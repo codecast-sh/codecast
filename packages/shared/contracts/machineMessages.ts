@@ -1,3 +1,4 @@
+import type { AreaChange } from "./orgAreas";
 // Detection of user-role messages that machinery delivered into a session
 // rather than a human typing them: cross-session `cast send` wrappers,
 // inter-agent teammate broadcasts (Claude Code SendMessage), scheduled-task
@@ -202,7 +203,9 @@ export interface WaitingSession {
   /** When the wait began (ms). */
   since: number;
   role?: string;
-  /** The first line of its pinned state; empty when it pinned none. */
+  /** The decision it posted (sd-N), when that is what it waits on. */
+  decision?: string;
+  /** The first line of its pinned state, or the decision's question. */
   state: string;
 }
 
@@ -228,6 +231,9 @@ export interface ScheduledTaskFrame {
   /** The event that fired it; absent on a scheduled or manual run. */
   event?: string;
   waiting?: WaitingSession | null;
+  /** A change in the company that lasted (org-staffing.md S29), when the
+   *  area watch fired the Chief of Staff's trigger for it. */
+  change?: AreaChange | null;
   role?: RoleCard | null;
   /** The trigger's prompt, and whatever the writer appended for the agent. */
   body: string;
@@ -245,7 +251,13 @@ export function formatScheduledTask(f: ScheduledTaskFrame): string {
   const head = tagAttrs([["title", f.title], ["task-id", f.task_id], ["trigger", f.trigger], ["event", f.event]]);
   const w = f.waiting;
   const waiting = w
-    ? `\n<waiting-session ${tagAttrs([["id", w.short_id], ["title", w.title], ["why", w.why], ["since", String(w.since)], ["role", w.role]])}>${w.state.trim()}</waiting-session>\n\n`
+    ? `\n<waiting-session ${tagAttrs([["id", w.short_id], ["title", w.title], ["why", w.why], ["since", String(w.since)], ["role", w.role], ["decision", w.decision]])}>${w.state.trim()}</waiting-session>\n\n`
+    : "";
+  const c = f.change;
+  const change = c
+    ? `\n<area-change ${tagAttrs(c.kind === "status"
+        ? [["kind", c.kind], ["role", c.role_handle], ["name", c.role_name], ["from", c.from ?? undefined], ["to", c.to], ["since", String(c.since)]]
+        : [["kind", c.kind], ["project", c.project_id], ["title", c.project_title], ["since", String(c.since)]])}>${c.line.trim()}</area-change>\n\n`
     : "";
   const r = f.role;
   const roleLines = r ? [
@@ -254,7 +266,7 @@ export function formatScheduledTask(f: ScheduledTaskFrame): string {
     r.goals.length ? `Goals: ${r.goals.join("; ")}` : "",
   ].filter(Boolean).join("\n") : "";
   const role = r ? `\n<role-card ${tagAttrs([["handle", r.handle], ["name", r.name], ["reports-to", r.reports_to]])}>${roleLines}</role-card>\n` : "";
-  return `<scheduled-task ${head}>${role}${waiting}${f.body}</scheduled-task>`;
+  return `<scheduled-task ${head}>${role}${waiting}${change}${f.body}</scheduled-task>`;
 }
 
 /** The one reader. Tolerates a missing closing tag: a preview slice can cut the body. */
@@ -288,8 +300,19 @@ export function parseScheduledTask(rawContent: string | null | undefined): Sched
       why: tagAttr(w[1], "why"),
       since: Number(tagAttr(w[1], "since")) || 0,
       ...(tagAttr(w[1], "role") ? { role: tagAttr(w[1], "role") } : {}),
+      ...(tagAttr(w[1], "decision") ? { decision: tagAttr(w[1], "decision") } : {}),
       state: w[2].trim(),
     };
+  }
+  let change: AreaChange | null = null;
+  const ch = body.match(/^\s*<area-change((?:\s+[a-z-]+="[^"]*")*)\s*>([\s\S]*?)<\/area-change>\s*/);
+  if (ch) {
+    body = body.slice(ch[0].length);
+    const at = (k: string) => tagAttr(ch[1], k);
+    const since = Number(at("since")) || 0;
+    change = at("kind") === "unowned_project"
+      ? { kind: "unowned_project", project_id: at("project"), project_title: at("title"), since, line: ch[2].trim() }
+      : { kind: "status", role_handle: at("role"), role_name: at("name"), from: (at("from") || null) as Extract<AreaChange, { kind: "status" }>["from"], to: at("to") as Extract<AreaChange, { kind: "status" }>["to"], since, line: ch[2].trim() };
   }
   return {
     title: tagAttr(m[1], "title"),
@@ -297,6 +320,7 @@ export function parseScheduledTask(rawContent: string | null | undefined): Sched
     ...(tagAttr(m[1], "trigger") ? { trigger: tagAttr(m[1], "trigger") } : {}),
     ...(tagAttr(m[1], "event") ? { event: tagAttr(m[1], "event") } : {}),
     waiting,
+    ...(change ? { change } : {}),
     role,
     body: body.trim(),
   };
@@ -309,8 +333,17 @@ export function parseScheduledTask(rawContent: string | null | undefined): Sched
 // Groups: 1 = channel name, 2 = the DM phrase, 3 = team name.
 export const CHAT_WAKE_HEADER = /^\[codecast team chat — (?:#([^\]\n]+?)|(a direct message))(?: · team ([^\]\n]+))?\]\n/;
 
+// A mention of a role or session (chat.ts wakeMentionedParties) carries the
+// same wake inside <chat-mention channel=… thread=… from=…>. The wake is the
+// message; the envelope is routing for the agent.
+export function chatWakeText(rawContent: string): string {
+  const text = stripInjectionNoise(rawContent);
+  const m = text.match(/^<chat-mention\b[^>]*>\n?([\s\S]*?)(?:\n?<\/chat-mention>\s*)?$/);
+  return m ? m[1] : text;
+}
+
 export function isChatWakePrompt(rawContent: string | null | undefined): boolean {
-  return !!rawContent && CHAT_WAKE_HEADER.test(stripInjectionNoise(rawContent));
+  return !!rawContent && CHAT_WAKE_HEADER.test(chatWakeText(rawContent));
 }
 
 // A harness <task-notification> — a background task / Monitor / Workflow
@@ -340,6 +373,12 @@ export function parseUnwrappedSessionReport(
   if (withTask) {
     const name = named(withTask[1]);
     if (name) return { from: "unknown", body: text, name };
+  }
+  // A notice codecast sent a role before notices carried the session
+  // envelope (pendingMessages.tellRole): a decision under it, a task handed
+  // to it.
+  if (/^decision sd-\d+ from a session under you: /.test(first) || /^\S.{0,80} assigned you ct-\d+ "/.test(first)) {
+    return { from: "unknown", body: text, name: "codecast" };
   }
   // A worker's name is capitalized ("Backend B follow-up:"); a lowercase
   // opener ("codecast test follow-up: ...") is a person's own prompt.

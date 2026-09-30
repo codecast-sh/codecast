@@ -21,7 +21,6 @@ import {
   GitPullRequest,
   GitCommitHorizontal,
   ChevronDown,
-  PanelBottomOpen,
 } from "lucide-react";
 import { taskVisual } from "./TaskStatusBadge";
 import { InitiativeHoverContent } from "./initiatives/InitiativeHoverContent";
@@ -1129,10 +1128,10 @@ export function EntityIdPill({
     },
     [closeNow, isSession, entity, openLinkedSession],
   );
-  // A plain click on the pill opens the object's full page right here (the
-  // reveal band under this line) and clicks it closed again; the hover
-  // card's own link, and any modified click, still go to the page. Without
-  // a reveal host the pill is the link it always was.
+  // The pill is split in two. The label is the link: a plain click opens the
+  // object the way any reference does. The caret after it opens the object's
+  // full page right here (the reveal band under this line) and clicks it
+  // closed again. Without a reveal host the pill is only the link.
   const linkRef = useRef<HTMLAnchorElement>(null);
   const openLabel = type ? `Open ${TYPE_LABEL[type].toLowerCase()}` : "Open";
   const revealTarget = useMemo(
@@ -1140,22 +1139,20 @@ export function EntityIdPill({
     [href, type, fullLabel, handleOpen, openLabel],
   );
   const { host: revealHost, open: revealOpen, toggle: toggleReveal } = useRevealRef(revealTarget, linkRef);
-  const handleClick = useCallback(
+  const canReveal = revealHost && !!entity;
+  const handleExpand = useCallback(
     (e: React.MouseEvent) => {
-      if (!revealHost || !entity || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) {
-        handleOpen(e);
-        return;
-      }
       e.preventDefault();
+      e.stopPropagation();
       closeNow();
       toggleReveal();
     },
-    [revealHost, entity, handleOpen, closeNow, toggleReveal],
+    [closeNow, toggleReveal],
   );
-  // Plain click stays here: the reveal band, or a session taking the stage.
-  // The href is still real (cmd-click, copy link), but it will not produce a
-  // router transition, so the top progress bar must not start.
-  const clickStaysHere = !!entity && (revealHost || isSession);
+  // A session click takes the stage instead of routing. The href is still
+  // real (cmd-click, copy link), but it will not produce a router
+  // transition, so the top progress bar must not start.
+  const clickStaysHere = !!entity && isSession;
 
   // Clear any in-flight timer if the pill unmounts (e.g. on navigation).
 
@@ -1184,14 +1181,14 @@ export function EntityIdPill({
         <Link
           ref={linkRef}
           href={href}
-          onClick={handleClick}
+          onClick={handleOpen}
           {...(clickStaysHere ? { "data-no-progress": "" } : {})}
           // While its band is open the full page is right below: no hover
           // card over it, and a stale timer never brings one back.
           onMouseEnter={revealOpen ? closeNow : openSoon}
           onMouseLeave={closeSoon}
-          aria-pressed={revealHost ? revealOpen : undefined}
-          className={`not-prose entity-ref${compact ? " entity-ref-compact" : ""} inline-flex items-center gap-[0.2em] px-[0.2em] rounded-[0.2em] text-[1em] font-medium leading-none ${revealOpen ? "underline" : "no-underline"} ${colors} transition-colors cursor-pointer align-baseline hover:underline decoration-current/40 underline-offset-2`}
+          data-reveal-open={revealOpen ? "" : undefined}
+          className={`not-prose entity-ref${compact ? " entity-ref-compact" : ""}${canReveal ? " entity-ref--split" : ""} inline-flex items-center gap-[0.2em] px-[0.2em] rounded-[0.2em] text-[1em] font-medium leading-none ${revealOpen ? "underline" : "no-underline"} ${colors} transition-colors cursor-pointer align-baseline hover:underline decoration-current/40 underline-offset-2`}
           title={fullLabel !== pillLabel ? fullLabel : undefined}
         >
           <span className="relative flex-shrink-0 opacity-80 inline-flex items-center">
@@ -1207,13 +1204,23 @@ export function EntityIdPill({
             )}
           </span>
           <span>{pillLabel}</span>
-          {/* The reveal affordance: a caret that shows on hover and points
-              down while the band is closed, up while it is open, so the pill
-              says what a click will do before the reader commits to it. Only
-              where a click can reveal, never on a plain link. */}
-          {revealHost && entity && <ChevronDown aria-hidden className="entity-ref__caret w-[0.9em] h-[0.9em] flex-shrink-0" />}
         </Link>
       </PopoverAnchor>
+      {/* The other half of the pill: the caret opens the full page in a band
+          under this line, and points up to fold it away again. */}
+      {canReveal && (
+        <button
+          type="button"
+          onClick={handleExpand}
+          onMouseEnter={closeNow}
+          aria-expanded={revealOpen}
+          aria-label={revealOpen ? "Hide full page" : "Show full page here"}
+          title={revealOpen ? "Hide full page" : "Show full page here"}
+          className={`not-prose entity-ref__expand ${colors}`}
+        >
+          <ChevronDown aria-hidden className="entity-ref__caret" />
+        </button>
+      )}
       <PopoverContent
         className={`${type === "doc" ? "w-96" : "w-80"} max-w-[calc(100vw-16px)] bg-sol-bg border border-sol-border shadow-xl p-0 relative`}
         side="top"
@@ -1265,14 +1272,14 @@ export function EntityIdPill({
             </a>
           </div>
         )}
-        {/* The card is the preview; the pill itself opens the full page in
+        {/* The card is the preview; the pill's caret opens the full page in
             place. Said once here, where a reader hovering for the first time
-            is looking, so the band that follows a click is no surprise. */}
-        {revealHost && entity && (
+            is looking, so the split pill reads before they click. */}
+        {canReveal && (
           <div className="flex items-center justify-between gap-2 border-t border-sol-border/60 px-3 py-1.5 text-[10px] text-sol-text-dim">
             <span className="inline-flex items-center gap-1.5">
-              <PanelBottomOpen className="h-3 w-3" />
-              Click to open here
+              <ChevronDown className="h-3 w-3" />
+              The arrow opens it here
             </span>
             <RevealOpenLink href={href} label={openLabel} onOpen={handleOpen} variant="compact" />
           </div>

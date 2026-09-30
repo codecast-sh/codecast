@@ -68,7 +68,7 @@ describe("ghostsFor", () => {
     const ghost = m.get(roleNodeId(c._id))!;
     expect(ghost?.kind).toBe("role");
     if (ghost.kind !== "role") return;
-    expect(ghost.ghost).toEqual({ change_id: c._id, status: "proposed", line: "Add a standing agent, Head of Platform (@platform), reporting to you, looking after Platform", kind: "role", solid: false });
+    expect(ghost.ghost).toEqual({ change_id: c._id, status: "proposed", line: "Add a role, Head of Platform (@platform), reporting to you, looking after Platform", kind: "role", solid: false });
     expect(ghost.role.handle).toBe("platform");
     expect(ghost.role.scope_names.projects.map((p) => p.title)).toEqual(["Platform"]);
     // Under the viewer, one level below, on a ghost edge.
@@ -306,7 +306,7 @@ describe("ghostsFor", () => {
     if (stub.kind !== "role") throw new Error("role");
     expect(stub.role.name).toBe("Platform Lead");
     expect(stub.role.handle).toBe("platform-lead");
-    expect(stub.ghost?.line).toBe("Add a standing agent, Platform Lead (@platform-lead), reporting to Samvit Jain");
+    expect(stub.ghost?.line).toBe("Add a role, Platform Lead (@platform-lead), reporting to Samvit Jain");
     expect(edges.find((e) => e.target === stub.id)?.source).toBe(SAM);
     // The edited handle is what org.tree will echo: a proposal for "growth" edited to a live handle is superseded.
     const dup = { ...change({ kind: "role", name: "G", handle: "g2" }, "accepted"), edits: { handle: "growth" } };

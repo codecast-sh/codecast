@@ -187,10 +187,61 @@ export const ORG_STAFFING_FIXTURE_HEALTH: OrgHealth = {
       flow: { decisions_7d: 9, median_recommend_min: 3, done_7d: 12, handoffs_7d: { done: 10, blocked: 1, needs_context: 1 }, review_stalls: 1, sends_7d: { to: [], from: [] } },
       last_move_at: T0 - 86_400_000 * 12, idle_days: 0,
       flags: [
-        { code: "overloaded", severity: "warn", detail: "4 cap hit days this week against a model of 1; ledger 19 open, 11 in flight, 2 active plans" },
-        { code: "cap_hit", severity: "warn", detail: "hit the token cap on 4 of the last 7 days" },
-        { code: "review_stall", severity: "info", detail: "one task in review for 26 hours" },
+        { code: "overloaded", severity: "warn", detail: "@growth has more reaching it than one role can answer: 4 days at its daily limit this week" },
+        { code: "cap_hit", severity: "warn", detail: "@growth reached its daily limit and waited on 4 days this week" },
+        { code: "review_stall", severity: "info", detail: "1 task in @growth's area has sat in review for more than a day" },
       ],
+      // The area as the panel reads it (S29): stuck, with the role's own
+      // line, the two sessions waiting under it, its goal and its check.
+      area: {
+        status: "stuck",
+        status_line: "Stuck: 1 session under it waiting unanswered, 1 task stuck in review.",
+        signals: [
+          { code: "waiting_sessions", severity: "warn", text: "1 session under it has waited more than a day with no answer from it." },
+          { code: "review_stall", severity: "warn", text: "1 task has sat in review for more than a day with nobody owning the verdict." },
+          { code: "overloaded", severity: "warn", text: "More reaches it than one role can answer: 4 days at its daily limit this week." },
+        ],
+        standing: { project: "Growth", text: "Two landing pages shipped this week; the pricing page waits on a decision about the plans.", written_on: "2026-09-29", written_at: Date.parse("2026-09-29T00:00:00Z") },
+        standing_lines: [
+          { project: "Growth", text: "Two landing pages shipped this week; the pricing page waits on a decision about the plans.", written_on: "2026-09-29", written_at: Date.parse("2026-09-29T00:00:00Z") },
+          { project: "SEO and AI citations", text: "Citations up a third since the schema change; no new pages.", written_on: "2026-09-22", written_at: Date.parse("2026-09-22T00:00:00Z") },
+        ],
+        waiting: [
+          { id: "fixture-growth-2", short_id: "jx7gr02", title: "Pricing page copy", why: "blocked", since: T0 - 30 * 3_600_000, state: "Which plan names go on the page?" },
+          { id: "fixture-growth-3", short_id: "jx7gr03", title: "Ads audit", why: "waiting", since: T0 - 2 * 3_600_000, state: null },
+        ],
+        goals: [
+          { project: { id: "fixture-project-growth", title: "Growth", short_id: "pr-4" }, goal: "Double signups from organic search by December", open: 19, in_progress: 11, done_7d: 12 },
+        ],
+        checked_at: T0 - 5 * 3_600_000,
+        check: { trigger_id: "fixture-trigger-growth-check", short_id: "tr-41", title: "Check Head of Growth's area", status: "scheduled", run_at: T0 + 19 * 3_600_000, last_run_at: T0 - 5 * 3_600_000, last_run_summary: "Two pages shipped; nothing needed the founder.", interval_ms: 86_400_000 },
+        standing_conversation_id: "fixture-growth-conv",
+        standing_short_id: "jx7gr0w",
+      },
+    },
+    {
+      role_id: "fixture-role-chief", short_id: "or-9", handle: "chief-of-staff",
+      load: { items_per_day: 2, decisions_per_day: 0.3, live_hands: 0, direct_reports: 0, open_stalls: 0, cap_hit_days: 0 },
+      ledger: { open_tasks: 41, in_flight: 6, active_plans: 5 },
+      spend: { wakes_today: 3, wakes_7d_avg: 4, wakes_cap: 40, tokens_today: 90_000, tokens_7d_avg: 110_000, tokens_cap: 400_000, cap_hits_7d: 0 },
+      flow: { decisions_7d: 2, median_recommend_min: 4, done_7d: 9, handoffs_7d: { done: 3, blocked: 0, needs_context: 0 }, review_stalls: 0, sends_7d: { to: [], from: [] } },
+      last_move_at: null, idle_days: 0,
+      flags: [],
+      area: {
+        status: "on_track",
+        status_line: "On track.",
+        signals: [],
+        standing: { project: "Company", text: "Growth is carrying the quarter and is the one area with more on it than one role can follow; Platform has work and nobody looking after it. I proposed a Platform lead and splitting content out of Growth.", written_on: "2026-09-28", written_at: Date.parse("2026-09-28T00:00:00Z") },
+        standing_lines: [
+          { project: "Company", text: "Growth is carrying the quarter and is the one area with more on it than one role can follow; Platform has work and nobody looking after it. I proposed a Platform lead and splitting content out of Growth.", written_on: "2026-09-28", written_at: Date.parse("2026-09-28T00:00:00Z") },
+        ],
+        waiting: [],
+        goals: [],
+        checked_at: T0 - 26 * 3_600_000,
+        check: { trigger_id: "fixture-trigger-company-review", short_id: "tr-12", title: "Company review", status: "scheduled", run_at: T0 + 5 * 86_400_000, last_run_at: T0 - 2 * 86_400_000, last_run_summary: "Proposed a Platform lead and a content split; three records closed.", interval_ms: 7 * 86_400_000 },
+        standing_conversation_id: "fixture-chief-conv",
+        standing_short_id: "jx7ch1f",
+      },
     },
   ],
   people: [

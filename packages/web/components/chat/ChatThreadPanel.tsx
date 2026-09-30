@@ -1,11 +1,12 @@
 import type { ReactNode } from "react";
-import { memo, useCallback, useRef, useState } from "react";
+import { memo } from "react";
 import { ChevronLeft, X } from "lucide-react";
 import type { ChatAttachment } from "../../store/chatSlice";
 import { ChatMessage } from "./ChatMessage";
 import { ChatMessageList } from "./ChatMessageList";
 import { ChatComposer } from "./ChatComposer";
 import type { ChatMessageView } from "./chatTypes";
+import { EdgeResizeHandle, useEdgeResize } from "../../hooks/useEdgeResize";
 import "./chat.css";
 
 // The thread panel: Slack's right rail.
@@ -46,11 +47,9 @@ const MIN_TRANSCRIPT_W = 360;
 const DEFAULT_W = 384;
 const WIDTH_KEY = "ch-thread-width";
 
-function loadWidth(): number {
-  if (typeof window === "undefined") return DEFAULT_W;
-  const v = Number(window.localStorage.getItem(WIDTH_KEY));
-  return v >= MIN_W ? v : DEFAULT_W;
-}
+// As wide as the shell allows while the transcript keeps its column.
+const maxWidth = (handle: HTMLElement) =>
+  (handle.parentElement?.parentElement?.clientWidth ?? Infinity) - MIN_TRANSCRIPT_W;
 
 export const ChatThreadPanel = memo(function ChatThreadPanel({
   channelName,
@@ -100,36 +99,7 @@ export const ChatThreadPanel = memo(function ChatThreadPanel({
   onRetrySend?: (messageId: string) => void;
   onRetryAgent?: (messageId: string) => void;
 }) {
-  const [width, setWidth] = useState(loadWidth);
-  const dragRef = useRef<{ x: number; w: number; max: number } | null>(null);
-
-  const onResizeDown = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    // As wide as the shell allows while the transcript keeps its column.
-    const shell = (e.currentTarget as HTMLElement).parentElement?.parentElement;
-    const max = Math.max(MIN_W, (shell?.clientWidth ?? Infinity) - MIN_TRANSCRIPT_W);
-    dragRef.current = { x: e.clientX, w: width, max };
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-    const move = (ev: MouseEvent) => {
-      const d = dragRef.current;
-      if (!d) return;
-      setWidth(Math.min(d.max, Math.max(MIN_W, d.w + (d.x - ev.clientX))));
-    };
-    const up = () => {
-      dragRef.current = null;
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-      setWidth((w) => {
-        window.localStorage.setItem(WIDTH_KEY, String(w));
-        return w;
-      });
-      window.removeEventListener("mousemove", move);
-      window.removeEventListener("mouseup", up);
-    };
-    window.addEventListener("mousemove", move);
-    window.addEventListener("mouseup", up);
-  }, [width]);
+  const { width, onResizeDown } = useEdgeResize({ storageKey: WIDTH_KEY, min: MIN_W, fallback: DEFAULT_W, max: maxWidth });
 
   return (
     <aside
@@ -137,7 +107,7 @@ export const ChatThreadPanel = memo(function ChatThreadPanel({
       aria-label="Thread"
       style={{ "--ch-thread-w": `${width}px` } as React.CSSProperties}
     >
-      <div className="ch-thread-resize" onMouseDown={onResizeDown} title="Drag to resize" />
+      <EdgeResizeHandle onResizeDown={onResizeDown} />
       <div className="ch-thread-head">
         <button type="button" className="ch-thread-back" title={`Back to #${channelName}`} onClick={onClose}>
           <ChevronLeft className="w-4 h-4" />

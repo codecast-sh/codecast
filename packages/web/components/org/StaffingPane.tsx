@@ -11,7 +11,7 @@ import { asksProgressLine, asksLoading } from "./staffingAsks";
 // hands it.
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, Check, ChevronDown, ChevronRight, CornerDownRight, ExternalLink, Flag as FlagGlyph, MessageSquareText, Pause, Pencil, Play, Sparkles, Undo2, UserRoundPlus, X } from "lucide-react";
+import { ArrowRight, Check, ChevronDown, ChevronRight, CornerDownRight, ExternalLink, MessageSquareText, Pause, Pencil, Play, RefreshCw, Send, Sparkles, Undo2, UserRoundPlus, X } from "lucide-react";
 import { agoOf } from "../../lib/threadState";
 import { cn } from "../../lib/utils";
 import { AnchorConversation } from "../anchor/AnchorConversation";
@@ -25,29 +25,34 @@ import { TakeoverEdit } from "./TakeoverEdit";
 import { askNames, askOfChange, asksProgress, proposalAsks, type AskView } from "./staffingAsks";
 import { SectionLabel } from "./OrgScopePanel";
 import { rolePausedSentence, SEVERITY_META } from "./orgMeta";
+import type { QueueItem } from "../../lib/decisionQueue";
+import type { AreaCheck } from "@codecast/shared/contracts/orgAreas";
 import { QuietLines, StatusPill } from "./ghostChrome";
 export { StatusPill };
 import type { OrgRole, OrgTree } from "./orgTypes";
-import type { HealthFlag, OrgChangeStatus, OrgHealth, OrgProposalChange, OrgProposalRow } from "./orgStaffingTypes";
+import type { OrgChangeStatus, OrgHealth, OrgProposalChange, OrgProposalRow } from "./orgStaffingTypes";
 import {
   CHANGE_STATUS_META,
-  FLAG_LABEL,
-  bottleneckRoles,
+  CHECK_CADENCES,
+  areaRows,
+  cadenceLabel,
   changeEdits,
   changeFields,
   changeLine,
   changeTenure,
-  collectHealthFlags,
+  chiefRead,
   isDecidable,
   isSyncChange,
+  needsYou,
   openProposals,
-  spanOfControl,
   staffingMode,
   syncEvidence,
   syncGroupSummary,
   tenureLine,
+  type AreaRow,
   type ChangeField,
-  type HealthFlagRow,
+  type ChiefRead,
+  type NeedsYouItem,
 } from "./staffingModel";
 
 export type StaffingPaneProps = {
@@ -118,6 +123,17 @@ export type StaffingPaneProps = {
    *  (staffingRevise.revisedSince): the card that holds them says so, each
    *  row is marked, and `onSeen` clears both. */
   revised?: { rows: OrgProposalChange[]; who: string; onSeen: () => void };
+  /** The loop (org-staffing.md S29). The person's open decisions, as the
+   *  decision queue holds them; the pane keeps the ones the org routed. */
+  queue?: QueueItem[];
+  /** Answer a `cast decide` card in place, by option index. */
+  onAnswerDecision?: (decisionId: string, index: number) => void;
+  /** Pause, resume or run a role's check or the company review, in place. */
+  onTrigger?: (taskId: string, verb: "pause" | "resume" | "runNow") => void;
+  /** Change a check's cadence in place. */
+  onSetTriggerEvery?: (taskId: string, intervalMs: number) => void;
+  /** "Ask @role": a line into the role's standing session. */
+  onSendToRole?: (conversationId: string, text: string) => void;
   /** A `?proposal=op-N` link that does not resolve in the active workspace
    *  (staffingModel.resolveProposalLink): the pane is that one line, with a
    *  switch when the proposal lives in a workspace the viewer can open. The
@@ -652,116 +668,309 @@ export function EditChangeForm({ change, onCancel, onAccept }: { change: OrgProp
   );
 }
 
-// ---------------------------------------------------------------- flags
+// ---------------------------------------------------------------- the loop (S29)
 
-/** A severity in shape and word (orgMeta.SEVERITY_META): a filled dot for a
- *  blocker, a hollow ring for a warning, nothing for information. */
-function SeverityDot({ severity }: { severity: HealthFlag["severity"] }) {
-  const m = SEVERITY_META[severity];
-  if (m.dot === "none") return <span className="w-1.5 h-1.5 shrink-0 mt-[6px]" aria-hidden />;
-  return <span className="w-1.5 h-1.5 rounded-full shrink-0 mt-[6px]" aria-hidden style={m.dot === "filled" ? { background: m.color } : { border: `1.5px solid ${m.color}` }} />;
+/** What the health read could not do: a server without it, a failed read
+ *  with nothing cached, or a stale copy. Never painted as a clean company. */
+function HealthNote({ missing, error, hasHealth, onRetry }: { missing?: boolean; error?: string; hasHealth: boolean; onRetry?: () => void }) {
+  const retry = onRetry ? <button type="button" onClick={onRetry} className="ml-1.5 underline underline-offset-2" style={{ color: "var(--sol-blue)" }}>Retry</button> : null;
+  if (missing) return <p className="mt-2 text-[12px] px-1" style={{ color: "var(--sol-text-dim)" }}>This server does not read the company's health yet.</p>;
+  if (error && !hasHealth) return <p className="mt-2 text-[12px] px-1" style={{ color: "var(--sol-red)" }} data-health-error>Health could not be read: {error}{retry}</p>;
+  if (error) return <p className="mt-2 text-[11px] px-1" style={{ color: "var(--sol-yellow)" }} data-health-stale>Showing the last copy; the latest read failed: {error}{retry}</p>;
+  return null;
 }
 
-function FlagList({ rows, missing, error, hasHealth, onRetry, onSelectNode, limit = 5 }: { rows: HealthFlagRow[]; missing?: boolean; error?: string; hasHealth?: boolean; onRetry?: () => void; onSelectNode: (nodeId: string) => void; limit?: number }) {
-  const [all, setAll] = useState(false);
-  // A read this server does not answer yet is nothing a person can act on.
-  if (missing) return <p className="text-[12px] px-1" style={{ color: "var(--sol-text-dim)" }}>Nothing to show yet.</p>;
-  const retry = onRetry ? <button type="button" onClick={onRetry} className="ml-1.5 underline underline-offset-2" style={{ color: "var(--sol-blue)" }}>Retry</button> : null;
-  // A read that failed with nothing cached says so; it never reads as a clean company.
-  if (error && !hasHealth) return <p className="text-[12px] px-1" style={{ color: "var(--sol-red)" }} data-health-error>Health could not be read: {error}{retry}</p>;
-  const stale = error ? <p className="text-[11px] px-1" style={{ color: "var(--sol-yellow)" }} data-health-stale>Showing the last copy; the latest read failed: {error}{retry}</p> : null;
-  if (rows.length === 0) return <>{stale}<p className="text-[12px] px-1" style={{ color: "var(--sol-text-dim)" }}>Nothing is flagged.</p></>;
-  const shown = all ? rows : rows.slice(0, limit);
+const ago = (now: number, at: number | null | undefined): string => (at ? agoOf(now - at) : "");
+
+// ---- needs you
+
+function NeedsYou({ items, now, onAnswer, onOpenSession, onPickProposal }: { items: NeedsYouItem[]; now: number; onAnswer?: (decisionId: string, index: number) => void; onOpenSession: (id: string) => void; onPickProposal: (shortId: string) => void }) {
   return (
-    <div className="flex flex-col gap-1" data-flags>
-      {stale}
-      {shown.map((r) => {
-        const subject = r.subject.kind === "role" ? `@${r.subject.handle}` : r.subject.kind === "person" ? r.subject.name : "company";
-        const m = SEVERITY_META[r.flag.severity];
-        const body = (
-          <>
-            <SeverityDot severity={r.flag.severity} />
-            <span className="min-w-0 flex-1">
-              <span className="block text-[12px] leading-snug" style={{ color: "var(--sol-text)" }}>
-                <span className="font-medium" style={{ color: m.color }}>{FLAG_LABEL[r.flag.code]}</span>
-                {m.tag && <span className="ml-1.5 inline-flex items-center h-[15px] px-1 rounded text-[9.5px] font-semibold uppercase tracking-[0.06em] align-[1px]" style={{ background: `color-mix(in srgb, ${m.color} 16%, transparent)`, color: m.color }} data-severity-tag>{m.word}</span>}
-                <span style={{ color: "var(--sol-text-dim)" }}> · {subject}</span>
-              </span>
-              <span className="block text-[11px] leading-snug" style={{ color: "var(--sol-text-muted)" }}>{r.flag.detail}</span>
-            </span>
-          </>
-        );
-        return r.subject.kind === "company" ? (
-          <div key={r.id} className="flex items-start gap-2 px-1.5 py-1 rounded-md" data-flag={r.flag.code}>{body}</div>
-        ) : (
-          <button key={r.id} type="button" onClick={() => onSelectNode((r.subject as { nodeId: string }).nodeId)} className="flex items-start gap-2 px-1.5 py-1 rounded-md text-left w-full hover:bg-sol-bg-highlight/70 transition-colors" data-flag={r.flag.code}>{body}</button>
-        );
-      })}
-      {rows.length > limit && (
-        <button type="button" onClick={() => setAll((v) => !v)} className="self-start inline-flex items-center gap-1 text-[11px] px-1.5 h-6 rounded-md hover:bg-sol-bg-highlight" style={{ color: "var(--sol-text-dim)" }}>
-          {all ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-          {all ? "fewer" : `${rows.length - limit} more`}
-        </button>
+    <>
+      <SectionLabel right={items.length > 0 ? <span className="text-[10.5px] tabular-nums" style={{ color: "var(--sol-orange)" }}>{items.length}</span> : undefined}>Needs you</SectionLabel>
+      {items.length === 0 ? (
+        <p className="text-[12.5px] px-1" style={{ color: "var(--sol-text-dim)" }} data-needs-you="empty">Nothing needs you.</p>
+      ) : (
+        <div className="flex flex-col gap-1.5" data-needs-you={items.length}>
+          {items.map((it) => (
+            <div key={it.key} className="rounded-lg border px-2.5 py-2" data-needs-you-item={it.kind} style={{ borderColor: "color-mix(in srgb, var(--sol-orange) 35%, transparent)", background: "color-mix(in srgb, var(--sol-orange) 6%, transparent)" }}>
+              {it.kind === "decision" && (
+                <>
+                  <div className="flex items-start gap-2">
+                    {it.role && <RoleFace role={it.role} size={18} className="shrink-0 mt-[1px]" />}
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-[12.5px] leading-snug" style={{ color: "var(--sol-text)" }}>{it.item.question}</span>
+                      <span className="block text-[11px] mt-0.5" style={{ color: "var(--sol-text-dim)" }}>{it.role ? `${it.role.name} asks` : "asked"} · {ago(now, it.item.createdAt)}</span>
+                    </span>
+                    <button type="button" onClick={() => onOpenSession(it.item.conversationId)} className="shrink-0 inline-flex items-center gap-1 text-[11.5px] h-6 px-1.5 rounded-md hover:bg-sol-bg-highlight" style={{ color: "var(--sol-violet)" }} data-needs-you-open>Open <ExternalLink className="w-3 h-3" /></button>
+                  </div>
+                  {it.canAnswerInPlace && onAnswer && (
+                    <div className="mt-1.5 flex flex-wrap gap-1" data-needs-you-options>
+                      {it.item.options.map((o, i) => (
+                        <OrgButton key={i} size="sm" primary={it.item.defaultOption === i} onClick={() => onAnswer(it.item.decisionId!, i)} title={o.description}>{o.label}</OrgButton>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+              {it.kind === "blocked" && (
+                <div className="flex items-start gap-2">
+                  <RoleFace role={it.role} size={18} className="shrink-0 mt-[1px]" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[12.5px] leading-snug" style={{ color: "var(--sol-text)" }}>{it.line}</span>
+                    <span className="block text-[11px] mt-0.5" style={{ color: "var(--sol-text-dim)" }}>{it.role.name} is waiting on you{it.role.standing?.state_at ? ` · ${ago(now, it.role.standing.state_at)}` : ""}</span>
+                  </span>
+                  <button type="button" onClick={() => onOpenSession(it.conversationId)} className="shrink-0 inline-flex items-center gap-1 text-[11.5px] h-6 px-1.5 rounded-md hover:bg-sol-bg-highlight" style={{ color: "var(--sol-violet)" }} data-needs-you-open>Open <ExternalLink className="w-3 h-3" /></button>
+                </div>
+              )}
+              {it.kind === "proposal" && (
+                <div className="flex items-start gap-2">
+                  <Sparkles className="w-4 h-4 shrink-0 mt-[1px]" style={{ color: "var(--sol-violet)" }} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[12.5px] leading-snug" style={{ color: "var(--sol-text)" }}>{it.proposal.title}</span>
+                    <span className="block text-[11px] mt-0.5" style={{ color: "var(--sol-text-dim)" }}>{it.remaining === 1 ? "1 change" : `${it.remaining} changes`} to decide · {ago(now, it.proposal.created_at)}</span>
+                  </span>
+                  <OrgButton size="sm" primary onClick={() => onPickProposal(it.proposal.short_id)} data-needs-you-open>Open</OrgButton>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
       )}
+    </>
+  );
+}
+
+// ---- areas
+
+function StatusWord({ row }: { row: AreaRow }) {
+  return <span className="shrink-0 text-[11px] font-medium" style={{ color: row.color }} data-area-status={row.status}>{row.statusWord}</span>;
+}
+
+/** The role's check (or the company review) as a person controls it: when
+ *  it last looked, when it looks next, pause and run now, and the cadence. */
+function CheckLine({ check, checkedAt, now, word, onTrigger, onSetEvery }: { check: AreaCheck | null; checkedAt: number | null; now: number; word: "check" | "review"; onTrigger?: (id: string, verb: "pause" | "resume" | "runNow") => void; onSetEvery?: (id: string, ms: number) => void }) {
+  const paused = check?.status === "paused";
+  const live = !!check && (check.status === "scheduled" || check.status === "running" || paused);
+  const last = checkedAt ?? check?.last_run_at ?? null;
+  const cadences = check?.interval_ms && !CHECK_CADENCES.some((c) => c.ms === check.interval_ms) ? [{ ms: check.interval_ms, label: cadenceLabel(check.interval_ms) }, ...CHECK_CADENCES] : CHECK_CADENCES;
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11.5px]" data-area-check={check?.status ?? "none"} style={{ color: "var(--sol-text-muted)" }}>
+      <span>{last ? `Last ${word} ${ago(now, last)}` : `No ${word} yet`}</span>
+      {live && !paused && check.run_at && <span style={{ color: "var(--sol-text-dim)" }}>· next {check.run_at > now ? `in ${agoOf(check.run_at - now).replace(/ ago$/, "")}` : "any moment"}</span>}
+      {paused && <span style={{ color: "var(--sol-yellow)" }}>· paused</span>}
+      {!live && check && <span style={{ color: "var(--sol-text-dim)" }}>· {check.status}</span>}
+      {live && onSetEvery && (
+        <select value={check.interval_ms ?? ""} onChange={(e) => onSetEvery(check.trigger_id, Number(e.target.value))} className="h-5 rounded border bg-transparent px-1 text-[11px] outline-none" style={{ borderColor: BORDER, color: "var(--sol-text-secondary)" }} aria-label={`How often it ${word === "check" ? "checks" : "reviews"}`} data-area-cadence>
+          {cadences.map((c) => <option key={c.ms} value={c.ms}>{c.label}</option>)}
+        </select>
+      )}
+      {live && onTrigger && (
+        <span className="ml-auto inline-flex items-center gap-0.5">
+          <IconButton label={paused ? "Resume" : "Pause"} onClick={() => onTrigger(check.trigger_id, paused ? "resume" : "pause")}>{paused ? <Play className="w-3 h-3" /> : <Pause className="w-3 h-3" />}</IconButton>
+          {!paused && <IconButton label={word === "check" ? "Check now" : "Review now"} tone="var(--sol-violet)" onClick={() => onTrigger(check.trigger_id, "runNow")}><RefreshCw className="w-3 h-3" /></IconButton>}
+        </span>
+      )}
+      {check?.short_id && <Link href={`/triggers/${check.short_id}`} className="text-[10.5px] hover:underline" style={{ color: "var(--sol-text-dim)" }} data-area-check-link>change</Link>}
     </div>
   );
 }
 
-// ---------------------------------------------------------------- health summary
+/** "Ask @growth": one line into the role's own thread; the answer lands there. */
+function AskRole({ role, conversationId, onSend, onOpenSession }: { role: OrgRole; conversationId: string | null; onSend?: (conversationId: string, text: string) => void; onOpenSession: (id: string) => void }) {
+  const [text, setText] = useState("");
+  const [sent, setSent] = useState(false);
+  if (!conversationId) return <p className="text-[11.5px]" style={{ color: "var(--sol-text-dim)" }}>It has no session yet, so there is nobody to ask.</p>;
+  const submit = () => {
+    const body = text.trim();
+    if (!body || !onSend) return;
+    onSend(conversationId, body);
+    setText("");
+    setSent(true);
+  };
+  return (
+    <form className="flex flex-col gap-1" data-ask-role={role.handle} onSubmit={(e) => { e.preventDefault(); submit(); }}>
+      <div className="flex items-center gap-1.5">
+        <input value={text} onChange={(e) => { setText(e.target.value); setSent(false); }} placeholder={`Ask @${role.handle}…`} className="min-w-0 flex-1 h-7 rounded-md px-2 border outline-none text-[12px] bg-sol-bg-alt" style={{ borderColor: BORDER, color: "var(--sol-text)" }} aria-label={`Ask @${role.handle}`} />
+        <OrgButton size="sm" primary type="submit" disabled={!text.trim() || !onSend} aria-label="Send"><Send className="w-3 h-3" /></OrgButton>
+      </div>
+      {sent && (
+        <span className="text-[11px]" style={{ color: "var(--sol-text-dim)" }} data-ask-role-sent>
+          Sent. Its answer lands in <button type="button" onClick={() => onOpenSession(conversationId)} className="hover:underline" style={{ color: "var(--sol-violet)" }}>its thread</button>.
+        </span>
+      )}
+    </form>
+  );
+}
+
+const DETAIL_LABEL = "text-[10px] font-semibold uppercase tracking-[0.08em]";
+
+/** A row opened: the area's goals and progress, the sessions waiting under
+ *  it, at most three signals, its check, and a line to the role. */
+function AreaDetail({ row, now, onOpenSession, onSelectNode, onTrigger, onSetEvery, onSend }: { row: AreaRow; now: number; onOpenSession: (id: string) => void; onSelectNode: (nodeId: string) => void; onTrigger?: (id: string, verb: "pause" | "resume" | "runNow") => void; onSetEvery?: (id: string, ms: number) => void; onSend?: (conversationId: string, text: string) => void }) {
+  const a = row.area;
+  const conv = a?.standing_conversation_id ?? row.role.standing?.conversation_id ?? null;
+  const goals = a?.goals ?? [];
+  const scopeProjects = row.role.scope_names.projects;
+  return (
+    <div className="px-2.5 pb-2.5 pt-1 flex flex-col gap-2.5 org-pop-in" data-area-detail={row.role.handle}>
+      {a && row.status !== "on_track" && <p className="text-[12px] leading-snug" style={{ color: row.color }} data-area-status-line>{a.status_line}</p>}
+
+      <div data-area-goals>
+        <div className={DETAIL_LABEL} style={{ color: "var(--sol-text-dim)" }}>Goals</div>
+        {goals.length === 0 && scopeProjects.length === 0 && <p className="text-[12px] mt-0.5" style={{ color: "var(--sol-text-dim)" }}>{row.role.handle === "chief-of-staff" ? "Everything no other role looks after." : "No area of its own: it runs its check and answers what it is asked."}</p>}
+        {goals.length === 0 && scopeProjects.length > 0 && <p className="text-[12px] mt-0.5" style={{ color: "var(--sol-text-secondary)" }}>{scopeProjects.map((p) => p.title).join(", ")}</p>}
+        {goals.map((g) => (
+          <div key={g.project.id} className="mt-0.5 text-[12px] leading-snug" data-area-goal={g.project.id}>
+            <Link href={`/projects/${g.project.short_id ?? g.project.id}`} className="font-medium no-underline hover:underline" style={{ color: "var(--sol-text)" }}>{g.project.title}</Link>
+            {g.goal && <span style={{ color: "var(--sol-text-secondary)" }}>: {g.goal}</span>}
+            <span className="block text-[11px] tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{g.done_7d} done this week · {g.in_progress} in progress · {g.open} open</span>
+          </div>
+        ))}
+      </div>
+
+      {a && a.waiting.length > 0 && (
+        <div data-area-waiting={a.waiting.length}>
+          <div className={DETAIL_LABEL} style={{ color: "var(--sol-text-dim)" }}>Waiting under it</div>
+          {a.waiting.map((w) => (
+            <button key={w.id} type="button" onClick={() => onOpenSession(w.id)} className="mt-0.5 w-full text-left rounded-md px-1 -mx-1 py-0.5 hover:bg-sol-bg-highlight/70" data-area-waiting-session={w.short_id}>
+              <span className="block text-[12px] leading-snug truncate" style={{ color: "var(--sol-text)" }}>{w.title || w.short_id}</span>
+              <span className="block text-[11px] truncate" style={{ color: "var(--sol-text-dim)" }}>{w.why === "blocked" ? "blocked" : "waiting"} {ago(now, w.since)}{w.state ? ` · ${w.state}` : ""}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {a && a.signals.length > 0 && (
+        <div data-area-signals={a.signals.length}>
+          <div className={DETAIL_LABEL} style={{ color: "var(--sol-text-dim)" }}>Signals</div>
+          {a.signals.map((sg, i) => {
+            const m = SEVERITY_META[sg.severity];
+            return (
+              <p key={i} className="mt-0.5 flex items-start gap-1.5 text-[12px] leading-snug" style={{ color: "var(--sol-text-secondary)" }} data-area-signal={sg.code}>
+                <span className="w-1.5 h-1.5 rounded-full shrink-0 mt-[6px]" aria-hidden style={m.dot === "none" ? { border: `1px solid ${m.color}` } : m.dot === "filled" ? { background: m.color } : { border: `1.5px solid ${m.color}` }} />
+                <span>{sg.text}</span>
+              </p>
+            );
+          })}
+        </div>
+      )}
+
+      <div>
+        <div className={DETAIL_LABEL} style={{ color: "var(--sol-text-dim)" }}>Check</div>
+        <div className="mt-0.5"><CheckLine check={a?.check ?? null} checkedAt={a?.checked_at ?? null} now={now} word="check" onTrigger={onTrigger} onSetEvery={onSetEvery} /></div>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <div className="min-w-0 flex-1"><AskRole role={row.role} conversationId={conv} onSend={onSend} onOpenSession={onOpenSession} /></div>
+        <button type="button" onClick={() => onSelectNode(row.nodeId)} className="shrink-0 text-[11px] h-7 px-1.5 rounded-md hover:bg-sol-bg-highlight" style={{ color: "var(--sol-text-dim)" }} data-area-open-node>On the chart</button>
+      </div>
+    </div>
+  );
+}
+
+function Areas({ rows, now, open, onToggle, onOpenSession, onSelectNode, onTrigger, onSetEvery, onSend }: { rows: AreaRow[]; now: number; open: string | null; onToggle: (roleId: string) => void; onOpenSession: (id: string) => void; onSelectNode: (nodeId: string) => void; onTrigger?: (id: string, verb: "pause" | "resume" | "runNow") => void; onSetEvery?: (id: string, ms: number) => void; onSend?: (conversationId: string, text: string) => void }) {
+  return (
+    <>
+      <SectionLabel right={<span className="text-[10.5px] tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{rows.length}</span>}>Areas</SectionLabel>
+      {rows.length === 0 && <p className="text-[12.5px] px-1" style={{ color: "var(--sol-text-dim)" }}>No roles yet.</p>}
+      <div className="flex flex-col gap-1" data-areas={rows.length}>
+        {rows.map((row) => {
+          const isOpen = open === row.role._id;
+          const line = row.area?.standing;
+          const depth = row.role.reports_to.kind === "role" ? 1 : 0;
+          return (
+            <div key={row.role._id} className={cn("rounded-lg border transition-colors", isOpen ? "bg-sol-bg-highlight/50" : "hover:bg-sol-bg-highlight/40")} style={{ borderColor: isOpen ? "color-mix(in srgb, var(--sol-violet) 40%, transparent)" : "transparent", marginLeft: depth * 14 }} data-area-row={row.role.handle}>
+              <button type="button" onClick={() => onToggle(row.role._id)} aria-expanded={isOpen} className="w-full flex items-start gap-2 px-2.5 py-1.5 text-left">
+                <RoleFace role={row.role} size={22} className="shrink-0 mt-[1px]" />
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-baseline gap-2">
+                    <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium" style={{ color: "var(--sol-text)" }}>{row.role.name}</span>
+                    <StatusWord row={row} />
+                  </span>
+                  {line ? (
+                    <span className={cn("block text-[11.5px] leading-snug", isOpen ? "break-words" : "truncate")} style={{ color: "var(--sol-text-muted)" }} title={`${line.project}: ${line.text}`} data-area-standing>
+                      {line.text}{line.written_on && <span style={{ color: "var(--sol-text-dim)" }}> · {line.written_on.slice(5)}</span>}
+                    </span>
+                  ) : (
+                    <span className="block text-[11.5px] leading-snug" style={{ color: "var(--sol-text-dim)" }} data-area-standing="none">No word from it yet.</span>
+                  )}
+                </span>
+                {isOpen ? <ChevronDown className="w-3.5 h-3.5 shrink-0 mt-1" style={{ color: "var(--sol-text-dim)" }} /> : <ChevronRight className="w-3.5 h-3.5 shrink-0 mt-1" style={{ color: "var(--sol-text-dim)" }} />}
+              </button>
+              {isOpen && <AreaDetail row={row} now={now} onOpenSession={onOpenSession} onSelectNode={onSelectNode} onTrigger={onTrigger} onSetEvery={onSetEvery} onSend={onSend} />}
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+// ---- the chief's read
+
+function ChiefReadSection({ read, now, onPickProposal, onTrigger, onSetEvery }: { read: ChiefRead; now: number; onPickProposal: (shortId: string) => void; onTrigger?: (id: string, verb: "pause" | "resume" | "runNow") => void; onSetEvery?: (id: string, ms: number) => void }) {
+  const [lead, ...rest] = read.narrative;
+  const [more, setMore] = useState(false);
+  const p = read.proposed;
+  const word = p ? (p.proposal.status === "withdrawn" ? "withdrawn" : p.progress.remaining === 0 ? "decided" : `${p.progress.decided} of ${p.progress.total} decided`) : "";
+  return (
+    <>
+      <SectionLabel>{`${read.chief.name}'s read`}</SectionLabel>
+      <div className="flex flex-col gap-2" data-chief-read>
+        {lead ? (
+          <p className="text-[13px] leading-relaxed" style={{ color: "var(--sol-text-secondary)" }} data-chief-narrative>
+            {lead.text}{lead.written_on && <span className="text-[11px]" style={{ color: "var(--sol-text-dim)" }}> · {lead.written_on}</span>}
+          </p>
+        ) : (
+          <p className="text-[12.5px]" style={{ color: "var(--sol-text-dim)" }} data-chief-narrative="none">{read.area?.check?.last_run_summary ?? "No review yet. Its first read of the company lands here after its first review."}</p>
+        )}
+        {rest.length > 0 && (
+          <div>
+            <button type="button" onClick={() => setMore((v) => !v)} className="inline-flex items-center gap-1 text-[11px] h-5 px-1 -mx-1 rounded-md hover:bg-sol-bg-highlight" style={{ color: "var(--sol-text-dim)" }} data-chief-more>
+              {more ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}{more ? "fewer" : `${rest.length} more ${rest.length === 1 ? "line" : "lines"}`}
+            </button>
+            {more && rest.map((l, i) => (
+              <p key={i} className="mt-1 text-[12px] leading-snug" style={{ color: "var(--sol-text-secondary)" }}><span className="font-medium" style={{ color: "var(--sol-text)" }}>{l.project}:</span> {l.text}{l.written_on && <span style={{ color: "var(--sol-text-dim)" }}> · {l.written_on}</span>}</p>
+            ))}
+          </div>
+        )}
+        {p && (
+          <button type="button" onClick={() => onPickProposal(p.proposal.short_id)} className="flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-left hover:bg-sol-bg-highlight/60" style={{ borderColor: BORDER }} data-chief-proposed={p.proposal.short_id}>
+            <Sparkles className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--sol-violet)" }} />
+            <span className="min-w-0 flex-1">
+              <span className="block text-[12px] leading-snug truncate" style={{ color: "var(--sol-text)" }}>{p.proposal.title}</span>
+              <span className="block text-[11px]" style={{ color: "var(--sol-text-dim)" }}>proposed {ago(now, p.proposal.created_at)} · {word}</span>
+            </span>
+            <ChevronRight className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--sol-text-dim)" }} />
+          </button>
+        )}
+        <CheckLine check={read.area?.check ?? null} checkedAt={read.area?.check?.last_run_at ?? null} now={now} word="review" onTrigger={onTrigger} onSetEvery={onSetEvery} />
+      </div>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------- health: the loop
 
 function HealthBody(props: StaffingPaneProps) {
-  const { tree, health } = props;
-  const flags = useMemo(() => collectHealthFlags(health, tree), [health, tree]);
-  const span = useMemo(() => spanOfControl(health, tree), [health, tree]);
-  const bottlenecks = useMemo(() => bottleneckRoles(health), [health]);
-  const roleById = (id: string) => tree?.roles.find((r) => r._id === id);
+  const { tree, health, now } = props;
+  const items = useMemo(() => needsYou(tree, health, props.queue ?? [], props.proposals, props.proposal), [tree, health, props.queue, props.proposals, props.proposal]);
+  const rows = useMemo(() => areaRows(tree, health), [tree, health]);
+  const read = useMemo(() => chiefRead(tree, health, props.proposals), [tree, health, props.proposals]);
+  const [openRole, setOpenRole] = useState<string | null>(null);
   return (
     <>
       <h2 className="text-[19px] leading-tight font-semibold tracking-tight" style={{ fontFamily: "var(--font-serif)", color: "var(--sol-text)" }}>Company health</h2>
       <p className="mt-1 text-[12px]" style={{ color: "var(--sol-text-muted)" }}>
-        {props.reviewing ? "A review of the company is running; a proposal appears here when it lands." : "No open proposal. This is how the company looks right now."}
+        {props.reviewing ? "A review of the company is running; a proposal appears here when it lands." : health ? `What needs you, how each area is doing, and what ${read?.chief.name ?? "the Chief of Staff"} makes of it. Read ${ago(now, health.generated_at) || "just now"}.` : "What needs you, how each area is doing, and what the Chief of Staff makes of it."}
       </p>
       {props.reviewing && props.reviewSessionId && <ReviewSessionLink id={props.reviewSessionId} onOpenSession={props.onOpenSession} />}
       {props.reviewEnded && <ReviewEndedLine sessionId={props.reviewSessionId} onOpenSession={props.onOpenSession} />}
-      <SectionLabel right={flags.length > 0 ? <span className="text-[10.5px] tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{flags.length}</span> : undefined}>Findings</SectionLabel>
-      <FlagList rows={flags} missing={props.healthMissing} error={props.healthError} hasHealth={!!props.health} onRetry={props.onRetryHealth} onSelectNode={props.onSelectNode} />
-
-      <SectionLabel>Roles per person</SectionLabel>
-      {span.length === 0 ? <p className="text-[12px] px-1" style={{ color: "var(--sol-text-dim)" }}>Nobody here yet.</p> : (
-        <div className="flex flex-col gap-1" data-span>
-          {span.map((s) => (
-            <button key={s.user_id} type="button" onClick={() => props.onSelectNode(s.nodeId)} className="flex items-center gap-2.5 px-1.5 py-1 rounded-md text-left hover:bg-sol-bg-highlight/70 transition-colors">
-              <span className="min-w-0 flex-1 truncate text-[12px]" style={{ color: "var(--sol-text)" }}>{s.name}</span>
-              <span className="w-24 h-[5px] rounded-full overflow-hidden" style={{ background: "color-mix(in srgb, var(--sol-border) 35%, transparent)" }}>
-                <span className="block h-full rounded-full" style={{ width: `${Math.min(100, (s.direct_roles / s.limit) * 100)}%`, background: s.wide ? "var(--sol-red)" : "var(--sol-violet)" }} />
-              </span>
-              <span className="text-[11px] tabular-nums shrink-0" style={{ color: s.wide ? "var(--sol-red)" : "var(--sol-text-dim)" }}>{s.direct_roles} / {s.limit}</span>
-            </button>
-          ))}
-        </div>
-      )}
-
-      <SectionLabel>Roles under strain</SectionLabel>
-      {bottlenecks.length === 0 ? <p className="text-[12px] px-1" style={{ color: "var(--sol-text-dim)" }}>None.</p> : (
-        <div className="flex flex-col gap-1" data-bottlenecks>
-          {bottlenecks.map((b) => (
-            <button key={b.role_id} type="button" onClick={() => props.onSelectNode(b.nodeId)} className="flex items-center gap-2 px-1.5 py-1.5 rounded-md text-left hover:bg-sol-bg-highlight/70 transition-colors">
-              <span className="inline-flex items-center h-[20px] px-1.5 rounded-md text-[10.5px] font-medium shrink-0" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)", fontFamily: "var(--font-mono)" }}>@{b.handle}</span>
-              <span className="min-w-0 flex-1 truncate text-[12px]" style={{ color: "var(--sol-text-muted)" }}>{roleById(b.role_id)?.name ?? ""}</span>
-              <span className="flex items-center gap-1 shrink-0">
-                {b.flags.map((f, i) => {
-                  const m = SEVERITY_META[f.severity];
-                  return (
-                    <span key={i} className="inline-flex items-center gap-1 h-[18px] px-1.5 rounded-md text-[10px]" style={{ background: `color-mix(in srgb, ${m.color} 14%, transparent)`, color: m.color }} title={`${m.word}: ${f.detail}`}>
-                      <FlagGlyph className="w-2.5 h-2.5" fill={m.dot === "filled" ? "currentColor" : "none"} />{FLAG_LABEL[f.code]}
-                    </span>
-                  );
-                })}
-              </span>
-            </button>
-          ))}
-        </div>
-      )}
+      <HealthNote missing={props.healthMissing} error={props.healthError} hasHealth={!!health} onRetry={props.onRetryHealth} />
+      <NeedsYou items={items} now={now} onAnswer={props.onAnswerDecision} onOpenSession={props.onOpenSession} onPickProposal={props.onPickProposal} />
+      <Areas rows={rows} now={now} open={openRole} onToggle={(id) => setOpenRole((cur) => (cur === id ? null : id))} onOpenSession={props.onOpenSession} onSelectNode={props.onSelectNode} onTrigger={props.onTrigger} onSetEvery={props.onSetTriggerEvery} onSend={props.onSendToRole} />
+      {read && <ChiefReadSection read={read} now={now} onPickProposal={props.onPickProposal} onTrigger={props.onTrigger} onSetEvery={props.onSetTriggerEvery} />}
     </>
   );
 }
@@ -795,7 +1004,7 @@ function NoChiefBody(props: StaffingPaneProps) {
           <p className="text-[11px] leading-snug px-1" style={{ color: "var(--sol-text-dim)" }}>Hiring gives you a chief of staff that stays and reviews the company every week. Proposing runs one review and hires nobody.</p>
         </div>
       )}
-      <FlagsPreview {...props} />
+      <AreasPreview {...props} />
     </div>
   );
 }
@@ -821,14 +1030,15 @@ function ReviewSessionLink({ id, onOpenSession }: { id: string; onOpenSession: (
   );
 }
 
-/** With no chief and no proposal, the flags still tell the person something. */
-function FlagsPreview(props: StaffingPaneProps) {
-  const flags = useMemo(() => collectHealthFlags(props.health, props.tree), [props.health, props.tree]);
-  if (flags.length === 0 && !props.healthMissing && !props.healthError) return null;
+/** With no chief and no proposal, the areas the roles look after still read (S29). */
+function AreasPreview(props: StaffingPaneProps) {
+  const rows = useMemo(() => areaRows(props.tree, props.health), [props.tree, props.health]);
+  const [openRole, setOpenRole] = useState<string | null>(null);
+  if (rows.length === 0 && !props.healthMissing && !props.healthError) return null;
   return (
     <>
-      <SectionLabel>Findings</SectionLabel>
-      <FlagList rows={flags} missing={props.healthMissing} error={props.healthError} hasHealth={!!props.health} onRetry={props.onRetryHealth} onSelectNode={props.onSelectNode} limit={3} />
+      <HealthNote missing={props.healthMissing} error={props.healthError} hasHealth={!!props.health} onRetry={props.onRetryHealth} />
+      <Areas rows={rows} now={props.now} open={openRole} onToggle={(id) => setOpenRole((cur) => (cur === id ? null : id))} onOpenSession={props.onOpenSession} onSelectNode={props.onSelectNode} onTrigger={props.onTrigger} onSetEvery={props.onSetTriggerEvery} onSend={props.onSendToRole} />
     </>
   );
 }

@@ -559,15 +559,14 @@ export function RoomThread({
               title={adding ? "An agent is joining the room" : addTitle}
             >
               <UserPlus className="h-3 w-3" />
-              {surface === "stage" ? "Add" : "Add to the call"}
+              <span className="rt-add-word">{surface === "stage" ? "Add" : "Add to the call"}</span>
             </button>
           )}
           <span className="rt-head-right">
             {/* On the stage the listening line is the first member of the
-                controls' group, so the group wraps to its own row as one unit
-                when the chips fill the first, and the line truncates inside
-                it. The switch beside it already pulses and says "on", so the
-                line only says what is missing; the title has the long form. */}
+                controls' group and truncates in whatever room the chips
+                leave. The switch beside it already pulses and says "on", so
+                the line only says what is missing; the title has the long form. */}
             {listening && surface === "stage" && (
               <span className="rt-listening rt-head-listening" title={listeningText}>
                 <span className="truncate">{listeningShort}</span>

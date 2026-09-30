@@ -1,4 +1,4 @@
-import { memo, useCallback, useRef, useState } from "react";
+import { memo, useState } from "react";
 import { MessageSquare, CornerUpRight, Quote, FileCode2, CheckCircle2, RotateCcw } from "lucide-react";
 import { SlotActions } from "../workspace/Slot";
 import { useInboxStore, selectCommentRailOpen } from "../../store/inboxStore";
@@ -13,6 +13,7 @@ import { isAgentComment } from "../../lib/commentThread";
 import { CommentThread } from "./CommentThread";
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { EdgeResizeHandle, useEdgeResize } from "../../hooks/useEdgeResize";
 // The conversation's GLOBAL comment thread as a right-docked, full-height rail —
 // like the sidebar, on the other side. It slides away to nothing when closed (no
 // minimized stub) and is reopened from the header's comments toggle, mirroring
@@ -26,11 +27,7 @@ const MAX_W = 760;
 const DEFAULT_W = 384;
 const WIDTH_KEY = "cc-comment-rail-width";
 
-function loadWidth(): number {
-  if (typeof window === "undefined") return DEFAULT_W;
-  const v = Number(window.localStorage.getItem(WIDTH_KEY));
-  return v >= MIN_W && v <= MAX_W ? v : DEFAULT_W;
-}
+const commitWidth = (w: number) => useInboxStore.getState().wsSetSize("context", w);
 
 // The context slot's size serves whichever pane holds the right edge — pixels
 // for this rail, a percent for the session list — so only a plausibly-pixel
@@ -89,10 +86,16 @@ function CommentRailImpl({ conversationId }: { conversationId: string }) {
   const slotWidth = useInboxStore((s) =>
     s.workspace.context.pane?.kind === "comments" ? slotPixelWidth(s.workspace.context.size) : undefined,
   );
-  const [width, setW] = useState(() => slotWidth ?? loadWidth());
-  const dragRef = useRef<{ x: number; w: number } | null>(null);
+  const { width, setWidth: setW, dragging, onResizeDown } = useEdgeResize({
+    storageKey: WIDTH_KEY,
+    min: MIN_W,
+    max: MAX_W,
+    fallback: DEFAULT_W,
+    initial: slotWidth,
+    onCommit: commitWidth,
+  });
   useWatchEffect(() => {
-    if (slotWidth !== undefined && !dragRef.current) setW(slotWidth);
+    if (slotWidth !== undefined && !dragging.current) setW(slotWidth);
   }, [slotWidth]);
 
   // The rail stays positioned and slides off the right edge when closed (mirror
@@ -115,32 +118,6 @@ function CommentRailImpl({ conversationId }: { conversationId: string }) {
     return () => setWidth(conversationId, 0);
   }, [conversationId, open, width, railEnabled, setWidth]);
 
-  const onResizeDown = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    dragRef.current = { x: e.clientX, w: width };
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-    const move = (ev: MouseEvent) => {
-      const d = dragRef.current;
-      if (!d) return;
-      setW(Math.min(MAX_W, Math.max(MIN_W, d.w + (d.x - ev.clientX))));
-    };
-    const up = () => {
-      dragRef.current = null;
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-      setW((w) => {
-        window.localStorage.setItem(WIDTH_KEY, String(w));
-        useInboxStore.getState().wsSetSize("context", w);
-        return w;
-      });
-      window.removeEventListener("mousemove", move);
-      window.removeEventListener("mouseup", up);
-    };
-    window.addEventListener("mousemove", move);
-    window.addEventListener("mouseup", up);
-  }, [width]);
-
   // Comment tools off and nothing to read → the rail doesn't exist at all (this
   // also catches the keyboard shortcut, not just the now-hidden header toggle).
   if (!railEnabled) return null;
@@ -149,7 +126,7 @@ function CommentRailImpl({ conversationId }: { conversationId: string }) {
     <aside className={`cc-railx${open ? "" : " cc-railx--closed"}`} style={{ width }} aria-hidden={!open}>
       {mounted && (
       <>
-      <div className="cc-railx-resize" onMouseDown={onResizeDown} title="Drag to resize" />
+      <EdgeResizeHandle onResizeDown={onResizeDown} />
       <header className="cc-railx-head">
         <MessageSquare className="w-3.5 h-3.5 text-sol-cyan" />
         <span className="cc-railx-title">Comments</span>

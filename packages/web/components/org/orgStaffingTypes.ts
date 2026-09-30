@@ -3,9 +3,10 @@
 // shapes; the pane, the fixture, the model helpers and the store slots agree
 // on one definition here.
 import type { HealthFlag } from "@codecast/shared/contracts/orgCapacity";
+import type { RoleArea } from "@codecast/shared/contracts/orgAreas";
 import type { OrgAsk, OrgChange, OrgChangeKind, OrgChangeRevision, OrgChangeStatus, OrgEvidenceLink, OrgProposalMode, OrgProposalThread } from "@codecast/shared/contracts/orgProposal";
 
-export type { HealthFlag, OrgAsk, OrgChange, OrgChangeKind, OrgChangeRevision, OrgChangeStatus, OrgEvidenceLink, OrgProposalThread };
+export type { HealthFlag, RoleArea, OrgAsk, OrgChange, OrgChangeKind, OrgChangeRevision, OrgChangeStatus, OrgEvidenceLink, OrgProposalThread };
 
 // ---------------------------------------------------------------- org.health
 
@@ -31,6 +32,10 @@ export type OrgRoleHealth = {
   last_move_at: number | null;
   idle_days: number;
   flags: HealthFlag[];
+  /** The area as a person reads it (org-staffing.md S29). Absent from a server older than S29. */
+  area?: RoleArea;
+  name?: string;
+  status?: "active" | "paused" | "retired";
 };
 
 export type OrgPersonHealth = {

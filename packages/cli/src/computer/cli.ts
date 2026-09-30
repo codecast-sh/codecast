@@ -1,5 +1,6 @@
 /**
- * `cast computer` — drive a native macOS app through its accessibility tree.
+ * `cast computer` — drive a native app through its accessibility tree: macOS
+ * through the signed helper app, Linux (X11) through AT-SPI and linux/helper.py.
  *
  * Registration only. Every action reaches its implementation through a dynamic
  * `import("./run.js")`, so `cast --help`, `cast status` and every unrelated
@@ -27,7 +28,7 @@ function run(verb: ComputerVerb, o: ComputerOptions, deps: ComputerCommandDeps):
 /** `--app` plus the window selector, on every verb that targets a window. */
 function targetFlags<T extends Command>(cmd: T): T {
   return cmd
-    .requiredOption("--app <selector>", "bundle id (com.apple.TextEdit), app name (TextEdit), or pid:1234")
+    .requiredOption("--app <selector>", "bundle id (com.apple.TextEdit; on Linux the WM_CLASS, google-chrome), app name (TextEdit), or pid:1234")
     .option("--window-id <id>", "target this window id (from list-windows)")
     .option("--window-index <n>", "target this window index (from list-windows)");
 }
@@ -41,12 +42,29 @@ function targetFlags<T extends Command>(cmd: T): T {
  * sentinel does not bounce it. No click, no keystroke and no snapshot raises
  * anything on its own.
  */
-function observeFlags<T extends Command>(cmd: T): T {
-  return cmd
-    .option("--no-screenshot", "skip the capture (faster, and the tree is usually the answer)")
+function observeFlags<T extends Command>(cmd: T, kind: "snapshot" | "action" = "snapshot"): T {
+  const shot =
+    kind === "snapshot"
+      ? cmd.option("--no-screenshot", "skip the capture (faster, and the tree is usually the answer)")
+      : cmd
+          .option("--screenshot", "also capture the window after the action (off by default: the output says what changed)")
+          .option("--no-screenshot", "the default for an action; kept so older scripts still parse")
+          .option("--no-cursor", "do not show the agent cursor for this action (CODECAST_COMPUTER_CURSOR=0 turns it off everywhere)");
+  return shot
+    .option("--full-resolution", "capture at the display's full pixel density (for small text); coordinates are then pixels / scale")
+    .option("--find <text>", "print only elements matching this text (or /regex/), with their ancestors")
+    .option("--under <index>", "print only the subtree under this element index")
     .option("--restore-window", "raise and unminimize the target window first — the only flag that takes the human's screen")
     .option("--no-inline", "write the screenshot but do not show it in the conversation")
     .option("--json", "machine-readable result; the screenshot is written to a 0600 file and reported as a path");
+}
+
+/** The element a verb acts on: an index from the tree, or a name resolved against a fresh one. */
+function elementFlags<T extends Command>(cmd: T, required = false): T {
+  return cmd
+    .option("--element-index <n>", `element index from the latest get-app-state${required ? " (or use --element)" : ""}`)
+    .option("--element <query>", "the element by name, e.g. \"Sign\" or \"button Save\"; several matches are listed, never guessed")
+    .option("--nth <n>", "with --element, take the nth of several matches (1 based)");
 }
 
 export function registerComputerCommand(program: Command, deps: ComputerCommandDeps = {}): void {
@@ -71,21 +89,21 @@ export function registerComputerCommand(program: Command, deps: ComputerCommandD
     .addHelpText(
       "after",
       `
-The loop: read an indexed tree, act on an element by its index, read the tree
-the action returns. Indexes are sparse and go stale — never infer one from
-elementCount, and take a fresh snapshot after navigation, scrolling or a delay.
+The loop: read the tree once, act on elements by name or index, and read what
+each action changed (it prints a diff; "No change" means it was ignored).
+Indexes are sparse and go stale, so prefer names: --element "Save".
 
   cast computer setup                                grant the two permissions, once, with a human
   cast computer list-apps                            what is running
   cast computer get-app-state --app com.apple.TextEdit
+  cast computer find --app com.apple.Preview "Sign"  just the matching elements
+  cast computer click --app Slack --element "Send"
   cast computer set-value --app com.apple.TextEdit --element-index 12 --value hi
-  cast computer click --app Slack --element-index 34
+  cast computer do --app com.apple.Preview "click Sign" "wait Created" shot
 
-Focus: no verb raises a window. Synthetic input (type-text, press-key, hotkey,
-a coordinate click) needs the target window focused already and otherwise fails
-with window_not_focused; prefer set-value and perform-secondary-action, which
-work on a background window and take nothing from the human. Pass
---restore-window only when the screen genuinely has to move.
+Focus: no verb raises a window. Keys, typing and mouse clicks go to the target
+app directly when it is in the background, so the human can keep working in
+another app. Pass --restore-window only when the screen genuinely has to move.
 
 Secrets go in on stdin (--text-stdin, --value-stdin), never in argv, where the
 shell history and every other user's \`ps\` output would keep them.
@@ -147,71 +165,135 @@ release than the one about to run.
 
   observeFlags(
     targetFlags(computer.command("get-app-state").description("The indexed accessibility tree of one window, plus a screenshot")),
-  ).action((o) => run("get-app-state", o, deps));
+  )
+    .option("--diff", "print only what changed since this window's last snapshot")
+    .action((o) => run("get-app-state", o, deps));
+
+  targetFlags(computer.command("find").description("Elements matching text, with their ancestors — the cheap way to get an index"))
+    .argument("<text>", "text to match (case insensitive), or /regex/")
+    .option("--under <index>", "search only under this element index")
+    .option("--json", "machine-readable result")
+    .action((text: string, o) => run("find", { ...o, find: text }, deps));
+
+  targetFlags(computer.command("wait").description("Wait until text appears in the window (or disappears, or anything changes)"))
+    .argument("[text]", "text to wait for (same as --text)")
+    .option("--text <text>", "text to wait for, matched like find")
+    .option("--gone", "wait for the text to disappear instead")
+    .option("--change", "wait for any change in the window's tree")
+    .option("--timeout <seconds>", "give up after this long (default 10)")
+    .option("--json", "machine-readable result")
+    .action((text: string | undefined, o) => run("wait", { ...o, text: o.text ?? text }, deps));
 
   observeFlags(
-    targetFlags(computer.command("click").description("Click an element by index, or a window-local coordinate"))
-      .option("--element-index <n>", "element index from the latest get-app-state")
+    elementFlags(targetFlags(computer.command("click").description("Click an element by index or name, or a window-local coordinate")))
+      .option("--mouse", "a real mouse click at the element's center instead of its accessibility press (for controls that ignore the press)")
       .option("--x <n>", "window-local x (screenshot pixel / screenshot.scale)")
       .option("--y <n>", "window-local y")
       .option("--click-count <n>", "1, 2 or 3 presses")
       .option("--mouse-button <button>", "left | right | middle")
       .option("--modifiers <chord>", "modifiers only, e.g. CmdOrCtrl or CmdOrCtrl+Shift"),
+    "action",
   ).action((o) => run("click", o, deps));
 
   observeFlags(
-    targetFlags(
-      computer
-        .command("perform-secondary-action")
-        .description("Run one of an element's advertised Secondary Actions (no focus needed)"),
-    )
-      .requiredOption("--element-index <n>", "element index from the latest get-app-state")
-      .requiredOption("--action <name>", "exactly as the element's Secondary Actions list it"),
+    elementFlags(
+      targetFlags(
+        computer
+          .command("perform-secondary-action")
+          .description("Run one of an element's advertised Secondary Actions (no focus needed)"),
+      ),
+      true,
+    ).requiredOption("--action <name>", "exactly as the element's Secondary Actions list it"),
+    "action",
   ).action((o) => run("perform-secondary-action", o, deps));
 
   observeFlags(
-    targetFlags(computer.command("scroll").description("Scroll an element or a window-local point"))
+    elementFlags(targetFlags(computer.command("drag").description("Press on an element or point, move, and release on another")))
+      .option("--x <n>", "window-local x to press at")
+      .option("--y <n>", "window-local y to press at")
+      .option("--to-element <query>", "drop on this element, by name or #index")
+      .option("--to-element-index <n>", "drop on this element index")
+      .option("--to-x <n>", "window-local x to release at")
+      .option("--to-y <n>", "window-local y to release at"),
+    "action",
+  ).action((o) => run("drag", o, deps));
+
+  observeFlags(
+    elementFlags(targetFlags(computer.command("scroll").description("Scroll an element or a window-local point")))
       .requiredOption("--direction <direction>", "up | down | left | right")
-      .option("--element-index <n>", "element index from the latest get-app-state")
       .option("--x <n>", "window-local x")
       .option("--y <n>", "window-local y")
       .option("--pages <n>", "how many pages to scroll"),
+    "action",
   ).action((o) => run("scroll", o, deps));
 
   observeFlags(
-    targetFlags(computer.command("type-text").description("Type into the focused element of a FOCUSED window"))
+    targetFlags(computer.command("type-text").description("Type into the focused element (a background window takes it without taking the front)"))
       .option("--text <text>", "the text to type")
       .option("--text-stdin", "read the text from stdin — the only safe route for a secret"),
+    "action",
   ).action((o) => run("type-text", o, deps));
 
   observeFlags(
-    targetFlags(computer.command("press-key").description("Press one key (Return, Escape, Tab, +) in a FOCUSED window")).requiredOption(
+    targetFlags(computer.command("press-key").description("Press one key (Return, Escape, Tab, +) in the target window")).requiredOption(
       "--key <key>",
       "one key; use hotkey for a combination",
     ),
+    "action",
   ).action((o) => run("press-key", o, deps));
 
   observeFlags(
-    targetFlags(computer.command("hotkey").description("Press a modifier combination (CmdOrCtrl+A) in a FOCUSED window")).requiredOption(
+    targetFlags(computer.command("hotkey").description("Press a modifier combination (CmdOrCtrl+A) in the target window")).requiredOption(
       "--key <chord>",
       "a modifier and one key, e.g. CmdOrCtrl+A",
     ),
+    "action",
   ).action((o) => run("hotkey", o, deps));
 
   observeFlags(
     targetFlags(computer.command("paste-text").description("Paste text through the clipboard, restoring what was there"))
       .option("--text <text>", "the text to paste")
       .option("--text-stdin", "read the text from stdin — the only safe route for a secret"),
+    "action",
   ).action((o) => run("paste-text", o, deps));
 
   observeFlags(
-    targetFlags(
-      computer.command("set-value").description("Write a value straight into an element — no focus needed, and read back to verify"),
+    elementFlags(
+      targetFlags(
+        computer.command("set-value").description("Write a value straight into an element — no focus needed, and read back to verify"),
+      ),
+      true,
     )
-      .requiredOption("--element-index <n>", "element index from the latest get-app-state")
       .option("--value <value>", "the value to write (empty clears the field)")
       .option("--value-stdin", "read the value from stdin — the only safe route for a secret"),
+    "action",
   ).action((o) => run("set-value", o, deps));
+
+  targetFlags(computer.command("do").description("Run several steps against one app in one go — much faster than separate commands"))
+    .argument("[steps...]", "steps, or - to read one per line from stdin")
+    .option("--keep-going", "carry on after a step fails")
+    .addHelpText(
+      "after",
+      `
+Steps read the way the window does, and each takes the single command's flags:
+  cast computer do --app com.apple.Preview - <<'EOF'
+  click "Sign"
+  wait "Created January"
+  action "insert signature" "Created January 27"
+  press Return
+  shot
+  EOF
+
+  click "Save" | click #56 | click "Row" --mouse | click --x 10 --y 20
+  action <name> [element]   set <element> <value>   scroll <direction> [element]
+  drag <from> <to>          each a name, #index, or x,y in window points
+  type <text>   paste <text>   press <key>   hotkey <chord>
+  find <text>   (a bare click or action next acts on what it found)
+  wait <text> [--gone] [--change] [--timeout s]   snapshot [--find t]   shot   sleep <ms>`,
+    )
+    .action((steps: string[], o) =>
+      import("./batch.js").then(({ runComputerDo }) => runComputerDo(steps, o, deps)),
+    );
 
   // Commander only wires its implicit `help [command]` when the parent has no
   // action handler, and this group needs one to make an invented verb fail

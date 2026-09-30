@@ -619,8 +619,9 @@ describe("pull request references", () => {
 
 describe("page-load bar", () => {
   // A same-origin <a> starts the yellow top bar (NavigationProgress). A click
-  // that opens the reveal or takes a session onto the stage never navigates,
-  // so the pill must opt out. Without a host, a task/plan/doc pill still does.
+  // that takes a session onto the stage never navigates, so the pill must opt
+  // out. A task/plan/doc label is a plain link; inside a reveal host the band
+  // opens from the caret beside it.
   test("a session pill opts out: a click takes the stage, it does not route", () => {
     const html = render("see jx7b7mx");
     expect(html).toContain("data-no-progress");
@@ -632,7 +633,7 @@ describe("page-load bar", () => {
     expect(html).not.toContain("data-no-progress");
   });
 
-  test("a task pill inside a reveal host opts out: a click opens the band", async () => {
+  test("a task pill inside a reveal host is a link plus a caret that opens the band", async () => {
     const { RevealHostCtx } = await import("../lib/revealHost");
     const html = renderToStaticMarkup(
       <MemoryRouter>
@@ -643,8 +644,9 @@ describe("page-load bar", () => {
         </RevealHostCtx.Provider>
       </MemoryRouter>,
     );
-    expect(html).toContain("data-no-progress");
+    expect(html).not.toContain("data-no-progress");
     expect(html).toContain('href="/tasks/' + TASK_CONVEX_ID + '"');
+    expect(html).toContain("entity-ref__expand");
   });
 });
 

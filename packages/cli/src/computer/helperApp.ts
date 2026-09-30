@@ -28,7 +28,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "../proc.js";
 import { acquireFileLock } from "../lockFile.js";
 import { ComputerError } from "./errors.js";
-import { computerHelperTar } from "./helperPayload.js";
+import { computerHelperTar, computerLinuxHelperSource } from "./helperPayload.js";
 import { defaultConfigDir } from "../config/configDir.js";
 
 /** The one path, forever. A test asserts this string; a future refactor that
@@ -52,12 +52,40 @@ export function computerHome(): string {
   return path.join(root, "computer");
 }
 
-export function helperAppPath(): string {
-  return path.join(computerHome(), HELPER_APP_BASENAME);
+/** On Linux the helper is a script in a directory of its own, with no
+ *  bundle and no signature: the path is where it runs from and nothing more. */
+const LINUX_HELPER_DIR = "linux";
+const LINUX_HELPER_FILE = `${HELPER_EXECUTABLE_NAME}.py`;
+
+export function helperAppPath(platform: NodeJS.Platform = process.platform): string {
+  return path.join(computerHome(), platform === "linux" ? LINUX_HELPER_DIR : HELPER_APP_BASENAME);
 }
 
-export function helperExecutablePath(appPath = helperAppPath()): string {
+export function helperExecutablePath(appPath = helperAppPath(), platform: NodeJS.Platform = process.platform): string {
+  if (platform === "linux") return path.join(appPath, LINUX_HELPER_FILE);
   return path.join(appPath, "Contents", "MacOS", HELPER_EXECUTABLE_NAME);
+}
+
+/**
+ * Write the embedded Linux helper where the launcher runs it, when its bytes
+ * differ. A temp file and a rename, so a helper starting at that moment reads
+ * the old script or the new one, never half of one.
+ */
+export function materializeLinuxHelper(source = computerLinuxHelperSource()): MaterializeResult {
+  const dir = helperAppPath("linux");
+  const file = helperExecutablePath(dir, "linux");
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  let current: string | null = null;
+  try {
+    current = fs.readFileSync(file, "utf-8");
+  } catch {
+    /* first run */
+  }
+  if (current === source) return { appPath: dir, executablePath: file, installed: false, adopted: false };
+  const temp = `${file}.${randomUUID()}.tmp`;
+  fs.writeFileSync(temp, source, { mode: 0o700 });
+  fs.renameSync(temp, file);
+  return { appPath: dir, executablePath: file, installed: true, adopted: false };
 }
 
 function stampPath(): string {
@@ -326,8 +354,9 @@ export interface MaterializeResult {
  * radius.
  */
 export function materializeHelperApp(opts: { version?: string; payload?: Buffer } = {}): MaterializeResult {
+  if (process.platform === "linux") return materializeLinuxHelper();
   if (process.platform !== "darwin") {
-    throw new ComputerError("unsupported_capability", "cast computer runs on macOS only");
+    throw new ComputerError("unsupported_capability", `cast computer runs on macOS and on Linux (X11); this is ${process.platform}`);
   }
   const payload = opts.payload ?? computerHelperTar();
   if (!payload) {
@@ -479,6 +508,19 @@ export interface HelperAvailability {
 /** What `cast doctor` needs, without materializing anything. */
 export function helperAvailability(): HelperAvailability {
   const appPath = helperAppPath();
+  if (process.platform === "linux") {
+    return {
+      embedded: computerLinuxHelperSource().length > 0,
+      materialized: fs.existsSync(helperExecutablePath(appPath)),
+      appPath,
+      atFixedPath: true,
+      pendingSwap: false,
+      signature: null,
+      signatureDetail: "",
+      authority: "",
+      installedVersion: null,
+    };
+  }
   const materialized = looksLikeBundle(appPath);
   // Resolve the parent separately: `~/.codecast` itself is often a symlink
   // into a dotfiles repo, and that is fine — what must not happen is the

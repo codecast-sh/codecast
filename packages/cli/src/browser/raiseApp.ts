@@ -9,6 +9,13 @@
  * its own window. By pid, not by app name: `tell application "Google Chrome"`
  * would reach the user's real Chrome, a different process from a driven one.
  *
+ * Even this is honored only when the sender descends from the ACTIVE app. From
+ * the daemon (a launchd process) the event is delivered and answered, and the
+ * app stays behind whatever the human is in. So the focus route also returns
+ * the pid, and the desktop app, active because the human just clicked in it,
+ * repeats the raise from its own process (the "raise-app" verb in
+ * packages/electron/main.js).
+ *
  * Used in both directions: the web's "open tab" link raises the driven Chrome
  * (focusHttp.ts), and the focus guard raises the app the human was in when an
  * engine command pulled Chrome over it (focusGuard.ts).
@@ -22,7 +29,8 @@ function raiseJxa(pid: number): string {
     'ObjC.import("Foundation");' +
     `const target = $.NSAppleEventDescriptor.descriptorWithProcessIdentifier(${Math.floor(pid)});` +
     "const evt = $.NSAppleEventDescriptor.appleEventWithEventClassEventIDTargetDescriptorReturnIDTransactionID(0x6d697363, 0x61637476, target, -1, 0);" +
-    "const err = Ref(); evt.sendEventWithOptionsTimeoutError(1, 10, err); err[0] ? String(err[0].localizedDescription) : 'ok';"
+    // An untouched error slot reads back as a nil wrapper, which is truthy.
+    "const err = Ref(); evt.sendEventWithOptionsTimeoutError(1, 10, err); !err[0] || err[0].isNil() ? 'ok' : String(err[0].localizedDescription.js);"
   );
 }
 

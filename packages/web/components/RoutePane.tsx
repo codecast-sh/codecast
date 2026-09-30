@@ -192,12 +192,15 @@ export function RoutePane({
   tabId,
   path,
   isActive,
+  isVisible,
   navigate,
   leafId,
 }: {
   tabId: string;
   path: string;
   isActive: boolean;
+  /** On screen without keyboard focus (a split sibling). Defaults to isActive. */
+  isVisible?: boolean;
   navigate?: (path: string, mode: "push" | "replace") => void;
   /** Set when this pane is a stage leaf: a page that draws its own header
    *  hosts the pane's close and expand controls (components/browser). */
@@ -210,10 +213,11 @@ export function RoutePane({
       ...parseTabLocation(path),
       params: matched?.params ?? {},
       isActive,
+      isVisible: isVisible ?? isActive,
       navigate,
       leafId,
     };
-  }, [tabId, path, matched, isActive, navigate, leafId]);
+  }, [tabId, path, matched, isActive, isVisible, navigate, leafId]);
 
   if (!matched) return null;
   const Component = matched.component;

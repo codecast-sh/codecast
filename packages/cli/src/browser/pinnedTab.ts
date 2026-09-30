@@ -14,7 +14,7 @@ import { CAST_TAB_GROUP } from "./bridge/protocol.js";
 import { isPidAlive } from "../workspace/chrome.js";
 import { OWNER_HARNESS_ENV } from "./owner.js";
 import { sameDocument } from "./url.js";
-import { ownerState, scanLiveOwners, type LiveOwners } from "./engineReap.js";
+import { detachSessionDaemon, ownerState, scanLiveOwners, type LiveOwners } from "./engineReap.js";
 import { authorizesTeardown } from "@codecast/shared/contracts";
 
 /** The engine daemon for this session, if one is alive. */
@@ -262,6 +262,11 @@ export async function ensurePinnedTab(session = engineSession(), url?: string): 
  * does not mint a second one beside a tab that was merely slow to answer.
  */
 export async function recoverGoneTab(session: string, url?: string): Promise<void> {
+  // The engine daemon reads the binding only when it attaches, so the one
+  // that just answered tab_gone still holds the dead tab and would refuse the
+  // retry the same way, whatever the binding file says now. Detach it (that
+  // closes nothing): the retry attaches afresh and adopts the binding below.
+  detachSessionDaemon(session);
   const bound = readBoundTarget(session);
   if (bound) {
     const browser = await pinnedTabBrowser(session);

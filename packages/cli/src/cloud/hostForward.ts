@@ -50,10 +50,17 @@ export function forwardSshArgs(host: RemoteHost, remotePort: number): string[] {
  * codecast device is `deviceId`. Reuses a live listener for the same pair.
  * Never wakes a host: a sleeping one has no session to watch.
  */
+export interface HostForwardDeps {
+  resolve?: (deviceId: string) => Promise<RemoteHost | null>;
+  /** The command whose stdio carries one connection; `ssh -W` by default. */
+  dial?: (host: RemoteHost, remotePort: number) => [string, string[]];
+  idleMs?: number;
+}
+
 export async function forwardToHost(
   deviceId: string,
   remotePort: number,
-  deps: { resolve?: (deviceId: string) => Promise<RemoteHost | null> } = {},
+  deps: HostForwardDeps = {},
 ): Promise<{ port: number }> {
   if (!Number.isInteger(remotePort) || remotePort < 1024 || remotePort > 65535) {
     throw new HostForwardError(`not a daemon port: ${remotePort}`, 400);
@@ -69,7 +76,7 @@ export async function forwardToHost(
   const pending = (async () => {
     const host = await resolve(deviceId);
     if (!host) throw new HostForwardError("that device is not a cloud host this laptop can reach", 404);
-    return listen(key, host, remotePort);
+    return listen(key, host, remotePort, deps.dial ?? ((h, p) => ["ssh", forwardSshArgs(h, p)]), deps.idleMs ?? FORWARD_IDLE_MS);
   })();
   forwards.set(key, pending);
   try {
@@ -80,18 +87,29 @@ export async function forwardToHost(
   }
 }
 
+/** Is `deviceId` a cloud host in this laptop's registry, with an address to dial? */
+export function managesHost(deviceId: string): boolean {
+  return !!hostForDevice(deviceId)?.address;
+}
+
 async function resolveHost(deviceId: string): Promise<RemoteHost | null> {
   const host = hostForDevice(deviceId);
   if (!host?.address) return null;
   return reachableRemoteHost(host, { toRemoteHost, sshReachable });
 }
 
-function listen(key: string, host: RemoteHost, remotePort: number): Promise<Forward> {
+function listen(
+  key: string,
+  host: RemoteHost,
+  remotePort: number,
+  dial: NonNullable<HostForwardDeps["dial"]>,
+  idleMs: number,
+): Promise<Forward> {
   return new Promise((resolve, reject) => {
     const f: Forward = { server: net.createServer(), port: 0, live: 0, idleTimer: null };
     const armIdle = () => {
       if (f.idleTimer) clearTimeout(f.idleTimer);
-      f.idleTimer = setTimeout(() => { if (f.live === 0) close(); }, FORWARD_IDLE_MS);
+      f.idleTimer = setTimeout(() => { if (f.live === 0) close(); }, idleMs);
       f.idleTimer.unref?.();
     };
     const close = () => {
@@ -101,7 +119,8 @@ function listen(key: string, host: RemoteHost, remotePort: number): Promise<Forw
     f.server.on("connection", (sock) => {
       f.live++;
       if (f.idleTimer) { clearTimeout(f.idleTimer); f.idleTimer = null; }
-      const child = spawn("ssh", forwardSshArgs(host, remotePort), { stdio: ["pipe", "pipe", "ignore"] });
+      const [cmd, args] = dial(host, remotePort);
+      const child = spawn(cmd, args, { stdio: ["pipe", "pipe", "ignore"] });
       let done = false;
       const end = () => {
         if (done) return;
