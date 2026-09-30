@@ -42,7 +42,7 @@ interface MockCalls {
 
 function makeScheduler(
   dueTasks: any[],
-  opts: { claimResult?: (task: any) => any; filing?: "stashed" | "killed" | null } = {},
+  opts: { claimResult?: (task: any) => any; filing?: "stashed" | "killed" | null; frame?: string } = {},
 ) {
   const calls: MockCalls = { claimed: [], failed: [], injected: [], completed: [], prompts: [], skipped: [] };
   const byId = new Map(dueTasks.map((t) => [t._id, t]));
@@ -71,6 +71,7 @@ function makeScheduler(
     // the fake must exist at all, or the read throws and the whole injection is
     // reported as a failed run.
     getSessionFiling: async () => opts.filing ?? null,
+    getInjectFrame: async () => opts.frame ?? null,
     skipTaskRun: async (taskId: string, _daemonId: string, result: any, reason: string, source?: string) => {
       calls.skipped.push({
         taskId,
@@ -222,6 +223,14 @@ describe("wake-time self-knowledge", () => {
   const injectTask = () => ({
     ...spawnTask("t1"),
     originating_conversation_id: "conv123",
+  });
+
+  it("delivers the frame the server builds for every trigger path", async () => {
+    const frame = '<scheduled-task title="Check Growth\'s area" task-id="t1" trigger="tr-9">\n<role-card handle="growth" name="Growth lead" reports-to="Ada">Looks after: Growth</role-card>\nCheck your area.</scheduled-task>';
+    const { scheduler, calls } = makeScheduler([injectTask()], { claimResult: (t) => t, frame, filing: "stashed" });
+    await scheduler.poll();
+    expect(calls.prompts[0]).toBe(frame);
+    expect(calls.failed).toEqual([]);
   });
 
   it("tells a stashed session nobody is watching", async () => {

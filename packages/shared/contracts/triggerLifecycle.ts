@@ -1,3 +1,15 @@
+// Appended to a trigger run's frame when its session is stashed: the agent
+// must know nobody is watching, and that declaring its state is its only way
+// back to the person's eyes. Agent-only text; the web leaves it out of what it
+// shows (the conversation's trigger block).
+export const STASHED_RUN_NOTE = `\n\nThis session is STASHED: the user will not see this run or its output. End your turn with cast state --status done|dormant to stay quietly out of their inbox; declare --status blocked ONLY if a human must act — that returns the session to their inbox.`;
+
+/** A trigger run's body as a person reads it: without the agent-only note. */
+export function withoutStashedRunNote(body: string): string {
+  const i = body.indexOf(STASHED_RUN_NOTE.trim());
+  return (i >= 0 ? body.slice(0, i) : body).trim();
+}
+
 // The defaults a trigger's run reads after its prompt. A role's routine gets
 // none: the role's opening message already says how it works.
 export function triggerLifecycleInstructions(task: { _id: string; short_id?: string; role_id?: string }): string | null {

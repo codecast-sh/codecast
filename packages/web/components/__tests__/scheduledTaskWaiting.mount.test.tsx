@@ -5,7 +5,7 @@ import { act } from "react";
 import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../../test-helpers/globals";
 import { closeDomWindow } from "../../test-helpers/domGlobals";
-import { formatScheduledTask } from "@codecast/shared/contracts";
+import { formatScheduledTask, STASHED_RUN_NOTE } from "@codecast/shared/contracts";
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "https://local.codecast.sh", pretendToBeVisual: true });
 const restoreGlobals = replaceGlobals({
@@ -52,5 +52,30 @@ test("a needs-input run names the session, why it waits, for how long, its state
   expect(line.textContent).toContain("8 self-wake paths collapsed to 2");
   // The raw frame never leaks into the prompt text.
   expect(host.textContent).not.toContain("waiting-session");
-  expect(host.textContent).toContain("A session under you needs input");
+  // The trigger's pill names it and opens it.
+  expect(host.querySelector("[data-pill='tr-1168']")).not.toBeNull();
+});
+
+test("a role's run is one line at rest and opens inline to its card, the waiting state and the prompt", async () => {
+  const firedAt = Date.now();
+  const content = formatScheduledTask({
+    title: "A session under you needs input", task_id: "rx2", trigger: "tr-1168", event: "session_needs_input",
+    role: { handle: "calling", name: "Calling lead", reports_to: "Cam", scope: ["Callers & Call Management"], charter: "Keeps the caller team effective.", goals: ["Cost per intro under $250"] },
+    waiting: { short_id: "jx7781p", title: "Broker cleanup", why: "blocked", since: firedAt - 9 * 60_000, state: "Which tool cuts come next?" },
+    // The writer appends a note for the agent alone when its session is out of the inbox.
+    body: `A session that reports to you is waiting.${STASHED_RUN_NOTE}`,
+  });
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  await act(async () => createRoot(host).render(React.createElement(ScheduledTaskBlock, { content, timestamp: firedAt })));
+  const block = host.querySelector("[data-role-wake=calling]") as HTMLElement;
+  expect(block.textContent).toContain("is blocked for 9m");
+  expect(host.querySelector("[data-role-wake-detail]")).toBeNull();
+  await act(async () => (block.querySelector("[role=button]") as HTMLElement).click());
+  const detail = host.querySelector("[data-role-wake-detail]") as HTMLElement;
+  expect(detail.textContent).toContain("Which tool cuts come next?");
+  expect(detail.textContent).toContain("Callers & Call Management");
+  expect(detail.textContent).toContain("reports to Cam");
+  expect(host.querySelector("[data-role-wake-prompt]")!.textContent).toBe("A session that reports to you is waiting.");
+  expect(detail.textContent).not.toMatch(/STASHED|cast state/);
 });
