@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react";
+import { createContext, useContext, useSyncExternalStore } from "react";
 import { useInboxStore } from "../store/inboxStore";
 
 /** The workspace's "give every session a character" switch. Kept out of
@@ -6,7 +6,14 @@ import { useInboxStore } from "../store/inboxStore";
  *  there made Vite serve it with no named `sessionIdentity` export. */
 const noSubscription = () => () => {};
 
-export function usePersonifyAll(override?: boolean): boolean {
+/** Answers the switch for everything below it instead of the viewer's
+ *  preference. The homepage hero sets it so its sessions render the same for
+ *  every visitor. */
+export const PersonifyOverride = createContext<boolean | undefined>(undefined);
+
+export function usePersonifyAll(overrideProp?: boolean): boolean {
+  const contextOverride = useContext(PersonifyOverride);
+  const override = overrideProp ?? contextOverride;
   return useSyncExternalStore(
     override === undefined ? useInboxStore.subscribe : noSubscription,
     () => override ?? !!useInboxStore.getState().clientState?.ui?.personify_sessions,

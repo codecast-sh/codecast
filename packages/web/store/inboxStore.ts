@@ -12951,6 +12951,10 @@ export function resolveTrackedStoreSnapshot<S>(
   return { deps: deps.map((dep) => dep(state)), state };
 }
 
+// A render outside the browser (the marketing prerender) reads the initial
+// state instead of throwing for a missing server snapshot.
+const serverSnapshot = () => useInboxStore.getInitialState();
+
 export function useTrackedStore(deps: Array<(s: InboxStoreState) => any>): InboxStoreState {
   const prevRef = useRef<{ deps: any[]; state: InboxStoreState } | null>(null);
   return useSyncExternalStore(useInboxStore.subscribe, () => {
@@ -12971,7 +12975,7 @@ export function useTrackedStore(deps: Array<(s: InboxStoreState) => any>): Inbox
     }
     prevRef.current = snapshot;
     return state;
-  });
+  }, serverSnapshot);
 }
 const _depChanges = new Map<string, number>();
 if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {

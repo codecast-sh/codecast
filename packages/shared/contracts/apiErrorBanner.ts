@@ -228,6 +228,32 @@ export function limitBannerContent(shownAs: string | null | undefined): string {
   return shown ? `${LIMIT_BANNER_PREFIX} · ${shown}` : LIMIT_BANNER_PREFIX;
 }
 
+// Claude Code's own limit wait (2.1.283+). At a spent window it writes no
+// API-error entry: it arms an automatic continue at the reset and records only
+// a system line, "Usage limit reached · continuing automatically at 6:10pm ·
+// esc to cancel" ("… reached again · …" when it re-parks). The pane footer
+// repeats the wait as "Continuing automatically at 6:10pm · esc to cancel ·
+// /usage-credits to continue now". Read as nothing, the park never reached the
+// recovery loop: on 2026-09-30 ten sessions on a spent account sat for hours
+// while the machine had accounts with headroom.
+const CLAUDE_AUTO_CONTINUE_RE = /^(?:[⏺●]\s*)?(?:usage limit reached(?: again)?\s*·\s*)?continuing automatically\b[^\n]*·\s*esc to cancel\b/i;
+
+/** Is this line Claude Code's armed automatic continue (the system line or
+ *  the pane footer)? Its "esc to cancel" belongs to the wait, not to a
+ *  dialog: Escape cancels the continue. */
+export function isClaudeAutoContinueLine(line: string | null | undefined): boolean {
+  return !!line && CLAUDE_AUTO_CONTINUE_RE.test(line.trim());
+}
+
+/** The canonical limit banner for Claude Code's auto-continue system line, or
+ *  null for any other line. Only the "Usage limit reached" form records a park;
+ *  the bare footer is pane-only. */
+export function claudeAutoContinueBanner(text: string | null | undefined): string | null {
+  const line = (text ?? "").trim();
+  if (!/^usage limit reached/i.test(line) || !isClaudeAutoContinueLine(line)) return null;
+  return limitBannerContent(line.replace(/\s*·\s*esc to cancel\b.*$/i, ""));
+}
+
 // The context-overflow park. Claude Code writes it when a request is rejected
 // for size (error "invalid_request", no HTTP status on the entry) and the pane
 // shows "Context limit reached · /compact or /clear to continue". The JSONL

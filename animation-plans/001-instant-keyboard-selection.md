@@ -1,6 +1,6 @@
 # 001 — Make keyboard-driven selection instant
 
-- **Status**: TODO
+- **Status**: DONE
 - **Commit**: 3efe31bb3
 - **Severity**: HIGH
 - **Category**: Purpose & frequency
