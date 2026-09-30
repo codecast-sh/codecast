@@ -15,6 +15,7 @@ import {
 import { listLiveManagedSessions } from "./lib/liveSessions";
 import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { scheduleFedSessionSettle } from "./callChat";
+import { scheduleWorkerSettle } from "./workerSettle";
 
 // A status CHANGE is the entry point to the needs-input push (see
 // notifications.checkNeedsInput). "idle" only settles into needs_input after
@@ -36,6 +37,8 @@ async function scheduleNeedsInputCheck(
   // a turn that never happened. Standing the schedule down is what keeps a
   // resume out of both (ct-49533).
   if (sessionBoundary) return;
+  // A spawned worker that settles tells the session it reports to.
+  if (!ACTIVE_AGENT_STATUSES.has(agentStatus)) await scheduleWorkerSettle(ctx, conversationId, statusTs);
   const delay =
     agentStatus === "idle"
       ? NEEDS_INPUT_IDLE_CHECK_DELAY_MS

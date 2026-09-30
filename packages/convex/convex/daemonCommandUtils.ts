@@ -162,10 +162,27 @@ export async function requireSessionCommandTarget(
 ): Promise<Doc<"conversations">> {
   const conv = await ctx.db.get(conversationId);
   if (!conv) throw new Error("Conversation not found");
-  if (conv.user_id !== userId && conv.owner_user_id !== userId) {
+  if (!commandsSession(conv, userId)) {
     throw new Error("Not authorized");
   }
   return conv;
+}
+
+/** Whether a person may send the session's commands: its runner or its second-party owner. */
+function commandsSession(conv: Pick<Doc<"conversations">, "user_id" | "owner_user_id">, userId: Id<"users">): boolean {
+  return conv.user_id === userId || conv.owner_user_id === userId;
+}
+
+/**
+ * Whether a person may read a daemon command's row (its verdict): their
+ * own, or a session command on the runner's queue for a session they may
+ * command (the people requireSessionCommandTarget lets send it).
+ */
+export async function canReadSessionCommand(ctx: DbCtx, userId: Id<"users">, row: { user_id: Id<"users">; args?: string | null }): Promise<boolean> {
+  if (row.user_id === userId) return true;
+  const convId = ctx.db.normalizeId("conversations", extractDaemonCommandConversationId(row.args) ?? "");
+  const conv = convId ? await ctx.db.get(convId) : null;
+  return !!conv && commandsSession(conv, userId);
 }
 
 /**
