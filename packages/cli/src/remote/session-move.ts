@@ -19,7 +19,7 @@
  *     refreshToken, but copy a FRESH credential at move time.
  */
 
-import { execFileSync, execSync, keychainReadAsync, spawn, spawnSync } from "../proc.js";
+import { execFileSync, execSync, spawn, spawnSync } from "../proc.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -31,7 +31,7 @@ import { deviceId as localDeviceId } from "./device.js";
 import { readLocalConfig } from "../config/readLocalConfig.js";
 import { applySnapshotFastForward, createWipSnapshot, remoteSnapshotScript } from "../wipSnapshot.js";
 import { defaultConfigDir } from "../config/configDir.js";
-import { ccKeychainReadArgs, ccKeychainReadItems } from "../ccKeychain.js";
+import { readLocalCredential, readLocalCredentialAsync } from "../ccKeychain.js";
 import { remapContextPaths } from "../cloud/mirror/transform.js";
 
 export interface RemoteHost {
@@ -429,43 +429,6 @@ export async function gitPullWorktree(
 // --------------------------------------------------------------------------
 // Auth: copy a FRESH credential to the remote
 // --------------------------------------------------------------------------
-
-// The file form (Linux / older CC). $HOME over os.homedir(): bun caches the
-// latter at startup, breaking $HOME-sandboxed tests; real environments always
-// have HOME set.
-function credentialFile(): string {
-  return path.join(process.env.HOME || os.homedir(), ".claude", ".credentials.json");
-}
-
-/**
- * Read the current CC credential. On macOS it lives in the Keychain (service
- * "Claude Code-credentials"); falls back to the file form (Linux / older CC).
- */
-export function readLocalCredential(): string | null {
-  for (const item of ccKeychainReadItems()) {
-    try {
-      return execFileSync("security", ccKeychainReadArgs(item), { encoding: "utf-8" }).trim();
-    } catch {}
-  }
-  const f = credentialFile();
-  if (!fs.existsSync(f)) return null;
-  return fs.readFileSync(f, "utf-8");
-}
-
-/**
- * The same read for the daemon's timers: the keychain call runs off the loop
- * with a timeout. A `security` call takes tens of milliseconds on an idle
- * machine and seconds on a loaded one, and the credential tick asks every
- * minute.
- */
-export async function readLocalCredentialAsync(): Promise<string | null> {
-  for (const item of ccKeychainReadItems()) {
-    try {
-      return await keychainReadAsync(ccKeychainReadArgs(item));
-    } catch {}
-  }
-  return fs.promises.readFile(credentialFile(), "utf-8").catch(() => null);
-}
 
 /** ssh argv that writes stdin to the remote's credential file (0600 via umask). */
 function credentialPushArgs(host: RemoteHost): string[] {

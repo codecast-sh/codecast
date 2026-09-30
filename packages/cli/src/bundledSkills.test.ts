@@ -66,7 +66,7 @@ describe("the org skill", () => {
     const named = [...body.matchAll(/cast org ([a-z]+)/g)].map((m) => m[1]);
     expect(named.length).toBeGreaterThan(0);
     for (const verb of named) expect(registered).toContain(verb);
-    for (const verb of ["ls", "proposals", "health", "apply", "init", "review", "propose", "staff"]) expect(named).toContain(verb);
+    for (const verb of ["ls", "proposals", "health", "init", "review", "propose", "revise", "staff"]) expect(named).toContain(verb);
     // The two prompt verbs run here, in the person's session, never spawned.
     expect(body).toContain("cast org init --here");
     expect(body).toContain("cast org review --here");

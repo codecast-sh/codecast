@@ -70,7 +70,6 @@ const ALLOWED = new Set<string>([
   "components/capabilities/FleetMatrix.tsx",
   "components/capabilities/InstalledTab.tsx",
   "components/capabilities/TokenCostBadge.tsx",
-  "components/chat/ChatComposer.tsx",
   "components/chat/ChatMessage.tsx",
   "components/chat/ChatToast.tsx",
   "components/editor/SlashCommand.tsx",

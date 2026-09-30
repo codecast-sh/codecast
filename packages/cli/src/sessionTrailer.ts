@@ -32,7 +32,7 @@
 //
 // Kept off index.ts's import graph: the hook runs on the fast path.
 
-import { execFileSync } from "node:child_process";
+import { execFileSync } from "./proc.js";
 import * as path from "node:path";
 import type { CachedSessionLink } from "./localConversationMap.js";
 import { SESSION_TRAILER_KEY, sessionTrailerValue } from "@codecast/shared/blame";

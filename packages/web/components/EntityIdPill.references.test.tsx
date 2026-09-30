@@ -183,13 +183,13 @@ function render(markdown: string): string {
 // The pill's visible text, with the surrounding markup stripped — what a reader
 // actually sees where the id was written.
 function pillText(html: string): string {
-  const m = html.match(/<a [^>]*class="not-prose[^"]*"[^>]*>.*?<span>([^<]*)<\/span><\/a>/);
+  const m = html.match(/<a [^>]*class="not-prose[^"]*"[^>]*>.*?<span[^>]*>([^<]*)<\/span><\/a>/);
   return m ? m[1] : "";
 }
 
 // Every pill's visible text, in reading order.
 function pillTexts(html: string): string[] {
-  return [...html.matchAll(/<a [^>]*class="not-prose[^"]*"[^>]*>.*?<span>([^<]*)<\/span><\/a>/g)].map((m) => m[1]);
+  return [...html.matchAll(/<a [^>]*class="not-prose[^"]*"[^>]*>.*?<span[^>]*>([^<]*)<\/span><\/a>/g)].map((m) => m[1]);
 }
 
 const { EstablishedRefsProvider } = await import("../hooks/entityMentionScope");

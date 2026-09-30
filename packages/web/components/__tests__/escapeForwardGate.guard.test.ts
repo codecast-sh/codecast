@@ -16,13 +16,26 @@ import { join } from "node:path";
 // Escape pressed while a message was pending must not cancel the turn that
 // message starts once the daemon pastes it (2026-08-28) — now rides on the
 // press time: the daemon skips a press that predates its newest injection.
+//
+// The dispatch lives once, in useSessionEscape (hooks/useSessionComposerControls.ts),
+// and every composer that shows a session (the conversation view, a Threads card)
+// sends its Escape through it.
 describe("Escape is forwarded on every press, stamped with the press time", () => {
-  const src = readFileSync(join(import.meta.dir, "..", "ConversationView.tsx"), "utf-8");
-  const start = src.indexOf("const handleSendEscape = useCallback(");
+  const read = (rel: string) => readFileSync(join(import.meta.dir, "..", rel), "utf-8");
+  const src = read("../hooks/useSessionComposerControls.ts");
+  const start = src.indexOf("export function useSessionEscape(");
   const dispatch = src.indexOf('"sendEscapeToSession"', start);
   const body = src.slice(start, dispatch);
 
-  test("handleSendEscape dispatches without judging the live agent status", () => {
+  test("every composer sends Escape through the one hook", () => {
+    for (const rel of ["ConversationView.tsx", "threads/kinds/SessionKind.tsx"]) {
+      const surface = read(rel);
+      expect(surface, rel).toContain("useSessionEscape(");
+      expect(surface, rel).not.toContain('"sendEscapeToSession"');
+    }
+  });
+
+  test("useSessionEscape dispatches without judging the live agent status", () => {
     expect(start).toBeGreaterThan(-1);
     expect(dispatch).toBeGreaterThan(start);
     expect(body).not.toMatch(/isActiveAgentStatus|agent_status/);

@@ -22,6 +22,7 @@ import {
   blockedHeadlineCause,
   ccAccountsValidator,
   decideAutoSwitch,
+  decideSwitchAhead,
   fallbackProfiles,
   isWindowRolled,
   usageStanding,
@@ -606,9 +607,15 @@ export async function insertSwitchCommands(
     // restarts only the sessions a message cannot reach: signed-out ones, and
     // ones pinned to another account's setup-token — the rest get the message
     // a hand-typed continue would send.
-    const restart = switchRequested
+    // On the fleet store a switch moves every session that follows the store,
+    // so only the ones bound at launch (signed out, or pinned) restart; the
+    // rest follow the store and get their continue from the daemon once
+    // Claude Code has re-read it.
+    const followsStore = switchRequested && !isRemote && device?.cc_accounts?.fleet_store === true;
+    const restart = switchRequested && !followsStore
       ? convs
       : convs.filter((c) => continueNeedsRestart(c, device, opts.now));
+    const follow = followsStore ? convs.filter((c) => !restart.includes(c)) : [];
     if (!switchRequested && opts.continueBlocked) {
       for (const c of convs) if (!restart.includes(c)) await sendContinue(c);
     }
@@ -619,7 +626,7 @@ export async function insertSwitchCommands(
     // The daemon reads the pin from the row at resume, so it is corrected here,
     // before the kill command exists.
     if (!isRemote) {
-      const pin = switchRequested
+      const pin = switchRequested && !followsStore
         ? tokenBackedProfile(device?.cc_accounts, { profile: localProfile }, opts.now)
         : continueTargetPin(device, opts.now);
       for (const c of restart) {
@@ -628,6 +635,7 @@ export async function insertSwitchCommands(
     }
     if (restart.length === 0 && !(switchRequested && !isRemote)) continue;
     restarted += restart.length;
+    messaged += follow.length;
     commandIds.push(
       await ctx.db.insert("daemon_commands", {
         user_id: userId,
@@ -637,12 +645,13 @@ export async function insertSwitchCommands(
           // primary's push. They only recycle their blocked sessions.
           profile: isRemote ? undefined : localProfile,
           conversation_ids: restart.map((c) => c._id),
+          ...(follow.length > 0 && opts.continueBlocked ? { follow_ids: follow.map((c) => c._id) } : {}),
           session_ids: Object.fromEntries(restart.map((c) => [c._id, c.session_id])),
           continue_blocked: opts.continueBlocked,
           ...(opts.continueClientIds
             ? {
                 client_ids: Object.fromEntries(
-                  restart
+                  [...restart, ...follow]
                     .map((c) => [c._id, opts.continueClientIds![c._id]] as const)
                     .filter(([, clientId]) => !!clientId),
                 ),
@@ -1574,6 +1583,56 @@ export const setRecoveryMode = mutation({
  * switch_account command / continue enqueue), so auto and manual behave
  * identically at the execution layer.
  */
+// Switch ahead: on a machine whose sessions run on the fleet store, move the
+// fleet off an account before it runs out rather than after sessions park on
+// it. A switch there costs the running sessions nothing (they follow the store
+// mid-turn), so the only thing waiting buys is Claude Code's grace window and
+// its "wrap up this turn" note reaching every session. Scheduled by the
+// heartbeat whenever that machine reports new meters; auto recovery only, the
+// same opt-in that lets the loop switch accounts after a park.
+export const switchAheadCheck = internalMutation({
+  args: { user_id: v.id("users") },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const { online, primary } = await listOnlineDevices(ctx, args.user_id, now);
+    const accounts = primary?.cc_accounts;
+    if (!primary || !accounts?.fleet_store || recoveryModeOf(primary) !== "auto") return { acted: "off" };
+    const state = primary.cc_auto_switch_state ?? {};
+    const fleet = fleetAccount(accounts, now);
+    const decision = decideSwitchAhead({
+      now,
+      fleetEmail: fleet.email,
+      fleetSince: accounts.active_since,
+      profiles: accounts.profiles,
+      attempts: state.attempts ?? [],
+      lastActionAt: state.last_action_at,
+    });
+    if (!decision) return { acted: "stay" };
+    await insertSwitchCommands(ctx, args.user_id, {
+      profile: decision.profile,
+      blocked: [],
+      online,
+      primary,
+      continueBlocked: false,
+      now,
+    });
+    await ctx.db.patch(primary._id, {
+      cc_auto_switch_state: {
+        ...state,
+        last_action_at: now,
+        last_action: `ahead:${decision.profile}`,
+        attempts: [
+          ...(state.attempts ?? []),
+          ...(fleet.profile ? [{ profile: fleet.profile, at: now }] : []),
+          { profile: decision.profile, at: now },
+        ].slice(-MAX_ATTEMPT_HISTORY),
+      },
+    });
+    console.log(`switchAheadCheck: moving the fleet from "${fleet.profile ?? fleet.email}" to "${decision.profile}" before it runs out`);
+    return { acted: "switch", profile: decision.profile };
+  },
+});
+
 export const autoSwitchCheck = internalMutation({
   args: { user_id: v.id("users") },
   handler: async (ctx, args) => {
@@ -2433,6 +2492,7 @@ export const listAccountProfiles = query({
           // The profile sessions launch on when a token switch moved the fleet
           // off the keychain login (fleetAccount); absent = the login.
           launch_profile: d.cc_accounts?.launch_profile,
+          fleet_store: d.cc_accounts?.fleet_store,
           login_flow: d.cc_login_flow,
           session_tokens: true,
           mint_flow: d.cc_mint_flow,

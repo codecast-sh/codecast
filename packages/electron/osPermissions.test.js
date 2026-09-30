@@ -46,8 +46,11 @@ test("the built addon answers from inside an app bundle and never throws outside
 // its permission (2026-09-03: an update staged at 11:58 and its "ready"
 // notification was denied the same second, "can't mix modern clients with
 // legacy clients"). A click reaches exactly the handler of the notification
-// clicked, once.
-test("notify posts through the addon and routes a click to its own handler", () => {
+// clicked, once. The modern API is macOS only, so these two run on darwin and
+// the test after them pins what every other platform gets.
+const NOT_MAC = process.platform !== "darwin";
+
+test("notify posts through the addon and routes a click to its own handler", { skip: NOT_MAC }, () => {
   const posted = [];
   let activate = null;
   let asked = 0;
@@ -70,7 +73,7 @@ test("notify posts through the addon and routes a click to its own handler", () 
   assert.deepEqual(clicks, ["b"]);
 });
 
-test("notify prompts first when never asked, and reports false when nothing can post", () => {
+test("notify prompts first when never asked, and reports false when nothing can post", { skip: NOT_MAC }, () => {
   let asked = 0;
   const addon = {
     authorizationStatus: () => 0,
@@ -88,6 +91,13 @@ test("notify prompts first when never asked, and reports false when nothing can 
   // A post that returns nothing (outside a bundle) is not a delivery.
   const mute = { ...addon, post: () => null };
   assert.equal(createOsPermissions({ electron: stubElectron(), bundleId: APP, notifications: mute }).notify("t", "b"), false);
+});
+
+test("notify never posts off macOS, even with a working addon, so the caller falls back", { skip: !NOT_MAC }, () => {
+  let posts = 0;
+  const addon = { authorizationStatus: () => 2, requestAuthorization: () => {}, post: () => { posts++; return "id"; }, onActivate: () => {} };
+  assert.equal(createOsPermissions({ electron: stubElectron(), bundleId: APP, notifications: addon }).notify("t", "b"), false);
+  assert.equal(posts, 0);
 });
 
 function stubElectron() {

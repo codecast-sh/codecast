@@ -3,9 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import * as proc from "./proc.js";
-import { readLocalCredential, readLocalCredentialAsync } from "./remote/session-move.js";
 import { writeActiveCredential } from "./ccAccounts.js";
-import { ccKeychainReadItems, ccKeychainWriteItem } from "./ccKeychain.js";
+import { ccKeychainReadItems, ccKeychainWriteItem, readLocalCredential, readLocalCredentialAsync } from "./ccKeychain.js";
 
 let root: string;
 let saved: Record<string, string | undefined>;

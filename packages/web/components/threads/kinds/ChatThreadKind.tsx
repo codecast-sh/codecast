@@ -11,7 +11,8 @@ import { rowOf } from "../../../lib/threadRows";
 import { ChatMessage, ChatNewDivider } from "../../chat/ChatMessage";
 import { ChatComposer } from "../../chat/ChatComposer";
 import type { ChatMessageView } from "../../chat/chatTypes";
-import { EarlierButton, useReaderFold } from "../readerFold";
+import { EarlierButton } from "../readerFold";
+import { useReaderFold } from "../../../hooks/useReaderFold";
 import { useThreadsPage } from "../threadsContext";
 
 import { useWatchEffect } from "../../../hooks/useWatchEffect";

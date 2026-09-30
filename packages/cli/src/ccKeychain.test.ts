@@ -10,8 +10,8 @@ import {
   ccKeychainReadItems,
   ccKeychainWriteItem,
   claudeConfigDir,
+  readLocalCredentialAsync,
 } from "./ccKeychain.js";
-import { readLocalCredentialAsync } from "./remote/session-move.js";
 
 // Every test runs with a sandboxed env: HOME in a temp dir, and a PATH that
 // names no real directory so a keychain lookup finds no `security` to run.

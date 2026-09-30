@@ -23,7 +23,7 @@ import {
 } from "./ui/dropdown-menu";
 import type { AgentOption, MoveVerb } from "../lib/sessionControl";
 import { MOVE_VERBS, moveAgentOptions, sessionMoveVerbs } from "../lib/sessionControl";
-import { useCloudAgentOfConversation } from "./cloudAgents";
+import { useCloudAgentOfConversation } from "./cloudAgents/sessionAgent";
 
 // The unified session control: one panel behind the conversation-header badge
 // holding everything that moves a session between rails — model and effort

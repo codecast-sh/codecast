@@ -6,35 +6,13 @@
 // so when no machine is online, when the one it names is offline, or when that
 // one runs a codecast too old for this, and closes with Done once the
 // provider's own steps finish. Each provider's dialog (ConnectCursorDialog,
-// ConnectCodexDialog) supplies only its steps.
+// ConnectCodexDialog) supplies only its steps, and pins its machine with
+// usePinnedCloudAgentMachine (machine.ts).
 
-import { useState, type ReactNode } from "react";
-import { useDevices, type Device } from "../DeviceBadge";
-import { deviceManagedKeys } from "../../lib/useProviderKeyCommand";
+import type { ReactNode } from "react";
+import type { Device } from "../DeviceBadge";
 import { Button } from "../ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../ui/dialog";
-
-/**
- * The machine that drives a cloud agent session, and whether it is already
- * connected to the provider: the one named (the session's machine, the page's
- * machine), else your most recently seen online computer.
- */
-export function useCloudAgentMachine(deviceId: string | null | undefined, isConnected: (device: Device) => boolean): { device: Device | null; connected: boolean } {
-  const { byId, mostRecentOnlineLocal } = useDevices();
-  const device = (deviceId ? byId.get(deviceId) : undefined) ?? mostRecentOnlineLocal;
-  return { device, connected: !!device && isConnected(device) };
-}
-
-/**
- * The machine for a dialog, fixed when it opens: the roster reorders as
- * machines check in, and credentials must go where the label said.
- */
-export function usePinnedCloudAgentMachine(deviceId: string | null | undefined, isConnected: (device: Device) => boolean) {
-  const initial = useCloudAgentMachine(deviceId, isConnected);
-  const [pinnedId] = useState(() => initial.device?.device_id ?? null);
-  const { device, connected } = useCloudAgentMachine(pinnedId, isConnected);
-  return { device, connected, machine: device?.label ?? "your computer", pubkey: device ? deviceManagedKeys(device).pubkey : undefined };
-}
 
 export function CloudConnectDialog({ title, description, device, machine, needsPubkey = true, pubkey, outdated = false, done, onClose, children }: {
   title: string;

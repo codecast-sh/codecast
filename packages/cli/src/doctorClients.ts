@@ -138,7 +138,8 @@ export function clientFixture(id: AgentClientId): ClientFixture {
     case "cursor":
       return {
         transcript: `user:\n${PROBE}\nassistant:\npong\n`,
-        readySample: "❯ ",
+        // The empty composer after a turn (see the cursor descriptor).
+        readySample: "  → Add a follow-up",
         // sqlite store — no file-event watcher.
       };
     case "muse": {

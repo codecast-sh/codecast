@@ -10,7 +10,8 @@ import { CommentAvatar } from "../../comments/CommentAvatar";
 import { ChatComposer } from "../../chat/ChatComposer";
 import { ChatTimelineRows, ThreadUnavailableNote } from "./ChatThreadKind";
 import { useThreadsPage } from "../threadsContext";
-import { EarlierButton, useReaderFold } from "../readerFold";
+import { EarlierButton } from "../readerFold";
+import { useReaderFold } from "../../../hooks/useReaderFold";
 
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 // The DM kind: a direct message room from the chat rail (a multi-person DM is

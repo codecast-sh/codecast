@@ -10,7 +10,8 @@ import { SettingsPanel, SettingsSection } from "../../../components/settings/ui"
 import { DevicePanelHeader } from "../../../components/settings/DevicePanelHeader";
 import { useDevices, type Device } from "../../../components/DeviceBadge";
 import { useProviderKeyCommand, deviceManagedKeys } from "../../../lib/useProviderKeyCommand";
-import { CloudAgentSignInRows, cloudAgentKeyDialog } from "../../../components/cloudAgents";
+import { CloudAgentSignInRows } from "../../../components/cloudAgents";
+import { cloudAgentKeyDialog } from "../../../components/cloudAgents/providerUi";
 
 /**
  * "Provider keys" — manage the optional LLM API keys codecast injects into

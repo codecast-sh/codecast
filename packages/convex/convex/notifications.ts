@@ -12,7 +12,7 @@ import { enqueuePush, readMissedSince } from "./pushRouter";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { isConversationTeamVisible } from "./privacy";
-import { ENTITY_TYPE, NOTIFICATION_TYPE } from "./notificationRouter";
+import { ENTITY_TYPE, NOTIFICATION_TYPE } from "./lib/notificationTypes";
 import { isAgentSpawnedConversation, isSubagentConversation } from "./ccAccountsShared";
 import { listSessionOwnerIds } from "./sessionOwners";
 import {

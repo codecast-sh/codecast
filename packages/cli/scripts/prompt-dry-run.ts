@@ -23,11 +23,12 @@
 //     no file ever carries it. The directory is removed when the run ends.
 //  2. CODECAST_DIR points at an empty directory, so a real `cast` the agent
 //     finds is "Not authenticated" and cannot post, send or pin anything.
-//  3. `cast` on PATH is the guard beside this script (prompt-dry-run-cast.sh,
-//     or the one in --guard): reads pass through with the real state directory
-//     restored, writes are refused and logged, and `--serve <dir>` answers
-//     `cast org inputs` and `cast org health` from files there, so a run grades
-//     the prompt against a record and never against a moving workspace.
+//  3. `cast` on PATH is the guard beside this script (prompt-dry-run-bin/cast,
+//     or the directory given as --guard): reads pass through with the real
+//     state directory restored, writes are refused and logged, and
+//     `--serve <dir>` answers `cast org inputs` and `cast org health` from
+//     files there, so a run grades the prompt against a record and never
+//     against a moving workspace.
 //  4. No controlling terminal (start_new_session), no tmux variables, none of
 //     the launching session's identity (CODECAST_SESSION_ID and friends).
 //

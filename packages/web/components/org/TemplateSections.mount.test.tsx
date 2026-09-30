@@ -72,19 +72,21 @@ async function verifyTemplateSections() {
   // The terminal form stays, folded: the page never leads with a command.
   assert.match(document.querySelector("details")!.textContent!, /cast org template bind acme-growth --secret accounts\.ads=<path>/);
   const type = async (selector: string, value: string) => {
-    const el = document.querySelector<HTMLInputElement>(selector)!;
+    const el = document.querySelector<HTMLTextAreaElement>(selector)!;
     assert.ok(el, selector);
-    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(el, value); el.dispatchEvent(new Event("input", { bubbles: true })); });
+    await act(async () => { Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), "value")!.set!.call(el, value); el.dispatchEvent(new Event("input", { bubbles: true })); });
   };
   const run = () => document.querySelector<HTMLButtonElement>("[data-host-run]")!;
   assert.equal(run().disabled, true, "nothing typed: nothing to bind");
-  assert.equal(document.querySelector<HTMLInputElement>('input[name="secret:accounts.ads"]')!.type, "password");
-  await type('input[name="secret:accounts.ads"]', "{\"token\":\"never-copied\"}");
+  // A masked textarea, never a password input: a password input strips line breaks, which breaks a pasted PEM key.
+  const field = document.querySelector<HTMLTextAreaElement>('textarea[name="secret:accounts.ads"]')!;
+  assert.equal(field.tagName, "TEXTAREA");
+  await type('textarea[name="secret:accounts.ads"]', "{\"token\":\n\"never-copied\"}");
   assert.equal(run().textContent, "Bind on MacBook");
   await act(async () => run().click());
   assert.equal(binds.length, 1);
   assert.equal(binds[0][0], "key-1");
-  assert.deepEqual(binds[0][1], [{ key: "accounts.ads", payload: { provider: "accounts.ads", epk: "epk:PUB", iv: "iv", ct: "sealed:24" } }]);
+  assert.deepEqual(binds[0][1], [{ key: "accounts.ads", payload: { provider: "accounts.ads", epk: "epk:PUB", iv: "iv", ct: "sealed:25" } }]); // the line break survives into what is sealed
   assert.doesNotMatch(JSON.stringify(binds), /never-copied/);
   await act(async () => root.unmount());
   // Awaiting its host: one button, the machine named, progress and failure read from the record.
@@ -108,7 +110,7 @@ async function verifyTemplateSections() {
   assert.match(body, /No machine has run codecast/);
   assert.equal(document.querySelector("[data-host-run]"), null);
   body = await rerender({ phase: "awaiting_host", bind_host: { ...instance.bind_host, device: { ...instance.bind_host.device, can_receive_secrets: false, pubkey: null } } });
-  await type('input[name="secret:accounts.ads"]', "x");
+  await type('textarea[name="secret:accounts.ads"]', "x");
   assert.match(document.body.textContent!, /too old to receive a secret/);
   assert.equal(run().disabled, true);
   await act(async () => root2.unmount());

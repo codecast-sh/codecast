@@ -4333,6 +4333,11 @@ export default defineSchema({
     ),
     run_at: v.optional(v.number()),
     interval_ms: v.optional(v.number()),
+    // A recurring trigger's cadence slot, held only while run_at is off the
+    // cadence (a manual run, a retry, a limit park: agentTasks.offCadence), so
+    // the arming after the run returns to the cadence. Absent otherwise:
+    // run_at is then the slot.
+    cadence_slot_at: v.optional(v.number()),
     event_filter: v.optional(v.object({
       event_type: v.string(),
       action: v.optional(v.string()),
