@@ -113,3 +113,4 @@ export { SESSION_SNOOZE_CHOICES, sessionSnoozeUntil, type SessionSnoozeKey } fro
 export * from "./unattended";
 export * from "./handoffPrompt";
 export * from "./browserExtension";
+export type { AskResult } from "./sessionAsk";

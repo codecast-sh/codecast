@@ -191,7 +191,19 @@ describe("command groups stay off the boot graph", () => {
     // 263 after sync exclusions: syncScope.ts reads its folder lists through
     // @codecast/shared/team/syncPlan (no imports), the rule the settings page
     // and `cast sharing` read too.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(263);
+    // 262 after the 2026-09-30 cloud agents landing, which had pushed it to 280.
+    // Its new leaves stay: the `cast sync` verb registrar cloud/syncCli.ts
+    // (bodies load inside each action), shared/search for the operator help
+    // text, cloudAgents/transcript.ts under parser.ts, cloud/gitOrigin.ts under
+    // gitPlane.ts, cloud/mirror/bundle.ts and seven contracts through the
+    // barrel. What left: ccAccounts.ts read the Claude login through
+    // remote/session-move.ts, which dragged the whole session move cluster
+    // (12 files) onto every command; the read now lives in ccKeychain.ts beside
+    // the item names it reads. The usage poll loads cloudAgents/http.ts and
+    // usageRetry.ts when it runs, and `cast doctor` loads doctor.ts (5 files).
+    // One leaf arrived: cliVersion.ts, the version read update.ts and the
+    // harness ledger share, so the worker runtime no longer loads the updater.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(262);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.
@@ -249,7 +261,21 @@ describe("command groups stay off the boot graph", () => {
     // define them; plus deviceAccount.ts, vault/vaultCapability.ts and
     // workspace/copyFiles.ts, all leaves on node alone or the workspace manifest.
     // 358 after sync exclusions: the shared folder list rule in syncScope.ts.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(358);
+    // 389 after the 2026-09-30 cloud agents, cloud sync and usage retry work,
+    // every file of it the daemon's own: the Cursor and Codex cloud agent
+    // registry (cloudAgents/*, 9 files, built when daemon.ts loads) with the
+    // sse.ts parser its Cursor adapter reads, claudeCloud.ts (the claude.ai
+    // session watcher, started on every boot), workers/cursorObservation.ts
+    // under the ingest worker, typedPollAnswer.ts in message delivery,
+    // usageRetry.ts with cloudAgents/http.ts for the usage polls,
+    // cloud/syncSide.ts under worktreeGc.ts, cloud/tailnet.ts under
+    // cloudHost.ts, browser/hostScreen.ts under browser/instance.ts,
+    // cloud/gitOrigin.ts, cloud/mirror/bundle.ts, shared/blame under
+    // repoMirror.ts, search/tokenize.ts under the vault index, and seven
+    // contracts through the barrel. A dynamic import of the registry or the
+    // watcher would lower this number without lowering what the daemon
+    // loads, since both run at boot. Plus cliVersion.ts, the same leaf as above.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(389);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

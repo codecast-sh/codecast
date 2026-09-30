@@ -18,7 +18,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { Mic, Ban } from "lucide-react";
 import { getRecorderStatus, startRecording } from "../../lib/calls/recorder";
-import { getMeetingDetect, setMeetingDetect, type MeetingOffer } from "../../lib/desktop";
+import { getMeetingDetect, setMeetingDetect, type MeetingOffer } from "../../lib/desktopMeetings";
 import "./recorder.css";
 
 export function MeetingOfferCard({

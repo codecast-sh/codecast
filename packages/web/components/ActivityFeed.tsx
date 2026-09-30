@@ -384,7 +384,7 @@ const NO_EXTERNAL_EVENTS: ExternalEventRecord[] = [];
 // A day holds two kinds of rows: the sessions it always held, and the team's
 // git events from the same day, folded into one row per thread of work (a
 // pull request, else a branch). `ts` is what the two are ordered by.
-type FeedEntry =
+export type FeedEntry =
   | { kind: "conv"; ts: number; conv: Conversation }
   | { kind: "git"; ts: number; group: ExternalEventGroup };
 
@@ -404,7 +404,7 @@ function mergeDayEntries(convEntries: FeedEntry[], gitEntries: FeedEntry[]): Fee
   return out;
 }
 
-function DaySection({ date, entries, showActor, onNavigate, compact, projectColors, onProjectFilter, shareTeamId }: {
+export function DaySection({ date, entries, showActor, onNavigate, compact, projectColors, onProjectFilter, shareTeamId }: {
   date: string;
   entries: FeedEntry[];
   showActor: boolean;

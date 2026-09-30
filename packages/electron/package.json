@@ -1,6 +1,6 @@
 {
   "name": "@codecast/electron",
-  "version": "1.1.121",
+  "version": "1.1.122",
   "description": "Codecast Desktop (Electron)",
   "main": "main.js",
   "private": true,
@@ -14,6 +14,7 @@
     "prebuild:local": "npm run native",
     "start": "electron .",
     "dev": "CODECAST_URL=https://local.codecast.sh electron .",
+    "test": "node --test *.test.js",
     "build": "NOTARIZE_KEYCHAIN_PROFILE=codecast electron-builder -m",
     "build:dir": "electron-builder -m --config.mac.target=dir",
     "build:local": "electron-builder -m --config.mac.target=dir --config.mac.identity=null",

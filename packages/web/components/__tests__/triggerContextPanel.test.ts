@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { liveTriggersFor, pillsShown } from "../TriggerContextPanel";
+import { liveTriggersFor, pillsShown } from "../triggerStrip";
 import type { TaskRow } from "../triggerTasks";
 
 // The strip above a conversation shows the triggers that are still live there.

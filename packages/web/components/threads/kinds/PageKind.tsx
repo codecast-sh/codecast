@@ -8,7 +8,8 @@ import type { ThreadCardModel } from "../../../lib/threadCards";
 import { rowOf } from "../../../lib/threadRows";
 import { usePageThreadRow as usePageRow } from "../../../hooks/useThreadPreviews";
 import { CommentAvatar } from "../../comments/CommentAvatar";
-import { EarlierButton, useReaderFold } from "../readerFold";
+import { EarlierButton } from "../readerFold";
+import { useReaderFold } from "../../../hooks/useReaderFold";
 import { Clamp } from "../../tasks/TaskCommentStream";
 import { useThreadsPage } from "../threadsContext";
 

@@ -62,7 +62,7 @@ import {
 } from "../../../../../lib/repoView";
 import { cn, copyToClipboard, relTimeShort, sharePageUrl } from "../../../../../lib/utils";
 import "../../../../../components/repo/repo.css";
-import { useSessionTrailer } from "../../../../../components/SessionTrailer";
+import { useSessionTrailer } from "../../../../../hooks/useSessionTrailer";
 
 // `api` is a proxy, so naming a function prod has not deployed yet still
 // produces a reference; useQueryNoThrow then reports the miss as an error

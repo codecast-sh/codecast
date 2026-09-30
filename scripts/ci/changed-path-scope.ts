@@ -30,25 +30,32 @@ export type Area = (typeof AREAS)[number];
 
 // Which areas make each ci.yml job worth running. A job runs when any of its
 // areas changed. The mapping follows what the job actually executes: `lint`
-// only lints packages/web, `typecheck` filters to web + convex, and every
+// only lints packages/web, `typecheck` filters to cli + web + convex, and every
 // package test reads @codecast/shared.
 export const JOB_AREAS: Record<string, Area[]> = {
-  build: ["cli", "web", "shared", "extension"],
-  typecheck: ["web", "convex", "shared"],
-  lint: ["web"],
-  "test-convex": ["convex", "shared"],
-  "test-web": ["web", "shared"],
-  "test-cli": ["cli", "shared"],
   build: ["cli", "web", "shared", "extension", "platform"],
-  typecheck: ["web", "convex", "shared", "platform"],
+  // The cli program's rootDir is the repo root and it imports the convex
+  // generated api, so a convex change can break the cli typecheck too.
+  typecheck: ["cli", "web", "convex", "shared", "platform"],
   lint: ["web"],
   "test-convex": ["convex", "shared", "platform"],
   "test-web": ["web", "shared", "platform"],
   "test-cli": ["cli", "shared", "platform"],
   // The mirror's own job: its package tests, and the drift check. Every other
-  // job above lists "platform" too, because the mirror is a dependency of all
-  // of them and used to reach them through "shared".
+  // job lists "platform" too, because the mirror is a dependency of all of
+  // them and used to reach them through "shared".
   "test-platform": ["platform"],
+  // Every area, because the shared suite reads more than shared: the max lines
+  // ratchet walks every package under packages/, and the chief of staff prompt
+  // test reads its spec from docs/. Gating it on less would let a change break
+  // it without CI running it.
+  "test-shared": [...AREAS],
+  // The guard tests walk the native bundle's import graph, which reaches into
+  // packages/web, packages/convex and packages/shared, and they borrow the
+  // graph walker from packages/cli/src/bench.
+  "test-mobile": ["mobile", "web", "convex", "shared", "cli", "platform"],
+  // The shell requires @platform/desktop and nothing else in the repo.
+  "test-electron": ["electron", "platform"],
 };
 
 export const GATED_JOBS = Object.keys(JOB_AREAS);
@@ -60,7 +67,8 @@ export const GATED_JOBS = Object.keys(JOB_AREAS);
  * do not change when the job stops being required.
  *
  * `computer-macos` builds and exercises the `cast computer` helper, which needs
- * a Mac and a Swift toolchain. It becomes a gate — moved into JOB_AREAS and into
+ * a Mac and a Swift toolchain, and runs the cli test files whose cases skip
+ * anywhere but darwin. It becomes a gate — moved into JOB_AREAS and into
  * verify — after ten green runs in a row (ct-49523).
  */
 export const ADVISORY_JOBS = ["computer-macos"];
@@ -78,8 +86,6 @@ const AREA_PREFIXES: Array<[Exclude<Area, "docs">, string[]]> = [
   // The vendored mirror is its own area: a change to it runs the platform
   // tests and the manifest drift check, which "shared" alone never did
   // (ct-49675).
-  ["platform", ["platform/"]],
-  ["shared", ["packages/shared/"]],
   ["platform", ["platform/"]],
   ["electron", ["packages/electron/", "packages/desktop/"]],
   ["mobile", ["packages/mobile/"]],

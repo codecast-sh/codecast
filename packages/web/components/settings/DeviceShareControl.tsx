@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Check, Lock, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { useInboxStore } from "../../store/inboxStore";
+import { listTeamNames, sharedTeamsOf, useMyTeams, type ShareTeam } from "../../hooks/useDeviceSharing";
 import { deviceDisplayName, type Device } from "../DeviceBadge";
 import { TeamIcon } from "../TeamIcon";
 import { Button } from "../ui/button";
@@ -16,19 +17,6 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 
-type Team = { _id: string; name: string; icon?: string | null; icon_color?: string | null };
-
-/** The teams a machine is open to, as the viewer's team rows (unknown ids,
- *  a team since left, drop out). */
-export function sharedTeamsOf(d: Pick<Device, "shared_team_ids">, teams: Team[]): Team[] {
-  const ids = new Set(d.shared_team_ids ?? []);
-  return teams.filter((t) => ids.has(String(t._id)));
-}
-
-function useMyTeams(): Team[] {
-  return (useInboxStore((s) => s.teams) ?? []) as Team[];
-}
-
 /**
  * Who may start sessions on this machine: one pill per team you are on. A
  * filled pill is open to that team, a dashed one is not. Opening asks once,
@@ -39,7 +27,7 @@ export function DeviceShareControl({ d, teamId }: { d: Device; teamId?: string }
   const allTeams = useMyTeams();
   const teams = teamId ? allTeams.filter((t) => String(t._id) === teamId) : allTeams;
   const setDeviceShares = useInboxStore((s) => s.setDeviceShares);
-  const [asking, setAsking] = useState<Team | null>(null);
+  const [asking, setAsking] = useState<ShareTeam | null>(null);
   if (teams.length === 0) return null;
 
   const shared = new Set(d.shared_team_ids ?? []);
@@ -47,11 +35,11 @@ export function DeviceShareControl({ d, teamId }: { d: Device; teamId?: string }
   const name = deviceDisplayName(d);
 
   const write = (next: Set<string>) => setDeviceShares(d.device_id, [...next]);
-  const open = (t: Team) => {
+  const open = (t: ShareTeam) => {
     write(new Set([...shared, String(t._id)]));
     toast.success(`${t.name} can start sessions on ${name}`);
   };
-  const close = (t: Team) => {
+  const close = (t: ShareTeam) => {
     const next = new Set(shared);
     next.delete(String(t._id));
     write(next);
@@ -150,7 +138,7 @@ export function DeviceShareControl({ d, teamId }: { d: Device; teamId?: string }
       <p className="mt-1.5 text-[11px] leading-snug text-sol-text-dim">
         {openTo.length ? (
           <>
-            {listNames(openTo)} can start sessions here. They run as you, with this machine&apos;s logins and
+            {listTeamNames(openTo)} can start sessions here. They run as you, with this machine&apos;s logins and
             checkouts.
           </>
         ) : (
@@ -170,16 +158,4 @@ function Point({ children }: { children: React.ReactNode }) {
       <span>{children}</span>
     </li>
   );
-}
-
-function listNames(teams: Team[]): string {
-  const names = teams.map((t) => t.name);
-  if (names.length <= 1) return names[0] ?? "";
-  return `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
-}
-
-/** "shared with Acme" for a one-line row, or null when private. */
-export function useSharedWithLabel(d: Device): string | null {
-  const openTo = sharedTeamsOf(d, useMyTeams());
-  return openTo.length ? `shared with ${listNames(openTo)}` : null;
 }

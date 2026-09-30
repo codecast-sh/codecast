@@ -17,7 +17,8 @@ import { useInboxStore } from "../../store/inboxStore";
 import { Spinner, Step } from "../MintTokenDialog";
 import { Button } from "../ui/button";
 import { CopyCommand } from "../conversation/blocks/shared";
-import { CloudConnectDialog, usePinnedCloudAgentMachine } from "./CloudConnectDialog";
+import { CloudConnectDialog } from "./CloudConnectDialog";
+import { usePinnedCloudAgentMachine } from "./machine";
 import { useCloudAgentConnected } from "./credentials";
 
 const CODEX = CLOUD_AGENT_PROVIDERS.codex;

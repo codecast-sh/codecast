@@ -98,7 +98,7 @@ async function verifyFirstOpen() {
   await act(async () => q<HTMLButtonElement>("[data-retire-submit]")!.click());
   assert.deepEqual(calls.splice(0), ["retire:undefined"]);
   assert.equal(retireToastText("Chief of Staff", "keep"), "Retired Chief of Staff; its agent keeps running as a plain agent");
-  assert.equal(retireToastText("Chief of Staff", "retire"), "Retired Chief of Staff and its standing agent; the thread is kept");
+  assert.equal(retireToastText("Chief of Staff", "retire"), "Retired Chief of Staff; its thread is kept");
   assert.equal(retireToastText("Growth lead", undefined), "Retired Growth lead");
 
   await act(async () => root.unmount());

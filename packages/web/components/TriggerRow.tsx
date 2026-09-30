@@ -146,8 +146,12 @@ export type TriggerRowVariant =
 
 const VERB_BTN = "p-1 rounded transition-[color,background-color,transform] duration-100 active:scale-90";
 
+// A trigger verb: the store's triggerAction signature, so a caller can supply
+// its own (the marketing hero plays verbs on fixture rows without a store).
+export type TriggerVerbAction = (taskId: string, verb: "pause" | "resume" | "runNow" | "cancel" | "reactivate") => void;
+
 export const TriggerRowItem = memo(function TriggerRowItem({
-  row, variant = "roster", activeSessionId, onOpen, highlighted, isNext, onNavigated, onEdit, onDuplicate, onDelete,
+  row, variant = "roster", activeSessionId, onOpen, highlighted, isNext, onNavigated, onEdit, onDuplicate, onDelete, actions,
 }: {
   row: TriggerRow;
   variant?: TriggerRowVariant;
@@ -166,6 +170,9 @@ export const TriggerRowItem = memo(function TriggerRowItem({
   onEdit?: () => void;
   onDuplicate?: () => void;
   onDelete?: () => void;
+  // Replaces the store's triggerAction for every verb. The server toasts
+  // ("Run queued", "Trigger canceled") belong to the store path and stay off.
+  actions?: TriggerVerbAction;
 }) {
   const { task, unread } = row;
   const router = useRouter();
@@ -180,15 +187,17 @@ export const TriggerRowItem = memo(function TriggerRowItem({
   // Every verb is a store action (local-first): the agent_tasks row flips on
   // the draft the instant it's clicked and the dispatch side effect runs the
   // real mutation. Same actions on every surface.
-  const triggerAction = useInboxStore((st) => st.triggerAction);
+  const storeTriggerAction = useInboxStore((st) => st.triggerAction);
+  const triggerAction = actions ?? storeTriggerAction;
+  const confirm = (fire: () => void) => { if (!actions) fire(); };
   const taskId = task._id as Id<"agent_tasks">;
-  const runNow = () => { triggerAction(taskId, "runNow"); toast.success("Run queued"); };
-  const runAgain = () => { triggerAction(taskId, "reactivate"); toast.success("Re-armed — runs within ~30s"); };
+  const runNow = () => { triggerAction(taskId, "runNow"); confirm(() => toast.success("Run queued")); };
+  const runAgain = () => { triggerAction(taskId, "reactivate"); confirm(() => toast.success("Re-armed — runs within ~30s")); };
   const pause = () => triggerAction(taskId, "pause");
   const resume = () => triggerAction(taskId, "resume");
   const cancel = () => {
     triggerAction(taskId, "cancel");
-    toast("Trigger canceled", { description: taskDisplayTitle(task), action: { label: "Undo", onClick: () => triggerAction(taskId, "reactivate") } });
+    confirm(() => toast("Trigger canceled", { description: taskDisplayTitle(task), action: { label: "Undo", onClick: () => triggerAction(taskId, "reactivate") } }));
   };
   const paused = task.status === "paused";
   const terminal = task.status === "completed" || task.status === "failed";

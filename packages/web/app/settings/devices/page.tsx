@@ -18,7 +18,8 @@ import { canRemoveMachine, splitStaleMachines } from "../../../lib/staleMachines
 import { describeDeviceFreeze } from "../../../lib/daemonHealthCopy";
 import { useSettingsData } from "../../../hooks/useSyncSettings";
 import { Bot, Users } from "lucide-react";
-import { DeviceShareControl, useSharedWithLabel } from "../../../components/settings/DeviceShareControl";
+import { DeviceShareControl } from "../../../components/settings/DeviceShareControl";
+import { useSharedWithLabel } from "../../../hooks/useDeviceSharing";
 import { CloudHostPanel } from "../../../components/settings/CloudHostPanel";
 
 type RepoPlane = NonNullable<Device["git_plane"]>[number];

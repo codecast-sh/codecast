@@ -8,7 +8,7 @@
  * the agent; every later message is a follow-up. The transcript comes back
  * through the provider's CloudAgentWatcher.
  */
-import { execFile } from "child_process";
+import { execFile } from "../proc.js";
 import * as fs from "fs";
 import { promisify } from "util";
 import { cloudAgentLaunch, cloudAgentRootId, isCloudAgentId } from "@codecast/shared/contracts";

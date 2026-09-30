@@ -13,7 +13,7 @@ import { formatToolName } from "@codecast/shared/render";
  * truncate, so beside the Approve/Deny buttons in a narrow pane it yields
  * width instead of crushing the preview to one letter per line.
  */
-function ToolName({ name, className = "" }: { name: string; className?: string }) {
+export function ToolName({ name, className = "" }: { name: string; className?: string }) {
   return (
     <span title={name} className={`min-w-0 max-w-[40%] truncate font-mono text-sol-text-muted ${className}`}>
       {formatToolName(name)}
@@ -46,7 +46,15 @@ type Permission = {
   responded_at?: number;
 };
 
-function PermissionRow({
+/** The fields the view renders. A real row satisfies it, and so does a fixture with a plain string id. */
+export type PermissionViewItem<PId extends string = string> = {
+  _id: PId;
+  tool_name: string;
+  arguments_preview?: string;
+  status: Permission["status"];
+};
+
+export function PermissionRow({
   permission,
   onApprove,
   onDeny,
@@ -54,7 +62,7 @@ function PermissionRow({
   onToggleExpand,
   showToolName,
 }: {
-  permission: Permission;
+  permission: PermissionViewItem;
   onApprove: () => void;
   onDeny: () => void;
   isExpanded: boolean;
@@ -120,8 +128,6 @@ export function PermissionStack({
 }) {
   const updatePermissionStatus = useMutation(api.permissions.updatePermissionStatus);
   const resolveSessionQuestion = useInboxStore((s) => s.resolveSessionQuestion);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [collapsed, setCollapsed] = useState(false);
   const [inflight, setInflight] = useState<Set<string>>(new Set());
 
   const pending = permissions.filter((p) => p.status === "pending");
@@ -199,6 +205,47 @@ export function PermissionStack({
     }
   }, [pending, handleApprove, handleDeny, handleApproveAll, handleDenyAll]));
 
+  return (
+    <PermissionStackView
+      pending={pending}
+      inflight={inflight}
+      onApprove={handleApprove}
+      onDeny={handleDeny}
+      onApproveAll={handleApproveAll}
+      onDenyAll={handleDenyAll}
+      onAllowAll={onAllowAll ? handleAllowAll : undefined}
+    />
+  );
+}
+
+/**
+ * The permission stack as pure markup: every write goes through the callbacks,
+ * and only presentation state (collapsed, which row is expanded) lives here.
+ * PermissionStack wires it to the mutation and the y/n keys; the marketing
+ * hero renders it with fixture rows.
+ */
+export function PermissionStackView<PId extends string>({
+  pending,
+  inflight,
+  onApprove,
+  onDeny,
+  onApproveAll,
+  onDenyAll,
+  onAllowAll,
+}: {
+  /** Pending rows only; the container filters. */
+  pending: PermissionViewItem<PId>[];
+  inflight: ReadonlySet<string>;
+  onApprove: (id: PId) => void;
+  onDeny: (id: PId) => void;
+  onApproveAll: () => void;
+  onDenyAll: () => void;
+  /** Present only when the session can bypass future prompts. */
+  onAllowAll?: () => void;
+}) {
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState(false);
+
   if (pending.length === 0) return null;
 
   const allSameTool = pending.every((p) => p.tool_name === pending[0].tool_name);
@@ -237,7 +284,7 @@ export function PermissionStack({
           {(!preview || isLong) && <span className="flex-1" />}
           <div className="ml-auto flex items-center gap-1 flex-shrink-0">
             <button
-              onClick={() => handleApprove(p._id)}
+              onClick={() => onApprove(p._id)}
               disabled={inflight.has(p._id)}
               className="px-2.5 py-0.5 text-[11px] font-medium whitespace-nowrap rounded border border-sol-green/40 text-sol-green hover:bg-sol-green hover:text-sol-bg transition-colors disabled:opacity-40 disabled:pointer-events-none"
             >
@@ -245,7 +292,7 @@ export function PermissionStack({
             </button>
             {onAllowAll && (
               <button
-                onClick={handleAllowAll}
+                onClick={onAllowAll}
                 title="Approve this and bypass all future permission prompts in this session"
                 className="px-2.5 py-0.5 text-[11px] font-medium whitespace-nowrap rounded border border-orange-500/40 text-orange-500 hover:bg-orange-500 hover:text-sol-bg transition-colors"
               >
@@ -253,7 +300,7 @@ export function PermissionStack({
               </button>
             )}
             <button
-              onClick={() => handleDeny(p._id)}
+              onClick={() => onDeny(p._id)}
               disabled={inflight.has(p._id)}
               className="px-2.5 py-0.5 text-[11px] font-medium whitespace-nowrap rounded border border-sol-red/30 text-sol-text-dim hover:bg-sol-red hover:text-sol-bg transition-colors disabled:opacity-40 disabled:pointer-events-none"
             >
@@ -289,14 +336,14 @@ export function PermissionStack({
         <span className="flex-1" />
         <div className="ml-auto flex flex-wrap items-center justify-end gap-1">
           <button
-            onClick={handleApproveAll}
+            onClick={onApproveAll}
             className="px-2 py-0.5 text-[10px] font-medium whitespace-nowrap rounded border border-sol-green/40 text-sol-green hover:bg-sol-green hover:text-sol-bg transition-colors"
           >
             Approve all
           </button>
           {onAllowAll && (
             <button
-              onClick={handleAllowAll}
+              onClick={onAllowAll}
               title="Approve all and bypass future permission prompts in this session"
               className="px-2 py-0.5 text-[10px] font-medium whitespace-nowrap rounded border border-orange-500/40 text-orange-500 hover:bg-orange-500 hover:text-sol-bg transition-colors"
             >
@@ -304,7 +351,7 @@ export function PermissionStack({
             </button>
           )}
           <button
-            onClick={handleDenyAll}
+            onClick={onDenyAll}
             className="px-2 py-0.5 text-[10px] font-medium whitespace-nowrap rounded border border-sol-border/40 text-sol-text-dim hover:bg-sol-red hover:text-sol-bg transition-colors"
           >
             Deny all
@@ -326,8 +373,8 @@ export function PermissionStack({
           <PermissionRow
             key={p._id}
             permission={p}
-            onApprove={() => handleApprove(p._id)}
-            onDeny={() => handleDeny(p._id)}
+            onApprove={() => onApprove(p._id)}
+            onDeny={() => onDeny(p._id)}
             isExpanded={expandedId === p._id}
             onToggleExpand={() => setExpandedId(expandedId === p._id ? null : p._id)}
             showToolName={!allSameTool}

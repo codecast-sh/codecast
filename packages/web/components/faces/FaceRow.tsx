@@ -452,13 +452,14 @@ export function FaceRow({
     setOpenId(id);
     setPinned(true);
   };
-  // A pinned card closes on a press anywhere else, and on Escape.
+  // A pinned card closes on a press anywhere else, and on Escape. Listening
+  // only while there is a card to close keeps a resting row off the window.
   useEventListener("pointerdown", (e: Event) => {
     if (pinned && ownRef.current && !ownRef.current.contains(e.target as Node)) close();
-  });
+  }, pinned ? window : null);
   useEventListener("keydown", (e: Event) => {
     if (openId && (e as KeyboardEvent).key === "Escape") close();
-  });
+  }, openId ? window : null);
   // The card is gone when its person leaves the row, or folds into the stack.
   const onRow = !openId || row.entries.some((e) => e.id === openId && !(stacked && !onTheCall(e)));
   useLayoutEffect(() => {

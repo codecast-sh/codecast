@@ -31,8 +31,12 @@ export type RouteEntry = {
    * e.g. the Settings index is "settings", `/settings/cli` is "settings/cli").
    */
   path: string;
-  /** Lazy component reference, mirroring the App.tsx / TabContent import target. */
-  component: LazyExoticComponent<ComponentType<unknown>>;
+  /**
+   * Lazy component reference, mirroring the App.tsx / TabContent import target. Null for a
+   * route App.tsx matches with `element={null}`: it renders nothing of its own, and matching
+   * it is what lets its layout act on the URL (the settings splat opens a section's modal).
+   */
+  component: LazyExoticComponent<ComponentType<unknown>> | null;
   /**
    * The App.tsx layout group this route renders under. Drives nothing yet; recorded so the
    * Wave 2 generator can re-create the nested <Route element={<Layout/>}> structure.
@@ -447,6 +451,9 @@ export const ROUTES: RouteEntry[] = [
   { path: "settings/integrations/github-app", component: cast(SettingsIntegrations), layout: "settings" },
   { path: "settings/desktop", component: cast(SettingsDesktop), layout: "settings" },
   { path: "settings/apps", component: cast(SettingsApps), layout: "settings" },
+  // Sections with no page of their own (provider-keys, daemon, sounds): SettingsLayout opens
+  // them as a modal over the settings index.
+  { path: "settings/*", component: null, layout: "settings" },
 
   // -- Public profiles (anonymous, guest-viewable, at the ROOT: /<handle>) --
   // MUST stay last: React Router ranks static segments above this dynamic one, so

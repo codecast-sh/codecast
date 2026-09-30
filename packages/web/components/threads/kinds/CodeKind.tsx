@@ -8,7 +8,8 @@ import { serverCommentId, threadResolved, threadSide } from "../../../lib/prView
 import type { ThreadCardModel } from "../../../lib/threadCards";
 import { codeAnchorOf as anchorOf, rowOf } from "../../../lib/threadRows";
 import { PRLineThread } from "../../pr/PRThread";
-import { EarlierButton, useReaderFold } from "../readerFold";
+import { EarlierButton } from "../readerFold";
+import { useReaderFold } from "../../../hooks/useReaderFold";
 
 // The code kind: one thread of comments on code — a line of a commit's diff,
 // a line of a pull request, or the commit or pull request itself. The row

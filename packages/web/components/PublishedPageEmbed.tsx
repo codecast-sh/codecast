@@ -83,7 +83,7 @@ function OpenInPaneButton({ url, native, className }: { url: string; native?: bo
 
 /** The block card: header strip (icon, title, verbs, "open"), a body, and the
  *  caption the author wrote under it. */
-function PageCard({ icon, title, href, actions, caption, children }: {
+export function PageCard({ icon, title, href, actions, caption, children }: {
   icon: ReactNode;
   title: string;
   href: string;
@@ -166,6 +166,33 @@ function usePageMeta(slug: string) {
     | undefined;
 }
 
+/** A published page card's header verbs: copy the share link, expand the
+ *  frame, open it in a pane. */
+export function PublishedPageActions({ slug, expanded, onToggleExpand }: {
+  slug: string;
+  expanded: boolean;
+  onToggleExpand: () => void;
+}) {
+  return (
+    <>
+      {/* Copy the public share URL, not the serving origin the iframe uses. */}
+      <CopyLinkButton url={pageShareUrl(slug)} title="Copy link to published page" className={HEADER_ACTION} />
+      <button
+        type="button"
+        onClick={onToggleExpand}
+        className={HEADER_ACTION}
+        title={expanded ? "Collapse" : "Expand"}
+      >
+        <ChevronsUpDown className="h-3 w-3" />
+      </button>
+      {/* The pane frames the SERVING origin, the same source the iframe
+          uses, so the page arrives under its own sandbox CSP and the share
+          page's chrome does not wrap it a second time. */}
+      <OpenInPaneButton url={pageFrameSrc(slug)} className={HEADER_ACTION} />
+    </>
+  );
+}
+
 const EMBED_HEIGHT = 420;
 const EMBED_HEIGHT_EXPANDED = "70vh";
 
@@ -216,24 +243,7 @@ export function PublishedPageEmbed({ slug, caption, height }: {
       title={title}
       href={pageShareUrl(slug)}
       caption={caption}
-      actions={
-        <>
-          {/* Copy the public share URL, not the serving origin the iframe uses. */}
-          <CopyLinkButton url={pageShareUrl(slug)} title="Copy link to published page" className={HEADER_ACTION} />
-          <button
-            type="button"
-            onClick={() => setExpanded((v) => !v)}
-            className={HEADER_ACTION}
-            title={expanded ? "Collapse" : "Expand"}
-          >
-            <ChevronsUpDown className="h-3 w-3" />
-          </button>
-          {/* The pane frames the SERVING origin, the same source the iframe
-              uses, so the page arrives under its own sandbox CSP and the share
-              page's chrome does not wrap it a second time. */}
-          <OpenInPaneButton url={pageFrameSrc(slug)} className={HEADER_ACTION} />
-        </>
-      }
+      actions={<PublishedPageActions slug={slug} expanded={expanded} onToggleExpand={() => setExpanded((v) => !v)} />}
     >
       <iframe
         ref={frameRef}
@@ -252,7 +262,7 @@ export function PublishedPageEmbed({ slug, caption, height }: {
  *  pill already names an internal object (blue session, cyan plan, green doc,
  *  violet project…), so a page — a link OUT to the web — gets a duotone disc
  *  no entity owns instead of another accent from the same family. */
-function PageFavicon({ className = "h-3.5 w-3.5" }: { className?: string }) {
+export function PageFavicon({ className = "h-3.5 w-3.5" }: { className?: string }) {
   return (
     <span
       className={`inline-flex flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-sol-cyan/35 to-sol-violet/35 ${className}`}

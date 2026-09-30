@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Check, ExternalLink } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
@@ -8,6 +8,7 @@ import { THREAD_KIND_SPECS, isDismissible } from "../../lib/threadKinds";
 import type { ThreadCardModel } from "../../lib/threadCards";
 import { openCardIn } from "../../lib/threadRows";
 import { useThreadsPage } from "./threadsContext";
+import { useMountEffect } from "../../hooks/useMountEffect";
 
 // One thread on the Threads page, whatever the kind, always open: a head
 // naming the object (room, task, session, page) and under it the body with
@@ -29,7 +30,7 @@ const THRESHOLDS = Array.from({ length: 21 }, (_, i) => i / 20);
 /** Whether enough of the card is in the viewport to have been read. */
 function useOnScreen(ref: React.RefObject<HTMLElement | null>): boolean {
   const [onScreen, setOnScreen] = useState(false);
-  useEffect(() => {
+  useMountEffect(() => {
     const el = ref.current;
     if (!el || typeof IntersectionObserver === "undefined") {
       setOnScreen(true);
@@ -42,7 +43,7 @@ function useOnScreen(ref: React.RefObject<HTMLElement | null>): boolean {
     }, { threshold: THRESHOLDS });
     io.observe(el);
     return () => io.disconnect();
-  }, [ref]);
+  });
   return onScreen;
 }
 

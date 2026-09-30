@@ -25,7 +25,8 @@ import { imagePlaceholderToken, insertImagePlaceholder, dropImagePlaceholder } f
 import { attachReviewToMessage } from "../lib/reviewActions";
 import { enterReviewFromComposer } from "../lib/reviewNav";
 import { ReviewBar } from "./ReviewBar";
-import { ComposerFade } from "./ComposerFade";
+import { ComposerSendButton, ComposerShell, ComposerTextarea, ComposerTextRow } from "./ComposerShell";
+import { composerColumn, FIELD_SIZING_SUPPORTED } from "./composerLayout";
 import { ComposerSuggestion, ComposerSuggestionHandle } from "./ComposerSuggestion";
 import { useMutation, useQuery, useConvex } from "convex/react";
 import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
@@ -37,11 +38,13 @@ import { isParkedDispatchError } from "../store/mutativeMiddleware";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { soundSend } from "../lib/sounds";
 import type { MentionItem } from "./editor/MentionList";
-import { MentionSuggestion } from "./editor/MentionSuggestion";
-import { mergeMentionSuggestions, mentionViewTimes } from "../lib/mentionRanking";
+import { MentionMenu } from "./editor/MentionMenu";
+import { mergeMentionSuggestions, mentionViewTimes, orderMentionItems } from "../lib/mentionRanking";
 import { Maximize2, Minimize2, Split, Archive, ArrowRightLeft } from "lucide-react";
 import type { ComposeEditorHandle } from "./editor/ComposeEditor";
-import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, matchScore, mentionItemMatches } from "../hooks/useMentionQuery";
+import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, matchScore, mentionItemMatches, channelMentionItems } from "../hooks/useMentionQuery";
+import { mentionContextFor } from "../lib/mentionContext";
+import { parseChatDraftKey } from "../lib/chatDraftKey";
 import { inFlightPending, isAliveIdleStatus, pendingRowHoldReason, type LiveAgentStatus } from "../lib/pendingBanner";
 import { expandEntityMentions } from "../lib/mentionExpansion";
 import { identityLine } from "../lib/sessionIdentity";
@@ -75,15 +78,9 @@ const ComposeEditor = lazy(() => import("./editor/ComposeEditor").then((m) => ({
 // that frame can spare, so a long draft never pushes the host's other rows
 // out of its clip. The element that carries the cap (the textarea, or the
 // expanded editor's box) wears data-composer-field so a host can measure it.
-// Chat's caret-anchored @ popup. Wide enough that a session row's title, its
-// message count and its age fit on one line — 340px truncated most of them.
-const CHAT_AC_WIDTH = 480;
-
-const FIELD_SIZING_SUPPORTED =
-  typeof CSS !== "undefined" && CSS.supports?.("field-sizing", "content");
-const FIELD_SIZING_STYLE: React.CSSProperties = FIELD_SIZING_SUPPORTED
-  ? ({ fieldSizing: "content" } as React.CSSProperties)
-  : {};
+// Chat's caret-anchored @ and # popup. Wide enough that a session row's name,
+// its meta run, its id and its age share one line.
+const CHAT_AC_WIDTH = 560;
 
 const MENTION_TRIGGER_RE = /@([\w./\\-]*(?: [\w./\\-]+){0,4} ?)$/;
 const MENTION_QUERY_RE = /^[\w./\\-]*(?: [\w./\\-]+){0,4} ?/;
@@ -91,6 +88,11 @@ const MENTION_QUERY_RE = /^[\w./\\-]*(?: [\w./\\-]+){0,4} ?/;
 // can be named mid-sentence; a "/" inside a word (a path, "and/or") is prose.
 const SLASH_TRIGGER_RE = /(?:^|\s)\/([\w:.-]*)$/;
 const SLASH_QUERY_RE = /^[\w:.-]*/;
+// A channel reference opens after whitespace or "(" and takes the slug
+// alphabet channel names are normalized to (convex chatText
+// normalizeChannelName), so "##" headings and "a#b" stay prose.
+const CHANNEL_TRIGGER_RE = /(?:^|[\s(])#([a-z0-9_-]*)$/i;
+const CHANNEL_QUERY_RE = /^[a-z0-9_-]*/i;
 
 
 // deriveRestartStage (the live label for a kill+restart in flight) lives in
@@ -339,7 +341,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const markAsQueued = useInboxStore((s) => s.markOptimisticAsQueued);
   const sentContentRef = useRef<string | null>(null);
 
-  type AutocompleteTrigger = { type: "/" | "@"; startPos: number } | null;
+  type AutocompleteTrigger = { type: "/" | "@" | "#"; startPos: number } | null;
   type AcItem = Omit<MentionItem, "id"> & { id?: string; description?: string };
   const [acTrigger, setAcTrigger] = useState<AutocompleteTrigger>(null);
   const [acIndex, setAcIndex] = useState(0);
@@ -350,7 +352,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const acAnchorRef = useRef<HTMLDivElement>(null);
   const [acCaretLeft, setAcCaretLeft] = useState(0);
   useLayoutEffect(() => {
-    if (!chatMentionMode || !acTrigger || acTrigger.type !== "@") return;
+    if (!chatMentionMode || !acTrigger || acTrigger.type === "/") return;
     const ta = textareaRef.current;
     const host = acAnchorRef.current;
     if (!ta || !host) return;
@@ -381,7 +383,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const acQuery = useMemo(() => {
     if (!acTrigger) return "";
     const rawQuery = message.slice(acTrigger.startPos + 1);
-    const queryRe = acTrigger.type === "@" ? MENTION_QUERY_RE : SLASH_QUERY_RE;
+    const queryRe = acTrigger.type === "@" ? MENTION_QUERY_RE : acTrigger.type === "#" ? CHANNEL_QUERY_RE : SLASH_QUERY_RE;
     return (rawQuery.match(queryRe)?.[0] ?? "").trim().toLowerCase();
   }, [acTrigger, message]);
 
@@ -396,8 +398,23 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     { teamId: mentionScope.kind === "team" ? mentionScope.teamId : undefined, types: SERVER_MENTION_TYPES },
   );
 
+  // What this session or chat thread already names leads the @ and # lists
+  // (lib/mentionContext). Read once per opened trigger, not per keystroke:
+  // the transcript does not change while a mention is being typed.
+  const acTriggerKey = acTrigger && acTrigger.type !== "/" ? `${acTrigger.type}${acTrigger.startPos}` : null;
+  const acContext = useMemo(() => {
+    if (!acTriggerKey) return undefined;
+    const st = useInboxStore.getState();
+    return mentionContextFor(st, conversationId, st.currentUser?._id ? String(st.currentUser._id) : undefined);
+  }, [acTriggerKey, conversationId]);
+
   const acItems: AcItem[] = useMemo(() => {
     if (!acTrigger) return [];
+    if (acTrigger.type === "#") {
+      const channels = channelMentionItems(useInboxStore.getState(), mentionScope)
+        .filter((c) => matchScore(c.label, acQuery) !== Infinity || (!!c.sublabel && matchScore(c.sublabel, acQuery) !== Infinity));
+      return orderMentionItems(mergeMentionSuggestions(channels, [], new Map(), 12, acQuery, false, acContext));
+    }
     if (acTrigger.type === "/") {
       return (skills || [])
         .filter(s => s.name.toLowerCase().includes(acQuery))
@@ -428,14 +445,15 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         : null;
       const candidates = mergeMentionSuggestions(
         [...roleItems, ...(effectiveMentionItemsRef.current ?? [])], acServerItems,
-        mentionViewTimes(useInboxStore.getState()),
+        mentionViewTimes(useInboxStore.getState()), Infinity, "", false, acContext,
       ).filter((m) => {
         if (chatMentionMode && (m.type === "label" || (m.type === "person" && !m.handle))) return false;
-        if (chatMentionMode && m.type === "session" && !(acQuery.startsWith("jx") && recentSessionIds!.has(m.id))) return false;
+        // A session the thread already cites is offered outright; any other
+        // waits for its short id.
+        if (chatMentionMode && m.type === "session" && !m.contextAt && !(acQuery.startsWith("jx") && recentSessionIds!.has(m.id))) return false;
         return mentionItemMatches(m, acQuery);
       });
-      const items: AcItem[] = mergeMentionSuggestions(candidates, [], new Map(), acQuery ? 8 : 6, acQuery, personifyAllNow())
-        .map((m) => ({ ...m, description: m.sublabel }));
+      const items: AcItem[] = mergeMentionSuggestions(candidates, [], new Map(), acQuery ? 10 : 6, acQuery, personifyAllNow());
 
       const fileMatches = (filePathsRef.current || [])
         .filter(p => {
@@ -446,11 +464,11 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         .map(p => ({ label: p, description: undefined, type: "file" as string }));
       items.push(...fileMatches);
 
-      return items;
+      return orderMentionItems(items);
     }
     return [];
     // localMentionTick re-runs this when the fallback query resolves into the ref.
-  }, [acTrigger, acQuery, skills, acServerItems, localMentionTick, chatMentionMode]);
+  }, [acTrigger, acQuery, skills, acServerItems, localMentionTick, chatMentionMode, acContext, mentionScope]);
 
   const clampedAcIndex = acItems.length > 0 ? Math.min(acIndex, acItems.length - 1) : 0;
 
@@ -481,6 +499,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     let inserted: string;
     if (acTrigger.type === "/") {
       inserted = `/${item.label} `;
+    } else if (acTrigger.type === "#") {
+      inserted = `#${item.label} `;
     } else if (chatMentionMode && (item.type === "person" || item.type === "role") && item.handle) {
       // The handle the server resolves, at the @ the user typed. The ref form
       // (`@[Name id]`) is the session vocabulary; for people in chat it only
@@ -1038,8 +1058,12 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     const cursorPos = textareaRef.current?.selectionStart ?? val.length;
     const textBefore = val.slice(0, cursorPos);
     const slashMatch = (skills?.length ?? 0) > 0 ? textBefore.match(SLASH_TRIGGER_RE) : null;
+    const hashMatch = slashMatch ? null : textBefore.match(CHANNEL_TRIGGER_RE);
     if (slashMatch) {
       setAcTrigger({ type: "/", startPos: cursorPos - slashMatch[1].length - 1 });
+      setAcIndex(0);
+    } else if (hashMatch) {
+      setAcTrigger({ type: "#", startPos: cursorPos - hashMatch[1].length - 1 });
       setAcIndex(0);
     } else {
       const atMatch = textBefore.match(MENTION_TRIGGER_RE);
@@ -1794,7 +1818,6 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     if (!open) requestAnimationFrame(() => textareaRef.current?.focus());
   };
 
-  const acScrollRef = useRef(false);
   // The image strip and the queue take keys while the caret stays in the
   // textarea, so any sign the user is back on the text (a click in it, an
   // edit) ends that selection before a key meant for words reaches it. The
@@ -1812,13 +1835,11 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     if (acTrigger && acItems.length > 0) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
-        acScrollRef.current = true;
         setAcIndex(i => Math.min(i + 1, acItems.length - 1));
         return;
       }
       if (e.key === "ArrowUp") {
         e.preventDefault();
-        acScrollRef.current = true;
         setAcIndex(i => Math.max(i - 1, 0));
         return;
       }
@@ -2129,27 +2150,20 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // When the send is carried entirely by attached quotes, tint the button cyan to
   // match the tray so it reads as "this sends the quotes".
   const quotesOnlySend = !hasContent && reviewCount > 0;
-  // The composer's column: the conversation's column, or the host's full
-  // width when it sits inline in another surface.
-  const colWidth = inline ? "w-full" : isExpanded ? "conv-col" : "max-w-md";
-  const colClass = inline ? colWidth : `px-2 sm:px-4 ${colWidth}`;
-  const sendBtnClass = bareComposer
-    ? `w-6 h-6 rounded-md transition-colors flex items-center justify-center ${
-        !canSubmit ? "text-sol-text-dim/30 cursor-not-allowed" : "text-sol-cyan hover:bg-sol-cyan/10"
-      }`
-    : `w-8 h-8 rounded-full transition-colors flex items-center justify-center border ${
-        !canSubmit
-          ? "border-sol-border/30 text-sol-text-dim/25 cursor-not-allowed"
-          : quotesOnlySend
-            ? "border-sol-cyan/50 bg-sol-cyan/20 text-sol-cyan hover:bg-sol-cyan/30 hover:border-sol-cyan"
-            : "border-sol-blue/50 bg-sol-blue/20 text-sol-blue hover:bg-sol-blue/30 hover:border-sol-blue hover:text-sol-blue"
-      }`;
+  const { colWidth, colClass } = composerColumn({ inline, expanded: isExpanded });
+  const sendButton = <ComposerSendButton canSubmit={canSubmit} bare={bareComposer} quotesOnly={quotesOnlySend} />;
 
   return (
-    <div ref={composerRootRef} data-sv-composer className={`shrink-0 pointer-events-none ${inline ? "" : "sticky bottom-0"} ${lightboxImageIndex !== null ? "z-[10002]" : "z-10"}`}>
-      {lightboxImageIndex === null && !inline && <ComposerFade />}
-      <div className={`${inline ? "" : bareComposer ? "pb-4" : "pb-3"} pointer-events-auto ${lightboxImageIndex === null && !inline ? "bg-sol-bg" : ""}`}>
-        <div className="relative">
+    <ComposerShell
+      rootRef={composerRootRef}
+      inline={inline}
+      bare={bareComposer}
+      expanded={isExpanded}
+      lightboxOpen={lightboxImageIndex !== null}
+      composeMode={composeMode}
+      selectionActive={isSelectionActive}
+      onSubmit={handleFormSubmit}
+      before={<>
           {serverDeleted && !isRestarting && (
             <div className={`mx-auto mb-2 ${inline ? "" : "px-4"} ${colWidth} ${lightboxImageIndex !== null ? "hidden" : ""}`}>
               <div className="flex items-center justify-between gap-3 rounded-lg border border-sol-orange/40 bg-sol-orange/10 px-3 py-2">
@@ -2169,14 +2183,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
           {!bareComposer && lightboxImageIndex === null && agentStatus === "compacting" && (
             <LiveCompactionCard conversationId={conversationId} expanded={isExpanded} />
           )}
-          {/* The composer's status line: always one row tall, so focusing the
-              box or the agent changing state never shifts the composer. The
-              left side carries the live status (or nothing); the right side
-              is the send-options "?" and the permission mode dot. */}
-          {!bareComposer && (
-            <div data-cc-composer-meta className={`mx-auto mb-1 min-h-[18px] flex justify-between items-center ${colClass} ${lightboxImageIndex !== null ? "hidden" : ""}`}>
-              <p className="text-[11px] text-sol-text-dim/70 pl-1">
-                {((isSessionStarting && !agentStatus) || isAgentStarting) && !showStuckBanner ? (
+      </>}
+      meta={((isSessionStarting && !agentStatus) || isAgentStarting) && !showStuckBanner ? (
                   <span className="flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-sol-cyan/50 animate-pulse" />
                     Starting session...
@@ -2317,9 +2325,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     Resuming session...
                   </span>
                 ) : isInactive ? "Session idle — message to resume" : "\u00A0"}
-              </p>
-              <div className="flex items-center gap-2">
-                {permissionMode && (
+      metaEnd={permissionMode && (
                   <div className="relative">
                     <button
                       onMouseDown={(e) => e.preventDefault()}
@@ -2389,9 +2395,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     )}
                   </div>
                 )}
-              </div>
-            </div>
-          )}
+      between={<>
           {/* The pinned thread state slots between the status line and the
               box: the status line says what the session is doing right now,
               the pinned state says where the work stands, the box is where you
@@ -2400,46 +2404,25 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
           {threadStateNode}
           {composerNode}
           {acTrigger && (acItems.length > 0 || (acTrigger.type === "@" && acServerLoading && !acQuery.includes(" "))) && (() => {
+            const chatKey = parseChatDraftKey(conversationId);
             const dropdown = (
               <div
                 ref={acRef}
                 className={chatMentionMode
-                  ? "absolute bottom-0 mb-1 z-30"
-                  : `mx-auto mb-1 ${colClass}`}
-                style={chatMentionMode ? { left: acCaretLeft, width: CHAT_AC_WIDTH } : undefined}
+                  ? "absolute bottom-0 mb-1.5 z-30"
+                  : `mx-auto mb-1.5 ${colClass}`}
+                style={chatMentionMode ? { left: acCaretLeft, width: CHAT_AC_WIDTH, maxWidth: "calc(100vw - 24px)" } : undefined}
               >
-                <div role="listbox" aria-label="Suggestions" className="bg-sol-bg border border-sol-border/50 rounded-lg shadow-xl py-1.5 max-h-[320px] overflow-y-auto overflow-x-hidden">
-                  <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-sol-text-dim">
-                    {acTrigger.type === "@" ? "Recently viewed · then updated" : "Commands"}
-                  </div>
-                  {acItems.map((item, index) => {
-                    const isSelected = index === clampedAcIndex;
-                    return (
-                      <button
-                        key={`${item.type}:${item.id || item.label}`}
-                        type="button"
-                        data-mention-id={item.id}
-                        role="option"
-                        aria-selected={isSelected}
-                        ref={isSelected ? (el) => { if (el && acScrollRef.current) { el.scrollIntoView({ block: "nearest" }); acScrollRef.current = false; } } : undefined}
-                        onMouseEnter={() => setAcIndex(index)}
-                        onMouseDown={(e) => { e.preventDefault(); applyAutocomplete(item); }}
-                        className={`w-full text-left px-3 py-2 flex items-center gap-2.5 ${isSelected ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"}`}
-                      >
-                        <MentionSuggestion item={item} />
-                      </button>
-                    );
-                  })}
-                  {acTrigger.type === "@" && acServerLoading && (
-                    <div className="px-3 py-2 flex items-center gap-2 text-[11px] text-sol-text-dim border-t border-sol-border/30">
-                      <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v3a5 5 0 00-5 5H4z" />
-                      </svg>
-                      <span>Searching everything&hellip;</span>
-                    </div>
-                  )}
-                </div>
+                <MentionMenu
+                  items={acItems}
+                  selectedIndex={clampedAcIndex}
+                  onHover={setAcIndex}
+                  onPick={(index) => applyAutocomplete(acItems[index])}
+                  query={acQuery}
+                  loading={acTrigger.type === "@" && acServerLoading}
+                  heading={acTrigger.type === "/" ? "Commands" : undefined}
+                  contextTitle={chatKey ? (chatKey.threadRootId ? "In this thread" : "In this channel") : "In this conversation"}
+                />
               </div>
             );
             if (!chatMentionMode) return dropdown;
@@ -2447,8 +2430,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
             // positioning context the caret-anchored popup hangs from.
             return <div ref={acAnchorRef} className="relative h-0">{dropdown}</div>;
           })()}
-          <form onSubmit={handleFormSubmit} className={bareComposer ? "w-full" : `mx-auto ${colClass}`}>
-            <div data-composer-field={composeMode ? "" : undefined} className={`flex flex-col ${bareComposer ? "" : "border"} transition-colors duration-150 ${bareComposer ? "px-2.5 py-0.5 rounded-lg bg-sol-text/[0.04] focus-within:bg-sol-text/[0.07]" : inline ? "border px-3 py-1.5 rounded-xl bg-sol-bg-alt" : `border px-4 py-2 shadow-lg bg-sol-bg-alt ${isExpanded ? "rounded-2xl" : "rounded-full"}`} ${composeMode ? "min-h-[min(40vh,var(--composer-max-h,40vh))] max-h-[var(--composer-max-h,45vh)]" : ""} ${isSelectionActive ? "border-sol-cyan/40 ring-1 ring-sol-cyan/20" : composeMode ? "border-sol-cyan/20" : bareComposer ? "" : "border-sol-border"}`}>
+      </>}
+      fieldTop={<>
               {isSelectionActive && (
                 <div className="flex items-center gap-2 pb-1.5 mb-1.5 border-b border-sol-cyan/20 text-[10px] text-sol-cyan">
                   <span className="font-medium">Rewriting message</span>
@@ -2540,6 +2523,43 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                   )}
                 </div>
               )}
+      </>}
+      after={lightboxImageIndex !== null && pastedImages[lightboxImageIndex] && createPortal(
+        // Center the preview in the space ABOVE the composer, not the whole
+        // viewport: the composer stays visible over the lightbox (so you can
+        // keep typing), and a viewport-centered tall image would run behind and
+        // past it — worst in the compose dialog, where the composer sits
+        // mid-screen. paddingBottom pushes the centering box up to the
+        // composer's top edge; the img maxHeight clamps to that space so a
+        // vertical image fits it instead of 70vh of viewport.
+        (() => {
+          const composerTop = composerRootRef.current?.getBoundingClientRect().top;
+          const reserved = composerTop != null ? Math.max(0, window.innerHeight - composerTop) : 0;
+          const available = composerTop != null ? Math.max(120, composerTop - 24) : undefined;
+          return (
+        <div className="fixed inset-0 z-[10001] flex items-center justify-center" style={{ backgroundColor: `rgba(0,0,0,${0.8 * lightboxSwipe.backdropOpacity})`, paddingBottom: reserved, paddingTop: 12 }}>
+          <div className="absolute inset-0" onClick={dismissLightbox} />
+          <div className="relative" onClick={(e) => e.stopPropagation()} style={lightboxSwipe.style} {...lightboxSwipe.handlers}>
+            <img
+              src={pastedImages[lightboxImageIndex].previewUrl}
+              alt="Image preview"
+              className="max-w-[85vw] max-h-[70vh] object-contain rounded-lg shadow-2xl"
+              style={available != null ? { maxHeight: available } : undefined}
+            />
+            {pastedImages.length > 1 && (
+              <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5">
+                {pastedImages.map((_, i) => (
+                  <div key={i} className={`w-1.5 h-1.5 rounded-full transition-colors ${i === lightboxImageIndex ? "bg-white" : "bg-white/30"}`} />
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+          );
+        })(),
+        composerRootRef.current?.closest<HTMLElement>('[role="dialog"][aria-modal="true"]') ?? document.body
+      )}
+    >
               {composeMode ? (
                 <div className="flex flex-col flex-1 min-h-0">
                   <div className="flex-1 min-h-0 overflow-y-auto">
@@ -2605,58 +2625,17 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                           <Split className="w-3.5 h-3.5" />
                         </button>
                       )}
-                      <button
-                        type="submit"
-                        disabled={!canSubmit}
-                        className={sendBtnClass}
-                      >
-                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M12 19V5M5 12l7-7 7 7" />
-                        </svg>
-                      </button>
+                      {sendButton}
                     </div>
                   </div>
                 </div>
               ) : (
-                <div ref={controlsRowRef} className="flex flex-wrap items-end gap-x-2 gap-y-1">
-                  {/* One grid cell for the textarea and the ghost suggestion: the
-                      cell takes the taller of the two, so a wrapped suggestion
-                      grows the box and the textarea stretches to cover it. */}
-                  <div className="grid flex-1 min-w-0">
-                  <textarea
-                    ref={textareaRef}
-                    data-chat-input
-                    data-composer-field
-                    data-draft-conv={conversationId}
-                    value={message}
-                    onChange={(e) => { leaveStripSelection(); handleMessageChange(e.target.value); }}
-                    onMouseDown={leaveStripSelection}
-                    onKeyDown={handleKeyDown}
-                    onPaste={handlePaste}
-                    onFocus={() => setIsFocused(true)}
-                    onBlur={() => { setIsFocused(false); setAcTrigger(null); }}
-                    placeholder={ghostVisible ? "" : composerPlaceholder ?? (bareComposer ? "Comment…" : onGateSend ? "Send a message to continue the workflow..." : onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : reviewCount > 0 ? `Send ${reviewCount} quote${reviewCount !== 1 ? "s" : ""} as-is, or add a reply first...` : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? "Approve or deny permission to continue..." : hasAskUserQuestion ? "Answer the question to continue..." : "Send a message...") : "Send a message...")}
-                    rows={1}
-                    style={FIELD_SIZING_STYLE}
-                    className={`block w-full [grid-area:1/1] bg-transparent text-sm placeholder:text-sol-text-dim focus:outline-none disabled:opacity-50 resize-none overflow-y-auto max-h-[var(--composer-max-h,45vh)] leading-relaxed py-1 ${isSelectionActive && !isSelectionEditedRef.current ? "text-sol-text-dim italic" : "text-sol-text"}`}
-                  />
-                  {!bareComposer && suggestionsEnabled && !onGateSend && !onWorkflowLaunch && !hasAskUserQuestion && (
-                    <ComposerSuggestion
-                      ref={suggestionRef}
-                      conversationId={conversationId}
-                      idle={!isWaitingForResponse && !isThinking && !(agentStatus && ACTIVE_AGENT_STATUSES.has(agentStatus))}
-                      hidden={!!message || pastedImages.length > 0}
-                      onAccept={(t) => {
-                        setMessage(t);
-                        messageRef.current = t;
-                        const ta = textareaRef.current;
-                        if (ta) { ta.focus(); requestAnimationFrame(() => ta.setSelectionRange(t.length, t.length)); }
-                      }}
-                      onVisibleChange={setGhostVisible}
-                    />
-                  )}
-                  </div>
-                  <div ref={sendRef} className={`shrink-0 flex items-end gap-1 ${controlsTucked ? "basis-full justify-end" : ""}`}>
+                <ComposerTextRow
+                  rowRef={controlsRowRef}
+                  sendRef={sendRef}
+                  tucked={controlsTucked}
+                  send={sendButton}
+                  actions={<>
                     {isMultiline && (
                       <button
                         type="button"
@@ -2703,57 +2682,40 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                         <Split className="w-3.5 h-3.5" />
                       </button>
                     )}
-                    <button
-                      type="submit"
-                      disabled={!canSubmit}
-                      className={sendBtnClass}
-                    >
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 19V5M5 12l7-7 7 7" />
-                      </svg>
-                    </button>
-                  </div>
-                </div>
+                  </>}
+                >
+                  <ComposerTextarea
+                    ref={textareaRef}
+                    data-chat-input
+                    data-composer-field
+                    data-draft-conv={conversationId}
+                    value={message}
+                    onChange={(e) => { leaveStripSelection(); handleMessageChange(e.target.value); }}
+                    onMouseDown={leaveStripSelection}
+                    onKeyDown={handleKeyDown}
+                    onPaste={handlePaste}
+                    onFocus={() => setIsFocused(true)}
+                    onBlur={() => { setIsFocused(false); setAcTrigger(null); }}
+                    placeholder={ghostVisible ? "" : composerPlaceholder ?? (bareComposer ? "Comment…" : onGateSend ? "Send a message to continue the workflow..." : onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : reviewCount > 0 ? `Send ${reviewCount} quote${reviewCount !== 1 ? "s" : ""} as-is, or add a reply first...` : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? "Approve or deny permission to continue..." : hasAskUserQuestion ? "Answer the question to continue..." : "Send a message...") : "Send a message...")}
+                    dim={isSelectionActive && !isSelectionEditedRef.current}
+                  />
+                  {!bareComposer && suggestionsEnabled && !onGateSend && !onWorkflowLaunch && !hasAskUserQuestion && (
+                    <ComposerSuggestion
+                      ref={suggestionRef}
+                      conversationId={conversationId}
+                      idle={!isWaitingForResponse && !isThinking && !(agentStatus && ACTIVE_AGENT_STATUSES.has(agentStatus))}
+                      hidden={!!message || pastedImages.length > 0}
+                      onAccept={(t) => {
+                        setMessage(t);
+                        messageRef.current = t;
+                        const ta = textareaRef.current;
+                        if (ta) { ta.focus(); requestAnimationFrame(() => ta.setSelectionRange(t.length, t.length)); }
+                      }}
+                      onVisibleChange={setGhostVisible}
+                    />
+                  )}
+                </ComposerTextRow>
               )}
-            </div>
-          </form>
-        </div>
-      </div>
-      {lightboxImageIndex !== null && pastedImages[lightboxImageIndex] && createPortal(
-        // Center the preview in the space ABOVE the composer, not the whole
-        // viewport: the composer stays visible over the lightbox (so you can
-        // keep typing), and a viewport-centered tall image would run behind and
-        // past it — worst in the compose dialog, where the composer sits
-        // mid-screen. paddingBottom pushes the centering box up to the
-        // composer's top edge; the img maxHeight clamps to that space so a
-        // vertical image fits it instead of 70vh of viewport.
-        (() => {
-          const composerTop = composerRootRef.current?.getBoundingClientRect().top;
-          const reserved = composerTop != null ? Math.max(0, window.innerHeight - composerTop) : 0;
-          const available = composerTop != null ? Math.max(120, composerTop - 24) : undefined;
-          return (
-        <div className="fixed inset-0 z-[10001] flex items-center justify-center" style={{ backgroundColor: `rgba(0,0,0,${0.8 * lightboxSwipe.backdropOpacity})`, paddingBottom: reserved, paddingTop: 12 }}>
-          <div className="absolute inset-0" onClick={dismissLightbox} />
-          <div className="relative" onClick={(e) => e.stopPropagation()} style={lightboxSwipe.style} {...lightboxSwipe.handlers}>
-            <img
-              src={pastedImages[lightboxImageIndex].previewUrl}
-              alt="Image preview"
-              className="max-w-[85vw] max-h-[70vh] object-contain rounded-lg shadow-2xl"
-              style={available != null ? { maxHeight: available } : undefined}
-            />
-            {pastedImages.length > 1 && (
-              <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5">
-                {pastedImages.map((_, i) => (
-                  <div key={i} className={`w-1.5 h-1.5 rounded-full transition-colors ${i === lightboxImageIndex ? "bg-white" : "bg-white/30"}`} />
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-          );
-        })(),
-        composerRootRef.current?.closest<HTMLElement>('[role="dialog"][aria-modal="true"]') ?? document.body
-      )}
-    </div>
+    </ComposerShell>
   );
 });

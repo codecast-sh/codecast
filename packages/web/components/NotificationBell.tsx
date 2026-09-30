@@ -10,8 +10,7 @@ import { useInboxStore } from "../store/inboxStore";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { TopbarButton } from "./TopbarButton";
 import { notificationHref, notificationRoute } from "../lib/notificationTypes";
-import { groupIdleNotifications } from "@codecast/shared/contracts";
-import { NotificationGroupRow, NotificationRow } from "./notifications/NotificationRow";
+import { NotificationList } from "./notifications/NotificationList";
 import { ArrowUpRight, ExternalLink, Check, CheckCheck } from "lucide-react";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
 
@@ -75,13 +74,6 @@ export function NotificationBell() {
     setIsOpen(false);
   };
 
-  // Fold each waiting burst into one entry (the same fold-up the hourly alert
-  // makes), then take 20 ENTRIES — so a fleet of twenty sessions no longer
-  // pushes everything else out of the list.
-  const entries = useMemo(
-    () => groupIdleNotifications(sortedNotifications, (n: any) => String(n._id)).slice(0, 20),
-    [sortedNotifications]
-  );
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
   const toggleGroup = useCallback(
     (key: string) => setOpenGroups((prev) => ({ ...prev, [key]: !prev[key] })),
@@ -119,56 +111,18 @@ export function NotificationBell() {
       </ShortcutTooltip>
 
       {isOpen && (
-        <div className="cc-topbar-menu absolute right-0 mt-2 w-[calc(100vw-1rem)] sm:w-[520px] max-w-[520px] bg-sol-bg border border-sol-border rounded-lg shadow-lg overflow-hidden z-50">
-          <div className="px-5 py-3 border-b border-sol-border flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-sol-text">Notifications</h3>
-            {unreadCount !== undefined && unreadCount > 0 && (
-              <span className="text-xs text-sol-text-muted">{unreadCount} unread</span>
-            )}
-          </div>
-
-          <div className="max-h-[600px] overflow-y-auto">
-            {entries.length === 0 ? (
-              <div className="px-5 py-12 text-center text-sol-text-muted">
-                No notifications yet
-              </div>
-            ) : (
-              entries.map((entry: any) =>
-                entry.kind === "group" ? (
-                  <NotificationGroupRow
-                    key={entry.key}
-                    group={entry}
-                    open={!!openGroups[entry.key]}
-                    onToggle={() => toggleGroup(entry.key)}
-                    onOpen={openNotification}
-                    onContextMenu={(e, n) => ctxMenu.open(e, n)}
-                  />
-                ) : (
-                  <NotificationRow
-                    key={entry.key}
-                    notification={entry.row}
-                    onOpen={openNotification}
-                    onContextMenu={(e, n) => ctxMenu.open(e, n)}
-                  />
-                )
-              )
-            )}
-          </div>
-
-          {entries.length > 0 && (
-            <div className="px-5 py-3 border-t border-sol-border">
-              <button
-                onClick={() => {
-                  router.push('/notifications');
-                  setIsOpen(false);
-                }}
-                className="text-sm text-sol-yellow hover:text-sol-yellow-bright transition-colors w-full text-center"
-              >
-                View all
-              </button>
-            </div>
-          )}
-        </div>
+        <NotificationList
+          notifications={sortedNotifications}
+          unreadCount={unreadCount}
+          onOpen={openNotification}
+          onContextMenu={(e, n) => ctxMenu.open(e, n)}
+          openGroups={openGroups}
+          onToggleGroup={toggleGroup}
+          onViewAll={() => {
+            router.push('/notifications');
+            setIsOpen(false);
+          }}
+        />
       )}
 
       <ContextMenu state={ctxMenu}>
