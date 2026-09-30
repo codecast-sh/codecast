@@ -4,13 +4,18 @@ import { JSDOM } from "jsdom";
 import { MemoryRouter } from "react-router";
 import { replaceGlobals } from "../../test-helpers/globals";
 
+// Conversations are named by full 32-char Convex ids: only that spelling opens
+// in place (directConversationId); anything shorter is a plain route.
+const A = "a".repeat(32);
+const B = "b".repeat(32);
+
 // The revealed page is a probe: it drives the band's pane-local router the way
 // a task page's session card does (useOpenLinkedSession → router.push).
 mock.module("../RoutePane", () => ({
   RoutePane: ({ path, navigate }: { path: string; navigate: (p: string, mode: "push" | "replace") => void }) => (
     <div data-route-pane={path}>
-      <button data-open-session onClick={() => navigate("/conversation/A", "push")} />
-      <button data-open-message onClick={() => navigate("/conversation/B#msg-m1", "push")} />
+      <button data-open-session onClick={() => navigate(`/conversation/${A}`, "push")} />
+      <button data-open-message onClick={() => navigate(`/conversation/${B}#msg-m1`, "push")} />
       <button data-open-detail onClick={() => navigate("/tasks/ct-2", "push")} />
     </div>
   ),
@@ -71,7 +76,7 @@ async function mount(ui: React.ReactNode) {
 // inside itself with the same band open — two headers alternating on screen.
 test("a session opened from inside a band goes to the stage, and the band stays on its page", async () => {
   const m = await mount(
-    <RevealAncestryCtx.Provider value={["A"]}>
+    <RevealAncestryCtx.Provider value={[A]}>
       <RevealHost><Pill href="/tasks/ct-1" /></RevealHost>
     </RevealAncestryCtx.Provider>,
   );
@@ -81,13 +86,13 @@ test("a session opened from inside a band goes to the stage, and the band stays 
 
     await m.click("[data-open-session]");
     // The inbox hosts the band, so the click selects the session in place.
-    expect(useInboxStore.getState().currentSessionId).toBe("A");
+    expect(useInboxStore.getState().currentSessionId).toBe(A);
     expect(m.container.querySelector("[data-route-pane]")?.getAttribute("data-route-pane")).toBe("/tasks/ct-1");
     expect(m.container.querySelector("[data-reveal-nested]")).toBeNull();
 
     // A message deep link keeps its target: it rides the host's router.
     await m.click("[data-open-message]");
-    expect(useInboxStore.getState().tabs[0].path).toBe("/conversation/B#msg-m1");
+    expect(useInboxStore.getState().tabs[0].path).toBe(`/conversation/${B}#msg-m1`);
     expect(m.container.querySelector("[data-route-pane]")?.getAttribute("data-route-pane")).toBe("/tasks/ct-1");
 
     // The page's own list → detail still stays in the band.
@@ -106,8 +111,8 @@ test("a session opened from inside a band goes to the stage, and the band stays 
 
 test("a band never shows a conversation it is already inside", async () => {
   const m = await mount(
-    <RevealAncestryCtx.Provider value={["outer", "A"]}>
-      <RevealHost><Pill href="/conversation/A" /></RevealHost>
+    <RevealAncestryCtx.Provider value={["outer", A]}>
+      <RevealHost><Pill href={`/conversation/${A}`} /></RevealHost>
     </RevealAncestryCtx.Provider>,
   );
   try {

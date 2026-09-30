@@ -1,6 +1,6 @@
 # 004 — Reduced motion: keep spinners and the deliberate gentle fallbacks
 
-- **Status**: TODO
+- **Status**: DONE
 - **Commit**: 3efe31bb3
 - **Severity**: HIGH
 - **Category**: Accessibility

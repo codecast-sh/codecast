@@ -55,11 +55,57 @@ export function DecisionCompactCard({
   const task = decision.task_id ? s.tasks[decision.task_id] : undefined;
   const stack = decision.stack_id ? s.decisionStacks[decision.stack_id] : undefined;
   const now = useCoarseNow(30_000);
+  const onAnswer = useCallback((input: DecisionAnswerInput) => answerDecision(decision._id, input), [answerDecision, decision._id]);
+  const onDismiss = useCallback(() => answerDecision(decision._id, { dismiss: true }), [answerDecision, decision._id]);
+
+  return (
+    <DecisionCompactCardView
+      decision={decision}
+      task={task}
+      stack={stack}
+      now={now}
+      onAnswer={onAnswer}
+      onDismiss={onDismiss}
+      keys={keys}
+      selected={selected}
+      onToggleSelect={onToggleSelect}
+      showTask={showTask}
+      cta={cta}
+    />
+  );
+}
+
+/** The compact card drawn from props: the decision, the task and stack it is
+ *  bound to, the clock, and the answer callbacks. DecisionCompactCard feeds it
+ *  from the store; a surface outside the app feeds it fixtures. */
+export function DecisionCompactCardView({
+  decision,
+  task,
+  stack,
+  now,
+  onAnswer,
+  onDismiss,
+  keys = false,
+  selected,
+  onToggleSelect,
+  showTask = true,
+  cta = false,
+}: {
+  decision: SessionDecisionItem;
+  task?: { short_id?: string };
+  stack?: { _id: string; short_id?: string; title: string };
+  now: number;
+  onAnswer: (input: DecisionAnswerInput) => void;
+  onDismiss: () => void;
+  keys?: boolean;
+  selected?: boolean;
+  onToggleSelect?: () => void;
+  showTask?: boolean;
+  cta?: boolean;
+}) {
   const kind = decision.kind ?? "single";
   const pending = decision.status === "pending";
   const rec = ladderRecommendation(decision);
-  const onAnswer = useCallback((input: DecisionAnswerInput) => answerDecision(decision._id, input), [answerDecision, decision._id]);
-  const onDismiss = useCallback(() => answerDecision(decision._id, { dismiss: true }), [answerDecision, decision._id]);
   const pageCount = optionPageSlugs(decision.options).length;
 
   return (

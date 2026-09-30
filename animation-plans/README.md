@@ -4,11 +4,11 @@ Written by the improve-animations audit on 2026-09-30 at commit 3efe31bb3. Each 
 
 | Plan | Title | Severity | Status |
 |---|---|---|---|
-| [001](001-instant-keyboard-selection.md) | Make keyboard-driven selection instant | HIGH | TODO |
-| [002](002-chunk-hint-pop-bug.md) | Stop the chunk hint jumping when it appears | HIGH | TODO |
-| [003](003-stage-morph-invalid-transition.md) | Repair the stage split morph (invalid transition) | HIGH | TODO |
-| [004](004-reduced-motion-gentler-not-zero.md) | Reduced motion: keep spinners and gentle fallbacks | HIGH | TODO |
-| [005](005-transition-all-hot-surfaces.md) | Replace transition-all on the message list and composer | MEDIUM | TODO |
+| [001](001-instant-keyboard-selection.md) | Make keyboard-driven selection instant | HIGH | DONE |
+| [002](002-chunk-hint-pop-bug.md) | Stop the chunk hint jumping when it appears | HIGH | DONE |
+| [003](003-stage-morph-invalid-transition.md) | Repair the stage split morph (invalid transition) | HIGH | DONE |
+| [004](004-reduced-motion-gentler-not-zero.md) | Reduced motion: keep spinners and gentle fallbacks | HIGH | DONE |
+| [005](005-transition-all-hot-surfaces.md) | Replace transition-all on the message list and composer | MEDIUM | DONE |
 
 ## Order
 

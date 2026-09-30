@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { WorkState } from "@codecast/shared/contracts";
+import { CHIEF_OF_STAFF_HANDLE } from "@codecast/shared/contracts/orgLead";
 import { HAND_GROUPS, boundTaskOf, feedLinkIsServerOwned, feedStateTone, groupHands, queryProblem, roleStanding, scopeQueryRef, stateLineBesideName, subtaskCounts, tokensUncounted } from "../scopePage";
 import { ORG_STATE_META } from "../../components/org/orgMeta";
 
@@ -51,16 +52,21 @@ describe("scope page rules", () => {
     expect(feedLinkIsServerOwned("/questions?s=x")).toBe(false);
   });
 
-  test("an empty role scope reads the whole workspace, like the root", () => {
-    const role = { _id: "r1", scope: { project_ids: [], plan_ids: [] } };
-    expect(scopeQueryRef(role, ["p1", "p2"], "t1")).toEqual({ scope: { project_ids: ["p1", "p2"], plan_ids: [] }, team_id: "t1" });
-    expect(scopeQueryRef({ _id: "r2", scope: { project_ids: ["p1"], plan_ids: [] } }, ["p1", "p2"], "t1")).toEqual({ role_id: "r2" });
+  test("only the root and an unscoped Chief of Staff read the whole workspace; any other role reads its own scope", () => {
+    const empty = { project_ids: [], plan_ids: [] };
+    const chief = { _id: "r1", handle: CHIEF_OF_STAFF_HANDLE, scope: empty };
+    expect(scopeQueryRef(chief, ["p1", "p2"], "t1")).toEqual({ scope: { project_ids: ["p1", "p2"], plan_ids: [] }, team_id: "t1" });
     expect(scopeQueryRef(null, ["p1"], undefined)).toEqual({ scope: { project_ids: ["p1"], plan_ids: [] } });
+    // An ordinary role with no scope looks after no work: the server resolves it to nothing.
+    expect(scopeQueryRef({ _id: "r2", handle: "growth", scope: empty }, ["p1", "p2"], "t1")).toEqual({ role_id: "r2" });
+    expect(scopeQueryRef({ _id: "r3", handle: "growth", scope: { project_ids: ["p1"], plan_ids: [] } }, ["p1", "p2"], "t1")).toEqual({ role_id: "r3" });
+    // A Chief of Staff given a scope reads that scope like anyone else.
+    expect(scopeQueryRef({ _id: "r4", handle: CHIEF_OF_STAFF_HANDLE, scope: { project_ids: ["p1"], plan_ids: [] } }, ["p1", "p2"], "t1")).toEqual({ role_id: "r4" });
   });
 
   test("a failed query becomes one line, not a skeleton", () => {
     expect(queryProblem(undefined, false, "The feed")).toBeNull();
-    expect(queryProblem(new Error("Could not find public function"), true, "The feed")).toBe("The feed is not available on this backend yet.");
+    expect(queryProblem(new Error("Could not find public function"), true, "The feed")).toBe("The feed is not available yet.");
     expect(queryProblem(new Error("[Request ID: abc] Server Error\nboom\nstack"), false, "The brief")).toBe("The brief did not load: boom");
   });
 });

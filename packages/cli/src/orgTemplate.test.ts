@@ -100,6 +100,11 @@ class Server {
         this.roles.push(role); decision.applied_at = Date.now(); decision.applied_note = `created @${role.handle} (${role.short_id})`;
         return { status: "applied", role: { id: role._id, short_id: role.short_id }, note: decision.applied_note };
       }
+      case "/cli/role/update": {
+        const role = this.roles.find((r) => r._id === body.role_id);
+        if (role && body.charter !== undefined) role.charter = body.charter;
+        return role;
+      }
       case "/cli/role/provision": {
         this.roles[0].anchor_id = "anchor-1";
         this.anchors = [{ anchor_id: "anchor-1", org_role_id: "role-1", conversation_id: "standing-1" }];
@@ -631,6 +636,12 @@ describe("the host step for a hire accepted on the web (org-hire.md H1, H3)", ()
     expect(bound.config).toEqual({ "product.slug": "acme" });
     // Seated and armed: the standing session was provisioned, the routines created paused.
     expect(server.calls.some((c) => c.endpoint === "/cli/role/provision")).toBe(true);
+    // The role's charter is the loader for the pinned release, as a terminal install
+    // proposes it, set before the standing session is seated and briefed.
+    const charterAt = server.calls.findIndex((c) => c.endpoint === "/cli/role/update");
+    expect(charterAt).toBeGreaterThan(-1);
+    expect(charterAt).toBeLessThan(server.calls.findIndex((c) => c.endpoint === "/cli/role/provision"));
+    expect(server.roles[0].charter).toContain("cast org template instructions 'acme-growth' 'charter'");
     expect(server.triggers.map((t: any) => [t.title, t.status])).toEqual([["CMO portfolio review", "paused"], ["Ads monitoring", "paused"]]);
     // The server row is the same row, taken over by the receipt's key, ready, with the secret by hash only.
     expect(server.instances).toHaveLength(1);
@@ -641,8 +652,10 @@ describe("the host step for a hire accepted on the web (org-hire.md H1, H3)", ()
     expect(fs.readFileSync(path.join(server.dir, ".codecast/packs/growth.toml"), "utf8")).toContain(secret);
     // A rerun reads the receipt it wrote; nothing is provisioned or created twice.
     const provisions = server.calls.filter((c) => c.endpoint === "/cli/role/provision").length;
+    const charterSets = server.calls.filter((c) => c.endpoint === "/cli/role/update").length;
     const again = await bindTemplate(server.deps, "acme-growth", options);
     expect(again.key).toBe(bound.key);
+    expect(server.calls.filter((c) => c.endpoint === "/cli/role/update").length).toBe(charterSets);
     expect(server.calls.filter((c) => c.endpoint === "/cli/role/provision").length).toBe(provisions);
     expect(server.triggers).toHaveLength(2);
     // The receipt is a full one: status and instructions work on it.

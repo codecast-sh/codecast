@@ -3,12 +3,13 @@
 import { useRef, useState } from "react";
 import { track } from "@/lib/analytics";
 import { useWatchEffect } from "@/hooks/useWatchEffect";
+import { DOTS } from "./chapterDots";
 
 // The hand drawn tour (videos/codecast-explainer), hosted on media.codecast.sh
 // and played by the same <cast-player> published pages use. One chapter per
 // file; the player runs them back to back as one film.
 const MEDIA = "https://media.codecast.sh/media/";
-export const TOUR_CHAPTERS = [
+const TOUR_CHAPTERS = [
   { title: "Prologue: five steps out of the dark", duration: 120.3, file: "55f1381fa127e7ed37592e6a1e7f997890d70cf3df345552f5505cb6abe25e59" },
   { title: "Setup", duration: 40.6, file: "4d0722e7c34931c0b94d88c6ac7fde48fbebaa323a6c45ea0c602e46395ebb29" },
   { title: "The inbox", duration: 57.2, file: "cce83398d750f7578a3f1e082c335fb5c6dd98364ef8fed87b509d7ae195bf29" },
@@ -24,7 +25,6 @@ export const TOUR_CHAPTERS = [
 ];
 const STARTS = TOUR_CHAPTERS.map((_, i) => TOUR_CHAPTERS.slice(0, i).reduce((t, c) => t + c.duration, 0));
 const TOTAL = STARTS[STARTS.length - 1] + TOUR_CHAPTERS[TOUR_CHAPTERS.length - 1].duration;
-export const DOTS = ["#2aa198", "#268bd2", "#b58900", "#6c71c4", "#cb4b16", "#859900"];
 
 type CastPlayerEl = HTMLElement & {
   goTo(i: number): void;

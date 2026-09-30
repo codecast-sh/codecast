@@ -8,7 +8,7 @@
  * #002b36 ink, accents #859900 / #b58900 / #268bd2 / #6c71c4 / #2aa198.
  */
 
-export const AGENT_COLORS: Record<string, string> = {
+const AGENT_COLORS: Record<string, string> = {
   claude: "#268bd2",
   codex: "#859900",
   cursor: "#b58900",
@@ -25,7 +25,7 @@ export function AgentChip({ agent }: { agent: string }) {
 }
 
 export type SessionStatus = "working" | "needs-input" | "idle";
-export const STATUS_COLORS: Record<SessionStatus, string> = { working: "#859900", "needs-input": "#b58900", idle: "#93a1a1" };
+const STATUS_COLORS: Record<SessionStatus, string> = { working: "#859900", "needs-input": "#b58900", idle: "#93a1a1" };
 
 export function StatusDot({ kind }: { kind: SessionStatus }) {
   const color = STATUS_COLORS[kind];
@@ -65,7 +65,7 @@ export function WindowChrome({ title }: { title: string }) {
 
 export type HeroSession = { status: SessionStatus; title: string; note: string; agent: string; time: string; active?: boolean };
 
-export const HERO_SESSIONS: HeroSession[] = [
+const HERO_SESSIONS: HeroSession[] = [
   { status: "needs-input", title: "Migrate billing webhooks", note: "Allow running npm test?", agent: "claude", time: "now", active: true },
   { status: "working", title: "Dashboard rewrite", note: "sarah · merging the dashboard half", agent: "claude", time: "1m" },
   { status: "working", title: "Fix flaky auth test", note: "Reproduced, writing regression test", agent: "codex", time: "2m" },
@@ -168,7 +168,7 @@ export function UserPromptCard({ name = "Ashot", initials = "A", color = "#cb4b1
   );
 }
 
-export const CANVAS_BARS = [
+const CANVAS_BARS = [
   { x: 6, h: 26, c: "#93a1a1" }, { x: 25, h: 20, c: "#93a1a1" }, { x: 44, h: 22, c: "#93a1a1" },
   { x: 63, h: 12, c: "#268bd2" }, { x: 82, h: 9, c: "#268bd2" }, { x: 101, h: 7, c: "#859900" },
 ];
@@ -342,7 +342,7 @@ export function TaskPill({ title }: { title: string }) {
  * title → source-agent icon → plan pill (cyan) → label dots → assignee avatar
  * (cyan ring) → priority icon → age.
  */
-export const PLAN_PILL_STYLE = { backgroundColor: "rgba(42,161,152,0.1)", color: "#2aa198", borderColor: "rgba(42,161,152,0.2)" };
+const PLAN_PILL_STYLE = { backgroundColor: "rgba(42,161,152,0.1)", color: "#2aa198", borderColor: "rgba(42,161,152,0.2)" };
 
 export function PlanPill({ name }: { name: string }) {
   return <span className="shrink-0 rounded border px-1.5 text-[10px]" style={PLAN_PILL_STYLE}>{name}</span>;
@@ -359,7 +359,7 @@ export function AssigneeSlot({ children, style }: { children?: React.ReactNode; 
 
 export type TaskRowData = { icon: React.ReactNode; id: string; title: React.ReactNode; pill: React.ReactNode; dots: string[]; who: React.ReactNode; pri: React.ReactNode; age: string };
 
-export const TASK_ROWS: TaskRowData[] = [
+const TASK_ROWS: TaskRowData[] = [
   { icon: <CircleDotIcon color="#b58900" />, id: "ct-619", title: "Fix supply write-back", pill: null, dots: ["#268bd2"], who: <span title="codex"><BotIcon color="#859900" /></span>, pri: <ArrowUpIcon color="#cb4b16" />, age: "2h" },
   { icon: <CircleDotIcon color="#6c71c4" />, id: "ct-703", title: "Investigate matchmaker costs", pill: null, dots: ["#d33682"], who: <span title="claude"><BotIcon color="#268bd2" /></span>, pri: <MinusIcon color="#93a1a1" />, age: "3h" },
   { icon: <CircleIcon color="#268bd2" />, id: "ct-712", title: "SMS reminders before sched", pill: null, dots: ["#b58900", "#2aa198"], who: <Avatar initials="A" color="#cb4b16" />, pri: <ArrowUpIcon color="#cb4b16" />, age: "6h" },

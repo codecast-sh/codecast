@@ -13,7 +13,7 @@ export type MessageAlternate = {
 };
 
 import { SYSTEM_MESSAGE_PREFIXES } from "./sessionFilters";
-import { classifyApiErrorBanner, isAgentContextMessage, isAgentSwitchNotice, isMachineSwitchNotice } from "@codecast/shared/contracts";
+import { classifyApiErrorBanner, isAgentContextMessage, isAgentSwitchNotice, isMachineSwitchNotice, stripMentionContext } from "@codecast/shared/contracts";
 import { stripTeammateFraming, parseSpawnedTaskPrompt, parseChatWakePrompt, chatWakePlace, isSkillExpansion, extractSkillInfo } from "../components/sessionMessage";
 export { isSkillExpansion, extractSkillInfo };
 
@@ -270,7 +270,7 @@ const INTERRUPT_PREFIXES = ["[Request interrupted", "[Request cancelled"];
  * while preserving the human's prose/markdown. Shared with the conversation
  * view so a message reads the same wherever it's shown. */
 export function stripSystemTags(content: string): string {
-  return content
+  return stripMentionContext(content)
     .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
     .replace(/<task-reminder>[\s\S]*?<\/task-reminder>/g, "")
     .replace(/<local-command-stdout>[\s\S]*?<\/local-command-stdout>/g, "")

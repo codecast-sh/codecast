@@ -2,18 +2,15 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useMemo, useContext } from "react";
 import { useChatMessageRow, useEnsureChatMessage } from "../../../hooks/useChatSync";
-import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
 import { BrowserTabPill } from "../../browser/BrowserTabPill";
 import { parseThreadStateStatus } from "@codecast/shared/contracts";
 import { truncateStr } from "@codecast/shared/render";
 import { entityRoute } from "../../../lib/entityLinks";
 import { parseTriggerCadence } from "../../triggerCadence";
 import { CollapsibleBody } from "../../CollapsibleBody";
-import { useQuery } from "convex/react";
-import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { findEntityInStore } from "../../../lib/liveEntities";
 import { EntityIdPill } from "../../EntityIdPill";
+import { useEntityResolution } from "../../../lib/entityDisplay";
 import { THREAD_STATE_STATUS_META } from "../../../lib/threadState";
 import { entityRemarkPlugins } from "../../../lib/remarkEntityIds";
 import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS } from "../../messageMarkdown";
@@ -33,8 +30,6 @@ import { renderAnsi } from "../../../lib/conversationFormat";
 import { MessageMarkdown, ReactMarkdown } from "../markdown";
 import type { ImageData, ToolCall, ToolResult } from "../types";
 
-const api = _typedApi as any;
-
 const CAST_STATUS_COLORS: Record<string, { bg: string; text: string }> = {
   draft: { bg: "bg-gray-500/10", text: "text-gray-400" },
   open: { bg: "bg-sol-blue/10", text: "text-sol-blue" },
@@ -50,12 +45,9 @@ const CAST_STATUS_COLORS: Record<string, { bg: string; text: string }> = {
 
 function DocTitleLink({ convexId }: { convexId: string }) {
   const router = useRouter();
-  // Local-first seed (same pattern as EntityIdPill): the store usually holds
-  // the doc row already — paint the title on the first frame instead of
-  // flashing a truncated raw id. Non-reactive read; the query keeps it fresh.
-  const seed = useMemo(() => findEntityInStore(useInboxStore.getState(), "doc", convexId), [convexId]);
-  const queryDoc = useQuery(api.docs.webGet, { id: convexId });
-  const doc = queryDoc ?? seed;
+  // The shared resolver (same as EntityIdPill): seeded from the store on the
+  // first frame, kept fresh by its query.
+  const doc = useEntityResolution(convexId, "doc").entity;
   if (!doc) return <span className="text-sol-text-dim font-mono">{convexId.slice(0, 12)}...</span>;
   return (
     <button
@@ -69,19 +61,12 @@ function DocTitleLink({ convexId }: { convexId: string }) {
 
 // Resolved title of a task/plan, rendered inline after its id pill in a cast
 // command row. `struck` crosses it out — a `task done` row reads as the task
-// being checked off. Enrichment only: the row is honest without it, so the
-// queries go through useQueryNoThrow and an unresolved title renders nothing.
+// being checked off. Enrichment only: the row is honest without it, so an
+// unresolved title renders nothing.
 function InlineEntityTitle({ shortId, struck }: { shortId: string; struck?: boolean }) {
   const isPlan = shortId.startsWith("pl-");
-  // Local-first seed: paint the resolved title on the first frame when the
-  // store already holds the row (it usually does — same rule as EntityIdPill).
-  const seed = useMemo(
-    () => findEntityInStore(useInboxStore.getState(), isPlan ? "plan" : "task", shortId),
-    [isPlan, shortId],
-  );
-  const { data: task } = useQueryNoThrow(api.tasks.webGet, !isPlan ? { short_id: shortId } : "skip");
-  const { data: plan } = useQueryNoThrow(api.plans.webGet, isPlan ? { short_id: shortId } : "skip");
-  const entity: any = (isPlan ? plan : task) ?? seed;
+  // The shared resolver: the store's row on the first frame, then the query's.
+  const entity: any = useEntityResolution(shortId, isPlan ? "plan" : "task").entity;
   const title = entity?.display_title || entity?.title;
   if (!title) return null;
   return (
@@ -97,14 +82,7 @@ function CastEntityCard({ type, shortId, convexId }: { type: "task" | "plan" | "
   // frame; the query refreshes it. Every `cast task/plan/doc` row in a
   // transcript renders this, so the flash was everywhere.
   const rawId = convexId ?? shortId ?? "";
-  const seed = useMemo(
-    () => (rawId ? findEntityInStore(useInboxStore.getState(), type, rawId) : undefined),
-    [type, rawId],
-  );
-  const task = useQuery(api.tasks.webGet, type === "task" && shortId ? { short_id: shortId } : "skip");
-  const plan = useQuery(api.plans.webGet, type === "plan" && shortId ? { short_id: shortId } : "skip");
-  const doc = useQuery(api.docs.webGet, type === "doc" && convexId ? { id: convexId } : "skip");
-  const entity = (type === "task" ? task : type === "plan" ? plan : doc) ?? seed;
+  const entity = useEntityResolution(rawId, type).entity;
 
   if (!entity) {
     if (shortId) return <EntityIdPill shortId={shortId} />;

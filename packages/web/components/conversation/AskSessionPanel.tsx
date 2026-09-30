@@ -13,7 +13,7 @@ import { createContext, memo, useContext, useRef, useState, useSyncExternalStore
 import ReactMarkdownBase from "react-markdown";
 import { useAction } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import type { AskResult } from "@codecast/convex/convex/sessionAsk";
+import type { AskResult } from "@codecast/shared/contracts";
 import { Loader2, MessageCircleQuestion, X } from "lucide-react";
 import { entityRemarkPlugins } from "../../lib/remarkEntityIds";
 import { MESSAGE_MD_COMPONENTS } from "../messageMarkdown";

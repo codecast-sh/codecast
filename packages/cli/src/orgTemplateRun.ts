@@ -352,6 +352,13 @@ export async function bindTemplate(deps: OrgInitDeps, instance: string, options:
     const receipt = fs.existsSync(receiptPath(dir, instance)) ? readReceipt(dir, instance) : await adoptHiredInstance(deps, instance, dir, options);
     const artifact = verifiedArtifact(receipt);
     const tree = await checkContext(deps, receipt, options);
+    // The role's charter is the loader that reads the pinned release's charter
+    // on this host, as a terminal install proposes it. A web hire cannot write
+    // it (only the host knows the project folder), so it is set here, before
+    // the standing session is seated and briefed.
+    const loader = loaderPrompt(receipt, "charter");
+    const roleRow = receipt.role ? (tree.roles ?? []).find((r: any) => r._id === receipt.role!.id) : undefined;
+    if (roleRow && roleRow.charter !== loader) await request(deps, "/cli/role/update", { role_id: receipt.role!.id, charter: loader });
     // A role applied but not yet seated and armed (a web hire, or a reconcile
     // that stopped after the apply) is finished here; a proposal still open is not.
     if (receipt.phase === "provisioning") await provisionAndArm(deps, receipt, tree);

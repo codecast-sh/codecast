@@ -1,5 +1,5 @@
 import { autonomyOn } from "@codecast/shared/contracts/roleAutonomy";
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import { captureException } from "@sentry/react";
 import { Loader2, Lock } from "lucide-react";
 import { Section } from "../identity/RoleScopeView";
@@ -144,7 +144,8 @@ function HostStep({ instance, canEdit, purpose }: { instance: any; canEdit: bool
               {secrets.map((s) => (
                 <label key={s.key} className="flex flex-col gap-1">
                   <span className="text-[11px] text-sol-text-muted">{s.label}{s.bound ? <span className="text-sol-green"> · set</span> : null}</span>
-                  <input type="password" autoComplete="off" spellCheck={false} name={`secret:${s.key}`} value={values[s.key] ?? ""} onChange={(e) => setValues({ ...values, [s.key]: e.target.value })} placeholder={s.bound ? "replace…" : "paste the credential, key or JSON"} className="h-8 w-full rounded-md border border-sol-border/50 bg-sol-bg px-2 text-[12px] text-sol-text outline-none focus:border-sol-cyan" style={{ fontFamily: "var(--font-mono)" }} />
+                  {/* A textarea, masked, never <input type=password>: a password input strips newlines, which breaks a pasted PEM key or multi-line JSON. */}
+                  <textarea rows={2} autoComplete="off" spellCheck={false} name={`secret:${s.key}`} value={values[s.key] ?? ""} onChange={(e) => setValues({ ...values, [s.key]: e.target.value })} placeholder={s.bound ? "replace…" : "paste the credential, key or JSON"} className="min-h-8 w-full resize-y rounded-md border border-sol-border/50 bg-sol-bg px-2 py-1.5 text-[12px] text-sol-text outline-none focus:border-sol-cyan" style={{ fontFamily: "var(--font-mono)", WebkitTextSecurity: "disc" } as CSSProperties} />
                 </label>
               ))}
               {typed.length > 0 && !device.can_receive_secrets && <p className="text-[11px] text-sol-yellow">{device.label} runs a codecast too old to receive a secret from here. Update it there, or bind the secret from its terminal.</p>}

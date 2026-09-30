@@ -4,12 +4,13 @@
 // live room AND remembers the choice for the next join, and every picker reads
 // the remembered choice back from the store, so no two surfaces can disagree
 // about what was chosen.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Check, ChevronUp, Mic, Video, type LucideIcon } from "lucide-react";
 import { grantDeviceNames, listDevices, switchDevice } from "../../lib/calls/callManager";
 import { DEVICE_PREF_KEY } from "../../lib/calls/joinPrefs";
 import { useInboxStore } from "../../store/inboxStore";
 import { useMountEffect } from "../../hooks/useMountEffect";
+import { useEventListener } from "../../hooks/useEventListener";
 
 type Kind = keyof typeof DEVICE_PREF_KEY;
 type Lists = Record<Kind, MediaDeviceInfo[]>;
@@ -167,19 +168,14 @@ export function DeviceChips({ footer }: { footer?: React.ReactNode }) {
   const { lists, refresh } = useDeviceLists();
   const [open, setOpen] = useState<Kind | null>(null);
   const root = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: PointerEvent) => {
-      if (!root.current?.contains(e.target as Node)) setOpen(null);
-    };
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(null);
-    window.addEventListener("pointerdown", onDown);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("pointerdown", onDown);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
+  // A click outside or Escape closes the open picker; nothing listens while closed.
+  const dismissTarget = open ? window : null;
+  useEventListener("pointerdown", (e) => {
+    if (!root.current?.contains(e.target as Node)) setOpen(null);
+  }, dismissTarget);
+  useEventListener("keydown", (e) => {
+    if (e.key === "Escape") setOpen(null);
+  }, dismissTarget);
   if (!lists) return null;
   return (
     <div ref={root} className="relative flex items-center justify-center gap-1">
