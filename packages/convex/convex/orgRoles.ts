@@ -1,7 +1,7 @@
 import { internalMutation, mutation, query } from "./functions";
 import { internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { applyPause, applyResume, applyRunNow, applyTaskUpdate, cancelTasksOriginatingFrom, ensureRoleNeedsInputTrigger, insertTask } from "./agentTasks";
+import { applyPause, applyResume, applyRunNow, applyTaskUpdate, cancelTasksOriginatingFrom, ensureRoleEventTriggers, insertTask } from "./agentTasks";
 import { CHIEF_OF_STAFF_JOB } from "@codecast/shared/contracts/chiefOfStaffPrompt";
 import { defaultAvatarFor, isAvatarKey } from "@codecast/shared/contracts/orgAvatars";
 import { ORG_AUTHORITY_KINDS, authorityWords, orgTenureError, type OrgAuthorityGrant } from "@codecast/shared/contracts/orgProposal";
@@ -1248,16 +1248,16 @@ export async function ensureRoleRoutine(ctx: Ctx, role: any, standing: any, ever
   // cancelled, whatever door arms the role again.
   const found = await findRoleRoutineInAnyStatus(ctx, role, standing);
   const live = found && isLiveTrigger(found) ? await refreshRoutine(ctx, role, standing, found) : null;
-  // The route up is armed with the routine (S28), so every door that arms
-  // one arms both.
+  // The route up is armed with the routine (S28), and the Chief of Staff's
+  // area change trigger with it (S29), so every door that arms one arms all.
   if (found && !live) {
-    await ensureRoleNeedsInputTrigger(ctx, role, standing);
+    await ensureRoleEventTriggers(ctx, role, standing);
     return { id: found._id, short_id: found.short_id, created: false };
   }
   if (live) {
     // A cadence the caller named reaches a routine already armed.
     if (everyMs && live.interval_ms !== interval) await applyTaskUpdate(ctx, live, { interval_ms: interval }, { userId: standing.user_id, source: "cli" });
-    await ensureRoleNeedsInputTrigger(ctx, role, standing);
+    await ensureRoleEventTriggers(ctx, role, standing);
     return { id: live._id, short_id: live.short_id, created: false };
   }
   const created = await insertTask(ctx, standing.user_id, {
@@ -1271,7 +1271,7 @@ export async function ensureRoleRoutine(ctx: Ctx, role: any, standing: any, ever
     mode: "apply",
     role_id: role._id,
   });
-  await ensureRoleNeedsInputTrigger(ctx, role, standing);
+  await ensureRoleEventTriggers(ctx, role, standing);
   return { ...created, created: true };
 }
 

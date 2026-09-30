@@ -7,58 +7,108 @@
  * owns that last hop: a background SSH tunnel from local loopback to the
  * box's, plus a one-frame screenshot for when a still is enough.
  *
- * The tunnel is idempotent: if the local port already answers, whatever holds
- * it is presumed to be a live tunnel and reused. That makes `hosts view` safe
- * to run repeatedly — it converges on "the URLs work" rather than stacking
- * ssh processes.
+ * Each tunnel is idempotent per host (ensureHostTunnel): running `hosts vnc`
+ * or `hosts view` again converges on "the URLs work" rather than stacking ssh
+ * processes, and a tunnel nobody uses exits by itself.
  */
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
 import * as net from "node:net";
 import * as path from "node:path";
-import { spawn } from "../proc.js";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { RemoteHost } from "../remote/session-move.js";
 import { HLS_PORT, NOVNC_PORT, RTSP_PORT, SCREEN_DISPLAY } from "./hostScreen.js";
 import { SHOT_TEMP_KIND } from "./shotFile.js";
+import { freePort } from "./instance.js";
 import { agentTempPath } from "../tempFiles.js";
 import { hostScreenUrl } from "@codecast/shared/contracts";
 
 /**
- * Bring the machine-level VNC to local loopback and return the noVNC URL.
- *
- * This is the fallback below the in-app browser control: it shows the whole
- * X display, so anything outside the agent's tab — a popup window, a Chrome
- * dialog, a second window — is reachable. Same shape as the view tunnel:
- * idempotent, reuses a tunnel that already answers.
+ * How long a VNC or view tunnel outlives its last viewer. The tunnel is an
+ * SSH master of its own, and ControlPersist counts open forwarded
+ * connections: a live noVNC socket or player keeps it up, and this long after
+ * the last one closes it exits, so a forgotten viewer never keeps the host
+ * awake (the idle watchdog counts inbound SSH as use).
  */
-export async function ensureVncTunnel(host: RemoteHost): Promise<{ url: string; tunnelPid?: number }> {
-  const url = hostScreenUrl(NOVNC_PORT);
-  if (await portAnswers(NOVNC_PORT)) return { url };
-  const tunnel = spawn(
+export const TUNNEL_IDLE_SECONDS = 600;
+
+/** The control socket for one kind of tunnel to one host, and the file naming its local ports. */
+export function tunnelSocket(host: RemoteHost, kind: string): string {
+  return path.join(os.tmpdir(), `cast-${kind}-${host.user}-${host.address.replace(/[^\w.]/g, "_")}`);
+}
+
+/**
+ * Local loopback ports that reach `remotePorts` on this host, through a
+ * detached SSH master that ends itself when idle. Reused only when it is this
+ * host's own tunnel and its ports answer: a fixed port reused on sight could
+ * show a different host, or whatever else holds it. A local port keeps the
+ * remote number when that is free, so the URLs stay familiar.
+ */
+export async function ensureHostTunnel(
+  host: RemoteHost,
+  kind: string,
+  remotePorts: number[],
+): Promise<{ localPorts: number[]; tunnelPid?: number }> {
+  const socket = tunnelSocket(host, kind);
+  const record = `${socket}.json`;
+  const target = `${host.user}@${host.address}`;
+  const alive = spawnSync("ssh", ["-S", socket, "-O", "check", target], { stdio: "ignore", timeout: 5_000 }).status === 0;
+  if (alive) {
+    try {
+      const ports = JSON.parse(fs.readFileSync(record, "utf-8")).localPorts as number[];
+      if (ports.length === remotePorts.length && (await Promise.all(ports.map((p) => portAnswers(p)))).every(Boolean)) {
+        return { localPorts: ports };
+      }
+    } catch { /* no record: replace the tunnel */ }
+    spawnSync("ssh", ["-S", socket, "-O", "exit", target], { stdio: "ignore", timeout: 5_000 });
+  }
+  const localPorts: number[] = [];
+  for (const p of remotePorts) localPorts.push((await portAnswers(p)) ? await freePort() : p);
+  const r = spawnSync(
     "ssh",
     ["-i", host.keyPath, "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",
      "-o", "ConnectTimeout=20", "-o", "BatchMode=yes",
      "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3",
      "-o", "ExitOnForwardFailure=yes",
-     "-N",
-     // Only noVNC crosses the tunnel: websockify on the box proxies to the
-     // VNC port there. Forwarding 5900 too collided with macOS Screen
-     // Sharing, which owns that port locally, and ExitOnForwardFailure then
-     // took the whole tunnel down with it.
-     "-L", `127.0.0.1:${NOVNC_PORT}:127.0.0.1:${NOVNC_PORT}`,
-     `${host.user}@${host.address}`],
-    { stdio: ["ignore", "ignore", "ignore"], detached: true },
+     "-o", "ControlMaster=yes", "-o", `ControlPath=${socket}`, "-o", `ControlPersist=${TUNNEL_IDLE_SECONDS}`,
+     "-f", "-N",
+     ...remotePorts.flatMap((p, i) => ["-L", `127.0.0.1:${localPorts[i]}:127.0.0.1:${p}`]),
+     target],
+    { stdio: ["ignore", "ignore", "pipe"], encoding: "utf-8", timeout: 45_000 },
   );
-  tunnel.unref();
-  if (!tunnel.pid) throw new Error("could not start the VNC tunnel");
+  if (r.status !== 0) throw new Error(`could not open the ${kind} tunnel: ${(r.stderr || "ssh failed").trim().split("\n").pop()}`);
+  fs.writeFileSync(record, JSON.stringify({ localPorts }));
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
-    if (await portAnswers(NOVNC_PORT)) return { url, tunnelPid: tunnel.pid };
+    if ((await Promise.all(localPorts.map((p) => portAnswers(p)))).every(Boolean)) {
+      const pid = Number(spawnSync("ssh", ["-S", socket, "-O", "check", target], { encoding: "utf-8", timeout: 5_000 }).stderr?.match(/pid=(\d+)/)?.[1]);
+      return { localPorts, tunnelPid: pid || undefined };
+    }
     await sleep(400);
   }
-  try { process.kill(tunnel.pid, "SIGTERM"); } catch { /* gone */ }
-  throw new Error("the VNC tunnel never came up — re-run `cast browser hosts provision` to install it");
+  spawnSync("ssh", ["-S", socket, "-O", "exit", target], { stdio: "ignore", timeout: 5_000 });
+  throw new Error(`the ${kind} tunnel opened but nothing answered — re-run \`cast hosts provision\` to install the ${kind} service`);
+}
+
+/** Close this host's tunnel of that kind now, rather than at its idle timeout. */
+export function closeHostTunnel(host: RemoteHost, kind: string): boolean {
+  return spawnSync("ssh", ["-S", tunnelSocket(host, kind), "-O", "exit", `${host.user}@${host.address}`], { stdio: "ignore", timeout: 5_000 }).status === 0;
+}
+
+/**
+ * Bring the machine-level VNC to local loopback and return the noVNC URL.
+ *
+ * This is the fallback below the in-app browser control: it shows the whole
+ * X display, so anything outside the agent's tab (a popup window, a Chrome
+ * dialog, a second window) is reachable. Only noVNC crosses the tunnel:
+ * websockify on the box proxies to the VNC port there, and forwarding 5900
+ * too collided with macOS Screen Sharing, which owns that port locally.
+ */
+export async function ensureVncTunnel(host: RemoteHost): Promise<{ url: string; tunnelPid?: number }> {
+  const t = await ensureHostTunnel(host, "vnc", [NOVNC_PORT]);
+  return { url: hostScreenUrl(t.localPorts[0]), tunnelPid: t.tunnelPid };
 }
 
 export interface ViewUrls {
@@ -78,36 +128,14 @@ function portAnswers(port: number, timeoutMs = 1500): Promise<boolean> {
   });
 }
 
-/** Bring both view ports to local loopback; reuse an existing tunnel if one answers. */
+/** Bring both view ports to local loopback; reuse this host's tunnel if it answers. */
 export async function ensureViewTunnel(host: RemoteHost): Promise<ViewUrls> {
-  const urls = {
-    rtsp: `rtsp://127.0.0.1:${RTSP_PORT}/screen`,
-    hls: `http://127.0.0.1:${HLS_PORT}/screen`,
+  const t = await ensureHostTunnel(host, "view", [RTSP_PORT, HLS_PORT]);
+  return {
+    rtsp: `rtsp://127.0.0.1:${t.localPorts[0]}/screen`,
+    hls: `http://127.0.0.1:${t.localPorts[1]}/screen`,
+    tunnelPid: t.tunnelPid,
   };
-  if (await portAnswers(RTSP_PORT)) return urls;
-
-  const tunnel = spawn(
-    "ssh",
-    ["-i", host.keyPath, "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",
-     "-o", "ConnectTimeout=20", "-o", "BatchMode=yes",
-     "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3",
-     "-o", "ExitOnForwardFailure=yes",
-     "-N",
-     "-L", `127.0.0.1:${RTSP_PORT}:127.0.0.1:${RTSP_PORT}`,
-     "-L", `127.0.0.1:${HLS_PORT}:127.0.0.1:${HLS_PORT}`,
-     `${host.user}@${host.address}`],
-    { stdio: ["ignore", "ignore", "ignore"], detached: true },
-  );
-  tunnel.unref();
-  if (!tunnel.pid) throw new Error("could not start the view tunnel");
-
-  const deadline = Date.now() + 20_000;
-  while (Date.now() < deadline) {
-    if (await portAnswers(RTSP_PORT)) return { ...urls, tunnelPid: tunnel.pid };
-    await sleep(400);
-  }
-  try { process.kill(tunnel.pid, "SIGTERM"); } catch { /* gone */ }
-  throw new Error("the view tunnel never came up — is the host provisioned? (`cast browser hosts provision`)");
 }
 
 /**

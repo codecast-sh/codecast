@@ -7,7 +7,7 @@ import { Command } from "commander";
 import { applyProposalChanges, extractOrgProposal } from "@codecast/shared/contracts/orgProposal";
 import { registerOrgTemplateCommands } from "./orgTemplate";
 import { atomicJson, canonicalDirectory, readArtifact, substitute, validateTemplate, type OrgTemplate } from "./orgTemplateArtifact";
-import { bindTemplate, catalogTemplates, evidenceTemplate, installTemplate, lessonTemplate, publishTemplate, reportTemplate, setupTemplate, quoteTemplateArg, readReceipt, receiptPath, reconcileTemplate, templateInstructions, templateStatus, upgradeTemplate, type TemplateOptions } from "./orgTemplateRun";
+import { bindTemplate, catalogTemplates, evidenceTemplate, installTemplate, lessonTemplate, publishTemplate, publishTemplates, reportTemplate, setupTemplate, quoteTemplateArg, readReceipt, receiptPath, reconcileTemplate, templateInstructions, templateStatus, upgradeTemplate, type TemplateOptions } from "./orgTemplateRun";
 import type { OrgInitDeps } from "./orgInit";
 
 const dirs: string[] = [];
@@ -38,6 +38,9 @@ class Server {
   work: any[] = [];
   instances: any[] = [];
   lessons: any[] = [];
+  /** Published releases by digest, with the snapshot blob publish uploaded (H1). */
+  releases: Record<string, { manifest: any; storage_url: string | null }> = {};
+  blobs: Record<string, Uint8Array> = {};
   recordCalls: Array<{ endpoint: string; body: any }> = [];
   calls: Array<{ endpoint: string; body: any }> = [];
   failAfter?: string;
@@ -54,6 +57,17 @@ class Server {
     webUrl: () => "https://codecast.sh/",
     callingSession: () => undefined,
     realCwd: () => this.dir,
+    // Blob traffic outside the API: the snapshot upload and its download.
+    fetchUrl: (async (url: any, init?: any) => {
+      const href = String(url);
+      if (href === "https://upload.test/snapshot") {
+        const id = `st-${Object.keys(this.blobs).length + 1}`;
+        this.blobs[id] = new Uint8Array(init.body);
+        return new Response(JSON.stringify({ storageId: id }), { status: 200 });
+      }
+      const blob = this.blobs[href.replace("https://blob.test/", "")];
+      return blob ? new Response(new Blob([blob as unknown as BlobPart]), { status: 200 }) : new Response("missing", { status: 404 });
+    }) as any,
     cliPost: async (endpoint, body) => {
       this.calls.push({ endpoint, body });
       if (this.failBefore === endpoint) { this.failBefore = undefined; throw new Error("Connection lost before request"); }
@@ -100,7 +114,7 @@ class Server {
       case "/cli/tasks/pause": { if (this.pauseWorks) this.triggers.find((t) => t._id === body.task_id).status = "paused"; return { success: this.pauseWorks }; }
       case "/cli/tasks/update": Object.assign(this.triggers.find((t) => t._id === body.task_id), body); return { success: true };
       case "/cli/org/template/instance": {
-        const row = this.instances.find((r) => r.instance_key === body.instance_key);
+        const row = this.instances.find((r) => r.instance_key === body.instance_key) ?? this.instances.find((r) => r.instance === body.instance && r.project_id === body.project_id && r.phase === "awaiting_host");
         if (row) { Object.assign(row, body); return row; }
         const created = { ...body, _id: `inst-${this.instances.length + 1}` }; this.instances.push(created); return created;
       }
@@ -109,7 +123,13 @@ class Server {
         this.recordCalls.push({ endpoint, body }); return { ok: true };
       }
       case "/cli/org/template/lesson": { const row = { ...body, _id: `lesson-${this.lessons.length + 1}`, status: "open" }; this.lessons.push(row); return { id: row._id, status: "open" }; }
-      case "/cli/org/template/publish": return { action: "created", template_id: body.manifest.id, digest: body.digest, as_codecast: !!body.as_codecast, team_id: body.team_id };
+      case "/cli/images/upload-url": return "https://upload.test/snapshot";
+      case "/cli/org/template/publish": {
+        this.releases[body.digest] = { manifest: body.manifest, storage_url: body.storage_id ? `https://blob.test/${body.storage_id}` : null };
+        return { action: "created", template_id: body.manifest.id, latest: { version: body.manifest.version, digest: body.digest }, digest: body.digest, as_codecast: !!body.as_codecast, team_id: body.team_id, storage_id: body.storage_id, changelog: body.changelog };
+      }
+      case "/cli/org/template/release": { const r = this.releases[body.digest]; if (!r) throw new Error("Release not published"); return { template_id: body.template_id, version: body.version, digest: body.digest, ...r }; }
+      case "/cli/org/template/instances": return this.instances;
       case "/cli/org/template/catalog": return [{ template_id: "growth", team_id: body.team_id }];
       case "/cli/work/list": return { tasks: this.work.filter((t) => !body.label || (t.labels ?? []).includes(body.label)) };
       case "/cli/work/create": {
@@ -567,4 +587,91 @@ test("loader and follow-up shell arguments remain literal", () => {
   const value = "/tmp/it's $(printf INJECTED) `printf INJECTED`";
   const result = spawnSync("bash", ["-c", `printf '%s' ${quoteTemplateArg(value)}`], { encoding: "utf8" });
   expect({ status: result.status, stdout: result.stdout, stderr: result.stderr, error: result.error?.message }).toEqual({ status: 0, stdout: value, stderr: "", error: undefined });
+});
+
+describe("the host step for a hire accepted on the web (org-hire.md H1, H3)", () => {
+  const hired = (): any => ({ ...manifest(), schemaVersion: 2, version: "2.0.0", instance_file: ".codecast/packs/growth.toml", inputs: [
+    { key: "product.slug", label: "Short name", kind: "string", required: true },
+    { key: "accounts.ads", label: "Ads credentials", kind: "secret" },
+  ], ledgers: [{ id: "cmo", title: "CMO ledger for {{input.product.slug}}" }] });
+  test("a snapshot reads back to the same digest and a tampered one is refused", async () => {
+    const { artifactFromSnapshot, snapshotArtifact } = await import("./orgTemplateArtifact");
+    const artifact = readArtifact(folder(hired()));
+    const back = artifactFromSnapshot(snapshotArtifact(artifact), artifact.hash);
+    expect(back.hash).toBe(artifact.hash);
+    expect([...back.files.keys()].sort()).toEqual([...artifact.files.keys()].sort());
+    const tampered = JSON.parse(snapshotArtifact(artifact).toString("utf8"));
+    tampered.files[1].bytes = Buffer.from("changed").toString("base64");
+    expect(() => artifactFromSnapshot(JSON.stringify(tampered), artifact.hash)).toThrow(/does not match the published digest/);
+    expect(() => artifactFromSnapshot(JSON.stringify({ schemaVersion: 1, files: [{ name: "../x", bytes: "" }] }))).toThrow();
+  });
+  test("bind with no receipt adopts the server's row, installs the release from the record, seats and arms the role, then binds", async () => {
+    const source = folder(hired());
+    const server = new Server(tmp());
+    const options: TemplateOptions = { dir: server.dir, project: "project-1", team: "team-1" };
+    // Nothing hired yet: bind says so instead of inventing a receipt.
+    await expect(bindTemplate(server.deps, "acme-growth", options)).rejects.toThrow(/No instance acme-growth here or on the server/);
+    // Publish uploads the snapshot; CHANGELOG.md rides along by default.
+    fs.writeFileSync(path.join(source, "CHANGELOG.md"), "## 2.0.0\nFirst.");
+    const published: any = await publishTemplate(server.deps, source, { team: "team-1", status: "stable" });
+    expect(published.storage_id).toBe("st-1");
+    expect(published.changelog).toBe("## 2.0.0\nFirst.");
+    expect(new TextDecoder().decode(server.blobs["st-1"])).toContain("org-template.json");
+    // The web hire's apply core wrote the role and the instance row awaiting its host.
+    server.roles.push({ _id: "role-1", short_id: "or-1", handle: "acme-cmo", name: "CMO", scope: { project_ids: ["project-1"], plan_ids: [] }, trust: "understand", status: "active" });
+    server.instances.push({ _id: "inst-1", instance_key: "pending:project-1:acme-growth", instance: "acme-growth", template_id: "growth", version: "2.0.0", digest: published.digest, project_id: "project-1", role_id: "role-1", phase: "awaiting_host", update_policy: "stable", config: { "product.slug": "acme" }, workspace: "team:team-1" });
+    const secret = path.join(tmp(), "ads.json");
+    fs.writeFileSync(secret, "{\"token\":\"never-copied\"}", { mode: 0o600 });
+    const bound = await bindTemplate(server.deps, "acme-growth", { ...options, secret: [`accounts.ads=${secret}`] });
+    // The release is frozen from the snapshot exactly as a folder install freezes it.
+    expect(bound.template.root).toBe(path.join(server.dir, ".codecast/org-templates/releases/growth", `2.0.0-${published.digest}`));
+    expect(readArtifact(bound.template.root).hash).toBe(published.digest);
+    expect(bound.phase).toBe("ready");
+    expect(bound.role).toMatchObject({ id: "role-1", handle: "acme-cmo", sessionId: "standing-1" });
+    expect(bound.config).toEqual({ "product.slug": "acme" });
+    // Seated and armed: the standing session was provisioned, the routines created paused.
+    expect(server.calls.some((c) => c.endpoint === "/cli/role/provision")).toBe(true);
+    expect(server.triggers.map((t: any) => [t.title, t.status])).toEqual([["CMO portfolio review", "paused"], ["Ads monitoring", "paused"]]);
+    // The server row is the same row, taken over by the receipt's key, ready, with the secret by hash only.
+    expect(server.instances).toHaveLength(1);
+    expect(server.instances[0]).toMatchObject({ _id: "inst-1", instance_key: bound.key, phase: "ready", role_id: "role-1", host: { dir: server.dir }, ledgers: { cmo: { shortId: "ct-1" } } });
+    expect(server.instances[0].bindings["accounts.ads"].path_hash).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.stringify(server.instances[0])).not.toContain("never-copied");
+    expect(bound.instanceId).toBe("inst-1");
+    expect(fs.readFileSync(path.join(server.dir, ".codecast/packs/growth.toml"), "utf8")).toContain(secret);
+    // A rerun reads the receipt it wrote; nothing is provisioned or created twice.
+    const provisions = server.calls.filter((c) => c.endpoint === "/cli/role/provision").length;
+    const again = await bindTemplate(server.deps, "acme-growth", options);
+    expect(again.key).toBe(bound.key);
+    expect(server.calls.filter((c) => c.endpoint === "/cli/role/provision").length).toBe(provisions);
+    expect(server.triggers).toHaveLength(2);
+    // The receipt is a full one: status and instructions work on it.
+    const status = await templateStatus(server.deps, "acme-growth", options);
+    expect(status.routines.weekly.status).toBe("paused");
+    expect(await templateInstructions(server.deps, "acme-growth", "charter", options)).toContain("Own Product only");
+  });
+  test("several folders publish in one run; a broken one is reported beside the rest", async () => {
+    const server = new Server(tmp());
+    const good = folder(hired());
+    const bad = tmp(); fs.writeFileSync(path.join(bad, "org-template.json"), "{}");
+    const rows = await publishTemplates(server.deps, [good, bad, "/nowhere/at/all"], { codecast: true, status: "canary" });
+    expect(rows[0]).toMatchObject({ folder: good, template_id: "growth", version: "2.0.0", action: "created" });
+    expect(rows[1]!.error).toMatch(/missing or unknown fields/);
+    expect(rows[2]!.error).toMatch(/ENOENT|no such/i);
+    expect(Object.keys(server.releases)).toHaveLength(1);
+    expect(Object.keys(server.blobs)).toHaveLength(1);
+  });
+  test("a release published without its snapshot cannot be installed from the record, and two projects with one name need --project", async () => {
+    const source = folder(hired());
+    const server = new Server(tmp());
+    const options: TemplateOptions = { dir: server.dir, team: "team-1" };
+    const artifact = readArtifact(source);
+    server.releases[artifact.hash] = { manifest: artifact.manifest, storage_url: null };
+    server.roles.push({ _id: "role-1", short_id: "or-1", handle: "acme-cmo", name: "CMO", scope: { project_ids: ["project-1"], plan_ids: [] }, trust: "understand", status: "active" });
+    const row = { _id: "inst-1", instance_key: "pending:project-1:acme-growth", instance: "acme-growth", template_id: "growth", version: "2.0.0", digest: artifact.hash, project_id: "project-1", role_id: "role-1", phase: "awaiting_host", update_policy: "stable", config: { "product.slug": "acme" } };
+    server.instances.push(row, { ...row, _id: "inst-2", project_id: "project-2", instance_key: "pending:project-2:acme-growth" });
+    await expect(bindTemplate(server.deps, "acme-growth", options)).rejects.toThrow(/Several projects have an instance named acme-growth; pass --project/);
+    await expect(bindTemplate(server.deps, "acme-growth", { ...options, project: "project-1" })).rejects.toThrow(/published without its snapshot/);
+    expect(fs.existsSync(receiptPath(server.dir, "acme-growth"))).toBe(false);
+  });
 });

@@ -11,6 +11,7 @@ import * as path from "node:path";
 import {
   bridgeEndpointIfConfigured, connectRealBridge, engineBrowserFor, requireRealBridge, explicitTarget, extensionReady, isRealMode, ownedRealTab, pruneRealTabs, realModeHint,
   realTabOwnership, rememberRealTab, resolveRealTarget, setStickyTarget, splitTargetFlags, stickyTarget, walledOffFromExtension,
+  hostOwnsBrowser, isPaneMode,
 } from "./real.js";
 import * as http from "node:http";
 import { startBridgeHost, writeBridgeState, type BridgeState, type RunningHost } from "./host.js";
@@ -473,5 +474,27 @@ describe("walledOffFromExtension", () => {
     expect(walledOffFromExtension("https://console.cloud.google.com/apis")).toBeNull();
     expect(walledOffFromExtension("example.com/page")).toBeNull();
     expect(walledOffFromExtension("not a url")).toBeNull();
+  });
+});
+
+describe("a remote host's browser", () => {
+  let prevRemote: string | undefined;
+  beforeEach(() => { prevRemote = process.env.CODECAST_REMOTE_DEVICE; process.env.CODECAST_REMOTE_DEVICE = "1"; });
+  afterEach(() => {
+    if (prevRemote === undefined) delete process.env.CODECAST_REMOTE_DEVICE;
+    else process.env.CODECAST_REMOTE_DEVICE = prevRemote;
+  });
+
+  test("a cloud host with no paired extension drives its own Chrome", () => {
+    expect(hostOwnsBrowser()).toBe(true);
+    expect(stickyTarget("s1", { settle: true })).toBe("clone");
+    expect(isRealMode({}, "s1")).toBe(false);
+    expect(isPaneMode({ pane: true }, "s1")).toBe(false);
+  });
+
+  test("a remote box someone paired an extension on keeps the human's Chrome", () => {
+    writeBridgeState({ port: 41999, token: "t".repeat(64), extensionSeenAt: Date.now() });
+    expect(hostOwnsBrowser()).toBe(false);
+    expect(stickyTarget("s2")).toBe("real");
   });
 });

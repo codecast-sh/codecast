@@ -15,14 +15,14 @@ import open from "open";
 import { cliFetchRead } from "./cliHttp.js";
 import { contentLinesToMatch as selectContentLines, extractSessionTrailer, MAX_CONTENT_LINES, type ContentLine } from "@codecast/shared/blame";
 import { defaultConfigDir } from "./config/configDir.js";
+import { webBaseUrl } from "./config/readLocalConfig.js";
 
-const WEB_BASE = process.env.CODE_CHAT_SYNC_WEB_URL || "https://codecast.sh";
 
 // Deep link to the session behind a blamed line. When the resolution carries
 // the originating message id, anchor on it (#msg-<id>) so the conversation
 // page scrolls straight to the exact edit; otherwise just open the session.
 export function conversationDeepLink(ref: SessionRef): string {
-  const base = `${WEB_BASE}/conversation/${ref.conversation_id}`;
+  const base = `${webBaseUrl()}/conversation/${ref.conversation_id}`;
   return ref.message_id ? `${base}#msg-${ref.message_id}` : base;
 }
 

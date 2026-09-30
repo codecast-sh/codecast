@@ -27,6 +27,8 @@ export interface OrgInitDeps {
   /** The directory `cast` runs in (symlinks resolved): the project path a
    *  provisioned standing session starts in. */
   realCwd: () => string;
+  /** HTTP for blobs outside the API (a release snapshot's upload and download); global fetch when absent. */
+  fetchUrl?: typeof fetch;
 }
 
 export type OrgInitSummary = {

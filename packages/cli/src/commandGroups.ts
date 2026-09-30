@@ -299,7 +299,7 @@ Examples:
   },
   {
     token: "computer",
-    description: `Drive a native macOS app through its accessibility tree (cast browser is still the tool for web pages)`,
+    description: `Drive a native app (macOS, or Linux on X11) through its accessibility tree (cast browser is still the tool for web pages)`,
     load: () => import("./computer/cli.js").then((m) => (program: Command) => m.registerComputerCommand(program)),
   },
   {

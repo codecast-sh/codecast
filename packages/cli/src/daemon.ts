@@ -8147,6 +8147,20 @@ async function executeRemoteCommand(
         await sendHeartbeat().catch(() => {});
         break;
       }
+      case "org_template_bind": {
+        // The web's host step for a role hired from a template (org-hire.md
+        // H3): run `cast org template bind` here, the machine with the checkout.
+        // Secrets arrive sealed to this device's key and become 0600 files the
+        // CLI binds by path (orgTemplateBindCommand.ts); no value is logged.
+        const { runOrgTemplateBind } = await import("./orgTemplateBindCommand.js");
+        const bound = await runOrgTemplateBind(CONFIG_DIR, commandArgs, (cliArgs) => runCastCommand(cliArgs, {
+          timeoutMs: 10 * 60 * 1000,
+          env: harnessCauseEnv({ why: "the host step of a template hire, pressed on the role page", automatic: false }),
+        }));
+        log(`[TEMPLATE] bound ${bound.instance}: ${bound.phase}${bound.bound.length ? ` (${bound.bound.length} secret${bound.bound.length === 1 ? "" : "s"})` : ""}`);
+        result = JSON.stringify(bound);
+        break;
+      }
       case "cloud_agent_login": {
         // The web's Connect dialog for a sign-in based cloud agent provider
         // (Codex Cloud): "check" reads this machine's login and asks the

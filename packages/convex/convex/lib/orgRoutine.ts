@@ -2,7 +2,7 @@
 // trigger on its standing session that wakes it on a schedule. Leaf module,
 // read by org.brief and org.health as well as the role writers.
 
-import { SESSION_NEEDS_INPUT_EVENT } from "@codecast/shared/contracts";
+import { ORG_AREA_CHANGE_EVENT, SESSION_NEEDS_INPUT_EVENT } from "@codecast/shared/contracts";
 import { CHIEF_OF_STAFF_HANDLE } from "./orgAccess";
 
 export const COMPANY_REVIEW_TITLE = "Company review";
@@ -37,11 +37,35 @@ export function roleRoutineFor(role: { handle: string; name: string }): { title:
 // about it, and it still reads whole on a run a person starts by hand.
 export const ROLE_NEEDS_INPUT_TITLE = "A session under you needs input";
 export const ROLE_NEEDS_INPUT_PROMPT = [
-  `A session that reports to you is waiting and cannot continue on its own. Read what it needs with \`cast read <its id>\`, and answer it with \`cast send\` when the answer is yours to give.`,
+  `A session that reports to you is waiting and cannot continue on its own. Read what it needs with \`cast read <its id>\`, and answer it with \`cast send\` when the answer is yours to give. When it posted a decision, read it with \`cast decide show <its id>\` and answer it if you hold the grant, or recommend an option with \`cast decide recommend\`.`,
   `When it needs a person, raise it here in your own thread with your recommendation. \`cast brief\` lists every session waiting under you.`,
 ].join("\n");
 
-const isNeedsInputTrigger = (t: any) => t.schedule_type === "event" && t.event_filter?.event_type === SESSION_NEEDS_INPUT_EVENT;
+/** An event trigger of a role: what fires it, and the words it carries. The
+ *  needs-input one every role has (S28), and the area change one only the
+ *  Chief of Staff has (S29). */
+export type RoleEventSpec = { event: string; title: string; prompt: string };
+export const ROLE_NEEDS_INPUT_SPEC: RoleEventSpec = { event: SESSION_NEEDS_INPUT_EVENT, title: ROLE_NEEDS_INPUT_TITLE, prompt: ROLE_NEEDS_INPUT_PROMPT };
+
+// The area watch (org-staffing.md S29) tells the Chief of Staff, through one
+// event trigger on its standing session, about a change that lasted: an area
+// stuck or overloaded at two checks in a row, or a project with work and no
+// owner. The run names the change itself, so the prompt says what to do
+// about it; the person edits, pauses or cancels the trigger like any other.
+export const CHIEF_AREA_CHANGE_TITLE = "An area needs your review";
+export const CHIEF_AREA_CHANGE_PROMPT = [
+  `Something in the company changed and it lasted: the run names it. Read that area as it stands now (\`cast org health\`, the role's brief, its sessions) and decide whether the structure or the owner should change, or whether the role only needs telling.`,
+  `When a change is warranted, open it with the person you report to here in your thread as a small proposal, its short id alone on its line, with the evidence beside it. When the role can settle it itself, write to it (\`cast role wake @handle "<what changed and what you expect>"\`). When nothing is warranted, say so in one line and end the turn.`,
+].join("\n");
+export const CHIEF_AREA_CHANGE_SPEC: RoleEventSpec = { event: ORG_AREA_CHANGE_EVENT, title: CHIEF_AREA_CHANGE_TITLE, prompt: CHIEF_AREA_CHANGE_PROMPT };
+
+/** The event triggers a role is armed with: every role hears for its waiting
+ *  sessions; the Chief of Staff also hears the area watch. */
+export function roleEventSpecsFor(role: { handle: string }): RoleEventSpec[] {
+  return role.handle === CHIEF_OF_STAFF_HANDLE ? [ROLE_NEEDS_INPUT_SPEC, CHIEF_AREA_CHANGE_SPEC] : [ROLE_NEEDS_INPUT_SPEC];
+}
+
+const isEventTrigger = (event: string) => (t: any) => t.schedule_type === "event" && t.event_filter?.event_type === event;
 export const isLiveTrigger = (t: any) => t.status === "scheduled" || t.status === "running" || t.status === "paused";
 
 /** Every trigger ever armed on a standing session, in whatever status. */
@@ -68,8 +92,13 @@ const ofRole = (role: { _id: any }) => (t: any) => isLiveTrigger(t) || String(t.
  *  event, never its title, so a person may rename it. Without `role`, any
  *  needs-input trigger ever armed on the session. */
 export async function findRoleNeedsInputTrigger(ctx: { db: any }, standing: { _id: any } | null, role?: { _id: any }): Promise<any | null> {
+  return findRoleEventTrigger(ctx, standing, SESSION_NEEDS_INPUT_EVENT, role);
+}
+
+/** A role's event trigger for `event`, by the same rule. */
+export async function findRoleEventTrigger(ctx: { db: any }, standing: { _id: any } | null, event: string, role?: { _id: any }): Promise<any | null> {
   if (!standing) return null;
-  return liveFirst((await triggersOf(ctx, standing)).filter((t) => isNeedsInputTrigger(t) && (!role || ofRole(role)(t))));
+  return liveFirst((await triggersOf(ctx, standing)).filter((t) => isEventTrigger(event)(t) && (!role || ofRole(role)(t))));
 }
 
 /** Every live trigger armed on a role's standing session. */

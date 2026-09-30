@@ -90,6 +90,10 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   openAppWindow: (app, navPath) => ipcRenderer.invoke("open-app-window", app, navPath ?? null),
   closeAppWindow: (app) => ipcRenderer.invoke("close-app-window", app),
   routeNavigate: (navPath) => ipcRenderer.invoke("route-navigate", navPath),
+  // Bring another app to the front by pid (the Chrome holding a tab the
+  // daemon just focused). Only the active app may, which this one is when
+  // the human has just clicked in it. Absent on older builds.
+  raiseApp: (pid) => ipcRenderer.invoke("raise-app", pid),
   isPeopleWindow: process.argv.includes("--people-window"),
   openPeopleWindow: () => ipcRenderer.invoke("open-people-window"),
   // With a voice host the buddy list is the WALL, a shape of that window;

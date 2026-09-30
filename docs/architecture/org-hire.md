@@ -570,3 +570,60 @@ files the project under one.
   `orgTemplateHire.mount.test.tsx`, `TemplateSections.mount.test.tsx`, `orgTemplate.test.ts`, `orgTemplateArtifact.v2.test.ts`,
   `orgTemplateInstance.test.ts`, `orgTemplateState.test.ts`,
   `orgTemplateActivation.test.ts`, and `orgTemplateReadiness.test.ts` in shared.
+
+## As built (2026-09-30): hiring without a terminal
+
+- **The gallery.** "Hire" on the org page opens the hire dialog on its template
+  tab, which is now a gallery (`TemplateGallery.tsx`) over the catalog query:
+  one card per template with its face, name, one line, what it asks for
+  (answers, secrets kept on the machine, permissions, setup steps only a person
+  can do), its routines with their cadence, version, publisher and release
+  status. A card offers the hire only when the workspace can take it: a project
+  to lead, and a release that can be installed from the record; otherwise the
+  card says why in its own words. An empty catalog says so and names the
+  publish command. Picking a card opens the existing answers form with the
+  template chosen; the folder path for authors stays behind its fold on the
+  gallery. The Engineering Lead (`eng-lead`) is a project's default lead: it
+  leads the gallery and is badged; with a lead in place the other templates are
+  hired under it by default (the form's seat choice starts at "under"), and a
+  project with no lead nudges toward hiring the Engineering Lead first
+  (`DEFAULT_LEAD_TEMPLATE_ID` in `orgTemplateSpec.ts`).
+- **The release travels with its record.** `cast org template publish` uploads
+  the release as one snapshot (every file with its mode, `snapshotArtifact`) and
+  the row keeps its `storage_id`; `orgTemplates.release` answers with the
+  manifest and the snapshot's URL, and the catalog carries `installable` per
+  release so a manifest published without its files is readable, never
+  hireable. `publish` takes several folders in one run (`publish packs/*`),
+  reads each folder's `CHANGELOG.md` as its changelog when none is given, and
+  reports each folder beside the others.
+- **The host step from the web.** A hire accepted on the web has no receipt on
+  any machine, so `bind` now bootstraps one from the server row
+  (`adoptHiredInstance`): it downloads the release snapshot, verifies it
+  against the release's digest, freezes it exactly as a folder install does,
+  builds the receipt from the hire's role and answers, then seats and arms the
+  role the way reconcile does (`provisionAndArm`, shared with reconcile) before
+  binding. The role page's "One step left" is a button: `orgTemplates.requestBind`
+  (human only) enqueues one `org_template_bind` daemon command for the machine
+  that runs the role's standing session, else the host's machine holding the
+  project path (deviceRouting's ladder), and records `bind_request` on the
+  instance row; `instanceForRole` returns `bind_host` (the machine, online or
+  not, whether it can take a secret) and `host_step` (idle, pending, failed
+  with the daemon's words, done), so the page shows progress and a retry. The
+  daemon runs the very command a person would (`orgTemplateBindCommand.ts`)
+  and reports its outcome; the terminal form stays behind a fold.
+- **Secrets from the web keep H4.** A secret typed on the role page is sealed
+  in the browser to the target machine's provider-key public key (the
+  `set_provider_key` transport, keyed by the input) before it leaves; the
+  command row holds ciphertext only that device can open, never a value. The
+  daemon decrypts each into a 0600 file under its config dir
+  (`org-template-secrets/<instance>/<key>`) and hands `bind` the path, so the
+  CLI's rule (a path recorded by hash, contents never leaving the machine) is
+  unchanged. A machine whose daemon predates the transport is refused a secret
+  with the reason on the page; a person may still bind it from that terminal.
+  A missing secret on a ready instance is bound the same way from the page.
+- **Tests**: `orgTemplates.test.ts` (release, catalog installability, the bind
+  request and its progress), `orgTemplate.test.ts` (snapshot round trip, bind
+  from the server row, refusals), `orgTemplateBindCommand.test.ts` (sealed
+  secrets to private files, the CLI invocation, failures without the value),
+  `TemplateGallery.test.ts`, and the gallery and host step in the two mount
+  tests.

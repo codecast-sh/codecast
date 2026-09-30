@@ -170,3 +170,65 @@ describe("why a probe missed", () => {
     expect((globalThis as any).fetch).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("a pane on a cloud host this laptop manages", () => {
+  /** The relay: a targeted ask reaches the host's daemon, a broadcast this machine's. */
+  function hostAndHere(host: { port: number; token: string; deviceId: string }) {
+    return {
+      mutation: async (_fn: unknown, args: { device_id?: string }) => ({
+        commands: [{ command_id: args.device_id === host.deviceId ? "cmd-host" : "cmd-here" }],
+      }),
+      query: async (_fn: unknown, args: { command_id: string }) => {
+        const ep = args.command_id === "cmd-host" ? host : THIS_MACHINE;
+        return { executed_at: 1, result: JSON.stringify({ port: ep.port, token: ep.token, device_id: ep.deviceId, tmux: true }) };
+      },
+    } as any;
+  }
+
+  /** Loopback as the browser sees it: this machine's daemon answers, the host's
+   *  own port is not here, and this daemon forwards (or refuses) the host. */
+  function loopback(opts: { hostPort: number; forwardTo: number | null }) {
+    const calls: string[] = [];
+    (globalThis as any).fetch = mock(async (url: string, init?: { method?: string }) => {
+      const u = new URL(String(url));
+      calls.push(`${init?.method ?? "GET"} ${u.port}${u.pathname}`);
+      const port = Number(u.port);
+      if (u.pathname === "/term/forward") {
+        return opts.forwardTo === null
+          ? { ok: false, json: async () => ({ error: "not a host" }) }
+          : { ok: true, json: async () => ({ port: opts.forwardTo }) };
+      }
+      if (port === opts.hostPort) throw new TypeError("Failed to fetch");
+      return { ok: true, json: async () => ({ tmux: true, sessions: [] }) };
+    });
+    return calls;
+  }
+
+  test("reaches the host's own server through this machine's daemon", async () => {
+    const host = { port: 50001, token: "host-tok", deviceId: "cloud-a" };
+    const calls = loopback({ hostPort: 50001, forwardTo: 60001 });
+    const ep = await getTerminalEndpoint(hostAndHere(host), { deviceId: "cloud-a" });
+    expect(ep).toEqual({ port: 60001, token: "host-tok", deviceId: "cloud-a", tmux: true });
+    expect(lastDiscoveryFailure()).toBe("none");
+    expect(calls).toContain(`POST ${THIS_MACHINE.port}/term/forward`);
+  });
+
+  test("a daemon that cannot reach the host leaves the relay path", async () => {
+    const host = { port: 50002, token: "host-tok", deviceId: "cloud-b" };
+    loopback({ hostPort: 50002, forwardTo: null });
+    expect(await getTerminalEndpoint(hostAndHere(host), { deviceId: "cloud-b" })).toBeNull();
+    expect(lastDiscoveryFailure()).toBe("other-device");
+  });
+
+  test("the relay dev switch still forces the relay", async () => {
+    const host = { port: 50003, token: "host-tok", deviceId: "cloud-c" };
+    const calls = loopback({ hostPort: 50003, forwardTo: 60003 });
+    store.set("CAST_TERM_FORCE_RELAY", "1");
+    try {
+      expect(await getTerminalEndpoint(hostAndHere(host), { deviceId: "cloud-c" })).toBeNull();
+      expect(calls.some((c) => c.includes("/term/forward"))).toBe(false);
+    } finally {
+      store.delete("CAST_TERM_FORCE_RELAY");
+    }
+  });
+});

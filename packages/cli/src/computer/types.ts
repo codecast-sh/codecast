@@ -49,8 +49,12 @@ export type ComputerSnapshotData = {
   treeText: string;
   elementCount: number;
   focusedElementId: number | null;
+  /** Window-local frames by element index, for a click at a point the tree names. */
+  elements?: ComputerElementFrame[];
   truncation?: { truncated: boolean; maxNodes?: number; maxDepth?: number; maxDepthReached?: boolean };
 };
+
+export type ComputerElementFrame = { index: number; x: number; y: number; width: number; height: number };
 
 export type ComputerScreenshotData = {
   /** base64 png on the wire; the CLI replaces it with `path` in --json. */
@@ -66,7 +70,7 @@ export type ComputerScreenshotData = {
 };
 
 export type ComputerScreenshotStatus =
-  | { state: "captured"; metadata?: { engine?: "cgWindowList" | "screenCaptureKit" | "unknown"; windowId?: number | null } }
+  | { state: "captured"; metadata?: { engine?: "cgWindowList" | "screenCaptureKit" | "x11" | "unknown"; windowId?: number | null } }
   | { state: "skipped"; reason: "no_screenshot_flag" }
   | { state: "failed"; code: ComputerErrorCode; message: string; metadata?: { engine?: string; windowId?: number | null } };
 
@@ -76,6 +80,7 @@ export type ComputerActionVerification =
       state: "unverified";
       reason:
         | "synthetic_input"
+        | "background_input"
         | "clipboard_paste"
         | "accessibility_action_unasserted"
         | "provider_unavailable"
@@ -99,12 +104,16 @@ export type ComputerSnapshotResult = {
   snapshot: ComputerSnapshotData;
   screenshot: ComputerScreenshotData | null;
   screenshotStatus: ComputerScreenshotStatus;
+  /** The tree before: what an action saw just before it acted, or the previous
+   *  snapshot of this window for `get-app-state --diff`. The CLI turns it into
+   *  `changes` and never prints it. */
+  baselineTreeText?: string;
 };
 
 export type ComputerActionResult = ComputerSnapshotResult & { action?: ComputerActionMetadata };
 
 export type ComputerProviderCapabilities = {
-  platform: "darwin";
+  platform: "darwin" | "linux";
   provider: string;
   /** The CLI version the helper was built with; a mismatch relaunches it. */
   providerVersion: string;
@@ -146,6 +155,7 @@ export type ComputerMethod =
   | "click"
   | "performSecondaryAction"
   | "scroll"
+  | "drag"
   | "typeText"
   | "pressKey"
   | "hotkey"
@@ -172,4 +182,7 @@ export type ComputerPermissionStatusResult = {
   helperAppPath: string | null;
   helperUnavailableReason: string | null;
   permissions: { id: ComputerPermissionId; status: ComputerPermissionStatus }[];
+  /** Linux has no grants: what stands in for them is whether the display and
+   *  the accessibility bus answer, and this says what is missing when not. */
+  detail?: string | null;
 };

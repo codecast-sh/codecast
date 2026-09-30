@@ -284,6 +284,9 @@ async function hostForwardedEndpoint(convex: ConvexReactClient, deviceId: string
   const known = forwardedByDevice.get(deviceId);
   if (known && (await probeEndpoint(known)) !== null) return known;
   forwardedByDevice.delete(deviceId);
+  // Most machines elsewhere are not this laptop's hosts; their relay must not
+  // wait on a discovery round, so the registry answers first.
+  if ((await forwardHostPort(convex, deviceId)) === null) return null;
   // A cached local endpoint settles "not this machine" without asking the
   // target, so its reply may not be in hand yet.
   if (!missedReplies.has(deviceId)) await discover(convex, deviceId);
@@ -300,17 +303,20 @@ async function hostForwardedEndpoint(convex: ConvexReactClient, deviceId: string
 /**
  * A loopback port on this machine that reaches `port` on the cloud host
  * `deviceId`, opened by this machine's daemon. Null when this browser's
- * machine has no daemon, or its daemon cannot reach that host.
+ * machine has no daemon, or its daemon cannot reach that host. With no
+ * port, only asks whether the daemon manages that host (0 when it does).
  */
-export async function forwardHostPort(convex: ConvexReactClient, deviceId: string, port: number): Promise<number | null> {
+export async function forwardHostPort(convex: ConvexReactClient, deviceId: string, port?: number): Promise<number | null> {
   const local = await directTerminalEndpoint(convex);
   if (!local || local.deviceId === deviceId) return null;
   try {
+    const query = `device=${encodeURIComponent(deviceId)}${port === undefined ? "" : `&port=${port}`}`;
     const res = await fetch(
-      `${termHttpBase(local)}/term/forward?device=${encodeURIComponent(deviceId)}&port=${port}`,
+      `${termHttpBase(local)}/term/forward?${query}`,
       { method: "POST", headers: { Authorization: `Bearer ${local.token}` }, signal: AbortSignal.timeout(PROBE_RETRY_TIMEOUT_MS) },
     );
     if (!res.ok) return null;
+    if (port === undefined) return 0;
     return ((await res.json()) as { port: number }).port;
   } catch {
     return null;

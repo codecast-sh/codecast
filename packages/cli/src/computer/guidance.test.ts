@@ -139,13 +139,13 @@ describe("the Computer section describes the binary that ships with it", () => {
   test("teaches the rules whose cost lands on the human, not on a retry", () => {
     // Each is a decision the design made that an agent cannot infer from the
     // command line: the stale index rule, the focus rule, the secret rule, the
-    // behaviour rule, the coordinate conversion, and the line that keeps this
+    // behaviour rule, the coordinate rule, and the line that keeps this
     // tool off web pages.
     expect(BODY).toContain("never infer an index from `elementCount`");
     expect(BODY).toContain("No verb raises a window on its own");
     expect(BODY).toContain("Secrets never go on the command line");
     expect(BODY).toContain("Do not push, submit a form, send a message, buy anything, delete data");
-    expect(BODY).toContain("action_x = screenshot_pixel_x / screenshot.scale");
+    expect(BODY).toContain("a position read off one is the coordinate an action takes");
     expect(BODY).toContain("`cast browser` is the tool and stays the default");
   });
 

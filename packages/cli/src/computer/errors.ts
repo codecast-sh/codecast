@@ -39,9 +39,9 @@ const RECOVERY: Record<ComputerErrorCode, string[]> = {
     "cast computer does not launch closed apps.",
   ],
   window_not_focused: [
-    "Retry once with `--restore-window`.",
-    "If the message says restore was already requested, stop retrying restore and prefer `set-value` or `perform-secondary-action`, which do not need focus.",
-    "If the message says presses may already have been delivered, run `get-app-state` and check before retrying.",
+    "Mouse input reaches only a window in front; keys and typing reach a background one.",
+    "Look for a route that needs no mouse: a keyboard shortcut, a menu item, a Secondary Action, or set-value.",
+    "If only the mouse will do, pass --restore-window, which takes the human's screen; if the message says presses were already delivered, run `get-app-state` first.",
   ],
   window_stale: [
     "Run `cast computer list-windows --app <app>` and choose a current selector.",

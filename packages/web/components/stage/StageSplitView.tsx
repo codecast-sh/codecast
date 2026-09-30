@@ -174,7 +174,7 @@ const StageCell = memo(function StageCell({
           {!solo && <PaneGrip leafId={leafId} path={path} />}
           <div className="h-full min-h-0">
             <ErrorBoundary name="StagePane" level="panel">
-              <RoutePane tabId={tabId} path={path} isActive={active} navigate={navigate} leafId={paneLeafId} />
+              <RoutePane tabId={tabId} path={path} isActive={active} isVisible={isTabActive} navigate={navigate} leafId={paneLeafId} />
             </ErrorBoundary>
           </div>
         </>
@@ -183,7 +183,7 @@ const StageCell = memo(function StageCell({
           {!solo && <PaneStrip leafId={leafId} path={path} focused={focused} />}
           <div className="flex-1 min-h-0">
             <ErrorBoundary name="StagePane" level="panel">
-              <RoutePane tabId={tabId} path={path} isActive={active} navigate={navigate} leafId={paneLeafId} />
+              <RoutePane tabId={tabId} path={path} isActive={active} isVisible={isTabActive} navigate={navigate} leafId={paneLeafId} />
             </ErrorBoundary>
           </div>
         </div>

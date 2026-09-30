@@ -20,4 +20,18 @@ describe("the trigger run frame", () => {
     expect(parseScheduledTask(text)?.role).toEqual({ handle: "x", name: "X", reports_to: "Ada", scope: [], goals: [] });
     expect(parseScheduledTask(formatScheduledTask({ title: "T", body: "B" }))?.role).toBeNull();
   });
+
+  test("a worker report carries each settled worker and reads back whole", () => {
+    const frame: ScheduledTaskFrame = {
+      title: "2 workers settled",
+      waiting: null,
+      workers: [
+        { short_id: "jx75tw6", title: "Call action timing", why: "done", since: 7, state: "Change is on branch call-action-timing" },
+        { short_id: "jx7abcd", title: "Audit \"the\" lane", why: "blocked", since: 7, state: "Which lane owns retries?" },
+      ],
+      role: null,
+      body: "Read the result with cast read <id> and act on it.",
+    };
+    expect(parseScheduledTask(formatScheduledTask(frame))).toEqual(frame);
+  });
 });

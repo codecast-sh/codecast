@@ -47,6 +47,11 @@ export type FocusFailure = "browser-stopped" | "browser-unreachable" | "tab-not-
 export interface FocusResult {
   ok: boolean;
   reason?: FocusFailure;
+  /** The browser process that now holds the tab, when known. The daemon's own
+   *  raise of it is refused whenever another app is active (a background
+   *  process may not activate an app on macOS 14+), so the caller, usually the
+   *  app the human just clicked in, raises it again with this. */
+  pid?: number;
 }
 
 export interface FocusTab {
@@ -319,7 +324,7 @@ export async function focusBrowserTab(query: string, deps: FocusDeps = defaultDe
     // This raise is asked for — tell the sentinel not to bounce it.
     noteDeliberateRaise();
     if (tab.pid) deps.raiseApp(tab.pid, deps.log);
-    return { ok: true };
+    return { ok: true, ...(tab.pid ? { pid: tab.pid } : {}) };
   }
   return { ok: false, reason };
 }
@@ -405,7 +410,7 @@ export function handleBrowserFocusHttp(
       opts.log(`[BROWSER] Reopened ${pageUrl} as tab ${result.tabId}`);
       const focused = await focusBrowserTab(result.tabId, { ...deps, log: deps.log ?? opts.log });
       res.writeHead(200, headers);
-      res.end(JSON.stringify({ ok: true, tabId: result.tabId, focused: focused.ok }));
+      res.end(JSON.stringify({ ok: true, tabId: result.tabId, focused: focused.ok, ...(focused.pid ? { pid: focused.pid } : {}) }));
     })();
     return true;
   }

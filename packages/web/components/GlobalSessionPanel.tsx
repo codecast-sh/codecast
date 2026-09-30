@@ -91,7 +91,7 @@ const USER_REST_CARD_LINE: Record<UserRest, string> = {
 };
 import { soundKill } from "../lib/sounds";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
-import { X, ChevronsRight, ChevronRight, ChevronDown, Clock, Tag, GitFork, History, Star, Workflow, Play, Pause, Settings2, Users, ArrowUpRight, UserCheck, Zap, ZapOff, Pin, Copy, ArrowUp, ArrowDown, EyeOff, CheckSquare } from "lucide-react";
+import { X, ChevronsRight, ChevronRight, ChevronDown, Clock, Tag, GitFork, History, Star, Workflow, Play, Pause, Settings2, Users, ArrowUpRight, UserCheck, Zap, ZapOff, Pin, Copy, ArrowUp, ArrowDown, EyeOff, CheckSquare, Square } from "lucide-react";
 import { InboxViewMenu } from "./InboxViewMenu";
 import { LabelChipsRow } from "./LabelChipsRow";
 import { TaskStatusBadge } from "./TaskStatusBadge";
@@ -1921,6 +1921,34 @@ function selectionTargets(session: InboxSession): InboxSession[] {
     .filter((row): row is InboxSession => !!row);
 }
 
+// A ticked card reads in blue, never cyan: cyan is the open session's color,
+// and the two must not be confused when both are on screen.
+const SELECTED_CARD_CLASS = "bg-sol-blue/[0.22] hover:bg-sol-blue/[0.26]";
+
+/** The card's tick while a selection is live: every card shows its box, so
+ *  the mode is visible, and the box itself toggles the card. A ticked card
+ *  also gets its frame here, as an overlay, so the pin's fade cannot cover it. */
+function SelectTick({ sessionId, isSelected }: { sessionId: string; isSelected: boolean }) {
+  const selecting = useInboxSelection((sel) => sel.ids.length > 0);
+  if (!selecting) return null;
+  const Icon = isSelected ? CheckSquare : Square;
+  return (
+    <>
+    {isSelected && <span data-sv-selframe aria-hidden className="pointer-events-none absolute inset-0 z-[3] rounded-[inherit] ring-2 ring-inset ring-sol-blue" />}
+    <button
+      type="button"
+      data-sv-check
+      aria-label={isSelected ? "Remove from selection" : "Add to selection"}
+      aria-pressed={isSelected}
+      onClick={(e) => { e.stopPropagation(); useInboxSelection.getState().toggle(sessionId); }}
+      className={`absolute right-1 top-1 z-10 rounded bg-sol-bg-alt/80 p-0.5 ${isSelected ? "text-sol-blue" : "text-sol-text-dim/60 hover:text-sol-blue"}`}
+    >
+      <Icon className="h-4 w-4" />
+    </button>
+    </>
+  );
+}
+
 export const SessionCard = memo(function SessionCard({
   session,
   isActive,
@@ -2328,7 +2356,7 @@ export const SessionCard = memo(function SessionCard({
         onDragLeave={handleFileDragLeave}
         onDrop={handleFileDrop}
         onContextMenu={onCardContextMenu ? (e) => onCardContextMenu(e, session, isForeignSession) : undefined}
-        className={`relative group transition-all overflow-hidden ${isDraggingCard ? "opacity-35 scale-[0.99]" : ""} ${isDragOver ? "ring-1 ring-inset ring-violet-400/40 bg-violet-500/10" : ""} ${isSelected ? "ring-1 ring-inset ring-sol-cyan/60 bg-sol-cyan/[0.08]" : ""} ${
+        className={`relative group transition-opacity duration-150 overflow-hidden ${isDraggingCard ? "opacity-35 scale-[0.99]" : ""} ${isDragOver ? "ring-1 ring-inset ring-violet-400/40 bg-violet-500/10" : ""} ${isSelected && !isActive ? SELECTED_CARD_CLASS : ""} ${
           isActive
             ? "bg-violet-500/[0.08] border-l-2 border-l-violet-400/60"
             : isParentActive
@@ -2343,7 +2371,7 @@ export const SessionCard = memo(function SessionCard({
         }`}
       >
         {forkColorKey && <ForkCorner colorKey={forkColorKey} />}
-      {isSelected && <span data-sv-check className="pointer-events-none absolute right-1.5 top-1.5 z-10 text-sol-cyan"><CheckSquare className="h-3 w-3" /></span>}
+      <SelectTick sessionId={session._id} isSelected={isSelected} />
         <div
           role="button"
           tabIndex={0}
@@ -2471,6 +2499,11 @@ export const SessionCard = memo(function SessionCard({
     );
   }
 
+  // The ground under the right-edge fades (pin badge, hover toolbar), so a
+  // tinted card does not show a pale patch there. Null = the resting card.
+  const fadeGround = isActive
+    ? "color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt))"
+    : isSelected ? "color-mix(in srgb, var(--sol-blue) 22%, var(--sol-bg-alt))" : null;
   return (
     <div
       data-session-id={session._id}
@@ -2485,7 +2518,7 @@ export const SessionCard = memo(function SessionCard({
       onDragLeave={handleFileDragLeave}
       onDrop={handleFileDrop}
       onContextMenu={onCardContextMenu ? (e) => onCardContextMenu(e, session, isForeignSession) : undefined}
-      className={`relative group transition-all overflow-hidden ${isDraggingCard ? "opacity-35 scale-[0.99]" : ""} ${isDragOver ? "ring-1 ring-inset ring-sol-cyan bg-sol-cyan/10" : ""} ${isSelected ? "ring-1 ring-inset ring-sol-cyan/60 bg-sol-cyan/[0.08]" : ""} ${
+      className={`relative group transition-opacity duration-150 overflow-hidden ${isDraggingCard ? "opacity-35 scale-[0.99]" : ""} ${isDragOver ? "ring-1 ring-inset ring-sol-cyan bg-sol-cyan/10" : ""} ${isSelected && !isActive ? SELECTED_CARD_CLASS : ""} ${
         // Violet, not cyan: cyan ring+tint is the ACTIVE row's treatment, and an
         // unacked handoff must never read as "this is the session you have open".
         session.assigned_ping ? "ring-1 ring-inset ring-sol-violet/50 bg-sol-violet/[0.06]" : ""
@@ -2513,7 +2546,7 @@ export const SessionCard = memo(function SessionCard({
       }`}
     >
       {forkColorKey && <ForkCorner colorKey={forkColorKey} />}
-      {isSelected && <span data-sv-check className="pointer-events-none absolute right-1.5 top-1.5 z-10 text-sol-cyan"><CheckSquare className="h-3 w-3" /></span>}
+      <SelectTick sessionId={session._id} isSelected={isSelected} />
       <div
         role="button"
         tabIndex={0}
@@ -2946,7 +2979,7 @@ export const SessionCard = memo(function SessionCard({
           omits its own pin button for pinned rows — so the pin never duplicates or
           cross-fades into a second copy. */}
       {onPin && session.is_pinned && (
-        <div data-sv-fade data-sv-pin className="absolute top-0 right-0 py-1 pr-2 pointer-events-none z-[2]" style={{ paddingLeft: 24, background: isActive ? 'linear-gradient(to right, transparent, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 60%)' : 'linear-gradient(to right, transparent, var(--sol-bg-alt) 60%)' }}>
+        <div data-sv-fade data-sv-pin className="absolute top-0 right-0 py-1 pr-2 pointer-events-none z-[2]" style={{ paddingLeft: 24, background: `linear-gradient(to right, transparent, ${fadeGround ?? "var(--sol-bg-alt)"} 60%)` }}>
           <ShortcutTooltip label="Unpin" action="session.pin" side="left">
             <button
               onClick={(e) => { e.stopPropagation(); onPin(session._id); tipActions.whisper('session.pin', e); }}
@@ -2961,7 +2994,7 @@ export const SessionCard = memo(function SessionCard({
         </div>
       )}
       {!isForeignSession && (onDismiss || onStash || onDefer || onPin) && (
-        <div data-sv-fade className={`absolute top-0 bottom-0 right-0 flex flex-col items-center justify-between py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-10 pr-2 pointer-events-none ${isActive ? '' : 'bg-gradient-to-r from-transparent via-[color-mix(in_srgb,var(--sol-bg-alt)_50%,transparent)] to-[color-mix(in_srgb,var(--sol-bg-alt)_85%,transparent)]'}`} style={isActive ? { background: 'linear-gradient(to right, transparent, color-mix(in srgb, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 50%, transparent), color-mix(in srgb, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 85%, transparent))' } : undefined}>
+        <div data-sv-fade className={`absolute top-0 bottom-0 right-0 flex flex-col items-center justify-between py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-10 pr-2 pointer-events-none ${fadeGround ? '' : 'bg-gradient-to-r from-transparent via-[color-mix(in_srgb,var(--sol-bg-alt)_50%,transparent)] to-[color-mix(in_srgb,var(--sol-bg-alt)_85%,transparent)]'}`} style={fadeGround ? { background: `linear-gradient(to right, transparent, color-mix(in srgb, ${fadeGround} 50%, transparent), color-mix(in srgb, ${fadeGround} 85%, transparent))` } : undefined}>
           {/* Pin slot, first so it anchors the top of the toolbar. When the row is
               already pinned, the persistent badge above IS the pin — here we render
               only an invisible spacer the same size, so the remaining actions sit
@@ -3403,7 +3436,10 @@ function SessionListPanelImpl({
       else sel.range(session._id, useInboxStore.getState().visualOrder().map((row) => row._id));
       return;
     }
-    useInboxSelection.setState({ anchorId: session._id });
+    // A plain click opens the card and leaves selection mode, as in a file list.
+    const sel = useInboxSelection.getState();
+    if (sel.ids.length > 0) sel.set([], session._id);
+    else useInboxSelection.setState({ anchorId: session._id });
     if (onSessionSelect) {
       onSessionSelect(session._id);
     }
@@ -3420,11 +3456,16 @@ function SessionListPanelImpl({
     [selectedIdsRaw, s.sessions],
   );
   const clearSelection = useCallback(() => useInboxSelection.getState().clear(), []);
+  // Selection is a mode, so Esc leaves it first, even from the composer (which
+  // holds focus most of the time). An open menu or dialog keeps its own Esc.
   useEventListener("keydown", (e) => {
-    if (e.key === "Escape" && useInboxSelection.getState().ids.length > 0 && !(e.target instanceof HTMLInputElement) && !(e.target instanceof HTMLTextAreaElement)) {
-      useInboxSelection.getState().clear();
-    }
-  });
+    if (e.key !== "Escape" || useInboxSelection.getState().ids.length === 0) return;
+    const overlays = document.querySelectorAll('[role="menu"], [role="dialog"], [role="listbox"]');
+    if ([...overlays].some((el) => el.getClientRects().length > 0)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    useInboxSelection.getState().clear();
+  }, undefined, { capture: true });
 
   // One-shot queries (the schedule-row click's run-list lookup) — not a
   // subscription, so a resting panel costs nothing.

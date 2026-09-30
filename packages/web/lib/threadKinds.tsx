@@ -6,7 +6,6 @@ import type { InboxSession } from "../store/inboxStore";
 import {
   SWEEPABLE_CHIPS,
   THREAD_KIND_META,
-  type CardPreview,
   type ChipKey,
   type ThreadCardKind,
   type ThreadCardModel,
@@ -20,19 +19,9 @@ import { TaskExpanded, TaskLabel, TaskMeta } from "../components/threads/kinds/T
 import { SessionExpanded, SessionLabel } from "../components/threads/kinds/SessionKind";
 import { PageExpanded, PageLabel } from "../components/threads/kinds/PageKind";
 import { QuestionExpanded, QuestionLabel } from "../components/threads/kinds/QuestionKind";
-import {
-  useChatPreview,
-  useCodePreview,
-  useCommentPreview,
-  useDmPreview,
-  usePagePreview,
-  useQuestionPreview,
-  useSessionPreview,
-  useTaskPreview,
-} from "../hooks/useThreadPreviews";
 
 // The Threads page's kind registry: one spec per card kind, each saying how a
-// row reads collapsed, what it shows open, and how it marks itself read. The
+// thread's head is labelled, what its body shows, and how it marks itself read. The
 // page and the generic ThreadCard know nothing kind-specific — they look the
 // kind up here. The React-free half (chips, card models, derivation,
 // filtering) lives in lib/threadCards.ts and is re-exported below.
@@ -47,16 +36,14 @@ export type ThreadKindSpec = ThreadKindMeta & {
   Glyph?: ComponentType<{ card: ThreadCardModel }>;
   /** The row's first line: room / session / task name. */
   Label: ComponentType<{ card: ThreadCardModel }>;
-  /** The row's second line: who spoke last and what they said. A hook, so
-   *  the row stays one component and the kind reads whatever store it needs. */
-  usePreview: (card: ThreadCardModel) => CardPreview | null;
   /** A line between the row head and the open body — the task's status row,
    *  a comment's anchor — for kinds whose object needs one. */
   Meta?: ComponentType<{ card: ThreadCardModel }>;
-  /** In-place thread + composer. Mounted only for the one open row; the
-   *  kind's read-mark effect gates on `seen` — the reader is present and the
-   *  row is open — and on its own content having arrived, never on the mount
-   *  itself, so a cold cache cannot mark a thread read it never showed. */
+  /** In-place thread + composer, mounted once the thread nears the viewport.
+   *  The kind's read-mark effect gates on `seen` (the reader is present and
+   *  the body is on screen) and on its own content having arrived, never on
+   *  the mount itself, so a cold cache cannot mark a thread read it never
+   *  showed. */
   Expanded: ComponentType<{ card: ThreadCardModel; present: boolean; seen: boolean; frozenReadAt: number; focusComposer: boolean }>;
   /** Mark one card read, the kind's own way. */
   markRead(card: ThreadCardModel): void;
@@ -79,16 +66,16 @@ function markSessionSeen(card: ThreadCardModel): void {
 }
 
 export const THREAD_KIND_SPECS: Record<ThreadCardKind, ThreadKindSpec> = {
-  chat: { ...THREAD_KIND_META.chat, Glyph: ChatGlyph, Label: ChatLabel, usePreview: useChatPreview, Meta: ChatMeta, Expanded: ChatExpanded, markRead: markServerRead },
-  dm: { ...THREAD_KIND_META.dm, Glyph: DmGlyph, Label: DmLabel, usePreview: useDmPreview, Expanded: DmExpanded, markRead: markDmRead },
-  comment: { ...THREAD_KIND_META.comment, Label: CommentLabel, usePreview: useCommentPreview, Meta: CommentMeta, Expanded: CommentExpanded, markRead: markServerRead },
-  code: { ...THREAD_KIND_META.code, Label: CodeLabel, usePreview: useCodePreview, Meta: CodeMeta, Expanded: CodeExpanded, markRead: markServerRead },
-  task: { ...THREAD_KIND_META.task, Label: TaskLabel, usePreview: useTaskPreview, Meta: TaskMeta, Expanded: TaskExpanded, markRead: markServerRead },
-  session: { ...THREAD_KIND_META.session, Label: SessionLabel, usePreview: useSessionPreview, Expanded: SessionExpanded, markRead: markSessionSeen },
-  page: { ...THREAD_KIND_META.page, Label: PageLabel, usePreview: usePagePreview, Expanded: PageExpanded, markRead: markServerRead },
+  chat: { ...THREAD_KIND_META.chat, Glyph: ChatGlyph, Label: ChatLabel, Meta: ChatMeta, Expanded: ChatExpanded, markRead: markServerRead },
+  dm: { ...THREAD_KIND_META.dm, Glyph: DmGlyph, Label: DmLabel, Expanded: DmExpanded, markRead: markDmRead },
+  comment: { ...THREAD_KIND_META.comment, Label: CommentLabel, Meta: CommentMeta, Expanded: CommentExpanded, markRead: markServerRead },
+  code: { ...THREAD_KIND_META.code, Label: CodeLabel, Meta: CodeMeta, Expanded: CodeExpanded, markRead: markServerRead },
+  task: { ...THREAD_KIND_META.task, Label: TaskLabel, Meta: TaskMeta, Expanded: TaskExpanded, markRead: markServerRead },
+  session: { ...THREAD_KIND_META.session, Label: SessionLabel, Expanded: SessionExpanded, markRead: markSessionSeen },
+  page: { ...THREAD_KIND_META.page, Label: PageLabel, Expanded: PageExpanded, markRead: markServerRead },
   // A question's status IS its read mark: answering or dismissing resolves the
   // row, so there is nothing separate to mark.
-  question: { ...THREAD_KIND_META.question, Label: QuestionLabel, usePreview: useQuestionPreview, Expanded: QuestionExpanded, markRead: () => {} },
+  question: { ...THREAD_KIND_META.question, Label: QuestionLabel, Expanded: QuestionExpanded, markRead: () => {} },
 };
 
 /** Mark every unread card of a view read. Server kinds go through the one

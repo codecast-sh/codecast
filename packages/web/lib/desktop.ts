@@ -70,6 +70,9 @@ declare global {
       openAppWindow?: (app: string, path?: string | null) => Promise<boolean>;
       closeAppWindow?: (app: string) => Promise<void>;
       routeNavigate?: (path: string) => Promise<boolean>;
+      // Brings another app to the front by pid; only the active app may on
+      // macOS 14+. Absent on older builds.
+      raiseApp?: (pid: number) => Promise<boolean>;
       // The people window (the floating buddy list at /people). A singleton:
       // openPeopleWindow focuses the one that exists. setAlwaysOnTop resolves
       // the pin the shell actually applied — it is honored only from the people

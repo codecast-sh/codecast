@@ -92,9 +92,11 @@ describe("orgRoles.staff", () => {
     expect(again.already_existed).toBe(true);
     expect(String(again.role._id)).toBe(String(role._id));
     expect(tables.org_roles).toHaveLength(1);
-    // The seat's two triggers: the routine, and the route up (S28).
-    expect(tables.agent_tasks.map((t) => t.schedule_type)).toEqual(["recurring", "event"]);
+    // The seat's three triggers: the routine, the route up (S28), and the
+    // area watch's, which only the Chief of Staff has (S29).
+    expect(tables.agent_tasks.map((t) => t.schedule_type)).toEqual(["recurring", "event", "event"]);
     expect(tables.agent_tasks[1].event_filter).toEqual({ event_type: "session_needs_input" });
+    expect(tables.agent_tasks[2]).toMatchObject({ event_filter: { event_type: "org_area_change" }, title: "An area needs your review", role_id: role._id });
     expect(String(tables.agent_tasks[1].role_id)).toBe(String(role._id));
   });
 
@@ -376,8 +378,8 @@ describe("orgRoles.staff", () => {
     tables.pending_messages.push({ _id: "waiting", conversation_id: "anchor-conv", from_user_id: ME, owner_user_id: ME, content: "what changed?", status: "held", created_at: NOW });
     const retired = await performRetireRole(ctx, ME as any, { role_id: String(out.role._id) });
     expect(retired.standing_session).toBe("kept");
-    // The seat's own two go, the routine and the route up.
-    expect(retired.cancelled_triggers).toBe(2);
+    // The seat's own three go: the routine, the route up and the area watch's.
+    expect(retired.cancelled_triggers).toBe(3);
     expect(tables.agent_tasks.find((t) => t.event_filter?.event_type === "session_needs_input")!.status).toBe("cancelled");
     expect(tables.agent_tasks.find((t) => t._id === "digest")!.status).toBe("scheduled");
     expect(tables.agent_tasks.find((t) => t.title === COMPANY_REVIEW_TITLE)!.status).toBe("cancelled");
@@ -565,10 +567,10 @@ describe("orgRoles.staff", () => {
     await performBackfillSeatedChiefs(ctx, false);
     expect(routine.prompt).toBe(COMPANY_REVIEW_PROMPT);
     expect(String(routine.role_id)).toBe(String(tables.org_roles[0]._id));
-    expect(tables.agent_tasks).toHaveLength(2);
+    expect(tables.agent_tasks).toHaveLength(3);
     routine.status = "cancelled";
     await performBackfillSeatedChiefs(ctx, false);
-    expect(tables.agent_tasks).toHaveLength(2);
+    expect(tables.agent_tasks).toHaveLength(3);
   });
 
   test("the charter is the right hand's job its opening states, for the person it reports to", () => {

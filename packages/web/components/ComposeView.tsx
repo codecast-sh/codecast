@@ -13,11 +13,17 @@ import { isElectron, bridge } from "../lib/desktop";
 import { resolveSessionSkills } from "../lib/sessionSkills";
 import { broadcastComposeOptimistic } from "../lib/composeBridge";
 import { AGENT_LAUNCH_OPTIONS } from "@codecast/shared/contracts";
-import { composeDraftContent, type ComposeInstance } from "../store/composeSlice";
+import { composeDraftContent, findKeptComposeDraft, type ComposeInstance } from "../store/composeSlice";
+import { flushDraftWrite } from "../lib/pendingDraftWrites";
 import { Minus, Maximize2, ChevronUp, X } from "lucide-react";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
-const draftContentFor = (id: string | null) => composeDraftContent(useInboxStore.getState(), id);
+// Every keep/confirm/prune decision reads through here, so it flushes the
+// composer's debounced write first: the last keystrokes count.
+const draftContentFor = (id: string | null) => {
+  flushDraftWrite(id);
+  return composeDraftContent(useInboxStore.getState(), id);
+};
 
 /**
  * The floating new-session popup, shown in the palette window when summoned by
@@ -68,7 +74,9 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
   //   • committed — the first send fires materialize() and sets sentRef.
   //   • kept — the user chose "Keep draft" (or a dismissal we couldn't intercept
   //     happened over typed content): the stub stays, flagged _hasDraft, and
-  //     renders as a draft new-session card in the inbox.
+  //     renders as a draft new-session card in the inbox. The desktop palette
+  //     window keeps on every dismissal and reopens onto the kept draft
+  //     (findKeptComposeDraft).
   //   • abandoned — abandonStub() prunes the un-sent, server-less stub (and plants
   //     an IDB exclude so it can't resurrect as a ghost "New session").
   // abandonStub is the SINGLE un-commit path, run from the only two moments the
@@ -86,9 +94,19 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
     useInboxStore.getState().pruneGhostSessions([stubIdRef.current]);
   }, []);
 
-  // One fresh blank session per popup instance (PaletteRoot remounts via key).
+  // The standalone desktop palette window (no onClose host). It closes
+  // without asking: an empty open reopens onto the last kept draft, and the
+  // footer's Clear is how a draft is dropped. The in-app popup asks instead.
+  const standalone = !onClose;
+  const [restored, setRestored] = useState(false);
+
+  // One session per popup instance (PaletteRoot remounts via key): in the
+  // palette window an empty open resumes the last kept draft, else a fresh
+  // blank session.
   useMountEffect(() => {
     const store = useInboxStore.getState();
+    const resumeStubId = standalone && !initialQuery && !context ? findKeptComposeDraft(store) : null;
+    const resumed = resumeStubId ? store.sessions[resumeStubId] : undefined;
     const ctx = store.currentConversation;
     // Caller context > current conversation (unless a project-filter chip is
     // active and the conversation lives elsewhere) > filter chip > recent — see
@@ -103,7 +121,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
       recentProjects: store.recentProjects,
       machineRoster: store.machineRoster,
     });
-    const agentType = (ctx.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
+    const agentType = (resumed?.agent_type || ctx.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
 
     // Shared optimistic-create path — see store.beginOptimisticSession.
     // deferCreate: opening the popup seeds ONLY a local stub (so the null-state
@@ -115,6 +133,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
       projectPath: path,
       gitRoot: path || undefined,
       deferCreate: true,
+      resumeStubId: resumeStubId ?? undefined,
       // Source project + agent from the LIVE stub at create time, NOT this
       // closure's mount-time `path`/`agentType`: the user may have switched
       // either in the null-state pickers before sending, and that switch (written
@@ -127,7 +146,8 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
 
     if (initialQuery) store.setDraft(sid, { draft_message: initialQuery });
     setSessionId(sid);
-    setSkillCtx({ projectPath: path || undefined, agentType });
+    setRestored(sid === resumeStubId);
+    setSkillCtx({ projectPath: (sid === resumeStubId ? resumed?.project_path : path) || undefined, agentType });
 
     // Unmount (overlay close, or the palette window switching face / navigating
     // away) abandons the stub when it was never sent.
@@ -243,7 +263,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
   useWatchEffect(() => { if (!collapsed) refocusComposer(); }, [docked, collapsed, refocusComposer]);
 
   const requestClose = useCallback(() => {
-    if (!sentRef.current && draftContentFor(stubIdRef.current)) {
+    if (!standalone && !sentRef.current && draftContentFor(stubIdRef.current)) {
       // The confirm paints inside the body a collapsed dock hides.
       const inst = instanceRef.current;
       if (inst?.collapsed) useInboxStore.getState().setComposeCollapsed(inst.id, false);
@@ -251,7 +271,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
       return;
     }
     dismiss();
-  }, [dismiss]);
+  }, [dismiss, standalone]);
 
   // Keep: the stub graduates from pre-warm infrastructure to deliberate state —
   // a draft new-session card in the inbox. sentRef blocks every abandon path.
@@ -274,6 +294,12 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
     setConfirmClose(false);
     dismiss();
   }, [dismiss]);
+
+  const clearInputRef = useRef<(() => void) | null>(null);
+  const clearDraft = useCallback(() => {
+    clearInputRef.current?.();
+    setRestored(false);
+  }, []);
 
   // Hand the guarded close to the host so its backdrop click gets the same
   // draft confirm as Escape (the backdrop lives outside this component).
@@ -485,6 +511,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
           onSubmitWithIntent={handleSubmit}
           onDidSend={(info) => { if (navIntentRef.current) broadcastComposeOptimistic(info); }}
           escapeOwnedRef={escapeOwnedRef}
+          clearInputRef={clearInputRef}
         />
       )}
       {confirmClose && (
@@ -500,7 +527,10 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
           <span className="flex items-center gap-1.5"><FooterKeys combo="enter" /> send</span>
           <span className="flex items-center gap-1.5"><FooterKeys combo="meta+enter" /> send &amp; open</span>
         </span>
-        <span className="flex items-center gap-1.5"><FooterKeys combo="escape" /> {docked ? "minimize" : "close"}</span>
+        <span className="flex items-center gap-3">
+          {standalone && <ClearDraftButton stubId={sessionId} restored={restored} onClear={clearDraft} />}
+          <span className="flex items-center gap-1.5"><FooterKeys combo="escape" /> {docked ? "minimize" : "close"}</span>
+        </span>
       </div>
       </div>
     </div>
@@ -642,6 +672,28 @@ function DiscardDraftConfirm({ stubId, onKeep, onDiscard, onCancel }: {
         </div>
       </div>
     </div>
+  );
+}
+
+// The palette window's way to drop a draft, shown once the composer holds one
+// (or reopened onto a kept one): empties the text and images and deletes the
+// draft. Subscribes to one boolean, so typing re-renders this button and not
+// the composer.
+function ClearDraftButton({ stubId, restored, onClear }: { stubId: string | null; restored: boolean; onClear: () => void }) {
+  const hasDraft = useInboxStore((s) => !!composeDraftContent(s, stubId));
+  if (!hasDraft) return null;
+  return (
+    <span className="flex items-center gap-1.5">
+      {restored && <span className="text-sol-yellow">draft restored</span>}
+      <button
+        type="button"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={onClear}
+        className="px-1.5 py-0.5 rounded text-sol-text-dim hover:text-sol-red hover:bg-sol-red/10 transition-colors"
+      >
+        clear
+      </button>
+    </span>
   );
 }
 

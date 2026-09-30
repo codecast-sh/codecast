@@ -19,7 +19,7 @@ EOF
 
 Both spawn modes start fresh sessions with no shared history. Write a self-contained brief. A different backend, worktree, label, or plan binding does not decide whether the session belongs in the inbox: `--subagent` controls nesting.
 
-The parent manages its workers with `cast read` and `cast send`, then delivers the combined result. Watch the returned IDs:
+The parent manages its workers with `cast read` and `cast send`, then delivers the combined result. When a worker settles (finished, blocked, stopped, or waiting on a permission prompt), the parent is woken with a message naming it; workers that settle together arrive as one message. So a parent can delegate, declare itself dormant, and end its turn. To follow workers live, watch the returned IDs:
 
 ```bash
 cast sessions <worker-id> <worker-id> -w --json
