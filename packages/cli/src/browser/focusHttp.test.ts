@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { focusBrowserTab, focusEndpoint, makeBridgeFocusEngine, matchTab, type BridgeFocusDeps, type FocusEngine, type FocusTab } from "./focusHttp.js";
+import { focusBrowserTab, focusEndpoint, focusRequestedTab, makeBridgeFocusEngine, matchTab, type BridgeFocusDeps, type FocusEngine, type FocusTab } from "./focusHttp.js";
 import { shortTabId, tabLine } from "./tabId.js";
 
 const T1 = "2BE86883491FD502B8D986C164423006";
@@ -223,5 +223,40 @@ describe("bridge focus engine", () => {
     });
     expect(result).toEqual({ ok: true });
     expect(calls).toEqual(['bridge:activate:1E21CD78@{"port":41729,"token":"t0k","raise":true}', "raise:90468"]);
+  });
+});
+
+describe("focusRequestedTab", () => {
+  test("a row's own tab id wins over the session", async () => {
+    const calls: string[] = [];
+    const out = await focusRequestedTab(new URLSearchParams({ tab: "2be86883", session_uuid: "s-1" }), {
+      engines: [engine("builtin", { calls })],
+      raiseApp: () => {},
+      resolveSessionTab: () => { throw new Error("not asked"); },
+    });
+    expect(out).toEqual({ tab: "2be86883", result: { ok: true } });
+    expect(calls).toEqual([`builtin:activate:${T1}@9333`]);
+  });
+
+  test("a row that lost its tab footer raises the tab its session drives", async () => {
+    const calls: string[] = [];
+    const asked: string[][] = [];
+    const out = await focusRequestedTab(new URLSearchParams({ session_uuid: "s-1" }), {
+      engines: [engine("builtin", { calls })],
+      raiseApp: () => {},
+      resolveSessionTab: (keys) => (asked.push(keys), T1),
+    });
+    expect(asked).toEqual([["session:s-1", "env:s-1"]]);
+    expect(out).toEqual({ tab: T1, result: { ok: true } });
+    expect(calls).toEqual([`builtin:activate:${T1}@9333`]);
+  });
+
+  test("a session that drives no tab is tab-not-found, never a random tab", async () => {
+    const out = await focusRequestedTab(new URLSearchParams({ session_uuid: "s-1" }), {
+      engines: [engine("builtin")],
+      raiseApp: () => {},
+      resolveSessionTab: () => null,
+    });
+    expect(out).toEqual({ tab: "", result: { ok: false, reason: "tab-not-found" } });
   });
 });

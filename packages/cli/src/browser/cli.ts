@@ -50,7 +50,7 @@ import { DesktopPaneUnavailable, withDesktopPanePage } from "./desktopPane.js";
 import { registerEngineCommands } from "./cliEngine.js";
 import { hideCloneControls, registerAdvancedClone } from "./advanced.js";
 import { DEFAULT_CLONE, resolveRemote, startLocalBrowser, startManagedBrowser, waitingOnLaunch, type StartOptions } from "./managedBrowser.js";
-import { ENGINE_MIN_VERSION, ENGINE_PACKAGE, engineFitness, findEngine } from "./engine.js";
+import { ENGINE_MIN_VERSION, ENGINE_PACKAGE, engineFitness, ensureEngine, findEngine } from "./engine.js";
 import { sameDocument } from "./url.js";
 import { loadSitePolicy } from "./policy.js";
 import { auditLanding, refuseNavigation, signInLandingNote } from "./siteGuard.js";
@@ -60,7 +60,7 @@ import { provisionCredentials } from "./credentials.js";
 import { bridgeEndpoint } from "./bridge/host.js";
 import { BROWSER_START_HELP, prepareRealBrowserStart, registerBridgeCommands, targetFlags } from "./bridge/commands.js";
 import {
-  isPaneMode, isRealMode, listRealTargets, ownedRealTab, realTabOwnership, rememberRealTab, requireRealBridge, resolveRealTarget, withRealPage, realModeHint,
+  hostOwnsBrowser, isPaneMode, isRealMode, listRealTargets, ownedRealTab, realTabOwnership, rememberRealTab, requireRealBridge, resolveRealTarget, withRealPage, realModeHint,
 } from "./bridge/real.js";
 import { startRemoteBrowser, stopRemoteBrowser } from "./remote.js";
 import { runBrowserSync, DEFAULT_SYNC_WAIT_S } from "./sync.js";
@@ -222,6 +222,18 @@ function useEngine(): boolean {
   if (process.env.CAST_BROWSER_LEGACY === "1") return false;
   const fit = engineFitness();
   if (fit.ok) return true;
+  // A cloud host is provisioned without the engine, and nobody there runs the
+  // laptop's first-time install; without it agents get the older driver's
+  // smaller verb set (no read, no do). Install it once, on first use.
+  if (fit.reason === "missing" && hostOwnsBrowser()) {
+    try {
+      ensureEngine();
+      return true;
+    } catch (err) {
+      process.stderr.write(`  ${fmt.warning("!")} ${(err as Error).message.split("\n")[0]}; using the built-in driver.\n`);
+      return false;
+    }
+  }
   // Say why, once, on stderr — so a machine quietly running the older driver is
   // diagnosable without anyone having to read this function. "missing" is the
   // ordinary first-run state and needs no announcement; a version we refuse to

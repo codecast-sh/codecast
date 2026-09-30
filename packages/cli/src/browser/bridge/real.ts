@@ -29,6 +29,7 @@ import {
 import { discardPairingPage, launchRealChrome, realChromeRunning, wakeExtension } from "./realChrome.js";
 import { realChromePid } from "../localChrome.js";
 import { BRIDGE_STORE_URL } from "./protocol.js";
+import { isRemoteDevice } from "../../remote/device.js";
 
 const cloneScope = new AsyncLocalStorage<boolean>();
 
@@ -124,12 +125,24 @@ export function extensionReady(): boolean {
 }
 
 /**
- * Ordinary commands use the human's Chrome. Clone scope lasts one invocation.
+ * A remote device (a cloud host, a rented Mac) has no human at its screen and
+ * no human's Chrome to reach: its browser is the box's own Chrome, painted on
+ * the screen the live view and VNC show, with logins carried in by
+ * `cast browser sync`. A remote box someone did pair an extension on keeps
+ * the ordinary default.
+ */
+export function hostOwnsBrowser(): boolean {
+  return isRemoteDevice() && !extensionPaired();
+}
+
+/**
+ * Ordinary commands use the human's Chrome, or the host's own on a remote
+ * device (hostOwnsBrowser). Clone scope lasts one invocation.
  * A session that chose its desktop pane keeps it until it chooses again or
  * the pane is reported closed (desktopPane.ts resolveDesktopPane).
  */
 export function stickyTarget(sessionKey: string | null, opts: { settle?: boolean } = {}): StickyMode {
-  if (isAdvancedClone()) return "clone";
+  if (isAdvancedClone() || hostOwnsBrowser()) return "clone";
   if (explicitTarget(sessionKey) === "pane") return "pane";
   if (opts.settle) setStickyTarget(sessionKey, "real");
   return "real";
@@ -154,7 +167,7 @@ export function isRealMode(opts: TargetFlags, sessionKey: string | null): boolea
  * one verb, the same way it overrides everything else.
  */
 export function isPaneMode(opts: TargetFlags, sessionKey: string | null): boolean {
-  if (opts.real || opts.clone || isAdvancedClone()) return false;
+  if (opts.real || opts.clone || isAdvancedClone() || hostOwnsBrowser()) return false;
   return opts.pane === true || explicitTarget(sessionKey) === "pane";
 }
 

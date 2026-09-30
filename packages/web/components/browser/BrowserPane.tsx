@@ -260,6 +260,7 @@ export function BrowserPane() {
     askedWhy,
     desktop: isDesktop(),
     onReload: () => setReloadToken((n) => n + 1),
+    fixes: actions.filter((x) => x.card),
     onOpenOutside: openOutside,
     onNative: goNative,
     onDismiss: () => setAskedWhy(false),
@@ -483,6 +484,8 @@ function paneOverlay(a: {
   askedWhy: boolean;
   desktop: boolean;
   onReload: () => void;
+  /** Backend verbs that fix an error (PaneStripAction.card), offered first. */
+  fixes: PaneStripAction[];
   onOpenOutside: () => void;
   onNative: () => void;
   onDismiss: () => void;
@@ -576,7 +579,21 @@ function paneOverlay(a: {
         icon={<CircleAlert className={glyph} />}
         host={a.host}
         headline={a.state.message}
-        actions={tryAgain}
+        detail={a.state.detail}
+        actions={
+          a.fixes.length > 0 ? (
+            <>
+              {a.fixes.map((fix) => (
+                <PaneCardButton key={fix.label} primary onClick={fix.onClick}>
+                  {fix.card}
+                </PaneCardButton>
+              ))}
+              <PaneCardButton onClick={a.onReload}>Try again</PaneCardButton>
+            </>
+          ) : (
+            tryAgain
+          )
+        }
       />
     );
   }

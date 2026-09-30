@@ -6,10 +6,16 @@ import { Input } from "../ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
 import { copyToClipboard } from "../../lib/utils";
 import { remoteMachineSetupCommand, type RemoteMachineSetup as SetupForm } from "../../lib/remoteMachineSetup";
+import { useDevices } from "../DeviceBadge";
 
 export function RemoteMachineSetup({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const [form, setForm] = useState<SetupForm>({ platform: "linux", mode: "existing", instance: "", region: "us-west-2", profile: "", key: "", name: "", image: "", keyName: "", subnet: "", securityGroup: "", dedicatedHost: "" });
-  const command = remoteMachineSetupCommand(form);
+  // `cast hosts create` starts from the newest saved codecast image in the region when no image is named.
+  const { remotes } = useDevices();
+  const saved = form.platform === "linux"
+    ? remotes.filter((d) => d.cloud_host?.region === form.region.trim() && !/^mac/.test(d.cloud_host?.instance_type ?? "")).flatMap((d) => d.cloud_host!.images).sort((a, b) => b.created.localeCompare(a.created))[0]
+    : undefined;
+  const command = remoteMachineSetupCommand({ ...form, savedImage: saved?.id });
   const field = (key: keyof SetupForm, label: string, placeholder: string) => (
     <label className="grid gap-1.5 text-xs text-sol-text-muted" key={key}>
       {label}
@@ -42,7 +48,7 @@ export function RemoteMachineSetup({ open, onOpenChange }: { open: boolean; onOp
         <div className="grid gap-3 sm:grid-cols-2">
           {form.mode === "existing" ? field("instance", "EC2 instance ID", "i-…") : <>
             {field("name", "Machine name", form.platform === "mac" ? "dev-mac" : "dev-linux")}
-            {field("image", form.platform === "mac" ? "macOS AMI ID" : "Ubuntu 24.04 x86_64 AMI ID", "ami-…")}
+            {saved ? field("image", `Image (optional; starts from your saved ${saved.name})`, saved.id) : field("image", form.platform === "mac" ? "macOS AMI ID" : "Ubuntu 24.04 x86_64 AMI ID", "ami-…")}
             {field("keyName", "AWS key pair name", "dev-key")}
             {field("subnet", "Public subnet ID", "subnet-…")}
             {field("securityGroup", "SSH security group ID", "sg-…")}

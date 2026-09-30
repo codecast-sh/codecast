@@ -20,7 +20,7 @@ import {
   reloadExtension, rotateBridgeToken, runBridgeHost, stopBridgeHost, waitForExtension, type BridgeHostStatus,
 } from "./host.js";
 import { BRIDGE_EXTENSION_ID, BRIDGE_STORE_URL, bridgePairingUrl } from "./protocol.js";
-import { connectRealBridge, isRealMode, requireRealBridge, setStickyTarget, stickyTarget } from "./real.js";
+import { connectRealBridge, hostOwnsBrowser, isRealMode, requireRealBridge, setStickyTarget, stickyTarget } from "./real.js";
 import { CHROME_LAUNCHER_NAME, discardPairingPage, installChromeLauncher, openInRealChrome, REAL_CHROME_LAUNCH_ARGS, restartRealChrome } from "./realChrome.js";
 import { ownedDesktopPane, PANE_HOW_TO } from "../desktopPane.js";
 
@@ -85,6 +85,12 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
   br.command("target [mode]")
     .description("Show the browser; ordinary commands always use the human's Chrome")
     .action(async (mode?: string) => {
+      if (hostOwnsBrowser()) {
+        if (mode) die("This machine is a remote host with no human's Chrome: every session here uses the host's own Chrome.");
+        console.log(`target: ${fmt.highlight("host")}${fmt.muted(" (this host's own Chrome, on the screen the session's browser view and `cast hosts vnc` show)")}`);
+        console.log(fmt.muted("  `cast browser sync <site>` carries a login in from the owner's laptop"));
+        return;
+      }
       if (!mode) {
         const cur = stickyTarget(me());
         if (cur === "pane") {

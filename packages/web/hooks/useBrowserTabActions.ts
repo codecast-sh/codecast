@@ -43,21 +43,30 @@ function noteFor(reason: BrowserTabFailure, detail?: string): string {
 }
 
 /**
- * Focus / reopen for one driven tab. `tabId` is the tab the row named; after
+ * Focus / reopen for one driven tab. `tabId` is the tab the row named (null
+ * when its output named none: focus then asks for the session's tab); after
  * a reopen the hook follows the new tab, so the next click raises that one.
  * `url` is what a reopen brings back; without it the offer is not made.
+ * `gone` says the transcript already knows the tab was closed (a later
+ * `cast browser stop`), so the offer stands before anyone clicks.
  */
 export function useBrowserTabActions(
-  tab: { tabId: string | null; url: string | null },
+  tab: { tabId: string | null; url: string | null; gone?: boolean },
   session: BrowserSessionRef,
   onReopened?: (tabId: string) => void,
 ): { state: BrowserTabActionState; tabId: string | null; focus: () => void; reopen: () => void; dismiss: () => void } {
   const convex = useConvex();
-  const [state, setState] = useState<BrowserTabActionState>({ kind: "idle" });
+  const canReopen = !!tab.url && !!(session.sessionUuid || session.tmuxSession);
+  const goneOffer: BrowserTabActionState | null = tab.gone && canReopen ? { kind: "offer", reason: "tab-gone" } : null;
+  const [state, setState] = useState<BrowserTabActionState>(goneOffer ?? { kind: "idle" });
   const [tabId, setTabId] = useState(tab.tabId);
   const noteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The row's tab wins whenever it changes (a later row named another tab).
   useWatchEffect(() => setTabId(tab.tabId), [tab.tabId]);
+  // A stop landing later in the transcript turns an idle pill into the offer.
+  useWatchEffect(() => {
+    if (goneOffer) setState((s) => (s.kind === "idle" ? goneOffer : s));
+  }, [!!goneOffer]);
   useMountEffect(() => () => {
     if (noteTimer.current) clearTimeout(noteTimer.current);
   });
@@ -67,12 +76,12 @@ export function useBrowserTabActions(
     if (noteTimer.current) clearTimeout(noteTimer.current);
     noteTimer.current = setTimeout(() => setState((s) => (s.kind === "note" ? { kind: "idle" } : s)), NOTE_MS);
   };
-  const canReopen = !!tab.url && !!(session.sessionUuid || session.tmuxSession);
 
+  const bySession = !!(session.sessionUuid || session.tmuxSession);
   const focus = () => {
-    if (!tabId || state.kind === "busy") return;
+    if ((!tabId && !bySession) || state.kind === "busy") return;
     setState({ kind: "busy", verb: "focusing" });
-    void focusBrowserTab(convex, tabId).then((out) => {
+    void focusBrowserTab(convex, tabId ?? session).then((out) => {
       if (out.ok) return setState({ kind: "idle" });
       if ((out.reason === "tab-gone" || out.reason === "browser-stopped") && canReopen) return setState({ kind: "offer", reason: out.reason });
       note(out.reason === "tab-gone" ? "tab is gone" : out.reason === "browser-stopped" ? "browser is not running" : noteFor(out.reason, out.detail));

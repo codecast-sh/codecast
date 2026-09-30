@@ -16,7 +16,8 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { ArrowUpRight, RotateCw } from "lucide-react";
+import { ArrowUpRight, Monitor, RotateCw } from "lucide-react";
+import { useConvex } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
 import { useInboxStore } from "../../../store/inboxStore";
@@ -27,7 +28,9 @@ import { missingTabMessage, type BrowserStreamReport } from "../../../lib/browse
 import { BrowserStream } from "../BrowserStream";
 import { WatchAddress, WheelButton } from "../watchControls";
 import { useBrowserTabActions } from "../../../hooks/useBrowserTabActions";
+import { browserRowMapOf, lastBrowserPageOf } from "../../../hooks/useBrowserAndWakeRows";
 import type { BackendProps, PaneStripAction } from "./types";
+import { hasHostScreen, openHostScreen } from "../../../lib/hostScreen";
 
 export function StreamBackend({
   source,
@@ -78,16 +81,31 @@ export function StreamBackend({
   });
   const [control, setControl] = useState(false);
   const [retry, setRetry] = useState(0);
+  const convex = useConvex();
+  const screenDevice = hasHostScreen(machine) ? machine!.device_id : null;
+  const [screenNote, setScreenNote] = useState<string | null>(null);
+  const openScreen = useCallback(() => {
+    if (!screenDevice) return;
+    setScreenNote(null);
+    void openHostScreen(convex, screenDevice).then(setScreenNote);
+  }, [convex, screenDevice]);
   const redial = useCallback(() => setRetry((n) => n + 1), []);
+
+  // The page the transcript last put the browser on. A stream that finds no
+  // tab names none, and this is what a reopen brings back.
+  const messages = useInboxStore((s) => (session.convId ? s.messages[session.convId] : undefined));
+  const lastPage = useMemo(() => (messages ? lastBrowserPageOf(browserRowMapOf(messages)) : null), [messages]);
 
   const status = report.status;
   const failed = status.kind === "failed" ? status : null;
   const tabUrl = report.tab?.url ?? null;
+  const pageUrl = tabUrl ?? lastPage?.url ?? null;
   const tabActions = useBrowserTabActions(
-    { tabId: report.tab?.id ?? null, url: tabUrl },
+    { tabId: report.tab?.id ?? null, url: pageUrl },
     { sessionUuid, tmuxSession: session.tmuxSession },
     redial,
   );
+  const tabNote = tabActions.state.kind === "note" ? tabActions.state.text : null;
 
   // The pane paints the states; this is the translation. A stream that failed
   // is an `error` with the sentence already written (lib/browserWatch), except
@@ -103,10 +121,10 @@ export function StreamBackend({
     }
     const message =
       failed.tabGone && !failed.capped
-        ? missingTabMessage(session.title, tabUrl)
+        ? missingTabMessage(session.title, pageUrl)
         : failed.message;
-    return { kind: "error", message } as const;
-  }, [failed, status.kind, session.title, tabUrl]);
+    return { kind: "error", message, ...(tabNote && { detail: tabNote }) } as const;
+  }, [failed, status.kind, session.title, pageUrl, tabNote]);
 
   useWatchEffect(() => onState(paneState), [paneState, onState]);
 
@@ -115,7 +133,7 @@ export function StreamBackend({
   // WheelButton), because a handoff should read the same here as in the dock,
   // and the strip only has room for an icon.
   const live = status.kind === "live";
-  const offerReopen = !!failed?.tabGone && !!tabUrl;
+  const offerReopen = !!failed?.tabGone && !!pageUrl && !!(sessionUuid || session.tmuxSession);
   const busy = tabActions.state.kind === "busy";
   useWatchEffect(() => {
     if (!onActions) return;
@@ -129,10 +147,18 @@ export function StreamBackend({
       actions.push({
         icon: <ArrowUpRight className="w-3.5 h-3.5" />,
         label: offerReopen
-          ? `Reopen ${tabUrl} in the agent's browser`
+          ? `Reopen ${pageUrl} in the agent's browser`
           : "Raise this tab in the agent's browser",
         active: busy,
         onClick: offerReopen ? tabActions.reopen : tabActions.focus,
+        ...(offerReopen && { card: busy ? "Reopening…" : "Reopen the page" }),
+      });
+    }
+    if (screenDevice) {
+      actions.push({
+        icon: <Monitor className="w-3 h-3" />,
+        label: "Open the host's whole screen: windows, dialogs and popups outside this tab",
+        onClick: openScreen,
       });
     }
     onActions(actions);
@@ -144,10 +170,12 @@ export function StreamBackend({
     onActions,
     failed?.capped,
     offerReopen,
-    tabUrl,
+    pageUrl,
     tabActions.tabId,
     busy,
     redial,
+    screenDevice,
+    openScreen,
   ]);
 
   return (
@@ -193,9 +221,14 @@ export function StreamBackend({
           )}
         </div>
       )}
-      {tabActions.state.kind === "note" && (
+      {screenNote && (
         <span className="absolute bottom-2 left-2 px-1.5 py-0.5 rounded bg-sol-bg/85 border border-sol-red/30 text-[10px] font-mono text-sol-red/80">
-          {tabActions.state.text}
+          {screenNote}
+        </span>
+      )}
+      {tabNote && !failed && (
+        <span className="absolute bottom-2 left-2 px-1.5 py-0.5 rounded bg-sol-bg/85 border border-sol-red/30 text-[10px] font-mono text-sol-red/80">
+          {tabNote}
         </span>
       )}
     </div>
