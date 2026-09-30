@@ -33,6 +33,7 @@ import { resolveCastInvocation } from "../castInvocation.js";
 import { HELPER_BUNDLE_ID, helperAppPath, helperExecutablePath } from "./helperApp.js";
 import { stampComputerRaise } from "./instance.js";
 import { spawnObserved, type ObservedLaunch } from "./launchObserver.js";
+import { launchesThroughOpen, noDesktopSessionReason, runOpen } from "./desktopSession.js";
 import type { ComputerPermissionId, ComputerPermissionStatus, ComputerPermissionStatusResult } from "./types.js";
 
 /**
@@ -109,6 +110,8 @@ export type PermissionProbeRoute = "disclaimed" | "open";
 export async function getPermissionStatus(opts: PermissionStatusOptions = {}): Promise<ComputerPermissionStatusResult> {
   if (process.platform !== "darwin") return unsupported();
   const appPath = helperAppPath();
+  const noDesktop = noDesktopSessionReason();
+  if (noDesktop) return unavailable(noDesktop, appPath);
   if (!helperIsMaterialized()) {
     return unavailable(`${helperExecutablePath()} was not found — run \`cast computer capabilities\` to materialize the helper`, appPath);
   }
@@ -168,7 +171,7 @@ function readStatusFile(statusPath: string): Partial<Record<ComputerPermissionId
 
 function useOpenRoute(route?: PermissionProbeRoute): boolean {
   if (route) return route === "open";
-  return process.env.CODECAST_COMPUTER_PERMISSION_ROUTE === "open" || process.env.CODECAST_NO_DISCLAIM === "1";
+  return launchesThroughOpen();
 }
 
 function launchStatusProbe(appPath: string, statusPath: string, logFile: string, route?: PermissionProbeRoute): ObservedLaunch {
@@ -200,14 +203,6 @@ function silentLaunch(): ObservedLaunch {
 }
 
 /** `open`, with its refusal turned into an error that names itself. */
-function runOpen(args: string[], what: string): void {
-  const result = spawnSync("/usr/bin/open", args, { encoding: "utf8", timeout: 30_000 });
-  if (result.error) throw new ComputerError("accessibility_error", `could not ${what}: ${result.error.message}`);
-  if (result.status === 0) return;
-  const detail = (result.stderr || result.stdout || `exit ${result.status ?? "unknown"}`).replace(/\s+/g, " ").trim();
-  throw new ComputerError("accessibility_error", `could not ${what}: ${detail}`);
-}
-
 export interface PermissionSetupResult extends ComputerPermissionStatusResult {
   permissionId?: ComputerPermissionId;
   launchedHelper: boolean;

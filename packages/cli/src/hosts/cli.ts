@@ -1356,15 +1356,22 @@ export function buildHostsCommand(parent: Command): Command {
     .command("vnc [id]")
     .description("Interactive view of the host's whole screen (noVNC in your browser) — for anything outside the agent's tab")
     .option("--no-open", "Print the URL without opening it")
-    .action(async (id: string | undefined, o: { open: boolean }) => {
+    .option("--stop", "Close the tunnel now instead of when it goes idle")
+    .action(async (id: string | undefined, o: { open: boolean; stop?: boolean }) => {
       const h = pick(id, "no linux host registered");
+      const { ensureVncTunnel, closeHostTunnel, TUNNEL_IDLE_SECONDS } = await import("../browser/liveView.js");
+      if (o.stop) {
+        if (!h.address) die(`${h.id} has no address; it is asleep, so no tunnel is open`);
+        console.log(closeHostTunnel(toRemoteHost(h), "vnc") ? `${OK} VNC tunnel closed` : fmt.muted("no VNC tunnel was open"));
+        return;
+      }
       const up = await ensureUp(h, (m) => console.log(fmt.muted(`  ${m}`)));
-      const { ensureVncTunnel } = await import("../browser/liveView.js");
       try {
         const v = await ensureVncTunnel(toRemoteHost(up));
         console.log(`${OK} VNC is up${v.tunnelPid ? ` (tunnel pid ${v.tunnelPid})` : " (reusing the existing tunnel)"}`);
         console.log(`  ${fmt.highlight(v.url)}`);
-        console.log(fmt.muted("  the whole display, with mouse and keyboard — for a page's own sign-in, prefer the CONTROL button in the session's browser view"));
+        console.log(fmt.muted("  the whole display, with mouse and keyboard; for a page's own sign-in, Take the wheel in the session's browser view is closer"));
+        console.log(fmt.muted(`  the tunnel closes ${TUNNEL_IDLE_SECONDS / 60} minutes after the last viewer leaves, so the host can still sleep (--stop closes it now)`));
         if (o.open) {
           try { execFileSync("open", [v.url], { stdio: "ignore", timeout: 10_000 }); } catch { /* headless shell */ }
         }

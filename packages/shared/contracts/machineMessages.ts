@@ -202,7 +202,9 @@ export interface WaitingSession {
   /** When the wait began (ms). */
   since: number;
   role?: string;
-  /** The first line of its pinned state; empty when it pinned none. */
+  /** The decision it posted (sd-N), when that is what it waits on. */
+  decision?: string;
+  /** The first line of its pinned state, or the decision's question. */
   state: string;
 }
 
@@ -245,7 +247,7 @@ export function formatScheduledTask(f: ScheduledTaskFrame): string {
   const head = tagAttrs([["title", f.title], ["task-id", f.task_id], ["trigger", f.trigger], ["event", f.event]]);
   const w = f.waiting;
   const waiting = w
-    ? `\n<waiting-session ${tagAttrs([["id", w.short_id], ["title", w.title], ["why", w.why], ["since", String(w.since)], ["role", w.role]])}>${w.state.trim()}</waiting-session>\n\n`
+    ? `\n<waiting-session ${tagAttrs([["id", w.short_id], ["title", w.title], ["why", w.why], ["since", String(w.since)], ["role", w.role], ["decision", w.decision]])}>${w.state.trim()}</waiting-session>\n\n`
     : "";
   const r = f.role;
   const roleLines = r ? [
@@ -288,6 +290,7 @@ export function parseScheduledTask(rawContent: string | null | undefined): Sched
       why: tagAttr(w[1], "why"),
       since: Number(tagAttr(w[1], "since")) || 0,
       ...(tagAttr(w[1], "role") ? { role: tagAttr(w[1], "role") } : {}),
+      ...(tagAttr(w[1], "decision") ? { decision: tagAttr(w[1], "decision") } : {}),
       state: w[2].trim(),
     };
   }
@@ -309,8 +312,17 @@ export function parseScheduledTask(rawContent: string | null | undefined): Sched
 // Groups: 1 = channel name, 2 = the DM phrase, 3 = team name.
 export const CHAT_WAKE_HEADER = /^\[codecast team chat — (?:#([^\]\n]+?)|(a direct message))(?: · team ([^\]\n]+))?\]\n/;
 
+// A mention of a role or session (chat.ts wakeMentionedParties) carries the
+// same wake inside <chat-mention channel=… thread=… from=…>. The wake is the
+// message; the envelope is routing for the agent.
+export function chatWakeText(rawContent: string): string {
+  const text = stripInjectionNoise(rawContent);
+  const m = text.match(/^<chat-mention\b[^>]*>\n?([\s\S]*?)(?:\n?<\/chat-mention>\s*)?$/);
+  return m ? m[1] : text;
+}
+
 export function isChatWakePrompt(rawContent: string | null | undefined): boolean {
-  return !!rawContent && CHAT_WAKE_HEADER.test(stripInjectionNoise(rawContent));
+  return !!rawContent && CHAT_WAKE_HEADER.test(chatWakeText(rawContent));
 }
 
 // A harness <task-notification> — a background task / Monitor / Workflow
@@ -340,6 +352,12 @@ export function parseUnwrappedSessionReport(
   if (withTask) {
     const name = named(withTask[1]);
     if (name) return { from: "unknown", body: text, name };
+  }
+  // A notice codecast sent a role before notices carried the session
+  // envelope (pendingMessages.tellRole): a decision under it, a task handed
+  // to it.
+  if (/^decision sd-\d+ from a session under you: /.test(first) || /^\S.{0,80} assigned you ct-\d+ "/.test(first)) {
+    return { from: "unknown", body: text, name: "codecast" };
   }
   // A worker's name is capitalized ("Backend B follow-up:"); a lowercase
   // opener ("codecast test follow-up: ...") is a person's own prompt.

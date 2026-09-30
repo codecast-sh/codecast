@@ -146,6 +146,10 @@ export default defineConfig(({ mode }) => ({
   // from the body bytes.
   optimizeDeps: {
     holdUntilCrawlEnd: true,
+    // Plain ESM with a top-level await the optimizer's target refuses; the
+    // browser loads it as it ships, and an excluded dep never triggers a
+    // mid-session re-optimize.
+    exclude: ["@novnc/novnc"],
     include: [
       "react",
       "react-dom",

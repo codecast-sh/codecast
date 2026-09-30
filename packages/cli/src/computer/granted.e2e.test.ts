@@ -318,29 +318,26 @@ describe("the act half", () => {
     await untilWindows((ids) => !ids.has(target), "closed the window whose close button was pressed");
   });
 
-  granted("synthetic input is refused on a background window, and the accessibility route is taken where one exists", async () => {
-    // The rule in design 11.2 point 1 is about SYNTHETIC input, and the design's
-    // own verification table says two of these three verbs have an accessibility
-    // route: text replacement is `verified` with `focusedText`, and a select all
-    // chord is `verified` with `selection`. Measured on a granted Mac, that is
-    // exactly what the helper does, so asserting that all three are refused
-    // asserted a contract the design never had.
+  granted("synthetic input on a background window goes to that app alone, and the accessibility route is taken where one exists", async () => {
+    // The safety property from design 11.2 point 1: a keystroke with no named
+    // recipient must never be delivered blind to whatever holds focus. A
+    // background target now gets its keys in its own event queue (posted to
+    // its pid), which names the recipient, so the key lands in TextEdit and
+    // the human's front app never sees it.
     //
-    // press-key is the one with no accessibility route, so it is what proves
-    // the refusal — and the refusal is the safety property: a keystroke with no
-    // named recipient must never be delivered blind to whatever holds focus.
     // Observe first. The case before this one closes a window, and the helper
     // answers an index from a superseded tree with `window_stale` rather than
-    // acting on whatever now sits there — correctly, but it is not what this
-    // case is about. Snapshot-then-act is the model the design teaches anyway.
+    // acting on whatever now sits there. Snapshot-then-act is the model anyway.
     await snapshot();
-    const refused = await client.action("pressKey", { app: TEXTEDIT, key: "Return" }).then(
-      () => null,
-      (err) => err as { code: string; message: string },
-    );
-    expect(refused, "press-key should refuse a background window").not.toBeNull();
-    expect(refused!.code).toBe("window_not_focused");
-    expect(refused!.message).toMatch(/restore-window|restoreWindow/i);
+    const front = frontApp();
+    const marker = `k${Date.now() % 100000}`;
+    for (const key of marker) {
+      const pressed = await client.action("pressKey", { app: TEXTEDIT, key });
+      expect(pressed.action?.path).toBe("synthetic");
+      expect(pressed.action?.verification).toMatchObject({ state: "unverified", reason: "background_input" });
+    }
+    expect((await snapshot()).snapshot.treeText).toContain(marker);
+    expect(frontApp()).toBe(front);
 
     // The other two need no focus, because they name the element they act on.
     const typed = await client.action("typeText", { app: TEXTEDIT, text: `typed without focus ${Date.now()}` });

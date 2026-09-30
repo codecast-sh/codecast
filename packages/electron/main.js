@@ -752,6 +752,25 @@ shellIpc.handle("route-navigate", (e, navPath) => {
   return routeToWindow(clean, BrowserWindow.fromWebContents(e.sender));
 });
 
+// Bring another app (the Chrome an "open tab" click just focused a tab in) in
+// front of this one. macOS 14+ honors an activation only from the app that is
+// active, so the daemon's own raise leaves Chrome behind the app the human
+// clicked in; this repeats it from here. Same pid-addressed Apple event as
+// packages/cli/src/browser/raiseApp.ts. Resolves whether the event was sent.
+shellIpc.handle("raise-app", (_e, pid) => {
+  if (process.platform !== "darwin" || !Number.isInteger(pid) || pid <= 1) return false;
+  const jxa =
+    'ObjC.import("Foundation");' +
+    `const target = $.NSAppleEventDescriptor.descriptorWithProcessIdentifier(${pid});` +
+    "const evt = $.NSAppleEventDescriptor.appleEventWithEventClassEventIDTargetDescriptorReturnIDTransactionID(0x6d697363, 0x61637476, target, -1, 0);" +
+    "const err = Ref(); evt.sendEventWithOptionsTimeoutError(1, 10, err); !err[0] || err[0].isNil() ? 'ok' : 'failed';";
+  return new Promise((resolve) => {
+    execFile("/usr/bin/osascript", ["-l", "JavaScript", "-e", jxa], { timeout: 5_000 }, (err, stdout) => {
+      resolve(!err && `${stdout}`.trim() === "ok");
+    });
+  });
+});
+
 // ---------------------------------------------------------------------------
 // The people window: a compact floating buddy list (route /people) carrying the
 // roster, status and calling. Singleton — one per app, focused rather than

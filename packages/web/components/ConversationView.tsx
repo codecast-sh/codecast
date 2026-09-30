@@ -134,7 +134,8 @@ import { CastBrowserRowContext, ChatWakeContext } from "../lib/conversationBlock
 import { UserIcon } from "./conversation/blocks/shared";
 import { agentColorMap } from "../lib/conversationBlockStyles";
 import { AgentSwitchDivider, BashCommandBlock, ChatWakeBlock, CommandMessageBlock, CompactionSummaryBlock, EscalationDivider, HuddleSummaryBlock, InterruptStatusLine, MachineMoveDivider, NudgeLine, ScheduledTaskBlock, SessionMessageBlock, SkillExpansionBlock, SystemBlock, TaskNotificationLine, TeammateEventsBlock, WorkflowEventBlock } from "./conversation/blocks/systemBlocks";
-import { AssistantBlock, CompactCollapsedTurn, CompactTurnCard, ForkSeedMark, GitDiffPanel, StoryTimelineView, ThreadSummaryView, UserPrompt } from "./conversation/blocks/turnBlocks";
+import { CompactTurnCard } from "./conversation/blocks/compactTurnCard";
+import { AssistantBlock, CompactCollapsedTurn, ForkSeedMark, GitDiffPanel, StoryTimelineView, ThreadSummaryView, UserPrompt } from "./conversation/blocks/turnBlocks";
 import { COMPACT_TAIL_HEIGHT, EMPTY_CHILD_CONVERSATIONS, EMPTY_RECEIPT_ENTRIES } from "../lib/conversationTurnDefaults";
 import { FOLD_KEPT_USER_KINDS, canAnchorForkChips, classifyUserMessage, cleanStickyContent, extractCompactionSummaryContent, isAlwaysVisibleToolCall, isHiddenStubMessage, isStickyWorthy, isToolReceiptRow, normalizePendingContent, parseCastCommand, parseWorkflowEventContent, sameStringArray, stripSystemTags } from "./conversation/classify";
 import { formatMessagePartsForCopy, formatRelativeTime } from "../lib/conversationFormat";
@@ -3460,16 +3461,7 @@ const ConversationViewInner = (
       if (foldTurns && turnKey && !turnExpanded) {
         const lastText = turnAggregates.lastTextOf.get(turnKey);
         const stats = turnAggregates.statsOf.get(turnKey);
-        const cardAs = (variant: "card" | "steps") => (
-          <CompactTurnCard
-            key={foldWorkingTurns ? `${msg._id}:folded` : msg._id}
-            preview={stats?.preview || ""}
-            messageCount={stats?.messages || 0}
-            toolCount={stats?.tools || 0}
-            onExpand={() => toggleGroup(turnKey)}
-            variant={variant}
-          />
-        );
+        const cardAs = (variant: "card" | "steps") => <CompactTurnCard key={foldWorkingTurns ? `${msg._id}:folded` : msg._id} preview={stats?.preview || ""} messageCount={stats?.messages || 0} toolCount={stats?.tools || 0} onExpand={() => toggleGroup(turnKey)} variant={variant} />;
         const card = cardAs("card");
         if (!foldWorkingTurns) {
           if (lastText) {
