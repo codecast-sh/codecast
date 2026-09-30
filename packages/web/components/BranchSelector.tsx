@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { Split } from "lucide-react";
 import { useInboxStore, type ForkChild } from "../store/inboxStore";
 import { branchSizeOf, originSizeSinceFork } from "../lib/branchCounts";
-import { attemptLineLabel, attemptsHeading, isAttemptFamily } from "../hooks/useForkTree";
+import { attemptLineLabel, familyHeading, isAttemptFamily } from "../hooks/useForkTree";
 
 // Sentinel loadingBranchId for the origin-line chip, which has no fork id.
 const MAIN_BRANCH = "main";
@@ -128,7 +128,7 @@ export function BranchSelector({
       <div className="flex items-center gap-1.5 mb-1.5">
         <BranchIcon className="w-3.5 h-3.5 text-sol-cyan" />
         <span className="text-[10px] text-sol-text-dim uppercase tracking-wider font-medium">
-          {attemptsHeading(forkChildren) ?? `${forkChildren.length} branch${forkChildren.length !== 1 ? "es" : ""}`}
+          {familyHeading(forkChildren)}
         </span>
       </div>
       <div className="flex flex-wrap gap-1.5">

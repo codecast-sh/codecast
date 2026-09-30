@@ -1,6 +1,6 @@
 import { HandoffLinkChip, HandoffSessionLink, SessionHandoffCard, SessionHandoffNotice } from "./conversation/SessionHandoff";
 import { CloudAgentLink, CloudAgentMenuItems, useCloudAgentActions } from "./cloudAgents";
-import { attemptsHeading } from "../hooks/useForkTree";
+import { familyHeading } from "../hooks/useForkTree";
 import { sessionRepository } from "../lib/repoNavigation";
 import { repoTreeHref, repoCommitsHref } from "../lib/repoView";
 import { madeInTranscript, transcriptGitOutcomes } from "../lib/gitToolOutcome";
@@ -20,6 +20,7 @@ import { useTeamRosterIdentity } from "../hooks/useTeamRoster";
 import { useShortcutContext, useShortcutAction, isMac, hasOpenModal } from "../shortcuts";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useShallow } from "zustand/react/shallow";
+import { composerAgentStatus, useManagedSessionFields, useSessionEscape } from "../hooks/useSessionComposerControls";
 import { useStorageImageUrls } from "../hooks/useStorageImageUrl";
 import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from "../lib/sessionImages";
 import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
@@ -134,7 +135,8 @@ import { CastBrowserRowContext, ChatWakeContext } from "../lib/conversationBlock
 import { UserIcon } from "./conversation/blocks/shared";
 import { agentColorMap } from "../lib/conversationBlockStyles";
 import { AgentSwitchDivider, BashCommandBlock, ChatWakeBlock, CommandMessageBlock, CompactionSummaryBlock, EscalationDivider, HuddleSummaryBlock, InterruptStatusLine, MachineMoveDivider, NudgeLine, ScheduledTaskBlock, SessionMessageBlock, SkillExpansionBlock, SystemBlock, TaskNotificationLine, TeammateEventsBlock, WorkflowEventBlock } from "./conversation/blocks/systemBlocks";
-import { AssistantBlock, CompactCollapsedTurn, CompactTurnCard, ForkSeedMark, GitDiffPanel, StoryTimelineView, ThreadSummaryView, UserPrompt } from "./conversation/blocks/turnBlocks";
+import { CompactTurnCard } from "./conversation/blocks/compactTurnCard";
+import { AssistantBlock, CompactCollapsedTurn, ForkSeedMark, GitDiffPanel, StoryTimelineView, ThreadSummaryView, UserPrompt } from "./conversation/blocks/turnBlocks";
 import { COMPACT_TAIL_HEIGHT, EMPTY_CHILD_CONVERSATIONS, EMPTY_RECEIPT_ENTRIES } from "../lib/conversationTurnDefaults";
 import { FOLD_KEPT_USER_KINDS, canAnchorForkChips, classifyUserMessage, cleanStickyContent, extractCompactionSummaryContent, isAlwaysVisibleToolCall, isHiddenStubMessage, isStickyWorthy, isToolReceiptRow, normalizePendingContent, parseCastCommand, parseWorkflowEventContent, sameStringArray, stripSystemTags } from "./conversation/classify";
 import { formatMessagePartsForCopy, formatRelativeTime } from "../lib/conversationFormat";
@@ -726,18 +728,7 @@ const ConversationViewInner = (
   // is_idle overlay). Subscribing to the whole row re-rendered the entire
   // ConversationView (~120ms) on every heartbeat for a LIVE session. useShallow
   // re-renders only when one of these six fields actually changes.
-  const managedSession = useInboxStore(useShallow((s) => {
-    const sess = effectiveConversationId ? s.sessions[effectiveConversationId] : null;
-    if (!sess) return null;
-    return {
-      agent_status: sess.agent_status,
-      permission_mode: sess.permission_mode,
-      session_id: sess.session_id,
-      is_connected: sess.is_connected,
-      tmux_session: sess.tmux_session,
-      team_id: sess.team_id,
-    };
-  }));
+  const managedSession = useManagedSessionFields(effectiveConversationId);
   // Who this session is (docs/architecture/session-characters.md S3): the
   // header wears the same face as its inbox card, at 22 px, and clicking it
   // opens the character picker. Narrow like managedSession above — the
@@ -1156,8 +1147,18 @@ const ConversationViewInner = (
   // (`enteredAt`). The "New" divider renders above this row; -1 = nothing new
   // (first-ever visit, or everything unseen actually arrived live this visit).
   const firstUnseenIndex = useMemo(
-    () => computeNewDividerIndex(timeline, unreadAnchorAt, enteredAt),
-    [timeline, unreadAnchorAt, enteredAt],
+    () => computeNewDividerIndex(timeline, unreadAnchorAt, enteredAt, (item) => {
+      if (item.type !== 'message') return false;
+      const m = item.data as Message;
+      if (m.role !== 'user') return false;
+      const me = (currentUser as any)?._id;
+      if (!me) return false;
+      // Same attribution as resolveMsgSender: optimistic rows are the viewer's,
+      // rows without from_user_id belong to the conversation owner.
+      const senderId = m.from_user_id ?? ((m._isOptimistic || m._isQueued) ? me : conversation?.user_id);
+      return !!senderId && String(senderId) === String(me);
+    }),
+    [timeline, unreadAnchorAt, enteredAt, currentUser, conversation?.user_id],
   );
   // Handoff markers, drawn the same way: each transfer sits above the first
   // row at or after the moment it happened, with the assigner's note under
@@ -1202,18 +1203,12 @@ const ConversationViewInner = (
   // daemon holds the facts and decides (cli/src/escapeInterrupt.ts); the press
   // time rides along so an Escape aimed at the previous turn cannot cancel the
   // one a queued message started after the press (the 2026-08-28 race).
+  const sendEscape = useSessionEscape(convexConvId, { active: conversation?.status === "active", isOwner: effectiveIsOwner });
   const handleSendEscape = useCallback(() => {
-    if (!conversation || !effectiveIsOwner || conversation.status !== "active" || !convexConvId) return;
+    if (!sendEscape()) return;
     setUserScrolled(false);
-    void convCommand(convexConvId, "sendEscapeToSession", { pressed_at: Date.now() }).catch((err) => {
-        if (isParkedDispatchError(err)) {
-          toast.info("Escape queued — it will send when the connection recovers");
-          return;
-        }
-        toast.error(err instanceof Error ? err.message : "Failed to send Escape");
-    });
     requestAnimationFrame(() => scrollToBottomFnRef.current());
-  }, [conversation, effectiveIsOwner, convCommand, convexConvId, setUserScrolled]);
+  }, [sendEscape, setUserScrolled]);
 
   const handleMessageSent = useCallback(() => {
     setUserScrolled(false);
@@ -3092,13 +3087,15 @@ const ConversationViewInner = (
   const codeRepository = conversation ? sessionRepository(conversation) : null;
   // A cloud agent session's actions (Create PR, Apply, Archive), in the palette as in the header and the session menu.
   const cloudAgentActions = useCloudAgentActions(conversation?._id, effectiveIsOwner);
+  // A session with an agent process of its own (not a cloud agent's): the one a restart or a resume command reaches.
+  const hasLocalAgent = !!conversation?.session_id && !cloudAgentActions.cloud;
   usePaletteSessionCommands(conversation?._id, [
     ...cloudAgentActions.palette,
-    { key: "view_restart", label: "Restart session", icon: PaletteRestart, available: !!isOwner && !!conversation?.session_id, run: handleRestartSession },
+    { key: "view_restart", label: "Restart session", icon: PaletteRestart, available: !!isOwner && hasLocalAgent, run: handleRestartSession },
     { key: "view_profile_pin", label: conversation?.profile_pinned_at ? "Unpin from public profile" : "Pin to public profile", icon: PalettePin, available: !!isOwner, run: togglePublicProfilePin },
     { key: "view_copy_all", label: "Copy all messages", icon: PaletteCopy, run: handleCopyAll },
-    { key: "view_resume_claude", label: "Copy Claude resume command", icon: PaletteCopy, available: !!conversation?.session_id, run: () => { void handleCopyResumeCommand("claude"); } },
-    { key: "view_resume_codex", label: "Copy Codex resume command", icon: PaletteCopy, available: !!conversation?.session_id, run: () => { void handleCopyResumeCommand("codex"); } },
+    { key: "view_resume_claude", label: "Copy Claude resume command", icon: PaletteCopy, available: hasLocalAgent, run: () => { void handleCopyResumeCommand("claude"); } },
+    { key: "view_resume_codex", label: "Copy Codex resume command", icon: PaletteCopy, available: hasLocalAgent, run: () => { void handleCopyResumeCommand("codex"); } },
     { key: "view_tmux", label: "Copy tmux attach command", icon: PaletteCopy, available: !!managedSession?.tmux_session, run: copyTmuxAttach },
     { key: "view_ask", label: "Ask this session…", icon: PaletteAsk, shortcutAction: "conv.ask", available: !guest, run: openAskPanel },
     { key: "view_search", label: "Search in conversation", icon: PaletteSearch, run: () => { setIsLocalSearchOpen(true); setLocalSearchQuery(""); setTimeout(() => localSearchInputRef.current?.focus(), 0); } },
@@ -3460,16 +3457,7 @@ const ConversationViewInner = (
       if (foldTurns && turnKey && !turnExpanded) {
         const lastText = turnAggregates.lastTextOf.get(turnKey);
         const stats = turnAggregates.statsOf.get(turnKey);
-        const cardAs = (variant: "card" | "steps") => (
-          <CompactTurnCard
-            key={foldWorkingTurns ? `${msg._id}:folded` : msg._id}
-            preview={stats?.preview || ""}
-            messageCount={stats?.messages || 0}
-            toolCount={stats?.tools || 0}
-            onExpand={() => toggleGroup(turnKey)}
-            variant={variant}
-          />
-        );
+        const cardAs = (variant: "card" | "steps") => <CompactTurnCard key={foldWorkingTurns ? `${msg._id}:folded` : msg._id} preview={stats?.preview || ""} messageCount={stats?.messages || 0} toolCount={stats?.tools || 0} onExpand={() => toggleGroup(turnKey)} variant={variant} />;
         const card = cardAs("card");
         if (!foldWorkingTurns) {
           if (lastText) {
@@ -3848,7 +3836,7 @@ const ConversationViewInner = (
                     (conversation.fork_children?.length ?? 0) +
                     (conversation.forked_from ? 1 + (conversation.fork_siblings?.length ?? 0) : 0);
                   // A cloud agent's attempts count as attempts (the branches off the family's origin line).
-                  const attempts = attemptsHeading(conversation.forked_from ? [conversation as any, ...(conversation.fork_siblings ?? [])] : conversation.fork_children ?? []);
+                  const heading = familyHeading(conversation.forked_from ? [conversation, ...(conversation.fork_siblings ?? [])] : conversation.fork_children ?? [], familyCount);
                   return (
                     <button
                       ref={treeChipRef}
@@ -3858,7 +3846,7 @@ const ConversationViewInner = (
                           ? "bg-sol-cyan/20 text-sol-cyan border-sol-cyan/40"
                           : "bg-sol-cyan/10 text-sol-cyan border-sol-cyan/30 hover:bg-sol-cyan/20"
                       }`}
-                      title={`Branch map — ${attempts ?? `${familyCount} branch${familyCount === 1 ? "" : "es"}`} (${isMac ? "⌘B" : "Ctrl+B"})`}
+                      title={`Branch map: ${heading} (${isMac ? "⌘B" : "Ctrl+B"})`}
                     >
                       <Split className="w-3 h-3" />
                       {familyCount > 1 && (
@@ -4061,7 +4049,7 @@ const ConversationViewInner = (
                       </svg>
                       Copy all messages
                     </DropdownMenuItem>
-                    {conversation?.session_id && (
+                    {hasLocalAgent && (
                       <>
                         <DropdownMenuItem onSelect={() => setTimeout(() => handleCopyResumeCommand("claude"))}>
                           <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -4177,7 +4165,7 @@ const ConversationViewInner = (
                         {conversation.profile_pinned_at ? "Unpin from public profile" : "Pin to public profile"}
                       </DropdownMenuItem>
                     )}
-                    {effectiveIsOwner && conversation?.session_id && (
+                    {effectiveIsOwner && hasLocalAgent && (
                       <DropdownMenuItem disabled={isHeaderRestarting} onSelect={() => { setTimeout(() => handleRestartSession()); }}>
                         <svg className={`w-3 h-3 mr-1.5 text-orange-400 ${isHeaderRestarting ? "animate-spin" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -4311,12 +4299,8 @@ const ConversationViewInner = (
             />
           </div>
         )}
-        {subHeaderContent}
-        {/* Unacked handoff strip. Lives INSIDE the header so headerHeight's
-            ResizeObserver counts it and the sticky-message overlay (anchored at
-            top: headerHeight) lands below instead of covering it. */}
-        {conversation && <AssignedToYouBanner conversationId={conversation._id.toString()} />}
-        {/* Live tmux view (opened from the tmux pill), docked across the top.
+        {/* Live tmux view (opened from the tmux pill), docked across the top,
+            above the trigger/plan/workflow strips in subHeaderContent.
             INSIDE the header on purpose: headerHeight's ResizeObserver counts
             it, so the sticky prompt card, files-changed pill and jump toast
             all anchor below the terminal — including live during a resize
@@ -4329,6 +4313,11 @@ const ConversationViewInner = (
             <BrowserWatchSplit convKey={conversation._id.toString()} sessionUuid={managedSession?.session_id} tmuxSession={managedSession?.tmux_session} lastPage={lastBrowserPage} />
           </ErrorBoundary>
         )}
+        {subHeaderContent}
+        {/* Unacked handoff strip. Lives INSIDE the header so headerHeight's
+            ResizeObserver counts it and the sticky-message overlay (anchored at
+            top: headerHeight) lands below instead of covering it. */}
+        {conversation && <AssignedToYouBanner conversationId={conversation._id.toString()} />}
       </header>
 
       {askOpen && !guest && conversation?._id && (
@@ -4742,7 +4731,7 @@ const ConversationViewInner = (
                   ))}
                 </div>
               ) : null}
-              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss ?? sendAndStashFallback} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={workingSinceForClock(latestMessageTimestamp, now)} workingPhrase={workingPhrase} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={managedSession?.agent_status === "hibernated" ? "hibernated" : isSessionDisconnected || conversation.status !== "active" ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onForkSend={forkSendHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} permissionModePending={modeSwitching} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={onSendOverride ?? (workflowRun?.status === "paused" ? handleGateRespond : undefined)} composerNode={composerNode} composerPlaceholder={composerPlaceholder} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} threadStateNode={onSendOverride ? undefined : threadStatePanel} branchMapNode={treePopoverOpen ? (
+              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss ?? sendAndStashFallback} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={workingSinceForClock(latestMessageTimestamp, now)} workingPhrase={workingPhrase} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={composerAgentStatus(managedSession?.agent_status, { active: conversation.status === "active", disconnected: isSessionDisconnected })} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onForkSend={forkSendHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} permissionModePending={modeSwitching} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={onSendOverride ?? (workflowRun?.status === "paused" ? handleGateRespond : undefined)} composerNode={composerNode} composerPlaceholder={composerPlaceholder} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} threadStateNode={onSendOverride ? undefined : threadStatePanel} branchMapNode={treePopoverOpen ? (
                 <ForkMapBox
                   tray
                   open

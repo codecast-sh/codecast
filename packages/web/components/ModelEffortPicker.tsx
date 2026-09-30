@@ -11,7 +11,7 @@ import {
   isDynamicModelKey,
   dynamicModelOption,
   launchRailOptions,
-  listedModels,
+  liveRailOptions,
   type ModelOption,
 } from "@codecast/shared/contracts";
 import { useDynamicModels } from "../hooks/useDynamicModels";
@@ -105,7 +105,7 @@ export function ModelEffortRows({
   if (!cfg) return null;
   // Dynamic clients: Default + the curated featured head; typing searches the
   // device's full inventory. Everything else: the shared curated rail.
-  const rail = midSession ? { models: listedModels(cfg), efforts: [...cfg.efforts] } : launchRailOptions(cfg);
+  const rail = midSession ? liveRailOptions(cfg) : launchRailOptions(cfg);
   // A client with a cloud agent provider (Cursor) lists its local and its
   // cloud models side by side; the composer's "run in the cloud" switch
   // picks the half, so show that half.

@@ -35,3 +35,11 @@ export function addCloudMirrorExcludes(paths: string[]): string {
   }
   return next;
 }
+
+/** The web app's origin when config names none (CODE_CHAT_SYNC_WEB_URL points a dev CLI elsewhere). */
+export const DEFAULT_WEB_URL = process.env.CODE_CHAT_SYNC_WEB_URL || "https://codecast.sh";
+
+/** The web app's origin for links this CLI prints or opens: config's web_url, else the default. */
+export function webBaseUrl(): string {
+  return readLocalConfig()?.web_url || DEFAULT_WEB_URL;
+}

@@ -7,6 +7,7 @@ import { buildLogReport, readSleepWindows, type LogReport, type SleepWindow } fr
 import { readLoopbackIdentity, localAuthHeaders, runRouteProbes, benchClock, type ProbeIdentity, type RouteProbes } from "./probes.js";
 import { runLoadBench, type LoadResult, type RuntimeIdentity, type LoadIO } from "./load.js";
 import { childProcess } from "./fixture.js";
+import { porcelainEntries } from "../gitPlane.js";
 
 export interface BenchDeps {
   config: Config;
@@ -94,13 +95,9 @@ export async function benchContext(deps: BenchDeps, identity: ProbeIdentity): Pr
   try {
     const root = (await childProcess("git", ["rev-parse", "--show-toplevel"])).trim();
     source.commit = (await childProcess("git", ["rev-parse", "HEAD"])).trim();
-    const rows = (await childProcess("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"])).split("\0");
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i]; if (!row) continue;
-      const file = row.slice(3);
-      if (/[RC]/.test(row.slice(0, 2))) i++;
+    for (const { status, path: file } of porcelainEntries(await childProcess("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"]))) {
       const content = await fs.readFile(path.join(root, file)).catch(() => null);
-      source.dirty.push({ path: file, status: row.slice(0, 2), sha256: content ? hash(content) : null });
+      source.dirty.push({ path: file, status, sha256: content ? hash(content) : null });
     }
   } catch { source.error = "source manifest unavailable or incomplete"; }
   return { at: new Date().toISOString(), runtime, daemonConnected: state?.connected ?? null,

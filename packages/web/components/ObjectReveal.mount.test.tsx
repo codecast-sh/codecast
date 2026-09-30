@@ -1,6 +1,6 @@
 // Mounts RevealHost + RevealButton in jsdom with the page renderers stubbed
 // and checks the wiring the browser shows: the band portals into the slot
-// under the reference's block, the header strip closes it, opening a reference in
+// under the reference's block, the header strip and the foot close it, opening a reference in
 // another host closes the first, and a host inside a band is inert.
 // Run: bun test --timeout 120000 components/ObjectReveal.mount.test.tsx
 import { test, expect, beforeAll, beforeEach, mock } from "bun:test";
@@ -62,7 +62,7 @@ function mount(ui: React.ReactNode) {
 }
 const click = (el: Element) => React.act(() => { el.dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0 })); });
 
-test("the band portals into a slot right under the reference's paragraph and the header strip closes it", () => {
+test("the band portals into a slot right under the reference's paragraph and the header strip and the foot close it", () => {
   const { RevealHost, RevealButton } = mod;
   const h = React.createElement;
   mount(
@@ -81,15 +81,19 @@ test("the band portals into a slot right under the reference's paragraph and the
   const band = content.querySelector(".object-reveal")!;
   expect(band.querySelector("[data-path]")?.getAttribute("data-path")).toBe("/tasks/a");
   expect(content.querySelector("button")?.getAttribute("aria-pressed")).toBe("true");
-  // The grip is there for the resize; the header strip is the one close,
-  // above the page. The open-the-page hit does not close.
+  // The grip is there for the resize; the header strip and the foot close,
+  // above and below the page. The open-the-page hit does not close.
   expect(band.querySelector(".object-reveal__grip-bar")).not.toBeNull();
   expect(band.querySelectorAll(".object-reveal__open").length).toBe(1);
   expect(band.querySelector(".object-reveal__open-beside")?.getAttribute("title")).toBe("Open beside");
   expect(band.querySelector(".object-reveal__frame")?.firstElementChild?.classList.contains("object-reveal__strip")).toBe(true);
   click(content.querySelector(".object-reveal__open a")!);
   expect(content.querySelector(".object-reveal")).not.toBeNull();
-  click(band.querySelector(".object-reveal__strip")!);
+  expect(band.querySelector(".object-reveal__frame")?.lastElementChild?.classList.contains("object-reveal__foot")).toBe(true);
+  click(band.querySelector(".object-reveal__foot")!);
+  expect(content.querySelector("[data-reveal-slot]")).toBeNull();
+  click(content.querySelector("button")!);
+  click(content.querySelector(".object-reveal__strip")!);
   expect(content.querySelector("[data-reveal-slot]")).toBeNull();
   expect(content.querySelector("button")?.getAttribute("aria-pressed")).toBe("false");
   // The top bar's X closes it too.
