@@ -29,6 +29,13 @@ export type MentionItem = {
   agentType?: string;
   updatedAt?: number;
   viewedAt?: number;
+  /** Set when the conversation being typed into already names this item
+   *  (lib/mentionContext): how recently, higher = later. */
+  contextAt?: number;
+  /** A chat channel's kind (public, private, agents…) and the viewer's
+   *  unread count in it. */
+  channelKind?: string;
+  unread?: number;
   idleSummary?: string;
   /** A session's identity row (session-characters.md S1): the character and
    *  role fields, handed whole to `sessionIdentity` so the dropdown row wears

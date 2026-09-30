@@ -18,7 +18,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { atomicWriteFile } from "./atomicWrite.js";
 import { defaultConfigDir } from "./config/configDir.js";
-import { getVersion } from "./update.js";
+import { getVersion } from "./cliVersion.js";
 
 export type HarnessAction = "created" | "modified" | "removed";
 

@@ -106,9 +106,12 @@ test("guarded Escape observes only a successful send or signal", async () => {
   const body = source.slice(start, source.indexOf('      case "rewind":', start));
   const sent: string[] = [], observed: unknown[] = [];
   let pane: string | null = "ct-claude-test:0.0", fail = false;
+  let cloudEscape: "sent" | null = null;
   const clock = 1_800_000_000_000;
   const deps = {
     Date: { now: () => clock },
+    // A cloud agent's Escape cancels its turn through its API: no pane, nothing observed.
+    cloudAgents: { interrupt: async () => cloudEscape },
     appServerConversations: new Map(), persistedAppServerThreads: new Map(), latestInjectionTsFor: () => null,
     log: () => {}, resolveCommandSessionId: async () => "sid", detectSessionAgentType: () => "claude",
     resolveSessionCommandPane: async () => ({ tmuxTarget: pane, proc: { pid: 42 } }),
@@ -133,6 +136,10 @@ test("guarded Escape observes only a successful send or signal", async () => {
   await run();
   expect(observed).toEqual([{ kind: "escape" }, { kind: "ctrl-c" }]);
   expect(sent).toEqual(["escape", "ctrl-c"]);
+  cloudEscape = "sent";
+  expect(await run()).toEqual({ result: "escape_sent", error: undefined });
+  expect(observed).toHaveLength(2);
+  expect(sent).toHaveLength(2);
 });
 
 test("a failed remote write never arms inference", async () => {

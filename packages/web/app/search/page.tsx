@@ -27,6 +27,7 @@ import { highlightMatch, getSnippet } from "../../lib/searchHighlight";
 import { useInstantSessionRows, mergeSearchRows } from "../../lib/instantSessionSearch";
 import { copyToClipboard, shareOrigin } from "../../lib/utils";
 import { SessionGlyph } from "../../components/identity";
+import { formatSearchTimestamp } from "../../lib/searchTimestamp";
 import { parseSessionQuery, sessionQuerySearches, SESSION_QUERY_OPERATORS } from "@codecast/shared/search";
 import { useSessionQueryAutocomplete } from "../../hooks/useSessionQuerySuggestions";
 import { SessionQuerySuggestList } from "../../components/SessionQuerySuggestList";
@@ -35,19 +36,6 @@ import { SessionQuerySuggestList } from "../../components/SessionQuerySuggestLis
 type SearchCtxPayload =
   | { kind: "session"; result: any; session: InboxSession; isForeign: boolean }
   | { kind: "message"; result: any; messageId: string };
-
-function formatTimestamp(ts: number) {
-  const date = new Date(ts);
-  const now = new Date();
-  const isToday = date.toDateString() === now.toDateString();
-  const yesterday = new Date(now);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const isYesterday = date.toDateString() === yesterday.toDateString();
-  const timeStr = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  if (isToday) return timeStr;
-  if (isYesterday) return `Yesterday ${timeStr}`;
-  return date.toLocaleDateString([], { month: "short", day: "numeric" }) + ` ${timeStr}`;
-}
 
 function projectName(p?: string | null): string | null {
   if (!p) return null;
@@ -516,7 +504,7 @@ export default function SearchPage() {
                             </span>
                           )}
                           <span>{result.messageCount} msgs</span>
-                          <span>{formatTimestamp(result.updatedAt)}</span>
+                          <span>{formatSearchTimestamp(result.updatedAt)}</span>
                         </div>
                       </div>
                       {(proj || !result.isOwn) && (
@@ -558,7 +546,7 @@ export default function SearchPage() {
                                 {match.role}
                               </span>
                               <span className="text-[10px] text-sol-text-dim tabular-nums">
-                                {formatTimestamp(match.timestamp)}
+                                {formatSearchTimestamp(match.timestamp)}
                               </span>
                             </div>
                             <p className="text-[13px] text-sol-text-secondary leading-relaxed line-clamp-3">

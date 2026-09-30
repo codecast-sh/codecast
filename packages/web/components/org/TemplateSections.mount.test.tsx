@@ -3,9 +3,10 @@ import assert from "node:assert/strict";
 import { closeDomWindow } from "../../test-helpers/domGlobals";
 
 // The role page's template sections (org-hire.md H5 to H8, H11), rendered from
-// one mocked instance: the one open ask first, Done on a person's item only,
-// what the role may do, routines with what each still needs and Activate on
-// the ready paused one only, the scoreboard, the release with its bindings.
+// one mocked instance: the one open ask first with its guide open, Done and
+// Skip on a person's open item only, what the role may do, routines with their
+// trigger, what each still needs and Activate on the ready paused one only,
+// the scoreboard, the release with its bindings.
 async function verifyTemplateSections() {
   const { JSDOM } = await import("jsdom");
   const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", { url: "https://local.codecast.sh", pretendToBeVisual: true });
@@ -20,7 +21,8 @@ async function verifyTemplateSections() {
     _id: "inst-1", instance_key: "key-1", instance: "acme-growth", template_id: "growth", version: "2.0.0", digest: "6e0c187bacdef8543bba951bbad6cca098545a45be99ef6e47bc3e9b302e5e01", phase: "ready", host: { machine: "mbp", dir: "/src/acme" },
     trust: "understand", handle: "acme-growth-cmo",
     authority: [{ id: "site-write", kind: "write", label: "Ship pages", granted_at: now }, { id: "old", kind: "publish", label: "Expired", granted_at: now, expires_at: now - 1 }],
-    setup: [{ id: "search-console", title: "Verify the domain", who: "human", status: "open", unlocks: ["seo-weekly"], price: "unlocks SEO weekly" }, { id: "measurement", title: "See one event", who: "role", status: "open", unlocks: [] }, { id: "bing", title: "Verify in Bing", who: "human", status: "done", unlocks: [] }],
+    // search-console carries the guide the host rendered at bind; measurement names one the page does not hold yet.
+    setup: [{ id: "search-console", title: "Verify the domain", who: "human", status: "open", unlocks: ["seo-weekly"], price: "unlocks SEO weekly", how: "org/setup/search-console.md", guide: "# Verify acme.io\n\n1. Add the TXT record from /src/acme." }, { id: "measurement", title: "See one event", who: "role", status: "open", unlocks: [], how: "org/setup/measurement.md" }, { id: "bing", title: "Verify in Bing", who: "human", status: "done", unlocks: [] }],
     ask: { id: "search-console", title: "Verify the domain", unlocks: ["seo-weekly"] },
     readiness: { "cmo-weekly": { ready: true, mode: "propose", missing: [] }, "seo-weekly": { ready: false, mode: "propose", missing: ["evidence technical has no pass"] }, "ads-daily": { ready: true, mode: "propose", missing: ["runs as propose: trust is understand"] } },
     routines: [
@@ -44,6 +46,9 @@ async function verifyTemplateSections() {
     sealSecret: async (pubkey: string, key: string, value: string) => ({ key, payload: { provider: key, epk: `epk:${pubkey}`, iv: "iv", ct: `sealed:${value.length}` } }),
   }));
   const React = await import("react");
+  const md = ({ content }: { content: string }) => React.createElement("div", { "data-md": true }, content);
+  mock.module("../tools/MarkdownRenderer", () => ({ MarkdownRenderer: md, MarkdownBlocks: md }));
+  mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => React.createElement("a", { href, ...rest }, children) }));
   const { act } = React;
   const { createRoot } = await import("react-dom/client");
   const { TemplateSections } = await import("./TemplateSections");
@@ -60,11 +65,27 @@ async function verifyTemplateSections() {
   const states = [...document.querySelectorAll<HTMLElement>("[data-template-routine]")].map((el) => [el.dataset.templateRoutine, el.dataset.state]);
   assert.deepEqual(states, [["cmo-weekly", "paused, ready"], ["seo-weekly", "paused, not ready"], ["ads-daily", "active"]]);
   const buttons = (label: string) => [...document.querySelectorAll<HTMLButtonElement>("button")].filter((b) => b.textContent === label);
-  // Done only on the person's open item; Activate only on the ready paused routine.
+  // Each routine names its trigger, linked to the trigger's page.
+  assert.deepEqual([...document.querySelectorAll<HTMLAnchorElement>("[data-template-trigger]")].map((a) => [a.textContent, a.getAttribute("href")]), [["tr-1", "/triggers/tr-1"], ["tr-2", "/triggers/tr-2"], ["tr-3", "/triggers/tr-3"]]);
+  // The one open ask shows its guide, with this instance's values, without a click; the others stay folded.
+  const guide = (id: string) => document.querySelector<HTMLElement>(`[data-template-guide="${id}"]`);
+  assert.match(guide("search-console")!.textContent!, /Verify acme\.io.*Add the TXT record from \/src\/acme/s);
+  assert.equal(guide("measurement"), null);
+  assert.equal(document.querySelector('[data-template-guide-toggle="bing"]'), null, "no guide in the release: no toggle");
+  // A step whose guide has not reached the page says where it is and how to get it.
+  await act(async () => document.querySelector<HTMLButtonElement>('[data-template-guide-toggle="measurement"]')!.click());
+  assert.match(guide("measurement")!.textContent!, /Ask @acme-growth-cmo for it, or run there: cast org template instructions acme-growth setup:measurement/);
+  await act(async () => document.querySelector<HTMLButtonElement>('[data-template-guide-toggle="search-console"]')!.click());
+  assert.equal(guide("search-console"), null, "a person can fold the open ask's guide");
+  // Done and Skip only on the person's open item; Reopen on the one they closed; Activate only on the ready paused routine.
   assert.equal(buttons("Done").length, 1);
+  assert.equal(buttons("Skip").length, 1);
+  assert.equal(buttons("Reopen").length, 1);
   assert.equal(buttons("Activate").length, 1);
   await act(async () => buttons("Done")[0]!.click());
-  assert.deepEqual(marked, [["key-1", "search-console", "done"]]);
+  await act(async () => buttons("Skip")[0]!.click());
+  await act(async () => buttons("Reopen")[0]!.click());
+  assert.deepEqual(marked, [["key-1", "search-console", "done"], ["key-1", "search-console", "skipped"], ["key-1", "bing", "open"]]);
   await act(async () => buttons("Activate")[0]!.click());
   assert.deepEqual(activated, ["tasks_1"]);
   // Ready with a missing secret: the page binds it from here, sealed to the machine's key, never as a value.
@@ -72,25 +93,38 @@ async function verifyTemplateSections() {
   // The terminal form stays, folded: the page never leads with a command.
   assert.match(document.querySelector("details")!.textContent!, /cast org template bind acme-growth --secret accounts\.ads=<path>/);
   const type = async (selector: string, value: string) => {
-    const el = document.querySelector<HTMLInputElement>(selector)!;
+    const el = document.querySelector<HTMLTextAreaElement>(selector)!;
     assert.ok(el, selector);
-    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(el, value); el.dispatchEvent(new Event("input", { bubbles: true })); });
+    await act(async () => { Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), "value")!.set!.call(el, value); el.dispatchEvent(new Event("input", { bubbles: true })); });
   };
   const run = () => document.querySelector<HTMLButtonElement>("[data-host-run]")!;
   assert.equal(run().disabled, true, "nothing typed: nothing to bind");
-  assert.equal(document.querySelector<HTMLInputElement>('input[name="secret:accounts.ads"]')!.type, "password");
-  await type('input[name="secret:accounts.ads"]', "{\"token\":\"never-copied\"}");
+  // A masked textarea, never a password input: a password input strips line breaks, which breaks a pasted PEM key.
+  const field = document.querySelector<HTMLTextAreaElement>('textarea[name="secret:accounts.ads"]')!;
+  assert.equal(field.tagName, "TEXTAREA");
+  await type('textarea[name="secret:accounts.ads"]', "{\"token\":\n\"never-copied\"}");
   assert.equal(run().textContent, "Bind on MacBook");
   await act(async () => run().click());
   assert.equal(binds.length, 1);
   assert.equal(binds[0][0], "key-1");
-  assert.deepEqual(binds[0][1], [{ key: "accounts.ads", payload: { provider: "accounts.ads", epk: "epk:PUB", iv: "iv", ct: "sealed:24" } }]);
+  assert.deepEqual(binds[0][1], [{ key: "accounts.ads", payload: { provider: "accounts.ads", epk: "epk:PUB", iv: "iv", ct: "sealed:25" } }]); // the line break survives into what is sealed
   assert.doesNotMatch(JSON.stringify(binds), /never-copied/);
   await act(async () => root.unmount());
   // Awaiting its host: one button, the machine named, progress and failure read from the record.
   const rerender = async (patch: any) => { shown = { ...instance, ...patch }; await act(async () => root2.render(<TemplateSections key={JSON.stringify(patch)} roleId="role-1" canEdit />)); return document.body.textContent!; };
   const root2 = createRoot(document.getElementById("root")!);
-  let body = await rerender({ phase: "awaiting_host", secrets: [{ key: "accounts.ads", label: "Google Ads credentials", bound: false }] });
+  // Skipped: the record's ask is the next open step, and the page follows it, opening that step's guide instead.
+  let body = await rerender({ setup: [{ ...instance.setup[0]!, status: "skipped" }, instance.setup[1]!, { id: "publora", title: "Connect Publora", who: "human", status: "open", unlocks: ["social"], how: "org/setup/publora.md", guide: "Open Publora and connect the accounts." }], ask: { id: "publora", title: "Connect Publora", unlocks: ["social"] } });
+  assert.match(body, /Waiting on you: Connect Publora \(unlocks social\)/);
+  assert.doesNotMatch(body, /Waiting on you: Verify the domain/);
+  assert.equal(document.querySelector('[data-template-setup-item="search-console"]')!.getAttribute("data-status"), "skipped");
+  assert.equal(guide("search-console"), null);
+  assert.match(guide("publora")!.textContent!, /Open Publora/);
+  assert.equal(buttons("Skip").length, 1);
+  assert.equal(buttons("Reopen").length, 1);
+  body = await rerender({ setup: instance.setup.map((s) => ({ ...s, status: s.who === "human" ? "skipped" : "done" })), ask: undefined });
+  assert.match(body, /Nothing is left open\. A skipped step can be reopened\./);
+  body = await rerender({ phase: "awaiting_host", secrets: [{ key: "accounts.ads", label: "Google Ads credentials", bound: false }] });
   assert.match(body, /Its machine still has to install the template/);
   assert.equal(run().textContent, "Set up on MacBook");
   assert.equal(run().disabled, false, "a secret may be left blank and added later");
@@ -108,7 +142,7 @@ async function verifyTemplateSections() {
   assert.match(body, /No machine has run codecast/);
   assert.equal(document.querySelector("[data-host-run]"), null);
   body = await rerender({ phase: "awaiting_host", bind_host: { ...instance.bind_host, device: { ...instance.bind_host.device, can_receive_secrets: false, pubkey: null } } });
-  await type('input[name="secret:accounts.ads"]', "x");
+  await type('textarea[name="secret:accounts.ads"]', "x");
   assert.match(document.body.textContent!, /too old to receive a secret/);
   assert.equal(run().disabled, true);
   await act(async () => root2.unmount());

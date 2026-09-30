@@ -30,7 +30,7 @@ beforeAll(() => {
 
 const React = await import("react");
 const { createRoot } = await import("react-dom/client");
-const { ThemeProvider, useTheme } = await import("../ThemeProvider");
+const { ThemeProvider, useTheme, useThemeLock } = await import("../ThemeProvider");
 const { useInboxStore } = await import("../../store/inboxStore");
 const { applyUpdatesToStore } = await import("../../store/syncReplication");
 const { flushSyncPublishes } = await import("../../store/syncTransaction");
@@ -183,5 +183,35 @@ describe("ThemeProvider Minimal style", () => {
     expect(document.documentElement.classList.contains("minimal-style")).toBe(true);
     expect(document.documentElement.classList.contains("codex-style")).toBe(false);
     expect(useInboxStore.getState().clientState.ui?.visual_style).toBe("minimal");
+  });
+});
+
+describe("ThemeProvider lock", () => {
+  function Locked() {
+    useThemeLock("light");
+    const { theme, visualStyle } = useTheme();
+    return <span>{`${theme} ${visualStyle}`}</span>;
+  }
+
+  test("holds light Classic over a dark Minimal viewer, keeps their preference, and restores it on release", async () => {
+    localStorage.setItem("codecast-theme", "dark");
+    localStorage.setItem("codecast-visual-style", "minimal");
+    await act(async () => root.render(<ThemeProvider><Locked /></ThemeProvider>));
+
+    expect(host.textContent).toBe("light classic");
+    expect(document.documentElement.className.split(" ").sort()).toEqual(["light"]);
+
+    // The viewer's preference changing live does not break the lock or get overwritten.
+    await act(async () => {
+      useInboxStore.getState().syncTable("clientState", { ui: { theme: "dark", "theme:ts": 100, visual_style: "minimal" } });
+      flushSyncPublishes();
+    });
+    expect(document.documentElement.className.split(" ").sort()).toEqual(["light"]);
+    expect(localStorage.getItem("codecast-theme")).toBe("dark");
+    expect(localStorage.getItem("codecast-visual-style")).toBe("minimal");
+
+    await act(async () => root.render(<ThemeProvider><ThemeProbe /></ThemeProvider>));
+    expect(document.documentElement.classList.contains("dark")).toBe(true);
+    expect(document.documentElement.classList.contains("minimal-style")).toBe(true);
   });
 });

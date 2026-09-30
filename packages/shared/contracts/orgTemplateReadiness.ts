@@ -59,6 +59,16 @@ export function instanceReadiness(manifest: ReadinessManifest, state: ReadinessS
   return Object.fromEntries(manifest.routines.map((r) => [r.id, routineReadiness(manifest, r, state, now)]));
 }
 
+/** A routine's state in one phrase: the words the role page shows and the role hears after a bind. */
+export function routineState(routine: { external?: boolean; retired?: boolean; trigger?: { status: string } | null }, r: RoutineReadiness | undefined): string {
+  const t = routine.trigger;
+  if (routine.external) return "external";
+  if (routine.retired) return "retired";
+  if (!t) return "not created";
+  if (t.status === "paused") return r?.ready ? "paused, ready" : "paused, not ready";
+  return t.status === "scheduled" ? "active" : t.status;
+}
+
 function describeAge(ms: number): string {
   const hours = Math.floor(ms / 3600000);
   if (hours < 48) return `${Math.max(1, hours)} hour${hours === 1 ? "" : "s"}`;

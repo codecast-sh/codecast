@@ -1,14 +1,7 @@
 import { useState } from "react";
 import { copyToClipboard } from "../lib/utils";
 import { track } from "../lib/analytics";
-import { visitorPlatform } from "../lib/visitorPlatform";
-
-export type InstallOs = "unix" | "windows";
-
-/** The shell this visitor will paste into: PowerShell on Windows, a POSIX shell elsewhere. */
-export function detectInstallOs(): InstallOs {
-  return visitorPlatform() === "windows" ? "windows" : "unix";
-}
+import { detectInstallOs, type InstallOs } from "../lib/visitorPlatform";
 
 const INSTALL_COMMANDS = {
   unix: "curl -fsSL codecast.sh/install | sh",

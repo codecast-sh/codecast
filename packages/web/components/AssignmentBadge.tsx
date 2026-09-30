@@ -37,6 +37,8 @@ import {
   RunOnDeviceItems,
 } from "./DeviceBadge";
 import { useOwnersFromStore, OwnerAvatar, OwnerMenuItems } from "./OwnersBadge";
+import { useSessionRoleFacts } from "../hooks/useOwnersStoreEnv";
+import { RoleFace } from "./org/RoleFace";
 import { MakeRoleDialog } from "./org/MakeRoleDialog";
 import { MirrorMenuItems } from "./LocalMirror";
 import { cloudSeedTitle } from "@codecast/shared/contracts";
@@ -118,6 +120,10 @@ export function AssignmentBadge({
 }) {
   const { byId, loaded } = useDevices();
   const owners = useOwnersFromStore(conversationId);
+  // A role's own session under another role has no person owner: it answers to
+  // that role (S28), so the chip shows the role rather than whoever runs it.
+  const { seatRoleId, currentRole: parentRole } = useSessionRoleFacts(conversationId);
+  const seatUnderRole = !!seatRoleId && !!parentRole;
   const [makingRole, setMakingRole] = useState(false);
   const orgOn = useWorkspaceFeature("org");
   // A session may run on a machine outside the viewer's own device list (a
@@ -151,8 +157,9 @@ export function AssignmentBadge({
     : null;
   const ownerNames = (ownerList.length ? ownerList : meId && isRunner ? [meId] : starterId ? [starterId] : [])
     .map((id) => (id === meId ? `${selfDisp?.name ?? "You"}${selfDisp?.name ? " (you)" : ""}` : displayFor(id).name));
-  const ownerHover =
-    ownerNames.length === 0
+  const ownerHover = seatUnderRole
+    ? `Reports to ${parentRole!.name} (@${parentRole!.handle})`
+    : ownerNames.length === 0
       ? "No owner — click to take ownership"
       : ownerNames.length === 1
         ? `Owned by ${ownerNames[0]}`
@@ -235,7 +242,12 @@ export function AssignmentBadge({
               ownershipChanged ? "bg-sol-cyan/10 text-sol-cyan" : "text-sol-text-dim hover:text-sol-text"
             }`}
           >
-            {ownerList.length === 0 && !isRunner && !starterId ? (
+            {seatUnderRole ? (
+              <>
+                <RoleFace role={parentRole as any} size={16} />
+                {!compact && <span className="truncate cq-sq1">{parentRole!.name}</span>}
+              </>
+            ) : ownerList.length === 0 && !isRunner && !starterId ? (
               <>
                 <UserCheck className="w-3.5 h-3.5" />
                 {!compact && <span className="truncate cq-sq1">Take ownership</span>}

@@ -1879,6 +1879,99 @@ export async function mirrorFiles(ctx: ActionCtx, install: Install, files: any[]
   return { attachments, extra };
 }
 
+// The link line mirrorFiles leaves when a file could not be read, with the
+// Slack file id its permalink carries (…slack.com/files/<user>/<file>/<name>).
+const FILE_LINK_LINE = /^📎 \[.*\]\(https:\/\/[^/\s)]+\.slack\.com\/files\/[^/\s)]+\/(F[A-Z0-9]+)\/[^\s)]*\)$/;
+
+export function slackFileLinkLines(content: string): Array<{ line: string; file_id: string }> {
+  const out: Array<{ line: string; file_id: string }> = [];
+  for (const line of content.split("\n")) {
+    const m = FILE_LINK_LINE.exec(line);
+    if (m) out.push({ line, file_id: m[1] });
+  }
+  return out;
+}
+
+// A token that could not read files (a DM grant from before files:read) left
+// images as link lines. Once the person's token can, bring each one over as
+// the image it should have been. Scheduled whenever a token is stored.
+const FILE_REPAIR_SCAN = 500;
+
+export const fileRepairContext = internalQuery({
+  args: { installation_id: v.id("slack_installations"), user_id: v.id("users") },
+  handler: async (ctx, args) => {
+    const install = await ctx.db.get(args.installation_id);
+    const token = await userTokenFor(ctx, args.installation_id, args.user_id);
+    if (!install || !token || !tokenHasDmScopes(token.scopes)) return null;
+    const links = (await ctx.db.query("slack_channel_links").withIndex("by_installation", (q: any) => q.eq("installation_id", install._id)).collect())
+      .filter((l) => l.kind === "dm" && l.options.files && l.owner_user_id?.toString() === args.user_id.toString());
+    const rows: Array<{ message_id: Id<"chat_messages">; content: string }> = [];
+    for (const link of links) {
+      const recent = await ctx.db
+        .query("chat_messages")
+        .withIndex("by_channel_created", (q: any) => q.eq("channel_id", link.chat_channel_id))
+        .order("desc")
+        .take(FILE_REPAIR_SCAN);
+      for (const m of recent) {
+        if (m.deleted_at || m.attachments?.length) continue;
+        if (m.external?.provider !== "slack" || m.external.direction !== "inbound" || m.external.channel !== link.slack_channel_id) continue;
+        if (slackFileLinkLines(m.content).length > 0) rows.push({ message_id: m._id, content: m.content });
+      }
+    }
+    return { install: { ...install, bot_token: token.token }, rows };
+  },
+});
+
+export const repairFileLinks = internalAction({
+  args: { installation_id: v.id("slack_installations"), user_id: v.id("users") },
+  handler: async (ctx, args): Promise<{ repaired: number }> => {
+    const c = await ctx.runQuery(internal.slackSync.fileRepairContext, args);
+    if (!c) return { repaired: 0 };
+    let repaired = 0;
+    for (const row of c.rows) {
+      const attachments: InboundFile[] = [];
+      let content = row.content;
+      for (const { line, file_id } of slackFileLinkLines(row.content)) {
+        const info = await slackApi(c.install.bot_token, "files.info", { file: file_id });
+        if (!info.ok || !info.file) continue;
+        const mirrored = await mirrorFiles(ctx, c.install, [info.file]);
+        if (mirrored.attachments.length === 0) continue;
+        attachments.push(...mirrored.attachments);
+        content = content.split("\n").filter((l) => l !== line).join("\n");
+      }
+      if (attachments.length === 0) continue;
+      const r = await ctx.runMutation(internal.slackSync.applyFileRepair, {
+        message_id: row.message_id, expected: row.content, content: content.trim(), attachments,
+      });
+      if (r.status === "repaired") repaired++;
+    }
+    return { repaired };
+  },
+});
+
+export const applyFileRepair = internalMutation({
+  args: {
+    message_id: v.id("chat_messages"),
+    expected: v.string(),
+    content: v.string(),
+    attachments: v.array(v.object({
+      storage_id: v.id("_storage"),
+      name: v.optional(v.string()),
+      mime: v.optional(v.string()),
+      width: v.optional(v.number()),
+      height: v.optional(v.number()),
+    })),
+  },
+  handler: async (ctx, args) => {
+    const row = await ctx.db.get(args.message_id);
+    if (!row || row.deleted_at) return { status: "gone" };
+    // Edited or repaired since the scan read it: leave it as it is now.
+    if (row.content !== args.expected || row.attachments?.length) return { status: "changed" };
+    await patchChat(ctx, row._id, { content: args.content, attachments: args.attachments });
+    return { status: "repaired" };
+  },
+});
+
 // One Slack message (root, reply, broadcast, bot card, file share) to a chat line.
 async function mirrorMessage(
   ctx: ActionCtx,

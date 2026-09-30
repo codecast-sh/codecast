@@ -15,3 +15,10 @@ export function visitorPlatform(): VisitorPlatform {
   if (/Linux|X11|CrOS/.test(`${platform} ${ua}`) && !/Android/.test(ua)) return "linux";
   return "other";
 }
+
+export type InstallOs = "unix" | "windows";
+
+/** The shell this visitor will paste into: PowerShell on Windows, a POSIX shell elsewhere. */
+export function detectInstallOs(): InstallOs {
+  return visitorPlatform() === "windows" ? "windows" : "unix";
+}

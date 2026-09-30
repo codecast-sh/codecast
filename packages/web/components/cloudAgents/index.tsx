@@ -1,94 +1,25 @@
 "use client";
 
-// The web's side of each cloud agent provider (CLOUD_AGENT_PROVIDERS in the
-// shared contracts): its connect wording and the dialog that connects it
-// (whether a machine is connected is credentials.ts). Everything else (the
-// header chip, the composer's cloud switch, the credential card, the Sync
-// switch) reads the shared registry, so a new provider is an entry here and
-// there, not new JSX.
+// The cloud agent controls every surface renders: the setup text and held
+// note on a setup card, the connect button, the Provider Keys sign-in rows,
+// the Sync switch notes, and the session's cloud agent chip and menu rows.
+// What they read lives beside them: the provider registry (providerUi.ts),
+// the driving machine and its status (machine.ts), whether it holds the
+// credential (credentials.ts) and the session's agent and actions
+// (sessionAgent.ts). A new provider is an entry in the shared registry and
+// providerUi.ts, not new JSX.
 
-import { useState, type ComponentType } from "react";
-import { toast } from "sonner";
-import { Archive, ArchiveRestore, ChevronDown, Download, ExternalLink, GitPullRequest, KeyRound, Loader2 } from "lucide-react";
-import { CLOUD_AGENT_ACTIONS, CLOUD_AGENT_PROVIDERS, CLOUD_AGENT_RETRIED_SUFFIX, type CloudAgentActionName, type CloudAgentLaunch, cloudAgentLaunch, cloudAgentProviderForKey, cloudAgentProviderForSyncSource, cloudAgentProviderOfConversation, cloudAgentSetupSentence, isCloudAgentCredentialKind, isCloudAgentId, type CloudAgentProviderId, type CloudAgentProviderSpec, type CloudAgentSetupKind } from "@codecast/shared/contracts";
-import type { Device } from "../DeviceBadge";
+import { useState } from "react";
+import { ChevronDown, ExternalLink, KeyRound, Loader2 } from "lucide-react";
+import { CLOUD_AGENT_ACTIONS, CLOUD_AGENT_PROVIDERS, CLOUD_AGENT_RETRIED_SUFFIX, cloudAgentProviderForSyncSource, type CloudAgentProviderSpec } from "@codecast/shared/contracts";
 import { AgentTypeIcon } from "../AgentTypeIcon";
-import { ConnectCursorDialog } from "../ConnectCursorDialog";
-import { ConnectCodexDialog } from "./ConnectCodexDialog";
 import { useLiveSessionMeta } from "../../hooks/useLiveSessionMeta";
-import { useCloudAgentMachine } from "./CloudConnectDialog";
-import { cloudAgentBlockOf, useCloudAgentConnected, useCloudAgentExpiry } from "./credentials";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "../ui/dropdown-menu";
-import { useCloudAgentAction } from "../../lib/useProviderKeyCommand";
 import { useInboxStore } from "../../store/inboxStore";
 import { convHasPendingSend } from "../../store/inboxOverlays";
-
-interface CloudAgentUiEntry {
-  /** What the connect control names: "Cursor". */
-  connectName: string;
-  /** What a held message waits for, given the machine that runs the session: "the key is connected". */
-  heldUntil: (machine: string) => string;
-  Dialog: ComponentType<{ onClose: () => void; deviceId?: string | null }>;
-  /** A sign-in based provider's line among the Provider Keys: what it signs in with instead of a key. */
-  signIn?: string;
-}
-
-export interface CloudAgentUi extends CloudAgentUiEntry {
-  /** The connect control's words: "Connect Cursor". */
-  connectLabel: string;
-  /** The same inside a line of lowercase controls (the composer's switches). */
-  connectInlineLabel: string;
-}
-
-const ENTRIES: Record<CloudAgentProviderId, CloudAgentUiEntry> = {
-  cursor: { connectName: "Cursor", heldUntil: () => "the key is connected", Dialog: ConnectCursorDialog },
-  codex: {
-    connectName: "Codex",
-    heldUntil: (machine) => `${machine} is signed in to Codex`,
-    Dialog: ConnectCodexDialog,
-    signIn: "Codex Cloud runs with this machine's Codex sign-in (your ChatGPT plan), not a key.",
-  },
-};
-
-const CLOUD_AGENT_UI = Object.fromEntries(Object.entries(ENTRIES).map(([id, e]) => [id, {
-  ...e,
-  connectLabel: `Connect ${e.connectName}`,
-  connectInlineLabel: `connect ${e.connectName}`,
-}])) as Record<CloudAgentProviderId, CloudAgentUi>;
-
-export function cloudAgentUi(spec: CloudAgentProviderSpec): CloudAgentUi {
-  return CLOUD_AGENT_UI[spec.id as CloudAgentProviderId];
-}
-
-/** The guided setup for a Provider Keys entry that is a cloud agent's credential. */
-export function cloudAgentKeyDialog(keyProvider: string): CloudAgentUi["Dialog"] | undefined {
-  const spec = cloudAgentProviderForKey(keyProvider);
-  return spec ? cloudAgentUi(spec).Dialog : undefined;
-}
-
-/** What keeps a machine from reading a provider, in the sentence the daemon's card says (cloudAgentSetupSentence), and what it waits for. */
-export interface CloudAgentProblem {
-  kind: CloudAgentSetupKind;
-  sentence: string;
-  /** A new key or sign-in fixes it (isCloudAgentCredentialKind). */
-  credential: boolean;
-}
-
-/**
- * The machine that drives a provider's session, whether it is connected
- * (never, without a provider), and why not when it can say: its sign-in ran
- * out, or what its daemon found in the provider's way.
- */
-export function useCloudAgentStatus(spec: CloudAgentProviderSpec | undefined, deviceId?: string | null): { device: Device | null; connected: boolean; problem?: CloudAgentProblem } {
-  const status = useCloudAgentMachine(deviceId, useCloudAgentConnected(spec));
-  const expiry = useCloudAgentExpiry(spec);
-  if (!spec || !status.device) return status;
-  const expiredAt = expiry(status.device);
-  const block = expiredAt ? { kind: "key_invalid" as const, expiredAt } : cloudAgentBlockOf(spec, status.device);
-  if (!block) return status;
-  const sentence = cloudAgentSetupSentence(spec, block, status.device.label ?? "your computer");
-  return { ...status, problem: { kind: block.kind, sentence, credential: isCloudAgentCredentialKind(block.kind) } };
-}
+import { cloudAgentUi } from "./providerUi";
+import { useCloudAgentStatus } from "./machine";
+import type { CloudAgentActions } from "./sessionAgent";
 
 /** What waits on a setup problem that is not a credential. */
 const UNTIL_FIXED = "this is fixed";
@@ -188,80 +119,6 @@ export function CloudAgentSyncConnect({ source }: { source: string }) {
   if (!spec) return null;
   return <ConnectCloudAgentButton spec={spec} label={connected ? `${cloudAgentUi(spec).connectName} connected` : undefined} />;
 }
-
-/**
- * The cloud agent a conversation runs as, or null for a local session: its
- * provider, the agent's id (null until the first message creates it, while
- * the session id is still a local one), what its launch asked for (the model
- * stamp; a task mirrored from the provider's site has none) and whether it is
- * archived there.
- */
-export function useCloudAgentOfConversation(conversationId: string | undefined): { spec: CloudAgentProviderSpec; agentId: string | null; launch: CloudAgentLaunch | null; archived: boolean } | null {
-  const live = useLiveSessionMeta(conversationId);
-  const spec = cloudAgentProviderOfConversation(live?.agentType, live?.sessionId, live?.model);
-  if (!spec) return null;
-  const agentId = live?.sessionId && isCloudAgentId(spec, live.sessionId) ? live.sessionId : null;
-  return { spec, agentId, launch: cloudAgentLaunch(live?.agentType, live?.model), archived: !!live?.cloudAgentArchived };
-}
-
-const ACTION_ICONS: Record<CloudAgentActionName, ComponentType<{ className?: string }>> = {
-  create_pr: GitPullRequest,
-  apply: Download,
-  archive: Archive,
-  unarchive: ArchiveRestore,
-};
-
-/** Why an ask task has no Create PR or Apply: it answers without changing code. */
-const ASK_HAS_NO_CHANGES = "An ask task answers without changing code";
-
-/** One of the provider's actions as a surface lists it: shown only when it applies, disabled with the reason when it cannot run. */
-export interface CloudAgentActionItem {
-  action: CloudAgentActionName;
-  label: string;
-  title: string;
-  Icon: ComponentType<{ className?: string }>;
-  disabledReason?: string;
-}
-
-/**
- * The provider's actions on a session's cloud agent (its spec lists which),
- * as every surface offers them: the header chip, the session menu and the
- * command palette. Archive or Unarchive, whichever the agent's state takes;
- * Create PR and Apply disabled for an ask task; none until the agent exists.
- * The owner only; the machine that hosts the session runs them, says the
- * result in the thread, and a toast says it here (a pull request with a
- * button that opens it). Called once per conversation view and handed to
- * each surface, so one pending action shows everywhere and its outcome is
- * still watched after the menu that started it closes.
- */
-export function useCloudAgentActions(conversationId: string | undefined, canAct: boolean) {
-  const cloud = useCloudAgentOfConversation(conversationId);
-  const { run, pending } = useCloudAgentAction(conversationId ?? "", ({ ok, text, url }) => {
-    if (!ok) toast.error(text);
-    else if (url) toast.success(text, { action: { label: "Open PR", onClick: () => window.open(url, "_blank", "noopener") } });
-    else toast.success(text);
-  });
-  const items: CloudAgentActionItem[] = !cloud?.agentId || !canAct ? [] : (cloud.spec.actions ?? [])
-    .filter((action) => action !== (cloud.archived ? "archive" : "unarchive"))
-    .map((action) => ({
-      action,
-      label: CLOUD_AGENT_ACTIONS[action].label,
-      title: CLOUD_AGENT_ACTIONS[action].title,
-      Icon: ACTION_ICONS[action],
-      ...(CLOUD_AGENT_ACTIONS[action].needsChanges && cloud.launch?.ask ? { disabledReason: ASK_HAS_NO_CHANGES } : {}),
-    }));
-  // The command palette's session actions: the ones that can run now.
-  const palette = items.filter((i) => !i.disabledReason).map((i) => ({
-    key: `cloud_${i.action}`,
-    label: `${cloud!.spec.label}: ${i.label}`,
-    icon: i.Icon,
-    available: !pending,
-    run: () => void run(i.action),
-  }));
-  return { cloud, items, run, pending, palette };
-}
-
-export type CloudAgentActions = ReturnType<typeof useCloudAgentActions>;
 
 /** The provider's page for a session's agent, and where it opens. */
 function agentPage(spec: CloudAgentProviderSpec, agentId: string): { href: string; host: string } {

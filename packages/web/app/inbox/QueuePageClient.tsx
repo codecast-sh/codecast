@@ -643,10 +643,10 @@ export function QueuePageClient() {
     }
     // A held target (a link still loading, or refused) owns the address bar:
     // a reload or a copied URL must ask for it again, not for the session
-    // that happened to be open before.
-    const targetId = heldTargetId ?? (viewingDismissedId
-      ? undefined
-      : useInboxStore.getState().getCurrentSession()?._id);
+    // that happened to be open before. A peek at a hidden session names the
+    // session it shows too, as opening its link does, or a reload or a tab
+    // switch lands on the session behind it.
+    const targetId = heldTargetId ?? viewingDismissedId ?? useInboxStore.getState().getCurrentSession()?._id;
     // A local stub (a blank new session not yet created on the server) never
     // reaches the address bar: a reload hands the URL to the conversation
     // route, whose resolver has never heard of it and answers Not Found, and

@@ -1,25 +1,28 @@
 # Hero fly-through: build spec (ct-55800)
 
-Replaces `<InboxHeroMock />` in the homepage "Hero Image" section (`packages/web/app/(marketing)/page.tsx`) with a 36 second looping 3D fly-through of the product. One world, one camera, one timeline. Every beat demonstrates one real feature, legibly, and the loop tells one piece of work end to end.
+The homepage hero (`packages/web/app/(marketing)/page.tsx`, Hero Image section) is an 84 second looping 3D fly-through that renders the **real product UI**: actual app views, fed by sandboxed fixture data, lightly interactive during holds. One world, one camera, one timeline, one story. A visitor who watches it once understands the whole product.
 
-## Verdict on the three storyboards
+Bar: Apple and Linear launch-page motion. Every hold is face-on and legible, every hand-off between surfaces is a visible cause and effect, and nothing moves without a reason.
 
-- **Spine: Storyboard 1 ("The Desk").** One continuous drone flight over a world of flat surfaces, face-on legible holds, cards dealt face-up at the start and face-down at the end so every state reset is hidden. It is the most buildable in CSS 3D, the most legible, and the seam is solved by construction.
-- **Grafted from Storyboard 2:** the story order (ask, fan out with `cast spawn --subagent`, a worker needs permission, workers talk, a task is filed, weeks later someone finds why), the caption strip as the legibility carrier on small screens, the palette search with a teammate's query, `cast blame` in its real git-blame format, and the "3 weeks later" world label the camera flies past. Real wording everywhere (Approve/Deny, "Permission Required", "spawned by").
-- **Grafted from Storyboard 3:** the causality motif. Things lift *out of* one surface and land *as* another: a spawn block peels off into an inbox row, the amber permission chip flies to the phone and becomes its push banner, the `cast send` envelope becomes a "Message from" card, the TaskPill falls onto the board and unfolds into a row. Also its motion vocabulary (analytic springs named DROP/SETTLE/SNAP) and the rule that the poster frame is the familiar app window.
-- **Dropped:** the exploded "Anatomy" view (costly refactor into absolute plates, crowded callouts), Docs as its own beat (the Docs section lower on the page covers it), the phone "allow it, then ship the branch" bubble (the real mobile card has no reply there).
+Companion documents: `heroFly/ARCHITECTURE.md` (the sandbox, the container/view splits, theme, risks) and `heroFly/chapters/README.md` (the chapter contract builders work to). The numbers below are the ones in `heroFly/world.ts` and `heroFly/fixtures/story.ts`; where this file and the code disagree after tuning, the code wins and this file is updated.
 
-Features shown (7 chapters, one per tick): 1 Inbox for every agent. 2 Fan out (agents spawn workers). 3 From your phone (push + permission). 4 Agents talk (`cast send`). 5 Tasks (filed from chat, claimed by an agent). 6 Memory (search every session, `cast blame` to the conversation). 7 Publish (`cast publish` a cast-canvas report with viewer comments).
+## The story
+
+"Retry failed webhooks" is asked for, fanned out to two workers, approved from a phone, discussed between agents, decided by a person, tracked as a task, automated, talked over with the team, merged, published, and found again three weeks later. The cast (`fixtures/story.ts`):
+
+- People: Ashot (the viewer), Sarah Chen, Maya Ortiz.
+- Sessions: the lead **Retry failed webhooks** (claude_code, `jx7hero`), **Webhook API half** (codex, `jx7hapi`), **Dashboard retry UI** (cursor, `jx7hrui`), and the fork **Try fixed backoff** (codex, `jx7hfrk`). Project `~/src/billing`.
+- Objects: task `ct-hero1` "Retry queue for failed webhooks", plan `pl-hero1` "Webhook reliability", the decision "Exponential or fixed backoff?", the trigger "Check CI every 4h", PR acme/billing#482 "Retry failed webhooks with exponential backoff", the page codecast.sh/a/webhook-retries "Webhook retry report", `src/billing/retry.ts:42`, channel #eng, hosts linux-host-1 and macbook.
+- The prompt: "retry failed webhooks with backoff".
 
 ## Globals
 
-- `DURATION = 36.0`. `POSTER_T = 5.4` (Inbox hold: new row landed and selected, conversation shows the prompt). Prerender, first client paint and reduced-motion default all render `frame(POSTER_T)`; the driver starts playing from `POSTER_T`, so hydration never jumps.
-- Stage: logical 1280x760 (desktop) or 640x800 (mobile, below 640px container width). `aspect-ratio` reserves height; one CSS `scale()` fits the logical stage to the container. Stage: `perspective: 1800px; perspective-origin: 50% 45%`, outer wrapper `overflow: hidden` (the only clip, outside the 3D tree).
-- World: one div, `transform-style: preserve-3d`, camera transform:
-  `translateZ(dist) rotateX(pitch) rotateY(yaw) rotateZ(roll) translate3d(-x, -y, -z)`.
-  `dist = 0` renders the focus point at scale 1.0. Holds keep effective scale of the hero surface between 0.95 and 1.1.
-- Backdrop: a large `#fdf6e3` plane at z = -420 with a `#eee8d5` 32px dot grid (radial-gradient) and a soft vignette. Each surface has a contact shadow on that plane: a pre-blurred radial gradient div (#002b36 at 10%), opacity and scale tracking the surface's lift. Never `filter: blur`.
-- Only `transform` and `opacity` animate. Colour changes are two stacked elements cross-fading. Typing and counters are pure functions of t written through `textContent`.
+- `DURATION = 84`. `POSTER_T = 5.4`: the inbox hold with the lead's row landed and selected, and the prompt in the conversation. Prerender, first client paint and the reduced-motion start all render `frame(POSTER_T)`; the driver starts playing from it, so hydration never jumps. Chapters 1 and 2 are in the first paint and the prerender; the rest load when the page is idle.
+- Stage: logical 1280x760 (desktop) or 640x800 (container under 640px). `aspect-ratio` reserves height and one CSS `scale()` fits the stage. `perspective: 1800px`, origin 50% 50%. The outer wrapper is the only clip, outside the 3D tree.
+- World: one div, `transform-style: preserve-3d`, camera transform `translateZ(dist) rotateX(pitch) rotateY(yaw) rotateZ(roll) translate3d(-x, -y, -z)`. `dist = 0` renders the focus point at scale 1.0.
+- Backdrop: a `var(--sol-bg)` plane at z = -420 with a `var(--sol-bg-highlight)` 32px dot grid. Each surface has a contact shadow (a pre-blurred radial gradient, never `filter: blur`) whose opacity and scale track the surface's lift.
+- Only `transform` and `opacity` animate on the driver path. A colour change is two stacked elements cross-fading. State a real view shows (a status, a count, a composer's value) comes from `useFilmTime`, which re-renders only when the derived value changes.
+- Sandbox: everything in the stage renders inside `HeroSandbox` (stub Convex, fixture entities, personify off, light Classic, navigation cancelled, errors caught silently). The theme lock keeps `<html>` light Classic on every marketing page, so portalled popovers match.
 
 ### Easing kit (`heroFly/timeline.ts`, all pure)
 
@@ -32,202 +35,238 @@ Features shown (7 chapters, one per tick): 1 Inbox for every agent. 2 Fan out (a
 | `SETTLE` | spring w=10, zeta=0.86 (no visible overshoot, 0.7s) | card flips at the seam, reassembly |
 | `SNAP` | spring w=24, zeta=0.72 | dots, badges, button presses, pill pops |
 
-Spring: `x(s) = 1 - e^(-zeta*w*s) * (cos(wd*s) + (zeta*w/wd) * sin(wd*s))`, `wd = w*sqrt(1 - zeta^2)`, `x = 0` for `s < 0`, clamped to exactly 1 after 2.5s so the seam is exact.
+Spring: `x(s) = 1 - e^(-zeta*w*s) * (cos(wd*s) + (zeta*w/wd) * sin(wd*s))`, `wd = w*sqrt(1 - zeta^2)`, `x = 0` for `s < 0`, bent to land on exactly 1 at 2.5s so nothing drifts past a cut or the seam.
 
-Camera path: Catmull-Rom through keyframe positions (no dead stops), angles interpolated with `glide` per segment. Long lateral moves add a crest: `dist` pulls back by the listed amount at mid-move. Roll leads the turn by 150ms and returns on `settle`. Each hold drifts 12px and 0.4deg yaw across its length (below 1% per second) so it never looks frozen, and returns to integer pixel x/y at the hold midpoint.
+House entrance "drop": from `perspective(800px) translateZ(220px) rotateX(-18deg) translateY(-24px)`, opacity 0 to 1 over the first 30%, on `DROP`. Siblings stagger 60ms in reading order. In-surface elements carry their own `perspective()`, so they need no preserve-3d chain and work inside regions that clip.
 
-House entrance "drop in" (in-surface elements): from `perspective(800px) translateZ(220px) rotateX(-18deg) translateY(-24px)`, opacity 0 to 1 over the first 30% of progress, `DROP`. Siblings stagger 60ms in reading order. In-surface elements carry their own `perspective()` in the transform, so they need no `preserve-3d` chain and work inside surfaces that clip with `overflow: hidden`.
+### Camera model
 
-## World layout (world px; x right, y down, z toward viewer)
+Catmull-Rom through the hold poses (no dead stops), angles interpolated with `glide` per transit. A long lateral move adds a crest: `dist` pulls back by the listed amount at mid-move, and roll leads the turn by 150ms. Each hold drifts 12px and 0.4deg of yaw across its length so it never looks frozen; the two overview holds stay still so the seam is exact. `will-change: transform` is on the world only in transit, so text re-rasterizes sharp at rest. Every hold frames its hero surface at scale 0.93 to 1.12 and within 12deg of face-on (0.8 allowed for the pair and the tilted board); `timeline.test.ts` enforces it on desktop and mobile.
 
-| id | surface | size | position | rotation |
-|---|---|---|---|---|
-| `desk` | desktop app window (sidebar, session list, conversation) | 1180x680 | (0, 0, 0) | 0 |
-| `phone` | iPhone, mobile app | 300x620, radius 44, #002b36 bezel | (840, 40, 180) | rotY -16, rotZ -2 |
-| `pairA` | worker session "Webhook API half" | 500x300 | (1480, -230, -100) | rotY -8 |
-| `pairB` | worker session "Dashboard retry UI" | 500x300 | (1540, 150, -20) | rotY -8 |
-| `board` | task board | 720x320 | (80, 800, -20) | rotX 24 (tilted back like paper) |
-| `palette` | command palette search | 720x380 | (-1360, -120, -100) | rotY 12 |
-| `blame` | terminal with `cast blame` | 700x300 | (-1320, 360, -40) | rotY 10 |
-| `page` | published page | 780x460 | (0, -880, -260) | rotX -10 (pinned poster at the top) |
-| `label3w` | world text "3 weeks later" | 44px mono | (-700, 420, 260) | 0 |
+## World layout
 
-The route is a loop around the desk: desk, phone (E), pair (far NE), board (S, biggest swoop), palette and blame (W), page (N), overview. All numbers are starting values; tune against seek captures. Every surface back face (for the deal) is `#eee8d5`, 1px `#e4ddc8` border, small codecast glyph, chapter name in 13px mono `#93a1a1`.
+World px; x right, y down, z toward the viewer; `pos` is the surface centre. The route is one loop: out east to the phone and the pair, back to the desk, down to the board, east along the south to automation and the team, up to the pull request, west along the top to the page, down the west side to memory, home to the desk, and out to the overview.
 
-Cross-surface flyers (world-level siblings of surfaces, in the preserve-3d world): `ghostSpawnA`, `ghostSpawnB`, `ghostPermission`, `envelope`, `envelopeBack`, `ghostTask`. Each flies along a quadratic Bezier in x/y/z between two anchor points given in world coords.
+| id | surface | size | pos | rot (x, y, z) | regions (px from top-left) |
+|---|---|---|---|---|---|
+| `desk` | the desktop app window | 1180x680 | (0, 0, 0) | 0, 0, 0 | `sidebar` 0,0 200x680; `list` 200,0 340x680; `header` 540,0 640x48; `transcript` 540,48 640x512 (bottom-anchored); `composer` 540,560 640x120; `side` 800,64 360x460 (overlay); `inset` 700,430 460x230 (overlay) |
+| `phone` | iPhone, mobile app in its dark theme | 300x620, radius 44, bezel | (860, 30, 180) | 0, -16, -2 | `main` 276x572 (the screen under the notch) |
+| `pairA` | worker session, Webhook API half | 540x320 | (1500, -250, -100) | 0, -8, 0 | `header` 540x44; `transcript` 0,44 540x276 (bottom) |
+| `pairB` | worker session, Dashboard retry UI | 540x320 | (1560, 140, -20) | 0, -8, 0 | same as pairA |
+| `board` | tasks and plan | 1000x520 | (80, 900, -20) | 24, 0, 0 (tilted back like paper) | `main` |
+| `auto` | triggers and a workflow run | 900x520 | (1400, 980, -60) | 16, -6, 0 | `main` |
+| `team` | channel, huddle, org | 980x600 | (2500, 360, -80) | 0, -10, 0 | `main` |
+| `pr` | the pull request page | 900x560 | (2400, -800, -120) | -8, -8, 0 | `main` |
+| `page` | the published page | 900x560 | (0, -1000, -260) | -10, 0, 0 (pinned at the top) | `main` |
+| `palette` | command palette search | 720x420 | (-1380, -160, -100) | 0, 12, 0 | `main` |
+| `blame` | a file with session blame | 900x380 | (-1400, 380, -40) | 0, 10, 0 | `main` |
+| `label3w` | world text "3 weeks later" | 44px mono | (-760, -560, 260) | 0 | |
+
+Every surface's back face (for the deal) is `--sol-bg-alt` with the codecast logo and the chapter name in 13px mono.
+
+A surface is rendered only during the transits either side of a hold that sees it (`Hold.sees`), plus both overviews; everything else is culled with `visibility`.
 
 ## Camera keyframes (desktop)
 
-`(x, y, z | pitch, yaw, roll | dist)`; holds listed as start to end.
+`(x, y, z | pitch, yaw, roll | dist)`. Mobile overrides (`CAMERA_MOBILE`, index-aligned) frame each hold's hero element tighter at about 1.2x and use pitch 48, dist -8000 for the overview.
 
-| t | pose | note |
-|---|---|---|
-| 0.0 | (0, 0, 0 \| 36, -6, 0 \| -3200) | OVERVIEW, whole world |
-| 2.4 to 5.6 | (0, 0, 0 \| 4, -5, 0 \| -40) | DESK hold, whole window, slight 3/4 |
-| 6.3 to 10.2 | (120, 20, 0 \| 2, -7, 0 \| 10) | DESK closer on list + conversation |
-| 11.2 to 13.4 | (840, 40, 180 \| 0, 16, 2 \| 120) | PHONE hold; crest -700 in transit |
-| 13.4 to 14.6 | (560, 30, 120 \| 0, 8, 1 \| -520) | pull back: phone right, desk right edge left |
-| 15.0 hold to 15.2 | same | payoff visible |
-| 16.0 to 19.6 | (1510, -40, -60 \| 0, 8, -1.5 \| -380) | PAIR, both cards; crest -600 |
-| 20.8 to 24.2 | (80, 640, -20 \| -26, 0, 0 \| -260) | BOARD, desk bottom edge visible at frame top; crest -1100, roll -3 |
-| 25.2 to 27.6 | (-1360, -120, -100 \| 0, -12, 0 \| 0) | PALETTE; slider-rig track through `label3w` |
-| 28.2 to 30.4 | (-1320, 360, -40 \| -4, -10, 0 \| 20) | BLAME |
-| 31.0 to 33.4 | (0, -880, -260 \| 10, 0, 0 \| -60) | PAGE; crane-up, crest -900 |
-| 34.2 to 36.0 | OVERVIEW (identical to 0.0) | seam |
+| hold | t | pose | sees | arriving transit |
+|---|---|---|---|---|
+| overview | 0.0 to 0.9 | (570, -20, 0 \| 34, -6, 0 \| -5000) | all | |
+| inbox | 2.4 to 8.2 | (0, 0, 0 \| 3, -4, 0 \| -40) | desk | glide down, roll peaks -2 |
+| conversation | 9.0 to 14.4 | (250, 0, 0 \| 2, -5, 0 \| 80) | desk | ease in |
+| fan out | 15.0 to 17.6 | (60, 0, 0 \| 2, -6, 0 \| 0) | desk | ease out |
+| workers boot | 18.6 to 20.6 | (1530, -55, -60 \| 0, 8, -1.5 \| -400) | pairA, pairB, phone | crest -600 |
+| permission | 21.4 to 23.2 | (250, 120, 0 \| 2, -4, 0 \| 60) | desk | crest -700 |
+| phone | 24.2 to 26.6 | (860, 30, 180 \| 0, 16, 2 \| 70) | phone, desk | crest -500, roll +3 |
+| payoff | 27.0 to 27.8 | (560, 20, 110 \| 0, 8, 1 \| -560) | phone, desk | pull back |
+| talk | 28.8 to 33.6 | (1530, -55, -60 \| 0, 8, -1.5 \| -400) | pairA, pairB | crest -600 |
+| decide | 35.0 to 39.6 | (390, -50, 0 \| 2, -4, 0 \| 60) | desk | crest -900, roll +2 |
+| track | 41.0 to 46.4 | (80, 780, -40 \| -22, 0, 0 \| -260) | board, desk | crest -1100, roll -3 (the big swoop) |
+| automate | 47.8 to 52.6 | (1400, 940, -60 \| -14, 6, 0 \| -100) | auto, board | crest -500 |
+| team | 53.8 to 60.4 | (2500, 360, -80 \| 0, 10, 0 \| -80) | team | crest -800, roll +2 |
+| GitHub | 61.8 to 67.4 | (2400, -800, -120 \| 8, 8, 0 \| -80) | pr, team | crest -700 |
+| publish | 69.0 to 73.4 | (0, -1000, -260 \| 10, 0, 0 \| -80) | page | crest -1200, roll -2 (long pan west) |
+| palette | 74.8 to 77.0 | (-1380, -160, -100 \| 0, -12, 0 \| -20) | palette | crest -500, past `label3w` |
+| blame | 77.6 to 79.6 | (-1400, 380, -40 \| -2, -10, 0 \| -120) | blame, palette | short glide down |
+| anywhere | 80.4 to 81.4 | (340, 205, 0 \| 2, -4, 0 \| 60) | desk | crest -600 |
+| overview | 82.3 to 84.0 | same as 0.0 | all | seam |
 
-## Timeline
+## Scenes
 
-Scene table (also `window.__heroFly.scenes` and the chapter ticks). Clicking a tick seeks to its hold start.
+Scene table (also `window.__heroFly.scenes` and the 13 chapter ticks; a tick seeks to the chapter's hold).
 
-| # | name | start | end | hold start | feature | caption (DOM strip) |
+| # | id | tick | start | end | hold | caption |
 |---|---|---|---|---|---|---|
-| 1 | Inbox | 0.0 | 6.0 | 2.6 | every agent in one live inbox | Every agent session, live. Claude Code, Codex, Cursor, OpenCode and pi in one inbox. |
-| 2 | Fan out | 6.0 | 10.6 | 6.3 | agents spawn worker sessions | One lead spawns workers, and every session lands in the same inbox. |
-| 3 | From your phone | 10.6 | 15.6 | 11.2 | push + approve on iOS, synced live | A worker needs permission. Approve it from your phone. |
-| 4 | Agents talk | 15.6 | 20.2 | 16.0 | `cast send` between sessions | Sessions message each other to hand off work. |
-| 5 | Tasks | 20.2 | 24.8 | 20.8 | task filed from chat, claimed by an agent | Tasks come straight out of the conversation, and agents claim them. |
-| 6 | Memory | 24.8 | 30.8 | 25.2 | search every session, blame a line | Weeks later, anyone can find why a line of code exists. |
-| 7 | Publish | 30.8 | 36.0 | 31.0 | `cast publish` a report | Publish the result as a page your team can comment on. |
+| 1 | inbox | Inbox | 0 | 9 | 2.4 | Every agent session, live. Claude Code, Codex, Cursor, Gemini and pi in one inbox. |
+| 2 | conversation | Steer | 9 | 15 | 9.0 | Open any session to watch it work, and steer it mid-run. |
+| 3 | fanout | Fan out | 15 | 21 | 15.0 | One lead spawns workers, and every session lands in the same inbox. |
+| 4 | phone | Approve | 21 | 28 | 21.4 | A worker needs permission. Approve it from your desk or your phone. |
+| 5 | talk | Agents talk | 28 | 34 | 28.8 | Sessions message each other, and fork to try another way. |
+| 6 | decide | Decide | 34 | 40 | 35.0 | Agents queue the calls only you can make, with every option priced out. |
+| 7 | work | Track | 40 | 47 | 41.0 | Tasks come straight out of the conversation, and agents claim them. |
+| 8 | automation | Automate | 47 | 53 | 47.8 | Triggers and workflows keep the work moving while you are away. |
+| 9 | team | Team | 53 | 61 | 53.8 | Your team sees the same sessions, talks in the same channels, and huddles live. |
+| 10 | integrations | GitHub | 61 | 68 | 61.8 | Pull requests know the sessions behind them, from checks to merge. |
+| 11 | publish | Publish | 68 | 74 | 69.0 | Publish a result as a page your team can comment on. |
+| 12 | memory | Memory | 74 | 80 | 74.8 | Weeks later, anyone can find why a line of code exists. |
+| 13 | remote | Anywhere | 80 | 84 | 80.4 | Sessions run on your laptop, a cloud host or in a browser, all in one place. |
 
-### Scene 1: Inbox (0.0 to 6.0)
+## Chapters
 
-- 0.0: every surface lies face-down (rotateX 180 about its bottom edge). Camera at OVERVIEW.
-- 0.15: surfaces flip face-up in flight order (desk, phone, pairA, pairB, board, palette, blame, page), 120ms stagger. Each flip rises to translateZ +160 at 45% progress and lands on `DROP`; contact shadow shrinks at the apex and snaps back on landing.
-- 0.9 to 2.4: camera glides down to the DESK hold, roll peaks at -2deg at 1.6.
-- Desk state at deal: sidebar Inbox (badge **1**), Feed, Tasks, Docs, Workflows; Projects codecast, api, mobile. Session list, 6 rows:
-  1. Dashboard rewrite, claude, working, "sarah · merging the dashboard half", 1m (active row)
-  2. Fix flaky auth test, codex, working, "Reproduced, writing regression test", 2m
-  3. Ship dark mode, cursor, working, "Applying tokens across settings", 9m
-  4. Investigate p95 latency, opencode, working, "Profiling the sync endpoint", 14m
-  5. Refactor session cache, pi, needs input, "Two eviction strategies, which one?", 31m
-  6. Add rate limiting, claude, idle, "Merged. 34 files changed", 2h
-  Conversation pane shows "Dashboard rewrite · working · claude", avatar S (#2aa198), one prose line "Table states are done. Wiring retries next.", composer "Send a message..." with the ↵ keycap.
-- 2.8: agent chips pulse down the column (scale 1 to 1.12 to 1, `SNAP`, 90ms stagger) so the eye reads "every agent".
-- 3.4: new row **"Migrate billing webhooks"** (claude, working, "Reading the webhook handlers", now) drops in at the top: house drop but from translateZ +240, rotateX -22, y -40. The final layout already contains the new row; before 3.4 rows 1 to 6 carry `translateY(-rowH)` and slide to 0 on `settle` 480ms, 25ms stagger, while the new row is at opacity 0.
-- 4.8: the new row takes the active highlight (amber 8% tint and 2px amber left border, 200ms `settle`); previous active highlight fades out.
-- 4.9 to 5.2: conversation pane cross-fades to the Migrate session: header "Migrate billing webhooks · working · claude", avatar A (#cb4b16). 5.0: user prompt card drops in: "Ashot: switch us to the new Stripe webhook API. @sarah owns the dashboard side" (@sarah violet).
-- POSTER_T = 5.4 is this frame.
+Times are film seconds; named cues are in `fixtures/story.ts`. "Light interaction" is local state behind `data-hero-live`, only during the chapter's hold. Real components are the ones ARCHITECTURE.md section 0 lists; each renders as a view with fixture props.
 
-### Scene 2: Fan out (6.0 to 10.6)
+### 1 Inbox (0 to 9)
 
-- 6.0 to 6.3: camera eases closer (no crest, neighbouring framing).
-- 6.4 to 7.2: agent prose streams word by word: "On it. Splitting this in two: the API half and the dashboard retry UI."
-- 7.3 and 7.7: two tool blocks reveal (`settle` 400ms, #eee8d5, green `$`):
-  `$ cast spawn --subagent --agent codex "Webhook API half"`
-  `$ cast spawn --subagent --agent cursor "Dashboard retry UI"`
-- 7.9 and 8.2: from each block a ghost card (the session title) lifts to z +200, rotates Y 35deg, arcs over the pane divider (z peaks +260) and lands at 8.5 and 8.8 as a new row directly under "Migrate billing webhooks", `DROP`. Rows below push down on `settle`. Worker rows mirror the real ConversationList parent link: a dim line "spawned by Migrate billing webhooks" with the rotated arrow glyph, agent icon at the smaller subagent size.
-  - "Webhook API half", codex, working, "Reading stripe/webhooks.ts", now
-  - "Dashboard retry UI", cursor, working, "Applying retry states to the table", now
-- 9.0: claude, codex, cursor chips pulse once (`SNAP`, 120ms stagger).
-- 9.4: "Webhook API half" dot crossfades green to amber with a 1 to 1.35 to 1 pulse; note crossfades to "Allow running npm test?"; Inbox badge 1 to **2** (`SNAP`).
-- 10.1: a thin amber ring starts expanding on that row. Handoff.
+- 0.0: every surface lies face-down. 0.15: the deal flips them face-up in flight order, 120ms apart, each rising to translateZ +160 at 45% and landing on `DROP`.
+- 0.9 to 2.4: the camera glides down to the whole desk window.
+- The desk: sidebar (Inbox with its count, Feed, Tasks, Docs, Workflows; projects), the inbox list with a section header and six sessions from five agents: one working (green ping), one NEEDS INPUT, one DONE, one idle, one unread, one on a cloud host (worktree chip). Timestamps are offsets from mount.
+- 2.8: agent icons pulse down the column (`SNAP`, 90ms stagger) so the eye reads "every agent".
+- `leadLands` 3.4: the lead's row **Retry failed webhooks** drops in on top; rows below push down on `settle`, 25ms stagger.
+- `leadSelected` 4.8: it takes the selection; the conversation pane cross-fades to it.
+- Light interaction: hover shows the row's real toolbar; click selects; pin toggles; the InboxViewMenu popover opens.
 
-### Scene 3: From your phone (10.6 to 15.6)
+### 2 Steer (9 to 15)
 
-- 10.2 to 11.2: crest move right to PHONE (dist -700 at mid, roll +3). At 10.3 `ghostPermission` (an amber chip reading "Permission needed") lifts off the amber row and travels with the camera, docking at the phone's top edge at 11.1.
-- 11.2: the chip becomes the iOS push banner, dropping from y -80 (`DROP`): app icon, "codecast", title "Permission needed", subtitle "Webhook API half", body "npm test --workspace packages/api". (Mirrors the daemon's "codecast - Permission needed" push whose body is the command.)
-- 11.9: banner expands (`settle` 400ms, banner lifts out on translateZ while the card fades in) into the real mobile PermissionCard: "Permission Required", tool "Bash", args box "npm test --workspace packages/api", buttons **Approve** (green) and **Deny**. Header dot amber, "Needs input".
-- 12.8: tap: 28px ring on Approve (scale 0.4 to 1.6, opacity 0.5 to 0, 420ms), button `SNAP` 1 to 0.94 to 1, fills #859900, label "Approved" at 13.0. Header dot to green, "Working".
-- 13.2 to 13.6: phone streams one line in green: "212 passed, 0 failed".
-- 13.4 to 14.6: camera pulls back left so the desk's right side enters frame. 13.8: desk row "Webhook API half" crossfades amber to green, note "Running npm test. 212 passed"; Inbox badge 2 to **1**. A 1px green arc (SVG path in world space, stroke-dashoffset, 500ms `settle`) runs phone to row, the one non-transform animation allowed.
+- `prompt` 5.0 (seen from the poster on): the user prompt "retry failed webhooks with backoff" drops into the lead's transcript.
+- 9.0: the camera eases in on the conversation. The header bar shows the title, the working status pill, the model and the viewers' faces.
+- 9.4 to 11.6: the assistant reasons (a thinking block), runs `bun test` (a Bash tool block), edits `retry.ts` (an Edit tool block with its inline diff). `testsPass` 12.0: "212 passed".
+- 12.6 to 14.0: the composer types a steer from the timeline, "keep the max at 5 attempts", and sends it; the working status line updates.
+- Light interaction: the Edit block expands.
 
-### Scene 4: Agents talk (15.6 to 20.2)
+### 3 Fan out (15 to 21)
 
-- 15.0 to 16.0: crest up and right to PAIR.
-- pairA header "Webhook API half · working · codex", pairB header "Dashboard retry UI · working · cursor" plus a dim short-id chip `jx7k2mq`.
-- 16.2 to 17.4: pairA types (40 chars/s): `$ cast send jx7k2mq "api is on staging, your turn"`
-- 17.5: `envelope` (a SessionPill "Webhook API half") lifts off pairA to z +200 and arcs to pairB in 700ms `glide`; camera tilts down 3deg to follow.
-- 18.2: it unfolds into the SessionMessageBlock (reuse the mock's cyan card): "MESSAGE FROM [Webhook API half] · now", body "api is on staging, your turn". `DROP`.
-- 18.7 to 19.3: pairB reply prose streams: "Retry states are in. Staging green on my end."
-- 19.2: `envelopeBack` flies a shorter mirror arc (500ms) to pairA, landing as a compact message block "staging green on my end".
-- Meanwhile on the desk (off-camera, visible on arrival in scene 5): at 19.8 the lead conversation gains prose "Both halves are merged. Filed [Retry queue for failed webhooks] for the last two endpoints." with a TaskPill.
+- `spawnA` 15.6, `spawnB` 16.0: two `cast spawn --subagent` command blocks appear in the lead's transcript, and the session constellation pulses.
+- Flyers `fanout.spawnA` and `fanout.spawnB`: a card with each worker's title lifts off its spawn block, arcs over the pane divider (z +260) and lands as a subagent row under the lead, `workerRowA` 16.6 and `workerRowB` 16.9, `DROP`; rows below push down.
+- 17.6 to 18.6: crest east to the pair. 18.6 to 20.6: both workers boot on their own surfaces: header, the prompt they were handed, first tool call.
+- Light interaction: hovering a worker row lights its node in the constellation.
 
-### Scene 5: Tasks (20.2 to 24.8)
+### 4 Approve (21 to 28)
 
-- 19.6 to 20.8: the biggest move: pitch down to -26, swoop down-left to BOARD, crest dist -1100, roll -3.
-- Board: toolbar "All · Filter · Sort by priority · ⌘K" (reuse TasksMock header) and the four TasksMock rows.
-- 21.0: `ghostTask` (the TaskPill) lifts from the desk prose at the frame's top edge and falls on a parabola onto the board (600ms), landing at 21.6 and unfolding (`settle`, scaleX from pill width to row width on a container with counter-scaled content, content fades in at 60%) into a new top row: open circle (blue), `ct-731`, "Retry queue for failed webhooks", plan pill "Billing", empty dashed assignee, priority up arrow (#cb4b16), "now". Rows below push down, 25ms stagger.
-- 22.6: claim: assignee slot flips (rotateY 180 about its centre, 380ms) from dashed circle to codex BotIcon (#859900); status icon crossfades to CircleDot amber; tag "codex claimed" slides out right of the title (x +8 to 0, fade), fades after 1.2s.
-- 23.4: row ct-619 "Fix supply write-back" completes: icon crossfades to the green check, title fades to #93a1a1.
+- `permissionAsk` 20.8: the API worker's row turns amber, NEEDS INPUT; the Inbox count ticks up.
+- 21.4 to 23.2: the permission stack in the lead's transcript: Bash, `npm test --workspace packages/api`, Approve and Deny.
+- Flyer `phone.permission` 23.3: the amber chip lifts off the worker's row and travels with the camera east, docking at the phone's top edge.
+- 24.2: it becomes the iOS banner "codecast - Permission needed" (the daemon's push), which expands into the mobile permission card.
+- `permissionApproved` 25.6: a tap ring on Approve, the button presses (`SNAP`), "Approved", the header dot goes green.
+- 27.0 to 27.8: the camera pulls back; arc `phone.approved` draws from the phone to the desk row, which turns green with "212 passed"; the count ticks down.
+- Light interaction: **Approve** works on the desk card and on the phone (Approve, then "...", then gone). Nothing leaves the page.
 
-### Scene 6: Memory (24.8 to 30.8)
+### 5 Agents talk (28 to 34)
 
-- 24.2 to 25.2: low slider-rig track left to PALETTE, pitch -26 to 0. The camera passes `label3w` ("3 weeks later", #002b36 at 80%), whose opacity is 1 only during this transit (parallax cue). The caption strip also reads "Weeks later...".
-- Palette mirrors CommandPalette: input with placeholder "Search sessions, docs...", then 25.4 to 26.2 the query types (34 chars/s): "why do webhooks retry twice". Avatar S beside the input (sarah is searching).
-- 26.4: results drop in from y -16, z +40 (`DROP`, 100ms stagger), grouped:
-  - SESSIONS: "Migrate billing webhooks · claude · Ashot · 3w" (selected: amber 8% tint and left border); "Webhook API half · codex · 3w" with snippet "MAX_ATTEMPTS = 2, then park it in the retry queue" (matches highlighted #b58900)
-  - TASKS: "ct-731 Retry queue for failed webhooks · done · codex"
-- 27.6 to 28.2: short `glide` down to BLAME.
-- Blame terminal (#002b36 bg, #93a1a1 text): `$ cast blame src/billing/webhooks.ts -L 41,43`, then three lines in the real default format `<sha> (<who> <date> <lineno>) <content>`, where who is `<short id> <first name> <title>` for session-authored lines:
-  `a41c9e2 (jx7p4rt Ashot Webhook API half 2026-09-09 10:14:02 -0700 41) const MAX_ATTEMPTS = 2;`
-  `a41c9e2 (jx7p4rt Ashot Webhook API half 2026-09-09 10:14:02 -0700 42) await retryQueue.park(event);`
-  `9f03b17 (Sarah Chen                     2026-09-12 16:40:51 -0700 43) // batch 2 merchants on the new endpoint`
-  The who column of lines 41 and 42 is overlaid by a blue SessionPill tint. Lines type in at 28.3 (each line fades in, 80ms stagger; do not type long lines).
-- 28.6: line 41 highlight bar sweeps left to right (scaleX 0 to 1, 260ms).
-- 29.1: a quote card drops below the pill (`DROP`): header SessionPill "Webhook API half · codex · 3w ago", body "Two attempts, then park it in the retry queue so Stripe never double charges." This is the message the pill opens to, phrased as a quote from the session.
+- 28.8: the camera holds on the pair.
+- 29.0 to 29.6: pairA types `cast send jx7hrui "API is on /v2/hooks/retry, schema in the doc"` as a real cast command block.
+- Flyer `talk.envelope` at `messageSent` 29.6: the message lifts off pairA and lands on pairB as a "Message from Webhook API half" block, with the doc reference as a real entity pill.
+- Flyer `talk.envelopeBack` at `replySent` 31.2: the reply "Retry states are in, staging green" flies back.
+- `forked` 32.4: pairB's user prompt shows a fork child, **Try fixed backoff**.
+- Light interaction: hovering the pill shows the real hover card with the fixture entity.
 
-### Scene 7: Publish (30.8 to 36.0)
+### 6 Decide (34 to 40)
 
-- 30.4 to 31.0: crane-up to PAGE, pitch -4 to +10, crest -900.
-- Page starts as a cast-canvas card "Webhook p95 by endpoint" (reuse the InboxHeroMock bar chart data). 31.1: bars grow from the baseline (scaleY 0 to 1, origin bottom, 60ms stagger, `SNAP`); the last three are blue then green.
-- 31.6: a terminal chip slides along the top edge: `$ cast publish report.html` then `codecast.sh/a/webhook-latency`.
-- 32.0: the card unfolds into the full page (scale 0.62 to 1 on the frame, clip inset on the frame's own box, 520ms `settle`): URL bar "codecast.sh/a/webhook-latency", title "Webhook migration: latency report", two-line summary "p95 down 71% across 16 endpoints. Retries park after two attempts."
-- 32.6: comments drop in on the right margin, 180ms apart: S (violet) "ship it", M (#d33682) "numbers look great". 32.9: chip "3 viewers" pops top right.
-- 33.4 to 34.2: camera glides back to OVERVIEW; roll +2 resolves to 0. For about 0.8s the world reads as one finished day of work.
-- 34.4 to 36.0: surfaces flip face-down in reverse order (page first, desk last), 120ms stagger, `SETTLE` (no overshoot, calm seam), lifting to translateZ +140 at the apex.
-- 36.0 = 0.0 exactly. Each surface's content resets only while it is face-down: content beats read `contentT(surface, t) = t < flipDownMid(surface) ? t : 0`, where `flipDownMid` is the moment the surface passes edge-on (90deg). Before that it shows its finished state; after it, its t=0 state, which is what the deal at 0.15 flips up.
+- 34.0 to 35.0: crest back to the desk.
+- `decisionAsked` 35.4: the decision card drops into the desk's side region: "Exponential or fixed backoff?", three options with cost tags, the context line and the session.
+- `decisionAnswered` 37.8: an option is picked (a tap ring, the option highlights) and the card shows the recorded answer.
+- Light interaction: clicking an option records it as the answer.
 
-## Mobile (container < 640px)
+### 7 Track (40 to 47)
 
-- Stage switches to logical 640x800 (`aspect-ratio: 4/5`). Same world, same timeline, same transits.
-- `CAMERA_MOBILE` overrides only the hold poses: rotations halved, framed on the hero element at about 1.35x: new inbox row + prompt card (1), list with worker rows (2), phone full frame (3), pairB message card (4), new task row (5), palette results then blame line 41 and quote card (6), page title and comments (7). Overview uses pitch 50.
-- The caption strip sits under the stage and carries the meaning where stage text is small. Ticks become dots with only the active name shown.
-- No horizontal overflow: the only clip is the outer wrapper; nothing outside the stage box.
+- `taskFiled` 40.2: the lead runs `cast task create` and its transcript shows the task pill.
+- Flyer `work.task` 40.2 to 41.5: the pill falls on a parabola from the desk to the board as the camera makes the biggest swoop, and at `taskLands` 41.6 unfolds into a new top row: status open, `ct-hero1`, the title, the plan pill, an empty assignee, priority high, "now".
+- `taskClaimed` 43.0: the assignee flips to the codex worker, the status crossfades to in progress, and the active-session badge appears.
+- 44.4: the plan's progress bar advances and its graph lights the next wave.
+- Light interaction: clicking status or priority cycles the fixture value.
 
-## Reduced motion (`prefers-reduced-motion: reduce`)
+### 8 Automate (47 to 53)
 
-- No camera flight, no flips, no drops. Render each chapter's settled frame face-on: `frame(holdEnd - 0.1)` with the camera at that hold pose and all in-surface entrances at progress 1.
-- Start on chapter 1 at POSTER_T. Cross-fade between chapter frames every 5s with 400ms opacity, pausable. Ticks remain buttons.
+- 47.8: the automation surface: the trigger row "Check CI every 4h" with its cadence, next fire and health dot, and a workflow graph implement, verify, review gate.
+- `triggerFires` 49.0: the fire badge counts down and fires; the run's nodes light up in order with the film; the review gate waits; the thread state reads "Waiting on review".
+- Light interaction: Pause and Resume flip locally.
+
+### 9 Team (53 to 61)
+
+- 53.8: the team surface. #eng: Sarah asks about the retry work, an agent replies in the thread (typing indicator first), reactions land.
+- 56.0: the face row shows a huddle, with a live caption line from the transcript.
+- 58.0: the org chart, with one role card that outlives its sessions; a teammate's cursor glides across.
+- Light interaction: reactions toggle; the feed card's more/less toggles.
+
+### 10 GitHub (61 to 68)
+
+- `prOpened` 62.0: PR #482 with its header, the sessions behind it, commits, and checks pending.
+- `checksGreen` 64.5: the checks go green one by one.
+- `merged` 66.0: the status chip turns merged, and an external event row records it on the task.
+- Flyer `integrations.merged` 67.5: the merged chip flies west to the page, where it becomes the page's version chip.
+
+### 11 Publish (68 to 74)
+
+- 69.0: a cast-canvas report (a retry-rate chart) in an assistant block.
+- `published` 69.8: `cast publish` turns it into the page card, which unfolds into the published page "Webhook retry report".
+- 71.0: two viewer comments drop into the margin; the viewer count pops.
+- Light interaction: the page's real comments panel (inside its sandboxed iframe).
+
+### 12 Memory (74 to 80)
+
+- `threeWeeks` 73.5 to 74.7: the camera passes the "3 weeks later" label on its way west; the caption strip reads the chapter's line.
+- 74.8: the command palette. Sarah types "webhook retry" (typed from the film); results group into sessions and tasks, with matches highlighted.
+- 77.6: the camera drops to the blame view of `src/billing/retry.ts`; line 42 is tied to the fork session **Try fixed backoff** by its blame strip.
+- Light interaction: **typing in the palette** filters the fixtures through cmdk; hovering a blame chip lights its lines.
+
+### 13 Anywhere (80 to 84)
+
+- 80.4 to 81.4: the desk's inset: machine chips for macbook and linux-host-1, a tmux attach pill, a browser tab pill over a static screenshot, a `cast computer` command block.
+- 81.4 to 82.3: the camera glides back to the overview; for a moment the world reads as one finished piece of work.
+- 82.4 to 84.0: surfaces flip face-down in reverse flight order, 80ms apart, on `SETTLE`, lifting to translateZ +140 at the apex. Each surface's content resets only while it is face-down (`contentT`), so 84.0 equals 0.0 exactly.
+
+## Flyers and arcs
+
+World-level siblings of the surfaces, each on a quadratic Bezier between two anchors (`regionPt` or `localToWorld`), owned by the chapter that causes them:
+
+| id | cue | from | to | carries |
+|---|---|---|---|---|
+| `fanout.spawnA`, `fanout.spawnB` | workerRow - 0.6 | desk transcript spawn blocks | desk list worker rows | the new worker |
+| `phone.permission` | 23.3 | the worker's row | the phone's top edge | "Permission needed" |
+| `phone.approved` (arc) | 27.0 | the phone | the worker's row | the approval |
+| `talk.envelope`, `talk.envelopeBack` | messageSent, replySent | pairA, pairB | pairB, pairA | the message and its reply |
+| `work.task` | taskLands - 1.4 | the lead's transcript | the board's top row | the task |
+| `integrations.merged` | 67.5 | the PR header | the page's version chip | the merge |
+
+## Poster frame
+
+`POSTER_T = 5.4`: the desk, face-on, the whole window: the inbox with the lead's row just landed and selected, and the conversation showing the lead's header and the prompt. It is what crawlers get from the prerender, what the first client paint shows, and where the film starts playing.
+
+## Mobile (container under 640px)
+
+Logical stage 640x800 (`aspect-ratio: 4/5`), the same world and timeline. `CAMERA_MOBILE` frames each hold's hero element tighter. The caption strip under the stage carries the meaning where stage text is small; ticks show dots with only the active name.
+
+## Reduced motion
+
+No flight, flips or drops: each chapter's settled frame (`STILLS`, the end of its last hold), face-on, cross-fading every 5s while playing. Ticks remain buttons.
 
 ## Controls, captions, accessibility
 
-- Under the stage (DOM, outside 3D, crisp): pause/play button (28px, KeyCap-like mono, `aria-pressed`), then 7 chapter ticks with names. The active tick fills with a `scaleX` bar (reuse TourFilm's `DOTS` colours for tick dots; export `DOTS` from TourFilm rather than copying). Clicking a tick seeks to its hold start and keeps the current play state.
-- Caption strip: 13px mono #657b83, chapter name plus caption line, 350ms `settle` crossfade on chapter change. React re-renders only on chapter change.
-- Root: `<figure role="group" aria-label="Codecast product tour">` with a visually hidden description: "A looping tour of codecast: a live inbox of Claude Code, Codex, Cursor, OpenCode and pi sessions; a lead session spawning two workers; a permission prompt approved from an iPhone; two agents messaging each other; a task filed from the conversation and claimed by an agent; a teammate finding the session weeks later and tracing a line of code to it with cast blame; and a report published as a page." The stage is `aria-hidden`. Controls are real buttons.
+- Under the stage (DOM, outside the 3D tree and the sandbox): a pause/play button, 13 chapter ticks with names and a progress bar on the active one (tick dots reuse TourFilm's `DOTS`), and the caption strip (chapter name plus caption, 350ms `settle` crossfade on change).
+- Root: `<figure role="group" aria-label="Codecast product tour">` with a visually hidden description of all 13 chapters; the stage is `aria-hidden`.
 
-## Scrub hook contract
+## Scrub hook
 
 ```ts
 window.__heroFly = {
-  seek(seconds: number): void,   // renders frame(seconds mod DURATION) synchronously, keeps play state
+  seek(seconds: number): void,  // renders frame(seconds mod 84) synchronously, keeps play state
   pause(): void,
   play(): void,
-  duration: 36,
-  scenes: [{ name, start, end }...], // the 7 rows of the scene table
-  get t(): number,               // current film time (read-only convenience)
+  duration: 84,
+  scenes: [{ name, start, end }, ...], // the 13 rows of the scene table
+  get t(): number,
 };
 ```
 
-- `?hero-t=<seconds>` renders that time and stays paused (overrides reduced motion and autoplay).
-- `frame(t)` is pure: no Date.now, no accumulated spring state, no React state feeding it. Playback time = `anchorT + (performance.now() - anchorWall)/1000`, re-anchored on play, seek and resume.
-- The driver pauses on IntersectionObserver exit and `visibilitychange` hidden; resume keeps absolute film time.
-- Seek verification points: 0.0, 1.2, 4.2, 5.4, 8.9, 12.4, 14.4, 18.6, 22.8, 26.9, 29.6, 32.8, 35.99.
+`?hero-t=<seconds>` renders that time and stays paused; `?hero-reduced=1` previews reduced motion; `?hero-mobile=1` the phone framing. `frame(t)` is pure. Background tabs stall requestAnimationFrame: verify by seeking.
 
-## Code layout (reuse first)
-
-- `productMocks.tsx`: export `AGENT_COLORS`, `AgentChip`, `StatusDot`, `Avatar`, `WindowChrome`, `SessionPill`, `TaskPill`, and the icons. Split `InboxHeroMock` into exported pieces that both the static mock and the film use: `HeroSidebar`, `SessionRow`, `ConversationHeader`, `UserPromptCard`, `CanvasCard` (bars data exported), `SessionMessageCard`, `PermissionBlock`, `Composer`. `InboxHeroMock` becomes their composition with the same output (except copy fixes: no emdashes in `HERO_SESSIONS` and the prompt, buttons say Approve/Deny like the real PermissionCard). `TasksMock` exports `TaskRow`, `TASK_ROWS` and `TaskToolbar`; `AgentChatMock` reuses `SessionMessageCard`. Move the Pillar 3 phone bezel from `page.tsx` into `PhoneFrame` in productMocks and use it in both places. Keep TasksMock, DocsMock, AgentChatMock and the Pillar 3 phone rendering unchanged and check them after the refactor.
-- `HeroFlythrough.tsx`: the component (stage, scale-to-fit, driver, controls, captions, a11y, scrub hook). Renders the world once; the driver writes styles to refs.
-- `heroFly/timeline.ts`: easings, springs, `clamp`, `progress(t, cue, dur, ease)`, Catmull-Rom camera sampler, typing helper `typed(text, t, cue, cps)`, and `frame(t, layout) -> { camera, els: Record<id, {transform, opacity}>, texts: Record<id, string> }`.
-- `heroFly/world.ts`: declarative config only: `SURFACES` (id, size, pos, rot, back label, render key), `CAMERA` and `CAMERA_MOBILE` keyframes, `SCENES`, and per-surface `BEATS` arrays `{ id, cue, dur, from, preset }` plus flyer paths.
-- `heroFly/surfaces.tsx`: one render function per surface (`DeskSurface`, `PhoneSurface`, `PairSurface`, `BoardSurface`, `PaletteSurface`, `BlameSurface`, `PageSurface`), composed from productMocks pieces. Elements that animate carry `data-fly="<id>"`; typed text carries `data-fly-text="<id>"`. Initial inline styles come from `frame(POSTER_T)` computed at module scope (pure), so the prerender is the poster frame with real text.
-- `heroFly/timeline.test.ts` (bun test): `frame(0)` equals `frame(36 - 1e-6)` within epsilon for camera and every element; `frame` is deterministic; scenes are contiguous and cover [0, 36); every hold keeps the hero surface's effective scale in [0.95, 1.1] and within 12deg of face-on.
-- `page.tsx`: swap `<InboxHeroMock />` for `<HeroFlythrough />` in the Hero Image section; keep the glow wrapper.
+Seek verification points: 0.0, 1.2, 5.4, 11.0, 16.9, 19.6, 22.3, 25.6, 27.4, 31.0, 37.8, 43.0, 50.0, 57.0, 64.5, 71.0, 75.9, 78.6, 80.9, 83.99.
 
 ## Risks and rules
 
-1. **preserve-3d flattening.** Only the world and surface wrappers are in the 3D tree; they carry no overflow, filter, clip-path or opacity. Opacity animates on leaves (a surface's inner card), never on a 3D parent. In-surface drops use their own `perspective()` and need no 3D chain.
-2. **Text crispness.** Holds are face-on at scale near 1; surfaces render at true size and the camera moves. `will-change: transform` goes on the world only during transits (toggled by `frame`), never during holds, so Chrome re-rasterizes text sharp at rest. Check Safari.
-3. **Performance.** Cull surfaces more than one scene away (`visibility: hidden`, a pure function of t). Skip style writes whose value did not change. One rAF, paused offscreen and when hidden.
-4. **Cause and effect in frame.** The scene 3 payoff (desk row turns green) and the scene 5 pill fall need the desk in frame at 13.8 and 21.0. Tune camera and board position against captures before polishing anything else.
-5. **Copy truth.** Real wording: Approve/Deny, "Permission Required", "Permission needed" push, "spawned by" parent link, "Search sessions, docs..." palette placeholder, git-blame default format with session who column. Short ids, ct numbers, dates and comment text are illustrative. No emdashes anywhere.
-6. **Prerender.** No window or matchMedia at module scope; media queries read in effects. The prerendered frame is desktop layout at POSTER_T; mobile swaps layout in an effect with no height change (both aspect ratios are set by a CSS media query, not JS).
+1. **Isolation.** Fixture data reaches views only as props or through the sandbox seams; no container is ever mounted. `heroFly/sandbox.guard.test.tsx` mounts every chapter across the whole film and fails on any store, IndexedDB, outbox, dispatch, listener, Convex, `<html>` or localStorage effect.
+2. **preserve-3d flattening.** Only the world and the surface wrappers are in the 3D tree; they carry no overflow, filter, clip-path or opacity. Opacity animates on leaves.
+3. **Portals and ReactFlow under 3D.** Popovers render flat at `document.body`: open them only in face-on holds and close them on the way out. OrgGraph and WorkflowGraphView sit in fixed, untransformed inner boxes with `pointer-events: none`.
+4. **Performance.** Culling by `Hold.sees`, unchanged style writes skipped, one requestAnimationFrame paused offscreen and when hidden, views re-rendered only when a derived value changes, each chapter its own chunk.
+5. **Copy truth.** Real wording from the product everywhere. No emdashes.
+6. **Real-UI churn.** The film tracks the product by design; a seek capture per chapter (`?hero-t=`) catches visual regressions in review.

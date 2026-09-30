@@ -11,7 +11,7 @@ import { Button } from "../../../components/ui/button";
 import { SegmentedToggle } from "../../../components/SegmentedToggle";
 import { SettingsPanel, SettingsSection } from "../../../components/settings/ui";
 import { BrowserExtensionSetup } from "../../../components/settings/BrowserExtensionSetup";
-import { detectInstallOs, type InstallOs } from "../../../components/install-tabs";
+import { detectInstallOs, type InstallOs } from "../../../lib/visitorPlatform";
 
 // The two install commands diverge by shell: curl|sh can't run on Windows, and
 // irm|iex can't run on a POSIX shell. The Windows form passes the token via env

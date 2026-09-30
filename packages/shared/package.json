@@ -37,6 +37,7 @@
     "./contracts/briefStanding": "./contracts/briefStanding.ts",
     "./entities": "./entities/index.ts",
     "./render": "./render/index.ts",
+    "./render/permissionCardStyle": "./render/permissionCardStyle.ts",
     "./tasks": "./tasks/index.ts",
     "./docs": "./docs/index.ts",
     "./files": "./files/index.ts",

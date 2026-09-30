@@ -583,7 +583,6 @@ export const COMPUTER_SNIPPET = `
 
 **Grants.** Accessibility and Screen Recording are granted by hand, once, to the codecast computer helper; until then every verb fails saying so. Read the grants with \`cast computer permissions\`, which shows nothing on screen and is free to run anytime. If one is missing, hand the human \`cast computer setup\` and wait: it explains each permission, asks before anything appears, opens each pane they still owe and waits for the grant. Then read again. Rereading with no human in between, or retrying, grants nothing.
 
-
 \`\`\`bash
 cast computer capabilities                        # what this machine supports; sets the helper up on first run
 cast computer setup                               # the human's one command for both grants; asks before it opens anything

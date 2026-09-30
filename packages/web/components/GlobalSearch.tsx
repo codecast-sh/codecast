@@ -3,7 +3,7 @@ import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useShortcutAction } from "../shortcuts";
-import { KeyCap, MenuKeyCaps } from "./KeyboardShortcutsHelp";
+import { KeyCap } from "./KeyboardShortcutsHelp";
 import { AppLoader } from "./AppLoader";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useRouter } from "next/navigation";
@@ -13,9 +13,10 @@ import { ContextMenu, useContextMenu } from "./ui/context-menu";
 import { SessionMenuItems } from "./menus/ObjectContextMenus";
 import { highlightMatch, getSnippet, parseSearchTerms } from "../lib/searchHighlight";
 import { useInstantSessionRows, mergeSearchRows } from "../lib/instantSessionSearch";
-import { SessionGlyph } from "./identity";
 import { SessionQuerySuggestList } from "./SessionQuerySuggestList";
 import { useSessionQueryAutocomplete } from "../hooks/useSessionQuerySuggestions";
+import { SearchField, SearchGlyph } from "./search/SearchField";
+import { SearchResultRow } from "./search/SearchResultRow";
 
 export { parseSearchTerms, highlightMatch, getSnippet };
 
@@ -149,19 +150,6 @@ export function GlobalSearch() {
   // the count on screen is "what we can already see", never a total.
   const contentPending = debouncedQuery.length >= 2 && !searchData && !searchError;
 
-  const formatTimestamp = (ts: number) => {
-    const date = new Date(ts);
-    const now = new Date();
-    const isToday = date.toDateString() === now.toDateString();
-    const yesterday = new Date(now);
-    yesterday.setDate(yesterday.getDate() - 1);
-    const isYesterday = date.toDateString() === yesterday.toDateString();
-    const timeStr = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    if (isToday) return timeStr;
-    if (isYesterday) return `Yesterday ${timeStr}`;
-    return date.toLocaleDateString([], { month: "short", day: "numeric" }) + ` ${timeStr}`;
-  };
-
   useShortcutAction('search.open', useCallback(() => {
     setIsOpen(true);
     setIconOpen(true);
@@ -272,74 +260,32 @@ export function GlobalSearch() {
           aria-label="Search sessions"
           title="Search sessions"
         >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={1.5}
-              d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-            />
-          </svg>
+          <SearchGlyph className="w-4 h-4" />
         </button>
       )}
-      <div
-        className={`relative w-full min-w-0 transition-[max-width] duration-300 [transition-timing-function:cubic-bezier(0.32,0.72,0,1)] ${
-          isExpanded
-            ? compact
-              ? "tb-search-overlay"
-              : "max-w-[680px]"
-            : compact
-              ? "hidden"
-              : "max-w-[230px]"
-        }`}
+      <SearchField
+        value={query}
+        expanded={isExpanded}
+        compact={compact}
+        hideCaps={hideCaps}
+        inputRef={inputRef}
+        onChange={(e) => {
+          setQuery(e.target.value);
+          autocomplete.trackCaret(e.target);
+          // Clear the slow-search hint the instant the term changes, so it can
+          // never linger from a prior broad query onto a fresh, fast one.
+          setSearchIsSlow(false);
+          if (!isOpen) setIsOpen(true);
+        }}
+        inputProps={{
+          onSelect: autocomplete.inputHandlers.onSelect,
+          onFocus: () => { setIsFocused(true); setIsOpen(true); autocomplete.inputHandlers.onFocus(); },
+          onBlur: () => { setIsFocused(false); setIconOpen(false); autocomplete.inputHandlers.onBlur(); },
+          onKeyDown: handleKeyDown,
+        }}
       >
-        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-          <svg
-            className={`w-4 h-4 transition-colors duration-200 ${isExpanded ? "text-sol-cyan" : "text-sol-text-dim"}`}
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={1.5}
-              d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-            />
-          </svg>
-        </div>
-        <input
-          ref={inputRef}
-          type="text"
-          value={query}
-          onChange={(e) => {
-            setQuery(e.target.value);
-            autocomplete.trackCaret(e.target);
-            // Clear the slow-search hint the instant the term changes, so it can
-            // never linger from a prior broad query onto a fresh, fast one.
-            setSearchIsSlow(false);
-            if (!isOpen) setIsOpen(true);
-          }}
-          onSelect={autocomplete.inputHandlers.onSelect}
-          onFocus={() => { setIsFocused(true); setIsOpen(true); autocomplete.inputHandlers.onFocus(); }}
-          onBlur={() => { setIsFocused(false); setIconOpen(false); autocomplete.inputHandlers.onBlur(); }}
-          onKeyDown={handleKeyDown}
-          placeholder="Search sessions"
-          className={`w-full pl-9 py-1.5 bg-sol-bg-alt border rounded-full text-sm text-sol-text placeholder:text-sol-text-dim truncate cursor-pointer focus:cursor-text focus:outline-none transition-[border-color,box-shadow,padding] duration-200 ${
-            isExpanded
-              ? "pr-3 border-sol-cyan/50 ring-1 ring-sol-cyan/30 shadow-lg shadow-black/10"
-              : `${hideCaps ? "pr-3" : "pr-12"} border-sol-border hover:border-sol-text-dim/40 hover:bg-sol-bg-highlight`
-          }`}
-        />
-        <div
-          className={`absolute inset-y-0 right-0 pr-2.5 items-center pointer-events-none transition-opacity duration-150 ${
-            hideCaps ? "hidden" : "flex"
-          } ${isExpanded ? "opacity-0" : "opacity-100"}`}
-        >
-          <MenuKeyCaps action="search.open" />
-        </div>
         {autocomplete.open && <SessionQuerySuggestList {...autocomplete.listProps} className="z-[250]" />}
-      </div>
+      </SearchField>
 
       {isOpen && query.length >= 2 && (
         <div
@@ -388,70 +334,15 @@ export function GlobalSearch() {
                   )}
                 </div>
                 <div className="space-y-1 py-1">
-                {groupedResults.map((session: any, sessionIndex: number) => (
-                  <button
+                {groupedResults.map((session, sessionIndex) => (
+                  <SearchResultRow
                     key={session.conversationId}
+                    session={session}
+                    query={query}
+                    selected={sessionIndex === selectedIndex}
                     onClick={() => handleResultClick(session.conversationId)}
                     onContextMenu={(e) => openSessionMenu(e, session)}
-                    className={`w-full text-left mx-1 rounded-lg transition-colors ${
-                      sessionIndex === selectedIndex
-                        ? "bg-amber-200/60 dark:bg-amber-900/40"
-                        : "hover:bg-amber-100/30 dark:hover:bg-amber-900/20"
-                    }`}
-                  >
-                    <div className="px-3 py-2 flex items-center gap-2">
-                      {/* Who the session is (session-characters.md S3). */}
-                      <SessionGlyph row={session.identity} className="flex-shrink-0" />
-                      <span className="text-sm font-semibold text-sol-text truncate max-w-[600px]">
-                        {session.title}
-                      </span>
-                      {!session.isOwn && (
-                        <span className="text-[10px] text-sol-text-dim px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border">
-                          {session.authorName}
-                        </span>
-                      )}
-                      <span className="text-[10px] text-sol-text-dim px-1.5 py-0.5 bg-sol-bg rounded">
-                        {session.messageCount} msgs
-                      </span>
-                      <span className="text-[10px] text-sol-text-dim ml-auto whitespace-nowrap">
-                        {formatTimestamp(session.updatedAt)}
-                      </span>
-                    </div>
-                    <div className={`ml-4 space-y-1 border-l-2 border-sol-border/40 pl-3 ${session.matches.length || session.instantSnippet ? "pb-2" : ""}`}>
-                      {/* No message hits yet (or ever): show where the name
-                          match landed rather than a bare header row. When the
-                          content tier lands, its snippets replace this. */}
-                      {session.matches.length === 0 && session.instantSnippet && (
-                        <p className="px-2 py-1 text-xs text-sol-text-dim leading-relaxed line-clamp-2">
-                          {highlightMatch(getSnippet(session.instantSnippet, query, 180), query)}
-                        </p>
-                      )}
-                      {session.matches.slice(0, 3).map((match: any, matchIndex: number) => (
-                        <div
-                          key={`${session.conversationId}-${matchIndex}`}
-                          className="px-2 py-1"
-                        >
-                          <div className="flex items-center gap-2 mb-0.5">
-                            <span
-                              className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
-                                match.role === "user"
-                                  ? "bg-blue-500/20 text-blue-700 dark:text-blue-300"
-                                  : "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300"
-                              }`}
-                            >
-                              {match.role}
-                            </span>
-                            <span className="text-[10px] text-sol-text-dim">
-                              {formatTimestamp(match.timestamp)}
-                            </span>
-                          </div>
-                          <p className="text-sm text-sol-text-secondary leading-relaxed line-clamp-3">
-                            {highlightMatch(getSnippet(match.content, query), query)}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  </button>
+                  />
                 ))}
                 </div>
               </div>

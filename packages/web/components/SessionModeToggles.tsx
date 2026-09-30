@@ -11,7 +11,8 @@
 
 import { deviceDisplayName, type CloudAgentLaunch, type CloudAgentProviderSpec } from "@codecast/shared/contracts";
 import type { SessionMachine } from "../lib/sessionMachines";
-import { ConnectCloudAgentButton, cloudAgentUi } from "./cloudAgents";
+import { ConnectCloudAgentButton } from "./cloudAgents";
+import { cloudAgentUi } from "./cloudAgents/providerUi";
 
 export type SessionModeTogglesProps = {
   /** The cloud host on the roster (offline included), or null without one. */

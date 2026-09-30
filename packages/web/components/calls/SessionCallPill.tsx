@@ -13,6 +13,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { callExcerptHref, callLinkHow, callLinkHref } from "@codecast/shared/contracts";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { isConvexId } from "../../lib/entityLinks";
+import { excerptLabel } from "../../lib/calls/excerptLabel";
 import { fmtClock } from "../triggerCadence";
 import {
   DropdownMenu,
@@ -27,13 +28,6 @@ const PILL =
   "inline-flex min-w-0 max-w-[180px] flex-shrink items-center gap-1 rounded-full bg-sol-bg-highlight px-2 py-0.5 text-[10.5px] leading-4 text-sol-text-muted hover:text-sol-text";
 
 const callName = (c: any) => c.title || "Untitled huddle";
-
-// Seqs are the transcript's own counter, never shown, so an excerpt reads by
-// its size and when it was sent.
-export function excerptLabel(e: { from_seq: number; to_seq: number }): string {
-  const n = e.to_seq - e.from_seq + 1;
-  return `Excerpt · ${n} line${n === 1 ? "" : "s"}`;
-}
 
 export function SessionCallPill({ conversationId }: { conversationId: string }) {
   const router = useRouter();

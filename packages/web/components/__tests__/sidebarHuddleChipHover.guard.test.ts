@@ -2,13 +2,15 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
 const source = readFileSync(new URL("../Sidebar.tsx", import.meta.url), "utf8");
+// The rail's row primitives (SectionRow, NavSection) live beside it.
+const primitives = readFileSync(new URL("../sidebar/navPrimitives.tsx", import.meta.url), "utf8");
 
-function block(startMarker: string, endMarker: string) {
-  const start = source.indexOf(startMarker);
+function block(startMarker: string, endMarker: string, text = source) {
+  const start = text.indexOf(startMarker);
   expect(start).toBeGreaterThan(-1);
-  const end = source.indexOf(endMarker, start);
+  const end = text.indexOf(endMarker, start);
   expect(end).toBeGreaterThan(start);
-  return source.slice(start, end);
+  return text.slice(start, end);
 }
 
 // A sidebar row swaps its trailing marker for its hover actions, so the two
@@ -28,7 +30,7 @@ test("the huddle chip is a control, not a trailing marker", () => {
 });
 
 test("a row's control survives hover while its trailing marker steps aside", () => {
-  const row = block("function SectionRow(", "/** A numeric count on a nav row.");
+  const row = block("function SectionRow(", "/** A numeric count on a nav row.", primitives);
   const control = row.slice(row.indexOf("{row.control &&"), row.indexOf("{row.trailing &&"));
   expect(control).not.toContain("group-hover/v:hidden");
   const trailing = row.slice(row.indexOf("{row.trailing &&"), row.indexOf("{!!row.actions?.length"));
@@ -41,7 +43,7 @@ test("both chat rows in the rail wear the same signals", () => {
 });
 
 test("the section count sits after the chevron, not inside the link", () => {
-  const nav = block("function NavSection(", "const NeedsInputCountBadge");
+  const nav = block("function NavSection(", "/** The needs-input count on the Inbox row", primitives);
   const linkEnd = nav.indexOf("</Link>");
   const chevron = nav.indexOf("aria-expanded={expanded}");
   const badge = nav.indexOf("{!isNarrow && badge && (");

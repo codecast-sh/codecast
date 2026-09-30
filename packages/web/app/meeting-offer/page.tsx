@@ -34,16 +34,16 @@
 // this window: those route offers to an app window, never here.
 import { useRef, useState } from "react";
 import { Ban, Maximize2, Mic, Square, X } from "lucide-react";
+import { isElectron } from "../../lib/desktop";
 import {
   getMeetingDetect,
-  isElectron,
   meetingOfferHide,
   meetingOfferOpenCall,
   meetingOfferSize,
   onMeetingDetected,
   setMeetingDetect,
   type MeetingOffer,
-} from "../../lib/desktop";
+} from "../../lib/desktopMeetings";
 import {
   getRecorderStatus,
   startRecording,

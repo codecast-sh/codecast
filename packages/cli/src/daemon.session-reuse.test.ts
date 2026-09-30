@@ -109,11 +109,15 @@ describe("double-start fix invariants", () => {
     expect(start).toBeGreaterThan(-1);
     const waitLoop = daemonSource.slice(start, start + 2500);
     // The recheck runs inside `deliveryStep`, which times the step; the await
-    // moved to the wrapper, so the call is its last argument.
-    expect(waitLoop).toMatch(/if \(await deliveryStep\([^)]*?,\s*tryAppServerDelivery\)\) return true/);
-    expect(waitLoop.indexOf("tryAppServerDelivery")).toBeLessThan(
+    // moved to the wrapper, so the call is its last argument. The step is the
+    // backend one: a cloud agent first, and the app-server when none owns it.
+    expect(waitLoop).toMatch(/if \(await deliveryStep\([^)]*?,\s*tryBackendDelivery\)\) return true/);
+    expect(waitLoop.indexOf("tryBackendDelivery")).toBeLessThan(
       waitLoop.indexOf("startFreshSessionForDelivery"),
     );
+    const backendStart = daemonSource.indexOf("const tryBackendDelivery = async");
+    expect(backendStart).toBeGreaterThan(-1);
+    expect(daemonSource.slice(backendStart, daemonSource.indexOf("\n  };", backendStart))).toContain("if (!delivered) return tryAppServerDelivery();");
   });
 
   test("the Claude-only delivery fallback refuses a different declared agent", () => {

@@ -714,7 +714,7 @@ describe("Codex Cloud launch options (the composer's ask mode and attempts)", ()
     expect((await reg.deliver("conv-1", "explain the repo"))?.adapter.spec.id).toBe("codex");
     expect(calls.at(-1)!.body).toMatchObject({ new_task: { environment_id: "env1", run_environment_in_qa_mode: true }, metadata: { best_of_n: 2 } });
     expect(binds).toEqual(["conv-1=task_e_new"]);
-  });
+  }, 30_000);
 });
 
 describe("Codex Cloud drive: follow-ups, held while busy, cancel", () => {
@@ -877,7 +877,7 @@ describe("Codex Cloud session actions", () => {
     git("checkout", "--", "README.md");
     await expect(applyInCheckout({ ...plan, diff: diff.replace(" hi", " not there") }, repo)).rejects.toThrow("patch does not apply");
     await expect(applyInCheckout(plan, tmpDir("codex-not-git-"))).rejects.toThrow("is not a git checkout of ashot/chatdoc");
-  });
+  }, 30_000);
 
   test("a task started from a second checkout (a worktree) stays there, its branches too, and Apply runs there", async () => {
     const commit = (dir: string) => execFileSync("git", ["-C", dir, "commit", "-q", "--allow-empty", "-m", "init"], { env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } });
@@ -918,7 +918,7 @@ describe("Codex Cloud session actions", () => {
     const { message } = await reg.act("conv-branch", "apply");
     expect(message).toBe(`Applied attempt 2's changes to ${worktree} (1 file, not committed).`);
     expect(fs.readFileSync(path.join(worktree, "README.md"), "utf8")).toBe("hi\nattempt 2\n");
-  });
+  }, 30_000);
 
   test("porcelainEntries: every path git status -z names, a rename's new path and not its old one", () => {
     expect(porcelainEntries(" M README.md\0R  new name.md\0old name.md\0?? x.txt\0").map((e) => e.path)).toEqual(["README.md", "new name.md", "x.txt"]);

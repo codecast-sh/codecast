@@ -30,7 +30,7 @@ import {
 import { personName } from "../sessionOwnership";
 import { computeWorkspaceKey } from "./access";
 import { capsFor, trustOf } from "./orgCaps";
-import { listSessionOwnerIds } from "../sessionOwners";
+import { listSessionOwnerIds, ownerSetOf } from "../sessionOwners";
 
 type Ctx = { db: any };
 
@@ -56,6 +56,8 @@ type State = {
   seq: Map<string, number>;
   writes?: Map<string, OrgWrite>;
   records?: Map<string, any>;
+  /** Each touched session's owner set before this row's first owner write. */
+  owners?: Map<string, string[]>;
 };
 
 export type OrgWrite = { table: string; id: string; before: Record<string, any>; after: Record<string, any> };
@@ -91,16 +93,40 @@ function recordWrite(s: State, table: string, id: string, before: any, after: an
   if (Object.keys(prior.after).length) s.writes.set(id, prior);
 }
 
+// A session's owners live in session_owners rows, not on the conversation, so
+// the conversation's write carries them as `owner_user_ids`: the set before
+// this row's first owner write, and the set when the row is written.
+async function noteOwnersBefore(db: any, s: State, conversationId: any) {
+  if (s.owners && conversationId && !s.owners.has(String(conversationId))) s.owners.set(String(conversationId), await ownerSetOf({ db }, conversationId));
+}
+
+async function recordOwners(db: any, s: State) {
+  for (const [id, before] of s.owners ?? []) {
+    const after = await ownerSetOf({ db }, id as Id<"conversations">);
+    if (canonical(before) === canonical(after)) continue;
+    const prior = s.writes!.get(id) ?? { table: "conversations", id, before: {}, after: {} };
+    prior.before.owner_user_ids = before;
+    prior.after.owner_user_ids = after;
+    s.writes!.set(id, prior);
+  }
+}
+
 function recordingDb(db: any, s: State): any {
   const cache = s.records = new Map<string, any>();
   const tableOf = (id: string) => Object.keys(FIELDS).find((table) => db.normalizeId(table, id));
   return new Proxy(db, { get(target, prop) {
+    if (prop === "delete") return async (...args: any[]) => {
+      const id = args.at(-1);
+      if (target.normalizeId("session_owners", id)) await noteOwnersBefore(target, s, (await target.get(id))?.conversation_id);
+      return target.delete(...args);
+    };
     if (prop === "get") return async (id: string) => {
       const doc = await target.get(id);
       cache.set(id, doc);
       return doc;
     };
     if (prop === "insert") return async (table: string, doc: any) => {
+      if (table === "session_owners") await noteOwnersBefore(target, s, doc.conversation_id);
       const id = await target.insert(table, doc);
       cache.set(id, { ...doc, _id: id });
       recordWrite(s, table, id, null, doc);
@@ -108,6 +134,7 @@ function recordingDb(db: any, s: State): any {
     };
     if (prop === "patch" || prop === "replace") return async (id: string, value: any) => {
       const table = tableOf(id);
+      if (table === "conversations" && "owner_user_id" in value) await noteOwnersBefore(target, s, id);
       const tracked = table && (prop === "replace" || FIELDS[table].some((key) => key in value));
       const before = tracked ? cache.get(id) ?? await target.get(id) : null;
       await target[prop](id, value);
@@ -296,16 +323,19 @@ export async function withOrgChange<T>(ctx: any, userId: Id<"users">, head: OrgC
   if (s.open) return run();
   const db = ctx.db;
   s.writes = new Map();
+  s.owners = new Map();
   ctx.db = recordingDb(db, s);
   s.open = { kind: head.kind, subject: head.subject, before: {}, after: {}, effects: {}, labels: {}, undoes: head.undoes };
   try {
     const result = await run();
+    await recordOwners(db, s);
     // The row lands where its first fact said: the boundary of what changed.
     if (s.open.where) await writeRow(ctx, userId, s.open.where, s.open, fallbackOf(head));
     return result;
   } finally {
     ctx.db = db;
     s.writes = undefined;
+    s.owners = undefined;
     s.records = undefined;
     s.open = undefined;
   }

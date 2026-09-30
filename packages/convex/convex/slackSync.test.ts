@@ -27,6 +27,9 @@ import {
   getSlackUser,
   teammateHandles,
   mirrorFiles,
+  slackFileLinkLines,
+  fileRepairContext,
+  applyFileRepair,
 } from "./slackSync";
 import { markdownToSlack, slackToMarkdown } from "./lib/slackText";
 import { listChannels, sendMessage, toggleReaction, updateChannel } from "./chat";
@@ -662,6 +665,28 @@ describe("direct messages", () => {
     }
     expect(stored).toHaveLength(1);
     expect(auths).toEqual(["Bearer xoxp-owner", "Bearer xoxp-owner"]);
+  });
+  test("an image that came over as a link becomes the image once the owner's token can read files", async () => {
+    const link = "📎 [image.png](https://union-app.slack.com/files/U05J1KXRSHX/F0C5UMXCA1Y/image.png)";
+    expect(slackFileLinkLines(`oh i know him\n\n${link}`)).toEqual([{ line: link, file_id: "F0C5UMXCA1Y" }]);
+    expect(slackFileLinkLines("📎 [x](https://example.com/files/U1/F1/x)")).toEqual([]);
+    const ctx = context(ALICE, withToken(DM_SCOPES.replace(",files:read", "")));
+    await ctx.db.patch(LINK, { kind: "dm", owner_user_id: ALICE });
+    const external = { provider: "slack", direction: "inbound", workspace: WS, channel: SLACK_CH, ts: "8000.000001", synced_at: 8_000 };
+    const msg = await ctx.db.insert("chat_messages", { channel_id: CHANNEL, user_id: BOB, content: `look\n\n${link}`, created_at: 8_000, updated_at: 8_000, external } as any);
+    await ctx.db.insert("chat_messages", { channel_id: CHANNEL, user_id: BOB, content: "no file", created_at: 8_001, updated_at: 8_001, external } as any);
+    // Without files:read there is nothing to repair with.
+    expect(await call(fileRepairContext, ctx, { installation_id: INSTALL, user_id: ALICE })).toBeNull();
+    await ctx.db.patch(TOKEN, { scopes: DM_SCOPES });
+    const c = await call(fileRepairContext, ctx, { installation_id: INSTALL, user_id: ALICE });
+    expect(c.install.bot_token).toBe("xoxp-test");
+    expect(c.rows).toEqual([{ message_id: msg, content: `look\n\n${link}` }]);
+    const att = [{ storage_id: "storage_1", mime: "image/png", name: "image.png" }];
+    // An edit since the scan wins over the repair.
+    expect(await call(applyFileRepair, ctx, { message_id: msg, expected: "stale", content: "look", attachments: att })).toEqual({ status: "changed" });
+    expect(await call(applyFileRepair, ctx, { message_id: msg, expected: `look\n\n${link}`, content: "look", attachments: att })).toEqual({ status: "repaired" });
+    expect(await ctx.db.get(msg)).toMatchObject({ content: "look", attachments: att });
+    expect((await call(fileRepairContext, ctx, { installation_id: INSTALL, user_id: ALICE })).rows).toEqual([]);
   });
   test("a line codecast posted into a DM as the person is not imported twice when Slack hands it back", async () => {
     const ctx = context(ALICE);
