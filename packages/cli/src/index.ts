@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { registerSessionParkingCommands } from "./sessionParkingCommand.js";
+import { registerSyncVerbs } from "./cloud/syncCli.js";
 import { chiefForward, isChiefAnchor } from "./anchorAlias.js";
 import { planProgressLabel } from "./planProgress.js";
 import { registerSessionSendCommand } from "./sessionSendCommand.js";
@@ -73,7 +74,8 @@ import {
   renderFencedPlanRecord,
   renderFencedPlanTasks,
 } from "@codecast/shared/tasks";
-import { describeDates, describeDatesFull, formatDateSmart, relTimeShort, wasEdited } from "@codecast/shared/time";
+import { describeDates, describeDatesFull, formatDateSmart, parseEndDate, parseRelativeDate, relTimeShort, wasEdited } from "@codecast/shared/time";
+import { SESSION_QUERY_OPERATORS } from "@codecast/shared/search";
 import { describeShareSpan, formatDateRange, formatSessionCount, summarizeShareImpact, type PathShareSummary } from "@codecast/shared/team";
 import { cliFetch, cliFetchRead, cliSearchRequest } from "./cliHttp.js";
 import type { OrgTarget } from "./orgTarget.js";
@@ -1007,6 +1009,19 @@ function getLaunchdDaemonPid(): number | null {
   return status?.pid ? probeDaemonPid(status.pid) : null;
 }
 
+/**
+ * A provisioned cloud host runs its daemon as the systemd unit
+ * codecast-daemon.service (browser/provisionLinux.ts, Restart=always). Start,
+ * stop and restart there go through the unit: a daemon started beside it
+ * makes the unit's own copy exit as "already running" and leaves the unit
+ * inactive, so the next `cast hosts update` fails its restart (2026-09-30).
+ */
+const SYSTEMD_DAEMON_UNIT = "/etc/systemd/system/codecast-daemon.service";
+function systemdDaemon(action: "start" | "stop"): boolean {
+  if (process.platform !== "linux" || !fs.existsSync(SYSTEMD_DAEMON_UNIT)) return false;
+  return spawnSync("sudo", ["-n", "systemctl", action, "codecast-daemon.service"], { stdio: "ignore", timeout: 60_000 }).status === 0;
+}
+
 function kickstartManagedDaemon(): boolean {
   const status = getMacLaunchdDaemonStatus();
   if (!status?.configured || !process.getuid) return false;
@@ -1064,6 +1079,7 @@ function startDaemonQuiet(): void {
   if (!daemonSupportedOnPlatform()) return;
   ensureConfigDir();
   if (isDaemonRunning()) return;
+  if (systemdDaemon("start")) return;
 
   if (kickstartManagedDaemon()) {
     return;
@@ -1459,6 +1475,8 @@ function waitForPidExit(pid: number, timeoutMs: number): boolean {
 function stopDaemon(): void {
   let killedAny = false;
   const pidsToWait = new Set<number>();
+  // The unit stops first, or Restart=always brings its daemon back mid-stop.
+  if (systemdDaemon("stop")) killedAny = true;
 
   // If launchd is managing the daemon, bootout the plist first so KeepAlive
   // can't respawn it during the kill window. The plist file stays on disk so
@@ -1578,6 +1596,10 @@ function startDaemon(): void {
   const existingPid = getDaemonPid();
   if (existingPid) {
     console.log(`Daemon is already running (PID: ${existingPid})`);
+    return;
+  }
+  if (systemdDaemon("start")) {
+    console.log("Daemon started (codecast-daemon.service)");
     return;
   }
 
@@ -5770,12 +5792,13 @@ program
     process.exit(report.acceptance.status === "FAIL" ? 1 : 0);
   });
 
-program
+const syncCommand = program
   .command("sync")
-  .description("Manually sync all unsynced conversations (daemon does this automatically)")
+  .description("Sync a cloud session's folder with the laptop (status, pull, push, diff, start, stop, keep); bare, upload unsynced conversations")
   .action(async () => {
     await runSync();
   });
+registerSyncVerbs(syncCommand);
 
 program
   .command("config")
@@ -5786,7 +5809,7 @@ program
     "  cast config excluded_paths     # View specific setting\n" +
     "  cast config excluded_paths \"**/node_modules/**\"  # Set value"
   )
-  .argument("[key]", "Configuration key (auth_token, web_url, user_id, convex_url, team_id, excluded_paths, cloud_mirror_enabled, cloud_mirror_exclude, cloud_mirror_include)")
+  .argument("[key]", "Configuration key (auth_token, web_url, user_id, convex_url, team_id, excluded_paths, cloud_mirror_enabled, cloud_mirror_exclude, cloud_mirror_include, sync_always, sync_never, session_trailer)")
   .argument("[value]", "Value to set for the key")
   .allowUnknownOption()
   .action(async (key, value) => {
@@ -5805,7 +5828,10 @@ program
         if (config.browser_capture) console.log(`  browser_capture: ${config.browser_capture}`);
         console.log(`  cloud_mirror_enabled: ${isCloudMirrorEnabled(config)}`);
         if (config.cloud_mirror_exclude) console.log(`  cloud_mirror_exclude: ${config.cloud_mirror_exclude}`);
+        if (config.sync_always) console.log(`  sync_always: ${config.sync_always}`);
+        if (config.sync_never) console.log(`  sync_never: ${config.sync_never}`);
         if (config.cloud_mirror_include) console.log(`  cloud_mirror_include: ${config.cloud_mirror_include}`);
+        console.log(`  session_trailer: ${config.session_trailer !== false}`);
         if (config.claude_args) console.log(`  claude_args: ${config.claude_args}`);
         if (config.codex_args) console.log(`  codex_args: ${config.codex_args}`);
         if (config.agent_args) {
@@ -5935,10 +5961,10 @@ program
       return;
     }
 
-    const settableKeys = ["auth_token", "web_url", "user_id", "convex_url", "team_id", "excluded_paths", "claude_args", "codex_args", "browser_capture", "cloud_mirror_enabled", "cloud_mirror_exclude", "cloud_mirror_include"] as const;
+    const settableKeys = ["auth_token", "web_url", "user_id", "convex_url", "team_id", "excluded_paths", "claude_args", "codex_args", "browser_capture", "cloud_mirror_enabled", "cloud_mirror_exclude", "cloud_mirror_include", "sync_always", "sync_never", "session_trailer"] as const;
     const sensitiveKeys = ["auth_token"];
     // Keys stored as booleans: the setter takes true/false/1/0 and rejects the rest.
-    const BOOLEAN_CONFIG_KEYS = new Set<string>(["cloud_mirror_enabled"]);
+    const BOOLEAN_CONFIG_KEYS = new Set<string>(["cloud_mirror_enabled", "session_trailer"]);
     type SettableKey = (typeof settableKeys)[number];
 
     if (!settableKeys.includes(key as SettableKey)) {
@@ -6623,39 +6649,6 @@ program
     }
   });
 
-function parseRelativeDate(input: string): number | null {
-  const now = Date.now();
-  const lowered = input.toLowerCase().trim();
-
-  if (lowered === "today") return new Date().setHours(0, 0, 0, 0);
-  if (lowered === "yesterday") return now - 24 * 60 * 60 * 1000;
-
-  const relMatch = lowered.match(/^(\d+)\s*(d|day|days|h|hour|hours|w|week|weeks)(\s*ago)?$/);
-  if (relMatch) {
-    const num = parseInt(relMatch[1]);
-    const unit = relMatch[2][0];
-    const ms = unit === "d" ? num * 24 * 60 * 60 * 1000
-             : unit === "h" ? num * 60 * 60 * 1000
-             : unit === "w" ? num * 7 * 24 * 60 * 60 * 1000 : 0;
-    return now - ms;
-  }
-
-  const parsed = Date.parse(input);
-  return isNaN(parsed) ? null : parsed;
-}
-
-// End bounds parse date-only inputs to the END of that day, so
-// `-s 2026-06-05 -e 2026-06-05` means the whole day instead of an empty
-// window (a bare date otherwise parses to midnight starting the day).
-function parseEndDate(input: string): number | null {
-  const parsed = parseRelativeDate(input);
-  if (parsed === null) return null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(input.trim())) {
-    return parsed + 24 * 60 * 60 * 1000 - 1;
-  }
-  return parsed;
-}
-
 program
   .command("search")
   .description(
@@ -6667,15 +6660,22 @@ program
     "Use -g to search across all teams.\n" +
     "Use -u to search only user messages.\n" +
     "Use --keyword for keyword-only, --semantic for semantic-only.\n\n" +
+    "Operators narrow which sessions the text is searched in; with no text they list the\n" +
+    "matching sessions, newest matching change first. The web /search page reads the same query.\n" +
+    SESSION_QUERY_OPERATORS.map((o) => `  ${o.example.padEnd(22)} ${o.hint}`).join("\n") + "\n" +
+    "--label, --mine, -m, -s and -e are the same as label:, author:me, author:, after: and before:.\n\n" +
     "Time formats: 2024-01-15, yesterday, 7d, 2w, 24h\n\n" +
     "Examples:\n" +
     "  cast search auth                 # team-wide search\n" +
     "  cast search auth --mine          # only my sessions\n" +
     "  cast search auth -m samvit       # specific member\n" +
     "  cast search auth -g -s 7d        # all teams, last 7 days\n" +
-    "  cast search auth --label api     # only sessions I filed under a label"
+    "  cast search auth --label api     # only sessions I filed under a label\n" +
+    "  cast search file:src/auth.ts     # which sessions edited this file\n" +
+    "  cast search commit:3f2a91c       # the session behind a commit\n" +
+    "  cast search \"pr:482 retry after:7d\"  # text inside a pull request's sessions"
   )
-  .argument("<query>", "Search query (min 2 characters)")
+  .argument("<query>", "Search text and operators (min 2 characters)")
   .option("-u, --user-only", "Search only user messages (excludes assistant responses)")
   .option("-g, --global", "Search all sessions (not just current team)")
   .option("--mine", "Show only my sessions")
@@ -8525,18 +8525,46 @@ program
     "                                      #  without it they collapse to a one-line summary)\n" +
     "  cast read 'https://codecast.sh/conversation/<id>#msg-<msgId>'\n" +
     "                                      # Read a window around a linked message\n" +
-    "  cast read '<url-with-#msg>' -c 5    # …with 5 messages of context each side"
+    "  cast read '<url-with-#msg>' -c 5    # …with 5 messages of context each side\n\n" +
+    "Ask instead of paging:\n" +
+    "  cast read jx70ntf --ask \"did we keep the retry cap?\"\n" +
+    "                                      # Answer from that one session, citing its lines;\n" +
+    "                                      #  reads the whole session (a huge one: its end first,\n" +
+    "                                      #  then its start, naming any stretch left unread) and\n" +
+    "                                      #  says when a later message revised the first answer\n" +
+    "  cast read --ask \"what did the user ask for first?\"\n" +
+    "                                      # …about THIS session, past its own compactions"
   )
-  .argument("<conversation-id>", "Conversation ID, or a share URL (a #msg-<id> anchor reads around that message)")
+  .argument("[conversation-id]", "Conversation ID, or a share URL (a #msg-<id> anchor reads around that message); with --ask, omit it or pass `self` for this session")
   .argument("[range]", "Message range (e.g., 12:20, 12:, :20, 15)")
   .option("-f, --full", "Show full tool call and tool result content (the only way to see a StructuredOutput payload)")
   .option("-c, --context <n>", "Messages to show on each side of a #msg-<id> anchor (default 10)")
   .option("-n, --tail <n>", "Read the last n messages (at most 500)")
   .option("--ack", "Also mark the session read: clears its unread dot in the web and mobile inbox")
+  .option("--ask <question>", "Answer a question from this session, with line citations, checking whether later messages changed the answer")
+  .option("--json", "With --ask: machine-readable output")
   .action(async (conversationId, range, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
       console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+
+    if (options.ask !== undefined) {
+      if (range || options.tail !== undefined || options.context !== undefined || options.full || options.ack) {
+        console.error("Error: --ask reads the whole session; it takes no range, -n, -c, --full or --ack");
+        process.exit(1);
+      }
+      const ref = conversationId === undefined || conversationId === "self"
+        ? await resolveConversationFullId(config, undefined)
+        : parseConversationRef(conversationId).conversationId;
+      const result = await cliPost("/cli/read/ask", { conversation_id: ref, question: options.ask }, { timeoutMs: 300_000 });
+      const { formatAskResult } = await import("./formatter.js");
+      console.log(options.json ? JSON.stringify(result, null, 2) : formatAskResult(result));
+      return;
+    }
+    if (conversationId === undefined) {
+      console.error("Error: pass a conversation id (from `cast sessions`), or use --ask to question this session");
       process.exit(1);
     }
 
@@ -11047,7 +11075,10 @@ program
     "git blame with session attribution — a drop-in replacement whose author\n" +
     "column shows the codecast session that wrote each line. Output matches\n" +
     "git blame's default and porcelain formats, so editor integrations that\n" +
-    "shell out to `git blame` can call `cast blame` instead.\n\n" +
+    "shell out to `git blame` can call `cast blame` instead. A commit's\n" +
+    "Codecast-Session trailer, which codecast adds to every commit a Claude\n" +
+    "Code session makes, names its session outright; other commits are\n" +
+    "matched by hash, then subject and time.\n\n" +
     "Examples:\n" +
     "  cast blame src/auth.ts             # line-level blame with sessions\n" +
     "  cast blame src/auth.ts:42          # just line 42\n" +
@@ -13202,7 +13233,8 @@ roleGroup
     const role = await cliPost("/cli/org/scope", { role_id: target.role_id, add: options.add, remove: options.remove, from_session, ...(options.leaveSessions ? { leave_sessions: true } : {}) });
     if (options.json) { console.log(JSON.stringify(role, null, 2)); return; }
     const scope = [...role.scope.project_ids.map((id: string) => `project ${id}`), ...role.scope.plan_ids.map((id: string) => `plan ${id}`)];
-    console.log(`${c.green}✓${c.reset} @${role.handle} ${c.dim}(${role.short_id})${c.reset} scope: ${scope.length ? scope.join(", ") : "whole workspace"}`);
+    const { noScopeWords } = await import("./briefLines.js");
+    console.log(`${c.green}✓${c.reset} @${role.handle} ${c.dim}(${role.short_id})${c.reset} scope: ${scope.length ? scope.join(", ") : noScopeWords(role.handle)}`);
     printTookOver(role, !!options.leaveSessions);
     for (const o of role.overlaps ?? []) {
       console.log(`  ${c.yellow}overlaps @${o.handle}${c.reset} ${c.dim}on ${[...o.project_ids.map((id: string) => `project ${id}`), ...o.plan_ids.map((id: string) => `plan ${id}`)].join(", ")}${c.reset}`);
@@ -13321,7 +13353,7 @@ roleGroup
   .option("--model <model>", "Model for the standing session")
   .option("--agent <agent>", "Agent backend for the standing session (default: claude)")
   .option("-C, --dir <path>", "Project directory the standing session runs in (default: current)")
-  .option("--no-session", "Create the seat only; provision later with cast role provision")
+  .option("--no-session", "Create the role only; start its session later with cast role provision")
   .option("--leave-sessions", "With --project or --plan: the sessions in the scope stay with their owner (the new role otherwise takes over the host's sessions in it)")
   .option("--team <name|id>", "Team workspace (default: the active workspace)")
   .option("--json", "Machine-readable output")
@@ -13393,7 +13425,7 @@ roleGroup
 
 roleGroup
   .command("show")
-  .description("One role: its seat, whether it starts work on its own, today's use against its limits, and its hands")
+  .description("One role: its session, whether it starts work on its own, today's use against its limits, and the sessions under it")
   .argument("<handle>", "@handle, or-N, or id")
   .option("--team <name|id>", "Team workspace")
   .option("--json", "Machine-readable output")
@@ -13407,7 +13439,7 @@ roleGroup
     console.log(`  ${c.dim}${AUTONOMY_LABEL.toLowerCase()}: ${autonomyOn(brief.role.trust) ? "on" : "off"} (${autonomySentence(autonomyOn(brief.role.trust)).replace(/^It /, "it ").replace(/\.$/, "")})${c.reset}`);
     const held = (brief.role.authority ?? []).filter((g: any) => !g.expires_at || g.expires_at > Date.now());
     console.log(`  ${c.dim}authority outside codecast: ${held.length ? held.map((g: any) => `${g.kind} (${g.label}${g.expires_at ? `, until ${formatDateSmart(g.expires_at)}` : ""})`).join("; ") : "none granted"}${c.reset}`);
-    console.log(`  ${c.dim}used today, of its limits: ${u.wakes} of ${u.caps.wakes_per_day} wakes · ${u.hands} of ${u.caps.hands_per_day} hands · ${u.tokens} of ${u.caps.tokens_per_day} tokens${u.uncounted_sessions ? ` · tokens not counted for ${u.uncounted_sessions} session${u.uncounted_sessions === 1 ? "" : "s"}` : ""}${c.reset}`);
+    console.log(`  ${c.dim}used today, of its limits: ${u.wakes} of ${u.caps.wakes_per_day} wakes · ${u.hands} of ${u.caps.hands_per_day} sessions started · ${u.tokens} of ${u.caps.tokens_per_day} tokens${u.uncounted_sessions ? ` · tokens not counted for ${u.uncounted_sessions} session${u.uncounted_sessions === 1 ? "" : "s"}` : ""}${c.reset}`);
     console.log(`  ${c.dim}standing session: ${brief.role.standing_short_id ?? "none"}${routineLine(brief.role.routine)}${c.reset}`);
     const { briefHandLine } = await import("./briefLines.js");
     for (const h of brief.facts.hands) console.log(briefHandLine(h));
@@ -13440,20 +13472,20 @@ for (const verb of ["pause", "resume", "retire", "restart"] as const) {
   roleGroup
     .command(verb)
     .description({
-      pause: "Pause a role: wakes hold, hands stop at a safe point, no new hands",
-      resume: "Resume a paused role; held wakes ship as one frame",
+      pause: "Pause a role: its triggers pause, and the sessions under it stop at a safe point",
+      resume: "Resume a paused role: the triggers its pause paused run again",
       retire: "Retire a role; its area falls back to the role that covers it, else its sessions to their owners",
-      restart: "Restart the standing session; the next frame carries the charter and brief in full",
+      restart: "Restart the role's standing session",
     }[verb])
     .argument("<handle>", "@handle, or-N, or id")
     .option("--team <name|id>", "Team workspace")
-    .option("--standing <keep|retire>", "retire only: keep the standing session running as a plain agent (default for the chief of staff) or retire it with the seat")
+    .option("--standing <keep|retire>", "retire only: keep the standing session running as a plain agent (default for the chief of staff) or retire it with the role")
     .option("--json", "Machine-readable output")
     .action(async (handle: string, options: any) => {
       const role_id = await resolveRoleId(handle, options.team);
       const result = await cliPost(verb === "retire" ? "/cli/org/retire" : `/cli/role/${verb}`, verb === "retire" ? { role_id, standing_session: options.standing, from_session: callingSession() } : { role_id });
       if (options.json) { console.log(JSON.stringify(result, null, 2)); return; }
-      const extra = verb === "pause" && result.interrupted ? ` ${c.dim}(${result.interrupted} hand${result.interrupted === 1 ? "" : "s"} told to stop at a safe point)${c.reset}` : "";
+      const extra = verb === "pause" && result.interrupted ? ` ${c.dim}(${result.interrupted} session${result.interrupted === 1 ? "" : "s"} told to stop at a safe point)${c.reset}` : "";
       console.log(`${c.green}✓${c.reset} ${verb === "restart" ? "restarting" : verb + "d"} @${handle.replace(/^@/, "")}${extra}`);
     });
 }
@@ -13520,7 +13552,7 @@ roleGroup
   .alias("caps")
   .description("Set a role's daily limits, the most it may do in one day (a safety net with defaults filled in)")
   .argument("<handle>", "@handle, or-N, or id")
-  .option("--hands <n>", "Hands it may start in a day", parseInt)
+  .option("--hands <n>", "Sessions it may start in a day", parseInt)
   .option("--wakes <n>", "Wakes it may take in a day", parseInt)
   .option("--tokens <n>", "Tokens it may read and write in a day", parseInt)
   .option("--team <name|id>", "Team workspace")
@@ -13529,7 +13561,7 @@ roleGroup
     const role_id = await resolveRoleId(handle, options.team);
     const result = await cliPost("/cli/role/limits", { role_id, hands: options.hands, wakes: options.wakes, tokens: options.tokens, from_session: callingSession() });
     if (options.json) { console.log(JSON.stringify(result, null, 2)); return; }
-    console.log(`${c.green}✓${c.reset} @${result.handle} limits: ${result.caps.hands_per_day} hands · ${result.caps.wakes_per_day} wakes · ${result.caps.tokens_per_day} tokens a day`);
+    console.log(`${c.green}✓${c.reset} @${result.handle} limits: ${result.caps.hands_per_day} sessions started · ${result.caps.wakes_per_day} wakes · ${result.caps.tokens_per_day} tokens a day`);
   });
 
 // Who reports to a role (org-roles-run-work.md R6): a person who wants the
@@ -13605,7 +13637,7 @@ const briefCmd = program
     const f = brief.facts;
     printRoleLine(brief.role);
     const { briefScopeLine, briefPlanLines } = await import("./briefLines.js");
-    console.log(`  ${c.dim}scope: ${briefScopeLine(f.scope)}${c.reset}`);
+    console.log(`  ${c.dim}scope: ${briefScopeLine(f.scope, brief.role.handle)}${c.reset}`);
     const held = (brief.role.authority ?? []).filter((g: any) => !g.expires_at || g.expires_at > Date.now());
     console.log(`  ${c.dim}authority outside codecast: ${held.length ? held.map((g: any) => `${g.kind} (${g.label}${g.expires_at ? `, until ${formatDateSmart(g.expires_at)}` : ""})`).join("; ") : "none granted"}${c.reset}`);
     console.log(`  ${c.dim}standing session: ${brief.role.standing_short_id ?? "none"}${routineLine(brief.role.routine)}${c.reset}`);
@@ -13616,12 +13648,12 @@ const briefCmd = program
     console.log(`  decisions: ${f.decisions.open} open, ${f.decisions.answered_today} answered today`);
     // What moved since the role last read this (S25): the section its
     // scheduled check acts on.
-    console.log(`  changed since ${formatDateSmart(f.changed_since)}:${f.changed.length ? "" : " nothing in scope"}`);
+    console.log(`  changed since ${formatDateSmart(f.changed_since)}:${f.changed.length ? "" : " nothing"}`);
     for (const ch of f.changed) console.log(`    ${ch.kind} ${ch.short_id ?? ""} ${ch.title} → ${ch.status}`);
     const u = f.usage;
-    console.log(`  today: ${u.wakes}/${u.caps.wakes_per_day} wakes · ${u.hands}/${u.caps.hands_per_day} hands · ${u.tokens}/${u.caps.tokens_per_day} tokens${u.uncounted_sessions ? ` ${c.dim}(tokens not counted for ${u.uncounted_sessions} session${u.uncounted_sessions === 1 ? "" : "s"})${c.reset}` : ""}`);
+    console.log(`  today: ${u.wakes}/${u.caps.wakes_per_day} wakes · ${u.hands}/${u.caps.hands_per_day} sessions started · ${u.tokens}/${u.caps.tokens_per_day} tokens${u.uncounted_sessions ? ` ${c.dim}(tokens not counted for ${u.uncounted_sessions} session${u.uncounted_sessions === 1 ? "" : "s"})${c.reset}` : ""}`);
     if (f.hands.length) {
-      console.log(`  hands:`);
+      console.log(`  sessions under it:`);
       const { briefHandLine } = await import("./briefLines.js");
       for (const h of f.hands) console.log(briefHandLine(h));
     }
@@ -13741,7 +13773,7 @@ org
     console.log(`${c.bold}${role.name}${c.reset} ${c.dim}@${role.handle} · ${role.short_id} · ${role.status}${c.reset}`);
     if (role.charter) console.log(`  ${role.charter}`);
     const { briefScopeLine, briefPlanLines } = await import("./briefLines.js");
-    console.log(`  ${c.dim}scope: ${briefScopeLine(role.scope_names)}${c.reset}`);
+    console.log(`  ${c.dim}scope: ${briefScopeLine(role.scope_names, role.handle)}${c.reset}`);
     console.log(`  ${c.dim}${orgTally(role.counts)}${c.reset}`);
     for (const s of page.sessions) console.log(orgSessionLine(s));
   });
@@ -13787,7 +13819,7 @@ org
   .command("retire")
   .description("Retire a role; its area falls back to the role that covers it, else its sessions to their owners")
   .argument("<role>", "Role short id (or-N), id, or @handle")
-  .option("--standing <keep|retire>", "The standing session: keep it running as a plain agent (default for the chief of staff) or retire it with the seat")
+  .option("--standing <keep|retire>", "The standing session: keep it running as a plain agent (default for the chief of staff) or retire it with the role")
   .option("--team <name|id>", "Team workspace (default: the active workspace)")
   .option("--json", "Machine-readable output")
   .action(async (ref: string, options: any) => {
@@ -13797,6 +13829,33 @@ org
     const result = await cliPost("/cli/org/retire", { role_id: target.role_id, standing_session: options.standing, from_session: callingSession() });
     if (options.json) { console.log(JSON.stringify(result, null, 2)); return; }
     console.log(`${c.green}✓${c.reset} retired ${result.name} ${c.dim}(${result.cleared} session${result.cleared === 1 ? "" : "s"} back under their owners${result.standing_session === "kept" ? "; the standing session keeps running as a plain agent" : result.standing_session === "retired" ? "; the standing session was retired" : ""})${c.reset}`);
+  });
+
+// A reset clears the org (org-staffing.md S27). The workspace is named
+// outright, the server says what would go, and the person confirms.
+org
+  .command("reset")
+  .description("Clear the org: retire every role with its session and triggers, return the sessions under them to their owners, and archive every proposal")
+  .option("--team <name|id>", "Team workspace (default: the active workspace; the confirmation names it)")
+  .option("-y, --yes", "Skip the confirmation")
+  .option("--json", "Machine-readable output")
+  .action(async (options: any) => {
+    const ws = await writeWorkspace(options.team);
+    const body = { ...workspaceArgs(ws), from_session: callingSession() };
+    const preview = await cliPost("/cli/org/reset", { ...body, dry_run: true });
+    const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+    if (!options.yes) {
+      if (!preview.roles.length && !preview.proposals) { console.log(`Nothing to reset in ${workspaceLabel(ws)}: no roles and no proposals.`); return; }
+      console.log(`Resetting the org of ${c.bold}${workspaceLabel(ws)}${c.reset} retires ${plural(preview.roles.length, "role")}, each with its standing session and its triggers, and archives ${plural(preview.proposals, "proposal")}:`);
+      for (const r of preview.roles) console.log(`  ${r.name} ${c.dim}@${r.handle} · ${plural(r.sessions, "session")} under it return${r.sessions === 1 ? "s" : ""} to ${r.sessions === 1 ? "its owner" : "their owners"}${c.reset}`);
+      const iface = readline.createInterface({ input: process.stdin, output: process.stdout });
+      const answer = await new Promise<string>((resolve) => iface.question(`Reset the org of ${workspaceLabel(ws)}? This cannot be undone. [y/N] `, resolve));
+      iface.close();
+      if (!/^y(es)?$/i.test(answer.trim())) { console.log("Aborted"); return; }
+    }
+    const result = await cliPost("/cli/org/reset", body);
+    if (options.json) { console.log(JSON.stringify(result, null, 2)); return; }
+    console.log(`${c.green}✓${c.reset} reset the org of ${workspaceLabel(ws)} ${c.dim}(${plural(result.roles.length, "role")} retired, ${plural(result.sessions_returned, "session")} back with their owners, ${plural(result.triggers_cancelled, "trigger")} cancelled, ${plural(result.proposals_archived, "proposal")} archived)${c.reset}`);
   });
 
 // The scope feed (scopes-and-feed.md F2): what a role owns, merged newest first.
@@ -15596,7 +15655,7 @@ async function resolveChatChannelId(ref: string, teamId?: string): Promise<strin
   return String(match._id);
 }
 
-async function cliPost(urlPath: string, body: Record<string, any>): Promise<any> {
+async function cliPost(urlPath: string, body: Record<string, any>, opts?: { timeoutMs?: number }): Promise<any> {
   try {
     rejectBareDash(body);
   } catch (err) {
@@ -15611,7 +15670,7 @@ async function cliPost(urlPath: string, body: Record<string, any>): Promise<any>
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ api_token: apiToken, ...body }),
-  });
+  }, opts);
   const text = await response.text();
   let result: any;
   try {

@@ -137,6 +137,9 @@ interface SearchResult {
   // content matches can't cover the requested range, so title/summary hits
   // (rows with title_match) are the reliable signal there.
   content_window_days?: number;
+  // Operator walks (file:, repo:, ...) that stopped at a read budget: the rows
+  // are the newest part of the answer, and each line says how to reach more.
+  truncated?: string[];
 }
 
 interface SearchOptions {
@@ -377,6 +380,10 @@ export function formatSearchResults(result: SearchResult, options: SearchOptions
     lines.push(`${c.dim}Content search covers the last ${result.content_window_days} days; older sessions in this window match by title/summary only (marked "title match").${c.reset}`);
     lines.push("");
   }
+  for (const line of result.truncated ?? []) {
+    lines.push(`${c.yellow}Partial:${c.reset}${c.dim} ${line}${c.reset}`);
+  }
+  if (result.truncated?.length) lines.push("");
 
   if (result.total_matches === 0 && result.conversations.length === 0) {
     lines.push("No matches found.");
@@ -387,8 +394,12 @@ export function formatSearchResults(result: SearchResult, options: SearchOptions
 
   const allTitleRows =
     result.conversations.length > 0 && result.conversations.every((cv) => cv.title_match);
+  const sessions = `${result.conversations.length} session${result.conversations.length === 1 ? "" : "s"}`;
   lines.push(result.titles_only || allTitleRows
-    ? `Found ${result.conversations.length} session${result.conversations.length === 1 ? "" : "s"} by title/summary\n`
+    ? `Found ${sessions} by title/summary\n`
+    // An operator-only query (file:, commit:, pr: …) matches sessions, not messages.
+    : result.total_matches === 0
+    ? `Found ${sessions} matching the filters\n`
     : `Found ${result.total_matches} match${result.total_matches === 1 ? "" : "es"} in ${result.conversations.length} conversation${result.conversations.length === 1 ? "" : "s"}\n`);
 
   for (const conv of result.conversations) {
@@ -451,6 +462,61 @@ export function formatSearchResults(result: SearchResult, options: SearchOptions
 interface FormatOptions {
   full?: boolean;
   targetLine?: number;
+}
+
+/** What `cast read <id> --ask` gets back (convex/sessionAsk.ts AskResult). */
+export interface ReadAskResult {
+  conversation: { id: string; short_id: string; title: string; lines: number };
+  question: string;
+  answer: string;
+  /** Negative numbers count back from the end, as `cast read -n` shows them. */
+  cited_lines: number[];
+  scanned_lines: number;
+  scan_complete: boolean;
+  /** An incomplete read skipped every message between msg `after` and msg `before`. */
+  unread?: { after: number; before: number };
+  shown_lines: number;
+  matched_lines: number;
+  model: string;
+  usage: { input_tokens: number; output_tokens: number; cost_usd: number };
+  took_ms: number;
+}
+
+/** 3,4,5,9 → "3:5 9", in the range syntax `cast read` takes. */
+export function lineRanges(lines: number[]): string[] {
+  const sorted = [...new Set(lines)].sort((a, b) => a - b);
+  const out: string[] = [];
+  for (let i = 0; i < sorted.length; i++) {
+    let j = i;
+    while (j + 1 < sorted.length && sorted[j + 1] === sorted[j] + 1) j++;
+    out.push(j > i ? `${sorted[i]}:${sorted[j]}` : String(sorted[i]));
+    i = j;
+  }
+  return out;
+}
+
+/** The answer first, then where to read it, then what it cost. */
+export function formatAskResult(result: ReadAskResult): string {
+  const conv = result.conversation;
+  const header = `── ${conv.title} `;
+  const out = [header + "─".repeat(Math.max(0, 60 - header.length))];
+  out.push(`   ${fmt.id(conv.short_id)} | ${conv.lines}${result.scan_complete ? "" : "+"} lines | ${fmt.muted(result.question)}`, "");
+  out.push(result.answer.trim(), "");
+  // Lines counted from the end open with a tail read reaching back to the earliest one.
+  const fromEnd = result.cited_lines.filter((l) => l < 0);
+  const reads = [
+    ...lineRanges(result.cited_lines.filter((l) => l > 0)).map((r) => `cast read ${conv.short_id} ${r}`),
+    ...(fromEnd.length ? [`cast read ${conv.short_id} -n ${-Math.min(...fromEnd)}`] : []),
+  ];
+  if (reads.length) out.push(`${fmt.label("read:")} ${reads.map((r) => fmt.cmd(r)).join("  ")}`);
+  const k = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+  out.push(fmt.muted([
+    `${result.model.replace(/-\d{8}$/, "")}`,
+    `read ${result.scanned_lines} lines${result.scan_complete ? "" : ` (too long to read whole: msg ${result.unread?.after ?? "?"} to ${result.unread?.before ?? "?"} not read)`}, ${result.matched_lines} matched, showed ${result.shown_lines}`,
+    `${k(result.usage.input_tokens)} in / ${k(result.usage.output_tokens)} out, $${result.usage.cost_usd.toFixed(3)}`,
+    `${(result.took_ms / 1000).toFixed(1)}s`,
+  ].join(" · ")));
+  return out.join("\n");
 }
 
 export function formatReadResult(result: ReadResult, options: FormatOptions = {}): string {
