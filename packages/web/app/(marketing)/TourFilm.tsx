@@ -24,7 +24,7 @@ export const TOUR_CHAPTERS = [
 ];
 const STARTS = TOUR_CHAPTERS.map((_, i) => TOUR_CHAPTERS.slice(0, i).reduce((t, c) => t + c.duration, 0));
 const TOTAL = STARTS[STARTS.length - 1] + TOUR_CHAPTERS[TOUR_CHAPTERS.length - 1].duration;
-const DOTS = ["#2aa198", "#268bd2", "#b58900", "#6c71c4", "#cb4b16", "#859900"];
+export const DOTS = ["#2aa198", "#268bd2", "#b58900", "#6c71c4", "#cb4b16", "#859900"];
 
 type CastPlayerEl = HTMLElement & {
   goTo(i: number): void;
