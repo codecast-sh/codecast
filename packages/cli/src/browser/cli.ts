@@ -56,6 +56,7 @@ import { loadSitePolicy } from "./policy.js";
 import { auditLanding, refuseNavigation, signInLandingNote } from "./siteGuard.js";
 import { registerAuditCommand } from "./auditCommand.js";
 import { runBatch, type BatchContext } from "./batch.js";
+import { printStepResults, readStepPlan } from "../stepBatch.js";
 import { provisionCredentials } from "./credentials.js";
 import { bridgeEndpoint } from "./bridge/host.js";
 import { BROWSER_START_HELP, prepareRealBrowserStart, registerBridgeCommands, targetFlags } from "./bridge/commands.js";
@@ -1244,17 +1245,7 @@ Or one per line from stdin, which keeps long flows readable:
 A step with no ref uses whatever the last \`find\` matched.`,
     )
     .action(async (steps: string[], o: { keepGoing?: boolean; shot?: boolean; tab?: string; capture: boolean }) => {
-      // `-` reads the flow from stdin, the same convention as `cast send -`.
-      let plan = steps;
-      if (steps.length === 1 && steps[0] === "-") {
-        const stdin = await new Promise<string>((resolve) => {
-          let buf = "";
-          process.stdin.setEncoding("utf-8");
-          process.stdin.on("data", (d) => (buf += d));
-          process.stdin.on("end", () => resolve(buf));
-        });
-        plan = stdin.split("\n").map((l) => l.trim()).filter(Boolean);
-      }
+      const plan = await readStepPlan(steps);
       if (!plan.length) die("no steps given", 'try: cast browser do "open example.com" snapshot');
 
       await act(o, async (page, state, conn) => {
@@ -1310,15 +1301,7 @@ A step with no ref uses whatever the last \`find\` matched.`,
         };
 
         const results = await runBatch(ctx, plan, { keepGoing: o.keepGoing });
-        for (const r of results) {
-          if (r.ok) {
-            console.log(`${OK} ${fmt.highlight(r.step)}`);
-            if (r.output) console.log(r.output.split("\n").map((l) => `    ${l}`).join("\n"));
-          } else {
-            console.log(`${BAD} ${fmt.highlight(r.step)}`);
-            console.log(`    ${r.error}`);
-          }
-        }
+        const failed = printStepResults(results, plan.length, started);
 
         for (const shot of ctx.shots) console.log(inlineImageMarker(path.resolve(shot)));
         for (const shot of autoShots) console.log(inlineImageMarker(path.resolve(shot)));
@@ -1335,14 +1318,6 @@ A step with no ref uses whatever the last \`find\` matched.`,
           }
         }
 
-        const failed = results.filter((r) => !r.ok).length;
-        const skipped = plan.length - results.length;
-        console.log(
-          fmt.muted(
-            `\n${results.length - failed}/${plan.length} steps in ${((Date.now() - started) / 1000).toFixed(1)}s` +
-              (skipped ? ` — ${skipped} not attempted after the failure` : ""),
-          ),
-        );
         if (failed) {
           process.exitCode = 1;
           // The batch reports per-step results itself rather than dying, so the

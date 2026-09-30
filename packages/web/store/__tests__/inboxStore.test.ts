@@ -2435,6 +2435,15 @@ describe("computeNewDividerIndex — unread band is (seenUpToAt, enteredAt]", ()
     expect(computeNewDividerIndex(tl(1000, 1500), 2000, 5000)).toBe(-1);
   });
 
+  it("never marks your own message as new, and moves past what it proves you read", () => {
+    // Left at 2000; an agent row at 3000, your own message at 4000 (typed in the
+    // terminal), then an agent reply at 4500. You had read through 4000.
+    const rows = [{ timestamp: 1000 }, { timestamp: 3000 }, { timestamp: 4000, own: true }, { timestamp: 4500 }];
+    const isOwn = (r: { own?: boolean }) => !!r.own;
+    expect(computeNewDividerIndex(rows, 2000, 5000, isOwn)).toBe(3);
+    expect(computeNewDividerIndex(rows.slice(0, 3), 2000, 5000, isOwn)).toBe(-1);
+  });
+
   it("falls back to the open interval when entry time is unknown", () => {
     // Defensive: enteredAt 0 means 'no upper bound' → first unseen wins.
     expect(computeNewDividerIndex(tl(1000, 3000), 2000, 0)).toBe(1);

@@ -6,7 +6,7 @@ import type { Comment } from "../../lib/commentThread";
 
 // What every row on the Threads page shares, assembled ONCE by the page: the
 // clock, presence, the chat roster, the chat roots ready to render, and the
-// cursor's two moves. A per-row reader for any of these would recompute a
+// cursor. A per-row reader for any of these would recompute a
 // full-collection signature per push per row (see useThreadInboxCards). Lives
 // apart from the components so the context object is not a Fast Refresh
 // boundary.
@@ -14,7 +14,7 @@ import type { Comment } from "../../lib/commentThread";
 export type ThreadsPageContextValue = {
   /** The page's shared coarse clock. */
   now: number;
-  /** The reader is actually here: tab active, window focused. Reads follow it. */
+  /** The reader is here: the page on screen (active or a split sibling) in a focused window. Reads follow it. */
   present: boolean;
   /** The active workspace team, if any. */
   teamId?: string;
@@ -26,11 +26,8 @@ export type ThreadsPageContextValue = {
   chatCards: Map<string, ThreadInboxCard>;
   /** Comment threads by the row's root_key, assembled once (useCommentThreadMap). */
   commentThreads: Map<string, Comment[]>;
-  /** Put the cursor on a row without opening it. */
+  /** Put the keyboard cursor on a thread. */
   select: (card: ThreadCardModel) => void;
-  /** The row's click: open it (moving the cursor there), or close it if it is
-   *  the open one. One row is open at a time. */
-  toggle: (card: ThreadCardModel) => void;
 };
 
 export const ThreadsPageCtx = createContext<ThreadsPageContextValue | null>(null);

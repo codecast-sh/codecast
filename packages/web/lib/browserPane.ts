@@ -19,9 +19,15 @@ export type BrowserSource =
   // CDP port (packages/electron/browserPanes.js). A pane the human opened by
   // hand has none, and no agent may claim it.
   | { kind: "url"; url: string; session?: string }
-  | { kind: "watch"; sessionUuid: string };
+  | { kind: "watch"; sessionUuid: string }
+  // A cloud host's whole display (its Xvfb, through noVNC's protocol), by the
+  // host's device id: everything outside the agent's tab.
+  | { kind: "screen"; deviceId: string };
 
-export type BrowserBackendKind = "frame" | "stream" | "native";
+export type BrowserBackendKind = "frame" | "stream" | "native" | "screen";
+
+/** A device id as it may ride a path or a message. */
+const DEVICE_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 export const BROWSER_ROUTE = "/browser";
 
@@ -337,6 +343,9 @@ export function readPaneMessage(
     if (source?.kind === "watch" && typeof source.sessionUuid === "string" && source.sessionUuid) {
       return { type: "codecast:open-pane", source: { kind: "watch", sessionUuid: source.sessionUuid } };
     }
+    if (source?.kind === "screen" && typeof source.deviceId === "string" && DEVICE_ID.test(source.deviceId)) {
+      return { type: "codecast:open-pane", source: { kind: "screen", deviceId: source.deviceId } };
+    }
     // Passed on as sent, not normalized: the host builds the same path the
     // gesture would have built unframed, so a pane already showing it is
     // focused rather than doubled.
@@ -426,6 +435,8 @@ export function parseBrowserRoute(path: string): BrowserSource | null {
   const params = new URLSearchParams(path.split("#")[0].split("?")[1] ?? "");
   const watch = params.get("watch");
   if (watch) return { kind: "watch", sessionUuid: watch };
+  const screen = params.get("screen");
+  if (screen && DEVICE_ID.test(screen)) return { kind: "screen", deviceId: screen };
   const u = params.get("u");
   if (!u) return null;
   const url = normalizeUrl(u);
@@ -445,6 +456,7 @@ export function prefersNativeRoute(path: string): boolean {
 export function browserRoutePath(source: BrowserSource, opts?: { native?: boolean }): string {
   const params = new URLSearchParams();
   if (source.kind === "watch") params.set("watch", source.sessionUuid);
+  else if (source.kind === "screen") params.set("screen", source.deviceId);
   else {
     params.set("u", source.url);
     if (source.session) params.set("s", source.session);
@@ -459,6 +471,7 @@ export function browserPathLabel(path: string): string {
   const source = parseBrowserRoute(path);
   if (!source) return "Browser";
   if (source.kind === "watch") return "Agent tab";
+  if (source.kind === "screen") return "Host screen";
   return browserTitle(source.url) ?? displayHost(source.url);
 }
 
@@ -486,6 +499,7 @@ export type BrowserEnv = {
  */
 export function selectBackend(source: BrowserSource, env: BrowserEnv): BrowserBackendKind {
   if (source.kind === "watch") return "stream";
+  if (source.kind === "screen") return "screen";
   if (env.desktop && env.nativeAvailable && (env.preferNative || env.refused)) return "native";
   return "frame";
 }

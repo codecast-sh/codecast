@@ -13,11 +13,10 @@ import * as fs from "fs";
 import { promisify } from "util";
 import { cloudAgentLaunch, cloudAgentRootId, isCloudAgentId } from "@codecast/shared/contracts";
 import { atomicWriteFile } from "../atomicWrite.js";
-import { githubRepo } from "../cloud/gitOrigin.js";
 import { splitPatches } from "../repoMirror.js";
 import { codecastPath } from "../codecastDir.js";
 import { CloudApiError } from "./http.js";
-import { repoRootFor } from "../gitPlane.js";
+import { git, githubOriginAt, porcelainEntries, repoRootFor } from "../gitPlane.js";
 import { deviceLabel } from "../remote/device.js";
 import { CloudAgentBusyError, CloudAgentSetupError, errorText, logTag, type AnyCloudAgentAdapter, type CloudAgentApplyPlan } from "./types.js";
 import type { CloudAgentWatcher } from "./watcher.js";
@@ -177,19 +176,6 @@ export function setupErrorOf(adapter: AnyCloudAgentAdapter, err: unknown, sessio
   return err instanceof CloudApiError && err.keyRejected ? CloudAgentSetupError.credentialsRejected(adapter, err.message) : null;
 }
 
-/** `git -C dir <args>`, its output trimmed. */
-function gitIn(dir: string): (...args: string[]) => Promise<string> {
-  return async (...args) => (await execFileAsync("git", ["-C", dir, ...args], { timeout: 15_000 })).stdout.trim();
-}
-
-/** The GitHub repository a checkout's origin is (`https://github.com/owner/name`), read locally; null when it has none. */
-export async function githubOriginAt(dir: string): Promise<string | null> {
-  let remote: string;
-  try { remote = await gitIn(dir)("config", "--get", "remote.origin.url"); } catch { return null; }
-  const repo = githubRepo(remote);
-  return repo ? `https://github.com/${repo}` : null;
-}
-
 /**
  * The GitHub repo and pushed branch a checkout is on, or null when it has no
  * GitHub remote. A cloud agent clones the remote, so it starts from the local
@@ -198,17 +184,16 @@ export async function githubOriginAt(dir: string): Promise<string | null> {
  * applies.
  */
 export async function githubRepoAt(dir: string): Promise<{ repoUrl: string; startingRef?: string; notice?: string } | null> {
-  const git = gitIn(dir);
   const repoUrl = await githubOriginAt(dir);
   if (!repoUrl) return null;
   let branch: string | undefined;
-  try { branch = await git("rev-parse", "--abbrev-ref", "HEAD"); } catch {}
+  try { branch = await git(dir, ["rev-parse", "--abbrev-ref", "HEAD"]); } catch {}
   if (!branch || branch === "HEAD") return { repoUrl };
   let onRemote: boolean;
-  try { onRemote = !!(await git("ls-remote", "--heads", "origin", branch)); } catch { return { repoUrl }; }
+  try { onRemote = !!(await git(dir, ["ls-remote", "--heads", "origin", branch])); } catch { return { repoUrl }; }
   if (!onRemote) return { repoUrl, notice: `Started from the repository's default branch: \`${branch}\` is not on GitHub yet. Push it to start the agent from it.` };
   let ahead = 0;
-  try { ahead = parseInt(await git("rev-list", "--count", `origin/${branch}..HEAD`), 10) || 0; } catch {}
+  try { ahead = parseInt(await git(dir, ["rev-list", "--count", `origin/${branch}..HEAD`]), 10) || 0; } catch {}
   return {
     repoUrl,
     startingRef: branch,
@@ -229,7 +214,7 @@ export async function applyInCheckout(plan: CloudAgentApplyPlan, dir: string | n
   const root = await repoRootFor(dir);
   if (!root) throw new Error(`${dir} is not a git checkout of ${plan.repo}`);
   const files = [...splitPatches(plan.diff).keys()];
-  const dirty = files.length ? porcelainPaths((await execFileAsync("git", ["-C", root, "status", "--porcelain", "-z", "--", ...files], { timeout: 15_000 })).stdout) : [];
+  const dirty = files.length ? porcelainEntries(await git(root, ["status", "--porcelain", "-z", "--", ...files])).map((e) => e.path) : [];
   if (dirty.length) {
     throw new Error(`${root} has local changes to ${dirty.length === 1 ? "a file" : `${dirty.length} files`} these changes touch (${dirty.slice(0, 5).join(", ")}): commit or stash them, then apply again`);
   }
@@ -243,20 +228,4 @@ export async function applyInCheckout(plan: CloudAgentApplyPlan, dir: string | n
     const said = (e.stderr ?? "").trim();
     throw new Error(said ? said.split("\n").slice(-6).join("\n") : errorText(err));
   }
-}
-
-/**
- * The paths `git status --porcelain -z` names: "XY path", NUL-separated, and
- * a rename or copy adds its original path as the next entry.
- */
-export function porcelainPaths(out: string): string[] {
-  const entries = out.split("\0");
-  const paths: string[] = [];
-  for (let i = 0; i < entries.length; i++) {
-    const entry = entries[i];
-    if (entry.length < 4) continue;
-    paths.push(entry.slice(3));
-    if (/[RC]/.test(entry.slice(0, 2))) i++;
-  }
-  return paths;
 }

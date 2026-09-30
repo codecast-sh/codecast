@@ -32,6 +32,7 @@
 
 import { execFile } from "./proc.js";
 import { promisify } from "node:util";
+import { githubRepo } from "./cloud/gitOrigin.js";
 import {
   deviceKeyEnv,
   gitEnvFor,
@@ -100,7 +101,8 @@ export function isRendezvousUrl(url: string | undefined): url is string {
   return !url.startsWith("/") && !url.startsWith("file://") && !url.startsWith(".");
 }
 
-async function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Promise<string> {
+/** `git -C cwd <args>`, its output trimmed. Throws git's failure. */
+export async function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Promise<string> {
   const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], {
     encoding: "utf-8",
     timeout: GIT_TIMEOUT_MS,
@@ -110,7 +112,8 @@ async function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Promis
   return stdout.trim();
 }
 
-async function gitTry(cwd: string, args: string[]): Promise<string | undefined> {
+/** `git -C cwd <args>`, or undefined when it failed. */
+export async function gitTry(cwd: string, args: string[]): Promise<string | undefined> {
   try {
     return await git(cwd, args);
   } catch {
@@ -134,6 +137,29 @@ export async function repoRootFor(cwd: string): Promise<string | null> {
   const root = (await gitTry(cwd, ["rev-parse", "--show-toplevel"])) || null;
   repoRootCache.set(cwd, root);
   return root;
+}
+
+/** The GitHub repository a checkout's origin is (`https://github.com/owner/name`), read locally; null when it has none. */
+export async function githubOriginAt(dir: string): Promise<string | null> {
+  const repo = githubRepo(await gitTry(dir, ["config", "--get", "remote.origin.url"]));
+  return repo ? `https://github.com/${repo}` : null;
+}
+
+/**
+ * The entries `git status --porcelain -z` names: "XY path", NUL-separated,
+ * where a rename or copy adds its original path as the next entry (skipped:
+ * each entry is the path as it is now).
+ */
+export function porcelainEntries(out: string): Array<{ status: string; path: string }> {
+  const entries = out.split("\0");
+  const found: Array<{ status: string; path: string }> = [];
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    if (entry.length < 4) continue;
+    found.push({ status: entry.slice(0, 2), path: entry.slice(3) });
+    if (/[RC]/.test(entry.slice(0, 2))) i++;
+  }
+  return found;
 }
 
 /** root -> last successful fetch time (cadence gate). */

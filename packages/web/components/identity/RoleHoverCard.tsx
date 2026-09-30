@@ -51,7 +51,7 @@ export function RoleHoverContent({ role }: { role: RoleRef }) {
           <div className="mt-0.5 flex items-center gap-1.5 text-[10px]">
             <span className="text-sol-violet font-medium">role</span>
             {r.status && r.status !== "active" && <span className="text-sol-yellow">{r.status}</span>}
-            {tenureKind && <span className="text-sol-text-dim">{tenureKind === "program" ? "program seat" : "standing seat"}</span>}
+            {tenureKind && <span className="text-sol-text-dim">{tenureKind === "program" ? "until its work ends" : "ongoing"}</span>}
             {trust && <span className="text-sol-text-dim">· {TRUST_WORD(trust)}</span>}
           </div>
         </div>

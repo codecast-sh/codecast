@@ -50,3 +50,20 @@ describe("parseUnwrappedSessionReport", () => {
     expect(isMachineDeliveredMessage("continue")).toBe(false);
   });
 });
+
+describe("a role notice from before the session envelope", () => {
+  test("a decision notice and a task hand-off are codecast's, not the host's words", () => {
+    for (const body of [
+      "decision sd-316 from a session under you: Step 6 of the approved tool cuts?\nRead it with `cast decide show sd-316`.",
+      'Ashot Petrosian assigned you ct-1204 "Rank call cards by value"',
+    ]) {
+      expect(parseUnwrappedSessionReport(body)).toEqual({ from: "unknown", body, name: "codecast" });
+      expect(isMachineDeliveredMessage(body)).toBe(true);
+    }
+  });
+
+  test("a person talking about decisions or assignments is still a person", () => {
+    expect(isUnwrappedSessionReport("decision time: which of these should we ship?")).toBe(false);
+    expect(isUnwrappedSessionReport("who assigned you that task?")).toBe(false);
+  });
+});

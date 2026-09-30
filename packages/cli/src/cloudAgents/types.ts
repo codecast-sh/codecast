@@ -112,7 +112,7 @@ export interface CloudAgentAdapter<C = unknown, A = unknown, D = unknown> {
 
   // Mirror side.
   listAgents(client: C, cursor?: string): Promise<{ items: CloudAgentListItem<A>[]; nextCursor?: string }>;
-  /** Read the agent and render its transcript. Null skips this pass. */
+  /** Read the agent and render its transcript. Null skips this pass; for a child agent, null says its parent no longer has it, and it is forgotten. */
   mirror(client: C, handle: CloudAgentHandle<D>, known: A | undefined): Promise<CloudAgentMirror | null>;
   /** Stop any live work (streams it follows). */
   stop?(): void;
@@ -139,7 +139,7 @@ export interface CloudAgentAdapter<C = unknown, A = unknown, D = unknown> {
   /** Archive the agent on the provider's site, or bring it back. */
   archive?(client: C, agentId: string, archived: boolean): Promise<void>;
   /** Open a draft pull request from the agent's changes: its link, once the provider made it. */
-  createPullRequest?(client: C, agentId: string): Promise<{ url?: string; branch?: string }>;
+  createPullRequest?(client: C, agentId: string): Promise<{ url?: string }>;
   /**
    * The agent's changes to apply to a local checkout: the repository it works
    * on and its diff. The core applies that diff itself (`git apply`), so what

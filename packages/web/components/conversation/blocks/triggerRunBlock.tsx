@@ -2,8 +2,8 @@
 // scheduled-task frame an inject run arrives in, the prompt header a spawned
 // run opens with, and a role's run with its card, folded to one line.
 import { useState } from "react";
-import { ChevronDown, ChevronRight, Zap } from "lucide-react";
-import { parseScheduledTask, withoutStashedRunNote, type ScheduledTaskFrame, type WaitingSession } from "@codecast/shared/contracts";
+import { ChevronDown, ChevronRight, CornerDownLeft, Zap } from "lucide-react";
+import { WORKER_SETTLE_WORDS, parseScheduledTask, withoutStashedRunNote, type ScheduledTaskFrame, type WaitingSession } from "@codecast/shared/contracts";
 import { ShortcutTooltip } from "../../KeyboardShortcutsHelp";
 import { fmtDuration } from "../../triggerCadence";
 import { CollapsibleBody } from "../../CollapsibleBody";
@@ -31,20 +31,31 @@ function FoldToggle({ label, open, onToggle }: { label: string; open: boolean; o
   );
 }
 
+/** Why a session waits, in the reader's words, by the kind the run names. */
+const WAITING_WORDS: Record<string, string> = {
+  blocked: "is blocked",
+  decision: "asks for a decision",
+  waiting: "is waiting on an answer",
+  awaiting_input: "asked a question",
+  permission_blocked: "waits on a permission",
+  stopped: "has stopped",
+  unresponsive: "is not responding",
+};
+
 /** Why a session waits and for how long, in words: "is blocked for 9m". */
 function waitingWords(w: WaitingSession, firedAt: number): string {
-  const why = w.why === "blocked" ? "is blocked" : `waits on ${w.why.replace(/_/g, " ")}`;
+  const why = WAITING_WORDS[w.why] ?? `is waiting (${w.why.replace(/_/g, " ")})`;
   return w.since > 0 && firedAt > w.since ? `${why} for ${fmtDuration(firedAt - w.since)}` : why;
 }
 
 /** The session a trigger fired for (org-staffing.md S28): which one waits,
  *  why, since when, and the first line of what it pinned. */
-function WaitingSessionLine({ waiting: w, firedAt }: { waiting: WaitingSession; firedAt: number }) {
+function WaitingSessionLine({ waiting: w, firedAt, words, wordsClass = "text-sol-text-muted" }: { waiting: WaitingSession; firedAt: number; words?: string; wordsClass?: string }) {
   return (
     <div className="mx-3 mb-1.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[12px]" data-waiting-session={w.short_id}>
       <EntityIdPill shortId={w.short_id} compact />
       {w.role && <span className="text-sol-text-dim">@{w.role}</span>}
-      <span className="text-sol-text-muted" title={w.since ? formatFullTimestamp(w.since) : undefined}>{waitingWords(w, firedAt)}</span>
+      <span className={wordsClass} title={w.since ? formatFullTimestamp(w.since) : undefined}>{words ?? waitingWords(w, firedAt)}</span>
       {w.state && <span className="basis-full truncate text-sol-text" title={w.state}>{w.state}</span>}
     </div>
   );
@@ -95,6 +106,35 @@ function RoleWakeBlock({ frame, timestamp }: { frame: ScheduledTaskFrame; timest
   );
 }
 
+/** The settle word's tone: delivered reads green, a stall red, anything the
+ *  parent must answer yellow, a plain turn end stays quiet. */
+const WORKER_TONE: Record<string, string> = {
+  done: "text-sol-green",
+  blocked: "text-sol-yellow",
+  permission_blocked: "text-sol-yellow",
+  stopped: "text-sol-red",
+};
+
+/** Spawned workers reporting back to the session they nest under
+ *  (workerSettle.ts): one live row per worker, what it settled on, and the
+ *  line it pinned. The frame's body is the ask to the agent, not shown. */
+function WorkerReportBlock({ frame, timestamp }: { frame: ScheduledTaskFrame; timestamp: number }) {
+  const workers = frame.workers!;
+  return (
+    <div className="mb-3 rounded border-l-2 border-sol-cyan/60 bg-sol-cyan/5 pb-0.5" data-worker-report={workers.length}>
+      <div className="flex items-center gap-2 px-3 pt-2 pb-1.5">
+        <CornerDownLeft className="w-3.5 h-3.5 text-sol-cyan/70 shrink-0" />
+        <span className="text-[11px] font-medium tracking-wide uppercase text-sol-cyan/70 shrink-0">{workers.length === 1 ? "Worker report" : `${workers.length} worker reports`}</span>
+        <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+      </div>
+      {workers.map((w) => (
+        <WaitingSessionLine key={w.short_id} waiting={{ ...w, since: 0 }} firedAt={timestamp}
+          words={WORKER_SETTLE_WORDS[w.why] ?? w.why.replace(/_/g, " ")} wordsClass={WORKER_TONE[w.why] ?? "text-sol-text-muted"} />
+      ))}
+    </div>
+  );
+}
+
 export function ScheduledTaskBlock({ content: rawContent, timestamp }: { content: string; timestamp: number }) {
   const [showPlumbing, setShowPlumbing] = useState(false);
   const [showPrompt, setShowPrompt] = useState(false);
@@ -102,6 +142,7 @@ export function ScheduledTaskBlock({ content: rawContent, timestamp }: { content
   const spawned = parseSpawnedTaskPrompt(content);
   const frame = spawned ? null : parseScheduledTask(content);
   if (frame?.role) return <RoleWakeBlock frame={frame} timestamp={timestamp} />;
+  if (frame?.workers?.length) return <WorkerReportBlock frame={frame} timestamp={timestamp} />;
   const title = spawned?.title || frame?.title || "Trigger Run";
   const prompt = spawned?.prompt ?? (frame?.body || cleanStickyContent(content));
   const prevFailed = !!spawned?.previousRun && /^Failed/i.test(spawned.previousRun.summary);

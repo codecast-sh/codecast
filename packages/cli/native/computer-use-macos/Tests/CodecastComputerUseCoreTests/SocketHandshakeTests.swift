@@ -100,10 +100,10 @@ final class SocketHandshakeTests: XCTestCase {
         let actions = try XCTUnwrap(supports["actions"] as? [String: Any])
         let observation = try XCTUnwrap(supports["observation"] as? [String: Any])
 
-        // No verb an agent can call may focus a window, and drag does not exist.
+        // No verb an agent can call may focus a window.
         XCTAssertEqual(windows["focus"] as? Bool, false)
         XCTAssertEqual(windows["moveResize"] as? Bool, false)
-        XCTAssertEqual(actions["drag"] as? Bool, false)
+        XCTAssertEqual(actions["drag"] as? Bool, true)
         XCTAssertEqual(actions["setValue"] as? Bool, true)
         XCTAssertEqual(observation["ocr"] as? Bool, false)
         XCTAssertEqual(observation["annotatedScreenshot"] as? Bool, false)

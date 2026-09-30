@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { CheckCircle2, FileCode2, GitCommitHorizontal, GitPullRequest } from "lucide-react";
 import { useInboxStore } from "../../../store/inboxStore";
@@ -7,7 +8,7 @@ import { serverCommentId, threadResolved, threadSide } from "../../../lib/prView
 import type { ThreadCardModel } from "../../../lib/threadCards";
 import { codeAnchorOf as anchorOf, rowOf } from "../../../lib/threadRows";
 import { PRLineThread } from "../../pr/PRThread";
-import { useTailPin } from "../cardWindow";
+import { EarlierButton, useReaderFold } from "../readerFold";
 
 // The code kind: one thread of comments on code — a line of a commit's diff,
 // a line of a pull request, or the commit or pull request itself. The row
@@ -75,7 +76,7 @@ export function CodeMeta({ card }: { card: ThreadCardModel }) {
   );
 }
 
-export function CodeExpanded({ card, seen }: { card: ThreadCardModel; present: boolean; seen: boolean; frozenReadAt: number; focusComposer: boolean }) {
+export function CodeExpanded({ card, seen, frozenReadAt }: { card: ThreadCardModel; present: boolean; seen: boolean; frozenReadAt: number; focusComposer: boolean }) {
   const row = rowOf(card);
   const anchor = anchorOf(row);
   const comments = useCodeThreadRows(card);
@@ -91,14 +92,19 @@ export function CodeExpanded({ card, seen }: { card: ThreadCardModel; present: b
     useInboxStore.getState().markThreadRead("code", row.root_key);
   }, [seen, row.root_key, row.last_activity_at, row.last_read_at, row.unread, comments.length]);
 
-  const pinRef = useTailPin(comments.length ? `${comments[comments.length - 1]._id}|${comments.length}` : "");
+  // The first comment is what the thread hangs on and always shows; its
+  // replies fold to what is new. Replies and resolves act on the whole thread.
+  const replies = useMemo(() => comments.slice(1), [comments]);
+  const fold = useReaderFold(replies, (c) => c.created_at, frozenReadAt);
+  const shown = comments.length ? [comments[0], ...fold.visible] : comments;
 
   return (
-    <div ref={pinRef} className="th-card-open th-card-open-comments">
+    <div className="th-card-open th-card-open-comments">
+      <EarlierButton count={fold.hidden} noun="reply" onClick={fold.showAll} />
       <PRLineThread
         repository={anchor.repository}
         threadKey={row.root_key}
-        comments={comments}
+        comments={shown}
         authed={lineComments.authed}
         lineNumber={anchor.lineNumber}
         onReply={(content) =>

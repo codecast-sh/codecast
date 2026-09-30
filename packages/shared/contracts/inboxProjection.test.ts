@@ -628,6 +628,9 @@ describe("placeProjectableRow — the park facts", () => {
     expect(placeProjectableRow(claim(11 * HOUR, { armed_trigger_kind: "standing" }), false, EPOCH).bucket).toBe("dormant");
     expect(placeProjectableRow(claim(11 * HOUR, { loop_state: { status: "armed", wakeup_at: EPOCH + HOUR, event_at: EPOCH - HOUR } }), false, EPOCH).bucket).toBe("dormant");
     expect(placeProjectableRow(claim(11 * HOUR, { open_tasks: [{ id: "t1" }], open_tasks_at: EPOCH - 60_000 }), false, EPOCH).bucket).toBe("dormant");
+    // A worker still producing: its result will wake the parent. Once it stops, the claim is judged again.
+    expect(placeProjectableRow(claim(11 * HOUR, { producing_until: EPOCH + 60_000 }), false, EPOCH).bucket).toBe("dormant");
+    expect(placeProjectableRow(claim(11 * HOUR, { producing_until: EPOCH - 60_000 }), false, EPOCH).bucket).toBe("needs_input");
     // Stale open-task report: the daemon has not vouched recently, so it is no wake.
     expect(placeProjectableRow(claim(11 * HOUR, { open_tasks: [{ id: "t1" }], open_tasks_at: EPOCH - 11 * HOUR }), false, EPOCH).bucket).toBe("needs_input");
     // A verified `waiting` (open work) has its own trust rule and is untouched.

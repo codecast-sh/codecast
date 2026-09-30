@@ -1231,7 +1231,7 @@ export function ActionSubmenu({
     "Select...";
 
   const itemClass = (i: number) =>
-    `w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors ${
+    `w-full flex items-center gap-3 px-4 py-2.5 text-sm ${
       i === highlightIndex
         ? "bg-sol-bg-highlight text-sol-text"
         : "text-sol-text-muted hover:bg-sol-bg-alt/50"
@@ -2263,7 +2263,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       if (actionKey === "session_pin") toast.success(`${session.is_pinned ? "Unpinned" : "Pinned"}${targets.length > 1 ? ` ${targets.length} sessions` : ""}`);
       if (actionKey === "session_favorite") toast.success(session.is_favorite ? "Removed from favorites" : "Added to favorites");
       if (targets.length > 1) useInboxSelection.getState().clear();
-      if (!["session_dormant", "session_done"].includes(actionKey)) closePalette();
+      closePalette();
       return;
     }
   }, [targets, targetType, closePalette, pinDoc, router, navigate, navigateToSession, killWithNotice, openCreateModal]);
@@ -2316,7 +2316,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   );
 
   const groupClass = "px-1.5 [&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-sol-text-dim/70";
-  const itemClass = "flex items-center gap-3 px-2.5 py-2 mx-1 rounded-lg text-sm text-sol-text-muted cursor-pointer transition-colors data-[selected=true]:bg-sol-cyan/10 data-[selected=true]:text-sol-text";
+  const itemClass = "flex items-center gap-3 px-2.5 py-2 mx-1 rounded-lg text-sm text-sol-text-muted cursor-pointer data-[selected=true]:bg-sol-cyan/10 data-[selected=true]:text-sol-text";
   const filterGroup = filterCompletion && filterSuggestions.length > 0 && (
     <CommandPrimitive.Group heading="Filter sessions" className={groupClass}>
       {filterSuggestions.map((s) => (

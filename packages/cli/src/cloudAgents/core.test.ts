@@ -409,6 +409,20 @@ describe("CloudAgentWatcher", () => {
     expect(git).toContainEqual({ agentId: "bc-child" });
   });
 
+  test("a child its parent no longer has is forgotten, not read again every pass", async () => {
+    const root = tmp();
+    const agents: Record<string, FakeAgent> = { "bc-mine": { id: "bc-mine", updatedAt: T0, children: ["bc-child"], replies: ["ok"] } };
+    const { adapter, client } = fakeAdapter(agents);
+    const w = new CloudAgentWatcher(adapter, { rootDir: root, now: NOW, importAll: () => true });
+    await w.poll();
+    await new Promise((r) => setTimeout(r, 20));
+    // The child was never there to mirror (null): its state entry goes, and later passes do not ask again.
+    expect(JSON.parse(fs.readFileSync(path.join(root, "state.json"), "utf8")).agents["bc-child"]).toBeUndefined();
+    client.calls.length = 0;
+    await w.poll();
+    expect(client.calls.some((c) => c.includes("bc-child"))).toBe(false);
+  });
+
   test("a branch the agent no longer names is reported gone, and a restart says so again", async () => {
     const root = tmp();
     const agents: Record<string, FakeAgent> = { "bc-a": { id: "bc-a", updatedAt: T0, branch: "feat/a", replies: ["ok"] } };
