@@ -15,6 +15,7 @@ import { useNowWhen } from "../hooks/useCoarseNow";
 import { formatCountdown, HIBERNATED_COPY } from "@codecast/shared/contracts";
 import { parseLimitResetAt } from "../lib/limitReset";
 import { pendingImageUploads, persistDraftImages, restoreDraftImages, settleDraftImageUpload } from "../lib/draftImages";
+import { cancelDraftWrite, scheduleDraftWrite } from "../lib/pendingDraftWrites";
 import { isResentCopyOfSentMessage } from "../lib/staleDraft";
 import type { SkillItem } from "../lib/conversationProcessor";
 import { KeyCap, ShortcutTooltip } from "./KeyboardShortcutsHelp";
@@ -41,7 +42,7 @@ import { mergeMentionSuggestions, mentionViewTimes } from "../lib/mentionRanking
 import { Maximize2, Minimize2, Split, Archive, ArrowRightLeft } from "lucide-react";
 import type { ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, matchScore, mentionItemMatches } from "../hooks/useMentionQuery";
-import { inFlightPending, isAliveIdleStatus, type LiveAgentStatus } from "../lib/pendingBanner";
+import { inFlightPending, isAliveIdleStatus, pendingRowHoldReason, type LiveAgentStatus } from "../lib/pendingBanner";
 import { expandEntityMentions } from "../lib/mentionExpansion";
 import { identityLine } from "../lib/sessionIdentity";
 import { personifyAllNow } from "../hooks/usePersonifyAll";
@@ -86,6 +87,10 @@ const FIELD_SIZING_STYLE: React.CSSProperties = FIELD_SIZING_SUPPORTED
 
 const MENTION_TRIGGER_RE = /@([\w./\\-]*(?: [\w./\\-]+){0,4} ?)$/;
 const MENTION_QUERY_RE = /^[\w./\\-]*(?: [\w./\\-]+){0,4} ?/;
+// A slash command opens at the start of the text or of any word, so a skill
+// can be named mid-sentence; a "/" inside a word (a path, "and/or") is prose.
+const SLASH_TRIGGER_RE = /(?:^|\s)\/([\w:.-]*)$/;
+const SLASH_QUERY_RE = /^[\w:.-]*/;
 
 
 // deriveRestartStage (the live label for a kill+restart in flight) lives in
@@ -179,7 +184,7 @@ const ForkReplyInput = memo(function ForkReplyInput({ userName, userAvatar, onFo
   );
 });
 
-export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onForkSend, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, permissionModePending, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchMapNode, threadStateNode, composerNode, bareComposer, chatMentionMode, mentionTeamId, composerPlaceholder, workingSinceTs, workingPhrase, escapeOwnedRef }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: AgentStatus; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onForkSend?: (content: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; permissionMode?: string; permissionModePending?: boolean; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string, images?: Array<{ storageId?: string; previewUrl: string; mime: string; uploading: boolean }>) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; branchMapNode?: React.ReactNode; threadStateNode?: React.ReactNode; composerNode?: React.ReactNode; bareComposer?: boolean; chatMentionMode?: boolean; mentionTeamId?: string; composerPlaceholder?: string; workingSinceTs?: number; workingPhrase?: string; escapeOwnedRef?: React.MutableRefObject<boolean> }) {
+export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onForkSend, onSendEscape, onOpenNavigator, onPopulateInput, clearInputRef, permissionMode, permissionModePending, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchMapNode, threadStateNode, composerNode, bareComposer, inline, chatMentionMode, mentionTeamId, composerPlaceholder, workingSinceTs, workingPhrase, escapeOwnedRef }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: AgentStatus; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onForkSend?: (content: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; /** Filled with a function that empties the composer and deletes its draft: text, images and the stored row. */ clearInputRef?: React.MutableRefObject<(() => void) | null>; permissionMode?: string; permissionModePending?: boolean; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string, images?: Array<{ storageId?: string; previewUrl: string; mime: string; uploading: boolean }>) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; branchMapNode?: React.ReactNode; threadStateNode?: React.ReactNode; composerNode?: React.ReactNode; bareComposer?: boolean; /** The full session composer laid out inside another surface (a Threads card): full width, not pinned to the bottom, tighter. */ inline?: boolean; chatMentionMode?: boolean; mentionTeamId?: string; composerPlaceholder?: string; workingSinceTs?: number; workingPhrase?: string; escapeOwnedRef?: React.MutableRefObject<boolean> }) {
   const sacredKey = sessionId || conversationId;
   const sacredKeyRef = useRef(sacredKey);
   const convIdRef = useRef(conversationId);
@@ -376,7 +381,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const acQuery = useMemo(() => {
     if (!acTrigger) return "";
     const rawQuery = message.slice(acTrigger.startPos + 1);
-    return (acTrigger.type === "@" ? (rawQuery.match(MENTION_QUERY_RE)?.[0] ?? "").trim() : rawQuery).toLowerCase();
+    const queryRe = acTrigger.type === "@" ? MENTION_QUERY_RE : SLASH_QUERY_RE;
+    return (rawQuery.match(queryRe)?.[0] ?? "").trim().toLowerCase();
   }, [acTrigger, message]);
 
   // While an @-mention is being typed, also search the server — it reaches
@@ -464,55 +470,51 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
 
   const applyAutocomplete = useCallback((item: AcItem) => {
     if (!acTrigger) return;
+    const before = message.slice(0, acTrigger.startPos);
+    const cursorPos = textareaRef.current?.selectionStart ?? message.length;
+    // A slash command replaces its whole token, so picking one with the
+    // caret mid-word leaves no stray tail behind.
+    const after = acTrigger.type === "/"
+      ? message.slice(acTrigger.startPos + 1).replace(SLASH_QUERY_RE, "").replace(/^ /, "")
+      : message.slice(cursorPos);
+
+    let inserted: string;
     if (acTrigger.type === "/") {
-      const newVal = `/${item.label} `;
-      setMessage(newVal);
-      setTimeout(() => {
-        if (textareaRef.current) {
-          textareaRef.current.selectionStart = textareaRef.current.selectionEnd = newVal.length;
-        }
-      }, 0);
+      inserted = `/${item.label} `;
+    } else if (chatMentionMode && (item.type === "person" || item.type === "role") && item.handle) {
+      // The handle the server resolves, at the @ the user typed. The ref form
+      // (`@[Name id]`) is the session vocabulary; for people in chat it only
+      // notified when the label happened to contain the handle — and the
+      // anchor's label never did, which is how "@[Anchor] hi" woke nothing.
+      // A role is the same shape: `@growth` wakes it, `@[Growth or-3]` is prose.
+      inserted = `@${item.handle} `;
+    } else if (chatMentionMode && item.type === "session" && item.shortId) {
+      // Only the bare 7-char short id resolves to a session in chat.
+      inserted = `@${item.shortId} `;
+    } else if (item.type === "file" || item.type === "skill") {
+      inserted = `@${item.label} `;
     } else {
-      const before = message.slice(0, acTrigger.startPos);
-      const cursorPos = textareaRef.current?.selectionStart ?? message.length;
-      const after = message.slice(cursorPos);
-
-      let inserted: string;
-      if (chatMentionMode && (item.type === "person" || item.type === "role") && item.handle) {
-        // The handle the server resolves, at the @ the user typed. The ref form
-        // (`@[Name id]`) is the session vocabulary; for people in chat it only
-        // notified when the label happened to contain the handle — and the
-        // anchor's label never did, which is how "@[Anchor] hi" woke nothing.
-        // A role is the same shape: `@growth` wakes it, `@[Growth or-3]` is prose.
-        inserted = `@${item.handle} `;
-      } else if (chatMentionMode && item.type === "session" && item.shortId) {
-        // Only the bare 7-char short id resolves to a session in chat.
-        inserted = `@${item.shortId} `;
-      } else if (item.type === "file" || item.type === "skill") {
-        inserted = `@${item.label} `;
-      } else {
-        // A session that wears a character or a role is named as that person:
-        // the reference reads "@[Ember jx7abcd]" and renders as its face and
-        // name (session-characters.md S3). A plain session keeps its title.
-        const persona = item.type === "session" && item.identity
-          ? identityLine(item.identity, item.label, personifyAllNow()).name
-          : null;
-        const refTitle = persona ?? item.label;
-        const truncTitle = refTitle.length > 30 ? refTitle.slice(0, 30) + "..." : refTitle;
-        const id = item.shortId || (item.type === "doc" ? `doc:${item.id}` : "");
-        const ref = id ? `@[${truncTitle} ${id}]` : `@[${truncTitle}]`;
-        inserted = `${ref} `;
-      }
-
-      const newVal = before + inserted + after;
-      setMessage(newVal);
-      const newCursor = before.length + inserted.length;
-      setTimeout(() => {
-        if (textareaRef.current) {
-          textareaRef.current.selectionStart = textareaRef.current.selectionEnd = newCursor;
-        }
-      }, 0);
+      // A session that wears a character or a role is named as that person:
+      // the reference reads "@[Ember jx7abcd]" and renders as its face and
+      // name (session-characters.md S3). A plain session keeps its title.
+      const persona = item.type === "session" && item.identity
+        ? identityLine(item.identity, item.label, personifyAllNow()).name
+        : null;
+      const refTitle = persona ?? item.label;
+      const truncTitle = refTitle.length > 30 ? refTitle.slice(0, 30) + "..." : refTitle;
+      const id = item.shortId || (item.type === "doc" ? `doc:${item.id}` : "");
+      const ref = id ? `@[${truncTitle} ${id}]` : `@[${truncTitle}]`;
+      inserted = `${ref} `;
     }
+
+    const newVal = before + inserted + after;
+    setMessage(newVal);
+    const newCursor = before.length + inserted.length;
+    setTimeout(() => {
+      if (textareaRef.current) {
+        textareaRef.current.selectionStart = textareaRef.current.selectionEnd = newCursor;
+      }
+    }, 0);
     setAcTrigger(null);
     setAcIndex(0);
     textareaRef.current?.focus();
@@ -910,7 +912,12 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       });
   }, [messageStatus?.status, isAgentActive, messageReachedSession, conversationId, convCommand, ghostRestartContext, handleRestartResult]);
 
-  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The draft id with a debounced write in flight (lib/pendingDraftWrites).
+  const draftPendingIdRef = useRef<string | null>(null);
+  const cancelPendingDraft = useCallback(() => {
+    if (draftPendingIdRef.current) cancelDraftWrite(draftPendingIdRef.current);
+    draftPendingIdRef.current = null;
+  }, []);
 
   // The text that counts as the user's draft right now. While an UNEDITED
   // fork-rewrite preview is active (Alt+J/K message selection), the composer
@@ -971,10 +978,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   useWatchEffect(() => {
     const keyChanged = sacredKeyRef.current !== sacredKey;
     if (keyChanged) {
-      if (draftTimerRef.current) {
-        clearTimeout(draftTimerRef.current);
-        draftTimerRef.current = null;
-      }
+      cancelPendingDraft();
       // Untouched seeded text stays out of the sacred cache: sacred entries
       // outrank the store on the flip back and no heal ever looks there, so a
       // stashed seed would pin a since-cleared draft for the page's lifetime.
@@ -1020,7 +1024,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     }
     scheduleStaleRecheck();
     return () => {
-      if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+      cancelPendingDraft();
       if (staleRecheckTimerRef.current) clearTimeout(staleRecheckTimerRef.current);
       saveDraftSnapshot(convIdRef.current);
     };
@@ -1031,17 +1035,13 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     if (savedDraftRef.current !== null) {
       isSelectionEditedRef.current = true;
     }
-    if (val.startsWith("/") && (skills?.length ?? 0) > 0) {
-      const query = val.slice(1);
-      if (!query.includes(" ")) {
-        setAcTrigger({ type: "/", startPos: 0 });
-        setAcIndex(0);
-      } else {
-        setAcTrigger(null);
-      }
+    const cursorPos = textareaRef.current?.selectionStart ?? val.length;
+    const textBefore = val.slice(0, cursorPos);
+    const slashMatch = (skills?.length ?? 0) > 0 ? textBefore.match(SLASH_TRIGGER_RE) : null;
+    if (slashMatch) {
+      setAcTrigger({ type: "/", startPos: cursorPos - slashMatch[1].length - 1 });
+      setAcIndex(0);
     } else {
-      const cursorPos = textareaRef.current?.selectionStart ?? val.length;
-      const textBefore = val.slice(0, cursorPos);
       const atMatch = textBefore.match(MENTION_TRIGGER_RE);
       const startPos = atMatch ? cursorPos - atMatch[0].length : -1;
       const dead = mentionDeadEndRef.current;
@@ -1062,8 +1062,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       }
     }
     if (!sendingRef.current) {
-      if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
-      draftTimerRef.current = setTimeout(() => {
+      cancelPendingDraft();
+      draftPendingIdRef.current = conversationId;
+      scheduleDraftWrite(conversationId, () => {
+        if (draftPendingIdRef.current === conversationId) draftPendingIdRef.current = null;
         if (sendingRef.current) return;
         const existing = useInboxStore.getState().getDraft(conversationId);
         if (!val && !existing?.draft_image_storage_ids?.length) {
@@ -1074,9 +1076,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         } else {
           useInboxStore.getState().setDraft(conversationId, { ...existing, draft_message: val || null });
         }
-      }, 300);
+      });
     }
-  }, [conversationId, skills, queryMentions]);
+  }, [conversationId, skills, queryMentions, cancelPendingDraft]);
 
   const isSelectionActive = !!(selectedMessageContent && selectedMessageUuid);
   const savedDraftRef = useRef<string | null>(null);
@@ -1376,6 +1378,19 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     setLightboxImageIndex(null);
   }, [pastedImages]);
 
+  useWatchEffect(() => {
+    if (!clearInputRef) return;
+    clearInputRef.current = () => {
+      cancelPendingDraft();
+      setMessage("");
+      messageRef.current = "";
+      clearAllImages(true);
+      useInboxStore.getState().clearDraftFinal(convIdRef.current);
+      textareaRef.current?.focus();
+    };
+    return () => { clearInputRef.current = null; };
+  }, [clearInputRef, cancelPendingDraft, setMessage, clearAllImages]);
+
   const uploadImage = useCallback((file: File) => {
     const previewUrl = URL.createObjectURL(file);
     const entry = { file, previewUrl, uploading: true };
@@ -1470,7 +1485,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       }));
       if (!text && gateImages.length === 0) return;
       sendingRef.current = true;
-      if (draftTimerRef.current) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null; }
+      cancelPendingDraft();
       setMessage("");
       messageRef.current = "";
       // In-flight uploads keep their blobs alive in pendingImageUploads; the
@@ -1484,7 +1499,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     if (onWorkflowLaunch) {
       const goal = message.trim();
       sendingRef.current = true;
-      if (draftTimerRef.current) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null; }
+      cancelPendingDraft();
       setMessage("");
       messageRef.current = "";
       useInboxStore.getState().clearDraftFinal(conversationId);
@@ -1517,10 +1532,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     // If a message is selected, fork from it then send the new content
     if (isSelectionActive && selectedMessageUuid && onForkFromMessage) {
       sendingRef.current = true;
-      if (draftTimerRef.current) {
-        clearTimeout(draftTimerRef.current);
-        draftTimerRef.current = null;
-      }
+      cancelPendingDraft();
       isSelectionEditedRef.current = true;
       savedDraftRef.current = null;
       const content = message.trim();
@@ -1581,10 +1593,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       submitRefusedRef.current = true;
       return false;
     }
-    if (draftTimerRef.current) {
-      clearTimeout(draftTimerRef.current);
-      draftTimerRef.current = null;
-    }
+    cancelPendingDraft();
     soundSend();
     setMessage("");
     messageRef.current = "";
@@ -1750,7 +1759,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     const text = attachReviewToMessage(conversationId, raw).trim();
     if (!text) return;
     sendingRef.current = true;
-    if (draftTimerRef.current) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null; }
+    cancelPendingDraft();
     composeRef.current?.clear();
     setMessage("");
     messageRef.current = "";
@@ -1766,7 +1775,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     const raw = composeMode && composeRef.current ? composeRef.current.getMarkdown() : message;
     const text = raw.trim();
     sendingRef.current = true;
-    if (draftTimerRef.current) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null; }
+    cancelPendingDraft();
     composeRef.current?.clear();
     setMessage("");
     messageRef.current = "";
@@ -2081,7 +2090,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
           toast.error(error instanceof Error ? error.message : "Could not save the queued message.");
           return;
         }
-        if (draftTimerRef.current) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null; }
+        cancelPendingDraft();
         setMessage("");
         messageRef.current = "";
         useInboxStore.getState().clearDraftFinal(conversationId);
@@ -2120,6 +2129,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // When the send is carried entirely by attached quotes, tint the button cyan to
   // match the tray so it reads as "this sends the quotes".
   const quotesOnlySend = !hasContent && reviewCount > 0;
+  // The composer's column: the conversation's column, or the host's full
+  // width when it sits inline in another surface.
+  const colWidth = inline ? "w-full" : isExpanded ? "conv-col" : "max-w-md";
+  const colClass = inline ? colWidth : `px-2 sm:px-4 ${colWidth}`;
   const sendBtnClass = bareComposer
     ? `w-6 h-6 rounded-md transition-colors flex items-center justify-center ${
         !canSubmit ? "text-sol-text-dim/30 cursor-not-allowed" : "text-sol-cyan hover:bg-sol-cyan/10"
@@ -2133,12 +2146,12 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       }`;
 
   return (
-    <div ref={composerRootRef} data-sv-composer className={`shrink-0 pointer-events-none sticky bottom-0 ${lightboxImageIndex !== null ? "z-[10002]" : "z-10"}`}>
-      {lightboxImageIndex === null && <ComposerFade />}
-      <div className={`${bareComposer ? "pb-4" : "pb-3"} pointer-events-auto ${lightboxImageIndex === null ? "bg-sol-bg" : ""}`}>
+    <div ref={composerRootRef} data-sv-composer className={`shrink-0 pointer-events-none ${inline ? "" : "sticky bottom-0"} ${lightboxImageIndex !== null ? "z-[10002]" : "z-10"}`}>
+      {lightboxImageIndex === null && !inline && <ComposerFade />}
+      <div className={`${inline ? "" : bareComposer ? "pb-4" : "pb-3"} pointer-events-auto ${lightboxImageIndex === null && !inline ? "bg-sol-bg" : ""}`}>
         <div className="relative">
           {serverDeleted && !isRestarting && (
-            <div className={`mx-auto px-4 mb-2 ${isExpanded ? "conv-col" : "max-w-md"} ${lightboxImageIndex !== null ? "hidden" : ""}`}>
+            <div className={`mx-auto mb-2 ${inline ? "" : "px-4"} ${colWidth} ${lightboxImageIndex !== null ? "hidden" : ""}`}>
               <div className="flex items-center justify-between gap-3 rounded-lg border border-sol-orange/40 bg-sol-orange/10 px-3 py-2">
                 <p className="text-[12px] text-sol-text">
                   This conversation was deleted on the server — you&apos;re viewing a cached copy.
@@ -2161,13 +2174,16 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
               left side carries the live status (or nothing); the right side
               is the send-options "?" and the permission mode dot. */}
           {!bareComposer && (
-            <div data-cc-composer-meta className={`mx-auto px-2 sm:px-4 mb-1 min-h-[18px] flex justify-between items-center ${isExpanded ? "conv-col" : "max-w-md"} ${lightboxImageIndex !== null ? "hidden" : ""}`}>
+            <div data-cc-composer-meta className={`mx-auto mb-1 min-h-[18px] flex justify-between items-center ${colClass} ${lightboxImageIndex !== null ? "hidden" : ""}`}>
               <p className="text-[11px] text-sol-text-dim/70 pl-1">
                 {((isSessionStarting && !agentStatus) || isAgentStarting) && !showStuckBanner ? (
                   <span className="flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-sol-cyan/50 animate-pulse" />
                     Starting session...
                   </span>
+                ) : pendingRowHoldReason(existingPending) ? (
+                  // Held on purpose: the message's bubble says why, and nothing is being processed.
+                  null
                 ) : (pendingMessageId || existingPending) && !showStuckBanner && (isAgentStarting || isAgentDelivering) ? (
                   <span className="flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-sol-cyan/50 animate-pulse" />
@@ -2328,7 +2344,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                           dot for the full name. */}
                       {permissionMode !== "default" && (
                         <span
-                          className={`text-[10px] font-mono transition-all duration-300 ease-out overflow-hidden whitespace-nowrap ${
+                          className={`text-[10px] font-mono transition-[opacity,transform] duration-150 ease-out overflow-hidden whitespace-nowrap ${
                             showModeLabel ? "max-w-[80px] opacity-100 translate-x-0" : "max-w-0 opacity-0 -translate-x-1"
                           } ${
                             permissionMode === "plan" ? "text-sol-blue" :
@@ -2389,7 +2405,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                 ref={acRef}
                 className={chatMentionMode
                   ? "absolute bottom-0 mb-1 z-30"
-                  : `mx-auto px-2 sm:px-4 mb-1 ${isExpanded ? "conv-col" : "max-w-md"}`}
+                  : `mx-auto mb-1 ${colClass}`}
                 style={chatMentionMode ? { left: acCaretLeft, width: CHAT_AC_WIDTH } : undefined}
               >
                 <div role="listbox" aria-label="Suggestions" className="bg-sol-bg border border-sol-border/50 rounded-lg shadow-xl py-1.5 max-h-[320px] overflow-y-auto overflow-x-hidden">
@@ -2431,8 +2447,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
             // positioning context the caret-anchored popup hangs from.
             return <div ref={acAnchorRef} className="relative h-0">{dropdown}</div>;
           })()}
-          <form onSubmit={handleFormSubmit} className={bareComposer ? "w-full" : `mx-auto px-2 sm:px-4 transition-all duration-200 ease-out ${isExpanded ? "conv-col" : "max-w-md"}`}>
-            <div data-composer-field={composeMode ? "" : undefined} className={`flex flex-col ${bareComposer ? "" : "border"} transition-colors duration-150 ${bareComposer ? "px-2.5 py-0.5 rounded-lg bg-sol-text/[0.04] focus-within:bg-sol-text/[0.07]" : `border px-4 py-2 shadow-lg bg-sol-bg-alt ${isExpanded ? "rounded-2xl" : "rounded-full"}`} ${composeMode ? "min-h-[min(40vh,var(--composer-max-h,40vh))] max-h-[var(--composer-max-h,45vh)]" : ""} ${isSelectionActive ? "border-sol-cyan/40 ring-1 ring-sol-cyan/20" : composeMode ? "border-sol-cyan/20" : bareComposer ? "" : "border-sol-border"}`}>
+          <form onSubmit={handleFormSubmit} className={bareComposer ? "w-full" : `mx-auto ${colClass}`}>
+            <div data-composer-field={composeMode ? "" : undefined} className={`flex flex-col ${bareComposer ? "" : "border"} transition-colors duration-150 ${bareComposer ? "px-2.5 py-0.5 rounded-lg bg-sol-text/[0.04] focus-within:bg-sol-text/[0.07]" : inline ? "border px-3 py-1.5 rounded-xl bg-sol-bg-alt" : `border px-4 py-2 shadow-lg bg-sol-bg-alt ${isExpanded ? "rounded-2xl" : "rounded-full"}`} ${composeMode ? "min-h-[min(40vh,var(--composer-max-h,40vh))] max-h-[var(--composer-max-h,45vh)]" : ""} ${isSelectionActive ? "border-sol-cyan/40 ring-1 ring-sol-cyan/20" : composeMode ? "border-sol-cyan/20" : bareComposer ? "" : "border-sol-border"}`}>
               {isSelectionActive && (
                 <div className="flex items-center gap-2 pb-1.5 mb-1.5 border-b border-sol-cyan/20 text-[10px] text-sol-cyan">
                   <span className="font-medium">Rewriting message</span>
@@ -2558,7 +2574,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                           <button
                             type="button"
                             onClick={handleSendAndStash}
-                            className="w-7 h-7 rounded-full transition-all flex items-center justify-center text-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)] hover:text-sol-yellow hover:bg-sol-yellow/10"
+                            className="w-7 h-7 rounded-full transition-colors flex items-center justify-center text-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)] hover:text-sol-yellow hover:bg-sol-yellow/10"
                             aria-label="Send and stash"
                           >
                             <Archive className="w-3.5 h-3.5" />
@@ -2570,7 +2586,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                           <ShortcutTooltip label="Hand off to a teammate" action="msg.handoff" hint="your message goes along as the note" side="top">
                           <button
                             type="button"
-                            className={`w-7 h-7 rounded-full transition-all flex items-center justify-center ${handoffOpen ? "text-sol-violet bg-sol-violet/15" : "text-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)] hover:text-sol-violet hover:bg-sol-violet/10"}`}
+                            className={`w-7 h-7 rounded-full transition-colors flex items-center justify-center ${handoffOpen ? "text-sol-violet bg-sol-violet/15" : "text-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)] hover:text-sol-violet hover:bg-sol-violet/10"}`}
                             aria-label="Hand off to a teammate"
                             onClick={() => openHandoff(!handoffOpen)}
                           >
@@ -2583,7 +2599,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                         <button
                           type="button"
                           onClick={handleForkSend}
-                          className="w-7 h-7 rounded-full transition-all flex items-center justify-center text-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)] hover:text-sol-cyan hover:bg-sol-cyan/10"
+                          className="w-7 h-7 rounded-full transition-colors flex items-center justify-center text-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)] hover:text-sol-cyan hover:bg-sol-cyan/10"
                           title={`Fork and send (${navigator.platform?.includes("Mac") ? "Cmd" : "Ctrl"}+Shift+Enter)`}
                         >
                           <Split className="w-3.5 h-3.5" />
@@ -2645,7 +2661,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                       <button
                         type="button"
                         onClick={toggleCompose}
-                        className="w-7 h-7 mb-0.5 rounded-full transition-all flex items-center justify-center text-sol-text-dim/30 hover:text-sol-text-dim hover:bg-sol-bg/50"
+                        className="w-7 h-7 mb-0.5 rounded-full transition-colors flex items-center justify-center text-sol-text-dim/30 hover:text-sol-text-dim hover:bg-sol-bg/50"
                         title="Expand editor (Cmd+Shift+E)"
                       >
                         <Maximize2 className="w-3 h-3" />
@@ -2656,7 +2672,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                         <button
                           type="button"
                           onClick={handleSendAndStash}
-                          className="w-7 h-7 mb-0.5 rounded-full transition-all flex items-center justify-center text-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)] hover:text-sol-yellow hover:bg-sol-yellow/10"
+                          className="w-7 h-7 mb-0.5 rounded-full transition-colors flex items-center justify-center text-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)] hover:text-sol-yellow hover:bg-sol-yellow/10"
                           aria-label="Send and stash"
                         >
                           <Archive className="w-3.5 h-3.5" />
@@ -2668,7 +2684,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                         <ShortcutTooltip label="Hand off to a teammate" action="msg.handoff" hint="your message goes along as the note" side="top">
                         <button
                           type="button"
-                          className={`w-7 h-7 mb-0.5 rounded-full transition-all flex items-center justify-center ${handoffOpen ? "text-sol-violet bg-sol-violet/15" : "text-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)] hover:text-sol-violet hover:bg-sol-violet/10"}`}
+                          className={`w-7 h-7 mb-0.5 rounded-full transition-colors flex items-center justify-center ${handoffOpen ? "text-sol-violet bg-sol-violet/15" : "text-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)] hover:text-sol-violet hover:bg-sol-violet/10"}`}
                           aria-label="Hand off to a teammate"
                           onClick={() => openHandoff(!handoffOpen)}
                         >
@@ -2681,7 +2697,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                       <button
                         type="button"
                         onClick={handleForkSend}
-                        className="w-7 h-7 mb-0.5 rounded-full transition-all flex items-center justify-center text-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)] hover:text-sol-cyan hover:bg-sol-cyan/10"
+                        className="w-7 h-7 mb-0.5 rounded-full transition-colors flex items-center justify-center text-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)] hover:text-sol-cyan hover:bg-sol-cyan/10"
                         title={`Fork and send (${navigator.platform?.includes("Mac") ? "Cmd" : "Ctrl"}+Shift+Enter)`}
                       >
                         <Split className="w-3.5 h-3.5" />

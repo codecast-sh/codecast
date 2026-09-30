@@ -23,6 +23,10 @@ export const TabParamsCtx = createContext<{
   // (display:none) so their scroll/state survive — a pane uses this to freeze
   // itself on its own route/params instead of following global view state.
   isActive: boolean;
+  /** Whether the pane is on screen. In a split, every pane of the visible tab
+   *  is on screen while only the focused one is active; reads follow this,
+   *  keyboard ownership follows isActive. Absent means the same as isActive. */
+  isVisible?: boolean;
   /** Pane-local routing. When set, `useRouter().push/replace` from inside the
    *  pane call this instead of moving the tab — how a page can be hosted in a
    *  workspace slot (the Files pane) and keep its URL-driven state. */

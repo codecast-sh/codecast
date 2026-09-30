@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { performCatalog, performFileLesson, performInstanceStatus, performListLessons, performMarkSetup, performPublish, performRecordEvidence, performRecordScores, performSetLessonStatus, performUpsertInstance } from "./orgTemplates";
+import { performCatalog, performFileLesson, performInstanceForRole, performInstanceStatus, performListLessons, performMarkSetup, performPublish, performRecordEvidence, performRecordScores, performRelease, performRequestBind, performSetLessonStatus, performUpsertInstance } from "./orgTemplates";
 import { applyOrgChange } from "./orgInit";
 
 // Roles hired from a template (org-hire.md W8): the server side of publish,
@@ -170,5 +170,75 @@ describe("the hire and upgrade changes through the org apply core (org-hire.md H
     const up = await applyOrgChange(humanCtx(db), ME, boundary, { kind: "upgrade", instance: "acme-growth", template: "growth", to: "2.1.0", digest: D2 }, human);
     expect((up as any).note).toContain("bind acme-growth --to 2.1.0");
     expect((await db.get(rows[0]._id)).pending_upgrade).toMatchObject({ to: "2.1.0", digest: D2, accepted_by: ME });
+  });
+});
+
+describe("the host step from the web (org-hire.md H3, H4)", () => {
+  beforeEach(() => { process.env.CODECAST_TEMPLATES_TEAM_ID = CODECAST; });
+  afterEach(() => { delete process.env.CODECAST_TEMPLATES_TEAM_ID; });
+  const storage = { getUrl: async (id: string) => `https://blob.test/${id}` };
+  test("a release answers with its snapshot url once publish uploaded one; the catalog says which releases can be hired", async () => {
+    const db = fixtures();
+    await performPublish(ctx(db), ME, { as_codecast: true, manifest: manifest(), digest: D1, status: "stable" });
+    expect((await performCatalog(ctx(db), MATE, { team_id: ACME }))[0]).toMatchObject({ installable: false, latest_status: "stable" });
+    expect(await performRelease({ db, storage } as any, MATE, { team_id: ACME, template_id: "growth", version: "2.0.0", digest: D1 })).toMatchObject({ storage_url: null, status: "stable", manifest: { id: "growth", version: "2.0.0" } });
+    await performPublish(ctx(db), ME, { as_codecast: true, manifest: manifest(), digest: D1, status: "stable", storage_id: "st-1" as any });
+    expect((await performCatalog(ctx(db), MATE, { team_id: ACME }))[0].installable).toBe(true);
+    expect((await performRelease({ db, storage } as any, MATE, { team_id: ACME, template_id: "growth", version: "2.0.0", digest: D1 })).storage_url).toBe("https://blob.test/st-1");
+    await expect(performRelease({ db, storage } as any, MATE, { team_id: ACME, template_id: "growth", version: "2.0.0", digest: D2 })).rejects.toThrow(/not published/);
+  });
+  test("request bind targets the machine with the checkout, carries secrets sealed only, and the role page reads the step's progress", async () => {
+    const db = fixtures();
+    const now = Date.now();
+    await performPublish(ctx(db), ME, { as_codecast: true, manifest: manifest(), digest: D1, status: "stable", storage_id: "st-1" as any });
+    const row = await performUpsertInstance(ctx(db), ME, { instance_key: "pending:p:acme-growth", instance: "acme-growth", template_id: "growth", version: "2.0.0", digest: D1, project_id: P as any, role_id: "role-1" as any, phase: "awaiting_host", config: { "product.domain": "acme.io" } });
+    // No machine yet: the page says so and the request refuses with the same words.
+    const before = await performInstanceForRole(ctx(db), ME, { role_id: "role-1" as any });
+    expect(before.host_step).toEqual({ state: "idle" });
+    expect(before.bind_host.device).toBeNull();
+    expect(before.bind_host.reason).toMatch(/Start the codecast app/);
+    await expect(performRequestBind(ctx(db), ME, { instance_key: row.instance_key })).rejects.toThrow(/Start the codecast app/);
+    // The role's standing session runs on a laptop that went quiet; another of the host's machines holds the checkout and is online.
+    const old = await db.insert("devices", { user_id: ME, device_id: "dev-old", label: "Old laptop", last_seen: now - 10 * 60_000, local_project_roots: ["/src/acme"], platform: "darwin", provider_key_pubkey: "OLD" });
+    const mbp = await db.insert("devices", { user_id: ME, device_id: "dev-mbp", label: "MacBook", last_seen: now, local_project_roots: ["/src/acme"], platform: "darwin", provider_key_pubkey: "PUB" });
+    await db.insert("conversations", { _id: "conv-1", user_id: ME, project_path: "/src/acme", owner_device_id: "dev-old" } as any);
+    await db.insert("anchors", { _id: "anchor-1", host_user_id: ME, bot_user_id: ME, conversation_id: "conv-1", org_role_id: "role-1" } as any);
+    await db.patch("role-1" as any, { anchor_id: "anchor-1" });
+    const sealed = { provider: "accounts.ads", epk: "e", iv: "i", ct: "c" };
+    await expect(performRequestBind(ctx(db), MATE, { instance_key: row.instance_key, secrets: [{ key: "product.domain", payload: { ...sealed, provider: "product.domain" } }] })).rejects.toThrow(/Not a secret input/);
+    await expect(performRequestBind(ctx(db), MATE, { instance_key: row.instance_key, secrets: [{ key: "accounts.ads", payload: { ...sealed, provider: "other" } }] })).rejects.toThrow(/sealed/);
+    // A teammate presses the button; the command belongs to the host's daemon.
+    const req = await performRequestBind(ctx(db), MATE, { instance_key: row.instance_key, secrets: [{ key: "accounts.ads", payload: sealed }] });
+    expect(req).toMatchObject({ device: { device_id: "dev-mbp", label: "MacBook" }, already_pending: false });
+    const cmd = await db.get(req.command_id);
+    expect(cmd).toMatchObject({ user_id: ME, command: "org_template_bind", target_device_id: "dev-mbp" });
+    expect(JSON.parse(cmd.args)).toEqual({ instance_key: row.instance_key, instance: "acme-growth", dir: "/src/acme", workspace: { kind: "team", id: ACME }, secrets: [{ key: "accounts.ads", payload: sealed }] });
+    const pending = await performInstanceForRole(ctx(db), ME, { role_id: "role-1" as any });
+    expect(pending.host_step).toMatchObject({ state: "pending", device_label: "MacBook" });
+    expect(pending.bind_host).toMatchObject({ dir: "/src/acme", device: { device_id: "dev-mbp", online: true, can_receive_secrets: true, pubkey: "PUB" } });
+    // Pressing again while it runs returns the same command, never a second.
+    expect(await performRequestBind(ctx(db), ME, { instance_key: row.instance_key })).toMatchObject({ command_id: req.command_id, already_pending: true });
+    expect(await db.query("daemon_commands").collect()).toHaveLength(1);
+    // The daemon's failure reaches the page; a retry is a new command.
+    await db.patch(req.command_id, { executed_at: now, error: "Instance is proposal; bind runs once the role and its routines exist" });
+    const failed = (await performInstanceForRole(ctx(db), ME, { role_id: "role-1" as any })).host_step;
+    expect(failed.state).toBe("failed"); expect(failed.error).toMatch(/Instance is proposal/);
+    const retry = await performRequestBind(ctx(db), ME, { instance_key: row.instance_key });
+    expect(retry.already_pending).toBe(false);
+    await db.patch(retry.command_id, { executed_at: now, result: JSON.stringify({ instance: "acme-growth", phase: "ready", bound: [] }) });
+    expect((await performInstanceForRole(ctx(db), ME, { role_id: "role-1" as any })).host_step).toMatchObject({ state: "done", result: { phase: "ready" } });
+    // An explicit machine of the host's is honoured; a stranger's is not.
+    const picked = await performRequestBind(ctx(db), ME, { instance_key: row.instance_key, device_id: "dev-old" });
+    expect(picked.device.device_id).toBe("dev-old");
+    await db.patch(picked.command_id, { executed_at: now, result: "{}" });
+    await expect(performRequestBind(ctx(db), ME, { instance_key: row.instance_key, device_id: "dev-nope" })).rejects.toThrow(/not one of the host's/);
+    // A daemon that predates the transport cannot take a secret; the reason names the machine.
+    await db.patch(mbp, { provider_key_pubkey: undefined });
+    await db.patch(old, { last_seen: now - 60 * 60_000 });
+    await db.patch(await (async () => (await db.query("org_template_instances").collect())[0]._id)(), { bind_request: undefined });
+    await expect(performRequestBind(ctx(db), ME, { instance_key: row.instance_key, secrets: [{ key: "accounts.ads", payload: sealed }] })).rejects.toThrow(/MacBook runs a codecast too old to receive a secret/);
+    // Outside the workspace: nothing.
+    expect(await performInstanceForRole(ctx(db), OUT, { role_id: "role-1" as any })).toBeNull();
+    await expect(performRequestBind(ctx(db), OUT, { instance_key: row.instance_key })).rejects.toThrow(/Instance not found/);
   });
 });

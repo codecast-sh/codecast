@@ -16,6 +16,8 @@
 // empty composer from one holding a draft. Ephemeral UI state (raw set), like
 // the palette toggle.
 import type { DraftImageRow } from "../lib/draftImages";
+import { flushDraftWrite } from "../lib/pendingDraftWrites";
+import { isConvexId } from "../lib/entityLinks";
 
 export type ComposeContext = { projectPath?: string; gitRoot?: string };
 export type ComposeInstance = {
@@ -57,6 +59,26 @@ export function composeDraftContent(
   return text || images.length > 0 ? { text, images } : null;
 }
 
+/** The newest kept compose draft no open composer holds: a local stub
+ *  (never created on the server) flagged _hasDraft with content in it. An
+ *  empty composer reopens onto it, so dismissing never loses what was typed. */
+export function findKeptComposeDraft(state: {
+  sessions: Record<string, any>;
+  drafts: Record<string, any>;
+  pendingSessionCreates: Record<string, unknown>;
+  composes: ComposeInstance[];
+}): string | null {
+  const held = new Set(state.composes.map((c) => c.stubId).filter(Boolean));
+  let best: { id: string; at: number } | null = null;
+  for (const [id, row] of Object.entries(state.sessions)) {
+    if (!row?._hasDraft || isConvexId(id) || held.has(id) || state.pendingSessionCreates[id]) continue;
+    if (!composeDraftContent(state, id)) continue;
+    const at = row.updated_at ?? row.started_at ?? 0;
+    if (!best || at > best.at) best = { id, at };
+  }
+  return best?.id ?? null;
+}
+
 export function createComposeSlice(set: any, get: any): ComposeSliceState {
   const patch = (id: number, fields: Partial<ComposeInstance>) =>
     set({ composes: (get().composes as ComposeInstance[]).map((c) => (c.id === id ? { ...c, ...fields } : c)) });
@@ -65,7 +87,7 @@ export function createComposeSlice(set: any, get: any): ComposeSliceState {
   const displaceModal = (list: ComposeInstance[]): ComposeInstance[] =>
     list.flatMap((c) =>
       c.mode !== "modal" ? [c]
-        : composeDraftContent(get(), c.stubId) ? [{ ...c, mode: "dock" as const, collapsed: true }]
+        : (flushDraftWrite(c.stubId), composeDraftContent(get(), c.stubId)) ? [{ ...c, mode: "dock" as const, collapsed: true }]
         : []);
   return {
     composes: [],

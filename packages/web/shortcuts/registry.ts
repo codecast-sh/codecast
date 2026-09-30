@@ -127,7 +127,6 @@ export type ShortcutAction =
   | 'threads.done'
   | 'threads.reply'
   | 'threads.openIn'
-  | 'threads.collapse'
   | 'threads.markAllRead'
   | 'task.status'
   | 'task.priority'
@@ -401,10 +400,9 @@ export const SHORTCUTS: ShortcutDef[] = [
   // an inbox adds. `e` is Gmail's archive and the list context's rename: the
   // list def wins the match, the page registers no rename, so the dispatch
   // declines and falls through to done. Shift+I is Gmail's mark-read.
-  { key: 'e', action: 'threads.done', when: 'threads', description: 'Done — archive the thread and move on' },
+  { key: 'e', action: 'threads.done', when: 'threads', description: 'Done — archive the thread and move to the next' },
   { key: 'r', action: 'threads.reply', when: 'threads', description: 'Reply — focus the composer' },
   { key: 'o', action: 'threads.openIn', when: 'threads', description: 'Open the task, room or page' },
-  { key: 'escape', action: 'threads.collapse', when: 'threads', description: 'Close the open thread' },
   { key: 'shift+i', action: 'threads.markAllRead', when: 'threads', description: 'Mark every thread in the view read' },
   { key: 's', action: 'task.status', when: 'tasks', description: 'Set status' },
   { key: 'p', action: 'task.priority', when: 'tasks', description: 'Set priority' },

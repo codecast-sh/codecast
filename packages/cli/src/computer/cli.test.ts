@@ -132,6 +132,7 @@ async function run(
   const client = new FakeClient(opts.answers ?? { result: snapshotResult() });
   let clientsCreated = 0;
   let exit: number | null = null;
+  let stdinLeft = opts.stdin ?? "";
   const program = new Command();
   program.exitOverride();
   registerComputerCommand(program, {
@@ -139,7 +140,13 @@ async function run(
       clientsCreated++;
       return client;
     },
-    readStdin: () => opts.stdin ?? "",
+    // A real stream: the body once, then nothing. A reader that answered the
+    // same body every time hid a second read that came back empty.
+    readStdin: () => {
+      const body = stdinLeft;
+      stdinLeft = "";
+      return body;
+    },
     stdinIsTty: () => opts.tty ?? false,
     permissions: opts.permissions,
     exit: ((code: number) => {
@@ -173,28 +180,28 @@ describe("argv becomes exactly one helper request", () => {
       "click", "--app", "pid:4413", "--element-index", "34", "--click-count", "2", "--mouse-button", "right", "--modifiers", "CmdOrCtrl+Shift",
     ]);
     expect(r.method).toBe("click");
-    expect(r.params).toEqual({ app: "pid:4413", elementIndex: 34, clickCount: 2, mouseButton: "right", modifiers: "CmdOrCtrl+Shift" });
+    expect(r.params).toEqual({ app: "pid:4413", elementIndex: 34, clickCount: 2, mouseButton: "right", modifiers: "CmdOrCtrl+Shift", noScreenshot: true });
   });
 
   test("click by coordinate keeps both numbers and no element index", async () => {
     const r = await run(["click", "--app", "Slack", "--x", "120.5", "--y", "44", "--window-index", "1"]);
-    expect(r.params).toEqual({ app: "Slack", windowIndex: 1, x: 120.5, y: 44 });
+    expect(r.params).toEqual({ app: "Slack", windowIndex: 1, x: 120.5, y: 44, noScreenshot: true });
   });
 
   test("scroll, secondary action, keys and set-value each reach their own method", async () => {
     expect((await run(["scroll", "--app", "A", "--direction", "Down", "--element-index", "3", "--pages", "2"])).params).toEqual({
-      app: "A", elementIndex: 3, direction: "down", pages: 2,
+      app: "A", elementIndex: 3, direction: "down", pages: 2, noScreenshot: true,
     });
     expect((await run(["perform-secondary-action", "--app", "A", "--element-index", "3", "--action", "zoom the window"])).params).toEqual({
-      app: "A", elementIndex: 3, action: "zoom the window",
+      app: "A", elementIndex: 3, action: "zoom the window", noScreenshot: true,
     });
-    expect((await run(["press-key", "--app", "A", "--key", "Return"])).params).toEqual({ app: "A", key: "Return" });
-    expect((await run(["hotkey", "--app", "A", "--key", "CmdOrCtrl+A"])).params).toEqual({ app: "A", key: "CmdOrCtrl+A" });
+    expect((await run(["press-key", "--app", "A", "--key", "Return"])).params).toEqual({ app: "A", key: "Return", noScreenshot: true });
+    expect((await run(["hotkey", "--app", "A", "--key", "CmdOrCtrl+A"])).params).toEqual({ app: "A", key: "CmdOrCtrl+A", noScreenshot: true });
     expect((await run(["set-value", "--app", "A", "--element-index", "12", "--value", "hello"])).params).toEqual({
-      app: "A", elementIndex: 12, value: "hello",
+      app: "A", elementIndex: 12, value: "hello", noScreenshot: true,
     });
     expect((await run(["set-value", "--app", "A", "--element-index", "12", "--value", ""])).params).toEqual({
-      app: "A", elementIndex: 12, value: "",
+      app: "A", elementIndex: 12, value: "", noScreenshot: true,
     });
   });
 
@@ -208,12 +215,12 @@ describe("argv becomes exactly one helper request", () => {
 describe("secrets arrive on stdin, never in argv", () => {
   test("--text-stdin reads the payload and strips the heredoc newline", async () => {
     const r = await run(["type-text", "--app", "A", "--text-stdin"], { stdin: "hunter2" });
-    expect(r.params).toEqual({ app: "A", text: "hunter2" });
+    expect(r.params).toEqual({ app: "A", text: "hunter2", noScreenshot: true });
   });
 
   test("--value-stdin accepts an empty payload, because clearing a field is a real action", async () => {
     const r = await run(["set-value", "--app", "A", "--element-index", "2", "--value-stdin"], { stdin: "" });
-    expect(r.params).toEqual({ app: "A", elementIndex: 2, value: "" });
+    expect(r.params).toEqual({ app: "A", elementIndex: 2, value: "", noScreenshot: true });
   });
 
   test("a literal and a stdin flag together is a refusal, not a guess", async () => {
@@ -246,13 +253,13 @@ describe("flags are validated before the helper is spawned", () => {
 
   test("press-key takes one key, and the literal + is one key", async () => {
     await refuses(["press-key", "--app", "A", "--key", "Cmd+A"], "press-key accepts one key only");
-    expect((await run(["press-key", "--app", "A", "--key", "+"])).params).toEqual({ app: "A", key: "+" });
+    expect((await run(["press-key", "--app", "A", "--key", "+"])).params).toEqual({ app: "A", key: "+", noScreenshot: true });
   });
 
   test("hotkey needs a modifier and exactly one key", async () => {
     await refuses(["hotkey", "--app", "A", "--key", "A"], "hotkey requires a modifier and one key");
     await refuses(["hotkey", "--app", "A", "--key", "Cmd+Shift"], "hotkey requires a modifier and one key");
-    expect((await run(["hotkey", "--app", "A", "--key", "Cmd++"])).params).toEqual({ app: "A", key: "Cmd++" });
+    expect((await run(["hotkey", "--app", "A", "--key", "Cmd++"])).params).toEqual({ app: "A", key: "Cmd++", noScreenshot: true });
   });
 
   test("--modifiers takes modifiers only, at most four", async () => {
@@ -314,11 +321,45 @@ describe("human output", () => {
     await run(["set-value", "--app", "com.apple.TextEdit", "--element-index", "12", "--value", "hi"], {
       answers: { result: actionResult({ path: "synthetic", targetWindowId: 812 }) },
     });
+    // A helper too old to send the tree it acted on: say how to look instead.
     expect(stdout()).toContain(
-      "Set value attempted via synthetic, unverified (synthetic input); 61 visible elements in current window. " +
+      "Set value attempted via synthetic, unverified (synthetic input). 61 visible elements in current window. " +
         "Use `cast computer get-app-state --app com.apple.TextEdit --window-id 812` to inspect.",
     );
-    expect(stdout()).toContain("before assuming it worked");
+  });
+
+  test("an action prints what it changed, by depth and body, so shifted indexes are not changes", async () => {
+    const before = 'App=A (pid 1)\nWindow: "W", App: A.\n\n0 window W\n\t1 button Sign\n\t2 text hello\n\nThe focused UI element is 0 window W.';
+    const after =
+      'App=A (pid 1)\nWindow: "W", App: A.\n\n0 window W\n\t1 popover\n\t\t2 cell, Secondary Actions: insert signature\n\t3 button Sign\n\t4 text hello\n\nThe focused UI element is 2 cell, Secondary Actions: insert signature.';
+    const result = actionResult({ path: "accessibility", actionName: "AXPress" });
+    result.snapshot.treeText = after;
+    result.baselineTreeText = before;
+    await run(["click", "--app", "A", "--element-index", "1"], { answers: { result } });
+    const text = stdout();
+    expect(text).toContain("Click attempted via accessibility (AXPress), unverified (accessibility action unasserted).");
+    expect(text).toContain("Changes: 2 added, 0 removed");
+    expect(text).toContain("+   1 popover");
+    expect(text).toContain("+     2 cell, Secondary Actions: insert signature");
+    expect(text).not.toContain("button Sign\n+");
+    expect(text).toContain("The focused UI element is 2 cell");
+  });
+
+  test("an action that changed nothing says so, which is how an ignored press shows", async () => {
+    const result = actionResult({ path: "accessibility", actionName: "AXPress" });
+    result.baselineTreeText = result.snapshot.treeText;
+    await run(["click", "--app", "A", "--element-index", "1"], { answers: { result } });
+    expect(stdout()).toContain("No change in the window's tree.");
+  });
+
+  test("--json reports changes in place of the tree it compared against", async () => {
+    const result = actionResult({ path: "accessibility" });
+    result.baselineTreeText = result.snapshot.treeText.replace("0 window Untitled", "0 window Old");
+    await run(["click", "--app", "A", "--element-index", "1", "--json"], { answers: { result } });
+    const body = JSON.parse(stdout());
+    expect(body.baselineTreeText).toBeUndefined();
+    expect(body.changes.added).toEqual(["0 window Untitled"]);
+    expect(body.changes.removed).toEqual(["0 window Old"]);
   });
 
   test("a read-back verification is the only thing that reads as completed", async () => {
@@ -335,7 +376,8 @@ describe("human output", () => {
         result: actionResult({ path: "accessibility", targetWindowId: 812, verification: { state: "unverified", reason: "window_changed" } }),
       },
     });
-    expect(stdout()).toContain("Use `cast computer get-app-state --app A` to inspect.");
+    expect(stdout()).toContain("The target window is gone");
+    expect(stdout()).toContain("Next: `cast computer get-app-state --app A`.");
     expect(stdout()).not.toContain("--window-id");
   });
 

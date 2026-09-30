@@ -4,12 +4,15 @@ import { api } from "./_generated/api";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { scopedFetch } from "./data";
-import { collectOrgSessions, computeScopeFeed, requireWorkspaceCaller, resolveScope, sessionsInScope, waitingSinceOf, type OrgScan, type ResolvedScope } from "./org";
+import { collectOrgSessions, computeScopeFeed, requireWorkspaceCaller, resolveScope, sessionsInScope, stateOf, waitingSinceOf, type OrgScan, type ResolvedScope } from "./org";
+import { findRoleRoutineInAnyStatus } from "./lib/orgRoutine";
+import { parseStandingSection } from "@codecast/shared/contracts/briefStanding";
+import { areaSignalsOf, areaStatusLine, areaStatusOf, newestStandingFirst, type AreaGoal, type AreaInput, type AreaStandingLine, type AreaWaitingSession, type RoleArea } from "@codecast/shared/contracts/orgAreas";
 import { planProjectsOf } from "./orgRoles";
 import { capsFor, countersFor, utcDay } from "./lib/orgCaps";
 import { scopeIds } from "./lib/orgScope";
 import { ownsWork, projectsWithoutAnOwnerAmongWatchers } from "@codecast/shared/contracts/orgLead";
-import { capacity, capacityFlags, type HealthFlag, isOverloaded, overloadRatio, type RoleLedger, type RoleLoad } from "@codecast/shared/contracts/orgCapacity";
+import { capacity, capacityFlags, type HealthFlag, isOverloaded, overloadDetails, overloadRatio, type RoleLedger, type RoleLoad } from "@codecast/shared/contracts/orgCapacity";
 import { computeReportingPeople } from "./orgGoals";
 import { extractRepoFromRemoteUrl } from "@codecast/shared/contracts";
 import { activityPlanOf, computeStale, type ActivityCommit, type ActivitySession } from "./lib/orgActivity";
@@ -43,6 +46,12 @@ export const HEALTH_CAPS = {
   inbox_per_person: 200,
   history_per_role: 1,
 } as const;
+
+/** How much of an area one row carries: the oldest waiting sessions, the
+ *  newest standing lines, the first projects. The rest is on the role's page. */
+export const AREA_WAITING_MAX = 8;
+export const AREA_STANDING_MAX = 6;
+export const AREA_GOALS_MAX = 6;
 
 export type RoleActivity = {
   last_scope_event_at: number | null;
@@ -594,6 +603,73 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
     };
     const history: any[] = await ctx.db.query("org_role_history").withIndex("by_role", (q: any) => q.eq("role_id", role._id)).order("desc").take(HEALTH_CAPS.history_per_role);
     const lastMoveAt: number | null = history[0]?.created_at ?? null;
+    const programEnded = programEndedOf(role, now, planById, projectById);
+
+    // ── The area as a person reads it (org-staffing.md S29) ─────────────
+    // One status word, the role's own latest line, the sessions waiting under
+    // it, its goals, and its check, derived from the counts above by the
+    // shared reading (orgAreas), so the panel, the CLI, the Chief of Staff's
+    // review and the area watch all say the same thing about an area.
+    const standingConvId = standingConvOfRole.get(rid) ?? null;
+    const standingEntry = standingConvId ? scan.sessions.get(standingConvId) : undefined;
+    const standingRaw: any = standingEntry?.raw ?? (standingConvId ? await ctx.db.get(standingConvId) : null);
+    const standingState = standingRaw ? stateOf(standingRaw) : null;
+    // The role raised something for a person (S28): it declared itself
+    // blocked, or its process stopped on a prompt. A standing session that
+    // merely finished its turn is not waiting on anyone; a decision it posted
+    // reaches the person through the decision queue, which the panel reads.
+    const standingWaits = !!standingRaw && (standingState?.state_status === "blocked" || standingRaw.agent_status === "permission_blocked");
+    const waiting: AreaWaitingSession[] = hands.flatMap((h) => {
+      const raw = scan.sessions.get(String(h._id))?.raw;
+      const since = raw ? waitingSinceOf(h.state, raw) : null;
+      if (!raw || since === null) return [];
+      const pin = stateOf(raw);
+      return [{ id: String(h._id), short_id: raw.short_id ?? String(h._id).slice(0, 7), title: String(raw.title ?? "").slice(0, 80), why: pin.state_status === "blocked" ? "blocked" : "waiting", since, state: pin.state_line }];
+    }).sort((x, y) => x.since - y.since || x.short_id.localeCompare(y.short_id)).slice(0, AREA_WAITING_MAX);
+    const standingLines: AreaStandingLine[] = newestStandingFirst(parseStandingSection(briefDoc?.content ?? "")).slice(0, AREA_STANDING_MAX).map(({ project, text, written_on, written_at }) => ({ project, text, written_on, written_at }));
+    const goals: AreaGoal[] = Array.from(items.projectIds).slice(0, AREA_GOALS_MAX).flatMap((pid) => {
+      const p = projectById.get(pid);
+      if (!p) return [];
+      const mine = items.tasks.filter((t) => String(t.project_id ?? "") === pid);
+      return [{
+        project: { id: pid, title: p.title, short_id: p.short_id ?? null },
+        goal: String(p.goal ?? "").trim() || null,
+        open: mine.filter(isOpen).length,
+        in_progress: mine.filter((t) => t.status === "in_progress" || t.status === "in_review").length,
+        done_7d: mine.filter((t) => t.status === "done" && (t.updated_at ?? 0) >= cut7).length,
+      }];
+    });
+    const routine: any = standingRaw ? await findRoleRoutineInAnyStatus(ctx, role, standingRaw) : null;
+    const areaInput: AreaInput = {
+      role_status: role.status,
+      has_standing: !!standingRaw,
+      standing_waits_on_person: standingWaits,
+      standing_state_line: standingState?.state_line ?? null,
+      waiting_unanswered: unseenWaits,
+      waiting_total: waiting.length,
+      review_stalls: stalls,
+      blocked_sessions: stuckHands,
+      overloaded: isOverloaded(load),
+      overloaded_by: overloadDetails(load).map(([, , phrase]) => phrase),
+      idle_days: activity.idle_days,
+      age_days: activity.age_days,
+      idle: activity.idle,
+      program_ended: programEnded,
+    };
+    const areaStatus = areaStatusOf(areaInput);
+    const area: RoleArea = {
+      status: areaStatus,
+      status_line: areaStatusLine(areaInput, areaStatus),
+      signals: areaSignalsOf(areaInput),
+      standing: standingLines[0] ?? null,
+      standing_lines: standingLines,
+      waiting,
+      goals,
+      checked_at: role.checked_at ?? null,
+      check: routine ? { trigger_id: String(routine._id), short_id: routine.short_id ?? null, title: routine.title, status: routine.status, run_at: routine.run_at ?? null, last_run_at: routine.last_run_at ?? null, last_run_summary: routine.last_run_summary ?? null, interval_ms: routine.interval_ms ?? null } : null,
+      standing_conversation_id: standingConvId,
+      standing_short_id: standingRaw?.short_id ?? null,
+    };
     const flags: HealthFlag[] = capacityFlags({
       kind: "role",
       handle: role.handle,
@@ -607,7 +683,7 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
       age_days: activity.age_days,
       has_charter: !!(role.charter_doc_id || (role.charter ?? "").trim()),
       breaches: role.overload_streak ?? 0,
-      program_ended: programEndedOf(role, now, planById, projectById),
+      program_ended: programEnded,
     });
     roleRows.push({
       role_id: role._id,
@@ -634,6 +710,8 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
       last_move_at: lastMoveAt,
       idle_days: activity.idle_days,
       flags,
+      /** The area as a person reads it (S29). */
+      area,
     });
   }
 

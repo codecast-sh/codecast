@@ -12,7 +12,7 @@ import * as fs from "node:fs";
 import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
-import { acquireStartLock, probeLiveness, readState, strayPids, writeState, type InstanceState, chromeLaunchArgs} from "./instance.js";
+import { acquireStartLock, probeLiveness, readState, strayPids, writeState, type InstanceState, chromeLaunchArgs, chromeLogTail} from "./instance.js";
 import { authorizesTeardown } from "@codecast/shared/contracts";
 import { browserHome } from "./profile.js";
 
@@ -291,5 +291,19 @@ describe("strayPids", () => {
     // `waitForStraysGone` never reaches zero. macOS hides it (its `sh` execs a
     // lone simple command and is gone); Debian's `sh` stays (ct-49945).
     expect(strayPids(path.join(os.tmpdir(), "codecast-chrome-nobody-here"))).toEqual([]);
+  });
+});
+
+describe("chromeLogTail", () => {
+  test("quotes what Chrome said, without the dbus and font noise of every Linux launch", () => {
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cast-chrome-log-")), "x.log");
+    fs.writeFileSync(file, [
+      "[1:1:ERROR:dbus/object_proxy.cc] Failed to call method: org.freedesktop.DBus",
+      "Fontconfig error: cannot load default config file",
+      "[1:1:ERROR:ozone_platform_x11.cc] Missing X server or $DISPLAY",
+      "",
+    ].join("\n"));
+    expect(chromeLogTail(file)).toBe("  [1:1:ERROR:ozone_platform_x11.cc] Missing X server or $DISPLAY");
+    expect(chromeLogTail(`${file}.missing`)).toBe("");
   });
 });

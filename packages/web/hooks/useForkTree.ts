@@ -421,6 +421,11 @@ export function attemptsHeading(branches: ReadonlyArray<{ agent_type?: string | 
   return isAttemptFamily(branches) ? `${branches.length + 1} attempts` : null;
 }
 
+/** A fork family's heading everywhere it is named: its attempts, else `count` branches (by default, the branches given). */
+export function familyHeading(branches: ReadonlyArray<{ agent_type?: string | null; session_id?: string | null }>, count = branches.length): string {
+  return attemptsHeading(branches) ?? `${count} branch${count === 1 ? "" : "es"}`;
+}
+
 // Unread mirror of BranchSelector.unreadOf: baseline is your seen count or the
 // inherited history, so never-opened branches read fully unread.
 export function branchUnread(

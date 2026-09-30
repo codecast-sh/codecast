@@ -177,7 +177,11 @@ export function inFlightPending<T extends { status: string }>(pending: T | null 
 
 /** Why the daemon is holding this message back, when it said (retryMessage holdReason): a key to add, a dialog to answer. */
 export function pendingMessageHoldReason(messageId: string, pending?: PendingLookup | null): string | undefined {
-  const row = serverPendingRowFor(messageId, pending);
+  return pendingRowHoldReason(serverPendingRowFor(messageId, pending));
+}
+
+/** A pending row's hold reason: set while the daemon holds it back on purpose, rather than working on it. */
+export function pendingRowHoldReason(row: { status?: string; hold_reason?: string | null } | null | undefined): string | undefined {
   return row?.status === "pending" && row.hold_reason ? row.hold_reason : undefined;
 }
 

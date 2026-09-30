@@ -19,6 +19,12 @@ export type HireDraft = {
 
 export type HireSpec = { title: string; summary_md: string; mode: "request"; changes: OrgChange[]; asks: { title: string; why: string; effect: string; seqs: number[] }[] };
 
+/** The template that leads a project by default: the Engineering Lead. The
+ *  other templates are hires under a project's lead once it has one
+ *  (org-hire.md H3, the lead rule; product decision of 2026-09-30). */
+export const DEFAULT_LEAD_TEMPLATE_ID = "eng-lead";
+export const isDefaultLeadTemplate = (templateId: string) => templateId === DEFAULT_LEAD_TEMPLATE_ID;
+
 export const SLUG_RE = /^[a-z][a-z0-9-]{0,47}$/;
 export const slugOf = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").replace(/^[^a-z]+/, "").slice(0, 48);
 

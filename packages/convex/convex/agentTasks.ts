@@ -17,8 +17,8 @@ import { restoreToInbox } from "./inboxFilters";
 import { configuredCloudWakeHosts, getCloudWakeHostForConversation } from "./cloudWake";
 import { enqueuePendingMessage, reachableRole } from "./pendingMessages";
 import { triggerFiringSource, normalizeThreadState, runOwnerWakeOf, runParentOf, runResultThreadOf, triggerLifecycleInstructions, formatScheduledTask, STASHED_RUN_NOTE, type RoleCard, type RunOutcome, type WaitingSession } from "@codecast/shared/contracts";
-import { SESSION_NEEDS_INPUT_EVENT } from "@codecast/shared/contracts";
-import { findRoleNeedsInputTrigger, ROLE_NEEDS_INPUT_PROMPT, ROLE_NEEDS_INPUT_TITLE } from "./lib/orgRoutine";
+import type { AreaChange } from "@codecast/shared/contracts/orgAreas";
+import { findRoleEventTrigger, ROLE_NEEDS_INPUT_SPEC, roleEventSpecsFor, type RoleEventSpec } from "./lib/orgRoutine";
 import { earliestUsageResetAt, listOnlineDevices } from "./ccAccountsShared";
 import { performSetThreadState } from "./conversations";
 
@@ -850,7 +850,7 @@ async function roleCardOf(ctx: TaskCtx, roleId: Id<"org_roles"> | undefined): Pr
   };
 }
 
-export async function triggerFrameFor(ctx: TaskCtx, task: Doc<"agent_tasks">, conversation: Doc<"conversations"> | null, waiting?: WaitingSession): Promise<string> {
+export async function triggerFrameFor(ctx: TaskCtx, task: Doc<"agent_tasks">, conversation: Doc<"conversations"> | null, waiting?: WaitingSession, change?: AreaChange): Promise<string> {
   const stashed = !!conversation && !conversation.inbox_killed_at && !!conversation.inbox_stashed_at;
   const body = [task.prompt, triggerLifecycleInstructions(task)].filter(Boolean).join("\n\n") + (stashed ? STASHED_RUN_NOTE : "");
   return formatScheduledTask({
@@ -860,6 +860,7 @@ export async function triggerFrameFor(ctx: TaskCtx, task: Doc<"agent_tasks">, co
     event: task.event_filter?.event_type,
     role: await roleCardOf(ctx, task.role_id),
     waiting: waiting ?? null,
+    ...(change ? { change } : {}),
     body,
   });
 }
@@ -875,10 +876,10 @@ export async function triggerFrameFor(ctx: TaskCtx, task: Doc<"agent_tasks">, co
  *  when nothing can: no standing session, the org off, or the person paused
  *  or cancelled the trigger. A seat from before the trigger existed is armed
  *  here, on its first event. */
-async function roleHearing(ctx: TaskCtx, roleId: Id<"org_roles">): Promise<{ standing: Doc<"conversations">; task: Doc<"agent_tasks"> } | null> {
+async function roleHearing(ctx: TaskCtx, roleId: Id<"org_roles">, spec: RoleEventSpec = ROLE_NEEDS_INPUT_SPEC): Promise<{ standing: Doc<"conversations">; task: Doc<"agent_tasks"> } | null> {
   const reached = await reachableRole(ctx, roleId);
   if (!reached) return null;
-  const task = await ctx.db.get((await ensureRoleNeedsInputTrigger(ctx, reached.role, reached.standing)).id);
+  const task = await ctx.db.get((await ensureRoleEventTrigger(ctx, reached.role, reached.standing, spec)).id);
   return task && task.status === "scheduled" ? { standing: reached.standing, task } : null;
 }
 
@@ -903,12 +904,25 @@ export async function fireRoleNeedsInput(
   waiting: WaitingSession,
   clientId: string,
 ): Promise<Id<"pending_messages"> | null> {
-  const hearing = await roleHearing(ctx, roleId);
+  return fireRoleEvent(ctx, roleId, ROLE_NEEDS_INPUT_SPEC, { waiting }, clientId);
+}
+
+/** One firing of a role's event trigger (S28, S29): the run is written into
+ *  the standing session as a frame naming what fired it (a waiting session,
+ *  an area change), and the trigger's run count moves as on any run. */
+export async function fireRoleEvent(
+  ctx: TaskCtx,
+  roleId: Id<"org_roles">,
+  spec: RoleEventSpec,
+  about: { waiting?: WaitingSession; change?: AreaChange },
+  clientId: string,
+): Promise<Id<"pending_messages"> | null> {
+  const hearing = await roleHearing(ctx, roleId, spec);
   if (!hearing) return null;
   const { standing, task } = hearing;
   const now = Date.now();
   const id = await enqueuePendingMessage(ctx as any, standing, task.user_id, {
-    content: await triggerFrameFor(ctx, task, standing, waiting),
+    content: await triggerFrameFor(ctx, task, standing, about.waiting, about.change),
     origin: "scheduler",
     client_id: clientId,
   });
@@ -960,19 +974,29 @@ export async function routeUpWaitingSession(
  *  person has it: their prompt, their pause, their cancel. A dead one that an
  *  earlier role left in the same session is not this role's (orgRoutine). */
 export async function ensureRoleNeedsInputTrigger(ctx: TaskCtx, role: { _id: Id<"org_roles"> }, standing: Doc<"conversations">): Promise<{ id: Id<"agent_tasks">; short_id?: string; created: boolean }> {
-  const found = await findRoleNeedsInputTrigger(ctx, standing, role);
+  return ensureRoleEventTrigger(ctx, role, standing, ROLE_NEEDS_INPUT_SPEC);
+}
+
+/** Arm one of a role's event triggers, by the same rule. */
+export async function ensureRoleEventTrigger(ctx: TaskCtx, role: { _id: Id<"org_roles"> }, standing: Doc<"conversations">, spec: RoleEventSpec): Promise<{ id: Id<"agent_tasks">; short_id?: string; created: boolean }> {
+  const found = await findRoleEventTrigger(ctx, standing, spec.event, role);
   if (found) return { id: found._id, short_id: found.short_id, created: false };
   const created = await insertTask(ctx, standing.user_id, {
-    title: ROLE_NEEDS_INPUT_TITLE,
-    prompt: ROLE_NEEDS_INPUT_PROMPT,
+    title: spec.title,
+    prompt: spec.prompt,
     originating_conversation_id: String(standing._id),
     project_path: standing.project_path ?? undefined,
     schedule_type: "event",
-    event_filter: { event_type: SESSION_NEEDS_INPUT_EVENT },
+    event_filter: { event_type: spec.event },
     mode: "apply",
     role_id: role._id,
   });
   return { ...created, created: true };
+}
+
+/** Every event trigger the role should have (roleEventSpecsFor), armed. */
+export async function ensureRoleEventTriggers(ctx: TaskCtx, role: { _id: Id<"org_roles">; handle: string }, standing: Doc<"conversations">): Promise<void> {
+  for (const spec of roleEventSpecsFor(role)) await ensureRoleEventTrigger(ctx, role, standing, spec);
 }
 
 export const dispatchCloudTriggers = internalMutation({

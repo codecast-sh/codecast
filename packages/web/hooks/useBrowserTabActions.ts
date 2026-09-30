@@ -9,6 +9,7 @@ import { useConvex } from "convex/react";
 import { focusBrowserTab, reopenBrowserTab, type BrowserSessionRef, type BrowserTabFailure } from "../lib/browserFocus";
 import { useWatchEffect } from "./useWatchEffect";
 import { useMountEffect } from "./useMountEffect";
+import { bridge } from "../lib/desktop";
 
 /** The session whose browser the rows belong to, for the reopen. Provided by
  *  the conversation view; the pill can raise without it but not reopen. */
@@ -28,6 +29,14 @@ export type BrowserTabActionState =
   | { kind: "note"; text: string };
 
 const NOTE_MS = 6_000;
+
+/** The daemon raised the browser too, but macOS 14+ honors that only when no
+ *  other app is active. In the desktop app, which is active because the human
+ *  just clicked in it, the shell repeats the raise; in a browser the page's
+ *  own browser is already in front. */
+function raiseInShell(pid: number | undefined): void {
+  if (pid) void bridge("raiseApp")?.(pid);
+}
 
 function noteFor(reason: BrowserTabFailure, detail?: string): string {
   switch (reason) {
@@ -82,7 +91,10 @@ export function useBrowserTabActions(
     if ((!tabId && !bySession) || state.kind === "busy") return;
     setState({ kind: "busy", verb: "focusing" });
     void focusBrowserTab(convex, tabId ?? session).then((out) => {
-      if (out.ok) return setState({ kind: "idle" });
+      if (out.ok) {
+        raiseInShell(out.pid);
+        return setState({ kind: "idle" });
+      }
       if ((out.reason === "tab-gone" || out.reason === "browser-stopped") && canReopen) return setState({ kind: "offer", reason: out.reason });
       note(out.reason === "tab-gone" ? "tab is gone" : out.reason === "browser-stopped" ? "browser is not running" : noteFor(out.reason, out.detail));
     });
@@ -93,6 +105,7 @@ export function useBrowserTabActions(
     setState({ kind: "busy", verb: "reopening" });
     void reopenBrowserTab(convex, { url: tab.url, ...session }).then((out) => {
       if (!out.ok) return note(noteFor(out.reason, out.detail));
+      raiseInShell(out.pid);
       setTabId(out.tabId);
       setState({ kind: "idle" });
       onReopened?.(out.tabId);

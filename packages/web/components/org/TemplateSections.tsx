@@ -1,8 +1,9 @@
 import { autonomyOn } from "@codecast/shared/contracts/roleAutonomy";
 import { useState } from "react";
 import { captureException } from "@sentry/react";
+import { Loader2, Lock } from "lucide-react";
 import { Section } from "../identity/RoleScopeView";
-import { useTemplateActions, useTemplateInstance } from "../../hooks/useTemplateHire";
+import { sealSecret, useTemplateActions, useTemplateInstance } from "../../hooks/useTemplateHire";
 
 // A template role's right column, under its project card (docs/architecture/
 // org-hire.md H5 to H8, H11): the setup list with the one open item first,
@@ -31,7 +32,7 @@ export function TemplateSections({ roleId, canEdit }: { roleId: string; canEdit:
     <div data-scope-template={instance.instance}>
       {instance.phase === "awaiting_host" && (
         <Section density="page" label="One step left" name="template-host">
-          <p className="px-2.5 pb-1.5 text-[12px] leading-relaxed text-sol-yellow" data-template-host-step>On the machine that runs this role, run <code style={{ fontFamily: "var(--font-mono)" }}>cast org template bind {instance.instance}</code> in the project&apos;s folder. That fixes the template&apos;s version and creates its triggers, paused.</p>
+          <HostStep instance={instance} canEdit={canEdit} purpose="setup" />
         </Section>
       )}
       {setup.length > 0 && (
@@ -86,10 +87,82 @@ export function TemplateSections({ roleId, canEdit }: { roleId: string; canEdit:
         <ul className="space-y-0.5 px-2.5 pb-1.5 text-[12px] text-sol-text-muted">
           <li>{instance.template?.name ?? instance.template_id} {instance.version} <span className="text-sol-text-dim">sha256 {String(instance.digest).slice(0, 12)}</span>{instance.host ? <span className="text-sol-text-dim"> · on {instance.host.machine}</span> : null}</li>
           {instance.update_available && <li className="text-sol-text" data-template-update={instance.update_available}>Update available: {instance.update_available}{instance.pending_upgrade ? ` (accepted; on its machine, run cast org template bind ${instance.instance} --to ${instance.pending_upgrade.to})` : ""}</li>}
-          {((instance.secrets ?? []) as any[]).map((s) => <li key={s.key} data-template-secret={s.key} data-bound={s.bound}>{s.label}: {s.bound ? <span className="text-sol-green">set</span> : <span className="text-sol-yellow">missing · on its machine, run cast org template bind {instance.instance} --secret {s.key}=&lt;path&gt;</span>}</li>)}
+          {((instance.secrets ?? []) as any[]).map((s) => <li key={s.key} data-template-secret={s.key} data-bound={s.bound}>{s.label}: {s.bound ? <span className="text-sol-green">set</span> : <span className="text-sol-yellow">missing</span>}</li>)}
         </ul>
+        {instance.phase === "ready" && ((instance.secrets ?? []) as any[]).some((s) => !s.bound) && <HostStep instance={instance} canEdit={canEdit} purpose="secrets" />}
       </Section>
       {error && <p role="alert" className="px-2.5 text-[12px] text-sol-red">{error}</p>}
+    </div>
+  );
+}
+
+/**
+ * The host step as a button (org-hire.md H3): the daemon on the machine that
+ * runs the role installs the template and creates its triggers, paused. A
+ * secret typed here is sealed in this browser to that machine's key before it
+ * leaves (H4): the server relays ciphertext it cannot open, the daemon writes
+ * the value to a private file and binds its path. The terminal form stays
+ * behind a fold for anyone who prefers it. The same control binds a missing
+ * secret once the instance is ready (`purpose: "secrets"`).
+ */
+function HostStep({ instance, canEdit, purpose }: { instance: any; canEdit: boolean; purpose: "setup" | "secrets" }) {
+  const { requestBind } = useTemplateActions();
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const host = instance.bind_host as { device: { device_id: string; label: string; online: boolean; can_receive_secrets: boolean; pubkey: string | null } | null; dir: string | null; reason: string | null } | undefined;
+  const step = (instance.host_step ?? { state: "idle" }) as { state: "idle" | "pending" | "failed" | "done"; device_label?: string; error?: string; result?: { phase?: string; bound?: string[] } };
+  const secrets = ((instance.secrets ?? []) as { key: string; label: string; bound: boolean }[]).filter((s) => purpose === "setup" || !s.bound);
+  const typed = secrets.filter((s) => (values[s.key] ?? "").length > 0);
+  const device = host?.device ?? null;
+  const cli = `cast org template bind ${instance.instance}${secrets.length ? ` --secret ${secrets[0]!.key}=<path>` : ""}`;
+  const run = async () => {
+    if (!device || !host?.dir || busy) return;
+    setBusy(true); setError(null);
+    try {
+      if (typed.length && !device.pubkey) throw new Error(`${device.label} runs a codecast too old to receive a secret from here; update it there, or bind the secret from its terminal.`);
+      const sealed = await Promise.all(typed.map((s) => sealSecret(device.pubkey!, s.key, values[s.key]!)));
+      await requestBind(instance.instance_key, sealed);
+      setValues({});
+    } catch (e) { captureException(e); setError(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  };
+  const label = purpose === "setup" ? `Set up on ${device?.label ?? "its machine"}` : `Bind on ${device?.label ?? "its machine"}`;
+  return (
+    <div className="px-2.5 pb-1.5 text-[12px] leading-relaxed" data-template-host-step={step.state} data-host-purpose={purpose}>
+      {purpose === "setup" && step.state !== "pending" && <p className="text-sol-text-muted">The hire is accepted. Its machine still has to install the template and create its triggers, paused; nothing runs until you activate one.</p>}
+      {step.state === "pending" ? (
+        <p className="mt-1 flex items-center gap-2 text-sol-text" role="status"><Loader2 className="h-3.5 w-3.5 animate-spin text-sol-violet" /> Setting up on {step.device_label ?? device?.label ?? "its machine"}…{device && !device.online ? <span className="text-sol-text-dim">it is offline, so this runs when it wakes.</span> : null}</p>
+      ) : (
+        <>
+          {step.state === "failed" && <p className="mt-1 text-sol-red" role="alert" data-host-error>{step.device_label ? `${step.device_label}: ` : ""}{step.error}</p>}
+          {step.state === "done" && purpose === "setup" && <p className="mt-1 text-sol-text-dim">The last run finished{step.result?.phase ? ` (${step.result.phase})` : ""}, but the record is still waiting; run it again.</p>}
+          {!device && <p className="mt-1 text-sol-yellow" data-host-reason>{host?.reason ?? "No machine can run this yet."}</p>}
+          {canEdit && device && secrets.length > 0 && (
+            <div className="mt-2 flex flex-col gap-2 rounded-lg border border-sol-border/50 bg-sol-bg-alt/60 p-2.5" data-host-secrets>
+              <p className="flex items-start gap-1.5 text-[11.5px] text-sol-text"><Lock className="mt-[3px] h-3 w-3 shrink-0 text-sol-text-dim" /> {purpose === "setup" ? "Secrets stay on that machine. Enter them here once, or leave one blank and add it later." : "Enter the value once; it is sealed to that machine and never stored here."}</p>
+              {secrets.map((s) => (
+                <label key={s.key} className="flex flex-col gap-1">
+                  <span className="text-[11px] text-sol-text-muted">{s.label}{s.bound ? <span className="text-sol-green"> · set</span> : null}</span>
+                  <input type="password" autoComplete="off" spellCheck={false} name={`secret:${s.key}`} value={values[s.key] ?? ""} onChange={(e) => setValues({ ...values, [s.key]: e.target.value })} placeholder={s.bound ? "replace…" : "paste the credential, key or JSON"} className="h-8 w-full rounded-md border border-sol-border/50 bg-sol-bg px-2 text-[12px] text-sol-text outline-none focus:border-sol-cyan" style={{ fontFamily: "var(--font-mono)" }} />
+                </label>
+              ))}
+              {typed.length > 0 && !device.can_receive_secrets && <p className="text-[11px] text-sol-yellow">{device.label} runs a codecast too old to receive a secret from here. Update it there, or bind the secret from its terminal.</p>}
+            </div>
+          )}
+          {canEdit && device && (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <button type="button" onClick={() => void run()} disabled={busy || (purpose === "secrets" && typed.length === 0) || (typed.length > 0 && !device.can_receive_secrets)} className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-sol-violet px-3 text-[12px] font-semibold text-sol-bg disabled:opacity-50" data-host-run>{busy ? "Sending…" : step.state === "failed" ? `Try again on ${device.label}` : label}</button>
+              <span className="text-[11px] text-sol-text-dim">{device.online ? "online" : "offline: queued until it wakes"}{host?.dir ? ` · ${host.dir}` : ""}</span>
+            </div>
+          )}
+          {error && <p className="mt-1 text-sol-red" role="alert">{error}</p>}
+        </>
+      )}
+      <details className="mt-2 text-[11px] text-sol-text-dim">
+        <summary className="cursor-pointer select-none">Prefer the terminal?</summary>
+        <p className="mt-1">On the machine that runs this role, in the project&apos;s folder: <code style={{ fontFamily: "var(--font-mono)" }}>{cli}</code></p>
+      </details>
     </div>
   );
 }

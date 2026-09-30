@@ -27,6 +27,16 @@ crons.interval(
   {}
 );
 
+// The area watch (docs/architecture/org-staffing.md S29): read each watched
+// workspace's health, remember every area's status, and tell the Chief of
+// Staff once per episode about a change that lasted two passes.
+crons.interval(
+  "watch org areas",
+  { hours: 6 },
+  internal.orgWatch.sweep,
+  {}
+);
+
 crons.interval(
   "reclaim stale agent tasks",
   { minutes: 5 },

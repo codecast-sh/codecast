@@ -98,6 +98,15 @@ export const DAEMON_COMMANDS = [
   // sees plaintext; the daemon decrypts, updates its 0600 store, and fans out to
   // remotes. Old daemons: "Unknown command" (the key just doesn't take there).
   "set_provider_key",
+  // The web's host step for a role hired from a template (org-hire.md H3):
+  // run `cast org template bind <instance>` on the machine that holds the
+  // project's checkout. args: OrgTemplateBindArgs (orgTemplateBind.ts). A
+  // secret input arrives SEALED to this device's provider-key public key, the
+  // same transport as set_provider_key: the daemon decrypts it into a 0600
+  // file and hands bind the path, so the value never enters Convex in plain
+  // text. Result: OrgTemplateBindResult. Old daemons: "Unknown command" (the
+  // role page says to update codecast there or bind from the terminal).
+  "org_template_bind",
   // The web's Connect dialog for a sign-in based cloud agent provider (Codex
   // Cloud) on THIS device. args: { provider, op: "check" | "start" }. check
   // answers with the machine's login state ({state, account?, plan?,

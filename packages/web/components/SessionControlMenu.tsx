@@ -236,6 +236,24 @@ export interface SessionControlPanelProps {
 }
 
 /**
+ * What a session's model control shows: whether it offers models at all
+ * (canControlModel), the effort glyph (only where it does), and, for a cloud
+ * agent's session, its provider and the sentence saying the provider picks.
+ */
+function useModelControl(conversationId: string | undefined, agentType: string | undefined, model: string | null | undefined, effort: string | null | undefined) {
+  const sessionId = useLiveSessionMeta(conversationId)?.sessionId;
+  const controllable = canControlModel(agentType, sessionId, model);
+  const cloud = useCloudAgentOfConversation(conversationId)?.spec;
+  return {
+    sessionId,
+    controllable,
+    cloud,
+    glyph: controllable ? effortGlyph(effort) : "",
+    cloudNote: cloud ? `Runs on ${cloud.label}, which picks the model` : undefined,
+  };
+}
+
+/**
  * A model stamp as the header names it: a cloud launch by what it asked of
  * the provider ("2 attempts", "ask"; the provider chip beside it names the
  * provider), anything else by formatModel.
@@ -259,24 +277,19 @@ export function SessionControlPanel({
   // configuration once its agent is chosen.
   const [view, setView] = useState<{ step: "main" } | { step: "pick"; verb: MoveVerb } | { step: "handoff"; agent: ConvexAgentType }>({ step: "main" });
   const blank = (messageCount ?? 0) === 0;
-  const sessionId = useLiveSessionMeta(conversationId)?.sessionId;
-  const controllable = canControlModel(agentType, sessionId, model);
-  // Only the wording: which rules apply to a cloud agent is canControlModel's and sessionMoveVerbs'.
-  const cloud = useCloudAgentOfConversation(conversationId)?.spec;
+  const { sessionId, controllable, cloud, glyph, cloudNote } = useModelControl(conversationId, agentType, model, effort);
   // A cloud session is named by its provider, and its launch by what it asked for ("2 attempts").
   const agentLabel = cloud?.label ?? formatAgentType(agentType);
   const modelText = model ? modelLabel(agentType, model) : "";
-  const glyph = cloud ? "" : effortGlyph(effort);
   const options = moveAgentOptions(agentType, messageCount);
   const verbs = sessionMoveVerbs(agentType, sessionId, model);
 
-  const stateLine = cloud
-    ? `Runs on ${cloud.label}, which picks the model`
-    : !controllable
+  const stateLine = cloudNote
+    ?? (!controllable
     ? `${agentLabel} keeps the model it launched with`
     : blank
       ? "Blank session · picks apply at launch"
-      : "Live session · picks apply in place";
+      : "Live session · picks apply in place");
 
   const onSwitch = (type: ConvexAgentType) => {
     onClose();
@@ -432,8 +445,6 @@ export function HeaderModelControl({
   useWatchEffect(() => { setPicked(null); }, [agentType]);
 
   const blank = (messageCount ?? 0) === 0;
-  // A cloud agent's model is the provider's: the trigger names no model and offers none.
-  const cloud = useCloudAgentOfConversation(conversationId)?.spec;
   const overlayModel = picked?.model !== undefined
     ? modelStampForPick(agentType, picked.model)
     : (modelFitsAgent(storeModel, agentType) ? storeModel : undefined);
@@ -444,8 +455,8 @@ export function HeaderModelControl({
   // The panel is the owner's; a blank session still gets it (switch agent,
   // hand off, launch-rail model), so the only gate is ownership.
   const interactive = !!(canEdit && conversationId);
-  // No effort on a cloud agent either: the provider runs it.
-  const glyph = cloud ? "" : effortGlyph(overlayEffort);
+  // A cloud agent's model and effort are the provider's: the trigger names neither and offers none.
+  const { cloud, glyph, cloudNote } = useModelControl(conversationId, agentType, storeModel, overlayEffort);
 
   const label = overlayModel ? modelLabel(agentType, overlayModel) : "";
 
@@ -468,8 +479,8 @@ export function HeaderModelControl({
           <button
             data-session-control-trigger
             className="group flex items-center gap-1 font-mono rounded px-1 -mx-1 transition-colors hover:bg-sol-bg-alt hover:text-sol-text-secondary"
-            title={cloud
-              ? `Runs on ${cloud.label}, which picks the model · fork, hand off`
+            title={cloudNote
+              ? `${cloudNote} · fork, hand off`
               : `Model: ${overlayModel ?? "default"}${overlayEffort ? ` · ${overlayEffort} effort` : ""} · model, agent, fork, hand off`}
           >
             {/* A cloud launch that asked for nothing more names what the panel does instead: fork or hand off. */}

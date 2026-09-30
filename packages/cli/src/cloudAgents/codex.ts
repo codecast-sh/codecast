@@ -477,7 +477,7 @@ function turnPullRequest(turn: WhamTurn, pullRequests: TaskPullRequests): WhamPu
 function attemptsNote(turns: WhamTurns, turn: WhamTurn): string | undefined {
   const attempts = attemptsAt(turns, turn);
   if (attempts.length < 2) return undefined;
-  return `Codex Cloud ran ${attempts.length} attempts at this; this is attempt ${attemptNumber(turns, turn)}. Each attempt is a branch of this session: switch under the prompt, and a message sent on a branch continues that attempt.`;
+  return `${CODEX.label} ran ${attempts.length} attempts at this; this is attempt ${attemptNumber(turns, turn)}. Each attempt is a branch of this session: switch under the prompt, and a message sent on a branch continues that attempt.`;
 }
 
 export interface CodexCloudTranscriptInput {
@@ -545,9 +545,9 @@ export function buildCodexCloudTranscript(input: CodexCloudTranscriptInput): str
       if (text) tx.note(`${key}:progress`, text, secondsToMs(turn.created_at) ?? tx.clock);
       continue;
     }
-    if (turn.turn_status === "failed") tx.error(`${key}:error`, `Codex Cloud turn failed: ${turnError(turn.error)}`);
+    if (turn.turn_status === "failed") tx.error(`${key}:error`, `${CODEX.label} turn failed: ${turnError(turn.error)}`);
     else if (turn.turn_status === "cancelled") tx.note(`${key}:cancelled`, "Cancelled.");
-    else if (turn.turn_status && turn.turn_status !== "completed") tx.note(`${key}:ended`, `Codex Cloud ended this turn as ${turn.turn_status}.`);
+    else if (turn.turn_status && turn.turn_status !== "completed") tx.note(`${key}:ended`, `${CODEX.label} ended this turn as ${turn.turn_status}.`);
     tx.turnEnded();
   }
   return tx.toString();
@@ -579,15 +579,29 @@ export function taskGit(taskId: string, task: WhamTask | undefined, chain: WhamT
   return { agentId: taskId, ...(repo ? { repoUrl: `https://github.com/${repo}` } : {}), ...(branch ? { branch } : {}), ...(pr?.url ? { prUrl: pr.url } : {}) };
 }
 
-/** Whether any turn of the task is still running. */
-function taskRunning(turns: WhamTurns): boolean {
-  return allTurns(turns).some((t) => t.type === "assistant" && isRunningTurnStatus(t.turn_status));
+/** Whether any of these turns is an assistant turn still running. */
+function anyRunning(turns: WhamTurn[]): boolean {
+  return turns.some((t) => t.type === "assistant" && isRunningTurnStatus(t.turn_status));
 }
 
-/** The diff an assistant turn left: a follow-up's own, else its pull request item's; "" when it changed no code. */
+/** Whether any turn of the task is still running. */
+function taskRunning(turns: WhamTurns): boolean {
+  return anyRunning(allTurns(turns));
+}
+
+/** An output item's diff of one kind: "follow_up_diff" (that turn's own changes) or "pr" (the line's changes so far, verified live). */
+function outputDiff(turn: WhamTurn, type: "follow_up_diff" | "pr"): string {
+  return turn.output_items?.find((o) => o.type === type)?.output_diff?.diff || "";
+}
+
+/** The diff an assistant turn itself made (the transcript's row for that turn); "" when it changed no code. */
 function turnDiff(turn: WhamTurn): string {
-  const outputs = turn.output_items ?? [];
-  return outputs.find((o) => o.type === "follow_up_diff")?.output_diff?.diff || outputs.find((o) => o.type === "pr")?.output_diff?.diff || "";
+  return outputDiff(turn, "follow_up_diff") || outputDiff(turn, "pr");
+}
+
+/** Everything the line changed up to this turn: what Create PR and `codex cloud apply` act on. */
+function lineDiff(turn: WhamTurn): string {
+  return outputDiff(turn, "pr") || outputDiff(turn, "follow_up_diff");
 }
 
 /** The last turn of a chain that changed code. */
@@ -732,7 +746,7 @@ export class CodexCloudAdapter implements CloudAgentAdapter<CodexCloudApi, Codex
    */
   async create(api: CodexCloudApi, session: CloudAgentSession, content: string): Promise<{ agentId: string; url?: string }> {
     const repo = repoOwnerName(githubRepo(session.repoUrl));
-    if (!repo) throw CloudAgentSetupError.repoUnreachable(this, session, "this session's folder has no GitHub remote", "Codex Cloud works on GitHub repositories: start the session in a checkout of one");
+    if (!repo) throw CloudAgentSetupError.repoUnreachable(this, session, "this session's folder has no GitHub remote", `${CODEX.label} works on GitHub repositories: start the session in a checkout of one`);
     const env = await pickEnvironment(api, repo.owner, repo.name);
     if (!env) throw CloudAgentSetupError.repoUnreachable(this, session, "it has no Codex environment", `Create one at ${CODEX.repoAccessUrl}`);
     const attempts = Math.min(Math.max(session.attempts ?? 1, 1), CODEX.launchOptions.maxAttempts);
@@ -742,7 +756,7 @@ export class CodexCloudAdapter implements CloudAgentAdapter<CodexCloudApi, Codex
       ...(attempts > 1 ? { metadata: { best_of_n: attempts } } : {}),
     });
     const agentId = created.task?.id;
-    if (!agentId) throw new Error("Codex Cloud created no task");
+    if (!agentId) throw new Error(`${CODEX.label} created no task`);
     return { agentId, url: CODEX.agentUrl(agentId) };
   }
 
@@ -762,12 +776,20 @@ export class CodexCloudAdapter implements CloudAgentAdapter<CodexCloudApi, Codex
     await api.createTask({ follow_up: { task_id: taskId, turn_id: last.id, run_environment_in_qa_mode: ask }, input_items: inputItems(content) });
   }
 
-  /** Codex Cloud cancels a task's running turn, whichever line it is on. */
+  /**
+   * Cancel the line's own running turn. Codex cancels a whole task, so a line
+   * with nothing of its own running cancels nothing (stopping one attempt's
+   * session never stops another's work), and one whose attempts run side by
+   * side says that they all stopped.
+   */
   async cancel(api: CodexCloudApi, agentId: string): Promise<string | null> {
     const taskId = cloudAgentRootId(agentId);
-    if (!taskRunning(await api.turns(taskId))) return null;
+    const turns = await api.turns(taskId);
+    const own = taskTurnChain(turns, agentId);
+    if (!anyRunning(own)) return null;
     await api.cancel(taskId);
-    return "the running turn";
+    const ownIds = new Set(own.map((t) => t.id));
+    return anyRunning(allTurns(turns).filter((t) => !ownIds.has(t.id))) ? "the running turn, and the task's other attempts with it" : "the running turn";
   }
 
   async archive(api: CodexCloudApi, agentId: string, archived: boolean): Promise<void> {
@@ -778,17 +800,21 @@ export class CodexCloudAdapter implements CloudAgentAdapter<CodexCloudApi, Codex
    * A draft pull request from the line's changes (its last turn with a diff),
    * without Codex's label (add_codex_tag; Codex still ends the body with a
    * link to the task, verified live). Codex opens it within seconds; the link comes back
-   * once it did (and reaches the session through the mirror either way).
+   * once it did (and reaches the session through the mirror either way). A
+   * line that already opened one (on any of its turns, as taskGit finds it)
+   * gets that one back: a new POST for a later turn would open a second pull
+   * request rather than update the first.
    */
-  async createPullRequest(api: CodexCloudApi, agentId: string): Promise<{ url?: string; branch?: string }> {
+  async createPullRequest(api: CodexCloudApi, agentId: string): Promise<{ url?: string }> {
     const taskId = cloudAgentRootId(agentId);
-    const [turn, task] = await Promise.all([this.changesTurn(api, agentId), api.task(taskId).then((r) => r.task)]);
+    const [turns, task] = await Promise.all([api.turns(taskId), api.task(taskId).then((r) => r.task)]);
     const opened = (t: WhamTurn | undefined) => {
-      const pr = t && turnPullRequest(t, taskPullRequests(task));
-      return pr?.url ? { url: pr.url, ...(pr.head ? { branch: pr.head } : {}) } : null;
+      const url = t && turnPullRequest(t, taskPullRequests(task))?.url;
+      return url ? { url } : null;
     };
-    const existing = opened(turn);
+    const existing = [...taskTurnChain(turns, agentId)].reverse().map(opened).find(Boolean);
     if (existing) return existing;
+    const turn = await this.changesTurn(api, agentId, turns);
     await api.createPullRequest(taskId, turn.id);
     const sleep = this.opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
     for (let waited = 0; waited < PR_WAIT_MS; waited += PR_POLL_MS) {
@@ -802,10 +828,11 @@ export class CodexCloudAdapter implements CloudAgentAdapter<CodexCloudApi, Codex
   }
 
   /**
-   * The line's latest changes (its last turn that changed code), as the diff
-   * Codex Cloud recorded for that turn: the same diff `codex cloud apply`
-   * would fetch, applied by the core without running the Codex CLI on this
-   * machine's login (which may refresh it).
+   * Everything the line changed, as Codex recorded it at the line's last turn
+   * that changed code (lineDiff: a follow-up's own diff holds only that
+   * turn's changes): the same diff `codex cloud apply` would fetch, applied by
+   * the core without running the Codex CLI on this machine's login (which may
+   * refresh it).
    */
   async applyPlan(api: CodexCloudApi, agentId: string): Promise<CloudAgentApplyPlan> {
     const turns = await api.turns(cloudAgentRootId(agentId));
@@ -813,7 +840,7 @@ export class CodexCloudAdapter implements CloudAgentAdapter<CodexCloudApi, Codex
     const repo = taskRepo(taskTurnChain(turns, agentId));
     if (!repo) throw new Error("the task names no GitHub repository");
     const what = attemptsAt(turns, turn).length > 1 ? `attempt ${attemptNumber(turns, turn)}'s changes` : "the task's changes";
-    return { repo, diff: turnDiff(turn), what };
+    return { repo, diff: lineDiff(turn), what };
   }
 
   /** The line's last turn that changed code, settled; what Create PR and Apply act on. */
@@ -855,8 +882,8 @@ export class CodexCloudAdapter implements CloudAgentAdapter<CodexCloudApi, Codex
 }
 
 /** Why an API-key Codex login is no sign-in here, and what signing in changes. */
-const API_KEY_LOGIN = "Codex there uses an API key, and Codex Cloud needs a ChatGPT sign-in. Signing in moves that Codex from the API key to your ChatGPT plan.";
+const API_KEY_LOGIN = `Codex there uses an API key, and ${CODEX.label} needs a ChatGPT sign-in. Signing in moves that Codex from the API key to your ChatGPT plan.`;
 
 function workspaceDisabled(reason: string): string {
-  return `Codex Cloud is not enabled for this ChatGPT workspace (${reason}). A workspace admin can turn on "Use Codex in the cloud" for your role in the workspace's Codex settings`;
+  return `${CODEX.label} is not enabled for this ChatGPT workspace (${reason}). A workspace admin can turn on "Use Codex in the cloud" for your role in the workspace's Codex settings`;
 }

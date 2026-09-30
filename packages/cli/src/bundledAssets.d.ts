@@ -11,6 +11,11 @@ declare module "*.sh" {
   export default text;
 }
 
+declare module "*.py" {
+  const text: string;
+  export default text;
+}
+
 declare module "*.cast" {
   const text: string;
   export default text;

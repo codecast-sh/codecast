@@ -7,8 +7,7 @@ import {
   serverCards,
   questionCards,
   sessionCards,
-  sessionUnread,
-  sortCards,
+    sortCards,
   unreadByChip,
   visibleChips,
 } from "../threadCards";
@@ -102,7 +101,7 @@ describe("serverCards", () => {
 describe("dmCards", () => {
   it("takes only DM rooms, zeroes unread when muted, keys activity to inbound", () => {
     const rail = [
-      railChannel({ id: "a", kind: "dm", unreadCount: 3, sortAt: 10, lastInboundAt: 8 }),
+      railChannel({ id: "a", kind: "dm", unreadCount: 3, sortAt: 8, lastInboundAt: 8 }),
       railChannel({ id: "b", kind: "public", unreadCount: 9, sortAt: 99 }),
       railChannel({ id: "c", kind: "dm", unreadCount: 4, muted: true, sortAt: 20, lastReadAt: 7, lastInboundAt: 20 }),
     ];
@@ -116,18 +115,9 @@ describe("dmCards", () => {
 });
 
 describe("session cards", () => {
-  it("is unread only when opened before and grown since", () => {
-    expect(sessionUnread({ message_count: 5 }, undefined)).toBe(0);
-    expect(sessionUnread({ message_count: 5 }, 5)).toBe(0);
-    expect(sessionUnread({ message_count: 5 }, 3)).toBe(1);
-  });
-
-  it("derives cards from the inbox rows with the cursor rule", () => {
-    const cards = sessionCards(
-      [session({ _id: "s1", message_count: 4, updated_at: 50 }), session({ _id: "s2", message_count: 2, updated_at: 60 })],
-      { s1: 2 },
-    );
-    expect(cards.map((c) => [c.id, c.unread, c.activityAt])).toEqual([["session:s1", 1, 50], ["session:s2", 0, 60]]);
+  it("derives cards from the waiting sessions, each one new", () => {
+    const cards = sessionCards([session({ _id: "s1", message_count: 4, updated_at: 50 }), session({ _id: "s2", message_count: 2, updated_at: 60 })]);
+    expect(cards.map((c) => [c.id, c.unread, c.activityAt])).toEqual([["session:s1", 1, 50], ["session:s2", 1, 60]]);
     expect(cards[0].href).toBe("/conversation/s1");
     expect(cards[0].kind).toBe("session");
     expect(cards[0].chip).toBe("session");
@@ -147,7 +137,7 @@ describe("chip filtering and counts", () => {
       () => undefined,
     ),
     ...dmCards([railChannel({ id: "d1", unreadCount: 2, sortAt: 35, lastInboundAt: 35 })]),
-    ...sessionCards([session({ _id: "s1", message_count: 4, updated_at: 50 })], { s1: 1 }),
+    ...sessionCards([session({ _id: "s1", message_count: 4, updated_at: 50 })]),
   ];
 
   it("shows sessions only under All and only when toggled on", () => {

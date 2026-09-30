@@ -181,7 +181,7 @@ export function subtaskCounts(taskId: string, tasks: Array<{ _id: string; parent
 /** One honest line for a per view query that will not answer. */
 export function queryProblem(error: Error | undefined, missing: boolean, what: string): string | null {
   if (!error) return null;
-  if (missing) return `${what} is not available on this backend yet.`;
+  if (missing) return `${what} is not available yet.`;
   const line = (error.message ?? "").replace(/^\[Request ID: [^\]]+\] Server Error\s*/i, "").split("\n")[0].trim();
   return line ? `${what} did not load: ${line}` : `${what} did not load.`;
 }

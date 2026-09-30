@@ -1087,12 +1087,17 @@ export const AGENT_LAUNCH_OPTIONS: AgentLaunchOption[] = Object.values(AGENT_CLI
 /** The launch-time model/effort rail for a blank session: effort gains the
  *  "default" stop (= omit the flag, the agent's saved default wins). One
  *  definition for the web menu, the mobile switcher chip, and the mobile
- *  new-session sheet; the live (mid-session) rail is cfg.models/cfg.efforts. */
+ *  new-session sheet; a live session's is liveRailOptions. */
 export function launchRailOptions(cfg: AgentModelConfig): { models: ModelOption[]; efforts: string[] } {
   return {
     models: listedModels(cfg),
     efforts: ["default", ...cfg.efforts],
   };
+}
+
+/** The model/effort rail for a live session (mid-session switching): no "default" effort stop. The web menu and the mobile chip. */
+export function liveRailOptions(cfg: AgentModelConfig): { models: ModelOption[]; efforts: string[] } {
+  return { models: listedModels(cfg), efforts: [...cfg.efforts] };
 }
 
 /** The options a picker lists: every catalog entry but the hidden ones (ModelOption.hidden). */

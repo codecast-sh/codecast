@@ -1307,34 +1307,6 @@ div.ch-reaction-tip {
   z-index: 5;
 }
 
-/* The panel's left edge is a drag handle (same affordance as the comment
- * rail): invisible at rest, a cyan hairline on hover/drag. */
-.ch-thread-resize {
-  position: absolute;
-  left: -3px;
-  top: 0;
-  bottom: 0;
-  width: 7px;
-  z-index: 2;
-  cursor: col-resize;
-}
-
-.ch-thread-resize::after {
-  content: "";
-  position: absolute;
-  left: 3px;
-  top: 0;
-  bottom: 0;
-  width: 1px;
-  background: transparent;
-  transition: background 120ms ease;
-}
-
-.ch-thread-resize:hover::after,
-.ch-thread-resize:active::after {
-  background: var(--sol-cyan);
-}
-
 .ch-thread-head {
   display: flex;
   align-items: center;
@@ -1719,7 +1691,7 @@ div.ch-reaction-tip {
     background: var(--sol-bg);
   }
 
-  .ch-thread-resize,
+  .ch-thread .edge-resize,
   .ch-thread-close {
     display: none;
   }

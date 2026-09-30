@@ -103,20 +103,39 @@
   padding: 4px var(--rt-inset) 0;
   border-bottom: 0;
 }
-/* In the rail the chips and Add an agent wrap together, and the last row is
-   always the controls' group (the listening line while nothing has been
-   said, the words control, the switch), so the controls have one fixed home
-   however many agents come and go. The group wraps as one unit when the
-   chips fill the first row, then takes the whole row; the controls keep the
-   right edge and the line takes what they leave. One agent is two rows. */
+/* In the rail the header is one row however narrow the rail is dragged.
+   The controls' group (the listening line while nothing has been said, the
+   words control, the switch) holds the right edge at its full size; the
+   agent chips give way and truncate. Under 480px the Add button drops its
+   word and the switch says only on or off; both titles keep the long form. */
+.rt[data-surface="stage"] .rt-head {
+  flex-wrap: nowrap;
+  container-type: inline-size;
+}
 .rt[data-surface="stage"] .rt-head-right {
-  order: 1;
-  flex: 1 1 auto;
-  min-width: 0;
+  flex: 1 0 auto;
   justify-content: flex-end;
+}
+.rt[data-surface="stage"] .rt-chip {
+  min-width: 0;
+}
+.rt[data-surface="stage"] .rt-chip > span {
+  min-width: 0;
 }
 .rt[data-surface="stage"] .rt-chip .truncate {
   max-width: 130px;
+}
+.rt[data-surface="stage"] .rt-add {
+  flex-shrink: 0;
+}
+@container (max-width: 480px) {
+  .rt-head .rt-add-word,
+  .rt-head .ts-switch-word {
+    display: none;
+  }
+  .rt-head .rt-add {
+    padding: 2px 6px;
+  }
 }
 /* The remove x sits beside the agent's name at the top of the rail and acts
    in one click, so on the stage it shows only when the pointer or focus is
@@ -163,9 +182,8 @@
   font-size: 10.5px;
   color: var(--sol-text-muted);
 }
-/* The rail's last row is the words control and the switch; at the 272px
-   rail they fit by 7px. The word goes; the radiogroup keeps its name and
-   each position its title. */
+/* The rail's header is one row, so the word goes; the radiogroup keeps its
+   name and each position its title. */
 .rt[data-surface="stage"] .rt-density-label {
   display: none;
 }
@@ -610,7 +628,8 @@ button.rt-event-agent:hover {
    header's right. It takes what the words control and the switch leave and
    truncates rather than wrap the row; the title has the long form. */
 .rt-head-listening {
-  flex: 1 1 auto;
+  flex: 1 1 0;
+  width: 0;
   min-width: 0;
   align-items: center;
   padding: 0;

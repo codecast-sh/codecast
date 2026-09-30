@@ -41,6 +41,7 @@ export * from "./providerKeys";
 export * from "./cloudSessionSync";
 export * from "./cloudAgents";
 export * from "./providerKeyCrypto";
+export * from "./orgTemplateBind";
 export * from "./snippets";
 export * from "./castPlayer";
 export * from "./harnessHooks";

@@ -75,7 +75,7 @@ describe.skipIf(process.platform !== "darwin")("computer helper", () => {
     expect(result.result.protocolVersion).toBe(1);
     expect(result.result.providerVersion).toBe(version);
     expect(result.result.provider).toBe("codecast-computer-macos");
-    expect(result.result.supports.actions.drag).toBe(false);
+    expect(result.result.supports.actions.drag).toBe(true);
     expect(result.result.supports.windows.focus).toBe(false);
   });
 

@@ -290,7 +290,7 @@ export function SettingsModal() {
               <X className="w-[18px] h-[18px]" />
             </button>
           </header>
-          <div key={active.id} className="scrollbar-auto flex-1 overflow-y-auto px-4 sm:px-6 py-5 animate-fadeSlideIn">
+          <div key={active.id} className="scrollbar-auto flex-1 overflow-y-auto px-4 sm:px-6 py-5">
             <ErrorBoundary name="SettingsPanel" level="panel">
               <Panel />
             </ErrorBoundary>

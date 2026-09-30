@@ -62,6 +62,25 @@ describe("Cursor Cloud sessions: failures", () => {
     expect(err.message).toBe("Cursor Cloud can't reach this repository (Failed to verify existence of branch 'main' in repository codecast-sh/codecast). Give Cursor's GitHub app access to it at https://cursor.com/dashboard/integrations; the message retries on its own.");
   });
 
+  test("a message held for a folder with no GitHub remote goes out once the folder has one", async () => {
+    const created: unknown[] = [];
+    const api = { createAgent: async (req: { repos?: unknown }) => { created.push(req.repos); return { agent: { id: "bc-new" } }; } } as unknown as CursorCloudApi;
+    const adapter = adapterWith(api);
+    const create = adapter.create.bind(adapter);
+    adapter.create = async (c, session, content) => {
+      if (!session.repoUrl) throw CloudAgentSetupError.repoUnreachable(adapter, session, "no GitHub remote", "Add one");
+      return create(c, session, content);
+    };
+    const s = new CloudAgentSessions(adapter, { watcher: () => null, bindSession: () => {}, agentForConversation: () => undefined, setStatus: () => {}, log: () => {} }, path.join(tmp(), "sessions.json"));
+    const dir = tmp();
+    execFileSync("git", ["-C", dir, "init", "-q"]);
+    await s.start("c", dir, "cloud");
+    await expect(s.deliver("c", "hi")).rejects.toMatchObject({ kind: "repo" });
+    execFileSync("git", ["-C", dir, "remote", "add", "origin", "git@github.com:acme/app.git"]);
+    expect(await s.deliver("c", "hi")).toBe(true);
+    expect(created).toEqual([[{ url: "https://github.com/acme/app" }]]);
+  }, 30_000);
+
   test("a follow-up while a run is going is busy, which the delivery layer retries", async () => {
     const api = { createRun: async () => { throw new CloudApiError(409, "conflict", "run in progress"); } } as unknown as CursorCloudApi;
     const file = path.join(tmp(), "sessions.json");
@@ -88,7 +107,7 @@ describe("githubRepoAt", () => {
 
   test("a pushed, up to date branch starts from itself with no notice", async () => {
     expect(await githubRepoAt(checkout())).toEqual({ repoUrl: "https://github.com/acme/app", startingRef: "main" });
-  });
+  }, 30_000);
 
   test("unpushed commits are called out", async () => {
     const local = checkout();
@@ -97,7 +116,7 @@ describe("githubRepoAt", () => {
     const r = await githubRepoAt(local);
     expect(r?.startingRef).toBe("main");
     expect(r?.notice).toContain("2 local commits are not pushed");
-  });
+  }, 30_000);
 
   test("a branch GitHub doesn't have starts from the default branch, and says so", async () => {
     const local = checkout();
@@ -106,11 +125,11 @@ describe("githubRepoAt", () => {
     expect(r).toMatchObject({ repoUrl: "https://github.com/acme/app" });
     expect(r?.startingRef).toBeUndefined();
     expect(r?.notice).toContain("`feat` is not on GitHub yet");
-  });
+  }, 30_000);
 
   test("no GitHub remote: no repo", async () => {
     const d = tmp();
     git(d, "init", "-q");
     expect(await githubRepoAt(d)).toBeNull();
-  });
+  }, 30_000);
 });

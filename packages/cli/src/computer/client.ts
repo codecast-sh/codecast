@@ -38,6 +38,7 @@ import { isPidAlive } from "../workspace/chrome.js";
 import { asComputerError, ComputerError, computerErrorFromWire } from "./errors.js";
 import { helperAppPath, materializeHelperApp, withPrepareLock } from "./helperApp.js";
 import { spawnObserved, type ObservedLaunch } from "./launchObserver.js";
+import { launchesThroughOpen, requireDesktopSession, runOpen } from "./desktopSession.js";
 import {
   acquireStartLock,
   clearInstance,
@@ -68,6 +69,9 @@ const MAX_SOCKET_PATH = 103;
 export interface HelperLaunch {
   cmd: string;
   args: string[];
+  /** `cmd` is `open`, a launcher that exits once LaunchServices has the
+   *  bundle: run it to completion, and find the helper by its socket dir. */
+  viaOpen?: boolean;
 }
 
 export interface ComputerClientOptions {
@@ -94,17 +98,23 @@ export interface ComputerClientOptions {
  * The disclaimed route is the primary one for both the socket helper and the
  * permission probe, because it yields a real child pid and a real spawn error,
  * and because disclaiming is precisely the mechanism that stops TCC
- * inheritance. `open -n` remains the documented fallback for the two cases
- * where disclaiming is unavailable: CODECAST_NO_DISCLAIM=1, and a macOS that
- * drops the private symbol (execDisclaimed returns -1).
+ * inheritance. `open -n` is the route when this process sits outside the
+ * desktop session (an SSH login, see desktopSession.ts) and when disclaiming
+ * is switched off with CODECAST_NO_DISCLAIM=1.
  */
 export function defaultHelperLaunch(socketPath: string, tokenPath: string, version?: string): HelperLaunch {
-  const { executablePath } = materializeHelperApp({ version });
+  requireDesktopSession();
+  const { appPath, executablePath } = materializeHelperApp({ version });
   const helperArgs = ["--agent", socketPath, "--token-file", tokenPath];
-  const cast = resolveCastInvocation();
-  if (process.platform !== "darwin" || process.env.CODECAST_NO_DISCLAIM === "1") {
-    return { cmd: executablePath, args: helperArgs };
+  // Linux: a script with no identity for any grant to attach to, so nothing
+  // to disclaim. It reports the version it was launched with, which is what
+  // lets a helper left from the previous release be told apart.
+  if (process.platform === "linux") {
+    return { cmd: "python3", args: [executablePath, ...helperArgs, ...(version ? ["--provider-version", version] : [])] };
   }
+  if (process.platform !== "darwin") return { cmd: executablePath, args: helperArgs };
+  if (launchesThroughOpen()) return { cmd: "/usr/bin/open", args: ["-n", appPath, "--args", ...helperArgs], viaOpen: true };
+  const cast = resolveCastInvocation();
   return { cmd: cast.cmd, args: [...cast.prefixArgs, "_disclaimed", "--", executablePath, ...helperArgs] };
 }
 
@@ -406,7 +416,7 @@ export class ComputerClient {
     const token = randomBytes(32).toString("hex");
     fs.writeFileSync(tokenPath, token, { mode: 0o600 });
 
-    let observed: ObservedLaunch;
+    let observed: ObservedLaunch | null = null;
     try {
       // The bundle swap and the launch share prepare.lock, so no process can
       // observe the fixed path missing or half-populated mid-spawn.
@@ -419,31 +429,31 @@ export class ComputerClient {
       // already private and already swept, so a helper that dies naming a
       // missing dylib or a refused signature says so in the error instead of
       // arriving as a bare exit code (ct-49674).
-      observed = spawnObserved(launch.cmd, launch.args, path.join(socketDir, "helper.log"));
+      if (launch.viaOpen) runOpen(launch.args, "start the computer helper");
+      else observed = spawnObserved(launch.cmd, launch.args, path.join(socketDir, "helper.log"));
     } catch (err) {
       fs.rmSync(socketDir, { recursive: true, force: true });
       throw asComputerError(err);
     }
-    const child = observed.child;
+    const helperPid = (): number => observed?.child.pid ?? strayHelperPids(socketDir)[0] ?? 0;
 
-    const failure = watchLaunchFailure(observed);
+    const failure = observed ? watchLaunchFailure(observed) : null;
     let socket: net.Socket;
     try {
-      socket = await Promise.race([
-        connectWithRetry(socketPath, this.opts.connectTimeoutMs ?? CONNECT_TIMEOUT_MS),
-        failure.promise,
-      ]);
+      const connect = connectWithRetry(socketPath, this.opts.connectTimeoutMs ?? CONNECT_TIMEOUT_MS);
+      socket = await (failure ? Promise.race([connect, failure.promise]) : connect);
     } catch (err) {
-      failure.cleanup();
+      failure?.cleanup();
       try {
-        child.kill("SIGTERM");
+        const pid = helperPid();
+        if (pid) process.kill(pid, "SIGTERM");
       } catch {
         /* already gone */
       }
       fs.rmSync(socketDir, { recursive: true, force: true });
       throw asComputerError(err);
     }
-    failure.cleanup();
+    failure?.cleanup();
     // The token now lives only in this process's memory and in instance.json
     // at 0600, which is what lets the NEXT invocation reconnect.
     fs.rmSync(tokenPath, { force: true });
@@ -455,7 +465,7 @@ export class ComputerClient {
     }
 
     const state: ComputerInstanceState = {
-      pid: child.pid ?? 0,
+      pid: helperPid(),
       socketPath,
       socketDir,
       token,

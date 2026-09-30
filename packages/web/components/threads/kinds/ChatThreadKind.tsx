@@ -11,7 +11,7 @@ import { rowOf } from "../../../lib/threadRows";
 import { ChatMessage, ChatNewDivider } from "../../chat/ChatMessage";
 import { ChatComposer } from "../../chat/ChatComposer";
 import type { ChatMessageView } from "../../chat/chatTypes";
-import { useTailPin } from "../cardWindow";
+import { EarlierButton, useReaderFold } from "../readerFold";
 import { useThreadsPage } from "../threadsContext";
 
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
@@ -97,10 +97,8 @@ export function ChatTimelineRows({
   const retry = useCallback((id: string) => {
     useInboxStore.getState().retryChatSend(id);
   }, []);
-  // Pinned to the tail so the newest message is what the capped region shows.
-  const pinRef = useTailPin(messages.length ? `${messages[messages.length - 1].id}|${messages.length}` : "");
   return (
-    <div ref={pinRef} className="th-card-replies">
+    <div className="th-card-replies">
       {rows.map((row) =>
         row.kind === "new" ? (
           <ChatNewDivider key={row.key} />
@@ -177,6 +175,7 @@ export function ChatExpanded({
   const roomName = channel ? channelDisplayName(channel, members) : "channel";
   const sync = useThreadSync(rootId);
   const thread = useThreadMessages(rootId);
+  const fold = useReaderFold(thread.replies, (m) => m.createdAt, frozenReadAt);
 
   // The read law: the row is open and the reader is here (`seen`), and the
   // thread query has answered — on a cold cache the body renders empty with
@@ -210,7 +209,8 @@ export function ChatExpanded({
 
   return (
     <div className="th-card-open">
-      <ChatTimelineRows messages={thread.replies} channelId={channelId} frozenReadAt={frozenReadAt} inThread />
+      <EarlierButton count={fold.hidden} noun="reply" onClick={fold.showAll} />
+      <ChatTimelineRows messages={fold.visible} channelId={channelId} frozenReadAt={frozenReadAt} inThread />
       <ChatComposer
         channelId={channelId}
         threadRootId={rootId}
