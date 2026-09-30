@@ -605,7 +605,8 @@ export function TaskNotificationLine({ content, timestamp, agentNameToChildMap }
   );
 }
 
-export { ScheduledTaskBlock } from "./triggerRunBlock";
+import { ScheduledTaskBlock } from "./triggerRunBlock";
+export { ScheduledTaskBlock };
 
 // The /loop heartbeat, in the trigger family's visual language. A
 // ScheduleWakeup call is the agent arming its own next fire — standing intent,
