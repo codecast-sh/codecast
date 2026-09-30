@@ -121,6 +121,10 @@ export async function runComputerSetup(opts: { yes?: boolean }, deps: ComputerSe
   };
 
   let missing = missingIds(status);
+  // Linux grants nothing: the report's next step names what is missing.
+  if (status.platform === "linux") {
+    return report(missing.length ? "cast computer is not ready on this machine yet." : "cast computer is ready.");
+  }
   if (!missing.length) return report("cast computer is ready. Both permissions were already granted.");
 
   say("Setting up cast computer.");
