@@ -19,6 +19,7 @@
 
 import type { CapabilityKind } from "./capabilities";
 import type { ModelOption } from "./modelOptions";
+import { CLOUD_AGENT_PROVIDERS, cloudAgentLaunchModelOptions } from "./cloudAgents";
 import {
   CLAUDE_MODEL_OPTIONS,
   CODEX_MODEL_OPTIONS,
@@ -511,7 +512,7 @@ const CLAUDE_MODEL: AgentModelConfig = {
   midSession: true,
 };
 const CODEX_MODEL: AgentModelConfig = {
-  models: CODEX_MODEL_OPTIONS,
+  models: [...CODEX_MODEL_OPTIONS, ...cloudAgentLaunchModelOptions(CLOUD_AGENT_PROVIDERS.codex, "A Codex Cloud task on your ChatGPT plan, in this repository's Codex environment")],
   efforts: CODEX_EFFORT_LEVELS,
   midSession: false,
 };
@@ -1089,9 +1090,14 @@ export const AGENT_LAUNCH_OPTIONS: AgentLaunchOption[] = Object.values(AGENT_CLI
  *  new-session sheet; the live (mid-session) rail is cfg.models/cfg.efforts. */
 export function launchRailOptions(cfg: AgentModelConfig): { models: ModelOption[]; efforts: string[] } {
   return {
-    models: cfg.models,
+    models: listedModels(cfg),
     efforts: ["default", ...cfg.efforts],
   };
+}
+
+/** The options a picker lists: every catalog entry but the hidden ones (ModelOption.hidden). */
+export function listedModels(cfg: Pick<AgentModelConfig, "models">): ModelOption[] {
+  return cfg.models.filter((m) => !m.hidden);
 }
 
 /** Web/conversation agent_type → registry client id (claude_code → claude). */
