@@ -22,8 +22,11 @@
  * plumbing the CI lane and a human setting the feature up need:
  *
  *   build      compile + sign the helper and write its tar (and an unpacked
- *              .app, for CODECAST_COMPUTER_HELPER_APP)
+ *              .app, for CODECAST_COMPUTER_HELPER_APP); --fast builds debug
+ *              for this machine's arch only
  *   install    put a built tar at the fixed path
+ *   dev        build --fast, install, and stop the running helper: the local
+ *              edit loop (needs CODECAST_SIGN_IDENTITY to keep the grant)
  *   status     read the helper's own grants without opening any window
  *   cli        run the from-source CLI with a built payload staged in
  *
@@ -39,6 +42,7 @@ import { spawnSync } from "node:child_process";
 import { buildComputerHelper, COMPUTER_HELPER_PAYLOAD } from "./build-with-native.js";
 import {
   HELPER_APP_BASENAME,
+  HELPER_SIGNING_TEAM,
   computerHome,
   helperAppPath,
   helperExecutablePath,
@@ -49,6 +53,7 @@ import {
   withPrepareLock,
 } from "../src/computer/helperApp.js";
 import { probeHelperPermissions } from "../src/test-helpers/computerPermissionProbe.js";
+import { readInstance } from "../src/computer/instance.js";
 
 const CLI_ROOT = path.join(import.meta.dir, "..");
 const PROBE_SETTLE_MS = 30_000;
@@ -91,7 +96,8 @@ function build(args: string[]): { tar: string; app: string } {
   const stage = flag(args, "stage") ?? fs.mkdtempSync(path.join(os.tmpdir(), "cast-computer-build-"));
   const tar = flag(args, "out") ?? path.join(stage, "helper.tar");
   fs.mkdirSync(path.dirname(tar), { recursive: true });
-  const size = buildComputerHelper({ stage, output: tar, version: flag(args, "version") });
+  // --fast: this machine's arch only, debug, for a local edit and test loop.
+  const size = buildComputerHelper({ stage, output: tar, version: flag(args, "version"), universal: !args.includes("--fast") });
   if (size === 0) fail("swift is not on PATH, so there is nothing to verify");
 
   // Unpack a copy beside the tar: the e2e suites take a bundle path in
@@ -316,6 +322,35 @@ switch (verb) {
   case "build":
     build(rest);
     break;
+  case "dev": {
+    // The local edit loop: this arch, debug, signed, installed at the fixed
+    // path (the grant survives, same identity), and the running helper stopped
+    // so the next command launches the new build.
+    //
+    // An ad hoc signature is a different app to TCC, so installing one silently
+    // revokes both grants until a signed build replaces it. The team identity
+    // comes from the keychain when the environment does not name one.
+    if (!process.env.CODECAST_SIGN_IDENTITY) {
+      const found = spawnSync("/usr/bin/security", ["find-identity", "-v", "-p", "codesigning"], { encoding: "utf8" }).stdout ?? "";
+      const identity = new RegExp(`"(Developer ID Application: [^"]*\\(${HELPER_SIGNING_TEAM}\\))"`).exec(found)?.[1];
+      if (!identity) fail("dev needs the Developer ID signing identity (set CODECAST_SIGN_IDENTITY); an ad hoc build would revoke the helper's grants");
+      process.env.CODECAST_SIGN_IDENTITY = identity;
+    }
+    const built = build(["--fast", ...rest]);
+    await install(built.tar, { version: flag(rest, "version") });
+    // The recorded pid only: a pattern match also hits any shell whose command
+    // line mentions the helper's path.
+    const running = readInstance()?.pid;
+    if (running) {
+      try {
+        process.kill(running);
+      } catch {
+        /* already gone */
+      }
+    }
+    console.log("helper restarted on the next cast computer command");
+    break;
+  }
   case "install":
     await install(rest[0] ?? fail("usage: install <helper.tar>"), { version: flag(rest, "version") });
     break;

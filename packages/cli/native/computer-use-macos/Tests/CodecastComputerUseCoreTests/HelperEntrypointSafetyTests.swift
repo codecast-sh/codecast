@@ -44,14 +44,17 @@ final class HelperEntrypointSafetyTests: XCTestCase {
         let click = try region(of: "private func click(params:", until: "private func performClickAction(")
 
         XCTAssertFalse(click.contains("raiseWindow"))
-        XCTAssertTrue(click.contains("requireTargetWindowFocused"))
+        XCTAssertTrue(click.contains("requireMouseFocus"))
     }
 
-    func testTheDragVerbDoesNotExist() throws {
-        let source = try helperSource()
+    /// Mouse input has no background route (AppKit drops a press on an inactive
+    /// window), so a drag refuses a background target rather than doing nothing,
+    /// and never raises one on its own.
+    func testADragNeedsFocusAndNeverRaises() throws {
+        let drag = try region(of: "private func drag(params:", until: "private func currentKeyboardSnapshot(")
 
-        XCTAssertFalse(source.contains("case \"drag\":"))
-        XCTAssertFalse(source.contains("func drag("))
+        XCTAssertFalse(drag.contains("raiseWindow"))
+        XCTAssertTrue(drag.contains("requireMouseFocus"))
     }
 
     /// An interrupted agent must never leave a modifier logically held for the
@@ -61,7 +64,7 @@ final class HelperEntrypointSafetyTests: XCTestCase {
 
         XCTAssertTrue(chord.contains("var pressedModifiers: [KeyModifierName] = []"))
         XCTAssertTrue(chord.contains(
-            "defer { for modifier in pressedModifiers.reversed() { flags.remove(modifier.flag) try? keyEvent(modifier.keyCode, down: false, flags: flags) } }"
+            "defer { for modifier in pressedModifiers.reversed() { flags.remove(modifier.flag) try? keyEvent(modifier.keyCode, down: false, flags: flags, route: route) } }"
         ))
     }
 

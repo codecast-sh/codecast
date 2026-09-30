@@ -30,9 +30,10 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { spawnSync } from "../proc.js";
 import { ComputerError } from "./errors.js";
 import { resolveCastInvocation } from "../castInvocation.js";
-import { HELPER_BUNDLE_ID, helperAppPath, helperExecutablePath } from "./helperApp.js";
+import { HELPER_BUNDLE_ID, helperAppPath, helperExecutablePath, materializeLinuxHelper } from "./helperApp.js";
 import { stampComputerRaise } from "./instance.js";
 import { spawnObserved, type ObservedLaunch } from "./launchObserver.js";
+import { launchesThroughOpen, noDesktopSessionReason, runOpen } from "./desktopSession.js";
 import type { ComputerPermissionId, ComputerPermissionStatus, ComputerPermissionStatusResult } from "./types.js";
 
 /**
@@ -107,8 +108,12 @@ export type PermissionProbeRoute = "disclaimed" | "open";
 
 /** Ask the helper what IT is granted. Never exec's the binary in-process. */
 export async function getPermissionStatus(opts: PermissionStatusOptions = {}): Promise<ComputerPermissionStatusResult> {
-  if (process.platform !== "darwin") return unsupported();
+  if (process.platform !== "darwin" && process.platform !== "linux") return unsupported();
+  // A script, written in a moment: there is no reason to report it missing.
+  if (process.platform === "linux" && !opts.launch) materializeLinuxHelper();
   const appPath = helperAppPath();
+  const noDesktop = noDesktopSessionReason();
+  if (noDesktop) return unavailable(noDesktop, appPath);
   if (!helperIsMaterialized()) {
     return unavailable(`${helperExecutablePath()} was not found — run \`cast computer capabilities\` to materialize the helper`, appPath);
   }
@@ -121,11 +126,12 @@ export async function getPermissionStatus(opts: PermissionStatusOptions = {}): P
       statusPath,
       path.join(tempDir, "probe.log"),
     ) || null;
-  const report = (raw: Partial<Record<ComputerPermissionId, unknown>>): ComputerPermissionStatusResult => ({
+  const report = (raw: Partial<Record<ComputerPermissionId | "detail", unknown>>): ComputerPermissionStatusResult => ({
     platform: process.platform,
     helperAppPath: appPath,
     helperUnavailableReason: null,
     permissions: PERMISSION_IDS.map((id) => ({ id, status: normalizeStatus(raw[id]) })),
+    ...(typeof raw.detail === "string" && raw.detail ? { detail: raw.detail } : {}),
   });
   const deadline = Date.now() + (opts.timeoutMs ?? STATUS_POLL_TIMEOUT_MS);
   try {
@@ -156,11 +162,11 @@ function normalizeStatus(value: unknown): ComputerPermissionStatus {
   return value === "granted" || value === "unsupported" ? value : "not-granted";
 }
 
-function readStatusFile(statusPath: string): Partial<Record<ComputerPermissionId, unknown>> | null {
+function readStatusFile(statusPath: string): Partial<Record<ComputerPermissionId | "detail", unknown>> | null {
   try {
     // The helper writes atomically, so a readable file is a complete one; a
     // parse failure here means a partial write we should keep waiting on.
-    return JSON.parse(fs.readFileSync(statusPath, "utf-8")) as Partial<Record<ComputerPermissionId, unknown>>;
+    return JSON.parse(fs.readFileSync(statusPath, "utf-8")) as Partial<Record<ComputerPermissionId | "detail", unknown>>;
   } catch {
     return null;
   }
@@ -168,11 +174,12 @@ function readStatusFile(statusPath: string): Partial<Record<ComputerPermissionId
 
 function useOpenRoute(route?: PermissionProbeRoute): boolean {
   if (route) return route === "open";
-  return process.env.CODECAST_COMPUTER_PERMISSION_ROUTE === "open" || process.env.CODECAST_NO_DISCLAIM === "1";
+  return launchesThroughOpen();
 }
 
 function launchStatusProbe(appPath: string, statusPath: string, logFile: string, route?: PermissionProbeRoute): ObservedLaunch {
   const args = ["--permission-status-file", statusPath];
+  if (process.platform === "linux") return spawnObserved("python3", [helperExecutablePath(appPath), ...args], logFile);
   if (useOpenRoute(route)) {
     // `open` is a launcher, not the probe: it hands the app to LaunchServices
     // and exits, so watching IT for an exit would report success as a death.
@@ -200,14 +207,6 @@ function silentLaunch(): ObservedLaunch {
 }
 
 /** `open`, with its refusal turned into an error that names itself. */
-function runOpen(args: string[], what: string): void {
-  const result = spawnSync("/usr/bin/open", args, { encoding: "utf8", timeout: 30_000 });
-  if (result.error) throw new ComputerError("accessibility_error", `could not ${what}: ${result.error.message}`);
-  if (result.status === 0) return;
-  const detail = (result.stderr || result.stdout || `exit ${result.status ?? "unknown"}`).replace(/\s+/g, " ").trim();
-  throw new ComputerError("accessibility_error", `could not ${what}: ${detail}`);
-}
-
 export interface PermissionSetupResult extends ComputerPermissionStatusResult {
   permissionId?: ComputerPermissionId;
   launchedHelper: boolean;
@@ -284,6 +283,8 @@ export interface PermissionResetResult extends ComputerPermissionStatusResult {
 /** Clear both TCC rows for the helper's stable identity. macOS keeps them
  *  after an uninstall, so a stale deny needs an explicit way out. */
 export async function resetPermissions(): Promise<PermissionResetResult> {
+  // Linux keeps no grants, so there is nothing to clear: report the state.
+  if (process.platform === "linux") return { ...(await getPermissionStatus()), bundleId: HELPER_BUNDLE_ID };
   if (process.platform !== "darwin") return { ...unsupported(), bundleId: HELPER_BUNDLE_ID };
   const status = await getPermissionStatus();
   if (status.helperUnavailableReason) throw new ComputerError("accessibility_error", status.helperUnavailableReason);
@@ -318,8 +319,11 @@ export function nextPermissionStep(status: ComputerPermissionStatusResult): stri
   // agent to grant Accessibility to an app that is not on the machine, or to a
   // feature that does not exist on this platform, sends it to System Settings
   // to look for a row that is not there.
-  if (missing.status === "unsupported") return `cast computer is macOS only; this is ${status.platform}.`;
+  if (missing.status === "unsupported") return `cast computer runs on macOS and on Linux (X11); this is ${status.platform}.`;
   if (status.helperUnavailableReason) return `No grant can be read yet: ${status.helperUnavailableReason}`;
+  if (status.platform === "linux") {
+    return status.detail ?? "The display or the accessibility bus is not reachable; provision the host again from the machine that manages it (`cast hosts provision <host>`), then retry.";
+  }
   const label = missing.id === "accessibility" ? "Accessibility" : "Screen Recording";
   return `Grant ${label} to codecast computer, then retry get-app-state.`;
 }
