@@ -59,7 +59,9 @@ export const NOTIFICATION_TYPE = v.union(
   // stalled (org-roles-run-work.md R6): one line, once a day at most.
   v.literal("goal_stall"),
   // The hourly fold-up of "sessions are waiting for you" (notifications.ts).
-  v.literal("sessions_need_input")
+  v.literal("sessions_need_input"),
+  // A teammate shared a machine with a team the recipient is on.
+  v.literal("device_shared")
 );
 
 export const PREFERENCE_MAP: Record<string, string> = {
@@ -101,6 +103,8 @@ export const PREFERENCE_MAP: Record<string, string> = {
   // The role is addressing the person by name about their own goals: the
   // same class as a mention, under the switch a person already has.
   goal_stall: "mention",
+  // News about what the team can do, like a teammate starting a session.
+  device_shared: "team_session_start",
 };
 
 function isNotificationEnabled(
@@ -233,6 +237,9 @@ export const emit = internalMutation({
     chat_message_id: v.optional(v.id("chat_messages")),
     chat_thread_root_id: v.optional(v.id("chat_messages")),
     direct_recipient_id: v.optional(v.id("users")),
+    // The caller already decided who this is news for (a task comment reaches
+    // the same people its Threads row moves for). Skips the subscription scan.
+    recipient_ids: v.optional(v.array(v.id("users"))),
     // The push banner's parts, when they differ from the bell row. The bell
     // keeps `message` (one full sentence); a phone banner reads like a
     // messaging app: title = who, subtitle = where, body = the words alone.
@@ -253,10 +260,14 @@ export const emit = internalMutation({
     const recipients: UserDoc[] = [];
 
     const actorId = args.actor_user_id?.toString();
-    if (args.direct_recipient_id) {
-      const u = await ctx.db.get(args.direct_recipient_id);
-      if (u && u._id.toString() !== actorId) {
-        recipients.push(u);
+    const named = args.recipient_ids ?? (args.direct_recipient_id ? [args.direct_recipient_id] : null);
+    if (named) {
+      const seen = new Set<string>();
+      for (const id of named) {
+        if (id.toString() === actorId || seen.has(id.toString())) continue;
+        seen.add(id.toString());
+        const u = await ctx.db.get(id);
+        if (u) recipients.push(u);
       }
     } else {
       const subs = await ctx.db

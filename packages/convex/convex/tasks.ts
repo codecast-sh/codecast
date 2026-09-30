@@ -42,7 +42,7 @@ import { pickInheritedGitMeta, type GitMetaSource } from "./projectPaths";
 import { bucketTs } from "./presenceState";
 import { enqueuePendingMessage, tellRole } from "./pendingMessages";
 import { addConversationToWorkItem, linkConversationToEntityBestEffort, linkedEntityIdsForConversation } from "./conversationLinks";
-import { agentCommentLevelOf, dropThreadRead, taskCommentIsNews, taskThreadParticipants, touchThread, type TaskCommentAuthorKind } from "./threadReads";
+import { agentCommentLevelOf, dropThreadRead, taskCommentAuthorKind, taskCommentIsNews, taskThreadParticipants, touchThread, type TaskCommentAuthorKind } from "./threadReads";
 import { extractMentionHandles } from "@codecast/shared/chat";
 import { resolveTeamForPath, teamVisibleConvTeam } from "./privacy";
 import { webBaseUrl } from "./slack";
@@ -449,21 +449,35 @@ export async function resolveAssigneeStr(
   return role ? settle(role) : assignee;
 }
 
-export async function notifySubscribers(
+// A status change rings nobody by default: the board and the Threads inbox
+// carry it. A reader who opts in (notification_preferences.task_status_changes)
+// hears only the moves that end a task, done or dropped, and only on tasks
+// they take part in (the same participants a comment reaches), like Linear's
+// "status changes" setting.
+const STATUS_NEWS: ReadonlySet<string> = new Set(["done", "dropped"]);
+
+export async function notifyTaskStatus(
   ctx: any,
-  eventType: string,
   actorUserId: Id<"users">,
-  task: { _id: Id<"tasks">; short_id: string; title: string },
-  message: string,
-  conversationId?: Id<"conversations">
+  task: { _id: Id<"tasks">; short_id: string; user_id: Id<"users">; assignee?: string; source?: string; creation_source?: string },
+  status: string,
+  conversationId?: Id<"conversations">,
 ) {
+  if (!STATUS_NEWS.has(status)) return;
+  const recipients: Id<"users">[] = [];
+  for (const userId of await taskThreadParticipants(ctx, task as any)) {
+    const user = await ctx.db.get(userId);
+    if (user?.notification_preferences?.task_status_changes === true) recipients.push(userId);
+  }
+  if (recipients.length === 0) return;
   await ctx.runMutation(internal.notificationRouter.emit, {
-    event_type: eventType,
+    event_type: "task_status_changed",
     actor_user_id: actorUserId,
     entity_type: "task",
     entity_id: task._id.toString(),
-    message,
+    message: `changed ${task.short_id} to ${status}`,
     conversation_id: conversationId,
+    recipient_ids: recipients,
   });
 }
 
@@ -546,6 +560,7 @@ async function announceAssignment(
   if (!assigneeId || String(assigneeId) === String(o.actorUserId)) return;
   await subscribeUser(ctx, assigneeId, o.task._id, "assignee", o.via);
   if (o.via === "human") await handoffTaskThread(ctx, o.task._id, o.actorUserId, assigneeId);
+  if (await foldMachineAssignment(ctx, assigneeId, o)) return;
   await ctx.runMutation(internal.notificationRouter.emit, {
     event_type: "task_assigned",
     actor_user_id: o.actorUserId,
@@ -554,6 +569,36 @@ async function announceAssignment(
     message: `assigned you to ${o.task.short_id}: ${o.task.title}`,
     direct_recipient_id: assigneeId,
   });
+}
+
+// An agent or a bot account assigning work does it in bursts (a board sweep
+// handed one person 45 tasks in a minute). While the last such row from the
+// same actor is still unread and recent, a new assignment folds into it: one
+// row that counts, pointing at the newest task, and no second push.
+const ASSIGNMENT_FOLD_WINDOW_MS = 30 * 60 * 1000;
+
+async function foldMachineAssignment(
+  ctx: any,
+  assigneeId: Id<"users">,
+  o: { task: { _id: Id<"tasks">; short_id: string; title: string }; actorUserId: Id<"users">; via: SubscriptionVia },
+): Promise<boolean> {
+  if (o.via !== "agent" && !(await ctx.db.get(o.actorUserId))?.is_bot) return false;
+  const now = Date.now();
+  const recent = await ctx.db
+    .query("notifications")
+    .withIndex("by_recipient_created", (q: any) => q.eq("recipient_user_id", assigneeId).gt("created_at", now - ASSIGNMENT_FOLD_WINDOW_MS))
+    .order("desc")
+    .take(50);
+  const open = recent.find((n: any) => n.type === "task_assigned" && !n.read && String(n.actor_user_id) === String(o.actorUserId));
+  if (!open) return false;
+  const count = (open.fold_count ?? 1) + 1;
+  await ctx.db.patch(open._id, {
+    fold_count: count,
+    entity_id: o.task._id.toString(),
+    message: `assigned you ${count} tasks, latest ${o.task.short_id}: ${o.task.title}`,
+    created_at: now,
+  });
+  return true;
 }
 
 /**
@@ -2159,7 +2204,7 @@ export const update = mutation({
       if (task.plan_id) {
         await recalcPlanProgress(ctx, task.plan_id, task._id, nextStatus);
       }
-      await notifySubscribers(ctx, "task_status_changed", auth.userId, task as any, `changed ${task.short_id} to ${nextStatus}`, linkedConvId);
+      await notifyTaskStatus(ctx, auth.userId, task as any, nextStatus, linkedConvId);
     }
     if (args.assignee !== undefined && updates.assignee !== task.assignee) {
       await announceAssignment(ctx, { task, assignee: updates.assignee, actorUserId: auth.userId, actorName: actor.name, via: cliVia(args) });
@@ -2198,6 +2243,11 @@ export const update = mutation({
 // their copy reads as read and the row carries author_user_id. An agent or
 // system row has no actor, so the owner sees it unread — that is the point.
 // Every task_comments insert with a task row goes through here.
+//
+// `notify` also rings the bell (and the phone) for the same people the row
+// moves for, so the Threads inbox and the notification never disagree about
+// what is news. `tokenOwner` is who the write ran under: an agent posts under
+// its owner's token, and its own comments never ring its owner.
 export async function insertTaskComment(
   ctx: any,
   taskId: Id<"tasks">,
@@ -2209,6 +2259,7 @@ export async function insertTaskComment(
     image_storage_ids?: string[];
   },
   actorId?: Id<"users">,
+  notify?: { tokenOwner: Id<"users">; conversationId?: Id<"conversations"> },
 ) {
   const now = Date.now();
   const id = await ctx.db.insert("task_comments", {
@@ -2235,11 +2286,14 @@ export async function insertTaskComment(
     // an agent's only when it needs a person, or per the reader's own level.
     // The named people are participants of this comment outright, whether
     // or not the subscription write above has landed in this transaction.
+    // A bot account's comment (an anchor, another team's triage agent) is an
+    // agent's, the same classification the read side applies (threads.ts).
     const recipients: Id<"users">[] = [];
     const participants = await taskThreadParticipants(ctx, task);
     for (const id of mentioned) if (!participants.some((p) => String(p) === String(id))) participants.push(id);
+    const actor = actorId ? await ctx.db.get(actorId) : null;
     for (const userId of participants) {
-      const author: TaskCommentAuthorKind = !actorId ? "agent" : String(actorId) === String(userId) ? "self" : "person";
+      const author: TaskCommentAuthorKind = taskCommentAuthorKind({ author_user_id: actorId }, actor, userId);
       const level = agentCommentLevelOf(await ctx.db.get(userId));
       if (taskCommentIsNews(fields, author, level, mentionedSet.has(String(userId)))) recipients.push(userId);
     }
@@ -2252,6 +2306,17 @@ export async function insertTaskComment(
       actorId,
       activityAt: now,
     });
+    if (notify) {
+      await ctx.runMutation(internal.notificationRouter.emit, {
+        event_type: "task_commented",
+        actor_user_id: actorId ?? notify.tokenOwner,
+        entity_type: "task",
+        entity_id: String(taskId),
+        message: `commented on ${task.short_id}: ${fields.text.slice(0, 100)}`,
+        conversation_id: notify.conversationId,
+        recipient_ids: recipients.filter((r) => String(r) !== String(notify.tokenOwner)),
+      });
+    }
   }
   return id;
 }
@@ -2315,10 +2380,9 @@ export const addComment = mutation({
       text: args.text,
       conversation_id,
       comment_type: args.comment_type || "note",
-    }, args.conversation_id ? undefined : auth.userId);
+    }, args.conversation_id ? undefined : auth.userId, { tokenOwner: auth.userId, conversationId: notificationConversationId });
 
     await subscribeUser(ctx, auth.userId, task._id, "commenter", cliVia(args));
-    await notifySubscribers(ctx, "task_commented", auth.userId, task as any, `commented on ${task.short_id}: ${args.text.slice(0, 100)}`, notificationConversationId);
     await schedulePushComment(ctx, task, id);
 
     return { id };
@@ -3531,7 +3595,7 @@ export const webUpdate = mutation({
       if (task.plan_id) {
         await recalcPlanProgress(ctx, task.plan_id, task._id, nextStatus);
       }
-      await notifySubscribers(ctx, "task_status_changed", userId, task as any, `changed ${task.short_id} to ${nextStatus}`);
+      await notifyTaskStatus(ctx, userId, task as any, nextStatus);
     }
     if (args.assignee !== undefined && resolvedAssignee !== task.assignee) {
       await announceAssignment(ctx, { task, assignee: resolvedAssignee, actorUserId: userId, via: "human" });
@@ -3565,10 +3629,9 @@ export const webAddComment = mutation({
       text: args.text,
       comment_type: args.comment_type || "note",
       image_storage_ids: args.image_storage_ids,
-    }, userId);
+    }, userId, { tokenOwner: userId });
 
     await subscribeUser(ctx, userId, task._id, "commenter", "human");
-    await notifySubscribers(ctx, "task_commented", userId, task as any, `commented on ${task.short_id}: ${args.text.slice(0, 100)}`);
     await schedulePushComment(ctx, task, commentId);
 
     return { success: true };
@@ -4236,7 +4299,7 @@ export const batchUpdateStatus = mutation({
 
       if (args.status !== task.status) {
         if (task.plan_id) affectedPlans.add(`${task.plan_id}:${task._id}:${args.status}`);
-        await notifySubscribers(ctx, "task_status_changed", auth.userId, task as any, `changed ${task.short_id} to ${args.status}`);
+        await notifyTaskStatus(ctx, auth.userId, task as any, args.status);
       }
 
       results.push({ short_id, success: true });

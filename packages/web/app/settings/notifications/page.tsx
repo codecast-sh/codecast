@@ -22,7 +22,7 @@ function DevicePermissionRow() {
   return <PermissionRow kind="notifications" readiness={readiness} onChange={refresh} />;
 }
 
-type NotifType = "team_session_start" | "mention" | "permission_request" | "session_idle" | "session_idle_digest" | "session_error" | "task_activity" | "doc_activity" | "plan_activity" | "artifact_activity" | "chat_activity" | "email_notifications";
+type NotifType = "team_session_start" | "mention" | "permission_request" | "session_idle" | "session_idle_digest" | "session_error" | "task_activity" | "doc_activity" | "plan_activity" | "artifact_activity" | "chat_activity" | "email_notifications" | "task_status_changes";
 
 const NOTIF_SECTIONS = [
   {
@@ -49,7 +49,8 @@ const NOTIF_SECTIONS = [
     title: "Work Items",
     icon: CheckCircle,
     items: [
-      { key: "task_activity" as NotifType, label: "Task activity", desc: "Updates on tasks you're watching" },
+      { key: "task_activity" as NotifType, label: "Task activity", desc: "Assignments, comments from people, and agent comments that need you" },
+      { key: "task_status_changes" as NotifType, label: "Task done or dropped", desc: "When a task you take part in is closed. Other status moves stay on the board" },
       { key: "doc_activity" as NotifType, label: "Doc activity", desc: "Updates on docs you're watching" },
       { key: "plan_activity" as NotifType, label: "Plan activity", desc: "Updates on plans you're watching" },
     ],
@@ -78,6 +79,7 @@ const DEFAULT_PREFS = {
   artifact_activity: true,
   chat_activity: true,
   email_notifications: true,
+  task_status_changes: false,
 };
 
 export default function NotificationsSettingsPage() {
@@ -91,7 +93,7 @@ export default function NotificationsSettingsPage() {
   const machineWidePresence = (user as any)?.machine_wide_presence ?? true;
 
   const getPref = useCallback((key: NotifType) => {
-    return (prefs as any)?.[key] ?? true;
+    return (prefs as any)?.[key] ?? DEFAULT_PREFS[key];
   }, [prefs]);
 
   const handleGlobalToggle = useCallback(async (value: boolean) => {
