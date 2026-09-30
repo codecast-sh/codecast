@@ -69,91 +69,51 @@
   flex-direction: column;
 }
 
-/* The rows sit in one bordered column, separated by hairlines: a list, not a
-   stack of cards. The column is the scroll container's child, so the open
-   row's sticky head resolves against .th-scroll. */
+/* Each thread is its own card in one column, the page's only scroller:
+   nothing inside a card scrolls. */
 .th-list {
   width: 100%;
   max-width: 920px;
   margin: 0 auto;
-  border: 1px solid color-mix(in srgb, var(--sol-border) 32%, transparent);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--sol-card) 40%, var(--sol-bg));
-  overflow: clip;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
   flex: 0 0 auto;
 }
 
 .th-row {
-  border-top: 1px solid color-mix(in srgb, var(--sol-border) 22%, transparent);
-  /* The list's rounded top clips the first row's corners; the sticky head
-     below keeps its own inset from the scroller's edge. */
-  scroll-margin-top: 4px;
-  /* One body inset for every kind: 14px from the row's edge. The chat and DM
+  border: 1px solid color-mix(in srgb, var(--sol-border) 30%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--sol-card) 40%, var(--sol-bg));
+  overflow: clip;
+  /* The keyboard walk lands a card's head just under the scroller's edge. */
+  scroll-margin-top: 10px;
+  /* One body inset for every kind: 14px from the card's edge. The chat and DM
      kinds reach it through the message grid's own gutter — a 22px face
      right-aligned in this column, with the gutter's 8px of padding, starts at
      14px. */
   --ch-gutter: 44px;
 }
 
-.th-row:first-child { border-top: 0; }
-
 /* Unread is a statement, not a hue swap: a solid cyan rule down the left
-   edge. A read row in the list is the visit's memory — it recedes so the
-   unread rows around it read as the page's content. */
+   edge, as long as the visit has not read it. */
 .th-row-unread { box-shadow: inset 3px 0 0 var(--sol-cyan); }
 
-.th-row:not(.th-row-unread):not(.th-row-open) .th-row-kind { opacity: 0.6; }
-.th-row:not(.th-row-unread):not(.th-row-open) .th-row-title { color: var(--sol-text-muted); }
+/* The cursor: the card's frame lights. */
+.th-row-selected { border-color: color-mix(in srgb, var(--sol-blue) 55%, transparent); }
 
-/* The cursor: a tinted band. It reads as "you are here" whether the row is
-   open or not, and it is the only hover the head gets — the head lights the
-   same way under the mouse, so the two never disagree. */
-.th-row-selected > .th-row-head,
-.th-row-open > .th-row-head {
-  background: color-mix(in srgb, var(--sol-blue) 9%, transparent);
-}
-
-@media (hover: hover) {
-  .th-row:not(.th-row-selected) > .th-row-head:hover {
-    background: color-mix(in srgb, var(--sol-border) 22%, transparent);
-  }
-}
-
-.th-row-hit:active { background: color-mix(in srgb, var(--sol-border) 30%, transparent); }
-
-/* The head: the hit area and, beside it, the tools. Two sibling controls,
-   never one inside the other. */
+/* The head names the object the thread is on. */
 .th-row-head {
   display: flex;
-  align-items: stretch;
-  font-size: 12.5px;
-  color: var(--sol-text-muted);
-  transition: background-color 100ms ease;
-}
-
-/* Open, the head stays on screen while the body scrolls under it, so a
-   reader deep in a long thread still has its name. Opaque, never a mix with
-   transparent: message rows scroll under it. */
-.th-row-open > .th-row-head {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  background: color-mix(in srgb, var(--sol-blue) 9%, var(--sol-bg));
-  border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 24%, transparent);
-}
-
-.th-row-hit {
-  flex: 1 1 auto;
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
+  align-items: center;
+  gap: 9px;
   min-width: 0;
-  padding: 9px 8px 9px 13px;
-  text-align: left;
-  cursor: pointer;
+  padding: 10px 10px 8px 14px;
+  font-size: 12.5px;
+  line-height: 20px;
+  color: var(--sol-text-muted);
 }
 
-.th-row-hit:focus-visible,
 .th-row-tool:focus-visible,
 .th-toggle:has(:focus-visible),
 .th-markall:focus-visible,
@@ -163,14 +123,13 @@
 }
 
 /* The kind glyph: a tinted square so a scan down the page reads kinds by
-   colour before it reads names. Aligned with the first line. */
+   colour before it reads names. */
 .th-row-kind {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 18px;
   height: 18px;
-  margin-top: 1px;
   border-radius: 5px;
   flex: 0 0 auto;
 }
@@ -183,39 +142,18 @@
 .th-tone-yellow { color: var(--sol-yellow); background: color-mix(in srgb, var(--sol-yellow) 14%, transparent); }
 .th-tone-red { color: var(--sol-red); background: color-mix(in srgb, var(--sol-red) 14%, transparent); }
 
-.th-row-main {
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.th-row-top {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  line-height: 20px;
-}
-
-/* The rail's grammar: weight plus cyan says unread, a quiet label says read. */
 .th-row-title {
   flex: 1 1 auto;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-weight: 500;
-  color: var(--sol-text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--sol-text);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.th-row-unread .th-row-title {
-  font-weight: 600;
-  color: var(--sol-text);
 }
 
 .th-row-badge {
@@ -235,75 +173,45 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* The second line: who spoke last, then what they said, two lines at most.
-   The speaker is inline so the line reads as one sentence: "Fix auth race:
-   PR #3589 up. The fix landed differently…" */
-.th-row-preview {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow: hidden;
-  font-size: 12px;
-  line-height: 17px;
-  color: var(--sol-text-muted);
-  overflow-wrap: anywhere;
-}
-
-.th-row-who {
-  display: inline;
-  font-weight: 500;
-  color: var(--sol-text-secondary);
-}
-
-.th-row-who::after { content: ": "; }
-
-/* An agent speaks under its session's name with a small mark before it, so
-   "Ashot: shipped it" can never read as the reader's own words. */
-.th-row-who-agent { color: var(--sol-orange); }
-
-.th-row-who-agent svg {
-  display: inline-block;
-  vertical-align: -2px;
-  margin-right: 3px;
-}
-
-/* A question's row: the question is the speaker slot, the consequence the text. */
-.th-kind-question .th-row-who { color: var(--sol-text); }
-.th-kind-question .th-row-who::after { content: " — "; }
-
 .th-row-tools {
   display: inline-flex;
   align-items: center;
   gap: 2px;
   flex: 0 0 auto;
-  padding: 0 8px 0 0;
-  /* Hidden until the row is under the cursor or the mouse: a column of
+  /* Hidden until the card is under the cursor or the mouse: a column of
      check marks and arrows is noise the eye has to skip. */
   opacity: 0;
   transition: opacity 100ms ease;
 }
 
 .th-row-selected .th-row-tools,
-.th-row-open .th-row-tools,
 .th-row:hover .th-row-tools,
 .th-row:focus-within .th-row-tools { opacity: 1; }
 
 .th-row-tool { flex: 0 0 auto; }
 
-/* The body arriving is the one moment worth motion: a short fade with a
-   3px settle. */
-.th-card-body { animation: th-body-in 150ms ease-out; }
-
-@keyframes th-body-in {
-  from {
-    opacity: 0;
-    transform: translateY(-3px);
-  }
+/* Where the new threads end and the seen ones begin. */
+.th-marker {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  max-width: 920px;
+  margin: 22px auto 18px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--sol-text-muted);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .th-card-body { animation: none; }
+.th-marker::before,
+.th-marker::after {
+  content: "";
+  flex: 1 1 auto;
+  height: 1px;
+  background: color-mix(in srgb, var(--sol-border) 40%, transparent);
 }
+
+.th-list-seen .th-row-title { color: var(--sol-text-secondary); }
 
 .th-card-root { padding: 8px 6px 2px; }
 
@@ -323,11 +231,7 @@
   border-top: 1px solid color-mix(in srgb, var(--sol-border) 18%, transparent);
 }
 
-/* Bounded so one long thread doesn't swallow the page; the page keeps its own
-   scroll for walking BETWEEN rows, the row scrolls WITHIN itself. */
 .th-card-replies {
-  max-height: 60vh;
-  overflow-y: auto;
   /* No left padding: the timeline reads the row's gutter, the way the root
      message above it does, so the two line up. */
   padding: 4px 6px 8px 0;
@@ -336,13 +240,6 @@
 .th-card-open-comments,
 .th-card-open-task {
   padding: 6px 12px 10px;
-  max-height: 65vh;
-  overflow-y: auto;
-}
-
-.th-kind-chat .th-card-replies {
-  max-height: none;
-  overflow-y: visible;
 }
 
 /* The comment thread on the row's own surface. Its composer wears the app's
@@ -575,8 +472,6 @@ a.th-task-meta:hover { color: var(--sol-cyan); }
   color: var(--sol-text-secondary);
   border-left: 2px solid color-mix(in srgb, var(--sol-border) 60%, transparent);
   padding-left: 10px;
-  max-height: 40vh;
-  overflow-y: auto;
 }
 
 .th-question-options {
@@ -683,8 +578,6 @@ a.th-task-meta:hover { color: var(--sol-cyan); }
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-height: 55vh;
-  overflow-y: auto;
 }
 
 .th-page-comment {
@@ -779,13 +672,7 @@ a.th-task-meta:hover { color: var(--sol-cyan); }
 
 /* A message is a window, not a transcript: clamp long ones, the side panel
    has the whole thing. */
-.th-session-row-body {
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 6;
-  -webkit-box-orient: vertical;
-  color: var(--sol-text-secondary);
-}
+.th-session-row-body { color: var(--sol-text-secondary); }
 
 .th-session-row-tools {
   display: inline-flex;
@@ -795,14 +682,14 @@ a.th-task-meta:hover { color: var(--sol-cyan); }
   color: var(--sol-text-muted);
 }
 
-.th-session-composer { margin: 0 12px; }
+.th-session-composer { margin: 6px 14px 0; }
 
 .th-session-foot {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 0 14px;
+  padding: 6px 14px 0;
 }
 
 .th-session-state {
@@ -894,3 +781,8 @@ a.th-task-meta:hover { color: var(--sol-cyan); }
 }
 
 .th-head-done svg { color: var(--sol-green); }
+
+/* The chat and DM bodies take their gutter from the message grid, so their
+   "show earlier" button brings its own inset. */
+.th-kind-chat .th-card-open > .th-task-earlier,
+.th-kind-dm .th-card-open > .th-task-earlier { padding: 8px 14px 2px; }

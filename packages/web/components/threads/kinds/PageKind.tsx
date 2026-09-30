@@ -8,7 +8,8 @@ import type { ThreadCardModel } from "../../../lib/threadCards";
 import { rowOf } from "../../../lib/threadRows";
 import { usePageThreadRow as usePageRow } from "../../../hooks/useThreadPreviews";
 import { CommentAvatar } from "../../comments/CommentAvatar";
-import { useTailPin } from "../cardWindow";
+import { EarlierButton, useReaderFold } from "../readerFold";
+import { Clamp } from "../../tasks/TaskCommentStream";
 import { useThreadsPage } from "../threadsContext";
 
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
@@ -44,7 +45,7 @@ function threadOrder(comments: PageCommentRow[]): Array<{ c: PageCommentRow; rep
   return out;
 }
 
-export function PageExpanded({ card, seen, focusComposer }: { card: ThreadCardModel; present: boolean; seen: boolean; frozenReadAt: number; focusComposer: boolean }) {
+export function PageExpanded({ card, seen, frozenReadAt, focusComposer }: { card: ThreadCardModel; present: boolean; seen: boolean; frozenReadAt: number; focusComposer: boolean }) {
   const row = rowOf(card);
   const page = usePageRow(row.root_key);
   const { now } = useThreadsPage();
@@ -65,9 +66,7 @@ export function PageExpanded({ card, seen, focusComposer }: { card: ThreadCardMo
 
   const ordered = useMemo(() => threadOrder(page?.comments ?? []), [page?.comments]);
 
-  // The comments list is the capped scroller; pinned to the tail so the
-  // newest comment is what shows first.
-  const pinRef = useTailPin(ordered.length ? `${ordered[ordered.length - 1].c._id}|${ordered.length}` : "");
+  const fold = useReaderFold(ordered, (o) => o.c.created_at, frozenReadAt);
 
   const send = useCallback(() => {
     const t = text.trim();
@@ -78,8 +77,9 @@ export function PageExpanded({ card, seen, focusComposer }: { card: ThreadCardMo
 
   return (
     <div className="th-card-open th-card-open-page">
-      <div ref={pinRef} className="th-page-comments">
-        {ordered.map(({ c, reply }) => (
+      <EarlierButton count={fold.hidden} noun="comment" onClick={fold.showAll} />
+      <div className="th-page-comments">
+        {fold.visible.map(({ c, reply }) => (
           <div key={c._id} className={`th-page-comment ${reply ? "th-page-comment-reply" : ""}`}>
             <CommentAvatar name={c.author_name} image={c.author_avatar} size={20} />
             <div className="th-page-comment-body">
@@ -88,7 +88,7 @@ export function PageExpanded({ card, seen, focusComposer }: { card: ThreadCardMo
                 <span className="th-page-comment-age">{relTimeShort(c.created_at, now)}</span>
                 {c.status === "resolved" && <span className="th-page-comment-resolved">resolved</span>}
               </span>
-              <span className="th-page-comment-text">{c.text}</span>
+              <Clamp><span className="th-page-comment-text">{c.text}</span></Clamp>
             </div>
           </div>
         ))}

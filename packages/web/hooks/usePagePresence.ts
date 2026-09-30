@@ -28,10 +28,30 @@ export function useTabActive(): boolean {
   return tab ? tab.isActive : true;
 }
 
+/** Is this page on screen? A split sibling is on screen without being the
+ *  active (focused) pane. */
+export function useTabVisible(): boolean {
+  const tab = useTabContext();
+  return tab ? (tab.isVisible ?? tab.isActive) : true;
+}
+
+function useWindowPresent(): boolean {
+  return useSyncExternalStore(subscribePresence, readPresence, () => false);
+}
+
 /** True while this page is the active tab pane AND the window is focused and
- *  visible. */
+ *  visible: the gate for keyboard ownership. */
 export function usePagePresence(): boolean {
   const tabActive = useTabActive();
-  const windowPresent = useSyncExternalStore(subscribePresence, readPresence, () => false);
+  const windowPresent = useWindowPresent();
   return tabActive && windowPresent;
+}
+
+/** True while this page is on screen (a focused pane or a split sibling) AND
+ *  the window is focused and visible: the gate for reads. Scrolling a split
+ *  pane does not focus it, and what the reader scrolls past is read. */
+export function usePageReading(): boolean {
+  const visible = useTabVisible();
+  const windowPresent = useWindowPresent();
+  return visible && windowPresent;
 }
