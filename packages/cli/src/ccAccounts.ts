@@ -31,6 +31,7 @@ import { renderProviderEnvFile, sourceFilePrefix } from "./providerKeyLaunch.js"
 import { defaultConfigDir } from "./config/configDir.js";
 import { ccKeychainWriteItem, type CcKeychainItem } from "./ccKeychain.js";
 import { requestCloudJson } from "./cloudAgents/http.js";
+import { isRemoteDevice } from "./remote/device.js";
 import { nextUsageRetry, type UsageRetryState } from "./usageRetry.js";
 
 const PROFILE_KEYCHAIN_PREFIX = "codecast-cc-account-";
@@ -1430,6 +1431,15 @@ export function launchRecordInEffect(active?: ActiveIdentity, now = Date.now()):
   const record = readLaunchRecord();
   if (!record) return null;
   const meta = readProfileIndex().profiles[record.profile];
+  // On the fleet store the record names the account the store carries. It
+  // holds while that profile is saved: the keychain login is not the fleet's,
+  // and whether the profile can still carry sessions is the store's question
+  // (maintainFleetStore), answered by a switch rather than by dropping the record.
+  if (fleetStoreEnabled()) {
+    if (meta) return record;
+    clearLaunchProfile();
+    return null;
+  }
   const token = meta ? accountTokenInfo(record.profile) : null;
   const keychainKey = active?.verified ? active.uuid || active.email : undefined;
   const identityMoved = !!record.keychain_key && !!keychainKey && record.keychain_key !== keychainKey;
@@ -1445,6 +1455,226 @@ export function launchRecordInEffect(active?: ActiveIdentity, now = Date.now()):
  *  record's, else none (the keychain login). No keychain read. */
 export function launchProfileName(now = Date.now()): string | undefined {
   return launchRecordInEffect(undefined, now)?.profile;
+}
+
+// ---------------------------------------------------------------------------
+// Fleet store: one credential store every codecast-launched session reads
+//
+// Claude Code reads its credential store again about every 30 seconds
+// (measured on 2.1.286: a store rewritten between two turns of one process
+// served the second turn from the new account, with no restart). A launch
+// credential fixed at process start (a setup-token in the env, or a profile's
+// own store) can never follow a switch, so every switch was a kill and a
+// resume, and a spent account reached the session first: Claude Code's grace
+// window, its "wrap up this turn" note, and a session that stops to report it.
+//
+// So sessions launch on ONE store the daemon owns, and a switch rewrites it:
+// every running session is on the new account within half a minute, mid-turn.
+// The store carries a bearer only, never a refresh token: the profile's
+// setup-token when it has one (a year, nothing to rotate), else its saved
+// login's access token while that has time left. Claude Code therefore never
+// rotates anything in it, so no session can strand a saved login; the daemon
+// keeps the access token current from the profile's own grant.
+//
+// The launch record names the account the store carries. The keychain login
+// is left alone: `claude` started by hand keeps using it.
+// ---------------------------------------------------------------------------
+
+/** A login access token with less than this left is not written to the store.
+ *  The daemon refreshes a dormant fleet login an hour before it lapses, and
+ *  maintainActiveCcToken refreshes the keychain login half an hour before, so
+ *  the store is rewritten long before this floor is reached. */
+export const FLEET_MIN_ACCESS_MS = 5 * 60 * 1000;
+const FLEET_REFRESH_AHEAD_MS = 60 * 60 * 1000;
+
+export function fleetStoreDir(): string {
+  return path.join(defaultConfigDir(), "cc-fleet").normalize("NFC");
+}
+
+function fleetLaunchFile(): string {
+  return path.join(defaultConfigDir(), "cc-fleet.env");
+}
+
+function fleetStatePath(): string {
+  return path.join(fleetStoreDir(), "state.json");
+}
+
+/** Sessions on this machine launch on the fleet store. Remotes run a pushed
+ *  copy of the primary's login instead. CODECAST_CC_FLEET=0 turns it off. */
+export function fleetStoreEnabled(): boolean {
+  if (process.env.CODECAST_CC_FLEET === "0") return false;
+  return !isRemoteDevice();
+}
+
+export interface FleetState {
+  profile: string;
+  via: "token" | "login";
+  expires_at: number;
+  written_at: number;
+}
+
+export function readFleetState(): FleetState | null {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(fleetStatePath(), "utf-8"));
+    if (typeof parsed?.profile === "string" && typeof parsed?.expires_at === "number") return parsed;
+  } catch {}
+  return null;
+}
+
+/** The store holds a credential that can serve a request now. */
+export function fleetStoreReady(now = Date.now()): boolean {
+  const state = readFleetState();
+  return fleetStoreEnabled() && !!state && state.expires_at > now;
+}
+
+/** The bearer the fleet store carries for a profile, or null when it can carry
+ *  nothing now (no setup-token, and the saved login is dead or about to lapse).
+ *  `login` is the profile's credential JSON when the caller already read it. */
+export function fleetBearer(
+  name: string,
+  login: string | null,
+  now = Date.now(),
+): { blob: string; via: "token" | "login"; expires_at: number } | null {
+  const meta = readProfileIndex().profiles[name];
+  if (!meta) return null;
+  const identity = {
+    ...(meta.subscription ? { subscriptionType: meta.subscription } : {}),
+    ...(meta.tier ? { rateLimitTier: meta.tier } : {}),
+  };
+  const token = readAccountTokenValue(name);
+  if (token) {
+    const expires_at = accountTokenInfo(name)!.expires_at;
+    return {
+      blob: JSON.stringify({ claudeAiOauth: { accessToken: token, expiresAt: expires_at, scopes: ["user:inference"], ...identity } }),
+      via: "token",
+      expires_at,
+    };
+  }
+  if (meta.login_expired_at) return null;
+  const oauth = oauthOf(login);
+  const accessToken = tokenField(oauth?.accessToken);
+  const expiresAt = typeof oauth?.expiresAt === "number" ? oauth.expiresAt : 0;
+  if (!accessToken || expiresAt - now < FLEET_MIN_ACCESS_MS) return null;
+  return {
+    blob: JSON.stringify({
+      claudeAiOauth: {
+        accessToken,
+        expiresAt,
+        ...(Array.isArray(oauth?.scopes) ? { scopes: oauth!.scopes } : {}),
+        ...identity,
+        ...(oauth?.subscriptionType ? { subscriptionType: oauth.subscriptionType } : {}),
+        ...(oauth?.rateLimitTier ? { rateLimitTier: oauth.rateLimitTier } : {}),
+      },
+    }),
+    via: "login",
+    expires_at: expiresAt,
+  };
+}
+
+/** A profile's login as the fleet should read it: the keychain when it is the
+ *  machine's login (a live claude may have rotated it there), else the saved
+ *  profile with its store overlaid. */
+async function fleetLoginFor(name: string): Promise<string | null> {
+  if (activeProfileName() === name) return readActiveCredentialAsync();
+  const raw = await readProfileSecretAsync(name);
+  if (!raw) return null;
+  try {
+    return JSON.stringify(parseProfile(raw).credentials);
+  } catch {
+    return null;
+  }
+}
+
+async function readFleetStoreBlob(): Promise<string | null> {
+  const dir = fleetStoreDir();
+  if (useFileStore()) return fs.promises.readFile(storeCredentialFile(dir), "utf-8").catch(() => null);
+  return keychainReadAsync(["find-generic-password", "-s", profileStoreKeychainService(dir), "-w"]).then((s) => s || null, () => null);
+}
+
+async function writeFleetStoreBlob(blob: string): Promise<void> {
+  const dir = fleetStoreDir();
+  await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
+  if (useFileStore()) {
+    atomicWriteFile(storeCredentialFile(dir), blob, { mode: 0o600 });
+  } else {
+    await execFileAsync("/usr/bin/security", [
+      "add-generic-password", "-U", "-a", os.userInfo().username,
+      "-s", profileStoreKeychainService(dir), "-w", blob,
+    ], { encoding: "utf-8", timeout: 30_000 }).then(undefined, () => {
+      throw new CcAccountError("Could not write the fleet credential store");
+    });
+  }
+  if (!fs.existsSync(fleetLaunchFile())) {
+    atomicWriteFile(fleetLaunchFile(), renderProviderEnvFile({ CLAUDE_SECURESTORAGE_CONFIG_DIR: dir }), { mode: 0o600 });
+  }
+}
+
+/** Put a profile on the fleet store. Every session launched on it moves to
+ *  that account within Claude Code's re-read interval, without a restart.
+ *  Throws when the profile can carry nothing now. */
+export async function putFleetOn(name: string, now = Date.now()): Promise<FleetState> {
+  assertValidProfileName(name);
+  const bearer = fleetBearer(name, await fleetLoginFor(name), now);
+  if (!bearer) {
+    throw new CcAccountError(`Profile "${name}" has no setup-token and no live login to put on the fleet — sign into it again from Settings`);
+  }
+  if ((await readFleetStoreBlob()) !== bearer.blob) await writeFleetStoreBlob(bearer.blob);
+  const state: FleetState = { profile: name, via: bearer.via, expires_at: bearer.expires_at, written_at: now };
+  atomicWriteFile(fleetStatePath(), JSON.stringify(state), { mode: 0o600 });
+  if (readLaunchRecord()?.profile !== name) setLaunchProfile(name, undefined, now);
+  invalidateAccountsCache();
+  return state;
+}
+
+/**
+ * The daemon's tick: keep the store carrying the fleet account's current
+ * bearer. Seeds the fleet with the machine's login the first time, refreshes a
+ * dormant login before its access token runs out (the keychain login is
+ * refreshed by maintainActiveCcToken), and rewrites the store after any
+ * rotation. Returns what it did, for the log.
+ */
+export async function maintainFleetStore(now = Date.now()): Promise<string | null> {
+  if (!fleetStoreEnabled()) return null;
+  const name = launchProfileName(now) ?? activeProfileName();
+  if (!name) return null;
+  const login = await fleetLoginFor(name);
+  if (!readAccountTokenValue(name) && activeProfileName() !== name) {
+    const exp = oauthOf(login)?.expiresAt;
+    if (typeof exp === "number" && exp - now < FLEET_REFRESH_AHEAD_MS) {
+      const refreshed = await refreshProfileCredential(name, { now });
+      if (refreshed.refreshed) return `refreshed "${name}" and ${describeFleetWrite(await putFleetOn(name, now))}`;
+    }
+  }
+  const before = readFleetState();
+  try {
+    const state = await putFleetOn(name, now);
+    return before?.profile === state.profile && before.expires_at === state.expires_at ? null : describeFleetWrite(state);
+  } catch (err) {
+    return `cannot carry "${name}": ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+function describeFleetWrite(state: FleetState): string {
+  return `fleet store on "${state.profile}" via ${state.via}, good until ${new Date(state.expires_at).toISOString()}`;
+}
+
+/** The live gate's account for a pane on the fleet store: it holds no
+ *  refreshable grant, so it is neither the keychain's holder nor a profile's.
+ *  Not a valid profile name, so it can never collide with one. */
+export const FLEET_GATE_ACCOUNT = "+fleet";
+
+/** The launch prefix for a Claude session, and the account the live gate
+ *  should attribute it to. A pin (a person's `--account`, or a pin the server
+ *  kept) sources that profile; no pin runs on the fleet store when it is
+ *  ready, else on the launch profile or the keychain. An empty prefix is the
+ *  keychain login, attributed as such. */
+export function launchAccountPrefix(pin: string | undefined, warn?: (msg: string) => void): { prefix: string; account?: string } {
+  if (!pin && fleetStoreReady() && fs.existsSync(fleetLaunchFile())) {
+    return { prefix: sourceFilePrefix(fleetLaunchFile()), account: FLEET_GATE_ACCOUNT };
+  }
+  const account = pin ?? launchProfileName();
+  const prefix = accountSourcePrefix(account, warn);
+  return { prefix, account: prefix ? account : undefined };
 }
 
 export interface AccountTokenInfo {
@@ -1780,7 +2010,7 @@ export function useProfile(name: string): SwitchResult {
   return { from, fromEmail, to: name, toEmail: target.oauthAccount?.emailAddress };
 }
 
-export type SwitchMode = "keychain" | "token";
+export type SwitchMode = "keychain" | "token" | "fleet";
 
 /** Which way a switch to `name` lands: on the keychain (its saved login is
  *  usable) or on its minted setup-token (the login is dead or missing and the
@@ -1824,6 +2054,16 @@ export function switchProfile(name: string, now = Date.now()): SwitchResult & { 
   // Neither: let useProfile name the exact reason (no profile, unusable login).
   useProfile(name);
   throw new CcAccountError(`Profile "${name}" has no usable login and no live setup-token`);
+}
+
+/** Switch the fleet: on the fleet store the store is rewritten and every
+ *  running session follows it (putFleetOn), the keychain login untouched;
+ *  otherwise switchProfile. The one entry point for the daemon and the CLI. */
+export async function switchFleetTo(name: string, now = Date.now()): Promise<SwitchResult & { mode: SwitchMode }> {
+  if (!fleetStoreEnabled()) return switchProfile(name, now);
+  const from = readFleetState()?.profile ?? null;
+  await putFleetOn(name, now);
+  return { from, to: name, toEmail: readProfileIndex().profiles[name]?.email, mode: "fleet" };
 }
 
 // ---------------------------------------------------------------------------
@@ -2896,6 +3136,9 @@ export interface AccountsHeartbeatPayload {
   // The profile sessions launch on when it is not the keychain login (a token
   // switch; see "Launch profile"). Absent = the fleet follows the keychain.
   launch_profile?: string;
+  // Sessions run on the fleet store, which carries launch_profile: a switch
+  // moves every running session without a restart (see "Fleet store").
+  fleet_store?: boolean;
   profiles: Array<{
     name: string;
     email?: string;
@@ -2981,6 +3224,7 @@ function accountsPayload(active: ReturnType<typeof activeAccountIdentity>): Acco
         active_uuid: active?.uuid,
         ...(activeSince !== undefined ? { active_since: activeSince } : {}),
         ...(launch ? { launch_profile: launch.profile } : {}),
+        ...(launch && fleetStoreReady() ? { fleet_store: true } : {}),
         profiles,
       };
     }
@@ -2990,7 +3234,7 @@ function accountsPayload(active: ReturnType<typeof activeAccountIdentity>): Acco
   return value;
 }
 
-const accountsCachePaths = () => [indexPath(), claudeJsonPath(), usageCachePath(), activeStampPath(), launchRecordPath(), defaultConfigDir()];
+const accountsCachePaths = () => [indexPath(), claudeJsonPath(), usageCachePath(), activeStampPath(), launchRecordPath(), fleetStatePath(), defaultConfigDir()];
 const accountsCache = createMtimeGatedCache(accountsCachePaths, () => {
   try {
     return accountsPayload(activeAccountIdentity());

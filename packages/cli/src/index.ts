@@ -93,7 +93,7 @@ import {
   WorkspaceUnresolved,
   type Workspace,
 } from "./resolveWorkspace.js";
-import { listProfiles, saveProfile, switchProfile, launchProfileName, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, accountLaunchInfo, accountTokenInfo, writeAccountToken, removeAccountToken, ensureProfileStore, profileStoreDir, adoptProfileStoreCredential, auditProfileIdentities, repairProfileIdentities, type ProfileAudit } from "./ccAccounts.js";
+import { listProfiles, saveProfile, switchFleetTo, launchProfileName, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, accountLaunchInfo, accountTokenInfo, writeAccountToken, removeAccountToken, ensureProfileStore, profileStoreDir, adoptProfileStoreCredential, auditProfileIdentities, repairProfileIdentities, type ProfileAudit } from "./ccAccounts.js";
 import { buildUsageReport, loadLocalUsageProfiles, renderUsageReport } from "./usageCommand.js";
 import type { RecoveryMode } from "@codecast/shared/contracts";
 import type { CumulativeChange } from "@codecast/shared/diff";
@@ -4509,11 +4509,15 @@ accountsCmd
       return;
     }
     try {
-      const result = switchProfile(name);
+      const result = await switchFleetTo(name);
       console.log(`${c.green}✓${c.reset} switched to ${c.cyan}${name}${c.reset}${result.toEmail ? ` (${result.toEmail})` : ""}${result.mode === "token" ? " on its setup-token" : ""}`);
-      if (result.from) console.log(`${c.dim}  outgoing account re-saved as "${result.from}"${c.reset}`);
-      if (result.mode === "token") console.log(`${c.dim}  the saved login is dead, so the keychain login stays; sessions codecast starts or resumes run on the token${c.reset}`);
-      console.log(`${c.dim}  running sessions keep the old account until restarted — new/resumed ones use ${name}${c.reset}`);
+      if (result.mode === "fleet") {
+        console.log(`${c.dim}  running sessions codecast launched follow within about 30s; the keychain login stays${c.reset}`);
+      } else {
+        if (result.from) console.log(`${c.dim}  outgoing account re-saved as "${result.from}"${c.reset}`);
+        if (result.mode === "token") console.log(`${c.dim}  the saved login is dead, so the keychain login stays; sessions codecast starts or resumes run on the token${c.reset}`);
+        console.log(`${c.dim}  running sessions keep the old account until restarted — new/resumed ones use ${name}${c.reset}`);
+      }
     } catch (err) {
       console.error(err instanceof CcAccountError ? err.message : String(err));
       process.exit(1);

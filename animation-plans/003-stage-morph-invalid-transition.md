@@ -1,6 +1,6 @@
 # 003 — Repair the stage split morph (its transition is invalid CSS)
 
-- **Status**: TODO
+- **Status**: DONE
 - **Commit**: 3efe31bb3
 - **Severity**: HIGH
 - **Category**: Performance / correctness

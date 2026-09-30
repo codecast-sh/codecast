@@ -5,7 +5,10 @@ import { BUBBLE_PRESETS, DEFAULT_BUBBLE_PRESET, isCustomBubbleColor, resolveBubb
 
 const ROOT = join(import.meta.dir, "..", "..");
 const css = readFileSync(join(ROOT, "app", "globals.css"), "utf8");
-const panel = readFileSync(join(ROOT, "components", "GlobalSessionPanel.tsx"), "utf8");
+// The session rail: the panel plus the card view it renders.
+const panel = [join(ROOT, "components", "GlobalSessionPanel.tsx"), join(ROOT, "components", "inbox", "SessionCardView.tsx")]
+  .map((file) => readFileSync(file, "utf8"))
+  .join("\n");
 const diffView = readFileSync(join(ROOT, "components", "DiffView.tsx"), "utf8");
 const terminalSessions = readFileSync(join(ROOT, "lib", "terminal", "termSessions.ts"), "utf8");
 // The conversation surface: the container plus every module it was split into.

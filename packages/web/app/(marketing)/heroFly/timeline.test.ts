@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { DROP, SETTLE, SNAP, cameraAt, frame, typed } from "./timeline";
-import { CAMERA, DURATION, SCENES, SURFACE_BY_ID, type SurfaceId, type V3 } from "./world";
+import { CAMERA, CAMERA_MOBILE, DURATION, SCENES, SURFACE_BY_ID, type SurfaceId, type V3 } from "./world";
 
 const nums = (s: string | undefined) => (s ?? "").match(/-?\d+(\.\d+)?(e-?\d+)?/g)?.map(Number) ?? [];
 
@@ -25,13 +25,13 @@ function expectSameFrame(a: ReturnType<typeof frame>, b: ReturnType<typeof frame
 }
 
 describe("hero fly-through timeline", () => {
-  test("the loop seam is exact: frame(0) equals frame(36 - 1e-6)", () => {
+  test("the loop seam is exact: frame(0) equals frame(DURATION - 1e-6)", () => {
     expectSameFrame(frame(0), frame(DURATION - 1e-6), 0.01);
     expectSameFrame(frame(0, true), frame(DURATION - 1e-6, true), 0.01);
   });
 
   test("frame is a pure function of t", () => {
-    for (const t of [0, 1.2, 5.4, 12.4, 22.8, 29.7, 35.99]) {
+    for (const t of [0, 1.2, 5.4, 12.4, 22.8, 29.7, 44.1, 58.3, 71.2, 79.9, DURATION - 0.01]) {
       expect(frame(t)).toEqual(frame(t));
       expect(frame(t + DURATION)).toEqual(frame(t));
     }
@@ -64,7 +64,17 @@ describe("hero fly-through timeline", () => {
   });
 
   // Every hold frames its hero surface near scale 1 and near face-on, so text reads crisply.
-  const HERO: (SurfaceId | null)[] = [null, "desk", "desk", "phone", null, "pairB", "board", "palette", "blame", "page", null];
+  const HERO: (SurfaceId | null)[] = [null, "desk", "desk", "desk", "pairB", "desk", "phone", null, "pairB", "desk", "board", "auto", "team", "pr", "page", "palette", "blame", "desk", null];
+
+  test("every camera hold has a hero entry and a mobile override", () => {
+    expect(HERO.length).toBe(CAMERA.length);
+    expect(CAMERA_MOBILE.length).toBe(CAMERA.length);
+  });
+
+  test("every scene is one chapter, in order, holding inside itself", () => {
+    SCENES.forEach((s) => expect(CAMERA.some((h) => h.t0 === s.hold), `${s.id} hold ${s.hold} starts a camera hold`).toBe(true));
+    expect(new Set(SCENES.map((s) => s.id)).size).toBe(SCENES.length);
+  });
   const rad = (d: number) => (d * Math.PI) / 180;
   const rotX = ([x, y, z]: V3, a: number): V3 => [x, y * Math.cos(rad(a)) - z * Math.sin(rad(a)), y * Math.sin(rad(a)) + z * Math.cos(rad(a))];
   const rotY = ([x, y, z]: V3, a: number): V3 => [x * Math.cos(rad(a)) + z * Math.sin(rad(a)), y, -x * Math.sin(rad(a)) + z * Math.cos(rad(a))];

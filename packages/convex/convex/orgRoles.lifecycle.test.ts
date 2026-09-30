@@ -2,8 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { applyCancel, applyPause } from "./agentTasks";
 import { briefingFor, performRebriefRoles } from "./anchors";
-import { charterTemplate, ensureRoleRoutine, performCreateRole, performPauseRole, performProvisionRole, performResetOrg, performResumeRole, performRetireRole, performStaff, resetOrgPreview, seatingNote, standingConversationOf } from "./orgRoles";
+import { charterTemplate, ensureRoleRoutine, performCreateRole, performPauseRole, performProvisionRole, performResetOrg, performReparentRole, performResumeRole, performRetireRole, performStaff, resetOrgPreview, seatingNote, standingConversationOf } from "./orgRoles";
 import { ROLE_CHECK_PROMPT } from "./lib/orgRoutine";
+import { performReparentSession } from "./sessionOwnership";
 import { isBootstrapPrompt, isSessionMessage } from "@codecast/shared/contracts";
 
 // A role's lifecycle a person can trust (docs/architecture/org-staffing.md
@@ -191,7 +192,7 @@ describe("what a person and a role read", () => {
     const role = await lead(ctx);
     const anchor = tables.anchors[0];
     const briefing = await briefingFor(ctx, anchor);
-    expect(briefing).toContain("the standing agent for the **Infra lead** role (@infra)");
+    expect(briefing).toContain("You are the **Infra lead** (@infra)");
     expect(briefing).not.toContain("workspace's standing agent");
     expect(briefing).not.toContain("cast escalate");
 
@@ -239,5 +240,28 @@ describe("what a person and a role read", () => {
     expect(brief.content).not.toMatch(/frame|provisioned/);
     const note = seatingNote({ short_id: "or-7", handle: "chief-of-staff", name: "Chief of Staff" }, "Acme");
     expect(note.replace(/https?:\S+/g, "")).not.toMatch(/or-7|seat/);
+  });
+});
+
+describe("a role's own session belongs to whom the role reports to (S28)", () => {
+  const owners = (tables: Record<string, any[]>, id: string) => tables.session_owners.filter((r) => String(r.conversation_id) === id).map((r) => String(r.user_id));
+  test("seated under a person it is that person's; moved under a role it is nobody's; moved back it is the new person's", async () => {
+    const { ctx, tables } = world();
+    const role = await lead(ctx, { reports_to: { kind: "user", user_id: PEER } });
+    expect(owners(tables, "mine")).toEqual([PEER]);
+    const chief = await performStaff(ctx, ME as any, { team_id: TEAM });
+    await performReparentRole(ctx, ME as any, { role_id: String(role._id), reports_to: { kind: "role", role_id: chief.role._id } as any });
+    expect(owners(tables, "mine")).toEqual([]);
+    expect(String(tables.conversations.find((c) => c._id === "mine")!.org_role_id)).toBe(String(chief.role._id));
+    await performReparentRole(ctx, ME as any, { role_id: String(role._id), reports_to: { kind: "user", user_id: ME } as any });
+    expect(owners(tables, "mine")).toEqual([ME]);
+    expect(tables.conversations.find((c) => c._id === "mine")!.org_role_id).toBeUndefined();
+  });
+
+  test("its owner changes only by moving the role: the owner gesture refuses and names the move", async () => {
+    const { ctx, tables } = world();
+    await lead(ctx);
+    await expect(performReparentSession(ctx, ME as any, { session_id: "mine", target: { kind: "user", owners: [PEER], mode: "set" } as any })).rejects.toThrow("cast org reparent @infra");
+    expect(owners(tables, "mine")).toEqual([ME]);
   });
 });

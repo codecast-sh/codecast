@@ -852,6 +852,11 @@ export function WorkingStatusLine({ startedAt, phrase, conversationId }: { start
   // This line renders only while the turn is working, so the work state half
   // of the shared rule is already true here.
   const label = isSessionActivityFresh(rowActivity, "working", now) ? rowActivity.text : phrase;
+  return <WorkingStatusLineView startedAt={startedAt} now={now} label={label} />;
+}
+
+/** The working line as markup, for a caller that owns the clock and the label (the marketing hero writes both from its timeline). */
+export function WorkingStatusLineView({ startedAt, now, label }: { startedAt?: number; now: number; label?: string }) {
   const elapsedMs = startedAt ? now - startedAt : 0;
   const showElapsed = shouldShowElapsed(startedAt, now);
   return (

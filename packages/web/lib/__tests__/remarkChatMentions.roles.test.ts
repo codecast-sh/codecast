@@ -49,3 +49,17 @@ describe("a Slack-only person", () => {
     expect(chip.data.hChildren[1]).toEqual({ type: "text", value: "@Erin" });
   });
 });
+
+describe("remarkChatMentions channels", () => {
+  const channels = new Map([["infra", "ch1"], ["design-crit", "ch2"]]);
+  it("links a known #channel into its room", () => {
+    const out = render("see #infra and #design-crit", { channels });
+    expect(out).toContain('"url":"/chat/ch1"');
+    expect(out).toContain('"url":"/chat/ch2"');
+    expect(out).toContain('"value":"#infra"');
+  });
+  it("leaves unknown names and mid-word hashes as text", () => {
+    const out = render("issue#infra and #nope", { channels });
+    expect(out).toBe(JSON.stringify([{ type: "text", value: "issue#infra and #nope" }]));
+  });
+});

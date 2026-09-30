@@ -1,4 +1,4 @@
-import { Bot, CheckSquare, FileText, FolderOpen, Hash, MessageSquare, Shield, Tag, Target, User, Calendar } from "lucide-react";
+import { Bot, CheckSquare, FileText, FolderOpen, Hash, Lock, MessageSquare, Shield, Slash, Tag, Target, User, Calendar } from "lucide-react";
 import type { MentionItem } from "./MentionList";
 import { useInboxStore, placeInboxRows, rankVerdictOf } from "../../store/inboxStore";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
@@ -22,17 +22,23 @@ const TYPES = {
   // An org role (the org page's violet shield): @handle wakes its agent.
   role: { icon: Shield, label: "Role", color: "text-sol-violet" },
   file: { icon: FolderOpen, label: "File", color: "text-sol-text-dim" },
-  skill: { icon: Hash, label: "Command", color: "text-sol-orange" },
+  skill: { icon: Slash, label: "Command", color: "text-sol-orange" },
+  channel: { icon: Hash, label: "Channel", color: "text-sol-cyan" },
   date: { icon: Calendar, label: "Date", color: "text-sol-orange" },
 };
 
-const STATE_COLORS: Record<string, string> = {
-  working: "text-sol-green", needs_input: "text-sol-orange", done: "text-sol-green",
-  dormant: "text-sol-text-dim", idle: "text-sol-text-dim", in_progress: "text-sol-yellow",
-  in_review: "text-sol-violet", blocked: "text-sol-orange", permission_blocked: "text-sol-orange",
+const STATE_DOTS: Record<string, string> = {
+  working: "bg-sol-green", needs_input: "bg-sol-orange", done: "bg-sol-green",
+  in_progress: "bg-sol-yellow", in_review: "bg-sol-violet", blocked: "bg-sol-orange",
+  permission_blocked: "bg-sol-orange", active: "bg-sol-blue",
 };
 
-export function MentionSuggestion({ item }: { item: Omit<MentionItem, "id"> & { id?: string; description?: string } }) {
+type SuggestionItem = Omit<MentionItem, "id"> & { id?: string; description?: string };
+
+// One item as the popup shows it: the row fields the list was built with,
+// overlaid with the live store row (a session's state and title move while the
+// popup is open), plus the persona a personified session is offered as.
+function useLiveMention(item: SuggestionItem) {
   const now = useCoarseNow(15_000);
   const liveJson = useInboxStore((s) => {
     const id = item.id ?? "";
@@ -62,65 +68,147 @@ export function MentionSuggestion({ item }: { item: Omit<MentionItem, "id"> & { 
     }
     return "{}";
   });
-  const current = { ...item, ...JSON.parse(liveJson) } as typeof item;
+  const current = { ...item, ...JSON.parse(liveJson) } as SuggestionItem;
   const config = TYPES[current.type as keyof typeof TYPES] ?? TYPES.doc;
-  const Icon = current.isBot ? Bot : config.icon;
   // A session that wears a character or a role is offered as that person: its
-  // face in place of the session glyph, its name on the first line, and the
-  // title demoted to the detail line (session-characters.md S3). A session
-  // nobody personified reads exactly as it did before.
+  // face in place of the session glyph, its name first, and the title demoted
+  // to the detail (session-characters.md S3). A session nobody personified
+  // reads exactly as it did before.
   const personifyAll = usePersonifyAll();
   const identityRow = current.type === "session" ? current.identity ?? null : null;
   const persona = identityRow && sessionIdentity(identityRow, personifyAll).kind !== "plain"
     ? identityLine(identityRow, current.label, personifyAll)
     : null;
   const status = current.type === "person" || (current.type === "session" && liveJson === "{}") ? undefined : current.status;
-  const parts = persona?.title ? [persona.title] : [config.label];
-  if (persona?.handle) parts.push(`@${persona.handle}`);
+
+  const name = persona?.name
+    ?? (current.type === "file" ? current.label.split("/").pop() ?? current.label
+      : current.type === "skill" ? `/${current.label}`
+      : current.type === "channel" ? current.label
+      : current.label);
+
+  // The meta run after the name: what kind of thing it is and where it lives.
+  const meta: string[] = [];
+  if (persona?.title) meta.push(persona.title);
+  if (persona?.handle) meta.push(`@${persona.handle}`);
   if (current.type === "session") {
-    if (current.agentType) parts.push(agentDisplayName(current.agentType));
+    if (current.agentType) meta.push(agentDisplayName(current.agentType));
     const model = modelDisplayLabel(current.agentType, current.model);
-    if (model) parts.push(model);
+    if (model) meta.push(model);
     const project = current.projectPath?.split("/").filter(Boolean).pop();
-    if (project) parts.push(project);
-    if (current.messageCount != null) parts.push(`${current.messageCount} msg${current.messageCount === 1 ? "" : "s"}`);
+    if (project) meta.push(project);
+    if (current.messageCount != null) meta.push(`${current.messageCount} msg${current.messageCount === 1 ? "" : "s"}`);
   } else if (current.type === "task") {
-    if (current.shortId) parts.push(current.shortId);
-    if (current.priority && current.priority !== "none") parts.push(`${current.priority} priority`);
+    if (current.priority && current.priority !== "none") meta.push(current.priority);
   } else if (current.type === "file") {
     const parent = current.label.replace(/\/[^/]+$/, "");
-    if (parent !== current.label) parts.push(parent);
-  } else if (current.type === "doc") parts.push(current.docType || "note");
-  else if (current.type === "plan" && current.shortId) parts.push(current.shortId);
-  else if (current.sublabel || current.description) parts.push(current.sublabel || current.description!);
-  const summary = current.type === "session" ? current.idleSummary : current.type === "plan" ? current.goal : undefined;
-  const time = current.viewedAt || current.updatedAt;
-  const timeLabel = current.viewedAt ? "Viewed" : "Updated";
+    if (parent !== current.label) meta.push(parent);
+  } else if (current.type === "doc") meta.push(current.docType || "note");
+  else if (current.type === "channel") {
+    if (current.channelKind && current.channelKind !== "public") meta.push(current.channelKind);
+    if (current.sublabel) meta.push(current.sublabel);
+  } else if (current.type === "person" || current.type === "role") {
+    if (current.sublabel) meta.push(current.sublabel);
+  } else if (current.sublabel || current.description) meta.push(current.sublabel || current.description!);
 
+  // The trailing mono token: the id you would type to reach it again.
+  const token = current.type === "task" || current.type === "plan" ? current.shortId
+    : current.type === "session" ? current.shortId
+    : undefined;
+  const summary = current.type === "session" ? current.idleSummary
+    : current.type === "plan" ? current.goal
+    : current.type === "channel" ? current.sublabel
+    : current.type === "skill" ? current.description
+    : current.type === "file" ? current.label
+    : undefined;
+  const time = current.viewedAt || current.updatedAt;
+  const timeLabel = current.viewedAt ? "Viewed" : current.type === "channel" ? "Active" : "Updated";
+  const Icon = current.isBot ? Bot : current.type === "channel" && current.channelKind === "private" ? Lock : config.icon;
+  return { current, config, Icon, persona, identityRow, status, name, meta, token, summary, time, timeLabel };
+}
+
+// The query's words inside a name, marked so the eye lands on why it matched.
+function Highlighted({ text, query }: { text: string; query?: string }) {
+  const words = (query ?? "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return <>{text}</>;
+  const lower = text.toLowerCase();
+  const marks = new Array<boolean>(text.length).fill(false);
+  for (const w of words) {
+    const at = lower.indexOf(w);
+    if (at >= 0) for (let i = at; i < at + w.length; i++) marks[i] = true;
+  }
+  const out: React.ReactNode[] = [];
+  let i = 0;
+  while (i < text.length) {
+    const on = marks[i];
+    let j = i;
+    while (j < text.length && marks[j] === on) j++;
+    out.push(on
+      ? <mark key={i} className="bg-sol-yellow/25 text-inherit rounded-[2px]">{text.slice(i, j)}</mark>
+      : text.slice(i, j));
+    i = j;
+  }
+  return <>{out}</>;
+}
+
+function Glyph({ live, size }: { live: ReturnType<typeof useLiveMention>; size: number }) {
+  const { persona, identityRow, current, Icon, config } = live;
+  if (persona && identityRow) return <SessionFace row={identityRow} size={size} className="shrink-0" />;
+  if (current.image) return <AvatarImg src={current.image} alt="" className="rounded-full object-cover shrink-0" style={{ width: size, height: size }} />;
+  return <Icon aria-hidden className={`shrink-0 ${config.color}`} style={{ width: size - 4, height: size - 4, margin: 2 }} />;
+}
+
+function StatusDot({ status }: { status?: string }) {
+  if (!status) return null;
+  const key = status.toLowerCase().replace(/ /g, "_");
+  const color = STATE_DOTS[key] ?? "bg-sol-text-dim/50";
+  return (
+    <span className="shrink-0 inline-flex items-center gap-1 whitespace-nowrap text-[11px] text-sol-text-dim" title={status.replace(/_/g, " ")}>
+      <span className={`w-1.5 h-1.5 rounded-full ${color} ${key === "working" ? "animate-pulse" : ""}`} />
+      <span className="hidden sm:inline">{status.replace(/_/g, " ")}</span>
+    </span>
+  );
+}
+
+/** One dense row of the popup: glyph, name, a dim meta run, the id and age. */
+export function MentionSuggestion({ item, query }: { item: SuggestionItem; query?: string }) {
+  const live = useLiveMention(item);
+  const { current, status, name, meta, token, time, timeLabel } = live;
   return (
     <>
-      {persona && identityRow
-        ? <SessionFace row={identityRow} size={20} className="shrink-0" />
-        : current.image
-          ? <AvatarImg src={current.image} alt="" className="w-5 h-5 rounded-full object-cover shrink-0" />
-          : <Icon aria-hidden className={`w-4 h-4 shrink-0 ${config.color}`} />}
-      <span className="min-w-0 flex-1">
-        <span className="flex items-center gap-2">
-          <span className="text-[13px] truncate" title={current.label}>
-            {persona?.name ?? (current.type === "file" ? current.label.split("/").pop() : current.type === "skill" ? `/${current.label}` : current.label)}
-          </span>
-          {current.slack && <SlackLogo className="w-3 h-3 shrink-0" title="In Slack only — paged there" />}
-          {time ? <span className="ml-auto shrink-0 text-[10px] text-sol-text-dim tabular-nums" title={`${timeLabel} ${new Date(time).toLocaleString()}`}>{timeLabel.toLowerCase()} {visitTimeAgo(time)}</span> : null}
+      <Glyph live={live} size={18} />
+      <span className="min-w-0 flex-1 flex items-center gap-2 overflow-hidden">
+        <span className="text-[13px] leading-5 text-sol-text truncate shrink-0 max-w-[70%]" title={current.label}>
+          <Highlighted text={name} query={query} />
         </span>
-        <span className="flex items-center gap-1.5 text-[11px] text-sol-text-dim min-w-0" title={[status, ...parts, summary].filter(Boolean).join(" · ")}>
-          {status && <span className={`shrink-0 ${STATE_COLORS[status.toLowerCase().replace(/ /g, "_")] ?? "text-sol-text-muted"}`}>
-            {status === "working" && <span className="inline-block w-1.5 h-1.5 mr-1 rounded-full bg-sol-green" />}
-            {status.replace(/_/g, " ")}
-          </span>}
-          {status && <span aria-hidden className="opacity-40">·</span>}
-          <span className="truncate">{parts.join(" · ")}</span>
-        </span>
+        {current.slack && <SlackLogo className="w-3 h-3 shrink-0" title="In Slack only, paged there" />}
+        <StatusDot status={status} />
+        {meta.length > 0 && <span className="text-[11px] text-sol-text-dim truncate min-w-0" title={meta.join(" · ")}>{meta.join(" · ")}</span>}
       </span>
+      {current.unread ? <span className="shrink-0 text-[10px] tabular-nums px-1.5 rounded-full bg-sol-blue/15 text-sol-blue">{current.unread}</span> : null}
+      {token && <span className="shrink-0 font-mono text-[10px] text-sol-text-dim/80">{token}</span>}
+      {time ? <span className="shrink-0 min-w-[2.5rem] whitespace-nowrap text-right text-[10px] text-sol-text-dim tabular-nums" title={`${timeLabel} ${new Date(time).toLocaleString()}`}>{visitTimeAgo(time)}</span> : null}
     </>
+  );
+}
+
+/** The highlighted item in full: the whole name, what it is, and its summary. */
+export function MentionDetail({ item }: { item: SuggestionItem }) {
+  const live = useLiveMention(item);
+  const { current, config, name, meta, summary, time, timeLabel, status } = live;
+  const kind = [live.persona ? "Session" : config.label, status?.replace(/_/g, " "), ...meta.filter((m) => m !== summary)].filter(Boolean).join(" · ");
+  const title = current.type === "channel" ? `#${name}` : current.type === "file" ? current.label : name;
+  return (
+    <div className="flex gap-2.5 px-3 py-2 h-[70px] overflow-hidden">
+      <Glyph live={live} size={22} />
+      <div className="min-w-0 flex-1 flex flex-col gap-0.5">
+        <span className="text-[12px] leading-4 font-medium text-sol-text line-clamp-2 break-words">{title}</span>
+        {summary && summary !== title && <span className="text-[11px] leading-4 text-sol-text-muted truncate">{summary}</span>}
+        <span className="mt-auto flex items-center gap-2 text-[10px] text-sol-text-dim min-w-0">
+          <span className="truncate">{kind}</span>
+          {time ? <span className="ml-auto shrink-0 whitespace-nowrap">{timeLabel.toLowerCase()} {visitTimeAgo(time)}</span> : null}
+        </span>
+      </div>
+    </div>
   );
 }
