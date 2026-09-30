@@ -12,7 +12,7 @@ import { CLIENT_ERROR_BANNER_PREFIX, CLOUD_AGENT_ACTION_SUBTYPE, CLOUD_AGENT_ACT
 import { isCloudMirrorPlaceholder, repoOwnerName } from "./poll.js";
 import { applyInCheckout, CloudAgentSessions, setupErrorOf, type CloudAgentSessionsDeps } from "./sessions.js";
 import { CloudAgentWatcher, type CloudAgentTranscriptEvent, type CloudAgentWatcherOptions } from "./watcher.js";
-import { CloudAgentSetupError, errorText, logTag, type AnyCloudAgentAdapter, type CloudAgentGit, type CloudAgentLoginState } from "./types.js";
+import { CLOUD_AGENT_ACTION_METHODS, CloudAgentSetupError, errorText, logTag, type AnyCloudAgentAdapter, type CloudAgentGit, type CloudAgentLoginState } from "./types.js";
 
 export interface CloudAgentRuntime {
   adapter: AnyCloudAgentAdapter;
@@ -71,6 +71,8 @@ const HOST_RETRY_MS = 30_000;
 export class CloudAgentRegistry {
   readonly runtimes: CloudAgentRuntime[];
   private readonly setupCardsPosted = new Map<string, number>();
+  /** Tries of each conversation's held message that met a setup problem, until one goes out. */
+  private readonly setupHolds = new Map<string, number>();
   /** Each provider's mirror, by provider id, once startWatchers ran. */
   private readonly watchers = new Map<string, CloudAgentWatcher>();
   /** Sessions this run hosts, and when another device's claim was last found. */
@@ -169,8 +171,16 @@ export class CloudAgentRegistry {
   async deliver(conversationId: string, content: string): Promise<CloudAgentRuntime | null> {
     for (const runtime of this.runtimes) {
       try {
-        if (await runtime.sessions.deliver(conversationId, content)) return runtime;
+        if (await runtime.sessions.deliver(conversationId, content)) {
+          this.setupHolds.delete(conversationId);
+          return runtime;
+        }
       } catch (err) {
+        if (err instanceof CloudAgentSetupError) {
+          const tries = this.setupHolds.get(conversationId) ?? 0;
+          this.setupHolds.set(conversationId, tries + 1);
+          err.triedBefore(tries);
+        }
         const card = err instanceof CloudAgentSetupError ? this.setupCard(err, conversationId) : null;
         if (card) await this.deps.addLine(conversationId, { key: card.key, role: "assistant", content: `${CLIENT_ERROR_BANNER_PREFIX} ${card.message}` });
         throw err;
@@ -207,7 +217,7 @@ export class CloudAgentRegistry {
     const session = runtime.sessions.get(conversationId);
     const agentId = session?.agentId;
     if (!agentId) throw new Error(`the ${adapter.spec.label} agent has not started yet`);
-    if (!adapter.spec.actions?.includes(action)) throw new Error(`${adapter.spec.label} has no ${label}`);
+    if (!adapter.spec.actions?.includes(action) || !adapter[CLOUD_AGENT_ACTION_METHODS[action]]) throw new Error(`${adapter.spec.label} has no ${label}`);
     const key = `${adapter.spec.mirrorDir}-action:${conversationId}:${action}:${Date.now()}`;
     let done: CloudAgentActionResult;
     try {
@@ -233,23 +243,20 @@ export class CloudAgentRegistry {
   }
 
   private async runAction(runtime: CloudAgentRuntime, client: unknown, agentId: string, action: CloudAgentActionName): Promise<CloudAgentActionResult> {
+    // act() checked the adapter has the action's method (CLOUD_AGENT_ACTION_METHODS).
     const { adapter } = runtime;
-    const missing = () => new Error(`${adapter.spec.label} has no ${CLOUD_AGENT_ACTIONS[action].label}`);
     switch (action) {
       case "archive":
       case "unarchive": {
-        if (!adapter.archive) throw missing();
-        await adapter.archive(client, agentId, action === "archive");
+        await adapter.archive!(client, agentId, action === "archive");
         return { message: action === "archive" ? `Archived on ${adapter.spec.label}. It stays here; Unarchive brings it back there.` : `Unarchived on ${adapter.spec.label}.` };
       }
       case "create_pr": {
-        if (!adapter.createPullRequest) throw missing();
-        const pr = await adapter.createPullRequest(client, agentId);
+        const pr = await adapter.createPullRequest!(client, agentId);
         return pr.url ? { message: "Opened a draft pull request.", url: pr.url } : { message: `${adapter.spec.label} is opening a draft pull request; the session's branch and pull request show here once it is open.` };
       }
       case "apply": {
-        if (!adapter.applyPlan) throw missing();
-        const plan = await adapter.applyPlan(client, agentId);
+        const plan = await adapter.applyPlan!(client, agentId);
         const repo = repoOwnerName(plan.repo);
         const { root, files } = await applyInCheckout(plan, repo ? await this.checkoutOf(runtime, agentId, repo) : null);
         return { message: `Applied ${plan.what} to ${root} (${files.length === 1 ? "1 file" : `${files.length} files`}, not committed).` };

@@ -9,7 +9,8 @@ import { CloudApiError, cloudApiErrorOf } from "./http.js";
 import { cloudMirrorRepoFacts, PollCadence } from "./poll.js";
 import { CloudAgentRegistry } from "./registry.js";
 import { classifyMirrorTranscriptTail, MirrorTranscript, mirrorHistoryId, mirrorMetaJson, parseMirrorTranscript, readMetaJson } from "./transcript.js";
-import { CloudAgentBusyError, CloudAgentSetupError, type CloudAgentAdapter, type CloudAgentMirror } from "./types.js";
+import { CLOUD_AGENT_ACTION_METHODS, CloudAgentBusyError, CloudAgentSetupError, type CloudAgentAdapter, type CloudAgentMirror } from "./types.js";
+import { cloudAgentAdapters } from "./index.js";
 import { CloudAgentWatcher } from "./watcher.js";
 
 const cleanups: (() => void)[] = [];
@@ -64,6 +65,7 @@ function fakeAdapter(agents: Record<string, FakeAgent>, opts: { key?: () => bool
       c.calls.push(`followUp ${agentId} ${content}`);
       if (content === "busy") throw new CloudAgentBusyError("Fake Cloud");
       if (content === "denied") throw new CloudApiError(401, undefined, "401");
+      if (content === "no-repo") throw CloudAgentSetupError.repoUnreachable(adapter, undefined, "no access", "Give it access");
     },
     async cancel(c, agentId) {
       c.calls.push(`cancel ${agentId}`);
@@ -409,6 +411,20 @@ describe("CloudAgentWatcher", () => {
     expect(git).toContainEqual({ agentId: "bc-child" });
   });
 
+  test("a child its parent no longer has is forgotten, not read again every pass", async () => {
+    const root = tmp();
+    const agents: Record<string, FakeAgent> = { "bc-mine": { id: "bc-mine", updatedAt: T0, children: ["bc-child"], replies: ["ok"] } };
+    const { adapter, client } = fakeAdapter(agents);
+    const w = new CloudAgentWatcher(adapter, { rootDir: root, now: NOW, importAll: () => true });
+    await w.poll();
+    await new Promise((r) => setTimeout(r, 20));
+    // The child was never there to mirror (null): its state entry goes, and later passes do not ask again.
+    expect(JSON.parse(fs.readFileSync(path.join(root, "state.json"), "utf8")).agents["bc-child"]).toBeUndefined();
+    client.calls.length = 0;
+    await w.poll();
+    expect(client.calls.some((c) => c.includes("bc-child"))).toBe(false);
+  });
+
   test("a branch the agent no longer names is reported gone, and a restart says so again", async () => {
     const root = tmp();
     const agents: Record<string, FakeAgent> = { "bc-a": { id: "bc-a", updatedAt: T0, branch: "feat/a", replies: ["ok"] } };
@@ -635,6 +651,19 @@ describe("CloudAgentRegistry", () => {
     expect(reg.setupCard(err, "conv-4", Date.now() + 61_000)).not.toBeNull();
   });
 
+  test("a hold only the provider can clear is asked about half as often each try, and starts over once a message goes out", async () => {
+    const { reg } = registry({});
+    await reg.start("cursor", "conv-6", undefined, "cloud", "");
+    (reg.runtimes[0].sessions as any).sessions["conv-6"].agentId = "bc-6";
+    const waits: number[] = [];
+    for (let i = 0; i < 7; i++) waits.push((await reg.deliver("conv-6", "no-repo").catch((e) => e)).recheckMs);
+    expect(waits).toEqual([30_000, 60_000, 120_000, 240_000, 480_000, 600_000, 600_000]);
+    // Credentials are read on this machine: always soon.
+    expect((await reg.deliver("conv-6", "denied").catch((e) => e)).recheckMs).toBe(5_000);
+    await reg.deliver("conv-6", "ok");
+    expect((await reg.deliver("conv-6", "no-repo").catch((e) => e)).recheckMs).toBe(30_000);
+  });
+
   test("a launch prompt that cannot be queued is the start's error, not a silent loss", async () => {
     const { reg, logs } = registry({});
     (reg as any).deps.enqueueMessage = async () => { throw new Error("not connected"); };
@@ -662,6 +691,15 @@ describe("CloudAgentRegistry", () => {
     // Priming reads the provider's own directory; route one event through it.
     reg.runtimes[0].watcher!.emit("session", { sessionId: "bc-p", filePath: file, eventType: "add" });
     expect(routed).toEqual(["Fake Cloud bc-p add"]);
+  });
+});
+
+describe("cloud agent adapters", () => {
+  test("each offers exactly the header actions its spec lists", () => {
+    for (const adapter of cloudAgentAdapters(tmp())) {
+      const offered = (Object.keys(CLOUD_AGENT_ACTION_METHODS) as Array<keyof typeof CLOUD_AGENT_ACTION_METHODS>).filter((action) => typeof adapter[CLOUD_AGENT_ACTION_METHODS[action]] === "function");
+      expect([...offered].sort(), adapter.spec.id).toEqual([...(adapter.spec.actions ?? [])].sort());
+    }
   });
 });
 

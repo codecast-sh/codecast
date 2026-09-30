@@ -270,23 +270,33 @@ function agentPage(spec: CloudAgentProviderSpec, agentId: string): { href: strin
 }
 
 /**
+ * How ActionRows sit in their menu: the chip's own menu, compact and in the
+ * provider's color, or the session menu, where they read like its other rows.
+ */
+const ROW_STYLES = {
+  chip: { item: "gap-2 text-xs", icon: "h-3.5 w-3.5 text-sol-violet" },
+  menu: { item: "", icon: "h-3 w-3 mr-1.5" },
+} as const;
+
+/**
  * A menu's rows for a cloud agent: open it on the provider's site, then the
  * owner's actions on it. A disabled action says why in the row itself (a
  * disabled row takes no hover, so a tooltip would never show).
  */
-function ActionRows({ actions }: { actions: CloudAgentActions }) {
+function ActionRows({ actions, style }: { actions: CloudAgentActions; style: keyof typeof ROW_STYLES }) {
   const { cloud, items, run, pending } = actions;
   if (!cloud?.agentId) return null;
   const { href, host } = agentPage(cloud.spec, cloud.agentId);
+  const row = ROW_STYLES[style];
   return (
     <>
-      <DropdownMenuItem onSelect={() => window.open(href, "_blank", "noopener")} className="gap-2 text-xs">
-        <ExternalLink className="h-3.5 w-3.5 text-sol-violet" />
+      <DropdownMenuItem onSelect={() => window.open(href, "_blank", "noopener")} className={row.item}>
+        <ExternalLink className={row.icon} />
         Open on {host}
       </DropdownMenuItem>
       {items.map(({ action, label, title, Icon, disabledReason }) => (
-        <DropdownMenuItem key={action} disabled={!!pending || !!disabledReason} onSelect={() => void run(action)} title={title} className="items-start gap-2 text-xs">
-          {pending === action ? <Loader2 className="mt-px h-3.5 w-3.5 shrink-0 animate-spin text-sol-violet" /> : <Icon className="mt-px h-3.5 w-3.5 shrink-0 text-sol-violet" />}
+        <DropdownMenuItem key={action} disabled={!!pending || !!disabledReason} onSelect={() => void run(action)} title={title} className={`items-start ${row.item}`}>
+          {pending === action ? <Loader2 className={`mt-px shrink-0 animate-spin ${row.icon}`} /> : <Icon className={`mt-px shrink-0 ${row.icon}`} />}
           <span className="flex min-w-0 flex-col">
             {label}
             {disabledReason && <span className="text-[10px] text-sol-text-dim">{disabledReason}</span>}
@@ -304,7 +314,7 @@ export function CloudAgentMenuItems({ actions }: { actions: CloudAgentActions })
     <>
       <DropdownMenuSeparator />
       <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">{actions.cloud.spec.label}</DropdownMenuLabel>
-      <ActionRows actions={actions} />
+      <ActionRows actions={actions} style="menu" />
     </>
   );
 }
@@ -349,7 +359,7 @@ export function CloudAgentLink({ actions }: { actions: CloudAgentActions }) {
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="min-w-[12rem]">
-        <ActionRows actions={actions} />
+        <ActionRows actions={actions} style="chip" />
       </DropdownMenuContent>
     </DropdownMenu>
   );
