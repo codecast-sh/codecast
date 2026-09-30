@@ -48,7 +48,8 @@ import { prState, repoObjectRefOf, repoObjectTitle } from "../lib/repoObjects";
 import { DocDates } from "./DocDates";
 import { FileDiffList } from "./FileDiffView";
 import { RevealButton, RevealOpenLink, type RevealTarget } from "./ObjectReveal";
-import { ProposalDetail, ProposalMeta, ProposalSnippet, useProposalChanges, useProposalTree } from "./org/ProposalCard";
+import { ProposalDetail, ProposalMeta, ProposalSnippet } from "./org/ProposalCard";
+import { useProposalChanges, useProposalTree } from "./org/proposalHooks";
 
 // The preview card a SHARED object renders as — the rich sibling of the inline
 // pill. remarkEntityCards promotes a references-only paragraph (or list) into

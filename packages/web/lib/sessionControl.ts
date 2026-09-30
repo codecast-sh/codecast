@@ -1,5 +1,5 @@
 import { ArrowRightLeft, Split, Send } from "lucide-react";
-import { AGENT_LAUNCH_OPTIONS, canSessionBecomeAgent, type ConvexAgentType } from "@codecast/shared/contracts";
+import { AGENT_LAUNCH_OPTIONS, canSessionBecomeAgent, cloudAgentProviderOfConversation, type ConvexAgentType } from "@codecast/shared/contracts";
 
 // ── Moving a session ──────────────────────────────────────────────────────────
 //
@@ -23,6 +23,20 @@ export const MOVE_VERBS: Record<MoveVerb, { label: string; hint: string; icon: t
   fork: { label: "Fork as", hint: "A copy of this session on another agent", icon: Split },
   handoff: { label: "Hand off to", hint: "A fresh session, seeded with a brief", icon: Send },
 };
+
+/**
+ * Whether a session can become another agent in place: never a cloud agent's,
+ * which runs on the provider's machines (fork and hand off still start a new
+ * session from it). Every surface that offers "Switch agent" asks this.
+ */
+export function canSwitchSessionAgent(agentType: string | undefined, sessionId: string | null | undefined, model: string | null | undefined): boolean {
+  return !cloudAgentProviderOfConversation(agentType, sessionId, model);
+}
+
+/** The move verbs a session offers. */
+export function sessionMoveVerbs(agentType: string | undefined, sessionId: string | null | undefined, model: string | null | undefined): MoveVerb[] {
+  return (Object.keys(MOVE_VERBS) as MoveVerb[]).filter((verb) => verb !== "switch" || canSwitchSessionAgent(agentType, sessionId, model));
+}
 
 /** The agent list for each verb from one session state. Exported for tests. */
 export function moveAgentOptions(agentType: string | undefined, messageCount: number | undefined): Record<MoveVerb, AgentOption[]> {

@@ -441,19 +441,17 @@ const ThreadsNavRow = memo(function ThreadsNavRow({
   onMobileClose?: () => void;
 }) {
   const unread = useThreadUnread();
-  // Threads live in the Chat window while there is one: this row is a door.
-  const away = usePoppedOut("chat");
   return (
     <Link
       href="/threads"
       onClick={onMobileClose}
       {...paneDragProps("/threads", "Threads")}
       className={`relative w-full flex items-center ${isNarrow ? "justify-center" : "gap-3"} px-4 py-2.5 border-l-2 transition-colors motion-reduce:transition-none text-left ${
-        isActive && !away
+        isActive
           ? "bg-sol-bg-highlight text-sol-text border-sol-cyan"
           : "text-sol-text-muted border-transparent hover:text-sol-text hover:bg-sol-bg-highlight/60"
-      }${away ? " opacity-55 hover:opacity-90" : ""}`}
-      title={away ? "Threads: opens in the Chat window" : "Threads — every conversation you're in"}
+      }`}
+      title="Threads — every conversation you're in"
     >
       <MessagesSquare className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />
       {isNarrow ? (

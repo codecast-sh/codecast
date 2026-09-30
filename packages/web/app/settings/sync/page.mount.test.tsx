@@ -35,6 +35,8 @@ async function verify() {
   const state: any = {
     get teams() { return fx.teams; },
     currentUser: fx.user,
+    // The cloud agent rows read the machine roster (no machines: no connect notes).
+    machineRoster: [],
     setPrivacy: () => {},
     setTeamMembershipVisibility: () => {},
   };
@@ -60,7 +62,11 @@ async function verify() {
     ...convexReact,
     useMutation: (ref: any) => {
       const name = getFunctionName(ref).replace(/^.*[:.]/, "");
-      return async (args: any) => { calls.push(`${name}:${JSON.stringify(args)}`); return {}; };
+      return async (args: any) => {
+        calls.push(`${name}:${JSON.stringify(args)}`);
+        if (fx.failNext) { fx.failNext = false; throw new Error("Server Error"); }
+        return {};
+      };
     },
   }));
 
@@ -91,11 +97,24 @@ async function verify() {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, v);
     input.dispatchEvent(new (dom.window as any).Event("input", { bubbles: true }));
   };
+  // An empty field has nothing to add: the button says so by being disabled,
+  // not by swallowing the click (a user rage clicked it fifteen times).
+  assert.equal(byText("Add")!.disabled, true, "Add is disabled while the field is empty");
+  await act(async () => { setValue("   "); });
+  assert.equal(byText("Add")!.disabled, true, "whitespace is still empty");
   await act(async () => { setValue("notes"); });
+  assert.equal(byText("Add")!.disabled, false, "a typed path enables Add");
   await act(async () => { byText("Add")!.click(); });
   assert.equal(calls.length, 0, "a relative path writes nothing");
   assert.match(toasts.pop() ?? "", /^err:Type the full path/);
+  // A failed save keeps the typed path and says so, rather than clearing the
+  // field and leaving nothing behind.
   await act(async () => { setValue("/Users/me/health/"); });
+  fx.failNext = true;
+  await act(async () => { byText("Add")!.click(); });
+  calls.pop();
+  assert.match(toasts.pop() ?? "", /^err:Could not add health/);
+  assert.equal(input.value, "/Users/me/health/", "the path stays in the field to try again");
   await act(async () => { byText("Add")!.click(); });
   assert.equal(calls.pop(), 'updateSyncSettings:{"sync_projects":["/Users/me/health"]}', "the trailing slash is dropped and the path is stored");
   assert.match(toasts.pop() ?? "", /^ok:health added/);

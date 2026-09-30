@@ -681,6 +681,31 @@ describe("buildBrowserRowMap", () => {
     expect(map.t1).toEqual({ url: "http://localhost:3000/inbox", tabId: "11AA22BB" });
     expect(map.t2.url).toBe("http://localhost:3000/inbox");
   });
+
+  // A stop closes the session's tab, so every row that drove it has nothing
+  // left to raise; a tab opened after the stop is a different, live one. The
+  // stop here rides at the end of a compound command whose verb is `eval`.
+  test("marks rows whose tab a later stop closed", () => {
+    const map = buildBrowserRowMap([
+      row("t1", "find", '"x"', "  nothing"),
+      row("t2", "open", "a.dev", "A\nhttps://a.dev/\n  tab 4A2CDC7E"),
+      row("t3", "shot", "", "  /tmp/x.png (10K)"),
+      row("t4", "eval", "1", "1\n✓ closed this session's tab"),
+      row("t5", "open", "b.dev", "B\nhttps://b.dev/\n  tab 9F00AB12"),
+    ]);
+    expect(map.t2.gone).toBe(true);
+    expect(map.t3.gone).toBe(true);
+    expect(map.t4.gone).toBe(true);
+    expect(map.t5.gone).toBeUndefined();
+  });
+
+  test("a row that named no tab is gone once the session's browser stops", () => {
+    const map = buildBrowserRowMap([
+      row("t1", "open", "a.dev", "A\nhttps://a.dev/"),
+      row("t2", "stop", "", "✓ closed this session's browser"),
+    ]);
+    expect(map.t1).toEqual({ url: "https://a.dev/", gone: true });
+  });
 });
 
 describe("cast browser do steps", () => {
@@ -880,7 +905,12 @@ describe("browserTabOf", () => {
     const tool = bash("t2", "cast browser find 'Sign in'");
     const carried = { t2: { tabId: "4A2CDC7E", url: "https://example.com/x" } };
     expect(browserTabOf(tool, cast("cast browser find 'Sign in'"), "found #e3", carried)).toEqual({ kind: "cast", tabId: "4A2CDC7E", url: "https://example.com/x" });
-    expect(browserTabOf(tool, cast("cast browser find 'Sign in'"), "found #e3", {})).toBeNull();
+    expect(browserTabOf(tool, cast("cast browser find 'Sign in'"), "found #e3", {})).toEqual({ kind: "cast", tabId: null, url: null });
+  });
+
+  test("a piped row that lost its tab footer still offers the session's tab, with the page it opened", () => {
+    const command = `cd ~/src/family && timeout 110 cast browser open "https://www.amazon.com/dp/0399167900" 2>&1 | grep -oE "error: [^(]*" | head -1`;
+    expect(browserTabOf(bash("t5", command), cast(command), "", {})).toEqual({ kind: "cast", tabId: null, url: "https://www.amazon.com/dp/0399167900" });
   });
 
   test("ignores cast rows outside the browser, and plain shell", () => {

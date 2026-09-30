@@ -799,7 +799,15 @@ export interface BrowserRowInput {
 export interface BrowserRowState {
   url?: string;
   tabId?: string;
+  /** A later `cast browser stop` closed this row's tab, so there is nothing
+   *  left to raise: the pill offers the reopen from the start. */
+  gone?: true;
 }
+
+// What `cast browser stop` prints (cli cliEngine.ts, engineStop.ts). Read off
+// the output, not the verb, because a stop often rides at the end of a
+// compound command whose first cast verb is something else.
+const SESSION_TAB_CLOSED_RE = /closed this session's (?:tab|browser)/;
 
 /**
  * Walk a conversation's browser rows in order and give every row the page URL
@@ -818,17 +826,31 @@ export function buildBrowserRowMap(rows: BrowserRowInput[]): Record<string, Brow
     tabId = extractBrowserTabId(row.output) ?? tabId;
     if (url || tabId) map[row.toolCallId] = { ...(url && { url }), ...(tabId && { tabId }) };
   }
+  // Backwards, so each row knows whether a stop came after it. A row that
+  // named a tab is gone when a stop closed that tab; a row that named none
+  // drove the session's tab of the moment, which any later stop closed.
+  const closed = new Set<string>();
+  let stopLater = false;
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    const state = map[rows[i].toolCallId];
+    if (SESSION_TAB_CLOSED_RE.test(rows[i].output)) {
+      stopLater = true;
+      if (state?.tabId) closed.add(state.tabId);
+    }
+    if (state && (state.tabId ? closed.has(state.tabId) : stopLater)) state.gone = true;
+  }
   return map;
 }
 
 /** The driven browser tab behind a tool call, for the "open tab" affordance. */
 export type BrowserTabRef =
-  | { kind: "cast"; tabId: string; url: string | null }
+  | { kind: "cast"; tabId: string | null; url: string | null; gone?: boolean }
   | { kind: "extension"; tabId: string };
 
 /**
  * A `cast browser` row names an 8-char tab in its output, or inherits one from
- * an earlier row through the carry-forward map (buildBrowserRowMap); a
+ * an earlier row through the carry-forward map (buildBrowserRowMap), or names
+ * none (tabId null: the session's current tab); a
  * Claude-in-Chrome call names a numeric tabId in its input or its result. Null
  * for every other tool, so callers can ask without checking the tool first.
  * `cast` is the row's parsed command (null when it is not a cast command).
@@ -848,15 +870,16 @@ export function browserTabOf(
   }
   if (!cast || normalizeCastCategory(cast.category) !== "browser") return null;
   const output = resultContent ?? "";
+  // A row whose output lost the tab footer (piped through grep or tail) still
+  // drove the session's tab: tabId null asks the daemon for that one.
   const tabId = extractBrowserTabId(output) ?? carried[tool.id]?.tabId ?? null;
-  if (!tabId) return null;
   const url = extractBrowserPageUrl(cast.subcommand, cast.args, output) ?? carried[tool.id]?.url ?? null;
-  return { kind: "cast", tabId, url };
+  return { kind: "cast", tabId, url, ...(carried[tool.id]?.gone && { gone: true }) };
 }
 
 export function sameBrowserRowMap(a: Record<string, BrowserRowState>, b: Record<string, BrowserRowState>): boolean {
   const keys = Object.keys(a);
-  return keys.length === Object.keys(b).length && keys.every((k) => b[k] && a[k].url === b[k].url && a[k].tabId === b[k].tabId);
+  return keys.length === Object.keys(b).length && keys.every((k) => b[k] && a[k].url === b[k].url && a[k].tabId === b[k].tabId && a[k].gone === b[k].gone);
 }
 
 // ── cast browser do — the CLI's batch ───────────────────────────────────────

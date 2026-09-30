@@ -46,11 +46,12 @@ export function isThreadsPin(pin: Pick<SidebarPin, "kind" | "id">): boolean {
   return pin.id === "threads" && (pin.kind === "view" || pin.kind === "channel");
 }
 
-/** The desktop app a pin belongs to (lib/desktopApps): a channel and the
- *  threads inbox are chat's; a project and a saved task or doc view are
- *  work's. Each app's own window shows only its own pins. */
-export function pinApp(pin: Pick<SidebarPin, "kind" | "id">): "chat" | "work" {
-  return pin.kind === "channel" || isThreadsPin(pin) ? "chat" : "work";
+/** The desktop app a pin belongs to (lib/desktopApps): a channel is chat's;
+ *  a project and a saved task or doc view are work's; the threads inbox is
+ *  the main window's (null). Each app's own window shows only its own pins. */
+export function pinApp(pin: Pick<SidebarPin, "kind" | "id">): "chat" | "work" | null {
+  if (isThreadsPin(pin)) return null;
+  return pin.kind === "channel" ? "chat" : "work";
 }
 
 /** Add or remove one pin. Order is pin order — newest last, no re-sorting:

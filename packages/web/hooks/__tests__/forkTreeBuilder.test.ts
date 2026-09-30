@@ -3,6 +3,7 @@ import {
   buildForkFamily,
   branchDisplayLabel,
   branchDisplayCount,
+  attemptsHeading,
   type ForkConversationLike,
 } from "../useForkTree";
 
@@ -196,5 +197,26 @@ describe("buildForkFamily — killed branches never glow needs_input", () => {
   test("a killed branch that still claims to be working reads idle", () => {
     expect(liveFor({ is_idle: false, agent_status: "working", inbox_killed_at: 1_000 })).toBe("idle");
     expect(liveFor({ is_idle: false, agent_status: "working" })).toBe("working");
+  });
+});
+
+describe("buildForkFamily: a cloud agent's attempts", () => {
+  const task = "task_e_abc";
+  const sessions = {
+    t: sess("t", null, { session_id: task, agent_type: "codex", title: "Append a line", started_at: 1 }),
+    a2: sess("a2", "t", { session_id: `${task}~assttrn_2`, agent_type: "codex", title: "Attempt 2: Append a line", started_at: 2, branch_label: "a later prompt" }),
+  };
+  const conv: ForkConversationLike = { _id: "t", session_id: task, agent_type: "codex", title: "Append a line", message_count: 4, started_at: 1 };
+
+  test("each line is named by its attempt and the family counts attempts, as the branch chips do", () => {
+    const flat = buildForkFamily(conv, sessions);
+    expect(flat.map(branchDisplayLabel)).toEqual(["Attempt 1", "Attempt 2: Append a line"]);
+    expect(attemptsHeading(flat.slice(1))).toBe("2 attempts");
+  });
+
+  test("a family with an ordinary fork keeps its prompt labels", () => {
+    const flat = buildForkFamily(conv, { ...sessions, f: sess("f", "t", { agent_type: "codex", title: "Fork", started_at: 3 }) });
+    expect(branchDisplayLabel(flat[0])).not.toBe("Attempt 1");
+    expect(attemptsHeading(flat.slice(1))).toBeNull();
   });
 });

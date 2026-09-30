@@ -8,6 +8,7 @@ import {
   type InboxSession,
   type Message,
 } from "../store/inboxStore";
+import { isCloudAgentBranch } from "@codecast/shared/contracts";
 
 // The fork family of a conversation, built LOCAL-FIRST: the inbox store already
 // carries forked_from links for every cached session, and the conversation
@@ -34,6 +35,7 @@ export type ForkNode = {
   started_at: number;
   updated_at?: number;
   agent_type?: string;
+  session_id?: string;
   username?: string;
   last_message_preview?: string;
   last_message_role?: string;
@@ -66,6 +68,7 @@ export type ForkConversationLike = {
   started_at?: number;
   updated_at?: number;
   agent_type?: string;
+  session_id?: string | null;
   forked_from?: { toString(): string } | string | null;
   parent_message_uuid?: string | null;
   forked_from_details?: {
@@ -144,6 +147,7 @@ function recFromSession(s: InboxSession): RawRec {
     started_at: s.started_at,
     updated_at: s.updated_at,
     agent_type: s.agent_type,
+    session_id: s.session_id ?? undefined,
     git_branch: s.git_branch ?? undefined,
     username: s.author_name ?? undefined,
     live: liveOf(s),
@@ -162,6 +166,7 @@ function recFromDetails(f: Record<string, any>, parentId: string | undefined): R
     started_at: f.started_at,
     updated_at: f.updated_at,
     agent_type: f.agent_type,
+    session_id: f.session_id ?? undefined,
     username: f.username,
     last_message_preview: f.last_message_preview,
     last_message_role: f.last_message_role,
@@ -254,6 +259,7 @@ export function buildForkFamily(
     started_at: conversation.started_at ?? 0,
     updated_at: conversation.updated_at,
     agent_type: conversation.agent_type,
+    session_id: conversation.session_id ?? undefined,
   });
   const ffd = conversation.forked_from_details;
   if (parentId && ffd?.conversation_id) {
@@ -346,6 +352,7 @@ export function buildForkFamily(
       started_at: r.started_at ?? 0,
       updated_at: r.updated_at,
       agent_type: r.agent_type,
+      session_id: r.session_id,
       username: r.username,
       last_message_preview: r.last_message_preview,
       last_message_role: r.last_message_role,
@@ -365,6 +372,10 @@ export function buildForkFamily(
   const isLastChild = (i: number, kids: RawRec[]) => i === kids.length - 1;
   const root = recs.get(rootId)!;
   visit(root, 0, [], true);
+  // An attempt family's lines are named by attempt (isAttemptFamily), everywhere branchDisplayLabel is read.
+  if (isAttemptFamily(flat.slice(1))) {
+    flat.forEach((n, i) => { n.branch_label = attemptLineLabel(i === 0, n.title) ?? n.branch_label; });
+  }
   return flat;
 }
 
@@ -386,6 +397,28 @@ export function branchDisplayCount(n: ForkNode): number {
 // prompt the same way. Falls back to the title until messages/tree are loaded.
 export function branchDisplayLabel(n: ForkNode): string {
   return (n.branch_label || n.title || "Untitled").trim();
+}
+
+/**
+ * A cloud agent's attempts at one prompt (a Codex Cloud best-of-N task) are
+ * branches of its session. A family whose every branch is one reads as
+ * attempts: the line they fork from is attempt 1, each branch is named by its
+ * title ("Attempt 2: ..."), not by what was said on it later, and the family
+ * counts its lines as attempts. Every surface that names a family's lines
+ * (the branch chips, the branch map) asks these.
+ */
+export function isAttemptFamily(branches: ReadonlyArray<{ agent_type?: string | null; session_id?: string | null }>): boolean {
+  return branches.length > 0 && branches.every((b) => isCloudAgentBranch(b.agent_type, b.session_id));
+}
+
+/** A line's name in an attempt family: the origin line is attempt 1, a branch its title. */
+export function attemptLineLabel(origin: boolean, title: string | null | undefined): string | undefined {
+  return origin ? "Attempt 1" : title || undefined;
+}
+
+/** An attempt family's heading, counting the origin line; null for any other family. */
+export function attemptsHeading(branches: ReadonlyArray<{ agent_type?: string | null; session_id?: string | null }>): string | null {
+  return isAttemptFamily(branches) ? `${branches.length + 1} attempts` : null;
 }
 
 // Unread mirror of BranchSelector.unreadOf: baseline is your seen count or the

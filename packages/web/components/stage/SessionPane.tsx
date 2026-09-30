@@ -12,6 +12,7 @@ import { animatedHideSession } from "../../store/undoActions";
 import { useMissingSessionRow } from "../../hooks/useMissingSessionRow";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { ConversationPlaceholder } from "../ConversationPlaceholder";
+import { ConversationUnavailable } from "../ConversationUnavailable";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { PaneControls } from "./PaneControls";
 
@@ -55,14 +56,7 @@ export const SessionPane = memo(function SessionPane({
     if (!killed && missing !== null) return <ConversationPlaceholder id={sessionId} />;
     // Killed here, or the server will not hand it over (deleted, private):
     // say so honestly instead of painting an empty column.
-    return (
-      <div className="h-full flex flex-col items-center justify-center gap-2 text-xs text-sol-text-dim">
-        <span>This session is no longer available</span>
-        {onClose && (
-          <button onClick={onClose} className="text-sol-cyan hover:underline">Close pane</button>
-        )}
-      </div>
-    );
+    return <ConversationUnavailable actionLabel={onClose ? "Close pane" : undefined} onAction={onClose} />;
   }
   return (
     <ErrorBoundary name="StageSessionPane" level="panel">

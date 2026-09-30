@@ -75,11 +75,13 @@ test("a personified session leads with the name and dims what it is working on",
   );
   assert.equal(host.textContent, "Ember:Fixing the auth race");
   const spans = Array.from(host.querySelectorAll("span > span")) as HTMLElement[];
-  const name = spans.find((s) => s.textContent === "Ember")!;
+  const name = host.querySelector("[data-sv-name]") as HTMLElement;
   const title = spans.find((s) => s.textContent === "Fixing the auth race")!;
+  assert.equal(name.textContent, "Ember");
   assert.ok(name.className.includes("text-sol-text") && name.className.includes("font-medium"), "the name is dominant");
   assert.ok(title.className.includes("text-sol-text-dim"), "the work is secondary");
-  assert.ok(name.className.includes("flex-shrink-0"), "the name never truncates");
+  assert.ok(name.className.includes("flex-shrink-0"), "the name never gives way to the title");
+  assert.ok(name.className.includes("truncate") && name.parentElement!.className.includes("max-w-"), "a name wider than the line ellipsizes instead of painting under the chips");
   assert.ok(title.className.includes("truncate"), "the title does");
 });
 

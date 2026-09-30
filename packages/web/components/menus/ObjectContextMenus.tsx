@@ -530,7 +530,7 @@ export function SessionMenuItems({
         </CtxSubContent>
       </CtxSub>
       {extra}
-      {canControlModel(session.agent_type, (session.message_count ?? 0) === 0) && (
+      {canControlModel(session.agent_type, session.session_id, session.model) && (
         <CtxItem icon={Cpu} onSelect={() => openPaletteMode([session], "session", "model")}>
           Change model &amp; effort…
         </CtxItem>

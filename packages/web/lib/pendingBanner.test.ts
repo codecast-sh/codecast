@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { pendingBannerState, sessionMessageQueueLabel, pendingRetryClientId, pendingCancelRef, pendingMessageCanRetry, pendingMessageReachedSession, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "./pendingBanner";
+import { pendingBannerState, sessionMessageQueueLabel, pendingRetryClientId, pendingCancelRef, pendingMessageCanRetry, pendingMessageReachedSession, pendingMessageHoldReason, serverPendingBubbles, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "./pendingBanner";
 
 describe("session message queue labels", () => {
   test.each([undefined, "idle", "waiting", "dormant", "done", "connected", "starting", "resuming"])("does not call a %s recipient busy", status => {
@@ -206,4 +206,42 @@ test("a healthy daemon leaves the session verdict alone", () => {
 test("nothing to say stays nothing, and a restart in flight keeps its progress UI", () => {
   expect(withDaemonHealth("none", { daemonDegraded: true, restartInFlight: false })).toBe("none");
   expect(withDaemonHealth("stuck", { daemonDegraded: true, restartInFlight: true })).toBe("stuck");
+});
+
+describe("serverPendingBubbles", () => {
+  const row = (id: string, content: string, over: Record<string, unknown> = {}) =>
+    ({ message_id: id, client_id: `c_${id}`, created_at: 10, status: "pending", content, ...over });
+  const timeline = (over: Partial<Parameters<typeof serverPendingBubbles>[1]> = {}) => ({
+    seen: new Set<string>(), seenContent: new Set<string>(), local: [], newestServerTs: 5, atLiveTail: true,
+    normalize: (s: string) => s.trim(), ...over,
+  });
+
+  // 2026-09-30: a session stayed down for 33 hours with seven sends queued;
+  // only the oldest had a bubble and the person's own messages never showed.
+  test("every queued send renders, whichever device sent it", () => {
+    const task = row("task", "<scheduled-task>", { status: "failed", created_at: 1 });
+    const pending = { ...task, inflight: [task, row("photo", "use this photo"), row("buy", "buy it"), row("buy2", "buy it")] };
+    expect(serverPendingBubbles(pending, timeline()).map((b) => b._id))
+      .toEqual(["serverpending_task", "serverpending_photo", "serverpending_buy", "serverpending_buy2"]);
+  });
+
+  test("a row already on screen, synced or local, adds nothing", () => {
+    const pending = { ...row("a", "one"), inflight: [row("a", "one"), row("b", "two"), row("c", "three")] };
+    const bubbles = serverPendingBubbles(pending, timeline({ seen: new Set(["c_a"]), local: [{ _id: "c_b" }] }));
+    expect(bubbles.map((b) => b._id)).toEqual(["serverpending_c"]);
+    expect(serverPendingBubbles(pending, timeline({ seenContent: new Set(["three"]) })).map((b) => b._id))
+      .toEqual(["serverpending_a", "serverpending_b"]);
+  });
+
+  test("an older server without the list still renders its one row", () => {
+    expect(serverPendingBubbles(row("a", "one"), timeline()).map((b) => b._id)).toEqual(["serverpending_a"]);
+  });
+
+  test("each bubble finds its own row for delivery proof and hold reasons", () => {
+    const pending = { ...row("a", "one"), inflight: [row("a", "one"), row("b", "two", { status: "injected" }), row("c", "three", { hold_reason: "answer the dialog" })] };
+    expect(pendingMessageReachedSession("c_b", pending)).toBe(true);
+    expect(pendingMessageReachedSession("serverpending_a", pending)).toBe(false);
+    expect(pendingMessageHoldReason("serverpending_c", pending)).toBe("answer the dialog");
+    expect(pendingCancelRef("c_c", pending)).toEqual({ messageId: "c", clientId: "c_c" });
+  });
 });

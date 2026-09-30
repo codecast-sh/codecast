@@ -21,7 +21,7 @@ export const DOCUMENT_POLICY = [
   `style-src 'self' 'unsafe-inline' https://fonts.googleapis.com`,
   "font-src 'self' data: https://fonts.gstatic.com",
   "img-src 'self' data: blob: https:",
-  `media-src 'self' blob: ${CONVEX_HTTP} ${LOOPBACK}`,
+  `media-src 'self' blob: ${CONVEX_HTTP} https://media.codecast.sh ${LOOPBACK}`,
   `connect-src 'self' ${CONVEX_HTTP} ${CONVEX_WS} ${POSTHOG} https://*.ingest.us.sentry.io ${LOOPBACK} ${LOOPBACK_WS} wss://api.openai.com https://*.livekit.cloud wss://*.livekit.cloud ${AVATARS} ${GOOGLE_ADS}`,
   `frame-src 'self' https: ${LOOPBACK}`,
   "worker-src 'self'",

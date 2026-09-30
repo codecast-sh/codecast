@@ -8,7 +8,7 @@
 // there would interrupt and discard live work. Only when the agent is genuinely idle
 // (or gone) and STILL hasn't taken the message is a restart the right escalation.
 
-import { MID_TURN_AGENT_STATUSES } from "@codecast/shared/contracts";
+import { MID_TURN_AGENT_STATUSES, isRecoveryContinueClientId } from "@codecast/shared/contracts";
 
 export type LiveAgentStatus =
   | "working"
@@ -74,20 +74,41 @@ export function pendingRetryClientId(messageId: string): string | undefined {
   return messageId.startsWith("serverpending_") ? undefined : messageId;
 }
 
+export type ServerPendingRow = { message_id: string; client_id?: string; created_at: number; status: string; content: string; hold_reason?: string };
+// getConversationPendingMessage: the primary row (oldest in flight, else the
+// newest settled) plus `inflight`, every undelivered row. Older servers send
+// no `inflight`.
+export type ServerPendingStatus = ServerPendingRow & { inflight?: ServerPendingRow[] };
+
+// Every server row that may need a bubble: all undelivered rows, or the
+// settled primary when nothing is in flight.
+export function serverPendingRows(pending?: ServerPendingStatus | null): ServerPendingRow[] {
+  if (!pending) return [];
+  return pending.inflight?.length ? pending.inflight : [pending];
+}
+
+type PendingRowRef = { message_id: string; client_id?: string; status?: string; hold_reason?: string };
+type PendingLookup = PendingRowRef & { inflight?: PendingRowRef[] };
+
+// The server row behind a bubble: `serverpending_<id>` or the sender's client id.
+export function serverPendingRowFor<T extends PendingRowRef>(messageId: string, pending?: (T & { inflight?: T[] }) | null): T | undefined {
+  return [pending, ...(pending?.inflight ?? [])].find((row): row is T & { inflight?: T[] } =>
+    !!row && (messageId === `serverpending_${row.message_id}` || messageId === row.client_id || messageId === row.message_id));
+}
+
 // Identity the cancel dispatch can look the row up with. A local optimistic
 // bubble is keyed by its client id; a bubble synthesized from the conversation's
 // pending_messages row uses the `serverpending_` prefix. When the conversation
 // pending row matches this bubble, pass both so the server can find it either way.
 export function pendingCancelRef(
   messageId: string,
-  pending?: { message_id: string; client_id?: string } | null,
+  pending?: PendingLookup | null,
 ): { messageId?: string; clientId?: string } {
   if (messageId.startsWith("serverpending_")) {
     return { messageId: messageId.slice("serverpending_".length) };
   }
-  if (pending && (messageId === pending.client_id || messageId === pending.message_id)) {
-    return { messageId: pending.message_id, clientId: pending.client_id };
-  }
+  const row = serverPendingRowFor(messageId, pending);
+  if (row) return { messageId: row.message_id, clientId: row.client_id };
   return { clientId: messageId };
 }
 
@@ -105,6 +126,45 @@ export function serverPendingBubbleVisible(
   return window.atLiveTail && window.newestServerTs < pending.created_at;
 }
 
+// The bubbles the timeline adds for server pending rows: every queued message,
+// whichever device or CLI sent it, for every viewer. A row already on screen
+// (a synced message or a local optimistic copy, by client id or by content)
+// adds nothing, but two queued rows with the same text are two sends and both
+// render; the real JSONL echo fills `seenContent` with the same
+// normalized key, which is what drops the bubble. A delivered row renders as a
+// plain message while serverPendingBubbleVisible says its echo is still coming.
+export function serverPendingBubbles(
+  pending: ServerPendingStatus | null | undefined,
+  timeline: {
+    seen: Set<string>;
+    seenContent: Set<string>;
+    local: Array<{ _id: string; _clientId?: string }>;
+    newestServerTs: number;
+    atLiveTail: boolean;
+    normalize: (content: string) => string;
+  },
+) {
+  const bubbles = [];
+  for (const row of serverPendingRows(pending)) {
+    if (!serverPendingBubbleVisible(row, timeline)) continue;
+    const id = row.client_id;
+    if (id && (timeline.seen.has(id) || timeline.local.some((m) => m._id === id || m._clientId === id))) continue;
+    const norm = timeline.normalize(row.content);
+    if (!norm || timeline.seenContent.has(norm)) continue;
+    bubbles.push({
+      _id: `serverpending_${row.message_id}`,
+      role: "user" as const,
+      content: row.content,
+      timestamp: row.created_at,
+      ...(row.status === "delivered" ? {} : { _isOptimistic: true }),
+      _serverPendingStatus: row.status,
+      _serverPendingReason: row.hold_reason,
+      _recoveryContinue: isRecoveryContinueClientId(row.client_id),
+    });
+  }
+  return bubbles;
+}
+
 // The conversation's pending row as the composer's delivery tracker sees it.
 // getConversationPendingMessage falls back to the newest SETTLED row
 // (delivered/cancelled) so a lagging transcript keeps its bubble; to the
@@ -116,14 +176,14 @@ export function inFlightPending<T extends { status: string }>(pending: T | null 
 }
 
 /** Why the daemon is holding this message back, when it said (retryMessage holdReason): a key to add, a dialog to answer. */
-export function pendingMessageHoldReason(messageId: string, pending?: { message_id: string; client_id?: string; status: string; hold_reason?: string } | null): string | undefined {
-  if (!pending || pending.status !== "pending" || !pending.hold_reason) return undefined;
-  return messageId === `serverpending_${pending.message_id}` || messageId === pending.client_id ? pending.hold_reason : undefined;
+export function pendingMessageHoldReason(messageId: string, pending?: PendingLookup | null): string | undefined {
+  const row = serverPendingRowFor(messageId, pending);
+  return row?.status === "pending" && row.hold_reason ? row.hold_reason : undefined;
 }
 
-export function pendingMessageReachedSession(messageId: string, pending?: { message_id: string; client_id?: string; status: string } | null): boolean {
-  return !!pending && (pending.status === "injected" || pending.status === "delivered")
-    && (messageId === `serverpending_${pending.message_id}` || messageId === pending.client_id);
+export function pendingMessageReachedSession(messageId: string, pending?: PendingLookup | null): boolean {
+  const row = serverPendingRowFor(messageId, pending);
+  return !!row && (row.status === "injected" || row.status === "delivered");
 }
 
 // - "queued": the session is booting/resuming/connecting, parked, or idle and simply

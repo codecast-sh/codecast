@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Split } from "lucide-react";
 import { useInboxStore, type ForkChild } from "../store/inboxStore";
 import { branchSizeOf, originSizeSinceFork } from "../lib/branchCounts";
+import { attemptLineLabel, attemptsHeading, isAttemptFamily } from "../hooks/useForkTree";
 
 // Sentinel loadingBranchId for the origin-line chip, which has no fork id.
 const MAIN_BRANCH = "main";
@@ -96,11 +97,13 @@ export function BranchSelector({
   // is active, and each is labeled by the prompt that sent it its own way. The
   // origin line falls back to "main" when it has no distinguishing prompt after
   // the fork point (common on orchestration lines that just keep running tools).
+  // A cloud agent's other attempts at this prompt are named by attempt (isAttemptFamily).
+  const attempts = isAttemptFamily(forkChildren);
   const branches = [
     {
       key: MAIN_BRANCH,
       id: null as string | null,
-      label: mainDivergentPreview || "main",
+      label: (attempts ? attemptLineLabel(true, null) : mainDivergentPreview) || "main",
       size: mainSize,
       unread: 0,
       isActive: !activeBranchId,
@@ -111,7 +114,7 @@ export function BranchSelector({
       return {
         key: fork._id,
         id: fork._id as string | null,
-        label: fork.first_divergent_preview || fork.title || fork.short_id || "fork",
+        label: (attempts ? attemptLineLabel(false, fork.title) : fork.first_divergent_preview || fork.title) || fork.short_id || "fork",
         size: branchSizeOf(fork),
         unread: unreadOf(fork, seenMessageCount[fork._id], isActive),
         isActive,
@@ -125,7 +128,7 @@ export function BranchSelector({
       <div className="flex items-center gap-1.5 mb-1.5">
         <BranchIcon className="w-3.5 h-3.5 text-sol-cyan" />
         <span className="text-[10px] text-sol-text-dim uppercase tracking-wider font-medium">
-          {forkChildren.length} branch{forkChildren.length !== 1 ? "es" : ""}
+          {attemptsHeading(forkChildren) ?? `${forkChildren.length} branch${forkChildren.length !== 1 ? "es" : ""}`}
         </span>
       </div>
       <div className="flex flex-wrap gap-1.5">
