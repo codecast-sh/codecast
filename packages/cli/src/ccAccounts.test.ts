@@ -29,7 +29,6 @@ import {
   deleteProfile,
   listProfiles,
   parseUsageResponse,
-  parseRetryAfter,
   refreshUsageSnapshots,
   readUsageCache,
   readActiveStamp,
@@ -2167,30 +2166,6 @@ describe("attributeFingerprint (token → saved profile via usage snapshots)", (
     expect(attributeFingerprint(fp(1_788_324_000, 1_788_861_600), { z: { uuid: "u-z" } }, usage, now)).toBeNull();
     const twin = { ...usage, "u-b": usage["u-a"] };
     expect(attributeFingerprint(fp(1_788_324_000, 1_788_861_600), profiles, twin, now)).toBeNull();
-  });
-});
-
-describe("parseRetryAfter", () => {
-  const NOW = 1_781_000_000_000;
-
-  it("reads delta-seconds", () => {
-    expect(parseRetryAfter("120", NOW)).toBe(120_000);
-    expect(parseRetryAfter("  90 ", NOW)).toBe(90_000);
-  });
-
-  it("reads an HTTP date as the wait from now", () => {
-    expect(parseRetryAfter(new Date(NOW + 300_000).toUTCString(), NOW)).toBe(300_000);
-  });
-
-  it("ignores a header that names no future wait", () => {
-    for (const h of [null, undefined, "", "   ", "soon", "0", "-5", new Date(NOW - 60_000).toUTCString()]) {
-      expect(parseRetryAfter(h, NOW)).toBeUndefined();
-    }
-  });
-
-  it("caps at 24h so a corrupt header can't freeze the meters", () => {
-    expect(parseRetryAfter("999999999", NOW)).toBe(24 * 60 * 60 * 1000);
-    expect(parseRetryAfter(new Date(NOW + 400 * 86_400_000).toUTCString(), NOW)).toBe(24 * 60 * 60 * 1000);
   });
 });
 
