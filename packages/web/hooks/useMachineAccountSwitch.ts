@@ -95,7 +95,7 @@ export function useMachineAccountSwitch(opts: { deviceId?: string; activeEmail?:
         pending: null,
         outcome: { kind: "error", profile: pending.profile, message },
       } });
-      toast.error(message, { id: pending.toastId, duration: 12_000 });
+      toast.error(message, { id: pending.toastId });
     }
   }, [deviceId, state, pending, resolved.phase, resolved.error]);
 
@@ -132,7 +132,7 @@ export function useMachineAccountSwitch(opts: { deviceId?: string; activeEmail?:
       captureException(err);
       if (useSwitchState.getState()[deviceId]?.pending?.requestId !== requestId) return;
       const message = err instanceof Error ? err.message : "Switch failed";
-      toast.error(message, { id: toastId, duration: 12_000 });
+      toast.error(message, { id: toastId });
       useSwitchState.setState({ [deviceId]: { pending: null, outcome: { kind: "error", profile, message } } });
     }
   };

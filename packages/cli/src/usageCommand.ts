@@ -24,7 +24,8 @@ import {
   type CcUsage,
   type RecoveryMode,
 } from "@codecast/shared/contracts";
-import { activeAccountSummary, launchProfileName, listProfiles, readUsageCache, type UsageRetryState } from "./ccAccounts.js";
+import { activeAccountSummary, launchProfileName, listProfiles, readUsageCache } from "./ccAccounts.js";
+import type { UsageRetryState } from "./usageRetry.js";
 
 export interface UsageProfile {
   name: string;
