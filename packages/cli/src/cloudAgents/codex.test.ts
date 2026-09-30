@@ -11,7 +11,8 @@ import { readTranscriptIngest } from "../workers/ingestClient.js";
 import { buildCodexCloudTranscript, CodexCloudAdapter, CodexCloudApi, codexCitations, codexTaskLines, codexTaskTitle, isRunningTurnStatus, taskGit, taskRepo, taskTurnChain, type CodexKnown, type WhamTask, type WhamTurn, type WhamTurns } from "./codex.js";
 import { CloudAgentRegistry } from "./registry.js";
 import { checkCloudAgentLogin } from "./registry.js";
-import { applyInCheckout, CloudAgentSessions, porcelainPaths, setupErrorOf, type CloudAgentSession } from "./sessions.js";
+import { applyInCheckout, CloudAgentSessions, setupErrorOf, type CloudAgentSession } from "./sessions.js";
+import { porcelainEntries } from "../gitPlane.js";
 import { classifyMirrorTranscriptTail, mirrorMessageUuid, readMetaJson } from "./transcript.js";
 import { CloudAgentBusyError, CloudAgentSetupError, type CloudAgentLoginCommand } from "./types.js";
 import { CloudAgentWatcher } from "./watcher.js";
@@ -769,13 +770,19 @@ describe("Codex Cloud drive: follow-ups, held while busy, cancel", () => {
     expect(calls.length).toBe(reads);
   });
 
-  test("cancel from a branch cancels the task's running turn", async () => {
+  test("cancel from a branch cancels its own running turn, and never another line's", async () => {
     const running = clone(BEST_OF_2);
     assistantTurn(running, 1).turn_status = "pending";
     const { fetchImpl, calls } = wham({ [`GET /tasks/${BEST_TASK.id}/turns`]: json(running), [`POST /tasks/${BEST_TASK.id}/cancel`]: json({ success: true }) });
     const a = adapter(VALID, fetchImpl);
+    // The task's own line (attempt 1) has nothing running: stopping its session leaves attempt 2 working.
+    expect(await a.cancel(a.client() as CodexCloudApi, BEST_TASK.id)).toBeNull();
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
     expect(await a.cancel(a.client() as CodexCloudApi, A1.id)).toBe("the running turn");
     expect(calls.at(-1)).toMatchObject({ method: "POST", path: `/tasks/${BEST_TASK.id}/cancel` });
+    // Attempts running side by side stop together (Codex cancels a whole task), and the result says so.
+    assistantTurn(running, 0).turn_status = "in_progress";
+    expect(await a.cancel(a.client() as CodexCloudApi, BEST_TASK.id)).toBe("the running turn, and the task's other attempts with it");
   });
 });
 
@@ -796,13 +803,20 @@ describe("Codex Cloud session actions", () => {
       [`GET /tasks/${BEST_TASK.id}/turns/${A1.id}`]: () => new Response(JSON.stringify(answers.shift())),
     });
     const a = adapter(VALID, fetchImpl, { sleep: async () => {} });
-    expect(await a.createPullRequest(a.client() as CodexCloudApi, A1.id)).toEqual({ url: "https://github.com/ashot/chatdoc/pull/99", branch: "codex/branch-2" });
+    expect(await a.createPullRequest(a.client() as CodexCloudApi, A1.id)).toEqual({ url: "https://github.com/ashot/chatdoc/pull/99" });
     expect(calls.find((c) => c.method === "POST")).toMatchObject({ path: `/tasks/${BEST_TASK.id}/turns/${A1.id}/pr`, body: { mode: "draft", add_codex_tag: false } });
     // One the task already has (on the turn, or only in the task's pull requests) is its link, with nothing sent.
     const open = wham({ [`GET /tasks/${BEST_TASK.id}/turns`]: json(BEST_OF_2), [`GET /tasks/${BEST_TASK.id}`]: json({ task: BEST_TASK }) });
     const b = adapter(VALID, open.fetchImpl);
     expect((await b.createPullRequest(b.client() as CodexCloudApi, BEST_TASK.id)).url).toBe("https://github.com/ashot/chatdoc/pull/18");
     expect(open.calls.some((c) => c.method === "POST")).toBe(false);
+    // A later follow-up that changed code on a line that already has a pull request: that one, not a second.
+    const later = clone(BEST_OF_2);
+    later.current_turn_id = followUpOn(later, A0, "m1", { output_items: [{ type: "follow_up_diff", output_diff: { diff: "diff --git a/b b/b\n" } }] }).answer.id;
+    const moved = wham({ [`GET /tasks/${BEST_TASK.id}/turns`]: json(later), [`GET /tasks/${BEST_TASK.id}`]: json({ task: BEST_TASK }) });
+    const d = adapter(VALID, moved.fetchImpl);
+    expect((await d.createPullRequest(d.client() as CodexCloudApi, BEST_TASK.id)).url).toBe("https://github.com/ashot/chatdoc/pull/18");
+    expect(moved.calls.some((c) => c.method === "POST")).toBe(false);
     // An ask task changed no code.
     const ask = wham({ [`GET /tasks/${ASK_TASK.id}/turns`]: json(ASK), [`GET /tasks/${ASK_TASK.id}`]: json({ task: ASK_TASK }) });
     const c = adapter(VALID, ask.fetchImpl);
@@ -828,6 +842,13 @@ describe("Codex Cloud session actions", () => {
     onMain.current_turn_id = followUpOn(onMain, A0, "m1").answer.id;
     expect(await plan(onMain, A1.id)).toEqual(a1);
     expect((await plan(onMain, BEST_TASK.id)).diff).toBe((await plan(BEST_OF_2, BEST_TASK.id)).diff);
+    // A follow-up that changed code carries its own diff and the line's whole one (the pr item, verified live):
+    // Apply takes the whole one, or a checkout at the base branch gets only the last turn's part.
+    const followed = clone(BEST_OF_2);
+    const own = "diff --git a/b.txt b/b.txt\n";
+    const whole = "diff --git a/README.md b/README.md\ndiff --git a/b.txt b/b.txt\n";
+    followed.current_turn_id = followUpOn(followed, A0, "m2", { output_items: [{ type: "pr", output_diff: { diff: whole } }, { type: "follow_up_diff", output_diff: { diff: own } }] }).answer.id;
+    expect((await plan(followed, BEST_TASK.id)).diff).toBe(whole);
   });
 
   test("applyInCheckout: refused without a checkout or with local changes to a file it touches; else git apply at the checkout's root", async () => {
@@ -899,9 +920,10 @@ describe("Codex Cloud session actions", () => {
     expect(fs.readFileSync(path.join(worktree, "README.md"), "utf8")).toBe("hi\nattempt 2\n");
   });
 
-  test("porcelainPaths: every path git status -z names, a rename's new path and not its old one", () => {
-    expect(porcelainPaths(" M README.md\0R  new name.md\0old name.md\0?? x.txt\0")).toEqual(["README.md", "new name.md", "x.txt"]);
-    expect(porcelainPaths("")).toEqual([]);
+  test("porcelainEntries: every path git status -z names, a rename's new path and not its old one", () => {
+    expect(porcelainEntries(" M README.md\0R  new name.md\0old name.md\0?? x.txt\0").map((e) => e.path)).toEqual(["README.md", "new name.md", "x.txt"]);
+    expect(porcelainEntries(" M README.md\0")).toEqual([{ status: " M", path: "README.md" }]);
+    expect(porcelainEntries("")).toEqual([]);
   });
 
   test("the registry says each action's result in the thread, a refusal too", async () => {

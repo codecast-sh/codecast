@@ -7,7 +7,7 @@
  * interrupt, held messages, setup errors) and the daemon's registry
  * (registry.ts). An adapter only speaks its vendor's API.
  */
-import { CLOUD_AGENT_RETRIED_SUFFIX, cloudAgentCardText, cloudAgentExpiryDate, cloudAgentSetupSentence, isCloudAgentCredentialKind, type CloudAgentLoginStateName, type CloudAgentProviderSpec, type CloudAgentSetupKind } from "@codecast/shared/contracts";
+import { CLOUD_AGENT_RETRIED_SUFFIX, cloudAgentCardText, cloudAgentExpiryDate, cloudAgentSetupSentence, isCloudAgentCredentialKind, type CloudAgentActionName, type CloudAgentLoginStateName, type CloudAgentProviderSpec, type CloudAgentSetupKind } from "@codecast/shared/contracts";
 import { githubRepo } from "../cloud/gitOrigin.js";
 import { deviceLabel } from "../remote/device.js";
 import type { CloudAgentSession } from "./sessions.js";
@@ -112,7 +112,7 @@ export interface CloudAgentAdapter<C = unknown, A = unknown, D = unknown> {
 
   // Mirror side.
   listAgents(client: C, cursor?: string): Promise<{ items: CloudAgentListItem<A>[]; nextCursor?: string }>;
-  /** Read the agent and render its transcript. Null skips this pass. */
+  /** Read the agent and render its transcript. Null skips this pass; for a child agent, null says its parent no longer has it, and it is forgotten. */
   mirror(client: C, handle: CloudAgentHandle<D>, known: A | undefined): Promise<CloudAgentMirror | null>;
   /** Stop any live work (streams it follows). */
   stop?(): void;
@@ -139,7 +139,7 @@ export interface CloudAgentAdapter<C = unknown, A = unknown, D = unknown> {
   /** Archive the agent on the provider's site, or bring it back. */
   archive?(client: C, agentId: string, archived: boolean): Promise<void>;
   /** Open a draft pull request from the agent's changes: its link, once the provider made it. */
-  createPullRequest?(client: C, agentId: string): Promise<{ url?: string; branch?: string }>;
+  createPullRequest?(client: C, agentId: string): Promise<{ url?: string }>;
   /**
    * The agent's changes to apply to a local checkout: the repository it works
    * on and its diff. The core applies that diff itself (`git apply`), so what
@@ -150,6 +150,14 @@ export interface CloudAgentAdapter<C = unknown, A = unknown, D = unknown> {
   /** When the credential is a sign-in on this machine (a CLI's own login) rather than a key. */
   readonly login?: CloudAgentLogin<C>;
 }
+
+/** The adapter method each header action runs: an adapter offers an action (its spec's `actions`) exactly when it has the method. */
+export const CLOUD_AGENT_ACTION_METHODS = {
+  create_pr: "createPullRequest",
+  apply: "applyPlan",
+  archive: "archive",
+  unarchive: "archive",
+} as const satisfies Record<CloudAgentActionName, keyof CloudAgentAdapter>;
 
 /** What applying an agent's changes locally takes (CloudAgentAdapter.applyPlan). */
 export interface CloudAgentApplyPlan {
@@ -221,8 +229,9 @@ function sentence(adapter: Pick<AnyCloudAgentAdapter, "spec">, problem: Paramete
 
 /** How soon a held message is tried again: credentials are read on this machine, so every few seconds. */
 const CREDENTIAL_RECHECK_MS = 5_000;
-/** The rest ask the provider again on every try, so less often. */
+/** The rest ask the provider again on every try, so less often, and less often again each time it still refuses. */
 const PROVIDER_RECHECK_MS = 30_000;
+const PROVIDER_RECHECK_MAX_MS = 10 * 60_000;
 
 /**
  * A message the agent cannot take yet: the delivery layer holds it with
@@ -240,7 +249,8 @@ export abstract class CloudAgentHoldError extends Error {
  */
 export class CloudAgentSetupError extends CloudAgentHoldError {
   readonly holdReason: string;
-  readonly recheckMs: number;
+  private readonly credential: boolean;
+  private tries = 0;
   /**
    * `reason`: the provider's own words (or the vendor's sentence), without
    * the card around it: what the connect dialog shows. `holdReason`: what
@@ -248,9 +258,17 @@ export class CloudAgentSetupError extends CloudAgentHoldError {
    */
   constructor(readonly adapter: Pick<AnyCloudAgentAdapter, "spec">, readonly kind: CloudAgentSetupKind, message: string, readonly reason?: string, holdReason?: string) {
     super(message);
-    const credential = isCloudAgentCredentialKind(kind);
-    this.holdReason = credential ? card(adapter.spec.credentialCards.holdReason) : holdReason ?? `waiting for ${adapter.spec.label} setup`;
-    this.recheckMs = credential ? CREDENTIAL_RECHECK_MS : PROVIDER_RECHECK_MS;
+    this.credential = isCloudAgentCredentialKind(kind);
+    this.holdReason = this.credential ? card(adapter.spec.credentialCards.holdReason) : holdReason ?? `waiting for ${adapter.spec.label} setup`;
+  }
+  /** Credentials are read on this machine, so soon; a problem only the provider can answer is asked about half as often each try. */
+  get recheckMs(): number {
+    return this.credential ? CREDENTIAL_RECHECK_MS : Math.min(PROVIDER_RECHECK_MS * 2 ** this.tries, PROVIDER_RECHECK_MAX_MS);
+  }
+  /** How many tries this conversation's hold already had (the registry counts them). */
+  triedBefore(tries: number): this {
+    this.tries = tries;
+    return this;
   }
   /** No usable credentials on this machine: the spec's card, and `detail` when there is more to say (a login of the wrong kind). */
   static credentialsMissing(adapter: Pick<AnyCloudAgentAdapter, "spec">, detail?: string): CloudAgentSetupError {
