@@ -1843,7 +1843,7 @@ function isOwnBotEvent(install: Install, event: any): boolean {
 
 type InboundFile = { storage_id: Id<"_storage">; name?: string; mime?: string; width?: number; height?: number };
 
-async function mirrorFiles(ctx: ActionCtx, install: Install, files: any[]): Promise<{ attachments: InboundFile[]; extra: string[] }> {
+export async function mirrorFiles(ctx: ActionCtx, install: Install, files: any[]): Promise<{ attachments: InboundFile[]; extra: string[] }> {
   const attachments: InboundFile[] = [];
   const extra: string[] = [];
   for (const f of files ?? []) {
@@ -1855,7 +1855,9 @@ async function mirrorFiles(ctx: ActionCtx, install: Install, files: any[]): Prom
     if (isImage && url && size > 0 && size <= MAX_FILE_BYTES) {
       try {
         const resp = await fetch(url, { headers: { Authorization: `Bearer ${install.bot_token}` } });
-        if (resp.ok) {
+        // A token without access to the file gets Slack's sign-in page back,
+        // often as a 200: only real image bytes become an attachment.
+        if (resp.ok && (resp.headers.get("content-type") ?? "").startsWith("image/")) {
           const blob = await resp.blob();
           const storageId = await ctx.storage.store(new Blob([await blob.arrayBuffer()], { type: mime }));
           attachments.push({

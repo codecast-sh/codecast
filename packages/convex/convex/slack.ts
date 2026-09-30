@@ -42,11 +42,12 @@ export const BOT_SCOPES = [
 // history, no posting: their token never reads or writes a message.
 export const USER_SCOPES = [
   "channels:read", "groups:read", "groups:write", "users:read",
-  // Their own direct messages, read and written as them (slackSync DMs).
-  "im:read", "im:history", "mpim:read", "mpim:history", "chat:write",
+  // Their own direct messages, read and written as them (slackSync DMs),
+  // with the images shared in them.
+  "im:read", "im:history", "mpim:read", "mpim:history", "chat:write", "files:read",
 ].join(",");
 /** The scopes a token needs before a person's DMs can come over. */
-export const DM_SCOPES = ["im:read", "im:history", "mpim:read", "mpim:history", "chat:write"];
+export const DM_SCOPES = ["im:read", "im:history", "mpim:read", "mpim:history", "chat:write", "files:read"];
 export function tokenHasDmScopes(scopes: string | undefined | null): boolean {
   const have = new Set((scopes ?? "").split(",").map((s) => s.trim()));
   return DM_SCOPES.every((s) => have.has(s));

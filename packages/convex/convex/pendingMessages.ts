@@ -1430,15 +1430,21 @@ export const getConversationPendingMessage = query({
     // viewer whose transcript tail lags the server (minutes under load) keeps
     // a delivered message on screen until its echo arrives, instead of
     // watching it vanish; a cancelled row tells the viewer to drop it.
-    const msg = visible
+    // `inflight` lists EVERY undelivered row, oldest first: each one is a
+    // message the person sent that the transcript does not hold yet, and each
+    // must render. A session that stays down queues several; showing only the
+    // oldest hid the rest for 33 hours on 2026-09-30.
+    const shown = (m: (typeof visible)[number]) => ({ message_id: m._id, client_id: m.client_id, created_at: m.created_at, retry_count: m.retry_count, status: m.status as string, content: m.content, hold_reason: m.delivery_disposition_reason });
+    const inflight = visible
       .filter((m) => SHOWN_PENDING_STATUSES.has(m.status))
-      .sort((a, b) => a.created_at - b.created_at)[0]
+      .sort((a, b) => a.created_at - b.created_at);
+    const msg = inflight[0]
       ?? visible
         .filter((m) => TERMINAL_STATUSES.has(m.status as PendingStatus))
         .sort((a, b) => b.created_at - a.created_at)[0]
       ?? null;
     if (!msg) return null;
-    return { message_id: msg._id, client_id: msg.client_id, created_at: msg.created_at, retry_count: msg.retry_count, status: msg.status as string, content: msg.content, hold_reason: msg.delivery_disposition_reason };
+    return { ...shown(msg), inflight: inflight.map(shown) };
   },
 });
 
