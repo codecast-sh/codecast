@@ -1265,3 +1265,20 @@ describe("per-message usage extraction (org-roles-standing.md T4)", () => {
     expect(malformed.usage).toBeUndefined();
   });
 });
+
+describe("parser - Claude Code auto-continue limit wait", () => {
+  // Real system entry from 2026-09-30 (CC 2.1.286): the only JSONL record of
+  // that limit park.
+  test("syncs as a limit banner, other informational lines stay system", () => {
+    const entries = [
+      { type: "system", subtype: "informational", uuid: "u1", timestamp: "2026-09-30T19:44:04.449Z", content: "Usage limit reached · continuing automatically at 6:10pm · esc to cancel" },
+      { type: "system", subtype: "informational", uuid: "u2", timestamp: "2026-09-30T19:48:07.837Z", content: "Automatic continue cancelled · /rate-limit-options to re-arm" },
+    ] as unknown as ClaudeSessionEntry[];
+    const [park, cancelled] = extractMessages(entries);
+    expect(park.role).toBe("assistant");
+    expect(park.uuid).toBe("u1");
+    expect(classifyApiErrorBanner(park.content)).toBe("limit");
+    expect(cancelled.role).toBe("system");
+    expect(cancelled.content).toBe("Automatic continue cancelled · /rate-limit-options to re-arm");
+  });
+});

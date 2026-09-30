@@ -10,7 +10,7 @@ import { remarkEmojiShortcodes } from "../../lib/remarkEmojiShortcodes";
 import { MESSAGE_MD_COMPONENTS, MESSAGE_MD_REHYPE, USER_MD_REMARK } from "../messageMarkdown";
 import { RevealHost } from "../ObjectReveal";
 import { CommentAvatar } from "../comments/CommentAvatar";
-import { remarkChatMentions } from "../../lib/remarkChatMentions";
+import { remarkChatMentions, channelNameMap } from "../../lib/remarkChatMentions";
 import { remarkEntityCards } from "../../lib/remarkEntityCards";
 import { compactAge } from "../../lib/threadState";
 import { copyToClipboard } from "../../lib/utils";
@@ -24,6 +24,7 @@ import "./chat.css";
 import "../editor/editor.css";
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { useInboxStore } from "../../store/inboxStore";
 // One chat message.
 //
 // The row is a two column grid: a fixed gutter (--ch-gutter in chat.css) and the body. When a message
@@ -236,11 +237,15 @@ export const ChatMessage = memo(function ChatMessage({
     for (const p of mentionSlack(roleRefs)) slack.set(p.handle.toLowerCase(), p);
     return { roles: roles.size ? roles : undefined, sessions: sessions.size ? sessions : undefined, slack: slack.size ? slack : undefined };
   }, [roleRefs]);
+  // `#name` links into the room, from this team's channels. Only a line that
+  // has a "#" subscribes, so the rest of the list never re-renders for it.
+  const hasHash = message.content.includes("#");
+  const channels = useInboxStore((s) => hasHash && channelId ? channelNameMap(s.chatChannels, s.chatChannels[channelId]?.team_id) : undefined);
   const remarkPlugins = useMemo(
     () => [
       [
         remarkChatMentions,
-        { known: knownHandles, self: selfHandles, names: handleNames, roles: mentionVocab.roles, sessions: mentionVocab.sessions, slack: mentionVocab.slack },
+        { known: knownHandles, self: selfHandles, names: handleNames, roles: mentionVocab.roles, sessions: mentionVocab.sessions, slack: mentionVocab.slack, channels },
       ] as [typeof remarkChatMentions, Parameters<typeof remarkChatMentions>[0]],
       ...USER_MD_REMARK,
       remarkSanitizeInvisibleUnicode,
@@ -249,7 +254,7 @@ export const ChatMessage = memo(function ChatMessage({
       remarkEmojiShortcodes,
       remarkEntityCards,
     ],
-    [knownHandles, selfHandles, handleNames, mentionVocab],
+    [knownHandles, selfHandles, handleNames, mentionVocab, channels],
   );
 
   const rowRef = useRef<HTMLDivElement | null>(null);

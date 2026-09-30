@@ -4,6 +4,7 @@
 import { useState } from "react";
 import { ChevronDown, ChevronRight, CornerDownLeft, Zap } from "lucide-react";
 import { WORKER_SETTLE_WORDS, parseScheduledTask, withoutStashedRunNote, type ScheduledTaskFrame, type WaitingSession } from "@codecast/shared/contracts";
+import { AREA_STATUS_WORDS } from "@codecast/shared/contracts/orgAreas";
 import { ShortcutTooltip } from "../../KeyboardShortcutsHelp";
 import { fmtDuration } from "../../triggerCadence";
 import { CollapsibleBody } from "../../CollapsibleBody";
@@ -66,10 +67,17 @@ function WaitingSessionLine({ waiting: w, firedAt, words, wordsClass = "text-sol
  *  role card the run reminded the role of, the waiting session's state and
  *  the trigger's prompt. The trigger pill opens the trigger, where the person
  *  edits, pauses or cancels it. */
+/** The change the area watch fired for (org-staffing.md S29), in a few words on the closed line. */
+function changeWords(c: NonNullable<ScheduledTaskFrame["change"]>): string {
+  if (c.kind === "unowned_project") return `"${c.project_title}" has no owner`;
+  return `@${c.role_handle} has read ${AREA_STATUS_WORDS[c.to]} at two checks in a row`;
+}
+
 function RoleWakeBlock({ frame, timestamp }: { frame: ScheduledTaskFrame; timestamp: number }) {
   const [open, setOpen] = useState(false);
   const role = frame.role!;
   const w = frame.waiting;
+  const c = frame.change ?? null;
   const stop = (e: React.MouseEvent) => e.stopPropagation();
   const prompt = withoutStashedRunNote(frame.body);
   return (
@@ -83,12 +91,14 @@ function RoleWakeBlock({ frame, timestamp }: { frame: ScheduledTaskFrame; timest
             <span className="truncate text-sol-text-muted">{waitingWords(w, timestamp)}</span>
           </span>
         )}
+        {c && <span className="min-w-0 shrink truncate text-[12px] text-sol-text-muted" data-area-change={c.kind}>{changeWords(c)}</span>}
         <span className="ml-auto shrink-0 text-[10px] text-sol-text-dim" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
         {open ? <ChevronDown className="w-3 h-3 shrink-0 text-sol-text-dim" /> : <ChevronRight className="w-3 h-3 shrink-0 text-sol-text-dim" />}
       </div>
       {open && (
         <div className="space-y-2 px-3 pb-2.5 pt-0.5 text-[12px]" data-role-wake-detail>
           {w?.state && <p className="text-sol-text">{w.state}</p>}
+          {c && <p className="text-sol-text" data-area-change-line>{c.line}</p>}
           <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-sol-text-muted" data-role-card>
             <dt className="text-sol-text-dim">Role</dt><dd>{role.name} <span className="text-sol-text-dim">@{role.handle}</span>{role.reports_to && <span className="text-sol-text-dim">, reports to {role.reports_to}</span>}</dd>
             <dt className="text-sol-text-dim">Looks after</dt><dd>{role.scope.length ? role.scope.join(", ") : "no area of its own"}</dd>

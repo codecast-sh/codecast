@@ -5,6 +5,7 @@ import type { MentionItem } from "../lib/mentionItem";
 import { memberHandle } from "@codecast/shared/chat";
 import { useInboxStore, convBucketMap, isConvexId } from "../store/inboxStore";
 import type { BucketItem, BucketAssignmentItem } from "../store/inboxStore";
+import type { ChatChannelRow, ChatRailRow } from "../store/chatSlice";
 import { useDebounce } from "./useDebounce";
 import { inActiveWorkspace } from "../lib/workspaceScope";
 import { matchScore, mergeMentionSuggestions, mentionViewTimes } from "../lib/mentionRanking";
@@ -132,6 +133,28 @@ export function labelMentionItems(s: {
         sublabel: `${n} session${n === 1 ? "" : "s"}`,
         shortId: `label:${b._id}`,
         updatedAt: b.updated_at || 0,
+      };
+    });
+}
+
+// Chat channels as `#` suggestions: the scope's team rooms a person can name
+// in prose (never DMs, never archived). Ordered by the rail's own activity
+// clock, and the viewer's unread count rides along as the detail line.
+export function channelMentionItems(s: {
+  chatChannels?: Record<string, ChatChannelRow>;
+  chatRail?: ChatRailRow[];
+}, scope: MentionScope): MentionItem[] {
+  const rail = new Map((s.chatRail || []).map((r) => [r.channel_id, r]));
+  return Object.values(s.chatChannels || {})
+    .filter((c) => c.kind !== "dm" && !c.archived_at && !!c.name)
+    .filter((c) => scope.kind !== "team" || c.team_id === scope.teamId)
+    .map((c) => {
+      const r = rail.get(String(c._id));
+      return {
+        id: String(c._id), type: "channel", label: c.name,
+        sublabel: c.topic || undefined, channelKind: c.kind ?? "public",
+        updatedAt: Math.max(r?.sort_at ?? 0, r?.last_message?.created_at ?? 0, c.updated_at ?? 0),
+        unread: r?.unread || undefined,
       };
     });
 }
