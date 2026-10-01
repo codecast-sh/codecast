@@ -10,7 +10,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { getProviderKeySpec, type ProviderKeyStore } from "@codecast/shared/contracts";
+import type { ProviderKeyStore } from "@codecast/shared/contracts";
 import { atomicWriteFile } from "./atomicWrite.js";
 import { readJsonForUpdate } from "./readForUpdate.js";
 
@@ -20,10 +20,14 @@ export function providerKeyStorePath(configDir: string): string {
   return path.join(configDir, PROVIDER_KEY_STORE_FILE);
 }
 
-/** A provider's API key on this machine: the one codecast manages, else the provider's env var. */
-export function providerApiKey(id: string, configDir: string): string | null {
-  const spec = getProviderKeySpec(id);
-  return readProviderKeyStore(configDir)[id] || (spec ? process.env[spec.envVars[0]] : undefined) || null;
+/**
+ * The key codecast manages for a provider on this machine, or null. Never the
+ * provider's env var: the web shows a machine as connected from its managed
+ * keys alone (managed_provider_ids), and a cloud agent that bills a key must
+ * run only on one the person gave codecast, not on whatever a shell exported.
+ */
+export function managedProviderKey(id: string, configDir: string): string | null {
+  return readProviderKeyStore(configDir)[id] || null;
 }
 
 /** The managed keys on this device, or `{}` when nothing is managed (the default).

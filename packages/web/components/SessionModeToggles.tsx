@@ -9,10 +9,14 @@
  * becomes the workspace pick (own worktree vs the host's shared checkout).
  */
 
+import type { ReactNode } from "react";
+import { Info } from "lucide-react";
 import { deviceDisplayName, type CloudAgentLaunch, type CloudAgentProviderSpec } from "@codecast/shared/contracts";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import type { SessionMachine } from "../lib/sessionMachines";
 import { ConnectCloudAgentButton } from "./cloudAgents";
 import { cloudAgentUi } from "./cloudAgents/providerUi";
+import type { CloudAgentProblem } from "./cloudAgents/machine";
 
 export type SessionModeTogglesProps = {
   /** The cloud host on the roster (offline included), or null without one. */
@@ -47,9 +51,14 @@ export type SessionModeTogglesProps = {
    */
   cloudAgent?: {
     spec: CloudAgentProviderSpec;
+    /** Every provider the agent type can run on (CloudAgentProviderSpec.lane): with more than one, a choice between them while on. */
+    lanes?: CloudAgentProviderSpec[];
+    onPickLane?: (spec: CloudAgentProviderSpec) => void;
     on: boolean;
     onToggle: () => void;
     connected: boolean;
+    /** What the driving machine's daemon found in the provider's way (machine.ts); one a sign-in can't fix (the provider changed, a limit) is said instead of the connect control. */
+    problem?: CloudAgentProblem;
     deviceId?: string | null;
     /** While on, the provider's launch options (spec.launchOptions: ask mode, attempts) and how to change them. */
     launch?: CloudAgentLaunch;
@@ -61,6 +70,23 @@ const START_FROM_OPTIONS: Array<{ value: "checkout" | "origin_main"; label: stri
   { value: "checkout", label: "my checkout", title: "my checkout — the branch, commit and uncommitted changes of this repo on the laptop that prepares the host" },
   { value: "origin_main", label: "origin/main", title: "origin/main — a clean checkout of the default branch" },
 ];
+
+/** A short line that opens its detail: on a tap too, since a touch device shows no title. */
+function DetailPopover({ label, about, className, children }: { label: string; about: string; className: string; children: ReactNode }) {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button type="button" className={`inline-flex items-center gap-1 text-center text-[11px] ${className}`}>
+          {label}
+          <Info className="h-3 w-3 shrink-0" aria-label={about} />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent side="top" className="w-80 border-sol-border bg-sol-bg p-3 text-xs leading-relaxed text-sol-text-muted">
+        {children}
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 /** One of the meta row's switches: a small track and its label, lit in `accent` while on. */
 function ModeSwitch({ on, accent, label, title, onClick, disabled = false }: { on: boolean; accent: "cyan" | "violet"; label: string; title: string; onClick: () => void; disabled?: boolean }) {
@@ -121,12 +147,41 @@ const ISOLATED_TITLE = "Create session in an isolated git worktree";
 export function SessionModeToggles({ cloudHost, cloudMode, cloudToggleEnabled, onToggleCloud, isolated, onToggleIsolated, shared = false, onToggleShared, startFrom = "checkout", onSetStartFrom, cloudAgent }: SessionModeTogglesProps) {
   const effectiveStartFrom = shared ? "origin_main" : startFrom;
   if (cloudAgent) {
-    const { spec, on, onToggle, connected, launch, onSetLaunch } = cloudAgent;
+    const { spec, on, onToggle, connected, problem, launch, onSetLaunch, onPickLane } = cloudAgent;
+    // A lane no sign-in fixes: the provider changed (codecast paused it) or holds the account to a limit.
+    const laneHeld = problem?.kind === "changed" ? "paused" : problem?.kind === "limit" ? "limited" : null;
     const options = on && launch && onSetLaunch ? spec.launchOptions : undefined;
+    // Several ways to run on one vendor's machines (Codex: your ChatGPT plan or an API key): the switch names the
+    // vendor's cloud (never bare "the cloud", which is a codecast cloud host's switch, and never just the vendor,
+    // which reads as its models), the pills say how it is paid for.
+    const lanes = (cloudAgent.lanes ?? []).filter((l) => l.lane);
+    const choosing = lanes.length > 1;
     return (
       <>
         {!on && <ModeSwitch on={isolated} accent="cyan" label="isolated worktree" title={ISOLATED_TITLE} onClick={onToggleIsolated} />}
-        <ModeSwitch on={on} accent="violet" label={`run in ${spec.label}`} title={spec.toggleTitle} onClick={onToggle} />
+        <ModeSwitch
+          on={on}
+          accent="violet"
+          label={choosing ? `run in ${spec.vendor}'s cloud` : `run in ${spec.label}`}
+          title={choosing && !on ? `Run this session on ${spec.vendor}'s machines: ${lanes.map((l) => `${l.label} on your ${l.lane!.label}`).join(", or ")}` : spec.toggleTitle}
+          onClick={onToggle}
+        />
+        {on && choosing && onPickLane && (
+          <>
+            <PillRadio
+              label="with"
+              title={spec.toggleTitle}
+              options={lanes.map((l) => ({ value: l.id, label: l.lane!.label, title: `${l.label}: ${l.lane!.detail}` }))}
+              value={spec.id}
+              onPick={(id) => { const lane = lanes.find((l) => l.id === id); if (lane) onPickLane(lane); }}
+            />
+            {spec.lane && (
+              <DetailPopover label={spec.lane.cost} about={`About ${spec.label}`} className="text-sol-text-dim hover:text-sol-text">
+                <span className="font-medium text-sol-text">{spec.label}</span>: {spec.lane.detail}
+              </DetailPopover>
+            )}
+          </>
+        )}
         {options?.ask && (
           <ModeSwitch
             on={launch!.ask}
@@ -145,7 +200,9 @@ export function SessionModeToggles({ cloudHost, cloudMode, cloudToggleEnabled, o
             onPick={(attempts) => onSetLaunch!({ attempts })}
           />
         )}
-        {on && !connected && <ConnectCloudAgentButton spec={spec} label={cloudAgentUi(spec).connectInlineLabel} deviceId={cloudAgent.deviceId} />}
+        {on && !connected && (laneHeld
+          ? <DetailPopover label={laneHeld} about={`Why ${spec.label} is ${laneHeld}`} className="text-amber-500 hover:text-amber-400">{problem!.sentence}</DetailPopover>
+          : <ConnectCloudAgentButton spec={spec} label={cloudAgentUi(spec).connectInlineLabel} deviceId={cloudAgent.deviceId} />)}
       </>
     );
   }

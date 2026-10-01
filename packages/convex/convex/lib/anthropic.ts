@@ -18,12 +18,36 @@ export interface ModelReply {
   usage: ModelUsage;
 }
 
-export async function callModel(args: {
-  prompt: string;
+/**
+ * One Messages API request, as the server sends it. The evals replay the same
+ * object, so a prompt measured offline is the prompt prod posts.
+ */
+export type SurfaceRequest = {
+  model: string;
   system?: string;
+  prompt: string;
   max_tokens: number;
-  model?: string;
+  /** Left out of the body when undefined, so the API default applies. */
   temperature?: number;
+};
+
+/**
+ * The JSON body prod posts for a request. Key order is model, max_tokens,
+ * temperature, system, messages: every server call site uses that order, so
+ * JSON.stringify of this object is byte-identical to what each site sent.
+ */
+export function anthropicBody(req: SurfaceRequest) {
+  return {
+    model: req.model,
+    max_tokens: req.max_tokens,
+    ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
+    ...(req.system ? { system: req.system } : {}),
+    messages: [{ role: "user" as const, content: req.prompt }],
+  };
+}
+
+export async function callModel(args: Omit<SurfaceRequest, "model"> & {
+  model?: string;
   label: string;
   /** Give up after this long, so a stalled call cannot outlive its caller. */
   timeout_ms?: number;
@@ -37,13 +61,15 @@ export async function callModel(args: {
       method: "POST",
       signal: abort.signal,
       headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({
-        model: args.model ?? CHEAP_MODEL,
-        max_tokens: args.max_tokens,
-        temperature: args.temperature ?? 0,
-        ...(args.system ? { system: args.system } : {}),
-        messages: [{ role: "user", content: args.prompt }],
-      }),
+      body: JSON.stringify(
+        anthropicBody({
+          model: args.model ?? CHEAP_MODEL,
+          system: args.system,
+          prompt: args.prompt,
+          max_tokens: args.max_tokens,
+          temperature: args.temperature ?? 0,
+        }),
+      ),
     });
     if (!response.ok) {
       console.error(`${args.label} API error:`, response.status, (await response.text()).slice(0, 300));
@@ -67,4 +93,39 @@ export async function callModel(args: {
 /** Dollars for a usage on the cheap model. */
 export function cheapModelCost(usage: ModelUsage): number {
   return (usage.input_tokens * CHEAP_MODEL_PRICE.input + usage.output_tokens * CHEAP_MODEL_PRICE.output) / 1_000_000;
+}
+
+// The JSON value the reply starts with. A model that answers `[]` and then
+// explains why it stayed silent has still answered; the explanation is
+// dropped, not the answer. Fences are stripped the same way.
+export function parseJsonBlock(raw: string): unknown | null {
+  const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    const start = cleaned.search(/[\[{]/);
+    if (start < 0) return null;
+    const open = cleaned[start];
+    const close = open === "[" ? "]" : "}";
+    let depth = 0;
+    let inString = false;
+    for (let i = start; i < cleaned.length; i++) {
+      const ch = cleaned[i];
+      if (inString) {
+        if (ch === "\\") i++;
+        else if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') inString = true;
+      else if (ch === open) depth++;
+      else if (ch === close && --depth === 0) {
+        try {
+          return JSON.parse(cleaned.slice(start, i + 1));
+        } catch {
+          return null;
+        }
+      }
+    }
+    return null;
+  }
 }

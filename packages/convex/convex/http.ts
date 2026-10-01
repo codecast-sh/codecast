@@ -4573,6 +4573,9 @@ cliRoute("/cli/docs/unshare", async (ctx, body) => {
 cliRoute("/cli/docs/delete", async (ctx, body) => {
   return await ctx.runMutation(api.docs.remove, body);
 });
+// `cast doc lab`: a Lab tool (alternatives, trim, flag, typos) run on the
+// stored doc, its result written in as drafting markup (docLab.runOnDoc).
+cliRoute("/cli/docs/lab", async (ctx, body) => ctx.runAction((api as any).docLab.runOnDoc, body));
 cliRoute("/cli/docs/patch", async (ctx, body) => {
   const result = await ctx.runMutation(api.docs.patch, body);
   if (result.content) {

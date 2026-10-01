@@ -66,7 +66,7 @@ export type Principal =
   | { kind: "token"; userId: string; token: string }      // api_tokens row seeded with hashToken
   | { kind: "system" };                                  // scheduled jobs, crons: null identity
 export interface ScheduledJob { id: string; due: number; name: string; args: unknown; }
-export interface CallRecord { seq: number; principal: Principal; name: string; kind: "query"|"mutation"|"action"; ok: boolean; error?: string; writes: number; }
+export interface CallRecord { seq: number; principal: Principal; name: string; kind: "query"|"mutation"|"action"; ok: boolean; error?: string; writes: number; memo?: "hit"|"miss"; }
 export interface SimBackendOptions {
   tables: Record<string, any[]>;
   now: () => number;
@@ -75,6 +75,8 @@ export interface SimBackendOptions {
   onSchedule?: (job: ScheduledJob) => void;               // world turns jobs into `sched` deliveries
   onInsert?: (table: string, id: string) => void;         // labels
   memoFunctions?: string[];                               // default: the four inbox reads
+  modules?: Record<string, () => Promise<any>>;           // extra modules by reference name (test fixtures)
+  debug?: boolean;                                        // overlapping top-level calls throw instead of queueing
 }
 export interface SimClient {
   query(ref: any, args: any): Promise<any>;
@@ -87,6 +89,7 @@ export function makeSimBackend(opts: SimBackendOptions): {
   runScheduled(job: ScheduledJob): Promise<void>;
   cancelScheduled(id: string): void;
   writes(): number; calls: CallRecord[]; actions: { name: string; args: unknown }[];
+  activeCall(): { seq: number; name: string; rng: () => number } | null;   // for the realm's Math.random routing
 };
 ```
 
@@ -94,30 +97,34 @@ export function makeSimBackend(opts: SimBackendOptions): {
 - `getFunctionName(ref)` returns `"module:export"`. The module is resolved through a literal lazy map, `const MODULES = { syncLog: () => import("./syncLog"), ... }`.
 - The map starts with: syncLog, conversations, dispatch, tasks, docs, plans, projects, chat, pendingMessages, agentTasks, teams, anchors, managedSessions, orgRoles, teamScopeSweep, syncLogPrune and cleanup.
 - Lazy imports avoid import-cycle TDZ and load only the modules a run uses. The file is never bundled, so the Convex dynamic-import restriction does not apply.
-- An unknown name throws: `sim client: no handler for "chat:sendMesage"; did you mean chat:sendMessage? Add the module to MODULES in convex/simBackend.testing.ts`. The suggestion is the closest name by edit distance.
-- Kind and visibility are enforced from `isQuery/isMutation/isAction/isPublic/isInternal`. `clientFor` reaches public functions only. `runInternal` reaches internal ones.
+- An unknown name throws: `sim client: no handler for "chat:sendMesage"; did you mean chat:sendMessage? Add the module to MODULES in convex/simBackend.testing.ts`. The suggestion is the closest name by edit distance (`levenshtein` from the `@codecast/shared/contracts/levenshtein` subpath, kept out of the contracts barrel so the daemon boot graph does not load it, shared with the CLI's command suggestions), searched in the named module or, for an unknown module, the nearest module name.
+- Kind and visibility are enforced from `isQuery/isMutation/isAction/isPublic/isInternal`. `clientFor` reaches public functions only. `runInternal` reaches internal and public ones, as server code can.
+- `calls` records top-level calls only. Nested `runQuery`/`runMutation` calls are part of their caller's record.
 
 **Validation and the wire boundary**
 - `simValidate.testing.ts` walks the JSON validator from `fn.exportArgs()` (registration_impl.js:102/127). It covers object, optional, string, float64, int64, boolean, null, id, literal, union, array, record, any and bytes.
 - It rejects arguments with the same message shape prod uses: `ArgumentValidationError: ...`.
 - Arguments and results cross `convexToJson`/`jsonToConvex`, so no client object aliases a server row.
 
-**ctx is a Proxy** over `{ db, auth, scheduler, runQuery, runMutation, runAction, storage }`.
-- Touching any other field throws `sim ctx: <fn> read ctx.<field>, which the sim does not provide. Add it in makeCtx.`
+**ctx is a Proxy** over the fields prod gives that kind of call: a query gets `{ db, auth, storage, runQuery }`, a mutation also `{ scheduler, runMutation }`.
+- A prod field the kind lacks (`runAction`, or `scheduler` in a query) reads as `undefined`, as in prod. Touching any other field throws `sim ctx: <fn> read ctx.<field>, which the sim does not provide. Add it in makeCtx.`
+- `functions.ts` wraps every tracked mutation by spreading ctx into a plain object, so inside those mutations the unknown-field guard is gone (such reads give `undefined`). The storage stub travels by reference and still throws.
+- A query's `db` refuses `insert`/`patch`/`replace`/`delete`.
 - `auth.getUserIdentity` returns `{ subject: userId + "|session" }` for a user principal, and null for token and system principals. Token principals pass `api_token` in args, as the CLI does.
 - `runQuery`/`runMutation` re-enter the router inline under the same principal. They are not queued. Each nested mutation gets its own `withChangeLog` wrap via its own `_handler`. The journal is shared with the top-level call.
-- `storage` is a stub whose methods throw with the named error.
-- `global fetch` is replaced with a throwing stub for the life of the backend.
+- `storage` is a stub: reading `ctx.storage` works, and touching anything on it throws `sim ctx: <fn> read ctx.storage.<method>, ...`.
+- `global fetch` is replaced with a throwing stub for the duration of each top-level call, and restored after it, so test code that runs between calls keeps the real one.
 
 **Single flight and journal**
-- Top-level calls go through a promise chain, one at a time.
+- Top-level calls go through a promise chain, one at a time, from name resolution to commit.
 - A second top-level call entering while one runs throws `sim server: X started while Y was running` in debug mode. Otherwise it simply waits its turn in the chain.
 - Each top-level mutation runs `db.__beginJournal()`. A throw leads to `db.__rollback()`, which undoes inserts, patches, replaces and deletes in reverse, including `sync_actions` rows. The error then propagates to the client.
 
 **Scheduler**
-- `runAfter(ms)` and `runAt(ts)` create a `ScheduledJob` with `due = now() + ms`.
-- The job goes to `onSchedule`. The world turns it into a `sched` delivery that runs `runScheduled` under the system principal.
-- `cancel` removes it. Scheduled actions are recorded only.
+- `runAfter(ms)` and `runAt(ts)` create a `ScheduledJob` with `due = now() + ms`. The job is also a row in a `_scheduled_functions` system table (`state.kind` pending, inProgress, success, failed or canceled), which handlers read through `ctx.db.system`.
+- Scheduling is transactional: the call's jobs go to `onSchedule` when it commits, and a rolled-back mutation schedules nothing. The world turns each job into a `sched` delivery that runs `runScheduled` under the system principal.
+- `runScheduled` takes its own slot on the chain and runs a job only while it is pending, so a job runs at most once. A failed job fails alone, as in prod: it is marked failed and kept in `calls`, and `runScheduled` does not throw.
+- `cancel` (and `cancelScheduled`) mark it canceled. Scheduled actions are recorded only.
 
 **Memo**
 - Only `conversations:listInboxSessions`, `conversations:sessionsLiveness`, `conversations:listTeamInboxSessions` and `conversations:teamSessionsLiveness` are memoized.
@@ -126,15 +133,15 @@ export function makeSimBackend(opts: SimBackendOptions): {
 
 **Random and time**
 - `Date.now` is frozen for the duration of a call, which is already true under the virtual clock.
-- `Math.random` inside a call draws from `rngFor(callSeq)`. This works through the realm's routing (section 3.3).
+- `Math.random` inside a call draws from `rngFor(callSeq)`. This works through the realm's routing (section 3.3), which reads the running call from `activeCall()`.
 
 **`testDb.ts` changes** are all opt-in, through a second argument `makeFakeDb(tables, opts?)`:
 - `mintId(table, n)`;
 - `creationTime: () => number`, a monotonic `_creationTime` stamp on insert when absent;
 - `strictPatch: true`, so a patch value of `undefined` deletes the field;
 - `__writeCount`, incremented on insert, patch, replace and delete;
-- `__beginJournal/__commit/__rollback`;
-- an id-to-table map so `get` is O(1) when `mintId` is set.
+- `__beginJournal/__commit/__rollback`. A rollback also restores `__writeCount` and the `_inserted/_patched/_replaced/_deleted` logs, and removes a table the journal created. Minted ids are not reused after a rollback, as in convex;
+- an id-to-row map so `get` and `patch` are O(1) when `mintId` is set. Rows must then enter and leave through the db or the seed.
 
 With no options, behaviour is byte-identical for the existing tests.
 
@@ -147,7 +154,7 @@ With no options, behaviour is byte-identical for the existing tests.
 - **Timer shim.** `setTimeout/clearTimeout/setInterval/clearInterval` are shimmed.
   - A timer records its owner: the active window, or `global`.
   - Delay 0 enqueues a `timer:<owner>` delivery.
-  - A positive delay is armed at `now + delay` and enqueued when the clock reaches it.
+  - A positive delay is enqueued with `due = now + delay`; the net holds it until the clock reaches it, and `drain` advances the clock to it. `clearTimeout` calls `net.cancel(seq)`.
   - `setImmediate` and `queueMicrotask` stay real.
 - **Store facade.** `bindStoreFacade(inst | null)` rebinds `useInboxStore.getState/setState/subscribe/getInitialState` to `inst`'s api, or back to the saved base api.
 - **Active window.** `activeWindow()` returns it, and `runInWindow(w, fn)` does this:
@@ -173,10 +180,10 @@ Initial classification, from a grep of the reachable store and hook files:
 
 | Class | Bindings |
 |---|---|
-| `window` | `_heldOverlayFacts`, `recentlyRequestedPendingMessages`, `resolvedSessionPreparations`, `recentThawTimer`, `_userMsgsProbed`, `hydrationEpoch` (inboxStore.ts); `sourceToken` (gestureBridge.ts); `states` (reconcileCrawl.ts); `done` (useBootstrapCollection.ts); `cargoSupported`, `applyTally`, `flushTimer`, `shadowApplied` (useSyncChangeFeed.ts); `_lastApplyMono`/`_applySeq` (syncActivity.ts, through the existing `__setSyncActivityForTests`); `pendingSource`, `appliedNavCount` (viewNav.ts) |
-| `memo` | `_membershipKey/_membershipVal`, `_visibleKey/_visibleVal`, `_pendingSendSig*`, `_placementDeadlineMemo`, `_placedMemo`, `_lastParityCheckAt` (through `__resetInboxPlacementCacheForTests` plus the new slot seam) |
+| `window` | `_heldOverlayFacts`, `recentlyRequestedPendingMessages`, `resolvedSessionPreparations`, `recentThawTimer`, `_userMsgsProbed`, `_idbHydrating`, `hydrationEpoch` (inboxStore.ts); `sourceToken` (gestureBridge.ts); `states` (reconcileCrawl.ts); `done` (useBootstrapCollection.ts); `cargoSupported`, `applyTally`, `flushTimer`, `shadowApplied` (useSyncChangeFeed.ts); `_lastApplyMono`/`_applySeq` (syncActivity.ts, through the existing `__setSyncActivityForTests`); `pendingSource`, `appliedNavCount` (viewNav.ts) |
+| `memo` | `_membershipKey/_membershipVal`, `_visibleKey/_visibleVal`, `_pendingSendSig*`, `_placementDeadlineMemo`, `_placedMemo`, `_lastParityCheckAt` (all reset by `__inboxStoreSimSlots().resetMemos()`, which reuses `__resetInboxPlacementCacheForTests`) |
 | `transient` | `depth`, `deferred`, `deferredFanOut`, `timer` (syncTransaction.ts) |
-| `shared` | every `WeakMap` (keyed by per-instance objects, so it cannot cross windows); `channelFactory` (set once by the sim); `running` (syncReplication.ts; the sim never calls `startSyncReplication`); `_depChanges` (dev census) |
+| `shared` | every `WeakMap` (keyed by per-instance objects, so it cannot cross windows); `channelFactory` (set once by the sim); `running` (syncReplication.ts; the sim never calls `startSyncReplication`); `_depChanges` (dev census); `navLog` (viewNav.ts audit ring, persisted to the one origin-wide localStorage in production too); `navListeners` (viewNav.ts follow-mode subscribers; the sim mounts no React) |
 
 **`sim/windowSlots.guard.test.ts`** is static and imports no store.
 - It uses `buildBootGraph` (packages/cli/src/bench/bootGraph.ts) from the sim roots with an `@/` alias resolver, restricted to `packages/web/{store,hooks,lib}`.
@@ -195,7 +202,7 @@ boot(opts: { scope?: "mine" | { team: string } }): Promise<void>
 
 `boot` sets `currentUser` and `clientState.ui` (`inbox_scope`, `active_team_id`). It then wires:
 
-- **Dispatch.** `_setDispatch(makeDispatchBinding(args => client.mutation(api.dispatch.dispatch, args), ...))`, using the U3 extraction, plus `_setDispatchError(applyDispatchFailure)`.
+- **Dispatch.** `_setDispatch(makeDispatchBinding(args => client.mutation(api.dispatch.dispatch, args), state?))`, using the U3 extraction, plus `_setDispatchError(applyDispatchFailure)`. `state` is a `DispatchAckState` from `newDispatchAckState()`; one per window keeps the ack latch per window.
 - **Outbox.** `_setOutbox` backed by an in-memory Map per window.
 - **Host tee.** `_setIDBWrite` feeds the replication host tee.
 - **Follower tee.** `_setActionTee` feeds the follower mut tee.
@@ -208,7 +215,7 @@ Host windows then mount the feeders:
 - any registered feed a scenario opts into, through the extracted `applyCollectionFeed`;
 - the chat page through `ingestChatPage`.
 
-Log catch-up is the real `catchUp(client)`. The floor is the extracted `runInboxFloorStep`, and `loadFloorOnce/floorScopeKeys`. The digest comparer is the real `createInboxDigestComparer`, with its IO bound to the client.
+Log catch-up is the real `catchUp(client)`. The floor is the extracted `runInboxFloorStep(client, inboxFloorFlags(state, userId))`, and `loadFloorOnce/floorScopeKeys`. The floor step is fire-and-forget (it starts `runReconcileCrawl`, which returns `void`), so the sim observes its completion through its timer and conn deliveries, not by awaiting it. The digest comparer is the real `createInboxDigestComparer`, with its IO bound to the client.
 
 Followers mount no global feeders, matching production.
 
@@ -219,28 +226,41 @@ This module is pure and never imports the store.
 ```ts
 export type Channel = string;  // "conn:<win>", "live:<win>:<feed>", "repl:<from>><to>", "bridge:<dev>:<from>",
                                // "timer:<owner>", "sched", "actor:<name>"
-export interface Delivery { seq: number; channel: Channel; due: number; label: string; run: () => Promise<void>; producer: string; }
+export interface Delivery { seq: number; channel: Channel; due: number; label: string; run: () => Promise<void> | void; producer: string; }
+export type DeliveryInit = Omit<Delivery, "seq" | "channel" | "due"> & { channel?: Channel; due?: number };  // due defaults to now()
+export interface LiveMount { run: () => Promise<void> | void; label?: string; producer?: string; }
+export const DEFAULT_MAX_DELIVERIES = 5000, DEFAULT_MAX_WRITES = 2000, DEFAULT_DRAIN_HORIZON_MS = 2 * HIDDEN_OVERRIDE_SETTLE_MS;
+export class SimNetError extends Error { code: "no-quiescence" | "write-budget" | "order-mismatch"; }
+export function formatOrder(channels: Channel[]): string;   // space separated, the --order line
+export function parseOrder(s: string): Channel[];           // spaces or commas
 export class Net {
-  constructor(opts: { rng: () => number; maxDeliveries: number; maxWrites: number; writes: () => number; now: () => number; advance: (ms: number) => void });
-  mode: "scripted" | "interleave" | { order: Channel[] };
-  enqueue(channel, d: Omit<Delivery,"seq">): void;
-  markDirty(channel): void;          // live refresh: at most one pending per live channel
+  constructor(opts: { rng: () => number; maxDeliveries?: number; maxWrites?: number; writes: () => number; now: () => number;
+                      advance: (ms: number) => void; onOnline?: (win: string) => void; onDeliver?: (d: Delivery) => void });
+  mode: "scripted" | "interleave" | { order: Channel[] };   // setting it restarts an order replay
+  enqueue(channel, d: DeliveryInit): number;  // returns seq
+  cancel(seq): boolean;              // clearTimeout, a canceled job
+  mountLive(channel, m: LiveMount): void; unmountLive(channel): void;
+  markDirty(channel): void;          // live refresh: at most one pending per mounted live channel
   step(): Promise<Delivery | null>;  // one delivery per mode rules
   drain(opts?: { horizonMs?: number }): Promise<void>;
   ring: Delivery[];                  // last 64, for reports
   orderSoFar(): Channel[];           // for the --order replay line
-  producers(): Map<string, number>;
+  producers(): Map<string, number>;  // deliveries run per producer
+  readonly deliveries: number; readonly writesSpent: number;
   offline(win): void; online(win): void; lag(channel): void; release(channel): void;
 }
 ```
 
+The net's `rng` is its own stream (`makeRng(hash(seed, "net"))`). An order replay draws nothing from it, so sharing it would shift other draws between the recorded run and its replay. `onDeliver` is the hook for `SIM_TRACE` streaming and `events.jsonl`.
+
 **Ordering rules**
-- Channels are FIFO internally.
+- Channels are FIFO internally: deliveries due at the same time run in enqueue order, and one due later never blocks one due earlier (timers on one owner fire by deadline).
+- A delivery is ready when its due time has come and its channel is neither lagged nor held by an offline window.
 - `scripted` picks the lexicographically first ready channel.
 - `interleave` picks a seeded choice among ready channels.
-- `order` consumes the given channel list and throws a named error on a mismatch.
+- `order` consumes the given channel list and throws `SimNetError` (`order-mismatch`) when the next listed channel is not ready while another is. Once the list is used up it continues as `scripted`, so a partial order pins only the first deliveries.
 - A lagged channel is not ready until it is released.
-- An offline window's `conn:` channel holds its events. `online()` fires `_drainOutbox` on that window.
+- An offline window's `conn:<win>` and `live:<win>:*` channels hold their events, and neither pulls the clock forward. `online()` calls `onOnline(win)`, through which the window fires `_drainOutbox` (the net never touches the store).
 
 **Requests and responses**
 - A client call from window W becomes `req` then `res` on `conn:W`.
@@ -249,14 +269,15 @@ export class Net {
 - `dropResponse(W, n)` makes the next n mutation `res` events reject with a network error after the commit, so the engine outbox and the server receipts decide the outcome.
 
 **Live pushes**
-- After any delivery that raises `writes()`, the net marks every mounted live channel dirty.
+- A live query is mounted with `mountLive(channel, { run })`; its delivery runs `run`.
+- After any delivery that raises `writes()`, the net marks every mounted live channel dirty. A write made outside a delivery (seeding) is noticed at the next `step`.
 - A dirty channel's delivery recomputes the query at delivery time, so intermediate versions may be skipped, as production allows.
 
 **drain**
 - It loops until no channel is ready.
 - It then advances the clock to the next armed timer or scheduled job, up to `horizonMs`. The default is `2 * HIDDEN_OVERRIDE_SETTLE_MS`.
 - It stops when nothing is due inside the horizon.
-- It fails at `maxDeliveries` with `did not quiesce after N deliveries; top producers: ...`, or at `maxWrites`.
+- It fails at `maxDeliveries` with `did not quiesce after N deliveries; top producers: ...`, or at `maxWrites` with the top writers. Both are `SimNetError`s thrown by `step`. The write budget counts only writes made inside deliveries, so genesis is not budgeted.
 
 ### 3.5 Devices: `sim/device.ts`
 
@@ -275,12 +296,15 @@ export class Net {
 **`packages/shared/contracts/__fixtures__/teamWorldGen.ts`** is pure data with no convex imports.
 
 ```ts
-export interface TeamWorldSpec { users: string[]; teams: { name: string; members: string[]; org?: boolean }[]; rowsPerUser: number; seed: number; }
-export function genTeamWorld(spec): { users: Row[]; teams: Row[]; team_memberships: Row[]; perUser: Record<string, GenWorld> }
+export interface TeamWorldSpec { users: string[]; teams: { name: string; members: string[]; features?: TeamFeatures }[]; rowsPerUser: number; seed: number; epoch: number; }
+export function genTeamWorld(spec): { users: WorldRow[]; teams: WorldRow[]; team_memberships: WorldRow[]; perUser: Record<string, GenWorld> }
+export const userIdFor, teamIdFor, membershipIdFor;  // convexIdFor("user:<name>"), ("team:<name>"), ("member:<team>:<user>")
 ```
 
-- It calls `genWorld(seed * 16 + userIndex, rowsPerUser)` per user, and `genWorld` itself is unchanged.
-- User and team ids come from `convexIdFor("user:<name>")` and `convexIdFor("team:<name>")`.
+- It calls `genWorld(seed * 16 + userIndex, rowsPerUser, epoch, userIdFor(name))` per user, and `genWorld` itself is unchanged. `epoch` is the `inboxEpoch` minute the sessions are dated against. At most 16 users, so per-user seeds stay disjoint.
+- User and team ids come from `convexIdFor("user:<name>")` and `convexIdFor("team:<name>")`. Two names that mint one id throw.
+- A team's first listed member is its admin and the rest are members, as `teams.create` and `teams.join` write them. A user's first team becomes its `team_id` and `active_team_id`. Members join before the oldest generated session starts.
+- `features` is the team row's flag object (`TeamFeatures` from `contracts/teamFeatures.ts`). Scenarios that use team chat need `chat: true`, and role scenarios need `org: true`.
 
 **`sim/world.ts`** has three parts.
 
@@ -294,7 +318,7 @@ export function genTeamWorld(spec): { users: Row[]; teams: Row[]; team_membershi
 1. Insert users, teams and memberships as rows. Team membership inserts go through `makeChangeTrackedDb`, so `scope_added` rows exist.
 2. Insert the per-user conversations and messages as rows. Then patch each through the real `patchConversationVisibility`, which gives real `workspace` keys and access stamps.
 3. Create tasks, docs and plans through their real create mutations.
-4. Provision anchors and org roles through `provisionStandingAgent` via `runInternal` when that runs cleanly over the fake db. Otherwise use seeded rows with a comment naming the blocker. The org flag goes on the team row.
+4. Provision anchors and org roles through `provisionStandingAgent` via `runInternal` when that runs cleanly over the fake db. Otherwise use seeded rows with a comment naming the blocker. The org and chat flags go on the team row through the spec's `features`.
 5. Seed `api_tokens` with `hashToken` from `@platform/auth/convex`.
 6. The genesis gate: `runInternal("teamScopeSweep:sweepPage", { apply: false })` must return zero findings, and `writes()` must be unchanged by the sweep.
 
@@ -367,34 +391,39 @@ export function scenario(
 - `--seed a,b`
 - `--sweep N`
 - `--trace [label]` sets `SIM_TRACE`, which streams deliveries touching the label
-- `--red`
+- `--red` sets `SIM_RED=1`: the DSL runs only scenarios that have `red:`
 - `--list` prints the scenario catalog from a static scan: name, red task, modes
 - `--invariants` prints the catalog
-- `--out dir`
+- `--out dir` sets `SIM_OUT` (resolved to an absolute path)
 - `--order "<channels>"` sets `SIM_ORDER`
 
-The env vars remain the source of truth.
+The env vars remain the source of truth. The filter sets `SIM_SCENARIO`, `--seed` sets `SIM_SEEDS` and `--sweep` sets `SIM_SWEEP`. A bare word after `--trace` is read as its label, so the filter goes first; `--trace=label` also works, and `--trace` alone sets `SIM_TRACE=1`.
+
+`--list` and `--invariants` never import the store. `--list` reads every `scenario({ ... })` call in `scenarios/*.scenario.ts` and `selftests/*.selftest.ts`, and `--invariants` reads `invariants.ts`. So `name`, `red`, `id` and `meaning` must be string literals, and `modes` an array literal (absent means the DSL default, scripted plus interleave).
 
 ### 3.9 Labels, reports, replay
 
-**`sim/labels.ts`**: a map from 32-char id to label.
-- The world registers `ada`, `acme`, `ada/s`, `task:acme/t1` and so on.
-- `backend.onInsert` registers `table#n` for rows created by real mutations.
-- `label(id)` falls back to the first 8 characters of the id.
+**`sim/labels.ts`**: `class SimLabels`, a map from 32-char id to label.
+- The world registers `ada`, `acme`, `ada/s`, `task:acme/t1` and so on with `register(id, label)`. A label names one id and an id carries one label; a conflicting registration throws.
+- `onInsert(table, id)` is the `backend.onInsert` hook. It registers `table#n` for rows created by real mutations, numbered per table in insert order. A row the world already named keeps its name but still takes its number.
+- `label(id)` falls back to the first 8 characters of the id. `id(label)` is the reverse, for the DSL's label-based point checks, and throws naming the known labels. `relabel(text)` replaces every id-shaped token in a string with its label.
 
 **`sim/report.ts`** formats a failure block.
-- It covers: scenario, mode, seed, step, delivery number; invariant id and meaning; window (principal and scope); the row label; a field-only server vs replica diff that omits `PAYLOAD_DENYLIST`; and the last 12 deliveries from `net.ring`.
-- It prints two replay lines, `bun run sim <name> --seed N --trace <label>` and `--order "<net.orderSoFar()>"`.
+- `formatFailure(ctx, artifactsDir)` takes a `FailureContext`: scenario, mode, seed, step, delivery number; invariant id and meaning, plus the check's own message; window (name, principal, scope); the row as `{ table, id, server, replica }`; the delivery ring; the channel order so far; the labels; and the clock origin `t0`.
+- It covers all of those, and renders the row as a field-only server vs replica diff (`fieldDiff`, key-order blind through `canonical`) that omits `PAYLOAD_DENYLIST` (imported from `convex/syncLog.ts`). `fieldDiff` is the only place the denylist is applied, so the artifacts omit those fields too. The last 12 deliveries print as aligned rows with every id relabelled.
+- It prints two replay lines, `bun run sim <name> --seed N --trace <label>` and `bun run sim <name> --seed N --order "<net.orderSoFar()>"`, serialized with net's own `formatOrder`. With no row, the first line is a bare `--trace`.
 - It prints the artifacts path.
-- It throws with the same text. Artifacts go to `$SIM_OUT/<scenario>-<mode>-<seed>/{result.json,events.jsonl,world.json,final.json}`. They are always written on failure, and on a pass only when `SIM_OUT` is set.
+- `reportFailure(ctx, { events, world, final })` writes the artifacts, prints the block, and throws a `SimFailure` with the same text. Artifacts go to `$SIM_OUT/<scenario>-<mode>-<seed>/{result.json,events.jsonl,world.json,final.json}`, or under `<tmpdir>/codecast-sim` when `SIM_OUT` is unset (`artifactDir`). They are always written on failure. On a pass the DSL calls `writeArtifacts` itself, and only when `SIM_OUT` is set.
+- `events` is every delivery of the run, not the 64-entry ring, so the DSL collects it through the net's `onDeliver` option. `eventsJsonl` writes one canonical JSON line per delivery (seq, channel, due, label, producer). `result.json` holds the rendered diff, never the raw rows.
 - **Determinism self-test:** the same scenario and seed run twice must produce identical `events.jsonl` hashes.
 
 ### 3.10 Typecheck, CI, budget
 
 **Typecheck**
 - `packages/web/store/__tests__/sim/tsconfig.json` extends `../../../tsconfig.json`.
-- It sets `include: ["./**/*.ts", "../inboxSimHarness.ts", "../inboxConvergenceSim.test.ts", "../inboxMultiWindowSim.test.ts"]` and `exclude: []`.
-- It sets `compilerOptions.types: ["bun"]` and `typeRoots: ["../../../../cli/node_modules/@types"]`, because `@types/bun` resolves only under packages/cli today.
+- It sets `include: ["./**/*.ts", "../inboxSimHarness.ts", "../inboxConvergenceSim.test.ts", "../inboxMultiWindowSim.test.ts", "../../../scripts/sim.ts"]` and `exclude: []`. The runner script is listed because no other program covers `packages/web/scripts`.
+- It sets `compilerOptions.types: ["bun"]` and `typeRoots: ["../../../../cli/node_modules/@types"]`, because `@types/bun` resolves only under packages/cli today. The base list's `vite/client` cannot be kept: with that `typeRoots` it no longer resolves (TS2688). `@types/bun` brings the node types itself.
+- It sets `incremental: false`, so the watcher writes no `tsconfig.tsbuildinfo` beside it.
 - Fallback if the typeRoots path is not stable: add `@types/bun@1.3.13` as a web devDependency, with bun.lock in the same change.
 - `.codecast/check.toml` gains `sim = "packages/web/store/__tests__/sim/tsconfig.json"`.
 
@@ -434,6 +463,7 @@ It is used only for real OCC, real scheduler timing, HTTP routes, the prod error
 | packages/convex/convex/simBackend.testing.ts | U1 |
 | packages/convex/convex/simValidate.testing.ts | U1 |
 | packages/convex/convex/simBackend.test.ts | U1 |
+| packages/shared/contracts/levenshtein.ts | U1 (edit distance moved out of cli/src/commandSuggestion.ts so the sim backend's suggestions reuse it) |
 | packages/web/lib/dispatchBinding.ts | U3 |
 | packages/web/lib/__tests__/dispatchBinding.test.ts | U3 |
 | packages/shared/contracts/__fixtures__/teamWorldGen.ts | U4 |
@@ -468,17 +498,21 @@ It is used only for real OCC, real scheduler timing, HTTP routes, the prod error
 | Path | Unit | What |
 |---|---|---|
 | packages/convex/convex/testDb.ts | U1 | additive options (section 3.2) |
-| packages/web/store/inboxStore.ts | U2 | `export const __createInboxStoreForTests = createInboxStore`; `export function freshInboxData()` built from `INITIAL_INBOX_DATA` via `cloneInitialValue`, which `clearProtectedInboxMemory` uses; `export function __inboxStoreSimSlots()` returning get/set for the `window` bindings and a reset for the `memo` bindings listed in 3.3 |
+| packages/shared/package.json | U1 | `exports` entry for `contracts/levenshtein`. It stays out of the contracts barrel, which the daemon loads at boot |
+| packages/cli/src/commandSuggestion.ts, commandSuggestion.test.ts | U1 | import `levenshtein` from `@codecast/shared/contracts/levenshtein` |
+| packages/cli/src/bench/bootGraph.guard.test.ts | U1 | index.ts ceiling up by one for levenshtein.ts |
+| packages/shared/package.json | U4 | `exports` entry for `contracts/__fixtures__/teamWorldGen`, so web's `sim/world.ts` can import it by package name |
+| packages/web/store/inboxStore.ts | U2 | `export const __createInboxStoreForTests = createInboxStore`; `export function freshInboxData()` built from `INITIAL_INBOX_DATA` via `cloneInitialValue`, which `clearProtectedInboxMemory` uses; `export function __inboxStoreSimSlots()` returning `get`/`set` for the `window` bindings (keyed by binding name; `get` returns a detached copy, `set` loads one), `fresh()` for a window that has not run yet, and `resetMemos()` for the `memo` bindings listed in 3.3 |
 | packages/web/store/gestureBridge.ts | U2 | `__gestureBridgeSimSlots()` for `sourceToken` |
 | packages/web/store/syncTransaction.ts | U2 | `__syncTransactionIdleForTests(): boolean` |
 | packages/web/store/viewNav.ts | U2 | `__viewNavSimSlots()` for `pendingSource`, `appliedNavCount` |
-| packages/web/hooks/useEnsureDispatch.ts | U3 | calls `makeDispatchBinding` and `applyDispatchFailure` from lib/dispatchBinding.ts (the `ackFlagSupported` latch moves into the binding's state object) |
-| packages/web/hooks/useSyncInboxSessions.ts | U3 | extract the floor watch-effect body, including its `logStamped` gate, as `export async function runInboxFloorStep(convex, opts)`; the hook calls it |
+| packages/web/hooks/useEnsureDispatch.ts | U3 | calls `makeDispatchBinding(call, state)` and `applyDispatchFailure` from lib/dispatchBinding.ts (the `ackFlagSupported` latch moves into a `DispatchAckState` object; the hook shares one module-level object across mounts, as before). `store/__tests__/orgSlice.intents.test.ts` reads the failure handler's source, so its path points at lib/dispatchBinding.ts |
+| packages/web/hooks/useSyncInboxSessions.ts | U3 | extract the floor watch-effect body, including its `logStamped` gate, as `export function runInboxFloorStep(convex, flags): void`, with the gate inputs from `export function inboxFloorFlags(state, principalId)`; the hook subscribes to the same flags and calls it |
 | packages/web/hooks/useSyncTeamInboxSessions.ts | U3 | `export function applyTeamLivenessPayload(teamId, data)` and `teamInboxArgs(teamId)`; the hook calls them |
 | packages/web/hooks/useSyncCollection.ts | U3 | `export function applyCollectionFeed(key, data, select?, syncOpts?)`; the hook calls it |
-| packages/web/hooks/useBootstrapCollection.ts | U3 | `__bootstrapSimSlots()` for `done` |
+| packages/web/hooks/useBootstrapCollection.ts | U3 | `__bootstrapSimSlots()` for `done`. Like the U2 seams, it returns `{ get(), set(snapshot), fresh() }` over a snapshot keyed by binding name; `get` copies collections so the snapshot is detached, and `fresh()` is the state of a window that never ran |
 | packages/web/hooks/useSyncChangeFeed.ts | U3 | `__changeFeedSimSlots()` for `cargoSupported`, `applyTally`, `flushTimer`, `shadowApplied` |
-| packages/web/hooks/reconcileCrawl.ts | U3 | `__reconcileCrawlSimSlots()` for `states` |
+| packages/web/hooks/reconcileCrawl.ts | U3 | `__reconcileCrawlSimSlots()` for `states` (same shape) |
 | .codecast/check.toml | U5 | `sim` entry |
 | packages/web/package.json | U5 | `"sim": "bun scripts/sim.ts"` |
 | packages/web/store/__tests__/inboxSimHarness.ts | U14 | thin adapter over sim/ |
@@ -512,7 +546,7 @@ What it builds: section 3.2. `simBackend.test.ts` covers eight cases:
 
 Acceptance:
 - `cd packages/convex && bun test convex/simBackend.test.ts` passes.
-- `cd packages/convex && bun test convex/` shows the same pass and fail counts as before the change. Record both.
+- `cd packages/convex && bun test convex/` shows the same fail count as before the change, and a pass count larger only by `simBackend.test.ts`'s tests plus the two `moduleLoad.test.ts` entries it adds for the new `.testing.ts` files. Record both.
 - `cast check convex` is green.
 - `grep -c "bun:test" packages/convex/convex/*.testing.ts` gives 0.
 
@@ -535,11 +569,11 @@ What it builds: each extraction is called by its own hook with identical argumen
 Acceptance:
 - `cast check web` is green.
 - `bun test hooks/ lib/__tests__/dispatchBinding.test.ts` passes, with the same count as before plus the new tests.
-- `grep -n "__syncAckV1" packages/web/hooks packages/web/lib -r` hits only `lib/dispatchBinding.ts`.
+- `grep -n "__syncAckV1" packages/web/hooks packages/web/lib -r` hits only `lib/dispatchBinding.ts` and its test.
 
 **U4 Team world generator.** `teamWorldGen.ts` and its test.
 
-What it builds: section 3.6. The test pins `sha256(JSON.stringify(genWorld(s, 45)))` for the seeds used by the legacy suites (21-32, 81-92, and the convergence seeds). Capture the hashes before writing the generator. It also asserts that no two users' conversation ids or tags collide across seeds 1-50.
+What it builds: section 3.6. The test pins `sha256(JSON.stringify(genWorld(s, n, inboxEpoch(1_800_000_000_000), me)))` for every seed the legacy suites use: the web sims' `seededWorld` seeds (11, 21-32, 41-43, 51, 52, 61, 71, 72, 81-92, 101, 102, 111) at 45 rows with `me = "u" x 32`, and the convex convergence seeds (500-513 at 90 rows, 77 at 10, 9 at 40) with `me = "users_me"`. Rows draw from one stream in order, so a smaller count is a prefix of the pinned one (`seededWorld(31, 30)` is the head of seed 31's 45 rows). Capture the hashes before writing the generator. It also asserts that no two users' conversation ids or tags collide across seeds 1-50.
 
 Acceptance: `cd packages/shared && bun test contracts/__fixtures__/teamWorldGen.test.ts` passes, and `git diff --stat packages/shared/contracts/__fixtures__/inboxProjectionGen.ts` is empty.
 

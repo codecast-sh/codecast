@@ -332,7 +332,7 @@ Units in the same wave touch disjoint files and can run in parallel in the share
 **U1: Vendor @platform/evals** (ct-55698)
 
 Files:
-- `packages/evals/package.json`, final: name, private, `type: module`, deps from 2.1, `scripts.test: "bun test src/"`
+- `packages/evals/package.json`, final: name, private, `type: module`, deps from 2.1, `scripts.test: "bun test src/"`, and cli's devDependencies (`@types/bun`, `@types/node`, `typescript`) so U4's typecheck has its types
 - `bun.lock`
 - `platform/packages/evals/**`, generated
 - `platform/vendor-manifest.txt`
@@ -355,7 +355,7 @@ Acceptance:
 - `scripts/vendor-platform.sh --check-manifest` exits 0.
 - `(cd platform/packages/evals && bun install && bun test)` passes, 17 or more tests.
 - `cast --help` and `cast task ls -q x` still run.
-- `git diff bun.lock` only adds `@codecast/evals` and `@platform/evals` entries, plus `commander` if it is new.
+- `git diff bun.lock` adds only the `packages/evals` workspace block and its `@platform/*` resolution entries (`commander` and the devDependencies already resolve, so no new packages). bun also writes whatever the committed tree already owed the lock: on 2026-10-01 that was the cli and electron workspace versions from release commits that bumped `package.json` without the lock, and one `@platform/cli-kit` entry reduced to `{}`. Keep those lines, because they are what bun writes for this tree. The real check is that `bun install --frozen-lockfile` passes and leaves `bun.lock` unchanged.
 - The commit of `packages/evals/package.json` must include `bun.lock` (Railway frozen lockfile). Note this for whoever commits.
 
 **U2: One home for the Anthropic request body**
@@ -368,6 +368,7 @@ Changes:
 - Export `type SurfaceRequest = {model: string; system?: string; prompt: string; max_tokens: number; temperature?: number}`.
 - Export `anthropicBody(req)`. It returns the exact JSON object prod posts: `{model, max_tokens, ...(temperature !== undefined ? {temperature} : {}), ...(system ? {system} : {}), messages: [{role:'user', content: prompt}]}`, with the key order matching today's fetch bodies. Read them first; if the literal bodies differ in key order, keep the order `JSON.stringify` produces today per site by letting each site pass its own order. Byte-identity is the test, not this sketch.
 - `callModel` builds its body through `anthropicBody`, and its default temperature of 0 is unchanged.
+- Checked on 2026-10-01: every server fetch body (`callModel` and the eight literal sites in section 7) uses the order model, max_tokens, temperature, system, messages, so one order serves all sites and none needs its own. A site with no `temperature` key today passes `temperature: undefined`.
 
 Acceptance:
 - a test asserts `JSON.stringify(anthropicBody(x))` equals the string `callModel` sent before, for 3 inputs

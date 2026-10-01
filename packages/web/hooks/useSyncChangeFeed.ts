@@ -572,6 +572,36 @@ function shadowEnabled(): boolean {
     return false;
   }
 }
+/**
+ * Sim seam: the cargo latch, the apply tally and its flush timer, and the
+ * shadow set belong to one window. get() snapshots them (collections copied,
+ * so the snapshot is detached), set() loads a snapshot back, fresh() is what
+ * a window that never ran starts from.
+ */
+export function __changeFeedSimSlots() {
+  type Slots = {
+    cargoSupported: boolean;
+    applyTally: { direct: number; refetch: number };
+    flushTimer: ReturnType<typeof setTimeout> | null;
+    shadowApplied: Set<string> | null;
+  };
+  return {
+    fresh: (): Slots => ({ cargoSupported: true, applyTally: { direct: 0, refetch: 0 }, flushTimer: null, shadowApplied: null }),
+    get: (): Slots => ({
+      cargoSupported,
+      applyTally: { ...applyTally },
+      flushTimer,
+      shadowApplied: shadowApplied && new Set(shadowApplied),
+    }),
+    set: (s: Slots): void => {
+      cargoSupported = s.cargoSupported;
+      applyTally = { ...s.applyTally };
+      flushTimer = s.flushTimer;
+      shadowApplied = s.shadowApplied && new Set(s.shadowApplied);
+    },
+  };
+}
+
 async function shadowCompare(convex: any, runStart: number): Promise<void> {
   if (!shadowEnabled()) {
     shadowApplied = null;

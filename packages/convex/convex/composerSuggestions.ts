@@ -4,6 +4,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { isLowSignalPrompt } from "./titleGeneration";
+import { parseJsonBlock } from "./lib/anthropic";
 
 // Suggested replies for the composer ("suggestion pills"). Fourth member of
 // the Haiku family (titleGeneration, idleSummary, sessionInsights): an
@@ -745,40 +746,7 @@ export async function llmComplete(opts: {
   }
 }
 
-// The JSON value the reply starts with. A model that answers `[]` and then
-// explains why it stayed silent has still answered; the explanation is
-// dropped, not the answer. Fences are stripped the same way.
-export function parseJsonBlock(raw: string): unknown | null {
-  const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
-  try {
-    return JSON.parse(cleaned);
-  } catch {
-    const start = cleaned.search(/[\[{]/);
-    if (start < 0) return null;
-    const open = cleaned[start];
-    const close = open === "[" ? "]" : "}";
-    let depth = 0;
-    let inString = false;
-    for (let i = start; i < cleaned.length; i++) {
-      const ch = cleaned[i];
-      if (inString) {
-        if (ch === "\\") i++;
-        else if (ch === '"') inString = false;
-        continue;
-      }
-      if (ch === '"') inString = true;
-      else if (ch === open) depth++;
-      else if (ch === close && --depth === 0) {
-        try {
-          return JSON.parse(cleaned.slice(start, i + 1));
-        } catch {
-          return null;
-        }
-      }
-    }
-    return null;
-  }
-}
+export { parseJsonBlock };
 
 // Two full reusable prompts plus a verdict fit comfortably; the cap only
 // stops a runaway completion.

@@ -1469,7 +1469,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     await ctx.db.patch(doc._id, { archived_at: undefined });
   },
 
-  updateDoc: async (ctx, userId, [docId, fields]: [string, { content?: string; title?: string; doc_type?: string; labels?: string[] }]) => {
+  updateDoc: async (ctx, userId, [docId, fields]: [string, { content?: string; title?: string; doc_type?: string; labels?: string[]; overflow?: string }]) => {
     const doc = await ctx.db.get(docId as Id<"docs">);
     if (!doc) throw new Error("Doc not found");
     if (!(await canAccessDoc(ctx, userId, doc))) throw new Error("Unauthorized");
@@ -1478,6 +1478,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (fields.title !== undefined) updates.title = fields.title;
     if (fields.doc_type !== undefined) updates.doc_type = fields.doc_type;
     if (fields.labels !== undefined) updates.labels = fields.labels;
+    if (fields.overflow !== undefined) updates.overflow = fields.overflow;
     await ctx.db.patch(doc._id, updates);
   },
 

@@ -3,10 +3,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {EventEmitter} from 'node:events';
 import {Database} from 'bun:sqlite';
-const until=async(check:()=>boolean)=>{const end=Date.now()+5000;while(!check()){if(Date.now()>end)throw new Error('retained work scheduled condition timed out');await new Promise(resolve=>setTimeout(resolve,2));}};
+import {pollUntil} from './until.js';
+const until=(check:()=>boolean)=>pollUntil(check,'retained work scheduled condition',{every:2});
 
 export async function coreScheduled({d,home,getPosition,AuthExpiredError}:any) {
-  const core=d.fixtureCore,owner=d.fixtureCustody.transcriptRetryOwners,source=fs.readFileSync(path.resolve(import.meta.dir,'../../daemon.ts'),'utf8');
+  const core=d.fixtureCore,owner=d.fixtureCustody.transcriptRetryOwners;
   const cache:any={},pending:any={},registered:any[]=[],rows:any[]=[],deleteCalls:any[]=[],operations:any[]=[];
   let failure='',now=Date.now(),attempts=0,taskCalls=0,failDelete=false;
   owner.options.now=()=>now;
@@ -26,15 +27,11 @@ export async function coreScheduled({d,home,getPosition,AuthExpiredError}:any) {
     deleteMessagesByUuid:async(conv:string,ids:string[])=>{deleteCalls.push({conv,ids,failed:failDelete});if(failDelete)throw new Error('orphan delete outage');return ids.length;},
   },{get:(target,key)=>key in target?(target as any)[key]:async()=>true});
   const queue:any={hasPendingConversation:()=>false,getPendingOperations:()=>operations,add:(type:string,params:any)=>{operations.push({type,params});return 'memory';}};
-  const context:any={transcriptRetryOwners:owner,fs,path,MESSAGE_SYNC_DEBOUNCE:{debounceMs:0},config:{user_id:'fixture'},conversationCache:cache,retryQueue:queue,pendingMessages:pending,titleCache:{},updateState:()=>{},syncService,processSessionFile:d.processSessionFile};
-  const instantiate=(file:string,id:string)=>{
-    const a=source.indexOf('sync = transcriptRetryOwners.create(',source.indexOf('  const fileSyncs =')),b=source.indexOf('}, MESSAGE_SYNC_DEBOUNCE);',a);assert.ok(a>0&&b>a);
-    const scope={...context,fileSyncs:new Map(),filePath:file,event:{sessionId:id},projectPath:home};
-    return new Function(...Object.keys(scope),new Bun.Transpiler({loader:'ts'}).transformSync('let sync;'+source.slice(a,b+'}, MESSAGE_SYNC_DEBOUNCE);'.length)+'return sync;'))(...Object.values(scope));
-  };
-  const heartbeat=source.match(/setInterval\(\(\) => \{ transcriptRetryOwners\.drain\(\); sendHeartbeat\(\)\.catch\(\(\) => \{\}\); \}, 30_000\);/);assert.ok(heartbeat);
+  // The daemon's own retry owners and heartbeat tick, with the sync state main() hands them.
+  const deps:any={config:{user_id:'fixture'},conversationCache:cache,retryQueue:queue,pendingMessages:pending,titleCache:{},updateState:()=>{},syncService};
+  const instantiate=(file:string,id:string)=>d.claudeTranscriptRetrySync(new Map(),file,id,home,deps);
   let timer:ReturnType<typeof setInterval>|undefined,beats=0;
-  const startTicks=()=>new Function('setInterval','transcriptRetryOwners','sendHeartbeat',heartbeat[0])((callback:()=>void)=>{timer=setInterval(()=>{now+=30_001;callback();},5);},owner,async()=>{beats++;});
+  const startTicks=()=>{timer=setInterval(()=>{now+=d.HEARTBEAT_INTERVAL_MS+1;d.heartbeatTick(async()=>{beats++;});},5);};
   try{
     for(const kind of ['direct','pending','task','create-auth']){
       const id='cold-auth-'+kind,file=path.join(home,id+'.jsonl'),content=kind==='task'?[{type:'tool_use',id:'native-tool-'+id,name:'TaskCreate',input:{subject:'task'}}]:'ordinary message';
@@ -64,11 +61,8 @@ export async function coreScheduled({d,home,getPosition,AuthExpiredError}:any) {
       }else fs.writeFileSync(file,JSON.stringify({type:'assistant',uuid:'native-'+id,timestamp:'2026-09-05T12:00:00Z',message:{content:'permission retry'}})+'\n');
       cache[id]='conv-'+id;failure='';core.saveDaemonState({authExpired:false,authFailureCount:0});
       let sync:any;
-      if(client==='cursorDb'){
-        const a=source.indexOf('sync = transcriptRetryOwners.create(cursorSyncs,'),b=source.indexOf('}, MESSAGE_SYNC_DEBOUNCE);',a);assert.ok(a>0&&b>a);
-        const scope={...context,cursorSyncs:new Map(),dbPath:file,event:{sessionId:id,workspacePath:home},processCursorSession:d.processCursorSession};
-        sync=new Function(...Object.keys(scope),new Bun.Transpiler({loader:'ts'}).transformSync('let sync;'+source.slice(a,b+'}, MESSAGE_SYNC_DEBOUNCE);'.length)+'return sync;'))(...Object.values(scope));
-      }else sync=instantiate(file,id);
+      if(client==='cursorDb')sync=d.cursorDatabaseRetrySync(new Map(),{dbPath:file,sessionId:id,workspacePath:home},deps);
+      else sync=instantiate(file,id);
       assert.equal(owner.drain(),0);assert.equal(getPosition(file),0);
       const before=fs.statSync(file),beforeAttempts=attempts,stat=fs.promises.stat.bind(fs.promises),boundaries:string[]=[];
       let fired=false;
@@ -87,15 +81,13 @@ export async function coreScheduled({d,home,getPosition,AuthExpiredError}:any) {
       clearInterval(timer);timer=undefined;sync.stop();
       assert.equal(rows.filter(row=>row.conversationId===cache[id]).length,1);assert.equal(fs.statSync(file).mtimeMs,before.mtimeMs);
     }
-    const dirA=source.indexOf('  const registerJsonlDirWatcher ='),dirB=source.indexOf('\n  registerJsonlDirWatcher(',dirA);assert.ok(dirA>0&&dirB>dirA);
-    const scope={...context,dirEventWatchers:[],readDaemonState:()=>({authExpired:false}),isSyncPaused:()=>false,log:()=>{},logError:()=>{},opencodeDbPath:()=>''};
-    const register=new Function(...Object.keys(scope),new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(dirA,dirB)+'\nreturn registerJsonlDirWatcher;'))(...Object.values(scope));
+    const register=(watcher:any,label:string,pass:(event:any)=>Promise<unknown>)=>d.registerTranscriptDirWatcher(watcher,label,pass,[]);
     class Watcher extends EventEmitter{start(){}}
     for(const client of ['pi','grok']){
       const id='orphan-'+client,file=path.join(home,id+'.jsonl'),fixture=fs.readFileSync(path.resolve(import.meta.dir,`../../__fixtures__/${client}/${client==='pi'?'branch':'thinking-rewind'}.jsonl`),'utf8').trim().split('\n');
       const split=fixture.findIndex(line=>line.includes(client==='pi'?'branch_summary':'rewind_marker'));assert.ok(split>0);
       fs.writeFileSync(file,fixture.slice(0,split).join('\n')+'\n');cache[id]='conv-'+id;
-      const run=()=>d.processTranscriptDeltaSession(client,file,id,syncService,'fixture',undefined,cache,queue,pending,{},()=>{});
+      const run=()=>d.processTranscriptDeltaSession(client,file,id,syncService,'fixture',undefined,cache,queue,pending,()=>{});
       await run();const before=new Map(core.piSyncedSigs.get(file));assert.ok(before.size>2);
       fs.appendFileSync(file,fixture[split]+'\n');const watcher=new Watcher();register(watcher,client,run);failDelete=true;
       watcher.emit('session',{filePath:file,sessionId:id});await until(()=>deleteCalls.some(row=>row.conv===cache[id]&&row.failed));

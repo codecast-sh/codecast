@@ -34,6 +34,10 @@
     </noscript>
     <script>
       (function() {
+        // The homepage is light Classic for every visitor (its hero renders the
+        // real app's views, and globals.css restyles them under .dark and
+        // .minimal-style); the visitor's own theme starts when the app does.
+        if (location.pathname === '/') return;
         var theme = localStorage.getItem('codecast-theme') || 'light';
         document.documentElement.classList.add(theme);
         var visualStyle = localStorage.getItem('codecast-visual-style');

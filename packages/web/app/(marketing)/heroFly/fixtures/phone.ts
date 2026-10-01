@@ -11,7 +11,7 @@
 
 import type { EntityFixture } from "@/lib/entityDisplay";
 import type { PermissionViewItem } from "@/components/PermissionCard";
-import { SESSIONS } from "./story";
+import { MIN, SESSIONS } from "./story";
 
 export const entities: Record<string, EntityFixture> = {};
 
@@ -38,3 +38,12 @@ export const NOTIFICATIONS = {
     ago: 0,
   },
 };
+
+const conv = (_id: string, title: string, agent_type: string) => ({ _id, title, agent_type, project_path: "~/src/billing" });
+
+/** What was already in the app's notifications, read, under the new rows: the inbox's other sessions (fixtures/desk.ts). */
+export const EARLIER = [
+  { _id: "hero-n-stripe", type: "session_idle", title: "codecast - Session ready", message: "Tests green on Stripe v14. PR #479 is open for review.", conversation: conv("hero-s-stripe", "Upgrade Stripe SDK to v14", "gemini"), ago: 25 * MIN },
+  { _id: "hero-n-mention", type: "mention", title: "Sarah mentioned you", message: "can you look at the 4242 card limit on checkout e2e?", conversation: conv("hero-s-e2e", "Fix flaky checkout e2e", "cursor"), ago: 38 * MIN },
+  { _id: "hero-n-audit", type: "session_idle", title: "codecast - Session ready", message: "Export runs nightly and writes a manifest per day.", conversation: conv("hero-s-audit", "Audit log export to S3", "opencode"), ago: 47 * MIN },
+];
