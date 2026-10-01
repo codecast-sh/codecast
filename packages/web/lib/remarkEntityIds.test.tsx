@@ -27,6 +27,8 @@ mock.module("convex/react", () => ({
   // honest answer for resolveIdType without a backend: the pill falls back to
   // its plain-text rendering, exactly as it does when the query is in flight.
   useQueries: () => ({}),
+  // A link preview card asks the server to read its page; nothing to read here.
+  useMutation: () => async () => {},
 }));
 
 // The real next/link compat shim calls react-router's useNavigate, which

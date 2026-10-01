@@ -73,7 +73,7 @@ test("a personified session leads with the name and dims what it is working on",
   const host = await render(
     <SessionIdentityLine row={{ _id: ID, character_name: "Ember", character_avatar: "fox" }} title="Fixing the auth race" />,
   );
-  assert.equal(host.textContent, "Ember:Fixing the auth race");
+  assert.equal(host.textContent, "Ember·Fixing the auth race");
   const spans = Array.from(host.querySelectorAll("span > span")) as HTMLElement[];
   const name = host.querySelector("[data-sv-name]") as HTMLElement;
   const title = spans.find((s) => s.textContent === "Fixing the auth race")!;
@@ -106,7 +106,7 @@ test("a role's standing session wears the role and is personified without opting
   assert.ok(face.querySelector("img"), "a role always has a face");
 
   const line = await render(<SessionIdentityLine row={row as never} title="Rolling the canary" />);
-  assert.equal(line.textContent, "Infra lead@infra:Rolling the canary");
+  assert.equal(line.textContent, "Infra lead@infra·Rolling the canary");
   // A standing session's title IS the role's name, so it is not repeated.
   const same = await render(<SessionIdentityLine row={row as never} title="Infra lead" />);
   assert.equal(same.textContent, "Infra lead@infra");
@@ -131,4 +131,21 @@ test("a list's glyph: the face when personified, the surface's own mark when not
   const all = await render(<SessionGlyph row={{ _id: ID }} fallback={<span data-old-mark>icon</span>} />);
   assert.ok(all.querySelector("img"), "the workspace switch personifies every row");
   await setPersonifyAll(false);
+});
+
+test("a session tag names a personified session the same way at every size, and a plain one by its title", async () => {
+  const { SessionTag } = await import("./SessionTag");
+  await setPersonifyAll(false);
+  const personified = { _id: ID, title: "Team huddle observation", character_avatar: "cat", character_name: "Whisker", agent_type: "claude_code" };
+  for (const size of ["xs", "sm", "md", "lg"] as const) {
+    const tag = await render(<SessionTag session={personified} size={size} />);
+    assert.equal(tag.textContent, "Whisker·Team huddle observation", `size ${size}`);
+    assert.ok(tag.querySelector("[data-identity]"), `size ${size} draws the face`);
+  }
+  let opened = 0;
+  const plain = await render(<SessionTag session={{ _id: ID, title: "Fixing the auth race", agent_type: "codex" }} onClick={() => { opened++; }} />);
+  assert.equal(plain.textContent, "Fixing the auth race");
+  assert.equal(plain.querySelector("[data-identity]"), null, "a plain session keeps its agent brand, no face");
+  await act(async () => { (plain.querySelector("button") as HTMLButtonElement).click(); });
+  assert.equal(opened, 1);
 });

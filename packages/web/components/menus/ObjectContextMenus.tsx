@@ -30,6 +30,7 @@ import {
   CheckCircle2,
   CircleDot,
   ArrowUp,
+  RefreshCw,
 } from "lucide-react";
 import { toast } from "sonner";
 import { CtxItem, CtxHeader, CtxSeparator, CtxSub, CtxSubTrigger, CtxSubContent } from "../ui/context-menu";
@@ -55,6 +56,7 @@ import { openForwardToChat } from "../../lib/forwardToChat";
 import { useTeamFeature } from "../../lib/teamFeatures";
 import { getLabelColor } from "../../lib/labelColors";
 import { canControlModel } from "../../lib/modelSwitch";
+import { isSessionKilled, isSessionSetAside } from "../../lib/sessionRetirement";
 
 // Menu CONTENT per object type — the items every right-click surface renders
 // inside a <ContextMenu>. Verbs call the same store actions the command
@@ -550,21 +552,29 @@ export function SessionMenuItems({
       <CtxItem icon={LinkIcon} shortcut="conv.copyLink" onSelect={copyLink}>Copy link</CtxItem>
       <ForwardCtxItem url={`${shareOrigin()}/conversation/${id}`} label="session" />
       <CtxSeparator />
-      <CtxItem
-        icon={Archive}
-        shortcut="session.stash"
-        onSelect={onStash ?? (() => undoableHideSession(id, "stash"))}
-      >
-        Stash
-      </CtxItem>
-      <CtxItem
-        icon={EyeOff}
-        shortcut="session.stashHide"
-        onSelect={() => undoableHideSession(id, "stash", { hidden: true })}
-      >
-        Stash and hide — stays out through trigger wakes
-      </CtxItem>
-      {!session.inbox_killed_at && (
+      {isSessionSetAside(session) ? (
+        <CtxItem icon={RefreshCw} onSelect={() => { useInboxStore.getState().restoreSession(id); toast.success("Restored to inbox"); }}>
+          Restore session to inbox
+        </CtxItem>
+      ) : (
+        <>
+          <CtxItem
+            icon={Archive}
+            shortcut="session.stash"
+            onSelect={onStash ?? (() => undoableHideSession(id, "stash"))}
+          >
+            Stash
+          </CtxItem>
+          <CtxItem
+            icon={EyeOff}
+            shortcut="session.stashHide"
+            onSelect={() => undoableHideSession(id, "stash", { hidden: true })}
+          >
+            Stash and hide — stays out through trigger wakes
+          </CtxItem>
+        </>
+      )}
+      {!isSessionKilled(session) && (
         <CtxItem icon={Clock} shortcut="session.snooze" onSelect={() => openPaletteMode([session], "session", "snooze")}>
           Snooze…
         </CtxItem>
@@ -574,29 +584,38 @@ export function SessionMenuItems({
           Move to Needs Input now
         </CtxItem>
       )}
-      <CtxItem
-        icon={Clock}
-        shortcut="session.deferAdvance"
-        onSelect={onDefer ?? (() => undoableDeferSession(id))}
-      >
-        Defer
-      </CtxItem>
-      <CtxItem
-        icon={Moon}
-        shortcut="session.dormantAdvance"
-        onSelect={() => undoableSetSessionRest(id, "dormant")}
-      >
-        Dormant — a machine wakes it
-      </CtxItem>
-      <CtxItem icon={CheckCircle2} onSelect={() => undoableSetSessionRest(id, "done")}>
-        Mark done
-      </CtxItem>
-      <CtxItem icon={CircleDot} onSelect={() => undoableSetSessionRest(id, "needs_input")}>
-        Mark needs input
-      </CtxItem>
-      {onKill && (
+      {!isSessionSetAside(session) && (
+        <>
+          <CtxItem
+            icon={Clock}
+            shortcut="session.deferAdvance"
+            onSelect={onDefer ?? (() => undoableDeferSession(id))}
+          >
+            Defer
+          </CtxItem>
+          <CtxItem
+            icon={Moon}
+            shortcut="session.dormantAdvance"
+            onSelect={() => undoableSetSessionRest(id, "dormant")}
+          >
+            Dormant — a machine wakes it
+          </CtxItem>
+          <CtxItem icon={CheckCircle2} onSelect={() => undoableSetSessionRest(id, "done")}>
+            Mark done
+          </CtxItem>
+          <CtxItem icon={CircleDot} onSelect={() => undoableSetSessionRest(id, "needs_input")}>
+            Mark needs input
+          </CtxItem>
+        </>
+      )}
+      {onKill && !isSessionKilled(session) && (
         <CtxItem danger icon={Square} shortcut="session.kill" onSelect={onKill}>
           Kill session
+        </CtxItem>
+      )}
+      {!session.persistent && (
+        <CtxItem danger icon={Trash2} onSelect={() => openPaletteMode([session], "session", "session_delete")}>
+          Delete session…
         </CtxItem>
       )}
     </>

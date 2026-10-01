@@ -68,7 +68,18 @@ const ROWS: Row[] = [
   // Every transcript file event (Cursor's and each cloud agent mirror's) runs
   // through one handler, handed the place lookup its caller owns: Cursor's
   // above, and the mirror's meta.json read below.
-  { file: D, name: "handleTranscriptFileEvent", kind: "function", from: MAIN, minLines: 40, mustContain: "await findWorkspacePath()" },
+  { file: D, name: "handleTranscriptFileEvent", kind: "function", minLines: 15, mustContain: "await findWorkspacePath()" },
+  // The per-event paths every transcript watcher shares (the hold on auth and
+  // pause, the retry owner, Cursor's two stores, the directory watchers), the
+  // watchdog's stale Cursor pass, the heartbeat tick and the retry executor.
+  { file: D, name: "transcriptEventHeld", kind: "function", minLines: 5, mustContain: "isSyncPaused" },
+  { file: D, name: "transcriptRetrySync", kind: "function", minLines: 3, mustContain: "transcriptRetryOwners.create" },
+  { file: D, name: "handleCursorTranscriptEvent", kind: "function", minLines: 3, mustContain: "logError" },
+  { file: D, name: "syncStaleCursorTranscript", kind: "function", minLines: 5, mustContain: "await findWorkspacePathForCursorConversation" },
+  { file: D, name: "handleCursorDatabaseEvent", kind: "function", minLines: 8, mustContain: "transcriptScopeRefusal" },
+  { file: D, name: "registerTranscriptDirWatcher", kind: "function", minLines: 15, mustContain: "transcriptEventHeld" },
+  { file: D, name: "heartbeatTick", kind: "function", minLines: 3, mustContain: "transcriptRetryOwners.drain" },
+  { file: D, name: "executeRetryOperation", kind: "function", minLines: 40, mustContain: "reconcileRemoteExisting" },
   { file: "cloudAgents/transcript.ts", name: "readMetaJson", kind: "function", minLines: 8, mustContain: "fs.promises.readFile" },
   { file: D, name: "startWatchdog", kind: "function", minLines: 40, mustContain: "findStaleSessionFiles" },
   { file: D, name: "logHealthSummary", kind: "function", minLines: 10, mustContain: "getSystemMetrics" },
@@ -129,7 +140,7 @@ const ROWS: Row[] = [
   { file: D, name: "onClaudeTranscript", find: "const onClaudeTranscript", kind: "call", from: MAIN, minLines: 40, mustContain: "chooseSessionTranscript" },
   { file: "claudeCloud.ts", name: "poll", kind: "method", minLines: 10, mustContain: "mirrorSession" },
   { file: "claudeCloud.ts", name: "mirrorSession", kind: "method", minLines: 30, mustContain: "appendFile" },
-  { file: D, name: "setHookStatusSink(", kind: "call", from: MAIN, minLines: 15, mustContain: "processSessionFile" },
+  { file: D, name: "setHookStatusSink(", kind: "call", from: MAIN, minLines: 15, mustContain: "claudeTranscriptRetrySync" },
   { file: D, name: "main setInterval", kind: "intervals", from: MAIN, minLines: 1, mustContain: "", minCount: 14 },
   { file: D, name: "module setInterval", kind: "intervals", from: "", to: MAIN, minLines: 1, mustContain: "", minCount: 1 },
   // The loopback server listens a few lines into boot (pl-497 unit D1), so

@@ -1,0 +1,19 @@
+{
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "notes": "asks a yes/no buried after a report",
+  "label": {
+    "verdict": "needs_input"
+  },
+  "snapshot": {
+    "newestFirst": [
+      {
+        "role": "assistant",
+        "content": "Numbers reconciled: revenue 41,203, refunds 1,120, net 40,083 — matches Stripe to the cent. One thing: the July row double-counts a refund; should I restate July or leave the historical figure alone?"
+      },
+      {
+        "role": "user",
+        "content": "check the numbers"
+      }
+    ]
+  }
+}

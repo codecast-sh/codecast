@@ -2,6 +2,7 @@
 // authorizes these), the web client (builds keys for chips/huddle buttons),
 // and anything else that needs to name a room. A room is a string key, never
 // a row; the full semantics live with the authorizer in convex/callRooms.ts.
+import { isPerson } from "../team/memberKind";
 
 // Lease timings. The dock heartbeats every CALL_HEARTBEAT_MS while connected;
 // readers ignore call_members rows older than CALL_MEMBER_STALE_MS (three
@@ -31,7 +32,7 @@ export function channelHuddleMemberIds(
   if (kind === "community") return [];
   if (!teammates?.length || ((kind === "private" || kind === "dm") && !memberIds)) return undefined;
   const allowed = kind === "private" || kind === "dm" ? new Set(memberIds) : null;
-  return [...new Set(teammates.flatMap((m) => m && !m.is_bot && (!allowed || allowed.has(String(m._id))) ? [String(m._id)] : []))];
+  return [...new Set(teammates.flatMap((m) => isPerson(m) && (!allowed || allowed.has(String(m._id))) ? [String(m._id)] : []))];
 }
 
 const MAX_ROOM_KEY_LENGTH = 400;

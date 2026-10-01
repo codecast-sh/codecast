@@ -1,5 +1,6 @@
 import rehypeHighlight from "rehype-highlight";
 import { entityRemarkPlugins } from "./remarkEntityIds";
+import { remarkDrafting } from "./remarkDrafting";
 
 // ---------------------------------------------------------------------------
 // Security control: neutralize invisible Unicode in rendered transcript text.
@@ -63,4 +64,6 @@ export const MD_REHYPE_PLUGINS = [rehypeHighlight];
 // Exported so a surface that adds a plugin of its own (chat's mentions) BUILDS
 // FROM this list instead of from entityRemarkPlugins — the sanitizer is a
 // security control, and a surface that assembles its own list silently drops it.
-export const MD_REMARK_PLUGINS = [...entityRemarkPlugins, remarkSanitizeInvisibleUnicode];
+// remarkDrafting turns a doc's drafting spans (alternatives, ghosts, Lab
+// flags) into what a reader sees instead of literal tags.
+export const MD_REMARK_PLUGINS = [remarkDrafting, ...entityRemarkPlugins, remarkSanitizeInvisibleUnicode];

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { HEALTH_CAPS, computeOrgHealth, roleActivity } from "./orgHealth";
+import { collectOrgSessions } from "./org";
 
 // org.health (docs/architecture/org-staffing.md S3): the flow signals per
 // role, per person and for the company, read from the same scan org.tree uses
@@ -322,6 +323,22 @@ describe("org.health", () => {
     expect(await roleActivity(ctxOf(db), ME as any, cos, NOW, { wholeWorkspaceLatest: NOW - D })).toMatchObject({ idle_days: 1, idle: false });
     expect(await roleActivity(ctxOf(db), ME as any, cos, NOW, { wholeWorkspaceLatest: null })).toMatchObject({ idle_days: null, age_days: 20, idle: true });
     expect(HEALTH_CAPS.tasks).toBe(2000);
+  });
+
+  test("roleActivity reads the caller's scan instead of scanning the sessions again (ct-56046)", async () => {
+    // The analyzer's org slice calls roleActivity once per role; a scan per
+    // role passed Convex's 100 MB read limit on a nine role workspace.
+    const db = fixtures();
+    const growth = await db.get(GROWTH as any);
+    let conversationReads = 0;
+    const counting = { db: { ...db, query: (table: string) => { if (table === "conversations") conversationReads++; return db.query(table); } } } as any;
+    const own = await roleActivity(counting, ME as any, growth, NOW, { wholeWorkspaceLatest: null });
+    const scanning = conversationReads;
+    const scan = await collectOrgSessions(ctxOf(db), ME as any, TEAM, NOW);
+    conversationReads = 0;
+    const shared = await roleActivity(counting, ME as any, growth, NOW, { wholeWorkspaceLatest: null, scan });
+    expect(shared).toEqual(own);
+    expect(conversationReads).toBeLessThan(scanning);
   });
 });
 
