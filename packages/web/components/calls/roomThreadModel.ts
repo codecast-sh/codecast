@@ -33,6 +33,10 @@ export type TranscriptSegment = TurnSegment & { at: number };
 
 export type Speaker = { id: string; name: string };
 
+/** The one promise the thread makes about an agent, worded once: on the
+ *  Add button, in the empty card, on the event line and in the picker. */
+export const HEARS = "hears the room and answers here";
+
 export type Passage = {
   kind: "passage";
   index: number;

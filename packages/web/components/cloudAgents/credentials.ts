@@ -29,13 +29,6 @@ function useCodexSignIn(): SignInCheck {
   }, [devices, now]);
 }
 
-/**
- * Providers whose credential is a sign-in on the machine (a CLI's own login),
- * not a Provider Keys entry, name the hook that checks it here. Every one runs
- * on every render, in this order, so the hook rules hold.
- */
-const SIGN_IN_CHECKS: ReadonlyArray<readonly [CloudAgentProviderId, () => SignInCheck]> = [["codex", useCodexSignIn]];
-
 const NEVER: ConnectedCheck = () => false;
 
 /** What the machine's daemon last found keeps it from reading the provider (turned off for the account, refused), if anything. */
@@ -43,10 +36,14 @@ export function cloudAgentBlockOf(spec: CloudAgentProviderSpec | undefined, devi
   return spec ? device.cloud_agent_blocks?.find((b) => b.provider === spec.id) : undefined;
 }
 
-/** The provider's sign-in check, when its credential is a sign-in. */
+/**
+ * The provider's sign-in check, when its credential is a sign-in on the
+ * machine (a CLI's own login) rather than a Provider Keys entry. Each
+ * provider's check is called here on every render, so the hook rules hold.
+ */
 function useSignInCheck(spec: CloudAgentProviderSpec | undefined): SignInCheck | undefined {
-  const checks = SIGN_IN_CHECKS.map(([id, useCheck]) => [id, useCheck()] as const);
-  return spec ? checks.find(([id]) => id === spec.id)?.[1] : undefined;
+  const checks: Partial<Record<string, SignInCheck>> = { codex: useCodexSignIn() } satisfies Partial<Record<CloudAgentProviderId, SignInCheck>>;
+  return spec ? checks[spec.id] : undefined;
 }
 
 /**

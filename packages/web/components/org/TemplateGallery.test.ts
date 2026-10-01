@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { cadenceWords, cannotHireReason, type CatalogTemplate } from "./TemplateGallery";
+import { cadenceWords, cannotHireReason, displayTitle, type CatalogTemplate } from "./templateCatalog";
 
 // The gallery's honesty rules (org-hire.md H3): a card offers the hire only
 // when this workspace can take it, and says why not otherwise.
@@ -14,6 +14,12 @@ describe("template gallery", () => {
     expect(cannotHireReason(t({ installable: false }), 1)).toMatch(/published without the files/);
     expect(cannotHireReason(t(), 0)).toMatch(/Create a project/);
     expect(cannotHireReason(t({ installable: undefined }), 1)).toMatch(/Not ready/);
+  });
+  test("a title's tokens read as words before any answer exists", () => {
+    const m = { ...t().manifest, inputs: [{ key: "repo.name", label: "Repository", kind: "string" }] } as any;
+    expect(displayTitle(m, "Merge pass for {{input.repo.name}}")).toBe("Merge pass for Repository");
+    expect(displayTitle(m, "Weekly review of {{project.name}} as {{instance}}")).toBe("Weekly review of the project as the instance");
+    expect(displayTitle(m, "{{input.unknown}} check")).toBe("… check");
   });
   test("cadence in words", () => {
     expect(cadenceWords("1d")).toBe("daily");

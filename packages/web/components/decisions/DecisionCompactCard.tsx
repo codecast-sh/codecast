@@ -14,7 +14,8 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { isHumanOnlyCategory } from "@codecast/convex/convex/lib/decisionCategory";
 import { DecisionProposalOrigin } from "../org/ProposalAuthorPill";
 import { CollapsibleBody } from "../CollapsibleBody";
-import { AskingSession } from "./DecisionParties";
+import { AskingSessionView, type AskingSessionRow } from "./DecisionParties";
+import { askingSessionDeps } from "./askingSessionDeps";
 import { OptionPages } from "./OptionPages";
 import { PublishedPageEmbed } from "../PublishedPageEmbed";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
@@ -44,8 +45,7 @@ export function DecisionCompactCard({
   cta?: boolean;
 }) {
   const s = useTrackedStore([
-    (st) => st.sessions[decision.conversation_id]?.title,
-    (st) => st.sessions[decision.conversation_id]?.project_path,
+    ...askingSessionDeps(decision.conversation_id),
     (st) => decision.task_id ? st.tasks[decision.task_id]?.short_id : undefined,
     (st) => decision.stack_id ? st.decisionStacks[decision.stack_id]?.title : undefined,
   ]);
@@ -55,11 +55,65 @@ export function DecisionCompactCard({
   const task = decision.task_id ? s.tasks[decision.task_id] : undefined;
   const stack = decision.stack_id ? s.decisionStacks[decision.stack_id] : undefined;
   const now = useCoarseNow(30_000);
+  const onAnswer = useCallback((input: DecisionAnswerInput) => answerDecision(decision._id, input), [answerDecision, decision._id]);
+  const onDismiss = useCallback(() => answerDecision(decision._id, { dismiss: true }), [answerDecision, decision._id]);
+
+  return (
+    <DecisionCompactCardView
+      decision={decision}
+      session={session}
+      task={task}
+      stack={stack}
+      now={now}
+      onAnswer={onAnswer}
+      onDismiss={onDismiss}
+      onJumpToAsk={jumpToAsk}
+      keys={keys}
+      selected={selected}
+      onToggleSelect={onToggleSelect}
+      showTask={showTask}
+      cta={cta}
+    />
+  );
+}
+
+/** The compact card drawn from props: the decision, the asking session's row,
+ *  the task and stack it is bound to, the clock, and the answer and jump
+ *  callbacks. DecisionCompactCard feeds it from the store; a surface outside
+ *  the app feeds it fixtures. */
+export function DecisionCompactCardView({
+  decision,
+  session,
+  task,
+  stack,
+  now,
+  onAnswer,
+  onDismiss,
+  onJumpToAsk,
+  keys = false,
+  selected,
+  onToggleSelect,
+  showTask = true,
+  cta = false,
+}: {
+  decision: SessionDecisionItem;
+  session?: AskingSessionRow;
+  task?: { short_id?: string };
+  stack?: { _id: string; short_id?: string; title: string };
+  now: number;
+  onAnswer: (input: DecisionAnswerInput) => void;
+  onDismiss: () => void;
+  /** A plain click on the asking session's name. */
+  onJumpToAsk: () => void;
+  keys?: boolean;
+  selected?: boolean;
+  onToggleSelect?: () => void;
+  showTask?: boolean;
+  cta?: boolean;
+}) {
   const kind = decision.kind ?? "single";
   const pending = decision.status === "pending";
   const rec = ladderRecommendation(decision);
-  const onAnswer = useCallback((input: DecisionAnswerInput) => answerDecision(decision._id, input), [answerDecision, decision._id]);
-  const onDismiss = useCallback(() => answerDecision(decision._id, { dismiss: true }), [answerDecision, decision._id]);
   const pageCount = optionPageSlugs(decision.options).length;
 
   return (
@@ -74,7 +128,7 @@ export function DecisionCompactCard({
             <input type="checkbox" checked={!!selected} onChange={onToggleSelect} className="accent-[var(--sol-violet)]" aria-label="Select for a stack" />
           )}
           <span className={`w-1.5 h-1.5 shrink-0 rounded-full ${decision.blocking ? "bg-sol-yellow animate-pulse" : "bg-sol-blue"}`} />
-          <AskingSession decision={decision} className="max-w-[22rem]" />
+          <AskingSessionView decision={decision} session={session} onJumpToAsk={onJumpToAsk} className="max-w-[22rem]" />
           <span>· asked {formatTimeAgo(decision.created_at, now)}</span>
           {!decision.blocking && <span className="px-1.5 py-0.5 rounded border border-sol-blue/30 text-sol-blue">advisory</span>}
           {/* The category decides who may answer, and only a real one says

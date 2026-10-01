@@ -4,6 +4,7 @@
 // Run: bun test store/__tests__/initiativeSlice.test.ts
 import { beforeEach, describe, expect, it } from "bun:test";
 import type { InitiativeRow } from "@codecast/shared/contracts/initiative";
+import { CHIEF_OF_STAFF_HANDLE } from "@codecast/shared/contracts/orgLead";
 import { ORG_FIXTURE } from "../../components/org/orgFixture";
 import { useInboxStore } from "../inboxStore";
 
@@ -119,9 +120,19 @@ describe("an owner role has every project of its initiative in its scope", () =>
     expect(scopeOf()).toContain("proj-late");
   });
 
-  it("never narrows a role that looks after the whole workspace", () => {
+  it("an ordinary role with no scope gains the projects, like any other", () => {
     const tree = structuredClone(ORG_FIXTURE);
     tree.roles[0].scope = { project_ids: [], plan_ids: [] };
+    useInboxStore.setState({ orgTree: tree, initiatives: { [ID]: row({ project_ids: ["proj-new"] }) } } as any);
+    state().updateInitiative(ID, { owner: { kind: "role", role_id: ROLE._id } });
+    expect(scopeOf()).toEqual(["proj-new"]);
+    expect(state().orgIntents).toHaveLength(1);
+  });
+
+  it("never narrows the Chief of Staff, who looks after the whole workspace", () => {
+    const tree = structuredClone(ORG_FIXTURE);
+    tree.roles[0].scope = { project_ids: [], plan_ids: [] };
+    tree.roles[0].handle = CHIEF_OF_STAFF_HANDLE;
     useInboxStore.setState({ orgTree: tree, initiatives: { [ID]: row({ project_ids: ["proj-new"] }) } } as any);
     state().updateInitiative(ID, { owner: { kind: "role", role_id: ROLE._id } });
     expect(scopeOf()).toEqual([]);

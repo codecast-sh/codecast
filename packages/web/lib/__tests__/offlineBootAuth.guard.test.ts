@@ -45,9 +45,13 @@ describe("offline boot auth", () => {
     const firstAwait = source.indexOf("await loadCache(HYDRATION_CRITICAL_READ_KEYS)");
     expect(paintRead).toBeGreaterThan(-1);
     expect(paintRead).toBeLessThan(firstAwait);
-    expect(source).toContain(
-      "const restoreId = requestedId ?? ownId ?? st.clientState?.current_conversation_id",
-    );
+    // The session to restore is chosen before that preload, so the preload warms the
+    // conversation the app opens on: a conversation the URL names wins, then this
+    // client's own last focus, then the server's.
+    const restore = source.match(/const restoreId = ([^;]+);/);
+    expect(restore).not.toBeNull();
+    expect(source.indexOf(restore![0])).toBeLessThan(hydrate);
+    expect(restore![1]).toMatch(/^linked !== undefined \? linked : ownId \?\? st\.clientState\?\.current_conversation_id$/);
   });
 
   test("interaction-only conversation tools stay outside the blocking route graph", () => {

@@ -37,13 +37,13 @@ test("a shared checkout row renders 'shared' with the main-checkout title; prepa
 });
 
 test("both compact worktree rows and full cards render the same location chip", () => {
-  const source = readFileSync(new URL("./GlobalSessionPanel.tsx", import.meta.url), "utf8");
+  const source = readFileSync(new URL("./inbox/SessionCardView.tsx", import.meta.url), "utf8");
   const compact = source.indexOf("if (isSubagent) {");
   expect(compact).toBeGreaterThan(0);
   // The compact ↳ branch is gated on a REAL parent only. A worktree is a
   // location, not a parent: worktree_name must not appear anywhere in
   // SessionCard's branch decision (ct-49429).
-  const card = source.slice(source.indexOf("export const SessionCard"), compact);
+  const card = source.slice(source.indexOf("export function SessionCardView"), compact);
   expect(card).toContain("const isSubagent = !!subRow || !!session.is_subagent || !!nestParentIdOf(session);");
   expect(card).not.toContain("!!session.worktree_name");
   expect(source.slice(0, compact)).toContain('const worktreeChip = (session.worktree_name || session.cloud_placement === "pending" || session.cloud_workspace === "shared" || session.migration_batch_id)');
@@ -53,7 +53,7 @@ test("both compact worktree rows and full cards render the same location chip", 
 });
 
 test("a worktree does not make a first-class session look like a nested child", () => {
-  const source = readFileSync(new URL("./GlobalSessionPanel.tsx", import.meta.url), "utf8");
+  const source = readFileSync(new URL("./inbox/SessionCardView.tsx", import.meta.url), "utf8");
   const start = source.indexOf("const isSubagent =");
   expect(start).toBeGreaterThan(0);
   const line = source.slice(start, source.indexOf(";", start) + 1);

@@ -8,40 +8,9 @@ import { useState } from "react";
 import { ArrowRight, Lock, Search } from "lucide-react";
 import { RoleAvatar } from "./avatars";
 import { avatarOf } from "@codecast/shared/contracts/orgAvatars";
-import type { OrgTemplate, TemplateRoutine } from "@codecast/shared/contracts/orgTemplateManifest";
+import type { TemplateRoutine } from "@codecast/shared/contracts/orgTemplateManifest";
 import { humanSetupCount, isDefaultLeadTemplate, secretInputs } from "./orgTemplateSpec";
-
-export type CatalogTemplate = {
-  template_id: string;
-  workspace: string;
-  name: string;
-  description: string;
-  avatar?: string;
-  latest: { version: string; digest: string };
-  latest_status?: "draft" | "canary" | "stable" | null;
-  installable?: boolean;
-  asks: { inputs: number; secrets: number; authority: number; setup: number; routines: number };
-  manifest: OrgTemplate;
-};
-
-/** Why a card cannot offer the hire, in the words it shows; null when it can. */
-export function cannotHireReason(t: CatalogTemplate, projectCount: number): string | null {
-  if (!t.installable) return "Not ready to hire: its release was published without the files a machine installs. Publish it again.";
-  if (projectCount === 0) return "Create a project in this workspace first: this role leads one project.";
-  return null;
-}
-
-/** The cadence of a routine in words: 1d → daily, 7d → weekly, 2d → every 2 days. */
-export function cadenceWords(every: string): string {
-  const m = /^(\d+)([mhd])$/.exec(every);
-  if (!m) return `every ${every}`;
-  const n = Number(m[1]);
-  const unit = m[2] === "d" ? "day" : m[2] === "h" ? "hour" : "minute";
-  if (unit === "day" && n === 1) return "daily";
-  if (unit === "day" && n === 7) return "weekly";
-  if (unit === "day" && n === 14) return "every two weeks";
-  return n === 1 ? `every ${unit}` : `every ${n} ${unit}s`;
-}
+import { cadenceWords, cannotHireReason, displayTitle, type CatalogTemplate } from "./templateCatalog";
 
 function askWords(t: CatalogTemplate): string[] {
   const m = t.manifest;
@@ -119,12 +88,12 @@ function TemplateCard({ template: t, reason, onPick }: { template: CatalogTempla
           <div className="flex items-baseline gap-2">
             <h3 className="truncate text-[15px] font-semibold text-sol-text" style={{ fontFamily: "var(--font-serif)" }}>{t.name}</h3>
             <span className="shrink-0 text-[10.5px] text-sol-text-dim" style={{ fontFamily: "var(--font-mono)" }}>{t.latest.version}</span>
-            {leads && <span className="shrink-0 rounded px-1.5 py-px text-[9.5px] font-semibold uppercase tracking-wide text-sol-violet" style={{ background: "color-mix(in srgb, var(--sol-violet) 14%, transparent)" }} data-template-card-leads>Leads the project</span>}
           </div>
           <p className="mt-0.5 line-clamp-3 text-[12px] leading-snug text-sol-text-muted">{t.description}</p>
         </div>
       </header>
       <ul className="flex flex-wrap gap-1.5" aria-label="What it asks for">
+        {leads && <li className="rounded-md px-1.5 py-0.5 text-[10.5px] font-semibold leading-tight text-sol-violet" style={{ background: "color-mix(in srgb, var(--sol-violet) 14%, transparent)" }} data-template-card-leads>Leads the project</li>}
         {askWords(t).map((w) => <li key={w} className="rounded-md px-1.5 py-0.5 text-[10.5px] leading-tight text-sol-text-muted" style={{ background: "color-mix(in srgb, var(--sol-border) 22%, transparent)" }}>{w}</li>)}
         {askWords(t).length === 0 && <li className="text-[10.5px] text-sol-text-dim">Asks nothing at hire</li>}
       </ul>
@@ -133,7 +102,7 @@ function TemplateCard({ template: t, reason, onPick }: { template: CatalogTempla
         <ul className="mt-1 space-y-0.5">
           {routines.slice(0, 4).map((r) => (
             <li key={r.id} className="flex items-baseline justify-between gap-2 text-[11.5px]">
-              <span className="truncate text-sol-text">{r.title}</span>
+              <span className="truncate text-sol-text">{displayTitle(t.manifest, r.title)}</span>
               <span className="shrink-0 text-sol-text-dim">{cadenceWords(r.every)}</span>
             </li>
           ))}

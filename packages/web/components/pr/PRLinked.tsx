@@ -26,7 +26,7 @@ const REVIEW_WORD: Record<string, string> = {
 };
 
 /** The newest review per person is that person's standing opinion. */
-export function latestReviews(reviews: PrReviewRow[]): PrReviewRow[] {
+function latestReviews(reviews: PrReviewRow[]): PrReviewRow[] {
   const latest = new Map<string, PrReviewRow>();
   for (const review of [...reviews].sort((a, b) => a.submitted_at - b.submitted_at)) {
     if (review.author_github_username) latest.set(review.author_github_username, review);

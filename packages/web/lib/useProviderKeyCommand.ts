@@ -6,7 +6,8 @@
 // so the encrypt + mutation logic (and the codegen casts) live exactly once. The key
 // only ever leaves the browser as ciphertext, via encryptProviderKey.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useMutation, useQuery } from "convex/react";
 import { captureException } from "@sentry/react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -69,7 +70,7 @@ export function useWatchedCommand(timeoutMs?: number) {
   const [unansweredId, setUnansweredId] = useState<string | null>(null);
   const outcome = useQuery(api.devices.watchedCommandOutcome, commandId ? { command_id: commandId as Id<"daemon_commands"> } : "skip");
   const settled = outcome?.state === "done" || outcome?.state === "failed";
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!commandId || settled || timeoutMs === undefined) return;
     const t = setTimeout(() => setUnansweredId(commandId), timeoutMs);
     return () => clearTimeout(t);
@@ -182,7 +183,7 @@ export function useCloudAgentLogin(provider: string, device: Device | null) {
 
   // One check per machine the dialog opens on (and again after it comes back online), not one per effect run.
   const checkedFor = useRef<string | undefined>(undefined);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (checkedFor.current === deviceId) return;
     checkedFor.current = deviceId;
     if (deviceId) void recheck();
@@ -200,7 +201,7 @@ export function useCloudAgentLogin(provider: string, device: Device | null) {
 
   // Waiting on a started sign-in: each settled check that is not yet signed in asks again.
   const signedIn = check?.state === "done" && check.login === "signed_in";
-  useEffect(() => {
+  useWatchEffect(() => {
     if (waitingSince === null || !settled) return;
     if (signedIn || start?.state === "failed") { setWaitingSince(null); return; }
     if (Date.now() - waitingSince > LOGIN_WAIT_MS) { setWaitingSince(null); setTimedOut(true); return; }
@@ -227,7 +228,7 @@ export function useCloudAgentLogin(provider: string, device: Device | null) {
   return { view, waiting: waitingSince !== null, timedOut: timedOut && !signedIn, signIn, recheck: checkAgain };
 }
 
-/** How long an action waits for the hosting machine's answer (Create PR waits on Codex, Apply on the CLI). */
+/** How long an action waits for the hosting machine's answer (Create PR waits up to a minute for Codex to open the pull request). */
 const ACTION_WAIT_MS = 4 * 60_000;
 
 /** How an action went, for the page that asked: its result in words, and the page it made (a pull request). */
@@ -257,7 +258,7 @@ export function useCloudAgentAction(conversationId: string, onResult: (outcome: 
     }
   }, [conversationId, enqueue, watch]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!action) return;
     if (unanswered) report.current({ action, ok: false, text: "The machine that hosts this session did not answer: it may be offline, or its codecast too old for this" });
     else if (outcome?.state === "done") report.current({ action, ok: true, text: outcome.detail ?? `${CLOUD_AGENT_ACTIONS[action].label} done`, url: outcome.url });

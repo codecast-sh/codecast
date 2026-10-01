@@ -3,7 +3,7 @@ import { isPollResponsePayload } from "@codecast/shared/contracts";
 import { classifyApiErrorBanner, isNoResponseStub, CLIENT_ERROR_BANNER_PREFIX, parseDecisionAnswer, isSessionEscalationMessage, parseSessionEscalation, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel } from "@codecast/shared/contracts";
 import { isAskTool, isPlanWriteToolCall, isShellTool } from "@codecast/shared/render";
 import { isBackgroundBashToolCall, parseTaskNotificationBlock } from "../monitorRows";
-import { stripPastedContent } from "@codecast/shared/contracts";
+import { stripMentionContext, stripPastedContent } from "@codecast/shared/contracts";
 import { parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUnwrappedSessionReport, parseUserMessage, parseProposalMessage, isTeammateFramingOnly, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, parseHuddleSummaryTag, isToolResultCarrier } from "../sessionMessage";
 import { parseCastCommandString, stripCdPrefix, isDecideCastCommand, type ParsedCastCommand, type DecideArgs } from "../castCommand";
 import { hasRichMarkdown } from "../../lib/conversationMarkdown";
@@ -19,7 +19,7 @@ const STRIP_SYSTEM_TAGS_CACHE = new Map<string, string>();
 export function stripSystemTags(content: string): string {
   const hit = STRIP_SYSTEM_TAGS_CACHE.get(content);
   if (hit !== undefined) return hit;
-  const out = stripPastedContent(content)
+  const out = stripMentionContext(stripPastedContent(content))
     .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
     .replace(/<task-reminder>[\s\S]*?<\/task-reminder>/g, '')
     .replace(/<local-command-stdout>[\s\S]*?<\/local-command-stdout>/g, '')

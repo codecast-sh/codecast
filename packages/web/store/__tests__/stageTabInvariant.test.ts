@@ -134,6 +134,31 @@ describe("the inbox tab's ?s= sync on a split stage", () => {
     // a raw tab.path write left the pane snapping back to the stale session.
     expect(findLeaf(t.layout!, inboxLeaf.id)!.path).toBe("/inbox?s=sX");
   });
+
+  it("a peek at a stashed session (a fork chip's switch to a stashed branch) moves the focused inbox leaf too", () => {
+    declareViewNav("gesture");
+    const row = (id: string, extra: object = {}) => ({ _id: id, session_id: `s-${id}`, updated_at: Date.now(), agent_type: "codex", message_count: 1, is_idle: true, has_pending: false, ...extra });
+    useInboxStore.setState({
+      sessions: { root: row("root"), branch: row("branch", { forked_from: "root", inbox_stashed_at: Date.now() }) },
+      currentSessionId: null,
+      viewingDismissedId: null,
+      tabs: [tab({ path: "/inbox", title: "Inbox" })],
+      activeTabId: "t1",
+    } as any);
+    state().stageInsertLeaf("root", "right", "/docs");
+    const inboxLeaf = leavesOf(activeTab().layout!)[0];
+    state().stageFocusLeaf(inboxLeaf.id);
+    state().setCurrentSession("root");
+    state().navigateToSession("branch");
+    expect(state().viewingDismissedId).toBe("branch");
+    expect(state().currentSessionId).toBe("root");
+    // The pane renders its leaf's ?s= once it loses focus: it must name the branch shown,
+    // or the pane falls back to the origin and stops following the branch.
+    expect(findLeaf(activeTab().layout!, inboxLeaf.id)!.path).toBe("/inbox?s=branch");
+    // Leaving the peek hands the leaf back to the current session.
+    state().clearSelection();
+    expect(findLeaf(activeTab().layout!, inboxLeaf.id)!.path).toBe("/inbox?s=root");
+  });
 });
 
 describe("healTabPaths layouts", () => {

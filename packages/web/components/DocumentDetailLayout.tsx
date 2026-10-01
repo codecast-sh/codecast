@@ -1,7 +1,6 @@
 "use client";
 import { useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import type { Components } from "react-markdown";
 import { CollabDocEditor } from "./editor/CollabDocEditor";
 import { AppLoader } from "./AppLoader";
 import { useMentionQuery, useActiveMentionScope } from "../hooks/useMentionQuery";
@@ -10,7 +9,7 @@ import { ErrorBoundary } from "./ErrorBoundary";
 import { ContextChatInput } from "./ContextChatInput";
 import { MessageReview } from "./MessageReview";
 import { MarkdownBlocks } from "./tools/MarkdownRenderer";
-import { MD_COMPONENTS } from "../lib/markdownComponents";
+import { DOC_MD_COMPONENTS } from "../lib/docMarkdownComponents";
 import { DocReviewBar } from "./DocReviewBar";
 import { SlotActions } from "./workspace/Slot";
 import { useInboxStore } from "../store/inboxStore";
@@ -25,23 +24,6 @@ import { leadingHeading, stripTitleHeading } from "@codecast/shared/docs";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useTabActive } from "../hooks/usePagePresence";
-// The reading view uses the EDITOR's type scale (editor.css), not chat's
-// compact one, so toggling edit mode doesn't reflow the whole document.
-// MD_COMPONENTS stays the base — entity pills, code blocks, images and the
-// security plugins are shared; only the heading scale diverges.
-const DOC_MD_COMPONENTS: Components = {
-  ...MD_COMPONENTS,
-  h1: ({ children }) => (
-    <h1 className="text-[21px] font-bold mt-10 first:mt-0 mb-3 leading-[1.3] text-sol-text">{children}</h1>
-  ),
-  h2: ({ children }) => (
-    <h2 className="text-[17px] font-semibold mt-8 mb-2 leading-[1.3] text-sol-text">{children}</h2>
-  ),
-  h3: ({ children }) => (
-    <h3 className="text-[15px] font-semibold mt-6 mb-1.5 leading-[1.4] text-sol-text">{children}</h3>
-  ),
-};
-
 // Module-level so MessageReview's memo holds (a fresh inline arrow would defeat
 // it). Renders the doc's markdown as a flat run of blocks — each a direct child
 // of MessageReview's measurement container, so every block is hover-quotable.

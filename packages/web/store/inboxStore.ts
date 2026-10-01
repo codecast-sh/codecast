@@ -1540,84 +1540,8 @@ export type DocDetail = DocItem & {
   _cachedAt?: number;
 };
 
-export type TaskViewPrefs = {
-  status?: string;
-  statuses?: string;
-  completed?: string;
-  view?: "list" | "kanban";
-  group?: string;
-  sort?: string;
-  dir?: string;
-  priority?: string;
-  label?: string;
-  assignee?: string;
-  session?: string;
-  project?: string;
-  hide_agent?: boolean;
-  source?: string;
-  /** Kanban column order (status ids), set by dragging column headers. */
-  kanban_order?: string[];
-};
-
-export type DocViewPrefs = {
-  doc_type?: string;
-  group?: string;
-  sort?: string;
-  dir?: string;
-  project?: string;
-  label?: string;
-  source?: string;
-  scope?: string;
-};
-
-export type PlanViewPrefs = {
-  source?: string;
-};
-
-export type SavedView = {
-  id: string;
-  name: string;
-  page: "tasks" | "docs" | "plans";
-  prefs: TaskViewPrefs | DocViewPrefs | PlanViewPrefs;
-  team_id?: string;
-  created_at: number;
-};
-
-/**
- * A saved view as it now lives on the server (convex/savedViews.ts). The legacy
- * SavedView above is the client_state shape these were kept in before they could
- * be shared; useSyncSavedViews migrates those across once and then they are gone.
- */
-export type SavedViewRow = {
-  _id: string;
-  client_key?: string;
-  user_id?: string;
-  team_id?: string;
-  name: string;
-  // "workspace" = a layout workbench: the saved arrangement of the chrome
-  // itself (store/workbench.ts), riding the same rows as the list views.
-  page: "tasks" | "docs" | "plans" | "workspace";
-  prefs: TaskViewPrefs | DocViewPrefs | PlanViewPrefs | WorkbenchSnapshot;
-  /** Visible to the whole team's rail, not just its author's. */
-  shared?: boolean;
-  icon?: string;
-  color?: string;
-  /** Enrichment from webList — who authored a view you did not. */
-  owner_name?: string;
-  owner_image?: string;
-  is_mine?: boolean;
-  created_at: number;
-  updated_at: number;
-};
-
-// The inbox panel's session-ordering modes. "grouped" = status sections;
-// "recent" = flat, newest-first by last activity (updated_at) — reshuffles as
-// sessions work; "time" = flat, newest-first by creation (started_at) — a
-// stable chronology that doesn't move; "bucket" = sections per manual label;
-// "plan" = sections per plan; "trigger" = trigger-first — every armed trigger
-// (and loop/subagent) is a group header with the sessions it drives beneath.
-export type InboxViewMode = "grouped" | "recent" | "time" | "bucket" | "plan" | "trigger";
-
+export type { TaskViewPrefs, DocViewPrefs, PlanViewPrefs, SavedView, SavedViewRow, InboxViewMode, ClientLayouts, ClientDismissed, ClientTips } from "./clientPrefsTypes";
+import type { TaskViewPrefs, DocViewPrefs, PlanViewPrefs, SavedView, SavedViewRow, InboxViewMode, ClientLayouts, ClientDismissed, ClientTips } from "./clientPrefsTypes";
 
 export type ClientUI = {
   theme?: "light" | "dark";
@@ -1864,48 +1788,6 @@ export type ClientUI = {
   // (a live band-grouped tile grid of every session) or the chronological
   // activity feed. Board is the default. Per-user → stamped LWW.
   inbox_home?: "board" | "feed";
-};
-
-export type ClientLayouts = {
-  dashboard?: { sidebar: number; main: number };
-  inbox?: { main: number; sidebar: number };
-  conversation_diff?: { content: number; diff: number };
-  file_diff?: { tree: number; content: number };
-};
-
-export type ClientDismissed = {
-  // The native app nudges (NativeAppBanner): one permanent opt-out per app.
-  desktop_app?: boolean;
-  ios_app?: boolean;
-  has_used_desktop?: boolean;
-  // User chose "stay in browser" from the open-in-desktop hand-off; suppresses
-  // the auto-redirect from then on (synced per-user across browsers).
-  prefer_browser_links?: boolean;
-  setup_prompt?: number;
-  cli_offline?: number;
-  tmux_missing?: number;
-  team_sharing_prompt?: number;
-  // Onboarding strip after the first sync: "decide what syncs and what your
-  // team sees" (SharingSetupBanner). Stamped when taken or dismissed.
-  sharing_setup?: number;
-  // Blocked-sessions banner X (timestamp snooze, cross-device).
-  blocked_sessions_banner?: number;
-  // "Turn on desktop notifications" nudge X (timestamp snooze; a missed
-  // message overrides it — lib/notificationNudge.ts).
-  notif_nudge?: number;
-  // "Set up account switching" promo inside that banner — permanent opt-out.
-  cc_accounts_promo?: boolean;
-  // "New agent features" upsell — one stamp per snippet slug the user enabled
-  // or dismissed from the intro (timestamp; cross-device via per-key LWW).
-  [k: `snippet_intro_${string}`]: number | undefined;
-};
-
-export type ClientTips = {
-  seen?: string[];
-  dismissed?: string[];
-  completed?: string[];
-  level?: 'all' | 'subtle' | 'none';
-  _inlineSuppressed?: boolean;
 };
 
 // A tab freezes its WHOLE view, frame included. Content identity (path,
@@ -7267,6 +7149,16 @@ function commitCurrentSession(draft: Draft, id: string) {
   syncActiveInboxTabPath(draft, id);
 }
 
+// The view-only peek at a hidden (stashed, dismissed) session, or null to end
+// it. The tab path follows what is shown, as commitCurrentSession's does: a
+// peek the path never named left a split's inbox pane on its old `?s=` (a fork
+// chip's switch to a stashed branch snapped back to the origin, and stopped
+// following the branch, once the pane lost focus).
+function setDismissedView(draft: Draft, id: string | null) {
+  draft.viewingDismissedId = id;
+  syncActiveInboxTabPath(draft, id ?? draft.currentSessionId);
+}
+
 // HIDDEN_OVERRIDE_SETTLE_MS lives in ./inboxOverlays (the `triage_gesture`
 // overlay's bound) and is re-exported above.
 
@@ -9148,7 +9040,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     }
     declareViewNav("gesture");
     this.currentSessionId = id;
-    this.viewingDismissedId = null;
+    setDismissedView(this, null);
     recordCurrentConversationPointer(this, id);
     // Sibling windows converge on the same clear (gestureBridge.ts) — but only
     // the flags: the view move above is this window's alone.
@@ -9166,7 +9058,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       recordCurrentConversationPointer(this, next?._id);
       syncActiveInboxTabPath(this, next?._id ?? null);
     }
-    if (ids.includes(this.viewingDismissedId ?? "")) this.viewingDismissedId = null;
+    if (ids.includes(this.viewingDismissedId ?? "")) setDismissedView(this, null);
     if (ids.includes(this.sidePanelSessionId ?? "")) this.sidePanelSessionId = next?._id ?? null;
   }),
 
@@ -10432,7 +10324,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   }),
 
   clearSelection: action(function (this: Draft) {
-    this.viewingDismissedId = null;
+    setDismissedView(this, null);
   }),
 
   toggleCollapsedSection: action(function (this: Draft, key: string) {
@@ -10453,7 +10345,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   setViewingDismissedId: action(function (this: Draft, id: string | null) {
     if (id && divertSessionOpen(id)) return;
-    this.viewingDismissedId = id;
+    setDismissedView(this, id);
   }),
 
   getCurrentSession: () => {
@@ -10468,7 +10360,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     // can read it without resurrecting it into the active inbox.
     const merged = seedSessionRow(this, session);
     if (isSessionHidden(merged)) {
-      this.viewingDismissedId = session._id;
+      setDismissedView(this, session._id);
     } else {
       declareViewNav("gesture");
       commitCurrentSession(this, session._id);
@@ -10603,7 +10495,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const session = this.sessions[id];
     if (session) {
       if (isSessionHidden(session)) {
-        this.viewingDismissedId = id;
+        setDismissedView(this, id);
       } else {
         commitCurrentSession(this, id);
       }
@@ -12951,6 +12843,10 @@ export function resolveTrackedStoreSnapshot<S>(
   return { deps: deps.map((dep) => dep(state)), state };
 }
 
+// A render outside the browser (the marketing prerender) reads the initial
+// state instead of throwing for a missing server snapshot.
+const serverSnapshot = () => useInboxStore.getInitialState();
+
 export function useTrackedStore(deps: Array<(s: InboxStoreState) => any>): InboxStoreState {
   const prevRef = useRef<{ deps: any[]; state: InboxStoreState } | null>(null);
   return useSyncExternalStore(useInboxStore.subscribe, () => {
@@ -12971,7 +12867,7 @@ export function useTrackedStore(deps: Array<(s: InboxStoreState) => any>): Inbox
     }
     prevRef.current = snapshot;
     return state;
-  });
+  }, serverSnapshot);
 }
 const _depChanges = new Map<string, number>();
 if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
