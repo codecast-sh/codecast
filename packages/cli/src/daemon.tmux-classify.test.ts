@@ -226,6 +226,25 @@ describe("classifyTmuxLiveState", () => {
     expect(classifyTmuxLiveState(region)).toBe("idle");
   });
 
+  // Captured 2026-09-30 from a session parked on Claude Code's auto-continue.
+  // Its footer says "esc to cancel"; read as Rewind, delivery's Escape
+  // cancelled the continue and the next one opened a real dialog.
+  test("idle: Claude Code's armed auto-continue at a usage limit is not a Rewind dialog", () => {
+    const pane = [
+      "⏺ Usage limit reached · continuing automatically at 6:10pm · esc to cancel",
+      "",
+      "✻ Cogitated for 9m 52s · done 3:44 PM",
+      "─".repeat(80),
+      "❯ ",
+      "─".repeat(80),
+      "  ⚠ Usage limit reached · limit resets 6:10pm · clau.de/wrap-up",
+      "    Continuing automatically at 6:10pm · esc to cancel · /usage-credits to continue now",
+      "  fresh · session 99%, resets in 1h 25m · week 27%, resets in 6d 10h",
+      "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents",
+    ].join("\n");
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(pane))).toBe("idle");
+  });
+
   test("rewind: Restore dialog with 'Enter to continue · Esc to cancel'", () => {
     const region = extractTmuxLiveRegion(REWIND_PANE);
     expect(classifyTmuxLiveState(region)).toBe("rewind");

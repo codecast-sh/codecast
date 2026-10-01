@@ -7,7 +7,7 @@ import { roleByHandleForRead, rolesInBoundary, userCanAdminRole } from "./lib/or
 import { checkConversationAccess } from "./privacy";
 import { personName, performReparentSession } from "./sessionOwnership";
 import { refuseUnlessHuman, performReparentRole, performSetCaps, performSetTrust, performUpdateRole } from "./orgRoles";
-import { removeSessionOwnerRow, syncPrimaryOwnerCache } from "./sessionOwners";
+import { ownerSetOf, removeSessionOwnerRow, setSessionOwnerRows, syncPrimaryOwnerCache } from "./sessionOwners";
 import { patchTask } from "./agentTasks";
 import { recalcPlanProgress } from "./tasks";
 import { setTaskStatus } from "./orgInit";
@@ -215,7 +215,12 @@ export async function planUndo(ctx: Ctx, userId: Id<"users">, ref: string, inclu
   if (included.some((id) => !dependencies.some((d) => d.batch === id))) throw new Error("Only the displayed dependent entries can be undone together");
   const batches = [...preview.depends, { _id: target._id, seq: target.seq }].sort((a, b) => b.seq - a.seq);
   const virtual = new Map<string, any>();
-  const read = async (id: string): Promise<any> => virtual.has(String(id)) ? virtual.get(String(id)) : ctx.db.get(id);
+  // A session reads with its owner set, which its write records as `owner_user_ids`.
+  const read = async (id: string): Promise<any> => {
+    if (virtual.has(String(id))) return virtual.get(String(id));
+    const doc = await ctx.db.get(id);
+    return doc && ctx.db.normalizeId("conversations", id) ? { ...doc, owner_user_ids: await ownerSetOf(ctx, doc._id) } : doc;
+  };
   const steps: Step[] = [];
   let messageCount = 0;
   const sessions = new Set<string>();
@@ -270,7 +275,7 @@ export async function planUndo(ctx: Ctx, userId: Id<"users">, ref: string, inclu
 
 async function restoreWrite(ctx: Ctx, userId: Id<"users">, w: OrgWrite) {
   const current = await ctx.db.get(w.id);
-  const patch = patchOf(w.before);
+  const { owner_user_ids: owners, ...patch } = patchOf(w.before);
   if (w.table === "org_roles" && current.status !== "retired" && patch.status !== "retired") {
     if (patch.reports_to) await performReparentRole(ctx, userId, { role_id: w.id, reports_to: patch.reports_to });
     if (patch.caps) await performSetCaps(ctx, userId, { role_id: w.id, hands: patch.caps.hands_per_day, wakes: patch.caps.wakes_per_day, tokens: patch.caps.tokens_per_day });
@@ -292,8 +297,9 @@ async function restoreWrite(ctx: Ctx, userId: Id<"users">, w: OrgWrite) {
     if (patch.status === "decommissioned") { for (const m of memberships) await ctx.db.delete(m._id); }
     else if (!memberships.length) await ctx.db.insert("team_memberships", { user_id: current.bot_user_id, team_id: current.team_id, role: "member", joined_at: Date.now(), visibility: "full" });
   }
-  if (w.table === "agent_tasks") await patchTask(ctx, current, { ...patch, ...(patch.status === "scheduled" && current.interval_ms ? { run_at: Date.now() + current.interval_ms } : {}) });
+  if (w.table === "agent_tasks") await patchTask(ctx, current, { ...patch, ...(patch.status === "scheduled" && current.interval_ms ? { run_at: Date.now() + current.interval_ms, cadence_slot_at: undefined } : {}) });
   else await ctx.db.patch(w.id, patch);
+  if (w.table === "conversations" && owners) await setSessionOwnerRows(ctx, current._id, owners, userId);
   if (w.table === "tasks" && current.plan_id) await recalcPlanProgress(ctx, current.plan_id, current._id, patch.status ?? current.status);
 }
 

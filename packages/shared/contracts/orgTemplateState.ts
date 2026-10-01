@@ -74,13 +74,20 @@ export function markSetup(manifest: OrgTemplate, state: InstanceState, id: strin
   return next;
 }
 
-export type SetupRow = { id: string; title: string; who: "human" | "role"; status: SetupState["status"]; unlocks: string[]; price?: string; how?: string; evidence?: string };
-export function setupRows(manifest: OrgTemplate, state: InstanceState): SetupRow[] {
-  return (manifest.setup ?? []).map((item) => ({ id: item.id, title: item.title, who: item.who, status: state.setup?.[item.id]?.status ?? "open", unlocks: item.unlocks ?? [], price: item.price, how: item.how, evidence: state.setup?.[item.id]?.evidence }));
+/**
+ * A setup item's words with the instance's values filled in: its title, its
+ * price and its how-to guide. The host renders them at bind, from the pinned
+ * release and the receipt (one renderer: the CLI's substitute), and the
+ * instance row carries them for the role page. Absent before the host step.
+ */
+export type SetupText = Record<string, { title: string; price?: string; guide?: string }>;
+export type SetupRow = { id: string; title: string; who: "human" | "role"; status: SetupState["status"]; unlocks: string[]; price?: string; how?: string; guide?: string; evidence?: string };
+export function setupRows(manifest: OrgTemplate, state: InstanceState, text: SetupText = {}): SetupRow[] {
+  return (manifest.setup ?? []).map((item) => ({ id: item.id, title: text[item.id]?.title ?? item.title, who: item.who, status: state.setup?.[item.id]?.status ?? "open", unlocks: item.unlocks ?? [], price: text[item.id]?.price ?? item.price, how: item.how, guide: text[item.id]?.guide, evidence: state.setup?.[item.id]?.evidence }));
 }
-/** The one ask (H5): the first open human item in the manifest's order, which is the author's value order. */
-export function nextHumanAsk(manifest: OrgTemplate, state: InstanceState): SetupRow | undefined {
-  return setupRows(manifest, state).find((row) => row.who === "human" && row.status === "open");
+/** The one ask (H5): the first open human item in the manifest's order, which is the author's value order. A skipped item is not open, so the ask moves past it. */
+export function nextHumanAsk(manifest: OrgTemplate, state: InstanceState, text?: SetupText): SetupRow | undefined {
+  return setupRows(manifest, state, text).find((row) => row.who === "human" && row.status === "open");
 }
 
 export function readiness(manifest: OrgTemplate, state: InstanceState, trust: "understand" | "decide" | "direct", now = Date.now()): Record<string, RoutineReadiness> {

@@ -29,6 +29,17 @@ function fileWith(body: string): string {
   return `# My own notes\n\nkeep me\n\n${body.replace(/^\n+/, "")}\n`;
 }
 
+/** A body an older cast could have written: the first line of prose under the
+ *  heading reads differently. Derived from the text it is given, so rewording
+ *  the snippet can never turn the edit into a no-op. */
+function drift(body: string): string {
+  const prose = body.split("\n").find((line) => /^[A-Za-z`*]/.test(line));
+  expect(prose).toBeDefined();
+  const drifted = body.replace(prose!, `${prose} An older cast said this.`);
+  expect(drifted).not.toBe(body);
+  return drifted;
+}
+
 describe("section version stamp", () => {
   test("sits on its own line immediately above the end marker", () => {
     const stamped = stampSectionBody(calls.section!.body, END, "9.9.9");
@@ -143,7 +154,7 @@ describe("guidanceSectionStatus — what cast doctor reads", () => {
   });
 
   test("a body written by an older cast reads as stale, and names it", () => {
-    const older = current.replace("The team's huddles", "Huddles");
+    const older = drift(current);
     const rows = guidanceSectionStatus({
       files: [{ label: "CLAUDE.md", text: fileWith(older) }],
       config,
@@ -167,7 +178,7 @@ describe("guidanceSectionStatus — what cast doctor reads", () => {
   });
 
   test("drift in a pre-stamp section is stale with no version to name", () => {
-    const drifted = calls.section!.body.replace("The team's huddles", "Huddles");
+    const drifted = drift(calls.section!.body);
     const rows = guidanceSectionStatus({
       files: [{ label: "CLAUDE.md", text: fileWith(drifted) }],
       config,
@@ -213,7 +224,7 @@ describe("guidanceSectionStatus — what cast doctor reads", () => {
     const rows = guidanceSectionStatus({
       files: [
         { label: "CLAUDE.md", text: fileWith(current) },
-        { label: "AGENTS.md", text: fileWith(current.replace("The team's huddles", "Huddles")) },
+        { label: "AGENTS.md", text: fileWith(drift(current)) },
       ],
       config,
       version: "1.0.0",

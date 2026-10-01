@@ -1688,6 +1688,10 @@ export default defineSchema({
     evidence: v.optional(v.record(v.string(), v.object({ status: v.union(v.literal("pass"), v.literal("fail")), observed_at: v.number(), source: v.string(), detail: v.optional(v.record(v.string(), v.string())) }))),
     scoreboard: v.optional(v.record(v.string(), v.object({ value: v.string(), observed_at: v.number(), source: v.string() }))),
     setup: v.optional(v.record(v.string(), v.object({ status: v.union(v.literal("open"), v.literal("done"), v.literal("skipped")), done_at: v.optional(v.number()), evidence: v.optional(v.string()) }))),
+    // Each setup item's title, price and how-to guide with the instance's
+    // values filled in, rendered by the host at bind (it holds the release and
+    // the paths): what the role page shows under a setup step.
+    setup_text: v.optional(v.record(v.string(), v.object({ title: v.string(), price: v.optional(v.string()), guide: v.optional(v.string()) }))),
     created_by: v.id("users"),
     created_at: v.number(),
     updated_at: v.number(),
@@ -4333,6 +4337,11 @@ export default defineSchema({
     ),
     run_at: v.optional(v.number()),
     interval_ms: v.optional(v.number()),
+    // A recurring trigger's cadence slot, held only while run_at is off the
+    // cadence (a manual run, a retry, a limit park: agentTasks.offCadence), so
+    // the arming after the run returns to the cadence. Absent otherwise:
+    // run_at is then the slot.
+    cadence_slot_at: v.optional(v.number()),
     event_filter: v.optional(v.object({
       event_type: v.string(),
       action: v.optional(v.string()),

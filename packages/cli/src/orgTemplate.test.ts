@@ -100,6 +100,11 @@ class Server {
         this.roles.push(role); decision.applied_at = Date.now(); decision.applied_note = `created @${role.handle} (${role.short_id})`;
         return { status: "applied", role: { id: role._id, short_id: role.short_id }, note: decision.applied_note };
       }
+      case "/cli/role/update": {
+        const role = this.roles.find((r) => r._id === body.role_id);
+        if (role && body.charter !== undefined) role.charter = body.charter;
+        return role;
+      }
       case "/cli/role/provision": {
         this.roles[0].anchor_id = "anchor-1";
         this.anchors = [{ anchor_id: "anchor-1", org_role_id: "role-1", conversation_id: "standing-1" }];
@@ -117,6 +122,12 @@ class Server {
         const row = this.instances.find((r) => r.instance_key === body.instance_key) ?? this.instances.find((r) => r.instance === body.instance && r.project_id === body.project_id && r.phase === "awaiting_host");
         if (row) { Object.assign(row, body); return row; }
         const created = { ...body, _id: `inst-${this.instances.length + 1}` }; this.instances.push(created); return created;
+      }
+      // The role page's marks live on the row (`setup_marks`); a test sets them as a person on the page would.
+      case "/cli/org/template/instance-status": {
+        const row = this.instances.find((r) => r.instance_key === body.instance_key);
+        if (!row) throw new Error("Instance not found");
+        return { ...row, setup_marks: row.setup_marks ?? {} };
       }
       case "/cli/org/template/evidence": case "/cli/org/template/report": case "/cli/org/template/setup": {
         if (!this.instances.some((r) => r.instance_key === body.instance_key)) throw new Error("Instance not found");
@@ -574,6 +585,56 @@ describe("instance record, readiness and the loader", () => {
     expect(lapsed).toContain("Mode now: propose.\nNot met for weekly: evidence technical is 9 days old.\nPropose mode: read, draft and report; make no external change, spend nothing, publish nothing.");
     expect(await templateInstructions(server.deps, "acme", "charter", options)).not.toContain("Mode now");
   }, 30000);
+  test("a setup step's guide is filled for the instance, carried by bind, returned by instructions; a mark from the role page reaches the terminal", async () => {
+    const m: any = { ...manifest(), schemaVersion: 2, version: "2.0.0",
+      inputs: [{ key: "product.domain", label: "Domain", kind: "string", required: true }],
+      setup: [
+        { id: "search-console", title: "Verify {{input.product.domain}} in Search Console", who: "human", unlocks: ["weekly"], how: "org/setup/search-console.md", price: "indexing signals for {{input.product.domain}}" },
+        { id: "publora", title: "Connect Publora", who: "human" },
+        { id: "measurement", title: "See one real event", who: "role", how: "org/setup/measurement.md" },
+      ] };
+    const source = folder(m);
+    fs.mkdirSync(path.join(source, "org/setup"));
+    fs.writeFileSync(path.join(source, "org/setup/search-console.md"), "Verify {{input.product.domain}} for {{instance}} in {{project.dir}}.\nThe script is at {{template.root}}/scripts/verify.sh.");
+    fs.writeFileSync(path.join(source, "org/setup/measurement.md"), "Name the event for {{project.name}}.");
+    const server = new Server(tmp());
+    const options: TemplateOptions = { dir: server.dir, project: "project-1", team: "team-1", session: "sess-1", input: ["product.domain=acme.io"] };
+    await installTemplate(server.deps, source, "acme", options);
+    server.approve(); await reconcileTemplate(server.deps, "acme", options);
+    const receipt = await bindTemplate(server.deps, "acme", options);
+    // Bind hands the server every step's words with this instance's values: the role page shows these.
+    const guide = `Verify acme.io for acme in ${receipt.project.dir}.\nThe script is at ${receipt.template.root}/scripts/verify.sh.`;
+    expect(server.instances[0].setup_text).toEqual({
+      "search-console": { title: "Verify acme.io in Search Console", price: "indexing signals for acme.io", guide },
+      publora: { title: "Connect Publora" },
+      measurement: { title: "See one real event", guide: "Name the event for Product." },
+    });
+    // The role hands a person the same guide.
+    const handed = await templateInstructions(server.deps, "acme", "setup:search-console", options);
+    expect(handed).toContain("Setup step search-console: Verify acme.io in Search Console (indexing signals for acme.io)");
+    expect(handed).toContain("A person's step");
+    expect(handed.endsWith(guide)).toBe(true);
+    expect(await templateInstructions(server.deps, "acme", "setup:measurement", options)).toContain("The role's own step.\n\nName the event for Product.");
+    expect(await templateInstructions(server.deps, "acme", "setup:publora", options)).toContain("no written guide");
+    await expect(templateInstructions(server.deps, "acme", "setup:nope", options)).rejects.toThrow(/Not a setup item/);
+    // The terminal's list carries the filled titles and prices, never the guides.
+    let status = await templateStatus(server.deps, "acme", options);
+    expect(status.ask).toMatchObject({ id: "search-console", title: "Verify acme.io in Search Console", price: "indexing signals for acme.io" });
+    expect(status.setup.every((row: any) => row.guide === undefined)).toBe(true);
+    // A person skips the step on the role page: the server row holds the mark, and the role's next read moves past it.
+    server.instances[0].setup_marks = { "search-console": { status: "skipped" } };
+    status = await templateStatus(server.deps, "acme", options);
+    expect(status.ask).toMatchObject({ id: "publora" });
+    const rows = await setupTemplate(server.deps, "acme", undefined, options) as any[];
+    expect(rows.map((r) => [r.id, r.status])).toEqual([["search-console", "skipped"], ["publora", "open"], ["measurement", "open"]]);
+    expect(readReceipt(server.dir, "acme").setup).toEqual({ "search-console": { status: "skipped" } });
+    // Reopened on the page: the ask returns. A mark the receipt alone holds is kept.
+    await setupTemplate(server.deps, "acme", "measurement", { ...options, done: true, evidence: "ct-1" });
+    server.instances[0].setup_marks = { "search-console": { status: "open" } };
+    status = await templateStatus(server.deps, "acme", options);
+    expect(status.ask).toMatchObject({ id: "search-console" });
+    expect(status.setup.map((r: any) => [r.id, r.status])).toEqual([["search-console", "open"], ["publora", "open"], ["measurement", "done"]]);
+  }, 30000);
 });
 
 test("registers lazy org template commands and UI install flags", () => {
@@ -631,6 +692,12 @@ describe("the host step for a hire accepted on the web (org-hire.md H1, H3)", ()
     expect(bound.config).toEqual({ "product.slug": "acme" });
     // Seated and armed: the standing session was provisioned, the routines created paused.
     expect(server.calls.some((c) => c.endpoint === "/cli/role/provision")).toBe(true);
+    // The role's charter is the loader for the pinned release, as a terminal install
+    // proposes it, set before the standing session is seated and briefed.
+    const charterAt = server.calls.findIndex((c) => c.endpoint === "/cli/role/update");
+    expect(charterAt).toBeGreaterThan(-1);
+    expect(charterAt).toBeLessThan(server.calls.findIndex((c) => c.endpoint === "/cli/role/provision"));
+    expect(server.roles[0].charter).toContain("cast org template instructions 'acme-growth' 'charter'");
     expect(server.triggers.map((t: any) => [t.title, t.status])).toEqual([["CMO portfolio review", "paused"], ["Ads monitoring", "paused"]]);
     // The server row is the same row, taken over by the receipt's key, ready, with the secret by hash only.
     expect(server.instances).toHaveLength(1);
@@ -641,8 +708,10 @@ describe("the host step for a hire accepted on the web (org-hire.md H1, H3)", ()
     expect(fs.readFileSync(path.join(server.dir, ".codecast/packs/growth.toml"), "utf8")).toContain(secret);
     // A rerun reads the receipt it wrote; nothing is provisioned or created twice.
     const provisions = server.calls.filter((c) => c.endpoint === "/cli/role/provision").length;
+    const charterSets = server.calls.filter((c) => c.endpoint === "/cli/role/update").length;
     const again = await bindTemplate(server.deps, "acme-growth", options);
     expect(again.key).toBe(bound.key);
+    expect(server.calls.filter((c) => c.endpoint === "/cli/role/update").length).toBe(charterSets);
     expect(server.calls.filter((c) => c.endpoint === "/cli/role/provision").length).toBe(provisions);
     expect(server.triggers).toHaveLength(2);
     // The receipt is a full one: status and instructions work on it.

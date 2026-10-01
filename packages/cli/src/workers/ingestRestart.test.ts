@@ -94,8 +94,9 @@ describe("a cloud agent mirror across a restart", () => {
   });
   test("the pass keeps a known mirror's session before it returns on an empty delta", () => {
     const pass = daemon.slice(daemon.indexOf("async function processTranscriptDeltaSessionPass("));
-    const keep = pass.indexOf("if (keptConversation) await cloudAgents.keepSession(");
-    const emptyReturn = pass.indexOf("if (newMessages.length === 0 && orphanUuids.length === 0)");
+    const keep = pass.indexOf("const hostedHere = keptConversation ? await cloudAgents.keepSession(");
+    // Nothing new, or another live device hosts the mirror and syncs it: return.
+    const emptyReturn = pass.indexOf("if ((newMessages.length === 0 && orphanUuids.length === 0) || !hostedHere)");
     expect(keep).toBeGreaterThan(0);
     expect(keep).toBeLessThan(emptyReturn);
     // A conversation this pass created is kept once, after it exists; a known one is not kept twice.

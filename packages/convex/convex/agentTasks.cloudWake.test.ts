@@ -197,7 +197,8 @@ describe("dispatchCloudTriggers", () => {
       last_run_summary: "old summary", last_run_session_uuid: "old-session",
     })] });
     await dispatch(ctx);
-    expect(tables.agent_tasks[0]).toMatchObject({ status: "scheduled", run_count: 8, run_at: NOW + 60_000, retry_count: 0 });
+    // Re-armed one interval after its slot (NOW - 1), not after the dispatch.
+    expect(tables.agent_tasks[0]).toMatchObject({ status: "scheduled", run_count: 8, run_at: NOW - 1 + 60_000, retry_count: 0 });
     for (const field of ["lease_holder", "lease_expires_at", "last_run_summary", "last_run_session_uuid"]) {
       expect(tables.agent_tasks[0][field]).toBeUndefined();
     }

@@ -286,11 +286,15 @@ describe("daemon restart gating", () => {
     expect(body).toContain("processedPollCommandIds.has(c.id)");
     // The claim goes out for the whole batch before the serial execute loop.
     const primeAt = body.indexOf("primeCommandClaims(");
-    const executeAt = body.indexOf("await executeRemoteCommand(");
+    const executeAt = body.indexOf("executeRemoteCommand(");
     expect(primeAt).toBeGreaterThan(-1);
     expect(executeAt).toBeGreaterThan(primeAt);
+    // Serial: every command waits for the one before it, except the few that
+    // wait minutes on a provider and report their own result.
+    expect(body).toContain("if (DETACHED_COMMANDS.has(cmd.command)) void run.catch(");
+    expect(body).toContain("else await run;");
     // And the old per-path loops are gone: one call site, inside the batch.
-    expect(daemon.split("await executeRemoteCommand(").length - 1).toBe(1);
+    expect(daemon.split(/(?<!function )executeRemoteCommand\(/).length - 1).toBe(1);
   });
 
   // Priming ahead of the owner guard is safe only because the guard hands the

@@ -447,6 +447,11 @@ export const storeUserToken = internalMutation({
     await ctx.scheduler.runAfter(0, internal.slackSync.linkSignedInPerson, {
       installation_id: install._id, user_id: userId, slack_user_id: args.slack_user_id,
     });
+    // A reconnect that adds files:read turns the DM images that came over as
+    // links into the images they are.
+    if (tokenHasDmScopes(args.scopes)) {
+      await ctx.scheduler.runAfter(0, internal.slackSync.repairFileLinks, { installation_id: install._id, user_id: userId });
+    }
     return { ok: true as const };
   },
 });
