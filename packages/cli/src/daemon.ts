@@ -9831,16 +9831,8 @@ async function resolveTeamLeadConversation(
           queue.push(child);
         }
       }
-      try {
-        const regPath = path.join(process.env.HOME || "", ".claude", "sessions", `${pid}.json`);
-        if (fs.existsSync(regPath)) {
-          const reg = JSON.parse(fs.readFileSync(regPath, "utf-8"));
-          const sid = reg?.sessionId;
-          if (typeof sid === "string" && conversationCache[sid]) {
-            leadConvIds.add(conversationCache[sid]);
-          }
-        }
-      } catch {}
+      const sid = readPidRegistrySessionId(pid);
+      if (sid && conversationCache[sid]) leadConvIds.add(conversationCache[sid]);
     }
     // Exactly one live non-member agent in this tmux session — that's the lead.
     // Zero or several means we can't tell; stay unlinked rather than guess.
@@ -9897,14 +9889,33 @@ const SPAWN_LINK_MAX_ATTEMPTS = 3;
 const pendingNativeParents = new Map<string, { parentSessionId: string; description?: string }>();
 const retiringCodexReviews = new Set<string>();
 
+function pidRegistryDir(): string {
+  return path.join(process.env.HOME || "", ".claude", "sessions");
+}
+
 function readPidRegistrySessionId(pid: number): string | null {
   try {
-    const regPath = path.join(process.env.HOME || "", ".claude", "sessions", `${pid}.json`);
+    const regPath = path.join(pidRegistryDir(), `${pid}.json`);
     if (!fs.existsSync(regPath)) return null;
     const reg = JSON.parse(fs.readFileSync(regPath, "utf-8"));
     return typeof reg?.sessionId === "string" ? reg.sessionId : null;
   } catch {
     return null;
+  }
+}
+
+// A headless claude (`claude -p`, which is what `cast exec` runs) has no tty
+// and appends to its transcript without holding it open, so neither lsof nor
+// findSessionProcess finds it. It still registers its own pid.
+function pidsRegisteredForSession(sessionId: string): number[] {
+  try {
+    return fs.readdirSync(pidRegistryDir())
+      .map((name) => /^(\d+)\.json$/.exec(name)?.[1])
+      .filter((pid): pid is string => !!pid)
+      .map(Number)
+      .filter((pid) => readPidRegistrySessionId(pid) === sessionId);
+  } catch {
+    return [];
   }
 }
 
@@ -9988,7 +9999,7 @@ async function walkSpawnerCandidates(
   let pids = await pidsWithFileOpen(filePath);
   if (pids.length === 0) {
     const proc = await findSessionProcess(sessionId, agentType).catch(() => null);
-    if (proc) pids = [proc.pid];
+    pids = proc ? [proc.pid] : pidsRegisteredForSession(sessionId);
   }
   if (pids.length === 0) return [];
   const psOut = (await psSnapshotLines(["-axo", "pid=,ppid="])).join("\n");
@@ -20163,6 +20174,7 @@ async function runHeartbeatMaintenance(): Promise<void> {
     // Same cadence as the reaper, and deliberately after it: a session the
     // reaper just retired is not a live session the cap has to park.
     await runHibernationPass().catch((e) => log(`[HIBERNATE] pass error: ${(e as Error)?.message ?? e}`));
+    await migrateLegacyPanesToFleet().catch((e) => log(`[CC-FLEET] migration pass error: ${(e as Error)?.message ?? e}`));
     // And the browser engines those agents left behind (engineReap.ts).
     await reapOrphanEngines().catch((e) => reaperLog(`engine reap failed: ${(e as Error)?.message ?? e}`, false));
   }
@@ -22003,6 +22015,62 @@ export async function hibernateSessionNow(
   cand.conversationId ??= conversationId;
   const refusal = await attemptHibernation(cand, io);
   return refusal ? { result: `skipped_${refusal}`, error: `not parked: ${refusal}` } : { result: "hibernated" };
+}
+
+// A Claude pane launched before the fleet store holds a credential of its own
+// (a setup-token in its env, a profile store, or the keychain login), so it
+// cannot follow a fleet switch and runs its own account out: on 2026-09-30
+// eight such panes hit a limit on an account the fleet had already left. Each
+// one is moved onto the store at a moment that costs it nothing: idle past the
+// prompt cache's hour, under every gate hibernation uses, parked and resumed
+// at once so it comes back on the store. A few per pass, until none are left.
+const FLEET_MIGRATE_IDLE_MS = 60 * 60 * 1000;
+const FLEET_MIGRATE_PER_PASS = 3;
+
+async function migrateLegacyPanesToFleet(io: HibernationPassIo = productionHibernationIo): Promise<number> {
+  if (!fleetStoreReady() || !hasTmux()) return 0;
+  const legacy = new Set(liveClaudeSessions().filter((s) => s.account !== FLEET_GATE_ACCOUNT).map((s) => s.id));
+  if (legacy.size === 0) return 0;
+  const candidates = await collectHibernationCandidates(io);
+  if (!candidates) return 0;
+  const now = Date.now();
+  for (const [sessionId, at] of hibernationRefusedAt) {
+    if (now - at >= HIBERNATE_REFUSAL_BACKOFF_MS) hibernationRefusedAt.delete(sessionId);
+  }
+  const skips: string[] = [];
+  const known = new Set(candidates.map((c) => c.tmux));
+  for (const id of legacy) if (!known.has(id)) skips.push("no-candidate");
+  // "Idle" here is the prompt cache's question: when did the session last
+  // write a turn. The transcript's mtime answers it; a quiet CPU does not.
+  const turnAgo = new Map<string, number>();
+  for (const c of candidates) {
+    if (!legacy.has(c.tmux)) continue;
+    const file = findSessionJsonlPath(c.sessionId);
+    const mtime = file ? await fs.promises.stat(file).then((st) => st.mtimeMs, () => undefined) : undefined;
+    if (mtime !== undefined) turnAgo.set(c.sessionId, now - mtime);
+  }
+  const eligible = candidates.filter((c) => {
+    if (!legacy.has(c.tmux)) return false;
+    const ago = turnAgo.get(c.sessionId);
+    const reason = ago === undefined ? "no-transcript"
+      : ago < FLEET_MIGRATE_IDLE_MS ? "turn-within-1h"
+      : hibernationRefusedAt.has(c.sessionId) ? "refused-recently"
+      : hibernationBlockReason(c);
+    if (reason) skips.push(reason);
+    return !reason;
+  });
+  const picks = eligible.sort((a, b) => turnAgo.get(b.sessionId)! - turnAgo.get(a.sessionId)!).slice(0, FLEET_MIGRATE_PER_PASS);
+  reaperLog(`fleet migration pass: ${legacy.size} legacy pane(s), picked ${picks.length}, skipped: ${summarizeReapSkips(skips)}`, false);
+  let moved = 0;
+  for (const cand of picks) {
+    const refusal = await attemptHibernation(cand, io);
+    if (refusal) { hibernationRefusedAt.set(cand.sessionId, now); continue; }
+    const resumed = await autoResumeSession(cand.sessionId, "", readTitleCache(), undefined, cand.conversationId, "claude");
+    if (resumed) moved++;
+    reaperLog(`fleet migration: ${cand.sessionId.slice(0, 8)} ${resumed ? "restarted onto the fleet store" : "parked; it resumes on the store at its next message"}`, false);
+  }
+  if (picks.length) log(`[CC-FLEET] moved ${moved}/${picks.length} idle legacy pane(s) onto the fleet store; ${legacy.size - moved} legacy left`);
+  return moved;
 }
 
 // When the gates last refused each session, so the next passes offer their
