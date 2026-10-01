@@ -17,7 +17,7 @@ import { paginationOptsValidator } from "convex/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { AgentStatus, ThreadStateStatus } from "@codecast/shared/contracts";
 import { PATCHABLE_CONVERSATION_FIELDS, forkSeedClientId } from "@codecast/shared/contracts";
-import { avatarOf } from "@codecast/shared/contracts/orgAvatars";
+import { identityFieldsOf } from "./lib/sessionIdentityFields";
 import { normalizeCharacterFields } from "@codecast/shared/contracts/sessionCharacter";
 import {
   openTasksVouchForWaiting,
@@ -97,6 +97,7 @@ import {
   conversationMatchesAllTerms,
   calculateProximityScore,
   rankConversationsByCoverage,
+  groupMessagesByConversation,
   type ParsedTerms,
 } from "./searchCore";
 import { MIRROR_WINDOW_MS } from "./searchMirror";
@@ -104,7 +105,9 @@ import { parseSessionQuery, type SessionQuery } from "@codecast/shared/search";
 import { narrowByOperators, type OperatorCandidate, type OperatorScope } from "./sessionQuerySearch";
 import { requireUser } from "./lib/auth";
 import { liveConversationIdSet } from "./lib/liveSessions";
+import { isDeletedSession } from "./lib/deletedSessions";
 import { readLocalViewRevision, runLocalCommand } from "./localFirstCommands";
+import { claimShareToken } from "./publicShare";
 import {
   FAVORITES_GRANT_KEY,
   FAVORITES_VIEW_CONTRACT_ID,
@@ -437,15 +440,18 @@ async function fetchTitleFieldHits(ctx: QueryCtx, terms: ParsedTerms) {
       .withSearchIndex("search_idle_summary", (q) => q.search("idle_summary", searchQuery))
       .take(50),
   ]);
-  const hits = new Map<string, Doc<"conversations">>();
+  // The index matches any one word; a session qualifies only by the same
+  // coverage rule content search uses, so "jon stewart" does not surface every
+  // summary that mentions a Jon. Best coverage first.
+  const convs = new Map<string, Doc<"conversations">>();
+  const groups = new Map<string, Array<{ content: string }>>();
   for (const conv of fieldHits.flat()) {
     const convId = conv._id.toString();
-    if (hits.has(convId)) continue;
-    const directFields = `${conv.title || ""} ${conv.subtitle || ""} ${conv.idle_summary || ""}`;
-    if (!contentMatchesAnyTerm(directFields, terms)) continue;
-    hits.set(convId, conv);
+    if (convs.has(convId)) continue;
+    convs.set(convId, conv);
+    groups.set(convId, [{ content: `${conv.title || ""} ${conv.subtitle || ""} ${conv.idle_summary || ""}` }]);
   }
-  return hits;
+  return new Map(rankConversationsByCoverage(groups, terms).map((r) => [r.convId, { conv: convs.get(r.convId)!, coverage: r.coverage }]));
 }
 
 // First-message fetch only feeds a title fallback, so it's only needed for
@@ -1183,6 +1189,9 @@ export const createConversation = mutation({
     }
 
     await checkRateLimit(ctx, args.user_id, "createConversation");
+    if (await isDeletedSession(ctx, args.user_id, args.session_id)) {
+      throw new Error("Session deleted by its owner");
+    }
     const forkOrigin = args.fork ? await ctx.db.get(args.fork.from) : null;
     if (args.fork && forkOrigin?.user_id !== args.user_id) {
       throw new Error("Unauthorized: can only fork your own conversations");
@@ -3102,26 +3111,15 @@ export const generateShareLink = mutation({
 // counts only while its token matches), and turning it back on takes a new
 // token, so an old link never comes back to life. A profile pin is served by
 // that same token, so turning the link off also takes it off the profile.
-const SHARE_TOKEN_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 export async function writeShareLink(ctx: Pick<MutationCtx, "db">, userId: Id<"users">, conversationId: string, token: string | null) {
   const id = ctx.db.normalizeId("conversations", conversationId);
   const conversation = id ? await ctx.db.get(id) : null;
   if (!conversation) throw new Error("Conversation not found");
   if (conversation.user_id.toString() !== userId.toString())
     throw new Error("Unauthorized: can only change sharing on your own conversations");
-  if (token === null) {
-    if (conversation.share_token || conversation.profile_pinned_at)
-      await ctx.db.patch(conversation._id, { share_token: undefined, profile_pinned_at: undefined });
-    return;
-  }
-  if (!SHARE_TOKEN_SHAPE.test(token)) throw new Error("Invalid share token");
-  if (conversation.share_token === token) return;
-  const taken = await ctx.db
-    .query("conversations")
-    .withIndex("by_share_token", (q) => q.eq("share_token", token))
-    .first();
-  if (taken) throw new Error("Invalid share token");
-  await ctx.db.patch(conversation._id, { share_token: token });
+  if (token === null && conversation.profile_pinned_at)
+    await ctx.db.patch(conversation._id, { profile_pinned_at: undefined });
+  await claimShareToken(ctx, "conversations", conversation, token);
 }
 
 // Pin a session to the owner's PUBLIC profile. This is the consent act that
@@ -3478,35 +3476,22 @@ export const searchConversations = query({
         });
     const matchedAt = new Map(operatorRun?.hits.map((h) => [h.conv._id.toString(), h.matchedAt]));
 
-    // Group messages by conversation (keep messages matching ANY term for context)
-    const conversationMessages = new Map<string, typeof searchResults>();
-    for (const msg of searchResults) {
-      if (userOnly && msg.role !== "user") {
-        continue;
-      }
-      if (!contentMatchesAnyTerm(msg.content || "", terms)) {
-        continue;
-      }
-      const convId = msg.conversation_id.toString();
-      if (!conversationMessages.has(convId)) {
-        conversationMessages.set(convId, []);
-      }
-      conversationMessages.get(convId)!.push(msg);
-    }
+    // Best coverage, as cast search ranks it: a short query needs every word,
+    // a longer one at least half, so a sentence degrades to its best matches
+    // instead of to nothing. Quoted phrases stay required.
+    const conversationMatches = new Map(
+      rankConversationsByCoverage(groupMessagesByConversation(searchResults, terms, userOnly), terms)
+        .map((r) => [r.convId, r]),
+    );
 
-    // Filter to conversations where ALL terms appear (across any messages)
-    const conversationMatches = new Map<string, typeof searchResults>();
-    for (const [convId, messages] of conversationMessages) {
-      if (conversationMatchesAllTerms(messages, terms)) {
-        conversationMatches.set(convId, messages);
-      }
-    }
-
-    const titleConvs = new Map<string, Doc<"conversations">>();
+    const titleConvs = new Map<string, { conv: Doc<"conversations">; coverage: number }>();
     if (!userOnly && !operatorRun) {
-      for (const [convId, conv] of await fetchTitleFieldHits(ctx, terms)) {
-        if (conversationMatches.has(convId)) continue;
-        titleConvs.set(convId, conv);
+      for (const [convId, hit] of await fetchTitleFieldHits(ctx, terms)) {
+        // A session whose title covers more of the query than its messages
+        // ranks by the better of the two.
+        const content = conversationMatches.get(convId);
+        if (content) content.coverage = Math.max(content.coverage, hit.coverage);
+        else titleConvs.set(convId, hit);
       }
     }
 
@@ -3538,18 +3523,18 @@ export const searchConversations = query({
     // await-in-loop, the dominant source of latency on common queries).
     const matchEntries = [...conversationMatches.values()];
     const matchConvs = await Promise.all(
-      matchEntries.map((messages) => ctx.db.get(messages[0].conversation_id))
+      matchEntries.map(({ messages }) => ctx.db.get(messages[0].conversation_id))
     );
-    const candidates: Array<{ conv: Doc<"conversations">; messages: typeof searchResults }> = [];
-    matchEntries.forEach((messages, i) => {
+    const candidates: Array<{ conv: Doc<"conversations">; messages: typeof searchResults; coverage: number }> = [];
+    matchEntries.forEach(({ messages, coverage }, i) => {
       const conv = matchConvs[i];
-      if (conv) candidates.push({ conv, messages });
+      if (conv) candidates.push({ conv, messages, coverage });
     });
-    for (const conv of titleConvs.values()) {
-      candidates.push({ conv, messages: [] });
+    for (const { conv, coverage } of titleConvs.values()) {
+      candidates.push({ conv, messages: [], coverage });
     }
     for (const hit of operatorRun?.hits ?? []) {
-      candidates.push({ conv: hit.conv, messages: hit.messages });
+      candidates.push({ conv: hit.conv, messages: hit.messages, coverage: hit.coverage });
     }
 
     // Visibility filter is synchronous (no DB) — drop non-visible candidates first.
@@ -3566,15 +3551,17 @@ export const searchConversations = query({
       ...c,
       proximityScore: calculateProximityScore(c.messages, terms),
     }));
+    // Either sort ranks full matches above partial ones first.
     if (args.sort === "relevance") {
       scored.sort((a, b) =>
+        b.coverage - a.coverage ||
         b.proximityScore - a.proximityScore ||
         b.messages.length - a.messages.length ||
         b.conv.updated_at - a.conv.updated_at);
     } else {
       // An operator match is as recent as the change that matched it.
       const at = (c: (typeof scored)[number]) => matchedAt.get(c.conv._id.toString()) ?? c.conv.updated_at;
-      scored.sort((a, b) => at(b) - at(a));
+      scored.sort((a, b) => b.coverage - a.coverage || at(b) - at(a));
     }
     const totalMatches = scored.reduce((sum, c) => sum + c.messages.length, 0);
     const totalSessions = scored.length;
@@ -3682,12 +3669,12 @@ export const searchConversationTitles = query({
     const scope = await loadConversationSearchScope(ctx, userId, user, args);
     const hits = await fetchTitleFieldHits(ctx, terms);
 
-    const visible = [...hits.values()].filter((conv) => scope.isVisible(conv));
+    const visible = [...hits.values()].filter(({ conv }) => scope.isVisible(conv));
     const scoped = args.since
-      ? visible.filter((conv) => conv.updated_at >= args.since!)
+      ? visible.filter(({ conv }) => conv.updated_at >= args.since!)
       : visible;
-    scoped.sort((a, b) => b.updated_at - a.updated_at);
-    const top = scoped.slice(0, args.limit ?? 20);
+    scoped.sort((a, b) => b.coverage - a.coverage || b.conv.updated_at - a.conv.updated_at);
+    const top = scoped.slice(0, args.limit ?? 20).map(({ conv }) => conv);
     const firstMsgByConv = await resolveFirstMessageTitles(ctx, top);
 
     const results = await Promise.all(top.map(async (conv) => {
@@ -4429,7 +4416,7 @@ export const searchForCLI = query({
 
     if (args.titles_only && !operatorHits) {
       const hits = await fetchTitleFieldHits(ctx, terms);
-      const visibleConvs = [...hits.values()]
+      const visibleConvs = [...hits.values()].map(({ conv }) => conv)
         .filter(isEligibleConv)
         .sort(byRankThenRecency);
       const page = visibleConvs.slice(offset, offset + limit);
@@ -4477,24 +4464,10 @@ export const searchForCLI = query({
           teamIds: effectiveTeamIds,
         });
 
-    // Group messages by conversation (keep messages matching ANY term for context)
-    const conversationMessages = new Map<string, typeof searchResults>();
-    for (const msg of searchResults) {
-      if (userOnly && msg.role !== "user") continue;
-      if (!contentMatchesAnyTerm(msg.content || "", terms)) {
-        continue;
-      }
-      const convId = msg.conversation_id.toString();
-      if (!conversationMessages.has(convId)) {
-        conversationMessages.set(convId, []);
-      }
-      conversationMessages.get(convId)!.push(msg);
-    }
-
     // Best-coverage selection: full-coverage conversations first, then partial
     // matches for longer queries, so a natural-language task description degrades
     // to best-match instead of no-match. Quoted phrases stay required.
-    const rankedMatches = rankConversationsByCoverage(conversationMessages, terms);
+    const rankedMatches = rankConversationsByCoverage(groupMessagesByConversation(searchResults, terms, userOnly), terms);
 
     const results: Array<{
       id: string;
@@ -4708,7 +4681,7 @@ export const searchForCLI = query({
     if (hasTimeWindow) {
       const titleHits = await fetchTitleFieldHits(ctx, terms);
       const contentIds = new Set(eligible.map(({ conv }) => conv._id.toString()));
-      const titleConvs = [...titleHits.values()]
+      const titleConvs = [...titleHits.values()].map(({ conv }) => conv)
         .filter((c) => !contentIds.has(c._id.toString()))
         .filter(isEligibleConv)
         .sort(byRankThenRecency);
@@ -7128,7 +7101,7 @@ export const feedForCLI = query({
         conversationMessages.get(convId)!.push(msg);
       }
 
-      const rankedMatches = rankConversationsByCoverage(conversationMessages, terms);
+      const rankedMatches = rankConversationsByCoverage(groupMessagesByConversation(searchResults, terms, userOnly), terms);
       matchingConvIds = new Set(rankedMatches.map((r) => r.convId));
 
       const matchedConvs = await Promise.all(
@@ -9021,25 +8994,6 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
   };
 }
 
-/**
- * The identity a row resolves to (docs/architecture/session-characters.md
- * S1): its chosen character parts, its org pointers, and for a role's rows a
- * snapshot of the role so the web can draw the role's face and name without
- * loading the org tree. Only rows with a pointer pay the extra read.
- */
-export async function identityFieldsOf(conv: any, getDoc: (id: any) => Promise<any>) {
-  const roleId = conv.standing_role_id ?? conv.org_role_id ?? null;
-  const role = roleId ? await getDoc(roleId).catch(() => null) : null;
-  return {
-    character_avatar: conv.character_avatar ?? null,
-    character_name: conv.character_name ?? null,
-    org_role_id: conv.org_role_id?.toString() ?? null,
-    standing_role_id: conv.standing_role_id?.toString() ?? null,
-    role: role
-      ? { _id: role._id.toString(), short_id: role.short_id, name: role.name, handle: role.handle, avatar: avatarOf(role), status: role.status, tenure_kind: role.tenure?.kind ?? "standing" }
-      : null,
-  };
-}
 
 // Stable inbox ordering shared by the live query (the crawl leaves ordering to
 // the client, which re-sorts via sortSessions anyway).

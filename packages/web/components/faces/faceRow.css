@@ -335,7 +335,7 @@
   line-height: 1;
   cursor: pointer;
   animation: face-stack-count-in 420ms var(--settle) calc(var(--stack-i-last, 0) * 32ms + 120ms) both;
-  transition: color 120ms ease;
+  transition: color 120ms ease, filter 360ms ease;
 }
 .face-row-stack-count:hover {
   color: var(--sol-text);
@@ -374,6 +374,36 @@
 .face-row-fold svg {
   width: 55%;
   height: 55%;
+}
+/* The float at rest (pointer outside the window): the call is the window, so
+   the stack folds away to one quiet "4 others" pill, and the pointer coming
+   in opens it back into faces. The faces collapse by `--face` itself, so the
+   row (and the window measured from it) closes up around the call. */
+.face-row[data-density="float"][data-rest] .face-seat[data-stacked] {
+  --face: 0px;
+  opacity: 0;
+  pointer-events: none;
+}
+.face-row[data-density="float"][data-rest] .face-row-strip[data-track] + .face-seat[data-stacked] {
+  margin-left: calc(var(--face-gap) * -1);
+}
+.face-row-stack-word {
+  display: none;
+}
+.face-row[data-density="float"][data-rest] .face-row-stack-count {
+  gap: 0.5ch;
+  height: max(22px, calc(var(--face) * 0.3));
+  margin-left: 0;
+  padding: 0 max(9px, calc(var(--face) * 0.11));
+  box-shadow: 0 0 0 1px var(--hairline);
+  background: transparent;
+  font-size: max(11px, calc(var(--face) * 0.13));
+  font-weight: 500;
+  color: var(--ink-soft);
+  filter: opacity(0.7);
+}
+.face-row[data-density="float"][data-rest] .face-row-stack-word {
+  display: inline;
 }
 .face-row[data-density="float"] .face-row-fold {
   background: linear-gradient(180deg, var(--paper) 0%, var(--paper-deep) 100%);
@@ -1661,6 +1691,10 @@
   border: 1px solid var(--sol-cyan);
   padding: 0 9px;
   font-variant-numeric: tabular-nums;
+}
+.engagement-card .engagement-card-chat[data-agent] {
+  background: var(--sol-violet);
+  border-color: var(--sol-violet);
 }
 .engagement-card .engagement-card-chat:hover {
   filter: brightness(1.1);

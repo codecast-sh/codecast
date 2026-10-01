@@ -183,7 +183,7 @@ export function InboxSelectionBar({
 }) {
   const n = sessions.length;
   return (
-    <div className="flex items-center gap-1.5 whitespace-nowrap border-b border-[color:color-mix(in_srgb,var(--sel-accent)_35%,transparent)] bg-[color:var(--sel-fill)] px-2.5 py-1.5 text-xs text-sol-text" title="⌘-click toggles a card, shift-click selects a run">
+    <div className="flex items-center gap-1.5 whitespace-nowrap border-b border-sol-border/30 bg-[color:var(--sel-fill)] px-2.5 py-1.5 text-xs text-sol-text" title="⌘-click toggles a card, shift-click selects a run">
       <span className="font-semibold text-[color:var(--sel-accent)]">{n} selected</span>
       <div className="ml-auto flex items-center gap-0.5">
         <DropdownMenu>
@@ -216,7 +216,7 @@ export function InboxSelectionBar({
             <Square className="h-3 w-3" /> Kill
           </button>
         )}
-        <button type="button" title="Leave selection" className="ml-1.5 inline-flex items-center gap-1.5 rounded border border-[color:color-mix(in_srgb,var(--sel-accent)_40%,transparent)] bg-sol-bg px-2 py-0.5 font-semibold text-[color:var(--sel-accent)] hover:bg-sol-bg/70" onClick={onClear}>
+        <button type="button" title="Leave selection" className="ml-1.5 inline-flex items-center gap-1.5 rounded bg-sol-bg px-2 py-0.5 font-semibold text-[color:var(--sel-accent)] hover:bg-sol-bg/70" onClick={onClear}>
           Done <KeyCap size="xs">Esc</KeyCap>
         </button>
       </div>

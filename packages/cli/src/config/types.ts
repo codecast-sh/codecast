@@ -15,7 +15,7 @@
  * present on disk at a given moment.
  */
 
-import type { AgentClientId, VaultInfo } from "@codecast/shared/contracts";
+import type { AgentClientId, CloudSessionSyncField, VaultInfo } from "@codecast/shared/contracts";
 
 /** How aggressively a client skips approval prompts. Codex is the only client
  *  with a distinct `full_auto`; the others use `default`/`bypass`, but the union
@@ -29,7 +29,13 @@ export type AgentPermissionModes = Partial<Record<AgentClientId, AgentPermission
 /** Per-client extra default CLI params (flag name → value), keyed by client id. */
 export type AgentDefaultParams = Partial<Record<AgentClientId, Record<string, string>>>;
 
-export interface Config {
+/**
+ * Mirrored from the server: the account's cloud session sync settings, one
+ * per CLOUD_SESSION_SOURCES entry (unset = the source's default there).
+ */
+type CloudSessionSyncSettings = Partial<Record<CloudSessionSyncField, boolean>>;
+
+export interface Config extends CloudSessionSyncSettings {
   daemon_workers?: boolean;
   // --- Identity / auth (all three writers) ---
   // On disk: the secret, encrypted for this machine. In memory: the wire
@@ -62,14 +68,6 @@ export interface Config {
   // TCC grant — the daemon never triggers the "access data from other apps"
   // prompt at login on its own (see cursorWatcherDecision).
   cursor_sync?: "on" | "off";
-  /** Mirrored from the server: the account setting for Claude Code cloud
-   *  sessions (claude.ai/code), read with the local Claude login and mirrored
-   *  as Claude transcripts (claudeCloud.ts). Unset = on. */
-  claude_cloud_sync?: boolean;
-  /** Mirror Cursor Cloud Agents (needs a Cursor API key); off only when false. */
-  cursor_cloud_sync?: boolean;
-  /** Mirror every Codex Cloud task (needs a Codex sign-in); on only when true. */
-  codex_cloud_sync?: boolean;
   excluded_paths?: string;
   sync_mode?: "all" | "selected";
   sync_projects?: string[];

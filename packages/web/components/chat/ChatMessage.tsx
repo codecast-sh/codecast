@@ -13,7 +13,7 @@ import { CommentAvatar } from "../comments/CommentAvatar";
 import { remarkChatMentions, channelNameMap } from "../../lib/remarkChatMentions";
 import { remarkEntityCards } from "../../lib/remarkEntityCards";
 import { compactAge } from "../../lib/threadState";
-import { copyToClipboard } from "../../lib/utils";
+import { copyToClipboard, sharePageUrl } from "../../lib/utils";
 import type { ChatAttachmentView, ChatMessageView } from "./chatTypes";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { useStorageImageSrc } from "../../hooks/useStorageImageUrl";
@@ -678,7 +678,7 @@ export const ChatMessage = memo(function ChatMessage({
                   onClick={() => {
                     setMenuOpen(false);
                     void copyToClipboard(
-                      typeof window === "undefined" ? permalink : new URL(permalink, window.location.origin).toString(),
+                      sharePageUrl(permalink),
                     );
                   }}
                 >
@@ -694,7 +694,7 @@ export const ChatMessage = memo(function ChatMessage({
                   onClick={() => {
                     setMenuOpen(false);
                     openForwardToChat({
-                      url: typeof window === "undefined" ? permalink : new URL(permalink, window.location.origin).toString(),
+                      url: sharePageUrl(permalink),
                       label: "message",
                       previewText: message.content,
                     });

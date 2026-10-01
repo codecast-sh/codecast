@@ -1,5 +1,6 @@
 "use client";
 import { useState, useRef } from "react";
+import { createChipClass } from "./CreateDialog";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { Bot, User, ChevronDown, Search, Check, X } from "lucide-react";
 import type { AssigneeInfo } from "@codecast/shared/contracts/orgAssignee";
@@ -93,11 +94,7 @@ export function AssigneeSelect({
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors border ${
-          value
-            ? "border-sol-border/60 bg-sol-bg-alt text-sol-text"
-            : "border-sol-border/30 hover:border-sol-border/60 text-sol-text-dim hover:text-sol-text"
-        }`}
+        className={createChipClass(!!value)}
       >
         {currentOpt
           ? renderAvatar({ ...currentOpt, id: currentOpt.id, type: value?.startsWith("agent:") ? "agent" : "user" })

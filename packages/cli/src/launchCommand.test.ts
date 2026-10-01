@@ -285,6 +285,14 @@ describe("buildPrintArgs maps unified flags onto each client's native print mode
     expect(ignored).toEqual([]);
   });
 
+  test("claude: a fresh run takes the assigned session id; resume and continue keep theirs", () => {
+    const base = { ...printBase, agentType: "claude" as const, assignedClaudeSessionId: "abc" };
+    expect(buildPrintArgs(base).binaryArgs).toEqual(["--session-id", "abc", "-p", "do the thing"]);
+    expect(buildPrintArgs({ ...base, resumeId: "old" }).binaryArgs).not.toContain("--session-id");
+    expect(buildPrintArgs({ ...base, continueLast: true }).binaryArgs).not.toContain("--session-id");
+    expect(buildPrintArgs({ ...base, configuredArgs: "--session-id mine" }).binaryArgs).toEqual(["--session-id", "mine", "-p", "do the thing"]);
+  });
+
   test("grok: -p takes the prompt as its value", () => {
     const { binaryArgs } = buildPrintArgs({
       ...printBase,

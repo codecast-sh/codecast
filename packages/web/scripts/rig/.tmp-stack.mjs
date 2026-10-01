@@ -1,0 +1,31 @@
+import { killChrome, launchChrome } from "./chrome.mjs";
+import { connect, connectTarget, newTarget, sleep } from "./cdp.mjs";
+import { APP_URL, signIn } from "./auth.mjs";
+import { PAGE_LIB } from "./page.mjs";
+import { FAKE_BRIDGE, STATES_LIB } from "./states.mjs";
+const DIR = "/tmp/facerig-stack", PORT = 9614;
+const FLOAT = '.face-row[data-density="float"], .face-row[data-density="float"] .face-row-below';
+const child = await launchChrome({ port: PORT, profile: `${DIR}/prof`, fresh: true });
+try {
+  const bar = await connect(PORT, /about:blank|localhost/);
+  await signIn(bar, "riley");
+  await bar.evaluate(PAGE_LIB);
+  await bar.evaluate(`__rig.waitFor("!s.missing && s.entries.length > 0", 240000)`);
+  const float = await connectTarget(await newTarget(PORT));
+  await float.addInitScript(FAKE_BRIDGE);
+  await float.navigate(`${APP_URL}/call-panel`);
+  await float.evaluate(`(async () => { for (let i = 0; i < 2400; i++) { const st = window.__inboxStore?.getState(); if (st?.currentUser?._id && (st.teamMembers ?? []).length > 1 && window.__faceRow) return 1; await new Promise((r) => setTimeout(r, 100)); } throw new Error("no roster"); })()`);
+  await float.evaluate(STATES_LIB);
+  await float.evaluate(`__rigStates.apply("live")`);
+  await float.evaluate(`(() => { const st = __inboxStore.getState(); const base = st.teamMembers.find(m => m._id !== st.currentUser._id); const extra = ["Avery","Blake","Casey","Devon"].map((n, i) => ({ ...base, _id: base._id.slice(0, -2) + "x" + i, name: n, image: null, presence_state: "active", status: "available" })); const add = () => { const cur = __inboxStore.getState().teamMembers; if (!cur.some(m => m.name === "Avery")) __inboxStore.setState({ teamMembers: [...cur, ...extra] }); }; add(); setInterval(add, 100); return 1; })()`);
+  await sleep(1500);
+  console.log(await float.screenshot(`${DIR}/rest2.png`, FLOAT));
+  const at = await float.evaluate(`(() => { const r = document.querySelector('.face-row[data-density=float] .face-row-strip').getBoundingClientRect(); return { x: r.left + 20, y: r.top + r.height/2 }; })()`);
+  await float.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: at.x, y: at.y });
+  await sleep(1200);
+  console.log(await float.screenshot(`${DIR}/hover2.png`, FLOAT));
+  await float.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 1400, y: 900 });
+  await float.evaluate(`document.dispatchEvent(new MouseEvent("mouseleave"))`);
+  await sleep(1200);
+  console.log(await float.screenshot(`${DIR}/rest3.png`, FLOAT));
+} finally { killChrome(child); }

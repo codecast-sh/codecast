@@ -14,7 +14,7 @@ import { useMemo, useState, type ReactNode } from "react";
 import { ArrowRight, History, Link2, ListPlus, MessageSquare, Pencil, Terminal, UserRound } from "lucide-react";
 import { ISSUE_PROVIDER_NAME } from "../../lib/integrations";
 import { SegmentedToggle } from "../SegmentedToggle";
-import { AgentTypeIcon } from "../AgentTypeIcon";
+import { SessionTag } from "../identity/SessionTag";
 import { CollapsibleBody } from "../CollapsibleBody";
 import { ExternalEventRow } from "../feed/ExternalEventRow";
 import { externalEventRowToExternalEvent, type ExternalEventRecord } from "../../lib/externalEvents";
@@ -76,16 +76,7 @@ function changeStyle(row: HistoryRow) {
 
 /** A linked session named inline, opening it on click. */
 export function TaskSessionLink({ session, onOpen }: { session: TaskLinkedSession; onOpen: (s: TaskLinkedSession) => void }) {
-  return (
-    <button
-      type="button"
-      onClick={() => onOpen(session)}
-      className="inline-flex items-center gap-1.5 min-w-0 text-sol-text font-medium hover:text-sol-cyan transition-colors"
-    >
-      <AgentTypeIcon agentType={session.agent_type || "claude_code"} className="w-3.5 h-3.5 flex-shrink-0" />
-      <span className="truncate">{session.title || "Untitled session"}</span>
-    </button>
-  );
+  return <SessionTag session={session} size="sm" onClick={() => onOpen(session)} className="font-medium" />;
 }
 
 function ChangeBody({ row, provider, origin, openLinkedSession }: { row: HistoryRow; provider?: "linear" | "github"; origin?: TaskLinkedSession; openLinkedSession: (info: any) => void }) {

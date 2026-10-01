@@ -28,3 +28,11 @@ export function isSessionStashed(
   // Dismissed bucket, never both.
   return !!s.inbox_stashed_at && !s.inbox_dismissed_at;
 }
+
+// Set aside from the inbox by a person: dismissed, stashed or killed. Every
+// session menu offers Restore in place of the filing verbs for such a row,
+// because those verbs would be no-ops: a killed row stays under Killed
+// whatever else is stamped on it. `dismissed` is the palette target's flag.
+export function isSessionSetAside(s: RetirementStamps & { dismissed?: unknown }): boolean {
+  return !!s.dismissed || !!s.inbox_stashed_at || !!s.inbox_killed_at || !!s.inbox_dismissed_at;
+}

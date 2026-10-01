@@ -52,6 +52,48 @@ export function limitWindows(usage: CcUsage): { percent: number; resets_at?: num
   );
 }
 
+/** Each limit window under the label the meters show: "Session (5h)", "Week
+ *  (7d)", a model-scoped week as "Fable (7d)", a scoped window by its own
+ *  label. The stored window's raw `label` ("Fable") never stands in for these. */
+export function labeledUsageWindows(usage: CcUsage): { label: string; percent: number; resets_at?: number }[] {
+  const out: { label: string; percent: number; resets_at?: number }[] = [];
+  const add = (label: string, w?: { percent: number; resets_at?: number }) => {
+    if (w) out.push({ label, percent: w.percent, resets_at: w.resets_at });
+  };
+  add("Session (5h)", usage.session);
+  add("Week (7d)", usage.weekly);
+  add(`${usage.weekly_scoped?.label ?? "Model"} (7d)`, usage.weekly_scoped);
+  for (const s of usage.scoped ?? []) add(s.label, s);
+  return out;
+}
+
+/** The pegged window that keeps an account unusable longest (its meter
+ *  label and reset), or undefined when nothing is pegged. Several can be
+ *  pegged at once (a spent 5h session inside a spent week); the shorter one
+ *  reopening changes nothing while the longer one is still shut, so the latest
+ *  reset is the one named. */
+export function peggedWindow(usage: CcUsage | undefined | null, now: number): { label: string; resets_at?: number } | undefined {
+  if (!usage) return undefined;
+  const w = labeledUsageWindows(usage)
+    .filter((w) => !isWindowRolled(w, now) && w.percent >= 100)
+    .sort((a, b) => (b.resets_at ?? 0) - (a.resets_at ?? 0))[0];
+  return w && { label: w.label, ...(w.resets_at !== undefined ? { resets_at: w.resets_at } : {}) };
+}
+
+/**
+ * An account's plan type as people read it: ChatGPT's own names ("prolite" is
+ * Pro Lite), and any other (Claude's "max") capitalized.
+ */
+const PLAN_TYPE_LABELS: Record<string, string> = { free: "Free", go: "Go", plus: "Plus", pro: "Pro", prolite: "Pro Lite", team: "Team", business: "Business", enterprise: "Enterprise", edu: "Edu" };
+export function planTypeLabel(planType: string): string {
+  return PLAN_TYPE_LABELS[planType.toLowerCase()] ?? `${planType.charAt(0).toUpperCase()}${planType.slice(1)}`;
+}
+
+/** The meter label of the pegged window that keeps an account unusable longest (peggedWindow). */
+export function peggedWindowLabel(usage: CcUsage | undefined | null, now: number): string | undefined {
+  return peggedWindow(usage, now)?.label;
+}
+
 /** The worst (highest) utilization across an account's limit windows AS OF
  * `now` — what a single summary meter should show. Rolled windows count as 0,
  * so a dormant account stops reading "100%" forever. Null when no usage data

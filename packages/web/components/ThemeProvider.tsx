@@ -3,6 +3,7 @@ import { useInboxStore } from "../store/inboxStore";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { BUBBLE_HUE_VAR, resolveBubbleHue } from "../lib/bubbleColor";
+import { lockedAtBoot } from "../lib/themeBootLock";
 
 export type Theme = "dark" | "light";
 export type VisualStyle = "classic" | "minimal";
@@ -46,7 +47,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   // the viewer's stored preferences untouched; releasing it restores them.
   // This provider is the only writer of the root's theme classes, so a lock
   // cannot race the stored theme's own effect.
-  const [lock, setLock] = useState<Theme | null>(null);
+  // A route the boot script leaves unthemed starts locked (lib/themeBootLock.ts), so the stored theme never paints there before the page's own lock mounts.
+  const [lock, setLock] = useState<Theme | null>(() => (typeof window !== "undefined" && lockedAtBoot(window.location.pathname) ? "light" : null));
   const acquireLock = useCallback((locked: Theme) => {
     setLock(locked);
     return () => setLock((cur) => (cur === locked ? null : cur));

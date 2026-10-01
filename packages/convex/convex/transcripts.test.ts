@@ -23,14 +23,23 @@ import {
   recLeaseExpired,
   setRecordingScope,
   setSummary,
+  generateSummary,
+  getForSummary,
+  callSummaryKind,
+  callSummaryRequest,
+  callSummarySource,
   withDefaultRoutes,
   linkExcerpt,
+  markRouteSent,
   webCallsForConversation,
   webGetCall,
   webListCalls,
+  endTranscript,
+  HUDDLE_GRACE_MS,
 } from "./transcripts";
 import { LIVE_TRANSCRIBE_MODEL } from "@codecast/shared/contracts";
 import { makeFakeDb } from "./testDb";
+import { captureFetch, goldenBody, recordGolden, type GoldenCase } from "./__golden__/golden.testkit";
 import { characterOf } from "@codecast/shared/contracts/sessionCharacter";
 import { hashToken } from "./apiTokens";
 import {
@@ -642,9 +651,9 @@ describe("the orphan sweep dates the end from seats, never from a prewarm", () =
   });
 
   test("ends at the last real seat's lease, not the prewarm's", async () => {
-    // The speaker's tab died a while ago; somebody opened this DM afterwards
-    // and their connection is now the freshest row in the table.
-    const seatSeen = T - STALE - 60_000;
+    // The speaker's tab died longer ago than the grace; somebody opened this
+    // DM afterwards and their connection is now the freshest row in the table.
+    const seatSeen = T - HUDDLE_GRACE_MS - 60_000;
     const { ctx, patches } = sweepCtx([
       row({ _id: "dead", last_seen: seatSeen }),
       row({ _id: "warm", last_seen: T - 1_000, prewarm: true }),
@@ -658,13 +667,20 @@ describe("the orphan sweep dates the end from seats, never from a prewarm", () =
     expect(ended.ended_at).toBe(seatSeen);
   });
 
-  test("a room holding nothing but a prewarm is still an ended huddle", async () => {
+  test("a room holding nothing but a prewarm reads empty and starts its grace", async () => {
     // The prewarm must not keep the transcript alive either: liveMembers drops
-    // it, so the room reads empty and the sweep does its job.
+    // it, so the room reads empty. With no seat to date the quiet from, the
+    // sweep stamps it now and the next pass past the grace ends it.
     const { ctx, patches } = sweepCtx([row({ _id: "warm", last_seen: T, prewarm: true })]);
     const res = await sweep(ctx);
-    expect(res.ended).toBe(1);
-    expect(patches.find((p) => p.id === "tr1").status).toBe("ended");
+    expect(res.ended).toBe(0);
+    expect(patches.find((p) => p.id === "tr1").idle_since).toBeGreaterThanOrEqual(T);
+  });
+
+  test("a room emptied inside the grace is left to resume", async () => {
+    const { ctx, patches } = sweepCtx([row({ _id: "gone", last_seen: T - STALE - 10_000 })]);
+    expect((await sweep(ctx)).ended).toBe(0);
+    expect(patches.find((p) => p.id === "tr1")).toBeUndefined();
   });
 
   test("a live seat still protects the transcript", async () => {
@@ -989,7 +1005,10 @@ describe("the room's thread sees transcription go on", () => {
     const res = await call(start, c, { room_key: "session:conv1", auto: true });
     expect(res.role).toBe("scribe");
     expect(events(c)).toEqual([["agent_joined", "ua", "conv1"]]);
+    // Switching the scribe off is a gap in the huddle, never its end.
     await call(stop, c, { transcript_id: res.transcript_id });
+    expect(c.db._tables.transcripts[0].status).toBe("live");
+    await endTranscript(c, c.db._tables.transcripts[0]);
     expect(c.db._tables.transcripts[0].status).toBe("ended");
     expect(c.db._tables.call_agent_feeds).toHaveLength(0);
     expect(c.db._tables.call_chat_messages).toHaveLength(1);
@@ -1035,7 +1054,7 @@ describe("calls and the sessions they reach", () => {
   test("a live feed links the session, and the link outlives the call", async () => {
     const c = ctx(tables());
     const res = await call(start, c, { room_key: "session:conv1", auto: true });
-    await call(stop, c, { transcript_id: res.transcript_id });
+    await endTranscript(c, c.db._tables.transcripts[0]);
     expect(c.db._tables.call_agent_feeds).toHaveLength(0);
     expect(c.db._tables.call_session_links.map((l: any) => [l.conversation_id, l.live])).toEqual([["conv1", true]]);
 
@@ -1104,8 +1123,12 @@ describe("pacing the words to a fed agent", () => {
   test("a hold the agent asked for waits like a busy turn, and lifts when it ends", () => {
     const held = sessionDeliveryVerdict({ reason: "flush", now: 10_000, route: { hold_until: 20_000 }, pacing: ember, unsent: [seg("chatter", 9_000)] });
     expect(held).toEqual({ deliver: false });
+    // A lull after the hold ends ships what was said under it as a catch up;
+    // words said after the hold are plain live words again.
     const lifted = sessionDeliveryVerdict({ reason: "flush", now: 21_000, route: { hold_until: 20_000 }, pacing: ember, unsent: [seg("chatter", 9_000)] });
-    expect(lifted).toEqual({ deliver: true, lane: "context", held: false });
+    expect(lifted).toEqual({ deliver: true, lane: "context", held: true });
+    const fresh = sessionDeliveryVerdict({ reason: "flush", now: 31_000, route: { hold_until: 20_000 }, pacing: ember, unsent: [seg("chatter", 30_000)] });
+    expect(fresh).toEqual({ deliver: true, lane: "context", held: false });
   });
 
   test("the catch up at a turn's end says the words waited, and waits for a quiet room", () => {
@@ -1224,5 +1247,146 @@ describe("pacing the words to a fed agent", () => {
     const out = await (cliHoldCall as any)._handler(c, { api_token: "tok", session: "conv1", duration_ms: 60_000 });
     expect(out).toEqual({ held: false, reason: "not_in_huddle", short_id: "conv1" });
     expect(c._scheduled).toHaveLength(0);
+  });
+});
+
+// The call summary request as prod posts it, for synthetic calls run end to
+// end: getForSummary over a fake db, then generateSummary with fetch stubbed.
+describe("call summary request goldens", () => {
+  const T0 = Date.UTC(2026, 0, 15, 0, 5, 0);
+  type CallFixture = {
+    case: string;
+    rolling?: boolean;
+    transcript: Record<string, unknown>;
+    lines: Array<{ speaker: string; text: string }>;
+  };
+  const FIXTURES: CallFixture[] = [
+    {
+      case: "huddle-ended",
+      transcript: { room_key: "channel:ch1", status: "ended", started_at: T0, ended_at: T0 + 23 * 60_000 },
+      lines: [
+        { speaker: "Ana", text: "Let's decide whether the release goes out Thursday or waits for the migration." },
+        { speaker: "Ben", text: "The migration is done on staging, I'd ship Thursday behind a flag." },
+        { speaker: "Ana", text: "Fine. Ben, you own the flag. I'll write the rollback note." },
+        { speaker: "Cy", text: "I'll watch the error rate for the first hour after it ships." },
+      ],
+    },
+    {
+      // Over 60,000 characters, so the model reads only the tail; one
+      // microphone, so no speaker names reach the prompt.
+      case: "recording-long-tail",
+      transcript: { room_key: "rec:0a1b2c3d-0000-4000-8000-000000000001", status: "ended", started_at: T0, ended_at: T0 + 95 * 60_000 },
+      lines: Array.from({ length: 1300 }, (_, i) => ({
+        speaker: "Speaker",
+        text: `point ${String(i + 1).padStart(4, "0")} about the rollout plan, who owns it and what ships next`,
+      })),
+    },
+    {
+      case: "huddle-rolling-live",
+      rolling: true,
+      transcript: { room_key: "dm:u1:u2", status: "live", started_at: T0 },
+      lines: [
+        { speaker: "Ana", text: "Quick sync on the onboarding emails before the design review this afternoon." },
+        { speaker: "Ben", text: "The second email still links the old docs page, I will fix that today and send the copy for review." },
+        { speaker: "Ana", text: "Good, and I want the third email cut entirely." },
+      ],
+    },
+  ];
+  const SKIPPED: CallFixture = {
+    case: "under-forty-words",
+    transcript: { room_key: "channel:ch1", status: "ended", started_at: T0, ended_at: T0 + 60_000 },
+    lines: [{ speaker: "Ana", text: "Can you hear me? Okay, let's talk later." }],
+  };
+
+  const capture = captureFetch('{"title":"t","summary":"s","action_items":[]}');
+  beforeEach(() => capture.install());
+  afterEach(() => capture.restore());
+
+  /** Run the query and the action; the bodies posted and the verdicts written. */
+  async function runSummary(fixture: CallFixture) {
+    const db = makeFakeDb({
+      transcripts: [{ _id: "t1", title: "Call", participants: [], ...fixture.transcript }],
+      transcript_segments: fixture.lines.map((l, i) => ({ _id: `s${i}`, transcript_id: "t1", seq: i + 1, speaker_name: l.speaker, text: l.text })),
+    });
+    const verdicts: any[] = [];
+    const ctx = {
+      runQuery: async (ref: any, args: any) => {
+        expect(getFunctionName(ref)).toBe("transcripts:getForSummary");
+        return (getForSummary as any)._handler({ db }, args);
+      },
+      runMutation: async (_ref: any, args: any) => { verdicts.push(args); },
+    };
+    const before = capture.bodies.length;
+    await (generateSummary as any)._handler(ctx, { transcript_id: "t1", ...(fixture.rolling ? { rolling: true } : {}) });
+    return { bodies: capture.bodies.slice(before), verdicts };
+  }
+
+  test("the action posts the recorded body for every fixture", async () => {
+    const actual: GoldenCase[] = [];
+    for (const fixture of FIXTURES) {
+      const { bodies, verdicts } = await runSummary(fixture);
+      expect(bodies).toHaveLength(1);
+      expect(verdicts.map((v) => v.summary_status)).toEqual(["done"]);
+      actual.push({ case: fixture.case, body: bodies[0]! });
+    }
+    expect(actual).toEqual(recordGolden("call-summary", actual));
+  });
+
+  test("a call under forty words is skipped without a model call", async () => {
+    const { bodies, verdicts } = await runSummary(SKIPPED);
+    expect(bodies).toEqual([]);
+    expect(verdicts.map((v) => v.summary_status)).toEqual(["skipped"]);
+    expect(callSummarySource(SKIPPED.lines, "huddle")).toBeNull();
+  });
+
+  test("the shared builders render the same body from the same facts", () => {
+    const actual: GoldenCase[] = [];
+    for (const fixture of FIXTURES) {
+      const t = fixture.transcript as { room_key: string; started_at: number; ended_at?: number };
+      const kind = callSummaryKind(t.room_key);
+      const source = callSummarySource(fixture.lines, kind);
+      expect(source).not.toBeNull();
+      const req = callSummaryRequest(source!, { kind, started_at: t.started_at, ended_at: t.ended_at, rolling: fixture.rolling });
+      expect(req.temperature).toBeUndefined();
+      actual.push({ case: fixture.case, body: goldenBody(req) });
+    }
+    expect(actual).toEqual(recordGolden("call-summary", actual));
+  });
+
+  test("a long call keeps the tail, and a recording names no speaker", () => {
+    const long = FIXTURES.find((f) => f.case === "recording-long-tail")!;
+    const source = callSummarySource(long.lines, "recording")!;
+    expect(source.length).toBe(60_000);
+    expect(source.endsWith("point 1300 about the rollout plan, who owns it and what ships next")).toBe(true);
+    expect(source).not.toContain("Speaker:");
+    expect(callSummarySource(FIXTURES[0]!.lines, "huddle")!.startsWith("Ana: ")).toBe(true);
+  });
+});
+
+// A live feed sends a chunk at every pause, so the full framing rides only the
+// first chunk on a route and every Nth after it; the route counts the chunks
+// since the last full one.
+describe("markRouteSent briefing count", () => {
+  test("a full brief resets the count, a short header adds one, other routes are untouched", async () => {
+    const db = makeFakeDb({
+      transcripts: [{
+        _id: "t1",
+        routes: [
+          { kind: "session", target: "conv1", mode: "live", sent_seq: 0 },
+          { kind: "doc", target: "d1", mode: "live", sent_seq: 0 },
+        ],
+      }],
+    });
+    const send = (sent_seq: number, full_brief?: boolean) =>
+      (markRouteSent as any)._handler({ db }, { transcript_id: "t1", kind: "session", target: "conv1", sent_seq, full_brief });
+    await send(2, true);
+    await send(4, false);
+    await send(6, false);
+    let t = await db.get("t1" as any);
+    expect(t.routes[0]).toMatchObject({ sent_seq: 6, briefed_chunks: 3 });
+    expect(t.routes[1].briefed_chunks).toBeUndefined();
+    await send(8, true);
+    t = await db.get("t1" as any);
+    expect(t.routes[0].briefed_chunks).toBe(1);
   });
 });

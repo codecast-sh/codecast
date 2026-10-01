@@ -9,23 +9,62 @@
  * matches it.
  */
 
-import { Suspense, type CSSProperties, type ComponentType } from "react";
-import { LogoIcon } from "@/components/Logo";
+import { memo, startTransition, Suspense, useState, type CSSProperties, type ComponentType, type ReactNode } from "react";
+import { useWatchEffect } from "@/hooks/useWatchEffect";
+import { EntityFixtureContext } from "@/lib/entityDisplay";
+import { DOTS } from "../chapterDots";
 import { PhoneFrame } from "../productMocks";
 import type { ChapterPart, HeroChapter, PartProps } from "./chapters/contract";
-import { fly, SurfaceContext } from "./filmClock";
+import { fly, SurfaceContext, useFilmTime } from "./filmClock";
+import { entityStage, ENTITY_STAGES } from "./fixtures";
 import { ARCS, FLYERS } from "./motion";
 import { HeroPartBoundary } from "./sandbox";
-import { LABEL_3W, SURFACES, type ArcPath, type Region, type RegionKey, type Surface } from "./world";
+import { DEALT, LABEL_3W, SCENES, SURFACES, type ArcPath, type Region, type RegionKey, type Surface } from "./world";
 
 const px = (n: number) => `${Math.round(n * 1000) / 1000}px`;
 
+/** A window floating off the stage: a hairline, a close soft shadow and a far one, so it never reads as pasted onto the cream. */
+const FACE_SHADOW = "0 1px 0 rgba(0,43,54,0.06), 0 24px 48px -20px rgba(0,43,54,0.28), 0 60px 120px -40px rgba(0,43,54,0.22)";
+
 type Placed = ChapterPart & { chapter: string };
 
+/**
+ * Film second from which a chapter's views are mounted: the start of the
+ * chapter two before it, early enough for every cue it shows and every
+ * resting state it sets face-down. A surface the opening deals face-up shows
+ * its chapter from the first second, so that chapter mounts from 0.
+ */
+const MOUNT_FROM: Record<string, number> = Object.fromEntries(SCENES.map((sc, i) => [sc.id, SCENES[Math.max(0, i - 2)].start]));
+for (const s of SURFACES) if (DEALT.includes(s.id)) MOUNT_FROM[s.chapter] = 0;
+
+/**
+ * Mounts a chapter's views once the film comes near it and keeps them
+ * mounted, so the views of a chapter a minute away cost nothing while the
+ * opening plays, and the chapters arrive one by one rather than in one commit.
+ * Crossing into reach mounts them in a transition, off the clock tick that
+ * crossed it, so no animation frame carries a chapter's first render.
+ */
+function NearChapter({ chapter, children }: { chapter: string; children: ReactNode }) {
+  const from = MOUNT_FROM[chapter] ?? 0;
+  const near = useFilmTime((t) => t >= from);
+  const [seen, setSeen] = useState(near);
+  useWatchEffect(() => {
+    if (near && !seen) startTransition(() => setSeen(true));
+  }, [near, seen]);
+  return seen ? children : null;
+}
+
+/** A feed anchored to its composer is cut by the header above it: its oldest line fades out under the edge, the way a scrolled feed does, instead of being sliced. */
+const FEED_TOP_FADE = "linear-gradient(to bottom, transparent 0, #000 28px)";
+
 function RegionSlot({ k, region, parts, now }: { k: RegionKey; region: Region; parts: Placed[]; now: number }) {
+  // A region that was empty in the prerender (the poster's conversation pane) fades in when its views arrive.
+  const [emptyAtFirst] = useState(parts.length === 0);
+  const bottom = region.anchor === "bottom";
   return (
     <div
       data-region={k}
+      className={emptyAtFirst && parts.length > 0 ? "hf-in" : undefined}
       style={{
         position: "absolute",
         left: region.x,
@@ -34,15 +73,23 @@ function RegionSlot({ k, region, parts, now }: { k: RegionKey; region: Region; p
         height: region.h,
         display: "flex",
         flexDirection: "column",
-        justifyContent: region.anchor === "bottom" ? "flex-end" : "flex-start",
-        overflow: "hidden",
+        justifyContent: bottom ? "flex-end" : "flex-start",
+        maskImage: bottom ? FEED_TOP_FADE : undefined,
+        WebkitMaskImage: bottom ? FEED_TOP_FADE : undefined,
+        // clip, not hidden: a hidden box is a scroll container, and a real
+        // view's scrollIntoView or focus would scroll the film inside it.
+        overflow: "clip",
+        // A region overlaps others (the card over the conversation): its own box takes no clicks, only the views in it (HeroFlythrough's [data-region]>* rule).
+        pointerEvents: "none",
       }}
     >
       {parts.map((p) => (
         <HeroPartBoundary key={`${p.chapter}.${p.key}`} name={`${p.chapter}.${p.key}`}>
-          <Suspense fallback={null}>
-            <p.Component now={now} />
-          </Suspense>
+          <NearChapter chapter={p.chapter}>
+            <Suspense fallback={null}>
+              <p.Component now={now} />
+            </Suspense>
+          </NearChapter>
         </HeroPartBoundary>
       ))}
     </div>
@@ -50,7 +97,7 @@ function RegionSlot({ k, region, parts, now }: { k: RegionKey; region: Region; p
 }
 
 function SurfaceMount({ s, parts, now }: { s: Surface; parts: Placed[]; now: number }) {
-  const face: CSSProperties = { position: "absolute", inset: 0, backfaceVisibility: "hidden", WebkitBackfaceVisibility: "hidden", borderRadius: s.radius, overflow: "hidden" };
+  const face: CSSProperties = { position: "absolute", inset: 0, backfaceVisibility: "hidden", WebkitBackfaceVisibility: "hidden", borderRadius: s.radius, overflow: "clip" };
   const regions = Object.entries(s.regions).map(([name, region]) => {
     const k = `${s.id}.${name}` as RegionKey;
     return <RegionSlot key={k} k={k} region={region} parts={parts.filter((p) => p.region === k)} now={now} />;
@@ -75,30 +122,28 @@ function SurfaceMount({ s, parts, now }: { s: Surface; parts: Placed[]; now: num
           width: "112%",
           height: "112%",
           borderRadius: s.radius * 2,
-          background: "radial-gradient(closest-side, rgba(0,43,54,0.16), rgba(0,43,54,0.07) 60%, rgba(0,43,54,0) 100%)",
+          background: "radial-gradient(closest-side, rgba(0,43,54,0.22), rgba(0,43,54,0.08) 60%, rgba(0,43,54,0) 100%)",
         })}
       />
       <div {...fly(`card:${s.id}`, { position: "absolute", inset: 0, transformStyle: "preserve-3d" })}>
         <SurfaceContext.Provider value={s.id}>
           {s.frame === "phone" ? (
-            <div style={face}>
+            <div {...fly(`face:${s.id}`, face)}>
               {/* Regions on the phone are measured from the screen's top-left, under the notch. */}
               <PhoneFrame className="h-full !shadow-none" screenClassName="dark relative h-full">
                 <div className="relative bg-sol-bg text-sol-text" style={{ height: s.h - 48 }}>{regions}</div>
               </PhoneFrame>
             </div>
           ) : (
-            <div className="bg-sol-bg text-sol-text" style={{ ...face, border: "1px solid var(--sol-bg-highlight)", boxShadow: "0 30px 60px -30px rgba(0,43,54,0.35)" }}>
+            <div className="bg-sol-bg text-sol-text" style={{ ...face, border: "1px solid color-mix(in srgb, var(--sol-text) 10%, transparent)", boxShadow: FACE_SHADOW }}>
               {regions}
             </div>
           )}
         </SurfaceContext.Provider>
-        <div
-          style={{ ...face, transform: "rotateX(180deg)", border: "1px solid var(--sol-bg-highlight)" }}
-          className="flex flex-col items-center justify-center gap-3 bg-sol-bg-alt font-mono"
-        >
-          <LogoIcon size={34} />
-          <span className="text-[13px] text-sol-text-dim">{s.back}</span>
+        {/* The back the deal shows from the overview, where a surface is a few hundred pixels wide: a card in the page's own palette, named for its chapter, its dot the chapter's colour on the scrubber; a narrow card sets its name smaller so it stays on one line. */}
+        <div style={{ ...face, transform: "rotateX(180deg)", backgroundColor: "#eee8d5", border: "1px solid #e4ddc8" }} className="flex flex-col items-center justify-center gap-7 font-mono">
+          <span className="h-9 w-9 rounded-full" style={{ backgroundColor: DOTS[SCENES.findIndex((sc) => sc.id === s.chapter) % DOTS.length] }} />
+          <span className="whitespace-nowrap font-semibold leading-none tracking-tight" style={{ color: "#586e75", fontSize: Math.min(84, (s.w - 56) / (s.back.length * 0.62)) }}>{s.back}</span>
         </div>
       </div>
     </div>
@@ -113,7 +158,7 @@ function Arc({ a }: { a: ArcPath }) {
   const w = Math.abs(ax - bx) + 40;
   const h = Math.abs(ay - by) + 240;
   const z = (a.from[2] + a.to[2]) / 2;
-  const d = `M ${ax - x0} ${ay - y0} Q ${(ax + bx) / 2 - x0} ${Math.min(ay, by) - y0 - 170} ${bx - x0} ${by - y0}`;
+  const d = `M ${ax - x0} ${ay - y0} Q ${(ax + bx) / 2 - x0} ${Math.min(ay, by) - y0 - (a.apex ?? 170)} ${bx - x0} ${by - y0}`;
   return (
     <svg
       width={w}
@@ -121,32 +166,31 @@ function Arc({ a }: { a: ArcPath }) {
       viewBox={`0 0 ${w} ${h}`}
       style={{ position: "absolute", left: 0, top: 0, overflow: "visible", transform: `translate3d(${px(x0)}, ${px(y0)}, ${px(z)})` }}
     >
-      <path {...fly(a.id, { strokeDasharray: 1, strokeDashoffset: 1 })} d={d} pathLength={1} fill="none" stroke={a.color} strokeWidth={2} strokeLinecap="round" />
+      <path {...fly(a.id, { strokeDasharray: 1, strokeDashoffset: 1 })} d={d} pathLength={1} fill="none" stroke={a.color} strokeWidth={5} strokeLinecap="round" />
+      <circle {...fly(`${a.id}.dot`)} cx={bx - x0} cy={by - y0} r={7} fill={a.color} />
+      <circle {...fly(`${a.id}.ring`, { transformBox: "fill-box", transformOrigin: "center" })} cx={bx - x0} cy={by - y0} r={22} fill="none" stroke={a.color} strokeWidth={3} />
     </svg>
   );
 }
 
-/** Everything inside the camera: backdrop, surfaces, flyers. The driver writes styles to it; React renders it again only when chapters load. */
-export function World({ chapters, now }: { chapters: HeroChapter[]; now: number }) {
+/** Entity pills and cards read the fixtures in force at film time; only their consumers re-render when the stage turns. */
+function FilmEntities({ children }: { children: ReactNode }) {
+  const stage = useFilmTime(entityStage);
+  return <EntityFixtureContext.Provider value={ENTITY_STAGES[stage]}>{children}</EntityFixtureContext.Provider>;
+}
+
+/**
+ * Everything inside the camera: surfaces, flyers, arcs. There is no backdrop: the page itself is the ground. The driver writes
+ * styles to it; React renders it again only when chapters load (memo: the
+ * hero's own state, its chapter, play and phone flags, never reaches it).
+ */
+export const World = memo(function World({ chapters, now }: { chapters: HeroChapter[]; now: number }) {
   const parts: Placed[] = chapters
     .flatMap((c) => c.parts.map((p) => ({ ...p, chapter: c.id })))
     .sort((a, b) => a.order - b.order);
   const flyers: Record<string, ComponentType<PartProps>> = Object.assign({}, ...chapters.map((c) => c.flyers ?? {}));
   return (
-    <>
-      <div
-        style={{
-          position: "absolute",
-          left: -6000,
-          top: -4600,
-          width: 12000,
-          height: 9200,
-          transform: "translateZ(-420px)",
-          backgroundColor: "var(--sol-bg)",
-          backgroundImage: "radial-gradient(var(--sol-bg-highlight) 1.4px, transparent 1.6px)",
-          backgroundSize: "32px 32px",
-        }}
-      />
+    <FilmEntities>
       {SURFACES.map((s) => <SurfaceMount key={s.id} s={s} parts={parts.filter((p) => p.region.startsWith(`${s.id}.`))} now={now} />)}
       {ARCS.map((a) => <Arc key={a.id} a={a} />)}
       {FLYERS.map((f) => {
@@ -155,7 +199,9 @@ export function World({ chapters, now }: { chapters: HeroChapter[]; now: number 
           <div key={f.id} {...fly(f.id, { position: "absolute", left: 0, top: 0 })}>
             {Flyer && (
               <HeroPartBoundary name={f.id}>
-                <Flyer now={now} />
+                <NearChapter chapter={f.id.split(".")[0]}>
+                  <Flyer now={now} />
+                </NearChapter>
               </HeroPartBoundary>
             )}
           </div>
@@ -164,8 +210,8 @@ export function World({ chapters, now }: { chapters: HeroChapter[]; now: number 
       <div
         {...fly("label3w", { position: "absolute", left: 0, top: 0, transform: `translate3d(${px(LABEL_3W.pos[0])}, ${px(LABEL_3W.pos[1])}, ${px(LABEL_3W.pos[2])})` })}
       >
-        <span className="inline-block -translate-x-1/2 whitespace-nowrap font-mono text-[44px] font-bold text-sol-text/80">3 weeks later</span>
+        <span className="inline-block -translate-x-1/2 whitespace-nowrap font-mono text-[34px] font-semibold text-sol-text-muted">3 weeks later</span>
       </div>
-    </>
+    </FilmEntities>
   );
-}
+});
