@@ -24,6 +24,7 @@ import {
   rosterSig,
   type DmBadge,
 } from "./peopleRoster";
+import { peopleOf } from "@codecast/shared/team/memberKind";
 
 export interface PeopleRosterData {
   /** Coarse clock. Every activity line's duration ticks off this and nothing
@@ -81,7 +82,7 @@ export function usePeopleRoster(): PeopleRosterData {
 
   // One walk of the roster: the viewer's own row out, everyone else in.
   const { members, me } = useMemo(() => {
-    const all = (useInboxStore.getState().teamMembers ?? []).filter((m: any) => m?._id);
+    const all = peopleOf(useInboxStore.getState().teamMembers as any[]).filter((m: any) => m._id);
     return {
       members: all.filter((m: any) => String(m._id) !== viewerId),
       me: all.find((m: any) => String(m._id) === viewerId) ?? user ?? null,

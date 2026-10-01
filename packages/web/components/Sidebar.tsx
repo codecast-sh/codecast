@@ -36,17 +36,17 @@ import { useSyncSavedViews } from "../hooks/useSyncSavedViews";
 import { activeViewId, currentViewId, VIEW_ID_KEY } from "../lib/savedViews";
 import { projectDotClass } from "../lib/projectColors";
 import { useCurrentUser } from "../hooks/useCurrentUser";
-import { TeamIcon } from "./TeamIcon";
 import { toast } from "sonner";
-import { FolderGit2, Globe, Workflow, Zap, MessageSquare, MessagesSquare, FolderKanban, Flag, Layers, Users, UserMinus, Hash, MoreHorizontal, Pin, PinOff, BellOff, Lock, SquarePen, Phone, PhoneCall, Monitor, Smartphone } from "lucide-react";
+import { ContextMenu, CtxItem, useContextMenu } from "./ui/context-menu";
+import { MessagesSquare, FolderKanban, Layers, Users, UserMinus, Hash, MoreHorizontal, Pin, PinOff, BellOff, Lock, SquarePen, Phone, PhoneCall, Monitor, Smartphone } from "lucide-react";
 import { NATIVE_APP_COPY, NATIVE_APP_LINKS, nativeAppOffer, trackNativeAppClick } from "../lib/nativeApps";
 import { useSyncTeams } from "../hooks/useSyncTeams";
 import { AppPopOutButton } from "./desktop/AppPopOutButton";
 import type { DesktopApp } from "../lib/desktopApps";
 import { WorkbenchSection } from "./WorkbenchSection";
-import { RailHeading, SectionRow, NavCount, NavSection, NeedsInputCount, InboxNavRow, type SectionRowSpec } from "./sidebar/navPrimitives";
-import { DocsNavIcon, SessionsNavIcon, TasksNavIcon } from "./sidebar/navIcons";
-import { paneDragProps, railRowClass, railRowTone } from "../lib/railRow";
+import { RailHeading, SectionRow, NavCount, NeedsInputCount, InboxNavRow, type SectionRowSpec } from "./sidebar/navPrimitives";
+import { ChatNavSectionView, FeedNavRowView, QuestionsNavRowView, SidebarNavView, ThreadsNavRowView } from "./sidebar/SidebarNav";
+import { paneDragProps, railRowTone } from "../lib/railRow";
 import { usePoppedOut } from "../hooks/usePoppedOut";
 import { inActiveWorkspace } from "../lib/workspaceScope";
 import { useWorkspaceCollection } from "../hooks/useWorkspaceCollection";
@@ -124,25 +124,7 @@ const QuestionsNavRow = memo(function QuestionsNavRow({
   // Minus the rows a lead holds under a grant: those are the lead's to clear.
   const pending = waitingOnPerson(useDecisionQueue()).length;
   if (pending === 0) return null;
-  return (
-    <Link
-      href="/questions"
-      onClick={onMobileClose}
-      {...paneDragProps("/questions", "Questions")}
-      className={railRowClass(isActive, isNarrow, "border-sol-violet")}
-      title="Decisions waiting on you"
-    >
-      <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-      </svg>
-      {!isNarrow && (
-        <>
-          <span>Questions</span>
-          <NavCount n={pending} tone="bg-sol-violet text-white" />
-        </>
-      )}
-    </Link>
-  );
+  return <QuestionsNavRowView isActive={isActive} isNarrow={isNarrow} onMobileClose={onMobileClose} pending={pending} />;
 });
 
 // The Threads inbox's row: every conversation you are in, across chat, session
@@ -161,27 +143,7 @@ const ThreadsNavRow = memo(function ThreadsNavRow({
   onMobileClose?: () => void;
 }) {
   const unread = useThreadUnread();
-  return (
-    <Link
-      href="/threads"
-      onClick={onMobileClose}
-      {...paneDragProps("/threads", "Threads")}
-      className={`relative ${railRowClass(isActive, isNarrow)}`}
-      title="Threads — every conversation you're in"
-    >
-      <MessagesSquare className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />
-      {isNarrow ? (
-        unread > 0 && !isActive ? (
-          <span className="absolute top-2 right-3 w-1.5 h-1.5 rounded-full bg-sol-cyan" aria-label={`${unread} threads with new replies`} />
-        ) : null
-      ) : (
-        <>
-          <span>Threads</span>
-          {unread > 0 && <NavCount n={unread} tone="bg-sol-cyan text-sol-bg" />}
-        </>
-      )}
-    </Link>
-  );
+  return <ThreadsNavRowView isActive={isActive} isNarrow={isNarrow} onMobileClose={onMobileClose} unread={unread} />;
 });
 
 // Chat's sidebar row. Isolated for the same reason NeedsInputCountBadge is: the
@@ -358,23 +320,13 @@ const ChatNavRow = memo(function ChatNavRow({
 
   return (
     <>
-      <NavSection
-        label="Chat"
-        href="/chat"
+      <ChatNavSectionView
         isActive={isActive}
         isNarrow={isNarrow}
         onMobileClose={onMobileClose}
-        unread={channels > 0 || mentions > 0}
-        badge={
-          mentions > 0 ? (
-            <NavCount n={mentions} tone="bg-sol-red text-white" kind="mention" />
-          ) : channels > 0 && !isActive ? (
-            <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan" aria-label="Unread messages" />
-          ) : null
-        }
-        icon={<MessageSquare className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
+        channels={channels}
+        mentions={mentions}
         items={[...items, ...suggestedItems]}
-        popped="chat"
         headerAction={<AppPopOutButton app="chat" className="mr-1" />}
         expanded={expanded}
         onToggle={onToggle}
@@ -497,6 +449,10 @@ function PinnedRail({
   // kept, so turning chat back on restores it). The Threads pin is a VIEW even
   // in its legacy channel-kind form (isThreadsPin), so it survives chat off.
   const chatOn = useTeamFeature("chat");
+  // Right-click on a pin: a channel opens its full channel menu (which carries
+  // Unpin), every other pin a menu with just Unpin.
+  const channelMenu = useChannelMenu();
+  const pinMenu = useContextMenu<SidebarPin>();
   const visiblePins = (chatOn ? pins : pins.filter((p) => isThreadsPin(p) || p.kind !== "channel"))
     .filter((p) => !scope || pinApp(p) === scope);
   if (visiblePins.length === 0) return null;
@@ -512,6 +468,7 @@ function PinnedRail({
         icon: <PinOff className="w-3 h-3" />,
         onClick: () => togglePin(pin.kind, pin.id, pin.label),
       }],
+      onContextMenu: (e: React.MouseEvent) => pinMenu.open(e, pin),
     };
     // The Threads page, whichever kind the pin was stored under: its own
     // icon, and the same cyan count the rail's Threads row wears.
@@ -579,6 +536,8 @@ function PinnedRail({
         // from a fresh navigation — and both mean this row.
         active: pathname === `/chat/${id}` || pathname === `/chat/${pin.id}`,
         onSelect: () => onNavigate(`/chat/${id}`),
+        onContextMenu: (e: React.MouseEvent) =>
+          channelMenu.open(e, { channelId: id, notifyLevel: live?.notifyLevel ?? "mentions" }),
       };
     }
     const rows: any[] = Array.isArray(savedViews) ? savedViews : Object.values(savedViews ?? {});
@@ -601,6 +560,14 @@ function PinnedRail({
         const row = resolve(pin);
         return <SectionRow key={row.id} row={row} className="mx-2 rounded" />;
       })}
+      <ChannelContextMenu state={channelMenu} />
+      <ContextMenu state={pinMenu}>
+        {(p) => (
+          <CtxItem icon={PinOff} onSelect={() => togglePin(p.kind, p.id, p.label)}>
+            Unpin from top
+          </CtxItem>
+        )}
+      </ContextMenu>
     </div>
   );
 }
@@ -988,51 +955,41 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             scope={scope}
           />
         )}
-        {scope === "work" ? null : (<>
-        <RailHeading label="Conversations" isNarrow={isNarrow} />
-        <div className="text-sm">
-          <InboxNavRow
-            active={isInbox}
-            isNarrow={isNarrow}
-            badge={<NeedsInputCountBadge />}
-            onClick={() => {
-              useInboxStore.getState().setShowFavorites(false);
-              if (isInbox) {
-                useInboxStore.getState().setShowMySessions(true);
-                useInboxStore.getState().clearSelection();
-              }
-              router.push("/inbox");
-            }}
-          />
-          <ThreadsNavRow
-            isActive={pathname === "/threads"}
-            isNarrow={isNarrow}
-            onMobileClose={onMobileClose}
-          />
-          {activeTeam && (
-            <Link
-              href="/team/activity"
-              {...paneDragProps("/team/activity", "Activity")}
-              className={railRowClass(isTeamActivity, isNarrow)}
-              title={activeTeam.name}
-            >
-              <TeamIcon icon={activeTeam.icon} color={activeTeam.icon_color} className="w-5 h-5 flex-shrink-0" />
-              {!isNarrow && (
-                <>
-                  <span>Feed</span>
-                  {teamUnreadCount != null && teamUnreadCount > 0 && !isTeamActivity && (
-                    <NavCount n={teamUnreadCount} tone="bg-sol-cyan text-sol-bg" />
-                  )}
-                </>
-              )}
-            </Link>
-          )}
-          <QuestionsNavRow
-            isActive={pathname === "/questions"}
-            isNarrow={isNarrow}
-            onMobileClose={onMobileClose}
-          />
-          {chatOn && <ChatNavRow
+        <SidebarNavView
+          isNarrow={isNarrow}
+          scope={scope}
+          onMobileClose={onMobileClose}
+          inbox={
+            <InboxNavRow
+              active={isInbox}
+              isNarrow={isNarrow}
+              badge={<NeedsInputCountBadge />}
+              onClick={() => {
+                useInboxStore.getState().setShowFavorites(false);
+                if (isInbox) {
+                  useInboxStore.getState().setShowMySessions(true);
+                  useInboxStore.getState().clearSelection();
+                }
+                router.push("/inbox");
+              }}
+            />
+          }
+          threads={
+            <ThreadsNavRow
+              isActive={pathname === "/threads"}
+              isNarrow={isNarrow}
+              onMobileClose={onMobileClose}
+            />
+          }
+          feed={activeTeam && <FeedNavRowView team={activeTeam} isActive={!!isTeamActivity} isNarrow={isNarrow} unread={teamUnreadCount} />}
+          questions={
+            <QuestionsNavRow
+              isActive={pathname === "/questions"}
+              isNarrow={isNarrow}
+              onMobileClose={onMobileClose}
+            />
+          }
+          chat={chatOn && <ChatNavRow
             isActive={!!isChat}
             isNarrow={isNarrow}
             pathname={pathname}
@@ -1040,177 +997,47 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             onToggle={() => setViewSectionOverride((v) => ({ ...v, chat: !(v.chat ?? !!isChat) }))}
             onMobileClose={onMobileClose}
           />}
-          {callsOn && <CallsNavRow
-            isActive={!!isCalls}
-            isNarrow={isNarrow}
-            onMobileClose={onMobileClose}
-          />}
-          {/* The huddles running right now, one row each — an occupied room
-              is a door you can walk through from here. Renders nothing when
-              none is live. */}
-          {callsOn && (
+          calls={callsOn && (<>
+            <CallsNavRow
+              isActive={!!isCalls}
+              isNarrow={isNarrow}
+              onMobileClose={onMobileClose}
+            />
+            {/* The huddles running right now, one row each — an occupied room
+                is a door you can walk through from here. Renders nothing when
+                none is live. */}
             <Suspense fallback={null}>
               <LiveNowRail isNarrow={isNarrow} onNavigate={onMobileClose} />
             </Suspense>
-          )}
-        </div>
-
-        </>)}
-        {/* What you are working on. Projects leads: it is the container the rest
-            of this group files into, so the rail reads top-down as project →
-            its tasks → the docs and files around them. */}
-        <RailHeading label="Work" isNarrow={isNarrow} action={<AppPopOutButton app="work" />} />
-        <div className="text-sm">
-          {/* The goals above the projects (initiatives-projects-role-page.md I1). */}
-          <NavSection
-            label="Initiatives"
-            href="/initiatives"
-            isActive={!!isInitiatives}
-            popped="work"
-            isNarrow={isNarrow}
-            onMobileClose={onMobileClose}
-            title="Initiatives: what the company is trying to reach"
-            icon={<Flag className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
-          />
-          <NavSection
-            label="Projects"
-            href="/projects"
-            isActive={isProjects}
-            popped="work"
-            isNarrow={isNarrow}
-            onMobileClose={onMobileClose}
-            items={projectItems}
-            expanded={viewSectionOverride.projects ?? isProjects}
-            onToggle={() => setViewSectionOverride((o) => ({ ...o, projects: !(o.projects ?? isProjects) }))}
-            icon={<FolderKanban className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
-          />
-          <NavSection
-            label="Tasks"
-            href="/tasks"
-            isActive={isTasks}
-            popped="work"
-            isNarrow={isNarrow}
-            onMobileClose={onMobileClose}
-            items={taskViewItems}
-            expanded={viewSectionOverride.tasks ?? isTasks}
-            onToggle={() => setViewSectionOverride((o) => ({ ...o, tasks: !(o.tasks ?? isTasks) }))}
-            icon={<TasksNavIcon />}
-          />
-          <NavSection
-            label="Docs"
-            href="/docs"
-            isActive={isDocs || isPlans}
-            popped="work"
-            isNarrow={isNarrow}
-            onMobileClose={onMobileClose}
-            items={docViewItems}
-            expanded={viewSectionOverride.docs ?? (isDocs || isPlans)}
-            onToggle={() => setViewSectionOverride((o) => ({ ...o, docs: !(o.docs ?? (isDocs || isPlans)) }))}
-            icon={<DocsNavIcon />}
-          />
-          <NavSection
-            label="Code"
-            href="/repo"
-            isActive={pathname === "/repo" || /^\/(repo|commit|pr)\//.test(pathname || "")}
-            isNarrow={isNarrow}
-            onMobileClose={onMobileClose}
-            icon={<FolderGit2 className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
-          />
-          <NavSection
-            label="Files"
-            href="/files"
-            isActive={isVault}
-            isNarrow={isNarrow}
-            onMobileClose={onMobileClose}
-            icon={
-              <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 13h6m-6 3h4" />
-              </svg>
-            }
-          />
-          <NavSection
-            label="Pages"
-            href="/pages"
-            isActive={isPages}
-            isNarrow={isNarrow}
-            onMobileClose={onMobileClose}
-            icon={<Globe className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
-          />
-        </div>
-
-        {/* The Work window keeps the pinned rail and the Work group, the
-            two things its pages are reached through; the rest is the main
-            window's. */}
-        {scope === "work" ? null : (<>
-        {/* The machinery that does the work: what is running right now, and the
-            standing things that set it running. */}
-        <RailHeading label="Agents" isNarrow={isNarrow} />
-        <div data-rail-group="agents" className="text-sm">
-          <NavSection
-            label="Sessions"
-            href="/sessions"
-            isActive={!!isSessions}
-            isNarrow={isNarrow}
-            onMobileClose={onMobileClose}
-            icon={<SessionsNavIcon />}
-          />
-          <NavSection
-            label="Workflows"
-            href="/routines"
-            isActive={isWorkflows}
-            isNarrow={isNarrow}
-            onMobileClose={onMobileClose}
-            icon={<Workflow className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
-          />
-          <NavSection
-            label="Triggers"
-            href="/triggers"
-            isActive={isTriggers}
-            isNarrow={isNarrow}
-            onMobileClose={onMobileClose}
-            icon={<Zap className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
-          />
-          {orgOn && (<>
-          <NavSection
-            label="Org"
-            href="/org"
-            isActive={!!isOrg}
-            isNarrow={isNarrow}
-            onMobileClose={onMobileClose}
-            title="Org — who reports to whom"
-            icon={
-              <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <rect x="9" y="3" width="6" height="4.5" rx="1" strokeWidth={1.5} />
-                <rect x="3" y="16.5" width="6" height="4.5" rx="1" strokeWidth={1.5} />
-                <rect x="15" y="16.5" width="6" height="4.5" rx="1" strokeWidth={1.5} />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 7.5V12M12 12H6v4.5M12 12h6v4.5" />
-              </svg>
-            }
-          />
-          <NavSection
-            label={rootAgent ? agentName(rootAgent) : "Workspace agent"}
-            href="/anchor"
-            isActive={isRootAgent}
-            isNarrow={isNarrow}
-            onMobileClose={onMobileClose}
-            title={rootAgent ? `${agentName(rootAgent)}, the workspace's agent` : "Set up the workspace's agent"}
-            icon={<AnchorAvatar anchor={rootAgent} size={20} className="flex-shrink-0" />}
-          />
           </>)}
-          <NavSection
-            label="Windows"
-            href="/windows"
-            isActive={!!isWindows}
-            isNarrow={isNarrow}
-            onMobileClose={onMobileClose}
-            icon={
-              <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 5a1 1 0 011-1h4a1 1 0 011 1v5a1 1 0 01-1 1H5a1 1 0 01-1-1V5zm10 0a1 1 0 011-1h4a1 1 0 011 1v3a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 16a1 1 0 011-1h4a1 1 0 011 1v3a1 1 0 01-1 1H5a1 1 0 01-1-1v-3zm10-2a1 1 0 011-1h4a1 1 0 011 1v5a1 1 0 01-1 1h-4a1 1 0 01-1-1v-5z" />
-            </svg>
-            }
-          />
-        </div>
+          workAction={<AppPopOutButton app="work" />}
+          active={{
+            initiatives: !!isInitiatives,
+            projects: isProjects,
+            tasks: isTasks,
+            docs: isDocs || isPlans,
+            code: pathname === "/repo" || /^\/(repo|commit|pr)\//.test(pathname || ""),
+            files: isVault,
+            pages: isPages,
+            sessions: !!isSessions,
+            workflows: isWorkflows,
+            triggers: isTriggers,
+            org: !!isOrg,
+            rootAgent: isRootAgent,
+            windows: !!isWindows,
+          }}
+          projects={{ items: projectItems, expanded: viewSectionOverride.projects ?? isProjects, onToggle: () => setViewSectionOverride((o) => ({ ...o, projects: !(o.projects ?? isProjects) })) }}
+          tasks={{ items: taskViewItems, expanded: viewSectionOverride.tasks ?? isTasks, onToggle: () => setViewSectionOverride((o) => ({ ...o, tasks: !(o.tasks ?? isTasks) })) }}
+          docs={{ items: docViewItems, expanded: viewSectionOverride.docs ?? (isDocs || isPlans), onToggle: () => setViewSectionOverride((o) => ({ ...o, docs: !(o.docs ?? (isDocs || isPlans)) })) }}
+          orgOn={orgOn}
+          agent={{
+            label: rootAgent ? agentName(rootAgent) : "Workspace agent",
+            title: rootAgent ? `${agentName(rootAgent)}, the workspace's agent` : "Set up the workspace's agent",
+            icon: <AnchorAvatar anchor={rootAgent} size={20} className="flex-shrink-0" />,
+          }}
+        />
+
+        {scope === "work" ? null : (<>
 
         {!isNarrow && bookmarks && bookmarks.length > 0 && (
           <div className="mt-4">

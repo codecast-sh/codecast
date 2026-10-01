@@ -18,3 +18,4 @@
 # spawn that it is in force.
 [test]
 preload = ["./src/test-helpers/isolatedTmuxServer.ts", "./src/test-helpers/sandboxHarnessLedger.ts"]
+pathIgnorePatterns = ["**/src/computer/**"]

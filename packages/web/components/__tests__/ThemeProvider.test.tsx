@@ -5,7 +5,8 @@ import { closeDomWindow } from "../../test-helpers/domGlobals";
 const previous = new Map<string, { present: boolean; value: unknown }>();
 const dom = new JSDOM("<!doctype html><html><body></body></html>", {
   pretendToBeVisual: true,
-  url: "https://local.codecast.sh/",
+  // An app route: "/" opens locked to light (lib/themeBootLock.ts), which the boot lock test below covers.
+  url: "https://local.codecast.sh/inbox",
 });
 
 beforeAll(() => {
@@ -213,5 +214,39 @@ describe("ThemeProvider lock", () => {
     await act(async () => root.render(<ThemeProvider><ThemeProbe /></ThemeProvider>));
     expect(document.documentElement.classList.contains("dark")).toBe(true);
     expect(document.documentElement.classList.contains("minimal-style")).toBe(true);
+  });
+});
+
+describe("ThemeProvider boot lock", () => {
+  test("the homepage never paints the stored theme, and the app gets it back once the page's lock lets go", async () => {
+    dom.reconfigure({ url: "https://local.codecast.sh/" });
+    try {
+      localStorage.setItem("codecast-theme", "dark");
+      localStorage.setItem("codecast-visual-style", "minimal");
+      const seen: string[] = [];
+      const watch = new MutationObserver(() => seen.push(document.documentElement.className));
+      watch.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+      function Page({ locked }: { locked: boolean }) {
+        return locked ? <Locked /> : <ThemeProbe />;
+      }
+      function Locked() {
+        useThemeLock("light");
+        return <ThemeProbe />;
+      }
+      // The provider mounts before the page's own lock does (the route is lazy).
+      await act(async () => root.render(<ThemeProvider><ThemeProbe /></ThemeProvider>));
+      expect(host.textContent).toBe("light");
+      await act(async () => root.render(<ThemeProvider><Page locked /></ThemeProvider>));
+      await act(async () => root.render(<ThemeProvider><Page locked={false} /></ThemeProvider>));
+      watch.disconnect();
+      const firstDark = seen.findIndex((c) => /\bdark\b|minimal-style/.test(c));
+      // Light Classic until the page's lock lets go, and only then the visitor's own.
+      expect(seen.slice(0, firstDark).every((c) => !/\bdark\b|minimal-style/.test(c))).toBe(true);
+      expect(host.textContent).toBe("dark");
+      expect(document.documentElement.classList.contains("minimal-style")).toBe(true);
+      expect(localStorage.getItem("codecast-theme")).toBe("dark");
+    } finally {
+      dom.reconfigure({ url: "https://local.codecast.sh/inbox" });
+    }
   });
 });

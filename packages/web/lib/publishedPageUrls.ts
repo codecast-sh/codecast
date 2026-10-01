@@ -20,3 +20,9 @@ export function pageShareUrl(slug: string): string {
 export function pageThumbUrl(slug: string, version: number): string {
   return `${pageFrameSrc(slug)}?thumb=1&r=v${version}`;
 }
+
+// The page alone, without the codecast bar, view beacon or comment polling:
+// what a card frames, scaled down, when there is no stored capture.
+export function pagePreviewSrc(slug: string, version: number): string {
+  return `${pageFrameSrc(slug)}?preview=1&r=v${version}`;
+}

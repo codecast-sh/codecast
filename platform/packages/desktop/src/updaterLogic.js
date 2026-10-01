@@ -76,9 +76,10 @@ function decideUpdate({ feed, installedVersion, force = false, platform = "darwi
 
 // The swap helper: a /bin/sh script that waits for `pid` to exit, renames the
 // old bundle aside, renames the incoming one in, rolls back if either rename
-// fails, clears quarantine, removes the old bundle and reopens the app in the
-// foreground. Pure string so the quoting and the rollback are testable.
-function swapScript({ pid, bundlePath, incomingPath, oldPath }) {
+// fails, clears quarantine, removes the old bundle and, unless the person was
+// quitting, reopens the app in the foreground. Pure string so the quoting and
+// the rollback are testable.
+function swapScript({ pid, bundlePath, incomingPath, oldPath, relaunch = true }) {
   const sh = (p) => `'${String(p).replace(/'/g, `'\\''`)}'`; // single-quote for /bin/sh
   return [
     `while kill -0 ${pid} 2>/dev/null; do sleep 0.2; done`,
@@ -86,7 +87,7 @@ function swapScript({ pid, bundlePath, incomingPath, oldPath }) {
     `mv ${sh(bundlePath)} ${sh(oldPath)} && mv ${sh(incomingPath)} ${sh(bundlePath)} || { mv ${sh(oldPath)} ${sh(bundlePath)} 2>/dev/null; exit 1; }`,
     `/usr/bin/xattr -dr com.apple.quarantine ${sh(bundlePath)} 2>/dev/null`,
     `rm -rf ${sh(oldPath)}`,
-    `/usr/bin/open ${sh(bundlePath)}`,
+    ...(relaunch ? [`/usr/bin/open ${sh(bundlePath)}`] : []),
   ].join("\n");
 }
 

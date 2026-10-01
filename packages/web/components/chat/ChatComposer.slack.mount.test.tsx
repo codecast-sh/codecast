@@ -31,9 +31,9 @@ async function verifySlackComposer() {
   mock.module("../KeyboardShortcutsHelp", () => ({ KeyCap: ({ children }: any) => <kbd>{children}</kbd>, MenuKeyCaps: () => null }));
   mock.module("../ui/popover", () => ({ Popover: ({ children }: any) => <div>{children}</div>, PopoverTrigger: ({ children }: any) => children, PopoverContent: ({ children }: any) => <div>{children}</div> }));
   mock.module("../../lib/draftImages", () => ({ settleComposerAttachments: async () => [] }));
-  mock.module("../MessageInput", () => ({ MessageInput: ({ onGateSend }: any) => {
+  mock.module("../MessageInput", () => ({ MessageInput: ({ onGateSend, composerFoot }: any) => {
     const [text, setText] = React.useState("Draft survives authorization");
-    return <><textarea value={text} onChange={event => setText(event.target.value)} /><button type="button" data-send onClick={() => onGateSend(text, [])}>Send</button></>;
+    return <><textarea value={text} onChange={event => setText(event.target.value)} /><button type="button" data-send onClick={() => onGateSend(text, [])}>Send</button>{composerFoot}</>;
   } }));
   const { ChatComposer } = await import("./ChatComposer");
   const root = createRoot(document.getElementById("root")!);

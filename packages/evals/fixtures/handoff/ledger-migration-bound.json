@@ -1,0 +1,251 @@
+{
+ "asOf": "2026-01-15T14:49:30.000Z",
+ "notes": "synthetic session bound to a task and a plan, with a pinned state: billing reads moved to a ledger, writes half done",
+ "judge": "a cold reader can continue: the brief names the goal (billing on the ledger tables), the double-write decision and its reason (rollback by a flag), what is verified (reads match on 200 accounts, tests pass) and what is not, that refunds in billing/refunds.ts remain, and a first step that names that file",
+ "snapshot": {
+  "rows": [
+   {
+    "role": "assistant",
+    "content": "Reads are all on the ledger. Writes: invoices, credits and usage double-write now. Refunds still write only the old table, and the refund path in billing/refunds.ts is the last one to port before cutover.",
+    "timestamp": 1768488570000,
+    "line": 34
+   },
+   {
+    "role": "user",
+    "content": "",
+    "timestamp": 1768488480000,
+    "line": 33,
+    "tool_results": [
+     {}
+    ]
+   },
+   {
+    "role": "assistant",
+    "content": "",
+    "timestamp": 1768488390000,
+    "line": 32
+   },
+   {
+    "role": "assistant",
+    "content": "Switched the proration read to the ledger view and compared it with the old table on the sample of 200 accounts: totals match to the cent.",
+    "timestamp": 1768488300000,
+    "line": 31
+   },
+   {
+    "role": "user",
+    "content": "",
+    "timestamp": 1768488210000,
+    "line": 30,
+    "tool_results": [
+     {}
+    ]
+   },
+   {
+    "role": "assistant",
+    "content": "",
+    "timestamp": 1768488120000,
+    "line": 29
+   },
+   {
+    "role": "assistant",
+    "content": "Switched the payment intents read to the ledger view and compared it with the old table on the sample of 200 accounts: totals match to the cent.",
+    "timestamp": 1768488030000,
+    "line": 28
+   },
+   {
+    "role": "user",
+    "content": "",
+    "timestamp": 1768487940000,
+    "line": 27,
+    "tool_results": [
+     {}
+    ]
+   },
+   {
+    "role": "assistant",
+    "content": "",
+    "timestamp": 1768487850000,
+    "line": 26
+   },
+   {
+    "role": "assistant",
+    "content": "Switched the dunning state read to the ledger view and compared it with the old table on the sample of 200 accounts: totals match to the cent.",
+    "timestamp": 1768487760000,
+    "line": 25
+   },
+   {
+    "role": "user",
+    "content": "",
+    "timestamp": 1768487670000,
+    "line": 24,
+    "tool_results": [
+     {}
+    ]
+   },
+   {
+    "role": "assistant",
+    "content": "",
+    "timestamp": 1768487580000,
+    "line": 23
+   },
+   {
+    "role": "assistant",
+    "content": "Switched the invoice PDFs read to the ledger view and compared it with the old table on the sample of 200 accounts: totals match to the cent.",
+    "timestamp": 1768487490000,
+    "line": 22
+   },
+   {
+    "role": "user",
+    "content": "",
+    "timestamp": 1768487400000,
+    "line": 21,
+    "tool_results": [
+     {}
+    ]
+   },
+   {
+    "role": "assistant",
+    "content": "",
+    "timestamp": 1768487310000,
+    "line": 20
+   },
+   {
+    "role": "assistant",
+    "content": "Switched the coupon redemptions read to the ledger view and compared it with the old table on the sample of 200 accounts: totals match to the cent.",
+    "timestamp": 1768487220000,
+    "line": 19
+   },
+   {
+    "role": "assistant",
+    "content": "Double-write it is: every write goes to the ledger first and then the old table inside one transaction, so a rollback is a flag flip.",
+    "timestamp": 1768487130000,
+    "line": 18
+   },
+   {
+    "role": "user",
+    "content": "Do writes double-write to both tables, or switch outright? I'd rather double-write so we can roll back.",
+    "timestamp": 1768487040000,
+    "line": 17
+   },
+   {
+    "role": "user",
+    "content": "",
+    "timestamp": 1768486950000,
+    "line": 16,
+    "tool_results": [
+     {}
+    ]
+   },
+   {
+    "role": "assistant",
+    "content": "",
+    "timestamp": 1768486860000,
+    "line": 15
+   },
+   {
+    "role": "assistant",
+    "content": "Switched the seat counts read to the ledger view and compared it with the old table on the sample of 200 accounts: totals match to the cent.",
+    "timestamp": 1768486770000,
+    "line": 14
+   },
+   {
+    "role": "user",
+    "content": "",
+    "timestamp": 1768486680000,
+    "line": 13,
+    "tool_results": [
+     {}
+    ]
+   },
+   {
+    "role": "assistant",
+    "content": "",
+    "timestamp": 1768486590000,
+    "line": 12
+   },
+   {
+    "role": "assistant",
+    "content": "Switched the usage charges read to the ledger view and compared it with the old table on the sample of 200 accounts: totals match to the cent.",
+    "timestamp": 1768486500000,
+    "line": 11
+   },
+   {
+    "role": "user",
+    "content": "",
+    "timestamp": 1768486410000,
+    "line": 10,
+    "tool_results": [
+     {}
+    ]
+   },
+   {
+    "role": "assistant",
+    "content": "",
+    "timestamp": 1768486320000,
+    "line": 9
+   },
+   {
+    "role": "assistant",
+    "content": "Switched the tax lines read to the ledger view and compared it with the old table on the sample of 200 accounts: totals match to the cent.",
+    "timestamp": 1768486230000,
+    "line": 8
+   },
+   {
+    "role": "user",
+    "content": "",
+    "timestamp": 1768486140000,
+    "line": 7,
+    "tool_results": [
+     {}
+    ]
+   },
+   {
+    "role": "assistant",
+    "content": "",
+    "timestamp": 1768486050000,
+    "line": 6
+   },
+   {
+    "role": "assistant",
+    "content": "Switched the credit balance read to the ledger view and compared it with the old table on the sample of 200 accounts: totals match to the cent.",
+    "timestamp": 1768485960000,
+    "line": 5
+   },
+   {
+    "role": "user",
+    "content": "",
+    "timestamp": 1768485870000,
+    "line": 4,
+    "tool_results": [
+     {}
+    ]
+   },
+   {
+    "role": "assistant",
+    "content": "",
+    "timestamp": 1768485780000,
+    "line": 3
+   },
+   {
+    "role": "assistant",
+    "content": "Switched the invoice totals read to the ledger view and compared it with the old table on the sample of 200 accounts: totals match to the cent.",
+    "timestamp": 1768485690000,
+    "line": 2
+   },
+   {
+    "role": "user",
+    "content": "Move billing to the new ledger tables. Reads first, then writes, and keep the old tables in sync until the cutover.",
+    "timestamp": 1768485600000,
+    "line": 1
+   }
+  ],
+  "facts": {
+   "title": "Migrate billing to the ledger",
+   "agent_type": "codex",
+   "model": "gpt-5",
+   "thread_state": "Migrating billing writes to the ledger\nStatus: reads switched, writes double-write except refunds\nNext: port the refund path",
+   "task_short_id": "ct-101",
+   "plan_short_id": "pl-7"
+  }
+ }
+}

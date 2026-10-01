@@ -1164,6 +1164,9 @@ export const serve = httpAction(async (ctx, request) => {
     html = injectBase(html, doc.version < artifact.version ? `_v/${doc.version}/` : "./");
   }
   html = injectPlayer(html, apiBase);
+  // A card's live thumbnail: the page alone. No bar means no view beacon and
+  // no comment polling, so a gallery of previews counts nothing as a view.
+  if (q.get("preview") === "1") return htmlResponse(html, 200, cachePolicy(artifact));
   // Bake the validated gate tokens into the meta URL so the bar's polling
   // clears the same gates the document did.
   const metaTokens = `${kToken ? `&k=${kToken}` : ""}${artifact.email_gate && q.get("e") ? `&e=${q.get("e")}` : ""}`;

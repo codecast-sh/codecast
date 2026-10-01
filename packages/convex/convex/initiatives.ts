@@ -2,11 +2,15 @@ import { labelsOf, noteOrgChange, partyRef, recordSubject, whereOfRecord, withOr
 import { movedFields } from "@codecast/shared/contracts/orgChange";
 import { v, type Validator } from "convex/values";
 import {
+  INITIATIVE_METRICS_MAX,
   INITIATIVE_STATUSES,
   INITIATIVE_UPDATE_HEALTHS,
+  metricKeyOf,
+  type InitiativeMetric,
   type InitiativeStatus,
   type InitiativeUpdateHealth,
 } from "@codecast/shared/contracts/initiative";
+import { recordScores } from "@codecast/shared/contracts/orgTemplateState";
 import type { Id } from "./_generated/dataModel";
 import { mutation, query } from "./functions";
 import { getAuthenticatedUserId } from "./pendingMessages";
@@ -136,6 +140,27 @@ async function requireParent(ctx: Ctx, userId: Id<"users">, initiative: any, ref
 
 const clean = (text: string, max: number) => text.trim().slice(0, max);
 
+// One or two metrics, each a name and a target; the key is derived from the
+// name when the caller gave none, so a person types "Weekly active teams=1000"
+// and a role reports `weekly_active_teams=412`. A value already reported
+// under a key that survives the edit is kept; one under a key that goes is
+// dropped with it.
+function metricsPatch(raw: Array<{ key?: string; name: string; target: string }>, prior?: Record<string, any>): { metrics: InitiativeMetric[] | undefined; scoreboard: Record<string, any> | undefined } {
+  const metrics: InitiativeMetric[] = [];
+  for (const m of raw) {
+    const name = clean(String(m.name ?? ""), 80);
+    const target = clean(String(m.target ?? ""), 40);
+    const key = metricKeyOf(m.key?.trim() || name);
+    if (!name || !target) throw new Error("A metric is a name and a target");
+    if (!key) throw new Error(`A metric name needs a letter or a digit in it: "${name}"`);
+    if (metrics.some((x) => x.key === key)) throw new Error(`Two metrics read as the same key: ${key}`);
+    metrics.push({ key, name, target });
+  }
+  if (metrics.length > INITIATIVE_METRICS_MAX) throw new Error(`An initiative carries at most ${INITIATIVE_METRICS_MAX} metrics`);
+  const kept = Object.fromEntries(Object.entries(prior ?? {}).filter(([k]) => metrics.some((m) => m.key === k)));
+  return { metrics: metrics.length ? metrics : undefined, scoreboard: Object.keys(kept).length ? kept : undefined };
+}
+
 // An owner role has every project of its initiative in its scope (I1 "The
 // org"). The scope write is orgRoles' one path for a scope gain; this only
 // decides WHEN: after any write that names a role owner or grows the project
@@ -167,6 +192,8 @@ type Fields = {
   labels?: string[];
   project_ids?: string[];
   parent_initiative_id?: string | null;
+  /** Replaces the list; an empty list clears it. */
+  metrics?: Array<{ key?: string; name: string; target: string }>;
 };
 
 // The patch a create or an edit becomes, validated against the row's own

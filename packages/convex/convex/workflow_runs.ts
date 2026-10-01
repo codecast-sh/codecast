@@ -37,7 +37,7 @@ export async function runScope(
 // Owner always; otherwise the run's ACCESS key must grant the viewer. The
 // stored key when present, the write-time compute for rows minted before
 // the backfill (they resolve personal to their owner).
-async function canReadRun(ctx: Ctx, userId: Id<"users">, run: any): Promise<boolean> {
+export async function canReadRun(ctx: Ctx, userId: Id<"users">, run: any): Promise<boolean> {
   if (String(run.user_id) === String(userId)) return true;
   return workspaceGrantsAccess(ctx, userId, await resolveWorkspaceKey(ctx, run));
 }
@@ -814,6 +814,12 @@ export const updateProgress = mutation({
 // (<session>/workflows/wf_<id>.json). Upserts by external_run_id so the daemon can
 // re-post on every snapshot change. run_kind="workflow" distinguishes these from our
 // routine/DOT-graph runs, which share this table and the existing run UI.
+const INGEST_LIVE_STATUSES = new Set(["pending", "running", "paused"]);
+export function ingestRunStatus(status: string): "pending" | "running" | "paused" | "completed" | "failed" {
+  if (INGEST_LIVE_STATUSES.has(status) || status === "completed") return status as "pending" | "running" | "paused" | "completed";
+  return "failed";
+}
+
 export const ingestSnapshot = mutation({
   args: {
     api_token: v.string(),
@@ -844,9 +850,13 @@ export const ingestSnapshot = mutation({
     if (!auth) return { error: "Unauthorized" };
     const now = Date.now();
 
-    const allowed = ["pending", "running", "paused", "completed", "failed"];
-    const runStatus = (allowed.includes(args.status) ? args.status : "running") as
-      "pending" | "running" | "paused" | "completed" | "failed";
+    // The runtime's own vocabulary is wider than ours: a stopped run (TaskStop,
+    // Esc, its host exiting) snapshots as "killed". Anything we don't know is
+    // a run that is OVER, never one that is running, or its bar and the host
+    // card's "waiting on the fleet" stay up forever. A stop lands the way
+    // cancelCore records one: failed, with the reason.
+    const runStatus = ingestRunStatus(args.status);
+    const failReason = runStatus === "failed" && args.status !== "failed" ? "Stopped" : undefined;
     const agentStatus = (s: string) =>
       s === "done" ? "completed"
       : s === "error" || s === "failed" ? "failed"
@@ -903,6 +913,8 @@ export const ingestSnapshot = mutation({
       project_path: args.project_path,
       primary_session_id: args.session_id,
       primary_conversation_id: primaryConvId,
+      // Undefined unsets it, so a stopped run that is resumed sheds the reason.
+      fail_reason: failReason,
       updated_at: now,
     };
 

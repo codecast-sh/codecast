@@ -311,7 +311,9 @@ export async function computeAnalysisOrg(ctx: Ctx, userId: Id<"users">, teamId: 
     };
     // Last activity in the scope and the week's wakes: the one reading
     // org.health uses (orgHealth.roleActivity).
-    const activity = await roleActivity(ctx, userId, role, now, { wholeWorkspaceLatest: latestAnywhere });
+    // The slice's own scan: one session scan for every role, not one each
+    // (nine scoped roles passed Convex's 100 MB read limit, ct-56046).
+    const activity = await roleActivity(ctx, userId, role, now, { wholeWorkspaceLatest: latestAnywhere, scan });
     const caps = capsFor(role);
     const hands = (scan.byParent.get(`role:${String(role._id)}`) ?? []).length;
     const parent = role.reports_to?.kind === "role"

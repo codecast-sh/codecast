@@ -388,6 +388,19 @@ export function isChatWakePrompt(rawContent: string | null | undefined): boolean
   return !!rawContent && CHAT_WAKE_HEADER.test(chatWakeText(rawContent));
 }
 
+// Claude Code's Workflow tool opens every subagent with two framed user turns:
+// the relayed request of the session that ran the workflow, then the task the
+// script computed for this agent. Each is one header line of boilerplate, then
+// the body indented two spaces. Group 1 names the frame.
+export const WORKFLOW_HARNESS_HEADER = /^\[Workflow harness — (user request|computed task)\][^\n]*\n/;
+
+export function parseWorkflowHarnessFrame(rawContent: string | null | undefined): { kind: "user request" | "computed task"; body: string } | null {
+  const m = rawContent?.match(WORKFLOW_HARNESS_HEADER);
+  if (!m) return null;
+  const body = stripPastedContent(rawContent!.slice(m[0].length).replace(/^ {2}/gm, "")).trim();
+  return { kind: m[1] as "user request" | "computed task", body };
+}
+
 // A harness <task-notification> — a background task / Monitor / Workflow
 // completion the harness injected as a user turn. Keys off the opening tag
 // only, same truncated-preview rule as isSessionMessage.

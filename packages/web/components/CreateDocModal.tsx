@@ -4,7 +4,8 @@ import { useImageUpload } from "../hooks/useImageUpload";
 import { useWorkspaceArgs, workspaceStamp } from "../hooks/useWorkspaceArgs";
 import { useInboxStore } from "../store/inboxStore";
 import { toast } from "sonner";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, FileText, Map as MapIcon } from "lucide-react";
+import { CreateDialog, CreateDialogSubtitle, CreateDialogTitle, createChipClass } from "./CreateDialog";
 import { DocEditor } from "./editor/DocEditor";
 import { DOC_TYPES, DOC_TYPE_LABELS } from "@codecast/shared/docs";
 
@@ -92,45 +93,37 @@ export function CreateDocModal({ onClose, initialType }: { onClose: () => void; 
   };
 
   return (
-    <div
-      className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[10001] flex items-start justify-center pt-[10vh] animate-in fade-in duration-150"
-      onClick={onClose}
-      onKeyDown={(e) => {
-        if (e.key === "Escape") onClose();
-        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); handleSubmit(); }
-      }}
+    <CreateDialog
+      icon={isPlan ? <MapIcon className="h-3 w-3 text-sol-yellow" /> : <FileText className="h-3 w-3 text-sol-text-muted" />}
+      noun={isPlan ? "plan" : "doc"}
+      onClose={onClose}
+      onSubmit={handleSubmit}
+      canSubmit={!!title.trim() && !submitting}
+      submitLabel={submitting ? "Creating…" : isPlan ? "Create plan" : "Create doc"}
+      width="lg"
     >
-      <div
-        className="bg-sol-bg border border-sol-border rounded-2xl shadow-2xl w-full max-w-[640px] animate-in slide-in-from-bottom-4 fade-in duration-200"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="px-6 pt-6 pb-1">
-          <input
+        <div className="px-5 pt-3">
+          <CreateDialogTitle
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             placeholder={isPlan ? "Plan title" : "Doc title"}
-            autoFocus
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.metaKey && !e.ctrlKey) e.preventDefault();
-              if (e.key === "Escape") onClose();
             }}
-            className="w-full text-xl font-semibold text-sol-text placeholder:text-sol-text-dim/40 bg-transparent outline-none"
           />
         </div>
 
         {isPlan && (
-          <div className="px-6 pb-2">
-            <input
+          <div className="px-5 pt-1.5">
+            <CreateDialogSubtitle
               value={goal}
               onChange={(e) => setGoal(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}
               placeholder="Goal (optional)"
-              className="w-full text-sm text-sol-text-muted placeholder:text-sol-text-dim/30 bg-transparent outline-none"
             />
           </div>
         )}
 
-        <div className="px-6 pb-4 min-h-[300px] max-h-[50vh] overflow-y-auto doc-editor-compact">
+        <div className="px-5 pb-3 pt-1 min-h-[260px] max-h-[50vh] overflow-y-auto doc-editor-compact">
           <DocEditor
             content=""
             onUpdate={(md) => { contentRef.current = md; }}
@@ -141,16 +134,14 @@ export function CreateDocModal({ onClose, initialType }: { onClose: () => void; 
           />
         </div>
 
-        <div className="flex items-center gap-2 px-6 py-3 border-t border-sol-border/40 flex-wrap">
+        <div className="flex flex-wrap items-center gap-1.5 px-5 pb-3.5">
           {DOC_TYPES.map((dt) => (
             <button
               key={dt}
+              type="button"
               onClick={() => setDocType(dt)}
-              className={`px-3 py-1.5 rounded-lg text-xs border transition-colors ${
-                docType === dt
-                  ? "border-sol-cyan/60 bg-sol-cyan/10 text-sol-text"
-                  : "border-sol-border/30 text-sol-text-dim hover:text-sol-text-muted"
-              }`}
+              aria-pressed={docType === dt}
+              className={createChipClass(docType === dt)}
             >
               {DOC_TYPE_LABELS[dt]}
             </button>
@@ -158,7 +149,7 @@ export function CreateDocModal({ onClose, initialType }: { onClose: () => void; 
         </div>
 
         {isPlan && (
-          <div className="px-6 pb-3">
+          <div className="px-5 pb-3.5">
             <button
               type="button"
               onClick={() => setShowAdvanced(!showAdvanced)}
@@ -222,22 +213,6 @@ export function CreateDocModal({ onClose, initialType }: { onClose: () => void; 
           </div>
         )}
 
-        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-sol-border/40">
-          <span className="text-[11px] text-sol-text-dim/50 mr-1 hidden sm:inline">
-            {typeof navigator !== "undefined" && /Mac/.test(navigator.userAgent) ? "\u2318" : "Ctrl"}+&#x21B5;
-          </span>
-          <button onClick={onClose} className="px-4 py-2 text-sm rounded-lg text-sol-text-muted hover:text-sol-text transition-colors">
-            Cancel
-          </button>
-          <button
-            onClick={handleSubmit}
-            disabled={!title.trim() || submitting}
-            className="px-5 py-2 text-sm rounded-lg bg-sol-cyan text-sol-bg font-semibold hover:brightness-110 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
-          >
-            {submitting ? "Creating..." : isPlan ? "Create plan" : "Create doc"}
-          </button>
-        </div>
-      </div>
-    </div>
+    </CreateDialog>
   );
 }

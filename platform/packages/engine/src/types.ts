@@ -32,6 +32,10 @@ export type RegistryEntry = {
   //     logic (excluded from the derived apply lists).
   hydration?: { phase?: HydrationPhase; merge?: HydrationMerge } | "manual";
   localFirst?: boolean;
+  // How the key syncs, where the registry says: a local-first list or
+  // singleton protects its rows and fields by diffing the slice (see
+  // generateAutoPending), and `rowKey` names a list row's identity field.
+  sync?: { kind?: "collection" | "singleton" | "list" | "scalar"; rowKey?: string };
   dispatchTable?: {
     table: string;
     kind: DispatchTableKind;
@@ -88,6 +92,29 @@ export type OutboxEntry = {
   // Present on repeated-write actions (see outboxCoalesceKeys): the outbox
   // keeps at most one row per key, newest wins.
   coalesceKey?: string;
+  // The field locks the action planted, with what each replaced, so a
+  // permanent refusal can lift them and put the prior values back
+  // (releaseActionFieldLocks). Absent when the action protected no field.
+  locks?: ActionFieldLock[];
+};
+
+/** One field lock an action planted on a localFirst row, and what it replaced. */
+export type ActionFieldLock = {
+  key: string;
+  storeKey: string;
+  recordId: string;
+  field: string;
+  ts: number;
+  value: unknown;
+  prior: unknown;
+  hadPrior: boolean;
+  priorLock?: PendingEntry;
+  // A list row the action added (include) or removed (exclude) rather than a
+  // field it changed; `rowKey` names the row's identity field and `index`
+  // where a removed row sat.
+  membership?: "include" | "exclude";
+  rowKey?: string;
+  index?: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -101,6 +128,10 @@ export type MergeSpec = MergePolicy | MergeSpecMap | MergeFn;
 
 export type SyncOpts = {
   kind?: "collection" | "singleton" | "list" | "scalar";
+  // A local-first list's row identity, the field a lock names a row by
+  // (default `_id`). Set it when optimistic rows carry a stub `_id` but share
+  // a natural key with the server row (a bookmark's message_id).
+  rowKey?: string;
   // Skip the updated_at version bail. Replicated OPTIMISTIC rows change fields
   // without bumping updated_at, so to the version heuristic they look like
   // heartbeat no-ops and are dropped. Field-level identity reuse still applies,

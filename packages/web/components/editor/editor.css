@@ -2,7 +2,7 @@
   font-family: var(--font-mono), monospace;
   font-size: 14px;
   line-height: 1.8;
-  color: var(--sol-text-muted);
+  color: var(--sol-text);
 }
 
 .doc-editor-content {
@@ -560,7 +560,7 @@
    rhythm, same inline-code chip, same blockquote/hr treatment. Heading sizes
    are matched in DOC_MD_COMPONENTS (they're Tailwind utilities there). */
 .doc-read-body {
-  color: var(--sol-text-muted);
+  color: var(--sol-text);
   line-height: 1.8;
 }
 
@@ -599,4 +599,262 @@
   color: #268bd2;
   text-decoration-color: rgba(38, 139, 210, 0.3);
   text-underline-offset: 2px;
+}
+
+/* ── Drafting (DraftingExtension, components/docs/drafting) ─────────────────
+   One accent for the whole layer (violet), so the affordances read as a
+   single system laid over the prose rather than a scatter of colours. */
+.doc-editor {
+  --draft: var(--sol-violet);
+  --draft-soft: color-mix(in srgb, var(--sol-violet) 45%, transparent);
+}
+
+/* Ghosts read dimmed always: the writer chose to dim them. */
+.doc-editor .draft-ghost {
+  opacity: 0.24;
+  transition: opacity 160ms ease;
+}
+.doc-editor .draft-ghost:hover {
+  opacity: 0.5;
+}
+/* A proposed cut (the Lab's trim): clicking keeps it. */
+.doc-editor .draft-ghost--proposal {
+  opacity: 0.3;
+  cursor: pointer;
+}
+
+/* Alternatives and Lab marks only while drafting is on. */
+.drafting-on .draft-alt {
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-decoration-color: color-mix(in srgb, var(--draft) 38%, transparent);
+  text-underline-offset: 5px;
+  border-radius: 2px;
+  transition: background-color 140ms ease, text-decoration-color 140ms ease;
+}
+.drafting-on .draft-alt:hover {
+  text-decoration-color: var(--draft);
+  background: color-mix(in srgb, var(--draft) 9%, transparent);
+}
+.drafting-on .draft-alt-para .draft-alt {
+  text-decoration: none;
+}
+.drafting-on .draft-flag {
+  text-decoration: underline wavy;
+  text-decoration-thickness: 1px;
+  text-decoration-color: color-mix(in srgb, var(--sol-orange) 70%, transparent);
+  text-underline-offset: 4px;
+  cursor: help;
+}
+
+/* The dot pager: one dot per version, under the end of the run. The first is
+   the original; the filled one is showing; a lit filled dot means the run is
+   on a variation, not the original. */
+.draft-dots {
+  position: relative;
+  display: inline-block;
+  width: 0;
+  height: 0;
+  vertical-align: baseline;
+}
+.draft-dots__row {
+  position: absolute;
+  right: 0;
+  top: 8px;
+  display: flex;
+  gap: 2px;
+  line-height: 0;
+  animation: draft-in 180ms ease-out;
+}
+.draft-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  border: 1px solid var(--draft-soft);
+  cursor: pointer;
+  transition: transform 120ms ease, background-color 120ms ease;
+}
+.draft-dot:hover {
+  transform: scale(1.5);
+  background: var(--draft-soft);
+}
+.draft-dot--ai {
+  border-radius: 1px;
+}
+.draft-dot--on {
+  background: color-mix(in srgb, var(--draft) 55%, transparent);
+  border-color: transparent;
+}
+.draft-dot--on:not(.draft-dot--original) {
+  background: var(--draft);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--draft) 22%, transparent);
+}
+
+/* Paragraph versions: a rule in the left gutter with the pager running down it. */
+.drafting-on .draft-alt-para {
+  position: relative;
+}
+.drafting-on .draft-alt-para::before {
+  content: "";
+  position: absolute;
+  left: -18px;
+  top: 0.35em;
+  bottom: 0.35em;
+  width: 1px;
+  background: linear-gradient(to bottom, transparent, var(--draft-soft) 15%, var(--draft-soft) 85%, transparent);
+}
+.draft-dots--para {
+  position: absolute;
+  left: -24px;
+  top: 50%;
+  width: auto;
+  height: auto;
+}
+.draft-dots--para .draft-dots__row {
+  position: static;
+  flex-direction: column;
+  transform: translateY(-50%);
+  background: var(--sol-bg);
+  padding: 3px 1px;
+}
+
+/* The alternatives panel is open: everything but the stretch it works on recedes. */
+.drafting-focus > *:not(.draft-lit-block) {
+  opacity: 0.28;
+  transition: opacity 200ms ease;
+}
+.drafting-focus .draft-lit-block {
+  color: color-mix(in srgb, var(--sol-text-muted) 45%, transparent);
+}
+.drafting-focus .draft-lit {
+  color: var(--sol-text);
+  background: color-mix(in srgb, var(--draft) 10%, transparent);
+  border-radius: 2px;
+}
+
+@keyframes draft-in {
+  from { opacity: 0; transform: translateY(-2px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* ── Drafting surfaces around the editor ── */
+.draft-accent { color: var(--sol-violet); }
+.draft-accent-bg { background: var(--sol-violet); }
+.draft-toggle--on {
+  color: var(--sol-violet);
+  background: color-mix(in srgb, var(--sol-violet) 12%, transparent);
+}
+.draft-lab-button {
+  border-color: color-mix(in srgb, var(--sol-border) 80%, transparent);
+  font-family: var(--font-mono), monospace;
+}
+.draft-trim--on {
+  border-color: color-mix(in srgb, var(--sol-violet) 60%, transparent);
+  color: var(--sol-violet);
+  background: color-mix(in srgb, var(--sol-violet) 10%, transparent);
+}
+
+.draft-panel {
+  position: sticky;
+  top: 0;
+  /* Above the doc composer's sticky bar (z-10), whose fade would otherwise
+     wash out the panel's bottom hints. */
+  z-index: 20;
+  align-self: flex-start;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  height: calc(100dvh - 160px);
+  max-height: 100%;
+  padding: 44px 20px 16px;
+  font-family: var(--font-mono), monospace;
+  animation: draft-panel-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.draft-panel--left {
+  width: 248px;
+  border-right: 1px solid color-mix(in srgb, var(--sol-border) 35%, transparent);
+  background: linear-gradient(to right, color-mix(in srgb, var(--sol-bg-alt) 70%, transparent), transparent);
+}
+.draft-panel--right {
+  width: 288px;
+  border-left: 1px solid color-mix(in srgb, var(--sol-border) 35%, transparent);
+  background: linear-gradient(to left, color-mix(in srgb, var(--sol-bg-alt) 70%, transparent), transparent);
+  --enter: 8px;
+}
+@keyframes draft-panel-in {
+  from { opacity: 0; transform: translateX(var(--enter, -8px)); }
+  to { opacity: 1; transform: none; }
+}
+
+.draft-scope {
+  font-style: italic;
+  font-size: 13px;
+  color: var(--sol-text-dim);
+  transition: color 120ms ease;
+}
+.draft-scope:hover { color: var(--sol-text-muted); }
+.draft-scope--on { color: var(--sol-violet); }
+
+.draft-input {
+  width: 100%;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px dashed color-mix(in srgb, var(--sol-border) 70%, transparent);
+  padding: 4px 0 4px 20px;
+  font-size: 13px;
+  color: var(--sol-text);
+  outline: none;
+  font-variant-ligatures: none;
+}
+.draft-input:focus { border-bottom-color: var(--sol-violet); }
+
+.draft-overflow {
+  width: 100%;
+  min-height: 0;
+  resize: none;
+  background: transparent;
+  border: 0;
+  outline: none;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--sol-text-muted);
+  font-variant-ligatures: none;
+}
+.draft-overflow::placeholder { color: color-mix(in srgb, var(--sol-text-dim) 70%, transparent); }
+
+.draft-trimbar {
+  position: sticky;
+  bottom: 14px;
+  z-index: 20;
+  margin: 0 auto 14px;
+  width: min(780px, calc(100% - 48px));
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 55%, transparent);
+  background: color-mix(in srgb, var(--sol-card) 94%, transparent);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 14px 40px -12px rgba(0, 0, 0, 0.35);
+  font-family: var(--font-mono), monospace;
+  font-size: 12px;
+  animation: draft-bar-in 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes draft-bar-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+.draft-chip {
+  padding: 3px 9px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 60%, transparent);
+  color: var(--sol-text-muted);
+  white-space: nowrap;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+.draft-chip:hover { color: var(--sol-text); border-color: var(--sol-violet); }
+
+@media (prefers-reduced-motion: reduce) {
+  .draft-dots__row, .draft-panel, .draft-trimbar { animation: none; }
 }

@@ -298,14 +298,10 @@ crons.interval(
   {}
 );
 
-crons.interval(
-  // The sweep starts the line (the-line.md L9): every open task assigned to a
-  // direct-trust role's agent gets a run of the scope's line, within caps.
-  "start the line for scoped tasks",
-  { minutes: 2 },
-  (internal as any).orgLine.sweep,
-  {}
-);
+// The line sweep (the-line.md L9) is off for now: it started a run on every
+// open task assigned to a direct-trust role's agent, within caps. To turn it
+// back on, register (internal as any).orgLine.sweep every 2 minutes as
+// "start the line for scoped tasks".
 
 crons.interval(
   // A person who reports to a role hears once a day at most that a high

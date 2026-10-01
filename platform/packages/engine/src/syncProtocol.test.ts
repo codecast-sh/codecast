@@ -29,6 +29,20 @@ describe("pending protection", () => {
     expect(next["items:a:title"]).toBeDefined();
   });
 
+  it("protects a field on a row whose id carries colons", () => {
+    const pending: Record<string, PendingEntry> = {
+      "items:dm:ann:me:locked": { type: "field", value: true, ts: 1 },
+    };
+    const { table, pending: next } = applySyncTable(
+      "items",
+      [row("dm:ann:me", { locked: false })],
+      pending,
+      { "dm:ann:me": row("dm:ann:me", { locked: true }) },
+    );
+    expect(table["dm:ann:me"].locked).toBe(true);
+    expect(next["items:dm:ann:me:locked"]).toBeDefined();
+  });
+
   it("clears the lock once the server echoes the local value", () => {
     const pending: Record<string, PendingEntry> = {
       "items:a:title": { type: "field", value: "local", ts: 1 },
