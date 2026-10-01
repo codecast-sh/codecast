@@ -1115,6 +1115,7 @@ export function buildHostsCommand(parent: Command): Command {
   // its AWS calls block, so they never run on the daemon's loop.
   hosts
     .command("report", { hidden: true })
+    .description("Print each host's laptop-side report for the Machines page as JSON (internal; the daemon runs this)")
     .option("--json", "One JSON array of { host_device_id, report }")
     .action(async () => {
       const { buildCloudHostReport } = await import("../cloud/hostReports.js");

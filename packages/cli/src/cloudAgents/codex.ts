@@ -599,7 +599,7 @@ function turnDiff(turn: WhamTurn): string {
   return outputDiff(turn, "follow_up_diff") || outputDiff(turn, "pr");
 }
 
-/** Everything the line changed up to this turn: what Create PR and `codex cloud apply` act on. */
+/** Everything the line changed up to this turn: what Create PR and Apply act on. */
 function lineDiff(turn: WhamTurn): string {
   return outputDiff(turn, "pr") || outputDiff(turn, "follow_up_diff");
 }
@@ -799,11 +799,11 @@ export class CodexCloudAdapter implements CloudAgentAdapter<CodexCloudApi, Codex
   /**
    * A draft pull request from the line's changes (its last turn with a diff),
    * without Codex's label (add_codex_tag; Codex still ends the body with a
-   * link to the task, verified live). Codex opens it within seconds; the link comes back
-   * once it did (and reaches the session through the mirror either way). A
-   * line that already opened one (on any of its turns, as taskGit finds it)
-   * gets that one back: a new POST for a later turn would open a second pull
-   * request rather than update the first.
+   * link to the task, verified live). Codex opens it within seconds; the link
+   * comes back once it did (and reaches the session through the mirror either
+   * way). A line that already opened one (on any of its turns, as taskGit
+   * finds it) gets that one back: a new POST for a later turn would open a
+   * second pull request rather than update the first.
    */
   async createPullRequest(api: CodexCloudApi, agentId: string): Promise<{ url?: string }> {
     const taskId = cloudAgentRootId(agentId);
@@ -848,7 +848,7 @@ export class CodexCloudAdapter implements CloudAgentAdapter<CodexCloudApi, Codex
     const turns = read ?? await api.turns(cloudAgentRootId(agentId));
     const chain = taskTurnChain(turns, agentId);
     const turn = lastChanges(chain);
-    if (!turn) throw new Error(chain.some((t) => t.type === "assistant" && isRunningTurnStatus(t.turn_status)) ? STILL_RUNNING : "this branch changed no code (an ask task answers without changes)");
+    if (!turn) throw new Error(anyRunning(chain) ? STILL_RUNNING : "this branch changed no code (an ask task answers without changes)");
     if (isRunningTurnStatus(turn.turn_status)) throw new Error(STILL_RUNNING);
     return turn;
   }

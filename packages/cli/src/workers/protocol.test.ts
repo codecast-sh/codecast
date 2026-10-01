@@ -71,7 +71,8 @@ test("worker runtime import closure excludes daemon, CLI boot and auth; Convex s
       }
       if (spec.startsWith(".")) {
         const resolved = path.resolve(path.dirname(file), spec.replace(/\.js$/, ".ts"));
-        if (fs.existsSync(resolved)) queue.push(resolved);
+        // Source only: a JSON import (the CLI version) has no imports of its own to follow.
+        if (/\.tsx?$/.test(resolved) && fs.existsSync(resolved)) queue.push(resolved);
       }
     }
   }

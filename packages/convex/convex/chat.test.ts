@@ -58,7 +58,8 @@ import { dmKeyFor } from "@codecast/shared/chat";
 import { isMachineDeliveredMessage } from "@codecast/shared/contracts";
 import { listMine, markAllRead, markRead as markThreadReadMine, unreadCount } from "./threads";
 import { backfillThreadReads } from "./threadReads";
-import { ENTITY_TYPE, NOTIFICATION_TYPE, PREFERENCE_MAP } from "./notificationRouter";
+import { PREFERENCE_MAP } from "./notificationRouter";
+import { ENTITY_TYPE, NOTIFICATION_TYPE } from "./lib/notificationTypes";
 import { dayBucket, hourBucket } from "./lib/chatQuota";
 import { follow as followChannel, unfollow as unfollowChannel } from "./orgChannels";
 

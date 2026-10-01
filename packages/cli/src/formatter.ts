@@ -2,7 +2,7 @@ import { c, fmt, UNVERIFIABLE_MARK } from "./colors.js";
 import { computeCumulativeFiles, type CumulativeChange } from "@codecast/shared/diff";
 import { structuredPayloadSummary, structuredPayloadKeysFromRaw } from "@codecast/shared/render";
 import { threadStateHeadline, parseThreadStateStatus, sessionLivenessVerdict } from "@codecast/shared/contracts";
-import type { LivenessVerdict } from "@codecast/shared/contracts";
+import type { AskResult, LivenessVerdict } from "@codecast/shared/contracts";
 
 // One glyph per liveness verdict. Green is positive contact. The gray ring is a
 // session that settled — its own agent said so, or we tore it down. The dim ? is
@@ -464,23 +464,8 @@ interface FormatOptions {
   targetLine?: number;
 }
 
-/** What `cast read <id> --ask` gets back (convex/sessionAsk.ts AskResult). */
-export interface ReadAskResult {
-  conversation: { id: string; short_id: string; title: string; lines: number };
-  question: string;
-  answer: string;
-  /** Negative numbers count back from the end, as `cast read -n` shows them. */
-  cited_lines: number[];
-  scanned_lines: number;
-  scan_complete: boolean;
-  /** An incomplete read skipped every message between msg `after` and msg `before`. */
-  unread?: { after: number; before: number };
-  shown_lines: number;
-  matched_lines: number;
-  model: string;
-  usage: { input_tokens: number; output_tokens: number; cost_usd: number };
-  took_ms: number;
-}
+/** The part of `cast read <id> --ask`'s answer the formatter reads (the shared AskResult contract). */
+export type ReadAskResult = Omit<AskResult, "citations" | "terms" | "prompt">;
 
 /** 3,4,5,9 → "3:5 9", in the range syntax `cast read` takes. */
 export function lineRanges(lines: number[]): string[] {

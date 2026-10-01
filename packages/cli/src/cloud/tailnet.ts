@@ -18,7 +18,7 @@
  * joining or leaving the tailnet.
  */
 
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "../proc.js";
 import * as fs from "node:fs";
 
 export interface TailnetRecord {

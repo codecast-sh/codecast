@@ -1831,7 +1831,8 @@ const WATCHED_COMMANDS: ReadonlySet<string> = new Set(["set_provider_key", "clou
  * the daemon's verdict. A key set carries the account the provider named, a
  * refusal the provider's reason; a sign-in check carries the machine's
  * login state (`login`) with its account, plan and reason; an action its
- * result (`detail`) and the page it made (`url`). Owner only.
+ * result (`detail`) and the page it made (`url`). Readable by whoever may
+ * send it (canReadSessionCommand).
  */
 export const watchedCommandOutcome = query({
   args: { command_id: v.id("daemon_commands") },

@@ -138,7 +138,7 @@ describe("operator search end to end", () => {
       } as any);
       const bucket = await ctx.db.insert("inbox_buckets", { user_id: viewer, name: "auth", created_at: now, updated_at: now } as any);
       await ctx.db.insert("bucket_assignments", { user_id: viewer, conversation_id: shared, bucket_id: bucket, updated_at: now } as any);
-      return { viewer, mine: String(mine), shared: String(shared), hidden: String(hidden), foreign: String(foreign) };
+      return { now, viewer, mine: String(mine), shared: String(shared), hidden: String(hidden), foreign: String(foreign) };
     });
     return { t, ...ids };
   }
@@ -185,7 +185,8 @@ describe("operator search end to end", () => {
 
   test("after: holds the matching change to the window, not the session's last activity", async () => {
     const s = await seed();
-    const cutoff = new Date(Date.now() - 7500).toISOString();
+    // Cutoffs come from the seed's clock, so a slow run cannot slide them past an edit.
+    const cutoff = new Date(s.now - 7500).toISOString();
     const r = await web(s.t, s.viewer, `file:src/auth.ts after:${cutoff}`);
     expect(ids(r)).toEqual([s.shared]);
   });
@@ -193,7 +194,7 @@ describe("operator search end to end", () => {
     const s = await seed();
     const cli = (query: string) => s.t.query(anyApi.conversations.searchForCLI, { api_token: token, query });
     const rows = (r: any) => r.conversations.map((c: any) => c.title);
-    const iso = (ms: number) => new Date(Date.now() - ms).toISOString();
+    const iso = (ms: number) => new Date(s.now - ms).toISOString();
     // abc1234 was committed 8.5s ago, d1b0237001 about 4s ago.
     expect(rows(await cli(`commit:abc1234 after:${iso(1000)}`))).toEqual([]);
     expect(rows(await cli(`commit:abc1234 before:${iso(8000)}`))).toEqual(["Viewer auth work"]);
@@ -211,7 +212,10 @@ describe("operator search at volume", () => {
   };
   const token = "v".repeat(64);
 
-  async function seed() {
+  // `checkouts` adds the hundreds of checkouts and remotes. Only the tests about
+  // them seed it: convex-test scans every row for each index read, and the root
+  // walk reads once per checkout, so every relative path search would pay for it.
+  async function seed({ checkouts }: { checkouts: boolean }) {
     const t = convexTest(schema, modules);
     const ids = await t.run(async (ctx) => {
       const now = Date.now();
@@ -247,21 +251,24 @@ describe("operator search at volume", () => {
       const late = await conv("Late file");
       await edit(late, "/Users/v/src/repo/lib/zzz.ts", now - 40_000);
 
-      // 410 checkouts that sort before the one that edited src/late.ts.
-      for (let i = 0; i < 410; i++) {
-        const root = `/Users/v/a/wt-${String(i).padStart(3, "0")}`;
-        await conv(`Worktree ${i}`, { git_root: root, project_path: root, git_remote_url: `git@github.com:acme/r${String(i).padStart(3, "0")}.git`, updated_at: now - 1_000_000 });
+      let zroot: unknown = null;
+      if (checkouts) {
+        // 410 checkouts that sort before the one that edited src/late.ts.
+        for (let i = 0; i < 410; i++) {
+          const root = `/Users/v/a/wt-${String(i).padStart(3, "0")}`;
+          await conv(`Worktree ${i}`, { git_root: root, project_path: root, git_remote_url: `git@github.com:acme/r${String(i).padStart(3, "0")}.git`, updated_at: now - 1_000_000 });
+        }
+        // A pile of worktrees that sorts before an old checkout, one of which edited src/wt.ts.
+        for (let i = 0; i < 30; i++) {
+          const root = `/Users/v/a/.codecast/worktrees/w${String(i).padStart(2, "0")}`;
+          const c = await conv(`Worktree task ${i}`, { git_root: root, project_path: root, updated_at: now - 2_000_000 });
+          if (i === 7) await edit(c, `${root}/src/wt.ts`, now - 2_000_000);
+        }
+        const app = await conv("Old app checkout", { git_root: "/Users/v/a/app", project_path: "/Users/v/a/app", updated_at: now - 3_000_000 });
+        await edit(app, "/Users/v/a/app/src/mid.ts", now - 3_000_000);
+        zroot = await conv("Late checkout", { git_root: "/Users/v/z/repo", project_path: "/Users/v/z/repo", git_remote_url: "git@github.com:acme/zebra.git", updated_at: now + 1000 });
+        await edit(zroot, "/Users/v/z/repo/src/late.ts", now - 30_000);
       }
-      // A pile of worktrees that sorts before an old checkout, one of which edited src/wt.ts.
-      for (let i = 0; i < 30; i++) {
-        const root = `/Users/v/a/.codecast/worktrees/w${String(i).padStart(2, "0")}`;
-        const c = await conv(`Worktree task ${i}`, { git_root: root, project_path: root, updated_at: now - 2_000_000 });
-        if (i === 7) await edit(c, `${root}/src/wt.ts`, now - 2_000_000);
-      }
-      const app = await conv("Old app checkout", { git_root: "/Users/v/a/app", project_path: "/Users/v/a/app", updated_at: now - 3_000_000 });
-      await edit(app, "/Users/v/a/app/src/mid.ts", now - 3_000_000);
-      const zroot = await conv("Late checkout", { git_root: "/Users/v/z/repo", project_path: "/Users/v/z/repo", git_remote_url: "git@github.com:acme/zebra.git", updated_at: now + 1000 });
-      await edit(zroot, "/Users/v/z/repo/src/late.ts", now - 30_000);
 
       // 45 sessions edited one file; only the oldest mentions the word.
       let needle = "";
@@ -273,44 +280,53 @@ describe("operator search at volume", () => {
           needle = String(c);
         }
       }
-      return { viewer, old, busy: String(busy), early: String(early), late: String(late), zroot: String(zroot), needle };
+      return { now, viewer, old, busy: String(busy), early: String(early), late: String(late), zroot: String(zroot), needle };
     });
     return { t, ...ids };
   }
+  // Tests that only read share one seed of each shape; a test that writes seeds its own.
+  let plainSeed: ReturnType<typeof seed> | undefined;
+  let checkoutSeed: ReturnType<typeof seed> | undefined;
+  const plain = () => (plainSeed ??= seed({ checkouts: false }));
+  const withCheckouts = () => (checkoutSeed ??= seed({ checkouts: true }));
+  // A full walk of every checkout is about 900 index reads, and convex-test scans
+  // every row for each one: about a second of CPU, which bun's 5s wall clock
+  // default trips on a loaded machine.
+  const FULL_WALK_MS = 30_000;
 
   const cli = (t: any, query: string, extra: Record<string, unknown> = {}) =>
     t.query(anyApi.conversations.searchForCLI, { api_token: token, query, limit: 100, ...extra });
   const titles = (r: any) => r.conversations.map((c: any) => c.title);
 
   test("a hot file lists every session that edited it, not the last few", async () => {
-    const s = await seed();
+    const s = await plain();
     expect(titles(await cli(s.t, "file:src/hot.ts"))).toEqual(["Busy hot", "Old hot 2", "Old hot 1", "Old hot 0"]);
   });
 
   test("before: reaches edits older than the newest rows", async () => {
-    const s = await seed();
-    const cutoff = new Date(Date.now() - 120_000).toISOString();
+    const s = await plain();
+    const cutoff = new Date(s.now - 120_000).toISOString();
     expect(titles(await cli(s.t, `file:src/hot.ts before:${cutoff}`))).toEqual(["Old hot 2", "Old hot 1", "Old hot 0"]);
   });
 
   test("a folder reaches every file under it, not the alphabetically first rows", async () => {
-    const s = await seed();
+    const s = await plain();
     expect(titles(await cli(s.t, "file:lib"))).toEqual(["Late file", "Early file"]);
   });
 
   test("a checkout that sorts after hundreds of others still resolves a relative path", async () => {
-    const s = await seed();
+    const s = await withCheckouts();
     expect(titles(await cli(s.t, "file:src/late.ts"))).toEqual(["Late checkout"]);
-  });
+  }, FULL_WALK_MS);
 
   test("repo: finds a remote past the first sixty", async () => {
-    const s = await seed();
+    const s = await withCheckouts();
     expect(titles(await cli(s.t, "repo:zebra"))).toEqual(["Late checkout"]);
     expect(titles(await cli(s.t, "repo:acme/zebra"))).toEqual(["Late checkout"]);
-  });
+  }, FULL_WALK_MS);
 
   test("text inside a wide narrowed set is looked up in every session, not the newest forty", async () => {
-    const s = await seed();
+    const s = await plain();
     // titles_only skips the shared pool, so only per-session lookups can find it.
     expect(titles(await cli(s.t, "file:src/many.ts quokkaword", { titles_only: true }))).toEqual(["Many 0"]);
   });
@@ -325,7 +341,7 @@ describe("operator search at volume", () => {
     });
 
   test("a walk that stops at its row budget says so and keeps the newest edits", async () => {
-    const s = await seed();
+    const s = await plain();
     const r = await narrow(s, "file:src/hot.ts", { fileRows: 10 });
     expect(r.titles).toEqual(["Busy hot"]);
     expect(r.truncated.join("\n")).toContain("file:src/hot.ts stopped after reading 10 edits");
@@ -333,7 +349,7 @@ describe("operator search at volume", () => {
   });
 
   test("a folder gives each file a bounded walk and keeps the newest sessions across all of them", async () => {
-    const s = await seed();
+    const s = await plain();
     const capped = await narrow(s, "file:lib", { folderFileRows: 5 });
     expect(capped.titles).toEqual(["Late file", "Early file"]);
     expect(capped.truncated.join("\n")).toContain("newest 5 edits of each file");
@@ -344,7 +360,7 @@ describe("operator search at volume", () => {
   });
 
   test("a row still carrying legacy inline text counts against the size budget", async () => {
-    const s = await seed();
+    const s = await seed({ checkouts: false });
     await s.t.run(async (ctx: any) => {
       const c = await ctx.db.insert("conversations", { user_id: s.viewer, agent_type: "claude_code", status: "active", started_at: 1, message_count: 1, session_id: "legacy", title: "Legacy", git_root: "/Users/v/src/repo", updated_at: Date.now() } as any);
       const m = await ctx.db.insert("messages", { conversation_id: c, role: "user", content: "x", timestamp: Date.now() } as any);
@@ -356,23 +372,23 @@ describe("operator search at volume", () => {
   });
 
   test("past the root cap, the newest sessions' checkouts are still searched", async () => {
-    const s = await seed();
+    const s = await withCheckouts();
     const r = await narrow(s, "file:src/late.ts", { roots: 5 });
     expect(r.titles).toEqual(["Late checkout"]);
     expect(r.truncated.join("\n")).toContain("checkouts");
   });
 
   test("a pile of worktrees is walked after every other checkout", async () => {
-    const s = await seed();
+    const s = await withCheckouts();
     // Five reads: the worktree folder is skipped in one, so the old checkout past it is still reached.
     const r = await narrow(s, "file:src/mid.ts", { roots: 5 });
     expect(r.titles).toEqual(["Old app checkout"]);
     // With room, the worktrees themselves are walked too.
     expect((await narrow(s, "file:src/wt.ts", {})).titles).toEqual(["Worktree task 7"]);
-  });
+  }, FULL_WALK_MS);
 
   test("sessions the viewer cannot see never take the seats of ones they can", async () => {
-    const s = await seed();
+    const s = await plain();
     const r = await narrow(s, "file:src/hot.ts", { candidates: 2 }, (c) => c.title !== "Busy hot");
     expect(r.titles).toEqual(["Old hot 2", "Old hot 1"]);
     expect(r.truncated.join("\n")).toContain("stopped at 2 matching sessions");

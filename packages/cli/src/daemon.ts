@@ -2,7 +2,7 @@
 import { VersionedObservationSet } from "./versionedObservationSet.js";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission.js";
 import { pendingMessageFinished, prepareTmuxDelivery, receiptSettled, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
-import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLOUD_SESSION_SOURCES, cloudSessionSyncOn, classifyApiErrorBanner, isCloudAgentActionName, confineToOwningDevice, findModelOption, fromConvexAgentType, modelOptionKey, isCodexSafetyError, isMachineDeliveredMessage, isUsageLimitDialog, isValidPaneTarget, isMachineSetting, MACHINE_SETTINGS, machineSettingValues, snippetBySlug, verdictFromProbe, worktreeOfPath } from "@codecast/shared/contracts";
+import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLOUD_SESSION_SOURCES, cloudSessionSyncOn, classifyApiErrorBanner, isCloudAgentActionName, confineToOwningDevice, findModelOption, fromConvexAgentType, modelOptionKey, isClaudeAutoContinueLine, isCodexSafetyError, isRecoveryContinueClientId, isMachineDeliveredMessage, isUsageLimitDialog, isValidPaneTarget, isMachineSetting, MACHINE_SETTINGS, machineSettingValues, snippetBySlug, verdictFromProbe, worktreeOfPath } from "@codecast/shared/contracts";
 import { holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, setPendingRedrive } from "./pendingPromptHold.js";
 import { typedPollAnswer } from "./typedPollAnswer.js";
 import { codexTurnErrorMessage } from "./codexTurnError.js";
@@ -90,8 +90,11 @@ import {
   type LiveClaudeSession,
 } from "./ccLiveGate.js";
 import {
-  switchProfile,
-  launchProfileName,
+  launchAccountPrefix,
+  FLEET_GATE_ACCOUNT,
+  fleetStoreReady,
+  maintainFleetStore,
+  switchFleetTo,
   saveProfile,
   getAccountsHeartbeatPayloadAsync,
   autoSaveActiveProfile,
@@ -107,7 +110,6 @@ import {
   credentialHealth,
   activeAccountSummary,
   listProfiles,
-  accountSourcePrefix,
   activeProfileName,
   ensureProfileStoreAsync,
   deleteProfileStoreAsync,
@@ -3102,17 +3104,17 @@ export function discardPrimedClaim(commandId: string, siteUrl: string, apiToken:
   }).catch(() => {});
 }
 
+/**
+ * Commands that wait on a provider (a cloud agent's Create PR waits up to a
+ * minute for the pull request): each reports its own result, and the commands
+ * queued behind it (an Escape) do not wait.
+ */
+const DETACHED_COMMANDS: ReadonlySet<string> = new Set(["cloud_agent_action"]);
+
 /** Run one delivery batch: drop what this daemon already handled, claim the
  *  whole batch in one round trip, then execute in order. Shared by the three
  *  paths a command arrives on (the subscription, the 10s poll, the heartbeat
  *  response), which differed only in their log line. */
-/**
- * Commands that wait on a provider for minutes (a cloud agent's Create PR
- * waits for the pull request, Apply runs the provider's CLI): each reports its
- * own result, and the commands queued behind it (an Escape) do not wait.
- */
-const DETACHED_COMMANDS: ReadonlySet<string> = new Set(["cloud_agent_action"]);
-
 async function executeCommandBatch(
   cmds: Array<{ id: string; command: string; args?: string }>,
   config: Config,
@@ -4222,6 +4224,10 @@ async function watchMintFlow(profile: string, email: string | undefined, gen: nu
 // the active credential the daemon stands back and reads back what the CLI
 // rotated instead (ccLiveGate.ts, resnapshotIfActiveFresher).
 const CC_TOKEN_MAINT_INTERVAL_MS = 10 * 60 * 1000;
+const CC_FLEET_TICK_MS = 60 * 1000;
+// Claude Code re-reads its credential store about every 30s (measured on
+// 2.1.286), so a session on the fleet store is on the new account by then.
+const FLEET_REREAD_WAIT_MS = 40 * 1000;
 const CC_TOKEN_REFRESH_THRESHOLD_MS = 30 * 60 * 1000;
 let ccTokenMaintInFlight = false;
 
@@ -5272,6 +5278,17 @@ export async function killLocalPanesForConversation(
 // auto-resumes. Shared by kill_session and switch_account — the latter recycles
 // limit-blocked sessions so a fresh `claude --resume` re-reads the just-swapped
 // account credential. Extracted verbatim from the kill_session command body.
+/** Whether a conversation's live Claude pane reads the fleet store: true when
+ *  it launched on it, false when it holds a credential of its own (a pane from
+ *  before the store, or a pinned one), null when no live pane is known (a
+ *  continue then resumes it, and the resume lands on the store). */
+function paneFollowsFleet(conversationId: string): boolean | null {
+  const sessionId = buildReverseConversationCache(readConversationCache())[conversationId];
+  const names = new Set([startedSessionTmux.get(conversationId)?.tmuxSession, sessionId ? resumeSessionCache.get(sessionId) : undefined].filter(Boolean));
+  const pane = liveClaudeSessions().find((s) => names.has(s.id));
+  return pane ? pane.account === FLEET_GATE_ACCOUNT : null;
+}
+
 async function killConversationBackends(
   conversationId: string,
   sessionIdHint?: string,
@@ -5839,7 +5856,7 @@ async function executeRemoteCommand(
           agentType === "claude"
             ? typeof parsed.cc_account === "string" && /^[a-z0-9][a-z0-9._-]{0,40}$/i.test(parsed.cc_account)
               ? parsed.cc_account
-              : launchProfileName()
+              : undefined
             : undefined;
         // Per-session stable-context prefs from the new-session page. Same
         // ride-along contract as model/effort: unknown values dropped here.
@@ -6108,11 +6125,12 @@ async function executeRemoteCommand(
         // key never lands in `ps`/the pane; "" when nothing is managed (pl-207).
         const keyPrefix = providerKeySourcePrefix(agentType, CONFIG_DIR);
         // Same file-not-argv rule for the per-session Claude account store.
-        const accountPrefix = accountSourcePrefix(requestedAccount, log);
         // An empty prefix means the account did not resolve to a launch file and
         // the launch falls back to the keychain login — which the OAuth refresh
         // gate must then treat as held. Attribute what runs, not what was asked.
-        const launchedAccount = accountPrefix ? requestedAccount : undefined;
+        const { prefix: accountPrefix, account: launchedAccount } = agentType === "claude"
+          ? launchAccountPrefix(requestedAccount, log)
+          : { prefix: "", account: undefined };
         // Launch through the disclaim wrapper so the agent is TCC
         // self-responsible: privacy prompts name the agent (its own signed
         // identity), not codecast/bun (see disclaim.ts). The wrapper execs
@@ -6687,6 +6705,9 @@ async function executeRemoteCommand(
         const parsed = commandArgs ? JSON.parse(commandArgs) : {};
         const profile: string | undefined = typeof parsed.profile === "string" && parsed.profile ? parsed.profile : undefined;
         const conversationIds: string[] = Array.isArray(parsed.conversation_ids) ? parsed.conversation_ids : [];
+        // Parked sessions on the fleet store: the switch moves them with the
+        // store, so they get only the continue, once Claude Code has re-read it.
+        const followIds: string[] = Array.isArray(parsed.follow_ids) ? parsed.follow_ids : [];
         const sessionIds: Record<string, string> =
           parsed.session_ids && typeof parsed.session_ids === "object" ? parsed.session_ids : {};
         const sendContinue: boolean = parsed.continue_blocked !== false;
@@ -6858,14 +6879,17 @@ async function executeRemoteCommand(
           let switched: string | null = null;
           if (profile) {
             try {
-              // Keychain when the saved login is usable; onto the minted
-              // setup-token when it is not (the launch record: the fleet
-              // moves, the keychain login stays). The restarts below pin to
-              // the token either way (the server corrected the rows first).
-              const switchResult = switchProfile(profile);
+              // On the fleet store the store is rewritten and running
+              // sessions follow it. Otherwise the keychain when the saved
+              // login is usable, else the minted setup-token (the launch
+              // record: the fleet moves, the keychain login stays); the
+              // restarts below then carry the pins the server corrected.
+              const switchResult = await switchFleetTo(profile);
               switched = switchResult.to;
               log(
-                switchResult.mode === "token"
+                switchResult.mode === "fleet"
+                  ? `[ACCOUNTS] Fleet store moved to "${profile}"${switchResult.toEmail ? ` (${switchResult.toEmail})` : ""}${switchResult.from ? ` from "${switchResult.from}"` : ""}; running sessions follow without a restart`
+                  : switchResult.mode === "token"
                   ? `[ACCOUNTS] Switched fleet to "${profile}"${switchResult.toEmail ? ` (${switchResult.toEmail})` : ""} on its setup-token; the keychain login stays`
                   : `[ACCOUNTS] ${switchResult.keptLive ? "Already on" : "Switched CC account to"} "${profile}"${switchResult.toEmail ? ` (${switchResult.toEmail})` : ""}${switchResult.from ? `, re-saved outgoing as "${switchResult.from}"` : ""}${switchResult.keptLive ? ", kept the live login" : ""}`,
               );
@@ -6922,14 +6946,20 @@ async function executeRemoteCommand(
                 return false;
               }
             };
-            const [first, ...rest] = conversationIds;
-            if (first && (await enqueueContinue(first))) continued++;
+            // A follower still holds the old account's credential until Claude
+            // Code re-reads the store, so its continue waits that out.
+            const followWaitMs = followIds.length > 0 && switched ? FLEET_REREAD_WAIT_MS : 0;
+            const revive = [...conversationIds, ...followIds];
+            const immediate = followWaitMs === 0 ? revive.slice(0, 1) : [];
+            const rest = revive.slice(immediate.length);
+            for (const convId of immediate) if (await enqueueContinue(convId)) continued++;
             if (rest.length > 0) {
               continued += rest.length;
               void (async () => {
+                if (followWaitMs) await new Promise((resolve) => setTimeout(resolve, followWaitMs));
                 let sent = 0;
-                for (const convId of rest) {
-                  await new Promise((resolve) => setTimeout(resolve, SWITCH_CONTINUE_SPACING_MS));
+                for (const [i, convId] of rest.entries()) {
+                  if (i > 0 || immediate.length > 0) await new Promise((resolve) => setTimeout(resolve, SWITCH_CONTINUE_SPACING_MS));
                   if (await enqueueContinue(convId)) sent++;
                 }
                 log(`[ACCOUNTS] paced continues done: ${sent}/${rest.length} enqueued ${SWITCH_CONTINUE_SPACING_MS / 1000}s apart after switch=${switched ?? "none"}`);
@@ -14881,7 +14911,12 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
   // this dialog's "No, quit" (ct-49609).
   if (isCodexTrustDialog(region)) return "trust";
   if (isClaudeBypassWarning(region)) return "trust";
-  if (/Esc to cancel|❯\s*\(current\)/i.test(region)) return "rewind";
+  // Claude Code's armed automatic continue at a usage limit also ends in "esc
+  // to cancel", under a live composer. Escape there cancels the continue, and
+  // the next one opens the real Rewind dialog (2026-09-30: three Escapes left a
+  // limit-parked session holding every message for two hours). It is no modal.
+  const dialogText = region.split("\n").filter((line) => !isClaudeAutoContinueLine(line)).join("\n");
+  if (/Esc to cancel|❯\s*\(current\)/i.test(dialogText)) return "rewind";
   if (/What should Claude do instead\?/i.test(region)) return "interrupted";
   // Teammate panel: a lead session with in-process agents renders a chip list
   // (⏺ main, ◯ name · state, "↓ N more") below its footer. Teammate panes split
@@ -23980,15 +24015,14 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     const resumePin = conversationId && syncServiceRef
       ? await syncServiceRef.pinForResume(conversationId)
       : null;
-    // No pin at all = the launch profile after a token switch (the fleet's
-    // account), else the keychain, same rule as a fresh launch.
-    const pinnedAccount = (resumePin ? resumePin.cc_account ?? undefined : convInfo?.cc_account ?? undefined) ?? launchProfileName();
-    resumeAccountPrefix = accountSourcePrefix(pinnedAccount, log);
+    // No pin at all = the fleet store, else the launch profile after a token
+    // switch, else the keychain: the same rule as a fresh launch.
+    const pinnedAccount = resumePin ? resumePin.cc_account ?? undefined : convInfo?.cc_account ?? undefined;
     // An empty prefix means the pin did not resolve to a launch file, so this
     // resume lands on the keychain login after all — and then it DOES hold the
     // credential the refresh gate protects. Attribute what happens, not what
     // was asked for.
-    resumeAccount = resumeAccountPrefix ? pinnedAccount : undefined;
+    ({ prefix: resumeAccountPrefix, account: resumeAccount } = launchAccountPrefix(pinnedAccount, log));
     resumeCmd = `${launchBinary("claude", { warn: log })} --resume ${resumeId}${modelFlag}${effortFlag}${extraFlags ? " " + extraFlags : ""}`;
   }
 
@@ -24674,9 +24708,7 @@ async function blankLaunchAccount(conversationId: string | undefined): Promise<{
       ? resumePin.cc_account ?? undefined
       : (await syncServiceRef.getProjectInfo(conversationId).catch(() => null))?.cc_account ?? undefined;
   }
-  const account = pin ?? launchProfileName();
-  const prefix = accountSourcePrefix(account, log);
-  return { prefix, account: prefix ? account : undefined };
+  return launchAccountPrefix(pin, log);
 }
 
 async function startFreshSessionForDelivery(
@@ -28138,6 +28170,18 @@ async function main(): Promise<void> {
   setTimeout(() => { maintainActiveCcToken("daemon start").catch(() => {}); }, 45_000);
   setInterval(() => { maintainActiveCcToken("periodic").catch(() => {}); }, CC_TOKEN_MAINT_INTERVAL_MS);
 
+  // The fleet store every launched Claude session reads: seeded, kept on the
+  // fleet account's current bearer, refreshed ahead of a login's expiry.
+  const tendFleetStore = (reason: string) => maintainFleetStore()
+    .then((did) => {
+      if (!did) return;
+      log(`[CC-FLEET] ${did} (${reason})`);
+      if (!did.startsWith("cannot")) sendHeartbeat().catch(() => {});
+    })
+    .catch((err) => log(`[CC-FLEET] tick failed: ${err instanceof Error ? err.message : String(err)}`));
+  setTimeout(() => { void tendFleetStore("daemon start"); }, 5_000);
+  setInterval(() => { void tendFleetStore("periodic"); }, CC_FLEET_TICK_MS);
+
   // Per-account usage snapshots for the web's meters + auto-switch decisions.
   setTimeout(() => { maintainCcUsageSnapshots("daemon start").catch(() => {}); }, 75_000);
   setInterval(() => { maintainCcUsageSnapshots("periodic").catch(() => {}); }, CC_USAGE_REFRESH_INTERVAL_MS);
@@ -30407,6 +30451,14 @@ async function main(): Promise<void> {
           messagesInFlight.delete(msg._id);
           conversationDeliveryActive.delete(msg.conversation_id);
           continue;
+        }
+
+        // A recovery continue into a pane that holds its own credential (one
+        // launched before the fleet store, or pinned) would retry the account it
+        // parked on. Restart it first: the continue then resumes it onto the store.
+        if (isRecoveryContinueClientId(msg.client_id) && fleetStoreReady() && paneFollowsFleet(msg.conversation_id) === false) {
+          logDelivery(`[CC-FLEET] conv=${msg.conversation_id.slice(0, 12)} parked on a credential of its own; restarting it onto the fleet store before the continue`);
+          await killConversationBackends(msg.conversation_id).catch(() => {});
         }
 
         let timeoutHandle: ReturnType<typeof setTimeout> | undefined;

@@ -110,9 +110,9 @@ Sources: `cursor` (done), `codex_cloud` (plan, `/wham`), `codex_api` (Agents API
 | **Ask mode** | Toggle, `run_environment_in_qa_mode: true`. |
 | **Follow-ups** | `POST /tasks {follow_up}`. A message sent while the agent is busy is held and delivered when the turn ends (same mechanism as Cursor). |
 | **Interrupt** | Escape → `POST /tasks/{id}/cancel`. |
-| **Best-of-N attempts** | Each attempt is a branch of the conversation, using codecast's fork chips. Picking one makes it the task's current turn for follow-ups. |
-| **PR** | Header action "Create PR" (`POST …/pr`). Existing PR state shows via `git_branch` and codecast's PR linking. |
-| **Apply locally** | Header action: runs `codex cloud apply <id> --attempt n` in the project's checkout (the official, tested path) and reports the result in the thread. |
+| **Best-of-N attempts** | Each attempt is a branch of the conversation, using codecast's fork chips (attempt 1 is the task's own session). A message sent on a branch continues that attempt (`follow_up` from its last turn). |
+| **PR** | Header action "Create draft PR" (`POST …/pr`, draft, `add_codex_tag: false`), which returns the PR the branch already opened instead of opening a second. Existing PR state shows via `git_branch` and codecast's PR linking. |
+| **Apply locally** | Header action: `git apply` of the branch's recorded diff at the root of the session's checkout, refused when local changes touch the same files, and reported in the thread. Not `codex cloud apply`: its `--attempt n` counts only the current turn's attempts, and running the Codex CLI may refresh the login codecast only reads. |
 | **Kill / archive** | Kill cancels the active turn. "Archive" (reversible) is separate. |
 | **Usage** | The usage chip shows Codex Cloud windows from `/wham/usage`. |
 

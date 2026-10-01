@@ -333,7 +333,7 @@ describe("the laptop seed's pure parts (ct-49433)", () => {
     expect(cloudStartArgs({ conversation_id: "c1", workspace: "isolated", start_from: "origin_main" })).toEqual(["cloud", "start", "c1", "--workspace", "isolated", "--from", "origin-main"]);
     expect(cloudStartArgs({ conversation_id: "c1", start_from: "trunk" })).toEqual(["cloud", "start", "c1"]);
     expect(seedPlacementArg({ source: "checkout", base: "a".repeat(40), branch: "feat/x", dirty: true, laptopRoot: "/Users/me/app", deviceId: "dev1", ref: "refs/codecast/cloud/x", snapshot: "b".repeat(40), tree: "c".repeat(40) }))
-      .toEqual({ source: "checkout", base: "a".repeat(40), branch: "feat/x", dirty: true, laptop_root: "/Users/me/app", device_id: "dev1" });
+      .toEqual({ source: "checkout", base: "a".repeat(40), branch: "feat/x", dirty: true, laptop_root: "/Users/me/app", device_id: "dev1", tree: "c".repeat(40) });
     expect(seedPlacementArg({ source: "origin_main", base: "a".repeat(40), reason: "no repo" })).toEqual({ source: "origin_main", base: "a".repeat(40), reason: "no repo" });
   });
 

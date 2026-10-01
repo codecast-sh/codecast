@@ -19,12 +19,13 @@ import {
   type UpdaterConfig,
 } from "@platform/cli-kit/update";
 import { execFileSync, spawnSync } from "./proc.js";
-import pkg from "../package.json";
+import { getVersion } from "./cliVersion.js";
 import { defaultConfigDir } from "./config/configDir.js";
 
 export * from "./snippetVersions.js";
+export { getVersion };
 
-const VERSION = pkg.version;
+const VERSION = getVersion();
 const CONFIG_DIR = defaultConfigDir();
 
 export const RELEASE_BASE_URL = "https://dl.codecast.sh";
@@ -133,10 +134,6 @@ export function createCodecastUpdater(overrides: Partial<UpdaterConfig> = {}): U
 }
 
 export const updater = createCodecastUpdater();
-
-export function getVersion(): string {
-  return VERSION;
-}
 
 export async function checkForUpdates(force = false): Promise<string | null> {
   return updater.checkForUpdates(force);

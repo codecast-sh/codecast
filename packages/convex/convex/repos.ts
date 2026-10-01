@@ -34,6 +34,7 @@ import { applyCommitFilesTo } from "./commits";
 import { matchFileLines, newResolveCaches, resolveCommitSessions, type BlameViewer } from "./blame";
 import { contentLinesToMatch } from "@codecast/shared/blame";
 import { WORKTREES_KIND, mergeWorktreesPayload, type WorktreesPayload } from "@codecast/shared/contracts";
+import { localCommitFiles } from "./lib/localCommitFiles";
 
 const MINUTE = 60 * 1000;
 const TTL: Record<string, number> = {
@@ -572,9 +573,6 @@ export const answerLocalRead = mutation({
     return { ok: true };
   },
 });
-
-/** The files a local commit touched with their line counts (git log --numstat). */
-export const localCommitFiles = v.array(v.object({ filename: v.string(), additions: v.number(), deletions: v.number() }));
 
 /**
  * A daemon publishing one checkout's git metadata.

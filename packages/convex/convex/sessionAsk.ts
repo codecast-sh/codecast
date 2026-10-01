@@ -20,6 +20,7 @@
 import { action, internalAction, internalQuery } from "./functions";
 import type { ActionCtx } from "./_generated/server";
 import { ConvexError, v } from "convex/values";
+import type { AskResult } from "@codecast/shared/contracts";
 import { internal } from "./_generated/api";
 import { readableConversation, streamMessageRows, isNonEmptyMessage } from "./conversations";
 import { readFileChangeIndex } from "./fileChangeBodies";
@@ -118,30 +119,6 @@ export const askScan = internalQuery({
     return { lines, cursor: reached ? undefined : cursor, reached: reached || undefined };
   },
 });
-
-export interface AskResult {
-  conversation: { id: string; short_id: string; title: string; lines: number };
-  question: string;
-  answer: string;
-  /** `cast read` numbers; negative ones count back from the end (-1 is the last). */
-  cited_lines: number[];
-  /** The message row behind each cited line, so a reader can open it without
-   *  re-deriving `cast read` numbering. */
-  citations: Array<{ line: number; message_id: string }>;
-  terms: string[];
-  scanned_lines: number;
-  /** False when the session was too long to read whole within the budget. */
-  scan_complete: boolean;
-  /** When incomplete: every message between msg `after` and msg `before` was not read. */
-  unread?: { after: number; before: number };
-  shown_lines: number;
-  matched_lines: number;
-  model: string;
-  usage: { input_tokens: number; output_tokens: number; cost_usd: number };
-  took_ms: number;
-  /** Only with debug.include_prompt. */
-  prompt?: string;
-}
 
 /** The access refusals, as coded errors cliRoute answers with 401/403/404. */
 const ACCESS_ERRORS: Record<string, { code: string; message: string }> = {
