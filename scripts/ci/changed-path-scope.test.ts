@@ -62,24 +62,30 @@ describe("touchesPlatform", () => {
 });
 
 describe("classifyChangedPaths", () => {
-  test("a docs-only change runs no job", () => {
+  test("a docs-only change runs only the shared suite, which reads docs/", () => {
     const result = flags(["docs/architecture/sync-host.md", "README.md"]);
     expect(result.docs).toBe(true);
-    for (const job of GATED_JOBS) expect(result[jobFlag(job)]).toBe(false);
+    for (const job of GATED_JOBS) {
+      expect(result[jobFlag(job)], job).toBe(job === "test-shared");
+    }
     for (const area of AREAS) {
       if (area !== "docs") expect(result[area]).toBe(false);
     }
   });
 
-  test("a cli change runs build and the cli tests only", () => {
+  test("a cli change runs build, typecheck, the cli, shared and mobile tests", () => {
     const result = flags(["packages/cli/src/daemon.ts"]);
     expect(result.cli).toBe(true);
     expect(result.run_build).toBe(true);
+    expect(result.run_typecheck).toBe(true);
     expect(result.run_test_cli).toBe(true);
-    expect(result.run_typecheck).toBe(false);
+    expect(result.run_test_shared).toBe(true);
+    // The mobile guards borrow the import graph walker from packages/cli.
+    expect(result.run_test_mobile).toBe(true);
     expect(result.run_lint).toBe(false);
     expect(result.run_test_web).toBe(false);
     expect(result.run_test_convex).toBe(false);
+    expect(result.run_test_electron).toBe(false);
   });
 
   test("a web change runs lint, typecheck, build and the web tests", () => {
@@ -144,11 +150,64 @@ describe("classifyChangedPaths", () => {
     expect(result.run_lint).toBe(false);
   });
 
-  test("mobile and electron changes run nothing — no job covers them", () => {
-    const result = flags(["packages/mobile/app/index.tsx", "packages/electron/main.js"]);
+  test("a mobile change runs the mobile tests and the shared suite only", () => {
+    const result = flags(["packages/mobile/app/index.tsx"]);
     expect(result.mobile).toBe(true);
-    expect(result.electron).toBe(true);
-    for (const job of GATED_JOBS) expect(result[jobFlag(job)]).toBe(false);
+    for (const job of GATED_JOBS) {
+      expect(result[jobFlag(job)], job).toBe(job === "test-mobile" || job === "test-shared");
+    }
+  });
+
+  test("an electron or desktop change runs the electron tests and the shared suite only", () => {
+    for (const file of ["packages/electron/main.js", "packages/desktop/src-tauri/tauri.conf.json"]) {
+      const result = flags([file]);
+      expect(result.electron).toBe(true);
+      for (const job of GATED_JOBS) {
+        expect(result[jobFlag(job)], `${file} ${job}`).toBe(job === "test-electron" || job === "test-shared");
+      }
+    }
+  });
+
+  test("the mobile guards rerun for every package the native bundle reaches", () => {
+    // bundleGraph.guard walks into web, convex and shared; both guards import
+    // the graph walker from packages/cli.
+    for (const file of [
+      "packages/web/components/DiffView.tsx",
+      "packages/convex/convex/tasks.ts",
+      "packages/shared/contracts/agentClients.ts",
+      "packages/cli/src/bench/bootGraph.ts",
+      "platform/packages/analytics/src/index.ts",
+    ]) {
+      expect(flags([file]).run_test_mobile, file).toBe(true);
+    }
+    expect(flags(["packages/electron/main.js"]).run_test_mobile).toBe(false);
+  });
+
+  test("the electron tests rerun for the vendored @platform/desktop they require", () => {
+    expect(flags(["platform/packages/desktop/src/index.js"]).run_test_electron).toBe(true);
+    expect(flags(["packages/electron/package.json"]).run_test_electron).toBe(true);
+    expect(flags(["packages/web/components/DiffView.tsx"]).run_test_electron).toBe(false);
+    expect(flags(["packages/shared/contracts/agentClients.ts"]).run_test_electron).toBe(false);
+  });
+
+  test("the shared suite runs for any change at all", () => {
+    // The max lines ratchet walks every package and a contract test reads its
+    // spec from docs/, so no classified change leaves it out.
+    const samples: Record<string, string> = {
+      cli: "packages/cli/src/daemon.ts",
+      web: "packages/web/components/DiffView.tsx",
+      convex: "packages/convex/convex/tasks.ts",
+      shared: "packages/shared/contracts/agentClients.ts",
+      platform: "platform/vendor-manifest.txt",
+      electron: "packages/electron/main.js",
+      mobile: "packages/mobile/app/index.tsx",
+      extension: "packages/browser-extension/background.js",
+      docs: "docs/architecture/chief-of-staff-prompt.md",
+    };
+    expect(Object.keys(samples).sort()).toEqual([...AREAS].sort());
+    for (const [area, file] of Object.entries(samples)) {
+      expect(flags([file]).run_test_shared, area).toBe(true);
+    }
   });
 
   test("an empty diff runs everything", () => {
