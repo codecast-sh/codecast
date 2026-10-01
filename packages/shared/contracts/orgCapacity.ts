@@ -23,6 +23,10 @@
 /** Daily caps a role starts with (org-roles-standing.md T1). */
 export const DEFAULT_ROLE_CAPS = { hands_per_day: 6, wakes_per_day: 40, tokens_per_day: 400_000 } as const;
 
+/** Open card decisions a role's line may hold before it admits another cause
+ *  (the-line-end-to-end.md LE6): work starts at the rate a person answers. */
+export const DEFAULT_LINE_CARDS_CAP = 5;
+
 export type CapacityThreshold = { value: number; unit: string; reason: string };
 
 /** What loads one role. A role is one context window: its frame is capped at
@@ -135,7 +139,7 @@ export type RoleSignals = {
     /** Sessions filed under the seat inside the scan window, in any state. */
     hands_window?: number;
   };
-  /** A whole workspace seat (the chief of staff) reviews and directs nothing,
+  /** A whole workspace seat (the head of people) reviews and directs nothing,
    *  so work passing it by is its design, not a finding. */
   reviews_only?: boolean;
   /** The scope names no project or plan that still exists. */

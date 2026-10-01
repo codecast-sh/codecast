@@ -55,7 +55,7 @@ const SCOPE_PLANS_NAMED = 5;
 const PLANS_LISTED = 8;
 
 /** What a role that names no projects and no plans looks after (org-staffing.md
- *  S26): nothing of its own, unless it is the Chief of Staff. */
+ *  S26): nothing of its own, unless it is the Head of People. */
 export function noScopeWords(handle?: string): string {
   return isWholeWorkspaceRole({ _id: "", handle }) ? "the whole workspace, apart from what a lead looks after" : "no area of its own";
 }

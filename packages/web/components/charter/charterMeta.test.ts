@@ -1,11 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import { ORG_FIXTURE } from "../org/orgFixture";
-import { CHIEF_OF_STAFF_HANDLE } from "../org/orgStaffingTypes";
+import { HEAD_OF_PEOPLE_HANDLE } from "../org/orgStaffingTypes";
 import {
   CHARTER_PRIORITIES,
   PRIORITY_META,
   charterOf,
-  chiefOfStaffOf,
+  headOfPeopleOf,
   cleanBudget,
   composeCharterHref,
   formatTokens,
@@ -68,14 +68,14 @@ describe("charterOf / hasCharter", () => {
 });
 
 describe("roles from the org tree", () => {
-  const chief = { ...ORG_FIXTURE.roles[0], _id: "role-chief", short_id: "or-99", handle: CHIEF_OF_STAFF_HANDLE, name: "Chief of Staff", status: "active" as const };
-  const retiredChief = { ...chief, _id: "role-chief-old", status: "retired" as const };
+  const head = { ...ORG_FIXTURE.roles[0], _id: "role-head", short_id: "or-99", handle: HEAD_OF_PEOPLE_HANDLE, name: "Head of People", status: "active" as const };
+  const retiredHead = { ...head, _id: "role-head-old", status: "retired" as const };
 
-  it("finds a live chief of staff by handle, never a retired one", () => {
-    expect(chiefOfStaffOf(ORG_FIXTURE.roles)).toBeNull();
-    expect(chiefOfStaffOf([...ORG_FIXTURE.roles, retiredChief])).toBeNull();
-    expect(chiefOfStaffOf([...ORG_FIXTURE.roles, chief])?._id).toBe("role-chief");
-    expect(chiefOfStaffOf(null)).toBeNull();
+  it("finds a live head of people by handle, never a retired one", () => {
+    expect(headOfPeopleOf(ORG_FIXTURE.roles)).toBeNull();
+    expect(headOfPeopleOf([...ORG_FIXTURE.roles, retiredHead])).toBeNull();
+    expect(headOfPeopleOf([...ORG_FIXTURE.roles, head])?._id).toBe("role-head");
+    expect(headOfPeopleOf(null)).toBeNull();
   });
 
   it("resolves the owner by id and links to /org/or-N", () => {
@@ -94,15 +94,15 @@ describe("roles from the org tree", () => {
     expect(ownerRoleOf(ORG_FIXTURE.roles, role._id)?._id).toBe(role._id);
   });
 
-  it("owner candidates exclude retired roles and the chief of staff", () => {
-    const ids = ownerCandidates([...ORG_FIXTURE.roles, chief, { ...ORG_FIXTURE.roles[0], _id: "gone", status: "retired" as const }]).map((r) => r._id);
-    expect(ids).not.toContain("role-chief");
+  it("owner candidates exclude retired roles and the head of people", () => {
+    const ids = ownerCandidates([...ORG_FIXTURE.roles, head, { ...ORG_FIXTURE.roles[0], _id: "gone", status: "retired" as const }]).map((r) => r._id);
+    expect(ids).not.toContain("role-head");
     expect(ids).not.toContain("gone");
     expect(ids).toEqual(ORG_FIXTURE.roles.filter((r) => r.status !== "retired").map((r) => r._id));
   });
 });
 
-describe("the ask to the chief of staff", () => {
+describe("the ask to the head of people", () => {
   it("opens /org with the composer prefilled for this title", () => {
     expect(composeCharterHref("Codecast: Product")).toBe(`/org?compose=${encodeURIComponent("draft a charter for Codecast: Product")}`);
   });

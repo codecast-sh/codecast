@@ -4,7 +4,8 @@ import path from 'node:path';
 import {AsyncLocalStorage} from 'node:async_hooks';
 import {readTranscriptIngest} from '../ingestClient.js';
 import {ingestRetainedWeight} from '../ingestTransport.js';
-const until=async(check:()=>boolean)=>{const end=Date.now()+4000;while(!check()){if(Date.now()>end)throw new Error('admission yield was not reached');await new Promise(resolve=>setTimeout(resolve,1));}};
+import {pollUntil} from '../../test-helpers/pollUntil.js';
+const until=(check:()=>boolean)=>pollUntil(check,'admission yield',{ms:4000,every:1});
 
 export async function coreAdmission({d,home,getPosition}:any) {
   const core=d.fixtureCore,context=new AsyncLocalStorage<string>();

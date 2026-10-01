@@ -1,6 +1,6 @@
 import { test, expect, describe, beforeEach } from "bun:test";
 import { useInboxStore } from "../store/inboxStore";
-import { takeReviewBatch, attachReviewToMessage, createReviewComment } from "./reviewActions";
+import { takeReviewBatch, attachReviewToMessage, createReviewComment, addImagePin, quotedImageStorageIds } from "./reviewActions";
 import { formatPlanFeedback, formatDocFeedback, formatPendingComments, sortPendingComments, type PendingComment } from "./quoteFormat";
 
 const CONV = "conv-test";
@@ -126,6 +126,59 @@ describe("attachReviewToMessage", () => {
 
   test("leaves the typed message untouched when no quotes are pending", () => {
     expect(attachReviewToMessage(CONV, "just text")).toBe("just text");
+  });
+});
+
+describe("image quotes from the gallery", () => {
+  const shot = { src: "https://x.convex.cloud/api/storage/s1", href: "https://x.convex.cloud/api/storage/s1", storageId: "s1", messageId: "m1" };
+  const remote = { src: "https://example.com/a.png", href: "https://example.com/a.png", messageId: "m2" };
+
+  beforeEach(() => {
+    useInboxStore.setState({
+      messages: {
+        [CONV]: [
+          { _id: "m1", role: "assistant", content: "Here is the dashboard after the fix", timestamp: 1_700_000_000_000 },
+          { _id: "m1b", role: "assistant", content: "", timestamp: 1_700_000_050_000, tool_calls: [{ id: "tu1", name: "Read", input: JSON.stringify({ file_path: "/tmp/shot.png" }) }] },
+          { _id: "m2", role: "user", content: "", timestamp: 1_700_000_100_000, images: [{ storage_id: "s2", tool_use_id: "tu1" }] },
+        ],
+      },
+    } as any);
+  });
+
+  test("a pin joins the batch beside paragraph quotes and opens its note editor", () => {
+    seed([mk("1", 0, "a paragraph", "")]);
+    const id = addImagePin(CONV, { ...shot, width: 1600, height: 900 }, { x: 0.25, y: 0.5 });
+    const pin = useInboxStore.getState().reviewComments[CONV].find((c) => c.id === id);
+    expect(pin?.image).toEqual({ src: shot.src, href: shot.href, storageId: "s1", width: 1600, height: 900, point: { x: 0.25, y: 0.5 } });
+    expect(pin?.messageId).toBe("m1");
+    expect(pin?.quote).toStartWith("Image from your message at ");
+    expect(pin?.quote).toEndWith(': "Here is the dashboard after the fix"');
+    expect(useInboxStore.getState().reviewEditingId).toBe(id);
+  });
+
+  test("each pin names its picture's attachment number and the point in pixels; a picture pinned twice attaches once", () => {
+    const a = addImagePin(CONV, { ...shot, width: 1600, height: 900 }, { x: 0.25, y: 0.5 });
+    const b = addImagePin(CONV, { ...shot, width: 1600, height: 900 }, { x: 0.9, y: 0.1 });
+    const c = addImagePin(CONV, remote, { x: 0.5, y: 0.5 });
+    const s = useInboxStore.getState();
+    s.commitReviewComment(CONV, a, "this button is misaligned");
+    s.commitReviewComment(CONV, b, "and this badge overlaps");
+    s.commitReviewComment(CONV, c, "wrong color");
+    expect(quotedImageStorageIds(CONV)).toEqual(["s1"]);
+    const text = attachReviewToMessage(CONV, "fix these", 3);
+    const blocks = text.split("\n\n");
+    expect(blocks[0]).toBe("> [Image 3] at x=400, y=450 of 1600×900 px (25% from the left, 50% from the top)\n> " + blocks[0].split("\n> ")[1]);
+    expect(blocks[1]).toBe("this button is misaligned");
+    expect(blocks[2]).toStartWith("> [Image 3] at x=1440, y=90 of 1600×900 px");
+    expect(blocks[3]).toBe("and this badge overlaps");
+    expect(blocks[4]).toMatch(/^> !\[image\]\(https:\/\/example\.com\/a\.png\) at 50% from the left, 50% from the top\n> Image returned by your Read call at .*: `\/tmp\/shot\.png`$/);
+    expect(blocks[5]).toBe("wrong color");
+    expect(blocks[6]).toBe("fix these");
+  });
+
+  test("without attachment numbers a pin points at the picture by address", () => {
+    addImagePin(CONV, shot, { x: 0.1, y: 0.2 });
+    expect(takeReviewBatch(CONV)).toStartWith(`> ![image](${shot.href}) at 10% from the left, 20% from the top\n> Image from your message`);
   });
 });
 

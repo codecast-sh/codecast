@@ -24,6 +24,7 @@ import type { Room, RemoteParticipant } from "livekit-client";
 import { RoomEvent, Track } from "livekit-client";
 import { GHOST_IDLE_MS } from "../browserGhost";
 import { sendShareCursors, type ShareCursor } from "../desktop";
+import { callSpeakerName } from "@codecast/shared/contracts";
 
 export const CURSOR_TOPIC = "cursor";
 /** Sends are paced like the browser control surface: about thirty a second. */
@@ -194,7 +195,10 @@ export function bindCallCursors(room: Room): void {
     if (topic !== CURSOR_TOPIC || !participant) return;
     const msg = decodeCursorMessage(payload);
     if (!msg) return;
-    setState(applyCursorMessage(state, participant.identity, participant.name || participant.identity, msg, Date.now()));
+    // The label is the name the room knows them by, a guest marked as one
+    // (callSpeakerName): a guest's name is whatever they typed, and over a
+    // shared screen it must not pass for a teammate's.
+    setState(applyCursorMessage(state, participant.identity, callSpeakerName(participant.identity, participant.name), msg, Date.now()));
   });
   // My share starting or stopping changes which cursors are mine to show.
   room.on(RoomEvent.LocalTrackPublished, forwardShareCursors);

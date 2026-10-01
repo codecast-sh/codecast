@@ -129,7 +129,7 @@ describe("org.analysisInputs", () => {
       org_roles: [
         { _id: "org_roles_g", user_id: ME, team_id: TEAM, short_id: "or-1", name: "Growth lead", handle: "growth", status: "active", scope: { project_ids: [P], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, created_at: 1, updated_at: 1 },
         // A whole workspace role leads nothing, so it hides no gap.
-        { _id: "org_roles_c", user_id: ME, team_id: TEAM, short_id: "or-2", name: "Chief of Staff", handle: "chief-of-staff", status: "active", scope: { project_ids: [], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, created_at: 1, updated_at: 1 },
+        { _id: "org_roles_c", user_id: ME, team_id: TEAM, short_id: "or-2", name: "Head of People", handle: "head-of-people", status: "active", scope: { project_ids: [], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, created_at: 1, updated_at: 1 },
       ],
     });
     const { coverage } = await computeAnalysisInputs(ctxOf(db), ME as any, TEAM, NOW);
@@ -152,7 +152,7 @@ describe("org.analysisInputs", () => {
         { ...base, _id: "conversations_h1", short_id: "jxh1", title: "helper", started_at: NOW - 2 * D, parent_conversation_id: "conversations_old", is_subagent: true },
         { ...base, _id: "conversations_h2", short_id: "jxh2", title: "helper", started_at: NOW - D, parent_conversation_id: "conversations_old", is_subagent: true },
         { ...base, _id: "conversations_young", short_id: "jxyoung", title: "Fix a bug", started_at: NOW - 2 * D },
-        { ...base, _id: "conversations_standing", short_id: "jxstand", title: "Chief of Staff", started_at: NOW - 60 * D, standing_role_id: "org_roles_1", anchor_id: "anchors_1" },
+        { ...base, _id: "conversations_standing", short_id: "jxstand", title: "Head of People", started_at: NOW - 60 * D, standing_role_id: "org_roles_1", anchor_id: "anchors_1" },
       ],
       agent_tasks: [
         { _id: "agent_tasks_1", user_id: ME, short_id: "tr-886", title: "Daily growth run", originating_conversation_id: "conversations_old", schedule_type: "recurring", interval_ms: D, status: "scheduled" },
@@ -250,6 +250,14 @@ describe("org.analysisInputs", () => {
         { _id: "transcripts_5", room_key: "channel:chat_channels_1", team_id: TEAM, started_by: ME, status: "ended", started_at: NOW - 40 * D, participants: [{ id: ME, name: "Me" }], summary: "old", routes: [], last_seq: 1 },
         // A huddle that ended before a word was spoken or written.
         { _id: "transcripts_6", room_key: "channel:chat_channels_1", team_key: TEAM, team_id: TEAM, started_by: ME, status: "ended", started_at: NOW - D, participants: [], routes: [], last_seq: 0 },
+        // A short huddle, too little said for a summary: its own lines are read, the ones that decide or ask.
+        { _id: "transcripts_7", room_key: "channel:chat_channels_1", team_id: TEAM, started_by: ME, status: "ended", started_at: NOW - 6 * H, ended_at: NOW - 6 * H + 120_000, title: "Quick sync", participants: [{ id: ME, name: "Me" }, { id: MATE, name: "Mate" }], summary_status: "skipped", routes: [], last_seq: 4 },
+      ],
+      transcript_segments: [
+        { _id: "ts_1", transcript_id: "transcripts_7", seq: 1, speaker_id: ME, speaker_name: "Me", text: "Morning.", t0: 1000, t1: 2000 },
+        { _id: "ts_2", transcript_id: "transcripts_7", seq: 2, speaker_id: ME, speaker_name: "Me", text: "Let's drop the ads this month.", t0: 2000, t1: 5000 },
+        { _id: "ts_3", transcript_id: "transcripts_7", seq: 3, speaker_id: MATE, speaker_name: "Mate", text: "Can you tell the growth lead?", t0: 6000, t1: 8000 },
+        { _id: "ts_4", transcript_id: "transcripts_7", seq: 4, speaker_id: ME, speaker_name: "Me", text: "Sure.", t0: 9000, t1: 9500 },
       ],
       chat_channels: [
         { _id: "chat_channels_1", team_id: TEAM, name: "general", kind: "public", created_by: ME, created_at: 1, updated_at: 1 },
@@ -276,7 +284,13 @@ describe("org.analysisInputs", () => {
     });
     const r = await computeAnalysisInputs(ctxOf(db), ME as any, TEAM, NOW);
     expect(r.channels.map((c: any) => c.name)).toEqual(["general", "me-mate"]);
-    expect(r.said.calls).toEqual([{ title: "Pricing huddle", started_at: NOW - 2 * D, ended_at: NOW - 2 * D + H, participants: ["Me", "Mate"], summary: "Agreed to raise the price.", action_items: ["Me: update the page"] }]);
+    expect(r.said.calls).toEqual([
+      { title: "Quick sync", started_at: NOW - 6 * H, ended_at: NOW - 6 * H + 120_000, participants: ["Me", "Mate"], summary: null, summary_status: "skipped", action_items: [], lines: [
+        { at: NOW - 6 * H + 1000, by: "Me", line: "Morning. Let's drop the ads this month." },
+        { at: NOW - 6 * H + 6000, by: "Mate", line: "Can you tell the growth lead?" },
+      ] },
+      { title: "Pricing huddle", started_at: NOW - 2 * D, ended_at: NOW - 2 * D + H, participants: ["Me", "Mate"], summary: "Agreed to raise the price.", summary_status: null, action_items: ["Me: update the page"] },
+    ]);
     expect(r.said.chat).toEqual([
       { channel: "#general", at: NOW - 4 * D, by: "Mate", line: "@growth is on Growth this week", why: ["named"], replies: [] },
       { channel: "#general", at: NOW - 5 * D, by: "Me", line: "We decided to drop the old funnel.", why: ["decided", "asked"], replies: [{ at: NOW - 5 * D + H, by: "Mate", line: "Can you own the migration?" }] },

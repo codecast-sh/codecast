@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { performMirrorAdvance, performBackfillScopes, MIRROR_WINDOW_MS, MIRROR_LIVE_SLACK_MS } from "./searchMirror";
+import { performMirrorAdvance, performBackfillScopes, dropMirroredMessage, MIRROR_WINDOW_MS, MIRROR_LIVE_SLACK_MS } from "./searchMirror";
 
 // ── In-memory Convex-ish ctx ─────────────────────────────────────────────────
 // Same pattern as notifications.needsInput.test.ts: a fake ctx.db faithful
@@ -86,6 +86,60 @@ function msg(id: string, createdAt: number, over: Rec = {}): Rec {
 }
 
 describe("performMirrorAdvance", () => {
+  test("a message is searchable seconds after it lands, then re-copied once its text settles", async () => {
+    const at = NOW - 60_000;
+    const { ctx, tables } = createCtx({
+      search_mirror_state: [{ _id: "state_1", cursor: CEILING - 1, updated_at: NOW }],
+      messages: [msg("m1", at, { content: "partial Jon Stew" })],
+    });
+    const first = await performMirrorAdvance(ctx, { now: NOW });
+    expect(first.fresh_scanned).toBe(1);
+    expect(tables.message_search_recent).toHaveLength(1);
+    expect(tables.message_search_recent[0].content).toBe("partial Jon Stew");
+
+    // Streamed text lands after the fresh copy; the settle walk catches it.
+    tables.messages[0].content = "partial Jon Stewart on Crossfire";
+    const later = at + LAG_MS + 1_000;
+    await performMirrorAdvance(ctx, { now: later });
+    expect(tables.message_search_recent).toHaveLength(1);
+    expect(tables.message_search_recent[0].content).toBe("partial Jon Stewart on Crossfire");
+  });
+
+  test("the settle walk writes nothing for rows the fresh walk already copied unchanged", async () => {
+    const at = NOW - 60_000;
+    const { ctx, tables } = createCtx({
+      search_mirror_state: [{ _id: "state_1", cursor: CEILING - 1, updated_at: NOW }],
+      messages: [msg("m1", at)],
+    });
+    await performMirrorAdvance(ctx, { now: NOW });
+    const row = tables.message_search_recent[0];
+    let writes = 0;
+    const patch = ctx.db.patch;
+    ctx.db.patch = async (id: string, p: Rec) => { if (id === row._id) writes++; return patch(id, p); };
+    await performMirrorAdvance(ctx, { now: at + LAG_MS + 1_000 });
+    expect(writes).toBe(0);
+  });
+
+  test("the fresh walk never starts below the settle ceiling after an outage", async () => {
+    const { ctx, tables } = createCtx({
+      search_mirror_state: [{ _id: "state_1", cursor: NOW - MIRROR_WINDOW_MS, fresh_cursor: 0, updated_at: NOW }],
+      messages: [msg("old", NOW - MIRROR_WINDOW_MS + 5_000), msg("new", NOW - 30_000)],
+    });
+    const res = await performMirrorAdvance(ctx, { now: NOW });
+    expect(res.fresh_scanned).toBe(1);
+    expect(tables.message_search_recent.map((r) => r.message_id).sort()).toEqual(["new", "old"]);
+  });
+
+  test("a deleted message leaves the mirror", async () => {
+    const { ctx, tables } = createCtx({
+      search_mirror_state: [{ _id: "state_1", cursor: CEILING - 1, updated_at: NOW }],
+      messages: [msg("m1", NOW - 60_000)],
+    });
+    await performMirrorAdvance(ctx, { now: NOW });
+    await dropMirroredMessage(ctx, "m1" as any);
+    expect(tables.message_search_recent).toHaveLength(0);
+  });
+
   test("initializes state at window start and copies content-bearing messages", async () => {
     const inWindow = NOW - MIRROR_WINDOW_MS + 5_000;
     const { ctx, tables } = createCtx({

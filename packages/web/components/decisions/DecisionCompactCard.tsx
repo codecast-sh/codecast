@@ -18,6 +18,7 @@ import { AskingSessionView, type AskingSessionRow } from "./DecisionParties";
 import { askingSessionDeps } from "./askingSessionDeps";
 import { OptionPages } from "./OptionPages";
 import { PublishedPageEmbed } from "../PublishedPageEmbed";
+import { ChangeCardView } from "./ChangeCardView";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { stripMarkdown } from "../../lib/notificationText";
 import "./decisions.css";
@@ -172,7 +173,9 @@ export function DecisionCompactCardView({
             here, clipped to a few lines with the way to open it. Collapsed it
             renders as stripped text, not parsed markdown: a queue of ten
             cards would otherwise parse ten bodies nobody has opened. */}
-        {decision.context_md && (
+        {/* A change card's own line says what the context would: the
+            question, then the change, then the proof, once each. */}
+        {decision.context_md && !decision.card && (
           <CollapsibleBody
             className="mt-2"
             collapsedHeight={112}
@@ -192,7 +195,14 @@ export function DecisionCompactCardView({
         {/* An attached report is the evidence the question rests on, so it
             renders here rather than living one click away on the document
             page. Clipped like the context: a page is taller than a card. */}
-        {decision.report_slug && (
+        {/* A change card (LE11) reads as one dense line of proof here; the
+            whole card is on the document page and in the transcript sheet. */}
+        {decision.card && (
+          <Link href={decisionHref(decision)} className="block mt-2 rounded-md px-2.5 py-2 -mx-1 hover:bg-sol-bg-alt/60 transition-colors">
+            <ChangeCardView card={decision.card} density="line" />
+          </Link>
+        )}
+        {decision.report_slug && !decision.card && (
           <div className="mt-1" data-decision-report={decision.report_slug}>
             <PublishedPageEmbed slug={decision.report_slug} height={240} />
           </div>

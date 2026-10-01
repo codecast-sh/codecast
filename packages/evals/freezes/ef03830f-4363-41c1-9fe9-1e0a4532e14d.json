@@ -1,0 +1,26 @@
+{
+  "name": "settle unresolvable-error",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:unresolvable-error"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "settle:unresolvable-error",
+    "title": "settle unresolvable-error"
+  },
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "trigger": {
+    "type": "settle"
+  },
+  "meta": {
+    "surface": "settle",
+    "visibility": "public",
+    "snapshot": "fixtures/settle/unresolvable-error.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "ef03830f-4363-41c1-9fe9-1e0a4532e14d",
+  "createdAt": "2026-10-01T17:46:23.249Z"
+}

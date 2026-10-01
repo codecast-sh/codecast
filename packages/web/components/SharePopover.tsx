@@ -35,6 +35,9 @@ interface SharePopoverProps {
   /** False for a viewer who cannot change how this is shared: the popover
    *  then offers only the page link and send to chat. */
   canManage?: boolean;
+  /** What else the public link carries, decided per object (a call's video),
+   *  shown under link access for whoever manages it. */
+  linkExtra?: React.ReactNode;
 }
 
 type VisibilityMode = "private" | "summary" | "full";
@@ -91,6 +94,7 @@ export function SharePopover({
   forwardLabel,
   sharedVia,
   canManage = true,
+  linkExtra,
 }: SharePopoverProps) {
   const chatOn = useTeamFeature("chat");
   const [isOpen, setIsOpen] = useState(false);
@@ -194,6 +198,7 @@ export function SharePopover({
                   ? "Anyone with the link can view it, no sign in needed."
                   : "Only people who can already see it can open the link."}
               </p>
+              {linkExtra}
             </div>
           )}
         </div>

@@ -1,4 +1,5 @@
 import { clsx, type ClassValue } from "clsx"
+import { CODECAST_BASE_URL } from "@codecast/shared/entities";
 import { twMerge } from "tailwind-merge"
 
 export function cn(...inputs: ClassValue[]) {
@@ -17,7 +18,7 @@ export const NEW_SESSION_EVENT = "codecast-new-session";
 export { relTimeShort, formatRelative, formatShortDate, formatDateFull, formatDateSmart } from "@codecast/shared/time";
 
 export function shareOrigin(): string {
-  return "https://codecast.sh";
+  return CODECAST_BASE_URL;
 }
 
 /** The public address of an in-app path, whatever pane the page is open in. */
@@ -248,6 +249,39 @@ export function buildProjectPathOptions(opts: {
   const absent =
     listed && !!split!.prefix && (!listing!.exists || !listing!.dirs.some((d) => d.path === custom));
   return [...matches, ...disk, { path: custom!, custom: true, ...(absent ? { create: true } : {}) }];
+}
+
+/**
+ * Copy text that does not exist yet (a link a mutation is still minting),
+ * from inside the press that asked for it. Safari lets a page write the
+ * clipboard only during the user's gesture, and an await before the write
+ * ends the gesture, so the write starts NOW with a promise of the text
+ * (ClipboardItem accepts one). Where ClipboardItem cannot take a promise, the
+ * text is copied the ordinary way once it lands. Resolves false when there
+ * was nothing to copy (the promise gave null) and throws when the copy failed.
+ */
+export async function copyToClipboardWhenReady(text: Promise<string | null>): Promise<boolean> {
+  if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
+    let got: string | null = null;
+    const blob = text.then((t) => {
+      got = t;
+      if (t === null) throw new Error("nothing to copy");
+      return new Blob([t], { type: "text/plain" });
+    });
+    try {
+      await navigator.clipboard.write([new ClipboardItem({ "text/plain": blob })]);
+      return true;
+    } catch {
+      // Nothing to copy, or a browser that refused the deferred item: the
+      // text itself decides which.
+      const t = got ?? (await text.catch(() => null));
+      if (t === null) return false;
+    }
+  }
+  const t = await text;
+  if (t === null) return false;
+  await copyToClipboard(t);
+  return true;
 }
 
 export async function copyToClipboard(text: string): Promise<void> {

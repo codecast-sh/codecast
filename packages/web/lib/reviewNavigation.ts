@@ -14,6 +14,10 @@ export function reviewSourceMessageId(messageId: string) {
 export function jumpToReviewComment(comment: PendingComment, scroll: HTMLElement | null, jumpToMessage: (id: string) => void, scrollToBlock?: (block: HTMLElement, align: "center" | "nearest") => void) {
   const state = useInboxStore.getState();
   state.setReviewEditingId(null);
+  if (comment.image) {
+    if (comment.messageId) jumpToMessage(comment.messageId);
+    return;
+  }
   state.setReviewTarget(comment.messageId, comment.blockIndex);
   const region = scroll && reviewRegion(scroll, comment.messageId);
   if (region) {

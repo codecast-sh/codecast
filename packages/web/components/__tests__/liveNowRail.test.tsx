@@ -47,6 +47,7 @@ function room(overrides: Partial<LiveRoomRow> = {}): LiveRoomRow {
     members: [{ user_id: "ann", user_name: "Ann" }],
     mine: false,
     knocked: false,
+    recording: false,
     ...overrides,
   };
 }

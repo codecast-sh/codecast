@@ -6,6 +6,7 @@ import { Id } from "./_generated/dataModel";
 import { isConversationTeamVisible, teamVisibleConvTeam } from "./privacy";
 import { canAccessConversation } from "./lib/access";
 import { pullRequestsLinkedToConversation } from "./lib/prSessions";
+import { CHEAP_MODEL, postMessages, replyText, type SurfaceRequest } from "./lib/anthropic";
 
 type OutcomeType = "shipped" | "progress" | "blocked" | "unknown";
 type InsightGenStatus = {
@@ -116,6 +117,177 @@ function summarySignature(summary: string): string {
   return tokens.join("-");
 }
 
+/** A message row as the insight context reads it. */
+export type InsightMessageRow = {
+  role: string;
+  content?: string;
+  timestamp: number;
+  tool_calls?: Array<{ name: string }>;
+};
+
+/**
+ * What the insight prompt reads from a session's newest messages, given in
+ * chronological order: the user and assistant turns, each cut to 500
+ * characters, sampled to the first 8 and the last 10, plus the tool names seen.
+ */
+export function selectInsightContext(rows: InsightMessageRow[]): Pick<ConversationInsightContext, "messages" | "tool_names"> {
+  const turns = rows
+    .filter((m) => (m.role === "user" || m.role === "assistant") && !!m.content)
+    .map((m) => ({
+      role: m.role,
+      content: (m.content || "").slice(0, 500),
+      timestamp: m.timestamp,
+    }));
+  return {
+    messages: turns.length > 18 ? [...turns.slice(0, 8), ...turns.slice(-10)] : turns,
+    tool_names: uniqCompact(
+      rows.flatMap((m) => (m.tool_calls || []).map((tc) => tc.name)).filter(Boolean),
+      16,
+      80
+    ),
+  };
+}
+
+/** The facts the insight prompt names; the ids and privacy fields stay out. */
+export type InsightRequestContext = Pick<ConversationInsightContext, "messages" | "tool_names" | "commits" | "prs"> & {
+  conversation: Pick<
+    ConversationInsightContext["conversation"],
+    "title" | "subtitle" | "idle_summary" | "project_path" | "git_branch" | "status" | "started_at" | "updated_at"
+  >;
+};
+
+/**
+ * The insight request. Message times print in UTC, which is the Convex
+ * runtime's zone, so a replay on any machine renders the same prompt. No
+ * temperature: the API default applies.
+ */
+export function insightRequest(context: InsightRequestContext, source: string): SurfaceRequest {
+  const formatMsgTime = (ts: number | undefined) => {
+    if (!ts) return "";
+    const d = new Date(ts);
+    return `[${d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "UTC" })}]`;
+  };
+  const sampledMessages = context.messages
+    .map((m) => `${formatMsgTime(m.timestamp)} ${m.role === "assistant" ? "Assistant" : "User"}: ${m.content}`)
+    .join("\n\n");
+
+  const commitsText = context.commits.length
+    ? context.commits
+        .slice(0, 8)
+        .map((c) => `- ${c.sha.slice(0, 7)} ${c.message.split("\n")[0]} (+${c.insertions}/-${c.deletions}, ${c.files_changed} files)`)
+        .join("\n")
+    : "- none";
+
+  const prsText = context.prs.length
+    ? context.prs
+        .slice(0, 6)
+        .map((pr) => `- #${pr.number} [${pr.state}] ${pr.title} (${pr.repository})`)
+        .join("\n")
+    : "- none";
+
+  const prompt = `You are writing a session narrative for a developer activity feed.
+
+Return ONLY valid JSON with this exact shape:
+{
+  "headline": "string (one sentence, max 80 chars, what was accomplished)",
+  "turns": [
+    { "ask": "what the user asked/directed (their actual words, paraphrased concisely)", "did": ["what was done in response (2-4 bullet points, specific)"] }
+  ],
+  "summary": "string (2-3 sentences, narrative context)",
+  "outcome_type": "shipped|progress|blocked|unknown",
+  "themes": ["string"],
+  "confidence": number (0..1)
+}
+
+Rules:
+- turns: THE MOST IMPORTANT FIELD. This captures the back-and-forth of the session. Each turn is one user request and what the agent did about it. The "ask" field should quote or closely paraphrase what the user actually said -- their intent, their words. The "did" array lists specific concrete things that were done in response (files changed, bugs found, features built). 3-8 turns per session.
+  Good: { "ask": "Fix the OOM crash in renderMedia", "did": ["Found root cause: renderMedia() spawning unlimited Chromium processes", "Capped concurrency to os.cpus().length * 0.5 in index.ts", "Deployed fix, confirmed memory stable"] }
+  Good: { "ask": "Map the React Native architecture across the monorepo", "did": ["Documented Router file-base routing in app/, layout.tsx", "Identified Tamagui config and component library structure", "Wrote comprehensive report covering all three backend layers"] }
+  Bad: { "ask": "Worked on stuff", "did": ["Made changes"] }
+- headline: Lead with the verb. Max 80 characters.
+- summary: Brief narrative context, 2-3 sentences.
+- outcome_type: shipped = deployed/merged/complete. progress = still working. blocked = stuck.
+- themes: 2-4 short tags, lowercase.
+- No markdown, no commentary, just JSON.
+
+Session metadata:
+- title: ${context.conversation.title || ""}
+- subtitle: ${context.conversation.subtitle || ""}
+- idle_summary: ${context.conversation.idle_summary || ""}
+- project_path: ${context.conversation.project_path || ""}
+- git_branch: ${context.conversation.git_branch || ""}
+- status: ${context.conversation.status}
+- started_at: ${context.conversation.started_at ? new Date(context.conversation.started_at).toISOString() : "unknown"}
+- updated_at: ${context.conversation.updated_at ? new Date(context.conversation.updated_at).toISOString() : "unknown"}
+- source: ${source}
+
+Tool names seen:
+${context.tool_names.join(", ") || "none"}
+
+Commits:
+${commitsText}
+
+Linked PRs:
+${prsText}
+
+Conversation excerpt:
+${sampledMessages}`;
+
+  return { model: CHEAP_MODEL, max_tokens: 1200, prompt };
+}
+
+/**
+ * The insight reply as the insight row stores it. `summary` is the model's
+ * value as given (the caller falls back to the session's own lines when it is
+ * empty); every other field is normalized and capped. A missing or non-JSON
+ * reply is an error with the status reason prod records.
+ */
+export function parseInsightReply(text: string | undefined) {
+  const raw = text?.trim();
+  if (!raw) return { ok: false as const, reason: "empty_response" };
+  const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  let parsed: any;
+  try {
+    parsed = JSON.parse(cleaned);
+  } catch {
+    return { ok: false as const, reason: "invalid_json" };
+  }
+  const timeline: Array<{ t: string; event: string; type: string }> | undefined = Array.isArray(parsed.timeline)
+    ? parsed.timeline
+        .filter((e: any) => e && typeof e.event === "string" && typeof e.t === "string")
+        .slice(0, 12)
+        .map((e: any) => ({
+          t: String(e.t).slice(0, 10),
+          event: String(e.event).trim().slice(0, 200),
+          type: String(e.type || "change").slice(0, 20),
+        }))
+    : undefined;
+  const turns: Array<{ ask: string; did: string[] }> | undefined = Array.isArray(parsed.turns)
+    ? parsed.turns
+        .filter((t: any) => t && typeof t.ask === "string" && Array.isArray(t.did))
+        .slice(0, 10)
+        .map((t: any) => ({
+          ask: String(t.ask).trim().slice(0, 200),
+          did: t.did.filter((d: any) => typeof d === "string").slice(0, 6).map((d: any) => String(d).trim().slice(0, 200)),
+        }))
+    : undefined;
+  return {
+    ok: true as const,
+    summary: parsed.summary,
+    headline: parsed.headline ? String(parsed.headline).trim().slice(0, 120) : undefined,
+    keyChanges: uniqCompact(Array.isArray(parsed.key_changes) ? parsed.key_changes.map((c: any) => String(c)) : [], 6, 120),
+    timeline,
+    turns,
+    goal: parsed.goal ? String(parsed.goal).trim().slice(0, 220) : undefined,
+    whatChanged: parsed.what_changed ? String(parsed.what_changed).trim().slice(0, 320) : undefined,
+    outcomeType: safeOutcomeType(parsed.outcome_type),
+    blockers: uniqCompact(Array.isArray(parsed.blockers) ? parsed.blockers.map((b: any) => String(b)) : [], 5, 200),
+    nextAction: parsed.next_action ? String(parsed.next_action).trim().slice(0, 220) : undefined,
+    themes: uniqCompact(Array.isArray(parsed.themes) ? parsed.themes.map((t: any) => String(t)) : [], 6, 48),
+    confidence: clampConfidence(parsed.confidence),
+  };
+}
+
 export const getConversationContextForInsight = internalQuery({
   args: {
     conversation_id: v.id("conversations"),
@@ -132,22 +304,7 @@ export const getConversationContextForInsight = internalQuery({
       .order("desc")
       .take(80);
 
-    const chronological = messages.reverse();
-    const conversationMessages = chronological
-      .filter((m) => (m.role === "user" || m.role === "assistant") && !!m.content)
-      .map((m) => ({
-        role: m.role,
-        content: (m.content || "").slice(0, 500),
-        timestamp: m.timestamp,
-      }));
-
-    const toolNames = uniqCompact(
-      chronological
-        .flatMap((m) => (m.tool_calls || []).map((tc) => tc.name))
-        .filter(Boolean),
-      16,
-      80
-    );
+    const sampled = selectInsightContext(messages.reverse());
 
     const commits = await ctx.db
       .query("commits")
@@ -187,8 +344,8 @@ export const getConversationContextForInsight = internalQuery({
         started_at: conversation.started_at,
         updated_at: conversation.updated_at,
       },
-      messages: conversationMessages,
-      tool_names: toolNames,
+      messages: sampled.messages,
+      tool_names: sampled.tool_names,
       commits: commits.map((c) => ({
         sha: c.sha,
         message: c.message,
@@ -440,8 +597,7 @@ export const generateSessionInsight = internalAction({
     )),
   },
   handler: async (ctx, args): Promise<InsightGenStatus> => {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) return { status: "skipped", reason: "missing_api_key" };
+    if (!process.env.ANTHROPIC_API_KEY) return { status: "skipped", reason: "missing_api_key" };
 
     const context = (await ctx.runQuery(internal.sessionInsights.getConversationContextForInsight, {
       conversation_id: args.conversation_id,
@@ -458,143 +614,24 @@ export const generateSessionInsight = internalAction({
       return { status: "skipped", reason: "rate_limited" };
     }
 
-    const firstSlice = context.messages.slice(0, 8);
-    const lastSlice = context.messages.length > 18 ? context.messages.slice(-10) : context.messages.slice(8);
-    const formatMsgTime = (ts: number | undefined) => {
-      if (!ts) return "";
-      const d = new Date(ts);
-      return `[${d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false })}]`;
-    };
-    const sampledMessages = [...firstSlice, ...lastSlice]
-      .map((m) => `${formatMsgTime(m.timestamp)} ${m.role === "assistant" ? "Assistant" : "User"}: ${m.content}`)
-      .join("\n\n");
-
-    const commitsText = context.commits.length
-      ? context.commits
-          .slice(0, 8)
-          .map((c) => `- ${c.sha.slice(0, 7)} ${c.message.split("\n")[0]} (+${c.insertions}/-${c.deletions}, ${c.files_changed} files)`)
-          .join("\n")
-      : "- none";
-
-    const prsText = context.prs.length
-      ? context.prs
-          .slice(0, 6)
-          .map((pr) => `- #${pr.number} [${pr.state}] ${pr.title} (${pr.repository})`)
-          .join("\n")
-      : "- none";
-
-    const prompt = `You are writing a session narrative for a developer activity feed.
-
-Return ONLY valid JSON with this exact shape:
-{
-  "headline": "string (one sentence, max 80 chars, what was accomplished)",
-  "turns": [
-    { "ask": "what the user asked/directed (their actual words, paraphrased concisely)", "did": ["what was done in response (2-4 bullet points, specific)"] }
-  ],
-  "summary": "string (2-3 sentences, narrative context)",
-  "outcome_type": "shipped|progress|blocked|unknown",
-  "themes": ["string"],
-  "confidence": number (0..1)
-}
-
-Rules:
-- turns: THE MOST IMPORTANT FIELD. This captures the back-and-forth of the session. Each turn is one user request and what the agent did about it. The "ask" field should quote or closely paraphrase what the user actually said -- their intent, their words. The "did" array lists specific concrete things that were done in response (files changed, bugs found, features built). 3-8 turns per session.
-  Good: { "ask": "Fix the OOM crash in renderMedia", "did": ["Found root cause: renderMedia() spawning unlimited Chromium processes", "Capped concurrency to os.cpus().length * 0.5 in index.ts", "Deployed fix, confirmed memory stable"] }
-  Good: { "ask": "Map the React Native architecture across the monorepo", "did": ["Documented Router file-base routing in app/, layout.tsx", "Identified Tamagui config and component library structure", "Wrote comprehensive report covering all three backend layers"] }
-  Bad: { "ask": "Worked on stuff", "did": ["Made changes"] }
-- headline: Lead with the verb. Max 80 characters.
-- summary: Brief narrative context, 2-3 sentences.
-- outcome_type: shipped = deployed/merged/complete. progress = still working. blocked = stuck.
-- themes: 2-4 short tags, lowercase.
-- No markdown, no commentary, just JSON.
-
-Session metadata:
-- title: ${context.conversation.title || ""}
-- subtitle: ${context.conversation.subtitle || ""}
-- idle_summary: ${context.conversation.idle_summary || ""}
-- project_path: ${context.conversation.project_path || ""}
-- git_branch: ${context.conversation.git_branch || ""}
-- status: ${context.conversation.status}
-- started_at: ${context.conversation.started_at ? new Date(context.conversation.started_at).toISOString() : "unknown"}
-- updated_at: ${context.conversation.updated_at ? new Date(context.conversation.updated_at).toISOString() : "unknown"}
-- source: ${source}
-
-Tool names seen:
-${context.tool_names.join(", ") || "none"}
-
-Commits:
-${commitsText}
-
-Linked PRs:
-${prsText}
-
-Conversation excerpt:
-${sampledMessages}`;
 
     try {
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 1200,
-          messages: [{ role: "user", content: prompt }],
-        }),
-      });
-
+      const response = await postMessages(insightRequest(context, source));
+      if (!response) return { status: "skipped", reason: "missing_api_key" };
       if (!response.ok) {
         return { status: "error", reason: `provider_${response.status}` };
       }
 
       const data = await response.json();
-      const raw = data.content?.[0]?.text?.trim();
-      if (!raw) return { status: "error", reason: "empty_response" };
+      const reply = parseInsightReply(replyText(data));
+      if (!reply.ok) return { status: "error", reason: reply.reason };
 
-      const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
-      let parsed: any;
-      try {
-        parsed = JSON.parse(cleaned);
-      } catch {
-        return { status: "error", reason: "invalid_json" };
-      }
-
-      const summary = (parsed.summary || context.conversation.idle_summary || context.conversation.subtitle || "Updated session activity")
+      const summary = (reply.summary || context.conversation.idle_summary || context.conversation.subtitle || "Updated session activity")
         .toString()
         .trim()
         .slice(0, 600);
 
-      const headline = parsed.headline ? String(parsed.headline).trim().slice(0, 120) : undefined;
-      const keyChanges = uniqCompact(Array.isArray(parsed.key_changes) ? parsed.key_changes.map((c: any) => String(c)) : [], 6, 120);
-      const timeline = Array.isArray(parsed.timeline)
-        ? parsed.timeline
-            .filter((e: any) => e && typeof e.event === "string" && typeof e.t === "string")
-            .slice(0, 12)
-            .map((e: any) => ({
-              t: String(e.t).slice(0, 10),
-              event: String(e.event).trim().slice(0, 200),
-              type: String(e.type || "change").slice(0, 20),
-            }))
-        : undefined;
-      const turns = Array.isArray(parsed.turns)
-        ? parsed.turns
-            .filter((t: any) => t && typeof t.ask === "string" && Array.isArray(t.did))
-            .slice(0, 10)
-            .map((t: any) => ({
-              ask: String(t.ask).trim().slice(0, 200),
-              did: t.did.filter((d: any) => typeof d === "string").slice(0, 6).map((d: any) => String(d).trim().slice(0, 200)),
-            }))
-        : undefined;
-      const goal = parsed.goal ? String(parsed.goal).trim().slice(0, 220) : undefined;
-      const whatChanged = parsed.what_changed ? String(parsed.what_changed).trim().slice(0, 320) : undefined;
-      const outcomeType = safeOutcomeType(parsed.outcome_type);
-      const blockers = uniqCompact(Array.isArray(parsed.blockers) ? parsed.blockers.map((b: any) => String(b)) : [], 5, 200);
-      const nextAction = parsed.next_action ? String(parsed.next_action).trim().slice(0, 220) : undefined;
-      const themes = uniqCompact(Array.isArray(parsed.themes) ? parsed.themes.map((t: any) => String(t)) : [], 6, 48);
-      const confidence = clampConfidence(parsed.confidence);
+      const { headline, keyChanges, timeline, turns, goal, whatChanged, outcomeType, blockers, nextAction, themes, confidence } = reply;
 
       const filesTouched = uniqCompact(
         context.commits
@@ -641,6 +678,17 @@ ${sampledMessages}`;
         await ctx.runMutation(internal.idleSummary.setIdleSummary, {
           conversation_id: context.conversation._id,
           idle_summary: headline,
+        });
+      }
+
+      // Each blocker this insight newly records is a signal (LE3); the door
+      // attaches it to a cause in the insight's workspace.
+      if (blockers.length) {
+        await ctx.scheduler.runAfter(0, internal.signals.ingestInsightBlockers, {
+          conversation_id: context.conversation._id,
+          blockers,
+          previous_blockers: existing?.blockers,
+          goal,
         });
       }
 

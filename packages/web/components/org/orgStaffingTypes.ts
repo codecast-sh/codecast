@@ -20,11 +20,18 @@ export type OrgRoleHealth = {
   ledger: { open_tasks: number; in_flight: number; active_plans: number };
   /** Which rows the load and the ledger were counted from, and by what rule. */
   counted?: { rule: "scope" | "remainder"; projects: number; plans: number; tasks: number; complete: boolean; note: string };
-  spend: { wakes_today: number; wakes_7d_avg: number; wakes_cap: number; tokens_today: number; tokens_7d_avg: number; tokens_cap: number; cap_hits_7d: number };
+  spend: {
+    wakes_today: number; wakes_7d_avg: number; wakes_cap: number; tokens_today: number; tokens_7d_avg: number | null; tokens_cap: number; cap_hits_7d: number;
+    /** Delivered wakes by UTC day (YYYY-MM-DD) over the week. */
+    wakes_by_day?: Record<string, number>;
+  };
   flow: {
     decisions_7d: number;
     median_recommend_min: number | null;
     done_7d: number;
+    /** done_7d by UTC day of the close; decisions_7d by UTC day of the ask. */
+    done_by_day?: Record<string, number>;
+    decisions_by_day?: Record<string, number>;
     handoffs_7d: { done: number; blocked: number; needs_context: number };
     review_stalls: number;
     sends_7d: { to: { role_id: string; n: number }[]; from: { role_id: string; n: number }[] };
@@ -154,7 +161,15 @@ export function joinProposals(rows: Record<string, OrgProposalListRow>, changes:
   return Object.values(rows).map((p) => ({ ...p, changes: (byProposal.get(p._id) ?? []).sort((a, b) => a.seq - b.seq) }));
 }
 
-/** The handle the chief of staff always carries (S6). */
-export const CHIEF_OF_STAFF_HANDLE = "chief-of-staff";
-/** The name it is born with (S22: the workspace's root role, renamable). */
-export const CHIEF_OF_STAFF_NAME = "Chief of Staff";
+// The handle and birth name live in the shared contract (orgLead.ts), with
+// the legacy handle rule every reader needs; re-exported for the web's imports.
+export { HEAD_OF_PEOPLE_HANDLE, HEAD_OF_PEOPLE_NAME, isHeadOfPeopleRole } from "@codecast/shared/contracts/orgLead";
+import { roleIdentity, type RoleIdentity } from "@codecast/shared/contracts/orgIdentity";
+export { roleIdentity, type RoleIdentity };
+
+/** How a role is named on every web surface (S30): its given name, with its
+ *  title (and a chief's reach) as the subtitle. The tree names teams, so a
+ *  chief for a team reads "Chief of Staff, <team>". */
+export function roleWords(role: { _id: string; name: string; handle: string; avatar?: string | null; given_name?: string | null; chief?: any; scope_type?: "team" | "user"; team_id?: string }, teamName?: string | null): RoleIdentity {
+  return roleIdentity(role, { teamName: teamName ?? null });
+}

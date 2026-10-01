@@ -22,6 +22,8 @@ const FULL_WIDTH_PATTERNS: RegExp[] = [
   /^\/questions(\/|$)/,
   // A decision's document page and a stack own their reading column.
   /^\/decisions(\/|$)/,
+  // The line owns its canvas: six stations side by side, each its own scroll.
+  /^\/line$/,
   // Chat owns its whole canvas: three columns, each with its own scroll region.
   /^\/chat(\/|$)/,
   // The public rooms are the same three column surface.

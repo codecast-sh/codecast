@@ -1,5 +1,6 @@
-import { Room, type Track, type Participant } from "livekit-client";
+import { LocalParticipant, Room, Track, type Participant } from "livekit-client";
 import { peekOsPermissions, permissionHint, refreshOsPermissions } from "../osPermissions";
+import { callParticipantKind } from "@codecast/shared/contracts";
 
 // ── track fan-out to React ────────────────────────────────────────────────
 // One tile per VIDEO TRACK, not per participant: a person can have a camera
@@ -17,6 +18,37 @@ export type ParticipantTile = {
   kind: "camera" | "screen";
   track: Track;
 };
+
+/** Every video track in a room as a tile, the local participant first. Built
+ *  here, not in the call manager, because two rooms draw from it: a member's
+ *  huddle (callManager) and a guest's (lib/calls/guestRoom), and a tile must
+ *  mean the same thing on both. */
+export function participantTiles(room: Room): ParticipantTile[] {
+  const out: ParticipantTile[] = [];
+  const all: Participant[] = [room.localParticipant, ...room.remoteParticipants.values()];
+  for (const p of all) {
+    const isLocal = p instanceof LocalParticipant;
+    const base = {
+      identity: p.identity,
+      name: p.name || p.identity,
+      image: participantImage(p),
+      isLocal,
+    };
+    for (const [source, kind] of [
+      [Track.Source.Camera, "camera"],
+      [Track.Source.ScreenShare, "screen"],
+    ] as const) {
+      const pub = p.getTrackPublication(source);
+      // A remote track only renders once subscribed; a local one as soon
+      // as it exists. Muted camera tracks stay listed (they render as a
+      // frozen/black frame the tile can label) — a mute is not a removal.
+      const track = pub && (isLocal || pub.isSubscribed) ? pub.track : null;
+      if (!track) continue;
+      out.push({ ...base, kind, track, key: `${p.identity}:${kind}:${pub!.trackSid || track.sid || "local"}` });
+    }
+  }
+  return out;
+}
 
 // Why did capture fail? livekit resolves null (no throw) when getUserMedia
 // yields nothing, and the OS permission state tells the cases apart: a
@@ -67,6 +99,27 @@ export async function grantDeviceNames(): Promise<boolean> {
       return false;
     }
   }
+}
+
+/** What a participant is doing with their microphone and screen, read off
+ *  the media itself: the one reading for every surface that has no server
+ *  row to ask (a guest has no seat), on a member's stage and a guest's alike. */
+export function participantFlags(p: Participant): { muted: boolean; sharing: boolean } {
+  return { muted: !p.isMicrophoneEnabled, sharing: p.isScreenShareEnabled };
+}
+
+/** The room's guests as the media sees them: in it, and with the microphone
+ *  on or off. A guest's lease says they were let in; this says they can be
+ *  heard, which is what a face or a row should draw. */
+export type GuestMedia = { identity: string; muted: boolean };
+
+export function guestMediaOf(room: Room | null): GuestMedia[] {
+  if (!room) return [];
+  const out: GuestMedia[] = [];
+  for (const p of room.remoteParticipants.values()) {
+    if (callParticipantKind(p.identity) === "guest") out.push({ identity: p.identity, muted: participantFlags(p).muted });
+  }
+  return out;
 }
 
 export function participantImage(p: Participant): string | undefined {

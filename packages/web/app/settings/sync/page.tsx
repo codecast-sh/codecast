@@ -10,7 +10,7 @@ import { Button } from "../../../components/ui/button";
 import { Switch } from "../../../components/ui/switch";
 import { Fragment, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { CLOUD_AGENT_PROVIDERS, CLOUD_SESSION_SOURCES, cloudSessionSyncSettings, type CloudSessionSource } from "@codecast/shared/contracts";
+import { CLOUD_SESSION_SOURCES, cloudSessionSyncSettings, type CloudSessionSource } from "@codecast/shared/contracts";
 import {
   GitBranch, Folder, FolderGit2, Search, AlertTriangle, RefreshCw, Terminal,
 } from "lucide-react";
@@ -99,11 +99,12 @@ const CLOUD_SYNC_COPY: Record<CloudSessionSource, { on: string; off: string }> =
     off: "Only the Cursor Cloud sessions you start from codecast sync here. The rest stay on cursor.com.",
   },
   codex: {
-    on: "Tasks you run on chatgpt.com/codex, in Slack, Linear or from GitHub sync here like local ones, and you can message them from codecast. Your daemon reads them with the Codex sign-in on your machine.",
-    // Until codecast can start Codex Cloud tasks, none of them sync with this off.
-    off: CLOUD_AGENT_PROVIDERS.codex.composer
-      ? "Only the Codex Cloud tasks you start from codecast sync here. The rest stay on chatgpt.com/codex."
-      : "Codex Cloud tasks stay on chatgpt.com/codex until you turn this on.",
+    on: "Tasks you run on chatgpt.com/codex or with the Codex CLI sync here like local ones, and you can message them from codecast. Your daemon reads them with the Codex sign-in on your machine.",
+    off: "Only the Codex Cloud tasks you start from codecast sync here. The rest stay on chatgpt.com/codex.",
+  },
+  codex_api: {
+    on: "Every Agents API session on your OpenAI key's project syncs here, the ones other apps start on that key included, and you can message them from codecast. Your daemon reads them with the OpenAI API key on your machine (Settings → Provider keys).",
+    off: "Only the OpenAI Agents API sessions you start from codecast sync here. Sessions other apps start on your key stay with them.",
   },
 };
 

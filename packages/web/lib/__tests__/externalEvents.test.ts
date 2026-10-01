@@ -7,7 +7,9 @@ import {
   externalEventStyle,
   filePath,
   externalEventRowToExternalEvent,
+  externalEventGroupActor,
   groupExternalEvents,
+  mergeExternalEventGroups,
   isQuietExternalEvent,
   prPath,
   registerExternalEventStyles,
@@ -267,5 +269,36 @@ describe("groupExternalEvents", () => {
       pr({ _id: "k2", kind: "commit" }),
     ]);
     expect(phrases.map((p) => p.text)).toEqual(["2 commits", "pushed 3 commits"]);
+  });
+});
+
+describe("mergeExternalEventGroups", () => {
+  const commit = (id: string, branch: string, at: number, actor = "u1"): ExternalEventRecord => ({
+    _id: id,
+    repository: "codecast-sh/codecast",
+    kind: "commit",
+    branch,
+    actor_user_id: actor,
+    title: id,
+    created_at: at,
+  });
+
+  it("folds one person's commits across worktree branches into one run", () => {
+    const groups = groupExternalEvents([
+      commit("a", "w1-fallbacks-v2", 30),
+      commit("b", "w1dead-v3", 20),
+      commit("c", "review-l3db", 10),
+    ]);
+    expect(groups).toHaveLength(3);
+    expect(groups.map(externalEventGroupActor)).toEqual(["u1", "u1", "u1"]);
+    const run = mergeExternalEventGroups(groups);
+    expect(run.events.map((e) => e._id)).toEqual(["a", "b", "c"]);
+    expect(run.at).toBe(30);
+    expect(run.phrases).toEqual([{ kind: "commit", count: 3, text: "3 commits" }]);
+  });
+
+  it("names no single actor for a group two people share", () => {
+    const [group] = groupExternalEvents([commit("a", "main", 2, "u1"), commit("b", "main", 1, "u2")]);
+    expect(externalEventGroupActor(group)).toBeUndefined();
   });
 });

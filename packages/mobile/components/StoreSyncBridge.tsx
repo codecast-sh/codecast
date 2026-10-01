@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { AppState } from 'react-native';
 import { useSyncCore } from '@codecast/web/hooks/useSyncCore';
+import { useSessionCommandResults } from '@codecast/web/hooks/useSessionCommands';
 import { emitSyncWake } from '@codecast/web/hooks/syncWake';
 import { flushPersistence } from '@codecast/web/store/idbCache';
 import { bootMark } from '@/lib/bootProfile';
@@ -36,6 +37,9 @@ export function StoreSyncBridge() {
 
 function StoreSyncBridgeInner() {
   useSyncCore('mobile');
+  // Settles the daemon commands this phone asked for (restart, device move),
+  // as web's DashboardLayout does for each window.
+  useSessionCommandResults();
   useEffect(() => { bootMark("sync-armed"); }, []);
   // eslint-disable-next-line no-restricted-syntax -- platform wake-source wiring
   useEffect(() => {

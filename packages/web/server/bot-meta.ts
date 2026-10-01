@@ -4,7 +4,7 @@ import { join } from "path";
 import { api } from "../../convex/convex/_generated/api.js";
 import type { Id } from "../../convex/convex/_generated/dataModel";
 import { parseSharePath } from "@codecast/shared/entities";
-import { convex, fetchShared, shareMeta } from "./shareData";
+import { convex, fetchGuestLink, fetchShared, guestMeetMeta, shareMeta } from "./shareData";
 import { seoFor, SITE_URL } from "../lib/seoRoutes";
 
 /**
@@ -159,6 +159,15 @@ async function getConversationMeta(id: string, shareToken?: string) {
 // registered in shareData — this table only holds non-share routes.
 const ROUTES: Array<{ pattern: RegExp; handler: (match: RegExpMatchArray, search: URLSearchParams) => Promise<{ title: string; description: string; url: string; type?: string } | null> }> = [
   { pattern: /^\/conversation\/([a-z0-9]{32})$/, handler: (m, search) => getConversationMeta(m[1], search.get("share") ?? undefined) },
+  // A guest's meeting link: the card says which meeting, who invited them,
+  // and whether it is recorded or transcribed (shareData.guestMeetMeta).
+  {
+    pattern: /^\/meet\/([A-Za-z0-9_-]{8,64})\/?$/,
+    handler: async (m) => {
+      const result = await fetchGuestLink(m[1]);
+      return result ? guestMeetMeta(m[1], result.value, BASE_URL) : null;
+    },
+  },
 ];
 
 export async function botMetaMiddleware(c: Context, next: Next) {

@@ -7,6 +7,7 @@ import { resolveCreationPrivacy } from "./privacy";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { askCore, finalizeAnswer, normalizeVerdict, personMayResolve, withdrawCore, type AnsweredBy } from "./sessionDecisions";
 import { createStackCore } from "./decisionStacks";
+import type { ChangeCard } from "@codecast/shared/contracts/changeCard";
 import { canAccessTask, canAccessPlan, computeWorkspaceKey, resolveWorkspaceKey, workspaceGrantsAccess } from "./lib/access";
 import { patchTask } from "./lib/taskWrite";
 import { createDataContext } from "./data";
@@ -37,7 +38,7 @@ export async function runScope(
 // Owner always; otherwise the run's ACCESS key must grant the viewer. The
 // stored key when present, the write-time compute for rows minted before
 // the backfill (they resolve personal to their owner).
-async function canReadRun(ctx: Ctx, userId: Id<"users">, run: any): Promise<boolean> {
+export async function canReadRun(ctx: Ctx, userId: Id<"users">, run: any): Promise<boolean> {
   if (String(run.user_id) === String(userId)) return true;
   return workspaceGrantsAccess(ctx, userId, await resolveWorkspaceKey(ctx, run));
 }
@@ -92,7 +93,7 @@ async function gateStackRef(ctx: Ctx, userId: Id<"users">, run: any, stack: stri
 export async function pauseAtGateCore(
   ctx: Ctx,
   auth: { userId: Id<"users"> },
-  args: { run_id: Id<"workflow_runs">; node_id: string; prompt: string; choices: GateChoice[]; doc_md?: string; category?: string; stack?: string },
+  args: { run_id: Id<"workflow_runs">; node_id: string; prompt: string; choices: GateChoice[]; doc_md?: string; category?: string; stack?: string; card?: ChangeCard },
 ) {
   const run = await ctx.db.get(args.run_id);
   if (!run || String(run.user_id) !== String(auth.userId)) return { error: "Not found" };
@@ -128,12 +129,14 @@ export async function pauseAtGateCore(
     const [first, ...rest] = args.prompt.split("\n");
     const question = first.trim() || args.node_id;
     const body = rest.join("\n").trim();
-    const asked = await askCore(ctx, auth, {
+    const ask = (card?: ChangeCard) => askCore(ctx, auth, {
       session_id: asker.session_id,
       question,
       context_md: body || undefined,
       options: args.choices.map((c) => ({ label: stripGateKey(c.label), ...(c.description ? { description: c.description } : {}) })),
       doc_md: args.doc_md,
+      // LE11: the change card the gate decides on, drawn natively by the web.
+      card,
       category: args.category,
       stack: stackRef,
       blocking: true,
@@ -142,6 +145,10 @@ export async function pauseAtGateCore(
       workflow_run_id: args.run_id,
       gate_node_id: args.node_id,
     });
+    // A card that fails its contract must not cost the run its gate: the
+    // question is asked without it and the card's page stays on the task.
+    let asked = await ask(args.card);
+    if (asked?.error && args.card) asked = await ask(undefined);
     if (asked && !asked.error) {
       decision = { id: asked.id, short_id: asked.short_id };
       await ctx.db.patch(args.run_id, { gate_decision_id: asked.id });
@@ -690,6 +697,9 @@ export const updateProgress = mutation({
     fail_reason: v.optional(v.string()),
     // the-line.md L7: a chain step's output head, shown on the run's node.
     result_preview: v.optional(v.string()),
+
+    // LE14: the runner's hash of the graph it executes, sent on its first report.
+    graph_hash: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);
@@ -723,6 +733,7 @@ export const updateProgress = mutation({
       node_statuses: nodeStatuses,
       status: args.run_status ?? run.status,
       fail_reason: args.fail_reason,
+      ...(args.graph_hash ? { graph_hash: args.graph_hash } : {}),
       updated_at: now,
     });
 
@@ -814,6 +825,12 @@ export const updateProgress = mutation({
 // (<session>/workflows/wf_<id>.json). Upserts by external_run_id so the daemon can
 // re-post on every snapshot change. run_kind="workflow" distinguishes these from our
 // routine/DOT-graph runs, which share this table and the existing run UI.
+const INGEST_LIVE_STATUSES = new Set(["pending", "running", "paused"]);
+export function ingestRunStatus(status: string): "pending" | "running" | "paused" | "completed" | "failed" {
+  if (INGEST_LIVE_STATUSES.has(status) || status === "completed") return status as "pending" | "running" | "paused" | "completed";
+  return "failed";
+}
+
 export const ingestSnapshot = mutation({
   args: {
     api_token: v.string(),
@@ -844,9 +861,13 @@ export const ingestSnapshot = mutation({
     if (!auth) return { error: "Unauthorized" };
     const now = Date.now();
 
-    const allowed = ["pending", "running", "paused", "completed", "failed"];
-    const runStatus = (allowed.includes(args.status) ? args.status : "running") as
-      "pending" | "running" | "paused" | "completed" | "failed";
+    // The runtime's own vocabulary is wider than ours: a stopped run (TaskStop,
+    // Esc, its host exiting) snapshots as "killed". Anything we don't know is
+    // a run that is OVER, never one that is running, or its bar and the host
+    // card's "waiting on the fleet" stay up forever. A stop lands the way
+    // cancelCore records one: failed, with the reason.
+    const runStatus = ingestRunStatus(args.status);
+    const failReason = runStatus === "failed" && args.status !== "failed" ? "Stopped" : undefined;
     const agentStatus = (s: string) =>
       s === "done" ? "completed"
       : s === "error" || s === "failed" ? "failed"
@@ -903,6 +924,8 @@ export const ingestSnapshot = mutation({
       project_path: args.project_path,
       primary_session_id: args.session_id,
       primary_conversation_id: primaryConvId,
+      // Undefined unsets it, so a stopped run that is resumed sheds the reason.
+      fail_reason: failReason,
       updated_at: now,
     };
 
@@ -990,6 +1013,7 @@ export const pauseAtGate = mutation({
     doc_md: v.optional(v.string()),
     category: v.optional(v.string()),
     stack: v.optional(v.string()),
+    card: v.optional(v.any()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);

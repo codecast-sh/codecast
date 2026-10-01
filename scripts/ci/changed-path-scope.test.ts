@@ -8,6 +8,8 @@ import {
   formatScope,
   jobFlag,
   touchesPlatform,
+  touchesComputer,
+  computerScope,
 } from "./changed-path-scope";
 
 const flags = (files: string[]) => classifyChangedPaths(files).flags;
@@ -15,6 +17,7 @@ const flags = (files: string[]) => classifyChangedPaths(files).flags;
 describe("areaOf", () => {
   test("maps each package to its area", () => {
     expect(areaOf("packages/cli/src/daemon.ts")).toBe("cli");
+    expect(areaOf("packages/evals/src/x.ts")).toBe("cli");
     expect(areaOf("packages/web/components/DiffView.tsx")).toBe("web");
     expect(areaOf("packages/convex/convex/tasks.ts")).toBe("convex");
     expect(areaOf("packages/shared/contracts/agentClients.ts")).toBe("shared");
@@ -88,6 +91,18 @@ describe("classifyChangedPaths", () => {
     expect(result.run_test_electron).toBe(false);
   });
 
+  // The eval home's unit tests are a step of test-cli, so an evals change has
+  // to reach that job, and only the jobs a cli change reaches.
+  test("an evals change runs the cli tests without forcing every job", () => {
+    const scope = classifyChangedPaths(["packages/evals/src/x.ts"]);
+    expect(scope.forcedBy).toEqual([]);
+    expect(scope.flags).toEqual(flags(["packages/cli/src/daemon.ts"]));
+    expect(scope.flags.run_test_cli).toBe(true);
+    expect(scope.flags.run_test_web).toBe(false);
+    expect(scope.flags.run_test_convex).toBe(false);
+    expect(scope.flags.run_lint).toBe(false);
+  });
+
   test("a web change runs lint, typecheck, build and the web tests", () => {
     const result = flags(["packages/web/components/DiffView.tsx"]);
     expect(result.run_lint).toBe(true);
@@ -141,11 +156,13 @@ describe("classifyChangedPaths", () => {
     expect(flags(["docs/architecture/sync-host.md"]).run_test_platform).toBe(false);
   });
 
-  test("a convex change runs typecheck, build and the convex tests", () => {
+  // test-cli carries the eval home's unit tests, which import convex prompt
+  // builders and parsers, so a convex-only change has to run them.
+  test("a convex change runs typecheck, build, the convex tests and the cli job's evals step", () => {
     const result = flags(["packages/convex/convex/tasks.ts"]);
     expect(result.run_typecheck).toBe(true);
     expect(result.run_test_convex).toBe(true);
-    expect(result.run_test_cli).toBe(false);
+    expect(result.run_test_cli).toBe(true);
     expect(result.run_test_web).toBe(false);
     expect(result.run_lint).toBe(false);
   });
@@ -202,7 +219,7 @@ describe("classifyChangedPaths", () => {
       electron: "packages/electron/main.js",
       mobile: "packages/mobile/app/index.tsx",
       extension: "packages/browser-extension/background.js",
-      docs: "docs/architecture/chief-of-staff-prompt.md",
+      docs: "docs/architecture/head-of-people-prompt.md",
     };
     expect(Object.keys(samples).sort()).toEqual([...AREAS].sort());
     for (const [area, file] of Object.entries(samples)) {
@@ -249,12 +266,48 @@ describe("classifyChangedPaths", () => {
 
 test("the classifier runs as a script and prints the flags", async () => {
   const proc = Bun.spawn(["bun", new URL("./changed-path-scope.ts", import.meta.url).pathname], {
-    stdin: new TextEncoder().encode("packages/convex/convex/tasks.ts\n"),
+    stdin: new TextEncoder().encode("packages/web/components/DiffView.tsx\n"),
     stdout: "pipe",
     stderr: "pipe",
   });
   const stdout = await new Response(proc.stdout).text();
   expect(await proc.exited).toBe(0);
-  expect(stdout.split("\n")).toContain("run_test_convex=true");
+  expect(stdout.split("\n")).toContain("run_test_web=true");
   expect(stdout.split("\n")).toContain("run_test_cli=false");
+});
+
+describe("computer test scope", () => {
+  test("runs for computer source, native helpers and verification scripts", () => {
+    for (const file of [
+      "packages/cli/src/computer/client.ts",
+      "packages/cli/src/computer/__fixtures__/fakeHelper.ts",
+      "packages/cli/native/computer-use-macos/Package.swift",
+      "packages/cli/scripts/computer-verify.ts",
+    ]) expect(touchesComputer(file)).toBe(true);
+  });
+
+  test("does not run for unrelated CLI, web or documentation changes", () => {
+    for (const file of ["packages/cli/src/daemon.ts", "packages/web/index.ts", "docs/README.md", ""])
+      expect(touchesComputer(file)).toBe(false);
+  });
+
+  // Same fail-closed rule as classifyChangedPaths: an empty diff is a failed
+  // git command or a missing base, not a no-op.
+  test("an empty diff runs the helper lane, an unrelated one skips it", () => {
+    expect(computerScope([])).toBe(true);
+    expect(computerScope(["", "  "])).toBe(true);
+    expect(computerScope(["packages/cli/src/daemon.ts"])).toBe(false);
+    expect(computerScope(["packages/cli/src/daemon.ts", "packages/cli/src/computer/client.ts"])).toBe(true);
+  });
+
+  test("the script prints the fail-closed flag on empty input", async () => {
+    const proc = Bun.spawn(["bun", new URL("./changed-path-scope.ts", import.meta.url).pathname, "--computer-only"], {
+      stdin: new TextEncoder().encode("\n"),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const stdout = await new Response(proc.stdout).text();
+    expect(await proc.exited).toBe(0);
+    expect(stdout.trim()).toBe("run_test_computer=true");
+  });
 });

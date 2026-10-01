@@ -132,6 +132,7 @@ const Community = lazy(() => import("@/app/community/page"));
 const Search = lazy(() => import("@/app/search/page"));
 const Notifications = lazy(() => import("@/app/notifications/page"));
 const Questions = lazy(() => import("@/app/questions/page"));
+const Line = lazy(() => import("@/app/line/page"));
 const DecisionDetail = lazy(() => import("@/app/decisions/[id]/page"));
 const DecisionStacks = lazy(() => import("@/app/decisions/stacks/page"));
 const DecisionStack = lazy(() => import("@/app/decisions/stacks/[id]/page"));
@@ -187,6 +188,14 @@ const Share = lazy(() => import("@/app/share/[token]/page"));
 const ShareMessage = lazy(() => import("@/app/share/message/[token]/page"));
 const ShareDoc = lazy(() => import("@/app/share/doc/[token]/page"));
 const SharePlan = lazy(() => import("@/app/share/plan/[token]/page"));
+const ShareTask = lazy(() => import("@/app/share/task/[token]/page"));
+const ShareCall = lazy(() => import("@/app/share/call/[token]/page"));
+const ShareProject = lazy(() => import("@/app/share/project/[token]/page"));
+const ShareInitiative = lazy(() => import("@/app/share/initiative/[token]/page"));
+const ShareDecision = lazy(() => import("@/app/share/decision/[token]/page"));
+const ShareStack = lazy(() => import("@/app/share/stack/[token]/page"));
+const ShareTrigger = lazy(() => import("@/app/share/trigger/[token]/page"));
+const ShareRun = lazy(() => import("@/app/share/run/[token]/page"));
 
 // Browsing a repository
 const RepoIndex = lazy(() => import("@/app/repo/page"));
@@ -303,6 +312,8 @@ export const ROUTES: RouteEntry[] = [
   { path: "notifications", component: cast(Notifications), layout: "dashboardShell", tab: "/notifications" },
   // Full-bleed via lib/pageLayout FULL_WIDTH_PATTERNS, so no `fullWidth` flag here.
   { path: "questions", component: cast(Questions), layout: "dashboardShell", tab: "/questions" },
+  // Full-bleed via lib/pageLayout FULL_WIDTH_PATTERNS, like /questions.
+  { path: "line", component: cast(Line), layout: "dashboardShell", tab: "/line" },
   { path: "decisions/stacks", component: cast(DecisionStacks), layout: "dashboardShell", tab: "/decisions/stacks" },
   { path: "decisions/stacks/:id", component: cast(DecisionStack), layout: "dashboardShell", tab: "/decisions/stacks/:id" },
   { path: "decisions/:id", component: cast(DecisionDetail), layout: "dashboardShell", tab: "/decisions/:id" },
@@ -359,6 +370,14 @@ export const ROUTES: RouteEntry[] = [
   { path: "share/message/:token", component: cast(ShareMessage), layout: "share", guestOk: true, guestKind: "public" },
   { path: "share/doc/:token", component: cast(ShareDoc), layout: "share", guestOk: true, guestKind: "public" },
   { path: "share/plan/:token", component: cast(SharePlan), layout: "share", guestOk: true, guestKind: "public" },
+  { path: "share/task/:token", component: cast(ShareTask), layout: "share", guestOk: true, guestKind: "public" },
+  { path: "share/call/:token", component: cast(ShareCall), layout: "share", guestOk: true, guestKind: "public" },
+  { path: "share/project/:token", component: cast(ShareProject), layout: "share", guestOk: true, guestKind: "public" },
+  { path: "share/initiative/:token", component: cast(ShareInitiative), layout: "share", guestOk: true, guestKind: "public" },
+  { path: "share/decision/:token", component: cast(ShareDecision), layout: "share", guestOk: true, guestKind: "public" },
+  { path: "share/stack/:token", component: cast(ShareStack), layout: "share", guestOk: true, guestKind: "public" },
+  { path: "share/trigger/:token", component: cast(ShareTrigger), layout: "share", guestOk: true, guestKind: "public" },
+  { path: "share/run/:token", component: cast(ShareRun), layout: "share", guestOk: true, guestKind: "public" },
 
   // -- Browsing a repository. The tree and blob pages carry the file path in the
   //    query string (`?path=`), not the route, so every path here is a fixed set

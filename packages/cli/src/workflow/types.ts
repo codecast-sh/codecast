@@ -61,6 +61,8 @@ export interface WorkflowNode {
   // and the proposed decision category.
   doc?: string;
   category?: string;
+  // LE11: a built change card (card.json, $vars expand) the gate decides on.
+  card?: string;
 }
 
 export interface WorkflowEdge {

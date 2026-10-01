@@ -6,6 +6,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { canAccessConversation, canAccessCommit } from "./lib/access";
 import { isConversationTeamVisible } from "./privacy";
 import { extractRepoFromRemoteUrl, normalizeRepository } from "@codecast/shared/contracts";
+import { commitCarriesDiffs } from "@codecast/shared/contracts/commitDiffs";
 
 export const addCommit = mutation({
   args: {
@@ -538,15 +539,7 @@ export const getUserById = internalQuery({
 // commit ingested that way has no diff to show. repos.ensureCommitFiles is the
 // read-through that fetches it; these two are its halves.
 
-/**
- * Whether a commit row holds its files' diffs, rather than only their names.
- * A push names files with no patch field at all; a fetch writes a patch on
- * every file, empty where the diff is (applyCommitFilesTo). Counted lines are
- * a diff too, for rows written before that rule.
- */
-export function commitCarriesDiffs(files: Array<{ patch?: string; additions?: number; deletions?: number }> | undefined): boolean {
-  return (files ?? []).some((f) => f.patch !== undefined || (f.additions ?? 0) > 0 || (f.deletions ?? 0) > 0);
-}
+export { commitCarriesDiffs };
 
 export const commitFilesState = internalQuery({
   args: { repository: v.string(), sha: v.string() },

@@ -10,8 +10,8 @@ import { isDesktopShell } from "../lib/desktop";
 import { MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { TopbarButton } from "./TopbarButton";
 import {
-  Settings, Keyboard, SlidersHorizontal, CircleUser, History, Rss, ListChecks,
-  FileText, FolderGit2, CalendarClock, ArrowLeftRight, ScrollText, Globe, LogOut,
+  Settings, Keyboard, Compass, SlidersHorizontal, CircleUser, History, Rss, ListChecks,
+  FileText, FolderGit2, CalendarClock, ArrowLeftRight, ScrollText, Globe, LogOut, Waypoints,
   BookOpen, ExternalLink, Radio, Newspaper, Home, MonitorSmartphone,
   Blocks,
 } from "lucide-react";
@@ -206,6 +206,7 @@ export function UserMenu() {
               onClick={() => { setOpen(false); toggleShortcutsPanel(); }}
               trailing={<MenuKeyCaps action="ui.toggleShortcutsHelp" />}
             />
+            <MenuItem icon={Compass} label="Tours" onClick={() => { setOpen(false); useInboxStore.getState().setToursPanelOpen(true); }} />
             <MenuItem icon={SlidersHorizontal} label="Agent Config" onClick={() => go("/config")} />
             <MenuItem icon={Blocks} label="Capabilities" onClick={() => go("/capabilities")} />
             <MenuItem
@@ -245,6 +246,7 @@ export function UserMenu() {
             <MenuItem icon={FileText} label="Documents" onClick={() => go("/docs")} />
             <MenuItem icon={FolderGit2} label="Projects" onClick={() => go("/projects")} />
             <MenuItem icon={CalendarClock} label="Workflows" onClick={() => go("/routines")} />
+            <MenuItem icon={Waypoints} label="Line" onClick={() => go("/line")} />
           </div>
 
           {isAdmin && (

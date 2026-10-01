@@ -105,6 +105,17 @@ describe("the live command surface", () => {
     }
   }, 120_000);
 
+  test("runsBare tells a group that runs something for an unknown word from one that only answers", () => {
+    // Bare `cast sync` uploads conversations and `cast hosts` lists through its
+    // default `ls`; `cast org` and `cast task` answer a word they lack with
+    // "unknown command". The dry run guard reads this to tell the two apart.
+    expect(byPath.get("sync")?.runsBare).toBe(true);
+    expect(byPath.get("hosts")?.runsBare).toBe(true);
+    expect(byPath.get("send")?.runsBare).toBe(true);
+    expect(byPath.get("org")?.runsBare).toBe(false);
+    expect(byPath.get("task")?.runsBare).toBe(false);
+  });
+
   test("a group's flags are the real ones, never the placeholder's stand-in", () => {
     const placeholders = context.commands
       .filter((cmd) => cmd.flags.some((flag) => flag.long === "--placeholder"))
@@ -147,13 +158,17 @@ describe("buildAgentContext", () => {
       .option("--json", "Output as JSON")
       .argument("[query]", "Filter text");
     task.command("drop", { hidden: true }).description("Drop a task").argument("<ids...>", "Task ids");
+    const sync = program.command("sync").description("Sync").action(() => {});
+    sync.command("status").description("What differs");
+    const hosts = program.command("hosts").description("Hosts");
+    hosts.command("ls", { isDefault: true }).description("List hosts");
     return program;
   }
 
   test("flattens the tree, sorted, with a path and a runnable usage line", () => {
     const built = buildAgentContext(fixture(), "9.9.9");
-    expect(built.commands.map((cmd) => cmd.command)).toEqual(["task", "task drop", "task ls"]);
-    expect(built.commandCount).toBe(3);
+    expect(built.commands.map((cmd) => cmd.command)).toEqual(["hosts", "hosts ls", "sync", "sync status", "task", "task drop", "task ls"]);
+    expect(built.commandCount).toBe(7);
     const ls = built.commands.find((cmd) => cmd.command === "task ls")!;
     expect(ls.path).toEqual(["task", "ls"]);
     expect(ls.aliases).toEqual(["list"]);
@@ -181,9 +196,14 @@ describe("buildAgentContext", () => {
     expect(drop.hidden).toBe(true);
   });
 
+  test("runsBare is the command's own action or a default subcommand", () => {
+    const built = new Map(buildAgentContext(fixture(), "9.9.9").commands.map((cmd) => [cmd.command, cmd.runsBare]));
+    expect(Object.fromEntries(built)).toEqual({ hosts: true, "hosts ls": false, sync: true, "sync status": false, task: false, "task drop": false, "task ls": false });
+  });
+
   test("the human summary reports the size and names the flag that prints it", () => {
     const summary = formatAgentContextSummary(buildAgentContext(fixture(), "9.9.9"));
-    expect(summary).toContain("3 commands");
+    expect(summary).toContain("7 commands");
     expect(summary).toContain("cast agent-context --json");
   });
 });

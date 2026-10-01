@@ -44,6 +44,8 @@ import { HUDDLE_DIGEST_CLIENT_ID_PREFIX, parseRoomKey } from "@codecast/shared/c
 import { RateLimitError, checkRateLimit } from "./rateLimit";
 import { matchHandle, resolveChatMentions, teamRoster } from "./lib/mentionResolve";
 import { dayBucket, hourBucket, takeQuota } from "./lib/chatQuota";
+import { chatAttachmentValidator } from "./lib/chatAttachment";
+import { displayName } from "./lib/displayNames";
 import { purgeUserTeam, touchThread } from "./threadReads";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 // `userCanAccessAnchor` is the WAKE permission (any member of a team anchor's
@@ -77,6 +79,7 @@ import {
   oneLine,
   plainPreview,
   searchSnippet, emailLocalHandle } from "./chatText";
+import { chatMentionClientId, chatRelayClientId } from "./lib/chatWakeIds";
 
 type ReadCtx = Pick<QueryCtx, "db"> | Pick<MutationCtx, "db">;
 
@@ -145,8 +148,8 @@ const ANCHOR_REPLY_LIMIT = 60;
 // the send is refused (posts) or the mention folds (wakes).
 const AGENT_POSTS_PER_CHANNEL_DAY = 30;
 const AGENT_ROOTS_PER_CHANNEL_DAY = 5;
-const MENTION_WAKES_PER_SENDER_HOUR = 10;
-const MENTION_WAKES_PER_TARGET_HOUR = 30;
+export const MENTION_WAKES_PER_SENDER_HOUR = 10;
+export const MENTION_WAKES_PER_TARGET_HOUR = 30;
 
 // A push-to-talk burst costs what a send costs, so it is capped like one — the
 // start is the send. The transcript patch that follows fires every few seconds
@@ -368,9 +371,8 @@ export async function patchChat(
 
 // ── Identity ────────────────────────────────────────────────────────────────
 
-export function displayName(user: Doc<"users"> | null): string {
-  return user?.name || user?.github_username || user?.email || "Someone";
-}
+// Lives in lib/displayNames beside the outsider-safe form.
+export { displayName };
 
 
 // ── Notifications ───────────────────────────────────────────────────────────
@@ -2038,13 +2040,6 @@ export const setNotifyLevel = mutation({
 
 // ── Sending ─────────────────────────────────────────────────────────────────
 
-const attachmentValidator = v.object({
-  storage_id: v.id("_storage"),
-  name: v.optional(v.string()),
-  mime: v.optional(v.string()),
-  width: v.optional(v.number()),
-  height: v.optional(v.number()),
-});
 
 export async function findByClientId(
   ctx: ReadCtx,
@@ -2142,6 +2137,18 @@ export const postCallDigest = internalMutation({
   },
 });
 
+/** A call record folded into another (huddleBackfill): its digest card
+ *  speaks for a call that no longer exists on its own, so it comes down. */
+export async function retireCallDigest(ctx: MutationCtx, t: Doc<"transcripts">): Promise<boolean> {
+  const channel = await digestChannel(ctx, { transcript_id: t._id, room_key: t.room_key, team_id: t.team_id, author: t.started_by });
+  if (!channel) return false;
+  const card = await findByClientId(ctx, channel._id, `${HUDDLE_DIGEST_CLIENT_ID_PREFIX}${t._id}`);
+  if (!card || card.deleted_at) return false;
+  await tombstoneChatMessage(ctx, card._id);
+  await queueSlackOutbound(ctx, { op: "delete", message: card });
+  return true;
+}
+
 export const sendMessage = mutation({
   args: {
     api_token: v.optional(v.string()),
@@ -2155,7 +2162,7 @@ export const sendMessage = mutation({
     // in the channel timeline. Ignored without thread_root_id — a root is
     // already in the channel, and a stray flag on it must not mean anything.
     broadcast: v.optional(v.boolean()),
-    attachments: v.optional(v.array(attachmentValidator)),
+    attachments: v.optional(v.array(chatAttachmentValidator)),
     client_id: v.optional(v.string()),
     // The one argument a caller may set about itself, and it can only ever take
     // privileges AWAY: an agent session declaring "agent" gives up the ability to
@@ -3054,7 +3061,7 @@ export const finalizeVoiceBurst = mutation({
     message_id: v.id("chat_messages"),
     content: v.string(),
     duration_ms: v.number(),
-    attachments: v.optional(v.array(attachmentValidator)),
+    attachments: v.optional(v.array(chatAttachmentValidator)),
   },
   handler: async (ctx, args) => {
     const userId = await requireCaller(ctx, args.api_token);
@@ -3520,7 +3527,7 @@ export async function resolveChannelAnchor(
     return null;
   }
   // The workspace anchor, by the one rule that names it (the plain anchor, else
-  // the chief of staff's seat). Every role's standing agent is an anchor row
+  // the head of people's seat). Every role's standing agent is an anchor row
   // too, so "the team's first active anchor" would hand the channel to
   // whichever lead happened to be oldest.
   const anchor = await workspaceAnchorFor(ctx, { team_id: channel.team_id });
@@ -3888,7 +3895,7 @@ async function maybeRelayToOriginSession(
   // (origin_session_id is ownership-checked at post time).
   if (!mentionReply && !(await canSendProductMessage(ctx, opts.senderId, conversation))) return no("no_access");
 
-  const key = `chat-relay:${opts.message._id}`;
+  const key = chatRelayClientId(opts.message._id);
   try {
     await chatRateLimit(ctx, opts.senderId, "chat.session_relay", ANCHOR_WAKE_LIMIT);
   } catch (error) {
@@ -3949,7 +3956,7 @@ export async function maybeWakeAnchor(
     senderName: string;
     mentions: Id<"users">[];
     /** Roles the line named. A role whose standing seat IS this channel's
-     *  anchor (`@anchor`, `@chief-of-staff`) addresses the anchor. */
+     *  anchor (`@anchor`, `@head-of-people`) addresses the anchor. */
     roles?: Doc<"org_roles">[];
   },
 ): Promise<AnchorWake & { seat_role_id: Id<"org_roles"> | null }> {
@@ -4319,7 +4326,7 @@ export async function wakeMentionedParties(
     const where = opts.channel.kind === "dm" ? "dm" : `#${opts.channel.name}`;
     const rowId = await tellRole(ctx, role._id, {
       content: `<chat-mention channel="${where.replace(/"/g, "'")}" thread="${threadRootId}" from="${opts.senderName.replace(/"/g, "'")}">\n${text}\n</chat-mention>`,
-      client_id: `chat-mention:${opts.message._id}:${role._id}`,
+      client_id: chatMentionClientId(opts.message._id, role._id),
       from_user_id: opts.senderId,
       from_conversation_id: selfConversation?._id ?? undefined,
     });
@@ -4336,7 +4343,7 @@ export async function wakeMentionedParties(
     const where = opts.channel.kind === "dm" ? "dm" : `#${opts.channel.name}`;
     await enqueuePendingMessage(ctx, conversation, opts.senderId, {
       content: `<chat-mention channel="${where.replace(/"/g, "'")}" thread="${threadRootId}" from="${opts.senderName.replace(/"/g, "'")}">\n${body}\n</chat-mention>`,
-      client_id: `chat-mention:${opts.message._id}:${conversation._id}`,
+      client_id: chatMentionClientId(opts.message._id, conversation._id),
     });
     out.sessions++;
   }

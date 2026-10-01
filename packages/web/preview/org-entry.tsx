@@ -11,7 +11,7 @@ import { createRoot } from "react-dom/client";
 import { MemoryRouter } from "react-router";
 import { ReactFlow, ReactFlowProvider, type Node } from "@xyflow/react";
 import { RoleCard, type RoleNodeData } from "../components/org/OrgNodeCards";
-import { ChiefSeatDialog } from "../components/org/ChiefSeatDialog";
+import { HeadSeatDialog } from "../components/org/HeadSeatDialog";
 import { ORG_SIZES } from "../components/org/orgLayout";
 import { roleTenureChip } from "../components/org/orgMeta";
 import { EMPTY_COUNTS, type OrgRole } from "../components/org/orgTypes";
@@ -98,7 +98,7 @@ function Cards() {
 function Seat() {
   return (
     <div className="min-h-screen bg-sol-bg text-sol-text">
-      <ChiefSeatDialog
+      <HeadSeatDialog
         open
         onClose={() => {}}
         agentName="Anchor"

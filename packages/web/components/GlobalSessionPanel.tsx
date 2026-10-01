@@ -1,5 +1,4 @@
 import { HIBERNATED_COPY } from "@codecast/shared/contracts";
-import { ShortId } from "./ShortId";
 import React, { useState, useCallback, useRef, memo, useMemo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useConvex, useMutation, useQuery } from "convex/react";
@@ -14,7 +13,7 @@ import { labelSessions } from "../lib/labelSessions";
 import { selectionGesture, selectionIdsFor, useInboxSelection } from "../lib/inboxSelection";
 import { useEventListener } from "../hooks/useEventListener";
 import { copyToClipboard, formatShortDate } from "../lib/utils";
-import { SessionErrorBanner, SessionResumeBanner } from "./SessionErrorBanner";
+import { SessionErrorBanner, SessionResumeBanner, sessionLooksAbandoned } from "./SessionErrorBanner";
 import { AppLoader } from "./AppLoader";
 import type { ConversationData } from "./conversation/types";
 import { threadStateView } from "../lib/threadState";
@@ -22,8 +21,9 @@ import { ORG_STATE_META } from "./org/orgMeta";
 import { StatusDot } from "./StatusDot";
 import type { WorkState } from "@codecast/shared/contracts";
 import { useConversationMessages } from "../hooks/useConversationMessages";
-import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, isInterruptControlMessage, getProjectName, sessionsWithPendingSend, freshReviveRequestIds, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipProjectFilters, passesFilterTerms, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, resolveFavorite, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
-import { sessionsWakeSig, resolveShowOld, sectionHeaderCount, classifySession, inboxNestParentOf } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, sessionsWithPendingSend, freshReviveRequestIds, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipProjectFilters, passesFilterTerms, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, resolveFavorite, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
+import { sessionsWakeSig, resolveShowOld, sectionHeaderCount, classifySession, inboxNestParentOf, NEW_SESSION_HOLD_MS } from "../store/inboxStore";
+import { useFlipAnimation } from "../hooks/useFlipAnimation";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
 import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow } from "../hooks/useCoarseNow";
@@ -38,7 +38,6 @@ import { sessionLiveAt } from "../lib/liveness";
 import { TooltipProvider } from "./ui/tooltip";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { getLabelColor } from "../lib/labelColors";
-import { useWorkspaceCollection } from "../hooks/useWorkspaceCollection";
 import Link from "next/link";
 import { fmtClock, fmtDuration, describeTaskCadence, isTaskOverdue, taskStateLabel } from "./triggerCadence";
 import { isWatchHostDead, liveWatchRowsFor } from "./monitorRows";
@@ -63,15 +62,13 @@ import { toast } from "sonner";
 import { animatedHideSession, fileSessionsAsRest } from "../store/undoActions";
 
 import { soundKill } from "../lib/sounds";
+import { latestSessionCommand, requestAccountSwitchCommand, requestSessionRestart, switchPending } from "../lib/sessionCommands";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { X, ChevronsRight, ChevronRight, ChevronDown, GitFork, History, Star, Workflow, Play, Pause, Settings2, Users, ArrowUpRight, Zap, ZapOff, Copy, ArrowUp, ArrowDown } from "lucide-react";
 import { InboxViewMenu } from "./InboxViewMenu";
 import { SessionCard } from "./inbox/SessionCard";
 import { SectionHeader } from "./inbox/SectionHeader";
 import { LabelChipsRow } from "./LabelChipsRow";
-import { TaskStatusBadge } from "./TaskStatusBadge";
-import { TaskDecisionChip } from "./decisions/TaskDecisions";
-import { TaskSessionBadge } from "./tasks/TaskSessionBadge";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { PaneControls } from "./stage/PaneControls";
@@ -103,10 +100,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
   const forceRestartAttemptedRef = useRef(false);
   const reconstitutionAttemptedRef = useRef(false);
 
-  const lastMsg = conversation?.messages?.[conversation.messages.length - 1];
-  const lastRoleIsUser = lastMsg?.role === "user";
-  const isStale = (Date.now() - (conversation?.updated_at || 0)) > 5 * 60 * 1000;
-  const looksAbandoned = isIdle && lastRoleIsUser && !isInterruptControlMessage(lastMsg?.content) && isStale;
+  const looksAbandoned = sessionLooksAbandoned(conversation, isIdle);
 
   useWatchEffect(() => {
     if (!isIdle && (resumeState === "sent" || resumeState === "resuming" || resumeState === "reconstituting")) {
@@ -122,7 +116,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
       if (!forceRestartAttemptedRef.current && isConvexId(sessionId)) {
         forceRestartAttemptedRef.current = true;
         try {
-          await convCommand(sessionId, "restartSession");
+          await requestSessionRestart(sessionId);
           setResumeState("sent");
         } catch (err) {
           // A parked restart is still pending. Keep the recovery state and let
@@ -134,7 +128,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
         reconstitutionAttemptedRef.current = true;
         setResumeState("reconstituting");
         try {
-          await convCommand(sessionId, "repairSession");
+          await requestSessionRestart(sessionId, undefined, true);
           setResumeState("reconstituting");
         } catch (err) {
           if (isParkedDispatchError(err)) return;
@@ -442,12 +436,13 @@ function BlockedSessionsBanner({
   // into now, null = not chosen yet — the default, which is the account the
   // machine PROPOSED when it is asking, else the current one.
   const [onAccount, setOnAccount] = useState<string | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
+  // The newest account switch in flight from any surface: a fleet revive and
+  // a machine switch would fight over the same credential, so it holds both.
+  const switchRow = useInboxStore((st) => latestSessionCommand(st.sessionCommands, (r) => r.kind === "switch"));
   // Which sessions the continue restarts. null = the default pick: parks inside
   // the auto-continue window, since an older park already sat through a reset
   // nobody came back for. The first tick or untick makes it an explicit set.
   const [picked, setPicked] = useState<Set<string> | null>(null);
-  const requestSwitch = useMutation(api.accountSwitch.requestAccountSwitch);
   const acknowledgeMutation = useMutation(api.accountSwitch.acknowledgeBlocked);
   // The X is a durable, cross-device snooze (24h) — a banner that resurrects
   // on every reload isn't dismissible. Permanent removal is per-session:
@@ -466,6 +461,7 @@ function BlockedSessionsBanner({
   // Ticking clock for the "Xm ago" times — a static Date.now() would freeze
   // them at whatever the last unrelated re-render happened to read.
   const now = useCoarseNow(30_000);
+  const busy = switchPending(switchRow, Date.now()) ? (switchRow?.profile ?? switchRow?.email ?? "revive") : null;
 
   const snoozed = snoozedTs > 0 && Date.now() - snoozedTs < 24 * 60 * 60 * 1000;
   // A switch the machine recommended and is waiting on. Asking is the whole
@@ -713,13 +709,12 @@ function BlockedSessionsBanner({
     if (skippedIds.length > 0) store.markBlockedAcknowledged(skippedIds);
     closeBanner();
     const targetLabel = target?.email ?? target?.profile;
-    setBusy(targetLabel ?? "revive");
     try {
-      const res = await requestSwitch({
+      const res = await requestAccountSwitchCommand({
         ...target,
         include_subagents: includeSubs,
         continue_client_ids: clientIds,
-        ...(scoped ? { conversation_ids: ids as any } : {}),
+        ...(scoped ? { conversation_ids: ids } : {}),
       });
       // Sessions on a machine that lacks the account got no command: their
       // painted "continue" and revive stamp must not stand.
@@ -746,12 +741,12 @@ function BlockedSessionsBanner({
             : ""),
       );
     } catch (err) {
+      // Parked: the outbox still delivers it, so the paint stands. Refused:
+      // the dispatch-failure toast says why; take the gesture back.
+      if (isParkedDispatchError(err)) return;
       for (const id of ids) store.removeOptimisticMessage(id, clientIds[id]);
       store.clearBlockedReviveRequested(ids);
       updateDismissed("blocked_sessions_banner", 0);
-      toast.error(err instanceof Error ? err.message : targetLabel ? "Account switch failed" : "Failed to restart blocked sessions");
-    } finally {
-      setBusy(null);
     }
   };
 
@@ -1818,116 +1813,21 @@ function selectionTargets(session: InboxSession): InboxSession[] {
 
 // -- SessionListPanel (shared) --
 
-// Wake signature for the Needs Attention section: only tasks in an attention
-// state project any fields, so the always-mounted panel re-renders when a task
-// enters/leaves the set or a rendered field changes — never on unrelated task
-// churn. (This section used to hold two extra live webList subscriptions; the
-// store already carries every task via the sync/crawl machinery, so reading
-// locally costs the server nothing.)
-const needsAttention = (t: any) =>
-  t.execution_status === "blocked" || t.execution_status === "needs_context";
-const needsAttentionRowSig = (t: any) =>
-  needsAttention(t)
-    ? `${t.short_id}|${t.title}|${t.execution_status}|${t.execution_concerns ?? ""}|${t.status}|${t.triage_status ?? ""}|${String(t.user_id)}|${t.assignee ?? ""}|${t.plan?.title ?? ""}|${t.origin_session?.conversation_id ?? ""}`
-    : "";
-
 // Structural signature for the decision rows the Questions section branches on.
 const decisionsSectionSig = makeCollectionSig((d: any) =>
   d.status === "pending" ? `${d._id}|${d.conversation_id}|${d.updated_at ?? 0}` : "");
 
-function NeedsAttentionSection() {
-  // Workspace-scoped rows, with a field signature so this always-mounted
-  // section wakes on the blocked/needs-context fields it renders — and on
-  // nothing else (heartbeat churn must not re-render it).
-  const wsTasks = useWorkspaceCollection<any>("tasks", needsAttentionRowSig);
-  const s = useTrackedStore([(st) => st.currentUser?._id]);
-  const updateTask = s.updateTask;
-  const router = useRouter();
-  const [collapsed, setCollapsed] = useState(false);
-
-  const me = s.currentUser?._id?.toString?.() ?? null;
-  const tasks = useMemo(() => {
-    if (!me) return [];
-    return wsTasks
-      .filter((t: any) =>
-        needsAttention(t) &&
-        (!t.triage_status || t.triage_status === "active") &&
-        t.status !== "done" && t.status !== "dropped" &&
-        (String(t.user_id) === me || t.assignee === me))
-      .sort((a: any, b: any) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
-  }, [wsTasks, me]);
-
-  if (tasks.length === 0) return null;
-
-  // Clearing the flag is the retry: the server lets go of an ended run with
-  // it, so a task on the line gets a fresh run from the next sweep.
-  const handleRetry = (shortId: string) => {
-    updateTask(shortId, { execution_status: "", status: "open" });
-    toast.success(`Reopened ${shortId} for another attempt`);
-  };
-
-  return (
-    <div className="border-b border-sol-red/20">
-      <button
-        onClick={() => setCollapsed(!collapsed)}
-        className="w-full px-3 py-1.5 bg-sol-red/[0.06] border-b border-sol-red/15 flex items-center justify-between"
-      >
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-red">
-          Needs Attention ({tasks.length})
-        </span>
-        <svg
-          className={`w-3 h-3 text-sol-red/60 transition-transform ${collapsed ? "" : "rotate-180"}`}
-          fill="none" stroke="currentColor" viewBox="0 0 24 24"
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-        </svg>
-      </button>
-      {!collapsed && tasks.map((task: any) => (
-        <div
-          key={task.short_id}
-          role="link"
-          tabIndex={0}
-          onClick={() => router.push(`/tasks/${task.short_id}`)}
-          onKeyDown={(e) => { if (e.key === "Enter") router.push(`/tasks/${task.short_id}`); }}
-          title={`Open ${task.short_id}`}
-          className="group px-3 py-2 border-b border-sol-border/20 bg-sol-red/[0.03] hover:bg-sol-red/[0.06] transition-colors cursor-pointer"
-        >
-          <div className="flex items-start gap-2">
-            <div className="flex-1 min-w-0">
-              <div className="text-sm text-sol-text truncate leading-tight">{task.title}</div>
-              {task.execution_concerns && (
-                <div className="mt-1 text-[11px] leading-snug text-sol-text-muted line-clamp-2" title={task.execution_concerns}>
-                  {task.execution_concerns}
-                </div>
-              )}
-              <div className="flex items-center gap-1.5 mt-1 min-w-0">
-                <ShortId id={task.short_id} className="text-[10px] text-sol-text-dim" />
-                <TaskStatusBadge status={task.execution_status || "blocked"} type="execution" size="sm" />
-                <TaskDecisionChip taskId={task._id} />
-                <TaskSessionBadge task={task} compact />
-                {task.plan && (
-                  <span className="text-[10px] text-sol-cyan/70 truncate max-w-[100px]" title={task.plan.title}>
-                    {task.plan.title}
-                  </span>
-                )}
-              </div>
-            </div>
-            <button
-              onClick={(e) => { e.stopPropagation(); handleRetry(task.short_id); }}
-              title="Clear the block and reopen the task for another attempt"
-              className="flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium text-sol-orange border border-sol-orange/30 bg-sol-orange/10 hover:bg-sol-orange/20 transition-opacity opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-            >
-              Retry
-            </button>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 // Inbox-clearing prompt: when more than this many active sessions haven't been
 // touched in over a month, offer to bulk-dismiss them out of the working set.
+// The accent of each section a just-started session can move to when its NEW
+// hold ends, matching the section captions below.
+const HOLD_DEST_COLORS: Partial<Record<string, string>> = {
+  working: "var(--sol-green)",
+  needs_input: "var(--sol-yellow)",
+  done: "var(--sol-cyan)",
+  dormant: "var(--sol-blue)",
+};
+
 const STALE_SESSION_MS = 30 * 24 * 60 * 60 * 1000;
 const STALE_PROMPT_THRESHOLD = 10;
 // "Not now" rests the prompt for this long — persisted in client UI prefs so it
@@ -1990,21 +1890,27 @@ function scrollRowIntoView(container: HTMLElement, el: Element) {
   requestAnimationFrame(step);
 }
 
-// Floating "jump back to your open session" pill. Appears over the list edge
-// when the active card is scrolled out of view — top edge when the card is
-// above the fold, bottom edge when below — and one click glides back to it.
+// Floating "jump to it" pill. Appears over the list edge when its target card
+// is scrolled out of view — top edge when the card is above the fold, bottom
+// edge when below — and one click glides back to it. The target is the open
+// session, or (tone "new") a session just started and still held in NEW.
 // Visibility comes from an IntersectionObserver rooted at the scroll container
 // (fires on scroll AND container resize with zero per-frame work); a
 // per-render node check re-attaches it when a resort replaces the card's DOM
 // node without any scroll event.
-function ActiveSessionBeacon({
+function SessionBeacon({
   containerRef,
-  activeSessionId,
+  targetId: activeSessionId,
   title,
+  tone = "open",
+  style,
 }: {
   containerRef: React.RefObject<HTMLDivElement | null>;
-  activeSessionId?: string | null;
+  targetId?: string | null;
   title?: string | null;
+  tone?: "open" | "new";
+  /** The held row's --hold-* vars, so the pill's hairline fills in step with its card's. */
+  style?: React.CSSProperties;
 }) {
   const [dir, setDir] = useState<"up" | "down" | null>(null);
   const observedRef = useRef<Element | null>(null);
@@ -2057,17 +1963,22 @@ function ActiveSessionBeacon({
   }, [containerRef]);
 
   if (!dir) return null;
+  const label = tone === "new" ? "Scroll to the session you just started" : "Scroll to the open session";
   return (
     <button
+      // Keyed by target, so a switch to another target replays the entrance.
+      key={activeSessionId ?? ""}
       onClick={handleJump}
       data-dir={dir}
-      className={`cc-session-beacon absolute left-1/2 z-30 flex items-center gap-1.5 rounded-full border border-sol-cyan/40 bg-sol-bg/90 py-1 pl-2 pr-2.5 text-[10px] font-medium text-sol-cyan backdrop-blur-md hover:border-sol-cyan/70 hover:text-sol-cyan ${dir === "up" ? "top-2" : "bottom-2"}`}
-      title="Scroll to the open session"
-      aria-label="Scroll to the open session"
+      data-tone={tone}
+      style={style}
+      className={`cc-session-beacon absolute left-1/2 z-30 flex items-center gap-1.5 rounded-full border bg-sol-bg/90 py-1 pl-2 pr-2.5 text-[10px] font-medium backdrop-blur-md ${dir === "up" ? "top-2" : "bottom-2"}`}
+      title={label}
+      aria-label={label}
     >
       {dir === "up" ? <ArrowUp className="cc-session-beacon__arrow h-3 w-3" /> : <ArrowDown className="cc-session-beacon__arrow h-3 w-3" />}
       <span className="cc-session-beacon__dot" aria-hidden />
-      <span className="max-w-[150px] truncate">{title || "Open session"}</span>
+      <span className="max-w-[150px] truncate">{title || (tone === "new" ? "New session" : "Open session")}</span>
     </button>
   );
 }
@@ -2108,6 +2019,7 @@ function SessionListPanelImpl({
     s => s.collapsedSections,
     s => s.currentSessionId,
     s => s.pendingSessionCreates,
+    s => s.newSessionHolds,
     s => s.showFavorites,
     s => s.favorites,
     s => s.recentFreezeOrder,
@@ -2233,8 +2145,25 @@ function SessionListPanelImpl({
     // Structural change + the view keys + the question inputs + the epoch tick
     // (coarseNow drives the deadline signature).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessionsWakeSig(s.sessions), inboxScope, meId, s.teamInboxIds, showAllSessions, focusedId, s.sessionsWithQueuedMessages, pendingSendIds, blankOpts, placementDecisionsSig(s.sessionDecisions), s.questionResolutions, s.killedShelf.ids, coarseNow],
+    [sessionsWakeSig(s.sessions), inboxScope, meId, s.teamInboxIds, showAllSessions, focusedId, s.sessionsWithQueuedMessages, pendingSendIds, blankOpts, placementDecisionsSig(s.sessionDecisions), s.questionResolutions, s.killedShelf.ids, s.newSessionHolds, coarseNow],
   );
+  // The section a held row is headed for, as its accent: the fuse and the
+  // landing wash speak in the color of where the row is going.
+  const holdDestColor = (session: InboxSession | undefined): string | undefined => {
+    if (!session) return undefined;
+    const bucket = placed.placements.get(session._id)?.bucket ?? "working";
+    return HOLD_DEST_COLORS[bucket] ?? HOLD_DEST_COLORS.working;
+  };
+  // The --hold-* vars a held (or just landed) row and its beacon both read.
+  const holdStyleOf = (id: string): React.CSSProperties | undefined => {
+    const left = (s.newSessionHolds[id] ?? 0) - Date.now();
+    if (left <= 0 && !landedIds.has(id)) return undefined;
+    return {
+      "--hold-dest": holdDestColor(s.sessions[id]),
+      "--hold-ms": `${NEW_SESSION_HOLD_MS}ms`,
+      "--hold-delay": `${left - NEW_SESSION_HOLD_MS}ms`,
+    } as React.CSSProperties;
+  };
   const { visibleSessions, oldCount, sorted: sortedSessions, pinned, newSessions, needsInput, done, dormant, working, snoozed: snoozedList, stashed: stashedList, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent, questions: placedQuestions, isQuestion, roleSessionsByLead } = placed;
 
   // -- Schedules in the inbox (status view) --
@@ -2863,6 +2792,29 @@ function SessionListPanelImpl({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const scrolledToRef = useRef<string | null>(null);
 
+  // -- A just-started session leaving NEW --
+  // Its hold expiring re-files it (placeInboxRows). The store subscriber runs
+  // inside set(), before React commits, so the rows still sit where they were:
+  // the "first" measurement the glide needs. The rows it arrives among get a
+  // brief wash in its color (or the collapsed header does).
+  const { beforeReorder: beforeHoldRelease } = useFlipAnimation({ durationMs: 560, containerRef: scrollContainerRef });
+  const [landedIds, setLandedIds] = useState<ReadonlySet<string>>(() => new Set());
+  // While a session you started is held in NEW and you are elsewhere, the
+  // beacon points at it (the newest one), so it is findable even when Pinned
+  // or Questions push NEW below the fold. Back to the open session after.
+  const heldBeaconId = Object.entries(s.newSessionHolds)
+    .filter(([id, until]) => until > Date.now() && id !== focusedId && !!s.sessions[id])
+    .sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+  useMountEffect(() => useInboxStore.subscribe((st, prev) => {
+    if (st.newSessionHolds === prev.newSessionHolds) return;
+    const now = Date.now();
+    const released = Object.keys(prev.newSessionHolds).filter((id) => !(id in st.newSessionHolds) && prev.newSessionHolds[id] <= now);
+    if (released.length === 0) return;
+    beforeHoldRelease();
+    setLandedIds(new Set(released));
+    setTimeout(() => setLandedIds((cur) => (released.every((id) => cur.has(id)) ? new Set() : cur)), 1600);
+  }));
+
   // -- Hide & enter animations --
   // Stash: set aside, agent keeps running (Stashed group). The secondary remove.
   // Deliberately no schedule CHANGE: stash keeps schedules armed (a
@@ -3240,6 +3192,7 @@ function SessionListPanelImpl({
           sectionKey={key}
           collapsed={collapsed}
           monoLabel={opts?.monoLabel}
+          landedColor={collapsed ? holdDestColor(items.find((i) => landedIds.has(i._id))) : undefined}
           onToggle={() => s.toggleCollapsedSection(key)}
         />
         {!collapsed && (() => {
@@ -3285,10 +3238,14 @@ function SessionListPanelImpl({
             const hiddenCount = subs.length - visibleSubs.length;
             const reorderable = !!opts?.reorderable;
             const reorderHere = reorderable && reorderOver?.id === session._id;
+            const holdLeft = (s.newSessionHolds[session._id] ?? 0) - Date.now();
+            const justStarted = key === "new" && Date.now() - (session.started_at ?? 0) < 4000;
             return (
               <div
                 key={session._id}
-                className={`border-b border-sol-border/30${reorderable ? " relative" : ""}`}
+                data-flip-key={session._id}
+                style={holdStyleOf(session._id)}
+                className={`relative border-b border-sol-border/30${holdLeft > 0 ? " inbox-held" : ""}${justStarted ? " animate-inbox-row-in" : ""}${landedIds.has(session._id) ? " inbox-landed" : ""}`}
                 onDragOver={reorderable ? (e) => {
                   if (!e.dataTransfer.types.includes("codecast/session-id")) return;
                   e.preventDefault();
@@ -3408,7 +3365,7 @@ function SessionListPanelImpl({
   };
 
   return (
-    <div data-sv-rail className="h-full w-full flex flex-col bg-sol-bg-alt overflow-hidden">
+    <div data-sv-rail data-selecting={selectedIdsRaw.length > 0 ? "true" : undefined} className="h-full w-full flex flex-col bg-sol-bg-alt overflow-hidden">
       {selectedSessions.length > 0 && (
         <InboxSelectionBar
           sessions={selectedSessions}
@@ -3669,7 +3626,6 @@ function SessionListPanelImpl({
         <>
         {/* An exclude chip is a near-global view ("everything but X") — the
             failed/blocked banner must not vanish behind it. */}
-        {(s.chipFilterExclude || (!s.activeProjectFilter && !s.activeBucketFilter)) && <NeedsAttentionSection />}
         {renderSection("Pinned", filteredPinned, "text-sol-magenta")}
         {bucketView.labelGroups.map(({ bucket, items }) => (
           <div key={bucket._id}>
@@ -3688,7 +3644,6 @@ function SessionListPanelImpl({
         <>
         {/* An exclude chip is a near-global view ("everything but X") — the
             failed/blocked banner must not vanish behind it. */}
-        {(s.chipFilterExclude || (!s.activeProjectFilter && !s.activeBucketFilter)) && <NeedsAttentionSection />}
         {renderSection("Pinned", filteredPinned, "text-sol-magenta")}
         {planView.planGroups.map(({ key, label, items }) => (
           <div key={key}>
@@ -3754,7 +3709,6 @@ function SessionListPanelImpl({
         <>
         {/* An exclude chip is a near-global view ("everything but X") — the
             failed/blocked banner must not vanish behind it. */}
-        {(s.chipFilterExclude || (!s.activeProjectFilter && !s.activeBucketFilter)) && <NeedsAttentionSection />}
         {/* Questions lead: a session that asked you something is your move
             before anything else, pinned or not. One move: clicking a card
             opens the full-width answer view anchored on that question, and
@@ -3852,11 +3806,21 @@ function SessionListPanelImpl({
         })}
         </>)}
       </div>
-      <ActiveSessionBeacon
-        containerRef={scrollContainerRef}
-        activeSessionId={focusedId}
-        title={(focusedId && s.sessions[focusedId]?.title) || null}
-      />
+      {heldBeaconId ? (
+        <SessionBeacon
+          containerRef={scrollContainerRef}
+          targetId={heldBeaconId}
+          title={s.sessions[heldBeaconId]?.title || null}
+          tone="new"
+          style={holdStyleOf(heldBeaconId)}
+        />
+      ) : (
+        <SessionBeacon
+          containerRef={scrollContainerRef}
+          targetId={focusedId}
+          title={(focusedId && s.sessions[focusedId]?.title) || null}
+        />
+      )}
       </div>
       {/* The schedule dock is panel chrome, not list content: it renders under
           the scroll area in every view mode EXCEPT "by trigger" — there the

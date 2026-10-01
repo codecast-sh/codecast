@@ -20,7 +20,8 @@ import { DecisionOptionList } from "./DecisionOptionList";
 import { AskingSession, CategoryNote, HolderLine, PersonChip } from "./DecisionParties";
 import { GateRunChip } from "./DecisionCompactCard";
 import { OptionPages } from "./OptionPages";
-import { CopyLinkButton } from "../CopyLinkButton";
+import { ChangeCardView, cardAnswerIndexes } from "./ChangeCardView";
+import { ShareControl } from "../ShareControl";
 import { chosenOptions, ladderRecommendation } from "../../lib/decisionLinks";
 import "./decisions.css";
 import { DecisionProposalOrigin } from "../org/ProposalAuthorPill";
@@ -70,6 +71,10 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
   // Single, multi and rank answer on the option rows themselves; a form
   // answers on its fields in the footer.
   const answerInOptions = pending && answerable && (decision.kind ?? "single") !== "form";
+  // A change card's Ship / Revise / Drop sits in a bar pinned under the
+  // question, beside its proof line, so the call is above the fold; the
+  // options section below then has nothing left to say.
+  const verdictBar = answerInOptions && !!cardAnswerIndexes(decision);
   const chosen = new Set<number>(chosenOptions(decision));
 
   const onAnswer = useCallback((input: DecisionAnswerInput) => answerDecision(decision._id, input), [answerDecision, decision._id]);
@@ -102,6 +107,47 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
   const isPerson = detail.asked_users.some((u) => u._id === meId);
   const canReopen = decision.status === "answered" && answeredBy?.kind === "role" && !!decision.grant_id && isPerson && answerable;
 
+  // Who asked, who may answer, who holds it. A change card leads with the
+  // change and its proof, so for one these facts follow the card.
+  const meta = (
+    <dl className="mt-4 decision-meta text-[12px]">
+      <dt>asked by</dt>
+      <dd><AskingSession decision={decision} /></dd>
+      {proposalRefInContext(decision.context_md) && (
+        <>
+          <dt>proposal</dt>
+          <dd><DecisionProposalOrigin contextMd={decision.context_md} size="md" /></dd>
+        </>
+      )}
+      {(detail.task || decision.task_id) && (
+        <>
+          <dt>task</dt>
+          <dd>
+            <Link href={`/tasks/${detail.task?.short_id ?? decision.task_id}`} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-violet/30 text-sol-violet hover:bg-sol-violet/10">
+              {detail.task?.short_id ?? "task"}<span className="text-sol-text truncate max-w-[20rem]">{detail.task?.title}</span>
+            </Link>
+            {decision.station && <span className="text-sol-text-dim"> held at <span className="text-sol-text">{decision.station}</span></span>}
+          </dd>
+        </>
+      )}
+      <dt title="A category decides who may answer a question like this one">who may answer</dt>
+      <dd><CategoryNote category={decision.category} proposed={decision.category_proposed} /></dd>
+      {detail.stack && (
+        <>
+          <dt>stack</dt>
+          <dd>
+            <Link href={`/decisions/stacks/${detail.stack.short_id ?? detail.stack._id}`} className="inline-flex items-center gap-1 text-sol-cyan hover:underline">
+              <Layers className="w-3 h-3" />{detail.stack.title}
+            </Link>
+            <span className="text-sol-text-dim"> · {detail.stack.decision_ids.indexOf(decision._id) + 1} of {detail.stack.decision_ids.length}</span>
+          </dd>
+        </>
+      )}
+      <dt>holder</dt>
+      <dd><HolderLine people={detail.asked_users} roleName={decision.holder?.kind === "role" ? (detail.holder_role?.name ?? "a role") : undefined} /></dd>
+    </dl>
+  );
+
   return (
     <div className="h-full overflow-y-auto decision-doc" data-main-scroll>
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
@@ -120,49 +166,30 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
             {decision.resolved_at && <span>· resolved {formatTimeAgo(decision.resolved_at, now)}</span>}
             {/* A gate on the line (the-line.md L4): the run this question pauses. */}
             {decision.workflow_run_id && <GateRunChip runId={decision.workflow_run_id} nodeId={decision.gate_node_id} />}
-            <CopyLinkButton path={`/decisions/${decision.short_id ?? decision._id}`} className="ml-auto" />
+            <ShareControl label="decision" path={`/decisions/${decision.short_id ?? decision._id}`} publicShare={{ kind: "decision", id: decision._id, token: (decision as any).share_token }} className="ml-auto" />
           </div>
           <h1 className="mt-3 decision-question text-sol-text">{decision.question}</h1>
-          <dl className="mt-4 decision-meta text-[12px]">
-            <dt>asked by</dt>
-            <dd><AskingSession decision={decision} /></dd>
-            {proposalRefInContext(decision.context_md) && (
-              <>
-                <dt>proposal</dt>
-                <dd><DecisionProposalOrigin contextMd={decision.context_md} size="md" /></dd>
-              </>
-            )}
-            {(detail.task || decision.task_id) && (
-              <>
-                <dt>task</dt>
-                <dd>
-                  <Link href={`/tasks/${detail.task?.short_id ?? decision.task_id}`} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-violet/30 text-sol-violet hover:bg-sol-violet/10">
-                    {detail.task?.short_id ?? "task"}<span className="text-sol-text truncate max-w-[20rem]">{detail.task?.title}</span>
-                  </Link>
-                  {decision.station && <span className="text-sol-text-dim"> held at <span className="text-sol-text">{decision.station}</span></span>}
-                </dd>
-              </>
-            )}
-            <dt title="A category decides who may answer a question like this one">who may answer</dt>
-            <dd><CategoryNote category={decision.category} proposed={decision.category_proposed} /></dd>
-            {detail.stack && (
-              <>
-                <dt>stack</dt>
-                <dd>
-                  <Link href={`/decisions/stacks/${detail.stack.short_id ?? detail.stack._id}`} className="inline-flex items-center gap-1 text-sol-cyan hover:underline">
-                    <Layers className="w-3 h-3" />{detail.stack.title}
-                  </Link>
-                  <span className="text-sol-text-dim"> · {detail.stack.decision_ids.indexOf(decision._id) + 1} of {detail.stack.decision_ids.length}</span>
-                </dd>
-              </>
-            )}
-            <dt>holder</dt>
-            <dd><HolderLine people={detail.asked_users} roleName={decision.holder?.kind === "role" ? (detail.holder_role?.name ?? "a role") : undefined} /></dd>
-          </dl>
+          {!decision.card && meta}
         </header>
 
+        {/* Sticky, so it is a sibling of the page's sections, not inside the header. */}
+        {verdictBar && decision.card && (
+          <div className="cc-verdict-bar" data-verdict-bar>
+            <ChangeCardView card={decision.card} density="line" recommend={false} change={false} />
+            <DecisionAnswerControls decision={decision} onAnswer={onAnswer} onDismiss={onDismiss} keys recommendation={rec} />
+          </div>
+        )}
+
+        {/* ── The change card (LE11), drawn natively; its page stays on the task ── */}
+        {decision.card && (
+          <section className="mt-6">
+            <ChangeCardView card={decision.card} density="full" recommend={!verdictBar} />
+            {meta}
+          </section>
+        )}
+
         {/* ── Body ── */}
-        {(detail.doc?.content || decision.context_md || decision.report_slug) && (
+        {(detail.doc?.content || decision.context_md || (decision.report_slug && !decision.card)) && (
           <section className="mt-8">
             {detail.doc?.content && (
               <div className="decision-body text-sol-text-muted"><MarkdownRenderer content={detail.doc.content} /></div>
@@ -176,13 +203,13 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
                 <div className="mt-2 border-l-2 border-sol-border pl-4"><MarkdownRenderer content={decision.context_md} /></div>
               </details>
             )}
-            {decision.report_slug && <div className="mt-4"><PublishedPageEmbed slug={decision.report_slug} /></div>}
+            {decision.report_slug && !decision.card && <div className="mt-4"><PublishedPageEmbed slug={decision.report_slug} /></div>}
           </section>
         )}
 
         {/* ── Options ── */}
-        <section className="mt-8">
-          <h2 className="decision-kicker">Options{decision.kind && decision.kind !== "single" ? ` · ${decision.kind === "multi" ? "pick several" : decision.kind === "rank" ? "rank them" : "a form"}` : ""}</h2>
+        {!verdictBar && <section className="mt-8">
+          <h2 className="decision-kicker">{decision.card ? "Your call" : "Options"}{decision.kind && decision.kind !== "single" ? ` · ${decision.kind === "multi" ? "pick several" : decision.kind === "rank" ? "rank them" : "a form"}` : ""}</h2>
           {/* Option pages (L6) compare side by side above the list; a card's
               number answers on a single kind, where one option is the answer. */}
           <div className="mt-3 empty:hidden">
@@ -222,7 +249,7 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
               Fields: {decision.form.fields.map((f) => `${f.label} (${f.type})`).join(", ")}
             </div>
           )}
-        </section>
+        </section>}
 
         {/* ── Ladder ── */}
         <section className="mt-8">

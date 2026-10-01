@@ -29,6 +29,7 @@ import { useInboxStore, hasSyncRegistryEntry, syncLogScopeMetaKey } from "./inbo
 import { writePatchesToIDB } from "./idbCache";
 import { followerPersistencePatches } from "./followerPersistence";
 import { syncTransaction } from "./syncTransaction";
+import type { GestureMessage } from "./gestureBridge";
 import {
   isReplicatedCollectionKey,
   REPLICATED_STORE_KEYS,
@@ -143,6 +144,68 @@ export function buildMutUpdates(patches: readonly any[], state: any): MutUpdate[
 }
 
 const isReplicated = (key: string) => REPLICATED_STORE_KEYS.includes(key);
+
+/**
+ * A synced follower's action tee (wire to `_setActionTee`): its own
+ * optimistic writes, offered to the host as field-level muts. The engine's
+ * own mutTee ships whole rows; buildMutUpdates keeps an edited row from
+ * overlaying the host's fresher copy.
+ */
+export function followerActionTee(channel: ReplicationChannel, selfId: string) {
+  return (_name: string, patches: any[], state: any): void => {
+    const updates = buildMutUpdates(patches, state);
+    if (updates.length > 0) channel.post({ type: "mut", from: selfId, updates });
+  };
+}
+
+/** The host runtime an elected window runs. A follower's mut lands as its optimistic rows, held under the same locks. */
+export function replicationHostFor(hostId: string, channel: ReplicationChannel, getState: () => any): ReplicationHost {
+  return createReplicationHost({
+    hostId,
+    channel,
+    getState,
+    replicatedKeys: REPLICATED_STORE_KEYS,
+    isCollectionKey: isReplicatedCollectionKey,
+    applyUpdates: (updates) => applyUpdatesToStore(updates, { optimistic: true }),
+  });
+}
+
+/** The follower runtime. The host's rows land through applyUpdatesToStore, authoritative for this window. */
+export function replicationFollowerFor(selfId: string, channel: ReplicationChannel, onSynced: (synced: boolean) => void): ReplicationFollower {
+  return createReplicationFollower({
+    selfId,
+    channel,
+    replicatedKeys: REPLICATED_STORE_KEYS,
+    isCollectionKey: isReplicatedCollectionKey,
+    applyUpdates: (updates) => applyUpdatesToStore(updates),
+    onSynced,
+  });
+}
+
+/**
+ * A follower taking the host role, in order: it stops following, takes the
+ * host role, drops the follower's action tee, and starts the host runtime.
+ * Run inside the promoted window.
+ */
+export function promoteToHost(follower: ReplicationFollower | null, startHost: () => ReplicationHost): ReplicationHost {
+  follower?.stop();
+  setRole("host");
+  (useInboxStore.getState() as any)._setActionTee(null);
+  return startHost();
+}
+
+/**
+ * A sibling window's gesture, landed in this window. Follow state is
+ * ephemeral window state, not a row: it never enters the draft, so it takes
+ * its own path to the setter.
+ */
+export function applyBridgedGesture(msg: GestureMessage): void {
+  if (msg.kind === "follow") {
+    useInboxStore.getState().setFollowLeader(msg.leaderId, { fromBridge: true });
+    return;
+  }
+  useInboxStore.getState().applyGestureBridge(msg);
+}
 
 // Land one batch of replicated updates through the store's own sync actions,
 // so pending protection, merge policies, and the no-op bails all behave as if
@@ -320,32 +383,19 @@ export function startSyncReplication(opts: { eligible: boolean; principalId: str
   };
 
   const startFollower = () => {
-    follower = createReplicationFollower({
-      selfId,
-      channel,
-      replicatedKeys: REPLICATED_STORE_KEYS,
-      isCollectionKey: isReplicatedCollectionKey,
-      // The host's rows: authoritative for this window (see applyUpdatesToStore).
-      applyUpdates: (updates) => applyUpdatesToStore(updates),
-      onSynced: (synced) => {
-        if (stopped || elected) return;
-        if (synced) {
-          if (soloTimer) clearTimeout(soloTimer);
-          setRole("follower");
-          (useInboxStore.getState() as any)._setIDBWrite((patches: any[], state: any) => {
-            const local = followerPersistencePatches(patches);
-            if (local.length) return writePatchesToIDB(local, state);
-          });
-          (useInboxStore.getState() as any)._setActionTee((_name: string, patches: any[], state: any) => {
-            // The engine's own mutTee ships whole rows; a field-level mut is
-            // built here so an edited row never overlays the host's copy.
-            const updates = buildMutUpdates(patches, state);
-            if (updates.length > 0) channel.post({ type: "mut", from: selfId, updates });
-          });
-        } else {
-          armSoloFallback();
-        }
-      },
+    follower = replicationFollowerFor(selfId, channel, (synced) => {
+      if (stopped || elected) return;
+      if (synced) {
+        if (soloTimer) clearTimeout(soloTimer);
+        setRole("follower");
+        (useInboxStore.getState() as any)._setIDBWrite((patches: any[], state: any) => {
+          const local = followerPersistencePatches(patches);
+          if (local.length) return writePatchesToIDB(local, state);
+        });
+        (useInboxStore.getState() as any)._setActionTee(followerActionTee(channel, selfId));
+      } else {
+        armSoloFallback();
+      }
     });
     armSoloFallback();
   };
@@ -354,20 +404,9 @@ export function startSyncReplication(opts: { eligible: boolean; principalId: str
     if (stopped) return;
     elected = true;
     if (soloTimer) clearTimeout(soloTimer);
-    follower?.stop();
+    host = promoteToHost(follower, () => replicationHostFor(selfId, channel, () => useInboxStore.getState()));
     follower = null;
-    setRole("host");
     const internals = useInboxStore.getState() as any;
-    internals._setActionTee(null);
-    host = createReplicationHost({
-      hostId: selfId,
-      channel,
-      getState: () => useInboxStore.getState(),
-      replicatedKeys: REPLICATED_STORE_KEYS,
-      isCollectionKey: isReplicatedCollectionKey,
-      // A follower's mut: its optimistic rows, held under the same locks.
-      applyUpdates: (updates) => applyUpdatesToStore(updates, { optimistic: true }),
-    });
     // The write-through tee: persist first, then broadcast the same patches.
     internals._setIDBWrite((patches: any[], state: any) => {
       const persisted = writePatchesToIDB(patches, state);

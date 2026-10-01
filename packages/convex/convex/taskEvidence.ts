@@ -198,11 +198,31 @@ export async function computeTaskEvidence(ctx: Ctx, viewerId: Id<"users">, task:
 
   // Images from cast image have no row of their own; the message that carries
   // them lands in conversation_images, so a linked session's images are the
-  // task's images (L6). Newest 12 across the sessions.
+  // task's images (L6), but only those posted while the session worked on the
+  // task: a long-lived session (a role, a lead) links by commenting and must
+  // not lend the task its screenshots from months before. A session the task
+  // lists counts from the task's creation, one that only commented from its
+  // first comment. Newest 12 across the sessions.
+  const listed = new Set((task.conversation_ids ?? []).map(String));
+  const firstCommentAt = new Map<string, number>();
+  for (const c of comments) {
+    if (!c.conversation_id) continue;
+    const key = String(c.conversation_id);
+    firstCommentAt.set(key, Math.min(firstCommentAt.get(key) ?? Infinity, c.created_at));
+  }
+  const taskStart = task.created_at ?? task._creationTime;
   const imagesRaw: any[] = [];
   for (const cid of linkedConversationIds) {
-    const rows: any[] = await ctx.db.query("conversation_images").withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", cid)).order("desc").take(IMAGES_MAX);
-    imagesRaw.push(...rows);
+    const since = listed.has(String(cid)) ? taskStart : Math.max(taskStart, firstCommentAt.get(String(cid)) ?? taskStart);
+    let kept = 0;
+    for await (const row of ctx.db.query("conversation_images").withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", cid)).order("desc")) {
+      // A row is never inserted before its message, so once rows were created
+      // before the floor every older row is out of the window too.
+      if (row._creationTime < since) break;
+      if (row.timestamp < since) continue;
+      imagesRaw.push(row);
+      if (++kept >= IMAGES_MAX) break;
+    }
   }
   imagesRaw.sort((a, b) => b.timestamp - a.timestamp || b.seq - a.seq);
   const images: TaskEvidence["images"] = [];

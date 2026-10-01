@@ -46,10 +46,53 @@ export function livePercent(w: { percent: number; resets_at?: number }, now: num
   return isWindowRolled(w, now) ? 0 : w.percent;
 }
 
+/** Every limit window an account reports, in the order the meters list them (labeledUsageWindows). */
 export function limitWindows(usage: CcUsage): { percent: number; resets_at?: number }[] {
-  return [usage.session, usage.weekly, usage.weekly_scoped, ...(usage.scoped ?? [])].filter(
-    (w): w is NonNullable<typeof w> => !!w,
-  );
+  return labeledUsageWindows(usage);
+}
+
+/** Each limit window an account reports, the one listing every surface
+ *  reads: `name`, what a meter row beside its bar says ("Session", "Week", a
+ *  model-scoped week by its model, "Fable"), and `label`, the name with its
+ *  span where a sentence or a list needs it ("Session (5h)", "Week (7d)",
+ *  "Fable (7d)"). A scoped window is named by its own label alone. */
+export function labeledUsageWindows(usage: CcUsage): { name: string; label: string; percent: number; resets_at?: number }[] {
+  const out: { name: string; label: string; percent: number; resets_at?: number }[] = [];
+  const add = (name: string, span: string | undefined, w?: { percent: number; resets_at?: number }) => {
+    if (w) out.push({ name, label: span ? `${name} (${span})` : name, percent: w.percent, resets_at: w.resets_at });
+  };
+  add("Session", "5h", usage.session);
+  add("Week", "7d", usage.weekly);
+  add(usage.weekly_scoped?.label ?? "Model", "7d", usage.weekly_scoped);
+  for (const s of usage.scoped ?? []) add(s.label, undefined, s);
+  return out;
+}
+
+/** The pegged window that keeps an account unusable longest (its meter
+ *  label and reset), or undefined when nothing is pegged. Several can be
+ *  pegged at once (a spent 5h session inside a spent week); the shorter one
+ *  reopening changes nothing while the longer one is still shut, so the latest
+ *  reset is the one named. */
+export function peggedWindow(usage: CcUsage | undefined | null, now: number): { label: string; resets_at?: number } | undefined {
+  if (!usage) return undefined;
+  const w = labeledUsageWindows(usage)
+    .filter((w) => !isWindowRolled(w, now) && w.percent >= 100)
+    .sort((a, b) => (b.resets_at ?? 0) - (a.resets_at ?? 0))[0];
+  return w && { label: w.label, ...(w.resets_at !== undefined ? { resets_at: w.resets_at } : {}) };
+}
+
+/**
+ * An account's plan type as people read it: ChatGPT's own names ("prolite" is
+ * Pro Lite), and any other (Claude's "max") capitalized.
+ */
+const PLAN_TYPE_LABELS: Record<string, string> = { free: "Free", go: "Go", plus: "Plus", pro: "Pro", prolite: "Pro Lite", team: "Team", business: "Business", enterprise: "Enterprise", edu: "Edu" };
+export function planTypeLabel(planType: string): string {
+  return PLAN_TYPE_LABELS[planType.toLowerCase()] ?? `${planType.charAt(0).toUpperCase()}${planType.slice(1)}`;
+}
+
+/** The meter label of the pegged window that keeps an account unusable longest (peggedWindow). */
+export function peggedWindowLabel(usage: CcUsage | undefined | null, now: number): string | undefined {
+  return peggedWindow(usage, now)?.label;
 }
 
 /** The worst (highest) utilization across an account's limit windows AS OF

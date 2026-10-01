@@ -62,6 +62,11 @@ export const CODECAST_EVENTS = defineCatalog({
   nux_tour_finished: { step: COUNT },
   nux_tour_skipped: { step: COUNT },
 
+  // Tours (web/tours): `tour` is a registry id, never user text.
+  tour_started: { tour: { type: "string", max: 32 }, replay: { type: "boolean" } },
+  tour_finished: { tour: { type: "string", max: 32 }, step: COUNT },
+  tour_skipped: { tour: { type: "string", max: 32 }, step: COUNT },
+
   // Tips.
   tip_seen: { tip_id: { type: "string", max: 64 }, type: { type: "string", max: 16, optional: true } },
   tip_dismissed: { tip_id: { type: "string", max: 64 }, type: { type: "string", max: 16, optional: true } },

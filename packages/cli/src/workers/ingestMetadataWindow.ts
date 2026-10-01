@@ -36,9 +36,11 @@ export async function readCompleteMetadataHead(
     boundary: (buffer, length, atEof, from = 0) => {
       checkpoint();
       const bytes = buffer.subarray(0, length);
-      if (firstNativeByte < 0) {
-        const native = buffer.subarray(from,length).findIndex(byte => byte !== 0x20 && byte !== 0x09 && byte !== 0x0a && byte !== 0x0d);
-        if (native >= 0) firstNativeByte = from + native;
+      // A plain loop: findIndex with a callback per byte cost seconds per
+      // pass on a head of megabytes of blank lines, which every pass rereads.
+      for (let i = from; firstNativeByte < 0 && i < length; i++) {
+        const byte = buffer[i];
+        if (byte !== 0x20 && byte !== 0x09 && byte !== 0x0a && byte !== 0x0d) firstNativeByte = i;
       }
       const last = buffer.subarray(from,length).lastIndexOf(0x0a);
       if (last >= 0) lastComplete = from + last;

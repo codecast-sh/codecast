@@ -85,7 +85,7 @@ export function DecisionOptionRow({
   const body = (
     <>
       <span className={`shrink-0 ${compact ? "mt-[3px]" : "mt-[2px]"}`}>{badge}</span>
-      <span className="min-w-0 flex-1 text-left">
+      <span className="min-w-0 flex-1 text-left [overflow-wrap:anywhere]">
         <span className="flex items-center gap-2 flex-wrap">
           <span className={`${compact ? "text-[13px]" : "text-[15px]"} leading-snug text-sol-text`}>{label}</span>
           {tags}

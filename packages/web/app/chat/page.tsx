@@ -37,6 +37,8 @@
 import { useCallsAvailable, useTeamFeature } from "../../lib/teamFeatures";
 import { TeamFeatureOff } from "../../components/TeamFeatureOff";
 import { useCallback, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { dmKeyFor } from "@codecast/shared/chat";
+import { isChatRailLive, subscribeChatRailLive } from "../../lib/chatLive";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useMutation } from "convex/react";
 import { api as _chatApi } from "@codecast/convex/convex/_generated/api";
@@ -48,7 +50,7 @@ import { linkSendsOutbound } from "@codecast/convex/convex/lib/slackMirror";
 import { SlackMirrorPill } from "../../components/chat/SlackMirrorPill";
 import { useChannelSlackLink } from "../../hooks/useChannelSlackLink";
 import { WalkiePttButton } from "../../components/calls/WalkiePtt";
-import { HuddleButton, OccupancyChip } from "../../components/calls/OccupancyChip";
+import { GuestInviteChip, HuddleButton, OccupancyChip } from "../../components/calls/OccupancyChip";
 import { chatViewRoomKey } from "../../lib/chatViews";
 import { channelHuddleMemberIds } from "@codecast/shared/contracts";
 import { NewMessageModal } from "../../components/chat/NewMessageModal";
@@ -61,9 +63,9 @@ import { useInboxStore, selectChannelReadMarker, selectNavCollapsed, type ChatNo
 import Link from "next/link";
 import { useAuthGate } from "@platform/auth/web";
 import { useLocalAuth } from "../../lib/localAuth";
-import { isStandaloneCommunityPath } from "../../lib/desktop";
+import { isStandaloneCommunityPath, openExternalUrl } from "../../lib/desktop";
 import { Logo } from "../../components/Logo";
-import type { ChatAttachment } from "../../store/chatSlice";
+import { findDmChannelId, type ChatAttachment } from "../../store/chatSlice";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import {
   useChannelMessages,
@@ -511,6 +513,34 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
   const openDm = useOpenDm();
   const openDmWith = useCallback((memberId: string) => openDm([memberId]), [openDm]);
 
+  // ── `?with=<userId>`: the viewer's DM with one person ─────────────────────
+  // What a mention of a Slack person links to (slackSync slackPersonHref). An
+  // existing DM opens; a teammate gets one opened; anyone else, once the rail
+  // has landed and still holds no DM with them, opens in Slack (`slack`).
+  const withId = search.get("with") || undefined;
+  const railLive = useSyncExternalStore(subscribeChatRailLive, isChatRailLive, () => false);
+  const withDmKey = withId && viewerId ? dmKeyFor(String(useInboxStore.getState().clientState?.ui?.active_team_id ?? ""), [viewerId, withId]) : undefined;
+  const withDm = useInboxStore((s) => (withDmKey ? findDmChannelId(s.chatChannels, withDmKey) : null));
+  const handledWithRef = useRef<string | undefined>(undefined);
+  useWatchEffect(() => {
+    if (!withId || handledWithRef.current === withId) return;
+    if (withDm) {
+      handledWithRef.current = withId;
+      router.replace(`${base}/${withDm}`);
+      return;
+    }
+    if (teamMembers.some((m: any) => String(m._id) === withId && !m.is_bot)) {
+      handledWithRef.current = withId;
+      openDmWith(withId);
+      return;
+    }
+    if (!railLive) return;
+    handledWithRef.current = withId;
+    const slack = search.get("slack");
+    if (slack?.startsWith("https://slack.com/")) openExternalUrl(slack);
+    router.replace(base);
+  }, [withId, withDm, railLive, teamMembers]);
+
   // The app's one context-menu system; the header bell and the rail's rows
   // (click and right-click) all open the same instance.
   const channelMenu = useChannelMenu();
@@ -636,7 +666,7 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
               {activeChannel?.kind !== "dm" && activeChannel?.topic
                 ? <span className="ch-head-topic">{activeChannel.topic}</span>
                 : <span className="ch-head-topic" />}
-              {activeChannel && (activeChannel.kind === "dm" || activeChannel.isPrivate) && (
+              {activeChannel && !community && !isGuest && (
                 <ChannelMembersButton channel={activeChannel} />
               )}
               {/* ONE voice control per room. A DM gets the key — it used to
@@ -673,6 +703,9 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
                   // A phone header has no room for the word beside the icon.
                   compact={narrowViewport}
                 />
+              )}
+              {activeChannel && activeChannel.kind !== "dm" && !community && (
+                <GuestInviteChip roomKey={chatViewRoomKey(activeChannel, viewerId, teamMembers)} compact={narrowViewport} className="shrink-0" />
               )}
               {!community && <SearchPill onOpen={() => setSearchOpen(true)} />}
               {!community && (

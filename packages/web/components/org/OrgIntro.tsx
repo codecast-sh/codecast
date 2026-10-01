@@ -5,7 +5,7 @@
 // built from the painted faces because the faces are the feature's own
 // character.
 //
-// Five faces stand as a small company at the top: the chief of staff above,
+// Five faces stand as a small company at the top: the head of people above,
 // four roles under it on one rail. Each face stands for one of the five
 // sentences, and the same face marks that sentence's line below, so the two
 // are tied without a label. The entrance is one orchestrated sequence in CSS
@@ -14,7 +14,7 @@
 // its face nods; the two actions come last. Reduced motion collapses the
 // whole sequence to its final frame through the global rule.
 //
-// Two actions and only two: the one that starts (Ask the chief of staff when
+// Two actions and only two: the one that starts (Ask the head of people when
 // the workspace has no roles, Open the chart when it has) and Later. Seen is
 // the page's business: both actions call back and the page writes
 // org_intro_seen through the store, so the screen is seen once per person.
@@ -27,7 +27,7 @@ import { OrgButton } from "./OrgButton";
 import { useEventListener } from "../../hooks/useEventListener";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import type { OrgIntroLine } from "../../lib/orgIntro";
-import { ORG_INTRO_LINES, renderOrgIntroLine, ORG_INTRO_CHIEF, ORG_INTRO_TITLE, orgIntroStartLabel } from "../../lib/orgIntro";
+import { ORG_INTRO_LINES, renderOrgIntroLine, ORG_INTRO_HEAD_OF_PEOPLE, ORG_INTRO_TITLE, orgIntroStartLabel } from "../../lib/orgIntro";
 
 // Capture: the intro answers Escape before the page under it does.
 const INTRO_KEY_CAPTURE = { capture: true } as const;
@@ -35,7 +35,7 @@ const INTRO_KEY_CAPTURE = { capture: true } as const;
 // ---------------------------------------------------------------- the entrance, in milliseconds
 
 const T = {
-  /** The chief pops first, then the four on the rail, left to right. */
+  /** The Head of People pops first, then the four on the rail, left to right. */
   face: (i: number) => i * 110,
   rail: 520,
   title: 760,
@@ -49,23 +49,23 @@ const T = {
 /** Geometry of the little chart in CSS pixels at scale 1. The four on the
  *  rail are spaced so the whole company is a touch wider than the lines
  *  below it, which keeps it reading as a picture and not as a header. */
-const CHART = { w: 340, h: 136, chief: { x: 170, y: 30, size: 56 }, rail: { y: 88, from: 32, to: 308 }, kids: { y: 110, size: 50, xs: [32, 124, 216, 308] } };
+const CHART = { w: 340, h: 136, head: { x: 170, y: 30, size: 56 }, rail: { y: 88, from: 32, to: 308 }, kids: { y: 110, size: 50, xs: [32, 124, 216, 308] } };
 
 function Company({ scale, lines }: { scale: number; lines: readonly OrgIntroLine[] }) {
   const k = scale;
-  const kids = lines.filter((l) => l.face !== ORG_INTRO_CHIEF).slice(0, CHART.kids.xs.length);
+  const kids = lines.filter((l) => l.face !== ORG_INTRO_HEAD_OF_PEOPLE).slice(0, CHART.kids.xs.length);
   const faces: Array<{ face: AvatarKey; x: number; y: number; size: number; order: number }> = [
-    { face: ORG_INTRO_CHIEF, x: CHART.chief.x, y: CHART.chief.y, size: CHART.chief.size, order: 0 },
+    { face: ORG_INTRO_HEAD_OF_PEOPLE, x: CHART.head.x, y: CHART.head.y, size: CHART.head.size, order: 0 },
     ...kids.map((l, i) => ({ face: l.face, x: CHART.kids.xs[i], y: CHART.kids.y, size: CHART.kids.size, order: i + 1 })),
   ];
   const lineIndexOf = (face: AvatarKey) => lines.findIndex((l) => l.face === face);
-  const stemTop = CHART.chief.y + CHART.chief.size / 2;
+  const stemTop = CHART.head.y + CHART.head.size / 2;
   const kidTop = CHART.kids.y - CHART.kids.size / 2;
   return (
     <div className="relative mx-auto" style={{ width: CHART.w * k, height: CHART.h * k }} data-org-intro-company aria-hidden="true">
       <svg className="absolute inset-0" width={CHART.w * k} height={CHART.h * k} viewBox={`0 0 ${CHART.w} ${CHART.h}`} fill="none" stroke="color-mix(in srgb, var(--sol-text-dim) 60%, transparent)" strokeWidth={1.5} strokeLinecap="round">
-        {/* the stem from the chief to the rail, the rail, then one stem per role */}
-        <path d={`M ${CHART.chief.x} ${stemTop + 4} V ${CHART.rail.y}`} pathLength={1} className="org-intro-draw" style={{ "--d": `${T.rail}ms` } as CSSProperties} />
+        {/* the stem from the Head of People to the rail, the rail, then one stem per role */}
+        <path d={`M ${CHART.head.x} ${stemTop + 4} V ${CHART.rail.y}`} pathLength={1} className="org-intro-draw" style={{ "--d": `${T.rail}ms` } as CSSProperties} />
         <path d={`M ${CHART.rail.from} ${CHART.rail.y} H ${CHART.rail.to}`} pathLength={1} className="org-intro-draw" style={{ "--d": `${T.rail + 120}ms` } as CSSProperties} />
         {CHART.kids.xs.slice(0, kids.length).map((x, i) => (
           <path key={x} d={`M ${x} ${CHART.rail.y} V ${kidTop - 4}`} pathLength={1} className="org-intro-draw" style={{ "--d": `${T.rail + 260 + i * 40}ms` } as CSSProperties} />
@@ -110,7 +110,7 @@ function useRoomScale(ref: React.RefObject<HTMLDivElement | null>, compact: bool
 
 export function OrgIntro({ hasRoles, compact = false, leaving = false, onStart, onLater, lines = ORG_INTRO_LINES }: {
   /** Roles exist: the start action opens the chart under this screen.
-   *  None: it asks the chief of staff to look at the workspace. */
+   *  None: it asks the head of people to look at the workspace. */
   hasRoles: boolean;
   /** The screen is on its way out: it fades and lifts over ORG_INTRO_LEAVE_MS
    *  with the tour's own easing, so the tour's first step opens as the last

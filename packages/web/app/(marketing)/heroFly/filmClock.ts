@@ -8,8 +8,8 @@
  */
 
 import { createContext, useContext, useSyncExternalStore, type CSSProperties } from "react";
-import { contentT, frame, SURFACE_INDEX } from "./timeline";
-import { POSTER_T, type SurfaceId } from "./world";
+import { frame } from "./timeline";
+import { POSTER_T } from "./world";
 
 /** Film time for one hero instance: the driver sets it every frame it renders. */
 export type FilmClock = { get(): number; set(t: number): void; subscribe(fn: () => void): () => void };
@@ -34,23 +34,15 @@ export function createFilmClock(t0 = POSTER_T): FilmClock {
 const posterClock = createFilmClock();
 export const FilmClockContext = createContext<FilmClock>(posterClock);
 
-/** The surface a part renders on; set by the world around each surface. */
-export const SurfaceContext = createContext<SurfaceId | null>(null);
-
 /**
- * A value derived from film time. On a surface, `t` is that surface's content
- * time: the film time until the surface turns face-down at the seam, then 0,
- * so a chapter's state resets unseen. `select` must return a primitive (or a
+ * A value derived from film time. `select` must return a primitive (or a
  * stable reference): it runs every frame, and the component re-renders only
- * when its result changes.
+ * when its result changes. Under the seam's copy of a window (surfaces.tsx
+ * SeamGhost) the clock is held at 0.
  */
 export function useFilmTime<T>(select: (t: number) => T): T {
   const clock = useContext(FilmClockContext);
-  const surface = useContext(SurfaceContext);
-  const read = () => {
-    const t = clock.get();
-    return select(surface ? contentT(SURFACE_INDEX[surface], t) : t);
-  };
+  const read = () => select(clock.get());
   return useSyncExternalStore(clock.subscribe, read, read);
 }
 

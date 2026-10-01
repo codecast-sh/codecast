@@ -37,7 +37,7 @@ export const FIXTURE_TASKS = [
 export const FIXTURE_INITIATIVES: InitiativeRow[] = [
   row({
     _id: "init-org", short_id: "in-1", title: "Agents run the company's routine work", status: "active",
-    description: "Every area of the product has a lead that is an agent, and a person reads one page to know how it is going.\n\nScope: the org chart, roles, scopes and the chief of staff. Not in scope: billing for agent seats.",
+    description: "Every area of the product has a lead that is an agent, and a person reads one page to know how it is going.\n\nScope: the org chart, roles, scopes and the head of people. Not in scope: billing for agent seats.",
     owner: { kind: "role", role_id: "fixture-role-growth" }, target_date: FIXTURE_NOW + 60 * DAY, priority: "p0",
     project_ids: ["proj-org", "proj-inbox"], health: "at_risk", health_at: FIXTURE_NOW - 2 * DAY, latest_update_id: "upd-2",
   }),

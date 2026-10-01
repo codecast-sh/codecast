@@ -239,6 +239,8 @@ describe("shouldAttemptPreBootHandoff", () => {
     expect(shouldAttemptPreBootHandoff({ ...PRE, freshNavigation: false })).toBe(false);
     expect(shouldAttemptPreBootHandoff({ ...PRE, isTopWindow: false })).toBe(false);
     expect(shouldAttemptPreBootHandoff({ ...PRE, path: "/share/abc" })).toBe(false);
+    // A guest's meeting page belongs to somebody with no account: never the app.
+    expect(shouldAttemptPreBootHandoff({ ...PRE, path: "/meet/abc123def" })).toBe(false);
     expect(shouldAttemptPreBootHandoff({ ...PRE, path: "/", search: "?code=a&state=b" })).toBe(false);
     expect(shouldAttemptPreBootHandoff({ ...PRE, skippedUrl: "/conversation/jx7c89" })).toBe(false);
     expect(shouldAttemptPreBootHandoff({ ...PRE, agentDriven: true })).toBe(false);
