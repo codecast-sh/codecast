@@ -37,14 +37,19 @@ import { FileText, ListChecks, Target, Maximize2, ChevronDown, ChevronRight, Che
 import { useTeamFeature } from "../../../lib/teamFeatures";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "../../ui/context-menu";
 import { pendingBannerState, pendingRetryClientId, pendingCancelRef, pendingMessageCanRetry, pendingMessageReachedSession, pendingMessageHoldReason, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "../../../lib/pendingBanner";
+import { cancelPendingSend } from "../../../lib/cancelPendingSend";
 import { PendingDeliveryNote } from "../../PendingDeliveryNote";
 import { ghostRestartContextFor, deriveRestartStage, type RestartProgressRow } from "../../../hooks/useSessionRestart";
 import { CastCommandBlock } from "./castBlocks";
 import { AskUserQuestionBlock, ImageBlock, MonitorBlock, PlanModeBlock, ThinkingBlock } from "./interactiveBlocks";
 import { useImageSrc } from "../../../hooks/useImageSrc";
-import { AssistantIcon, UserIcon } from "./shared";
+import { AssistantIcon, FooterIconButton, FullscreenIcon, UserIcon } from "./shared";
 import { CastBrowserRowContext } from "../../../lib/conversationBlockContexts";
 import { assistantLabel } from "../../../lib/conversationBlockStyles";
+import { IdentityFace, IdentityHover } from "../../identity";
+import { AgentTypeIcon } from "../../AgentTypeIcon";
+import { identityRowOf, identitySig, sessionIdentity } from "../../../lib/sessionIdentity";
+import { usePersonifyAll } from "../../../hooks/usePersonifyAll";
 import { ScheduleWakeupBlock, TeammateMessageCard } from "./systemBlocks";
 import { BrowserWatchButton, SendMessageBlock, SkillBlock, TaskCreateUpdateBlock, TaskListBlock, TaskToolBlock, TeamCreateBlock, TodoWriteBlock, ToolBlock, WorkflowToolBlock } from "./toolBlocks";
 import { isAlwaysVisibleToolCall, parseApiErrorContent, parseCastCommand, parseContextBlocks, parseSkillBlocks, parseTeammateMessages, stripSystemTags } from "../classify";
@@ -353,10 +358,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
     if (!conversationId || cancelState !== "idle") return;
     setCancelState("inflight");
     try {
-      const status = await useInboxStore.getState().cancelPendingMessage(
-        conversationId,
-        pendingCancelRef(messageId, conversationPending),
-      );
+      const status = await cancelPendingSend(conversationId, pendingCancelRef(messageId, conversationPending), content);
       if (status === "delivered" || status === "injected") {
         toast.info("This message has already reached the session");
       }
@@ -849,8 +851,8 @@ function CondensedImageThumb({ image }: { image: ImageData }) {
   const gallery = useImageGallery();
   const messageId = useGalleryMessageId();
   useWatchEffect(() => {
-    if (src && gallery) gallery.register({ src, href, messageId });
-  }, [src, href, messageId, gallery]);
+    if (src && gallery) gallery.register({ src, href, messageId, storageId: image.storage_id });
+  }, [src, href, messageId, image.storage_id, gallery]);
   if (storageMissing) return null;
   if (!src) {
     return <span className="h-7 w-10 shrink-0 rounded-sm border border-sol-border/50 bg-sol-bg-alt animate-pulse" aria-hidden />;
@@ -1004,6 +1006,42 @@ export const CompactCollapsedTurn = memo(function CompactCollapsedTurn({ content
     </div>
   );
 });
+
+// Who is speaking on an assistant turn (session-characters.md S3): a session
+// that wears a role or a character speaks as it, with the agent brand riding
+// the face as a corner badge, the same glyph its inbox card shows. A plain
+// session keeps the agent's icon and name. Subscribes to the identity
+// signature alone, so a heartbeat on the row re-renders no message.
+function AssistantWho({ conversationId, agentType }: { conversationId?: string; agentType?: string }) {
+  const sig = useInboxStore((s) => identitySig(conversationId ? (s.sessions[conversationId] as any) : null));
+  const personifyAll = usePersonifyAll();
+  const row = useMemo(() => {
+    const sess = sig && conversationId ? (useInboxStore.getState().sessions[conversationId] as any) : null;
+    return sess ? identityRowOf(sess) : null;
+  }, [sig, conversationId]);
+  const id = row ? sessionIdentity(row, personifyAll) : null;
+  if (!row || !id || id.kind === "plain") {
+    return (
+      <>
+        <AssistantIcon agentType={agentType} />
+        <span className="text-sol-text-secondary text-xs font-medium">{assistantLabel(agentType)}</span>
+      </>
+    );
+  }
+  // Face and name are one hover target: a role opens its card from either.
+  return (
+    <IdentityHover row={row} personifyAll={personifyAll} triggerClassName="inline-flex items-center gap-2 cursor-default">
+      <IdentityFace
+        row={row}
+        size={24}
+        hover={false}
+        personifyAll={personifyAll}
+        badge={<AgentTypeIcon agentType={agentType || "claude_code"} className="w-full h-full p-[1px]" />}
+      />
+      <span className="text-sol-text-secondary text-xs font-medium">{id.name}</span>
+    </IdentityHover>
+  );
+}
 
 function AssistantBlockImpl({
   content,
@@ -1348,8 +1386,7 @@ function AssistantBlockImpl({
       {shouldShowHeader && (
         <div data-cc-message-who className="flex items-center gap-2 mb-2 mt-4">
           <span className="flex items-center gap-2 cursor-default" title={model ? `Model: ${model}` : undefined}>
-            <AssistantIcon agentType={agentType} />
-            <span className="text-sol-text-secondary text-xs font-medium">{assistantLabel(agentType)}</span>
+            <AssistantWho conversationId={conversationId} agentType={agentType} />
           </span>
           {model && <span className="text-sol-text-dim text-[10px] font-mono truncate" title={`Model: ${model}`}>{formatModel(model)}</span>}
           <a
@@ -1393,7 +1430,7 @@ function AssistantBlockImpl({
           <>
             <div className={parsedApiError ? "" : "text-sol-text prose prose-invert prose-sm max-w-none"}>
               {parsedApiError ? (
-                <ApiErrorCard error={parsedApiError} agentType={agentType} conversationId={conversationId} timestamp={timestamp} compact={condensed} />
+                <ApiErrorCard error={parsedApiError} agentType={agentType} conversationId={conversationId} messageUuid={messageUuid} timestamp={timestamp} compact={condensed} />
               ) : (
                 <div
                   ref={contentRef}
@@ -1420,29 +1457,12 @@ function AssistantBlockImpl({
             </div>
             {!parsedApiError && (isOverflowing || !contentExpanded) && (
               <div data-cc-message-overflow className="flex items-center gap-1 mt-2">
-                <button
-                  onClick={() => setFullscreen(true)}
-                  className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-cyan transition-colors flex items-center gap-1"
-                  title="Fullscreen"
-                >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" />
-                  </svg>
-                  <span className="hidden sm:inline text-xs text-sol-text-dim">Full Screen</span>
-                </button>
-                <button
-                  onClick={() => setContentExpanded(e => !e)}
-                  className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-cyan transition-colors"
-                  title={contentExpanded ? "Collapse" : "Expand"}
-                >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    {contentExpanded ? (
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 15.75l7.5-7.5 7.5 7.5" />
-                    ) : (
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
-                    )}
-                  </svg>
-                </button>
+                <FooterIconButton onClick={() => setFullscreen(true)} title="Fullscreen">
+                  <FullscreenIcon />
+                </FooterIconButton>
+                <FooterIconButton onClick={() => setContentExpanded(e => !e)} title={contentExpanded ? "Collapse" : "Expand"}>
+                  {contentExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                </FooterIconButton>
               </div>
             )}
           </>
@@ -1482,7 +1502,7 @@ function AssistantBlockImpl({
               </div>
               <div className="prose prose-invert prose-sm max-w-none text-sol-text">
                 {parsedApiError ? (
-                  <ApiErrorCard error={parsedApiError} agentType={agentType} conversationId={conversationId} timestamp={timestamp} />
+                  <ApiErrorCard error={parsedApiError} agentType={agentType} conversationId={conversationId} messageUuid={messageUuid} timestamp={timestamp} />
                 ) : (
                   <ReactMarkdown
                     remarkPlugins={entityRemarkPlugins}
@@ -1504,12 +1524,11 @@ function AssistantBlockImpl({
         <button
           data-cc-message-action
           onClick={() => onForkFromMessage(messageUuid)}
-          className="absolute right-2 -bottom-3 z-10 inline-flex select-none items-center gap-1.5 text-[11px] font-medium pl-1.5 pr-2.5 py-1 rounded-md border border-sol-border bg-sol-card text-sol-text-secondary shadow-md opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto hover:text-sol-cyan hover:border-sol-cyan/60 transition-[opacity,color,border-color] duration-150"
+          className="absolute right-2 -bottom-3 z-10 inline-flex select-none items-center p-1 rounded-md border border-sol-border bg-sol-card text-sol-text-secondary shadow-md opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto hover:text-sol-cyan hover:border-sol-cyan/60 transition-[opacity,color,border-color] duration-150"
           title="Fork the conversation from this message"
           aria-label="Fork from this message"
         >
           <Split className="w-3.5 h-3.5" />
-          <span>Fork</span>
         </button>
       )}
 

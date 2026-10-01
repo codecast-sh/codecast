@@ -717,6 +717,7 @@ Every codecast object has a short ID. Written anywhere (messages, summaries, tas
 | Plan    | \`pl-88\`   | \`cast plan ls\` |
 | Trigger | \`tr-42\`   | \`cast trigger ls\` |
 | Doc     | \`doc:<id>\` | \`cast doc ls\`, \`cast doc search\` |
+| Call    | \`cl-42\`   | \`cast calls\` |
 
 Write the bare ID by default (\`Filed under ct-4102.\`); it reads as a normal sentence and still renders in full. Write \`@[Title id]\` (\`@[Fix the auth race ct-4102]\`) when the sentence needs the name. Never paste a 32-character internal ID: it renders as an unreadable blob, and every command accepts the short one.
 ${REFERENCES_SNIPPET_END}
@@ -813,12 +814,13 @@ Team huddles are transcribed with exact speaker attribution, and each call gets 
 \`\`\`bash
 cast calls                        # team call history, live calls first
 cast call <id>                    # one call: summary + action items
-cast call <id> --transcript       # full who-said-what transcript
+cast call <id> --transcript       # full who-said-what transcript, each line with its #seq
+cast call <id> 15:25              # just lines 15 to 25
 cast call <id> --json             # machine-readable, segments too
 cast call hold 3m|off             # hold the room's words while you work
 \`\`\`
 
-When a task or thread refers to what was said on a call, read the transcript and quote the exact line rather than paraphrase it.
+When a task or thread refers to what was said on a call, read the transcript and cite the words rather than paraphrase them. A call's short ID with a line range, \`cl-42:15-25\`, renders as those lines with their speakers when it stands on its own line, and as a pill inline.
 ${CALLS_SNIPPET_END}
 `;
 

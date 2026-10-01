@@ -104,3 +104,37 @@ test("the open image offers its link and the way back to its message", async () 
   expect(lightbox()!.querySelector('[aria-label="Copy link to image"]')).toBeNull();
   expect(lightbox()!.querySelector('button[aria-label="Locate in the conversation"]')).toBeNull();
 });
+
+test("a trackpad pinch zooms the open image, 0 resets, paging resets", async () => {
+  await mount(
+    <ImageGalleryProvider conversationId="A">
+      <Registered src="z1" />
+      <Registered src="z2" />
+    </ImageGalleryProvider>,
+  );
+  await clickSrc("z1");
+  const img = () => lightbox()!.querySelector('img[alt="Gallery image"]') as HTMLElement;
+  const scaleOf = () => Number(img().style.transform.match(/scale\(([\d.]+)\)/)?.[1]);
+  expect(scaleOf()).toBe(1);
+
+  // Chromium reports a pinch as a ctrl+wheel with negative deltaY to zoom in.
+  const pinch = (deltaY: number) => act(() => {
+    lightbox()!.dispatchEvent(new dom.window.WheelEvent("wheel", { deltaY, ctrlKey: true, bubbles: true, cancelable: true }));
+  });
+  await pinch(-40);
+  expect(scaleOf()).toBeGreaterThan(1.4);
+  expect(lightbox()!.textContent).toContain("reset");
+
+  // Zoom never goes below 100%.
+  await pinch(50); await pinch(50); await pinch(50);
+  expect(scaleOf()).toBe(1);
+
+  await pinch(-40);
+  await act(() => { document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "0", bubbles: true })); });
+  expect(scaleOf()).toBe(1);
+
+  await pinch(-40);
+  await act(() => { document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })); });
+  expect(counter()).toBe("2 / 2");
+  expect(scaleOf()).toBe(1);
+});

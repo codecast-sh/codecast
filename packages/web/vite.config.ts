@@ -1,10 +1,11 @@
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import { sentryVitePlugin } from "@sentry/vite-plugin";
 import { VitePWA } from "vite-plugin-pwa";
 import path from "path";
 import { sharedResolve, sharedCss } from "./vite.shared";
 import { execSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { storeHmrPlugin } from "./plugins/storeHmr";
 import { hookRefreshPlugin } from "./plugins/hookRefresh";
 import { handoffBootPlugin } from "./plugins/handoffBoot";
@@ -13,11 +14,19 @@ import { castPlayerScriptPlugin } from "./plugins/castPlayerScript";
 import { APP_SHELL_GLOB_IGNORES, APP_SHELL_GLOB_PATTERNS } from "./vite.pwa";
 
 /**
- * Build identity for drivers (window.__CODECAST_BUILD). Railway exposes the
- * commit it built; a local checkout answers git; a tarball with neither says
- * so instead of guessing.
+ * Build identity for drivers (window.__CODECAST_BUILD) and for the running app
+ * (/version.json, read by lib/updatePrompt). Railway exposes the commit it
+ * built; a local checkout answers git; a tarball with neither says so instead
+ * of guessing. Memoized per mode so the bundle and the manifest carry one
+ * identity.
  */
+const builds = new Map<string, ReturnType<typeof computeBuildIdentity>>();
 function buildIdentity(mode: string) {
+  if (!builds.has(mode)) builds.set(mode, computeBuildIdentity(mode));
+  return builds.get(mode)!;
+}
+
+function computeBuildIdentity(mode: string) {
   let sha = process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_SHA || "";
   if (!sha) {
     try {
@@ -26,7 +35,28 @@ function buildIdentity(mode: string) {
       sha = "unknown";
     }
   }
-  return { sha, builtAt: new Date().toISOString(), mode };
+  return { sha, builtAt: new Date().toISOString(), mode, ...releasePrompt() };
+}
+
+/**
+ * The release's reload prompt (release-prompt.json, bumped by
+ * scripts/release-prompt.ts). Every deploy reaches open windows silently when
+ * they hide; a bumped generation also asks visible windows to reload now.
+ */
+function releasePrompt(): { promptGeneration: number; promptMessage: string } {
+  const raw = JSON.parse(readFileSync(path.resolve(__dirname, "release-prompt.json"), "utf-8"));
+  return { promptGeneration: Number(raw.generation) || 0, promptMessage: String(raw.message ?? "") };
+}
+
+/** Serves the build identity at /version.json, so a running window can ask what is deployed now. */
+function versionManifestPlugin(mode: string): Plugin {
+  return {
+    name: "version-manifest",
+    apply: "build",
+    generateBundle() {
+      this.emitFile({ type: "asset", fileName: "version.json", source: JSON.stringify(buildIdentity(mode)) });
+    },
+  };
 }
 
 export default defineConfig(({ mode }) => ({
@@ -34,6 +64,7 @@ export default defineConfig(({ mode }) => ({
     __CODECAST_BUILD__: JSON.stringify(buildIdentity(mode)),
   },
   plugins: [
+    versionManifestPlugin(mode),
     // Before react(): gives hooks in plain .ts files a Fast Refresh signature,
     // so editing their hook list remounts consumers instead of crashing them.
     hookRefreshPlugin(),

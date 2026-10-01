@@ -181,18 +181,25 @@ export function RevealOpenLink({
 }
 
 /**
- * Nearest thing the band should fill: an ancestor that opts in with
- * data-reveal-bounds, else the nearest scrolling ancestor — the transcript
- * feed, the chat list, a page's main scroll.
+ * The surface the band scrolls with and takes its height from: the nearest
+ * scrolling ancestor — the transcript feed, the chat list, a page's main scroll.
  */
 function revealBounds(el: HTMLElement): HTMLElement | null {
-  const marked = el.parentElement?.closest<HTMLElement>("[data-reveal-bounds]");
-  if (marked) return marked;
   for (let n = el.parentElement; n; n = n.parentElement) {
     const o = getComputedStyle(n).overflowY;
     if (o === "auto" || o === "scroll") return n;
   }
   return null;
+}
+
+/**
+ * What the band spans side to side: a column inside the scroller that opts in
+ * with data-reveal-span (the decision sheet's reasoning beside its sticky
+ * options), else the whole scroller.
+ */
+function revealSpan(el: HTMLElement, bounds: HTMLElement): HTMLElement {
+  const marked = el.parentElement?.closest<HTMLElement>("[data-reveal-span]");
+  return marked && bounds.contains(marked) ? marked : bounds;
 }
 
 // The band's height is the reader's choice, kept across reveals and reloads;
@@ -228,6 +235,7 @@ function useFullBleed(ref: React.RefObject<HTMLDivElement | null>) {
     if (!el) return;
     const bounds = revealBounds(el);
     if (!bounds) return;
+    const span = revealSpan(el, bounds);
     let raf = 0;
     const apply = () => {
       raf = 0;
@@ -235,10 +243,10 @@ function useFullBleed(ref: React.RefObject<HTMLDivElement | null>) {
       el.style.marginLeft = "0px";
       el.style.width = "auto";
       const zoom = cssZoomOf(el);
-      const b = bounds.getBoundingClientRect();
+      const b = span.getBoundingClientRect();
       const r = el.getBoundingClientRect();
-      el.style.marginLeft = `${(b.left - r.left) / zoom + bounds.clientLeft}px`;
-      el.style.width = `${bounds.clientWidth}px`;
+      el.style.marginLeft = `${(b.left - r.left) / zoom + span.clientLeft}px`;
+      el.style.width = `${span.clientWidth}px`;
       el.style.height = `${bandHeight(bounds)}px`;
     };
     apply();
@@ -246,6 +254,7 @@ function useFullBleed(ref: React.RefObject<HTMLDivElement | null>) {
       if (!raf) raf = requestAnimationFrame(apply);
     });
     ro.observe(bounds);
+    if (span !== bounds) ro.observe(span);
     return () => {
       ro.disconnect();
       if (raf) cancelAnimationFrame(raf);
@@ -410,11 +419,13 @@ function usePinnedClose(ref: React.RefObject<HTMLDivElement | null>): PinSpot | 
         return;
       }
       const h = host.getBoundingClientRect();
+      const span = revealSpan(el, bounds);
+      const s = span.getBoundingClientRect();
       const next = {
         host,
         top: Math.round((b.top - h.top) / zoom + bounds.clientTop),
-        left: Math.round((b.left - h.left) / zoom + bounds.clientLeft),
-        width: bounds.clientWidth,
+        left: Math.round((s.left - h.left) / zoom + span.clientLeft),
+        width: span.clientWidth,
       };
       setSpot((cur) => (cur && cur.top === next.top && cur.left === next.left && cur.width === next.width ? cur : next));
     };
@@ -465,8 +476,8 @@ function RevealBand({ reveal }: { reveal: OpenReveal }) {
       .finished.then(done, done);
   }, [reveal.anchor]);
   const onGripDown = useResizeGrip(ref);
-  // The header strip and the foot are both the close: one click anywhere on
-  // either. Enter and Space do the same from the keyboard.
+  // The header strip is the close: one click anywhere on it. Enter and Space
+  // do the same from the keyboard.
   const closeKeys = useCallback((e: React.KeyboardEvent) => {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
@@ -593,19 +604,6 @@ function RevealBand({ reveal }: { reveal: OpenReveal }) {
           )}
         </ErrorBoundary>
         </RevealInBandCtx.Provider>
-      </div>
-      <div
-        className="object-reveal__foot"
-        onClick={requestClose}
-        onKeyDown={closeKeys}
-        role="button"
-        tabIndex={0}
-        aria-label="Close"
-        title="Close (Esc)"
-      >
-        <X className="h-3.5 w-3.5" />
-        <span>Close</span>
-        <KeyCap size="xs">esc</KeyCap>
       </div>
       </div>
       {/* The grip is only a grip: the rounded bar under the frame, in the

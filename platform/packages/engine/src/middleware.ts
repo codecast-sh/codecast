@@ -1,12 +1,14 @@
 import { create as mutativeCreate, type Patch } from "mutative";
 import { deriveRegistryMaps, type RegistryMaps } from "./registry";
 import type {
+  ActionFieldLock,
   DispatchFn,
   IDBWriteFn,
   OutboxEnqueueFn,
   OutboxEntry,
   OutboxLoadFn,
   OutboxRemoveFn,
+  PendingEntry,
   PlatformConfig,
 } from "./types";
 
@@ -477,6 +479,74 @@ async function dispatchWithRetry(
   }
 }
 
+const sameValue = (a: unknown, b: unknown) =>
+  a === b || (typeof a === "object" && a !== null && JSON.stringify(a) === JSON.stringify(b));
+
+/**
+ * The field locks one action planted: every field entry in `nextPending` that
+ * is new or replaced, with the row value and lock it displaced. Kept with the
+ * dispatch so a permanent refusal can undo exactly this action.
+ */
+export function collectActionFieldLocks(
+  prevPending: Record<string, PendingEntry>,
+  nextPending: Record<string, PendingEntry>,
+  prevState: Record<string, any>,
+): ActionFieldLock[] {
+  const locks: ActionFieldLock[] = [];
+  for (const [key, entry] of Object.entries(nextPending)) {
+    if (entry?.type !== "field" || prevPending[key] === entry) continue;
+    // table:id:field, where the id may itself carry colons.
+    const first = key.indexOf(":");
+    const last = key.lastIndexOf(":");
+    if (first === -1 || last <= first) continue;
+    const storeKey = key.slice(0, first);
+    const recordId = key.slice(first + 1, last);
+    const field = key.slice(last + 1);
+    const row = prevState[storeKey]?.[recordId];
+    locks.push({
+      key, storeKey, recordId, field,
+      ts: entry.ts,
+      value: entry.value,
+      prior: row?.[field],
+      hadPrior: !!row && field in row,
+      ...(prevPending[key] ? { priorLock: prevPending[key] } : {}),
+    });
+  }
+  return locks;
+}
+
+/**
+ * Undo a refused action's field locks. A lock a later write has replaced is
+ * left alone (that write owns the field now); otherwise the lock goes (or the
+ * one it displaced comes back) and the row gets its prior value, so the
+ * control stops asserting a value the server refused and the next push is
+ * free to land. Returns the next pending map and the rows it rewrote, or null
+ * when nothing was still this action's.
+ */
+export function releaseActionFieldLocks(
+  state: Record<string, any>,
+  locks: ActionFieldLock[],
+): { pending: Record<string, PendingEntry>; rows: Array<{ storeKey: string; recordId: string; row: any }> } | null {
+  const current = (state.pending ?? {}) as Record<string, PendingEntry>;
+  let pending: Record<string, PendingEntry> | null = null;
+  const rows = new Map<string, { storeKey: string; recordId: string; row: any }>();
+  for (const lock of locks) {
+    const entry = current[lock.key];
+    if (entry?.type !== "field" || entry.ts !== lock.ts || !sameValue(entry.value, lock.value)) continue;
+    if (!pending) pending = { ...current };
+    if (lock.priorLock) pending[lock.key] = lock.priorLock;
+    else delete pending[lock.key];
+    const rowKey = `${lock.storeKey}\u0000${lock.recordId}`;
+    const base = rows.get(rowKey)?.row ?? state[lock.storeKey]?.[lock.recordId];
+    if (!base || !sameValue(base[lock.field], lock.value)) continue;
+    const row = { ...base };
+    if (lock.hadPrior) row[lock.field] = lock.prior;
+    else delete row[lock.field];
+    rows.set(rowKey, { storeKey: lock.storeKey, recordId: lock.recordId, row });
+  }
+  return pending ? { pending, rows: [...rows.values()] } : null;
+}
+
 /**
  * Scan mutative patches from an action() and auto-generate pending entries
  * for synced collections. Returns null if no pending changes needed.
@@ -664,6 +734,27 @@ export function mutativeMiddleware(
       if (!waiter) return;
       receiptWaiters.delete(entryId);
       waiter.resolve(value);
+    };
+
+    // A plain action the server refused for good: undo its field locks (and
+    // the row values they painted) unless a later write owns the field now.
+    const releaseRefusedLocks = (actionName: string, locks: ActionFieldLock[]) => {
+      if (locks.length === 0) return;
+      const state = get();
+      const released = releaseActionFieldLocks(state, locks);
+      if (!released) return;
+      const next: Record<string, any> = { pending: released.pending };
+      const patches: Patch[] = [{ op: "replace", path: ["pending"], value: released.pending }];
+      for (const { storeKey, recordId, row } of released.rows) {
+        next[storeKey] = { ...(next[storeKey] ?? state[storeKey]), [recordId]: row };
+        patches.push({ op: "replace", path: [storeKey, recordId], value: row });
+      }
+      set({ ...state, ...next }, true);
+      if (idbWriteFn) {
+        void Promise.resolve(idbWriteFn(patches, get())).catch((error) => {
+          console.error(`[local-first] failed to persist refused "${actionName}" rollback`, error);
+        });
+      }
     };
 
     const rejectReceiptWaiter = (entryId: string, error: unknown) => {
@@ -989,6 +1080,7 @@ export function mutativeMiddleware(
             // Legacy non-receipt actions still treat a permanent refusal as
             // delivery. Re-driving those forever can only repeat the refusal.
             if (isPermanentDispatchError(e)) {
+              releaseRefusedLocks(entry.action, entry.locks ?? []);
               rejectReceiptWaiter(entry.id, e);
               await capturedRemove?.(entry.id);
               continue;
@@ -1053,6 +1145,7 @@ export function mutativeMiddleware(
         // writes are protected from server sync overwrites.
         let finalState = nextState;
         let finalPatches: Patch[] = patches;
+        let fieldLocks: ActionFieldLock[] = [];
         if (isAct || isAsyncAct) {
           const newPending = generateAutoPending(
             patches,
@@ -1062,6 +1155,7 @@ export function mutativeMiddleware(
             maps.isUnprotectedField,
           );
           if (newPending) {
+            fieldLocks = collectActionFieldLocks(state.pending ?? {}, newPending, state);
             finalState = { ...nextState, pending: newPending };
             // Synthetic patch so IDB persists the updated pending
             finalPatches = [...patches, { op: "replace" as const, path: ["pending"] as (string | number)[], value: newPending }];
@@ -1133,6 +1227,7 @@ export function mutativeMiddleware(
             // delete, fork → send) are queued in the same millisecond.
             ts: nextOutboxTimestamp(),
             ...(coalesceKey ? { coalesceKey } : {}),
+            ...(fieldLocks.length > 0 ? { locks: fieldLocks } : {}),
           };
           const capturedDispatch = dispatchBinding;
           const capturedError = dispatchErrorFn;
@@ -1258,8 +1353,11 @@ export function mutativeMiddleware(
               if (e instanceof StaleDispatchBindingError) throw e;
               assertDispatchCurrent(capturedDispatch);
               // Permanent rejection: the server answered and said no — remove
-              // the parked copy so the drain loops don't re-litigate it forever.
+              // the parked copy so the drain loops don't re-litigate it forever,
+              // and lift the locks it planted so the refused value stops
+              // standing over the server's.
               if (isPermanentDispatchError(e)) {
+                releaseRefusedLocks(key, fieldLocks);
                 await retireOutboxEntry(outboxId, enqueued);
                 void drainOutbox(false);
               }

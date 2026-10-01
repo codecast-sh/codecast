@@ -547,6 +547,52 @@ describe("outbox", () => {
   });
 });
 
+describe("a permanent refusal lifts the refused action's locks", () => {
+  it("puts the prior value back and lets the next push land (live dispatch)", async () => {
+    const h = makeHarness();
+    h.wireDispatch(async () => ({}));
+    h.wrapped.seedRow(SERVER_ID, { title: "server" });
+    await waitFor(() => h.outbox.size === 0);
+    h.wireDispatch(async () => { throw new Error("Uncaught Error: not yours"); });
+    h.wrapped.rename(SERVER_ID, "refused");
+    expect(h.state.items[SERVER_ID].title).toBe("refused");
+    await waitFor(() => h.state.pending[`items:${SERVER_ID}:title`] === undefined);
+    expect(h.state.items[SERVER_ID].title).toBe("server");
+  });
+
+  it("leaves a field a later write owns", async () => {
+    const h = makeHarness();
+    h.wireDispatch(async () => ({}));
+    h.wrapped.seedRow(SERVER_ID, { title: "server" });
+    await waitFor(() => h.outbox.size === 0);
+    let refuse!: (e: Error) => void;
+    h.wireDispatch((a) => a === "rename" && !refuse
+      ? new Promise((_, reject) => { refuse = reject; })
+      : Promise.resolve({}));
+    h.wrapped.rename(SERVER_ID, "first");
+    await waitFor(() => !!refuse);
+    h.wrapped.rename(SERVER_ID, "second");
+    refuse(new Error("Uncaught Error: no"));
+    await sleep(10);
+    expect(h.state.items[SERVER_ID].title).toBe("second");
+    expect(h.state.pending[`items:${SERVER_ID}:title`]).toMatchObject({ value: "second" });
+  });
+
+  it("lifts the locks of a parked row the server refuses on replay", async () => {
+    const h = makeHarness();
+    h.wrapped.seedRow(SERVER_ID, { title: "server" });
+    h.wrapped.rename(SERVER_ID, "parked");
+    expect(h.state.pending[`items:${SERVER_ID}:title`]).toBeDefined();
+    h.wireDispatch(async (a) => {
+      if (a === "rename") throw new Error("Uncaught Error: no");
+      return {};
+    });
+    await waitFor(() => h.outbox.size === 0);
+    expect(h.state.pending[`items:${SERVER_ID}:title`]).toBeUndefined();
+    expect(h.state.items[SERVER_ID].title).toBe("server");
+  });
+});
+
 describe("dispatch error classification", () => {
   it("treats a thrown backend function or bad args as permanent", () => {
     expect(isPermanentDispatchError(new Error("Uncaught Error: boom"))).toBe(true);

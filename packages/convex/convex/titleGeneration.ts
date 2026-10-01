@@ -5,6 +5,7 @@ import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import { isRefusalProse } from "./idleSummary";
 import { isToolResultCarrier } from "@codecast/shared/contracts";
+import { callModel, CHEAP_MODEL, type SurfaceRequest } from "./lib/anthropic";
 
 // Floor between generateTitle schedulings for one conversation. The
 // no-subtitle fallback fires on every sync batch of an untitled conversation;
@@ -72,8 +73,7 @@ export const generateTitle = internalAction({
     conversation_id: v.id("conversations"),
   },
   handler: async (ctx, args) => {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
+    if (!process.env.ANTHROPIC_API_KEY) {
       console.error("ANTHROPIC_API_KEY not configured");
       return;
     }
@@ -86,41 +86,10 @@ export const generateTitle = internalAction({
       return;
     }
 
-    const messageText = buildTitleMessageContext(conversation.spine, conversation.recent);
-
-    const prompt = buildTitlePrompt({
-      messageText,
-      currentTitle: conversation.currentTitle,
-      messageCount: conversation.messageCount,
-    });
-
     try {
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 400,
-          // Deterministic: the same conversation state must yield the same
-          // title, otherwise every regeneration re-rolls borderline keeps.
-          temperature: 0,
-          messages: [{ role: "user", content: prompt }],
-        }),
-      });
-
-      if (!response.ok) {
-        console.error("Haiku API error:", response.status, await response.text());
-        return;
-      }
-
-      const data = await response.json();
-      const text = data.content?.[0]?.text?.trim();
-
-      if (!text) return;
+      const reply = await callModel({ ...titleRequest(conversation), label: "Title generation" });
+      if (!reply) return;
+      const text = reply.text;
 
       const parsed = extractTitleJson(text);
       const title = parsed?.title?.trim();
@@ -165,27 +134,16 @@ const shortTitleTarget = v.union(v.id("conversations"), v.id("tasks"), v.id("pla
 export const generateShortTitle = internalAction({
   args: { id: shortTitleTarget },
   handler: async (ctx, args) => {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) return;
+    if (!process.env.ANTHROPIC_API_KEY) return;
     const row = await ctx.runQuery(internal.titleGeneration.getRowForShortTitle, { id: args.id });
     if (!row?.title) return;
     try {
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-        body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 60,
-          temperature: 0,
-          messages: [{ role: "user", content: buildShortTitlePrompt(row.kind, row.title, row.context) }],
-        }),
+      const reply = await callModel({
+        ...shortTitleRequest({ kind: row.kind, title: row.title, context: row.context }),
+        label: "Short title generation",
       });
-      if (!response.ok) {
-        console.error("Haiku API error (short title):", response.status, await response.text());
-        return;
-      }
-      const data = await response.json();
-      const shortTitle = cleanShortTitle(extractTitleJson(data.content?.[0]?.text?.trim() ?? "")?.short_title);
+      if (!reply) return;
+      const shortTitle = cleanShortTitle(extractTitleJson(reply.text)?.short_title);
       if (!shortTitle) return;
       await ctx.runMutation(internal.titleGeneration.setShortTitle, { id: args.id, short_title: shortTitle });
     } catch (error) {
@@ -220,6 +178,16 @@ export const setShortTitle = internalMutation({
     await ctx.db.patch(args.id as any, { short_title: args.short_title });
   },
 });
+
+/** The name-only request: one task, plan or session title in, a short name out. */
+export function shortTitleRequest(input: { kind: "session" | "task" | "plan"; title: string; context?: string }): SurfaceRequest {
+  return {
+    model: CHEAP_MODEL,
+    max_tokens: 60,
+    temperature: 0,
+    prompt: buildShortTitlePrompt(input.kind, input.title, input.context),
+  };
+}
 
 export function buildShortTitlePrompt(kind: "session" | "task" | "plan", title: string, context?: string): string {
   const noun = kind === "session" ? "work session" : kind;
@@ -359,6 +327,103 @@ export function isLowSignalPrompt(content: string): boolean {
   );
 }
 
+// The fields of a message row the title selector reads. A database row fits,
+// and so does a row an eval rebuilt from `/cli/read`.
+export type TitleRow = {
+  _id: string;
+  role: string;
+  content?: string;
+  tool_results?: readonly unknown[] | null;
+  timestamp: number;
+};
+
+/** What the title request is built from: the spine, the recent window and the anchor. */
+export type TitleInput = {
+  spine: Array<{ role: string; content?: string }>;
+  recent: Array<{ role: string; content?: string }>;
+  currentTitle?: string;
+  messageCount: number;
+};
+
+// The [t0, t1) time buckets the spine samples across. Empty when the prompts
+// span no time, so a session whose prompts share one timestamp reads only the
+// opening and trailing windows.
+export function spineBucketBounds(lo: number, hi: number): Array<[number, number]> {
+  if (!(hi > lo)) return [];
+  const span = hi + 1 - lo;
+  return Array.from({ length: SPINE_BUCKETS }, (_, k) => [
+    lo + (span * k) / SPINE_BUCKETS,
+    lo + (span * (k + 1)) / SPINE_BUCKETS,
+  ]);
+}
+
+// The spine reads over an in-memory transcript: the same three views the
+// query below takes from its index (opening prompts, trailing prompts, a few
+// per time bucket), in the same order, for a caller that holds the rows
+// instead of a database. `rows` is the whole transcript, oldest first.
+export function pickSpineRows<R extends TitleRow>(rows: R[]): R[] {
+  const prompts = rows
+    .filter((m) => m.role === "user" && m.tool_results == null && m.content != null)
+    .sort((a, b) => a.timestamp - b.timestamp);
+  const firstPrompts = prompts.slice(0, SPINE_END_FETCH);
+  const lastPrompts = [...prompts].reverse().slice(0, SPINE_END_FETCH);
+  const lo = firstPrompts[0]?.timestamp;
+  const hi = lastPrompts[0]?.timestamp;
+  const buckets = lo !== undefined && hi !== undefined
+    ? spineBucketBounds(lo, hi).map(([t0, t1]) =>
+        prompts.filter((m) => m.timestamp >= t0 && m.timestamp < t1).slice(0, SPINE_PER_BUCKET))
+    : [];
+  return [...firstPrompts, ...lastPrompts, ...buckets.flat()];
+}
+
+// What the title model sees, from the rows the query read: `spine` is every
+// prompt row the spine reads returned (duplicates allowed), `latest` the
+// newest 20 rows of any role, newest first.
+export function selectTitleInput(
+  rows: { spine: TitleRow[]; latest: TitleRow[] },
+  conversation: { title?: string; subtitle?: string; title_is_custom?: boolean; message_count?: number },
+): TitleInput {
+  const isHumanText = (m: TitleRow) => !!m.content && !isToolResultCarrier(m);
+
+  const seenSpine = new Set<string>();
+  const orderedSpine = rows.spine
+    .filter((m) => {
+      if (seenSpine.has(m._id)) return false;
+      seenSpine.add(m._id);
+      return true;
+    })
+    .sort((a, b) => a.timestamp - b.timestamp);
+
+  // Recent window: the last few exchanges (any role) so the subtitle can
+  // describe what is happening right now.
+  const recent = [...rows.latest]
+    .reverse()
+    .filter(
+      (m) =>
+        (m.role === "user" || m.role === "assistant") &&
+        isHumanText(m) &&
+        !isLowSignalPrompt(m.content!)
+    );
+
+  const recentIds = new Set(recent.map((m) => m._id));
+  const spine = orderedSpine.filter(
+    (m) => isHumanText(m) && !isLowSignalPrompt(m.content!) && !recentIds.has(m._id)
+  );
+
+  // Anchor on the existing title only when it came from a previous LLM pass
+  // (which always writes a subtitle). Daemon-created placeholder titles have
+  // no subtitle and must not be kept verbatim; custom titles are never
+  // overwritten, so anchoring on them is pointless.
+  const llmTitled = !conversation.title_is_custom && !!conversation.subtitle;
+
+  return {
+    spine: spine.map((m) => ({ role: m.role, content: m.content })),
+    recent: recent.map((m) => ({ role: m.role, content: m.content })),
+    currentTitle: llmTitled ? conversation.title : undefined,
+    messageCount: conversation.message_count ?? 0,
+  };
+}
+
 export const getConversationForTitle = internalQuery({
   args: {
     conversation_id: v.id("conversations"),
@@ -366,9 +431,6 @@ export const getConversationForTitle = internalQuery({
   handler: async (ctx, args) => {
     const conversation = await ctx.db.get(args.conversation_id);
     if (!conversation) return null;
-
-    const isHumanText = (m: { role: string; content?: string | null; tool_results?: unknown[] | null }) =>
-      !!m.content && !isToolResultCarrier(m);
 
     const userPrompts = (dir: "asc" | "desc") =>
       ctx.db
@@ -387,14 +449,14 @@ export const getConversationForTitle = internalQuery({
     // Prompts cluster in time, so buckets alone under-sample dense stretches.
     // Union three views: the opening prompts (where the user states the goal),
     // time buckets across the span (the arc), and the trailing prompts (where
-    // the work is now). Dedupe and re-sort chronologically.
+    // the work is now). selectTitleInput dedupes and re-sorts chronologically.
     const firstPrompts = await userPrompts("asc").take(SPINE_END_FETCH);
     const lastPrompts = await userPrompts("desc").take(SPINE_END_FETCH);
 
     const spineRows: Doc<"messages">[] = [...firstPrompts, ...lastPrompts];
     const lo = firstPrompts[0]?.timestamp;
     const hi = lastPrompts[0]?.timestamp;
-    if (lo !== undefined && hi !== undefined && hi > lo) {
+    if (lo !== undefined && hi !== undefined) {
       const promptsInRange = (t0: number, t1: number) =>
         ctx.db
           .query("messages")
@@ -413,26 +475,10 @@ export const getConversationForTitle = internalQuery({
           )
           .take(SPINE_PER_BUCKET);
 
-      const span = hi + 1 - lo;
-      const bucketRows = await Promise.all(
-        Array.from({ length: SPINE_BUCKETS }, (_, k) =>
-          promptsInRange(lo + (span * k) / SPINE_BUCKETS, lo + (span * (k + 1)) / SPINE_BUCKETS)
-        )
-      );
+      const bucketRows = await Promise.all(spineBucketBounds(lo, hi).map(([t0, t1]) => promptsInRange(t0, t1)));
       spineRows.push(...bucketRows.flat());
     }
 
-    const seenSpine = new Set<string>();
-    const orderedSpine = spineRows
-      .filter((m) => {
-        if (seenSpine.has(m._id)) return false;
-        seenSpine.add(m._id);
-        return true;
-      })
-      .sort((a, b) => a.timestamp - b.timestamp);
-
-    // Recent window: the last few exchanges (any role) so the subtitle can
-    // describe what is happening right now.
     const latest = await ctx.db
       .query("messages")
       .withIndex("by_conversation_id", (q) =>
@@ -441,32 +487,7 @@ export const getConversationForTitle = internalQuery({
       .order("desc")
       .take(20);
 
-    const recent = latest
-      .reverse()
-      .filter(
-        (m) =>
-          (m.role === "user" || m.role === "assistant") &&
-          isHumanText(m) &&
-          !isLowSignalPrompt(m.content!)
-      );
-
-    const recentIds = new Set(recent.map((m) => m._id));
-    const spine = orderedSpine.filter(
-      (m) => isHumanText(m) && !isLowSignalPrompt(m.content!) && !recentIds.has(m._id)
-    );
-
-    // Anchor on the existing title only when it came from a previous LLM pass
-    // (which always writes a subtitle). Daemon-created placeholder titles have
-    // no subtitle and must not be kept verbatim; custom titles are never
-    // overwritten, so anchoring on them is pointless.
-    const llmTitled = !conversation.title_is_custom && !!conversation.subtitle;
-
-    return {
-      spine: spine.map((m) => ({ role: m.role, content: m.content })),
-      recent: recent.map((m) => ({ role: m.role, content: m.content })),
-      currentTitle: llmTitled ? conversation.title : undefined,
-      messageCount: conversation.message_count ?? 0,
-    };
+    return selectTitleInput({ spine: spineRows, latest }, conversation);
   },
 });
 
@@ -478,6 +499,22 @@ const SPINE_MAX = 20;
 const SPINE_CHARS = 250;
 const RECENT_MAX = 4;
 const RECENT_CHARS = 350;
+
+/** The title request prod posts for a selected input. */
+export function titleRequest(input: TitleInput): SurfaceRequest {
+  return {
+    model: CHEAP_MODEL,
+    max_tokens: 400,
+    // Deterministic: the same conversation state must yield the same
+    // title, otherwise every regeneration re-rolls borderline keeps.
+    temperature: 0,
+    prompt: buildTitlePrompt({
+      messageText: buildTitleMessageContext(input.spine, input.recent),
+      currentTitle: input.currentTitle,
+      messageCount: input.messageCount,
+    }),
+  };
+}
 
 export function buildTitlePrompt(input: {
   messageText: string;

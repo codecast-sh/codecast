@@ -1,18 +1,27 @@
 import { createContext, useContext, useState, useCallback, useRef, useMemo } from "react";
-import { Link2, LocateFixed } from "lucide-react";
+import { Link2, LocateFixed, MessageSquarePlus, X } from "lucide-react";
 import { toast } from "sonner";
 import { useEventListener } from "../hooks/useEventListener";
 import { createPortal } from "react-dom";
 import { copyToClipboard } from "../lib/utils";
+import { useInboxStore } from "../store/inboxStore";
+import { addImagePin } from "../lib/reviewActions";
+import type { PendingComment } from "../lib/quoteFormat";
+import { KeyCap } from "./KeyboardShortcutsHelp";
+import { CommentEditor } from "./MessageReview";
+import { useCurrentUser } from "../hooks/useCurrentUser";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { usePanZoom } from "../hooks/usePanZoom";
 
 // One image the lightbox can show. `src` is whatever paints (may be a blob: or
 // data: URL from the byte cache); `href` is the shareable address of the same
 // bytes (the storage URL or the remote markdown URL) — absent when there is
 // none, e.g. an inline base64 image. `messageId` is the transcript message the
-// image came from, when the registrar knows it.
-export type GalleryImage = { src: string; href?: string; messageId?: string };
+// image came from, when the registrar knows it. `storageId` names the stored
+// bytes (so a quote can attach the picture itself) and `timestamp` when it
+// landed, both when known.
+export type GalleryImage = { src: string; href?: string; messageId?: string; storageId?: string; timestamp?: number };
 
 type ImageGalleryContextType = {
   register: (image: GalleryImage) => void;
@@ -46,12 +55,15 @@ export function useGalleryMessageId() {
 // Minimal standalone viewer for one image outside any provider (inbox row
 // thumbnails): same dark overlay as the gallery, click or Esc to close.
 export function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
+  const zoom = usePanZoom(src);
   useEventListener("keydown", useCallback((e: KeyboardEvent) => {
     if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onClose(); }
-  }, [onClose]), document);
+    else if (e.key === "0") { e.preventDefault(); e.stopPropagation(); zoom.reset(); }
+  }, [onClose, zoom.reset]), document);
   return createPortal(
     <div
-      className="fixed inset-0 z-[10001] flex items-center justify-center"
+      ref={zoom.surfaceRef}
+      className="fixed inset-0 z-[10001] flex items-center justify-center overflow-hidden"
       style={{ backgroundColor: "rgba(0,0,0,0.92)" }}
       onClick={e => { e.stopPropagation(); onClose(); }}
     >
@@ -69,9 +81,24 @@ export function ImageLightbox({ src, onClose }: { src: string; onClose: () => vo
         alt="Image preview"
         className="max-w-[90vw] max-h-[90vh] object-contain rounded"
         onClick={e => e.stopPropagation()}
+        {...zoom.imageProps}
       />
+      <ZoomBadge scale={zoom.scale} />
     </div>,
     document.body
+  );
+}
+
+// Zoom level while zoomed in, with the way back. Hidden at 100%: the gesture
+// is discoverable from the trackpad, and an idle viewer stays quiet.
+function ZoomBadge({ scale }: { scale: number }) {
+  if (scale <= 1) return null;
+  return (
+    <div className="pointer-events-none absolute bottom-16 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 rounded bg-black/70 px-2 py-1 text-[11px] font-mono tabular-nums text-white/60">
+      {Math.round(scale * 100)}%
+      <span className="text-white/30">·</span>
+      <KeyCap size="xs">0</KeyCap> reset
+    </div>
   );
 }
 
@@ -87,9 +114,12 @@ const ACTION_CLASS = "inline-flex h-10 w-10 items-center justify-center rounded 
 type Registry = { conversationId: string | undefined; bySrc: Map<string, GalleryImage>; order: GalleryImage[] };
 const emptyRegistry = (conversationId: string | undefined): Registry => ({ conversationId, bySrc: new Map(), order: [] });
 
-export function ImageGalleryProvider({ conversationId, onJumpToMessage, children }: {
+export function ImageGalleryProvider({ conversationId, onJumpToMessage, quotable = false, children }: {
   // Scopes the mount registry to one conversation.
   conversationId?: string;
+  // The viewer can reply here: clicking a point of an image pins a note there,
+  // into the conversation's quote batch, the same one paragraph quotes build up.
+  quotable?: boolean;
   // Scroll the transcript to a message (the host's own path, which can expand
   // a collapsed group and highlight the row). Called after the lightbox closes.
   onJumpToMessage?: (messageId: string) => void;
@@ -123,7 +153,7 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, children
     if (!existing) {
       r.bySrc.set(image.src, image);
       r.order.push(image);
-    } else if ((image.href && !existing.href) || (image.messageId && !existing.messageId)) {
+    } else if ((image.href && !existing.href) || (image.messageId && !existing.messageId) || (image.storageId && !existing.storageId)) {
       // A later registrar knows more (e.g. the storage URL resolved): fold it in.
       const merged = { ...existing, ...image };
       r.bySrc.set(image.src, merged);
@@ -148,6 +178,11 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, children
   const close = useCallback(() => {
     setCurrentIndex(-1);
     setOverrideList(null);
+    // A pin's note editor lives in the lightbox; don't leave it "open" behind.
+    const s = useInboxStore.getState();
+    if (conversationIdRef.current && s.reviewComments[conversationIdRef.current]?.some((c) => c.id === s.reviewEditingId && c.image)) {
+      s.setReviewEditingId(null);
+    }
   }, []);
 
   // A lightbox open over one conversation must not survive a switch to another.
@@ -161,11 +196,35 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, children
     setCurrentIndex(i => (i > 0 ? i - 1 : i));
   }, []);
 
+  // Notes pinned to points of the gallery's images, from the quote batch. A
+  // signature of the pin fields keeps the lightbox from re-rendering on every
+  // unrelated batch write.
+  const canPin = quotable && !!conversationId;
+  const pinsSig = useInboxStore((s) => {
+    if (!canPin) return "";
+    return JSON.stringify((s.reviewComments[conversationId!] ?? []).filter((c) => c.image?.point).map((c) => [c.id, c.image!.src, c.image!.point, c.body]));
+  });
+  const pinsBySrc = useMemo(() => {
+    const by = new Map<string, PendingComment[]>();
+    if (!pinsSig) return by;
+    for (const c of useInboxStore.getState().reviewComments[conversationId!] ?? []) {
+      if (!c.image?.point) continue;
+      by.set(c.image.src, [...(by.get(c.image.src) ?? []), c]);
+    }
+    return by;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pinsSig]);
+  const pinCount = useMemo(() => [...pinsBySrc.values()].reduce((n, l) => n + l.length, 0), [pinsBySrc]);
+  const editingId = useInboxStore((s) => s.reviewEditingId);
+  const { user: author } = useCurrentUser();
+  const zoom = usePanZoom(isOpen ? listRef.current[currentIndex]?.src : null);
+
   useEventListener("keydown", useCallback((e: KeyboardEvent) => {
     if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); }
     else if (e.key === "ArrowRight") { e.preventDefault(); e.stopPropagation(); goNext(); }
     else if (e.key === "ArrowLeft") { e.preventDefault(); e.stopPropagation(); goPrev(); }
-  }, [close, goNext, goPrev]), isOpen ? document : null);
+    else if (e.key === "0") { e.preventDefault(); e.stopPropagation(); zoom.reset(); }
+  }, [close, goNext, goPrev, zoom.reset]), isOpen ? document : null);
 
   const ctx = useMemo(() => ({ register, open, openList }), [register, open, openList]);
 
@@ -176,6 +235,7 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, children
   }, [isOpen, currentIndex]);
 
   const current = isOpen ? list[currentIndex] : null;
+  const currentPins = current ? pinsBySrc.get(current.src) ?? [] : [];
   const currentSrc = current?.src ?? null;
   const hasPrev = currentIndex > 0;
   const hasNext = currentIndex < list.length - 1;
@@ -189,6 +249,21 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, children
     onJumpToMessage?.(messageId);
   }, [close, onJumpToMessage]);
 
+  // A click on the picture pins a note at that point. The point is measured
+  // against the picture's on-screen box, which already includes any zoom, and
+  // kept as fractions so it maps onto the file the agent receives.
+  const pinAt = useCallback((e: React.MouseEvent<HTMLImageElement>) => {
+    if (!canPin || !current) return;
+    const img = e.currentTarget;
+    const rect = img.getBoundingClientRect();
+    const clamp = (v: number) => Math.min(1, Math.max(0, v));
+    addImagePin(
+      conversationId!,
+      { ...current, width: img.naturalWidth || undefined, height: img.naturalHeight || undefined },
+      { x: clamp((e.clientX - rect.left) / rect.width), y: clamp((e.clientY - rect.top) / rect.height) },
+    );
+  }, [canPin, current, conversationId]);
+
   return (
     <ImageGalleryContext.Provider value={ctx}>
       {children}
@@ -197,7 +272,8 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, children
           role="dialog"
           aria-modal="true"
           aria-label="Image gallery"
-          className="fixed inset-0 z-[10001] flex items-center justify-center"
+          ref={zoom.surfaceRef}
+          className="fixed inset-0 z-[10001] flex items-center justify-center overflow-hidden"
           style={{ backgroundColor: "rgba(0,0,0,0.92)" }}
           onClick={close}
         >
@@ -237,16 +313,17 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, children
             </button>
           </div>
 
-          {count > 1 && (
-            <div className="absolute top-4 left-1/2 -translate-x-1/2 text-white/40 text-xs font-mono tabular-nums">
-              {currentIndex + 1} / {count}
+          {(count > 1 || pinCount > 0) && (
+            <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3 text-white/40 text-xs font-mono tabular-nums">
+              {count > 1 && <span>{currentIndex + 1} / {count}</span>}
+              {pinCount > 0 && <span className="text-sol-yellow/80">{pinCount} {pinCount === 1 ? "note" : "notes"} on your next message</span>}
             </div>
           )}
 
           {hasPrev && (
             <button
               onClick={e => { e.stopPropagation(); goPrev(); }}
-              className="absolute left-3 top-1/2 -translate-y-1/2 text-white/20 hover:text-white/70 p-2 transition-colors"
+              className="absolute left-3 top-1/2 -translate-y-1/2 z-10 text-white/20 hover:text-white/70 p-2 transition-colors"
               title="Previous"
             >
               <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -258,7 +335,7 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, children
           {hasNext && (
             <button
               onClick={e => { e.stopPropagation(); goNext(); }}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-white/20 hover:text-white/70 p-2 transition-colors"
+              className="absolute right-3 top-1/2 -translate-y-1/2 z-10 text-white/20 hover:text-white/70 p-2 transition-colors"
               title="Next"
             >
               <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -267,16 +344,44 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, children
             </button>
           )}
 
-          <img
-            src={currentSrc}
-            alt="Gallery image"
-            className={`max-w-[90vw] object-contain rounded ${count > 1 ? "max-h-[82vh]" : "max-h-[90vh]"}`}
-            onClick={e => e.stopPropagation()}
-          />
+          {/* Clicking a point of the picture pins a note there. The zoom
+              transform sits on the box around the picture so the pins ride
+              along with it; each pin undoes the scale to keep its size. */}
+          <div className="relative flex flex-col items-center" onClick={e => e.stopPropagation()}>
+            <div className="relative" {...zoom.imageProps}>
+              <img
+                src={currentSrc}
+                alt="Gallery image"
+                draggable={false}
+                className={`block max-w-[90vw] object-contain rounded ${count > 1 ? "max-h-[78vh]" : "max-h-[86vh]"} ${
+                  canPin && !zoom.zoomed ? "cursor-crosshair" : ""}`}
+                onClick={pinAt}
+              />
+              {currentPins.map((c, i) => (
+                <ImagePin
+                  key={c.id}
+                  conversationId={conversationId!}
+                  comment={c}
+                  number={i + 1}
+                  scale={zoom.scale}
+                  editing={editingId === c.id}
+                  author={author}
+                />
+              ))}
+            </div>
+            {canPin && !zoom.zoomed && (
+              <div className="mt-2 flex items-center gap-1.5 text-[11px] font-mono text-white/35">
+                <MessageSquarePlus className="h-3 w-3" strokeWidth={2} />
+                click anywhere on the image to pin a note for the agent
+              </div>
+            )}
+          </div>
+
+          <ZoomBadge scale={zoom.scale} />
 
           {count > 1 && (
             <div
-              className="absolute bottom-3 left-1/2 -translate-x-1/2 max-w-[92vw] overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+              className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 max-w-[92vw] overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
               onClick={e => e.stopPropagation()}
             >
               <div className="flex items-center gap-1.5 px-1.5 py-1.5">
@@ -285,14 +390,19 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, children
                     key={src}
                     ref={i === currentIndex ? activeThumbRef : undefined}
                     onClick={() => setCurrentIndex(i)}
-                    className={`shrink-0 rounded-md overflow-hidden transition-all duration-150 ${
+                    className={`relative shrink-0 rounded-md overflow-hidden transition-all duration-150 ${
                       i === currentIndex
                         ? "ring-1 ring-white/80 opacity-100"
-                        : "opacity-40 hover:opacity-75"
+                        : pinsBySrc.has(src) ? "ring-1 ring-sol-yellow/70 opacity-80 hover:opacity-100" : "opacity-40 hover:opacity-75"
                     }`}
-                    title={`Image ${i + 1}`}
+                    title={pinsBySrc.has(src) ? `Image ${i + 1} (${pinsBySrc.get(src)!.length} notes)` : `Image ${i + 1}`}
                   >
                     <img src={src} alt="" className="h-9 w-9 object-cover" draggable={false} />
+                    {pinsBySrc.has(src) && (
+                      <span className="absolute bottom-0 right-0 flex h-3.5 min-w-3.5 items-center justify-center rounded-tl bg-sol-yellow px-0.5 text-[9px] font-bold leading-none text-black">
+                        {pinsBySrc.get(src)!.length}
+                      </span>
+                    )}
                   </button>
                 ))}
               </div>
@@ -302,5 +412,68 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, children
         document.body
       )}
     </ImageGalleryContext.Provider>
+  );
+}
+
+// One note pinned to a point of the picture: a numbered dot, and the note
+// editor beside it while it is being written. Clicking the dot reopens the
+// note; the editor's corner button takes the pin away. The editor opens
+// toward the middle of the picture so it stays on screen near any edge.
+function ImagePin({ conversationId, comment, number, scale, editing, author }: {
+  conversationId: string;
+  comment: PendingComment;
+  number: number;
+  scale: number;
+  editing: boolean;
+  author: unknown;
+}) {
+  const { x, y } = comment.image!.point!;
+  const store = useInboxStore.getState;
+  return (
+    <div
+      className="absolute z-10"
+      style={{ left: `${x * 100}%`, top: `${y * 100}%`, transform: `scale(${1 / scale})`, transformOrigin: "0 0" }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <button
+        type="button"
+        className={`absolute -left-3 -top-3 flex h-6 w-6 items-center justify-center rounded-full border-2 bg-sol-yellow text-[11px] font-bold text-black shadow-[0_0_0_2px_rgba(0,0,0,0.45)] transition-transform hover:scale-110 ${
+          editing ? "border-white" : "border-black/60"}`}
+        title={comment.body || "Pinned note (click to edit)"}
+        aria-label={`Note ${number}${comment.body ? `: ${comment.body}` : ""}`}
+        onClick={() => store().setReviewEditingId(editing ? null : comment.id)}
+      >
+        {number}
+      </button>
+      {!editing && comment.body && (
+        <div className="pointer-events-none absolute left-4 -top-2.5 max-w-[16rem] truncate rounded bg-black/75 px-1.5 py-0.5 text-[11px] text-white/85">
+          {comment.body}
+        </div>
+      )}
+      {editing && (
+        <div
+          className="absolute w-72 rounded-md border border-sol-border bg-sol-bg p-2 shadow-xl"
+          style={{
+            ...(x > 0.6 ? { right: "1rem" } : { left: "1rem" }),
+            ...(y > 0.6 ? { bottom: "0.5rem" } : { top: "-0.5rem" }),
+          }}
+        >
+          <div className="mb-1 flex items-center justify-between text-[10px] font-mono text-sol-text-dim">
+            <span>Note {number} on this point</span>
+            <button
+              type="button"
+              className="rounded p-0.5 hover:text-sol-red"
+              title="Remove this pin"
+              aria-label="Remove this pin"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => store().removeReviewComment(conversationId, comment.id)}
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+          <CommentEditor conversationId={conversationId} comment={comment} author={author} onDone={() => {}} />
+        </div>
+      )}
+    </div>
   );
 }

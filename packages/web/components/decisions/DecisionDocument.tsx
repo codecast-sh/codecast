@@ -20,7 +20,7 @@ import { DecisionOptionList } from "./DecisionOptionList";
 import { AskingSession, CategoryNote, HolderLine, PersonChip } from "./DecisionParties";
 import { GateRunChip } from "./DecisionCompactCard";
 import { OptionPages } from "./OptionPages";
-import { CopyLinkButton } from "../CopyLinkButton";
+import { ShareControl } from "../ShareControl";
 import { chosenOptions, ladderRecommendation } from "../../lib/decisionLinks";
 import "./decisions.css";
 import { DecisionProposalOrigin } from "../org/ProposalAuthorPill";
@@ -120,7 +120,7 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
             {decision.resolved_at && <span>· resolved {formatTimeAgo(decision.resolved_at, now)}</span>}
             {/* A gate on the line (the-line.md L4): the run this question pauses. */}
             {decision.workflow_run_id && <GateRunChip runId={decision.workflow_run_id} nodeId={decision.gate_node_id} />}
-            <CopyLinkButton path={`/decisions/${decision.short_id ?? decision._id}`} className="ml-auto" />
+            <ShareControl label="decision" path={`/decisions/${decision.short_id ?? decision._id}`} publicShare={{ kind: "decision", id: decision._id, token: (decision as any).share_token }} className="ml-auto" />
           </div>
           <h1 className="mt-3 decision-question text-sol-text">{decision.question}</h1>
           <dl className="mt-4 decision-meta text-[12px]">

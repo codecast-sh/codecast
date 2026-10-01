@@ -19,6 +19,8 @@ export {
   mutativeMiddleware,
   groupPatchesByTable,
   generateAutoPending,
+  collectActionFieldLocks,
+  releaseActionFieldLocks,
   outboxCoalesceKeyFor,
   isPermanentDispatchError,
   isParkedDispatchError,

@@ -17,6 +17,7 @@ import type { ChatAuthor, ChatChannelView, ChatMessageView, ChatReaction } from 
 import { botHandle } from "@codecast/convex/convex/chatText";
 import { chatRoomKey } from "@codecast/shared/contracts";
 import { dmOtherIds, mentionUserIds, threadFaceKey } from "@codecast/shared/chat";
+import { isPerson } from "@codecast/shared/team/memberKind";
 
 export type ChatMember = {
   _id: string;
@@ -179,7 +180,7 @@ export function suggestedDmMembers(
     if (ids.length === 1) open.add(String(ids[0]));
   }
   return (members ?? [])
-    .filter((m) => !m.is_bot && String(m._id) !== String(viewerId) && !open.has(String(m._id)))
+    .filter((m) => isPerson(m) && String(m._id) !== String(viewerId) && !open.has(String(m._id)))
     .sort(compareMembersByPresence)
     .slice(0, cap);
 }

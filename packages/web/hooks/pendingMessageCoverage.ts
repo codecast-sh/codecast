@@ -6,6 +6,8 @@ export async function reconcilePendingMessageCoverage(options: {
   query: (conversationId: string, commandIds: string[]) => Promise<Coverage>;
   settle: (conversationId: string, commandIds: string[]) => void;
   fail?: (conversationId: string, commandIds: string[]) => void;
+  // The conversation itself no longer exists: none of its sends can ever settle.
+  gone?: (conversationId: string) => void;
   isCurrent: () => boolean;
 }) {
   const entries = Object.entries(options.pending).sort((a, b) =>
@@ -19,6 +21,7 @@ export async function reconcilePendingMessageCoverage(options: {
       const requested = ids.slice(offset, offset + 64);
       const result = await options.query(conversationId, requested);
       if (!options.isCurrent()) return;
+      if (result.access === "missing") { options.gone?.(conversationId); break; }
       if (result.access !== "granted" || result.coverage?.kind !== "command-ids") continue;
       const confirmed = [...new Set([...result.coverage.commandIds, ...(result.delivery?.settled ?? [])])]
         .filter(id => requested.includes(id));

@@ -7,6 +7,7 @@ import {
   createInboxDigestDevHandle,
   INBOX_COMPARE_TICK_MS,
   type InboxDigestComparer,
+  type InboxDigestComparerIO,
 } from "../store/inboxDigestCompare";
 import { syncMetaKey } from "./reconcileCrawl";
 import { inboxCrawlWsKey } from "./useSyncInboxSessions";
@@ -25,10 +26,12 @@ import { getPlatform, track } from "../lib/analytics";
 // applier — never a working-set refetch, never a store write outside
 // syncTable's pending filter. `track` / `getPlatform` are the analytics
 // channel every other sync metric uses (lib/analytics; the native twin stamps
-// "mobile").
+// "mobile"). `io` overrides any part of that surface; the simulator's legacy
+// suites use it to collect telemetry and run heals by hand.
 export function startInboxDigestCompare(
   convex: { query: (fn: any, args: any) => Promise<any> },
   subscribeTick: (intervalMs: number, fn: () => void) => () => void = subscribeCoarseTick,
+  io: Partial<InboxDigestComparerIO> = {},
 ): { comparer: InboxDigestComparer; dispose: () => void } {
   const crawlMetaKeyFor = (meId: string | null) => (meId ? syncMetaKey("sessions", inboxCrawlWsKey(meId)) : null);
   const comparer = createInboxDigestComparer({
@@ -44,6 +47,7 @@ export function startInboxDigestCompare(
       if (!fresh?.liveness) return;
       useInboxStore.getState().applyInboxLivenessPayload("mine", fresh);
     },
+    ...io,
   });
   // Dev console handle (same convention as __inboxStore): the read-only
   // diagnostics live in the compare module (an allowed reader of the stamp

@@ -130,7 +130,7 @@ function PlanBlockImpl({ content, timestamp, collapsed, messageId, conversationI
         </div>
         {(isOverflowing || isExpanded) && (
           <div className="flex items-center gap-1 mt-2 pt-1 border-t border-sol-border/30">
-            <FooterIconButton onClick={() => setFullscreen(true)} title="Fullscreen" label="Full Screen">
+            <FooterIconButton onClick={() => setFullscreen(true)} title="Fullscreen">
               <FullscreenIcon />
             </FooterIconButton>
             <FooterIconButton onClick={() => setIsExpanded(e => !e)} title={isExpanded ? "Collapse" : "Expand"}>

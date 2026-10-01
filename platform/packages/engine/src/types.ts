@@ -88,6 +88,23 @@ export type OutboxEntry = {
   // Present on repeated-write actions (see outboxCoalesceKeys): the outbox
   // keeps at most one row per key, newest wins.
   coalesceKey?: string;
+  // The field locks the action planted, with what each replaced, so a
+  // permanent refusal can lift them and put the prior values back
+  // (releaseActionFieldLocks). Absent when the action protected no field.
+  locks?: ActionFieldLock[];
+};
+
+/** One field lock an action planted on a localFirst row, and what it replaced. */
+export type ActionFieldLock = {
+  key: string;
+  storeKey: string;
+  recordId: string;
+  field: string;
+  ts: number;
+  value: unknown;
+  prior: unknown;
+  hadPrior: boolean;
+  priorLock?: PendingEntry;
 };
 
 // ---------------------------------------------------------------------------
