@@ -61,13 +61,13 @@ describe("performSetProjectLead", () => {
     expect(await scopeOf(db, growth._id)).toEqual([P]);
   });
 
-  test("the Chief of Staff with no scope is never narrowed to the one project", async () => {
+  test("the Head of People with no scope is never narrowed to the one project", async () => {
     const db = fixtures();
-    const chief = await role(db, "chief-of-staff", []);
-    const out = await performSetProjectLead(ctxOf(db), ME as any, { project_id: P as any, role_id: String(chief._id) });
+    const head = await role(db, "head-of-people", []);
+    const out = await performSetProjectLead(ctxOf(db), ME as any, { project_id: P as any, role_id: String(head._id) });
     expect(out.scope).toBe("whole_workspace");
-    expect(await scopeOf(db, chief._id)).toEqual([]);
-    expect(String((await db.get(P)).owner_role_id)).toBe(String(chief._id));
+    expect(await scopeOf(db, head._id)).toEqual([]);
+    expect(String((await db.get(P)).owner_role_id)).toBe(String(head._id));
   });
 
   // Scope is opt in (S26): any other role with no scope owns no work, so
@@ -184,9 +184,9 @@ describe("performCoverProjects", () => {
     expect(await scopeOf(db, billing._id)).toEqual([Q]);
   });
 
-  test("the Chief of Staff with no scope keeps the whole workspace", async () => {
+  test("the Head of People with no scope keeps the whole workspace", async () => {
     const db = fixtures();
-    const ops = await role(db, "chief-of-staff", []);
+    const ops = await role(db, "head-of-people", []);
     const out = await performCoverProjects(ctxOf(db), ME as any, ops._id, [P, Q] as any);
     expect(out.skipped.map((x) => x.reason)).toEqual(["whole_workspace", "whole_workspace"]);
     expect(await scopeOf(db, ops._id)).toEqual([]);

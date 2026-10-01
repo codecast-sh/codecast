@@ -35,8 +35,13 @@ import { isTeamMember } from "./privacy";
 import { channelMemberIds, isRestricted } from "./chatAccess";
 import { bucketTs } from "./presenceState";
 import { teamFeatureOffMessage, teamHasFeature } from "./teamFeatures";
-import { endLiveTranscriptsForRoom } from "./transcripts";
-import { postEvent } from "./callChat";
+import { huddleAlive, idleLiveTranscriptsForRoom, resumeOrEndHuddle } from "./transcripts";
+import { isRoomRecording, noteRecordedPeople, nudgeRecordingForShare, stopRoomRecording } from "./lib/callRecordingRuns";
+import { liveTranscriptFor, postEvent } from "./callChat";
+import { admittedGuests, guestKnocks, projectGuest } from "./callGuests";
+import { endGuestAdmissions } from "./lib/callGuestAdmission";
+import { signLivekitJwt } from "./lib/livekitJwt";
+export { signLivekitJwt };
 import {
   CALL_PUSH_CATEGORY,
   CALL_PUSH_SOUND,
@@ -264,8 +269,10 @@ async function requireUser(ctx: any): Promise<Id<"users">> {
   return userId;
 }
 
-// Sweep a room's dead rows while we're writing to it anyway.
-async function sweepRoom(ctx: any, roomKey: string, now: number) {
+// Sweep a room's dead rows while we're writing to it anyway. Returns the
+// rows as they stood before the sweep: a join into an emptied room dates the
+// quiet from the leases the dead rows last refreshed.
+async function sweepRoom(ctx: any, roomKey: string, now: number): Promise<Doc<"call_members">[]> {
   const rows = await ctx.db
     .query("call_members")
     .withIndex("by_room", (q: any) => q.eq("room_key", roomKey))
@@ -273,6 +280,7 @@ async function sweepRoom(ctx: any, roomKey: string, now: number) {
   for (const m of rows) {
     if (now - m.last_seen >= CALL_MEMBER_STALE_MS) await ctx.db.delete(m._id);
   }
+  return rows;
 }
 
 /**
@@ -374,25 +382,25 @@ export const joinRoom = mutation({
     // common case, and our own stale row must be gone before we decide
     // whether to refresh or insert (patching a row the sweep just deleted
     // threw "Update on nonexistent document").
-    await sweepRoom(ctx, args.room_key, now);
+    const before = await sweepRoom(ctx, args.room_key, now);
 
-    // Taking a seat in an EMPTY room starts a NEW huddle: the previous
-    // huddle's invite grants die here (callRooms.acceptedInviteGrant relies
-    // on this — an accepted invite means "that huddle never ended"). A guest
-    // whose huddle is still running never reaches this: the room holds a
-    // fresh lease, so it is not empty.
+    // Taking a seat in an EMPTY room starts a NEW huddle, unless the last one
+    // emptied inside its grace (transcripts.HUDDLE_GRACE_MS): coming back
+    // after a dropped connection or a hop to another room is the same
+    // conversation, with the same record, grants, lock and switch. A new
+    // huddle kills the previous huddle's invite grants
+    // (callRooms.acceptedInviteGrant relies on this — an accepted invite
+    // means "that huddle never ended"). A guest whose huddle is still running
+    // never reaches this: the room holds a fresh lease, so it is not empty.
     const seated = await ctx.db
       .query("call_members")
       .withIndex("by_room", (q) => q.eq("room_key", args.room_key))
       .collect();
-    if (liveMembers(seated, now).length === 0) {
+    if (liveMembers(seated, now).length === 0 && !(await resumeOrEndHuddle(ctx, args.room_key, now, before))) {
       await expireRoomGrants(ctx, args.room_key);
       // A lock belongs to the huddle that set it, and so do the knocks at its
       // door: the next huddle in this room starts open, with nobody waiting.
       await clearRoomState(ctx, args.room_key);
-      // Same reason: a transcript left "live" by the previous huddle (its
-      // scribe's tab died without stop) must not swallow this new one.
-      await endLiveTranscriptsForRoom(ctx, args.room_key);
     }
 
     // One huddle at a time: joining a room implicitly leaves every other —
@@ -407,6 +415,10 @@ export const joinRoom = mutation({
       if (m.room_key === args.room_key) existing = m;
       else await ctx.db.delete(m._id);
     }
+
+    // Walking into a room being filmed puts you in its video, so you may
+    // watch it afterwards (canReadCall's recorded_people door).
+    await noteRecordedPeople(ctx, args.room_key, [userId]);
 
     const languages = stampedLanguages(args.languages);
     if (existing) {
@@ -472,6 +484,9 @@ export const heartbeat = mutation({
     // A heartbeat for a row the sweep already removed is a no-op, not an
     // error: the client will notice via getMyCalls and reconnect or leave.
     if (row) {
+      // A screen share just began: if the room is recording, its own file
+      // should start now rather than at the recording loop's next look.
+      if (args.sharing === true && !row.sharing) await nudgeRecordingForShare(ctx, args.room_key);
       const patch: Record<string, unknown> = { last_seen: now };
       if (args.muted !== undefined) patch.muted = args.muted;
       if (args.camera !== undefined) patch.camera = args.camera;
@@ -530,15 +545,25 @@ export const leaveRoom = mutation({
       }
     }
     await settleOutboundRings(ctx, userId, args.room_key, now);
-    // The last one out ends the room's transcript: the record must not sit
-    // "live" on the calls page after everyone has hung up.
+    // The last one out starts the huddle's grace: its record ends at this
+    // moment unless somebody is back within HUDDLE_GRACE_MS.
     for (const roomKey of left) {
       const seated = await ctx.db
         .query("call_members")
         .withIndex("by_room", (q) => q.eq("room_key", roomKey))
         .collect();
       if (liveMembers(seated, now).length === 0) {
-        await endLiveTranscriptsForRoom(ctx, roomKey);
+        await idleLiveTranscriptsForRoom(ctx, roomKey, now);
+        // A recording does not wait out the grace: nobody is left to film,
+        // and a person back inside it presses Record again if they want it.
+        // Guests still inside do not hold it open: a guest alone never keeps
+        // a huddle going (transcripts.huddleAlive), the same rule the
+        // recording loop applies to LiveKit's room (huddleKeepers).
+        await stopRoomRecording(ctx, roomKey, { reason: "huddle_ended" });
+        // Guests wait out the same grace the record does (a teammate back
+        // inside it finds them still there). A huddle with no grace (nothing
+        // transcribing it) is over now, and so are their admissions.
+        if (!(await huddleAlive(ctx, roomKey, now))) await endGuestAdmissions(ctx, roomKey);
       }
     }
   },
@@ -968,6 +993,17 @@ export const setRoomTranscribeOff = mutation({
     if (args.off && !wasOff) {
       await postEvent(ctx, { room_key: args.room_key, team_id: seat.team_id, user_id: userId, event: "transcribe_off" });
     }
+    // Back on inside the same huddle: its record is still live (off is a gap,
+    // not an end), so the presser takes over as its scribe and says so. A
+    // room with no record yet gets one from the presser's own start, which
+    // writes the line itself.
+    if (!args.off && wasOff) {
+      const live = await liveTranscriptFor(ctx, args.room_key);
+      if (live) {
+        if (String(live.started_by) !== String(userId)) await ctx.db.patch(live._id, { started_by: userId });
+        await postEvent(ctx, { room_key: args.room_key, team_id: seat.team_id, user_id: userId, event: "transcribe_on" });
+      }
+    }
     return { transcribe_off: args.off };
   },
 });
@@ -1014,12 +1050,24 @@ export const knock = mutation({
 // is a gesture at one door, not a team-wide event. Bucketed and sorted like
 // every other room subscription so heartbeats do not re-push it.
 export const getRoomKnocks = query({
-  args: { room_key: v.string() },
+  args: {
+    room_key: v.string(),
+    // The client knows the guest shape (kind "guest", guest_id, admitted
+    // through callGuests.admitGuest). A client from before guests never
+    // asks, and never sees a knock whose Admit it would send to `invite`.
+    guests: v.optional(v.boolean()),
+  },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
     const now = Date.now();
     if (!(await liveSeat(ctx, userId, args.room_key, now))) return [];
+    // Whether THIS viewer may answer the door: the rule admitting a teammate
+    // (a ring, `invite`) and admitting a guest (callGuests.requireDoorkeeper)
+    // both take. Somebody seated in a channel's room through an accepted ring
+    // sees who is waiting and cannot let them in, so the door shows them no
+    // buttons that would only fail. Moves only with a membership.
+    const canAnswer = (await authorizeRoomInviter(ctx, userId, args.room_key)).ok;
     const rows = await ctx.db
       .query("call_knocks")
       .withIndex("by_room", (q) => q.eq("room_key", args.room_key))
@@ -1042,10 +1090,15 @@ export const getRoomKnocks = query({
             // knock onto the first, leaving the room with no way to tell that
             // someone tried again.
             created_at: k.created_at,
+            kind: "person" as const,
+            can_answer: canAnswer,
           };
         }),
     );
-    return waiting.sort((a, b) => String(a.from_user).localeCompare(String(b.from_user)));
+    // Guests knock here too, in the same list, so a door shows everybody
+    // waiting at it in one place (callGuests.guestKnocks has their shape).
+    const guests = args.guests ? await guestKnocks(ctx, args.room_key, now, canAnswer) : [];
+    return [...waiting, ...guests].sort((a, b) => String(a.from_user).localeCompare(String(b.from_user)));
   },
 });
 
@@ -1131,6 +1184,10 @@ export const getLiveRooms = query({
         // auto-scribe from starting it again.
         transcribe_off: !!state?.transcribe_off,
         transcribe_off_at: state?.transcribe_off ? state.transcribe_off_at ?? state.updated_at : null,
+        // Somebody pressed Record and it has not been stopped: what everyone
+        // who can see the room, inside it or about to walk in, is told.
+        // Byte-stable: it flips on a press and a stop, never with the clock.
+        recording: await isRoomRecording(ctx, roomKey),
         can_join: canJoin,
         redacted,
         title,
@@ -1139,6 +1196,11 @@ export const getLiveRooms = query({
           .slice()
           .sort((a, b) => String(a.user_id).localeCompare(String(b.user_id)))
           .map((m) => ({ ...projectMember(m), seat })),
+        // People from outside the team who were let in (callGuests.ts). Their
+        // own list, never mixed into `members`: a member row is a users id
+        // that every reader resolves, and a guest has none. Present by the
+        // same lease, bucketed the same way, sorted by id.
+        guests: (await admittedGuests(ctx, roomKey, now)).map(projectGuest),
       });
     }
     return out;
@@ -1166,55 +1228,6 @@ export const authForToken = internalQuery({
     };
   },
 });
-
-function b64url(bytes: Uint8Array): string {
-  let s = "";
-  for (const b of bytes) s += String.fromCharCode(b);
-  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-export async function signLivekitJwt(opts: {
-  apiKey: string;
-  apiSecret: string;
-  identity: string;
-  name: string;
-  room: string;
-  metadata?: string;
-  ttlSeconds?: number;
-  nowSeconds?: number;
-}): Promise<string> {
-  const now = opts.nowSeconds ?? Math.floor(Date.now() / 1000);
-  const header = { alg: "HS256", typ: "JWT" };
-  const payload = {
-    iss: opts.apiKey,
-    sub: opts.identity,
-    nbf: now - 10,
-    exp: now + (opts.ttlSeconds ?? 6 * 3600),
-    name: opts.name,
-    ...(opts.metadata ? { metadata: opts.metadata } : {}),
-    video: {
-      room: opts.room,
-      roomJoin: true,
-      canPublish: true,
-      canSubscribe: true,
-    },
-  };
-  const enc = new TextEncoder();
-  const signingInput = `${b64url(enc.encode(JSON.stringify(header)))}.${b64url(
-    enc.encode(JSON.stringify(payload)),
-  )}`;
-  const key = await crypto.subtle.importKey(
-    "raw",
-    enc.encode(opts.apiSecret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const sig = new Uint8Array(
-    await crypto.subtle.sign("HMAC", key, enc.encode(signingInput)),
-  );
-  return `${signingInput}.${b64url(sig)}`;
-}
 
 export const mintAccessToken = action({
   args: { room_key: v.string() },

@@ -19,6 +19,13 @@
  * alive: each holds a program in memory, and a fleet of worktrees could
  * otherwise recreate the pile this replaces.
  *
+ * Slots are a queue, not a refusal. An ask that needs a new watcher while
+ * every slot is taken waits its turn, oldest ask first, and starts when a
+ * slot frees: a watcher between passes, or a pass nobody waits on any more.
+ * A pass is protected only while someone waits on it (an asker refreshes
+ * `askedAt` while it waits), so a first pass whose asker gave up does not
+ * hold its slot forever on a loaded machine.
+ *
  * Which programs a tree carries is the tree's own business, read from
  * `.codecast/check.toml` (a `[projects]` table of name = tsconfig path;
  * tracked, so a worktree inherits it). A tree without one is checked from
@@ -34,6 +41,7 @@ import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "./proc.js";
 import { acquireFileLock } from "./lockFile.js";
 import { isPidAlive } from "./workspace/chrome.js";
+import { startLaunchdJob, unloadOwnLaunchdJob } from "./launchdJob.js";
 
 /** One program to check: its name (a path segment of the state dir) and its tsconfig, relative to the tree root. */
 export interface CheckProject {
@@ -119,6 +127,15 @@ export function resolveProjects(root: string, names: string[], cwd = process.cwd
 
 /** Live watchers this machine keeps at most; the least recently asked is stopped to make room. */
 export const MAX_WATCHERS = Math.max(1, parseInt(process.env.CAST_CHECK_MAX_WATCHERS ?? "", 10) || 6);
+
+/** How often a waiting asker refreshes `askedAt`, and how long without one leaves a running pass unwanted. */
+export const ASK_HEARTBEAT_MS = 30_000;
+export const WANTED_MS = 5 * 60_000;
+
+/** A running pass someone still waits on: never stopped to make room. */
+export function isWanted(state: Pick<WatchState, "inProgress" | "askedAt" | "startedAt">, now = Date.now()): boolean {
+  return state.inProgress && now - (state.askedAt ?? state.startedAt) <= WANTED_MS;
+}
 
 export interface WatchState {
   pid: number;
@@ -302,6 +319,7 @@ export async function runWatcher(root: string, project: string, tsconfig: string
     try {
       fs.rmSync(statePath(dir), { force: true });
     } catch {}
+    unloadOwnLaunchdJob();
     process.exit(0);
   };
   process.on("SIGTERM", stop);
@@ -311,6 +329,7 @@ export async function runWatcher(root: string, project: string, tsconfig: string
   try {
     fs.rmSync(statePath(dir), { force: true });
   } catch {}
+  unloadOwnLaunchdJob();
 }
 
 // ---------------------------------------------------------------------------
@@ -328,13 +347,19 @@ export interface CheckResult {
 
 export type WatcherStarter = (root: string, project: CheckProject) => void;
 
-/** Respawn ourselves as the watcher, detached, logging to the watch dir. */
+/**
+ * Respawn ourselves as the watcher, logging to the watch dir: as an
+ * Interactive launchd job where launchd takes one, so the build does not
+ * inherit the agent tree's utility clamp (launchdJob.ts), else detached.
+ */
 export const startDetachedWatcher: WatcherStarter = (root, { name, tsconfig }) => {
   const dir = watchDir(root, name);
   fs.mkdirSync(dir, { recursive: true });
   const base = path.basename(process.execPath).toLowerCase();
   const viaRuntime = base.includes("bun") || base.includes("node");
   const args = viaRuntime ? [process.argv[1], "check-watch", root, name, tsconfig] : ["check-watch", root, name, tsconfig];
+  const label = `sh.codecast.check.${path.basename(path.dirname(dir))}.${name}`.replace(/[^A-Za-z0-9._-]/g, "_");
+  if (startLaunchdJob({ label, argv: [process.execPath, ...args], plistPath: path.join(dir, "watcher.plist"), logPath: logPath(dir) })) return;
   const log = fs.openSync(logPath(dir), "a");
   try {
     const child = spawn(process.execPath, args, { detached: true, stdio: ["ignore", log, log] });
@@ -349,8 +374,9 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 /**
  * The current diagnostics for one project: from the running watcher's last
  * finished pass, waiting for the pass in flight when there is one, starting
- * the watcher when none runs. `budgetMs` bounds a first pass on a loaded
- * machine; a watcher that is still building past it is reported as such.
+ * the watcher when none runs (queued for a slot when the machine is full).
+ * `budgetMs` bounds the whole ask, queue included; a watcher that is still
+ * building past it is reported as such.
  */
 export async function checkProject(
   target: CheckProject,
@@ -362,10 +388,12 @@ export async function checkProject(
   const budget = opts.budgetMs ?? 20 * 60_000;
   const note = opts.note ?? (() => {});
   const kill = opts.kill ?? ((pid: number) => process.kill(pid, "SIGTERM"));
+  const deadline = Date.now() + budget;
   let started = false;
+  let state: WatchState | null;
   const release = await acquireFileLock(path.join(dir, "start.lock"), { describe: `cast check ${project}` });
   try {
-    let state = readWatchState(dir);
+    state = readWatchState(dir);
     // The tree's config now names a different tsconfig for this project than
     // the running watcher was built on (an entry corrected in
     // .codecast/check.toml). The old program would keep answering, so it is
@@ -386,36 +414,26 @@ export async function checkProject(
       state = null;
       await sleep(300);
     }
-    if (!state || !isPidAlive(state.pid)) {
-      const releaseCapacity = await acquireFileLock(path.join(checkHome(), "capacity.lock"), { describe: "cast check watcher start", waitMs: 60_000 });
-      try {
-        for (const evicted of makeRoom(opts.maxWatchers ?? MAX_WATCHERS, kill)) {
-          note(`stopped the ${evicted.project} watcher for ${evicted.root} (idle longest) to stay under ${opts.maxWatchers ?? MAX_WATCHERS} watchers on this machine`);
-        }
-        (opts.start ?? startDetachedWatcher)(root, target);
-        started = true;
-        note(`starting the ${project} typecheck watcher for ${root} (first pass builds the whole program; later asks take seconds)`);
-        const deadline = Date.now() + 30_000;
-        while (Date.now() < deadline && !(state = readWatchState(dir))) await sleep(200);
-        if (!state) throw new Error(`the ${project} typecheck watcher did not start; its log is ${logPath(dir)}`);
-      } finally {
-        releaseCapacity();
-      }
-    }
   } finally {
     release();
   }
+  if (!state || !isPidAlive(state.pid)) started = await startWhenSlotFrees(target, root, { ...opts, start: opts.start ?? startDetachedWatcher, note, kill, deadline });
   // Mark the ask (keeps the watcher alive), then let a change that landed a
   // moment ago reach tsc before trusting the last pass.
   const askedAt = Date.now();
   const current = readWatchState(dir);
   if (current) writeWatchState(dir, { ...current, askedAt });
   await sleep(SETTLE_MS);
-  const deadline = askedAt + budget;
   let noted = false;
+  let beat = askedAt;
   for (;;) {
     const s = readWatchState(dir);
     if (!s) throw new Error(`the ${project} typecheck watcher went away; its log is ${logPath(dir)}`);
+    // Keep the pass wanted while this ask waits on it, so the queue never takes its slot.
+    if (Date.now() - beat >= ASK_HEARTBEAT_MS) {
+      beat = Date.now();
+      writeWatchState(dir, { ...s, askedAt: beat });
+    }
     if (!s.inProgress && s.finishedAt) {
       const diagnostics = fs.existsSync(outputPath(dir)) ? fs.readFileSync(outputPath(dir), "utf-8") : "";
       // A global tsc resolves libs and types its own way, so its errors are not
@@ -459,17 +477,18 @@ export function listWatchers(): Array<WatchState & { dir: string }> {
 }
 
 /**
- * Stop the least recently asked watchers until one more fits under `max`.
- * Returns what was stopped. A watcher's state file goes with it, so a later
- * ask for that project starts a fresh one.
+ * Stop the least recently asked watchers until one more fits under `max`:
+ * watchers between passes first, then passes nobody waits on. Returns what
+ * was stopped, or null when every slot holds a wanted pass (nothing is
+ * stopped then). A watcher's state file goes with it, so a later ask for
+ * that project starts a fresh one.
  */
-export function makeRoom(max: number, kill: (pid: number) => void = (pid) => process.kill(pid, "SIGTERM")): Array<WatchState & { dir: string }> {
-  const live = listWatchers().sort((a, b) => (a.askedAt ?? a.startedAt) - (b.askedAt ?? b.startedAt));
+export function makeRoom(max: number, kill: (pid: number) => void = (pid) => process.kill(pid, "SIGTERM"), now = Date.now()): Array<WatchState & { dir: string }> | null {
+  const byAsk = (a: WatchState, b: WatchState) => (a.askedAt ?? a.startedAt) - (b.askedAt ?? b.startedAt);
+  const live = listWatchers();
   const needed = Math.max(0, live.length - max + 1);
-  const eligible = live.filter((state) => !state.inProgress);
-  if (eligible.length < needed) {
-    throw new Error(`typecheck capacity is full: ${live.length} watchers, limit ${max}; running passes are preserved. Ask again when a pass finishes; do not restart them with --fresh`);
-  }
+  const eligible = [...live.filter((w) => !w.inProgress).sort(byAsk), ...live.filter((w) => w.inProgress && !isWanted(w, now)).sort(byAsk)];
+  if (eligible.length < needed) return null;
   const evicted: Array<WatchState & { dir: string }> = [];
   for (const victim of eligible.slice(0, needed)) {
     try {
@@ -479,4 +498,114 @@ export function makeRoom(max: number, kill: (pid: number) => void = (pid) => pro
     evicted.push(victim);
   }
   return evicted;
+}
+
+// ---------------------------------------------------------------------------
+// The slot queue: asks that need a new watcher wait their turn, oldest first
+// ---------------------------------------------------------------------------
+
+export const queueDir = (): string => path.join(checkHome(), "queue");
+
+interface QueueTicket {
+  pid: number;
+  root: string;
+  project: string;
+  at: number;
+  file: string;
+}
+
+/** Live tickets, oldest first; a ticket whose asker died is cleared. */
+export function listQueue(): QueueTicket[] {
+  const dir = queueDir();
+  if (!fs.existsSync(dir)) return [];
+  const out: QueueTicket[] = [];
+  for (const name of fs.readdirSync(dir)) {
+    const file = path.join(dir, name);
+    try {
+      const t = JSON.parse(fs.readFileSync(file, "utf-8")) as Omit<QueueTicket, "file">;
+      if (isPidAlive(t.pid)) out.push({ ...t, file });
+      else fs.rmSync(file, { force: true });
+    } catch {}
+  }
+  return out.sort((a, b) => a.at - b.at || a.file.localeCompare(b.file));
+}
+
+/** How long a program keeps its place in the queue across asks that gave up and asked again. */
+export const QUEUE_PLACE_MS = 60 * 60_000;
+const queuedAtPath = (dir: string): string => path.join(dir, "queued_at");
+
+/** When this program first joined the queue, so a re-ask keeps its place rather than going to the back. */
+function queuePlace(dir: string, now = Date.now()): number {
+  try {
+    const at = parseInt(fs.readFileSync(queuedAtPath(dir), "utf-8"), 10);
+    if (at && now - at < QUEUE_PLACE_MS) return at;
+  } catch {}
+  fs.writeFileSync(queuedAtPath(dir), String(now));
+  return now;
+}
+
+/**
+ * Start the project's watcher once a slot is free and every earlier ask has
+ * had its turn. An ask for a project whose watcher another asker started
+ * meanwhile leaves the queue and rides that watcher. Returns whether this
+ * call started it.
+ */
+async function startWhenSlotFrees(
+  target: CheckProject,
+  root: string,
+  opts: { start: WatcherStarter; note: (line: string) => void; kill: (pid: number) => void; maxWatchers?: number; deadline: number },
+): Promise<boolean> {
+  const project = target.name;
+  const dir = watchDir(root, project);
+  const max = opts.maxWatchers ?? MAX_WATCHERS;
+  fs.mkdirSync(queueDir(), { recursive: true });
+  fs.mkdirSync(dir, { recursive: true });
+  const at = queuePlace(dir);
+  const file = path.join(queueDir(), `${process.pid}-${Math.random().toString(36).slice(2, 8)}.json`);
+  fs.writeFileSync(file, JSON.stringify({ pid: process.pid, root, project, at }));
+  let lastAhead = -1;
+  try {
+    for (;;) {
+      const release = await acquireFileLock(path.join(dir, "start.lock"), { describe: `cast check ${project}` });
+      try {
+        const state = readWatchState(dir);
+        if (state && isPidAlive(state.pid)) {
+          fs.rmSync(queuedAtPath(dir), { force: true });
+          return false;
+        }
+        const ahead = listQueue().findIndex((t) => t.file === file);
+        if (ahead === 0) {
+          const releaseCapacity = await acquireFileLock(path.join(checkHome(), "capacity.lock"), { describe: "cast check watcher start", waitMs: 60_000 });
+          try {
+            const evicted = makeRoom(max, opts.kill);
+            if (evicted) {
+              for (const w of evicted) opts.note(`stopped the ${w.project} watcher for ${w.root} (${w.inProgress ? "a pass nobody waits on" : "idle longest"}) to stay under ${max} watchers on this machine`);
+              opts.start(root, target);
+              fs.rmSync(queuedAtPath(dir), { force: true });
+              opts.note(`starting the ${project} typecheck watcher for ${root} (first pass builds the whole program; later asks take seconds)`);
+              const deadline = Date.now() + 30_000;
+              while (Date.now() < deadline && !readWatchState(dir)) await sleep(200);
+              if (!readWatchState(dir)) throw new Error(`the ${project} typecheck watcher did not start; its log is ${logPath(dir)}`);
+              return true;
+            }
+          } finally {
+            releaseCapacity();
+          }
+        }
+        if (ahead !== lastAhead) {
+          lastAhead = ahead;
+          const busy = listWatchers().map((w) => w.project).join(", ");
+          opts.note(ahead === 0
+            ? `queued: all ${max} typecheck slots hold passes someone is waiting on (${busy}); starting when one finishes`
+            : `queued: ${ahead} ask${ahead === 1 ? "" : "s"} ahead for the ${max} typecheck slots (${busy})`);
+        }
+      } finally {
+        release();
+      }
+      if (Date.now() > opts.deadline) throw new Error(`the ${project} typecheck is still queued for a slot; every one of the ${max} slots holds a pass someone is waiting on. Ask again later; do not restart them with --fresh`);
+      await sleep(1_000);
+    }
+  } finally {
+    fs.rmSync(file, { force: true });
+  }
 }

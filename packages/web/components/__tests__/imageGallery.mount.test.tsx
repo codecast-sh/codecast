@@ -5,6 +5,7 @@ import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../../test-helpers/globals";
 import { ImageGalleryProvider, GalleryMessageScope, useImageGallery, useGalleryMessageId, type GalleryImage } from "../ImageGallery";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { useInboxStore } from "../../store/inboxStore";
 
 import { closeDomWindow } from "../../test-helpers/domGlobals";
 // The lightbox provider outlives a conversation switch: the inbox keeps one
@@ -103,4 +104,70 @@ test("the open image offers its link and the way back to its message", async () 
   await clickSrc("data:image/png;base64,AAAA");
   expect(lightbox()!.querySelector('[aria-label="Copy link to image"]')).toBeNull();
   expect(lightbox()!.querySelector('button[aria-label="Locate in the conversation"]')).toBeNull();
+});
+
+test("a trackpad pinch zooms the open image, 0 resets, paging resets", async () => {
+  await mount(
+    <ImageGalleryProvider conversationId="A">
+      <Registered src="z1" />
+      <Registered src="z2" />
+    </ImageGalleryProvider>,
+  );
+  await clickSrc("z1");
+  // The zoom transform sits on the box around the picture, which also holds its pins.
+  const zoomBox = () => lightbox()!.querySelector('img[alt="Gallery image"]')!.parentElement as HTMLElement;
+  const scaleOf = () => Number(zoomBox().style.transform.match(/scale\(([\d.]+)\)/)?.[1]);
+  expect(scaleOf()).toBe(1);
+
+  // Chromium reports a pinch as a ctrl+wheel with negative deltaY to zoom in.
+  const pinch = (deltaY: number) => act(() => {
+    lightbox()!.dispatchEvent(new dom.window.WheelEvent("wheel", { deltaY, ctrlKey: true, bubbles: true, cancelable: true }));
+  });
+  await pinch(-40);
+  expect(scaleOf()).toBeGreaterThan(1.4);
+  expect(lightbox()!.textContent).toContain("reset");
+
+  // Zoom never goes below 100%.
+  await pinch(50); await pinch(50); await pinch(50);
+  expect(scaleOf()).toBe(1);
+
+  await pinch(-40);
+  await act(() => { document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "0", bubbles: true })); });
+  expect(scaleOf()).toBe(1);
+
+  await pinch(-40);
+  await act(() => { document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })); });
+  expect(counter()).toBe("2 / 2");
+  expect(scaleOf()).toBe(1);
+});
+
+test("clicking a point of the picture pins a note there, and a click before writing moves it", async () => {
+  useInboxStore.setState({ reviewComments: {}, reviewEditingId: null } as any);
+  await mount(
+    <ImageGalleryProvider conversationId="P" quotable>
+      <Registered src="p1" href="https://files.example/p1.png" />
+    </ImageGalleryProvider>,
+  );
+  await clickSrc("p1");
+  const img = lightbox()!.querySelector('img[alt="Gallery image"]') as HTMLImageElement;
+  img.getBoundingClientRect = () => ({ left: 100, top: 50, width: 400, height: 200, right: 500, bottom: 250, x: 100, y: 50, toJSON() {} });
+  const clickAt = (clientX: number, clientY: number) => act(() => {
+    img.dispatchEvent(new dom.window.MouseEvent("click", { clientX, clientY, bubbles: true }));
+  });
+  const pins = () => useInboxStore.getState().reviewComments.P ?? [];
+
+  await clickAt(200, 100);
+  expect(pins().map((c) => c.image?.point)).toEqual([{ x: 0.25, y: 0.25 }]);
+  expect(lightbox()!.querySelector('button[aria-label="Note 1"]')).not.toBeNull();
+  expect(lightbox()!.querySelector("textarea")).not.toBeNull();
+
+  // Still no note: the click was a miss, so the pin moves rather than doubles.
+  await clickAt(400, 200);
+  expect(pins().map((c) => c.image?.point)).toEqual([{ x: 0.75, y: 0.75 }]);
+
+  // Once it has a note, the next click is a second pin.
+  await act(() => { useInboxStore.getState().commitReviewComment("P", pins()[0].id, "this one"); });
+  await clickAt(300, 150);
+  expect(pins().map((c) => c.image?.point)).toEqual([{ x: 0.75, y: 0.75 }, { x: 0.5, y: 0.5 }]);
+  expect(lightbox()!.textContent).toContain("2 notes on your next message");
 });

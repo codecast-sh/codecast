@@ -7,7 +7,7 @@
 // Work belongs to the most specific live role that covers it (ownerOf):
 // - a role whose scope names the work's plan, over
 // - a role whose scope names the work's project, over
-// - the Chief of Staff, which looks after whatever no narrower role covers.
+// - the Head of People, which looks after whatever no narrower role covers.
 // Scope is opt in: any other role with no projects and no plans owns no work.
 // It is a standing role that runs its routine and answers what it is asked.
 // A child's scope sits inside its parent's (scopes-and-feed.md F1), so a head
@@ -30,6 +30,8 @@ export type LeadProject = { _id: unknown; owner_role_id?: unknown };
 export type LeadRole = {
   _id: unknown;
   handle?: string;
+  /** Set on a Chief of Staff (S30); such a role never covers the workspace. */
+  chief?: unknown;
   status?: string;
   scope?: { project_ids?: readonly unknown[]; plan_ids?: readonly unknown[] } | null;
   reports_to?: { kind: string; role_id?: unknown } | null;
@@ -54,14 +56,40 @@ export function scopeListsProject(role: LeadRole, projectId: unknown): boolean {
 
 const scopeListsPlan = (role: LeadRole, planId: unknown) => (role.scope?.plan_ids ?? []).some((p) => String(p) === String(planId));
 
+export const HEAD_OF_PEOPLE_HANDLE = "head-of-people";
+/** The name the role is born with (org-staffing.md S22: renamable like any role). */
+export const HEAD_OF_PEOPLE_NAME = "Head of People";
+/** The handle the role carried before 2026-10-02 (org-staffing.md S30), when
+ *  it was called the Chief of Staff. Rows in prod keep it until
+ *  `migrations:renameHeadOfPeople` runs, and old references (charters,
+ *  triggers, a person's habit) keep naming it, so every reader accepts both.
+ *  A row that carries `chief` is a Chief of Staff (the right hand), never the
+ *  Head of People, whatever its handle. */
+export const LEGACY_HEAD_OF_PEOPLE_HANDLE = "chief-of-staff";
+
+/** The person's right hand (S30): a role marked by `chief`, with no scope.
+ *  `chief-of-staff` is the default handle of the first one in a boundary. */
 export const CHIEF_OF_STAFF_HANDLE = "chief-of-staff";
+export const CHIEF_OF_STAFF_NAME = "Chief of Staff";
+
+export type ChiefReach<TeamId = unknown> = { reach: "global" } | { reach: "team"; team_id: TeamId };
+
+/** True for the Head of People of a boundary: its handle, or the handle it
+ *  had before the rename, on a row that is not a Chief of Staff. */
+export const isHeadOfPeopleRole = (r: { handle?: string; chief?: unknown }): boolean =>
+  !r.chief && (r.handle === HEAD_OF_PEOPLE_HANDLE || r.handle === LEGACY_HEAD_OF_PEOPLE_HANDLE);
+
+/** The handle a reader looks up for the one typed: the old handle still finds
+ *  the Head of People. A boundary with a live Chief of Staff under that
+ *  handle keeps it for the chief (orgAccess.rolesByHandle decides). */
+export const canonicalHeadHandle = (h: string) => (h === LEGACY_HEAD_OF_PEOPLE_HANDLE ? HEAD_OF_PEOPLE_HANDLE : h);
 
 /** The role names projects or plans it looks after. */
 export const hasScope = (r: LeadRole) => (r.scope?.project_ids ?? []).length > 0 || (r.scope?.plan_ids ?? []).length > 0;
 
-/** The one role that looks after what no narrower role covers: the Chief of
- *  Staff, while it names no scope. Any other role without a scope owns nothing. */
-export const isWholeWorkspaceRole = (r: LeadRole) => !hasScope(r) && r.handle === CHIEF_OF_STAFF_HANDLE;
+/** The one role that looks after what no narrower role covers: the Head of
+ *  People, while it names no scope. Any other role without a scope owns nothing. */
+export const isWholeWorkspaceRole = (r: LeadRole) => !hasScope(r) && isHeadOfPeopleRole(r);
 
 /** A piece of work as the rule reads it: the plan it is filed under and the
  *  project it belongs to (a plan's own project when the work names none).

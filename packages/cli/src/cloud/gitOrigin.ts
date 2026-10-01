@@ -27,12 +27,20 @@ export function isGitHubHost(host: string | undefined): boolean {
   return host === "github.com" || (host?.endsWith(".github.com") ?? false);
 }
 
+/**
+ * A GitHub owner or repository name. GitHub allows only these characters, so
+ * anything else is not one, and never reaches a URL or a command built from it.
+ */
+export function isGitHubName(s: string | undefined): s is string {
+  return !!s && /^[A-Za-z0-9._-]+$/.test(s) && s !== "." && s !== "..";
+}
+
 /** `owner/repo` of a GitHub origin (what `gh -R` wants), or undefined. */
 export function githubRepo(origin: string | undefined): string | undefined {
   const p = parseOrigin(origin);
   if (!p || !isGitHubHost(p.host)) return undefined;
   const parts = p.repo.split("/").filter(Boolean);
-  return parts.length === 2 ? parts.join("/") : undefined;
+  return parts.length === 2 && parts.every(isGitHubName) ? parts.join("/") : undefined;
 }
 
 /** Where a deploy key for this origin is added on GitHub; undefined for a non-GitHub origin. */

@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { v, type Validator } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import { internalMutation, mutation, query } from "./functions";
 import { verifyApiToken } from "./apiTokens";
@@ -27,10 +27,11 @@ import {
   teamTaskStatuses,
 } from "@codecast/shared/tasks";
 import type { TeamTaskStatus } from "@codecast/shared/tasks";
+import { LINE_CATEGORIES, LINE_READINESS, LINE_RISKS } from "@codecast/shared/contracts/goalsBrief";
 import { Id } from "./_generated/dataModel";
 import type { SubscriptionVia } from "./notificationRouter";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { createDataContext, scopeByProject, explicitWorkspace } from "./data";
+import { createDataContext, createWorkContext, scopeByProject, explicitWorkspace } from "./data";
 import { nextShortId } from "./counters";
 import { internal } from "./_generated/api";
 import { isViableInboxParent } from "./inboxFilters";
@@ -44,7 +45,7 @@ import { enqueuePendingMessage, tellRole } from "./pendingMessages";
 import { addConversationToWorkItem, linkConversationToEntityBestEffort, linkedEntityIdsForConversation } from "./conversationLinks";
 import { agentCommentLevelOf, dropThreadRead, taskCommentAuthorKind, taskCommentIsNews, taskThreadParticipants, touchThread, type TaskCommentAuthorKind } from "./threadReads";
 import { extractMentionHandles } from "@codecast/shared/chat";
-import { resolveTeamForPath, teamVisibleConvTeam } from "./privacy";
+import { resolveTeamForPath } from "./privacy";
 import { webBaseUrl } from "./slack";
 // Owner-or-team access check for a task. Moved to lib/access.ts (Wave-1
 // auth/access seam). Imported for local use here and re-exported so existing
@@ -1168,31 +1169,17 @@ export const create = mutation({
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
 
-    // Resolve conversation first so we can propagate team_id to the task
-    let conversation_ids: Id<"conversations">[] | undefined;
-    let created_from_conversation: Id<"conversations"> | undefined;
-    let convTeamId: Id<"teams"> | undefined;
-    let originConv: any = null;
-    if (args.conversation_id) {
-      // Unresolvable session ref = create the task without the link, never
-      // reject the create (see resolveSessionConversation).
-      const conv = await resolveSessionConversation(ctx, auth.userId, args.conversation_id);
-      originConv = conv;
-      if (conv) {
-        conversation_ids = [conv._id];
-        created_from_conversation = conv._id;
-        // Only team-visible conversations hand their team to the task — a
-        // private session's team_id is routing, and copying it here would make
-        // the task readable by the whole team (see teamVisibleConvTeam).
-        convTeamId = teamVisibleConvTeam(conv);
-      }
-    }
-
-    const db = await createDataContext(ctx, {
+    // The session the task came from links it and, when team visible, hands
+    // it its team (createWorkContext).
+    const { db, conversation: originConv } = await createWorkContext(ctx, {
       userId: auth.userId,
       project_path: args.project_path,
-      ...explicitWorkspace(args, convTeamId ? { workspace: "team" as const, team_id: convTeamId } : {}),
+      workspace: args.workspace,
+      team_id: args.team_id,
+      conversation_id: args.conversation_id,
     });
+    const conversation_ids: Id<"conversations">[] | undefined = originConv ? [originConv._id] : undefined;
+    const created_from_conversation: Id<"conversations"> | undefined = originConv?._id;
     // Same status rule as webCreate: a team status by name ("today") lands as
     // its category plus status_id.
     const statusWrite = await resolveStatusWrite(
@@ -1557,7 +1544,7 @@ const assigneeNameOf = (info: AssigneeInfo | undefined): string | undefined =>
   !info ? undefined : info.kind === "role" ? `@${info.handle}` : info.name;
 
 // Display names for a set of assignee values; see assigneeInfoFor.
-async function assigneeNamesFor(ctx: any, assignees: (string | undefined)[]): Promise<Record<string, string>> {
+export async function assigneeNamesFor(ctx: any, assignees: (string | undefined)[]): Promise<Record<string, string>> {
   const info = await assigneeInfoFor(ctx, assignees);
   return Object.fromEntries(Object.entries(info).map(([id, i]) => [id, assigneeNameOf(i)!]));
 }
@@ -1908,6 +1895,25 @@ export const get = query({
   },
 });
 
+// "" clears a ground field; any other value is checked by the validator.
+const orClear = <T extends string>(values: readonly T[]) => v.optional(v.union(v.literal(""), ...values.map((x) => v.literal(x))) as unknown as Validator<T | "">);
+const groundArgs = {
+  goal_ref: v.optional(v.string()),
+  category: orClear(LINE_CATEGORIES),
+  risk: orClear(LINE_RISKS),
+  readiness: orClear(LINE_READINESS),
+  readiness_note: v.optional(v.string()),
+};
+const GROUND_FIELDS = ["goal_ref", "category", "risk", "readiness", "readiness_note"] as const;
+function groundPatch(args: Partial<Record<(typeof GROUND_FIELDS)[number], string>>): Record<string, string | undefined> {
+  const patch: Record<string, string | undefined> = {};
+  for (const field of GROUND_FIELDS) {
+    const value = args[field];
+    if (value !== undefined) patch[field] = value.trim() || undefined;
+  }
+  return patch;
+}
+
 export const update = mutation({
   args: {
     api_token: v.string(),
@@ -1950,6 +1956,9 @@ export const update = mutation({
     // move in this one write. by_conversation_id is the caller's session.
     review_verdict: v.optional(v.union(v.literal("approve"), v.literal("changes"), v.literal("reject"))),
     review_note: v.optional(v.string()),
+    // The ground node's fields (the-line-end-to-end.md LE5). An empty string
+    // clears one; goal_ref "none" is a value (the cause threatens no goal).
+    ...groundArgs,
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -2051,6 +2060,7 @@ export const update = mutation({
     if (args.verification_evidence !== undefined) updates.verification_evidence = args.verification_evidence;
     if (args.files_changed) updates.files_changed = args.files_changed;
     if (args.estimated_minutes !== undefined) updates.estimated_minutes = args.estimated_minutes;
+    Object.assign(updates, groundPatch(args));
 
     if (nextStatus === "done" || nextStatus === "dropped") {
       updates.closed_at = now;
@@ -4681,5 +4691,28 @@ export const getDependencyChain = query({
       critical_path: criticalPath,
       cycles,
     };
+  },
+});
+
+// Support path: delete a task outright with its comments and history
+// (packages/convex/run.sh). The product's own verb is "dropped"; this is for a
+// row its owner wants gone from the database.
+export const adminDeleteTask = internalMutation({
+  args: { short_id: v.string() },
+  handler: async (ctx, args) => {
+    const task = await ctx.db
+      .query("tasks")
+      .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
+      .first();
+    if (!task) return { found: false };
+    for (const table of ["task_comments", "task_history"] as const) {
+      const rows = await ctx.db
+        .query(table)
+        .withIndex("by_task_id", (q: any) => q.eq("task_id", task._id))
+        .collect();
+      for (const row of rows) await ctx.db.delete(row._id);
+    }
+    await ctx.db.delete(task._id);
+    return { found: true, title: task.title, user_id: task.user_id, created_from: task.created_from_conversation ?? null, conversation_ids: task.conversation_ids ?? [] };
   },
 });

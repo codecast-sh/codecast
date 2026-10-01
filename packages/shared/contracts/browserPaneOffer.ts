@@ -39,7 +39,7 @@ function isLoopbackHost(host: string): boolean {
 /** A host only this machine or this network can answer: loopback, a bare name
  *  with no dot, an .internal/.local/.test name, or a private range. Those get
  *  http://, because nothing on a private network serves TLS by default. */
-function isPrivateHost(host: string): boolean {
+export function isPrivateHost(host: string): boolean {
   const h = host.toLowerCase();
   if (isLoopbackHost(h)) return true;
   if (h.endsWith(".local") || h.endsWith(".internal") || h.endsWith(".test")) return true;

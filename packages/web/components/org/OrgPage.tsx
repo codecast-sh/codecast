@@ -9,7 +9,7 @@ import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useEventListener } from "../../hooks/useEventListener";
 import { create as mutate } from "mutative";
-import { Network, Plus, Map as MapIcon, Users, Briefcase, Search, ArrowLeft, ArrowRightLeft, ChevronDown, ChevronRight, ExternalLink, Pencil, History, Store } from "lucide-react";
+import { Activity, Network, Plus, Map as MapIcon, Users, Briefcase, Search, ArrowLeft, ArrowRightLeft, ChevronDown, ChevronRight, ExternalLink, Pencil, History, Store } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { createOrgSlice, orgRoleReparentMakesCycle, reparentToastLine, type OrgUpdateRoleInput } from "../../store/orgSlice";
 import { useSyncOrgTree } from "../../hooks/useSyncOrgTree";
@@ -41,11 +41,15 @@ import { proposalThread, revisedSince } from "./staffingRevise";
 import { latestOrgRevisionAt, orgChangeTakeover, type OrgVerdictSeen } from "@codecast/shared/contracts/orgProposal";
 import { useTakeoverPreviews } from "../../hooks/useTakeoverPreviews";
 import { HireRoleDialog, type HireRoleInitial } from "./HireRoleDialog";
-import { ChiefSeatDialog, type ChiefSeatChoice } from "./ChiefSeatDialog";
+import { HeadSeatDialog, type HeadSeatChoice } from "./HeadSeatDialog";
 import { StaffingPane, type ProposalLinkLine } from "./StaffingPane";
+import { HealthBoard, HEALTH_DRAWER_FRACTION } from "./HealthBoard";
+import { flowDays, flowMap, roleFlows } from "./orgFlow";
+import { DEFAULT_ROLE_CAPS } from "@codecast/shared/contracts/orgCapacity";
 import { asksLoading, asksProgressLine } from "./staffingAsks";
-import { OrgEmptyCanvas, OrgGuide } from "./OrgFirstOpen";
-import { orgGuideSteps } from "../../lib/orgGuideSteps";
+import { OrgEmptyCanvas } from "./OrgFirstOpen";
+import { startTour } from "../../tours/engine";
+import { useTourAutoStart } from "../../tours/useTourAutoStart";
 import { OrgIntro } from "./OrgIntro";
 import { markOrgIntroSeen, markOrgUpsellSeen } from "../../lib/orgIntro";
 import { OrgGlossary, type GlossaryPage } from "./OrgGlossary";
@@ -53,10 +57,9 @@ import { OrgReset } from "./OrgReset";
 import type { OrgResetPreview } from "./orgMeta";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { staffingPaneWord } from "./orgMeta";
 import { orgTreeReadState } from "./orgReadState";
-import { reviewRunState, type OrgReviewRun } from "./staffingModel";
-import { changeNodeId, composeParam, findChiefOfStaff, hasAcceptedBefore, isDecidable, orgPreviewEnabled, pickProposal, proposalParam, resolveProposalLink, roleChangeEdits, roleChangeInitial } from "./staffingModel";
+import { needsYou, reviewRunState, type OrgReviewRun } from "./staffingModel";
+import { changeNodeId, composeParam, findHeadOfPeople, hasAcceptedBefore, isDecidable, orgPreviewEnabled, pickProposal, proposalParam, resolveProposalLink, roleChangeEdits, roleChangeInitial } from "./staffingModel";
 import { ORG_STAFFING_FIXTURE_HEALTH, ORG_STAFFING_FIXTURE_PROPOSAL, ORG_STAFFING_FIXTURE_REVISED_PROPOSAL } from "./orgStaffingFixture";
 import { readOrgPreviewSpec, readOrgPreviewTree } from "./orgPreviewSpec";
 import { joinProposals, type OrgHealth, type OrgProposalChange, type OrgProposalRow } from "./orgStaffingTypes";
@@ -127,6 +130,7 @@ export function OrgPageInner() {
   // proposals) joined at render; the focus scalar is what a ghost click and
   // a change row click both set (org-staffing.md S5).
   const s = useTrackedStore([
+    (st) => st.tour?.id === "org-page" ? st.tour.step : null,
     (st) => st.currentUser?._id,
     (st) => st.clientState.ui?.active_team_id,
     (st) => st.orgProposals,
@@ -193,7 +197,7 @@ export function OrgPageInner() {
   const [movePicker, setMovePicker] = useState<MoveSubject | null>(null);
   // "Add a role" writes one; "Hire" opens the gallery of templates (org-hire.md H3).
   const [addRoleOpen, setAddRoleOpen] = useState<false | "manual" | "template">(false);
-  // S16: the seat-the-existing-agent moment, opened by hireChief when a
+  // S16: the seat-the-existing-agent moment, opened by hireHeadOfPeople when a
   // standing agent already exists.
   const [seatDialog, setSeatDialog] = useState<{ name: string; convId: string; messageCount?: number } | null>(null);
   const [resetKey, setResetKey] = useState(0);
@@ -208,10 +212,17 @@ export function OrgPageInner() {
   // selecting a node while it is open keeps the pane and highlights the node.
   const proposalShortId = proposalParam(searchParams.toString());
   // `?compose=<text>` (a charter empty state links here) opens the pane and
-  // seeds the chief of staff's composer with the text.
+  // seeds the head of people's composer with the text.
   const composeText = composeParam(searchParams.toString());
-  const [panelMode, setPanelModeState] = useState<OrgPanelMode>(proposalShortId || composeText ? "staffing" : "node");
-  const [staffingOpen, setStaffingOpen] = useState(!!proposalShortId || !!composeText);
+  const [panelMode, setPanelModeState] = useState<OrgPanelMode>(proposalShortId ? "staffing" : "node");
+  const [staffingOpen, setStaffingOpen] = useState(!!proposalShortId);
+  // `?view=health` is the health page (HealthBoard): the chart in its health
+  // mode, each role's week on its card, and the head of people's conversation
+  // in its own column. A proposal link wins: the page is the proposal while one is open.
+  // `?compose=` lands here too, since the Head of People's composer lives on it.
+  const healthPage = !proposalShortId && (new URLSearchParams(searchParams.toString()).get("view") === "health" || !!composeText);
+  /** The role open in the health page's drawer, and lit on its chart. */
+  const [healthFocus, setHealthFocus] = useState<string | null>(null);
   const [editRoleChange, setEditRoleChange] = useState<OrgProposalChange | null>(null);
   // The review "Propose an org now" started lives in the prefs bag
   // (ClientUI.org_review_run), so a reload or a visit elsewhere does not
@@ -223,9 +234,6 @@ export function OrgPageInner() {
   const [graphFocus, setGraphFocus] = useState<OrgFocusTarget | null>(null);
   const focusSeq = useRef(0);
   const askFocus = useCallback((kind: OrgFocusTarget["kind"], id: string) => setGraphFocus({ kind, id, seq: ++focusSeq.current }), []);
-  // The tour of the page's parts (org-staffing.md S14): opened by hand from
-  // "How this page works", never on its own.
-  const [guide, setGuide] = useState<{ step: number } | null>(null);
   // The first visit (S20), the one first-open flow: the one screen built
   // from the faces, over the body. Opens on its own once the tree and the
   // prefs have landed and org_intro_seen is unset. Either action writes the
@@ -265,11 +273,12 @@ export function OrgPageInner() {
     return { kind: "foreign", shortId: linkState.shortId, workspaceName, onSwitch: () => void switchWorkspace(ws.kind === "team" ? ws.id : null) };
   }, [linkState, s.teams, meId, switchWorkspace]);
   const health: OrgHealth | null = preview ? ORG_STAFFING_FIXTURE_HEALTH : storeHealth;
-  const chief = useMemo(() => findChiefOfStaff(tree), [tree]);
+  const head = useMemo(() => findHeadOfPeople(tree), [tree]);
   // The loop (org-staffing.md S29): the person's open decisions feed "Needs
   // you" (the pane keeps the ones the org routed), and the in-place verbs
   // are the store's own actions. The preview sends nothing.
   const queue = useDecisionQueue();
+  const waitingOnMe = useMemo(() => needsYou(tree, health, queue, workspaceProposals, null).length, [tree, health, queue, workspaceProposals]);
   const previewOnly = useCallback(() => toast.success("Preview: nothing is sent"), []);
   const answerDecision = useCallback((decisionId: string, index: number) => { if (preview) return previewOnly(); useInboxStore.getState().answerDecision(decisionId, { index }); }, [preview, previewOnly]);
   const triggerVerb = useCallback((taskId: string, verb: "pause" | "resume" | "runNow") => { if (preview) return previewOnly(); useInboxStore.getState().triggerAction(taskId, verb); }, [preview, previewOnly]);
@@ -282,16 +291,26 @@ export function OrgPageInner() {
   const reviewState = reviewRunState(reviewRun, now, tree?.workspace.id ?? null, workspaceProposals, reviewRow ? { is_idle: reviewRow.is_idle, status: reviewRow.status } : null);
   const reviewing = reviewState === "reviewing";
   const reviewSession = reviewState === "none" ? null : reviewRun?.session_id ?? null;
-  const setProposalParam = useCallback((shortId: string | null) => {
+  const replaceParams = useCallback((edit: (params: URLSearchParams) => void) => {
     const params = new URLSearchParams(searchParams.toString());
-    if (shortId) params.set("proposal", shortId); else params.delete("proposal");
+    edit(params);
     const qs = params.toString();
     router.replace(qs ? `/org?${qs}` : "/org");
   }, [searchParams, router]);
+  const setProposalParam = useCallback((shortId: string | null) => replaceParams((params) => {
+    if (shortId) { params.set("proposal", shortId); params.delete("view"); } else params.delete("proposal");
+  }), [replaceParams]);
+  const setHealthPage = useCallback((on: boolean) => replaceParams((params) => {
+    if (on) { params.set("view", "health"); params.delete("proposal"); } else params.delete("view");
+  }), [replaceParams]);
+  // With no proposal to show, the staffing sheet's question is the company's
+  // health, which has its own page: a sheet tab or a guide step lands there.
+  const healthIsPage = !proposal && !!head;
   const setPanelMode = useCallback((mode: OrgPanelMode) => {
+    if (mode === "staffing" && healthIsPage) { setHealthPage(true); return; }
     setPanelModeState(mode);
     if (mode !== "node") setStaffingOpen(true);
-  }, []);
+  }, [healthIsPage, setHealthPage]);
   const focusChangeId = storeFocusChangeId;
   const setFocusChangeId = useCallback((id: string | null) => useInboxStore.getState().setOrgFocusChangeId(id), []);
   // The compose text lands in the standing session's store draft, which is
@@ -299,16 +318,13 @@ export function OrgPageInner() {
   // the parameter leaves the URL so a reload does not seed it twice. A draft
   // the person already typed wins.
   useWatchEffect(() => {
-    const conv = chief?.standing?.conversation_id;
+    const conv = head?.standing?.conversation_id;
     if (!composeText || !conv) return;
     const st = useInboxStore.getState();
     const existing = st.getDraft(conv) ?? {};
     if (!existing.draft_message) st.setDraft(conv, { ...existing, draft_message: composeText });
-    const params = new URLSearchParams(searchParams.toString());
-    params.delete("compose");
-    const qs = params.toString();
-    router.replace(qs ? `/org?${qs}` : "/org");
-  }, [composeText, chief?.standing?.conversation_id]);
+    replaceParams((params) => { params.delete("compose"); if (!proposalShortId) params.set("view", "health"); });
+  }, [composeText, head?.standing?.conversation_id]);
   // A ghost click on the chart sets the scalar; the pane opens on that change.
   useWatchEffect(() => {
     if (storeFocusChangeId) setPanelMode("staffing");
@@ -324,7 +340,7 @@ export function OrgPageInner() {
 
   // -------- store actions (or the preview equivalent)
   const slice = useMemo(() => createOrgSlice(), []);
-  const run = useCallback(<K extends "reparentOrgSession" | "reparentOrgRole" | "createOrgRole" | "updateOrgRole" | "retireOrgRole" | "staffChiefOfStaff">(name: K, ...args: Parameters<ReturnType<typeof createOrgSlice>[K]>) => {
+  const run = useCallback(<K extends "reparentOrgSession" | "reparentOrgRole" | "createOrgRole" | "updateOrgRole" | "retireOrgRole" | "staffHeadOfPeople">(name: K, ...args: Parameters<ReturnType<typeof createOrgSlice>[K]>) => {
     if (preview) {
       setPreviewTree((t) => mutate(t, (draft) => { (slice[name] as any).call({ orgTree: draft }, ...args); }));
       return;
@@ -353,18 +369,15 @@ export function OrgPageInner() {
   // -------- first open (S14)
   const liveRoles = tree ? tree.roles.filter((r) => r.status !== "retired").length : 0;
   const meNodeId = me ? parentNodeId({ kind: "user", user_id: me.user_id }) : null;
-  // The first step is the person's own node: bring it into view.
+  // The tours (tours/registry.ts): the page's own, once the first visit's
+  // screen is out of the way; the health panel's the first time it is open;
+  // the gallery's the first time it is open; the proposal's the first time one
+  // is open in the pane. Each runs once per person; the Tours panel replays.
+  // The tour's first step is the person's own node: bring it into view.
+  const tourStep = s.tour?.id === "org-page" ? s.tour.step : null;
   useWatchEffect(() => {
-    if (guide?.step === 0 && meNodeId) askFocus("node", meNodeId);
-  }, [guide?.step, meNodeId, askFocus]);
-  const closeGuide = useCallback(() => setGuide(null), []);
-  // With a proposal open, the last step points at it (the remaining count is
-  // read where staffingCount is, below; the steps only need the two facts).
-  const guideProposal = proposal?.status === "open" ? { remaining: asksProgress(proposalAsks(proposal)).remaining } : null;
-  // The role step points at a real card, so it needs a live role's node id
-  // rather than the old "are there any roles" boolean.
-  const guideRoleNodeId = tree ? (tree.roles.find((r) => r.status !== "retired")?._id ?? null) : null;
-  const guideSteps = useMemo(() => orgGuideSteps({ meNodeId, roleNodeId: guideRoleNodeId ? roleNodeId(guideRoleNodeId) : null, openProposal: guideProposal }), [meNodeId, guideRoleNodeId, guideProposal?.remaining]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (tourStep === 0 && meNodeId) askFocus("node", meNodeId);
+  }, [tourStep, meNodeId, askFocus]);
   /** Which cards may be picked up at all: no drag that would only snap back. */
   const canDrag = useCallback((n: OrgLayoutNode) => n.kind === "session" ? canMoveSession(n.session) : n.kind === "role" ? canEditRole(n.role._id) : false, [canMoveSession, canEditRole]);
 
@@ -568,22 +581,22 @@ export function OrgPageInner() {
     else if (changeId) askFocus("change", changeId);
     else setGraphFocus(null);
   }, [proposal, tree, setFocusChangeId, focusNode, askFocus]);
-  /** A paused chief's triggers hold until resumed; the composer says so and
+  /** A paused Head of People's triggers hold until resumed; the composer says so and
    *  this is its Resume. */
-  const resumeChief = useCallback((roleId: string) => updateRole(roleId, { status: "active" }), [updateRole]);
-  // Staff the chief (S16). `seat` says what to do with the workspace's existing
+  const resumeHeadOfPeople = useCallback((roleId: string) => updateRole(roleId, { status: "active" }), [updateRole]);
+  // Staff the Head of People (S16). `seat` says what to do with the workspace's existing
   // standing agent: seat it (default, nothing restarts) or start fresh and
   // retire the old one. After a seat, route to the thread and say what changed.
-  const doStaffChief = useCallback((seat?: ChiefSeatChoice) => {
+  const doStaffHead = useCallback((seat?: HeadSeatChoice) => {
     const host = me?.user_id ?? meId;
     if (!tree || !host) return;
     // The provisioned standing session starts in a project, like every
     // session the web starts (the same resolution proposeNow uses).
     const st = useInboxStore.getState();
     const projectPath = defaultNewSessionPath(st);
-    const input = { ...(tree.workspace.kind === "team" ? { team_id: tree.workspace.id } : {}), ...(projectPath ? { project_path: projectPath } : {}), host_user_id: host, client_id: `orgrolestub-chief-${Math.random().toString(36).slice(2)}`, ...(seat ? { seat } : {}) };
-    if (preview) { run("staffChiefOfStaff", input); toast.success("Hiring the chief of staff", { description: "Its first review lands as a proposal here." }); return; }
-    void useInboxStore.getState().staffChiefOfStaff(input).then((r) => {
+    const input = { ...(tree.workspace.kind === "team" ? { team_id: tree.workspace.id } : {}), ...(projectPath ? { project_path: projectPath } : {}), host_user_id: host, client_id: `orgrolestub-head-${Math.random().toString(36).slice(2)}`, ...(seat ? { seat } : {}) };
+    if (preview) { run("staffHeadOfPeople", input); toast.success("Hiring the head of people", { description: "Its first review lands as a proposal here." }); return; }
+    void useInboxStore.getState().staffHeadOfPeople(input).then((r) => {
       // Route to the thread and say what changed (S16). A seat keeps the agent;
       // a fresh start replaces it. When no thread came back, the review still
       // lands as a proposal on this page.
@@ -594,11 +607,11 @@ export function OrgPageInner() {
         // The contract's own words (S16): name what it was, what it is, and
         // that nothing restarted, so seating never reads as a takeover.
         const was = r?.previous_title?.trim();
-        toast.success(`Your agent${was ? `, formerly ${was},` : ""} is now your Chief of Staff. Nothing restarted.`, { action: open });
+        toast.success(`Your agent${was ? `, formerly ${was},` : ""} is now your Head of People. Nothing restarted.`, { action: open });
       } else if (r?.seated === "fresh") {
-        toast.success("Your new Chief of Staff is running", { description: "The old agent was retired. Its thread is kept and linked from its page.", action: open });
+        toast.success("Your new Head of People is running", { description: "The old agent was retired. Its thread is kept and linked from its page.", action: open });
       } else {
-        toast.success("Hiring the chief of staff", { description: "Its first review lands as a proposal here.", action: open });
+        toast.success("Hiring the head of people", { description: "Its first review lands as a proposal here.", action: open });
       }
     }).catch(() => {});
   }, [tree, me, meId, run, preview, openSession]);
@@ -616,7 +629,7 @@ export function OrgPageInner() {
     introOffered.current = true;
     setIntro("auto");
   }, [tree, preview, initialized, introSeen]);
-  const hireChief = useCallback(() => {
+  const hireHeadOfPeople = useCallback(() => {
     if (!tree) return;
     // The explained moment (S16): a workspace with a standing agent already
     // opens the seat dialog; an empty one hires fresh straight away. The
@@ -628,17 +641,17 @@ export function OrgPageInner() {
       const count = (useInboxStore.getState().sessions as Record<string, { message_count?: number } | undefined>)?.[convId]?.message_count;
       setSeatDialog({ name: wsAnchor.name, convId, messageCount: count });
     } else {
-      doStaffChief();
+      doStaffHead();
     }
-  }, [tree, doStaffChief]);
+  }, [tree, doStaffHead]);
   /** Either action closes the screen and writes the pref (S20). The start
-   *  action asks the chief of staff when the workspace has no roles; with
+   *  action asks the head of people when the workspace has no roles; with
    *  roles the chart is already under the screen. */
   const closeIntro = useCallback((how: "start" | "later") => {
     setIntro(null);
     if (!preview) markOrgIntroSeen(useInboxStore.getState());
-    if (how === "start" && liveRoles === 0) hireChief();
-  }, [preview, liveRoles, hireChief]);
+    if (how === "start" && liveRoles === 0) hireHeadOfPeople();
+  }, [preview, liveRoles, hireHeadOfPeople]);
   /** "Propose an org now": one review from a fresh session, no hire (S8).
    *  Rides the same spawn route as every session the web starts. */
   const proposeNow = useCallback(() => {
@@ -759,7 +772,7 @@ export function OrgPageInner() {
       onClearAbout={clearAbout}
       onSay={say}
       onOpenSession={openSession}
-      onResume={resumeChief}
+      onResume={resumeHeadOfPeople}
       firstTime={firstTime}
       now={now}
       asksBar={asksBar}
@@ -767,6 +780,10 @@ export function OrgPageInner() {
     />
   ) : null;
   const effectivePanelMode: OrgPanelMode = nodeSelected || panelMode === "history" ? panelMode : "staffing";
+  useTourAutoStart("org-page", !!tree && !intro && (preview || introSeen) && !phone);
+  useTourAutoStart("org-health", !!tree && healthPage && !phone);
+  useTourAutoStart("org-hire", !!tree && addRoleOpen === "template" && !phone, { insideModal: true });
+  useTourAutoStart("org-proposal", !!tree && !healthPage && panelOpen && effectivePanelMode === "staffing" && proposal?.status === "open" && !phone);
   // The pane is the page only while it is open (S19): closed, the chart's
   // own header comes back, with its guide and its counters.
   const threadLeads = panelOpen && effectivePanelMode === "staffing" && !!threadNode;
@@ -792,7 +809,7 @@ export function OrgPageInner() {
       proposals={workspaceProposals}
       proposal={proposal}
       selectedChangeId={focusChangeId}
-      chief={chief}
+      head={head}
       reviewing={reviewing}
       reviewEnded={reviewState === "ended"}
       reviewSessionId={reviewSession}
@@ -806,15 +823,16 @@ export function OrgPageInner() {
       onOpenSession={openSession}
       onPickProposal={setProposalParam}
       onWithdraw={withdrawProposal}
-      onHireChief={hireChief}
+      onHireHeadOfPeople={hireHeadOfPeople}
       onProposeNow={proposeNow}
-      onResumeChief={resumeChief}
+      onResumeHeadOfPeople={resumeHeadOfPeople}
       hasThread={!!threadRef}
       titleInPageHeader={titleInPageHeader}
       onAskAbout={threadRef ? askAbout : undefined}
       onAskAboutAsk={threadRef ? askAboutAsk : undefined}
       revised={threadRef ? { rows: revisedRows, who: threadRef.name, onSeen: seenRevisions } : undefined}
       link={link}
+      onOpenHealth={() => { closePanel(); setHealthPage(true); }}
       queue={queue}
       onAnswerDecision={answerDecision}
       onTrigger={triggerVerb}
@@ -851,6 +869,80 @@ export function OrgPageInner() {
     focusChangeId,
     onSelectChange: selectChange,
   } : null;
+
+  // -------- the health page: the same tree, each role carrying its week
+  const flows = useMemo(() => healthPage ? roleFlows(tree, health, now) : [], [healthPage, tree, health, now]);
+  const healthMap = useMemo(() => flowMap(flows), [flows]);
+  const healthView = useMemo<OrgLayoutView>(() => ({ ...view, structureOnly: true }), [view]);
+  const healthFocusNode = healthFocus ? roleNodeId(healthFocus) : null;
+  const healthDays = useMemo(() => flowDays(now), [now]);
+  const healthRoles = useMemo(() => Object.fromEntries(flows.map((f) => [f.nodeId, f])), [flows]);
+  /** A role opened from its card or the drawer: the chart brings it above the drawer. */
+  const focusHealthRole = useCallback((roleId: string | null) => {
+    setHealthFocus(roleId);
+    if (roleId) askFocus("node", roleNodeId(roleId)); else setGraphFocus(null);
+  }, [askFocus]);
+  const pickFromHealth = useCallback((shortId: string) => { setProposalParam(shortId); setPanelModeState("staffing"); setStaffingOpen(true); }, [setProposalParam]);
+  const setLimit = useCallback((roleId: string, perDay: number) => {
+    const role = tree?.roles.find((r) => r._id === roleId);
+    if (!role) return;
+    if (preview) return previewOnly();
+    updateRole(roleId, { caps: { ...DEFAULT_ROLE_CAPS, ...(role.caps ?? {}), wakes_per_day: perDay } });
+    toast.success(`${role.name} can now take ${perDay} a day`);
+  }, [tree, preview, previewOnly, updateRole]);
+  const healthBoard = healthPage && tree ? (
+    <HealthBoard
+      tree={tree}
+      health={health}
+      flows={flows}
+      healthMissing={!preview && healthMissing}
+      healthError={!preview && !healthMissing ? healthError?.message : undefined}
+      onRetryHealth={refreshHealth}
+      proposals={workspaceProposals}
+      queue={queue}
+      head={head}
+      now={now}
+      phone={phone}
+      focusRoleId={healthFocus}
+      onFocusRole={focusHealthRole}
+      reviewing={reviewing}
+      reviewEnded={reviewState === "ended"}
+      reviewSessionId={reviewSession}
+      onOpenSession={openSession}
+      onPickProposal={pickFromHealth}
+      onSelectNode={(nodeId) => { const ref = parentRefOfNodeId(nodeId); if (ref?.kind === "role") focusHealthRole(ref.role_id); }}
+      onAnswerDecision={answerDecision}
+      onTrigger={triggerVerb}
+      onSetTriggerEvery={setTriggerEvery}
+      onSendToRole={sendToRole}
+      onResumeHeadOfPeople={resumeHeadOfPeople}
+      onSetLimit={setLimit}
+      canEditRole={canEditRole}
+      map={layout && layout.nodes.length > 0 ? (
+        <OrgGraph
+          tree={tree}
+          view={healthView}
+          selectedId={healthFocusNode}
+          loadingClusters={loadingClusters}
+          showMiniMap={false}
+          onSelect={(id) => { const ref = id ? parentRefOfNodeId(id) : null; focusHealthRole(ref?.kind === "role" ? ref.role_id : null); }}
+          panelHeightFraction={healthFocus ? HEALTH_DRAWER_FRACTION : 0}
+          onToggleCollapse={toggleCollapse}
+          onExpandCluster={loadMore}
+          onCollapseCluster={collapseCluster}
+          onReparentRequest={requestMove}
+          canDrag={() => false}
+          onNodeContextMenu={(e, n) => menu.open(e, n, { force: true })}
+          onOpenSession={openSession}
+          resetKey={resetKey}
+          health={health}
+          viewerSession={viewerSession}
+          focusTarget={graphFocus}
+          flow={{ map: healthMap, focusNodeId: healthFocusNode, roles: healthRoles, days: healthDays }}
+        />
+      ) : null}
+    />
+  ) : null;
 
   return (
     <div className="h-full flex flex-col overflow-hidden relative" style={{ background: "var(--sol-bg)", color: "var(--sol-text)" }}>
@@ -892,10 +984,10 @@ export function OrgPageInner() {
             {tree && <span className="text-[13px] font-normal mt-1 truncate" style={{ color: "var(--sol-text-dim)", fontFamily: "var(--font-mono)" }}>/ {tree.workspace.name || (tree.workspace.kind === "user" ? "personal" : "team")}</span>}
           </h1>
           <p className="mt-1.5 text-[12.5px] truncate flex items-center gap-2" style={{ color: "var(--sol-text-muted)" }}>
-            <span className="hidden sm:inline truncate">Who reports to whom: people, the roles they hired, every session. Drag a card to move it.</span>
+            <span className="hidden sm:inline truncate">{healthPage ? "How work moves through the company this week, and what you can change about it." : "Who reports to whom: people, the roles they hired, every session. Drag a card to move it."}</span>
             <span className="sm:hidden truncate">Who reports to whom. Drag a card to move it.</span>
             {tree && (
-              <button type="button" onClick={() => setGuide({ step: 0 })} className="shrink-0 underline-offset-2 hover:underline" style={{ color: "var(--sol-violet)" }} data-org-guide="reopen">How this page works</button>
+              <button type="button" onClick={() => startTour("org-page", { replay: true })} className="shrink-0 underline-offset-2 hover:underline" style={{ color: "var(--sol-violet)" }} data-org-guide="reopen">How this page works</button>
             )}
             {tree && (
               <button type="button" onClick={() => setGlossary("words")} className="shrink-0 underline-offset-2 hover:underline" style={{ color: "var(--sol-violet)" }} title="The words this page uses, each in one sentence" data-org-glossary-open>Words</button>
@@ -921,19 +1013,20 @@ export function OrgPageInner() {
           )}
           <button
             type="button"
-            onClick={() => setPanelMode("staffing")}
-            className={cn("h-[34px] inline-flex items-center gap-1.5 px-3 rounded-lg border text-[12.5px] font-medium transition-colors", staffingOpen && panelMode === "staffing" ? "bg-sol-bg-highlight" : "hover:bg-sol-bg-highlight/60")}
-            style={{ borderColor: "color-mix(in srgb, var(--sol-border) 30%, transparent)", color: "var(--sol-text-muted)" }}
-            title={proposal ? `The open proposal: ${staffingCount} to decide` : "How the company is doing, and where a proposal starts"}
-            aria-pressed={staffingOpen && panelMode === "staffing"}
+            onClick={() => { if (!healthPage) closePanel(); setHealthPage(!healthPage); }}
+            className={cn("h-[34px] inline-flex items-center gap-1.5 px-3 rounded-lg border text-[12.5px] font-medium transition-colors", healthPage ? "bg-sol-bg-highlight" : "hover:bg-sol-bg-highlight/60")}
+            style={{ borderColor: healthPage ? "color-mix(in srgb, var(--sol-violet) 45%, transparent)" : "color-mix(in srgb, var(--sol-border) 30%, transparent)", color: healthPage ? "var(--sol-text)" : "var(--sol-text-muted)" }}
+            title="How work flows through the company, and what is waiting on you"
+            aria-pressed={healthPage}
             data-org-guide="staffing"
+            data-org-health-open
           >
-            {staffingPaneWord(!!proposal)}
-            {staffingCount > 0 && <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold tabular-nums" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }}>{staffingCount}</span>}
+            <Activity className="w-3.5 h-3.5" /> Health
+            {waitingOnMe > 0 && <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold tabular-nums" style={{ background: "var(--sol-orange)", color: "var(--sol-bg)" }} title={`${waitingOnMe} waiting on you`}>{waitingOnMe}</span>}
           </button>
           <button
             type="button"
-            onClick={() => setPanelMode("history")}
+            onClick={() => { if (healthPage) setHealthPage(false); setPanelMode("history"); }}
             className={cn("h-[34px] inline-flex items-center gap-1.5 px-3 rounded-lg border text-[12.5px] font-medium transition-colors", panelOpen && effectivePanelMode === "history" ? "bg-sol-bg-highlight" : "hover:bg-sol-bg-highlight/60")}
             style={{ borderColor: "color-mix(in srgb, var(--sol-border) 30%, transparent)", color: "var(--sol-text-muted)" }}
             title="What changed, who changed it, and a way back"
@@ -981,7 +1074,10 @@ export function OrgPageInner() {
         </div>
       )}
 
-      {/* body */}
+      {/* body: the health page, or the chart with its panel */}
+      {healthPage && tree ? (
+        <div className="flex-1 min-h-0" data-org-body="health">{healthBoard}</div>
+      ) : (
       <div className="flex-1 min-h-0 relative flex">
         <div className="relative flex-1 min-w-0" style={{ background: "radial-gradient(ellipse at 50% 0%, color-mix(in srgb, var(--sol-bg-alt) 55%, transparent) 0%, transparent 60%)" }}>
           {tree && layout && layout.nodes.length > 0 ? (
@@ -1050,7 +1146,7 @@ export function OrgPageInner() {
           )}
           {/* S14: no roles yet. The person's own node is on the canvas; this is the paragraph and the two buttons that start a proposal. */}
           {tree && layout && liveRoles === 0 && !proposal && !(phone && panelOpen) && (
-            <OrgEmptyCanvas me={me ?? null} reviewing={reviewing} reviewEnded={reviewState === "ended"} onOpenReview={reviewSession ? () => openSession(reviewSession) : undefined} onHireChief={hireChief} onProposeNow={proposeNow} />
+            <OrgEmptyCanvas me={me ?? null} reviewing={reviewing} reviewEnded={reviewState === "ended"} onOpenReview={reviewSession ? () => openSession(reviewSession) : undefined} onHireHeadOfPeople={hireHeadOfPeople} onProposeNow={proposeNow} />
           )}
           <div className="pointer-events-none absolute bottom-3 hidden lg:flex items-center gap-2 text-[10.5px] whitespace-nowrap transition-[right] duration-200" style={{ color: "var(--sol-text-dim)", right: panelWidth + 12 }}>
             <span>drag to move · double click to open</span>
@@ -1079,6 +1175,7 @@ export function OrgPageInner() {
           </div>
         )}
       </div>
+      )}
 
       {/* pagers */}
       {Object.entries(requests).map(([pid, r]) => (
@@ -1099,15 +1196,15 @@ export function OrgPageInner() {
         />
       )}
 
-      {/* seat the chief (S16) */}
+      {/* seat the Head of People (S16) */}
       {seatDialog && (
-        <ChiefSeatDialog
+        <HeadSeatDialog
           open
           onClose={() => setSeatDialog(null)}
           teamId={tree?.workspace.kind === "team" ? tree.workspace.id : undefined}
           agentName={seatDialog.name}
           messageCount={seatDialog.messageCount}
-          onConfirm={(seat: ChiefSeatChoice) => doStaffChief(seat)}
+          onConfirm={(seat: HeadSeatChoice) => doStaffHead(seat)}
         />
       )}
 
@@ -1149,7 +1246,6 @@ export function OrgPageInner() {
       )}
 
       {/* first open guide (S14) */}
-      {guide && tree && <OrgGuide steps={guideSteps} step={guide.step} onStep={(i) => setGuide({ step: i })} onDone={closeGuide} onAction={(id) => { if (id === "open_proposal") setPanelMode("staffing"); }} />}
       <OrgGlossary open={glossary} onClose={() => setGlossary(null)} tree={tree} health={health} proposal={proposal} />
 
       {/* context menu */}

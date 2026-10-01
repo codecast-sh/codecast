@@ -16,6 +16,8 @@
 //      best matches, everything later on the same topic, the human's turns,
 //      the tail), and
 //   5. asks the model, which answers with `cast read` line citations.
+// Both model calls are built by askTermsRequest and askAnswerRequest
+// (lib/sessionAsk.ts), the same builders the evals replay.
 
 import { action, internalAction, internalQuery } from "./functions";
 import type { ActionCtx } from "./_generated/server";
@@ -27,22 +29,15 @@ import { readFileChangeIndex } from "./fileChangeBodies";
 import { callModel, cheapModelCost, CHEAP_MODEL } from "./lib/anthropic";
 import {
   ASK_MAX_QUESTION_CHARS,
-  ASK_SYSTEM_PROMPT,
-  buildAskPrompt,
-  buildTermsPrompt,
+  askAnswerRequest,
+  askTerms,
+  askTermsRequest,
   citationTargets,
-  dedupeTerms,
-  parseTermsReply,
-  questionTerms,
   readSession,
-  selectAskContext,
   toAskLine,
   type AskMessage,
   type AskScanLine,
 } from "./lib/sessionAsk";
-
-/** Characters of excerpt the model reads: about 50k tokens, a few cents. */
-const ASK_BUDGET_CHARS = 180_000;
 /** Scan steps one question may take (each reads at most READ_STEP_BYTES). */
 const ASK_MAX_STEPS = 300;
 /** Wall time the scan may take. With the two model calls' own limits this
@@ -170,12 +165,12 @@ async function answerQuestion(ctx: ActionCtx, args: AskArgs): Promise<AskResult>
   }
 
   const usage = { input_tokens: 0, output_tokens: 0 };
-  const expansion = await callModel({ prompt: buildTermsPrompt(question), max_tokens: 200, label: "Ask terms", timeout_ms: ASK_TERMS_MS });
+  const expansion = await callModel({ ...askTermsRequest(question), label: "Ask terms", timeout_ms: ASK_TERMS_MS });
   if (expansion) {
     usage.input_tokens += expansion.usage.input_tokens;
     usage.output_tokens += expansion.usage.output_tokens;
   }
-  const terms = dedupeTerms([...questionTerms(question), ...parseTermsReply(expansion?.text)]);
+  const terms = askTerms(question, expansion?.text);
 
   const read = await readSession(async ({ order, after, stop_after }) => {
     const page: AskScanStep = await ctx.runQuery(internal.sessionAsk.askScan, {
@@ -199,24 +194,8 @@ async function answerQuestion(ctx: ActionCtx, args: AskArgs): Promise<AskResult>
     const line = idToLine.get(change.message_id);
     if (line !== undefined) extraFiles.set(line, [...(extraFiles.get(line) ?? []), change.path]);
   }
-  const unreadAfter = read.complete ? undefined : read.headLines;
-  const context = selectAskContext(lines, { budget: ASK_BUDGET_CHARS, termCount: terms.length, extraFiles, unreadAfter });
-
-  const prompt = buildAskPrompt({
-    question,
-    title: head.conversation.title,
-    totalLines: lines.length,
-    shownLines: context.shownLines.length,
-    excerpts: context.text,
-    unread: read.complete ? undefined : { headLines: read.headLines, tailLines: read.tailLines },
-  });
-  const reply = await callModel({
-    system: ASK_SYSTEM_PROMPT,
-    prompt,
-    max_tokens: 1500,
-    label: "Ask answer",
-    timeout_ms: ASK_ANSWER_MS,
-  });
+  const { context, request } = askAnswerRequest({ question, title: head.conversation.title, read, termCount: terms.length, extraFiles });
+  const reply = await callModel({ ...request, label: "Ask answer", timeout_ms: ASK_ANSWER_MS });
   if (!reply) throw new Error("The model did not answer; retry in a moment");
   usage.input_tokens += reply.usage.input_tokens;
   usage.output_tokens += reply.usage.output_tokens;
@@ -238,7 +217,7 @@ async function answerQuestion(ctx: ActionCtx, args: AskArgs): Promise<AskResult>
     model: CHEAP_MODEL,
     usage: { ...usage, cost_usd: Math.round(cheapModelCost(usage) * 10_000) / 10_000 },
     took_ms: Date.now() - started,
-    ...(args.debug?.include_prompt ? { prompt } : {}),
+    ...(args.debug?.include_prompt ? { prompt: request.prompt } : {}),
   };
 }
 

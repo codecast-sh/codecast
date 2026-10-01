@@ -199,6 +199,9 @@ test("composes windows, tray, menus, protocol and IPC from config", async () => 
   // Sound is the caller's choice, per banner.
   await el.handlers.get("show-notification")({}, { title: "a", body: "b", data: { key: "s", silent: true } });
   expect(el.notifications.map((n) => n.opts.silent)).toEqual([false, false, true]);
+  // The subject line rides under the title.
+  await el.handlers.get("show-notification")({}, { title: "a", body: "b", data: { key: "u", subtitle: "Thursday" } });
+  expect(el.notifications.at(-1).opts.subtitle).toBe("Thursday");
 
   // Tab windows: only app-relative paths may ride detach.
   await el.handlers.get("detach-tab")({}, "https://evil.example");
@@ -443,6 +446,10 @@ test("app defined ipc handlers, events, menu items and windows", async () => {
   const win = api.openWindow({ file: "/app/setup.html", width: 640 });
   expect(win.loaded).toBe("file:/app/setup.html");
   expect(win.opts.webPreferences.additionalArguments).toContain("--bridge-global=__CODECAST_ELECTRON__");
+  // The app's own file is a file:// document, and the preload only opens the
+  // bridge for listed origins, so the window has to list it or its page is inert.
+  const origins = win.opts.webPreferences.additionalArguments.find((a) => a.startsWith("--bridge-origins="));
+  expect(origins.slice("--bridge-origins=".length).split(",")).toContain("file://");
   api.emit("permissions-changed", { fda: "granted" });
   expect(win.webContents.sent).toContainEqual(["app:permissions-changed", { fda: "granted" }]);
   expect(() => api.emit("not-listed", 1)).toThrow(/ipc.events/);

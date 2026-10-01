@@ -1,5 +1,7 @@
 import { StyleSheet } from 'react-native';
 import { useSyncExternalStore } from 'react';
+import { MOBILE_TAB_BAR_STYLE } from '@codecast/shared/render/mobileTabsStyle';
+import { MOBILE_CHIP_HEIGHT, MOBILE_CHIP_STYLE } from '@codecast/shared/render/mobileSessionStyle';
 
 export const SolarizedLight = {
   bg: '#FBF5E2',
@@ -189,7 +191,7 @@ export function useTheme(): Palette {
 // The tab bar's fixed height (its own paddingBottom absorbs the home
 // indicator, so this is the full box). Overlays that float above the tab bar
 // (the in-call pill) offset by THIS, not by insets.bottom + a guess.
-export const TAB_BAR_HEIGHT = 84;
+export const TAB_BAR_HEIGHT = MOBILE_TAB_BAR_STYLE.height;
 
 export const Spacing = {
   xs: 4,
@@ -228,19 +230,10 @@ export const CHROME_FONT_CAP = 1.2;
 // device chip, model switcher, footer status): identical fixed height, radius,
 // padding, border weight and text size — only the tint changes. The fixed
 // height keeps mixed content (icons, text, dots) on one optical line.
-export const CHIP_HEIGHT = 22;
+export const CHIP_HEIGHT = MOBILE_CHIP_HEIGHT;
 export const chipShell = {
-  flexDirection: 'row',
-  alignItems: 'center',
-  gap: 4,
-  height: CHIP_HEIGHT,
+  ...MOBILE_CHIP_STYLE.shell,
   borderWidth: StyleSheet.hairlineWidth,
-  borderRadius: 6,
-  paddingHorizontal: 7,
-  maxWidth: 160,
 } as const;
-export const chipText = {
-  fontSize: 11,
-  fontWeight: '600',
-} as const;
+export const chipText = MOBILE_CHIP_STYLE.text;
 export const chipTint = (color: string) => ({ borderColor: color + '40', backgroundColor: color + '14' });

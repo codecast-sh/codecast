@@ -5,6 +5,8 @@ import { briefingFor, performRebriefRoles } from "./anchors";
 import { charterTemplate, ensureRoleRoutine, performCreateRole, performPauseRole, performProvisionRole, performResetOrg, performReparentRole, performResumeRole, performRetireRole, performStaff, resetOrgPreview, seatingNote, standingConversationOf } from "./orgRoles";
 import { ROLE_CHECK_PROMPT } from "./lib/orgRoutine";
 import { performReparentSession } from "./sessionOwnership";
+import { killConversation } from "./conversations";
+import { applyHideTransition } from "./cleanup";
 import { isBootstrapPrompt, isSessionMessage } from "@codecast/shared/contracts";
 
 // A role's lifecycle a person can trust (docs/architecture/org-staffing.md
@@ -128,12 +130,12 @@ describe("org reset (S27)", () => {
         { _id: "op_done", short_id: "op-2", team_id: TEAM, author: { kind: "user", id: ME }, created_by: ME, title: "Done", summary_md: "x", mode: "review", status: "accepted", created_at: 1, updated_at: 1 },
       ],
     });
-    const chief = await performStaff(ctx, ME as any, { team_id: TEAM });
-    const role = await lead(ctx, { reports_to: { kind: "role", role_id: chief.role._id } });
+    const head = await performStaff(ctx, ME as any, { team_id: TEAM });
+    const role = await lead(ctx, { reports_to: { kind: "role", role_id: head.role._id } });
     tables.conversations.find((c) => c._id === "work1")!.org_role_id = role._id;
 
     const preview = await resetOrgPreview(ctx, ME as any, { team_id: TEAM });
-    expect(preview.roles.map((r) => r.handle).sort()).toEqual(["chief-of-staff", "infra"]);
+    expect(preview.roles.map((r) => r.handle).sort()).toEqual(["head-of-people", "infra"]);
     expect(preview.roles.find((r) => r.handle === "infra")!.sessions).toBe(1);
     expect(preview.proposals).toBe(2);
     expect(tables.org_roles.every((r) => r.status === "active")).toBe(true);
@@ -145,7 +147,7 @@ describe("org reset (S27)", () => {
     expect(tables.org_roles.every((r) => r.status === "retired")).toBe(true);
     expect(tables.anchors.every((a) => a.status === "decommissioned")).toBe(true);
     expect(tables.agent_tasks.every((t) => t.status === "cancelled")).toBe(true);
-    // The session under the lead goes back to its owner, not up to the chief.
+    // The session under the lead goes back to its owner, not up to the Head of People.
     expect(tables.conversations.find((c) => c._id === "work1")!.org_role_id).toBeUndefined();
     expect(tables.conversations.some((c) => c.standing_role_id)).toBe(false);
     expect(tables.org_proposals.every((p) => p.archived_at)).toBe(true);
@@ -175,7 +177,7 @@ describe("retire", () => {
 });
 
 describe("what a person and a role read", () => {
-  test("a role with no scope is never told the workspace is its own; the Chief of Staff is", async () => {
+  test("a role with no scope is never told the workspace is its own; the Head of People is", async () => {
     const { ctx, tables } = world();
     const role = await lead(ctx);
     const opening = tables.pending_messages.map((p) => String(p.content)).find((c) => isBootstrapPrompt(c))!;
@@ -183,7 +185,7 @@ describe("what a person and a role read", () => {
     expect(opening).not.toMatch(/whole workspace|You own/);
     expect(charterTemplate(role, [], "Me")).toContain("- no area of its own");
     expect(charterTemplate(role, [], "Me")).not.toContain("whole workspace");
-    expect(charterTemplate({ name: "Chief of Staff", handle: "chief-of-staff" }, [], "Me")).toContain("- the whole workspace");
+    expect(charterTemplate({ name: "Head of People", handle: "head-of-people" }, [], "Me")).toContain("- the whole workspace");
     expect(charterTemplate(role, ["project Infra"], "Me")).toContain("looks after the work in its area");
   });
 
@@ -238,7 +240,7 @@ describe("what a person and a role read", () => {
     await lead(ctx);
     const brief = tables.docs.find((d) => d.doc_type === "brief")!;
     expect(brief.content).not.toMatch(/frame|provisioned/);
-    const note = seatingNote({ short_id: "or-7", handle: "chief-of-staff", name: "Chief of Staff" }, "Acme");
+    const note = seatingNote({ short_id: "or-7", handle: "head-of-people", name: "Head of People" }, "Acme");
     expect(note.replace(/https?:\S+/g, "")).not.toMatch(/or-7|seat/);
   });
 });
@@ -249,10 +251,10 @@ describe("a role's own session belongs to whom the role reports to (S28)", () =>
     const { ctx, tables } = world();
     const role = await lead(ctx, { reports_to: { kind: "user", user_id: PEER } });
     expect(owners(tables, "mine")).toEqual([PEER]);
-    const chief = await performStaff(ctx, ME as any, { team_id: TEAM });
-    await performReparentRole(ctx, ME as any, { role_id: String(role._id), reports_to: { kind: "role", role_id: chief.role._id } as any });
+    const head = await performStaff(ctx, ME as any, { team_id: TEAM });
+    await performReparentRole(ctx, ME as any, { role_id: String(role._id), reports_to: { kind: "role", role_id: head.role._id } as any });
     expect(owners(tables, "mine")).toEqual([]);
-    expect(String(tables.conversations.find((c) => c._id === "mine")!.org_role_id)).toBe(String(chief.role._id));
+    expect(String(tables.conversations.find((c) => c._id === "mine")!.org_role_id)).toBe(String(head.role._id));
     await performReparentRole(ctx, ME as any, { role_id: String(role._id), reports_to: { kind: "user", user_id: ME } as any });
     expect(owners(tables, "mine")).toEqual([ME]);
     expect(tables.conversations.find((c) => c._id === "mine")!.org_role_id).toBeUndefined();
@@ -263,5 +265,21 @@ describe("a role's own session belongs to whom the role reports to (S28)", () =>
     await lead(ctx);
     await expect(performReparentSession(ctx, ME as any, { session_id: "mine", target: { kind: "user", owners: [PEER], mode: "set" } as any })).rejects.toThrow("cast org reparent @infra");
     expect(owners(tables, "mine")).toEqual([ME]);
+  });
+});
+
+describe("a role's own session is retired, never killed (S16)", () => {
+  test("every explicit kill door refuses and names the retire; a retire still decommissions it", async () => {
+    const { ctx, tables } = world();
+    const role = await lead(ctx);
+    const seat = tables.conversations.find((c) => c._id === "mine")!;
+    await expect(killConversation(ctx, ME as any, { conversation_id: "mine" as any })).rejects.toThrow("cast role retire @infra");
+    await expect(applyHideTransition(ctx, seat, { inbox_dismissed_at: NOW }, { forceKill: true })).rejects.toThrow("@infra's own session");
+    expect(seat.inbox_killed_at).toBeUndefined();
+    // A plain session still kills.
+    await killConversation(ctx, ME as any, { conversation_id: "work1" as any });
+    expect(tables.conversations.find((c) => c._id === "work1")!.inbox_killed_at).toBeTruthy();
+    await performRetireRole(ctx, ME as any, { role_id: String(role._id) });
+    expect(tables.org_roles[0].status).toBe("retired");
   });
 });

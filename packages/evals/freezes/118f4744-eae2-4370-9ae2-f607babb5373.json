@@ -1,0 +1,26 @@
+{
+  "name": "settle delivered-summary-no-ask",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:delivered-summary-no-ask"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "settle:delivered-summary-no-ask",
+    "title": "settle delivered-summary-no-ask"
+  },
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "trigger": {
+    "type": "settle"
+  },
+  "meta": {
+    "surface": "settle",
+    "visibility": "public",
+    "snapshot": "fixtures/settle/delivered-summary-no-ask.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "118f4744-eae2-4370-9ae2-f607babb5373",
+  "createdAt": "2026-10-01T17:46:16.704Z"
+}

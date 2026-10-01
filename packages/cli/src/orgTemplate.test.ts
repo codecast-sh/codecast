@@ -529,10 +529,10 @@ describe("the project's lead", () => {
     m.role.avatar = "fox"; m.role.tenure = { kind: "program", then: "review" };
     const source = folder(m);
     const server = new Server(tmp());
-    server.roles.push({ _id: "role-lead", short_id: "or-9", handle: "growth", name: "Growth lead", status: "paused", scope: { project_ids: ["project-1"], plan_ids: [] } }, { _id: "role-cos", short_id: "or-1", handle: "chief-of-staff", name: "Chief of Staff", status: "active", scope: { project_ids: [], plan_ids: [] } }, { _id: "role-old", short_id: "or-2", handle: "old-lead", name: "Old", status: "retired", scope: { project_ids: ["project-1"], plan_ids: [] } });
+    server.roles.push({ _id: "role-lead", short_id: "or-9", handle: "growth", name: "Growth lead", status: "paused", scope: { project_ids: ["project-1"], plan_ids: [] } }, { _id: "role-cos", short_id: "or-1", handle: "head-of-people", name: "Head of People", status: "active", scope: { project_ids: [], plan_ids: [] } }, { _id: "role-old", short_id: "or-2", handle: "old-lead", name: "Old", status: "retired", scope: { project_ids: ["project-1"], plan_ids: [] } });
     const options: TemplateOptions = { dir: server.dir, project: "project-1", team: "team-1", session: "sess-1" };
     await expect(installTemplate(server.deps, source, "acme", options)).rejects.toThrow(/already has a lead, @growth.*--reports-to @growth/);
-    await expect(installTemplate(server.deps, source, "acme", { ...options, reportsTo: "@chief-of-staff" })).rejects.toThrow(/already has a lead, @growth/);
+    await expect(installTemplate(server.deps, source, "acme", { ...options, reportsTo: "@head-of-people" })).rejects.toThrow(/already has a lead, @growth/);
     await expect(installTemplate(server.deps, source, "acme", { ...options, reportsTo: "@nobody" })).rejects.toThrow(/No active role @nobody/);
     await expect(installTemplate(server.deps, source, "acme", { ...options, reportsTo: "growth" })).rejects.toThrow(/me or @handle/);
     expect(server.writes()).toHaveLength(0);

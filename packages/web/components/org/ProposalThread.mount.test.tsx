@@ -40,9 +40,9 @@ async function verifyProposalThread() {
   const { ORG_STAFFING_FIXTURE_REVISED_PROPOSAL } = await import("./orgStaffingFixture");
   const { proposalThread } = await import("./staffingRevise");
   const { proposalAsks } = await import("./staffingAsks");
-  const chiefTree = { ...ORG_FIXTURE, roles: [...ORG_FIXTURE.roles, { ...ORG_FIXTURE.roles[0], _id: "fixture-role-chief", short_id: "or-9", handle: "chief-of-staff", name: "Chief of Staff", avatar: "owl", standing: { conversation_id: "fixture-chief-conv", short_id: "jx7ch1f" } }] };
+  const headOfPeopleTree = { ...ORG_FIXTURE, roles: [...ORG_FIXTURE.roles, { ...ORG_FIXTURE.roles[0], _id: "fixture-role-head", short_id: "or-9", handle: "head-of-people", name: "Head of People", avatar: "owl", standing: { conversation_id: "fixture-head-conv", short_id: "jx7ch1f" } }] };
   const proposal = ORG_STAFFING_FIXTURE_REVISED_PROPOSAL;
-  const thread = proposalThread(proposal, chiefTree)!;
+  const thread = proposalThread(proposal, headOfPeopleTree)!;
   const asks = proposalAsks(proposal);
   const root = createRoot(document.getElementById("root")!);
   const q = <T extends Element = HTMLElement>(sel: string) => document.querySelector<T>(sel);
@@ -63,7 +63,7 @@ async function verifyProposalThread() {
 
   // ── the letter is the author's first bubble, above the live messages ──
   await renderThread({});
-  assert.equal(q("[data-proposal-thread]")!.getAttribute("data-proposal-thread"), "fixture-chief-conv");
+  assert.equal(q("[data-proposal-thread]")!.getAttribute("data-proposal-thread"), "fixture-head-conv");
   assert.equal(embed.props.since, proposal.created_at, "the embed starts at the proposal");
   assert.equal(embed.props.initialDensity, "condensed", "the author's working turns fold away");
   assert.equal(embed.props.hideDiff, true);
@@ -71,18 +71,18 @@ async function verifyProposalThread() {
   const letter = q("[data-proposal-letter]")!;
   assert.ok(letter, "the letter renders as the lead node");
   assert.equal(letter.compareDocumentPosition(q("[data-live]")!) & Node.DOCUMENT_POSITION_FOLLOWING, Node.DOCUMENT_POSITION_FOLLOWING, "the letter sits above the live messages");
-  assert.equal(q("[data-letter-author]")!.textContent, "Chief of Staff");
+  assert.equal(q("[data-letter-author]")!.textContent, "Head of People");
   assert.equal(q("[data-proposal-letter] [data-avatar]")!.getAttribute("data-avatar"), "owl");
   assert.match(letter.textContent!, /\d+[smhd] ago/);
   // The first time: one line of introduction, in the author's voice.
-  assert.match(q("[data-letter-intro]")!.textContent!, /^I am your Chief of Staff\. I look at how the work here is organized/);
+  assert.match(q("[data-letter-intro]")!.textContent!, /^I am your Head of People\. I look at how the work here is organized/);
   assert.match(q("[data-letter-lead]")!.textContent!, /The platform project has no owner/);
   assert.equal(q("[data-letter-toggle]"), null, "a short letter has no fold");
   // No header line of the thread's own: the bubble says who and when; the
   // full session is the icon on the name's line.
   assert.doesNotMatch(text(), /Talk to|who wrote this/);
   await click(q("[data-thread-open]"));
-  assert.equal(calls.pop(), "open:fixture-chief-conv");
+  assert.equal(calls.pop(), "open:fixture-head-conv");
   // Nothing is about anything yet: no line above the box.
   assert.equal(q("[data-about-line]"), null);
   // The letter's last visible line is cut by the composer. The fade over
@@ -90,7 +90,7 @@ async function verifyProposalThread() {
   // so the thread hands the composer no second one.
   assert.equal(q("[data-thread] [data-composer-fade]"), null, "the live composer draws the fade itself");
   await embed.onSendOverride!("why is growth in there");
-  assert.equal(said.pop(), "fixture-chief-conv|op-9|null|null|why is growth in there");
+  assert.equal(said.pop(), "fixture-head-conv|op-9|null|null|why is growth in there");
   // Not the first time: no introduction.
   await renderThread({ firstTime: false });
   assert.equal(q("[data-letter-intro]"), null);
@@ -112,14 +112,14 @@ async function verifyProposalThread() {
   assert.equal(q("[data-about-line]")!.getAttribute("data-about-ask"), "0");
   assert.match(q("[data-about-line]")!.textContent!, new RegExp(`Asking about${asks[0].title}`));
   await embed.onSendOverride!("  that seems like a lot  ");
-  assert.equal(said.pop(), "fixture-chief-conv|op-9|null|0|that seems like a lot");
+  assert.equal(said.pop(), "fixture-head-conv|op-9|null|0|that seems like a lot");
   await click(q("[data-about-clear]"));
   assert.equal(calls.pop(), "clear");
   await renderThread({ about: { kind: "change", change: budget } });
   assert.equal(q("[data-about-line]")!.getAttribute("data-about-change"), "fixture-change-93");
   assert.match(q("[data-about-line]")!.textContent!, /Asking about.*800,?000/);
   await embed.onSendOverride!("that is too much");
-  assert.equal(said.pop(), "fixture-chief-conv|op-9|3|null|that is too much");
+  assert.equal(said.pop(), "fixture-head-conv|op-9|3|null|that is too much");
   await embed.onSendOverride!("   ");
   assert.equal(said.length, 0, "a blank line sends nothing");
   // A picture alone is refused out loud; words with a picture send the words and say so.
@@ -127,7 +127,7 @@ async function verifyProposalThread() {
   assert.equal(said.length, 0, "a picture alone sends nothing");
   assert.deepEqual(toasts.splice(0), ["error:The picture was not sent / This conversation takes text for now."]);
   await embed.onSendOverride!("see this", [{ previewUrl: "blob:x", mime: "image/png", uploading: false }]);
-  assert.equal(said.pop(), "fixture-chief-conv|op-9|3|null|see this");
+  assert.equal(said.pop(), "fixture-head-conv|op-9|3|null|see this");
   assert.deepEqual(toasts.splice(0), ["warning:Sent your words, not the picture / This conversation takes text for now."]);
 
   // ── a session author is not a name ──
@@ -138,9 +138,9 @@ async function verifyProposalThread() {
 
   // ── a paused author is said above the thread, with Resume ──
   await renderThread({ thread: { ...thread, role: { ...thread.role!, status: "paused" } }, onResume: (id: string) => calls.push(`resume:${id}`) });
-  assert.match(q("[data-chief-paused]")!.textContent!, /Chief of Staff is paused/);
-  await click(qa("[data-chief-paused] button")[0]);
-  assert.equal(calls.pop(), "resume:fixture-role-chief");
+  assert.match(q("[data-head-paused]")!.textContent!, /Head of People is paused/);
+  await click(qa("[data-head-paused] button")[0]);
+  assert.equal(calls.pop(), "resume:fixture-role-head");
 
   // ── the phone: the conversation is the page, the bar at its foot opens the asks ──
   await renderThread({ layout: "phone", asksBar: { toDecide: 3, total: 3, updated: 2, onOpen: () => calls.push("asks") } });

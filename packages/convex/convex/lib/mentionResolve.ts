@@ -17,7 +17,8 @@ import {
 } from "@codecast/shared/chat";
 import { entityMentionRegex } from "@codecast/shared/entities";
 import { emailLocalHandle } from "../chatText";
-import { CHIEF_OF_STAFF_HANDLE, liveRoleByHandle } from "./orgAccess";
+import { liveRoleByHandle } from "./orgAccess";
+import { CHIEF_OF_STAFF_HANDLE } from "@codecast/shared/contracts/orgLead";
 import { findConversationByAnyRefWhere } from "../conversationSessionLookup";
 import { canSendProductMessage } from "../pendingMessages";
 
@@ -94,7 +95,7 @@ export async function resolveMentions(
  *  to that bot (a plain user mention that wakes nothing) and never to the
  *  role. Retired roles are not addressable; a paused one resolves (its wake
  *  rail holds it). */
-/** The handle the workspace anchor answered to before the chief of staff. */
+/** The handle the workspace anchor answered to before the head of people. */
 export const ANCHOR_ALIAS = "anchor";
 
 export type ChatMentions = {
@@ -194,10 +195,12 @@ export async function resolveChatMentions(
   const roleByHandle = async (handle: string): Promise<Doc<"org_roles"> | null> =>
     (await liveRoleByHandle(ctx, { team_id: teamId }, handle)) ?? (await liveRoleByHandle(ctx, { scope_user_id: senderId }, handle));
   for (const written of handles) {
-    // `@anchor` names the chief of staff once one stands (org-staffing.md
-    // S12): the workspace's standing agent is the chief, and the bot named
-    // Anchor is its identity, so the mention reaches the seat, not the bot.
-    const handle = written.toLowerCase() === ANCHOR_ALIAS && (await roleByHandle(CHIEF_OF_STAFF_HANDLE)) ? CHIEF_OF_STAFF_HANDLE : written;
+    // `@anchor` names the workspace's agent once one stands (org-staffing.md
+    // S12, S30): the team's Chief of Staff when one does, else the Head of
+    // People. The bot named Anchor is its identity, so the mention reaches
+    // the seat, not the bot. `@chief-of-staff` with no chief standing reaches
+    // the Head of People through rolesByHandle's legacy rule.
+    const handle = written.toLowerCase() === ANCHOR_ALIAS ? (await roleByHandle(CHIEF_OF_STAFF_HANDLE))?.handle ?? written : written;
     const person = matchHandle(roster, written);
     if (person && !person.is_bot) continue;
     if (SESSION_SHORT_ID_RE.test(handle)) {

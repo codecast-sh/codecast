@@ -1,6 +1,8 @@
 "use client";
+import { useContext } from "react";
 import { X } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
+import { RevealInBandCtx } from "../../lib/revealHost";
 import type { SlotId } from "../../store/workspace";
 
 // The standard close affordance for a workspace-slot region, dropped into a
@@ -19,6 +21,10 @@ export function SlotActions({
   slot: SlotId;
   onClose?: () => void;
 }) {
+  // Inside an inline reveal band the band's own header is the one close; a
+  // second X here would navigate the page away instead of closing the band.
+  const inBand = useContext(RevealInBandCtx);
+  if (inBand) return null;
   const close = () => {
     if (onClose) return onClose();
     // remember:true — a close BY HAND is sticky; automatic rules must not

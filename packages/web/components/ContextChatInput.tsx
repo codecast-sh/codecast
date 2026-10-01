@@ -1,6 +1,6 @@
 "use client";
 import { useState, useRef, useCallback } from "react";
-import { ArrowUp } from "lucide-react";
+import { ArrowUp, Sparkles } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
 import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
@@ -77,7 +77,7 @@ export function ContextChatInput({
     let contextBody = body || "";
     // Prepend editing instructions for docs so the model knows how to modify them
     if (contextType === "doc" && linkedObjectId && body) {
-      contextBody = `[Document ID: ${linkedObjectId}]\nTo edit this document use: cast doc edit ${linkedObjectId} --old "text to find" --new "replacement text"\nTo update title: cast doc edit ${linkedObjectId} --title "New Title"\nDo not use file Read/Write/Edit tools — this document lives in the database, not the filesystem.\n\n${body}`;
+      contextBody = `[Document ID: ${linkedObjectId}]\nTo edit this document use: cast doc edit ${linkedObjectId} --old "text to find" --new "replacement text"\nTo update title: cast doc edit ${linkedObjectId} --title "New Title"\nTo offer the writer choices instead of replacing their words: cast doc alt (versions they flip between), cast doc ghost (dim text that could go), cast doc overflow --stash (move text aside), cast doc lab (trims and marks). cast doc drafts ${linkedObjectId} lists what is already there.\nDo not use file Read/Write/Edit tools — this document lives in the database, not the filesystem.\n\n${body}`;
     }
     const contextBlock = contextBody
       ? `<context type="${escapeContext(contextType)}" title="${escapeContext(contextTitle)}"${idAttr}>\n${protectContextBody(contextBody)}\n</context>\n\n`
@@ -193,13 +193,31 @@ export function ContextChatInput({
   const defaultPlaceholder = `Work on this ${contextType} with an agent...`;
   const hasText = message.trim().length > 0;
 
+  // At rest the composer is a small pill out of the reading line; a click
+  // opens the full input (agent picker, textarea) and focuses it, and it
+  // folds back when it loses focus empty.
+  if (!isExpanded) {
+    return (
+      <div data-context-composer className="shrink-0 pointer-events-none sticky bottom-0 z-10 flex justify-end px-4 pb-3">
+        <button
+          type="button"
+          onClick={() => setIsFocused(true)}
+          title={placeholder || defaultPlaceholder}
+          className="pointer-events-auto inline-flex items-center gap-1.5 h-7 px-3 rounded-full border border-sol-border/60 bg-sol-bg-alt text-[11px] text-sol-text-muted shadow-md transition-colors hover:text-sol-text hover:border-sol-border"
+        >
+          <Sparkles className="w-3 h-3 text-sol-cyan" />
+          Ask an agent
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <div className="shrink-0 pointer-events-none sticky bottom-0 z-10">
+    <div data-context-composer className="shrink-0 pointer-events-none sticky bottom-0 z-10">
       <div className="h-16 bg-gradient-to-t from-sol-bg via-[color-mix(in_srgb,var(--sol-bg)_80%,transparent)] to-transparent -mt-16 relative" />
-      <div className={`pb-4 pointer-events-auto bg-sol-bg`}>
-      <div className={`mx-auto px-2 sm:px-4 transition-all duration-200 ease-out ${isExpanded ? "conv-col" : "max-w-sm"}`}>
-      {isExpanded && (
-        <div className={`mx-auto px-4 mb-1 flex justify-between items-center ${isExpanded ? "conv-col" : "max-w-md"}`}>
+      <div className="pb-4 pointer-events-auto bg-sol-bg">
+      <div className="mx-auto px-2 sm:px-4 conv-col">
+        <div className="mx-auto px-4 mb-1 flex justify-between items-center conv-col">
           <div className="flex items-center gap-1">
             {AGENT_TYPES.map((agent) => (
               <button
@@ -222,12 +240,12 @@ export function ContextChatInput({
             {contextType}
           </span>
         </div>
-      )}
-      <div className={`flex flex-col border shadow-lg transition-all duration-200 ${isExpanded ? "px-4 py-2 rounded-2xl" : "px-3 py-1.5 rounded-full"} bg-sol-bg-alt ${isFocused ? "border-sol-border" : "border-sol-border/50"}`}>
+      <div className={`flex flex-col border shadow-lg px-4 py-2 rounded-2xl bg-sol-bg-alt ${isFocused ? "border-sol-border" : "border-sol-border/50"}`}>
         <div className="flex items-end gap-2">
           <textarea
             ref={textareaRef}
             data-chat-input
+            autoFocus
             value={message}
             onChange={(e) => {
               setMessage(e.target.value);
@@ -240,20 +258,20 @@ export function ContextChatInput({
             }}
             placeholder={placeholder || defaultPlaceholder}
             rows={1}
-            className={`flex-1 bg-transparent text-sol-text placeholder:text-sol-text-dim focus:outline-none resize-none overflow-hidden leading-relaxed ${isExpanded ? "text-sm py-1" : "text-xs py-0.5"}`}
+            className="flex-1 bg-transparent text-sol-text placeholder:text-sol-text-dim focus:outline-none resize-none overflow-hidden leading-relaxed text-sm py-1"
           />
           <div className="shrink-0">
             <button
               type="button"
               onClick={handleSubmit}
               disabled={!hasText}
-              className={`${isExpanded ? "w-8 h-8" : "w-6 h-6"} rounded-full transition-colors flex items-center justify-center border ${
+              className={`w-8 h-8 rounded-full transition-colors flex items-center justify-center border ${
                 !hasText
                   ? "border-sol-border/30 text-sol-text-dim/25 cursor-not-allowed"
                   : "border-sol-blue/50 bg-sol-blue/20 text-sol-blue hover:bg-sol-blue/30 hover:border-sol-blue"
               }`}
             >
-              <ArrowUp className={isExpanded ? "w-4 h-4" : "w-3 h-3"} />
+              <ArrowUp className="w-4 h-4" />
             </button>
           </div>
         </div>

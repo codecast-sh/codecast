@@ -18,7 +18,14 @@ Each talks raw CDP over a WebSocket to a page on a Chrome started with `--remote
 
 - `bundle-graph.mjs`: walks the Vite build manifest from one entry and reports the gzip size of its static import graph (`<manifest.json> <entry-key>`).
 - `rig/`: the two-identity headless rig for the header face row (walkie, ring, reconnect, dead seat); `rig/run.mjs` runs the legs, `rig/shots.mjs` captures every row state, `rig/eval.mjs` evaluates on a browser left up by `--keep`. Needs the dev server on localhost:3200 and `CONVEX_SELF_HOSTED_ADMIN_KEY`.
+- `call-e2e/`: a synthetic call participant and its checks, for testing huddles, recordings, guests and frame snapshots with no camera, screen picker or person. `publish.mjs` joins a LiveKit room as a member or guest and publishes a generated camera and screen share whose every frame carries a decodable timecode; `inspect.mjs` shows LiveKit's own view of the room's tracks and egresses; `grab.mjs` saves frames as a receiver gets them; `decode.mjs` reads the timecode back out of a PNG or recording. Its own `package.json` (run `npm install` there, then `node <script>`); its README has the recipes.
 - `renderCueWaveforms.ts`: draws every walkie cue as a waveform PNG at one shared scale, so a cue's loudness is reviewed by eye instead of by ear (`[outDir]`).
+
+## Generated assets
+
+Run by hand when their source changes; the output is checked in.
+
+- `hero-page.ts`: builds `public/hero/page.html`, the published page the homepage hero's Publish chapter frames, from the hero's publish fixture, so the page's markdown and highlighting code stays out of the hero's bundle (no arguments).
 
 ## Build steps
 

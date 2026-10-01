@@ -1,0 +1,4 @@
+{
+  "before": [{ "name": "titlePrompt.test.ts · greeting is never the title", "ok": false, "detail": "got \"Hey can you look at why…\"" }],
+  "after": [{ "name": "titlePrompt.test.ts · greeting is never the title", "ok": true, "detail": "12 of 12 pass" }]
+}

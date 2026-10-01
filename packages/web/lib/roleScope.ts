@@ -174,7 +174,7 @@ export function dailyLimitLine(caps: RoleLimits | null, counters: RoleUse | null
 export function buildRoleScope(source: RoleScopeSource, rows: RoleScopeRows, today: string): RoleScopeModel {
   const projectById = new Map(rows.projects.map((p) => [p._id, p]));
   const planById = new Map(rows.plans.map((p) => [p._id, p]));
-  // The Chief of Staff with no scope looks after the whole workspace
+  // The Head of People with no scope looks after the whole workspace
   // (org-staffing.md S26): every project the store holds for it.
   const projectRefs = source.whole ? rows.projects.map((p) => ({ id: p._id, title: p.title, short_id: p.short_id })) : source.projects;
   const inScope = new Set(projectRefs.map((p) => p.id));

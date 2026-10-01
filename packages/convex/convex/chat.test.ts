@@ -3493,22 +3493,22 @@ describe("agent channels: roles and sessions in chat", () => {
 
   // ── Review wave 1 ─────────────────────────────────────────────────────────
 
-  test("@anchor and @chief-of-staff name the chief, whose seat is the workspace anchor: a thinking placeholder, not the wake rail", async () => {
-    const CHIEF = "org_roles_chief" as any;
+  test("@anchor and @head-of-people name the Head of People, whose seat is the workspace anchor: a thinking placeholder, not the wake rail", async () => {
+    const HEAD = "org_roles_head" as any;
     const base = seed();
     const ctx = context(ALICE, {
       ...base,
-      anchors: [{ ...base.anchors[0], org_role_id: CHIEF }, base.anchors[1]],
+      anchors: [{ ...base.anchors[0], org_role_id: HEAD }, base.anchors[1]],
       org_roles: [...base.org_roles, {
-        ...base.org_roles[0], _id: CHIEF, short_id: "or-10", name: "Chief of Staff", handle: "chief-of-staff", anchor_id: ANCHOR,
+        ...base.org_roles[0], _id: HEAD, short_id: "or-10", name: "Head of People", handle: "head-of-people", anchor_id: ANCHOR,
       }],
       teams: teams().map((t: any) => ({ ...t, features: { ...(t.features ?? {}), org: true } })),
     });
-    for (const line of ["@anchor make these into tasks", "@chief-of-staff make these into tasks"]) {
+    for (const line of ["@anchor make these into tasks", "@head-of-people make these into tasks"]) {
       const root = await call(sendMessage, ctx, { channel_id: CHANNEL, content: `call notes ${line.length}` });
       const sent = await call(sendMessage, ctx, { channel_id: CHANNEL, content: line, thread_root_id: root.message_id });
       expect(row(ctx, sent.message_id).mentions).toEqual([
-        { kind: "role", role_id: CHIEF, short_id: "or-10", handle: "chief-of-staff" },
+        { kind: "role", role_id: HEAD, short_id: "or-10", handle: "head-of-people" },
       ]);
       expect(sent.anchor_wake_skipped).toBe(null);
       expect(sent.mention_wakes).toEqual({ roles: 0, sessions: 0, folded: 0, skipped: [] });

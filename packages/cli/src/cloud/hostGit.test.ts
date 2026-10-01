@@ -132,6 +132,13 @@ describe("origin parsing", () => {
     expect(ACCOUNT_KEY_URL).toBe("https://github.com/settings/ssh/new");
   });
 
+  test("an origin whose owner or name has characters GitHub never allows is not a GitHub repository", () => {
+    expect(githubRepo("git@github.com:o/n$(id).git")).toBeUndefined();
+    expect(githubRepo("https://github.com/o;rm/r")).toBeUndefined();
+    expect(githubRepo("git@github.com:o/..")).toBeUndefined();
+    expect(githubRepo("git@github.com:my-org/app.js.git")).toBe("my-org/app.js");
+  });
+
   test("known_hosts lines: GitHub's are pinned, another host's come from the laptop's file, or none", () => {
     expect(knownHostLinesFor("github.com")).toEqual({ lines: [...GITHUB_KNOWN_HOSTS], source: "pinned" });
     const kh = path.join(dir, "laptop-known-hosts");

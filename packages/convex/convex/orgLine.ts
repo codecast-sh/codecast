@@ -70,6 +70,9 @@ async function isBlocked(ctx: Ctx, task: any): Promise<boolean> {
 
 export function roleMayStartHands(role: any, now: number): boolean {
   if (role.status !== "active" || !roleStartsOnItsOwn(role)) return false;
+  // A role retiring behind a knowledge handoff (org-staffing.md S32) starts
+  // nothing new: its area already belongs to the heirs.
+  if (role.handing_over?.retire) return false;
   return countersFor(role, now).hands < capsFor(role).hands_per_day;
 }
 

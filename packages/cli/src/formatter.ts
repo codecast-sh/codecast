@@ -1,6 +1,6 @@
 import { c, fmt, UNVERIFIABLE_MARK } from "./colors.js";
 import { computeCumulativeFiles, type CumulativeChange } from "@codecast/shared/diff";
-import { structuredPayloadSummary, structuredPayloadKeysFromRaw } from "@codecast/shared/render";
+import { structuredPayloadSummary, structuredPayloadKeysFromRaw, toolSummary } from "@codecast/shared/render";
 import { threadStateHeadline, parseThreadStateStatus, sessionLivenessVerdict } from "@codecast/shared/contracts";
 import type { AskResult, LivenessVerdict } from "@codecast/shared/contracts";
 
@@ -89,6 +89,13 @@ function summarizeToolCall(tc: { name?: string; input?: unknown }): string {
   // salvage the top-level key names from the truncated prefix.
   if (!param && name === "StructuredOutput" && typeof tc.input === "string") {
     param = structuredPayloadKeysFromRaw(tc.input);
+  }
+  // Any other client's tool (Codex's commandExecution, Grok's run_terminal_command): the summary
+  // every client renderer gives it, under its own name.
+  if (!param) {
+    const summary = toolSummary({ name, input: typeof tc.input === "string" ? tc.input : JSON.stringify(tc.input ?? {}) }).split("\n")[0];
+    // An MCP tool's summary falls back to its method, which its name already says.
+    if (!name.includes(summary)) param = summary.length > 60 ? `${summary.slice(0, 60)}...` : summary;
   }
   return param ? `${name} ${param}` : name;
 }
