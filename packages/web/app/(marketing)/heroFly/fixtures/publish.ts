@@ -17,8 +17,12 @@ export const PUBLISH = {
   reply: 68.2,
   command: 69.0,
   published: CUES.published,
-  /** The iframe mounts just before the card lands, so the page has loaded under it. */
-  frame: CUES.published - 0.6,
+  /**
+   * The iframe mounts once the card is opaque. A frame that loaded while the
+   * card was transparent or its surface hidden stayed blank in Chrome after
+   * it appeared; the local page loads in well under the card's settle.
+   */
+  frame: CUES.published + 0.2,
   comments: 71.0,
 } as const;
 

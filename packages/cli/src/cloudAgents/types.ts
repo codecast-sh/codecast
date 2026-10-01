@@ -1,6 +1,6 @@
 /**
  * The adapter a cloud agent provider implements (Cursor Cloud Agents, Codex
- * Cloud). The core in this directory owns
+ * Cloud, the OpenAI Agents API). The core in this directory owns
  * everything provider-neutral: the mirror watcher (poll, per-agent state, the
  * mirror directory, transcript emission, priming, own-vs-imported), the
  * transcript records (transcript.ts), the sessions registry (start, deliver,
@@ -122,6 +122,12 @@ export interface CloudAgentAdapter<C = unknown, A = unknown, D = unknown> {
   create(client: C, session: CloudAgentSession, content: string): Promise<{ agentId: string; url?: string }>;
   /** A follow-up message. Throws CloudAgentBusyError while the agent cannot take one yet. */
   followUp(client: C, agentId: string, content: string): Promise<void>;
+  /**
+   * The provider takes a follow-up while a turn runs and steers that turn
+   * with it (the Agents API): it goes out at once rather than being held
+   * until the turn ends.
+   */
+  readonly steersRunningTurn?: boolean;
   /** Cancel the running turn: what was cancelled, or null when nothing was running. */
   cancel(client: C, agentId: string): Promise<string | null>;
   /**

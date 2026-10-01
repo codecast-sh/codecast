@@ -8,7 +8,9 @@
  * and isolated in a sandboxed iframe with an opaque origin.
  */
 
+import { useRef } from "react";
 import { AssistantBlock } from "@/components/conversation/blocks/turnBlocks";
+import { useMountEffect } from "@/hooks/useMountEffect";
 import { PageCard, PageFavicon, PublishedPageActions } from "@/components/PublishedPageEmbed";
 import type { PartProps } from "./contract";
 import { fly, useFilmTime } from "../filmClock";
@@ -36,6 +38,19 @@ function Reply({ now }: { now: number }) {
   );
 }
 
+/**
+ * The published page, navigated once the frame is in the document: a frame
+ * given its src before it was attached stayed blank in Chrome, while one
+ * navigated after attaching painted.
+ */
+function PageFrame() {
+  const ref = useRef<HTMLIFrameElement>(null);
+  useMountEffect(() => {
+    if (ref.current) ref.current.src = "/hero/page.html";
+  });
+  return <iframe ref={ref} className="h-full w-full" sandbox="allow-scripts" title={PAGE.title} />;
+}
+
 function Page() {
   const framed = useFilmTime((t) => t >= PUBLISH.frame);
   return (
@@ -48,7 +63,7 @@ function Page() {
       >
         <div className="h-[470px] w-full bg-sol-card" data-hero-live="">
           {framed && (
-            <iframe src="/hero/page.html" className="h-full w-full" sandbox="allow-scripts" title={PAGE.title} loading="eager" />
+            <PageFrame />
           )}
         </div>
       </PageCard>

@@ -1115,6 +1115,16 @@ function readDaemonState(): DaemonState | null {
   }
 }
 
+/** Rewrite fields of the daemon's state file when it exists; an undefined
+ *  value drops the field. Best effort: a failed write leaves the file as is. */
+function patchDaemonState(patch: Partial<DaemonState>): void {
+  const state = readDaemonState();
+  if (!state) return;
+  try {
+    fs.writeFileSync(STATE_FILE, JSON.stringify({ ...state, ...patch }, null, 2), { mode: 0o600 });
+  } catch {}
+}
+
 function formatRelativeTime(timestamp: string | number): string {
   const ts = typeof timestamp === "number" ? timestamp : new Date(timestamp).getTime();
   if (!Number.isFinite(ts)) return "unknown";
@@ -1797,16 +1807,7 @@ async function runLogin(setupToken: string): Promise<void> {
 
     writeConfig(config);
 
-    const stateFile = path.join(CONFIG_DIR, "daemon.state");
-    if (fs.existsSync(stateFile)) {
-      try {
-        const currentState = JSON.parse(fs.readFileSync(stateFile, "utf-8"));
-        const newState = { ...currentState, authExpired: false };
-        fs.writeFileSync(stateFile, JSON.stringify(newState, null, 2), { mode: 0o600 });
-      } catch {
-        // Ignore errors
-      }
-    }
+    patchDaemonState({ authExpired: false });
 
     console.log("Linked successfully!\n");
     console.log(`User ID: ${config.user_id}`);
@@ -1909,16 +1910,7 @@ async function runAuth(): Promise<void> {
 
   writeConfig(config);
 
-  const stateFile = path.join(CONFIG_DIR, "daemon.state");
-  if (fs.existsSync(stateFile)) {
-    try {
-      const currentState = JSON.parse(fs.readFileSync(stateFile, "utf-8"));
-      const newState = { ...currentState, authExpired: false };
-      fs.writeFileSync(stateFile, JSON.stringify(newState, null, 2), { mode: 0o600 });
-    } catch {
-      // Ignore errors
-    }
-  }
+  patchDaemonState({ authExpired: false });
 
   console.log(`${fmt.success(icons.check)} ${c.bold}Authenticated successfully!${c.reset}\n`);
   console.log(`  ${fmt.muted("User")}     ${fmt.id(config.user_id || "")}`);
@@ -19982,11 +19974,7 @@ program
     const priorAccess = readDaemonState()?.cursorAccess;
     // Drop the recorded outcome so the poll below reads THIS run's probe, not
     // a stale verdict from before a System Settings change.
-    try {
-      const st = JSON.parse(fs.readFileSync(STATE_FILE, "utf-8"));
-      delete st.cursorAccess;
-      fs.writeFileSync(STATE_FILE, JSON.stringify(st, null, 2), { mode: 0o600 });
-    } catch {}
+    patchDaemonState({ cursorAccess: undefined });
     if (process.platform === "darwin" && priorAccess !== "granted") {
       console.log("Restarting the daemon. macOS will ask:");
       console.log('  "codecast would like to access data from other apps" — click Allow.');

@@ -10,6 +10,8 @@
  *   personify     off, whatever the visitor chose
  *   theme         light Classic (tokens are also re-declared on .hero-sandbox)
  *   reveal bands  reported as already inside one, so none mounts a real pane
+ *   location      a memory router of the hero's own at /inbox, so the views'
+ *                 links and location reads never see or move the visitor's page
  *   navigation    link clicks cancelled; clicks, presses and keys stop here
  *                 unless the target sits inside a `data-hero-live` element
  *   drag, drop, context menus   cancelled
@@ -21,6 +23,7 @@
 
 import type { ReactNode, SyntheticEvent } from "react";
 import { ConvexProvider } from "convex/react";
+import { MemoryRouter, UNSAFE_LocationContext } from "react-router";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ThemeContext } from "@/components/ThemeProvider";
 import { PersonifyOverride } from "@/hooks/usePersonifyAll";
@@ -42,6 +45,15 @@ function cancelNav(e: SyntheticEvent) {
 
 const prevent = (e: SyntheticEvent) => e.preventDefault();
 
+/** The page's router is masked first, since a router refuses to mount inside another. */
+function HeroRouter({ children }: { children: ReactNode }) {
+  return (
+    <UNSAFE_LocationContext.Provider value={null as never}>
+      <MemoryRouter initialEntries={["/inbox"]}>{children}</MemoryRouter>
+    </UNSAFE_LocationContext.Provider>
+  );
+}
+
 export function HeroSandbox({ children, fallback = null, className }: { children: ReactNode; fallback?: ReactNode; className?: string }) {
   return (
     <ErrorBoundary name="HeroFlythrough" fallback={fallback} silent>
@@ -50,22 +62,24 @@ export function HeroSandbox({ children, fallback = null, className }: { children
           <PersonifyOverride.Provider value={false}>
             <EntityFixtureContext.Provider value={HERO_ENTITIES}>
               <RevealInBandCtx.Provider value={true}>
-                <div
-                  className={`hero-sandbox${className ? ` ${className}` : ""}`}
-                  data-hero-sandbox=""
-                  onClickCapture={cancelNav}
-                  onAuxClickCapture={cancelNav}
-                  onDoubleClickCapture={cancelNav}
-                  onPointerDownCapture={cancelNav}
-                  onMouseDownCapture={cancelNav}
-                  onKeyDownCapture={cancelNav}
-                  onSubmitCapture={prevent}
-                  onDragStartCapture={prevent}
-                  onDropCapture={prevent}
-                  onContextMenuCapture={prevent}
-                >
-                  {children}
-                </div>
+                <HeroRouter>
+                  <div
+                    className={`hero-sandbox${className ? ` ${className}` : ""}`}
+                    data-hero-sandbox=""
+                    onClickCapture={cancelNav}
+                    onAuxClickCapture={cancelNav}
+                    onDoubleClickCapture={cancelNav}
+                    onPointerDownCapture={cancelNav}
+                    onMouseDownCapture={cancelNav}
+                    onKeyDownCapture={cancelNav}
+                    onSubmitCapture={prevent}
+                    onDragStartCapture={prevent}
+                    onDropCapture={prevent}
+                    onContextMenuCapture={prevent}
+                  >
+                    {children}
+                  </div>
+                </HeroRouter>
               </RevealInBandCtx.Provider>
             </EntityFixtureContext.Provider>
           </PersonifyOverride.Provider>

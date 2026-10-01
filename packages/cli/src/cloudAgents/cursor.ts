@@ -17,7 +17,7 @@
  */
 import { CLOUD_AGENT_PROVIDERS, isCloudAgentId } from "@codecast/shared/contracts";
 import { readSse } from "../sse.js";
-import { CloudApiError, cloudApiErrorOf, requestCloudJson } from "./http.js";
+import { CloudApiError, requestCloudJson, requestCloudStream, verifyCloudKey } from "./http.js";
 import { CLOUD_MAX_LIST_PAGES } from "./poll.js";
 import { MirrorTranscript } from "./transcript.js";
 import { CloudAgentBusyError, CloudAgentSetupError, errorText, logTag, type CloudAgentAdapter, type CloudAgentGit, type CloudAgentHandle, type CloudAgentListItem, type CloudAgentMirror } from "./types.js";
@@ -142,17 +142,15 @@ export class CursorCloudApi {
    * `lastEventId` resumes one cut short. Throws 410 once it has expired.
    */
   async streamRun(agentId: string, runId: string, onEvent: (e: CursorRunEvent) => void, opts: { signal?: AbortSignal; lastEventId?: string } = {}): Promise<boolean> {
-    const resp = await this.fetchImpl(`${this.base}/v1/agents/${encodeURIComponent(agentId)}/runs/${encodeURIComponent(runId)}/stream`, {
-      headers: this.headers({ Accept: "text/event-stream", ...(opts.lastEventId ? { "Last-Event-ID": opts.lastEventId } : {}) }),
+    const body = await requestCloudStream(this.fetchImpl, {
+      method: "GET",
+      url: `${this.base}/v1/agents/${encodeURIComponent(agentId)}/runs/${encodeURIComponent(runId)}/stream`,
+      headers: this.headers(opts.lastEventId ? { "Last-Event-ID": opts.lastEventId } : {}),
+      label: "cursor cloud run stream",
       signal: opts.signal,
     });
-    if (!resp.ok || !resp.body) {
-      let body: unknown;
-      try { body = await resp.json(); } catch {}
-      throw cloudApiErrorOf(resp.status, body, `cursor cloud run stream ${resp.status}`);
-    }
     let sawResult = false;
-    for await (const frame of readSse(resp.body)) {
+    for await (const frame of readSse(body)) {
       if (frame.event === "done") return sawResult;
       let data: Record<string, any>;
       try { data = JSON.parse(frame.data); } catch { continue; }
@@ -170,14 +168,8 @@ export class CursorCloudApi {
  * Cursor's reason for refusing it. A network failure is reported as such,
  * never as a bad key.
  */
-export async function verifyCursorKey(key: string, fetchImpl: typeof fetch = fetch): Promise<{ ok: true; account?: string } | { ok: false; error: string }> {
-  try {
-    const me = await new CursorCloudApi(key, fetchImpl).request<{ userEmail?: string; apiKeyName?: string }>("GET", "/v1/me");
-    return { ok: true, account: me?.userEmail };
-  } catch (err) {
-    if (err instanceof CloudApiError && err.keyRejected) return { ok: false, error: `Cursor rejected this key: ${err.message}` };
-    return { ok: false, error: `Couldn't reach Cursor to check the key: ${errorText(err)}` };
-  }
+export function verifyCursorKey(key: string, fetchImpl: typeof fetch = fetch): Promise<{ ok: true; account?: string } | { ok: false; error: string }> {
+  return verifyCloudKey("Cursor", async () => ({ account: (await new CursorCloudApi(key, fetchImpl).request<{ userEmail?: string }>("GET", "/v1/me"))?.userEmail }));
 }
 
 // ── Transcript ───────────────────────────────────────────────────────────────

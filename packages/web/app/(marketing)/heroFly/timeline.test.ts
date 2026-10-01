@@ -92,7 +92,8 @@ describe("hero fly-through timeline", () => {
         const scale = 1800 / (1800 - (cam[2] + pose.dist));
         const lo = id === "pairB" || id === "board" ? 0.8 : mobile ? 0.95 : 0.93;
         expect(scale, `${id} scale at hold ${i}`).toBeGreaterThan(lo);
-        expect(scale, `${id} scale at hold ${i}`).toBeLessThan(mobile ? 1.45 : 1.12);
+        // Up to a third larger when a hold frames one region of its surface (the decision card, the Anywhere inset).
+        expect(scale, `${id} scale at hold ${i}`).toBeLessThan(mobile ? 1.45 : 1.33);
         // The surface normal after the surface's own rotation and the camera's.
         let n: V3 = [0, 0, 1];
         n = rotX(rotY(rotZ(n, s.rot[2]), s.rot[1]), s.rot[0]);

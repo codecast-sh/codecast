@@ -101,7 +101,7 @@ export function CodeExpanded({ card, seen, frozenReadAt }: { card: ThreadCardMod
 
   return (
     <div className="th-card-open th-card-open-comments">
-      <EarlierButton count={fold.hidden} noun="reply" onClick={fold.showAll} />
+      <EarlierButton fold={fold} noun="reply" />
       <PRLineThread
         repository={anchor.repository}
         threadKey={row.root_key}

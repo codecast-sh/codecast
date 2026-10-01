@@ -3,8 +3,8 @@
 // The components in ./index.tsx read it, so a new provider is an entry here.
 import type { ComponentType } from "react";
 import { cloudAgentProviderForKey, type CloudAgentProviderId, type CloudAgentProviderSpec } from "@codecast/shared/contracts";
-import { ConnectCursorDialog } from "../ConnectCursorDialog";
 import { ConnectCodexDialog } from "./ConnectCodexDialog";
+import { ConnectCursorDialog, ConnectOpenAIDialog } from "./ConnectKeyDialog";
 
 interface CloudAgentUiEntry {
   /** What the connect control names: "Cursor". */
@@ -31,6 +31,7 @@ const ENTRIES: Record<CloudAgentProviderId, CloudAgentUiEntry> = {
     Dialog: ConnectCodexDialog,
     signIn: "Codex Cloud runs with this machine's Codex sign-in (your ChatGPT plan), not a key.",
   },
+  codex_api: { connectName: "OpenAI", heldUntil: () => "the key is connected", Dialog: ConnectOpenAIDialog },
 };
 
 const CLOUD_AGENT_UI = Object.fromEntries(Object.entries(ENTRIES).map(([id, e]) => [id, {

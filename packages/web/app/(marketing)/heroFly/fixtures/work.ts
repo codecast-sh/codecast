@@ -97,7 +97,7 @@ export function planTasks(now: number, advanced: boolean): TaskItem[] {
       status: "open",
       priority: "low",
       labels: ["data"],
-      external: { provider: "linear", id: "hero-lin-212", identifier: "BIL-212", url: "https://linear.app/acme/issue/BIL-212", remote_updated_at: now - 2 * DAY },
+      external: { provider: "linear", id: "hero-lin-212", identifier: "BIL-212", url: "https://linear.app/acme/issue/BIL-212", remote_updated_at: now - 2 * DAY, synced_at: now - 2 * DAY },
     }, 2 * DAY),
     task({ _id: "hero-t6", short_id: "ct-hero6", title: "Idempotency keys on webhook handlers", status: "done", priority: "high", labels: ["webhooks"], assignee: PEOPLE.sarah.id, assignee_info: SARAH }, 3 * DAY),
   ];

@@ -6,6 +6,7 @@ import { defaultConfigDir } from "../config/configDir.js";
 import { providerApiKey } from "../providerKeyStore.js";
 import { CodexCloudAdapter } from "./codex.js";
 import { CursorCloudAdapter } from "./cursor.js";
+import { OpenAIAgentsAdapter } from "./openaiAgents.js";
 import type { AnyCloudAgentAdapter, CloudAgentLoginCommand } from "./types.js";
 
 export { CloudAgentRegistry, type CloudAgentRuntime } from "./registry.js";
@@ -21,5 +22,6 @@ export function cloudAgentAdapters(configDir = defaultConfigDir(), deps: CloudAg
   return [
     new CursorCloudAdapter({ readKey: () => providerApiKey("cursor", configDir) }),
     new CodexCloudAdapter({ runLogin: deps.runLogin }),
+    new OpenAIAgentsAdapter({ readKey: () => providerApiKey("openai", configDir) }),
   ];
 }

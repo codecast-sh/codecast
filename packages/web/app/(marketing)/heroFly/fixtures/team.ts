@@ -21,14 +21,15 @@ export const TEAM = {
   reply: 55.6,
   reactA: 56.2,
   reactB: 56.7,
+  feedOut: 55.75,
   huddle: 55.9,
   faces: [56.05, 56.15, 56.25] as const,
   turns: [56.4, 57.1, 57.8] as const,
   orgOut: 58.4,
   org: 58.5,
   cursor: 58.9,
-  typing: 58.9,
-  followUp: 59.7,
+  typing: 57.2,
+  followUp: 58.05,
 } as const;
 
 /** A head-and-shoulders silhouette on a soft ground: a face without a stranger's photo. */
@@ -48,7 +49,7 @@ export const CHAT_PEOPLE = {
   sarah: { id: PEOPLE.sarah.id, name: PEOPLE.sarah.name, handle: PEOPLE.sarah.handle, avatarUrl: FACES.sarah },
   maya: { id: PEOPLE.maya.id, name: PEOPLE.maya.name, handle: PEOPLE.maya.handle, avatarUrl: FACES.maya },
   /** The lead session, speaking in the channel as itself and crediting the human it runs as. */
-  lead: { id: SESSIONS.lead.id, name: SESSIONS.lead.title, session: { id: SESSIONS.lead.id, agentType: SESSIONS.lead.agent, via: "Ashot" } },
+  lead: { id: SESSIONS.lead.id, name: SESSIONS.lead.title, isAgent: true, session: { id: SESSIONS.lead.id, agentType: SESSIONS.lead.agent, via: "Ashot" } },
 };
 
 export const CHANNELS = [
@@ -64,6 +65,7 @@ const leadMention = { kind: "session" as const, conversation_id: SESSIONS.lead.i
 
 /** The channel, in order; `cue` is when a line lands (absent: already there), `ago` its timestamp. */
 export const MESSAGES = [
+  { id: "hero-m0", who: "sarah", ago: 3 * HOUR, content: "Morning. Refund webhooks are idempotent now, so replaying one is safe." },
   { id: "hero-m1", who: "maya", ago: 2 * HOUR, content: "Staging is on the new billing build. Invoices and refunds both green." },
   {
     id: "hero-m2",
@@ -86,7 +88,7 @@ export const MESSAGES = [
     ago: 2 * MIN,
     cue: TEAM.thinking,
     answered: TEAM.reply,
-    content: `Yes. Both failed on a 502 from the ledger, and a failed delivery now goes to a retry queue with exponential backoff, at most 5 attempts. Both would have landed on the second try. Tracked in ${OBJECTS.task.shortId}.`,
+    content: `Yes. Both failed on a 502 from the ledger, and a failed delivery now goes to a retry queue with exponential backoff, at most 5 attempts. Both would have landed on the second try. The PR is green and the task is in review:\n\n${OBJECTS.task.shortId}`,
   },
   { id: "hero-m5", who: "maya", ago: 0, cue: TEAM.followUp, content: "Adding a retry queue panel to the billing dashboard so support can see it too." },
 ] as const;
@@ -95,6 +97,46 @@ export const MESSAGES = [
 export const REACTIONS = [
   { emoji: "🎉", cue: TEAM.reactA, names: ["Sarah"] },
   { emoji: "🙌", cue: TEAM.reactB, names: ["Maya"] },
+] as const;
+
+/** The team feed beside the channel: what teammates' sessions are doing right now. */
+export const FEED = [
+  {
+    _id: SESSIONS.lead.id,
+    title: SESSIONS.lead.title,
+    author_name: "Ashot Petrosian",
+    agent_type: SESSIONS.lead.agent,
+    project_path: "/Users/ashot/src/billing",
+    subtitle: "Failed deliveries retry with exponential backoff, at most 5 attempts. Two workers split the API and the dashboard.",
+    message_count: 64,
+    duration_ms: 38 * MIN,
+    ago: 1 * MIN,
+    is_active: true,
+  },
+  {
+    _id: "hero-s-maya1",
+    title: "Retry queue dashboard panel",
+    author_name: PEOPLE.maya.name,
+    agent_type: "cursor",
+    project_path: "/Users/maya/src/billing",
+    subtitle: "A panel on the billing dashboard that lists queued retries with their next attempt time.",
+    message_count: 18,
+    duration_ms: 12 * MIN,
+    ago: 30_000,
+    is_active: true,
+  },
+  {
+    _id: "hero-s-sarah1",
+    title: "Stripe signature check",
+    author_name: PEOPLE.sarah.name,
+    agent_type: "claude_code",
+    project_path: "/Users/sarah/src/billing",
+    subtitle: "Rejects webhooks whose signature is older than five minutes. Waiting on Sarah to pick the tolerance.",
+    message_count: 27,
+    duration_ms: 21 * MIN,
+    ago: 4 * MIN,
+    is_active: false,
+  },
 ] as const;
 
 /** The huddle in #eng: who is in it, and what they say (live captions). */
@@ -170,7 +212,7 @@ export function orgTree(now: number): OrgTree {
   const roleSessions = sessions(ORG_SEEDS.role, PEOPLE.me.id, ORG_ROLE.id);
   return {
     workspace: { kind: "team", id: "hero-team", name: "Acme" },
-    people: [person("me", "owner", "online"), person("sarah", "member", "online"), person("maya", "member", "online")],
+    people: [person("me", "owner", "online"), person("sarah", "member", "online")],
     roles: [
       {
         _id: ORG_ROLE.id,
@@ -206,6 +248,6 @@ export const entities: Record<string, EntityFixture> = {
   },
   [OBJECTS.task.shortId]: {
     type: "task",
-    entity: { _id: "hero-task-1", short_id: OBJECTS.task.shortId, title: OBJECTS.task.title, status: "in_progress", priority: "high", task_type: "task" },
+    entity: { _id: "hero-task-1", short_id: OBJECTS.task.shortId, title: OBJECTS.task.title, status: "in_review", priority: "high", task_type: "task", description: "Queue failed Stripe deliveries and retry them with exponential backoff, at most 5 attempts, then dead-letter." },
   },
 };
