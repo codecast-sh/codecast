@@ -24,8 +24,15 @@ describe("proposalTreeRows", () => {
   test("a status change draws the record itself, with its new status and reason", () => {
     const [row] = proposalTreeRows(ORG_FIXTURE, [change("c-task", 1, { kind: "task_status", task: "ct-9", status: "done", reason: "shipped on main", title: "Remove the pilot" })]);
     expect(row.node).toEqual({ kind: "record", id: "ct-9", name: "Remove the pilot", record: "task" });
-    expect(row.tag).toBe("done");
+    expect(row.tag).toBe("→ done");
+    expect(row.closes).toBe("done");
     expect(row.detail).toBe("shipped on main");
+  });
+
+  test("only a closing status strikes the record; reopening it does not", () => {
+    const [row] = proposalTreeRows(ORG_FIXTURE, [change("c-task", 1, { kind: "task_status", task: "ct-9", status: "open", reason: "still in progress", title: "Remove the pilot" })]);
+    expect(row.tag).toBe("→ open");
+    expect(row.closes).toBeNull();
   });
 
   test("a role that takes over a session names it; no scope reads as no area of its own", () => {

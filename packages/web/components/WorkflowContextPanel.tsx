@@ -31,14 +31,20 @@ export function WorkflowContextPanel({ workflowRunId }: { workflowRunId: Id<"wor
   // frame instead of popping in a round-trip late.
   const run = useWorkflowRun(workflowRunId);
   const workflow = useWorkflow(run?.workflow_id);
+  if (!run) return null;
+  return <WorkflowRunPanel run={run} workflow={workflow} />;
+}
+
+/** One run as the context panel draws it, from the rows it is given (the
+ *  marketing hero passes fixtures). */
+export function WorkflowRunPanel({ run, workflow, defaultExpanded = false }: { run: any; workflow?: any | null; defaultExpanded?: boolean }) {
   // Same default as PlanContextPanel: the header already carries the run in
   // aggregate, the session rows come on a click.
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(defaultExpanded);
   const now = useCoarseNow(30_000);
   // A gate is a decision (the-line.md L4, L10): the panel renders the
   // decision card for the run's gate_decision_id, never its own buttons.
   // The row rides the sessionDecisions collection; until it lands, a link.
-  if (!run) return null;
 
   const statusColor = STATUS_COLOR[run.status] || "text-sol-text-dim";
   // A run the sweep started from a shipped template has no stored graph

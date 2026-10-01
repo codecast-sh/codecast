@@ -6,7 +6,7 @@ import { repoObjectGitHubUrl } from "@codecast/shared/entities";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useRepoLocation } from "../../../../../components/repo/useRepoFamily";
-import { GitPullRequest, FileDiff, GitCommitHorizontal, ListChecks, MessagesSquare } from "lucide-react";
+import { GitPullRequest } from "lucide-react";
 import { RepoPageShell } from "../../../../../components/repo/RepoPageShell";
 import { FileDiffLayout, type DiffFile, type FileLineThreads } from "../../../../../components/FileDiffLayout";
 import { KeyCap } from "../../../../../components/KeyboardShortcutsHelp";
