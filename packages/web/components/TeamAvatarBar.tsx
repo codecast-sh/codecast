@@ -22,6 +22,7 @@ import { FaceRow } from "./faces/FaceRow";
 import { EngagementCard } from "./faces/EngagementCard";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
+import { peopleOf } from "@codecast/shared/team/memberKind";
 
 interface TeamAvatarBarProps {
   teamId?: Id<"teams">;
@@ -81,7 +82,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
   // default team would render that team's roster inside the personal space.
   const effectiveTeamId = propTeamId ?? activeTeamId;
   // A scalar: the roster array itself re-pushes on every heartbeat.
-  const rosterCount = useInboxStore((s) => s.teamMembers.length);
+  const rosterCount = useInboxStore((s) => peopleOf(s.teamMembers).length);
   const callsEnabled = useCallsAvailable();
   // THE ROW. One subscription, signature gated: a heartbeat, a level tick or
   // a mute that moves no face hands back the same row and this bar sleeps.

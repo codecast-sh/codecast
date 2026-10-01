@@ -1,0 +1,34 @@
+import { test } from "bun:test";
+import * as H from "../inboxSimHarness";
+import { runInWindowSync, runInWindow } from "../sim/realm";
+import { saveSlots, restoreSlots, resetMemos, settleTransients, assertTransientIdle } from "../sim/windowSlots";
+const cpu = () => { const u = process.cpuUsage(); return (u.user + u.system) / 1000; };
+test("turn", async () => {
+  H.installSim();
+  const server = new H.SimServer(H.seededWorld(21));
+  const a = await H.bootReplica(server, "A", 21);
+  const b = await H.bootReplica(server, "B", 121);
+  const w = a.window, v = b.window;
+  let c = cpu();
+  for (let i = 0; i < 1000; i++) await w.run(() => {});
+  console.log(`run same ${((cpu() - c)).toFixed(3)}us`);
+  c = cpu();
+  for (let i = 0; i < 1000; i++) await (i % 2 ? w : v).run(() => {});
+  console.log(`run alternating ${((cpu() - c)).toFixed(3)}us`);
+  c = cpu();
+  for (let i = 0; i < 1000; i++) runInWindowSync(i % 2 ? w : v, () => {});
+  console.log(`sync alternating ${((cpu() - c)).toFixed(3)}us`);
+  c = cpu();
+  for (let i = 0; i < 1000; i++) { const s = saveSlots(); restoreSlots(s); }
+  console.log(`slots ${((cpu() - c)).toFixed(3)}us`);
+  c = cpu();
+  for (let i = 0; i < 1000; i++) resetMemos();
+  console.log(`resetMemos ${((cpu() - c)).toFixed(3)}us`);
+  c = cpu();
+  for (let i = 0; i < 1000; i++) settleTransients();
+  console.log(`settleTransients ${((cpu() - c)).toFixed(3)}us`);
+  c = cpu();
+  for (let i = 0; i < 1000; i++) await new Promise((r) => setImmediate(r));
+  console.log(`setImmediate ${((cpu() - c)).toFixed(3)}us`);
+  H.uninstallSim();
+}, 600_000);

@@ -113,6 +113,7 @@ import { BUILD_ID_VALUE_RE, daemonBuildUnchanged } from "./daemonBuildGate.js";
 import { DAEMON_STOP_SIGKILL_MS } from "./shutdownBudget.js";
 import { findOtherDaemonPids, snapshotProcessTable } from "./processTable.js";
 import { expandCommandStdinDashes, readStdinBody, rejectBareDash, stdinText } from "./sendBody.js";
+import { registerDocDraftingCommands } from "./docDraftingCommand.js";
 import { commandTree, unknownCommandNextStep } from "./commandSuggestion.js";
 import { requireDestructiveConfirm } from "./destructiveCommands.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
@@ -1115,6 +1116,16 @@ function readDaemonState(): DaemonState | null {
   }
 }
 
+/** Rewrite fields of the daemon's state file when it exists; an undefined
+ *  value drops the field. Best effort: a failed write leaves the file as is. */
+function patchDaemonState(patch: Partial<DaemonState>): void {
+  const state = readDaemonState();
+  if (!state) return;
+  try {
+    fs.writeFileSync(STATE_FILE, JSON.stringify({ ...state, ...patch }, null, 2), { mode: 0o600 });
+  } catch {}
+}
+
 function formatRelativeTime(timestamp: string | number): string {
   const ts = typeof timestamp === "number" ? timestamp : new Date(timestamp).getTime();
   if (!Number.isFinite(ts)) return "unknown";
@@ -1797,16 +1808,7 @@ async function runLogin(setupToken: string): Promise<void> {
 
     writeConfig(config);
 
-    const stateFile = path.join(CONFIG_DIR, "daemon.state");
-    if (fs.existsSync(stateFile)) {
-      try {
-        const currentState = JSON.parse(fs.readFileSync(stateFile, "utf-8"));
-        const newState = { ...currentState, authExpired: false };
-        fs.writeFileSync(stateFile, JSON.stringify(newState, null, 2), { mode: 0o600 });
-      } catch {
-        // Ignore errors
-      }
-    }
+    patchDaemonState({ authExpired: false });
 
     console.log("Linked successfully!\n");
     console.log(`User ID: ${config.user_id}`);
@@ -1909,16 +1911,7 @@ async function runAuth(): Promise<void> {
 
   writeConfig(config);
 
-  const stateFile = path.join(CONFIG_DIR, "daemon.state");
-  if (fs.existsSync(stateFile)) {
-    try {
-      const currentState = JSON.parse(fs.readFileSync(stateFile, "utf-8"));
-      const newState = { ...currentState, authExpired: false };
-      fs.writeFileSync(stateFile, JSON.stringify(newState, null, 2), { mode: 0o600 });
-    } catch {
-      // Ignore errors
-    }
-  }
+  patchDaemonState({ authExpired: false });
 
   console.log(`${fmt.success(icons.check)} ${c.bold}Authenticated successfully!${c.reset}\n`);
   console.log(`  ${fmt.muted("User")}     ${fmt.id(config.user_id || "")}`);
@@ -14748,7 +14741,7 @@ trigger
   .command("add")
   .description("Set a new trigger")
   .argument("<prompt>", stdinText("Instruction for the agent when the trigger fires"))
-  .option("--in <duration>", "Run after delay (e.g., 30m, 2h, 1d)")
+  .option("--in <duration>", "Run after delay (e.g., 30m, 2h, 1d); with --every, the first run, which sets the time of day")
   .option("--every <duration>", "Run on interval (e.g., 4h, 1d)")
   .option("--on <event>", `Run on event (${EVENT_NAMES})`)
   .option("--repo <owner/name>", "Only fire for this repository (pull request events default to the checkout's origin; pass \"\" for every repository)")
@@ -14784,6 +14777,11 @@ trigger
     let run_at: number | undefined;
     let interval_ms: number | undefined;
     let event_filter: { event_type: string; action?: string; repository?: string; pr_number?: number } | undefined;
+    const delay = options.in ? parseDuration(options.in) : undefined;
+    if (options.in && !delay) {
+      console.error(`Invalid duration: ${options.in}`);
+      process.exit(1);
+    }
 
     if (options.every) {
       schedule_type = "recurring";
@@ -14792,16 +14790,14 @@ trigger
         console.error(`Invalid duration: ${options.every}`);
         process.exit(1);
       }
-      run_at = Date.now() + interval_ms;
+      // --in sets the first run, and the first run anchors the cadence: every
+      // later run lands on that grid (nextArmingAfterRun), so `--in 6h --every
+      // 24h` is a daily run at that time of day.
+      run_at = Date.now() + (delay ?? interval_ms);
     } else if (options.on) {
       schedule_type = "event";
       event_filter = await buildEventFilter(options.on, options);
-    } else if (options.in) {
-      const delay = parseDuration(options.in);
-      if (!delay) {
-        console.error(`Invalid duration: ${options.in}`);
-        process.exit(1);
-      }
+    } else if (delay) {
       run_at = Date.now() + delay;
     } else {
       run_at = Date.now();
@@ -17526,9 +17522,15 @@ doc
   .option("-L, --lines <n>", "Lines per page", "200")
   .option("-n, --line-numbers", "Prefix each line with its number")
   .option("--full", "Print the entire document without paging")
+  .option("--clean", "Without drafting markup: the versions showing, ghosts kept as plain text")
+  .option("--final", "As it would publish: drafting markup removed and ghosted text left out")
   .action(async (id: string, range: string | undefined, options: any) => {
     const result = await cliPost("/cli/docs/get", { id });
     if (!result) { console.error("Doc not found"); process.exit(1); }
+    if (options.clean || options.final) {
+      const { stripDrafting } = await import("@codecast/shared/docs/drafting");
+      result.content = stripDrafting(result.content || "", { dropGhosts: !!options.final });
+    }
     const lines = (result.content || "").split("\n");
     const total = lines.length;
 
@@ -17651,6 +17653,8 @@ doc
       console.log(`${c.green}ok${c.reset} Updated doc ${c.cyan}${id}${c.reset}`);
     }
   });
+
+registerDocDraftingCommands(doc, { post: cliPost, sessionId: detectCurrentSessionId });
 
 doc
   .command("search")
@@ -19982,11 +19986,7 @@ program
     const priorAccess = readDaemonState()?.cursorAccess;
     // Drop the recorded outcome so the poll below reads THIS run's probe, not
     // a stale verdict from before a System Settings change.
-    try {
-      const st = JSON.parse(fs.readFileSync(STATE_FILE, "utf-8"));
-      delete st.cursorAccess;
-      fs.writeFileSync(STATE_FILE, JSON.stringify(st, null, 2), { mode: 0o600 });
-    } catch {}
+    patchDaemonState({ cursorAccess: undefined });
     if (process.platform === "darwin" && priorAccess !== "granted") {
       console.log("Restarting the daemon. macOS will ask:");
       console.log('  "codecast would like to access data from other apps" — click Allow.');

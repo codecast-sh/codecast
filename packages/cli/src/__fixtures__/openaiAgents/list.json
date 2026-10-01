@@ -1,0 +1,75 @@
+{
+ "object": "list",
+ "data": [
+  {
+   "metadata": {
+    "repo": "octocat/Hello-World",
+    "source": "codecast-probe"
+   },
+   "id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "object": "agent.session",
+   "created_at": 1790831458,
+   "last_active_at": 1790831458,
+   "status": "idle",
+   "required_actions": [],
+   "error": null,
+   "agent": {
+    "id": "agent_127eed62f9a54e4bb1e7a745f8b4f21a630fd679c2f2464da8",
+    "name": null,
+    "model": "gpt-5.6-terra",
+    "reasoning": {
+     "effort": "medium",
+     "summary": null
+    },
+    "text": {
+     "format": {
+      "type": "text"
+     },
+     "verbosity": "medium"
+    },
+    "service_tier": "auto",
+    "tools": [],
+    "multi_agent": {
+     "enabled": false,
+     "max_concurrent_subagents": null
+    }
+   },
+   "environment": {
+    "type": "openai_hosted",
+    "id": "ccarenv_b64_Y2NhcmVudl82YWJkZWI2MjZiYTg4MTkxOWQwODk2MWE3ZDE0YmFlMQ",
+    "container_size": "small",
+    "packages": {
+     "python": [],
+     "system": [],
+     "npm": []
+    },
+    "network": {
+     "access": "enabled",
+     "allowed_domains": []
+    },
+    "desktop": {
+     "enabled": false
+    },
+    "capability_directories": [],
+    "skills": [],
+    "plugins": [],
+    "files": []
+   },
+   "vault_ids": [],
+   "usage": {
+    "input_tokens": 30044,
+    "input_tokens_details": {
+     "cached_tokens": 15559
+    },
+    "output_tokens": 245,
+    "output_tokens_details": {
+     "reasoning_tokens": 18
+    },
+    "total_tokens": 30289
+   }
+  }
+ ],
+ "first_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+ "last_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+ "has_more": false
+}

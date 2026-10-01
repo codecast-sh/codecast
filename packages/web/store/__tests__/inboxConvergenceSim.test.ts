@@ -75,8 +75,8 @@ describe("two replicas converge", () => {
     b.online = false;
     await b.stash(r);
     // The daemon settles s and a trigger arms on t (server-side facts).
-    SERVER_EVENTS.agentSettles(server, () => 0.0, 0);
-    server.mutate(t, { armed_trigger_kind: "standing" });
+    await SERVER_EVENTS.agentSettles(server, () => 0.0, 0);
+    await server.mutate(t, { armed_trigger_kind: "standing" });
     // A queues a send on t and revives s (local overlays), then a minute passes.
     await a.setQueued(t, true);
     await a.revive(s);
@@ -118,7 +118,7 @@ describe("two replicas converge", () => {
         const r = replicas[Math.floor(rng() * replicas.length)];
         const target = pickShown(r, rng);
         if (roll < 0.3) {
-          SERVER_EVENTS[eventNames[Math.floor(rng() * eventNames.length)]](server, rng, step);
+          await SERVER_EVENTS[eventNames[Math.floor(rng() * eventNames.length)]](server, rng, step);
         } else if (roll < 0.4 && target) {
           await r.pin(target);
         } else if (roll < 0.45 && target) {
@@ -215,8 +215,8 @@ describe("a dead subscription is detected and healed", () => {
     const id = memberIds(server, () => 0.3)!;
     a.overlayDead = true;
     // The world moves: a fact flips server-side that only the overlay carries.
-    server.setAgent(id, { agent_status: "working", last_heartbeat: now(), agent_status_updated_at: now() });
-    server.mutate(id, { updated_at: now(), message_count: 9 });
+    await server.setAgent(id, { agent_status: "working", last_heartbeat: now(), agent_status_updated_at: now() });
+    await server.mutate(id, { updated_at: now(), message_count: 9 });
     advance(2 * GEN_MIN);
     await a.receiveBase();
     await a.catchUp();
@@ -233,8 +233,7 @@ describe("a dead subscription is detected and healed", () => {
     advance(INBOX_PROBE_PAYLOAD_AGE_MS);
     a.tick();
     expect(a.comparer.counters().probes).toBe(1);
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
+    await a.flush();
     // The fresh payload landed through the applier: the probe's own execution
     // clock is the tick's, so the very next tick is clean.
     expect(a.tick()).toMatchObject({ kind: "clean" });
@@ -249,7 +248,7 @@ describe("a dead subscription is detected and healed", () => {
     a.baseDead = true;
     // A new session starts elsewhere; A's log cursor is stuck too (same socket).
     a.online = false;
-    SERVER_EVENTS.newSession(server, () => 0, 99);
+    await SERVER_EVENTS.newSession(server, () => 0, 99);
     const newId = convexIdFor("new99");
     a.online = true;
     const first = await quietTick(a);

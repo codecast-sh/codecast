@@ -104,6 +104,7 @@ import { parseSessionQuery, type SessionQuery } from "@codecast/shared/search";
 import { narrowByOperators, type OperatorCandidate, type OperatorScope } from "./sessionQuerySearch";
 import { requireUser } from "./lib/auth";
 import { liveConversationIdSet } from "./lib/liveSessions";
+import { isDeletedSession } from "./lib/deletedSessions";
 import { readLocalViewRevision, runLocalCommand } from "./localFirstCommands";
 import {
   FAVORITES_GRANT_KEY,
@@ -437,15 +438,18 @@ async function fetchTitleFieldHits(ctx: QueryCtx, terms: ParsedTerms) {
       .withSearchIndex("search_idle_summary", (q) => q.search("idle_summary", searchQuery))
       .take(50),
   ]);
-  const hits = new Map<string, Doc<"conversations">>();
+  // The index matches any one word; a session qualifies only by the same
+  // coverage rule content search uses, so "jon stewart" does not surface every
+  // summary that mentions a Jon. Best coverage first.
+  const convs = new Map<string, Doc<"conversations">>();
+  const groups = new Map<string, Array<{ content: string }>>();
   for (const conv of fieldHits.flat()) {
     const convId = conv._id.toString();
-    if (hits.has(convId)) continue;
-    const directFields = `${conv.title || ""} ${conv.subtitle || ""} ${conv.idle_summary || ""}`;
-    if (!contentMatchesAnyTerm(directFields, terms)) continue;
-    hits.set(convId, conv);
+    if (convs.has(convId)) continue;
+    convs.set(convId, conv);
+    groups.set(convId, [{ content: `${conv.title || ""} ${conv.subtitle || ""} ${conv.idle_summary || ""}` }]);
   }
-  return hits;
+  return new Map(rankConversationsByCoverage(groups, terms).map((r) => [r.convId, convs.get(r.convId)!]));
 }
 
 // First-message fetch only feeds a title fallback, so it's only needed for
@@ -1183,6 +1187,9 @@ export const createConversation = mutation({
     }
 
     await checkRateLimit(ctx, args.user_id, "createConversation");
+    if (await isDeletedSession(ctx, args.user_id, args.session_id)) {
+      throw new Error("Session deleted by its owner");
+    }
     const forkOrigin = args.fork ? await ctx.db.get(args.fork.from) : null;
     if (args.fork && forkOrigin?.user_id !== args.user_id) {
       throw new Error("Unauthorized: can only fork your own conversations");

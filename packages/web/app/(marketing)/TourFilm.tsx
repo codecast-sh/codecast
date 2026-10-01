@@ -166,10 +166,24 @@ export function TourSection() {
 }
 
 /** A quiet "watch this part" link beside a section of the page, playing its chapter in the tour above. */
-export function WatchChapter({ title, tone = "light" }: { title: string; tone?: "light" | "dark" }) {
+export function WatchChapter({ title, tone = "light", compact = false }: { title: string; tone?: "light" | "dark"; compact?: boolean }) {
   const i = TOUR_CHAPTERS.findIndex((c) => c.title === title);
   const c = TOUR_CHAPTERS[i];
   const color = tone === "dark" ? "#93a1a1" : "#657b83";
+  if (compact) {
+    return (
+      <button
+        type="button"
+        onClick={() => playChapter(i, "section_link")}
+        className="inline-flex items-center gap-1.5 font-mono text-[11px] transition-colors hover:text-[#cb4b16]"
+        style={{ color }}
+        aria-label={`Watch "${c.title}"`}
+      >
+        <svg className="w-2 h-2" viewBox="0 0 10 10" fill="#cb4b16" aria-hidden><path d="M2 1.2v7.6a.6.6 0 0 0 .9.5l6.1-3.8a.6.6 0 0 0 0-1L2.9.7a.6.6 0 0 0-.9.5z" /></svg>
+        <span className="tabular-nums">{clock(c.duration)}</span>
+      </button>
+    );
+  }
   return (
     <button
       type="button"

@@ -44,6 +44,7 @@ import { HUDDLE_DIGEST_CLIENT_ID_PREFIX, parseRoomKey } from "@codecast/shared/c
 import { RateLimitError, checkRateLimit } from "./rateLimit";
 import { matchHandle, resolveChatMentions, teamRoster } from "./lib/mentionResolve";
 import { dayBucket, hourBucket, takeQuota } from "./lib/chatQuota";
+import { chatAttachmentValidator } from "./lib/chatAttachment";
 import { purgeUserTeam, touchThread } from "./threadReads";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 // `userCanAccessAnchor` is the WAKE permission (any member of a team anchor's
@@ -145,8 +146,8 @@ const ANCHOR_REPLY_LIMIT = 60;
 // the send is refused (posts) or the mention folds (wakes).
 const AGENT_POSTS_PER_CHANNEL_DAY = 30;
 const AGENT_ROOTS_PER_CHANNEL_DAY = 5;
-const MENTION_WAKES_PER_SENDER_HOUR = 10;
-const MENTION_WAKES_PER_TARGET_HOUR = 30;
+export const MENTION_WAKES_PER_SENDER_HOUR = 10;
+export const MENTION_WAKES_PER_TARGET_HOUR = 30;
 
 // A push-to-talk burst costs what a send costs, so it is capped like one — the
 // start is the send. The transcript patch that follows fires every few seconds
@@ -2038,13 +2039,6 @@ export const setNotifyLevel = mutation({
 
 // ── Sending ─────────────────────────────────────────────────────────────────
 
-const attachmentValidator = v.object({
-  storage_id: v.id("_storage"),
-  name: v.optional(v.string()),
-  mime: v.optional(v.string()),
-  width: v.optional(v.number()),
-  height: v.optional(v.number()),
-});
 
 export async function findByClientId(
   ctx: ReadCtx,
@@ -2155,7 +2149,7 @@ export const sendMessage = mutation({
     // in the channel timeline. Ignored without thread_root_id — a root is
     // already in the channel, and a stray flag on it must not mean anything.
     broadcast: v.optional(v.boolean()),
-    attachments: v.optional(v.array(attachmentValidator)),
+    attachments: v.optional(v.array(chatAttachmentValidator)),
     client_id: v.optional(v.string()),
     // The one argument a caller may set about itself, and it can only ever take
     // privileges AWAY: an agent session declaring "agent" gives up the ability to
@@ -3054,7 +3048,7 @@ export const finalizeVoiceBurst = mutation({
     message_id: v.id("chat_messages"),
     content: v.string(),
     duration_ms: v.number(),
-    attachments: v.optional(v.array(attachmentValidator)),
+    attachments: v.optional(v.array(chatAttachmentValidator)),
   },
   handler: async (ctx, args) => {
     const userId = await requireCaller(ctx, args.api_token);

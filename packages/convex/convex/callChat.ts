@@ -24,31 +24,25 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { huddleChatLineHeader, isHuddlePass, isRecRoomKey } from "@codecast/shared/contracts";
+import { huddleChatLineHeader, isHuddlePass, isRecRoomKey, isToolResultCarrier } from "@codecast/shared/contracts";
 import { characterOf } from "@codecast/shared/contracts/sessionCharacter";
 import { authorizeRoom } from "./callRooms";
 import { MAX_ATTACHMENTS } from "./chatText";
+import { chatAttachmentValidator } from "./lib/chatAttachment";
 
 const MAX_TEXT = 4000;
-// Same shape as chat_messages.attachments / chat.ts's attachmentValidator —
-// huddle images are chat images, stored and rendered the same way.
-const attachmentValidator = v.object({
-  storage_id: v.id("_storage"),
-  name: v.optional(v.string()),
-  mime: v.optional(v.string()),
-  width: v.optional(v.number()),
-  height: v.optional(v.number()),
-});
 const PAGE = 200;
 // A chat bubble, not a report: a long answer is clipped here and the row
 // links to the session that holds the whole of it.
 export const AGENT_LINE_MAX = 1800;
 // Words land in the session by transcript sync a beat after the Stop hook
-// settles the status, so the mirror waits before reading the newest reply,
+// settles the status, so the mirror waits before reading the replies,
 // and looks once more if nothing new had landed yet.
 const MIRROR_DELAY_MS = 4_000;
 const MIRROR_RETRY_MS = 15_000;
 const MIRROR_ATTEMPTS = 2;
+// The most rows one mirror walks past the watermark: a few turns of tool calls.
+const MIRROR_SCAN = 200;
 
 export const list = query({
   args: { room_key: v.string(), limit: v.optional(v.number()) },
@@ -157,7 +151,7 @@ export const post = mutation({
   args: {
     room_key: v.string(),
     text: v.string(),
-    attachments: v.optional(v.array(attachmentValidator)),
+    attachments: v.optional(v.array(chatAttachmentValidator)),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -225,11 +219,29 @@ export function agentLineText(m: { content?: string; is_encrypted?: boolean } | 
   return text.length > AGENT_LINE_MAX ? `${text.slice(0, AGENT_LINE_MAX - 1).trimEnd()}…` : text;
 }
 
+/** Each turn's reply, oldest first: the last assistant words before the next
+ *  thing said to the session. A user row that only carries tool results is
+ *  the harness, not a new turn, so narration between tool calls never posts. */
+export function turnReplies<M extends { role: string; content?: string; is_encrypted?: boolean; tool_results?: readonly unknown[] }>(rows: M[]): M[] {
+  const out: M[] = [];
+  let last: M | null = null;
+  for (const m of rows) {
+    if (m.role === "assistant") {
+      if (agentLineText(m)) last = m;
+    } else if (m.role === "user" && !isToolResultCarrier(m)) {
+      if (last) out.push(last);
+      last = null;
+    }
+  }
+  if (last) out.push(last);
+  return out;
+}
+
 /** A fed session settled a turn: show its reply in the huddle chat.
  *
- *  Reads the session's newest assistant message and posts it unless the feed
- *  already mirrored it (the watermark), so a settle republished for the same
- *  turn, a turn that ended without words, or a turn that passed, posts nothing. The huddle may
+ *  Posts the reply of every turn past the feed's watermark (turnReplies), so a
+ *  settle republished for the same turn, a turn that ended without words, or a
+ *  turn that passed, posts nothing. The huddle may
  *  have ended between the settle and now; then the feed row is already gone
  *  and there is nothing to do. */
 export const mirrorAgentTurn = internalMutation({
@@ -245,49 +257,55 @@ export const mirrorAgentTurn = internalMutation({
       await ctx.db.delete(feed._id);
       return { mirrored: false, reason: "huddle_over" };
     }
-    // The newest assistant message with words: a turn usually ends on prose,
-    // but the last row can be a bare tool call, so look a few rows back.
-    const recent = await ctx.db
+    // Every turn since the watermark, oldest first. The settle hands the room's
+    // next words over at once but mirrors a beat later, so a quick next turn
+    // (a [pass] to those words) can land first; reading only the newest reply
+    // let it bury the one before. With no watermark yet, only the newest turn.
+    const seen = feed.last_mirrored_message_id ? await ctx.db.get(feed.last_mirrored_message_id) : null;
+    let since = seen?.timestamp;
+    if (since === undefined) {
+      const recent = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_role_timestamp", (q) =>
+          q.eq("conversation_id", args.conversation_id).eq("role", "assistant"),
+        )
+        .order("desc")
+        .take(4);
+      const newest = recent.find((m) => agentLineText(m).length > 0);
+      since = newest ? (newest.timestamp ?? 0) - 1 : Number.MAX_SAFE_INTEGER;
+    }
+    const after = await ctx.db
       .query("messages")
-      .withIndex("by_conversation_role_timestamp", (q) =>
-        q.eq("conversation_id", args.conversation_id).eq("role", "assistant"),
+      .withIndex("by_conversation_timestamp", (q) =>
+        q.eq("conversation_id", args.conversation_id).gt("timestamp", since),
       )
-      .order("desc")
-      .take(4);
-    const newest = recent.find((m) => agentLineText(m).length > 0) ?? null;
+      .order("asc")
+      .take(MIRROR_SCAN);
+    const replies = turnReplies(after);
     const attempt = args.attempt ?? 0;
-    if (!newest || String(newest._id) === String(feed.last_mirrored_message_id)) {
+    if (replies.length === 0) {
       if (attempt + 1 < MIRROR_ATTEMPTS) {
         await ctx.scheduler.runAfter(MIRROR_RETRY_MS, internal.callChat.mirrorAgentTurn, {
           conversation_id: args.conversation_id,
           attempt: attempt + 1,
         });
       }
-      return { mirrored: false, reason: newest ? "already_mirrored" : "no_words" };
+      return { mirrored: false, reason: seen ? "already_mirrored" : "no_words" };
     }
-    // The watermark must not run backwards: an older message that only now
-    // became the "newest with words" (the real newest was a tool call) is
-    // still older than what the room has seen.
-    if (feed.last_mirrored_message_id) {
-      const seen = await ctx.db.get(feed.last_mirrored_message_id);
-      if (seen && (seen.timestamp ?? 0) >= (newest.timestamp ?? 0)) {
-        return { mirrored: false, reason: "already_mirrored" };
-      }
+    // A turn that passed is seen, and the room gets nothing for it.
+    const posted = replies.filter((m) => !isHuddlePass(m.content));
+    for (const m of posted) {
+      await ctx.db.insert("call_chat_messages", {
+        room_key: feed.room_key,
+        team_id: feed.team_id,
+        user_id: feed.added_by,
+        text: agentLineText(m),
+        agent_conversation_id: args.conversation_id,
+        source_message_id: m._id,
+      });
     }
-    // The agent passed: the turn is seen, and the room gets nothing.
-    if (isHuddlePass(newest.content)) {
-      await ctx.db.patch(feed._id, { last_mirrored_message_id: newest._id });
-      return { mirrored: false, reason: "passed" };
-    }
-    await ctx.db.insert("call_chat_messages", {
-      room_key: feed.room_key,
-      team_id: feed.team_id,
-      user_id: feed.added_by,
-      text: agentLineText(newest),
-      agent_conversation_id: args.conversation_id,
-      source_message_id: newest._id,
-    });
-    await ctx.db.patch(feed._id, { last_mirrored_message_id: newest._id });
+    await ctx.db.patch(feed._id, { last_mirrored_message_id: replies[replies.length - 1]._id });
+    if (posted.length === 0) return { mirrored: false, reason: "passed" };
     return { mirrored: true };
   },
 });

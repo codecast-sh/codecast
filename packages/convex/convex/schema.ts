@@ -7,9 +7,10 @@ import { openTaskValidator } from "./lib/openTasksValidator";
 import { TASK_STATUS_CATEGORIES, TASK_STATUS_COLORS } from "@codecast/shared/tasks";
 import { DOC_TYPES } from "@codecast/shared/docs";
 import { ccAccountsValidator, ccAutoSwitchStateValidator, ccLoginFlowValidator, ccMintFlowValidator } from "./ccAccountsShared";
-import { cloudAgentBlocksValidator, deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
+import { cloudAgentBlocksValidator, cloudSessionSyncFields, deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
 import { capabilityTables } from "./capabilitiesSchema";
 import { externalAuthorValidator } from "./lib/externalAuthor";
+import { chatAttachmentValidator } from "./lib/chatAttachment";
 import { googleOAuthTables } from "./googleOAuthSchema";
 import { oauthConnectorTables } from "./oauthConnectorsSchema";
 import { issueSyncTables, taskExternalValidator, taskCommentExternalValidator } from "./issueSyncSchema";
@@ -237,13 +238,10 @@ export default defineSchema({
     // With sync_mode "all": folders that never upload, the folders inside
     // them and their checkouts' worktrees included.
     sync_excluded: v.optional(v.array(v.string())),
-    // Claude Code cloud sessions (claude.ai/code) sync through the user's
-    // daemons, read with their Claude login. Unset = on.
-    claude_cloud_sync: v.optional(v.boolean()),
-    cursor_cloud_sync: v.optional(v.boolean()),
-    // Codex Cloud tasks (chatgpt.com/codex), read with the daemon's Codex
-    // login. Unset = off: the source's default (CLOUD_SESSION_SOURCES).
-    codex_cloud_sync: v.optional(v.boolean()),
+    // Cloud sessions the user's daemons sync (claude.ai/code, Cursor Cloud,
+    // Codex Cloud, the Agents API): one per CLOUD_SESSION_SOURCES entry,
+    // unset = the source's default there.
+    ...cloudSessionSyncFields,
     team_share_paths: v.optional(v.array(v.string())),
     muted_members: v.optional(v.array(v.id("users"))),
     team_conversations_last_seen: v.optional(v.number()),
@@ -507,6 +505,16 @@ export default defineSchema({
     .index("by_user", ["user_id"])
     // Upsert / restore for one viewer and one session.
     .index("by_user_conversation", ["user_id", "conversation_id"]),
+
+  // A session its owner deleted (sessionDelete.ts). The transcript still sits
+  // on their machine, and the daemon recreates a conversation it finds missing,
+  // so createConversation refuses a session_id listed here for that user.
+  deleted_sessions: defineTable({
+    user_id: v.id("users"),
+    session_id: v.string(),
+    conversation_id: v.string(),
+    deleted_at: v.number(),
+  }).index("by_user_session", ["user_id", "session_id"]),
 
   conversations: defineTable({
     user_id: v.id("users"),
@@ -1847,6 +1855,18 @@ export default defineSchema({
       capped: v.optional(v.boolean()), // stopped at the per import ceiling
       error: v.optional(v.string()),
     })),
+    // Who is in the Slack channel (Slack user ids), for the room's member
+    // panel. Read whole by slackSync.refreshSlackMembers, kept live by the
+    // member_joined/left events, edited by slackSync.setSlackMember. Absent
+    // means never read. Capped at SLACK_MEMBERS_CAP.
+    slack_member_ids: v.optional(v.array(v.string())),
+    slack_members_at: v.optional(v.number()),
+    // The last invite or remove Slack refused, undone on the roster and shown
+    // in the panel. null (not absent) once a later change clears it.
+    member_error: v.optional(v.union(
+      v.object({ message: v.string(), slack_user_id: v.string(), at: v.number() }),
+      v.null(),
+    )),
     created_by: v.id("users"),
     created_at: v.number(),
     updated_at: v.number(),
@@ -2077,6 +2097,9 @@ export default defineSchema({
   // re-run every open search each tick).
   search_mirror_state: defineTable({
     cursor: v.number(),
+    // The fresh walk's position (searchMirror.ts): new messages are copied
+    // seconds after they land, ahead of the settle walk at `cursor`.
+    fresh_cursor: v.optional(v.number()),
     updated_at: v.number(),
   }),
 
@@ -5214,6 +5237,11 @@ export default defineSchema({
 
     cli_edited_at: v.optional(v.number()),
 
+    // The Overflow: loose writing kept beside the doc rather than in it
+    // (stashed cuts, notes, words to use later). Plain text, edited from the
+    // doc page's side panel and `cast doc overflow`.
+    overflow: v.optional(v.string()),
+
     // Public sharing
     share_token: v.optional(v.string()),
 
@@ -5843,13 +5871,7 @@ export default defineSchema({
     // Images pasted, dropped or picked in the huddle chat. Same shape as
     // chat_messages.attachments so the room reuses the chat tile, and the
     // same storage ids ride to fed sessions as pending_messages.image_storage_ids.
-    attachments: v.optional(v.array(v.object({
-      storage_id: v.id("_storage"),
-      name: v.optional(v.string()),
-      mime: v.optional(v.string()),
-      width: v.optional(v.number()),
-      height: v.optional(v.number()),
-    }))),
+    attachments: v.optional(v.array(chatAttachmentValidator)),
     // Set when an AGENT said this: the session that is fed the huddle live
     // and answered. Rendered with the agent's identity, never as user_id's
     // own words. `source_message_id` is the session message it mirrors, so
@@ -6468,13 +6490,7 @@ export default defineSchema({
     // `@channel` is deliberately absent in v1 — on a team small enough to share
     // one codecast workspace it is the same blast radius with worse manners.
     mention_scope: v.optional(v.literal("here")),
-    attachments: v.optional(v.array(v.object({
-      storage_id: v.id("_storage"),
-      name: v.optional(v.string()),
-      mime: v.optional(v.string()),
-      width: v.optional(v.number()),
-      height: v.optional(v.number()),
-    }))),
+    attachments: v.optional(v.array(chatAttachmentValidator)),
     // Push-to-talk. Present only on a walkie burst, which is an ordinary chat
     // message written in three steps: created "live" while the sender holds the
     // key, transcript streaming into `content`, then finalized with the audio.
@@ -6795,6 +6811,24 @@ export default defineSchema({
       })),
     })),
   }).index("by_key", ["key"]),
+
+  // What a web page says about itself (Open Graph, Twitter card, <title>),
+  // read once and shared by every message that links it, so a link standing
+  // alone on its line renders as a preview card. Keyed by the URL as
+  // parseLinkPreviewUrl normalizes it. `status` "pending" while the fetch
+  // runs; "failed" keeps a dead or tagless page from being refetched on
+  // every view until the row ages out (linkPreviews.ts).
+  link_previews: defineTable({
+    url: v.string(),
+    status: v.union(v.literal("pending"), v.literal("ok"), v.literal("failed")),
+    title: v.optional(v.string()),
+    description: v.optional(v.string()),
+    image: v.optional(v.string()),
+    site_name: v.optional(v.string()),
+    favicon: v.optional(v.string()),
+    requested_at: v.number(),
+    fetched_at: v.optional(v.number()),
+  }).index("by_url", ["url"]),
 
   ...issueSyncTables,
   ...agentTables,
