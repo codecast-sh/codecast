@@ -167,6 +167,19 @@ export class MirrorTranscript {
     if (m.role === "user" && !m.toolResults?.length) this.placeNotice();
   }
 
+  /**
+   * How a turn ended, then its end: a failure as an error banner (`reason`:
+   * why), a cancel as a note, any other status the provider names as it says
+   * it. Records are id'd by the turn's `key`, so a re-render keeps them.
+   */
+  endTurn(key: string, end: { status: string | null | undefined; label: string; reason?: string; at?: number }): void {
+    const { status, label, at } = end;
+    if (status === "failed") this.error(`${key}:error`, `${label} turn failed: ${end.reason || "no reason given"}`, at);
+    else if (status === "cancelled") this.note(`${key}:cancelled`, "Cancelled.", at);
+    else if (status && status !== "completed") this.note(`${key}:ended`, `${label} ended this turn as ${status}.`, at);
+    this.turnEnded();
+  }
+
   turnEnded(): void {
     this.push({ type: "turn_ended", status: "success" });
   }

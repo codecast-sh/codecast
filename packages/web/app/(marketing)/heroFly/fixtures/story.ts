@@ -67,6 +67,8 @@ export const CUES = {
   /** 4 Approve: the API worker asks; the phone tap approves it. */
   permissionAsk: 20.8,
   permissionApproved: 25.6,
+  /** The answered stack leaves the lead's transcript. */
+  permissionCleared: 26.0,
   /** 5 Talk: a message and its reply between the workers, then a fork. */
   messageSent: 29.6,
   replySent: 31.2,
@@ -89,3 +91,15 @@ export const CUES = {
   /** 12 Memory: the cut to three weeks later. */
   threeWeeks: 73.5,
 } as const;
+
+/**
+ * What other chapters add to the foot of the lead's transcript, and the
+ * height each adds there (px at the desk's width, measured; negative when it
+ * leaves). The transcript is anchored to the composer, so the conversation
+ * chapter glides its feed by these and nothing jumps when they mount.
+ */
+export const FEED_FOOT: { cue: number; h: number }[] = [
+  { cue: CUES.permissionAsk, h: 48 }, // 4 Approve: the permission stack
+  { cue: CUES.permissionCleared, h: -48 }, // answered, it leaves
+  { cue: CUES.taskFiled, h: 150 }, // 7 Track: `cast task create`
+];

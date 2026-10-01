@@ -1,6 +1,6 @@
 /**
  * The adapter a cloud agent provider implements (Cursor Cloud Agents, Codex
- * Cloud). The core in this directory owns
+ * Cloud, the OpenAI Agents API). The core in this directory owns
  * everything provider-neutral: the mirror watcher (poll, per-agent state, the
  * mirror directory, transcript emission, priming, own-vs-imported), the
  * transcript records (transcript.ts), the sessions registry (start, deliver,
@@ -10,6 +10,7 @@
 import { CLOUD_AGENT_RETRIED_SUFFIX, cloudAgentCardText, cloudAgentExpiryDate, cloudAgentSetupSentence, isCloudAgentCredentialKind, type CloudAgentActionName, type CloudAgentLoginStateName, type CloudAgentProviderSpec, type CloudAgentSetupKind } from "@codecast/shared/contracts";
 import { githubRepo } from "../cloud/gitOrigin.js";
 import { deviceLabel } from "../remote/device.js";
+import type { ProviderKeyVerdict } from "../providerKeyCrypto.js";
 import type { CloudAgentSession } from "./sessions.js";
 
 /** One agent from the provider's list: enough to decide whether it moved. */
@@ -122,6 +123,12 @@ export interface CloudAgentAdapter<C = unknown, A = unknown, D = unknown> {
   create(client: C, session: CloudAgentSession, content: string): Promise<{ agentId: string; url?: string }>;
   /** A follow-up message. Throws CloudAgentBusyError while the agent cannot take one yet. */
   followUp(client: C, agentId: string, content: string): Promise<void>;
+  /**
+   * The provider takes a follow-up while a turn runs and steers that turn
+   * with it (the Agents API): it goes out at once rather than being held
+   * until the turn ends.
+   */
+  readonly steersRunningTurn?: boolean;
   /** Cancel the running turn: what was cancelled, or null when nothing was running. */
   cancel(client: C, agentId: string): Promise<string | null>;
   /**
@@ -133,7 +140,7 @@ export interface CloudAgentAdapter<C = unknown, A = unknown, D = unknown> {
    */
   setupErrorOf?(err: unknown, session?: CloudAgentSession): CloudAgentSetupError | null;
   /** Check a key before it is stored (Settings, Provider keys), when the credential is one. */
-  verifyKey?(key: string): Promise<{ ok: true; account?: string } | { ok: false; error: string }>;
+  verifyKey?(key: string): Promise<ProviderKeyVerdict>;
 
   // Session actions (the header's, CLOUD_AGENT_ACTIONS): each one the spec lists.
   /** Archive the agent on the provider's site, or bring it back. */
@@ -297,8 +304,10 @@ export class CloudAgentSetupError extends CloudAgentHoldError {
   static accessDenied(adapter: Pick<AnyCloudAgentAdapter, "spec">, problem: string): CloudAgentSetupError {
     return CloudAgentSetupError.retried(adapter, "access", problem, `waiting until ${adapter.spec.label} lets this account in`);
   }
+  /** A card that is not about credentials. It opens with the provider's label, which is how the web tells which provider it is (cloudAgentSetupCard). */
   private static retried(adapter: Pick<AnyCloudAgentAdapter, "spec">, kind: CloudAgentSetupKind, problem: string, holdReason: string): CloudAgentSetupError {
-    return new CloudAgentSetupError(adapter, kind, `${problem}${CLOUD_AGENT_RETRIED_SUFFIX}`, problem, holdReason);
+    const named = problem.startsWith(adapter.spec.label) ? problem : `${adapter.spec.label}: ${problem}`;
+    return new CloudAgentSetupError(adapter, kind, `${named}${CLOUD_AGENT_RETRIED_SUFFIX}`, problem, holdReason);
   }
   /** The card's message id: one per conversation and kind. */
   cardKey(conversationId: string): string {

@@ -1046,6 +1046,7 @@ function AssistantBlockImpl({
   isConversationActive,
   globalImageMap,
   globalFileMap,
+  collapseAbove,
 }: {
   content?: string;
   timestamp: number;
@@ -1088,15 +1089,18 @@ function AssistantBlockImpl({
   isConversationActive?: boolean;
   globalImageMap?: Record<string, ImageData[]>;
   globalFileMap?: Record<string, SentFileData[]>;
+  /** A smaller host (a Threads card) folds long text at this height and opens
+   *  it folded; the conversation shows every message whole up to 800px. */
+  collapseAbove?: number;
 }) {
-  const CONTENT_MAX_HEIGHT = 800;
+  const CONTENT_MAX_HEIGHT = collapseAbove ?? 800;
 
   // Condensed feed: this message's segment tools fold into one receipt row
   // (condensedReceipt), rendered inline right after the content where the
   // activity happened. Opening it reveals the real tool blocks nested under
   // the chip, inside this row. Compact-expanded turns arrive as density "full".
   const condensed = density === "condensed";
-  const [contentExpanded, setContentExpanded] = useState(true);
+  const [contentExpanded, setContentExpanded] = useState(collapseAbove === undefined);
   const [isOverflowing, setIsOverflowing] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -1418,7 +1422,7 @@ function AssistantBlockImpl({
                 </div>
               )}
             </div>
-            {!parsedApiError && (isOverflowing || !contentExpanded) && (
+            {!parsedApiError && (isOverflowing || (!contentExpanded && collapseAbove === undefined)) && (
               <div data-cc-message-overflow className="flex items-center gap-1 mt-2">
                 <button
                   onClick={() => setFullscreen(true)}

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { docOrigin, docOriginClass, isHumanDocOrigin, isOnHumanShelf, docSourceForPlanSource, DOC_TYPES, DOC_TYPE_LABELS, docTypeLabel } from "./index";
+import { docOrigin, docOriginClass, isHumanDocOrigin, isOnHumanShelf, docSourceForPlanSource, DOC_TYPES, DOC_TYPE_LABELS, docTypeLabel, docMentionExcerpt, renderDocMentionExcerpt } from "./index";
 
 describe("docOrigin", () => {
   test("only an explicit human stamp is human", () => {
@@ -133,5 +133,43 @@ describe("DOC_TYPES", () => {
     expect(docTypeLabel("decision")).toBe("Decision");
     expect(docTypeLabel("some_future_type")).toBe("Note");
     expect(docTypeLabel(undefined)).toBe("Note");
+  });
+});
+
+describe("docMentionExcerpt", () => {
+  const long = [
+    "# Plan",
+    "",
+    ...Array.from({ length: 60 }, (_, i) => `intro line ${i} with some words to fill it out`),
+    "## Workstreams",
+    "```",
+    "# not a heading, inside a fence",
+    "```",
+    "### W0 Signal",
+    "body",
+    "## Execution",
+  ].join("\n");
+
+  test("a short doc rides along whole", () => {
+    const ex = docMentionExcerpt("# Small\n\nbody", 2000);
+    expect(ex.truncated).toBe(false);
+    expect(ex.excerpt).toBe("# Small\n\nbody");
+  });
+
+  test("a long doc is cut at a whole line, and the headings after it carry their line numbers", () => {
+    const ex = docMentionExcerpt(long, 500);
+    expect(ex.truncated).toBe(true);
+    expect(ex.excerpt.length).toBeLessThanOrEqual(500);
+    expect(long.startsWith(ex.excerpt + "\n")).toBe(true);
+    const lines = long.split("\n");
+    expect(ex.outline.map((o) => o.heading)).toEqual(["## Workstreams", "### W0 Signal", "## Execution"]);
+    for (const o of ex.outline) expect(lines[o.line - 1]).toBe(o.heading);
+  });
+
+  test("the rendered excerpt names the doc and how to read the rest", () => {
+    const md = renderDocMentionExcerpt(long, "s979abc", 500);
+    expect(md).toContain("L63 ## Workstreams");
+    expect(md).toContain("cast doc show s979abc <from>:<to>");
+    expect(md).not.toContain("intro line 59");
   });
 });

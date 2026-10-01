@@ -28,17 +28,9 @@ import { huddleChatLineHeader, isHuddlePass, isRecRoomKey } from "@codecast/shar
 import { characterOf } from "@codecast/shared/contracts/sessionCharacter";
 import { authorizeRoom } from "./callRooms";
 import { MAX_ATTACHMENTS } from "./chatText";
+import { chatAttachmentValidator } from "./lib/chatAttachment";
 
 const MAX_TEXT = 4000;
-// Same shape as chat_messages.attachments / chat.ts's attachmentValidator —
-// huddle images are chat images, stored and rendered the same way.
-const attachmentValidator = v.object({
-  storage_id: v.id("_storage"),
-  name: v.optional(v.string()),
-  mime: v.optional(v.string()),
-  width: v.optional(v.number()),
-  height: v.optional(v.number()),
-});
 const PAGE = 200;
 // A chat bubble, not a report: a long answer is clipped here and the row
 // links to the session that holds the whole of it.
@@ -157,7 +149,7 @@ export const post = mutation({
   args: {
     room_key: v.string(),
     text: v.string(),
-    attachments: v.optional(v.array(attachmentValidator)),
+    attachments: v.optional(v.array(chatAttachmentValidator)),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);

@@ -14,7 +14,13 @@ import { replaceGlobals } from "../../../test-helpers/globals";
 //   (d) the real Convex client was never asked to watch a query
 //   (e) <html>'s classes are untouched
 //   (f) nothing was written to localStorage
-// and that no part failed into its boundary. New chapters and parts are
+//   (g) no event fired inside the hero reached a document or window listener
+//       (the page's navigation progress bar, outside-click handlers)
+//   (h) nothing was portalled to document.body (context menus, dialogs)
+//   (i) no link activation went through
+// and that no part failed into its boundary. Interactions are fired on every
+// control inside each live element (pointer, mouse, click, context menu and
+// Enter/Space), and a context menu on every message and trigger row. New chapters and parts are
 // picked up through the registry (chapters/contract.test.ts keeps the
 // registry equal to the files), so a builder never edits this test.
 
@@ -52,6 +58,11 @@ const restoreGlobals = replaceGlobals({
   Event: w.Event,
   MouseEvent: w.MouseEvent,
   KeyboardEvent: w.KeyboardEvent,
+  CustomEvent: w.CustomEvent,
+  FocusEvent: w.FocusEvent,
+  NodeFilter: (w as any).NodeFilter,
+  HTMLAnchorElement: w.HTMLAnchorElement,
+  HTMLButtonElement: w.HTMLButtonElement,
   PointerEvent: (w as any).PointerEvent ?? w.MouseEvent,
   MutationObserver: w.MutationObserver,
   IntersectionObserver: (w as any).IntersectionObserver,
@@ -78,6 +89,7 @@ const { World } = await import("./surfaces");
 const { createFilmClock, FilmClockContext } = await import("./filmClock");
 const { loadAllChapters } = await import("./chapters");
 const { DURATION, SCENES, SURFACES } = await import("./world");
+const { MemoryRouter } = await import("react-router");
 const act: <T>(fn: () => T | Promise<T>) => Promise<T> = (React as any).act;
 
 /**
@@ -86,11 +98,32 @@ const act: <T>(fn: () => T | Promise<T>) => Promise<T> = (React as any).act;
  *   resize, scroll       layout reads
  *   visibilitychange     pausing while the tab is hidden
  *   selectionchange      React DOM's own root listener (createRoot adds it)
+ *   beforeunload,        module-level teardown in lib/calls/callManager.ts,
+ *   pagehide             lib/calls/walkie.ts and lib/terminal/termSessions.ts,
+ *                        loaded through real views; they act only during a
+ *                        live call or terminal session, which the hero never starts
  */
-const LISTENER_ALLOWLIST = new Set<string>(["resize", "scroll", "visibilitychange", "selectionchange"]);
+const LISTENER_ALLOWLIST = new Set<string>(["resize", "scroll", "visibilitychange", "selectionchange", "beforeunload", "pagehide"]);
 
 const STEP = 0.25;
+
+/** What a visitor can press inside a live element. */
+const CONTROLS = "button, [role=button], a, [role=menuitem], [role=option], [role=checkbox], [role=switch], [role=tab], label, summary";
+/** Rows whose right-click opens the app's own menu. */
+const MENU_ROWS = "[data-cc-message], [data-schedrow]";
 const store = useInboxStore as any;
+
+const host = w.document.createElement("div");
+const navigated: string[] = [];
+
+const mouse = (type: string) => new w.MouseEvent(type, { bubbles: true, cancelable: true, button: 0 });
+/** Fire a press the way a visitor's click arrives; a link it activates must have been cancelled. */
+function press(el: Element) {
+  for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup"]) el.dispatchEvent(type.startsWith("pointer") ? new ((w as any).PointerEvent ?? w.MouseEvent)(type, { bubbles: true, cancelable: true, button: 0 }) : mouse(type));
+  const went = el.dispatchEvent(mouse("click"));
+  const link = el.closest("a[href]");
+  if (went && link) navigated.push(link.getAttribute("href") ?? "");
+}
 
 describe("hero sandbox isolation", () => {
   test("the whole film, every live interaction, touches nothing of the app's", async () => {
@@ -104,6 +137,15 @@ describe("hero sandbox isolation", () => {
     store.getState()._setOutbox(async (e: unknown) => void enqueued.push(e), async () => {}, async () => []);
     store.getState()._setDispatch(async (...args: unknown[]) => void dispatched.push(args));
     const before = { ...store.getState() };
+
+    // Registered before the listener spies, as the page's own document listeners are.
+    const reached: string[] = [];
+    for (const type of ["click", "pointerdown", "mousedown", "pointerup", "mouseup", "contextmenu", "keydown", "keyup"]) {
+      w.document.addEventListener(type, (e) => {
+        if (e.target instanceof w.Node && host.contains(e.target)) reached.push(type);
+      });
+    }
+    const bodyBefore = [...w.document.body.children];
 
     const listeners: string[] = [];
     const winAdd = spyOn(w, "addEventListener").mockImplementation(function (this: unknown, type: string) {
@@ -122,17 +164,20 @@ describe("hero sandbox isolation", () => {
     w.document.documentElement.className = "dark minimal-style";
     const chapters = await loadAllChapters();
     const clock = createFilmClock(0);
-    const host = w.document.createElement("div");
     w.document.body.append(host);
     const root = createRoot(host);
 
     await act(async () => {
       root.render(
-        <HeroSandbox>
-          <FilmClockContext.Provider value={clock}>
-            <World chapters={chapters} now={Date.UTC(2026, 8, 30, 12)} />
-          </FilmClockContext.Provider>
-        </HeroSandbox>,
+        // The page always has a router around the hero; HeroSandbox masks it
+        // with its own, so this also proves the two nest.
+        <MemoryRouter>
+          <HeroSandbox>
+            <FilmClockContext.Provider value={clock}>
+              <World chapters={chapters} now={Date.UTC(2026, 8, 30, 12)} />
+            </FilmClockContext.Provider>
+          </HeroSandbox>
+        </MemoryRouter>,
       );
     });
 
@@ -140,16 +185,30 @@ describe("hero sandbox isolation", () => {
     for (let t = 0; t < DURATION; t += STEP) {
       await act(async () => clock.set(t));
       if (holds.some((h) => h >= t && h < t + STEP)) {
-        for (const el of host.querySelectorAll<HTMLElement>("[data-hero-live]")) {
+        for (const live of host.querySelectorAll<HTMLElement>("[data-hero-live]")) {
+          if (!live.isConnected) continue;
           await act(async () => {
-            if (el instanceof w.HTMLInputElement || el instanceof w.HTMLTextAreaElement) {
-              el.focus();
-              el.value = "webhook retry";
-              el.dispatchEvent(new w.Event("input", { bubbles: true }));
+            if (live instanceof w.HTMLInputElement || live instanceof w.HTMLTextAreaElement) {
+              live.focus();
+              live.value = "webhook retry";
+              live.dispatchEvent(new w.Event("input", { bubbles: true }));
+              live.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+              live.blur();
             } else {
-              el.dispatchEvent(new w.MouseEvent("click", { bubbles: true, cancelable: true }));
+              press(live);
             }
           });
+          for (const el of [...live.querySelectorAll<HTMLElement>(CONTROLS)]) {
+            if (!el.isConnected) continue;
+            await act(async () => {
+              press(el);
+              el.dispatchEvent(mouse("contextmenu"));
+              for (const key of ["Enter", " "]) el.dispatchEvent(new w.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+            });
+          }
+        }
+        for (const row of [...host.querySelectorAll<HTMLElement>(MENU_ROWS)]) {
+          await act(async () => void row.dispatchEvent(mouse("contextmenu")));
         }
       }
     }
@@ -171,6 +230,9 @@ describe("hero sandbox isolation", () => {
     expect(watch).not.toHaveBeenCalled();
     expect(w.document.documentElement.className, "(e) html classes").toBe("dark minimal-style");
     expect(setItem).not.toHaveBeenCalled();
+    expect([...new Set(reached)], "(g) events that reached the document").toEqual([]);
+    expect([...w.document.body.children].filter((n) => !bodyBefore.includes(n) && n !== host), "(h) portalled to body").toEqual([]);
+    expect(navigated, "(i) link activations").toEqual([]);
 
     for (const spy of [winAdd, docAdd, watch, setItem, consoleError]) spy.mockRestore();
   }, 120_000);

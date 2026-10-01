@@ -20,6 +20,12 @@ Each talks raw CDP over a WebSocket to a page on a Chrome started with `--remote
 - `rig/`: the two-identity headless rig for the header face row (walkie, ring, reconnect, dead seat); `rig/run.mjs` runs the legs, `rig/shots.mjs` captures every row state, `rig/eval.mjs` evaluates on a browser left up by `--keep`. Needs the dev server on localhost:3200 and `CONVEX_SELF_HOSTED_ADMIN_KEY`.
 - `renderCueWaveforms.ts`: draws every walkie cue as a waveform PNG at one shared scale, so a cue's loudness is reviewed by eye instead of by ear (`[outDir]`).
 
+## Generated assets
+
+Run by hand when their source changes; the output is checked in.
+
+- `hero-page.ts`: builds `public/hero/page.html`, the published page the homepage hero's Publish chapter frames, from the hero's publish fixture, so the page's markdown and highlighting code stays out of the hero's bundle (no arguments).
+
 ## Build steps
 
 `precompress.mjs`, `prerender.mjs` and `indexnow.mjs` run after `vite build` in the `build` script of `package.json`.

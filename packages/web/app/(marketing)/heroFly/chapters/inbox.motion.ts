@@ -4,7 +4,7 @@
  * (chapter 3's cues) land the same way under the lead.
  */
 
-import { DESK, INBOX_ROWS, LIST_ROW_H } from "../fixtures/desk";
+import { DESK, glideOver, INBOX_ROWS, LIST_ROW_H } from "../fixtures/desk";
 import { CUES } from "../fixtures/story";
 import type { ChapterMotion } from "./contract";
 
@@ -17,10 +17,10 @@ export const motion: ChapterMotion = {
       land("inbox.row:lead", CUES.leadLands),
       land("inbox.row:api", CUES.workerRowA),
       land("inbox.row:ui", CUES.workerRowB),
-      // The rows under the newcomers wait over the newcomers' space, then glide down as each lands, 25ms behind it.
-      { id: "inbox.rows", cue: CUES.leadLands + 0.025, dur: 0.6, preset: "push", y: -LIST_ROW_H.lead },
-      { id: "inbox.rows", cue: CUES.workerRowA + 0.025, dur: 0.6, preset: "push", y: -LIST_ROW_H.worker },
-      { id: "inbox.rows", cue: CUES.workerRowB + 0.025, dur: 0.6, preset: "push", y: -LIST_ROW_H.worker },
+      // The rows under each newcomer glide down over its height as it mounts.
+      ...glideOver("inbox.rows", CUES.leadLands, -LIST_ROW_H.lead, 0.6),
+      ...glideOver("inbox.rows", CUES.workerRowA, -LIST_ROW_H.worker, 0.6),
+      ...glideOver("inbox.rows", CUES.workerRowB, -LIST_ROW_H.worker, 0.6),
     ],
   },
 };

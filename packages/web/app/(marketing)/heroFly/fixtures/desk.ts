@@ -8,7 +8,7 @@
 
 import type { InboxSession } from "@/store/inboxStore";
 import type { Device } from "@/components/DeviceBadge";
-import { CAMERA } from "../world";
+import { CAMERA, type Beat } from "../world";
 import { CUES, HOUR, MIN, OBJECTS, PROMPT, SESSIONS } from "./story";
 
 /** Chapter-internal cues on the desk, in film seconds. Cross-chapter ones are in story.ts. */
@@ -53,6 +53,7 @@ export const CLOUD_HOST: Device = {
   hostname: OBJECTS.hosts.cloud,
   last_seen: 0,
   is_remote: true,
+  online: true,
   local_project_roots: [],
 };
 
@@ -161,29 +162,6 @@ export function workerRow(now: number, which: "api" | "ui", phase: WorkerPhase):
   });
 }
 
-/* ── The lead's transcript ─────────────────────────────────────────────── */
-
-/**
- * Every entry the lead's transcript gains during the film, in order, with the
- * height it adds (px, measured at the desk's width). The transcript is
- * anchored to the composer, so an entry landing lifts everything above it by
- * its height; each part carries a `push` beat per entry at or below it so the
- * lift is a glide, not a jump.
- */
-export const TRANSCRIPT = [
-  { key: "prompt", part: "conversation", cue: CUES.prompt, h: 58 },
-  { key: "thinking", part: "conversation", cue: DESK.thinking, h: 84 },
-  { key: "edit", part: "conversation", cue: DESK.edit, h: 128 },
-  { key: "bash", part: "conversation", cue: DESK.bash, h: 46 },
-  { key: "bashDone", part: "conversation", cue: CUES.testsPass, h: 0 },
-  { key: "steer", part: "conversation", cue: DESK.steerSent, h: 58 },
-  { key: "ack", part: "conversation", cue: DESK.ack, h: 52 },
-  { key: "spawnA", part: "fanout", cue: CUES.spawnA, h: 74 },
-  { key: "spawnB", part: "fanout", cue: CUES.spawnB, h: 74 },
-] as const;
-
-export type TranscriptPart = (typeof TRANSCRIPT)[number]["part"];
-
 /** The camera hold the film is in or last passed: local interaction state is keyed on it, so it resets when the camera moves on. */
 export const holdIndex = (t: number) => {
   let i = 0;
@@ -195,4 +173,19 @@ export const holdIndex = (t: number) => {
 
 /** Rows in the inbox before the lead lands, and the measured heights of the rows that land (px). */
 export const INBOX_ROWS = 6;
-export const LIST_ROW_H = { lead: 64, worker: 26 };
+export const LIST_ROW_H = { lead: 70, worker: 23 };
+
+/**
+ * Glide a stack by `h` px when an entry of that height mounts into it at
+ * `cue` (React mounts it then, so the stack's resting layout never depends on
+ * `h`). Two pushes: one holds the stack `h` away and eases it home from the
+ * cue, the other cancels it exactly until the cue. So the stack sits still
+ * before the cue, appears where it was at the cue, and settles into its new
+ * place; a wrong `h` only shortens or lengthens the glide.
+ */
+export function glideOver(id: string, cue: number, h: number, dur = 0.65): Beat[] {
+  return [
+    { id, cue, dur, preset: "push", y: h },
+    { id, cue, dur: 0.0001, preset: "push", y: -h },
+  ];
+}

@@ -13,7 +13,7 @@ A chapter is four files, and its builder owns all four outright. The split keeps
 | `chapters/<id>.motion.ts` | `export const motion: ChapterMotion`: beats, typed text, flyers and arcs, as pure data |
 | `fixtures/<id>.ts` | the fixture data its views receive, and `entities` for any id it renders as a pill or card |
 
-Read-only for builders (ask the orchestrator for a change, do not edit): `world.ts` (surfaces, regions, camera, scenes), `fixtures/story.ts` (the cast and the cross-chapter cues), `filmClock.ts`, `film.tsx`, `surfaces.tsx`, `sandbox.tsx`, `timeline.ts`, `motion.ts`, `chapters/index.ts`, `chapters/contract.ts`, `fixtures/index.ts`, `placeholder.tsx`, `placeholderParts.ts`, `HeroFlythrough.tsx`.
+Read-only for builders (ask the orchestrator for a change, do not edit): `world.ts` (surfaces, regions, camera, scenes), `fixtures/story.ts` (the cast and the cross-chapter cues), `filmClock.ts`, `film.tsx`, `surfaces.tsx`, `sandbox.tsx`, `timeline.ts`, `motion.ts`, `chapters/index.ts`, `chapters/contract.ts`, `fixtures/index.ts`, `HeroFlythrough.tsx`.
 
 App files you split into container and view (ARCHITECTURE.md section 3) are shared with other live sessions: re-read a file right before each edit, edit surgically, never revert or reformat what you did not write, never use git checkout/restore/stash/reset, and do not commit.
 
@@ -27,7 +27,7 @@ Region rectangles are in `world.ts` (px from the surface's top-left; on the phon
 | 2 | `conversation` | Steer | 9 to 15 | 9.0 to 14.4 desk, in on the conversation | `desk.header` 0, `desk.transcript` 10, `desk.composer` 0 | prompt, testsPass |
 | 3 | `fanout` | Fan out | 15 to 21 | 15.0 to 17.6 desk; 18.6 to 20.6 pair | `desk.transcript` 20, `desk.list` 20 (worker rows), `pairA.header` 0, `pairB.header` 0, `pairA.transcript` 10, `pairB.transcript` 10 | spawnA, spawnB, workerRowA, workerRowB |
 | 4 | `phone` | Approve | 21 to 28 | 21.4 to 23.2 desk; 24.2 to 26.6 phone; 27.0 to 27.8 both | `desk.transcript` 30 (permission stack), `phone.main` 0 | permissionAsk, permissionApproved |
-| 5 | `talk` | Agents talk | 28 to 34 | 28.8 to 33.6 pair | `pairA.transcript` 20, `pairB.transcript` 20 | messageSent, replySent, forked |
+| 5 | `talk` | Talk | 28 to 34 | 28.8 to 33.6 pair | `pairA.transcript` 20, `pairB.transcript` 20 | messageSent, replySent, forked |
 | 6 | `decide` | Decide | 34 to 40 | 35.0 to 39.6 desk, on the side card | `desk.side` 0 | decisionAsked, decisionAnswered |
 | 7 | `work` | Track | 40 to 47 | 41.0 to 46.4 board | `desk.transcript` 40 (files the task), `board.main` 0 | taskFiled, taskLands, taskClaimed |
 | 8 | `automation` | Automate | 47 to 53 | 47.8 to 52.6 auto | `auto.main` 0 | triggerFires |
@@ -93,7 +93,7 @@ export const motion: ChapterMotion = {
 
 ## The sandbox and the mount policy
 
-Inside the hero, Convex is a stub (queries load forever, writes resolve null), entity pills answer from fixtures, personify is off, the theme is light Classic, reveal bands never mount, and a part that throws leaves its region empty. Still, **never mount a container**: anything that runs a feeder, calls a store action, or adds listeners that act. Specifically never: PermissionStack, ForkMapBox, BrowserPane, DecisionAnswerControls with keys on, GenericListView, GlobalSearch, CommandPalette, NotificationBell, DocumentDetailLayout in edit mode, MessageInput, ChatComposer, RoomThread, TriggerRowItem without `actions`. Never write the real inboxStore, IndexedDB, localStorage or the outbox, and never call real Convex. `../sandbox.guard.test.tsx` mounts every chapter across the whole film and fails on any of these.
+Inside the hero, Convex is a stub (queries load forever, writes resolve null), entity pills answer from fixtures, personify is off, the theme is light Classic, reveal bands never mount, links and `useLocation` read a memory router of the hero's own at `/inbox`, and a part that throws leaves its region empty. Still, **never mount a container**: anything that runs a feeder, calls a store action, or adds listeners that act. Specifically never: PermissionStack, ForkMapBox, BrowserPane, DecisionAnswerControls with keys on, GenericListView, GlobalSearch, CommandPalette, NotificationBell, DocumentDetailLayout in edit mode, MessageInput, ChatComposer, RoomThread, TriggerRowItem without `actions`. Never write the real inboxStore, IndexedDB, localStorage or the outbox, and never call real Convex. `../sandbox.guard.test.tsx` mounts every chapter across the whole film and fails on any of these.
 
 ## Theme and CSS
 
