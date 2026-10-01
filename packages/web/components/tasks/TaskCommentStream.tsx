@@ -392,19 +392,19 @@ export function TaskCommentStream({
   // OBJECT here and crashed the whole Threads page. Hydration heals such rows
   // now; this guard keeps one bad row from ever taking the page down again.
   const sorted = (Array.isArray(comments) ? [...comments] : []).sort((a, b) => a.created_at - b.created_at);
-  const { visible, hidden, firstNew, showAll } = useReaderFold(sorted, (c) => c.created_at, newSince);
+  const fold = useReaderFold(sorted, (c) => c.created_at, newSince);
   return (
     <div className="th-task-stream">
       {sorted.length === 0 ? (
         <div className="th-card-note">No comments yet.</div>
       ) : (
         <div className="space-y-0">
-          <EarlierButton count={hidden} noun="comment" onClick={showAll} />
-          {visible.map((c, i) => (
+          <EarlierButton fold={fold} noun="comment" />
+          {fold.visible.map((c, i) => (
             <div key={c._id}>
               {/* The divider marks where the news starts, once there is
                   something read above it to divide from. */}
-              {firstNew > 0 && hidden + i === firstNew && <ChatNewDivider />}
+              {fold.firstNew > 0 && fold.hidden + i === fold.firstNew && <ChatNewDivider />}
               <TaskCommentItem comment={c} openLinkedSession={openLinkedSession} clamp={clampComments} />
             </div>
           ))}

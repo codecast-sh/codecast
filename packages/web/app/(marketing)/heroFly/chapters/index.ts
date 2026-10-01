@@ -4,7 +4,7 @@
  * page is idle, well before the camera heads its way.
  */
 
-import { useState } from "react";
+import { startTransition, useState } from "react";
 import { useMountEffect } from "@/hooks/useMountEffect";
 import type { ChapterId } from "../world";
 import type { HeroChapter } from "./contract";
@@ -35,17 +35,57 @@ export async function loadAllChapters(): Promise<HeroChapter[]> {
   return [...EAGER_CHAPTERS, ...rest];
 }
 
-/** The chapters mounted so far: the eager ones, then all of them once the page is idle. */
+const FILM_ORDER = Object.keys(LAZY_CHAPTERS) as (keyof typeof LAZY_CHAPTERS)[];
+
+/**
+ * The chapters mounted so far: the eager ones, then the rest once the page is
+ * idle. Each chapter joins in its own idle callback and transition, in film
+ * order, so no one commit holds a frame of the opening. A chunk that fails is
+ * tried once more after a pause; the film plays on without it until then.
+ */
 export function useHeroChapters(): HeroChapter[] {
   const [chapters, setChapters] = useState(EAGER_CHAPTERS);
   useMountEffect(() => {
     let live = true;
-    const load = () => loadAllChapters().then((all) => live && setChapters(all), () => {});
-    const idle = window.requestIdleCallback?.(load, { timeout: 1500 }) ?? window.setTimeout(load, 300);
+    const loaded = new Map<string, HeroChapter>();
+    const mounted: HeroChapter[] = [...EAGER_CHAPTERS];
+    const idles: number[] = [];
+    const timers: number[] = [];
+    let queued = false;
+    const whenIdle = (fn: () => void, timeout: number) => {
+      if (window.requestIdleCallback) idles.push(window.requestIdleCallback(fn, { timeout }));
+      else timers.push(window.setTimeout(fn, 300));
+    };
+    const pending = () => FILM_ORDER.filter((id) => loaded.has(id) && !mounted.some((c) => c.id === id));
+    // One chapter per idle callback, in film order.
+    const flush = () => {
+      queued = false;
+      const [next] = pending();
+      if (!live || !next) return;
+      mounted.push(loaded.get(next)!);
+      const snapshot = [...mounted];
+      startTransition(() => setChapters(snapshot));
+      if (pending().length) schedule();
+    };
+    const schedule = () => {
+      if (queued) return;
+      queued = true;
+      whenIdle(flush, 500);
+    };
+    const load = (ids: (keyof typeof LAZY_CHAPTERS)[], retry: boolean) =>
+      Promise.allSettled(ids.map((id) => LAZY_CHAPTERS[id]().then((m) => loaded.set(id, m.chapter)))).then((res) => {
+        if (!live) return;
+        schedule();
+        const failed = ids.filter((_, i) => res[i].status === "rejected");
+        if (!failed.length) return;
+        if (retry) timers.push(window.setTimeout(() => live && load(failed, false), 2000));
+        else console.warn(`hero: chapters failed to load: ${failed.join(", ")}`);
+      });
+    whenIdle(() => load(FILM_ORDER, true), 1500);
     return () => {
       live = false;
-      if (window.cancelIdleCallback) window.cancelIdleCallback(idle);
-      else window.clearTimeout(idle);
+      idles.forEach((id) => window.cancelIdleCallback?.(id));
+      timers.forEach((id) => window.clearTimeout(id));
     };
   });
   return chapters;

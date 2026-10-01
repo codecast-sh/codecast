@@ -113,6 +113,7 @@ import { BUILD_ID_VALUE_RE, daemonBuildUnchanged } from "./daemonBuildGate.js";
 import { DAEMON_STOP_SIGKILL_MS } from "./shutdownBudget.js";
 import { findOtherDaemonPids, snapshotProcessTable } from "./processTable.js";
 import { expandCommandStdinDashes, readStdinBody, rejectBareDash, stdinText } from "./sendBody.js";
+import { registerDocDraftingCommands } from "./docDraftingCommand.js";
 import { commandTree, unknownCommandNextStep } from "./commandSuggestion.js";
 import { requireDestructiveConfirm } from "./destructiveCommands.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
@@ -1115,6 +1116,16 @@ function readDaemonState(): DaemonState | null {
   }
 }
 
+/** Rewrite fields of the daemon's state file when it exists; an undefined
+ *  value drops the field. Best effort: a failed write leaves the file as is. */
+function patchDaemonState(patch: Partial<DaemonState>): void {
+  const state = readDaemonState();
+  if (!state) return;
+  try {
+    fs.writeFileSync(STATE_FILE, JSON.stringify({ ...state, ...patch }, null, 2), { mode: 0o600 });
+  } catch {}
+}
+
 function formatRelativeTime(timestamp: string | number): string {
   const ts = typeof timestamp === "number" ? timestamp : new Date(timestamp).getTime();
   if (!Number.isFinite(ts)) return "unknown";
@@ -1797,16 +1808,7 @@ async function runLogin(setupToken: string): Promise<void> {
 
     writeConfig(config);
 
-    const stateFile = path.join(CONFIG_DIR, "daemon.state");
-    if (fs.existsSync(stateFile)) {
-      try {
-        const currentState = JSON.parse(fs.readFileSync(stateFile, "utf-8"));
-        const newState = { ...currentState, authExpired: false };
-        fs.writeFileSync(stateFile, JSON.stringify(newState, null, 2), { mode: 0o600 });
-      } catch {
-        // Ignore errors
-      }
-    }
+    patchDaemonState({ authExpired: false });
 
     console.log("Linked successfully!\n");
     console.log(`User ID: ${config.user_id}`);
@@ -1909,16 +1911,7 @@ async function runAuth(): Promise<void> {
 
   writeConfig(config);
 
-  const stateFile = path.join(CONFIG_DIR, "daemon.state");
-  if (fs.existsSync(stateFile)) {
-    try {
-      const currentState = JSON.parse(fs.readFileSync(stateFile, "utf-8"));
-      const newState = { ...currentState, authExpired: false };
-      fs.writeFileSync(stateFile, JSON.stringify(newState, null, 2), { mode: 0o600 });
-    } catch {
-      // Ignore errors
-    }
-  }
+  patchDaemonState({ authExpired: false });
 
   console.log(`${fmt.success(icons.check)} ${c.bold}Authenticated successfully!${c.reset}\n`);
   console.log(`  ${fmt.muted("User")}     ${fmt.id(config.user_id || "")}`);
@@ -17526,9 +17519,15 @@ doc
   .option("-L, --lines <n>", "Lines per page", "200")
   .option("-n, --line-numbers", "Prefix each line with its number")
   .option("--full", "Print the entire document without paging")
+  .option("--clean", "Without drafting markup: the versions showing, ghosts kept as plain text")
+  .option("--final", "As it would publish: drafting markup removed and ghosted text left out")
   .action(async (id: string, range: string | undefined, options: any) => {
     const result = await cliPost("/cli/docs/get", { id });
     if (!result) { console.error("Doc not found"); process.exit(1); }
+    if (options.clean || options.final) {
+      const { stripDrafting } = await import("@codecast/shared/docs/drafting");
+      result.content = stripDrafting(result.content || "", { dropGhosts: !!options.final });
+    }
     const lines = (result.content || "").split("\n");
     const total = lines.length;
 
@@ -17651,6 +17650,8 @@ doc
       console.log(`${c.green}ok${c.reset} Updated doc ${c.cyan}${id}${c.reset}`);
     }
   });
+
+registerDocDraftingCommands(doc, { post: cliPost, sessionId: detectCurrentSessionId });
 
 doc
   .command("search")
@@ -19982,11 +19983,7 @@ program
     const priorAccess = readDaemonState()?.cursorAccess;
     // Drop the recorded outcome so the poll below reads THIS run's probe, not
     // a stale verdict from before a System Settings change.
-    try {
-      const st = JSON.parse(fs.readFileSync(STATE_FILE, "utf-8"));
-      delete st.cursorAccess;
-      fs.writeFileSync(STATE_FILE, JSON.stringify(st, null, 2), { mode: 0o600 });
-    } catch {}
+    patchDaemonState({ cursorAccess: undefined });
     if (process.platform === "darwin" && priorAccess !== "granted") {
       console.log("Restarting the daemon. macOS will ask:");
       console.log('  "codecast would like to access data from other apps" — click Allow.');

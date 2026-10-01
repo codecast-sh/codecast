@@ -1,5 +1,6 @@
 import { StyleSheet } from 'react-native';
 import { useSyncExternalStore } from 'react';
+import { MOBILE_TAB_BAR_STYLE } from '@codecast/shared/render/mobileTabsStyle';
 
 export const SolarizedLight = {
   bg: '#FBF5E2',
@@ -189,7 +190,7 @@ export function useTheme(): Palette {
 // The tab bar's fixed height (its own paddingBottom absorbs the home
 // indicator, so this is the full box). Overlays that float above the tab bar
 // (the in-call pill) offset by THIS, not by insets.bottom + a guess.
-export const TAB_BAR_HEIGHT = 84;
+export const TAB_BAR_HEIGHT = MOBILE_TAB_BAR_STYLE.height;
 
 export const Spacing = {
   xs: 4,

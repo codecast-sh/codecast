@@ -41,6 +41,8 @@ export interface CloudAgentProblem {
   sentence: string;
   /** A new key or sign-in fixes it (isCloudAgentCredentialKind). */
   credential: boolean;
+  /** A limit's reset, when the provider named it (ms since the epoch). */
+  resetsAt?: number;
 }
 
 /**
@@ -56,5 +58,6 @@ export function useCloudAgentStatus(spec: CloudAgentProviderSpec | undefined, de
   const block = expiredAt ? { kind: "key_invalid" as const, expiredAt } : cloudAgentBlockOf(spec, status.device);
   if (!block) return status;
   const sentence = cloudAgentSetupSentence(spec, block, machineName(status.device));
-  return { ...status, problem: { kind: block.kind, sentence, credential: isCloudAgentCredentialKind(block.kind) } };
+  const resetsAt = "resets_at" in block ? block.resets_at : undefined;
+  return { ...status, problem: { kind: block.kind, sentence, credential: isCloudAgentCredentialKind(block.kind), ...(resetsAt ? { resetsAt } : {}) } };
 }

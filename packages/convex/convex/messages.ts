@@ -37,6 +37,7 @@ import {
 import { onFreshApiErrorPark } from "./accountSwitch";
 import { safetyBlockPatch } from "./conversationSafety";
 import { stripContextTags } from "./userMessagesFilter";
+import { dropMirroredMessage } from "./searchMirror";
 import { countMatches, parseSearchTerms } from "@codecast/shared/search";
 import { batchHasLoopEvent, deriveLoopState } from "./loopState";
 import { nextAgentStatusOnAddMessages, classifyApiErrorBanner, apiErrorBatchAction, nextPendingApiError, newestSignificantMessage, isBannerTurn, isRealTurn, NEEDS_INPUT_AUQ_CHECK_DELAY_MS } from "./inboxFilters";
@@ -1715,6 +1716,7 @@ export async function supersedeApiErrorBanners(
   for (const r of recent) {
     if (r.timestamp < beforeTs && isBannerTurn(r) && classifyApiErrorBanner(r.content) !== "safety") {
       await ctx.db.delete(r._id);
+      await dropMirroredMessage(ctx, r._id);
       deleted++;
     }
   }
@@ -2402,6 +2404,7 @@ export const deleteMessagesByUuid = mutation({
         .first();
       if (existing) {
         await ctx.db.delete(existing._id);
+        await dropMirroredMessage(ctx, existing._id);
         deleted++;
       }
     }

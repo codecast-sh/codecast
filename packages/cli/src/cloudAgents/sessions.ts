@@ -15,10 +15,13 @@ import { cloudAgentLaunch, cloudAgentRootId, isCloudAgentId } from "@codecast/sh
 import { atomicWriteFile } from "../atomicWrite.js";
 import { splitPatches } from "../repoMirror.js";
 import { codecastPath } from "../codecastDir.js";
+import { githubRepo } from "../cloud/gitOrigin.js";
 import { CloudApiError } from "./http.js";
+import { CloudShapeError } from "./shape.js";
+import { repoOwnerName } from "./poll.js";
 import { git, githubOriginAt, gitRaw, porcelainEntries, repoRootFor } from "../gitPlane.js";
 import { deviceLabel } from "../remote/device.js";
-import { CloudAgentBusyError, CloudAgentSetupError, errorText, logTag, type AnyCloudAgentAdapter, type CloudAgentApplyPlan } from "./types.js";
+import { CloudAgentBusyError, CloudAgentSetupError, CloudAgentUnsentError, errorText, logTag, type AnyCloudAgentAdapter, type CloudAgentApplyPlan, type CloudAgentCreated } from "./types.js";
 import type { CloudAgentWatcher } from "./watcher.js";
 
 const execFileAsync = promisify(execFile);
@@ -28,6 +31,8 @@ export interface CloudAgentSession {
   agentId?: string;
   projectPath?: string;
   repoUrl?: string;
+  /** The GitHub repository of `repoUrl`, as owner and name; unset when the checkout has no GitHub remote. */
+  repo?: { owner: string; name: string };
   startingRef?: string;
   /** Provider model id; "" = the account's default. */
   model: string;
@@ -36,11 +41,17 @@ export interface CloudAgentSession {
   attempts?: number;
   /** What the agent starts from when that differs from the checkout (see githubRepoAt). */
   notice?: string;
+  /**
+   * What an adapter tags the agent it creates with, kept across tries of one
+   * message: a retry finds the agent an earlier try created without hearing
+   * back, rather than creating a second.
+   */
+  createKey?: string;
 }
 
 export interface CloudAgentSessionsDeps {
   /** The provider's mirror, once it runs: told to mirror an agent codecast just moved. */
-  watcher: () => Pick<CloudAgentWatcher, "follow" | "setNotice" | "isRunning"> | null;
+  watcher: () => Pick<CloudAgentWatcher, "follow" | "setNotice" | "isRunning" | "setupProblem" | "report"> | null;
   /** Map the agent id to the conversation, locally and on the server. */
   bindSession: (conversationId: string, agentId: string, projectPath: string | undefined, repoUrl: string | undefined) => void;
   /** The agent id the conversation is already mapped to, from the session cache. */
@@ -68,14 +79,9 @@ export class CloudAgentSessions {
     }
   }
 
-  /** Whether codecast started this agent. */
-  ownsAgent(agentId: string): boolean {
-    return Object.values(this.sessions).some((s) => s.agentId === agentId);
-  }
-
-  /** Whether codecast started (or was bound to) any agent. */
-  ownsAnyAgent(): boolean {
-    return Object.values(this.sessions).some((s) => !!s.agentId);
+  /** The agents codecast started (or was bound to). */
+  agentIds(): Set<string> {
+    return new Set(Object.values(this.sessions).flatMap((s) => (s.agentId ? [s.agentId] : [])));
   }
 
   /** The conversation's cloud session: one codecast started, or a mirrored agent it was bound to. */
@@ -111,35 +117,53 @@ export class CloudAgentSessions {
     const client = this.adapter.client();
     if (client instanceof CloudAgentSetupError) throw client;
     const watcher = this.deps.watcher();
+    // The provider changed (the mirror paused the lane): nothing is sent to an API codecast can't read until a check passes.
+    // Every other problem is the send's own to find: its answer carries the provider's current word (a limit's wait).
+    const paused = watcher?.setupProblem;
+    if (paused?.kind === "changed") throw paused;
     if (!session.agentId) {
       // Read again on every try: a message held for a missing remote or an unpushed branch goes out once it is fixed.
       await readRepo(session);
-      let created: { agentId: string; url?: string };
+      let created: CloudAgentCreated;
       try {
         created = await this.adapter.create(client, session, content);
       } catch (err) {
-        throw setupErrorOf(this.adapter, err, session) ?? err;
+        // What the try left on the session (its create key) outlives a restart, so the next try still finds its agent.
+        if (session.createKey) this.save();
+        const problem = await this.problemOf(client, err, session);
+        // The agent may exist: sending again could start a second one, so the message is not held for a retry.
+        if (err instanceof CloudAgentUnsentError) throw err;
+        throw problem ?? err;
       }
       session.agentId = created.agentId;
+      // What the checkout says about where the agent starts, then what the provider says about where it works.
+      session.notice = [session.notice, created.notice].filter(Boolean).join(" ") || undefined;
       this.save();
       if (session.notice) watcher?.setNotice(created.agentId, session.notice);
       this.deps.bindSession(conversationId, created.agentId, session.projectPath, session.repoUrl);
       this.deps.log(`${this.tag} created agent ${created.agentId} for conversation ${conversationId.slice(0, 12)} (${created.url ?? ""})`);
     } else {
-      // Last seen running: busy without asking the provider (each retry of a held message would be a read).
-      if (watcher?.isRunning(session.agentId)) throw new CloudAgentBusyError(this.adapter.spec.label);
+      // Last seen running: busy without asking the provider (each retry of a held message would be a read),
+      // unless the provider steers the running turn with it.
+      if (!this.adapter.steersRunningTurn && watcher?.isRunning(session.agentId)) throw new CloudAgentBusyError(this.adapter.spec.label);
       try {
         await this.adapter.followUp(client, session.agentId, content);
       } catch (err) {
-        if (!(err instanceof CloudAgentBusyError)) throw setupErrorOf(this.adapter, err, session) ?? err;
+        const busy = busyErrorOf(this.adapter, err);
+        if (!busy) throw (await this.problemOf(client, err, session)) ?? err;
         // A turn started elsewhere (the provider's site): the mirror follows it, so the next retries are answered above.
         void watcher?.follow(session.agentId);
-        throw err;
+        throw busy;
       }
     }
     this.deps.setStatus(conversationId, "working");
     void watcher?.follow(session.agentId!);
     return true;
+  }
+
+  /** The setup problem a failed send names (judgeCloudFailure). */
+  private problemOf(client: unknown, err: unknown, session: CloudAgentSession): Promise<CloudAgentSetupError | null> {
+    return judgeCloudFailure(this.adapter, this.deps.watcher(), client, err instanceof CloudAgentUnsentError ? err.unreadable : err, session);
   }
 
   /**
@@ -169,14 +193,41 @@ export class CloudAgentSessions {
 }
 
 /**
- * The setup problem an API error names: the adapter's vendor-specific cases
- * first, then the rule every provider shares (credentials the provider
- * refused). Null for anything else.
+ * The setup problem any failed call names, by every rule at once: an answer
+ * in a shape codecast does not read (the provider changed: "changed"), a 429
+ * (a limit, named by the adapter when it can: usageLimit), the adapter's
+ * vendor-specific cases, then credentials the provider refused. Null for
+ * anything else.
  */
-export function setupErrorOf(adapter: AnyCloudAgentAdapter, err: unknown, session?: CloudAgentSession): CloudAgentSetupError | null {
+export async function cloudSetupErrorOf(adapter: AnyCloudAgentAdapter, client: unknown, err: unknown, session?: CloudAgentSession): Promise<CloudAgentSetupError | null> {
+  if (err instanceof CloudShapeError) return CloudAgentSetupError.changed(adapter, err.message);
+  if (err instanceof CloudApiError && err.status === 429) {
+    const used = await adapter.usageLimit?.(client, err).catch(() => null);
+    if (used) return CloudAgentSetupError.limited(adapter, used.detail, used.waitMs ?? err.retryAfterMs, used.resetsAt);
+    return CloudAgentSetupError.limited(adapter, `requests from ${deviceLabel()} are rate limited (${err.message})`, err.retryAfterMs);
+  }
   const specific = adapter.setupErrorOf?.(err, session);
   if (specific) return specific;
   return err instanceof CloudApiError && err.keyRejected ? CloudAgentSetupError.credentialsRejected(adapter, err.message) : null;
+}
+
+/**
+ * A failed send's or header action's setup problem: the mirror's verdict
+ * (CloudAgentWatcher.report), which also pauses the lane when the problem
+ * holds every agent, or the rule alone (cloudSetupErrorOf) before a mirror runs.
+ */
+export function judgeCloudFailure(adapter: AnyCloudAgentAdapter, watcher: Pick<CloudAgentWatcher, "report"> | null | undefined, client: unknown, err: unknown, session?: CloudAgentSession): Promise<CloudAgentSetupError | null> {
+  return watcher ? watcher.report(client, err, { session }) : cloudSetupErrorOf(adapter, client, err, session);
+}
+
+/**
+ * A follow-up the agent cannot take yet: the adapter's own busy error, or the
+ * provider answering it with a conflict (409: a turn still runs), which every
+ * provider means the same way.
+ */
+function busyErrorOf(adapter: AnyCloudAgentAdapter, err: unknown): CloudAgentBusyError | null {
+  if (err instanceof CloudAgentBusyError) return err;
+  return err instanceof CloudApiError && err.status === 409 ? new CloudAgentBusyError(adapter.spec.label) : null;
 }
 
 /** The session's repository, starting branch and notice, as its checkout is now. */
@@ -184,8 +235,29 @@ async function readRepo(session: CloudAgentSession): Promise<void> {
   if (!session.projectPath) return;
   const repo = await githubRepoAt(session.projectPath);
   session.repoUrl = repo?.repoUrl;
+  session.repo = repoOwnerName(githubRepo(repo?.repoUrl));
   session.startingRef = repo?.startingRef;
   session.notice = repo?.notice;
+}
+
+/** How long GitHub may take to say whether a repository clones without credentials. */
+const CLONE_CHECK_MS = 10_000;
+
+/**
+ * Whether GitHub lets anyone clone the repository (anonymously, over HTTPS),
+ * as a sandbox without GitHub credentials does. False for a private or missing
+ * one; undefined when GitHub did not say (the agent is then tried, and its
+ * setup says).
+ */
+export async function clonesAnonymously(repo: { owner: string; name: string }, fetchImpl: typeof fetch = fetch): Promise<boolean | undefined> {
+  try {
+    const resp = await fetchImpl(`https://github.com/${repo.owner}/${repo.name}.git/info/refs?service=git-upload-pack`, { signal: AbortSignal.timeout(CLONE_CHECK_MS), redirect: "follow" });
+    await resp.body?.cancel().catch(() => {});
+    if (resp.ok) return true;
+    return resp.status === 401 || resp.status === 403 || resp.status === 404 ? false : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

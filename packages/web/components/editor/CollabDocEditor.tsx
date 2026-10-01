@@ -19,6 +19,8 @@ import { EntityRefExtension } from "./EntityRefExtension";
 import { BubbleToolbar } from "./BubbleToolbar";
 import { uploadImageWithPlaceholder } from "./ImageUploadPlugin";
 import { createWikiLinkExtension } from "./WikiLinkExtension";
+import { DraftingExtension, type DraftingOptions } from "./DraftingExtension";
+import type { Editor as TiptapEditor } from "@tiptap/core";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import {
@@ -72,6 +74,11 @@ interface CollabDocEditorProps {
   onExit?: () => void;
   onContentChange?: (hasContent: boolean) => void;
   composeHandleRef?: React.MutableRefObject<ComposeEditorHandle | null>;
+  // ── Drafting (the doc page) ──
+  /** Handlers for the drafting shortcuts; read through a ref so they can change without a rebuild. */
+  draftingRef?: React.MutableRefObject<DraftingOptions>;
+  /** The live editor once mounted (null when it unmounts), for the page's drafting panels. */
+  onEditor?: (editor: TiptapEditor | null) => void;
 }
 
 // One extension stack for every doc editor: the shared base (which already
@@ -83,8 +90,18 @@ function buildExtensions(
   onMentionQuery: MentionQueryFn,
   placeholder: string,
   titleFirst?: { fallbackTitle: () => string },
+  draftingRef?: React.MutableRefObject<DraftingOptions>,
 ) {
   return [
+    ...(draftingRef
+      ? [
+          DraftingExtension.configure({
+            onOpenAlternatives: (r) => draftingRef.current.onOpenAlternatives?.(r),
+            onAiAlternatives: (r) => draftingRef.current.onAiAlternatives?.(r),
+            onStash: (t) => draftingRef.current.onStash?.(t),
+          }),
+        ]
+      : []),
     ...createBaseExtensions({ placeholder, titleFirst }),
     createMentionExtension(onMentionQuery),
     EntityIdExtension,
@@ -199,7 +216,9 @@ function EditorInner({
   composeHandleRef,
   onContentChange,
   onSyncGap,
+  onEditor,
 }: {
+  onEditor?: (editor: TiptapEditor | null) => void;
   docId: string;
   editable: boolean;
   presences: PresenceEntry[];
@@ -262,6 +281,12 @@ function EditorInner({
       setMarkdown: (markdown: string) => { editor.commands.setContent(markdown); },
     };
   }
+
+  useMountEffect(() => {
+    if (!editor || !onEditor) return;
+    onEditor(editor);
+    return () => onEditor(null);
+  });
 
   useMountEffect(() => {
     if (!editor || !onContentChange) return;
@@ -360,6 +385,8 @@ function CollabDocEditorLive({
   onContentChange,
   composeHandleRef,
   onSyncGap,
+  draftingRef,
+  onEditor,
 }: CollabDocEditorProps & { onSyncGap: () => void }) {
   const onImageUploadRef = useRef(onImageUpload);
   onImageUploadRef.current = onImageUpload;
@@ -403,6 +430,7 @@ function CollabDocEditorLive({
       onMentionQuery,
       placeholder,
       titleFirst ? { fallbackTitle: () => titleRef.current } : undefined,
+      draftingRef,
     );
   }
 
@@ -504,6 +532,7 @@ function CollabDocEditorLive({
           composeHandleRef={composeHandleRef}
           onContentChange={onContentChange}
           onSyncGap={onSyncGap}
+          onEditor={onEditor}
         />
         {/* Gated on contentReady like the seed path above: mounting this before
             the doc detail (which carries cliEditedAt) has synced would race the

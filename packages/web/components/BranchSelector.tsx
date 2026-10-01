@@ -1,9 +1,10 @@
-import { useState, useRef, useEffect } from "react";
+import { useContext, useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { Split } from "lucide-react";
 import { useInboxStore, type ForkChild } from "../store/inboxStore";
 import { branchSizeOf, originSizeSinceFork } from "../lib/branchCounts";
 import { attemptLineLabel, familyHeading, isAttemptFamily } from "../hooks/useForkTree";
+import { HoverCardsOff } from "../lib/hoverCardsOff";
 
 // Sentinel loadingBranchId for the origin-line chip, which has no fork id.
 const MAIN_BRANCH = "main";
@@ -60,6 +61,8 @@ export function BranchSelector({
   onFork?: () => void;
 }) {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  // The fork preview portals to the body; a surface that opens nothing on hover keeps it shut.
+  const previewsOff = useContext(HoverCardsOff);
   const [tooltipPos, setTooltipPos] = useState<{ top: number; left: number } | null>(null);
   const buttonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const seenMessageCount = useInboxStore((s) => s._seenMessageCount);
@@ -194,7 +197,7 @@ export function BranchSelector({
         )}
       </div>
 
-      {hoveredFork && tooltipPos && createPortal(
+      {hoveredFork && tooltipPos && !previewsOff && createPortal(
         <div
           className="fixed z-[9999] px-3 py-2 rounded-lg bg-sol-bg border border-sol-border shadow-xl text-[11px] text-sol-text-secondary pointer-events-none ring-1 ring-black/5 max-w-[300px]"
           style={{ top: tooltipPos.top, left: tooltipPos.left }}

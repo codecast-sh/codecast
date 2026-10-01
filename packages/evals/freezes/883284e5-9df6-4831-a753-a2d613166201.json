@@ -1,0 +1,26 @@
+{
+  "name": "anchor-brief team-anchor-opening",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:team-anchor-opening"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "anchor-brief:team-anchor-opening",
+    "title": "anchor-brief team-anchor-opening"
+  },
+  "asOf": "2026-09-28T09:00:00.000Z",
+  "trigger": {
+    "type": "anchor-brief"
+  },
+  "meta": {
+    "surface": "anchor-brief",
+    "visibility": "public",
+    "snapshot": "fixtures/anchor-brief/team-anchor-opening.json"
+  },
+  "judge": "the opening turn orients the role to its scope and does no writes",
+  "notes": null,
+  "tags": [],
+  "id": "883284e5-9df6-4831-a753-a2d613166201",
+  "createdAt": "2026-10-01T17:53:53.738Z"
+}

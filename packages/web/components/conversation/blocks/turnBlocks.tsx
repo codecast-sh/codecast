@@ -37,6 +37,7 @@ import { FileText, ListChecks, Target, Maximize2, ChevronDown, ChevronRight, Che
 import { useTeamFeature } from "../../../lib/teamFeatures";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "../../ui/context-menu";
 import { pendingBannerState, pendingRetryClientId, pendingCancelRef, pendingMessageCanRetry, pendingMessageReachedSession, pendingMessageHoldReason, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "../../../lib/pendingBanner";
+import { cancelPendingSend } from "../../../lib/cancelPendingSend";
 import { PendingDeliveryNote } from "../../PendingDeliveryNote";
 import { ghostRestartContextFor, deriveRestartStage, type RestartProgressRow } from "../../../hooks/useSessionRestart";
 import { CastCommandBlock } from "./castBlocks";
@@ -353,10 +354,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
     if (!conversationId || cancelState !== "idle") return;
     setCancelState("inflight");
     try {
-      const status = await useInboxStore.getState().cancelPendingMessage(
-        conversationId,
-        pendingCancelRef(messageId, conversationPending),
-      );
+      const status = await cancelPendingSend(conversationId, pendingCancelRef(messageId, conversationPending), content);
       if (status === "delivered" || status === "injected") {
         toast.info("This message has already reached the session");
       }
@@ -1046,6 +1044,7 @@ function AssistantBlockImpl({
   isConversationActive,
   globalImageMap,
   globalFileMap,
+  collapseAbove,
 }: {
   content?: string;
   timestamp: number;
@@ -1088,15 +1087,18 @@ function AssistantBlockImpl({
   isConversationActive?: boolean;
   globalImageMap?: Record<string, ImageData[]>;
   globalFileMap?: Record<string, SentFileData[]>;
+  /** A smaller host (a Threads card) folds long text at this height and opens
+   *  it folded; the conversation shows every message whole up to 800px. */
+  collapseAbove?: number;
 }) {
-  const CONTENT_MAX_HEIGHT = 800;
+  const CONTENT_MAX_HEIGHT = collapseAbove ?? 800;
 
   // Condensed feed: this message's segment tools fold into one receipt row
   // (condensedReceipt), rendered inline right after the content where the
   // activity happened. Opening it reveals the real tool blocks nested under
   // the chip, inside this row. Compact-expanded turns arrive as density "full".
   const condensed = density === "condensed";
-  const [contentExpanded, setContentExpanded] = useState(true);
+  const [contentExpanded, setContentExpanded] = useState(collapseAbove === undefined);
   const [isOverflowing, setIsOverflowing] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -1418,7 +1420,7 @@ function AssistantBlockImpl({
                 </div>
               )}
             </div>
-            {!parsedApiError && (isOverflowing || !contentExpanded) && (
+            {!parsedApiError && (isOverflowing || (!contentExpanded && collapseAbove === undefined)) && (
               <div data-cc-message-overflow className="flex items-center gap-1 mt-2">
                 <button
                   onClick={() => setFullscreen(true)}
@@ -1504,12 +1506,11 @@ function AssistantBlockImpl({
         <button
           data-cc-message-action
           onClick={() => onForkFromMessage(messageUuid)}
-          className="absolute right-2 -bottom-3 z-10 inline-flex select-none items-center gap-1.5 text-[11px] font-medium pl-1.5 pr-2.5 py-1 rounded-md border border-sol-border bg-sol-card text-sol-text-secondary shadow-md opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto hover:text-sol-cyan hover:border-sol-cyan/60 transition-[opacity,color,border-color] duration-150"
+          className="absolute right-2 -bottom-3 z-10 inline-flex select-none items-center p-1 rounded-md border border-sol-border bg-sol-card text-sol-text-secondary shadow-md opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto hover:text-sol-cyan hover:border-sol-cyan/60 transition-[opacity,color,border-color] duration-150"
           title="Fork the conversation from this message"
           aria-label="Fork from this message"
         >
           <Split className="w-3.5 h-3.5" />
-          <span>Fork</span>
         </button>
       )}
 

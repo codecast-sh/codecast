@@ -11,6 +11,8 @@ import {
   recoveryModeOf,
   RESUME_BURST_SPACING_MS,
   pendingProposal,
+  peggedWindow,
+  peggedWindowLabel,
   type CcUsage,
 } from "./usageLimits";
 
@@ -19,6 +21,18 @@ const now = 1_000_000_000_000;
 function usage(partial: Partial<CcUsage> & { session?: CcUsage["session"]; weekly?: CcUsage["weekly"] }): CcUsage {
   return { fetched_at: now - 60_000, ...partial };
 }
+
+describe("peggedWindow — the used-up window that keeps an account shut longest", () => {
+  test("names the latest reset among the pegged windows, scoped ones too, by the meters' label", () => {
+    const u = usage({ session: { percent: 100, resets_at: now + 3_600_000 }, weekly: { percent: 40, resets_at: now + 86_400_000 }, scoped: [{ label: "Fable", percent: 100, resets_at: now + 2 * 86_400_000 }] });
+    expect(peggedWindow(u, now)).toEqual({ label: "Fable", resets_at: now + 2 * 86_400_000 });
+    expect(peggedWindowLabel(u, now)).toBe("Fable");
+  });
+  test("a window whose reset has passed has rolled, and none pegged is undefined", () => {
+    expect(peggedWindow(usage({ weekly: { percent: 100, resets_at: now - 1 } }), now)).toBeUndefined();
+    expect(peggedWindow(usage({ weekly: { percent: 100 } }), now)).toEqual({ label: "Week (7d)" });
+  });
+});
 
 describe("switchUsagePercent", () => {
   test("matches worstUsagePercent on a fresh snapshot with future resets", () => {

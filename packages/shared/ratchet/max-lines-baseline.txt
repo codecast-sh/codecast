@@ -163,13 +163,13 @@ packages/web/components/LabelChipsRow.tsx 1050
 packages/web/components/MessageInput.tsx 2750
 packages/web/components/MessageReview.tsx 850
 packages/web/components/PlanDetailPanel.tsx 1250
-packages/web/components/Sidebar.tsx 1450
+packages/web/components/Sidebar.tsx 1250
 packages/web/components/TriggerContextPanel.tsx 950
 packages/web/components/calls/CallStage.tsx 1450
 packages/web/components/calls/RoomThread.tsx 950
 packages/web/components/capabilities/FleetMatrix.tsx 1300
 packages/web/components/castCommand.test.ts 950
-packages/web/components/castCommand.ts 1000
+packages/web/components/castCommand.ts 900
 packages/web/components/chat/ChatMessage.tsx 850
 packages/web/components/conversation/blocks/castBlocks.tsx 950
 packages/web/components/conversation/blocks/systemBlocks.tsx 1400

@@ -27,6 +27,9 @@ export function usePendingMessageCoverage() {
       fail: (conversationId, commandIds) => {
         for (const clientId of commandIds) useInboxStore.getState().markOptimisticAsFailed(conversationId, clientId);
       },
+      // Deleted server-side (an explicit delete, or the empty GC): drop the
+      // cached session rather than holding its unsendable bubbles forever.
+      gone: (conversationId) => useInboxStore.getState().pruneGhostSessions([conversationId], { serverDeleted: true }),
       isCurrent: () => !signal.aborted && useInboxStore.getState().currentUser?._id === userId,
     });
     lastCheck.current = Date.now();

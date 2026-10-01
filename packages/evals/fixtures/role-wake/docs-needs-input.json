@@ -1,0 +1,159 @@
+{
+  "asOf": "2026-09-28T09:00:00.000Z",
+  "notes": "A session under the docs role waits on a decision the role can answer.",
+  "snapshot": {
+    "captured_at": "2026-09-28T09:00:00.000Z",
+    "fixture": {
+      "trigger": "tr-902",
+      "routine": "needs-input",
+      "role": {
+        "handle": "docs",
+        "name": "Docs lead",
+        "reports_to": "Mara",
+        "scope": [
+          "Docs site",
+          "API reference"
+        ],
+        "charter": "Keep every public page true to what the product does today.",
+        "goals": [
+          "Every page reviewed within a month of the feature it describes",
+          "API reference generated from the schema, never by hand"
+        ]
+      },
+      "waiting": {
+        "short_id": "jx7ref2",
+        "title": "Regenerate the webhooks reference",
+        "why": "needs_input",
+        "since": 1790581200000,
+        "role": "docs",
+        "decision": "sd-55",
+        "state": "Drop the v1 events table from the reference, or keep it marked deprecated?"
+      }
+    },
+    "reads": [
+      {
+        "argv": [
+          "brief"
+        ],
+        "out": "Docs lead @docs · or-7 · active · starts work\n  scope: project Docs site, project API reference\n  authority outside codecast: none granted\n  standing session: jx7dcs1 · next check in 23h (tr-901)\n  tasks: 14 in scope, 6 open · 2 backlog, 3 in_progress, 1 in_review, 8 done\n  plan pl-31 Reference from schema: 3 of 5 done\n  decisions: 1 open, 0 answered today\n  changed since 1d ago:\n    task ct-412 Regenerate the webhooks reference → in_review\n    task ct-418 Billing page still describes the old plans → backlog\n  today: 1/40 wakes · 0/6 sessions started · 2100/400000 tokens\n  sessions under it:\n    jx7ref2  needs input  Regenerate the webhooks reference: asks whether to drop the v1 events table (sd-55)\n    jx7bil3  working      Rewrite the billing page for the new plans\n  people who report to it:\n    Theo (@theo): 2 tasks open, last active 3h ago\n\n  ## Charter\n  Keep every public page true to what the product does today.\n\n  ## Brief\n  Docs lead for Fernhill: the docs site and the API reference.\n\n  ## Where it stands\n  - Docs site: billing page rewrite started; the old plans are still live on it. (2026-09-27)\n  - API reference: webhooks section regenerated from the schema, waiting on review. (2026-09-14)"
+      },
+      {
+        "argv": [
+          "brief",
+          "--json"
+        ],
+        "out": "{\n  \"role\": {\n    \"handle\": \"docs\",\n    \"name\": \"Docs lead\",\n    \"short_id\": \"or-7\",\n    \"status\": \"active\",\n    \"standing_short_id\": \"jx7dcs1\"\n  },\n  \"facts\": {\n    \"scope\": {\n      \"projects\": [\n        \"Docs site\",\n        \"API reference\"\n      ]\n    },\n    \"tasks\": {\n      \"total\": 14,\n      \"open\": 6,\n      \"by_status\": {\n        \"backlog\": 2,\n        \"in_progress\": 3,\n        \"in_review\": 1,\n        \"done\": 8\n      }\n    },\n    \"decisions\": {\n      \"open\": 1,\n      \"answered_today\": 0\n    },\n    \"changed_since\": 1790499600000,\n    \"changed\": [\n      {\n        \"kind\": \"task\",\n        \"short_id\": \"ct-412\",\n        \"title\": \"Regenerate the webhooks reference\",\n        \"status\": \"in_review\"\n      },\n      {\n        \"kind\": \"task\",\n        \"short_id\": \"ct-418\",\n        \"title\": \"Billing page still describes the old plans\",\n        \"status\": \"backlog\"\n      }\n    ],\n    \"hands\": [\n      {\n        \"short_id\": \"jx7ref2\",\n        \"title\": \"Regenerate the webhooks reference\",\n        \"work_state\": \"needs_input\",\n        \"state\": \"asks whether to drop the v1 events table (sd-55)\"\n      },\n      {\n        \"short_id\": \"jx7bil3\",\n        \"title\": \"Rewrite the billing page for the new plans\",\n        \"work_state\": \"working\"\n      }\n    ]\n  },\n  \"charter\": \"Keep every public page true to what the product does today.\",\n  \"narrative\": \"Docs lead for Fernhill: the docs site and the API reference.\\n\\n## Where it stands\\n- Docs site: billing page rewrite started; the old plans are still live on it. (2026-09-27)\\n- API reference: webhooks section regenerated from the schema, waiting on review. (2026-09-14)\"\n}"
+      },
+      {
+        "argv": [
+          "brief",
+          "@docs"
+        ],
+        "out": "Docs lead @docs · or-7 · active · starts work\n  scope: project Docs site, project API reference\n  authority outside codecast: none granted\n  standing session: jx7dcs1 · next check in 23h (tr-901)\n  tasks: 14 in scope, 6 open · 2 backlog, 3 in_progress, 1 in_review, 8 done\n  plan pl-31 Reference from schema: 3 of 5 done\n  decisions: 1 open, 0 answered today\n  changed since 1d ago:\n    task ct-412 Regenerate the webhooks reference → in_review\n    task ct-418 Billing page still describes the old plans → backlog\n  today: 1/40 wakes · 0/6 sessions started · 2100/400000 tokens\n  sessions under it:\n    jx7ref2  needs input  Regenerate the webhooks reference: asks whether to drop the v1 events table (sd-55)\n    jx7bil3  working      Rewrite the billing page for the new plans\n  people who report to it:\n    Theo (@theo): 2 tasks open, last active 3h ago\n\n  ## Charter\n  Keep every public page true to what the product does today.\n\n  ## Brief\n  Docs lead for Fernhill: the docs site and the API reference.\n\n  ## Where it stands\n  - Docs site: billing page rewrite started; the old plans are still live on it. (2026-09-27)\n  - API reference: webhooks section regenerated from the schema, waiting on review. (2026-09-14)"
+      },
+      {
+        "argv": [
+          "sessions"
+        ],
+        "out": "Sessions · you\nneeds input 1  ·  working 1\n\nNeeds input (1)\n  jx7ref2  Regenerate the webhooks reference   asks whether to drop the v1 events table (sd-55)\nWorking (1)\n  jx7bil3  Rewrite the billing page for the new plans"
+      },
+      {
+        "argv": [
+          "sessions",
+          "--json"
+        ],
+        "out": "{\n  \"counts\": {\n    \"needs_input\": 1,\n    \"working\": 1,\n    \"total\": 2\n  },\n  \"sessions\": [\n    {\n      \"id\": \"jx7ref2\",\n      \"title\": \"Regenerate the webhooks reference\",\n      \"work_state\": \"needs_input\",\n      \"role\": \"docs\",\n      \"last_user_message\": \"Regenerate the webhooks section from the schema.\",\n      \"updated_at\": \"2026-09-28T07:40:00.000Z\"\n    },\n    {\n      \"id\": \"jx7bil3\",\n      \"title\": \"Rewrite the billing page for the new plans\",\n      \"work_state\": \"working\",\n      \"role\": \"docs\",\n      \"last_user_message\": \"Rewrite the billing page for the new plans.\",\n      \"updated_at\": \"2026-09-28T08:50:00.000Z\"\n    }\n  ]\n}"
+      },
+      {
+        "argv": [
+          "org",
+          "health"
+        ],
+        "out": "{\n  \"workspace\": {\n    \"name\": \"Fernhill\",\n    \"kind\": \"team\"\n  },\n  \"areas\": [\n    {\n      \"role\": \"docs\",\n      \"status\": \"busy\",\n      \"open\": 6,\n      \"waiting\": 1,\n      \"stale\": 0\n    }\n  ]\n}"
+      },
+      {
+        "argv": [
+          "org",
+          "health",
+          "--json"
+        ],
+        "out": "{\n  \"workspace\": {\n    \"name\": \"Fernhill\",\n    \"kind\": \"team\"\n  },\n  \"areas\": [\n    {\n      \"role\": \"docs\",\n      \"status\": \"busy\",\n      \"open\": 6,\n      \"waiting\": 1,\n      \"stale\": 0\n    }\n  ]\n}"
+      },
+      {
+        "argv": [
+          "org"
+        ],
+        "out": "Usage: cast org [options] [command]\n\nThe workspace's reporting structure: people, roles, and the sessions under them\n\nCommands:\n  ls|list        Show the org tree for the active workspace\n  health         Each area at a glance\n  review         The company review"
+      },
+      {
+        "argv": [
+          "org",
+          "ls"
+        ],
+        "out": "Fernhill\n  Mara (you) · owner\n    Docs lead @docs · active · 6 open, 1 needs input\n      jx7ref2 Regenerate the webhooks reference · needs_input\n      jx7bil3 Rewrite the billing page for the new plans · working\n    Theo (@theo) · reports to @docs · 2 open"
+      },
+      {
+        "argv": [
+          "decide",
+          "ls"
+        ],
+        "out": "Open decisions (1)\n  sd-55  Drop the v1 events table from the reference, or keep it marked deprecated?  asked by jx7ref2 · 1h ago"
+      },
+      {
+        "argv": [
+          "task",
+          "show",
+          "ct-412"
+        ],
+        "out": "ct-412 Regenerate the webhooks reference · in_review · docs\n  The webhooks section is regenerated from the schema. Review waits on sd-55: six customer guides still link to the v1 events table."
+      },
+      {
+        "argv": [
+          "task",
+          "show",
+          "ct-418"
+        ],
+        "out": "ct-418 Billing page still describes the old plans · backlog · docs\n  The billing page lists the Starter and Team plans, retired on 2026-09-15. jx7bil3 is rewriting it."
+      },
+      {
+        "argv": [
+          "task",
+          "show",
+          "ct-412",
+          "ct-418"
+        ],
+        "out": "ct-412 Regenerate the webhooks reference · in_review · docs\n  The webhooks section is regenerated from the schema. Review waits on sd-55: six customer guides still link to the v1 events table.\n\nct-418 Billing page still describes the old plans · backlog · docs\n  The billing page lists the Starter and Team plans, retired on 2026-09-15. jx7bil3 is rewriting it."
+      },
+      {
+        "argv": [
+          "read",
+          "jx7bil3"
+        ],
+        "out": "Rewrite the billing page for the new plans (jx7bil3) · working · 22 messages\n\n[21] assistant: Drafted the new plans table; checking the annual discount against the pricing service.\n[22] assistant: Opening the pull request once the discount matches."
+      },
+      {
+        "argv": [
+          "read",
+          "jx7ref2"
+        ],
+        "out": "Regenerate the webhooks reference (jx7ref2) · needs input · 41 messages\n\n[38] user: Regenerate the webhooks section of the API reference from the schema.\n[39] assistant: Done for v2. The schema no longer defines the v1 events, but six customer guides still link to the v1 table.\n[40] assistant: Posted sd-55: drop the v1 events table, or keep it marked deprecated until the guides move?\n[41] assistant: Waiting on sd-55 before I open the pull request."
+      },
+      {
+        "argv": [
+          "decide",
+          "show",
+          "sd-55"
+        ],
+        "out": "sd-55 · open · asked by jx7ref2 (Regenerate the webhooks reference)\nDrop the v1 events table from the reference, or keep it marked deprecated?\n  1. Drop it :: the reference matches the schema; six guides link to a missing anchor until they move\n  2. Keep it, marked deprecated :: guides keep working; the table drifts from the schema\nGrant: docs (role) may answer."
+      }
+    ],
+    "frozen": [
+      "brief",
+      "org",
+      "sessions",
+      "read",
+      "decide",
+      "task"
+    ]
+  }
+}

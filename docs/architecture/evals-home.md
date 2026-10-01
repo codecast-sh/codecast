@@ -14,7 +14,7 @@ This spec was written read-only. It starts from the operator design (Design 2), 
 | One concept for cases | Every case is a freeze. Settle's 17 synthetic cases, org snapshots and real moments are all freezes. The `sim` seam stays unset. |
 | What goes in git (the repo is PUBLIC) | Surface code, synthetic fixtures (with their labels inside), and freeze pointers for synthetic fixtures only. Every real freeze, snapshot, run, label and ground-truth file lives in `EVALS_HOME`. Codecast's own grade sets are kept private too. That is founder decision 1, with this as the default. |
 | `EVALS_HOME` | `${CODECAST_EVALS_HOME:-~/.local/share/codecast/evals}`. This is a data dir, not a cache, because hand labels are precious. `labels/` is a git repo whose remote is the private GitHub repo `ashot/codecast-eval-labels`; every label write commits and pushes (founder decision sd-319, 2026-09-30). |
-| Reads for freezes | Access-checked only. Session reads use `cliFetchRead` on `/cli/read` plus `readLocalConfig`, imported directly with no new `--json` flags. The inbox uses `cast sessions --json`, calls use `cast call <id> --json`, and triggers use `cast trigger show <tr> --json`. No `run.sh`, no system-table reader, no `npx convex run`. The one new server read is a self-only `/cli/suggestion-profile` route. |
+| Reads for freezes | Access-checked only. Session reads use `cliFetchRead` on `/cli/read` plus `readAuthConfig` (config.json stores the token encrypted, and `readLocalConfig` does not decrypt it), imported directly with no new `--json` flags. The inbox uses `cast sessions --json`, calls use `cast call <id> --json`, and a trigger is read through `/cli/tasks/list` (what `cast trigger ls --json` reads; there is no `cast trigger show`), with a role's wake frame from the self-only public query `agentTasks:injectFrame`, the one the daemon delivers it through. No `run.sh`, no system-table reader, no `npx convex run`. The one new server read is a self-only `/cli/suggestion-profile` route. |
 | Agent replays | Reads are served from a cassette keyed by an argv hash, with UNSERVED logging and a `frozen-reads` gate. There is no generic `<w1>.txt` fallback. `cast org review` without `--spawn` becomes a permitted read. |
 | Precheck | `./evals stale` hashes the declared sources at HEAD with `git rev-parse HEAD:<path>` and never reads the disk. A surface is blocked after 2 crashes on the same hash. `check --stale` skips a surface whose sources are dirty in the checkout. |
 | Model pins | Call surfaces use `CHEAP_MODEL`, imported from `convex/lib/anthropic.ts`. `JUDGE_MODEL` and `AGENT_MODEL` are `claude-sonnet-5-5`. The role and anchor surfaces pin the production session's model when the resolver can read it. `prompt-dry-run.ts --model` is required. |
@@ -63,7 +63,7 @@ It runs on a cadence (ct-55704) and never runs LLM calls in CI.
   exec bun "$root/packages/evals/src/index.ts" "$@"
   ```
 - It is not mounted under `cast`. `cast` runs from source on every session's boot path, and the release binaries would ship eval code.
-- `index.ts` builds a commander program named `evals` and calls `registerEvals(program, sources)` and `runEvalsCli`, as eaiden does in `~/src/eaiden/tools/xrun/src/index.ts`.
+- `index.ts` answers `stale` itself, before commander or the platform load, and otherwise loads `main.ts`. `main.ts` builds a commander program named `evals` and calls `registerEvals(program, sources)` and `runEvalsCli`, as eaiden does in `~/src/eaiden/tools/xrun/src/index.ts`.
 - The network-backed seams (`convo`, `freezeResolver`, `productionReply`) sit behind eaiden's lazy Proxy (lines 34-41), so `runs` and `freeze list` work with no auth.
 - The codecast commands are listed below. Each is one file in `src/commands/`.
 
@@ -71,17 +71,17 @@ It runs on a cadence (ct-55704) and never runs LLM calls in CI.
 |---|---|
 | `./evals` / `status` | One row per surface: route, pinned model, freezes (public/private/snapshot missing here), last run age, pass rate of the last 5 runs, stale or blocked mark, estimated cost of a default `check`. Ends with the next command. |
 | `check [surface…] [--stale] [--route call\|agent] [--freeze id…] [--reps n] [--model id] [--budget usd] [--dry] [--publish]` | Replays every freeze of each chosen surface. It estimates the cost first and refuses when the estimate exceeds `--budget`, and it stops mid-run with `endedBecause:'budget'`. It prints a verdict table per surface against that surface's previous run set: pass rate, mean score, min to max, flips, cost, model. It adds `separated` or `not separated` (see 2.8) and ends with `runs diff` / `freeze results` hints. Exit 1 on any gate failure or a separated regression. With `--stale`, the list comes from `stale`; an empty list prints "nothing changed" and exits 0. A surface whose sources are dirty in the checkout is skipped with one line. |
-| `stale [--route r] [--list]` | The precheck. Exit 0 when some surface is stale, exit 1 otherwise. No imports beyond `registry.ts` and `state.ts`. Uses git only. Well under 1 s. |
+| `stale [surface…] [--route r] [--list]` | The precheck. Surface ids narrow it (`check [surface…] --stale` intersects the same way). Exit 0 when some surface is stale, exit 1 otherwise. No imports beyond `registry.ts` and `state.ts`. Uses git only. Well under 1 s. |
 | `snapshot <surface> <args>` | Captures the served world for an agent surface into `EVALS_HOME/snapshots/…` and makes it read-only. Replaces `snapshot.sh`. |
 | `grade <surface> <dir>` | Grades an existing output dir with the surface's gates and checks. Used for regrading old org rounds. |
 | `capture <surface> <runDir>` | Presentation capture, attended only. org-review is the only surface in Phase 1. |
-| `doctor [--init]` | Uses `@platform/cli-kit` doctor, as eaiden's `commands/doctor.ts` does. Checks: the mirror resolves; cast auth (`readLocalConfig` has an api_token); `claude` on PATH; the keychain login, or a note that `--account` is needed on Linux; `EVALS_HOME` exists and `labels/` is a git repo with the private `ashot/codecast-eval-labels` remote and nothing unpushed (`--init` creates the dir, clones the remote, or creates the private repo with `gh repo create --private` when it does not exist); snapshot and label presence per freeze; that `prompt-dry-run.ts` without `--model` exits 2; that `models.ts` pins equal the prod constants; snippet status. |
+| `doctor [--init]` | Uses `@platform/cli-kit` doctor, as eaiden's `commands/doctor.ts` does. Checks: the mirror resolves; cast auth (`readAuthConfig` decrypts an auth token); `claude` on PATH; the keychain login, or a note that `--account` is needed on Linux; `EVALS_HOME` exists and `labels/` is a git repo with the private `ashot/codecast-eval-labels` remote and nothing unpushed (`--init` creates the dir, clones the remote, or creates the private repo with `gh repo create --private` when it does not exist); snapshot and label presence per freeze; that `prompt-dry-run.ts` without `--model` exits 2; that `models.ts` pins equal the prod constants; snippet status. |
 | `snippet install\|show\|status\|remove` | Copies eaiden's `src/snippet.ts`. It calls `installSectionToFile` from `@platform/snippets` against `AGENTS.md` (the real file, not the `CLAUDE.md` symlink), with `evalsSnippet({name: 'evals', repoNotes})`. The name is `evals`, not `./evals`, because the snippet already prepends `./`. |
 | `publish [--since 24h]` | Writes `EVALS_HOME/html/site/{index.html, report.html, matrix.html}` through the platform's `runs report` and `runs matrix --html` renderers. Then runs `cast publish EVALS_HOME/html/site --email-gate --task ct-55687 --title "Codecast evals"`. There is no ungated path. |
 
 ### 2.2 Vocabulary
 
-- **Surface.** One production prompt with one call site. Each surface is a directory `src/surfaces/<id>/` that holds:
+- **Surface.** One production prompt with one call site. Each surface is a directory `src/surfaces/<dir>/`, where `<dir>` is the id in camelCase (`orgReview` for `org-review`, as U14 names it), that holds:
   - `meta.ts`: light, no heavy imports, statically imported by `registry.ts`
   - `index.ts`: the implementation, loaded lazily
 - **Freeze.** One case: a synthetic fixture, a real moment, or an org snapshot. It is always created with `./evals freeze create <surface>@<ref>`.
@@ -100,8 +100,10 @@ export interface SurfaceMeta {
   sources: string[];                 // repo paths hashed by `stale` (always add this surface's dir and packages/cli/scripts/prompt-dry-run.ts)
   reps: { check: number; smoke?: number };
   maxUsdPerRep: number;              // fallback cost estimate before any real run
+  criteria?: string | null;          // the default judge criteria from section 3; a fixture's own `judge` wins
   frozenReads?: string[][];          // agent route: argv templates captured by `snapshot`, e.g. [['brief'], ['org','inputs','--team','{team}','--json']]
   frozenVerbs?: string[];            // agent route: first words (or "w1 w2") that must be served, never live
+  allowedRefusals?: string[];        // agent route: REFUSED argv patterns the surface's harness note allows
 }
 ```
 
@@ -112,18 +114,19 @@ export interface SurfaceImpl {
   refForms: string;                                             // one line for the UsageError
   capture(ref: string, ctx: CaptureCtx): Promise<Captured>;     // snapshot + subject + asOf + anchor + visibility
   replay(snap: any, ctx: ReplayCtx): Promise<ReplayOutput>;     // uses ctx.call(req) and/or ctx.agent(opts); may call more than once (ask)
-  gates(snap: any, out: ReplayOutput, label?: any): GateResult[];
-  checks?(snap: any, out: ReplayOutput, label?: any): CheckResult[];
+  gates(snap: any, out: ReplayResult, label?: any): GateResult[];   // ReplayResult = ReplayOutput {reply, parsed?, extra?} + every harness run it made {calls, agents}
+  checks?(snap: any, out: ReplayResult, label?: any): CheckResult[];
   describe(snap: any): ConvoMessage[];                          // what the judge and convo views show
   productionReply?(snap: any): ProductionReply | null;
   grade?(dir: string, label: any): Score;                       // org only in Phase 1
   capturePresentation?(runDir: string): Promise<void>;          // org only
+  summarize?(scores: Score[]): string[];                        // extra lines `check` prints under the verdict (suggest's grade distribution)
 }
 ```
 
 `ReplayCtx` works like this:
 
-- `call(req: SurfaceRequest, opts?)` returns `{text, outputTokens, stopReason, modelUsage, costUsd, isError}`.
+- `call(req: SurfaceRequest, opts?)` returns `{text, outputTokens, stopReason, modelUsage, costUsd, isError}`. `opts.grader` marks a call that grades the reply rather than one under test (suggest's hit/partial/miss grader); its prompt stays out of `run.json.promptSha`, while its cost still counts toward the budget.
 - `agent({prompt, serveDir, model, tools, maxTurns, then?})` returns `{runSubdir, said, calls, costUsd, modelUsage, isError}`.
 - Both spawn `prompt-dry-run.ts` through `adapters/dryRun.ts`.
 - `ctx.dry` makes both return canned output without spawning, for tests.
@@ -157,7 +160,7 @@ Out of git, in `EVALS_HOME`:
 - a committed freeze whose `meta.snapshot` does not resolve to a committed fixture
 - a `containsSecrets` hit anywhere under `freezes/` or `fixtures/`
 - any string under those dirs that looks like a Convex document id (`/\b[a-z0-9]{32}\b/`)
-- a `judge` longer than 1000 characters, or any other string longer than 300 characters
+- in a freeze file, a `judge` longer than 1000 characters or any other string longer than 300 characters (fixtures hold synthetic transcripts, so they get the secret and id scans only)
 
 Snapshots of real moments pass through `redactSecrets` (`secretRedaction.ts:143`) before they are written. They are content-addressed: sha256 of the canonical JSON, file named by the first 12 hex characters. A replay recomputes the hash and fails gate `snapshot` on a mismatch.
 
@@ -168,15 +171,15 @@ The ref grammar is `<surface>@<ref>`. The resolver splits on the first `@`. An u
 | Ref form | Surfaces | asOf |
 |---|---|---|
 | `fixture:<case>` | all | fixture's `asOf` |
-| `<session7>:<line>`, `<messageId>`, share URL with `#msg-` | title, insight, settle, suggest, ask, handoff | that message's timestamp |
+| `<session7>:<line>`, or a session id or share URL with `#msg-<messageId>` (a bare message id cannot be read: `/cli/read` needs the conversation). `adapters/moment.ts` (`readSessionMoment`) parses both forms and reads the rows up to the line. | title, insight, settle, suggest, ask, handoff | that message's timestamp |
 | `<callId>` | call-summary | call end |
-| `<trigger tr-N>` | role-wake (the "now" form: frame built with `now = capture time`, reads captured now) | capture time |
-| `<session7>` | anchor-brief (the standing session's first user message is the production opening; reads captured now) | capture time |
+| `<trigger tr-N>` or a snapshot name | role-wake (the "now" form: `./evals snapshot role-wake --trigger tr-N --team T --role <handle>` captures the reads, and `freeze create` reads prod's frame within the hour after) | snapshot's `captured_at` |
+| `<session7>[:<line>]` | anchor-brief (the user message at that line, default 1, is the production opening: a seat adopted from an older session has its opening later; reads captured now by `./evals snapshot anchor-brief --session <id> --team T --role <handle>`) | snapshot's `captured_at` |
 | `<snapshotName>` | org-review (for example `union-base8`, a dir already in `EVALS_HOME/snapshots/org-review/`) | snapshot's `captured_at` |
 
 **ConvoSource** (`adapters/convo.ts`):
 - `inbox` spawns `cast sessions --json`.
-- `load` and `message`: when the subject has a freeze snapshot, they return the snapshot's messages. Otherwise they page `/cli/read` via `cliFetchRead(`${siteUrl}/cli/read`, …)` with `{api_token, conversation_id, start_line, end_line, full_content: true}`. `siteUrl` and `api_token` come from `readLocalConfig()` (`packages/cli/src/config/readLocalConfig.ts`).
+- `load` and `message`: when the subject has a freeze snapshot, they return the snapshot's messages. Otherwise they page `/cli/read` via `cliFetchRead(`${siteUrl}/cli/read`, …)` with `{api_token, conversation_id, start_line, end_line, full_content: true}`. `siteUrl` and `api_token` come from `readAuthConfig(defaultConfigDir())` (`packages/cli/src/config/readAuthConfig.ts`), which decrypts the stored token.
 - `find` runs `cliSearchRequest(siteUrl, {api_token, query, …})`.
 - Messages map to `ConvoMessage` as follows: `channel: 'session'`, `isGroup: false`, `direction` inbound for user and outbound for assistant, `at` = the message's ISO timestamp, so that `momentOf`'s cut works.
 - `toRows()` maps `/cli/read` messages to the row fields the prod selectors read. U4 writes the mapping and a fixture test.
@@ -235,11 +238,11 @@ Gates:
 All of this is in `packages/cli/scripts/prompt-dry-run-bin/cast`, in this order:
 
 1. Log `"$*"` to `calls.log`, as today.
-2. Keep the three existing org cases (`org inputs|health|ls` from `org-inputs.json`, `org-health.json`, `org-ls.json`) and `org proposals`. Old `served/` dirs keep working unchanged.
+2. Keep the three existing org cases (`org inputs|health|ls` from `org-inputs.json`, `org-health.json`, `org-ls.json`) and `org proposals`. Old `served/` dirs keep working unchanged. Each answer also logs `SERVED <argv>`.
 3. When `SERVE` is set: compute `key = sha256` of the bytes of each argument followed by `\x1f` (`printf '%s\x1f' "$@" | shasum -a 256`, with `sha256sum` as the fallback). If `$SERVE/reads/$key.out` exists, print it, log `SERVED <argv>`, and exit with the contents of `$SERVE/reads/$key.exit`, or 0 when that file is missing.
-4. When `SERVE` is set and `$SERVE/frozen` lists `$1` or `"$1 $2"`, refuse with `dry run: 'cast <argv>' is frozen for this replay and was not captured`, log `UNSERVED <argv>`, and exit 1.
-5. The existing live read dispatch. Add `review` to the org read verbs only when no argument is `--spawn`. `cast org review` without `--spawn` prints the review prompt (`orgInit.ts:102`).
-6. Every existing refusal also logs `REFUSED <argv>`.
+4. Classify the argv as a read by the existing live read dispatch, with `review` added to the org read verbs only when no argument is `--spawn`. `cast org review` without `--spawn` prints the review prompt (`orgInit.ts:102`).
+5. A read, when `SERVE` is set and `$SERVE/frozen` lists `$1` or `"$1 $2"`: refuse with `dry run: 'cast <argv>' is frozen for this replay and was not captured`, log `UNSERVED <argv>`, and exit 1. Any other read logs `LIVE <argv>` and goes to the real `cast`. The frozen check applies to reads only, so a write under a frozen verb (`org propose` with `org` frozen) is a refused write for `no-unexpected-writes`, never an uncaptured read for `frozen-reads`.
+6. Everything else is refused as before, and logs `REFUSED <argv>`.
 
 The same key is computed in TS by `src/served.ts` (`servedReadKey(argv)`). Both the TS test and the guard test assert these vectors:
 - `["brief"]` → `5aade2e80f5dd74f765b32cf20b9954d5283af5331c34e0ad909d8a609cecbcf`
@@ -278,7 +281,7 @@ The same key is computed in TS by `src/served.ts` (`servedReadKey(argv)`). Both 
 **`state.json` per surface:** `lastRunHash`, `lastNotifiedHash`, `crash {hash, count}`, `lastCostPerRep`.
 
 **`stale` rules:**
-- `hash = sha256(join(git rev-parse HEAD:<p> for p in meta.sources))`.
+- `hash = sha256(join(git rev-parse HEAD:<p> for p in meta.sources))`. `state.ts` reads every surface's objects with one `git ls-tree -z HEAD -- <paths>`, which names the same objects; a path HEAD lacks hashes as `missing`.
 - A call surface is stale when `hash ≠ lastRunHash`.
 - An agent surface is stale when `hash ∉ {lastRunHash, lastNotifiedHash}`.
 - It is blocked, and not counted as stale, when `crash.hash === hash && crash.count >= 2`.
@@ -304,20 +307,20 @@ Agent surfaces never run unattended. Presentation capture is attended only.
 
 ## 3. Surfaces
 
-The table has one row per surface. The route, model and max_tokens (m_t) come first, then the ref and snapshot, the gates beyond the route gates, and the default judge criteria. The call-summary max_tokens is read from the code during U6; it is not repeated here.
+The table has one row per surface. The route, model and max_tokens (m_t) come first, then the ref and snapshot, the gates beyond the route gates, and the default judge criteria. The call-summary max_tokens is 700, read from the code during U6.
 
 | id | Route / model / m_t | Ref and snapshot | Gates beyond the route gates | Default judge criteria |
 |---|---|---|---|---|
 | settle | call / CHEAP_MODEL / as prod (`idleSummary.ts:333-337`) | fixture or session line. The snapshot is the `shapeSettleTail` input rows. | `parse`: `parseSettleReply` is non-null. `label-match`: the parsed state equals the label. | none (labels decide) |
-| title | call / CHEAP_MODEL / 400 (title), short-title as prod | session line. The snapshot is the rows `selectTitleInput` reads, cut at `asOf`, plus `currentTitle` only if it was LLM-set before `asOf`. | `parse`: `extractTitleJson`. `clean`: `cleanShortTitle` is non-empty. `no-refusal`: `isRefusalProse` is false. | "names what the session is actually doing at this point, specific enough to find it later" |
-| insight | call / CHEAP_MODEL / 1200, prod temp api-default | session line. The snapshot is `selectInsightContext` input (first 8 + last 10). | `parse`: the fields the prompt asks for parse with prod's parser. | "goal, blockers and next action are supported by the transcript" |
-| call-summary | call / CHEAP_MODEL / as prod, prod temp api-default | callId. The snapshot is `cast call <id> --json` segments and kind. | `skip-honored`: under 40 words means no call is made and the replay is an empty pass. `tail-rule`: sources over 60k characters keep the tail. `parse` as prod. | "action items are real commitments from the transcript, with owners where stated" |
-| ask | call ×2 / CHEAP_MODEL / 200 then 1500 with `ASK_SYSTEM_PROMPT` | session line (the question and its context). The snapshot is `selectAskContext` input. | `parse`: `parseTermsReply`. `citations-real`: every citation is in `citationTargets`. | "answers the question from the sessions, says so when it cannot" |
-| handoff | call / CHEAP_MODEL / 1200 | session line. The snapshot is the `shapeHandoffTranscript` input. | `non-empty`, `no-refusal` | "a cold reader can continue: decisions, state, next steps" |
-| suggest | call / CHEAP_MODEL (anthropic provider pinned) / as prod | session line where the next user turn is typed. The snapshot is the context rows, the profile (self-only route), and `truth` (the real next message, excluded from the prompt, as `scrubTruth` does today). | `pipeline-ok`: no `provider_failed` or `invalid_json`. | Checks, not criteria: hit / partial / miss / silent / nudge graded as in `suggest-eval.ts`, judged on JUDGE_MODEL. |
-| org-review | agent / AGENT_MODEL / max-turns 200 | snapshotName. The served dir holds legacy files, `reads/` and `frozen` (`org`). | `spec-parses` on each `proposals/op-*.json`. `no-wrong-close` (`must_not_close`, which includes ct-49328). `no-never-name`. `no-phantom-handle` (pool = labels plus every snapshot's roster). `frozen-reads`. | Checks ported from `grade.py` with the same numbers: records 3/2/1 at recall 70%/40%, sessions, roles_named, coverage, repeats, summary_words. Presentation checks from `capture`, attended only. |
-| role-wake | agent / production session model else AGENT_MODEL / max-turns 80 | `tr-N`. The frame comes from `buildTriggerFrame(trigger, now)`. Frozen reads: `brief`, `org inputs/health/ls --team T --json`, `sessions --json`, `org review --team T`. `frozenVerbs: brief, org, sessions`. | `brief-parses`: the brief the harness note asks for, written to `<runDir>/brief.md`, passes `parseStandingSection`. `no-stale-lines`: `standingLineStale` is false for every line. `frozen-reads`. `no-unexpected-writes`. | "asks a person only what needs them; each line names evidence" |
-| anchor-brief | agent / as role-wake | standing session short id. The prompt is the production first user message (replays test agent and model changes). A second freeze kind, `fixture:`, renders `bootstrapMessage` / `roleOpeningMessage` over synthetic facts so builder edits are tested. | `frozen-reads`, `no-unexpected-writes` | "the opening turn orients the role to its scope and does no writes" |
+| title | call / CHEAP_MODEL / 400 (title), short-title as prod | session line. The snapshot is the rows `selectTitleInput` reads, cut at `asOf` (`pickSpineRows` and the newest 20 rows). `/cli/read` has no subtitle or title history, so a captured snapshot carries no `currentTitle` anchor and its `message_count` is the moment's `/cli/read` line; both are listed in the snapshot's `approximate`. A `mode: 'short-title'` snapshot replays `shortTitleRequest`, with the fence nonce pinned to `untrusted-00000000` so a freeze keeps one `promptSha`. | `parse`: `extractTitleJson`. `clean`: `cleanShortTitle` is non-empty. `no-refusal`: `isRefusalProse` is false. | "names what the session is actually doing at this point, specific enough to find it later" |
+| insight | call / CHEAP_MODEL / 1200, prod temp api-default | session line. The snapshot is `selectInsightContext` input (the newest 80 message rows before `asOf`, chronological; the selector keeps the first 8 + last 10 turns and the tool names) plus the conversation metadata, commits and PRs that `insightRequest` prints. `/cli/read` gives only the project path, so a captured snapshot leaves title, subtitle, idle_summary and git_branch blank, takes `started_at` from the first row, and has empty commits and PRs (no access-checked read lists them); `approximate` says so. Fixtures may set all of them. | `parse`: the fields the prompt asks for (headline, turns, summary, themes, confidence) parse with prod's `parseInsightReply`, extracted from `generateSessionInsight` in U12. | "the headline and each turn are supported by the transcript: every ask is the user's, every did item happened" (the prompt asks for headline, turns, summary, outcome_type, themes and confidence; it never asks for goal, blockers or next action) |
+| call-summary | call / CHEAP_MODEL / 700, prod temp api-default | callId. The snapshot is `cast call <id> --json` segments (`speaker_name` maps to `speaker`), the kind from `callSummaryKind(room_key)`, `started_at`, `ended_at`, and whether it was a rolling recap. | `skip-honored`: under 40 words means no call is made and the replay is an empty pass. `tail-rule`: sources over 60k characters keep the tail. `parse` as prod. | "action items are real commitments from the transcript, with owners where stated" |
+| ask | call ×2 / CHEAP_MODEL / 200 then 1500 with `ASK_SYSTEM_PROMPT` | session line holding a `cast read <id> --ask "<q>"` call (no id, or `self`, means the asking session). The snapshot is the question, the asked-about session's title, and its non-empty rows up to the asking line's timestamp, not a `selectAskContext` selection: which lines match depends on the terms call's reply, so every rep runs `readRows` and `askAnswerRequest` over the rows with its own terms. | `parse`: `parseTermsReply` finds terms in the terms reply. `citations-real`: every `msg N` the answer cites is in `citationTargets` (a line it was shown). | "answers the question from the sessions, says so when it cannot" |
+| handoff | call / CHEAP_MODEL / 1200 | session line, or a bare session id that is the child of a real handoff (its first message carries the `# Handed off from` header). The snapshot is the `shapeHandoffTranscript` input (the newest 400 rows, newest first) plus the source facts `handoffBriefInput` reads. | `non-empty`, `no-refusal` | "a cold reader can continue: decisions, state, next steps" |
+| suggest | call / CHEAP_MODEL (anthropic provider pinned) / as prod | session line where the next user turn is typed. The snapshot is the context rows, the profile (self-only route), and `truth` (the real next message, excluded from the prompt, as `scrubTruth` does today). | `pipeline-ok`: no `provider_failed` or `invalid_json`. `graded`: the grader returned a grade. | Checks, not criteria: one `grade` check, hit / partial / miss / silent / nudge graded as the retired `suggest-eval.ts` did, judged on JUDGE_MODEL. |
+| org-review | agent / AGENT_MODEL / max-turns 200 | snapshotName. The served dir holds legacy files, `reads/` and `frozen` (`org`). | `spec-parses` on each `proposals/op-*.json`. `no-wrong-close` (`must_not_close`, which includes ct-49328). `no-never-name`. `no-phantom-handle` (pool = the labels' handle pool, every snapshot's roster, and the roles runs since proposed). `frozen-reads`. | Checks ported from `grade.py` with the same numbers: records 3/2/1 at recall 70%/40%, sessions, roles_named, coverage, repeats, summary_words. Presentation checks from `capture`, attended only. |
+| role-wake | agent / production session model else AGENT_MODEL / max-turns 80 | `tr-N`. A role's trigger runs inline in its standing session, so the frame is the server's inject frame (`triggerRunFrame` in `shared/contracts/triggerLifecycle.ts`, built by `agentTasks.triggerFrameFor`), not `buildTriggerFrame`, which frames a spawned run. A real freeze replays prod's frame; a `fixture:` renders it from the tree over synthetic facts and the routine prompts in `lib/orgRoutine.ts`. Frozen reads: `brief @{role}` (served as `brief`) and its `--json`, `org inputs/health/ls --team T --json`, `sessions` and `sessions --json`, `org review --team T` (served also without `--team`). `frozenVerbs: brief, org, sessions`. | `brief-parses`: the brief the harness note asks for, written to `<runDir>/brief.md`, passes `parseStandingSection`. `no-stale-lines`: `standingLineStale` is false for every line. `frozen-reads`. `no-unexpected-writes`. | "asks a person only what needs them; each line names evidence" |
+| anchor-brief | agent / as role-wake | standing session short id, with the opening's line when it is not 1. The prompt is the production opening (replays test agent and model changes). A second freeze kind, `fixture:`, renders `bootstrapMessage` / `roleOpeningMessage` over synthetic facts so builder edits are tested. | `frozen-reads`, `no-unexpected-writes` | "the opening turn orients the role to its scope and does no writes" |
 
 The org-review harness note is `mkrun.ts`'s note. It tells the agent to write `proposals/op-<n>.json` and check it with `bun packages/evals/src/surfaces/orgReview/checkProposal.ts <file>`, the port of `check.ts`. `assemble.ts` merges the proposal files, as `assemble-proposals.py` did, and drops asks.
 
@@ -332,7 +335,7 @@ Units in the same wave touch disjoint files and can run in parallel in the share
 **U1: Vendor @platform/evals** (ct-55698)
 
 Files:
-- `packages/evals/package.json`, final: name, private, `type: module`, deps from 2.1, `scripts.test: "bun test src/"`
+- `packages/evals/package.json`, final: name, private, `type: module`, deps from 2.1, `scripts.test: "bun test src/"`, and cli's devDependencies (`@types/bun`, `@types/node`, `typescript`) so U4's typecheck has its types
 - `bun.lock`
 - `platform/packages/evals/**`, generated
 - `platform/vendor-manifest.txt`
@@ -355,7 +358,7 @@ Acceptance:
 - `scripts/vendor-platform.sh --check-manifest` exits 0.
 - `(cd platform/packages/evals && bun install && bun test)` passes, 17 or more tests.
 - `cast --help` and `cast task ls -q x` still run.
-- `git diff bun.lock` only adds `@codecast/evals` and `@platform/evals` entries, plus `commander` if it is new.
+- `git diff bun.lock` adds only the `packages/evals` workspace block and its `@platform/*` resolution entries (`commander` and the devDependencies already resolve, so no new packages). bun also writes whatever the committed tree already owed the lock: on 2026-10-01 that was the cli and electron workspace versions from release commits that bumped `package.json` without the lock, and one `@platform/cli-kit` entry reduced to `{}`. Keep those lines, because they are what bun writes for this tree. The real check is that `bun install --frozen-lockfile` passes and leaves `bun.lock` unchanged.
 - The commit of `packages/evals/package.json` must include `bun.lock` (Railway frozen lockfile). Note this for whoever commits.
 
 **U2: One home for the Anthropic request body**
@@ -368,6 +371,7 @@ Changes:
 - Export `type SurfaceRequest = {model: string; system?: string; prompt: string; max_tokens: number; temperature?: number}`.
 - Export `anthropicBody(req)`. It returns the exact JSON object prod posts: `{model, max_tokens, ...(temperature !== undefined ? {temperature} : {}), ...(system ? {system} : {}), messages: [{role:'user', content: prompt}]}`, with the key order matching today's fetch bodies. Read them first; if the literal bodies differ in key order, keep the order `JSON.stringify` produces today per site by letting each site pass its own order. Byte-identity is the test, not this sketch.
 - `callModel` builds its body through `anthropicBody`, and its default temperature of 0 is unchanged.
+- Checked on 2026-10-01: every server fetch body (`callModel` and the eight literal sites in section 7) uses the order model, max_tokens, temperature, system, messages, so one order serves all sites and none needs its own. A site with no `temperature` key today passes `temperature: undefined`.
 
 Acceptance:
 - a test asserts `JSON.stringify(anthropicBody(x))` equals the string `callModel` sent before, for 3 inputs
@@ -388,17 +392,21 @@ Precondition: `pgrep -fl prompt-dry-run` is empty. Never edit the guard while a 
 - `--model` is required. It exits 2 with `--model is required: an unpinned run takes the account default and cannot be compared`. Update the usage line at 62.
 - It writes `args.json` `{model, call, maxOutputTokens, tools, maxTurns, serve, guard}` to the run dir.
 - New `--call` mode:
-  - `--tools ""` in place of `--allowedTools`
+  - the prompt file's text goes to `claude -p` on stdin as the whole user message (there are no tools to read a briefing file with)
+  - `--tools ""` in place of `--allowedTools`, and no `--dangerously-skip-permissions`
   - `--max-turns 1`
   - `--system-prompt-file <--system file>`, or a one-line neutral system `Follow the user's instructions.`
+  - `--strict-mcp-config`, `--disable-slash-commands`, and in the child's env `CLAUDE_CODE_DISABLE_THINKING`, `CLAUDE_CODE_DISABLE_CLAUDE_MDS`, `CLAUDE_CODE_DISABLE_AUTO_MEMORY` and `CLAUDE_CODE_DISABLE_ATTACHMENTS`, because a prod call has no thinking, CLAUDE.md or memory (claude 2.1.286 thinks by default, with a 31999 token budget)
   - no guard or serve needed, but keep all the isolation
-  - `--then` is refused
-- New `--max-output-tokens N`, which sets `CLAUDE_CODE_MAX_OUTPUT_TOKENS=N` in the child's env only.
-- Fix line 26: `prompt-dry-run-cast.sh` becomes `prompt-dry-run-bin/cast`, and describe the served reads.
+  - `--then`, `--tools` and `--max-turns` are refused, and `--system` without `--call` is refused
+  - `--include-partial-messages`, so the stream carries each API response's `stop_reason` and usage. A reply cut at `max_tokens` makes claude resume the turn by itself ("Output token limit hit", up to three times, no knob turns it off) and end on an error. Prod gets the first reply only, so when that happens `out.json` reports the first reply's text, `stop_reason` and `usage`, sets `is_error: false`, `num_turns: 1` and `resumed_past_cap: <n>`, and the exit code is 0. `total_cost_usd` and `modelUsage` stay the whole run's real spend.
+  - what claude still adds on a subscription login is fixed, about 175 input tokens: an SDK identity line in the system prompt and three reminders (environment, model, date) before the prompt. `CLAUDE_CODE_SIMPLE` would drop them but refuses OAuth.
+- New `--max-output-tokens N`, which sets `CLAUDE_CODE_MAX_OUTPUT_TOKENS=N` in the child's env only. An inherited `CLAUDE_CODE_MAX_OUTPUT_TOKENS` is dropped, so `args.json` names every cap. Measured on 2026-10-01: claude sends it as the request's `max_tokens`.
+- Line 26 already named `prompt-dry-run-bin/cast`; describe the served reads there.
 
 Guard changes: as in 2.6.
 
-The test runs the guard as a subprocess with a temp `RUN_DIR` and `DRY_RUN_SERVE_DIR`, and a fake real `cast` earlier on PATH that echoes `LIVE $*`. It asserts:
+The test runs the guard as a subprocess with a temp `RUN_DIR` and `DRY_RUN_SERVE_DIR`, and a fake real `cast` earlier on PATH that echoes `LIVE $*`. It takes the key from U4's `servedReadKey` (`packages/evals/src/served.ts`), so the TS and bash keys are proven equal. It also runs the harness against a fake `claude` and a fake `--account` token in a temp `CODECAST_DIR`, with no keychain or network, to check the `--call` flags, stdin, env and the first-reply rewrite. It asserts:
 - the legacy org files are served
 - a `reads/<key>.out` hit is served with its exit code
 - a frozen verb miss prints the refusal and logs `UNSERVED`
@@ -422,14 +430,15 @@ Acceptance:
 Files, all new:
 - `evals` (root launcher)
 - `.codecast/check.toml` (add `evals = "packages/evals/tsconfig.json"`)
-- `packages/evals/tsconfig.json`: model it on `packages/cli/tsconfig.typecheck.json`, include `src/**` plus the convex, shared and cli source files the surfaces import, no `rootDir`, `noEmit`
-- `packages/evals/src/{index,paths,models,surface,registry,layout,stats,served,state,snippet}.ts`
+- `packages/evals/tsconfig.json`: model it on `packages/cli/tsconfig.typecheck.json`, include `src/**` plus the convex, shared and cli source files the surfaces import (today `lib/anthropic.ts`, `cliHttp.ts`, `config/readAuthConfig.ts`, `secretRedaction.ts` and `ccKeychain.ts`, which doctor's login check reads), no `rootDir`, `noEmit`
+- `packages/evals/src/{index,main,paths,models,surface,registry,layout,stats,served,state,snippet}.ts` (`main.ts` is the program; `index.ts` keeps `stale` off its import graph)
 - `src/adapters/{convo,freezes,resolver,replay,judge,runs,dryRun}.ts`
 - `src/commands/{status,check,stale,snapshot,grade,capture,doctor,snippetCmd,publish}.ts`
 - `src/testSurface.ts`: an `echo` surface used only by tests
 - `src/surfaces/<id>/meta.ts` for all 10 surfaces, values from section 3
 - `src/surfaces/<id>/index.ts` stubs that throw `"<id> is not implemented yet"`
-- `src/{cli,freezes.guard,served,stats,state}.test.ts`
+- `src/{cli,freezes.guard,served,stats,state}.test.ts`, plus `src/adapters/convo.test.ts` (the `toRows()` fixture test from 2.4) and `src/adapters/replay.test.ts` (route gates, scoring, `snapshot` with an injected `cast`)
+- the test hooks, read only from the environment: `CODECAST_EVALS_REPO_ROOT` points `stale`, the dirty check and the public freeze and fixture dirs at a scratch git repo, and `CODECAST_EVALS_TEST=1` registers the `echo` surface. The public tree check lives in `adapters/freezes.ts` as `auditPublicTree`, so the guard test and `cli.test.ts` share it.
 - `freezes/.gitkeep`, `fixtures/.gitkeep`
 
 `models.ts`:
@@ -481,20 +490,30 @@ Files:
 - `storyMode.ts`
 - `titleGeneration.test.ts`
 - `idleSummary.test.ts`
-- new golden files under `packages/convex/convex/__golden__/`, one per surface
+- new golden files under `packages/convex/convex/__golden__/`, one per surface (`title.json`, `short-title.json`, `settle.json`)
+- new `packages/convex/convex/__golden__/golden.testkit.ts`, shared by U6 and U7. Its name has two dots so the Convex bundler skips it, since it imports `node:fs`. It holds:
+  - `goldenBody(req)`, the body prod posts for a request, with the fence nonce pinned
+  - `captureFetch(reply)`, a fetch stub that records each posted body and answers in the Messages API shape (`type: "text"` blocks), so a reply reaches `callModel`
+  - `loadGolden(name)`, which only reads; tests that check a builder against a recorded body use it
+  - `recordGolden(name, actual)`, which returns the recorded cases with `actual`'s names for `expect(actual).toEqual(…)`. Under `UPDATE_GOLDENS=1` it first merges `actual` into the file case by case, so two tests sharing one golden never erase each other, and a test that only reads can never blank a golden
+- new `packages/convex/convex/__golden__/golden.testkit.test.ts`, which proves both re-record properties and that the stub's reply reaches `callModel`
 
 Changes:
-- Export `titleRequest(input)` and `shortTitleRequest(input)`, plus a pure `selectTitleInput(rows, conversation)` extracted from `getConversationForTitle` (362). The query fetches the same rows and calls the selector.
+- Export `titleRequest(input)` and `shortTitleRequest(input)`, plus a pure `selectTitleInput(rows, conversation)` extracted from `getConversationForTitle`. `rows` is `{spine, latest}`: the prompt rows the three spine reads return, and the newest 20 rows newest first. The query fetches the same rows and calls the selector.
+- Also export `pickSpineRows(rows)`, which takes the same three spine views (first 10 prompts, last 10, 4 per time bucket) from an in-memory transcript, and `spineBucketBounds(lo, hi)`, which both the query and `pickSpineRows` use. The title resolver (U12) builds its snapshot with `pickSpineRows` over `/cli/read` rows, so it needs no copy of the sampling.
 - Export `settleRequest(tail)` around `buildSettlePrompt`.
-- Each fetch posts `JSON.stringify(anthropicBody(req))`.
-- `agentTasks.ts:2624` and `storyMode.ts:16` use `CHEAP_MODEL`; that is a literal swap only.
-- Order of work: first write golden JSON of today's request bodies for 3 fixtures per site from the current code; then refactor; then assert equality.
+- Each site posts through `callModel` (`lib/anthropic.ts`), which sends `JSON.stringify(anthropicBody(req))`. That removes three copies of the fetch, header and error code. Only the error log lines change.
+- `agentTasks.ts` (`generateDisplaySummary`, now about line 2651) and `storyMode.ts` use `CHEAP_MODEL`; that is a literal swap only, and storyMode's `SUMMARY_MODEL` alias is gone.
+- Order of work: first write golden JSON of today's request bodies for 3 fixtures per site from the current code; then refactor; then assert equality. The goldens run the real actions and queries under convex-test with a stubbed `fetch`, over synthetic sessions.
+- `buildShortTitlePrompt` fences its context with `fenceForeignText`, which draws a random nonce per call, in prod as well. The goldens pin it to `untrusted-00000000` and compare everything else byte for byte.
 
 Acceptance:
 - goldens are equal
-- `grep -rn 'claude-haiku-4-5-20251001' packages/convex/convex --include=*.ts | grep -v test` leaves only `lib/anthropic.ts:7` and the U6/U7 sites
+- `grep -rn 'claude-haiku-4-5-20251001' packages/convex/convex --include=*.ts | grep -v test` leaves only `lib/anthropic.ts:7` and any U6/U7 site not yet swapped
+- the rows path (`pickSpineRows` + `selectTitleInput` + `titleRequest`, and `settleRequest(shapeSettleTail(rows))`) produces the same golden bytes as the actions
 - `cast check convex`
-- `bun test packages/convex/convex/titleGeneration.test.ts packages/convex/convex/idleSummary.test.ts`
+- `bun test packages/convex/convex/titleGeneration.test.ts packages/convex/convex/idleSummary.test.ts packages/convex/convex/__golden__/golden.testkit.test.ts`
+- `UPDATE_GOLDENS=1` over every golden test file leaves each golden byte for byte unchanged
 
 **U6: Insight and call summary on shared requests**
 
@@ -506,11 +525,11 @@ Files:
 - goldens
 
 Changes:
-- Extract `selectInsightContext(rows)` (from 119: first 8 + last 10) and `insightRequest(ctx)` (from 486-546), with `toLocaleTimeString(…, {timeZone: 'UTC'})` at 466 and `temperature` left undefined so the API default of 1 is preserved.
-- Extract `callSummarySource(segments, kind)` (the 40-word skip at 918 and the 60,000-character tail at 921) and `callSummaryRequest(source, kind)` (1116-1142), with temperature undefined.
+- Extract `selectInsightContext(rows)` (from 119: first 8 + last 10, plus the tool names the query derives from the same rows) and `insightRequest(ctx, source)` (from 486-546; `source` is the run reason the prompt prints), with `toLocaleTimeString(…, {timeZone: 'UTC'})` at 466 and `temperature` left undefined so the API default of 1 is preserved. The query now returns the sampled turns instead of up to 80; the action was their only reader.
+- Extract `callSummarySource(lines, kind)` (the 40-word skip at 918 and the 60,000-character tail at 921; null means skip) and `callSummaryRequest(source, {kind, started_at, ended_at?, rolling?})` (1116-1142), with temperature undefined. The second argument carries more than the kind because the prompt prints the duration and whether the call is still going. `callSummaryKind(room_key)` names the kind.
 - Both handlers post `anthropicBody(req)` with `CHEAP_MODEL`.
-- Goldens are generated under `TZ=UTC` before the refactor.
-- Record, but do not fix, that the insight parser reads `key_changes` and `timeline` fields the prompt never asks for. File it as a finding on ct-55702.
+- Goldens are generated under `TZ=UTC` before the refactor: `__golden__/insight.json` and `__golden__/call-summary.json`, through the shared `__golden__/golden.testkit.ts`. The insight goldens and builder tests live in `sessionInsights.request.test.ts`, the call-summary ones in `transcripts.test.ts`.
+- Record, but do not fix, that the insight parser reads `key_changes`, `timeline`, `goal`, `what_changed`, `blockers` and `next_action`, none of which the prompt asks for. File it as a finding on ct-55702.
 
 Acceptance: goldens are equal, `cast check convex`, and both test files are green.
 
@@ -522,10 +541,11 @@ Files:
 - `packages/convex/convex/http.ts`: one appended route
 
 Changes:
-- `predictSuggestions(context, profile, provider, complete = llmComplete)`.
-- Export `suggestRequest` for the Haiku branch at about 733, with `CHEAP_MODEL`.
-- Extract `contextFromRows(rows, …)` from `getSuggestionContext` (65).
-- New `POST /cli/suggestion-profile`: `{api_token}` resolves to that user's id, then `getSuggestionProfile` runs for that user only. There is no `user_id` parameter. It returns the profile or null.
+- `predictSuggestions(context, profile, provider, complete = llmComplete)`. It takes its prompt and cap from `suggestRequest`, so an injected `complete` sees exactly what `llmComplete` would.
+- The Haiku branch is shared by the suggester and the profile miner, so it gets two builders, both on `CHEAP_MODEL` and posted through `anthropicBody`: `haikuRequest(prompt, maxTokens)` (temperature 0.3, as prod) for the branch itself, and `suggestRequest(context, profile)` for one suggestion moment (`buildPrompt` at the 1200 cap). The eval replays `suggestRequest`.
+- Extract `contextFromRows(rows, conversation)` from `getSuggestionContext`. `rows` are in time order and end at the moment being predicted; the selector keeps the newest 60 and filters to real turns, so the live query and a past moment share one window.
+- New `POST /cli/suggestion-profile`, appended to http.ts. An httpAction has no db for `verifyApiToken`, so the route forwards only `api_token` to a new internal query `getOwnSuggestionProfile({api_token})`. It resolves the token to its user and reads that user's profile through the same reader as `getSuggestionProfile`. There is no `user_id` parameter; a bad or missing token is a 401. It returns the profile or null.
+- The golden is `packages/convex/convex/__golden__/suggest.json`: the bodies for three synthetic suggest moments and one miner call, recorded from the code before the refactor, in the shared `GoldenCase[]` format through `__golden__/golden.testkit.ts` like the other goldens. `UPDATE_GOLDENS=1` rewrites it on a deliberate prompt change; only a recording call writes, so a test that just reads a golden cannot blank it.
 
 Acceptance:
 - a test shows the injected `complete` receives the same opts `llmComplete` did
@@ -539,8 +559,9 @@ Files:
 - new `packages/cli/src/triggerFrame.ts`
 - `packages/cli/src/taskScheduler.ts`
 - new `packages/cli/src/triggerFrame.test.ts`
+- new `packages/cli/src/__fixtures__/triggerFrame.golden.json`: the fixture tasks, the fixed `now`, and each pre-refactor frame
 
-Change: move `buildPrompt`'s body (595 on) into `export function buildTriggerFrame(task, now: number)`. Its imports stay light: `formatTimeAgo` from wherever `taskScheduler` imports it, and `triggerLifecycleInstructions`. `Date.now()` becomes `now`. The private `buildPrompt(task)` returns `buildTriggerFrame(task, Date.now())`.
+Change: move `buildPrompt`'s body (595 on) into `export function buildTriggerFrame(task, now: number)`. Its imports stay light: `SAFE_MODE_MANDATE` from `./agentLaunch.js`, and `triggerLifecycleInstructions` and `runResultThreadOf` from `@codecast/shared/contracts`. `formatTimeAgo` was a private function at the bottom of `taskScheduler.ts` with no other caller, so it moves into `triggerFrame.ts` unchanged. `Date.now()` becomes `now`. The private `buildPrompt(task)` returns `buildTriggerFrame(task, Date.now())`.
 
 Acceptance:
 - the frame for 3 fixture tasks, with and without `last_run_summary`, equals the pre-refactor output at a fixed `now` (golden written first)
@@ -556,11 +577,12 @@ Files:
 - `.github/workflows/ci.yml`
 - `scripts/ci/ci-workflow.contract.test.ts`, only if it pins test-cli steps
 
-Precondition: Phase 0 (ct-52537) is actively editing CI. If any of these files has uncommitted edits, do not touch them. Send the owning session the exact lines below with `cast send`, and wait for them to land.
+Precondition: if a session is still mid-change on any of these files, send it the exact lines below with `cast send` and wait for them to land. On 2026-10-01 `ci.yml`, `changed-path-scope.ts` and the contract test held Phase 0's (ct-52537) finished but uncommitted edits, untouched for five hours, and the owning session was the dormant orchestrator of this plan, so U9 added its lines beside those edits and kept them byte for byte.
 
 Changes:
-- Add `"packages/evals/"` to the `cli` entry of `AREA_PREFIXES`, so `test-cli` runs. Leave the pre-existing duplicate keys alone; they are Phase 0's.
-- In `ci.yml`'s `test-cli` job, add a step "Unit tests (evals package)" with `working-directory: packages/evals`, running `bun test src/`.
+- Add `"packages/evals/"` to the `cli` entry of `AREA_PREFIXES`, so `test-cli` runs.
+- In `ci.yml`'s `test-cli` job, add a step "Unit tests (evals package)" with `working-directory: packages/evals`, running `bun test src/`, right after the cli unit tests. The job's `setup-bun` composite action installs the root workspace, which includes `packages/evals`, so the step needs no install of its own.
+- The contract test pins no test-cli step, so it is unchanged.
 
 Acceptance:
 - `bun test scripts/ci/` is green
@@ -573,11 +595,11 @@ Acceptance:
 **U10: settle** (ct-55701). Also deletes `packages/convex/scripts/settle-eval.ts`.
 
 Steps:
-- Move the 17 inline cases (22-164) into `fixtures/settle/<case>.json` with the label inline.
+- Move the 17 inline cases (22-164) into `fixtures/settle/<case>.json` with the label inline. A fixture's `snapshot` is `{newestFirst}`, the raw rows the old `tail()` handed `shapeSettleTail`; its `label` is `{verdict}`; the old case name is its `notes`.
 - Create 17 public freezes: `./evals freeze create settle@fixture:<case>`.
-- Before deleting the old script, add a test that for all 17 cases the surface's rendered prompt equals `buildSettlePrompt` over the same tail. That proves the move is lossless.
+- Before deleting the old script, prove the move lossless. `surfaces/settle/settle.test.ts` pins a fingerprint (sha256 of the rows and verdict) per case, taken from the old script's inline cases, and asserts that each replay sends exactly `settleRequest(shapeSettleTail(rows))` with a prompt equal to `buildSettlePrompt` over that tail. Those two halves keep the proof after the script is gone. A one-time comparison against the old script itself, run before the deletion, found all 17 prompts byte-identical.
 - Run `./evals check settle --reps 5`.
-- Freeze 3 of the founder's own moments privately, with labels in `EVALS_HOME/labels/settle/`.
+- Freeze 3 of the founder's own moments privately (`settle@<session>:<line>`, captured through the shared `adapters/moment.ts`), with labels at `EVALS_HOME/labels/settle/<freezeId>.json` as `{verdict, why}`, committed and pushed in the labels repo.
 
 Acceptance:
 - a pass rate is recorded, and `model-as-pinned` and `prod-budget` pass in every rep
@@ -596,6 +618,15 @@ Acceptance:
 - `./evals check suggest --reps 5` runs green on gates and reports the grade distribution
 - the old script is deleted
 
+As built (2026-10-01):
+- Refs: `suggest@<session>:<line>` names the line of the typed reply; the line before it must be the agent turn. A bare `suggest@<session>` answers with the newest moments as refs. The `<messageId>` and share URL forms are not taken: `adapters/convo.ts` has no resolver for them yet, and they belong there, shared with title, insight, ask and handoff.
+- A typed reply is judged after `stripInjectionNoise` (`@codecast/shared/contracts`). Claude Code 2.1.277+ wraps every delivered paste, which includes composer sends, in `<pasted_content>`, and `isMachineCarrierText` reads that wrapper as markup, so the old test would discard almost every recent reply. The truth is the unwrapped text; the context rows stay as stored, because that is what prod's selector sees.
+- The snapshot holds the rows up to the agent turn (up to 120, so a wider prod window still has rows; `contextFromRows` keeps 60), each cut to the fields the selector reads, with tool results kept only as a count. It also holds the profile as `/cli/suggestion-profile` returns it, minus `_id`, `_creationTime` and `user_id`, and the truth. `/cli/read` carries only the title and project path, so branch, idle summary and thread state are left out; the private freeze records this in `meta.snapshot_approximate`, together with the fact that the profile is the one stored at capture.
+- The replay runs `predictSuggestions` with its `complete` sending `haikuRequest(prompt, maxTokens)` through `ctx.call`, which is the request `llmComplete` posts on the anthropic branch and equals `suggestRequest`. `--dry` answers `[]`.
+- Scores: hit 1, nudge-silent 1, nudge-shown 0.7, silent 0.7, partial 0.4, miss 0. A rep passes when it showed nothing wrong, and a hit is the only full score. `check` prints `grades: hit … | precision … coverage … | nudge moments …` through `summarize`. Its "only gates grade this freeze" warning skips surfaces that grade with their own checks.
+- Freezes: public `fixture:approve-plan` (the agent stops for a verdict, the truth is a reusable prompt the profile holds and also sits in `recent`, so `scrubTruth` has work to do) and `fixture:correction` (the truth is a correction only the developer could write). Six private freezes from the founder's own sessions: five substantive moments and one nudge. Labels are not needed, because the truth is in the snapshot.
+- Finding, not fixed here (filed on ct-55701): prod's habit miner (`getRecentUserInputs`) tests raw content with `isMachineCarrierText`, so every `<pasted_content>`-wrapped input is skipped as a machine carrier, and a profile is mined only from messages that arrived unwrapped. `buildPrompt` also shows the wrapper to the suggester inside the context turns.
+
 **U12: title, insight, call-summary** (ct-55702)
 
 For each surface:
@@ -607,34 +638,47 @@ For each surface:
 
 Acceptance: `./evals check title insight call-summary --reps 5` completes, and every freeze has a recorded baseline.
 
+As built (2026-10-01):
+- The gates reuse prod's own code. U12 extracted `parseInsightReply` (`sessionInsights.ts`) and `parseCallSummaryReply` (`transcripts.ts`) out of their actions, and exported `countWords`, `SUMMARY_MIN_WORDS` and `SUMMARY_MAX_CHARS`, with no change to what either action writes. call-summary's `parse` gate is that parser; `skip-honored` checks that a call was made exactly when the transcript has 40 words or more; `tail-rule` checks the prompt ends with `Transcript:` and exactly the last 60,000 characters.
+- A fixture's `"judge": null` means only gates grade its freeze (the call under 40 words makes no model call, so a judge would grade an empty reply). Unset still takes the surface's default criteria.
+- `gate()` lives in `surface.ts` for every surface and the replayer; `adapters/moment.ts` is the session-line reader every session surface shares.
+- Tests: `src/surfaces/u12.test.ts` (each fixture's request equals prod's builder over the same input; each gate passes a good reply and fails the one it exists to catch).
+
 **U13: ask, handoff** (ct-55702)
 
 - ask: two sequential `ctx.call`s, terms then answer.
 - The judge sees the question and the selected context. `productionReply` is null.
 - handoff: `productionReply` is the child session's first message when the ref anchors a real handoff (resolved from `/cli/read` of the child). Otherwise null.
 
+As built:
+- Prod gained the builders the replay calls, with no change to the bytes posted: `askTermsRequest`, `askTerms`, `askAnswerRequest`, `readRows` and `ASK_BUDGET_CHARS` in `lib/sessionAsk.ts`, and `handoffBriefInput` and `handoffBriefRequest` in `handoff.ts`. Goldens (`__golden__/ask.json`, `__golden__/handoff.json`) were recorded from the actions before the refactor; `sessionAsk.request.test.ts` and `handoff.request.test.ts` prove both the actions and the rows path still post them.
+- The judge's "selected context" is a selection made from the question's own words (`questionTerms`) at 60,000 characters, because `describe` sees only the snapshot and the answer's selection also used the terms reply.
+- A real handoff is frozen from the child's id (`handoff@<child>`), not a source line: the child's first message names the source, its model, task and plan, and holds the brief, and the source is read up to the child's first message. `productionReply` is that brief, the part of the child's first message the model wrote. Only one real handoff child exists in the founder's sessions (2026-10-01), so the other private handoff freezes are source lines with no production reply.
+- Snapshot gaps are listed in each snapshot's `approximate`: titles are today's, the file change index (ask's extra files) and a pre-handoff pinned state are not captured, and `/cli/read` carries no subtype or images.
+
 Acceptance: the same baseline as U12.
 
 **U14: org-review** (ct-55699, part of ct-55703)
 
-Files: `src/surfaces/orgReview/{meta,index,build,checkProposal,assemble,grade,present}.ts` and `grade.test.ts`.
+Files: `src/surfaces/orgReview/{meta,index,build,checkProposal,assemble,grade,present,migrate}.ts` and `grade.test.ts`. Three one-line seams outside the dir: `ReplayOutput.promptSha` (`surface.ts`, read by `adapters/replay.ts`), `grade?(dir, label, freeze)` with `grade --freeze <id>` (`commands/grade.ts`; without the flag it takes the freeze the dir's `run.json` names), and `LEGACY` exported from `commands/snapshot.ts` so the migration writes the same layout.
 
 Port:
-- `build.ts`: `mkrun.ts`. Import `buildOrgAnalyzerPrompt` and `summarizeInputs` from `packages/cli/src/orgInitRun.ts` by relative path. Keep the harness note, and point it at `checkProposal.ts`. Keep the hashes that `hashes.json` recorded in `run.json.promptSha`.
+- `build.ts`: `mkrun.ts`. Import `buildOrgAnalyzerPrompt` and `summarizeInputs` from `packages/cli/src/orgInitRun.ts` by relative path. Keep the harness note, and point it at `checkProposal.ts`. Keep the hashes that `hashes.json` recorded: the replay writes `hashes.json` (plus `workspace` and `promptSha`) into the run folder, and `run.json.promptSha` is the full sha256 of the analyzer prompt without the harness note (its first 12 characters are the old `prompt` hash), so reps compare even though each note names its own run folder.
 - `checkProposal.ts`: `check.ts`.
 - `assemble.ts`: `assemble-proposals.py`.
-- `grade.ts`: `grade.py`, with the same sets, bands and pools. The workspace comes from `freeze.meta.workspace`, not the path.
-- `present.ts`: `capture.sh`, `capture-raw.ts` and `chart-fit.ts`, same behaviour. It needs `localhost:3200` and the founder's Chrome, and refuses with one line when either is missing. The presentation grading run goes through `ctx.agent` on `JUDGE_MODEL` with `--tools Read` and max-turns 10. It reads the rubric from `docs/architecture/org-eval.md` "Presentation rubric" at run time, so the rubric has one home, and writes `presentation:<line>` checks.
+- `grade.ts`: `grade.py`, with the same sets, bands and pools. The workspace comes from `freeze.meta.workspace`, not the path. The pool is `labels/org-review/<ws>/handle-pool.json` (every role handle any old round proposed or any old served roster held, which grade.py globbed and the old rounds no longer carry here), every snapshot's roster for the workspace, and every role an org-review run since proposed. Check scores: records, sessions and roles_named are grade/3; coverage is the share of projects with work that has a lead after; repeats is 1 when nothing repeats; summary_words has no band in grade.py, so it is shown at weight 0.
+- `present.ts`: `capture.sh`, `capture-raw.ts` and `chart-fit.ts`, same behaviour. It needs `localhost:3200` and the founder's Chrome, and refuses with one line when either is missing. One implementation over the raw bridge covers all three scripts (capture.sh's CLI attach stalls under load), and the saved tree comes from the snapshot's `org-tree.json`. There is no ReplayCtx at capture time, so the presentation grading run calls `runAgent` (what `ctx.agent` wraps) on `JUDGE_MODEL` with `--tools Read` and max-turns 10. It reads the rubric from `docs/architecture/org-eval.md` "Presentation rubric" at run time, so the rubric has one home, and writes `presentation:<line>` checks.
 
 Data migration, copy only (`~/.cache/org-eval` stays untouched):
 - `{union,codecast}/{grade-sets.json, ground-truth.md, sample30-labels.*, extra-labels.json, final-fixes.md}` go to `EVALS_HOME/labels/org-review/<ws>/`, followed by a git commit in the labels repo.
-- `union/served/base8` and codecast's latest served dir go to `EVALS_HOME/snapshots/org-review/<ws>-<name>/`.
-- Create the private freezes `org-review@union-base8` and `org-review@codecast-<name>`, with `meta.workspace`.
+- `union/served/base8` and codecast's latest full-round base, `served/base3`, go to `EVALS_HOME/snapshots/org-review/<ws>-<name>/`, bytes as they were, with `reads/<key>.out` for the three legacy reads, `frozen` (`org`), `captured.json` (with `workspace`) and `raw/org-tree.json` as `org-tree.json`, all 444.
+- `migrate.ts` does both and commits and pushes the labels repo; it never overwrites.
+- Create the private freezes `org-review@union-base8` and `org-review@codecast-base3`, with `meta.workspace`.
 
 `grade.test.ts`, which reads `~/.cache/org-eval` and skips when it is absent (so CI skips it):
-- copy `union/round-36/s{1,2,3}` to `/tmp`
-- run `python3 ~/.cache/org-eval/bin/grade.py` on the copies, reading `grade.py` first to see where it writes
-- run `./evals grade org-review <copy>`
+- copy `union/round-36/s{1,2,3}` to `/tmp`, without their `grade-auto.json` (and, for the TS copy, `proposal.json`, so the port assembles it)
+- run `python3 ~/.cache/org-eval/bin/grade.py` on the copies. grade.py takes its workspace from the run dir's path under `~/.cache/org-eval` and writes `grade-auto.json` into the run dir, so it runs with `HOME` at a scratch dir whose `.cache/org-eval/union/` links to the real labels, served dirs and rounds (its pool) and holds the copies; nothing in the archive is written
+- run `migrate.ts` and `./evals freeze create org-review@union-base8` into a scratch `EVALS_HOME`, then `./evals grade org-review <copy> --freeze <id>`
 - every field must be equal
 - `round-35/s{1,2,3}` must fail `no-wrong-close`, with ct-49328 in the evidence
 
@@ -643,11 +687,12 @@ Acceptance: the regrade matches exactly, and round 35 fails the gate.
 **U15: role-wake, anchor-brief** (ct-55702)
 
 Steps:
-- Snapshots use `./evals snapshot role-wake --trigger tr-N --team T`.
-- The frame is `buildTriggerFrame(trigger, capturedAt)`, followed by the harness note: "write the brief you would save to `brief.md` in the current directory".
-- anchor-brief takes the production opening from `/cli/read`.
-- The `fixture:` freezes render `bootstrapMessage` and `roleOpeningMessage` (anchors.ts 166, 115) over synthetic facts.
-- Two freezes each, plus a 3-rep smoke.
+- Snapshots use `./evals snapshot role-wake --trigger tr-N --team T --role <handle>`. `--role` is needed because a role's own `cast brief` is captured as `cast brief @<handle>`: a bare read from the role's session would move its brief clock in prod. `meta.servedAliases` serves that capture under the bare argv the role types.
+- The frame is prod's inject frame (`agentTasks:injectFrame`, read at `freeze create` within an hour of the snapshot), not `buildTriggerFrame`, which frames spawned runs only. The pure part of `agentTasks.triggerFrameFor` moved into `triggerRunFrame` (`shared/contracts/triggerLifecycle.ts`) so prod and the fixtures render one way. The harness note asks for the brief as it should stand, written to `brief.md` in the current directory.
+- anchor-brief takes the production opening from `/cli/read` at the line the ref names (default 1), and prod's answer up to the next typed message as the production reply.
+- The `fixture:` freezes render `bootstrapMessage` (anchors.ts, which calls `roleOpeningMessage` when the facts name a role) over synthetic facts; role-wake fixtures render `triggerRunFrame` over a synthetic role card and the tree's routine prompts.
+- Two fixture freezes each, one real freeze each, plus a 3-rep smoke on the real ones.
+- The guard treats `cast decide show|ls` as reads (the needs-input frame tells a role to run `cast decide show`); any other `cast decide` still posts and is refused. Any argv with `--help` goes live and is never frozen or refused: it prints the CLI's own text.
 
 Acceptance:
 - smoke runs complete with `frozen-reads` passing
@@ -670,7 +715,7 @@ Acceptance:
 **U17: Org refresh** (ct-55703, operational, no repo files)
 
 Steps:
-1. `./evals snapshot org-review --team <union> --name base9` and the same for codecast.
+1. `./evals snapshot org-review --team <union> --name union-base9` and the same for codecast (`codecast-base9`; snapshot names carry the workspace, and one name cannot hold two).
 2. Hand-label every flagged record that is new since base8 into the private labels, following org-eval.md "Ground truth, built by reading", and commit in the labels repo.
 3. Run 8 samples each on base8 and base9 at `AGENT_MODEL` for the new baseline.
 4. Run presentation capture and grading on the best and the worst sample, attended.

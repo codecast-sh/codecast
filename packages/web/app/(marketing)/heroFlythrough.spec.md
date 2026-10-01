@@ -11,8 +11,8 @@ Companion documents: `heroFly/ARCHITECTURE.md` (the sandbox, the container/view 
 "Retry failed webhooks" is asked for, fanned out to two workers, approved from a phone, discussed between agents, decided by a person, tracked as a task, automated, talked over with the team, merged, published, and found again three weeks later. The cast (`fixtures/story.ts`):
 
 - People: Ashot (the viewer), Sarah Chen, Maya Ortiz.
-- Sessions: the lead **Retry failed webhooks** (claude_code, `jx7hero`), **Webhook API half** (codex, `jx7hapi`), **Dashboard retry UI** (cursor, `jx7hrui`), and the fork **Try fixed backoff** (codex, `jx7hfrk`). Project `~/src/billing`.
-- Objects: task `ct-hero1` "Retry queue for failed webhooks", plan `pl-hero1` "Webhook reliability", the decision "Exponential or fixed backoff?", the trigger "Check CI every 4h", PR acme/billing#482 "Retry failed webhooks with exponential backoff", the page codecast.sh/a/webhook-retries "Webhook retry report", `src/billing/retry.ts:42`, channel #eng, hosts linux-host-1 and macbook.
+- Sessions: the lead **Retry failed webhooks** (claude_code, `jx7c4mq`), **Webhook API half** (codex, `jx7d2wk`), **Dashboard retry UI** (cursor, `jx7f9np`), and the fork **Try fixed backoff** (codex, `jx7gk3t`). Project `~/src/billing`.
+- Objects: task `ct-4182` "Retry queue for failed webhooks", plan `pl-312` "Webhook reliability", the decision "Exponential or fixed backoff?", the trigger "Check CI every 4h", PR acme/billing#482 "Retry failed webhooks with exponential backoff", the page codecast.sh/a/webhook-retries "Webhook retry report", `src/billing/retry.ts:42`, channel #eng, hosts linux-host-1 and macbook.
 - The prompt: "retry failed webhooks with backoff".
 
 ## Globals
@@ -154,7 +154,7 @@ Times are film seconds; named cues are in `fixtures/story.ts`. "Light interactio
 ### 5 Agents talk (28 to 34)
 
 - 28.8: the camera holds on the pair.
-- 29.0 to 29.6: pairA types `cast send jx7hrui "API is on /v2/hooks/retry, schema in the doc"` as a real cast command block.
+- 29.0 to 29.6: pairA types `cast send jx7f9np "API is on /v2/hooks/retry, schema in the doc"` as a real cast command block.
 - Flyer `talk.envelope` at `messageSent` 29.6: the message lifts off pairA and lands on pairB as a "Message from Webhook API half" block, with the doc reference as a real entity pill.
 - Flyer `talk.envelopeBack` at `replySent` 31.2: the reply "Retry states are in, staging green" flies back.
 - `forked` 32.4: pairB's user prompt shows a fork child, **Try fixed backoff**.
@@ -170,7 +170,7 @@ Times are film seconds; named cues are in `fixtures/story.ts`. "Light interactio
 ### 7 Track (40 to 47)
 
 - `taskFiled` 40.2: the lead runs `cast task create` and its transcript shows the task pill.
-- Flyer `work.task` 40.2 to 41.5: the pill falls on a parabola from the desk to the board as the camera makes the biggest swoop, and at `taskLands` 41.6 unfolds into a new top row: status open, `ct-hero1`, the title, the plan pill, an empty assignee, priority high, "now".
+- Flyer `work.task` 40.2 to 41.5: the pill falls on a parabola from the desk to the board as the camera makes the biggest swoop, and at `taskLands` 41.6 unfolds into a new top row: status open, `ct-4182`, the title, the plan pill, an empty assignee, priority high, "now".
 - `taskClaimed` 43.0: the assignee flips to the codex worker, the status crossfades to in progress, and the active-session badge appears.
 - 44.4: the plan's progress bar advances and its graph lights the next wave.
 - Light interaction: clicking status or priority cycles the fixture value.

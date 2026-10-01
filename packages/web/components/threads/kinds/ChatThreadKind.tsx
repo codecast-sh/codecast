@@ -210,7 +210,7 @@ export function ChatExpanded({
 
   return (
     <div className="th-card-open">
-      <EarlierButton count={fold.hidden} noun="reply" onClick={fold.showAll} />
+      <EarlierButton fold={fold} noun="reply" />
       <ChatTimelineRows messages={fold.visible} channelId={channelId} frozenReadAt={frozenReadAt} inThread />
       <ChatComposer
         channelId={channelId}

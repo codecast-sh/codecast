@@ -72,6 +72,7 @@ export function paletteActions(type: PaletteTargetType | null, targets: any[], u
         row("session_needs_input", "Mark needs input", CircleDot, "g"),
       ]),
       ...(!target.inbox_killed_at ? [row("session_kill", many("Kill session", "Kill # sessions"), Square, "k", "session.kill")] : []),
+      ...(!target.persistent ? [row("session_delete", many("Delete session…", "Delete # sessions…"), Trash2, "x")] : []),
       ...(single && target.parent_conversation_id ? [row("session_parent", "View parent conversation", GitBranch)] : []),
       ...(single && target.git_branch ? [row("session_branch", "Copy branch name", GitBranch)] : []),
       ...(single && (target.project_path || target.git_root) ? [row("session_files", "Open project files", Folder)] : []),

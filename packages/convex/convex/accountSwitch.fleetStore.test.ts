@@ -4,13 +4,12 @@ import { makeFakeDb } from "./testDb";
 import {
   activeTokenProfile,
   continueNeedsRestart,
-  decideSwitchAhead,
   fleetAccount,
   parkedOnActiveAccount,
   resumePinFor,
   AUTO_SWITCH_ATTEMPT_EVIDENCE_MS,
-  SWITCH_AHEAD_COOLDOWN_MS,
 } from "./ccAccountsShared";
+import { decideSwitchAhead, SWITCH_AHEAD_COOLDOWN_MS } from "./ccSwitchAhead";
 
 // A machine whose sessions run on the fleet store (cli/ccAccounts.ts): the
 // store carries launch_profile and every running session follows a switch.

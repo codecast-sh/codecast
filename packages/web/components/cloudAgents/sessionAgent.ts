@@ -4,9 +4,10 @@
 import type { ComponentType } from "react";
 import { toast } from "sonner";
 import { Archive, ArchiveRestore, Download, GitPullRequest } from "lucide-react";
-import { CLOUD_AGENT_ACTIONS, cloudAgentLaunch, cloudAgentProviderOfConversation, isCloudAgentId, type CloudAgentActionName, type CloudAgentLaunch, type CloudAgentProviderSpec } from "@codecast/shared/contracts";
+import { CLOUD_AGENT_ACTIONS, cloudAgentCardKind, cloudAgentLaunch, cloudAgentProblemKind, cloudAgentProviderOfConversation, isCloudAgentId, type CloudAgentActionName, type CloudAgentLaunch, type CloudAgentProviderSpec } from "@codecast/shared/contracts";
 import { useLiveSessionMeta } from "../../hooks/useLiveSessionMeta";
 import { useCloudAgentAction } from "../../lib/useProviderKeyCommand";
+import { machineName, useCloudAgentStatus } from "./machine";
 
 /**
  * The cloud agent a conversation runs as, or null for a local session: its
@@ -22,6 +23,28 @@ export function useCloudAgentOfConversation(conversationId: string | undefined):
   const agentId = live?.sessionId && isCloudAgentId(spec, live.sessionId) ? live.sessionId : null;
   return { spec, agentId, launch: cloudAgentLaunch(live?.agentType, live?.model), archived: !!live?.cloudAgentArchived };
 }
+
+/**
+ * The daemon's card a message in a cloud agent session is, or null: the
+ * session's provider (from the conversation, never the card's wording), the
+ * card's kind, and whether it still holds anything back. A credential card
+ * stops holding once the machine that runs the session has the credential,
+ * though the card stays in the thread. A limit card counts down the reset
+ * the machine reports while it still reports the limit.
+ */
+export function useCloudAgentSetupCard(conversationId: string | undefined, message: string) {
+  const spec = useCloudAgentOfConversation(conversationId)?.spec;
+  const status = useCloudAgentStatus(spec, useLiveSessionMeta(conversationId)?.ownerDeviceId);
+  const kind = spec ? cloudAgentCardKind(spec, message) : null;
+  if (!spec || !kind) return null;
+  // A setup card's own kind (the provider changed, a limit, any other setup) is in its sentence.
+  const problem = kind === "setup" ? cloudAgentProblemKind(spec, message) : null;
+  const resetsAt = problem === "limit" && status.problem?.kind === "limit" ? status.problem.resetsAt : undefined;
+  // Connected and not refused: a key the provider rejects is connected too, and still holds the message.
+  return { spec, kind, problem, resetsAt, resolved: kind === "credential" && status.connected && !status.problem?.credential, machine: machineName(status.device) };
+}
+
+export type CloudAgentSetupCard = NonNullable<ReturnType<typeof useCloudAgentSetupCard>>;
 
 const ACTION_ICONS: Record<CloudAgentActionName, ComponentType<{ className?: string }>> = {
   create_pr: GitPullRequest,

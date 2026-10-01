@@ -12,6 +12,7 @@ import { DecisionAnswerControls } from "./decisions/DecisionAnswerControls";
 import { DecisionOptionList, TypeAnswerButton } from "./decisions/DecisionOptionList";
 import { OptionPages } from "./decisions/OptionPages";
 import { useJumpToDecisionAsk } from "../hooks/useJumpToDecisionAsk";
+import { useOpenSession } from "../hooks/useOpenSession";
 import { formatTimeAgo } from "../lib/messageNavigator";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { buildSingleAnswerPayload, buildFreeTextPayload } from "../lib/pollPayload";
@@ -71,7 +72,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
   const addOptimisticMessage = useInboxStore((s) => s.addOptimisticMessage);
   const sendMessage = useInboxStore((s) => s.sendMessage);
   const resolveSessionQuestion = useInboxStore((s) => s.resolveSessionQuestion);
-  const navigateToSession = useInboxStore((s) => s.navigateToSession);
+  const openSessionRoute = useOpenSession();
 
   const [size, setSize] = useState<Size>(() => (item.blocking || stepper ? "full" : "line"));
   const full = size === "full";
@@ -221,10 +222,9 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
   }, [item, answerDecision, resolveSessionQuestion, onDone]);
 
   const onExit = stepper?.onExit;
-  const openSession = useCallback(() => {
-    navigateToSession(item.conversationId);
-    onExit?.();
-  }, [navigateToSession, item.conversationId, onExit]);
+  // Off the inbox (the /questions stepper) "open" must leave for the inbox;
+  // exiting the queue afterwards would push /questions back over it.
+  const openSession = useCallback(() => openSessionRoute(item.conversationId), [openSessionRoute, item.conversationId]);
 
   // A fold by scrolling is undone by scrolling: wheel up at the top of the
   // sheet hands the pane to the thread, so wheel down at the bottom of the

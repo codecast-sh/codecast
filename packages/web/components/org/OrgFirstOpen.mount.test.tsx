@@ -42,7 +42,7 @@ async function verifyFirstOpen() {
     const waiting = orgGuideSteps({ meNodeId: "person:me", roleNodeId: hasRoles ? "role:r1" : null, openProposal: { remaining: 129 } });
     const step = proposals(waiting);
     assert.equal(step.target, '[data-org-guide="staffing"]');
-    assert.match(step.sentence, /the one waiting for you, as a conversation with 129 changes/);
+    assert.match(step.sentence, /starting with the open proposal: 129 changes to decide/);
     assert.doesNotMatch(step.sentence, /\bop-\d+/, "a sentence never carries a short id");
     assert.deepEqual(step.action, { id: "open_proposal", label: "Open the proposal" });
   }

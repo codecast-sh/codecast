@@ -25,6 +25,7 @@ import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { DevicesSection } from '@/components/DevicesSection';
 import { liveActivityNative } from '@/modules/codecast-live-activity';
+import { peopleOf } from '@codecast/shared/team/memberKind';
 
 const THEME_OPTIONS = [
   { key: undefined, label: 'System', icon: 'mobile' as const },
@@ -615,8 +616,8 @@ export default function SettingsScreen() {
                       Team Members
                     </RNText>
                   </RNView>
-                  {teamMembers
-                    .filter((m: any) => m != null && m._id !== currentUser?._id)
+                  {peopleOf(teamMembers as any[])
+                    .filter((m: any) => m._id !== currentUser?._id)
                     .map((member: any, idx: number) => (
                       <RNView key={member._id}>
                         {idx > 0 && <RNView style={styles.settingDivider} />}

@@ -83,8 +83,9 @@ describe("cast computer against the built helper", () => {
     const caps = await realClient().capabilities();
     expect(caps.protocolVersion).toBe(COMPUTER_PROTOCOL_VERSION);
     expect(caps.platform).toBe("darwin");
-    // v1 ships no drag and no window focus verb, by design.
-    expect(caps.supports.actions.drag).toBe(false);
+    // Drag ships (unverified, like every synthetic input); focusing a window
+    // is never a verb, by design.
+    expect(caps.supports.actions.drag).toBe(true);
     expect(caps.supports.windows.focus).toBe(false);
   });
 

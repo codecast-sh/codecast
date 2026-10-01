@@ -81,6 +81,18 @@ const FAKE_SHARED_MESSAGE = {
   sharedAt: Date.now() - 60_000,
 };
 
+const FAKE_PREVIEW = {
+  url: "https://github.com/ashot/codecast",
+  status: "ok",
+  title: "ashot/codecast: sessions you can share",
+  description: "The agent session sync tool.",
+  image: "https://opengraph.githubassets.com/1/ashot/codecast",
+  site_name: "GitHub",
+  favicon: "https://github.com/favicon.ico",
+  requested_at: Date.now(),
+  fetched_at: Date.now(),
+};
+
 const { getFunctionName } = await import("convex/server");
 
 const ROWS: Record<string, any[]> = {
@@ -101,6 +113,7 @@ function fakeQuery(fn: unknown, args: any) {
   if (name === "docs:webGet") return args?.id === DOC_CONVEX_ID ? FAKE_DOC : null;
   if (name === "messages:getSharedMessage") return args?.share_token === SHARE_TOKEN ? FAKE_SHARED_MESSAGE : null;
   if (name === "messages:webGet") return args?.id === MSG_CONVEX_ID ? FAKE_SHARED_MESSAGE : null;
+  if (name === "linkPreviews:get") return args?.url === FAKE_PREVIEW.url ? FAKE_PREVIEW : null;
   const rows = ROWS[name];
   if (!rows) return undefined;
   return rows.find((r) => r.short_id === args?.short_id || r._id === args?.id) ?? null;
@@ -111,6 +124,7 @@ mock.module("convex/react", () => ({
   ...convexReact,
   useQuery: fakeQuery,
   useQueries: () => ({}),
+  useMutation: () => async () => {},
 }));
 
 const noThrow = await import("../hooks/useQueryNoThrow");
@@ -444,5 +458,42 @@ describe("a transcript promotes a staffing proposal alone", () => {
     expect(html).not.toContain("entity-card-row");
     expect(html).toContain("entity-ref");
     expect(html).toContain("Rich object preview cards in chat");
+  });
+});
+
+describe("web link previews", () => {
+  const url = FAKE_PREVIEW.url;
+
+  test("a link on its own line under prose renders the page's preview card", () => {
+    const html = render(`Look at this:\n${url}`);
+    expect(html).toContain("<p>Look at this:</p>");
+    expect(html).toContain(FAKE_PREVIEW.title);
+    expect(html).toContain(FAKE_PREVIEW.description);
+    expect(html).toContain("github.com · GitHub");
+    expect(html).toContain(`src="${FAKE_PREVIEW.image}"`);
+    expect(html).not.toMatch(/<p>\s*<span class="not-prose/);
+  });
+
+  test("a page not read yet is a card carrying its address", () => {
+    const html = render("https://example.com/post/42");
+    expect(html).toContain("example.com/post/42");
+    expect(html).toContain("not-prose");
+  });
+
+  test("a link inside a sentence, a list of links and an object URL stay links", () => {
+    expect(render(`See ${url} today.`)).not.toContain(FAKE_PREVIEW.title);
+    expect(render(`- ${url}\n- https://example.com`)).not.toContain(FAKE_PREVIEW.title);
+    expect(render("https://codecast.sh/tasks/ct-46943")).not.toContain("not-prose my-2");
+  });
+
+  test("a Slack message's own unfurl is the preview: no second card", () => {
+    const html = render(`${url}\n\n> *GitHub* · **[ashot/codecast](${url})**`);
+    expect(html).not.toContain(FAKE_PREVIEW.title);
+  });
+
+  test("an authored caption rides under the card", () => {
+    const html = render(`[the repo](${url})`);
+    expect(html).toContain(FAKE_PREVIEW.title);
+    expect(html).toContain("the repo");
   });
 });

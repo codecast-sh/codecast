@@ -1,0 +1,68 @@
+{
+ "asOf": "2026-01-15T14:07:00.000Z",
+ "notes": "synthetic session: a flaky login e2e test fixed by waiting on a hydration marker; CI not yet run",
+ "judge": "a cold reader can continue: the brief names the cause (clicking before hydration) and the fix (wait for [data-hydrated] in e2e/login.test.ts), that 50 local runs pass but CI has not run it, the decision to leave CI retries alone and why, and a concrete first step to run the change on CI",
+ "snapshot": {
+  "rows": [
+   {
+    "role": "assistant",
+    "content": "Not yet. The change is in the working tree only; CI has not run it. Next is to push a branch and watch 10 CI runs of the e2e job.",
+    "timestamp": 1768486020000,
+    "line": 8
+   },
+   {
+    "role": "user",
+    "content": "Good. Leave the CI retry setting alone, I want flakes to stay visible. Did you run it on CI?",
+    "timestamp": 1768485960000,
+    "line": 7
+   },
+   {
+    "role": "assistant",
+    "content": "Yes. The form sets data-hydrated on its root after hydration. I changed the test to wait for [data-hydrated] before clicking, in e2e/login.test.ts. 50 runs in a row pass locally.",
+    "timestamp": 1768485900000,
+    "line": 6
+   },
+   {
+    "role": "user",
+    "content": "Can we wait on something the app sets instead of a sleep?",
+    "timestamp": 1768485840000,
+    "line": 5
+   },
+   {
+    "role": "assistant",
+    "content": "3 of 30 runs fail, all with a timeout waiting for #submit to be clickable. The test clicks before the form hydrates: the button is in the server HTML but disabled until hydration.",
+    "timestamp": 1768485780000,
+    "line": 4
+   },
+   {
+    "role": "user",
+    "content": "",
+    "timestamp": 1768485720000,
+    "line": 3,
+    "tool_results": [
+     {}
+    ]
+   },
+   {
+    "role": "assistant",
+    "content": "",
+    "timestamp": 1768485660000,
+    "line": 2
+   },
+   {
+    "role": "user",
+    "content": "The login e2e test fails about one run in ten on CI. Find out why and fix it without adding retries.",
+    "timestamp": 1768485600000,
+    "line": 1
+   }
+  ],
+  "facts": {
+   "title": "Fix the flaky login e2e test",
+   "agent_type": "claude_code",
+   "model": "opus",
+   "thread_state": null,
+   "task_short_id": null,
+   "plan_short_id": null
+  }
+ }
+}
