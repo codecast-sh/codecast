@@ -164,6 +164,9 @@ describe("new-session launch options", () => {
       "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark",
       // Codex Cloud's plain launch; its ask mode and attempts are hidden keys the composer's own switches set.
       "cloud",
+      // The Agents API lane: its default launch, then one key per model it runs.
+      "api", "api:gpt-6-astra", "api:gpt-5.6-sol", "api:gpt-5.6-terra", "api:gpt-5.6-luna",
+      "api:gpt-5.5", "api:gpt-5.4", "api:gpt-5.4-mini",
     ]);
     expect(codex.efforts).toEqual(["default", "low", "medium", "high", "xhigh", "max", "ultra"]);
   });
