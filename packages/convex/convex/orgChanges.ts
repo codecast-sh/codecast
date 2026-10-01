@@ -219,7 +219,7 @@ export async function planUndo(ctx: Ctx, userId: Id<"users">, ref: string, inclu
   const read = async (id: string): Promise<any> => {
     if (virtual.has(String(id))) return virtual.get(String(id));
     const doc = await ctx.db.get(id);
-    return doc && ctx.db.normalizeId("conversations", id) ? { ...doc, owner_user_ids: await ownerSetOf(ctx, doc._id) } : doc;
+    return doc && ctx.db.normalizeId("conversations", id) ? { ...doc, owner_user_ids: await ownerSetOf(ctx, doc._id, doc) } : doc;
   };
   const steps: Step[] = [];
   let messageCount = 0;
@@ -229,17 +229,32 @@ export async function planUndo(ctx: Ctx, userId: Id<"users">, ref: string, inclu
     if (row.undone_by) continue;
     if (!(await mayChangeRow(ctx, userId, row))) { preview.refused = "You can only undo changes you could make yourself"; continue; }
     const writes: OrgWrite[] = [];
+    // Ids whose write stands: restored as recorded, or with only its owners
+    // left as they are now.
+    const standing = new Set<string>();
     for (const w of row.writes ?? []) {
       const current = await read(w.id);
+      const leaveAlone = (suffix: string, skipped: string) => preview.left_alone.push({ row: { ...publicRow(row), _id: `${row._id}:${suffix}`, subject: w.id === row.subject.id ? row.subject : { type: w.table === "conversations" ? "session" : w.table === "org_roles" ? "role" : w.table === "tasks" ? "task" : w.table === "plans" ? "plan" : w.table === "initiatives" ? "initiative" : "project", id: w.id, label: current?.title ?? current?.name ?? row.subject.label }, skipped } });
       if (!(await mayWrite(ctx, userId, row.workspace, w, current))) {
         preview.left_alone.push({ row: { ...publicRow(row), _id: `${row._id}:unavailable`, skipped: "a related record is no longer available in this workspace" } });
         continue;
       }
-      if (!fieldsMatch(current, w.after)) {
-        preview.left_alone.push({ row: { ...publicRow(row), _id: `${row._id}:${w.id}`, subject: w.id === row.subject.id ? row.subject : { type: w.table === "conversations" ? "session" : w.table === "org_roles" ? "role" : w.table === "tasks" ? "task" : w.table === "plans" ? "plan" : w.table === "initiatives" ? "initiative" : "project", id: w.id, label: current?.title ?? current?.name ?? row.subject.label }, skipped: current ? "it changed after this, or is no longer editable by you" : "it no longer exists" } });
+      // A session's owners are judged apart from its other fields: owners that
+      // moved since (a co-owner added) stay as they are, and the rest of the
+      // write (the seat markers of an adopt) still comes back.
+      const { owner_user_ids: ownersAfter, ...fieldsAfter } = w.after;
+      if (!fieldsMatch(current, fieldsAfter)) {
+        leaveAlone(w.id, current ? "it changed after this, or is no longer editable by you" : "it no longer exists");
         continue;
       }
-      writes.push(w);
+      standing.add(w.id);
+      if (ownersAfter === undefined || fieldsMatch(current, { owner_user_ids: ownersAfter })) {
+        writes.push(w);
+        continue;
+      }
+      leaveAlone(`${w.id}:owners`, "its owners changed after this");
+      const { owner_user_ids: _owners, owner_rows: _rows, ...fieldsBefore } = w.before;
+      if (Object.keys(fieldsAfter).length) writes.push({ ...w, before: fieldsBefore, after: fieldsAfter });
     }
     let parent: Step["parent"];
     if (row.subject.type === "session" && row.before.parent) {
@@ -248,9 +263,9 @@ export async function planUndo(ctx: Ctx, userId: Id<"users">, ref: string, inclu
       else preview.left_alone.push({ row: { ...publicRow(row), skipped: "its reporting line changed after this" } });
     }
     const subjectWrite = row.writes?.find((w) => w.id === row.subject.id);
-    if (subjectWrite && !writes.includes(subjectWrite)) continue;
+    if (subjectWrite && !standing.has(subjectWrite.id)) continue;
     const seatWrites = (row.writes ?? []).filter((w) => w.table === "anchors" || w.id === row.effects.seat?.conversation_id);
-    if (seatWrites.some((w) => !writes.includes(w))) continue;
+    if (seatWrites.some((w) => !standing.has(w.id))) continue;
     if (!writes.length && !parent) {
       if (!row.writes?.length) preview.left_alone.push({ row: { ...publicRow(row), skipped: "this older entry has no reversible snapshot" } });
       continue;
@@ -275,7 +290,7 @@ export async function planUndo(ctx: Ctx, userId: Id<"users">, ref: string, inclu
 
 async function restoreWrite(ctx: Ctx, userId: Id<"users">, w: OrgWrite) {
   const current = await ctx.db.get(w.id);
-  const { owner_user_ids: owners, ...patch } = patchOf(w.before);
+  const { owner_user_ids: owners, owner_rows: ownerRows, ...patch } = patchOf(w.before);
   if (w.table === "org_roles" && current.status !== "retired" && patch.status !== "retired") {
     if (patch.reports_to) await performReparentRole(ctx, userId, { role_id: w.id, reports_to: patch.reports_to });
     if (patch.caps) await performSetCaps(ctx, userId, { role_id: w.id, hands: patch.caps.hands_per_day, wakes: patch.caps.wakes_per_day, tokens: patch.caps.tokens_per_day });
@@ -299,7 +314,7 @@ async function restoreWrite(ctx: Ctx, userId: Id<"users">, w: OrgWrite) {
   }
   if (w.table === "agent_tasks") await patchTask(ctx, current, { ...patch, ...(patch.status === "scheduled" && current.interval_ms ? { run_at: Date.now() + current.interval_ms, cadence_slot_at: undefined } : {}) });
   else await ctx.db.patch(w.id, patch);
-  if (w.table === "conversations" && owners) await setSessionOwnerRows(ctx, current._id, owners, userId);
+  if (w.table === "conversations" && owners) await setSessionOwnerRows(ctx, current._id, owners, userId, ownerRows ?? []);
   if (w.table === "tasks" && current.plan_id) await recalcPlanProgress(ctx, current.plan_id, current._id, patch.status ?? current.status);
 }
 

@@ -154,11 +154,11 @@
       "shown": {
         "questions": 0,
         "pinned": 0,
-        "new": 2,
+        "new": 3,
         "needs_input": 3,
         "done": 3,
         "dormant": 3,
-        "working": 4,
+        "working": 3,
         "idle": 0,
         "snoozed": 0,
         "stashed": 0,
@@ -180,7 +180,7 @@
         "hidden": 0
       }
     },
-    "set_digest": "89fb432e70eb18d2",
+    "set_digest": "07cbac0f752670b5",
     "placements": {
       "donenoturnz100000000000000000000": [
         "done",
@@ -238,7 +238,7 @@
         false
       ],
       "workbornz80000000000000000000000": [
-        "working",
+        "new",
         "working",
         false
       ],
@@ -293,10 +293,10 @@
       ],
       "new": [
         "newbornz700000000000000000000000",
+        "workbornz80000000000000000000000",
         "newolderz80000000000000000000000"
       ],
       "working": [
-        "workbornz80000000000000000000000",
         "workjustbackz1200000000000000000",
         "workneversettledz160000000000000",
         "workgrindingz1200000000000000000"

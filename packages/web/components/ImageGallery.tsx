@@ -1,9 +1,12 @@
 import { createContext, useContext, useState, useCallback, useRef, useMemo } from "react";
-import { Link2, LocateFixed } from "lucide-react";
+import { Link2, LocateFixed, MessageSquareQuote } from "lucide-react";
 import { toast } from "sonner";
 import { useEventListener } from "../hooks/useEventListener";
 import { createPortal } from "react-dom";
 import { copyToClipboard } from "../lib/utils";
+import { useInboxStore } from "../store/inboxStore";
+import { toggleImageQuote } from "../lib/reviewActions";
+import { KeyCap } from "./KeyboardShortcutsHelp";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
 
@@ -11,8 +14,10 @@ import { useWatchEffect } from "../hooks/useWatchEffect";
 // data: URL from the byte cache); `href` is the shareable address of the same
 // bytes (the storage URL or the remote markdown URL) — absent when there is
 // none, e.g. an inline base64 image. `messageId` is the transcript message the
-// image came from, when the registrar knows it.
-export type GalleryImage = { src: string; href?: string; messageId?: string };
+// image came from, when the registrar knows it. `storageId` names the stored
+// bytes (so a quote can attach the picture itself) and `timestamp` when it
+// landed, both when known.
+export type GalleryImage = { src: string; href?: string; messageId?: string; storageId?: string; timestamp?: number };
 
 type ImageGalleryContextType = {
   register: (image: GalleryImage) => void;
@@ -87,9 +92,12 @@ const ACTION_CLASS = "inline-flex h-10 w-10 items-center justify-center rounded 
 type Registry = { conversationId: string | undefined; bySrc: Map<string, GalleryImage>; order: GalleryImage[] };
 const emptyRegistry = (conversationId: string | undefined): Registry => ({ conversationId, bySrc: new Map(), order: [] });
 
-export function ImageGalleryProvider({ conversationId, onJumpToMessage, children }: {
+export function ImageGalleryProvider({ conversationId, onJumpToMessage, quotable = false, children }: {
   // Scopes the mount registry to one conversation.
   conversationId?: string;
+  // The viewer can reply here: clicking an image (or Q) quotes it into the
+  // conversation's quote batch, the same one paragraph quotes build up.
+  quotable?: boolean;
   // Scroll the transcript to a message (the host's own path, which can expand
   // a collapsed group and highlight the row). Called after the lightbox closes.
   onJumpToMessage?: (messageId: string) => void;
@@ -123,7 +131,7 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, children
     if (!existing) {
       r.bySrc.set(image.src, image);
       r.order.push(image);
-    } else if ((image.href && !existing.href) || (image.messageId && !existing.messageId)) {
+    } else if ((image.href && !existing.href) || (image.messageId && !existing.messageId) || (image.storageId && !existing.storageId)) {
       // A later registrar knows more (e.g. the storage URL resolved): fold it in.
       const merged = { ...existing, ...image };
       r.bySrc.set(image.src, merged);
@@ -161,11 +169,29 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, children
     setCurrentIndex(i => (i > 0 ? i - 1 : i));
   }, []);
 
+  // Which images already sit in the quote batch, by src: the open lightbox
+  // marks them and a click takes one back out.
+  const canQuote = quotable && !!conversationId;
+  const quotedKey = useInboxStore((s) => {
+    if (!canQuote) return "";
+    return (s.reviewComments[conversationId!] ?? []).flatMap((c) => (c.image ? [c.image.src] : [])).join("\n");
+  });
+  const quoted = useMemo(() => new Set(quotedKey ? quotedKey.split("\n") : []), [quotedKey]);
+  const toggleQuote = useCallback((image: GalleryImage | undefined) => {
+    if (!canQuote || !image) return;
+    const added = toggleImageQuote(conversationId!, image);
+    toast.success(added ? "Image quoted into your next message" : "Image quote removed", { duration: 1500 });
+  }, [canQuote, conversationId]);
+  const currentRef = useRef<GalleryImage | undefined>(undefined);
+
   useEventListener("keydown", useCallback((e: KeyboardEvent) => {
     if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); }
     else if (e.key === "ArrowRight") { e.preventDefault(); e.stopPropagation(); goNext(); }
     else if (e.key === "ArrowLeft") { e.preventDefault(); e.stopPropagation(); goPrev(); }
-  }, [close, goNext, goPrev]), isOpen ? document : null);
+    else if (canQuote && (e.key === "q" || e.key === "Q") && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      e.preventDefault(); e.stopPropagation(); toggleQuote(currentRef.current);
+    }
+  }, [close, goNext, goPrev, canQuote, toggleQuote]), isOpen ? document : null);
 
   const ctx = useMemo(() => ({ register, open, openList }), [register, open, openList]);
 
@@ -176,6 +202,8 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, children
   }, [isOpen, currentIndex]);
 
   const current = isOpen ? list[currentIndex] : null;
+  currentRef.current = current ?? undefined;
+  const isQuoted = !!current && quoted.has(current.src);
   const currentSrc = current?.src ?? null;
   const hasPrev = currentIndex > 0;
   const hasNext = currentIndex < list.length - 1;
@@ -206,6 +234,17 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, children
               arrows, sitting with the close button so the eye has one corner
               to check. Each shows only when it has somewhere to go. */}
           <div className="absolute top-4 right-4 flex items-center gap-0.5 z-10" onClick={e => e.stopPropagation()}>
+            {canQuote && (
+              <button
+                onClick={() => toggleQuote(current ?? undefined)}
+                className={`${ACTION_CLASS} ${isQuoted ? "!text-sol-yellow" : ""}`}
+                title={isQuoted ? "Remove from your next message (Q)" : "Quote into your next message (Q)"}
+                aria-label={isQuoted ? "Remove image quote" : "Quote image"}
+                aria-pressed={isQuoted}
+              >
+                <MessageSquareQuote className="w-4 h-4" strokeWidth={2} />
+              </button>
+            )}
             {current?.href && (
               <button
                 onClick={() => copyLink(current.href!)}
@@ -237,9 +276,10 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, children
             </button>
           </div>
 
-          {count > 1 && (
-            <div className="absolute top-4 left-1/2 -translate-x-1/2 text-white/40 text-xs font-mono tabular-nums">
-              {currentIndex + 1} / {count}
+          {(count > 1 || quoted.size > 0) && (
+            <div className="absolute top-4 left-1/2 -translate-x-1/2 flex items-center gap-3 text-white/40 text-xs font-mono tabular-nums">
+              {count > 1 && <span>{currentIndex + 1} / {count}</span>}
+              {quoted.size > 0 && <span className="text-sol-yellow/80">{quoted.size} quoted</span>}
             </div>
           )}
 
@@ -267,12 +307,24 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, children
             </button>
           )}
 
-          <img
-            src={currentSrc}
-            alt="Gallery image"
-            className={`max-w-[90vw] object-contain rounded ${count > 1 ? "max-h-[82vh]" : "max-h-[90vh]"}`}
-            onClick={e => e.stopPropagation()}
-          />
+          {/* Clicking the picture quotes it (or takes the quote back), so a
+              batch builds up by paging through and clicking. The ring says
+              which ones are in; the hint under it says what a click does. */}
+          <div className="relative flex flex-col items-center" onClick={e => e.stopPropagation()}>
+            <img
+              src={currentSrc}
+              alt="Gallery image"
+              className={`max-w-[90vw] object-contain rounded transition-shadow ${count > 1 ? "max-h-[78vh]" : "max-h-[86vh]"} ${
+                canQuote ? "cursor-pointer" : ""} ${isQuoted ? "ring-2 ring-sol-yellow/80" : ""}`}
+              onClick={() => toggleQuote(current ?? undefined)}
+            />
+            {canQuote && (
+              <div className={`mt-2 flex items-center gap-1.5 text-[11px] font-mono ${isQuoted ? "text-sol-yellow/80" : "text-white/35"}`}>
+                <KeyCap size="xs">Q</KeyCap>
+                {isQuoted ? "quoted into your next message, click to remove" : "click to quote into your next message"}
+              </div>
+            )}
+          </div>
 
           {count > 1 && (
             <div
@@ -285,14 +337,19 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, children
                     key={src}
                     ref={i === currentIndex ? activeThumbRef : undefined}
                     onClick={() => setCurrentIndex(i)}
-                    className={`shrink-0 rounded-md overflow-hidden transition-all duration-150 ${
+                    className={`relative shrink-0 rounded-md overflow-hidden transition-all duration-150 ${
                       i === currentIndex
                         ? "ring-1 ring-white/80 opacity-100"
-                        : "opacity-40 hover:opacity-75"
+                        : quoted.has(src) ? "ring-1 ring-sol-yellow/70 opacity-80 hover:opacity-100" : "opacity-40 hover:opacity-75"
                     }`}
-                    title={`Image ${i + 1}`}
+                    title={quoted.has(src) ? `Image ${i + 1} (quoted)` : `Image ${i + 1}`}
                   >
                     <img src={src} alt="" className="h-9 w-9 object-cover" draggable={false} />
+                    {quoted.has(src) && (
+                      <span className="absolute bottom-0 right-0 flex h-3.5 w-3.5 items-center justify-center rounded-tl bg-sol-yellow text-black">
+                        <MessageSquareQuote className="h-2.5 w-2.5" strokeWidth={2.5} />
+                      </span>
+                    )}
                   </button>
                 ))}
               </div>

@@ -9,10 +9,11 @@
  * a provider (setupBlocks), and boot (startWatchers).
  */
 import { CLIENT_ERROR_BANNER_PREFIX, CLOUD_AGENT_ACTION_SUBTYPE, CLOUD_AGENT_ACTIONS, CLOUD_SESSION_SOURCES, cloudSessionSyncOn, cloudAgentProviderForKey, cloudAgentProviderForLaunch, type CloudAgentActionName, type CloudAgentProviderSpec, type CloudAgentSetupBlock } from "@codecast/shared/contracts";
-import { isCloudMirrorPlaceholder, repoOwnerName } from "./poll.js";
-import { applyInCheckout, CloudAgentSessions, setupErrorOf, type CloudAgentSessionsDeps } from "./sessions.js";
+import { doublingDelay, isCloudMirrorPlaceholder, repoOwnerName } from "./poll.js";
+import { applyInCheckout, CloudAgentSessions, cloudSetupErrorOf, judgeCloudFailure, type CloudAgentSessionsDeps } from "./sessions.js";
 import { CloudAgentWatcher, type CloudAgentTranscriptEvent, type CloudAgentWatcherOptions } from "./watcher.js";
-import { CLOUD_AGENT_ACTION_METHODS, CloudAgentSetupError, errorText, logTag, type AnyCloudAgentAdapter, type CloudAgentGit, type CloudAgentLoginState } from "./types.js";
+import { CLOUD_AGENT_ACTION_METHODS, CloudAgentSetupError, CloudAgentUnsentError, errorText, logTag, type AnyCloudAgentAdapter, type CloudAgentGit, type CloudAgentLoginState } from "./types.js";
+import type { ProviderKeyVerdict } from "../providerKeyCrypto.js";
 
 export interface CloudAgentRuntime {
   adapter: AnyCloudAgentAdapter;
@@ -107,8 +108,7 @@ export class CloudAgentRegistry {
       const field = CLOUD_SESSION_SOURCES[adapter.spec.syncSource].field;
       const watcher = new CloudAgentWatcher(adapter, {
         importAll: () => cloudSessionSyncOn(field, opts.syncSetting(field)),
-        isOwnAgent: (agentId) => sessions.ownsAgent(agentId),
-        hasOwnAgents: () => sessions.ownsAnyAgent(),
+        ownAgents: () => sessions.agentIds(),
         resolveRepoDir: (repo, agentId) => this.checkoutOf(runtime, agentId, repo),
         log: opts.log,
       });
@@ -181,7 +181,8 @@ export class CloudAgentRegistry {
           this.setupHolds.set(conversationId, tries + 1);
           err.triedBefore(tries);
         }
-        const card = err instanceof CloudAgentSetupError ? this.setupCard(err, conversationId) : null;
+        const card = err instanceof CloudAgentSetupError ? this.setupCard(err, conversationId)
+          : err instanceof CloudAgentUnsentError ? { key: err.cardKey(conversationId), message: err.message } : null;
         if (card) await this.deps.addLine(conversationId, { key: card.key, role: "assistant", content: `${CLIENT_ERROR_BANNER_PREFIX} ${card.message}` });
         throw err;
       }
@@ -220,12 +221,12 @@ export class CloudAgentRegistry {
     if (!adapter.spec.actions?.includes(action) || !adapter[CLOUD_AGENT_ACTION_METHODS[action]]) throw new Error(`${adapter.spec.label} has no ${label}`);
     const key = `${adapter.spec.mirrorDir}-action:${conversationId}:${action}:${Date.now()}`;
     let done: CloudAgentActionResult;
+    const client = adapter.client();
     try {
-      const client = adapter.client();
       if (client instanceof CloudAgentSetupError) throw client;
       done = await this.runAction(runtime, client, agentId, action);
     } catch (err) {
-      const setup = err instanceof CloudAgentSetupError ? err : setupErrorOf(adapter, err);
+      const setup = err instanceof CloudAgentSetupError ? err : await judgeCloudFailure(adapter, runtime.watcher, client, err, session);
       const message = `${label} failed: ${setup?.message ?? errorText(err)}`;
       this.deps.log(`${logTag(adapter)} ${action} on ${agentId}: ${message}`);
       await this.postNote(conversationId, key, message);
@@ -292,9 +293,9 @@ export class CloudAgentRegistry {
   async checkLogin(providerId: string): Promise<Omit<CloudAgentLoginState, "setup">> {
     const runtime = this.loginRuntime(providerId);
     const state = await checkCloudAgentLogin(runtime.adapter);
-    // The check is the provider's answer too: what the machine reports follows it.
+    // The check is the provider's answer too: what the machine reports follows it, as far as a sign-in proves.
     if (state.state === "signed_in") {
-      runtime.watcher?.setRemoteSetup(null);
+      runtime.watcher?.signInPassed();
       runtime.watcher?.hurry();
     } else if (state.setup) runtime.watcher?.setRemoteSetup(state.setup);
     const { setup: _setup, ...shown } = state;
@@ -358,7 +359,7 @@ export class CloudAgentRegistry {
     else if (result === "not_owner") this.hosted.set(sessionId, Date.now());
     else {
       // Unanswered, not refused: ask again soon, or its status is dropped until the next restart.
-      const delay = Math.min(HOST_RETRY_MS * 2 ** attempt, HOST_ELSEWHERE_MS);
+      const delay = doublingDelay(HOST_RETRY_MS, HOST_ELSEWHERE_MS, attempt);
       this.hostRetries.set(sessionId, setTimeout(() => void this.host(sessionId, conversationId, attempt + 1), delay));
     }
     return result === "hosted" ? "hosted" : result === "not_owner" ? "elsewhere" : "unknown";
@@ -377,12 +378,12 @@ export class CloudAgentRegistry {
   setupBlocks(): CloudAgentSetupBlock[] {
     return this.runtimes.flatMap(({ adapter, watcher }) => {
       const problem = watcher?.setupProblem;
-      return problem ? [{ provider: adapter.spec.id, kind: problem.kind, ...(problem.reason ? { reason: problem.reason } : {}) }] : [];
+      return problem ? [{ provider: adapter.spec.id, kind: problem.kind, ...(problem.reason ? { reason: problem.reason } : {}), ...(problem.resetsAt ? { resets_at: problem.resetsAt } : {}), ...(watcher?.holdsOnlySends ? { sends_only: true } : {}) }] : [];
     });
   }
 
   /** Check a key before it is stored, for the provider whose credential it is. */
-  async verifyKey(keyProvider: string, key: string): Promise<{ ok: true; account?: string } | { ok: false; error: string }> {
+  async verifyKey(keyProvider: string, key: string): Promise<ProviderKeyVerdict> {
     const spec = cloudAgentProviderForKey(keyProvider);
     const adapter = spec && this.runtimes.find((r) => r.adapter.spec.id === spec.id)?.adapter;
     return adapter?.verifyKey ? adapter.verifyKey(key) : { ok: true };
@@ -398,7 +399,7 @@ const LOGIN_STATE_OF_SETUP: Partial<Record<CloudAgentSetupError["kind"], CloudAg
 /**
  * Where a sign-in based provider's login on this machine stands, by the same
  * rules delivery uses: the client's own setup problem (none, or run out),
- * else whatever the provider's answer to whoami says through setupErrorOf.
+ * else whatever the provider's answer to whoami says through cloudSetupErrorOf.
  * Anything that names no setup problem is the provider being unreachable.
  */
 export async function checkCloudAgentLogin(adapter: AnyCloudAgentAdapter): Promise<CloudAgentLoginState> {
@@ -409,9 +410,10 @@ export async function checkCloudAgentLogin(adapter: AnyCloudAgentAdapter): Promi
     const who = await login.whoami(client);
     return { state: "signed_in", ...(who.account ? { account: who.account } : {}), ...(who.plan ? { plan: who.plan } : {}) };
   } catch (err) {
-    const setup = err instanceof CloudAgentSetupError ? err : setupErrorOf(adapter, err);
+    const setup = err instanceof CloudAgentSetupError ? err : await cloudSetupErrorOf(adapter, client, err);
     const state = (setup && LOGIN_STATE_OF_SETUP[setup.kind]) ?? "unreachable";
-    const detail = state === "unreachable" ? errorText(err) : setup?.reason;
+    // Unreachable: the provider's limit or change when it named one, else the error itself.
+    const detail = state === "unreachable" ? setup?.reason ?? errorText(err) : setup?.reason;
     const account = state === "signed_out" ? undefined : login.localAccount?.();
     return { state, ...(account ? { account } : {}), ...(detail ? { detail } : {}), ...(setup && !(err instanceof CloudAgentSetupError) ? { setup } : {}) };
   }

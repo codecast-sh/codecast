@@ -471,28 +471,6 @@ export function needsYou(tree: OrgTree | null, health: OrgHealth | null, queue: 
   return out;
 }
 
-export type ChiefRead = {
-  chief: OrgRole;
-  area: RoleArea | null;
-  /** The chief's read of the company: its "Company" line first, else its newest line. */
-  narrative: RoleArea["standing_lines"];
-  /** Its newest proposal, of any status, with how far it is decided. */
-  proposed: { proposal: OrgProposalRow; progress: ProposalProgress } | null;
-};
-
-/** The Chief of Staff's latest review as the panel shows it (S29). */
-export function chiefRead(tree: OrgTree | null, health: OrgHealth | null, proposals: OrgProposalRow[]): ChiefRead | null {
-  const chief = findChiefOfStaff(tree);
-  if (!chief) return null;
-  const area = health?.roles.find((r) => r.role_id === chief._id)?.area ?? null;
-  const lines = area?.standing_lines ?? [];
-  const company = lines.filter((l) => /^company$/i.test(l.project.trim()));
-  const narrative = company.length ? [...company, ...lines.filter((l) => !company.includes(l))] : lines;
-  const mine = proposals.filter((p) => p.author.kind === "role" && (p.author.id === chief._id || p.author.handle === chief.handle)).sort((a, b) => b.created_at - a.created_at);
-  const latest = mine[0] ?? null;
-  return { chief, area, narrative, proposed: latest ? { proposal: latest, progress: proposalProgress(latest) } : null };
-}
-
 /** The cadences a check or a review can be set to in place. */
 export const CHECK_CADENCES: ReadonlyArray<{ ms: number; label: string }> = [
   { ms: 6 * 3_600_000, label: "every 6 hours" },

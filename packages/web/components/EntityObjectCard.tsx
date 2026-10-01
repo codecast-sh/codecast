@@ -18,9 +18,7 @@ import { taskVisual } from "./TaskStatusBadge";
 import { stripMarkdown, docContentPreview, docBodyMarkdown } from "../lib/notificationText";
 import { type EntityType } from "../lib/entityLinks";
 import { ACCENT, type Accent } from "../lib/entityCardAccent";
-import { AgentTypeIcon } from "./AgentTypeIcon";
-import { SessionGlyph } from "./identity";
-import { identityRowOf } from "../lib/sessionIdentity";
+import { SessionMark } from "./identity";
 import { cleanUserMessage } from "./sessionMessage";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { getLabelColor } from "../lib/labelColors";
@@ -34,8 +32,8 @@ import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { describeTaskCadence, taskStateLabel } from "./triggerCadence";
 import { AuthorAvatar, SessionSummaryBlock, DiffStat, DottedRow, TaskPeople, type DottedPart } from "./entityDisplay";
+import { taskPriorityBadge } from "../lib/taskPriority";
 import {
-  PRIORITY_CONFIG,
   STATUS_COLOR,
   STATUS_LABEL,
   TYPE_LABEL,
@@ -98,7 +96,7 @@ function CardMetaLine({ type, entity }: { type: EntityType; entity: any }) {
   if (type === "task") {
     const v = taskVisual(entity.status);
     push(<span className={`whitespace-nowrap font-medium ${v.color}`}>{v.label}</span>, "status");
-    const priority = PRIORITY_CONFIG[entity.priority];
+    const priority = taskPriorityBadge(entity.priority);
     if (priority) {
       push(
         <span className={`inline-flex items-center gap-0.5 whitespace-nowrap ${priority.color}`}>
@@ -220,16 +218,7 @@ function SessionCardBody({ session, expanded }: { session: any; expanded: boolea
         <div className="flex items-start gap-1.5 text-sm leading-snug text-sol-text">
           {/* Who the session is (session-characters.md S3), the agent brand
               on its corner; a plain row keeps the brand alone. */}
-          <SessionGlyph
-            row={identityRowOf(session)}
-            className="flex-shrink-0"
-            badge={<AgentTypeIcon agentType={session.agent_type || "claude_code"} className="w-full h-full p-[1px]" />}
-            fallback={
-              <span className="flex-shrink-0" title={session.agent_type || "claude_code"}>
-                <AgentTypeIcon agentType={session.agent_type || "claude_code"} className="w-3.5 h-3.5" />
-              </span>
-            }
-          />
+          <SessionMark session={session} />
           <span className="min-w-0 font-medium [overflow-wrap:anywhere]">{title}</span>
           {isLive && (
             <span className="relative flex h-1.5 w-1.5 flex-shrink-0" title="Live">

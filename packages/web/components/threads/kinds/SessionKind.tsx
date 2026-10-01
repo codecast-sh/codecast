@@ -4,20 +4,20 @@ import { useInboxStore, type InboxSession } from "../../../store/inboxStore";
 import { summaryCount, type ThreadCardModel } from "../../../lib/threadCards";
 import { threadStateView } from "../../../lib/threadState";
 import { sessionLabel } from "../../../lib/notificationTypes";
-import { classifyFeedMessage } from "../../../lib/conversationProcessor";
 import { useConversationMessages, type Message } from "../../../hooks/useConversationMessages";
-import { parseAgentAuthoredMessage } from "../../sessionMessage";
+import type { Id } from "@codecast/convex/convex/_generated/dataModel";
+import { classifyUserMessage, stripSystemTags } from "../../conversation/classify";
+import type { Message as ConvMessage, UserMessageKind } from "../../conversation/types";
+import { AssistantBlock, UserPrompt } from "../../conversation/blocks/turnBlocks";
+import { SessionMessageBlock } from "../../conversation/blocks/systemBlocks";
 import { openConversationBeside } from "../../../hooks/useOpenLinkedSession";
-import { AgentIcon } from "../../ConversationList";
+import { SessionIdentityLine, SessionMark } from "../../identity";
 import { MessageInput } from "../../MessageInput";
 import { composerAgentStatus, useManagedSessionFields, useSessionEscape } from "../../../hooks/useSessionComposerControls";
 import { usePermissionModeSwitch } from "../../../hooks/usePermissionModeSwitch";
 import { animatedHideSession } from "../../../store/undoActions";
-import { MarkdownRenderer } from "../../tools/MarkdownRenderer";
-import { EntityIdPill } from "../../EntityIdPill";
 import { EarlierButton } from "../readerFold";
 import { useReaderFold } from "../../../hooks/useReaderFold";
-import { Clamp } from "../../tasks/TaskCommentStream";
 import { useThreadsPage } from "../threadsContext";
 import "../../chat/chat.css";
 
@@ -42,90 +42,110 @@ export function SessionLabel({ card }: { card: ThreadCardModel }) {
   const session = sessionOf(card);
   return (
     <>
-      <AgentIcon agentType={session.agent_type || "claude_code"} className="w-3 h-3" />
-      {sessionLabel(session) ?? "Session"}
+      <SessionMark session={session as any} size={14} iconClassName="w-3 h-3" />
+      <SessionIdentityLine row={session as any} title={sessionLabel(session) ?? "Session"} />
     </>
   );
 }
 
-// One message as the card shows it. The user side goes through the same
-// classifier the activity feed uses, so wrappers (<task-notification>,
-// command expansions, continuations) never reach the card; a message another
-// session sent keeps its sender. The assistant side is its text, with a tool
-// count where it only called tools.
+// One message as the card shows it, through the conversation view's own
+// classifier and blocks (components/conversation): a person's words are the
+// same blue UserPrompt bubble, another session's send the same
+// SessionMessageBlock, the agent's text the same AssistantBlock with its
+// collapse and fullscreen controls. Rows the conversation draws as chrome
+// (commands, dividers, notifications) stay out of the card; a run of
+// tool-only turns folds into one count.
 type SessionRow =
-  | { key: string; role: "user"; text: string; from?: string; mine: boolean }
-  | { key: string; role: "assistant"; text: string; tools: number };
+  | { key: string; role: "user"; msg: ConvMessage; kind: UserMessageKind }
+  | { key: string; role: "assistant"; msg?: ConvMessage; tools: number; first: boolean };
 
-function toRows(messages: Message[]): SessionRow[] {
+function toRows(messages: Message[], agentType?: string): SessionRow[] {
   const rows: SessionRow[] = [];
-  for (const m of messages) {
+  let prev: ConvMessage | null = null;
+  for (const raw of messages) {
+    const m = raw as ConvMessage;
+    const immediatePrev = prev;
+    prev = m;
     const key = m._id;
     if (m.role === "user") {
-      // A `cast send` from another session and a subagent's report both name
-      // their sender on the wire; either way the row is not the human's words.
-      const envelope = parseAgentAuthoredMessage(m.content);
-      if (envelope) {
-        const text = envelope.body || (m.content ?? "").trim();
-        if (text) rows.push({ key, role: "user", text, from: envelope.from || undefined, mine: false });
-        continue;
+      const kind = classifyUserMessage(m, agentType, immediatePrev);
+      if (kind.kind === "normal" || kind.kind === "direct_user" || kind.kind === "decision_answer" || kind.kind === "session_message") {
+        rows.push({ key, role: "user", msg: m, kind });
       }
-      const d = classifyFeedMessage(m.content);
-      if (d.kind === "hidden") continue;
-      rows.push({ key, role: "user", text: d.text, mine: true });
     } else if (m.role === "assistant") {
-      const text = (m.content ?? "").trim();
+      const hasText = !!stripSystemTags(m.content ?? "").trim();
       const tools = m.tool_calls?.length ?? 0;
-      if (!text && !tools) continue;
-      // A run of tool-only turns folds into one row: "12 tool calls" reads
-      // as work done, twelve bare rows would push the text out of the window.
-      const prev = rows[rows.length - 1];
-      if (!text && prev && prev.role === "assistant" && !prev.text) {
-        prev.tools += tools;
+      if (!hasText && !tools) continue;
+      const last = rows[rows.length - 1];
+      // "12 tool calls" reads as work done; twelve bare rows would push the
+      // text out of the window.
+      if (!hasText && last && last.role === "assistant" && !last.msg) {
+        last.tools += tools;
         continue;
       }
-      rows.push({ key, role: "assistant", text, tools });
+      rows.push({ key, role: "assistant", msg: hasText ? m : undefined, tools, first: !last || last.role !== "assistant" });
     }
   }
   return rows;
 }
 
-function SessionRows({ rows, agentType }: { rows: SessionRow[]; agentType?: string }) {
+function SessionUserRow({ row, conversationId }: { row: Extract<SessionRow, { role: "user" }>; conversationId: string }) {
+  const { msg, kind } = row;
+  if (kind.kind === "session_message") {
+    return <SessionMessageBlock variant={kind.variant === "agent" ? "agent" : "session"} from={kind.from} name={kind.name} body={kind.body} timestamp={msg.timestamp} />;
+  }
+  const decision = kind.kind === "decision_answer" ? kind.decision : undefined;
+  return (
+    <UserPrompt
+      content={kind.kind === "direct_user" ? kind.body : decision ? decision.answer : (msg.content || "")}
+      decision={decision}
+      images={msg.images}
+      timestamp={msg.timestamp}
+      messageId={msg._id}
+      messageUuid={msg.message_uuid}
+      conversationId={conversationId as Id<"conversations">}
+      collapsed={false}
+      userName={kind.kind === "direct_user" ? kind.from : undefined}
+      isPending={!!msg._isOptimistic}
+      isQueued={!!msg._isQueued}
+    />
+  );
+}
+
+function SessionRows({ rows, agentType, conversationId }: { rows: SessionRow[]; agentType?: string; conversationId: string }) {
   // The newest few messages, the rest behind one button above: a session has
   // no read boundary here, so the fold keeps the tail the card is about.
   const fold = useReaderFold(rows, () => 0, 0);
   return (
     <div className="th-card-replies th-session-rows">
       <EarlierButton count={fold.hidden} noun="message" onClick={fold.showAll} />
-      {fold.visible.map((row) => (
-        <div key={row.key} className={`th-session-row th-session-row-${row.role}`}>
-          <div className="th-session-row-head">
-            {row.role === "assistant" ? (
-              <>
-                <AgentIcon agentType={agentType || "claude_code"} className="w-3 h-3" />
-                <span>agent</span>
-              </>
-            ) : row.from ? (
-              <>
-                <span>from</span>
-                <EntityIdPill shortId={row.from} />
-              </>
-            ) : (
-              <span>you</span>
+      {fold.visible.map((row, i) =>
+        row.role === "user" ? (
+          <SessionUserRow key={row.key} row={row} conversationId={conversationId} />
+        ) : (
+          <div key={row.key} className="th-session-assistant">
+            {row.msg ? (
+              <AssistantBlock
+                content={row.msg.content}
+                timestamp={row.msg.timestamp}
+                images={row.msg.images}
+                messageId={row.msg._id}
+                messageUuid={row.msg.message_uuid}
+                conversationId={conversationId as Id<"conversations">}
+                density="condensed"
+                showHeader={row.first || i === 0}
+                agentType={agentType}
+                model={row.msg.model}
+              />
+            ) : null}
+            {row.tools > 0 && (
+              <div className="th-session-row-tools">
+                <Wrench className="w-3 h-3" /> {summaryCount(row.tools, "tool call")}
+              </div>
             )}
           </div>
-          {row.text ? (
-            <Clamp className="th-session-row-body">
-              <MarkdownRenderer content={row.text} className="text-[12.5px] !prose-sm [&>*:first-child]:mt-0 [&>*:last-child]:mb-0" />
-            </Clamp>
-          ) : null}
-          {row.role === "assistant" && row.tools > 0 && (
-            <div className="th-session-row-tools">
-              <Wrench className="w-3 h-3" /> {summaryCount(row.tools, "tool call")}
-            </div>
-          )}
-        </div>
-      ))}
+        ),
+      )}
     </div>
   );
 }
@@ -139,7 +159,7 @@ export function SessionExpanded({ card, seen, focusComposer }: { card: ThreadCar
   const { conversation } = useConversationMessages(sessionId);
   const all: Message[] = conversation?.messages ?? [];
   const rows = useMemo(() => {
-    const r = toRows(all);
+    const r = toRows(all, session.agent_type);
     return r.length > SESSION_WINDOW ? r.slice(-SESSION_WINDOW) : r;
   }, [all]);
   const newestId = all.length ? all[all.length - 1]._id : undefined;
@@ -171,7 +191,7 @@ export function SessionExpanded({ card, seen, focusComposer }: { card: ThreadCar
       {rows.length === 0 ? (
         <div className="th-card-note">{conversation ? "Nothing to show yet." : "Loading…"}</div>
       ) : (
-        <SessionRows rows={rows} agentType={session.agent_type} />
+        <SessionRows rows={rows} agentType={session.agent_type} conversationId={sessionId} />
       )}
       <div className="th-session-composer">
         <MessageInput

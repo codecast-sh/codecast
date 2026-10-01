@@ -56,7 +56,9 @@ export type OrgLayoutNode =
 /** `ghost`: a dashed edge into a stub, or a proposed move's edge to the new
  *  parent (then `change_id` names the move). `faded`: the old edge of a
  *  proposed move, drawn at 30%. */
-export type OrgLayoutEdge = { id: string; source: string; target: string; kind: "tree" | "stack" | "ghost"; faded?: boolean; change_id?: string };
+export type OrgLayoutEdge = { id: string; source: string; target: string; kind: "tree" | "stack" | "ghost"; faded?: boolean; change_id?: string;
+  /** Drawn as a spine down the parent's left edge into the card's side (the health map's columns). */
+  spine?: boolean };
 
 export type OrgLayoutView = {
   /** Node ids (person:<user_id> / role:<role_id>) whose subtree is folded. */
@@ -65,11 +67,16 @@ export type OrgLayoutView = {
    *  that is present (even with an empty list) means "show every loaded
    *  session", not just the first ORG_STACK_VISIBLE. */
   expanded: Readonly<Record<string, OrgSession[]>>;
+  /** People and roles only, no session stacks: the health map draws how work
+   *  moves between seats, and a column of sessions under each would bury it. */
+  structureOnly?: boolean;
 };
 
 export const ORG_SIZES = {
   person: { w: 232, h: 96 },
   role: { w: 232, h: 108 },
+  /** A role on the health map (OrgNodeCards.HealthRoleCard): name, the week's two numbers, its signals. */
+  healthRole: { w: 232, h: 122 },
   session: { w: 220, h: 50 },
   cluster: { w: 220, h: 58 },
   /** Extra card height when a node carries ghost chips. */
@@ -93,6 +100,10 @@ export const ORG_SIZES = {
   levelGap: 56,
   stackGap: 8,
   rootGap: 96,
+  /** The health map's columns (layoutOrgColumns): a report's indent, the gap between cards and between columns. */
+  columnIndent: 28,
+  columnGap: 22,
+  columnRootGap: 56,
 } as const;
 
 /** Sessions drawn under a parent before the cluster card takes over. The tree
@@ -241,10 +252,10 @@ export function buildBranches(tree: OrgTree, view: OrgLayoutView, ghosts?: Pick<
     // books ORG_SIZES.tenureRow for a program, so the two agree by construction.
     const tenure = roleTenureChip(r.tenure, tree);
     const b: Branch = {
-      id, kind: "role", w: ORG_SIZES.role.w, h: ORG_SIZES.role.h + (standingLineOf(r.standing) ? ORG_SIZES.standingRow : 0) + (r.tenure?.kind === "program" ? ORG_SIZES.tenureRow : 0) + seatRowHeight(ghosts?.stubs[id]?.seat) + chipRow(id), role: r,
+      id, kind: "role", w: ORG_SIZES.role.w, h: view.structureOnly ? ORG_SIZES.healthRole.h : ORG_SIZES.role.h + (standingLineOf(r.standing) ? ORG_SIZES.standingRow : 0) + (r.tenure?.kind === "program" ? ORG_SIZES.tenureRow : 0) + seatRowHeight(ghosts?.stubs[id]?.seat) + chipRow(id), role: r,
       ...(tenure ? { tenure } : {}),
       children: collapsed ? [] : kids.map(roleBranch),
-      stack: collapsed ? null : stackFor({ kind: "role", role_id: r._id }, r, view, filed),
+      stack: collapsed || view.structureOnly ? null : stackFor({ kind: "role", role_id: r._id }, r, view, filed),
       collapsed, hidden: 0, overflow: 0, width: 0, height: 0,
     };
     b.overflow = b.stack ? Math.max(0, b.stack.total - b.stack.sessions.length) : collapsed ? r.total : 0;
@@ -259,7 +270,7 @@ export function buildBranches(tree: OrgTree, view: OrgLayoutView, ghosts?: Pick<
     const b: Branch = {
       id, kind: "person", w: ORG_SIZES.person.w, h: ORG_SIZES.person.h + chipRow(id), person: p,
       children: collapsed ? [] : kids.map(roleBranch),
-      stack: collapsed ? null : stackFor({ kind: "user", user_id: p.user_id }, p, view, filed),
+      stack: collapsed || view.structureOnly ? null : stackFor({ kind: "user", user_id: p.user_id }, p, view, filed),
       collapsed, hidden: 0, overflow: 0, width: 0, height: 0,
     };
     b.overflow = b.stack ? Math.max(0, b.stack.total - b.stack.sessions.length) : collapsed ? p.total : 0;
@@ -336,6 +347,7 @@ export type OrgLayout = { nodes: OrgLayoutNode[]; edges: OrgLayoutEdge[]; width:
  * proposed move and the faded old one.
  */
 export function layoutOrgTree(tree: OrgTree, view: OrgLayoutView, ghosts?: OrgGhostPlan): OrgLayout {
+  if (view.structureOnly && !ghosts) return layoutOrgColumns(buildBranches(tree, view));
   const roots = buildBranches(ghosts?.merged ?? tree, view, ghosts);
   for (const r of roots) measure(r, ghosts?.stubs);
   const nodes: OrgLayoutNode[] = [];
@@ -349,6 +361,39 @@ export function layoutOrgTree(tree: OrgTree, view: OrgLayoutView, ghosts?: OrgGh
   }
   if (ghosts) decorate(nodes, edges, ghosts);
   return { nodes, edges, width: Math.max(0, x - ORG_SIZES.rootGap), height };
+}
+
+/**
+ * The health map's layout: a column per person, each seat's reports stacked
+ * under it and indented, joined by a spine down the parent's left edge. An
+ * org is wide and shallow (a few people, many leads), so the tree's own
+ * layout fits it at a fraction of its size; columns keep every card legible.
+ */
+function layoutOrgColumns(roots: Branch[]): OrgLayout {
+  const nodes: OrgLayoutNode[] = [];
+  const edges: OrgLayoutEdge[] = [];
+  let x = 0;
+  let height = 0;
+  const stack = (b: Branch, left: number, top: number, depth: number): { bottom: number; right: number } => {
+    const nx = left + depth * ORG_SIZES.columnIndent;
+    if (b.kind === "person") nodes.push({ id: b.id, kind: "person", x: nx, y: top, w: b.w, h: b.h, person: b.person!, collapsed: b.collapsed, hidden: b.hidden, overflow: b.overflow });
+    else nodes.push({ id: b.id, kind: "role", x: nx, y: top, w: b.w, h: b.h, role: b.role!, collapsed: b.collapsed, hidden: b.hidden, overflow: b.overflow, ...(b.tenure ? { tenure: b.tenure } : {}) });
+    let y = top + b.h + ORG_SIZES.columnGap;
+    let right = nx + b.w;
+    for (const c of b.children) {
+      edges.push({ id: `e:${b.id}->${c.id}`, source: b.id, target: c.id, kind: "tree", spine: true });
+      const r = stack(c, left, y, depth + 1);
+      y = r.bottom;
+      right = Math.max(right, r.right);
+    }
+    return { bottom: y, right };
+  };
+  for (const r of roots) {
+    const { bottom, right } = stack(r, x, 0, 0);
+    height = Math.max(height, bottom - ORG_SIZES.columnGap);
+    x = right + ORG_SIZES.columnRootGap;
+  }
+  return { nodes, edges, width: Math.max(0, x - ORG_SIZES.columnRootGap), height };
 }
 
 function decorate(nodes: OrgLayoutNode[], edges: OrgLayoutEdge[], ghosts: OrgGhostPlan): void {

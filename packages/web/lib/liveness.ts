@@ -23,6 +23,7 @@ export function liveFactsOf(s: {
   open_tasks?: unknown[] | null;
   open_tasks_at?: number | null;
   loop_state?: LiveFactsRow["loop_state"];
+  started_at?: number | null;
 }): LiveFactsRow {
   return {
     status: s.status ?? "active",
@@ -43,6 +44,7 @@ export function liveFactsOf(s: {
     open_tasks: s.open_tasks ?? null,
     open_tasks_at: s.open_tasks_at ?? null,
     loop_state: s.loop_state ?? null,
+    started_at: s.started_at ?? null,
   };
 }
 

@@ -3,7 +3,6 @@ import { useQuery } from "convex/react";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useRepoObject } from "../hooks/useRepoObject";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { AlertTriangle, ArrowUp, Minus, ArrowDown } from "lucide-react";
 import { entityRoute, isConvexId, entityTypeFromId, entityReferenceLabel, entityShortLabel, parseRepoObjectId, type EntityType } from "./entityLinks";
 import { repoObjectRefOf, repoObjectTitle } from "./repoObjects";
 import { findEntityInStore, resolveAssigneeInfo } from "./liveEntities";
@@ -12,7 +11,7 @@ import { useSyncOrgProposal } from "../hooks/useSyncOrgProposals";
 const api = _api as any;
 
 
-// The shared vocabulary of inline object references: status/priority/type maps,
+// The shared vocabulary of inline object references: status and type maps,
 // the small display atoms (avatars, summaries, relative time), and the
 // resolution hook that turns a raw id into a live entity. EntityIdPill (the
 // inline pill + hover card) and EntityObjectCard (the shared-object preview
@@ -38,14 +37,6 @@ export const STATUS_LABEL: Record<string, string> = {
   active: "Active",
   paused: "Paused",
   abandoned: "Abandoned",
-};
-
-
-export const PRIORITY_CONFIG: Record<string, { icon: any; color: string; label: string }> = {
-  urgent: { icon: AlertTriangle, color: "text-red-400", label: "Urgent" },
-  high: { icon: ArrowUp, color: "text-orange-400", label: "High" },
-  medium: { icon: Minus, color: "text-sol-yellow", label: "Medium" },
-  low: { icon: ArrowDown, color: "text-sol-blue", label: "Low" },
 };
 
 

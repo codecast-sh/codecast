@@ -54,7 +54,7 @@ export function SlackDmSwitch({ teamId, compact }: { teamId: string; compact?: b
           <div className="ch-slack-dms-title">Your direct messages</div>
           <div className="ch-slack-fine">
             {needsConnect && "Connect your Slack account to bring your DMs here."}
-            {needsScopes && "Slack has to grant access to your direct messages once."}
+            {needsScopes && "Slack has to grant access to your direct messages once. "}
             {!needsConnect && !needsScopes && !enabled && "Each of your Slack DMs becomes a DM here: teammates as themselves, everyone else under their Slack name. Your replies here go to Slack as you."}
             {enabled && sync?.status === "scanning" && (
               <span className="inline-flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Finding your conversations · {sync.conversations ?? 0} so far</span>

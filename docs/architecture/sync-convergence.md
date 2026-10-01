@@ -65,8 +65,8 @@ client:
 
 **Replication channels deliver the working set and keep it current.** The live window
 query (`listInboxSessions`) delivers row bodies; the sync log delivers every semantic
-transition per scope with ordered positions — hides, restores, pins, renames and hard
-deletes included — and is the only healer for hide state; the completeness floor
+transition per scope with ordered positions (hides, restores, pins, renames and hard
+deletes included) and is the only healer for hide state; the completeness floor
 (`listInboxSessionsPaginated`) is cut once per cold or resynced cache and stamps
 `backfilledAt`; `getInboxSessionsByIds` hydrates named ids. There is no crawl on a
 timer and no subtractive reconcile: the dismissed and stashed reconcile crawls, whose
@@ -74,7 +74,7 @@ clear pass read a stale hidden set as a restore, were removed (ct-47927, 2026-09
 The one bounded reconcile left runs only when the log had a hole (retention passed the
 cursor, or no cursor existed): the recut floor cannot carry what left the inbox scan
 while the client was away, so the cached rows it did not return are re-read by id
-through the same authorized byIds path the log applier uses — returned rows land with
+through the same authorized byIds path the log applier uses: returned rows land with
 their stamps, omitted ids are gone or foreign and prune.
 
 **The liveness overlay is the fact writer.** `sessionsLiveness` (and its team twin)
@@ -225,7 +225,7 @@ are top level:
 | pinned | `inbox_pinned_at` set | `inbox_pinned_at` desc | 100 |
 | dismissed | `inbox_dismissed_at` within 30 days, not killed | `inbox_dismissed_at` desc | 200 |
 | stashed | `inbox_stashed_at` within 30 days, not killed | `inbox_stashed_at` desc | 200 |
-| owned | `owned_by_me` — the owner row alone, no status or recency gate | server side only | 200 |
+| owned | `owned_by_me`: the owner row alone, no status or recency gate | server side only | 200 |
 
 The caps and sort keys are shared constants; the server scan and the client selection
 must agree, pinned by a test that runs both over one fixture set. A filed row is never
@@ -247,7 +247,7 @@ from "mine" (`isAssignedAwayFromViewer`, `isForeignRow`), so it cannot sit in
 one of them and not the other. Two exceptions, both deliberate: a row the caller
 named by id is hydrated because they asked for it, and a teammate's row on the
 team board is there by team visibility, which its owner says nothing about. The
-mirror image is the owned window above — an owner seat needs no recency and no
+mirror image is the owned window above: an owner seat needs no recency and no
 status, because a handoff nobody has opened for six weeks is exactly the one
 that must not age out. The alert follows the row: notification delivery drops
 the runner by the same rule (`isAssignedAwayFromOwnerSet`), and the handoff
@@ -567,6 +567,13 @@ metric fires when `loadCache` disables the cache so that noise is measurable.
   drills (wrong client version, `INBOX_DIGEST_DISABLED`). The sync channels alone leave
   a bounded residue (the settled pin lock case above); the anti-entropy loop closes it
   within one heal, and the test prints which seeds needed it.
+- Multiplayer simulation: the same claims for several people, teams and windows at
+  once, against the real Convex handlers, with per-window store instances, the real
+  replication and gesture bridge, and actors for daemons, agents and team admins. It
+  checks the projection, followers, team slot, workspace access, cursors, locks,
+  outbox, triggers, sends, chat and roles at every settle, and carries the red list of
+  multi-party scenarios we fail today. How to run, read and replay it:
+  [sync-sim.md](sync-sim.md).
 - Golden fixtures and property tests: `packages/shared/contracts/inboxProjection.golden.test.ts`
   over `__fixtures__/inboxProjection/*.json` (regenerate with `INBOX_GOLDEN_REGEN=1`,
   then bump the version and pin the printed hash), and

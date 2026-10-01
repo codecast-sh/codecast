@@ -99,11 +99,22 @@ export function ccKeychainReadArgs(item: CcKeychainItem): string[] {
   return ["find-generic-password", "-s", item.service, "-w"];
 }
 
-// The file form (Linux / older CC). $HOME over os.homedir(): bun caches the
-// latter at startup, breaking $HOME-sandboxed tests; real environments always
-// have HOME set.
-function credentialFile(): string {
+/** Where Claude Code keeps its login as a file: Linux, older CC, and the file
+ *  store ccAccounts uses off macOS and in sandboxed tests. $HOME over
+ *  os.homedir(): bun caches the latter at startup, breaking $HOME-sandboxed
+ *  tests; real environments always have HOME set. */
+export function ccCredentialFile(): string {
   return path.join(process.env.HOME || os.homedir(), ".claude", ".credentials.json");
+}
+
+/** The file form of the login, or null when there is none. */
+export function readCredentialFile(): string | null {
+  const f = ccCredentialFile();
+  return fs.existsSync(f) ? fs.readFileSync(f, "utf-8") : null;
+}
+
+export function readCredentialFileAsync(): Promise<string | null> {
+  return fs.promises.readFile(ccCredentialFile(), "utf-8").catch(() => null);
 }
 
 /**
@@ -116,9 +127,7 @@ export function readLocalCredential(): string | null {
       return execFileSync("security", ccKeychainReadArgs(item), { encoding: "utf-8" }).trim();
     } catch {}
   }
-  const f = credentialFile();
-  if (!fs.existsSync(f)) return null;
-  return fs.readFileSync(f, "utf-8");
+  return readCredentialFile();
 }
 
 /**
@@ -133,5 +142,5 @@ export async function readLocalCredentialAsync(): Promise<string | null> {
       return await keychainReadAsync(ccKeychainReadArgs(item));
     } catch {}
   }
-  return fs.promises.readFile(credentialFile(), "utf-8").catch(() => null);
+  return readCredentialFileAsync();
 }
