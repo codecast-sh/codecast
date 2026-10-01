@@ -37,6 +37,7 @@ import {
 import { onFreshApiErrorPark } from "./accountSwitch";
 import { safetyBlockPatch } from "./conversationSafety";
 import { stripContextTags } from "./userMessagesFilter";
+import { dropMirroredMessage } from "./searchMirror";
 import { countMatches, parseSearchTerms } from "@codecast/shared/search";
 import { batchHasLoopEvent, deriveLoopState } from "./loopState";
 import { nextAgentStatusOnAddMessages, classifyApiErrorBanner, apiErrorBatchAction, nextPendingApiError, newestSignificantMessage, isBannerTurn, isRealTurn, NEEDS_INPUT_AUQ_CHECK_DELAY_MS } from "./inboxFilters";
@@ -50,7 +51,7 @@ import {
 import { extractFileChanges, extractCommitHashFromContent, hasFileChangeToolCall, type FileChange, type FileChangeBody, type FileChangeRef } from "./fileChanges/extractor";
 import { activityLine } from "@codecast/shared/render";
 import type { SessionActivity } from "@codecast/shared/contracts";
-import { extractSessionImages, type SessionImageEntry } from "./sessionImages";
+import { attachmentViews, extractSessionImages, ATTACHMENT_FILE_RE, type SessionImageEntry } from "./sessionImages";
 
 type DocExtractionMessage = {
   message_uuid?: string;
@@ -893,10 +894,23 @@ async function materializeConversationImages(
   messageId: Id<"messages">,
   timestamp: number,
   content: string | undefined,
-  images: Array<{ media_type: string; data?: string; storage_id?: Id<"_storage"> }> | undefined,
+  images: Array<{ media_type: string; data?: string; storage_id?: Id<"_storage">; tool_use_id?: string }> | undefined,
 ): Promise<void> {
   if (!images?.some((i) => i.storage_id) && !content?.includes("![")) return;
-  for (const entry of extractSessionImages([{ content, timestamp, images }], isTrustedMarkdownImageSrc)) {
+  // A tool result's call sits on an earlier assistant row; read the few rows
+  // before it so a view of an attachment keys as that attachment.
+  const views = images?.some((i) => i.storage_id && i.tool_use_id)
+    ? attachmentViews(
+        await ctx.db
+          .query("messages")
+          .withIndex("by_conversation_timestamp", (q) =>
+            q.eq("conversation_id", conversationId).lte("timestamp", timestamp),
+          )
+          .order("desc")
+          .take(20),
+      )
+    : new Map<string, string>();
+  for (const entry of extractSessionImages([{ content, timestamp, images }], isTrustedMarkdownImageSrc, views)) {
     // Inline base64 images key on their own payload — the client window
     // extraction surfaces those; an index table is no place for the bytes.
     if (!entry.storage_id && (!entry.src || entry.src.startsWith("data:"))) continue;
@@ -1049,8 +1063,7 @@ export function injectedImageRefs(
 ): Array<{ media_type: string; storage_id: string }> {
   const refs: Array<{ media_type: string; storage_id: string }> = [];
   const seen = new Set<string>();
-  // Every extension downloadImage can write (named by the object's content type).
-  const re = /\/codecast\/images\/([^/\s.\]]+)\.(png|webp|jpe?g|gif)/g;
+  const re = new RegExp(ATTACHMENT_FILE_RE.source, "g");
   let m: RegExpExecArray | null;
   while ((m = re.exec(content)) !== null) {
     if (seen.has(m[1])) continue;
@@ -1715,6 +1728,7 @@ export async function supersedeApiErrorBanners(
   for (const r of recent) {
     if (r.timestamp < beforeTs && isBannerTurn(r) && classifyApiErrorBanner(r.content) !== "safety") {
       await ctx.db.delete(r._id);
+      await dropMirroredMessage(ctx, r._id);
       deleted++;
     }
   }
@@ -2402,6 +2416,7 @@ export const deleteMessagesByUuid = mutation({
         .first();
       if (existing) {
         await ctx.db.delete(existing._id);
+        await dropMirroredMessage(ctx, existing._id);
         deleted++;
       }
     }

@@ -1,0 +1,101 @@
+{
+ "asOf": "2026-01-15T14:14:15.000Z",
+ "notes": "synthetic session: per-sender webhook rate limiting, cut at line 10",
+ "snapshot": {
+  "rows": [
+   {
+    "role": "user",
+    "content": "The /hooks/billing endpoint is getting hammered by retries from the payment provider and our worker pool falls over. Add rate limiting per sender, something like 20 requests a minute, and return 429 with Retry-After when it trips.",
+    "timestamp": 1768485600000,
+    "line": 1
+   },
+   {
+    "role": "assistant",
+    "content": "I will look at how the billing webhook is routed and where a limiter can sit before the handler runs.",
+    "timestamp": 1768485695000,
+    "line": 2,
+    "tool_calls": [
+     {
+      "name": "Grep"
+     },
+     {
+      "name": "Read"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "",
+    "timestamp": 1768485790000,
+    "line": 3
+   },
+   {
+    "role": "assistant",
+    "content": "The route is registered in server/hooks.ts and the handler parses the body before any check. I will add a token bucket keyed by the sender id from the signature header, in a new server/rateLimit.ts, and call it first in the route.",
+    "timestamp": 1768485885000,
+    "line": 4,
+    "tool_calls": [
+     {
+      "name": "Write"
+     },
+     {
+      "name": "Edit"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "",
+    "timestamp": 1768485980000,
+    "line": 5
+   },
+   {
+    "role": "assistant",
+    "content": "Added server/rateLimit.ts with a token bucket (20 tokens, refill one every 3 seconds) and wired it into the billing route. Over the limit it answers 429 with a Retry-After header in whole seconds.",
+    "timestamp": 1768486075000,
+    "line": 6
+   },
+   {
+    "role": "user",
+    "content": "Keep the buckets in Redis, not in memory. We run four instances behind the load balancer so an in-memory limit is four times too loose.",
+    "timestamp": 1768486170000,
+    "line": 7
+   },
+   {
+    "role": "assistant",
+    "content": "Moving the buckets to Redis with a Lua script so the take-and-refill is atomic across instances.",
+    "timestamp": 1768486265000,
+    "line": 8,
+    "tool_calls": [
+     {
+      "name": "Edit"
+     },
+     {
+      "name": "Bash"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "",
+    "timestamp": 1768486360000,
+    "line": 9
+   },
+   {
+    "role": "assistant",
+    "content": "The limiter now uses Redis with an atomic script. Typecheck passes. Next I will add tests.",
+    "timestamp": 1768486455000,
+    "line": 10
+   }
+  ],
+  "conversation": {
+   "project_path": "/home/dev/billing-service",
+   "status": "active",
+   "started_at": 1768485600000,
+   "updated_at": 1768486455000
+  },
+  "commits": [],
+  "prs": [],
+  "source": "idle"
+ }
+}

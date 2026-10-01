@@ -561,6 +561,9 @@ export function FaceRow({
       }
       data-holding={faces.sendingRoomKey ? "1" : undefined}
       data-stacked={stacked ? "1" : undefined}
+      // The float with the pointer away: the stack beside a call sinks
+      // further back, and the pointer coming in wakes it.
+      data-rest={density === "float" && !holdCard ? "1" : undefined}
       role="group"
       aria-label="Team"
     >

@@ -30,7 +30,7 @@ import { memberDisplayName } from "../liveEntities";
 import { RING_STUB, RING_STUB_MS, isRingStub, ringStubId, type RingStub } from "./ringStubs";
 import { startScribe, stopScribe } from "./transcription";
 import { readJoinPrefs, rememberCamera, rememberDevice, rememberMic } from "./joinPrefs";
-import { huddleRoomOptions, SCREEN_SHARE_CAPTURE, SCREEN_SHARE_ENCODING } from "./livekitMedia";
+import { huddleRoomOptions, SCREEN_SHARE_CAPTURE, SCREEN_SHARE_PUBLISH } from "./livekitMedia";
 import { bindPrewarmAudio, bindPrewarmConvex, takePrewarmedRoom, warmRoomPublishesMic } from "./roomPrewarm";
 import { CALL_HEARTBEAT_MS, humanizeConvexError, localTranscribeLanguages } from "@codecast/shared/contracts";
 import {
@@ -1014,15 +1014,11 @@ export async function setScreenShare(on: boolean, sourceId?: string): Promise<vo
       }
       // audio:false — a huddle shares the screen, not system audio (which
       // Chrome only offers for tabs anyway and doubles the mic path).
-      // Capture/encoding for a share of UI: see livekitMedia.ts. Encoding is
-      // passed here as well as on the Room so a huddle that joined before
-      // those defaults existed still publishes a sharp share.
+      // Capture/encoding for a share of UI: see livekitMedia.ts.
       const pub = await room.localParticipant.setScreenShareEnabled(
         on,
         on ? SCREEN_SHARE_CAPTURE : { audio: false },
-        on
-          ? { screenShareEncoding: SCREEN_SHARE_ENCODING, degradationPreference: "maintain-resolution" }
-          : undefined,
+        on ? SCREEN_SHARE_PUBLISH : undefined,
       );
       const live = on ? !!pub?.track : false;
       setCall({ sharing: live });

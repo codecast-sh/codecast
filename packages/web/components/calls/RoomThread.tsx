@@ -16,8 +16,10 @@ import { toast } from "sonner";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import {
+  callAnchorKey,
   isRecRoomKey,
   sessionRoomConversationId,
+  type CallAnchor,
 } from "@codecast/shared/contracts";
 import { useInboxStore } from "../../store/inboxStore";
 import { navigateMainWindow } from "../../lib/desktop";
@@ -116,6 +118,7 @@ export function RoomThread({
   panel,
   selection,
   sinceAt,
+  focus,
   className,
 }: {
   roomKey: string;
@@ -133,6 +136,8 @@ export function RoomThread({
   selection?: RoomThreadSelection;
   /** When the viewer joined this huddle; the dividers' anchor before any transcript. */
   sinceAt?: number;
+  /** A link landed on a place in this call: it opens, scrolls into view and flashes. */
+  focus?: CallAnchor | null;
   className?: string;
 }) {
   const recording = isRecRoomKey(roomKey);
@@ -412,6 +417,41 @@ export function RoomThread({
     setOverrides((o) => ({ ...o, [p.index]: opening }));
   };
 
+  // A link into the call: open what holds the place (its passages, or the
+  // recap through RecapCard's focus), then bring it into view once, and
+  // stop following the tail so a live call does not scroll away from it.
+  const focusKey = focus ? callAnchorKey(focus) : null;
+  const landedRef = useRef<string | null>(null);
+  const focusTurn =
+    focus?.kind === "turns"
+      ? passages.flatMap((p) => p.turns).find((t) => t.segments.some((sg) => sg.seq >= focus.from_seq && sg.seq <= focus.to_seq))
+      : undefined;
+  const hasSummary = !!call?.summary;
+  useWatchEffect(() => {
+    if (!focus || !focusKey || landedRef.current === focusKey) return;
+    if (focus.kind === "turns" ? !focusTurn : !hasSummary) return;
+    landedRef.current = focusKey;
+    stuckRef.current = false;
+    if (focus.kind === "turns") {
+      const held = passages.filter((p) =>
+        p.turns.some((t) => t.segments.some((sg) => sg.seq >= focus.from_seq && sg.seq <= focus.to_seq)),
+      );
+      if (density === "hidden") setDensityState("full");
+      setOverrides((o) => ({ ...o, ...Object.fromEntries(held.map((p) => [p.index, true])) }));
+    }
+    const selector =
+      focus.kind === "turns" ? `[data-turn="${focusTurn!.index}"]` : `[data-call-anchor="${focus.kind === "summary" ? "summary" : `action-${focus.index}`}"]`;
+    // After the fold has mounted what it holds. A timer, not a frame: frames
+    // stall in a background tab and the link may open in one.
+    setTimeout(() => {
+      const el = scrollRef.current?.querySelector<HTMLElement>(selector);
+      if (!el) return;
+      el.scrollIntoView({ block: "center" });
+      el.classList.add("cc-msg-flash");
+      setTimeout(() => el.classList.remove("cc-msg-flash"), 1300);
+    }, 60);
+  }, [focusKey, focusTurn, hasSummary]);
+
   // Event rows are the room's log, not its content: a room that has only
   // ever seen agents come and go is still empty.
   const empty = passages.length === 0 && chatRows.every((r) => r.event);
@@ -575,7 +615,13 @@ export function RoomThread({
         className="rt-list min-h-0 flex-1 select-text overflow-y-auto"
       >
         {call?.summary ? (
-          <RecapCard summary={call.summary} items={call.action_items ?? []} live={!ended} />
+          <RecapCard
+            summary={call.summary}
+            items={call.action_items ?? []}
+            live={!ended}
+            callId={String(call._id)}
+            focus={focus && focus.kind !== "turns" ? focusKey : null}
+          />
         ) : ended && !recording && passages.length > 0 ? (
           // A call with no spoken words has nothing a summary would cover:
           // the empty one says "Nothing was said." below, and one with only
@@ -687,6 +733,7 @@ export function RoomThread({
               onTurnClick={selection?.onTurnClick}
               compact
               activeIndex={activeIndex}
+              callId={call ? String(call._id) : undefined}
             />
           </div>
         ) : (
@@ -728,6 +775,7 @@ export function RoomThread({
                   dayOf={anchorAt}
                   onToggle={() => toggle(item)}
                   selection={selection}
+                  callId={call ? String(call._id) : undefined}
                 />
               );
             } else if (item.kind === "event") {

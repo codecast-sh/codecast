@@ -9,7 +9,7 @@ import { compressImage } from "../../lib/compressImage";
 import { formatDateFull, formatRelative } from "../../lib/utils";
 import { useOpenLinkedSession } from "../../hooks/useOpenLinkedSession";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
-import { AgentIcon } from "../ConversationList";
+import { SessionTag } from "../identity/SessionTag";
 import { ChatNewDivider } from "../chat/ChatMessage";
 import { Badge } from "../ui/badge";
 import { APP_LOOK, ISSUE_PROVIDER_NAME } from "../../lib/integrations";
@@ -84,7 +84,7 @@ export type TaskCommentRow = {
   text: string;
   comment_type?: string;
   created_at: number;
-  session_info?: { agent_type?: string; title?: string } & Record<string, any>;
+  session_info?: { _id: string; agent_type?: string; title?: string } & Record<string, any>;
   external?: TaskCommentExternal;
 };
 
@@ -152,17 +152,13 @@ export function TaskCommentItem({
     <div className="py-2.5 relative">
       <div className="flex items-center gap-2 mb-1.5">
         {comment.session_info ? (
-          <button
-            type="button"
+          <SessionTag
+            session={comment.session_info}
+            title={comment.session_info.title || comment.author}
+            size="md"
             onClick={() => openLinkedSession(comment.session_info)}
-            className="inline-flex items-center gap-1.5 flex-shrink-0 min-w-0 hover:opacity-80 cursor-pointer"
-            title={comment.author}
-          >
-            <AgentIcon agentType={comment.session_info.agent_type || "claude_code"} className="w-5 h-5" />
-            <span className="text-xs text-sol-text font-medium truncate max-w-[260px]">
-              {comment.session_info.title || comment.author}
-            </span>
-          </button>
+            className="flex-shrink min-w-0 max-w-[360px] font-medium"
+          />
         ) : (
           <UserBadge name={comment.author} image={comment.author_image} />
         )}
@@ -392,19 +388,19 @@ export function TaskCommentStream({
   // OBJECT here and crashed the whole Threads page. Hydration heals such rows
   // now; this guard keeps one bad row from ever taking the page down again.
   const sorted = (Array.isArray(comments) ? [...comments] : []).sort((a, b) => a.created_at - b.created_at);
-  const { visible, hidden, firstNew, showAll } = useReaderFold(sorted, (c) => c.created_at, newSince);
+  const fold = useReaderFold(sorted, (c) => c.created_at, newSince);
   return (
     <div className="th-task-stream">
       {sorted.length === 0 ? (
         <div className="th-card-note">No comments yet.</div>
       ) : (
         <div className="space-y-0">
-          <EarlierButton count={hidden} noun="comment" onClick={showAll} />
-          {visible.map((c, i) => (
+          <EarlierButton fold={fold} noun="comment" />
+          {fold.visible.map((c, i) => (
             <div key={c._id}>
               {/* The divider marks where the news starts, once there is
                   something read above it to divide from. */}
-              {firstNew > 0 && hidden + i === firstNew && <ChatNewDivider />}
+              {fold.firstNew > 0 && fold.hidden + i === fold.firstNew && <ChatNewDivider />}
               <TaskCommentItem comment={c} openLinkedSession={openLinkedSession} clamp={clampComments} />
             </div>
           ))}
