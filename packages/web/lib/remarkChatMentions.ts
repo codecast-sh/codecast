@@ -53,7 +53,36 @@ export type ChatMentionOptions = {
    *  Slack mark, named from the snapshot. Nothing to open; they are paged in
    *  the line's Slack copy. */
   slack?: Map<string, ChatSlackMention>;
+  /** The team's channels by name → id (channelNameMap): `#name` becomes a link
+   *  into the room. A name that is no channel stays text. */
+  channels?: Map<string, string>;
 };
+
+// `#name` in prose, after the same boundary a mention needs. Headings never
+// reach here: markdown made them heading nodes before this walk.
+const CHANNEL_RE = /#([a-z0-9][a-z0-9_-]*)/gi;
+
+const channelMaps = new WeakMap<object, Map<string, Map<string, string>>>();
+
+/** name → id for one team's rooms (never DMs), memoized on the collection ref
+ *  so every message in a list shares one map until a channel row changes. */
+export function channelNameMap(
+  channels: Record<string, { _id: string; name: string; kind?: string; team_id?: string; archived_at?: number | null }> | undefined,
+  teamId: string | undefined,
+): Map<string, string> | undefined {
+  if (!channels || !teamId) return undefined;
+  let byTeam = channelMaps.get(channels);
+  if (!byTeam) channelMaps.set(channels, (byTeam = new Map()));
+  let map = byTeam.get(teamId);
+  if (!map) {
+    map = new Map();
+    for (const c of Object.values(channels)) {
+      if (c.team_id === teamId && c.kind !== "dm" && !c.archived_at && c.name) map.set(c.name.toLowerCase(), String(c._id));
+    }
+    byTeam.set(teamId, map);
+  }
+  return map;
+}
 
 // The Slack mark as hast, for the chip above. mdast hands `data.hChildren`
 // straight through to rehype, so the plugin can draw the glyph without React.
@@ -72,7 +101,7 @@ export function orgRoleHref(shortId: string): string {
 }
 
 export function remarkChatMentions(options: ChatMentionOptions = {}) {
-  const { known, self, names, roles, sessions, slack } = options;
+  const { known, self, names, roles, sessions, slack, channels } = options;
   const has = (set: Set<string> | undefined, handle: string) =>
     !!set && (set.has(handle) || set.has(handle.toLowerCase()));
 
@@ -164,6 +193,21 @@ export function remarkChatMentions(options: ChatMentionOptions = {}) {
                 },
               },
               children: [{ type: "text", value: display ? `@${display}` : match }],
+            };
+          },
+        ],
+        [
+          CHANNEL_RE,
+          (match: string, name: string, meta: { index: number; input: string }) => {
+            const before = meta && meta.index > 0 ? meta.input[meta.index - 1] : "";
+            if (before && !BOUNDARY_RE.test(before)) return false;
+            const id = channels?.get(name.toLowerCase());
+            if (!id) return false;
+            return {
+              type: "link",
+              url: `/chat/${encodeURIComponent(id)}`,
+              data: { hProperties: { className: "ch-channel-ref", "data-channel": name.toLowerCase(), title: `Open #${name}` } },
+              children: [{ type: "text", value: match }],
             };
           },
         ],
