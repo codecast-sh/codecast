@@ -36,7 +36,7 @@ Web carries a second layer of defence. A query that merely ENRICHES a surface go
 
 ## Prompt dry runs
 
-A prompt dry run (a headless `claude -p` that grades a prompt: the org analyzer, a role's standing text, a wake frame) goes through `packages/cli/scripts/prompt-dry-run.ts` and nothing else. The daemon syncs every transcript under `~/.claude/projects` as a session, hooks or no hooks, so a bare `claude -p` with hooks off, detached and its transcript deleted afterwards still sits in the founder's inbox for as long as it runs; four sessions leaked runs that way on four days before the cause was found (2026-09-19). The harness gives each run a private `CLAUDE_CONFIG_DIR` under its run directory (the transcript never enters the watched tree), reads the login from the keychain and hands it to the child through its environment only, points `CODECAST_DIR` at an empty directory so a real `cast` the agent finds cannot post, and puts a guard `cast` on PATH (`scripts/prompt-dry-run-bin/cast`: reads pass through, writes are refused and logged, `--serve <dir>` answers `cast org inputs` and `cast org health` from saved files). `bun packages/cli/scripts/prompt-dry-run.ts --run <dir> --prompt <file> [--serve <dir>] [--guard <dir>]`; the run leaves `out.json`, `reply.txt`, `exit.txt`, `took.txt` and `calls.log` in its directory. Never edit a harness script while a run is alive: bash reads a script as it executes it.
+A prompt dry run (a headless `claude -p` that grades a prompt: the org analyzer, a role's standing text, a wake frame) goes through `packages/cli/scripts/prompt-dry-run.ts` and nothing else. The daemon syncs every transcript under `~/.claude/projects` as a session, hooks or no hooks, so a bare `claude -p` with hooks off, detached and its transcript deleted afterwards still sits in the founder's inbox for as long as it runs; four sessions leaked runs that way on four days before the cause was found (2026-09-19). The harness gives each run a private `CLAUDE_CONFIG_DIR` under its run directory (the transcript never enters the watched tree), reads the login from the keychain and hands it to the child through its environment only, points `CODECAST_DIR` at an empty directory so a real `cast` the agent finds cannot post, and puts a guard `cast` on PATH (`scripts/prompt-dry-run-bin/cast`: reads pass through, writes are refused and logged, `--serve <dir>` answers reads from a captured world: the legacy org files, and any argv saved under `reads/` by its key, refusing a read that the dir's `frozen` list names and that was not captured; `calls.log` marks each call SERVED, UNSERVED, LIVE, HELP or REFUSED). `bun packages/cli/scripts/prompt-dry-run.ts --run <dir> --prompt <file> --model <id> [--serve <dir>] [--guard <dir>]`. `--model` is required, because an unpinned run takes the account default and two runs on different accounts cannot be compared; without it the harness exits 2. `--call` grades one model call instead of an agent: the prompt file is the whole user message, `--system <file>` is the system prompt, and there are no tools and one turn, so an eval of a prod prompt carries no Claude Code context the prod call lacks. `--max-output-tokens N` caps the reply the way prod's `max_tokens` does. The run leaves `args.json` (the knobs it used), `out.json`, `reply.txt`, `exit.txt`, `took.txt` and `calls.log` in its directory. To grade a prod prompt against real moments, use `./evals` (below and `docs/architecture/evals.md`), which drives this harness. Never edit a harness script while a run is alive: bash reads a script as it executes it.
 
 ## CLI releases
 
@@ -178,3 +178,92 @@ __navLog()                                  // audit trail of every view change 
 ```
 
 Raw `setState` writes to `currentSessionId`/`pendingNavigateId` are reverted by the view-motion guard (`store/viewNav.ts`): every change of the visible conversation must declare a source, and machine-initiated sources can't move the view mid-session. If a "random session jump" is ever reported, read `__navLog()` first — it names the writer.
+
+## Conversations, freezes, simulations and evals (`evals`)
+
+`./evals` is how you read what people and the assistant said to each other,
+freeze the moment the assistant had to act, replay it against the prompts in
+this tree, run a scenario forward with simulated people, and read the score.
+Reads never change anything. Every view ends with the exact next commands;
+every read takes `--json`; colour is off when piped. Ids print as eight
+characters and any prefix is a handle. Never read the database directly for
+any of this: the CLI is the door, and what it cannot show is a gap to fix in it.
+
+The loop: `evals convo inbox` → pick a moment → `evals freeze create <messageId>`
+→ `evals freeze judge <id> "the reply must …"` → `evals freeze replay <id> --reps 3`
+(the baseline) → edit the prompt → replay again → `evals freeze results <id>` /
+`evals freeze diff <id> --run A --run B`. A judged freeze is a regression guard.
+
+```bash
+# Conversations: a <ref> is an id or prefix, a phone, an email, a name, or a message id
+evals convo inbox [--since 48h] [--channel imessage] [--unanswered]   # latest inbound; ! = nobody replied
+evals convo show <ref> [--around 12 | --from 5 --to 20 | --last 10] [--channel a,b] [--system] [--full]
+evals convo show <messageId>          # opens the conversation focused on that message
+evals convo msg <id>                  # one message in full, with the run behind it
+evals convo find "<text>" [--contact <ref>] [--since 7d]
+evals convo who <ref>                 # who it is, their addresses, who else is in it
+evals convo show <ref> --html --open  # the page
+
+# Freezes: a durable frozen moment, the world cut at that instant
+evals freeze create <messageId> [--name …] [--judge "…"] [--notes …] [--tag t]
+evals freeze list [-q text] [--tag t] [--contact <ref>]
+evals freeze show <id> [--context 6]   # the moment with a FROZEN HERE marker, the production reply, replays
+evals freeze replay <id> --reps 3 [--model id] [--dry] [--notes "what changed"]
+evals freeze judge <id> "the reply must …" [--rejudge]
+evals freeze results <id>              # every replay side by side with its verdict
+evals freeze diff <id> --run A --run B
+evals freeze sim <id> --horizon 24     # keep going: the other people answer, a day unfolds
+evals freeze html <id> --open
+
+# Runs: every simulation and replay, from the evidence folders
+evals runs [--scenario s] [--since 7d] [--status fail] [--freeze <id>] [-n 30]
+evals runs show <run> [--full]        # who, the score, the story both sides, what the boundary caught
+evals runs story <run> [--channel imessage] [--last 20] [--full]
+evals runs events <run> [--kind send_captured,inbound_injected]
+evals runs score <run>                # every gate with its evidence, every judged check
+evals runs diff <A> <B> · evals runs history <scenario>
+evals runs html <run> --open          # the page: cast, timeline, story, rooms, score, events
+evals runs report [--since 24h] --open   # one page over many runs
+
+# Simulations: a scenario against the whole product with simulated people
+evals sim scenarios
+evals sim run <scenario> [--seed 11] [--dry] [--model id] [--open]   # --dry proves the wiring and spends nothing
+evals sim sweep [--only a,b] [--seed 11] [--dry] [--model id] [--parallel 3] --open
+```
+
+Reading a score: gates are decided in code and any one failing scores the
+run zero; the judged checks are the half that needs reading; a gate that
+held with nothing to search says so, and is not a pass on the merits.
+
+In this repo a conversation is a codecast session: `convo inbox` lists your
+sessions and `convo show <session>` reads one; there are no channels, phones or
+simulations (`sim` and `freeze sim` are not wired). A surface is one prod
+prompt (title, settle, insight, call-summary, ask, handoff, suggest, org-review,
+role-wake, anchor-brief), and a ref names its surface, `<surface>@<ref>`, never
+a bare message id: `title@jx7c6zk:142` (a session and line),
+`call-summary@<callId>`, `role-wake@tr-42`, `org-review@union-base8` (a
+snapshot name), or `<surface>@fixture:<case>` for a committed synthetic case.
+`./evals` with no arguments lists every surface with its route, model,
+freezes, last runs and whether it is stale. The loop here: `./evals freeze
+create title@jx7c6zk:142` → `./evals check title --reps 5` (the baseline) →
+edit the prompt → `./evals check title` → `./evals freeze results <id>`.
+`freeze replay <id>` replays one freeze; `check` replays them all. The
+design is `docs/architecture/evals.md`.
+
+Two data homes. Synthetic fixtures and their freeze pointers are committed
+under `packages/evals`. Everything real (private freezes, snapshots, runs,
+labels, pages) lives in `EVALS_HOME` (`~/.local/share/codecast/evals`,
+or `CODECAST_EVALS_HOME`), and its `labels/` is a git repo pushed to the
+private `ashot/codecast-eval-labels`. The repo is public: real content,
+transcripts, names, ids or labels never enter git.
+
+`./evals check [surface…] [--reps n] [--model id] [--budget usd] [--dry]`
+replays every freeze of a surface through `prompt-dry-run.ts` on its pinned
+model and prints a verdict against the previous run set. Never claim a win
+without `separated: better` (an exact one-sided Mann-Whitney at p <= 0.05
+with 5+ reps a side), and a single gate failure in any sample fails the
+variant. Agent surfaces (org-review, role-wake, anchor-brief) are run by hand
+only: the cadence triggers flag them and never run them. `./evals stale` is
+the precheck, `./evals doctor` says what is missing here.
+
+<!-- /platform-evals -->

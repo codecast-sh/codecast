@@ -567,6 +567,13 @@ metric fires when `loadCache` disables the cache so that noise is measurable.
   drills (wrong client version, `INBOX_DIGEST_DISABLED`). The sync channels alone leave
   a bounded residue (the settled pin lock case above); the anti-entropy loop closes it
   within one heal, and the test prints which seeds needed it.
+- Multiplayer simulation: the same claims for several people, teams and windows at
+  once, against the real Convex handlers, with per-window store instances, the real
+  replication and gesture bridge, and actors for daemons, agents and team admins. It
+  checks the projection, followers, team slot, workspace access, cursors, locks,
+  outbox, triggers, sends, chat and roles at every settle, and carries the red list of
+  multi-party scenarios we fail today. How to run, read and replay it:
+  [sync-sim.md](sync-sim.md).
 - Golden fixtures and property tests: `packages/shared/contracts/inboxProjection.golden.test.ts`
   over `__fixtures__/inboxProjection/*.json` (regenerate with `INBOX_GOLDEN_REGEN=1`,
   then bump the version and pin the printed hash), and

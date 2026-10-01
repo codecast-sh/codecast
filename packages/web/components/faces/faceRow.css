@@ -335,7 +335,7 @@
   line-height: 1;
   cursor: pointer;
   animation: face-stack-count-in 420ms var(--settle) calc(var(--stack-i-last, 0) * 32ms + 120ms) both;
-  transition: color 120ms ease;
+  transition: color 120ms ease, filter 360ms ease;
 }
 .face-row-stack-count:hover {
   color: var(--sol-text);
@@ -374,6 +374,27 @@
 .face-row-fold svg {
   width: 55%;
   height: 55%;
+}
+/* The float at rest (pointer outside the window): the call is the window, so
+   the stack shrinks to a small grey tail and its count fades with it. The
+   window follows the row's measured box, so it closes up around the call. */
+.face-row[data-density="float"][data-rest] {
+  --face-stacked: calc(var(--face) * 0.34);
+}
+.face-row[data-density="float"][data-rest] .face-seat[data-stacked] .face {
+  --edge-w: 2px;
+  filter: var(--drain,) grayscale(1);
+}
+.face-row[data-density="float"][data-rest] .face-seat[data-stacked] .face::after {
+  opacity: 0.72;
+}
+.face-row[data-density="float"][data-rest] .face-row-stack-count {
+  /* filter, not opacity: the count's entrance animation holds opacity. */
+  filter: opacity(0.45);
+  box-shadow: 0 0 0 1px var(--hairline-strong);
+}
+.face-row[data-density="float"][data-rest] .face-row-strip[data-track] + .face-seat[data-stacked] {
+  margin-left: 4px;
 }
 .face-row[data-density="float"] .face-row-fold {
   background: linear-gradient(180deg, var(--paper) 0%, var(--paper-deep) 100%);

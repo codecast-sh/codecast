@@ -165,7 +165,7 @@ describe("randomized interleavings across four windows on two devices", () => {
         const target = pickShown(w, rng);
         const hidden = pickHidden(w, rng);
         if (roll < 0.22) {
-          SERVER_EVENTS[eventNames[Math.floor(rng() * eventNames.length)]](server, rng, step);
+          await SERVER_EVENTS[eventNames[Math.floor(rng() * eventNames.length)]](server, rng, step);
         } else if (roll < 0.3 && target) {
           await w.pin(target);
         } else if (roll < 0.36 && target) {
@@ -192,7 +192,7 @@ describe("randomized interleavings across four windows on two devices", () => {
           await h.crawl();
         } else if (roll < 0.83) {
           // Retention passes some replica's cursor while it is away.
-          server.retain(Math.floor(server.head() * rng()));
+          await server.retain(Math.floor(server.head() * rng()));
         } else if (roll < 0.93) {
           // Deliver some — not all — of a device's queued messages, so bridge
           // and replication interleave with feeds and gestures.
@@ -222,7 +222,7 @@ describe("retention passes a replica's cursor", () => {
     const [q, r, s] = await visibleIds(server, A);
     // A blank row A cached, that the GC deletes while A is away.
     const blank = newConversation("blank1", { message_count: 0, last_message_role: undefined, started_at: now() - GEN_DAY });
-    server.insert(blank);
+    await server.insert(blank);
     await A.host.receiveAll();
     await A.drain();
     expect((A.host.state.sessions as any)[blank._id]).toBeDefined();
@@ -234,9 +234,9 @@ describe("retention passes a replica's cursor", () => {
     await B.stash(r);
     await B.restore(r);
     await B.pin(s);
-    server.delete(blank._id);
+    await server.delete(blank._id);
     advance(2 * GEN_DAY);
-    server.retain(server.head());
+    await server.retain(server.head());
     expect(server.range(A.host.cursor).resync).toBe(true);
 
     A.host.online = true;
@@ -260,7 +260,7 @@ describe("retention passes a replica's cursor", () => {
     // The upgraded client: the old bundle's cache, no scope cursor (0), and
     // the server's log has moved past everything it could replay from.
     advance(GEN_HOUR);
-    server.retain(server.head());
+    await server.retain(server.head());
     const upgraded = await bootReplica(server, "upgraded", 3);
     upgraded.state = structuredClone(old.state);
     upgraded.cursor = 0;

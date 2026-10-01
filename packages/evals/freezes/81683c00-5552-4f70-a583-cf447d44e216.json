@@ -1,0 +1,26 @@
+{
+  "name": "settle agent-lists-its-own-next-steps",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:agent-lists-its-own-next-steps"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "settle:agent-lists-its-own-next-steps",
+    "title": "settle agent-lists-its-own-next-steps"
+  },
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "trigger": {
+    "type": "settle"
+  },
+  "meta": {
+    "surface": "settle",
+    "visibility": "public",
+    "snapshot": "fixtures/settle/agent-lists-its-own-next-steps.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "81683c00-5552-4f70-a583-cf447d44e216",
+  "createdAt": "2026-10-01T17:46:11.998Z"
+}

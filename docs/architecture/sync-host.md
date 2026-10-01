@@ -178,3 +178,11 @@ follower's optimistic write appears in other windows before the echo.
 5. The classification snapshot test fails on any unclassified registry key.
 6. No window renders, persists or dispatches for an account after the stored
    JWT stopped naming it; no row of one account is ever served to another.
+
+The multiplayer sim ([sync-sim.md](sync-sim.md)) checks two of these at every
+settle. `INV-followers` requires each follower's `snapshotEntries` over
+`REPLICATED_STORE_KEYS` to equal the host's byte for byte, which is what
+invariants 2 to 4 are for. `INV-fixpoint` re-runs every feeder a host mounted, one
+catch-up and a byIds pass over every held id, and requires no store write beyond
+`syncMeta` and `syncProgress`: replicated data that disagrees with the server
+shows there before any follower copies it.

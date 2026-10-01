@@ -70,6 +70,7 @@ import { canAccessConversation, requireAccessibleDoc } from "./lib/access";
 import { verifyApiToken } from "./apiTokens";
 import { enqueuePush } from "./pushRouter";
 import { agentIdentity, postEvent } from "./callChat";
+import { anthropicBody, CHEAP_MODEL, type SurfaceRequest } from "./lib/anthropic";
 
 export { asrTranscriptionSession };
 
@@ -668,7 +669,7 @@ export const cliHoldCall = mutation({
 export const ROLLING_SUMMARY_GAP_MS = 90_000;
 export const ROLLING_SUMMARY_MIN_WORDS = 120;
 
-function countWords(texts: string[]): number {
+export function countWords(texts: string[]): number {
   return texts.reduce((n, text) => n + text.split(/\s+/).filter(Boolean).length, 0);
 }
 
@@ -915,10 +916,85 @@ export const sweepOrphanedLive = internalMutation({
 // and the summary/action items generate within seconds of stop.
 
 // Below this many words there is nothing worth summarizing.
-const SUMMARY_MIN_WORDS = 40;
+export const SUMMARY_MIN_WORDS = 40;
 // Transcript text sent to the model is capped; long calls get the tail
 // (decisions and action items live at the end far more often than the start).
-const SUMMARY_MAX_CHARS = 60_000;
+export const SUMMARY_MAX_CHARS = 60_000;
+
+/**
+ * What a call is, as far as its summary prompt cares. A huddle is one audio
+ * track per person, so who said what is structural and the model can be told
+ * to trust it. A recording is one microphone in a room: it heard everybody and
+ * can tell nobody apart, so the same instruction would invite it to invent an
+ * attribution out of a placeholder speaker label. The two transcripts are not
+ * the same evidence and must not be described to the model as if they were.
+ */
+export type CallSummaryKind = "huddle" | "recording";
+
+export function callSummaryKind(roomKey: string): CallSummaryKind {
+  return isRecRoomKey(roomKey) ? "recording" : "huddle";
+}
+
+/**
+ * The transcript text a call summary reads, or null when the call is under
+ * SUMMARY_MIN_WORDS and gets no model call. A recording's lines carry no
+ * speaker; a long call keeps its last SUMMARY_MAX_CHARS characters.
+ */
+export function callSummarySource(lines: Array<{ speaker: string; text: string }>, kind: CallSummaryKind): string | null {
+  if (countWords(lines.map((l) => l.text)) < SUMMARY_MIN_WORDS) return null;
+  const text = kind === "recording"
+    ? lines.map((l) => l.text).join("\n")
+    : lines.map((l) => `${l.speaker}: ${l.text}`).join("\n");
+  return text.length > SUMMARY_MAX_CHARS ? text.slice(-SUMMARY_MAX_CHARS) : text;
+}
+
+/**
+ * The call summary request over a source from callSummarySource. `rolling` is
+ * the recap of a call still going. No temperature: the API default applies.
+ */
+export function callSummaryRequest(
+  source: string,
+  call: { kind: CallSummaryKind; started_at: number; ended_at?: number; rolling?: boolean },
+): SurfaceRequest {
+  const durationMin = call.ended_at
+    ? Math.max(1, Math.round((call.ended_at - call.started_at) / 60_000))
+    : null;
+  const preamble = call.kind === "recording"
+    ? `This is the transcript of a meeting recorded on ONE microphone in the room${durationMin ? `, about ${durationMin} min` : ""}. Voices are NOT separated and nobody is identified: attribute something to a person only when the words themselves name them, and otherwise write about what was said, not who said it.`
+    : `This is the transcript of a team huddle (voice call)${durationMin ? `, about ${durationMin} min` : ""}${call.rolling ? ", still going: summarize what has been said so far" : ""}. Speakers are exactly attributed.`;
+  return {
+    model: CHEAP_MODEL,
+    max_tokens: 700,
+    prompt: `${preamble}
+
+Write JSON only, this shape:
+{"title": "3-7 word title of what the call was about", "summary": "2-5 sentences: what was discussed, what was decided. Name people for decisions and disagreements. Plain words.", "action_items": ["each concrete follow-up someone committed to, with the owner's name first, e.g. 'Sam: ship the fix behind a flag'"]}
+
+Empty action_items array if there were none — never invent any.
+
+Transcript:
+${source}`,
+  };
+}
+
+/**
+ * The call summary reply as the transcript row stores it. Throws when the
+ * reply holds no JSON object, which the action records as a failed summary.
+ */
+export function parseCallSummaryReply(raw: string): { title?: string; summary?: string; action_items?: string[] } {
+  const match = raw.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error("No JSON in response");
+  const parsed = JSON.parse(match[0]);
+  return {
+    title: typeof parsed.title === "string" ? parsed.title.slice(0, 120) : undefined,
+    summary: typeof parsed.summary === "string" ? parsed.summary.slice(0, 2000) : undefined,
+    action_items: Array.isArray(parsed.action_items)
+      ? parsed.action_items
+          .filter((a: unknown) => typeof a === "string")
+          .slice(0, 20)
+      : undefined,
+  };
+}
 
 export const getForSummary = internalQuery({
   args: { transcript_id: v.id("transcripts") },
@@ -1079,8 +1155,9 @@ export const generateSummary = internalAction({
     // call has its own run.
     const rolling = args.rolling === true;
     if (rolling && t.status !== "live") return;
-    const wordCount = countWords(t.lines.map((l: { text: string }) => l.text));
-    if (wordCount < SUMMARY_MIN_WORDS) {
+    const kind = callSummaryKind(t.room_key);
+    const source = callSummarySource(t.lines, kind);
+    if (source === null) {
       await ctx.runMutation(internal.transcripts.setSummary, {
         transcript_id: args.transcript_id,
         summary_status: "skipped",
@@ -1097,25 +1174,6 @@ export const generateSummary = internalAction({
       });
       return;
     }
-    // A huddle is one audio track per person, so who said what is structural
-    // and the model can be told to trust it. A recording is one microphone in
-    // a room: it heard everybody and can tell nobody apart, so the same
-    // instruction would invite it to invent an attribution out of a placeholder
-    // speaker label. The two transcripts are not the same evidence and must not
-    // be described to the model as if they were.
-    const isRecording = isRecRoomKey(t.room_key);
-    let text = isRecording
-      ? t.lines.map((l: { text: string }) => l.text).join("\n")
-      : t.lines
-          .map((l: { speaker: string; text: string }) => `${l.speaker}: ${l.text}`)
-          .join("\n");
-    if (text.length > SUMMARY_MAX_CHARS) text = text.slice(-SUMMARY_MAX_CHARS);
-    const durationMin = t.ended_at
-      ? Math.max(1, Math.round((t.ended_at - t.started_at) / 60_000))
-      : null;
-    const source = isRecording
-      ? `This is the transcript of a meeting recorded on ONE microphone in the room${durationMin ? `, about ${durationMin} min` : ""}. Voices are NOT separated and nobody is identified: attribute something to a person only when the words themselves name them, and otherwise write about what was said, not who said it.`
-      : `This is the transcript of a team huddle (voice call)${durationMin ? `, about ${durationMin} min` : ""}${rolling ? ", still going: summarize what has been said so far" : ""}. Speakers are exactly attributed.`;
     try {
       const response = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -1124,42 +1182,17 @@ export const generateSummary = internalAction({
           "x-api-key": apiKey,
           "anthropic-version": "2023-06-01",
         },
-        body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 700,
-          messages: [
-            {
-              role: "user",
-              content: `${source}
-
-Write JSON only, this shape:
-{"title": "3-7 word title of what the call was about", "summary": "2-5 sentences: what was discussed, what was decided. Name people for decisions and disagreements. Plain words.", "action_items": ["each concrete follow-up someone committed to, with the owner's name first, e.g. 'Sam: ship the fix behind a flag'"]}
-
-Empty action_items array if there were none — never invent any.
-
-Transcript:
-${text}`,
-            },
-          ],
-        }),
+        body: JSON.stringify(
+          anthropicBody(callSummaryRequest(source, { kind, started_at: t.started_at, ended_at: t.ended_at, rolling })),
+        ),
       });
       if (!response.ok) throw new Error(`Anthropic ${response.status}`);
       const data = await response.json();
-      const raw: string = data?.content?.[0]?.text ?? "";
-      const match = raw.match(/\{[\s\S]*\}/);
-      if (!match) throw new Error("No JSON in response");
-      const parsed = JSON.parse(match[0]);
       await ctx.runMutation(internal.transcripts.setSummary, {
         transcript_id: args.transcript_id,
         summary_status: "done",
         rolling,
-        title: typeof parsed.title === "string" ? parsed.title.slice(0, 120) : undefined,
-        summary: typeof parsed.summary === "string" ? parsed.summary.slice(0, 2000) : undefined,
-        action_items: Array.isArray(parsed.action_items)
-          ? parsed.action_items
-              .filter((a: unknown) => typeof a === "string")
-              .slice(0, 20)
-          : undefined,
+        ...parseCallSummaryReply(data?.content?.[0]?.text ?? ""),
       });
     } catch (err) {
       console.error("Call summary generation failed:", err);
@@ -1970,7 +2003,10 @@ export function sessionDeliveryVerdict(opts: {
     const lastEnd = Math.max(...unsent.map((s) => s.ended_at));
     if (now - lastEnd < CATCH_UP_QUIET_MS) return { deliver: false };
   }
-  return { deliver: true, lane: "context", held: clockDriven };
+  // Words said under a hold are a catch up however they leave: the hold's end
+  // can find the agent still mid-turn, and the scribe's next lull ships them.
+  const saidUnderHold = unsent.some((s) => s.ended_at <= (route.hold_until ?? 0));
+  return { deliver: true, lane: "context", held: clockDriven || saidUnderHold };
 }
 
 export const deliverRoutes = internalAction({

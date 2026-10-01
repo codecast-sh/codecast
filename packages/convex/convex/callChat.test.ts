@@ -258,6 +258,32 @@ describe("mirrorAgentTurn", () => {
     expect(ctx._scheduled).toHaveLength(0);
   });
 
+  // The settle delivers the room's next words at once but mirrors 4s later, so
+  // a quick next turn (a [pass] to that chunk) can land before the mirror runs.
+  // The overtaken reply still reaches the room (jx74ymd, 2026-10-01: a page
+  // link the room asked for never showed in the huddle chat).
+  test("a reply overtaken by a quick next turn still lands in the room", async () => {
+    const ctx = ctxWith({
+      call_agent_feeds: [feed()],
+      transcripts: [transcript()],
+      messages: [
+        { _id: "m1", conversation_id: "conv1", role: "assistant", content: "earlier", timestamp: 1 },
+        { _id: "m2", conversation_id: "conv1", role: "user", content: "Rosie, explain it in a page", timestamp: 2 },
+        { _id: "m3", conversation_id: "conv1", role: "assistant", content: "Looking.", tool_calls: [{ id: "x", name: "Bash", input: "{}" }], timestamp: 3 },
+        { _id: "m4", conversation_id: "conv1", role: "user", content: "", tool_results: [{ tool_use_id: "x", content: "ok" }], timestamp: 4 },
+        { _id: "m5", conversation_id: "conv1", role: "assistant", content: "Here's the page:\n\nhttps://codecast.sh/a/abcdefgh12", timestamp: 5 },
+        { _id: "m6", conversation_id: "conv1", role: "user", content: "more chatter from the room", timestamp: 6 },
+        { _id: "m7", conversation_id: "conv1", role: "assistant", content: "[pass]", timestamp: 7 },
+      ],
+      call_chat_messages: [],
+    });
+    const out = await call(mirrorAgentTurn, ctx, { conversation_id: "conv1", attempt: 0 });
+    expect(out).toEqual({ mirrored: true });
+    // One line per turn: the turn's last words, never its narration mid-work.
+    expect(ctx.db._tables.call_chat_messages.map((r: any) => r.source_message_id)).toEqual(["m5"]);
+    expect(ctx.db._patched).toEqual([{ _id: "f1", patch: { last_mirrored_message_id: "m7" } }]);
+  });
+
   test("a session nobody is feeding is left alone", async () => {
     const ctx = ctxWith({ call_agent_feeds: [], transcripts: [], messages: [], call_chat_messages: [] });
     const out = await call(mirrorAgentTurn, ctx, { conversation_id: "conv1", attempt: 0 });

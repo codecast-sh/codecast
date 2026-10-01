@@ -28,6 +28,7 @@ import {
   PRESENCE_FRESH_MS,
   isDesktopActivePresence,
   isMachineActivePresence,
+  presenceReportPatch,
   type MachineDevice,
   type PresenceRow,
 } from "./presencePolicy";
@@ -564,13 +565,17 @@ export const reportPresence = mutation({
       .first();
     const viewingPatch = await viewingFieldsPatch(ctx, userId, existing, args.viewing_conversation_id, now);
     if (existing) {
-      await ctx.db.patch(existing._id, {
-        last_seen: now,
-        last_input_at: Math.max(existing.last_input_at, lastInputAt),
-        focused: args.focused,
-        updated_at: now,
-        ...viewingPatch,
-      });
+      // Write only what a reader can see change (presenceReportPatch): the
+      // roster re-runs for every open tab on each write to this row.
+      const patch = presenceReportPatch(existing, { focused: args.focused, lastInputAt }, now);
+      const viewingChanged = Object.keys(viewingPatch).length > 0;
+      if (viewingChanged || Object.keys(patch).length > 0) {
+        await ctx.db.patch(existing._id, {
+          ...patch,
+          ...(viewingChanged ? { last_seen: now, updated_at: now } : {}),
+          ...viewingPatch,
+        });
+      }
     } else {
       await ctx.db.insert("user_presence", {
         user_id: userId,

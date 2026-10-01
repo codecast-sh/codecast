@@ -73,7 +73,7 @@ const capabilities = {
     apps: { list: true, bundleIds: true, pids: true },
     windows: { list: true, targetById: true, targetByIndex: true, focus: false, moveResize: false },
     observation: { screenshot: true, annotatedScreenshot: false, elementFrames: true, ocr: false },
-    actions: { click: true, typeText: true, pressKey: true, hotkey: true, pasteText: true, scroll: true, drag: false, setValue: true, performAction: true },
+    actions: { click: true, typeText: true, pressKey: true, hotkey: true, pasteText: true, scroll: true, drag: true, setValue: true, performAction: true },
     surfaces: { menus: false, dialogs: false, dock: false, menubar: false },
   },
 };

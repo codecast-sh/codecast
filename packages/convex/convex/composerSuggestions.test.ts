@@ -1,6 +1,19 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { CHEAP_MODEL } from "./lib/anthropic";
+import { captureFetch, goldenBody, recordGolden, loadGolden, type GoldenCase } from "./__golden__/golden.testkit";
+import { hashToken } from "./apiTokens";
 import {
+  buildMinerPrompt,
+  contextFromRows,
+  getOwnSuggestionProfile,
   getRecentUserInputs,
+  getSuggestionContext,
+  haikuRequest,
+  isConversationTurn,
+  minePatternsWithLLM,
+  predictSuggestions,
+  suggestRequest,
   isMachineDrivenConversation,
   minePhrases,
   normalizeForMatch,
@@ -12,10 +25,10 @@ import {
 
 const DAY = 24 * 60 * 60 * 1000;
 
-// Minimal ctx.db for the collector: the two indexed reads it makes, with
-// the same filter/order/take semantics. Same convex-test-free idiom as
+// Minimal ctx.db over in-memory tables: indexed equality reads with the same
+// filter/order/take/first semantics. Same convex-test-free idiom as
 // calls.test.ts — drive the real handler through its exported config.
-function fakeDb(conversations: any[], messages: any[]) {
+function fakeDb(tables: Record<string, any[]>) {
   const q = {
     field: (name: string) => (row: any) => row[name],
     eq: (get: any, val: any) => (row: any) => get(row) === val,
@@ -24,7 +37,7 @@ function fakeDb(conversations: any[], messages: any[]) {
   };
   return {
     query: (table: string) => {
-      let rows = table === "conversations" ? conversations : messages;
+      let rows = tables[table] ?? [];
       const chain: any = {
         withIndex: (_name: string, fn: (b: any) => any) => {
           const eqs: Array<[string, any]> = [];
@@ -44,6 +57,7 @@ function fakeDb(conversations: any[], messages: any[]) {
           return chain;
         },
         take: async (n: number) => rows.slice(0, n),
+        first: async () => rows[0] ?? null,
       };
       return chain;
     },
@@ -52,7 +66,7 @@ function fakeDb(conversations: any[], messages: any[]) {
 
 async function collect(conversations: any[], messages: any[]) {
   const handler = (getRecentUserInputs as any)._handler ?? (getRecentUserInputs as any).handler;
-  return (await handler({ db: fakeDb(conversations, messages) }, { user_id: "u1" })) as Array<{
+  return (await handler({ db: fakeDb({ conversations, messages }) }, { user_id: "u1" })) as Array<{
     text: string;
     ts: number;
   }>;
@@ -363,5 +377,211 @@ describe("parseMinedProfile", () => {
   test("garbage yields null", () => {
     expect(parseMinedProfile("nope")).toBeNull();
     expect(parseMinedProfile({ patterns: [], prompts: [] })).toBeNull();
+  });
+});
+
+// ── Request seams for the evals (docs/architecture/evals-home.md, U7) ──
+//
+// The golden (__golden__/suggest.json, through the shared golden.testkit) holds
+// the exact Anthropic request bodies the Haiku branch posted before the request
+// moved onto lib/anthropic's anthropicBody. Every fixture is synthetic: this
+// repo is public. Re-record only on a deliberate prompt change, with
+// UPDATE_GOLDENS=1.
+const FULL_PROFILE = {
+  frequent: [{ text: "run the whole suite again please", count: 3 }],
+  phrases: [{ text: "add a regression test", count: 4 }],
+  patterns: [
+    {
+      pattern: "asks to see verification before accepting finished work",
+      example: "show me the test output first",
+      count: 5,
+    },
+  ],
+  prompts: [{ text: "polish this until it is excellent, then review it once more", count: 3 }],
+  recent: ["make the header sticky", "why is the build slow"],
+  generated_at: 0,
+};
+
+const PHRASES_ONLY_PROFILE = {
+  frequent: [],
+  phrases: [{ text: "add a regression test", count: 4 }],
+  recent: ["x".repeat(320)],
+  generated_at: 0,
+};
+
+const EMPTY_PROFILE = { frequent: [], recent: [], generated_at: 0 };
+
+const SHORT_CONTEXT = {
+  conversation: { title: "Fix the flaky login test", project_path: "/work/demo", git_branch: "main" },
+  turns: [
+    { role: "user", content: "the login test fails one run in five, find out why" },
+    { role: "assistant", content: "It races the session cookie. Want me to add a wait on the cookie and a regression test?" },
+  ],
+};
+
+const LONG_CONTEXT = {
+  conversation: {
+    title: "Speed up the build",
+    subtitle: "bundler",
+    idle_summary: "Profiled the bundler, cache misses dominate",
+    thread_state: "Working on the build cache\nNext: measure again",
+    project_path: "/work/demo",
+    git_branch: "speed",
+  },
+  turns: Array.from({ length: 20 }, (_, i) =>
+    i % 2 === 0
+      ? { role: "user", content: `step ${i}: keep going on the cache ${"detail ".repeat(70)}` }
+      : { role: "assistant", content: `done with step ${i}. ${"finding ".repeat(i === 19 ? 400 : 70)}` },
+  ),
+};
+
+const BARE_CONTEXT = {
+  conversation: {},
+  turns: [{ role: "assistant", content: "Shall I ship it?" }],
+};
+
+const SUGGEST_CASES = [
+  { name: "short-full-profile", context: SHORT_CONTEXT, profile: FULL_PROFILE },
+  { name: "long-phrases-only", context: LONG_CONTEXT, profile: PHRASES_ONLY_PROFILE },
+  { name: "bare-empty-profile", context: BARE_CONTEXT, profile: EMPTY_PROFILE },
+] as const;
+
+const MINER_INPUTS = ["fix the flaky login test", "add a regression test for this", "go", "add a regression test please"];
+
+// Runs `fn` with fetch stubbed to answer `reply` and returns every body it posted.
+async function postedBodies(fn: () => Promise<unknown>, reply = "[]"): Promise<string[]> {
+  const stub = captureFetch(reply);
+  stub.install();
+  try {
+    await fn();
+  } finally {
+    stub.restore();
+  }
+  return stub.bodies;
+}
+
+describe("suggest request golden", () => {
+  test("the Haiku bodies equal the recorded golden", async () => {
+    const actual: GoldenCase[] = [];
+    for (const c of SUGGEST_CASES) {
+      const [body] = await postedBodies(() => predictSuggestions(c.context as any, c.profile as any, "anthropic"));
+      actual.push({ case: c.name, body });
+    }
+    const [miner] = await postedBodies(() => minePatternsWithLLM(MINER_INPUTS), "{}");
+    actual.push({ case: "miner", body: miner });
+    expect(actual).toEqual(recordGolden("suggest", actual));
+  });
+});
+
+describe("suggest request seams", () => {
+  test("suggestRequest and haikuRequest render the golden bodies through anthropicBody", () => {
+    const golden = new Map(loadGolden("suggest").map((g) => [g.case, g.body]));
+    for (const c of SUGGEST_CASES) {
+      const req = suggestRequest(c.context as any, c.profile as any);
+      expect(req.model).toBe(CHEAP_MODEL);
+      expect(goldenBody(req)).toBe(golden.get(c.name)!);
+    }
+    expect(goldenBody(haikuRequest(buildMinerPrompt(MINER_INPUTS), 3000))).toBe(golden.get("miner")!);
+  });
+
+  test("an injected complete receives the opts llmComplete did, and its reply is parsed the same way", async () => {
+    for (const c of SUGGEST_CASES) {
+      const seen: any[] = [];
+      const reply = '[{"text":"add the wait and the regression test","confidence":0.9}]';
+      const injected = await predictSuggestions(c.context as any, c.profile as any, "anthropic", async (opts) => {
+        seen.push(opts);
+        return { text: reply };
+      });
+      const req = suggestRequest(c.context as any, c.profile as any);
+      expect(seen).toEqual([{ provider: "anthropic", prompt: req.prompt, maxTokens: req.max_tokens }]);
+      // The default path posts exactly those opts as its body, and parses the
+      // same reply into the same suggestions.
+      let live: any;
+      const [body] = await postedBodies(async () => {
+        live = await predictSuggestions(c.context as any, c.profile as any, "anthropic");
+      }, reply);
+      expect(body).toBe(goldenBody(haikuRequest(seen[0].prompt, seen[0].maxTokens)));
+      expect(injected).toEqual(live);
+    }
+    const providers: string[] = [];
+    await predictSuggestions(SHORT_CONTEXT as any, FULL_PROFILE as any, "openai", async (opts) => {
+      providers.push(opts.provider);
+      return null;
+    });
+    expect(providers).toEqual(["openai"]);
+  });
+
+  test("contextFromRows returns what getSuggestionContext did, and windows a past moment the same way", async () => {
+    const conv = {
+      _id: "c1",
+      user_id: "u1",
+      title: "Speed up the build",
+      project_path: "/work/demo",
+      git_branch: "speed",
+      status: "active",
+      extra_field: "never copied",
+    };
+    const rows = Array.from({ length: 72 }, (_, i) => ({
+      _id: `m${i}`,
+      conversation_id: "c1",
+      timestamp: 1000 + i,
+      ...(i % 5 === 3
+        ? { role: "user", content: "tool output", tool_results: [{}] }
+        : i % 2 === 0
+          ? { role: "user", content: `ask ${i}` }
+          : { role: "assistant", content: `answer ${i}`, ...(i === 71 ? { message_uuid: "uuid-71" } : {}) }),
+    }));
+    // The query as it read before the selector moved out of it.
+    const before = (raw: any[]) => {
+      const turns = raw.filter(isConversationTurn).reverse();
+      const tail = turns[turns.length - 1];
+      return {
+        conversation: {
+          user_id: conv.user_id, title: conv.title, subtitle: undefined, idle_summary: undefined,
+          thread_state: undefined, project_path: conv.project_path, git_branch: conv.git_branch, status: conv.status,
+        },
+        turns: turns.map((m: any) => ({ role: m.role, content: m.content || "", timestamp: m.timestamp })),
+        tail_role: tail?.role ?? null,
+        anchor: tail ? tail.message_uuid || tail._id : null,
+      };
+    };
+    const newest60 = [...rows].sort((a, b) => b.timestamp - a.timestamp).slice(0, 60);
+    const handler = (getSuggestionContext as any)._handler ?? (getSuggestionContext as any).handler;
+    const db = { ...fakeDb({ messages: rows }), get: async () => conv };
+    const live = await handler({ db }, { conversation_id: "c1" });
+    expect(live).toEqual(before(newest60));
+    expect(contextFromRows(rows as any, conv as any)).toEqual(live);
+    expect(live.anchor).toBe("uuid-71");
+
+    // A past moment: the rows up to and including an assistant turn.
+    const upTo = rows.slice(0, 42);
+    const past = contextFromRows(upTo as any, conv as any);
+    expect(past).toEqual(before([...upTo].reverse().slice(0, 60)));
+    expect(past.anchor).toBe("m41");
+  });
+
+  test("the profile route takes a token and nothing else, and reads only the token's user", async () => {
+    const args = JSON.parse((getOwnSuggestionProfile as any).exportArgs());
+    expect(Object.keys(args.value)).toEqual(["api_token"]);
+
+    const source = readFileSync(new URL("./http.ts", import.meta.url), "utf8");
+    const route = source.slice(source.indexOf('cliRoute("/cli/suggestion-profile"'));
+    const call = route.slice(0, route.indexOf(");\n") + 2);
+    expect(call).toContain("internal.composerSuggestions.getOwnSuggestionProfile, { api_token: String(body?.api_token");
+    expect(call).not.toContain("user_id");
+    expect(call).not.toContain("...body");
+
+    const tables: Record<string, any[]> = {
+      api_tokens: [{ _id: "t1", user_id: "userA", token_hash: await hashToken("secret-a") }],
+      suggestion_profiles: [
+        { _id: "p2", user_id: "userB", recent: ["b"] },
+        { _id: "p1", user_id: "userA", recent: ["a"] },
+      ],
+    };
+    const db = fakeDb(tables);
+    const handler = (getOwnSuggestionProfile as any)._handler ?? (getOwnSuggestionProfile as any).handler;
+    expect((await handler({ db }, { api_token: "secret-a" }))._id).toBe("p1");
+    await expect(handler({ db }, { api_token: "wrong" })).rejects.toThrow("Unauthorized");
+    await expect(handler({ db }, { api_token: "" })).rejects.toThrow("Unauthorized");
   });
 });

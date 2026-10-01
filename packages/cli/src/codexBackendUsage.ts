@@ -16,7 +16,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { requestCloudJson } from "./cloudAgents/http.js";
+import { requestCloudJson, type CloudAnswerShape } from "./cloudAgents/http.js";
 import {
   foldCodexLimits,
   isCodexWindowFilled,
@@ -34,7 +34,7 @@ export function codexBackendRequest<T>(
   headers: Record<string, string>,
   method: string,
   apiPath: string,
-  opts: { body?: unknown; fetchImpl?: typeof fetch; timeoutMs?: number; now?: number } = {},
+  opts: { body?: unknown; fetchImpl?: typeof fetch; timeoutMs?: number; now?: number; answer?: CloudAnswerShape<T> } = {},
 ): Promise<T> {
   return requestCloudJson<T>(opts.fetchImpl ?? fetch, {
     method,
@@ -44,6 +44,7 @@ export function codexBackendRequest<T>(
     label: `codex ${method} ${apiPath.split("?")[0]}`,
     timeoutMs: opts.timeoutMs,
     now: opts.now,
+    answer: opts.answer,
   });
 }
 

@@ -23,6 +23,7 @@ import { DateMentionExtension } from "./DateMentionExtension";
 import { TabIndentExtension } from "./TabIndentExtension";
 import { ImageUploadPlaceholder } from "./ImageUploadPlugin";
 import { DocTitleExtension, TitleFirstDocument } from "./DocTitleExtension";
+import { DRAFTING_MARKS } from "./DraftingExtension";
 import { identityLine } from "../../lib/sessionIdentity";
 import { personifyAllNow } from "../../hooks/usePersonifyAll";
 
@@ -158,6 +159,9 @@ export function createBaseExtensions(opts: {
     DateMentionExtension,
     TabIndentExtension,
     ImageUploadPlaceholder,
+    // Drafting markup (alternatives, ghosts, Lab flags) is part of a doc's
+    // text; every editor keeps it, the doc page's adds the behaviour.
+    ...DRAFTING_MARKS,
   ];
 
   if (opts.withTables !== false) {
