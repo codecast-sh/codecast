@@ -19,6 +19,9 @@ export type SpawnSessionInput = {
    *  conversation about the person's own settings. Set on the create itself,
    *  so no message is ever readable by a team. */
   private?: boolean;
+  /** The launch model key (a cloud agent lane's included), and the machine it runs from. */
+  model?: string;
+  targetDeviceId?: string;
 };
 
 /** The stub id, usable at once for optimistic reads; the real id arrives
@@ -31,7 +34,7 @@ export function spawnSessionWithPrompt(input: SpawnSessionInput): { stubId: stri
     agentType,
     projectPath: path,
     gitRoot: path || undefined,
-    create: (stubId) => store.createSessionFromStub(stubId, { agentType, projectPath: path, gitRoot: path || undefined, private: input.private }),
+    create: (stubId) => store.createSessionFromStub(stubId, { agentType, projectPath: path, gitRoot: path || undefined, private: input.private, model: input.model, targetDeviceId: input.targetDeviceId }),
   });
   const clientId = store.addOptimisticMessage(stubId, input.prompt);
   void store

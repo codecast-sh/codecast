@@ -26,12 +26,12 @@ import {
   buildInboundResolver,
   getSlackUser,
   teammateHandles,
-  mirrorFiles,
-  slackFileLinkLines,
   fileRepairContext,
+  fileRepairPage,
   applyFileRepair,
 } from "./slackSync";
 import { markdownToSlack, slackToMarkdown } from "./lib/slackText";
+import { mirrorFiles, slackFileLinkLines } from "./lib/slackFiles";
 import { listChannels, sendMessage, toggleReaction, updateChannel } from "./chat";
 import { resolveChatMentions } from "./lib/mentionResolve";
 
@@ -679,14 +679,14 @@ describe("direct messages", () => {
     expect(await call(fileRepairContext, ctx, { installation_id: INSTALL, user_id: ALICE })).toBeNull();
     await ctx.db.patch(TOKEN, { scopes: DM_SCOPES });
     const c = await call(fileRepairContext, ctx, { installation_id: INSTALL, user_id: ALICE });
-    expect(c.install.bot_token).toBe("xoxp-test");
-    expect(c.rows).toEqual([{ message_id: msg, content: `look\n\n${link}` }]);
+    expect(c).toMatchObject({ install: { bot_token: "xoxp-test" }, link_ids: [LINK] });
+    expect(await call(fileRepairPage, ctx, { link_id: LINK })).toEqual({ rows: [{ message_id: msg, content: `look\n\n${link}` }], cursor: null });
     const att = [{ storage_id: "storage_1", mime: "image/png", name: "image.png" }];
     // An edit since the scan wins over the repair.
     expect(await call(applyFileRepair, ctx, { message_id: msg, expected: "stale", content: "look", attachments: att })).toEqual({ status: "changed" });
     expect(await call(applyFileRepair, ctx, { message_id: msg, expected: `look\n\n${link}`, content: "look", attachments: att })).toEqual({ status: "repaired" });
     expect(await ctx.db.get(msg)).toMatchObject({ content: "look", attachments: att });
-    expect((await call(fileRepairContext, ctx, { installation_id: INSTALL, user_id: ALICE })).rows).toEqual([]);
+    expect((await call(fileRepairPage, ctx, { link_id: LINK })).rows).toEqual([]);
   });
   test("a line codecast posted into a DM as the person is not imported twice when Slack hands it back", async () => {
     const ctx = context(ALICE);

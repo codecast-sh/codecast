@@ -1,9 +1,11 @@
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useMutation } from "convex/react";
 import Link from "next/link";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Link as LinkIcon, Link2, ArrowUpRight, ChevronsUpDown, Columns2 } from "lucide-react";
 import { toast } from "sonner";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
+import { linkPreviewStale } from "@codecast/convex/convex/lib/linkPreviewMeta";
 import { useFrameTheme } from "../hooks/useFrameTheme";
 import { useNativeBrowserPane } from "../hooks/useNativeBrowserPane";
 import { copyToClipboard } from "../lib/utils";
@@ -405,5 +407,98 @@ export function ClaudeArtifactPill({ id, href, label }: { id: string; href: stri
       hoverClass="hover:border-sol-orange/50"
       pane={canPane ? { url, native: true } : undefined}
     />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Any other web page: a preview drawn from the page's own meta tags
+// ---------------------------------------------------------------------------
+
+type LinkPreviewRow = {
+  url: string;
+  status: "pending" | "ok" | "failed";
+  title?: string;
+  description?: string;
+  image?: string;
+  site_name?: string;
+  favicon?: string;
+  requested_at: number;
+  fetched_at?: number;
+};
+
+/** The page's preview row, asking the server to read the page when it has
+ *  none or it has gone stale. Enrichment only: the card renders the bare
+ *  address until the row arrives. */
+function useLinkPreview(url: string): LinkPreviewRow | null | undefined {
+  const { data } = useQueryNoThrow(api.linkPreviews.get, { url });
+  const request = useMutation(api.linkPreviews.request);
+  const row = data as LinkPreviewRow | null | undefined;
+  const stale = row !== undefined && linkPreviewStale(row, Date.now());
+  useEffect(() => {
+    if (stale) void request({ url }).catch(() => {});
+  }, [stale, url, request]);
+  return row;
+}
+
+function hostLabel(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
+/** A web link standing alone on its line: site, title, description and the
+ *  page's share image, the way chat apps unfurl a link. Until the page has
+ *  been read (or when it has no tags) it is the same card carrying the
+ *  address, so the message never jumps from a link to a card. */
+export function LinkPreviewCard({ url, caption }: { url: string; caption?: string }) {
+  const row = useLinkPreview(url);
+  const ok = row?.status === "ok" ? row : null;
+  const [iconFailed, setIconFailed] = useState(false);
+  const [imageFailed, setImageFailed] = useState(false);
+  const host = hostLabel(url);
+  const site = ok?.site_name && ok.site_name.toLowerCase() !== host ? `${host} · ${ok.site_name}` : host;
+  const image = ok?.image && !imageFailed ? ok.image : null;
+  return (
+    <span className="not-prose my-2 block max-w-xl">
+      <a
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        title={url}
+        className="group flex gap-3 rounded-md border border-sol-border border-l-[3px] border-l-sol-border bg-sol-bg-alt py-2 pl-3 pr-2 no-underline transition-colors hover:border-l-sol-blue hover:bg-sol-card"
+      >
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="flex min-w-0 items-center gap-1.5 text-[11px] text-sol-text-dim">
+            {ok?.favicon && !iconFailed ? (
+              <img src={ok.favicon} alt="" className="h-3.5 w-3.5 flex-shrink-0 rounded-sm" onError={() => setIconFailed(true)} />
+            ) : (
+              <LinkIcon className="h-3 w-3 flex-shrink-0" />
+            )}
+            <span className="truncate">{site}</span>
+            <ArrowUpRight className="h-3 w-3 flex-shrink-0 opacity-0 transition-opacity group-hover:opacity-100" />
+          </span>
+          {ok?.title ? (
+            <span className="line-clamp-2 text-[13px] font-semibold leading-snug text-sol-blue group-hover:underline">{ok.title}</span>
+          ) : (
+            <span className="truncate font-mono text-[11px] text-sol-text-muted">{url.replace(/^https?:\/\//, "")}</span>
+          )}
+          {ok?.description && (
+            <span className="line-clamp-2 text-xs leading-snug text-sol-text-muted">{ok.description}</span>
+          )}
+        </span>
+        {image && (
+          <img
+            src={image}
+            alt=""
+            loading="lazy"
+            className="h-[72px] w-[128px] flex-shrink-0 self-center rounded border border-sol-border object-cover"
+            onError={() => setImageFailed(true)}
+          />
+        )}
+      </a>
+      {caption && <span className="mt-1 block text-[11px] leading-snug text-sol-text-muted">{caption}</span>}
+    </span>
   );
 }

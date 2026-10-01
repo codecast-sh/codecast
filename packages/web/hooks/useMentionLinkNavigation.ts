@@ -33,7 +33,10 @@ export function resolveMentionClickNavigation(opts: {
   altKey?: boolean;
   href: string | null;
   target?: string | null;
+  /** The anchor sits in the homepage hero's sandbox, whose links never navigate the page. */
+  insideHero?: boolean;
 }): string | null {
+  if (opts.insideHero) return null;
   // Respect modified clicks (open-in-new-tab) and non-primary buttons.
   if (opts.defaultPrevented || opts.button !== 0) return null;
   if (opts.metaKey || opts.ctrlKey || opts.shiftKey || opts.altKey) return null;
@@ -63,6 +66,7 @@ export function useMentionLinkNavigation() {
         altKey: e.altKey,
         href: anchor.getAttribute("href"),
         target: anchor.target,
+        insideHero: !!anchor.closest("[data-hero-sandbox]"),
       });
       if (!path) return;
 

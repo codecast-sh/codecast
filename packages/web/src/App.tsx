@@ -69,6 +69,8 @@ const Share = lazy(() => import("@/app/share/[token]/page"));
 const ShareMessage = lazy(() => import("@/app/share/message/[token]/page"));
 const ShareDoc = lazy(() => import("@/app/share/doc/[token]/page"));
 const SharePlan = lazy(() => import("@/app/share/plan/[token]/page"));
+const ShareTask = lazy(() => import("@/app/share/task/[token]/page"));
+const ShareCall = lazy(() => import("@/app/share/call/[token]/page"));
 const PublicProfile = lazy(() => import("@/app/u/[username]/page"));
 
 const CommitView = lazy(() => import("@/app/commit/[owner]/[repo]/[sha]/page"));
@@ -289,6 +291,8 @@ export function App() {
             <Route path="share/message/:token" element={<E name="ShareMessage"><ShareMessage /></E>} />
             <Route path="share/doc/:token" element={<E name="ShareDoc"><ShareDoc /></E>} />
             <Route path="share/plan/:token" element={<E name="SharePlan"><SharePlan /></E>} />
+            <Route path="share/task/:token" element={<E name="ShareTask"><ShareTask /></E>} />
+            <Route path="share/call/:token" element={<E name="ShareCall"><ShareCall /></E>} />
 
             {/* Browsing a repository, inside the dashboard: its source, its
                 commits, the refs it has, its pull requests, its search. Every

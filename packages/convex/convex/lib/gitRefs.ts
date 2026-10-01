@@ -120,6 +120,16 @@ export async function linkableSessionsOnBranch(ctx: Db, branch: string, scope: L
 export { extractSessionTrailer };
 
 /**
+ * A branch an agent harness made for an isolated worktree: Claude Code's Agent
+ * and Workflow isolation (`worktree-agent-<id>`, `worktree-wf_<run>-<n>`). A
+ * commit there is the harness's scratch snapshot, not the session's work, so
+ * it links to no session until it reaches a real branch.
+ */
+export function isHarnessScratchBranch(branch: string | null | undefined): boolean {
+  return !!branch && /^worktree-(agent-|wf_)/.test(branch);
+}
+
+/**
  * The session a commit's `Codecast-Session` trailer names, when the claim
  * holds up.
  *

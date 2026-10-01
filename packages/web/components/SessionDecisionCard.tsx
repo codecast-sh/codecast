@@ -12,6 +12,7 @@ import { DecisionAnswerControls } from "./decisions/DecisionAnswerControls";
 import { DecisionOptionList, TypeAnswerButton } from "./decisions/DecisionOptionList";
 import { OptionPages } from "./decisions/OptionPages";
 import { useJumpToDecisionAsk } from "../hooks/useJumpToDecisionAsk";
+import { useOpenSession } from "../hooks/useOpenSession";
 import { formatTimeAgo } from "../lib/messageNavigator";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { buildSingleAnswerPayload, buildFreeTextPayload } from "../lib/pollPayload";
@@ -71,7 +72,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
   const addOptimisticMessage = useInboxStore((s) => s.addOptimisticMessage);
   const sendMessage = useInboxStore((s) => s.sendMessage);
   const resolveSessionQuestion = useInboxStore((s) => s.resolveSessionQuestion);
-  const navigateToSession = useInboxStore((s) => s.navigateToSession);
+  const openSessionRoute = useOpenSession();
 
   const [size, setSize] = useState<Size>(() => (item.blocking || stepper ? "full" : "line"));
   const full = size === "full";
@@ -221,10 +222,9 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
   }, [item, answerDecision, resolveSessionQuestion, onDone]);
 
   const onExit = stepper?.onExit;
-  const openSession = useCallback(() => {
-    navigateToSession(item.conversationId);
-    onExit?.();
-  }, [navigateToSession, item.conversationId, onExit]);
+  // Off the inbox (the /questions stepper) "open" must leave for the inbox;
+  // exiting the queue afterwards would push /questions back over it.
+  const openSession = useCallback(() => openSessionRoute(item.conversationId), [openSessionRoute, item.conversationId]);
 
   // A fold by scrolling is undone by scrolling: wheel up at the top of the
   // sheet hands the pane to the thread, so wheel down at the bottom of the
@@ -433,7 +433,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
   const showThreadState = !item.contextMd && !recentText && !!session?.thread_state;
   const showUnreadable = needsMessages && !poll && !isPermissionCard && !isInfraDialog;
   const contextBlock = (reasoning || showRecent || showThreadState || item.reportSlug || showUnreadable) ? (
-    <div className="decision-sheet-context min-w-0 space-y-4">
+    <div className="decision-sheet-context min-w-0 space-y-4" data-reveal-span>
       {reasoning && (
         <div className="decision-body text-sm text-sol-text-muted border-l-2 border-sol-border pl-4" data-decision-context>
           {reasoning}
@@ -465,7 +465,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
   // (the key handler above). Pages compare above the rows; a permission
   // prompt renders the real Approve/Deny stack with its own y/n keys.
   const answerBlock = (
-    <div ref={optionsRef} className="decision-sheet-options min-w-0" data-decision-options>
+    <div ref={optionsRef} className="decision-sheet-options min-w-0" data-decision-options data-reveal-span>
       {pageSlugs.length > 0 && (
         <div className="mb-3">
           <div className="text-[10px] uppercase tracking-wide text-sol-text-dim mb-1">the options, as pages</div>

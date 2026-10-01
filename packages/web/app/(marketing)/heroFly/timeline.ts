@@ -11,10 +11,14 @@ import { ARCS, BEATS, FLYERS, TEXTS } from "./motion";
 import {
   CAMERA,
   CAMERA_MOBILE,
+  DEALT,
   DURATION,
+  FLIP_DUR,
   LABEL_3W,
-  LIVE,
+  SURFACE_BY_ID,
   SURFACES,
+  TURN_AT,
+  localToWorld,
   type Beat,
   type Flyer,
   type Hold,
@@ -22,6 +26,7 @@ import {
   type SurfaceId,
   type V3,
 } from "./world";
+import { project } from "./project";
 
 /* ── Easing kit ───────────────────────────────────────────────────────── */
 
@@ -47,6 +52,8 @@ export function cubicBezier(x1: number, y1: number, x2: number, y2: number) {
 }
 
 export const glide = cubicBezier(0.65, 0, 0.35, 1);
+/** The camera's move: leaves briskly and lands gently. */
+export const camEase = cubicBezier(0.45, 0, 0.2, 1);
 export const settle = cubicBezier(0.16, 1, 0.3, 1);
 export const out = cubicBezier(0.4, 0, 1, 1);
 
@@ -82,19 +89,29 @@ export function typed(text: string, t: number, cue: number, rate: number, words 
 
 /* ── Camera ───────────────────────────────────────────────────────────── */
 
-const DRIFT_X = 12;
-const DRIFT_YAW = 0.4;
+/** A hold breathes: a slow slide and turn, and a push toward the subject. */
+const DRIFT_X = 28;
+const DRIFT_YAW = 1.2;
+const DRIFT_PUSH = 36;
 
 function holdPose(h: Hold, v: number, over?: Partial<Pose>): Pose {
   const p = { ...h.pose, ...over };
   if (!h.drift) return p;
   const d = v - 0.5;
-  return { ...p, x: p.x + DRIFT_X * d, yaw: p.yaw + DRIFT_YAW * d };
+  return { ...p, x: p.x + (h.slide ?? DRIFT_X) * d, yaw: p.yaw + DRIFT_YAW * d, dist: p.dist + (h.push ?? DRIFT_PUSH) * v };
 }
 
+/**
+ * A Hermite segment from p1 to p2 whose tangents lean toward the neighbouring
+ * holds, kept to the segment's own direction and to half its span, so a far
+ * neighbour can never swing a short move past its ends (the curve stays
+ * monotone between them).
+ */
 function catmull(p0: number, p1: number, p2: number, p3: number, u: number, tension = 0.35) {
-  const m1 = (p2 - p0) * tension;
-  const m2 = (p3 - p1) * tension;
+  const d = p2 - p1;
+  const lim = (m: number) => (d >= 0 ? clamp(m, 0, d * 0.5) : clamp(m, d * 0.5, 0));
+  const m1 = lim((p2 - p0) * tension);
+  const m2 = lim((p3 - p1) * tension);
   const u2 = u * u;
   const u3 = u2 * u;
   return (2 * u3 - 3 * u2 + 1) * p1 + (u3 - 2 * u2 + u) * m1 + (-2 * u3 + 3 * u2) * p2 + (u3 - u2) * m2;
@@ -114,9 +131,9 @@ export function cameraAt(t: number, mobile = false): { pose: Pose; moving: boole
       const after = i + 2 < holds.length ? holdPose(holds[i + 2], 0, over(i + 2)) : b;
       const span = next.t0 - h.t1;
       const u = (t - h.t1) / span;
-      const e = glide(u);
+      const e = camEase(u);
       // Roll leads the turn by 150ms so the move banks into itself.
-      const eRoll = glide(clamp(u + 0.15 / span));
+      const eRoll = camEase(clamp(u + 0.15 / span));
       const crest = (next.crest ?? 0) * Math.sin(Math.PI * e) * (mobile ? 1.6 : 1);
       const pose: Pose = {
         x: catmull(prev.x, a.x, b.x, after.x, e),
@@ -141,38 +158,175 @@ export function cameraTransform(p: Pose): string {
 
 /* ── Surfaces: the deal at the start, the reverse deal at the seam ───── */
 
+/**
+ * The opening deals only the surfaces the dive lands on (DEALT); every other
+ * one waits face-down in the overview, showing its chapter's name like a
+ * table of contents, and turns over at TURN_AT (world.ts), landed before the
+ * camera arrives, so each chapter opens on its own product.
+ */
 const FLIP_UP = 0.15;
 const FLIP_STEP = 0.12;
-/** The seam: surfaces turn face-down over the overview hold, faster than the deal so the last lands by the loop. */
-const FLIP_DOWN = DURATION - 1.6;
+const DEAL_T = 2.2;
+/**
+ * The seam: the desk turns face-down first and the outliers last, as the
+ * camera dives out, and every card has landed by LANDED so the overview rests
+ * face-down before the loop deals it again.
+ */
+const FLIP_DOWN = DURATION - 2.0;
 const FLIP_DOWN_STEP = 0.08;
+export const LANDED = DURATION - 0.6;
 const FLIP_LIFT_UP = 160;
 const FLIP_LIFT_DOWN = 140;
 
-/** Seconds after its cue at which a SETTLE flip passes edge-on (90deg). */
-const SETTLE_HALF = (() => {
-  let s = 0;
-  while (SETTLE(s) < 0.5) s += 0.001;
-  return s;
-})();
+const upCue = (i: number) => {
+  const s = SURFACES[i];
+  const dealt = DEALT.indexOf(s.id);
+  if (dealt >= 0) return FLIP_UP + dealt * FLIP_STEP;
+  return TURN_AT[s.id] ?? FLIP_UP;
+};
+const upDur = (i: number) => (DEALT.includes(SURFACES[i].id) ? DEAL_T : FLIP_DUR);
+const downCue = (i: number) => FLIP_DOWN + i * FLIP_DOWN_STEP;
+const downDur = (i: number) => LANDED - downCue(i);
 
-const upCue = (i: number) => FLIP_UP + i * FLIP_STEP;
-const downCue = (i: number) => FLIP_DOWN + (SURFACES.length - 1 - i) * FLIP_DOWN_STEP;
+/** Seconds after its down cue at which a surface's flip passes edge-on (90deg). */
+const DOWN_HALF = SURFACES.map((_, i) => {
+  let s = 0;
+  while (SETTLE(s, downDur(i)) < 0.5) s += 0.001;
+  return s;
+});
 
 /** Content time for a surface: its finished state until it turns edge-on at the seam, then its t=0 state for the deal. */
 export function contentT(i: number, t: number): number {
-  return t < downCue(i) + SETTLE_HALF ? t : 0;
+  return t < downCue(i) + DOWN_HALF[i] ? t : 0;
 }
 
 function surfaceFlip(i: number, t: number): { angle: number; lift: number } {
   const d = downCue(i);
   if (t >= d) {
-    const k = SETTLE(t - d, DURATION - d);
+    const k = SETTLE(t - d, downDur(i));
     return { angle: 180 * k, lift: FLIP_LIFT_DOWN * Math.sin(Math.PI * clamp(k)) };
   }
-  const k = DROP(t - upCue(i), 2.2);
+  // The opening deal lands with a little bounce; a chapter's own turn settles without overshoot.
+  const k = (DEALT.includes(SURFACES[i].id) ? DROP : SETTLE)(t - upCue(i), upDur(i));
   return { angle: 180 * (1 - k), lift: FLIP_LIFT_UP * Math.sin(Math.PI * clamp(k)) };
 }
+
+const SURFACE_INDEX = Object.fromEntries(SURFACES.map((s, i) => [s.id, i])) as Record<SurfaceId, number>;
+
+/** The film second each surface starts to turn face-up; the tests hold every chapter's resting state to it. */
+export const FACE_UP: Record<SurfaceId, number> = Object.fromEntries(SURFACES.map((s, i) => [s.id, upCue(i)])) as Record<SurfaceId, number>;
+
+/* ── Surfaces near the camera's path fade across transits ────────────── */
+
+const sees = (h: Hold, id: SurfaceId) => h.sees === "all" || h.sees.includes(id);
+const FADE = 0.3;
+
+/**
+ * Opacity of a `fadeInTransit` surface: out over the first 0.3s of a move
+ * away from a hold that sees it (its own `fadeOut` if it sets one), in over the first 0.3s of a move toward one (its own `fadeIn`),
+ * and in over the dive's last second (short of the flips) toward the overview.
+ */
+function transitOpacity(id: SurfaceId, t: number): number {
+  for (let i = 0; i < CAMERA.length; i++) {
+    const h = CAMERA[i];
+    if (t >= h.t0 && t <= h.t1) return sees(h, id) ? 1 : 0;
+    const next = CAMERA[i + 1];
+    if (!next || t <= h.t1 || t >= next.t0) continue;
+    const [a, b] = [sees(h, id), sees(next, id)];
+    const s = t - h.t1;
+    if (a && b) return 1;
+    if (a) {
+      const { fadeOut } = SURFACE_BY_ID[id];
+      return 1 - (fadeOut ? glide(clamp(s / fadeOut)) : settle(clamp(s / FADE)));
+    }
+    if (!b) return 0;
+    if (next.sees === "all") return settle(clamp((t - (next.t0 - 1)) / 0.6));
+    const { fadeIn } = SURFACE_BY_ID[id];
+    return fadeIn ? glide(clamp(s / fadeIn)) : settle(clamp(s / FADE));
+  }
+  return 1;
+}
+
+/**
+ * A contact shadow: just behind its surface and a little below, so the
+ * surface reads as resting on the page, never far enough back to slide into
+ * frame on its own while its surface is out of it. `h` is the surface's
+ * height above the page plane (z = -420): high surfaces cast a wider, softer
+ * one; low ones a tight one.
+ */
+const PAGE_Z = -420;
+function shadowOf(s: (typeof SURFACES)[number], liftN: number): El {
+  const h = s.pos[2] - PAGE_Z;
+  // Held behind the surface by as far as its tilt swings its edges, so no part of the shadow pokes through it.
+  const tilt = Math.sin((Math.max(Math.abs(s.rot[0]), Math.abs(s.rot[1])) * Math.PI) / 180) * (Math.max(s.w, s.h) / 2);
+  const clear = 12 + tilt * 1.1;
+  const scale = (1 + h / 2400) * (1 + 0.18 * liftN);
+  return {
+    transform: `translate3d(0px, ${r3(10 + h * 0.03)}px, ${r3(-(clear + 24 + h * 0.05))}px) scale(${r3(scale)})`,
+    opacity: r3(clamp(0.3 - (0.12 * h) / 600, 0.08, 0.3) / 0.3 * (1 - 0.65 * liftN)),
+  };
+}
+
+/* ── What the camera can see ──────────────────────────────────────────── */
+
+/**
+ * How far past the film's box the page shows the world, in stage px: the
+ * bleed runs to the window's edges (about 700 stage px each side on a 2560px
+ * screen, 350 at 1440) and FADE_Y above and below; a phone shows a gutter.
+ */
+const REACH = {
+  desktop: { x0: -700, x1: 1980, y0: -100, y1: 860 },
+  mobile: { x0: -60, x1: 700, y0: -100, y1: 900 },
+};
+const LIVE_STEP = 0.1;
+const LIVE_PAD = 0.3;
+
+/** Whether any part of a surface (its card as flipped and lifted at t, its shadow's spread) reaches the page at t. */
+function reaches(i: number, t: number, mobile: boolean): boolean {
+  const s = SURFACES[i];
+  const { pose } = cameraAt(t, mobile);
+  const { angle, lift } = surfaceFlip(i, t);
+  const [ca, sa] = [Math.cos((angle * Math.PI) / 180), Math.sin((angle * Math.PI) / 180)];
+  const r = mobile ? REACH.mobile : REACH.desktop;
+  let [x0, x1, y0, y1] = [Infinity, -Infinity, Infinity, -Infinity];
+  for (const [lx, ly] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+    // The card turns about its middle (rotateX) and lifts toward the viewer; 10% wider for the shadow's spread.
+    const [x, y] = [lx * s.w * 0.55, ly * s.h * 0.55];
+    const p = project(pose, localToWorld(s.id, x, y * ca, y * sa + lift), mobile);
+    if (!p) return true;
+    [x0, x1, y0, y1] = [Math.min(x0, p.x), Math.max(x1, p.x), Math.min(y0, p.y), Math.max(y1, p.y)];
+  }
+  return x1 > r.x0 && x0 < r.x1 && y1 > r.y0 && y0 < r.y1;
+}
+
+/**
+ * When each surface is rendered: while the camera can see any part of it on
+ * the page, padded LIVE_PAD either side, sampled every LIVE_STEP. Derived
+ * from geometry rather than from the holds' `sees`, because with no frame a
+ * surface in the side fades is on screen, and a cull it can see is a pop.
+ */
+const LIVE: Record<"desktop" | "mobile", [number, number][][]> = {
+  desktop: SURFACES.map((_, i) => liveWindows(i, false)),
+  mobile: SURFACES.map((_, i) => liveWindows(i, true)),
+};
+
+function liveWindows(i: number, mobile: boolean): [number, number][] {
+  const out: [number, number][] = [];
+  const n = Math.round(DURATION / LIVE_STEP);
+  for (let k = 0; k <= n; k++) {
+    const t = Math.min(k * LIVE_STEP, DURATION - 1e-6);
+    if (!reaches(i, t, mobile)) continue;
+    const [a, b] = [Math.max(0, t - LIVE_PAD), Math.min(DURATION, t + LIVE_PAD)];
+    const last = out[out.length - 1];
+    if (last && a <= last[1]) last[1] = b;
+    else out.push([a, b]);
+  }
+  return out;
+}
+
+/** Whether a surface is rendered at t. */
+export const isLive = (id: SurfaceId, t: number, mobile = false): boolean =>
+  LIVE[mobile ? "mobile" : "desktop"][SURFACE_INDEX[id]].some(([a, b]) => t >= a && t <= b);
 
 /* ── Beats ────────────────────────────────────────────────────────────── */
 
@@ -198,8 +352,9 @@ function beatState(b: Beat, t: number): { tf: string; o: number } {
       return { tf: "", o: settle(p) };
     case "fadeOut":
       return { tf: "", o: 1 - settle(p) };
-    case "push": {
-      const inv = 1 - settle(p);
+    case "push":
+    case "lift": {
+      const inv = 1 - (b.preset === "lift" ? glide(p) : settle(p));
       if (inv === 0) return { tf: "", o: 1 };
       return { tf: `translate3d(${r3((b.x ?? 0) * inv)}px, ${r3((b.y ?? 0) * inv)}px, 0px)`, o: 1 };
     }
@@ -264,7 +419,7 @@ function flyerState(f: Flyer, t: number): El {
   const rx = lerp(ra[0], rb[0], sr);
   const ry = lerp(ra[1], rb[1], sr);
   const rz = lerp(ra[2], rb[2], sr);
-  const sc = f.scale ? lerp(f.scale[0], f.scale[1], u) : 1;
+  const sc = (f.scale ? lerp(f.scale[0], f.scale[1], u) : 1) * (1 + (f.swell ?? 0) * Math.sin(Math.PI * u));
   const o = Math.min(clamp(u0 / f.fade[0]), clamp((1 - u0) / f.fade[1]));
   return {
     opacity: r3(o),
@@ -281,20 +436,19 @@ export type Frame = {
   texts: Record<string, string>;
 };
 
-const SURFACE_INDEX = Object.fromEntries(SURFACES.map((s, i) => [s.id, i])) as Record<SurfaceId, number>;
-
 /** Every element id the film animates, with its surface; used by the driver and the tests. */
 export const ELEMENT_IDS: string[] = [
-  ...SURFACES.flatMap((s) => [`card:${s.id}`, `shadow:${s.id}`, `mount:${s.id}`]),
+  ...SURFACES.flatMap((s) => [`card:${s.id}`, `shadow:${s.id}`, `mount:${s.id}`, ...(s.fadeInTransit ? [`face:${s.id}`] : [])]),
   ...Object.entries(BEATS).flatMap(([sid, beats]) => [...new Set(beats.map((b) => `${sid}/${b.id}`))]),
   ...FLYERS.map((f) => f.id),
-  ...ARCS.map((a) => a.id),
+  ...ARCS.flatMap((a) => [a.id, `${a.id}.dot`, `${a.id}.ring`]),
   "label3w",
 ];
 
+/** Film time in [0, DURATION), to the microsecond, so a looped t renders exactly the frame of the same t (118.5 % 88.8 is not 29.7 in floats). */
 export function wrapT(t: number): number {
   const m = t % DURATION;
-  return m < 0 ? m + DURATION : m;
+  return Math.round((m < 0 ? m + DURATION : m) * 1e6) / 1e6;
 }
 
 export function frame(tIn: number, mobile = false): Frame {
@@ -307,8 +461,11 @@ export function frame(tIn: number, mobile = false): Frame {
     const { angle, lift } = surfaceFlip(i, t);
     const liftN = lift / FLIP_LIFT_UP;
     els[`card:${s.id}`] = { transform: `translateZ(${r3(lift)}px) rotateX(${r3(angle)}deg)` };
-    els[`shadow:${s.id}`] = { transform: `translateZ(-60px) scale(${r3(1 + 0.18 * liftN)})`, opacity: r3(1 - 0.65 * liftN) };
-    els[`mount:${s.id}`] = { visible: LIVE[s.id].some(([a, b]) => t >= a && t <= b) };
+    const shadow = shadowOf(s, liftN);
+    const fade = s.fadeInTransit ? transitOpacity(s.id, t) : 1;
+    els[`shadow:${s.id}`] = { ...shadow, opacity: r3((shadow.opacity ?? 1) * fade) };
+    els[`mount:${s.id}`] = { visible: isLive(s.id, t, mobile) };
+    if (s.fadeInTransit) els[`face:${s.id}`] = { opacity: r3(fade) };
 
     const ct = contentT(i, t);
     const grouped: Record<string, { tf: string[]; o: number }> = {};
@@ -338,10 +495,14 @@ export function frame(tIn: number, mobile = false): Frame {
     const arcIn = progress(t, a.cue, a.dur);
     const arcOut = progress(t, a.cue + a.dur + a.hold, 0.4);
     els[a.id] = { dash: r3(1 - arcIn), opacity: r3(arcIn > 0 ? 1 - arcOut : 0) };
+    els[`${a.id}.dot`] = { opacity: r3(clamp((arcIn - 0.9) / 0.1) * (1 - arcOut)) };
+    // The end answers its arrival with one ring.
+    const ring = beatState({ id: `${a.id}.ring`, cue: a.cue + a.dur, dur: 0.35, preset: "ring" }, t);
+    els[`${a.id}.ring`] = { transform: ring.tf, opacity: r3(ring.o) };
   }
 
   const lIn = progress(t, LABEL_3W.cue, 0.3);
-  const lOut = progress(t, LABEL_3W.end - 0.3, 0.3);
+  const lOut = progress(t, LABEL_3W.end - 0.45, 0.45);
   els.label3w = { opacity: r3(lIn * (1 - lOut)) };
 
   return { camera: cameraTransform(cam.pose), moving: cam.moving, els, texts };
