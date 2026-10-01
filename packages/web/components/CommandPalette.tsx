@@ -73,8 +73,8 @@ import type { ChatAttachment } from "../store/chatSlice";
 import "./chat/chat.css";
 import "./CommandPalette.css";
 import { PalettePickPreview } from "./PalettePickPreview";
-import { groupClass, itemClass } from "./paletteStyles";
-import { NavIcon, PaletteSessionRow, PaletteSearchResultRow } from "./PaletteRows";
+import { groupClass, itemClass, paletteClass, paletteInputClass } from "./paletteStyles";
+import { NavIcon, PaletteSearchBar, PaletteSessionRow, PaletteSearchResultRow, PaletteTaskRow } from "./PaletteRows";
 import { formatDateSmart } from "@codecast/shared/time";
 
 // Loaded only on the confirm step so the search palette does not pull the
@@ -2278,7 +2278,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   if (open && actionMode && (hasTargets || TARGETLESS_MODES.has(actionMode))) {
     const paletteContent = (
       <div ref={paletteRef}
-      className="w-[min(680px,calc(100vw-24px))] rounded-xl border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col">
+      className={paletteClass}>
         {contextLabel && !TARGETLESS_MODES.has(actionMode) && (
           <div className="px-4 pt-3 pb-0">
             <div className="text-xs font-mono text-sol-text-dim truncate">{contextLabel}</div>
@@ -2467,7 +2467,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         const action = paletteActionForKey(e.nativeEvent, actions);
         if (action) { e.preventDefault(); e.stopPropagation(); handleRootAction(action.key); }
       }}
-      className="w-[min(680px,calc(100vw-24px))] rounded-xl border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col"
+      className={paletteClass}
       filter={paletteItemScore}
       loop
     >
@@ -2478,15 +2478,12 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           <PalettePickPreview preview={pick.preview} />
         </div>
       )}
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-sol-border/60">
-        <div className="text-sol-text-dim">
-          <NavIcon type="search" className="w-[18px] h-[18px]" />
-        </div>
+      <PaletteSearchBar trailing={<KeyCap>Esc</KeyCap>}>
         <CommandPrimitive.Input
           value={query}
           onValueChange={setQuery}
           placeholder={pick ? (pick.kinds.includes("person") ? "Search people, roles, sessions..." : "Search sessions, docs...") : hasTargets ? "Action or jump to..." : "Jump to..."}
-          className="flex-1 bg-transparent text-[15px] text-sol-text placeholder:text-sol-text-dim/60 outline-none"
+          className={paletteInputClass}
           autoFocus
           onKeyDown={(e) => {
             if (e.nativeEvent.isComposing) return;
@@ -2513,8 +2510,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
             }
           }}
         />
-        <KeyCap>Esc</KeyCap>
-      </div>
+      </PaletteSearchBar>
       <CommandPaletteList>
         {!query.trim() && (
           <CommandPrimitive.Empty className="py-6 text-center text-sm text-sol-text-dim">
@@ -2904,24 +2900,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
 
         {taskMatches.length > 0 && (
           <CommandPrimitive.Group heading="Tasks" className={groupClass}>
-            {taskMatches.map((t: any) => {
-              const st = TASK_STATUS_META[t.status];
-              return (
-                <CommandPrimitive.Item
-                  key={`task-${t._id}`}
-                data-palette-type="task" data-palette-id={t._id} data-palette-title={t.title} data-palette-short-id={t.short_id}
-                  value={`__entity__ ${t.title} ${t.short_id}|||${t._id}`}
-                  onSelect={() => chooseEntity("task", t, `/tasks/${t._id}`)}
-                  className={itemClass}
-                >
-                  <ListTodo className="w-4 h-4 flex-shrink-0 text-sol-cyan" />
-                  <span className="truncate flex-1">{t.title || "Untitled"}</span>
-                  {st && <span className={`text-[10px] flex-shrink-0 ${st.color}`}>{st.label}</span>}
-                  <ShortId id={t.short_id} className="text-[10px] text-sol-text-dim tabular-nums" />
-                  <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{formatDateSmart(t.updated_at)}</span>
-                </CommandPrimitive.Item>
-              );
-            })}
+            {taskMatches.map((t: any) => (
+              <PaletteTaskRow key={`task-${t._id}`} task={t} status={TASK_STATUS_META[t.status]} onSelect={() => chooseEntity("task", t, `/tasks/${t._id}`)} />
+            ))}
           </CommandPrimitive.Group>
         )}
 

@@ -1,4 +1,6 @@
+import { useContext } from "react";
 import { cn, relTimeShort } from "@/lib/utils";
+import { EntityFixtureContext } from "../lib/entityDisplay";
 import { useInboxStore } from "../store/inboxStore";
 import { type LivenessState } from "../lib/liveness";
 export type { LivenessState };
@@ -106,9 +108,13 @@ export function ActiveSessionBadge({ session, compact, dormant, className }: Act
     </>
   );
 
+  // Under fixture entities (the homepage hero) the session is not a real row:
+  // the side panel would open on nothing.
+  const fixtures = useContext(EntityFixtureContext);
   const handleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
+    if (fixtures) return;
     const store = useInboxStore.getState();
     const targetId = _id || session_id;
     store.openSidePanel(targetId);
