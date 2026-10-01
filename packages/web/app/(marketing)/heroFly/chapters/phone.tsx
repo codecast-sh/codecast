@@ -1,0 +1,151 @@
+"use client";
+
+/**
+ * Chapter 4, Approve: the API worker's ask as the desk's permission stack, and
+ * on the phone as the daemon's push on the lock screen that opens into the
+ * app's notification row and permission card. Approve works on both, locally.
+ */
+
+import { useState } from "react";
+import { LogoIcon } from "@/components/Logo";
+import { PermissionStackView } from "@/components/PermissionCard";
+import { PhonePermissionCard } from "@/components/PhonePermissionCard";
+import { NotificationRow } from "@/components/notifications/NotificationRow";
+import { NOTIFICATIONS, PERMISSION, PUSH } from "../fixtures/phone";
+import { CUES } from "../fixtures/story";
+import { fly, useFilmTime } from "../filmClock";
+import { PHONE_AT } from "./phone.motion";
+import type { PartProps } from "./contract";
+
+const noop = () => {};
+
+/** Where the ask stands: 0 pending, 1 Approve tapped (in flight), 2 answered. */
+type Answer = 0 | 1 | 2;
+
+/** A local Approve or Deny: in flight for a beat, then answered, as the real round trip reads. */
+function useLocalAnswer(): [Answer, () => void] {
+  const [answer, setAnswer] = useState<Answer>(0);
+  const respond = () => {
+    setAnswer(1);
+    setTimeout(() => setAnswer(2), 450);
+  };
+  return [answer, respond];
+}
+
+const filmAnswer = (t: number): Answer => (t < PHONE_AT.tap ? 0 : t < PHONE_AT.gone ? 1 : 2);
+
+function DeskPermissionAsk() {
+  const [local, respond] = useLocalAnswer();
+  const answer = Math.max(useFilmTime(filmAnswer), local);
+  if (answer === 2) return null;
+  return (
+    <div {...fly("desk/phone.stack")} data-hero-live="" className="border-t border-sol-border/40 px-4 py-1.5">
+      <PermissionStackView
+        pending={[PERMISSION]}
+        inflight={new Set(answer === 1 ? [PERMISSION._id] : [])}
+        onApprove={respond}
+        onDeny={respond}
+        onApproveAll={respond}
+        onDenyAll={respond}
+        onAllowAll={respond}
+      />
+    </div>
+  );
+}
+
+/** The lead's transcript foot while the worker waits on permission. A new ask (the next loop) starts fresh. */
+export function DeskPermission() {
+  const asked = useFilmTime((t) => t >= CUES.permissionAsk);
+  return asked ? <DeskPermissionAsk /> : null;
+}
+
+/** The daemon's push as iOS shows it: the app's icon, the push title and body. */
+function PushBannerCard() {
+  return (
+    <div
+      className="flex items-start gap-2.5 rounded-[18px] bg-[#2a3135]/95 px-3 py-2.5 text-white shadow-[0_10px_30px_rgba(0,0,0,0.45)]"
+      style={{ fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" }}
+    >
+      <span className="mt-0.5 flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-[9px] bg-[#002b36]">
+        <LogoIcon size={22} />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="flex items-baseline gap-2">
+          <span className="truncate text-[13px] font-semibold leading-tight">{PUSH.title}</span>
+          <span className="ml-auto shrink-0 text-[11px] text-white/55">now</span>
+        </span>
+        <span className="mt-0.5 block truncate text-[13px] leading-snug text-white/85">{PUSH.body}</span>
+      </span>
+    </div>
+  );
+}
+
+/** The flyer that carries the ask from the desk to the phone: the push it becomes. */
+export function PushFlyer() {
+  return (
+    <div className="w-[264px] -translate-x-1/2 -translate-y-1/2">
+      <PushBannerCard />
+    </div>
+  );
+}
+
+function LockScreen({ now }: PartProps) {
+  const d = new Date(now);
+  const time = `${d.getHours() % 12 || 12}:${String(d.getMinutes()).padStart(2, "0")}`;
+  const date = d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+  return (
+    <div
+      {...fly("phone/phone.lock", {
+        fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif",
+        background: "radial-gradient(120% 70% at 30% 0%, rgba(38,139,210,0.35), transparent 60%), radial-gradient(90% 60% at 100% 100%, rgba(42,161,152,0.28), transparent 60%), #001f27",
+      })}
+      className="absolute inset-0 flex flex-col items-center pt-10 text-white"
+    >
+      <span className="text-[15px] font-medium text-white/80">{date}</span>
+      <span className="text-[68px] font-semibold leading-none tracking-tight">{time}</span>
+    </div>
+  );
+}
+
+function PhoneApp({ now }: PartProps) {
+  const [local, respond] = useLocalAnswer();
+  const answer = Math.max(useFilmTime(filmAnswer), local);
+  const done = useFilmTime((t) => t >= PHONE_AT.done);
+  return (
+    <div {...fly("phone/phone.app")} className="absolute inset-0 flex flex-col bg-sol-bg pt-1">
+      {done && (
+        <div {...fly("phone/phone.done")}>
+          <NotificationRow notification={{ ...NOTIFICATIONS.done, created_at: now - NOTIFICATIONS.done.ago, read: false }} onOpen={noop} />
+        </div>
+      )}
+      <div {...fly("phone/phone.row")}>
+        <NotificationRow notification={{ ...NOTIFICATIONS.ask, created_at: now - NOTIFICATIONS.ask.ago, read: answer > 0 }} onOpen={noop} />
+      </div>
+      {answer < 2 && (
+        <div {...fly("phone/phone.card")} data-hero-live="" className="relative flex flex-col px-3 pt-3">
+          <PhonePermissionCard permission={PERMISSION} processing={answer === 1} onApprove={respond} onDeny={respond} />
+          {/* The tap, centred on Approve (the left half of the card's button row). */}
+          <span
+            {...fly("phone/phone.tap", { left: "calc(12px + 25% - 4px)", top: "calc(100% - 44px)", margin: "-28px 0 0 -28px" })}
+            aria-hidden
+            className="pointer-events-none absolute h-14 w-14 rounded-full border-2 border-white/80 bg-white/20"
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The phone's screen: the lock screen, the push landing on it, then the app it opens. */
+export function PhoneScreen({ now }: PartProps) {
+  const asked = useFilmTime((t) => t >= CUES.permissionAsk);
+  return (
+    <div className="relative h-full">
+      <LockScreen now={now} />
+      <PhoneApp key={asked ? "asked" : "idle"} now={now} />
+      <div {...fly("phone/phone.banner")} className="absolute inset-x-2 top-2">
+        <PushBannerCard />
+      </div>
+    </div>
+  );
+}
