@@ -31,6 +31,7 @@ import {
   parseEntityUrl,
   parsePublishedPageUrl,
   parseClaudeArtifactUrl,
+  parseLinkPreviewUrl,
   parseMessageRefUrl,
   isEntityId,
   entityMentionRegex,
@@ -45,8 +46,8 @@ import {
 import { isOnThreadRoute, openSessionAtMessage } from "../lib/openSessionAtMessage";
 import { SharedMessageCard, SharedMessagePill } from "./SharedMessageCard";
 import { AuthorAvatar, DiffStat, DottedRow, TaskPeople, type DottedPart } from "./entityDisplay";
+import { taskPriorityBadge } from "../lib/taskPriority";
 import {
-  PRIORITY_CONFIG,
   STATUS_COLOR,
   STATUS_LABEL,
   TYPE_LABEL,
@@ -68,7 +69,7 @@ import { FilePathContext, filePathMention, parseFilePathHref } from "../lib/file
 import { useKnownWorktrees } from "../hooks/useKnownWorktrees";
 import { worktreeRefOfCode } from "./worktree/worktreeModel";
 import { WorktreePill } from "./worktree/WorktreePill";
-import { ClaudeArtifactEmbed, ClaudeArtifactPill, PublishedPageEmbed, PublishedPagePill } from "./PublishedPageEmbed";
+import { ClaudeArtifactEmbed, ClaudeArtifactPill, LinkPreviewCard, PublishedPageEmbed, PublishedPagePill } from "./PublishedPageEmbed";
 import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
 import { REF_NTH_ATTR, REF_NAMED_ATTR, REF_SUFFIX_ATTR } from "../lib/remarkEntityIds";
 import { REF_CERTAIN_ATTR } from "../lib/remarkEntityCards";
@@ -100,7 +101,7 @@ function parseDateRef(text: string): { iso: string; label?: string } | null {
 
 function TaskHoverContent({ task }: { task: any }) {
   const { icon: StatusIcon, color: statusColor, label: statusLabel } = taskVisual(task.status);
-  const priority = PRIORITY_CONFIG[task.priority];
+  const priority = taskPriorityBadge(task.priority);
   const project = taskProject(task);
   const kind = task.task_type && task.task_type !== "task" ? task.task_type : null;
   const source = task.source && task.source !== "human" ? task.source : null;
@@ -686,6 +687,14 @@ function MessageDeepLink({
   );
 }
 
+function safeDecode(text: string): string {
+  try {
+    return decodeURIComponent(text);
+  } catch {
+    return "";
+  }
+}
+
 export function EntityAwareLink({ href, children, ...allProps }: any) {
   const { mention, rest: props } = takeMentionProps(allProps);
   // The conversation this link sits in, when there is one: its repository is
@@ -728,14 +737,20 @@ export function EntityAwareLink({ href, children, ...allProps }: any) {
       );
     }
     // A page URL alone on its own line, hoisted by remarkEntityIds into
-    // "embed:artifact:<slug>|<caption>" (a published codecast page) or
-    // "embed:claude:<id>|<caption>" (a Claude artifact) — the page renders
-    // inline as a card.
-    const pageEmbed = /^embed:(artifact|claude):([^|]+)(?:\|([\s\S]*))?$/.exec(embedText);
+    // "embed:artifact:<slug>|<caption>" (a published codecast page),
+    // "embed:claude:<id>|<caption>" (a Claude artifact) or
+    // "embed:link:<encoded url>|<caption>" (any other web page) — the page
+    // renders inline as a card.
+    const pageEmbed = /^embed:(artifact|claude|link):([^|]+)(?:\|([\s\S]*))?$/.exec(embedText);
     if (pageEmbed) {
       const [, kind, id, caption] = pageEmbed;
       if (kind === "artifact") return <PublishedPageEmbed slug={id} caption={caption} />;
-      return <ClaudeArtifactEmbed id={id} caption={caption} />;
+      if (kind === "link") {
+        const url = parseLinkPreviewUrl(safeDecode(id));
+        if (url) return <LinkPreviewCard url={url} caption={caption} />;
+      } else {
+        return <ClaudeArtifactEmbed id={id} caption={caption} />;
+      }
     }
   }
   if (href?.startsWith("entity://")) {

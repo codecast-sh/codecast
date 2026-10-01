@@ -1,14 +1,22 @@
 import { Id } from "./_generated/dataModel";
 
 // ── Owner-set primitives (session_owners join table) ─────────────────────────
-// The join table is the canonical multi-owner store — the humans whose inboxes a
-// session appears in. These are the single choke points every owner reader/
-// writer goes through. Kept in a dependency-free leaf module (imports only Id)
-// so both privacy.ts (access policy) and sessionOwnership.ts (assignment
-// workflow) can use them without an import cycle.
-//
-// The denormalized conversations.owner_user_id cache (the primary owner) is
-// maintained by the owner mutations, not here, so callers stay uniform.
+// The join table is the canonical multi-owner store: the humans whose inboxes a
+// session appears in. Every owner read and row write goes through these, and
+// so does the denormalized conversations.owner_user_id cache (the primary
+// owner), whose one writer is syncPrimaryOwnerCache below; setSessionOwnerRows
+// and the owner mutations call it after they change rows. Kept in a
+// dependency-free leaf module (imports only Id) so both privacy.ts (access
+// policy) and sessionOwnership.ts (assignment workflow) can use them without an
+// import cycle.
+
+async function ownerRows(ctx: { db: any }, conversationId: Id<"conversations">): Promise<any[]> {
+  const rows = await ctx.db
+    .query("session_owners")
+    .withIndex("by_conversation", (q: any) => q.eq("conversation_id", conversationId))
+    .collect();
+  return rows.sort((a: any, b: any) => a.added_at - b.added_at);
+}
 
 // Owners of a session, oldest-first (the first-added still-present owner is the
 // "primary" mirrored to conversations.owner_user_id).
@@ -16,12 +24,7 @@ export async function listSessionOwnerIds(
   ctx: { db: any },
   conversationId: Id<"conversations">,
 ): Promise<Id<"users">[]> {
-  const rows = await ctx.db
-    .query("session_owners")
-    .withIndex("by_conversation", (q: any) => q.eq("conversation_id", conversationId))
-    .collect();
-  rows.sort((a: any, b: any) => a.added_at - b.added_at);
-  return rows.map((r: any) => r.user_id as Id<"users">);
+  return (await ownerRows(ctx, conversationId)).map((r: any) => r.user_id as Id<"users">);
 }
 
 export async function isSessionOwner(
@@ -171,27 +174,66 @@ export async function stampSeatOwners(
 
 // A session's owner set as one comparable value: the primary (the
 // owner_user_id cache) first, the rest sorted. The org change log records it
-// before and after a change so an undo can put the exact set back.
-export async function ownerSetOf(ctx: { db: any }, conversationId: Id<"conversations">): Promise<string[]> {
+// before and after a change so an undo can put the exact set back. A caller
+// that already holds the conversation passes it, and it is not read again.
+export async function ownerSetOf(
+  ctx: { db: any },
+  conversationId: Id<"conversations">,
+  loaded?: { owner_user_id?: unknown } | null,
+): Promise<string[]> {
   const owners = (await listSessionOwnerIds(ctx, conversationId)).map(String);
-  const primary = String((await ctx.db.get(conversationId))?.owner_user_id ?? "");
+  const conversation = loaded === undefined ? await ctx.db.get(conversationId) : loaded;
+  const primary = String(conversation?.owner_user_id ?? "");
   return [...owners.filter((id) => id === primary), ...owners.filter((id) => id !== primary).sort()];
+}
+
+/** One owner row as the org change log keeps it, so an undo puts the row back
+ *  as it was: who added it, when, and whether its owner had acknowledged it. */
+export type OwnerRowSnapshot = { user_id: string; added_by: string; added_at: number; seen_at?: number; note?: string };
+
+export async function ownerRowsOf(ctx: { db: any }, conversationId: Id<"conversations">): Promise<OwnerRowSnapshot[]> {
+  return (await ownerRows(ctx, conversationId)).map((r: any) => ({
+    user_id: String(r.user_id),
+    added_by: String(r.added_by),
+    added_at: r.added_at,
+    ...(r.seen_at ? { seen_at: r.seen_at } : {}),
+    ...(r.note ? { note: r.note } : {}),
+  }));
 }
 
 // Make the owner rows exactly `owners`, the first listed as primary. Returns
 // true iff a row or the primary changed. Writes nothing for a set already in place.
+//
+// `restore` is an undo putting a set back: each owner that has to be re-added
+// gets its recorded row back unchanged. One with no recorded row (a log entry
+// written before rows were kept) comes back already acknowledged, because an
+// undo returns a state and must never read as a fresh handoff from the person
+// who clicked it.
 export async function setSessionOwnerRows(
   ctx: { db: any },
   conversationId: Id<"conversations">,
   owners: string[],
   addedBy: Id<"users">,
+  restore?: OwnerRowSnapshot[],
 ): Promise<boolean> {
   const keep = new Set(owners);
   let changed = false;
+  const present = new Set<string>();
   for (const id of await listSessionOwnerIds(ctx, conversationId)) {
+    present.add(String(id));
     if (!keep.has(String(id)) && await removeSessionOwnerRow(ctx, conversationId, id)) changed = true;
   }
-  for (const id of owners) if (await addSessionOwnerRow(ctx, conversationId, id as Id<"users">, addedBy)) changed = true;
+  for (const id of owners) {
+    if (!restore) {
+      if (await addSessionOwnerRow(ctx, conversationId, id as Id<"users">, addedBy)) changed = true;
+      continue;
+    }
+    if (present.has(id)) continue;
+    const now = Date.now();
+    const row = restore.find((r) => r.user_id === id) ?? { user_id: id, added_by: String(addedBy), added_at: now, seen_at: now };
+    await ctx.db.insert("session_owners", { conversation_id: conversationId, ...row });
+    changed = true;
+  }
   const primary = owners[0] as Id<"users"> | undefined;
   if (!changed && primary && String((await ctx.db.get(conversationId))?.owner_user_id ?? "") !== primary) changed = true;
   if (changed) await syncPrimaryOwnerCache(ctx, conversationId, primary);

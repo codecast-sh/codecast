@@ -52,6 +52,80 @@ export const ThreadStatePanel = memo(function ThreadStatePanel({
   // rewrites it, so subscribing to it directly does not follow row churn.
   const prStatus = useInboxStore((s) => s.sessions[conversationId]?.pr_status ?? null);
 
+  const toggle = () =>
+    useInboxStore.getState().updateClientUI({ thread_state_collapsed: !collapsed });
+
+  const clear = (headline: string) => {
+    // Nulls, not undefined: the patch rail reads null as an explicit clear and
+    // ignores undefined, so an Undo on a legacy row (written before the counts
+    // existed) still restores exactly what was there.
+    const previous = {
+      thread_state: threadState ?? null,
+      thread_state_at: threadStateAt ?? null,
+      thread_state_msg_count: threadStateMsgCount ?? null,
+      thread_state_status: threadStateStatus ?? null,
+    };
+    useInboxStore.getState().patchConversation(conversationId, {
+      thread_state: null,
+      thread_state_at: null,
+      thread_state_msg_count: null,
+      thread_state_status: null,
+    });
+    toast("Pinned state cleared", {
+      description: headline,
+      action: {
+        label: "Undo",
+        onClick: () => useInboxStore.getState().patchConversation(conversationId, previous),
+      },
+    });
+  };
+
+  return (
+    <ThreadStatePanelView
+      conversationId={conversationId}
+      threadState={threadState}
+      threadStateAt={threadStateAt}
+      threadStateMsgCount={threadStateMsgCount}
+      threadStateStatus={threadStateStatus}
+      messageCount={messageCount}
+      now={now}
+      collapsed={collapsed}
+      prStatus={prStatus}
+      onToggle={toggle}
+      onClear={canClear ? clear : undefined}
+    />
+  );
+});
+
+/** The panel drawn from props: the state, the clock, whether it is folded, and
+ *  the pull request beside it. ThreadStatePanel feeds it from the store; a
+ *  surface outside the app feeds it fixtures. Without `onClear` it offers no
+ *  clear. */
+export function ThreadStatePanelView({
+  conversationId,
+  threadState,
+  threadStateAt,
+  threadStateMsgCount,
+  threadStateStatus,
+  messageCount,
+  now,
+  collapsed,
+  prStatus,
+  onToggle,
+  onClear,
+}: {
+  conversationId: string;
+  threadState?: string | null;
+  threadStateAt?: number | null;
+  threadStateMsgCount?: number | null;
+  threadStateStatus?: string | null;
+  messageCount?: number | null;
+  now: number;
+  collapsed: boolean;
+  prStatus: React.ComponentProps<typeof PrStatusChip>["status"];
+  onToggle: () => void;
+  onClear?: (headline: string) => void;
+}) {
   // Long states expand in place instead of scrolling inside the panel: the body
   // clamps at a readable height, and when the text runs past it a "Show all"
   // control removes the clamp. `overflows` is measured only while clamped —
@@ -103,33 +177,9 @@ export const ThreadStatePanel = memo(function ThreadStatePanel({
   // describes the situation, not the subject — labeling it would lie.
   const headlineIsSubject = !/^[-*•]?\s*(Status|State|Blocked):/i.test(lines[headlineIdx] ?? "");
 
-  const toggle = () =>
-    useInboxStore.getState().updateClientUI({ thread_state_collapsed: !collapsed });
-
-  const clear = () => {
-    // Nulls, not undefined: the patch rail reads null as an explicit clear and
-    // ignores undefined, so an Undo on a legacy row (written before the counts
-    // existed) still restores exactly what was there.
-    const previous = {
-      thread_state: threadState ?? null,
-      thread_state_at: threadStateAt ?? null,
-      thread_state_msg_count: threadStateMsgCount ?? null,
-      thread_state_status: threadStateStatus ?? null,
-    };
-    useInboxStore.getState().patchConversation(conversationId, {
-      thread_state: null,
-      thread_state_at: null,
-      thread_state_msg_count: null,
-      thread_state_status: null,
-    });
-    toast("Pinned state cleared", {
-      description: view.headline,
-      action: {
-        label: "Undo",
-        onClick: () => useInboxStore.getState().patchConversation(conversationId, previous),
-      },
-    });
-  };
+  const toggle = onToggle;
+  const canClear = !!onClear;
+  const clear = () => onClear?.(view.headline);
 
   return (
     // z-20 clears the composer's own sticky layer: MessageInput pulls a 64px
@@ -244,4 +294,4 @@ export const ThreadStatePanel = memo(function ThreadStatePanel({
       </div>
     </div>
   );
-});
+}

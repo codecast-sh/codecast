@@ -7,7 +7,9 @@
 // plain shell) and whenever the server chose not to inline — both fall back to
 // the live query exactly as before.
 
-export type SharePreloadKind = "message" | "doc" | "plan";
+import type { SharedObjectKind } from "@codecast/shared/entities";
+
+export type SharePreloadKind = SharedObjectKind;
 
 interface SharePreload {
   kind: SharePreloadKind;

@@ -119,3 +119,33 @@ describe("mergeSessionImages", () => {
     expect(merged.map((e) => e.key)).toEqual(["a", "x", "y"]);
   });
 });
+
+describe("attachment views", () => {
+  const attach = { _id: "m1", timestamp: 100, content: "[Image 1] look", images: [{ media_type: "image/png", storage_id: "att" }] };
+  const read = {
+    _id: "m2",
+    timestamp: 200,
+    tool_calls: [{ id: "tu1", input: JSON.stringify({ file_path: "/tmp/codecast/images/att.png" }) }],
+  };
+  const result = { _id: "m3", timestamp: 300, images: [{ media_type: "image/png", storage_id: "copy", tool_use_id: "tu1" }] };
+
+  test("an agent opening an attached image shows it once", () => {
+    const entries = extractSessionImages([attach, read, result], trustOurs);
+    expect(entries.map((e) => [e.key, e.storage_id])).toEqual([["att", "att"]]);
+  });
+
+  test("other tool screenshots keep their own identity", () => {
+    const shot = { timestamp: 400, images: [{ media_type: "image/png", storage_id: "shot", tool_use_id: "tu2" }] };
+    const entries = extractSessionImages([attach, read, result, shot], trustOurs);
+    expect(entries.map((e) => e.key)).toEqual(["att", "shot"]);
+  });
+
+  test("a server row indexed before the fix is dropped when the window knows the echo", () => {
+    const server: SessionImageEntry[] = [
+      { key: "att", storage_id: "att", timestamp: 100, seq: 0 },
+      { key: "copy", storage_id: "copy", timestamp: 300, seq: 0 },
+    ];
+    const merged = mergeSessionImages(server, extractSessionImages([read, result], trustOurs));
+    expect(merged.map((e) => e.key)).toEqual(["att"]);
+  });
+});

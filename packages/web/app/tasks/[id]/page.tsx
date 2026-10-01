@@ -3,8 +3,8 @@ import { RepositoryLinks } from "../../../components/repo/RepositoryLinks";
 import { ShortId } from "../../../components/ShortId";
 import { taskRepository } from "../../../lib/repoNavigation";
 import { useState, useCallback, useMemo, useRef, type ReactNode } from "react";
-import { CopyLinkButton } from "../../../components/CopyLinkButton";
-import { copyToClipboard, canonicalUrl, formatDateFull, formatRelative } from "../../../lib/utils";
+import { ShareControl } from "../../../components/ShareControl";
+import { copyToClipboard, formatDateFull, formatRelative } from "../../../lib/utils";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useTabActive } from "../../../hooks/usePagePresence";
 import { useParams, useRouter } from "next/navigation";
@@ -68,10 +68,7 @@ import {
   MoreHorizontal,
   Plus,
   CornerDownRight,
-  Forward,
 } from "lucide-react";
-import { openForwardToChat } from "../../../lib/forwardToChat";
-import { useTeamFeature } from "../../../lib/teamFeatures";
 import { MAX_TASK_DEPTH, directChildren, isActiveTask, subtaskProgressOf, taskDepth } from "@codecast/shared/tasks";
 import { closeTaskWithGuard, createTaskAndAdopt, setTaskParent } from "../../../lib/taskActions";
 import { statusByKey, statusEntityOptions, statusVisual, statusWriteFields, taskStatusKey, taskStatusOf, useTeamTaskStatusList } from "../../../lib/taskStatuses";
@@ -477,7 +474,6 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
   const params = useParams();
   const router = useRouter();
   const openLinkedSession = useOpenLinkedSession();
-  const chatOn = useTeamFeature("chat");
   const id = taskId ?? (params?.id as string);
   const isInline = variant === "inline";
 
@@ -785,16 +781,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
               {isInline && onOpen && (
                 <button onClick={onOpen} className="text-xs px-2 py-1 rounded-md text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors" title="Open full page">Open</button>
               )}
-              <CopyLinkButton path={canonicalUrl} />
-              {chatOn && (
-                <button
-                  onClick={() => openForwardToChat({ url: canonicalUrl(), label: "task" })}
-                  className="p-1 rounded-md text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors"
-                  title="Send to chat"
-                >
-                  <Forward className="w-3.5 h-3.5" />
-                </button>
-              )}
+              <ShareControl label="task" path={`/tasks/${data.short_id}`} publicShare={{ kind: "task", id: data._id, token: data.share_token }} />
               <OverflowMenu>
                 <WatchButton entityType="task" entityId={data._id} variant="menuItem" />
               </OverflowMenu>

@@ -1,6 +1,6 @@
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { ThreadRow } from "../components/calls/roomThreadModel";
-import { countUnread, markRoomThreadSeen, setRoomThreadWatching, useRoomThreadSeen } from "../lib/calls/roomThreadSeen";
+import { markRoomThreadSeen, setRoomThreadWatching, unreadArrivals, useRoomThreadSeen } from "../lib/calls/roomThreadSeen";
 import { useEventListener } from "./useEventListener";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useWatchEffect } from "./useWatchEffect";
@@ -10,12 +10,13 @@ import { useWatchEffect } from "./useWatchEffect";
  * caller drawing the thread itself: its rows are seen as they land, and while
  * this window has focus the room is watched, so no other surface counts or
  * knocks for it. Every other caller (the header's door, the chime) passes
- * nothing and only reads.
+ * nothing and only reads. `latest` is the newest unread line, so a badge can
+ * say who it is from (an agent's answer wears the agent's colour).
  */
 export function useRoomThreadUnread(
   roomKey: string | null | undefined,
   open = false,
-): { rows: ThreadRow[] | null | undefined; unread: number } {
+): { rows: ThreadRow[] | null | undefined; unread: number; latest: ThreadRow | null } {
   const rows = useQueryNoThrow(api.callChat.list, roomKey ? { room_key: roomKey } : "skip").data as
     | ThreadRow[]
     | null
@@ -39,5 +40,6 @@ export function useRoomThreadUnread(
   useEventListener("blur", () => watch(false));
   useEventListener("pagehide", () => watch(false));
 
-  return { rows, unread: open ? 0 : countUnread(rows, seen) };
+  const fresh = open ? [] : unreadArrivals(rows, seen);
+  return { rows, unread: fresh.length, latest: fresh[fresh.length - 1] ?? null };
 }

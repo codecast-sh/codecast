@@ -209,10 +209,11 @@ test("before transcription starts, the moment the viewer joined sets earlier cha
     <RoomThread roomKey={ROOM} call={null} rows={rows as any} liveTranscriptId={null} surface="stage" seated sinceAt={START} />,
   );
   const dividers = [...r.container.querySelectorAll(".rt-divider")].map((d) => d.textContent);
-  // The stage's earlier lines are minutes old: the group is open.
-  expect(dividers).toEqual(["Earlier in this room · 2 lines", "This call"]);
-  expect(r.container.querySelector(".rt-divider")?.getAttribute("aria-expanded")).toBe("true");
-  expect(r.container.querySelectorAll(".rt-line").length).toBe(3);
+  // An earlier huddle is another conversation (this one's own lines stay in
+  // it through a rejoin or a switch to off), so it starts folded.
+  expect(dividers).toEqual(["Earlier in this room · 2 lines"]);
+  expect(r.container.querySelector(".rt-divider")?.getAttribute("aria-expanded")).toBe("false");
+  expect(r.container.querySelectorAll(".rt-line").length).toBe(1);
   await r.unmount();
 
   // With a call, the event's time is a flex child beside the sentence, not inside it.
@@ -270,6 +271,27 @@ test("after the call an agent's event reads in the past, typed lines from other 
   // A link a person typed is a link, the same as one an agent wrote.
   const link = r.container.querySelector<HTMLAnchorElement>(".rt-line a");
   expect(link?.getAttribute("href")).toBe("https://example.com/notes");
+  await r.unmount();
+});
+
+test("a line belongs to the huddle it was stamped with, not to the clock", async () => {
+  useInboxStore.setState({ currentUser: { _id: "u-me" }, liveRooms: [] } as any);
+  const rows = [
+    // The previous huddle in this room: folded away, whatever its time.
+    { _id: "prev", user_id: "u-ann", user_name: "Ann Lee", text: "the last call's link", at: START - 900_000, mine: false, agent: null, transcript_id: "t0" },
+    // Typed in this huddle before its record started (a ring not yet
+    // answered), claimed by the record when it did: this call's.
+    { _id: "early", user_id: "u-me", user_name: "Ashot P", text: "joining in a sec", at: START - 30_000, mine: true, agent: null, transcript_id: "t1" },
+    { _id: "now", user_id: "u-ann", user_name: "Ann Lee", text: "ok we are live", at: START + 5_000, mine: false, agent: null, transcript_id: "t1" },
+  ];
+  const r = await render(
+    <RoomThread roomKey={ROOM} call={call()} rows={rows as any} liveTranscriptId="t1" surface="stage" seated />,
+  );
+  expect([...r.container.querySelectorAll(".rt-divider")].map((d) => d.textContent)).toEqual(["Earlier in this room · 1 line"]);
+  expect([...r.container.querySelectorAll(".rt-line")].map((l) => l.textContent)).toEqual([
+    expect.stringContaining("joining in a sec"),
+    expect.stringContaining("ok we are live"),
+  ]);
   await r.unmount();
 });
 

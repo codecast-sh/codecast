@@ -148,12 +148,20 @@ describe("reportPresence viewing fields", () => {
     expect(rows.user_presence[0].viewing_since).toBeUndefined();
   });
 
-  test("a report that changes nothing about the view patches only the heartbeat fields", async () => {
+  test("a repeat report seconds later writes nothing, so the roster does not re-run", async () => {
     const rows = tables();
     rows.user_presence.push(presence(ANN, undefined));
     const ctx = ctxFor(rows, ANN);
     await handler(reportPresence)(ctx, { focused: true, idle_ms: 0 });
+    expect(ctx.db._patched).toEqual([]);
+  });
+
+  test("a report that changes nothing about the view patches only the heartbeat fields", async () => {
+    const rows = tables();
+    rows.user_presence.push(presence(ANN, undefined, 90_000));
+    const ctx = ctxFor(rows, ANN);
+    await handler(reportPresence)(ctx, { focused: true, idle_ms: 0 });
     const [patched] = ctx.db._patched;
-    expect(Object.keys(patched.patch).sort()).toEqual(["focused", "last_input_at", "last_seen", "updated_at"]);
+    expect(Object.keys(patched.patch).sort()).toEqual(["last_input_at", "last_seen", "updated_at"]);
   });
 });

@@ -1,0 +1,63 @@
+{
+ "asOf": "2026-01-14T17:09:00.000Z",
+ "notes": "synthetic three person huddle that decides a rollout and names three owners",
+ "judge": "the summary says the team decided to ship per-sender rate limits behind a flag on Thursday with the reseller at 200; the action items are exactly the three commitments (Iris emails the reseller, Theo adds a 429 dashboard panel, Mara reviews the branch) with those owners, and nothing invented",
+ "snapshot": {
+  "kind": "huddle",
+  "started_at": 1768410000000,
+  "ended_at": 1768410540000,
+  "rolling": false,
+  "lines": [
+   {
+    "speaker": "Mara",
+    "text": "Okay, quick one. The billing webhooks fell over twice this week because the payment provider retries everything at once.",
+    "at": 1768410000000
+   },
+   {
+    "speaker": "Theo",
+    "text": "Right, I have a branch that rate limits per sender. Twenty a minute by default, and it returns 429 with Retry-After.",
+    "at": 1768410050000
+   },
+   {
+    "speaker": "Mara",
+    "text": "Does that hold across all four instances? An in memory limit would be four times too loose.",
+    "at": 1768410100000
+   },
+   {
+    "speaker": "Theo",
+    "text": "It is in Redis now with an atomic script, so the limit is shared.",
+    "at": 1768410150000
+   },
+   {
+    "speaker": "Iris",
+    "text": "The reseller account sends about a hundred and fifty a minute at month end. Twenty would block them.",
+    "at": 1768410200000
+   },
+   {
+    "speaker": "Theo",
+    "text": "There is an override file. I can set the reseller to two hundred.",
+    "at": 1768410250000
+   },
+   {
+    "speaker": "Mara",
+    "text": "Good. Let us decide: ship it behind a flag on Thursday, reseller at two hundred, everyone else at twenty.",
+    "at": 1768410300000
+   },
+   {
+    "speaker": "Iris",
+    "text": "I will email the reseller before Thursday so they know about the 429s.",
+    "at": 1768410350000
+   },
+   {
+    "speaker": "Theo",
+    "text": "And I will add a dashboard panel for 429 counts per sender before we turn the flag on.",
+    "at": 1768410400000
+   },
+   {
+    "speaker": "Mara",
+    "text": "Great. I will review the branch tomorrow morning. That is it.",
+    "at": 1768410450000
+   }
+  ]
+ }
+}

@@ -73,6 +73,43 @@ test("notify posts through the addon and routes a click to its own handler", { s
   assert.deepEqual(clicks, ["b"]);
 });
 
+// A banner carries its click target, so a click still lands once the
+// in-memory handler is gone: the app relaunched (an update) while the banner
+// sat in Notification Center. The listener is wired at boot, before any post.
+test("a click with no live handler goes to the boot listener with the banner's payload", { skip: NOT_MAC }, () => {
+  const posted = [];
+  let activate = null;
+  let wired = 0;
+  const addon = {
+    authorizationStatus: () => 2,
+    requestAuthorization: () => {},
+    post: (title, body, payload) => { posted.push(payload); return `id-${posted.length}`; },
+    onActivate: (cb) => { activate = cb; wired++; },
+  };
+  const p = createOsPermissions({ electron: stubElectron(), bundleId: APP, notifications: addon });
+  const routed = [];
+  assert.equal(p.listenForClicks((payload) => routed.push(payload)), true);
+  assert.equal(wired, 1, "wired at boot, before any banner");
+  // A banner from an earlier run: no handler here, only its payload.
+  activate("id-old", '{"route":"/conversation/x"}');
+  assert.deepEqual(routed, ['{"route":"/conversation/x"}']);
+
+  // This run's banner: its own handler wins over the payload.
+  const clicks = [];
+  assert.equal(p.notify("A", "a", () => clicks.push("a"), '{"route":"/conversation/a"}'), true);
+  assert.deepEqual(posted, ['{"route":"/conversation/a"}']);
+  activate("id-1", '{"route":"/conversation/a"}');
+  assert.deepEqual(clicks, ["a"]);
+  assert.equal(routed.length, 1);
+  // A banner with no payload and no handler does nothing.
+  activate("id-none");
+  assert.equal(routed.length, 1);
+  // Wiring again re-claims the delegate and keeps the listener.
+  p.listenForClicks();
+  activate("id-old2", '{"route":"/conversation/y"}');
+  assert.equal(routed.length, 2);
+});
+
 test("notify prompts first when never asked, and reports false when nothing can post", { skip: NOT_MAC }, () => {
   let asked = 0;
   const addon = {

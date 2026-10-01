@@ -20,11 +20,18 @@ export type OrgRoleHealth = {
   ledger: { open_tasks: number; in_flight: number; active_plans: number };
   /** Which rows the load and the ledger were counted from, and by what rule. */
   counted?: { rule: "scope" | "remainder"; projects: number; plans: number; tasks: number; complete: boolean; note: string };
-  spend: { wakes_today: number; wakes_7d_avg: number; wakes_cap: number; tokens_today: number; tokens_7d_avg: number; tokens_cap: number; cap_hits_7d: number };
+  spend: {
+    wakes_today: number; wakes_7d_avg: number; wakes_cap: number; tokens_today: number; tokens_7d_avg: number | null; tokens_cap: number; cap_hits_7d: number;
+    /** Delivered wakes by UTC day (YYYY-MM-DD) over the week. */
+    wakes_by_day?: Record<string, number>;
+  };
   flow: {
     decisions_7d: number;
     median_recommend_min: number | null;
     done_7d: number;
+    /** done_7d by UTC day of the close; decisions_7d by UTC day of the ask. */
+    done_by_day?: Record<string, number>;
+    decisions_by_day?: Record<string, number>;
     handoffs_7d: { done: number; blocked: number; needs_context: number };
     review_stalls: number;
     sends_7d: { to: { role_id: string; n: number }[]; from: { role_id: string; n: number }[] };

@@ -7,9 +7,13 @@ import { recoveringWebSocket } from "@codecast/shared/network";
 import SharedMessage from "../app/share/message/[token]/page";
 import SharedDoc from "../app/share/doc/[token]/page";
 import SharedPlan from "../app/share/plan/[token]/page";
+import SharedTask from "../app/share/task/[token]/page";
+import SharedCall from "../app/share/call/[token]/page";
+import type { ComponentType } from "react";
+import type { SharedObjectKind } from "@codecast/shared/entities";
 
 /**
- * Standalone boot for /share/message|doc|plan/<token> — see main.tsx.
+ * Standalone boot for /share/<kind>/<token> — see main.tsx.
  *
  * The prod server renders the page into #root and inlines the payload it
  * rendered from (window.__SHARE_PRELOAD__), so this hydrates rather than
@@ -25,6 +29,16 @@ import SharedPlan from "../app/share/plan/[token]/page";
 // React re-renders from the client, so log the cause rather than swallow it.
 const onRecoverableError = (err: unknown) => console.error("[share] recoverable render error", err);
 
+// One page per shared kind; the type makes a new kind a compile error here
+// until it has one.
+const SHARE_PAGES: Record<SharedObjectKind, ComponentType> = {
+  message: SharedMessage,
+  doc: SharedDoc,
+  plan: SharedPlan,
+  task: SharedTask,
+  call: SharedCall,
+};
+
 const convex = new ConvexReactClient(CONVEX_URL, { webSocketConstructor: recoveringWebSocket() });
 
 const tree = (
@@ -32,9 +46,9 @@ const tree = (
     <BrowserRouter>
       <ConvexProvider client={convex}>
         <Routes>
-          <Route path="share/message/:token" element={<SharedMessage />} />
-          <Route path="share/doc/:token" element={<SharedDoc />} />
-          <Route path="share/plan/:token" element={<SharedPlan />} />
+          {Object.entries(SHARE_PAGES).map(([kind, Page]) => (
+            <Route key={kind} path={`share/${kind}/:token`} element={<Page />} />
+          ))}
         </Routes>
       </ConvexProvider>
     </BrowserRouter>

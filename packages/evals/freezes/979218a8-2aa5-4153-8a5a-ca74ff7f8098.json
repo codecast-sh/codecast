@@ -1,0 +1,26 @@
+{
+  "name": "ask deploy-token-failure",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:deploy-token-failure"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "ask:deploy-token-failure",
+    "title": "ask deploy-token-failure"
+  },
+  "asOf": "2026-01-15T14:04:40.000Z",
+  "trigger": {
+    "type": "ask"
+  },
+  "meta": {
+    "surface": "ask",
+    "visibility": "public",
+    "snapshot": "fixtures/ask/deploy-token-failure.json"
+  },
+  "judge": "says the first deploy failed because STAGING_TOKEN was not set, and that a later deploy succeeded after the token was loaded from the vault; cites the lines for both",
+  "notes": null,
+  "tags": [],
+  "id": "979218a8-2aa5-4153-8a5a-ca74ff7f8098",
+  "createdAt": "2026-10-01T17:49:17.341Z"
+}

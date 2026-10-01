@@ -64,6 +64,7 @@ import {
   BRIDGE_DEFAULT_PORT, BRIDGE_PROTOCOL, BRIDGE_STORE_URL, bridgeProof, CLOSE_BAD_TOKEN, CLOSE_HANDSHAKE_TIMEOUT, CLOSE_SESSIONS_DROPPED, isNonce, randomNonce, secretMatches, tabIdOfTarget,
   targetIdOfTab, type BridgeGroup, type BridgeReply, type BridgeTab,
 } from "./protocol.js";
+import { eventMessage, RawJson, readEventFrame, readReplyFrame, replyId, replyMessage, TrafficMeter } from "./frames.js";
 
 // ---------------------------------------------------------------------------
 // Config and lifecycle (used by the CLI)
@@ -249,14 +250,24 @@ export async function isHostAlive(state: Pick<BridgeState, "port" | "token">, ti
 export async function proveBridgeHost(state: BridgeState, timeoutMs = 1200): Promise<ProvenBridge> {
   const probe = await probeHost(state, timeoutMs);
   if (probe === "alive") return { ...state, proven: true };
-  throw new Error(
+  throw unprovenHostError(state, probe, timeoutMs);
+}
+
+/**
+ * Why the port cannot be used. A busy host is named as busy and nothing else:
+ * an agent told its host was "stalled", with a pid, killed it, and every
+ * session's in-flight command and tab attachment died with it while the
+ * machine stayed exactly as loaded.
+ */
+function unprovenHostError(state: BridgeState, probe: Exclude<HostProbe, "alive">, waitedMs: number): Error {
+  return new Error(
     probe === "impostor"
       ? `something on 127.0.0.1:${state.port} answers like a bridge host but cannot prove it holds the token — ` +
           `stop it, or set CAST_BRIDGE_PORT to move the bridge`
       : probe === "busy"
-        ? `something is listening on 127.0.0.1:${state.port} but did not answer within ${Math.round(timeoutMs / 1000)}s — ` +
-          `a bridge host whose event loop is stalled${state.hostPid ? ` (pid ${state.hostPid})` : ""}, or another program on the port; ` +
-          `its log is ${bridgeHostLogPath()}`
+        ? `the bridge host on 127.0.0.1:${state.port} is up but did not answer within ${Math.round(waitedMs / 1000)}s — ` +
+          `it is busy (the machine is loaded, or a tab is streaming heavy traffic; its log names the traffic: ${bridgeHostLogPath()}). ` +
+          `Retry the command; do not kill the host, which drops every session's tabs and changes nothing about the load`
         : `no bridge host is answering on 127.0.0.1:${state.port}`,
   );
 }
@@ -266,7 +277,9 @@ export async function proveBridgeHost(state: BridgeState, timeoutMs = 1200): Pro
  * each time, until it answers or `budgetMs` runs out. A refusal ("down") is
  * final at once — nothing is listening, waiting would not change that.
  */
-export async function probeHostPatiently(state: Pick<BridgeState, "port" | "token">, budgetMs = 15_000): Promise<HostProbe> {
+const PATIENT_PROBE_MS = 15_000;
+
+export async function probeHostPatiently(state: Pick<BridgeState, "port" | "token">, budgetMs = PATIENT_PROBE_MS): Promise<HostProbe> {
   const deadline = Date.now() + budgetMs;
   let timeout = 1200;
   let probe = await probeHost(state, timeout);
@@ -285,16 +298,98 @@ export function bridgeHostLogPath(): string {
 /** Brings a host up for ensureBridgeHost: the detached respawn, or an in-process host in tests. */
 export type BridgeHostStarter = (state: BridgeState) => void | Promise<void>;
 
+/** The environment a launchd-started host keeps: where cast's state lives and how to find tools, no credentials. */
+const HOST_ENV = /^(HOME|PATH|USER|LOGNAME|SHELL|TMPDIR|LANG|LC_[A-Z]+|CODECAST_[A-Z0-9_]+|CAST_[A-Z0-9_]+|BUN_[A-Z0-9_]+)$/;
+const SECRET_ENV = /KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL/;
+
+const xmlText = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/** An on-demand launchd job for the host: started now, never at login, never restarted by launchd. */
+export function bridgeHostPlistXml(label: string, argv: string[], env: Record<string, string>, logPath: string): string {
+  const strings = (xs: string[]) => xs.map((x) => `    <string>${xmlText(x)}</string>`).join("\n");
+  const vars = Object.entries(env)
+    .map(([k, v]) => `    <key>${xmlText(k)}</key>\n    <string>${xmlText(v)}</string>`)
+    .join("\n");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${xmlText(label)}</string>
+  <key>ProgramArguments</key>
+  <array>
+${strings(argv)}
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+${vars}
+  </dict>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>${xmlText(logPath)}</string>
+  <key>StandardErrorPath</key>
+  <string>${xmlText(logPath)}</string>
+</dict>
+</plist>
+`;
+}
+
+/**
+ * Start the host as its own launchd job rather than as a child of whichever
+ * agent shell needed it. Every agent runs under the codecast daemon's launchd
+ * job, which macOS clamps to utility QoS (priority 20), and a child inherits
+ * the clamp; no call inside the process lifts it. The host is one thread that
+ * every session's browser traffic and health probe go through, so at priority
+ * 20 it queued behind a hundred agents and their builds, missed its probe
+ * deadline, and every verb on the machine failed (2026-10-01, load 150: it got
+ * 4% of a core while its loop had work). An Interactive job runs at 37. The
+ * host uses about a CPU second per 170 MB relayed, so its priority costs the
+ * agents nothing measurable.
+ *
+ * False when launchd cannot take it (no GUI domain over SSH, a launchctl
+ * failure); the caller falls back to a detached child.
+ */
+function startAsLaunchdJob(port: number, argv: string[]): boolean {
+  const uid = process.getuid?.();
+  if (uid === undefined) return false;
+  const label = `sh.codecast.bridge-host.${port}`;
+  const service = `gui/${uid}/${label}`;
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) if (v !== undefined && HOST_ENV.test(k) && !SECRET_ENV.test(k)) env[k] = v;
+  const plist = path.join(browserHome(), "bridge-host.plist");
+  try {
+    fs.writeFileSync(plist, bridgeHostPlistXml(label, argv, env, bridgeHostLogPath()), { mode: 0o600 });
+  } catch {
+    return false;
+  }
+  const launchctl = (...a: string[]) => spawnSync("/bin/launchctl", a, { encoding: "utf8", timeout: 10_000 }).status === 0;
+  // A loaded job whose host exited is started again; a running one is left alone (no -k).
+  // The program may have moved since it was loaded (another checkout, a new binary), so
+  // a stopped job is reloaded from the plist just written.
+  const running = spawnSync("/bin/launchctl", ["print", service], { encoding: "utf8", timeout: 10_000 });
+  if (running.status === 0) {
+    if (/\bstate = running\b/.test(running.stdout)) return true;
+    launchctl("bootout", service);
+  }
+  return launchctl("bootstrap", `gui/${uid}`, plist) || launchctl("kickstart", service);
+}
+
 /**
  * Respawn ourselves as the host, detached, writing to bridgeHostLogPath().
  * Under bun/node the entry script must be repeated; in the compiled binary
  * process.execPath IS the cast binary.
  */
-const respawnDetached: BridgeHostStarter = () => {
+const respawnDetached: BridgeHostStarter = (state) => {
   const base = path.basename(process.execPath).toLowerCase();
   const viaRuntime = base.includes("bun") || base.includes("node");
   const args = viaRuntime ? [process.argv[1], "browser", "bridge-host"] : ["browser", "bridge-host"];
   fs.mkdirSync(browserHome(), { recursive: true, mode: 0o700 });
+  if (process.platform === "darwin" && startAsLaunchdJob(state.port, [process.execPath, ...args])) return;
   const log = fs.openSync(bridgeHostLogPath(), "a", 0o600);
   try {
     const child = spawn(process.execPath, args, { detached: true, stdio: ["ignore", log, log] });
@@ -341,8 +436,10 @@ export async function ensureBridgeHost(
     while (Date.now() < gone && (await probeHost(state, 500)) !== "down") await sleep(150);
     probe = await probeHost(state, 500);
     if (probe !== "down") return { ...(await proveBridgeHost(state)), started: false };
-  } else if (probe !== "down") {
-    return { ...(await proveBridgeHost(state)), started: false };
+  } else if (probe === "busy") {
+    // Already waited out probeHostPatiently's whole budget: report that wait,
+    // not a fresh one-second probe that says less.
+    throw unprovenHostError(state, probe, PATIENT_PROBE_MS);
   }
 
   await start(state);
@@ -508,6 +605,10 @@ interface Client {
 interface PendingExt {
   resolve: (r: BridgeReply) => void;
   reject: (e: Error) => void;
+  /** What the request was, for the traffic log: the op, or the CDP method of a `cdp` op. */
+  label: string;
+  /** A successful reply resolves with its result as JSON bytes (`raw`), never decoded. */
+  raw: boolean;
 }
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
@@ -598,6 +699,8 @@ export function startBridgeHost(opts: {
   sessionTabs?: SessionTabs;
   /** Called with the partition whenever it changes, for the host process to persist. */
   onSessionTabs?: (tabs: SessionTabs) => void;
+  /** A line naming the traffic of a minute heavy enough to load the host (frames.ts TrafficMeter). */
+  onTraffic?: (line: string) => void;
   /** Keepalive cadence and the silence after which the extension socket is dropped; tests shorten both. */
   pingIntervalMs?: number;
   extensionSilenceMs?: number;
@@ -610,6 +713,7 @@ export function startBridgeHost(opts: {
   let nextExtId = 1;
   const extPending = new Map<number, PendingExt>();
   const clients = new Set<Client>();
+  const traffic = new TrafficMeter(opts.onTraffic);
 
   const sendJson = (ws: WebSocket, msg: unknown): void => {
     if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
@@ -617,7 +721,7 @@ export function startBridgeHost(opts: {
 
   // ------------------------------------------------------------ extension
 
-  const extRequest = (op: string, payload: Record<string, unknown> = {}, timeoutMs = 30_000): Promise<BridgeReply> => {
+  const extRequest = (op: string, payload: Record<string, unknown> = {}, timeoutMs = 30_000, raw = false): Promise<BridgeReply> => {
     if (!ext || ext.readyState !== WebSocket.OPEN) {
       return Promise.reject(
         new Error(
@@ -642,6 +746,8 @@ export function startBridgeHost(opts: {
         );
       }, timeoutMs);
       extPending.set(id, {
+        label: op === "cdp" && typeof payload.method === "string" ? payload.method : op,
+        raw,
         resolve: (r) => {
           clearTimeout(timer);
           resolve(r);
@@ -655,8 +761,8 @@ export function startBridgeHost(opts: {
     });
   };
 
-  const extCall = async (op: string, payload: Record<string, unknown> = {}, timeoutMs?: number): Promise<BridgeReply> => {
-    const r = await extRequest(op, payload, timeoutMs);
+  const extCall = async (op: string, payload: Record<string, unknown> = {}, timeoutMs?: number, raw = false): Promise<BridgeReply> => {
+    const r = await extRequest(op, payload, timeoutMs, raw);
     if (!r.ok) throw new Error(String(r.error ?? `${op} failed`));
     return r;
   };
@@ -835,11 +941,34 @@ export function startBridgeHost(opts: {
     return held;
   };
 
-  const onExtMessage = (raw: string): void => {
+  const onExtMessage = (raw: Buffer): void => {
     extHeardAt = Date.now();
+    // The two messages that carry nearly every byte go through as bytes (frames.ts).
+    const event = readEventFrame(raw);
+    if (event) {
+      traffic.note(event.method, raw.length);
+      for (const c of clients) {
+        for (const [sessionId, tabId] of c.sessions) {
+          if (tabId !== event.tabId || c.ws.readyState !== WebSocket.OPEN) continue;
+          const out = eventMessage(event.method, event.params, sessionId);
+          traffic.sent(c.session, out.length);
+          c.ws.send(out, { binary: false });
+        }
+      }
+      return;
+    }
+    const pendingId = replyId(raw);
+    const pending = pendingId === null ? undefined : extPending.get(pendingId);
+    if (pending) traffic.note(`${pending.label} reply`, raw.length);
+    const reply = pending?.raw ? readReplyFrame(raw) : null;
+    if (reply) {
+      extPending.delete(reply.id);
+      pending!.resolve({ id: reply.id, ok: true, raw: new RawJson(reply.result) });
+      return;
+    }
     let msg: any;
     try {
-      msg = JSON.parse(raw);
+      msg = JSON.parse(String(raw));
     } catch {
       return;
     }
@@ -858,7 +987,8 @@ export function startBridgeHost(opts: {
         if (ext) sendJson(ext, { op: "pong" });
         return;
       case "event": {
-        // Fan out to every session bound to that tab, stamped with ITS id.
+        // An event in a shape frames.ts does not read. Fan out to every
+        // session bound to that tab, stamped with ITS id.
         for (const c of clients) {
           for (const [sessionId, tabId] of c.sessions) {
             if (tabId === msg.tabId) sendJson(c.ws, { method: msg.method, params: msg.params ?? {}, sessionId });
@@ -1023,8 +1153,8 @@ export function startBridgeHost(opts: {
       case "Runtime.runIfWaitingForDebugger":
         return {};
       default: {
-        const r = await extCall("cdp", { tabId, method, params: params ?? {} });
-        return r.result ?? {};
+        const r = await extCall("cdp", { tabId, method, params: params ?? {} }, undefined, true);
+        return r.raw instanceof RawJson ? r.raw : (r.result ?? {});
       }
     }
   };
@@ -1046,7 +1176,11 @@ export function startBridgeHost(opts: {
           return;
         }
         result = await sessionMethod(client, tabId, msg.method, msg.params);
-        sendJson(client.ws, { id: msg.id, sessionId: msg.sessionId, result });
+        if (result instanceof RawJson) {
+          const out = replyMessage(msg.id, result.bytes, msg.sessionId);
+          traffic.sent(client.session, out.length);
+          if (client.ws.readyState === WebSocket.OPEN) client.ws.send(out, { binary: false });
+        } else sendJson(client.ws, { id: msg.id, sessionId: msg.sessionId, result });
       } else {
         result = await browserMethod(client, msg.method, msg.params);
         sendJson(client.ws, { id: msg.id, result });
@@ -1246,7 +1380,7 @@ export function startBridgeHost(opts: {
         `worker ${boot ?? "?"} (${sameWorker ? "same worker, " : ""}${age}) via ${typeof msg.trigger === "string" ? msg.trigger : "?"}, v${msg.version ?? "?"}` +
           (recent.length ? `; worker notes: ${recent.join(" | ")}` : ""),
       );
-      ws.on("message", (raw) => onExtMessage(String(raw)));
+      ws.on("message", (raw) => onExtMessage(raw as Buffer));
       ws.on("close", (code, reason) => {
         if (ext !== ws) return;
         ext = null;
@@ -1396,6 +1530,7 @@ export async function runBridgeHost(): Promise<void> {
       onExtension: record,
       sessionTabs: state.sessionTabs,
       onSessionTabs: (sessionTabs) => { updateBridgeHostState(owner, { sessionTabs }); },
+      onTraffic: log,
     });
   } catch (err) {
     // Lost the port to a host that bound between the probe and the listen:

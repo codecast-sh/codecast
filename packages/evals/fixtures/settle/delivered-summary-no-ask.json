@@ -1,0 +1,19 @@
+{
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "notes": "delivered summary, no ask",
+  "label": {
+    "verdict": "done"
+  },
+  "snapshot": {
+    "newestFirst": [
+      {
+        "role": "assistant",
+        "content": "Green now (the one earlier failure was another session's fixture regeneration). The tasks snippet addition is two sentences plus two command lines; golden fixtures regenerated (19/19 pass), and the trimmed version is installed. Noted for future snippet edits: keep additions to a couple of lines."
+      },
+      {
+        "role": "user",
+        "content": "fix the flaky test"
+      }
+    ]
+  }
+}

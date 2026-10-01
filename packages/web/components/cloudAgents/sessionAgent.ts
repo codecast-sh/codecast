@@ -4,9 +4,10 @@
 import type { ComponentType } from "react";
 import { toast } from "sonner";
 import { Archive, ArchiveRestore, Download, GitPullRequest } from "lucide-react";
-import { CLOUD_AGENT_ACTIONS, cloudAgentLaunch, cloudAgentProviderOfConversation, isCloudAgentId, type CloudAgentActionName, type CloudAgentLaunch, type CloudAgentProviderSpec } from "@codecast/shared/contracts";
+import { CLOUD_AGENT_ACTIONS, cloudAgentCardOf, cloudAgentLaunch, cloudAgentProviderOfConversation, isCloudAgentId, type CloudAgentActionName, type CloudAgentLaunch, type CloudAgentProviderSpec } from "@codecast/shared/contracts";
 import { useLiveSessionMeta } from "../../hooks/useLiveSessionMeta";
 import { useCloudAgentAction } from "../../lib/useProviderKeyCommand";
+import { machineName, useCloudAgentStatus } from "./machine";
 
 /**
  * The cloud agent a conversation runs as, or null for a local session: its
@@ -22,6 +23,28 @@ export function useCloudAgentOfConversation(conversationId: string | undefined):
   const agentId = live?.sessionId && isCloudAgentId(spec, live.sessionId) ? live.sessionId : null;
   return { spec, agentId, launch: cloudAgentLaunch(live?.agentType, live?.model), archived: !!live?.cloudAgentArchived };
 }
+
+/**
+ * The daemon's card a message in a cloud agent session is, or null: the
+ * session's provider (from the conversation, never the card's wording), the
+ * card's kind and its setup kind (both from the message id the daemon posts
+ * it under, cloudAgentCardOf), and whether it still holds anything back. A
+ * credential card stops holding once the machine that runs the session has
+ * the credential, though the card stays in the thread. A limit card counts
+ * down the reset the machine reports while it still reports the limit.
+ */
+export function useCloudAgentSetupCard(conversationId: string | undefined, messageId: string | undefined, message: string) {
+  const spec = useCloudAgentOfConversation(conversationId)?.spec;
+  const status = useCloudAgentStatus(spec, useLiveSessionMeta(conversationId)?.ownerDeviceId, "session");
+  const card = spec ? cloudAgentCardOf(spec, messageId, message) : null;
+  if (!spec || !card) return null;
+  const problem = card.kind === "unsent" ? undefined : card.problem;
+  const resetsAt = problem === "limit" && status.problem?.kind === "limit" ? status.problem.resetsAt : undefined;
+  // Connected and not refused: a key the provider rejects is connected too, and still holds the message.
+  return { spec, kind: card.kind, problem, resetsAt, resolved: card.kind === "credential" && status.connected && !status.problem?.credential, machine: machineName(status.device) };
+}
+
+export type CloudAgentSetupCard = NonNullable<ReturnType<typeof useCloudAgentSetupCard>>;
 
 const ACTION_ICONS: Record<CloudAgentActionName, ComponentType<{ className?: string }>> = {
   create_pr: GitPullRequest,
@@ -51,10 +74,16 @@ export interface CloudAgentActionItem {
  * result in the thread, and a toast says it here (a pull request with a
  * button that opens it). Called once per conversation view and handed to
  * each surface, so one pending action shows everywhere and its outcome is
- * still watched after the menu that started it closes.
+ * still watched after the menu that started it closes. `problem`: what the
+ * machine that drives the session reports in the provider's way (it may
+ * have stopped syncing), for the header to say, when that machine is one of
+ * yours; `deviceId`, that machine.
  */
 export function useCloudAgentActions(conversationId: string | undefined, canAct: boolean) {
   const cloud = useCloudAgentOfConversation(conversationId);
+  const ownerDeviceId = useLiveSessionMeta(conversationId)?.ownerDeviceId;
+  // Only when the computer that drives it is one of yours: another person's says nothing about your own.
+  const { problem } = useCloudAgentStatus(cloud?.spec, ownerDeviceId, "session");
   const { run, pending } = useCloudAgentAction(conversationId ?? "", ({ ok, text, url }) => {
     if (!ok) toast.error(text);
     else if (url) toast.success(text, { action: { label: "Open PR", onClick: () => window.open(url, "_blank", "noopener") } });
@@ -77,7 +106,7 @@ export function useCloudAgentActions(conversationId: string | undefined, canAct:
     available: !pending,
     run: () => void run(i.action),
   }));
-  return { cloud, items, run, pending, palette };
+  return { cloud, items, run, pending, palette, problem, deviceId: ownerDeviceId };
 }
 
 export type CloudAgentActions = ReturnType<typeof useCloudAgentActions>;
