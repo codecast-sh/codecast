@@ -1,14 +1,14 @@
 "use client";
 
-import { useReducer, useRef, useSyncExternalStore, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { useReducer, useSyncExternalStore, type RefObject } from "react";
 import { getRoom, type ParticipantTile } from "../../lib/calls/callManager";
-import { getCallCursors, nextCursorExpiryAt, sendCursor, sendCursorGone, subscribeCallCursors } from "../../lib/calls/callCursors";
-import { mapFromFrame, mapToFrame } from "../../lib/browserWatch";
+import { getCallCursors, nextCursorExpiryAt, subscribeCallCursors } from "../../lib/calls/callCursors";
+import { mapFromFrame } from "../../lib/browserWatch";
 import { hueFor } from "../../lib/avatarInitials";
 import { useDerivedSize } from "../../hooks/useDerivedSize";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { CursorArrow } from "../presence/CursorArrow";
-import { naturalOf, useScreenCursorSender } from "../../hooks/useScreenCursorSender";
+import { useNaturalSize } from "../../hooks/useScreenCursorSender";
 import { firstName } from "./speakers";
 
 // Teammates' cursors over a screen share tile, and mine going out.
@@ -39,27 +39,8 @@ export function ScreenCursors({
   // The tile only re-renders this overlay when its rounded size changes.
   const boxSig = useDerivedSize(boxRef, (w, h) => `${Math.round(w)}x${Math.round(h)}`, () => "0x0");
   const [boxW, boxH] = boxSig.split("x").map(Number);
-  // The video's natural size arrives with its metadata, after mount.
+  const natural = useNaturalSize(videoRef, tile.track);
   const [, wake] = useReducer((n: number) => n + 1, 0);
-  const naturalRef = useRef<{ width: number; height: number } | null>(null);
-  useWatchEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-    const read = () => {
-      const n = naturalOf(video);
-      if (n && (n.width !== naturalRef.current?.width || n.height !== naturalRef.current?.height)) {
-        naturalRef.current = n;
-        wake();
-      }
-    };
-    read();
-    video.addEventListener("loadedmetadata", read);
-    video.addEventListener("resize", read);
-    return () => {
-      video.removeEventListener("loadedmetadata", read);
-      video.removeEventListener("resize", read);
-    };
-  }, [videoRef, tile.track]);
   // A cursor leaving is a question of time: wake when the next one expires.
   const expiry = nextCursorExpiryAt(cursors);
   useWatchEffect(() => {
@@ -68,7 +49,6 @@ export function ScreenCursors({
     return () => clearTimeout(t);
   }, [expiry]);
 
-  const natural = naturalRef.current ?? naturalOf(videoRef.current);
   if (!natural || !sid) return null;
   const box = { left: 0, top: 0, width: boxW, height: boxH };
   const shown = [...cursors.values()].filter((c) => c.sid === sid && c.identity !== me);

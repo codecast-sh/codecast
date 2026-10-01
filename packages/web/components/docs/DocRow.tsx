@@ -11,7 +11,9 @@ export function DocRow({ doc, onStar }: {
   doc: DocItem;
   /** The list's row state; the doc row draws none of it. */
   state?: ItemRowState;
-  /** Star or unstar; the docs list writes the store's pinDoc. */
+  /** Star or unstar. Without it the row stars through the store's pinDoc,
+   *  which is what the docs list relies on; a caller drawing from fixtures
+   *  rather than the store passes its own. */
   onStar?: (doc: DocItem, starred: boolean) => void;
 }) {
   const cfg = docTypeStyle(doc.doc_type);

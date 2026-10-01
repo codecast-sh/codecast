@@ -105,7 +105,7 @@ export async function resolveTeamForRepository(
     .withIndex("by_account_login", (q: any) => q.eq("account_login", repositoryOwner(repository)))
     .collect();
   for (const installation of installations) {
-    const team = await routingTeamForInstallation(ctx, installation);
+    const team = await routingTeamForInstallation(ctx, installation, repository);
     if (team) return team;
   }
   return null;

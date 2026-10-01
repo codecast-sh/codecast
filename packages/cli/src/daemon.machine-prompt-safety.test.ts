@@ -14,6 +14,7 @@ import { blockAt, functionBlock } from "./test-helpers/sourceRegion";
 import { TmuxDeliveryUncertainError } from "./tmuxDeliveryJournal";
 import { typedPollAnswer } from "./typedPollAnswer";
 import { CloudAgentHoldError } from "./cloudAgents/types";
+import { CLAUDE_TURN_STATUS_LINE } from "./daemon";
 
 const source = fs.readFileSync(new URL("./daemon.ts", import.meta.url), "utf8");
 const scratch: string[] = [];
@@ -161,7 +162,7 @@ function fixture(transport = "tmux", cached = true) {
     ensureTmuxPaneWide: async () => {}, glyphlessPromptPattern: () => null,
     classifyGlyphlessClientPaneState: fail("glyphless classification"), paneHasNoAgent: async () => false,
     acceptTrustPrompt: fail("trust input"), answerResumeCwdPicker: fail("cwd input"), DEAD_PANE_ERROR: "dead",
-    CLAUDE_TURN_STATUS_LINE: /^\s*[·✢✳✶✻✽]\s+\S[^\n]*…\s*\((?:\d+m\s*)?\d+s\b/m,
+    CLAUDE_TURN_STATUS_LINE,
     log: () => {}, logDelivery: () => {}, logConvexFailure: fail("convex failure"),
     // Free variables of the lifted delivery path. The real helper where it is
     // importable; for the two that live in daemon.ts, the answer this fixture's

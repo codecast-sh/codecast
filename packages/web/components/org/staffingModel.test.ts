@@ -10,7 +10,6 @@ import {
   collectHealthFlags,
   areaRows,
   cadenceLabel,
-  chiefRead,
   needsYou,
   rolesInTreeOrder,
   findChiefOfStaff,
@@ -220,16 +219,6 @@ describe("health summary", () => {
     const pin = needsYou(tree, H, [], [P], P);
     expect(pin).toEqual([expect.objectContaining({ kind: "blocked", conversationId: "fixture-chief-conv", line: "Which market goes first?" })]);
     expect(needsYou(ORG_FIXTURE, H, [], [], null)).toEqual([]);
-  });
-
-  test("the chief's read: its Company line first, its newest proposal with how far it is decided, its review", () => {
-    const read = chiefRead(tree, H, [{ ...P, author: { kind: "role", id: "fixture-role-chief" }, created_at: 5 }, { ...P, _id: "older", short_id: "op-2", author: { kind: "role", id: "fixture-role-chief" }, created_at: 1, status: "resolved" }, { ...P, _id: "someone", author: { kind: "session", id: "s" }, created_at: 9 }])!;
-    expect(read.chief.handle).toBe("chief-of-staff");
-    expect(read.narrative[0].project).toBe("Company");
-    expect(read.narrative[0].text).toMatch(/^Growth is carrying the quarter/);
-    expect(read.proposed).toMatchObject({ proposal: { short_id: "op-7" }, progress: { total: 8, decided: 2, remaining: 6 } });
-    expect(read.area?.check).toMatchObject({ short_id: "tr-12", interval_ms: 7 * 86_400_000 });
-    expect(chiefRead(ORG_FIXTURE, H, [])).toBeNull();
   });
 
   test("a cadence reads as words", () => {

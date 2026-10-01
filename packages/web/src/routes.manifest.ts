@@ -187,6 +187,8 @@ const Share = lazy(() => import("@/app/share/[token]/page"));
 const ShareMessage = lazy(() => import("@/app/share/message/[token]/page"));
 const ShareDoc = lazy(() => import("@/app/share/doc/[token]/page"));
 const SharePlan = lazy(() => import("@/app/share/plan/[token]/page"));
+const ShareTask = lazy(() => import("@/app/share/task/[token]/page"));
+const ShareCall = lazy(() => import("@/app/share/call/[token]/page"));
 
 // Browsing a repository
 const RepoIndex = lazy(() => import("@/app/repo/page"));
@@ -359,6 +361,8 @@ export const ROUTES: RouteEntry[] = [
   { path: "share/message/:token", component: cast(ShareMessage), layout: "share", guestOk: true, guestKind: "public" },
   { path: "share/doc/:token", component: cast(ShareDoc), layout: "share", guestOk: true, guestKind: "public" },
   { path: "share/plan/:token", component: cast(SharePlan), layout: "share", guestOk: true, guestKind: "public" },
+  { path: "share/task/:token", component: cast(ShareTask), layout: "share", guestOk: true, guestKind: "public" },
+  { path: "share/call/:token", component: cast(ShareCall), layout: "share", guestOk: true, guestKind: "public" },
 
   // -- Browsing a repository. The tree and blob pages carry the file path in the
   //    query string (`?path=`), not the route, so every path here is a fixed set

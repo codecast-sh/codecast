@@ -19,10 +19,6 @@ import { statusVisual, taskStatusOf, useTeamTaskStatusList } from "../../lib/tas
 import { getLabelColor } from "../../lib/labelColors";
 import { taskOrigin } from "@codecast/shared/tasks";
 import {
-  AlertTriangle,
-  ArrowUp,
-  ArrowDown,
-  Minus,
   Link2,
   X,
   Bot,
@@ -33,6 +29,8 @@ import {
   CornerDownRight,
   Copy,
 } from "lucide-react";
+import { taskPriority } from "../../lib/taskPriority";
+import { useTaskActiveSession } from "./taskActiveSession";
 
 // The task list row and the board card. The tasks page lays them out; every
 // write goes through the callbacks it passes (ItemRowState, onAssign), so a
@@ -56,15 +54,7 @@ export function SubtaskRing({ done, total }: { done: number; total: number }) {
   );
 }
 
-export type TaskPriority = "urgent" | "high" | "medium" | "low" | "none";
-
-const PRIORITY_CONFIG: Record<TaskPriority, { icon: typeof Minus; label: string; color: string }> = {
-  urgent: { icon: AlertTriangle, label: "Urgent", color: "text-sol-red" },
-  high: { icon: ArrowUp, label: "High", color: "text-sol-orange" },
-  medium: { icon: Minus, label: "Medium", color: "text-sol-text-muted" },
-  low: { icon: ArrowDown, label: "Low", color: "text-sol-text-dim" },
-  none: { icon: Minus, label: "None", color: "text-sol-text-dim" },
-};
+export type { TaskPriority } from "../../lib/taskPriority";
 
 export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, indent = 0, hiddenDescendantCount = 0, progress, collapsed = false, onToggleCollapse, parentChip }: {
   task: TaskItem;
@@ -85,12 +75,12 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
   parentChip?: { id: string; short_id: string; title: string } | null;
 }) {
   const router = useRouter();
-  const activeSession = useInboxStore((s) => s.taskActiveSessions[task._id]) ?? null;
+  const activeSession = useTaskActiveSession(task._id);
   // Resolve through the task's own team so a row shows that team's vocabulary
   // ("Working on") even if it ever renders outside its workspace view.
   const teamStatuses = useTeamTaskStatusList((task as any).team_id);
   const status = statusVisual(taskStatusOf(task as any, teamStatuses), teamStatuses);
-  const priority = PRIORITY_CONFIG[task.priority as TaskPriority] || PRIORITY_CONFIG.medium;
+  const priority = taskPriority(task.priority);
   const StatusIcon = status.icon;
   const PriorityIcon = priority.icon;
   const [editValue, setEditValue] = useState(task.title);
@@ -341,7 +331,7 @@ export function KanbanCard({
   /** Opens the assignee picker; the board opens the store's palette. */
   onAssign?: () => void;
 }) {
-  const priority = PRIORITY_CONFIG[task.priority as TaskPriority] || PRIORITY_CONFIG.none;
+  const priority = taskPriority(task.priority, "none");
   const PriorityIcon = priority.icon;
   const assignee = task.assignee_info;
   const firstLabel = task.labels?.[0];

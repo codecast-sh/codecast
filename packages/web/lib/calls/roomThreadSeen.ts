@@ -85,10 +85,16 @@ export function isArrival(row: ThreadRow): boolean {
   return !row.mine && !row.event;
 }
 
-export function countUnread(rows: ThreadRow[] | null | undefined, seen: Seen): number {
-  if (!rows || seen.seenAt === undefined || seen.watching) return 0;
+/** The arrivals after what the viewer last saw, oldest first. None while the
+ *  room has never been seen or the thread is open in a focused window. */
+export function unreadArrivals(rows: ThreadRow[] | null | undefined, seen: Seen): ThreadRow[] {
+  if (!rows || seen.seenAt === undefined || seen.watching) return [];
   const after = seen.seenAt;
-  return rows.filter((r) => r.at > after && isArrival(r)).length;
+  return rows.filter((r) => r.at > after && isArrival(r));
+}
+
+export function countUnread(rows: ThreadRow[] | null | undefined, seen: Seen): number {
+  return unreadArrivals(rows, seen).length;
 }
 
 export function useRoomThreadSeen(roomKey: string | null | undefined): Seen {

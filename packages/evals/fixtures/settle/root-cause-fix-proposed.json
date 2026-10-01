@@ -1,0 +1,19 @@
+{
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "notes": "root cause found and fix proposed, nothing changed yet, no question",
+  "label": {
+    "verdict": "needs_input"
+  },
+  "snapshot": {
+    "newestFirst": [
+      {
+        "role": "assistant",
+        "content": "Root cause found: the tab URL's ?s= param re-asserts after the nav guard runs, so the stale param wins and moves the view. The fix is to gate the re-assert on a user-initiated source and drop the param echo on machine navs — about 30 lines in viewNav.ts plus a regression test. Nothing is changed yet."
+      },
+      {
+        "role": "user",
+        "content": "the inbox sometimes jumps to a random session — figure out what's going on"
+      }
+    ]
+  }
+}

@@ -19,6 +19,7 @@ import { dmRoomKey } from '@codecast/shared/contracts';
 import { ChatAvatar } from './MessageRow';
 import { LivePulse, LiveRoomCard, type LiveRoomRow } from '@/components/calls/LiveRooms';
 import { joinCall, startHuddle } from '@/lib/calls/callManager';
+import { isPerson } from '@codecast/shared/team/memberKind';
 
 // The Chat tab's home list: live huddles first, then channels, then direct
 // messages, then the team's people. One FlatList, four kinds of row.
@@ -189,7 +190,7 @@ export function ChatHomeList({
     // People: the roster, the present first. A person already sitting in a
     // huddle says so, and the headset joins them instead of ringing.
     const people = (members ?? [])
-      .filter((m) => m && !m.is_bot && String(m._id) !== viewerId)
+      .filter((m) => isPerson(m) && String(m._id) !== viewerId)
       .sort((a, b) => {
         const rank = (m: any) => (m.presence_state === 'active' ? 0 : m.presence_state === 'idle' ? 1 : 2);
         return rank(a) - rank(b) || (a.name ?? '').localeCompare(b.name ?? '');
