@@ -36,7 +36,7 @@ import {
 } from "./lib/access";
 import { notFound } from "./lib/auth";
 import { packSnapshotContent } from "./lib/docSnapshot";
-import { docTitleFromContent, setTitleHeading, withTitleHeading } from "@codecast/shared/docs";
+import { docTitleFromContent, draftTextNodes, renderDocMentionExcerpt, setTitleHeading, withTitleHeading } from "@codecast/shared/docs";
 import { identityFieldsOf } from "./conversations";
 export { canAccessDoc };
 
@@ -279,7 +279,7 @@ async function buildWebDocList(
 
 type DocNode = { type: string; attrs?: Record<string, any>; content?: DocNode[]; text?: string };
 
-function markdownToDoc(text: string): DocNode {
+export function markdownToDoc(text: string): DocNode {
   const lines = text.split("\n");
   const content: DocNode[] = [];
   let i = 0;
@@ -307,7 +307,7 @@ function markdownToDoc(text: string): DocNode {
 
     const hm = line.match(/^(#{1,3})\s+(.+)/);
     if (hm) {
-      content.push({ type: "heading", attrs: { level: hm[1].length }, content: [{ type: "text", text: hm[2] }] });
+      content.push({ type: "heading", attrs: { level: hm[1].length }, content: draftTextNodes(hm[2]) });
       i++;
       continue;
     }
@@ -315,14 +315,14 @@ function markdownToDoc(text: string): DocNode {
     if (line.startsWith("> ")) {
       const ql: string[] = [];
       while (i < lines.length && lines[i].startsWith("> ")) { ql.push(lines[i].slice(2)); i++; }
-      content.push({ type: "blockquote", content: [{ type: "paragraph", content: [{ type: "text", text: ql.join("\n") }] }] });
+      content.push({ type: "blockquote", content: [{ type: "paragraph", content: draftTextNodes(ql.join("\n")) }] });
       continue;
     }
 
     if (/^[-*]\s/.test(line)) {
       const items: DocNode[] = [];
       while (i < lines.length && /^[-*]\s/.test(lines[i])) {
-        items.push({ type: "listItem", content: [{ type: "paragraph", content: [{ type: "text", text: lines[i].replace(/^[-*]\s/, "") }] }] });
+        items.push({ type: "listItem", content: [{ type: "paragraph", content: draftTextNodes(lines[i].replace(/^[-*]\s/, "")) }] });
         i++;
       }
       content.push({ type: "bulletList", content: items });
@@ -342,7 +342,8 @@ function markdownToDoc(text: string): DocNode {
     const pc: DocNode[] = [];
     paraLines.forEach((pl, idx) => {
       if (idx > 0) pc.push({ type: "hardBreak" });
-      pc.push({ type: "text", text: pl });
+      // Drafting spans (@codecast/shared/docs drafting) open as live editor marks.
+      pc.push(...draftTextNodes(pl));
     });
     if (pc.length > 0) content.push({ type: "paragraph", content: pc });
   }
@@ -656,6 +657,7 @@ export const update = mutation({
     pinned: v.optional(v.boolean()),
     archived: v.optional(v.boolean()),
     project_id: v.optional(v.string()),
+    overflow: v.optional(v.string()),
     // The session the CLI runs inside, when any (the charter guard reads it).
     session_id: v.optional(v.string()),
   },
@@ -672,6 +674,7 @@ export const update = mutation({
     if (args.labels) updates.labels = args.labels;
     if (args.pinned !== undefined) updates.pinned = args.pinned;
     if (args.archived !== undefined) updates.archived_at = args.archived ? Date.now() : undefined;
+    if (args.overflow !== undefined) updates.overflow = args.overflow;
     if (args.project_id !== undefined) {
       if (!args.project_id) {
         updates.project_id = undefined;
@@ -2097,7 +2100,7 @@ export const expandMentions = query({
                 && (await canAccessDoc(ctx, userId, doc))
                 && (doc as any).content
               ) {
-                md += `#### Plan Document\n\n${foreignProse((doc as any).content, FOREIGN_PLAN_CAPS.bodyChars) || ""}\n\n`;
+                md += `#### Plan Document\n\n${foreignProse(renderDocMentionExcerpt((doc as any).content, String(doc._id)), FOREIGN_PLAN_CAPS.bodyChars) || ""}\n\n`;
               }
             }
             const planSource = `plan ${inlineForeignText((plan as any).short_id)}`;
@@ -2197,12 +2200,7 @@ export const expandMentions = query({
             md += `Type: ${doc.doc_type || "note"}`;
             if ((doc as any).labels?.length) md += ` | Labels: ${(doc as any).labels.join(", ")}`;
             md += `\n\n`;
-            if (doc.content) {
-              const contentLimit = 4000;
-              md += doc.content.slice(0, contentLimit);
-              if (doc.content.length > contentLimit) md += `\n\n... (${Math.round(doc.content.length / 1000)}k chars total)`;
-              md += `\n\n`;
-            }
+            if (doc.content) md += `${renderDocMentionExcerpt(doc.content, String(doc._id))}\n`;
             // Related conversations
             const linkedConvs = await ctx.db.query("conversations")
               .withIndex("by_user_updated", (c: any) => c.eq("user_id", userId))
@@ -2216,7 +2214,7 @@ export const expandMentions = query({
               }
               md += `\n`;
             }
-            md += `> \`cast doc read ${String(doc._id).slice(-6)}\` for full document\n---\n`;
+            md += `---\n`;
             results.push({ type: "doc", id: mention.id, markdown: md });
           }
 

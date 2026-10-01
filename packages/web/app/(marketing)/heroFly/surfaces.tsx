@@ -9,16 +9,21 @@
  * matches it.
  */
 
-import { Suspense, type CSSProperties, type ComponentType } from "react";
-import { LogoIcon } from "@/components/Logo";
+import { memo, Suspense, type CSSProperties, type ComponentType, type ReactNode } from "react";
+import { EntityFixtureContext } from "@/lib/entityDisplay";
+import { DOTS } from "../chapterDots";
 import { PhoneFrame } from "../productMocks";
 import type { ChapterPart, HeroChapter, PartProps } from "./chapters/contract";
-import { fly, SurfaceContext } from "./filmClock";
+import { fly, SurfaceContext, useFilmTime } from "./filmClock";
+import { entityStage, ENTITY_STAGES } from "./fixtures";
 import { ARCS, FLYERS } from "./motion";
 import { HeroPartBoundary } from "./sandbox";
-import { LABEL_3W, SURFACES, type ArcPath, type Region, type RegionKey, type Surface } from "./world";
+import { LABEL_3W, SCENES, SURFACES, type ArcPath, type Region, type RegionKey, type Surface } from "./world";
 
 const px = (n: number) => `${Math.round(n * 1000) / 1000}px`;
+
+/** A window floating off the stage: a hairline, a close soft shadow and a far one, so it never reads as pasted onto the cream. */
+const FACE_SHADOW = "0 1px 0 rgba(0,43,54,0.06), 0 24px 48px -20px rgba(0,43,54,0.28), 0 60px 120px -40px rgba(0,43,54,0.22)";
 
 type Placed = ChapterPart & { chapter: string };
 
@@ -35,7 +40,9 @@ function RegionSlot({ k, region, parts, now }: { k: RegionKey; region: Region; p
         display: "flex",
         flexDirection: "column",
         justifyContent: region.anchor === "bottom" ? "flex-end" : "flex-start",
-        overflow: "hidden",
+        // clip, not hidden: a hidden box is a scroll container, and a real
+        // view's scrollIntoView or focus would scroll the film inside it.
+        overflow: "clip",
       }}
     >
       {parts.map((p) => (
@@ -50,7 +57,7 @@ function RegionSlot({ k, region, parts, now }: { k: RegionKey; region: Region; p
 }
 
 function SurfaceMount({ s, parts, now }: { s: Surface; parts: Placed[]; now: number }) {
-  const face: CSSProperties = { position: "absolute", inset: 0, backfaceVisibility: "hidden", WebkitBackfaceVisibility: "hidden", borderRadius: s.radius, overflow: "hidden" };
+  const face: CSSProperties = { position: "absolute", inset: 0, backfaceVisibility: "hidden", WebkitBackfaceVisibility: "hidden", borderRadius: s.radius, overflow: "clip" };
   const regions = Object.entries(s.regions).map(([name, region]) => {
     const k = `${s.id}.${name}` as RegionKey;
     return <RegionSlot key={k} k={k} region={region} parts={parts.filter((p) => p.region === k)} now={now} />;
@@ -75,30 +82,29 @@ function SurfaceMount({ s, parts, now }: { s: Surface; parts: Placed[]; now: num
           width: "112%",
           height: "112%",
           borderRadius: s.radius * 2,
-          background: "radial-gradient(closest-side, rgba(0,43,54,0.16), rgba(0,43,54,0.07) 60%, rgba(0,43,54,0) 100%)",
+          background: "radial-gradient(closest-side, rgba(0,43,54,0.22), rgba(0,43,54,0.08) 60%, rgba(0,43,54,0) 100%)",
         })}
       />
       <div {...fly(`card:${s.id}`, { position: "absolute", inset: 0, transformStyle: "preserve-3d" })}>
         <SurfaceContext.Provider value={s.id}>
           {s.frame === "phone" ? (
-            <div style={face}>
+            <div {...fly(`face:${s.id}`, face)}>
               {/* Regions on the phone are measured from the screen's top-left, under the notch. */}
               <PhoneFrame className="h-full !shadow-none" screenClassName="dark relative h-full">
                 <div className="relative bg-sol-bg text-sol-text" style={{ height: s.h - 48 }}>{regions}</div>
               </PhoneFrame>
             </div>
           ) : (
-            <div className="bg-sol-bg text-sol-text" style={{ ...face, border: "1px solid var(--sol-bg-highlight)", boxShadow: "0 30px 60px -30px rgba(0,43,54,0.35)" }}>
+            <div className="bg-sol-bg text-sol-text" style={{ ...face, border: "1px solid color-mix(in srgb, var(--sol-text) 10%, transparent)", boxShadow: FACE_SHADOW }}>
               {regions}
             </div>
           )}
         </SurfaceContext.Provider>
-        <div
-          style={{ ...face, transform: "rotateX(180deg)", border: "1px solid var(--sol-bg-highlight)" }}
-          className="flex flex-col items-center justify-center gap-3 bg-sol-bg-alt font-mono"
-        >
-          <LogoIcon size={34} />
-          <span className="text-[13px] text-sol-text-dim">{s.back}</span>
+        {/* The back the deal shows from the overview, where a surface is a few hundred pixels wide: a dark card in a deck, named for its chapter, its dot the chapter's colour on the scrubber; a narrow card sets its name smaller so it stays on one line. */}
+        <div style={{ ...face, transform: "rotateX(180deg)" }} className="dark flex flex-col items-center justify-center gap-7 bg-sol-bg-alt font-mono">
+          <span className="h-9 w-9 rounded-full" style={{ backgroundColor: DOTS[SCENES.findIndex((sc) => sc.id === s.chapter) % DOTS.length] }} />
+          <span className="whitespace-nowrap font-semibold leading-none tracking-tight text-sol-text-muted" style={{ fontSize: Math.min(84, (s.w - 56) / (s.back.length * 0.62)) }}>{s.back}</span>
+          {s.backAlso && <span className="text-[46px] leading-none tracking-tight text-sol-text-dim">{s.backAlso}</span>}
         </div>
       </div>
     </div>
@@ -113,7 +119,7 @@ function Arc({ a }: { a: ArcPath }) {
   const w = Math.abs(ax - bx) + 40;
   const h = Math.abs(ay - by) + 240;
   const z = (a.from[2] + a.to[2]) / 2;
-  const d = `M ${ax - x0} ${ay - y0} Q ${(ax + bx) / 2 - x0} ${Math.min(ay, by) - y0 - 170} ${bx - x0} ${by - y0}`;
+  const d = `M ${ax - x0} ${ay - y0} Q ${(ax + bx) / 2 - x0} ${Math.min(ay, by) - y0 - (a.apex ?? 170)} ${bx - x0} ${by - y0}`;
   return (
     <svg
       width={w}
@@ -121,19 +127,30 @@ function Arc({ a }: { a: ArcPath }) {
       viewBox={`0 0 ${w} ${h}`}
       style={{ position: "absolute", left: 0, top: 0, overflow: "visible", transform: `translate3d(${px(x0)}, ${px(y0)}, ${px(z)})` }}
     >
-      <path {...fly(a.id, { strokeDasharray: 1, strokeDashoffset: 1 })} d={d} pathLength={1} fill="none" stroke={a.color} strokeWidth={2} strokeLinecap="round" />
+      <path {...fly(a.id, { strokeDasharray: 1, strokeDashoffset: 1 })} d={d} pathLength={1} fill="none" stroke={a.color} strokeWidth={2.5} strokeLinecap="round" />
+      <circle {...fly(`${a.id}.dot`)} cx={bx - x0} cy={by - y0} r={4} fill={a.color} />
     </svg>
   );
 }
 
-/** Everything inside the camera: backdrop, surfaces, flyers. The driver writes styles to it; React renders it again only when chapters load. */
-export function World({ chapters, now }: { chapters: HeroChapter[]; now: number }) {
+/** Entity pills and cards read the fixtures in force at film time; only their consumers re-render when the stage turns. */
+function FilmEntities({ children }: { children: ReactNode }) {
+  const stage = useFilmTime(entityStage);
+  return <EntityFixtureContext.Provider value={ENTITY_STAGES[stage]}>{children}</EntityFixtureContext.Provider>;
+}
+
+/**
+ * Everything inside the camera: backdrop, surfaces, flyers. The driver writes
+ * styles to it; React renders it again only when chapters load (memo: the
+ * hero's own state, its chapter, play and phone flags, never reaches it).
+ */
+export const World = memo(function World({ chapters, now }: { chapters: HeroChapter[]; now: number }) {
   const parts: Placed[] = chapters
     .flatMap((c) => c.parts.map((p) => ({ ...p, chapter: c.id })))
     .sort((a, b) => a.order - b.order);
   const flyers: Record<string, ComponentType<PartProps>> = Object.assign({}, ...chapters.map((c) => c.flyers ?? {}));
   return (
-    <>
+    <FilmEntities>
       <div
         style={{
           position: "absolute",
@@ -164,8 +181,8 @@ export function World({ chapters, now }: { chapters: HeroChapter[]; now: number 
       <div
         {...fly("label3w", { position: "absolute", left: 0, top: 0, transform: `translate3d(${px(LABEL_3W.pos[0])}, ${px(LABEL_3W.pos[1])}, ${px(LABEL_3W.pos[2])})` })}
       >
-        <span className="inline-block -translate-x-1/2 whitespace-nowrap font-mono text-[44px] font-bold text-sol-text/80">3 weeks later</span>
+        <span className="inline-block -translate-x-1/2 whitespace-nowrap font-mono text-[34px] font-semibold text-sol-text-muted">3 weeks later</span>
       </div>
-    </>
+    </FilmEntities>
   );
-}
+});

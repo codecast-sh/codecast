@@ -9,22 +9,21 @@
 
 import type { EntityFixture } from "@/lib/entityDisplay";
 import type { SessionDecisionItem } from "@/store/inboxStore";
-import { OBJECTS, SESSIONS } from "./story";
+import { EVIDENCE, OBJECTS, SESSIONS } from "./story";
 
 export const entities: Record<string, EntityFixture> = {};
 
 export const DECISION: SessionDecisionItem = {
   _id: "hero-dec1",
-  short_id: "sd-hero1",
+  short_id: OBJECTS.decision.shortId,
   conversation_id: SESSIONS.lead.id,
   session_id: "hero-sid-lead",
   question: OBJECTS.decision.question,
-  context_md:
-    "The fork ran both against a 10 minute partner outage. Fixed backoff queued 4,800 retries in the first minute; exponential queued 310.",
+  context_md: `The fork replayed the failures both ways: ${EVIDENCE}.`,
   options: [
-    { label: "Exponential, capped at 5 attempts", description: "1s, 4s, 16s, 64s, 256s, then the dead letter queue.", cost: "40 lines, ships today" },
-    { label: "Fixed, every 30 seconds", description: "What the fork tried.", cost: "15 lines", risk: "retry storms in an outage" },
-    { label: "Exponential with jitter", description: "Spreads retries across tenants.", cost: "half a day more", risk: "harder to test" },
+    { label: "Exponential, 5 attempts", description: "2, 4, 8, 16 minutes with jitter, then dead letters.", cost: "40 lines, today" },
+    { label: "Fixed, every 30s", cost: "15 lines", risk: "lost 3 events in the replay" },
+    { label: "Linear, every 5 minutes", cost: "20 lines", risk: "slow after a short blip" },
   ],
   blocking: true,
   status: "pending",

@@ -22,7 +22,7 @@ import { githubRepo } from "../cloud/gitOrigin.js";
 import { codecastPath } from "../codecastDir.js";
 import { CLOUD_BACKFILL_MS, CLOUD_MAX_LIST_PAGES, cloudMirrorPlacement, PollCadence, repoOwnerName } from "./poll.js";
 import { CloudApiError } from "./http.js";
-import { setupErrorOf } from "./sessions.js";
+import { cloudSetupErrorOf } from "./sessions.js";
 import { mirrorMetaJson, readMetaJson } from "./transcript.js";
 import { CloudAgentSetupError, errorText, logTag, type AnyCloudAgentAdapter, type CloudAgentGit, type CloudAgentHandle, type CloudAgentListItem, type CloudAgentMirror } from "./types.js";
 
@@ -39,6 +39,23 @@ const FAILED_MAX_MS = 60 * 60_000;
  */
 const UNFOLLOWED_POLLS = 5;
 const UNFOLLOWED_MIN_MS = 3 * 60_000;
+/**
+ * Answers in a row the provider should never give codecast's reads (a 4xx
+ * other than the ones that name a setup problem, a gone agent or a busy one),
+ * with no read answered as expected between them: the API changed, and the
+ * lane pauses as for a payload of the wrong shape.
+ */
+const UNEXPECTED_TO_PAUSE = 3;
+/** A paused lane (the provider changed) checks again this often. */
+const CHANGED_PROBE_MS = 5 * 60_000;
+/** A rate limit that named no wait: the first check after it, doubling up to LIMIT_PROBE_MAX_MS. */
+const LIMIT_PROBE_MS = 60_000;
+const LIMIT_PROBE_MAX_MS = 30 * 60_000;
+
+/** An answer no read of codecast's should get, once the rules for setup, limits and gone agents had their say. */
+function isUnexpectedAnswer(err: unknown): boolean {
+  return err instanceof CloudApiError && err.status >= 400 && err.status < 500 && err.status !== 408 && err.status !== 409;
+}
 
 /** What the watcher emits for a mirrored transcript (the transcript watchers' event shape). */
 export interface CloudAgentTranscriptEvent {
@@ -55,14 +72,13 @@ export interface CloudAgentWatcherOptions {
   /** Import every agent on the account (the account's sync setting). Off,
    *  only the agents codecast started (and their children) are mirrored. */
   importAll?: () => boolean;
-  /** Whether codecast started this agent. */
-  isOwnAgent?: (agentId: string) => boolean;
-  /** Whether codecast started any agent: with importAll off and none, a pass reads nothing and is skipped. */
-  hasOwnAgents?: () => boolean;
+  /** The agents codecast started: with importAll off, the only ones listed (none: a pass reads nothing and is skipped). */
+  ownAgents?: () => ReadonlySet<string>;
   /** This machine's checkout of the repository an agent works on (where its session is placed), or null. */
   resolveRepoDir?: (repo: { owner: string; name: string }, agentId?: string) => Promise<string | null>;
   now?: () => number;
-  log?: (msg: string) => void;
+  /** `warn` for what someone should see in the server's logs: the lane paused or limited, and why. */
+  log?: (msg: string, level?: "info" | "warn") => void;
 }
 
 interface AgentState {
@@ -77,6 +93,8 @@ interface AgentState {
   git?: CloudAgentGit | null;
   /** Running when last mirrored: mirrored by id until it settles, even once the list stops showing it. */
   running?: boolean;
+  /** Deleted on the provider (a read of it answered 404): its mirror stays as it is, and it is never read by id again. */
+  gone?: boolean;
 }
 
 export declare interface CloudAgentWatcher {
@@ -95,11 +113,10 @@ export class CloudAgentWatcher<Adapter extends AnyCloudAgentAdapter = AnyCloudAg
   readonly rootDir: string;
   private readonly statePath: string;
   private readonly importAll: () => boolean;
-  private readonly isOwnAgent: (agentId: string) => boolean;
-  private readonly hasOwnAgents: () => boolean;
+  private readonly ownAgents: () => ReadonlySet<string>;
   private readonly resolveRepoDir: (repo: { owner: string; name: string }, agentId?: string) => Promise<string | null>;
   private readonly now: () => number;
-  private readonly log: (msg: string) => void;
+  private readonly log: (msg: string, level?: "info" | "warn") => void;
   private state: { format?: number; agents: Record<string, AgentState> };
   private readonly data = new Map<string, unknown>();
   private readonly handles = new Map<string, CloudAgentHandle<unknown>>();
@@ -123,19 +140,23 @@ export class CloudAgentWatcher<Adapter extends AnyCloudAgentAdapter = AnyCloudAg
   private readonly staleOnDisk = new Set<string>();
   /**
    * What keeps this machine from reading the provider: found on the machine
-   * (client(): no sign-in, run out), else in the provider's answer to the last
-   * list (refused, turned off for the account).
+   * (client(): no sign-in, run out), else in the provider's answers (refused,
+   * turned off for the account, changed, limited). While the provider's
+   * stands, the lane is paused: a pass only checks again (`probeAt`: when; the
+   * agent whose read broke, when one did), and the first check answered as
+   * expected resumes it.
    */
   private localSetup: CloudAgentSetupError | null = null;
-  private remoteSetup: CloudAgentSetupError | null = null;
+  private remote: { problem: CloudAgentSetupError; probeAt: number; agentId?: string; limitTries: number } | null = null;
+  /** Unexpected answers in a row (UNEXPECTED_TO_PAUSE). */
+  private unexpected = 0;
 
   constructor(readonly adapter: Adapter, opts: CloudAgentWatcherOptions = {}) {
     super();
     this.rootDir = opts.rootDir ?? codecastPath(adapter.spec.mirrorDir);
     this.statePath = path.join(this.rootDir, "state.json");
     this.importAll = opts.importAll ?? (() => true);
-    this.isOwnAgent = opts.isOwnAgent ?? (() => false);
-    this.hasOwnAgents = opts.hasOwnAgents ?? (() => true);
+    this.ownAgents = opts.ownAgents ?? (() => new Set());
     this.resolveRepoDir = opts.resolveRepoDir ?? (async () => null);
     this.now = opts.now ?? Date.now;
     this.log = opts.log ?? (() => {});
@@ -148,12 +169,83 @@ export class CloudAgentWatcher<Adapter extends AnyCloudAgentAdapter = AnyCloudAg
 
   /** What keeps this machine from reading the provider (no sign-in, expired, turned off for the account), or null. */
   get setupProblem(): CloudAgentSetupError | null {
-    return this.localSetup ?? this.remoteSetup;
+    return this.localSetup ?? this.remote?.problem ?? null;
   }
 
-  /** The provider's own verdict, from a list call or a sign-in check (null: it answered). */
-  setRemoteSetup(problem: CloudAgentSetupError | null): void {
-    this.remoteSetup = problem;
+  /**
+   * The provider's own verdict, from a read, a send or a sign-in check (null:
+   * it answered as expected, and the lane runs). `agentId`: the agent whose
+   * read broke, checked again before the lane resumes.
+   */
+  setRemoteSetup(problem: CloudAgentSetupError | null, agentId?: string): void {
+    const prior = this.remote;
+    if (!problem) {
+      this.remote = null;
+      this.unexpected = 0;
+      if (prior) this.log(`${logTag(this.adapter)} ${this.adapter.spec.label} answers again: ${prior.problem.kind === "changed" ? "syncing resumed" : "polling resumed"}`);
+      return;
+    }
+    const limitTries = problem.kind === "limit" && prior?.problem.kind === "limit" ? prior.limitTries + 1 : 0;
+    this.remote = { problem, agentId, limitTries, probeAt: this.now() + this.probeDelay(problem, limitTries) };
+    if (prior?.problem.message !== problem.message) this.log(`${logTag(this.adapter)} paused: ${problem.message}`, "warn");
+  }
+
+  /** How long a paused lane waits before it checks again: a limit as long as the provider said, a change a few minutes, the rest the next pass. */
+  private probeDelay(problem: CloudAgentSetupError, limitTries: number): number {
+    if (problem.kind === "limit") return problem.waitMs ?? Math.min(LIMIT_PROBE_MS * 2 ** limitTries, LIMIT_PROBE_MAX_MS);
+    return problem.kind === "changed" ? CHANGED_PROBE_MS : 0;
+  }
+
+  /**
+   * A failed read's verdict on the lane (cloudSetupErrorOf, or the unexpected
+   * answers it kept giving): a problem pauses it. Anything else, a network
+   * failure or an outage, is the read's alone.
+   */
+  private async judge(client: unknown, err: unknown, agentId?: string): Promise<void> {
+    let problem = await cloudSetupErrorOf(this.adapter, client, err);
+    if (!problem && isUnexpectedAnswer(err) && ++this.unexpected >= UNEXPECTED_TO_PAUSE) {
+      problem = CloudAgentSetupError.changed(this.adapter, `${UNEXPECTED_TO_PAUSE} answers in a row it does not expect, the last: ${errorText(err)}`);
+    }
+    if (problem) this.setRemoteSetup(problem, problem.kind === "changed" ? agentId : undefined);
+  }
+
+  /** One read of the provider, judged: answered as expected, the unexpected streak ends; failed, judge() has its say. A gone agent (404 by id) is the caller's. */
+  private async read<T>(client: unknown, fn: () => Promise<T>, agentId?: string): Promise<T> {
+    try {
+      const out = await fn();
+      this.unexpected = 0;
+      return out;
+    } catch (err) {
+      if (!(agentId && err instanceof CloudApiError && err.status === 404)) await this.judge(client, err, agentId);
+      throw err;
+    }
+  }
+
+  /**
+   * Check a paused lane: the list, and the agent whose read broke (a gone one
+   * no longer counts). Whether it answered as expected, which resumes the
+   * lane; a failure that changes nothing waits the same delay again.
+   */
+  private async probe(client: unknown): Promise<boolean> {
+    const remote = this.remote;
+    if (!remote) return true;
+    this.inFlight = true;
+    try {
+      await this.read(client, () => this.adapter.listAgents(client));
+      if (remote.agentId) {
+        await this.read(client, () => this.adapter.mirror(client, this.handle(remote.agentId!), undefined), remote.agentId).catch((err) => {
+          if (err instanceof CloudApiError && err.status === 404) return this.markGone(remote.agentId!);
+          throw err;
+        });
+      }
+      this.setRemoteSetup(null);
+      return true;
+    } catch {
+      if (this.remote === remote) remote.probeAt = this.now() + this.probeDelay(remote.problem, remote.limitTries);
+      return false;
+    } finally {
+      this.inFlight = false;
+    }
   }
 
   /** An API client from this machine's credentials, or null (logged once) while a setup problem stands in the way. */
@@ -206,53 +298,66 @@ export class CloudAgentWatcher<Adapter extends AnyCloudAgentAdapter = AnyCloudAg
     this.cadence.start();
   }
 
-  stop(): void {
+  /** Stop polling and following. Resolves once the mirrors already under way have written what they read. */
+  async stop(): Promise<void> {
     this.cadence.stop();
-    this.adapter.stop?.();
+    this.adapter.streams?.stop();
     for (const t of this.renderTimers.values()) clearTimeout(t);
     this.renderTimers.clear();
+    await Promise.allSettled([...this.mirroring.values()]);
   }
 
-  /** One pass: list agents, mirror the ones that moved. Never throws. */
+  /** One pass: list agents, mirror the ones that moved; while the lane is paused, only a check when one is due. Never throws. */
   async poll(): Promise<void> {
     if (this.inFlight) return;
     this.letGoUnfollowed();
     const running = Object.values(this.state.agents).some((st) => st.running);
     // Nothing to import, nothing of codecast's to follow and nothing left to
-    // settle or re-render: not even a list call.
-    if (!this.importAll() && !this.hasOwnAgents() && !running && !this.staleOnDisk.size) {
-      this.cadence.busy = false;
-      // Still read the sign-in on disk (no call to the provider), so a machine
-      // that signs in stops reporting it has none. A refusal the provider gave
-      // is asked again with one list call per idle poll: nothing else would
-      // learn that a new key, a new sign-in or an admin lifted it.
-      const client = this.client();
-      if (client && this.remoteSetup) {
-        this.inFlight = true;
-        try { await this.listPage(client); } catch (err) { this.emitError(err); } finally { this.inFlight = false; }
-      }
-      return;
-    }
+    // settle or re-render: not even a list call. The sign-in on disk is still
+    // read (no call to the provider), so a machine that signs in stops
+    // reporting it has none; and a lane the provider paused is still checked
+    // when due, since nothing else would learn that a new key, a new sign-in,
+    // an admin or a fixed API lifted it.
+    const importAll = this.importAll();
+    const own = this.ownAgents();
+    const idle = !importAll && !own.size && !running && !this.staleOnDisk.size;
+    if (idle) this.cadence.busy = false;
     const client = this.client();
     if (!client) { this.announceStale(); return; }
+    if (this.remote) {
+      this.cadence.busy = false;
+      if (this.now() < this.remote.probeAt || !(await this.probe(client))) { this.announceStale(); return; }
+    }
+    if (idle) return;
     this.inFlight = true;
     try {
       const horizon = this.now() - CLOUD_BACKFILL_MS;
       let cursor: string | undefined;
       let busy = false;
       const listed = new Set<string>();
+      // Without import, the list is read for codecast's own agents only: once each has been seen, the pages after hold none.
+      const unseen = importAll ? null : new Set([...own].filter((id) => !this.state.agents[id]?.gone));
       for (let page = 0; page < CLOUD_MAX_LIST_PAGES; page++) {
         const data = await this.listPage(client, cursor);
         let reachedHorizon = false;
         for (const item of data.items ?? []) {
-          if (item.updatedAtMs < horizon) { reachedHorizon = true; continue; }
-          if (!this.importAll() && !this.isOwnAgent(item.id)) continue;
+          if (item.updatedAtMs < horizon) {
+            // A list by last change ends at the horizon. One by creation goes on, and of the old agents reads
+            // only one running now or one mirrored before that moved since.
+            if (!this.adapter.listedByCreation) { reachedHorizon = true; continue; }
+            const st = this.state.agents[item.id];
+            if (!item.active && !(st && st.updatedAt !== item.version)) continue;
+          }
+          if (unseen && !own.has(item.id)) continue;
+          unseen?.delete(item.id);
           listed.add(item.id);
           if (item.active) busy = true;
           if (this.state.agents[item.id]?.updatedAt === item.version && !item.active) continue;
           await this.mirrorInPass(item.id, item.agent);
+          // A read that paused the lane ends the pass: nothing more is read until a check passes.
+          if (this.remote) return;
         }
-        if (reachedHorizon || !data.nextCursor) break;
+        if (reachedHorizon || !data.nextCursor || unseen?.size === 0) break;
         cursor = data.nextCursor;
       }
       // Mirrored by id: children (the list does not show them; found through
@@ -264,8 +369,10 @@ export class CloudAgentWatcher<Adapter extends AnyCloudAgentAdapter = AnyCloudAg
         // Listed, or mirrored right now (a child its parent just handed what it read): not read again.
         if (listed.has(id) || this.mirroring.has(id)) continue;
         const st = this.state.agents[id];
+        if (st?.gone) continue;
         if (!(st?.parent && !st.updatedAt) && !st?.running && !this.staleOnDisk.has(id)) continue;
         await this.mirrorInPass(id);
+        if (this.remote) return;
         if (this.state.agents[id]?.running && !this.failing.has(id)) busy = true;
       }
       this.cadence.busy = busy;
@@ -277,17 +384,9 @@ export class CloudAgentWatcher<Adapter extends AnyCloudAgentAdapter = AnyCloudAg
     }
   }
 
-  /** One page of the provider's list; its answer is the provider's verdict on this machine's credentials. */
-  private async listPage(client: NonNullable<ReturnType<CloudAgentWatcher<Adapter>["client"]>>, cursor?: string): Promise<{ items: CloudAgentListItem<unknown>[]; nextCursor?: string }> {
-    try {
-      const data = await this.adapter.listAgents(client, cursor);
-      this.setRemoteSetup(null);
-      return data;
-    } catch (err) {
-      const setup = setupErrorOf(this.adapter, err);
-      if (setup) this.setRemoteSetup(setup);
-      throw err;
-    }
+  /** One page of the provider's list, judged (read()). */
+  private listPage(client: NonNullable<ReturnType<CloudAgentWatcher<Adapter>["client"]>>, cursor?: string): Promise<{ items: CloudAgentListItem<unknown>[]; nextCursor?: string }> {
+    return this.read(client, () => this.adapter.listAgents(client, cursor));
   }
 
   /** Let go of running agents no mirror has reached for too long (UNFOLLOWED_POLLS). */
@@ -323,18 +422,25 @@ export class CloudAgentWatcher<Adapter extends AnyCloudAgentAdapter = AnyCloudAg
     try {
       await this.mirror(agentId, known);
     } catch (err) {
-      const st = this.state.agents[agentId];
-      if (err instanceof CloudApiError && err.status === 404 && st?.running) {
-        // Deleted while it ran: nothing is left to settle it by.
-        delete st.running;
-        this.followed.delete(agentId);
-        this.emit("unfollowed", agentId);
-        void this.saveState();
-      }
       const count = (failed?.count ?? 0) + 1;
       this.failing.set(agentId, { count, retryAt: this.now() + Math.min(FAILED_BASE_MS * 2 ** (count - 1), FAILED_MAX_MS) });
       this.emitError(new Error(`${agentId}: ${errorText(err)}`));
     }
+  }
+
+  /**
+   * The agent was deleted on the provider: its mirror and session stay as
+   * they are, and it is not read again (a deleted one that ran is let go:
+   * nothing is left to settle it by).
+   */
+  private markGone(agentId: string): void {
+    const { running, ...st } = this.state.agents[agentId] ?? {};
+    this.state.agents[agentId] = { ...st, gone: true };
+    this.followed.delete(agentId);
+    this.failing.delete(agentId);
+    if (running) this.emit("unfollowed", agentId);
+    this.log(`${logTag(this.adapter)} ${agentId} is gone on ${this.adapter.spec.label}: keeping its mirror as it is`);
+    void this.saveState();
   }
 
   /** Poll fast for a while, starting with the next pass: the account just turned sync on, or the machine just signed in. */
@@ -371,8 +477,15 @@ export class CloudAgentWatcher<Adapter extends AnyCloudAgentAdapter = AnyCloudAg
 
   private async mirrorOnce(agentId: string, known?: unknown): Promise<void> {
     const client = this.client();
-    if (!client) return;
-    const result = await this.adapter.mirror(client, this.handle(agentId), known);
+    // A paused lane reads nothing but its checks (probe()).
+    if (!client || this.remote) return;
+    let result: CloudAgentMirror | null;
+    try {
+      result = await this.read(client, () => this.adapter.mirror(client, this.handle(agentId), known), agentId);
+    } catch (err) {
+      if (err instanceof CloudApiError && err.status === 404) return this.markGone(agentId);
+      throw err;
+    }
     if (!result) {
       // A child its parent no longer has: forgotten, or every pass would read it again.
       if (this.state.agents[agentId]?.parent) {
@@ -392,7 +505,7 @@ export class CloudAgentWatcher<Adapter extends AnyCloudAgentAdapter = AnyCloudAg
       void this.mirrorNow(child.agentId, child.known);
     }
     // The git the agent reports now (kept while the adapter cannot tell): a branch it no longer names is not announced again at start.
-    const { git: _git, running: _wasRunning, ...st } = this.state.agents[agentId] ?? {};
+    const { git: _git, running: _wasRunning, gone: _gone, ...st } = this.state.agents[agentId] ?? {};
     const git = result.git !== undefined ? result.git : priorGit;
     this.state.agents[agentId] = {
       ...st,

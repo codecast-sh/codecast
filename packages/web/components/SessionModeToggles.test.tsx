@@ -153,3 +153,44 @@ test("a cloud agent provider replaces the host controls: its own switch, and a c
   expect(byText(connected.host, "connect Cursor")).toBeUndefined();
   connected.unmount();
 });
+
+test("an agent type with several cloud providers: the switch names the vendor (not the cloud host's words), and while on, a choice of how with what each costs", () => {
+  const { codex, codex_api } = CLOUD_AGENT_PROVIDERS;
+  const lanes = [codex, codex_api];
+  const picked: string[] = [];
+  const props = { cloudHost: cloud, cloudMode: false, cloudToggleEnabled: true, onToggleCloud: () => {}, isolated: false, onToggleIsolated: () => {} };
+  const off = mount(<SessionModeToggles {...props} cloudAgent={{ spec: codex, lanes, onPickLane: (l) => picked.push(l.id), on: false, onToggle: () => {}, connected: true }} />);
+  expect(byText(off.host, "run in the cloud")).toBeUndefined();
+  // Its place, not its models: a local Codex session runs on OpenAI's models too.
+  const sw = byText(off.host, "run in OpenAI's cloud");
+  expect(sw.getAttribute("title")).toBe("Run this session on OpenAI's machines: Codex Cloud on your ChatGPT plan, or OpenAI Agents API on your API key");
+  expect(byText(off.host, "API key")).toBeUndefined();
+  off.unmount();
+
+  const on = mount(<SessionModeToggles {...props} cloudAgent={{ spec: codex_api, lanes, onPickLane: (l) => picked.push(l.id), on: true, onToggle: () => {}, connected: false }} />);
+  expect(byText(on.host, "API key").getAttribute("aria-checked")).toBe("true");
+  expect(byText(on.host, "ChatGPT plan").getAttribute("title")).toBe(`Codex Cloud: ${codex.lane.detail}`);
+  expect(on.host.textContent).toContain(codex_api.lane.cost);
+  // Its key is missing: the guided key dialog's control.
+  expect(byText(on.host, "connect OpenAI")).toBeDefined();
+  click(byText(on.host, "ChatGPT plan"));
+  expect(picked).toEqual(["codex"]);
+  on.unmount();
+});
+
+test("a lane no sign-in fixes (the provider changed, a limit): its reason beside the switch, and no connect control while the sign-in holds", () => {
+  const { codex } = CLOUD_AGENT_PROVIDERS;
+  const props = { cloudHost: cloud, cloudMode: false, cloudToggleEnabled: true, onToggleCloud: () => {}, isolated: false, onToggleIsolated: () => {} };
+  const sentence = "Codex Cloud changed; syncing paused: codecast can't read its answer (GET /tasks/list: items should be an array, got nothing) and does not guess at it.";
+  const paused = mount(<SessionModeToggles {...props} cloudAgent={{ spec: codex, on: true, onToggle: () => {}, connected: true, problem: { kind: "changed", sentence, credential: false } }} />);
+  expect(byText(paused.host, "paused").querySelector("[aria-label]")?.getAttribute("aria-label")).toBe("Why Codex Cloud is paused");
+  expect(byText(paused.host, "connect Codex")).toBeUndefined();
+  paused.unmount();
+  const limited = mount(<SessionModeToggles {...props} cloudAgent={{ spec: codex, on: true, onToggle: () => {}, connected: true, problem: { kind: "limit", sentence: "Codex Cloud limit reached: your ChatGPT pro plan's weekly Codex usage is used up", credential: false } }} />);
+  expect(byText(limited.host, "limited")).toBeDefined();
+  limited.unmount();
+  // Off, nothing is said: the lane is not in use.
+  const off = mount(<SessionModeToggles {...props} cloudAgent={{ spec: codex, on: false, onToggle: () => {}, connected: true, problem: { kind: "changed", sentence, credential: false } }} />);
+  expect(byText(off.host, "paused")).toBeUndefined();
+  off.unmount();
+});

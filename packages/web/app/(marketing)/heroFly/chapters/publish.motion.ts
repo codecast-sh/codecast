@@ -10,10 +10,10 @@ export const motion: ChapterMotion = {
   beats: {
     page: [
       { id: "publish.reply", cue: PUBLISH.reply, preset: "drop", z: 160, rx: -12, y: -18 },
-      // `cast publish` lands: the reply steps back and the page drops in over it.
-      { id: "publish.reply", cue: PUBLISH.published, preset: "liftOut", y: 10, z: -140, dur: 0.7 },
-      { id: "publish.reply", cue: PUBLISH.published + 0.1, preset: "fadeOut", dur: 0.5 },
-      { id: "publish.card", cue: PUBLISH.published, preset: "drop", z: 320, rx: -16, y: -36 },
+      // `cast publish` lands: the reply recedes and rises toward where the page will sit and is gone as the page drops in, so the two layouts never read on top of each other.
+      { id: "publish.reply", cue: PUBLISH.published - 0.15, preset: "liftOut", y: -40, z: -160, dur: 0.4 },
+      { id: "publish.reply", cue: PUBLISH.published - 0.15, preset: "fadeOut", dur: 0.25 },
+      { id: "publish.card", cue: PUBLISH.published, preset: "drop", z: 160, rx: -12, y: -24 },
     ],
   },
 };

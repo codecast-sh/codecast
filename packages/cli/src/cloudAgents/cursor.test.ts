@@ -8,9 +8,10 @@ import { CursorCloudAdapter, CursorCloudApi, buildCursorCloudTranscript, forkedW
 import { CloudAgentWatcher, type CloudAgentWatcherOptions } from "./watcher.js";
 import { parseMirrorTranscriptFile } from "../parser.js";
 import { classifyMirrorTranscriptTail } from "./transcript.js";
-import { CLIENT_ERROR_BANNER_PREFIX, classifyApiErrorBanner, cloudAgentCredentialError } from "@codecast/shared/contracts";
+import { CLIENT_ERROR_BANNER_PREFIX, CLOUD_AGENT_PROVIDERS, classifyApiErrorBanner, cloudAgentCardKind } from "@codecast/shared/contracts";
 import { CloudAgentSetupError } from "./types.js";
 import { deviceLabel } from "../remote/device.js";
+import { fakeCloudFetch, json } from "../test-helpers/cloudFetch.js";
 
 // A real run's stream (api.cursor.com, 2026-09-29), deltas stripped.
 const SSE = fs.readFileSync(path.join(import.meta.dir, "..", "__fixtures__", "cursorCloudRun.sse"), "utf8");
@@ -21,18 +22,9 @@ const CONVERSATION = [
   { id: "a1", type: "assistant_message", text: "pong" },
 ];
 
-/** A fetch that serves canned responses by path. */
-function fakeFetch(routes: Record<string, () => Response>): typeof fetch {
-  return (async (input: RequestInfo | URL) => {
-    const url = new URL(String(input));
-    const hit = routes[url.pathname];
-    if (!hit) return new Response(JSON.stringify({ code: "not_found" }), { status: 404 });
-    return hit();
-  }) as typeof fetch;
-}
 
 async function streamEvents(agent = AGENT, run = RUN.id, sse = SSE): Promise<CursorRunEvent[]> {
-  const api = new CursorCloudApi("crsr_test", fakeFetch({ [`/v1/agents/${agent}/runs/${run}/stream`]: () => new Response(sse, { headers: { "content-type": "text/event-stream" } }) }), "https://api.test");
+  const api = new CursorCloudApi("crsr_test", fakeCloudFetch({ [`GET /v1/agents/${agent}/runs/${run}/stream`]: () => new Response(sse, { headers: { "content-type": "text/event-stream" } }) }), "https://api.test");
   const events: CursorRunEvent[] = [];
   expect(await api.streamRun(agent, run, (e) => events.push(e))).toBe(true);
   return events;
@@ -137,7 +129,7 @@ describe("Cursor Cloud transcript", () => {
     const adapter = new CursorCloudAdapter({ readKey: () => null });
     const rejected = setupErrorOf(adapter, new CloudApiError(401, "error", "Invalid User API Key"), { model: "" })!;
     for (const err of [CloudAgentSetupError.credentialsMissing(adapter), rejected]) {
-      expect(cloudAgentCredentialError("cursor", err.message)?.id).toBe("cursor");
+      expect(cloudAgentCardKind(CLOUD_AGENT_PROVIDERS.cursor, err.message)).toBe("credential");
       expect(classifyApiErrorBanner(`${CLIENT_ERROR_BANNER_PREFIX} ${err.message}`)).toBe("auth");
     }
     // The card names the machine the daemon runs on, as the web lists it.
@@ -150,19 +142,18 @@ describe("CursorCloudWatcher import setting", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "cursor-cloud-off-"));
     cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
     const agent = (id: string) => ({ id, name: id, status: "IDLE", createdAt: RUN.createdAt, updatedAt: RUN.updatedAt });
-    const json = (body: unknown) => () => new Response(JSON.stringify(body));
     const watcher = cursorWatcher({
       rootDir: root,
       readKey: () => "crsr_test",
       importAll: () => false,
-      isOwnAgent: (id) => id === "bc-mine",
+      ownAgents: () => new Set(["bc-mine"]),
       now: () => Date.parse(RUN.updatedAt),
-      fetchImpl: fakeFetch({
-        "/v1/agents": json({ items: [agent("bc-mine"), agent("bc-theirs")] }),
-        "/v1/agents/bc-mine/runs": json({ items: [] }),
-        "/v1/agents/bc-theirs/runs": json({ items: [] }),
-        "/v0/agents/bc-mine/conversation": json({ messages: [{ id: "u", type: "user_message", text: "hi" }] }),
-        "/v0/agents/bc-theirs/conversation": json({ messages: [{ id: "u", type: "user_message", text: "hi" }] }),
+      fetchImpl: fakeCloudFetch({
+        "GET /v1/agents": json({ items: [agent("bc-mine"), agent("bc-theirs")] }),
+        "GET /v1/agents/bc-mine/runs": json({ items: [] }),
+        "GET /v1/agents/bc-theirs/runs": json({ items: [] }),
+        "GET /v0/agents/bc-mine/conversation": json({ messages: [{ id: "u", type: "user_message", text: "hi" }] }),
+        "GET /v0/agents/bc-theirs/conversation": json({ messages: [{ id: "u", type: "user_message", text: "hi" }] }),
       }),
     });
     const seen: string[] = [];
@@ -177,20 +168,19 @@ describe("CursorCloudWatcher", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "cursor-cloud-"));
     cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
     const agent = { id: AGENT, name: "codecast probe", status: "IDLE", repos: [{ url: "https://github.com/ashot/codecast" }], url: `https://cursor.com/agents/${AGENT}`, createdAt: RUN.createdAt, updatedAt: RUN.updatedAt, latestRunId: RUN.id };
-    const json = (body: unknown) => () => new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
     const EMPTY_RUN: CursorCloudRun = { ...RUN, id: "run-empty", createdAt: "2026-09-29T07:53:00.000Z" };
     const watcher = cursorWatcher({
       rootDir: root,
       readKey: () => "crsr_test",
       resolveRepoDir: async (repo) => (repo.name === "codecast" ? "/Users/me/src/codecast" : null),
       now: () => Date.parse(RUN.updatedAt),
-      fetchImpl: fakeFetch({
-        "/v1/agents": json({ items: [agent] }),
+      fetchImpl: fakeCloudFetch({
+        "GET /v1/agents": json({ items: [agent] }),
         // The first run's stream is empty (seen live): it must not stand in for the second.
-        [`/v1/agents/${AGENT}/runs`]: json({ items: [RUN, EMPTY_RUN] }),
-        [`/v1/agents/${AGENT}/runs/run-empty/stream`]: () => new Response(""),
-        [`/v1/agents/${AGENT}/runs/${RUN.id}/stream`]: () => new Response(SSE),
-        [`/v0/agents/${AGENT}/conversation`]: json({ id: AGENT, messages: CONVERSATION }),
+        [`GET /v1/agents/${AGENT}/runs`]: json({ items: [RUN, EMPTY_RUN] }),
+        [`GET /v1/agents/${AGENT}/runs/run-empty/stream`]: () => new Response(""),
+        [`GET /v1/agents/${AGENT}/runs/${RUN.id}/stream`]: () => new Response(SSE),
+        [`GET /v0/agents/${AGENT}/conversation`]: json({ id: AGENT, messages: CONVERSATION }),
       }),
     });
     const sessions: Array<{ sessionId: string; filePath: string }> = [];
@@ -216,9 +206,9 @@ describe("CursorCloudWatcher", () => {
 
 describe("Cursor Cloud setup failures", () => {
   test("API errors carry Cursor's own message, from either error shape", async () => {
-    const api = new CursorCloudApi("crsr_test", fakeFetch({
-      "/v1/agents": () => new Response(JSON.stringify({ error: { code: "validation_error", message: "Failed to verify existence of branch 'main' in repository codecast-sh/codecast. Please ensure the branch name is correct." } }), { status: 400 }),
-      "/v1/me": () => new Response(JSON.stringify({ code: "error", message: "Invalid User API Key" }), { status: 401 }),
+    const api = new CursorCloudApi("crsr_test", fakeCloudFetch({
+      "POST /v1/agents": () => new Response(JSON.stringify({ error: { code: "validation_error", message: "Failed to verify existence of branch 'main' in repository codecast-sh/codecast. Please ensure the branch name is correct." } }), { status: 400 }),
+      "GET /v1/me": () => new Response(JSON.stringify({ code: "error", message: "Invalid User API Key" }), { status: 401 }),
     }), "https://api.test");
     await expect(api.createAgent({})).rejects.toMatchObject({ status: 400, code: "validation_error", message: expect.stringContaining("codecast-sh/codecast") });
     await expect(api.request("GET", "/v1/me")).rejects.toMatchObject({ status: 401, message: "Invalid User API Key" });

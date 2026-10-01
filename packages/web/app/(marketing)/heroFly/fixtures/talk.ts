@@ -4,7 +4,7 @@
  * this chapter renders as a pill or card.
  *
  * The API worker tells the dashboard worker where the endpoint is with
- * `cast send`; the dashboard worker answers the same way; then Ashot forks the
+ * `cast send`; the dashboard worker answers the same way; then you fork the
  * dashboard worker to try fixed backoff beside the exponential line.
  */
 
@@ -13,7 +13,8 @@ import type { ToolCall, ToolResult } from "@/components/conversation/types";
 import type { ForkChild } from "@/store/inboxStore";
 import { MIN, PEOPLE, SESSIONS } from "./story";
 
-const DOC_REF = "doc:hero_retry_schema";
+const DOC_ID = "hero_retry_schema";
+const DOC_REF = `doc:${DOC_ID}`;
 
 const session = (s: (typeof SESSIONS)[keyof typeof SESSIONS], status: string, messages: number, model: string) => ({
   _id: s.id,
@@ -28,14 +29,15 @@ const session = (s: (typeof SESSIONS)[keyof typeof SESSIONS], status: string, me
   updated_at: Date.now() - MIN,
 });
 
+// A doc pill resolves by its bare id with the type given, so the fixture is keyed by the id, not the `doc:` reference.
 export const entities: Record<string, EntityFixture> = {
   [SESSIONS.api.shortId]: { type: "session", entity: session(SESSIONS.api, "active", 38, "gpt-5.1-codex") },
   [SESSIONS.ui.shortId]: { type: "session", entity: session(SESSIONS.ui, "active", 27, "composer-1") },
   [SESSIONS.fork.shortId]: { type: "session", entity: session(SESSIONS.fork, "active", 6, "gpt-5.1-codex") },
-  [DOC_REF]: {
+  [DOC_ID]: {
     type: "doc",
     entity: {
-      _id: "hero_retry_schema",
+      _id: DOC_ID,
       title: "Retry API schema",
       doc_type: "spec",
       created_at: Date.now() - 40 * MIN,
@@ -58,7 +60,7 @@ export const SEND_RESULT: ToolResult = { tool_use_id: SEND.id, content: `Sent to
 export const REPLY_SEND = sendTool("hero-tool-reply", SESSIONS.api.shortId, REPLY);
 export const REPLY_RESULT: ToolResult = { tool_use_id: REPLY_SEND.id, content: `Sent to ${SESSIONS.api.shortId}` };
 
-/** Ashot's prompt on the dashboard worker, where the fork leaves the line. */
+/** Your prompt on the dashboard worker, where the fork leaves the line. */
 export const FORK_PROMPT = "Which backoff reads better on the retry timeline? Fork and try both.";
 export const MAIN_LINE = "keep exponential";
 

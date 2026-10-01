@@ -16,12 +16,13 @@
  * Cursor API key from the provider key store (`cast keys set cursor`).
  */
 import { CLOUD_AGENT_PROVIDERS, isCloudAgentId } from "@codecast/shared/contracts";
-import { readSse } from "../sse.js";
-import { CloudApiError, cloudApiErrorOf, requestCloudJson } from "./http.js";
-import { CLOUD_MAX_LIST_PAGES } from "./poll.js";
+import { CloudApiError, KeyedCloudApi, verifyCloudKey } from "./http.js";
+import { collectPages } from "./poll.js";
+import { CloudAgentStreams } from "./streams.js";
 import { MirrorTranscript } from "./transcript.js";
-import { CloudAgentBusyError, CloudAgentSetupError, errorText, logTag, type CloudAgentAdapter, type CloudAgentGit, type CloudAgentHandle, type CloudAgentListItem, type CloudAgentMirror } from "./types.js";
+import { CloudAgentSetupError, keyedCloudClient, type CloudAgentAdapter, type CloudAgentCreated, type CloudAgentGit, type KeyedCloudAdapterOptions, type CloudAgentHandle, type CloudAgentListItem, type CloudAgentMirror } from "./types.js";
 import type { CloudAgentSession } from "./sessions.js";
+import type { ProviderKeyVerdict } from "../providerKeyCrypto.js";
 
 const CURSOR = CLOUD_AGENT_PROVIDERS.cursor;
 /** Cursor links an agent by its bare id (`[Name](bc-…)`), which only its own app resolves. */
@@ -67,6 +68,8 @@ export interface CursorRunEvent {
   data: Record<string, any>;
 }
 
+const KEPT_EVENTS: ReadonlySet<string> = new Set<CursorRunEvent["event"]>(["assistant", "tool_call", "result", "status", "turn_start", "turn_end", "step"]);
+
 const MARKERS: Record<string, CursorRunEvent["event"]> = {
   "user-message-appended": "turn_start",
   "turn-ended": "turn_end",
@@ -81,16 +84,14 @@ export interface CursorConversationMessage {
 
 // ── API client ───────────────────────────────────────────────────────────────
 
-export class CursorCloudApi {
-  constructor(private readonly key: string, private readonly fetchImpl: typeof fetch = fetch, private readonly base = CURSOR_API_BASE) {}
-
-  private headers(extra: Record<string, string> = {}): Record<string, string> {
-    return { Authorization: `Basic ${Buffer.from(`${this.key}:`).toString("base64")}`, ...extra };
+/** Errors come as {error: {code, message}} (validation) or {code, message} (auth). */
+export class CursorCloudApi extends KeyedCloudApi {
+  constructor(key: string, fetchImpl: typeof fetch = fetch, base = CURSOR_API_BASE) {
+    super(key, fetchImpl, base, "cursor cloud");
   }
 
-  /** Errors come as {error: {code, message}} (validation) or {code, message} (auth). */
-  request<T>(method: string, p: string, body?: unknown): Promise<T> {
-    return requestCloudJson<T>(this.fetchImpl, { method, url: `${this.base}${p}`, headers: this.headers(), body, label: `cursor cloud ${method} ${p.split("?")[0]}` });
+  protected headers(): Record<string, string> {
+    return { Authorization: `Basic ${Buffer.from(`${this.key}:`).toString("base64")}` };
   }
 
   listAgents(limit = 100, cursor?: string): Promise<{ items: CursorCloudAgent[]; nextCursor?: string }> {
@@ -106,17 +107,12 @@ export class CursorCloudApi {
   createRun(agentId: string, text: string): Promise<{ run: CursorCloudRun }> {
     return this.request("POST", `/v1/agents/${encodeURIComponent(agentId)}/runs`, { prompt: { text } });
   }
-  async listRuns(agentId: string): Promise<CursorCloudRun[]> {
-    const out: CursorCloudRun[] = [];
-    let cursor: string | undefined;
-    for (let page = 0; page < CLOUD_MAX_LIST_PAGES; page++) {
+  listRuns(agentId: string): Promise<CursorCloudRun[]> {
+    return collectPages(async (cursor) => {
       const q = new URLSearchParams({ limit: "100", ...(cursor ? { cursor } : {}) });
       const data = await this.request<{ items?: CursorCloudRun[]; nextCursor?: string }>("GET", `/v1/agents/${encodeURIComponent(agentId)}/runs?${q}`);
-      out.push(...(data.items ?? []));
-      if (!data.nextCursor) break;
-      cursor = data.nextCursor;
-    }
-    return out;
+      return { items: data.items ?? [], next: data.nextCursor };
+    });
   }
   getRun(agentId: string, runId: string): Promise<CursorCloudRun> {
     return this.request("GET", `/v1/agents/${encodeURIComponent(agentId)}/runs/${encodeURIComponent(runId)}`);
@@ -134,32 +130,34 @@ export class CursorCloudApi {
   }
 
   /**
-   * Read a run's SSE stream, calling `onEvent` for each kept event, until the
-   * stream ends. Resolves true when it saw a terminal `result`. Despite the
-   * docs, a run's stream is the AGENT's event stream from that run on: it
-   * carries every later turn too, each opened by `turn_start` and closed by
-   * `turn_end`, with ids from one agent-wide sequence (verified 2026-09-29).
-   * `lastEventId` resumes one cut short. Throws 410 once it has expired.
+   * A run's SSE stream: resolves once it is open, to its kept events as they
+   * come until it ends. Despite the docs, a run's stream is the AGENT's event
+   * stream from that run on: it carries every later turn too, each opened by
+   * `turn_start` and closed by `turn_end`, with ids from one agent-wide
+   * sequence (verified 2026-09-29). `lastEventId` resumes one cut short.
+   * Throws 410 once it has expired.
    */
-  async streamRun(agentId: string, runId: string, onEvent: (e: CursorRunEvent) => void, opts: { signal?: AbortSignal; lastEventId?: string } = {}): Promise<boolean> {
-    const resp = await this.fetchImpl(`${this.base}/v1/agents/${encodeURIComponent(agentId)}/runs/${encodeURIComponent(runId)}/stream`, {
-      headers: this.headers({ Accept: "text/event-stream", ...(opts.lastEventId ? { "Last-Event-ID": opts.lastEventId } : {}) }),
+  async runEvents(agentId: string, runId: string, opts: { signal?: AbortSignal; lastEventId?: string } = {}): Promise<AsyncGenerator<CursorRunEvent>> {
+    const frames = await this.events<Record<string, any>>("GET", `/v1/agents/${encodeURIComponent(agentId)}/runs/${encodeURIComponent(runId)}/stream`, {
+      headers: opts.lastEventId ? { "Last-Event-ID": opts.lastEventId } : {},
       signal: opts.signal,
+      endEvent: "done",
     });
-    if (!resp.ok || !resp.body) {
-      let body: unknown;
-      try { body = await resp.json(); } catch {}
-      throw cloudApiErrorOf(resp.status, body, `cursor cloud run stream ${resp.status}`);
-    }
+    return (async function* () {
+      for await (const frame of frames) {
+        const event = frame.event === "interaction_update" ? MARKERS[frame.data?.type] : frame.event;
+        if (!event || !KEPT_EVENTS.has(event)) continue;
+        yield { event: event as CursorRunEvent["event"], ...(frame.id ? { id: frame.id } : {}), data: frame.event === "interaction_update" ? {} : frame.data };
+      }
+    })();
+  }
+
+  /** Read a run's stream to its end, calling `onEvent` for each kept event. Resolves true when it saw a terminal `result`. */
+  async streamRun(agentId: string, runId: string, onEvent: (e: CursorRunEvent) => void, opts: { signal?: AbortSignal; lastEventId?: string } = {}): Promise<boolean> {
     let sawResult = false;
-    for await (const frame of readSse(resp.body)) {
-      if (frame.event === "done") return sawResult;
-      let data: Record<string, any>;
-      try { data = JSON.parse(frame.data); } catch { continue; }
-      const event = frame.event === "interaction_update" ? MARKERS[data.type] : frame.event;
-      if (event !== "assistant" && event !== "tool_call" && event !== "result" && event !== "status" && event !== "turn_start" && event !== "turn_end" && event !== "step") continue;
-      if (event === "result") sawResult = true;
-      onEvent({ event, ...(frame.id ? { id: frame.id } : {}), data: frame.event === "interaction_update" ? {} : data });
+    for await (const e of await this.runEvents(agentId, runId, opts)) {
+      if (e.event === "result") sawResult = true;
+      onEvent(e);
     }
     return sawResult;
   }
@@ -170,14 +168,8 @@ export class CursorCloudApi {
  * Cursor's reason for refusing it. A network failure is reported as such,
  * never as a bad key.
  */
-export async function verifyCursorKey(key: string, fetchImpl: typeof fetch = fetch): Promise<{ ok: true; account?: string } | { ok: false; error: string }> {
-  try {
-    const me = await new CursorCloudApi(key, fetchImpl).request<{ userEmail?: string; apiKeyName?: string }>("GET", "/v1/me");
-    return { ok: true, account: me?.userEmail };
-  } catch (err) {
-    if (err instanceof CloudApiError && err.keyRejected) return { ok: false, error: `Cursor rejected this key: ${err.message}` };
-    return { ok: false, error: `Couldn't reach Cursor to check the key: ${errorText(err)}` };
-  }
+export function verifyCursorKey(key: string, fetchImpl: typeof fetch = fetch): Promise<ProviderKeyVerdict> {
+  return verifyCloudKey(CURSOR.vendor, async () => ({ account: (await new CursorCloudApi(key, fetchImpl).request<{ userEmail?: string }>("GET", "/v1/me"))?.userEmail }));
 }
 
 // ── Transcript ───────────────────────────────────────────────────────────────
@@ -377,26 +369,19 @@ export function latestCursorGit(agentId: string, runs: Array<CursorCloudRun & { 
   return { agentId, ...(b.repoUrl ? { repoUrl: cursorRepoUrl(b.repoUrl) } : {}), ...(b.branch ? { branch: b.branch } : {}), ...(b.prUrl ? { prUrl: b.prUrl } : {}) };
 }
 
-export interface CursorCloudAdapterOptions {
-  /** The Cursor API key on this machine, or null. */
-  readKey: () => string | null;
-  fetchImpl?: typeof fetch;
-}
-
 export class CursorCloudAdapter implements CloudAgentAdapter<CursorCloudApi, CursorCloudAgent, CursorAgentLog> {
   readonly spec = CURSOR;
   readonly mirrorFormat = MIRROR_FORMAT;
   /** Live runs being followed, by run id. */
-  private readonly followers = new Map<string, AbortController>();
+  readonly streams = new CloudAgentStreams<CursorRunEvent, CursorAgentLog>(this);
   private readonly fetchImpl: typeof fetch;
 
-  constructor(private readonly opts: CursorCloudAdapterOptions) {
+  constructor(private readonly opts: KeyedCloudAdapterOptions) {
     this.fetchImpl = opts.fetchImpl ?? fetch;
   }
 
   client(): CursorCloudApi | CloudAgentSetupError {
-    const key = this.opts.readKey();
-    return key ? new CursorCloudApi(key, this.fetchImpl) : CloudAgentSetupError.credentialsMissing(this);
+    return keyedCloudClient(this, this.opts.readKey, (key) => new CursorCloudApi(key, this.fetchImpl));
   }
 
   loadData(raw: any): CursorAgentLog {
@@ -441,11 +426,6 @@ export class CursorCloudAdapter implements CloudAgentAdapter<CursorCloudApi, Cur
     };
   }
 
-  stop(): void {
-    for (const c of this.followers.values()) c.abort();
-    this.followers.clear();
-  }
-
   /** Read a finished run's stream to its end into the agent's log. An expired one adds nothing. */
   private async readStream(api: CursorCloudApi, handle: CloudAgentHandle<CursorAgentLog>, run: CursorCloudRun): Promise<void> {
     const events: CursorRunEvent[] = [];
@@ -459,34 +439,24 @@ export class CursorCloudAdapter implements CloudAgentAdapter<CursorCloudApi, Cur
     log.events = mergeEventLog(log.events, events);
   }
 
+  /** Follow a running run's stream live, resuming one cut short, until its result; then the agent is mirrored again. */
   private startFollower(api: CursorCloudApi, handle: CloudAgentHandle<CursorAgentLog>, run: CursorCloudRun): void {
-    if (this.followers.has(run.id)) return;
-    const controller = new AbortController();
-    this.followers.set(run.id, controller);
-    void (async () => {
-      let lastEventId: string | undefined;
-      for (let attempt = 0; attempt < 20 && !controller.signal.aborted; attempt++) {
-        try {
-          const ended = await api.streamRun(handle.agentId, run.id, (e) => {
-            if (e.id) lastEventId = e.id;
-            const log = handle.data();
-            log.events = mergeEventLog(log.events, [e]);
-            handle.scheduleRender();
-          }, { signal: controller.signal, lastEventId });
-          if (ended) break;
-        } catch (err) {
-          if (controller.signal.aborted) return;
-          if (err instanceof CloudApiError && (err.status === 410 || err.status === 404)) break;
-          handle.log(`${logTag(this)} ${handle.agentId} run ${run.id} stream dropped: ${errorText(err)}`);
-        }
-        await new Promise((r) => setTimeout(r, Math.min(30_000, 1_000 * 2 ** attempt)));
-      }
-      this.followers.delete(run.id);
-      if (!controller.signal.aborted) await handle.follow();
-    })();
+    let lastEventId: string | undefined;
+    let sawResult = false;
+    this.streams.follow(run.id, {
+      open: (signal) => api.runEvents(handle.agentId, run.id, { signal, lastEventId }),
+      apply: (e, log) => {
+        if (e.id) lastEventId = e.id;
+        if (e.event === "result") sawResult = true;
+        log.events = mergeEventLog(log.events, [e]);
+      },
+      finished: () => sawResult,
+      gone: (err) => err instanceof CloudApiError && (err.status === 410 || err.status === 404),
+      reconnects: 20,
+    }, { handle });
   }
 
-  async create(api: CursorCloudApi, session: CloudAgentSession, content: string): Promise<{ agentId: string; url?: string }> {
+  async create(api: CursorCloudApi, session: CloudAgentSession, content: string): Promise<CloudAgentCreated> {
     const { agent } = await api.createAgent({
       prompt: { text: content },
       ...(session.model ? { model: { id: session.model } } : {}),
@@ -495,13 +465,9 @@ export class CursorCloudAdapter implements CloudAgentAdapter<CursorCloudApi, Cur
     return { agentId: agent.id, url: agent.url };
   }
 
+  /** A follow-up run. Cursor answers 409 while a run is going: the core holds the message. */
   async followUp(api: CursorCloudApi, agentId: string, content: string): Promise<void> {
-    try {
-      await api.createRun(agentId, content);
-    } catch (err) {
-      if (err instanceof CloudApiError && err.status === 409) throw new CloudAgentBusyError(CURSOR.label);
-      throw err;
-    }
+    await api.createRun(agentId, content);
   }
 
   async cancel(api: CursorCloudApi, agentId: string): Promise<string | null> {

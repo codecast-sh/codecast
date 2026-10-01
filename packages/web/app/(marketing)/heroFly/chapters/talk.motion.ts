@@ -20,7 +20,8 @@ export const TALK_AT = {
   forked: CUES.forked,
 } as const;
 
-const enter = { preset: "drop", z: 140, rx: -12, y: -16 } as const;
+/** Inside a 540px window a full-height drop would spill past its edges: a short one, kept for the hero cards elsewhere. */
+const enter = { preset: "drop", z: 60, rx: -8, y: -10 } as const;
 
 export const motion: ChapterMotion = {
   beats: {

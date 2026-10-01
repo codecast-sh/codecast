@@ -8,6 +8,9 @@
  * `frame(t)` straight to the DOM and ticks the film clock, so a view
  * re-renders only when a value it derives from film time changes.
  *
+ * With reduced motion the film is a set of chapter stills: it opens paused on
+ * the first, the scrubber picks any, and Play steps through them.
+ *
  * Verification hook: `window.__heroFly` seeks, pauses and plays, and
  * `?hero-t=<seconds>` freezes the film at that time. `?hero-reduced=1`
  * previews the reduced-motion version and `?hero-mobile=1` the phone framing.
@@ -33,7 +36,7 @@ const sceneAt = (t: number) => {
 };
 
 const DESCRIPTION =
-  "A looping tour of codecast: a live inbox of Claude Code, Codex, Cursor, Gemini and pi sessions; steering a session from its conversation; a lead session spawning two workers; a permission prompt approved from an iPhone; two agents messaging each other and forking; a decision queued for a person; a task filed from the conversation and claimed by an agent; a trigger and a workflow running on their own; the team's channel, huddle and org chart; a pull request going green and merging; a report published as a page; a teammate finding the session weeks later and tracing a line of code to it with cast blame; and sessions running on a laptop, a cloud host and in a browser.";
+  "A looping tour of codecast: a live inbox of Claude Code, Codex, Cursor, Gemini, OpenCode and pi sessions; steering a session from its conversation; a lead session spawning two workers; a permission prompt approved from an iPhone; two agents messaging each other and forking; a decision queued for a person; a task filed from the conversation and claimed by an agent; a trigger and a workflow running on their own; the team's channel and a huddle with live captions; a pull request going green and merging; a report published as a page; a teammate finding the session weeks later and tracing a line of code to it with cast blame; and sessions running on a laptop and a cloud host, driving real apps.";
 
 type HeroFlyApi = {
   seek(seconds: number): void;
@@ -55,9 +58,13 @@ const FALLBACK_SCALE_CSS = (() => {
   const rules: string[] = [".hf-stage{--hf-s:0.8625}"];
   for (let vw = 320; vw < 1152; vw += 32) {
     const cw = Math.min(vw, 1152) - 48;
-    rules.push(`@media (min-width:${vw}px){.hf-stage{--hf-s:${(cw / 1280).toFixed(4)}}}`);
+    // Below 640px the box is 4:5; the desktop poster sits in its middle until the driver frames it for a phone.
+    const top = vw < 640 ? `;top:${Math.round((cw * 1.25 - (760 * cw) / 1280) / 2)}px` : ";top:0";
+    rules.push(`@media (min-width:${vw}px){.hf-stage{--hf-s:${(cw / 1280).toFixed(4)}${top}}}`);
   }
   rules.push(`@media (min-width:1152px){.hf-stage{--hf-s:0.8625}}`);
+  // The film's width follows the viewport's height, so the scrubber's names hide by its own width: below about 70px a chapter, the dots and the caption carry it.
+  rules.push(".hf-scrub{container-type:inline-size}@container (max-width:900px){.hf-name{display:none!important}}");
   rules.push("@keyframes hf-cap{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}");
   return rules.join("");
 })();
@@ -116,7 +123,8 @@ export function HeroFlythrough() {
 
     const st = {
       t: POSTER_T,
-      playing: frozenAt === null,
+      // Reduced motion never advances on its own: the stills step only once the visitor presses Play.
+      playing: frozenAt === null && !reduced,
       anchorT: POSTER_T,
       anchorWall: performance.now(),
       onScreen: true,
@@ -164,6 +172,7 @@ export function HeroFlythrough() {
       const s = wrap.clientWidth / w;
       stage.style.width = `${w}px`;
       stage.style.height = `${h}px`;
+      stage.style.top = "0px";
       stage.style.setProperty("--hf-s", String(s));
     };
 
@@ -257,6 +266,7 @@ export function HeroFlythrough() {
       setPlaying(false);
       render(Number(frozenAt) || 0);
     } else if (reduced) {
+      setPlaying(false);
       showStill(0, false);
     } else {
       render(POSTER_T);
@@ -287,7 +297,7 @@ export function HeroFlythrough() {
       <div
         ref={wrapRef}
         aria-hidden
-        className="relative w-full overflow-hidden rounded-2xl bg-sol-bg aspect-[1280/760] max-sm:aspect-[4/5]"
+        className="relative w-full overflow-clip rounded-2xl bg-sol-bg aspect-[1280/760] max-sm:aspect-[4/5]"
         style={{ border: "1px solid var(--sol-bg-alt)", boxShadow: "0 40px 80px -40px rgba(0,43,54,0.35)" }}
       >
         <div
@@ -303,7 +313,7 @@ export function HeroFlythrough() {
         </div>
         <div
           className="pointer-events-none absolute inset-0"
-          style={{ background: "radial-gradient(ellipse 75% 70% at 50% 48%, transparent 60%, color-mix(in srgb, var(--sol-bg) 85%, transparent) 100%)" }}
+          style={{ background: "radial-gradient(ellipse 92% 88% at 50% 48%, transparent 74%, color-mix(in srgb, var(--sol-bg) 55%, transparent) 100%)" }}
         />
       </div>
       </HeroSandbox>
@@ -312,7 +322,6 @@ export function HeroFlythrough() {
         <button
           type="button"
           onClick={() => ctl.current?.toggle()}
-          aria-pressed={!playing}
           aria-label={playing ? "Pause the tour" : "Play the tour"}
           className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-[#eee8d5]"
           style={{ border: "1px solid #e4ddc8", borderBottomWidth: 2, color: "#586e75", backgroundColor: "#fdf6e3" }}
@@ -323,7 +332,7 @@ export function HeroFlythrough() {
             <svg className="ml-0.5 h-2.5 w-2.5" viewBox="0 0 10 10" fill="currentColor" aria-hidden><path d="M2 1.2v7.6a.6.6 0 0 0 .9.5l6.1-3.8a.6.6 0 0 0 0-1L2.9.7a.6.6 0 0 0-.9.5z" /></svg>
           )}
         </button>
-        <ol className="flex min-w-0 flex-1 gap-1">
+        <ol className="hf-scrub flex min-w-0 flex-1 gap-1">
           {SCENES.map((s, i) => (
             <li key={s.name} className="min-w-0 flex-1">
               <button
@@ -331,10 +340,10 @@ export function HeroFlythrough() {
                 onClick={() => ctl.current?.jump(i)}
                 aria-current={i === scene ? "step" : undefined}
                 aria-label={`Chapter ${i + 1}: ${s.name}`}
-                className="group relative flex w-full items-center gap-1.5 overflow-hidden rounded-md px-1.5 py-1.5 text-left transition-colors hover:bg-[#eee8d5]/70"
+                className="group relative flex min-h-6 w-full items-center gap-1.5 overflow-hidden rounded-md px-1.5 py-2.5 text-left transition-colors hover:bg-[#eee8d5]/70 sm:py-1.5"
               >
                 <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: DOTS[i % DOTS.length], opacity: i === scene ? 1 : 0.55 }} />
-                <span className={`hidden truncate text-[11px] sm:inline ${i === scene ? "text-[#002b36]" : "text-[#93a1a1] group-hover:text-[#586e75]"}`}>{s.name}</span>
+                <span className={`hf-name hidden truncate text-[11px] sm:inline ${i === scene ? "text-[#002b36]" : "text-[#93a1a1] group-hover:text-[#586e75]"}`}>{s.name}</span>
                 <span className="absolute inset-x-1.5 bottom-0 h-[2px] rounded-full" style={{ backgroundColor: "#eee8d5" }} />
                 <span
                   ref={(b) => {

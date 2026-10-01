@@ -1,17 +1,23 @@
 <!doctype html>
 <html lang="en">
-<head><script>(function(){
+<head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src data:; connect-src data:; form-action 'none'"><script>(function(){
+  var now=Date.now,shift=1790780475000-now();
+  Date.now=function(){return now()+shift;};
   var mem={};
-  var store={getItem:function(k){return k.indexOf("__cc_min")===0?"0":(k in mem?mem[k]:null);},setItem:function(k,v){mem[k]=String(v);},removeItem:function(k){delete mem[k];}};
+  var store={getItem:function(k){return k.indexOf("__cc_min")===0?"1":(k in mem?mem[k]:null);},setItem:function(k,v){mem[k]=String(v);},removeItem:function(k){delete mem[k];}};
   try{Object.defineProperty(window,"localStorage",{value:store,configurable:true});}catch(e){}
   var real=window.fetch.bind(window);
   window.fetch=function(u,o){
     if(typeof u==="string"&&u.indexOf("data:")===0)return real(u,o);
     return Promise.resolve(new Response("{}",{status:200,headers:{"Content-Type":"application/json"}}));
   };
-})();</script>
+  var open=function(n){var pin=document.querySelector(".__cc_pin");if(pin)pin.click();else if(n<40)setTimeout(function(){open(n+1);},50);};
+  addEventListener("load",function(){open(0);});
+  addEventListener("click",function(e){var a=e.target&&e.target.closest&&e.target.closest("a");if(a)e.preventDefault();},true);
+  addEventListener("submit",function(e){e.preventDefault();},true);
+})();</script><style>.__cc_signin,#__cc_cpanel .__cc_addrow,#__cc_cpanel .__cc_rbtn,#__cc_cpanel .__cc_send,#__cc_cpanel textarea{display:none!important}</style>
 <meta property="og:title" content="Webhook retry report">
-<meta property="og:description" content="A page published by Ashot Petrosian with codecast">
+<meta property="og:description" content="A page published by Alex Rivera with codecast">
 <meta property="og:url" content="https://codecast.sh/a/webhook-retries">
 <meta property="og:site_name" content="codecast">
 <meta property="og:type" content="article">
@@ -24,7 +30,7 @@
   :root { --ink: #073642; --mut: #586e75; --dim: #93a1a1; --line: #e8e2cf; --bg: #fdf6e3; --card: #fffdf6; --green: #859900; --red: #dc322f; --blue: #268bd2; --amber: #b58900; }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.55 ui-sans-serif, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
-  main { max-width: 760px; margin: 0 auto; padding: 28px 32px 48px; }
+  main { max-width: 352px; margin: 0; padding: 22px 16px 48px; }
   .kicker { font: 600 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .04em; color: var(--mut); }
   h1 { font-size: 26px; line-height: 1.2; margin: 8px 0 6px; letter-spacing: -.01em; }
   .lede { color: var(--mut); margin: 0 0 22px; max-width: 56ch; }
@@ -347,7 +353,7 @@
 <div id="__cc_bar">
   <a class="__cc_brand" href="https://codecast.sh" target="_blank" rel="noopener noreferrer" title="Published with codecast"><svg width="22" height="22" style="width:22px;height:22px;display:inline-block;vertical-align:middle;flex:none;max-width:none;min-width:0" viewBox="290 340 440 340" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="currentColor" d="M484.642334,414.398438 C441.085785,414.100739 407.961426,431.836365 389.038177,470.938019 C359.991791,530.957275 397.919464,599.922302 462.212036,610.452393 C488.377197,614.737732 512.859131,609.315125 534.993835,594.283020 C536.985901,592.930176 538.769653,590.998291 541.395325,590.790649 C542.830750,592.057068 542.358704,593.648865 542.360229,595.064209 C542.383118,615.894470 542.245728,636.725830 542.454224,657.553894 C542.495239,661.645569 540.944946,663.478516 537.347595,664.804260 C457.310547,694.300720 365.884827,658.371399 330.527679,577.853210 C318.822357,551.196838 314.364532,523.336731 317.783875,494.457825 C326.474518,421.058838 381.311096,368.253448 444.614929,354.822266 C476.047852,348.153107 507.120667,349.994629 537.405273,361.541992 C541.135986,362.964569 542.456543,364.823730 542.420715,368.821503 C542.237122,389.316772 542.366028,409.814758 542.335571,430.311707 C542.333191,431.888306 542.886780,433.635895 541.039673,435.579559 C524.470764,423.311615 505.857056,415.935822 484.642334,414.398438z"/><path fill="#e86c5d" d="M595.160889,540.159180 C602.995361,532.661072 610.436890,525.255066 618.219727,518.227051 C621.594788,515.179443 621.862915,513.288818 618.369263,510.015167 C605.976135,498.402374 593.950073,486.398682 581.638672,474.697052 C578.746277,471.947968 577.631470,469.026062 577.653381,465.050171 C577.786804,440.902161 577.692810,416.752869 577.674988,392.604004 C577.673828,390.969238 577.674927,389.334503 577.674927,387.822937 C580.475952,386.927032 581.524963,388.753571 582.754211,389.949341 C611.163818,417.584045 639.573853,445.218567 667.919434,472.919006 C680.901062,485.605255 693.661133,498.519287 706.712463,511.132599 C709.948914,514.260376 709.647461,516.128052 706.514099,519.115662 C674.820679,549.334167 643.279907,579.712769 611.649353,609.997375 C601.908936,619.323242 592.027832,628.502197 582.202148,637.738831 C581.252808,638.631287 580.419067,639.758240 578.788452,639.713379 C577.032288,638.391235 577.739929,636.409241 577.736206,634.708374 C577.682861,610.393066 577.748169,586.077332 577.625610,561.762512 C577.608215,558.319458 578.534119,555.799866 581.153076,553.487549 C585.892944,549.302612 590.338135,544.783875 595.160889,540.159180z"/></svg></a>
   <span class="__cc_title">Webhook retry report</span>
-  <a class="__cc_sess" href="https://codecast.sh/conversation/hero-s-lead" target="_blank" rel="noopener noreferrer" title="Open the session that published this (jx7hero)">Retry failed webhooks</a>
+  <a class="__cc_sess" href="https://codecast.sh/conversation/hero-s-lead" target="_blank" rel="noopener noreferrer" title="Open the session that published this (jx7c4mq)">Retry failed webhooks</a>
   <button id="__cc_new" type="button" hidden></button>
   <span class="__cc_when" id="__cc_when" data-ts="1790780400000">updated Sep 30, 2026</span>
   <button id="__cc_ver" type="button" title="Version history">v2 <svg width="9" height="9" style="width:9px;height:9px;display:inline-block;vertical-align:middle;flex:none;max-width:none;min-width:0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
@@ -361,7 +367,7 @@
 <div id="__cc_cpanel" class="__cc_panel" hidden></div>
 <div id="__cc_mgr" class="__cc_panel" hidden></div>
 <script>(function(){
-  var CC={"metaUrl":"data:application/json,%7B%22version%22%3A2%2C%22updated_at%22%3A1790780400000%2C%22kind%22%3A%22html%22%2C%22views%22%3A14%2C%22comment_count%22%3A2%2C%22comments%22%3A%5B%7B%22id%22%3A%22hero-cm1%22%2C%22author_name%22%3A%22Sarah%20Chen%22%2C%22author_avatar%22%3Anull%2C%22verified%22%3Atrue%2C%22parent_id%22%3Anull%2C%22text%22%3A%22Can%20we%20page%20someone%20when%20an%20event%20reaches%20attempt%205%3F%22%2C%22anchor%22%3A%22%7B%5C%22x%5C%22%3A0.9%2C%5C%22y%5C%22%3A0.47%7D%22%2C%22version%22%3A2%2C%22created_at%22%3A1790779920000%2C%22delivered%22%3Afalse%7D%2C%7B%22id%22%3A%22hero-cm2%22%2C%22author_name%22%3A%22Maya%20Ortiz%22%2C%22author_avatar%22%3Anull%2C%22verified%22%3Atrue%2C%22parent_id%22%3Anull%2C%22text%22%3A%22Putting%20this%20chart%20on%20the%20billing%20dashboard.%22%2C%22anchor%22%3A%22%7B%5C%22x%5C%22%3A0.9%2C%5C%22y%5C%22%3A0.27%7D%22%2C%22version%22%3A2%2C%22created_at%22%3A1790780160000%2C%22delivered%22%3Afalse%7D%5D%2C%22session%22%3A%7B%22short_id%22%3A%22jx7hero%22%2C%22title%22%3A%22Retry%20failed%20webhooks%22%7D%2C%22gated%22%3A%7B%22password%22%3Afalse%2C%22email%22%3Afalse%7D%2C%22versions%22%3A%5B%7B%22version%22%3A2%2C%22title%22%3A%22Webhook%20retry%20report%22%2C%22size%22%3A4560%2C%22published_at%22%3A1790780400000%7D%2C%7B%22version%22%3A1%2C%22title%22%3A%22Webhook%20retry%20report%22%2C%22size%22%3A4560%2C%22published_at%22%3A1790778840000%7D%5D%7D","apiBase":"https://hero.invalid","shareUrl":"https://codecast.sh/a/webhook-retries","slug":"webhook-retries","version":2,"currentVersion":2,"kind":"html","views":14,"comments":2,"live":false,"editMode":"owner","gated":{"password":false,"email":false}};
+  var CC={"metaUrl":"data:application/json,%7B%22version%22%3A2%2C%22updated_at%22%3A1790780400000%2C%22kind%22%3A%22html%22%2C%22views%22%3A14%2C%22comment_count%22%3A2%2C%22comments%22%3A%5B%7B%22id%22%3A%22hero-cm1%22%2C%22author_name%22%3A%22Sarah%20Chen%22%2C%22author_avatar%22%3Anull%2C%22verified%22%3Atrue%2C%22parent_id%22%3Anull%2C%22text%22%3A%22Can%20we%20page%20someone%20when%20an%20event%20reaches%20attempt%205%3F%22%2C%22anchor%22%3A%22%7B%5C%22x%5C%22%3A0.331%2C%5C%22y%5C%22%3A0.57%7D%22%2C%22version%22%3A2%2C%22created_at%22%3A1790780420000%2C%22delivered%22%3Afalse%7D%2C%7B%22id%22%3A%22hero-cm2%22%2C%22author_name%22%3A%22Maya%20Ortiz%22%2C%22author_avatar%22%3Anull%2C%22verified%22%3Atrue%2C%22parent_id%22%3Anull%2C%22text%22%3A%22Putting%20this%20chart%20on%20the%20billing%20dashboard.%22%2C%22anchor%22%3A%22%7B%5C%22x%5C%22%3A0.073%2C%5C%22y%5C%22%3A0.5%7D%22%2C%22version%22%3A2%2C%22created_at%22%3A1790780445000%2C%22delivered%22%3Afalse%7D%5D%2C%22session%22%3A%7B%22short_id%22%3A%22jx7c4mq%22%2C%22title%22%3A%22Retry%20failed%20webhooks%22%7D%2C%22gated%22%3A%7B%22password%22%3Afalse%2C%22email%22%3Afalse%7D%2C%22versions%22%3A%5B%7B%22version%22%3A2%2C%22title%22%3A%22Webhook%20retry%20report%22%2C%22size%22%3A4509%2C%22published_at%22%3A1790780400000%7D%2C%7B%22version%22%3A1%2C%22title%22%3A%22Webhook%20retry%20report%22%2C%22size%22%3A4509%2C%22published_at%22%3A1790778840000%7D%5D%7D","apiBase":"https://hero.invalid","shareUrl":"https://codecast.sh/a/webhook-retries","slug":"webhook-retries","version":2,"currentVersion":2,"kind":"html","views":14,"comments":2,"live":false,"editMode":"owner","gated":{"password":false,"email":false}};
   var frag=new URLSearchParams(location.hash.replace(/^#/,""));
   var ownerKey=frag.get("o")||"";
   var editKey=frag.get("ed")||"";
@@ -1237,13 +1243,13 @@
   }
 })();</script>
 <main>
-  <div class="kicker">acme/billing · PR #482 · 7 days on staging</div>
+  <div class="kicker">PR #482 · 24h replayed on staging</div>
   <h1>Webhook retry report</h1>
-  <p class="lede">Failed Stripe deliveries now retry with exponential backoff, at most 5 attempts over about thirty minutes. Nothing was dropped this week.</p>
+  <p class="lede">Failed Stripe deliveries now retry with exponential backoff, at most 5 attempts over about thirty minutes. Nothing was dropped in the replay.</p>
   <div class="stats">
-    <div class="stat"><b class="good">0</b><span>events dropped (41 the week before)</span></div>
-    <div class="stat"><b>99.98%</b><span>delivered, retries included</span></div>
-    <div class="stat"><b>2m 10s</b><span>median time to recover</span></div>
+    <div class="stat"><b class="good">0</b><span>dropped (41 before)</span></div>
+    <div class="stat"><b>99.98%</b><span>delivered</span></div>
+    <div class="stat"><b>2m 10s</b><span>median recovery</span></div>
   </div>
   <div class="chart" id="recovered">
     <h2>Where a failed event recovers</h2>

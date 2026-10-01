@@ -31,6 +31,15 @@ function useCodexSignIn(): SignInCheck {
 
 const NEVER: ConnectedCheck = () => false;
 
+/**
+ * Whether a machine's block is about its connection to the provider: not a
+ * lane the provider changed (codecast paused it) or holds to a limit, which
+ * no sign-in or key fixes and which the machine says on its own.
+ */
+function blocksConnection(block: CloudAgentSetupBlock | undefined): boolean {
+  return !!block && block.kind !== "changed" && block.kind !== "limit";
+}
+
 /** What the machine's daemon last found keeps it from reading the provider (turned off for the account, refused), if anything. */
 export function cloudAgentBlockOf(spec: CloudAgentProviderSpec | undefined, device: Device): CloudAgentSetupBlock | undefined {
   return spec ? device.cloud_agent_blocks?.find((b) => b.provider === spec.id) : undefined;
@@ -49,14 +58,14 @@ function useSignInCheck(spec: CloudAgentProviderSpec | undefined): SignInCheck |
 /**
  * Whether a machine can drive a provider's agents (never, without a
  * provider): it holds the credential, and its daemon found nothing in the
- * provider's way. Stable while what it reads holds still.
+ * provider's way (blocksConnection). Stable while what it reads holds still.
  */
 export function useCloudAgentConnected(spec: CloudAgentProviderSpec | undefined): ConnectedCheck {
   const signIn = useSignInCheck(spec);
   return useMemo<ConnectedCheck>(() => {
     if (!spec) return NEVER;
     const holds: ConnectedCheck = signIn ? (device) => signIn(device).connected : spec.keyProvider ? hasCloudAgentKey(spec.keyProvider) : NEVER;
-    return (device) => holds(device) && !cloudAgentBlockOf(spec, device);
+    return (device) => holds(device) && !blocksConnection(cloudAgentBlockOf(spec, device));
   }, [spec, signIn]);
 }
 

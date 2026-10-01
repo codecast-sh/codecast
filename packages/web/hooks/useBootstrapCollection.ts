@@ -56,6 +56,23 @@ export function resetBootstrapFloors(): void {
   done.clear();
 }
 
+/**
+ * Sim seam: the floors belong to one window. get() snapshots them (the map is
+ * copied, so the snapshot is detached), set() loads a snapshot back, fresh()
+ * is what a window that never ran starts from.
+ */
+export function __bootstrapSimSlots() {
+  type Slots = { done: Map<string, Floor> };
+  return {
+    fresh: (): Slots => ({ done: new Map() }),
+    get: (): Slots => ({ done: new Map(done) }),
+    set: (s: Slots): void => {
+      done.clear();
+      for (const [k, v] of s.done) done.set(k, v);
+    },
+  };
+}
+
 // Entries from an earlier epoch or principal can never be asked for again;
 // drop them so the map stays the size of one page session's live floors.
 function forgetFloorsOutside(prefix: string): void {
