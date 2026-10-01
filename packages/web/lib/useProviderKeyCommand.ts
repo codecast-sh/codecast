@@ -12,7 +12,7 @@ import { useMutation, useQuery } from "convex/react";
 import { captureException } from "@sentry/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { CLOUD_AGENT_ACTIONS, getProviderKeySpec, type CloudAgentActionName, type CloudAgentLoginStateName } from "@codecast/shared/contracts";
+import { CLOUD_AGENT_ACTIONS, cloudAgentPageUrl, getProviderKeySpec, type CloudAgentActionName, type CloudAgentLoginStateName } from "@codecast/shared/contracts";
 import { encryptProviderKey } from "./providerKeyCrypto";
 import type { Device } from "../components/DeviceBadge";
 
@@ -126,6 +126,8 @@ export function useVerifiedKeySubmit(keyProvider: string, device: Device | null,
     checking: sending || (!!commandId && (outcome === undefined || outcome?.state === "pending")),
     done: outcome?.state === "done",
     account: outcome?.state === "done" ? outcome.account : undefined,
+    /** What a key the provider kept still lacks (it was stored anyway). */
+    detail: outcome?.state === "done" ? outcome.detail : undefined,
     failed: outcome?.state === "failed" ? outcome.error : sendError,
   };
 }
@@ -261,7 +263,7 @@ export function useCloudAgentAction(conversationId: string, onResult: (outcome: 
   useWatchEffect(() => {
     if (!action) return;
     if (unanswered) report.current({ action, ok: false, text: "The machine that hosts this session did not answer: it may be offline, or its codecast too old for this" });
-    else if (outcome?.state === "done") report.current({ action, ok: true, text: outcome.detail ?? `${CLOUD_AGENT_ACTIONS[action].label} done`, url: outcome.url });
+    else if (outcome?.state === "done") report.current({ action, ok: true, text: outcome.detail ?? `${CLOUD_AGENT_ACTIONS[action].label} done`, url: cloudAgentPageUrl(outcome.url) });
     else if (outcome?.state === "failed") report.current({ action, ok: false, text: outcome.error });
     else return;
     setAction(null);

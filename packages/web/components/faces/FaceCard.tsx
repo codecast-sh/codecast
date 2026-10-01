@@ -26,6 +26,8 @@ import { useMemberHuddle } from "../presence/useMemberHuddle";
 import { FaceActions } from "../presence/FaceActions";
 import type { FaceKey } from "../presence/useFaceKey";
 import { ErrorBoundary } from "../ErrorBoundary";
+import { GuestTag } from "../calls/GuestTag";
+import { GuestRemoveButton } from "../calls/GuestDoor";
 
 /** The card's edge gutter: it never touches the viewport. */
 const EDGE = 8;
@@ -138,19 +140,7 @@ function FaceCardBody({
 
   // Centred on the face, then pushed in from a viewport edge if it would
   // clip; the notch stays on the face either way.
-  const ref = useRef<HTMLDivElement | null>(null);
-  const [shift, setShift] = useState(0);
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (density !== "bar" || !el || typeof window === "undefined") return;
-    const r = el.getBoundingClientRect();
-    if (r.width === 0) return;
-    let next = 0;
-    if (r.left < EDGE) next = EDGE - r.left;
-    else if (r.right > window.innerWidth - EDGE) next = window.innerWidth - EDGE - r.right;
-    if (next !== shift) setShift(next);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- measured once per anchor
-  }, [anchor, density]);
+  const { ref, shift } = useCardShift(anchor, density);
 
   const setStatus = (status: "available" | "busy" | "away") => {
     useInboxStore.getState().setMyStatus(status);
@@ -332,3 +322,82 @@ const IDLE_PTT = {
   press: () => {},
   release: () => {},
 };
+
+/** The card's place: centred on its face, pushed in from a viewport edge
+ *  when it would clip (the bar only; the float's band is the window). Every
+ *  card under a face measures the same way. */
+function useCardShift(anchor: number, density: "bar" | "float") {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [shift, setShift] = useState(0);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (density !== "bar" || !el || typeof window === "undefined") return;
+    const r = el.getBoundingClientRect();
+    if (r.width === 0) return;
+    let next = 0;
+    if (r.left < EDGE) next = EDGE - r.left;
+    else if (r.right > window.innerWidth - EDGE) next = window.innerWidth - EDGE - r.right;
+    if (next !== shift) setShift(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- measured once per anchor
+  }, [anchor, density]);
+  return { ref, shift };
+}
+
+/**
+ * The card under a guest's face. A guest is not on the team: no presence, no
+ * sessions to follow, no conversation to open, no walkie key. What there is
+ * to know is who they are (the name they typed), that they came in on a link,
+ * how long they have been here, and the one thing the room can do about them.
+ */
+export function GuestFaceCard({
+  identity,
+  name,
+  joinedAgo,
+  anchor,
+  density,
+  onClose,
+}: {
+  identity: string;
+  name: string;
+  joinedAgo: number | null;
+  anchor: number;
+  density: "bar" | "float";
+  onClose: () => void;
+}) {
+  const { ref, shift } = useCardShift(anchor, density);
+  const mins = joinedAgo === null ? null : Math.floor(joinedAgo / 60_000);
+  return (
+    <div
+      ref={ref}
+      className="face-card"
+      role="dialog"
+      aria-label={`${name}, a guest`}
+      data-density={density}
+      style={{ ["--anchor" as string]: `${anchor}px`, ["--shift" as string]: `${shift}px` }}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          e.stopPropagation();
+          onClose();
+        }
+      }}
+    >
+      <button type="button" className="face-card-close" aria-label="Close" title="Close" onClick={onClose}>
+        <X className="h-3.5 w-3.5" />
+      </button>
+      <div className="face-card-name pr-6">
+        <span className="truncate">{name}</span>
+        <GuestTag />
+      </div>
+      <span className="face-card-line text-sol-text-muted">
+        From outside the team, in this call on a guest link
+        {mins === null ? "" : mins < 1 ? " · just joined" : ` · ${mins} min`}
+      </span>
+      <div className="face-card-agent flex items-center gap-2">
+        <span className="min-w-0 flex-1">They see and hear the call. They cannot see the team, its sessions or the thread.</span>
+        <span className="shrink-0">
+          <GuestRemoveButton identity={identity} name={name} variant="row" always />
+        </span>
+      </div>
+    </div>
+  );
+}

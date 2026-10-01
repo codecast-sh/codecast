@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import {
+  Alert,
   Image,
   Pressable,
   StyleSheet,
@@ -10,8 +11,9 @@ import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 import { Ionicons } from "@expo/vector-icons";
-import { useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { livekit } from "@/lib/calls/livekitNative";
+import { humanizeConvexError, isGuestParticipant } from "@codecast/shared/contracts";
 
 // VideoTrack from the guarded native module: on a binary without the LiveKit
 // natives it is null and the stage renders avatars only (joinCall refuses to
@@ -35,6 +37,7 @@ import {
   subscribeCall,
 } from "@/lib/calls/callManager";
 import { RingBanner, useIncomingRing, type RingRow } from "@/components/calls/CallOverlay";
+import { LivePulse } from "@/components/calls/LiveRooms";
 import { acceptInvite, declineInvite } from "@/lib/calls/callManager";
 import { stopRinging } from "@/lib/calls/ringtone";
 import { useAuth } from "@/lib/auth";
@@ -158,7 +161,10 @@ export default function CallScreen() {
       <RingBanner ring={ring} top={insets.top + 6} onJoin={onJoinRing} onDecline={onDeclineRing} switching />
       {/* Header: room context + collapse. */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>huddle</Text>
+        <View style={styles.headerLead}>
+          <Text style={styles.headerTitle}>huddle</Text>
+          <RecordingBadge roomKey={call.roomKey} />
+        </View>
         <Pressable
           hitSlop={12}
           onPress={() => router.back()}
@@ -169,6 +175,7 @@ export default function CallScreen() {
           <Text style={styles.collapseText}>collapse</Text>
         </Pressable>
       </View>
+      <RecordingNotice roomKey={call.roomKey} />
 
       {/* Stage */}
       <View style={styles.stage}>
@@ -193,7 +200,7 @@ export default function CallScreen() {
                     ]}
                   >
                     <VideoTrack trackRef={c.ref} style={styles.fill} objectFit="cover" mirror={c.isLocal} />
-                    <Text style={styles.plateSmall}>{c.isLocal ? "you" : firstName(c.name)}</Text>
+                    <Text style={styles.plateSmall}>{c.isLocal ? "you" : participantName(c.identity, c.name)}</Text>
                   </View>
                 ))}
               </View>
@@ -212,7 +219,7 @@ export default function CallScreen() {
                 ]}
               >
                 <VideoTrack trackRef={c.ref} style={styles.fill} objectFit="cover" mirror={c.isLocal} />
-                <Text style={styles.plateSmall}>{c.isLocal ? "you" : firstName(c.name)}</Text>
+                <Text style={styles.plateSmall}>{c.isLocal ? "you" : participantName(c.identity, c.name)}</Text>
               </View>
             ))}
           </View>
@@ -244,7 +251,7 @@ export default function CallScreen() {
                     )}
                   </View>
                   <View style={styles.avatarNameRow}>
-                    <Text style={styles.avatarName}>{p.isLocal ? "you" : firstName(p.name)}</Text>
+                    <Text style={styles.avatarName}>{p.isLocal ? "you" : participantName(p.identity, p.name)}</Text>
                     {p.micMuted && (
                       <Ionicons name="mic-off" size={11} color={Theme.textDim} />
                     )}
@@ -263,7 +270,7 @@ export default function CallScreen() {
                 key={p.identity}
                 style={[styles.voiceChip, speaking.has(p.identity) && styles.speakingBorder]}
               >
-                <Text style={styles.voiceChipText}>{p.isLocal ? "you" : firstName(p.name)}</Text>
+                <Text style={styles.voiceChipText}>{p.isLocal ? "you" : participantName(p.identity, p.name)}</Text>
                 {p.micMuted && <Ionicons name="mic-off" size={10} color={Theme.textDim} />}
               </View>
             ))}
@@ -329,6 +336,119 @@ export default function CallScreen() {
   );
 }
 
+// The room is being recorded (convex callRecordings, filmed on LiveKit's
+// servers): the same red REC every other call surface wears, read off the
+// live rooms list the tab bar already subscribes to, so the phone costs no
+// extra query and works against a server that predates recording (the flag
+// is simply absent). Recording starts from a desktop or web stage; anyone in
+// the call may stop it, so a tap on the mark offers exactly that.
+function useRoomRecordingFlag(roomKey: string | null): boolean {
+  const { isAuthenticated } = useAuth();
+  const rooms = useQuery(api.calls.getLiveRooms, isAuthenticated && roomKey ? {} : "skip");
+  return !!roomKey && (rooms ?? []).some((r: any) => r.room_key === roomKey && r.recording);
+}
+
+/** Stop for everyone, asked once more first: one tap must not end the room's
+ *  recording. */
+function useConfirmStopRecording(roomKey: string | null): () => void {
+  const stop = useMutation(api.callRecordings.stopRecording);
+  return () =>
+    Alert.alert("Stop recording for everyone?", "The video so far is kept with the call.", [
+      { text: "Keep recording", style: "cancel" },
+      {
+        text: "Stop recording",
+        style: "destructive",
+        onPress: () => {
+          if (!roomKey) return;
+          void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          void stop({ room_key: roomKey }).catch((err: unknown) =>
+            Alert.alert("Couldn't stop the recording", humanizeConvexError(err, "Something went wrong")),
+          );
+        },
+      },
+    ]);
+}
+
+function RecordingBadge({ roomKey }: { roomKey: string | null }) {
+  const recording = useRoomRecordingFlag(roomKey);
+  const confirmStop = useConfirmStopRecording(roomKey);
+  if (!recording) return null;
+  return (
+    <Pressable
+      onPress={confirmStop}
+      hitSlop={8}
+      style={({ pressed }) => [styles.recBadge, pressed && styles.pressed]}
+      accessibilityRole="button"
+      accessibilityLabel="This call is being recorded. Tap to stop it"
+    >
+      <LivePulse color={Theme.red} size={6} />
+      <Text style={styles.recText}>REC</Text>
+    </Pressable>
+  );
+}
+
+// Rooms whose current recording this phone has already told its person
+// about. Module-wide, so collapsing the call screen and coming back mid-run
+// does not tell them again. A room drops out the moment its flag goes false
+// (the next run is told afresh) and the moment the person leaves it (walking
+// back in is joining later, which is told).
+const toldRecording = new Set<string>();
+let forgetOnLeave: (() => void) | null = null;
+function noteToldRecording(roomKey: string): void {
+  toldRecording.add(roomKey);
+  forgetOnLeave ??= subscribeCall(() => {
+    const seat = getCallSnapshot().roomKey;
+    for (const told of [...toldRecording]) if (told !== seat) toldRecording.delete(told);
+  });
+}
+
+/** Everyone in the room is told a recording is running, in words, once a
+ *  run: when somebody starts it while this person is in, and when they walk
+ *  into a room already being recorded. The badge alone is not telling. */
+function RecordingNotice({ roomKey }: { roomKey: string | null }) {
+  const recording = useRoomRecordingFlag(roomKey);
+  const confirmStop = useConfirmStopRecording(roomKey);
+  const [shown, setShown] = useState<string | null>(null);
+  useEffect(() => {
+    if (!roomKey) return;
+    if (!recording) {
+      toldRecording.delete(roomKey);
+      setShown(null);
+      return;
+    }
+    if (toldRecording.has(roomKey)) return;
+    noteToldRecording(roomKey);
+    setShown(roomKey);
+    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+  }, [roomKey, recording]);
+  if (!recording || shown !== roomKey) return null;
+  return (
+    <View style={styles.recNotice} accessibilityRole="alert">
+      <LivePulse color={Theme.red} size={6} />
+      <View style={styles.recNoticeBody}>
+        <Text style={styles.recNoticeTitle}>This call is being recorded</Text>
+        <Text style={styles.recNoticeText}>Video and shared screens are kept with the call. Anyone in it can stop it.</Text>
+        <View style={styles.recNoticeActions}>
+          <Pressable onPress={() => setShown(null)} hitSlop={6} style={({ pressed }) => [styles.recNoticeBtn, pressed && styles.pressed]}>
+            <Text style={styles.recNoticeBtnText}>Got it</Text>
+          </Pressable>
+          <Pressable onPress={confirmStop} hitSlop={6} style={({ pressed }) => [styles.recNoticeBtn, pressed && styles.pressed]}>
+            <Text style={[styles.recNoticeBtnText, { color: Theme.red }]}>Stop recording</Text>
+          </Pressable>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+/** A participant's first name, marked in words when they are a guest (a
+ *  person from outside the team on a link): a phone's name plate has no room
+ *  for the web's badge, and a guest must never pass for a teammate. The
+ *  shared test (isGuestParticipant), the one the web's badge uses. */
+function participantName(identity: string, name: string | undefined): string {
+  return isGuestParticipant(identity, name) ? `${firstName(name ?? "")} (guest)` : firstName(name ?? "");
+}
+
 function firstName(name: string): string {
   return name.split("@")[0].split(/\s+/)[0].toLowerCase() || "teammate";
 }
@@ -360,7 +480,7 @@ function Captions({ roomKey }: { roomKey: string | null }) {
           style={[styles.captionLine, i === arr.length - 1 && styles.captionLatest]}
           numberOfLines={2}
         >
-          <Text style={styles.captionSpeaker}>{firstName(seg.speaker_name)} </Text>
+          <Text style={styles.captionSpeaker}>{participantName(seg.speaker_id ?? "", seg.speaker_name)} </Text>
           {seg.text}
         </Text>
       ))}
@@ -426,6 +546,39 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   headerTitle: { fontSize: 14, color: Theme.bgAlt, opacity: 0.7 },
+  headerLead: { flexDirection: "row", alignItems: "center", gap: 10 },
+  recBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
+    paddingLeft: 3,
+    paddingRight: 7,
+    paddingVertical: 3,
+    borderRadius: 6,
+    backgroundColor: "rgba(220,50,47,0.16)",
+    borderWidth: 1,
+    borderColor: "rgba(220,50,47,0.35)",
+  },
+  recText: { fontSize: 10.5, fontWeight: "600", letterSpacing: 0.6, color: Theme.red },
+  recNotice: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 9,
+    marginHorizontal: 14,
+    marginBottom: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: "rgba(220,50,47,0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(220,50,47,0.30)",
+  },
+  recNoticeBody: { flex: 1, gap: 2, marginTop: -3 },
+  recNoticeTitle: { fontSize: 12.5, color: Theme.bgAlt },
+  recNoticeText: { fontSize: 11.5, lineHeight: 16, color: Theme.textDim },
+  recNoticeActions: { flexDirection: "row", gap: 6, marginTop: 6, marginLeft: -6 },
+  recNoticeBtn: { paddingHorizontal: 6, paddingVertical: 3, borderRadius: 6 },
+  recNoticeBtnText: { fontSize: 11.5, color: Theme.bgAlt },
   collapseBtn: { flexDirection: "row", alignItems: "center", gap: 4, padding: 6 },
   collapseText: { fontSize: 12, color: Theme.bgAlt, opacity: 0.7 },
   pressed: { opacity: 0.6 },

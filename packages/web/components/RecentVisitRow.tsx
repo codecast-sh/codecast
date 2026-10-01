@@ -28,7 +28,7 @@ export function PageIcon({ path, className }: { path: string; className: string 
   if (isBrowserRoutePath(path)) return <Globe className={className} />;
   if (path.startsWith("/initiatives")) return <Flag className={className} />;
   if (path.startsWith("/projects")) return <FolderKanban className={className} />;
-  if (path.startsWith("/workflows") || path.startsWith("/routines")) return <Workflow className={className} />;
+  if (path.startsWith("/workflows") || path.startsWith("/routines") || path === "/line") return <Workflow className={className} />;
   if (path.startsWith("/triggers") || path.startsWith("/schedules")) return <Zap className={className} />;
   return <LayoutGrid className={className} />;
 }

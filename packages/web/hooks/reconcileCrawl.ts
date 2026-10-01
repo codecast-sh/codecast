@@ -1,4 +1,5 @@
 import { useInboxStore } from "../store/inboxStore";
+import { mapSlots } from "../store/simSlot";
 
 // Shared full-reconcile crawl, used by useSyncTasks and useSyncDocs.
 //
@@ -24,6 +25,16 @@ function stateFor(namespace: string): ReconcileState {
   let s = states.get(namespace);
   if (!s) { s = { doneAt: new Map(), runningKey: null, gen: 0 }; states.set(namespace, s); }
   return s;
+}
+
+/**
+ * Sim seam: crawl state belongs to one window. get() snapshots it (the map is
+ * copied; an in-flight crawl keeps mutating its own state object, which stays
+ * in its window's snapshot), set() loads a snapshot back, fresh() is what a
+ * window that never ran starts from.
+ */
+export function __reconcileCrawlSimSlots() {
+  return mapSlots({ states });
 }
 
 /** Abandon the active crawl in one namespace without affecting other crawls. */

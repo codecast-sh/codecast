@@ -99,7 +99,10 @@ export type InboxTruncation = (typeof INBOX_TRUNCATION_KINDS)[number];
 // facts like any session: blocked or waiting in needs input, asking in
 // questions. A standing session that asks (a `cast decide` in its thread) is
 // no longer hidden by the anchor rule. Nothing lifts a lead for its hands.
-export const INBOX_PROJECTION_VERSION = 14 as const;
+// v15, v16: a fresh start held NEW for its first half hour (v16: only while
+// working). v17 removes it again, so placement equals v14: holding a just
+// started session in view is a moment of web presentation, not a placement.
+export const INBOX_PROJECTION_VERSION = 17 as const;
 
 export type InboxProjection = {
   v: typeof INBOX_PROJECTION_VERSION;
@@ -1483,6 +1486,11 @@ export const INBOX_FACT_FIELDS = [
   // Overlay borne so a tool call never changes the session list result; the
   // overlay already re-pushes on the same flush (updated_at is a fact).
   "activity",
+  // What waking the session costs (wakeCost.ts): both move on every model
+  // call, so on the base list they re-pushed the whole multi-MB session list
+  // to every open tab about once a second (2026-10-01).
+  "context_tokens",
+  "last_model_call_at",
 ] as const;
 
 export type InboxFactField = (typeof INBOX_FACT_FIELDS)[number];

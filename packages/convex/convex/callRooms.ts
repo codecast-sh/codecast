@@ -68,6 +68,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { createTeamFeedFilter, isTeamMember } from "./privacy";
 import { canAccessChannel, isCommunity, isRestricted } from "./chatAccess";
 import { teamFeatureOffMessage, teamHasFeature } from "./teamFeatures";
+import { endGuestAdmissions } from "./lib/callGuestAdmission";
 // Key shapes, builders and lease timings are the shared contract
 // (@codecast/shared/contracts/callRoomKeys) so the web client can build keys
 // and share staleness math without importing server code. This module adds
@@ -271,6 +272,11 @@ export async function expireRoomGrants(ctx: any, roomKey: string): Promise<void>
       await ctx.db.patch(inv._id, { status: "cancelled" });
     }
   }
+  // A guest's admission is the same kind of grant (callGuests.ts): it was for
+  // the huddle that just ended. Whoever is still holding the media open from
+  // it is put out, so the next huddle starts with only the people its own
+  // door lets in. Guests still WAITING stay (endGuestAdmissions says why).
+  await endGuestAdmissions(ctx, roomKey);
 }
 
 /** The room's one state row (lock, transcription opt-out), or null for the

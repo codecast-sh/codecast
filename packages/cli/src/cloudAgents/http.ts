@@ -1,42 +1,16 @@
 /**
  * The HTTP side every cloud agent API shares: one error type that knows when
- * the provider refused the credentials, and a JSON request that reads the
- * provider's reason from whichever shape it answers with.
+ * the provider refused the credentials, a JSON request and an event stream
+ * that read the provider's reason from whichever shape it answers with, the
+ * key check run before a key is stored, and the base of a keyed API client.
  */
+import type { ProviderKeyFacts, ProviderKeyVerdict } from "../providerKeyCrypto.js";
+import { readSseJson } from "../sse.js";
+import { CloudApiError, cloudApiErrorOf, cloudApiVerdict } from "./apiError.js";
+import { checkShape, type Shape } from "./shape.js";
+import { errorText } from "./types.js";
 
-export class CloudApiError extends Error {
-  /**
-   * `fromApi`: the body was the provider's own error (it named a reason or a
-   * code). A proxy in front of the API (a bot challenge page) answers without
-   * one, and that says nothing about the account.
-   */
-  readonly fromApi: boolean;
-  /** Set only when the provider named a wait (a 429's Retry-After); otherwise the caller picks its own delay. */
-  readonly retryAfterMs?: number;
-  constructor(readonly status: number, readonly code: string | undefined, message: string, opts: { fromApi?: boolean; retryAfterMs?: number } = {}) {
-    super(message);
-    this.fromApi = opts.fromApi ?? true;
-    this.retryAfterMs = opts.retryAfterMs;
-  }
-  /** The provider refused the credentials (wrong, revoked, expired, or lacking access); a 403 only in the provider's own words. */
-  get keyRejected(): boolean {
-    return this.status === 401 || (this.status === 403 && this.fromApi);
-  }
-}
-
-/**
- * A provider's reason and code from an error body. Providers answer with
- * `{error: {code|type, message}}`, `{code, message}`, `{detail}` or
- * `{detail: {type, message}}`.
- */
-export function cloudApiErrorOf(status: number, body: unknown, fallback: string, retryAfterMs?: number): CloudApiError {
-  const b = body && typeof body === "object" ? body as Record<string, any> : {};
-  const nested = [b.error, b.detail].find((o) => o && typeof o === "object") as Record<string, any> | undefined;
-  const inner = nested ?? b;
-  const code = [inner.code, inner.type].find((c): c is string => typeof c === "string" && !!c);
-  const reason = [inner.message, b.detail].find((m): m is string => typeof m === "string" && !!m);
-  return new CloudApiError(status, code, reason ?? fallback, { fromApi: !!(reason || code), retryAfterMs });
-}
+export { CloudApiError, cloudApiErrorOf, cloudApiVerdict };
 
 // A corrupt or hostile Retry-After would otherwise hold a poll off for years.
 const MAX_RETRY_AFTER_MS = 24 * 60 * 60 * 1000;
@@ -71,17 +45,112 @@ export interface CloudRequest {
   now?: number;
 }
 
-/** A JSON request; a non-2xx answer throws a CloudApiError with the provider's reason. */
-export async function requestCloudJson<T>(fetchImpl: typeof fetch, req: CloudRequest): Promise<T> {
-  const resp = await fetchImpl(req.url, {
+/**
+ * The shape codecast reads in a JSON answer (shape.ts): checked before the
+ * answer is returned, so a field the provider renamed or retyped throws
+ * CloudShapeError naming `name` (cloudRequestName: the request with its ids
+ * as placeholders, `GET /tasks/{id}`) and the path, never a value.
+ */
+export interface CloudAnswerShape<T> {
+  shape: Shape<T>;
+  name: string;
+}
+
+/**
+ * A request as an error or a log names it: the method and the path without
+ * its query, and with `ids` (a pattern matching a path segment that is an
+ * id, with its leading slash) as `{id}`, so every agent's request reads alike.
+ */
+export function cloudRequestName(method: string, p: string, ids?: RegExp): string {
+  const path = p.split("?")[0];
+  return `${method} ${ids ? path.replace(ids, "/{id}") : path}`;
+}
+
+/** A body as JSON; undefined when it is empty or not JSON. */
+function jsonOf(text: string): unknown {
+  try { return text ? JSON.parse(text) : undefined; } catch { return undefined; }
+}
+
+/** The provider's error from a non-2xx answer, read from its body (JSON or none). */
+async function errorOfResponse(resp: Response, req: Pick<CloudRequest, "label" | "now">, text?: string): Promise<CloudApiError> {
+  const json = jsonOf(text ?? await resp.text().catch(() => ""));
+  return cloudApiErrorOf(resp.status, json, `${req.label} ${resp.status}`, resp.status === 429 ? parseRetryAfter(resp.headers.get("retry-after"), req.now ?? Date.now()) : undefined);
+}
+
+/** The one fetch every cloud API request makes: JSON in, `accept` out. */
+function cloudFetch(fetchImpl: typeof fetch, req: Pick<CloudRequest, "method" | "url" | "headers" | "body">, accept: string, signal?: AbortSignal): Promise<Response> {
+  return fetchImpl(req.url, {
     method: req.method,
-    headers: { Accept: "application/json", ...(req.body === undefined ? {} : { "Content-Type": "application/json" }), ...req.headers },
+    headers: { Accept: accept, ...(req.body === undefined ? {} : { "Content-Type": "application/json" }), ...req.headers },
     body: req.body === undefined ? undefined : JSON.stringify(req.body),
-    signal: AbortSignal.timeout(req.timeoutMs ?? 60_000),
+    signal,
   });
+}
+
+/**
+ * A request answered with Server-Sent Events: resolves once the stream is
+ * open, to its JSON frames as they come (until `endEvent`, when the provider
+ * names one). A non-2xx answer throws a CloudApiError with the provider's
+ * reason. No timeout: a stream lasts as long as the work it follows, so the
+ * caller's signal ends it.
+ */
+export async function requestCloudEvents<T>(fetchImpl: typeof fetch, req: Omit<CloudRequest, "timeoutMs"> & { signal?: AbortSignal; endEvent?: string }): Promise<AsyncGenerator<{ event?: string; id?: string; data: T }>> {
+  const resp = await cloudFetch(fetchImpl, req, "text/event-stream", req.signal);
+  if (!resp.ok || !resp.body) throw await errorOfResponse(resp, req);
+  return readSseJson<T>(resp.body, { endEvent: req.endEvent });
+}
+
+/**
+ * Check a key before it is stored: `check` makes one authenticated call with
+ * it (the account it names, when the provider says, and `detail`: what a key
+ * the provider knows still lacks). A key the provider refuses is said in its
+ * words; a network failure is said as such, never as a bad key.
+ */
+export async function verifyCloudKey(vendor: string, check: () => Promise<ProviderKeyFacts | void>): Promise<ProviderKeyVerdict> {
+  try {
+    return { ok: true, ...(await check()) };
+  } catch (err) {
+    if (err instanceof CloudApiError && err.keyRejected) return { ok: false, error: `${vendor} rejected this key: ${err.message}` };
+    return { ok: false, error: `Couldn't reach ${vendor} to check the key: ${errorText(err)}` };
+  }
+}
+
+/**
+ * A JSON request; a non-2xx answer throws a CloudApiError with the provider's
+ * reason, and with `answer`, one in another shape throws CloudShapeError.
+ */
+export async function requestCloudJson<T>(fetchImpl: typeof fetch, req: CloudRequest & { answer?: CloudAnswerShape<T> }): Promise<T> {
+  const resp = await cloudFetch(fetchImpl, req, "application/json", AbortSignal.timeout(req.timeoutMs ?? 60_000));
   const text = await resp.text();
-  let json: unknown = undefined;
-  try { json = text ? JSON.parse(text) : undefined; } catch {}
-  if (!resp.ok) throw cloudApiErrorOf(resp.status, json, `${req.label} ${resp.status}`, resp.status === 429 ? parseRetryAfter(resp.headers.get("retry-after"), req.now ?? Date.now()) : undefined);
-  return json as T;
+  if (!resp.ok) throw await errorOfResponse(resp, req, text);
+  const json = jsonOf(text);
+  return req.answer ? checkShape(req.answer.shape, json, req.answer.name, req.method !== "GET") : json as T;
+}
+
+/**
+ * The client of a cloud agent API reached with a key: each request goes to
+ * `base` with the provider's auth headers, and an error with no reason of its
+ * own is named after `name` and the path.
+ */
+export abstract class KeyedCloudApi {
+  constructor(protected readonly key: string, protected readonly fetchImpl: typeof fetch, protected readonly base: string, private readonly name: string) {}
+
+  protected abstract headers(): Record<string, string>;
+  /** The provider's agent ids in a path (cloudRequestName's `ids`): a shape break names the request with them as `{id}`. */
+  protected readonly ids?: RegExp;
+
+  private label(method: string, p: string): string {
+    return `${this.name} ${cloudRequestName(method, p)}`;
+  }
+
+  /** `shape`: what codecast reads in the answer (CloudAnswerShape), named by the request. */
+  request<T>(method: string, p: string, body?: unknown, shape?: Shape<T>): Promise<T> {
+    const answer = shape && { shape, name: cloudRequestName(method, p, this.ids) };
+    return requestCloudJson<T>(this.fetchImpl, { method, url: `${this.base}${p}`, headers: this.headers(), body, label: this.label(method, p), answer });
+  }
+
+  /** An event stream (requestCloudEvents): `headers` adds to the auth ones (a resume's Last-Event-ID). */
+  protected events<T>(method: string, p: string, opts: { body?: unknown; signal?: AbortSignal; headers?: Record<string, string>; endEvent?: string } = {}): Promise<AsyncGenerator<{ event?: string; id?: string; data: T }>> {
+    return requestCloudEvents<T>(this.fetchImpl, { method, url: `${this.base}${p}`, headers: { ...this.headers(), ...opts.headers }, body: opts.body, label: `${this.label(method, p)} stream`, signal: opts.signal, endEvent: opts.endEvent });
+  }
 }

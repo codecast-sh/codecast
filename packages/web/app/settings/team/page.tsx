@@ -24,7 +24,8 @@ import { TEAM_ICONS, TEAM_COLORS, type TeamIconName, type TeamColorName } from "
 import { TeamIdentityPicker, type TeamIdentity } from "../../../components/team/TeamIdentityPicker";
 import { TeamTaskStatusEditor } from "../../../components/settings/TeamTaskStatusEditor";
 import { TeamFeaturesEditor } from "../../../components/settings/TeamFeaturesEditor";
-import { ChevronDown, Github, TriangleAlert, Users } from "lucide-react";
+import { Github, TriangleAlert, Users } from "lucide-react";
+import { SelectBox } from "../../../components/ui/select-box";
 import {
   SettingsField, SettingsPanel, SettingsSection, SettingsRow,
 } from "../../../components/settings/ui";
@@ -238,7 +239,13 @@ export default function TeamPage() {
     );
   }
 
-  const memberCount = teamMembers?.length || 0;
+  // Accounts only: the roster also carries synthetic identities (Slack shadow
+  // people, role bots) that chat mentions need but that have no login, so no
+  // seat to manage here. An agent account with its own login stays.
+  const people = (teamMembers ?? []).filter(
+    (m): m is NonNullable<typeof m> => !!m && !(m.is_bot && m.bot_kind),
+  );
+  const memberCount = people.length;
 
   return (
     <SettingsPanel>
@@ -369,7 +376,7 @@ export default function TeamPage() {
           </span>
         }
       >
-        {teamMembers?.filter((m): m is NonNullable<typeof m> => m !== null).map((member) => {
+        {people.map((member) => {
           const daemonStatus = getMemberDaemonStatus(member.daemon_last_seen);
           return (
             <div key={member._id} className="flex items-center justify-between gap-4 px-4 py-3 sm:px-5">
@@ -396,6 +403,9 @@ export default function TeamPage() {
                     {member._id === user._id && (
                       <span className="ml-2 text-xs text-sol-text-muted">(you)</span>
                     )}
+                    {member.is_bot && (
+                      <span className="ml-2 text-xs text-sol-text-muted">(agent)</span>
+                    )}
                   </div>
                   <div className="truncate text-xs text-sol-text-muted">
                     {member.email}
@@ -418,22 +428,16 @@ export default function TeamPage() {
               <div className="flex shrink-0 items-center gap-3">
                 <span className="text-xs text-sol-text-dim">{daemonStatus.text}</span>
                 {isAdmin && member._id !== user._id ? (
-                  <button
-                    type="button"
-                    onClick={() => handleRoleChange(
-                      member._id,
-                      member.role === "admin" ? "member" : "admin"
-                    )}
+                  <SelectBox
+                    value={member.role}
+                    onChange={(e) => handleRoleChange(member._id, e.target.value as "member" | "admin")}
                     disabled={roleChangeInProgress === member._id}
-                    className={`flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium transition-colors ${
-                      member.role === "admin"
-                        ? "border-sol-cyan bg-sol-cyan/10 text-sol-cyan hover:bg-sol-cyan/20"
-                        : "border-sol-border bg-sol-bg-highlight/20 text-sol-text-muted hover:bg-sol-bg-highlight/40 hover:text-sol-text"
-                    }`}
+                    aria-label={`Role for ${member.name || member.email || "member"}`}
+                    className={`font-medium ${member.role === "admin" ? "text-sol-cyan" : "text-sol-text-muted"}`}
                   >
-                    {roleChangeInProgress === member._id ? "..." : member.role}
-                    <ChevronDown className="h-3 w-3 opacity-60" />
-                  </button>
+                    <option value="member">member</option>
+                    <option value="admin">admin</option>
+                  </SelectBox>
                 ) : (
                   <span className={`rounded-md px-2 py-1 text-xs font-medium ${
                     member.role === "admin"

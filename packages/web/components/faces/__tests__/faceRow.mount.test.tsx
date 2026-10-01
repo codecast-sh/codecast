@@ -378,14 +378,14 @@ describe("a face opens one card", () => {
 
   test("an agent's face is marked and its card offers no call or message", async () => {
     useInboxStore.setState({
-      teamMembers: [...useInboxStore.getState().teamMembers, { _id: "u-chief", name: "Chief", is_bot: true, bot_kind: "anchor" }],
+      teamMembers: [...useInboxStore.getState().teamMembers, { _id: "u-head", name: "Chief", is_bot: true, bot_kind: "anchor" }],
     } as any);
-    const h = await mount(bar(rowOf([entry("u-chief", "Chief", { bot: true })])));
-    expect(h.circle("u-chief").getAttribute("data-bot")).toBe("1");
+    const h = await mount(bar(rowOf([entry("u-head", "Chief", { bot: true })])));
+    expect(h.circle("u-head").getAttribute("data-bot")).toBe("1");
     expect(h.q(".face-bot")!.getAttribute("aria-label")).toBe("agent");
     // Its face is its animal, not a letter.
-    expect(h.q(`[data-face-id="u-chief"] img`)?.getAttribute("src") ?? "").toMatch(/\.webp|avatars/);
-    await h.click(h.circle("u-chief"));
+    expect(h.q(`[data-face-id="u-head"] img`)?.getAttribute("src") ?? "").toMatch(/\.webp|avatars/);
+    await h.click(h.circle("u-head"));
     expect(h.q("[data-member-card] .face-card-agent")).not.toBeNull();
     expect(h.q("[data-member-card] .face-action")).toBeNull();
   });
@@ -642,10 +642,12 @@ describe("the engagement card renders the model's card", () => {
     expect(el.getAttribute("data-density")).toBe("float");
     expect(el.classList.contains("walkie-strip-tx")).toBe(true);
     expect(h.q(".walkie-stage-badge")!.textContent).toBe("Talking");
-    expect(h.q(".walkie-stage-with")!.textContent).toBe(" with Ann");
-    // The roster's fact rides the same line after the stage: one sentence,
-    // "Talking with Ann · Ann hears you", and no caption plate under it.
-    expect(h.q(".walkie-stage")!.textContent).toBe("Talking with Ann · hears you");
+    // On the track beside Ann's face: the stage alone, the sentence its tooltip.
+    expect(h.q(".walkie-stage-with")).toBeNull();
+    expect(h.q(".walkie-stage")!.getAttribute("title")).toBe(talkingWords.hint);
+    // The roster's fact rides the same line after the stage, and no caption
+    // plate under it.
+    expect(h.q(".walkie-stage")!.textContent).toBe("Talking · hears you");
     // The whole verdict is the tooltip.
     expect(h.q(".engagement-card-hearing")!.getAttribute("title")).toBe("Ann hears you");
     expect(h.q(".walkie-strip-hint")).toBeNull();
@@ -799,7 +801,10 @@ describe("the engagement card renders the model's card", () => {
     const order = Array.from(h.q(".face-row")!.children).map(
       (el) => (el as HTMLElement).dataset.faceId ?? el.className.split(" ")[0],
     );
-    expect(order).toEqual(["face-row-track", ME, "face-link", ANN, "face-row-strip", "u-bob"]);
+    // The float folds everyone off the call behind one circle after the
+    // strip; the seat keeps its room so the window never changes width.
+    expect(order).toEqual(["face-row-track", ME, "face-link", ANN, "face-row-strip", "__others", "u-bob"]);
+    expect(h.q('[data-face-id="u-bob"]')!.dataset.folded).toBe("1");
     expect(h.q(".face-row-track")!.getAttribute("data-link-kind")).toBe("ring");
     expect(h.q(".face-row-strip")!.getAttribute("data-track")).toBe("1");
     // Nobody linked: no track, and the strip goes back to the row's end.

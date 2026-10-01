@@ -28,12 +28,21 @@ crons.interval(
 );
 
 // The area watch (docs/architecture/org-staffing.md S29): read each watched
-// workspace's health, remember every area's status, and tell the Chief of
-// Staff once per episode about a change that lasted two passes.
+// workspace's health, remember every area's status, and tell the Head of
+// People once per episode about a change that lasted two passes.
 crons.interval(
   "watch org areas",
   { hours: 6 },
   internal.orgWatch.sweep,
+  {}
+);
+
+// Knowledge handoffs (org-staffing.md S32): one past its deadline closes with
+// what was written, and a retire that waited on it runs.
+crons.interval(
+  "close org handoffs past deadline",
+  { minutes: 15 },
+  internal.orgHandoff.sweep,
   {}
 );
 
@@ -168,6 +177,16 @@ crons.interval(
 );
 
 crons.interval(
+  // A cause whose watch after ship ended with no new signal closes as
+  // resolved (the-line-end-to-end.md LE12). One empty index read while
+  // nothing is in watch.
+  "close quiet watches",
+  { hours: 1 },
+  internal.signals.sweepWatches,
+  {}
+);
+
+crons.interval(
   // pending_api_error flags older than the 48h revive window stop meaning
   // "current incident" — clear them so the blocked-sessions banner, badges,
   // and mass-revive selection never count weeks-dead casualties.
@@ -253,6 +272,29 @@ crons.interval(
   {}
 );
 
+crons.interval(
+  // A guest let into a huddle is put out when it ends, when they leave and
+  // when their page goes quiet, whether or not anybody's client is there to
+  // say so, and LiveKit is made to agree (callGuests.sweepGuestRooms). Costs
+  // one empty index read while nobody outside the team is in a call.
+  "settle call guests",
+  { minutes: 1 },
+  internal.callGuests.sweepGuestRooms,
+  {}
+);
+
+crons.interval(
+  // Every call recording LiveKit is still writing has a loop polling it
+  // (callRecordings.reconcileRun). An action that died mid-run would leave a
+  // room reading "recording" forever; this restarts the loop of any run
+  // nobody has looked at for a few minutes, and stops any egress filming
+  // into the recordings bucket that no live recording tracks.
+  "restart stalled call recording loops",
+  { minutes: 2 },
+  internal.callRecordings.sweepRecordings,
+  {}
+);
+
 crons.cron(
   // Sync-log retention: delete actions past the 30d window and advance
   // per-scope floors (syncLogPrune.ts; the mutation self-continues in bounded
@@ -298,14 +340,10 @@ crons.interval(
   {}
 );
 
-crons.interval(
-  // The sweep starts the line (the-line.md L9): every open task assigned to a
-  // direct-trust role's agent gets a run of the scope's line, within caps.
-  "start the line for scoped tasks",
-  { minutes: 2 },
-  (internal as any).orgLine.sweep,
-  {}
-);
+// The line sweep (the-line.md L9) is off for now: it started a run on every
+// open task assigned to a direct-trust role's agent, within caps. To turn it
+// back on, register (internal as any).orgLine.sweep every 2 minutes as
+// "start the line for scoped tasks".
 
 crons.interval(
   // A person who reports to a role hears once a day at most that a high

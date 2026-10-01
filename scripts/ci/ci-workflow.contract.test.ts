@@ -4,6 +4,7 @@
 // test stops them drifting apart and quietly turning a skipped job into a pass
 // (ct-49562).
 import { describe, expect, test } from "bun:test";
+import { readdirSync, readFileSync } from "node:fs";
 
 import { AREAS, ADVISORY_JOBS, GATED_JOBS, jobFlag } from "./changed-path-scope";
 
@@ -14,6 +15,12 @@ const workflow = Bun.YAML.parse(await Bun.file(WORKFLOW_PATH).text()) as {
 };
 
 const jobs = workflow.jobs;
+
+const SETUP_BUN = "./.github/actions/setup-bun";
+const SETUP_DEPS = ["install", "cache", "none"];
+const setupBun = Bun.YAML.parse(
+  await Bun.file(new URL("../../.github/actions/setup-bun/action.yml", import.meta.url)).text(),
+) as { inputs: Record<string, any>; runs: { using: string; steps: any[] } };
 /** The verify env var carrying a job's result. */
 const envVar = (job: string) => job.replace(/-/g, "_").toUpperCase();
 
@@ -37,15 +44,43 @@ describe("ci.yml job graph", () => {
     }
   });
 
-  test("every job that installs dependencies caches the bun store", () => {
+  // Bun, its install cache and the workspace install come from one composite
+  // action, so the version and the cache key live in one file and a bump
+  // touches nothing else.
+  test("every job sets bun up through the one composite action", () => {
     for (const [name, job] of Object.entries(jobs)) {
       const steps: any[] = job.steps ?? [];
-      if (!steps.some((step) => step.run === "bun install")) continue;
-      const cache = steps.find((step) => String(step.uses ?? "").startsWith("actions/cache@"));
-      expect(cache, `${name} caches ~/.bun/install/cache`).toBeDefined();
-      expect(cache.with.path).toBe("~/.bun/install/cache");
-      expect(cache.with.key).toBe("bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}");
+      for (const step of steps) {
+        const uses = String(step.uses ?? "");
+        expect(uses.startsWith("oven-sh/setup-bun@"), `${name} uses setup-bun directly`).toBe(false);
+        expect(uses.startsWith("actions/cache@"), `${name} caches the bun store itself`).toBe(false);
+        expect(step.run, `${name} runs the root install itself`).not.toBe("bun install");
+      }
+      if (!steps.some((step) => /\bbun\b/.test(String(step.run ?? "")))) continue;
+      const setup = steps.findIndex((step) => step.uses === SETUP_BUN);
+      expect(setup, `${name} sets up bun`).toBeGreaterThan(-1);
+      expect(SETUP_DEPS, `${name} deps`).toContain(steps[setup].with?.deps ?? "install");
+      const firstBun = steps.findIndex((step) => /\bbun\b/.test(String(step.run ?? "")));
+      expect(setup, `${name} sets up bun before its first bun step`).toBeLessThan(firstBun);
     }
+  });
+
+  test("the composite action caches the bun store and installs only after", () => {
+    const steps: any[] = setupBun.runs.steps;
+    expect(setupBun.runs.using).toBe("composite");
+    expect(Object.keys(setupBun.inputs)).toEqual(["deps"]);
+    expect(setupBun.inputs.deps.default).toBe("install");
+    const bun = steps.findIndex((step) => String(step.uses ?? "").startsWith("oven-sh/setup-bun@"));
+    const cache = steps.findIndex((step) => String(step.uses ?? "").startsWith("actions/cache@"));
+    const install = steps.findIndex((step) => step.run === "bun install");
+    expect(bun).toBe(0);
+    expect(steps[bun].with["bun-version"]).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(cache).toBeGreaterThan(bun);
+    expect(steps[cache].if).toBe("inputs.deps != 'none'");
+    expect(steps[cache].with.path).toBe("~/.bun/install/cache");
+    expect(steps[cache].with.key).toBe("bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}");
+    expect(install).toBeGreaterThan(cache);
+    expect(steps[install].if).toBe("inputs.deps == 'install'");
   });
 });
 
@@ -68,9 +103,36 @@ describe("code_paths", () => {
 
   test("publishes every area and every job gate the classifier emits", () => {
     const expected = [...AREAS, ...GATED_JOBS.map(jobFlag)];
-    expect(Object.keys(jobs.code_paths.outputs)).toEqual(expected);
+    expect(Object.keys(jobs.code_paths.outputs).filter((name) => name !== "run_test_computer")).toEqual(expected);
     for (const name of expected) {
       expect(jobs.code_paths.outputs[name]).toBe(`\${{ steps.scope.outputs.${name} }}`);
+    }
+  });
+});
+
+// Every program `cast check` verifies locally has to be typechecked in CI too,
+// or it drifts red unnoticed (bun test strips types). A program counts when one
+// of the packages the typecheck job filters to runs it from its own script.
+describe("typecheck", () => {
+  // mobile typechecks through its own toolchain, outside this job.
+  const NOT_IN_TYPECHECK_JOB = ["mobile"];
+  const checkToml = Bun.TOML.parse(
+    readFileSync(new URL("../../.codecast/check.toml", import.meta.url), "utf8"),
+  ) as { projects: Record<string, string> };
+  const typecheckRun: string = jobs.typecheck.steps.find((step: any) =>
+    String(step.run ?? "").startsWith("bun run typecheck"),
+  ).run;
+
+  test("covers every program in .codecast/check.toml", () => {
+    for (const [name, tsconfig] of Object.entries(checkToml.projects)) {
+      if (NOT_IN_TYPECHECK_JOB.includes(name)) continue;
+      const pkgDir = tsconfig.split("/").slice(0, 2).join("/");
+      const pkg = JSON.parse(readFileSync(new URL(`../../${pkgDir}/package.json`, import.meta.url), "utf8"));
+      expect(typecheckRun, `${name}: ${pkg.name} filtered`).toContain(`--filter=${pkg.name}`);
+      const rel = tsconfig.slice(pkgDir.length + 1);
+      const script: string = pkg.scripts?.typecheck ?? "";
+      const runsIt = script.includes(`-p ${rel}`) || (rel === "tsconfig.json" && /tsc --noEmit(?! -p)/.test(script));
+      expect(runsIt, `${name}: ${pkg.name} typecheck script runs ${rel}`).toBe(true);
     }
   });
 });
@@ -82,6 +144,17 @@ describe("gates", () => {
       expect(jobs[job].if, `${job} if`).toBe(
         `needs.code_paths.outputs.${jobFlag(job)} == 'true'`,
       );
+    }
+  });
+
+  // continue-on-error on a gated job, or on any of its steps, turns a red
+  // suite into a job that concludes "success", and verify passes it.
+  test("no gated job, and no step of one, may continue on error", () => {
+    for (const job of GATED_JOBS) {
+      expect(jobs[job]["continue-on-error"], `${job} continue-on-error`).toBeUndefined();
+      for (const [i, step] of (jobs[job].steps ?? []).entries()) {
+        expect(step["continue-on-error"], `${job} step ${i} (${step.name ?? step.uses}) continue-on-error`).toBeUndefined();
+      }
     }
   });
 
@@ -216,5 +289,60 @@ describe("verify", () => {
     expect((await runVerify({ CODE_PATHS: "failure" }, {})).code).toBe(1);
     expect((await runVerify({ CI_CONTRACT: "failure" }, {})).code).toBe(1);
     expect((await runVerify({ CODE_PATHS: "skipped" }, {})).code).toBe(1);
+  });
+});
+
+// A cli case that skips anywhere but darwin passes on every ubuntu lane without
+// asserting anything, so it runs only where the macOS lane names its file. The
+// list is written by hand in ci.yml; this finds the files by their skip so a
+// new one cannot be left off it.
+describe("darwin-only cli tests", () => {
+  const CLI_SRC = new URL("../../packages/cli/src/", import.meta.url);
+  const NOT_DARWIN = String.raw`process\.platform\s*!==?\s*["']darwin["']`;
+  const IS_DARWIN = String.raw`process\.platform\s*===?\s*["']darwin["']`;
+  const SKIPS_OFF_DARWIN = [
+    new RegExp(String.raw`\.skipIf\(.*${NOT_DARWIN}`),
+    new RegExp(String.raw`\.(if|runIf)\(\s*${IS_DARWIN}\s*\)`),
+    new RegExp(String.raw`\bif\s*\(\s*${NOT_DARWIN}\s*\)\s*return\b`),
+  ];
+  const step = (jobs["computer-macos"].steps as any[]).find((s) =>
+    String(s.name ?? "").startsWith("Unit and e2e tests (cli files that only run on darwin)"),
+  );
+  const listed: string[] = String(step?.run ?? "").split(/\s+/).filter((t) => t.startsWith("src/"));
+
+  test("every cli file with a darwin-only case runs on the macOS lane", () => {
+    const darwinOnly = (readdirSync(CLI_SRC, { recursive: true }) as string[])
+      .filter((f) => /\.test\.tsx?$/.test(f) && !f.startsWith("computer/"))
+      .filter((f) => SKIPS_OFF_DARWIN.some((re) => re.test(readFileSync(new URL(f, CLI_SRC), "utf8"))))
+      .map((f) => `src/${f}`)
+      .sort();
+    expect(listed).toEqual(darwinOnly);
+  });
+});
+
+
+describe("computer tests are opt-in", () => {
+  test("the default CLI suite excludes computer tests and the dedicated command restores them", () => {
+    const config = Bun.TOML.parse(readFileSync(new URL("../../packages/cli/bunfig.toml", import.meta.url), "utf8")) as any;
+    const pkg = JSON.parse(readFileSync(new URL("../../packages/cli/package.json", import.meta.url), "utf8"));
+    expect(config.test.pathIgnorePatterns).toContain("**/src/computer/**");
+    expect(pkg.scripts["test:computer"]).toBe("bun test ./src/computer/ --isolate --path-ignore-patterns=''");
+  });
+
+  test("only computer changes build and exercise the helper in CI", () => {
+    expect(jobs.code_paths.outputs.run_test_computer).toBe("${{ steps.computer_scope.outputs.run_test_computer }}");
+    const classify = jobs.code_paths.steps.find((step: any) => step.id === "computer_scope");
+    expect(classify.env.PR_BASE_SHA).toBe("${{ github.event.pull_request.base.sha }}");
+    expect(classify.env.PUSH_BEFORE_SHA).toBe("${{ github.event.before }}");
+    expect(classify.run).toContain("--computer-only");
+    // Mirrors the scope step: a PR diffs from its merge base, and a failed
+    // diff falls through to an empty list, which the classifier runs on.
+    expect(classify.run).toContain("--merge-base");
+    expect(classify.run).toContain("|| true");
+    expect(classify.run).not.toContain("set -e");
+    for (const name of ["Swift unit tests (helper core)", "Build and sign the computer helper", "Unit and e2e tests (cast computer, ungranted half)"]) {
+      const step = jobs["computer-macos"].steps.find((step: any) => step.name === name);
+      expect(step.if).toBe("needs.code_paths.outputs.run_test_computer == 'true'");
+    }
   });
 });

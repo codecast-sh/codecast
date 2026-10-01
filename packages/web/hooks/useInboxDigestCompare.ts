@@ -7,9 +7,10 @@ import {
   createInboxDigestDevHandle,
   INBOX_COMPARE_TICK_MS,
   type InboxDigestComparer,
+  type InboxDigestComparerIO,
 } from "../store/inboxDigestCompare";
 import { syncMetaKey } from "./reconcileCrawl";
-import { inboxCrawlWsKey } from "./useSyncInboxSessions";
+import { applyMineLivenessPayload, inboxCrawlWsKey } from "./useSyncInboxSessions";
 import { batchGet } from "./useSyncChangeFeed";
 import { subscribeCoarseTick } from "./useCoarseNow";
 import { getPlatform, track } from "../lib/analytics";
@@ -25,10 +26,12 @@ import { getPlatform, track } from "../lib/analytics";
 // applier — never a working-set refetch, never a store write outside
 // syncTable's pending filter. `track` / `getPlatform` are the analytics
 // channel every other sync metric uses (lib/analytics; the native twin stamps
-// "mobile").
+// "mobile"). `io` overrides any part of that surface; the simulator's legacy
+// suites use it to collect telemetry and run heals by hand.
 export function startInboxDigestCompare(
   convex: { query: (fn: any, args: any) => Promise<any> },
   subscribeTick: (intervalMs: number, fn: () => void) => () => void = subscribeCoarseTick,
+  io: Partial<InboxDigestComparerIO> = {},
 ): { comparer: InboxDigestComparer; dispose: () => void } {
   const crawlMetaKeyFor = (meId: string | null) => (meId ? syncMetaKey("sessions", inboxCrawlWsKey(meId)) : null);
   const comparer = createInboxDigestComparer({
@@ -40,10 +43,9 @@ export function startInboxDigestCompare(
       useInboxStore.getState().applyHealedSessions(ids, rows);
     },
     probeOverlay: async () => {
-      const fresh: any = await convex.query(api.conversations.sessionsLiveness, { _probe: Date.now() });
-      if (!fresh?.liveness) return;
-      useInboxStore.getState().applyInboxLivenessPayload("mine", fresh);
+      applyMineLivenessPayload(await convex.query(api.conversations.sessionsLiveness, { _probe: Date.now() }));
     },
+    ...io,
   });
   // Dev console handle (same convention as __inboxStore): the read-only
   // diagnostics live in the compare module (an allowed reader of the stamp

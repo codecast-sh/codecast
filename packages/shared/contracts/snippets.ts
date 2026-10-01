@@ -689,7 +689,7 @@ A tree lists its programs in \`.codecast/check.toml\` as a \`[projects]\` table 
 
 Point each entry at the tsconfig the package's own \`typecheck\` script runs, not necessarily the plain \`tsconfig.json\`: a build that narrows \`rootDir\` often keeps a widened \`tsconfig.typecheck.json\`, and checking the build config reports hundreds of files-outside-root errors. When a check is red with errors nobody wrote, suspect the entry before the code.
 
-The first ask builds the program (as slow as \`tsc\`); later asks take seconds. If a pass is still running, ask again rather than starting your own \`tsc\`. Sessions in one checkout share a watcher and each worktree gets its own. A watcher stops after 45 idle minutes, and a machine keeps at most six, stopping the longest idle.
+The first ask builds the program (as slow as \`tsc\`); later asks take seconds. If a pass is still running, ask again rather than starting your own \`tsc\`. Sessions in one checkout share a watcher and each worktree gets its own. A machine keeps at most six watchers. When all six are busy an ask waits in a queue and starts when a slot frees, so wait on it rather than polling; a pass nobody waits on gives its slot up, and a watcher stops after 45 idle minutes.
 ${CHECK_SNIPPET_END}
 `;
 
@@ -717,6 +717,7 @@ Every codecast object has a short ID. Written anywhere (messages, summaries, tas
 | Plan    | \`pl-88\`   | \`cast plan ls\` |
 | Trigger | \`tr-42\`   | \`cast trigger ls\` |
 | Doc     | \`doc:<id>\` | \`cast doc ls\`, \`cast doc search\` |
+| Call    | \`cl-42\`   | \`cast calls\` |
 
 Write the bare ID by default (\`Filed under ct-4102.\`); it reads as a normal sentence and still renders in full. Write \`@[Title id]\` (\`@[Fix the auth race ct-4102]\`) when the sentence needs the name. Never paste a 32-character internal ID: it renders as an unreadable blob, and every command accepts the short one.
 ${REFERENCES_SNIPPET_END}
@@ -813,12 +814,18 @@ Team huddles are transcribed with exact speaker attribution, and each call gets 
 \`\`\`bash
 cast calls                        # team call history, live calls first
 cast call <id>                    # one call: summary + action items
-cast call <id> --transcript       # full who-said-what transcript
+cast call <id> --transcript       # full who-said-what transcript, each line labeled with its cl-42:15 reference
+cast call <id> 15:25              # just lines 15 to 25
 cast call <id> --json             # machine-readable, segments too
 cast call hold 3m|off             # hold the room's words while you work
+cast call cl-42@12:34             # the lines being said at 12m34s
+cast call snap cl-42:15           # a recorded call's frame when line 15 was said, as a PNG to read
+cast call snap cl-42@12:34        # 12m34s in; cl-42:15-25 gives a frame each time the shared screen changed
 \`\`\`
 
-When a task or thread refers to what was said on a call, read the transcript and quote the exact line rather than paraphrase it.
+When a task or thread refers to what was said on a call, read the transcript and cite the words rather than paraphrase them. A call's short ID with a line range, \`cl-42:15-25\`, renders as those lines with their speakers when it stands on its own line, and as a pill inline.
+
+A recorded call keeps its video, with each screen share at full resolution, and \`cast call <id>\` says which stretches were filmed. When the words point at something on screen ("this button", "the second chart"), snap the moment and read the PNG before acting on it. Each frame prints with the line being said and its citation, \`cl-42@12:34\`, which renders as that same picture for anyone who can read the call; \`--share\` instead uploads an image anyone with its link can open, for readers outside the team. While a call is still recording only its live picture can be snapped, and earlier moments become available once Record is stopped.
 ${CALLS_SNIPPET_END}
 `;
 
@@ -1118,9 +1125,10 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     desc: "Read transcribed team calls (cast calls)",
     detail:
       "Adds `cast calls` and `cast call <id>` so agents can read the team's huddles: the " +
-      "speaker-attributed transcript, the auto-generated summary and the action items. " +
-      "Nothing joins a call — this is read access to what was said, so a task that says " +
-      "\"as discussed on the call\" can be traced to the exact line.",
+      "speaker-attributed transcript, the auto-generated summary and the action items, " +
+      "and `cast call snap` for a frame of a recorded call at any line or time. " +
+      "Nothing joins a call: this is read access to what was said and shown, so a task that says " +
+      "\"as discussed on the call\" can be traced to the exact line and the screen behind it.",
     writesTo: "CLAUDE.md — a ## Calls section with the command reference",
     shipped: "2026-08-16",
     enabledKey: "calls_enabled",
@@ -1415,9 +1423,10 @@ export function stubSectionBody(descriptor: SnippetDescriptor): string {
  * so the installer, the daemon's refresh pass and doctor's comparison agree.
  *
  * A stub only replaces a section it makes substantially smaller — under two
- * thirds of it. `calls` (754 bytes) and `limits` (767) are short enough that
- * their stub saves 30 bytes or 220, and paying a `cast guide` run to save that
- * is a worse trade than keeping the guidance in the file. Stub mode exists to
+ * thirds of it. `limits` is short enough that its stub saves a couple of
+ * hundred bytes, and paying a `cast guide` run to save that is a worse trade
+ * than keeping the guidance in the file. (`calls` was too, until frames of
+ * recorded calls doubled it; it now stubs.) Stub mode exists to
  * spend fewer tokens, not to replace prose with pointers wherever it can.
  */
 export function renderSectionBody(

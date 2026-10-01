@@ -125,24 +125,40 @@ function failureOf(sent: Sent | "no-daemon"): { reason: BrowserTabFailure; detai
   return { reason: "unreachable" };
 }
 
-/**
- * Ask the daemon to raise the tab: the one a row named, or, when its output
- * named none, the one the session drives now (the tab "watch live" shows).
- * Never throws.
- */
-export async function focusBrowserTab(convex: ConvexReactClient, target: string | BrowserSessionRef, deps?: Partial<FocusTabDeps>): Promise<FocusOutcome> {
-  const d = realDeps(convex, deps);
-  const query = new URLSearchParams(
+function tabQuery(target: string | BrowserSessionRef): URLSearchParams {
+  return new URLSearchParams(
     typeof target === "string"
       ? { tab: target }
       : { ...(target.sessionUuid ? { session_uuid: target.sessionUuid } : {}), ...(target.tmuxSession ? { tmux_session: target.tmuxSession } : {}) },
   );
-  const sent = await sendToDaemon(d, `/browser/focus?${query}`, { method: "POST" }, FOCUS_REQUEST_TIMEOUT_MS);
+}
+
+async function askAboutTab(convex: ConvexReactClient, route: "focus" | "probe", target: string | BrowserSessionRef, deps?: Partial<FocusTabDeps>): Promise<FocusOutcome> {
+  const sent = await sendToDaemon(realDeps(convex, deps), `/browser/${route}?${tabQuery(target)}`, { method: "POST" }, FOCUS_REQUEST_TIMEOUT_MS);
   if (sent !== "no-daemon" && !("transport" in sent) && sent.res.ok) {
     const pid = sent.body?.pid;
     return { ok: true, ...(Number.isInteger(pid) ? { pid } : {}) };
   }
   return { ok: false, ...failureOf(sent) };
+}
+
+/**
+ * Ask the daemon to raise the tab: the one a row named, or, when its output
+ * named none, the one the session drives now (the tab "watch live" shows).
+ * Never throws.
+ */
+export function focusBrowserTab(convex: ConvexReactClient, target: string | BrowserSessionRef, deps?: Partial<FocusTabDeps>): Promise<FocusOutcome> {
+  return askAboutTab(convex, "focus", target, deps);
+}
+
+/**
+ * Whether the tab is still there, raising nothing, so a pill can show the
+ * reopen offer before anyone clicks. A daemon without the route answers a
+ * bare 404, which reads as "unreachable": callers act only on "tab-gone" and
+ * "browser-stopped". Never throws.
+ */
+export function probeBrowserTab(convex: ConvexReactClient, target: string | BrowserSessionRef, deps?: Partial<FocusTabDeps>): Promise<FocusOutcome> {
+  return askAboutTab(convex, "probe", target, deps);
 }
 
 /** Which session the page belongs to, the way the watch stream names it. */

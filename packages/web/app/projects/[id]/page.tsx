@@ -1,5 +1,6 @@
 "use client";
 import { RepositoryLinks } from "../../../components/repo/RepositoryLinks";
+import { ShareControl } from "../../../components/ShareControl";
 import { useState, useMemo, useCallback } from "react";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
@@ -12,6 +13,7 @@ import { TaskDetailContent } from "../../tasks/[id]/page";
 import { DetailSplitLayout } from "../../../components/DetailSplitLayout";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { projectDotClass } from "../../../lib/projectColors";
+import { docTypeStyle } from "../../../lib/docTypeStyle";
 import { buildBurndown, buildProgressSeries } from "../../../lib/projectProgress";
 import { ProgressChart } from "../../../components/ProgressChart";
 import { BurndownChart } from "../../../components/BurndownChart";
@@ -36,10 +38,6 @@ import {
   Target,
   ListChecks,
   FileText,
-  AlertTriangle,
-  ArrowUp,
-  ArrowDown,
-  Minus,
   Pin,
   Pencil,
   Check,
@@ -51,6 +49,7 @@ import {
   History,
   Megaphone,
 } from "lucide-react";
+import { taskPriority } from "../../../lib/taskPriority";
 import { DocDates } from "../../../components/DocDates";
 import { useSyncOrgTreeFeeder } from "../../../hooks/useSyncOrgTree";
 import { ProjectLeadChip } from "../../../components/charter/ProjectLeadChip";
@@ -78,23 +77,6 @@ const PLAN_STATUS_CONFIG: Record<string, { icon: typeof Circle; color: string }>
   abandoned: { icon: XCircle, color: "text-sol-text-dim" },
 };
 
-const PRIORITY_ICONS: Record<string, { icon: typeof Minus; color: string }> = {
-  urgent: { icon: AlertTriangle, color: "text-sol-red" },
-  high: { icon: ArrowUp, color: "text-sol-orange" },
-  medium: { icon: Minus, color: "text-sol-text-muted" },
-  low: { icon: ArrowDown, color: "text-sol-text-dim" },
-  none: { icon: Minus, color: "text-sol-text-dim" },
-};
-
-const DOC_TYPE_DOTS: Record<string, string> = {
-  note: "bg-gray-400",
-  plan: "bg-sol-blue",
-  design: "bg-sol-violet",
-  spec: "bg-sol-cyan",
-  investigation: "bg-sol-yellow",
-  handoff: "bg-sol-orange",
-};
-
 /** Timestamp → the yyyy-mm-dd a date input wants, in local time. */
 function toDateInput(ts: number): string {
   const d = new Date(ts);
@@ -112,7 +94,7 @@ function fmtAge(ms: number): string {
 function TaskRow({ task }: { task: TaskItem }) {
   const cfg = TASK_STATUS_CONFIG[task.status] || TASK_STATUS_CONFIG.open;
   const StatusIcon = cfg.icon;
-  const pri = PRIORITY_ICONS[task.priority] || PRIORITY_ICONS.none;
+  const pri = taskPriority(task.priority, "none");
   const PriIcon = pri.icon;
 
   return (
@@ -191,7 +173,7 @@ function PlanSection({ plan, tasks }: { plan: PlanItem; tasks: TaskItem[] }) {
 }
 
 function DocRow({ doc }: { doc: DocItem }) {
-  const dotColor = DOC_TYPE_DOTS[doc.doc_type] || DOC_TYPE_DOTS.note;
+  const dotColor = docTypeStyle(doc.doc_type).dot;
 
   return (
     <Link
@@ -430,6 +412,7 @@ function ProjectDetailContent() {
             </h1>
           )}
           {!editingTitle && <ProjectLeadChip projectId={project._id} editable />}
+          <ShareControl label="project" path={`/projects/${project._id}`} publicShare={{ kind: "project", id: project._id, token: ((storeProjects as any)[project._id] ?? project).share_token }} className="ml-auto" />
         </div>
 
         <RepositoryLinks projectId={project._id} />

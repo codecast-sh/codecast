@@ -83,3 +83,10 @@ test("the draft policy names every source the app loads from", () => {
   expect(directive("frame-ancestors")).toBe("frame-ancestors 'self' https://local.codecast.sh");
   expect(DOCUMENT_POLICY).not.toContain("'unsafe-eval'");
 });
+
+test("a guest meeting link tells search engines not to list it; other pages are untouched", async () => {
+  const app = new Hono().use("*", responsePolicy).get("*", c => c.html("<p>page</p>"));
+  expect((await app.request("/meet/abcDEF123456")).headers.get("X-Robots-Tag")).toBe("noindex, nofollow");
+  expect((await app.request("/meetings")).headers.get("X-Robots-Tag")).toBeNull();
+  expect((await app.request("/")).headers.get("X-Robots-Tag")).toBeNull();
+});

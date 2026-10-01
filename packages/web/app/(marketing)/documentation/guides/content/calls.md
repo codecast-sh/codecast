@@ -8,10 +8,14 @@ Codecast owns everything except the media. Rooms, rings, authorization and acces
 cast calls                        # calls across your teams, live ones first (-n 50 for more)
 cast call <id>                    # one call: title, participants, summary, action items
 cast call <id> --transcript       # the full transcript, a speaker on every line
+cast call <id> 15:25              # just lines 15 to 25
 cast call <id> --json             # the same as data; always includes the segments
+cast call snap cl-42:15           # a frame of the recorded call when line 15 was said
 ```
 
-`<id>` is a call id from `cast calls`, or a unique prefix of one. A segment in the JSON carries `seq`, `speaker_id`, `speaker_name`, `text`, and its start and end times. You can read a call you took part in, and a call whose room you may enter. A recording of one person's microphone shows in the same list, and it belongs to its creator until they share it with a team.
+`<id>` is a call's short id (`cl-42`) from `cast calls`, its full id, or a unique prefix of one.
+
+A call is a referenceable object like a task or a session. `cl-42` written in a message renders as a live pill with the call's title, length and speakers. Add a range of the line numbers the transcript prints and it names the words themselves: `cl-42:15-25` on its own line embeds those lines with their speakers, and inline it reads as a pill that shows them on hover. Either form links to the call page with those lines selected. A segment in the JSON carries `seq`, `speaker_id`, `speaker_name`, `text`, and its start and end times. You can read a call you took part in, and a call whose room you may enter. A recording of one person's microphone shows in the same list, and it belongs to its creator until they share it with a team.
 
 ## Rooms and presence
 
@@ -25,9 +29,21 @@ A room is a string key and never a stored row, so every client derives the same 
 | `channel:<channelId>` | A chat channel's standing room | Whoever may access the channel |
 | `session:<convId>` | A huddle about one session | The session's owner, and teammates when the session is visible to the team |
 
-A seat is a lease. A client in a room sends a heartbeat every 15 seconds, and every reader ignores a seat older than 45 seconds, so a closed laptop leaves the room without a cleanup step. A person joins muted, and unmuting is the deliberate act. An occupied room admits any member of its team, the way a meeting room with people in it admits whoever walks up. A channel room is the exception and keeps the channel's own membership. A huddle that wants privacy locks the room. A teammate can knock at a locked room, and anyone inside admits them by ringing them in. Nothing admits a person from outside the team. The server checks these rules in every call mutation and when it mints a media token, because the media server trusts that token.
+A seat is a lease. A client in a room sends a heartbeat every 15 seconds, and every reader ignores a seat older than 45 seconds, so a closed laptop leaves the room without a cleanup step. A person joins muted, and unmuting is the deliberate act. An occupied room admits any member of its team, the way a meeting room with people in it admits whoever walks up. A channel room is the exception and keeps the channel's own membership. A huddle that wants privacy locks the room. A teammate can knock at a locked room, and anyone inside admits them by ringing them in. A person from outside the team comes in only as a guest, on a link, and only when somebody inside lets them in (see Guests below). The server checks these rules in every call mutation and when it mints a media token, because the media server trusts that token.
 
 Presence comes from two facts about a person's machine: how recently the app checked in, and how recently somebody touched the keyboard or mouse. A person reads as active when the app checked in within 150 seconds and there was input within 3 minutes. The states are active, idle, away and offline. A person can declare busy or away, and a declaration wins over what the machine reports. The people wall draws the whole team at once and sizes each face by how present the person is. Click a face and three labeled actions appear under it: Talk, Ring and Message.
+
+## Guests
+
+A huddle can include people from outside the team. Press **invite** beside the lock on the call stage, or **Invite guest** on a live call's page, and copy the link. It stays open for seven days unless you pick one hour, one day or thirty days when you make it. **new link** replaces it and **turn off** closes it. Pressing invite again copies the same link instead of making a second one.
+
+The guest opens the link in a browser, with no account and nothing to install. Before they ask to join they see which meeting it is, who invited them, their own camera and microphone with a choice of devices, and a plain notice when the call is transcribed or recorded. Asking to join is their agreement to that notice. They wait at the door until somebody inside lets them in, and if nobody is in the room yet, whoever made the link gets a push that they are waiting.
+
+Their knock appears at the door beside a teammate's, marked as a guest, with **Admit** and **Deny**. When the call stage is closed it also arrives as a notification with the same two answers. A guest who was turned away can ask again after a minute, and when a link keeps bringing people the room turned away, the door offers to deny and turn the link off in one press.
+
+Inside, a guest is marked as a guest on every face, tile and transcript line, so a typed name never passes for a teammate's. They can talk, show their camera and share their screen. They see the call and nothing else: not the team, its sessions, the thread or the transcript. Anyone inside can remove a guest from beside their name or from their face in the header, and they are disconnected at once. An agent in the room treats what a guest says as conversation rather than instructions.
+
+An admission lasts for one huddle. When the last teammate leaves, the guests are let go with them, so a link from Tuesday's meeting cannot open Wednesday's on its own. A guest whose page goes quiet for longer than a blink is let go too. A guest who reloads the page is still let in, and rejoins with one press.
 
 ## Transcription with exact speakers
 
@@ -36,6 +52,30 @@ Attribution is structural and never inferred. One client in the room is the scri
 Every huddle transcribes unless somebody inside says otherwise. A client starts a run when it joined on purpose and the room has two or more people, and the server decides which client is the scribe. If the scribe's seat lapses, another client adopts the same run, and the old one lets go so no word lands twice.
 
 Transcription is a switch the room owns. It is a field on the room's state row, and anyone seated may flip it either way. It has to live on the room: a flag held by one client would be overruled by the next client that looked. Turning it off ends the run wherever it lives, and the digest of what was already said still posts.
+
+## Video and frames
+
+A huddle can also be recorded as video. Recording starts only when someone in the room presses Record, everyone in the room is told, including anyone who joins later and any guest, and anyone in the call can stop it, guests included. It stops by itself when the huddle ends. The recording runs on the LiveKit server, not in anyone's browser, so it does not depend on whose tab stayed open. Each run keeps two kinds of file: the room as people saw it, with every face, the screen share and everyone's audio, and each screen share on its own at full resolution, where text on the shared screen stays legible. The files live in a private bucket. Whoever may open the room's calls can watch the video: the people a huddle is between, everyone in a channel, everyone who can open a session. A reader gets a link that lasts minutes, minted after the same access check as the call itself.
+
+On the call page the video plays above the thread and stays in step with it. Click a line to see that moment, hold Shift and click to select lines to send, and the line being said lights up as it plays, with the thread following it until you scroll away to read something else (Back to the moment brings it back). When someone shared a screen, switch the view to that screen at full size and the room's sound keeps playing underneath. A link with `?t=754` opens the page paused at that second. Copy moment puts `cl-42@12:34` on the clipboard, and the thread's lines for a recording starting or stopping jump to that moment of the video. A call recorded twice plays on from one recording into the next. Whoever pressed Record, or an admin of the team, can delete a recording, and the thread says who did. A public share link shows the video only when someone turns on "Includes the video recording" for that link, and then only the room's view, never a single person's screen file.
+
+A recorded call answers "what was on screen when they said that". `cast calls` marks the calls that have video, `cast call cl-42` lists the stretches that were filmed, and `cast call snap` turns a call reference into a picture an agent can open:
+
+```bash
+cast call snap cl-42:15           # the moment line 15 was said (cast call snap cl-42 15 works too)
+cast call snap cl-42@12:34        # 12 minutes 34 seconds into the call (also 754s, 1:02:03)
+cast call snap cl-42:15-25        # frames across lines 15 to 25
+cast call snap cl-42              # the call as it is right now, while it records
+cast call cl-42@12:34             # the words around that moment, without the picture
+```
+
+Each frame is written as a PNG and printed with what it shows, the line being said at that moment and its citation. A line's frame is taken a beat after its first word, on a whole second, so the citation names the exact frame the agent saw. A line that began a moment before Record was pressed is shown from its first recorded second, and the output says so. Across a line range, a screen share yields a frame each time the screen changed, and the stretches with no share yield evenly spaced frames of the room, eight in all unless `--max` says otherwise (up to 50).
+
+A frame shows the shared screen from its own full resolution file whenever one covers the moment, and the room otherwise. `--composite` asks for the room view regardless. `--screen` asks for the shared screen only, and refuses a moment no share covers, naming the screens that were recorded. `-o` takes a .png or .jpg file, or a directory. Without it, frames go to a private scratch directory that is cleared after a day, because a frame of a private call is as private as the call. `--json` prints the same as data, refusals included (`{"error", "code"}`), and each frame carries its `kind` and what it `shows`.
+
+The moment comes from the shared clock: a transcript line carries its time since the call started, each file knows the wall clock of its first frame, and one function maps a moment to the file and offset that show it. The command and a frame embedded in a message use that function with the same choice of view, so a citation renders as the very picture the agent read. The call page's player uses it too, starting from the room's view because that is the file with everyone's sound. The seek itself runs on your machine with ffmpeg: a single frame reads a couple of megabytes around that moment, and a range on a shared screen reads the stretch once to find where it changed (a stretch too long to read is sampled evenly, and the output says so). ffmpeg reads through a short-lived proxy on your own machine, so the signed link never appears on a command line and is signed again when it is about to lapse. The command needs `ffmpeg` installed and says how to install it when it is missing.
+
+`cl-42@12:34` written in a message renders as that frame of the call, linked to the call page at that time (`?t=754`), for anyone who may read the call. `--share` is different: it uploads each frame as an image anyone with its link can open, for readers outside the team. LiveKit uploads a recording's video when Record is stopped or the huddle ends, so while a call is still recording only its live picture (`cast call snap cl-42`) can be snapped. When a snap cannot give a picture it says why and what to try: the call was not recorded, the moment falls outside what was recorded (with the recorded stretches and the nearest moment that works), or the recording is still being made.
 
 ## The digest
 

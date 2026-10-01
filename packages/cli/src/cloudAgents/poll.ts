@@ -6,12 +6,39 @@
  */
 import { CLOUD_AGENT_BACKFILL_DAYS } from "@codecast/shared/contracts";
 import type { GitInfo } from "../syncService.js";
+import { isGitHubName } from "../cloud/gitOrigin.js";
 
 /** How far back the first sight of a cloud agent or session reaches. */
 export const CLOUD_BACKFILL_MS = CLOUD_AGENT_BACKFILL_DAYS * 24 * 3600_000;
 
 /** How many pages of a provider's list one pass reads. */
 export const CLOUD_MAX_LIST_PAGES = 5;
+
+/**
+ * A provider's paged list: `fetchPage` reads one page from a cursor and says
+ * where the next starts (undefined at the end), for up to `maxPages`.
+ */
+export async function collectPages<T>(fetchPage: (cursor: string | undefined) => Promise<{ items: T[]; next?: string }>, maxPages = CLOUD_MAX_LIST_PAGES): Promise<T[]> {
+  const out: T[] = [];
+  let cursor: string | undefined;
+  for (let page = 0; page < maxPages; page++) {
+    const { items, next } = await fetchPage(cursor);
+    out.push(...items);
+    if (!next) break;
+    cursor = next;
+  }
+  return out;
+}
+
+/** A wait that doubles with each try (`tries` before this one) from `baseMs`, up to `maxMs`. */
+export function doublingDelay(baseMs: number, maxMs: number, tries: number): number {
+  return Math.min(baseMs * 2 ** Math.max(0, tries), maxMs);
+}
+
+/** A provider's time in seconds (Codex Cloud, the Agents API) as ms; undefined when it names none. */
+export function secondsToMs(s: number | null | undefined): number | undefined {
+  return typeof s === "number" && Number.isFinite(s) && s > 0 ? Math.round(s * 1000) : undefined;
+}
 
 /** The folder a cloud session is placed under when this machine has no checkout of its repo. */
 function cloudMirrorPlaceholderRoot(dirName: string): string {
@@ -58,10 +85,11 @@ export function cloudMirrorRepoFacts(info: GitInfo | undefined): GitInfo | undef
  */
 export const CLOUD_MIRROR_LOCAL_GIT_FIELDS = ["git_commit_hash", "git_ahead", "git_behind", "git_dirty"] as const;
 
-/** `owner/name` as the placement takes it; undefined when either half is missing. */
+/** `owner/name` as the placement takes it; undefined unless both halves are GitHub names (isGitHubName). */
 export function repoOwnerName(repo: string | undefined): { owner: string; name: string } | undefined {
-  const [owner, name] = repo?.split("/") ?? [];
-  return owner && name ? { owner, name } : undefined;
+  const parts = repo?.split("/") ?? [];
+  const [owner, name] = parts;
+  return parts.length === 2 && isGitHubName(owner) && isGitHubName(name) ? { owner, name } : undefined;
 }
 
 export interface PollCadenceOptions {

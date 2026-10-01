@@ -160,27 +160,51 @@ function createOsPermissions({ electron, bundleId, notifications = loadNotificat
   // the human. Returns false when the addon cannot post (not macOS, no
   // binary, outside a bundle); the caller falls back to the legacy class,
   // which still works in a process that never touched the modern API.
+  //
+  // A click goes to the banner's own `onClick` while this process lives.
+  // `payload` is a string the banner carries itself, handed to the
+  // `listenForClicks` handler when no `onClick` is left: a banner that
+  // outlived the process that posted it (a relaunch, an update) still lands.
   const clickHandlers = new Map();
-  let activateWired = false;
-  function notify(title, body, onClick) {
+  let onPayloadClick = null;
+  let listening = false;
+  function onActivate(id, payload) {
+    const handler = clickHandlers.get(id);
+    clickHandlers.delete(id);
+    try {
+      if (handler) handler();
+      else if (payload && onPayloadClick) onPayloadClick(payload);
+    } catch {}
+  }
+
+  // Install the click delegate. Called at boot, before any banner of this run,
+  // because a click on one left over from an earlier run reaches only a
+  // delegate that is already installed. Calling it again re-claims the
+  // delegate from whoever took it since (Electron's notification presenter).
+  function listenForClicks(handler) {
+    if (handler) onPayloadClick = handler;
+    if (!mac || !notifications || typeof notifications.onActivate !== "function") return false;
+    try {
+      notifications.onActivate(onActivate);
+      listening = true;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function notify(title, body, onClick, payload) {
     if (!mac || !notifications || typeof notifications.post !== "function") return false;
     try {
-      if (!activateWired && typeof notifications.onActivate === "function") {
-        notifications.onActivate((id) => {
-          const handler = clickHandlers.get(id);
-          clickHandlers.delete(id);
-          if (handler) {
-            try { handler(); } catch {}
-          }
-        });
-        activateWired = true;
-      }
+      if (!listening) listenForClicks();
       // Never asked: raise the prompt, then post anyway (the answer lands in
       // Notification Center, and a later notification benefits).
       if (readNotificationState() === "ask") {
         try { notifications.requestAuthorization(); } catch {}
       }
-      const id = notifications.post(String(title), String(body));
+      const id = typeof payload === "string" && payload
+        ? notifications.post(String(title), String(body), payload)
+        : notifications.post(String(title), String(body));
       if (!id) return false;
       if (onClick) clickHandlers.set(id, onClick);
       return true;
@@ -189,7 +213,7 @@ function createOsPermissions({ electron, bundleId, notifications = loadNotificat
     }
   }
 
-  return { getAll, request, openSettings, notify };
+  return { getAll, request, openSettings, notify, listenForClicks, readNotificationState };
 }
 
 module.exports = {

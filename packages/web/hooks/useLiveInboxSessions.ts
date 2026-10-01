@@ -10,9 +10,9 @@ import { useFeederError } from "./useSyncCollection";
 // re-render every subscriber (or touch IDB). "Old" = cached top-level sessions
 // absent from this set (filled by the completeness crawl). Writes go through
 // setLiveInboxIds — a sync() action — so the set persists and the next cold boot
-// filters its first frame against the last-known authoritative set. Exported as a
-// plain function (no React deps — it reads/writes the store directly) so the
-// recovery poll in useSyncInboxSessions can reuse it.
+// filters its first frame against the last-known authoritative set. A plain
+// function (no React deps; it reads/writes the store directly), applied with
+// the rows by applyInboxListPayload.
 export function applyLiveInboxIds(sessions: any[]) {
   const ids = sessions.map((x: any) => x._id.toString() as string);
   // Before the change-guard: a disown reaches this client as ABSENCE from the
@@ -23,6 +23,20 @@ export function applyLiveInboxIds(sessions: any[]) {
   const prev = useInboxStore.getState().liveInboxIds;
   if (prev.size === next.size && ids.every((id) => prev.has(id))) return;
   useInboxStore.getState().setLiveInboxIds(ids);
+}
+
+/**
+ * One listInboxSessions payload into the store: the rows through syncTable,
+ * then the live id set. The subscription, the recovery probe and the
+ * simulator's host all apply through it. Returns the rows, or null for a
+ * payload that holds none.
+ */
+export function applyInboxListPayload(data: any): any[] | null {
+  const sessions = data?.sessions ?? data;
+  if (!Array.isArray(sessions)) return null;
+  useInboxStore.getState().syncTable("sessions", sessions as unknown as InboxSession[]);
+  applyLiveInboxIds(sessions);
+  return sessions;
 }
 
 /**
@@ -61,16 +75,13 @@ export function useLiveInboxSessions(opts?: { onSync?: (sessions: any[]) => void
   const isSyncHost = useIsSyncHost();
   const { data: inboxSessions, error } = useQueryNoThrow(api.conversations.listInboxSessions, isSyncHost ? LIST_INBOX_SESSIONS_ARGS : "skip");
   useFeederError("conversations.listInboxSessions", error);
-  const syncTable = useInboxStore((s) => s.syncTable);
   const onSyncRef = useRef(opts?.onSync);
   onSyncRef.current = opts?.onSync;
 
   useConvexSync(inboxSessions, useCallback((data: any) => {
-    const sessions = data.sessions ?? data;
-    syncTable("sessions", sessions as unknown as InboxSession[]);
-    applyLiveInboxIds(sessions);
-    onSyncRef.current?.(sessions);
-  }, [syncTable]), { coalesceMs: 300 });
+    const sessions = applyInboxListPayload(data);
+    if (sessions) onSyncRef.current?.(sessions);
+  }, []), { coalesceMs: 300 });
 
   return { data: inboxSessions, error };
 }

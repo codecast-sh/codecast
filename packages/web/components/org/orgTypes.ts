@@ -56,6 +56,27 @@ export type OrgStandingState = {
 
 export type OrgStanding = OrgStandingState & { conversation_id?: string; short_id?: string };
 
+export type OrgSuccession = {
+  project_id?: string;
+  plan_id?: string;
+  from_role_id: string;
+  from_handle: string;
+  from_name: string;
+  at: number;
+  lines: number;
+  handed_at?: number;
+};
+
+export type OrgHandingOver = {
+  reason: "retire" | "split" | "scope";
+  started_at: number;
+  deadline: number;
+  by: string;
+  trigger_id?: string;
+  receivers: Array<{ role_id: string; handle: string; project_ids: string[]; plan_ids: string[]; done_at?: number }>;
+  retire?: { standing_session?: "keep" | "retire" };
+};
+
 export type OrgRole = {
   _id: string;
   short_id: string;
@@ -91,11 +112,24 @@ export type OrgRole = {
   // The face (org-staffing.md S13): the chosen avatar key, else the default for
   // the handle. org.tree always stamps this through avatarOf, so it is present.
   avatar?: string;
+  /** The person like name a person chose (org-staffing.md S30); absent, the
+   *  role wears its face's character name. Read through roleWords/roleIdentity. */
+  given_name?: string | null;
+  /** Set on a Chief of Staff (S30): what it reaches. */
+  chief?: { reach: "global" } | { reach: "team"; team_id: string } | null;
   /** The standing agent this seat replaced, when it was seated fresh (S16):
    *  the old thread is kept, not deleted, and the role's page links it so a
    *  workspace never loses the assistant it had. Rides org.tree on the role
    *  row's own spread. */
   previous_standing_conversation_id?: string;
+  /** The line's merge step (the-line.md L12): on, an approved branch merges
+   *  into the default branch under the role's merge authority. */
+  line_merge?: boolean;
+  /** Knowledge handoff (org-staffing.md S32): which role this one succeeded
+   *  for which area, and when the outgoing role handed over the rest. */
+  succeeded?: OrgSuccession[];
+  /** The handoff this role is in the middle of giving (S32); a retire waits on it. */
+  handing_over?: OrgHandingOver | null;
   created_by: string;
   created_at: number;
   updated_at: number;

@@ -5,7 +5,7 @@
 // a microphone that is muted at the operating system look identical in text,
 // and only a live meter tells them apart.
 //
-// The CURVE is the walkie's, imported rather than re-derived: `meterLevel` is
+// The CURVE is the walkie's (meterCurve), imported rather than re-derived: it is
 // calibrated in decibels from -50 to -6 dBFS, with a floor just under a typical
 // microphone's noise floor so a silent room reads zero. That calibration was
 // measured against real speech, and a second copy of it would be a second
@@ -15,7 +15,7 @@
 // moves sixty times a second, and anything that woke a component per frame
 // would be the jank the wake signatures exist to prevent. The pill writes it to
 // a CSS variable and the browser animates from there.
-import { meterLevel } from "./walkie";
+import { readMeterLevel } from "./meterCurve";
 
 export type MicMeter = {
   /** 0 to 1. Zero once stopped, and zero in a room nobody is talking in. */
@@ -44,14 +44,7 @@ export function createMicMeter(track: MediaStreamTrack): MicMeter {
   }
 
   function read(): number {
-    if (!analyser || !bytes) return 0;
-    analyser.getByteTimeDomainData(bytes);
-    let sum = 0;
-    for (let i = 0; i < bytes.length; i++) {
-      const v = (bytes[i] - 128) / 128;
-      sum += v * v;
-    }
-    return meterLevel(Math.sqrt(sum / bytes.length));
+    return analyser && bytes ? readMeterLevel(analyser, bytes) : 0;
   }
 
   function pump() {

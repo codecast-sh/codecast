@@ -241,6 +241,29 @@ export interface RoleCard {
   charter?: string;
   /** The goals written on the projects it looks after. */
   goals: string[];
+  /** The initiatives its work feeds (the ones it owns, and the ones its
+   *  projects carry), each with its metric read against the target and the
+   *  chain up to the top level goal, so the role knows what its area serves. */
+  initiatives?: RoleCardInitiative[];
+}
+export interface RoleCardInitiative {
+  short_id: string;
+  title: string;
+  /** Each metric as one line: "Weekly active teams: 412 of 1,000, behind (3 days ago)". */
+  metrics: string[];
+  /** The goals above it, nearest first, by title. */
+  chain: string[];
+}
+/** "Serves: Win the private network (in-4), under Reach 1k teams; Weekly active teams: 412 of 1,000, behind (3 days ago)" */
+export function roleCardInitiativeLine(i: RoleCardInitiative): string {
+  return `${i.title} (${i.short_id})${i.chain.length ? `, under ${i.chain.join(", under ")}` : ""}${i.metrics.length ? `; ${i.metrics.join("; ")}` : ""}`;
+}
+function parseRoleCardInitiativeLine(line: string): RoleCardInitiative {
+  const [head, ...metrics] = line.split("; ");
+  const m = head.match(/^(.*?) \((in-\d+)\)(?:, under (.*))?$/);
+  return m
+    ? { title: m[1], short_id: m[2], chain: m[3] ? m[3].split(", under ") : [], metrics }
+    : { title: head, short_id: "", chain: [], metrics };
 }
 
 export interface ScheduledTaskFrame {
@@ -252,7 +275,7 @@ export interface ScheduledTaskFrame {
   event?: string;
   waiting?: WaitingSession | null;
   /** A change in the company that lasted (org-staffing.md S29), when the
-   *  area watch fired the Chief of Staff's trigger for it. */
+   *  area watch fired the Head of People's trigger for it. */
   change?: AreaChange | null;
   /** Spawned workers that settled, reported to the session they nest under
    *  (workerSettle.ts). `why` is what each settled on: done, blocked,
@@ -291,6 +314,7 @@ export function formatScheduledTask(f: ScheduledTaskFrame): string {
     r.scope.length ? `Looks after: ${r.scope.join(", ")}` : "Looks after no area of its own: it runs its routine and answers what it is asked.",
     r.charter ? `Charter: ${r.charter}` : "",
     r.goals.length ? `Goals: ${r.goals.join("; ")}` : "",
+    ...(r.initiatives ?? []).map((i) => `Serves: ${roleCardInitiativeLine(i)}`),
   ].filter(Boolean).join("\n") : "";
   const role = r ? `\n<role-card ${tagAttrs([["handle", r.handle], ["name", r.name], ["reports-to", r.reports_to]])}>${roleLines}</role-card>\n` : "";
   return `<scheduled-task ${head}>${role}${waiting}${change}${workers}${f.body}</scheduled-task>`;
@@ -325,6 +349,8 @@ export function parseScheduledTask(rawContent: string | null | undefined): Sched
       ...(line("Charter") ? { charter: line("Charter") } : {}),
       goals: line("Goals") ? line("Goals").split("; ") : [],
     };
+    const serves = rc[2].split("\n").filter((l) => l.startsWith("Serves: ")).map((l) => parseRoleCardInitiativeLine(l.slice("Serves: ".length)));
+    if (serves.length) role.initiatives = serves;
   }
   let waiting: WaitingSession | null = null;
   const w = body.match(/^\s*<waiting-session((?:\s+[a-z-]+="[^"]*")*)\s*>([\s\S]*?)<\/waiting-session>\s*/);
@@ -388,6 +414,19 @@ export function isChatWakePrompt(rawContent: string | null | undefined): boolean
   return !!rawContent && CHAT_WAKE_HEADER.test(chatWakeText(rawContent));
 }
 
+// Claude Code's Workflow tool opens every subagent with two framed user turns:
+// the relayed request of the session that ran the workflow, then the task the
+// script computed for this agent. Each is one header line of boilerplate, then
+// the body indented two spaces. Group 1 names the frame.
+export const WORKFLOW_HARNESS_HEADER = /^\[Workflow harness — (user request|computed task)\][^\n]*\n/;
+
+export function parseWorkflowHarnessFrame(rawContent: string | null | undefined): { kind: "user request" | "computed task"; body: string } | null {
+  const m = rawContent?.match(WORKFLOW_HARNESS_HEADER);
+  if (!m) return null;
+  const body = stripPastedContent(rawContent!.slice(m[0].length).replace(/^ {2}/gm, "")).trim();
+  return { kind: m[1] as "user request" | "computed task", body };
+}
+
 // A harness <task-notification> — a background task / Monitor / Workflow
 // completion the harness injected as a user turn. Keys off the opening tag
 // only, same truncated-preview rule as isSessionMessage.
@@ -438,14 +477,14 @@ export function isUnwrappedSessionReport(rawContent: string | null | undefined):
 
 // The prompt that seats a standing agent (convex anchors.ts bootstrapMessage):
 // "You are the **<role>** (@handle) in <team>" for a role (older threads:
-// "You are **<name>**, the standing agent for the **<role>** role"), "You are the Chief of Staff for <workspace>." for the
-// chief of staff (chiefOfStaffPrompt.ts), or "..., the **team** anchor for
+// "You are **<name>**, the standing agent for the **<role>** role"), "You are the Head of People for <workspace>." for the
+// head of people (headOfPeoplePrompt.ts), or "..., the **team** anchor for
 // <team>" / "the **personal** anchor". The host sends it as an ordinary user message, so
 // its own first line is the mark. ONE recogniser: the scope page cuts the
 // thread after it (web lib/anchorWindow), and the inbox card's preview, the
 // sticky prompt header and the navigator skip it through
 // isMachineDeliveredMessage, so no surface can show it as the person's words.
-export const BOOTSTRAP_PROMPT_RE = /^\s*You are (\*\*[^*]+\*\*, the (standing agent for|\*\*(team|personal)\*\* (anchor|workspace's standing agent))|the Chief of Staff for |the \*\*[^*]+\*\* \(@[a-z0-9-]+\) in )/;
+export const BOOTSTRAP_PROMPT_RE = /^\s*You are (\*\*[^*]+\*\*, the (standing agent for|\*\*(team|personal)\*\* (anchor|workspace's standing agent))|the (Head of People|Chief of Staff) for |[^,\n]{1,40}, [^\n]{1,60}'s Chief of Staff for |the \*\*[^*]+\*\* \(@[a-z0-9-]+\) in )/;
 
 export function isBootstrapPrompt(rawContent: string | null | undefined): boolean {
   if (!rawContent) return false;

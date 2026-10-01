@@ -27,7 +27,7 @@ import { type FaceDensity, type FloatBandSide, FACE_ROW_METRICS, flipKeyframes, 
 // machinery (useFloatingCircles) sizes the window and lifts click through;
 // `FloatingFaceRow` is the row with that machinery attached.
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from "react";
-import { ChevronLeft, EyeOff, GripHorizontal, Maximize2, MicOff, Minus, PanelTop, Plus, Sparkle } from "lucide-react";
+import { ChevronLeft, EyeOff, GripHorizontal, Link2, Maximize2, MicOff, Minus, PanelTop, Plus, Sparkle } from "lucide-react";
 import { defaultAvatarFor, isAvatarKey } from "@codecast/shared/contracts/orgAvatars";
 import { AVATAR_URLS } from "../../lib/orgAvatars";
 import { useInboxStore } from "../../store/inboxStore";
@@ -37,7 +37,7 @@ import { CircleFace } from "../calls/FaceCircle";
 import { getCallTiles, subscribeCallTiles, type ParticipantTile } from "../../lib/calls/callManager";
 import { useFaceKey, useWalkieFaces, type FaceKey } from "../presence/useFaceKey";
 import { useOpenDm } from "../../hooks/useChatSync";
-import { FaceCard } from "./FaceCard";
+import { FaceCard, GuestFaceCard } from "./FaceCard";
 import { useWalkieLevelVar } from "../../hooks/useWalkie";
 import { useVideoFrame } from "../../lib/calls/videoFrames";
 import { useMicLevelVar } from "../../hooks/useMicLevelVar";
@@ -138,6 +138,13 @@ const onTheCall = (e: FaceEntry): boolean => e.tier === "me" || e.tier === "link
 
 const noHover = () => {};
 
+/** The float's one circle that stands for everyone off the call. A face id of
+ *  its own, so the window's hit test reports the pointer on it. */
+const OTHERS_ID = "__others";
+/** The grace after the pointer leaves the others before they fold again:
+ *  crossing from the circle to the first face never drops them. */
+const PEEK_CLOSE_MS = 400;
+
 function FaceSeat({
   entry,
   tile,
@@ -150,6 +157,7 @@ function FaceSeat({
   onPress,
   registerKey,
   stacked,
+  folded = false,
   stackDepth = 0,
   onExpand,
   onPointerDown,
@@ -174,6 +182,9 @@ function FaceSeat({
   /** Folded into the stack beside a call: the face is part of one control
    *  that spreads the team back out, with no card and no marks of its own. */
   stacked: boolean;
+  /** Folded away behind the float's others circle: the seat keeps its room,
+   *  so the window never changes size, but draws nothing and takes no click. */
+  folded?: boolean;
   /** Its place in the stack, from the front: the first face sits on top. */
   stackDepth?: number;
   onExpand: () => void;
@@ -193,10 +204,11 @@ function FaceSeat({
   const key = useFaceKey({
     viewerId,
     memberId: entry.id,
-    callsEnabled: callsEnabled && !entry.me,
+    // A guest has no walkie and no phone to ring: their face keys nothing.
+    callsEnabled: callsEnabled && !entry.me && !entry.guest,
     talking: entry.state === "talking-to-me",
   });
-  registerKey(entry.id, entry.me ? null : key);
+  registerKey(entry.id, entry.me || entry.guest ? null : key);
   // THE LEVEL. Theirs is their voice on the walkie's meter, by identity; mine
   // is my microphone on whichever meter is running.
   const voiceRef = useWalkieLevelVar<HTMLDivElement>(entry.level === "voice", entry.id);
@@ -221,6 +233,8 @@ function FaceSeat({
       data-hold={key.holding ? "1" : undefined}
       data-ask={entry.ask > 0 ? entry.ask : undefined}
       data-stacked={stacked ? "1" : undefined}
+      data-folded={folded ? "1" : undefined}
+      aria-hidden={folded || undefined}
       style={
         stackDepth >= 0
           ? ({ "--stack-i": stackDepth, zIndex: stacked ? 10 - Math.min(stackDepth, 9) : undefined } as React.CSSProperties)
@@ -275,6 +289,12 @@ function FaceSeat({
       {entry.bot ? (
         <span className="face-bot" aria-label="agent" title="Agent">
           <Sparkle className="face-bot-glyph" aria-hidden="true" />
+        </span>
+      ) : entry.guest ? (
+        // A guest wears the agent's corner mark with a link in it: they came
+        // in on one, and like an agent they have no presence to show.
+        <span className="face-bot face-guest" aria-label="guest" title="A guest from outside the team">
+          <Link2 className="face-bot-glyph" aria-hidden="true" />
         </span>
       ) : (
         presence && <PresenceBadge state={presence} size={density === "bar" ? "sm" : "md"} className="face-pres" />
@@ -385,12 +405,22 @@ export function FaceRow({
   // after the track: the call is what the row is about now. A press on the
   // stack spreads the team back out as ordinary faces (their cards carry
   // Add to call); the fold closes it again, and so does the next call.
+  //
+  // The float never stacks: its window is hung from a corner, and a row that
+  // changed width under the pointer carried the call across the screen (the
+  // founder, 2026-10-02: "do not move the whole window"). There everyone off
+  // the call keeps their seat's room at all times, folded out of sight behind
+  // one small circle after the strip; pointing at the circle fades them in
+  // where they already stand, and a click keeps them out.
   const callRoom = callRoomOf(row);
   const outsiders = row.entries.length - callIds.length;
-  const stackable = !!callRoom && callIds.length > 0 && outsiders >= 2;
+  const stackable = !!callRoom && callIds.length > 0 && outsiders >= (density === "float" ? 1 : 2);
   const [spread, setSpread] = useState(false);
   useLayoutEffect(() => setSpread(false), [callRoom]);
-  const stacked = stackable && !spread;
+  const stacked = stackable && !spread && density !== "float";
+  const [peek, setPeek] = useState(false);
+  const folds = stackable && density === "float";
+  const folded = folds && !spread && !peek;
   const lastId = row.entries[row.entries.length - 1]?.id;
 
   const cameraOf = (id: string): ParticipantTile | undefined =>
@@ -401,6 +431,9 @@ export function FaceRow({
   // clicking can never stack two things under one face.
   const [openId, setOpenId] = useState<string | null>(null);
   const [pinned, setPinned] = useState(false);
+  // A guest's face opens the guest's card: they are not on the roster the
+  // member card reads, and the row already holds all there is to say.
+  const openGuest = openId ? (row.entries.find((e) => e.id === openId && e.guest) ?? null) : null;
   const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clearTimers = () => {
@@ -435,7 +468,7 @@ export function FaceRow({
   // the hit test instead of the seats' own enter and leave. A face folded
   // into the stack opens nothing; its press spreads the team.
   const pointedOpens =
-    pointed != null && row.entries.some((e) => e.id === pointed && !(stacked && !onTheCall(e))) ? pointed : null;
+    pointed != null && row.entries.some((e) => e.id === pointed && !((stacked || folded) && !onTheCall(e))) ? pointed : null;
   useLayoutEffect(() => {
     if (pointed === undefined) return;
     hover(pointedOpens);
@@ -460,8 +493,22 @@ export function FaceRow({
   useEventListener("keydown", (e: Event) => {
     if (openId && (e as KeyboardEvent).key === "Escape") close();
   }, openId ? window : null);
+  // The others open while the pointer is on their circle or one of them, or
+  // one of their cards is up, and fold a beat after it has gone.
+  const outsiderIds = useMemo(() => new Set(row.entries.filter((e) => !onTheCall(e)).map((e) => e.id)), [row.entries]);
+  const peeking = folds && (pointed === OTHERS_ID || (pointed != null && outsiderIds.has(pointed)) || (openId != null && outsiderIds.has(openId)));
+  const peekTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useLayoutEffect(() => {
+    if (peekTimer.current) clearTimeout(peekTimer.current);
+    peekTimer.current = null;
+    if (peeking) setPeek(true);
+    else if (peek) peekTimer.current = setTimeout(() => setPeek(false), PEEK_CLOSE_MS);
+  }, [peeking, peek]);
+  useLayoutEffect(() => () => {
+    if (peekTimer.current) clearTimeout(peekTimer.current);
+  }, []);
   // The card is gone when its person leaves the row, or folds into the stack.
-  const onRow = !openId || row.entries.some((e) => e.id === openId && !(stacked && !onTheCall(e)));
+  const onRow = !openId || row.entries.some((e) => e.id === openId && !((stacked || folded) && !onTheCall(e)));
   useLayoutEffect(() => {
     if (!onRow) close();
   }, [onRow, close]);
@@ -561,6 +608,7 @@ export function FaceRow({
       }
       data-holding={faces.sendingRoomKey ? "1" : undefined}
       data-stacked={stacked ? "1" : undefined}
+      data-folded={folded ? "1" : undefined}
       role="group"
       aria-label="Team"
     >
@@ -586,6 +634,7 @@ export function FaceRow({
             registerKey={registerKey}
             diameter={diameter}
             stacked={stacked && !onTheCall(entry)}
+            folded={folded && !onTheCall(entry)}
             stackDepth={i - callIds.length}
             onExpand={() => setSpread(true)}
             onPointerDown={onDragStart}
@@ -596,6 +645,29 @@ export function FaceRow({
           ? [<span key={`link:${entry.id}`} className="face-link" data-link-kind={kind} aria-hidden="true" />, seat]
           : [seat];
         if (entry.id === lastCallId) out.push(strip!);
+        // The float's others: one quiet circle right after the call, ahead of
+        // the seats it stands for, so they open out beside it.
+        if (entry.id === callIds[callIds.length - 1] && folds) {
+          out.push(
+            <button
+              key="others"
+              type="button"
+              className="face-row-others"
+              data-face-id={OTHERS_ID}
+              data-face-hit
+              data-open={!folded ? "1" : undefined}
+              title={spread ? "Fold the team away" : "Show the rest of the team"}
+              aria-label={`${spread ? "Fold the team away" : "Show the rest of the team"} (${outsiders})`}
+              aria-expanded={!folded}
+              onClick={(e) => {
+                e.stopPropagation();
+                setSpread((v) => !v);
+              }}
+            >
+              {outsiders}
+            </button>,
+          );
+        }
         // How many the stack holds, and a second way in.
         if (entry.id === lastId && stacked) {
           out.push(
@@ -616,7 +688,7 @@ export function FaceRow({
           );
         }
         // The fold, after the spread team: the way back to the stack.
-        if (entry.id === lastId && stackable && spread) {
+        if (entry.id === lastId && stackable && spread && !folds) {
           out.push(
             <button
               key="fold"
@@ -660,7 +732,17 @@ export function FaceRow({
           }}
           onMouseLeave={() => hover(null)}
         >
-          {openId && (
+          {openId && openGuest && (
+            <GuestFaceCard
+              identity={openGuest.id}
+              name={openGuest.name}
+              joinedAgo={openGuest.joinedAgo}
+              anchor={anchor}
+              density={density}
+              onClose={close}
+            />
+          )}
+          {openId && !openGuest && (
             <FaceCard
               memberId={openId}
               viewerId={viewerId}

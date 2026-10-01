@@ -1,0 +1,14 @@
+{
+  "name": "call-e2e",
+  "private": true,
+  "type": "module",
+  "description": "Synthetic LiveKit participant and room diagnostics for testing calls without a camera or a screen picker. Not a workspace member: install inside this folder.",
+  "scripts": {
+    "publish-synthetic": "node publish.mjs",
+    "inspect": "node inspect.mjs",
+    "decode": "node decode.mjs"
+  },
+  "dependencies": {
+    "@livekit/rtc-node": "1.1.0"
+  }
+}

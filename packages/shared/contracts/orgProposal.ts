@@ -116,7 +116,7 @@ export type OrgProjectMetaChange = {
   non_goals?: string[];
   risks?: string[];
 };
-/** This session becomes the role's standing session (the analyzer offering to be the chief of staff). */
+/** This session becomes the role's standing session (the analyzer offering to be the head of people). */
 export type OrgAdoptChange = { kind: "adopt"; handle: string; conversation: string } & OrgLeaveSessions;
 /** File a plan under a project (plans.project_id), so a role's scope can see it. Both are refs. */
 export type OrgFileChange = { kind: "file"; plan: string; project: string };
@@ -162,23 +162,31 @@ export type OrgUpgradeChange = { kind: "upgrade"; instance: string; template: st
 // initiative's in-N, id or title; an owner as "@handle", "me" or a member's
 // name. `title` on the two changes to an existing initiative is its title,
 // carried so the row reads cold in a store that does not hold the row.
+/** How a goal is measured: a name and the number to reach ("Weekly active teams", "1000"). At most two. */
+export type OrgInitiativeMetric = { name: string; target: string };
 /** Set a goal: the initiative with the sentence that says what reaching it
- *  looks like, the projects that carry it, and who drives it. */
-export type OrgInitiativeChange = { kind: "initiative"; title: string; description: string; projects: string[]; owner?: string; target_date?: number; evidence?: string[] };
+ *  looks like, the projects that carry it, who drives it, the top level goal
+ *  it feeds (`parent`: a ref, or the title of a goal set earlier in the same
+ *  proposal) and the one or two numbers it is measured by. */
+export type OrgInitiativeChange = { kind: "initiative"; title: string; description: string; projects: string[]; owner?: string; target_date?: number; parent?: string; metrics?: OrgInitiativeMetric[]; evidence?: string[] };
 /** Add projects to a goal that exists. */
 export type OrgInitiativeProjectsChange = { kind: "initiative_projects"; initiative: string; projects: string[]; title?: string };
 /** Give a goal an owner, a person or a role. */
 export type OrgInitiativeOwnerChange = { kind: "initiative_owner"; initiative: string; owner: string; title?: string };
-export type OrgGoalChange = OrgInitiativeChange | OrgInitiativeProjectsChange | OrgInitiativeOwnerChange;
+/** Place a goal that exists in the tree and say how it is measured: `parent`
+ *  is a ref or null (a top level goal), `metrics` replaces the list; each is
+ *  optional and an absent one is left as it is. */
+export type OrgInitiativeShapeChange = { kind: "initiative_shape"; initiative: string; parent?: string | null; metrics?: OrgInitiativeMetric[]; title?: string };
+export type OrgGoalChange = OrgInitiativeChange | OrgInitiativeProjectsChange | OrgInitiativeOwnerChange | OrgInitiativeShapeChange;
 
 export type OrgChange = OrgProposal | OrgScopeChange | OrgBudgetChange | OrgTrustChange | OrgRoutineChange | OrgProjectMetaChange | OrgAdoptChange | OrgFileChange
   | OrgPlanStatusChange | OrgTaskStatusChange | OrgProjectStatusChange | OrgAuthorityChange | OrgHireChange | OrgUpgradeChange | OrgGoalChange;
 
-export const ORG_CHANGE_KINDS = [...ORG_PROPOSAL_KINDS, "file", "scope", "budget", "trust", "routine", "project_meta", "adopt", "plan_status", "task_status", "project_status", "authority", "hire", "upgrade", "initiative", "initiative_projects", "initiative_owner"] as const;
+export const ORG_CHANGE_KINDS = [...ORG_PROPOSAL_KINDS, "file", "scope", "budget", "trust", "routine", "project_meta", "adopt", "plan_status", "task_status", "project_status", "authority", "hire", "upgrade", "initiative", "initiative_projects", "initiative_owner", "initiative_shape"] as const;
 /** The kinds the pane groups under "Bring records in line" (S9). */
 export const ORG_SYNC_KINDS: readonly OrgChangeKind[] = ["plan_status", "task_status", "project_status"];
 /** The kinds that set, extend or staff a goal; one ask holds them (I1, revised). */
-export const ORG_GOAL_KINDS: readonly OrgChangeKind[] = ["initiative", "initiative_projects", "initiative_owner"];
+export const ORG_GOAL_KINDS: readonly OrgChangeKind[] = ["initiative", "initiative_projects", "initiative_owner", "initiative_shape"];
 /** Kinds a person never sees drawn (org-staffing.md S23.2): a limit is a safety
  *  net the person does not read about, so a card draws no chip and no row for
  *  it. A proposal holding nothing else says what changes in plain words, with
@@ -212,8 +220,8 @@ export type OrgChangeKind = OrgChange["kind"];
  *  gains the goal's projects in its scope when the owner is set. */
 export const ORG_CHANGE_APPLY_RANK: Record<OrgChangeKind, number> = {
   task_status: 0, plan_status: 1, project_status: 2,
-  projects: 3, file: 4, role: 5, project_meta: 6, initiative: 7, initiative_projects: 8, initiative_owner: 9,
-  move: 10, scope: 11, budget: 12, trust: 13, authority: 14, adopt: 15, routine: 16, hire: 17, upgrade: 18, retire: 19,
+  projects: 3, file: 4, role: 5, project_meta: 6, initiative: 7, initiative_projects: 8, initiative_owner: 9, initiative_shape: 10,
+  move: 11, scope: 12, budget: 13, trust: 14, authority: 15, adopt: 16, routine: 17, hire: 18, upgrade: 19, retire: 20,
 };
 const UNRANKED = Math.max(...Object.values(ORG_CHANGE_APPLY_RANK)) + 1;
 
@@ -402,6 +410,8 @@ export function orgChangeError(raw: any): string | null {
       if (!strings(raw.projects) || !raw.projects.length) return "initiative projects is a non-empty list of project refs: the projects that carry the goal";
       if (raw.owner !== undefined && !nonEmpty(raw.owner)) return "initiative owner is \"@handle\" for a role, \"me\" or a member's name for a person";
       if (raw.target_date !== undefined && !(typeof raw.target_date === "number" && raw.target_date > 0)) return "initiative target_date is unix ms";
+      if (raw.parent !== undefined && !nonEmpty(raw.parent)) return "initiative parent is the top level goal it feeds: in-N, an id, or the title of a goal set earlier in this proposal";
+      { const m = metricsError("initiative", raw.metrics); if (m) return m; }
       return optStrings(raw.evidence) ? null : "initiative evidence is a list of strings";
     case "initiative_projects":
       if (!nonEmpty(raw.initiative)) return "initiative_projects needs an initiative ref (in-N, an id or its title)";
@@ -411,7 +421,21 @@ export function orgChangeError(raw: any): string | null {
       if (!nonEmpty(raw.initiative)) return "initiative_owner needs an initiative ref (in-N, an id or its title)";
       if (!nonEmpty(raw.owner)) return "initiative_owner owner is \"@handle\" for a role, \"me\" or a member's name for a person";
       return optString(raw.title) ? null : "initiative_owner title is the initiative's title, a string";
+    case "initiative_shape":
+      if (!nonEmpty(raw.initiative)) return "initiative_shape needs an initiative ref (in-N, an id or its title)";
+      if (raw.parent !== undefined && raw.parent !== null && !nonEmpty(raw.parent)) return "initiative_shape parent is the top level goal it feeds (a ref), or null for a top level goal";
+      { const m = metricsError("initiative_shape", raw.metrics); if (m) return m; }
+      if (raw.parent === undefined && raw.metrics === undefined) return "initiative_shape needs a parent or metrics: what it changes about the goal";
+      return optString(raw.title) ? null : "initiative_shape title is the initiative's title, a string";
   }
+  return null;
+}
+
+/** One or two metrics, each { name, target }, or absent. */
+function metricsError(kind: string, raw: unknown): string | null {
+  if (raw === undefined) return null;
+  if (!Array.isArray(raw) || raw.length > 2) return `${kind} metrics is a list of at most two { name, target }: the numbers the goal is measured by`;
+  for (const m of raw) if (!m || typeof m !== "object" || !nonEmpty((m as any).name) || !nonEmpty((m as any).target)) return `${kind} metrics entries are { name, target }, both strings ("Weekly active teams", "1000")`;
   return null;
 }
 
@@ -434,7 +458,7 @@ export function isOrgChangeDecidable(status: string): boolean {
 
 // ── The conversation is part of the proposal (S18) ──────────────────────────
 
-/** The author's thread bound to a proposal: the chief of staff's standing
+/** The author's thread bound to a proposal: the head of people's standing
  *  session, or the session that ran the review. The pane embeds it. */
 export type OrgProposalThread = { conversation_id: string; short_id?: string };
 
@@ -672,11 +696,20 @@ export function goalChangeSentence(c: OrgGoalChange, names?: OrgAskNames): strin
   const project = (ref: string) => names?.project?.(ref) ?? ref;
   const goal = (ref: string, title?: string) => title?.trim() || names?.initiative?.(ref) || ref;
   switch (c.kind) {
-    case "initiative": return `set a goal: ${c.title.trim()}, carried by ${andList(c.projects.map(project))}${c.owner ? `, owned by ${owner(c.owner)}` : ""}`;
+    case "initiative": return `set a goal: ${c.title.trim()}, carried by ${andList(c.projects.map(project))}${c.owner ? `, owned by ${owner(c.owner)}` : ""}${c.parent ? `, under ${goal(c.parent)}` : ""}${c.metrics?.length ? `, measured by ${metricsWords(c.metrics)}` : ""}`;
     case "initiative_projects": return `add ${andList(c.projects.map(project))} to the goal ${goal(c.initiative, c.title)}`;
     case "initiative_owner": return c.owner.trim() ? `make ${owner(c.owner)} the owner of the goal ${goal(c.initiative, c.title)}` : `the goal ${goal(c.initiative, c.title)} has no owner`;
+    case "initiative_shape": {
+      const parts = [
+        c.parent === undefined ? "" : c.parent === null ? "a top level goal" : `under ${goal(c.parent)}`,
+        c.metrics === undefined ? "" : c.metrics.length ? `measured by ${metricsWords(c.metrics)}` : "with no metric",
+      ].filter(Boolean);
+      return `${c.parent === null && parts.length === 1 ? "make" : "put"} the goal ${goal(c.initiative, c.title)} ${andList(parts)}`;
+    }
   }
 }
+/** "Weekly active teams (target 1,000) and Paying teams (target 40)" */
+export const metricsWords = (metrics: ReadonlyArray<OrgInitiativeMetric>): string => andList(metrics.map((m) => `${m.name.trim()} (target ${m.target.trim()})`));
 
 /**
  * A derived ask's words, for a person reading cold: no handle, no
@@ -724,7 +757,7 @@ function askWords(names?: OrgAskNames) {
       case "move": return `Move ${agent(c.handle)}`;
       case "scope": return `Change what ${agent(c.handle)} looks after`;
       case "trust": return `${autonomyOn(c.trust) ? "Turn on" : "Turn off"} starting work on its own for ${agent(c.handle)}`;
-      case "initiative": case "initiative_projects": case "initiative_owner": { const s = goalChangeSentence(c, names); return s.charAt(0).toUpperCase() + s.slice(1); }
+      case "initiative": case "initiative_projects": case "initiative_owner": case "initiative_shape": { const s = goalChangeSentence(c, names); return s.charAt(0).toUpperCase() + s.slice(1); }
       default: return describeOrgChange(c);
     }
   };
@@ -744,9 +777,10 @@ function askWords(names?: OrgAskNames) {
         const parts = [c.add?.length ? `takes on ${things(c.add)}` : "", c.remove?.length ? `hands off ${things(c.remove)}` : ""].filter(Boolean);
         return `${agent(c.handle)} ${andList(parts)}.`;
       }
-      case "initiative": return `A new goal, ${c.title.trim()}, appears on the initiatives page with ${projects(c.projects)} under it${c.owner ? ` and ${parent(c.owner)} as its owner` : " and no owner yet"}. ${c.description.trim()}`;
+      case "initiative": return `A new goal, ${c.title.trim()}, appears on the initiatives page with ${projects(c.projects)} under it${c.owner ? ` and ${parent(c.owner)} as its owner` : " and no owner yet"}${c.parent ? `, feeding ${names?.initiative?.(c.parent) ?? c.parent}` : ""}${c.metrics?.length ? `. It is read against ${metricsWords(c.metrics)}` : ""}. ${c.description.trim()}`;
       case "initiative_projects": return `${projects(c.projects)} ${c.projects.length === 1 ? "counts" : "count"} toward the goal from now on, and its owner's area grows to include ${c.projects.length === 1 ? "it" : "them"}.`;
       case "initiative_owner": return `${parent(c.owner)} drives the goal from now on: its health is what ${c.owner.trim().toLowerCase() === "me" ? "you say" : "they say"}, and the goal's projects join their area.`;
+      case "initiative_shape": return `${c.parent !== undefined ? (c.parent ? `The goal feeds ${names?.initiative?.(c.parent) ?? c.parent} from now on, and every role under it sees that chain. ` : "The goal stands on its own at the top level. ") : ""}${c.metrics !== undefined ? (c.metrics.length ? `On track means against ${metricsWords(c.metrics)}; its owner reports the numbers.` : "It is no longer read against a number.") : ""}`.trim();
       default: return describeOrgChange(c);
     }
   };
@@ -896,6 +930,7 @@ export function orgChangeKey(c: OrgChange): string | null {
     case "initiative": return `initiative:${c.title.trim().toLowerCase()}`;
     case "initiative_projects": return `initiative_projects:${c.initiative.trim().toLowerCase()}`;
     case "initiative_owner": return `initiative_owner:${c.initiative.trim().toLowerCase()}`;
+    case "initiative_shape": return `initiative_shape:${c.initiative.trim().toLowerCase()}`;
     default: return null;
   }
 }
@@ -1141,9 +1176,10 @@ export function describeOrgChange(c: OrgChange): string {
     case "plan_status": return `mark plan ${c.plan} ${c.status}`;
     case "task_status": return `mark task ${c.task} ${c.status}`;
     case "project_status": return `mark project ${c.project} ${c.status}`;
-    case "initiative": return `create initiative ${c.title} over ${list(c.projects)}${c.owner ? ` owned by ${c.owner}` : ""}`;
+    case "initiative": return `create initiative ${c.title} over ${list(c.projects)}${c.owner ? ` owned by ${c.owner}` : ""}${c.parent ? ` under ${c.parent}` : ""}${c.metrics?.length ? ` measured by ${metricsWords(c.metrics)}` : ""}`;
     case "initiative_projects": return `initiative ${c.initiative} +${list(c.projects)}`;
     case "initiative_owner": return `initiative ${c.initiative} owner ${c.owner}`;
+    case "initiative_shape": return `initiative ${c.initiative}${c.parent !== undefined ? ` under ${c.parent ?? "nothing"}` : ""}${c.metrics !== undefined ? ` metrics ${c.metrics.length ? metricsWords(c.metrics) : "none"}` : ""}`;
   }
 }
 
@@ -1209,7 +1245,7 @@ function changeSentence(c: OrgChange): string {
       const parts = recordChangeParts(c)!;
       return parts.title ? `${parts.act}: ${parts.title} (${parts.ref})` : describeOrgChange(c);
     }
-    case "initiative": case "initiative_projects": case "initiative_owner": return goalChangeSentence(c);
+    case "initiative": case "initiative_projects": case "initiative_owner": case "initiative_shape": return goalChangeSentence(c);
     default: {
       const kind = (c as { kind?: unknown }).kind;
       return `a change this version of codecast cannot show yet${typeof kind === "string" && kind ? ` ("${kind}")` : ""}`;

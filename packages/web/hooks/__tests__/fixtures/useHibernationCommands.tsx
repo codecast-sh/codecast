@@ -5,7 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { ConvexProvider } from "convex/react";
 import { useHibernationCommands } from "../../useHibernationCommands";
 import { useEnsureDispatch } from "../../useEnsureDispatch";
-import { recordHibernationDispatchError } from "../../../lib/hibernation";
+import { recordSessionCommandDispatchError } from "../../../lib/sessionCommands";
 import { useInboxStore } from "../../../store/inboxStore";
 import { hibernate } from "../../../../convex/convex/sessionCommands";
 import { makeFakeDb } from "../../../../convex/convex/testDb";
@@ -158,7 +158,7 @@ test("a late dispatch error cannot overwrite an acknowledged daemon outcome", as
   const id = await request();
   await act(async () => {
     store().syncRecord("sessionCommands", id, { ...store().sessionCommands[id], executed_at: 123, result: "hibernated" });
-    recordHibernationDispatchError(id, new Error("Uncaught Error: late rejection"));
+    recordSessionCommandDispatchError(id, new Error("Uncaught Error: late rejection"));
   });
   expect(store().sessionCommands[id]).toMatchObject({ executed_at: 123, result: "hibernated", error: null });
 });

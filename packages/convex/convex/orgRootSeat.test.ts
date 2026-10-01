@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { CHIEF_OF_STAFF_HANDLE, performRetireRole, performStaff, staffTeamFor } from "./orgRoles";
+import { HEAD_OF_PEOPLE_HANDLE, performRetireRole, performStaff, staffTeamFor } from "./orgRoles";
 import { performSeatRootRoles, planRootSeats } from "./orgRootSeat";
 
 // One agent at the root (docs/architecture/org-staffing.md S22): the run seats
@@ -95,7 +95,7 @@ describe("orgRootSeat", () => {
 
     const roles = tables.org_roles;
     expect(roles).toHaveLength(2);
-    for (const role of roles) expect(role.handle).toBe(CHIEF_OF_STAFF_HANDLE);
+    for (const role of roles) expect(role.handle).toBe(HEAD_OF_PEOPLE_HANDLE);
     const teamRole = roles.find((r) => r.team_id === TEAM)!;
     const personalRole = roles.find((r) => !r.team_id)!;
     expect(teamRole.reports_to).toEqual({ kind: "user", user_id: ME });
@@ -107,7 +107,7 @@ describe("orgRootSeat", () => {
     expect(String(tables.anchors.find((a) => a._id === "anchor-p")!.org_role_id)).toBe(String(personalRole._id));
     const convT = tables.conversations.find((c) => c._id === "conv-t")!;
     expect(String(convT.standing_role_id)).toBe(String(teamRole._id));
-    expect(convT.title).toBe("Chief of Staff");
+    expect(convT.title).toBe("Head of People");
     expect(convT.seat_previous).toEqual({ title: "Anchor", title_is_custom: true });
     expect(tables.users.find((u) => u._id === BOT_T)?.bot_kind).toBe("role");
     // The seating note and the briefing land in the thread; the review is armed on it.
@@ -122,7 +122,7 @@ describe("orgRootSeat", () => {
     expect(again.rows.filter((r) => r.action === "seat")).toEqual([]);
     expect(again.rows.map((r) => r.action)).toEqual(["seated", "seated", "no_session"]);
     expect(tables.org_roles).toHaveLength(2);
-    // Each Chief of Staff seat carries its routine, its needs-input trigger and
+    // Each Head of People seat carries its routine, its needs-input trigger and
     // its area watch (S25, S28, S29), once: three per seat, and the second run mints none.
     for (const conv of ["conv-t", "conv-p"]) expect(tables.agent_tasks.filter((t) => t.originating_conversation_id === conv)).toHaveLength(3);
     expect(tables.agent_tasks).toHaveLength(6);
@@ -131,7 +131,7 @@ describe("orgRootSeat", () => {
 
   test("a workspace whose root role already stands in another session is left for a person", async () => {
     const { ctx, tables } = world();
-    // A chief seated fresh earlier, with the old anchor still alive beside it.
+    // A Head of People seated fresh earlier, with the old anchor still alive beside it.
     tables.conversations.push({ _id: "mine", user_id: ME, session_id: "s-mine", short_id: "jxmine1", status: "active", agent_type: "claude_code", updated_at: NOW, message_count: 4, team_id: TEAM, project_path: "/repo" });
     await performStaff(ctx, ME as any, { team_id: TEAM, adopt_conversation_id: "jxmine1" });
     const plan = await planRootSeats(ctx);
@@ -169,7 +169,7 @@ describe("orgRootSeat", () => {
     const plan = await planRootSeats(ctx);
     const acme = plan.find((r) => r.anchor_id === "anchor-t")!;
     expect(acme.action).toBe("retired_root");
-    expect(acme.retired_root).toEqual({ short_id: first.short_id, handle: CHIEF_OF_STAFF_HANDLE });
+    expect(acme.retired_root).toEqual({ short_id: first.short_id, handle: HEAD_OF_PEOPLE_HANDLE });
     const out = await performSeatRootRoles(ctx, false);
     expect(out.seated).toBe(2);
     const live = tables.org_roles.filter((r) => r.team_id === TEAM && r.status !== "retired");

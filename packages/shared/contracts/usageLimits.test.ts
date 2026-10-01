@@ -11,6 +11,9 @@ import {
   recoveryModeOf,
   RESUME_BURST_SPACING_MS,
   pendingProposal,
+  peggedWindow,
+  peggedWindowLabel,
+  planTypeLabel,
   type CcUsage,
 } from "./usageLimits";
 
@@ -19,6 +22,18 @@ const now = 1_000_000_000_000;
 function usage(partial: Partial<CcUsage> & { session?: CcUsage["session"]; weekly?: CcUsage["weekly"] }): CcUsage {
   return { fetched_at: now - 60_000, ...partial };
 }
+
+describe("peggedWindow — the used-up window that keeps an account shut longest", () => {
+  test("names the latest reset among the pegged windows, scoped ones too, by the meters' label", () => {
+    const u = usage({ session: { percent: 100, resets_at: now + 3_600_000 }, weekly: { percent: 40, resets_at: now + 86_400_000 }, scoped: [{ label: "Fable", percent: 100, resets_at: now + 2 * 86_400_000 }] });
+    expect(peggedWindow(u, now)).toEqual({ label: "Fable", resets_at: now + 2 * 86_400_000 });
+    expect(peggedWindowLabel(u, now)).toBe("Fable");
+  });
+  test("a window whose reset has passed has rolled, and none pegged is undefined", () => {
+    expect(peggedWindow(usage({ weekly: { percent: 100, resets_at: now - 1 } }), now)).toBeUndefined();
+    expect(peggedWindow(usage({ weekly: { percent: 100 } }), now)).toEqual({ label: "Week (7d)" });
+  });
+});
 
 describe("switchUsagePercent", () => {
   test("matches worstUsagePercent on a fresh snapshot with future resets", () => {
@@ -296,5 +311,13 @@ describe("fallbackProfiles with minted tokens", () => {
       { name: "lapsed", email: "l@x.com", usage: room, login_expired_at: 5, setup_token: { expires_at: now } },
     ];
     expect(fallbackProfiles(profiles, "a@x.com", now).map((p) => p.name)).toEqual(["minted"]);
+  });
+});
+
+describe("planTypeLabel", () => {
+  test("ChatGPT's plan types by their own names, any other capitalized", () => {
+    expect(planTypeLabel("prolite")).toBe("Pro Lite");
+    expect(planTypeLabel("pro")).toBe("Pro");
+    expect(planTypeLabel("max")).toBe("Max");
   });
 });

@@ -1,0 +1,124 @@
+/* The line page (the-line-end-to-end.md LE13). Theme tokens only. */
+
+.line-floor {
+  background-color: var(--sol-bg);
+  background-image:
+    radial-gradient(color-mix(in srgb, var(--sol-border) 30%, transparent) 1px, transparent 1.2px),
+    linear-gradient(180deg, color-mix(in srgb, var(--sol-bg-alt) 70%, transparent), transparent 220px);
+  background-size: 18px 18px, 100% 100%;
+  background-position: 9px 9px, 0 0;
+}
+
+.line-num {
+  font-family: var(--font-serif), serif;
+  font-variant-numeric: lining-nums tabular-nums;
+  font-optical-sizing: auto;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+
+/* Throughput: one ruled strip, cells divided by hairlines. */
+.line-meter {
+  border: 1px solid color-mix(in srgb, var(--sol-border) 55%, transparent);
+  background: color-mix(in srgb, var(--sol-card) 82%, transparent);
+  backdrop-filter: blur(2px);
+}
+.line-meter > * + * { border-left: 1px solid color-mix(in srgb, var(--sol-border) 35%, transparent); }
+
+/* A station. --stage is its accent. */
+.line-col {
+  --stage: var(--sol-blue);
+  background: color-mix(in srgb, var(--sol-card) 88%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--sol-border) 20%, transparent), 0 14px 32px -24px color-mix(in srgb, var(--sol-text) 40%, transparent);
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+  animation: line-rise 520ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation-delay: calc(var(--i, 0) * 60ms);
+}
+.line-col::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  border-radius: 10px 10px 0 0;
+  background: linear-gradient(90deg, var(--stage), color-mix(in srgb, var(--stage) 25%, transparent));
+}
+.line-col[data-focused="true"] {
+  border-color: color-mix(in srgb, var(--stage) 65%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--stage) 16%, transparent), 0 18px 40px -26px color-mix(in srgb, var(--stage) 70%, transparent);
+}
+.line-col[data-state="starved"] .line-col-count { opacity: 0.45; }
+
+@keyframes line-rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* The rail between stations: dashes that move when the next one runs. */
+.line-rail {
+  height: 2px;
+  background-image: linear-gradient(90deg, color-mix(in srgb, var(--stage) 70%, transparent) 50%, transparent 50%);
+  background-size: 8px 2px;
+  opacity: 0.35;
+}
+.line-rail[data-live="true"] {
+  opacity: 0.9;
+  animation: line-belt 900ms linear infinite;
+}
+@keyframes line-belt {
+  from { background-position: 0 0; }
+  to { background-position: 8px 0; }
+}
+
+/* Stage lamps. */
+.line-lamp { position: relative; width: 8px; height: 8px; border-radius: 9999px; flex-shrink: 0; }
+.line-lamp[data-kind="running"] { background: var(--sol-green); }
+.line-lamp[data-kind="running"]::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 9999px;
+  border: 1px solid var(--sol-green);
+  animation: line-ping 2.4s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+.line-lamp[data-kind="paused"] {
+  background: linear-gradient(90deg, var(--sol-yellow) 0 35%, transparent 35% 65%, var(--sol-yellow) 65%);
+  border-radius: 1px;
+}
+.line-lamp[data-kind="starved"] { border: 1.5px solid color-mix(in srgb, var(--sol-text-dim) 70%, transparent); }
+.line-lamp[data-kind="failing"] { background: var(--sol-red); animation: line-blink 1.2s steps(2, jump-none) infinite; }
+@keyframes line-ping {
+  0% { transform: scale(0.6); opacity: 0.9; }
+  80%, 100% { transform: scale(1.6); opacity: 0; }
+}
+@keyframes line-blink { 50% { opacity: 0.35; } }
+
+/* Rows inside a station. */
+.line-row {
+  border: 1px solid transparent;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+.line-row:hover { background: color-mix(in srgb, var(--stage) 6%, transparent); }
+.line-row[data-focused="true"] {
+  background: color-mix(in srgb, var(--stage) 10%, transparent);
+  border-color: color-mix(in srgb, var(--stage) 45%, transparent);
+}
+
+.line-spark rect { fill: color-mix(in srgb, var(--stage) 55%, transparent); }
+.line-spark rect[data-hot="true"] { fill: var(--stage); }
+
+.line-bar { background: color-mix(in srgb, var(--sol-border) 30%, transparent); }
+.line-bar > span { background: linear-gradient(90deg, color-mix(in srgb, var(--stage) 55%, transparent), var(--stage)); }
+
+.line-cmd {
+  font-family: var(--font-mono), monospace;
+  background: color-mix(in srgb, var(--sol-bg-alt) 80%, transparent);
+  border: 1px dashed color-mix(in srgb, var(--sol-border) 60%, transparent);
+}
+
+/* The awaiting column hosts the decision cards; tighten their padding. */
+.line-col .decision-card { background: var(--sol-card); }
+
+@media (prefers-reduced-motion: reduce) {
+  .line-col, .line-rail[data-live="true"], .line-lamp::after, .line-lamp[data-kind="failing"] { animation: none !important; }
+}

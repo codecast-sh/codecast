@@ -1,6 +1,8 @@
 /**
  * Loopback routes for the driven browser: POST /browser/focus?tab=<id> raises
- * a tab (or ?session_uuid=… raises the tab that session drives), POST /browser/reopen brings a closed one back (reopenTab.ts).
+ * a tab (or ?session_uuid=… raises the tab that session drives), POST /browser/probe
+ * asks the same question without raising anything, POST /browser/reopen brings a
+ * closed one back (reopenTab.ts).
  *
  * Mounted on the daemon's hook server next to the terminal and vault routes,
  * behind the same envelope of an allowed origin and the daemon's persisted
@@ -258,19 +260,24 @@ export function focusBrowserTabBlocking(query: string): Promise<FocusResult> {
 
 /**
  * Ask every engine for its tabs at once; the first engine to REPORT the tab
- * wins, and the others are not waited for. A CDP target id is unique across
- * browsers, so whichever engine finds it has found the tab, and order only
- * matters for the failure report. Listing is where the time goes — a `ps`
- * pass over 1,500 processes (8s on a loaded machine), a bridge proof, a
- * `/json/list` from a busy Chrome — and a tab in the human's Chrome sits
- * behind the last engine: asked in sequence, or waited for together, the
- * route outlived the web's patience and the click did nothing.
+ * (and, when `activate` is given, to activate it) wins, and the others are not
+ * waited for. A CDP target id is unique across browsers, so whichever engine
+ * finds it has found the tab, and order only matters for the failure report.
+ * Listing is where the time goes — a `ps` pass over 1,500 processes (8s on a
+ * loaded machine), a bridge proof, a `/json/list` from a busy Chrome — and a
+ * tab in the human's Chrome sits behind the last engine: asked in sequence,
+ * or waited for together, the route outlived the web's patience and the click
+ * did nothing.
  *
  * When no engine has it, the reported failure is the most hopeful one seen:
  * a stopped engine beside a running one that merely lacks the tab reads as
  * "tab-not-found", not "browser-stopped".
  */
-export async function focusBrowserTab(query: string, deps: FocusDeps = defaultDeps()): Promise<FocusResult> {
+async function findTab(
+  query: string,
+  engines: FocusEngine[],
+  activate?: (engine: FocusEngine, tab: FocusTab) => Promise<void>,
+): Promise<{ tab: FocusTab } | { reason: FocusFailure }> {
   let reason: FocusFailure = "browser-stopped";
   const rank: Record<FocusFailure, number> = { "browser-stopped": 0, "browser-unreachable": 1, "tab-not-found": 2 };
   const worse = (r: FocusFailure) => {
@@ -283,8 +290,8 @@ export async function focusBrowserTab(query: string, deps: FocusDeps = defaultDe
   type Listed = { engine: FocusEngine; tabs: FocusTab[] | null };
   const queue: Listed[] = [];
   let wake: (() => void) | null = null;
-  let pending = deps.engines.length;
-  for (const engine of deps.engines) {
+  let pending = engines.length;
+  for (const engine of engines) {
     engine.listTabs().then(
       (tabs) => queue.push({ engine, tabs }),
       () => queue.push({ engine, tabs: null }),
@@ -314,19 +321,35 @@ export async function focusBrowserTab(query: string, deps: FocusDeps = defaultDe
       worse("tab-not-found");
       continue;
     }
-
+    if (!activate) return { tab };
     try {
-      await engine.activate(tab);
+      await activate(engine, tab);
     } catch {
       worse("browser-unreachable");
       continue;
     }
-    // This raise is asked for — tell the sentinel not to bounce it.
-    noteDeliberateRaise();
-    if (tab.pid) deps.raiseApp(tab.pid, deps.log);
-    return { ok: true, ...(tab.pid ? { pid: tab.pid } : {}) };
+    return { tab };
   }
-  return { ok: false, reason };
+  return { reason };
+}
+
+export async function focusBrowserTab(query: string, deps: FocusDeps = defaultDeps()): Promise<FocusResult> {
+  const found = await findTab(query, deps.engines, (engine, tab) => engine.activate(tab));
+  if ("reason" in found) return { ok: false, reason: found.reason };
+  const { tab } = found;
+  // This raise is asked for — tell the sentinel not to bounce it.
+  noteDeliberateRaise();
+  if (tab.pid) deps.raiseApp(tab.pid, deps.log);
+  return { ok: true, ...(tab.pid ? { pid: tab.pid } : {}) };
+}
+
+/**
+ * Whether the tab still exists, touching nothing: the web asks on hover so a
+ * pill whose tab an agent closed reads as gone before the transcript says so.
+ */
+export async function probeBrowserTab(query: string, deps: Pick<FocusDeps, "engines"> = defaultDeps()): Promise<FocusResult> {
+  const found = await findTab(query, deps.engines);
+  return "reason" in found ? { ok: false, reason: found.reason } : { ok: true };
 }
 
 /**
@@ -337,12 +360,13 @@ export async function focusBrowserTab(query: string, deps: FocusDeps = defaultDe
 export async function focusRequestedTab(
   params: URLSearchParams,
   deps: FocusDeps,
+  act: (tab: string, deps: FocusDeps) => Promise<FocusResult> = focusBrowserTab,
 ): Promise<{ tab: string; result: FocusResult }> {
   const tab =
     params.get("tab") ||
     (deps.resolveSessionTab?.(await ownerOf({ session_uuid: params.get("session_uuid"), tmux_session: params.get("tmux_session") })) ?? "");
   if (!tab) return { tab, result: { ok: false, reason: "tab-not-found" } };
-  return { tab, result: await focusBrowserTab(tab, deps) };
+  return { tab, result: await act(tab, deps) };
 }
 
 /**
@@ -378,6 +402,17 @@ export function handleBrowserFocusHttp(
       // invisible from every side (the web stays quiet by design).
       const label = tab || "for the session";
       opts.log(result.ok ? `[BROWSER] Focused tab ${label}` : `[BROWSER] Could not focus tab ${label}: ${result.reason}`);
+      res.writeHead(result.ok ? 200 : 404, headers);
+      res.end(JSON.stringify(result));
+    });
+    return true;
+  }
+
+  // Same request shape as focus; answers whether the tab is there and
+  // raises nothing. Not logged: the web asks on every hover.
+  if (req.method === "POST" && url.startsWith("/browser/probe")) {
+    const params = new URL(url, "http://localhost").searchParams;
+    void focusRequestedTab(params, deps, probeBrowserTab).then(({ result }) => {
       res.writeHead(result.ok ? 200 : 404, headers);
       res.end(JSON.stringify(result));
     });
