@@ -234,6 +234,12 @@ describe("finding the agent inside its pane", () => {
     expect(resolveAgentPid([shell], 75564, "-bash", SID)).toBeNull();
   });
 
+  test("the agent's own children (MCP servers, tool shells) are the agent's", () => {
+    const mcp = row(80100, 75706, "node /Users/ashot/.npm/mcp-server/index.js");
+    const tool = row(80101, 80100, "/bin/bash -c sleep 30");
+    expect(resolveAgentPid([shell, agent, mcp, tool], 75564, "-bash", SID)).toBe(75706);
+  });
+
   test("another session's agent in the pane is never adopted", () => {
     const other = row(75706, 75564, "/Users/ashot/.codecast/bin/claude --session-id 11111111-2222-3333-4444-555555555555");
     expect(resolveAgentPid([shell, other], 75564, "-bash", SID)).toBeNull();

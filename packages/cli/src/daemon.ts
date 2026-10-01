@@ -21515,7 +21515,11 @@ export function resolveAgentPid(
   sessionId: string,
 ): number | null {
   if (argvSessionId(paneCommand) === sessionId) return panePid;
-  const under = descendantRows(procs, panePid);
+  // The shell's own children, not its whole tree: the agent's MCP servers and
+  // tool shells are the agent's, and counting them refused every pane whose
+  // agent had started one (2026-10-01: all six legacy panes the fleet
+  // migration picked, and the hibernation pass's argv-session-mismatch skips).
+  const under = descendantRows(procs, panePid).filter((p) => p.ppid === panePid);
   if (under.length !== 1) return null;
   return argvSessionId(under[0].command) === sessionId ? under[0].pid : null;
 }
@@ -22041,13 +22045,17 @@ async function migrateLegacyPanesToFleet(io: HibernationPassIo = productionHiber
   const known = new Set(candidates.map((c) => c.tmux));
   for (const id of legacy) if (!known.has(id)) skips.push("no-candidate");
   // "Idle" here is the prompt cache's question: when did the session last
-  // write a turn. The transcript's mtime answers it; a quiet CPU does not.
+  // write a real message. The reaper's clock answers it (transcriptIdleMs);
+  // a quiet CPU does not, and neither does an mtime something else touched.
   const turnAgo = new Map<string, number>();
   for (const c of candidates) {
     if (!legacy.has(c.tmux)) continue;
     const file = findSessionJsonlPath(c.sessionId);
-    const mtime = file ? await fs.promises.stat(file).then((st) => st.mtimeMs, () => undefined) : undefined;
-    if (mtime !== undefined) turnAgo.set(c.sessionId, now - mtime);
+    if (!file) continue;
+    const mtimeMs = await fs.promises.stat(file).then((st) => st.mtimeMs, () => undefined);
+    if (mtimeMs === undefined) continue;
+    const tail = await readFileTailAsync(file).catch(() => "");
+    turnAgo.set(c.sessionId, transcriptIdleMs({ mtimeMs, lastRealTimestampMs: transcriptTailLastRealTimestamp(tail), now }));
   }
   const eligible = candidates.filter((c) => {
     if (!legacy.has(c.tmux)) return false;
@@ -22064,7 +22072,11 @@ async function migrateLegacyPanesToFleet(io: HibernationPassIo = productionHiber
   let moved = 0;
   for (const cand of picks) {
     const refusal = await attemptHibernation(cand, io);
-    if (refusal) { hibernationRefusedAt.set(cand.sessionId, now); continue; }
+    if (refusal) {
+      hibernationRefusedAt.set(cand.sessionId, now);
+      reaperLog(`fleet migration: ${cand.sessionId.slice(0, 8)} refused: ${refusal}`, false);
+      continue;
+    }
     const resumed = await autoResumeSession(cand.sessionId, "", readTitleCache(), undefined, cand.conversationId, "claude");
     if (resumed) moved++;
     reaperLog(`fleet migration: ${cand.sessionId.slice(0, 8)} ${resumed ? "restarted onto the fleet store" : "parked; it resumes on the store at its next message"}`, false);
