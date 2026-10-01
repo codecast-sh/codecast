@@ -2,18 +2,33 @@ import { describe, expect, test } from "bun:test";
 import { checkRatchet } from "./index";
 import { join } from "node:path";
 
-// MAX LINES BASELINE.
+// MAX LINES BASELINE. The one file size ratchet for every package.
 //
 // A file nobody can hold in their head is where the expensive bugs live:
 // daemon.ts is 25k lines and index.ts 18k, and every guard test in this repo
 // exists because something got lost inside one of them. Splitting them is its
 // own work. What this stops is the tree getting worse while that work waits.
 //
-// The cap is 800 lines. A file that is over it today is listed with a pinned
-// size in 100-line steps, so a listed file may keep being edited but may not
-// grow another step; a file NOT on the list may not cross 800 at all. The
-// steps exist because a dozen sessions edit these files in parallel and an
-// exact pin would fail whichever branch merged second.
+// The cap is 800 lines in every package, tests included. A file that is over
+// it today is listed with a pinned size in 50-line steps, so a listed file may
+// keep being edited but may not grow past its step; a file NOT on the list may
+// not cross 800 at all. The steps exist because a dozen sessions edit these
+// files in parallel and an exact pin would fail whichever branch merged second.
+// A listed file that comes down by more than a tenth must be pruned, so a split
+// keeps the ground it took instead of leaving room to grow back. A tenth is the
+// rule the web ratchet had; smaller shrinks are left alone because every prune
+// is an edit to this shared list, and a session that trims a few dozen lines
+// from a 3000-line file should not have to make one.
+//
+// Pins are measured on committed content plus the change that lands them, never
+// on a working tree that holds other sessions' unfinished edits: a pin taken
+// from someone's uncommitted growth hands them room they never earned, and one
+// taken from their uncommitted split turns CI red if this list lands first.
+//
+// The web package once had a ratchet of its own at 1500 lines. This one holds
+// every web file to the lower cap, and each pin it carried over is at or under
+// the allowance web had, which is why the step is 50: web's allowances were
+// all multiples of 50, and a 100-line step would have loosened three of them.
 //
 // The only sanctioned edit is downward. Split the file; then prune.
 
@@ -21,10 +36,10 @@ const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 const ALLOWLIST = join(import.meta.dir, "max-lines-baseline.txt");
 
 const CAP = 800;
-const STEP = 100;
+const STEP = 50;
 
 /** The pinned size of an oversized file: its line count rounded up to the
- *  next 100. Zero for a file within the cap, which is not an offender. */
+ *  next step. Zero for a file within the cap, which is not an offender. */
 function pinnedSize(source: string): number {
   // Trailing newline dropped first, so this agrees with `wc -l`.
   const lines = source === "" ? 0 : source.replace(/\n$/, "").split("\n").length;
@@ -32,7 +47,7 @@ function pinnedSize(source: string): number {
 }
 
 /** How many files are over the cap today. May only fall. */
-const PIN = 128;
+const PIN = 200;
 
 const result = checkRatchet({
   name: "max lines",
@@ -44,13 +59,14 @@ const result = checkRatchet({
   count: pinnedSize,
   allowlist: ALLOWLIST,
   pin: PIN,
-  fix: `Split it. A file over ${CAP} lines is not allowed to be new, and a listed one may not grow another ${STEP} lines.`,
+  fix: `Split it. A file over ${CAP} lines is not allowed to be new, and a listed one may not grow past its ${STEP}-line step.`,
   pruneCommand: "cd packages/shared && RATCHET_WRITE=prune bun test ratchet/maxLines.ratchet.test.ts",
   minScanned: 1500,
+  shrinkFloor: 0.9,
 });
 
 describe("max lines ratchet", () => {
-  test("no new oversized file, and no listed file grew past its pin", () => {
+  test("no new oversized file, no listed file grew past its pin, and no shrink left unpruned", () => {
     expect(result.problems).toEqual([]);
   }, 120_000);
 });

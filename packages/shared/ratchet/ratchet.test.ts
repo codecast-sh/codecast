@@ -97,6 +97,17 @@ describe("shrink-only ratchet", () => {
     expect(written.get("src/a.ts")).toEqual({ value: 1, note: "a reason worth keeping" });
   });
 
+  test("with a shrink floor, a listed file that came down below it must be pruned", () => {
+    const root = fixture({ "a.ts": "banned();\n" });
+    writeFileSync(join(root, "allowlist.txt"), "src/a.ts 3\n");
+    const spec = specFor(root, 1);
+    expect(checkRatchet(spec).problems).toEqual([]); // no floor: a pin only caps growth
+    expect(checkRatchet({ ...spec, shrinkFloor: 0.3 }).problems).toEqual([]); // 1 is not below 0.9
+    const problems = checkRatchet({ ...spec, shrinkFloor: 0.5 }).problems; // 1 is below 1.5
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("src/a.ts came down from 3 to 1");
+  });
+
   test("comments never count as offences", () => {
     const root = fixture({ "a.ts": "// never call banned(\n/* banned( */\nallowed();\n" });
     writeFileSync(join(root, "allowlist.txt"), "");

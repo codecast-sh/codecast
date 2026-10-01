@@ -51,6 +51,11 @@ export type RatchetSpec = {
   pruneCommand: string;
   /** A scan that walks the wrong tree matches nothing and passes forever. */
   minScanned: number;
+  /** When set, a listed file whose number fell below this fraction of its pin
+   *  (0.9 means it came down by more than a tenth) fails until the allowlist is
+   *  pruned, so a file that was split cannot quietly grow back to its old size.
+   *  Unset, a pin only caps growth. */
+  shrinkFloor?: number;
 };
 
 export type RatchetOffender = { key: string; value: number };
@@ -227,6 +232,14 @@ export function checkRatchet(spec: RatchetSpec): RatchetResult {
     if (allowance.value !== undefined && value > allowance.value) {
       problems.push(
         `${spec.name}: ${key} went from ${allowance.value} to ${value}. A listed file may not grow. ${spec.fix}`,
+      );
+    } else if (
+      spec.shrinkFloor !== undefined &&
+      allowance.value !== undefined &&
+      value < allowance.value * spec.shrinkFloor
+    ) {
+      problems.push(
+        `${spec.name}: ${key} came down from ${allowance.value} to ${value}. Lower its line in ${listName} so the ground stays taken. (${spec.pruneCommand})`,
       );
     }
   }
