@@ -11,6 +11,7 @@
 // on a transient 500 would read as headroom.
 
 import { CloudApiError } from "./cloudAgents/http.js";
+import { doublingDelay } from "./cloudAgents/poll.js";
 
 const BACKOFF_BASE_MS = 30_000;
 const BACKOFF_MAX_MS = 15 * 60 * 1000;
@@ -29,7 +30,7 @@ export function nextUsageRetry(prev: UsageRetryState | undefined, err: unknown, 
   const failures = (prev?.failures ?? 0) + 1;
   const http = err instanceof CloudApiError ? err : undefined;
   const named = http?.retryAfterMs;
-  const backoff = Math.min(BACKOFF_BASE_MS * 2 ** (failures - 1), BACKOFF_MAX_MS);
+  const backoff = doublingDelay(BACKOFF_BASE_MS, BACKOFF_MAX_MS, failures - 1);
   return {
     retry_at: now + (named ?? backoff),
     failures,

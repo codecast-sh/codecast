@@ -125,22 +125,36 @@ const WORKER_TONE: Record<string, string> = {
   stopped: "text-sol-red",
 };
 
+/** One worker's report: who, what it settled on and its pinned line, on one
+ *  quiet row that opens in place to the whole line. */
+function WorkerReportRow({ worker: w, timestamp, first }: { worker: WaitingSession; timestamp: number; first: boolean }) {
+  const [open, setOpen] = useState(false);
+  const toggle = () => w.state && setOpen(!open);
+  return (
+    <div data-waiting-session={w.short_id} data-open={open || undefined}>
+      <div role="button" tabIndex={w.state ? 0 : -1} onClick={toggle} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } }}
+        className={`flex min-w-0 items-center gap-1.5 px-2.5 py-1 ${w.state ? "cursor-pointer hover:bg-sol-cyan/5" : ""}`} title={w.state ? (open ? "Hide the report" : "Show the report") : undefined}>
+        <CornerDownLeft className={`w-3 h-3 shrink-0 text-sol-cyan/60 ${first ? "" : "invisible"}`} />
+        <span className="shrink-0" onClick={(e) => e.stopPropagation()}><EntityIdPill shortId={w.short_id} compact /></span>
+        <span className={`shrink-0 ${WORKER_TONE[w.why] ?? "text-sol-text-dim"}`}>{WORKER_SETTLE_WORDS[w.why] ?? w.why.replace(/_/g, " ")}</span>
+        {!open && w.state && <span className="min-w-0 flex-1 truncate text-sol-text-dim">{w.state}</span>}
+        <span className="ml-auto shrink-0 text-[10px] text-sol-text-dim" title={formatFullTimestamp(timestamp)}>{first ? formatRelativeTime(timestamp) : null}</span>
+        {w.state && (open ? <ChevronDown className="w-3 h-3 shrink-0 text-sol-text-dim" /> : <ChevronRight className="w-3 h-3 shrink-0 text-sol-text-dim" />)}
+      </div>
+      {open && <p className="pb-1.5 pl-[30px] pr-2.5 text-sol-text-muted break-words" data-worker-state>{w.state}</p>}
+    </div>
+  );
+}
+
 /** Spawned workers reporting back to the session they nest under
- *  (workerSettle.ts): one live row per worker, what it settled on, and the
- *  line it pinned. The frame's body is the ask to the agent, not shown. */
+ *  (workerSettle.ts): one row per worker, what it settled on, and the line it
+ *  pinned, kept small so it never reads as a message. The frame's body is the
+ *  ask to the agent, not shown. */
 function WorkerReportBlock({ frame, timestamp }: { frame: ScheduledTaskFrame; timestamp: number }) {
   const workers = frame.workers!;
   return (
-    <div className="mb-3 rounded border-l-2 border-sol-cyan/60 bg-sol-cyan/5 pb-0.5" data-worker-report={workers.length}>
-      <div className="flex items-center gap-2 px-3 pt-2 pb-1.5">
-        <CornerDownLeft className="w-3.5 h-3.5 text-sol-cyan/70 shrink-0" />
-        <span className="text-[11px] font-medium tracking-wide uppercase text-sol-cyan/70 shrink-0">{workers.length === 1 ? "Worker report" : `${workers.length} worker reports`}</span>
-        <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
-      </div>
-      {workers.map((w) => (
-        <WaitingSessionLine key={w.short_id} waiting={{ ...w, since: 0 }} firedAt={timestamp}
-          words={WORKER_SETTLE_WORDS[w.why] ?? w.why.replace(/_/g, " ")} wordsClass={WORKER_TONE[w.why] ?? "text-sol-text-muted"} />
-      ))}
+    <div className="mb-2 rounded-sm border-l-2 border-sol-cyan/40 bg-sol-cyan/[0.03] py-0.5 text-[12px]" data-worker-report={workers.length}>
+      {workers.map((w, i) => <WorkerReportRow key={w.short_id} worker={w} timestamp={timestamp} first={i === 0} />)}
     </div>
   );
 }

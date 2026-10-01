@@ -3408,7 +3408,7 @@ function SessionListPanelImpl({
   };
 
   return (
-    <div data-sv-rail className="h-full w-full flex flex-col bg-sol-bg-alt overflow-hidden">
+    <div data-sv-rail data-selecting={selectedIdsRaw.length > 0 ? "true" : undefined} className="h-full w-full flex flex-col bg-sol-bg-alt overflow-hidden">
       {selectedSessions.length > 0 && (
         <InboxSelectionBar
           sessions={selectedSessions}

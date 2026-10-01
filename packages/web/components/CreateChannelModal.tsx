@@ -6,6 +6,8 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Hash, Lock } from "lucide-react";
 import { MemberPicker } from "./chat/ChannelPeople";
+import { Switch } from "./ui/switch";
+import { CreateDialog, CreateDialogSubtitle, CreateDialogTitle } from "./CreateDialog";
 import { useInboxStore } from "../store/inboxStore";
 import { useWorkspaceArgs } from "../hooks/useWorkspaceArgs";
 import { inActiveWorkspace } from "../lib/workspaceScope";
@@ -85,108 +87,77 @@ export function CreateChannelModal({
     );
   }
 
+  const hint = !teamId ? (
+    <span className="text-sol-orange">Switch to a team first: channels live in team workspaces</span>
+  ) : taken ? (
+    <span className="text-sol-red">#{slug} already exists</span>
+  ) : slug && slug !== name.trim() ? (
+    <span className="text-sol-text-dim">
+      Will be created as <span className="text-sol-text-muted">#{slug}</span>
+    </span>
+  ) : null;
+
   return (
-    <div
-      className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[10001] flex items-start justify-center pt-[12vh] animate-in fade-in duration-150"
-      onClick={onClose}
+    <CreateDialog
+      icon={isPrivate
+        ? <Lock className="h-3 w-3 text-sol-yellow" />
+        : <Hash className="h-3 w-3 text-sol-cyan" />}
+      noun={isPrivate ? "private channel" : "channel"}
+      onClose={onClose}
+      onSubmit={submit}
+      canSubmit={valid}
+      submitLabel="Create channel"
+      submitOnEnter
+      footerStart={slack?.data?.installation && (
+        <button
+          type="button"
+          onClick={() => setSlackOpen(true)}
+          className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-xs text-sol-text-muted transition-colors hover:bg-sol-bg-alt hover:text-sol-text"
+          title="Pick channels in the connected Slack workspace; each becomes a mirrored channel here"
+        >
+          <SlackLogo className="h-3 w-3" /> Add from Slack
+        </button>
+      )}
     >
-      <div
-        className="bg-sol-bg border border-sol-border rounded-2xl shadow-2xl w-full max-w-[480px] animate-in slide-in-from-bottom-4 fade-in duration-200"
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") onClose();
-          if (e.key === "Enter") {
-            e.preventDefault();
-            submit();
-          }
-        }}
-      >
-        <div className="px-6 pt-6 pb-2 flex items-center gap-2">
-          {isPrivate
-            ? <Lock className="w-4 h-4 text-sol-yellow shrink-0" />
-            : <Hash className="w-4 h-4 text-sol-text-dim shrink-0" />}
-          <input
+      <div className="px-5 pb-4 pt-3">
+        <div className="flex items-center gap-1.5">
+          <span className="select-none text-xl font-semibold text-sol-text-dim/70">#</span>
+          <CreateDialogTitle
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="Channel name"
-            autoFocus
-            className="w-full text-xl font-semibold text-sol-text placeholder:text-sol-text-dim/40 bg-transparent outline-none"
+            placeholder="channel-name"
           />
         </div>
-
-        <div className="px-6 pb-2">
-          <input
-            value={topic}
-            onChange={(e) => setTopic(e.target.value)}
-            placeholder="Topic (optional)"
-            className="w-full text-sm text-sol-text-muted placeholder:text-sol-text-dim/30 bg-transparent outline-none"
-          />
-        </div>
-
-        <div className="px-6 pb-4 text-xs min-h-[18px]">
-          {!teamId ? (
-            <span className="text-sol-orange">Switch to a team first — channels live in team workspaces</span>
-          ) : taken ? (
-            <span className="text-sol-red">#{slug} already exists</span>
-          ) : slug && slug !== name.trim() ? (
-            <span className="text-sol-text-muted">
-              Will be created as <span className="text-sol-text">#{slug}</span>
-            </span>
-          ) : null}
-        </div>
-
-        <div className="px-6 pb-3">
-          <label className="flex items-center gap-2.5 text-xs text-sol-text-muted cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={isPrivate}
-              onChange={(e) => setIsPrivate(e.target.checked)}
-              className="accent-[var(--sol-yellow)]"
-            />
-            <span>
-              <span className="text-sol-text font-medium">Private</span> — only invited people can
-              see it or find its messages
-            </span>
-          </label>
-          {isPrivate && (
-            <div className="mt-2">
-              <MemberPicker
-                exclude={[viewer]}
-                autoFocus={false}
-                onChange={(ids) => setMemberIds(ids)}
-              />
-            </div>
-          )}
-        </div>
-
-        <div className="px-6 py-3 border-t border-sol-border/50 flex items-center justify-end gap-2">
-          {slack?.data?.installation && (
-            <button
-              type="button"
-              onClick={() => setSlackOpen(true)}
-              className="mr-auto inline-flex items-center gap-1.5 px-1 py-1.5 text-xs text-sol-text-muted hover:text-sol-text transition-colors"
-              title="Pick channels in the connected Slack workspace; each becomes a mirrored channel here"
-            >
-              <SlackLogo className="w-3 h-3" /> Add from Slack
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-3 py-1.5 text-xs text-sol-text-muted hover:text-sol-text transition-colors"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={submit}
-            disabled={!valid}
-            className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-sol-blue/20 text-sol-blue border border-sol-blue/40 hover:bg-sol-blue/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            Create channel
-          </button>
-        </div>
+        {hint && <div className="mt-1 pl-[18px] text-xs">{hint}</div>}
+        <CreateDialogSubtitle
+          value={topic}
+          onChange={(e) => setTopic(e.target.value)}
+          placeholder="What is it about? (optional)"
+          className="mt-2"
+        />
       </div>
-    </div>
+
+      <div className="mx-5 mb-4 rounded-lg border border-sol-border/50 bg-sol-bg-alt/30">
+        <label className="flex cursor-pointer select-none items-center gap-3 px-3 py-2.5">
+          <Lock className={`h-3.5 w-3.5 shrink-0 ${isPrivate ? "text-sol-yellow" : "text-sol-text-dim"}`} />
+          <span className="min-w-0 flex-1">
+            <span className="block text-xs font-medium text-sol-text">Private</span>
+            <span className="block text-[11px] leading-snug text-sol-text-dim">
+              Only people you invite can see it or find its messages
+            </span>
+          </span>
+          <Switch checked={isPrivate} onCheckedChange={setIsPrivate} aria-label="Private channel" />
+        </label>
+        {isPrivate && (
+          <div className="border-t border-sol-border/40 px-3 py-2.5">
+            <MemberPicker
+              exclude={[viewer]}
+              autoFocus={false}
+              onChange={(ids) => setMemberIds(ids)}
+            />
+          </div>
+        )}
+      </div>
+    </CreateDialog>
   );
 }

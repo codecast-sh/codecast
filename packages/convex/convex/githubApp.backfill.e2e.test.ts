@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { getFunctionName } from "convex/server";
 import { internal } from "./_generated/api";
-import { applyInstallationRepositoriesEvent, backfillInstallationPulls, getInstallation, stampInstallationSync } from "./githubApp";
+import { applyInstallationRepositoriesEvent, backfillInstallationPulls, getInstallation, getInstallationForRepoInTeam, stampInstallationSync } from "./githubApp";
 import { listPulls } from "./githubApi";
 import { syncPRFromGitHub } from "./pull_requests";
 import { makeFakeDb } from "./testDb";
@@ -42,6 +42,7 @@ function setup() {
   }) as typeof fetch;
   const handlers: Record<string, any> = {
     "githubApp:getInstallation": getInstallation,
+    "githubApp:getInstallationForRepoInTeam": getInstallationForRepoInTeam,
     "githubApp:stampInstallationSync": stampInstallationSync,
     "githubApi:listPulls": listPulls,
     "pull_requests:syncPRFromGitHub": syncPRFromGitHub,
@@ -77,6 +78,17 @@ describe("GitHub backfill across repository access changes", () => {
       .toEqual([[kept.full_name, 7, "team"]]);
     expect((await s.row()).last_error).toBeUndefined();
     expect((await s.row()).last_sync_at).toBeGreaterThan(0);
+  });
+
+  test("a person's account installed for a team imports only the repository they share", async () => {
+    const s = setup();
+    await s.db.patch("install", { account_type: "User", installed_by_user_id: "owner" });
+    s.db._tables.directory_team_mappings = [{ _id: "rule", user_id: "owner", team_id: "team", auto_share: true,
+      path_prefix: "/code/littlebird", repository: kept.full_name }];
+    s.setVisible([removed, kept]);
+    expect(await s.run([removed.full_name, kept.full_name])).toEqual({ repositories: 1, pulls: 1 });
+    expect(s.requests.some((url) => url.pathname.includes("/ragtag/"))).toBe(false);
+    expect(s.db._tables.pull_requests.map((p: any) => p.repository)).toEqual([kept.full_name]);
   });
 
   test("an all-repository scan follows a switch to one selected repository", async () => {

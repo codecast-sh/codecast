@@ -21,10 +21,10 @@ import { Check, Hourglass, Loader2, RefreshCw, TimerReset, Zap } from "lucide-re
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { exhaustionBannerCopy, fleetAccount, isExhaustionCurrent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
-import { describeDecision, pendingProposal, fallbackProfiles, formatAgo, formatCountdown, standingLabel } from "@codecast/shared/contracts";
+import { describeDecision, pendingProposal, fallbackProfiles, formatAgo, standingLabel } from "@codecast/shared/contracts";
 import { useLimitRecovery } from "../hooks/useLimitRecovery";
 import { useInboxStore } from "../store/inboxStore";
-import { formatResetLocal, limitResetAsPrinted, limitWindowLabel, parseLimitResetAt } from "../lib/limitReset";
+import { formatResetPhrase, limitResetAsPrinted, limitWindowLabel, parseLimitResetAt } from "../lib/limitReset";
 import type { LimitRecoveryAction } from "../lib/limitRecovery";
 
 type Profile = { name: string; email?: string; usage?: CcUsage; login_expired_at?: number; setup_token?: { stored_at: number; expires_at: number } };
@@ -138,7 +138,7 @@ export function LimitParkCard({
     ? null
     : resetPassed
       ? `window reset ${formatAgo(now - resetAt)}`
-      : `resets in ${formatCountdown(resetAt - now)} · ${formatResetLocal(resetAt, now)}`;
+      : `resets ${formatResetPhrase(resetAt, now)}`;
 
   // Line 2: what happens next. Reads the owner machine's flags; a viewer
   // whose roster does not carry the owner gets the neutral wording.

@@ -67,3 +67,16 @@ test("ignores an earlier account's response and stops further queries", async ()
   });
   expect(queries).toBe(1);
 });
+
+test("reports a conversation the server no longer has, once, without settling or failing its sends", async () => {
+  const gone: string[] = [];
+  await reconcilePendingMessageCoverage({
+    pending: { [conversation]: rows(130) },
+    query: async () => ({ access: "missing" }),
+    settle: () => { throw new Error("Unconfirmed message settled"); },
+    fail: () => { throw new Error("Message failed instead of the session being dropped"); },
+    gone: id => { gone.push(id); },
+    isCurrent: () => true,
+  });
+  expect(gone).toEqual([conversation]);
+});

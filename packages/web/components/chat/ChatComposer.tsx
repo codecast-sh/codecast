@@ -1,9 +1,10 @@
 import { memo, useCallback, useRef, useState } from "react";
-import { Headphones, ImagePlus, MoreHorizontal } from "lucide-react";
+import { Headphones, MoreHorizontal } from "lucide-react";
 import { SlackLogo } from "../SlackLogo";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { WalkiePttButton } from "../calls/WalkiePtt";
 import { MessageInput } from "../MessageInput";
+import { ComposerAttachButton } from "./ComposerAttachButton";
 import { KeyCap, MenuKeyCaps } from "../KeyboardShortcutsHelp";
 import { useTypingMembers, useTypingReporter } from "../../hooks/useChatTyping";
 import { TypingIndicator } from "./TypingIndicator";
@@ -88,7 +89,6 @@ export const ChatComposer = memo(function ChatComposer({
   const typists = useTypingMembers(channelId, threadRootId);
   const ownDropRef = useRef<((files: File[]) => void) | null>(null);
   const dropRef = dropFilesRef ?? ownDropRef;
-  const pickerRef = useRef<HTMLInputElement | null>(null);
   // Slack's "also send to #channel". Per-send, not sticky: it resets after each
   // send, because broadcasting is a choice about ONE message, not a mode.
   const [broadcast, setBroadcast] = useState(false);
@@ -139,80 +139,60 @@ export const ChatComposer = memo(function ChatComposer({
           setBroadcast(false);
           setLocalOnly(false);
         }}
-      />
-      <div className="ch-composer-foot">
-        <button
-          type="button"
-          className="ch-composer-attach"
-          title="Attach an image"
-          aria-label="Attach an image"
-          onClick={() => pickerRef.current?.click()}
-        >
-          <ImagePlus className="w-3.5 h-3.5" />
-        </button>
-        {offerWalkie && (
-          <span className="walkie-seat">
-            <WalkiePttButton
-              roomKey={walkieRoomKey}
-              resolveChannelId={resolveChannelId}
-              size="sm"
-              icon={Headphones}
-              title="Talk to them — click again to stop"
-              ring={walkieRing ? { toUserIds: walkieRing } : undefined}
-            />
-          </span>
-        )}
-        <input
-          ref={pickerRef}
-          type="file"
-          accept="image/*"
-          multiple
-          className="hidden"
-          onChange={(e) => {
-            const files = Array.from(e.target.files ?? []);
-            if (files.length) dropRef.current?.(files);
-            e.target.value = "";
-          }}
-        />
-        <TypingIndicator members={typists} />
-        <Popover>
-          <PopoverTrigger asChild>
-            <button type="button" className="ch-composer-options" aria-label="Message options" title="Message options">
-              {offerSlack && <SlackLogo className="w-3 h-3" muted={!canSendSlack || localOnly} />}
-              {onlyHere && <span>Only in Codecast</span>}
-              {broadcast && <span>Also in #{channelName}</span>}
-              <MoreHorizontal className="w-4 h-4" />
-            </button>
-          </PopoverTrigger>
-          <PopoverContent side="top" align="end" sideOffset={8} className="ch-composer-menu" aria-label="Message options">
-            {(offerSlack || offerBroadcast) && (
-              <div className="ch-composer-delivery">
-                <span className="ch-composer-menu-heading">This message</span>
-                {offerSlack && (
-                  <label className="ch-composer-choice">
-                    <input type="checkbox" checked={canSendSlack && !localOnly} disabled={!canSendSlack} onChange={(e) => setLocalOnly(!e.target.checked)} />
-                    <SlackLogo className="w-3.5 h-3.5" muted={!canSendSlack || localOnly} />
-                    <span>Also send to {slack?.destination}</span>
-                  </label>
-                )}
-                {offerBroadcast && (
-                  <label className="ch-composer-choice">
-                    <input type="checkbox" checked={broadcast} onChange={(e) => setBroadcast(e.target.checked)} />
-                    <span>Also send to #{channelName}</span>
-                  </label>
-                )}
+        composerFoot={<>
+          <ComposerAttachButton dropRef={dropRef} />
+          {offerWalkie && (
+            <span className="walkie-seat">
+              <WalkiePttButton
+                roomKey={walkieRoomKey}
+                resolveChannelId={resolveChannelId}
+                size="sm"
+                icon={Headphones}
+                title="Talk to them — click again to stop"
+                ring={walkieRing ? { toUserIds: walkieRing } : undefined}
+              />
+            </span>
+          )}
+          <TypingIndicator members={typists} />
+          <Popover>
+            <PopoverTrigger asChild>
+              <button type="button" className="ch-composer-options" aria-label="Message options" title="Message options">
+                {offerSlack && <SlackLogo className="w-3 h-3" muted={!canSendSlack || localOnly} />}
+                {onlyHere && <span>Only in Codecast</span>}
+                {broadcast && <span>Also in #{channelName}</span>}
+                <MoreHorizontal className="w-4 h-4" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent side="top" align="end" sideOffset={8} className="ch-composer-menu" aria-label="Message options">
+              {(offerSlack || offerBroadcast) && (
+                <div className="ch-composer-delivery">
+                  <span className="ch-composer-menu-heading">This message</span>
+                  {offerSlack && (
+                    <label className="ch-composer-choice">
+                      <input type="checkbox" checked={canSendSlack && !localOnly} disabled={!canSendSlack} onChange={(e) => setLocalOnly(!e.target.checked)} />
+                      <SlackLogo className="w-3.5 h-3.5" muted={!canSendSlack || localOnly} />
+                      <span>Also send to {slack?.destination}</span>
+                    </label>
+                  )}
+                  {offerBroadcast && (
+                    <label className="ch-composer-choice">
+                      <input type="checkbox" checked={broadcast} onChange={(e) => setBroadcast(e.target.checked)} />
+                      <span>Also send to #{channelName}</span>
+                    </label>
+                  )}
+                </div>
+              )}
+              <div className="ch-composer-shortcuts">
+                <span className="ch-composer-menu-heading">Keyboard shortcuts</span>
+                <div><span>Send message</span><span><KeyCap size="xs">Enter</KeyCap></span></div>
+                <div><span>New line</span><span><KeyCap size="xs">Shift</KeyCap><KeyCap size="xs">Enter</KeyCap></span></div>
+                <div><span>Mention someone</span><span><KeyCap size="xs">@</KeyCap></span></div>
+                {offerWalkie && <div><span>Toggle voice</span><MenuKeyCaps action="chat.pushToTalk" className="inline-flex items-center gap-[2px]" /></div>}
               </div>
-            )}
-            <div className="ch-composer-shortcuts">
-              <span className="ch-composer-menu-heading">Keyboard shortcuts</span>
-              <div><span>Send message</span><span><KeyCap size="xs">Enter</KeyCap></span></div>
-              <div><span>New line</span><span><KeyCap size="xs">Shift</KeyCap><KeyCap size="xs">Enter</KeyCap></span></div>
-              <div><span>Mention someone</span><span><KeyCap size="xs">@</KeyCap></span></div>
-              {offerWalkie && <div><span>Toggle voice</span><MenuKeyCaps action="chat.pushToTalk" className="inline-flex items-center gap-[2px]" /></div>}
-            </div>
-          </PopoverContent>
-        </Popover>
-      </div>
+            </PopoverContent>
+          </Popover>
+        </>}
+      />
     </div>
   );
 });

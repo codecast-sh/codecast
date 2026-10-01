@@ -42,9 +42,10 @@ function createWebUpdateCtx(
         rows.set(id, { ...rows.get(id), ...patch });
       },
       // Just enough of the query builder for isTeamMember's
-      // team_memberships.by_user_team lookup.
+      // team_memberships.by_user_team lookup and claimShareToken's
+      // docs.by_share_token uniqueness check.
       query(table: string) {
-        if (table !== "team_memberships") throw new Error(`unexpected query on ${table}`);
+        if (table !== "team_memberships" && table !== "docs") throw new Error(`unexpected query on ${table}`);
         const eqs: Record<string, string> = {};
         const q = { eq: (field: string, value: string) => ((eqs[field] = value), q) };
         return {
@@ -52,6 +53,9 @@ function createWebUpdateCtx(
             fn(q);
             return {
               async first() {
+                if (table === "docs") {
+                  return [...rows.values()].find((d) => d.share_token === eqs.share_token) ?? null;
+                }
                 return (
                   memberships.find((m) => m.user_id === eqs.user_id && m.team_id === eqs.team_id)
                   ?? null

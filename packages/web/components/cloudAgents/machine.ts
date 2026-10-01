@@ -14,13 +14,23 @@ export function machineName(device: Device | null | undefined): string {
 }
 
 /**
- * The machine that drives a cloud agent session, and whether it is already
- * connected to the provider: the one named (the session's machine, the page's
- * machine), else your most recently seen online computer.
+ * Which machine a surface asks about: "picked" takes the one named (the
+ * page's machine) else your most recently seen online computer, where you
+ * would connect; "session" takes only the computer of yours that drives a
+ * session, and none for a session another person's computer drives (your
+ * roster holds only your own) or whose machine is not known yet.
  */
-export function useCloudAgentMachine(deviceId: string | null | undefined, isConnected: (device: Device) => boolean): { device: Device | null; connected: boolean } {
-  const { byId, mostRecentOnlineLocal } = useDevices();
-  const device = (deviceId ? byId.get(deviceId) : undefined) ?? mostRecentOnlineLocal;
+export type CloudAgentMachineScope = "picked" | "session";
+
+/** The machine a scope picks from your roster (CloudAgentMachineScope), or null. */
+export function cloudAgentMachineOf(roster: { byId: ReadonlyMap<string, Device>; mostRecentOnlineLocal: Device | null }, deviceId: string | null | undefined, scope: CloudAgentMachineScope): Device | null {
+  const named = deviceId ? roster.byId.get(deviceId) ?? null : null;
+  return scope === "session" ? named : named ?? roster.mostRecentOnlineLocal;
+}
+
+/** The machine that drives a cloud agent session (by `scope`), and whether it is already connected to the provider. */
+export function useCloudAgentMachine(deviceId: string | null | undefined, isConnected: (device: Device) => boolean, scope: CloudAgentMachineScope = "picked"): { device: Device | null; connected: boolean } {
+  const device = cloudAgentMachineOf(useDevices(), deviceId, scope);
   return { device, connected: !!device && isConnected(device) };
 }
 
@@ -41,6 +51,10 @@ export interface CloudAgentProblem {
   sentence: string;
   /** A new key or sign-in fixes it (isCloudAgentCredentialKind). */
   credential: boolean;
+  /** A limit's reset, when the provider named it (ms since the epoch). */
+  resetsAt?: number;
+  /** It holds sends alone (a limit a send met): the mirror keeps reading. */
+  sendsOnly?: boolean;
 }
 
 /**
@@ -48,13 +62,15 @@ export interface CloudAgentProblem {
  * (never, without a provider), and why not when it can say: its sign-in ran
  * out, or what its daemon found in the provider's way.
  */
-export function useCloudAgentStatus(spec: CloudAgentProviderSpec | undefined, deviceId?: string | null): { device: Device | null; connected: boolean; problem?: CloudAgentProblem } {
-  const status = useCloudAgentMachine(deviceId, useCloudAgentConnected(spec));
+export function useCloudAgentStatus(spec: CloudAgentProviderSpec | undefined, deviceId?: string | null, scope?: CloudAgentMachineScope): { device: Device | null; connected: boolean; problem?: CloudAgentProblem } {
+  const status = useCloudAgentMachine(deviceId, useCloudAgentConnected(spec), scope);
   const expiry = useCloudAgentExpiry(spec);
   if (!spec || !status.device) return status;
   const expiredAt = expiry(status.device);
   const block = expiredAt ? { kind: "key_invalid" as const, expiredAt } : cloudAgentBlockOf(spec, status.device);
   if (!block) return status;
   const sentence = cloudAgentSetupSentence(spec, block, machineName(status.device));
-  return { ...status, problem: { kind: block.kind, sentence, credential: isCloudAgentCredentialKind(block.kind) } };
+  const resetsAt = "resets_at" in block ? block.resets_at : undefined;
+  const sendsOnly = "sends_only" in block && block.sends_only;
+  return { ...status, problem: { kind: block.kind, sentence, credential: isCloudAgentCredentialKind(block.kind), ...(resetsAt ? { resetsAt } : {}), ...(sendsOnly ? { sendsOnly } : {}) } };
 }

@@ -88,7 +88,7 @@ export function parseDesktopDeepLinkPath(url: string): string | null {
 // site (codecast.sh itself: the landing page and its public pages; a visitor
 // looking at the site is not opening a conversation, and parseDesktopDeepLinkPath
 // already returns null for "/"), auth/oauth flows, the standalone share pages
-// (/share/message|doc|plan, often opened by people without the app; a
+// (/share/<kind>/<token>, often opened by people without the app; a
 // conversation share never reaches this gate as a document, because the web
 // server answers /share/<token> with a redirect to its /conversation/<id>
 // form), published artifacts (/a/<slug>, same audience), the standalone
@@ -577,11 +577,12 @@ function closeTab(): void {
 
 /**
  * Share pages that boot standalone (src/shareBoot.tsx) instead of the app:
- * /share/message|doc|plan/<token>. /share/<token> is NOT one — it resolves to
- * a conversation and needs the app.
+ * /share/<kind>/<token>, every kind in SHARED_OBJECT_KINDS (this file imports
+ * nothing, so it reads the shape rather than the list). /share/<token> is NOT
+ * one — it resolves to a conversation and needs the app.
  */
 export function isStandaloneSharePath(path: string): boolean {
-  return /^\/share\/(message|doc|plan)\/[^/]+\/?$/.test(path);
+  return /^\/share\/[a-z]+\/[^/]+\/?$/.test(path);
 }
 
 /**

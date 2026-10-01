@@ -972,7 +972,6 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
                     <FooterIconButton
                       onClick={(e) => { e.stopPropagation(); setMdFullscreen(true); }}
                       title="Fullscreen"
-                      label="Full Screen"
                     >
                       <FullscreenIcon />
                     </FooterIconButton>
@@ -1083,7 +1082,6 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
                 <FooterIconButton
                   onClick={(e) => { e.stopPropagation(); setCodeFullscreen(true); }}
                   title="Fullscreen"
-                  label="Full Screen"
                 >
                   <FullscreenIcon />
                 </FooterIconButton>
