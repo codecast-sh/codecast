@@ -8,6 +8,7 @@ import {
   slackAttachmentsToMarkdown,
   slackDisplayName,
   slackToMarkdown,
+  slackUserIdsIn,
 } from "./slackText";
 
 const users: Record<string, { handle?: string | null; name?: string | null }> = {
@@ -85,6 +86,31 @@ describe("attachments", () => {
       resolve,
     );
     expect(md).toBe("> *GitHub* · **[PR #12](https://g.h/12)**\n>\n> Fixes **the** thing\n>\n> *repo*");
+  });
+  // A pasted Slack message link, shaped like the live event that prompted this.
+  const share = {
+    is_share: true,
+    is_msg_unfurl: true,
+    author_id: "U2",
+    author_name: "Riley Baskali",
+    channel_id: "C7",
+    ts: "1790893978.215669",
+    from_url: "https://x.slack.com/archives/C7/p1790893978215669",
+    text: "<@U1> You got a clear *yes*",
+    footer: "Thread in Slack Conversation",
+  };
+  test("a shared message links to its mirrored copy, names resolved, no Slack footer", () => {
+    const md = slackAttachmentsToMarkdown([share], {
+      ...resolve,
+      message: (c, ts) => (c === "C7" && ts === share.ts ? "/chat/ch1?m=m1" : null),
+    });
+    expect(md).toBe("> [Riley Baskali](/chat/ch1?m=m1)\n>\n> @ashot You got a clear **yes**");
+  });
+  test("a shared message from an unmirrored channel links to Slack", () => {
+    expect(slackAttachmentsToMarkdown([share], resolve).split("\n")[0]).toBe(`> [Riley Baskali](${share.from_url})`);
+  });
+  test("mentions inside a quoted message are found for resolving", () => {
+    expect(slackUserIdsIn("hi <@U9>", [share]).sort()).toEqual(["U1", "U2", "U9"]);
   });
   test("empty input", () => {
     expect(slackAttachmentsToMarkdown(undefined, resolve)).toBe("");

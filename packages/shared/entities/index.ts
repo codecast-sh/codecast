@@ -13,7 +13,10 @@
  * 32-char ids: their table was simply never registered here.
  */
 
-export type EntityType = "task" | "plan" | "session" | "doc" | "project" | "initiative" | "proposal" | "trigger" | "decision" | "pr" | "commit";
+import { isPrivateHost } from "../contracts/browserPaneOffer";
+import { callAnchorHref } from "../contracts/callLinks";
+
+export type EntityType = "task" | "plan" | "session" | "doc" | "project" | "initiative" | "proposal" | "trigger" | "decision" | "pr" | "commit" | "call";
 
 /** The public web origin that serves codecast object pages. */
 export const CODECAST_BASE_URL = "https://codecast.sh";
@@ -48,6 +51,7 @@ export const ENTITY_ROUTE: Record<EntityType, string> = {
   // appending the id.
   pr: "/pr",
   commit: "/commit",
+  call: "/calls",
 };
 
 /**
@@ -64,6 +68,7 @@ export const SHORT_ID_PREFIX: Record<string, EntityType> = {
   in: "initiative",
   op: "proposal",
   sd: "decision",
+  cl: "call",
 };
 
 /**
@@ -72,7 +77,7 @@ export const SHORT_ID_PREFIX: Record<string, EntityType> = {
  * "in-house", "op-ed" and "sd-card" are prose. Every matcher below derives
  * from this, so the rule holds on every surface at once.
  */
-const DIGITS_ONLY_PREFIX: ReadonlySet<string> = new Set(["in", "op", "sd"]);
+const DIGITS_ONLY_PREFIX: ReadonlySet<string> = new Set(["in", "op", "sd", "cl"]);
 
 /**
  * URL path segment → entity type. Several segments alias to one type
@@ -101,6 +106,8 @@ const SEGMENT_TYPE: Record<string, EntityType> = {
   schedules: "trigger",
   decisions: "decision",
   decision: "decision",
+  calls: "call",
+  call: "call",
 };
 
 /**
@@ -135,6 +142,10 @@ export function entityRoute(type: string, id: string): string | null {
   const norm = normalizeEntityType(type);
   if (!norm) return null;
   if (norm === "pr" || norm === "commit") return repoObjectRoute(id);
+  if (norm === "call") {
+    const ref = parseCallRef(id);
+    if (ref) return callAnchorHref(ref.call, ref.turns && { kind: "turns", ...ref.turns });
+  }
   if (QUERY_ONLY.has(norm)) return `${ENTITY_ROUTE[norm]}?${QUERY_PARAM[norm]}=${encodeURIComponent(id)}`;
   return `${ENTITY_ROUTE[norm]}/${id}`;
 }
@@ -172,6 +183,7 @@ export function inferEntityTypeFromShortId(id: string): EntityType | null {
  */
 export function entityTypeFromId(id: string): EntityType | null {
   const s = (id || "").trim();
+  if (parseCallRef(s)?.turns) return "call";
   if (/^doc:/i.test(s)) return "doc";
   if (isConvexId(s.toLowerCase())) return null;
   if (/^jx[a-z0-9]{5,}$/i.test(s)) return "session";
@@ -427,6 +439,36 @@ export function parseGitHubLocationUrl(href: string | undefined | null): GitHubL
 // skips matches when two callers interleave.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Calls and the turns inside them
+//
+// A call is quoted by its short id, `cl-42`, and a stretch of what was said
+// by the call plus the transcript seqs `cast call --transcript` prints,
+// `cl-42:15-25` (one turn: `cl-42:15`). The range form also takes a full call
+// id, which is what a pasted `/calls/<id>?turns=15-25` link becomes.
+// ---------------------------------------------------------------------------
+
+/** A call with a turn range, as prose writes it. */
+export const CALL_TURNS_REF_SOURCE = "(?:cl-\\d+|[a-z0-9]{32}):\\d+(?:-\\d+)?";
+
+export type CallRef = { call: string; turns: { from_seq: number; to_seq: number } | null };
+
+/** A call reference split into the call (short or full id) and its turns. */
+export function parseCallRef(id: string | null | undefined): CallRef | null {
+  const m = /^(cl-\d+|[a-z0-9]{32})(?::(\d+)(?:-(\d+))?)?$/i.exec((id || "").trim());
+  if (!m) return null;
+  if (!m[2]) return /^cl-/i.test(m[1]) ? { call: m[1].toLowerCase(), turns: null } : null;
+  const a = Number(m[2]);
+  const b = m[3] ? Number(m[3]) : a;
+  return { call: m[1].toLowerCase(), turns: { from_seq: Math.min(a, b), to_seq: Math.max(a, b) } };
+}
+
+/** The prose form of a call reference: `cl-42`, `cl-42:15`, `cl-42:15-25`. */
+export function callRefId(call: string, turns?: { from_seq: number; to_seq: number } | null): string {
+  if (!turns) return call;
+  return `${call}:${turns.from_seq}${turns.to_seq !== turns.from_seq ? `-${turns.to_seq}` : ""}`;
+}
+
 /**
  * The registered short ids as a regex source: `(?:ct|pl|tr)-<tail>|(?:in)-\d+`.
  * `tail` is what follows a prefix that is not an English word. Exported so a
@@ -446,10 +488,10 @@ export function shortIdSource(tail = "[a-z0-9]+"): string {
  * alternation — mobile's markdown tokenizer scans every inline form in one
  * pass, so it needs the branch, not a standalone matcher.
  */
-export const BARE_ID_SOURCE = `${PR_REF_SOURCE}|${COMMIT_REF_SOURCE}|${shortIdSource()}|jx[a-z0-9]{5,}|doc:[a-z0-9]{20,}|[a-z0-9]{32}`;
+export const BARE_ID_SOURCE = `${PR_REF_SOURCE}|${COMMIT_REF_SOURCE}|${CALL_TURNS_REF_SOURCE}|${shortIdSource()}|jx[a-z0-9]{5,}|doc:[a-z0-9]{20,}|[a-z0-9]{32}`;
 
 /** Ids as they appear inside an `@[Title id]` mention (a label is not an object). */
-export const MENTION_ID_SOURCE = `${PR_REF_SOURCE}|${COMMIT_REF_SOURCE}|${shortIdSource("\\w+")}|jx\\w+|doc:\\w+|label:\\w+|date:\\d{4}-\\d{2}-\\d{2}|[a-z0-9]{32}`;
+export const MENTION_ID_SOURCE = `${PR_REF_SOURCE}|${COMMIT_REF_SOURCE}|${CALL_TURNS_REF_SOURCE}|${shortIdSource("\\w+")}|jx\\w+|doc:\\w+|label:\\w+|date:\\d{4}-\\d{2}-\\d{2}|[a-z0-9]{32}`;
 
 /** Scans prose for bare object ids. Word-bounded so it can't split a longer token. */
 export function bareEntityIdRegex(): RegExp {
@@ -670,6 +712,12 @@ export function parseEntityUrl(
     id = segs[1].trim();
   }
   if (!id || NOT_AN_ID[type]?.has(id.toLowerCase())) return null;
+  // A link to turns of a call is the excerpt, not the whole call.
+  if (type === "call") {
+    const turns = search ? new URLSearchParams(search).get("turns") : null;
+    const ref = turns ? parseCallRef(`${id}:${turns}`) : null;
+    if (ref) return { type, id: callRefId(ref.call, ref.turns) };
+  }
   return { type, id };
 }
 
@@ -722,6 +770,38 @@ export function parseClaudeArtifactUrl(href: string | undefined | null): { id: s
 
 export function claudeArtifactUrl(id: string): string {
   return `https://claude.ai/public/artifacts/${id}`;
+}
+
+// ---------------------------------------------------------------------------
+// Web links
+//
+// A link to anywhere else on the web previews the way Slack unfurls one: the
+// page's own meta tags (title, description, image) drawn as a card when the
+// link stands alone on its line.
+// ---------------------------------------------------------------------------
+
+/**
+ * The URL a web link previews as, or null when it is not a public page: our
+ * own hosts, codecast objects (GitHub pull requests and commits included),
+ * published pages and Claude artifacts (each has its own card), private or
+ * bare hosts, IP literals, and every scheme but http(s). Message markdown,
+ * the server that reads the meta tags, and Slack mirroring all ask this one
+ * question.
+ */
+export function parseLinkPreviewUrl(href: string | undefined | null): string | null {
+  if (!href || typeof href !== "string" || !/^https?:\/\//i.test(href.trim())) return null;
+  let u: URL;
+  try {
+    u = new URL(href.trim());
+  } catch {
+    return null;
+  }
+  const host = u.hostname.toLowerCase();
+  if (!host || host.startsWith("[") || /^\d+\.\d+\.\d+\.\d+$/.test(host) || isPrivateHost(host)) return null;
+  if (u.username || u.password) return null;
+  if (isAppHost(u.host) || parseEntityUrl(u.href) || parseClaudeArtifactUrl(u.href)) return null;
+  u.hash = "";
+  return u.href;
 }
 
 /**
@@ -800,20 +880,30 @@ export function parseMessageRefPayload(payload: string | undefined | null): Mess
  * token (a UUID minted when the owner shares it) rather than an id:
  *
  *   /share/<token>            → a whole conversation
- *   /share/message/<token>    → a message excerpt
- *   /share/doc/<token>        → a doc
- *   /share/plan/<token>       → a plan
+ *   /share/<kind>/<token>     → every other kind in SHARED_OBJECT_KINDS
  *
- * One grammar, three consumers: the web server (bot unfurls + SSR), the
- * mobile deep-link router, and the mobile /share resolver screen. The
- * sub-kind segment set is closed on purpose — an unknown segment is not a
- * token, it is a URL we do not own yet.
+ * One grammar, every consumer: the web server (routes, bot unfurls, SSR), the
+ * standalone share boot, the desktop handoff gate, the mobile deep-link
+ * router and the mobile /share resolver screen. The sub-kind segment set is
+ * closed on purpose — an unknown segment is not a token, it is a URL we do
+ * not own yet. Adding a kind is one entry here; the type then makes each
+ * consumer's table incomplete until it handles the new kind.
  */
-export type ShareKind = "conversation" | "message" | "doc" | "plan";
+export const SHARED_OBJECT_KINDS = ["message", "doc", "plan", "task", "call"] as const;
+export type SharedObjectKind = (typeof SHARED_OBJECT_KINDS)[number];
+export type ShareKind = "conversation" | SharedObjectKind;
+
+const SHARE_TOKEN_SRC = "[A-Za-z0-9_-]{6,80}";
+const SHARE_PATH_RE = new RegExp(`^/share/(?:(${SHARED_OBJECT_KINDS.join("|")})/)?(${SHARE_TOKEN_SRC})/?$`);
 
 export function parseSharePath(path: string): { kind: ShareKind; token: string } | null {
   const clean = (path || "").split(/[?#]/)[0];
-  const m = /^\/share\/(?:(message|doc|plan)\/)?([A-Za-z0-9_-]{6,80})\/?$/.exec(clean);
+  const m = SHARE_PATH_RE.exec(clean);
   if (!m) return null;
   return { kind: (m[1] as ShareKind) ?? "conversation", token: m[2] };
+}
+
+/** The path a share token is opened at: the inverse of parseSharePath. */
+export function sharePath(kind: ShareKind, token: string): string {
+  return kind === "conversation" ? `/share/${token}` : `/share/${kind}/${token}`;
 }

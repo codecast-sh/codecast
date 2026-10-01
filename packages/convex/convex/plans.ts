@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { claimShareToken } from "./publicShare";
 import { charterPatch, planCharterArgs } from "./lib/orgCharter";
 import { resolveActor } from "./lib/actor";
 import { mutation, query, internalMutation } from "./functions";
@@ -1829,9 +1830,8 @@ export const generateShareLink = mutation({
       .first();
     if (!plan) throw new Error("Plan not found");
     if (!(await canAccessPlan(ctx, userId, plan))) throw new Error("Plan not found");
-    if (plan.share_token) return { share_token: plan.share_token };
-    const share_token = crypto.randomUUID();
-    await ctx.db.patch(plan._id, { share_token });
+    const share_token = plan.share_token ?? crypto.randomUUID();
+    await claimShareToken(ctx, "plans", plan, share_token);
     return { share_token };
   },
 });
@@ -1847,7 +1847,7 @@ export const unsharePlan = mutation({
       .first();
     if (!plan) throw new Error("Plan not found");
     if (!(await canAccessPlan(ctx, userId, plan))) throw new Error("Plan not found");
-    await ctx.db.patch(plan._id, { share_token: undefined });
+    await claimShareToken(ctx, "plans", plan, null);
     return { success: true };
   },
 });

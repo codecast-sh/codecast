@@ -36,6 +36,16 @@ describe("command menu action coverage", () => {
     expect(actions).toContain("session_kill");
     expect(actions).not.toContain("session_stash");
   });
+  // The right-click menu reads the same isSessionSetAside/isSessionKilled rule,
+  // so a killed row offers neither Kill again nor the filing verbs, whose
+  // stamps would leave it under Killed.
+  test("killed sessions offer restore, never kill or the filing verbs", () => {
+    const actions = keys("session", { ...session, inbox_killed_at: 123 });
+    expect(actions).toContain("session_restore");
+    for (const verb of ["session_kill", "session_stash", "session_stash_hide", "session_defer", "session_dormant", "session_done", "session_needs_input", "snooze"]) {
+      expect(actions).not.toContain(verb);
+    }
+  });
   test("session-specific navigation appears when the backing metadata exists", () => {
     const actions = keys("session", {
       ...session,

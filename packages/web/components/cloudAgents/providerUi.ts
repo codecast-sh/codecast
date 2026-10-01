@@ -1,10 +1,10 @@
 // The web's side of each cloud agent provider (CLOUD_AGENT_PROVIDERS in the
 // shared contracts): its connect wording and the dialog that connects it.
 // The components in ./index.tsx read it, so a new provider is an entry here.
-import type { ComponentType } from "react";
-import { cloudAgentProviderForKey, type CloudAgentProviderId, type CloudAgentProviderSpec } from "@codecast/shared/contracts";
-import { ConnectCursorDialog } from "../ConnectCursorDialog";
+import { createElement, type ComponentType } from "react";
+import { CLOUD_AGENT_PROVIDERS, cloudAgentProviderForKey, type CloudAgentProviderId, type CloudAgentProviderSpec } from "@codecast/shared/contracts";
 import { ConnectCodexDialog } from "./ConnectCodexDialog";
+import { ConnectKeyDialog, type KeyProviderId } from "./ConnectKeyDialog";
 
 interface CloudAgentUiEntry {
   /** What the connect control names: "Cursor". */
@@ -23,14 +23,22 @@ export interface CloudAgentUi extends CloudAgentUiEntry {
   connectInlineLabel: string;
 }
 
+/** A provider whose credential is a Provider Keys entry: named by its vendor, held until the key is connected, connected by the guided key dialog. */
+function keyEntry(id: KeyProviderId): CloudAgentUiEntry {
+  // Built once per provider at load, so each dialog keeps its identity across renders.
+  const Dialog: CloudAgentUiEntry["Dialog"] = (props) => createElement(ConnectKeyDialog, { provider: id, ...props });
+  return { connectName: CLOUD_AGENT_PROVIDERS[id].vendor, heldUntil: () => "the key is connected", Dialog };
+}
+
 const ENTRIES: Record<CloudAgentProviderId, CloudAgentUiEntry> = {
-  cursor: { connectName: "Cursor", heldUntil: () => "the key is connected", Dialog: ConnectCursorDialog },
+  cursor: keyEntry("cursor"),
   codex: {
     connectName: "Codex",
     heldUntil: (machine) => `${machine} is signed in to Codex`,
     Dialog: ConnectCodexDialog,
     signIn: "Codex Cloud runs with this machine's Codex sign-in (your ChatGPT plan), not a key.",
   },
+  codex_api: keyEntry("codex_api"),
 };
 
 const CLOUD_AGENT_UI = Object.fromEntries(Object.entries(ENTRIES).map(([id, e]) => [id, {

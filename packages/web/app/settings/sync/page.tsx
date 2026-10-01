@@ -105,6 +105,10 @@ const CLOUD_SYNC_COPY: Record<CloudSessionSource, { on: string; off: string }> =
       ? "Only the Codex Cloud tasks you start from codecast sync here. The rest stay on chatgpt.com/codex."
       : "Codex Cloud tasks stay on chatgpt.com/codex until you turn this on.",
   },
+  codex_api: {
+    on: "Every Agents API session on your OpenAI key's project syncs here, the ones other apps start on that key included, and you can message them from codecast. Your daemon reads them with the OpenAI API key on your machine (Settings → Provider keys).",
+    off: "Only the OpenAI Agents API sessions you start from codecast sync here. Sessions other apps start on your key stay with them.",
+  },
 };
 
 export default function SyncPage() {

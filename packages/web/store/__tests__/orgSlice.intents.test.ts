@@ -272,12 +272,12 @@ describe("org intents", () => {
     // inside the permanent-error block and its notices reach a toast.
     const { readFileSync } = await import("node:fs");
     const { join } = await import("node:path");
-    const src = readFileSync(join(import.meta.dir, "..", "..", "hooks", "useEnsureDispatch.ts"), "utf8");
+    const src = readFileSync(join(import.meta.dir, "..", "..", "lib", "dispatchBinding.ts"), "utf8");
     const permanent = src.indexOf("if (isPermanentDispatchError(error)) {");
     const drop = src.indexOf("dropRejectedOrgIntent(useInboxStore.getState(), action, args, error)");
     expect(permanent).toBeGreaterThan(0);
     expect(drop).toBeGreaterThan(permanent);
-    expect(src.slice(permanent, drop)).not.toMatch(/\n\s{6}}\n/); // no block closes between them
+    expect(src.slice(permanent, drop)).not.toMatch(/\n\s{2}}\n/); // no block closes between them
     expect(src).toMatch(/for \(const text of dropRejectedOrgIntent\(.*\)\) toast\.error\(text\)/);
   });
 

@@ -9,6 +9,8 @@ import {
   BaseEdge,
   EdgeLabelRenderer,
   getSmoothStepPath,
+  useInternalNode,
+  type InternalNode,
   type Node,
   type Edge,
   type EdgeTypes,
@@ -54,6 +56,8 @@ interface WorkflowGraphViewProps {
   // no pan, zoom or wheel capture (the marketing hero shows it inside a page
   // that must keep scrolling). Default true.
   chrome?: boolean;
+  /** The margin fitView keeps around the graph, as a fraction of the box. Default 0.2. */
+  fitPadding?: number;
 }
 
 // Solarized palette
@@ -193,8 +197,26 @@ function getClipPath(shape: string): React.CSSProperties {
   }
 }
 
-function WorkflowEdge({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data, markerEnd, style }: any) {
-  const [edgePath, labelX, labelY] = getSmoothStepPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition });
+/**
+ * Where an edge meets a node, from the node's laid-out box rather than from
+ * React Flow's handle measurement, which reads screen rects and divides by
+ * its own zoom only: under any outer CSS transform (a scaled panel, the
+ * marketing hero's camera) it would put every end off its node.
+ */
+function handlePoint(node: InternalNode | undefined, handle: string | null | undefined): { x: number; y: number } | null {
+  if (!node) return null;
+  const { x, y } = node.internals.positionAbsolute;
+  const w = node.measured.width ?? NODE_W;
+  const h = node.measured.height ?? NODE_H;
+  if (handle === "right") return { x: x + w, y: y + h / 2 };
+  if (handle === "left") return { x, y: y + h / 2 };
+  return { x: x + w / 2, y: y + h };
+}
+
+function WorkflowEdge({ source, target, sourceHandleId, targetHandleId, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data, markerEnd, style }: any) {
+  const from = handlePoint(useInternalNode(source), sourceHandleId) ?? { x: sourceX, y: sourceY };
+  const to = handlePoint(useInternalNode(target), targetHandleId) ?? { x: targetX, y: targetY };
+  const [edgePath, labelX, labelY] = getSmoothStepPath({ sourceX: from.x, sourceY: from.y, sourcePosition, targetX: to.x, targetY: to.y, targetPosition });
   return (
     <>
       <BaseEdge path={edgePath} markerEnd={markerEnd} style={style} />
@@ -332,7 +354,7 @@ function buildGraph(wfNodes: WFNode[], wfEdges: WFEdge[], p: SolPalette, nodeSta
   return { nodes, edges };
 }
 
-export function WorkflowGraphView({ nodes: wfNodes, edges: wfEdges, onNodeSelect, selectedNodeId, nodeStatuses, currentNodeId, chrome = true }: WorkflowGraphViewProps) {
+export function WorkflowGraphView({ nodes: wfNodes, edges: wfEdges, onNodeSelect, selectedNodeId, nodeStatuses, currentNodeId, chrome = true, fitPadding = 0.2 }: WorkflowGraphViewProps) {
   const { theme } = useTheme();
   const p = SOL[theme];
 
@@ -362,7 +384,7 @@ export function WorkflowGraphView({ nodes: wfNodes, edges: wfEdges, onNodeSelect
         }}
         onPaneClick={() => onNodeSelect?.(null)}
         fitView
-        fitViewOptions={{ padding: 0.2 }}
+        fitViewOptions={{ padding: fitPadding }}
         minZoom={0.15}
         maxZoom={2}
         colorMode={theme}

@@ -32,6 +32,7 @@ import {
   relativeSeen,
   type Device,
 } from './DevicesSection';
+import { isPerson } from '@codecast/shared/team/memberKind';
 
 /**
  * The unified assignment control for a session — mobile twin of the web's
@@ -281,7 +282,7 @@ function OwnerSheetRows({
   const Theme = useTheme();
   const { ownerIds, ownerList, toggle, moveToRole, clearAll, currentUser } = owners;
   const serverRoster = useOwnerCandidates(conversationId, currentUser);
-  const selectable = pickRoster(serverRoster, owners.selectable).filter((m: any) => m && !m.is_bot);
+  const selectable = pickRoster(serverRoster, owners.selectable).filter(isPerson);
   const { liveRoles, orgRoleId, currentRole, isStandingThread } = useSessionRoleFacts(conversationId);
   const [rolesOpen, setRolesOpen] = useState(false);
   // Optional note, sent along with the NEXT assignment made from this sheet.
@@ -330,7 +331,7 @@ function OwnerSheetRows({
       )}
 
       <Text style={styles.sectionLabel}>Owners · whose inbox</Text>
-      {currentUser && !currentUser.is_bot && !ownerIds.has(currentUser._id) && (
+      {isPerson(currentUser) && !ownerIds.has(currentUser._id) && (
         <TouchableOpacity style={styles.row} activeOpacity={0.6} onPress={() => { tap(); onDone(); void toggle(currentUser._id); }}>
           <FontAwesome name="user-plus" size={13} color={Theme.cyan} style={{ width: 20 }} />
           <View style={{ flex: 1, minWidth: 0 }}>

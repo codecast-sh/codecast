@@ -26,6 +26,24 @@ function stateFor(namespace: string): ReconcileState {
   return s;
 }
 
+/**
+ * Sim seam: crawl state belongs to one window. get() snapshots it (the map is
+ * copied; an in-flight crawl keeps mutating its own state object, which stays
+ * in its window's snapshot), set() loads a snapshot back, fresh() is what a
+ * window that never ran starts from.
+ */
+export function __reconcileCrawlSimSlots() {
+  type Slots = { states: Map<string, ReconcileState> };
+  return {
+    fresh: (): Slots => ({ states: new Map() }),
+    get: (): Slots => ({ states: new Map(states) }),
+    set: (s: Slots): void => {
+      states.clear();
+      for (const [k, v] of s.states) states.set(k, v);
+    },
+  };
+}
+
 /** Abandon the active crawl in one namespace without affecting other crawls. */
 export function cancelReconcileCrawl(namespace: string): void {
   const st = stateFor(namespace);

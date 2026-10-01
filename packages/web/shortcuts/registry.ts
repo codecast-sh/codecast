@@ -48,6 +48,7 @@ export type ShortcutAction =
   | 'pane.prev'
   | 'ui.zenToggle'
   | 'ui.toggleShortcutsHelp'
+  | 'ui.openTours'
   | 'ui.openSettings'
   | 'ui.undo'
   | 'ui.redo'

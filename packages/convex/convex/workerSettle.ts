@@ -1,7 +1,8 @@
 import { internalMutation } from "./functions";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
-import { ACTIVE_AGENT_STATUSES, WORKER_SETTLE_WORDS, formatScheduledTask, threadStateFreshness, threadStateHeadline } from "@codecast/shared/contracts";
+import { ACTIVE_AGENT_STATUSES, WORKER_SETTLE_WORDS, formatScheduledTask, isToolResultCarrier, parseUserMessage, threadStateFreshness, threadStateHeadline } from "@codecast/shared/contracts";
+import { isUserMessageNoise, stripMessageTags } from "./lib/userSend";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { NEEDS_INPUT_IDLE_CHECK_DELAY_MS } from "./inboxFilters";
 import { internal } from "./_generated/api";
@@ -19,6 +20,8 @@ import { internal } from "./_generated/api";
 // reads as one turn, not five.
 
 const SIBLING_SCAN_LIMIT = 100;
+/** How far back a worker with nothing pinned is searched for a typed line. */
+const TYPED_SCAN_LIMIT = 40;
 
 type WorkerRow = {
   _id: Id<"conversations">;
@@ -37,7 +40,6 @@ type WorkerRow = {
   thread_state_status?: string;
   thread_state_at?: number;
   thread_state_msg_count?: number;
-  last_message_preview?: string;
   hand_wake_notified_key?: string;
 };
 
@@ -70,19 +72,33 @@ function refOf(w: WorkerRow): string {
 
 /** The frame the parent reads: one `<worker-report>` per worker (the web draws
  *  each as a live session row), a title for previews, and the ask. */
-export function workerSettleFrame(told: Array<{ worker: WorkerRow; why: string }>, now: number) {
-  const workers = told.map(({ worker, why }) => ({
+export function workerSettleFrame(told: Array<{ worker: WorkerRow; why: string; typed?: string }>, now: number) {
+  const workers = told.map(({ worker, why, typed }) => ({
     short_id: refOf(worker),
     title: (worker.title ?? "").slice(0, 80),
     why,
     since: now,
-    state: threadStateHeadline(worker.thread_state ?? "") || (worker.last_message_preview ?? "").replace(/\s+/g, " ").slice(0, 200),
+    state: threadStateHeadline(worker.thread_state ?? "") || (typed ?? "").replace(/\s+/g, " ").slice(0, 200),
   }));
   const title = told.length === 1
     ? `Worker ${workers[0].short_id} ${WORKER_SETTLE_WORDS[told[0].why]}`
     : `${told.length} workers settled`;
   const read = told.length === 1 ? `cast read ${workers[0].short_id}` : "cast read <id>";
   return { title, workers, body: `Read the result with ${read} and act on it.` };
+}
+
+/** The last line a person typed into the worker, for a report with nothing
+ *  pinned. The conversation's last_message_preview is the last user-role row of
+ *  any origin, so a harness notification or a session message would read as
+ *  the report; those are skipped, and so is everything else that is not typed. */
+async function lastTypedLine(ctx: any, conversationId: Id<"conversations">): Promise<string> {
+  let seen = 0;
+  for await (const m of ctx.db.query("messages").withIndex("by_conversation_timestamp", (q: any) => q.eq("conversation_id", conversationId)).order("desc")) {
+    if (++seen > TYPED_SCAN_LIMIT) break;
+    if (m.role !== "user" || isToolResultCarrier(m) || isUserMessageNoise(m.content ?? "")) continue;
+    return parseUserMessage(m.content)?.body ?? stripMessageTags(m.content);
+  }
+  return "";
 }
 
 async function statusOf(ctx: any, conversationId: Id<"conversations">) {
@@ -111,7 +127,7 @@ export async function performTellParent(
     .order("desc")
     .take(SIBLING_SCAN_LIMIT);
   const candidates = [worker, ...siblings.filter((s) => String(s._id) !== String(worker._id))];
-  const told: Array<{ worker: WorkerRow; why: string }> = [];
+  const told: Array<{ worker: WorkerRow; why: string; typed?: string }> = [];
   for (const c of candidates) {
     if (!c.message_count || !isSpawnedWorker(c) || c.hand_wake_notified_key === episodeOf(c)) continue;
     const status = c === worker ? session : await statusOf(ctx, c._id);
@@ -119,6 +135,9 @@ export async function performTellParent(
     if (why) told.push({ worker: c, why });
   }
   if (told.length === 0) return { told: 0, reason: "already" };
+  for (const t of told) {
+    if (!threadStateHeadline(t.worker.thread_state ?? "")) t.typed = await lastTypedLine(ctx, t.worker._id);
+  }
 
   await enqueuePendingMessage(ctx, parent, worker.user_id, {
     content: formatScheduledTask(workerSettleFrame(told, now)),
