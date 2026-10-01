@@ -27,11 +27,11 @@ export async function scheduledReview(f:any){
     assert.ok(a>0&&b>a);const body='let sync;'+source.slice(a,b+'}, MESSAGE_SYNC_DEBOUNCE);'.length)+'return sync;';
     const scope={...context,...locals};return new Function(...Object.keys(scope),new Bun.Transpiler({loader:'ts'}).transformSync(body))(...Object.values(scope));
   };
-  const file=(id:string,text:string)=>{const p=path.join(home,id+'.jsonl');fs.writeFileSync(p,text);cache[id]='conv-'+id;return p;};
+  const file=(id:string,text:string,ext='.jsonl')=>{const p=path.join(home,id+ext);fs.writeFileSync(p,text);cache[id]='conv-'+id;return p;};
   const claude=file('scheduled-claude',claudeLine('sc','scheduled Claude'));
   instantiate('  const fileSyncs =','claude',{fileSyncs:new Map(),filePath:claude,event:{sessionId:'scheduled-claude'},projectPath:home}).invalidate();
-  const cursor=file('scheduled-cursor','user:\nhello scheduled Cursor\n\nassistant:\nreply scheduled Cursor\n');
-  instantiate('  const cursorTranscriptSyncs =','cursor',{cursorTranscriptSyncs:new Map(),filePath:cursor,event:{sessionId:'scheduled-cursor'}}).invalidate();
+  const cursor=file('scheduled-cursor','user:\nhello scheduled Cursor\n\nassistant:\nreply scheduled Cursor\n','.txt');
+  await d.handleTranscriptFileEvent({filePath:cursor,sessionId:'scheduled-cursor'},'Cursor',new Map(),'cursor',context.config,async()=>null,()=>d.processCursorTranscriptFile(cursor,'scheduled-cursor',syncService,'fixture',undefined,cache,retryQueue,pending,()=>{}));
   const dbPath=path.join(home,'scheduled-cursor.db'),db=new Database(dbPath);db.run('CREATE TABLE ItemTable(key TEXT,value TEXT)');db.run('INSERT INTO ItemTable VALUES(?,?)',['workbench.panel.aichat.view.aichat.chatdata',JSON.stringify({tabs:[{tabId:'tab',bubbles:[{type:'user',id:'scheduled-sqlite-row',initText:'scheduled SQLite',contextCacheTimestamp:1000}]}]})]);cache['scheduled-db']='conv-scheduled-db';
   instantiate('  const cursorSyncs =','cursorDb',{cursorSyncs:new Map(),dbPath,event:{sessionId:'scheduled-db',workspacePath:home}}).invalidate();
   const a=source.indexOf('  const registerJsonlDirWatcher ='),b=source.indexOf('\n  registerJsonlDirWatcher(',a);assert.ok(a>0&&b>a);
@@ -44,7 +44,7 @@ export async function scheduledReview(f:any){
   };
   dir('codex','Codex',JSON.stringify({type:'response_item',timestamp:'2026-09-05T12:00:00Z',payload:{type:'message',role:'assistant',content:[{type:'output_text',text:'scheduled Codex'}]}})+'\n',(p:string,id:string)=>d.processCodexSession(p,id,syncService,'fixture',undefined,cache,retryQueue,pending,{},()=>{}));
   dir('gemini','Gemini',JSON.stringify({sessionId:'scheduled-gemini',messages:[{id:'sg',type:'user',timestamp:'2026-09-05T12:00:00Z',content:'scheduled Gemini'}]}),(p:string,id:string)=>d.processGeminiSession(p,id,'hash',syncService,'fixture',undefined,cache,retryQueue,pending,{},()=>{}));
-  for(const client of ['pi','grok'])dir(client,client,fs.readFileSync(path.resolve(import.meta.dir,`../../__fixtures__/${client}/${client==='pi'?'linear-bash-tool':'linear-tools'}.jsonl`),'utf8'),(p:string,id:string)=>d.processTranscriptDeltaSession(client,p,id,syncService,'fixture',undefined,cache,retryQueue,pending,{},()=>{}));
+  for(const client of ['pi','grok'])dir(client,client,fs.readFileSync(path.resolve(import.meta.dir,`../../__fixtures__/${client}/${client==='pi'?'linear-bash-tool':'linear-tools'}.jsonl`),'utf8'),(p:string,id:string)=>d.processTranscriptDeltaSession(client,p,id,syncService,'fixture',undefined,cache,retryQueue,pending,()=>{}));
   const opFile=context.opencodeDbPath();fs.mkdirSync(path.dirname(opFile),{recursive:true});const op=new Database(opFile);
   op.run('CREATE TABLE session(id TEXT,directory TEXT,title TEXT,version TEXT,project_id TEXT,slug TEXT,time_created INTEGER,time_updated INTEGER,parent_id TEXT,agent TEXT)');op.run('CREATE TABLE message(id TEXT,session_id TEXT,time_created INTEGER,data TEXT)');op.run('CREATE TABLE part(id TEXT,message_id TEXT,session_id TEXT,data TEXT)');
   const opId='ses_scheduled';cache[opId]='conv-'+opId;op.run('INSERT INTO session VALUES(?,?,?,?,?,?,?,?,?,?)',[opId,home,'scheduled OpenCode','1','project','slug',1000,2000,null,null]);

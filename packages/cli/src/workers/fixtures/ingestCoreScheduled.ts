@@ -95,7 +95,7 @@ export async function coreScheduled({d,home,getPosition,AuthExpiredError}:any) {
       const id='orphan-'+client,file=path.join(home,id+'.jsonl'),fixture=fs.readFileSync(path.resolve(import.meta.dir,`../../__fixtures__/${client}/${client==='pi'?'branch':'thinking-rewind'}.jsonl`),'utf8').trim().split('\n');
       const split=fixture.findIndex(line=>line.includes(client==='pi'?'branch_summary':'rewind_marker'));assert.ok(split>0);
       fs.writeFileSync(file,fixture.slice(0,split).join('\n')+'\n');cache[id]='conv-'+id;
-      const run=()=>d.processTranscriptDeltaSession(client,file,id,syncService,'fixture',undefined,cache,queue,pending,{},()=>{});
+      const run=()=>d.processTranscriptDeltaSession(client,file,id,syncService,'fixture',undefined,cache,queue,pending,()=>{});
       await run();const before=new Map(core.piSyncedSigs.get(file));assert.ok(before.size>2);
       fs.appendFileSync(file,fixture[split]+'\n');const watcher=new Watcher();register(watcher,client,run);failDelete=true;
       watcher.emit('session',{filePath:file,sessionId:id});await until(()=>deleteCalls.some(row=>row.conv===cache[id]&&row.failed));

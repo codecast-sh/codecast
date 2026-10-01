@@ -17,13 +17,13 @@ export async function custodyReview(f:any) {
     return {ids:p.messages.map((_:any,i:number)=>'row-'+sent.length+'-'+i)};
   },ackInjectedMessages:async(...args:any[])=>{acks.push(args);}}, {get:(target,key)=>key in target?(target as any)[key]:async()=>true});
   const queue:any={hasPendingConversation:()=>false,getPendingOperations:()=>operations,add:(type:string,params:any)=>{operations.push({id:'q-'+operations.length,type,params});return operations.at(-1).id;}};
-  const file=(id:string,text:string)=>{const p=path.join(home,id+'.jsonl');fs.writeFileSync(p,text);cache[id]='conv-'+id;return p;};
+  const file=(id:string,text:string,ext='.jsonl')=>{const p=path.join(home,id+ext);fs.writeFileSync(p,text);cache[id]='conv-'+id;return p;};
   const cursor=(p:string,id:string)=>d.processCursorTranscriptFile(p,id,sync,'user',undefined,cache,queue,pending,()=>{});
   const claude=(p:string,id:string)=>d.processSessionFile(p,id,home,sync,'user',undefined,cache,queue,pending,{},()=>{});
   const gemini=(p:string,id:string)=>d.processGeminiSession(p,id,'hash',sync,'user',undefined,cache,queue,pending,{},()=>{});
   const receipts=(id:string)=>[...internal.acceptedPending.values()].flatMap((m:any)=>[...m.values()]).filter((r:any)=>r.sessionId===id);
   for(const kind of ['ack-throw','mapping-same','mapping-new','deadline','cancel','source-change']) {
-    const id='late-'+kind,p=file(id,'assistant:\nbaseline\n');await cursor(p,id);const baseline=getPosition(p);
+    const id='late-'+kind,p=file(id,'assistant:\nbaseline\n','.txt');await cursor(p,id);const baseline=getPosition(p);
     fs.appendFileSync(p,'\nuser:\nidentical fresh occurrence\n\nassistant:\nidentical fresh occurrence\n');
     const before=sent.length,stat=fs.promises.stat.bind(fs.promises),controller=new AbortController();
     let expected=2;
@@ -54,7 +54,7 @@ export async function custodyReview(f:any) {
     const id='read-generation-'+client+'-'+concurrent;
     const line=(key:string,text:string)=>client==='claude'?claudeLine(key,text):client==='cursor'?'user:\n'+text+'\n':JSON.stringify({type:'response_item',timestamp:'2026-09-05T12:00:00Z',payload:{id:key,type:'message',role:'user',content:[{type:'input_text',text}]}})+'\n';
     const baseline=line('old-prefix','OLDprefix'),replacement=line('new-prefix','NEWprefix')+line('new-tailxx','new tail');assert.equal(Buffer.byteLength(baseline),Buffer.byteLength(line('new-prefix','NEWprefix')));
-    const p=file(id,baseline),run=()=>client==='claude'?claude(p,id):client==='cursor'?cursor(p,id):d.processCodexSession(p,id,sync,'user',undefined,cache,queue,pending,{},()=>{});
+    const p=file(id,baseline,client==='cursor'?'.txt':undefined),run=()=>client==='claude'?claude(p,id):client==='cursor'?cursor(p,id):d.processCodexSession(p,id,sync,'user',undefined,cache,queue,pending,{},()=>{});
     await run();fs.appendFileSync(p,line('old-tailxx','old tail'));const position=getPosition(p),before=sent.length,stat=fs.promises.stat.bind(fs.promises);let observations=0,fired=false;const boundaries:any[]=[];assert.ok(fs.statSync(p).size>position);
     fs.promises.stat=(async(...args:any[])=>{const result=await (stat as any)(...args);if(String(args[0])===p){boundaries.push({observation:++observations,ino:result.ino,size:result.size,position:getPosition(p)});}if(String(args[0])===p&&observations===2){fired=true;fs.writeFileSync(p+'.next',replacement);fs.renameSync(p+'.next',p);if(concurrent)setPosition(p,position+1);}return result;}) as typeof fs.promises.stat;
     let outcome:unknown;try{await run();}catch(error){outcome=error;}finally{fs.promises.stat=stat;console.error('F3_READ_GENERATION '+JSON.stringify({client,concurrent,fired,boundaries,outcome:String(outcome),position:getPosition(p)}));}
@@ -80,13 +80,13 @@ export async function custodyReview(f:any) {
   const makeDb=(p:string,id:string)=>{const db=new Database(p);db.run('CREATE TABLE ItemTable(key TEXT,value TEXT)');db.run('INSERT INTO ItemTable VALUES(?,?)',['workbench.panel.aichat.view.aichat.chatdata',JSON.stringify({tabs:[{tabId:'tab',bubbles:[{type:'user',id,initText:id,contextCacheTimestamp:1000}]}]})]);db.close();};
   makeDb(dbFile,'old-row');const runDb=()=>d.processCursorSession(dbFile,dbId,home,sync,'user',undefined,cache,queue,pending,()=>{});await runDb();assert.equal(getPosition(dbFile),1);makeDb(dbFile+'.next','new-row');fs.renameSync(dbFile+'.next',dbFile);const dbBefore=sent.length;await runDb();assert.equal(getPosition(dbFile),1);assert.equal(sent[dbBefore].messages[0].messageUuid,'new-row');
   fs.writeFileSync(countFile+'.next',JSON.stringify({messages:[{type:'gemini',content:'new generation count',timestamp:'2026-09-05T12:00:00Z'}]}));fs.renameSync(countFile+'.next',countFile);const gemBefore=sent.length;await gemini(countFile,countId);assert.equal(sent[gemBefore].messages[0].content,'new generation count');
-  const blockedId='receipt-blocked',blocked=file(blockedId,'assistant:\nblocked source remains\n');
+  const blockedId='receipt-blocked',blocked=file(blockedId,'assistant:\nblocked source remains\n','.txt');
   const parsed=await readTranscriptIngest({client:'cursor',file:blocked,sessionId:blockedId,offset:0}),record=ingestRecord(parsed.messages[0])!;
   const entries=Array.from({length:2048},(_,i)=>({key:record.key+'-'+i,signature:record.signature,file:blocked,identity:record.identity,size:record.sourceSize}));
   const reservation=internal.reserveTranscriptReceipts(blockedId,cache[blockedId],entries);assert.ok(reservation);reservation.accept();reservation.release();
   assert.equal(internal.reserveTranscriptReceipts(blockedId,cache[blockedId],[{...entries[0],key:'one-too-many'}]),null);assert.equal(receipts(blockedId).length,2048);
-  const healthyId='receipt-healthy',healthy=file(healthyId,'assistant:\nunrelated owner drains\n');await cursor(healthy,healthyId);assert.equal(getPosition(healthy),fs.statSync(healthy).size);assert.equal(receipts(healthyId).length,0);assert.equal(receipts(blockedId).length,2048);assert.ok(fs.existsSync(blocked));
-  const largeId='large-pending',large=file(largeId,'assistant:\n'+'a'.repeat(1_100_000)+'\n');delete cache[largeId];createFailed=true;await assert.rejects(cursor(large,largeId));assert.equal(pending[largeId],undefined);assert.equal(getPosition(large),0);createFailed=false;await cursor(large,largeId);assert.equal(getPosition(large),fs.statSync(large).size);
+  const healthyId='receipt-healthy',healthy=file(healthyId,'assistant:\nunrelated owner drains\n','.txt');await cursor(healthy,healthyId);assert.equal(getPosition(healthy),fs.statSync(healthy).size);assert.equal(receipts(healthyId).length,0);assert.equal(receipts(blockedId).length,2048);assert.ok(fs.existsSync(blocked));
+  const largeId='large-pending',large=file(largeId,'assistant:\n'+'a'.repeat(1_100_000)+'\n','.txt');delete cache[largeId];createFailed=true;await assert.rejects(cursor(large,largeId));assert.equal(pending[largeId],undefined);assert.equal(getPosition(large),0);createFailed=false;await cursor(large,largeId);assert.equal(getPosition(large),fs.statSync(large).size);
   const owner=internal.transcriptRetryOwners,map=new Map();let now=Date.now(),gaveUp=0;owner.options.now=()=>now;
   const manyId='many-count',many=file(manyId,JSON.stringify({messages:Array.from({length:2500},()=>({type:'gemini',content:'identical independent occurrence',timestamp:'2026-09-05T12:00:00Z'}))}));delete cache[manyId];createFailed=true;
   const scheduled=owner.create(map,many,{client:'gemini',file:many,sessionId:manyId},()=>gemini(many,manyId),{debounceMs:0,maxWaitMs:0,maxRetries:1,onGiveUp:()=>gaveUp++});

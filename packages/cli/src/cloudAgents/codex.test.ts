@@ -8,7 +8,8 @@ import { cloudApiErrorOf, CloudApiError } from "./http.js";
 import { execFileSync } from "child_process";
 import { CLOUD_AGENT_ACTION_SUBTYPE, CLOUD_AGENT_PROVIDERS } from "@codecast/shared/contracts";
 import { readTranscriptIngest } from "../workers/ingestClient.js";
-import { buildCodexCloudTranscript, CodexCloudAdapter, CodexCloudApi, codexCitations, codexTaskLines, codexTaskTitle, isRunningTurnStatus, taskGit, taskRepo, taskTurnChain, type CodexKnown, type WhamTask, type WhamTurn, type WhamTurns } from "./codex.js";
+import { buildCodexCloudTranscript, CodexCloudAdapter, CodexCloudApi, codexCitations, codexTaskLines, codexTaskTitle, taskGit, taskRepo, taskTurnChain, type CodexKnown, type WhamTask, type WhamTurn, type WhamTurns } from "./codex.js";
+import { isRunningTurnStatus } from "./transcript.js";
 import { CloudAgentRegistry } from "./registry.js";
 import { checkCloudAgentLogin } from "./registry.js";
 import { applyInCheckout, CloudAgentSessions, setupErrorOf, type CloudAgentSession } from "./sessions.js";
@@ -17,6 +18,7 @@ import { classifyMirrorTranscriptTail, mirrorMessageUuid, readMetaJson } from ".
 import { CloudAgentBusyError, CloudAgentSetupError, type CloudAgentLoginCommand } from "./types.js";
 import { CloudAgentWatcher } from "./watcher.js";
 import { deviceLabel } from "../remote/device.js";
+import { fakeCloudFetch, json, type FakeCloudCall } from "../test-helpers/cloudFetch.js";
 
 // Real payloads from chatgpt.com/backend-api/wham (2026-09-29), scrubbed.
 const FIXTURES = path.join(import.meta.dir, "..", "__fixtures__", "codexCloud");
@@ -55,27 +57,24 @@ const NOW = 1_790_724_000_000;
 const VALID = authJson(NOW / 1000 + 3600);
 const EXPIRED = authJson(NOW / 1000 - 3600);
 
-/** A fetch over the wham API: routes by method and path, records every call. */
+/** A fetch over the wham API: routes by method and path (a route gets the request body), records every call. */
 function wham(routes: Record<string, (body: any) => Response>) {
-  const calls: Array<{ method: string; path: string; body?: any; headers: Record<string, string> }> = [];
-  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = new URL(String(input));
-    const p = url.pathname.replace("/backend-api/wham", "");
-    const method = init?.method ?? "GET";
-    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
-    calls.push({ method, path: `${p}${url.search}`, body, headers: init?.headers as Record<string, string> });
-    const hit = routes[`${method} ${p}`];
-    return hit ? hit(body) : new Response(JSON.stringify({ detail: "Invalid task ID" }), { status: 404 });
-  }) as typeof fetch;
+  const calls: FakeCloudCall[] = [];
+  // Routes are read at call time: a test swaps one between polls.
+  const byBody = new Proxy({} as Record<string, (call: FakeCloudCall) => Response>, { get: (_, k) => (typeof k === "string" && routes[k] ? (call: FakeCloudCall) => routes[k](call.body) : undefined) });
+  const fetchImpl = fakeCloudFetch(byBody, {
+    calls,
+    stripPrefix: "/backend-api/wham",
+    missing: () => new Response(JSON.stringify({ detail: "Invalid task ID" }), { status: 404 }),
+  });
   return { fetchImpl, calls };
 }
-const json = (v: unknown, status = 200) => () => new Response(JSON.stringify(v), { status });
 
 function adapter(auth: string | null, fetchImpl?: typeof fetch, extra: Partial<ConstructorParameters<typeof CodexCloudAdapter>[0]> = {}) {
   return new CodexCloudAdapter({ readAuth: () => auth, fetchImpl, now: () => NOW, ...extra });
 }
 
-const SESSION: CloudAgentSession = { model: "", repoUrl: "https://github.com/ashot/chatdoc", startingRef: "main" };
+const SESSION: CloudAgentSession = { model: "", repoUrl: "https://github.com/ashot/chatdoc", repo: { owner: "ashot", name: "chatdoc" }, startingRef: "main" };
 
 const cleanups: (() => void)[] = [];
 afterEach(() => { for (const fn of cleanups.splice(0)) try { fn(); } catch {} });
@@ -340,7 +339,7 @@ describe("Codex Cloud API", () => {
     expect(page.items[0]).toMatchObject({ id: "task_e_6abc48f2d3b0832e9e4bb4b303d1bc45", updatedAtMs: Math.round(1790724360.440929 * 1000), active: false });
     expect(page.items[0].version).toContain("completed");
     expect(page.nextCursor).toBe(LIST.cursor);
-    expect(calls[0].path).toBe("/tasks/list?limit=20&task_filter=current");
+    expect(`${calls[0].path}${calls[0].search}`).toBe("/tasks/list?limit=20&task_filter=current");
     // The machine's own Codex headers.
     expect(calls[0].headers.Authorization).toStartWith("Bearer ");
     expect(calls[0].headers["ChatGPT-Account-Id"]).toBe("acct-1");
@@ -554,7 +553,7 @@ describe("Codex Cloud mirror (the core watcher over the adapter)", () => {
 
   test("with the account's sync off and nothing of codecast's to follow, a pass does not call the API at all", async () => {
     const { fetchImpl, calls } = wham(routes);
-    const watcher = new CloudAgentWatcher(adapter(VALID, fetchImpl), { rootDir: mirrorDir(), now: () => NOW, importAll: () => false, hasOwnAgents: () => false });
+    const watcher = new CloudAgentWatcher(adapter(VALID, fetchImpl), { rootDir: mirrorDir(), now: () => NOW, importAll: () => false, ownAgents: () => new Set() });
     await watcher.poll();
     expect(calls).toEqual([]);
   });

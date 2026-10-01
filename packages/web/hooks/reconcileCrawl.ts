@@ -19,11 +19,20 @@ import { useInboxStore } from "../store/inboxStore";
 //   gen        — bumped on a real workspace change so a stale crawl abandons its
 //                writes instead of clobbering the new workspace's data.
 type ReconcileState = { doneAt: Map<string, number>; runningKey: string | null; gen: number };
-const states = new Map<string, ReconcileState>();
+let states = new Map<string, ReconcileState>();
 function stateFor(namespace: string): ReconcileState {
   let s = states.get(namespace);
   if (!s) { s = { doneAt: new Map(), runningKey: null, gen: 0 }; states.set(namespace, s); }
   return s;
+}
+
+// The multiplayer simulator's per-window seam (store/__tests__/sim/windowSlots.ts):
+// each slot reads the binding, swaps in another window's value, or makes the
+// value a fresh window starts with. Tests only; production never calls it.
+export function __reconcileCrawlSimSlots() {
+  return {
+    states: { get: () => states, set: (v: Map<string, ReconcileState>) => { states = v; }, fresh: () => new Map<string, ReconcileState>() },
+  };
 }
 
 /** Abandon the active crawl in one namespace without affecting other crawls. */

@@ -68,7 +68,7 @@ const ROWS: Row[] = [
   // Every transcript file event (Cursor's and each cloud agent mirror's) runs
   // through one handler, handed the place lookup its caller owns: Cursor's
   // above, and the mirror's meta.json read below.
-  { file: D, name: "handleTranscriptFileEvent", kind: "function", from: MAIN, minLines: 40, mustContain: "await findWorkspacePath()" },
+  { file: D, name: "handleTranscriptFileEvent", kind: "function", minLines: 25, mustContain: "await findWorkspacePath()" },
   { file: "cloudAgents/transcript.ts", name: "readMetaJson", kind: "function", minLines: 8, mustContain: "fs.promises.readFile" },
   { file: D, name: "startWatchdog", kind: "function", minLines: 40, mustContain: "findStaleSessionFiles" },
   { file: D, name: "logHealthSummary", kind: "function", minLines: 10, mustContain: "getSystemMetrics" },

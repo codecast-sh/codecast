@@ -11,8 +11,16 @@
 //   - apiBase is dead, and a stub prepended to <head> answers every other
 //     fetch (the view beacon, a posted comment) locally;
 //   - the same stub stands in for localStorage, which an opaque origin
-//     refuses, and says the bar was last left open, as a visitor opening the
-//     page's own URL sees it (a framed page otherwise starts as the pill).
+//     refuses, and says the bar was last folded into its pill, as a framed
+//     page shows it in a conversation, so the frame carries one title;
+//   - the stub sets the page's clock to just after it was published, so its
+//     "updated" line and the comments read as fresh whenever it loads, and
+//     opens the discussion on the chart's pin once the page is up.
+//
+// The hero shows a still of this page (public/hero/page.jpg, captured at
+// 851x500 CSS px and 2x, after the stub has opened the discussion) and mounts
+// the live page over it only when a visitor points at it; recapture the still
+// whenever the report changes.
 //
 // Run from packages/web: bun scripts/hero-page.ts
 
@@ -23,8 +31,11 @@ import { PAGE } from "../app/(marketing)/heroFly/fixtures/publish";
 
 const OUT = join(import.meta.dir, "..", "public", "hero", "page.html");
 
-// A fixed clock, so the output only changes when the report does.
+// A fixed publish time, so the output only changes when the report does; the
+// stub reads every relative time against it (see above).
 const AT = Date.UTC(2026, 8, 30, 15, 0);
+/** How long after publishing the page's clock reads when it loads. */
+const SEEN_AFTER = 75_000;
 
 const report = `<!doctype html>
 <html lang="en">
@@ -56,11 +67,11 @@ const report = `<!doctype html>
 </head>
 <body>
 <main>
-  <div class="kicker">acme/billing · PR #482 · 7 days on staging</div>
+  <div class="kicker">acme/billing · PR #482 · last 24h replayed on staging</div>
   <h1>${PAGE.title}</h1>
-  <p class="lede">Failed Stripe deliveries now retry with exponential backoff, at most 5 attempts over about thirty minutes. Nothing was dropped this week.</p>
+  <p class="lede">Failed Stripe deliveries now retry with exponential backoff, at most 5 attempts over about thirty minutes. Nothing was dropped in the replay.</p>
   <div class="stats">
-    <div class="stat"><b class="good">0</b><span>events dropped (41 the week before)</span></div>
+    <div class="stat"><b class="good">0</b><span>events dropped (41 before the fix)</span></div>
     <div class="stat"><b>99.98%</b><span>delivered, retries included</span></div>
     <div class="stat"><b>2m 10s</b><span>median time to recover</span></div>
   </div>
@@ -101,7 +112,7 @@ const meta = {
     text: c.text,
     anchor: JSON.stringify(c.anchor),
     version: 2,
-    created_at: AT - (PAGE.comments.length - i) * 4 * 60_000,
+    created_at: AT + 20_000 + i * 25_000,
     delivered: false,
   })),
   session: { short_id: PAGE.session.shortId, title: PAGE.session.title },
@@ -113,14 +124,18 @@ const meta = {
 };
 
 const stub = `<script>(function(){
+  var now=Date.now,shift=${AT + SEEN_AFTER}-now();
+  Date.now=function(){return now()+shift;};
   var mem={};
-  var store={getItem:function(k){return k.indexOf("__cc_min")===0?"0":(k in mem?mem[k]:null);},setItem:function(k,v){mem[k]=String(v);},removeItem:function(k){delete mem[k];}};
+  var store={getItem:function(k){return k.indexOf("__cc_min")===0?"1":(k in mem?mem[k]:null);},setItem:function(k,v){mem[k]=String(v);},removeItem:function(k){delete mem[k];}};
   try{Object.defineProperty(window,"localStorage",{value:store,configurable:true});}catch(e){}
   var real=window.fetch.bind(window);
   window.fetch=function(u,o){
     if(typeof u==="string"&&u.indexOf("data:")===0)return real(u,o);
     return Promise.resolve(new Response("{}",{status:200,headers:{"Content-Type":"application/json"}}));
   };
+  var open=function(n){var pin=document.querySelector(".__cc_pin");if(pin)pin.click();else if(n<40)setTimeout(function(){open(n+1);},50);};
+  addEventListener("load",function(){open(0);});
 })();</script>`;
 
 const branded = brandArtifactHtml(report, {

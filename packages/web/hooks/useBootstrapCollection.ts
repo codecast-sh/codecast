@@ -31,7 +31,7 @@ type Opts = {
 // the store exactly once (`applied`): a remount after the floor landed must not
 // re-overlay a stale snapshot over log patches that arrived in between.
 type Floor = { promise: Promise<any[]>; applied: boolean };
-const done = new Map<string, Floor>();
+let done = new Map<string, Floor>();
 
 export function bootstrapKey(key: string, args: unknown): string {
   return `${key}:${JSON.stringify(args)}`;
@@ -54,6 +54,15 @@ export function floorScopeKeys(
 /** Test/HMR escape hatch. */
 export function resetBootstrapFloors(): void {
   done.clear();
+}
+
+// The multiplayer simulator's per-window seam (store/__tests__/sim/windowSlots.ts):
+// each slot reads the binding, swaps in another window's value, or makes the
+// value a fresh window starts with. Tests only; production never calls it.
+export function __bootstrapSimSlots() {
+  return {
+    done: { get: () => done, set: (v: Map<string, Floor>) => { done = v; }, fresh: () => new Map<string, Floor>() },
+  };
 }
 
 // Entries from an earlier epoch or principal can never be asked for again;

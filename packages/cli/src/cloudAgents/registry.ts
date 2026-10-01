@@ -13,6 +13,7 @@ import { isCloudMirrorPlaceholder, repoOwnerName } from "./poll.js";
 import { applyInCheckout, CloudAgentSessions, setupErrorOf, type CloudAgentSessionsDeps } from "./sessions.js";
 import { CloudAgentWatcher, type CloudAgentTranscriptEvent, type CloudAgentWatcherOptions } from "./watcher.js";
 import { CLOUD_AGENT_ACTION_METHODS, CloudAgentSetupError, errorText, logTag, type AnyCloudAgentAdapter, type CloudAgentGit, type CloudAgentLoginState } from "./types.js";
+import type { ProviderKeyVerdict } from "../providerKeyCrypto.js";
 
 export interface CloudAgentRuntime {
   adapter: AnyCloudAgentAdapter;
@@ -107,8 +108,7 @@ export class CloudAgentRegistry {
       const field = CLOUD_SESSION_SOURCES[adapter.spec.syncSource].field;
       const watcher = new CloudAgentWatcher(adapter, {
         importAll: () => cloudSessionSyncOn(field, opts.syncSetting(field)),
-        isOwnAgent: (agentId) => sessions.ownsAgent(agentId),
-        hasOwnAgents: () => sessions.ownsAnyAgent(),
+        ownAgents: () => sessions.agentIds(),
         resolveRepoDir: (repo, agentId) => this.checkoutOf(runtime, agentId, repo),
         log: opts.log,
       });
@@ -382,7 +382,7 @@ export class CloudAgentRegistry {
   }
 
   /** Check a key before it is stored, for the provider whose credential it is. */
-  async verifyKey(keyProvider: string, key: string): Promise<{ ok: true; account?: string } | { ok: false; error: string }> {
+  async verifyKey(keyProvider: string, key: string): Promise<ProviderKeyVerdict> {
     const spec = cloudAgentProviderForKey(keyProvider);
     const adapter = spec && this.runtimes.find((r) => r.adapter.spec.id === spec.id)?.adapter;
     return adapter?.verifyKey ? adapter.verifyKey(key) : { ok: true };

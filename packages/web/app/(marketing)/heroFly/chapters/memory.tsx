@@ -3,7 +3,8 @@
 /**
  * Chapter 12, Memory: three weeks later Sarah searches the palette, and the
  * sessions behind the work come back with the task; then session blame ties
- * line 42 of src/billing/retry.ts to the fork that tried the other way. The
+ * line 42 of src/billing/retry.ts to the lead session that applied the
+ * decision, under the comment that says why. The
  * palette is the real cmdk rows; the query types itself from the film, and a
  * visitor can type over it (the field listens only while it has focus).
  */
@@ -27,12 +28,12 @@ import type { PartProps } from "./contract";
 import { fly, useFilmTime } from "../filmClock";
 import { typed } from "../timeline";
 import { FILE, MEMORY, RECENT, RESULTS, SEARCH_MIN, TASK, VIEWER, blameRanges } from "../fixtures/memory";
-import { SESSIONS } from "../fixtures/story";
+import { PEOPLE, SESSIONS } from "../fixtures/story";
 
 const noop = () => {};
 const DONE = STATUS_OPTIONS.find((o) => o.key === TASK.status);
 const TASK_STATUS = DONE ? { label: DONE.label, color: DONE.color ?? "" } : undefined;
-const AUTHOR = "Ashot Petrosian";
+const AUTHOR = PEOPLE.me.name;
 
 /** Every word of the query somewhere in the text: how the fixtures stand in for the server's content search. */
 const wordsIn = (q: string, text: string) => q.split(/\s+/).filter(Boolean).every((w) => text.toLowerCase().includes(w));
@@ -40,6 +41,11 @@ const wordsIn = (q: string, text: string) => q.split(/\s+/).filter(Boolean).ever
 export function PaletteSearch({ now }: PartProps) {
   const filmQuery = useFilmTime((t) => typed(MEMORY.query, t, MEMORY.typeAt, MEMORY.typeRate));
   const [typedByVisitor, setTypedByVisitor] = useState<string | null>(null);
+  // cmdk scrolls its selected row into view, through every scrolling
+  // ancestor, the stage's clip included. A row is selected only while the
+  // palette is face-on, where that scroll has nothing to move.
+  const [picked, setPicked] = useState("");
+  const onScreen = useFilmTime((t) => t >= MEMORY.selectFrom && t < MEMORY.selectTo);
   const query = typedByVisitor ?? filmQuery;
   const q = query.trim().toLowerCase();
   const recent = RECENT.filter((r) => sessionMatchesQuery({ ...r, authorName: VIEWER.name }, q)).slice(0, 4);
@@ -48,7 +54,14 @@ export function PaletteSearch({ now }: PartProps) {
   const tasks = searching && wordsIn(q, `${TASK.title} ${TASK.short_id} webhook retry`) ? [TASK] : [];
   return (
     <div className="flex h-full items-start justify-center pt-5" {...fly("palette/memory.palette")}>
-      <CommandPrimitive className={paletteClass} filter={paletteItemScore} loop label="Command menu">
+      <CommandPrimitive
+        className={paletteClass}
+        filter={paletteItemScore}
+        loop
+        label="Command menu"
+        value={onScreen || typedByVisitor !== null ? picked : ""}
+        onValueChange={setPicked}
+      >
         <PaletteSearchBar trailing={<KeyCap>Esc</KeyCap>}>
           <CommandPrimitive.Input
             data-hero-live=""
@@ -103,7 +116,7 @@ export function Blame({ now }: PartProps) {
   const ranges = useMemo(() => blameRanges(now), [now]);
   const summary = useMemo(() => summarizeSessionBlame(ranges), [ranges]);
   const colors = useMemo(() => sessionBlameColors(summary), [summary]);
-  const filmFocus = useFilmTime((t) => (t >= MEMORY.focus ? SESSIONS.fork.id : null));
+  const filmFocus = useFilmTime((t) => (t >= MEMORY.focus ? SESSIONS.lead.id : null));
   const [hovered, setHovered] = useState<string | null>(null);
   const [pinned, setPinned] = useState<string | null>(null);
   const focus = hovered ?? pinned ?? filmFocus;

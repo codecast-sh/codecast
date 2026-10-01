@@ -1,17 +1,21 @@
 <!doctype html>
 <html lang="en">
 <head><script>(function(){
+  var now=Date.now,shift=1790780475000-now();
+  Date.now=function(){return now()+shift;};
   var mem={};
-  var store={getItem:function(k){return k.indexOf("__cc_min")===0?"0":(k in mem?mem[k]:null);},setItem:function(k,v){mem[k]=String(v);},removeItem:function(k){delete mem[k];}};
+  var store={getItem:function(k){return k.indexOf("__cc_min")===0?"1":(k in mem?mem[k]:null);},setItem:function(k,v){mem[k]=String(v);},removeItem:function(k){delete mem[k];}};
   try{Object.defineProperty(window,"localStorage",{value:store,configurable:true});}catch(e){}
   var real=window.fetch.bind(window);
   window.fetch=function(u,o){
     if(typeof u==="string"&&u.indexOf("data:")===0)return real(u,o);
     return Promise.resolve(new Response("{}",{status:200,headers:{"Content-Type":"application/json"}}));
   };
+  var open=function(n){var pin=document.querySelector(".__cc_pin");if(pin)pin.click();else if(n<40)setTimeout(function(){open(n+1);},50);};
+  addEventListener("load",function(){open(0);});
 })();</script>
 <meta property="og:title" content="Webhook retry report">
-<meta property="og:description" content="A page published by Ashot Petrosian with codecast">
+<meta property="og:description" content="A page published by Alex Rivera with codecast">
 <meta property="og:url" content="https://codecast.sh/a/webhook-retries">
 <meta property="og:site_name" content="codecast">
 <meta property="og:type" content="article">
@@ -361,7 +365,7 @@
 <div id="__cc_cpanel" class="__cc_panel" hidden></div>
 <div id="__cc_mgr" class="__cc_panel" hidden></div>
 <script>(function(){
-  var CC={"metaUrl":"data:application/json,%7B%22version%22%3A2%2C%22updated_at%22%3A1790780400000%2C%22kind%22%3A%22html%22%2C%22views%22%3A14%2C%22comment_count%22%3A2%2C%22comments%22%3A%5B%7B%22id%22%3A%22hero-cm1%22%2C%22author_name%22%3A%22Sarah%20Chen%22%2C%22author_avatar%22%3Anull%2C%22verified%22%3Atrue%2C%22parent_id%22%3Anull%2C%22text%22%3A%22Can%20we%20page%20someone%20when%20an%20event%20reaches%20attempt%205%3F%22%2C%22anchor%22%3A%22%7B%5C%22x%5C%22%3A0.9%2C%5C%22y%5C%22%3A0.47%7D%22%2C%22version%22%3A2%2C%22created_at%22%3A1790779920000%2C%22delivered%22%3Afalse%7D%2C%7B%22id%22%3A%22hero-cm2%22%2C%22author_name%22%3A%22Maya%20Ortiz%22%2C%22author_avatar%22%3Anull%2C%22verified%22%3Atrue%2C%22parent_id%22%3Anull%2C%22text%22%3A%22Putting%20this%20chart%20on%20the%20billing%20dashboard.%22%2C%22anchor%22%3A%22%7B%5C%22x%5C%22%3A0.9%2C%5C%22y%5C%22%3A0.27%7D%22%2C%22version%22%3A2%2C%22created_at%22%3A1790780160000%2C%22delivered%22%3Afalse%7D%5D%2C%22session%22%3A%7B%22short_id%22%3A%22jx7hero%22%2C%22title%22%3A%22Retry%20failed%20webhooks%22%7D%2C%22gated%22%3A%7B%22password%22%3Afalse%2C%22email%22%3Afalse%7D%2C%22versions%22%3A%5B%7B%22version%22%3A2%2C%22title%22%3A%22Webhook%20retry%20report%22%2C%22size%22%3A4560%2C%22published_at%22%3A1790780400000%7D%2C%7B%22version%22%3A1%2C%22title%22%3A%22Webhook%20retry%20report%22%2C%22size%22%3A4560%2C%22published_at%22%3A1790778840000%7D%5D%7D","apiBase":"https://hero.invalid","shareUrl":"https://codecast.sh/a/webhook-retries","slug":"webhook-retries","version":2,"currentVersion":2,"kind":"html","views":14,"comments":2,"live":false,"editMode":"owner","gated":{"password":false,"email":false}};
+  var CC={"metaUrl":"data:application/json,%7B%22version%22%3A2%2C%22updated_at%22%3A1790780400000%2C%22kind%22%3A%22html%22%2C%22views%22%3A14%2C%22comment_count%22%3A2%2C%22comments%22%3A%5B%7B%22id%22%3A%22hero-cm1%22%2C%22author_name%22%3A%22Sarah%20Chen%22%2C%22author_avatar%22%3Anull%2C%22verified%22%3Atrue%2C%22parent_id%22%3Anull%2C%22text%22%3A%22Can%20we%20page%20someone%20when%20an%20event%20reaches%20attempt%205%3F%22%2C%22anchor%22%3A%22%7B%5C%22x%5C%22%3A0.9%2C%5C%22y%5C%22%3A0.47%7D%22%2C%22version%22%3A2%2C%22created_at%22%3A1790780420000%2C%22delivered%22%3Afalse%7D%2C%7B%22id%22%3A%22hero-cm2%22%2C%22author_name%22%3A%22Maya%20Ortiz%22%2C%22author_avatar%22%3Anull%2C%22verified%22%3Atrue%2C%22parent_id%22%3Anull%2C%22text%22%3A%22Putting%20this%20chart%20on%20the%20billing%20dashboard.%22%2C%22anchor%22%3A%22%7B%5C%22x%5C%22%3A0.9%2C%5C%22y%5C%22%3A0.27%7D%22%2C%22version%22%3A2%2C%22created_at%22%3A1790780445000%2C%22delivered%22%3Afalse%7D%5D%2C%22session%22%3A%7B%22short_id%22%3A%22jx7hero%22%2C%22title%22%3A%22Retry%20failed%20webhooks%22%7D%2C%22gated%22%3A%7B%22password%22%3Afalse%2C%22email%22%3Afalse%7D%2C%22versions%22%3A%5B%7B%22version%22%3A2%2C%22title%22%3A%22Webhook%20retry%20report%22%2C%22size%22%3A4574%2C%22published_at%22%3A1790780400000%7D%2C%7B%22version%22%3A1%2C%22title%22%3A%22Webhook%20retry%20report%22%2C%22size%22%3A4574%2C%22published_at%22%3A1790778840000%7D%5D%7D","apiBase":"https://hero.invalid","shareUrl":"https://codecast.sh/a/webhook-retries","slug":"webhook-retries","version":2,"currentVersion":2,"kind":"html","views":14,"comments":2,"live":false,"editMode":"owner","gated":{"password":false,"email":false}};
   var frag=new URLSearchParams(location.hash.replace(/^#/,""));
   var ownerKey=frag.get("o")||"";
   var editKey=frag.get("ed")||"";
@@ -1237,11 +1241,11 @@
   }
 })();</script>
 <main>
-  <div class="kicker">acme/billing · PR #482 · 7 days on staging</div>
+  <div class="kicker">acme/billing · PR #482 · last 24h replayed on staging</div>
   <h1>Webhook retry report</h1>
-  <p class="lede">Failed Stripe deliveries now retry with exponential backoff, at most 5 attempts over about thirty minutes. Nothing was dropped this week.</p>
+  <p class="lede">Failed Stripe deliveries now retry with exponential backoff, at most 5 attempts over about thirty minutes. Nothing was dropped in the replay.</p>
   <div class="stats">
-    <div class="stat"><b class="good">0</b><span>events dropped (41 the week before)</span></div>
+    <div class="stat"><b class="good">0</b><span>events dropped (41 before the fix)</span></div>
     <div class="stat"><b>99.98%</b><span>delivered, retries included</span></div>
     <div class="stat"><b>2m 10s</b><span>median time to recover</span></div>
   </div>

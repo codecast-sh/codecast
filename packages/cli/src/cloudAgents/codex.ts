@@ -23,16 +23,15 @@
  * ~/.codecast/codex-cloud/<task id>/, synced as a codex session.
  */
 import { CLOUD_AGENT_BRANCH_SEPARATOR, CLOUD_AGENT_PROVIDERS, cloudAgentRootId } from "@codecast/shared/contracts";
-import { githubRepo } from "../cloud/gitOrigin.js";
 import { readActiveCodexAuth } from "../codexAccounts.js";
 import { codexAccessExpired, decodeCodexAuth } from "../codexAuthDecode.js";
 import { codexBackendHeadersFromAuth, codexBackendRequest, parseBackendUsageResponse, requestCodexBackendUsage } from "../codexBackendUsage.js";
 import { threadItemToMessage, type ThreadItem } from "../codexAppServer.js";
 import type { ParsedMessage } from "../parser.js";
 import { splitPatches } from "../repoMirror.js";
-import { CloudApiError, cloudApiErrorOf } from "./http.js";
-import { repoOwnerName } from "./poll.js";
-import { MirrorTranscript } from "./transcript.js";
+import { CloudApiError } from "./http.js";
+import { secondsToMs } from "./poll.js";
+import { isRunningTurnStatus, MirrorTranscript, turnError } from "./transcript.js";
 import { CloudAgentBusyError, CloudAgentSetupError, type CloudAgentAdapter, type CloudAgentApplyPlan, type CloudAgentGit, type CloudAgentHandle, type CloudAgentListItem, type CloudAgentLogin, type CloudAgentLoginCommand, type CloudAgentMirror } from "./types.js";
 import type { CloudAgentSession } from "./sessions.js";
 
@@ -44,9 +43,6 @@ const POLL_MS = 5 * 60_000;
 const FAST_POLL_MS = 30_000;
 /** The title a task has until Codex names it: not a name, so the session is titled by its prompt until the real one comes. */
 const PLACEHOLDER_TITLE = "New task";
-/** The statuses of a turn still running; any other status, one the spike never saw included, has ended. */
-const RUNNING_TURN_STATUSES: ReadonlySet<string> = new Set(["pending", "in_progress"]);
-
 // ── Payloads (only the fields codecast reads) ────────────────────────────────
 
 interface WhamContentPart { content_type?: string; text?: string; path?: string; line_range_start?: number | null; line_range_end?: number | null }
@@ -204,10 +200,6 @@ function inputItems(text: string) {
 
 // ── Turns ────────────────────────────────────────────────────────────────────
 
-export function isRunningTurnStatus(status: string | null | undefined): boolean {
-  return typeof status === "string" && RUNNING_TURN_STATUSES.has(status);
-}
-
 /** The id's own half: turn ids are `<task id>~<turn id>`. */
 function turnKey(id: string): string {
   return id.slice(id.indexOf(CLOUD_AGENT_BRANCH_SEPARATOR) + 1);
@@ -319,15 +311,6 @@ export function codexCitations(text: string): string {
   return text
     .replace(/【F:([^†】]+)†L(\d+)(?:-L(\d+))?】/g, (_m, file: string, a: string, b: string | undefined, at: number, all: string) => `${at > 0 && !/\s/.test(all[at - 1]) ? " " : ""}\`${fileRef(file, a, b)}\``)
     .replace(/【[^】]*】/g, "");
-}
-
-/** A failed turn's reason, in whichever shape the API gave it (the same reader as its HTTP errors). */
-function turnError(err: unknown): string {
-  return typeof err === "string" && err ? err : cloudApiErrorOf(0, err, "no reason given").message;
-}
-
-function secondsToMs(s: number | null | undefined): number | undefined {
-  return typeof s === "number" && Number.isFinite(s) && s > 0 ? Math.round(s * 1000) : undefined;
 }
 
 /**
@@ -545,10 +528,7 @@ export function buildCodexCloudTranscript(input: CodexCloudTranscriptInput): str
       if (text) tx.note(`${key}:progress`, text, secondsToMs(turn.created_at) ?? tx.clock);
       continue;
     }
-    if (turn.turn_status === "failed") tx.error(`${key}:error`, `${CODEX.label} turn failed: ${turnError(turn.error)}`);
-    else if (turn.turn_status === "cancelled") tx.note(`${key}:cancelled`, "Cancelled.");
-    else if (turn.turn_status && turn.turn_status !== "completed") tx.note(`${key}:ended`, `${CODEX.label} ended this turn as ${turn.turn_status}.`);
-    tx.turnEnded();
+    tx.endTurn(key, { status: turn.turn_status, label: CODEX.label, reason: turnError(turn.error) });
   }
   return tx.toString();
 }
@@ -745,7 +725,7 @@ export class CodexCloudAdapter implements CloudAgentAdapter<CodexCloudApi, Codex
    * attempts as the launch asked for.
    */
   async create(api: CodexCloudApi, session: CloudAgentSession, content: string): Promise<{ agentId: string; url?: string }> {
-    const repo = repoOwnerName(githubRepo(session.repoUrl));
+    const { repo } = session;
     if (!repo) throw CloudAgentSetupError.repoUnreachable(this, session, "this session's folder has no GitHub remote", `${CODEX.label} works on GitHub repositories: start the session in a checkout of one`);
     const env = await pickEnvironment(api, repo.owner, repo.name);
     if (!env) throw CloudAgentSetupError.repoUnreachable(this, session, "it has no Codex environment", `Create one at ${CODEX.repoAccessUrl}`);

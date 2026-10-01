@@ -203,7 +203,9 @@ describe("command groups stay off the boot graph", () => {
     // usageRetry.ts when it runs, and `cast doctor` loads doctor.ts (5 files).
     // One leaf arrived: cliVersion.ts, the version read update.ts and the
     // harness ledger share, so the worker runtime no longer loads the updater.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(262);
+    // Plus cloudAgents/apiError.ts, the provider error reader transcript.ts
+    // uses; it is a leaf so the HTTP client stays off this graph.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(263);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.
@@ -263,8 +265,11 @@ describe("command groups stay off the boot graph", () => {
     // 358 after sync exclusions: the shared folder list rule in syncScope.ts.
     // 389 after the 2026-09-30 cloud agents, cloud sync and usage retry work,
     // every file of it the daemon's own: the Cursor and Codex cloud agent
-    // registry (cloudAgents/*, 9 files, built when daemon.ts loads) with the
-    // sse.ts parser its Cursor adapter reads, claudeCloud.ts (the claude.ai
+    // registry (cloudAgents/*, 12 files, built when daemon.ts loads: the
+    // OpenAI Agents API adapter openaiAgents.ts and streams.ts, the stream
+    // reader it shares with the Cursor adapter, are the last two, beside
+    // apiError.ts, the leaf error reader the transcript writer shares) with the
+    // sse.ts parser those streams read, claudeCloud.ts (the claude.ai
     // session watcher, started on every boot), workers/cursorObservation.ts
     // under the ingest worker, typedPollAnswer.ts in message delivery,
     // usageRetry.ts with cloudAgents/http.ts for the usage polls,
@@ -275,7 +280,7 @@ describe("command groups stay off the boot graph", () => {
     // contracts through the barrel. A dynamic import of the registry or the
     // watcher would lower this number without lowering what the daemon
     // loads, since both run at boot. Plus cliVersion.ts, the same leaf as above.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(389);
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(392);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

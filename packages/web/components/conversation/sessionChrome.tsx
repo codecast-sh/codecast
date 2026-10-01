@@ -2,7 +2,7 @@ import { AppLoader } from "../AppLoader";
 import { useState, useMemo, memo, Fragment, type ReactNode } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { withSafetyBlock, SAFETY_BLOCK_HINT, PROVIDER_KEYS, getProviderKeySpec, cloudAgentCredentialError, cloudAgentSetupCard, computeConversationTaskStats, isSessionActivityFresh } from "@codecast/shared/contracts";
+import { withSafetyBlock, SAFETY_BLOCK_HINT, PROVIDER_KEYS, getProviderKeySpec, computeConversationTaskStats, isSessionActivityFresh } from "@codecast/shared/contracts";
 import { LimitParkCard } from "../LimitParkCard";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { toast } from "sonner";
@@ -23,7 +23,8 @@ import { useProviderKeyCommand, deviceManagedKeys } from "../../lib/useProviderK
 import type { RestartPhase, RestartStage } from "../../hooks/useSessionRestart";
 import { CopyCommand } from "./blocks/shared";
 import { authRemedy, detectProviderFromError } from "./classify";
-import { CloudAgentHeldNote, CloudAgentSetupText, ConnectCloudAgentButton } from "../cloudAgents";
+import { CloudAgentSetupHint, CloudAgentSetupText } from "../cloudAgents";
+import { useCloudAgentSetupCard } from "../cloudAgents/sessionAgent";
 import { formatDuration, formatFullTimestamp, formatRelativeTime } from "../../lib/conversationFormat";
 import { MessageMarkdown } from "./markdown";
 import type { ConversationDensity, ParsedApiError } from "./types";
@@ -255,7 +256,10 @@ function useApiErrorLive(conversationId?: string): boolean {
 }
 
 export function ApiErrorCard({ error, agentType, conversationId, timestamp, compact = false }: { error: ParsedApiError; agentType?: string; conversationId?: string; timestamp?: number; compact?: boolean }) {
-  const live = useApiErrorLive(conversationId);
+  // A cloud agent's setup card (the daemon's): its provider is the session's, its kind the card's text.
+  const cloudCard = useCloudAgentSetupCard(conversationId, error.message);
+  // A credential card is history once the machine has the credential, whatever the session did since.
+  const live = useApiErrorLive(conversationId) && !cloudCard?.resolved;
   // A usage-limit park has its own card: fixed shape in every density, the
   // reset counted down in the viewer's clock, and the owner machine's
   // recovery flags read into a "what happens next" line.
@@ -277,17 +281,15 @@ export function ApiErrorCard({ error, agentType, conversationId, timestamp, comp
   let hint: ReactNode;
   const remedy = authRemedy(agentType);
   // Actionable in every density, like the context card: its fix is one button.
-  // A cloud agent turn stopped for want of usable credentials (the daemon's setup card).
-  const cloudCredential = error.isAuth ? cloudAgentCredentialError(agentType, error.message) : null;
-  // Any other setup problem the daemon holds a cloud agent's message for (a
-  // repository it cannot reach, an account the provider refuses).
-  const cloudSetup = !cloudCredential ? cloudAgentSetupCard(agentType, error.message) : null;
-  if (cloudSetup) {
+  // Any setup problem the daemon holds a cloud agent's message for that is not
+  // a credential (a repository it cannot reach, an account the provider refuses).
+  const cloudSetup = cloudCard?.kind === "setup" ? cloudCard.spec : null;
+  if (cloudCard?.kind === "setup") {
     // Ahead of the auth branch: a workspace that turned the provider off reads
     // as a refusal, but no sign-in fixes it.
-    heading = `${cloudSetup.label} setup needed`;
+    heading = `${cloudCard.spec.label} setup needed`;
     icon = <span className="text-[10px] font-semibold">!</span>;
-    hint = <p className="mt-1.5 text-xs text-sol-text-dim"><CloudAgentHeldNote spec={cloudSetup} credential={false} conversationId={conversationId} /></p>;
+    hint = <CloudAgentSetupHint card={cloudCard} conversationId={conversationId} live={live} />;
   } else if (error.isSafety) {
     heading = "Safety review required";
     icon = <span className="text-[10px] font-semibold">!</span>;
@@ -300,11 +302,9 @@ export function ApiErrorCard({ error, agentType, conversationId, timestamp, comp
         <path d="M10 13L20 3M17 6l2 2M14 9l2 2" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
     );
-    hint = cloudCredential ? (
-      <div className="mt-2 flex items-center gap-2 flex-wrap text-xs text-sol-text-dim">
-        <ConnectCloudAgentButton spec={cloudCredential} conversationId={conversationId} />
-        <span><CloudAgentHeldNote spec={cloudCredential} credential conversationId={conversationId} /></span>
-      </div>
+    // A cloud agent turn stopped for want of usable credentials.
+    hint = cloudCard?.kind === "credential" ? (
+      <CloudAgentSetupHint card={cloudCard} conversationId={conversationId} live={live} />
     ) : (
       <>
         <div className="mt-2 flex items-center gap-1.5 flex-wrap text-xs text-sol-text-dim">
@@ -409,11 +409,12 @@ export function ApiErrorCard({ error, agentType, conversationId, timestamp, comp
           request_id: <span className="text-sol-text-secondary">{error.requestId}</span>
         </p>
       )}
-      {!live ? (
+      {/* A credential card the machine has since resolved says so in its own hint. */}
+      {!live && !cloudCard?.resolved ? (
         <p className="mt-1.5 text-xs text-sol-text-dim">
           The session continued after this — nothing to do here.
         </p>
-      ) : (!compact || error.isContext || cloudCredential || cloudSetup) && hint}
+      ) : (!compact || error.isContext || cloudCard) && hint}
     </div>
   );
 }
