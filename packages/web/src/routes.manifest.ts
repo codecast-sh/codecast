@@ -187,6 +187,14 @@ const Share = lazy(() => import("@/app/share/[token]/page"));
 const ShareMessage = lazy(() => import("@/app/share/message/[token]/page"));
 const ShareDoc = lazy(() => import("@/app/share/doc/[token]/page"));
 const SharePlan = lazy(() => import("@/app/share/plan/[token]/page"));
+const ShareTask = lazy(() => import("@/app/share/task/[token]/page"));
+const ShareCall = lazy(() => import("@/app/share/call/[token]/page"));
+const ShareProject = lazy(() => import("@/app/share/project/[token]/page"));
+const ShareInitiative = lazy(() => import("@/app/share/initiative/[token]/page"));
+const ShareDecision = lazy(() => import("@/app/share/decision/[token]/page"));
+const ShareStack = lazy(() => import("@/app/share/stack/[token]/page"));
+const ShareTrigger = lazy(() => import("@/app/share/trigger/[token]/page"));
+const ShareRun = lazy(() => import("@/app/share/run/[token]/page"));
 
 // Browsing a repository
 const RepoIndex = lazy(() => import("@/app/repo/page"));
@@ -359,6 +367,14 @@ export const ROUTES: RouteEntry[] = [
   { path: "share/message/:token", component: cast(ShareMessage), layout: "share", guestOk: true, guestKind: "public" },
   { path: "share/doc/:token", component: cast(ShareDoc), layout: "share", guestOk: true, guestKind: "public" },
   { path: "share/plan/:token", component: cast(SharePlan), layout: "share", guestOk: true, guestKind: "public" },
+  { path: "share/task/:token", component: cast(ShareTask), layout: "share", guestOk: true, guestKind: "public" },
+  { path: "share/call/:token", component: cast(ShareCall), layout: "share", guestOk: true, guestKind: "public" },
+  { path: "share/project/:token", component: cast(ShareProject), layout: "share", guestOk: true, guestKind: "public" },
+  { path: "share/initiative/:token", component: cast(ShareInitiative), layout: "share", guestOk: true, guestKind: "public" },
+  { path: "share/decision/:token", component: cast(ShareDecision), layout: "share", guestOk: true, guestKind: "public" },
+  { path: "share/stack/:token", component: cast(ShareStack), layout: "share", guestOk: true, guestKind: "public" },
+  { path: "share/trigger/:token", component: cast(ShareTrigger), layout: "share", guestOk: true, guestKind: "public" },
+  { path: "share/run/:token", component: cast(ShareRun), layout: "share", guestOk: true, guestKind: "public" },
 
   // -- Browsing a repository. The tree and blob pages carry the file path in the
   //    query string (`?path=`), not the route, so every path here is a fixed set

@@ -1,5 +1,6 @@
 // Speaker presentation shared by the call stage and the calls page: one
 // stable accent per voice so a conversation reads the same everywhere.
+import { fmtDuration } from "../triggerCadence";
 
 export const SPEAKER_COLORS = [
   "text-sol-cyan",
@@ -35,4 +36,9 @@ export function fmtClock(msFromStart: number): string {
   if (total < 3600) return `${Math.floor(total / 60)}:${s}`;
   const m = String(Math.floor(total / 60) % 60).padStart(2, "0");
   return `${Math.floor(total / 3600)}:${m}:${s}`;
+}
+
+/** How long a call ran, in the same form the thread's passages use. */
+export function fmtCallLength(startedAt: number, endedAt: number | null): string {
+  return endedAt ? fmtDuration(Math.max(1000, endedAt - startedAt)) : "live";
 }

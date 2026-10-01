@@ -8,6 +8,7 @@ import {
   formatScope,
   jobFlag,
   touchesPlatform,
+  touchesComputer,
 } from "./changed-path-scope";
 
 const flags = (files: string[]) => classifyChangedPaths(files).flags;
@@ -15,6 +16,7 @@ const flags = (files: string[]) => classifyChangedPaths(files).flags;
 describe("areaOf", () => {
   test("maps each package to its area", () => {
     expect(areaOf("packages/cli/src/daemon.ts")).toBe("cli");
+    expect(areaOf("packages/evals/src/x.ts")).toBe("cli");
     expect(areaOf("packages/web/components/DiffView.tsx")).toBe("web");
     expect(areaOf("packages/convex/convex/tasks.ts")).toBe("convex");
     expect(areaOf("packages/shared/contracts/agentClients.ts")).toBe("shared");
@@ -86,6 +88,18 @@ describe("classifyChangedPaths", () => {
     expect(result.run_test_web).toBe(false);
     expect(result.run_test_convex).toBe(false);
     expect(result.run_test_electron).toBe(false);
+  });
+
+  // The eval home's unit tests are a step of test-cli, so an evals change has
+  // to reach that job, and only the jobs a cli change reaches.
+  test("an evals change runs the cli tests without forcing every job", () => {
+    const scope = classifyChangedPaths(["packages/evals/src/x.ts"]);
+    expect(scope.forcedBy).toEqual([]);
+    expect(scope.flags).toEqual(flags(["packages/cli/src/daemon.ts"]));
+    expect(scope.flags.run_test_cli).toBe(true);
+    expect(scope.flags.run_test_web).toBe(false);
+    expect(scope.flags.run_test_convex).toBe(false);
+    expect(scope.flags.run_lint).toBe(false);
   });
 
   test("a web change runs lint, typecheck, build and the web tests", () => {
@@ -257,4 +271,20 @@ test("the classifier runs as a script and prints the flags", async () => {
   expect(await proc.exited).toBe(0);
   expect(stdout.split("\n")).toContain("run_test_convex=true");
   expect(stdout.split("\n")).toContain("run_test_cli=false");
+});
+
+describe("computer test scope", () => {
+  test("runs for computer source, native helpers and verification scripts", () => {
+    for (const file of [
+      "packages/cli/src/computer/client.ts",
+      "packages/cli/src/computer/__fixtures__/fakeHelper.ts",
+      "packages/cli/native/computer-use-macos/Package.swift",
+      "packages/cli/scripts/computer-verify.ts",
+    ]) expect(touchesComputer(file)).toBe(true);
+  });
+
+  test("does not run for unrelated CLI, web or documentation changes", () => {
+    for (const file of ["packages/cli/src/daemon.ts", "packages/web/index.ts", "docs/README.md", ""])
+      expect(touchesComputer(file)).toBe(false);
+  });
 });

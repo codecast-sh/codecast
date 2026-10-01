@@ -1,7 +1,6 @@
 import { useMemo } from "react";
-import { useTrackedStore, type LiveRoom } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, type LiveRoom } from "../store/inboxStore";
 import { describeRoomLive } from "../lib/calls/roomLabels";
-import { setRoomLock } from "../lib/calls/actions";
 import { useNowWhen } from "./useCoarseNow";
 import { useFaceRow } from "./useFaceRow";
 import { CALL_KNOCK_TTL_MS } from "@codecast/shared/contracts";
@@ -43,7 +42,7 @@ export type LiveRoomRow = {
 function roomsSig(rooms: LiveRoom[]): string {
   let sig = "";
   for (const r of rooms) {
-    sig += `${r.room_key}|${r.locked ? 1 : 0}|${r.can_join ? 1 : 0}|${r.redacted ? 1 : 0}|${r.title ?? ""}|`;
+    sig += `${r.room_key}|${r.can_join ? 1 : 0}|${r.redacted ? 1 : 0}|${r.title ?? ""}|`;
     for (const m of r.members) sig += `${m.user_id},`;
     sig += "\n";
   }
@@ -53,6 +52,7 @@ function roomsSig(rooms: LiveRoom[]): string {
 export function useLiveRooms(): LiveRoomRow[] {
   const s = useTrackedStore([
     (st: any) => roomsSig(st.liveRooms ?? []),
+    (st: any) => Object.values(st.callRooms ?? {}).filter((r: any) => r.locked).map((r: any) => r._id).sort().join("|"),
     // Label inputs. Teammate names (a rename renames the huddle), the channel
     // a channel room is named after, and my own identity — all cheap
     // signatures, none of them the churny collection.
@@ -94,7 +94,7 @@ export function useLiveRooms(): LiveRoomRow[] {
       return {
         roomKey: room.room_key,
         label,
-        locked: room.locked,
+        locked: !!s.callRooms?.[room.room_key]?.locked,
         canJoin: room.can_join,
         redacted: room.redacted,
         members: room.members,
@@ -103,7 +103,7 @@ export function useLiveRooms(): LiveRoomRow[] {
       };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [s.liveRooms, s.teamMembers, s.chatChannels, s.currentUser?._id, myRoom, knocked, now]);
+  }, [s.liveRooms, s.callRooms, s.teamMembers, s.chatChannels, s.currentUser?._id, myRoom, knocked, now]);
 }
 
 /** The huddle a teammate is sitting in, or null. The strip's own `in_room_key`
@@ -133,7 +133,7 @@ export function useLiveRoom(roomKey: string | null): LiveRoomRow | null {
 /** The lock on a room I'm in: its state and the gesture that flips it. Any
  *  occupant may lock — the huddle is theirs while it runs, and the lock dies
  *  with it (the server clears it when the room restarts from empty).
- *  Local-first: the glyph flips on click, the liveRooms echo reconciles. */
+ *  Local-first: the glyph flips on click (callRooms), the echo reconciles. */
 export function useRoomLock(roomKey: string | null): {
   locked: boolean;
   toggle: () => void;
@@ -144,7 +144,7 @@ export function useRoomLock(roomKey: string | null): {
   return {
     locked,
     toggle: () => {
-      if (roomKey) void setRoomLock(roomKey, !locked);
+      if (roomKey) useInboxStore.getState().setRoomLocked(roomKey, !locked);
     },
     title: locked
       ? "Locked — teammates must knock. Click to open the room again"

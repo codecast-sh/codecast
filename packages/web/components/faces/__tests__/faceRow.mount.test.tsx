@@ -799,7 +799,10 @@ describe("the engagement card renders the model's card", () => {
     const order = Array.from(h.q(".face-row")!.children).map(
       (el) => (el as HTMLElement).dataset.faceId ?? el.className.split(" ")[0],
     );
-    expect(order).toEqual(["face-row-track", ME, "face-link", ANN, "face-row-strip", "u-bob"]);
+    // The float folds everyone off the call behind one circle after the
+    // strip; the seat keeps its room so the window never changes width.
+    expect(order).toEqual(["face-row-track", ME, "face-link", ANN, "face-row-strip", "__others", "u-bob"]);
+    expect(h.q('[data-face-id="u-bob"]')!.dataset.folded).toBe("1");
     expect(h.q(".face-row-track")!.getAttribute("data-link-kind")).toBe("ring");
     expect(h.q(".face-row-strip")!.getAttribute("data-track")).toBe("1");
     // Nobody linked: no track, and the strip goes back to the row's end.

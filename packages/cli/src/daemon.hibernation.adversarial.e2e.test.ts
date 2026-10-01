@@ -7,8 +7,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  clearHibernationPark, flushHibernationStamps, hibernateSessionNow, injectViaTmux, inspectHibernationTarget,
-  noteSubagentActivity, resetSubagentActivityForTests, runHibernationPass,
+  awaitRecentSessionFile, clearHibernationPark, flushHibernationStamps, hibernateSessionNow, injectViaTmux, inspectHibernationTarget,
+  noteSubagentActivity, resetSubagentActivityForTests, runHibernationPass, takeTargetRefusal,
   sessionParkStateForTests, acquireSessionProcessOwnership, setSyncServiceForTests,
   trackSessionPaneForTests, type HibernationPassIo,
 } from "./daemon.js";
@@ -38,6 +38,7 @@ async function fixture(opts: { child?: boolean; verifiable?: boolean; space?: bo
   const h = spawnHarness({ sessionId, home: os.homedir(), tmuxPrefix: `${prefix}${opts.space ? " space" : ""}`, command: `exec '${script}'${opts.verifiable === false ? "" : ` --session-id ${sessionId}`}` });
   harnesses.push(h);
   await waitFor(() => h.paneHasPrompt(), { timeoutMs: 10000 });
+  expect((await awaitRecentSessionFile(sessionId))?.path).toBe(h.jsonlPath);
   if (opts.child) childPids.push(Number(fs.readFileSync(path.join(h.cwd, "child.pid"), "utf8")));
   trackSessionPaneForTests(h.sessionId, h.tmuxSession, { status: "idle" });
   const stampResult = tmuxRun(["set-option", "-t", `=${h.tmuxSession}:`, "@codecast_session_id", h.sessionId]);
@@ -242,3 +243,65 @@ test.skipIf(!hasTmux())("a delayed park write is followed by the wake clear, nev
   expect(persisted).toBeNull();
   expect(writes.map(w => w[1])).toEqual(["hibernated", "connected"]);
 }, 30000);
+
+for (const mode of ["pass", "command"] as const) describe.skipIf(!hasTmux())(`${mode} background evidence`, () => {
+  const append = (f: Awaited<ReturnType<typeof fixture>>, completed: boolean, queued = false) => {
+    const sessionId = f.h.sessionId;
+    const row = (type: string, content: unknown, stop_reason?: string) => ({ type, sessionId, timestamp: new Date().toISOString(), message: { role: type, content, stop_reason } });
+    const rows: unknown[] = [
+      row("assistant", [{ type: "tool_use", id: "monitor-call", name: "Monitor", input: { command: "wait for overnight job" } }], "tool_use"),
+      row("user", [{ type: "tool_result", tool_use_id: "monitor-call", content: "Monitor started (task overnight)" }]),
+    ];
+    if (completed) {
+      const content = "<task-notification><task-id>overnight</task-id><status>completed</status><summary>Finished</summary></task-notification>";
+      rows.push(queued ? { type: "queue-operation", sessionId, operation: "enqueue", content } : row("user", content));
+    }
+    rows.push(row("assistant", [{ type: "text", text: "Waiting for the next wake." }], "end_turn"));
+    fs.appendFileSync(f.h.jsonlPath, rows.map(row => JSON.stringify(row)).join("\n") + "\n");
+    trackSessionPaneForTests(sessionId, f.h.tmuxSession, { status: "dormant" });
+    f.io.awakeIdleMs = () => 72 * 60 * 60_000;
+  };
+  const run = async (f: Awaited<ReturnType<typeof fixture>>) => mode === "pass"
+    ? (await runHibernationPass(f.io)) === 1
+    : (await hibernateSessionNow(f.h.sessionId, undefined, f.io)).result === "hibernated";
+
+  test("a silent dormant monitor survives after three idle days", async () => {
+    const f = await fixture();
+    append(f, false);
+    expect(await run(f)).toBe(false);
+    expect(alive(f.h)).toBe(true);
+  }, 30000);
+
+  test("delivered completion releases the historical background-work veto", async () => {
+    const f = await fixture();
+    append(f, true);
+    const target = await f.io.inspectTarget!(f.h.sessionId, f.h.tmuxSession, f.conv);
+    expect(target, takeTargetRefusal(f.h.sessionId) ?? "target inspection").not.toBeNull();
+    expect(await run(f)).toBe(true);
+    expect(alive(f.h)).toBe(false);
+  }, 30000);
+
+  test("an undelivered completion still needs its dormant agent", async () => {
+    const f = await fixture();
+    append(f, true, true);
+    expect(await run(f)).toBe(false);
+    expect(alive(f.h)).toBe(true);
+  }, 30000);
+
+  test("an unfinished transcript row prevents parking", async () => {
+    const f = await fixture();
+    append(f, true);
+    fs.appendFileSync(f.h.jsonlPath, '{"type":"assistant","message":{"content":');
+    expect(await run(f)).toBe(false);
+    expect(alive(f.h)).toBe(true);
+  }, 30000);
+
+  test("a live child overrides a completed transcript task", async () => {
+    const f = await fixture({ child: true });
+    const child = childPids.at(-1)!;
+    append(f, true);
+    expect(await run(f)).toBe(false);
+    expect(alive(f.h)).toBe(true);
+    expect(() => process.kill(child, 0)).not.toThrow();
+  }, 30000);
+});

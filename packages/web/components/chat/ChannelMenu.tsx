@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Archive, Bell, Pencil, Text } from "lucide-react";
+import { Archive, Bell, Pencil, Pin, PinOff, Text } from "lucide-react";
 import { SlackLogo } from "../SlackLogo";
 import { SlackSyncDialog } from "./SlackSyncDialog";
 import { slackLinkForChannel } from "../../lib/slackChannelLink";
@@ -18,6 +18,8 @@ import { useInboxStore } from "../../store/inboxStore";
 import type { ChatNotifyLevel } from "../../store/chatSlice";
 import { channelDisplayName } from "../../lib/chatViews";
 import { dmOtherIds } from "@codecast/shared/chat";
+import { readPins, isThreadsPin, togglePin } from "../../lib/sidebarPins";
+import { supersededChannelId } from "../../hooks/useChatSync";
 import "./chat.css";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 // The one channel-management surface, on the app's one menu system.
@@ -77,6 +79,22 @@ export function ChannelContextMenu({ state }: { state: ContextMenuState<ChannelM
           return (
             <>
               <CtxHeader title={title} />
+              {/* A pin stores the id the channel had when pinned (maybe a stub
+                  the server row has since superseded), so match it the way the
+                  rails resolve pins, and toggle the stored id. */}
+              {(() => {
+                const pin = readPins(s).find((x) => x.kind === "channel" && !isThreadsPin(x)
+                  && (supersededChannelId(s.chatChannels as any, x.id) ?? x.id) === p.channelId);
+                return (
+                  <CtxItem
+                    icon={pin ? PinOff : Pin}
+                    onSelect={() => togglePin("channel", pin?.id ?? p.channelId, isDm ? title : channel.name)}
+                  >
+                    {pin ? "Unpin from top" : "Pin to top of sidebar"}
+                  </CtxItem>
+                );
+              })()}
+              <CtxSeparator />
               <CtxLabel>Notifications</CtxLabel>
               {NOTIFY_LEVELS.map((level) => (
                 <CtxCheckItem

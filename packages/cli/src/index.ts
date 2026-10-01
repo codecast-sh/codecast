@@ -37,9 +37,12 @@ import { targetDayOf, targetDayStamp } from "@codecast/shared/time";
 import {
   parseEntityUrl,
   buildEntityUrl,
+  CODECAST_BASE_URL,
   entityTypeFromId,
   normalizeEntityType,
   type EntityType,
+  parseCallRef,
+  callRefId,
 } from "@codecast/shared/entities";
 import {
   SNIPPET_CATALOG,
@@ -65,6 +68,7 @@ import {
   fenceForeignText,
   FOREIGN_TEXT_CAPS,
   callLinkHow,
+  callAnchorHref,
 } from "@codecast/shared/contracts";
 import type { SessionPresence } from "./formatter.js";
 import {
@@ -113,6 +117,7 @@ import { BUILD_ID_VALUE_RE, daemonBuildUnchanged } from "./daemonBuildGate.js";
 import { DAEMON_STOP_SIGKILL_MS } from "./shutdownBudget.js";
 import { findOtherDaemonPids, snapshotProcessTable } from "./processTable.js";
 import { expandCommandStdinDashes, readStdinBody, rejectBareDash, stdinText } from "./sendBody.js";
+import { registerDocDraftingCommands } from "./docDraftingCommand.js";
 import { commandTree, unknownCommandNextStep } from "./commandSuggestion.js";
 import { requireDestructiveConfirm } from "./destructiveCommands.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
@@ -1115,6 +1120,16 @@ function readDaemonState(): DaemonState | null {
   }
 }
 
+/** Rewrite fields of the daemon's state file when it exists; an undefined
+ *  value drops the field. Best effort: a failed write leaves the file as is. */
+function patchDaemonState(patch: Partial<DaemonState>): void {
+  const state = readDaemonState();
+  if (!state) return;
+  try {
+    fs.writeFileSync(STATE_FILE, JSON.stringify({ ...state, ...patch }, null, 2), { mode: 0o600 });
+  } catch {}
+}
+
 function formatRelativeTime(timestamp: string | number): string {
   const ts = typeof timestamp === "number" ? timestamp : new Date(timestamp).getTime();
   if (!Number.isFinite(ts)) return "unknown";
@@ -1797,16 +1812,7 @@ async function runLogin(setupToken: string): Promise<void> {
 
     writeConfig(config);
 
-    const stateFile = path.join(CONFIG_DIR, "daemon.state");
-    if (fs.existsSync(stateFile)) {
-      try {
-        const currentState = JSON.parse(fs.readFileSync(stateFile, "utf-8"));
-        const newState = { ...currentState, authExpired: false };
-        fs.writeFileSync(stateFile, JSON.stringify(newState, null, 2), { mode: 0o600 });
-      } catch {
-        // Ignore errors
-      }
-    }
+    patchDaemonState({ authExpired: false });
 
     console.log("Linked successfully!\n");
     console.log(`User ID: ${config.user_id}`);
@@ -1909,16 +1915,7 @@ async function runAuth(): Promise<void> {
 
   writeConfig(config);
 
-  const stateFile = path.join(CONFIG_DIR, "daemon.state");
-  if (fs.existsSync(stateFile)) {
-    try {
-      const currentState = JSON.parse(fs.readFileSync(stateFile, "utf-8"));
-      const newState = { ...currentState, authExpired: false };
-      fs.writeFileSync(stateFile, JSON.stringify(newState, null, 2), { mode: 0o600 });
-    } catch {
-      // Ignore errors
-    }
-  }
+  patchDaemonState({ authExpired: false });
 
   console.log(`${fmt.success(icons.check)} ${c.bold}Authenticated successfully!${c.reset}\n`);
   console.log(`  ${fmt.muted("User")}     ${fmt.id(config.user_id || "")}`);
@@ -10062,7 +10059,9 @@ function fmtCallDuration(row: { started_at: number; ended_at: number | null }): 
 }
 
 async function resolveCallId(ref: string): Promise<string> {
-  // Full convex id or a unique prefix of a recent call's id.
+  // A short id (cl-42) or full id resolves on the server; otherwise a unique
+  // prefix of a recent call's id.
+  if (parseCallRef(ref)) return ref.toLowerCase();
   const rows: any[] = await cliPost("/cli/calls/list", { limit: 200 });
   const exact = rows.find((r) => r._id === ref);
   if (exact) return exact._id;
@@ -10109,7 +10108,7 @@ program
       const title = r.title || r.room_key;
       const sum = r.summary ? "" : live ? "" : ` ${c.dim}(no summary)${c.reset}`;
       console.log(
-        `${dot} ${c.cyan}${r._id.slice(0, 8)}${c.reset} ${fmtCallWhen(r.started_at)} ${c.dim}${fmtCallDuration(r)}${c.reset}  ${c.bold}${title}${c.reset}${sum}`,
+        `${dot} ${c.cyan}${r.short_id ?? r._id.slice(0, 8)}${c.reset} ${fmtCallWhen(r.started_at)} ${c.dim}${fmtCallDuration(r)}${c.reset}  ${c.bold}${title}${c.reset}${sum}`,
       );
       console.log(`   ${c.dim}${who}${c.reset}`);
     }
@@ -10120,12 +10119,20 @@ program
   .command("call")
   .description(
     "Show one call: title, participants, summary, action items — and the\n" +
-    "full speaker-attributed transcript with --transcript\n\n" +
+    "full speaker-attributed transcript with --transcript. Each transcript line\n" +
+    "is labeled with the reference that cites it, so a message can name the exact words:\n" +
+    "  cl-42           # in a message: the call, as a live pill (a card alone on its line)\n" +
+    "  cl-42:15-25     # in a message: lines 15 to 25, embedded alone on a line\n" +
+    "  cast call cl-42 15:25   # print just those lines\n" +
+    "and a link can too:\n" +
+    "  https://codecast.sh/calls/<id>?turns=<from>-<to>   # those lines, selected\n" +
+    "  https://codecast.sh/calls/<id>?part=summary        # the summary\n" +
+    "  https://codecast.sh/calls/<id>?part=action-<n>     # action item n (from 1)\n\n" +
     "cast call hold <duration>|off   # from a session a live huddle feeds: hold\n" +
     "                                # the room's words for a stretch of work"
   )
-  .argument("<id>", "Call id (or unique prefix) from `cast calls`, or `hold`")
-  .argument("[duration]", "With `hold`: 3m, 90s, 1h, or `off` to lift it")
+  .argument("<id>", "Call short id (cl-42), id or unique prefix from `cast calls`, or `hold`")
+  .argument("[duration]", "Lines to print (15:25, 15-25 or 15), or with `hold`: 3m, 90s, 1h, or `off`")
   .option("--transcript", "Print the full attributed transcript")
   .option("--json", "Machine-readable output (always includes segments)")
   .option("--for <session>", "With `hold`: the fed session (default: the current one)")
@@ -10165,19 +10172,54 @@ program
       );
       return;
     }
-    const id = await resolveCallId(ref);
+    // Lines ride the ref (`cl-42:15-25`) or the second argument (`15:25`).
+    const lines = duration ? parseCallRef(`cl-0:${duration.replace(":", "-")}`)?.turns : null;
+    if (duration && !lines) {
+      console.error(`Lines are a range of line numbers: 15:25, 15-25 or 15 (got "${duration}")`);
+      process.exit(1);
+    }
+    const asRef = parseCallRef(ref);
+    const turns = lines ?? asRef?.turns ?? null;
+    const id = await resolveCallId(asRef ? asRef.call : ref);
     const call: any = await cliPost("/cli/calls/get", { transcript_id: id });
     if (!call) {
       console.error("Call not found or not accessible");
       process.exit(1);
     }
+    const handle = call.short_id ?? String(call._id);
+    // A line is labeled with what cites it (`cl-42:563`), because an agent
+    // quotes the label it reads: a bare `#563` renders as pull request 563 in
+    // any conversation bound to a repository. A full id per line would bury
+    // the words, so a call without a short id shows the number alone.
+    const lineLabel = (seq: number) => (call.short_id ? callRefId(call.short_id, { from_seq: seq, to_seq: seq }) : String(seq));
+    if (turns) {
+      const segs = (call.segments || []).filter((s: any) => s.seq >= turns.from_seq && s.seq <= turns.to_seq);
+      if (options.json) {
+        console.log(JSON.stringify({ ref: callRefId(handle, turns), title: call.title, segments: segs }, null, 2));
+        return;
+      }
+      console.log(`${c.bold}${call.title || call.room_key}${c.reset} ${c.dim}lines ${turns.from_seq}-${turns.to_seq}${c.reset}`);
+      let lastSpeaker = "";
+      for (const s of segs) {
+        if (s.speaker_name !== lastSpeaker) {
+          console.log(`${c.cyan}${s.speaker_name}${c.reset}`);
+          lastSpeaker = s.speaker_name;
+        }
+        console.log(`  ${c.dim}${lineLabel(s.seq)}${c.reset} ${s.text}`);
+      }
+      if (segs.length === 0) console.log(`${c.dim}(no lines in that range; this call runs 1-${call.last_seq})${c.reset}`);
+      console.log(`\n${c.dim}Embed these words in a message: ${c.reset}${callRefId(handle, turns)}${c.dim} on its own line${c.reset}`);
+      return;
+    }
+    const callUrl = (anchor?: Parameters<typeof callAnchorHref>[1]) => `${CODECAST_BASE_URL}${callAnchorHref(String(call._id), anchor)}`;
     if (options.json) {
-      console.log(JSON.stringify(call, null, 2));
+      console.log(JSON.stringify({ url: callUrl(), ...call }, null, 2));
       return;
     }
     const live = call.status === "live";
     console.log(`${c.bold}${call.title || call.room_key}${c.reset} ${live ? `${c.green}LIVE${c.reset}` : c.dim + fmtCallDuration(call) + c.reset}`);
-    console.log(`${c.dim}${fmtCallWhen(call.started_at)} · ${call.room_key}${c.reset}`);
+    console.log(`${c.dim}${handle} · ${fmtCallWhen(call.started_at)} · ${call.room_key}${c.reset}`);
+    console.log(`${c.dim}${callUrl()}${c.reset}`);
     const who = (call.participants || []).map((p: any) => p.name).join(", ");
     if (who) console.log(`${c.dim}speakers:${c.reset} ${who}`);
     if (call.summary) {
@@ -10189,7 +10231,7 @@ program
     }
     if ((call.action_items || []).length > 0) {
       console.log(`\n${c.bold}Action items${c.reset}`);
-      for (const a of call.action_items) console.log(`  - ${a}`);
+      call.action_items.forEach((a: string, i: number) => console.log(`  ${i + 1}. ${a}`));
     }
     if ((call.sessions || []).length > 0) {
       console.log(`\n${c.bold}Sessions${c.reset}`);
@@ -10205,7 +10247,16 @@ program
           console.log(`${c.cyan}${s.speaker_name}${c.reset}`);
           lastSpeaker = s.speaker_name;
         }
-        console.log(`  ${s.text}`);
+        console.log(`  ${c.dim}${lineLabel(s.seq)}${c.reset} ${s.text}`);
+      }
+      const segs = call.segments || [];
+      if (segs.length > 0) {
+        const sample = { from_seq: segs[0].seq, to_seq: segs[Math.min(2, segs.length - 1)].seq };
+        console.log(
+          `\n${c.dim}Embed lines in a message: ${c.reset}${callRefId(handle, sample)}${c.dim} on its own line (inline it reads as a pill)` +
+          `\nLink lines: ${callUrl({ kind: "turns", ...sample })}` +
+          ` (?turns=<from>-<to>; ?part=summary or ?part=action-<n> for the recap)${c.reset}`,
+        );
       }
     } else if ((call.segments || []).length > 0) {
       console.log(`\n${c.dim}${call.segments.length} transcript lines — add --transcript to print them${c.reset}`);
@@ -14748,7 +14799,7 @@ trigger
   .command("add")
   .description("Set a new trigger")
   .argument("<prompt>", stdinText("Instruction for the agent when the trigger fires"))
-  .option("--in <duration>", "Run after delay (e.g., 30m, 2h, 1d)")
+  .option("--in <duration>", "Run after delay (e.g., 30m, 2h, 1d); with --every, the first run, which sets the time of day")
   .option("--every <duration>", "Run on interval (e.g., 4h, 1d)")
   .option("--on <event>", `Run on event (${EVENT_NAMES})`)
   .option("--repo <owner/name>", "Only fire for this repository (pull request events default to the checkout's origin; pass \"\" for every repository)")
@@ -14784,6 +14835,11 @@ trigger
     let run_at: number | undefined;
     let interval_ms: number | undefined;
     let event_filter: { event_type: string; action?: string; repository?: string; pr_number?: number } | undefined;
+    const delay = options.in ? parseDuration(options.in) : undefined;
+    if (options.in && !delay) {
+      console.error(`Invalid duration: ${options.in}`);
+      process.exit(1);
+    }
 
     if (options.every) {
       schedule_type = "recurring";
@@ -14792,16 +14848,14 @@ trigger
         console.error(`Invalid duration: ${options.every}`);
         process.exit(1);
       }
-      run_at = Date.now() + interval_ms;
+      // --in sets the first run, and the first run anchors the cadence: every
+      // later run lands on that grid (nextArmingAfterRun), so `--in 6h --every
+      // 24h` is a daily run at that time of day.
+      run_at = Date.now() + (delay ?? interval_ms);
     } else if (options.on) {
       schedule_type = "event";
       event_filter = await buildEventFilter(options.on, options);
-    } else if (options.in) {
-      const delay = parseDuration(options.in);
-      if (!delay) {
-        console.error(`Invalid duration: ${options.in}`);
-        process.exit(1);
-      }
+    } else if (delay) {
       run_at = Date.now() + delay;
     } else {
       run_at = Date.now();
@@ -17526,9 +17580,15 @@ doc
   .option("-L, --lines <n>", "Lines per page", "200")
   .option("-n, --line-numbers", "Prefix each line with its number")
   .option("--full", "Print the entire document without paging")
+  .option("--clean", "Without drafting markup: the versions showing, ghosts kept as plain text")
+  .option("--final", "As it would publish: drafting markup removed and ghosted text left out")
   .action(async (id: string, range: string | undefined, options: any) => {
     const result = await cliPost("/cli/docs/get", { id });
     if (!result) { console.error("Doc not found"); process.exit(1); }
+    if (options.clean || options.final) {
+      const { stripDrafting } = await import("@codecast/shared/docs/drafting");
+      result.content = stripDrafting(result.content || "", { dropGhosts: !!options.final });
+    }
     const lines = (result.content || "").split("\n");
     const total = lines.length;
 
@@ -17651,6 +17711,8 @@ doc
       console.log(`${c.green}ok${c.reset} Updated doc ${c.cyan}${id}${c.reset}`);
     }
   });
+
+registerDocDraftingCommands(doc, { post: cliPost, sessionId: detectCurrentSessionId });
 
 doc
   .command("search")
@@ -19982,11 +20044,7 @@ program
     const priorAccess = readDaemonState()?.cursorAccess;
     // Drop the recorded outcome so the poll below reads THIS run's probe, not
     // a stale verdict from before a System Settings change.
-    try {
-      const st = JSON.parse(fs.readFileSync(STATE_FILE, "utf-8"));
-      delete st.cursorAccess;
-      fs.writeFileSync(STATE_FILE, JSON.stringify(st, null, 2), { mode: 0o600 });
-    } catch {}
+    patchDaemonState({ cursorAccess: undefined });
     if (process.platform === "darwin" && priorAccess !== "granted") {
       console.log("Restarting the daemon. macOS will ask:");
       console.log('  "codecast would like to access data from other apps" — click Allow.');

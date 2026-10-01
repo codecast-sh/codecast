@@ -183,6 +183,10 @@ export function NavSection({
           href={href}
           onClick={(e) => {
             onMobileClose?.();
+            // Going into a section opens its list: landing on a channel while
+            // the channels stay folded reads as broken. Only opens, never folds;
+            // the chevron is the fold control.
+            if (hasChildren && !expanded) onToggle?.();
             // On a SPLIT stage a plain click is ambiguous — which pane? Hand
             // the choice to the user (StagePickLayer) instead of guessing.
             // Modified clicks keep their browser meaning.

@@ -1,447 +1,506 @@
-// THE MULTI-REPLICA SIMULATION HARNESS — the eventual-consistency proof's
-// moving parts, shared by the convergence simulations
-// (docs/architecture/sync-convergence.md, "Validation plan": Simulation).
+// THE LEGACY CONVERGENCE SUITES' HARNESS: a thin adapter that keeps the
+// vocabulary inboxConvergenceSim.test.ts and inboxMultiWindowSim.test.ts were
+// written in (a SimServer, Replicas, Devices, SERVER_EVENTS) over the
+// multiplayer sim's substrate (store/__tests__/sim/, spec
+// docs/architecture/multiplayer-sim-harness.md, unit U14).
 //
-// SERVER: the real Convex compute functions over an in-memory db (the live
-// window, the liveness overlay, the byIds hydration, the completeness floor)
-// plus a sync log the sim appends to on every canonical write.
-// REPLICAS: snapshots of the real web store, swapped into the singleton one
-// at a time, fed through the real appliers (syncTable, the overlay applier,
-// the log catch-up, the floor watermark) and driven with the real gestures
-// (pin, kill, stash, revive, queued send), each with its own log cursor,
-// online flag and digest comparer.
-// DEVICES: a device is one origin — a HOST window that owns the feeders and
-// zero or more FOLLOWER windows that hold no subscription of their own. The
-// windows talk over the two production channels, modelled as in-order queues
-// the schedule drains: replication (the host's write-through tee broadcasts
-// its writes; a follower offers its own action writes back as muts, which the
-// host applies as sync writes and re-broadcasts) and the gesture bridge (a
-// triage gesture announces itself to every sibling window, which plants the
-// same field locks). Both run through the production code: the engine's
-// patch extractor, the store's replication applier, applyGestureBridge.
-// CLOCK: one virtual clock behind Date.now AND performance.now, so the
-// projection epoch, the overlay receipt clock, the overlay bounds and the
-// quiescence gate all move together and every run is replayable.
-import { expect, spyOn } from "bun:test";
-import {
-  computeInboxSessions,
-  computeSessionsLiveness,
-  collectInboxSessionsByIds,
-  collectInboxSessionsPaginated,
-} from "@codecast/convex/convex/conversations";
-import { makeFakeDb } from "@codecast/convex/convex/testDb";
+// SERVER: the sim backend (real Convex handlers over the fake db, through the
+// router) seeded with one user's generated world. Canonical writes go through
+// the real change-tracked db, so the sync log is the real one; the events
+// another device or the daemon would cause are their real calls (a second
+// window's store action, the daemon's updateAgentStatus, the empty-row GC).
+// REPLICAS: a Replica is one SimWindow (its own store instance and engine
+// closure), dispatching through the real binding. Its live feeds are held on
+// the net and delivered only when the suite asks (receiveBase,
+// receiveOverlay, receiveDecisions, catchUp, crawl), because the suites pick
+// the order payloads arrive in. Server traffic (requests, responses, timers,
+// scheduled jobs) settles after every step without moving the clock.
+// DEVICES: a Device is one SimDevice (the engine's replication runtimes and
+// the gesture bridge). Its window-to-window traffic waits on the net until
+// the suite delivers it (deliver, drain), so it can interleave with feeds.
+// CLOCK: the realm's virtual clock behind Date.now and performance.now.
+import { expect } from "bun:test";
 import { inboxEpoch, projectInbox, shouldShowInInbox, type ProjectableInboxRow } from "@codecast/shared/contracts";
 import { GEN_DAY, GEN_HOUR, GEN_MIN, convexIdFor, genWorld, makeRng, type GenWorld } from "@codecast/shared/contracts/__fixtures__/inboxProjectionGen";
-import { extractReplicationUpdates, snapshotEntries, type ReplicationUpdate } from "@platform/engine";
-import {
-  useInboxStore,
-  placeInboxRows,
-  __resetInboxPlacementCacheForTests,
-  type InboxSession,
-} from "../inboxStore";
+import { makeChangeTrackedDb } from "@codecast/convex/convex/changeLog";
+import { EMPTY_CONVERSATION_GRACE_MS } from "@codecast/convex/convex/cleanup";
+import { SYNC_ACTIONS_RETENTION_MS } from "@codecast/convex/convex/syncLogPrune";
+import { hashToken } from "@codecast/convex/convex/apiTokens";
+import { makeSimBackend, type Principal, type SimBackend, type SimClient } from "@codecast/convex/convex/simBackend.testing";
+import { useInboxStore, placeInboxRows } from "../inboxStore";
 import {
   INBOX_COMPARE_TICK_MS,
   INBOX_HEAL_BUDGET,
-  createInboxDigestComparer,
   type InboxCompareOutcome,
   type InboxCompareState,
   type InboxDigestComparer,
+  type InboxDigestComparerIO,
 } from "../inboxDigestCompare";
 import { BLOCKED_REVIVE_TTL_MS, HIDDEN_OVERRIDE_SETTLE_MS } from "../inboxOverlays";
-import { __resetSyncActivityForTests, __setSyncActivityForTests, lastSyncApplyMono, syncApplySeq } from "../syncActivity";
 import { declareViewNav } from "../viewNav";
-import { applyUpdatesToStore, buildMutUpdates } from "../syncReplication";
-import { isReplicatedCollectionKey, REPLICATED_STORE_KEYS } from "../clientSyncRegistry";
-import { setGestureChannelFactory, type GestureMessage } from "../gestureBridge";
+import { setGestureChannelFactory } from "../gestureBridge";
 import { syncMetaKey } from "../../hooks/reconcileCrawl";
-import { inboxCrawlWsKey } from "../../hooks/useSyncInboxSessions";
+import { inboxCrawlWsKey, inboxFloorFlags, runInboxFloorStep } from "../../hooks/useSyncInboxSessions";
+import { applyEntityIds, emptyIdsByCollection, scopeMetaKey } from "../../hooks/useSyncChangeFeed";
+import { startInboxDigestCompare } from "../../hooks/useInboxDigestCompare";
 import { LIST_INBOX_SESSIONS_ARGS } from "../../hooks/useLiveInboxSessions";
+import * as realm from "./sim/realm";
+import { T0, advance, attachRealm, installRealm, mono, now, resetClock, runInWindowSync, stream, uninstallRealm } from "./sim/realm";
+import { Net, type ChannelFilter } from "./sim/net";
+import { SimLabels } from "./sim/labels";
+import { reportFailure, type DeliveryRecord } from "./sim/report";
+import { makeActors, type Actors } from "./sim/actors";
+import { tokenFor } from "./sim/world";
+import { SimDevice } from "./sim/device";
+import { windowOnline, type SimWindow, type SimWindowWorld } from "./sim/window";
 
 export { GEN_DAY, GEN_HOUR, GEN_MIN, convexIdFor, makeRng };
 export { INBOX_COMPARE_TICK_MS, INBOX_HEAL_BUDGET };
 
 export const ME = "u".repeat(32);
 export const CRAWL_KEY = syncMetaKey("sessions", inboxCrawlWsKey(ME));
-export const T0 = inboxEpoch(1_800_000_000_000) + 25_000;
-const MONO0 = 10_000_000;
+const ME_SCOPE = `user:${ME}`;
 
 // ── The virtual clock ───────────────────────────────────────────────────────
+// It lives in the multiplayer sim's realm; re-exported here for these suites.
+export { T0, advance, mono, now, resetClock };
 
-let vnow = T0;
-export const now = (): number => vnow;
-export const mono = (): number => MONO0 + (vnow - T0);
-export function advance(ms: number): void {
-  vnow += ms;
-}
-export function resetClock(): void {
-  vnow = T0;
-}
-
-let nowSpy: ReturnType<typeof spyOn> | null = null;
-let perfSpy: ReturnType<typeof spyOn> | null = null;
-
-/** beforeEach: pin the clock, reset every module-scope cache the store keeps. */
+/** beforeEach (and once per seed of a loop): a fresh realm on a reset clock. */
 export function installSim(): void {
-  vnow = T0;
-  nowSpy = spyOn(Date, "now").mockImplementation(() => vnow);
-  perfSpy = spyOn(performance, "now").mockImplementation(() => mono());
-  __resetSyncActivityForTests();
-  __resetInboxPlacementCacheForTests();
-  installTees();
+  uninstallSim();
+  installRealm(0);
 }
 
-/** afterEach: restore the clock and leave no replica in the singleton store. */
+/** afterEach: restore every spy, the store facade and the gesture channel. */
 export function uninstallSim(): void {
-  nowSpy?.mockRestore();
-  perfSpy?.mockRestore();
-  nowSpy = null;
-  perfSpy = null;
-  uninstallTees();
-  // The singleton store outlives a test file: a future-epoch projection slot
-  // would age every later test's rows out of the working set.
-  useInboxStore.setState(freshReplicaState() as any);
-  __resetInboxPlacementCacheForTests();
+  uninstallRealm();
+  setGestureChannelFactory(null);
 }
+
+// ── Channels ────────────────────────────────────────────────────────────────
+
+// A channel's class never changes, and the net asks on every step: remember it.
+function memoFilter(test: ChannelFilter): ChannelFilter {
+  const seen = new Map<string, boolean>();
+  return (c) => {
+    let v = seen.get(c);
+    if (v === undefined) seen.set(c, (v = test(c)));
+    return v;
+  };
+}
+
+// Server traffic: requests, responses, timers, scheduled jobs, actor verbs.
+// Live feeds and a device's window-to-window traffic wait for the suite.
+const isServerTraffic: ChannelFilter = memoFilter((c) => !c.startsWith("live:") && !c.startsWith("repl:") && !c.startsWith("bridge:"));
+
+/**
+ * One device's window-to-window traffic: its replication posts and gesture
+ * bridge. Not memoized: a window that joins later adds channels to it.
+ */
+function deviceTraffic(sim: SimDevice): ChannelFilter {
+  const bridge = `bridge:${sim.name}:`;
+  return (c) => {
+    if (c.startsWith(bridge)) return true;
+    if (!c.startsWith("repl:")) return false;
+    const cut = c.indexOf(">");
+    const from = c.slice(5, cut);
+    const to = c.slice(cut + 1);
+    return sim.windows.some((w) => w.name === from || w.name === to);
+  };
+}
+
+// The feeds a host window mounts in the mine scope (sim/window.ts startHost).
+const HOST_FEEDS = ["inbox", "liveness", "decisions", "heads"] as const;
+type HostFeed = (typeof HOST_FEEDS)[number];
+
+// Generous: a randomized seed runs a few hundred steps with real dispatch,
+// floors and catch-ups. The budget catches a loop, not a slow seed.
+const LEGACY_MAX_DELIVERIES = 200_000;
+const LEGACY_MAX_WRITES = 50_000;
+
+const worldSeeds = new WeakMap<GenWorld, number>();
 
 // ── The server ──────────────────────────────────────────────────────────────
 
-export type LogEntry = { position: number; entity_id: string };
+export class SimServer implements SimWindowWorld {
+  readonly backend: SimBackend;
+  readonly net: Net;
+  readonly windows = new Map<string, SimWindow>();
+  readonly labels = new SimLabels();
+  readonly realm = realm;
+  readonly actors: Actors;
+  /** Catch-up runs when the suite asks (Replica.catchUp, crawl), never on its own at boot. */
+  readonly holdCatchUp = true;
+  /** The seededWorld seed this server was built from, when it was. */
+  readonly seed: number | null;
+  /** Every delivery of the run, for a failure's artifacts. */
+  readonly events: DeliveryRecord[] = [];
+  private readonly tracked: any;
+  // Ids the next inserts into a table take: the suites name their rows.
+  private readonly chosenIds = new Map<string, string[]>();
+  private tokenSeeded: Promise<void> | null = null;
+  private otherReplica: Replica | null = null;
 
-export class SimServer {
-  db: any;
-  log: LogEntry[] = [];
-  private position = 0;
-  /** Retention: positions at or below this are gone from the log. */
-  floor = 0;
   constructor(world: GenWorld) {
-    this.db = makeFakeDb({
+    this.seed = worldSeeds.get(world) ?? null;
+    const tables: Record<string, any[]> = {
       users: [{ _id: ME, name: "Me", email: "me@example.com" }],
       messages: [],
+      pending_messages: [],
+      inbox_hides: [],
+      api_tokens: [],
       ...world,
+    };
+    // Every Convex row has a creation time; a generated session was created when it started.
+    for (const c of tables.conversations ?? []) c._creationTime ??= c.started_at ?? c.updated_at;
+    this.backend = makeSimBackend({
+      tables,
+      now,
+      rngFor: (seq) => stream(`call:${seq}`),
+      mintId: (table, n) => this.chosenIds.get(table)?.shift() ?? convexIdFor(`${table}:${n}`),
+      onSchedule: (job) => {
+        this.net.enqueue("sched", { due: job.due, label: `sched ${job.name}`, producer: `sched ${job.name}`, run: () => this.backend.runScheduled(job) });
+      },
     });
+    this.net = new Net({
+      rng: stream("net"),
+      maxDeliveries: LEGACY_MAX_DELIVERIES,
+      maxWrites: LEGACY_MAX_WRITES,
+      writes: () => this.backend.writes(),
+      now,
+      advance,
+      onOnline: (win) => windowOnline(this, win),
+      onDeliver: ({ run: _run, ...d }) => void this.events.push(d),
+    });
+    attachRealm({ timers: this.net, serverCall: () => this.backend.activeCall() });
+    this.tracked = makeChangeTrackedDb(this.backend.db);
+    this.labels.register(ME, "me");
+    this.actors = makeActors(this);
   }
+
+  // -- What the actors and windows need of a world --
+
+  start(): Promise<void> {
+    return Promise.resolve();
+  }
+  idOf(label: string): string {
+    return label === "me" ? ME : label;
+  }
+  row(label: string): Promise<any> {
+    return this.backend.db.get(this.idOf(label));
+  }
+  clientAs(_user: string): SimClient {
+    return this.backend.clientFor({ kind: "user", userId: ME });
+  }
+  daemonClientAs(user: string): SimClient {
+    const p: Principal = { kind: "token", userId: ME, token: tokenFor(user) };
+    return this.backend.clientFor(p);
+  }
+  /** A window's boot settles only what it started: server traffic and its own device's windows. */
+  async settleBoot(w: SimWindow): Promise<void> {
+    const mine = deviceTraffic(w.device);
+    await this.net.drain({ horizonMs: 0, only: (c) => isServerTraffic(c) || mine(c) });
+  }
+
+  /** Runs every server delivery that is ready now (never a live feed, never a device's window traffic, never the clock). */
+  flush(): Promise<void> {
+    return this.net.drain({ horizonMs: 0, only: isServerTraffic });
+  }
+
+  // -- Reading the server --
+
   get conversations(): Array<Record<string, any>> {
-    return this.db._tables.conversations;
+    return this.backend.db._tables.conversations;
   }
   conv(id: string): Record<string, any> {
     const row = this.conversations.find((c) => c._id === id);
     if (!row) throw new Error(`no conversation ${id}`);
     return row;
   }
+  private headRow(): { position: number; floor?: number } | undefined {
+    return (this.backend.db._tables.sync_heads ?? []).find((h: any) => h.scope_key === ME_SCOPE);
+  }
+  /** The user scope's log head (the real sync_heads row). */
   head(): number {
-    return this.position;
+    return this.headRow()?.position ?? 0;
   }
-  // A canonical write to a tracked table: the row moves and the log records it.
-  mutate(id: string, patch: Record<string, any>): number {
-    Object.assign(this.conv(id), patch);
-    this.log.push({ position: ++this.position, entity_id: id });
-    return this.position;
-  }
-  insert(conv: Record<string, any>): void {
-    this.conversations.push(conv);
-    this.log.push({ position: ++this.position, entity_id: conv._id });
-  }
-  // A hard delete (the empty-conversation GC): the row is gone, the log
-  // records the delete; a replica that asks by id gets nothing back.
-  delete(id: string): void {
-    const i = this.conversations.findIndex((c) => c._id === id);
-    if (i >= 0) this.conversations.splice(i, 1);
-    this.log.push({ position: ++this.position, entity_id: id });
-  }
-  // Retention: everything at or below `upTo` leaves the log. A replica whose
-  // cursor is below the floor cannot be proven from the log any more.
-  retain(upTo: number): void {
-    this.floor = Math.max(this.floor, Math.min(upTo, this.position));
-    this.log = this.log.filter((e) => e.position > this.floor);
-  }
-  // managed_sessions is NOT a tracked table: a fact flip reaches replicas only
-  // through the overlay.
-  setAgent(id: string, patch: Record<string, any>): void {
-    let ms = this.db._tables.managed_sessions.find((m: any) => m.conversation_id === id);
-    if (!ms) {
-      ms = { _id: `ms_${id.slice(0, 8)}`, user_id: ME, conversation_id: id, last_heartbeat: vnow, agent_status: "idle", agent_status_updated_at: vnow };
-      this.db._tables.managed_sessions.push(ms);
-    }
-    Object.assign(ms, patch);
-  }
-  // The live window, exactly as the subscription requests it.
-  async base() {
-    return computeInboxSessions({ db: this.db }, ME as any, {
-      show_all: LIST_INBOX_SESSIONS_ARGS.show_all,
-      includeLiveness: LIST_INBOX_SESSIONS_ARGS.include_liveness,
-      fastFieldsInOverlay: LIST_INBOX_SESSIONS_ARGS.fast_fields_in_overlay,
-    });
-  }
-  async overlay() {
-    return computeSessionsLiveness({ db: this.db }, ME as any);
-  }
-  async byIds(ids: string[]) {
-    return (await collectInboxSessionsByIds({ db: this.db }, ME as any, ids)).sessions;
-  }
-  async crawl(since: number): Promise<any[]> {
-    const all: any[] = [];
-    let cursor: string | null = null;
-    for (let page = 0; page < 50; page++) {
-      const res: any = await collectInboxSessionsPaginated({ db: this.db }, ME as any, { since, paginationOpts: { numItems: 40, cursor } });
-      all.push(...(res.page ?? []));
-      if (res.isDone) break;
-      cursor = res.continueCursor;
-    }
-    return all;
-  }
+  /** The user scope's log past `from`, read off the real sync_actions and sync_heads rows. */
   range(from: number): { ids: string[]; upTo: number; resync: boolean } {
-    if (from < this.floor) return { ids: [], upTo: this.position, resync: true };
-    const entries = this.log.filter((e) => e.position > from);
-    return { ids: [...new Set(entries.map((e) => e.entity_id))], upTo: this.position, resync: false };
+    const head = this.headRow();
+    const upTo = head?.position ?? 0;
+    if ((head?.floor ?? 0) > from) return { ids: [], upTo, resync: true };
+    const actions = (this.backend.db._tables.sync_actions ?? []).filter((a: any) => a.scope_key === ME_SCOPE && a.position > from);
+    return { ids: [...new Set<string>(actions.map((a: any) => String(a.entity_id)))], upTo, resync: false };
+  }
+  // The live window, exactly as a host subscribes to it.
+  base(): Promise<{ sessions: Array<Record<string, any>> }> {
+    return this.clientAs("me").query("conversations:listInboxSessions", LIST_INBOX_SESSIONS_ARGS);
+  }
+  overlay(): Promise<{ liveness: Record<string, any>; projection: any }> {
+    return this.clientAs("me").query("conversations:sessionsLiveness", {});
+  }
+
+  // -- Writing the server (outside any window: another device, the daemon, a cron) --
+
+  /** A canonical write: through the change-tracked db, so the sync log records it (or the churn exemption skips it). */
+  async mutate(id: string, patch: Record<string, any>): Promise<void> {
+    await this.tracked.patch(id, patch);
+  }
+  /** A new conversation under the id it names. */
+  async insert(conv: Record<string, any>): Promise<void> {
+    await this.insertRow("conversations", conv);
+  }
+  /** A hard delete. */
+  async delete(id: string): Promise<void> {
+    await this.tracked.delete(id);
+  }
+  /**
+   * Retention: syncLogPrune.pruneSyncActions run at the instant whose
+   * retention cutoff passes the timestamp of the last action at or below
+   * `upTo`, so every action stamped at or before it is pruned (actions share
+   * a timestamp when the clock stood still between them, and retention is by
+   * time). The clock returns to where it was.
+   */
+  async retain(upTo: number): Promise<void> {
+    let ts: number | null = null;
+    let at = 0;
+    for (const a of this.backend.db._tables.sync_actions ?? []) {
+      if (a.scope_key === ME_SCOPE && a.position <= upTo && a.position > at) [at, ts] = [a.position, a.ts];
+    }
+    if (ts == null) return; // nothing left at or below upTo: retention already passed it
+    const shift = ts + 1 + SYNC_ACTIONS_RETENTION_MS - now();
+    advance(shift);
+    try {
+      await this.backend.runInternal("syncLogPrune:pruneSyncActions", {});
+    } finally {
+      advance(-shift);
+    }
+  }
+  /** managed_sessions is not a tracked table: a fact flip reaches replicas only through the overlay. */
+  async setAgent(id: string, patch: Record<string, any>): Promise<void> {
+    const ms = (this.backend.db._tables.managed_sessions ?? []).find((m: any) => m.conversation_id === id);
+    if (ms) {
+      await this.tracked.patch(ms._id, patch);
+      return;
+    }
+    await this.tracked.insert("managed_sessions", { user_id: ME, conversation_id: id, last_heartbeat: now(), agent_status: "idle", agent_status_updated_at: now(), ...patch });
+  }
+  /** The daemon's settle report (managedSessions.updateAgentStatus under the user's api token). */
+  async daemonReports(id: string, status: "idle" | "working" | "done"): Promise<void> {
+    await this.seedToken();
+    if (!(this.backend.db._tables.managed_sessions ?? []).some((m: any) => m.conversation_id === id)) await this.setAgent(id, {});
+    this.actors.daemon("me").settles(id, status);
+    await this.flush();
+  }
+  /** The empty-conversation GC cron, once. */
+  async gc(): Promise<void> {
+    await this.backend.runInternal("cleanup:gcEmptyConversations", {});
+    await this.flush();
+  }
+  /**
+   * Another device of the same user: a host window of its own that acts
+   * through the store, as a person would. Before each gesture it reads the
+   * row it acts on through the byIds path (applyEntityIds), so it holds what
+   * that person sees; its feeds and floor would add nothing a gesture reads.
+   */
+  async other(id: string): Promise<Replica> {
+    const r = (this.otherReplica ??= new Replica("other", this, { seed: 0 }));
+    await r.hydrate([id]);
+    return r;
+  }
+
+  private async insertRow(table: string, row: Record<string, any>): Promise<void> {
+    const { _id, ...doc } = row;
+    if (_id) this.chosenIds.set(table, [...(this.chosenIds.get(table) ?? []), String(_id)]);
+    await this.tracked.insert(table, Object.fromEntries(Object.entries(doc).filter(([, v]) => v !== undefined)));
+  }
+
+  private seedToken(): Promise<void> {
+    return (this.tokenSeeded ??= hashToken(tokenFor("me")).then(async (token_hash) => {
+      await this.backend.db.insert("api_tokens", { user_id: ME, token_hash, name: "sim daemon", created_at: now(), last_used_at: now() });
+    }));
   }
 }
 
 // ── A replica ───────────────────────────────────────────────────────────────
 
-// The store keys a replica owns. Everything the projection, the overlays and
-// the compare read, plus the row twins the gestures write.
-export const REPLICA_KEYS = [
-  "sessions", "conversations", "messages", "pagination", "sessionsProjection", "pending",
-  "pendingMessages", "pendingSessionCreates", "sessionsWithQueuedMessages", "blockedReviveRequestedAt",
-  "currentSessionId", "sessionDecisions", "questionResolutions", "currentUser", "clientState",
-  "syncMeta", "syncProgress", "liveInboxIds", "liveInboxIdList", "teamInboxIds",
-] as const;
-
-export function freshReplicaState(): Record<string, unknown> {
-  return {
-    sessions: {}, conversations: {}, messages: {}, pagination: {}, sessionsProjection: {}, pending: {},
-    pendingMessages: {}, pendingSessionCreates: {}, sessionsWithQueuedMessages: new Set(), blockedReviveRequestedAt: {},
-    currentSessionId: null, sessionDecisions: {}, questionResolutions: {}, currentUser: { _id: ME },
-    clientState: { ui: { inbox_scope: "mine", inbox_show_old: false } },
-    syncMeta: {}, syncProgress: {}, liveInboxIds: new Set(), liveInboxIdList: [], teamInboxIds: new Set(),
-  };
-}
-
 export type TrackedEvent = { event: string; props: Record<string, unknown> };
 
-// The window whose state is loaded into the singleton store right now: the
-// tees below attribute every captured write to it.
-let current: Replica | null = null;
-let teePatches: any[] = [];
-let teeState: any = null;
-let teeIsAction = false;
-
-const isReplicated = (key: string) => (REPLICATED_STORE_KEYS as readonly string[]).includes(key);
-
-function installTees(): void {
-  const s = useInboxStore.getState() as any;
-  // The host's write-through tee (every write) and the follower's action tee
-  // (its own optimistic writes only), routed by the loaded window's role.
-  s._setIDBWrite((patches: any[], state: any) => {
-    if (current?.role !== "host") return;
-    teePatches.push(...patches);
-    teeState = state;
-  });
-  s._setActionTee((_name: string, patches: any[], state: any) => {
-    if (current?.role !== "follower") return;
-    teePatches.push(...patches);
-    teeState = state;
-    teeIsAction = true;
-  });
-  // The gesture bridge: a fake BroadcastChannel whose posts land on the
-  // loaded window's device queue for every sibling window.
-  setGestureChannelFactory(() => ({
-    postMessage(data: any) {
-      const { v: _v, source: _s, userId: _u, ...msg } = data ?? {};
-      current?.device?.gesture(msg as GestureMessage, current);
-    },
-    addEventListener() {},
-    removeEventListener() {},
-    close() {},
-  }) as unknown as BroadcastChannel);
-}
-
-function uninstallTees(): void {
-  const s = useInboxStore.getState() as any;
-  s._setIDBWrite(null);
-  s._setActionTee(null);
-  setGestureChannelFactory(null);
-  current = null;
-  teePatches = [];
-  teeState = null;
-  teeIsAction = false;
-}
-
 export class Replica {
-  state: Record<string, unknown> = freshReplicaState();
-  cursor = 0;
-  online = true;
+  events: TrackedEvent[] = [];
+  lastOutcome: InboxCompareOutcome | null = null;
+  device: Device | null = null;
   /** Zombie flags: a subscription that stopped pushing while the socket looks fine. */
   baseDead = false;
   overlayDead = false;
-  events: TrackedEvent[] = [];
-  comparer: InboxDigestComparer;
-  lastOutcome: InboxCompareOutcome | null = null;
-  role: "host" | "follower" = "host";
-  device: Device | null = null;
-  /** This window's sync activity clock (a module singleton in the store; one per window here). */
-  private activity = { lastApplyMono: Number.NEGATIVE_INFINITY, applySeq: 0 };
-  /** Ids this replica pruned by its own hand (excludes planted). */
+  private win: SimWindow | null = null;
+  private sim: SimDevice | null = null;
+  private booting: Promise<void> | null = null;
+  private isOnline = true;
   private scheduled: Array<() => void> = [];
+  private readonly rng: () => number;
 
   constructor(readonly name: string, readonly server: SimServer, opts: { seed?: number } = {}) {
-    const rng = makeRng(opts.seed ?? 1);
-    this.comparer = createInboxDigestComparer({
-      platform: `sim-${name}`,
-      track: (event, props) => this.events.push({ event, props }),
-      crawlMetaKeyFor: (meId) => (meId ? syncMetaKey("sessions", inboxCrawlWsKey(meId)) : null),
-      // The heal IO is the real recovery path: byIds hydration through
-      // syncTable, one overlay probe through the one applier. Scheduled work
-      // runs synchronously at the next drain so the sim stays deterministic.
-      fetchByIds: async (ids) => this.withStore(async () => {
-        const rows = await server.byIds(ids);
-        useInboxStore.getState().applyHealedSessions(ids, rows as unknown as InboxSession[]);
-      }),
-      probeOverlay: async () => this.withStore(async () => {
-        useInboxStore.getState().applyInboxLivenessPayload("mine", await server.overlay());
-      }),
-      now: () => vnow,
-      nowMono: mono,
-      random: () => rng(),
-      schedule: (fn) => {
-        this.scheduled.push(fn);
-        return () => { this.scheduled = this.scheduled.filter((f) => f !== fn); };
-      },
-      onError: (err) => { throw err; },
+    this.rng = makeRng(opts.seed ?? 1);
+  }
+
+  get role(): "host" | "follower" {
+    return this.win?.role ?? "host";
+  }
+  get window(): SimWindow {
+    if (!this.win) throw new Error(`replica ${this.name}: not booted yet (await one of its async methods first)`);
+    return this.win;
+  }
+  get comparer(): InboxDigestComparer {
+    return this.window.comparer!;
+  }
+  /** The window's store state, data fields only (what the legacy suites read and copy). */
+  get state(): Record<string, any> {
+    return Object.fromEntries(Object.entries(this.window.store.getState()).filter(([, v]) => typeof v !== "function"));
+  }
+  set state(next: Record<string, any>) {
+    runInWindowSync(this.window, () => useInboxStore.setState(next as any));
+  }
+  /** The user scope's log cursor (0 when the window holds none). */
+  get cursor(): number {
+    return this.window.store.getState().syncMeta[scopeMetaKey(ME_SCOPE)]?.cursor ?? 0;
+  }
+  set cursor(position: number) {
+    runInWindowSync(this.window, () => {
+      const s = useInboxStore.getState();
+      s.clearSyncMeta(scopeMetaKey(ME_SCOPE));
+      s.recordSyncMeta(scopeMetaKey(ME_SCOPE), { cursor: position });
+    });
+  }
+  get online(): boolean {
+    return this.isOnline;
+  }
+  set online(on: boolean) {
+    if (on === this.isOnline) return;
+    this.isOnline = on;
+    if (on) this.server.net.online(this.name);
+    else this.server.net.offline(this.name);
+  }
+
+  // ── Boot ──
+
+  /** Boots this replica as a standalone host the first time it is used. */
+  async ready(): Promise<SimWindow> {
+    await (this.booting ??= this.bootHost());
+    return this.window;
+  }
+  get simDevice(): SimDevice {
+    if (!this.sim) throw new Error(`replica ${this.name}: not booted yet`);
+    return this.sim;
+  }
+
+  private async bootHost(): Promise<void> {
+    const net = this.server.net;
+    for (const feed of HOST_FEEDS) net.lag(this.channel(feed));
+    this.sim = new SimDevice(this.server, { userId: ME }, this.name);
+    await this.adopt(await this.sim.addWindow("host", { name: this.name }));
+  }
+
+  /** Joins `device` as a follower window: the host's chunked snapshot, then its stream. */
+  async bootFollower(device: Device): Promise<void> {
+    if (this.booting) throw new Error(`replica ${this.name}: already booted`);
+    this.device = device;
+    this.sim = device.sim;
+    this.booting = device.sim.addWindow("follower", { name: this.name }).then((w) => this.adopt(w));
+    await this.booting;
+  }
+
+  // The window's own comparer, with this replica's telemetry and heal queue.
+  private async adopt(w: SimWindow): Promise<void> {
+    this.win = w;
+    await w.run(() => {
+      w.comparer?.dispose();
+      const io: Partial<InboxDigestComparerIO> = {
+        // The replica names itself in its drift events; no real surface label fits.
+        platform: `sim-${this.name}` as unknown as InboxDigestComparerIO["platform"],
+        track: ((event: string, props: Record<string, unknown>) => void this.events.push({ event, props })) as InboxDigestComparerIO["track"],
+        random: () => this.rng(),
+        // A heal runs when the suite drains it (drainHeals), so the run stays deterministic.
+        schedule: (fn) => {
+          this.scheduled.push(fn);
+          return () => {
+            this.scheduled = this.scheduled.filter((f) => f !== fn);
+          };
+        },
+        onError: (err) => {
+          throw err;
+        },
+      };
+      w.comparer = startInboxDigestCompare(w.client, () => () => {}, io).comparer;
     });
   }
 
-  // Swap this replica into the singleton store for one operation.
-  load(): void {
-    __resetInboxPlacementCacheForTests();
-    declareViewNav("gesture");
-    useInboxStore.setState(this.state as any);
-    __setSyncActivityForTests(this.activity.lastApplyMono, this.activity.applySeq);
-    current = this;
-  }
-  save(): void {
-    const s = useInboxStore.getState() as any;
-    const out: Record<string, unknown> = {};
-    for (const k of REPLICA_KEYS) out[k] = s[k];
-    this.state = out;
-    this.activity = { lastApplyMono: lastSyncApplyMono(), applySeq: syncApplySeq() };
-    current = null;
-  }
-  // Every write this operation made leaves through the window's real tee:
-  // a host broadcasts to its followers, a follower offers its action writes
-  // to its host as a mut (attributed to itself so its own echo is skipped).
-  async withStore<T>(fn: () => Promise<T> | T, origin?: string): Promise<T> {
-    this.load();
-    teePatches = [];
-    teeState = null;
-    teeIsAction = false;
-    try {
-      return await fn();
-    } finally {
-      const patches = teePatches;
-      const state = teeState;
-      const isAction = teeIsAction;
-      this.save();
-      if (this.device && patches.length > 0) {
-        if (this.role === "host") {
-          const updates = extractReplicationUpdates(patches, state, isReplicated, isReplicatedCollectionKey);
-          if (updates.length > 0) this.device.broadcast(updates, origin ?? this.name, this);
-        } else if (isAction) {
-          const updates = buildMutUpdates(patches, state);
-          if (updates.length > 0) this.device.mut(updates, this);
-        }
-      }
-    }
-  }
-  compareState(): InboxCompareState {
-    this.load();
-    const s = useInboxStore.getState() as unknown as InboxCompareState;
-    current = null;
-    return s;
-  }
-
   // ── Channels (host only: a follower holds no subscription) ──
+
+  private channel(feed: HostFeed): string {
+    return `live:${this.name}:${feed}`;
+  }
   private feeds(): boolean {
-    return this.online && this.role === "host";
+    return this.isOnline && this.role === "host";
   }
   // Same-machine delivery outruns the network: whatever the windows already
   // posted to each other lands before the host's next server push.
   private async settleWindows(): Promise<void> {
     await this.device?.drain();
   }
+  // One push of a held feed: the query runs now and its answer applies.
+  private async pull(feed: HostFeed): Promise<void> {
+    const w = await this.ready();
+    const net = this.server.net;
+    net.release(this.channel(feed));
+    try {
+      await w.refeed([feed]);
+    } finally {
+      net.lag(this.channel(feed));
+    }
+    await this.server.flush();
+  }
   async receiveBase(): Promise<void> {
+    await this.ready();
     if (!this.feeds() || this.baseDead) return;
     await this.settleWindows();
-    const { sessions } = await this.server.base();
-    await this.withStore(() => useInboxStore.getState().syncTable("sessions", sessions as unknown as InboxSession[]));
+    await this.pull("inbox");
   }
   async receiveOverlay(): Promise<void> {
+    await this.ready();
     if (!this.feeds() || this.overlayDead) return;
     await this.settleWindows();
-    const payload = await this.server.overlay();
-    await this.withStore(() => useInboxStore.getState().applyInboxLivenessPayload("mine", payload));
+    await this.pull("liveness");
   }
   async receiveDecisions(): Promise<void> {
+    await this.ready();
     if (!this.feeds()) return;
-    const rows = this.server.db._tables.session_decisions;
-    await this.withStore(() => useInboxStore.getState().syncTable("sessionDecisions", rows));
+    await this.pull("decisions");
   }
-  // The sync-log catch-up: ids from the range, hydrated by the authorized
-  // byIds query, overlaid as a delta; an id the query omitted is pruned. A
-  // cursor below the retention floor takes the resync path: the floor is
-  // recut and the rows it did not return are re-read by id.
+  /** The sync-log catch-up (useSyncChangeFeed's runner), then the floor step it wakes. */
   async catchUp(): Promise<void> {
+    const w = await this.ready();
     if (!this.feeds()) return;
     await this.settleWindows();
-    const { ids, upTo, resync } = this.server.range(this.cursor);
-    if (resync) {
-      this.cursor = upTo;
-      await this.withStore(() => {
-        useInboxStore.getState().clearCrawlMetaForScope(`user:${ME}`);
-        useInboxStore.getState().retireAckedPending(`user:${ME}`, upTo);
-      });
-      await this.crawl();
+    await w.catchUp();
+    await this.server.flush();
+  }
+  /**
+   * The completeness floor (runInboxFloorStep): cut once per cold or
+   * resynced cache, after the log stamped the scope. A replica whose log is
+   * not stamped yet catches up first, which cuts the floor when it settles.
+   */
+  async crawl(): Promise<void> {
+    const w = await this.ready();
+    if (!this.feeds()) return;
+    const flags = runInWindowSync(w, () => inboxFloorFlags(useInboxStore.getState(), ME));
+    if (!flags.logStamped) {
+      await this.catchUp();
       return;
     }
-    if (ids.length) {
-      const rows = await this.server.byIds(ids);
-      await this.withStore(() => {
-        const store = useInboxStore.getState();
-        store.retireAckedPending(`user:${ME}`, upTo);
-        store.clearFeedExcludes("sessions", ids);
-        if (rows.length) store.syncTable("sessions", rows as unknown as InboxSession[], { isDelta: true } as any);
-        const present = new Set(rows.map((r: any) => String(r._id)));
-        const missing = ids.filter((id) => !present.has(id));
-        if (missing.length) store.pruneFeedEntities("sessions", missing);
-      });
-    }
-    this.cursor = upTo;
-  }
-  // The completeness floor: every row in the 30-day window, once per cold or
-  // resynced cache, then the durable watermark that lets the compare trust
-  // the replica (gate 5). On a warm cache the rows the floor did not return
-  // are re-read by id: returned rows land (hidden stamps and all), omitted
-  // ids are gone or foreign and prune.
-  async crawl(): Promise<void> {
-    if (!this.feeds()) return;
     await this.settleWindows();
-    const rows = await this.server.crawl(vnow - 30 * GEN_DAY);
-    const returned = new Set(rows.map((r: any) => String(r._id)));
-    const cached = Object.keys(this.state.sessions as Record<string, unknown>).filter((id) => !returned.has(id) && id.length === 32);
-    const probed = cached.length ? await this.server.byIds(cached) : [];
-    await this.withStore(() => {
-      const store = useInboxStore.getState();
-      store.clearFeedExcludes("sessions", rows.map((r: any) => String(r._id)));
-      store.syncTable("sessions", rows as unknown as InboxSession[]);
-      if (cached.length) {
-        store.clearFeedExcludes("sessions", cached);
-        if (probed.length) store.syncTable("sessions", probed as unknown as InboxSession[], { isDelta: true } as any);
-        const present = new Set(probed.map((r: any) => String(r._id)));
-        const missing = cached.filter((id) => !present.has(id));
-        if (missing.length) store.pruneFeedEntities("sessions", missing);
-      }
-      store.recordSyncMeta(CRAWL_KEY, { backfilledAt: vnow });
-    });
+    await w.run(() => runInboxFloorStep(w.client, inboxFloorFlags(useInboxStore.getState(), ME)));
+    await this.server.flush();
   }
   async receiveAll(): Promise<void> {
     await this.receiveBase();
@@ -450,114 +509,83 @@ export class Replica {
     await this.catchUp();
   }
 
-  // ── Gestures (the real store actions, then the dispatch to the server) ──
-  private dispatchPending(id: string): void {
-    const pending = this.state.pending as Record<string, any>;
-    const patch: Record<string, any> = {};
-    const keys: string[] = [];
-    for (const [key, entry] of Object.entries(pending)) {
-      if (entry?.type !== "field") continue;
-      const [coll, docId, ...rest] = key.split(":");
-      if (coll !== "conversations" || docId !== id) continue;
-      patch[rest.join(":")] = entry.value ?? undefined;
-      keys.push(rest.join(":"));
-    }
-    if (Object.keys(patch).length === 0) return;
-    // applyHideTransition: a dismiss stamps the retired marker as well.
-    if (patch.inbox_dismissed_at) patch.inbox_killed_at = patch.inbox_dismissed_at;
-    const position = this.server.mutate(id, patch);
-    // The dispatch acknowledgement (design D8): the acting window stamps the
-    // log position its write landed at onto the locks that write created,
-    // and announces it to its sibling windows over the bridge.
-    const patches = { conversations: { [id]: Object.fromEntries(keys.map((k) => [k, pending[`conversations:${id}:${k}`].value])) } };
-    const sentAt = vnow;
-    this.load();
-    useInboxStore.getState().stampSyncAck(patches, [{ scope_key: `user:${ME}`, position }], sentAt);
-    this.save();
+  // ── Gestures (the real store actions; the window's dispatch reaches the server) ──
+
+  /**
+   * One turn of this window, then the server traffic it started. The turn
+   * ends before that traffic runs, so `fn` starts server work and never
+   * waits on it (see hydrate).
+   */
+  async withStore<T>(fn: () => Promise<T> | T): Promise<T> {
+    const w = await this.ready();
+    const out = await w.run(fn);
+    await this.server.flush();
+    return out;
   }
-  // A gesture can write MORE rows than its target (a kill cascades a dismiss
-  // onto the session's subagents and teammates); prod dispatches one mutation
-  // per written row, so the harness dispatches every unacknowledged pending
-  // conversation write the gesture left behind, not only the target's.
-  private dispatchTouched(): void {
-    const pending = this.state.pending as Record<string, any>;
-    const ids = new Set<string>();
-    for (const [key, entry] of Object.entries(pending)) {
-      if (entry?.type !== "field" || (entry as any).ack) continue;
-      const [coll, docId] = key.split(":");
-      if (coll === "conversations" && docId) ids.add(docId);
-    }
-    for (const id of ids) this.dispatchPending(id);
+  pin(id: string): Promise<void> {
+    return this.withStore(() => useInboxStore.getState().pinSession(id));
   }
-  async pin(id: string): Promise<void> {
-    await this.withStore(() => useInboxStore.getState().pinSession(id));
-    this.dispatchTouched();
+  kill(id: string): Promise<void> {
+    return this.withStore(() => useInboxStore.getState().killSession(id));
   }
-  async kill(id: string): Promise<void> {
-    await this.withStore(() => useInboxStore.getState().killSession(id));
-    this.dispatchTouched();
+  stash(id: string): Promise<void> {
+    return this.withStore(() => useInboxStore.getState().stashSession(id));
   }
-  async stash(id: string): Promise<void> {
-    await this.withStore(() => useInboxStore.getState().stashSession(id));
-    this.dispatchTouched();
+  restore(id: string): Promise<void> {
+    return this.withStore(() => useInboxStore.getState().restoreSession(id));
   }
-  async restore(id: string): Promise<void> {
-    await this.withStore(() => useInboxStore.getState().restoreSession(id));
-    this.dispatchTouched();
+  revive(id: string): Promise<void> {
+    return this.withStore(() => useInboxStore.getState().markBlockedReviveRequested([id]));
   }
-  async revive(id: string): Promise<void> {
-    await this.withStore(() => useInboxStore.getState().markBlockedReviveRequested([id]));
-  }
-  async setQueued(id: string, queued: boolean): Promise<void> {
-    await this.withStore(() => useInboxStore.getState().setSessionHasQueuedMessages(id, queued));
+  setQueued(id: string, queued: boolean): Promise<void> {
+    return this.withStore(() => useInboxStore.getState().setSessionHasQueuedMessages(id, queued));
   }
   async setQueuedAll(queued: boolean): Promise<void> {
+    await this.ready();
     const ids = [...(this.state.sessionsWithQueuedMessages as Set<string>)];
     for (const id of ids) await this.setQueued(id, queued);
   }
-  async focus(id: string | null): Promise<void> {
-    await this.withStore(() => {
+  focus(id: string | null): Promise<void> {
+    return this.withStore(() => {
       declareViewNav("gesture");
       useInboxStore.setState({ currentSessionId: id } as any);
     });
   }
-
-  // ── Replication + bridge receipt ──
-  async applyReplication(updates: ReplicationUpdate[], origin: string): Promise<void> {
-    if (this.role === "follower" && origin === this.name) return; // own echo
-    // On a host every inbound update is a follower's mut (optimistic rows).
-    await this.withStore(() => applyUpdatesToStore(updates, { optimistic: this.role === "host" }), origin);
+  /** Reads these sessions through the byIds path (applyEntityIds), as catch-up does. */
+  async hydrate(ids: string[]): Promise<void> {
+    const w = await this.ready();
+    let applied: Promise<unknown> = Promise.resolve();
+    await w.run(() => {
+      applied = applyEntityIds(w.client, { ...emptyIdsByCollection(), sessions: ids });
+    });
+    await this.server.flush();
+    await applied;
   }
-  async applyGesture(msg: GestureMessage): Promise<void> {
-    await this.withStore(() => useInboxStore.getState().applyGestureBridge(msg));
-  }
-  // A follower's first contact: the host's whole replicated slice.
-  async applySnapshot(host: Replica): Promise<void> {
-    const entries = snapshotEntries(host.state, REPLICATED_STORE_KEYS as readonly string[]);
-    const updates: ReplicationUpdate[] = [];
-    for (const [key, value] of Object.entries(entries)) {
-      if (isReplicatedCollectionKey(key)) updates.push({ key, upserts: Object.values(value ?? {}) });
-      else updates.push({ key, value, hasValue: true });
-    }
-    await this.withStore(() => applyUpdatesToStore(updates));
+  /** Lets the server traffic this window started land (a probe's answer, a heal's rows). */
+  flush(): Promise<void> {
+    return this.server.flush();
   }
 
   // ── The compare loop ──
+
+  compareState(): InboxCompareState {
+    return this.window.store.getState() as unknown as InboxCompareState;
+  }
   tick(): InboxCompareOutcome {
-    const outcome = this.comparer.tick(this.compareState());
+    const comparer = this.comparer;
+    const outcome = runInWindowSync(this.window, () => comparer.tick(useInboxStore.getState() as any));
     this.lastOutcome = outcome;
     return outcome;
   }
-  // Run whatever the comparer scheduled (a jittered heal) to completion.
+  /** Run whatever the comparer scheduled (a jittered heal) to completion. */
   async drainHeals(): Promise<number> {
+    const w = await this.ready();
     let ran = 0;
     while (this.scheduled.length) {
       const fn = this.scheduled.shift()!;
-      fn();
+      await w.run(fn);
+      await this.server.flush();
       ran++;
-      // The heal body is async; let it settle before the next scheduled item.
-      await new Promise((r) => setTimeout(r, 0));
-      await new Promise((r) => setTimeout(r, 0));
     }
     return ran;
   }
@@ -566,20 +594,18 @@ export class Replica {
   }
 
   // ── The rendered projection, from the chokepoint every surface uses ──
+
   placed() {
-    this.load();
-    const out = placeInboxRows(useInboxStore.getState() as any, { scope: "mine", now: vnow });
-    current = null;
-    return out;
+    return runInWindowSync(this.window, () => placeInboxRows(useInboxStore.getState() as any, { scope: "mine", now: now() }));
   }
   membership(): string[] {
     return [...this.placed().placements.keys()].sort();
   }
-  /** Rows this window renders in an active bucket — what its user can pin, kill, stash. */
+  /** Rows this window renders in an active bucket: what its user can pin, kill, stash. */
   visibleIds(): string[] {
     return [...this.placed().placements].filter(([, p]) => p.bucket !== "dismissed" && p.bucket !== "stashed").map(([id]) => id).sort();
   }
-  /** Rows this window renders as hidden (Dismissed / Stashed) — what its user can restore. */
+  /** Rows this window renders as hidden (Dismissed / Stashed): what its user can restore. */
   hiddenIds(): string[] {
     return [...this.placed().placements].filter(([, p]) => p.bucket === "dismissed" || p.bucket === "stashed").map(([id]) => id).sort();
   }
@@ -595,15 +621,17 @@ export class Replica {
   }
 }
 
-// ── A device: one host window plus followers, and their two channels ──────
-
-type Delivery = { to: Replica; apply: () => Promise<void>; kind: "update" | "mut" | "gesture" };
+// ── A device: one host window plus followers, and the traffic between them ─
 
 export class Device {
   readonly windows: Replica[] = [];
-  private queue: Delivery[] = [];
+  readonly sim: SimDevice;
+  private readonly mine: ChannelFilter;
+
+  /** `host` is a booted replica (bootReplica); its machine becomes this device. */
   constructor(readonly name: string, readonly host: Replica) {
-    host.role = "host";
+    this.sim = host.simDevice;
+    this.mine = deviceTraffic(this.sim);
     host.device = this;
     this.windows.push(host);
   }
@@ -611,45 +639,26 @@ export class Device {
     return this.windows.filter((w) => w.role === "follower");
   }
   async addFollower(follower: Replica): Promise<void> {
-    follower.role = "follower";
-    follower.device = this;
     this.windows.push(follower);
-    await follower.applySnapshot(this.host);
+    await follower.bootFollower(this);
   }
-  /** The host's tee: every follower (but the origin) gets the update. */
-  broadcast(updates: ReplicationUpdate[], origin: string, _from: Replica): void {
-    for (const w of this.followers) {
-      if (w.name === origin) continue;
-      this.queue.push({ to: w, kind: "update", apply: () => w.applyReplication(updates, origin) });
-    }
-  }
-  /** A follower's action write, offered to the host. */
-  mut(updates: ReplicationUpdate[], from: Replica): void {
-    this.queue.push({ to: this.host, kind: "mut", apply: () => this.host.applyReplication(updates, from.name) });
-  }
-  /** A gesture announced to every sibling window. */
-  gesture(msg: GestureMessage, from: Replica): void {
-    for (const w of this.windows) {
-      if (w === from) continue;
-      this.queue.push({ to: w, kind: "gesture", apply: () => w.applyGesture(msg) });
-    }
-  }
+  /** Window-to-window deliveries waiting on this device. */
   pendingDeliveries(): number {
-    return this.queue.length;
+    return this.host.server.net.queued(this.mine);
   }
-  /** Deliver the next `n` queued messages in order (all of them by default). */
+  /** Deliver the next `n` of them in order (all by default), each followed by the server traffic it caused. */
   async deliver(n = Infinity): Promise<number> {
+    const server = this.host.server;
     let delivered = 0;
-    while (this.queue.length && delivered < n) {
-      const d = this.queue.shift()!;
-      await d.apply();
+    while (delivered < n && (await server.net.step(this.mine))) {
       delivered++;
+      await server.flush();
     }
     return delivered;
   }
   /** Drain until nothing is queued, including what deliveries themselves enqueue. */
   async drain(): Promise<void> {
-    while (this.queue.length) await this.deliver();
+    await this.deliver();
   }
 }
 
@@ -700,6 +709,7 @@ export async function settleAndAssertConverged(server: SimServer, replicas: Repl
     r.baseDead = false;
     r.overlayDead = false;
   }
+  await server.flush();
   // Every window's queued messages land, then the local overlays expire: the
   // revive TTL and the triage lock settle (a mut delivered after the clock
   // moved would plant a fresh lock and keep the compare off its short circuit).
@@ -709,6 +719,7 @@ export async function settleAndAssertConverged(server: SimServer, replicas: Repl
   }
   for (const d of devices) await d.drain();
   advance(Math.max(BLOCKED_REVIVE_TTL_MS, HIDDEN_OVERRIDE_SETTLE_MS) + GEN_MIN);
+  await server.flush();
   for (const r of hosts) await r.receiveAll();
   for (const d of devices) await d.drain();
   // Two quiet ticks with no row applies, then a fresh overlay for everyone
@@ -743,8 +754,7 @@ export async function settleAndAssertConverged(server: SimServer, replicas: Repl
     // compare at a distinct payload epoch), then the targeted heal, then clean.
     let heals = 0;
     if (outcome.kind === "diff" && process.env.SIM_TRACE) {
-      const ids = [...outcome.diff.missing, ...outcome.diff.extra, ...outcome.diff.bucket_deltas, ...outcome.diff.fold_deltas];
-      console.log(`[sim:trace] ${r.name} needs a heal: ${JSON.stringify({ diff: outcome.diff, detail: ids.map((id) => ({ id, server: server.conversations.find((c) => c._id === id) ?? null, replica: (r.state.sessions as any)[id] ?? null, pending: Object.entries(r.state.pending as Record<string, unknown>).filter(([k]) => k.includes(id)) })) }, null, 1)}`);
+      console.log(`[sim:trace] ${r.name} needs a heal: ${server.labels.relabel(JSON.stringify({ diff: outcome.diff, detail: driftDetail(server, r, driftIds(outcome.diff)) }, null, 1))}`);
     }
     while (outcome.kind === "diff" && heals < INBOX_HEAL_BUDGET) {
       advance(GEN_MIN);
@@ -757,34 +767,29 @@ export async function settleAndAssertConverged(server: SimServer, replicas: Repl
     }
     if (heals > 0) healedReplicas.push(`${r.name}:${heals}`);
     if (outcome.kind === "diff") {
-      // Replay aid: both sides of every disagreeing row, so a failing seed
-      // names its cause instead of a digest.
-      const ids = [...outcome.diff.missing, ...outcome.diff.extra, ...outcome.diff.bucket_deltas, ...outcome.diff.fold_deltas];
-      const detail = ids.map((id) => ({
-        id,
-        server: server.conversations.find((c) => c._id === id) ?? null,
-        stamp: (r.state.sessionsProjection as any).mine?.stamps?.[id] ?? null,
-        replica: (r.state.sessions as any)[id] ?? null,
-        pending: Object.entries(r.state.pending as Record<string, unknown>).filter(([k]) => k.includes(id)),
-      }));
-      throw new Error(`replica ${r.name} diverged at quiescence: ${JSON.stringify({ diff: outcome.diff, detail }, null, 1)}`);
+      const ids = driftIds(outcome.diff);
+      fail(server, r, ids[0], {
+        id: "legacy.diverged",
+        meaning: "every host matches the canonical projection at quiescence, through the compare loop's heals within one budget",
+        message: `replica ${r.name} diverged at quiescence after ${heals} heal(s): ${JSON.stringify({ diff: outcome.diff, detail: driftDetail(server, r, ids) }, null, 1)}`,
+      });
     }
     if (heals > 0) await recanonicalize();
     expect({ replica: r.name, outcome }).toEqual({ replica: r.name, outcome: { kind: "clean", epoch: projection.epoch, short_circuit: true, payload_age_ms: expect.any(Number) } });
-    const placed = r.placed();
-    expect({ replica: r.name, digest: placed.set_digest }).toEqual({ replica: r.name, digest: projection.set_digest });
-    expect({ replica: r.name, tally: placed.tally }).toEqual({ replica: r.name, tally: projection.tally });
     assertPlacements(server, r, r.placementsSnapshot(), canonicalPlacements, "canonical");
+    const placed = r.placed();
+    expect<{ replica: string; digest: string | null }>({ replica: r.name, digest: placed.set_digest }).toEqual({ replica: r.name, digest: projection.set_digest });
+    expect({ replica: r.name, tally: placed.tally }).toEqual({ replica: r.name, tally: projection.tally });
     expect(r.membership()).toEqual([...direct.placements.keys()].sort());
   }
-  // Host against host, byte for byte — every host on the final payload.
+  // Host against host, byte for byte: every host on the final payload.
   for (const r of hosts) await r.receiveOverlay();
   for (const d of devices) await d.drain();
   for (let i = 1; i < hosts.length; i++) {
     assertPlacements(server, hosts[i], hosts[i].placementsSnapshot(), hosts[0].placementsSnapshot(), hosts[0].name);
     expect(hosts[i].placed().set_digest).toBe(hosts[0].placed().set_digest);
   }
-  // Every follower renders exactly what its host renders — a heal on the
+  // Every follower renders exactly what its host renders: a heal on the
   // host reached it through replication, so drain once more first.
   for (const d of devices) await d.drain();
   for (const d of devices) {
@@ -796,19 +801,70 @@ export async function settleAndAssertConverged(server: SimServer, replicas: Repl
   return healedReplicas;
 }
 
+// ── Failure reports (sim/report.ts) ─────────────────────────────────────────
+
+const driftIds = (diff: { missing: string[]; extra: string[]; bucket_deltas: string[]; fold_deltas: string[] }) => [
+  ...diff.missing, ...diff.extra, ...diff.bucket_deltas, ...diff.fold_deltas,
+];
+
+// The fields a placement reads, so a report shows the inputs that disagree.
+const PLACEMENT_FIELDS = /status|agent_status|is_idle|updated_at|message_count|has_pending|awaiting|unresponsive|last_turn|settle_verdict|dormant|inbox_|is_pinned|is_deferred|started_at/;
+const pick = (row: any): Record<string, unknown> | null => row && Object.fromEntries(Object.entries(row).filter(([k]) => PLACEMENT_FIELDS.test(k)));
+const pendingFor = (r: Replica, id: string) => Object.entries(r.state.pending as Record<string, unknown>).filter(([k]) => k.includes(id));
+
+function driftDetail(server: SimServer, r: Replica, ids: string[]) {
+  return ids.map((id) => ({
+    id,
+    server: pick(server.conversations.find((c) => c._id === id)),
+    stamp: (r.state.sessionsProjection as any).mine?.stamps?.[id] ?? null,
+    replica: pick((r.state.sessions as any)[id]),
+    pending: pendingFor(r, id),
+  }));
+}
+
 // A placement mismatch names the rows and shows both sides' inputs, so a
 // failing seed reads as a cause, not as a diff of two digests.
 function assertPlacements(server: SimServer, r: Replica, got: Record<string, string>, want: Record<string, string>, against: string): void {
   const ids = [...new Set([...Object.keys(got), ...Object.keys(want)])].filter((id) => got[id] !== want[id]);
   if (ids.length === 0) return;
-  const pick = (row: any) => row && Object.fromEntries(Object.entries(row).filter(([k]) => /status|agent_status|is_idle|updated_at|message_count|has_pending|awaiting|unresponsive|last_turn|settle_verdict|dormant|inbox_|is_pinned|is_deferred|started_at/.test(k)));
   const detail = ids.map((id) => ({
     id, got: got[id] ?? null, want: want[id] ?? null,
     server: pick(server.conversations.find((c) => c._id === id)),
     replica: pick((r.state.sessions as any)[id]),
-    pending: Object.entries(r.state.pending as Record<string, unknown>).filter(([k]) => k.includes(id)),
+    pending: pendingFor(r, id),
   }));
-  throw new Error(`${r.name} places ${ids.length} row(s) unlike ${against}: ${JSON.stringify(detail, null, 1)}`);
+  fail(server, r, ids[0], {
+    id: "legacy.placements",
+    meaning: `every window places each row (bucket/work state/fold) as ${against === "canonical" ? "the canonical projection" : `its reference window ${against}`} does`,
+    message: `${r.name} places ${ids.length} row(s) unlike ${against}: ${JSON.stringify(detail, null, 1)}`,
+  });
+}
+
+// One failure block through the sim's report: the first row's server and
+// replica fields side by side, the last deliveries, and the artifacts.
+function fail(server: SimServer, r: Replica, rowId: string | undefined, check: { id: string; meaning: string; message: string }): never {
+  const seed = server.seed ?? 0;
+  const serverRow = rowId ? server.conversations.find((c) => c._id === rowId) ?? null : null;
+  const replicaRow = rowId ? (r.state.sessions as any)[rowId] ?? null : null;
+  reportFailure(
+    {
+      scenario: `legacy-${r.name}`,
+      mode: "scripted",
+      seed,
+      step: "settleAndAssertConverged",
+      delivery: server.net.deliveries,
+      invariant: { id: check.id, meaning: check.meaning },
+      message: check.message,
+      window: { name: r.name, principal: ME, scope: "mine" },
+      row: rowId ? { table: "conversations", id: rowId, server: pick(serverRow), replica: pick(replicaRow) } : undefined,
+      ring: server.net.ring,
+      order: server.net.orderSoFar(),
+      labels: server.labels,
+      t0: T0,
+      replay: [`SIM_SEEDS=${seed} SIM_TRACE=1 bun test store/__tests__/inboxConvergenceSim.test.ts store/__tests__/inboxMultiWindowSim.test.ts`],
+    },
+    { events: server.events, world: { seed, conversations: server.conversations.length }, final: { replica: r.name, placements: r.placementsSnapshot() } },
+  );
 }
 
 // ── Server-side events another device or the daemon would cause ────────────
@@ -818,8 +874,8 @@ export function newConversation(tag: string, over: Record<string, any> = {}): Re
     _id: convexIdFor(tag),
     user_id: ME,
     status: "active",
-    updated_at: vnow,
-    started_at: vnow - GEN_MIN,
+    updated_at: now(),
+    started_at: now() - GEN_MIN,
     message_count: 1,
     last_message_role: "user",
     title: `Session ${tag}`,
@@ -827,7 +883,7 @@ export function newConversation(tag: string, over: Record<string, any> = {}): Re
   };
 }
 
-export type ServerEvent = (server: SimServer, rng: () => number, step: number) => void;
+export type ServerEvent = (server: SimServer, rng: () => number, step: number) => Promise<void>;
 
 /** A random row the window's user can see and act on (null when it shows none). */
 export const pickShown = (w: Replica, rng: () => number): string | null => {
@@ -849,98 +905,98 @@ export const memberIds = (server: SimServer, rng: () => number): string | null =
 };
 
 export const SERVER_EVENTS: Record<string, ServerEvent> = {
-  newSession: (s, _rng, step) => {
+  newSession: async (s, _rng, step) => {
     const c = newConversation(`new${step}`);
-    s.insert(c);
-    s.setAgent(c._id, { agent_status: "working", last_heartbeat: vnow, agent_status_updated_at: vnow });
+    await s.insert(c);
+    await s.setAgent(c._id, { agent_status: "working", last_heartbeat: now(), agent_status_updated_at: now() });
   },
-  agentSettles: (s, rng) => {
+  agentSettles: async (s, rng) => {
+    const id = memberIds(s, rng);
+    if (id) await s.daemonReports(id, "idle");
+  },
+  agentDeclaresDone: async (s, rng) => {
+    const id = memberIds(s, rng);
+    if (id) await s.daemonReports(id, "done");
+  },
+  agentStarts: async (s, rng) => {
     const id = memberIds(s, rng);
     if (!id) return;
-    s.setAgent(id, { agent_status: "idle", last_heartbeat: vnow, agent_status_updated_at: vnow - 2 * GEN_MIN });
-    s.mutate(id, { updated_at: vnow - 2 * GEN_MIN, message_count: (s.conv(id).message_count ?? 0) + 1 });
+    await s.daemonReports(id, "working");
+    // The turn's transcript flush: churn fields only, so the sync log skips it.
+    await s.mutate(id, { updated_at: now(), message_count: (s.conv(id).message_count ?? 0) + 1 });
   },
-  agentDeclaresDone: (s, rng) => {
+  daemonDies: async (s, rng) => {
     const id = memberIds(s, rng);
-    if (!id) return;
-    s.setAgent(id, { agent_status: "done", last_heartbeat: vnow, agent_status_updated_at: vnow });
+    if (id) await s.setAgent(id, { last_heartbeat: now() - GEN_HOUR });
   },
-  agentStarts: (s, rng) => {
+  otherDevicePins: async (s, rng) => {
     const id = memberIds(s, rng);
-    if (!id) return;
-    s.setAgent(id, { agent_status: "working", last_heartbeat: vnow, agent_status_updated_at: vnow });
-    s.mutate(id, { updated_at: vnow, message_count: (s.conv(id).message_count ?? 0) + 1 });
+    if (id) await (await s.other(id)).pin(id);
   },
-  daemonDies: (s, rng) => {
+  otherDeviceDismisses: async (s, rng) => {
     const id = memberIds(s, rng);
-    if (!id) return;
-    s.setAgent(id, { last_heartbeat: vnow - GEN_HOUR });
+    if (id) await (await s.other(id)).kill(id);
   },
-  otherDevicePins: (s, rng) => {
+  otherDeviceStashes: async (s, rng) => {
     const id = memberIds(s, rng);
-    if (!id) return;
-    s.mutate(id, { inbox_pinned_at: s.conv(id).inbox_pinned_at ? undefined : vnow });
+    if (id) await (await s.other(id)).stash(id);
   },
-  otherDeviceDismisses: (s, rng) => {
-    const id = memberIds(s, rng);
-    if (!id) return;
-    s.mutate(id, { inbox_dismissed_at: vnow, inbox_killed_at: vnow });
-  },
-  otherDeviceStashes: (s, rng) => {
-    const id = memberIds(s, rng);
-    if (!id) return;
-    s.mutate(id, { inbox_stashed_at: vnow, inbox_stash_hidden: undefined });
-  },
-  otherDeviceRestores: (s, rng) => {
+  otherDeviceRestores: async (s, rng) => {
     const hidden = s.conversations.filter((c) => !c.is_subagent && (c.inbox_dismissed_at || c.inbox_stashed_at));
     if (!hidden.length) return;
     const c = hidden[Math.floor(rng() * hidden.length)];
-    s.mutate(c._id, { inbox_dismissed_at: undefined, inbox_stashed_at: undefined, inbox_killed_at: undefined, inbox_stash_hidden: undefined });
+    await (await s.other(c._id)).restore(c._id);
   },
-  gcDeletesBlank: (s, rng, step) => {
-    // The empty-conversation GC: a blank row is hard-deleted; a replica that
-    // cached it learns only through the log's delete (authorized absence).
-    const blank = newConversation(`blank${step}`, { message_count: 0, last_message_role: undefined, started_at: vnow - GEN_DAY });
-    s.insert(blank);
-    if (rng() < 0.7) s.delete(blank._id);
+  gcDeletesBlank: async (s, rng, step) => {
+    // The empty-conversation GC: a blank row past the grace window is
+    // hard-deleted, a younger one is kept; a replica that cached it learns
+    // only through the log's delete (authorized absence).
+    const reapable = rng() < 0.7;
+    await s.insert(newConversation(`blank${step}`, {
+      message_count: 0,
+      last_message_role: undefined,
+      started_at: now() - GEN_DAY,
+      _creationTime: reapable ? now() - EMPTY_CONVERSATION_GRACE_MS - GEN_MIN : now(),
+    }));
+    await s.gc();
   },
-  triggerArms: (s, rng) => {
+  triggerArms: async (s, rng) => {
+    const id = memberIds(s, rng);
+    if (id) await s.mutate(id, { armed_trigger_kind: s.conv(id).armed_trigger_kind === "standing" ? "none" : "standing" });
+  },
+  decisionQueued: async (s, rng, step) => {
     const id = memberIds(s, rng);
     if (!id) return;
-    s.mutate(id, { armed_trigger_kind: s.conv(id).armed_trigger_kind === "standing" ? "none" : "standing" });
+    await s.backend.db.insert("session_decisions", { user_id: ME, conversation_id: id, status: "pending", created_at: now(), title: `decision ${step}` });
   },
-  decisionQueued: (s, rng, step) => {
+  decisionAnswered: async (s) => {
+    const open = (s.backend.db._tables.session_decisions ?? []).find((d: any) => d.status === "pending");
+    if (open) await s.backend.db.patch(open._id, { status: "answered" });
+  },
+  userParks: async (s, rng) => {
     const id = memberIds(s, rng);
     if (!id) return;
-    s.db._tables.session_decisions.push({ _id: `sd_${step}`, user_id: ME, conversation_id: id, status: "pending", created_at: vnow });
+    await s.mutate(id, { inbox_rest: rng() < 0.5 ? "dormant" : rng() < 0.5 ? "done" : "needs_input", inbox_rest_at: now() });
   },
-  decisionAnswered: (s) => {
-    const open = s.db._tables.session_decisions.find((d: any) => d.status === "pending");
-    if (open) open.status = "answered";
-  },
-  userParks: (s, rng) => {
+  apiErrorBanner: async (s, rng) => {
     const id = memberIds(s, rng);
-    if (!id) return;
-    s.mutate(id, { inbox_rest: rng() < 0.5 ? "dormant" : rng() < 0.5 ? "done" : "needs_input", inbox_rest_at: vnow });
-  },
-  apiErrorBanner: (s, rng) => {
-    const id = memberIds(s, rng);
-    if (!id) return;
-    s.mutate(id, { pending_api_error: !s.conv(id).pending_api_error });
+    if (id) await s.mutate(id, { pending_api_error: !s.conv(id).pending_api_error });
   },
 };
 
 // ── Fixtures ────────────────────────────────────────────────────────────────
 
 export function seededWorld(seed: number, n = 45): GenWorld {
-  return genWorld(seed, n, inboxEpoch(vnow), ME);
+  const world = genWorld(seed, n, inboxEpoch(now()), ME);
+  worldSeeds.set(world, seed);
+  return world;
 }
 
+/** A standalone host replica: booted, its floor cut, every feed delivered once. */
 export async function bootReplica(server: SimServer, name: string, seed: number): Promise<Replica> {
   const r = new Replica(name, server, { seed });
   await r.crawl();
   await r.receiveAll();
-  r.cursor = server.head();
   return r;
 }
 

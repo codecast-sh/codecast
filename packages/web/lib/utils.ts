@@ -1,4 +1,5 @@
 import { clsx, type ClassValue } from "clsx"
+import { CODECAST_BASE_URL } from "@codecast/shared/entities";
 import { twMerge } from "tailwind-merge"
 
 export function cn(...inputs: ClassValue[]) {
@@ -17,7 +18,7 @@ export const NEW_SESSION_EVENT = "codecast-new-session";
 export { relTimeShort, formatRelative, formatShortDate, formatDateFull, formatDateSmart } from "@codecast/shared/time";
 
 export function shareOrigin(): string {
-  return "https://codecast.sh";
+  return CODECAST_BASE_URL;
 }
 
 /** The public address of an in-app path, whatever pane the page is open in. */

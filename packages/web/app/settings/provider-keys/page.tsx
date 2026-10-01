@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { KeyRound, ExternalLink, Trash2, Loader2, Check } from "lucide-react";
-import { PROVIDER_KEYS, type ProviderKeySpec } from "@codecast/shared/contracts";
+import { CLOUD_AGENT_PROVIDERS, PROVIDER_KEYS, getProviderKeySpec, type CloudAgentProviderSpec, type ProviderKeySpec } from "@codecast/shared/contracts";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
 import { SettingsPanel, SettingsSection } from "../../../components/settings/ui";
@@ -11,7 +11,7 @@ import { DevicePanelHeader } from "../../../components/settings/DevicePanelHeade
 import { useDevices, type Device } from "../../../components/DeviceBadge";
 import { useProviderKeyCommand, deviceManagedKeys } from "../../../lib/useProviderKeyCommand";
 import { CloudAgentSignInRows } from "../../../components/cloudAgents";
-import { cloudAgentKeyDialog } from "../../../components/cloudAgents/providerUi";
+import { cloudAgentKeyDialog, cloudAgentUi } from "../../../components/cloudAgents/providerUi";
 
 /**
  * "Provider keys" — manage the optional LLM API keys codecast injects into
@@ -42,6 +42,20 @@ export default function ProviderKeysPage() {
   );
 }
 
+/**
+ * Which keys run which cloud agents, and which cloud agents sign in instead,
+ * from the providers themselves: "The Cursor key runs Cursor Cloud sessions,
+ * and the OpenAI key runs OpenAI Agents API sessions. Codex Cloud runs with
+ * this machine's Codex sign-in ..."
+ */
+const CLOUD_KEYS_SENTENCE = (() => {
+  const specs: CloudAgentProviderSpec[] = Object.values(CLOUD_AGENT_PROVIDERS);
+  const keyed = specs.filter((s) => s.keyProvider).map((s) => `the ${getProviderKeySpec(s.keyProvider!)?.label ?? s.vendor} key runs ${s.label} sessions`);
+  const runs = keyed.length ? `${keyed.join(", and ")}.` : "";
+  const signIns = specs.map((s) => cloudAgentUi(s).signIn).filter(Boolean);
+  return [runs && runs[0].toUpperCase() + runs.slice(1), ...signIns].join(" ");
+})();
+
 function ProviderKeyList({ device }: { device: Device }) {
   const { pubkey, managedIds } = useMemo(() => deviceManagedKeys(device), [device]);
   const managed = useMemo(() => new Set(managedIds), [managedIds]);
@@ -56,10 +70,8 @@ function ProviderKeyList({ device }: { device: Device }) {
         description={
           <>
             API keys your agents use on this machine. opencode and pi get a model provider&apos;s key
-            as its env var at launch, on top of their own login. The Cursor key runs Cursor Cloud
-            agents and syncs your cloud agents into codecast; Codex Cloud uses the machine&apos;s Codex
-            sign-in instead. Keys stay on your devices, sealed in transit and never stored as plaintext
-            in the cloud.
+            as its env var at launch, on top of their own login. {CLOUD_KEYS_SENTENCE} Keys stay on your
+            devices, sealed in transit and never stored as plaintext in the cloud.
           </>
         }
       >

@@ -1,0 +1,21 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["bun"]
+  },
+  "include": [
+    "src/**/*",
+    "../convex/convex/lib/anthropic.ts",
+    "../convex/convex/idleSummary.ts",
+    "../cli/src/cliHttp.ts",
+    "../cli/src/config/readAuthConfig.ts",
+    "../cli/src/conversationRef.ts",
+    "../cli/src/secretRedaction.ts",
+    "../cli/src/ccKeychain.ts",
+    "../cli/src/orgInitRun.ts",
+    "../cli/src/bundledAssets.d.ts",
+    "../cli/src/browser/assets.d.ts",
+    "../cli/src/computer/assets.d.ts"
+  ]
+}

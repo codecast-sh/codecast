@@ -1,4 +1,5 @@
 import { followersSig, sameViewAnchor, type FollowerRow, type ViewAnchor } from "../lib/follow";
+import type { SharedObjectKind } from "@codecast/shared/entities";
 import { carryRingStubs } from "../lib/calls/ringStubs";
 import { nextMembershipVisibility, type TeamVisibilityLevel, type VisibilityChangeMode } from "@codecast/convex/convex/teamVisibility";
 import { queuedMessagesFromPending } from "./pendingMessageJournal";
@@ -60,7 +61,7 @@ import { makeCollectionSig } from "./wakeSig";
 import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessage } from "./gestureBridge";
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
-import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, decisionAnswerLabel, hasThreadState, clearedThreadStateFields } from "@codecast/shared/contracts";
+import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, decisionAnswerLabel, hasThreadState, clearedThreadStateFields } from "@codecast/shared/contracts";
 import { liveFactsOf } from "../lib/liveness";
 // The shared inbox projection (docs/architecture/sync-convergence.md): the
 // working-set selection, fold, fact/stamp field ownership, and the epoch clock.
@@ -203,6 +204,7 @@ import {
 } from "./stageSplit";
 import { divertSessionOpen } from "../lib/openIntent";
 import type { PalettePick } from "../lib/palettePick";
+import type { TourRun } from "../tours/types";
 export { isConvexId };
 
 // Canonical entity-derivation helpers live in lib/liveEntities. Re-exported here
@@ -1095,10 +1097,29 @@ export type TaskExternal = {
 /** S1.2: a comment pulled from, or pushed to, the provider. */
 export type TaskCommentExternal = { provider: IssueProvider; id: string; url?: string; author?: string };
 
+/** Every kind with an "anyone with the link" switch besides conversations. */
+export type PublicShareKind = Exclude<SharedObjectKind, "message">;
+
+/** Where each shareable kind keeps its cached rows, for the optimistic write. */
+const SHARE_COLLECTIONS: Record<PublicShareKind, string[]> = {
+  doc: ["docs", "docDetails"],
+  plan: ["plans"],
+  task: ["tasks"],
+  call: [],
+  project: ["projects"],
+  initiative: ["initiatives"],
+  decision: ["sessionDecisions", "decisionDetails", "handledDecisions"],
+  stack: ["decisionStacks"],
+  trigger: ["agentTasks", "foreignTriggers"],
+  run: ["workflowRuns"],
+};
+
 export type TaskItem = {
   _id: string;
   short_id: string;
   title: string;
+  /** "Anyone with the link" is on (convex publicShare.ts). */
+  share_token?: string;
   description?: string;
   task_type: string;
   status: string;
@@ -1628,6 +1649,9 @@ export type ClientUI = {
   // User-set height (px) of the trigger full-prompt viewport (TriggerPromptView
   // drag handle). Layout pref → unstamped, per-device local_wins.
   trigger_prompt_height?: number;
+  // The doc page's drafting layer (alternatives' underline and pager, Lab
+  // flags) is showing. Off, a doc reads as plain prose; ghosts stay dimmed.
+  doc_drafting?: boolean;
   // "Show old sessions" — reveal cached rows the live (authoritative) inbox
   // subscription no longer returns. Default hide. Successor to the removed
   // show_old_sessions key, whose blanket-local_wins sync made one browse click
@@ -2994,6 +3018,8 @@ export type PlaceInboxState = {
   pendingSessionCreates?: Record<string, unknown>;
   blockedReviveRequestedAt?: Record<string, number>;
   currentSessionId?: string | null;
+  /** NEW holds after a first send (newSessionHolds). Presentation only: filing, never placement. */
+  newSessionHolds?: Record<string, number>;
   /** In-flight field locks (the triage_gesture overlay's input). */
   pending?: InboxOverlayState["pending"];
 };
@@ -3079,14 +3105,15 @@ export const placementDecisionsSig = makeCollectionSig((d: any) =>
   d?.status === "pending" ? `${d._id}|${d.conversation_id}` : "");
 
 const EMPTY_PLACEMENT_OBJ: Record<string, never> = {};
-let _placementDeadlineMemo: {
+type PlacementDeadlineMemo = {
   sessions: PlaceInboxState["sessions"];
   revive: PlaceInboxState["blockedReviveRequestedAt"];
   stamps: NonNullable<PlaceInboxState["sessionsProjection"]>[string]["stamps"] | undefined;
   now: number;
   validUntil: number;
   sig: string;
-} | null = null;
+};
+let _placementDeadlineMemo: PlacementDeadlineMemo | null = null;
 
 // The DEADLINE signature — the chokepoint's deadline heap, folded to one
 // string. Every TIME-driven placement input is in it: rows past the liveness
@@ -3327,6 +3354,7 @@ export function placeInboxRows(
     Object.keys(pendingCreates).sort().join(","),
     placementDecisionsSig(decisions),
     state.questionResolutions,
+    state.newSessionHolds,
     state.killedShelf?.ids,
   ];
   const memo = _placedMemo.get(slot);
@@ -3541,6 +3569,7 @@ export function placeInboxRows(
   // flight (the create_stub overlay's pending half).
   const isEngagedBlank = (s: InboxSession) =>
     deps.pendingCreateIds.has(s._id) || overlaysAffecting(s._id, deps).some((o) => o === "focused" || o === "draft_blank");
+  const holds = state.newSessionHolds ?? EMPTY_PLACEMENT_OBJ as Record<string, number>;
   const questions: InboxSession[] = [];
   const pinned: InboxSession[] = [];
   const newSessions: InboxSession[] = [];
@@ -3556,6 +3585,13 @@ export function placeInboxRows(
       // any content files it under WORKING; an engaged blank renders in NEW.
       if (isConvexId(s._id)) continue;
       b = (s.message_count ?? 0) > 0 || deps.pendingSendIds.has(s._id) ? "working" : "new";
+    }
+    // A session the person just started stays where they put it for a moment
+    // after the first send, then moves on (NEW_SESSION_HOLD_MS). Filing only:
+    // the placement, the tally and the digest keep the row's real bucket.
+    if ((holds[s._id] ?? 0) > now && HELD_IN_NEW.has(b)) {
+      newSessions.push(s);
+      continue;
     }
     switch (b) {
       case "questions": questions.push(s); break;
@@ -3724,6 +3760,17 @@ function assertPlacementParity(
   }
 }
 
+// The "your move" rows (Ctrl+I, queue advance): questions, NEEDS INPUT and
+// DONE, plus a fresh start held in NEW whose turn has settled on the person.
+export function yourMoveOf(placed: PlacedInbox): (s: InboxSession) => boolean {
+  const keep = new Set([...placed.needsInput, ...placed.done].map((s) => s._id));
+  for (const s of placed.newSessions) {
+    const ws = placed.placements.get(s._id)?.work_state;
+    if (ws === "needs_input" || ws === "done") keep.add(s._id);
+  }
+  return (s) => placed.isQuestion(s) || keep.has(s._id);
+}
+
 export function visualOrderSessions(
   placed: PlacedInbox,
   projectFilters?: readonly ProjectFilterTerm[],
@@ -3767,8 +3814,7 @@ export function visualOrderSessions(
     }
   }
   if (opts.yourMove) {
-    const keep = new Set([...placed.needsInput, ...placed.done].map((s) => s._id));
-    return result.filter((s) => placed.isQuestion(s) || keep.has(s._id));
+    return result.filter(yourMoveOf(placed));
   }
   return result;
 }
@@ -4591,8 +4637,7 @@ export function computeVisualOrder(state: {
   if (state.showFavorites) {
     const order = favoritesVisualOrder(state.sessions, chipProjectFilters(state), state.favorites);
     if (!opts.yourMove) return order;
-    const keep = new Set([...placed.needsInput, ...placed.done].map((s) => s._id));
-    return order.filter((s) => placed.isQuestion(s) || keep.has(s._id));
+    return order.filter(yourMoveOf(placed));
   }
   const bucketByConv = convBucketMap(state.bucketAssignments);
   const mode = resolveInboxViewMode(state.clientState.ui);
@@ -4613,8 +4658,7 @@ export function computeVisualOrder(state: {
     if (!opts.yourMove) return flat;
     // A flat card still wears the bucket verdict (its badge reads from the same
     // placement), so "your move" is the same membership walked in flat order.
-    const keep = new Set([...placed.needsInput, ...placed.done].map((s) => s._id));
-    return flat.filter((s) => placed.isQuestion(s) || keep.has(s._id));
+    return flat.filter(yourMoveOf(placed));
   }
   // Grouped/bucket: the placed status sections over the SAME visible set. The
   // bucket branch below splits pinned out and regroups the rest by label/project.
@@ -4739,17 +4783,27 @@ export function findReusableBlankSession(
 
 // -- Store interface --
 
-/** One live huddle as calls.getLiveRooms projects it. A room the viewer may
- *  not see the anchor of arrives `redacted` with no title — the room is still
- *  joinable (the team wall holds), only its name is withheld. */
-export type LiveRoom = {
-  room_key: string;
-  team_id: string;
+/** The flags a person toggles from inside a huddle: one `callRooms` row per
+ *  live room, keyed by room_key. calls.getLiveRooms carries them and
+ *  useCallSync files them here, apart from the roster (`liveRooms`). */
+export type CallRoomFlags = {
+  _id: string;
   /** The room's door, as a fact about the ROOM: what the lock glyph paints. */
   locked: boolean;
   /** The huddle turned transcription off (calls.setRoomTranscribeOff) — what
    *  keeps every seated client's auto-scribe from starting it again. */
-  transcribe_off?: boolean;
+  transcribe_off: boolean;
+  /** When the opt-out was switched on; null while transcription is on. */
+  transcribe_off_at: number | null;
+};
+
+/** One live huddle as calls.getLiveRooms projects it, minus the room flags
+ *  (those live in `callRooms`). A room the viewer may not see the anchor of
+ *  arrives `redacted` with no title — the room is still joinable (the team
+ *  wall holds), only its name is withheld. */
+export type LiveRoom = {
+  room_key: string;
+  team_id: string;
   /** May THIS viewer walk in right now — the server's own authorizeRoom answer.
    *  A lock shuts the open door only, so a member of the room or a guest
    *  holding a live grant is still true here while `locked` is too. This, never
@@ -5093,6 +5147,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // -- Wrapped actions (middleware creates aliases from do_* -> *) --
   stashSession: (id: string, opts?: { hidden?: boolean }) => void;
   killSession: (id: string) => void;
+  deleteSession: (id: string) => void;
   killSessions: (ids: string[]) => void;
   markSessionsDismissed: (ids: string[]) => void;
   markBlockedAcknowledged: (ids: string[]) => void;
@@ -5115,6 +5170,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   setPrivacy: (id: string, isPrivate: boolean) => void;
   /** "Anyone with the link" on (a freshly minted token) or off (null). */
   setShareLink: (id: string, token: string | null) => void;
+  setObjectShareLink: (kind: PublicShareKind, id: string, token: string | null) => void;
   dismissBrowserPaneOffer: (id: string, at: number) => void;
   setTeamVisibility: (id: string, visibility: "summary" | "full" | null) => void;
   /** My level for a whole team. `mode` matters only when the level goes up:
@@ -5149,7 +5205,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // at create. `fallback` covers a stub that was somehow never seeded. Pairs with
   // beginOptimisticSession({ deferCreate })'s materialize() AND the in-app
   // self-heal create (ensureSessionCreated routes through it too).
-  createSessionFromStub: (stubId: string, fallback?: { agentType?: string; projectPath?: string; gitRoot?: string; private?: boolean }) => Promise<any>;
+  createSessionFromStub: (stubId: string, fallback?: { agentType?: string; projectPath?: string; gitRoot?: string; private?: boolean; model?: string; targetDeviceId?: string }) => Promise<any>;
   // The one true path for optimistically creating a session: stubs a local
   // conversation synchronously and rekeys it to the real Convex id when `create`
   // resolves. Every new-session entry point funnels through this so a first
@@ -5169,7 +5225,9 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // Ghost removal: hard-drop cached session rows nothing will re-deliver
   // (orphaned optimistic stubs). Plants the exclude pending entries that
   // authorize the IDB row delete and block re-adds.
-  pruneGhostSessions: (ids: string[]) => void;
+  // serverDeleted: the server proved the conversation gone (coverage poll's
+  // "missing"), so unsettled local messages no longer protect the row.
+  pruneGhostSessions: (ids: string[], opts?: { serverDeleted?: boolean }) => void;
   // Receiver for the cross-window gesture bridge — see gestureBridge.ts.
   applyGestureBridge: (msg: GestureMessage) => void;
   pruneFeedEntities: (collection: FeedCollection, ids: string[]) => void;
@@ -5359,6 +5417,10 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // In-memory map: stub id → in-flight createSession dispatch promise. Lets
   // consumers await rekey directly instead of polling. Not synced/persisted.
   pendingSessionCreates: Record<string, Promise<string>>;
+  // In-memory, this window only: session id → when its NEW hold ends. The
+  // first send into a blank session stamps it (appendOptimisticMessage) and an
+  // expired hold deletes itself (releaseExpiredNewSessionHolds). Not synced/persisted.
+  newSessionHolds: Record<string, number>;
   trackSessionCreate: (stubId: string, promise: Promise<string>) => void;
   awaitSessionCreate: (stubId: string) => Promise<string> | undefined;
   // Re-create a stub whose createSession was given up (outbox cap / lost to a
@@ -5697,10 +5759,14 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
    *  (components/stage/StagePickLayer). Ephemeral gesture — raw set. */
   stagePick: { path: string; title?: string } | null;
   setStagePick: (pick: { path: string; title?: string } | null) => void;
-  // The intro tour (components/triage/TriageNux). Ephemeral modal toggle;
-  // whether it has RUN is durable, in clientState.tips.
-  triageNuxOpen: boolean;
-  setTriageNuxOpen: (open: boolean) => void;
+  // The tour that is running (tours/): which one, which step, and whether a
+  // person asked for it (a replay) or it started itself. Ephemeral modal
+  // state; whether a tour has been SEEN is durable, in clientState.tips
+  // (tours/seen.ts). The Tours panel lists every tour.
+  tour: TourRun | null;
+  setTour: (run: TourRun | null) => void;
+  toursPanelOpen: boolean;
+  setToursPanelOpen: (open: boolean) => void;
   // The global anchor panel: a slide-over holding one anchor's conversation,
   // reachable from every page. Ephemeral (a modal toggle, never persisted).
   // `anchorId` is the LAST anchor shown, so re-opening lands where you were.
@@ -5791,7 +5857,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   removeAgentChain: (id: string) => void;
 
   addTaskComment: (shortId: string, text: string, commentType?: string, imageIds?: string[]) => Promise<any>;
-  updateDoc: (id: string, fields: { content?: string; title?: string; doc_type?: string; labels?: string[] }) => void;
+  updateDoc: (id: string, fields: { content?: string; title?: string; doc_type?: string; labels?: string[]; overflow?: string }) => void;
   pinDoc: (id: string, pinned: boolean) => Promise<any>;
   archiveDoc: (id: string) => Promise<any>;
   restoreArchivedDoc: (id: string) => void;
@@ -5821,14 +5887,14 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // on the row I clicked, and the auto-accept in useCallRing — the admit ring
   // for a door I knocked on must not ask me to answer it.
   callKnocked: Record<string, number>;
-  // In-flight lock toggles, room_key → desired state. Local-first: the lock
-  // glyph flips on click and this protects it through getLiveRooms pushes
-  // computed before setRoomLocked committed (same shape as myStatusPending).
-  callLockPending: Record<string, { locked: boolean; at: number }>;
+  callRooms: Record<string, CallRoomFlags>;
   noteKnock: (roomKey: string) => void;
   clearKnock: (roomKey: string) => void;
-  noteLockPending: (roomKey: string, locked: boolean) => void;
-  revertLockPending: (roomKey: string, locked: boolean) => void;
+  setRoomLocked: (roomKey: string, locked: boolean) => void;
+  /** Resolves once the server holds the flag: switching transcription back on
+   *  must land before the scribe asks transcripts.start, which refuses a room
+   *  that is still opted out. The switch itself paints synchronously. */
+  setRoomTranscribeOff: (roomKey: string, off: boolean) => Promise<unknown>;
   // Ephemeral media-plane state, written only by lib/calls/callManager. The
   // dock renders from THIS synchronously (local-first: joining paints
   // "connecting" before any server or SFU round-trip).
@@ -5920,9 +5986,34 @@ function appendOptimisticMessage(draft: Draft, convId: string, content: string, 
       : draft.sessions[convId]?.updated_at,
     ...(images && images.length > 0 ? { images } : {}),
   };
+  if ((draft.sessions[convId]?.message_count ?? 0) === 0 && !draft.pendingMessages[convId]?.length && !isInterruptControlMessage(content)) {
+    holdInNew(draft, convId);
+  }
   if (!draft.pendingMessages[convId]) draft.pendingMessages[convId] = [];
   draft.pendingMessages[convId].push(msg);
   return id;
+}
+
+// How long a just-started session stays in NEW after its first send before it
+// moves to the section its state names. Long enough to add a thought or fix
+// the prompt without hunting for the row; short enough that NEW never fills.
+export const NEW_SESSION_HOLD_MS = 30_000;
+const HELD_IN_NEW: ReadonlySet<InboxBucket | null> = new Set<InboxBucket | null>(["working", "needs_input", "done", "dormant"]);
+
+function holdInNew(draft: Draft, convId: string) {
+  const until = Date.now() + NEW_SESSION_HOLD_MS;
+  draft.newSessionHolds[convId] = until;
+  setTimeout(releaseExpiredNewSessionHolds, until - Date.now() + 50);
+}
+
+// Drops every expired hold in one write (ids may have been rekeyed since the
+// timer was armed, so it sweeps rather than naming one). Ephemeral UI state.
+export function releaseExpiredNewSessionHolds() {
+  const holds = useInboxStore.getState().newSessionHolds;
+  const now = Date.now();
+  const live = Object.entries(holds).filter(([, until]) => until > now);
+  if (live.length === Object.keys(holds).length) return;
+  useInboxStore.setState({ newSessionHolds: Object.fromEntries(live) });
 }
 
 function messageReplayKey(message: Message): string | null {
@@ -6541,29 +6632,9 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   callConfig: { kind: "singleton" },
   // Live huddles, wholesale-replaced on every push (the server sorts rooms
   // and rosters and buckets timestamps, so a heartbeat that changed nothing
-  // bails on the JSON compare). The one local edit to protect is an in-flight
-  // lock toggle: a push computed before setRoomLocked committed would flap the
-  // glyph back for a beat. Protection lives in normalize, like teamMembers, so
-  // the no-change bail still swallows heartbeat pushes.
-  liveRooms: {
-    kind: "list",
-    normalize: (list: any, draft?: any) => {
-      if (!Array.isArray(list)) return list;
-      const pending = draft?.callLockPending as Record<string, { locked: boolean; at: number }> | undefined;
-      if (!pending || Object.keys(pending).length === 0) return list;
-      return list.map((room: any) => {
-        const p = room && pending[room.room_key];
-        if (!p) return room;
-        // The TTL keeps a failed mutation from pinning a lock the server never
-        // accepted; agreement clears the entry and stops the protection.
-        if (Date.now() - p.at > 30_000 || room.locked === p.locked) {
-          delete pending[room.room_key];
-          return room;
-        }
-        return { ...room, locked: p.locked };
-      });
-    },
-  },
+  // bails on the JSON compare). Nothing local to protect: the flags a person
+  // flips live in `callRooms`, which useCallSync splits off this feed.
+  liveRooms: { kind: "list" },
   roomKnocks: { kind: "list" },
   teams: { kind: "list" },
   teamMembers: {
@@ -6933,6 +7004,10 @@ function scheduleResolvedChatChannelSends(channelId: string): void {
 
 function rekeyId(draft: any, oldId: string, newId: string) {
   if (oldId === newId) return;
+  if (draft.newSessionHolds?.[oldId]) {
+    draft.newSessionHolds[newId] = draft.newSessionHolds[oldId];
+    delete draft.newSessionHolds[oldId];
+  }
   if (draft.sessions[oldId]) {
     draft.sessions[newId] = { ...draft.sessions[oldId], _id: newId };
     delete draft.sessions[oldId];
@@ -7254,13 +7329,7 @@ function hideSessionInDraft(
   const me = draft.currentUser?._id?.toString?.();
   const hidden: string[] = [];
   const forgotten: string[] = [];
-  let newSessionId = draft.currentSessionId;
-  if (draft.currentSessionId && allIds.includes(draft.currentSessionId)) {
-    // Advance in the order the user is LOOKING at (active view mode, same as
-    // j/k), not the default grouped layout's order.
-    const next = nextSessionPastRemoved(computeVisualOrder(draft), draft.currentSessionId, new Set(allIds));
-    newSessionId = next?._id ?? null;
-  }
+  const newSessionId = sessionPastRemoved(draft, allIds);
   for (const sid of allIds) {
     // A local-only stub (optimistic create that never landed server-side)
     // can't be hidden durably: the server never knew it, so the reconcile's
@@ -7311,18 +7380,29 @@ function hideSessionInDraft(
       if (wasPinned) conv.inbox_pinned_at = null;
     }
   }
-  // Dismiss-and-advance: every caller of hideSessionInDraft is a user
-  // stash/kill/dismiss, so moving to the next session is gesture-class.
+  advanceSelection(draft, newSessionId);
+  return { hidden, forgotten, ts: now };
+}
+
+// The session to show once `removedIds` leave the list: the current one if it
+// survives, else the next in the order the user is LOOKING at (active view
+// mode, same as j/k), not the default grouped layout's order.
+function sessionPastRemoved(draft: any, removedIds: string[]): string | null {
+  if (!draft.currentSessionId || !removedIds.includes(draft.currentSessionId)) return draft.currentSessionId;
+  const next = nextSessionPastRemoved(computeVisualOrder(draft), draft.currentSessionId, new Set(removedIds));
+  return next?._id ?? null;
+}
+
+// Move the selection after a user removed rows (stash, kill, dismiss, delete):
+// gesture-class navigation. The active inbox tab's `?s=` moves in lockstep, as
+// commitCurrentSession does for normal navigation; otherwise the tab path stays
+// on the removed session and the inbox's re-assert effect snaps the view back
+// onto it the next time it runs (e.g. when the tab is re-activated).
+function advanceSelection(draft: any, newSessionId: string | null) {
   declareViewNav("gesture");
   draft.currentSessionId = newSessionId;
   recordCurrentConversationPointer(draft, newSessionId ?? undefined);
-  // Keep the active inbox tab's `?s=` in lockstep with the advanced selection,
-  // exactly as commitCurrentSession does for normal navigation. Without this the
-  // tab path stays pointed at the just-hidden session, and the inbox's re-assert
-  // effect snaps the view back onto it (resurfacing the dismissed/killed session
-  // as a peek) the next time it runs — e.g. when the tab is re-activated.
   syncActiveInboxTabPath(draft, newSessionId);
-  return { hidden, forgotten, ts: now };
 }
 
 // The focused session fell out of the list the panel renders — a filter changed
@@ -7769,6 +7849,36 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
   });
 }
 
+// Session ids a server-deleted prune skipped because the conversation was open;
+// retried by the subscription at the end of this module once the view moves.
+// One set per page, not per module evaluation: a hot swap keeps the store and
+// its first subscription, which must keep seeing the set the new config writes.
+const deferredDeletedSessions: Set<string> = ((globalThis as any).__deferredDeletedSessions ??= new Set<string>());
+
+// The one way a cached session row is dropped by hand: its three twins, its
+// pagination, and the excludes that authorize the IDB delete and block a
+// re-add. Shared by the ghost prune and the change-feed prune. An open view or
+// an optimistic create is never dropped. An unsettled local message protects
+// the row unless the server has proven the conversation gone (serverDeleted):
+// then nothing can ever settle it, and keeping it strands a ghost (2026-10-01).
+function dropSessionInDraft(draft: Draft, id: string, now: number, serverDeleted = false): boolean {
+  if (draft.currentSessionId === id) {
+    if (serverDeleted) deferredDeletedSessions.add(id);
+    return false;
+  }
+  if (!serverDeleted && pendingRowsUnsettled(draft.pendingMessages[id])) return false;
+  if (id in draft.pendingSessionCreates) return false;
+  deferredDeletedSessions.delete(id);
+  delete draft.sessions[id];
+  delete draft.conversations[id];
+  delete draft.messages[id];
+  delete draft.pendingMessages[id];
+  delete draft.pagination[id];
+  draft.pending[`sessions:${id}`] = { type: "exclude", ts: now };
+  draft.pending[`conversations:${id}`] = { type: "exclude", ts: now };
+  return true;
+}
+
 const inboxStoreConfig = (set: any, get: any) => ({
   // -- Initial state --
   // Every registered collection starts as {} by registration alone; explicit
@@ -8049,6 +8159,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   getReviewComments: (conversationId: string) => get().reviewComments[conversationId] ?? [],
 
   pendingSessionCreates: {},
+  newSessionHolds: {},
 
   currentConversation: {},
   isolatedWorktreeMode: false,
@@ -8581,6 +8692,20 @@ const inboxStoreConfig = (set: any, get: any) => ({
     announceHide(this, "kill", hideSessionInDraft(this, id, "kill"));
   }),
 
+  // Delete for good (sessionDelete.deleteSession, by action name): the server
+  // tears the agent down, removes the row and its content, and tombstones the
+  // session id so the daemon never recreates it. Owner-only; the menus offer it
+  // only on the viewer's own rows.
+  deleteSession: action(function (this: Draft, id: string) {
+    advanceSelection(this, sessionPastRemoved(this, [id]));
+    delete this.sessions[id];
+    delete this.conversations[id];
+    delete this.messages[id];
+    delete this.pendingMessages[id];
+    delete this.pagination[id];
+    broadcastGesture({ kind: "forget", ids: [id], ts: Date.now() }, bridgeUserId(this));
+  }),
+
   // Bulk kill ("Kill all" on the Stashed bucket): one action so the patches
   // ride a single dispatch and the kill sound plays once, not N times. Scale
   // is the user-curated stash list (tens) — each row NEEDS its own server
@@ -8690,7 +8815,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // excludes are what authorize the IDB row delete (a bare store-shrink is
   // ignored by the diff). A sync() — never re-dispatched; excludes are planted
   // manually (only action() auto-plants).
-  pruneGhostSessions: sync(function (this: Draft, ids: string[]) {
+  pruneGhostSessions: sync(function (this: Draft, ids: string[], opts?: { serverDeleted?: boolean }) {
     const now = Date.now();
     const removed: string[] = [];
     for (const id of ids) {
@@ -8701,17 +8826,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       // arrives on a later crawl, and the broadcast would order sibling windows
       // to drop a row on evidence this window doesn't have.
       if (!(id in this.sessions) && !(id in this.conversations)) continue;
-      if (this.currentSessionId === id) continue;
-      if (pendingRowsUnsettled(this.pendingMessages[id])) continue;
-      if (id in this.pendingSessionCreates) continue;
-      removed.push(id);
-      delete this.sessions[id];
-      delete this.conversations[id];
-      delete this.messages[id];
-      delete this.pendingMessages[id];
-      delete this.pagination[id];
-      this.pending[`sessions:${id}`] = { type: "exclude", ts: now };
-      this.pending[`conversations:${id}`] = { type: "exclude", ts: now };
+      if (dropSessionInDraft(this, id, now, opts?.serverDeleted)) removed.push(id);
     }
     // A sibling window still holding the ghost in memory would re-put the whole
     // row and resurrect it (see gestureBridge.ts). Only the ids actually removed
@@ -8739,16 +8854,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const now = Date.now();
     for (const id of ids) {
       if (collection === "sessions") {
-        if (this.currentSessionId === id) continue;
-        if (pendingRowsUnsettled(this.pendingMessages[id])) continue;
-        if (id in this.pendingSessionCreates) continue;
-        delete this.sessions[id];
-        delete this.conversations[id];
-        delete this.messages[id];
-        delete this.pendingMessages[id];
-        delete this.pagination[id];
-        this.pending[`sessions:${id}`] = { type: "exclude", ts: now };
-        this.pending[`conversations:${id}`] = { type: "exclude", ts: now };
+        dropSessionInDraft(this, id, now);
       } else {
         const coll = (this as any)[collection] as Record<string, any> | undefined;
         if (coll && id in coll) delete coll[id];
@@ -9271,6 +9377,19 @@ const inboxStoreConfig = (set: any, get: any) => ({
     });
   }),
 
+  // The same switch for every other shareable kind (convex publicShare.ts),
+  // same caller-minted token. Patches every cached copy of the object
+  // (SHARE_COLLECTIONS); a kind with no cached copy (calls) only dispatches.
+  setObjectShareLink: action(function (this: Draft, kind: PublicShareKind, id: string, token: string | null) {
+    for (const key of SHARE_COLLECTIONS[kind]) {
+      const coll = (this as any)[key] as Record<string, any> | undefined;
+      if (!coll) continue;
+      for (const row of coll[id] ? [coll[id]] : Object.values(coll).filter((r: any) => r?._id === id)) {
+        row.share_token = token ?? undefined;
+      }
+    }
+  }),
+
   setTeamVisibility: action(function (this: Draft, id: string, visibility: "summary" | "full" | null) {
     patchConversationRows(this, id, (c) => {
       c.team_visibility = visibility ?? undefined;
@@ -9477,7 +9596,12 @@ const inboxStoreConfig = (set: any, get: any) => ({
       // that already ended in "user interrupted" (a server echo or the line
       // this window painted moments ago) still reaches the daemon, which
       // judges it, but paints nothing: the conversation already ends there.
-      if ((session || this.conversations[convId]) && !isInterruptControlMessage(lastTimelineMessage(this, convId)?.content)) {
+      // A cloud agent's mirror is the record of how its turn ended (it says
+      // "Cancelled." for a turn the press stopped), and no echo ever settles
+      // a line painted here: it would stay even when nothing was running.
+      const row = session ?? this.conversations[convId];
+      const cloudAgent = !!row && !!cloudAgentProviderOfConversation(agentType, row.session_id, row.model);
+      if (row && !cloudAgent && !isInterruptControlMessage(lastTimelineMessage(this, convId)?.content)) {
         appendOptimisticMessage(this, convId, agentType === "codex" ? "<turn_aborted>" : "[Request interrupted by user]");
       }
     }
@@ -9542,7 +9666,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // compose popup intentionally allows a project-less stub → the daemon starts in
   // $HOME). Tracking + rekey are done by beginOptimisticSession's fire() (or by
   // ensureSessionCreated), so this only creates.
-  createSessionFromStub: (stubId: string, fallback?: { agentType?: string; projectPath?: string; gitRoot?: string; private?: boolean }) => {
+  createSessionFromStub: (stubId: string, fallback?: { agentType?: string; projectPath?: string; gitRoot?: string; private?: boolean; model?: string; targetDeviceId?: string }) => {
     const s = get();
     const cur = (s.sessions[stubId] || s.conversations[stubId]) as any;
     const projectPath = cur?.project_path ?? fallback?.projectPath;
@@ -9554,7 +9678,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     // the full model id ("claude-opus-4-8"); the create wants the contract option
     // key ("opus") — findModelOption matches on key. A model left on a different
     // agent's id (after an agent switch) resolves to "default" and is dropped.
-    const modelKey = modelOptionKey(cur?.model, agentType);
+    const modelKey = modelOptionKey(cur?.model ?? fallback?.model, agentType);
     // The machine shown in the new-session row, passed through verbatim. This
     // used to be re-checked here and DROPPED when it matched what routing would
     // pick anyway — an optimization that quietly became a bug: the picker's
@@ -9563,7 +9687,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     // discard an explicit pick and hand the choice back to a server-side
     // coin flip. The selection is now deterministic and always stamped, so
     // there is nothing left to second-guess.
-    const targetDeviceId = cur?.target_device_id as string | null | undefined;
+    const targetDeviceId = (cur?.target_device_id ?? fallback?.targetDeviceId) as string | null | undefined;
     // "Run in the cloud" is decided by the machine STAMPED on the stub, never by
     // the store flag (a mirror of the composer's derived mode). A stamped
     // wake-on-use host parks the row unless the folder is one the host already
@@ -12075,13 +12199,14 @@ const inboxStoreConfig = (set: any, get: any) => ({
     }
   }),
 
-  updateDoc: action(function (this: Draft, id: string, fields: { content?: string; title?: string; doc_type?: string; labels?: string[] }) {
+  updateDoc: action(function (this: Draft, id: string, fields: { content?: string; title?: string; doc_type?: string; labels?: string[]; overflow?: string }) {
     let changed = false;
     if (this.docs[id]) {
       if (fields.content !== undefined && fields.content !== this.docs[id].content) { this.docs[id].content = fields.content; changed = true; }
       if (fields.title !== undefined && fields.title !== this.docs[id].title) { this.docs[id].title = fields.title; changed = true; }
       if (fields.doc_type !== undefined && fields.doc_type !== (this.docs[id] as any).doc_type) { (this.docs[id] as any).doc_type = fields.doc_type; changed = true; }
       if (fields.labels !== undefined) { (this.docs[id] as any).labels = fields.labels; changed = true; }
+      if (fields.overflow !== undefined) { (this.docs[id] as any).overflow = fields.overflow; changed = true; }
       if (changed) this.docs[id].updated_at = Date.now();
     }
     if (this.docDetails[id]) {
@@ -12089,6 +12214,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       if (fields.title !== undefined) this.docDetails[id].title = fields.title;
       if (fields.doc_type !== undefined) (this.docDetails[id] as any).doc_type = fields.doc_type;
       if (fields.labels !== undefined) (this.docDetails[id] as any).labels = fields.labels;
+      if (fields.overflow !== undefined) (this.docDetails[id] as any).overflow = fields.overflow;
       if (changed) this.docDetails[id].updated_at = Date.now();
     }
   }),
@@ -12132,8 +12258,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
   toggleShortcutsPanel: () => set({ shortcutsPanelOpen: !get().shortcutsPanelOpen }),
   stagePick: null,
   setStagePick: (pick: { path: string; title?: string } | null) => set({ stagePick: pick }),
-  triageNuxOpen: false,
-  setTriageNuxOpen: (open: boolean) => set({ triageNuxOpen: open }),
+  tour: null,
+  setTour: (run: TourRun | null) => set({ tour: run }),
+  toursPanelOpen: false,
+  setToursPanelOpen: (open: boolean) => set({ toursPanelOpen: open }),
   anchorPanel: { open: false, anchorId: null },
   openAnchorPanel: (anchorId?: string | null) => set({
     anchorPanel: { open: true, anchorId: anchorId === undefined ? get().anchorPanel.anchorId : anchorId },
@@ -12584,7 +12712,6 @@ const inboxStoreConfig = (set: any, get: any) => ({
   liveRooms: [],
   roomKnocks: [],
   callKnocked: {},
-  callLockPending: {},
   call: {
     phase: "idle" as const,
     roomKey: null,
@@ -12615,29 +12742,22 @@ const inboxStoreConfig = (set: any, get: any) => ({
       delete next[roomKey];
       return { callKnocked: next };
     }),
-  noteLockPending: (roomKey: string, locked: boolean) =>
-    set((s: any) => ({
-      callLockPending: { ...s.callLockPending, [roomKey]: { locked, at: Date.now() } },
-      // Paint the flip now — the liveRooms echo reconciles, and the pending
-      // entry above keeps an in-flight push from reverting it meanwhile.
-      liveRooms: (s.liveRooms as any[]).map((r) =>
-        r.room_key === roomKey ? { ...r, locked } : r,
-      ),
-    })),
-  // The mutation was refused: paint the state it never left and stop
-  // protecting it. Without this the optimistic glyph would stand until some
-  // unrelated change happened to re-push getLiveRooms.
-  revertLockPending: (roomKey: string, locked: boolean) =>
-    set((s: any) => {
-      const next = { ...s.callLockPending };
-      delete next[roomKey];
-      return {
-        callLockPending: next,
-        liveRooms: (s.liveRooms as any[]).map((r) =>
-          r.room_key === roomKey ? { ...r, locked } : r,
-        ),
-      };
-    }),
+
+  // The room flags: draft flip, then the same-named dispatch side effect
+  // (convex/dispatch.ts) runs the mutation. callRooms is localFirst, so a
+  // getLiveRooms push computed before the write committed cannot flap the
+  // control back, and a refused write surfaces like every other dispatch.
+  setRoomLocked: action(function (this: Draft, roomKey: string, locked: boolean) {
+    const row = (this.callRooms[roomKey] ??= { _id: roomKey, locked: false, transcribe_off: false, transcribe_off_at: null });
+    row.locked = locked;
+    return { roomKey, locked };
+  }),
+  setRoomTranscribeOff: asyncAction(function (this: Draft, roomKey: string, off: boolean) {
+    const row = (this.callRooms[roomKey] ??= { _id: roomKey, locked: false, transcribe_off: false, transcribe_off_at: null });
+    row.transcribe_off = off;
+    row.transcribe_off_at = off ? Date.now() : null;
+    return { roomKey, off };
+  }),
 
   // =====================
   // SELECTORS
@@ -12762,6 +12882,11 @@ const INITIAL_INBOX_DATA = Object.fromEntries(
     .map(([key, value]) => [key, cloneInitialValue(value)]),
 );
 
+/** A fresh, unaliased copy of the account-neutral data floor. */
+export function freshInboxData(): Record<string, any> {
+  return cloneInitialValue(INITIAL_INBOX_DATA);
+}
+
 // Every clear opens a new hydration epoch: a disk read that started for the
 // account before it (boot hydration, a conversation's tail) finds the epoch
 // moved when it resolves and lands nothing.
@@ -12772,9 +12897,7 @@ export function clearProtectedInboxMemory(): void {
   hydrationEpoch++;
   const state = useInboxStore.getState() as any;
   state._clearRuntimeBindings?.();
-  const reset = Object.fromEntries(
-    Object.entries(INITIAL_INBOX_DATA).map(([key, value]) => [key, cloneInitialValue(value)]),
-  ) as Record<string, any>;
+  const reset = freshInboxData();
   // These few device layout preferences are explicitly account-neutral and
   // already mirrored to localStorage; no server or principal data is retained.
   reset.clientState = { ui: readCriticalUiPrefs() as ClientUI };
@@ -13365,3 +13488,131 @@ export function rebootPersistence(): void {
 // outbox bindings, so running this again would re-open the database and re-seed
 // state that is live.
 if (!survivingInboxStore) bootPersistence();
+
+// A server-deleted session that was open when the prune ran is dropped as soon
+// as the view moves off it (dropSessionInDraft deferred it).
+if (!survivingInboxStore) useInboxStore.subscribe((state, prev) => {
+  if (state.currentSessionId === prev.currentSessionId || deferredDeletedSessions.size === 0) return;
+  const ids = [...deferredDeletedSessions].filter((id) => id !== state.currentSessionId);
+  if (ids.length) state.pruneGhostSessions(ids, { serverDeleted: true });
+});
+
+// -- Simulation seams (docs/architecture/multiplayer-sim-harness.md, section 3.3) --
+//
+// The multiplayer sim runs several windows in one process. Each window gets its
+// own store instance (and with it its own engine closure: dispatch binding,
+// outbox, tees), and the harness swaps this module's per-window bindings in and
+// out around every turn a window takes. Nothing in production calls these.
+
+/** A separate store instance with its own middleware closure. */
+export const __createInboxStoreForTests = createInboxStore;
+
+/** The module bindings that belong to one window, keyed by binding name. */
+export interface InboxStoreWindowSlots {
+  _heldOverlayFacts: typeof _heldOverlayFacts;
+  recentlyRequestedPendingMessages: Map<string, number>;
+  resolvedSessionPreparations: Map<string, Promise<void>>;
+  recentThawTimer: ReturnType<typeof setTimeout> | null;
+  _userMsgsProbed: Set<string>;
+  _idbHydrating: Map<string, Promise<boolean>>;
+  hydrationEpoch: number;
+  _lastParityCheckAt: number;
+  // The placement caches. Each browser window keeps its own, and every key
+  // checks the window's own state refs, so a window's next turn may reuse them.
+  _membershipKey: string | null;
+  _membershipVal: InboxMembership | null;
+  _visibleKey: unknown[] | null;
+  _visibleVal: InboxVisible | null;
+  _pendingSendSigRef: unknown;
+  _pendingSendSig: string;
+  _placementDeadlineMemo: PlacementDeadlineMemo | null;
+  _placedMemo: typeof _placedMemo;
+}
+
+// Both levels are mutated in place (a scope's hold is assigned, a landed id is
+// deleted from it), so a snapshot copies both.
+function copyHeldOverlayFacts(h: typeof _heldOverlayFacts): typeof _heldOverlayFacts {
+  const copy: typeof _heldOverlayFacts = {};
+  for (const scope in h) copy[scope] = { ...h[scope] };
+  return copy;
+}
+
+function replaceContents<K, V>(target: Map<K, V>, source: Map<K, V>): void {
+  target.clear();
+  for (const [k, v] of source) target.set(k, v);
+}
+
+/**
+ * get() snapshots the window bindings (collections copied, so the snapshot is
+ * detached from the live binding), set() loads a snapshot back, fresh() is the
+ * state a window that never ran starts from, and resetMemos() drops the
+ * placement caches.
+ */
+export function __inboxStoreSimSlots() {
+  return {
+    fresh(): InboxStoreWindowSlots {
+      return {
+        _heldOverlayFacts: {},
+        recentlyRequestedPendingMessages: new Map(),
+        resolvedSessionPreparations: new Map(),
+        recentThawTimer: null,
+        _userMsgsProbed: new Set(),
+        _idbHydrating: new Map(),
+        hydrationEpoch: 0,
+        _lastParityCheckAt: 0,
+        _membershipKey: null,
+        _membershipVal: null,
+        _visibleKey: null,
+        _visibleVal: null,
+        _pendingSendSigRef: undefined,
+        _pendingSendSig: "",
+        _placementDeadlineMemo: null,
+        _placedMemo: new Map(),
+      };
+    },
+    get(): InboxStoreWindowSlots {
+      return {
+        _heldOverlayFacts: copyHeldOverlayFacts(_heldOverlayFacts),
+        recentlyRequestedPendingMessages: new Map(recentlyRequestedPendingMessages),
+        resolvedSessionPreparations: new Map(resolvedSessionPreparations),
+        recentThawTimer,
+        _userMsgsProbed: new Set(_userMsgsProbed),
+        _idbHydrating: new Map(_idbHydrating),
+        hydrationEpoch,
+        _lastParityCheckAt,
+        _membershipKey,
+        _membershipVal,
+        _visibleKey,
+        _visibleVal,
+        _pendingSendSigRef,
+        _pendingSendSig,
+        _placementDeadlineMemo,
+        _placedMemo: new Map(_placedMemo),
+      };
+    },
+    set(s: InboxStoreWindowSlots): void {
+      _heldOverlayFacts = copyHeldOverlayFacts(s._heldOverlayFacts);
+      replaceContents(recentlyRequestedPendingMessages, s.recentlyRequestedPendingMessages);
+      replaceContents(resolvedSessionPreparations, s.resolvedSessionPreparations);
+      recentThawTimer = s.recentThawTimer;
+      _userMsgsProbed.clear();
+      for (const id of s._userMsgsProbed) _userMsgsProbed.add(id);
+      replaceContents(_idbHydrating, s._idbHydrating);
+      hydrationEpoch = s.hydrationEpoch;
+      _lastParityCheckAt = s._lastParityCheckAt;
+      _membershipKey = s._membershipKey;
+      _membershipVal = s._membershipVal;
+      _visibleKey = s._visibleKey;
+      _visibleVal = s._visibleVal;
+      _pendingSendSigRef = s._pendingSendSigRef;
+      _pendingSendSig = s._pendingSendSig;
+      _placementDeadlineMemo = s._placementDeadlineMemo;
+      replaceContents(_placedMemo, s._placedMemo);
+    },
+    resetMemos(): void {
+      __resetInboxPlacementCacheForTests();
+      _pendingSendSigRef = undefined;
+      _pendingSendSig = "";
+    },
+  };
+}

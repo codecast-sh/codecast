@@ -1,0 +1,26 @@
+{
+  "name": "settle design-spec-build-ahead",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:design-spec-build-ahead"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "settle:design-spec-build-ahead",
+    "title": "settle design-spec-build-ahead"
+  },
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "trigger": {
+    "type": "settle"
+  },
+  "meta": {
+    "surface": "settle",
+    "visibility": "public",
+    "snapshot": "fixtures/settle/design-spec-build-ahead.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "eb41b1c5-d856-45e2-a6fe-87a270569d71",
+  "createdAt": "2026-10-01T17:46:17.602Z"
+}

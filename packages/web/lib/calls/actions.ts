@@ -6,9 +6,6 @@ export const joinCall = async (...args: Parameters<CallManager["joinCall"]>) =>
 export const knockRoom = async (...args: Parameters<CallManager["knockRoom"]>) =>
   (await import("./callManager")).knockRoom(...args);
 
-export const setRoomLock = async (...args: Parameters<CallManager["setRoomLock"]>) =>
-  (await import("./callManager")).setRoomLock(...args);
-
 export const ringInto = async (...args: Parameters<CallManager["ringInto"]>) =>
   (await import("./callManager")).ringInto(...args);
 

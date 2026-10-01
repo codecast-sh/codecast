@@ -27,12 +27,18 @@
 //   requestAuthorization() → raises the macOS Allow / Don't Allow prompt
 //                           (a no-op once decided). Fire-and-forget: the
 //                           caller re-polls for the answer.
-//   post(title, body)     → delivers a notification; returns its identifier,
-//                           or null outside a bundle.
-//   onActivate(cb)        → cb(identifier) when the human clicks one of ours.
-//                           Installs this addon as the center's delegate, which
-//                           also lets a notification show while the app is in
-//                           front (the default is to swallow those).
+//   post(title, body, payload?)
+//                         → delivers a notification; returns its identifier,
+//                           or null outside a bundle. `payload` is an opaque
+//                           string kept on the notification and handed back
+//                           on click, so a banner outlives the process that
+//                           posted it.
+//   onActivate(cb)        → cb(identifier, payload) when the human clicks one
+//                           of ours. Installs this addon as the center's
+//                           delegate, chained in front of any delegate already
+//                           there, which also lets a notification show while
+//                           the app is in front (the default is to swallow
+//                           those).
 //
 // It is also the app's one native addon, so the one window question Electron
 // cannot answer lives here too:
@@ -105,19 +111,48 @@ static napi_value RequestAuthorization(napi_env env, napi_callback_info) {
 
 // ---- clicks -----------------------------------------------------------------
 
+// Our banners carry this identifier prefix, so the delegate can tell them from
+// Electron's own (web pages in a browser pane post through Electron) and hand
+// those on.
+static NSString *const kOurPrefix = @"cast-";
+// The click target rides on the notification itself, in userInfo, so a banner
+// still sitting in Notification Center after a relaunch knows where it goes.
+static NSString *const kPayloadKey = @"cast";
+
 // The JS callback, reachable from the delegate's queue. Unref'd so it never
 // keeps the event loop alive on its own.
 static napi_threadsafe_function g_activate = nullptr;
 
+struct Activation {
+  char *identifier;
+  char *payload; // null when the banner carries none
+};
+
 static void CallActivate(napi_env env, napi_value js_cb, void *, void *data) {
-  char *identifier = (char *)data;
+  Activation *a = (Activation *)data;
   if (env != nullptr && js_cb != nullptr) {
-    napi_value arg;
-    napi_create_string_utf8(env, identifier, NAPI_AUTO_LENGTH, &arg);
-    napi_call_function(env, Undefined(env), js_cb, 1, &arg, nullptr);
+    napi_value argv[2];
+    napi_create_string_utf8(env, a->identifier, NAPI_AUTO_LENGTH, &argv[0]);
+    if (a->payload != nullptr) napi_create_string_utf8(env, a->payload, NAPI_AUTO_LENGTH, &argv[1]);
+    else argv[1] = Undefined(env);
+    napi_call_function(env, Undefined(env), js_cb, 2, argv, nullptr);
   }
-  free(identifier);
+  free(a->identifier);
+  free(a->payload);
+  delete a;
 }
+
+static bool IsOurs(UNNotification *notification) {
+  return [notification.request.identifier hasPrefix:kOurPrefix];
+}
+
+// The delegate that was installed before ours: Electron's, once its
+// notification presenter exists. Electron installs it whenever that presenter
+// is first created (a web page calling `new Notification`, or the main process
+// touching Electron's Notification), which used to replace ours and drop every
+// click on our banners. We chain instead: its banners go back to it. Weak,
+// because its presenter owns it and frees it at shutdown.
+static __weak id<UNUserNotificationCenterDelegate> g_next = nil;
 
 @interface CastNotificationDelegate : NSObject <UNUserNotificationCenterDelegate>
 @end
@@ -128,6 +163,11 @@ static void CallActivate(napi_env env, napi_value js_cb, void *, void *data) {
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center
        willPresentNotification:(UNNotification *)notification
          withCompletionHandler:(void (^)(UNNotificationPresentationOptions))completionHandler {
+  id<UNUserNotificationCenterDelegate> next = g_next;
+  if (!IsOurs(notification) && [next respondsToSelector:_cmd]) {
+    [next userNotificationCenter:center willPresentNotification:notification withCompletionHandler:completionHandler];
+    return;
+  }
   completionHandler(UNNotificationPresentationOptionBanner | UNNotificationPresentationOptionList |
                     UNNotificationPresentationOptionSound);
 }
@@ -135,10 +175,22 @@ static void CallActivate(napi_env env, napi_value js_cb, void *, void *data) {
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center
     didReceiveNotificationResponse:(UNNotificationResponse *)response
              withCompletionHandler:(void (^)(void))completionHandler {
+  id<UNUserNotificationCenterDelegate> next = g_next;
+  if (!IsOurs(response.notification) && [next respondsToSelector:_cmd]) {
+    [next userNotificationCenter:center didReceiveNotificationResponse:response withCompletionHandler:completionHandler];
+    return;
+  }
   if (g_activate != nullptr && [response.actionIdentifier isEqualToString:UNNotificationDefaultActionIdentifier]) {
-    const char *utf8 = response.notification.request.identifier.UTF8String;
-    if (utf8 != nullptr) {
-      napi_call_threadsafe_function(g_activate, strdup(utf8), napi_tsfn_nonblocking);
+    const char *identifier = response.notification.request.identifier.UTF8String;
+    id payload = response.notification.request.content.userInfo[kPayloadKey];
+    const char *payload8 = [payload isKindOfClass:[NSString class]] ? [(NSString *)payload UTF8String] : nullptr;
+    if (identifier != nullptr) {
+      Activation *a = new Activation{strdup(identifier), payload8 != nullptr ? strdup(payload8) : nullptr};
+      if (napi_call_threadsafe_function(g_activate, a, napi_tsfn_nonblocking) != napi_ok) {
+        free(a->identifier);
+        free(a->payload);
+        delete a;
+      }
     }
   }
   completionHandler();
@@ -146,6 +198,23 @@ static void CallActivate(napi_env env, napi_value js_cb, void *, void *data) {
 @end
 
 static CastNotificationDelegate *g_delegate = nil;
+
+// Make ours the center's delegate, keeping whatever held the post before as
+// the one ours hands foreign banners to. Runs on every post as well as at
+// wiring time, so a delegate Electron installed in between is taken back
+// before the next banner goes up.
+static void ClaimDelegate() {
+  if (g_activate == nullptr || !InsideBundle()) return;
+  @try {
+    UNUserNotificationCenter *center = [UNUserNotificationCenter currentNotificationCenter];
+    if (g_delegate == nil) g_delegate = [CastNotificationDelegate new];
+    id<UNUserNotificationCenterDelegate> current = center.delegate;
+    if (current == g_delegate) return;
+    if (current != nil) g_next = current;
+    center.delegate = g_delegate;
+  } @catch (NSException *) {
+  }
+}
 
 static napi_value OnActivate(napi_env env, napi_callback_info info) {
   size_t argc = 1;
@@ -165,14 +234,7 @@ static napi_value OnActivate(napi_env env, napi_callback_info info) {
     return Undefined(env);
   }
   napi_unref_threadsafe_function(env, g_activate);
-
-  if (InsideBundle()) {
-    @try {
-      if (g_delegate == nil) g_delegate = [CastNotificationDelegate new];
-      [UNUserNotificationCenter currentNotificationCenter].delegate = g_delegate;
-    } @catch (NSException *) {
-    }
-  }
+  ClaimDelegate();
   return Undefined(env);
 }
 
@@ -188,17 +250,22 @@ static NSString *ReadString(napi_env env, napi_value value) {
 }
 
 static napi_value Post(napi_env env, napi_callback_info info) {
-  size_t argc = 2;
-  napi_value argv[2];
+  size_t argc = 3;
+  napi_value argv[3];
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
   if (!InsideBundle() || argc < 2) return Null(env);
 
-  NSString *identifier = [[NSUUID UUID] UUIDString];
+  ClaimDelegate();
+  NSString *identifier = [kOurPrefix stringByAppendingString:[[NSUUID UUID] UUIDString]];
   @try {
     UNMutableNotificationContent *content = [UNMutableNotificationContent new];
     content.title = ReadString(env, argv[0]);
     content.body = ReadString(env, argv[1]);
     content.sound = [UNNotificationSound defaultSound];
+    napi_valuetype payloadType = napi_undefined;
+    if (argc >= 3 && napi_typeof(env, argv[2], &payloadType) == napi_ok && payloadType == napi_string) {
+      content.userInfo = @{kPayloadKey : ReadString(env, argv[2])};
+    }
     UNNotificationRequest *request = [UNNotificationRequest requestWithIdentifier:identifier content:content trigger:nil];
     [[UNUserNotificationCenter currentNotificationCenter] addNotificationRequest:request
                                                            withCompletionHandler:^(NSError *) {}];
