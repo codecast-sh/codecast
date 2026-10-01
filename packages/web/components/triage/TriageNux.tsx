@@ -4,12 +4,13 @@ import { useCallback, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { Check, MoreHorizontal } from "lucide-react";
 import { cn } from "../../lib/utils";
-import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
-import { getShortcutsForAction, hasOpenModal, matchShortcut, type ShortcutAction } from "../../shortcuts";
+import { useTrackedStore } from "../../store/inboxStore";
+import { getShortcutsForAction, matchShortcut, type ShortcutAction } from "../../shortcuts";
 import { MenuKeyCaps } from "../KeyboardShortcutsHelp";
 import { track } from "../../lib/analytics";
 import { isInboxSessionView } from "../../lib/inboxRouting";
-import { useFirstRunDialog } from "../../lib/firstRunDialogs";
+import { endTour } from "../../tours/engine";
+import { useTourAutoStart } from "../../tours/useTourAutoStart";
 import { PARK_VERBS, PRIMARY_VERBS, SECONDARY_VERBS, type TriageVerb, type TriageVerbId } from "./verbs";
 
 import { useMountEffect } from "../../hooks/useMountEffect";
@@ -19,10 +20,13 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 // keystroke each. The last screen is a practice inbox wired to the REAL
 // chords: aria-modal suspends the app's own shortcut dispatch, so the same
 // physical keys are safe to catch here and act only on the demo cards.
-// Runs once (clientState.tips, synced cross device); replayable from the
-// triage bar and the shortcuts panel.
+// Runs once (the tours' seen record on clientState.tips, synced cross
+// device); replayable from the Tours panel and the triage bar. It is the one
+// tour with its own screens: the registry lists it as "inbox" (kind modal)
+// and the engine's run state and seen record are shared with the spotlight
+// tours.
 
-const NUX_TIP_ID = "nux-tour";
+const TOUR_ID = "inbox";
 
 type CardState = "needs-input" | "working" | "dormant" | "done";
 
@@ -308,15 +312,8 @@ export function TriageNux() {
   useWatchEffect(() => { track("nux_tour_step", { step }); }, [step]);
 
   const close = useCallback((outcome: "finished" | "skipped") => {
-    const store = useInboxStore.getState();
-    const tips = store.clientState.tips;
-    if (outcome === "finished") {
-      store.updateClientTips({ completed: [...(tips?.completed ?? []), NUX_TIP_ID] });
-    } else {
-      store.updateClientTips({ dismissed: [...(tips?.dismissed ?? []), NUX_TIP_ID] });
-    }
     track(outcome === "finished" ? "nux_tour_finished" : "nux_tour_skipped", { step });
-    store.setTriageNuxOpen(false);
+    endTour(outcome);
     // Point at the live bar: the verbs just practiced are sitting on it.
     if (outcome === "finished") window.dispatchEvent(new Event("cc-triage-bar-glow"));
   }, [step]);
@@ -483,51 +480,25 @@ export function TriageNux() {
 
 // Mounted on the inbox page. Auto-opens the tour once per account, only when
 // there is something real behind it (the user has sessions), never over the
-// CLI setup hero, never over another dialog, and never when tips are off.
-// Established users — anyone the tips system already grades phase 3+ — never
-// get the unprompted modal; for them the tour stays a replay entry on the bar
-// and the shortcuts panel.
+// CLI setup hero, never over another dialog, and never when tips are off
+// (useTourAutoStart). Established users — anyone the tips system already
+// grades phase 3+ — never get the unprompted modal; for them the tour stays a
+// replay entry on the bar and in the Tours panel.
 export function TriageNuxGate() {
   const pathname = usePathname();
   const s = useTrackedStore([
-    (st) => st.triageNuxOpen,
-    (st) => st.clientStateInitialized,
-    (st) => {
-      const t = st.clientState.tips;
-      return !!(t?.completed?.includes(NUX_TIP_ID) || t?.dismissed?.includes(NUX_TIP_ID));
-    },
-    (st) => st.clientState.tips?.level === "none",
+    (st) => st.tour?.id === TOUR_ID,
+    (st) => (st.clientState.tips?.seen?.length ?? 0) + (st.clientState.tips?.completed?.length ?? 0) >= 8,
     (st) => Object.keys(st.sessions).length > 0,
     (st) => isInboxSessionView(pathname, st.currentConversation?.source),
   ]);
   const onInboxView = isInboxSessionView(pathname, s.currentConversation?.source);
-  const open = s.triageNuxOpen;
-  const initialized = s.clientStateInitialized;
-  const tips = s.clientState.tips;
-  const done = !!(tips?.completed?.includes(NUX_TIP_ID) || tips?.dismissed?.includes(NUX_TIP_ID));
-  const off = tips?.level === "none";
+  const open = s.tour?.id === TOUR_ID;
   const hasSessions = Object.keys(s.sessions).length > 0;
   // Same thresholds as useTips.currentPhase: 8+ tips absorbed = phase 3.
+  const tips = s.clientState.tips;
   const veteran = (tips?.seen?.length ?? 0) + (tips?.completed?.length ?? 0) >= 8;
-  // The tour holds the first-run turn while open (a replay too), and waits
-  // for it while the device-setup dialog has it: one introduction at a time.
-  const { blocked, claim } = useFirstRunDialog("tour", open);
-
-  useWatchEffect(() => {
-    if (open || blocked || !onInboxView || !initialized || done || off || veteran || !hasSessions) return;
-    // A beat after landing, so the tour never races the page paint. A modal
-    // the user has up at that moment (new session, settings) keeps its turn:
-    // the beat repeats until the screen is clear.
-    let t: ReturnType<typeof setTimeout>;
-    const arm = () => {
-      t = setTimeout(() => {
-        if (hasOpenModal()) arm();
-        else if (claim()) useInboxStore.getState().setTriageNuxOpen(true);
-      }, 1500);
-    };
-    arm();
-    return () => clearTimeout(t);
-  }, [open, blocked, onInboxView, initialized, done, off, veteran, hasSessions, claim]);
+  useTourAutoStart(TOUR_ID, onInboxView && hasSessions && !veteran);
 
   if (!open) return null;
   return <TriageNux />;

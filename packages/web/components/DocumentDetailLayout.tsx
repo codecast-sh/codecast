@@ -21,6 +21,8 @@ import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { isMac } from "../shortcuts";
 import { leadingHeading, stripTitleHeading } from "@codecast/shared/docs";
+import { useDrafting } from "./docs/drafting/useDrafting";
+import { AlternativesPanel, DraftingControls, OverflowPanel, TrimBar, useDraftingMenu } from "./docs/drafting/DraftingUI";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useTabActive } from "../hooks/usePagePresence";
@@ -68,6 +70,9 @@ interface DocumentDetailLayoutProps {
   /** Mounted inside another page (a role's brief on the scope page): no back
    *  link and no close, since the host page owns navigation. */
   embedded?: boolean;
+  /** The drafting layer (alternatives, ghosts, the Lab); `overflow` adds the
+   *  Overflow panel, which keeps its text on the docs row. */
+  drafting?: { overflow?: boolean };
 }
 
 export function DocumentDetailLayout({
@@ -92,6 +97,7 @@ export function DocumentDetailLayout({
   ownerConversationId,
   defaultEditing = true,
   embedded = false,
+  drafting,
 }: DocumentDetailLayoutProps) {
   const router = useRouter();
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
@@ -112,6 +118,10 @@ export function DocumentDetailLayout({
   const handleMentionQuery = useMentionQuery(useActiveMentionScope());
   const handleImageUpload = useImageUpload();
   const getMarkdownRef = useRef<(() => string) | null>(null);
+  const draft = useDrafting(docId);
+  const draftingOn = !!drafting && isEditing;
+  const overflowEnabled = !!drafting?.overflow;
+  const draftMenu = useDraftingMenu(draft, overflowEnabled);
 
   // Cmd/Ctrl+E toggles edit mode from anywhere on the surface — including
   // while the editor itself has focus (a modifier chord is never typing).
@@ -194,6 +204,7 @@ export function DocumentDetailLayout({
               <KeyCap size="xs">{isMac ? "⌘E" : "Ctrl+E"}</KeyCap>
             </button>
           )}
+          {draftingOn && <DraftingControls d={draft} overflowEnabled={overflowEnabled} />}
           {topBarRight}
           {/* Shared controls in the detail's own header. Closing here is a
               navigation, so the slot's default hide is overridden — the
@@ -219,7 +230,9 @@ export function DocumentDetailLayout({
 
       <div className="flex-1 overflow-y-auto">
         <div className="flex flex-col min-h-full">
-        <div className="flex-1 max-w-5xl mx-auto px-10 pt-10 pb-8 w-full">
+        <div className="flex-1 flex items-start w-full">
+        {draftingOn && <AlternativesPanel d={draft} />}
+        <div className="flex-1 min-w-0 max-w-5xl mx-auto px-10 pt-10 pb-8 w-full">
           {titleInBody && isEditing ? null : (
             // Editing the title here only applies to the separate-field mode;
             // with the title in the body the editor's first block is the title
@@ -240,7 +253,7 @@ export function DocumentDetailLayout({
 
           {leadContent && <div className="mt-2">{leadContent}</div>}
 
-          <div className={titleInBody && isEditing ? "" : "mt-4"}>
+          <div className={titleInBody && isEditing ? "" : "mt-4"} onContextMenu={draftingOn ? draftMenu.onContextMenu : undefined}>
             {isEditing ? (
               <ErrorBoundary name="DocEditor" level="panel">
                 <CollabDocEditor
@@ -255,6 +268,8 @@ export function DocumentDetailLayout({
                   getMarkdownRef={getMarkdownRef}
                   cliEditedAt={cliEditedAt}
                   contentReady={contentReady}
+                  draftingRef={drafting ? draft.draftingRef : undefined}
+                  onEditor={drafting ? draft.setEditor : undefined}
                 />
               </ErrorBoundary>
             ) : !bodyMarkdown.trim() && !contentReady ? (
@@ -296,6 +311,10 @@ export function DocumentDetailLayout({
             </div>
           )}
         </div>
+        {draftingOn && overflowEnabled && <OverflowPanel d={draft} />}
+        </div>
+        {draftingOn && <TrimBar d={draft} />}
+        {draftingOn && draftMenu.element}
         {footerContent && (
           <div className="max-w-5xl mx-auto px-10 pb-4 w-full">
             {footerContent}

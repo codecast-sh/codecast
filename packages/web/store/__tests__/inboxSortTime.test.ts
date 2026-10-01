@@ -115,13 +115,16 @@ describe("in-bucket order — one stamp per class", () => {
   });
 
   // A session the user just started has none of those events yet, so ambient
-  // output on older rows used to push it out of sight.
-  it("a session created inside the grace holds the top of its section", () => {
+  // output on older rows used to push it out of sight. Inside the grace it
+  // holds NEW, above every work section.
+  it("a session created inside the grace holds NEW, then files by its own stamps", () => {
     const pair = (t: number) => [
       rowAt(t, "a", { agent_status: "working", agent_status_updated_at: NOW - MIN, turn_completed_at: NOW - MIN, title: "Session busy" }),
       rowAt(t, "z", { agent_status: "working", agent_status_updated_at: NOW - 2 * MIN, started_at: NOW - 2 * MIN, title: "Session brand new" }),
     ];
-    expect(titles(place(pair(NOW)).working)).toEqual(["Session brand new", "Session busy"]);
+    const inside = place(pair(NOW));
+    expect(titles(inside.newSessions)).toEqual(["Session brand new"]);
+    expect(titles(inside.working)).toEqual(["Session busy"]);
     // Past the window the floor lifts and the row's own stamps speak again.
     const after = NOW - 2 * MIN + INBOX_CREATE_GRACE_MS + MIN;
     nowSpy.mockReturnValue(after);

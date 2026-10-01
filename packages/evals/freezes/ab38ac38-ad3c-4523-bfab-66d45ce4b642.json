@@ -1,0 +1,26 @@
+{
+  "name": "ask revised-retry-cap",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:revised-retry-cap"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "ask:revised-retry-cap",
+    "title": "ask revised-retry-cap"
+  },
+  "asOf": "2026-01-15T14:06:40.000Z",
+  "trigger": {
+    "type": "ask"
+  },
+  "meta": {
+    "surface": "ask",
+    "visibility": "public",
+    "snapshot": "fixtures/ask/revised-retry-cap.json"
+  },
+  "judge": "says the cap did not stay at 5: the user raised it to 8 (with a 60 s ceiling per wait) after it was first set to 5, cites the lines where each happened, and leads with that direct answer",
+  "notes": null,
+  "tags": [],
+  "id": "ab38ac38-ad3c-4523-bfab-66d45ce4b642",
+  "createdAt": "2026-10-01T17:49:15.957Z"
+}

@@ -16,8 +16,10 @@ import { toast } from "sonner";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import {
+  callAnchorKey,
   isRecRoomKey,
   sessionRoomConversationId,
+  type CallAnchor,
 } from "@codecast/shared/contracts";
 import { useInboxStore } from "../../store/inboxStore";
 import { navigateMainWindow } from "../../lib/desktop";
@@ -25,6 +27,7 @@ import { settleComposerAttachments } from "../../lib/draftImages";
 import { getRoom, startTranscribing } from "../../lib/calls/callManager";
 import { getScribeStatus, subscribeScribe } from "../../lib/calls/transcription";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { useRoomTranscribeOff } from "../../hooks/useRoomTranscribeOff";
 import { useConversationFileDrop } from "../../hooks/useConversationFileDrop";
 import { AgentTypeIcon } from "../AgentTypeIcon";
 import { MessageInput } from "../MessageInput";
@@ -44,6 +47,7 @@ import {
   mergeTimeline,
   type Passage,
   type ThreadRow,
+  type TimelineItem,
   type TranscriptSegment,
 } from "./roomThreadModel";
 import "../chat/chat.css";
@@ -116,6 +120,7 @@ export function RoomThread({
   panel,
   selection,
   sinceAt,
+  focus,
   className,
 }: {
   roomKey: string;
@@ -133,10 +138,11 @@ export function RoomThread({
   selection?: RoomThreadSelection;
   /** When the viewer joined this huddle; the dividers' anchor before any transcript. */
   sinceAt?: number;
+  /** A link landed on a place in this call: it opens, scrolls into view and flashes. */
+  focus?: CallAnchor | null;
   className?: string;
 }) {
   const recording = isRecRoomKey(roomKey);
-  const transcribing = !!liveTranscriptId;
   const ended = !!call && call.status !== "live";
   const post = useMutation(api.callChat.post);
   const [pending, setPending] = useState<Array<{ key: string; text: string; attachments: ChatAttachment[]; at: number }>>([]);
@@ -167,9 +173,11 @@ export function RoomThread({
   const myUserId = useInboxStore((s: any) => s.currentUser?._id?.toString?.() ?? null);
   // The room's opt-out (liveRooms): "off" because somebody switched it off
   // reads differently from "nobody has started yet".
-  const switchedOff = useInboxStore(
-    (s: any) => !!(s.liveRooms as any[] | undefined)?.find((r) => r.room_key === roomKey)?.transcribe_off,
-  );
+  const switchedOff = useRoomTranscribeOff(roomKey);
+  // The huddle's record stays live through a switch to off (off is a gap in
+  // it), so words are flowing only while the record is live and the room has
+  // not opted out.
+  const transcribing = !!liveTranscriptId && !switchedOff;
   const scribeError = useSyncExternalStore(subscribeScribe, () => getScribeStatus().error, () => null);
   // The viewer's own mute (callManager writes it) and the room's: every
   // seat muted means nobody can say anything for the scribe to hear.
@@ -226,28 +234,30 @@ export function RoomThread({
   // clock would move the indices under a selection until the echo landed.
   const breakAts = useMemo(() => chatRows.filter((r) => !r.pending).map((r) => r.at), [chatRows]);
   const passages = useMemo(() => buildPassages(segments ?? [], breakAts, { recording }), [segments, breakAts, recording]);
-  const startedAt = call?.started_at;
-  // The stage hands the thread no call once transcription is off, but the
-  // rows it just wrote ("You switched transcription off", "Pearl was in the
-  // room") are this call's story: the thread keeps the last call it saw as
-  // its anchor while it is mounted. Before any call there is no anchor.
-  const lastStartRef = useRef<number | undefined>(undefined);
-  if (startedAt !== undefined) lastStartRef.current = startedAt;
-  const anchorAt = startedAt ?? lastStartRef.current;
+  // The huddle this thread shows: its record, kept while mounted so the rows
+  // just written stay this huddle's while the stage reloads the call.
+  const lastCallRef = useRef<{ id: string; at: number } | undefined>(undefined);
+  if (call) lastCallRef.current = { id: String(call._id), at: call.started_at };
+  const callId = lastCallRef.current?.id;
+  const anchorAt = lastCallRef.current?.at;
+  // A line belongs to the huddle the server stamped it with
+  // (callChat.insertRoomRow). One with no stamp yet (still sending, or typed
+  // before the huddle's record started) is this huddle's when it came after
+  // the record started, or after the viewer joined when there is no record.
+  const sinceAnchor = anchorAt ?? sinceAt;
   const endedAt = call?.ended_at ?? undefined;
-  // An event row is the room's log for one call: an agent that came and went
-  // in an earlier or a later call is not this call's, so only events between
-  // the call's start and its end show. With no call to anchor on (the stage
-  // before transcription ever started) every event is an earlier call's, so
-  // none shows. Typed and agent lines from other calls stay, set apart by
-  // the dividers below.
-  const inCall = (at: number) => anchorAt !== undefined && at >= anchorAt && (endedAt === undefined || at <= endedAt);
+  const ofThisCall = (r: LocalRow) =>
+    r.transcript_id
+      ? r.transcript_id === callId
+      : !!r.pending || (sinceAnchor !== undefined && r.at >= sinceAnchor && (endedAt === undefined || r.at <= endedAt));
+  // An event row is one huddle's log: an agent that came and went in another
+  // huddle is not this one's. Typed and agent lines from earlier huddles in
+  // the room stay on the stage, folded under the divider below; the call
+  // page asks the server for this huddle's lines alone.
   const visibleRows = useMemo(
-    () =>
-      chatRows.filter(
-        (r) => !r.event || (anchorAt !== undefined && r.at >= anchorAt && (endedAt === undefined || r.at <= endedAt)),
-      ),
-    [chatRows, anchorAt, endedAt],
+    () => chatRows.filter((r) => !r.event || ofThisCall(r)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [chatRows, callId, sinceAnchor, endedAt],
   );
   const timeline = useMemo(() => mergeTimeline(passages, visibleRows), [passages, visibleRows]);
 
@@ -281,7 +291,7 @@ export function RoomThread({
   const past = ended || !transcribing;
   // The explanation of what an agent does is said once per call, on the
   // first agent event of this call; the later ones just say who came.
-  const explainEventId = past ? undefined : chatRows.find((r) => r.event === "agent_joined" && inCall(r.at))?._id;
+  const explainEventId = past ? undefined : chatRows.find((r) => r.event === "agent_joined" && ofThisCall(r))?._id;
   // No room means the server has not let this client into the huddle yet
   // (or refused it), so nothing can be started; a refusal past that point
   // is most often another scribe, but the server does not say which.
@@ -357,6 +367,8 @@ export function RoomThread({
     stuckRef.current = true;
     void post({
       room_key: roomKey,
+      // The call page writes into the huddle it shows, ended or not.
+      ...(surface === "page" && callId ? { transcript_id: callId as Id<"transcripts"> } : {}),
       text: body,
       attachments: attachments.length
         ? attachments.map((a) => ({
@@ -412,6 +424,41 @@ export function RoomThread({
     setOverrides((o) => ({ ...o, [p.index]: opening }));
   };
 
+  // A link into the call: open what holds the place (its passages, or the
+  // recap through RecapCard's focus), then bring it into view once, and
+  // stop following the tail so a live call does not scroll away from it.
+  const focusKey = focus ? callAnchorKey(focus) : null;
+  const landedRef = useRef<string | null>(null);
+  const focusTurn =
+    focus?.kind === "turns"
+      ? passages.flatMap((p) => p.turns).find((t) => t.segments.some((sg) => sg.seq >= focus.from_seq && sg.seq <= focus.to_seq))
+      : undefined;
+  const hasSummary = !!call?.summary;
+  useWatchEffect(() => {
+    if (!focus || !focusKey || landedRef.current === focusKey) return;
+    if (focus.kind === "turns" ? !focusTurn : !hasSummary) return;
+    landedRef.current = focusKey;
+    stuckRef.current = false;
+    if (focus.kind === "turns") {
+      const held = passages.filter((p) =>
+        p.turns.some((t) => t.segments.some((sg) => sg.seq >= focus.from_seq && sg.seq <= focus.to_seq)),
+      );
+      if (density === "hidden") setDensityState("full");
+      setOverrides((o) => ({ ...o, ...Object.fromEntries(held.map((p) => [p.index, true])) }));
+    }
+    const selector =
+      focus.kind === "turns" ? `[data-turn="${focusTurn!.index}"]` : `[data-call-anchor="${focus.kind === "summary" ? "summary" : `action-${focus.index}`}"]`;
+    // After the fold has mounted what it holds. A timer, not a frame: frames
+    // stall in a background tab and the link may open in one.
+    setTimeout(() => {
+      const el = scrollRef.current?.querySelector<HTMLElement>(selector);
+      if (!el) return;
+      el.scrollIntoView({ block: "center" });
+      el.classList.add("cc-msg-flash");
+      setTimeout(() => el.classList.remove("cc-msg-flash"), 1300);
+    }, 60);
+  }, [focusKey, focusTurn, hasSummary]);
+
   // Event rows are the room's log, not its content: a room that has only
   // ever seen agents come and go is still empty.
   const empty = passages.length === 0 && chatRows.every((r) => r.event);
@@ -444,25 +491,20 @@ export function RoomThread({
         : "Listening. Words show up here.");
   const listeningShort = scribeError ?? (soloMuted ? "Your mic is muted" : allMuted ? "Everyone is muted" : "Nothing said yet");
   const spokenHidden = density === "hidden" && passages.length > 0;
-  // The chat outlives one call, so typed and agent lines from before this
-  // call started and from after it ended are set apart from it. On the stage
-  // the switch already says the room is live, so the header's line is short.
-  // Before transcription starts there is no call to anchor on, so the moment
-  // the viewer joined this huddle anchors the dividers instead: chat from an
-  // earlier huddle in this room falls under "Earlier in this room" rather
-  // than reading as agents in the room now. Events keep the call's anchor.
-  const dividerAt = anchorAt ?? sinceAt;
-  const inDivider = (at: number) => dividerAt !== undefined && at >= dividerAt && (endedAt === undefined || at <= endedAt);
-  const earlier = dividerAt !== undefined ? timeline.filter((i) => i.at < dividerAt).length : 0;
-  const during = dividerAt !== undefined ? timeline.filter((i) => inDivider(i.at)).length : timeline.length;
-  const later = timeline.length - earlier - during;
-  // On an ended call's page the earlier lines are a month old "hello"
-  // between the recap and the first words: folded until asked for. The
-  // stage's earlier lines are minutes old, so they stay open. The call
-  // loads after the thread mounts, so the default is read each render
-  // until the reader chooses.
+  // Huddles in a room never overlap, so other huddles' lines sit before or
+  // after this one's: the leading run is "Earlier in this room", folded until
+  // asked for (it is another conversation), and a trailing run is "Later".
+  // With nothing to anchor on, there is nothing to set apart.
+  const isThisCalls = (i: TimelineItem) => i.kind === "passage" || ofThisCall(i.row);
+  let earlier = 0;
+  let laterAt = timeline.length;
+  if (sinceAnchor !== undefined) {
+    while (earlier < timeline.length && !isThisCalls(timeline[earlier])) earlier++;
+    while (laterAt > earlier && !isThisCalls(timeline[laterAt - 1])) laterAt--;
+    if (earlier === timeline.length) laterAt = timeline.length;
+  }
   const [earlierOverride, setEarlierOverride] = useState<boolean | null>(null);
-  const earlierOpen = earlierOverride ?? (surface === "stage" || !ended);
+  const earlierOpen = earlierOverride ?? false;
 
   return (
     <div
@@ -575,7 +617,13 @@ export function RoomThread({
         className="rt-list min-h-0 flex-1 select-text overflow-y-auto"
       >
         {call?.summary ? (
-          <RecapCard summary={call.summary} items={call.action_items ?? []} live={!ended} />
+          <RecapCard
+            summary={call.summary}
+            items={call.action_items ?? []}
+            live={!ended}
+            callId={String(call._id)}
+            focus={focus && focus.kind !== "turns" ? focusKey : null}
+          />
         ) : ended && !recording && passages.length > 0 ? (
           // A call with no spoken words has nothing a summary would cover:
           // the empty one says "Nothing was said." below, and one with only
@@ -687,6 +735,7 @@ export function RoomThread({
               onTurnClick={selection?.onTurnClick}
               compact
               activeIndex={activeIndex}
+              callId={call ? String(call._id) : undefined}
             />
           </div>
         ) : (
@@ -708,7 +757,7 @@ export function RoomThread({
                 </button>
               ) : earlier > 0 && i === earlier && earlierOpen ? (
                 <p className="rt-note rt-divider">This call</p>
-              ) : later > 0 && i === earlier + during ? (
+              ) : i === laterAt && laterAt < timeline.length ? (
                 <p className="rt-note rt-divider">Later in this room</p>
               ) : null;
             const hidden = (inEarlier && !earlierOpen) || (item.kind === "passage" && density === "hidden");
@@ -728,6 +777,7 @@ export function RoomThread({
                   dayOf={anchorAt}
                   onToggle={() => toggle(item)}
                   selection={selection}
+                  callId={call ? String(call._id) : undefined}
                 />
               );
             } else if (item.kind === "event") {

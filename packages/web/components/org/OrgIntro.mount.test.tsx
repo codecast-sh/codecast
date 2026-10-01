@@ -211,10 +211,10 @@ test("the card rises once the page settles and Not now sells it", async () => {
   expect(fake.toasts.map((t) => t.id)).toEqual([card.ORG_MEET_TOAST_ID]);
   const toastRoot = createRoot(document.getElementById("toast")!);
   await paintToast(toastRoot);
-  expect(q("[data-org-meet] .org-meet-title")!.textContent).toBe(card.ORG_MEET_TITLE);
-  expect(qa("[data-org-meet] .org-meet-copy").map((p) => p.textContent)).toEqual([...card.ORG_MEET_LINES]);
+  expect(q("[data-org-meet] .rise-card-title")!.textContent).toBe(card.ORG_MEET_TITLE);
+  expect(qa("[data-org-meet] .rise-card-copy").map((p) => p.textContent)).toEqual([...card.ORG_MEET_LINES]);
   expect(q("[data-org-meet] img")!.getAttribute("data-avatar")).toBe(intro.ORG_INTRO_CHIEF);
-  await act(async () => q<HTMLButtonElement>("[data-org-meet-later]")!.click());
+  await act(async () => q<HTMLButtonElement>("[data-org-meet] [data-rise-later]")!.click());
   expect(fake.writes).toEqual([{ org_upsell_seen: true }]);
   expect(fake.dismissed).toEqual([card.ORG_MEET_TOAST_ID]);
   expect(fake.pushes).toEqual([]);
@@ -230,7 +230,7 @@ test("See it opens the org page and sells it; the gates hold it back", async () 
   await sleep(card.ORG_MEET_SETTLE_MS + 150);
   const toastRoot = createRoot(document.getElementById("toast")!);
   await paintToast(toastRoot);
-  await act(async () => q<HTMLButtonElement>("[data-org-meet-see]")!.click());
+  await act(async () => q<HTMLButtonElement>("[data-org-meet] [data-rise-primary]")!.click());
   expect(fake.pushes).toEqual(["/org"]);
   expect(fake.writes).toEqual([{ org_upsell_seen: true }]);
   await act(async () => { toastRoot.unmount(); root.unmount(); });

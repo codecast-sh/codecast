@@ -1,0 +1,26 @@
+{
+  "name": "insight rate-limit-early",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:rate-limit-early"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "insight:rate-limit-early",
+    "title": "insight rate-limit-early"
+  },
+  "asOf": "2026-01-15T14:14:15.000Z",
+  "trigger": {
+    "type": "insight"
+  },
+  "meta": {
+    "surface": "insight",
+    "visibility": "public",
+    "snapshot": "fixtures/insight/rate-limit-early.json"
+  },
+  "judge": "the headline and each turn are supported by the transcript: every ask is the user's, every did item happened",
+  "notes": null,
+  "tags": [],
+  "id": "c0c50f98-76cc-4d6f-935a-2e300721cb70",
+  "createdAt": "2026-10-01T17:45:08.092Z"
+}

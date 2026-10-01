@@ -1,3 +1,5 @@
+import { formatCountdown } from "@codecast/shared/contracts";
+
 // The parts of a usage-limit banner the parked-session card renders. Claude
 // Code prints one line ("You've hit your weekly limit · resets 7am (UTC)") and
 // the card takes it apart: which window closed, when it opens again in the
@@ -63,4 +65,11 @@ export function formatResetLocal(resetAt: number, now: number, timeZone?: string
   if (target === dayOf(now + 86_400_000)) return `tomorrow ${time}`;
   const weekday = new Intl.DateTimeFormat("en-US", { weekday: "short", ...(timeZone ? { timeZone } : {}) }).format(new Date(resetAt));
   return `${weekday} ${time}`;
+}
+
+// A reset still to come, in the viewer's clock: how long until it, then when
+// it lands ("in 3h 20m, at 7:00 AM"). Every surface that counts a limit down
+// says it this way.
+export function formatResetPhrase(resetAt: number, now: number): string {
+  return `in ${formatCountdown(resetAt - now)}, at ${formatResetLocal(resetAt, now)}`;
 }

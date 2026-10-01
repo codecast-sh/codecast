@@ -116,7 +116,18 @@ function attachRoomTracks() {
  *  true when a run is now live here; false when somebody else's run already
  *  covers the room, the huddle opted out (`auto` only), or the server
  *  refused — in which case no track was attached and nothing is held. */
-export async function startScribe(opts: {
+// One start at a time: the switch and the auto-scribe can both ask in the
+// same beat (switching back on clears the opt-out the auto-scribe watches),
+// and two runs opening pipes would append every word twice.
+let starting: Promise<boolean> | null = null;
+export function startScribe(opts: Parameters<typeof startScribeOnce>[0]): Promise<boolean> {
+  starting ??= startScribeOnce(opts).finally(() => {
+    starting = null;
+  });
+  return starting;
+}
+
+async function startScribeOnce(opts: {
   convex: ConvexHandle;
   room: Room;
   roomKey: string;

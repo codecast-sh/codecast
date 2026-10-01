@@ -66,6 +66,22 @@ describe("gitActivity.recordLocal", () => {
     expect(ctx.db._tables.external_events[0].conversation_id).toBe(TRAILED);
   });
 
+  test("a harness's scratch commit links no session until it is seen on a real branch", async () => {
+    const trailedCommit = { ...commit, message: "base\n\nCodecast-Session: https://codecast.sh/conversation/conv" };
+    const ctx = context("owner", { file_changes: [{ _id: "fc", conversation_id: "conv", change_type: "commit", commit_hash: SHA.slice(0, 7) }] });
+    const event = { kind: "commit", old_sha: OLD, new_sha: SHA, at: 1, actor_name: "A", actor_email: "a@x", message: "base", commit: trailedCommit, conversation_id: "conv" };
+    for (const branch of ["worktree-wf_83ab08aa-905-104", "worktree-agent-a1b2c3d4"]) {
+      await record(ctx, [event], { branch });
+      expect(ctx.db._tables.commits[0].conversation_id).toBeUndefined();
+      expect(ctx.db._tables.external_events[0].conversation_id).toBeUndefined();
+    }
+    await linkLocalCommitToConversation(ctx as any, "conv" as any, SHA.slice(0, 7));
+    expect(ctx.db._tables.commits[0].conversation_id).toBeUndefined();
+
+    await record(ctx, [event], { branch: "main" });
+    expect(ctx.db._tables.commits[0]).toMatchObject({ conversation_id: "conv", branch: "main" });
+  });
+
   test("a trailer from a checkout links no teammate's private session and takes no teammate's commit", async () => {
     const MATE_PRIVATE = "p".repeat(32);
     const MINE = "t".repeat(32);

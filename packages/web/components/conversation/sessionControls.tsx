@@ -8,10 +8,11 @@ import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useRecentProjectsFeed } from "../../hooks/useRecentProjectsFeed";
 import { useShallow } from "zustand/react/shallow";
 import { createPortal } from "react-dom";
-import { AGENT_LAUNCH_OPTIONS, cloudAgentLaunch, cloudAgentLaunchKey, cloudAgentProvidersFor, modelOptionKey, type CloudAgentLaunch, type ConvexAgentType } from "@codecast/shared/contracts";
+import { AGENT_LAUNCH_OPTIONS, cloudAgentLaunch, cloudAgentLaunchKey, cloudAgentProviderForLaunch, cloudAgentProvidersFor, modelOptionKey, type CloudAgentLaunch, type CloudAgentProviderSpec, type ConvexAgentType } from "@codecast/shared/contracts";
 import { useLiveSessionMeta } from "../../hooks/useLiveSessionMeta";
 import { commitModelChange } from "../../lib/modelSwitchWeb";
 import { useCloudAgentStatus } from "../cloudAgents/machine";
+import { lastCloudLaunch } from "../cloudAgents/lanes";
 import { StableContextPicker } from "../StableContextCards";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { KeyCap } from "../KeyboardShortcutsHelp";
@@ -134,9 +135,12 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
   const isolatedToggle = useInboxStore((s) => s.isolatedWorktreeMode);
   // An agent type with a cloud agent provider (Cursor: Cursor Cloud Agents):
   // "run in the cloud" is the provider's agent, carried as the launch model
-  // key (cloud / cloud:<id>) the daemon already honours.
+  // key (cloud / cloud:<id>) the daemon already honours. With several (Codex:
+  // Codex Cloud, the Agents API), the one the launch key names; the switch
+  // turns on the first.
   const liveMeta = useLiveSessionMeta(conversation._id);
-  const cloudSpec = cloudAgentProvidersFor(liveMeta?.agentType)[0];
+  const cloudLaunchKey = liveMeta?.agentType ? modelOptionKey(liveMeta.model, liveMeta.agentType) : undefined;
+  const cloudSpec = cloudAgentProviderForLaunch(liveMeta?.agentType, cloudLaunchKey) ?? cloudAgentProvidersFor(liveMeta?.agentType)[0];
   // The machine the session will run from: the picked target, else its owner.
   const cloudDeviceId = storeSession?.target_device_id ?? storeSession?.owner_device_id ?? null;
   const cloudStatus = useCloudAgentStatus(cloudSpec, cloudDeviceId);
@@ -144,7 +148,7 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
     if (!cloudSpec || !liveMeta?.agentType) return undefined;
     const agentType = liveMeta.agentType;
     // The launch (model, ask mode, attempts) rides the launch model key.
-    const launch = cloudAgentLaunch(agentType, modelOptionKey(liveMeta.model, agentType));
+    const launch = cloudAgentLaunch(agentType, cloudLaunchKey);
     const pick = (model: string) => void commitModelChange({
       conversationId: conversation._id,
       agentType,
@@ -154,13 +158,17 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
     });
     return {
       spec: cloudSpec,
+      lanes: cloudAgentProvidersFor(agentType),
       on: launch !== null,
       connected: cloudStatus.connected,
+      problem: cloudStatus.problem,
       deviceId: cloudStatus.device?.device_id ?? null,
-      onToggle: () => pick(launch ? "default" : cloudSpec.modelPrefix),
+      // Turned on, and moved to a lane, where the person last ran: that lane and its model.
+      onToggle: () => pick(launch ? "default" : lastCloudLaunch(agentType) ?? cloudSpec.modelPrefix),
+      onPickLane: (lane: CloudAgentProviderSpec) => pick(lastCloudLaunch(agentType, lane) ?? lane.modelPrefix),
       ...(launch ? { launch, onSetLaunch: (change: Partial<CloudAgentLaunch>) => pick(cloudAgentLaunchKey(cloudSpec, { ...launch, ...change })) } : {}),
     };
-  }, [cloudSpec, liveMeta?.agentType, liveMeta?.model, liveMeta?.effort, cloudStatus.connected, cloudStatus.device?.device_id, conversation._id]);
+  }, [cloudSpec, cloudLaunchKey, liveMeta?.agentType, liveMeta?.model, liveMeta?.effort, cloudStatus.connected, cloudStatus.problem?.kind, cloudStatus.problem?.sentence, cloudStatus.problem?.resetsAt, cloudStatus.device?.device_id, conversation._id]);
   const convex = useConvex();
   const convCommand = useInboxStore((s) => s.convCommand);
 

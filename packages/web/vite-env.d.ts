@@ -10,4 +10,4 @@ interface ImportMeta {
 }
 
 /** Build identity stamped by vite.config.ts (`define`); read on window.__CODECAST_BUILD. */
-declare const __CODECAST_BUILD__: { sha: string; builtAt: string; mode: string };
+declare const __CODECAST_BUILD__: { sha: string; builtAt: string; mode: string; promptGeneration: number; promptMessage: string };

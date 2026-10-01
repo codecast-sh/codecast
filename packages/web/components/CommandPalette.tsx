@@ -46,6 +46,7 @@ import { channelDisplayName, dmCounterpart, memberName } from "../lib/chatViews"
 import { memberAvatarUrl, memberDisplayName } from "../lib/liveEntities";
 import { useOrgRoles } from "../hooks/useOrgRoles";
 import { useRolesAndPeopleOptions } from "../hooks/useRolesAndPeopleOptions";
+import { isPerson } from "@codecast/shared/team/memberKind";
 
 const NO_MEMBERS: any[] = [];
 import { compactDuration, teammateWhereabouts, type TeammateWhereabouts } from "./presence/memberPresence";
@@ -100,6 +101,7 @@ import { copyToClipboard, shareOrigin } from "../lib/utils";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import {
   Circle,
+  Compass,
   CircleDot,
   CircleDotDashed,
   CheckCircle2,
@@ -173,7 +175,7 @@ import { pickWhoRows, type PalettePickKind, type PalettePickTarget } from "../li
 const api = _api as any;
 import { SESSION_SNOOZE_CHOICES, sessionSnoozeUntil, type SessionSnoozeKey } from "@codecast/shared/contracts";
 
-type ActionMode = "device" | "snooze" | "rename" | "character" | "project" | "project_status" | "deadline" | "trigger_cancel" | "trigger_delete" | "status" | "priority" | "labels" | "assign" | "type" | "plan_status" | "agent_run" | "agent_switch" | "agent_fork" | "agent_handoff" | "bucket" | "model" | "view" | "parent" | "layout_save" | "layout_update" | "layout_rename" | "layout_delete";
+type ActionMode = "device" | "snooze" | "rename" | "character" | "project" | "project_status" | "deadline" | "trigger_cancel" | "trigger_delete" | "session_delete" | "status" | "priority" | "labels" | "assign" | "type" | "plan_status" | "agent_run" | "agent_switch" | "agent_fork" | "agent_handoff" | "bucket" | "model" | "view" | "parent" | "layout_save" | "layout_update" | "layout_rename" | "layout_delete";
 
 // Modes that act on the WORKSPACE rather than on selected rows: they open with
 // no target and show no entity header. Everything else needs something picked.
@@ -290,6 +292,7 @@ const GLOBAL_COMMANDS: ReadonlyArray<{
   { action: "pane.prev", label: "Focus previous pane", icon: StageNextGlyph, keywords: "split pane focus cycle", hidden: () => !stageIsSplit() },
   { action: "sidebar.toggleComments", label: "Toggle comments rail", icon: MessageSquare, keywords: "discussion thread comments" },
   { action: "ui.toggleShortcutsHelp", label: "Keyboard shortcuts help", icon: Keyboard, keywords: "keys bindings hotkeys cheatsheet" },
+  { action: "ui.openTours", label: "Tours: learn a feature on the real page", icon: Compass, keywords: "tour guide walkthrough onboarding learn how does this work help org inbox" },
 ];
 
 function getShortPath(p: string): string {
@@ -589,6 +592,7 @@ export function ActionSubmenu({
       return search.trim() ? [{ key: search.trim(), label: mode === "rename" ? `Rename to “${search.trim()}”` : `Set target date to ${search.trim()}`, icon: Pencil }] : [];
     }
     if (mode === "trigger_cancel" || mode === "trigger_delete") return [{ key: "confirm", label: mode === "trigger_delete" ? "Confirm delete trigger" : "Confirm cancel trigger", icon: Trash2 }];
+    if (mode === "session_delete") return [{ key: "confirm", label: targets.length > 1 ? `Delete ${targets.length} sessions and their messages for good` : "Delete this session and its messages for good", icon: Trash2 }];
     if (mode === "project_status") return ["active", "planning", "paused", "done"].filter(key => key.includes(q)).map(key => ({ key, label: key[0].toUpperCase() + key.slice(1), active: target?.status === key, icon: CircleDot }));
     if (mode === "project") {
       const rows = workspaceProjects;
@@ -846,6 +850,13 @@ export function ActionSubmenu({
     if (!target) return;
     const count = targets.length;
     const store = useInboxStore.getState();
+    if (mode === "session_delete") {
+      for (const row of targets) store.deleteSession(row._id);
+      toast.success(count > 1 ? `Deleted ${count} sessions` : "Session deleted");
+      if (count > 1) useInboxSelection.getState().clear();
+      onClose();
+      return;
+    }
     if (mode === "rename" || mode === "deadline" || mode === "project" || mode === "project_status" || mode === "trigger_cancel" || mode === "trigger_delete") {
       if (mode === "trigger_delete") store.deleteTrigger(target._id);
       else if (mode === "trigger_cancel") store.triggerAction(target._id, "cancel");
@@ -1148,6 +1159,7 @@ export function ActionSubmenu({
     mode === "project" ? "Move to project…" :
     mode === "project_status" ? "Change project status…" :
     mode === "trigger_delete" ? "Delete trigger" :
+    mode === "session_delete" ? "Delete session: gone for you and your team, cannot be undone" :
     mode === "trigger_cancel" ? "Cancel trigger" :
     mode === "status" ? "Change status..." :
     mode === "priority" ? "Set priority..." :
@@ -1784,7 +1796,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     if (pickingChannels) {
       for (const m of members) {
         const mid = m?._id ? String(m._id) : "";
-        if (!mid || mid === viewerId || dmPartners.has(mid)) continue;
+        if (!mid || mid === viewerId || dmPartners.has(mid) || !isPerson(m)) continue;
         const label = memberName(m);
         if (!label) continue;
         const s = matchScore(label, q);
@@ -2096,7 +2108,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     if (!targets.length) return;
     const target = targets[0] as any;
 
-    if (["device", "snooze", "status", "priority", "labels", "assign", "type", "plan_status", "agent_run", "agent_switch", "agent_fork", "agent_handoff", "rename", "project", "project_status", "deadline", "trigger_cancel", "trigger_delete", "bucket", "model", "parent", "character"].includes(actionKey)) {
+    if (["device", "snooze", "status", "priority", "labels", "assign", "type", "plan_status", "agent_run", "agent_switch", "agent_fork", "agent_handoff", "rename", "project", "project_status", "deadline", "trigger_cancel", "trigger_delete", "session_delete", "bucket", "model", "parent", "character"].includes(actionKey)) {
       setActionSearch("");
       setEnteredViaRoot(true);
       setActionMode(actionKey as ActionMode);
@@ -3080,6 +3092,17 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
             <FileText className="w-4 h-4 text-sol-text-dim flex-shrink-0" />
             <span className="truncate flex-1">Create Document</span>
           </CommandPrimitive.Item>
+          {chatOn && (
+            <CommandPrimitive.Item
+              key="create-channel"
+              value="Create channel new chat room"
+              onSelect={() => { closePalette(); openCreateModal('chat'); }}
+              className={itemClass}
+            >
+              <Hash className="w-4 h-4 text-sol-cyan flex-shrink-0" />
+              <span className="truncate flex-1">Create Channel</span>
+            </CommandPrimitive.Item>
+          )}
           {callsOn && (
             <CommandPrimitive.Item
               key="create-huddle"

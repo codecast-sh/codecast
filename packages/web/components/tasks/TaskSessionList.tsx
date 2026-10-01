@@ -3,8 +3,7 @@
 import { useMemo } from "react";
 import Link from "next/link";
 import { Columns2, Pin } from "lucide-react";
-import { AgentTypeIcon, formatAgentType } from "../AgentTypeIcon";
-import { SessionGlyph } from "../identity";
+import { SessionIdentityLine, SessionMark } from "../identity";
 import { identityRowOf } from "../../lib/sessionIdentity";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { LivenessDot } from "../LivenessDot";
@@ -160,21 +159,15 @@ export function TaskSessionRow({
         {leading}
         {/* Who the session is (session-characters.md S3), with the agent
             brand riding the face; a plain row keeps the brand alone. */}
-        <SessionGlyph
-          row={identityRowOf(conv as any)}
-          className="flex-shrink-0 mt-0.5"
-          badge={<AgentTypeIcon agentType={conv.agent_type || "claude_code"} className="w-full h-full p-[1px]" />}
-          fallback={
-            <span className="flex-shrink-0 mt-0.5" title={formatAgentType(conv.agent_type)}>
-              <AgentTypeIcon agentType={conv.agent_type || "claude_code"} className="w-3.5 h-3.5" />
-            </span>
-          }
-        />
+        <SessionMark session={conv as any} className="flex-shrink-0 mt-0.5" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5 min-w-0">
-            <span className={`truncate leading-tight ${prominent ? "text-sm font-medium" : "text-xs"} ${live ? "text-sol-text font-medium" : "text-sol-text"}`}>
-              {title}
-            </span>
+            <SessionIdentityLine
+              row={identityRowOf(conv as any)}
+              title={title}
+              className={`leading-tight ${prominent ? "text-sm" : "text-xs"}`}
+              titleClassName={prominent || live ? "font-medium" : undefined}
+            />
             {origin && (
               <span className="flex-shrink-0 text-[9px] font-medium px-1 py-px rounded bg-sol-violet/10 text-sol-violet border border-sol-violet/25">
                 from
