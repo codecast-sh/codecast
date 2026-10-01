@@ -22,18 +22,18 @@
  * The core (watcher.ts, sessions.ts) does the rest, under
  * ~/.codecast/codex-cloud/<task id>/, synced as a codex session.
  */
-import { CLOUD_AGENT_BRANCH_SEPARATOR, CLOUD_AGENT_PROVIDERS, cloudAgentRootId } from "@codecast/shared/contracts";
-import { githubRepo } from "../cloud/gitOrigin.js";
+import { CLOUD_AGENT_BRANCH_SEPARATOR, CLOUD_AGENT_PROVIDERS, cloudAgentRootId, peggedWindow, planTypeLabel } from "@codecast/shared/contracts";
 import { readActiveCodexAuth } from "../codexAccounts.js";
 import { codexAccessExpired, decodeCodexAuth } from "../codexAuthDecode.js";
 import { codexBackendHeadersFromAuth, codexBackendRequest, parseBackendUsageResponse, requestCodexBackendUsage } from "../codexBackendUsage.js";
 import { threadItemToMessage, type ThreadItem } from "../codexAppServer.js";
 import type { ParsedMessage } from "../parser.js";
 import { splitPatches } from "../repoMirror.js";
-import { CloudApiError, cloudApiErrorOf } from "./http.js";
-import { repoOwnerName } from "./poll.js";
-import { MirrorTranscript } from "./transcript.js";
-import { CloudAgentBusyError, CloudAgentSetupError, type CloudAgentAdapter, type CloudAgentApplyPlan, type CloudAgentGit, type CloudAgentHandle, type CloudAgentListItem, type CloudAgentLogin, type CloudAgentLoginCommand, type CloudAgentMirror } from "./types.js";
+import { CloudApiError, cloudApiVerdict, cloudRequestName } from "./http.js";
+import { arrayOf, bool, CloudShapeError, maybe, num, object, oneOf, optional, recordOf, str, unknownValue, type Infer, type Shape } from "./shape.js";
+import { secondsToMs } from "./poll.js";
+import { isRunningTurnStatus, MirrorTranscript, turnError } from "./transcript.js";
+import { CloudAgentBusyError, CloudAgentSetupError, CloudAgentUnsentError, type CloudAgentAdapter, type CloudAgentApplyPlan, type CloudAgentCreated, type CloudAgentGit, type CloudAgentHandle, type CloudAgentListItem, type CloudAgentLogin, type CloudAgentLoginCommand, type CloudAgentMirror } from "./types.js";
 import type { CloudAgentSession } from "./sessions.js";
 
 const CODEX = CLOUD_AGENT_PROVIDERS.codex;
@@ -44,117 +44,153 @@ const POLL_MS = 5 * 60_000;
 const FAST_POLL_MS = 30_000;
 /** The title a task has until Codex names it: not a name, so the session is titled by its prompt until the real one comes. */
 const PLACEHOLDER_TITLE = "New task";
-/** The statuses of a turn still running; any other status, one the spike never saw included, has ended. */
-const RUNNING_TURN_STATUSES: ReadonlySet<string> = new Set(["pending", "in_progress"]);
-
 // ── Payloads (only the fields codecast reads) ────────────────────────────────
+//
+// Each payload's shape is checked at every read (shape.ts): a field codecast
+// reads that changed name or type pauses the lane rather than reading as
+// absent. The types below are inferred from the shapes, so each field is
+// declared once. Fields codecast only reads when present are optional here.
 
-interface WhamContentPart { content_type?: string; text?: string; path?: string; line_range_start?: number | null; line_range_end?: number | null }
-interface WhamOutputItem { type?: string; content?: WhamContentPart[]; pr_title?: string; pr_message?: string; output_diff?: { diff?: string } | null }
-interface WhamWorklogMessage {
-  id?: string;
-  author?: { role?: string; name?: string | null };
-  create_time?: number | null;
-  content?: { content_type?: string; parts?: unknown[]; text?: string };
-  recipient?: string | null;
+const WHAM_CONTENT_PART = object({ content_type: optional(str), text: optional(str), path: optional(str), line_range_start: maybe(num), line_range_end: maybe(num) });
+type WhamContentPart = Infer<typeof WHAM_CONTENT_PART>;
+const WHAM_OUTPUT_ITEM = object({ type: str, content: optional(arrayOf(WHAM_CONTENT_PART)), pr_title: optional(str), pr_message: optional(str), output_diff: maybe(object({ diff: optional(str) })) });
+const WHAM_WORKLOG_MESSAGE = object({
+  id: optional(str),
+  author: optional(object({ role: optional(str), name: maybe(str) })),
+  create_time: maybe(num),
+  content: optional(object({ content_type: optional(str), parts: optional(arrayOf(unknownValue)), text: optional(str) })),
+  recipient: maybe(str),
   /** Set on the assistant's final answer. */
-  end_turn?: boolean | null;
-  metadata?: Record<string, unknown> | null;
-}
-interface WhamThreadEvent { method?: string; params?: { item?: { id?: string; type?: string; server?: string }; completedAtMs?: number } }
-interface WhamPullRequest { url?: string; number?: number; title?: string; head?: string; state?: string; head_repo_full_name?: string }
+  end_turn: maybe(bool),
+  metadata: maybe(recordOf(unknownValue)),
+});
+type WhamWorklogMessage = Infer<typeof WHAM_WORKLOG_MESSAGE>;
+/** An app-server notification: only a completed item's id, type and server are read here; threadItemToMessage reads the item as local Codex's. */
+const WHAM_THREAD_EVENT = object({ method: str, params: optional(object({ item: maybe(object({ id: maybe(str), type: str, server: optional(str) })), completedAtMs: maybe(num) })) });
+const WHAM_PULL_REQUEST = object({ url: optional(str), number: optional(num), title: optional(str), head: optional(str), state: optional(str), head_repo_full_name: maybe(str) });
+type WhamPullRequest = Infer<typeof WHAM_PULL_REQUEST>;
+const WHAM_TASK_PULL_REQUESTS = optional(arrayOf(object({ assistant_turn_id: optional(str), pull_request: optional(WHAM_PULL_REQUEST) })));
 
-export interface WhamTurn {
-  id: string;
-  type?: string;
-  created_at?: number;
-  previous_turn_id?: string | null;
-  input_items?: Array<{ type?: string; content?: WhamContentPart[] }>;
-  output_items?: WhamOutputItem[];
-  worklog?: { messages?: WhamWorklogMessage[] } | null;
-  thread_events?: { events?: WhamThreadEvent[] } | null;
-  turn_status?: string | null;
-  latest_event?: { text?: string | null } | null;
-  attempt_placement?: number | null;
-  sibling_turn_ids?: string[] | null;
-  error?: unknown;
-  branch_name?: string | null;
+const WHAM_TURN = object({
+  id: str,
+  type: oneOf("user", "assistant"),
+  created_at: num,
+  previous_turn_id: maybe(str),
+  input_items: optional(arrayOf(object({ type: optional(str), content: optional(arrayOf(WHAM_CONTENT_PART)) }))),
+  output_items: optional(arrayOf(WHAM_OUTPUT_ITEM)),
+  worklog: maybe(object({ messages: optional(arrayOf(WHAM_WORKLOG_MESSAGE)) })),
+  thread_events: maybe(object({ events: optional(arrayOf(WHAM_THREAD_EVENT)) })),
+  turn_status: maybe(str),
+  latest_event: maybe(object({ text: maybe(str) })),
+  attempt_placement: maybe(num),
+  sibling_turn_ids: maybe(arrayOf(str)),
+  error: unknownValue,
+  branch_name: maybe(str),
   /** not_created, creating, created (or failed) after POST .../pr. */
-  pull_request_status?: string | null;
-  pull_request_data?: WhamPullRequest | null;
+  pull_request_status: maybe(str),
+  pull_request_data: maybe(WHAM_PULL_REQUEST),
   /** Carries the environment's env vars and secrets in plain text: only repo_map's repository names are ever read. */
-  environment?: { repo_map?: Record<string, { repository_full_name?: string }> } | null;
-}
+  environment: maybe(object({ repo_map: optional(recordOf(object({ repository_full_name: optional(str) }))) })),
+});
+export type WhamTurn = Infer<typeof WHAM_TURN>;
 
-export interface WhamTurns { current_turn_id?: string | null; turn_mapping?: Record<string, { turn?: WhamTurn }> }
+const WHAM_TURNS = object({ current_turn_id: maybe(str), turn_mapping: recordOf(object({ turn: WHAM_TURN })) });
+export type WhamTurns = Infer<typeof WHAM_TURNS>;
 
-export interface WhamTask {
-  id: string;
-  title?: string;
+/** A task as the list shows it (and GET /tasks/{id}, which has no updated_at). */
+const WHAM_TASK_FIELDS = {
+  id: str,
+  title: optional(str),
   /** False while the title is still the placeholder ("New task"). */
-  has_generated_title?: boolean;
-  created_at?: number;
-  updated_at?: number;
-  task_status_display?: {
-    latest_turn_status_display?: { turn_id?: string; turn_status?: string | null; intent?: string | null } | null;
-    branch_name?: string | null;
-    initial_intent?: string | null;
-  } | null;
-  /** In the list. */
-  pull_requests?: Array<{ assistant_turn_id?: string; pull_request?: WhamPullRequest }>;
+  has_generated_title: optional(bool),
+  created_at: optional(num),
+  task_status_display: maybe(object({
+    latest_turn_status_display: maybe(object({ turn_id: optional(str), turn_status: maybe(str), intent: maybe(str) })),
+    branch_name: maybe(str),
+    initial_intent: maybe(str),
+  })),
   /** In GET /tasks/{id}. */
-  external_pull_requests?: Array<{ assistant_turn_id?: string; pull_request?: WhamPullRequest }>;
+  external_pull_requests: WHAM_TASK_PULL_REQUESTS,
+  /** In the list. */
+  pull_requests: WHAM_TASK_PULL_REQUESTS,
   /** Archived (POST .../archive): out of the current list, still readable by id. */
-  archived?: boolean | null;
-}
+  archived: maybe(bool),
+};
+/** Listed tasks are dated: a task with no time it changed could not be told apart from one past the backfill horizon. */
+const WHAM_LISTED_TASK = object({ ...WHAM_TASK_FIELDS, updated_at: num });
+const WHAM_TASK = object({ ...WHAM_TASK_FIELDS, updated_at: optional(num) });
+export type WhamTask = Infer<typeof WHAM_TASK>;
+
+/** Each request's answer, as codecast reads it. */
+const WHAM = {
+  list: object({ items: arrayOf(WHAM_LISTED_TASK), cursor: maybe(str) }),
+  task: object({ task: WHAM_TASK }),
+  turns: WHAM_TURNS,
+  turn: object({ turn: WHAM_TURN }),
+  created: object({ task: object({ id: str }) }),
+  /** Only the fields keptEnvironment keeps (never env_vars or secrets). */
+  environments: arrayOf(object({ id: str, label: maybe(str), machine_id: maybe(str), is_pinned: maybe(bool), repo_map: maybe(recordOf(object({ repository_full_name: optional(str), default_branch: maybe(str) }))) })),
+  /** Cancel, archive, open a pull request: codecast reads nothing back. */
+  none: unknownValue,
+};
 
 /** An environment as codecast keeps it: never its env vars or secrets. */
 export interface WhamEnvironment { id: string; label?: string; machineId?: string; pinned?: boolean; defaultBranch?: string; repos: string[] }
 
 // ── API client ───────────────────────────────────────────────────────────────
 
+/** A task's or a branch's id in a request's path (cloudRequestName's `ids`). */
+const CODEX_IDS = /\/(task_[^/]+|[^/]*~[^/]+)/g;
+
 export class CodexCloudApi {
   constructor(private readonly headers: Record<string, string>, private readonly fetchImpl: typeof fetch = fetch) {}
 
-  /** Errors come as {detail}, {detail: {type, message}} or {error: {message, type}}. */
-  request<T>(method: string, p: string, body?: unknown): Promise<T> {
-    return codexBackendRequest<T>(this.headers, method, p, { body, fetchImpl: this.fetchImpl });
+  /**
+   * One call, its answer checked against the shape codecast reads
+   * (CloudShapeError when it differs). Errors come as {detail},
+   * {detail: {type, message}} or {error: {message, type}}.
+   */
+  request<T>(method: string, p: string, shape: Shape<T>, body?: unknown): Promise<T> {
+    return codexBackendRequest<T>(this.headers, method, p, { body, fetchImpl: this.fetchImpl, answer: { shape, name: cloudRequestName(method, p, CODEX_IDS) } });
   }
 
-  listTasks(limit = 20, cursor?: string): Promise<{ items?: WhamTask[]; cursor?: string | null }> {
+  listTasks(limit = 20, cursor?: string) {
     const q = new URLSearchParams({ limit: String(limit), task_filter: "current", ...(cursor ? { cursor } : {}) });
-    return this.request("GET", `/tasks/list?${q}`);
+    return this.request("GET", `/tasks/list?${q}`, WHAM.list);
   }
-  task(id: string): Promise<{ task?: WhamTask }> {
-    return this.request("GET", `/tasks/${encodeURIComponent(id)}`);
+  task(id: string) {
+    return this.request("GET", `/tasks/${encodeURIComponent(id)}`, WHAM.task);
   }
   turns(id: string): Promise<WhamTurns> {
-    return this.request("GET", `/tasks/${encodeURIComponent(id)}/turns`);
+    return this.request("GET", `/tasks/${encodeURIComponent(id)}/turns`, WHAM.turns);
   }
-  createTask(body: Record<string, unknown>): Promise<{ task?: { id?: string } }> {
-    return this.request("POST", "/tasks", body);
+  createTask(body: Record<string, unknown>) {
+    return this.request("POST", "/tasks", WHAM.created, body);
+  }
+  /** A follow-up: a new turn on a task (its answer is not read). */
+  followUp(body: Record<string, unknown>): Promise<unknown> {
+    return this.request("POST", "/tasks", WHAM.none, body);
   }
   /** One turn, with its pull request's status. */
-  turn(id: string, turnId: string): Promise<{ turn?: WhamTurn }> {
-    return this.request("GET", `/tasks/${encodeURIComponent(id)}/turns/${encodeURIComponent(turnId)}`);
+  turn(id: string, turnId: string) {
+    return this.request("GET", `/tasks/${encodeURIComponent(id)}/turns/${encodeURIComponent(turnId)}`, WHAM.turn);
   }
   cancel(id: string): Promise<unknown> {
-    return this.request("POST", `/tasks/${encodeURIComponent(id)}/cancel`, {});
+    return this.request("POST", `/tasks/${encodeURIComponent(id)}/cancel`, WHAM.none, {});
   }
   /** Archive the task (hidden from the current list), or bring it back. */
   archive(id: string, archived: boolean): Promise<unknown> {
-    return this.request("POST", `/tasks/${encodeURIComponent(id)}/${archived ? "archive" : "recover"}`, {});
+    return this.request("POST", `/tasks/${encodeURIComponent(id)}/${archived ? "archive" : "recover"}`, WHAM.none, {});
   }
   /** Open a draft pull request from an assistant turn's changes; the turn reports it once made. */
   createPullRequest(id: string, turnId: string): Promise<unknown> {
-    return this.request("POST", `/tasks/${encodeURIComponent(id)}/turns/${encodeURIComponent(turnId)}/pr`, { mode: "draft", add_codex_tag: false });
+    return this.request("POST", `/tasks/${encodeURIComponent(id)}/turns/${encodeURIComponent(turnId)}/pr`, WHAM.none, { mode: "draft", add_codex_tag: false });
   }
-  /** The login's email and plan, read by the same request and parser as the usage meters. */
-  async usage(now = Date.now()): Promise<{ email?: string; plan?: string }> {
+  /** The login's usage reading (the same request and parser as the usage meters): its email, and the parsed plan and windows (null when it names no plan). */
+  async usage(now = Date.now()): Promise<{ email?: string; reading: ReturnType<typeof parseBackendUsageResponse> }> {
     const body = await requestCodexBackendUsage(this.headers, this.fetchImpl);
     const email = typeof body?.email === "string" ? body.email : undefined;
-    const plan = parseBackendUsageResponse(body, now)?.plan_type ?? undefined;
-    return { ...(email ? { email } : {}), ...(plan ? { plan } : {}) };
+    return { ...(email ? { email } : {}), reading: parseBackendUsageResponse(body, now) };
   }
   /** The environments set up for a GitHub repository, stripped to what codecast keeps. */
   environmentsForRepo(owner: string, name: string): Promise<WhamEnvironment[]> {
@@ -165,23 +201,21 @@ export class CodexCloudApi {
     return this.environmentList("/environments");
   }
   private async environmentList(p: string): Promise<WhamEnvironment[]> {
-    const raw = await this.request<unknown>("GET", p);
-    return (Array.isArray(raw) ? raw : []).map(keptEnvironment).filter((e): e is WhamEnvironment => !!e);
+    return (await this.request("GET", p, WHAM.environments)).map(keptEnvironment);
   }
 }
 
 /** An environment payload carries the account's env vars and secrets in plain text: only these fields are ever read. */
-function keptEnvironment(raw: any): WhamEnvironment | null {
-  if (!raw || typeof raw.id !== "string") return null;
-  const repos = Object.values(raw.repo_map ?? {}) as Array<{ repository_full_name?: unknown; default_branch?: unknown }>;
-  const branch = repos.find((r) => typeof r?.default_branch === "string")?.default_branch;
+function keptEnvironment(raw: Infer<typeof WHAM.environments>[number]): WhamEnvironment {
+  const repos = Object.values(raw.repo_map ?? {});
+  const branch = repos.find((r) => typeof r.default_branch === "string")?.default_branch;
   return {
     id: raw.id,
-    ...(typeof raw.label === "string" ? { label: raw.label } : {}),
-    ...(typeof raw.machine_id === "string" ? { machineId: raw.machine_id } : {}),
+    ...(raw.label ? { label: raw.label } : {}),
+    ...(raw.machine_id ? { machineId: raw.machine_id } : {}),
     ...(raw.is_pinned === true ? { pinned: true } : {}),
-    ...(typeof branch === "string" ? { defaultBranch: branch } : {}),
-    repos: repos.map((r) => r?.repository_full_name).filter((n): n is string => typeof n === "string"),
+    ...(branch ? { defaultBranch: branch } : {}),
+    repos: repos.map((r) => r.repository_full_name).filter((n): n is string => typeof n === "string"),
   };
 }
 
@@ -203,10 +237,6 @@ function inputItems(text: string) {
 }
 
 // ── Turns ────────────────────────────────────────────────────────────────────
-
-export function isRunningTurnStatus(status: string | null | undefined): boolean {
-  return typeof status === "string" && RUNNING_TURN_STATUSES.has(status);
-}
 
 /** The id's own half: turn ids are `<task id>~<turn id>`. */
 function turnKey(id: string): string {
@@ -319,15 +349,6 @@ export function codexCitations(text: string): string {
   return text
     .replace(/【F:([^†】]+)†L(\d+)(?:-L(\d+))?】/g, (_m, file: string, a: string, b: string | undefined, at: number, all: string) => `${at > 0 && !/\s/.test(all[at - 1]) ? " " : ""}\`${fileRef(file, a, b)}\``)
     .replace(/【[^】]*】/g, "");
-}
-
-/** A failed turn's reason, in whichever shape the API gave it (the same reader as its HTTP errors). */
-function turnError(err: unknown): string {
-  return typeof err === "string" && err ? err : cloudApiErrorOf(0, err, "no reason given").message;
-}
-
-function secondsToMs(s: number | null | undefined): number | undefined {
-  return typeof s === "number" && Number.isFinite(s) && s > 0 ? Math.round(s * 1000) : undefined;
 }
 
 /**
@@ -545,10 +566,7 @@ export function buildCodexCloudTranscript(input: CodexCloudTranscriptInput): str
       if (text) tx.note(`${key}:progress`, text, secondsToMs(turn.created_at) ?? tx.clock);
       continue;
     }
-    if (turn.turn_status === "failed") tx.error(`${key}:error`, `${CODEX.label} turn failed: ${turnError(turn.error)}`);
-    else if (turn.turn_status === "cancelled") tx.note(`${key}:cancelled`, "Cancelled.");
-    else if (turn.turn_status && turn.turn_status !== "completed") tx.note(`${key}:ended`, `${CODEX.label} ended this turn as ${turn.turn_status}.`);
-    tx.turnEnded();
+    tx.endTurn(key, { status: turn.turn_status, label: CODEX.label, reason: turnError(turn.error) });
   }
   return tx.toString();
 }
@@ -682,11 +700,11 @@ export class CodexCloudAdapter implements CloudAgentAdapter<CodexCloudApi, Codex
 
   async listAgents(api: CodexCloudApi, cursor?: string): Promise<{ items: CloudAgentListItem<WhamTask>[]; nextCursor?: string }> {
     const data = await api.listTasks(20, cursor);
-    const items = (data.items ?? []).filter((t) => typeof t?.id === "string");
+    const items = data.items;
     return {
       items: items.map((task) => ({
         id: task.id,
-        updatedAtMs: secondsToMs(task.updated_at) ?? secondsToMs(task.created_at) ?? 0,
+        updatedAtMs: secondsToMs(task.updated_at) ?? 0,
         version: taskVersion(task),
         active: isRunningTurnStatus(task.task_status_display?.latest_turn_status_display?.turn_status),
         agent: task,
@@ -744,20 +762,27 @@ export class CodexCloudAdapter implements CloudAgentAdapter<CodexCloudApi, Codex
    * branch the session starts from, in ask or code mode, with as many
    * attempts as the launch asked for.
    */
-  async create(api: CodexCloudApi, session: CloudAgentSession, content: string): Promise<{ agentId: string; url?: string }> {
-    const repo = repoOwnerName(githubRepo(session.repoUrl));
+  async create(api: CodexCloudApi, session: CloudAgentSession, content: string): Promise<CloudAgentCreated> {
+    const { repo } = session;
     if (!repo) throw CloudAgentSetupError.repoUnreachable(this, session, "this session's folder has no GitHub remote", `${CODEX.label} works on GitHub repositories: start the session in a checkout of one`);
     const env = await pickEnvironment(api, repo.owner, repo.name);
     if (!env) throw CloudAgentSetupError.repoUnreachable(this, session, "it has no Codex environment", `Create one at ${CODEX.repoAccessUrl}`);
     const attempts = Math.min(Math.max(session.attempts ?? 1, 1), CODEX.launchOptions.maxAttempts);
-    const created = await api.createTask({
-      new_task: { environment_id: env.id, branch: session.startingRef ?? env.defaultBranch ?? "main", run_environment_in_qa_mode: !!session.ask },
-      input_items: inputItems(content),
-      ...(attempts > 1 ? { metadata: { best_of_n: attempts } } : {}),
-    });
-    const agentId = created.task?.id;
-    if (!agentId) throw new Error(`${CODEX.label} created no task`);
-    return { agentId, url: CODEX.agentUrl(agentId) };
+    let created: Infer<typeof WHAM.created>;
+    try {
+      created = await api.createTask({
+        new_task: { environment_id: env.id, branch: session.startingRef ?? env.defaultBranch ?? "main", run_environment_in_qa_mode: !!session.ask },
+        input_items: inputItems(content),
+        ...(attempts > 1 ? { metadata: { best_of_n: attempts } } : {}),
+      });
+    } catch (err) {
+      // Codex answered, so the task may exist: an answer codecast can't read is never retried into a second task.
+      if (err instanceof CloudShapeError) throw new CloudAgentUnsentError(this, err);
+      throw err;
+    }
+    const agentId = created.task.id;
+    // Pinning one on chatgpt.com is how a repository with several environments picks (pickEnvironment).
+    return { agentId, url: CODEX.agentUrl(agentId), notice: `Runs in the Codex environment ${env.label ? `"${env.label}"` : env.id}.` };
   }
 
   /**
@@ -773,7 +798,7 @@ export class CodexCloudAdapter implements CloudAgentAdapter<CodexCloudApi, Codex
     if (!last || last.type !== "assistant" || taskRunning(turns)) throw new CloudAgentBusyError(CODEX.label);
     const status = task?.task_status_display;
     const ask = (status?.latest_turn_status_display?.intent ?? status?.initial_intent) === "qa";
-    await api.createTask({ follow_up: { task_id: taskId, turn_id: last.id, run_environment_in_qa_mode: ask }, input_items: inputItems(content) });
+    await api.followUp({ follow_up: { task_id: taskId, turn_id: last.id, run_environment_in_qa_mode: ask }, input_items: inputItems(content) });
   }
 
   /**
@@ -855,21 +880,37 @@ export class CodexCloudAdapter implements CloudAgentAdapter<CodexCloudApi, Codex
 
   /**
    * A repository Codex Cloud cannot reach, or a workspace with Codex Cloud
-   * turned off (a 401 is the core's rule). Only a 403 in the API's own words:
-   * the challenge page chatgpt.com's proxy answers with says nothing about
-   * the workspace.
+   * turned off (a 401 is the core's rule). Only a 403 the verdict reads as
+   * the provider's refusal: the challenge page chatgpt.com's proxy answers
+   * with says nothing about the workspace.
    */
   setupErrorOf(err: unknown, session?: CloudAgentSession): CloudAgentSetupError | null {
-    if (!(err instanceof CloudApiError) || err.status !== 403 || !err.fromApi) return null;
+    if (!(err instanceof CloudApiError) || err.status !== 403 || cloudApiVerdict(err) !== "refused") return null;
     if (err.code === "repo_not_accessible") return CloudAgentSetupError.repoUnreachable(this, session, err.message, `Connect it to an environment at ${CODEX.repoAccessUrl}`);
     return CloudAgentSetupError.accessDenied(this, workspaceDisabled(err.message));
+  }
+
+  /**
+   * After a 429: the plan window the usage reading says is used up (the same
+   * reading, parser and window rule as the usage meters: peggedWindow), named
+   * as the meters name it, and when it resets. Null when no window is full:
+   * Codex rate limited the requests themselves.
+   */
+  async usageLimit(api: CodexCloudApi): Promise<{ detail: string; waitMs?: number; resetsAt?: number } | null> {
+    const now = this.now();
+    const { reading } = await api.usage(now);
+    const pegged = peggedWindow(reading, now);
+    if (!pegged) return null;
+    const detail = `the ${pegged.label} window of your ${chatgptPlanName(reading?.plan_type)} is used up`;
+    return { detail, ...(pegged.resets_at ? { resetsAt: pegged.resets_at, waitMs: pegged.resets_at - now } : {}) };
   }
 
   /** The account and plan Codex names; listing a task proves the workspace runs Codex Cloud at all (a 403 when it does not). */
   private async whoami(api: CodexCloudApi): Promise<{ account?: string; plan?: string }> {
     const [usage] = await Promise.all([api.usage().catch(() => undefined), api.listTasks(1)]);
     const summary = decodeCodexAuth(this.readAuth());
-    return { account: usage?.email ?? summary.email, plan: usage?.plan ?? summary.plan };
+    const plan = usage?.reading?.plan_type ?? summary.plan;
+    return { account: usage?.email ?? summary.email, ...(plan ? { plan: planTypeLabel(plan) } : {}) };
   }
 
   private async startLogin(): Promise<void> {
@@ -881,9 +922,19 @@ export class CodexCloudAdapter implements CloudAgentAdapter<CodexCloudApi, Codex
   }
 }
 
+/** "ChatGPT Pro plan", or "ChatGPT plan" when Codex names none. */
+function chatgptPlanName(planType: string | undefined): string {
+  return planType ? `ChatGPT ${planTypeLabel(planType)} plan` : "ChatGPT plan";
+}
+
 /** Why an API-key Codex login is no sign-in here, and what signing in changes. */
 const API_KEY_LOGIN = `Codex there uses an API key, and ${CODEX.label} needs a ChatGPT sign-in. Signing in moves that Codex from the API key to your ChatGPT plan.`;
 
+/**
+ * A ChatGPT workspace that does not let this account use Codex Cloud: its
+ * owner turns on "Use Codex in the cloud" in the workspace's settings, and
+ * where roles are custom (RBAC), grants that permission to the person's role.
+ */
 function workspaceDisabled(reason: string): string {
-  return `${CODEX.label} is not enabled for this ChatGPT workspace (${reason}). A workspace admin can turn on "Use Codex in the cloud" for your role in the workspace's Codex settings`;
+  return `${CODEX.label} is not enabled for you in this ChatGPT workspace (${reason}). A workspace owner can turn on "Use Codex in the cloud" in the workspace's settings, or grant your role the "Use Codex in the cloud" permission where roles are custom (RBAC)`;
 }

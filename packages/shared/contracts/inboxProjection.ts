@@ -99,7 +99,13 @@ export type InboxTruncation = (typeof INBOX_TRUNCATION_KINDS)[number];
 // facts like any session: blocked or waiting in needs input, asking in
 // questions. A standing session that asks (a `cast decide` in its thread) is
 // no longer hidden by the anchor rule. Nothing lifts a lead for its hands.
-export const INBOX_PROJECTION_VERSION = 14 as const;
+// v15: a session a person started holds NEW for its first
+// INBOX_CREATE_GRACE_MS whatever it is doing, so it never drops out of sight
+// into a section below the fold (or a collapsed one) while its author is
+// still thinking about it. A hard block or an ask still files where it would.
+// v16: only while it is still working. Once it settles (done, dormant, needs
+// input) it files by its own state, so New never piles up parked sessions.
+export const INBOX_PROJECTION_VERSION = 16 as const;
 
 export type InboxProjection = {
   v: typeof INBOX_PROJECTION_VERSION;
@@ -323,6 +329,8 @@ export interface InboxPlacementInput extends WorkStateInput {
   isAnchor: boolean;
   /** Own open ask or permission prompt, a pending `cast decide`, or a child's open ask. */
   asking: boolean;
+  /** A person started this session within INBOX_CREATE_GRACE_MS (not spawned by another session). Holds NEW only while working. */
+  fresh?: boolean;
 }
 
 export type InboxPlacement = { bucket: InboxBucket; work_state: WorkState };
@@ -393,6 +401,7 @@ export function placeInboxRow(input: InboxPlacementInput): InboxPlacement {
   else if (input.asking && !input.killed && !input.userRest) bucket = "questions";
   else if (input.pinned) bucket = "pinned";
   else if (input.messageCount === 0) bucket = "new";
+  else if (input.fresh && work_state === "working") bucket = "new";
   else bucket = work_state;
   return { bucket, work_state };
 }
@@ -415,12 +424,14 @@ export function placeInboxRow(input: InboxPlacementInput): InboxPlacement {
 // `key`; a queue the reader clears top-down (Needs Input, Done) reads `at`
 // ascending and keeps its own direction.
 
-// A session created this recently holds the top of a freshest-first list: the
-// events the stamps above name have not happened to it yet, so ambient output
-// on older rows would push a session the user just started out of sight. Long
-// enough to notice the new row, short enough that ordinary order returns (Orca
+// How long a session counts as new. A person who just started one is still
+// thinking about it: they come back to adjust the prompt, add a thought, check
+// the first answer. For this long it files under NEW while it works
+// (placeInboxRow) and holds
+// the top of a freshest-first list, so ambient output on older rows cannot
+// push it out of sight; after it, ordinary placement and order return (Orca
 // smart-sort.ts CREATE_GRACE_MS).
-export const INBOX_CREATE_GRACE_MS = 5 * 60_000;
+export const INBOX_CREATE_GRACE_MS = 30 * 60_000;
 
 // A dormant row whose wake nothing can name sits after every named one,
 // freshest park first. The base is far past any wall-clock wake, so the two
@@ -1256,6 +1267,8 @@ export interface LiveFactsRow {
   open_tasks?: unknown[] | null;
   open_tasks_at?: number | null;
   loop_state?: Pick<LoopState, "status" | "wakeup_at"> | null;
+  /** conversations.started_at: only its deadline (a fresh start leaving NEW) is read here. */
+  started_at?: number | null;
 }
 
 export type LiveFacts = {
@@ -1328,6 +1341,8 @@ export function rowLiveDeadlines(row: LiveFactsRow): Array<number | null> {
     row.loop_state?.status === "armed" ? row.loop_state.wakeup_at + LOOP_OVERDUE_GRACE_MS : null,
     // A bare dormant claim outliving its trust (placeProjectableRow).
     u + DORMANT_CLAIM_TTL_MS,
+    // A fresh start leaving NEW (isFreshStart).
+    row.started_at ? row.started_at + INBOX_CREATE_GRACE_MS : null,
   ];
 }
 
@@ -1390,7 +1405,18 @@ export function placeProjectableRow(
     pinned: !!row.inbox_pinned_at,
     isAnchor: !!row.anchor_id,
     asking,
+    fresh: isFreshStart(row, epoch),
   });
+}
+
+// A session a person started within INBOX_CREATE_GRACE_MS. A session another
+// one started (a worker, a subagent, a handoff, a trigger run) or a role's
+// session is that session's or that role's business, and files by its own
+// facts from the start.
+export function isFreshStart(row: RollupRow & { started_at?: number | null }, epoch: number): boolean {
+  const started = row.started_at ?? 0;
+  if (started <= 0 || epoch >= started + INBOX_CREATE_GRACE_MS) return false;
+  return !row.spawned_by_conversation_id && !row.parent_conversation_id && !isOrphanOrSubagent(row) && !isUnderRole(row) && !row.standing_role_id;
 }
 
 // ── The whole projection in one call (design C5/C6) ─────────────────────────
@@ -1483,6 +1509,11 @@ export const INBOX_FACT_FIELDS = [
   // Overlay borne so a tool call never changes the session list result; the
   // overlay already re-pushes on the same flush (updated_at is a fact).
   "activity",
+  // What waking the session costs (wakeCost.ts): both move on every model
+  // call, so on the base list they re-pushed the whole multi-MB session list
+  // to every open tab about once a second (2026-10-01).
+  "context_tokens",
+  "last_model_call_at",
 ] as const;
 
 export type InboxFactField = (typeof INBOX_FACT_FIELDS)[number];

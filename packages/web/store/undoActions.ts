@@ -1,3 +1,4 @@
+import { askRetireInstead } from "../lib/seatKill";
 import { bridgeUserId, useInboxStore, type InboxSession, type ConversationMeta } from "./inboxStore";
 import type { UserRest } from "@codecast/shared/contracts";
 import { broadcastGesture } from "./gestureBridge";
@@ -51,6 +52,7 @@ export type HideSessionOpts = { hidden?: boolean };
 
 /** Animate a session card sliding out, then call undoableHideSession. */
 export function animatedHideSession(id: string, mode: HideSessionMode, opts?: HideSessionOpts) {
+  if (mode === "kill" && askRetireInstead(id)) return;
   const card = document.querySelector(`[data-session-id="${id}"]`);
   const wrapper = card?.parentElement;
   if (wrapper) {
@@ -107,6 +109,7 @@ function snapshotSession(state: StoreState, id: string) {
 // transition). Undo restores the snapshot and clears BOTH hide flags — the
 // kill itself isn't undoable (the session stays resumable), same as before.
 export function undoableHideSession(id: string, mode: HideSessionMode, opts?: HideSessionOpts) {
+  if (mode === "kill" && askRetireInstead(id)) return;
   const state = useInboxStore.getState();
   const session = state.sessions[id];
   const label = session?.title || "session";

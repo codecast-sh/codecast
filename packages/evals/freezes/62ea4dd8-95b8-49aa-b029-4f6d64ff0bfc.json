@@ -1,0 +1,26 @@
+{
+  "name": "settle delivered-courtesy-offer",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:delivered-courtesy-offer"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "settle:delivered-courtesy-offer",
+    "title": "settle delivered-courtesy-offer"
+  },
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "trigger": {
+    "type": "settle"
+  },
+  "meta": {
+    "surface": "settle",
+    "visibility": "public",
+    "snapshot": "fixtures/settle/delivered-courtesy-offer.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "62ea4dd8-95b8-49aa-b029-4f6d64ff0bfc",
+  "createdAt": "2026-10-01T17:46:15.693Z"
+}

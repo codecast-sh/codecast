@@ -44,6 +44,7 @@
       "computerPermissions.js",
       "browserPanes.js",
       "shareCursors.js",
+      "spellMenu.js",
       "shortcutSettings.js",
       "updaterNet.js",
       "preload.js",

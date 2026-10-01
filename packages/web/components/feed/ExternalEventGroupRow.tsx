@@ -1,24 +1,20 @@
-// One row for a day's events on one thread of work: a pull request, or a
-// branch. The feed shows the thread as a sentence of counts ("3 checks failed
+// One row for a day's events on one thread of work: a pull request, a
+// branch, or one person's run of commits across branches. The feed shows the thread as a sentence of counts ("3 checks failed
 // · merges cleanly · PR updated · rebased") with the pills the members share,
 // and opens into the member rows on a click. A thread with a single event is
 // that event's own row, so a quiet day reads exactly as before.
 import React, { useMemo, useState } from "react";
 import { ChevronRight } from "lucide-react";
-import { EntityIdPill } from "../EntityIdPill";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { relTimeShort, formatDateFull } from "../../lib/utils";
 import {
   accentSoft,
   accentVar,
-  commitPath,
   externalEventRowToExternalEvent,
   externalEventStyle,
-  prPath,
-  shortSha,
   type ExternalEventGroup,
 } from "../../lib/externalEvents";
-import { AccentWord, ActorFace, ExternalEventRow, Pill } from "./ExternalEventRow";
+import { AccentWord, ActorFace, EventRefPills, ExternalEventRow } from "./ExternalEventRow";
 
 const MAX_FACES = 3;
 
@@ -50,8 +46,10 @@ export function ExternalEventGroupRow({
   const actors = uniqueBy(events.map((e) => e.actor).filter(Boolean), (a) => a!.user_id ?? a!.login ?? a!.name ?? "");
   const sessions = uniqueBy(events.map((e) => e.refs.session_id).filter((id): id is string => !!id), (id) => id);
   const pr = events.find((e) => e.refs.pr)?.refs.pr;
-  const commit = events.find((e) => e.refs.commit)?.refs.commit;
-  const branch = group.events.find((e) => e.branch)?.branch;
+  const commits = uniqueBy(events.map((e) => e.refs.commit).filter((c) => !!c), (c) => c!.sha);
+  // A run across worktrees names how many branches it touched; one branch names itself.
+  const branches = uniqueBy(group.events.map((e) => e.branch).filter((b): b is string => !!b), (b) => b);
+  const branch = branches.length > 1 ? `${branches.length} branches` : branches[0];
   const newest = events[0];
   const oldest = events[events.length - 1];
 
@@ -104,7 +102,7 @@ export function ExternalEventGroupRow({
               </React.Fragment>
             ))}
             {branch ? (
-              <span className="font-mono text-[10px] text-sol-text-dim/80 flex-shrink-0 truncate max-w-[16rem]">{branch}</span>
+              <span className="font-mono text-[10px] text-sol-text-dim/80 flex-shrink-0 truncate max-w-[16rem]" title={branches.join("\n")}>{branch}</span>
             ) : null}
             <span className="inline-flex items-center gap-0.5 text-[10px] text-sol-text-dim flex-shrink-0">
               <ChevronRight className={`w-3 h-3 transition-transform ${open ? "rotate-90" : ""}`} />
@@ -118,28 +116,24 @@ export function ExternalEventGroupRow({
             </span>
           </div>
 
-          <div className="flex items-center gap-1 flex-wrap mt-1 empty:mt-0" onClick={(e) => e.stopPropagation()}>
-            {sessions.slice(0, 2).map((id) => (
-              <EntityIdPill key={id} id={id} type="session" />
-            ))}
-            {pr ? (
-              <Pill href={prPath(pr)} onNavigate={onNavigate} title={pr.repository}>
-                #{pr.number}
-              </Pill>
-            ) : null}
-            {commit ? (
-              <Pill href={commitPath(commit)} onNavigate={onNavigate} title={commit.sha}>
-                <span className="font-mono">{shortSha(commit.sha)}</span>
-              </Pill>
-            ) : null}
-          </div>
+          <EventRefPills
+            refs={{ pr: pr ?? undefined, commit: commits.length === 1 ? commits[0] : undefined }}
+            sessionIds={sessions.slice(0, 3)}
+            onNavigate={onNavigate}
+          />
         </div>
       </div>
 
       {open ? (
         <div className="ml-[25px] mt-0.5 pl-2 border-l border-sol-border/20 space-y-0.5">
           {events.map((event) => (
-            <ExternalEventRow key={event.id} event={event} density="feed" onNavigate={onNavigate} />
+            <ExternalEventRow
+              key={event.id}
+              event={event}
+              density="feed"
+              onNavigate={onNavigate}
+              omitRefs={sessions.length === 1 ? ["session_id"] : undefined}
+            />
           ))}
         </div>
       ) : null}

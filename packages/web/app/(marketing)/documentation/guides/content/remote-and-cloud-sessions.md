@@ -2,6 +2,8 @@ A session runs on one machine: the daemon there owns its tmux pane, its transcri
 
 Codecast treats every machine as a device with the same daemon. Cloud Linux and Mac hosts can run sessions, receive work from your laptop, and be watched or typed into from the web: from any browser through the relay, and at full speed from the laptop that manages the host. Linux sleeps when idle. AWS Macs use dedicated hosts whose charges continue while the instance is stopped. The transcript stays one thread throughout.
 
+A task that runs on a vendor's machines rather than yours, such as a Codex Cloud task, is synced and driven another way: see [Codex Cloud tasks in codecast](/documentation/codex-cloud).
+
 ```bash
 cast spawn --cloud "port the v1 routes" "write the migration"   # one worktree per task on the cloud host
 cast spawn --cloud --shared "run the migration"                 # the host's main checkout instead

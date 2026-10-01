@@ -1067,6 +1067,7 @@ function TriggersContent() {
           <h1 className="text-lg font-semibold text-sol-text">Triggers</h1>
           <span className="text-xs text-sol-text-dim">agents that run on their own, later</span>
           <button
+            data-tour="triggers-new"
             onClick={() => setShowForm((v) => !v)}
             className="ml-auto inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg bg-sol-amber text-sol-bg hover:bg-sol-amber/90 active:scale-[0.97] transition-all"
           >

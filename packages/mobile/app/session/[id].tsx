@@ -25,7 +25,7 @@ import { useComposerField, nativeComposerText } from '@/lib/composerField';
 import { NativePressable } from '@/lib/gestureHandler';
 import { isTrustedImageSrc } from '@/lib/convex';
 import { parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUnwrappedSessionReport, parseUserMessage, isScheduledTaskMessage, parseChatWakePrompt, chatWakePlace, chatWakeAction, parseHuddleSummaryTag, isToolResultCarrier, type ChatWakePrompt } from '@codecast/web/components/sessionMessage';
-import { buildNavigatorRows, sampleTicks, isStickyEligible, pickStickyFallbackFromLoaded, resolveStickyPrompt, countCommentsByMessage, type NavigatorRow } from '@codecast/web/lib/messageNavigator';
+import { buildNavigatorRows, sampleTicks, isStickyEligible, pickStickyFallback, resolveStickyPrompt, countCommentsByMessage, type NavigatorRow } from '@codecast/web/lib/messageNavigator';
 import { resolveSessionTitle } from '@codecast/web/lib/sessionTitle';
 import { isHiddenSystemNotice, isWarningSystemNotice } from '@codecast/web/lib/conversationProcessor';
 import { MessageNavigatorSheet } from '@/components/session/MessageNavigatorSheet';
@@ -4212,12 +4212,13 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   const stickyIndicesRef = useRef(stickyIndices);
   stickyIndicesRef.current = stickyIndices;
 
-  // The latest prompt ABOVE the loaded window, for when the reader scrolled
-  // past every loaded prompt (web's serverStickyFallback).
-  const stickyFallback = useMemo(() => {
-    if (!hasMoreAbove) return null;
-    return pickStickyFallbackFromLoaded(navSourceMessages, allMessages);
-  }, [hasMoreAbove, allMessages, navSourceMessages]);
+  // The full prompt list and the ids the window holds: a prompt the window
+  // does not hold can still be the one above the reader (pickStickyFallback).
+  const navSourceRef = useRef(navSourceMessages);
+  navSourceRef.current = navSourceMessages;
+  const loadedIds = useMemo(() => new Set(allMessages.map(m => m._id)), [allMessages]);
+  const loadedIdsRef = useRef(loadedIds);
+  loadedIdsRef.current = loadedIds;
 
   // Viewability drives the active sticky prompt. The handler and its config
   // must keep ONE identity for the FlatList's lifetime, so the handler reads
@@ -4249,7 +4250,11 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     const resolved = topVisibleIndex >= 0
       ? resolveStickyPrompt(stickyIndicesRef.current, topVisibleIndex, visibleOriginal)
       : null;
-    const next = resolved ? { id: msgs[resolved.index]._id, hidden: resolved.hidden } : null;
+    // Before the first viewability event, the window's first row stands in
+    // for the top visible one.
+    const topTs = msgs[Math.max(topVisibleIndex, 0)]?.timestamp ?? Infinity;
+    const above = pickStickyFallback(navSourceRef.current, loadedIdsRef.current, topTs, resolved ? msgs[resolved.index].timestamp : -Infinity);
+    const next = above ? { id: above.id, hidden: false } : resolved ? { id: msgs[resolved.index]._id, hidden: resolved.hidden } : null;
     const prev = stickyActiveRef.current;
     if (prev?.id === next?.id && prev?.hidden === next?.hidden) return;
     stickyActiveRef.current = next;
@@ -4268,11 +4273,10 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   // the array identity changes.
   useEffect(() => {
     resolveStickyFromViewable();
-  }, [allMessages, resolveStickyFromViewable]);
+  }, [allMessages, navSourceMessages, resolveStickyFromViewable]);
 
-  // Active prompt: the resolution inside the window when one lands, else the prompt
-  // above the loaded window. Also the navigator's current row.
-  const activeStickyId = stickyActive?.id ?? stickyFallback?.id ?? null;
+  // Active prompt, also the navigator's current row.
+  const activeStickyId = stickyActive?.id ?? null;
 
   const stickyPrompt = useMemo<StickyPrompt | null>(() => {
     // Mid jump the window is reloading and activeStickyId churns; the claim

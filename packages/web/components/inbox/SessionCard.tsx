@@ -21,6 +21,7 @@ import { rosterDeviceOf, deviceWakesOnUse } from "../DeviceBadge";
 import { useTipActions, checkMilestone } from "../../tips";
 import { formatIdleDuration } from "../../lib/sessionCard";
 import { SessionCardView, type SessionCardChrome, type SessionCardViewProps } from "./SessionCardView";
+import { useInboxSelection } from "../../lib/inboxSelection";
 
 // The inbox session card's container: the store, the clock, the mutations and
 // every action a gesture reaches. It renders SessionCardView, which draws.
@@ -71,6 +72,7 @@ const openComments = (id: string) => {
   st.requestNavigate(id, { source: "gesture" });
   st.setCommentRailOpen(true);
 };
+const toggleSelect = (id: string) => useInboxSelection.getState().toggle(id);
 const paneDragStart = (sessionId: string) => (e: React.DragEvent, title: string) =>
   startPaneDrag(e, { path: sessionPanePath(sessionId), title });
 
@@ -249,6 +251,7 @@ export const SessionCard = memo(function SessionCard({
     [onNavigateToSession],
   );
   const handlePaneDragStart = useMemo(() => paneDragStart(cardId), [cardId]);
+  const selecting = useInboxSelection((sel) => sel.ids.length > 0);
 
   return (
     <SessionCardView
@@ -271,6 +274,8 @@ export const SessionCard = memo(function SessionCard({
       anchorIdentity={anchorIdentity}
       runHost={runHost}
       thumbSrc={thumbSrc}
+      selecting={selecting}
+      onToggleSelect={toggleSelect}
       onPin={handlePin}
       onStash={handleStash}
       onNavigateToSession={onNavigateToSession}

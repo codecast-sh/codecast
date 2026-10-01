@@ -29,7 +29,7 @@ import {
 } from "./inboxFilters";
 import { loadArmedTriggerHomes, isArmedTriggerHome, isArmedLoopHome } from "./dormancy";
 import { displayNotificationActor, rewriteNotificationMessage } from "./lib/notificationActor";
-import { identityFieldsOf } from "./conversations";
+import { identityFieldsOf } from "./lib/sessionIdentityFields";
 
 export const sendPushNotification = internalAction({
   args: {
