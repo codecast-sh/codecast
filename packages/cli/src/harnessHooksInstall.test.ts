@@ -86,6 +86,26 @@ describe("a hook that belongs to an Agent Features entry", () => {
     expect(commandsFor(readSettings(), "Stop")).toContain(threadState);
   });
 
+  test("turning it off removes an entry an older installer spelled with $HOME, with the script", () => {
+    // jb-m5-max, cast 1.1.162: the old `$HOME/...` entry survived removal while
+    // the script was deleted, so every Stop failed with exit 127.
+    const dir = path.join(home, ".claude", "hooks");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "thread-state.sh"), "#!/bin/sh\n", { mode: 0o755 });
+    fs.writeFileSync(settingsFile(), JSON.stringify({ hooks: { Stop: [{ matcher: "", hooks: [
+      { type: "command", command: "$HOME/.claude/hooks/codecast-status.sh", timeout: 10 },
+      { type: "command", command: "$HOME/.claude/hooks/thread-state.sh", timeout: 10 },
+    ] }] } }, null, 2));
+
+    syncHarnessHooks({});
+
+    const stop = commandsFor(readSettings(), "Stop");
+    expect(stop.filter((c) => c.includes("thread-state.sh"))).toEqual([]);
+    expect(fs.existsSync(path.join(dir, "thread-state.sh"))).toBe(false);
+    // The functional hook is refreshed in place, not registered a second time.
+    expect(stop.filter((c) => c.includes("codecast-status.sh"))).toEqual([path.join(dir, "codecast-status.sh")]);
+  });
+
   test("the hooks switch still removes it with the rest", () => {
     syncHarnessHooks({ state_enabled: true });
     syncHarnessHooks({ state_enabled: true, hooks_enabled: false });
