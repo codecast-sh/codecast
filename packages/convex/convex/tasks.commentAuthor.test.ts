@@ -56,7 +56,7 @@ describe("task comment session authors", () => {
     test(`${name} shows the session title and Codex identity to its owner`, async () => {
       const { ctx } = await fixture();
       const [comment] = await read(ctx);
-      expect(comment.session_info).toEqual({ _id: CONVERSATION, session_id: "codex-thread", title: "Cast browser routing", agent_type: "codex" });
+      expect(comment.session_info).toEqual({ _id: CONVERSATION, session_id: "codex-thread", title: "Cast browser routing", agent_type: "codex", character_avatar: null, character_name: null, org_role_id: null, standing_role_id: null, role: null });
     });
 
     test(`${name} hides the private session from another task viewer`, async () => {

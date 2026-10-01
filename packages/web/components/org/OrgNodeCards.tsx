@@ -9,7 +9,6 @@ import { ProjectLeadMark } from "../charter/ProjectLeadChip";
 import Link from "next/link";
 import { Handle, Position, useStore, type NodeProps, type Node } from "@xyflow/react";
 import { ChevronDown, ChevronRight, GitFork, Layers, Shield, Crown, Check, Pencil, X, Clock, Sparkles, AlertTriangle } from "lucide-react";
-import { AgentIcon } from "../ConversationList";
 import { Avatar } from "../tasks/TaskCommentStream";
 import { compactAge } from "../../lib/threadState";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
@@ -20,7 +19,7 @@ import { CHANGE_KIND_WORD, GHOST, ORG_STATE_META, SEVERITY_META, standingLineOf 
 import { RoleFace } from "./RoleFace";
 import { GhostTag } from "./ghostChrome";
 import { CHIP_STATUS, ghostFrameStyle } from "./orgMeta";
-import { RoleHoverCard, SessionGlyph } from "../identity";
+import { RoleHoverCard, SessionIdentityLine, SessionMark } from "../identity";
 import type { OrgStandingState } from "./orgTypes";
 import type { HealthFlag, OrgChangeStatus } from "./orgStaffingTypes";
 import { CHIEF_OF_STAFF_HANDLE } from "./orgStaffingTypes";
@@ -623,16 +622,10 @@ export const SessionCard = memo(function SessionCard({ data }: NodeProps<Node<Se
       )}
       {/* Who the session is (session-characters.md S3), the agent brand on
           its corner; a session nobody personified keeps the brand alone. */}
-      <SessionGlyph
-        row={{ _id: s._id, title: s.title, character_avatar: s.character_avatar ?? null, character_name: s.character_name ?? null }}
-        size={20}
-        className="shrink-0"
-        badge={<AgentIcon agentType={s.agent_type} className="w-full h-full" />}
-        fallback={<AgentIcon agentType={s.agent_type} className="w-4 h-4" />}
-      />
+      <SessionMark session={s as any} size={20} iconClassName="w-4 h-4" className="shrink-0" />
       <div className="min-w-0 flex-1">
-        <div className="truncate text-[13px] leading-[1.25] font-medium" style={{ color: "var(--sol-text)" }} title={s.title}>
-          {s.title || "Untitled"}
+        <div className="flex min-w-0 text-[13px] leading-[1.25]" title={s.title}>
+          <SessionIdentityLine row={s as any} title={s.title || "Untitled"} titleClassName="font-medium" />
         </div>
         <div className="flex items-center gap-1.5 text-[9.5px] leading-tight mt-[1px]" style={{ color: "var(--sol-text-dim)", fontFamily: "var(--font-mono)" }}>
           <ShortId id={s.short_id} />

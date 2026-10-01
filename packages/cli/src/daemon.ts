@@ -7,7 +7,7 @@ import { holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, se
 import { typedPollAnswer } from "./typedPollAnswer.js";
 import { codexTurnErrorMessage } from "./codexTurnError.js";
 import { INGEST_CLIENTS, INGEST_WINDOW_ROWS, type IngestJob } from "./workers/ingestTypes.js";
-import { TranscriptRetryOwner } from "./workers/ingestRetryOwner.js";
+import { TranscriptRetryOwner, type TranscriptRetrySource } from "./workers/ingestRetryOwner.js";
 import { ingestRetainedWeight } from "./workers/ingestTransport.js";
 import { computeIngestSyncDelta, provenSyncedPrefix, samePersistedFile, transcriptSignatureWatermark, ingestIdentity, ingestMessageTitle, ingestRecord, ingestSource, readTranscriptIngest, sameIngestFile, sameIngestSnapshot, serializeTranscript, validateTranscriptIngest } from "./workers/ingestClient.js";
 import { checkTranscriptDeadline, outsideTranscriptDeadline } from "./workers/ingestDeadline.js";
@@ -102,7 +102,6 @@ import {
   activeCredentialExpiresAt,
   refreshActiveCredential,
   resnapshotIfActiveFresher,
-  refreshUsageSnapshots,
   verifyActiveIdentity,
   readOauthAccount,
   deleteProfile,
@@ -242,6 +241,7 @@ import { markSynced, markExamined, updateSyncRecord, getSyncRecord, findUnsynced
 import { ensureGrokFolderTrusted } from "./grokFolderTrust.js";
 import { SyncService, AuthExpiredError, type ConversationLifecycle, type CreateConversationParams } from "./syncService.js";
 import { subagentPromptParent } from "./agentPromptOrigin.js";
+import { declaredSpawnParent } from "./spawnParents.js";
 import { redactSecrets, maskToken } from "./redact.js";
 import { RetryQueue, flushRetryQueueForShutdown, type RetryOperation } from "./retryQueue.js";
 import { DAEMON_STOP_SIGKILL_MS } from "./shutdownBudget.js";
@@ -256,7 +256,7 @@ import {
   performReconciliation,
   repairDiscrepancies,
 } from "./reconciliation.js";
-import { TEST_SCRATCH_DIRNAME, isTestArtifactPath, isPathExcluded, isProjectAllowedToSync, watchDirFilter, watchFilter } from "./syncScope.js";
+import { TEST_SCRATCH_DIRNAME, isTestArtifactPath, isProjectAllowedToSync, transcriptScopeRefusal, watchDirFilter, watchFilter } from "./syncScope.js";
 import { parseOrphanProcessIdentity } from "./orphanProcessIdentity.js";
 import { TaskScheduler, triggerRunTaskId } from "./taskScheduler.js";
 import { hasTmux, isTmuxSessionMissingError } from "./tmux.js";
@@ -350,7 +350,7 @@ import {
   grokStableRulesFragment,
 } from "./resumeCommand.js";
 import { ClaudeCloudWatcher, cloudEventUuid } from "./claudeCloud.js";
-import { CloudAgentHoldError, CloudAgentRegistry, cloudAgentAdapters, logTag as cloudAgentLogTag, readMetaJson, type CloudAgentGit, type CloudAgentLoginCommand } from "./cloudAgents/index.js";
+import { CloudAgentHoldError, CloudAgentRegistry, CloudAgentUnsentError, cloudAgentAdapters, logTag as cloudAgentLogTag, readMetaJson, type CloudAgentGit, type CloudAgentLoginCommand } from "./cloudAgents/index.js";
 import { CLOUD_MIRROR_LOCAL_GIT_FIELDS, cloudMirrorRepoFacts } from "./cloudAgents/poll.js";
 import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, isResumableCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
 import { blankCodexRecoveryParams, buildLaunchArgs, getConfiguredAgentArgs, getDefaultParamFlags, getPermissionFlags, codexPermissionsFromArgs, launchBinary } from "./launchCommand.js";
@@ -4490,6 +4490,7 @@ async function maintainCcUsageSnapshotsInner(reason: string, opts: { force?: boo
       );
     }
     await reconcileLiveClaudeGate();
+    const { refreshUsageSnapshots } = await import("./ccUsagePoll.js");
     const res = await refreshUsageSnapshots({
       ...(opts.force ? { minIntervalMs: 0 } : {}),
       heldProfiles: liveClaudeProfiles(),
@@ -8172,7 +8173,8 @@ async function executeRemoteCommand(
         const applied = await applyProviderKeyCommand(CONFIG_DIR, commandArgs, verifyProviderKey);
         if (!applied.ok) { error = applied.error; break; }
         log(`[KEYS] ${applied.op} ${applied.provider} (web)${applied.account ? ` for ${applied.account}` : ""}`);
-        result = JSON.stringify({ op: applied.op, provider: applied.provider, ...(applied.account ? { account: applied.account } : {}) });
+        const { ok: _ok, ...verdict } = applied;
+        result = JSON.stringify(verdict);
         pushProviderKeysToRemoteHosts("web set").catch(() => {});
         await sendHeartbeat().catch(() => {});
         break;
@@ -8932,6 +8934,86 @@ export async function retryCreateTranscriptConversation(params: CreateConversati
       updateState();
       return true;
   });
+}
+
+// The retry queue's executor: replays one queued operation, and answers
+// whether it is done (false leaves an unknown operation type queued).
+export async function executeRetryOperation(op: RetryOperation, deps: Pick<TranscriptSyncDeps, "syncService" | "conversationCache" | "pendingMessages" | "retryQueue" | "updateState">): Promise<boolean> {
+  if (op.type === "createConversation") {
+    return retryCreateTranscriptConversation(op.params as unknown as CreateConversationParams, deps.conversationCache, deps.pendingMessages, deps.syncService, deps.retryQueue, deps.updateState);
+  }
+
+  if (op.type === "updateSessionId") {
+    const params = op.params as { conversationId: string; sessionId: string; projectPath?: string; gitRoot?: string; gitRemoteUrl?: string };
+    // Superseded while queued: the session resumed under a fresh uuid (or the
+    // local mapping was pruned). Executing anyway would clobber the newer
+    // binding, so discard — the newer link enqueued its own op.
+    const preferred = findCachedSessionIdForConversation(deps.conversationCache, params.conversationId);
+    if (preferred !== params.sessionId) {
+      log(`Retry: updateSessionId superseded for ${params.conversationId.slice(0, 12)} (queued ${params.sessionId.slice(0, 8)}, live ${preferred ? preferred.slice(0, 8) : "none"})`);
+      deps.updateState();
+      return true;
+    }
+    await deps.syncService.updateSessionId(params.conversationId, params.sessionId, params.projectPath, params.gitRoot, params.gitRemoteUrl);
+    log(`Retry: Rebound session ${params.sessionId.slice(0, 8)} -> conversation ${params.conversationId.slice(0, 12)}`);
+    deps.updateState();
+    return true;
+  }
+
+  if (op.type === "addMessages") {
+    const params = op.params as {
+      conversationId: string;
+      messages: Array<{
+        messageUuid?: string;
+        role: "human" | "assistant" | "system";
+        content: string;
+        timestamp: number;
+        thinking?: string;
+        toolCalls?: any;
+        toolResults?: any;
+        images?: any;
+        subtype?: string;
+      }>;
+    };
+    // Offload any still-inline images to file storage before re-sending, then
+    // persist so the queue stops carrying raw base64 across attempts. Images
+    // are normally offloaded at enqueue (syncMessagesBatch), but when the
+    // upload mutation is failing (e.g. a backend write-path stall) the base64
+    // is kept inline and persisted. The first retry after recovery replaces it
+    // with a storageId reference once, instead of re-uploading the same bytes
+    // (and re-bloating retry-queue.json / dropped-operations.json) every time.
+    const hasInlineImage = params.messages.some(
+      (m) => Array.isArray(m.images) && m.images.some((i: any) => i?.data && !i?.storageId),
+    );
+    if (hasInlineImage) {
+      await deps.syncService.offloadImages(params.messages as any);
+      deps.retryQueue.persistNow();
+    }
+    await deps.syncService.addMessages({ ...params, reconcileRemoteExisting: true });
+    deps.updateState();
+    log(`Retry: Batch synced ${params.messages.length} messages for ${params.conversationId.slice(0, 12)}`);
+    return true;
+  }
+
+  if (op.type === "addMessage") {
+    const params = op.params as {
+      conversationId: string;
+      messageUuid?: string;
+      role: "human" | "assistant" | "system";
+      content: string;
+      timestamp: number;
+      thinking?: string;
+      toolCalls?: Array<{ id: string; name: string; input: Record<string, unknown> }>;
+      toolResults?: Array<{ toolUseId: string; content: string; isError?: boolean }>;
+      images?: Array<{ mediaType: string; data?: string; localPath?: string; storageId?: string }>;
+      subtype?: string;
+    };
+    await deps.syncService.addMessage(params);
+    deps.updateState();
+    return true;
+  }
+
+  return false;
 }
 
 class TranscriptIngestRetry extends Error {}
@@ -10033,6 +10115,10 @@ export async function resolveSpawnerConversation(
   conversationCache: ConversationCache,
   spawnRegistry: TmuxSpawnRegistry = tmuxSpawnRegistry,
 ): Promise<string | null> {
+  // A launcher that knew its caller (`cast exec`) declared it: no guessing.
+  const declared = declaredSpawnParent(CONFIG_DIR, sessionId);
+  const declaredConversation = declared ? conversationCache[declared] : undefined;
+  if (declaredConversation && declaredConversation !== conversationCache[sessionId]) return declaredConversation;
   let candidates = spawnerCandidates.get(sessionId);
   if (!candidates) {
     candidates = await walkSpawnerCandidates(filePath, sessionId, agentType, spawnRegistry);
@@ -10563,33 +10649,8 @@ async function processSessionFilePass(
       }
 
       let matchedStartedConversation: string | null = null;
-      if (!conversationId && startedSessionTmux.size > 0 && !isSubagent && !parentConversationId) {
-        const startedClaudeEntries = Array.from(startedSessionTmux.entries())
-          .filter(([, entry]) => entry.agentType === "claude");
-        const proc = await findSessionProcess(sessionId, "claude").catch(() => null);
-        let tmuxSessionName: string | null = null;
-        if (proc) {
-          tmuxSessionName = sessionProcessCache.get(sessionId)?.tmuxTarget?.split(":")[0] ?? null;
-          if (!tmuxSessionName) {
-            const tmuxPane = await findTmuxPaneForTty(proc.tty);
-            if (tmuxPane) {
-              tmuxSessionName = tmuxPane.split(":")[0];
-              cacheSessionProcess(sessionId, proc, tmuxPane);
-            }
-          }
-        }
-        matchedStartedConversation = matchStartedConversation(startedClaudeEntries, {
-          tmuxSessionName,
-          // Only allow the cwd fallback when the process wasn't found at all
-          // (still spawning). A located process that isn't in our tmux belongs
-          // to someone else — see matchStartedConversation.
-          projectPath: proc ? null : actualProjectPath,
-        });
-        if (matchedStartedConversation && tmuxSessionName) {
-          log(`Matched session ${sessionId.slice(0, 8)} to conversation ${matchedStartedConversation.slice(0, 12)} via tmux ${tmuxSessionName}`);
-        } else if (matchedStartedConversation && actualProjectPath) {
-          log(`Matched session ${sessionId.slice(0, 8)} to conversation ${matchedStartedConversation.slice(0, 12)} via projectPath fallback`);
-        }
+      if (!conversationId && !isSubagent && !parentConversationId) {
+        matchedStartedConversation = (await matchStartedStub("claude", sessionId, actualProjectPath))?.conversationId ?? null;
       }
 
       // Re-check after async gap: discoverAndLinkSession may have linked during findSessionProcess/findTmuxPaneForTty
@@ -10602,22 +10663,7 @@ async function processSessionFilePass(
         if (conversationId) {
           // Already linked by background discovery — skip matching and creation
         } else if (matchedStartedConversation) {
-          conversationId = matchedStartedConversation;
-          const tmuxEntry = startedSessionTmux.get(matchedStartedConversation);
-          conversationCache[sessionId] = conversationId;
-          saveConversationCache(conversationCache);
-          // Reconcile project_path/git_root to the real session cwd: the stub
-          // was created (e.g. from the web) before this session existed, so its
-          // stored path is a guess that may not match where the session runs.
-          void pushSessionIdBinding(conversationId, sessionId, actualProjectPath || undefined, gitInfo?.repoRoot || gitInfo?.root, gitInfo?.remoteUrl);
-          if (tmuxEntry) {
-          registerManagedStartedSession(conversationId, sessionId, tmuxEntry.tmuxSession);
-          if (tmuxEntry.sessionId && tmuxEntry.sessionId !== sessionId) {
-            stopManagedSessionHeartbeat(tmuxEntry.sessionId);
-          }
-          }
-          deleteStartedSession(matchedStartedConversation);
-          log(`Linked session ${sessionId} to existing started conversation ${conversationId}`);
+          conversationId = await adoptStartedStub("claude", matchedStartedConversation, sessionId, actualProjectPath, conversationCache, gitInfo);
         if (parentConversationId) {
           syncService.linkSessions(parentConversationId, conversationId, subagentDescriptions.get(sessionId)).then(() => {
             log(`Linked started conversation ${conversationId.slice(0, 12)} to parent ${parentConversationId!.slice(0, 12)}`);
@@ -11659,23 +11705,10 @@ async function processCodexSessionPass(
         const matchedStartedConversation = (await matchStartedStub("codex", sessionId, projectPath))?.conversationId ?? null;
 
         if (matchedStartedConversation) {
-          conversationId = matchedStartedConversation;
           const tmuxEntry = startedSessionTmux.get(matchedStartedConversation);
+          conversationId = await adoptStartedStub("codex", matchedStartedConversation, sessionId, projectPath, conversationCache);
           setConversationCache(conversationId);
-          // Reconcile project_path/git_root to the real session cwd (see Claude
-          // match branch): the stub's stored path was a guess made before the
-          // session existed and may not match where it actually runs.
-          const codexGitInfo = projectPath ? await getGitInfo(projectPath) : undefined;
-          void pushSessionIdBinding(conversationId, sessionId, projectPath || undefined, codexGitInfo?.repoRoot || codexGitInfo?.root, codexGitInfo?.remoteUrl);
-          if (tmuxEntry) {
-            registerManagedStartedSession(conversationId, sessionId, tmuxEntry.tmuxSession);
-            if (tmuxEntry.sessionId && tmuxEntry.sessionId !== sessionId) {
-              stopManagedSessionHeartbeat(tmuxEntry.sessionId);
-            }
-            startCodexPermissionPoller(sessionId, tmuxEntry.tmuxSession, conversationId, syncService);
-          }
-          deleteStartedSession(matchedStartedConversation);
-          log(`Linked Codex session ${sessionId} to existing started conversation ${conversationId}`);
+          if (tmuxEntry) startCodexPermissionPoller(sessionId, tmuxEntry.tmuxSession, conversationId, syncService);
         } else {
 
           const firstUserMessage = messages.find(msg => msg.role === "user");
@@ -12457,11 +12490,15 @@ async function matchStartedStub(client: AgentClientId, sessionId: string, projec
 
 // Take over a matched started stub: map the session to it, tell the server
 // its real session id and cwd, and hand its pane's heartbeat to the session.
-async function adoptStartedStub(client: AgentClientId, conversationId: string, sessionId: string, projectPath: string | undefined, conversationCache: ConversationCache): Promise<string> {
+// The stub was created (from the web, say) before the session existed, so its
+// stored path is a guess; the binding reconciles project_path and git_root to
+// where the session really runs. A caller that already read the cwd's git
+// facts passes them, since a read is eight git processes.
+async function adoptStartedStub(client: AgentClientId, conversationId: string, sessionId: string, projectPath: string | undefined, conversationCache: ConversationCache, knownGitInfo?: GitInfo): Promise<string> {
   const tmuxEntry = startedSessionTmux.get(conversationId);
   conversationCache[sessionId] = conversationId;
   saveConversationCache(conversationCache);
-  const gitInfo = projectPath ? await getGitInfo(projectPath) : undefined;
+  const gitInfo = knownGitInfo ?? (projectPath ? await getGitInfo(projectPath) : undefined);
   void pushSessionIdBinding(conversationId, sessionId, projectPath || undefined, gitInfo?.repoRoot || gitInfo?.root, gitInfo?.remoteUrl);
   if (tmuxEntry) {
     registerManagedStartedSession(conversationId, sessionId, tmuxEntry.tmuxSession);
@@ -25063,6 +25100,13 @@ async function deliverMessage(
   const admit = createDeliveryAdmission(syncService, messageId, conversationId);
   await deliveryStep(messageId, "admit_first", admit);
   touchHostActivity();
+  // A slash command or a poll answer can open an interactive prompt in the
+  // pane it lands in: watch for one, longer after a poll answer.
+  const watchForPrompt = (tmuxTarget: string | undefined, sid: string): void => {
+    const isPollResponse = !!parsePollMessage(content);
+    if (!tmuxTarget || !(content.trimStart().startsWith("/") || isPollResponse)) return;
+    checkForInteractivePrompt(tmuxTarget, sid, conversationId, syncService, isPollResponse ? 4000 : 2000).catch(() => {});
+  };
 
   if (pendingAgentSwitches.has(conversationId)) {
     logDelivery(`[AGENT-SWITCH] Deferring msg=${messageId.slice(0, 8)} until conversation ${conversationId.slice(0, 12)} is rebound`);
@@ -25296,10 +25340,7 @@ async function deliverMessage(
         await deliveryStep(messageId, "inject_started", () => injectViaTmux(startedTmuxTarget, content, entry.agentType, { delivery: { messageId, conversationId } }));
         syncService.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
         log(`Injected message to started session tmux ${entry.tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
-        const isPollResponse = !!parsePollMessage(content);
-        if (content.trimStart().startsWith("/") || isPollResponse) {
-          checkForInteractivePrompt(startedTmuxTarget, conversationId, conversationId, syncService, isPollResponse ? 4000 : 2000).catch(() => {});
-        }
+        watchForPrompt(startedTmuxTarget, conversationId);
         return true;
       } catch (err) {
         if (err instanceof PendingDeliveryHeldError) throw err;
@@ -25437,10 +25478,7 @@ async function deliverMessage(
         if (live.source === "cache") syncService.setSessionError(conversationId).catch(logConvexFailure);
         clearUnresolvablePane(sessionId);
         logDelivery(`Injected via tmux ${injectTarget} (source=${live.source})`);
-        const isPollResponse = !!parsePollMessage(content);
-        if (content.trimStart().startsWith("/") || isPollResponse) {
-          checkForInteractivePrompt(injectTarget, sessionId, conversationId, syncService, isPollResponse ? 4000 : 2000).catch(() => {});
-        }
+        watchForPrompt(injectTarget, sessionId);
         return true;
       }
     } catch (err) {
@@ -25551,44 +25589,27 @@ async function deliverMessage(
   await admit();
   markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
   const resumed = await autoResumeSession(sessionId, content, titleCache, undefined, conversationId, agentTypeHint ?? detectedType, { delivery: { messageId, conversationId } });
-  if (resumed) {
-    resetSessionDeliveryFailures(sessionId);
-    materializedSessions.delete(sessionId);
-    logDelivery(`Injected via auto-resume for session=${sessionId.slice(0, 8)}`);
-    const isPollResponse = !!parsePollMessage(content);
-    if (content.trimStart().startsWith("/") || isPollResponse) {
-      const resumeTmux = resumeSessionCache.get(sessionId);
-      if (resumeTmux) {
-        checkForInteractivePrompt(resumeTmux + ":0.0", sessionId, conversationId, syncService, isPollResponse ? 4000 : 2000).catch(() => {});
-      }
-    }
-    postDeliveryHealthCheck(sessionId, conversationId, content, messageId, syncService, titleCache, conversationCache).catch(err => {
+  // A resume that delivered: the session is healthy again, and its new pane
+  // gets the same prompt watch and health check a live delivery gets.
+  const resumedDelivery = (via: string, sid: string): true => {
+    resetSessionDeliveryFailures(sid);
+    materializedSessions.delete(sid);
+    logDelivery(`Injected via ${via} for session=${sid.slice(0, 8)}`);
+    const resumeTmux = resumeSessionCache.get(sid);
+    watchForPrompt(resumeTmux && `${resumeTmux}:0.0`, sid);
+    postDeliveryHealthCheck(sid, conversationId, content, messageId, syncService, titleCache, conversationCache).catch(err => {
       log(`Health check error: ${err instanceof Error ? err.message : String(err)}`);
     });
     return true;
-  }
+  };
+  if (resumed) return resumedDelivery("auto-resume", sessionId);
 
   // Auto-resume failed - try repair (regenerate JSONL from Convex)
   logDelivery(`Auto-resume failed for ${sessionId.slice(0, 8)}, attempting repair...`);
   // Row is already marked "injected" from the auto-resume attempt above; repair+resume is a
   // second delivery path for the same message, so no re-mark needed.
   const repaired = await repairAndResumeSession(sessionId, content, titleCache, undefined, conversationId, agentTypeHint ?? detectedType, { delivery: { messageId, conversationId } });
-  if (repaired) {
-    resetSessionDeliveryFailures(sessionId);
-    materializedSessions.delete(sessionId);
-    logDelivery(`Injected via repair+resume for session=${sessionId.slice(0, 8)}`);
-    const isPollResponse = !!parsePollMessage(content);
-    if (content.trimStart().startsWith("/") || isPollResponse) {
-      const resumeTmux = resumeSessionCache.get(sessionId);
-      if (resumeTmux) {
-        checkForInteractivePrompt(resumeTmux + ":0.0", sessionId, conversationId, syncService, isPollResponse ? 4000 : 2000).catch(() => {});
-      }
-    }
-    postDeliveryHealthCheck(sessionId, conversationId, content, messageId, syncService, titleCache, conversationCache).catch(err => {
-      log(`Health check error: ${err instanceof Error ? err.message : String(err)}`);
-    });
-    return true;
-  }
+  if (repaired) return resumedDelivery("repair+resume", sessionId);
 
   // Only a genuinely-unrecoverable resume (recorded in resumeFatalReasons: missing
   // conversation, retired model, session truly gone) earns the long 5-min cooldown.
@@ -26729,6 +26750,131 @@ export async function findWorkspacePathForCursorConversation(sessionId: string):
   return workspacePath;
 }
 
+// Every watcher event is held while auth is expired or sync is paused; a held
+// event is dropped, and a paused one says so as `what` (e.g. "Cursor session").
+function transcriptEventHeld(what: string, sessionId: string): boolean {
+  if (readDaemonState()?.authExpired) return true;
+  if (!isSyncPaused()) return false;
+  log(`Sync paused, skipping ${what}: ${sessionId}`);
+  return true;
+}
+
+// The retry owner that runs `key`'s transcript passes. The first event for a
+// key creates it and fixes its pass; a later event finds it, and invalidating
+// it runs another pass. Every watcher that syncs a transcript file goes here.
+export function transcriptRetrySync(syncs: Map<string, InvalidateSync>, key: string, source: TranscriptRetrySource, pass: () => Promise<unknown>): InvalidateSync {
+  return syncs.get(key) ?? transcriptRetryOwners.create(syncs, key, source, async () => { await pass(); }, MESSAGE_SYNC_DEBOUNCE);
+}
+
+// One pass over a Claude transcript, a Cursor transcript or a Cursor database,
+// with the daemon's sync state. The live watchers, the hook path, the watchdog
+// and the unsynced sweep all run these.
+export function syncClaudeTranscript(deps: TranscriptSyncDeps, filePath: string, sessionId: string, projectPath: string, parentConversationId?: string): Promise<void> {
+  return processSessionFile(filePath, sessionId, projectPath, deps.syncService, deps.config.user_id!, deps.config.team_id, deps.conversationCache, deps.retryQueue, deps.pendingMessages, deps.titleCache, deps.updateState, parentConversationId);
+}
+export function syncCursorTranscript(deps: TranscriptSyncDeps, filePath: string, sessionId: string): Promise<void> {
+  return processCursorTranscriptFile(filePath, sessionId, deps.syncService, deps.config.user_id!, deps.config.team_id, deps.conversationCache, deps.retryQueue, deps.pendingMessages, deps.updateState);
+}
+export function syncCursorDatabase(deps: TranscriptSyncDeps, dbPath: string, sessionId: string, workspacePath: string): Promise<void> {
+  return processCursorSession(dbPath, sessionId, workspacePath, deps.syncService, deps.config.user_id!, deps.config.team_id, deps.conversationCache, deps.retryQueue, deps.pendingMessages, deps.updateState);
+}
+
+// The retry owners of a Claude transcript the live watcher or the hook path
+// admitted, and of a Cursor workspace database (the composer SQLite store).
+export function claudeTranscriptRetrySync(syncs: Map<string, InvalidateSync>, filePath: string, sessionId: string, projectPath: string, deps: TranscriptSyncDeps): InvalidateSync {
+  return transcriptRetrySync(syncs, filePath, { client: "claude", file: path.resolve(filePath), sessionId }, () => syncClaudeTranscript(deps, filePath, sessionId, projectPath));
+}
+export function cursorDatabaseRetrySync(syncs: Map<string, InvalidateSync>, event: Pick<CursorSessionEvent, "dbPath" | "sessionId" | "workspacePath">, deps: TranscriptSyncDeps): InvalidateSync {
+  return transcriptRetrySync(syncs, event.dbPath, { client: "cursorDb", file: path.resolve(event.dbPath), sessionId: event.sessionId }, () => syncCursorDatabase(deps, event.dbPath, event.sessionId, event.workspacePath));
+}
+
+// A transcript file's event: gated on auth, pause and the project's sync
+// selection (`findWorkspacePath` places the session), then synced through the
+// file's retry owner. Cursor's transcripts and every cloud agent mirror.
+export async function handleTranscriptFileEvent(
+  event: { sessionId: string; filePath: string },
+  label: string,
+  syncs: Map<string, InvalidateSync>,
+  client: string,
+  config: Config,
+  findWorkspacePath: () => Promise<string | null>,
+  pass: () => Promise<void>,
+): Promise<void> {
+  const filePath = event.filePath;
+  lastWatcherEventTime = Date.now();
+
+  if (transcriptEventHeld(`${label} transcript`, event.sessionId)) return;
+
+  const refusal = transcriptScopeRefusal(await findWorkspacePath(), config);
+  if (refusal) {
+    log(`Skipping ${label} transcript ${event.sessionId}: ${refusal}`);
+    return;
+  }
+
+  transcriptRetrySync(syncs, filePath, { client, file: path.resolve(filePath), sessionId: event.sessionId }, pass).invalidate();
+}
+
+// The Cursor transcript watcher's event. A failure (an unreadable workspace
+// database, say) is logged here: the watcher's emit has no one to throw to.
+export function handleCursorTranscriptEvent(event: CursorTranscriptEvent, syncs: Map<string, InvalidateSync>, deps: TranscriptSyncDeps): Promise<void> {
+  return handleTranscriptFileEvent(event, "Cursor", syncs, "cursor", deps.config, () => findWorkspacePathForCursorConversation(event.sessionId), () => syncCursorTranscript(deps, event.filePath, event.sessionId))
+    .catch(error => logError(`Cursor transcript event failed (${event.filePath})`, error));
+}
+
+// The watchdog's pass over a Cursor transcript the live watcher left stale,
+// under the same scope rule as the live event.
+export async function syncStaleCursorTranscript(filePath: string, deps: TranscriptSyncDeps): Promise<void> {
+  const sessionId = cursorTranscriptSessionId(filePath);
+  if (transcriptScopeRefusal(await findWorkspacePathForCursorConversation(sessionId), deps.config)) return;
+  log(`Watchdog: Syncing stale Cursor transcript ${sessionId}`);
+  await syncCursorTranscript(deps, filePath, sessionId);
+}
+
+// A Cursor workspace database's event.
+export function handleCursorDatabaseEvent(event: CursorSessionEvent, syncs: Map<string, InvalidateSync>, deps: TranscriptSyncDeps): void {
+  if (transcriptEventHeld("Cursor session", event.sessionId)) return;
+  const refusal = transcriptScopeRefusal(event.workspacePath, deps.config);
+  if (refusal) {
+    log(`Skipping Cursor session ${event.sessionId}: ${refusal}`);
+    return;
+  }
+  cursorDatabaseRetrySync(syncs, event, deps).invalidate();
+}
+
+// Register one transcript directory watcher (Codex, Gemini, OpenCode, pi, grok,
+// muse): each file's event schedules `pass` through that file's retry owner.
+// OpenCode's events name a session in its one database, so its retry source is
+// the database file.
+export function registerTranscriptDirWatcher(
+  watcher: DirEventWatcher,
+  label: string,
+  pass: (event: TranscriptDirEvent) => Promise<unknown>,
+  watchers: DirEventWatcher[],
+): void {
+  const syncs = new Map<string, InvalidateSync>();
+  watcher.on("ready", () => {
+    log(`${label} watcher ready`);
+  });
+  watcher.on("session", (event) => {
+    if (transcriptEventHeld(`${label} session`, event.sessionId)) return;
+    const file = label === "OpenCode" ? opencodeDbPath() : path.resolve(event.filePath);
+    transcriptRetrySync(syncs, event.filePath, { client: label.toLowerCase(), file, sessionId: event.sessionId }, () => pass(event)).invalidate();
+  });
+  watcher.on("error", (error: Error) => {
+    logError(`${label} watcher error`, error);
+  });
+  watchers.push(watcher);
+  watcher.start();
+}
+
+// The device heartbeat's tick, which also wakes transcript retry owners whose
+// retries are due (a pass that gave up, held by auth or a pause, or deferred).
+export const HEARTBEAT_INTERVAL_MS = 30_000;
+export function heartbeatTick(heartbeat: () => Promise<void> = sendHeartbeat): void {
+  transcriptRetryOwners.drain();
+  heartbeat().catch(() => {});
+}
+
 interface StaleCursorSession {
   sessionId: string;
   workspacePath: string;
@@ -26817,7 +26963,8 @@ export function findStaleCursorTranscriptFiles(maxAgeMs: number = 7 * 24 * 60 * 
   );
 }
 
-interface WatchdogDependencies {
+// The daemon's sync state a transcript pass runs against.
+interface TranscriptSyncDeps {
   config: Config;
   syncService: SyncService;
   conversationCache: ConversationCache;
@@ -26825,6 +26972,9 @@ interface WatchdogDependencies {
   pendingMessages: PendingMessages;
   titleCache: TitleCache;
   updateState: () => void;
+}
+
+interface WatchdogDependencies extends TranscriptSyncDeps {
   watcher: SessionWatcher;
 }
 
@@ -27275,12 +27425,9 @@ function startReconciliation(
 ): NodeJS.Timeout {
   log("Reconciliation scheduler started (runs every hour)");
 
-  // Run initial reconciliation after 5 minutes (let daemon stabilize first)
-  setTimeout(async () => {
+  const pass = async (label: string) => {
     try {
-      // Log health report
       await logHealthReport(retryQueue, config);
-
       const result = await performReconciliation(
         syncService,
         (msg, level) => log(msg, level || "info"),
@@ -27288,58 +27435,26 @@ function startReconciliation(
         50,
         config,
       );
-
-      if (result.discrepancies.length > 0) {
-        logWarn(`Reconciliation found ${result.discrepancies.length} discrepancies`);
-        // Auto-repair by resetting positions
-        const repaired = await repairDiscrepancies(result.discrepancies, log);
-        log(`Reconciliation: Reset ${repaired} sessions for re-sync`);
-        // repairDiscrepancies only rewinds positions; the byte-push is normally
-        // watcher-driven, so a silent post-sleep watcher would leave the reset files
-        // sitting unsynced. Drive the sweep directly — this is what makes reconciliation
-        // a real watcher-independent backstop rather than one that also waits on the watcher.
-        if (repaired > 0) {
-          await pushUnsyncedFilesHandler?.("Reconciliation");
-        }
-      }
+      if (result.discrepancies.length === 0) return;
+      logWarn(`Reconciliation found ${result.discrepancies.length} discrepancies`);
+      // Auto-repair by resetting positions
+      const repaired = await repairDiscrepancies(result.discrepancies, log);
+      log(`Reconciliation: Reset ${repaired} sessions for re-sync`);
+      // repairDiscrepancies only rewinds positions; the byte-push is normally
+      // watcher-driven, so a silent post-sleep watcher would leave the reset files
+      // sitting unsynced. Drive the sweep directly: this is what makes reconciliation
+      // a real watcher-independent backstop rather than one that also waits on the watcher.
+      if (repaired > 0) await pushUnsyncedFilesHandler?.("Reconciliation");
     } catch (err) {
-      logError("Initial reconciliation failed", err instanceof Error ? err : new Error(String(err)));
+      logError(`${label} failed`, err instanceof Error ? err : new Error(String(err)));
     }
-  }, 5 * 60 * 1000);
+  };
 
-  return setInterval(async () => {
-    const state = readDaemonState();
-    if (state?.authExpired) {
-      return;
-    }
-
-    try {
-      // Log health report
-      await logHealthReport(retryQueue, config);
-
-      const result = await performReconciliation(
-        syncService,
-        (msg, level) => log(msg, level || "info"),
-        conversationCache,
-        50,
-        config,
-      );
-
-      if (result.discrepancies.length > 0) {
-        logWarn(`Reconciliation found ${result.discrepancies.length} discrepancies`);
-        const repaired = await repairDiscrepancies(result.discrepancies, log);
-        log(`Reconciliation: Reset ${repaired} sessions for re-sync`);
-        // repairDiscrepancies only rewinds positions; the byte-push is normally
-        // watcher-driven, so a silent post-sleep watcher would leave the reset files
-        // sitting unsynced. Drive the sweep directly — this is what makes reconciliation
-        // a real watcher-independent backstop rather than one that also waits on the watcher.
-        if (repaired > 0) {
-          await pushUnsyncedFilesHandler?.("Reconciliation");
-        }
-      }
-    } catch (err) {
-      logError("Reconciliation failed", err instanceof Error ? err : new Error(String(err)));
-    }
+  // The first pass waits five minutes, so the daemon settles first.
+  setTimeout(() => void pass("Initial reconciliation"), 5 * 60 * 1000);
+  return setInterval(() => {
+    if (readDaemonState()?.authExpired) return;
+    void pass("Reconciliation");
   }, RECONCILIATION_INTERVAL_MS);
 }
 
@@ -27706,31 +27821,10 @@ function startWatchdog(
       const projectDirName = parts[subagentsIndex >= 2 ? subagentsIndex - 2 : parts.length - 2];
       const parentConversationId = subagentsIndex >= 1 ? deps.conversationCache[parts[subagentsIndex - 1]] : undefined;
       const projectPath = resolveTranscriptProjectPath(filePath, projectDirName);
-
-      if (deps.config.excluded_paths && isPathExcluded(projectPath, deps.config.excluded_paths)) {
-        return;
-      }
-
-      if (!isProjectAllowedToSync(projectPath, deps.config)) {
-        return;
-      }
+      if (transcriptScopeRefusal(projectPath, deps.config)) return;
 
       log(`Watchdog: Syncing stale session ${sessionId}`);
-
-      await processSessionFile(
-        filePath,
-        sessionId,
-        projectPath,
-        deps.syncService,
-        deps.config.user_id!,
-        deps.config.team_id,
-        deps.conversationCache,
-        deps.retryQueue,
-        deps.pendingMessages,
-        deps.titleCache,
-        deps.updateState,
-        parentConversationId,
-      );
+      await syncClaudeTranscript(deps, filePath, sessionId, projectPath, parentConversationId);
     }, "Watchdog worker");
 
     await runBounded(staleCodexFiles, WATCHDOG_CONCURRENCY, async (filePath) => {
@@ -27757,60 +27851,13 @@ function startWatchdog(
     }, "Watchdog worker");
 
     await runBounded(staleCursorSessions, WATCHDOG_CONCURRENCY, async (cursorSession) => {
-      if (deps.config.excluded_paths && isPathExcluded(cursorSession.workspacePath, deps.config.excluded_paths)) {
-        return;
-      }
-
-      if (!isProjectAllowedToSync(cursorSession.workspacePath, deps.config)) {
-        return;
-      }
+      if (transcriptScopeRefusal(cursorSession.workspacePath, deps.config)) return;
 
       log(`Watchdog: Syncing stale Cursor session ${cursorSession.sessionId}`);
-
-      await processCursorSession(
-        cursorSession.dbPath,
-        cursorSession.sessionId,
-        cursorSession.workspacePath,
-        deps.syncService,
-        deps.config.user_id!,
-        deps.config.team_id,
-        deps.conversationCache,
-        deps.retryQueue,
-        deps.pendingMessages,
-        deps.updateState
-      );
+      await syncCursorDatabase(deps, cursorSession.dbPath, cursorSession.sessionId, cursorSession.workspacePath);
     }, "Watchdog worker");
 
-    await runBounded(staleCursorTranscriptFiles, WATCHDOG_CONCURRENCY, async (filePath) => {
-      const sessionId = cursorTranscriptSessionId(filePath);
-      const workspacePath = await findWorkspacePathForCursorConversation(sessionId);
-
-      if (workspacePath) {
-        if (deps.config.excluded_paths && isPathExcluded(workspacePath, deps.config.excluded_paths)) {
-          return;
-        }
-
-        if (!isProjectAllowedToSync(workspacePath, deps.config)) {
-          return;
-        }
-      } else if (deps.config.sync_mode === "selected") {
-        return;
-      }
-
-      log(`Watchdog: Syncing stale Cursor transcript ${sessionId}`);
-
-      await processCursorTranscriptFile(
-        filePath,
-        sessionId,
-        deps.syncService,
-        deps.config.user_id!,
-        deps.config.team_id,
-        deps.conversationCache,
-        deps.retryQueue,
-        deps.pendingMessages,
-        deps.updateState
-      );
-    }, "Watchdog worker");
+    await runBounded(staleCursorTranscriptFiles, WATCHDOG_CONCURRENCY, (filePath) => syncStaleCursorTranscript(filePath, deps), "Watchdog worker");
 
     log(`Watchdog: Sync completed for ${totalStale} files`);
     } catch (err) {
@@ -28121,7 +28168,7 @@ async function main(): Promise<void> {
   // Register this device early + on its own interval, so device presence never
   // depends on later (potentially slow) init steps.
   void sendHeartbeat().catch(() => {});
-  setInterval(() => { transcriptRetryOwners.drain(); sendHeartbeat().catch(() => {}); }, 30_000);
+  setInterval(() => heartbeatTick(), HEARTBEAT_INTERVAL_MS);
 
   // Hourly re-assert of the settings-level transcript pin (asserted once at
   // boot already) — converges a settings.json rewritten out from under us.
@@ -28525,84 +28572,9 @@ async function main(): Promise<void> {
       pendingSyncNoProgressMs: health.noProgressMs,
     });
   };
+  const transcriptDeps: TranscriptSyncDeps = { config, syncService, conversationCache, retryQueue, pendingMessages, titleCache, updateState };
 
-  retryQueue.setExecutor(async (op: RetryOperation): Promise<boolean> => {
-    if (op.type === "createConversation") {
-      return retryCreateTranscriptConversation(op.params as unknown as CreateConversationParams, conversationCache, pendingMessages, syncService, retryQueue, updateState);
-    }
-
-    if (op.type === "updateSessionId") {
-      const params = op.params as { conversationId: string; sessionId: string; projectPath?: string; gitRoot?: string; gitRemoteUrl?: string };
-      // Superseded while queued: the session resumed under a fresh uuid (or the
-      // local mapping was pruned). Executing anyway would clobber the newer
-      // binding, so discard — the newer link enqueued its own op.
-      const preferred = findCachedSessionIdForConversation(conversationCache, params.conversationId);
-      if (preferred !== params.sessionId) {
-        log(`Retry: updateSessionId superseded for ${params.conversationId.slice(0, 12)} (queued ${params.sessionId.slice(0, 8)}, live ${preferred ? preferred.slice(0, 8) : "none"})`);
-        updateState();
-        return true;
-      }
-      await syncService.updateSessionId(params.conversationId, params.sessionId, params.projectPath, params.gitRoot, params.gitRemoteUrl);
-      log(`Retry: Rebound session ${params.sessionId.slice(0, 8)} -> conversation ${params.conversationId.slice(0, 12)}`);
-      updateState();
-      return true;
-    }
-
-    if (op.type === "addMessages") {
-      const params = op.params as {
-        conversationId: string;
-        messages: Array<{
-          messageUuid?: string;
-          role: "human" | "assistant" | "system";
-          content: string;
-          timestamp: number;
-          thinking?: string;
-          toolCalls?: any;
-          toolResults?: any;
-          images?: any;
-          subtype?: string;
-        }>;
-      };
-      // Offload any still-inline images to file storage before re-sending, then
-      // persist so the queue stops carrying raw base64 across attempts. Images
-      // are normally offloaded at enqueue (syncMessagesBatch), but when the
-      // upload mutation is failing (e.g. a backend write-path stall) the base64
-      // is kept inline and persisted. The first retry after recovery replaces it
-      // with a storageId reference once, instead of re-uploading the same bytes
-      // (and re-bloating retry-queue.json / dropped-operations.json) every time.
-      const hasInlineImage = params.messages.some(
-        (m) => Array.isArray(m.images) && m.images.some((i: any) => i?.data && !i?.storageId),
-      );
-      if (hasInlineImage) {
-        await syncService.offloadImages(params.messages as any);
-        retryQueue.persistNow();
-      }
-      await syncService.addMessages({ ...params, reconcileRemoteExisting: true });
-      updateState();
-      log(`Retry: Batch synced ${params.messages.length} messages for ${params.conversationId.slice(0, 12)}`);
-      return true;
-    }
-
-    if (op.type === "addMessage") {
-      const params = op.params as {
-        conversationId: string;
-        messageUuid?: string;
-        role: "human" | "assistant" | "system";
-        content: string;
-        timestamp: number;
-        thinking?: string;
-        toolCalls?: Array<{ id: string; name: string; input: Record<string, unknown> }>;
-        toolResults?: Array<{ toolUseId: string; content: string; isError?: boolean }>;
-        images?: Array<{ mediaType: string; data?: string; localPath?: string; storageId?: string }>;
-        subtype?: string;
-      };
-      await syncService.addMessage(params);
-      updateState();
-      return true;
-    }
-
-    return false;
-  });
+  retryQueue.setExecutor(op => executeRetryOperation(op, transcriptDeps));
 
   retryQueue.start();
 
@@ -28778,28 +28750,16 @@ async function main(): Promise<void> {
     const filePath = event.filePath;
     lastWatcherEventTime = Date.now();
 
-    const state = readDaemonState();
-    if (state?.authExpired) {
-      return;
-    }
-
-    if (isSyncPaused()) {
-      log(`Sync paused, skipping session: ${event.sessionId}`);
-      return;
-    }
+    if (transcriptEventHeld("session", event.sessionId)) return;
 
     // event.projectPath is the encoded directory name. Resolve the real path —
     // preferring the transcript's recorded cwd over the (lossy, copyable) slug —
     // so sync_mode:"selected" matching and the project label are both correct.
     const projectPath = resolveTranscriptProjectPath(filePath, event.projectPath);
 
-    if (isPathExcluded(projectPath, config.excluded_paths)) {
-      log(`Skipping sync for excluded path: ${projectPath}`);
-      return;
-    }
-
-    if (!isProjectAllowedToSync(projectPath, config)) {
-      log(`Skipping sync for non-selected project: ${projectPath}`);
+    const refusal = transcriptScopeRefusal(projectPath, config);
+    if (refusal) {
+      log(`Skipping sync for ${refusal}`);
       return;
     }
 
@@ -28841,27 +28801,7 @@ async function main(): Promise<void> {
     }
     canonicalTranscripts.set(event.sessionId, incoming);
 
-    let sync = fileSyncs.get(filePath);
-    if (!sync) {
-      sync = transcriptRetryOwners.create(fileSyncs, filePath, {client:"claude",file:path.resolve(filePath),sessionId:event.sessionId}, async () => {
-        await processSessionFile(
-          filePath,
-          event.sessionId,
-          projectPath,
-          syncService,
-          config.user_id!,
-          config.team_id,
-          conversationCache,
-          retryQueue,
-          pendingMessages,
-          titleCache,
-          updateState
-        );
-      }, MESSAGE_SYNC_DEBOUNCE);
-      fileSyncs.set(filePath, sync);
-    }
-
-    sync.invalidate();
+    claudeTranscriptRetrySync(fileSyncs, filePath, event.sessionId, projectPath, transcriptDeps).invalidate();
   };
   watcher.on("session", onClaudeTranscript);
 
@@ -29290,25 +29230,7 @@ async function main(): Promise<void> {
         const projectDirName = parts[parts.length - 2];
         const projectPath = resolveTranscriptProjectPath(transcriptPath, projectDirName);
 
-        if (isProjectAllowedToSync(projectPath, config) && !isPathExcluded(projectPath, config.excluded_paths)) {
-          const sync = transcriptRetryOwners.create(fileSyncs, transcriptPath, {client:"claude",file:path.resolve(transcriptPath),sessionId}, async () => {
-            await processSessionFile(
-              transcriptPath,
-              sessionId,
-              projectPath,
-              syncService,
-              config.user_id!,
-              config.team_id,
-              conversationCache,
-              retryQueue,
-              pendingMessages,
-              titleCache,
-              updateState
-            );
-          }, MESSAGE_SYNC_DEBOUNCE);
-          fileSyncs.set(transcriptPath, sync);
-          sync.invalidate();
-        }
+        if (!transcriptScopeRefusal(projectPath, config)) claudeTranscriptRetrySync(fileSyncs, transcriptPath, sessionId, projectPath, transcriptDeps).invalidate();
       }
     }
   });
@@ -29460,14 +29382,7 @@ async function main(): Promise<void> {
           projectDirName = parts[parts.length - 2];
         }
         const projectPath = resolveTranscriptProjectPath(filePath, projectDirName);
-
-        if (config.excluded_paths && isPathExcluded(projectPath, config.excluded_paths)) {
-          return;
-        }
-
-        if (!isProjectAllowedToSync(projectPath, config)) {
-          return;
-        }
+        if (transcriptScopeRefusal(projectPath, config)) return;
 
         let parentConversationId: string | undefined;
         if (isSubagentFile) {
@@ -29486,21 +29401,7 @@ async function main(): Promise<void> {
         }
 
         log(`${reason}: Syncing ${sessionId}${parentConversationId ? ` (subagent of ${parentConversationId})` : ""}`);
-
-        await processSessionFile(
-          filePath,
-          sessionId,
-          projectPath,
-          syncService,
-          config.user_id!,
-          config.team_id,
-          conversationCache,
-          retryQueue,
-          pendingMessages,
-          titleCache,
-          updateState,
-          parentConversationId,
-        );
+        await syncClaudeTranscript(transcriptDeps, filePath, sessionId, projectPath, parentConversationId);
       }, reason);
 
       // Resolve any remaining pending subagent parents after all files processed
@@ -29644,16 +29545,7 @@ async function main(): Promise<void> {
     logError("Startup scan failed", err instanceof Error ? err : new Error(String(err)));
   });
 
-  const watchdogInterval = startWatchdog({
-    config,
-    syncService,
-    conversationCache,
-    retryQueue,
-    pendingMessages,
-    titleCache,
-    updateState,
-    watcher,
-  });
+  const watchdogInterval = startWatchdog({ ...transcriptDeps, watcher });
 
   const versionCheckInterval = startVersionChecker(syncService);
   const reconciliationInterval = startReconciliation(syncService, retryQueue, conversationCache, config);
@@ -29666,50 +29558,7 @@ async function main(): Promise<void> {
     log("Cursor watcher ready");
   });
 
-  cursorWatcher.on("session", (event: CursorSessionEvent) => {
-    const dbPath = event.dbPath;
-
-    const state = readDaemonState();
-    if (state?.authExpired) {
-      return;
-    }
-
-    if (isSyncPaused()) {
-      log(`Sync paused, skipping Cursor session: ${event.sessionId}`);
-      return;
-    }
-
-    if (isPathExcluded(event.workspacePath, config.excluded_paths)) {
-      log(`Skipping sync for excluded path: ${event.workspacePath}`);
-      return;
-    }
-
-    if (!isProjectAllowedToSync(event.workspacePath, config)) {
-      log(`Skipping sync for non-selected project: ${event.workspacePath}`);
-      return;
-    }
-
-    let sync = cursorSyncs.get(dbPath);
-    if (!sync) {
-      sync = transcriptRetryOwners.create(cursorSyncs, dbPath, {client:"cursorDb",file:path.resolve(dbPath),sessionId:event.sessionId}, async () => {
-        await processCursorSession(
-          dbPath,
-          event.sessionId,
-          event.workspacePath,
-          syncService,
-          config.user_id!,
-          config.team_id,
-          conversationCache,
-          retryQueue,
-          pendingMessages,
-          updateState
-        );
-      }, MESSAGE_SYNC_DEBOUNCE);
-      cursorSyncs.set(dbPath, sync);
-    }
-
-    sync.invalidate();
-  });
+  cursorWatcher.on("session", (event: CursorSessionEvent) => handleCursorDatabaseEvent(event, cursorSyncs, transcriptDeps));
 
   cursorWatcher.on("error", (error: Error) => {
     logError("Cursor watcher error", error);
@@ -29757,67 +29606,8 @@ async function main(): Promise<void> {
   });
 
   cursorTranscriptWatcher.on("session", (event: CursorTranscriptEvent) => {
-    void handleTranscriptFileEvent(event, "Cursor", cursorTranscriptSyncs, "cursor", () => findWorkspacePathForCursorConversation(event.sessionId), () => processCursorTranscriptFile(
-      event.filePath,
-      event.sessionId,
-      syncService,
-      config.user_id!,
-      config.team_id,
-      conversationCache,
-      retryQueue,
-      pendingMessages,
-      updateState
-    )).catch(error => logError(`Cursor transcript event failed (${event.filePath})`, error));
+    void handleCursorTranscriptEvent(event, cursorTranscriptSyncs, transcriptDeps);
   });
-
-  // A transcript file's event: gated on auth, pause and the project's sync
-  // selection (`workspacePath` places the session), then synced through the
-  // file's retry owner. Cursor's transcripts and every cloud agent mirror.
-  async function handleTranscriptFileEvent(
-    event: { sessionId: string; filePath: string },
-    label: string,
-    syncs: Map<string, InvalidateSync>,
-    client: string,
-    findWorkspacePath: () => Promise<string | null>,
-    process: () => Promise<void>,
-  ): Promise<void> {
-    const filePath = event.filePath;
-    lastWatcherEventTime = Date.now();
-
-    const state = readDaemonState();
-    if (state?.authExpired) {
-      return;
-    }
-
-    if (isSyncPaused()) {
-      log(`Sync paused, skipping ${label} transcript: ${event.sessionId}`);
-      return;
-    }
-
-    const workspacePath = await findWorkspacePath();
-    if (workspacePath) {
-      if (isPathExcluded(workspacePath, config.excluded_paths)) {
-        log(`Skipping sync for excluded path: ${workspacePath}`);
-        return;
-      }
-
-      if (!isProjectAllowedToSync(workspacePath, config)) {
-        log(`Skipping sync for non-selected project: ${workspacePath}`);
-        return;
-      }
-    } else if (config.sync_mode === "selected") {
-      log(`Skipping ${label} transcript with unknown workspace path: ${event.sessionId}`);
-      return;
-    }
-
-    let sync = syncs.get(filePath);
-    if (!sync) {
-      sync = transcriptRetryOwners.create(syncs, filePath, {client,file:path.resolve(filePath),sessionId:event.sessionId}, process, MESSAGE_SYNC_DEBOUNCE);
-      syncs.set(filePath, sync);
-    }
-
-    sync.invalidate();
-  }
 
   cursorTranscriptWatcher.on("error", (error: Error) => {
     logError("Cursor transcript watcher error", error);
@@ -29869,7 +29659,7 @@ async function main(): Promise<void> {
     onTranscript: (spec, event) => {
       const client = spec.agentType !== "claude" && (INGEST_CLIENTS as readonly string[]).includes(spec.agentType) ? spec.agentType as CloudMirrorSource["mirror"] : null;
       if (!client) { log(`${cloudAgentLogTag({ spec })} no ingest for agent type ${spec.agentType}: its mirror is written but never synced`); return; }
-      void handleTranscriptFileEvent(event, spec.label, cloudMirrorSyncs, client, async () => (await readMetaJson(path.dirname(event.filePath)))?.cwd ?? null, async () => { await processTranscriptDeltaSession(
+      void handleTranscriptFileEvent(event, spec.label, cloudMirrorSyncs, client, config, async () => (await readMetaJson(path.dirname(event.filePath)))?.cwd ?? null, async () => { await processTranscriptDeltaSession(
         { mirror: client },
         event.filePath,
         event.sessionId,
@@ -30234,51 +30024,17 @@ async function main(): Promise<void> {
     log("[fenced-execution] disabled (set CODECAST_FENCED_EXECUTION_V1=1 for local rollout)");
   }
 
-  // One registration path for the JSONL-dir CLI watchers (codex, gemini), which now
-  // share the generic TranscriptDirWatcher. Claude's sessionWatcher and cursor's
-  // SQLite watcher are different kinds and register on their own paths. Each watcher
-  // debounces per-file syncs through InvalidateSync; the first event for a file fixes
-  // the sync closure (sessionId/projectHash are derived from the path, so later events
-  // for the same file carry identical values — same as before the collapse).
+  // The JSONL-dir CLI watchers (codex, gemini, pi, grok, muse) and OpenCode's
+  // store register through registerTranscriptDirWatcher. Claude's sessionWatcher
+  // and Cursor's SQLite watcher are different kinds and register on their own
+  // paths. The first event for a file fixes its pass (sessionId/projectHash are
+  // derived from the path, so later events for the same file carry identical values).
   const dirEventWatchers: DirEventWatcher[] = [];
   const registerJsonlDirWatcher = (
     watcher: DirEventWatcher,
     label: string,
-    process: (event: TranscriptDirEvent) => Promise<unknown>,
-  ): void => {
-    const syncs = new Map<string, InvalidateSync>();
-    watcher.on("ready", () => {
-      log(`${label} watcher ready`);
-    });
-    watcher.on("session", (event) => {
-      const filePath = event.filePath;
-
-      const state = readDaemonState();
-      if (state?.authExpired) {
-        return;
-      }
-
-      if (isSyncPaused()) {
-        log(`Sync paused, skipping ${label} session: ${event.sessionId}`);
-        return;
-      }
-
-      let sync = syncs.get(filePath);
-      if (!sync) {
-        sync = transcriptRetryOwners.create(syncs, filePath, {client:label.toLowerCase(),file:label === "OpenCode" ? opencodeDbPath() : path.resolve(filePath),sessionId:event.sessionId}, async () => {
-          await process(event);
-        }, MESSAGE_SYNC_DEBOUNCE);
-        syncs.set(filePath, sync);
-      }
-
-      sync.invalidate();
-    });
-    watcher.on("error", (error: Error) => {
-      logError(`${label} watcher error`, error);
-    });
-    dirEventWatchers.push(watcher);
-    watcher.start();
-  };
+    pass: (event: TranscriptDirEvent) => Promise<unknown>,
+  ): void => registerTranscriptDirWatcher(watcher, label, pass, dirEventWatchers);
 
   registerJsonlDirWatcher(
     new TranscriptDirWatcher(transcriptDirWatcherConfig("codex")),
@@ -30652,9 +30408,10 @@ async function main(): Promise<void> {
           } else if (err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(errMsg)) {
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} awaiting terminal input confirmation: ${errMsg}`);
             scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content, "waiting for terminal input confirmation");
-          } else if (err instanceof UndeliverableMessageError) {
+          } else if (err instanceof UndeliverableMessageError || err instanceof CloudAgentUnsentError) {
             // Terminal by construction: cancel (a status the server never
-            // re-pends) instead of burning the retry ladder.
+            // re-pends) instead of burning the retry ladder. A cloud agent
+            // that may have started from it is never sent it a second time.
             logDelivery(`CANCELLED: msg=${msg._id.slice(0, 8)} can never be delivered: ${errMsg}`);
             syncService.cancelPendingMessage(msg._id).catch(logConvexFailure);
           } else {

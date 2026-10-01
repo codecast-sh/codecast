@@ -1,4 +1,4 @@
-import { cloneElement, isValidElement, useMemo, useRef, useState, type ReactNode } from "react";
+import { cloneElement, isValidElement, useContext, useMemo, useRef, useState, type ReactNode } from "react";
 import { X, Keyboard } from "lucide-react";
 import { formatShortcutParts, formatAcceleratorParts, getShortcutsForAction, getShortcutsByContext } from "../shortcuts";
 import type { ShortcutAction } from "../shortcuts";
@@ -8,6 +8,7 @@ import { useTrackedStore } from "../store/inboxStore";
 import { useEventListener } from "../hooks/useEventListener";
 import { DESKTOP_SHORTCUTS, getDesktopShortcutConfig } from "../lib/desktop";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
+import { HoverCardsOff } from "../lib/hoverCardsOff";
 import { isTriageBarCompact, toggleTriageBarCompact } from "./triage/graduation";
 
 import { useMountEffect } from "../hooks/useMountEffect";
@@ -236,6 +237,7 @@ export function ShortcutTooltip({ label, action, hint, side = "bottom", align, p
   // user never hovers. Until the first pointer/focus touches the trigger,
   // render the child alone; then mount Radix for good and drive the FIRST
   // show ourselves (Radix missed the pointerenter that armed us).
+  const hoverOff = useContext(HoverCardsOff);
   const [armed, setArmed] = useState(eager);
   const [open, setOpen] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -267,7 +269,8 @@ export function ShortcutTooltip({ label, action, hint, side = "bottom", align, p
     };
   }, [open]);
 
-  if (!isValidElement(children)) {
+  // A surface that opens nothing on hover (HoverCardsOff) never arms: no tooltip, no window listeners.
+  if (!isValidElement(children) || hoverOff) {
     return <>{children}</>;
   }
 

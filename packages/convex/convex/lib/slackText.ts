@@ -6,6 +6,7 @@
 // typed may turn into a codecast mention of somebody they did not name.
 
 import { emojiToShortcode, replaceShortcodes, shortcodeToEmoji } from "@codecast/shared/chat";
+import { parseLinkPreviewUrl } from "@codecast/shared/entities";
 
 export { emojiToShortcode, replaceShortcodes, shortcodeToEmoji };
 
@@ -49,6 +50,9 @@ export type SlackInboundResolver = {
   user: (id: string) => { handle?: string | null; name?: string | null } | null;
   channel?: (id: string) => string | null;
   usergroup?: (id: string) => string | null;
+  /** A shared Slack message (by its channel and ts) to the chat permalink of
+   *  its mirrored copy, so a quote opens here rather than in Slack. */
+  message?: (channel: string, ts: string) => string | null;
 };
 
 // Word-boundary emphasis, the way Slack's own parser decides it: the marker
@@ -148,8 +152,71 @@ export type SlackAttachment = {
   thumb_url?: string;
   fields?: Array<{ title?: string; value?: string; short?: boolean }>;
   from_url?: string;
+  original_url?: string;
   service_name?: string;
+  // A shared (forwarded) Slack message or a pasted message link's unfurl.
+  is_share?: boolean;
+  is_msg_unfurl?: boolean;
+  author_id?: string;
+  channel_id?: string;
+  ts?: string;
 };
+
+/** Whether an attachment is another Slack message quoted into this one. */
+export function isSharedMessage(a: SlackAttachment | undefined): boolean {
+  return !!a && (!!a.is_share || !!a.is_msg_unfurl) && !!a.ts;
+}
+
+/** Every Slack user id a line names, its quoted messages included. */
+export function slackUserIdsIn(text: string, attachments?: SlackAttachment[]): string[] {
+  const ids = new Set<string>();
+  const scan = (t: string | undefined) => {
+    for (const m of (t ?? "").matchAll(/<@([A-Z0-9]+)(?:\|[^>]*)?>/g)) ids.add(m[1]);
+  };
+  scan(text);
+  for (const a of attachments ?? []) {
+    if (!a || typeof a !== "object") continue;
+    scan(a.text);
+    scan(a.pretext);
+    if (isSharedMessage(a) && a.author_id) ids.add(a.author_id);
+  }
+  return [...ids];
+}
+
+// A quoted message is a blockquote headed by a line holding only a link named
+// for its author: the chat permalink of the mirrored copy when there is one,
+// else Slack's. The chat renderer draws that shape as a quote card; every
+// other reader (CLI, search, agents) still reads who said what.
+function sharedMessageMarkdown(a: SlackAttachment, resolve: SlackInboundResolver): string[] {
+  const known = a.author_id ? resolve.user(a.author_id) : null;
+  const name = (a.author_name || a.author_subname || known?.name || "Someone").replace(/[[\]]/g, "");
+  const href = (a.channel_id && a.ts ? resolve.message?.(a.channel_id, a.ts) : null) || a.from_url || a.original_url;
+  const lines = [href ? `[${name}](${href})` : `**${name}**`];
+  const body = a.text ? slackToMarkdown(a.text, resolve) : "";
+  if (body) lines.push(body);
+  if (a.image_url) lines.push(`![](${a.image_url})`);
+  return lines;
+}
+
+// A bot card's lines: pretext, author and title, text, fields, image, footer.
+function attachmentCardLines(a: SlackAttachment, resolve: SlackInboundResolver): string[] {
+  const lines: string[] = [];
+  if (a.pretext) lines.push(slackToMarkdown(a.pretext, resolve));
+  const head: string[] = [];
+  if (a.service_name || a.author_name) head.push(`*${a.author_name || a.service_name}*`);
+  if (a.title) head.push(a.title_link ? `**[${a.title}](${a.title_link})**` : `**${a.title}**`);
+  if (head.length > 0) lines.push(head.join(" · "));
+  if (a.text) lines.push(slackToMarkdown(a.text, resolve));
+  for (const f of a.fields ?? []) {
+    if (!f) continue;
+    const t = f.title ? `**${f.title}** ` : "";
+    lines.push(`${t}${slackToMarkdown(f.value ?? "", resolve)}`.trim());
+  }
+  if (a.image_url) lines.push(`![](${a.image_url})`);
+  if (a.footer) lines.push(`*${slackToMarkdown(a.footer, resolve)}*`);
+  if (lines.length === 0 && a.fallback) lines.push(slackToMarkdown(a.fallback, resolve));
+  return lines;
+}
 
 export function slackAttachmentsToMarkdown(
   attachments: SlackAttachment[] | undefined,
@@ -159,21 +226,7 @@ export function slackAttachmentsToMarkdown(
   const cards: string[] = [];
   for (const a of attachments) {
     if (!a || typeof a !== "object") continue;
-    const lines: string[] = [];
-    if (a.pretext) lines.push(slackToMarkdown(a.pretext, resolve));
-    const head: string[] = [];
-    if (a.service_name || a.author_name) head.push(`*${a.author_name || a.service_name}*`);
-    if (a.title) head.push(a.title_link ? `**[${a.title}](${a.title_link})**` : `**${a.title}**`);
-    if (head.length > 0) lines.push(head.join(" · "));
-    if (a.text) lines.push(slackToMarkdown(a.text, resolve));
-    for (const f of a.fields ?? []) {
-      if (!f) continue;
-      const t = f.title ? `**${f.title}** ` : "";
-      lines.push(`${t}${slackToMarkdown(f.value ?? "", resolve)}`.trim());
-    }
-    if (a.image_url) lines.push(`![](${a.image_url})`);
-    if (a.footer) lines.push(`*${slackToMarkdown(a.footer, resolve)}*`);
-    if (lines.length === 0 && a.fallback) lines.push(slackToMarkdown(a.fallback, resolve));
+    const lines = isSharedMessage(a) ? sharedMessageMarkdown(a, resolve) : attachmentCardLines(a, resolve);
     if (lines.length === 0) continue;
     cards.push(lines.map((l) => l.split("\n").map((x) => `> ${x}`).join("\n")).join("\n>\n"));
   }
@@ -192,6 +245,18 @@ export type SlackOutboundResolver = {
 
 const HANDLE_RE = /(^|[^\w/])@([A-Za-z0-9][A-Za-z0-9_-]{0,38})\b/g;
 const ENTITY_ID_RE = /(^|[^\w-])((?:ct|pl|tr)-\d+)\b/g;
+
+/** Whether a message carries a web link standing alone on its line, the one
+ *  shape codecast draws as a preview card. Slack is asked to unfurl only
+ *  then, so the mirror shows the same preview and a line of object pills
+ *  (which travel as codecast.sh links) does not unfurl into a stack of cards. */
+export function hasStandalonePreviewLink(md: string): boolean {
+  return md.split("\n").some((line) => {
+    const t = line.trim();
+    const href = /^<?(https?:\/\/\S+?)>?$/.exec(t)?.[1] ?? /^\[[^\]]*\]\((https?:\/\/[^)\s]+)\)$/.exec(t)?.[1];
+    return !!parseLinkPreviewUrl(href);
+  });
+}
 
 /** Convert codecast markdown to Slack mrkdwn. */
 export function markdownToSlack(md: string, resolve: SlackOutboundResolver): string {

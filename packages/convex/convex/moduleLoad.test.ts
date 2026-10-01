@@ -13,12 +13,15 @@ import { join } from "node:path";
 // Whether a cycle throws depends on which module of it loads first, and
 // Convex bundles each module as its own entry. So each entry loads in its own
 // process: importing them all into one process lets an earlier entry warm the
-// module cache, and a later entry that would throw on its own passes (the
-// repos.ts -> ... -> gitActivity.ts -> repos.ts cycle hid that way).
+// module cache, and a later entry that would throw on its own passes.
+//
+// The entries are every module Convex registers, subdirectories included
+// (lib/, emails/, fileChanges/): the set _generated/api.d.ts lists.
 const DIR = join(import.meta.dir);
 const PKG = join(DIR, "..");
-const entries = readdirSync(DIR)
-  .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts") && !f.endsWith(".d.ts") && f !== "schema.ts");
+const entries = (readdirSync(DIR, { recursive: true }) as string[])
+  .filter((f) => f.endsWith(".ts") && !f.startsWith("_generated") && !/\.(test|d)\.ts$/.test(f) && f !== "schema.ts")
+  .sort();
 
 type Load = { code: number | null; stderr: string };
 
@@ -33,24 +36,26 @@ async function loadAlone(file: string): Promise<Load> {
   return { code, stderr };
 }
 
-// A small pool: one child per entry, a few at a time.
-function pooled(files: string[], width: number): Map<string, Promise<Load>> {
-  const queue = [...files];
-  const results = new Map<string, Promise<Load>>();
-  const resolvers = new Map<string, (load: Load) => void>();
-  for (const f of files) results.set(f, new Promise((resolve) => resolvers.set(f, resolve)));
-  const worker = async () => {
-    for (let f = queue.shift(); f !== undefined; f = queue.shift()) {
-      resolvers.get(f)!(await loadAlone(f).catch((e) => ({ code: -1, stderr: String(e) })));
+// One child per entry, at most `width` at a time, started in list order.
+function limit(width: number) {
+  let active = 0;
+  const waiting: Array<() => void> = [];
+  return async <T>(run: () => Promise<T>): Promise<T> => {
+    if (active >= width) await new Promise<void>((go) => waiting.push(go));
+    active++;
+    try {
+      return await run();
+    } finally {
+      active--;
+      waiting.shift()?.();
     }
   };
-  for (let i = 0; i < width; i++) void worker();
-  return results;
 }
 
 let loads: Map<string, Promise<Load>>;
 beforeAll(() => {
-  loads = pooled(entries, Math.max(2, Math.min(8, availableParallelism())));
+  const slot = limit(Math.max(2, Math.min(8, availableParallelism())));
+  loads = new Map(entries.map((f) => [f, slot(() => loadAlone(f).catch((e) => ({ code: -1, stderr: String(e) })))]));
 });
 
 describe("every entry module loads on its own", () => {

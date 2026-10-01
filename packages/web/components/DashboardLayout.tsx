@@ -1,3 +1,4 @@
+import { SeatKillDialog } from "./org/SeatKillDialog";
 import { ReactNode, useState, useCallback, useRef, useMemo, memo, createContext, useContext, lazy, Suspense } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useDragGatedLayoutPersist } from "../hooks/useDragGatedLayoutPersist";
@@ -332,7 +333,7 @@ function DashboardSyncEffects() {
  *  badge, the call surfaces. */
 function WindowOnlyEffects() {
   useChatToasts();
-  return <Suspense fallback={null}><CallSyncEffects /></Suspense>;
+  return <><Suspense fallback={null}><CallSyncEffects /></Suspense><SeatKillDialog /></>;
 }
 
 // The window's OS title: the surface, then the specific thing it shows,

@@ -94,7 +94,7 @@ import { instancesFromMatches, planActivation, skipDeadHit, stepIndex, walkSearc
 import { FilePathContext } from "../lib/filePathLinks";
 import { WorktreesProvider } from "./worktree/WorktreesContext";
 import { SessionWorktreePills } from "./worktree/WorktreePill";
-import { isStickyEligible, pickStickyFallbackFromLoaded, stickyPromptContent, mergeNavigatorSources, buildNavigatorRows, resolveStickyPrompt, resolveNavigatorCurrentId, topVisibleIndexFromRects } from "../lib/messageNavigator";
+import { isStickyEligible, pickStickyFallback, stickyPromptContent, mergeNavigatorSources, buildNavigatorRows, resolveStickyPrompt, resolveNavigatorCurrentId, topVisibleIndexFromRects } from "../lib/messageNavigator";
 import { isToolResultCarrier, foldNudgeRuns, nudgeLabel, type NudgeRow, type ChatWakePrompt } from "./sessionMessage";
 import { CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
 import { composerPresenceEnabled } from "../lib/composerPresence";
@@ -1242,7 +1242,7 @@ const ConversationViewInner = (
   }, [handleForkFromMessage, conversation, effectiveIsOwner, convCommand, convexConvId]);
   const { userMsgKindMap, turnAggregates, openAsk, commandExpansionMap, nudgeRuns, isThinking, isWaitingForResponse } = useTimelineTurns({ messages, conversation, hasMoreAbove, timeline, messageAuthors, hasMoreBelow, foldWorkingTurns });
   const { sessionSkills, sessionFilePaths, mentionItemsRef, handleMentionQuery } = useSessionMentions({ currentUser, conversation, managedSession });
-  const { serverUserMessages, stickyUserMsgIndices, navigatorTimelineIndices, timelineMessageIds, serverStickyFallback } = useNavigatorIndex({ cachedUserMessages, messages, timeline, userMsgKindMap, hasMoreAbove });
+  const { serverUserMessages, stickyUserMsgIndices, navigatorTimelineIndices, timelineMessageIds, loadedMessageIds } = useNavigatorIndex({ cachedUserMessages, messages, timeline, userMsgKindMap });
 
   const [activeStickyMsg, setActiveStickyMsgRaw] = useState<{ index: number; content: string; id: string; fromUserId?: string } | null>(null);
   const [navigatorCurrentId, setNavigatorCurrentId] = useState<string | null>(null);
@@ -2133,7 +2133,7 @@ const ConversationViewInner = (
     let ticking = false;
     const check = () => {
       ticking = false;
-      if ((window as any).__STICKY_DEBUG) { (((window as any).__STICKY_TOP) ??= []).push({ scrollTop: el.scrollTop, headerHeight, stickyDisabled, jumpPending: !!jumpPendingRef.current, idxCount: stickyUserMsgIndices.length, serverFb: serverStickyFallback?.id ?? null, svrLen: (serverUserMessages?.length ?? -1), hasMoreAbove: paginationPropsRef.current.hasMoreAbove, fb: !!fallbackStickyContent }); }
+      if ((window as any).__STICKY_DEBUG) { (((window as any).__STICKY_TOP) ??= []).push({ scrollTop: el.scrollTop, headerHeight, stickyDisabled, jumpPending: !!jumpPendingRef.current, idxCount: stickyUserMsgIndices.length, svrLen: (serverUserMessages?.length ?? -1), hasMoreAbove: paginationPropsRef.current.hasMoreAbove, fb: !!fallbackStickyContent }); }
       // Frozen during a pending jump — the sticky header must not flip to the
       // target edge before the view actually moves there.
       if (jumpPendingRef.current) return;
@@ -2159,17 +2159,27 @@ const ConversationViewInner = (
           st.setViewAnchor(a ? { conversationId: String(conversation._id), ...a } : null);
         }
       }
-      const navId = resolveNavigatorCurrentId(
+      // A prompt the window does not hold wins over the one it resolved when
+      // it is later and still above the top visible row (pickStickyFallback).
+      const topTs = timeline[Math.max(topVisibleIndex, 0)]?.timestamp ?? Infinity;
+      const laterUnloaded = (resolvedIndex: number | undefined) => pickStickyFallback(
+        serverUserMessages, loadedMessageIds, topTs,
+        resolvedIndex === undefined ? -Infinity : timeline[resolvedIndex]?.timestamp ?? -Infinity,
+      );
+      const navAbove = laterUnloaded(resolveStickyPrompt(navigatorTimelineIndices, topVisibleIndex, new Set())?.index);
+      const navId = navAbove?.id ?? resolveNavigatorCurrentId(
         navigatorTimelineIndices,
         timelineMessageIds,
         topVisibleIndex,
-        serverStickyFallback?.id ?? null,
+        null,
       );
       setNavigatorCurrentId(navId);
 
       const bannerOff = stickyDisabled && localStorage.getItem('__STICKY_FORCE') !== '1';
-      const stickyResolved = resolveStickyPrompt(stickyUserMsgIndices, topVisibleIndex, visible);
-      if ((window as any).__STICKY_DEBUG) { (((window as any).__STICKY_LOG) ??= []).push({ scrollTop, headerHeight, stickyDisabled, idxCount: stickyUserMsgIndices.length, topVisibleIndex, navId, stickyIdx: stickyResolved?.index ?? null, serverFb: serverStickyFallback?.id ?? null, fb: !!fallbackStickyContent, clientHeight: el.clientHeight, hasMoreAbove: paginationPropsRef.current.hasMoreAbove, svrLen: (serverUserMessages?.length ?? -1) }); }
+      const stickyInWindow = resolveStickyPrompt(stickyUserMsgIndices, topVisibleIndex, visible);
+      const stickyAbove = laterUnloaded(stickyInWindow?.index);
+      const stickyResolved = stickyAbove ? null : stickyInWindow;
+      if ((window as any).__STICKY_DEBUG) { (((window as any).__STICKY_LOG) ??= []).push({ scrollTop, headerHeight, stickyDisabled, idxCount: stickyUserMsgIndices.length, topVisibleIndex, navId, stickyIdx: stickyResolved?.index ?? null, fb: !!fallbackStickyContent, clientHeight: el.clientHeight, hasMoreAbove: paginationPropsRef.current.hasMoreAbove, svrLen: (serverUserMessages?.length ?? -1) }); }
 
       if (bannerOff) {
         setActiveStickyMsg(null);
@@ -2225,11 +2235,11 @@ const ConversationViewInner = (
         }
         setActiveStickyMsg({ index: stickyResolved.index, content: msg.content!, id: msgId, fromUserId: msg.from_user_id });
         setStickyMsgVisible(!stickyResolved.hidden && !inGap && !hideForNextMsg);
-      } else if (serverStickyFallback) {
-        prevStickyMsgIdRef.current = serverStickyFallback.id;
+      } else if (stickyAbove) {
+        prevStickyMsgIdRef.current = stickyAbove.id;
         prevStickyIdxRef.current = null;
         stickyGapRef.current = null;
-        setActiveStickyMsg({ index: -1, content: serverStickyFallback.content, id: serverStickyFallback.id, fromUserId: serverStickyFallback.fromUserId });
+        setActiveStickyMsg({ index: -1, content: stickyAbove.content, id: stickyAbove.id, fromUserId: stickyAbove.fromUserId });
         setStickyMsgVisible(true);
       } else if (fallbackStickyContent && scrollTop > el.clientHeight) {
         prevStickyMsgIdRef.current = '__fallback__';
@@ -2249,7 +2259,7 @@ const ConversationViewInner = (
     const onScroll = () => { if (!ticking) { ticking = true; requestAnimationFrame(check); } };
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => el.removeEventListener('scroll', onScroll);
-  }, [stickyUserMsgIndices, navigatorTimelineIndices, timelineMessageIds, virtualizer, timeline, fallbackStickyContent, serverStickyFallback, headerHeight, stickyDisabled]);
+  }, [stickyUserMsgIndices, navigatorTimelineIndices, timelineMessageIds, virtualizer, timeline, fallbackStickyContent, serverUserMessages, loadedMessageIds, headerHeight, stickyDisabled]);
 
   const scrollToMessageById = useCallback((messageId: string) => {
     // A folded working turn opens first, then the density's own group: walk

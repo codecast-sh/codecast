@@ -65,6 +65,26 @@ export function conversationMatchesAllTerms(
   return contentMatchesSearch(allContent, terms);
 }
 
+// Pool messages grouped by conversation, keeping each message that holds any
+// term so a match across several messages still counts and every snippet is
+// at hand. rankConversationsByCoverage then decides which groups qualify.
+export function groupMessagesByConversation<M extends { content?: string | null; role: string; conversation_id: { toString(): string } }>(
+  pool: M[],
+  terms: ParsedTerms,
+  userOnly = false,
+): Map<string, M[]> {
+  const groups = new Map<string, M[]>();
+  for (const msg of pool) {
+    if (userOnly && msg.role !== "user") continue;
+    if (!contentMatchesAnyTerm(msg.content || "", terms)) continue;
+    const convId = msg.conversation_id.toString();
+    const list = groups.get(convId);
+    if (list) list.push(msg);
+    else groups.set(convId, [msg]);
+  }
+  return groups;
+}
+
 export type RankedConversation<M> = { convId: string; messages: M[]; coverage: number };
 
 // Replaces the strict all-terms AND for CLI search surfaces. Quoted phrases stay

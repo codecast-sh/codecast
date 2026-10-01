@@ -35,6 +35,7 @@ import { Popover, PopoverAnchor, PopoverContent } from "./ui/popover";
 import { Command, CommandInput, CommandList, CommandEmpty, CommandItem } from "./ui/command";
 import { Switch } from "./ui/switch";
 import { KeyCap } from "./KeyboardShortcutsHelp";
+import { isPerson } from "@codecast/shared/team/memberKind";
 
 export type { OwnersApi, HandoffInfo };
 
@@ -104,7 +105,7 @@ export function OwnerMenuItems({
     return sessionFitsARole((s.sessions as any)?.[live] ?? (s.conversations as any)?.[conversationId], Date.now());
   });
   const selectable = pickRoster(serverRoster, owners.selectable).filter(
-    (m: any) => m && !m.is_bot,
+    isPerson,
   );
   // Optional handoff note, sent along with the NEXT assignment made from this
   // menu. It rides the notification (push + inbox row) and the assignee's
@@ -179,7 +180,7 @@ export function OwnerMenuItems({
       <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">
         Owners · whose inbox
       </DropdownMenuLabel>
-      {currentUser && !currentUser.is_bot && !ownerIds.has(currentUser._id) && (
+      {isPerson(currentUser) && !ownerIds.has(currentUser._id) && (
         <DropdownMenuItem onSelect={(e) => { e.preventDefault(); toggle(currentUser._id); }} className="text-xs gap-2 text-sol-cyan">
           <UserCheck className="w-3.5 h-3.5 shrink-0" />
           <span>Take ownership<span className="block text-[10px] text-sol-text-dim">Add to your inbox; keep existing owners</span></span>
@@ -360,7 +361,7 @@ export function HandoffPicker({
   const serverRoster = useOwnerCandidates(conversationId, currentUser, open);
   const meId = currentUser?._id?.toString?.();
   const people = pickRoster(serverRoster, owners.selectable).filter(
-    (m: any) => m && !m.is_bot && m._id !== meId,
+    (m: any) => isPerson(m) && m._id !== meId,
   );
   const [keepSelf, setKeepSelf] = useState(false);
   const anchorRef = useRef<HTMLSpanElement>(null);

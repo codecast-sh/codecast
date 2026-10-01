@@ -2145,7 +2145,13 @@ div.ch-reaction-tip {
 
 /* ── People: DM header, members popover, teammate picker ─────────────────── */
 
-.ch-head-dm { min-width: 0; }
+/* Centered, not the name row's baseline: the faces carry no text, so on a
+ * baseline their bottom edge sits on the name's baseline and they ride high. */
+.ch-head-dm {
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
 
 .ch-dm-faces {
   display: inline-flex;
@@ -2252,6 +2258,152 @@ div.ch-reaction-tip {
   color: var(--sol-text);
   background: color-mix(in srgb, var(--sol-text) 5%, transparent);
 }
+
+/* ── Roster: one row per person, one mark per side ─────────────────────────
+ * The marks sit in fixed-width columns so "here" and the Slack mark line up
+ * down the list and under their column labels. */
+.ch-roster-pop-wide { width: 312px; }
+
+.ch-roster-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.ch-roster-head .ch-people-title { padding-right: 0; }
+.ch-roster-count {
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--sol-text-muted);
+}
+.ch-roster-cols {
+  display: inline-flex;
+  gap: 4px;
+  padding: 0 6px 8px 0;
+}
+.ch-roster-col {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  color: var(--sol-text-dim);
+}
+
+.ch-roster-note {
+  margin: -2px 6px 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--sol-text-dim);
+}
+
+.ch-roster-search { margin: 0 0 6px; }
+
+.ch-roster-row { gap: 4px; }
+.ch-roster-row > :first-child { margin-right: 4px; }
+.ch-roster-row .ch-people-name { margin-right: 4px; }
+
+.ch-roster-mark {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 20px;
+  border-radius: 5px;
+  font-size: 11px;
+  color: var(--sol-text-dim);
+}
+.ch-roster-mark-in {
+  color: var(--sol-cyan);
+  background: color-mix(in srgb, var(--sol-cyan) 12%, transparent);
+}
+.ch-roster-mark-slack.ch-roster-mark-in {
+  color: var(--sol-magenta);
+  background: color-mix(in srgb, var(--sol-magenta) 12%, transparent);
+}
+.ch-roster-mark-team {
+  color: color-mix(in srgb, var(--sol-cyan) 55%, var(--sol-text-dim));
+}
+.ch-roster-mark-none { opacity: 0.45; }
+.ch-roster-mark-out {
+  border: 1px dashed color-mix(in srgb, var(--sol-border) 80%, transparent);
+}
+.ch-roster-mark-btn {
+  cursor: pointer;
+  transition: color 120ms, background 120ms, border-color 120ms;
+}
+.ch-roster-mark-btn.ch-roster-mark-out:hover {
+  color: var(--sol-text);
+  border-color: var(--sol-cyan);
+  border-style: solid;
+}
+.ch-roster-mark-slack.ch-roster-mark-btn.ch-roster-mark-out:hover { border-color: var(--sol-magenta); }
+
+/* An "in" mark that can be undone becomes its own undo on hover. */
+.ch-roster-mark-off { display: none; }
+.ch-roster-mark-btn.ch-roster-mark-in:hover {
+  color: var(--sol-red);
+  background: color-mix(in srgb, var(--sol-red) 12%, transparent);
+}
+.ch-roster-mark-btn.ch-roster-mark-in:hover .ch-roster-mark-on { display: none; }
+.ch-roster-mark-btn.ch-roster-mark-in:hover .ch-roster-mark-off { display: inline; }
+
+.ch-roster-divider {
+  margin: 8px 6px 2px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--sol-border) 50%, transparent);
+  font-size: 10.5px;
+  color: var(--sol-text-dim);
+}
+.ch-roster-candidate .ch-people-name { color: var(--sol-text-muted); }
+.ch-roster-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 5px;
+  font-size: 11.5px;
+  color: var(--sol-cyan);
+  opacity: 0;
+  transition: opacity 120ms, background 120ms;
+}
+.ch-roster-candidate:hover .ch-roster-add,
+.ch-roster-add:focus-visible { opacity: 1; }
+.ch-roster-add:hover { background: color-mix(in srgb, var(--sol-cyan) 12%, transparent); }
+
+.ch-roster-err {
+  margin: 6px 6px 0;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--sol-red);
+}
+.ch-roster-err-inline { color: var(--sol-red); }
+
+.ch-roster-reconnect {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 8px;
+  border-radius: 7px;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--sol-text-muted);
+  background: color-mix(in srgb, var(--sol-magenta) 7%, transparent);
+}
+.ch-roster-reconnect svg { margin-top: 2px; }
+.ch-roster-reconnect-btn {
+  flex: 0 0 auto;
+  padding: 3px 9px;
+  border-radius: 5px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--sol-bg);
+  background: var(--sol-magenta);
+}
+.ch-roster-reconnect-btn:disabled { opacity: 0.5; }
 
 .ch-picker { margin-top: 4px; }
 
@@ -3150,6 +3302,41 @@ a.ch-slack-mark:hover { color: var(--sol-text); text-decoration: underline; }
 }
 .ch-msg-body blockquote p { margin: 2px 0; }
 .ch-msg-body blockquote img { max-height: 200px; border-radius: 4px; }
+
+/* A quoted message (ChatQuote): the author's face, room and time over the
+   quoted words, opening the original. */
+.ch-msg-body blockquote.ch-quote {
+  margin: 6px 0;
+  padding: 7px 12px 8px;
+  border-left: 3px solid color-mix(in srgb, var(--sol-blue) 55%, transparent);
+  border-radius: 2px 8px 8px 2px;
+  background: color-mix(in srgb, var(--sol-bg-alt) 70%, transparent);
+  color: var(--sol-text);
+  font-style: normal;
+  max-width: 72ch;
+}
+.ch-quote-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  margin-bottom: 3px;
+  text-decoration: none;
+  color: inherit;
+}
+.ch-quote-head:hover .ch-quote-author { text-decoration: underline; }
+.ch-quote-author { font-weight: 600; color: var(--sol-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ch-quote-meta { font-size: 11px; color: var(--sol-text-dim); white-space: nowrap; }
+.ch-quote-slack {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--sol-bg-alt) 80%, transparent);
+}
+.ch-quote-body { color: var(--sol-text-secondary); }
+.ch-quote-body p { margin: 2px 0; font-style: normal; }
 
 /* The dialog. */
 .ch-slack-overlay {
