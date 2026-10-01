@@ -3,37 +3,121 @@
 # first on the run's PATH). Every call is logged to $RUN_DIR/calls.log. Reads
 # pass through to the real CLI with the real state directory restored; anything
 # that writes, posts, sends, pins or could start a session is refused with a
-# line that says so, so a run can never reach a person's inbox. With
-# DRY_RUN_SERVE_DIR set, `cast org inputs`, `cast org health` and `cast org ls`
-# answer from org-inputs.json, org-health.json and org-ls.json in it, so the run grades the prompt
-# against a saved record. A harness that needs other fixtures puts its own
-# `cast` in a directory and passes --guard.
+# line that says so, so a run can never reach a person's inbox. A harness that
+# needs other fixtures puts its own `cast` in a directory and passes --guard.
+#
+# With DRY_RUN_SERVE_DIR set, reads answer from a saved world instead:
+#  - `cast org inputs|health|ls` from org-inputs.json, org-health.json and
+#    org-ls.json in it (the layout older served dirs have);
+#  - any argv from reads/<key>.out, exit code from reads/<key>.exit (0 when
+#    absent). The key is the sha256 of each argument followed by \x1f, the same
+#    key packages/evals/src/served.ts computes when it captures the reads;
+#  - a read whose first word, or first two words, is a line of `frozen` and
+#    was not captured is refused, so a replay never reads the live workspace
+#    for something its snapshot was meant to hold. A `*` line freezes every
+#    read: a synthetic world answers from its record or not at all.
+#
+# `--help` before any `--` prints the CLI's own text, never the workspace, so
+# it is never frozen or refused. It runs as the leading command words alone
+# with one standalone --help after them, so a --help commander would take as
+# an option's value never reaches an action, and with a state directory of
+# its own, so no help call can sign in or reach anyone.
+#
+# calls.log gets the argv, then one marked line per outcome: SERVED (answered
+# from the serve dir), UNSERVED (a frozen read with no capture), LIVE (passed
+# to the real CLI), HELP (the CLI's help text), REFUSED (a write). The eval
+# gates read these marks.
 set -u
-printf '%s\n' "$*" >> "${RUN_DIR:-$PWD}/calls.log"
+LOG="${RUN_DIR:-$PWD}/calls.log"
+ARGV="$*"
+printf '%s\n' "$ARGV" >> "$LOG"
 SERVE="${DRY_RUN_SERVE_DIR:-}"
+mark() { printf '%s %s\n' "$1" "$ARGV" >> "$LOG"; }
+
+serve_file() {
+  [ -n "$SERVE" ] && [ -f "$SERVE/$1" ] || return 0
+  mark SERVED; cat "$SERVE/$1"; exit 0
+}
 case "${1:-} ${2:-}" in
-  "org inputs"*) [ -n "$SERVE" ] && [ -f "$SERVE/org-inputs.json" ] && { cat "$SERVE/org-inputs.json"; exit 0; } ;;
-  "org health"*) [ -n "$SERVE" ] && [ -f "$SERVE/org-health.json" ] && { cat "$SERVE/org-health.json"; exit 0; } ;;
-  "org ls"*|"org list"*) [ -n "$SERVE" ] && [ -f "$SERVE/org-ls.json" ] && { cat "$SERVE/org-ls.json"; exit 0; } ;;
-  "org proposals"*) echo "No open proposals."; exit 0 ;;
+  "org inputs"*) serve_file org-inputs.json ;;
+  "org health"*) serve_file org-health.json ;;
+  "org ls"*|"org list"*) serve_file org-ls.json ;;
+  "org proposals"*) mark SERVED; echo "No open proposals."; exit 0 ;;
 esac
-# The real CLI: the first `cast` on PATH that is not this guard, run with the
-# state directory the launching shell had (the run's own CODECAST_DIR is an
-# empty directory on purpose).
-real() {
+
+if [ -n "$SERVE" ] && [ $# -gt 0 ]; then
+  sha256() { if command -v shasum >/dev/null 2>&1; then shasum -a 256; else sha256sum; fi; }
+  key="$(printf '%s\x1f' "$@" | sha256 | cut -d' ' -f1)"
+  if [ -f "$SERVE/reads/$key.out" ]; then
+    mark SERVED
+    cat "$SERVE/reads/$key.out"
+    code=0
+    [ -f "$SERVE/reads/$key.exit" ] && code="$(tr -dc 0-9 < "$SERVE/reads/$key.exit")"
+    exit "${code:-0}"
+  fi
+fi
+
+# A read, by verb. `org review` prints the review prompt and only starts a
+# session with --spawn.
+has_spawn() { local a; for a in "$@"; do [ "$a" = "--spawn" ] && return 0; done; return 1; }
+is_read() {
+  case "${1:-}" in
+    task|project|plan|doc|initiative|trigger|anchor|role|org)
+      case "${2:-}" in show|ls|context|wakes|grep|status|search|inputs|health|"") return 0 ;; esac
+      [ "${1:-}" = org ] && [ "${2:-}" = review ] && ! has_spawn "$@" ;;
+    brief|read|link|search|feed|sessions|diff|summary|calls|call) return 0 ;;
+    # Only show and ls: a bare `cast decide "<question>"` posts a decision.
+    decide) case "${2:-}" in show|ls) return 0 ;; *) return 1 ;; esac ;;
+    state) [ "${2:-}" = show ] ;;
+    *) return 1 ;;
+  esac
+}
+frozen() {
+  [ -n "$SERVE" ] && [ -f "$SERVE/frozen" ] || return 1
+  grep -qxF -- '*' "$SERVE/frozen" || grep -qxF -- "${1:-}" "$SERVE/frozen" || grep -qxF -- "${1:-} ${2:-}" "$SERVE/frozen"
+}
+# The real CLI: the first `cast` on PATH that is not this guard.
+real_bin() {
   local here; here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  local dir bin=""
+  local dir
   IFS=: read -ra dirs <<< "$PATH"
-  for dir in "${dirs[@]}"; do [ "$dir" = "$here" ] && continue; [ -x "$dir/cast" ] && { bin="$dir/cast"; break; }; done
-  [ -n "$bin" ] || { echo "dry run: no real cast on PATH for a read" >&2; exit 1; }
+  for dir in "${dirs[@]}"; do [ "$dir" = "$here" ] && continue; [ -x "$dir/cast" ] && { printf '%s' "$dir/cast"; return 0; }; done
+  echo "dry run: no real cast on PATH for a read" >&2; exit 1
+}
+# A read, run with the state directory the launching shell had (the run's own
+# CODECAST_DIR is an empty directory on purpose).
+real() {
+  local bin; bin="$(real_bin)" || exit 1
+  mark LIVE
   if [ -n "${DRY_RUN_REAL_CODECAST_DIR:-}" ]; then CODECAST_DIR="$DRY_RUN_REAL_CODECAST_DIR" exec "$bin" "$@"; fi
   exec env -u CODECAST_DIR "$bin" "$@"
 }
+
+# Help: asked for when --help comes before any `--`. Only the leading command
+# words go through (lowercase words, up to the first flag or other text), then
+# one --help of our own.
+wants_help() { local a; for a in "$@"; do [ "$a" = "--" ] && return 1; [ "$a" = "--help" ] && return 0; done; return 1; }
+if wants_help "$@"; then
+  words=()
+  for a in "$@"; do [[ "$a" =~ ^[a-z][a-z0-9-]*$ ]] || break; words+=("$a"); done
+  bin="$(real_bin)" || exit 1
+  state="${RUN_DIR:-$PWD}/.cast-help"
+  mkdir -p "$state"
+  mark HELP
+  exec env CODECAST_DIR="$state" CODECAST_NO_AUTO_UPDATE=1 "$bin" ${words[@]+"${words[@]}"} --help
+fi
+
+if is_read "$@"; then
+  if frozen "$@"; then
+    mark UNSERVED
+    echo "dry run: 'cast $ARGV' is frozen for this replay and was not captured" >&2; exit 1
+  fi
+  real "$@"
+fi
+mark REFUSED
 case "${1:-}" in
-  task|project|plan|doc|initiative|trigger|anchor|role|org)
-    case "${2:-}" in show|ls|context|wakes|grep|status|search|inputs|health|"") real "$@" ;; esac
-    echo "dry run: 'cast $*' would write, and is refused" >&2; exit 1 ;;
-  brief|read|link|search|feed|sessions|diff|summary|calls|call) real "$@" ;;
-  state) case "${2:-}" in show) real "$@" ;; esac; echo "dry run: cast state is refused" >&2; exit 1 ;;
-  *) echo "dry run: 'cast $*' is refused; write what you would post to the file the briefing names" >&2; exit 1 ;;
+  task|project|plan|doc|initiative|trigger|anchor|role|org) echo "dry run: 'cast $ARGV' would write, and is refused" >&2 ;;
+  state) echo "dry run: cast state is refused" >&2 ;;
+  *) echo "dry run: 'cast $ARGV' is refused; write what you would post to the file the briefing names" >&2 ;;
 esac
+exit 1

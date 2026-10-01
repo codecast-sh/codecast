@@ -25,6 +25,7 @@ import { humanizeConvexError } from "@codecast/shared/contracts";
 import { isConvexId } from "../lib/entityLinks";
 import { useWatchEffect } from "./useWatchEffect";
 import { useQueryNoThrow } from "./useQueryNoThrow";
+import { peopleOf } from "@codecast/shared/team/memberKind";
 
 type OwnerInfo = {
   user_id: string;
@@ -340,7 +341,7 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
   };
 
   // Bots (Mr Bot, Anchors) can't own a session — a bot's inbox is nobody's.
-  const selectable = roster.filter((m: any) => m && !m.is_bot);
+  const selectable = peopleOf(roster as any[]);
   const ownerList = Array.from(ownerIds);
 
   // The current user's own UNACKED handoff (someone else assigned them, no

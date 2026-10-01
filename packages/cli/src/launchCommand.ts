@@ -261,9 +261,7 @@ export function buildLaunchArgs(input: LaunchArgsInput): LaunchArgsResult {
     if (permFlags && !claudeArgsPinPermission(configuredArgs)) {
       args.push(...permFlags.split(/\s+/).filter(Boolean));
     }
-    if (input.assignedClaudeSessionId && !configuredArgs.includes("--session-id")) {
-      args.push("--session-id", input.assignedClaudeSessionId);
-    }
+    args.push(...claudeSessionIdArgs(input.assignedClaudeSessionId, configuredArgs));
   } else if (agentType === "opencode") {
     if (configuredArgs) args.push(...configuredArgs.split(/\s+/).filter(Boolean));
     // A managed opencode session is driven from the web and can't answer the TUI's
@@ -395,10 +393,18 @@ export interface PrintArgsInput {
   bare?: boolean;
   worktree?: boolean | string;
   extraArgs?: string[];
+  /** The pre-assigned claude session id for a fresh run (claude only; ignored
+   *  when resuming or continuing). */
+  assignedClaudeSessionId?: string;
   /** Print-mode auto-approve for clients whose TUI launch has no perm flags
    *  (cursor --force, gemini --yolo). Default true; `--permission-mode default`
    *  turns it off. */
   autoApprove?: boolean;
+}
+
+/** `--session-id <id>` for a claude launch, unless the configured args already pin one. */
+function claudeSessionIdArgs(assigned: string | null | undefined, configuredArgs: string): string[] {
+  return assigned && !configuredArgs.includes("--session-id") ? ["--session-id", assigned] : [];
 }
 
 export interface PrintArgsResult {
@@ -445,6 +451,10 @@ export function buildPrintArgs(input: PrintArgsInput): PrintArgsResult {
   } else {
     if (input.resumeId) args.push("--resume", input.resumeId);
     else if (input.continueLast) args.push("--continue");
+  }
+
+  if (agentType === "claude" && !input.resumeId && !input.continueLast) {
+    args.push(...claudeSessionIdArgs(input.assignedClaudeSessionId, input.configuredArgs));
   }
 
   const configured = splitFlags(input.configuredArgs);

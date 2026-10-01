@@ -40,12 +40,16 @@ import {
   wakeMentionedParties,
 } from "./chat";
 import { externalAuthorValidator } from "./lib/externalAuthor";
+import { chatAttachmentValidator, type ChatAttachment } from "./lib/chatAttachment";
+import { mirrorFiles, recoverLinkedFiles, slackFileLinkLines } from "./lib/slackFiles";
+import { slackApi } from "./lib/slackApi";
 import { resolveChatMentions, slackPersonForHandle, teamRoster } from "./lib/mentionResolve";
 import { isValidEmoji, MAX_CHAT_CONTENT, normalizeChannelName, oneLine } from "./chatText";
 import { botHandle, dmKeyFor, extractMentionHandles, memberHandle } from "@codecast/shared/chat";
 import {
   emojiToShortcode,
   markdownToSlack,
+  hasStandalonePreviewLink,
   shortcodeToEmoji,
   slackAttachmentsToMarkdown,
   slackDisplayName,
@@ -61,7 +65,7 @@ import {
   slackLinkForChannel,
 } from "./lib/slackOutbound";
 import {
-  type BackfillWindow, DIRECTION_FLOW, DIRECTION_SENTENCE, LINK_DEFAULTS, mergeLinkOptions } from "./lib/slackMirror";
+  type BackfillWindow, DIRECTION_FLOW, DIRECTION_SENTENCE, LINK_DEFAULTS, mergeLinkOptions, nextSlackMembers, slackMemberWriter } from "./lib/slackMirror";
 import { tokenCanPost, tokenHasDmScopes, webBaseUrl } from "./slack";
 
 type ReadCtx = Pick<QueryCtx, "db"> | Pick<MutationCtx, "db">;
@@ -69,7 +73,6 @@ type Link = Doc<"slack_channel_links">;
 type Install = Doc<"slack_installations">;
 
 const PROFILE_TTL_MS = 24 * 60 * 60 * 1000;
-const MAX_FILE_BYTES = 20 * 1024 * 1024;
 // One import brings over at most this many lines (roots and replies): a
 // ceiling so "everything" on a years old, bot heavy channel cannot run for
 // hours, high enough that a busy team channel's whole history fits. The link
@@ -157,38 +160,6 @@ export function backfillSinceTs(window: BackfillWindow, now = Date.now()): strin
 }
 
 // ── Slack Web API ────────────────────────────────────────────────────────────
-
-type SlackResp = { ok: boolean; error?: string; [k: string]: any };
-
-// JSON only for the write methods that accept it (`blocks` needs it); form
-// encoding for everything else, including chat.getPermalink, which is a read
-// and rejects a JSON body.
-const JSON_METHODS = new Set([
-  "chat.postMessage", "chat.update", "chat.delete", "reactions.add", "reactions.remove",
-]);
-
-async function slackApi(token: string, method: string, params: Record<string, unknown> = {}): Promise<SlackResp> {
-  const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
-  let body: string;
-  if (JSON_METHODS.has(method)) {
-    headers["Content-Type"] = "application/json; charset=utf-8";
-    body = JSON.stringify(params);
-  } else {
-    headers["Content-Type"] = "application/x-www-form-urlencoded";
-    const form = new URLSearchParams();
-    for (const [k, val] of Object.entries(params)) {
-      if (val === undefined || val === null) continue;
-      form.set(k, typeof val === "string" ? val : JSON.stringify(val));
-    }
-    body = form.toString();
-  }
-  try {
-    const resp = await fetch(`https://slack.com/api/${method}`, { method: "POST", headers, body });
-    return (await resp.json()) as SlackResp;
-  } catch (error) {
-    return { ok: false, error: `network: ${error instanceof Error ? error.message : String(error)}` };
-  }
-}
 
 function slackTsToMs(ts: string): number {
   const n = Number(ts);
@@ -1841,61 +1812,10 @@ function isOwnBotEvent(install: Install, event: any): boolean {
   return !!(install.app_id && appId && appId === install.app_id);
 }
 
-type InboundFile = { storage_id: Id<"_storage">; name?: string; mime?: string; width?: number; height?: number };
-
-export async function mirrorFiles(ctx: ActionCtx, install: Install, files: any[]): Promise<{ attachments: InboundFile[]; extra: string[] }> {
-  const attachments: InboundFile[] = [];
-  const extra: string[] = [];
-  for (const f of files ?? []) {
-    if (!f || f.mode === "tombstone" || f.mode === "hidden_by_limit") continue;
-    const mime = String(f.mimetype ?? "");
-    const isImage = mime.startsWith("image/");
-    const size = Number(f.size ?? 0);
-    const url = f.url_private_download || f.url_private;
-    if (isImage && url && size > 0 && size <= MAX_FILE_BYTES) {
-      try {
-        const resp = await fetch(url, { headers: { Authorization: `Bearer ${install.bot_token}` } });
-        // A token without access to the file gets Slack's sign-in page back,
-        // often as a 200: only real image bytes become an attachment.
-        if (resp.ok && (resp.headers.get("content-type") ?? "").startsWith("image/")) {
-          const blob = await resp.blob();
-          const storageId = await ctx.storage.store(new Blob([await blob.arrayBuffer()], { type: mime }));
-          attachments.push({
-            storage_id: storageId,
-            name: f.name ? String(f.name).slice(0, 120) : undefined,
-            mime,
-            width: typeof f.original_w === "number" ? f.original_w : undefined,
-            height: typeof f.original_h === "number" ? f.original_h : undefined,
-          });
-          continue;
-        }
-      } catch {
-        // fall through to a link line
-      }
-    }
-    const label = f.title || f.name || "file";
-    if (f.permalink) extra.push(`📎 [${label}](${f.permalink})`);
-  }
-  return { attachments, extra };
-}
-
-// The link line mirrorFiles leaves when a file could not be read, with the
-// Slack file id its permalink carries (…slack.com/files/<user>/<file>/<name>).
-const FILE_LINK_LINE = /^📎 \[.*\]\(https:\/\/[^/\s)]+\.slack\.com\/files\/[^/\s)]+\/(F[A-Z0-9]+)\/[^\s)]*\)$/;
-
-export function slackFileLinkLines(content: string): Array<{ line: string; file_id: string }> {
-  const out: Array<{ line: string; file_id: string }> = [];
-  for (const line of content.split("\n")) {
-    const m = FILE_LINK_LINE.exec(line);
-    if (m) out.push({ line, file_id: m[1] });
-  }
-  return out;
-}
-
 // A token that could not read files (a DM grant from before files:read) left
 // images as link lines. Once the person's token can, bring each one over as
 // the image it should have been. Scheduled whenever a token is stored.
-const FILE_REPAIR_SCAN = 500;
+const FILE_REPAIR_PAGE = 300;
 
 export const fileRepairContext = internalQuery({
   args: { installation_id: v.id("slack_installations"), user_id: v.id("users") },
@@ -1905,20 +1825,29 @@ export const fileRepairContext = internalQuery({
     if (!install || !token || !tokenHasDmScopes(token.scopes)) return null;
     const links = (await ctx.db.query("slack_channel_links").withIndex("by_installation", (q: any) => q.eq("installation_id", install._id)).collect())
       .filter((l) => l.kind === "dm" && l.options.files && l.owner_user_id?.toString() === args.user_id.toString());
+    return { install: { ...install, bot_token: token.token }, link_ids: links.map((l) => l._id) };
+  },
+});
+
+// One page of a mirrored DM's history: the inbound lines still holding a
+// Slack file link where an image should be.
+export const fileRepairPage = internalQuery({
+  args: { link_id: v.id("slack_channel_links"), cursor: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const link = await ctx.db.get(args.link_id);
+    if (!link) return { rows: [], cursor: null };
+    const page = await ctx.db
+      .query("chat_messages")
+      .withIndex("by_channel_created", (q: any) => q.eq("channel_id", link.chat_channel_id))
+      .order("desc")
+      .paginate({ numItems: FILE_REPAIR_PAGE, cursor: args.cursor ?? null });
     const rows: Array<{ message_id: Id<"chat_messages">; content: string }> = [];
-    for (const link of links) {
-      const recent = await ctx.db
-        .query("chat_messages")
-        .withIndex("by_channel_created", (q: any) => q.eq("channel_id", link.chat_channel_id))
-        .order("desc")
-        .take(FILE_REPAIR_SCAN);
-      for (const m of recent) {
-        if (m.deleted_at || m.attachments?.length) continue;
-        if (m.external?.provider !== "slack" || m.external.direction !== "inbound" || m.external.channel !== link.slack_channel_id) continue;
-        if (slackFileLinkLines(m.content).length > 0) rows.push({ message_id: m._id, content: m.content });
-      }
+    for (const m of page.page) {
+      if (m.deleted_at || m.attachments?.length) continue;
+      if (m.external?.provider !== "slack" || m.external.direction !== "inbound" || m.external.channel !== link.slack_channel_id) continue;
+      if (slackFileLinkLines(m.content).length > 0) rows.push({ message_id: m._id, content: m.content });
     }
-    return { install: { ...install, bot_token: token.token }, rows };
+    return { rows, cursor: page.isDone ? null : page.continueCursor };
   },
 });
 
@@ -1928,39 +1857,32 @@ export const repairFileLinks = internalAction({
     const c = await ctx.runQuery(internal.slackSync.fileRepairContext, args);
     if (!c) return { repaired: 0 };
     let repaired = 0;
-    for (const row of c.rows) {
-      const attachments: InboundFile[] = [];
-      let content = row.content;
-      for (const { line, file_id } of slackFileLinkLines(row.content)) {
-        const info = await slackApi(c.install.bot_token, "files.info", { file: file_id });
-        if (!info.ok || !info.file) continue;
-        const mirrored = await mirrorFiles(ctx, c.install, [info.file]);
-        if (mirrored.attachments.length === 0) continue;
-        attachments.push(...mirrored.attachments);
-        content = content.split("\n").filter((l) => l !== line).join("\n");
-      }
-      if (attachments.length === 0) continue;
-      const r = await ctx.runMutation(internal.slackSync.applyFileRepair, {
-        message_id: row.message_id, expected: row.content, content: content.trim(), attachments,
-      });
-      if (r.status === "repaired") repaired++;
+    for (const link_id of c.link_ids) {
+      let cursor: string | undefined;
+      do {
+        const page: { rows: Array<{ message_id: Id<"chat_messages">; content: string }>; cursor: string | null } =
+          await ctx.runQuery(internal.slackSync.fileRepairPage, { link_id, cursor });
+        for (const row of page.rows) if (await repairFileRow(ctx, c.install, row)) repaired++;
+        cursor = page.cursor ?? undefined;
+      } while (cursor);
     }
     return { repaired };
   },
 });
+
+async function repairFileRow(ctx: ActionCtx, install: Install, row: { message_id: Id<"chat_messages">; content: string }): Promise<boolean> {
+  const { attachments, content } = await recoverLinkedFiles(ctx, install, row.content);
+  if (attachments.length === 0) return false;
+  const r = await ctx.runMutation(internal.slackSync.applyFileRepair, { message_id: row.message_id, expected: row.content, content, attachments });
+  return r.status === "repaired";
+}
 
 export const applyFileRepair = internalMutation({
   args: {
     message_id: v.id("chat_messages"),
     expected: v.string(),
     content: v.string(),
-    attachments: v.array(v.object({
-      storage_id: v.id("_storage"),
-      name: v.optional(v.string()),
-      mime: v.optional(v.string()),
-      width: v.optional(v.number()),
-      height: v.optional(v.number()),
-    })),
+    attachments: v.array(chatAttachmentValidator),
   },
   handler: async (ctx, args) => {
     const row = await ctx.db.get(args.message_id);
@@ -2012,7 +1934,7 @@ async function mirrorMessage(
   if (body) parts.push(body);
   const cards = slackAttachmentsToMarkdown(msg.attachments, resolver);
   if (cards) parts.push(cards);
-  let attachments: InboundFile[] = [];
+  let attachments: ChatAttachment[] = [];
   if (Array.isArray(msg.files) && msg.files.length > 0) {
     if (link.options.files) {
       const mirrored = await mirrorFiles(ctx, install, msg.files);
@@ -2164,6 +2086,11 @@ export const processEvent = internalAction({
           }
           return await finish("done");
         }
+        // The member panel's roster follows Slack whether or not the notice
+        // itself is mirrored into the room.
+        await ctx.runMutation(internal.slackSync.patchLinkMembers, type === "member_joined_channel"
+          ? { link_id: link._id, add: String(event.user) }
+          : { link_id: link._id, remove: String(event.user) });
         if (!link.options.system_messages) return await finish("skipped", "system_off");
         const who = await resolvePerson(ctx, install, String(event.user));
         const res = await ctx.runMutation(internal.slackSync.applyInboundMessage, {
@@ -2215,6 +2142,216 @@ export const pauseLink = internalMutation({
   },
 });
 
+// ── Channel members ──────────────────────────────────────────────────────────
+// Who is in the Slack side of a mirrored room, for the room's member panel. The
+// roster lives on the link row (slack_member_ids), so it reaches the client on
+// the same listChannels push as the link itself. A full read on demand, then
+// the join/leave events keep it current; invite and remove patch the row first
+// and undo it if Slack refuses.
+
+/** Members a link remembers. Slack channels can be far bigger; the panel
+ *  shows the first ones and the count Slack reports. */
+export const SLACK_MEMBERS_CAP = 2000;
+/** A panel opened twice within this window reads the cached roster. */
+const SLACK_MEMBERS_FRESH_MS = 2 * 60 * 1000;
+
+export const patchLinkMembers = internalMutation({
+  args: {
+    link_id: v.id("slack_channel_links"),
+    set: v.optional(v.array(v.string())),
+    add: v.optional(v.string()),
+    remove: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const link = await ctx.db.get(args.link_id);
+    if (!link) return;
+    // A join or leave before the first full read has nothing to edit: the
+    // panel's first open reads the roster whole.
+    if (!args.set && !link.slack_member_ids) return;
+    const current = link.slack_member_ids ?? [];
+    const next = nextSlackMembers(current, args, SLACK_MEMBERS_CAP);
+    const now = Date.now();
+    if (args.set) {
+      await ctx.db.patch(link._id, { slack_member_ids: next, slack_members_at: now, updated_at: now });
+    } else if (next !== current) {
+      await ctx.db.patch(link._id, { slack_member_ids: next, updated_at: now });
+    }
+  },
+});
+
+export const memberActionAuth = internalQuery({
+  // `user_id` is for the scheduled job, whose caller was authenticated by the
+  // mutation that scheduled it; every client-facing path passes the token.
+  args: { api_token: v.optional(v.string()), user_id: v.optional(v.id("users")), chat_channel_id: v.id("chat_channels") },
+  handler: async (ctx, args) => {
+    const userId = args.user_id ?? await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) return { ok: false as const, error: "Authentication failed" };
+    const channel = await ctx.db.get(args.chat_channel_id);
+    if (!channel || !(await canAccessChannel(ctx, userId, channel))) {
+      return { ok: false as const, error: "Channel not found" };
+    }
+    const link = await slackLinkForChannel(ctx, channel._id);
+    if (!link || link.kind === "dm") return { ok: false as const, error: "This channel is not mirrored with Slack" };
+    const install = await ctx.db.get(link.installation_id);
+    if (!install) return { ok: false as const, error: "The Slack workspace is no longer connected" };
+    const userToken = await userTokenFor(ctx, install._id, userId);
+    const writer = slackMemberWriter({
+      isPrivate: !!link.slack_channel_private,
+      botScopes: install.scopes,
+      userScopes: userToken?.scopes,
+    });
+    return {
+      ok: true as const,
+      link_id: link._id,
+      slack_channel_id: link.slack_channel_id,
+      members_at: link.slack_members_at ?? null,
+      install,
+      writer_token: writer === "bot" ? install.bot_token : writer === "user" ? userToken!.token : null,
+    };
+  },
+});
+
+// Split a Slack roster read: the people table's apps and deactivated
+// accounts leave it (they are not members anyone manages), and the ids the
+// table has never seen come back for a profile fetch.
+export const classifySlackMembers = internalQuery({
+  args: { workspace_id: v.string(), slack_user_ids: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    const people: string[] = [];
+    const missing: string[] = [];
+    for (const id of args.slack_user_ids) {
+      const row = await slackUserRow(ctx, args.workspace_id, id);
+      if (!row) missing.push(id);
+      else if (!row.is_bot && !row.deleted) people.push(id);
+    }
+    return { people, missing };
+  },
+});
+
+/** Faces a fresh read may fetch one by one; the nightly people sync covers
+ *  the rest. */
+const MEMBER_PROFILE_FETCH_CAP = 40;
+
+// Read the Slack channel's roster whole. Any reader of the room may ask: the
+// roster is what the room's own Slack side already shows its members.
+export const refreshSlackMembers = action({
+  args: { api_token: v.optional(v.string()), chat_channel_id: v.id("chat_channels"), force: v.optional(v.boolean()) },
+  handler: async (ctx, args): Promise<{ ok: boolean; error?: string; count?: number }> => {
+    const auth = await ctx.runQuery(internal.slackSync.memberActionAuth, { api_token: args.api_token, chat_channel_id: args.chat_channel_id });
+    if (!auth.ok) return { ok: false, error: auth.error };
+    if (!args.force && auth.members_at && Date.now() - auth.members_at < SLACK_MEMBERS_FRESH_MS) return { ok: true };
+    const ids: string[] = [];
+    let cursor: string | undefined;
+    do {
+      const resp: any = await slackApi(auth.install.bot_token, "conversations.members", {
+        channel: auth.slack_channel_id, limit: 1000, cursor,
+      });
+      if (!resp.ok) return { ok: false, error: `Slack: ${resp.error ?? "unknown"}` };
+      for (const id of resp.members ?? []) if (String(id) !== auth.install.bot_user_id) ids.push(String(id));
+      cursor = resp.response_metadata?.next_cursor || undefined;
+    } while (cursor && ids.length < SLACK_MEMBERS_CAP);
+    const { people, missing }: { people: string[]; missing: string[] } = await ctx.runQuery(internal.slackSync.classifySlackMembers, {
+      workspace_id: auth.install.workspace_id, slack_user_ids: ids,
+    });
+    for (const id of missing.slice(0, MEMBER_PROFILE_FETCH_CAP)) {
+      const person = await resolvePerson(ctx, auth.install, id);
+      if (!person.is_bot) people.push(id);
+    }
+    await ctx.runMutation(internal.slackSync.patchLinkMembers, { link_id: auth.link_id, set: people });
+    return { ok: true, count: people.length };
+  },
+});
+
+const SLACK_MEMBER_ERRORS: Record<string, string> = {
+  cant_invite_self: "That is the codecast app itself",
+  cant_kick_self: "That is the codecast app itself",
+  cant_kick_from_general: "Slack never lets anyone leave its general channel",
+  restricted_action: "Your Slack workspace only lets admins do that",
+  user_is_restricted: "That person is a guest Slack will not add here",
+  ura_max_channels: "That guest is already in as many channels as Slack allows",
+  not_in_channel: "The codecast app is not in this Slack channel",
+  is_archived: "The Slack channel is archived",
+  missing_scope: "Reconnect Slack so codecast can manage this channel's members",
+};
+
+// Invite someone into the Slack side, or remove them. Inviting is any reader's
+// gesture, as in Slack; removing is the channel's creator or a team admin, the
+// same rule as removing someone on the codecast side. The roster changes here,
+// at once, so the panel never waits on Slack; applySlackMember makes the call
+// and puts the roster back, with the reason, if Slack says no.
+export const requestSlackMember = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    chat_channel_id: v.id("chat_channels"),
+    slack_user_id: v.string(),
+    present: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireCaller(ctx, args.api_token);
+    const channel = await loadChannel(ctx, userId, args.chat_channel_id);
+    const link = await slackLinkForChannel(ctx, channel._id);
+    if (!link || link.kind === "dm") chatFail("INVALID", "This channel is not mirrored with Slack");
+    if (!args.present && !(await mayManageChannel(ctx, userId, channel))) {
+      chatFail("FORBIDDEN", "Only the channel's creator or a team admin can remove people");
+    }
+    const current = link.slack_member_ids ?? [];
+    const next = nextSlackMembers(current, args.present ? { add: args.slack_user_id } : { remove: args.slack_user_id }, SLACK_MEMBERS_CAP);
+    await ctx.db.patch(link._id, { slack_member_ids: next, member_error: null, updated_at: Date.now() });
+    await ctx.scheduler.runAfter(0, internal.slackSync.applySlackMember, {
+      user_id: userId, chat_channel_id: channel._id, slack_user_id: args.slack_user_id, present: args.present,
+    });
+    return { link_id: link._id };
+  },
+});
+
+export const applySlackMember = internalAction({
+  args: {
+    user_id: v.id("users"),
+    chat_channel_id: v.id("chat_channels"),
+    slack_user_id: v.string(),
+    present: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const auth = await ctx.runQuery(internal.slackSync.memberActionAuth, { user_id: args.user_id, chat_channel_id: args.chat_channel_id });
+    if (!auth.ok) return;
+    let error: string | null = null;
+    if (!auth.writer_token) {
+      error = SLACK_MEMBER_ERRORS.missing_scope;
+    } else {
+      const resp: any = args.present
+        ? await slackApi(auth.writer_token, "conversations.invite", { channel: auth.slack_channel_id, users: args.slack_user_id })
+        : await slackApi(auth.writer_token, "conversations.kick", { channel: auth.slack_channel_id, user: args.slack_user_id });
+      if (!resp.ok && !(args.present && resp.error === "already_in_channel")) {
+        const code = String(resp.error ?? "unknown");
+        error = SLACK_MEMBER_ERRORS[code] ?? `Slack: ${code}`;
+      }
+    }
+    if (!error) return;
+    await ctx.runMutation(internal.slackSync.revertSlackMember, {
+      link_id: auth.link_id, slack_user_id: args.slack_user_id, present: args.present, error,
+    });
+  },
+});
+
+export const revertSlackMember = internalMutation({
+  args: { link_id: v.id("slack_channel_links"), slack_user_id: v.string(), present: v.boolean(), error: v.string() },
+  handler: async (ctx, args) => {
+    const link = await ctx.db.get(args.link_id);
+    if (!link) return;
+    const now = Date.now();
+    const next = nextSlackMembers(
+      link.slack_member_ids ?? [],
+      args.present ? { remove: args.slack_user_id } : { add: args.slack_user_id },
+      SLACK_MEMBERS_CAP,
+    );
+    await ctx.db.patch(link._id, {
+      slack_member_ids: next,
+      member_error: { message: args.error, slack_user_id: args.slack_user_id, at: now },
+      updated_at: now,
+    });
+  },
+});
+
 // ── Inbound: apply ───────────────────────────────────────────────────────────
 
 export const applyInboundMessage = internalMutation({
@@ -2227,13 +2364,7 @@ export const applyInboundMessage = internalMutation({
     author_user_id: v.optional(v.id("users")),
     external_author: v.optional(externalAuthorValidator),
     content: v.string(),
-    attachments: v.array(v.object({
-      storage_id: v.id("_storage"),
-      name: v.optional(v.string()),
-      mime: v.optional(v.string()),
-      width: v.optional(v.number()),
-      height: v.optional(v.number()),
-    })),
+    attachments: v.array(chatAttachmentValidator),
     permalink: v.optional(v.string()),
     created_at: v.optional(v.number()),
     live: v.boolean(),
@@ -2877,7 +3008,7 @@ export const pushMessage = internalAction({
       icon_url: c.as_person ? undefined : c.author.image ?? undefined,
       thread_ts: c.message.thread_root_id ? c.root_ts ?? undefined : undefined,
       reply_broadcast: c.message.thread_root_id && c.message.broadcast && c.root_ts ? true : undefined,
-      unfurl_links: false,
+      unfurl_links: hasStandalonePreviewLink(c.message.content),
       unfurl_media: true,
     };
     let resp = await slackApi(c.install.bot_token, "chat.postMessage", params);

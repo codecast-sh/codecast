@@ -11,8 +11,8 @@
 
 export type V3 = [number, number, number];
 
-export const DURATION = 84;
-export const POSTER_T = 5.4;
+export const DURATION = 88.8;
+export const POSTER_T = 6.6;
 
 /* ── Chapters ─────────────────────────────────────────────────────────── */
 
@@ -50,11 +50,19 @@ export type Surface = {
   pos: V3;
   /** Degrees, applied as CSS rotateX, rotateY, rotateZ in that order. */
   rot: V3;
-  /** Chapter name printed on the back face the deal flips over. */
+  /** Chapter name printed on the back face the deal flips over, as the scrubber names it, so the deck reads as the film's contents. */
   back: string;
+  /** The chapter the back names: its dot wears that chapter's scrubber colour. */
+  chapter: ChapterId;
   radius: number;
   /** The phone renders the mobile app in its dark theme inside a bezel. */
   frame?: "phone";
+  /**
+   * Fades out as the camera leaves a hold that sees it and in as it turns
+   * toward one, instead of popping at the cull. For a surface that sits
+   * close to the camera's path, where it would sweep through the frame.
+   */
+  fadeInTransit?: boolean;
   regions: Record<string, Region>;
 };
 
@@ -63,36 +71,40 @@ const whole = (w: number, h: number): Record<string, Region> => ({ main: { x: 0,
 /** Flight order: the deal flips them up in this order and down in reverse. */
 export const SURFACES: Surface[] = [
   {
-    id: "desk", w: 1180, h: 680, pos: [0, 0, 0], rot: [0, 0, 0], back: "Inbox", radius: 14,
+    id: "desk", w: 1180, h: 720, pos: [0, 0, 0], rot: [0, 0, 0], back: "Inbox", chapter: "inbox", radius: 14,
+    // The app's shell: the nav rail on the left, the page (the open conversation) in the middle, and the session list as the one right rail (DashboardLayout).
     regions: {
-      sidebar: { x: 0, y: 0, w: 200, h: 680 },
-      list: { x: 200, y: 0, w: 340, h: 680 },
-      header: { x: 540, y: 0, w: 640, h: 48 },
-      transcript: { x: 540, y: 48, w: 640, h: 512, anchor: "bottom" },
-      composer: { x: 540, y: 560, w: 640, h: 120 },
-      side: { x: 800, y: 64, w: 360, h: 460 },
-      inset: { x: 700, y: 430, w: 460, h: 230 },
+      topbar: { x: 0, y: 0, w: 1180, h: 40 },
+      sidebar: { x: 0, y: 40, w: 200, h: 680 },
+      header: { x: 200, y: 40, w: 640, h: 48 },
+      transcript: { x: 200, y: 88, w: 640, h: 512, anchor: "bottom" },
+      composer: { x: 200, y: 600, w: 640, h: 120 },
+      list: { x: 840, y: 40, w: 340, h: 680 },
+      // A card over the conversation's right half, clear of the list.
+      side: { x: 420, y: 104, w: 380, h: 500 },
     },
   },
   {
-    id: "phone", w: 300, h: 620, pos: [860, 30, 180], rot: [0, -16, -2], back: "From your phone", radius: 44, frame: "phone",
+    id: "phone", w: 300, h: 620, pos: [1440, 600, 160], rot: [0, -12, -2], back: "Approve", chapter: "phone", radius: 44, frame: "phone", fadeInTransit: true,
     regions: whole(276, 572),
   },
+  // The workers side by side, one window each, the way two panes sit on a wide screen; no taller than a booting worker's transcript fills.
   {
-    id: "pairA", w: 540, h: 320, pos: [1500, -250, -100], rot: [0, -8, 0], back: "Agents talk", radius: 12,
-    regions: { header: { x: 0, y: 0, w: 540, h: 44 }, transcript: { x: 0, y: 44, w: 540, h: 276, anchor: "bottom" } },
+    id: "pairA", w: 540, h: 340, pos: [1250, -20, -60], rot: [0, -6, 0], back: "Talk", chapter: "talk", radius: 12,
+    regions: { header: { x: 0, y: 0, w: 540, h: 44 }, transcript: { x: 0, y: 44, w: 540, h: 296, anchor: "bottom" } },
   },
   {
-    id: "pairB", w: 540, h: 320, pos: [1560, 140, -20], rot: [0, -8, 0], back: "Agents talk", radius: 12,
-    regions: { header: { x: 0, y: 0, w: 540, h: 44 }, transcript: { x: 0, y: 44, w: 540, h: 276, anchor: "bottom" } },
+    id: "pairB", w: 540, h: 340, pos: [1830, 20, -60], rot: [0, -10, 0], back: "Fork", chapter: "talk", radius: 12,
+    regions: { header: { x: 0, y: 0, w: 540, h: 44 }, transcript: { x: 0, y: 44, w: 540, h: 296, anchor: "bottom" }, scrim: { x: 0, y: 0, w: 540, h: 340 } },
   },
-  { id: "board", w: 1000, h: 520, pos: [80, 900, -20], rot: [24, 0, 0], back: "Tasks", radius: 12, regions: whole(1000, 520) },
-  { id: "auto", w: 900, h: 520, pos: [1400, 980, -60], rot: [16, -6, 0], back: "Automation", radius: 12, regions: whole(900, 520) },
-  { id: "team", w: 980, h: 600, pos: [2500, 360, -80], rot: [0, -10, 0], back: "Team", radius: 14, regions: whole(980, 600) },
-  { id: "pr", w: 900, h: 560, pos: [2400, -800, -120], rot: [-8, -8, 0], back: "Pull requests", radius: 12, regions: whole(900, 560) },
-  { id: "page", w: 900, h: 560, pos: [0, -1000, -260], rot: [-10, 0, 0], back: "Publish", radius: 14, regions: whole(900, 560) },
-  { id: "palette", w: 720, h: 420, pos: [-1380, -160, -100], rot: [0, 12, 0], back: "Memory", radius: 14, regions: whole(720, 420) },
-  { id: "blame", w: 900, h: 380, pos: [-1400, 380, -40], rot: [0, 10, 0], back: "Memory", radius: 12, regions: whole(900, 380) },
+  { id: "board", w: 1000, h: 520, pos: [80, 900, -20], rot: [24, 0, 0], back: "Track", chapter: "work", radius: 12, regions: whole(1000, 520) },
+  { id: "auto", w: 900, h: 450, pos: [1400, 1000, -60], rot: [16, -6, 0], back: "Automate", chapter: "automation", radius: 12, regions: whole(900, 450) },
+  { id: "team", w: 980, h: 600, pos: [2500, 360, -80], rot: [0, -10, 0], back: "Team", chapter: "team", radius: 14, regions: whole(980, 600) },
+  { id: "pr", w: 900, h: 560, pos: [2400, -800, -120], rot: [-8, -8, 0], back: "GitHub", chapter: "integrations", radius: 12, regions: whole(900, 560) },
+  { id: "page", w: 900, h: 560, pos: [0, -1000, -260], rot: [-10, 0, 0], back: "Publish", chapter: "publish", radius: 14, regions: whole(900, 560) },
+  // The palette is the surface: its window, flush, the size of the dialog with its results.
+  { id: "palette", w: 720, h: 330, pos: [-1380, -240, -100], rot: [0, 12, 0], back: "Memory", chapter: "memory", radius: 14, regions: whole(720, 330) },
+  { id: "blame", w: 900, h: 380, pos: [-1400, 380, -40], rot: [0, 10, 0], back: "Blame", chapter: "memory", radius: 12, regions: whole(900, 380) },
 ];
 
 export const SURFACE_BY_ID = Object.fromEntries(SURFACES.map((s) => [s.id, s])) as Record<SurfaceId, Surface>;
@@ -148,71 +160,108 @@ export type Hold = {
   crestRoll?: number;
   /** Drift across the hold (px of x, degrees of yaw); overview holds stay still so the seam is exact. */
   drift?: boolean;
+  /** The drift's push toward the subject (px over the hold), when a hold must keep an edge in frame; DRIFT_PUSH otherwise. */
+  push?: number;
+  /** The drift's slide (px of x over the hold), when a hold glides onto what happens in it; DRIFT_X otherwise. */
+  slide?: number;
 };
 
 const P = (x: number, y: number, z: number, pitch: number, yaw: number, roll: number, dist: number): Pose => ({ x, y, z, pitch, yaw, roll, dist });
 
-export const OVERVIEW = P(570, -20, 0, 34, -6, 0, -5000);
+export const OVERVIEW = P(540, -20, 0, 34, -6, 0, -6100);
 
-const PAIR = P(1530, -55, -60, 0, 8, -1.5, -400);
+const PAIR = P(1530, 0, -60, 0, 8, -1.5, 140);
 
+/**
+ * Each transit takes the time its distance needs (about 0.9s plus 1s per
+ * 1600px, between 1.1s and 2.2s; the dives in and out of the overview 1.6s),
+ * so no move crosses the frame faster than a couple of widths a second.
+ */
 export const CAMERA: Hold[] = [
   { t0: 0, t1: 0.9, pose: OVERVIEW, sees: "all" },
   // 1 Inbox: the whole window, slight three-quarter.
-  { t0: 2.4, t1: 8.2, pose: P(0, 0, 0, 3, -4, 0, -40), sees: ["desk"], drift: true },
-  // 2 Conversation: in on the conversation pane.
-  { t0: 9.0, t1: 14.4, pose: P(250, 0, 0, 2, -5, 0, 80), sees: ["desk"], drift: true },
-  // 3 Fan out: list and conversation, then the workers boot on the pair.
-  { t0: 15.0, t1: 17.6, pose: P(60, 0, 0, 2, -6, 0, 0), sees: ["desk"], drift: true },
-  { t0: 18.6, t1: 20.6, pose: PAIR, sees: ["pairA", "pairB", "phone"], crest: -600, drift: true },
-  // 4 Approve: the permission stack on the desk, the phone, then pull back to see both.
-  { t0: 21.4, t1: 23.2, pose: P(250, 120, 0, 2, -4, 0, 60), sees: ["desk"], crest: -700, drift: true },
-  { t0: 24.2, t1: 26.6, pose: P(860, 30, 180, 0, 16, 2, 70), sees: ["phone", "desk"], crest: -500, crestRoll: 3, drift: true },
-  { t0: 27.0, t1: 27.8, pose: P(560, 20, 110, 0, 8, 1, -560), sees: ["phone", "desk"] },
+  { t0: 2.5, t1: 6.9, pose: P(20, 10, 0, 3, -4, 0, -120), sees: ["desk"], drift: true },
+  // 2 Conversation: in on the conversation and the list beside it, the rail just out of frame on the left and the topbar above; the composer clear of the frame's foot for the whole hold (no push).
+  { t0: 8.0, t1: 13.0, pose: P(135, 55, 0, 2, -5, 0, 340), sees: ["desk"], drift: true, push: 0 },
+  // 3 Fan out: the conversation and the list beside it, then the workers boot on the pair, and the frame glides onto the API worker as it asks (4).
+  { t0: 14.1, t1: 16.5, pose: P(30, 0, 0, 2, -6, 0, 0), sees: ["desk"], drift: true },
+  { t0: 18.3, t1: 21.0, pose: { ...PAIR, x: 1455 }, sees: ["pairA", "pairB"], crest: -600, drift: true, slide: -150 },
+  // 4 Approve: the push follows the camera to the phone, then a pull-back to see the phone and the worker it answered.
+  { t0: 22.6, t1: 25.9, pose: P(1440, 600, 160, 0, 12, 2, 70), sees: ["phone", "pairA"], crest: -500, crestRoll: 3, drift: true },
+  { t0: 27.0, t1: 29.3, pose: P(1500, 375, 40, 0, 8, 1, -1000), sees: ["phone", "pairA", "pairB"] },
   // 5 Agents talk.
-  { t0: 28.8, t1: 33.6, pose: PAIR, sees: ["pairA", "pairB"], crest: -600, drift: true },
-  // 6 Decide: the side card on the desk.
-  { t0: 35.0, t1: 39.6, pose: P(390, -50, 0, 2, -4, 0, 60), sees: ["desk"], crest: -900, crestRoll: 2, drift: true },
+  { t0: 31.0, t1: 35.7, pose: PAIR, sees: ["pairA", "pairB"], drift: true },
+  // 6 Decide: the card over the conversation, near and face-on, the frame's left edge on the rail's border so no nav label is cut.
+  { t0: 37.5, t1: 41.5, pose: P(110, -20, 0, 2, -4, 0, 420), sees: ["desk"], crest: -900, crestRoll: 2, drift: true },
   // 7 Track: the biggest swoop, down to the board.
-  { t0: 41.0, t1: 46.4, pose: P(80, 780, -40, -22, 0, 0, -260), sees: ["board", "desk"], crest: -1100, crestRoll: -3, drift: true },
+  { t0: 43.0, t1: 47.8, pose: P(80, 870, -60, -22, 0, 0, 160), sees: ["board", "desk"], crest: -1100, crestRoll: -3, drift: true },
   // 8 Automate.
-  { t0: 47.8, t1: 52.6, pose: P(1400, 940, -60, -14, 6, 0, -100), sees: ["auto", "board"], crest: -500, drift: true },
+  { t0: 49.5, t1: 53.7, pose: P(1400, 1005, -60, -14, 6, 0, 360), sees: ["auto", "board"], crest: -500, drift: true },
   // 9 Team.
-  { t0: 53.8, t1: 60.4, pose: P(2500, 360, -80, 0, 10, 0, -80), sees: ["team"], crest: -800, crestRoll: 2, drift: true },
+  { t0: 55.4, t1: 60.8, pose: P(2500, 360, -80, 0, 10, 0, 40), sees: ["team"], crest: -800, crestRoll: 2, drift: true },
   // 10 Integrations.
-  { t0: 61.8, t1: 67.4, pose: P(2400, -800, -120, 8, 8, 0, -80), sees: ["pr", "team"], crest: -700, drift: true },
+  { t0: 62.5, t1: 66.9, pose: P(2400, -830, -120, 8, 8, 0, 90), sees: ["pr", "team"], crest: -700, drift: true },
   // 11 Publish: a long pan west along the top of the world.
-  { t0: 69.0, t1: 73.4, pose: P(0, -1000, -260, 10, 0, 0, -80), sees: ["page"], crest: -1200, crestRoll: -2, drift: true },
+  { t0: 69.1, t1: 73.9, pose: P(0, -1000, -260, 10, 0, 0, -80), sees: ["page"], crest: -700, crestRoll: -2, drift: true },
   // 12 Memory: past the "3 weeks later" label to the palette, then the blame.
-  { t0: 74.8, t1: 77.0, pose: P(-1380, -160, -100, 0, -12, 0, -20), sees: ["palette"], crest: -500, drift: true },
-  { t0: 77.6, t1: 79.6, pose: P(-1400, 380, -40, -2, -10, 0, -120), sees: ["blame", "palette"], drift: true },
-  // 13 Anywhere: the desk's inset, then the whole world for the seam.
-  { t0: 80.4, t1: 81.4, pose: P(340, 205, 0, 2, -4, 0, 60), sees: ["desk"], crest: -600, drift: true },
-  { t0: 82.3, t1: 84, pose: OVERVIEW, sees: "all" },
+  { t0: 75.8, t1: 78.0, pose: P(-1380, -270, -100, 0, -12, 0, 380), sees: ["palette"], crest: -500, drift: true },
+  { t0: 79.3, t1: 81.3, pose: P(-1400, 390, -40, -2, -10, 0, 320), sees: ["blame", "palette"], drift: true },
+  // 13 Anywhere: back on the whole desk, the rail in frame, as the cloud worker's row is opened; then the whole world for the seam.
+  { t0: 83.0, t1: 86.0, pose: P(10, 10, 0, 2, -5, 0, 0), sees: ["desk"], crest: -600, drift: true },
+  { t0: 87.4, t1: DURATION, pose: OVERVIEW, sees: "all" },
 ];
 
-/** Phones get the same flight framed tighter on each chapter's hero element. Index-aligned with CAMERA. */
+/**
+ * Phones get the same flight framed tighter on each chapter's hero element:
+ * where a surface is wider than the phone's frame, on its leading (left) edge,
+ * where titles and ids start. Index-aligned with CAMERA.
+ */
 export const CAMERA_MOBILE: Partial<Pose>[] = [
-  { pitch: 48, dist: -8000 },
-  { x: -120, y: -150, yaw: -2, dist: 300 },
-  { x: 380, y: 0, dist: 320 },
-  { x: -120, y: -100, dist: 300 },
-  { x: 1560, y: 130, yaw: 4, dist: 20 },
-  { x: 350, y: 130, dist: 320 },
+  { pitch: 40, dist: -12500 },
+  { x: 360, y: -20, yaw: -2, dist: 380 },
+  { x: -100, y: 40, dist: 200 },
+  { x: 230, y: -10, dist: 300 },
+  { x: 1300, y: -10, yaw: 4, dist: 230 },
   { dist: -40 },
-  { x: 420, y: 20, dist: -900 },
-  { x: 1560, y: 130, yaw: 4, dist: 20 },
-  { x: 390, y: -50, dist: 300 },
-  { x: 60, y: 820, dist: 120 },
-  { x: 1400, dist: 260 },
-  { x: 2400, dist: 240 },
-  { x: 2400, dist: 240 },
-  { x: 0, pitch: 6, dist: 240 },
-  { x: -1380, y: -170, yaw: -6, dist: 80 },
-  { x: -1400, y: 380, yaw: -5, dist: 220 },
-  { x: 340, y: 205, dist: 300 },
-  { pitch: 48, dist: -8000 },
+  { x: 1400, y: 380, dist: -1350 },
+  { x: 1240, y: -10, yaw: 4, dist: 230 },
+  { x: 20, y: -30, dist: 300 },
+  { x: -140, y: 840, dist: 300 },
+  { x: 1240, dist: 240 },
+  { x: 2290, dist: 240 },
+  { x: 2230, dist: 240 },
+  { x: -120, pitch: 6, dist: 240 },
+  { x: -1475, y: -240, yaw: -6, dist: 250 },
+  { x: -1560, y: 380, yaw: -5, dist: 220 },
+  { x: -80, y: 60, dist: 220 },
+  { pitch: 40, dist: -12500 },
 ];
+
+/* ── The deal ─────────────────────────────────────────────────────────── */
+
+/** Surfaces the opening deals face-up; every other one waits face-down in the overview until its chapter. */
+export const DEALT: SurfaceId[] = ["desk", "board"];
+/** A chapter surface's turn, in seconds. */
+export const FLIP_DUR = 0.9;
+/** A turned surface has landed at least this long before the camera arrives on it. */
+const FLIP_CLEAR = 0.5;
+
+/**
+ * The film second each chapter surface starts to turn face-up: as the camera
+ * leaves the hold before its first visit (a beat early, while that hold is
+ * still on screen), and early enough to land FLIP_CLEAR before the camera
+ * does, so a chapter opens on its product rather than on a card's back.
+ */
+export const TURN_AT: Partial<Record<SurfaceId, number>> = Object.fromEntries(
+  SURFACES.filter((s) => !DEALT.includes(s.id)).flatMap((s) => {
+    const k = CAMERA.findIndex((h) => h.sees !== "all" && h.sees.includes(s.id));
+    if (k < 1) return [];
+    return [[s.id, Math.round(Math.min(CAMERA[k - 1].t1 - 0.1, CAMERA[k].t0 - FLIP_DUR - FLIP_CLEAR) * 100) / 100]];
+  }),
+);
+
+/** When a chapter surface's resting state must be in place: assembled face-down, just before it turns. */
+export const readyAt = (id: SurfaceId): number => (TURN_AT[id] ?? 0) - 0.4;
 
 /** When each surface is rendered: the transits either side of every hold that sees it. */
 export const LIVE: Record<SurfaceId, [number, number][]> = (() => {
@@ -230,29 +279,29 @@ export const LIVE: Record<SurfaceId, [number, number][]> = (() => {
 export type Scene = { id: ChapterId; name: string; start: number; end: number; hold: number; caption: string };
 
 export const SCENES: Scene[] = [
-  { id: "inbox", name: "Inbox", start: 0, end: 9, hold: 2.4, caption: "Every agent session, live. Claude Code, Codex, Cursor, Gemini and pi in one inbox." },
-  { id: "conversation", name: "Steer", start: 9, end: 15, hold: 9.0, caption: "Open any session to watch it work, and steer it mid-run." },
-  { id: "fanout", name: "Fan out", start: 15, end: 21, hold: 15.0, caption: "One lead spawns workers, and every session lands in the same inbox." },
-  { id: "phone", name: "Approve", start: 21, end: 28, hold: 21.4, caption: "A worker needs permission. Approve it from your desk or your phone." },
-  { id: "talk", name: "Agents talk", start: 28, end: 34, hold: 28.8, caption: "Sessions message each other, and fork to try another way." },
-  { id: "decide", name: "Decide", start: 34, end: 40, hold: 35.0, caption: "Agents queue the calls only you can make, with every option priced out." },
-  { id: "work", name: "Track", start: 40, end: 47, hold: 41.0, caption: "Tasks come straight out of the conversation, and agents claim them." },
-  { id: "automation", name: "Automate", start: 47, end: 53, hold: 47.8, caption: "Triggers and workflows keep the work moving while you are away." },
-  { id: "team", name: "Team", start: 53, end: 61, hold: 53.8, caption: "Your team sees the same sessions, talks in the same channels, and huddles live." },
-  { id: "integrations", name: "GitHub", start: 61, end: 68, hold: 61.8, caption: "Pull requests know the sessions behind them, from checks to merge." },
-  { id: "publish", name: "Publish", start: 68, end: 74, hold: 69.0, caption: "Publish a result as a page your team can comment on." },
-  { id: "memory", name: "Memory", start: 74, end: 80, hold: 74.8, caption: "Weeks later, anyone can find why a line of code exists." },
-  { id: "remote", name: "Anywhere", start: 80, end: 84, hold: 80.4, caption: "Sessions run on your laptop, a cloud host or in a browser, all in one place." },
+  { id: "inbox", name: "Inbox", start: 0, end: 7.4, hold: 2.5, caption: "Every agent session, live. Claude Code, Codex, Cursor, Gemini, OpenCode and pi in one inbox." },
+  { id: "conversation", name: "Steer", start: 7.4, end: 13.5, hold: 8.0, caption: "Open any session to watch it work, and steer it mid-run." },
+  { id: "fanout", name: "Fan out", start: 13.5, end: 19.8, hold: 14.1, caption: "One lead spawns workers, and every session lands in the same inbox." },
+  { id: "phone", name: "Approve", start: 19.8, end: 29.7, hold: 22.6, caption: "A worker needs permission. Approve it from your desk or your phone." },
+  { id: "talk", name: "Talk", start: 29.7, end: 36.6, hold: 31.0, caption: "Sessions message each other, and fork to try another way." },
+  { id: "decide", name: "Decide", start: 36.6, end: 42.2, hold: 37.5, caption: "Agents queue the calls only you can make, with every option priced out." },
+  { id: "work", name: "Track", start: 42.2, end: 48.6, hold: 43.0, caption: "Tasks come straight out of the conversation, and agents claim them." },
+  { id: "automation", name: "Automate", start: 48.6, end: 54.5, hold: 49.5, caption: "Triggers and workflows keep the work moving while you are away." },
+  { id: "team", name: "Team", start: 54.5, end: 61.6, hold: 55.4, caption: "Your team sees the same sessions, talks in the same channels, and huddles live." },
+  { id: "integrations", name: "GitHub", start: 61.6, end: 68.0, hold: 62.5, caption: "Pull requests know the sessions behind them, from checks to merge." },
+  { id: "publish", name: "Publish", start: 68.0, end: 74.8, hold: 69.1, caption: "Publish a result as a page your team can comment on." },
+  { id: "memory", name: "Memory", start: 74.8, end: 82.3, hold: 75.8, caption: "Weeks later, anyone can find why a line of code exists." },
+  { id: "remote", name: "Anywhere", start: 82.3, end: DURATION, hold: 83.0, caption: "Sessions run on your laptop or a cloud host, all in one inbox." },
 ];
 
 /** Reduced motion: each chapter's settled frame, the end of its last hold. */
 export const STILLS: number[] = SCENES.map((s) => {
   const last = CAMERA.filter((h) => h.t0 >= s.start && h.t0 < s.end).pop();
-  return last ? last.t1 - 0.1 : s.hold;
+  return last ? Math.min(last.t1, s.end) - 0.1 : s.hold;
 });
 
-/** The "3 weeks later" world label the camera flies past on the way to Memory. */
-export const LABEL_3W = { pos: [-760, -560, 260] as V3, cue: 73.5, end: 74.7 };
+/** The "3 weeks later" caption over the palette: it settles into frame with the camera and fades as the palette opens. */
+export const LABEL_3W = { pos: [-1380, -500, 0] as V3, cue: 74.9, end: 76.3 };
 
 /* ── Motion vocabulary (chapters/<id>.motion.ts use these) ─────────────── */
 
@@ -261,6 +310,7 @@ export type Preset =
   | "fadeIn"
   | "fadeOut"
   | "push" // slides from (x, y) to rest on `settle`
+  | "lift" // slides from (x, y) to rest on `glide`: a feed making room, which starts as gently as the entry it makes room for fades in
   | "pulse" // scale 1 -> 1 + s -> 1
   | "popIn" // scale from s to 1 on SNAP, fades in fast
   | "ring" // expanding ring that fades out
@@ -304,5 +354,15 @@ export type Flyer = {
   fade: [number, number];
 };
 
-/** A path drawn in world space with stroke-dashoffset (the one non-transform animation). */
-export type ArcPath = { id: string; cue: number; dur: number; hold: number; from: V3; to: V3; color: string };
+/** A path drawn in world space with stroke-dashoffset (the one non-transform animation); a dot marks its end once it arrives. */
+export type ArcPath = {
+  id: string;
+  cue: number;
+  dur: number;
+  hold: number;
+  from: V3;
+  to: V3;
+  color: string;
+  /** How far the curve's control point rises above the higher end (px); 170 when unset. */
+  apex?: number;
+};

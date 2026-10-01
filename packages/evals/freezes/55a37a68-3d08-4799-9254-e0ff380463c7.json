@@ -1,0 +1,26 @@
+{
+  "name": "handoff ledger-migration-bound",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:ledger-migration-bound"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "handoff:ledger-migration-bound",
+    "title": "handoff ledger-migration-bound"
+  },
+  "asOf": "2026-01-15T14:49:30.000Z",
+  "trigger": {
+    "type": "handoff"
+  },
+  "meta": {
+    "surface": "handoff",
+    "visibility": "public",
+    "snapshot": "fixtures/handoff/ledger-migration-bound.json"
+  },
+  "judge": "a cold reader can continue: the brief names the goal (billing on the ledger tables), the double-write decision and its reason (rollback by a flag), what is verified (reads match on 200 accounts, tests pass) and what is not, that refunds in billing/refunds.ts remain, and a first step that names that file",
+  "notes": null,
+  "tags": [],
+  "id": "55a37a68-3d08-4799-9254-e0ff380463c7",
+  "createdAt": "2026-10-01T17:49:22.817Z"
+}

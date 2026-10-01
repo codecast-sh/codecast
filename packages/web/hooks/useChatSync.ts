@@ -151,7 +151,8 @@ export const slackLinksSig = makeCollectionSig<ChatSlackLinkRow>(
     `|${l.kind ?? ""}|${l.team_id}|${l.viewer_user_id ?? ""}|${l.viewer_slack_auth ?? ""}` +
     `|${Object.entries(l.options ?? {}).map(([k, val]) => `${k}=${val ? 1 : 0}`).join(",")}` +
     `|${l.last_inbound_at ?? 0}|${l.last_outbound_at ?? 0}|${l.inbound_count ?? 0}|${l.outbound_count ?? 0}|${l.last_error ?? ""}` +
-    `|${l.backfill ? `${l.backfill.status}:${l.backfill.fetched}:${l.backfill.capped ? 1 : 0}` : ""}`,
+    `|${l.backfill ? `${l.backfill.status}:${l.backfill.fetched}:${l.backfill.capped ? 1 : 0}` : ""}` +
+    `|${l.member_writer ?? ""}|${(l.slack_member_ids ?? []).join(",")}|${l.member_error?.at ?? 0}`,
 );
 
 const channelsSig = makeCollectionSig<ChatChannelRow>(

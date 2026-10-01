@@ -3,7 +3,8 @@
  * Every id starts with "talk." (see contract.ts).
  *
  * pairA's `cast send` lifts off as the envelope and lands on pairB as a
- * "Message from" card; pairB answers the same way; then pairB's prompt forks.
+ * "Message from" card; pairB answers the same way; then your steer on pairA
+ * forks, the fork flies off it as its inbox row, and pairB opens on the fork.
  */
 
 import { CUES } from "../fixtures/story";
@@ -18,9 +19,13 @@ export const TALK_AT = {
   replyReceived: CUES.replySent + 0.45,
   prompt: CUES.forked - 0.55,
   forked: CUES.forked,
+  /** The second window clears as the fork's row reaches it, then shows the fork. */
+  forkClear: CUES.forked + 0.5,
+  forkAnswer: CUES.forked + 1.3,
 } as const;
 
-const enter = { preset: "drop", z: 140, rx: -12, y: -16 } as const;
+/** Inside a 540px window a full-height drop would spill past its edges: a short one, kept for the hero cards elsewhere. */
+const enter = { preset: "drop", z: 60, rx: -8, y: -10 } as const;
 
 export const motion: ChapterMotion = {
   beats: {
@@ -28,17 +33,24 @@ export const motion: ChapterMotion = {
       { id: "talk.send", cue: TALK_AT.send, ...enter },
       { id: "talk.send", cue: CUES.messageSent - 0.05, preset: "pulse", dur: 0.35, s: 0.03 },
       { id: "talk.reply", cue: TALK_AT.replyReceived, ...enter },
+      { id: "talk.prompt", cue: TALK_AT.prompt, ...enter },
+      { id: "talk.prompt", cue: TALK_AT.forked, preset: "pulse", dur: 0.4, s: 0.025 },
     ],
     pairB: [
       { id: "talk.received", cue: TALK_AT.received, ...enter },
       { id: "talk.replySend", cue: TALK_AT.reply, ...enter },
       { id: "talk.replySend", cue: CUES.replySent - 0.05, preset: "pulse", dur: 0.35, s: 0.03 },
-      { id: "talk.prompt", cue: TALK_AT.prompt, ...enter },
-      { id: "talk.prompt", cue: TALK_AT.forked, preset: "pulse", dur: 0.4, s: 0.025 },
+      { id: "talk.forkHeadCover", cue: TALK_AT.forkClear, dur: 0.2, preset: "fadeIn" },
+      { id: "talk.forkCover", cue: TALK_AT.forkClear, dur: 0.2, preset: "fadeIn" },
+      { id: "talk.forkHead", cue: TALK_AT.forkClear + 0.25, dur: 0.3, preset: "fadeIn" },
+      { id: "talk.forkFeed", cue: TALK_AT.forkClear + 0.25, dur: 0.3, preset: "fadeIn" },
+      { id: "talk.forkAnswer", cue: TALK_AT.forkAnswer, ...enter },
     ],
   },
   flyers: [
     { id: "talk.envelope", cue: CUES.messageSent, dur: 0.7, from: localToWorld("pairA", -60, 40, 4), to: localToWorld("pairB", -80, 0, 4), arc: 220, rot: [[0, -8, 0], [0, -8, 8], [0, -8, 0]], ease: "glide", fade: [0.1, 0.12] },
+    // The fork lifts off your steer at the foot of the worker's pane and lands on the second window's header.
+    { id: "talk.fork", cue: CUES.forked + 0.1, dur: 0.6, from: localToWorld("pairA", 40, 120, 4), to: localToWorld("pairB", -40, -148, 4), arc: 200, rot: [[0, -6, 0], [0, -10, 4], [0, -10, 0]], scale: [0.9, 1], ease: "glide", fade: [0.12, 0.2] },
     { id: "talk.envelopeBack", cue: CUES.replySent, dur: 0.5, from: localToWorld("pairB", -40, 70, 4), to: localToWorld("pairA", -60, 92, 4), arc: 140, rot: [[0, -8, 0], [0, -8, -8], [0, -8, 0]], ease: "glide", fade: [0.1, 0.14] },
   ],
 };

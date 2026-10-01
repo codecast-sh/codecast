@@ -1,0 +1,19 @@
+{
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "notes": "single-word acknowledgement",
+  "label": {
+    "verdict": "done"
+  },
+  "snapshot": {
+    "newestFirst": [
+      {
+        "role": "assistant",
+        "content": "ok"
+      },
+      {
+        "role": "user",
+        "content": "reply ok"
+      }
+    ]
+  }
+}

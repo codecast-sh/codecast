@@ -1,4 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { convexTest } from "convex-test";
+import { internal } from "./_generated/api";
+import schema from "./schema";
+import { captureFetch, goldenBody, recordGolden, loadGolden, type GoldenCase } from "./__golden__/golden.testkit";
 import {
   buildTitleMessageContext,
   buildTitlePrompt,
@@ -6,7 +10,8 @@ import {
   isLowSignalPrompt,
   maybeScheduleTitleGeneration,
   sampleEvenly,
-  shouldGenerateTitle, cleanShortTitle, buildShortTitlePrompt } from "./titleGeneration";
+  shouldGenerateTitle, cleanShortTitle, buildShortTitlePrompt,
+  pickSpineRows, selectTitleInput, shortTitleRequest, titleRequest } from "./titleGeneration";
 import { isRefusalProse } from "./idleSummary";
 
 describe("extractTitleJson", () => {
@@ -270,5 +275,154 @@ describe("maybeScheduleTitleGeneration", () => {
     const { ctx: ctx3, calls: calls3 } = makeCtx();
     await maybeScheduleTitleGeneration(ctx3, conv({ subtitle: "- has one" }), 31, 33);
     expect(calls3.scheduled.length).toBe(0);
+  });
+});
+
+// ── Request goldens ──────────────────────────────────────────────────────────
+// The exact bodies generateTitle and generateShortTitle post, recorded from the
+// code before the request builders existed. Synthetic sessions only: the repo
+// is public. The fixtures run through the real query under convex-test, so the
+// spine sampling, the recent window and the anchor rule are all in the bytes.
+type FixtureMessage = {
+  role: "user" | "assistant";
+  content?: string;
+  timestamp: number;
+  tool_results?: Array<{ tool_use_id: string; content: string }>;
+};
+type TitleFixture = { name: string; conversation: Record<string, unknown>; messages: FixtureMessage[] };
+
+const T0 = 1_760_000_000_000;
+const MIN = 60_000;
+
+function titleFixtures(): TitleFixture[] {
+  const fresh: TitleFixture = {
+    name: "fresh-short",
+    conversation: { message_count: 4 },
+    messages: [
+      { role: "user", content: "Add a dark mode toggle to the settings page", timestamp: T0 },
+      { role: "assistant", content: "I'll look at the settings components first.", timestamp: T0 + MIN },
+      { role: "user", tool_results: [{ tool_use_id: "t1", content: "settings.tsx" }], timestamp: T0 + 2 * MIN },
+      { role: "assistant", content: "Added the toggle and wired it to the theme store.", timestamp: T0 + 3 * MIN },
+    ],
+  };
+
+  // A long session: a dense first hour, then sparse prompts over two days, so
+  // the time buckets, the first/last windows and the dedupe all decide what
+  // reaches the model. Low-signal prompts and tool carriers are mixed in.
+  const long: FixtureMessage[] = [];
+  let t = T0;
+  for (let i = 0; i < 60; i++) {
+    t += MIN;
+    long.push({ role: "user", content: `Dense request ${i}: adjust the inbox card ${"padding ".repeat(i % 7)}spacing`, timestamp: t });
+    t += 10_000;
+    long.push({ role: "assistant", content: `Adjusted card spacing step ${i}.`, timestamp: t });
+    if (i % 5 === 0) long.push({ role: "user", tool_results: [{ tool_use_id: `r${i}`, content: "ok" }], timestamp: (t += 1000) });
+    if (i % 9 === 0) long.push({ role: "user", content: "[Request interrupted by user]", timestamp: (t += 1000) });
+  }
+  for (let i = 0; i < 30; i++) {
+    t += 97 * MIN;
+    long.push({ role: "user", content: `Sparse request ${i}: ${"move the unread badge and keep the avatar row aligned with the title. ".repeat(1 + (i % 5))}`, timestamp: t });
+    t += 30_000;
+    long.push({ role: "assistant", content: `Done with sparse step ${i}. ${"The badge now sits beside the title. ".repeat(i % 12)}`, timestamp: t });
+  }
+  long.push({ role: "user", content: "<task-notification>build finished</task-notification>", timestamp: (t += MIN) });
+  long.push({ role: "user", content: "[image]", timestamp: (t += MIN) });
+  long.push({ role: "assistant", content: "Final polish on the card: hover state, focus ring, and the empty state copy.", timestamp: (t += MIN) });
+
+  const titled: TitleFixture = {
+    name: "llm-titled-long",
+    conversation: { title: "Inbox card redesign", subtitle: "- Reworked card spacing\n- In progress", message_count: long.length },
+    messages: long,
+  };
+
+  const custom: TitleFixture = {
+    name: "custom-title-quotes",
+    conversation: { title: "My own name", title_is_custom: true, subtitle: "- earlier", message_count: 7 },
+    messages: [
+      { role: "user", content: 'Plan the "Q3 pricing" research: compare tiers\nand list risks', timestamp: T0 },
+      { role: "assistant", content: "Here is a first pass at the tiers — free, team, enterprise.", timestamp: T0 + MIN },
+      { role: "user", content: "Use the café survey numbers ☕ and keep it under a page", timestamp: T0 + 2 * MIN },
+      { role: "assistant", content: `Draft: ${"Tier analysis with margins and churn assumptions. ".repeat(12)}`, timestamp: T0 + 3 * MIN },
+      { role: "user", content: "<fork-boilerplate>ignore</fork-boilerplate>", timestamp: T0 + 4 * MIN },
+      { role: "user", content: "Now turn it into a table with a recommendation row", timestamp: T0 + 5 * MIN },
+      { role: "assistant", content: "Table added with a recommendation: raise team tier by 10%.", timestamp: T0 + 6 * MIN },
+    ],
+  };
+  return [fresh, titled, custom];
+}
+
+const titleModules = {
+  "./_generated/server.ts": () => import("./_generated/server"),
+  "./titleGeneration.ts": () => import("./titleGeneration"),
+};
+
+async function seedTitleFixture(fx: TitleFixture) {
+  const t = convexTest(schema, titleModules);
+  const ids = await t.run(async (ctx) => {
+    const user_id = await ctx.db.insert("users", { name: "Fixture" } as any);
+    const conversation_id = await ctx.db.insert("conversations", {
+      user_id, agent_type: "claude_code", session_id: `s-${fx.name}`, started_at: T0, updated_at: T0,
+      is_private: true, status: "active", ...fx.conversation,
+    } as any);
+    for (const m of fx.messages) await ctx.db.insert("messages", { conversation_id, ...m } as any);
+    const task = await ctx.db.insert("tasks", {
+      user_id, short_id: "ct-1", title: "Replace chokidar with fs.watch", task_type: "task", priority: "medium", source: "human",
+      created_at: T0, updated_at: T0, description: `Cut file descriptor use. ${"The watcher holds one FD per directory. ".repeat(12)}`,
+    } as any);
+    const plan = await ctx.db.insert("plans", {
+      user_id, short_id: "pl-1", title: "Unify the AI's context around the broker", status: "active", source: "human",
+      created_at: T0, updated_at: T0, goal: "One render path for every channel.",
+    } as any);
+    return { conversation_id, task, plan };
+  });
+  return { t, ...ids };
+}
+
+describe("title request goldens", () => {
+  const fetchStub = captureFetch();
+  beforeEach(() => fetchStub.install());
+  afterEach(() => fetchStub.restore());
+
+  test("generateTitle posts the recorded body for each fixture", async () => {
+    const actual: GoldenCase[] = [];
+    for (const fx of titleFixtures()) {
+      const { t, conversation_id } = await seedTitleFixture(fx);
+      fetchStub.bodies.length = 0;
+      await t.action(internal.titleGeneration.generateTitle, { conversation_id });
+      expect(fetchStub.bodies.length).toBe(1);
+      actual.push({ case: fx.name, body: fetchStub.bodies[0] });
+    }
+    expect(actual).toEqual(recordGolden("title", actual));
+  });
+
+  test("generateShortTitle posts the recorded body for a task, a plan and a session", async () => {
+    const actual: GoldenCase[] = [];
+    const { t, conversation_id, task, plan } = await seedTitleFixture(titleFixtures()[2]);
+    for (const [name, id] of [["task", task], ["plan", plan], ["session", conversation_id]] as const) {
+      fetchStub.bodies.length = 0;
+      await t.action(internal.titleGeneration.generateShortTitle, { id });
+      expect(fetchStub.bodies.length).toBe(1);
+      actual.push({ case: name, body: fetchStub.bodies[0] });
+    }
+    expect(actual).toEqual(recordGolden("short-title", actual));
+  });
+});
+
+// The evals hold a transcript, not a database: pickSpineRows plus
+// selectTitleInput over the same rows must post the bytes the query path posts.
+describe("title request from rows", () => {
+  test("pickSpineRows + selectTitleInput + titleRequest equal the golden", () => {
+    const golden = loadGolden("title");
+    for (const fx of titleFixtures()) {
+      const rows = fx.messages.map((m, i) => ({ _id: `m${i}`, ...m }));
+      const input = selectTitleInput({ spine: pickSpineRows(rows), latest: rows.slice(-20).reverse() }, fx.conversation);
+      const body = goldenBody(titleRequest(input));
+      expect(body).toBe(golden.find((g) => g.case === fx.name)!.body);
+    }
+  });
+
+  test("shortTitleRequest is the name-only pass on the cheap model", () => {
+    const req = shortTitleRequest({ kind: "plan", title: "Unify the AI's context around the broker", context: "One render path for every channel." });
+    expect(goldenBody(req)).toBe(loadGolden("short-title").find((g) => g.case === "plan")!.body);
   });
 });

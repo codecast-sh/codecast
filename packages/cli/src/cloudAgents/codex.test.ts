@@ -2,25 +2,28 @@ import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { CLIENT_ERROR_BANNER_PREFIX, cloudAgentCredentialError } from "@codecast/shared/contracts";
+import { CLIENT_ERROR_BANNER_PREFIX, cloudAgentCardKind } from "@codecast/shared/contracts";
 import { parseMirrorTranscriptFile } from "../parser.js";
 import { cloudApiErrorOf, CloudApiError } from "./http.js";
 import { execFileSync } from "child_process";
 import { CLOUD_AGENT_ACTION_SUBTYPE, CLOUD_AGENT_PROVIDERS } from "@codecast/shared/contracts";
 import { readTranscriptIngest } from "../workers/ingestClient.js";
-import { buildCodexCloudTranscript, CodexCloudAdapter, CodexCloudApi, codexCitations, codexTaskLines, codexTaskTitle, isRunningTurnStatus, taskGit, taskRepo, taskTurnChain, type CodexKnown, type WhamTask, type WhamTurn, type WhamTurns } from "./codex.js";
+import { buildCodexCloudTranscript, CodexCloudAdapter, CodexCloudApi, codexCitations, codexTaskLines, codexTaskTitle, taskGit, taskRepo, taskTurnChain, type CodexKnown, type WhamTask, type WhamTurn, type WhamTurns } from "./codex.js";
+import { isRunningTurnStatus } from "./transcript.js";
 import { CloudAgentRegistry } from "./registry.js";
 import { checkCloudAgentLogin } from "./registry.js";
-import { applyInCheckout, CloudAgentSessions, setupErrorOf, type CloudAgentSession } from "./sessions.js";
+import { applyInCheckout, CloudAgentSessions, cloudSetupErrorOf, type CloudAgentSession } from "./sessions.js";
 import { porcelainEntries } from "../gitPlane.js";
 import { classifyMirrorTranscriptTail, mirrorMessageUuid, readMetaJson } from "./transcript.js";
 import { CloudAgentBusyError, CloudAgentSetupError, type CloudAgentLoginCommand } from "./types.js";
 import { CloudAgentWatcher } from "./watcher.js";
 import { deviceLabel } from "../remote/device.js";
+import { json, type FakeCloudCall } from "../test-helpers/cloudFetch.js";
+import { fakeSessionWatcher } from "../test-helpers/cloudAgentFakes.js";
+import { clone, CODEX_NOW, CODEX_VALID, codexAuthJson, codexFixture, whamFetch } from "../test-helpers/codexCloudFixtures.js";
 
 // Real payloads from chatgpt.com/backend-api/wham (2026-09-29), scrubbed.
-const FIXTURES = path.join(import.meta.dir, "..", "__fixtures__", "codexCloud");
-const fixture = <T = any>(name: string): T => JSON.parse(fs.readFileSync(path.join(FIXTURES, name), "utf8"));
+const fixture = codexFixture;
 const ASK = fixture<WhamTurns>("turns.ask.json");
 const FOLLOW_UP = fixture<WhamTurns>("turns.askFollowUp.json");
 const BEST_OF_2 = fixture<WhamTurns>("turns.bestOf2.json");
@@ -33,49 +36,23 @@ function read(turns: WhamTurns, opts: { taskId?: string; notice?: string; pullRe
   return { jsonl, messages: parseMirrorTranscriptFile("codex", jsonl, "task") };
 }
 
-const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 const assistantTurn = (turns: WhamTurns, placement = 0) => Object.values(turns.turn_mapping!).map((n) => n.turn!).find((t) => t.type === "assistant" && (t.attempt_placement ?? 0) === placement)!;
 
-/** A JWT with the claims given (unsigned: codecast only reads its own machine's file). */
-function jwt(claims: Record<string, unknown>): string {
-  return `e30.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.sig`;
-}
-function authJson(expSeconds: number): string {
-  return JSON.stringify({
-    auth_mode: "chatgpt",
-    tokens: {
-      access_token: jwt({ exp: expSeconds }),
-      refresh_token: "rt",
-      account_id: "acct-1",
-      id_token: jwt({ email: "person@example.com", "https://api.openai.com/auth": { chatgpt_plan_type: "pro" } }),
-    },
-  });
-}
-const NOW = 1_790_724_000_000;
-const VALID = authJson(NOW / 1000 + 3600);
-const EXPIRED = authJson(NOW / 1000 - 3600);
+const NOW = CODEX_NOW;
+const VALID = CODEX_VALID;
+const EXPIRED = codexAuthJson(NOW / 1000 - 3600);
 
-/** A fetch over the wham API: routes by method and path, records every call. */
+/** A fetch over the wham API (whamFetch) whose routes get the request body. */
 function wham(routes: Record<string, (body: any) => Response>) {
-  const calls: Array<{ method: string; path: string; body?: any; headers: Record<string, string> }> = [];
-  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = new URL(String(input));
-    const p = url.pathname.replace("/backend-api/wham", "");
-    const method = init?.method ?? "GET";
-    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
-    calls.push({ method, path: `${p}${url.search}`, body, headers: init?.headers as Record<string, string> });
-    const hit = routes[`${method} ${p}`];
-    return hit ? hit(body) : new Response(JSON.stringify({ detail: "Invalid task ID" }), { status: 404 });
-  }) as typeof fetch;
-  return { fetchImpl, calls };
+  // Routes are read at call time: a test swaps one between polls.
+  return whamFetch(new Proxy({} as Record<string, (call: FakeCloudCall) => Response>, { get: (_, k) => (typeof k === "string" && routes[k] ? (call: FakeCloudCall) => routes[k](call.body) : undefined) }));
 }
-const json = (v: unknown, status = 200) => () => new Response(JSON.stringify(v), { status });
 
 function adapter(auth: string | null, fetchImpl?: typeof fetch, extra: Partial<ConstructorParameters<typeof CodexCloudAdapter>[0]> = {}) {
   return new CodexCloudAdapter({ readAuth: () => auth, fetchImpl, now: () => NOW, ...extra });
 }
 
-const SESSION: CloudAgentSession = { model: "", repoUrl: "https://github.com/ashot/chatdoc", startingRef: "main" };
+const SESSION: CloudAgentSession = { model: "", repoUrl: "https://github.com/ashot/chatdoc", repo: { owner: "ashot", name: "chatdoc" }, startingRef: "main" };
 
 const cleanups: (() => void)[] = [];
 afterEach(() => { for (const fn of cleanups.splice(0)) try { fn(); } catch {} });
@@ -340,7 +317,7 @@ describe("Codex Cloud API", () => {
     expect(page.items[0]).toMatchObject({ id: "task_e_6abc48f2d3b0832e9e4bb4b303d1bc45", updatedAtMs: Math.round(1790724360.440929 * 1000), active: false });
     expect(page.items[0].version).toContain("completed");
     expect(page.nextCursor).toBe(LIST.cursor);
-    expect(calls[0].path).toBe("/tasks/list?limit=20&task_filter=current");
+    expect(`${calls[0].path}${calls[0].search}`).toBe("/tasks/list?limit=20&task_filter=current");
     // The machine's own Codex headers.
     expect(calls[0].headers.Authorization).toStartWith("Bearer ");
     expect(calls[0].headers["ChatGPT-Account-Id"]).toBe("acct-1");
@@ -363,12 +340,12 @@ describe("Codex Cloud sign-in (read only, never refreshed)", () => {
   test("no login is the missing-credentials card; an expired token is its own card, naming the machine and the date", () => {
     const missing = adapter(null).client() as CloudAgentSetupError;
     expect(missing.kind).toBe("key_missing");
-    expect(cloudAgentCredentialError("codex", missing.message)?.id).toBe("codex");
+    expect(cloudAgentCardKind(CLOUD_AGENT_PROVIDERS.codex, missing.message)).toBe("credential");
     const expired = adapter(EXPIRED).client() as CloudAgentSetupError;
     expect(expired.kind).toBe("key_invalid");
     expect(expired.message).toBe(`The Codex sign-in on ${deviceLabel()} expired ${new Date(NOW - 3600_000).toLocaleDateString("en-US", { month: "short", day: "numeric" })}.`);
     expect(expired.message).not.toContain("refused");
-    expect(cloudAgentCredentialError("codex", expired.message)?.id).toBe("codex");
+    expect(cloudAgentCardKind(CLOUD_AGENT_PROVIDERS.codex, expired.message)).toBe("credential");
     expect(expired.holdReason).toBe(`waiting for a Codex sign-in on ${deviceLabel()}`);
     expect(adapter(VALID).client()).toBeInstanceOf(CodexCloudApi);
   });
@@ -377,12 +354,12 @@ describe("Codex Cloud sign-in (read only, never refreshed)", () => {
     const apiKey = adapter(JSON.stringify({ OPENAI_API_KEY: "sk-test", tokens: null })).client() as CloudAgentSetupError;
     expect(apiKey.kind).toBe("key_missing");
     expect(apiKey.reason).toContain("API key");
-    expect(cloudAgentCredentialError("codex", apiKey.message)?.id).toBe("codex");
+    expect(cloudAgentCardKind(CLOUD_AGENT_PROVIDERS.codex, apiKey.message)).toBe("credential");
   });
 
   test("check (the core's verdict): the account and plan Codex names; signed out, expired, refused and turned off each say so", async () => {
     const ok = wham({ "GET /usage": json({ email: "person@example.com", plan_type: "pro" }), "GET /tasks/list": json({ items: [] }) });
-    expect(await checkCloudAgentLogin(adapter(VALID, ok.fetchImpl))).toEqual({ state: "signed_in", account: "person@example.com", plan: "pro" });
+    expect(await checkCloudAgentLogin(adapter(VALID, ok.fetchImpl))).toEqual({ state: "signed_in", account: "person@example.com", plan: "Pro" });
     expect(await checkCloudAgentLogin(adapter(null))).toEqual({ state: "signed_out" });
     const apiKey = await checkCloudAgentLogin(adapter(JSON.stringify({ OPENAI_API_KEY: "sk-test" })));
     expect(apiKey.state).toBe("signed_out");
@@ -436,7 +413,7 @@ describe("Codex Cloud drive", () => {
     const running = clone(ASK);
     assistantTurn(running).turn_status = "pending";
     const id = "task_e_6abc48f2d3b0832e9e4bb4b303d1bc45";
-    const { fetchImpl, calls } = wham({ [`GET /tasks/${id}/turns`]: json(running), [`GET /tasks/${id}`]: json({ task: {} }), [`POST /tasks/${id}/cancel`]: json({ success: true }) });
+    const { fetchImpl, calls } = wham({ [`GET /tasks/${id}/turns`]: json(running), [`GET /tasks/${id}`]: json({ task: { id } }), [`POST /tasks/${id}/cancel`]: json({ success: true }) });
     const a = adapter(VALID, fetchImpl);
     const api = a.client() as CodexCloudApi;
     await expect(a.followUp(api, id, "more")).rejects.toBeInstanceOf(CloudAgentBusyError);
@@ -459,19 +436,19 @@ describe("Codex Cloud drive", () => {
     expect(err.message).toContain("https://chatgpt.com/codex/settings/environments");
   });
 
-  test("a 403 names the admin permission, or the repository Codex cannot reach; a 401 is the sign-in card", () => {
+  test("a 403 names the admin permission, or the repository Codex cannot reach; a 401 is the sign-in card", async () => {
     const a = adapter(VALID);
-    const off = setupErrorOf(a, new CloudApiError(403, undefined, "Forbidden"), SESSION)!;
+    const off = (await cloudSetupErrorOf(a, undefined, new CloudApiError(403, undefined, "Forbidden"), SESSION))!;
     expect(off.kind).toBe("access");
     expect(off.holdReason).toBe("waiting until Codex Cloud lets this account in");
     expect(off.message).toContain("Use Codex in the cloud");
-    expect(cloudAgentCredentialError("codex", off.message)).toBeNull();
-    const repo = setupErrorOf(a, new CloudApiError(403, "repo_not_accessible", "Repository is not accessible"), SESSION)!;
+    expect(cloudAgentCardKind(CLOUD_AGENT_PROVIDERS.codex, off.message)).toBe("setup");
+    const repo = (await cloudSetupErrorOf(a, undefined, new CloudApiError(403, "repo_not_accessible", "Repository is not accessible"), SESSION))!;
     expect(repo.kind).toBe("repo");
     expect(repo.message).toContain("ashot/chatdoc");
-    const signIn = setupErrorOf(a, new CloudApiError(401, undefined, "Could not parse your authentication token."), SESSION)!;
+    const signIn = (await cloudSetupErrorOf(a, undefined, new CloudApiError(401, undefined, "Could not parse your authentication token."), SESSION))!;
     expect(signIn.kind).toBe("key_invalid");
-    expect(cloudAgentCredentialError("codex", signIn.message)?.id).toBe("codex");
+    expect(cloudAgentCardKind(CLOUD_AGENT_PROVIDERS.codex, signIn.message)).toBe("credential");
   });
 });
 
@@ -554,7 +531,7 @@ describe("Codex Cloud mirror (the core watcher over the adapter)", () => {
 
   test("with the account's sync off and nothing of codecast's to follow, a pass does not call the API at all", async () => {
     const { fetchImpl, calls } = wham(routes);
-    const watcher = new CloudAgentWatcher(adapter(VALID, fetchImpl), { rootDir: mirrorDir(), now: () => NOW, importAll: () => false, hasOwnAgents: () => false });
+    const watcher = new CloudAgentWatcher(adapter(VALID, fetchImpl), { rootDir: mirrorDir(), now: () => NOW, importAll: () => false, ownAgents: () => new Set() });
     await watcher.poll();
     expect(calls).toEqual([]);
   });
@@ -739,8 +716,9 @@ describe("Codex Cloud drive: follow-ups, held while busy, cancel", () => {
   test("held while busy: known from the mirror's last read without asking Codex, and the hold says why", async () => {
     const { fetchImpl, calls } = wham({});
     const statuses: string[] = [];
-    const s = new CloudAgentSessions(adapter(VALID, fetchImpl), {
-      watcher: () => ({ follow: async () => {}, setNotice: () => {}, isRunning: (id) => id === BEST_TASK.id }),
+    const a = adapter(VALID, fetchImpl);
+    const s = new CloudAgentSessions(a, {
+      watcher: () => fakeSessionWatcher(a, { isRunning: (id) => id === BEST_TASK.id }),
       bindSession: () => {},
       agentForConversation: () => BEST_TASK.id,
       setStatus: (_c, st) => statuses.push(st),
@@ -759,8 +737,9 @@ describe("Codex Cloud drive: follow-ups, held while busy, cancel", () => {
     assistantTurn(running, 0).turn_status = "in_progress";
     const { fetchImpl, calls } = wham({ [`GET /tasks/${BEST_TASK.id}/turns`]: json(running), [`GET /tasks/${BEST_TASK.id}`]: json({ task: BEST_TASK }) });
     const followed: string[] = [];
-    const s = new CloudAgentSessions(adapter(VALID, fetchImpl), {
-      watcher: () => ({ follow: async (id) => { followed.push(id); }, setNotice: () => {}, isRunning: (id) => followed.includes(id) }),
+    const a = adapter(VALID, fetchImpl);
+    const s = new CloudAgentSessions(a, {
+      watcher: () => fakeSessionWatcher(a, { follow: async (id) => { followed.push(id); }, isRunning: (id) => followed.includes(id) }),
       bindSession: () => {}, agentForConversation: () => BEST_TASK.id, setStatus: () => {}, log: () => {},
     }, path.join(tmpDir("codex-sessions-"), "sessions.json"));
     await expect(s.deliver("conv-1", "next")).rejects.toBeInstanceOf(CloudAgentBusyError);

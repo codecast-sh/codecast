@@ -537,8 +537,8 @@ function CastDecideBlock({ decide, rawCmd, output, isError, conversationId }: { 
   );
 }
 
-export function CastCommandBlock({ tool, result, images, globalImageMap, conversationId }: { tool: ToolCall; result?: ToolResult; images?: ImageData[]; globalImageMap?: Record<string, ImageData[]>; conversationId?: Id<"conversations"> }) {
-  const [expanded, setExpanded] = useState(false);
+export function CastCommandBlock({ tool, result, images, globalImageMap, conversationId, defaultExpanded = false }: { tool: ToolCall; result?: ToolResult; images?: ImageData[]; globalImageMap?: Record<string, ImageData[]>; conversationId?: Id<"conversations">; /** Open on mount: the command and its output, not just the row. */ defaultExpanded?: boolean }) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
   const cast = parseCastCommand(tool)!;
   const { category, subcommand, args } = cast;
   const output = result?.content || "";

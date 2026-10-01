@@ -1,0 +1,26 @@
+{
+  "name": "settle waiting-on-a-person",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:waiting-on-a-person"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "settle:waiting-on-a-person",
+    "title": "settle waiting-on-a-person"
+  },
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "trigger": {
+    "type": "settle"
+  },
+  "meta": {
+    "surface": "settle",
+    "visibility": "public",
+    "snapshot": "fixtures/settle/waiting-on-a-person.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "3b8a1235-dbd0-4729-8a2f-4351fd8f2ced",
+  "createdAt": "2026-10-01T17:46:23.998Z"
+}

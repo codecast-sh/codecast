@@ -599,6 +599,11 @@ export function SessionMenuItems({
           Kill session
         </CtxItem>
       )}
+      {!session.persistent && (
+        <CtxItem danger icon={Trash2} onSelect={() => openPaletteMode([session], "session", "session_delete")}>
+          Delete session…
+        </CtxItem>
+      )}
     </>
   );
 }

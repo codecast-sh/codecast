@@ -1,0 +1,278 @@
+{
+ "asOf": "2026-01-15T14:30:05.000Z",
+ "notes": "synthetic session: per-sender webhook rate limiting, cut at line 20",
+ "judge": "names the per-sender rate limiting of the billing webhook as the goal (not the flaky test detour), specific enough to find it later; the subtitle reflects the configurable limits and passing tests",
+ "snapshot": {
+  "mode": "title",
+  "spine": [
+   {
+    "_id": "m1",
+    "role": "user",
+    "content": "The /hooks/billing endpoint is getting hammered by retries from the payment provider and our worker pool falls over. Add rate limiting per sender, something like 20 requests a minute, and return 429 with Retry-After when it trips.",
+    "timestamp": 1768485600000,
+    "line": 1
+   },
+   {
+    "_id": "m7",
+    "role": "user",
+    "content": "Keep the buckets in Redis, not in memory. We run four instances behind the load balancer so an in-memory limit is four times too loose.",
+    "timestamp": 1768486170000,
+    "line": 7
+   },
+   {
+    "_id": "m11",
+    "role": "user",
+    "content": "Write a test that fires 25 requests from one sender and checks the last five get 429.",
+    "timestamp": 1768486550000,
+    "line": 11
+   },
+   {
+    "_id": "m14",
+    "role": "user",
+    "content": "The retry test in hooks.test.ts is flaky again, can you see why while you are in there?",
+    "timestamp": 1768486835000,
+    "line": 14
+   },
+   {
+    "_id": "m17",
+    "role": "user",
+    "content": "Good. Now make the limit configurable per sender, the big reseller account needs 200 a minute.",
+    "timestamp": 1768487120000,
+    "line": 17
+   },
+   {
+    "_id": "m17",
+    "role": "user",
+    "content": "Good. Now make the limit configurable per sender, the big reseller account needs 200 a minute.",
+    "timestamp": 1768487120000,
+    "line": 17
+   },
+   {
+    "_id": "m14",
+    "role": "user",
+    "content": "The retry test in hooks.test.ts is flaky again, can you see why while you are in there?",
+    "timestamp": 1768486835000,
+    "line": 14
+   },
+   {
+    "_id": "m11",
+    "role": "user",
+    "content": "Write a test that fires 25 requests from one sender and checks the last five get 429.",
+    "timestamp": 1768486550000,
+    "line": 11
+   },
+   {
+    "_id": "m7",
+    "role": "user",
+    "content": "Keep the buckets in Redis, not in memory. We run four instances behind the load balancer so an in-memory limit is four times too loose.",
+    "timestamp": 1768486170000,
+    "line": 7
+   },
+   {
+    "_id": "m1",
+    "role": "user",
+    "content": "The /hooks/billing endpoint is getting hammered by retries from the payment provider and our worker pool falls over. Add rate limiting per sender, something like 20 requests a minute, and return 429 with Retry-After when it trips.",
+    "timestamp": 1768485600000,
+    "line": 1
+   },
+   {
+    "_id": "m1",
+    "role": "user",
+    "content": "The /hooks/billing endpoint is getting hammered by retries from the payment provider and our worker pool falls over. Add rate limiting per sender, something like 20 requests a minute, and return 429 with Retry-After when it trips.",
+    "timestamp": 1768485600000,
+    "line": 1
+   },
+   {
+    "_id": "m7",
+    "role": "user",
+    "content": "Keep the buckets in Redis, not in memory. We run four instances behind the load balancer so an in-memory limit is four times too loose.",
+    "timestamp": 1768486170000,
+    "line": 7
+   },
+   {
+    "_id": "m11",
+    "role": "user",
+    "content": "Write a test that fires 25 requests from one sender and checks the last five get 429.",
+    "timestamp": 1768486550000,
+    "line": 11
+   },
+   {
+    "_id": "m14",
+    "role": "user",
+    "content": "The retry test in hooks.test.ts is flaky again, can you see why while you are in there?",
+    "timestamp": 1768486835000,
+    "line": 14
+   },
+   {
+    "_id": "m17",
+    "role": "user",
+    "content": "Good. Now make the limit configurable per sender, the big reseller account needs 200 a minute.",
+    "timestamp": 1768487120000,
+    "line": 17
+   }
+  ],
+  "latest": [
+   {
+    "_id": "m20",
+    "role": "assistant",
+    "content": "All limiter tests pass and the flaky retry test passed 50 runs in a row. The change is ready for review.",
+    "timestamp": 1768487405000,
+    "line": 20
+   },
+   {
+    "_id": "m19",
+    "role": "user",
+    "content": "",
+    "timestamp": 1768487310000,
+    "line": 19,
+    "tool_results": [
+     {}
+    ]
+   },
+   {
+    "_id": "m18",
+    "role": "assistant",
+    "content": "Added a per-sender override map loaded from config/rateLimits.json, defaulting to 20 a minute. The reseller entry is set to 200. Tests cover the override.",
+    "timestamp": 1768487215000,
+    "line": 18
+   },
+   {
+    "_id": "m17",
+    "role": "user",
+    "content": "Good. Now make the limit configurable per sender, the big reseller account needs 200 a minute.",
+    "timestamp": 1768487120000,
+    "line": 17
+   },
+   {
+    "_id": "m16",
+    "role": "user",
+    "content": "",
+    "timestamp": 1768487025000,
+    "line": 16,
+    "tool_results": [
+     {}
+    ]
+   },
+   {
+    "_id": "m15",
+    "role": "assistant",
+    "content": "The flaky test waits a fixed 100 ms for a retry that is scheduled with jitter up to 150 ms. I changed it to wait for the retry event instead of sleeping.",
+    "timestamp": 1768486930000,
+    "line": 15
+   },
+   {
+    "_id": "m14",
+    "role": "user",
+    "content": "The retry test in hooks.test.ts is flaky again, can you see why while you are in there?",
+    "timestamp": 1768486835000,
+    "line": 14
+   },
+   {
+    "_id": "m13",
+    "role": "user",
+    "content": "",
+    "timestamp": 1768486740000,
+    "line": 13,
+    "tool_results": [
+     {}
+    ]
+   },
+   {
+    "_id": "m12",
+    "role": "assistant",
+    "content": "Added server/rateLimit.test.ts against a local Redis: 25 requests, the first 20 pass and the last 5 get 429 with Retry-After of 3.",
+    "timestamp": 1768486645000,
+    "line": 12
+   },
+   {
+    "_id": "m11",
+    "role": "user",
+    "content": "Write a test that fires 25 requests from one sender and checks the last five get 429.",
+    "timestamp": 1768486550000,
+    "line": 11
+   },
+   {
+    "_id": "m10",
+    "role": "assistant",
+    "content": "The limiter now uses Redis with an atomic script. Typecheck passes. Next I will add tests.",
+    "timestamp": 1768486455000,
+    "line": 10
+   },
+   {
+    "_id": "m9",
+    "role": "user",
+    "content": "",
+    "timestamp": 1768486360000,
+    "line": 9,
+    "tool_results": [
+     {}
+    ]
+   },
+   {
+    "_id": "m8",
+    "role": "assistant",
+    "content": "Moving the buckets to Redis with a Lua script so the take-and-refill is atomic across instances.",
+    "timestamp": 1768486265000,
+    "line": 8
+   },
+   {
+    "_id": "m7",
+    "role": "user",
+    "content": "Keep the buckets in Redis, not in memory. We run four instances behind the load balancer so an in-memory limit is four times too loose.",
+    "timestamp": 1768486170000,
+    "line": 7
+   },
+   {
+    "_id": "m6",
+    "role": "assistant",
+    "content": "Added server/rateLimit.ts with a token bucket (20 tokens, refill one every 3 seconds) and wired it into the billing route. Over the limit it answers 429 with a Retry-After header in whole seconds.",
+    "timestamp": 1768486075000,
+    "line": 6
+   },
+   {
+    "_id": "m5",
+    "role": "user",
+    "content": "",
+    "timestamp": 1768485980000,
+    "line": 5,
+    "tool_results": [
+     {}
+    ]
+   },
+   {
+    "_id": "m4",
+    "role": "assistant",
+    "content": "The route is registered in server/hooks.ts and the handler parses the body before any check. I will add a token bucket keyed by the sender id from the signature header, in a new server/rateLimit.ts, and call it first in the route.",
+    "timestamp": 1768485885000,
+    "line": 4
+   },
+   {
+    "_id": "m3",
+    "role": "user",
+    "content": "",
+    "timestamp": 1768485790000,
+    "line": 3,
+    "tool_results": [
+     {}
+    ]
+   },
+   {
+    "_id": "m2",
+    "role": "assistant",
+    "content": "I will look at how the billing webhook is routed and where a limiter can sit before the handler runs.",
+    "timestamp": 1768485695000,
+    "line": 2
+   },
+   {
+    "_id": "m1",
+    "role": "user",
+    "content": "The /hooks/billing endpoint is getting hammered by retries from the payment provider and our worker pool falls over. Add rate limiting per sender, something like 20 requests a minute, and return 429 with Retry-After when it trips.",
+    "timestamp": 1768485600000,
+    "line": 1
+   }
+  ],
+  "conversation": {
+   "message_count": 20
+  }
+ }
+}

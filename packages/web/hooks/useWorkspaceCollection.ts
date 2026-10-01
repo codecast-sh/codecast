@@ -26,11 +26,16 @@ import type { WorkspaceScopedStoreKey } from "../store/clientSyncRegistry";
 // and this hook accepts it — no second list to keep in step.
 export type WorkspaceScopedTable = WorkspaceScopedStoreKey;
 
+/** The viewer's active workspace key, read off store state: the active-team
+ *  pointer, else the viewer's own personal key. Null while the viewer is unknown. */
+export function activeWorkspaceKeyOf(s: { clientState: { ui?: { active_team_id?: string | null } }; currentUser?: { _id?: unknown } | null }): WorkspaceKey | null {
+  return activeWorkspaceKey(s.clientState.ui?.active_team_id, s.currentUser?._id ? String(s.currentUser._id) : null);
+}
+
 /** The viewer's active workspace key, from the canonical pointers. Null while
  *  the viewer is unknown — everything reads empty (fail closed), never all. */
 export function useActiveWorkspaceKey(): WorkspaceKey | null {
-  return useInboxStore((s) =>
-    activeWorkspaceKey(s.clientState.ui?.active_team_id, s.currentUser?._id ? String(s.currentUser._id) : null));
+  return useInboxStore(activeWorkspaceKeyOf);
 }
 
 // Membership signature: which row ids are in the workspace. Memoized on
@@ -86,13 +91,13 @@ export function useWorkspaceCollection<T = any>(
 ): T[] {
   const fieldSig = sig === null ? null : (sig ?? (defaultFieldSig as (row: T) => string));
   const s = useTrackedStore([
-    (st) => activeWorkspaceKey(st.clientState.ui?.active_team_id, st.currentUser?._id ? String(st.currentUser._id) : null),
+    (st) => activeWorkspaceKeyOf(st),
     (st) => {
-      const key = activeWorkspaceKey(st.clientState.ui?.active_team_id, st.currentUser?._id ? String(st.currentUser._id) : null);
+      const key = activeWorkspaceKeyOf(st);
       return membershipSig((st as any)[table], key, fieldSig);
     },
   ]);
-  const key = activeWorkspaceKey(s.clientState.ui?.active_team_id, s.currentUser?._id ? String(s.currentUser._id) : null);
+  const key = activeWorkspaceKeyOf(s);
   const coll = (s as any)[table] as Record<string, T>;
   const memberSig = membershipSig(coll, key, fieldSig);
   // Rows filed under a store key that isn't their own _id are dropped (e.g. a

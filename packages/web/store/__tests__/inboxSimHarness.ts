@@ -46,6 +46,7 @@ import {
   type InboxCompareOutcome,
   type InboxCompareState,
   type InboxDigestComparer,
+  type InboxDigestComparerIO,
 } from "../inboxDigestCompare";
 import { BLOCKED_REVIVE_TTL_MS, HIDDEN_OVERRIDE_SETTLE_MS } from "../inboxOverlays";
 import { __resetSyncActivityForTests, __setSyncActivityForTests, lastSyncApplyMono, syncApplySeq } from "../syncActivity";
@@ -54,6 +55,7 @@ import { applyUpdatesToStore, buildMutUpdates } from "../syncReplication";
 import { isReplicatedCollectionKey, REPLICATED_STORE_KEYS } from "../clientSyncRegistry";
 import { setGestureChannelFactory, type GestureMessage } from "../gestureBridge";
 import { syncMetaKey } from "../../hooks/reconcileCrawl";
+import { T0, advance, mono, now, resetClock } from "./sim/realm";
 import { inboxCrawlWsKey } from "../../hooks/useSyncInboxSessions";
 import { LIST_INBOX_SESSIONS_ARGS } from "../../hooks/useLiveInboxSessions";
 
@@ -62,28 +64,18 @@ export { INBOX_COMPARE_TICK_MS, INBOX_HEAL_BUDGET };
 
 export const ME = "u".repeat(32);
 export const CRAWL_KEY = syncMetaKey("sessions", inboxCrawlWsKey(ME));
-export const T0 = inboxEpoch(1_800_000_000_000) + 25_000;
-const MONO0 = 10_000_000;
 
 // ── The virtual clock ───────────────────────────────────────────────────────
-
-let vnow = T0;
-export const now = (): number => vnow;
-export const mono = (): number => MONO0 + (vnow - T0);
-export function advance(ms: number): void {
-  vnow += ms;
-}
-export function resetClock(): void {
-  vnow = T0;
-}
+// It lives in the multiplayer sim's realm; re-exported here for these suites.
+export { T0, advance, mono, now, resetClock };
 
 let nowSpy: ReturnType<typeof spyOn> | null = null;
 let perfSpy: ReturnType<typeof spyOn> | null = null;
 
 /** beforeEach: pin the clock, reset every module-scope cache the store keeps. */
 export function installSim(): void {
-  vnow = T0;
-  nowSpy = spyOn(Date, "now").mockImplementation(() => vnow);
+  resetClock();
+  nowSpy = spyOn(Date, "now").mockImplementation(() => now());
   perfSpy = spyOn(performance, "now").mockImplementation(() => mono());
   __resetSyncActivityForTests();
   __resetInboxPlacementCacheForTests();
@@ -159,7 +151,7 @@ export class SimServer {
   setAgent(id: string, patch: Record<string, any>): void {
     let ms = this.db._tables.managed_sessions.find((m: any) => m.conversation_id === id);
     if (!ms) {
-      ms = { _id: `ms_${id.slice(0, 8)}`, user_id: ME, conversation_id: id, last_heartbeat: vnow, agent_status: "idle", agent_status_updated_at: vnow };
+      ms = { _id: `ms_${id.slice(0, 8)}`, user_id: ME, conversation_id: id, last_heartbeat: now(), agent_status: "idle", agent_status_updated_at: now() };
       this.db._tables.managed_sessions.push(ms);
     }
     Object.assign(ms, patch);
@@ -287,7 +279,8 @@ export class Replica {
   constructor(readonly name: string, readonly server: SimServer, opts: { seed?: number } = {}) {
     const rng = makeRng(opts.seed ?? 1);
     this.comparer = createInboxDigestComparer({
-      platform: `sim-${name}`,
+      // The replica names itself in its drift events; no real surface label fits.
+      platform: `sim-${name}` as unknown as InboxDigestComparerIO["platform"],
       track: (event, props) => this.events.push({ event, props }),
       crawlMetaKeyFor: (meId) => (meId ? syncMetaKey("sessions", inboxCrawlWsKey(meId)) : null),
       // The heal IO is the real recovery path: byIds hydration through
@@ -300,7 +293,7 @@ export class Replica {
       probeOverlay: async () => this.withStore(async () => {
         useInboxStore.getState().applyInboxLivenessPayload("mine", await server.overlay());
       }),
-      now: () => vnow,
+      now,
       nowMono: mono,
       random: () => rng(),
       schedule: (fn) => {
@@ -425,7 +418,7 @@ export class Replica {
   async crawl(): Promise<void> {
     if (!this.feeds()) return;
     await this.settleWindows();
-    const rows = await this.server.crawl(vnow - 30 * GEN_DAY);
+    const rows = await this.server.crawl(now() - 30 * GEN_DAY);
     const returned = new Set(rows.map((r: any) => String(r._id)));
     const cached = Object.keys(this.state.sessions as Record<string, unknown>).filter((id) => !returned.has(id) && id.length === 32);
     const probed = cached.length ? await this.server.byIds(cached) : [];
@@ -440,7 +433,7 @@ export class Replica {
         const missing = cached.filter((id) => !present.has(id));
         if (missing.length) store.pruneFeedEntities("sessions", missing);
       }
-      store.recordSyncMeta(CRAWL_KEY, { backfilledAt: vnow });
+      store.recordSyncMeta(CRAWL_KEY, { backfilledAt: now() });
     });
   }
   async receiveAll(): Promise<void> {
@@ -470,7 +463,7 @@ export class Replica {
     // log position its write landed at onto the locks that write created,
     // and announces it to its sibling windows over the bridge.
     const patches = { conversations: { [id]: Object.fromEntries(keys.map((k) => [k, pending[`conversations:${id}:${k}`].value])) } };
-    const sentAt = vnow;
+    const sentAt = now();
     this.load();
     useInboxStore.getState().stampSyncAck(patches, [{ scope_key: `user:${ME}`, position }], sentAt);
     this.save();
@@ -568,7 +561,7 @@ export class Replica {
   // ── The rendered projection, from the chokepoint every surface uses ──
   placed() {
     this.load();
-    const out = placeInboxRows(useInboxStore.getState() as any, { scope: "mine", now: vnow });
+    const out = placeInboxRows(useInboxStore.getState() as any, { scope: "mine", now: now() });
     current = null;
     return out;
   }
@@ -772,7 +765,7 @@ export async function settleAndAssertConverged(server: SimServer, replicas: Repl
     if (heals > 0) await recanonicalize();
     expect({ replica: r.name, outcome }).toEqual({ replica: r.name, outcome: { kind: "clean", epoch: projection.epoch, short_circuit: true, payload_age_ms: expect.any(Number) } });
     const placed = r.placed();
-    expect({ replica: r.name, digest: placed.set_digest }).toEqual({ replica: r.name, digest: projection.set_digest });
+    expect<{ replica: string; digest: string | null }>({ replica: r.name, digest: placed.set_digest }).toEqual({ replica: r.name, digest: projection.set_digest });
     expect({ replica: r.name, tally: placed.tally }).toEqual({ replica: r.name, tally: projection.tally });
     assertPlacements(server, r, r.placementsSnapshot(), canonicalPlacements, "canonical");
     expect(r.membership()).toEqual([...direct.placements.keys()].sort());
@@ -818,8 +811,8 @@ export function newConversation(tag: string, over: Record<string, any> = {}): Re
     _id: convexIdFor(tag),
     user_id: ME,
     status: "active",
-    updated_at: vnow,
-    started_at: vnow - GEN_MIN,
+    updated_at: now(),
+    started_at: now() - GEN_MIN,
     message_count: 1,
     last_message_role: "user",
     title: `Session ${tag}`,
@@ -852,44 +845,44 @@ export const SERVER_EVENTS: Record<string, ServerEvent> = {
   newSession: (s, _rng, step) => {
     const c = newConversation(`new${step}`);
     s.insert(c);
-    s.setAgent(c._id, { agent_status: "working", last_heartbeat: vnow, agent_status_updated_at: vnow });
+    s.setAgent(c._id, { agent_status: "working", last_heartbeat: now(), agent_status_updated_at: now() });
   },
   agentSettles: (s, rng) => {
     const id = memberIds(s, rng);
     if (!id) return;
-    s.setAgent(id, { agent_status: "idle", last_heartbeat: vnow, agent_status_updated_at: vnow - 2 * GEN_MIN });
-    s.mutate(id, { updated_at: vnow - 2 * GEN_MIN, message_count: (s.conv(id).message_count ?? 0) + 1 });
+    s.setAgent(id, { agent_status: "idle", last_heartbeat: now(), agent_status_updated_at: now() - 2 * GEN_MIN });
+    s.mutate(id, { updated_at: now() - 2 * GEN_MIN, message_count: (s.conv(id).message_count ?? 0) + 1 });
   },
   agentDeclaresDone: (s, rng) => {
     const id = memberIds(s, rng);
     if (!id) return;
-    s.setAgent(id, { agent_status: "done", last_heartbeat: vnow, agent_status_updated_at: vnow });
+    s.setAgent(id, { agent_status: "done", last_heartbeat: now(), agent_status_updated_at: now() });
   },
   agentStarts: (s, rng) => {
     const id = memberIds(s, rng);
     if (!id) return;
-    s.setAgent(id, { agent_status: "working", last_heartbeat: vnow, agent_status_updated_at: vnow });
-    s.mutate(id, { updated_at: vnow, message_count: (s.conv(id).message_count ?? 0) + 1 });
+    s.setAgent(id, { agent_status: "working", last_heartbeat: now(), agent_status_updated_at: now() });
+    s.mutate(id, { updated_at: now(), message_count: (s.conv(id).message_count ?? 0) + 1 });
   },
   daemonDies: (s, rng) => {
     const id = memberIds(s, rng);
     if (!id) return;
-    s.setAgent(id, { last_heartbeat: vnow - GEN_HOUR });
+    s.setAgent(id, { last_heartbeat: now() - GEN_HOUR });
   },
   otherDevicePins: (s, rng) => {
     const id = memberIds(s, rng);
     if (!id) return;
-    s.mutate(id, { inbox_pinned_at: s.conv(id).inbox_pinned_at ? undefined : vnow });
+    s.mutate(id, { inbox_pinned_at: s.conv(id).inbox_pinned_at ? undefined : now() });
   },
   otherDeviceDismisses: (s, rng) => {
     const id = memberIds(s, rng);
     if (!id) return;
-    s.mutate(id, { inbox_dismissed_at: vnow, inbox_killed_at: vnow });
+    s.mutate(id, { inbox_dismissed_at: now(), inbox_killed_at: now() });
   },
   otherDeviceStashes: (s, rng) => {
     const id = memberIds(s, rng);
     if (!id) return;
-    s.mutate(id, { inbox_stashed_at: vnow, inbox_stash_hidden: undefined });
+    s.mutate(id, { inbox_stashed_at: now(), inbox_stash_hidden: undefined });
   },
   otherDeviceRestores: (s, rng) => {
     const hidden = s.conversations.filter((c) => !c.is_subagent && (c.inbox_dismissed_at || c.inbox_stashed_at));
@@ -900,7 +893,7 @@ export const SERVER_EVENTS: Record<string, ServerEvent> = {
   gcDeletesBlank: (s, rng, step) => {
     // The empty-conversation GC: a blank row is hard-deleted; a replica that
     // cached it learns only through the log's delete (authorized absence).
-    const blank = newConversation(`blank${step}`, { message_count: 0, last_message_role: undefined, started_at: vnow - GEN_DAY });
+    const blank = newConversation(`blank${step}`, { message_count: 0, last_message_role: undefined, started_at: now() - GEN_DAY });
     s.insert(blank);
     if (rng() < 0.7) s.delete(blank._id);
   },
@@ -912,7 +905,7 @@ export const SERVER_EVENTS: Record<string, ServerEvent> = {
   decisionQueued: (s, rng, step) => {
     const id = memberIds(s, rng);
     if (!id) return;
-    s.db._tables.session_decisions.push({ _id: `sd_${step}`, user_id: ME, conversation_id: id, status: "pending", created_at: vnow });
+    s.db._tables.session_decisions.push({ _id: `sd_${step}`, user_id: ME, conversation_id: id, status: "pending", created_at: now() });
   },
   decisionAnswered: (s) => {
     const open = s.db._tables.session_decisions.find((d: any) => d.status === "pending");
@@ -921,7 +914,7 @@ export const SERVER_EVENTS: Record<string, ServerEvent> = {
   userParks: (s, rng) => {
     const id = memberIds(s, rng);
     if (!id) return;
-    s.mutate(id, { inbox_rest: rng() < 0.5 ? "dormant" : rng() < 0.5 ? "done" : "needs_input", inbox_rest_at: vnow });
+    s.mutate(id, { inbox_rest: rng() < 0.5 ? "dormant" : rng() < 0.5 ? "done" : "needs_input", inbox_rest_at: now() });
   },
   apiErrorBanner: (s, rng) => {
     const id = memberIds(s, rng);
@@ -933,7 +926,7 @@ export const SERVER_EVENTS: Record<string, ServerEvent> = {
 // ── Fixtures ────────────────────────────────────────────────────────────────
 
 export function seededWorld(seed: number, n = 45): GenWorld {
-  return genWorld(seed, n, inboxEpoch(vnow), ME);
+  return genWorld(seed, n, inboxEpoch(now()), ME);
 }
 
 export async function bootReplica(server: SimServer, name: string, seed: number): Promise<Replica> {
