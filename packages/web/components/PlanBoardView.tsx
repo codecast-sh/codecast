@@ -10,11 +10,8 @@ import {
   CircleDot,
   CheckCircle2,
   XCircle,
-  ArrowUp,
-  ArrowDown,
-  Minus,
-  AlertTriangle,
 } from "lucide-react";
+import { taskPriorityBadge } from "../lib/taskPriority";
 
 const BOARD_COLUMNS = [
   { status: "open", label: "Open", icon: Circle, color: "text-sol-blue", border: "border-sol-blue/30" },
@@ -23,13 +20,6 @@ const BOARD_COLUMNS = [
   { status: "done", label: "Done", icon: CheckCircle2, color: "text-sol-green", border: "border-sol-green/30" },
   { status: "dropped", label: "Dropped", icon: XCircle, color: "text-sol-text-dim", border: "border-sol-text-dim/30" },
 ] as const;
-
-const PRIORITY_CONFIG: Record<string, { icon: typeof Minus; color: string }> = {
-  urgent: { icon: AlertTriangle, color: "text-sol-red" },
-  high: { icon: ArrowUp, color: "text-sol-orange" },
-  medium: { icon: Minus, color: "text-sol-text-dim" },
-  low: { icon: ArrowDown, color: "text-sol-text-dim" },
-};
 
 export function PlanBoardView({ tasks, planShortId }: { tasks: any[]; planShortId: string }) {
   const updateTask = useInboxStore((s) => s.updateTask);
@@ -112,7 +102,7 @@ export function PlanBoardView({ tasks, planShortId }: { tasks: any[]; planShortI
 
             <div className="flex-1 p-2 space-y-1.5 overflow-y-auto">
               {columnTasks.map(task => {
-                const pc = task.priority ? PRIORITY_CONFIG[task.priority] : null;
+                const pc = taskPriorityBadge(task.priority);
                 const PriorityIcon = pc?.icon;
                 const hasExec = task.execution_status && !!getExecStatusConfig(task.execution_status);
                 const isDragging = dragging === task.short_id;

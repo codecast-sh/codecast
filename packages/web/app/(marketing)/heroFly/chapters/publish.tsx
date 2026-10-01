@@ -4,10 +4,12 @@
  * Chapter 11, Publish: the lead session answers with a canvas report and runs
  * `cast publish`; the report becomes its page, framed the way a conversation
  * frames a published page. The page in the frame is the real codecast.sh/a/
- * chrome with its comments, generated ahead of time (scripts/hero-page.ts)
- * and isolated in a sandboxed iframe with an opaque origin.
+ * chrome with its comments, generated ahead of time (scripts/hero-page.ts),
+ * shown as a still that becomes the live page (a sandboxed iframe with an
+ * opaque origin) when a visitor points at it.
  */
 
+import { useState } from "react";
 import { AssistantBlock } from "@/components/conversation/blocks/turnBlocks";
 import { PageCard, PageFavicon, PublishedPageActions } from "@/components/PublishedPageEmbed";
 import type { PartProps } from "./contract";
@@ -36,8 +38,15 @@ function Reply({ now }: { now: number }) {
   );
 }
 
+/**
+ * The page: a still of it, captured from public/hero/page.html, so the film
+ * never waits on a cross-process frame painting under the camera's
+ * transform. The live page mounts over it only when a visitor reaches for
+ * it, and fades in once it has loaded.
+ */
 function Page() {
-  const framed = useFilmTime((t) => t >= PUBLISH.frame);
+  const [live, setLive] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   return (
     <div className="absolute inset-x-6 top-5" {...fly("page/publish.card")}>
       <PageCard
@@ -46,9 +55,17 @@ function Page() {
         href={`https://${PAGE.url}`}
         actions={<PublishedPageActions slug={PAGE.slug} expanded={false} onToggleExpand={noop} />}
       >
-        <div className="h-[470px] w-full bg-sol-card" data-hero-live="">
-          {framed && (
-            <iframe src="/hero/page.html" className="h-full w-full" sandbox="allow-scripts" title={PAGE.title} loading="eager" />
+        <div className="relative h-[470px] w-full overflow-hidden bg-sol-card" data-hero-live="" onPointerEnter={() => setLive(true)}>
+          <img src="/hero/page.jpg" alt="" className="absolute inset-0 h-full w-full object-cover object-top" decoding="async" draggable={false} />
+          {live && (
+            <iframe
+              src="/hero/page.html"
+              className="absolute inset-0 h-full w-full transition-opacity duration-300"
+              style={{ opacity: loaded ? 1 : 0 }}
+              sandbox="allow-scripts"
+              title={PAGE.title}
+              onLoad={() => setLoaded(true)}
+            />
           )}
         </div>
       </PageCard>

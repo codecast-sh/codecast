@@ -36,7 +36,7 @@ import {
 } from "./lib/access";
 import { notFound } from "./lib/auth";
 import { packSnapshotContent } from "./lib/docSnapshot";
-import { docTitleFromContent, setTitleHeading, withTitleHeading } from "@codecast/shared/docs";
+import { docTitleFromContent, renderDocMentionExcerpt, setTitleHeading, withTitleHeading } from "@codecast/shared/docs";
 import { identityFieldsOf } from "./conversations";
 export { canAccessDoc };
 
@@ -2097,7 +2097,7 @@ export const expandMentions = query({
                 && (await canAccessDoc(ctx, userId, doc))
                 && (doc as any).content
               ) {
-                md += `#### Plan Document\n\n${foreignProse((doc as any).content, FOREIGN_PLAN_CAPS.bodyChars) || ""}\n\n`;
+                md += `#### Plan Document\n\n${foreignProse(renderDocMentionExcerpt((doc as any).content, String(doc._id)), FOREIGN_PLAN_CAPS.bodyChars) || ""}\n\n`;
               }
             }
             const planSource = `plan ${inlineForeignText((plan as any).short_id)}`;
@@ -2197,12 +2197,7 @@ export const expandMentions = query({
             md += `Type: ${doc.doc_type || "note"}`;
             if ((doc as any).labels?.length) md += ` | Labels: ${(doc as any).labels.join(", ")}`;
             md += `\n\n`;
-            if (doc.content) {
-              const contentLimit = 4000;
-              md += doc.content.slice(0, contentLimit);
-              if (doc.content.length > contentLimit) md += `\n\n... (${Math.round(doc.content.length / 1000)}k chars total)`;
-              md += `\n\n`;
-            }
+            if (doc.content) md += `${renderDocMentionExcerpt(doc.content, String(doc._id))}\n`;
             // Related conversations
             const linkedConvs = await ctx.db.query("conversations")
               .withIndex("by_user_updated", (c: any) => c.eq("user_id", userId))
@@ -2216,7 +2211,7 @@ export const expandMentions = query({
               }
               md += `\n`;
             }
-            md += `> \`cast doc read ${String(doc._id).slice(-6)}\` for full document\n---\n`;
+            md += `---\n`;
             results.push({ type: "doc", id: mention.id, markdown: md });
           }
 

@@ -15,8 +15,8 @@ export const DECIDE_AT = {
   tap: CUES.decisionAnswered - 0.15,
   answered: CUES.decisionAnswered + 0.1,
   /** The answered card clears off the conversation it covered. */
-  cleared: 39.25,
-  gone: 39.8,
+  cleared: 41.0,
+  gone: 41.55,
 } as const;
 
 export const motion: ChapterMotion = {

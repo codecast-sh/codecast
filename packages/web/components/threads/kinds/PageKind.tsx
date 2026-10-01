@@ -78,7 +78,7 @@ export function PageExpanded({ card, seen, frozenReadAt, focusComposer }: { card
 
   return (
     <div className="th-card-open th-card-open-page">
-      <EarlierButton count={fold.hidden} noun="comment" onClick={fold.showAll} />
+      <EarlierButton fold={fold} noun="comment" />
       <div className="th-page-comments">
         {fold.visible.map(({ c, reply }) => (
           <div key={c._id} className={`th-page-comment ${reply ? "th-page-comment-reply" : ""}`}>

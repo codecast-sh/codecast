@@ -12,14 +12,12 @@
 import type { EntityFixture } from "@/lib/entityDisplay";
 import { CUES, MIN, OBJECTS, SESSIONS } from "./story";
 
-/** Film-time cues inside the chapter (the camera holds 69.0 to 73.4). */
+/** Film-time cues inside the chapter (the camera holds 69.1 to 73.9). */
 export const PUBLISH = {
-  reply: 68.2,
-  command: 69.0,
+  /** The canvas reply lands just ahead of the camera and reads for most of two seconds. */
+  reply: 68.9,
+  command: 69.7,
   published: CUES.published,
-  /** The iframe mounts just before the card lands, so the page has loaded under it. */
-  frame: CUES.published - 0.6,
-  comments: 71.0,
 } as const;
 
 /** The report, as the generated page and the canvas both tell it. */

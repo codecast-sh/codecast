@@ -8,7 +8,7 @@
 
 import type { InboxSession } from "@/store/inboxStore";
 import type { Device } from "@/components/DeviceBadge";
-import { CAMERA } from "../world";
+import { CAMERA, type Beat } from "../world";
 import { CUES, HOUR, MIN, OBJECTS, PROMPT, SESSIONS } from "./story";
 
 /** Chapter-internal cues on the desk, in film seconds. Cross-chapter ones are in story.ts. */
@@ -18,14 +18,15 @@ export const DESK = {
   iconStep: 0.09,
   /** The conversation pane fades from the previous session to the lead. */
   paneSwap: CUES.leadSelected,
-  thinking: 9.4,
-  edit: 10.2,
-  bash: 11.0,
+  /** The lead's plan answers the prompt before the camera moves in, so the poster's pane is full. */
+  thinking: 5.8,
+  edit: 8.3,
+  bash: 9.2,
   /** The steer: typed into the composer, then sent. */
-  steerType: 12.6,
+  steerType: 11.0,
   steerRate: 22,
-  steerSent: 13.95,
-  ack: 14.5,
+  steerSent: 12.3,
+  ack: 12.9,
 } as const;
 
 export const STEER = "keep the max at 5 attempts";
@@ -53,10 +54,11 @@ export const CLOUD_HOST: Device = {
   hostname: OBJECTS.hosts.cloud,
   last_seen: 0,
   is_remote: true,
+  online: true,
   local_project_roots: [],
 };
 
-/** The six sessions already in the inbox when the film opens, five agents between them, in the list's order. */
+/** The six sessions already in the inbox when the film opens, six agents between them with the lead, in the list's order. */
 export function inboxRows(now: number): { session: InboxSession; isLive: boolean; isUnread?: boolean; runHost?: Device }[] {
   return [
     {
@@ -101,7 +103,7 @@ export function inboxRows(now: number): { session: InboxSession; isLive: boolean
       isLive: false,
       isUnread: true,
       session: row(now, {
-        _id: "hero-s-audit", title: "Audit log export to S3", agent_type: "codex", ago: 47 * MIN,
+        _id: "hero-s-audit", title: "Audit log export to S3", agent_type: "opencode", ago: 47 * MIN,
         project_path: "/u/src/infra", git_root: "/u/src/infra", message_count: 34,
         idle_summary: "Export runs nightly and writes a manifest per day",
       }),
@@ -116,6 +118,20 @@ export function inboxRows(now: number): { session: InboxSession; isLive: boolean
     },
   ];
 }
+
+/**
+ * The inbox in its default grouped view, sections in the app's order (who
+ * acts next: you, then the agents). Rows are indexes into `inboxRows`; the
+ * lead lands on top of Working, and its workers nest under it.
+ */
+export const INBOX_SECTIONS = [
+  { key: "needs_input", label: "Needs Input", color: "text-sol-yellow", rows: [1] },
+  { key: "done", label: "Done", color: "text-sol-cyan", rows: [3, 4, 5] },
+  { key: "working", label: "Working", color: "text-sol-green", rows: [0, 2] },
+] as const;
+
+/** The rows in the order they read down the list. */
+export const INBOX_ORDER: number[] = INBOX_SECTIONS.flatMap((sec) => [...sec.rows]);
 
 /** The lead's message count as the film moves: its row and its header read it. */
 export const leadMessages = (t: number) =>
@@ -136,6 +152,9 @@ export type WorkerPhase = "working" | "asking" | "approved";
 
 export const apiWorkerPhase = (t: number): WorkerPhase =>
   t >= CUES.permissionApproved ? "approved" : t >= CUES.permissionAsk ? "asking" : "working";
+
+/** The cloud host each worker runs on: the API worker was spawned with `--cloud`. */
+export const WORKER_HOST: Record<"api" | "ui", Device | undefined> = { api: CLOUD_HOST, ui: undefined };
 
 export function workerRow(now: number, which: "api" | "ui", phase: WorkerPhase): InboxSession {
   const s = SESSIONS[which];
@@ -161,29 +180,6 @@ export function workerRow(now: number, which: "api" | "ui", phase: WorkerPhase):
   });
 }
 
-/* ── The lead's transcript ─────────────────────────────────────────────── */
-
-/**
- * Every entry the lead's transcript gains during the film, in order, with the
- * height it adds (px, measured at the desk's width). The transcript is
- * anchored to the composer, so an entry landing lifts everything above it by
- * its height; each part carries a `push` beat per entry at or below it so the
- * lift is a glide, not a jump.
- */
-export const TRANSCRIPT = [
-  { key: "prompt", part: "conversation", cue: CUES.prompt, h: 58 },
-  { key: "thinking", part: "conversation", cue: DESK.thinking, h: 84 },
-  { key: "edit", part: "conversation", cue: DESK.edit, h: 128 },
-  { key: "bash", part: "conversation", cue: DESK.bash, h: 46 },
-  { key: "bashDone", part: "conversation", cue: CUES.testsPass, h: 0 },
-  { key: "steer", part: "conversation", cue: DESK.steerSent, h: 58 },
-  { key: "ack", part: "conversation", cue: DESK.ack, h: 52 },
-  { key: "spawnA", part: "fanout", cue: CUES.spawnA, h: 74 },
-  { key: "spawnB", part: "fanout", cue: CUES.spawnB, h: 74 },
-] as const;
-
-export type TranscriptPart = (typeof TRANSCRIPT)[number]["part"];
-
 /** The camera hold the film is in or last passed: local interaction state is keyed on it, so it resets when the camera moves on. */
 export const holdIndex = (t: number) => {
   let i = 0;
@@ -193,6 +189,20 @@ export const holdIndex = (t: number) => {
   return i;
 };
 
-/** Rows in the inbox before the lead lands, and the measured heights of the rows that land (px). */
-export const INBOX_ROWS = 6;
-export const LIST_ROW_H = { lead: 64, worker: 26 };
+/** The measured heights of the rows that land in the inbox (px). */
+export const LIST_ROW_H = { lead: 70, worker: 23 };
+
+/**
+ * Glide a stack by `h` px when an entry of that height mounts into it at
+ * `cue` (React mounts it then, so the stack's resting layout never depends on
+ * `h`). Two pushes: one holds the stack `h` away and eases it home from the
+ * cue, the other cancels it exactly until the cue. So the stack sits still
+ * before the cue, appears where it was at the cue, and settles into its new
+ * place; a wrong `h` only shortens or lengthens the glide.
+ */
+export function glideOver(id: string, cue: number, h: number, dur = 0.65): Beat[] {
+  return [
+    { id, cue, dur, preset: "push", y: h },
+    { id, cue, dur: 0.0001, preset: "push", y: -h },
+  ];
+}

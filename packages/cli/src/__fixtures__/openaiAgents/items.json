@@ -1,0 +1,96 @@
+{
+ "object": "list",
+ "data": [
+  {
+   "type": "message",
+   "id": "msg_80de70be6b3012be0b8b1ddeaad4f8b75ea6ad2878ddbe9eb5",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "role": "user",
+   "content": [
+    {
+     "type": "input_text",
+     "text": "codecast test: run `cat Hello-World/README` and tell me its contents."
+    }
+   ],
+   "status": "completed",
+   "phase": null
+  },
+  {
+   "type": "reasoning",
+   "id": "rs_03f6683c1b47287f016abdeb668c7887d1a4c4131d2da94f9a",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "summary": [],
+   "status": "completed"
+  },
+  {
+   "type": "message",
+   "id": "msg_03f6683c1b47287f016abdeb66b27887d1897d798de9ef55fb",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "role": "assistant",
+   "content": [
+    {
+     "type": "output_text",
+     "text": "I\u2019ll wait for the workspace, then read that file."
+    }
+   ],
+   "status": "completed",
+   "phase": "commentary"
+  },
+  {
+   "type": "command_execution",
+   "id": "exec_383bbc47a6f1ffc0e14f6fa159f451996fb0c525491cdf6fcb",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "command": "/bin/bash -lc 'cat Hello-World/README'",
+   "cwd": "/workspace",
+   "status": "completed",
+   "output": "Hello World!\n",
+   "exit_code": 0,
+   "duration_ms": 0
+  },
+  {
+   "type": "message",
+   "id": "msg_03f6683c1b47287f016abdeb724c2487d18bd8c1e47d396041",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "role": "assistant",
+   "content": [
+    {
+     "type": "output_text",
+     "text": "Hello World!"
+    }
+   ],
+   "status": "completed",
+   "phase": "final_answer"
+  },
+  {
+   "type": "message",
+   "id": "msg_443de25c319834afbfc2893cc3ffe6e25039f54c22eafe7fde",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb8213e08193b35661e5a1650ebd",
+   "role": "user",
+   "content": [
+    {
+     "type": "input_text",
+     "text": "codecast test: run `sleep 40; echo done` and report the output."
+    }
+   ],
+   "status": "completed",
+   "phase": null
+  },
+  {
+   "type": "message",
+   "id": "msg_03f6683c1b47287f016abdeb8104e887d1a54456ac636f6f6b",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb8213e08193b35661e5a1650ebd",
+   "role": "assistant",
+   "content": [
+    {
+     "type": "output_text",
+     "text": "Running it now; this will take about 40 seconds."
+    }
+   ],
+   "status": "completed",
+   "phase": "commentary"
+  }
+ ],
+ "first_id": "msg_80de70be6b3012be0b8b1ddeaad4f8b75ea6ad2878ddbe9eb5",
+ "last_id": "msg_03f6683c1b47287f016abdeb8104e887d1a54456ac636f6f6b",
+ "has_more": false
+}

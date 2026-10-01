@@ -56,36 +56,53 @@ export const CUES = {
   /** 1 Inbox: the lead's row lands on top and takes focus. */
   leadLands: 3.4,
   leadSelected: 4.8,
-  /** 2 Conversation: the prompt drops in (the poster frame follows it). */
+  /** 2 Conversation: the prompt drops in, and the lead's plan answers it (the poster frame follows both). */
   prompt: 5.0,
-  testsPass: 12.0,
+  testsPass: 10.3,
   /** 3 Fan out: spawn blocks, then worker rows land in the list. */
-  spawnA: 15.6,
-  spawnB: 16.0,
-  workerRowA: 16.6,
-  workerRowB: 16.9,
-  /** 4 Approve: the API worker asks; the phone tap approves it. */
-  permissionAsk: 20.8,
+  spawnA: 14.7,
+  spawnB: 15.1,
+  workerRowA: 15.7,
+  workerRowB: 16.0,
+  /** 4 Approve: the API worker asks in its own pane; the phone tap approves it. */
+  permissionAsk: 21.6,
   permissionApproved: 25.6,
+  /** The answered stack leaves the worker's transcript. */
+  permissionCleared: 25.9,
   /** 5 Talk: a message and its reply between the workers, then a fork. */
-  messageSent: 29.6,
-  replySent: 31.2,
-  forked: 32.4,
+  messageSent: 31.1,
+  replySent: 32.5,
+  forked: 33.6,
   /** 6 Decide. */
-  decisionAsked: 35.4,
-  decisionAnswered: 37.8,
+  decisionAsked: 37.8,
+  decisionAnswered: 39.9,
   /** 7 Work: the lead files a task, it lands on the board, an agent claims it. */
-  taskFiled: 40.2,
-  taskLands: 41.6,
-  taskClaimed: 43.0,
+  taskFiled: 42.0,
+  taskLands: 43.5,
+  taskClaimed: 44.8,
   /** 8 Automation. */
-  triggerFires: 49.0,
-  /** 10 Integrations. */
-  prOpened: 62.0,
-  checksGreen: 64.5,
-  merged: 66.0,
+  triggerFires: 50.5,
+  /** 10 Integrations: the lead opens the PR before the team talks it over (9), its checks go green, it merges. */
+  prOpened: 53.8,
+  checksGreen: 64.7,
+  merged: 65.8,
   /** 11 Publish. */
-  published: 69.8,
+  published: 70.9,
   /** 12 Memory: the cut to three weeks later. */
-  threeWeeks: 73.5,
+  threeWeeks: 74.3,
+  /** 13 Anywhere: the API worker's row (on the cloud host) is opened, after the camera lands. */
+  remoteOpen: 83.4,
 } as const;
+
+/**
+ * What other chapters add to the foot of the lead's transcript, and the
+ * height each adds there (px at the desk's width, measured; negative when it
+ * leaves). The transcript is anchored to the composer, so the conversation
+ * chapter glides its feed by these and nothing jumps when they mount.
+ */
+export const FEED_FOOT: { cue: number; h: number }[] = [
+  { cue: CUES.taskFiled, h: 150 }, // 7 Track: `cast task create`
+];
+
+/** The permission stack's height at the foot of the API worker's transcript (px, measured); its boot entries glide by it. */
+export const ASK_H = 48;

@@ -43,7 +43,7 @@ export const JOB_AREAS: Record<string, Area[]> = {
   "test-cli": ["cli", "shared", "platform"],
   // The mirror's own job: its package tests, and the drift check. Every other
   // job lists "platform" too, because the mirror is a dependency of all of
-  // them and used to reach them through "shared".
+  // them and is its own area, not part of "shared".
   "test-platform": ["platform"],
   // Every area, because the shared suite reads more than shared: the max lines
   // ratchet walks every package under packages/, and the chief of staff prompt

@@ -13,7 +13,8 @@ import type { ToolCall, ToolResult } from "@/components/conversation/types";
 import type { ForkChild } from "@/store/inboxStore";
 import { MIN, PEOPLE, SESSIONS } from "./story";
 
-const DOC_REF = "doc:hero_retry_schema";
+const DOC_ID = "hero_retry_schema";
+const DOC_REF = `doc:${DOC_ID}`;
 
 const session = (s: (typeof SESSIONS)[keyof typeof SESSIONS], status: string, messages: number, model: string) => ({
   _id: s.id,
@@ -28,14 +29,15 @@ const session = (s: (typeof SESSIONS)[keyof typeof SESSIONS], status: string, me
   updated_at: Date.now() - MIN,
 });
 
+// A doc pill resolves by its bare id with the type given, so the fixture is keyed by the id, not the `doc:` reference.
 export const entities: Record<string, EntityFixture> = {
   [SESSIONS.api.shortId]: { type: "session", entity: session(SESSIONS.api, "active", 38, "gpt-5.1-codex") },
   [SESSIONS.ui.shortId]: { type: "session", entity: session(SESSIONS.ui, "active", 27, "composer-1") },
   [SESSIONS.fork.shortId]: { type: "session", entity: session(SESSIONS.fork, "active", 6, "gpt-5.1-codex") },
-  [DOC_REF]: {
+  [DOC_ID]: {
     type: "doc",
     entity: {
-      _id: "hero_retry_schema",
+      _id: DOC_ID,
       title: "Retry API schema",
       doc_type: "spec",
       created_at: Date.now() - 40 * MIN,
