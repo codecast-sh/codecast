@@ -4894,6 +4894,10 @@ pre[class*="language-"] {
   --sel-accent: var(--sol-orange);
   --sel-fill: color-mix(in srgb, var(--sol-orange) 15%, var(--sol-bg-alt));
 }
+/* On a dark ground 15% reads as mud; peach needs more of the accent. */
+.dark {
+  --sel-fill: color-mix(in srgb, var(--sol-orange) 26%, var(--sol-bg-alt));
+}
 /* A row in a multi-selection, in every layout. Simple view, compact and
    Minimal all force each row's background, so the ticked row sets the ground
    itself, over hover and status tints. The open row keeps its own ground and

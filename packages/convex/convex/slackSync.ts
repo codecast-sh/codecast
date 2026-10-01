@@ -40,6 +40,8 @@ import {
   wakeMentionedParties,
 } from "./chat";
 import { externalAuthorValidator } from "./lib/externalAuthor";
+import { chatAttachmentValidator, type ChatAttachment } from "./lib/chatAttachment";
+import { mirrorFiles, slackFileLinkLines } from "./lib/slackFiles";
 import { resolveChatMentions, slackPersonForHandle, teamRoster } from "./lib/mentionResolve";
 import { isValidEmoji, MAX_CHAT_CONTENT, normalizeChannelName, oneLine } from "./chatText";
 import { botHandle, dmKeyFor, extractMentionHandles, memberHandle } from "@codecast/shared/chat";
@@ -69,7 +71,6 @@ type Link = Doc<"slack_channel_links">;
 type Install = Doc<"slack_installations">;
 
 const PROFILE_TTL_MS = 24 * 60 * 60 * 1000;
-const MAX_FILE_BYTES = 20 * 1024 * 1024;
 // One import brings over at most this many lines (roots and replies): a
 // ceiling so "everything" on a years old, bot heavy channel cannot run for
 // hours, high enough that a busy team channel's whole history fits. The link
@@ -1841,57 +1842,6 @@ function isOwnBotEvent(install: Install, event: any): boolean {
   return !!(install.app_id && appId && appId === install.app_id);
 }
 
-type InboundFile = { storage_id: Id<"_storage">; name?: string; mime?: string; width?: number; height?: number };
-
-export async function mirrorFiles(ctx: ActionCtx, install: Install, files: any[]): Promise<{ attachments: InboundFile[]; extra: string[] }> {
-  const attachments: InboundFile[] = [];
-  const extra: string[] = [];
-  for (const f of files ?? []) {
-    if (!f || f.mode === "tombstone" || f.mode === "hidden_by_limit") continue;
-    const mime = String(f.mimetype ?? "");
-    const isImage = mime.startsWith("image/");
-    const size = Number(f.size ?? 0);
-    const url = f.url_private_download || f.url_private;
-    if (isImage && url && size > 0 && size <= MAX_FILE_BYTES) {
-      try {
-        const resp = await fetch(url, { headers: { Authorization: `Bearer ${install.bot_token}` } });
-        // A token without access to the file gets Slack's sign-in page back,
-        // often as a 200: only real image bytes become an attachment.
-        if (resp.ok && (resp.headers.get("content-type") ?? "").startsWith("image/")) {
-          const blob = await resp.blob();
-          const storageId = await ctx.storage.store(new Blob([await blob.arrayBuffer()], { type: mime }));
-          attachments.push({
-            storage_id: storageId,
-            name: f.name ? String(f.name).slice(0, 120) : undefined,
-            mime,
-            width: typeof f.original_w === "number" ? f.original_w : undefined,
-            height: typeof f.original_h === "number" ? f.original_h : undefined,
-          });
-          continue;
-        }
-      } catch {
-        // fall through to a link line
-      }
-    }
-    const label = f.title || f.name || "file";
-    if (f.permalink) extra.push(`📎 [${label}](${f.permalink})`);
-  }
-  return { attachments, extra };
-}
-
-// The link line mirrorFiles leaves when a file could not be read, with the
-// Slack file id its permalink carries (…slack.com/files/<user>/<file>/<name>).
-const FILE_LINK_LINE = /^📎 \[.*\]\(https:\/\/[^/\s)]+\.slack\.com\/files\/[^/\s)]+\/(F[A-Z0-9]+)\/[^\s)]*\)$/;
-
-export function slackFileLinkLines(content: string): Array<{ line: string; file_id: string }> {
-  const out: Array<{ line: string; file_id: string }> = [];
-  for (const line of content.split("\n")) {
-    const m = FILE_LINK_LINE.exec(line);
-    if (m) out.push({ line, file_id: m[1] });
-  }
-  return out;
-}
-
 // A token that could not read files (a DM grant from before files:read) left
 // images as link lines. Once the person's token can, bring each one over as
 // the image it should have been. Scheduled whenever a token is stored.
@@ -1929,7 +1879,7 @@ export const repairFileLinks = internalAction({
     if (!c) return { repaired: 0 };
     let repaired = 0;
     for (const row of c.rows) {
-      const attachments: InboundFile[] = [];
+      const attachments: ChatAttachment[] = [];
       let content = row.content;
       for (const { line, file_id } of slackFileLinkLines(row.content)) {
         const info = await slackApi(c.install.bot_token, "files.info", { file: file_id });
@@ -1954,13 +1904,7 @@ export const applyFileRepair = internalMutation({
     message_id: v.id("chat_messages"),
     expected: v.string(),
     content: v.string(),
-    attachments: v.array(v.object({
-      storage_id: v.id("_storage"),
-      name: v.optional(v.string()),
-      mime: v.optional(v.string()),
-      width: v.optional(v.number()),
-      height: v.optional(v.number()),
-    })),
+    attachments: v.array(chatAttachmentValidator),
   },
   handler: async (ctx, args) => {
     const row = await ctx.db.get(args.message_id);
@@ -2012,7 +1956,7 @@ async function mirrorMessage(
   if (body) parts.push(body);
   const cards = slackAttachmentsToMarkdown(msg.attachments, resolver);
   if (cards) parts.push(cards);
-  let attachments: InboundFile[] = [];
+  let attachments: ChatAttachment[] = [];
   if (Array.isArray(msg.files) && msg.files.length > 0) {
     if (link.options.files) {
       const mirrored = await mirrorFiles(ctx, install, msg.files);
@@ -2227,13 +2171,7 @@ export const applyInboundMessage = internalMutation({
     author_user_id: v.optional(v.id("users")),
     external_author: v.optional(externalAuthorValidator),
     content: v.string(),
-    attachments: v.array(v.object({
-      storage_id: v.id("_storage"),
-      name: v.optional(v.string()),
-      mime: v.optional(v.string()),
-      width: v.optional(v.number()),
-      height: v.optional(v.number()),
-    })),
+    attachments: v.array(chatAttachmentValidator),
     permalink: v.optional(v.string()),
     created_at: v.optional(v.number()),
     live: v.boolean(),

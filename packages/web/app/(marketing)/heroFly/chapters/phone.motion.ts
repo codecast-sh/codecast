@@ -28,7 +28,7 @@ export const motion: ChapterMotion = {
   beats: {
     desk: [{ id: "phone.stack", cue: CUES.permissionAsk, preset: "drop", z: 160, rx: -14, y: 18 }],
     phone: [
-      { id: "phone.banner", cue: PHONE_AT.banner, preset: "push", dur: 0.5, y: -96 },
+      { id: "phone.banner", cue: PHONE_AT.banner, preset: "drop", z: 160, rx: -14, y: -30 },
       { id: "phone.banner", cue: PHONE_AT.open - 0.05, preset: "liftOut", dur: 0.35, y: 30, z: 60 },
       { id: "phone.banner", cue: PHONE_AT.open - 0.05, preset: "fadeOut", dur: 0.3 },
       { id: "phone.lock", cue: PHONE_AT.open - 0.05, preset: "fadeOut", dur: 0.4 },
@@ -40,7 +40,7 @@ export const motion: ChapterMotion = {
     ],
   },
   flyers: [
-    { id: "phone.permission", cue: 23.3, dur: 0.85, from: regionPt("desk.list", 170, 120), to: localToWorld("phone", 0, -206, 8), arc: 320, rot: [[0, 0, 0], [0, -30, 4], [0, -16, -2]], scale: [1, 0.86], ease: "glide", fade: [0.1, 0.08] },
+    { id: "phone.permission", cue: 23.3, dur: 0.85, from: regionPt("desk.list", 170, 120), to: localToWorld("phone", 0, -90, 8), arc: 320, rot: [[0, 0, 0], [0, -30, 4], [0, -16, -2]], scale: [1, 0.86], ease: "glide", fade: [0.1, 0.08] },
   ],
   arcs: [
     { id: "phone.approved", cue: 27.0, dur: 0.5, hold: 0.8, from: localToWorld("phone", -150, -140), to: regionPt("desk.list", 320, 120), color: "#859900" },

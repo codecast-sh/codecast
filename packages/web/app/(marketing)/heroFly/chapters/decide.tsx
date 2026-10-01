@@ -7,6 +7,7 @@
  */
 
 import { useState } from "react";
+import { Check } from "lucide-react";
 import { DecisionCompactCardView } from "@/components/decisions/DecisionCompactCard";
 import { DecisionOptionList } from "@/components/decisions/DecisionOptionList";
 import type { DecisionAnswerInput } from "@/store/inboxStore";
@@ -33,11 +34,17 @@ function DecisionAsk({ now }: PartProps) {
       <DecisionCompactCardView decision={decision} session={ASKING} now={now} onAnswer={onAnswer} onDismiss={noop} onJumpToAsk={noop} />
       {answer !== null && (
         <div {...fly("desk/decide.answer")} className="px-4 pb-3 pt-2">
-          <DecisionOptionList options={DECISION.options} compact tone={(n) => (n === answer ? "picked" : "plain")} />
+          <DecisionOptionList
+            options={DECISION.options}
+            compact
+            tone={(n) => (n === answer ? "picked" : "plain")}
+            leading={(n) => (n === answer ? <Check className="mt-0.5 h-4 w-4 text-sol-green" /> : undefined)}
+          />
         </div>
       )}
+      {/* The tap, on the first option's number badge (measured in the pending layout). */}
       <span
-        {...fly("desk/decide.tap", { left: 40, top: 0, margin: "-24px 0 0 -24px" })}
+        {...fly("desk/decide.tap", { left: 38, top: 186, margin: "-24px 0 0 -24px" })}
         aria-hidden
         className="pointer-events-none absolute h-12 w-12 rounded-full border-2 border-sol-yellow bg-sol-yellow/20"
       />

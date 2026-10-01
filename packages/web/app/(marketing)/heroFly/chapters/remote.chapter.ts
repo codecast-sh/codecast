@@ -1,16 +1,13 @@
 /**
- * Chapter 13, Anywhere (80 to 84s): the same sessions on a laptop, a cloud
- * host and in a browser. PLACEHOLDER: replace each placeholder part with the
- * real views it names, fed by ../fixtures/remote.ts. See README.md for the
- * contract.
+ * Chapter 13, Anywhere (80 to 84s): the same sessions on a laptop and a cloud
+ * host, and an agent driving a browser there. Views in ./remote.tsx, fed by
+ * ../fixtures/remote.ts.
  */
 
-import { placeholderPart } from "../placeholderParts";
+import { Anywhere } from "./remote";
 import type { HeroChapter } from "./contract";
 
 export const chapter: HeroChapter = {
   id: "remote",
-  parts: [
-    placeholderPart("remote", "inset", "desk.inset", 0, "Machines and browser", ["MachineChips", "TmuxAttachPill", "BrowserTabPill", "WatchAddress", "CastCommandBlock (cast computer)"]),
-  ],
+  parts: [{ key: "inset", region: "desk.inset", order: 0, Component: Anywhere }],
 };

@@ -45,8 +45,8 @@ import {
 import { isOnThreadRoute, openSessionAtMessage } from "../lib/openSessionAtMessage";
 import { SharedMessageCard, SharedMessagePill } from "./SharedMessageCard";
 import { AuthorAvatar, DiffStat, DottedRow, TaskPeople, type DottedPart } from "./entityDisplay";
+import { taskPriorityBadge } from "../lib/taskPriority";
 import {
-  PRIORITY_CONFIG,
   STATUS_COLOR,
   STATUS_LABEL,
   TYPE_LABEL,
@@ -100,7 +100,7 @@ function parseDateRef(text: string): { iso: string; label?: string } | null {
 
 function TaskHoverContent({ task }: { task: any }) {
   const { icon: StatusIcon, color: statusColor, label: statusLabel } = taskVisual(task.status);
-  const priority = PRIORITY_CONFIG[task.priority];
+  const priority = taskPriorityBadge(task.priority);
   const project = taskProject(task);
   const kind = task.task_type && task.task_type !== "task" ? task.task_type : null;
   const source = task.source && task.source !== "human" ? task.source : null;
