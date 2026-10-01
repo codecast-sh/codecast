@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Chapter 8, Automate: the triggers page's horizon rail and rows, then the
+ * Chapter 8, Automate: the triggers page's rows, then the
  * workflow the CI trigger starts, as its graph and its run panel, and the
  * lead's pinned state once the run waits at the review gate. The fire badge
  * counts down with the film; Pause and Resume flip the row locally.
@@ -10,14 +10,12 @@
 import { useMemo, useState } from "react";
 import { ThreadStatePanel } from "@/components/ThreadStatePanel";
 import { TriggerRowItem, type TriggerVerbAction } from "@/components/TriggerRow";
-import { HorizonRail } from "@/components/triggers/HorizonRail";
 import { WorkflowGraphView } from "@/components/WorkflowGraphView";
 import { WorkflowRunPanel } from "@/components/WorkflowContextPanel";
 import type { TaskRow } from "@/components/triggerTasks";
 import { nodeStatuses, triggerRows, WAITING_STATE, WORKFLOW, workflowRun, type RunPhase, type TriggerEdits } from "../fixtures/automation";
 import { SESSIONS } from "../fixtures/story";
 import { fly, useFilmTime } from "../filmClock";
-import { DeskRouter } from "./desk";
 import { AUTO_AT, phaseAt } from "./automation.motion";
 import type { PartProps } from "./contract";
 
@@ -33,7 +31,7 @@ const VERB_STATUS: Record<Parameters<TriggerVerbAction>[1], TaskRow["status"]> =
 };
 
 /** The graph is React Flow: a fixed box its measurements can trust, and no pointer, since its hit testing is wrong under the camera's transform. */
-const GRAPH = { width: 470, height: 196 };
+const GRAPH = { width: 860, height: 160 };
 
 export function AutomationSurface({ now }: PartProps) {
   // The countdown's seconds, then the run's phase: each a discrete step of the film.
@@ -56,46 +54,40 @@ export function AutomationSurface({ now }: PartProps) {
   const act: TriggerVerbAction = (id, verb) => setEdits((e) => ({ ...e, [id]: { ...e[id], status: VERB_STATUS[verb] } }));
 
   return (
-    <DeskRouter>
-      <div className="flex h-full flex-col text-sol-text">
-        <div className="px-5 pt-3" {...fly("auto/automation.rail")}>
-          <HorizonRail tasks={rows.map((r) => r.task)} now={wall} onOpenPastRun={noop} />
-        </div>
-        <div className="mt-2 border-t border-sol-border/30">
-          {rows.map((row, i) => (
-            <div key={row.task._id} data-hero-live="" {...fly(`auto/automation.row:${i}`)}>
-              <TriggerRowItem key={i === 0 ? step : undefined} row={row} variant="page" isNext={i === 0 && phase === "armed"} onOpen={noop} actions={act} />
-            </div>
-          ))}
-        </div>
-        <div className="flex min-h-0 flex-1 gap-4 px-5 pt-3">
-          <div
-            className="shrink-0 overflow-hidden rounded-lg border border-sol-border/40"
-            style={{ ...GRAPH, pointerEvents: "none" }}
-            {...fly("auto/automation.graph")}
-          >
-            <WorkflowGraphView nodes={WORKFLOW.nodes} edges={WORKFLOW.edges} nodeStatuses={statuses} currentNodeId={run.current_node_id} chrome={false} />
+    <div className="flex h-full flex-col text-sol-text">
+      <div>
+        {rows.map((row, i) => (
+          <div key={row.task._id} data-hero-live="" {...fly(`auto/automation.row:${i}`)}>
+            <TriggerRowItem key={i === 0 ? step : undefined} row={row} variant="page" isNext={i === 0 && phase === "armed"} onOpen={noop} actions={act} />
           </div>
-          <div className="min-w-0 flex-1 overflow-hidden" {...fly("auto/automation.run")}>
-            <div className="overflow-hidden rounded-lg border border-sol-border/40">
-              <WorkflowRunPanel run={run} workflow={WORKFLOW} defaultExpanded />
-            </div>
-          </div>
-        </div>
-        {(phase === "gate" || phase === "rearmed") && (
-          <div className="px-3 pb-2" {...fly("auto/automation.state")}>
-            <ThreadStatePanel
-              conversationId={SESSIONS.lead.id}
-              threadState={WAITING_STATE.text}
-              threadStateAt={wall - 4_000}
-              threadStateMsgCount={WAITING_STATE.messages}
-              threadStateStatus={WAITING_STATE.status}
-              messageCount={WAITING_STATE.messages}
-              canClear={false}
-            />
-          </div>
-        )}
+        ))}
       </div>
-    </DeskRouter>
+      <div
+        className="mx-5 mt-3 shrink-0 overflow-hidden rounded-lg border border-sol-border/40"
+        {...fly("auto/automation.graph", { ...GRAPH, pointerEvents: "none" })}
+      >
+        <WorkflowGraphView nodes={WORKFLOW.nodes} edges={WORKFLOW.edges} nodeStatuses={statuses} currentNodeId={run.current_node_id} chrome={false} />
+      </div>
+      <div className="flex min-h-0 flex-1 items-start gap-4 px-5 pt-3">
+        <div className="min-w-0 flex-1 overflow-hidden rounded-lg border border-sol-border/40" {...fly("auto/automation.run")}>
+          <WorkflowRunPanel run={run} workflow={WORKFLOW} defaultExpanded />
+        </div>
+        <div className="w-[300px] shrink-0">
+          {(phase === "gate" || phase === "rearmed") && (
+            <div className="-mx-2 -mt-1.5" {...fly("auto/automation.state")}>
+              <ThreadStatePanel
+                conversationId={SESSIONS.lead.id}
+                threadState={WAITING_STATE.text}
+                threadStateAt={wall - 4_000}
+                threadStateMsgCount={WAITING_STATE.messages}
+                threadStateStatus={WAITING_STATE.status}
+                messageCount={WAITING_STATE.messages}
+                canClear={false}
+              />
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }

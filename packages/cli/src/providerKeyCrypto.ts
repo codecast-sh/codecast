@@ -97,14 +97,20 @@ export function encryptProviderKeyForTest(devicePublicKeyB64: string, provider: 
  *  "remove" drop the provider. The daemon calls this, then fans out to remotes and
  *  heartbeats. Extracted (and pure w.r.t. the store dir) so the full web→daemon path
  *  — encrypt, command args, decrypt, store — is unit-tested end to end. */
-/** A provider's own check of a key before it is stored: who it belongs to, or why it was refused. */
-export type ProviderKeyVerifier = (provider: string, apiKey: string) => Promise<{ ok: true; account?: string } | { ok: false; error: string }>;
+/**
+ * A provider's verdict on a key: who it belongs to and, for a key it keeps
+ * that cannot do everything codecast uses it for, what it still needs
+ * (`detail`); or why it was refused.
+ */
+export type ProviderKeyVerdict = { ok: true; account?: string; detail?: string } | { ok: false; error: string };
+/** A provider's own check of a key before it is stored. */
+export type ProviderKeyVerifier = (provider: string, apiKey: string) => Promise<ProviderKeyVerdict>;
 
 export async function applyProviderKeyCommand(
   configDir: string,
   argsJson: string | undefined,
   verify?: ProviderKeyVerifier,
-): Promise<{ ok: true; op: "set" | "remove"; provider: string; account?: string } | { ok: false; error: string }> {
+): Promise<{ ok: true; op: "set" | "remove"; provider: string; account?: string; detail?: string } | { ok: false; error: string }> {
   let parsed: any;
   try { parsed = argsJson ? JSON.parse(argsJson) : {}; } catch { return { ok: false, error: "bad JSON args" }; }
   const store = readProviderKeyStore(configDir);
@@ -125,7 +131,7 @@ export async function applyProviderKeyCommand(
     if (verdict && !verdict.ok) return { ok: false, error: verdict.error };
     store[provider] = apiKey;
     writeProviderKeyStore(configDir, store);
-    return { ok: true, op: "set", provider, ...(verdict?.ok && verdict.account ? { account: verdict.account } : {}) };
+    return { ok: true, op: "set", provider, ...(verdict?.ok && verdict.account ? { account: verdict.account } : {}), ...(verdict?.ok && verdict.detail ? { detail: verdict.detail } : {}) };
   }
   return { ok: false, error: `bad args: ${JSON.stringify(parsed).slice(0, 80)}` };
 }

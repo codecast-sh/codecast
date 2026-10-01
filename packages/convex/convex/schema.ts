@@ -10,6 +10,7 @@ import { ccAccountsValidator, ccAutoSwitchStateValidator, ccLoginFlowValidator, 
 import { cloudAgentBlocksValidator, deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
 import { capabilityTables } from "./capabilitiesSchema";
 import { externalAuthorValidator } from "./lib/externalAuthor";
+import { chatAttachmentValidator } from "./lib/chatAttachment";
 import { googleOAuthTables } from "./googleOAuthSchema";
 import { oauthConnectorTables } from "./oauthConnectorsSchema";
 import { issueSyncTables, taskExternalValidator, taskCommentExternalValidator } from "./issueSyncSchema";
@@ -244,6 +245,9 @@ export default defineSchema({
     // Codex Cloud tasks (chatgpt.com/codex), read with the daemon's Codex
     // login. Unset = off: the source's default (CLOUD_SESSION_SOURCES).
     codex_cloud_sync: v.optional(v.boolean()),
+    // OpenAI Agents API sessions on the daemon's OpenAI key, beyond the ones
+    // codecast started. Unset = off (CLOUD_SESSION_SOURCES).
+    codex_api_sync: v.optional(v.boolean()),
     team_share_paths: v.optional(v.array(v.string())),
     muted_members: v.optional(v.array(v.id("users"))),
     team_conversations_last_seen: v.optional(v.number()),
@@ -5843,13 +5847,7 @@ export default defineSchema({
     // Images pasted, dropped or picked in the huddle chat. Same shape as
     // chat_messages.attachments so the room reuses the chat tile, and the
     // same storage ids ride to fed sessions as pending_messages.image_storage_ids.
-    attachments: v.optional(v.array(v.object({
-      storage_id: v.id("_storage"),
-      name: v.optional(v.string()),
-      mime: v.optional(v.string()),
-      width: v.optional(v.number()),
-      height: v.optional(v.number()),
-    }))),
+    attachments: v.optional(v.array(chatAttachmentValidator)),
     // Set when an AGENT said this: the session that is fed the huddle live
     // and answered. Rendered with the agent's identity, never as user_id's
     // own words. `source_message_id` is the session message it mirrors, so
@@ -6468,13 +6466,7 @@ export default defineSchema({
     // `@channel` is deliberately absent in v1 — on a team small enough to share
     // one codecast workspace it is the same blast radius with worse manners.
     mention_scope: v.optional(v.literal("here")),
-    attachments: v.optional(v.array(v.object({
-      storage_id: v.id("_storage"),
-      name: v.optional(v.string()),
-      mime: v.optional(v.string()),
-      width: v.optional(v.number()),
-      height: v.optional(v.number()),
-    }))),
+    attachments: v.optional(v.array(chatAttachmentValidator)),
     // Push-to-talk. Present only on a walkie burst, which is an ordinary chat
     // message written in three steps: created "live" while the sender holds the
     // key, transcript streaming into `content`, then finalized with the audio.
@@ -6795,6 +6787,24 @@ export default defineSchema({
       })),
     })),
   }).index("by_key", ["key"]),
+
+  // What a web page says about itself (Open Graph, Twitter card, <title>),
+  // read once and shared by every message that links it, so a link standing
+  // alone on its line renders as a preview card. Keyed by the URL as
+  // parseLinkPreviewUrl normalizes it. `status` "pending" while the fetch
+  // runs; "failed" keeps a dead or tagless page from being refetched on
+  // every view until the row ages out (linkPreviews.ts).
+  link_previews: defineTable({
+    url: v.string(),
+    status: v.union(v.literal("pending"), v.literal("ok"), v.literal("failed")),
+    title: v.optional(v.string()),
+    description: v.optional(v.string()),
+    image: v.optional(v.string()),
+    site_name: v.optional(v.string()),
+    favicon: v.optional(v.string()),
+    requested_at: v.number(),
+    fetched_at: v.optional(v.number()),
+  }).index("by_url", ["url"]),
 
   ...issueSyncTables,
   ...agentTables,

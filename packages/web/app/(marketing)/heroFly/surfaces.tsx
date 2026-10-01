@@ -9,11 +9,13 @@
  * matches it.
  */
 
-import { Suspense, type CSSProperties, type ComponentType } from "react";
+import { Suspense, type CSSProperties, type ComponentType, type ReactNode } from "react";
 import { LogoIcon } from "@/components/Logo";
+import { EntityFixtureContext } from "@/lib/entityDisplay";
 import { PhoneFrame } from "../productMocks";
 import type { ChapterPart, HeroChapter, PartProps } from "./chapters/contract";
-import { fly, SurfaceContext } from "./filmClock";
+import { fly, SurfaceContext, useFilmTime } from "./filmClock";
+import { entityStage, ENTITY_STAGES } from "./fixtures";
 import { ARCS, FLYERS } from "./motion";
 import { HeroPartBoundary } from "./sandbox";
 import { LABEL_3W, SURFACES, type ArcPath, type Region, type RegionKey, type Surface } from "./world";
@@ -35,7 +37,9 @@ function RegionSlot({ k, region, parts, now }: { k: RegionKey; region: Region; p
         display: "flex",
         flexDirection: "column",
         justifyContent: region.anchor === "bottom" ? "flex-end" : "flex-start",
-        overflow: "hidden",
+        // clip, not hidden: a hidden box is a scroll container, and a real
+        // view's scrollIntoView or focus would scroll the film inside it.
+        overflow: "clip",
       }}
     >
       {parts.map((p) => (
@@ -50,7 +54,7 @@ function RegionSlot({ k, region, parts, now }: { k: RegionKey; region: Region; p
 }
 
 function SurfaceMount({ s, parts, now }: { s: Surface; parts: Placed[]; now: number }) {
-  const face: CSSProperties = { position: "absolute", inset: 0, backfaceVisibility: "hidden", WebkitBackfaceVisibility: "hidden", borderRadius: s.radius, overflow: "hidden" };
+  const face: CSSProperties = { position: "absolute", inset: 0, backfaceVisibility: "hidden", WebkitBackfaceVisibility: "hidden", borderRadius: s.radius, overflow: "clip" };
   const regions = Object.entries(s.regions).map(([name, region]) => {
     const k = `${s.id}.${name}` as RegionKey;
     return <RegionSlot key={k} k={k} region={region} parts={parts.filter((p) => p.region === k)} now={now} />;
@@ -75,13 +79,13 @@ function SurfaceMount({ s, parts, now }: { s: Surface; parts: Placed[]; now: num
           width: "112%",
           height: "112%",
           borderRadius: s.radius * 2,
-          background: "radial-gradient(closest-side, rgba(0,43,54,0.16), rgba(0,43,54,0.07) 60%, rgba(0,43,54,0) 100%)",
+          background: "radial-gradient(closest-side, rgba(0,43,54,0.22), rgba(0,43,54,0.08) 60%, rgba(0,43,54,0) 100%)",
         })}
       />
       <div {...fly(`card:${s.id}`, { position: "absolute", inset: 0, transformStyle: "preserve-3d" })}>
         <SurfaceContext.Provider value={s.id}>
           {s.frame === "phone" ? (
-            <div style={face}>
+            <div {...fly(`face:${s.id}`, face)}>
               {/* Regions on the phone are measured from the screen's top-left, under the notch. */}
               <PhoneFrame className="h-full !shadow-none" screenClassName="dark relative h-full">
                 <div className="relative bg-sol-bg text-sol-text" style={{ height: s.h - 48 }}>{regions}</div>
@@ -93,12 +97,13 @@ function SurfaceMount({ s, parts, now }: { s: Surface; parts: Placed[]; now: num
             </div>
           )}
         </SurfaceContext.Provider>
+        {/* The back the deal shows from the overview, where a surface is a few hundred pixels wide: a card in a deck. */}
         <div
-          style={{ ...face, transform: "rotateX(180deg)", border: "1px solid var(--sol-bg-highlight)" }}
-          className="flex flex-col items-center justify-center gap-3 bg-sol-bg-alt font-mono"
+          style={{ ...face, transform: "rotateX(180deg)", border: "1px solid color-mix(in srgb, var(--sol-text-muted) 12%, transparent)" }}
+          className="flex flex-col items-center justify-center gap-6 bg-sol-bg-highlight font-mono"
         >
-          <LogoIcon size={34} />
-          <span className="text-[13px] text-sol-text-dim">{s.back}</span>
+          <LogoIcon size={96} />
+          <span className="text-[64px] font-bold leading-none tracking-tight text-sol-text-muted">{s.back}</span>
         </div>
       </div>
     </div>
@@ -126,6 +131,12 @@ function Arc({ a }: { a: ArcPath }) {
   );
 }
 
+/** Entity pills and cards read the fixtures in force at film time; only their consumers re-render when the stage turns. */
+function FilmEntities({ children }: { children: ReactNode }) {
+  const stage = useFilmTime(entityStage);
+  return <EntityFixtureContext.Provider value={ENTITY_STAGES[stage]}>{children}</EntityFixtureContext.Provider>;
+}
+
 /** Everything inside the camera: backdrop, surfaces, flyers. The driver writes styles to it; React renders it again only when chapters load. */
 export function World({ chapters, now }: { chapters: HeroChapter[]; now: number }) {
   const parts: Placed[] = chapters
@@ -133,7 +144,7 @@ export function World({ chapters, now }: { chapters: HeroChapter[]; now: number 
     .sort((a, b) => a.order - b.order);
   const flyers: Record<string, ComponentType<PartProps>> = Object.assign({}, ...chapters.map((c) => c.flyers ?? {}));
   return (
-    <>
+    <FilmEntities>
       <div
         style={{
           position: "absolute",
@@ -166,6 +177,6 @@ export function World({ chapters, now }: { chapters: HeroChapter[]; now: number 
       >
         <span className="inline-block -translate-x-1/2 whitespace-nowrap font-mono text-[44px] font-bold text-sol-text/80">3 weeks later</span>
       </div>
-    </>
+    </FilmEntities>
   );
 }

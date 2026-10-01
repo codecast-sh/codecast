@@ -121,10 +121,10 @@ export function CloudAgentSyncConnect({ source }: { source: string }) {
   return <ConnectCloudAgentButton spec={spec} label={connected ? `${cloudAgentUi(spec).connectName} connected` : undefined} />;
 }
 
-/** The provider's page for a session's agent, and where it opens. */
-function agentPage(spec: CloudAgentProviderSpec, agentId: string): { href: string; host: string } {
-  const href = spec.agentUrl(agentId);
-  return { href, host: new URL(href).host };
+/** The provider's page for a session's agent, and where it opens; null when the provider has no page per agent. */
+function agentPage(spec: CloudAgentProviderSpec, agentId: string): { href: string; host: string } | null {
+  const href = spec.agentUrl?.(agentId);
+  return href ? { href, host: new URL(href).host } : null;
 }
 
 /**
@@ -144,14 +144,16 @@ const ROW_STYLES = {
 function ActionRows({ actions, style }: { actions: CloudAgentActions; style: keyof typeof ROW_STYLES }) {
   const { cloud, items, run, pending } = actions;
   if (!cloud?.agentId) return null;
-  const { href, host } = agentPage(cloud.spec, cloud.agentId);
+  const page = agentPage(cloud.spec, cloud.agentId);
   const row = ROW_STYLES[style];
   return (
     <>
-      <DropdownMenuItem onSelect={() => window.open(href, "_blank", "noopener")} className={row.item}>
-        <ExternalLink className={row.icon} />
-        Open on {host}
-      </DropdownMenuItem>
+      {page && (
+        <DropdownMenuItem onSelect={() => window.open(page.href, "_blank", "noopener")} className={row.item}>
+          <ExternalLink className={row.icon} />
+          Open on {page.host}
+        </DropdownMenuItem>
+      )}
       {items.map(({ action, label, title, Icon, disabledReason }) => (
         <DropdownMenuItem key={action} disabled={!!pending || !!disabledReason} onSelect={() => void run(action)} title={title} className={`items-start ${row.item}`}>
           {pending === action ? <Loader2 className={`mt-px shrink-0 animate-spin ${row.icon}`} /> : <Icon className={`mt-px shrink-0 ${row.icon}`} />}
@@ -165,9 +167,9 @@ function ActionRows({ actions, style }: { actions: CloudAgentActions; style: key
   );
 }
 
-/** The session menu's rows for a cloud agent session (ActionRows under the provider's name). Nothing for a local session. */
+/** The session menu's rows for a cloud agent session (ActionRows under the provider's name). Nothing for a local session, or for an agent with no page and no actions. */
 export function CloudAgentMenuItems({ actions }: { actions: CloudAgentActions }) {
-  if (!actions.cloud?.agentId) return null;
+  if (!actions.cloud?.agentId || (!actions.cloud.spec.agentUrl && !actions.items.length)) return null;
   return (
     <>
       <DropdownMenuSeparator />
@@ -199,10 +201,11 @@ export function CloudAgentLink({ actions }: { actions: CloudAgentActions }) {
   if (!agentId) {
     return <span title={`This session runs on ${spec.label}: its agent starts when the first message goes out`} className={CHIP}>{name}</span>;
   }
-  const { href, host } = agentPage(spec, agentId);
+  const page = agentPage(spec, agentId);
   if (!items.length) {
+    if (!page) return <span title={`${spec.label} runs this session. ${spec.vendor} has no page for a single session, so there is nothing to open.`} className={CHIP}>{name}</span>;
     return (
-      <a href={href} target="_blank" rel="noreferrer" title={`This session runs as a ${spec.label} agent: open it on ${host}`} className={`${CHIP} hover:bg-sol-violet/10`}>
+      <a href={page.href} target="_blank" rel="noreferrer" title={`This session runs as a ${spec.label} agent: open it on ${page.host}`} className={`${CHIP} hover:bg-sol-violet/10`}>
         {name}
         <ExternalLink className="h-2.5 w-2.5" aria-hidden />
       </a>
