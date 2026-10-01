@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { runOwnerOf, runOwnerWakeOf, runParentOf, runResultThreadOf, triggerLifecycleInstructions } from "./triggerLifecycle";
+import { formatScheduledTask, parseScheduledTask, type RoleCard } from "./machineMessages";
+import { runOwnerOf, runOwnerWakeOf, runParentOf, runResultThreadOf, STASHED_RUN_NOTE, triggerLifecycleInstructions, triggerRunFrame } from "./triggerLifecycle";
 
 // A fresh run's owner is the session that armed a once trigger; every other
 // shape has none. The owner is woken for outcomes it must act on, and for a
@@ -83,5 +84,42 @@ describe("triggerLifecycleInstructions", () => {
   test("every trigger gets the defaults except a role's routine", () => {
     expect(triggerLifecycleInstructions({ _id: "t1", short_id: "tr-1" })).toContain("cast trigger complete tr-1");
     expect(triggerLifecycleInstructions({ _id: "t1", short_id: "tr-1", role_id: "role1" })).toBeNull();
+  });
+});
+
+// The frame every trigger run arrives in (agentTasks.triggerFrameFor builds it
+// from what it reads; the eval harness renders role-wake fixtures through it).
+// The expected strings are the expression the server wrote inline before the
+// frame moved here, so the move is byte for byte.
+describe("triggerRunFrame", () => {
+  const role: RoleCard = { handle: "docs", name: "Docs lead", reports_to: "Ada", scope: ["Docs site"], charter: "Keep the docs true.", goals: ["Every page current"] };
+  const before = (task: any, role: RoleCard | null, stashed: boolean, waiting?: any, change?: any) => formatScheduledTask({
+    title: task.title || "",
+    task_id: String(task._id),
+    trigger: task.short_id,
+    event: task.event_filter?.event_type,
+    role,
+    waiting: waiting ?? null,
+    ...(change ? { change } : {}),
+    body: [task.prompt, triggerLifecycleInstructions(task)].filter(Boolean).join("\n\n") + (stashed ? STASHED_RUN_NOTE : ""),
+  });
+  const routine = { _id: "t1", short_id: "tr-1", title: "Check Docs lead's area", prompt: "Check your area.", role_id: "r1" };
+  const plain = { _id: "t2", short_id: "tr-2", title: "Nightly sweep", prompt: "Sweep the queue." };
+  const waiting = { short_id: "jx7wait", title: "Fix the docs build", why: "needs_input", since: 1, state: "Which theme?" };
+  const change = { kind: "unowned_project" as const, project_id: "p1", project_title: "Docs site", since: 2, line: "No owner." };
+
+  test("matches the server's inline frame for a role's routine, a plain trigger, a waiting session and a change", () => {
+    expect(triggerRunFrame(routine, { role, stashed: false })).toBe(before(routine, role, false));
+    expect(triggerRunFrame(routine, { role, stashed: true })).toBe(before(routine, role, true));
+    expect(triggerRunFrame(plain, { role: null, stashed: false })).toBe(before(plain, null, false));
+    const fired = { ...routine, event_filter: { event_type: "session_needs_input" } };
+    expect(triggerRunFrame(fired, { role, waiting, stashed: false })).toBe(before(fired, role, false, waiting));
+    expect(triggerRunFrame(routine, { role, change, stashed: false })).toBe(before(routine, role, false, undefined, change));
+  });
+
+  test("a role's frame carries its card and no lifecycle defaults, and reads back whole", () => {
+    const frame = triggerRunFrame(routine, { role, stashed: false });
+    expect(frame).not.toContain("Trigger lifecycle defaults");
+    expect(parseScheduledTask(frame)).toMatchObject({ trigger: "tr-1", role, body: "Check your area." });
   });
 });

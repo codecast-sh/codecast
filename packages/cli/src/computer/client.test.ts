@@ -15,6 +15,7 @@ import * as path from "node:path";
 import { ComputerClient, normalizeActionResult } from "./client.js";
 import { ComputerError } from "./errors.js";
 import { readInstance, writeInstance } from "./instance.js";
+import { pidGone } from "../test-helpers/processLiveness.js";
 import type { ComputerActionResult } from "./types.js";
 
 const FAKE_HELPER = path.join(import.meta.dir, "__fixtures__", "fakeHelper.ts");
@@ -30,9 +31,10 @@ const HELPER_LAUNCH_TIMEOUT_MS = 30_000;
 const helperTest = (name: string, body: () => void | Promise<void>) => test(name, body, HELPER_LAUNCH_TIMEOUT_MS);
 
 const cleanups: Array<() => void> = [];
-afterEach(() => {
-  for (const fn of cleanups.splice(0)) fn();
-});
+function cleanup(): void {
+  for (const fn of cleanups.splice(0).reverse()) fn();
+}
+afterEach(cleanup);
 
 /** Point CODECAST_DIR at a temp dir so nothing touches the real ~/.codecast. */
 function isolatedHome(): string {
@@ -62,6 +64,7 @@ function withEnv(vars: Record<string, string>): void {
 }
 
 function makeClient(overrides: Partial<ConstructorParameters<typeof ComputerClient>[0]> = {}): ComputerClient {
+  const launches: string[] = [];
   const client = new ComputerClient({
     version: "1.0.0",
     patienceMs: 500,
@@ -69,28 +72,70 @@ function makeClient(overrides: Partial<ConstructorParameters<typeof ComputerClie
     // No browser instance file in a temp home, so the raise stamp is a no-op;
     // it is asserted on its own in focusSentinel.test.ts.
     stampRaise: () => {},
-    helperLaunch: (socketPath, tokenPath) => ({
-      cmd: process.execPath,
-      args: [FAKE_HELPER, "--agent", socketPath, "--token-file", tokenPath],
-    }),
     ...overrides,
+    helperLaunch: (socketPath, tokenPath) => {
+      const pidFile = path.join(path.dirname(socketPath), "test-helper.pid");
+      launches.push(pidFile);
+      const launch = overrides.helperLaunch?.(socketPath, tokenPath) ?? {
+        cmd: process.execPath,
+        args: [FAKE_HELPER, "--agent", socketPath, "--token-file", tokenPath],
+      };
+      return {
+        ...launch,
+        args: [...launch.args, "--test-parent-pid", String(process.pid), "--test-pid-file", pidFile],
+      };
+    },
   });
   cleanups.push(() => {
-    const state = readInstance();
     client.shutdown();
-    if (state?.pid) {
-      try {
-        process.kill(state.pid, "SIGKILL");
-      } catch {
-        /* already gone */
+    for (const pidFile of launches) {
+      if (fs.existsSync(pidFile)) {
+        const pid = Number(fs.readFileSync(pidFile, "utf8"));
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+        }
       }
-      fs.rmSync(state.socketDir, { recursive: true, force: true });
+      fs.rmSync(path.dirname(pidFile), { recursive: true, force: true });
     }
   });
   return client;
 }
 
 describe("ComputerClient", () => {
+  helperTest("a fake helper exits when its test runner dies", async () => {
+    const home = isolatedHome();
+    const tokenPath = path.join(home, "token");
+    const socketPath = path.join(home, "helper.sock");
+    fs.writeFileSync(tokenPath, "test-token");
+    const parent = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "ignore" });
+    cleanups.push(() => parent.kill());
+    const helper = Bun.spawn([
+      process.execPath, FAKE_HELPER, "--agent", socketPath, "--token-file", tokenPath,
+      "--test-parent-pid", String(parent.pid),
+    ], { stdout: "ignore", stderr: "ignore" });
+    cleanups.push(() => helper.kill());
+    for (let attempt = 0; attempt < 400 && !fs.existsSync(socketPath); attempt++) await Bun.sleep(20);
+    expect(fs.existsSync(socketPath)).toBe(true);
+    parent.kill();
+    await parent.exited;
+    expect(await helper.exited).toBe(0);
+  });
+
+  helperTest("cleanup stops the helper before restoring and deleting its test home", async () => {
+    const previous = process.env.CODECAST_DIR;
+    const home = isolatedHome();
+    await makeClient().capabilities();
+    const state = readInstance()!;
+    cleanup();
+    expect(process.env.CODECAST_DIR).toBe(previous);
+    expect(fs.existsSync(home)).toBe(false);
+    expect(fs.existsSync(state.socketDir)).toBe(false);
+    for (let attempt = 0; attempt < 100 && !(await pidGone(state.pid)); attempt++) await Bun.sleep(20);
+    expect(await pidGone(state.pid)).toBe(true);
+  });
+
   helperTest("launches a helper, records it, and destroys the token file once connected", async () => {
     isolatedHome();
     const client = makeClient();

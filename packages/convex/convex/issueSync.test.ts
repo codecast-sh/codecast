@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { GITHUB_EVENT_KINDS, linearEventKind } from "./issueSync";
 import { linearDeliveryId, verifyLinearSignature } from "./linearWebhooks";
-import { markSourceSynced } from "./issueSync";
+import { markSourceSynced, stampInboundHealth } from "./issueSync";
 import { makeFakeDb } from "./testDb";
 import {
   normalizeGithubComment,
@@ -716,5 +716,22 @@ describe("pushTask parent", () => {
     } finally {
       globalThis.fetch = realFetch;
     }
+  });
+});
+
+describe("stampInboundHealth", () => {
+  test("a connection row is stamped at most once a minute; the source every time", async () => {
+    const t = {
+      issue_sync_sources: [{ _id: "src_1", provider: "github", team_id: "team_1", updated_at: 1 }] as any[],
+      github_app_installations: [{ _id: "inst_1", team_id: "team_1", repositories: [], updated_at: 1 }] as any[],
+    };
+    const db = makeFakeDb(t);
+    const T0 = 1_790_000_000_000;
+    await stampInboundHealth({ db }, t.issue_sync_sources[0], T0);
+    await stampInboundHealth({ db }, t.issue_sync_sources[0], T0 + 5_000);
+    expect(t.issue_sync_sources[0].last_webhook_at).toBe(T0 + 5_000);
+    expect(t.github_app_installations[0].last_webhook_at).toBe(T0);
+    await stampInboundHealth({ db }, t.issue_sync_sources[0], T0 + 61_000);
+    expect(t.github_app_installations[0].last_webhook_at).toBe(T0 + 61_000);
   });
 });

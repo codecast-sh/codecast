@@ -1,0 +1,86 @@
+{
+ "asOf": "2026-03-03T14:01:20.000Z",
+ "notes": "Synthetic. The agent delivered a result the developer corrects with facts only they hold (file format, audience); silence is the right answer.",
+ "snapshot": {
+  "conversation": {
+   "title": "Invoice export button",
+   "project_path": "/work/ledger"
+  },
+  "rows": [
+   {
+    "_id": "line:1",
+    "role": "user",
+    "content": "add an export button to the invoices page that downloads the filtered list",
+    "timestamp": 1772546420000,
+    "line": 1
+   },
+   {
+    "_id": "line:2",
+    "role": "assistant",
+    "content": "Adding the export now.",
+    "timestamp": 1772546440000,
+    "line": 2
+   },
+   {
+    "_id": "line:3",
+    "role": "user",
+    "content": "",
+    "timestamp": 1772546460000,
+    "line": 3,
+    "tool_results": [
+     {}
+    ]
+   },
+   {
+    "_id": "line:4",
+    "role": "assistant",
+    "content": "Done. The invoices page now has an Export button next to the filters. It downloads the filtered invoices as `invoices.json`, with every field the table shows. I ran the page locally and the download works.",
+    "timestamp": 1772546480000,
+    "line": 4
+   }
+  ],
+  "profile": {
+   "frequent": [
+    {
+     "text": "run the tests again",
+     "count": 6
+    }
+   ],
+   "phrases": [
+    {
+     "text": "add a regression test",
+     "count": 9
+    },
+    {
+     "text": "keep it minimal",
+     "count": 5
+    }
+   ],
+   "patterns": [
+    {
+     "pattern": "Asks for a regression test alongside every bug fix",
+     "example": "fix it and add a regression test for the date bug",
+     "count": 11
+    },
+    {
+     "pattern": "Approves plans tersely, often adding one constraint",
+     "example": "ok go, but keep the public api unchanged",
+     "count": 8
+    }
+   ],
+   "prompts": [
+    {
+     "text": "go ahead, and add a regression test that fails before the fix and passes after it",
+     "count": 7
+    }
+   ],
+   "generated_at": 1772323200000,
+   "recent": [
+    "why does the importer use a regex here",
+    "ok go, but keep the public api unchanged"
+   ]
+  },
+  "truth": "it needs to be csv not json, finance opens it in sheets. and only the columns that are visible, not every field",
+  "truthAt": 1772546525000
+ }
+}

@@ -4,6 +4,7 @@ import { internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { canAccessConversation } from "./lib/access";
 import { isLowSignalPrompt, sampleEvenly } from "./titleGeneration";
+import { CHEAP_MODEL } from "./lib/anthropic";
 
 // Story and Summary are chunked first-person retellings of a session. Rather
 // than summarize every message (which just reproduces the conversation at 1:1),
@@ -13,7 +14,6 @@ import { isLowSignalPrompt, sampleEvenly } from "./titleGeneration";
 // are grouped into a few PHASES. Both are cached as JSON and regenerate when the
 // conversation has grown enough.
 
-const SUMMARY_MODEL = "claude-haiku-4-5-20251001";
 const MAX_USER_ROWS = 600;
 const MAX_ASSISTANT_ROWS = 1500;
 // Regenerate once this many messages arrived since the cached level was built.
@@ -202,7 +202,7 @@ export const writeLevel = internalMutation({
       [args.level]: args.json,
       [`${args.level}_message_count`]: args.message_count,
       generated_at: args.generated_at,
-      model: SUMMARY_MODEL,
+      model: CHEAP_MODEL,
     };
     if (existing) await ctx.db.patch(existing._id, patch);
     else await ctx.db.insert("conversation_summaries", { conversation_id: args.conversation_id, ...patch } as any);
@@ -215,7 +215,7 @@ async function callHaiku(apiKey: string, prompt: string, maxTokens: number): Pro
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-    body: JSON.stringify({ model: SUMMARY_MODEL, max_tokens: maxTokens, temperature: 0, messages: [{ role: "user", content: prompt }] }),
+    body: JSON.stringify({ model: CHEAP_MODEL, max_tokens: maxTokens, temperature: 0, messages: [{ role: "user", content: prompt }] }),
   });
   if (!response.ok) {
     console.error("storyMode Haiku error:", response.status, await response.text());

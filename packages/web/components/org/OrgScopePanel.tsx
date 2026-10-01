@@ -12,7 +12,7 @@ import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
 import type { TaskItem, DocItem, PlanItem, ProjectItem } from "../../store/inboxStore";
 import { compactAge, agoOf } from "../../lib/threadState";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
-import { AgentIcon } from "../ConversationList";
+import { SessionIdentityLine, SessionMark } from "../identity";
 import { Avatar } from "../tasks/TaskCommentStream";
 import { SelectBox } from "../ui/select-box";
 import { cn } from "../../lib/utils";
@@ -104,9 +104,9 @@ export function SessionRow({ s, now, onOpen }: { s: OrgSession; now: number; onO
   return (
     <button type="button" onClick={onOpen} className="group w-full text-left flex items-center gap-2.5 px-2.5 py-2 rounded-lg transition-colors hover:bg-sol-bg-highlight/70">
       <span className="w-[3px] self-stretch rounded-full shrink-0" style={{ background: m.color }} />
-      <AgentIcon agentType={s.agent_type} className="w-4 h-4" />
+      <SessionMark session={s as any} iconClassName="w-4 h-4" />
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-[12.5px] font-medium" style={{ color: "var(--sol-text)" }}>{s.title || "Untitled"}</span>
+        <span className="flex min-w-0 text-[12.5px]"><SessionIdentityLine row={s as any} title={s.title || "Untitled"} titleClassName="font-medium" /></span>
         <span className="block truncate text-[10.5px] mt-[1px]" style={{ color: "var(--sol-text-dim)", fontFamily: "var(--font-mono)" }}>
           {s.short_id}{s.subagent_count > 0 ? ` · ${s.subagent_count} subagent${s.subagent_count === 1 ? "" : "s"}` : ""}
         </span>
@@ -489,7 +489,7 @@ function SessionPanel({ tree, session, parent, canEdit, onOpenSession, onMove, o
   return (
     <>
       <div className="flex items-start gap-2.5">
-        <AgentIcon agentType={session.agent_type} className="w-6 h-6 mt-0.5" />
+        <SessionMark session={session as any} size={24} iconClassName="w-6 h-6" className="shrink-0 mt-0.5" />
         <div className="min-w-0 flex-1">
           <div className="text-[17px] leading-snug font-semibold tracking-tight" style={{ fontFamily: "var(--font-serif)", color: "var(--sol-text)" }}>{session.title || "Untitled"}</div>
           <div className="mt-1 flex items-center gap-2 flex-wrap text-[11px]" style={{ color: "var(--sol-text-dim)", fontFamily: "var(--font-mono)" }}>

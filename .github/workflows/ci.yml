@@ -31,6 +31,7 @@ jobs:
       run_test_convex: ${{ steps.scope.outputs.run_test_convex }}
       run_test_web: ${{ steps.scope.outputs.run_test_web }}
       run_test_cli: ${{ steps.scope.outputs.run_test_cli }}
+      run_test_computer: ${{ steps.computer_scope.outputs.run_test_computer }}
       run_test_platform: ${{ steps.scope.outputs.run_test_platform }}
       run_test_shared: ${{ steps.scope.outputs.run_test_shared }}
       run_test_mobile: ${{ steps.scope.outputs.run_test_mobile }}
@@ -44,9 +45,9 @@ jobs:
           fetch-depth: 0
           filter: blob:none
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: ./.github/actions/setup-bun
         with:
-          bun-version: 1.3.13
+          deps: none
 
       # No `bun install`: the classifier has no dependencies.
       - name: Classify changed paths
@@ -68,6 +69,15 @@ jobs:
           printf '%s\n' "$CHANGED"
           printf '%s\n' "$CHANGED" | bun scripts/ci/changed-path-scope.ts | tee -a "$GITHUB_OUTPUT"
 
+      - name: Classify computer changes
+        id: computer_scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          git diff --name-only --no-renames "$BASE_SHA" "$HEAD_SHA" | bun scripts/ci/changed-path-scope.ts --computer-only >> "$GITHUB_OUTPUT"
+
   # Pins ci.yml against its classifier: the job list, the gates, and the
   # verify assertions. Ungated — it is the check that proves the gates.
   ci-contract:
@@ -77,9 +87,9 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: ./.github/actions/setup-bun
         with:
-          bun-version: 1.3.13
+          deps: none
 
       - name: Unit tests (ci scripts + workflow contract)
         run: bun test scripts/ci/
@@ -92,18 +102,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.3.13
-
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: bun-${{ runner.os }}-
-
-      - name: Install dependencies
-        run: bun install
+      - uses: ./.github/actions/setup-bun
 
       - name: Build
         run: bun run build
@@ -116,18 +115,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.3.13
-
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: bun-${{ runner.os }}-
-
-      - name: Install dependencies
-        run: bun install
+      - uses: ./.github/actions/setup-bun
 
       # Each package's own `typecheck` script, which is the same program
       # .codecast/check.toml points `cast check` at. cli's widens rootDir to the
@@ -143,18 +131,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.3.13
-
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: bun-${{ runner.os }}-
-
-      - name: Install dependencies
-        run: bun install
+      - uses: ./.github/actions/setup-bun
 
       - name: Lint (eslint flat config)
         run: bun run lint
@@ -167,18 +144,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.3.13
-
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: bun-${{ runner.os }}-
-
-      - name: Install dependencies
-        run: bun install
+      - uses: ./.github/actions/setup-bun
 
       - name: Unit tests (convex package)
         working-directory: packages/convex
@@ -192,18 +158,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.3.13
-
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: bun-${{ runner.os }}-
-
-      - name: Install dependencies
-        run: bun install
+      - uses: ./.github/actions/setup-bun
 
       - name: Unit tests (web package)
         working-directory: packages/web
@@ -212,7 +167,20 @@ jobs:
         # jsdom window installed on globalThis outlives the file that made it.
         # One mount test then decides what hundreds of later files see, so a
         # test passes alone and fails in the suite depending on file order.
+        # SIM_OUT: where the multiplayer sim writes each run's report and
+        # events (docs/architecture/sync-sim.md), uploaded below on failure.
+        env:
+          SIM_OUT: ${{ runner.temp }}/sim
         run: bun test --isolate
+
+      - name: Upload sim artifacts
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sim-artifacts
+          path: ${{ runner.temp }}/sim
+          if-no-files-found: ignore
+          retention-days: 14
 
   test-cli:
     needs: [code_paths]
@@ -226,21 +194,10 @@ jobs:
         with:
           fetch-depth: 2
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.3.13
-
       - name: Install tmux (e2e tests need a real tmux server)
         run: sudo apt-get update && sudo apt-get install -y tmux
 
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: bun-${{ runner.os }}-
-
-      - name: Install dependencies
-        run: bun install
+      - uses: ./.github/actions/setup-bun
 
       - name: Unit tests (cli package)
         working-directory: packages/cli
@@ -255,6 +212,12 @@ jobs:
         env:
           DAEMON_BUILD_ID_CHECK: "1"
         run: bun test src/ --isolate --bail=5
+
+      # The eval home (packages/evals). Its tests make no network or model
+      # calls; real replays run only from ./evals on a laptop.
+      - name: Unit tests (evals package)
+        working-directory: packages/evals
+        run: bun test src/
 
       - name: E2E messaging pipeline (real tmux + fake-claude shim)
         working-directory: packages/cli
@@ -367,15 +330,9 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: ./.github/actions/setup-bun
         with:
-          bun-version: 1.3.13
-
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: bun-${{ runner.os }}-
+          deps: cache
 
       # Before the installs below, which write a bun.lock into each mirrored
       # package. `--check` diffs against ~/src/platform, which no runner has;
@@ -428,18 +385,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.3.13
-
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: bun-${{ runner.os }}-
-
-      - name: Install dependencies
-        run: bun install
+      - uses: ./.github/actions/setup-bun
 
       - name: Unit tests (shared package)
         working-directory: packages/shared
@@ -458,10 +404,6 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.3.13
-
       # canvasShell.test.ts renders the WebView document in jsdom under a real
       # `node`, and jsdom 30 (through undici 8) needs Node 22; the runner's
       # default Node is older and dies on load.
@@ -469,14 +411,7 @@ jobs:
         with:
           node-version: 22
 
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: bun-${{ runner.os }}-
-
-      - name: Install dependencies
-        run: bun install
+      - uses: ./.github/actions/setup-bun
 
       - name: Unit and guard tests (mobile package)
         working-directory: packages/mobile
@@ -496,24 +431,13 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.3.13
-
       # The suites run under node --test, and appWindows.test.js require()s an
       # ES module, so pin a Node that does that without a flag.
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
 
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: bun-${{ runner.os }}-
-
-      - name: Install dependencies
-        run: bun install
+      - uses: ./.github/actions/setup-bun
 
       # Ubuntu 24.04 lets AppArmor deny unprivileged user namespaces, which
       # Chromium's sandbox needs, and Electron then aborts at launch rather than
@@ -554,24 +478,15 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.3.13
-
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: bun-${{ runner.os }}-
-
-      - name: Install dependencies
-        run: bun install
+      - uses: ./.github/actions/setup-bun
 
       - name: Swift unit tests (helper core)
+        if: needs.code_paths.outputs.run_test_computer == 'true'
         working-directory: packages/cli/native/computer-use-macos
         run: swift test
 
       - name: Build and sign the computer helper
+        if: needs.code_paths.outputs.run_test_computer == 'true'
         working-directory: packages/cli
         # No Developer ID certificate on a runner, so the helper signs ad hoc.
         # That is the from-source case the design already describes: it runs,
@@ -590,30 +505,41 @@ jobs:
         run: bun scripts/computer-verify.ts build --out "$RUNNER_TEMP/helper.tar"
 
       - name: Unit and e2e tests (cast computer, ungranted half)
+        if: needs.code_paths.outputs.run_test_computer == 'true'
         working-directory: packages/cli
         # Both variables point at the same build: the e2e suites take a bundle,
         # the materialization tests take the payload it came from.
         env:
           CODECAST_COMPUTER_HELPER_TAR: ${{ runner.temp }}/helper.tar
           CODECAST_COMPUTER_HELPER_APP: ${{ runner.temp }}/unpacked/codecast computer.app
-        run: bun test src/computer/
+        run: bun run test:computer
+
+      # The terminal liveness case needs a tmux server as well as darwin.
+      - name: Install tmux
+        if: ${{ !cancelled() }}
+        run: brew install tmux
 
       - name: Unit and e2e tests (cli files that only run on darwin)
         # Its own verdict whatever the cast computer steps above did.
         if: ${{ !cancelled() }}
         working-directory: packages/cli
-        # Browser app branding (clang + AppKit), Keychain call shapes, the
-        # desktop updater's bundle swap, Bonjour hostname fallback, the resident
-        # shell watchdog and the native scan watcher. --timeout: the branding
-        # cases compile and copy app bundles, which overruns bun's 5s default
-        # on a loaded machine. --isolate for the same reason test-cli uses it.
+        # Every cli test file with a case that skips anywhere but darwin, outside
+        # src/computer/ (the step above). The ci contract test finds them by
+        # their skip and fails until each is listed here. --timeout: the browser
+        # branding cases compile and copy app bundles, which overruns bun's 5s
+        # default on a loaded machine. --isolate for the same reason test-cli
+        # uses it.
         run: >-
           bun test --isolate --timeout=60000
           src/browser/appIdentity.native.test.ts
           src/ccAccounts.background.test.ts
           src/ccKeychain.callers.test.ts
+          src/daemon.process-terminal.e2e.test.ts
           src/desktopUpdate.test.ts
+          src/disclaim.test.ts
           src/remote/device.async.test.ts
+          src/resourceMonitor.parseEtime.test.ts
+          src/resourceMonitor.test.ts
           src/supervision.recovery.e2e.test.ts
           src/workers/scanWatcher.test.ts
 

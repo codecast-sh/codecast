@@ -8,6 +8,7 @@ import { fleetBandFor, type FleetBandOpts } from "../fleetBands";
 import { memberDisplayName as liveMemberDisplayName } from "../../lib/liveEntities";
 import { matchScore } from "../../lib/mentionRanking";
 import type { FaceState } from "../../lib/faces/faceState";
+import { isPerson } from "@codecast/shared/team/memberKind";
 
 export type PresenceState = "active" | "idle" | "away" | "offline";
 /** What a badge draws. "busy" is the manual status, not a heartbeat state. */
@@ -478,7 +479,7 @@ export function teammateWhereabouts(
   const rows: TeammateWhereabouts[] = [];
   for (const m of members ?? []) {
     const id = m?._id ? String(m._id) : "";
-    if (!id || id === viewerId) continue;
+    if (!id || id === viewerId || !isPerson(m)) continue;
     const followed = followingId !== null && id === followingId;
     if (!followed && memberPresenceState(m) === "offline") continue;
     const name = memberDisplayName(m);

@@ -51,3 +51,14 @@
 }
 .cc-review-edge[data-direction="above"] { top: 6px; }
 .cc-review-edge[data-direction="below"] { bottom: 6px; }
+/* An image quote leads its row with the picture itself, so a batch of several
+   reads at a glance as which images go along. */
+.cc-review-tray-thumb {
+  float: left;
+  width: 2rem;
+  height: 2rem;
+  margin: 0.05rem 0.5rem 0 0;
+  object-fit: cover;
+  border-radius: 3px;
+  border: 1px solid var(--sol-border);
+}

@@ -449,6 +449,33 @@ export function groupExternalEvents(rows: ExternalEventRecord[]): ExternalEventG
   return groups.sort((a, b) => b.at - a.at);
 }
 
+/** Who did an event, or undefined when the row names nobody. */
+export function externalEventActorKey(row: ExternalEventRecord): string | undefined {
+  return row.actor_user_id || row.actor_login || undefined;
+}
+
+/** The one person behind every event in a group, or undefined when it is several or none. */
+export function externalEventGroupActor(group: ExternalEventGroup): string | undefined {
+  const first = externalEventActorKey(group.events[0]);
+  return first && group.events.every((e) => externalEventActorKey(e) === first) ? first : undefined;
+}
+
+/**
+ * Fold a run of thread groups into one: a person hopping between worktrees
+ * makes a group per branch, and the feed reads that run as one burst of work.
+ * The input is newest first, as groupExternalEvents returns it.
+ */
+export function mergeExternalEventGroups(groups: ExternalEventGroup[]): ExternalEventGroup {
+  if (groups.length === 1) return groups[0];
+  const events = groups.flatMap((g) => g.events).sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0));
+  return {
+    key: `run:${groups.map((g) => g.key).join("+")}`,
+    events,
+    at: events[0].created_at ?? 0,
+    phrases: summarizeExternalEvents(events),
+  };
+}
+
 /** The shepherd states a pull request moves through, and how they read: a
  *  terse chip label, and the sentence a page with room says instead. */
 export const SHEPHERD_STATE_STYLE: Record<string, { label: string; phrase: string; accent: ExternalEventAccent }> = {

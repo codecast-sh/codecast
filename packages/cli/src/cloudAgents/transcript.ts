@@ -24,6 +24,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { CLIENT_ERROR_BANNER_PREFIX } from "@codecast/shared/contracts";
 import type { ImageBlock, ParsedMessage, ToolCall, ToolResult } from "../parser.js";
+import { cloudApiErrorOf } from "./apiError.js";
 
 export interface MirrorToolUse { id: string; name: string; input: Record<string, unknown> }
 
@@ -37,6 +38,28 @@ export interface MirrorTranscriptOptions {
 /** A line codecast adds to a cloud agent's thread, set off from what the agent said. */
 export function mirrorNoteText(text: string): string {
   return `ℹ ${text}`;
+}
+
+/** The statuses of a turn that still runs, across providers (Codex Cloud: pending; the Agents API: queued). */
+const RUNNING_TURN_STATUSES: ReadonlySet<string> = new Set(["pending", "queued", "in_progress"]);
+
+/**
+ * Whether a provider's turn still runs. Any other status has ended it, and
+ * endTurn says how: one codecast does not know reads as ended in the
+ * provider's own word rather than as running forever.
+ */
+export function isRunningTurnStatus(status: string | null | undefined): boolean {
+  return typeof status === "string" && RUNNING_TURN_STATUSES.has(status);
+}
+
+/**
+ * Why a turn failed, in whichever shape the provider gave it: its own
+ * sentence, or an error object read as its HTTP errors are (cloudApiErrorOf),
+ * its message else its code. `fallback` when it says nothing.
+ */
+export function turnError(err: unknown, fallback?: string): string {
+  const said = typeof err === "string" ? err : (({ message, code }) => message || code)(cloudApiErrorOf(0, err, ""));
+  return said || fallback || "no reason given";
 }
 
 export class MirrorTranscript {
@@ -165,6 +188,24 @@ export class MirrorTranscript {
       ...(m.model ? { model: m.model } : {}),
     });
     if (m.role === "user" && !m.toolResults?.length) this.placeNotice();
+  }
+
+  /**
+   * How a turn ended, then its end: a failure as an error banner (`reason`:
+   * why), a cancel as a note, any other status the provider names as it says
+   * it. A completed turn the agent gave no answer in (`answered` false) says
+   * so, rather than stopping on its last working note. Records are id'd by
+   * the turn's `key`, so a re-render keeps them.
+   */
+  endTurn(key: string, end: { status: string | null | undefined; label: string; reason?: string; at?: number; answered?: boolean }): void {
+    const { status, label } = end;
+    // Never before the turn's last row: a provider dates the end in its own (whole second) clock.
+    const at = Math.max(end.at ?? this.clock, this.clock);
+    if (status === "failed") this.error(`${key}:error`, `${label} turn failed: ${end.reason || "no reason given"}`, at);
+    else if (status === "cancelled") this.note(`${key}:cancelled`, "Cancelled.", at);
+    else if (status === "completed" && end.answered === false) this.note(`${key}:unanswered`, `${label} finished this turn without an answer.`, at);
+    else if (status && status !== "completed") this.note(`${key}:ended`, `${label} ended this turn as ${status}.`, at);
+    this.turnEnded();
   }
 
   turnEnded(): void {
