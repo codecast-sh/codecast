@@ -4886,13 +4886,17 @@ pre[class*="language-"] {
   box-shadow: none;
   --tw-ring-color: transparent;
 }
-/* The inbox multi-selection's color: a peach pastel, the one accent no row
-   state uses (cyan is the open row, blue the user's messages and dormant,
-   green working, yellow needs input, violet a handoff). The card, its tick
+/* The inbox multi-selection's color: a lavender pastel. It carries no
+   meaning elsewhere in the rail (cyan is the open row, blue the user's
+   messages, green working, yellow and orange warnings). The card, its tick
    and the selection bar all read these two tokens. */
 :root {
-  --sel-accent: var(--sol-orange);
-  --sel-fill: color-mix(in srgb, var(--sol-orange) 15%, var(--sol-bg-alt));
+  --sel-accent: var(--sol-violet);
+  /* Mixed into white, not the cream ground: violet over cream goes gray. */
+  --sel-fill: color-mix(in oklab, var(--sol-violet) 20%, white);
+}
+.dark {
+  --sel-fill: color-mix(in srgb, var(--sol-violet) 30%, var(--sol-bg-alt));
 }
 /* A row in a multi-selection, in every layout. Simple view, compact and
    Minimal all force each row's background, so the ticked row sets the ground

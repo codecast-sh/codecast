@@ -126,8 +126,9 @@ export class CloudAgentSessions {
       this.deps.bindSession(conversationId, created.agentId, session.projectPath, session.repoUrl);
       this.deps.log(`${this.tag} created agent ${created.agentId} for conversation ${conversationId.slice(0, 12)} (${created.url ?? ""})`);
     } else {
-      // Last seen running: busy without asking the provider (each retry of a held message would be a read).
-      if (watcher?.isRunning(session.agentId)) throw new CloudAgentBusyError(this.adapter.spec.label);
+      // Last seen running: busy without asking the provider (each retry of a held message would be a read),
+      // unless the provider steers the running turn with it.
+      if (!this.adapter.steersRunningTurn && watcher?.isRunning(session.agentId)) throw new CloudAgentBusyError(this.adapter.spec.label);
       try {
         await this.adapter.followUp(client, session.agentId, content);
       } catch (err) {

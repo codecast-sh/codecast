@@ -35,7 +35,9 @@ function RegionSlot({ k, region, parts, now }: { k: RegionKey; region: Region; p
         display: "flex",
         flexDirection: "column",
         justifyContent: region.anchor === "bottom" ? "flex-end" : "flex-start",
-        overflow: "hidden",
+        // clip, not hidden: a hidden box is a scroll container, and a real
+        // view's scrollIntoView or focus would scroll the film inside it.
+        overflow: "clip",
       }}
     >
       {parts.map((p) => (
@@ -50,7 +52,7 @@ function RegionSlot({ k, region, parts, now }: { k: RegionKey; region: Region; p
 }
 
 function SurfaceMount({ s, parts, now }: { s: Surface; parts: Placed[]; now: number }) {
-  const face: CSSProperties = { position: "absolute", inset: 0, backfaceVisibility: "hidden", WebkitBackfaceVisibility: "hidden", borderRadius: s.radius, overflow: "hidden" };
+  const face: CSSProperties = { position: "absolute", inset: 0, backfaceVisibility: "hidden", WebkitBackfaceVisibility: "hidden", borderRadius: s.radius, overflow: "clip" };
   const regions = Object.entries(s.regions).map(([name, region]) => {
     const k = `${s.id}.${name}` as RegionKey;
     return <RegionSlot key={k} k={k} region={region} parts={parts.filter((p) => p.region === k)} now={now} />;

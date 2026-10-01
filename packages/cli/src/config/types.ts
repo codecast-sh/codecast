@@ -70,6 +70,8 @@ export interface Config {
   cursor_cloud_sync?: boolean;
   /** Mirror every Codex Cloud task (needs a Codex sign-in); on only when true. */
   codex_cloud_sync?: boolean;
+  /** Mirror every OpenAI Agents API session on the OpenAI key (not only codecast's own); on only when true. */
+  codex_api_sync?: boolean;
   excluded_paths?: string;
   sync_mode?: "all" | "selected";
   sync_projects?: string[];

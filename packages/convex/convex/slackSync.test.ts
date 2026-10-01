@@ -26,12 +26,11 @@ import {
   buildInboundResolver,
   getSlackUser,
   teammateHandles,
-  mirrorFiles,
-  slackFileLinkLines,
   fileRepairContext,
   applyFileRepair,
 } from "./slackSync";
 import { markdownToSlack, slackToMarkdown } from "./lib/slackText";
+import { mirrorFiles, slackFileLinkLines } from "./lib/slackFiles";
 import { listChannels, sendMessage, toggleReaction, updateChannel } from "./chat";
 import { resolveChatMentions } from "./lib/mentionResolve";
 

@@ -287,7 +287,7 @@ export function HeroFlythrough() {
       <div
         ref={wrapRef}
         aria-hidden
-        className="relative w-full overflow-hidden rounded-2xl bg-sol-bg aspect-[1280/760] max-sm:aspect-[4/5]"
+        className="relative w-full overflow-clip rounded-2xl bg-sol-bg aspect-[1280/760] max-sm:aspect-[4/5]"
         style={{ border: "1px solid var(--sol-bg-alt)", boxShadow: "0 40px 80px -40px rgba(0,43,54,0.35)" }}
       >
         <div

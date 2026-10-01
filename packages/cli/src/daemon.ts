@@ -102,7 +102,6 @@ import {
   activeCredentialExpiresAt,
   refreshActiveCredential,
   resnapshotIfActiveFresher,
-  refreshUsageSnapshots,
   verifyActiveIdentity,
   readOauthAccount,
   deleteProfile,
@@ -4490,6 +4489,7 @@ async function maintainCcUsageSnapshotsInner(reason: string, opts: { force?: boo
       );
     }
     await reconcileLiveClaudeGate();
+    const { refreshUsageSnapshots } = await import("./ccUsagePoll.js");
     const res = await refreshUsageSnapshots({
       ...(opts.force ? { minIntervalMs: 0 } : {}),
       heldProfiles: liveClaudeProfiles(),
@@ -10563,33 +10563,8 @@ async function processSessionFilePass(
       }
 
       let matchedStartedConversation: string | null = null;
-      if (!conversationId && startedSessionTmux.size > 0 && !isSubagent && !parentConversationId) {
-        const startedClaudeEntries = Array.from(startedSessionTmux.entries())
-          .filter(([, entry]) => entry.agentType === "claude");
-        const proc = await findSessionProcess(sessionId, "claude").catch(() => null);
-        let tmuxSessionName: string | null = null;
-        if (proc) {
-          tmuxSessionName = sessionProcessCache.get(sessionId)?.tmuxTarget?.split(":")[0] ?? null;
-          if (!tmuxSessionName) {
-            const tmuxPane = await findTmuxPaneForTty(proc.tty);
-            if (tmuxPane) {
-              tmuxSessionName = tmuxPane.split(":")[0];
-              cacheSessionProcess(sessionId, proc, tmuxPane);
-            }
-          }
-        }
-        matchedStartedConversation = matchStartedConversation(startedClaudeEntries, {
-          tmuxSessionName,
-          // Only allow the cwd fallback when the process wasn't found at all
-          // (still spawning). A located process that isn't in our tmux belongs
-          // to someone else — see matchStartedConversation.
-          projectPath: proc ? null : actualProjectPath,
-        });
-        if (matchedStartedConversation && tmuxSessionName) {
-          log(`Matched session ${sessionId.slice(0, 8)} to conversation ${matchedStartedConversation.slice(0, 12)} via tmux ${tmuxSessionName}`);
-        } else if (matchedStartedConversation && actualProjectPath) {
-          log(`Matched session ${sessionId.slice(0, 8)} to conversation ${matchedStartedConversation.slice(0, 12)} via projectPath fallback`);
-        }
+      if (!conversationId && !isSubagent && !parentConversationId) {
+        matchedStartedConversation = (await matchStartedStub("claude", sessionId, actualProjectPath))?.conversationId ?? null;
       }
 
       // Re-check after async gap: discoverAndLinkSession may have linked during findSessionProcess/findTmuxPaneForTty
@@ -10602,22 +10577,7 @@ async function processSessionFilePass(
         if (conversationId) {
           // Already linked by background discovery — skip matching and creation
         } else if (matchedStartedConversation) {
-          conversationId = matchedStartedConversation;
-          const tmuxEntry = startedSessionTmux.get(matchedStartedConversation);
-          conversationCache[sessionId] = conversationId;
-          saveConversationCache(conversationCache);
-          // Reconcile project_path/git_root to the real session cwd: the stub
-          // was created (e.g. from the web) before this session existed, so its
-          // stored path is a guess that may not match where the session runs.
-          void pushSessionIdBinding(conversationId, sessionId, actualProjectPath || undefined, gitInfo?.repoRoot || gitInfo?.root, gitInfo?.remoteUrl);
-          if (tmuxEntry) {
-          registerManagedStartedSession(conversationId, sessionId, tmuxEntry.tmuxSession);
-          if (tmuxEntry.sessionId && tmuxEntry.sessionId !== sessionId) {
-            stopManagedSessionHeartbeat(tmuxEntry.sessionId);
-          }
-          }
-          deleteStartedSession(matchedStartedConversation);
-          log(`Linked session ${sessionId} to existing started conversation ${conversationId}`);
+          conversationId = await adoptStartedStub("claude", matchedStartedConversation, sessionId, actualProjectPath, conversationCache, gitInfo);
         if (parentConversationId) {
           syncService.linkSessions(parentConversationId, conversationId, subagentDescriptions.get(sessionId)).then(() => {
             log(`Linked started conversation ${conversationId.slice(0, 12)} to parent ${parentConversationId!.slice(0, 12)}`);
@@ -11659,23 +11619,10 @@ async function processCodexSessionPass(
         const matchedStartedConversation = (await matchStartedStub("codex", sessionId, projectPath))?.conversationId ?? null;
 
         if (matchedStartedConversation) {
-          conversationId = matchedStartedConversation;
           const tmuxEntry = startedSessionTmux.get(matchedStartedConversation);
+          conversationId = await adoptStartedStub("codex", matchedStartedConversation, sessionId, projectPath, conversationCache);
           setConversationCache(conversationId);
-          // Reconcile project_path/git_root to the real session cwd (see Claude
-          // match branch): the stub's stored path was a guess made before the
-          // session existed and may not match where it actually runs.
-          const codexGitInfo = projectPath ? await getGitInfo(projectPath) : undefined;
-          void pushSessionIdBinding(conversationId, sessionId, projectPath || undefined, codexGitInfo?.repoRoot || codexGitInfo?.root, codexGitInfo?.remoteUrl);
-          if (tmuxEntry) {
-            registerManagedStartedSession(conversationId, sessionId, tmuxEntry.tmuxSession);
-            if (tmuxEntry.sessionId && tmuxEntry.sessionId !== sessionId) {
-              stopManagedSessionHeartbeat(tmuxEntry.sessionId);
-            }
-            startCodexPermissionPoller(sessionId, tmuxEntry.tmuxSession, conversationId, syncService);
-          }
-          deleteStartedSession(matchedStartedConversation);
-          log(`Linked Codex session ${sessionId} to existing started conversation ${conversationId}`);
+          if (tmuxEntry) startCodexPermissionPoller(sessionId, tmuxEntry.tmuxSession, conversationId, syncService);
         } else {
 
           const firstUserMessage = messages.find(msg => msg.role === "user");
@@ -12457,11 +12404,15 @@ async function matchStartedStub(client: AgentClientId, sessionId: string, projec
 
 // Take over a matched started stub: map the session to it, tell the server
 // its real session id and cwd, and hand its pane's heartbeat to the session.
-async function adoptStartedStub(client: AgentClientId, conversationId: string, sessionId: string, projectPath: string | undefined, conversationCache: ConversationCache): Promise<string> {
+// The stub was created (from the web, say) before the session existed, so its
+// stored path is a guess; the binding reconciles project_path and git_root to
+// where the session really runs. A caller that already read the cwd's git
+// facts passes them, since a read is eight git processes.
+async function adoptStartedStub(client: AgentClientId, conversationId: string, sessionId: string, projectPath: string | undefined, conversationCache: ConversationCache, knownGitInfo?: GitInfo): Promise<string> {
   const tmuxEntry = startedSessionTmux.get(conversationId);
   conversationCache[sessionId] = conversationId;
   saveConversationCache(conversationCache);
-  const gitInfo = projectPath ? await getGitInfo(projectPath) : undefined;
+  const gitInfo = knownGitInfo ?? (projectPath ? await getGitInfo(projectPath) : undefined);
   void pushSessionIdBinding(conversationId, sessionId, projectPath || undefined, gitInfo?.repoRoot || gitInfo?.root, gitInfo?.remoteUrl);
   if (tmuxEntry) {
     registerManagedStartedSession(conversationId, sessionId, tmuxEntry.tmuxSession);
@@ -25063,6 +25014,13 @@ async function deliverMessage(
   const admit = createDeliveryAdmission(syncService, messageId, conversationId);
   await deliveryStep(messageId, "admit_first", admit);
   touchHostActivity();
+  // A slash command or a poll answer can open an interactive prompt in the
+  // pane it lands in: watch for one, longer after a poll answer.
+  const watchForPrompt = (tmuxTarget: string | undefined, sid: string): void => {
+    const isPollResponse = !!parsePollMessage(content);
+    if (!tmuxTarget || !(content.trimStart().startsWith("/") || isPollResponse)) return;
+    checkForInteractivePrompt(tmuxTarget, sid, conversationId, syncService, isPollResponse ? 4000 : 2000).catch(() => {});
+  };
 
   if (pendingAgentSwitches.has(conversationId)) {
     logDelivery(`[AGENT-SWITCH] Deferring msg=${messageId.slice(0, 8)} until conversation ${conversationId.slice(0, 12)} is rebound`);
@@ -25296,10 +25254,7 @@ async function deliverMessage(
         await deliveryStep(messageId, "inject_started", () => injectViaTmux(startedTmuxTarget, content, entry.agentType, { delivery: { messageId, conversationId } }));
         syncService.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
         log(`Injected message to started session tmux ${entry.tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
-        const isPollResponse = !!parsePollMessage(content);
-        if (content.trimStart().startsWith("/") || isPollResponse) {
-          checkForInteractivePrompt(startedTmuxTarget, conversationId, conversationId, syncService, isPollResponse ? 4000 : 2000).catch(() => {});
-        }
+        watchForPrompt(startedTmuxTarget, conversationId);
         return true;
       } catch (err) {
         if (err instanceof PendingDeliveryHeldError) throw err;
@@ -25437,10 +25392,7 @@ async function deliverMessage(
         if (live.source === "cache") syncService.setSessionError(conversationId).catch(logConvexFailure);
         clearUnresolvablePane(sessionId);
         logDelivery(`Injected via tmux ${injectTarget} (source=${live.source})`);
-        const isPollResponse = !!parsePollMessage(content);
-        if (content.trimStart().startsWith("/") || isPollResponse) {
-          checkForInteractivePrompt(injectTarget, sessionId, conversationId, syncService, isPollResponse ? 4000 : 2000).catch(() => {});
-        }
+        watchForPrompt(injectTarget, sessionId);
         return true;
       }
     } catch (err) {
@@ -25551,44 +25503,27 @@ async function deliverMessage(
   await admit();
   markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
   const resumed = await autoResumeSession(sessionId, content, titleCache, undefined, conversationId, agentTypeHint ?? detectedType, { delivery: { messageId, conversationId } });
-  if (resumed) {
-    resetSessionDeliveryFailures(sessionId);
-    materializedSessions.delete(sessionId);
-    logDelivery(`Injected via auto-resume for session=${sessionId.slice(0, 8)}`);
-    const isPollResponse = !!parsePollMessage(content);
-    if (content.trimStart().startsWith("/") || isPollResponse) {
-      const resumeTmux = resumeSessionCache.get(sessionId);
-      if (resumeTmux) {
-        checkForInteractivePrompt(resumeTmux + ":0.0", sessionId, conversationId, syncService, isPollResponse ? 4000 : 2000).catch(() => {});
-      }
-    }
-    postDeliveryHealthCheck(sessionId, conversationId, content, messageId, syncService, titleCache, conversationCache).catch(err => {
+  // A resume that delivered: the session is healthy again, and its new pane
+  // gets the same prompt watch and health check a live delivery gets.
+  const resumedDelivery = (via: string, sid: string): true => {
+    resetSessionDeliveryFailures(sid);
+    materializedSessions.delete(sid);
+    logDelivery(`Injected via ${via} for session=${sid.slice(0, 8)}`);
+    const resumeTmux = resumeSessionCache.get(sid);
+    watchForPrompt(resumeTmux && `${resumeTmux}:0.0`, sid);
+    postDeliveryHealthCheck(sid, conversationId, content, messageId, syncService, titleCache, conversationCache).catch(err => {
       log(`Health check error: ${err instanceof Error ? err.message : String(err)}`);
     });
     return true;
-  }
+  };
+  if (resumed) return resumedDelivery("auto-resume", sessionId);
 
   // Auto-resume failed - try repair (regenerate JSONL from Convex)
   logDelivery(`Auto-resume failed for ${sessionId.slice(0, 8)}, attempting repair...`);
   // Row is already marked "injected" from the auto-resume attempt above; repair+resume is a
   // second delivery path for the same message, so no re-mark needed.
   const repaired = await repairAndResumeSession(sessionId, content, titleCache, undefined, conversationId, agentTypeHint ?? detectedType, { delivery: { messageId, conversationId } });
-  if (repaired) {
-    resetSessionDeliveryFailures(sessionId);
-    materializedSessions.delete(sessionId);
-    logDelivery(`Injected via repair+resume for session=${sessionId.slice(0, 8)}`);
-    const isPollResponse = !!parsePollMessage(content);
-    if (content.trimStart().startsWith("/") || isPollResponse) {
-      const resumeTmux = resumeSessionCache.get(sessionId);
-      if (resumeTmux) {
-        checkForInteractivePrompt(resumeTmux + ":0.0", sessionId, conversationId, syncService, isPollResponse ? 4000 : 2000).catch(() => {});
-      }
-    }
-    postDeliveryHealthCheck(sessionId, conversationId, content, messageId, syncService, titleCache, conversationCache).catch(err => {
-      log(`Health check error: ${err instanceof Error ? err.message : String(err)}`);
-    });
-    return true;
-  }
+  if (repaired) return resumedDelivery("repair+resume", sessionId);
 
   // Only a genuinely-unrecoverable resume (recorded in resumeFatalReasons: missing
   // conversation, retired model, session truly gone) earns the long 5-min cooldown.
@@ -27275,12 +27210,9 @@ function startReconciliation(
 ): NodeJS.Timeout {
   log("Reconciliation scheduler started (runs every hour)");
 
-  // Run initial reconciliation after 5 minutes (let daemon stabilize first)
-  setTimeout(async () => {
+  const pass = async (label: string) => {
     try {
-      // Log health report
       await logHealthReport(retryQueue, config);
-
       const result = await performReconciliation(
         syncService,
         (msg, level) => log(msg, level || "info"),
@@ -27288,58 +27220,26 @@ function startReconciliation(
         50,
         config,
       );
-
-      if (result.discrepancies.length > 0) {
-        logWarn(`Reconciliation found ${result.discrepancies.length} discrepancies`);
-        // Auto-repair by resetting positions
-        const repaired = await repairDiscrepancies(result.discrepancies, log);
-        log(`Reconciliation: Reset ${repaired} sessions for re-sync`);
-        // repairDiscrepancies only rewinds positions; the byte-push is normally
-        // watcher-driven, so a silent post-sleep watcher would leave the reset files
-        // sitting unsynced. Drive the sweep directly — this is what makes reconciliation
-        // a real watcher-independent backstop rather than one that also waits on the watcher.
-        if (repaired > 0) {
-          await pushUnsyncedFilesHandler?.("Reconciliation");
-        }
-      }
+      if (result.discrepancies.length === 0) return;
+      logWarn(`Reconciliation found ${result.discrepancies.length} discrepancies`);
+      // Auto-repair by resetting positions
+      const repaired = await repairDiscrepancies(result.discrepancies, log);
+      log(`Reconciliation: Reset ${repaired} sessions for re-sync`);
+      // repairDiscrepancies only rewinds positions; the byte-push is normally
+      // watcher-driven, so a silent post-sleep watcher would leave the reset files
+      // sitting unsynced. Drive the sweep directly: this is what makes reconciliation
+      // a real watcher-independent backstop rather than one that also waits on the watcher.
+      if (repaired > 0) await pushUnsyncedFilesHandler?.("Reconciliation");
     } catch (err) {
-      logError("Initial reconciliation failed", err instanceof Error ? err : new Error(String(err)));
+      logError(`${label} failed`, err instanceof Error ? err : new Error(String(err)));
     }
-  }, 5 * 60 * 1000);
+  };
 
-  return setInterval(async () => {
-    const state = readDaemonState();
-    if (state?.authExpired) {
-      return;
-    }
-
-    try {
-      // Log health report
-      await logHealthReport(retryQueue, config);
-
-      const result = await performReconciliation(
-        syncService,
-        (msg, level) => log(msg, level || "info"),
-        conversationCache,
-        50,
-        config,
-      );
-
-      if (result.discrepancies.length > 0) {
-        logWarn(`Reconciliation found ${result.discrepancies.length} discrepancies`);
-        const repaired = await repairDiscrepancies(result.discrepancies, log);
-        log(`Reconciliation: Reset ${repaired} sessions for re-sync`);
-        // repairDiscrepancies only rewinds positions; the byte-push is normally
-        // watcher-driven, so a silent post-sleep watcher would leave the reset files
-        // sitting unsynced. Drive the sweep directly — this is what makes reconciliation
-        // a real watcher-independent backstop rather than one that also waits on the watcher.
-        if (repaired > 0) {
-          await pushUnsyncedFilesHandler?.("Reconciliation");
-        }
-      }
-    } catch (err) {
-      logError("Reconciliation failed", err instanceof Error ? err : new Error(String(err)));
-    }
+  // The first pass waits five minutes, so the daemon settles first.
+  setTimeout(() => void pass("Initial reconciliation"), 5 * 60 * 1000);
+  return setInterval(() => {
+    if (readDaemonState()?.authExpired) return;
+    void pass("Reconciliation");
   }, RECONCILIATION_INTERVAL_MS);
 }
 

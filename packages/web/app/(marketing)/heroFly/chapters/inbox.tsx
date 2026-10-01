@@ -4,9 +4,8 @@
  * Chapter 1, Inbox: the desk's rail and the inbox list, drawn by the app's own
  * rail primitives and SessionCardView from ../fixtures/desk.ts. The lead's row
  * lands on top and takes the selection; the two workers the lead spawns in
- * chapter 3 land under it. Every row is always mounted: a row waits invisible
- * in its place until its cue, and the rows under it ride a `push` beat up over
- * that space, so the film is a pure function of time.
+ * chapter 3 land under it. A row mounts at its cue and drops in, and the rows
+ * under it glide down to make room (glideOver in ../fixtures/desk.ts).
  *
  * Poster chapter: this module renders in the prerender, so nothing it mounts
  * may read the app's store (inbox.poster.test.tsx).
@@ -138,9 +137,9 @@ function InboxListAt({ now }: PartProps) {
         </div>
         <SectionHeader label="All" count={rows.length + (leadIn ? 1 : 0) + workers} color="text-sol-cyan" sectionKey="all" collapsed={false} />
         <div data-hero-live className="flex flex-col">
-          <div {...fly("desk/inbox.row:lead")}>{card(leadRow(now, messages, steered), leadIn)}</div>
-          <div {...fly("desk/inbox.row:api")}>{card(workerRow(now, "api", apiPhase), workers >= 1 && apiPhase !== "asking")}</div>
-          <div {...fly("desk/inbox.row:ui")}>{card(workerRow(now, "ui", "working"), workers >= 2)}</div>
+          {leadIn && <div {...fly("desk/inbox.row:lead")}>{card(leadRow(now, messages, steered), true)}</div>}
+          {workers >= 1 && <div {...fly("desk/inbox.row:api")}>{card(workerRow(now, "api", apiPhase), apiPhase !== "asking")}</div>}
+          {workers >= 2 && <div {...fly("desk/inbox.row:ui")}>{card(workerRow(now, "ui", "working"), true)}</div>}
           <div {...fly("desk/inbox.rows")}>
             {rows.map((r, i) => (
               <div key={r.session._id} {...fly(`desk/inbox.row:${i}`)}>

@@ -85,30 +85,32 @@ export function TaskBoard({ now }: PartProps) {
 
   return (
     <DeskRouter>
-      <div className="flex h-full text-sol-text">
-        <div className="cq-container flex w-[640px] shrink-0 flex-col border-r border-sol-border/40">
-          {group && <ListGroupHeader label={group.label} count={tasks.length} icon={group.icon} badge={group.badge} extra={group.extra} collapsed={false} />}
-          {tasks.map((task) => (
-            <div key={task._id} data-hero-live="" {...fly(`board/work.row:${task._id}`)}>
-              <ListRowShell state={stateOf(task)}>
-                <TaskRow task={task} state={stateOf(task)} onFilterLabel={noop} />
-              </ListRowShell>
+      <div className="cq-container flex h-full flex-col text-sol-text">
+        {group && <ListGroupHeader label={group.label} count={tasks.length} icon={group.icon} badge={group.badge} extra={group.extra} collapsed={false} />}
+        {tasks.map((task) => (
+          <div key={task._id} data-hero-live="" {...fly(`board/work.row:${task._id}`)}>
+            <ListRowShell state={stateOf(task)}>
+              <TaskRow task={task} state={stateOf(task)} onFilterLabel={noop} />
+            </ListRowShell>
+          </div>
+        ))}
+        <div className="flex min-h-0 flex-1 gap-6 px-4 pt-4" {...fly("board/work.below")}>
+          <div className="w-[440px] shrink-0">
+            <div {...fly("board/work.plan")}>
+              <PlanProgressBar progress={planProgress(tasks)} />
             </div>
-          ))}
-          <div className="px-4 pt-4" {...fly("board/work.plan")}>
-            <PlanProgressBar progress={planProgress(tasks)} />
+            <div {...fly("board/work.station")}>
+              <StationStrip task={filed as TaskItem & { status_id?: string }} />
+            </div>
           </div>
-        </div>
-        <div className="min-w-0 flex-1 overflow-hidden px-4 pt-4" {...fly("board/work.detail")}>
-          <div {...fly("board/work.station")}>
-            <StationStrip task={filed as TaskItem & { status_id?: string }} />
+          <div className="min-w-0 flex-1 overflow-hidden" {...fly("board/work.detail")}>
+            <TaskTimeline
+              task={{ _id: filed._id, created_at: filed.created_at, creator: filed.creator, created_from_conversation: filed.created_from_conversation, history: filedHistory(now, stage) }}
+              sessions={filedSessions(now, stage)}
+              externalEvents={merged ? [mergedEvent(now)] : []}
+              openLinkedSession={noop}
+            />
           </div>
-          <TaskTimeline
-            task={{ _id: filed._id, created_at: filed.created_at, creator: filed.creator, created_from_conversation: filed.created_from_conversation, history: filedHistory(now, stage) }}
-            sessions={filedSessions(now, stage)}
-            externalEvents={merged ? [mergedEvent(now)] : []}
-            openLinkedSession={noop}
-          />
         </div>
       </div>
     </DeskRouter>

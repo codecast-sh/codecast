@@ -78,6 +78,7 @@ const { World } = await import("./surfaces");
 const { createFilmClock, FilmClockContext } = await import("./filmClock");
 const { loadAllChapters } = await import("./chapters");
 const { DURATION, SCENES, SURFACES } = await import("./world");
+const { MemoryRouter } = await import("react-router");
 const act: <T>(fn: () => T | Promise<T>) => Promise<T> = (React as any).act;
 
 /**
@@ -86,8 +87,12 @@ const act: <T>(fn: () => T | Promise<T>) => Promise<T> = (React as any).act;
  *   resize, scroll       layout reads
  *   visibilitychange     pausing while the tab is hidden
  *   selectionchange      React DOM's own root listener (createRoot adds it)
+ *   beforeunload,        module-level teardown in lib/calls/callManager.ts,
+ *   pagehide             lib/calls/walkie.ts and lib/terminal/termSessions.ts,
+ *                        loaded through real views; they act only during a
+ *                        live call or terminal session, which the hero never starts
  */
-const LISTENER_ALLOWLIST = new Set<string>(["resize", "scroll", "visibilitychange", "selectionchange"]);
+const LISTENER_ALLOWLIST = new Set<string>(["resize", "scroll", "visibilitychange", "selectionchange", "beforeunload", "pagehide"]);
 
 const STEP = 0.25;
 const store = useInboxStore as any;
@@ -128,11 +133,15 @@ describe("hero sandbox isolation", () => {
 
     await act(async () => {
       root.render(
-        <HeroSandbox>
-          <FilmClockContext.Provider value={clock}>
-            <World chapters={chapters} now={Date.UTC(2026, 8, 30, 12)} />
-          </FilmClockContext.Provider>
-        </HeroSandbox>,
+        // The page always has a router around the hero (the app's, or the
+        // prerender's); a second one inside HeroSandbox would throw.
+        <MemoryRouter>
+          <HeroSandbox>
+            <FilmClockContext.Provider value={clock}>
+              <World chapters={chapters} now={Date.UTC(2026, 8, 30, 12)} />
+            </FilmClockContext.Provider>
+          </HeroSandbox>
+        </MemoryRouter>,
       );
     });
 
