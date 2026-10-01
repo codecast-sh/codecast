@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { awaitTrackedSessionCreateResult, computeInboxVisible, isFavoriteInStore, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, findReusableBlankSession, getSessionRenderKey, hydrateMergeValue, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, PENDING_SEND_PRUNE_GRACE_MS, pendingSendConsumed, reconcilePendingSendForSession, resolveAssigneeInfo, resolveSessionAuthor, resolveShowOld, seedLiveInboxIdsFromCache, seedTeamInboxIdsFromCache, selectNavCollapsed, selectSessionRailOpen, SessionCreatePendingError, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
+import { awaitTrackedSessionCreateResult, computeInboxVisible, isFavoriteInStore, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, findReusableBlankSession, getSessionRenderKey, hydrateMergeValue, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, PENDING_SEND_PRUNE_GRACE_MS, pendingSendConsumed, reconcilePendingSendForSession, resolveAssigneeInfo, resolveSessionAuthor, resolveShowOld, seedLiveInboxIdsFromCache, seedTeamInboxIdsFromCache, selectNavCollapsed, selectSessionRailOpen, SessionCreatePendingError, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, NEW_SESSION_HOLD_MS, releaseExpiredNewSessionHolds, type InboxSession } from "../inboxStore";
 import { convHasPendingSend, pendingRowsUnsettled } from "../inboxOverlays";
 import { _resetSnapshotLedger } from "../idbCollectionDiff";
 import { isPersistedStoreKey } from "../idbCache";
@@ -1940,6 +1940,32 @@ describe("kill/stash cascade takes the whole nested group", () => {
   });
 });
 
+describe("NEW hold: the first send into a blank session", () => {
+  beforeEach(() => {
+    useInboxStore.setState({ messages: {}, pendingMessages: {}, newSessionHolds: {}, sessions: {
+      blank: { ...baseSession, _id: "blank", message_count: 0 },
+      busy: { ...baseSession, _id: "busy", message_count: 4 },
+    } });
+  });
+
+  it("stamps a hold on the first send only, and never persists it", () => {
+    const before = Date.now();
+    useInboxStore.getState().addOptimisticMessage("blank", "first prompt");
+    useInboxStore.getState().addOptimisticMessage("blank", "second thought");
+    useInboxStore.getState().addOptimisticMessage("busy", "later message");
+    const holds = useInboxStore.getState().newSessionHolds;
+    expect(Object.keys(holds)).toEqual(["blank"]);
+    expect(holds.blank).toBeGreaterThanOrEqual(before + NEW_SESSION_HOLD_MS);
+    expect(isPersistedStoreKey("newSessionHolds")).toBe(false);
+  });
+
+  it("an expired hold releases on the sweep", () => {
+    useInboxStore.setState({ newSessionHolds: { gone: Date.now() - 1, live: Date.now() + 10_000 } });
+    releaseExpiredNewSessionHolds();
+    expect(Object.keys(useInboxStore.getState().newSessionHolds)).toEqual(["live"]);
+  });
+});
+
 describe("pending user messages must never be lost on reload", () => {
   // Bug history: a sent-but-unconfirmed message vanished on cmd-r. Root cause:
   // `pendingMessages` was absent from the IDB persistence allowlist, so the
@@ -3288,6 +3314,25 @@ describe("pruneGhostSessions — verified removal of GC'd blanks", () => {
     expect(s.sessions[SENDING]).toBeDefined();
     expect(s.sessions[CREATING]).toBeDefined();
     expect(s.pending[`sessions:${CURRENT}`]).toBeUndefined();
+  });
+
+  // var's ghost (2026-10-01): a session deleted server-side while a send was
+  // still unsettled. Nothing can settle that send, so the guard kept the row
+  // forever. A proven deletion drops it, and an open one goes when the view moves.
+  it("drops a server-deleted session even with an unsettled send", () => {
+    useInboxStore.getState().pruneGhostSessions([SENDING], { serverDeleted: true });
+    const s = useInboxStore.getState();
+    expect(s.sessions[SENDING]).toBeUndefined();
+    expect(s.pendingMessages[SENDING]).toBeUndefined();
+    expect(s.pending[`sessions:${SENDING}`]?.type).toBe("exclude");
+  });
+
+  it("defers a server-deleted open session until the view moves off it", () => {
+    useInboxStore.getState().pruneGhostSessions([CURRENT], { serverDeleted: true });
+    expect(useInboxStore.getState().sessions[CURRENT]).toBeDefined();
+    useInboxStore.getState().navigateToSession(GONE);
+    expect(useInboxStore.getState().currentSessionId).toBe(GONE);
+    expect(useInboxStore.getState().sessions[CURRENT]).toBeUndefined();
   });
 });
 

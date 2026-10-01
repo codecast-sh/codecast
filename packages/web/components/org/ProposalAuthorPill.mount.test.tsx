@@ -50,11 +50,11 @@ async function verifyAuthorPill() {
   const q = <T extends Element = HTMLElement>(sel: string) => document.querySelector<T>(sel);
 
   // A role the server named: name, handle, avatar, the scope page link.
-  await render(React.createElement(ProposalAuthorPill, { author: { kind: "role", id: "role-9", name: "Chief of Staff", short_id: "or-9", handle: "chief-of-staff", avatar: "fox" } }));
+  await render(React.createElement(ProposalAuthorPill, { author: { kind: "role", id: "role-9", name: "Head of People", short_id: "or-9", handle: "head-of-people", avatar: "fox" } }));
   const rolePill = q<HTMLAnchorElement>('[data-proposal-author="role"]')!;
   assert.equal(rolePill.tagName, "A");
   assert.equal(rolePill.getAttribute("href"), "/org/or-9");
-  assert.match(rolePill.textContent!, /Chief of Staff@chief-of-staff/);
+  assert.match(rolePill.textContent!, /Head of People@head-of-people/);
   assert.equal(q("[data-avatar]")!.getAttribute("data-avatar"), "fox");
 
   // A role only the tree names: filled from the roles hook, its chosen avatar kept.

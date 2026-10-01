@@ -21,6 +21,9 @@ export type RegistryMaps = {
   isProtectedSyncCollection: (key: string) => boolean;
   isUnprotectedField: (key: string, field: string) => boolean;
   collectionRowValidator: (key: string) => ((row: any) => boolean) | undefined;
+  /** The key's sync kind and list row identity when its entry declares them. */
+  syncKindOf: (key: string) => "collection" | "singleton" | "list" | "scalar" | undefined;
+  rowKeyOf: (key: string) => string | undefined;
 };
 
 export function deriveRegistryMaps(
@@ -97,6 +100,12 @@ export function deriveRegistryMaps(
     },
     isUnprotectedField(key: string, field: string): boolean {
       return unprotectedFieldSets.get(key)?.has(field) ?? false;
+    },
+    syncKindOf(key: string) {
+      return registry[key]?.sync?.kind;
+    },
+    rowKeyOf(key: string) {
+      return registry[key]?.sync?.rowKey;
     },
     collectionRowValidator(key: string) {
       return registry[key]?.validRow;

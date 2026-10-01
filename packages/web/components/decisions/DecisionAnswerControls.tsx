@@ -8,6 +8,7 @@ import { DecisionOptionList, TypeAnswerButton } from "./DecisionOptionList";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { hasOpenModal } from "../../shortcuts";
 import { chosenOptions } from "../../lib/decisionLinks";
+import { ChangeCardAnswer, cardAnswerIndexes } from "./ChangeCardView";
 
 // The answer footer, per kind (docs/architecture/decisions-as-documents.md
 // D1 / D4): single = one option (digits 1 to 9, or a typed answer); multi =
@@ -18,7 +19,17 @@ import { chosenOptions } from "../../lib/decisionLinks";
 // (store answerDecision takes it and delivers the message). `keys` claims the
 // digit keys on window in capture phase, the same way SessionDecisionCard
 // does, so exactly one surface on screen should pass it.
-export function DecisionAnswerControls({
+//
+// A decision about a change card (LE11) answers Ship, Revise or Drop through
+// the card's own controls (ChangeCardAnswer), whatever surface renders it.
+type AnswerControlsProps = Parameters<typeof GenericAnswerControls>[0];
+export function DecisionAnswerControls(props: AnswerControlsProps) {
+  const indexes = cardAnswerIndexes(props.decision);
+  if (indexes) return <ChangeCardAnswer decision={props.decision} indexes={indexes} onAnswer={props.onAnswer} onDismiss={props.onDismiss} keys={props.keys} size={props.size} />;
+  return <GenericAnswerControls {...props} />;
+}
+
+function GenericAnswerControls({
   decision,
   onAnswer,
   onDismiss,

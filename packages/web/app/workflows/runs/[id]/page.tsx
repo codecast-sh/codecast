@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { ShareControl } from "../../../../components/ShareControl";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { RunGate } from "../../../../components/WorkflowContextPanel";
@@ -119,6 +120,7 @@ function RunDetailContent({ runId }: { runId: string }) {
             <p className="text-xs text-sol-text-dim mt-0.5 truncate">{run.goal_override}</p>
           )}
         </div>
+        <ShareControl label="workflow run" path={`/workflows/runs/${run._id}`} publicShare={{ kind: "run", id: run._id, token: (run as any).share_token }} />
         <span className="text-[10px] text-sol-text-dim font-mono flex-shrink-0">{run._id.slice(-12)}</span>
       </div>
 

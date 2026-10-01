@@ -1356,7 +1356,7 @@
    {
     "name": "StaffingPane / ProposalCard parts / RoleScopeView",
     "file": "packages/web/components/org/StaffingPane.tsx",
-    "role": "The chief-of-staff staffing proposal pane (changes, tenure chips, accept/skip), proposal snippets, a role's scope view.",
+    "role": "The head-of-people staffing proposal pane (changes, tenure chips, accept/skip), proposal snippets, a role's scope view.",
     "props": "StaffingPane(props: StaffingPaneProps) :151; ChangeLineText({change}) :424; TenureChip({line}) :613; ProposalMeta/ProposalTreeView/ProposalSnippet/ProposalDetail (ProposalCard.tsx:38-264); RoleScopeView({model, density, renderLead, ...}) identity/RoleScopeView.tsx:65",
     "deps": "StaffingPane: props only apart from next/link (no store/Convex imports) and has a jsdom fit test (StaffingPane.fit.test.tsx) that already renders it from orgStaffingFixture. ProposalCard.tsx imports useInboxStore and useSyncOrgTree (:17-18) in some exports (ProposalActions), so pick ProposalTreeView/ProposalMeta. RoleScopeView: props + render callbacks + next/link.",
     "presentational": "yes",
@@ -1636,7 +1636,7 @@
     "role": "Standalone Vite root at packages/web/preview (migrate.html, org.html, bulk.html). A resolve plugin swaps store/inboxStore.ts, hooks/useQueryNoThrow.ts and hooks/useSyncDevices.ts for preview/mocks/*. `convex/react` and the generated api are aliased to mocks.",
     "deps": "preview/mocks/inboxStore.ts is a HAND-WRITTEN stub store with a few keys, a null useTrackedStore and every other export stubbed. It is not the real store.",
     "presentational": "nearly",
-    "howToRender": "This is the precedent for a separate module graph, but it only works for components that read a handful of keys. preview/org-entry.tsx is the better model: it imports ../app/globals.css, sets the theme class, wraps in MemoryRouter and renders the REAL props-only components (RoleCard, ChiefSeatDialog) from fixture props, with no store at all."
+    "howToRender": "This is the precedent for a separate module graph, but it only works for components that read a handful of keys. preview/org-entry.tsx is the better model: it imports ../app/globals.css, sets the theme class, wraps in MemoryRouter and renders the REAL props-only components (RoleCard, HeadSeatDialog) from fixture props, with no store at all."
    },
    {
     "name": "OrgPage ?preview=1",

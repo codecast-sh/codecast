@@ -25,7 +25,8 @@ export * from "./planForeignText";
 /**
  * Every value tasks.source may hold. `template` and `fork` come from
  * plans.instantiateTemplate / plans.fork; `insight` from taskMining;
- * `plan_mode` / `todo_sync` from the agent transcript importers.
+ * `plan_mode` / `todo_sync` from the agent transcript importers; `signal`
+ * from the signal door (a cause, the-line-end-to-end.md LE4).
  */
 export type TaskSource =
   | "human"
@@ -36,7 +37,8 @@ export type TaskSource =
   | "plan_mode"
   | "todo_sync"
   | "template"
-  | "fork";
+  | "fork"
+  | "signal";
 
 /**
  * The three origins a human actually cares to tell apart.

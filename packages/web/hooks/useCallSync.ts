@@ -94,8 +94,20 @@ export function useCallSync(): void {
   // carries the lock state the dock renders. Ephemeral like the rest of the
   // call slice: never persisted, re-derived on every load.
   const { data: liveRooms } = useQueryNoThrow(api.calls.getLiveRooms, enabled ? {} : "skip");
+  // One feed, two homes: the room flags a person flips go to `callRooms`
+  // (localFirst, so an in-flight toggle survives a stale push) and the roster
+  // to `liveRooms`.
   useConvexSync(liveRooms, useCallback((d: any) => {
-    useInboxStore.getState().syncTable("liveRooms", d);
+    if (!Array.isArray(d)) return;
+    const store = useInboxStore.getState();
+    store.syncTable("callRooms", d.map((r: any) => ({
+      _id: r.room_key,
+      locked: !!r.locked,
+      transcribe_off: !!r.transcribe_off,
+      transcribe_off_at: r.transcribe_off_at ?? null,
+      recording: !!r.recording,
+    })));
+    store.syncTable("liveRooms", d.map(({ locked: _l, transcribe_off: _t, transcribe_off_at: _a, recording: _r, ...room }: any) => room));
   }, []));
 
   // Who is waiting at MY door. Readable only from inside the room, so it is
@@ -104,7 +116,8 @@ export function useCallSync(): void {
   const seatedRoomKey = s.call.phase === "connected" ? s.call.roomKey : null;
   const { data: knocks } = useQueryNoThrow(
     api.calls.getRoomKnocks,
-    enabled && seatedRoomKey ? { room_key: seatedRoomKey } : "skip",
+    // `guests`: this client answers a guest's knock with admitGuest (RoomDoor).
+    enabled && seatedRoomKey ? { room_key: seatedRoomKey, guests: true } : "skip",
   );
   // Every huddle transcribes. While seated, watch who is running the room's
   // transcript and ask to scribe when nobody is (or when the scribe's seat is
@@ -128,15 +141,15 @@ export function useCallSync(): void {
   const scribeStartedAt = useSyncExternalStore(subscribeScribe, () => getScribeStatus().startedAt, () => null);
   const roster = useTrackedStore([
     (st: any) => (seatedRoomKey ? (st.callOccupancy[seatedRoomKey] ?? []) : []).map((m: any) => String(m.user_id)).sort().join("|"),
-    (st: any) => !!(st.liveRooms as any[]).find((r) => r.room_key === seatedRoomKey)?.transcribe_off,
-    (st: any) => (st.liveRooms as any[]).find((r) => r.room_key === seatedRoomKey)?.transcribe_off_at ?? null,
+    (st: any) => !!(seatedRoomKey && st.callRooms[seatedRoomKey]?.transcribe_off),
+    (st: any) => (seatedRoomKey && st.callRooms[seatedRoomKey]?.transcribe_off_at) || null,
   ]);
   const rosterSig = seatedRoomKey
     ? (roster.callOccupancy[seatedRoomKey] ?? []).map((m: any) => String(m.user_id)).sort().join("|")
     : "";
-  const liveRoomRow = (roster.liveRooms as any[]).find((r) => r.room_key === seatedRoomKey);
-  const transcribeOff = !!liveRoomRow?.transcribe_off;
-  const transcribeOffAt: number | null = liveRoomRow?.transcribe_off_at ?? null;
+  const roomFlags = seatedRoomKey ? roster.callRooms[seatedRoomKey] : undefined;
+  const transcribeOff = !!roomFlags?.transcribe_off;
+  const transcribeOffAt: number | null = roomFlags?.transcribe_off_at ?? null;
   const meId = s.currentUser?._id ? String(s.currentUser._id) : null;
   const liveStartedBy = liveTranscript === undefined ? undefined : liveTranscript ? String(liveTranscript.started_by) : null;
   useWatchEffect(() => {

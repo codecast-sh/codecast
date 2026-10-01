@@ -4,7 +4,9 @@
 // entry, the inbox's marking, and chat's DM naming for personal bots. A row
 // is the seat of the workspace's root role (org-staffing.md S22): `role` is
 // that role's identity, and every surface draws the role, never the row.
-import { CHIEF_OF_STAFF_HANDLE } from "../components/org/orgStaffingTypes";
+import { isHeadOfPeopleRole } from "../components/org/orgStaffingTypes";
+import { roleIdentity } from "@codecast/shared/contracts/orgIdentity";
+import type { ChiefReach } from "@codecast/shared/contracts/orgLead";
 import { useMemo } from "react";
 import { registerKnownAgentMembers } from "../lib/chatViews";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -17,7 +19,7 @@ const api = _api as any;
 
 export type AnchorRow = {
   _id: string;
-  /** The workspace's root: the chief of staff's seat (S22). Set by listAnchors. */
+  /** The workspace's root: the head of people's seat (S22). Set by listAnchors. */
   is_root?: boolean;
   scope_type: "team" | "user";
   team_id?: string | null;
@@ -35,7 +37,7 @@ export type AnchorRow = {
   status: "provisioning" | "active" | "paused" | "decommissioned";
   /** The root role this row is the seat of; null until the workspace's agent
    *  is seated (the S22 migration seats every live one). */
-  role?: { _id: string; short_id: string; name: string; handle: string; avatar: string | null; status: string } | null;
+  role?: { _id: string; short_id: string; name: string; handle: string; avatar: string | null; status: string; given_name?: string | null; chief?: ChiefReach<string> | null; scope_type?: "team" | "user" } | null;
   is_host: boolean;
   in_my_team: boolean;
   conv_status?: string | null;
@@ -72,14 +74,22 @@ export function useSyncAnchors(): { ready: boolean } {
   return result;
 }
 
-/** The name a person reads for a standing agent: its role's, else what the
- *  row was called. Never the word anchor. */
+/** The name a person reads for a standing agent: its role's given name
+ *  (org-staffing.md S30, roleIdentity), else what the row was called. Never
+ *  the word anchor. */
 export function agentName(a: Partial<AnchorRow> | null | undefined): string {
-  return a?.role?.name || a?.bot_name || a?.name || "Workspace agent";
+  if (a?.role) return roleIdentity({ ...a.role, scope_type: a.scope_type }, { teamName: a.team_name }).name;
+  return a?.bot_name || a?.name || "Workspace agent";
+}
+
+/** The role under the name: "Chief of Staff, global", "Head of People". */
+export function agentTitle(a: Partial<AnchorRow> | null | undefined): string | null {
+  if (!a?.role) return null;
+  return roleIdentity({ ...a.role, scope_type: a.scope_type }, { teamName: a.team_name }).subtitle;
 }
 
 const SIG = (a: any) =>
-  `${a._id}|${a.scope_type}|${a.team_id ?? ""}|${a.bot_name}|${a.bot_avatar ?? ""}|${a.team_name ?? ""}|${a.status}|${a.role ? `${a.role._id}:${a.role.short_id}:${a.role.name}:${a.role.handle}:${a.role.avatar ?? ""}:${a.role.status}` : ""}|${a.conversation_id ?? ""}|${a.conv_status ?? ""}|${a.agent_status ?? ""}|${a.awaiting_input ? 1 : 0}|${a.has_pending_messages ? 1 : 0}|${Math.floor((a.conv_updated_at ?? 0) / 60_000)}`;
+  `${a._id}|${a.scope_type}|${a.team_id ?? ""}|${a.bot_name}|${a.bot_avatar ?? ""}|${a.team_name ?? ""}|${a.status}|${a.role ? `${a.role._id}:${a.role.short_id}:${a.role.name}:${a.role.handle}:${a.role.avatar ?? ""}:${a.role.status}:${a.role.given_name ?? ""}:${a.role.chief ? `${a.role.chief.reach}/${(a.role.chief as any).team_id ?? ""}` : ""}` : ""}|${a.conversation_id ?? ""}|${a.conv_status ?? ""}|${a.agent_status ?? ""}|${a.awaiting_input ? 1 : 0}|${a.has_pending_messages ? 1 : 0}|${Math.floor((a.conv_updated_at ?? 0) / 60_000)}`;
 
 /** Reader: all visible anchors, personal first, then teams by name. */
 export function useAnchors(): AnchorRow[] {
@@ -108,10 +118,12 @@ export function rootAgentOf(anchors: AnchorRow[], activeTeamId: string | null | 
     ? a.scope_type === "team" && a.team_id === activeTeamId
     : a.scope_type === "user");
   // Every role's standing session is a row, so the root is the row the server
-  // marks (the chief of staff's seat), else a seat that is no role's yet (a
-  // workspace still waiting for its root); a lead is never the root.
-  return inWorkspace.find((a) => a.is_root)
-    ?? inWorkspace.find((a) => a.role?.handle === CHIEF_OF_STAFF_HANDLE)
+  // marks (the workspace's Chief of Staff, else the Head of People's seat,
+  // S30), else a seat that is no role's yet (a workspace still waiting for
+  // its root); a lead is never the root.
+  return inWorkspace.find((a) => a.is_root && a.role?.chief)
+    ?? inWorkspace.find((a) => a.is_root)
+    ?? inWorkspace.find((a) => (!!a.role && isHeadOfPeopleRole(a.role)))
     ?? inWorkspace.find((a) => !a.role)
     ?? null;
 }
@@ -181,7 +193,7 @@ export function anchorIdentitySig(anchors: Record<string, any> | undefined, anch
   if (!anchorId) return null;
   const a = anchors?.[anchorId];
   if (!a) return null;
-  return JSON.stringify([a._id, a.bot_name ?? "", a.bot_avatar ?? "", a.scope_type, a.team_name ?? ""]);
+  return JSON.stringify([a._id, a.role ? agentName(a) : (a.bot_name ?? ""), a.bot_avatar ?? "", a.scope_type, a.team_name ?? ""]);
 }
 
 export function anchorIdentityFromSig(sig: string | null): AnchorIdentity | null {

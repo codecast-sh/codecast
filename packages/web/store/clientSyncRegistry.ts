@@ -12,6 +12,10 @@ export type HydrationMerge = "shape" | "fill";
 // which spreads these defaults first and overrides per key.
 export type RegistrySyncOpts = {
   kind?: "collection" | "singleton" | "list" | "scalar";
+  // A localFirst list's row identity, the field its locks name a row by
+  // (default `_id`). Set it when an optimistic row carries a stub `_id` but
+  // shares a natural key with the server row (a bookmark's message_id).
+  rowKey?: string;
   // Delta overlay: absence in a payload means "unchanged", never "deleted".
   // Right for every windowed/paged list channel; wrong for a query that
   // returns the COMPLETE visible set (there, absence means removed).
@@ -739,10 +743,16 @@ export const CLIENT_SYNC_REGISTRY = {
   // COMPLETE live set (24h heartbeat window) — snapshot, so a session that
   // stops heartbeating leaves. Readers additionally hide rows whose
   // last_heartbeat is stale, so a persisted row can't outlive its window.
+  // Daemon commands a store action asked for (hibernate, restart, device
+  // move, account switch), keyed by the action's request id, plus the extra
+  // rows of a restart or move (the kill, a remote move's later resume) keyed
+  // by command id. results settles request ids; forConversation narrates the
+  // open conversation's pipeline. The action's intent (where a move goes,
+  // which account a switch picks) is local, so the echo must not blank it.
   sessionCommands: {
     persistence: { kind: "collection", key: "sessionCommands", perWindow: true },
-    sync: { isDelta: true },
-    feeds: ["sessionCommands.results"],
+    sync: { isDelta: true, preserveFields: ["kind", "conversation_id", "to_device_id", "to_remote", "to_label", "profile", "email", "started_at", "confirmed_at"] },
+    feeds: ["sessionCommands.results", "sessionCommands.forConversation"],
   },
   managedSessions: {
     persistence: { kind: "collection", key: "managedSessions" },
@@ -802,6 +812,25 @@ export const CLIENT_SYNC_REGISTRY = {
   },
   notifications: {
     localFirst: true,
+  },
+  // The flags a person flips from inside a huddle (calls.setRoomLocked,
+  // calls.setRoomTranscribeOff, Record and Stop through
+  // callRecordings.startRecording / stopRecording), one row per live room
+  // keyed by room_key. Their
+  // one home: calls.getLiveRooms carries them, and useCallSync files them here
+  // and the roster in `liveRooms`. Snapshot (the feed is the complete set of
+  // live rooms, so an ended room's row goes), never persisted (a huddle is
+  // re-derived on every load). localFirst: setRoomLocked / setRoomTranscribeOff
+  // flip the draft and ride the same-named dispatch side effects, and a push
+  // computed before the write committed cannot flap the control back.
+  // transcribe_off_at is a server clock: the draft stamps its own so this
+  // window's scribe can tell the opt-out is aimed at its run, and the server's
+  // stamp replaces it.
+  callRooms: {
+    sync: {},
+    localFirst: true,
+    unprotectedFields: ["transcribe_off_at"],
+    feeds: ["calls.getLiveRooms"],
   },
   clientState: {
     persistence: { kind: "meta", key: "clientState" },
@@ -889,11 +918,22 @@ export const CLIENT_SYNC_REGISTRY = {
   sidebarNavExpanded: {
     persistence: { kind: "meta", key: "sidebarNavExpanded" },
   },
+  // localFirst on a list or singleton: an action's change to a row's field
+  // (or a list's membership) is locked until the server echoes it, and lifted
+  // with its value restored if the server refuses. The engine diffs the slice
+  // before and after the action, so actions may mutate rows in place or
+  // replace them.
   teams: {
     persistence: { kind: "meta", key: "teams" },
+    localFirst: true,
+    // createTeam's stub row is superseded by the server row carrying its id
+    // as client_key.
+    sync: { kind: "list", altKey: "client_key" },
   },
   teamMembers: {
     persistence: { kind: "meta", key: "teamMembers" },
+    localFirst: true,
+    sync: { kind: "list" },
   },
   teamUnreadCount: {
     persistence: { kind: "meta", key: "teamUnreadCount" },
@@ -923,6 +963,10 @@ export const CLIENT_SYNC_REGISTRY = {
   bookmarks: {
     persistence: { kind: "meta", key: "bookmarks" },
     hydration: { phase: "deferred" },
+    localFirst: true,
+    // A fresh bookmark is a stub (temp_<message id>) until the server row
+    // lands; both share the message id.
+    sync: { kind: "list", rowKey: "message_id" },
   },
   tabs: {
     persistence: { kind: "meta", key: "tabs" },
@@ -944,6 +988,8 @@ export const CLIENT_SYNC_REGISTRY = {
     // Singleton record, not a collection: never union stale cached fields into
     // a freshly-synced user — only fill a still-empty slot (palette/cold start).
     hydration: { merge: "fill" },
+    localFirst: true,
+    sync: { kind: "singleton" },
   },
 } as const satisfies Record<string, ClientSyncRegistryEntry>;
 
@@ -1191,6 +1237,9 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   messageFeed: "shared",
   machineRoster: "shared",
   notifications: "shared",
+  // Fed in every window by useCallSync (calls are window effects, not host
+  // feeders), like the liveRooms roster it is split from.
+  callRooms: "local",
   clientState: "shared",
   liveInboxIdList: "shared",
   teamInboxIdSnapshot: "shared",

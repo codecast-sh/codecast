@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { resolveRestartTarget, enqueueKillAndResume } from "./conversations";
+import { resolveRestartTarget, enqueueKillAndResume, restartSession } from "./conversations";
+import { forConversation, results } from "./sessionCommands";
 import { deleteConversationBySessionIdCore } from "./cleanup";
 import { makeFakeDb } from "./testDb";
 
@@ -340,5 +341,37 @@ describe("deleteConversationBySessionIdCore", () => {
     const res: any = await deleteConversationBySessionIdCore(ctx, { session_id: "s1" });
     expect(res.done).toBe(true);
     expect(ctx.db._deleted).toEqual(["conversations_only"]);
+  });
+});
+
+// A restart from the web store carries its request id onto the resume, the
+// command whose outcome IS the restart's; the outbox replaying the same
+// dispatch queues nothing, and a click that joins a resume already queued
+// still binds its id, so the row it painted settles.
+describe("restart request ids", () => {
+  const auth = { getUserIdentity: async () => ({ subject: `${USER}|s` }) };
+  const conv = { _id: "conversations_1", user_id: USER, session_id: "s1", updated_at: 5 };
+
+  test("bind the resume once and reach both store feeds under the request id", async () => {
+    const ctx = { ...ctxWith({ conversations: [conv], daemon_commands: [], pending_messages: [] }), auth };
+    const run = () => (restartSession as any)._handler(ctx, { conversation_id: "conversations_1", request_id: "restart-1" });
+    expect(await run()).toMatchObject({ conversation_id: "conversations_1" });
+    await run();
+    const cmds = ctx.db._tables.daemon_commands;
+    expect(cmds.map((c: any) => [c.command, c.request_id])).toEqual([["kill_session", undefined], ["resume_session", "restart-1"]]);
+    const [row] = await (results as any)._handler(ctx, { request_ids: ["restart-1"] });
+    expect(row).toMatchObject({ _id: "restart-1", conversation_id: "conversations_1", command: "resume_session", executed_at: null });
+    const pipeline = await (forConversation as any)._handler(ctx, { conversation_id: "conversations_1" });
+    expect(pipeline.map((r: any) => r.command)).toEqual(["kill_session", "resume_session"]);
+    expect(pipeline[1]._id).toBe("restart-1");
+  });
+
+  test("a click folded into a queued resume binds its id to it", async () => {
+    const ctx = { ...ctxWith({ conversations: [conv], daemon_commands: [], pending_messages: [] }), auth };
+    await enqueueKillAndResume(ctx, USER, conv as any);
+    await enqueueKillAndResume(ctx, USER, conv as any, { requestId: "restart-2" });
+    const resumes = ctx.db._tables.daemon_commands.filter((c: any) => c.command === "resume_session");
+    expect(resumes).toHaveLength(1);
+    expect(resumes[0].request_id).toBe("restart-2");
   });
 });

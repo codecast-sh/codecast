@@ -7,6 +7,7 @@ import {
   applySyncTable as engineApplySyncTable,
   applySyncRecord as engineApplySyncRecord,
   applySyncPatch as engineApplySyncPatch,
+  applyShapeLocks as engineApplyShapeLocks,
   type PendingEntry,
 } from "@platform/engine";
 
@@ -61,6 +62,19 @@ export function applySyncRecord(
   pending: Record<string, PendingEntry>,
 ): { record: Record<string, any>; pending: Record<string, PendingEntry> } {
   return engineApplySyncRecord(tableName, id, incoming, pending, OPTIONAL_INBOX_TIMESTAMPS);
+}
+
+/** What an action locked on a local-first list or singleton, held over a
+ *  push; same optional-clear rule. */
+export function applyShapeLocks(
+  tableName: string,
+  kind: "list" | "singleton",
+  incoming: any,
+  pending: Record<string, PendingEntry>,
+  local: any,
+  keys?: { rowKey?: string; altKey?: string },
+): { value: any; pending: Record<string, PendingEntry> } {
+  return engineApplyShapeLocks(tableName, kind, incoming, pending, local, { ...keys, optionalClearFields: OPTIONAL_INBOX_TIMESTAMPS });
 }
 
 /** Partial-patch pending protection (sync-log cargo); same optional-clear rule. */

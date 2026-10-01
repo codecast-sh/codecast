@@ -72,9 +72,9 @@ test("the conversation an initiative opens beside: a role's seat, a person's own
   const tree = ORG_FIXTURE as unknown as OrgTree;
   expect(ownerSeat(tree, { kind: "role", role_id: "fixture-role-growth" })).toMatchObject({ conversationId: "fixture-growth-conv", speaker: ORG_FIXTURE.roles[0].name });
   expect(ownerSeat(tree, { kind: "user", user_id: "fixture-user-me" })).toMatchObject({ role: null, conversationId: "fixture-anchor-conv" });
-  // On a workspace whose only anchor is the chief of staff's seat, the person who hosts it opens on that seat.
-  const chiefSeat: OrgTree = { ...tree, roles: [{ ...tree.roles[0], handle: "chief-of-staff", anchor_id: "fixture-anchor" }], anchors: [{ ...tree.anchors[0], org_role_id: "fixture-role-growth" }] };
-  expect(ownerSeat(chiefSeat, { kind: "user", user_id: "fixture-user-me" }).conversationId).toBe("fixture-anchor-conv");
-  expect(ownerSeat(chiefSeat, { kind: "user", user_id: "fixture-user-sam" }).conversationId).toBeNull();
+  // On a workspace whose only anchor is the head of people's seat, the person who hosts it opens on that seat.
+  const headSeat: OrgTree = { ...tree, roles: [{ ...tree.roles[0], handle: "head-of-people", anchor_id: "fixture-anchor" }], anchors: [{ ...tree.anchors[0], org_role_id: "fixture-role-growth" }] };
+  expect(ownerSeat(headSeat, { kind: "user", user_id: "fixture-user-me" }).conversationId).toBe("fixture-anchor-conv");
+  expect(ownerSeat(headSeat, { kind: "user", user_id: "fixture-user-sam" }).conversationId).toBeNull();
   expect(ownerSeat(tree, undefined).conversationId).toBeNull();
 });

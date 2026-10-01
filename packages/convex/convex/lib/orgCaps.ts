@@ -2,7 +2,7 @@
 // and its switch (S23.1). Leaf module: read from every write path and from
 // org.health, so it imports nothing that imports them back.
 
-import { DEFAULT_ROLE_CAPS } from "@codecast/shared/contracts/orgCapacity";
+import { DEFAULT_LINE_CARDS_CAP, DEFAULT_ROLE_CAPS } from "@codecast/shared/contracts/orgCapacity";
 import { autonomyOn } from "@codecast/shared/contracts/roleAutonomy";
 
 // The numbers live in the shared capacity model, which the analyzer prompt
@@ -14,7 +14,9 @@ export function utcDay(now: number): string {
   return new Date(now).toISOString().slice(0, 10);
 }
 
-export type RoleCounters = { day: string; hands: number; wakes: number; tokens: number };
+// `merges` (the-line.md L12) is counted only once a line merges, so a row
+// written before it has none and reads as zero.
+export type RoleCounters = { day: string; hands: number; wakes: number; tokens: number; merges?: number };
 
 // Today's counters, reset when the stored day is not today. Every reader and
 // writer of `counters` goes through this so a stale row never leaks yesterday.
@@ -27,6 +29,11 @@ export function countersFor(role: { counters?: RoleCounters | null }, now: numbe
 
 export function capsFor(role: { caps?: { hands_per_day: number; wakes_per_day: number; tokens_per_day: number } | null }) {
   return { ...DEFAULT_CAPS, ...(role.caps ?? {}) };
+}
+
+/** caps.cards (LE6), the default when the role has none. */
+export function cardsCapOf(role: { caps?: { cards?: number } | null }): number {
+  return role.caps?.cards ?? DEFAULT_LINE_CARDS_CAP;
 }
 
 export function trustOf(role: { trust?: string | null }): "understand" | "decide" | "direct" {

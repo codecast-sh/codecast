@@ -46,8 +46,12 @@ const CONFIG: PlatformConfig = {
       dispatchFieldTable: "client_prefs",
     },
     pending: { persistence: { kind: "meta", key: "pending" } },
+    roster: { persistence: { kind: "meta", key: "roster" }, localFirst: true },
+    me: { persistence: { kind: "meta", key: "me" }, localFirst: true },
+    // Declared on the registry entry itself, as an app's client registry does.
+    marks: { persistence: { kind: "meta", key: "marks" }, localFirst: true, sync: { kind: "list", rowKey: "message_id" } },
   },
-  syncRegistry: {},
+  syncRegistry: { roster: { kind: "list" }, me: { kind: "singleton" } },
   mustDeliverActions: new Set(["sendNote"]),
   outboxCoalesceKeys: {
     setLayout: (args) => (typeof args[0] === "string" ? `setLayout:${args[0]}` : null),
@@ -95,6 +99,20 @@ function makeHarness(opts?: { config?: PlatformConfig; retryDelays?: number[] })
       activeId: null as string | null,
       pending: {} as Record<string, any>,
       rolledBack: [] as string[],
+      roster: [{ _id: "r1", vis: "full" }, { _id: "r2", vis: "full" }] as any[],
+      me: { _id: "u", status: "online" } as any,
+      setVis: action(function (this: any, id: string, vis: string) {
+        this.roster.find((r: any) => r._id === id).vis = vis;
+      }),
+      marks: [{ _id: "s1", message_id: "m1" }] as any[],
+      toggleMark: action(function (this: any, messageId: string) {
+        const i = this.marks.findIndex((m: any) => m.message_id === messageId);
+        if (i === -1) this.marks.unshift({ _id: `temp_${messageId}`, message_id: messageId });
+        else this.marks.splice(i, 1);
+      }),
+      setStatus: action(function (this: any, status: string) {
+        this.me.status = status;
+      }),
       poke: action(function (this: any, id: string, title = "t") {
         this.items[id] = { _id: id, title };
       }),
@@ -544,6 +562,91 @@ describe("outbox", () => {
     expect(h.wrapped._hasBootOutboxDrained()).toBe(false);
     h.wireDispatch(async () => ({}));
     await waitFor(() => h.wrapped._hasBootOutboxDrained() === true);
+  });
+});
+
+describe("a permanent refusal lifts the refused action's locks", () => {
+  it("puts the prior value back and lets the next push land (live dispatch)", async () => {
+    const h = makeHarness();
+    h.wireDispatch(async () => ({}));
+    h.wrapped.seedRow(SERVER_ID, { title: "server" });
+    await waitFor(() => h.outbox.size === 0);
+    h.wireDispatch(async () => { throw new Error("Uncaught Error: not yours"); });
+    h.wrapped.rename(SERVER_ID, "refused");
+    expect(h.state.items[SERVER_ID].title).toBe("refused");
+    await waitFor(() => h.state.pending[`items:${SERVER_ID}:title`] === undefined);
+    expect(h.state.items[SERVER_ID].title).toBe("server");
+  });
+
+  it("leaves a field a later write owns", async () => {
+    const h = makeHarness();
+    h.wireDispatch(async () => ({}));
+    h.wrapped.seedRow(SERVER_ID, { title: "server" });
+    await waitFor(() => h.outbox.size === 0);
+    let refuse!: (e: Error) => void;
+    h.wireDispatch((a) => a === "rename" && !refuse
+      ? new Promise((_, reject) => { refuse = reject; })
+      : Promise.resolve({}));
+    h.wrapped.rename(SERVER_ID, "first");
+    await waitFor(() => !!refuse);
+    h.wrapped.rename(SERVER_ID, "second");
+    refuse(new Error("Uncaught Error: no"));
+    await sleep(10);
+    expect(h.state.items[SERVER_ID].title).toBe("second");
+    expect(h.state.pending[`items:${SERVER_ID}:title`]).toMatchObject({ value: "second" });
+  });
+
+  it("lifts the locks of a parked row the server refuses on replay", async () => {
+    const h = makeHarness();
+    h.wrapped.seedRow(SERVER_ID, { title: "server" });
+    h.wrapped.rename(SERVER_ID, "parked");
+    expect(h.state.pending[`items:${SERVER_ID}:title`]).toBeDefined();
+    h.wireDispatch(async (a) => {
+      if (a === "rename") throw new Error("Uncaught Error: no");
+      return {};
+    });
+    await waitFor(() => h.outbox.size === 0);
+    expect(h.state.pending[`items:${SERVER_ID}:title`]).toBeUndefined();
+    expect(h.state.items[SERVER_ID].title).toBe("server");
+  });
+});
+
+describe("list and singleton locks from an action", () => {
+  it("locks a list row by its _id and a singleton field by the empty id", () => {
+    const h = makeHarness();
+    h.wrapped.setVis("r2", "hidden");
+    h.wrapped.setStatus("away");
+    expect(h.state.pending["roster:r2:vis"]).toMatchObject({ type: "field", value: "hidden" });
+    expect(h.state.pending["me::status"]).toMatchObject({ type: "field", value: "away" });
+  });
+
+  it("rolls both back when the server refuses", async () => {
+    const h = makeHarness();
+    h.wireDispatch(async () => { throw new Error("Uncaught Error: no"); });
+    h.wrapped.setVis("r2", "hidden");
+    h.wrapped.setStatus("away");
+    await waitFor(() => !h.state.pending["roster:r2:vis"] && !h.state.pending["me::status"]);
+    expect(h.state.roster[1].vis).toBe("full");
+    expect(h.state.me.status).toBe("online");
+  });
+});
+
+describe("list membership from an action", () => {
+  it("plants an include for an added row and an exclude for a removed one, by rowKey", () => {
+    const h = makeHarness();
+    h.wrapped.toggleMark("m2");
+    h.wrapped.toggleMark("m1");
+    expect(h.state.pending["marks:m2"]).toMatchObject({ type: "include" });
+    expect(h.state.pending["marks:m1"]).toMatchObject({ type: "exclude" });
+  });
+
+  it("undoes a refused add and a refused remove", async () => {
+    const h = makeHarness();
+    h.wireDispatch(async () => { throw new Error("Uncaught Error: no"); });
+    h.wrapped.toggleMark("m2");
+    h.wrapped.toggleMark("m1");
+    await waitFor(() => !h.state.pending["marks:m2"] && !h.state.pending["marks:m1"]);
+    expect(h.state.marks.map((m: any) => m.message_id)).toEqual(["m1"]);
   });
 });
 

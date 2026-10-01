@@ -3,7 +3,7 @@
 // RoomThread owns the reads and the writes and lays these out in time order.
 
 import { useState } from "react";
-import { Captions, CaptionsOff, ChevronRight, ListChecks, Sparkles } from "lucide-react";
+import { AlertTriangle, Captions, CaptionsOff, ChevronRight, Circle, ListChecks, Sparkles, Square, Trash2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { ChatAttachments } from "../chat/ChatMessage";
 import { MESSAGE_MD_COMPONENTS, MESSAGE_MD_REHYPE, USER_MD_REMARK } from "../messageMarkdown";
@@ -16,7 +16,10 @@ import { prefersReducedMotion } from "../../hooks/useBottomAnchoredList";
 import { Avatar } from "./Avatar";
 import { SessionFace } from "../identity";
 import { TranscriptTurnList } from "./TranscriptTurns";
+import { CallLinkButton } from "./CallLinkButton";
+import { turnsAnchor } from "./transcriptTurnModel";
 import { firstName, fmtClock, speakerColor } from "./speakers";
+import { GuestTag, isGuestParticipant } from "./GuestTag";
 import { HEARS, type EventRow, type Passage, type ThreadRow } from "./roomThreadModel";
 import "../chat/chat.css";
 import "./roomThread.css";
@@ -67,6 +70,7 @@ export function PassageBlock({
   dayOf,
   onToggle,
   selection,
+  callId,
 }: {
   passage: Passage;
   /** Per thread instance: the stage rail and the call page can both be mounted. */
@@ -81,6 +85,8 @@ export function PassageBlock({
   dayOf: number | undefined;
   onToggle: () => void;
   selection?: RoomThreadSelection;
+  /** The call the passage belongs to: its turns and its head offer links. */
+  callId?: string;
 }) {
   const units = recording ? "line" : "turn";
   const n = passage.turns.length;
@@ -98,13 +104,16 @@ export function PassageBlock({
             isSelected={selection?.isSelected}
             onTurnClick={selection?.onTurnClick}
             activeIndex={selection?.activeIndex ?? null}
+            callId={callId}
           />
         </div>
       </section>
     );
   }
+  const anchor = callId ? turnsAnchor(passage.turns) : null;
   return (
     <section className={className}>
+      <div className="group flex items-baseline">
       <button
         type="button"
         className="rt-passage-head"
@@ -121,6 +130,7 @@ export function PassageBlock({
             passage.speakers.map((sp, i) => (
               <span key={sp.id} className={speakerColor(sp.id)}>
                 {firstName(sp.name)}
+                {isGuestParticipant(sp.id, sp.name) && <GuestTag className="ml-1 align-[1px]" />}
                 {i < passage.speakers.length - 1 ? ", " : ""}
               </span>
             ))
@@ -141,6 +151,8 @@ export function PassageBlock({
         </span>
         {!open && <span className="rt-passage-preview">{passage.preview}</span>}
       </button>
+      {anchor && <CallLinkButton callId={callId!} anchor={anchor} title="Copy a link to this passage" className="ml-1" />}
+      </div>
       <Fold open={open}>
         <div id={bodyId} className="rt-passage-body">
           <TranscriptTurnList
@@ -149,6 +161,7 @@ export function PassageBlock({
             onTurnClick={selection?.onTurnClick}
             compact={recording}
             activeIndex={selection?.activeIndex ?? null}
+            callId={callId}
           />
         </div>
       </Fold>
@@ -165,8 +178,27 @@ function firstSentence(text: string): string {
   return (m ? m[0] : text).trim();
 }
 
-export function RecapCard({ summary, items, live }: { summary: string; items: string[]; live: boolean }) {
+export function RecapCard({
+  summary,
+  items,
+  live,
+  callId,
+  focus,
+}: {
+  summary: string;
+  items: string[];
+  live: boolean;
+  /** The call the recap belongs to: the summary and each item offer links. */
+  callId?: string;
+  /** A link landed on the summary or on one item: the recap opens for it. */
+  focus?: string | null;
+}) {
   const [open, setOpen] = useState(false);
+  const [openedFor, setOpenedFor] = useState<string | null>(null);
+  if (focus && focus !== openedFor) {
+    setOpenedFor(focus);
+    setOpen(true);
+  }
   const label = live ? "So far" : "Summary";
   return (
     <section className={`rt-recap${open ? " rt-recap-open" : ""}`}>
@@ -188,7 +220,12 @@ export function RecapCard({ summary, items, live }: { summary: string; items: st
       </button>
       <Fold open={open}>
         <div className="rt-recap-body">
-          <p>{summary}</p>
+          <p className="group" data-call-anchor="summary">
+            {summary}
+            {callId && (
+              <CallLinkButton callId={callId} anchor={{ kind: "summary" }} title="Copy a link to the summary" className="ml-1 align-middle" />
+            )}
+          </p>
           {items.length > 0 && (
             <div className="rt-recap-items">
               <div className="rt-recap-items-label">
@@ -196,9 +233,19 @@ export function RecapCard({ summary, items, live }: { summary: string; items: st
               </div>
               <ul>
                 {items.map((a, i) => (
-                  <li key={i}>
+                  <li key={i} className="group" data-call-anchor={`action-${i}`}>
                     <span className="text-sol-violet">→</span>
-                    <span>{a}</span>
+                    <span>
+                      {a}
+                      {callId && (
+                        <CallLinkButton
+                          callId={callId}
+                          anchor={{ kind: "action", index: i }}
+                          title="Copy a link to this action item"
+                          className="ml-1 align-middle"
+                        />
+                      )}
+                    </span>
                   </li>
                 ))}
               </ul>
@@ -246,6 +293,9 @@ export function EventLine({
   // The room's own agent is not somebody's guest: it was in the room before
   // anyone, so the line says it is here rather than who brought it.
   const ownRoom = !!agent && !!ownRoomId && (agent.conversation_id === ownRoomId || agent.short_id === ownRoomId);
+  if (row.event === "record_on" || row.event === "record_off" || row.event === "record_deleted") {
+    return <RecordEventLine row={row} actor={actor} fresh={fresh} dayOf={dayOf} />;
+  }
   const Glyph = row.event === "transcribe_off" ? CaptionsOff : row.event === "transcribe_on" ? Captions : Sparkles;
   // On and joined keep their accents; off and left go dim, as an ended thing should.
   const tone =
@@ -277,6 +327,56 @@ export function EventLine({
           </>
         )}
       </span>
+      <span className="rt-when rt-event-when">{fmtWallClock(row.at, dayOf)}</span>
+    </div>
+  );
+}
+
+/** A recording began, ended or was deleted. Every end is said, whoever or
+ *  whatever ended it (convex announceRecordEnd), so a thread never reads
+ *  "started recording" with nothing after it: a press names who (a guest as
+ *  the guest they are), and an end nobody pressed says why. */
+function RecordEventLine({
+  row,
+  actor,
+  fresh,
+  dayOf,
+}: {
+  row: EventRow;
+  actor: string;
+  fresh: boolean;
+  dayOf: number | undefined;
+}) {
+  const failed = row.event === "record_off" && row.event_reason === "failed";
+  const Glyph = row.event === "record_on" ? Circle : row.event === "record_deleted" ? Trash2 : failed ? AlertTriangle : Square;
+  // Recording keeps the red the mark wears; a failure is a warning; the
+  // ends are dim, as an ended thing should be.
+  const tone = row.event === "record_on" ? "fill-current text-sol-red" : failed ? "text-sol-orange" : "text-sol-text-dim";
+  const who = row.event_guest_name ? (
+    <>
+      {firstName(row.event_guest_name)} <GuestTag className="align-[1px]" />
+    </>
+  ) : (
+    actor
+  );
+  let words: React.ReactNode;
+  if (row.event === "record_on") words = <>{who} started recording</>;
+  else if (row.event === "record_deleted") words = <>{who} deleted a recording</>;
+  else if (row.event_reason === "huddle_ended") words = "Recording stopped when everyone left";
+  else if (row.event_reason === "limit") words = "Recording stopped at its time limit";
+  else if (failed) {
+    // The server's words already say it when they open with "The recording";
+    // LiveKit's own reason ("LiveKit: …") needs the subject in front.
+    const why = row.text?.trim() ?? "";
+    words = !why ? "The recording failed" : /^the recording/i.test(why) ? why : `Recording failed. ${why}`;
+  }
+  else words = <>{who} stopped recording</>;
+  return (
+    <div className={`rt-event${fresh ? " rt-in" : ""}`} role="note">
+      <span className="rt-event-glyph flex w-5 shrink-0 justify-center" aria-hidden="true">
+        <Glyph className={`h-3 w-3 ${tone}`} />
+      </span>
+      <span className="min-w-0 flex-1">{words}</span>
       <span className="rt-when rt-event-when">{fmtWallClock(row.at, dayOf)}</span>
     </div>
   );

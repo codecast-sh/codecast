@@ -8,7 +8,7 @@
  */
 
 import { createContext, useContext, useSyncExternalStore, type CSSProperties } from "react";
-import { contentT, frame, SURFACE_INDEX } from "./timeline";
+import { contentT, frame } from "./timeline";
 import { POSTER_T, type SurfaceId } from "./world";
 
 /** Film time for one hero instance: the driver sets it every frame it renders. */
@@ -49,7 +49,7 @@ export function useFilmTime<T>(select: (t: number) => T): T {
   const surface = useContext(SurfaceContext);
   const read = () => {
     const t = clock.get();
-    return select(surface ? contentT(SURFACE_INDEX[surface], t) : t);
+    return select(surface ? contentT(t) : t);
   };
   return useSyncExternalStore(clock.subscribe, read, read);
 }

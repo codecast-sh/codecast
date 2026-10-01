@@ -20,7 +20,8 @@ import { DecisionOptionList } from "./DecisionOptionList";
 import { AskingSession, CategoryNote, HolderLine, PersonChip } from "./DecisionParties";
 import { GateRunChip } from "./DecisionCompactCard";
 import { OptionPages } from "./OptionPages";
-import { CopyLinkButton } from "../CopyLinkButton";
+import { ChangeCardView } from "./ChangeCardView";
+import { ShareControl } from "../ShareControl";
 import { chosenOptions, ladderRecommendation } from "../../lib/decisionLinks";
 import "./decisions.css";
 import { DecisionProposalOrigin } from "../org/ProposalAuthorPill";
@@ -120,7 +121,7 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
             {decision.resolved_at && <span>· resolved {formatTimeAgo(decision.resolved_at, now)}</span>}
             {/* A gate on the line (the-line.md L4): the run this question pauses. */}
             {decision.workflow_run_id && <GateRunChip runId={decision.workflow_run_id} nodeId={decision.gate_node_id} />}
-            <CopyLinkButton path={`/decisions/${decision.short_id ?? decision._id}`} className="ml-auto" />
+            <ShareControl label="decision" path={`/decisions/${decision.short_id ?? decision._id}`} publicShare={{ kind: "decision", id: decision._id, token: (decision as any).share_token }} className="ml-auto" />
           </div>
           <h1 className="mt-3 decision-question text-sol-text">{decision.question}</h1>
           <dl className="mt-4 decision-meta text-[12px]">
@@ -161,8 +162,11 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
           </dl>
         </header>
 
+        {/* ── The change card (LE11), drawn natively; its page stays on the task ── */}
+        {decision.card && <section className="mt-8"><ChangeCardView card={decision.card} density="full" /></section>}
+
         {/* ── Body ── */}
-        {(detail.doc?.content || decision.context_md || decision.report_slug) && (
+        {(detail.doc?.content || decision.context_md || (decision.report_slug && !decision.card)) && (
           <section className="mt-8">
             {detail.doc?.content && (
               <div className="decision-body text-sol-text-muted"><MarkdownRenderer content={detail.doc.content} /></div>
@@ -176,13 +180,13 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
                 <div className="mt-2 border-l-2 border-sol-border pl-4"><MarkdownRenderer content={decision.context_md} /></div>
               </details>
             )}
-            {decision.report_slug && <div className="mt-4"><PublishedPageEmbed slug={decision.report_slug} /></div>}
+            {decision.report_slug && !decision.card && <div className="mt-4"><PublishedPageEmbed slug={decision.report_slug} /></div>}
           </section>
         )}
 
         {/* ── Options ── */}
         <section className="mt-8">
-          <h2 className="decision-kicker">Options{decision.kind && decision.kind !== "single" ? ` · ${decision.kind === "multi" ? "pick several" : decision.kind === "rank" ? "rank them" : "a form"}` : ""}</h2>
+          <h2 className="decision-kicker">{decision.card ? "Your call" : "Options"}{decision.kind && decision.kind !== "single" ? ` · ${decision.kind === "multi" ? "pick several" : decision.kind === "rank" ? "rank them" : "a form"}` : ""}</h2>
           {/* Option pages (L6) compare side by side above the list; a card's
               number answers on a single kind, where one option is the answer. */}
           <div className="mt-3 empty:hidden">

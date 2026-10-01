@@ -15,10 +15,10 @@ import { ConversationPlaceholder } from "../../components/ConversationPlaceholde
 import { ConversationDiffLayout, type ConversationDiffLayoutProps } from "../../components/ConversationDiffLayout";
 import type { ConversationData } from "../../components/conversation/types";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
-import { useInboxStore, useTrackedStore, isConvexId, sortSessions, sessionsWakeSig, isInterruptControlMessage, ensureHydrated, resolveInboxHome } from "../../store/inboxStore";
+import { useInboxStore, useTrackedStore, isConvexId, sortSessions, sessionsWakeSig, ensureHydrated, resolveInboxHome } from "../../store/inboxStore";
 import { FleetBoard, InboxHomeToggle } from "../../components/FleetBoard";
 import { ConversationSharePopover } from "../../components/ConversationSharePopover";
-import { SessionErrorBanner, SessionResumeBanner } from "../../components/SessionErrorBanner";
+import { SessionErrorBanner, SessionResumeBanner, sessionLooksAbandoned } from "../../components/SessionErrorBanner";
 import { ActivityFeed } from "../../components/ActivityFeed";
 import { EmptyState } from "../../components/EmptyState";
 import { PlanContextPanel } from "../../components/PlanContextPanel";
@@ -33,6 +33,7 @@ import { useSeedOwnership } from "../../hooks/useSeedOwnership";
 import { bootstrapCut, windowConversationSince, type WindowedConversation } from "../../lib/anchorWindow";
 import { standingRoleIdOf } from "../../lib/sessionIdentity";
 import { settleSessionViewAsk, useSessionViewAsk } from "../../lib/sessionViewVisit";
+import { requestSessionRestart } from "../../lib/sessionCommands";
 import { SeatHeadControls, SeatHeadState, RolePageControl, type SeatStall } from "../../components/org/scope/SeatHead";
 
 // The role page is a whole surface (the board's tabs, the org tree feeder), so
@@ -91,10 +92,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
     forceRestartAttemptedRef.current = false;
   }
 
-  const lastMsg = conversation?.messages?.[conversation.messages.length - 1];
-  const lastRoleIsUser = lastMsg?.role === "user";
-  const isStale = (Date.now() - (conversation?.updated_at || 0)) > 5 * 60 * 1000;
-  const looksAbandoned = isIdle && lastRoleIsUser && !isInterruptControlMessage(lastMsg?.content) && isStale;
+  const looksAbandoned = sessionLooksAbandoned(conversation, isIdle);
 
   useWatchEffect(() => {
     if (!isIdle && (resumeState === "sent" || resumeState === "resuming")) {
@@ -109,7 +107,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
       if (!forceRestartAttemptedRef.current && isConvexId(sessionId)) {
         forceRestartAttemptedRef.current = true;
         try {
-          await convCommand(sessionId, "restartSession");
+          await requestSessionRestart(sessionId);
           setResumeState("sent");
         } catch (err) {
           // The outbox owns delivery now. Stay in the pending recovery state;

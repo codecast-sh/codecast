@@ -1,0 +1,26 @@
+{
+  "name": "role-wake docs-check",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:docs-check"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "role-wake:docs-check",
+    "title": "role-wake docs-check"
+  },
+  "asOf": "2026-09-28T09:00:00.000Z",
+  "trigger": {
+    "type": "role-wake"
+  },
+  "meta": {
+    "surface": "role-wake",
+    "visibility": "public",
+    "snapshot": "fixtures/role-wake/docs-check.json"
+  },
+  "judge": "asks a person only what needs them; each line names evidence",
+  "notes": null,
+  "tags": [],
+  "id": "6c200751-8528-44e5-bee2-568344f039ad",
+  "createdAt": "2026-10-01T17:53:47.530Z"
+}

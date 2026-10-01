@@ -1,19 +1,15 @@
 /**
  * Chapter 10, GitHub (61 to 68s): the pull request knows its sessions: checks
- * go green and it merges. PLACEHOLDER: replace each placeholder part with the
- * real views it names, fed by ../fixtures/integrations.ts. See README.md for
- * the contract.
+ * go green and it merges.
  */
 
-import { placeholderFlyer, placeholderPart } from "../placeholderParts";
+import { MergedFlyer, PullRequestPage } from "./integrations";
 import type { HeroChapter } from "./contract";
 
 export const chapter: HeroChapter = {
   id: "integrations",
-  parts: [
-    placeholderPart("integrations", "main", "pr.main", 0, "Pull request", ["PRHeader", "PRChecks", "PRCommits", "PrStatusChip", "ExternalEventRow", "IssueLink"]),
-  ],
+  parts: [{ key: "main", region: "pr.main", order: 0, Component: PullRequestPage }],
   flyers: {
-    "integrations.merged": placeholderFlyer("Merged #482"),
+    "integrations.merged": MergedFlyer,
   },
 };

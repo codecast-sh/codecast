@@ -34,12 +34,17 @@ function gitHead(cwd) {
   }
 }
 
+// Files a static host reads at deploy time and never serves (Cloudflare
+// Pages, Netlify). Listing one would make every refresh of the offline copy
+// fail on its 404, leaving the copy on an old release for good.
+const HOST_FILES = new Set(["_headers", "_redirects", "_routes.json", "_worker.js"]);
+
 // Build the manifest for a directory. Exported so a packager can produce the
 // same file for a seed copy, and so it can be tested without Vite.
 function buildManifest(outDir, { fileName = "release.json", commit } = {}) {
   const files = {};
   for (const f of walk(outDir).sort()) {
-    if (f === fileName) continue;
+    if (f === fileName || HOST_FILES.has(f)) continue;
     files[f] = sha256(fs.readFileSync(path.join(outDir, f)));
   }
   if (!files["index.html"]) throw new Error(`release manifest: no index.html in ${outDir}`);

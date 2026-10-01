@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { verifyApiToken } from "./apiTokens";
 import { teamVisibleConvTeam } from "./privacy";
 import { computeWorkspaceKey } from "./lib/access";
+import type { Doc, Id } from "./_generated/dataModel";
 
 export const create = mutation({
   args: {
@@ -21,56 +22,72 @@ export const create = mutation({
       return { error: "Unauthorized" };
     }
 
-    const user = await ctx.db.get(result.userId);
-    if (!user) {
-      return { error: "User not found" };
-    }
-
-    let conversationId = undefined;
+    let sourceConv = null;
     if (args.session_id) {
-      const conv = await ctx.db
+      sourceConv = await ctx.db
         .query("conversations")
         .withIndex("by_session_id", (q) => q.eq("session_id", args.session_id!))
         .first();
-      if (conv) {
-        conversationId = conv._id;
-      }
     }
-
-    const sourceConv = conversationId ? await ctx.db.get(conversationId) : null;
-    let teamId = user.team_id;
-    if (sourceConv) {
-      // Only a team-VISIBLE source session donates its team; a private session's
-      // routing team_id must not become a team-readable decision grant.
-      const visibleTeam = teamVisibleConvTeam(sourceConv);
-      if (visibleTeam) teamId = visibleTeam;
-    }
-
-    const now = Date.now();
-    const id = await ctx.db.insert("decisions", {
-      user_id: result.userId,
-      team_id: teamId,
-      // Stored access key, computed from the same rule at write time: a private
-      // source session makes this decision personal to its owner.
-      workspace: computeWorkspaceKey(
-        { user_id: result.userId, team_id: teamId },
-        sourceConv,
-      ),
-      project_path: args.project_path,
+    const id = await insertDecision(ctx, result.userId, {
       title: args.title,
       rationale: args.rationale,
       alternatives: args.alternatives,
-      session_id: args.session_id,
-      conversation_id: conversationId,
       message_index: args.message_index,
       tags: args.tags,
-      created_at: now,
-      updated_at: now,
-    });
+      project_path: args.project_path,
+      session_id: args.session_id,
+    }, sourceConv);
+    if (!id) return { error: "User not found" };
 
     return { id, success: true };
   },
 });
+
+/**
+ * One recorded decision (`cast decisions add`, and an answered card gate,
+ * the-line-end-to-end.md LE12). The source session, when there is one, places
+ * it: only a team visible session donates its team, so a private session's
+ * routing team_id never becomes a team readable decision.
+ */
+export async function insertDecision(
+  ctx: { db: any },
+  userId: Id<"users">,
+  fields: {
+    title: string;
+    rationale: string;
+    alternatives?: string[];
+    message_index?: number;
+    tags?: string[];
+    project_path?: string;
+    session_id?: string;
+  },
+  sourceConv: Doc<"conversations"> | null,
+): Promise<Id<"decisions"> | null> {
+  const user = await ctx.db.get(userId);
+  if (!user) return null;
+  let teamId = user.team_id;
+  const visibleTeam = sourceConv ? teamVisibleConvTeam(sourceConv) : undefined;
+  if (visibleTeam) teamId = visibleTeam;
+  const now = Date.now();
+  return await ctx.db.insert("decisions", {
+    user_id: userId,
+    team_id: teamId,
+    // Stored access key, computed from the same rule at write time: a private
+    // source session makes this decision personal to its owner.
+    workspace: computeWorkspaceKey({ user_id: userId, team_id: teamId }, sourceConv),
+    project_path: fields.project_path,
+    title: fields.title,
+    rationale: fields.rationale,
+    alternatives: fields.alternatives,
+    session_id: fields.session_id ?? sourceConv?.session_id,
+    conversation_id: sourceConv?._id,
+    message_index: fields.message_index,
+    tags: fields.tags,
+    created_at: now,
+    updated_at: now,
+  });
+}
 
 export const list = mutation({
   args: {

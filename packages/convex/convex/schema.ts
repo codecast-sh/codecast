@@ -7,9 +7,11 @@ import { openTaskValidator } from "./lib/openTasksValidator";
 import { TASK_STATUS_CATEGORIES, TASK_STATUS_COLORS } from "@codecast/shared/tasks";
 import { DOC_TYPES } from "@codecast/shared/docs";
 import { ccAccountsValidator, ccAutoSwitchStateValidator, ccLoginFlowValidator, ccMintFlowValidator } from "./ccAccountsShared";
-import { cloudAgentBlocksValidator, deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
+import { cloudAgentBlocksValidator, cloudSessionSyncFields, deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
 import { capabilityTables } from "./capabilitiesSchema";
 import { externalAuthorValidator } from "./lib/externalAuthor";
+import { chatAttachmentValidator } from "./lib/chatAttachment";
+import { callGuestLeftReasonValidator, callGuestStatusValidator, callRecordingKindValidator, callRecordingStatusValidator, callRecordingStopReasonValidator } from "./lib/callValidators";
 import { googleOAuthTables } from "./googleOAuthSchema";
 import { oauthConnectorTables } from "./oauthConnectorsSchema";
 import { issueSyncTables, taskExternalValidator, taskCommentExternalValidator } from "./issueSyncSchema";
@@ -237,13 +239,10 @@ export default defineSchema({
     // With sync_mode "all": folders that never upload, the folders inside
     // them and their checkouts' worktrees included.
     sync_excluded: v.optional(v.array(v.string())),
-    // Claude Code cloud sessions (claude.ai/code) sync through the user's
-    // daemons, read with their Claude login. Unset = on.
-    claude_cloud_sync: v.optional(v.boolean()),
-    cursor_cloud_sync: v.optional(v.boolean()),
-    // Codex Cloud tasks (chatgpt.com/codex), read with the daemon's Codex
-    // login. Unset = off: the source's default (CLOUD_SESSION_SOURCES).
-    codex_cloud_sync: v.optional(v.boolean()),
+    // Cloud sessions the user's daemons sync (claude.ai/code, Cursor Cloud,
+    // Codex Cloud, the Agents API): one per CLOUD_SESSION_SOURCES entry,
+    // unset = the source's default there.
+    ...cloudSessionSyncFields,
     team_share_paths: v.optional(v.array(v.string())),
     muted_members: v.optional(v.array(v.id("users"))),
     team_conversations_last_seen: v.optional(v.number()),
@@ -507,6 +506,16 @@ export default defineSchema({
     .index("by_user", ["user_id"])
     // Upsert / restore for one viewer and one session.
     .index("by_user_conversation", ["user_id", "conversation_id"]),
+
+  // A session its owner deleted (sessionDelete.ts). The transcript still sits
+  // on their machine, and the daemon recreates a conversation it finds missing,
+  // so createConversation refuses a session_id listed here for that user.
+  deleted_sessions: defineTable({
+    user_id: v.id("users"),
+    session_id: v.string(),
+    conversation_id: v.string(),
+    deleted_at: v.number(),
+  }).index("by_user_session", ["user_id", "session_id"]),
 
   conversations: defineTable({
     user_id: v.id("users"),
@@ -1318,10 +1327,37 @@ export default defineSchema({
     team_id: v.optional(v.id("teams")), // routing AND the membership grant
     scope_user_id: v.optional(v.id("users")), // the personal owner
     host_user_id: v.id("users"), // creator; would host the role's session
-    name: v.string(), // display, e.g. "Head of Growth"
+    name: v.string(), // the role TITLE, e.g. "Head of Growth" (org-staffing.md S30)
     handle: v.string(), // unique inside the boundary; [a-z0-9-]{2,32}
+    // The person like name the role wears (S30), chosen by a person; absent
+    // rows wear the character name of their face (shared/contracts/
+    // orgIdentity.roleIdentity). Every surface reads the name through it.
+    given_name: v.optional(v.string()),
+    // Set on a Chief of Staff, the person's right hand (S30): what it reaches.
+    // Its row's boundary (scope_type) is ACCESS; `reach` is what its brief and
+    // routine look across. A global chief lives in the person's own boundary;
+    // a team's reach in a personal boundary is a person's own chief for one
+    // team. A chief names no scope and owns no work.
+    chief: v.optional(v.union(
+      v.object({ reach: v.literal("global") }),
+      v.object({ reach: v.literal("team"), team_id: v.id("teams") }),
+    )),
+    // What `migrations:renameHeadOfPeople` changed on this row (S30), so the
+    // run is reversible: the handle and name before, and the trigger titles
+    // it rewrote. Cleared by the reverse run.
+    renamed_from: v.optional(v.object({
+      handle: v.string(),
+      name: v.string(),
+      charter: v.optional(v.string()),
+      // The personal root converted into the person's global Chief of Staff:
+      // the review routine it had (cancelled) and the routine it got (armed).
+      converted: v.optional(v.boolean()),
+      review_trigger_id: v.optional(v.id("agent_tasks")),
+      routine_trigger_id: v.optional(v.id("agent_tasks")),
+      at: v.number(),
+    })),
     // Scope is opt in (org-staffing.md S26): empty arrays name no area, and
-    // the role owns no work. Only the Chief of Staff with empty arrays covers
+    // the role owns no work. Only the Head of People with empty arrays covers
     // the whole workspace (isWholeWorkspaceRole, shared/contracts/orgLead.ts).
     scope: v.object({
       project_ids: v.array(v.id("projects")),
@@ -1358,6 +1394,9 @@ export default defineSchema({
       hands_per_day: v.number(),
       wakes_per_day: v.number(),
       tokens_per_day: v.number(),
+      // Open card decisions the line may hold before it admits another cause
+      // (the-line-end-to-end.md LE6); unset reads as DEFAULT_LINE_CARDS_CAP.
+      cards: v.optional(v.number()),
     })),
     // What a person lets the role do OUTSIDE codecast (org-hire.md H4): spend
     // on an account, publish to destinations, write into a project, connect a
@@ -1382,14 +1421,17 @@ export default defineSchema({
       hands: v.number(),
       wakes: v.number(),
       tokens: v.number(),
+      // Merges the line made today (the-line.md L12), read against the
+      // role's merge authority limit (per_day).
+      merges: v.optional(v.number()),
     })),
     // When the role last read its brief from its own session (orgRoles
     // .markBriefRead): `cast brief` shows what changed since (org-staffing.md S25).
     checked_at: v.optional(v.number()),
     // The area watch (org-staffing.md S29, orgWatch.ts): the area's status as
     // the last pass read it, since when it has read so, how many passes in a
-    // row, and the status the Chief of Staff was last told about, so a change
-    // that lasts reaches the chief once per episode.
+    // row, and the status the Head of People was last told about, so a change
+    // that lasts reaches the Head of People once per episode.
     area_watch: v.optional(v.object({
       status: v.string(),
       since: v.number(),
@@ -1397,7 +1439,7 @@ export default defineSchema({
       told: v.optional(v.string()),
       told_at: v.optional(v.number()),
     })),
-    // On the Chief of Staff's row: the projects with work and no owner it was
+    // On the Head of People's row: the projects with work and no owner it was
     // told about, by project id, so each is told once until it gains an owner.
     unowned_told: v.optional(v.array(v.object({ id: v.string(), since: v.number() }))),
     // The standing agent retired when this seat was filled with a fresh
@@ -1410,6 +1452,47 @@ export default defineSchema({
     // The workflow this scope's tasks run on (the-line.md L2); absent = the
     // shipped "line" template. Human only, logged like a scope edit.
     line_workflow_slug: v.optional(v.string()),
+    // The line's merge step (the-line.md L12): on, an approved task's branch
+    // is merged into the default branch when its checks pass, under the
+    // role's `merge` authority grant and its daily limit. Off (absent) unless
+    // a person turns it on for this line. Human only, logged like the line.
+    line_merge: v.optional(v.boolean()),
+    // Knowledge handoff when an area moves (org-staffing.md S32). On the
+    // RECEIVING role: which role it succeeded for which project or plan, so
+    // its page says where its lines came from.
+    succeeded: v.optional(v.array(v.object({
+      project_id: v.optional(v.id("projects")),
+      plan_id: v.optional(v.id("plans")),
+      from_role_id: v.id("org_roles"),
+      from_handle: v.string(),
+      from_name: v.string(),
+      at: v.number(),
+      // How many standing lines came over with it, and when the outgoing
+      // role handed over what the lines did not say (cast role handoff).
+      lines: v.number(),
+      handed_at: v.optional(v.number()),
+    }))),
+    // On the OUTGOING role: the handoff in flight. The role's standing
+    // session has a trigger to hand each receiver what is not in the lines;
+    // a retire that moved the area waits for it until `deadline`, then
+    // decommissions anyway (orgHandoff.sweep).
+    handing_over: v.optional(v.object({
+      reason: v.union(v.literal("retire"), v.literal("split"), v.literal("scope")),
+      started_at: v.number(),
+      deadline: v.number(),
+      by: v.id("users"),
+      trigger_id: v.optional(v.id("agent_tasks")),
+      receivers: v.array(v.object({
+        role_id: v.id("org_roles"),
+        handle: v.string(),
+        project_ids: v.array(v.id("projects")),
+        plan_ids: v.array(v.id("plans")),
+        done_at: v.optional(v.number()),
+      })),
+      // Set when a retire waits on this handoff: how the person asked for
+      // the standing session to be treated when it completes.
+      retire: v.optional(v.object({ standing_session: v.optional(v.union(v.literal("keep"), v.literal("retire"))) })),
+    })),
     // People who report to the role (org-roles-run-work.md R6): the role keeps
     // their goals in its brief, reads their sessions against those goals at
     // every wake, and tells them once a day at most when a high goal stalls.
@@ -1531,7 +1614,7 @@ export default defineSchema({
     .index("by_subject", ["subject.id", "seq"]),
 
   // Staffing proposals (docs/architecture/org-staffing.md S4): a structured
-  // set of changes to the chart, authored by an agent (the chief of staff, an
+  // set of changes to the chart, authored by an agent (the head of people, an
   // analyzer run) or a person, decided change by change. Access is the anchor
   // rule (lib/orgAccess): team_id / scope_user_id carry the boundary and
   // created_by is the host. Resolves when every change is applied or skipped.
@@ -1847,6 +1930,18 @@ export default defineSchema({
       capped: v.optional(v.boolean()), // stopped at the per import ceiling
       error: v.optional(v.string()),
     })),
+    // Who is in the Slack channel (Slack user ids), for the room's member
+    // panel. Read whole by slackSync.refreshSlackMembers, kept live by the
+    // member_joined/left events, edited by slackSync.setSlackMember. Absent
+    // means never read. Capped at SLACK_MEMBERS_CAP.
+    slack_member_ids: v.optional(v.array(v.string())),
+    slack_members_at: v.optional(v.number()),
+    // The last invite or remove Slack refused, undone on the roster and shown
+    // in the panel. null (not absent) once a later change clears it.
+    member_error: v.optional(v.union(
+      v.object({ message: v.string(), slack_user_id: v.string(), at: v.number() }),
+      v.null(),
+    )),
     created_by: v.id("users"),
     created_at: v.number(),
     updated_at: v.number(),
@@ -2077,6 +2172,9 @@ export default defineSchema({
   // re-run every open search each tick).
   search_mirror_state: defineTable({
     cursor: v.number(),
+    // The fresh walk's position (searchMirror.ts): new messages are copied
+    // seconds after they land, ahead of the settle walk at `cursor`.
+    fresh_cursor: v.optional(v.number()),
     updated_at: v.number(),
   }),
 
@@ -3976,6 +4074,9 @@ export default defineSchema({
     ),
     // Published artifact slug (cast publish) carrying a full HTML report.
     report_slug: v.optional(v.string()),
+    // A change card (the-line-end-to-end.md LE10, shared/contracts/changeCard.ts):
+    // the web renders it natively in place of a report. Validated on ask.
+    card: v.optional(v.any()),
     // true = the agent ended its turn and is parked on this answer.
     // false = advisory: the agent proceeded with default_option and the
     // human's answer can override it later.
@@ -4063,7 +4164,10 @@ export default defineSchema({
     updated_at: v.optional(v.number()),
     resolved_at: v.optional(v.number()),
     resolved_by: v.optional(v.id("users")),
+    // Public sharing: "anyone with the link" (publicShare.ts).
+    share_token: v.optional(v.string()),
   })
+    .index("by_share_token", ["share_token"])
     .index("by_user_status", ["user_id", "status"])
     .index("by_conversation_status", ["conversation_id", "status"])
     // Global recency scan for the email digest sweep: recent pending decisions.
@@ -4116,7 +4220,10 @@ export default defineSchema({
     client_key: v.optional(v.string()),
     created_at: v.number(),
     updated_at: v.number(),
+    // Public sharing: "anyone with the link" (publicShare.ts).
+    share_token: v.optional(v.string()),
   })
+    .index("by_share_token", ["share_token"])
     .index("by_team", ["team_id"])
     .index("by_scope_user", ["scope_user_id"])
     .index("by_short_id", ["short_id"])
@@ -4423,7 +4530,10 @@ export default defineSchema({
     // that from a natural completion, so restoring the session can re-arm
     // exactly the schedules its kill took down. Cleared on reactivation.
     canceled_on_kill_at: v.optional(v.number()),
+    // Public sharing: "anyone with the link" (publicShare.ts).
+    share_token: v.optional(v.string()),
   })
+    .index("by_share_token", ["share_token"])
     .index("by_user_status", ["user_id", "status"])
     .index("by_user_run_at", ["user_id", "run_at"])
     .index("by_status_run_at", ["status", "run_at"])
@@ -4533,7 +4643,10 @@ export default defineSchema({
 
     created_at: v.number(),
     updated_at: v.number(),
+    // Public sharing: "anyone with the link" (publicShare.ts).
+    share_token: v.optional(v.string()),
   })
+    .index("by_share_token", ["share_token"])
     .index("by_user_id", ["user_id"])
     .index("by_user_status", ["user_id", "status"])
     .index("by_team_id", ["team_id"])
@@ -4574,15 +4687,25 @@ export default defineSchema({
     labels: v.optional(v.array(v.string())),
     // Ordered, added on purpose. A project may sit in several initiatives.
     project_ids: v.array(v.id("projects")),
-    // One level: a row that has a parent is never a parent itself.
+    // One level: a row that has a parent is never a parent itself. The parent
+    // is the top level goal this one feeds.
     parent_initiative_id: v.optional(v.id("initiatives")),
+    // How the goal is measured (shared/contracts/initiative InitiativeMetric):
+    // at most two numbers with a target each. The reported values live in
+    // `scoreboard` by key, the template scoreboard's own shape, written by
+    // the same recordScores path `cast org template report` uses.
+    metrics: v.optional(v.array(v.object({ key: v.string(), name: v.string(), target: v.string() }))),
+    scoreboard: v.optional(v.record(v.string(), v.object({ value: v.string(), observed_at: v.number(), source: v.string() }))),
     // Copied from the latest update when it is posted; "none" before one.
     health: v.union(v.literal("none"), v.literal("on_track"), v.literal("at_risk"), v.literal("off_track")),
     health_at: v.optional(v.number()),
     latest_update_id: v.optional(v.id("initiative_updates")),
     created_at: v.number(),
     updated_at: v.number(),
+    // Public sharing: "anyone with the link" (publicShare.ts).
+    share_token: v.optional(v.string()),
   })
+    .index("by_share_token", ["share_token"])
     .index("by_user_id", ["user_id"])
     .index("by_team_id", ["team_id"])
     .index("by_workspace", ["workspace"])
@@ -4981,6 +5104,8 @@ export default defineSchema({
       v.literal("todo_sync"),
       v.literal("template"),
       v.literal("fork"),
+      // A cause the signal door opened (the-line-end-to-end.md LE4).
+      v.literal("signal"),
     ),
     confidence: v.optional(v.number()),
     promoted: v.optional(v.boolean()),
@@ -5055,7 +5180,42 @@ export default defineSchema({
     closed_at: v.optional(v.number()),
     // Provider twin: a Linear issue or a GitHub issue backing this task.
     // Server authored only. docs/architecture/issue-sync.md S1.1.
+    // Public sharing: "anyone with the link" (publicShare.ts).
+    share_token: v.optional(v.string()),
     external: v.optional(taskExternalValidator),
+
+    // The line, end to end (docs/architecture/the-line-end-to-end.md).
+    // A cause is a task signals attach to (LE4): how many, when, and the
+    // fingerprints that reach it. Written by signals.ts only.
+    cause: v.optional(v.object({
+      signal_count: v.number(),
+      first_seen: v.number(),
+      last_seen: v.number(),
+      fingerprints: v.array(v.string()),
+    })),
+    // The ground node's fields (LE5): the goal the cause threatens ("none"
+    // parks it), what kind of change it needs, how much review it needs, and
+    // whether it can be worked as it stands.
+    goal_ref: v.optional(v.string()),
+    category: v.optional(v.union(
+      v.literal("code"),
+      v.literal("prompt"),
+      v.literal("ux"),
+      v.literal("infra"),
+      v.literal("data"),
+    )),
+    risk: v.optional(v.union(v.literal("low"), v.literal("review"), v.literal("plan"))),
+    readiness: v.optional(v.union(
+      v.literal("ready"),
+      v.literal("needs_context"),
+      v.literal("not_actionable"),
+    )),
+    readiness_note: v.optional(v.string()),
+    // The watch after ship (LE12): a signal on one of the cause's
+    // fingerprints before this time reopens it.
+    watch_until: v.optional(v.number()),
+    // The change card's published page (LE10).
+    card_slug: v.optional(v.string()),
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_status", ["user_id", "status"])
@@ -5066,8 +5226,12 @@ export default defineSchema({
     // architecture/scopes-and-feed.md F2) reading a plan's tasks directly.
     .index("by_plan_id", ["plan_id"])
     .index("by_parent_id", ["parent_id"])
+    .index("by_share_token", ["share_token"])
     .index("by_short_id", ["short_id"])
     .index("by_short_title", ["short_title"])
+    // Sparse in practice: only causes in watch (LE12) carry watch_until;
+    // signals.sweepWatches reads the ended ones.
+    .index("by_watch_until", ["watch_until"])
     .index("by_client_key", ["user_id", "client_key"])
     .index("by_team_id", ["team_id"])
     .index("by_team_status", ["team_id", "status"])
@@ -5085,6 +5249,42 @@ export default defineSchema({
       searchField: "title",
       filterFields: ["user_id", "project_id", "status"],
     }),
+
+  // One observation from the world, typed by the finder that saw it
+  // (docs/architecture/the-line-end-to-end.md LE3). Written only through
+  // signals.ingest, which attaches it to a cause task (LE4). workspace and
+  // team_id are stamped from the same data context a task create uses.
+  signals: defineTable({
+    user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    workspace: v.string(),
+    short_id: v.string(),
+    source: v.string(),
+    kind: v.union(
+      v.literal("bug"),
+      v.literal("regression"),
+      v.literal("prompt_miss"),
+      v.literal("ux"),
+      v.literal("cohesion"),
+      v.literal("request"),
+    ),
+    fingerprint: v.string(),
+    title: v.string(),
+    detail_md: v.optional(v.string()),
+    evidence_url: v.optional(v.string()),
+    subject: v.optional(v.string()),
+    goal_hint: v.optional(v.string()),
+    observed_at: v.number(),
+    created_at: v.number(),
+    task_id: v.id("tasks"),
+    attach: v.union(v.literal("fingerprint"), v.literal("judge"), v.literal("new"), v.literal("person")),
+    // Set when this signal reopened a cause in watch (LE12).
+    reopened: v.optional(v.boolean()),
+  })
+    .index("by_workspace_fingerprint", ["workspace", "fingerprint"])
+    .index("by_task", ["task_id", "created_at"])
+    .index("by_workspace_created", ["workspace", "created_at"])
+    .index("by_short_id", ["short_id"]),
 
   orchestration_events: defineTable({
     user_id: v.id("users"),
@@ -5213,6 +5413,11 @@ export default defineSchema({
     embedding: v.optional(v.array(v.float64())),
 
     cli_edited_at: v.optional(v.number()),
+
+    // The Overflow: loose writing kept beside the doc rather than in it
+    // (stashed cuts, notes, words to use later). Plain text, edited from the
+    // doc page's side panel and `cast doc overflow`.
+    overflow: v.optional(v.string()),
 
     // Public sharing
     share_token: v.optional(v.string()),
@@ -5709,6 +5914,96 @@ export default defineSchema({
     created_at: v.number(),
   }).index("by_room", ["room_key"]),
 
+  // A door into a huddle for people outside the team: a link somebody inside
+  // made and sent. Opening it lets a stranger ask to come in, nothing more;
+  // everyone who uses it still knocks and is admitted by a person in the room
+  // (call_guests). A link belongs to a ROOM, not to one huddle, so a link sent
+  // a day ahead of a meeting works when the meeting starts. It dies by
+  // expiring or by being revoked, and a revoked link stops new knocks without
+  // touching guests already admitted (removing them is its own act).
+  // Never readable by token through any signed in path: the token is the
+  // whole secret, so only the guest join route resolves it.
+  call_guest_links: defineTable({
+    room_key: v.string(),
+    // Routing, never access: whose huddle this is, for the creator's lists
+    // and the calls feature gate. Same rule as call_members.team_id.
+    team_id: v.id("teams"),
+    // Random, unguessable, the path segment of the link (guestJoinPath).
+    token: v.string(),
+    created_by: v.id("users"),
+    // What let the creator make it: "member" (one of the room's own people)
+    // or "seat" (sitting in a people or session huddle they are not a member
+    // of). A link lives on its creator's standing, so every knock re-checks
+    // it the same way (callGuests.linkUsable): a member who loses the room,
+    // or anyone who leaves the team, takes their links with them.
+    created_via: v.optional(v.union(v.literal("member"), v.literal("seat"))),
+    created_at: v.number(),
+    expires_at: v.number(),
+    revoked_at: v.optional(v.number()),
+    revoked_by: v.optional(v.id("users")),
+  })
+    .index("by_token", ["token"])
+    .index("by_room", ["room_key"]),
+
+  // One outside person at one huddle's door, and then in its room. A guest
+  // has no users row, so their knock and their seat cannot be call_knocks or
+  // call_members rows (both hang on a user id, and every reader of those
+  // tables resolves it); the guest's own row carries both, as a status
+  // (CallGuestStatus in shared/contracts/callGuests.ts):
+  //   waiting -> admitted | denied, admitted -> removed | left.
+  // The browser holds the row id and a secret; only the secret's hash is
+  // stored, so a leaked table row cannot be replayed as the guest. LiveKit
+  // knows them as `guest:<this id>` (guestIdentity) under `name`, which is
+  // how transcripts, faces and recordings name them.
+  // Presence is a lease like a seat: the guest's client beats last_seen
+  // while waiting and while in the call, and a stale beat reads as gone (a
+  // knock nobody answers lapses on its own, the way call_knocks expire).
+  call_guests: defineTable({
+    link_id: v.id("call_guest_links"),
+    room_key: v.string(),
+    team_id: v.id("teams"),
+    // As they typed it, cleaned by normalizeGuestName.
+    name: v.string(),
+    // sha256 hex of the secret the guest's browser keeps in localStorage.
+    secret_hash: v.string(),
+    status: callGuestStatusValidator,
+    created_at: v.number(),
+    // When they last asked to come in. A re-knock refreshes it, so the room
+    // can tell someone is still waiting (the same rule as call_knocks).
+    knocked_at: v.number(),
+    last_seen: v.number(),
+    // Who answered the door or put them out, and when.
+    decided_by: v.optional(v.id("users")),
+    decided_at: v.optional(v.number()),
+    // When the guest was shown that the call is transcribed and may be
+    // recorded, and went ahead. Joining requires it; the notice keeps
+    // showing in the call whatever this says.
+    notice_accepted_at: v.optional(v.number()),
+    // Why a `left` row left: they walked out, or the huddle they were let
+    // into ended (an admission is for one huddle). CallGuestLeftReason.
+    left_reason: v.optional(callGuestLeftReasonValidator),
+    // When the link's creator was last told this guest was waiting at an
+    // empty room (one push per arrival, not one per beat).
+    creator_told_at: v.optional(v.number()),
+  })
+    .index("by_room_status", ["room_key", "status"])
+    .index("by_status", ["status"])
+    .index("by_link", ["link_id"]),
+
+  // Which calls a guest was in: one row per guest per call record, written
+  // when they are let in (or when the record starts with them inside). A
+  // guest row lives across huddles on the same link, so the call it was last
+  // in cannot be a field on it; the record reads its outsiders from here,
+  // under the name the room let in (callGuestAdmission.noteGuestAttendance).
+  call_guest_attendance: defineTable({
+    transcript_id: v.id("transcripts"),
+    guest_id: v.id("call_guests"),
+    name: v.string(),
+    joined_at: v.number(),
+  })
+    .index("by_transcript", ["transcript_id"])
+    .index("by_guest_transcript", ["guest_id", "transcript_id"]),
+
   // A huddle transcription session ("scribe"). One row per recording run,
   // owned by whoever toggled Transcribe on — that client holds every audio
   // track (its own mic + each subscribed remote track), transcribes each
@@ -5769,6 +6064,9 @@ export default defineSchema({
         // this session waits until then, except for words that name it. The
         // hold's expiry schedules the catch up delivery.
         hold_until: v.optional(v.number()),
+        // Session routes: chunks delivered since the last one that carried
+        // the full huddle framing (needsFullBrief). Absent → none yet.
+        briefed_chunks: v.optional(v.number()),
       }),
     ),
     // Monotonic per-transcript segment counter (writer-owned; the scribe is
@@ -5781,6 +6079,13 @@ export default defineSchema({
     // transcript whose beat went stale is a browser tab that died mid-sentence.
     // Same window, same reason, one less table.
     last_beat: v.optional(v.number()),
+    // A HUDDLE'S GRACE. A transcript is the record of one huddle: it lives
+    // from the first seat to the room standing empty, and transcription
+    // switched off and on inside that span is a gap in it, never a new call.
+    // When the last person leaves this stamps the moment the room emptied;
+    // somebody back within HUDDLE_GRACE_MS clears it and the same record goes
+    // on, and otherwise the record ends at this moment (endIdleTranscript).
+    idle_since: v.optional(v.number()),
     // The audio, when there is any. A recording (`rec:` room key) uploads what
     // its microphone heard once it stops; a huddle has no single recording to
     // keep. Best effort by design — the transcript is the artifact, and a
@@ -5806,7 +6111,27 @@ export default defineSchema({
     // team_id says (team_id is routing, never access — canReadCall is the
     // gate). Meaningless on huddles, which have the room's own rules.
     rec_shared: v.optional(v.boolean()),
+    // Public sharing: "anyone with the link" (publicShare.ts). A grant to
+    // read this one call's record, never to join its room.
+    share_token: v.optional(v.string()),
+    // The share link whose holders may also watch the call's video: the
+    // share_token at the moment somebody chose to include it
+    // (callRecordings.setCallShareVideo). A link made for the transcript
+    // never shows faces and screens by itself, and a link turned off and on
+    // again is a new token, so it never inherits the choice.
+    share_video_token: v.optional(v.string()),
+    // Everyone a recording of this huddle showed: seated when a run started,
+    // or seated while one ran (lib/callRecordingRuns.noteRecordedPeople).
+    // canReadCall admits them like speakers, so a person who was filmed but
+    // never spoke (or pressed Record with transcription off) can watch it.
+    recorded_people: v.optional(v.array(v.id("users"))),
+    // "cl-N" from counters.nextShortId: the handle a call is quoted by in
+    // prose (`cl-42`, `cl-42:15-25` for turns 15 to 25), like ct-/pl-.
+    // Optional only for rows older than the backfill.
+    short_id: v.optional(v.string()),
   })
+    .index("by_short_id", ["short_id"])
+    .index("by_share_token", ["share_token"])
     .index("by_room", ["room_key"])
     .index("by_status", ["status"])
     // The calls page / cast calls: a team's call history, newest first.
@@ -5828,9 +6153,93 @@ export default defineSchema({
   })
     .index("by_transcript_seq", ["transcript_id", "seq"]),
 
+  // A call's video: one row per file LiveKit Egress writes for it, on the
+  // call's record (a call IS a transcripts row). The model, the time rule and
+  // the vocabulary live in shared/contracts/callRecordings.ts; in short:
+  //   kind composite  the room as people saw it, faces and share, with audio.
+  //                   One per press of Record.
+  //   kind screen     one shared screen at its own resolution, no audio, for
+  //                   legible frames. One per share while a run is on.
+  // Stopping and pressing Record again adds rows; nothing is ever appended
+  // to a finished file. "Is this call recording right now" is derived, never
+  // stored: a composite row of the room whose status is still active
+  // (isRecordingActive), read through by_room_status. That one fact is what
+  // tells everyone in the room, guests and late joiners included.
+  // Files live only in the private recordings bucket (lib/r2.ts) and are read
+  // through short lived URLs minted after the call's own access check.
+  // LiveKit is the truth about a file's state: the reconciler polls ListEgress
+  // and writes what it says here (lib/livekitServer.ts recordingFieldsFromEgress).
+  call_recordings: defineTable({
+    transcript_id: v.id("transcripts"),
+    room_key: v.string(),
+    // Routing only, copied from the call record. Access is the call's
+    // (canReadCall), never this field.
+    team_id: v.id("teams"),
+    kind: callRecordingKindValidator,
+    status: callRecordingStatusValidator,
+    // LiveKit's id, set once StartEgress answers. Absent on a row inserted
+    // ahead of that call, which is how a press shows at once.
+    egress_id: v.optional(v.string()),
+    // The object key. Written as the requested filepath, then replaced by the
+    // name LiveKit reports (it adds the extension a track's codec needs).
+    r2_key: v.string(),
+    // The JPEG LiveKit rewrites every few seconds while this file records
+    // (r2.callRecordingLiveFramePrefix): the picture of a call still going on,
+    // since the MP4 reaches the bucket only when its egress ends.
+    live_frame_key: v.optional(v.string()),
+    // Screen files: the shared track and whose screen it is (a user id, a
+    // `guest:` identity, never an agent face), named as the room saw them.
+    track_sid: v.optional(v.string()),
+    participant_identity: v.optional(v.string()),
+    participant_name: v.optional(v.string()),
+    // Screen files: the composite row of the press they belong to (a run,
+    // lib/callRecordingRuns.ts). A composite is its own run and has none.
+    // Stopping and deleting act on a whole run.
+    run_id: v.optional(v.id("call_recordings")),
+    // Who pressed Record (screen files inherit their run's presser), and when.
+    started_by: v.id("users"),
+    requested_at: v.number(),
+    // Wall ms of the file's time 0, from LiveKit's file result: the anchor of
+    // every offset (locateCallMoment). Absent until LiveKit has begun writing.
+    started_at: v.optional(v.number()),
+    ended_at: v.optional(v.number()),
+    duration_ms: v.optional(v.number()),
+    size_bytes: v.optional(v.number()),
+    // Why the file stopped, and who stopped it: a LiveKit identity (a user
+    // id or `guest:<id>`), since any participant may stop a recording.
+    stop_reason: v.optional(callRecordingStopReasonValidator),
+    stopped_by: v.optional(v.string()),
+    // LiveKit's words when it failed, shown as they are.
+    error: v.optional(v.string()),
+    // Written only when something a reader shows changes. The reconcile
+    // loop's own liveness lives in call_recording_loops, so a recording that
+    // simply keeps recording writes nothing every subscriber would re-read.
+    updated_at: v.number(),
+  })
+    .index("by_transcript", ["transcript_id", "requested_at"])
+    .index("by_room_status", ["room_key", "status"])
+    .index("by_egress", ["egress_id"])
+    // The reconciler's worklist: every row LiveKit is still working on.
+    .index("by_status", ["status"]),
+
+  // One row per recording run: its reconcile loop's bookkeeping, kept apart
+  // from call_recordings because every room and call page subscribes to
+  // those rows, and a loop that stamped them each pass would re-run all of
+  // them for nothing. `gen` is the loop that is current: a loop carries the
+  // gen it was started with and stops when it no longer matches, so the
+  // sweep replacing a stalled loop never leaves two polling one run.
+  call_recording_loops: defineTable({
+    run_id: v.id("call_recordings"),
+    gen: v.number(),
+    // The current loop's last look at LiveKit (the sweep's staleness clock).
+    looked_at: v.number(),
+    // The last one off look a screen share asked for (calls.heartbeat).
+    nudged_at: v.optional(v.number()),
+  }).index("by_run", ["run_id"]),
+
   // Text chat alongside a huddle: one thread per room, visible on the call
-  // stage and the call page. Keyed by room (not transcript) so the chat works
-  // before anyone toggles transcription and persists across a room's calls.
+  // stage and the call page. Keyed by room so the chat works before the
+  // huddle has a record; `transcript_id` says which huddle a line belongs to.
   call_chat_messages: defineTable({
     room_key: v.string(),
     team_id: v.optional(v.id("teams")),
@@ -5843,13 +6252,7 @@ export default defineSchema({
     // Images pasted, dropped or picked in the huddle chat. Same shape as
     // chat_messages.attachments so the room reuses the chat tile, and the
     // same storage ids ride to fed sessions as pending_messages.image_storage_ids.
-    attachments: v.optional(v.array(v.object({
-      storage_id: v.id("_storage"),
-      name: v.optional(v.string()),
-      mime: v.optional(v.string()),
-      width: v.optional(v.number()),
-      height: v.optional(v.number()),
-    }))),
+    attachments: v.optional(v.array(chatAttachmentValidator)),
     // Set when an AGENT said this: the session that is fed the huddle live
     // and answered. Rendered with the agent's identity, never as user_id's
     // own words. `source_message_id` is the session message it mirrors, so
@@ -5858,13 +6261,30 @@ export default defineSchema({
     source_message_id: v.optional(v.id("messages")),
     // Set when this row is something the room SAW rather than something
     // somebody said: "agent_joined" | "agent_left" | "transcribe_on" |
-    // "transcribe_off". `user_id` is who did it (the person who added or
-    // removed the agent, or pressed the transcription switch); an agent event
-    // also carries `agent_conversation_id`. `text` is empty. Written only by
-    // callChat.postEvent; never relayed to the fed sessions.
+    // "transcribe_off" | "record_on" | "record_off" | "record_deleted".
+    // `user_id` is who did it (the person who added or removed the agent, or
+    // pressed the transcription or recording switch); an agent event
+    // also carries `agent_conversation_id`. `text` is empty, except a
+    // recording that failed, which carries the failure in plain words.
+    // Written only by callChat.postEvent; never relayed to the fed sessions.
     event: v.optional(v.string()),
+    // Why a record_off happened (a CallRecordingStopReason: "pressed",
+    // "huddle_ended", "limit", "failed", ...). A stop nobody pressed is still
+    // owned by the run's presser, so this, not `user_id`, says who or what
+    // ended it.
+    event_reason: v.optional(v.string()),
+    // A guest did it (pressed Stop): the name the room knew them by. The row
+    // is owned by the run's presser, since a line needs a user, and is shown
+    // as the guest's.
+    event_guest_name: v.optional(v.string()),
+    // The huddle this line was said in: the room's live transcript when it
+    // was written (callChat.insertRoomRow), or the one a line typed before
+    // the record existed was claimed by when it started. Absent on a line
+    // typed in the room while no huddle was running.
+    transcript_id: v.optional(v.id("transcripts")),
   })
-    .index("by_room", ["room_key"]),
+    .index("by_room", ["room_key"])
+    .index("by_transcript", ["transcript_id"]),
 
   // One row per session a live transcript feeds: the cheap answer to "is this
   // session in a huddle right now?", asked on every turn settle so the agent's
@@ -5881,6 +6301,10 @@ export default defineSchema({
     team_id: v.optional(v.id("teams")),
     added_by: v.id("users"),
     last_mirrored_message_id: v.optional(v.id("messages")),
+    // The agent's face in the room: the Tavus conversation that joined the
+    // LiveKit room for this feed and speaks its replies (tavusPal.ts). Set
+    // once the face has joined; ended when this row is deleted.
+    tavus_conversation_id: v.optional(v.string()),
   })
     .index("by_conversation", ["conversation_id"])
     .index("by_transcript", ["transcript_id"]),
@@ -5938,6 +6362,7 @@ export default defineSchema({
       temperature: v.optional(v.number()),
       doc: v.optional(v.string()),
       category: v.optional(v.string()),
+      card: v.optional(v.string()),
     })),
     edges: v.array(v.object({
       from: v.string(),
@@ -6009,7 +6434,13 @@ export default defineSchema({
     agent_count: v.optional(v.number()),
     created_at: v.number(),
     updated_at: v.number(),
+    // Public sharing: "anyone with the link" (publicShare.ts).
+    share_token: v.optional(v.string()),
+    // The line's merge step landed (the-line.md L12): what went where, when.
+    merge: v.optional(v.object({ sha: v.string(), branch: v.string(), into: v.string(), at: v.number(), pr_url: v.optional(v.string()) })),
+    graph_hash: v.optional(v.string()), // LE14: content hash of the graph the runner executed (parser.graphHash)
   })
+    .index("by_share_token", ["share_token"])
     .index("by_user_id", ["user_id"])
     .index("by_workflow_id", ["workflow_id"])
     .index("by_external_run", ["external_run_id"])
@@ -6468,13 +6899,7 @@ export default defineSchema({
     // `@channel` is deliberately absent in v1 — on a team small enough to share
     // one codecast workspace it is the same blast radius with worse manners.
     mention_scope: v.optional(v.literal("here")),
-    attachments: v.optional(v.array(v.object({
-      storage_id: v.id("_storage"),
-      name: v.optional(v.string()),
-      mime: v.optional(v.string()),
-      width: v.optional(v.number()),
-      height: v.optional(v.number()),
-    }))),
+    attachments: v.optional(v.array(chatAttachmentValidator)),
     // Push-to-talk. Present only on a walkie burst, which is an ordinary chat
     // message written in three steps: created "live" while the sender holds the
     // key, transcript streaming into `content`, then finalized with the audio.
@@ -6795,6 +7220,24 @@ export default defineSchema({
       })),
     })),
   }).index("by_key", ["key"]),
+
+  // What a web page says about itself (Open Graph, Twitter card, <title>),
+  // read once and shared by every message that links it, so a link standing
+  // alone on its line renders as a preview card. Keyed by the URL as
+  // parseLinkPreviewUrl normalizes it. `status` "pending" while the fetch
+  // runs; "failed" keeps a dead or tagless page from being refetched on
+  // every view until the row ages out (linkPreviews.ts).
+  link_previews: defineTable({
+    url: v.string(),
+    status: v.union(v.literal("pending"), v.literal("ok"), v.literal("failed")),
+    title: v.optional(v.string()),
+    description: v.optional(v.string()),
+    image: v.optional(v.string()),
+    site_name: v.optional(v.string()),
+    favicon: v.optional(v.string()),
+    requested_at: v.number(),
+    fetched_at: v.optional(v.number()),
+  }).index("by_url", ["url"]),
 
   ...issueSyncTables,
   ...agentTables,

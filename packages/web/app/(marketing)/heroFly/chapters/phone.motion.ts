@@ -1,48 +1,120 @@
 /**
- * Chapter 4, Approve: beats, typed text, flyers and arcs, as pure data.
- * Every id starts with "phone." (see contract.ts).
+ * Chapter 4, Phone: beats, flyers and arcs, as pure data. Every id starts
+ * with "phone." (see contract.ts).
  *
- * The ask lands on the desk as the permission stack, flies to the phone as the
- * daemon's push, opens into the app's permission card, and the tap on Approve
- * draws back to the desk.
+ * The API worker stops on a question at the foot of its pane. The question
+ * flies to the phone and lands in the app's session screen, the field takes
+ * focus and the keyboard rises, the answer is typed and sent, the worker
+ * turns back to Working and streams its reply, and the answer's arc draws
+ * back to the worker on the pull-back.
+ *
+ * The phone's screen is the app laid out at a phone's width (APP_W) and
+ * scaled onto the model's screen. Heights below are the app's own px at that
+ * width, measured in the browser; a wrong one only lengthens or shortens a
+ * glide.
  */
 
 import { CUES } from "../fixtures/story";
-import { localToWorld, regionPt } from "../world";
+import { glideOver } from "../fixtures/desk";
+import { regionPt, surfacePt } from "../world";
 import type { ChapterMotion } from "./contract";
+
+/** The app's width in CSS px (an iPhone's, a little narrower), and its scale onto the model's 276px screen. */
+export const APP_W = 360;
+export const APP_K = 276 / APP_W;
+
+/** The status bar's height over the app (the band beside the notch, 24px of the model's screen). */
+export const STATUS_H = Math.round(24 / APP_K);
+/** The home indicator's inset under the composer, and the keyboard's height (QuickType bar, four rows, the globe row). */
+export const HOME_H = 34;
+export const KEYBOARD_H = 292;
+/** How far the feed and composer ride up with the keyboard: its height less the home indicator's inset, which it covers, leaving the composer's own 12px foot. */
+const KEYBOARD_LIFT = KEYBOARD_H - HOME_H + 12;
+
+/** Measured heights (app px) of what lands in the phone's feed. */
+const H = { ask: 52, steer: 79, reply: 112, test: 24 };
+
+/** The question leaves the worker's pane as the camera sets off for the phone, and lands as the camera arrives. */
+const FLY_CUE = 21.2;
+const FLY_DUR = 0.85;
 
 /** The phone's moments, read by the views (state) and the beats below (motion). */
 export const PHONE_AT = {
-  /** The push lands on the lock screen. */
-  banner: 24.2,
-  /** The push opens into the app. */
-  open: 24.8,
-  /** Approve is tapped: the card shows its in-flight label, then leaves. */
-  tap: CUES.permissionApproved,
-  gone: CUES.permissionApproved + 0.4,
-  /** The worker finishes the approved run and the app says so. */
-  done: 26.6,
+  /** The feed makes room for the question while it is in flight. */
+  askRoom: FLY_CUE + 0.3,
+  /** The question takes over from the flyer on its last frame; the session now needs input. */
+  askLands: FLY_CUE + FLY_DUR - 0.02,
+  /** Alex taps the field: the caret, and the keyboard rises. */
+  focus: 22.8,
+  /** The answer types itself in. */
+  type: 23.05,
+  rate: 24,
+  /** Send is pressed, and the answer leaves the field for the feed. */
+  press: 24.42,
+  sent: 24.52,
+  /** The worker picks the answer up (the API worker's row turns green here too). */
+  working: CUES.permissionApproved,
+  /** The keyboard goes down so the reply has the screen. */
+  blur: 24.95,
+  /** The reply's turn opens and streams in, word by word. */
+  reply: 25.15,
+  replyWords: 25.3,
+  wordRate: 11,
+  /** The test run it starts, and its result. */
+  test: 26.85,
+  testDone: 27.85,
 } as const;
+
+/** The desk's copy of the exchange lands in the worker's pane while the camera is on the phone. */
+export const DESK_AT = {
+  ask: CUES.permissionAsk,
+  steer: PHONE_AT.sent + 0.1,
+  reply: PHONE_AT.reply + 0.1,
+} as const;
+
+/** The screen's top-left on the phone surface (inside the bezel), and the question's centre on the screen at rest (app px from the screen's top-left, measured). */
+const SCREEN = { x: 12, y: 12 };
+const ASK_AT = { x: APP_W / 2, y: 602 };
+/** A point on the screen given in app px, on the surface. */
+const onScreen = (x: number, y: number, z = 0) => surfacePt("phone", SCREEN.x + x * APP_K, SCREEN.y + y * APP_K, z);
+
+/** Where the answer's arc starts: the user's message on the screen (app px). */
+const STEER_AT = { x: APP_W / 2, y: 452 };
 
 export const motion: ChapterMotion = {
   beats: {
-    desk: [{ id: "phone.stack", cue: CUES.permissionAsk, preset: "drop", z: 160, rx: -14, y: 18 }],
+    // The dashboard worker steps back while the camera frames the API worker's question, and comes forward again for Talk.
+    pairB: [
+      { id: "phone.veil", cue: CUES.permissionAsk - 0.2, dur: 0.5, preset: "fadeIn" },
+      { id: "phone.veil", cue: CUES.approvalDrawn, dur: 0.5, preset: "fadeOut" },
+    ],
+    pairA: [{ id: "phone.ask", cue: DESK_AT.ask, preset: "drop", z: 60, rx: -10, y: 14 }],
     phone: [
-      { id: "phone.banner", cue: PHONE_AT.banner, preset: "push", dur: 0.5, y: -96 },
-      { id: "phone.banner", cue: PHONE_AT.open - 0.05, preset: "liftOut", dur: 0.35, y: 30, z: 60 },
-      { id: "phone.banner", cue: PHONE_AT.open - 0.05, preset: "fadeOut", dur: 0.3 },
-      { id: "phone.lock", cue: PHONE_AT.open - 0.05, preset: "fadeOut", dur: 0.4 },
-      { id: "phone.app", cue: PHONE_AT.open, preset: "fadeIn", dur: 0.35 },
-      { id: "phone.row", cue: PHONE_AT.open, preset: "drop", z: 120, rx: -10, y: -14 },
-      { id: "phone.card", cue: PHONE_AT.open + 0.12, preset: "drop", z: 140, rx: -12, y: -16 },
-      { id: "phone.tap", cue: PHONE_AT.tap - 0.05, preset: "ring", dur: 0.6 },
-      { id: "phone.done", cue: PHONE_AT.done, preset: "drop", z: 120, rx: -10, y: -14 },
+      // The feed glides by each entry as it mounts, so nothing in it jumps.
+      ...glideOver("phone.feed", PHONE_AT.askRoom, H.ask, 0.55),
+      ...glideOver("phone.feed", PHONE_AT.sent, H.steer, 0.5),
+      ...glideOver("phone.feed", PHONE_AT.reply, H.reply, 0.6),
+      ...glideOver("phone.feed", PHONE_AT.test, H.test, 0.45),
+      // The question is invisible while its room opens, then takes over from the flyer in place.
+      { id: "phone.askBubble", cue: PHONE_AT.askLands, dur: 0.06, preset: "fadeIn" },
+      // The keyboard rises with the field's focus and carries the feed and the composer up with it; it goes down again after the send.
+      { id: "phone.keyboard", cue: PHONE_AT.focus, dur: 0.42, preset: "push", y: KEYBOARD_H },
+      { id: "phone.keyboard", cue: PHONE_AT.blur, dur: 0.42, preset: "liftOut", y: KEYBOARD_H, z: 0 },
+      { id: "phone.body", cue: PHONE_AT.focus, dur: 0.42, preset: "liftOut", y: -KEYBOARD_LIFT, z: 0 },
+      { id: "phone.body", cue: PHONE_AT.blur, dur: 0.42, preset: "liftOut", y: KEYBOARD_LIFT, z: 0 },
+      { id: "phone.tap", cue: PHONE_AT.focus - 0.08, preset: "ring", dur: 0.5 },
+      { id: "phone.send", cue: PHONE_AT.press, preset: "press", dur: 0.22 },
+      { id: "phone.sendTap", cue: PHONE_AT.press - 0.04, preset: "ring", dur: 0.5 },
+      { id: "phone.steer", cue: PHONE_AT.sent, preset: "drop", z: 40, rx: -8, y: 10 },
+      { id: "phone.reply", cue: PHONE_AT.reply, dur: 0.3, preset: "fadeIn" },
+      { id: "phone.test", cue: PHONE_AT.test, dur: 0.3, preset: "fadeIn" },
     ],
   },
   flyers: [
-    { id: "phone.permission", cue: 23.3, dur: 0.85, from: regionPt("desk.list", 170, 120), to: localToWorld("phone", 0, -206, 8), arc: 320, rot: [[0, 0, 0], [0, -30, 4], [0, -16, -2]], scale: [1, 0.86], ease: "glide", fade: [0.1, 0.08] },
+    // From the question at the foot of the worker's pane to its place in the phone's feed, opaque to its last frame, where the feed's own copy takes over.
+    { id: "phone.question", cue: FLY_CUE, dur: FLY_DUR, from: regionPt("pairA.transcript", 270, 270), to: onScreen(ASK_AT.x, ASK_AT.y, 1), arc: 320, rot: [[0, -6, 0], [0, -20, 4], [0, -12, -2]], scale: [1.12, 1], ease: "glide", fade: [0.12, 0] },
   ],
   arcs: [
-    { id: "phone.approved", cue: 27.0, dur: 0.5, hold: 0.8, from: localToWorld("phone", -150, -140), to: regionPt("desk.list", 320, 120), color: "#859900" },
+    { id: "phone.answered", cue: CUES.approvalDrawn - 0.5, dur: 0.5, hold: 1.0, from: onScreen(STEER_AT.x, STEER_AT.y), to: regionPt("pairA.header", 250, 22), color: "var(--sol-blue)", apex: 90 },
   ],
 };

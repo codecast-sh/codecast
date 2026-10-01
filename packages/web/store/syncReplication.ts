@@ -29,6 +29,7 @@ import { useInboxStore, hasSyncRegistryEntry, syncLogScopeMetaKey } from "./inbo
 import { writePatchesToIDB } from "./idbCache";
 import { followerPersistencePatches } from "./followerPersistence";
 import { syncTransaction } from "./syncTransaction";
+import type { GestureMessage } from "./gestureBridge";
 import {
   isReplicatedCollectionKey,
   REPLICATED_STORE_KEYS,
@@ -143,6 +144,32 @@ export function buildMutUpdates(patches: readonly any[], state: any): MutUpdate[
 }
 
 const isReplicated = (key: string) => REPLICATED_STORE_KEYS.includes(key);
+
+/**
+ * A synced follower's action tee (wire to `_setActionTee`): its own
+ * optimistic writes, offered to the host as field-level muts. The engine's
+ * own mutTee ships whole rows; buildMutUpdates keeps an edited row from
+ * overlaying the host's fresher copy.
+ */
+export function followerActionTee(channel: ReplicationChannel, selfId: string) {
+  return (_name: string, patches: any[], state: any): void => {
+    const updates = buildMutUpdates(patches, state);
+    if (updates.length > 0) channel.post({ type: "mut", from: selfId, updates });
+  };
+}
+
+/**
+ * A sibling window's gesture, landed in this window. Follow state is
+ * ephemeral window state, not a row: it never enters the draft, so it takes
+ * its own path to the setter.
+ */
+export function applyBridgedGesture(msg: GestureMessage): void {
+  if (msg.kind === "follow") {
+    useInboxStore.getState().setFollowLeader(msg.leaderId, { fromBridge: true });
+    return;
+  }
+  useInboxStore.getState().applyGestureBridge(msg);
+}
 
 // Land one batch of replicated updates through the store's own sync actions,
 // so pending protection, merge policies, and the no-op bails all behave as if
@@ -336,12 +363,7 @@ export function startSyncReplication(opts: { eligible: boolean; principalId: str
             const local = followerPersistencePatches(patches);
             if (local.length) return writePatchesToIDB(local, state);
           });
-          (useInboxStore.getState() as any)._setActionTee((_name: string, patches: any[], state: any) => {
-            // The engine's own mutTee ships whole rows; a field-level mut is
-            // built here so an edited row never overlays the host's copy.
-            const updates = buildMutUpdates(patches, state);
-            if (updates.length > 0) channel.post({ type: "mut", from: selfId, updates });
-          });
+          (useInboxStore.getState() as any)._setActionTee(followerActionTee(channel, selfId));
         } else {
           armSoloFallback();
         }

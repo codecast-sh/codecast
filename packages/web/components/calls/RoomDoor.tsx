@@ -3,10 +3,12 @@
 import { useState } from "react";
 import { Lock, Unlock } from "lucide-react";
 import { AvatarImg } from "../../lib/avatarCache";
-import { useTrackedStore } from "../../store/inboxStore";
+import { useTrackedStore, type RoomKnock } from "../../store/inboxStore";
 import { admitKnock } from "../../lib/calls/callManager";
 import { useRoomLock } from "../../hooks/useLiveRooms";
 import { firstName } from "./speakers";
+import { GuestTag } from "./GuestTag";
+import { useGuestDoor } from "./GuestDoor";
 
 // The door of the room you are IN: the lock that turns an open room private,
 // and the people knocking to be let into it. Both live in the dock and the
@@ -38,25 +40,41 @@ export function RoomLockButton({ roomKey }: { roomKey: string }) {
 }
 
 /** Who is at the door. Renders nothing when nobody is — a knock is a moment,
- *  not a queue. Admit rings them in: the accepted ring is their grant, so the
- *  room stays locked to everyone else. */
+ *  not a queue. Admit rings a teammate in: the accepted ring is their grant,
+ *  so the room stays locked to everyone else. A guest (a stranger on a link)
+ *  is let in with callGuests.admitGuest instead, under the name the door is
+ *  showing, and may be turned away; a guest's knock wears the guest mark, and
+ *  a link that keeps bringing people the room turned away offers to close. */
 export function RoomKnocks({ roomKey }: { roomKey: string }) {
   const s = useTrackedStore([
     // created_at is part of the signature, not decoration: a re-knock PATCHES
     // the same server row (calls.knock refreshes rather than duplicates), so
     // the second knock at the door IS a created_at change and nothing else.
     // Keyed by the person alone, this surface would never learn about it.
+    // A guest's name is in it too: a guest asking under a new name is a new
+    // knock, and Admit must carry the name the door shows.
     (st: any) =>
-      (st.roomKnocks ?? []).map((k: any) => `${k.from_user}:${k.created_at}`).join("|"),
+      (st.roomKnocks ?? [])
+        .map((k: RoomKnock) => `${k.from_user}:${k.created_at}:${k.from_name}:${k.can_answer === false ? 0 : 1}:${k.link_turned_away ?? 0}`)
+        .join("|"),
   ]);
-  const knocks: any[] = s.roomKnocks ?? [];
-  // An admitted knocker's row stays in the query until their knock expires or
-  // they walk in, so remember WHEN we admitted them and hide the row until a
+  const knocks: RoomKnock[] = s.roomKnocks ?? [];
+  const door = useGuestDoor();
+  // An answered knocker's row stays in the query until their knock expires or
+  // they walk in, so remember WHEN we answered them and hide the row until a
   // newer knock outranks it — an impatient second click must not ring someone
-  // twice, and a genuine second knock must still be visible.
-  const [admitted, setAdmitted] = useState<Record<string, number>>({});
+  // twice, and a genuine second knock must still be visible. A guest's answer
+  // that failed (the link closed, they changed their name) brings the row
+  // back, so the room sees them again rather than a door gone quiet.
+  const [answered, setAnswered] = useState<Record<string, number>>({});
+  const answer = (k: RoomKnock) => setAnswered((prev) => ({ ...prev, [String(k.from_user)]: k.created_at }));
+  const unanswer = (k: RoomKnock) =>
+    setAnswered((prev) => {
+      const { [String(k.from_user)]: _gone, ...rest } = prev;
+      return rest;
+    });
 
-  const waiting = knocks.filter((k) => (admitted[String(k.from_user)] ?? 0) < k.created_at);
+  const waiting = knocks.filter((k) => (answered[String(k.from_user)] ?? 0) < k.created_at);
 
   // Somebody arriving at the door is a moment, and it was a silent one: this
   // appeared as a coloured row and nothing else, so a person hosting a locked
@@ -70,38 +88,89 @@ export function RoomKnocks({ roomKey }: { roomKey: string }) {
       aria-live="polite"
       className={waiting.length ? "flex flex-col gap-1 px-2 py-1" : undefined}
     >
-      {waiting.map((k) => (
-        <div
-          key={String(k.from_user)}
-          className="flex items-center gap-2 rounded-md border border-sol-violet/30 bg-sol-violet/10 px-2 py-1"
-        >
-          <span className="inline-block h-5 w-5 shrink-0 overflow-hidden rounded-full">
-            <AvatarImg
-              src={k.from_image}
-              alt=""
-              className="h-full w-full object-cover"
-              fallback={
-                <span className="flex h-full w-full items-center justify-center bg-sol-base02 text-[9px]">
-                  {(k.from_name || "?").charAt(0).toUpperCase()}
-                </span>
-              }
-            />
-          </span>
-          <span className="min-w-0 flex-1 truncate text-[11px] text-sol-text-muted">
-            {firstName(k.from_name)} wants to join
-          </span>
-          <button
-            onClick={() => {
-              setAdmitted((prev) => ({ ...prev, [String(k.from_user)]: k.created_at }));
-              void admitKnock(roomKey, String(k.from_user));
-            }}
-            className="shrink-0 rounded bg-sol-violet/20 px-2 py-0.5 text-[11px] font-medium text-sol-violet transition-colors hover:bg-sol-violet/30"
-            aria-label={`Admit ${firstName(k.from_name)}`}
+      {waiting.map((k) => {
+        const guest = k.kind === "guest" && !!k.guest_id;
+        const name = guest ? k.from_name : firstName(k.from_name);
+        const canAnswer = k.can_answer !== false;
+        return (
+          <div
+            key={String(k.from_user)}
+            className={`flex flex-col gap-1 rounded-md border px-2 py-1 ${
+              guest ? "border-sol-yellow/30 bg-sol-yellow/[0.08]" : "border-sol-violet/30 bg-sol-violet/10"
+            }`}
           >
-            Admit
-          </button>
-        </div>
-      ))}
+            <div className="flex items-center gap-2">
+              <span className="inline-block h-5 w-5 shrink-0 overflow-hidden rounded-full">
+                <AvatarImg
+                  src={k.from_image}
+                  alt=""
+                  className="h-full w-full object-cover"
+                  fallback={
+                    <span className="flex h-full w-full items-center justify-center bg-sol-base02 text-[9px]">
+                      {(k.from_name || "?").charAt(0).toUpperCase()}
+                    </span>
+                  }
+                />
+              </span>
+              <span className="flex min-w-0 flex-1 items-center gap-1.5 text-[11px] text-sol-text-muted">
+                <span className="min-w-0 truncate" title={guest ? `${k.from_name}, a guest from outside the team` : undefined}>
+                  {name} {canAnswer ? "wants to join" : "is waiting"}
+                </span>
+                {guest && <GuestTag />}
+              </span>
+              {canAnswer && guest && (
+                <button
+                  onClick={() => {
+                    answer(k);
+                    void door.deny(k.guest_id!).then((r) => r === null && unanswer(k));
+                  }}
+                  className="shrink-0 rounded px-1.5 py-0.5 text-[11px] text-sol-text-muted transition-colors hover:bg-sol-bg-highlight hover:text-sol-text"
+                  aria-label={`Turn ${name} away`}
+                  title="Not now. They can ask again in a minute"
+                >
+                  Deny
+                </button>
+              )}
+              {canAnswer && (
+                <button
+                  onClick={() => {
+                    answer(k);
+                    if (guest) void door.admit(k.guest_id!, k.from_name).then((r) => r === null && unanswer(k));
+                    else void admitKnock(roomKey, String(k.from_user));
+                  }}
+                  className={`shrink-0 rounded px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                    guest
+                      ? "bg-sol-yellow/20 text-sol-yellow hover:bg-sol-yellow/30"
+                      : "bg-sol-violet/20 text-sol-violet hover:bg-sol-violet/30"
+                  }`}
+                  aria-label={`Admit ${name}`}
+                >
+                  Admit
+                </button>
+              )}
+            </div>
+            {/* A link that already brought somebody the room turned away is
+                probably out in the world: offer to close it with this answer. */}
+            {canAnswer && guest && (k.link_turned_away ?? 0) >= 1 && (
+              <div className="flex items-center gap-2 pl-7 text-[10.5px] text-sol-text-dim">
+                <span className="min-w-0 flex-1 truncate">
+                  {k.link_turned_away} turned away from this link already
+                </span>
+                <button
+                  onClick={() => {
+                    answer(k);
+                    void door.deny(k.guest_id!, { revokeLink: true }).then((r) => r === null && unanswer(k));
+                  }}
+                  className="shrink-0 rounded px-1.5 py-0.5 transition-colors hover:bg-sol-red/10 hover:text-sol-red"
+                  title="Turn them away and turn the link off, so nobody new can use it"
+                >
+                  Deny and turn off link
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

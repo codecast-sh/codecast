@@ -2,13 +2,11 @@ import { View as RNView } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
 import Svg, { Path } from 'react-native-svg';
 import { Theme } from '@/constants/Theme';
+import { MOBILE_AGENT_LOGO_BG } from '@codecast/shared/render/mobileSessionStyle';
 
 export function agentLogoBg(agentType?: string): string {
-  if (agentType === 'codex') return '#0f0f0f';
-  if (agentType === 'cursor') return '#1a1a2e';
-  if (agentType === 'gemini') return '#1a73e8';
-  if (agentType === 'opencode') return '#f97316';
-  if (agentType === 'pi') return '#14b8a6';
+  const bg = agentType ? MOBILE_AGENT_LOGO_BG[agentType] : undefined;
+  if (bg) return bg;
   if (agentType === 'grok') return Theme.text;
   return '#cb4b16';
 }
