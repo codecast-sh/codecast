@@ -1,7 +1,7 @@
 import { findAndReplace } from "mdast-util-find-and-replace";
 import remarkGfm from "remark-gfm";
 import type { Options as ReactMarkdownOptions } from "react-markdown";
-import { isConvexId, isEntityId, bareEntityIdRegex, entityMentionRegex, entityTypeFromId, parseEntityUrl, parsePublishedPageUrl, parseClaudeArtifactUrl, parseMessageRefUrl, messageRefPayload, contextualPrRefRegex, contextualPrRefPayload, splitContextualPrRefs } from "./entityLinks";
+import { isConvexId, isEntityId, bareEntityIdRegex, entityMentionRegex, entityTypeFromId, parseEntityUrl, parsePublishedPageUrl, parseClaudeArtifactUrl, parseLinkPreviewUrl, parseMessageRefUrl, messageRefPayload, contextualPrRefRegex, contextualPrRefPayload, splitContextualPrRefs } from "./entityLinks";
 import { FILE_PATH_SCAN_RE, mentionFromMatch } from "./filePathLinks";
 import { filesHref } from "./vault/vaultHref";
 
@@ -48,18 +48,21 @@ function isUrlLabel(text: string, href: string): boolean {
  * (codecast.sh/a/<slug>, payload `artifact:<slug>`) and a public Claude
  * artifact (claude.ai/public/artifacts/<id>, payload `claude:<id>`). Link text
  * the author wrote (`[caption](url)`) rides along as the caption, image-style;
- * a bare autolink has none. Same text-node payload trick as doc embeds:
- * react-markdown's url sanitizer drops the embed:// href, so the text carries
+ * a bare autolink has none. Any other public web page (payload
+ * `link:<encoded url>`) renders as a preview card drawn from its own meta
+ * tags. Same text-node payload trick as doc embeds: react-markdown's url
+ * sanitizer drops the embed:// href, so the text carries
  * `<kind>:<id>|<caption>`.
  */
 function toPageEmbedLink(link: any): any | null {
   const href = link?.type === "link" ? link.url : null;
   const page = parsePublishedPageUrl(href);
   const claude = page ? null : parseClaudeArtifactUrl(href);
-  if (!page && !claude) return null;
+  const web = page || claude ? null : parseLinkPreviewUrl(href);
+  if (!page && !claude && !web) return null;
   const text = mdastText(link).trim();
   const caption = text && !isUrlLabel(text, link.url) ? text : "";
-  const ref = page ? `artifact:${page.slug}` : `claude:${claude!.id}`;
+  const ref = page ? `artifact:${page.slug}` : claude ? `claude:${claude.id}` : `link:${encodeURIComponent(web!)}`;
   const payload = `${ref}${caption ? `|${caption}` : ""}`;
   return {
     type: "link",
@@ -68,38 +71,101 @@ function toPageEmbedLink(link: any): any | null {
   };
 }
 
-/**
- * Post-pass over the tree after findAndReplace: a paragraph consisting solely
- * of one embed link gets REPLACED by that link, so the embed renders at block
- * level (a full doc card inside a <p> is invalid HTML and reads wrong). An
- * embed mixed into surrounding prose is demoted to an ordinary doc pill —
- * transclusion is a block-level act, same semantics as Obsidian.
- */
-function hoistEmbeds(node: any) {
-  if (!Array.isArray(node.children)) return;
-  node.children = node.children.map((child: any) => {
-    if (child.type === "paragraph" && Array.isArray(child.children)) {
-      const meaningful = child.children.filter(
-        (c: any) => !(c.type === "text" && !c.value?.trim()),
-      );
-      if (meaningful.length === 1 && isEmbedLink(meaningful[0])) return meaningful[0];
-      if (meaningful.length === 1) {
-        const pageEmbed = toPageEmbedLink(meaningful[0]);
-        if (pageEmbed) return pageEmbed;
-      }
-      child.children = child.children.map((c: any) =>
-        isEmbedLink(c)
-          ? {
-              ...c,
-              url: c.url.replace("embed://", "entity://"),
-              children: [{ type: "text", value: c.url.slice("embed://".length) }],
-            }
-          : c,
-      );
-      return child;
+/** A web link previews only on a top-level line: a list of sources or a
+ *  link quoted inside something else stays a list of links. */
+function isWebPreview(embed: any): boolean {
+  return mdastText(embed).startsWith("embed:link:");
+}
+
+/** A message imported from Slack carries Slack's own unfurl as a quote right
+ *  under the link (slackAttachmentsToMarkdown); that quote already is the
+ *  preview, so the link stays a link instead of drawing a second card. */
+function quotesLink(node: any, url: string): boolean {
+  if (node?.type !== "blockquote") return false;
+  const has = (n: any): boolean => (n?.type === "link" && n.url === url) || (Array.isArray(n?.children) && n.children.some(has));
+  return has(node);
+}
+
+/** A paragraph's children split at its line breaks (a hard break node, or a
+ *  newline inside a text node), each line keeping the node that opened it so
+ *  the prose around a hoisted line rejoins exactly as written. */
+function paragraphLines(children: any[]): { sep: any | null; nodes: any[] }[] {
+  const lines: { sep: any | null; nodes: any[] }[] = [{ sep: null, nodes: [] }];
+  for (const c of children) {
+    if (c.type === "break") {
+      lines.push({ sep: c, nodes: [] });
+    } else if (c.type === "text" && c.value?.includes("\n")) {
+      c.value.split("\n").forEach((part: string, k: number) => {
+        if (k) lines.push({ sep: { type: "text", value: "\n" }, nodes: [] });
+        if (part) lines[lines.length - 1].nodes.push({ ...c, value: part });
+      });
+    } else {
+      lines[lines.length - 1].nodes.push(c);
     }
-    hoistEmbeds(child);
-    return child;
+  }
+  return lines;
+}
+
+function isBlank(nodes: any[]): boolean {
+  return nodes.every((c) => c.type === "text" && !c.value?.trim());
+}
+
+function demoteInlineEmbeds(paragraph: any): any {
+  paragraph.children = paragraph.children.map((c: any) =>
+    isEmbedLink(c)
+      ? {
+          ...c,
+          url: c.url.replace("embed://", "entity://"),
+          children: [{ type: "text", value: c.url.slice("embed://".length) }],
+        }
+      : c,
+  );
+  return paragraph;
+}
+
+/**
+ * Post-pass over the tree after findAndReplace: a line consisting solely of
+ * one embed link is lifted OUT of its paragraph, so the embed renders at block
+ * level (a full doc card inside a <p> is invalid HTML and reads wrong) and the
+ * prose above and below stays where it was. An embed mixed into surrounding
+ * prose is demoted to an ordinary doc pill — transclusion is a block-level
+ * act, same semantics as Obsidian.
+ */
+function hoistEmbeds(node: any, isRoot = true) {
+  if (!Array.isArray(node.children)) return;
+  node.children = node.children.flatMap((child: any, i: number) => {
+    if (child.type === "paragraph" && Array.isArray(child.children)) {
+      const lines = paragraphLines(child.children);
+      const embeds = lines.map(({ nodes }) => {
+        const meaningful = nodes.filter((c: any) => !(c.type === "text" && !c.value?.trim()));
+        if (meaningful.length !== 1) return null;
+        if (isEmbedLink(meaningful[0])) return meaningful[0];
+        const pageEmbed = toPageEmbedLink(meaningful[0]);
+        if (pageEmbed && isWebPreview(pageEmbed) && (!isRoot || quotesLink(node.children[i + 1], meaningful[0].url))) return null;
+        return pageEmbed;
+      });
+      if (embeds.some(Boolean)) {
+        const out: any[] = [];
+        let prose: typeof lines = [];
+        const flush = () => {
+          while (prose.length && isBlank(prose[0].nodes)) prose.shift();
+          while (prose.length && isBlank(prose[prose.length - 1].nodes)) prose.pop();
+          if (prose.length) out.push(demoteInlineEmbeds({ ...child, children: prose.flatMap((l, k) => (k && l.sep ? [l.sep, ...l.nodes] : l.nodes)) }));
+          prose = [];
+        };
+        lines.forEach((line, k) => {
+          if (embeds[k]) {
+            flush();
+            out.push(embeds[k]);
+          } else prose.push(line);
+        });
+        flush();
+        return out;
+      }
+      return [demoteInlineEmbeds(child)];
+    }
+    hoistEmbeds(child, false);
+    return [child];
   });
 }
 

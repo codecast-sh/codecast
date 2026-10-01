@@ -4573,6 +4573,9 @@ cliRoute("/cli/docs/unshare", async (ctx, body) => {
 cliRoute("/cli/docs/delete", async (ctx, body) => {
   return await ctx.runMutation(api.docs.remove, body);
 });
+// `cast doc lab`: a Lab tool (alternatives, trim, flag, typos) run on the
+// stored doc, its result written in as drafting markup (docLab.runOnDoc).
+cliRoute("/cli/docs/lab", async (ctx, body) => ctx.runAction((api as any).docLab.runOnDoc, body));
 cliRoute("/cli/docs/patch", async (ctx, body) => {
   const result = await ctx.runMutation(api.docs.patch, body);
   if (result.content) {
@@ -4932,5 +4935,12 @@ const emailUnsubscribe = httpAction(async (ctx, request) => {
 });
 http.route({ path: "/cli/email/unsubscribe", method: "GET", handler: emailUnsubscribe });
 http.route({ path: "/cli/email/unsubscribe", method: "POST", handler: emailUnsubscribe });
+
+// The caller's own suggestion profile, read by the suggest eval (packages/evals).
+// Only api_token is forwarded: the token decides whose profile it is, and any
+// other field in the body, a user id included, never reaches the query.
+cliRoute("/cli/suggestion-profile", async (ctx, body) =>
+  ctx.runQuery(internal.composerSuggestions.getOwnSuggestionProfile, { api_token: String(body?.api_token ?? "") }),
+);
 
 export default http;

@@ -8,7 +8,7 @@ import { findEntityInStore } from '@codecast/web/lib/liveEntities';
 import { useRouter } from 'expo-router';
 import Feather from '@expo/vector-icons/Feather';
 import { Theme, useTheme } from '@/constants/Theme';
-import { isConvexId, isEntityId, entityTypeFromId, entityReferenceLabel, type EntityType } from '@codecast/shared/entities';
+import { isConvexId, isEntityId, entityTypeFromId, entityReferenceLabel, parseCallRef, type EntityType } from '@codecast/shared/entities';
 import { mobileEntityRoute } from '@/lib/linkRoutes';
 import { identityLine, identityRowOf } from '@codecast/web/lib/sessionIdentity';
 import { usePersonifyAll } from '@codecast/web/hooks/usePersonifyAll';
@@ -34,6 +34,7 @@ const TYPE_LABEL: Record<EntityType, string> = {
   decision: 'Decision',
   pr: 'Pull request',
   commit: 'Commit',
+  call: 'Call',
 };
 
 // Web pill palette: session=blue, plan=cyan, task=violet, doc=green,
@@ -50,6 +51,7 @@ const TYPE_COLOR: Record<EntityType, string> = {
   decision: Theme.yellow,
   pr: Theme.green,
   commit: Theme.yellow,
+  call: Theme.red,
 };
 
 const TYPE_ICON: Record<EntityType, React.ComponentProps<typeof Feather>['name']> = {
@@ -64,6 +66,7 @@ const TYPE_ICON: Record<EntityType, React.ComponentProps<typeof Feather>['name']
   decision: 'help-circle',
   pr: 'git-pull-request',
   commit: 'git-commit',
+  call: 'phone',
 };
 
 // Mobile stand-in for web's StatusCircle glyphs: the circle "fills in" as the
@@ -118,8 +121,11 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback }: { 
   const session = useQuery(api.conversations.webGet, isSession && queryArgs ? queryArgs : 'skip');
   const trigger = useQuery(api.agentTasks.webGet, type === 'trigger' && queryArgs ? queryArgs : 'skip');
   const doc = useQuery(api.docs.webGet, type === 'doc' && looksConvex ? { id: rawId } : 'skip');
+  // A call names its title; a stretch of one (`cl-42:15-25`) adds the lines.
+  const callRef = type === 'call' ? parseCallRef(rawId) : null;
+  const call = useQuery(api.transcripts.webGetCallRef, callRef ? { ref: callRef.call } : 'skip');
 
-  const served: any = type === 'task' ? task : type === 'plan' ? plan : isSession ? session : type === 'trigger' ? trigger : type === 'doc' ? doc : undefined;
+  const served: any = type === 'task' ? task : type === 'plan' ? plan : isSession ? session : type === 'trigger' ? trigger : type === 'doc' ? doc : type === 'call' ? call : undefined;
 
   // Local-first, same rule as web: the client usually already holds this row, so
   // paint the title on the FIRST frame instead of flashing the raw id until the
@@ -147,7 +153,7 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback }: { 
     shortId: entity?.short_id,
     rawId,
     typeLabel: TYPE_LABEL[type],
-  });
+  }) + (callRef?.turns ? ` #${callRef.turns.from_seq}${callRef.turns.to_seq !== callRef.turns.from_seq ? `–${callRef.turns.to_seq}` : ''}` : '');
   // A session that wears a character or a role is named as that person, the
   // same rule as the web pill: its face in place of the glyph, its name as the
   // label. A session nobody personified reads exactly as it did before.

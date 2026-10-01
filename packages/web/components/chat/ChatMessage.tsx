@@ -13,13 +13,14 @@ import { CommentAvatar } from "../comments/CommentAvatar";
 import { remarkChatMentions, channelNameMap } from "../../lib/remarkChatMentions";
 import { remarkEntityCards } from "../../lib/remarkEntityCards";
 import { compactAge } from "../../lib/threadState";
-import { copyToClipboard } from "../../lib/utils";
+import { copyToClipboard, sharePageUrl } from "../../lib/utils";
 import type { ChatAttachmentView, ChatMessageView } from "./chatTypes";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { useStorageImageSrc } from "../../hooks/useStorageImageUrl";
 import { ChatVoiceBubble, VoicePlayButton } from "./ChatVoiceBubble";
 import { CallTranscriptDisclosure } from "../calls/TranscriptTurns";
 import { ImageLightbox } from "../ImageGallery";
+import { ChatBlockquote } from "./ChatQuote";
 import "./chat.css";
 import "../editor/editor.css";
 
@@ -100,6 +101,8 @@ export function ChatAttachments({
 
 const HOVER_TIME = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
 const FULL_TIME = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
+// Module scope so react-markdown keeps one component identity across renders.
+const CHAT_MD_COMPONENTS = { ...MESSAGE_MD_COMPONENTS, blockquote: ChatBlockquote };
 
 function clockTime(ts: number): string {
   return HOVER_TIME.format(new Date(ts));
@@ -492,7 +495,7 @@ export const ChatMessage = memo(function ChatMessage({
               <ReactMarkdown
                 remarkPlugins={remarkPlugins}
                 rehypePlugins={MESSAGE_MD_REHYPE}
-                components={MESSAGE_MD_COMPONENTS}
+                components={CHAT_MD_COMPONENTS}
               >
                 {/* The digest's lead line moved into the header above. */}
                 {callHead ? callHead.body : message.content}
@@ -678,7 +681,7 @@ export const ChatMessage = memo(function ChatMessage({
                   onClick={() => {
                     setMenuOpen(false);
                     void copyToClipboard(
-                      typeof window === "undefined" ? permalink : new URL(permalink, window.location.origin).toString(),
+                      sharePageUrl(permalink),
                     );
                   }}
                 >
@@ -694,7 +697,7 @@ export const ChatMessage = memo(function ChatMessage({
                   onClick={() => {
                     setMenuOpen(false);
                     openForwardToChat({
-                      url: typeof window === "undefined" ? permalink : new URL(permalink, window.location.origin).toString(),
+                      url: sharePageUrl(permalink),
                       label: "message",
                       previewText: message.content,
                     });

@@ -45,7 +45,7 @@ import { getLabelColor } from "../lib/labelColors";
 import { copyToClipboard } from "../lib/utils";
 import { fmtClock, fmtDuration, describeTaskCadence, isTaskOverdue, taskStateLabel } from "./triggerCadence";
 import { taskDisplayTitle, taskGist, lastRunHeadline, type TriggerRow, type TriggerHomeGroup, type TaskRow } from "./triggerTasks";
-import { TriggerRunList, useTriggerRuns } from "./TriggerRunHistory";
+import { TriggerRunList, useTriggerRuns, type TriggerRun } from "./TriggerRunHistory";
 
 const SCHED_ACCENT: Record<SchedAccent, string> = {
   running: "border-l-sol-green",
@@ -151,7 +151,7 @@ const VERB_BTN = "p-1 rounded transition-[color,background-color,transform] dura
 export type TriggerVerbAction = (taskId: string, verb: "pause" | "resume" | "runNow" | "cancel" | "reactivate") => void;
 
 export const TriggerRowItem = memo(function TriggerRowItem({
-  row, variant = "roster", activeSessionId, onOpen, highlighted, isNext, onNavigated, onEdit, onDuplicate, onDelete, actions,
+  row, variant = "roster", activeSessionId, onOpen, highlighted, isNext, onNavigated, onEdit, onDuplicate, onDelete, actions, history,
 }: {
   row: TriggerRow;
   variant?: TriggerRowVariant;
@@ -173,6 +173,9 @@ export const TriggerRowItem = memo(function TriggerRowItem({
   // Replaces the store's triggerAction for every verb. The server toasts
   // ("Run queued", "Trigger canceled") belong to the store path and stay off.
   actions?: TriggerVerbAction;
+  // Replaces the store's run history and what opening a run does (the
+  // marketing hero shows fixture runs and opens none of them).
+  history?: { runs: TriggerRun[]; open: (run: TriggerRun) => void };
 }) {
   const { task, unread } = row;
   const router = useRouter();
@@ -214,7 +217,8 @@ export const TriggerRowItem = memo(function TriggerRowItem({
   // Inline run history (the hover rail's History verb). Query only while
   // open, so a resting roster costs nothing.
   const [runsOpen, setRunsOpen] = useState(false);
-  const runs = useTriggerRuns(runsOpen && !isPseudo ? task._id : null);
+  const storeRuns = useTriggerRuns(runsOpen && !isPseudo && !history ? task._id : null);
+  const runs = history ? history.runs : storeRuns;
   const [confirmDelete, setConfirmDelete] = useState(false);
   const ctxMenu = useContextMenu<void>();
 
@@ -456,7 +460,7 @@ export const TriggerRowItem = memo(function TriggerRowItem({
           ) : runs.length === 0 ? (
             <div className="text-[10px] text-sol-text-dim py-1 pl-1.5">No runs recorded yet</div>
           ) : (
-            <TriggerRunList runs={runs} now={now} currentConversationId={activeSessionId} onOpened={onNavigated} ensureInboxRoute={page} />
+            <TriggerRunList runs={runs} now={now} currentConversationId={activeSessionId} onOpened={onNavigated} ensureInboxRoute={page} onOpenRun={history?.open} />
           )}
         </div>
       )}

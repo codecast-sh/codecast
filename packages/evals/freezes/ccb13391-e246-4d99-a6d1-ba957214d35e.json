@@ -1,0 +1,26 @@
+{
+  "name": "suggest correction",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:correction"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "suggest:correction",
+    "title": "suggest correction"
+  },
+  "asOf": "2026-03-03T14:01:20.000Z",
+  "trigger": {
+    "type": "suggest"
+  },
+  "meta": {
+    "surface": "suggest",
+    "visibility": "public",
+    "snapshot": "fixtures/suggest/correction.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "ccb13391-e246-4d99-a6d1-ba957214d35e",
+  "createdAt": "2026-10-01T17:42:09.743Z"
+}

@@ -1,0 +1,26 @@
+{
+  "name": "settle halted-mid-tool-call",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:halted-mid-tool-call"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "settle:halted-mid-tool-call",
+    "title": "settle halted-mid-tool-call"
+  },
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "trigger": {
+    "type": "settle"
+  },
+  "meta": {
+    "surface": "settle",
+    "visibility": "public",
+    "snapshot": "fixtures/settle/halted-mid-tool-call.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "b0b8143d-92ab-4511-9703-28d2b470c801",
+  "createdAt": "2026-10-01T17:46:19.548Z"
+}

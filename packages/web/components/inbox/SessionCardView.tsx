@@ -1,21 +1,18 @@
-import React, { useState, useCallback, useRef, useMemo } from "react";
-import { Pin, Star, Clock, EyeOff, UserCheck, Tag, CheckSquare, Square } from "lucide-react";
+import React, { useState, useMemo } from "react";
+import { Pin, Star, Clock, EyeOff } from "lucide-react";
 import Link from "next/link";
 import { withSafetyBlock, isStashHidden, type UserRest } from "@codecast/shared/contracts";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { formatIdleDuration, sessionCardTitle } from "../../lib/sessionCard";
 import { AvatarImg } from "../../lib/avatarCache";
-import { formatRelative, formatDateFull } from "../../lib/utils";
-import { selectionIdsFor, useInboxSelection } from "../../lib/inboxSelection";
 import { ImageLightbox } from "../ImageGallery";
 import { FormattedSummary } from "../FormattedSummary";
 import { sessionCardSummary } from "../../lib/sessionSummary";
 import { isHandoffFrom } from "../../lib/sessionHandoff";
 import { threadStateView, THREAD_STATE_PIN_CLASS, THREAD_STATE_STATUS_META } from "../../lib/threadState";
-import { sessionStartupState } from "../../lib/sessionLifecycle";
 import { getProjectName, isFork, isAgentActive, showsBlockedBadge, type InboxSession, type SessionRoleSnapshot } from "../../store/inboxStore";
 import { nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
-import { cleanTitle, msgCountColor, formatModel } from "../../lib/conversationProcessor";
+import { msgCountColor, formatModel } from "../../lib/conversationProcessor";
 import { getLabelColor } from "../../lib/labelColors";
 import { ViewerFaces } from "../presence/ViewerFaces";
 import { DeviceIcon, deviceDisplayName, type Device } from "../DeviceBadge";
@@ -31,6 +28,20 @@ import { BranchCodeLink } from "../repo/RepositoryLinks";
 import { PrStatusChip } from "../PrStatusChip";
 import { BrowserPaneOfferGlyph } from "../browser/BrowserPaneOfferChip";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
+import { useSessionCardDrag } from "../../hooks/useSessionCardDrag";
+import {
+  AssignedPingStrip,
+  CardHoverToolbar,
+  CardParentLinks,
+  CardPinBadge,
+  CardRestoreCluster,
+  CardStartupLine,
+  CardStatusSignals,
+  CommentThreadsChip,
+  ForkCorner,
+  SelectTick,
+  UnreadDot,
+} from "./SessionCardParts";
 
 // The inbox session card as a pure view: everything it draws arrives as props,
 // and every gesture that reaches past the card leaves through a handler. The
@@ -66,6 +77,10 @@ export type SessionCardViewProps = {
   isParentActive?: boolean;
   /** Ticked in the inbox multi-selection (lib/inboxSelection). */
   isSelected?: boolean;
+  /** A multi-selection is live, so every card shows its tick box. */
+  selecting?: boolean;
+  /** The tick box: adds the card to the selection or takes it out. */
+  onToggleSelect?: (id: string) => void;
   /** Lit for this viewer: the session moved since they last acknowledged it,
    *  or they marked it unread by hand (store/inboxStore.sessionUnreadMap). */
   isUnread?: boolean;
@@ -133,6 +148,8 @@ export function SessionCardView({
   isActive,
   isParentActive,
   isSelected = false,
+  selecting = false,
+  onToggleSelect,
   isUnread,
   isFavorite,
   sessionLabel,
@@ -262,78 +279,13 @@ export function SessionCardView({
     !isForeignSession && !(onRestore || onKill) && (onDismiss || onStash || onDefer || onPin)
       ? "group-hover:-translate-x-[14px]"
       : "";
-  const [isDragOver, setIsDragOver] = useState(false);
-  // Handoff note starts clamped; tapping the pill body reveals the full reason.
-  const [pingExpanded, setPingExpanded] = useState(false);
-  const dragCounter = useRef(0);
-
-  // Session-card drags must pass THROUGH cards untouched — stopping them here
-  // would shadow the label-section drop targets behind the card under the
-  // pointer. These handlers exist for image-file drops only.
-  const isSessionDrag = (e: React.DragEvent) => e.dataTransfer.types.includes("codecast/session-id");
-
-  const handleFileDragEnter = useCallback((e: React.DragEvent) => {
-    if (isSessionDrag(e)) return;
-    e.preventDefault();
-    e.stopPropagation();
-    dragCounter.current++;
-    if (e.dataTransfer.types.includes("Files")) setIsDragOver(true);
-  }, []);
-
-  const handleFileDragOver = useCallback((e: React.DragEvent) => {
-    if (isSessionDrag(e)) return;
-    e.preventDefault();
-    e.stopPropagation();
-  }, []);
-
-  const handleFileDragLeave = useCallback((e: React.DragEvent) => {
-    if (isSessionDrag(e)) return;
-    e.preventDefault();
-    e.stopPropagation();
-    dragCounter.current--;
-    if (dragCounter.current === 0) setIsDragOver(false);
-  }, []);
-
-  const handleFileDrop = useCallback((e: React.DragEvent) => {
-    if (isSessionDrag(e)) return;
-    e.preventDefault();
-    e.stopPropagation();
-    dragCounter.current = 0;
-    setIsDragOver(false);
-    onDropFiles?.(Array.from(e.dataTransfer.files), displayTitle);
-  }, [onDropFiles, displayTitle]);
-
-  // Card → label drag. Distinct dataTransfer type so the existing image-file
-  // drop on cards and this session drag can't interfere. The native drag image
-  // would be the full-width card and bury the drop targets — swap it for a
-  // compact pill so the chip/section under the pointer stays visible, and dim
-  // the source card while the drag is live.
-  const [isDraggingCard, setIsDraggingCard] = useState(false);
-  const handleCardDragStart = useCallback((e: React.DragEvent) => {
-    e.dataTransfer.setData("codecast/session-id", session._id);
-    e.dataTransfer.effectAllowed = "move";
-    // The same drag is also a pane: dropped on the stage it splits in as this
-    // conversation (lib/stage). The label drop keeps reading its own type.
-    onPaneDragStart?.(e, displayTitle);
-    const ghost = document.createElement("div");
-    ghost.className = "flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-sol-bg text-sol-text border border-sol-cyan/60 shadow-xl";
-    ghost.style.cssText = "position:fixed;top:-1000px;left:-1000px;max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;z-index:9999";
-    const dot = document.createElement("span");
-    dot.className = `w-1.5 h-1.5 rounded-full flex-shrink-0 ${getLabelColor(project).dot}`;
-    const text = document.createElement("span");
-    // A ticked card carries the whole selection to every drop sink.
-    const carried = selectionIdsFor(session._id).length;
-    text.textContent = carried > 1 ? `${carried} sessions` : displayTitle;
-    text.style.cssText = "overflow:hidden;text-overflow:ellipsis";
-    ghost.append(dot, text);
-    document.body.appendChild(ghost);
-    e.dataTransfer.setDragImage(ghost, 18, 14);
-    // The browser snapshots the drag image synchronously on dragstart; the
-    // element only needs to survive this frame.
-    requestAnimationFrame(() => ghost.remove());
-    setIsDraggingCard(true);
-  }, [session._id, displayTitle, project, onPaneDragStart]);
-  const handleCardDragEnd = useCallback(() => setIsDraggingCard(false), []);
+  const { isDragOver, isDraggingCard, props: dragProps } = useSessionCardDrag({
+    sessionId: session._id,
+    title: displayTitle,
+    project,
+    onPaneDragStart,
+    onDropFiles,
+  });
 
   const worktreeChip = (session.worktree_name || session.cloud_placement === "pending" || session.cloud_workspace === "shared" || session.migration_batch_id) ? (
     <SessionWorktreeChip
@@ -354,13 +306,7 @@ export function SessionCardView({
         data-session-id={session._id}
         data-active={isActive ? "true" : undefined}
         data-selected={isSelected ? "true" : undefined}
-        draggable
-        onDragStart={handleCardDragStart}
-        onDragEnd={handleCardDragEnd}
-        onDragEnter={handleFileDragEnter}
-        onDragOver={handleFileDragOver}
-        onDragLeave={handleFileDragLeave}
-        onDrop={handleFileDrop}
+        {...dragProps}
         onContextMenu={onCardContextMenu ? (e) => onCardContextMenu(e, session, isForeignSession) : undefined}
         className={`relative group transition-opacity duration-150 overflow-hidden ${isDraggingCard ? "opacity-35 scale-[0.99]" : ""} ${isDragOver ? "ring-1 ring-inset ring-violet-400/40 bg-violet-500/10" : ""} ${
           isActive
@@ -377,7 +323,7 @@ export function SessionCardView({
         }`}
       >
         {forkColorKey && <ForkCorner colorKey={forkColorKey} />}
-      <SelectTick sessionId={session._id} isSelected={isSelected} />
+      <SelectTick sessionId={session._id} isSelected={isSelected} selecting={selecting} onToggle={onToggleSelect} />
         <div
           role="button"
           tabIndex={0}
@@ -517,13 +463,7 @@ export function SessionCardView({
       data-active={isActive ? "true" : undefined}
       data-selected={isSelected ? "true" : undefined}
       data-sv-viewed={viewers.length > 0 ? viewers.length : undefined}
-      draggable
-      onDragStart={handleCardDragStart}
-      onDragEnd={handleCardDragEnd}
-      onDragEnter={handleFileDragEnter}
-      onDragOver={handleFileDragOver}
-      onDragLeave={handleFileDragLeave}
-      onDrop={handleFileDrop}
+      {...dragProps}
       onContextMenu={onCardContextMenu ? (e) => onCardContextMenu(e, session, isForeignSession) : undefined}
       className={`relative group transition-opacity duration-150 overflow-hidden ${isDraggingCard ? "opacity-35 scale-[0.99]" : ""} ${isDragOver ? "ring-1 ring-inset ring-sol-cyan bg-sol-cyan/10" : ""} ${
         // Violet, not cyan: cyan ring+tint is the ACTIVE row's treatment, and an
@@ -553,7 +493,7 @@ export function SessionCardView({
       }`}
     >
       {forkColorKey && <ForkCorner colorKey={forkColorKey} />}
-      <SelectTick sessionId={session._id} isSelected={isSelected} />
+      <SelectTick sessionId={session._id} isSelected={isSelected} selecting={selecting} onToggle={onToggleSelect} />
       <div
         role="button"
         tabIndex={0}
@@ -641,41 +581,7 @@ export function SessionCardView({
             </Link>
           )}
         </div>
-        {session.assigned_ping && (
-          /* mr-5 keeps the strip — and its "Got it" button — clear of the
-             hover toolbar's column on the right, whose gradient would
-             otherwise wash over the button. */
-          <div data-sv-ping className="flex items-start gap-1.5 mt-1 mr-5 px-1.5 py-1 rounded-md bg-sol-violet/15 border border-sol-violet/30">
-            <UserCheck className="w-3 h-3 text-sol-violet flex-shrink-0 mt-0.5" />
-            {/* The note is the REASON for the handoff — clamped for the list,
-                tap the body to read all of it without opening the session. */}
-            <div
-              className={`min-w-0 flex-1 text-[11px] leading-snug ${session.assigned_ping.note ? "cursor-pointer" : ""}`}
-              onClick={session.assigned_ping.note ? (e) => { e.stopPropagation(); setPingExpanded((v) => !v); } : undefined}
-            >
-              <span className="font-semibold text-sol-violet">
-                {session.assigned_ping.by_name} assigned this to you
-              </span>
-              <span className="text-sol-text-dim whitespace-nowrap" title={formatDateFull(session.assigned_ping.at)}>
-                {" · "}{formatRelative(session.assigned_ping.at, now)}
-              </span>
-              {session.assigned_ping.note && (
-                <div className={`text-sol-text-muted whitespace-pre-wrap break-words ${pingExpanded ? "" : "line-clamp-2"}`}>
-                  “{session.assigned_ping.note}”
-                </div>
-              )}
-            </div>
-            {/* Accept right here — the handoff shouldn't require opening the
-                conversation and finding the banner to retire. */}
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); onAckAssignment?.(session._id); }}
-              className="flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium bg-sol-violet/20 text-sol-violet border border-sol-violet/40 hover:bg-sol-violet/30 transition-colors"
-            >
-              Got it
-            </button>
-          </div>
-        )}
+        <AssignedPingStrip session={session} now={now} onAckAssignment={onAckAssignment} />
         {stateView && !session.implementation_session && (
           <div data-sv-state className="mt-0.5 flex items-start gap-1" title={stateView.text}>
             <Pin
@@ -734,39 +640,7 @@ export function SessionCardView({
             )}
           </div>
         )}
-        {session.message_count === 0 && !session.last_user_message && !session._hasDraft && <div data-sv-startup className="contents">{(() => {
-          // Mirror the composer's "Starting… → Ready" lifecycle (see sessionLifecycle).
-          // A blank session often has no daemon heartbeat until its first message, so
-          // we trust elapsed time as the fallback rather than spin forever.
-          const startup = sessionStartupState({
-            isConnected: session.is_connected,
-            ageMs: Date.now() - (session.started_at || session.updated_at),
-          });
-          if (startup === "ready") {
-            return (
-              <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-sol-green/70">
-                <span className="w-1.5 h-1.5 rounded-full bg-sol-green/70" />
-                <span>Ready</span>
-              </div>
-            );
-          }
-          if (startup === "starting") {
-            return (
-              <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-sol-cyan/60">
-                <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-                <span>Starting...</span>
-              </div>
-            );
-          }
-          return (
-            <div className="text-[11px] text-sol-text-dim/60 mt-0.5">
-              Waiting for connection
-            </div>
-          );
-        })()}</div>}
+        {session.message_count === 0 && !session.last_user_message && !session._hasDraft && <div data-sv-startup className="contents"><CardStartupLine session={session} /></div>}
         <div data-sv-meta className="flex items-center gap-1.5 mt-1">
           {author && (
             <span className="flex items-center gap-1 flex-shrink-0 max-w-[130px]" title={`${author.name}'s session`}>
@@ -785,9 +659,9 @@ export function SessionCardView({
           )}
           {viewers.length > 0 && <ViewerFaces members={viewers} size={14} max={3} />}
           {(project !== "unknown" || sessionLabel) && (
-            // With a user label: label name in the label's color, but the dot
-            // STAYS project-colored — provenance survives the relabel. Hover
-            // reveals project + directory.
+            // A label reads as a path under its project: the dot and a faded
+            // prefix in the project's color, then the label in its own color.
+            // Hover reveals project + directory.
             <span
               className={`flex items-center gap-1 min-w-0 text-[10px] font-medium ${getLabelColor(sessionLabel ?? project).text}`}
               title={`${project} · ${session.git_root || session.project_path || "no directory"}`}
@@ -795,7 +669,14 @@ export function SessionCardView({
               {project !== "unknown" && (
                 <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${getLabelColor(project).dot}`} />
               )}
-              <span className="truncate">{sessionLabel ?? project}</span>
+              {sessionLabel && project !== "unknown" && sessionLabel.toLowerCase() !== project.toLowerCase() ? (
+                <span className="flex min-w-0">
+                  <span className={`truncate font-normal opacity-60 ${getLabelColor(project).text}`}>{project}/</span>
+                  <span className="flex-shrink-0 max-w-[10rem] truncate">{sessionLabel}</span>
+                </span>
+              ) : (
+                <span className="truncate">{sessionLabel ?? project}</span>
+              )}
             </span>
           )}
           {worktreeChip}
@@ -843,120 +724,29 @@ export function SessionCardView({
             )}
             {/* A running workflow renders as its own ↳ WorkflowBar under the
                 card (same family as schedule/monitor bars) — no chip here. */}
-            {(session.open_comment_threads ?? 0) > 0 && (() => {
-              // Loud only when the ball is in the viewer's court: someone ELSE
-              // (teammate or agent) spoke last in an open thread. When the
-              // viewer commented last they're waiting, not being waited on —
-              // the chip stays but drops to the dim treatment.
-              const waitingOnViewer = !!session.last_comment_author_id
-                && session.last_comment_author_id !== viewerId;
-              const who = session.last_comment_author;
-              return (
-                <button
-                  type="button"
-                  className={`inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-semibold border transition-colors max-w-[9rem] ${
-                    waitingOnViewer
-                      ? "bg-sol-cyan/10 text-sol-cyan border-sol-cyan/30 hover:bg-sol-cyan/20"
-                      : "bg-sol-bg-alt/60 text-sol-text-dim border-sol-border/40 hover:bg-sol-bg-alt"
-                  }`}
-                  title={`${session.open_comment_threads} open comment thread${session.open_comment_threads === 1 ? "" : "s"}${
-                    who && session.last_comment_excerpt ? ` — ${who}: ${session.last_comment_excerpt}` : ""
-                  } — open with the comment rail`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onOpenComments?.(session._id);
-                  }}
-                >
-                  <svg className="w-2.5 h-2.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M7.9 20A9 9 0 104 16.1L2 22z" />
-                  </svg>
-                  {session.open_comment_threads}
-                  {waitingOnViewer && who && (
-                    <span className="truncate min-w-0">· {who.split(" ")[0]}</span>
-                  )}
-                </button>
-              );
-            })()}
-            {showBlockedBadge && <AuthErrorBadge kind={session.pending_api_error_kind} agentType={session.agent_type} />}
-            {session.session_error && session.pending_api_error_kind !== "safety" && (
-              <span className="w-1.5 h-1.5 rounded-full bg-sol-red" title={session.session_error} />
-            )}
-            {session.is_unresponsive && !session.session_error && (
-              <span className="w-1.5 h-1.5 rounded-full bg-sol-orange" title="Session unresponsive" />
-            )}
-            {session.has_pending && !session.is_unresponsive && !isPendingWorking && !isRowRestarting && (
-              <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse" title="Message pending" />
-            )}
-            {/* Settled with content gets the gray idle dot. Keyed on !isLive (now
-                staleness-aware) rather than the raw is_idle flag, so a frozen
-                is_idle:false row that's really finished shows idle, not nothing. */}
-            {!isWorking && !isLive && variant !== "dismissed" && !showBlockedBadge && !session.session_error && !session.is_unresponsive && !session.has_pending && !isPendingWorking && !isRowRestarting && session.message_count > 0 && (
-              <span className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/40 ring-1 ring-sol-text-dim/20" title="Session idle" />
-            )}
-            {/* A kill+restart owns the row's signal while it runs: the re-pended
-                message and the not-yet-live status are both part of the restart,
-                so the pending chip and dots yield to this one. isLive flipping
-                true retires it in favor of the green working dot. */}
-            {isRowRestarting && (
-              <span className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-semibold bg-sol-orange/10 text-sol-orange border border-sol-orange/30" title="Kill & restart in flight">
-                <span className="w-1 h-1 rounded-full bg-sol-orange animate-pulse" />
-                restarting
-              </span>
-            )}
-            {isPendingWorking && !isRowRestarting && (
-              <span className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-semibold bg-sol-yellow/10 text-sol-yellow border border-sol-yellow/30" title="Sent — waiting to confirm delivery">
-                <span className="w-1 h-1 rounded-full bg-sol-yellow animate-pulse" />
-                pending
-              </span>
-            )}
-            {(isWorking || isLive) && !isPendingWorking && !isRowRestarting && !showBlockedBadge && (
-              <span className="relative flex h-2 w-2" title="Working">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sol-green opacity-75" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-sol-green" />
-              </span>
-            )}
+            <CommentThreadsChip session={session} viewerId={viewerId} onOpenComments={onOpenComments} />
+            <CardStatusSignals
+              session={session}
+              showBlockedBadge={showBlockedBadge}
+              isWorking={isWorking}
+              isLive={isLive}
+              dismissed={variant === "dismissed"}
+              isPendingWorking={isPendingWorking}
+              isRowRestarting={isRowRestarting}
+            />
             <span className="text-[10px] text-sol-text-dim tabular-nums">
               {formatIdleDuration(session.updated_at)}
             </span>
           </div>
         </div>
-        {spawnedById && (
-          // Click-through to the session that spawned this one (its agent-team
-          // lead) — same affordance shape as the implementation-session row.
-          <div
-            data-sv-spawned
-            className="mt-1 flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-cyan cursor-pointer transition-colors"
-            onClick={(e) => {
-              e.stopPropagation();
-              onOpenParent?.(spawnedById);
-            }}
-            title={spawnedIsHandoff ? "View the session this one continues" : "View the session that spawned this one"}
-          >
-            <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
-            </svg>
-            <span className="flex-shrink-0">{spawnedIsHandoff ? "handed off from" : "spawned by"}</span>
-            <span className="truncate underline underline-offset-2">
-              {cleanTitle(spawnedByTitle || "parent session")}
-            </span>
-          </div>
-        )}
-        {session.implementation_session && (
-          <div
-            className="mt-1 flex items-center gap-1 text-[11px] text-sol-cyan hover:text-sol-cyan/80 cursor-pointer"
-            onClick={(e) => {
-              e.stopPropagation();
-              if (onNavigateToSession) onNavigateToSession(session.implementation_session!._id);
-            }}
-          >
-            <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-            </svg>
-            <span className="truncate underline underline-offset-2">
-              {sessionCardTitle(session.implementation_session)}
-            </span>
-          </div>
-        )}
+        <CardParentLinks
+          session={session}
+          spawnedById={spawnedById}
+          spawnedIsHandoff={spawnedIsHandoff}
+          spawnedByTitle={spawnedByTitle}
+          onOpenParent={onOpenParent}
+          onNavigateToSession={onNavigateToSession}
+        />
       </div>
       {hasThumb && (
         <button
@@ -979,118 +769,12 @@ export function SessionCardView({
         <ImageLightbox src={thumbSrc} onClose={() => setThumbZoom(false)} />
       )}
       </div>
-      {/* The ONE pin a pinned session shows: a persistent, interactive badge anchored
-          top-right. It stays put on hover (z above the toolbar) and the hover toolbar
-          omits its own pin button for pinned rows — so the pin never duplicates or
-          cross-fades into a second copy. */}
-      {onPin && session.is_pinned && (
-        <div data-sv-fade data-sv-pin className="absolute top-0 right-0 py-1 pr-2 pointer-events-none z-[2]" style={{ paddingLeft: 24, background: `linear-gradient(to right, transparent, ${fadeGround ?? "var(--sol-bg-alt)"} 60%)` }}>
-          <ShortcutTooltip label="Unpin" action="session.pin" side="left">
-            <button
-              onClick={(e) => { e.stopPropagation(); onPin(session._id, e); }}
-              className="p-1 rounded text-sol-magenta transition-opacity hover:opacity-70 pointer-events-auto"
-            >
-              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 17v5" />
-                <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76z" />
-              </svg>
-            </button>
-          </ShortcutTooltip>
-        </div>
-      )}
+      <CardPinBadge session={session} fadeGround={fadeGround} onPin={onPin} />
       {!isForeignSession && (onDismiss || onStash || onDefer || onPin) && (
-        <div data-sv-fade className={`absolute top-0 bottom-0 right-0 flex flex-col items-center justify-between py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-10 pr-2 pointer-events-none ${fadeGround ? '' : 'bg-gradient-to-r from-transparent via-[color-mix(in_srgb,var(--sol-bg-alt)_50%,transparent)] to-[color-mix(in_srgb,var(--sol-bg-alt)_85%,transparent)]'}`} style={fadeGround ? { background: `linear-gradient(to right, transparent, color-mix(in srgb, ${fadeGround} 50%, transparent), color-mix(in srgb, ${fadeGround} 85%, transparent))` } : undefined}>
-          {/* Pin slot, first so it anchors the top of the toolbar. When the row is
-              already pinned, the persistent badge above IS the pin — here we render
-              only an invisible spacer the same size, so the remaining actions sit
-              exactly where they do for an unpinned row and the badge has a clear slot
-              to occupy. When unpinned, this is the live "Pin" affordance. */}
-          {onPin && (
-            session.is_pinned ? (
-              <div className="p-1 pointer-events-none" aria-hidden="true">
-                <div className="w-3.5 h-3.5" />
-              </div>
-            ) : (
-              <ShortcutTooltip label="Pin" action="session.pin" side="left">
-                <button
-                  onClick={(e) => { e.stopPropagation(); onPin(session._id, e); }}
-                  className="p-1 rounded transition-colors text-sol-text-dim hover:text-sol-magenta pointer-events-auto"
-                >
-                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M12 17v5" />
-                    <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76z" />
-                  </svg>
-                </button>
-              </ShortcutTooltip>
-            )
-          )}
-          {/* Kill — the PRIMARY remove: done with it, clears to the Killed
-              group and tears the (usually idle) agent down. Undoable. */}
-          {onDismiss && (
-            <ShortcutTooltip label="Kill — done, tears the agent down" action="session.kill" side="left">
-              <button
-                onClick={(e) => { e.stopPropagation(); onDismiss(session._id); }}
-                className="p-1 rounded text-sol-text-dim hover:text-sol-red hover:bg-sol-red/10 transition-colors pointer-events-auto"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </ShortcutTooltip>
-          )}
-          <ShortcutTooltip label="Label session" action="session.moveToBucket" side="left">
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onOpenLabels?.(session);
-              }}
-              className="p-1 rounded text-sol-text-dim hover:text-sol-blue transition-colors pointer-events-auto"
-            >
-              <Tag className="w-3.5 h-3.5" />
-            </button>
-          </ShortcutTooltip>
-          {/* Stash — the SECONDARY remove: set aside, agent keeps running. */}
-          {onStash && (
-            <ShortcutTooltip label="Stash — set aside, keeps running" action="session.stash" side="left">
-              <button
-                onClick={(e) => { e.stopPropagation(); onStash(session._id, e); }}
-                className="p-1 rounded text-sol-text-dim hover:text-sol-yellow transition-colors pointer-events-auto"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7l10 10M17 17h-6m6 0v-6" />
-                </svg>
-              </button>
-            </ShortcutTooltip>
-          )}
-        </div>
+        <CardHoverToolbar session={session} fadeGround={fadeGround} onPin={onPin} onDismiss={onDismiss} onOpenLabels={onOpenLabels} onStash={onStash} />
       )}
       {!isForeignSession && (onRestore || onKill) && (
-        <div className="absolute top-1.5 right-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity z-[4]">
-          {onKill && (
-            <ShortcutTooltip label={isStashed ? "Kill" : "Remove from list"} action={isStashed ? "session.kill" : undefined} side="left">
-              <button
-                onClick={(e) => { e.stopPropagation(); onKill(session._id); }}
-                className="p-1 rounded-md text-sol-text-dim hover:text-sol-red bg-sol-bg/95 backdrop-blur-sm shadow-sm border border-sol-border/30"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </ShortcutTooltip>
-          )}
-          {onRestore && (
-            <ShortcutTooltip label={variant === "snoozed" ? "Move to Needs Input now" : "Restore"} side="left">
-              <button
-                onClick={(e) => { e.stopPropagation(); onRestore(session._id); }}
-                className="p-1 rounded-md text-sol-text-dim hover:text-sol-cyan bg-sol-bg/95 backdrop-blur-sm shadow-sm border border-sol-border/30"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17L7 7M7 7h6M7 7v6" />
-                </svg>
-              </button>
-            </ShortcutTooltip>
-          )}
-        </div>
+        <CardRestoreCluster session={session} variant={variant} isStashed={isStashed} onKill={onKill} onRestore={onRestore} />
       )}
     </div>
   );
@@ -1102,63 +786,3 @@ const USER_REST_CARD_LINE: Record<UserRest, string> = {
   done: "Filed as done — until the next wake",
   needs_input: "Filed as needs input — until the next wake",
 };
-
-const FORK_HUES = [30, 60, 120, 180, 200, 220, 260, 45, 90, 160, 240, 280];
-
-function getForkColor(id: string): string {
-  let h = 0;
-  for (let i = 0; i < id.length; i++) h = ((h << 5) - h + id.charCodeAt(i)) | 0;
-  const hue = FORK_HUES[((h % FORK_HUES.length) + FORK_HUES.length) % FORK_HUES.length];
-  return `hsl(${hue}, 65%, 55%)`;
-}
-
-function ForkCorner({ colorKey }: { colorKey: string }) {
-  const color = getForkColor(colorKey);
-  return (
-    <div
-      className="absolute top-0 left-0 w-0 h-0"
-      style={{
-        borderTop: `10px solid ${color}`,
-        borderRight: "10px solid transparent",
-      }}
-    />
-  );
-}
-
-// Unread, said once. Weight carries it (the title goes bright and medium) and
-// this dot marks the leading edge, the same two signals the chat rail uses —
-// never a count, which turns a busy afternoon into a number that never reaches
-// zero.
-function UnreadDot() {
-  return (
-    <span
-      className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-sol-cyan"
-      title="Unread — this session moved since you last looked at it"
-      aria-label="Unread"
-    />
-  );
-}
-
-/** The card's tick while a selection is live: every card shows its box, so
- *  the mode is visible, and the box itself toggles the card. A ticked card
- *  also gets its frame here, as an overlay, so the pin's fade cannot cover it. */
-function SelectTick({ sessionId, isSelected }: { sessionId: string; isSelected: boolean }) {
-  const selecting = useInboxSelection((sel) => sel.ids.length > 0);
-  if (!selecting) return null;
-  const Icon = isSelected ? CheckSquare : Square;
-  return (
-    <>
-    {isSelected && <span data-sv-selframe aria-hidden className="pointer-events-none absolute inset-0 z-[3] rounded-[inherit] ring-2 ring-inset ring-[color:color-mix(in_srgb,var(--sel-accent)_55%,transparent)]" />}
-    <button
-      type="button"
-      data-sv-check
-      aria-label={isSelected ? "Remove from selection" : "Add to selection"}
-      aria-pressed={isSelected}
-      onClick={(e) => { e.stopPropagation(); useInboxSelection.getState().toggle(sessionId); }}
-      className={`absolute right-1 top-1 z-10 rounded bg-sol-bg-alt/80 p-0.5 ${isSelected ? "text-[color:var(--sel-accent)]" : "text-sol-text-dim/60 hover:text-[color:var(--sel-accent)]"}`}
-    >
-      <Icon className="h-4 w-4" />
-    </button>
-    </>
-  );
-}
