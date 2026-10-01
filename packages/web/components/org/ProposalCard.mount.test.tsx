@@ -50,7 +50,7 @@ const { ORG_FIXTURE } = await import("./orgFixture");
 const { EntityObjectCard } = await import("../EntityObjectCard");
 const { ReviewComposerContext } = await import("../reviewContext");
 
-const AUTHOR = { kind: "role" as const, id: "role-cos", name: "Chief of Staff", handle: "chief-of-staff", short_id: "or-9", avatar: "fox" };
+const AUTHOR = { kind: "role" as const, id: "role-cos", name: "Head of People", handle: "head-of-people", short_id: "or-9", avatar: "fox" };
 const proposal = (id: string, short_id: string, title: string, status: "open" | "resolved" = "open") =>
   ({ _id: id, short_id, team_id: "fixture-team", author: AUTHOR, title, summary_md: `Why ${title.toLowerCase()}.`, mode: "review", status, created_at: Date.now() - 600_000 });
 const change = (id: string, proposal_id: string, seq: number, c: any, status: any = "proposed", extra: Record<string, unknown> = {}) =>
@@ -110,7 +110,7 @@ test("a proposed proposal draws its tree with faces and its three verdicts", () 
   expect(c.querySelector(".entity-card")).not.toBeNull();
   expect(c.textContent).toContain("Bring platform under one lead");
   expect(c.querySelector("[data-proposal-meta]")!.getAttribute("data-proposal-meta")).toBe("2 of 2 to decide");
-  expect(c.querySelector("[data-proposal-author='role']")!.textContent).toContain("Chief of Staff");
+  expect(c.querySelector("[data-proposal-author='role']")!.textContent).toContain("Head of People");
 
   // The tree: the new role under the founder, then the move onto it, with
   // where growth came from.

@@ -8,7 +8,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { ChevronDown, FolderKanban, Pencil, Plus, X } from "lucide-react";
-import { INITIATIVE_HEALTH_LABEL, INITIATIVE_UPDATE_HEALTHS, type InitiativeRow, type InitiativeUpdateHealth, type InitiativeUpdateRow } from "@codecast/shared/contracts/initiative";
+import { INITIATIVE_HEALTH_LABEL, INITIATIVE_METRICS_MAX, INITIATIVE_UPDATE_HEALTHS, initiativeChain, metricKeyOf, metricReadings, type InitiativeRow, type InitiativeUpdateHealth, type InitiativeUpdateRow } from "@codecast/shared/contracts/initiative";
 import { useInboxStore, type ProjectItem } from "../../store/inboxStore";
 import { useInitiativeProjects } from "../../hooks/useInitiativeProjects";
 import { useInitiativeUpdates } from "../../hooks/useInitiatives";
@@ -21,7 +21,8 @@ import { ProjectCard } from "../identity/RoleScopeView";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { HEALTH_COLOR, INITIATIVE_ACCENT } from "../../lib/initiativeColors";
-import { HealthChip, OwnerChip, StatusGlyph } from "./InitiativeAtoms";
+import { HealthChip, MetricReadingLine, OwnerChip, StatusGlyph } from "./InitiativeAtoms";
+import { EntityIdPill } from "../EntityIdPill";
 import { ProjectInitiatives } from "./ProjectInitiatives";
 
 const HAIRLINE = "color-mix(in srgb, var(--sol-border) 26%, transparent)";
@@ -47,6 +48,7 @@ export function InitiativePanel({ initiative, all, now, onClose, closeLabel }: {
       )}
       <div className="flex-1 min-h-0 overflow-y-auto px-4 py-4 space-y-7" data-initiative-scroll>
         <Description initiative={initiative} />
+        <Metrics initiative={initiative} all={all} now={now} />
         <Projects initiative={initiative} now={now} />
         <Updates initiative={initiative} now={now} />
         <SubInitiatives rows={subInitiatives(all, initiative._id)} now={now} />
@@ -112,6 +114,66 @@ function Description({ initiative }: { initiative: InitiativeRow }) {
         <MarkdownRenderer content={initiative.description} className="text-[13px] leading-relaxed" />
       ) : (
         <p className="text-[12.5px] italic" style={{ color: "var(--sol-text-dim)" }}>Nobody has said what this is for yet.</p>
+      )}
+    </Section>
+  );
+}
+
+// ---------------------------------------------------------------- metrics
+
+/** How the goal is measured (I4): one or two numbers read against their
+ *  targets, with the source and date of the last report, and the top level
+ *  goal this one feeds. On track here means against the target; the owner's
+ *  word stands beside it in the header so the two can disagree visibly. A
+ *  role reports the value with `cast initiative report`. */
+function Metrics({ initiative, all, now }: { initiative: InitiativeRow; all: InitiativeRow[]; now: number }) {
+  const readings = metricReadings(initiative);
+  const chain = useMemo(() => initiativeChain(initiative, (id) => all.find((r) => r._id === id)), [initiative, all]);
+  const [draft, setDraft] = useState<Array<{ name: string; target: string }> | null>(null);
+  const save = () => {
+    if (draft === null) return;
+    const metrics = draft.map((m) => ({ name: m.name.trim(), target: m.target.trim() })).filter((m) => m.name && m.target).map((m) => ({ key: metricKeyOf(m.name), name: m.name, target: m.target }));
+    useInboxStore.getState().updateInitiative(initiative._id, { metrics });
+    setDraft(null);
+  };
+  const empty = !readings.length && !chain.length;
+  return (
+    <Section name="metrics" label="Measured by" action={draft === null ? <GhostButton icon={Pencil} onClick={() => setDraft(readings.length ? readings.map((r) => ({ name: r.name, target: r.target })) : [{ name: "", target: "" }])} data-initiative-edit-metrics="">{readings.length ? "Edit" : "Add a number"}</GhostButton> : undefined}>
+      {draft !== null ? (
+        <div className="space-y-1.5" data-initiative-metrics-form>
+          {draft.map((m, i) => (
+            <div key={i} className="flex items-center gap-1.5">
+              <input autoFocus={i === 0} value={m.name} onChange={(e) => setDraft(draft.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} placeholder="Weekly active teams" className="flex-1 min-w-0 h-7 rounded-md border bg-transparent px-2 text-[12.5px] outline-none placeholder:text-sol-text-dim focus:border-sol-magenta/60" style={{ borderColor: HAIRLINE }} aria-label="Metric name" />
+              <input value={m.target} onChange={(e) => setDraft(draft.map((x, j) => (j === i ? { ...x, target: e.target.value } : x)))} onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") setDraft(null); }} placeholder="target 1,000" className="w-[110px] h-7 rounded-md border bg-transparent px-2 text-[12.5px] tabular-nums outline-none placeholder:text-sol-text-dim focus:border-sol-magenta/60" style={{ borderColor: HAIRLINE }} aria-label="Target" />
+              <button type="button" onClick={() => setDraft(draft.filter((_, j) => j !== i))} className="inline-flex items-center justify-center w-6 h-6 rounded-md hover:bg-sol-bg-highlight/70" style={{ color: "var(--sol-text-dim)" }} aria-label="Remove this metric"><X className="w-3 h-3" /></button>
+            </div>
+          ))}
+          <div className="flex items-center gap-1.5">
+            {draft.length < INITIATIVE_METRICS_MAX && <GhostButton icon={Plus} onClick={() => setDraft([...draft, { name: "", target: "" }])}>Another number</GhostButton>}
+            <span className="flex-1" />
+            <button type="button" onClick={() => setDraft(null)} className="h-7 px-2.5 rounded-md text-[12px] hover:bg-sol-bg-highlight/70" style={{ color: "var(--sol-text-muted)" }}>Cancel</button>
+            <button type="button" onClick={save} className="h-7 px-3 rounded-md text-[12px] font-medium" style={{ background: INITIATIVE_ACCENT, color: "var(--sol-bg)" }}>Save</button>
+          </div>
+          <p className="text-[11px]" style={{ color: "var(--sol-text-dim)" }}>A target reads as a number to reach; write "under 5%" for one to stay below.</p>
+        </div>
+      ) : (
+        <div className="space-y-1.5">
+          {readings.map((r) => (
+            <div key={r.key} className="flex items-center gap-2 min-w-0" data-initiative-metric={r.key}>
+              <MetricReadingLine reading={r} now={now} className="min-w-0 flex-1" />
+              {r.source && /^https?:\/\//.test(r.source) ? <a href={r.source} target="_blank" rel="noreferrer" className="text-[11px] no-underline hover:underline shrink-0" style={{ color: "var(--sol-text-dim)" }}>source</a> : r.source ? <span className="text-[11px] shrink-0" style={{ color: "var(--sol-text-dim)" }}>{r.source}</span> : null}
+            </div>
+          ))}
+          {readings.length > 0 && readings.every((r) => r.value === null) && (
+            <p className="text-[11.5px]" style={{ color: "var(--sol-text-dim)" }}>Nobody has reported a value yet: <code className="text-[11px]">cast initiative report {initiative.short_id} {readings[0].key}=&lt;value&gt; --source &lt;link&gt;</code></p>
+          )}
+          {chain.length > 0 && (
+            <p className="text-[12px] inline-flex items-center gap-1.5 flex-wrap" style={{ color: "var(--sol-text-secondary)" }} data-initiative-chain>
+              Feeds {chain.map((c, i) => <span key={c.short_id} className="inline-flex items-center gap-1">{i > 0 && <span style={{ color: "var(--sol-text-dim)" }}>under</span>}<Link href={`/initiatives/${c.short_id}`} className="no-underline hover:underline" style={{ color: "var(--sol-text)" }}>{c.title}</Link> <EntityIdPill type="initiative" id={c.short_id} /></span>)}
+            </p>
+          )}
+          {empty && <p className="text-[12.5px] italic" style={{ color: "var(--sol-text-dim)" }}>No number to read it against yet, and no goal above it.</p>}
+        </div>
       )}
     </Section>
   );

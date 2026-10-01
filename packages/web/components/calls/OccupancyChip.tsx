@@ -3,7 +3,8 @@ import { useCallback, useState } from "react";
 import type { FaceRow } from "../../lib/faces/faceRow";
 import { useFaceRowSelect } from "../../hooks/useFaceRow";
 import { roomHeldAsBurst } from "../../lib/faces/faceRow";
-import { Headphones } from "lucide-react";
+import { Headphones, Link2 } from "lucide-react";
+import { GuestInvite } from "./GuestDoor";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { joinCall, startHuddle } from "../../lib/calls/actions";
 import { CHANNEL_HUDDLE_WARNING_SIZE, parseRoomKey, sessionRoomKey } from "@codecast/shared/contracts";
@@ -202,15 +203,51 @@ export function HuddleButton({
   );
 }
 
+// A guest link into this room, from the header, before anybody is in it: a
+// guest is usually sent the link ahead of the meeting, and the stage (which
+// has its own invite) only exists once a huddle runs. Shown only to somebody
+// who may make one (GuestInvite asks), in the header's own chip idiom.
+export function GuestInviteChip({ roomKey, compact = false, className = "" }: { roomKey: string; compact?: boolean; className?: string }) {
+  const enabled = useCallsAvailable();
+  if (!enabled) return null;
+  return (
+    <GuestInvite
+      roomKey={roomKey}
+      align="end"
+      trigger={({ open, toggle }) => (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            toggle();
+          }}
+          aria-expanded={open}
+          className={`flex items-center gap-1 rounded-full border transition-colors hover:border-sol-yellow/40 hover:text-sol-yellow ${
+            open ? "border-sol-yellow/40 text-sol-yellow" : "text-sol-text-dim"
+          } ${compact ? "border-sol-border/40 px-1.5 py-1 text-[10px] font-medium" : "border-sol-border px-2 py-0.5 text-xs"} ${className}`}
+          title="Invite someone outside the team: a link they join from in a browser"
+          aria-label="Invite someone outside the team"
+        >
+          <Link2 className="h-3 w-3" />
+          {!compact && <span>Guest</span>}
+        </button>
+      )}
+    />
+  );
+}
+
 // Session headers: the room of one conversation, and the one room where the
 // agent is listening — a session huddle transcribes into its own session live
 // (transcripts.start seeds the route), so the tooltip says so.
 export function SessionHuddleButton({ conversationId }: { conversationId: string }) {
   return (
-    <HuddleButton
-      roomKey={sessionRoomKey(conversationId)}
-      hint="Talk to this session — what you say reaches the agent as you speak"
-      compact
-    />
+    <>
+      <HuddleButton
+        roomKey={sessionRoomKey(conversationId)}
+        hint="Talk to this session — what you say reaches the agent as you speak"
+        compact
+      />
+      <GuestInviteChip roomKey={sessionRoomKey(conversationId)} compact />
+    </>
   );
 }

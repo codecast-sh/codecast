@@ -1,5 +1,5 @@
 import { useRef, useCallback, useState } from "react";
-import { useMutation, useConvex } from "convex/react";
+import { useMutation, useConvex, type ConvexReactClient } from "convex/react";
 import { captureError } from "../lib/analytics";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, InboxSession, classifySession, isSub, isConvexId, visualOrderViewSig } from "../store/inboxStore";
@@ -11,7 +11,7 @@ import { useConvexSync } from "./useConvexSync";
 import { useRecoveryPoll } from "./useRecoveryPoll";
 import { queryWithSignal } from "../lib/queryWithSignal";
 import { useEnsureDispatch } from "./useEnsureDispatch";
-import { useLiveInboxSessions, applyLiveInboxIds, LIST_INBOX_SESSIONS_ARGS } from "./useLiveInboxSessions";
+import { useLiveInboxSessions, applyInboxListPayload, LIST_INBOX_SESSIONS_ARGS } from "./useLiveInboxSessions";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useFeederError } from "./useSyncCollection";
 import { onSyncWake } from "./syncWake";
@@ -119,6 +119,87 @@ export function floorProbeIds(cached: Iterable<string>, returned: Iterable<strin
   return out;
 }
 
+// The personal liveness overlay into the store: FACT fields merge onto the
+// cached rows; the STAMPS and envelope land in the "mine" slot of the
+// ephemeral sessionsProjection buffer, never on rows (sync-convergence C1).
+// The subscription, the recovery probe, the digest comparer's heal and the
+// simulator's host apply through it, so no pass forks the payload shape.
+// Returns the liveness map, or null when the payload held none.
+export function applyMineLivenessPayload(data: any): Record<string, any> | null {
+  const liveness = data?.liveness ?? data;
+  if (!liveness || typeof liveness !== "object") return null;
+  useInboxStore.getState().applyInboxLivenessPayload("mine", data);
+  return liveness;
+}
+
+// The floor's gate inputs, read off one store state for one principal. The
+// hook subscribes to each field; the simulator reads them all at once.
+export type InboxFloorFlags = { wsKey: string; hydrated: boolean; floorStamped: boolean; logStamped: boolean };
+export function inboxFloorFlags(s: ReturnType<typeof useInboxStore.getState>, principalId: string | null | undefined): InboxFloorFlags {
+  const wsKey = inboxCrawlWsKey(principalId);
+  return {
+    wsKey,
+    hydrated: s.clientStateInitialized,
+    floorStamped: !!s.syncMeta[syncMetaKey("sessions", wsKey)]?.backfilledAt,
+    logStamped: principalId != null && s.syncLogScopeStamps[`user:${principalId}`] !== undefined,
+  };
+}
+
+/**
+ * THE COMPLETENESS FLOOR, one step: cut it when the gates allow, else do
+ * nothing. Fire-and-forget like runReconcileCrawl, which it starts.
+ *
+ * Once per cold or resynced cache, never on a timer or a wake. It pages every
+ * session in the horizon into the cache and stamps backfilledAt (the digest
+ * compare's cold-replica gate). Everything after it rides the sync log: every
+ * hide, restore, pin, rename and delete is a log action, so there is no set to
+ * re-crawl and nothing to reconcile. The watermark clears when the log can no
+ * longer prove the gap (retention passed this client's cursor, or a cursor
+ * never existed) in the applier's resync path (clearCrawlMetaForScope), and
+ * the floor is recut.
+ *
+ * Cut after the applier stamped the scope cursors (E8 / D9, the logStamped
+ * gate): a floor queried before the stamp can miss writes that commit between
+ * its query and the heads capture. Keyed by the principal: account A's floor
+ * must not stand in for account B's.
+ */
+export function runInboxFloorStep(convex: Pick<ConvexReactClient, "query">, flags: InboxFloorFlags): void {
+  const { wsKey, hydrated, floorStamped, logStamped } = flags;
+  if (!hydrated || wsKey === "skip" || floorStamped || !logStamped) return;
+  // ONE stable lower bound for the whole floor: it becomes the paginated
+  // index bound, and a wall-clock value recomputed per page would make each
+  // page a different query (InvalidCursor).
+  const floorSince = Date.now() - SESSIONS_FLOOR_WINDOW_MS;
+  const cached = Object.keys(useInboxStore.getState().sessions);
+  runReconcileCrawl({
+    namespace: "sessions",
+    wsKey,
+    // The durable watermark (floorStamped) is the gate; the runner's own
+    // throttle must not hold a recut floor back.
+    throttleMs: 0,
+    pageDelayMs: SESSIONS_FLOOR_PAGE_DELAY_MS,
+    maxPages: 200,
+    fetchPage: async (cursor) => {
+      const page: any = await convex.query(api.conversations.listInboxSessionsPaginated, {
+        since: floorSince,
+        paginationOpts: { numItems: SESSIONS_FLOOR_PAGE_SIZE, cursor },
+      });
+      return { rows: page.page ?? [], isDone: page.isDone, continueCursor: page.continueCursor };
+    },
+    // syncTable("sessions") is isDelta/never-prune (SYNC_REGISTRY): additive overlay.
+    onPage: (rows) => useInboxStore.getState().syncTable("sessions", rows as unknown as InboxSession[]),
+    onComplete: async (all) => {
+      useInboxStore.getState().syncTable("sessions", all as unknown as InboxSession[]);
+      // The warm-cache probe (floorProbeIds): only a cache that had rows
+      // before this floor can hold one the floor did not return. Safe on a
+      // resumed (partial) floor too: byIds answers with the truth for every
+      // id, so the only cost of a wider probe is reads.
+      const stale = floorProbeIds(cached, all.map((r: any) => String(r._id)));
+      if (stale.length) await applyEntityIds(convex, { ...emptyIdsByCollection(), sessions: stale });
+    },
+  });
+}
+
 export function useSyncInboxSessions() {
   // Wire the store's server dispatch (split out so a screen can ensure dispatch
   // without these inbox subscriptions — see useEnsureDispatch).
@@ -204,9 +285,8 @@ export function useSyncInboxSessions() {
   // post-merge store rows (bounded to the payload's ids) so it sees the
   // overlaid values.
   useConvexSync(sessionLiveness, useCallback((data: any) => {
-    const liveness = data?.liveness ?? data;
-    if (!liveness || typeof liveness !== "object") return;
-    useInboxStore.getState().applyInboxLivenessPayload("mine", data);
+    const liveness = applyMineLivenessPayload(data);
+    if (!liveness) return;
     const store = useInboxStore.getState();
     const merged = Object.keys(liveness)
       .map((id) => store.sessions[id])
@@ -255,10 +335,7 @@ export function useSyncInboxSessions() {
     // serving the (possibly stalled) cache of the live listInboxSessions
     // subscription — otherwise the "recovery" just re-reads the staleness.
     const fresh: any = await queryWithSignal(convex, api.conversations.listInboxSessions, { ...LIST_INBOX_SESSIONS_ARGS, _probe: Date.now() }, signal);
-    if (signal.aborted || !fresh) return;
-    const sessions = fresh.sessions ?? fresh;
-    syncTable("sessions", sessions as unknown as InboxSession[]);
-    applyLiveInboxIds(sessions);
+    if (signal.aborted || !applyInboxListPayload(fresh)) return;
     warm();
     lastSyncRef.current = Date.now();
   }, [convex, syncTable, warm]), 15_000);
@@ -268,12 +345,7 @@ export function useSyncInboxSessions() {
   // (or null) agent_status after a sleep/reconnect.
   useRecoveryPoll(lastLivenessSyncRef, useCallback(async (signal: AbortSignal) => {
     const fresh: any = await queryWithSignal(convex, api.conversations.sessionsLiveness, { _probe: Date.now() }, signal);
-    if (signal.aborted) return;
-    const liveness = fresh?.liveness;
-    if (!liveness) return;
-    // Same applier as the subscription: facts onto rows, stamps + envelope into
-    // the "mine" projection slot — a recovery pass must not fork payload shapes.
-    useInboxStore.getState().applyInboxLivenessPayload("mine", fresh);
+    if (signal.aborted || !applyMineLivenessPayload(fresh)) return;
     lastLivenessSyncRef.current = Date.now();
   }, [convex]), 15_000);
 
@@ -360,59 +432,15 @@ export function useSyncInboxSessions() {
     void store.redrivePendingMessages().catch(captureError);
     store.resumePostCreateSessionIntents();
   }, [hydrated]);
-  // THE COMPLETENESS FLOOR — once per cold or resynced cache, never on a
-  // timer or a wake. It pages every session in the horizon into the cache and
-  // stamps backfilledAt (the digest compare's cold-replica gate). Everything
-  // after it rides the sync log: every hide, restore, pin, rename and delete
-  // is a log action, so there is no set to re-crawl and nothing to reconcile.
-  // The watermark clears when the log can no longer prove the gap — retention
-  // passed this client's cursor, or a cursor never existed — in the applier's
-  // resync path (clearCrawlMetaForScope), and the floor is recut here.
-  //
-  // Cut after the applier stamped the scope cursors (E8 / D9): a floor
-  // queried before the stamp can miss writes that commit between its query
-  // and the heads capture. Keyed by the principal: account A's floor must
-  // not stand in for account B's.
-  const sessWsKey = inboxCrawlWsKey(currentUser?._id?.toString());
-  const floorKey = syncMetaKey("sessions", sessWsKey);
-  const floorStamped = useInboxStore((s) => !!s.syncMeta[floorKey]?.backfilledAt);
-  const logStamped = useInboxStore((s) => currentUser?._id != null && s.syncLogScopeStamps[`user:${String(currentUser._id)}`] !== undefined);
+  // THE COMPLETENESS FLOOR: see runInboxFloorStep for the rules and gates.
+  const principalId = currentUser?._id?.toString();
+  const sessWsKey = inboxCrawlWsKey(principalId);
+  const floorStamped = useInboxStore((s) => inboxFloorFlags(s, principalId).floorStamped);
+  const logStamped = useInboxStore((s) => inboxFloorFlags(s, principalId).logStamped);
   // eslint-disable-next-line no-restricted-syntax -- cleanup keyed to the principal; cancels an in-flight floor on wsKey change
   useWatchEffect(() => () => cancelReconcileCrawl("sessions"), [sessWsKey]);
   useWatchEffect(() => {
-    if (!hydrated || sessWsKey === "skip" || floorStamped || !logStamped) return;
-    // ONE stable lower bound for the whole floor — it becomes the paginated
-    // index bound, and a wall-clock value recomputed per page would make each
-    // page a different query (InvalidCursor).
-    const floorSince = Date.now() - SESSIONS_FLOOR_WINDOW_MS;
-    const cached = Object.keys(useInboxStore.getState().sessions);
-    runReconcileCrawl({
-      namespace: "sessions",
-      wsKey: sessWsKey,
-      // The durable watermark (floorStamped) is the gate; the runner's own
-      // throttle must not hold a recut floor back.
-      throttleMs: 0,
-      pageDelayMs: SESSIONS_FLOOR_PAGE_DELAY_MS,
-      maxPages: 200,
-      fetchPage: async (cursor) => {
-        const page: any = await convex.query(api.conversations.listInboxSessionsPaginated, {
-          since: floorSince,
-          paginationOpts: { numItems: SESSIONS_FLOOR_PAGE_SIZE, cursor },
-        });
-        return { rows: page.page ?? [], isDone: page.isDone, continueCursor: page.continueCursor };
-      },
-      // syncTable("sessions") is isDelta/never-prune (SYNC_REGISTRY) — additive overlay.
-      onPage: (rows) => useInboxStore.getState().syncTable("sessions", rows as unknown as InboxSession[]),
-      onComplete: async (all) => {
-        useInboxStore.getState().syncTable("sessions", all as unknown as InboxSession[]);
-        // The warm-cache probe (floorProbeIds): only a cache that had rows
-        // before this floor can hold one the floor did not return. Safe on a
-        // resumed (partial) floor too — byIds answers with the truth for every
-        // id, so the only cost of a wider probe is reads.
-        const stale = floorProbeIds(cached, all.map((r: any) => String(r._id)));
-        if (stale.length) await applyEntityIds(convex, { ...emptyIdsByCollection(), sessions: stale });
-      },
-    });
+    runInboxFloorStep(convex, { wsKey: sessWsKey, hydrated, floorStamped, logStamped });
   }, [convex, sessWsKey, hydrated, floorStamped, logStamped]);
 
   // THE STUB SWEEP — local cruft only. An optimistic create that never landed

@@ -188,6 +188,38 @@ Examples:
     load: () => import("./stackCommand.js").then((m) => m.registerStackCommand),
   },
   {
+    token: "signal",
+    description: `Signals: file what a finder saw; each attaches to one cause task
+
+  cast signal add --source <finder> --kind <kind> --fingerprint <key> --title "<one line>" [--detail -] [--url <url>] [--subject <ref>] [--goal-hint <metric>]
+  cast signal ls [--task ct-N] [--source <finder>]
+  cast signal show sg-N`,
+    load: () => import("./signalCommand.js").then((m) => m.registerSignalCommand),
+  },
+  {
+    token: "goals",
+    hasOptions: true,
+    description: `Goals: the workspace's active initiatives with their metrics, project charters and principles, as one document
+
+  cast goals [--brief] [--json] [--team <name|id|personal>]
+
+--brief is the compact shape a prompt reads. Each metric prints with its goal_ref
+(in-N:key); a project's goal_ref is its short id.`,
+    load: () => import("./goalsCommand.js").then((m) => m.registerGoalsCommand),
+  },
+  {
+    token: "card",
+    description: `The change card: one change and its proof, the page a person answers Ship, Revise or Drop on
+
+  cast card build --task ct-N [--eval-result eval-result.json] [--proof proof.json]
+    [--wrong -] [--change -] [--recommend ship|revise|drop --why -] [--out card.json] [--publish] [--json]
+
+Assembles the card from the task (cause, goal, verify, review, PR), the eval result, the
+branch diff and the run cost; validates it and names every field that is missing or wrong;
+writes card.json and card.html. --publish attaches the page to the task as evidence.`,
+    load: () => import("./cardCommand.js").then((m) => m.registerCardCommand),
+  },
+  {
     token: "image",
     args: ["<target...>"],
     hasOptions: true,

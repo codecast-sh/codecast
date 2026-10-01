@@ -24,6 +24,8 @@ import {
   parseContextualPrRef,
   splitContextualPrRefs,
   parseClaudeArtifactUrl,
+  parseCallRef,
+  callRefId,
 } from "./entityLinks";
 
 const MSG_CONVEX_ID = "kx82qtvpbmmrmwcjqmhzawejsx8bq9gm";
@@ -626,5 +628,34 @@ describe("decisions (sd-N)", () => {
     // A stack's page is not a decision.
     expect(parseEntityUrl("/decisions/stacks/ds-3")?.type).not.toBe("decision");
     expect(parseEntityUrl("/decisions/stacks")?.type).not.toBe("decision");
+  });
+});
+
+describe("calls (cl-N) and their lines (cl-N:a-b)", () => {
+  const CALL_ID = "k57abcdefghijkmnpqrstvwxyz234567";
+  test("a call and a stretch of it are both call references; prose is not", () => {
+    expect(entityTypeFromId("cl-42")).toBe("call");
+    expect(entityTypeFromId("cl-42:15-25")).toBe("call");
+    expect(entityTypeFromId(`${CALL_ID}:7`)).toBe("call");
+    for (const word of ["cl-ear", "cl-", "cl-42:"]) expect(isEntityId(word)).toBe(false);
+    const prose = "Ashot said it on cl-42, and again here:\ncl-42:15-25\nsee cl-7:3.";
+    expect(prose.match(bareEntityIdRegex())).toEqual(["cl-42", "cl-42:15-25", "cl-7:3"]);
+  });
+
+  test("parseCallRef splits the call from its lines, in order", () => {
+    expect(parseCallRef("cl-42")).toEqual({ call: "cl-42", turns: null });
+    expect(parseCallRef("CL-42:25-15")).toEqual({ call: "cl-42", turns: { from_seq: 15, to_seq: 25 } });
+    expect(parseCallRef("cl-42:9")).toEqual({ call: "cl-42", turns: { from_seq: 9, to_seq: 9 } });
+    // A bare full id names no type; only with lines is it known to be a call.
+    expect(parseCallRef(CALL_ID)).toBeNull();
+    expect(callRefId("cl-42", { from_seq: 9, to_seq: 9 })).toBe("cl-42:9");
+    expect(callRefId("cl-42", { from_seq: 9, to_seq: 12 })).toBe("cl-42:9-12");
+  });
+
+  test("a call routes to its page with the lines selected, and the link parses back", () => {
+    expect(entityRoute("call", "cl-42")).toBe("/calls/cl-42");
+    expect(entityRoute("call", `${CALL_ID}:15-25`)).toBe(`/calls/${CALL_ID}?turns=15-25`);
+    expect(parseEntityUrl(`https://codecast.sh/calls/${CALL_ID}?turns=15-25`)).toEqual({ type: "call", id: `${CALL_ID}:15-25` });
+    expect(parseEntityUrl(`/calls/${CALL_ID}`)).toEqual({ type: "call", id: CALL_ID });
   });
 });

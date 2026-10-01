@@ -135,3 +135,16 @@ export function _resetViewNavForTests(): void {
   appliedNavCount = 0;
   navLog = [];
 }
+
+/** Sim seam: the intent token and lifetime counter belong to one window. */
+export function __viewNavSimSlots() {
+  type Slots = { pendingSource: ViewNavSource | null; appliedNavCount: number };
+  return {
+    fresh: (): Slots => ({ pendingSource: null, appliedNavCount: 0 }),
+    get: (): Slots => ({ pendingSource, appliedNavCount }),
+    set: (s: Slots): void => {
+      pendingSource = s.pendingSource;
+      appliedNavCount = s.appliedNavCount;
+    },
+  };
+}

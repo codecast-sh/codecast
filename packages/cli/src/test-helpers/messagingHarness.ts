@@ -20,6 +20,7 @@ import * as os from "node:os";
 import * as http from "node:http";
 import type * as net from "node:net";
 import { hasBinary } from "./binaryProbe.js";
+import { pollUntil } from "./pollUntil.js";
 import { shellQuote, spawnTmuxPane as spawnPane, type SpawnTmuxPaneOptions } from "./tmuxPane.js";
 import { randomUUID } from "node:crypto";
 import { Database } from "bun:sqlite";
@@ -190,21 +191,18 @@ export function spawnHarness(opts: HarnessOptions = {}): Harness {
 }
 
 /**
- * Polls until `predicate()` returns true, or `timeoutMs` elapses.
- * Returns the elapsed milliseconds for latency assertions.
+ * Polls until `predicate()` returns true, or `timeoutMs` (stretched for the
+ * machine's load) elapses. Returns the elapsed milliseconds for latency
+ * assertions. The harness's spelling of pollUntil.
  */
-export async function waitFor(
+export function waitFor(
   predicate: () => boolean | Promise<boolean>,
   opts: { timeoutMs?: number; intervalMs?: number; label?: string } = {},
 ): Promise<number> {
-  const timeoutMs = opts.timeoutMs ?? 15000;
-  const intervalMs = opts.intervalMs ?? 100;
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    if (await predicate()) return Date.now() - start;
-    await new Promise(r => setTimeout(r, intervalMs));
-  }
-  throw new Error(`waitFor timeout after ${timeoutMs}ms${opts.label ? `: ${opts.label}` : ""}`);
+  return pollUntil(predicate, `waitFor${opts.label ? ` (${opts.label})` : ""}`, {
+    ms: opts.timeoutMs ?? 15000,
+    every: opts.intervalMs ?? 100,
+  });
 }
 
 /**

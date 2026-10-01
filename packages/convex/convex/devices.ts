@@ -7,7 +7,7 @@ import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { canAccessConversation } from "./lib/access";
-import { canReadSessionCommand, requireSessionCommandTarget } from "./daemonCommandUtils";
+import { canReadSessionCommand, requireSessionCommandTarget, findSessionCommandByRequest } from "./daemonCommandUtils";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import {
   DEVICE_ONLINE_MS,
@@ -606,10 +606,15 @@ export const moveToRemote = mutation({
     // Any conversation ref — see reassignToDevice.
     conversation_id: v.string(),
     to_device_id: v.optional(v.string()),
+    // The web store's id for this move (moveSessionToDevice); rides the
+    // move_to_device row so the row the click painted settles from it.
+    request_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Authentication required");
+    const replay = args.request_id !== undefined && await findSessionCommandByRequest(ctx, userId, args.request_id);
+    if (replay) return { command_id: replay._id, source: replay.target_device_id ?? null, dest: JSON.parse(replay.args ?? "{}").to_device_id ?? null };
     const conv = await findConversationByAnyRefWhere(ctx, args.conversation_id, (candidate: any) =>
       candidate.user_id.toString() === userId.toString());
     if (!conv) throw new Error("not your conversation");
@@ -649,6 +654,7 @@ export const moveToRemote = mutation({
     const commandId = await ctx.db.insert("daemon_commands", {
       user_id: userId,
       command: "move_to_device" as const,
+      request_id: args.request_id,
       args: JSON.stringify({ conversation_id: conv._id, session_id: conv.session_id, to_device_id: dest.device_id }),
       created_at: now,
       target_device_id: source,
@@ -739,10 +745,12 @@ export const reclaimAutoClaimedRemoteSessions = internalMutation({
 export async function performReassignToDevice(
   ctx: { db: any },
   userId: Id<"users">,
-  args: { conversation_id: Id<"conversations">; device_id: string },
+  args: { conversation_id: Id<"conversations">; device_id: string; request_id?: string },
 ): Promise<{ ok: true; command_id: any; device_id: string; label: string; cross_user?: boolean }> {
   const conv = await ctx.db.get(args.conversation_id);
   if (!conv) throw new Error("not your conversation");
+  const replay = args.request_id !== undefined && await findSessionCommandByRequest(ctx, userId, args.request_id);
+  if (replay) return { ok: true, command_id: replay._id, device_id: args.device_id, label: "" };
   // A session the caller OWNS but a teammate RUNS can't be re-homed by a plain
   // device restamp — the destination daemon runs under the caller's account, so
   // the account must follow the device. Route it through the cross-user
@@ -751,6 +759,7 @@ export async function performReassignToDevice(
     return performReparentSessionToDevice(ctx, userId, {
       session_id: args.conversation_id,
       device_id: args.device_id,
+      request_id: args.request_id,
     });
   }
   const device = await ctx.db
@@ -782,6 +791,7 @@ export async function performReassignToDevice(
   const commandId = await ctx.db.insert("daemon_commands", {
     user_id: userId,
     command: "resume_session" as const,
+    request_id: args.request_id,
     args: JSON.stringify({
       session_id: conv.session_id,
       agent_type: agentType,
@@ -837,6 +847,8 @@ export const reassignToDevice = mutation({
     // v.id() validator rejected those reassigns outright (ct-40176).
     conversation_id: v.string(),
     device_id: v.string(),
+    // The web store's id for this move (moveSessionToDevice); rides the resume.
+    request_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -854,6 +866,7 @@ export const reassignToDevice = mutation({
     return performReassignToDevice(ctx, userId, {
       conversation_id: conv._id,
       device_id: args.device_id,
+      request_id: args.request_id,
     });
   },
 });
@@ -894,7 +907,7 @@ async function resolveRemoteForReparent(
 export async function performReparentSessionToDevice(
   ctx: { db: any },
   userId: Id<"users">,
-  args: { session_id: string; device_id: string; remote_url?: string },
+  args: { session_id: string; device_id: string; remote_url?: string; request_id?: string },
 ): Promise<{ ok: true; command_id: any; device_id: string; label: string; cross_user: boolean }> {
   // Authorization is folded into resolution: the caller must RUN it (user_id),
   // OWN it (owner set / cached primary), or be a HUMAN teammate who can SEE it
@@ -997,6 +1010,7 @@ export async function performReparentSessionToDevice(
   const commandId = await ctx.db.insert("daemon_commands", {
     user_id: userId,
     command: "resume_session" as const,
+    request_id: args.request_id,
     args: JSON.stringify({
       session_id: conv.session_id,
       agent_type: agentType,

@@ -59,8 +59,9 @@ const formatTimestamp = cacheLocalDateFormat((date) => date.toLocaleTimeString([
 
 const formatCalendarDate = cacheLocalDateFormat((date) => date.toLocaleDateString([], { month: "short", day: "numeric" }));
 
-export function formatDuration(startTs: number): string {
-  const diff = Date.now() - startTs;
+/** How long from `startTs` to `endTs` (now, unless the session's span ended: a mirrored cloud task's last message). */
+export function formatDuration(startTs: number, endTs = Date.now()): string {
+  const diff = endTs - startTs;
   const minutes = Math.floor(diff / 60000);
   if (minutes < 1) return '';
   if (minutes < 60) return `${minutes}m`;

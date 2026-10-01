@@ -1,7 +1,8 @@
 "use client";
 import { useState, useRef } from "react";
+import { CreateChipCaret, createChipClass, createMenuItemClass, CREATE_MENU_CLASS, CREATE_MENU_SEARCH_CLASS, CREATE_MENU_SECTION_CLASS } from "./CreateDialog";
 import { useWatchEffect } from "../hooks/useWatchEffect";
-import { Bot, User, ChevronDown, Search, Check, X } from "lucide-react";
+import { Bot, User, Search, Check, X } from "lucide-react";
 import type { AssigneeInfo } from "@codecast/shared/contracts/orgAssignee";
 import { useRolesAndPeopleOptions } from "../hooks/useRolesAndPeopleOptions";
 import { AssigneeFace } from "./identity/AssigneeFace";
@@ -50,9 +51,9 @@ export function AssigneeSelect({
   }, [open]);
 
   const agentOptions: AssigneeOption[] = [
-    { id: "agent:claude_code", name: "Claude Code", type: "agent" },
-    { id: "agent:codex", name: "Codex", type: "agent" },
-    { id: "agent:gemini", name: "Gemini", type: "agent" },
+    { id: "agent:claude_code", name: "Claude Code", type: "agent", section: "Agents" },
+    { id: "agent:codex", name: "Codex", type: "agent", section: "Agents" },
+    { id: "agent:gemini", name: "Gemini", type: "agent", section: "Agents" },
   ];
 
   const { people, roles } = useRolesAndPeopleOptions(teamMembers ?? NO_MEMBERS);
@@ -93,37 +94,35 @@ export function AssigneeSelect({
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors border ${
-          value
-            ? "border-sol-border/60 bg-sol-bg-alt text-sol-text"
-            : "border-sol-border/30 hover:border-sol-border/60 text-sol-text-dim hover:text-sol-text"
-        }`}
+        className={createChipClass(!!value, open)}
+        aria-expanded={open}
       >
         {currentOpt
           ? renderAvatar({ ...currentOpt, id: currentOpt.id, type: value?.startsWith("agent:") ? "agent" : "user" })
           : <User className="w-3.5 h-3.5" />
         }
-        <span>{currentOpt ? currentOpt.name.replace(" (you)", "") : "Assignee"}</span>
-        <ChevronDown className="w-3 h-3 opacity-60" />
+        <span className="max-w-[10rem] truncate">{currentOpt ? currentOpt.name.replace(" (you)", "") : "Assignee"}</span>
+        <CreateChipCaret open={open} />
       </button>
       {open && (
-        <div className="absolute top-full left-0 mt-1 w-52 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[250] overflow-hidden">
-          <div className="flex items-center gap-2 px-3 py-2 border-b border-sol-border/30">
+        <div className={`${CREATE_MENU_CLASS} w-56`}>
+          <div className={CREATE_MENU_SEARCH_CLASS}>
             <Search className="w-3.5 h-3.5 text-sol-text-dim flex-shrink-0" />
             <input
               ref={inputRef}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search..."
+              placeholder="Search people and agents"
               className="flex-1 text-xs bg-transparent text-sol-text placeholder:text-sol-text-dim outline-none"
               onKeyDown={(e) => e.key === "Escape" && setOpen(false)}
             />
           </div>
-          <div className="py-1 max-h-48 overflow-y-auto">
+          <div className="max-h-56 overflow-y-auto">
             {value && (
               <button
+                type="button"
                 onClick={() => select(null)}
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-sol-text-dim hover:bg-sol-bg-alt transition-colors"
+                className={createMenuItemClass()}
               >
                 <X className="w-3.5 h-3.5" />
                 Clear assignee
@@ -132,13 +131,12 @@ export function AssigneeSelect({
             {filtered.map((opt, i) => (
               <div key={opt.id}>
                 {opt.section && filtered[i - 1]?.section !== opt.section && (
-                  <div className="px-3 pt-2 pb-0.5 text-[10px] uppercase tracking-wide text-sol-text-dim">{opt.section}</div>
+                  <div className={CREATE_MENU_SECTION_CLASS}>{opt.section}</div>
                 )}
                 <button
+                  type="button"
                   onClick={() => select(opt)}
-                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors ${
-                    opt.id === value ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"
-                  }`}
+                  className={createMenuItemClass(opt.id === value)}
                 >
                   {renderAvatar(opt)}
                   <span className="flex-1 text-left truncate">{opt.name}</span>
@@ -147,7 +145,7 @@ export function AssigneeSelect({
               </div>
             ))}
             {filtered.length === 0 && (
-              <div className="px-3 py-2 text-xs text-sol-text-dim">No results</div>
+              <div className="px-2 py-2 text-xs text-sol-text-dim">Nobody matches</div>
             )}
           </div>
         </div>

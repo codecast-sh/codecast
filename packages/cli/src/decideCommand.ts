@@ -40,6 +40,8 @@ import { cliFetch } from "./cliHttp.js";
 import { fmt } from "./colors.js";
 import { commandGroup } from "./commandGroups.js";
 import { readTaskPulseFor } from "./taskPulse.js";
+import { readCardFile } from "./cardFile.js";
+import { CARD_DECISION_OPTIONS, cardVerdictIndexes, type ChangeCard } from "@codecast/shared/contracts/changeCard";
 
 export interface DecideOption {
   label: string;
@@ -491,6 +493,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
     .option("--question <text>", stdinText("edit: replace the question"))
     .option("--context <text>", stdinText("Markdown context: the reasoning, the tradeoff, what happens under each choice"))
     .option("--report <file>", "HTML/markdown report published as the decision's body (reuses cast publish)")
+    .option("--card <card.json>", "A change card (cast card build) the decision is about; the queue draws it natively. Without -o the options are Ship, Revise, Drop")
     .option("--advisory", "Don't block: proceed with --default. Only when the default is cheap to undo — the answer often lands an hour later and may override you")
     .option("--default <n>", "1-based option you proceed with when --advisory (required with it)")
     .option("--blocking", "edit: turn an advisory decision into a blocking one (clears the default)")
@@ -501,6 +504,8 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
     .option("--stack <ds-N>", "Append to a decision stack (cast stack create); ls: list that stack's members")
     .option("--category <c>", "Proposed category: approach|scope|priority|retry|review|allocation (the server may pin a protected one)")
     .option("--kind <k>", `single|multi|rank|form (default single)`)
+    .option("--line <label>", "Ask for one line of text instead of a choice: a form with one text field (sets --kind form)")
+    .option("--to <who>", "Who answers: a person's name, email or @handle in the session's workspace (repeatable; default: whoever the session reports to)", (val: string, acc: string[]) => [...acc, val], [] as string[])
     .option("--doc <file>", stdinText("Markdown document as the decision's long body (creates a decision doc)"))
     .option("--spec <file>", "JSON spec: { question, kind, category, options[{label,description,body_md,evidence,cost,risk,page}], form{fields}, doc_md, task, station, stack, advisory, default }")
     .option(
@@ -530,8 +535,18 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       const sub = question && DECIDE_SUBCOMMANDS.has(question) ? question : null;
       const spec: DecideSpec | null = options.spec ? parseDecideSpec(bodyFromArg(options.spec, "--spec")) : null;
       const rawOptions = options.option as string[];
-      let optionList: DecideOption[] | undefined = rawOptions.length > 0 ? rawOptions.map(parseDecideOption) : spec?.options;
-      const kind: DecideKind = options.kind ?? spec?.kind ?? "single";
+      // LE11: a change card decides Ship, Revise or Drop unless -o says otherwise.
+      const card: ChangeCard | undefined = options.card ? (() => { const r = readCardFile(options.card); return "error" in r ? fail(r.error) : r.card; })() : undefined;
+      let optionList: DecideOption[] | undefined = rawOptions.length > 0 ? rawOptions.map(parseDecideOption) : spec?.options ?? (card && !sub ? CARD_DECISION_OPTIONS.map((o) => ({ ...o })) : undefined);
+      // An advisory card proceeds with what the card recommends unless --default names another.
+      if (card && options.advisory && !options.default && optionList) {
+        const at = cardVerdictIndexes(optionList)?.[card.recommend.verdict];
+        if (at !== undefined) options.default = String(at + 1);
+      }
+      // --line is the one-field form a person answers in a line (the morning
+      // agenda, org-staffing.md S33): the label is the field's.
+      const lineForm = options.line ? { fields: [{ key: "answer", label: String(options.line), type: "text" as const }] } : undefined;
+      const kind: DecideKind = options.kind ?? spec?.kind ?? (lineForm ? "form" : "single");
       if (!DECIDE_KINDS.includes(kind)) fail(`--kind must be one of ${DECIDE_KINDS.join("|")}.`);
       if (kind === "form" && !optionList) optionList = [];
       if (optionList && !sub && ((kind !== "form" && optionList.length < 2) || optionList.length > 9)) {
@@ -671,6 +686,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
           changes.report_slug = report.slug;
           changes.report_url = report.url;
         }
+        if (card) changes.card = card;
         if (options.blocking && options.advisory) fail("--blocking and --advisory contradict each other.");
         if (options.blocking) {
           changes.blocking = true;
@@ -683,7 +699,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
         }
         const { report_url: reportUrl, ...payload } = changes as any;
         if (Object.keys(payload).length === 0) {
-          fail("Nothing to change. Pass --question, -o, --context, --report, --doc, --kind, --task, --station, --stack, --category, --option-page, --advisory --default <n>, or --blocking.");
+          fail("Nothing to change. Pass --question, -o, --context, --report, --card, --doc, --kind, --task, --station, --stack, --category, --option-page, --advisory --default <n>, or --blocking.");
         }
         const result = await decideApi(deps, { action: "edit", session_id: sessionId, decision_id: target, ...payload });
         if (options.json) {
@@ -702,12 +718,12 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       }
 
       // ── ask ──
-      question = question ?? spec?.question;
+      question = question ?? spec?.question ?? card?.cause.title;
       if (!question) fail('Usage: cast decide "<question>" -o … -o … --context … — or: ls | show | edit [id] | cancel [id] | recommend | answer');
       if (!optionList) fail("Provide 2-9 options (-o), they map to keys 1-9 in the queue.");
       const docMd: string | undefined = options.doc ? bodyFromArg(options.doc, "--doc") : spec?.doc_md;
-      if (!contextMd && !options.report && !docMd) {
-        fail("A bare question is not decidable. Pass --context (or --report, or --doc) with the reasoning and the tradeoff.");
+      if (!contextMd && !options.report && !docMd && !card) {
+        fail("A bare question is not decidable. Pass --context (or --report, --doc or --card) with the reasoning and the tradeoff.");
       }
       if (options.blocking) fail("--blocking is for `cast decide edit`; a new decision blocks unless you pass --advisory.");
       if (spec?.advisory && !options.advisory) {
@@ -740,15 +756,17 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
         options: optionList,
         context_md: contextMd,
         report_slug: reportSlug,
+        ...(card ? { card } : {}),
         blocking: !options.advisory,
         default_option: defaultOption,
         kind,
         category,
         doc_md: docMd,
-        form: spec?.form,
+        form: lineForm ?? spec?.form,
         task,
         station: options.station ?? spec?.station,
         stack: options.stack ?? spec?.stack,
+        ...(options.to?.length ? { to: options.to } : {}),
       });
 
       if (options.json) {

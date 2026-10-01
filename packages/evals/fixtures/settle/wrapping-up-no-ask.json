@@ -1,0 +1,19 @@
+{
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "notes": "final message is a plan the agent is about to execute (mid-work settle, no ask)",
+  "label": {
+    "verdict": "done"
+  },
+  "snapshot": {
+    "newestFirst": [
+      {
+        "role": "assistant",
+        "content": "Refactor landed: 9 files, all typechecks green, screenshots attached. Wrapping up."
+      },
+      {
+        "role": "user",
+        "content": "go"
+      }
+    ]
+  }
+}

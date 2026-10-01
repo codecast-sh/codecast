@@ -1,4 +1,4 @@
-import { CHIEF_OF_STAFF_HANDLE } from "../components/org/orgStaffingTypes";
+import { isHeadOfPeopleRole } from "../components/org/orgStaffingTypes";
 
 export type UnseatChoice = "keep" | "retire";
 
@@ -7,9 +7,9 @@ export const UNSEAT_CHOICES: readonly (readonly [UnseatChoice, string, string])[
   ["retire", "Retire it with the role", "The thread is kept and stops waking."],
 ];
 
-/** The choice a retire carries: asked for the chief of staff, absent for any other seat. */
-export function isChiefOfStaff(role: { handle: string }): boolean {
-  return role.handle === CHIEF_OF_STAFF_HANDLE;
+/** The choice a retire carries: asked for the head of people, absent for any other seat. */
+export function isHeadOfPeople(role: { handle: string }): boolean {
+  return isHeadOfPeopleRole(role);
 }
 
 /** What the toast says after a retire, the same words on every surface. */

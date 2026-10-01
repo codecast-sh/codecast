@@ -12,7 +12,7 @@ const H = 3_600_000;
 const person = (over: Record<string, unknown>) => ({ user_id: "u1", name: "Ashot", has_section: true, goals: [], sessions_changed: [], sessions_total: 0, stalled_high: 0, ...over }) as any;
 
 test("each goal shows what is matched to it, what moved and what stalled", () => {
-  const html = renderToStaticMarkup(<PersonGoals own roleHandle="chief" now={NOW} person={person({ goals: [
+  const html = renderToStaticMarkup(<PersonGoals own roleHandle="head" now={NOW} person={person({ goals: [
     { text: "Ship org roles", priority: "high", raw: "", refs: [{ kind: "task", short_id: "ct-7", title: "R6", status: "in_progress", updated_at: NOW - 2 * H }], unresolved: [], moved_at: NOW - 2 * H, stalled: false, unmatched: false },
     { text: "Close the round", priority: "high", raw: "", refs: [], unresolved: [], moved_at: null, stalled: true, unmatched: false },
   ] })} />);
@@ -25,9 +25,9 @@ test("each goal shows what is matched to it, what moved and what stalled", () =>
 });
 
 test("a person with no goal section is told where goals go, in their own voice or the reader's", () => {
-  const own = renderToStaticMarkup(<PersonGoals own roleHandle="chief" now={NOW} person={person({ has_section: false })} />);
-  expect(own).toContain("You report to @chief");
+  const own = renderToStaticMarkup(<PersonGoals own roleHandle="head" now={NOW} person={person({ has_section: false })} />);
+  expect(own).toContain("You report to @head");
   expect(own).toContain("## Goals: Ashot");
-  const other = renderToStaticMarkup(<PersonGoals own={false} roleHandle="chief" now={NOW} person={person({ has_section: false })} />);
-  expect(other).toContain("Ashot reports to @chief");
+  const other = renderToStaticMarkup(<PersonGoals own={false} roleHandle="head" now={NOW} person={person({ has_section: false })} />);
+  expect(other).toContain("Ashot reports to @head");
 });

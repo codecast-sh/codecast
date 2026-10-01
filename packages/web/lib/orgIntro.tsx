@@ -8,10 +8,10 @@ export type OrgIntroLine = { face: AvatarKey; text: string };
 /** S20's five sentences, in its order, each with the face that stands for it. */
 export const ORG_INTRO_LINES: readonly OrgIntroLine[] = [
   { face: "fox", text: "**Roles.** Your organization has roles. Each one is an agent with a name and a face that looks after one area of work: it reports to someone, sessions report to it, and it owns the tasks in its area." },
-  { face: "owl", text: "**A chief of staff** reads your workspace, its commits, sessions, plans and tasks, and proposes the roles it needs. You decide, and nothing changes until you **accept**." },
+  { face: "owl", text: "**A head of people** reads your workspace, its commits, sessions, plans and tasks, and proposes the roles it needs. You decide, and nothing changes until you **accept**." },
   { face: "bear", text: "**Only what needs you.** A role answers its own sessions. What it cannot settle it raises **in its own thread**, as one card in your inbox or a decision to answer." },
   { face: "hare", text: "**Talk and hover.** You can talk to any role from its page, and hover any role anywhere to see what it looks after." },
-  { face: "crane", text: "**From any session.** You can talk to the chief of staff from any session too: type /cast-org." },
+  { face: "crane", text: "**From any session.** You can talk to the head of people from any session too: type /cast-org." },
 ];
 
 /** The line as plain words, emphasis marks dropped. */
@@ -24,8 +24,8 @@ export function renderOrgIntroLine(text: string) {
   return text.split(/\*\*/).map((run, i) => (i % 2 === 1 ? <strong key={i} className="font-semibold" style={{ color: "var(--sol-text)" }}>{run}</strong> : run));
 }
 
-/** The chief of staff sits above the rail; the other four stand on it. */
-export const ORG_INTRO_CHIEF: AvatarKey = "owl";
+/** The head of people sits above the rail; the other four stand on it. */
+export const ORG_INTRO_HEAD_OF_PEOPLE: AvatarKey = "owl";
 
 /** One name for one thing: the page is Org, the feature is the organization,
  *  so the card and this screen both say it. */
@@ -58,5 +58,5 @@ export function markOrgIntroSeen(st: OrgSeenStore) {
 
 /** The start action's label, by whether the workspace has roles. */
 export function orgIntroStartLabel(hasRoles: boolean): string {
-  return hasRoles ? "Open the chart" : "Ask the chief of staff to look at my workspace";
+  return hasRoles ? "Open the chart" : "Ask the head of people to look at my workspace";
 }

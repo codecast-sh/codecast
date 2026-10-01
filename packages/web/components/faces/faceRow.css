@@ -335,7 +335,7 @@
   line-height: 1;
   cursor: pointer;
   animation: face-stack-count-in 420ms var(--settle) calc(var(--stack-i-last, 0) * 32ms + 120ms) both;
-  transition: color 120ms ease;
+  transition: color 120ms ease, filter 360ms ease;
 }
 .face-row-stack-count:hover {
   color: var(--sol-text);
@@ -374,6 +374,52 @@
 .face-row-fold svg {
   width: 55%;
   height: 55%;
+}
+/* The float's others (FaceRow): everyone off the call folds behind one small
+   quiet circle after the strip. A folded seat keeps its full room, so the
+   window measured from the row is the same size open or folded and never
+   moves; it only fades, a beat after its neighbour, and takes no click. */
+.face-row[data-density="float"] .face-seat[data-folded] {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(calc(var(--face) * -0.25)) scale(0.85);
+}
+.face-row[data-density="float"] .face-row-others ~ .face-seat {
+  transition:
+    opacity 220ms ease calc(var(--stack-i, 0) * 30ms),
+    transform 320ms var(--settle) calc(var(--stack-i, 0) * 30ms);
+}
+.face-row-others {
+  flex: none;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: max(24px, calc(var(--face) * 0.38));
+  height: max(24px, calc(var(--face) * 0.38));
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--paper) 70%, transparent);
+  box-shadow: 0 0 0 1px var(--hairline);
+  color: var(--ink-soft);
+  font-family: var(--font-mono);
+  font-size: max(10px, calc(var(--face) * 0.15));
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  opacity: 0.6;
+  cursor: pointer;
+  transition: opacity 180ms ease, color 180ms ease, box-shadow 180ms ease;
+}
+.face-row-others:hover,
+.face-row-others[data-open] {
+  opacity: 1;
+  color: var(--ink);
+  box-shadow: 0 0 0 1px var(--hairline-strong);
+}
+.face-row-strip[data-track] + .face-row-others {
+  margin-left: 8px;
 }
 .face-row[data-density="float"] .face-row-fold {
   background: linear-gradient(180deg, var(--paper) 0%, var(--paper-deep) 100%);
@@ -1046,6 +1092,9 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .face-row[data-density="float"] .face-seat[data-folded] {
+    transform: none;
+  }
   .face-row[data-density="float"][data-band="above"] .face-row-below {
     animation: none;
   }
@@ -1607,6 +1656,11 @@
 .face-row[data-density="float"] .face-bot {
   box-shadow: 0 0 0 2px #fcfbf7;
 }
+/* A guest wears the same corner mark as an agent, a link in it, in the
+ * guest's yellow (GuestTag): no presence to show, and not one of the team. */
+.face-guest {
+  color: #b58900;
+}
 .face-bot-glyph {
   width: 8px;
   height: 8px;
@@ -1661,6 +1715,10 @@
   border: 1px solid var(--sol-cyan);
   padding: 0 9px;
   font-variant-numeric: tabular-nums;
+}
+.engagement-card .engagement-card-chat[data-agent] {
+  background: var(--sol-violet);
+  border-color: var(--sol-violet);
 }
 .engagement-card .engagement-card-chat:hover {
   filter: brightness(1.1);

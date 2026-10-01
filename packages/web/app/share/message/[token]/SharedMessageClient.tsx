@@ -1,6 +1,6 @@
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useParams } from "next/navigation";
+import { useParams } from "react-router";
 import { AppLoader } from "@/components/AppLoader";
 import { readSharePreload, readSharePreloadNow } from "@/lib/sharePreload";
 import { SharedMessageNotFound, SharedMessageView } from "./SharedMessageView";

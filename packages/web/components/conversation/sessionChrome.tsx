@@ -2,9 +2,9 @@ import { AppLoader } from "../AppLoader";
 import { useState, useMemo, memo, Fragment, type ReactNode } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { withSafetyBlock, SAFETY_BLOCK_HINT, PROVIDER_KEYS, getProviderKeySpec, cloudAgentCredentialError, cloudAgentSetupCard, computeConversationTaskStats, isSessionActivityFresh } from "@codecast/shared/contracts";
+import { withSafetyBlock, SAFETY_BLOCK_HINT, PROVIDER_KEYS, getProviderKeySpec, computeConversationTaskStats, isSessionActivityFresh } from "@codecast/shared/contracts";
 import { LimitParkCard } from "../LimitParkCard";
-import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
+import { KeyCap, ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { toast } from "sonner";
 import { formatElapsedClock, shouldShowElapsed } from "../workingStatus";
 import { activitySig } from "../../lib/sessionActivity";
@@ -23,7 +23,8 @@ import { useProviderKeyCommand, deviceManagedKeys } from "../../lib/useProviderK
 import type { RestartPhase, RestartStage } from "../../hooks/useSessionRestart";
 import { CopyCommand } from "./blocks/shared";
 import { authRemedy, detectProviderFromError } from "./classify";
-import { CloudAgentHeldNote, CloudAgentSetupText, ConnectCloudAgentButton } from "../cloudAgents";
+import { cloudAgentCardHeading, CloudAgentSetupHint, CloudAgentSetupText } from "../cloudAgents";
+import { useCloudAgentSetupCard } from "../cloudAgents/sessionAgent";
 import { formatDuration, formatFullTimestamp, formatRelativeTime } from "../../lib/conversationFormat";
 import { MessageMarkdown } from "./markdown";
 import type { ConversationDensity, ParsedApiError } from "./types";
@@ -254,8 +255,11 @@ function useApiErrorLive(conversationId?: string): boolean {
   });
 }
 
-export function ApiErrorCard({ error, agentType, conversationId, timestamp, compact = false }: { error: ParsedApiError; agentType?: string; conversationId?: string; timestamp?: number; compact?: boolean }) {
-  const live = useApiErrorLive(conversationId);
+export function ApiErrorCard({ error, agentType, conversationId, messageUuid, timestamp, compact = false }: { error: ParsedApiError; agentType?: string; conversationId?: string; messageUuid?: string; timestamp?: number; compact?: boolean }) {
+  // A cloud agent's setup card (the daemon's): its provider is the session's, its kind in the id the daemon posted it under.
+  const cloudCard = useCloudAgentSetupCard(conversationId, messageUuid, error.message);
+  // A credential card is history once the machine has the credential, whatever the session did since.
+  const live = useApiErrorLive(conversationId) && !cloudCard?.resolved;
   // A usage-limit park has its own card: fixed shape in every density, the
   // reset counted down in the viewer's clock, and the owner machine's
   // recovery flags read into a "what happens next" line.
@@ -277,17 +281,18 @@ export function ApiErrorCard({ error, agentType, conversationId, timestamp, comp
   let hint: ReactNode;
   const remedy = authRemedy(agentType);
   // Actionable in every density, like the context card: its fix is one button.
-  // A cloud agent turn stopped for want of usable credentials (the daemon's setup card).
-  const cloudCredential = error.isAuth ? cloudAgentCredentialError(agentType, error.message) : null;
-  // Any other setup problem the daemon holds a cloud agent's message for (a
-  // repository it cannot reach, an account the provider refuses).
-  const cloudSetup = !cloudCredential ? cloudAgentSetupCard(agentType, error.message) : null;
+  // Any setup problem the daemon holds a cloud agent's message for that is not
+  // a credential (a repository it cannot reach, an account the provider
+  // refuses), or a message the provider may have acted on: its sentence says
+  // where to look, and no retry is offered, since sending it again could
+  // start the agent twice.
+  const cloudSetup = cloudCard?.kind === "setup" || cloudCard?.kind === "unsent" ? cloudCard : null;
   if (cloudSetup) {
     // Ahead of the auth branch: a workspace that turned the provider off reads
     // as a refusal, but no sign-in fixes it.
-    heading = `${cloudSetup.label} setup needed`;
+    heading = cloudAgentCardHeading(cloudSetup);
     icon = <span className="text-[10px] font-semibold">!</span>;
-    hint = <p className="mt-1.5 text-xs text-sol-text-dim"><CloudAgentHeldNote spec={cloudSetup} credential={false} conversationId={conversationId} /></p>;
+    hint = cloudSetup.kind === "setup" ? <CloudAgentSetupHint card={cloudSetup} conversationId={conversationId} live={live} /> : null;
   } else if (error.isSafety) {
     heading = "Safety review required";
     icon = <span className="text-[10px] font-semibold">!</span>;
@@ -300,11 +305,9 @@ export function ApiErrorCard({ error, agentType, conversationId, timestamp, comp
         <path d="M10 13L20 3M17 6l2 2M14 9l2 2" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
     );
-    hint = cloudCredential ? (
-      <div className="mt-2 flex items-center gap-2 flex-wrap text-xs text-sol-text-dim">
-        <ConnectCloudAgentButton spec={cloudCredential} conversationId={conversationId} />
-        <span><CloudAgentHeldNote spec={cloudCredential} credential conversationId={conversationId} /></span>
-      </div>
+    // A cloud agent turn stopped for want of usable credentials.
+    hint = cloudCard?.kind === "credential" ? (
+      <CloudAgentSetupHint card={cloudCard} conversationId={conversationId} live={live} />
     ) : (
       <>
         <div className="mt-2 flex items-center gap-1.5 flex-wrap text-xs text-sol-text-dim">
@@ -403,17 +406,18 @@ export function ApiErrorCard({ error, agentType, conversationId, timestamp, comp
           </span>
         )}
       </div>
-      <p className={`mt-1 text-sm ${tone.fg}`}>{cloudSetup ? <CloudAgentSetupText spec={cloudSetup} message={error.message} /> : error.message}</p>
+      <p className={`mt-1 text-sm ${tone.fg}`}>{cloudSetup ? <CloudAgentSetupText spec={cloudSetup.spec} message={error.message} /> : error.message}</p>
       {error.requestId && !error.isAuth && !error.isLimit && !error.isConnection && (
         <p className="mt-1 text-[11px] text-sol-text-muted font-mono">
           request_id: <span className="text-sol-text-secondary">{error.requestId}</span>
         </p>
       )}
-      {!live ? (
+      {/* A credential card the machine has since resolved says so in its own hint. */}
+      {!live && !cloudCard?.resolved ? (
         <p className="mt-1.5 text-xs text-sol-text-dim">
           The session continued after this — nothing to do here.
         </p>
-      ) : (!compact || error.isContext || cloudCredential || cloudSetup) && hint}
+      ) : (!compact || error.isContext || cloudCard) && hint}
     </div>
   );
 }
@@ -641,8 +645,10 @@ export function ConversationMetadata({
 
 /** How old and how big: the facts strip's last item, so the strip's tail
  *  clip takes these before anything that says what the session is. The
- *  message count copies the conversation id, as it always has. */
-export function ConversationAgeFacts({ startedAt, messageCount, conversationId }: { startedAt?: number; messageCount?: number; conversationId?: string }) {
+ *  message count copies the conversation id, as it always has. `endedAt`
+ *  ends the duration where a session's span ends (a cloud agent's mirror:
+ *  its last message), else it runs to now. */
+export function ConversationAgeFacts({ startedAt, endedAt, messageCount, conversationId }: { startedAt?: number; endedAt?: number; messageCount?: number; conversationId?: string }) {
   if (!startedAt && !messageCount) return null;
   return (
     <div className="flex items-center gap-1 text-[10px] sm:text-xs text-sol-text-dim flex-shrink-0">
@@ -662,7 +668,7 @@ export function ConversationAgeFacts({ startedAt, messageCount, conversationId }
       {startedAt && (
         <span className="hidden sm:flex items-center gap-1 flex-shrink-0 cq-sq1">
           <span className="text-sol-text-dim">&middot;</span>
-          <span>{formatDuration(startedAt)}</span>
+          <span>{formatDuration(startedAt, endedAt)}</span>
         </span>
       )}
     </div>
@@ -799,8 +805,8 @@ export function RestartStatusStrip({ phase, stage, failure, startedAt, onRetry, 
 
 // Same strip for a device move ("Run here" / "Move to remote Mac"): the move
 // pipeline — worktree transfer, resume on the destination — narrated live from
-// the same daemon command rows. useDeviceMoveStatus owns the lifecycle
-// (movingSessions in the store), so this stays mounted-cheap when idle.
+// the same daemon command rows. useDeviceMoveStatus reads the move's
+// sessionCommands row, so this stays mounted-cheap when idle.
 export function DeviceMoveStatusStrip({ conversationId }: { conversationId: string }) {
   const { phase, stage, failure, startedAt, restoredLabel, retry } = useDeviceMoveStatus(conversationId);
   return (
@@ -841,7 +847,7 @@ export const ConversationTaskStatsMenuItem = memo(function ConversationTaskStats
 // stamp (the same phrase, written at ingest and shown on the inbox card) is
 // absent or stale. Owns its own 1s ticker so only this tiny node re-renders each
 // second, not the whole composer; the activity dep is per row, text plus stamp.
-export function WorkingStatusLine({ startedAt, phrase, conversationId }: { startedAt?: number; phrase?: string; conversationId: string }) {
+export function WorkingStatusLine({ startedAt, phrase, conversationId, stopHint }: { startedAt?: number; phrase?: string; conversationId: string; stopHint?: boolean }) {
   const [now, setNow] = useState(() => Date.now());
   useMountEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
@@ -852,11 +858,16 @@ export function WorkingStatusLine({ startedAt, phrase, conversationId }: { start
   // This line renders only while the turn is working, so the work state half
   // of the shared rule is already true here.
   const label = isSessionActivityFresh(rowActivity, "working", now) ? rowActivity.text : phrase;
-  return <WorkingStatusLineView startedAt={startedAt} now={now} label={label} />;
+  return <WorkingStatusLineView startedAt={startedAt} now={now} label={label} stopHint={stopHint} />;
 }
 
-/** The working line as markup, for a caller that owns the clock and the label (the marketing hero writes both from its timeline). */
-export function WorkingStatusLineView({ startedAt, now, label }: { startedAt?: number; now: number; label?: string }) {
+/**
+ * The working line as markup, for a caller that owns the clock and the label
+ * (the marketing hero writes both from its timeline). `stopHint`: Escape in
+ * the empty composer stops the turn (a cloud agent's included), said here
+ * because nothing else on screen does.
+ */
+export function WorkingStatusLineView({ startedAt, now, label, stopHint }: { startedAt?: number; now: number; label?: string; stopHint?: boolean }) {
   const elapsedMs = startedAt ? now - startedAt : 0;
   const showElapsed = shouldShowElapsed(startedAt, now);
   return (
@@ -864,6 +875,7 @@ export function WorkingStatusLineView({ startedAt, now, label }: { startedAt?: n
       <LivePulseDot className="w-2 h-2" />
       Working
       {showElapsed && <span className="text-sol-text-dim/60 tabular-nums">· {formatElapsedClock(elapsedMs)}</span>}
+      {stopHint && <span data-stop-hint className="inline-flex shrink-0 items-center gap-1 text-sol-text-dim/60">· <KeyCap size="xs">Esc</KeyCap> stop</span>}
       {showElapsed && label && <span className="text-sol-text-dim/60 truncate" title={label}>· {label}</span>}
     </span>
   );

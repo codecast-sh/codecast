@@ -1,8 +1,10 @@
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../../convex/convex/_generated/api.js";
 import { cleanNotificationBody } from "../lib/notificationText";
-import type { ShareKind } from "@codecast/shared/entities";
+import { sharePath, type ShareKind } from "@codecast/shared/entities";
 import { CONVEX_URL } from "./convexUrl";
+import { GUEST_LINK_REFUSAL_TEXT, guestJoinPath, guestNoticeSentence, type GuestLinkRefusal } from "@codecast/shared/contracts";
+import { meetingTitle } from "../lib/calls/roomGuests";
 
 /**
  * The server's view of shared objects: one Convex client, one query per share
@@ -46,6 +48,14 @@ const SHARE_QUERIES: Record<ShareKind, (token: string) => Promise<unknown>> = {
   message: (t) => convex.query(api.messages.getSharedMessage, { share_token: t }),
   doc: (t) => convex.query((api as any).docs.getShared, { share_token: t }),
   plan: (t) => convex.query((api as any).plans.getShared, { share_token: t }),
+  task: (t) => convex.query(api.publicShare.getSharedTask, { share_token: t }),
+  call: (t) => convex.query(api.publicShare.getSharedCall, { share_token: t }),
+  project: (t) => convex.query(api.publicShare.getSharedProject, { share_token: t }),
+  initiative: (t) => convex.query(api.publicShare.getSharedInitiative, { share_token: t }),
+  decision: (t) => convex.query(api.publicShare.getSharedDecision, { share_token: t }),
+  stack: (t) => convex.query(api.publicShare.getSharedStack, { share_token: t }),
+  trigger: (t) => convex.query(api.publicShare.getSharedTrigger, { share_token: t }),
+  run: (t) => convex.query(api.publicShare.getSharedRun, { share_token: t }),
 };
 
 /** The shared object behind a token, through the cache. `null` = query failed;
@@ -73,8 +83,7 @@ export function shareMeta(
 ): ShareMeta | null {
   if (!data || typeof data !== "object") return null;
   const d = data as any;
-  const path = kind === "conversation" ? `/share/${token}` : `/share/${kind}/${token}`;
-  const url = `${baseUrl}${path}`;
+  const url = `${baseUrl}${sharePath(kind, token)}`;
 
   switch (kind) {
     case "conversation": {
@@ -104,5 +113,77 @@ export function shareMeta(
         || (tasks.length ? `${done}/${tasks.length} tasks done` : "A shared plan");
       return { title: `Codecast: ${title}`, description, url, type: "article" };
     }
+    case "task": {
+      const title = d.title || "Shared Task";
+      const description = cleanNotificationBody(d.description || "", 200)
+        || `${d.short_id ? `${d.short_id}, ` : ""}${String(d.status || "open").replace("_", " ")}`;
+      return { title: `Codecast: ${title}`, description, url, type: "article" };
+    }
+    case "call": {
+      const title = d.title || (d.recording ? "Shared Recording" : "Shared Huddle");
+      const names: string[] = Array.isArray(d.participants) ? d.participants.map((p: any) => p.name).filter(Boolean) : [];
+      const description = cleanNotificationBody(d.summary || "", 200)
+        || (names.length ? `A call with ${names.join(", ")}` : "A shared call");
+      return { title: `Codecast: ${title}`, description, url, type: "article" };
+    }
+    case "project":
+    case "initiative": {
+      const title = d.title || `Shared ${kind}`;
+      const description = cleanNotificationBody(d.goal || d.description || "", 200) || `A ${kind} on Codecast`;
+      return { title: `Codecast: ${title}`, description, url, type: "article" };
+    }
+    case "decision": {
+      const options: string[] = Array.isArray(d.options) ? d.options.map((o: any) => o.label) : [];
+      const chosen = d.status === "answered" && d.answer_index != null ? options[d.answer_index] : null;
+      const description = chosen ? `Decided: ${chosen}` : options.length ? `Options: ${options.join(", ")}` : "A decision on Codecast";
+      return { title: `Codecast: ${d.question || "Shared decision"}`, description: cleanNotificationBody(description, 200), url, type: "article" };
+    }
+    case "stack": {
+      const ds: any[] = Array.isArray(d.decisions) ? d.decisions : [];
+      const decided = ds.filter((x) => x.status === "answered").length;
+      return { title: `Codecast: ${d.title || "Shared decisions"}`, description: `${decided} of ${ds.length} decisions made`, url, type: "article" };
+    }
+    case "trigger": {
+      const description = cleanNotificationBody(d.summary || d.prompt || "", 200) || "A standing instruction to an agent";
+      return { title: `Codecast: ${d.title || "Shared trigger"}`, description, url, type: "article" };
+    }
+    case "run": {
+      const nodes: any[] = Array.isArray(d.nodes) ? d.nodes : [];
+      const done = nodes.filter((n) => n.status === "completed").length;
+      const description = cleanNotificationBody(d.goal || "", 200) || `${done} of ${nodes.length} steps done`;
+      return { title: `Codecast: ${d.name || "Workflow run"}`, description, url, type: "article" };
+    }
   }
+}
+
+// --- Guest meeting links ------------------------------------------------------
+// /meet/<token> is not a share kind (it opens a door into a live call, not a
+// read-only object), but it travels the same way: pasted into a chat or a
+// calendar invite, where the card is the first thing the guest reads.
+
+/** callGuests.describeGuestLink for a token, through the same cache. */
+export function fetchGuestLink(token: string): Promise<{ value: unknown } | null> {
+  return cachedQuery(`meet:${token}`, () => convex.query(api.callGuests.describeGuestLink, { token }));
+}
+
+/** The link card for a guest link: which meeting, who is asking, and the
+ *  notice, because a card is the first place a guest can be told. A closed
+ *  link says so rather than inviting anybody anywhere. */
+export function guestMeetMeta(token: string, data: unknown, baseUrl: string): ShareMeta | null {
+  if (!data || typeof data !== "object") return null;
+  const d = data as any;
+  const url = `${baseUrl}${guestJoinPath(token)}`;
+  if (!d.ok) {
+    const reason = (d.reason ?? "not_found") as GuestLinkRefusal;
+    return { title: "codecast: this meeting link is closed", description: GUEST_LINK_REFUSAL_TEXT[reason] ?? GUEST_LINK_REFUSAL_TEXT.not_found, url };
+  }
+  const title = meetingTitle(d.title, d.inviter);
+  const notice = guestNoticeSentence({ recording: !!d.recording, transcribed: !!d.transcribed });
+  const kept = notice ? ` ${notice}` : "";
+  const who = d.inviter?.name ? `${d.inviter.name} invited you to join.` : "You are invited to join.";
+  return {
+    title: `Join: ${title}`,
+    description: `${who} Join from your browser, no account needed.${kept}`,
+    url,
+  };
 }

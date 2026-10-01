@@ -14,7 +14,7 @@ import { action } from "./mutativeMiddleware";
 import { writeAsServerShape } from "./serverShape";
 import { pushRoleFieldsIntent, type OrgSliceData } from "./orgSlice";
 import { leadScopeChange } from "@codecast/shared/contracts/orgLead";
-import type { InitiativeOwner, InitiativePriority, InitiativeRow, InitiativeStatus, InitiativeUpdateHealth, InitiativeUpdateRow } from "@codecast/shared/contracts/initiative";
+import type { InitiativeMetric, InitiativeOwner, InitiativePriority, InitiativeRow, InitiativeStatus, InitiativeUpdateHealth, InitiativeUpdateRow } from "@codecast/shared/contracts/initiative";
 
 /** Null clears a field, as the mutation reads it. */
 export type InitiativeFields = {
@@ -26,6 +26,8 @@ export type InitiativeFields = {
   priority?: InitiativePriority | null;
   labels?: string[];
   parent_initiative_id?: string | null;
+  /** Replaces the list; keys in the server's order (key, name, target) so the echo reconciles. */
+  metrics?: InitiativeMetric[];
 };
 
 /** Writes are explicit: the caller names the workspace it is looking at. */

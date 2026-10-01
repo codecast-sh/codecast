@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { promisify } from "node:util";
-import { execFile, execFileSync, keychainReadAsync, spawnSync, withWindowsHide, SLOW_SYNC_SPAWN_MS } from "./proc.js";
+import { execFile, execFileSync, findOnPath, keychainReadAsync, spawnSync, withWindowsHide, SLOW_SYNC_SPAWN_MS } from "./proc.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -128,5 +128,26 @@ describe("keychainReadAsync", () => {
       setSlowSyncSink(null);
     }
     expect(seen).toEqual([]);
+  });
+});
+
+describe("findOnPath", () => {
+  it("resolves a bare name through PATHEXT on Windows, where there is no `which`", () => {
+    const files = new Set(["C:\\Tools\\ffmpeg\\bin\\ffmpeg.EXE"]);
+    const isFile = (p: string) => files.has(p);
+    const pathEnv = 'C:\\Windows;"C:\\Tools\\ffmpeg\\bin";';
+    expect(findOnPath("ffmpeg", pathEnv, { platform: "win32", pathext: ".COM;.EXE", isFile })).toBe("C:\\Tools\\ffmpeg\\bin\\ffmpeg.EXE");
+    expect(findOnPath("tmux", pathEnv, { platform: "win32", pathext: ".COM;.EXE", isFile })).toBeNull();
+  });
+
+  it("walks a POSIX PATH in order and takes the first hit", () => {
+    const files = new Set(["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]);
+    const isFile = (p: string) => files.has(p);
+    expect(findOnPath("ffmpeg", "/usr/bin:/opt/homebrew/bin:/usr/local/bin", { platform: "darwin", isFile })).toBe("/opt/homebrew/bin/ffmpeg");
+    expect(findOnPath("/usr/local/bin/ffmpeg", "", { platform: "darwin", isFile })).toBe("/usr/local/bin/ffmpeg");
+  });
+
+  it("finds a real executable on this machine", () => {
+    expect(findOnPath("sh", process.env.PATH ?? "/bin:/usr/bin")).toMatch(/\/sh$/);
   });
 });

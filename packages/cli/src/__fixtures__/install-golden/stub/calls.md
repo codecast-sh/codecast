@@ -1,16 +1,8 @@
 
 ## Calls
 
-Team huddles are transcribed with exact speaker attribution, and each call gets a title, summary and action items when it ends. `cast calls` shows what was decided, asked and owned without having been there.
+Read transcribed team calls (cast calls). Adds `cast calls` and `cast call <id>` so agents can read the team's huddles: the speaker-attributed transcript, the auto-generated summary and the action items, and `cast call snap` for a frame of a recorded call at any line or time. Nothing joins a call: this is read access to what was said and shown, so a task that says "as discussed on the call" can be traced to the exact line and the screen behind it.
 
-```bash
-cast calls                        # team call history, live calls first
-cast call <id>                    # one call: summary + action items
-cast call <id> --transcript       # full who-said-what transcript
-cast call <id> --json             # machine-readable, segments too
-cast call hold 3m|off             # hold the room's words while you work
-```
-
-When a task or thread refers to what was said on a call, read the transcript and quote the exact line rather than paraphrase it.
+Run `cast guide calls` for the commands and flags. The guide ships inside the binary you run, so it always matches the `cast` that will execute them.
 <!-- cast @VERSION@ -->
 <!-- /codecast-calls -->

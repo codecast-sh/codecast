@@ -105,6 +105,35 @@ describe("org history round trips", () => {
     await f.redo(adopt);
     expect(await owners()).toEqual({ rows: [ME], primary: ME });
   });
+  test("undoing an adopt puts the replaced owner's row back as it was, not as a new handoff", async () => {
+    const f = fixture(); await f.role();
+    const mateRow = () => f.db._tables.session_owners.find((r: any) => r.conversation_id === "conversations_c" && r.user_id === MATE);
+    await f.db.insert("session_owners", { conversation_id: "conversations_c", user_id: MATE, added_by: MATE, added_at: 1, seen_at: 2, note: "mine" });
+    await f.db.patch("conversations_c", { owner_user_id: MATE });
+    await f.apply({ kind: "adopt", handle: "growth", conversation: "jx70001" }); const adopt = f.last();
+    expect(mateRow()).toBeUndefined();
+    await f.undo(adopt);
+    // An unseen row added by someone else is an "assigned to you" ping; the
+    // owner had acknowledged theirs long before, so the undo must not raise one.
+    const { added_by, added_at, seen_at, note } = mateRow();
+    expect({ added_by, added_at, seen_at, note }).toEqual({ added_by: MATE, added_at: 1, seen_at: 2, note: "mine" });
+  });
+  test("an owner change after an adopt leaves the owners alone and still takes the seat back", async () => {
+    const f = fixture(); await f.role();
+    const seat = async () => { const c = await f.db.get("conversations_c"); return { org_role_id: c.org_role_id ?? null, standing_role_id: c.standing_role_id ?? null }; };
+    const before = await seat();
+    await f.apply({ kind: "adopt", handle: "growth", conversation: "jx70001" }); const adopt = f.last();
+    expect(await seat()).not.toEqual(before);
+    // A co-owner joins after the adopt.
+    await f.db.insert("session_owners", { conversation_id: "conversations_c", user_id: MATE, added_by: ME, added_at: NOW + 1 });
+    const owners = () => f.db._tables.session_owners.filter((r: any) => r.conversation_id === "conversations_c").map((r: any) => r.user_id).sort();
+    const ownersNow = owners();
+    const p = await planUndo(f.ctx(), ME as any, adopt);
+    expect(p.preview.left_alone.map((e: any) => e.row.skipped)).toContain("its owners changed after this");
+    await f.undo(adopt);
+    expect(await seat()).toEqual(before);
+    expect(owners()).toEqual(ownersNow);
+  });
   test("retirement restores children and untouched task assignments", async () => {
     const f = fixture(); const role = await f.role();
     await f.db.patch("tasks_t", { assignee: role._id });
@@ -295,7 +324,7 @@ const ORG_STATE: Record<string, string[]> = {
   plans: ["status", "project_id", "owner_role_id"],
   projects: ["status", "description", "owner_role_id", "goal", "success_metrics", "priority", "non_goals", "risks", "budget"],
   docs: ["project_id"],
-  initiatives: ["status", "owner", "project_ids"],
+  initiatives: ["status", "owner", "project_ids", "parent_initiative_id", "metrics"],
   session_owners: ["conversation_id", "user_id"],
   org_template_instances: ["phase", "role_id", "version", "pending_upgrade"],
 };
@@ -339,6 +368,8 @@ const CASES: Case[] = [
   { kind: "initiative", setup: (f) => f.role(), change: { kind: "initiative", title: "Reach 1k teams", description: "A thousand teams run an agent every week.", projects: ["pr-1"], owner: "@growth" } },
   { kind: "initiative_projects", change: { kind: "initiative_projects", initiative: "in-1", projects: ["pr-1"] } },
   { kind: "initiative_owner", setup: (f) => f.role(), change: { kind: "initiative_owner", initiative: "Campaign", owner: "@growth" } },
+  // Where a goal sits and how it is read: the parent and the metrics restore as fields.
+  { kind: "initiative_shape", setup: (f) => f.apply({ kind: "initiative", title: "Reach 1k teams", description: "A thousand teams run an agent every week.", projects: ["pr-1"] }), change: { kind: "initiative_shape", initiative: "in-1", parent: "Reach 1k teams", metrics: [{ name: "Campaign signups", target: "500" }] } },
 ];
 
 describe("S21: every change kind round trips through apply, undo and redo", () => {

@@ -10,6 +10,7 @@ import {
   computeWorkspaceKey,
   resolveWorkspaceKey,
   parseWorkspaceKey,
+  resolveSessionConversation,
   type WorkspaceKey,
 } from "./lib/access";
 
@@ -251,14 +252,44 @@ export function scopeByProject<T extends Record<string, any>>(
   return items.filter(item => !item.project_path || item.project_path.startsWith(projectPath) || (item.git_root && item.git_root.startsWith(projectPath)));
 }
 
+/**
+ * The data context for a work write from the CLI, and the session it came
+ * from. The workspace the caller named wins; else the team of the calling
+ * session when that session is team visible (a private session's team_id is
+ * routing, and copying it would make the row readable by the whole team);
+ * else the directory rule. An unresolvable session ref drops the link and
+ * keeps the write (resolveSessionConversation).
+ */
+export async function createWorkContext(
+  ctx: { db: any },
+  opts: DataContextOpts & { conversation_id?: string },
+) {
+  const conversation = opts.conversation_id
+    ? await resolveSessionConversation(ctx, opts.userId, opts.conversation_id)
+    : null;
+  const convTeamId = conversation ? teamVisibleConvTeam(conversation) : undefined;
+  const db = await createDataContext(ctx, {
+    userId: opts.userId,
+    project_path: opts.project_path,
+    ...explicitWorkspace(opts, convTeamId ? { workspace: "team" as const, team_id: convTeamId } : {}),
+  });
+  return { db, conversation };
+}
+
 export async function createDataContext(ctx: { db: any }, opts: DataContextOpts) {
   const workspace = await resolveWorkspace(ctx, opts);
   const key = workspaceKey(workspace);
   const projectPath = opts.project_path;
 
+  // Both axes for a row written in this workspace: team_id (routing) and
+  // workspace (access). A table outside SCOPED_TABLES that is still
+  // workspace-owned (signals) stamps these itself.
+  const axes = { team_id: workspace.type === "team" ? workspace.teamId : undefined, workspace: key };
+
   const self = {
     workspace,
     workspaceKey: key,
+    axes,
     userId: opts.userId,
     projectPath,
 
@@ -277,8 +308,8 @@ export async function createDataContext(ctx: { db: any }, opts: DataContextOpts)
         updated_at: now,
       };
       if (SCOPED_TABLES.has(table)) {
-        doc.team_id = workspace.type === "team" ? workspace.teamId : undefined;
-        doc.workspace = typeof fields.workspace === "string" && fields.workspace ? fields.workspace : key;
+        doc.team_id = axes.team_id;
+        doc.workspace = typeof fields.workspace === "string" && fields.workspace ? fields.workspace : axes.workspace;
         if (projectPath && !doc.project_path) {
           doc.project_path = projectPath;
         }

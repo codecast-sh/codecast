@@ -1,0 +1,26 @@
+{
+  "name": "call-summary too-short-to-summarize",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:too-short-to-summarize"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "call-summary:too-short-to-summarize",
+    "title": "call-summary too-short-to-summarize"
+  },
+  "asOf": "2026-01-14T17:01:00.000Z",
+  "trigger": {
+    "type": "call-summary"
+  },
+  "meta": {
+    "surface": "call-summary",
+    "visibility": "public",
+    "snapshot": "fixtures/call-summary/too-short-to-summarize.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "e22b47f0-eb2d-488e-b397-6b086acd15e2",
+  "createdAt": "2026-10-01T17:45:14.197Z"
+}

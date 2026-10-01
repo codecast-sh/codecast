@@ -3,7 +3,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { ConvexProvider } from "convex/react";
 import { heroConvexStub } from "../../app/(marketing)/heroFly/convexStub";
 import { PermissionStack, PermissionStackView } from "../PermissionCard";
-import { PhonePermissionCard } from "../PhonePermissionCard";
 import { AgentStatusPill } from "../conversation/ConversationHeaderBar";
 import { agentStatusPillSpec } from "../conversation/agentStatusPill";
 import { ComposerSendButton, ComposerShell, ComposerTextarea, ComposerTextRow } from "../ComposerShell";
@@ -52,23 +51,6 @@ describe("PermissionStackView", () => {
       <PermissionStackView pending={[row("hero-p1", "Bash", "npm test")]} inflight={new Set(["hero-p1"])} onApprove={noop} onDeny={noop} onApproveAll={noop} onDenyAll={noop} />,
     );
     expect(html).toContain(">...</button>");
-    expect(html.match(/disabled=""/g)).toHaveLength(2);
-  });
-});
-
-describe("PhonePermissionCard", () => {
-  test("renders the shared copy and nothing for a settled row", () => {
-    const html = renderToStaticMarkup(<PhonePermissionCard permission={row("p", "Bash", "npm test")} onApprove={noop} onDeny={noop} />);
-    expect(html).toContain("Permission Required");
-    expect(html).toContain("npm test");
-    expect(html).toContain(">Approve<");
-    expect(html).toContain(">Deny<");
-    expect(renderToStaticMarkup(<PhonePermissionCard permission={row("p", "Bash", "x", "approved")} onApprove={noop} onDeny={noop} />)).toBe("");
-  });
-
-  test("processing replaces both labels and disables the buttons", () => {
-    const html = renderToStaticMarkup(<PhonePermissionCard permission={row("p", "Bash")} processing onApprove={noop} onDeny={noop} />);
-    expect(html).not.toContain("Approve");
     expect(html.match(/disabled=""/g)).toHaveLength(2);
   });
 });

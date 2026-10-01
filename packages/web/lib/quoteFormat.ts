@@ -14,6 +14,23 @@ export type PendingComment = {
   // editor can offer posting it as a durable team comment at that anchor.
   filePath?: string;
   fileLine?: number;
+  // Set on a note pinned to a point of a gallery image. `quote` then holds a
+  // plain description of where the image came from, and the image itself is
+  // pointed at by its attachment number when it rides along on the send, else
+  // by its address.
+  image?: QuotedImage;
+};
+
+// `point` is where on the picture the note sits, as fractions of its width
+// and height from the top left; `width`/`height` are the picture's own pixel
+// size, so the point can also be given in pixels.
+export type QuotedImage = {
+  src: string;
+  href?: string;
+  storageId?: string;
+  point?: { x: number; y: number };
+  width?: number;
+  height?: number;
 };
 
 // Prefix every line with "> " so multi-line and structured text (lists, code)
@@ -37,11 +54,36 @@ export function formatQuotedReply(quote: string, body?: string): string {
   return bq || reply;
 }
 
+// What an image note's blockquote says: the image (the `[Image N]` token the
+// composer uses for attachments when it rides along on the send, its address
+// as a markdown image otherwise) and the point the note is pinned to, then
+// where the image came from.
+export function imageQuoteText(c: Pick<PendingComment, "quote" | "image">, attachmentNumber?: number): string {
+  if (!c.image) return c.quote;
+  const head = attachmentNumber ? `[Image ${attachmentNumber}]` : c.image.href ? `![image](${c.image.href})` : "[image]";
+  const at = c.image.point ? ` ${describePoint(c.image)}` : "";
+  return c.quote ? `${head}${at}\n${c.quote}` : `${head}${at}`;
+}
+
+// "at x=412, y=230 of 1600×900 px (26% from the left, 26% from the top)", or
+// only the percentages when the picture's size is unknown.
+export function describePoint({ point, width, height }: QuotedImage): string {
+  if (!point) return "";
+  const pct = `${Math.round(point.x * 100)}% from the left, ${Math.round(point.y * 100)}% from the top`;
+  if (!width || !height) return `at ${pct}`;
+  return `at x=${Math.round(point.x * width)}, y=${Math.round(point.y * height)} of ${width}×${height} px (${pct})`;
+}
+
 // A batch of inline comments, in the order given, separated by blank lines.
 // Comments with no body still emit their quote (treated as a plain quote).
-export function formatPendingComments(comments: Pick<PendingComment, "quote" | "body">[]): string {
+// `attachmentNumbers` maps an image comment's id to its position among the
+// send's attached images.
+export function formatPendingComments(
+  comments: (Pick<PendingComment, "quote" | "body" | "image"> & { id?: string })[],
+  attachmentNumbers?: ReadonlyMap<string, number>,
+): string {
   return comments
-    .map((c) => formatQuotedReply(c.quote, c.body))
+    .map((c) => formatQuotedReply(imageQuoteText(c, c.id ? attachmentNumbers?.get(c.id) : undefined), c.body))
     .filter(Boolean)
     .join("\n\n");
 }

@@ -31,8 +31,8 @@ export function orgProposalRowFromSpec(raw: unknown, teamId: string | null = "fi
   }));
   return {
     _id: proposalId, short_id: ORG_PREVIEW_SPEC_SHORT_ID, ...(teamId ? { team_id: teamId } : {}),
-    author: { kind: "role", id: "fixture-role-chief", name: "Chief of Staff", short_id: "or-9" },
-    thread: { conversation_id: "fixture-chief-conv", short_id: "jx7ch1f" },
+    author: { kind: "role", id: "fixture-role-head", name: "Head of People", short_id: "or-9" },
+    thread: { conversation_id: "fixture-head-conv", short_id: "jx7ch1f" },
     title: spec.title, summary_md: spec.summary_md, mode: spec.mode, status: "open", created_at: now,
     asks: resolveOrgAsks(spec.asks, changes), changes,
   };

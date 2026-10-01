@@ -1,0 +1,116 @@
+/* The guest's page (app/meet): a person with no account joining a call from
+   a link. Always dark, like the call stage it leads into, because video
+   wants a dark room and the page is mostly a camera. Solarized night with
+   the share pages' cyan as the one accent; the guest's own yellow mark is
+   the only warm thing on it. JetBrains Mono for what the app would print,
+   Fraunces for the one line that names the meeting. */
+
+.meet {
+  --meet-accent: #2aa198;
+  --meet-rule: rgba(255, 255, 255, 0.07);
+  --serif: var(--font-serif), Georgia, serif;
+  min-height: 100dvh;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  background:
+    radial-gradient(900px 520px at 12% -8%, rgba(42, 161, 152, 0.14), transparent 62%),
+    radial-gradient(760px 480px at 108% 112%, rgba(38, 139, 210, 0.11), transparent 60%),
+    radial-gradient(rgba(147, 161, 161, 0.07) 1px, transparent 1.2px) 0 0 / 22px 22px,
+    #002b36;
+  color: var(--sol-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+.meet-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 12.5px;
+  letter-spacing: -0.01em;
+  color: var(--sol-text);
+  text-decoration: none;
+}
+.meet-mark i {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: linear-gradient(135deg, #2aa198, #268bd2);
+  box-shadow: 0 0 0 3px rgba(42, 161, 152, 0.18);
+}
+
+.meet-title {
+  font-family: var(--serif);
+  font-weight: 500;
+  letter-spacing: -0.015em;
+  font-variation-settings: "opsz" 72;
+}
+
+/* The page arrives in order, a beat apart; nothing moves for a reader who
+   asked for stillness. */
+.meet-rise > * {
+  animation: meet-rise 0.5s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+.meet-rise > *:nth-child(2) { animation-delay: 50ms; }
+.meet-rise > *:nth-child(3) { animation-delay: 100ms; }
+.meet-rise > *:nth-child(4) { animation-delay: 150ms; }
+.meet-rise > *:nth-child(5) { animation-delay: 200ms; }
+.meet-rise > *:nth-child(6) { animation-delay: 250ms; }
+@keyframes meet-rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* The microphone button breathes with the voice: --meet-level (0..1) is
+   written straight onto the element by the meter, never through React. */
+.meet-level {
+  box-shadow: 0 0 0 calc(var(--meet-level, 0) * 7px) rgba(42, 161, 152, 0.32);
+  transition: box-shadow 90ms linear;
+}
+
+/* Waiting at the door: rings leave the guest's own face, slowly, the way a
+   knock carries. Three, a third apart, so there is always one in flight. */
+.meet-knock {
+  position: relative;
+  isolation: isolate;
+}
+.meet-knock::before,
+.meet-knock::after,
+.meet-knock > .meet-knock-ring {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  border: 1.5px solid rgba(42, 161, 152, 0.55);
+  animation: meet-knock 2.7s cubic-bezier(0.2, 0.6, 0.3, 1) infinite;
+  z-index: -1;
+}
+.meet-knock::after { animation-delay: 0.9s; }
+.meet-knock > .meet-knock-ring { animation-delay: 1.8s; }
+@keyframes meet-knock {
+  from { transform: scale(1); opacity: 0.85; }
+  to { transform: scale(2.1); opacity: 0; }
+}
+
+/* A device select that looks like the rest of the page and still opens the
+   platform's own picker (a phone's sheet is the right control there). */
+.meet-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-color: rgba(255, 255, 255, 0.04);
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 13px) 50%, calc(100% - 9px) 50%;
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
+  padding-right: 24px;
+}
+.meet-select option { background: #073642; color: #eee8d5; }
+
+@media (prefers-reduced-motion: reduce) {
+  .meet-rise > *,
+  .meet-knock::before,
+  .meet-knock::after,
+  .meet-knock > .meet-knock-ring {
+    animation: none;
+  }
+  .meet-knock::before { opacity: 0.4; transform: scale(1.35); }
+}

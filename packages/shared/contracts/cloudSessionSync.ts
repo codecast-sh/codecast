@@ -1,17 +1,20 @@
 /**
  * Agent sessions that run in a vendor's cloud and sync into codecast through
  * the daemon (Claude Code on claude.ai/code, Cursor Cloud Agents, Codex
- * Cloud). Each is an account setting: a boolean on the user row, sent to
- * every daemon on its heartbeat, which starts or stops that source's mirror.
- * Unset means the source's `defaultOn`: Codex Cloud reads a private API with
- * the person's Codex login, so it waits until they turn it on. One table so
- * the settings page, the mutation, the heartbeat and the daemon all walk the
+ * Cloud, OpenAI Agents API sessions). Each is an account setting: a boolean
+ * on the user row, sent to every daemon on its heartbeat, which starts or
+ * stops that source's mirror. Unset means the source's `defaultOn`: Codex
+ * Cloud reads a private API with the person's Codex login, and an OpenAI API
+ * key's project holds whatever other apps ran on it, so both wait until they
+ * turn it on (sessions codecast starts sync either way). One table so the
+ * settings page, the mutation, the heartbeat and the daemon all walk the
  * same list.
  */
 export const CLOUD_SESSION_SOURCES = {
   claude: { field: "claude_cloud_sync", label: "Claude Code cloud sessions", defaultOn: true },
   cursor: { field: "cursor_cloud_sync", label: "Cursor Cloud agents", defaultOn: true },
   codex: { field: "codex_cloud_sync", label: "Codex Cloud tasks", defaultOn: false },
+  codex_api: { field: "codex_api_sync", label: "OpenAI Agents API sessions", defaultOn: false },
 } as const;
 
 export type CloudSessionSource = keyof typeof CLOUD_SESSION_SOURCES;

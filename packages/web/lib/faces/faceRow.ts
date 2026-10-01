@@ -1,4 +1,5 @@
 import type { FaceState } from "./faceState";
+import { memberKind } from "@codecast/shared/team/memberKind";
 export type { FaceState } from "./faceState";
 // THE FACE ROW: presence, walkie, ringing and calls as the same faces in
 // different states (pl-756).
@@ -100,6 +101,10 @@ export type FaceEntry = {
   ask: number;
   /** An agent, not a person: drawn as one, and offers no call or message. */
   bot?: boolean;
+  /** Somebody from outside the team, in the viewer's call on a guest link:
+   *  drawn with the guest mark, no presence, and a card with only what the
+   *  room can do about a guest (put them out). */
+  guest?: boolean;
 };
 
 export type FaceCard =
@@ -178,7 +183,14 @@ export type FaceSeat = {
   walkie_joined_at?: number;
 };
 
-export type FaceLiveRoom = { room_key: string; seat?: "call" | "walkie"; members: FaceSeat[] };
+export type FaceLiveRoom = {
+  room_key: string;
+  seat?: "call" | "walkie";
+  members: FaceSeat[];
+  /** Guests let in on a link (calls.getLiveRooms `guests`): no seat, no
+   *  roster row, a LiveKit identity (`guest:<id>`) and the name they typed. */
+  guests?: { identity: string; name: string; joined_at?: number }[];
+};
 
 export type FaceRowInput = {
   viewer: { id: string; name?: string; image?: string } | null;
@@ -202,6 +214,9 @@ export type FaceRowInput = {
      *  window: the tracks' own in the window holding them, the host's mirror
      *  everywhere else, so the header draws video exactly where the float does. */
     cameras: string[];
+    /** The room's guests in the media, with their microphones; null when the
+     *  window holding the media is too old to say. */
+    guests?: { identity: string; muted: boolean }[] | null;
   };
   followLeaderId: string | null;
   rings: {
@@ -491,7 +506,7 @@ export function deriveFaceRow(input: FaceRowInput, prev: FaceRow | null): FaceRo
     if (!id || id === meId) continue;
     // A Slack person is a shadow identity for chat mentions: nobody to call,
     // ring or message from here, so no face (founder, 2026-09-24).
-    if (m.is_bot && m.bot_kind === "slack") continue;
+    if (memberKind(m) === "slack") continue;
     const prevEntry = prevById.get(id);
     // In my room by any of three reports: the occupancy feed, the live rooms
     // list, or their own roster row naming my room. Three sources so a face
@@ -527,6 +542,46 @@ export function deriveFaceRow(input: FaceRowInput, prev: FaceRow | null): FaceRo
       ...(m.is_bot ? { bot: true } : {}),
     };
     rows.push({ entry, member: m, linked });
+  }
+
+  // The guests in my call. Never on the team's roster, so the loop above never
+  // meets them; they are in the call with me all the same, linked like any
+  // seat in it, speaking by their identity, on camera by their identity.
+  // The server lists a guest by their lease; the media says whether they can
+  // be heard. Once my call is connected, a guest the media does not have (a
+  // reload waiting on a press, a dropped page) is not drawn as here, and a
+  // guest it does have wears their real microphone.
+  const guestMedia =
+    input.call.phase === "connected" && input.call.roomKey === room && input.call.guests
+      ? new Map(input.call.guests.map((g) => [g.identity, g]))
+      : null;
+  if (room && mode === "call") {
+    for (const g of input.liveRooms.find((r) => r.room_key === room)?.guests ?? []) {
+      const id = g.identity;
+      if (!id || rows.some((r) => r.entry.id === id)) continue;
+      if (guestMedia && !guestMedia.has(id)) continue;
+      const speaking = input.call.speaking.includes(id);
+      links.push({ from: meId, to: id, kind: linkKindOf(input, mode, id) });
+      rows.push({
+        entry: {
+          id,
+          name: g.name,
+          me: false,
+          tier: "linked",
+          state: speaking ? "speaking" : "live-with-me",
+          level: speaking ? "voice" : null,
+          video: cameraOf.has(id) ? "remote" : null,
+          muted: !!guestMedia?.get(id)?.muted,
+          followed: false,
+          joinedAgo: g.joined_at ? Math.max(0, input.now - g.joined_at) : null,
+          unread: 0,
+          ask: 0,
+          guest: true,
+        },
+        member: { _id: id, name: g.name },
+        linked: true,
+      });
+    }
   }
 
   const rank = new Map(FACE_TIERS.map((t, i) => [t, i]));
@@ -607,7 +662,9 @@ function occupancySig(occ: Record<string, FaceSeat[]> | undefined): string {
 
 function liveRoomsSig(rooms: FaceLiveRoom[] | undefined): string {
   let s = "";
-  for (const r of rooms ?? []) s += `${r.room_key}|${r.seat ?? ""}|${seatSig(r.members)}\n`;
+  for (const r of rooms ?? []) {
+    s += `${r.room_key}|${r.seat ?? ""}|${seatSig(r.members)}|${(r.guests ?? []).map((g) => `${g.identity}:${g.name}`).join(",")}\n`;
+  }
   return s;
 }
 
@@ -707,7 +764,7 @@ export function faceRowInputSig(
     occupancySig(st.callOccupancy),
     liveRoomsSig(st.liveRooms),
     walkieRowSig(walkie),
-    `${call.phase}|${call.roomKey ?? ""}|${call.muted ? 1 : 0}|${call.micDenied ? 1 : 0}|${call.camera ? 1 : 0}|${call.speaking.join(",")}|${call.cameras.join(",")}`,
+    `${call.phase}|${call.roomKey ?? ""}|${call.muted ? 1 : 0}|${call.micDenied ? 1 : 0}|${call.camera ? 1 : 0}|${call.speaking.join(",")}|${call.cameras.join(",")}|${(call.guests ?? []).map((g) => `${g.identity}:${g.muted ? 1 : 0}`).join(",")}`,
     st.followLeaderId ?? "",
     ringsSig(st.myCalls),
     announcement ? `${announcement.roomKey}|${announcement.at}` : "",
@@ -753,6 +810,7 @@ export function faceRowInputFrom(
       camera: call.camera,
       speaking: call.speaking,
       cameras: call.cameras,
+      guests: call.guests,
     },
     followLeaderId: st.followLeaderId ?? null,
     rings: { incoming: st.myCalls?.incoming ?? [], outgoing: st.myCalls?.outgoing ?? [] },

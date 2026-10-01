@@ -10,6 +10,8 @@ import { getLabelColor } from "../lib/labelColors";
 import { itemClass } from "./paletteStyles";
 import { ShortId } from "./ShortId";
 import { formatDateSmart } from "@codecast/shared/time";
+import { parseSessionQuery } from "@codecast/shared/search";
+import { highlightMatch, getSnippet } from "../lib/searchHighlight";
 
 // Presentational rows of the Cmd+K palette. CommandPalette owns the data and
 // the select handlers; these draw a row from plain props, so the marketing
@@ -158,10 +160,13 @@ export type PaletteSearchResult = {
 };
 
 /** A "Search Results" row: face, identity line, author, first match, match count, age. */
-export function PaletteSearchResultRow({ result, onSelect }: {
+export function PaletteSearchResultRow({ result, query = "", onSelect }: {
   result: PaletteSearchResult;
+  /** The typed query; its free text (operators stripped) is marked in the snippet. */
+  query?: string;
   onSelect: () => void;
 }) {
+  const terms = query ? parseSessionQuery(query).text : "";
   const row = identityRowOf({ _id: result.conversationId, title: result.title, ...(result.identity ?? {}) });
   return (
     <CommandPrimitive.Item
@@ -184,7 +189,7 @@ export function PaletteSearchResultRow({ result, onSelect }: {
         </div>
         {result.matches?.[0]?.content && (
           <div className="truncate text-[11px] text-sol-text-dim mt-0.5">
-            {result.matches[0].content.slice(0, 80)}
+            {highlightMatch(getSnippet(result.matches[0].content, terms, 160), terms)}
           </div>
         )}
       </div>

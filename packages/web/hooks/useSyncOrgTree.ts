@@ -18,7 +18,7 @@ export function isMissingFunctionError(error: Error | undefined): boolean {
 
 /** The feeder alone: mounts the subscription and reports its state without
  *  subscribing the caller to the tree. A page that only names roles (an
- *  owner chip, the chief of staff link) mounts this and reads useOrgRoles,
+ *  owner chip, the head of people link) mounts this and reads useOrgRoles,
  *  so a message under any node does not re-render it. */
 export function useSyncOrgTreeFeeder(canonicalTeamId?: string | null): { ready: boolean; error?: Error; missing: boolean; refused: boolean; retry: () => void } {
   // Web reads the mirrored pointer. Mobile switches teams through

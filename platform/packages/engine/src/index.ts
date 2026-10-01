@@ -19,6 +19,8 @@ export {
   mutativeMiddleware,
   groupPatchesByTable,
   generateAutoPending,
+  collectActionFieldLocks,
+  releaseActionFieldLocks,
   outboxCoalesceKeyFor,
   isPermanentDispatchError,
   isParkedDispatchError,
@@ -39,7 +41,7 @@ export {
   type GroupPatchesContext,
 } from "./middleware";
 
-export { applySyncTable, applySyncRecord, applySyncPatch } from "./syncProtocol";
+export { applySyncTable, applySyncRecord, applySyncPatch, applyShapeLocks } from "./syncProtocol";
 export { createSyncEngine, applyMerge, rekeyPending, type SyncEngine } from "./syncEngine";
 
 export { deriveRegistryMaps, type RegistryMaps } from "./registry";
@@ -93,6 +95,7 @@ export type {
   SyncOpts,
   PendingEntry,
   OutboxEntry,
+  ActionFieldLock,
   MergeSpec,
   MergeSpecMap,
   MergePolicy,

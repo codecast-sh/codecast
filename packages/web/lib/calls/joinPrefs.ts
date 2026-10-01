@@ -93,20 +93,6 @@ export function rememberMicAutoOpen(on: boolean): void {
   useInboxStore.getState().updateClientUI({ call_mic_auto_open: on });
 }
 
-/**
- * The capture constraints every join hands to the media plane.
- *
- * `echoCancellation` is the one that is not a preference. The burst coming out
- * of a listener's speakers is arriving at their own microphone the moment they
- * step in — without cancellation that is a loop, and the sender hears
- * themselves a beat late. It is on by default in Chromium for `audio: true`,
- * and stating it is the difference between relying on a default and meaning it.
- */
-export function micConstraints(deviceId?: string): MediaTrackConstraints {
-  return {
-    echoCancellation: true,
-    noiseSuppression: true,
-    autoGainControl: true,
-    ...(deviceId ? { deviceId: { ideal: deviceId } } : {}),
-  };
-}
+// The capture constraints live with the rest of the media options
+// (livekitMedia), which a guest's page reads without the store.
+export { micConstraints } from "./livekitMedia";
