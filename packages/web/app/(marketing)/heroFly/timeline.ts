@@ -47,6 +47,8 @@ export function cubicBezier(x1: number, y1: number, x2: number, y2: number) {
 }
 
 export const glide = cubicBezier(0.65, 0, 0.35, 1);
+/** The camera's move: leaves briskly and lands gently. */
+export const camEase = cubicBezier(0.45, 0, 0.2, 1);
 export const settle = cubicBezier(0.16, 1, 0.3, 1);
 export const out = cubicBezier(0.4, 0, 1, 1);
 
@@ -82,19 +84,29 @@ export function typed(text: string, t: number, cue: number, rate: number, words 
 
 /* ── Camera ───────────────────────────────────────────────────────────── */
 
-const DRIFT_X = 12;
-const DRIFT_YAW = 0.4;
+/** A hold breathes: a slow slide and turn, and a push toward the subject. */
+const DRIFT_X = 28;
+const DRIFT_YAW = 1.2;
+const DRIFT_PUSH = 36;
 
 function holdPose(h: Hold, v: number, over?: Partial<Pose>): Pose {
   const p = { ...h.pose, ...over };
   if (!h.drift) return p;
   const d = v - 0.5;
-  return { ...p, x: p.x + DRIFT_X * d, yaw: p.yaw + DRIFT_YAW * d };
+  return { ...p, x: p.x + DRIFT_X * d, yaw: p.yaw + DRIFT_YAW * d, dist: p.dist + DRIFT_PUSH * v };
 }
 
+/**
+ * A Hermite segment from p1 to p2 whose tangents lean toward the neighbouring
+ * holds, kept to the segment's own direction and to half its span, so a far
+ * neighbour can never swing a short move past its ends (the curve stays
+ * monotone between them).
+ */
 function catmull(p0: number, p1: number, p2: number, p3: number, u: number, tension = 0.35) {
-  const m1 = (p2 - p0) * tension;
-  const m2 = (p3 - p1) * tension;
+  const d = p2 - p1;
+  const lim = (m: number) => (d >= 0 ? clamp(m, 0, d * 0.5) : clamp(m, d * 0.5, 0));
+  const m1 = lim((p2 - p0) * tension);
+  const m2 = lim((p3 - p1) * tension);
   const u2 = u * u;
   const u3 = u2 * u;
   return (2 * u3 - 3 * u2 + 1) * p1 + (u3 - 2 * u2 + u) * m1 + (-2 * u3 + 3 * u2) * p2 + (u3 - u2) * m2;
@@ -114,9 +126,9 @@ export function cameraAt(t: number, mobile = false): { pose: Pose; moving: boole
       const after = i + 2 < holds.length ? holdPose(holds[i + 2], 0, over(i + 2)) : b;
       const span = next.t0 - h.t1;
       const u = (t - h.t1) / span;
-      const e = glide(u);
+      const e = camEase(u);
       // Roll leads the turn by 150ms so the move banks into itself.
-      const eRoll = glide(clamp(u + 0.15 / span));
+      const eRoll = camEase(clamp(u + 0.15 / span));
       const crest = (next.crest ?? 0) * Math.sin(Math.PI * e) * (mobile ? 1.6 : 1);
       const pose: Pose = {
         x: catmull(prev.x, a.x, b.x, after.x, e),
@@ -143,8 +155,8 @@ export function cameraTransform(p: Pose): string {
 
 const FLIP_UP = 0.15;
 const FLIP_STEP = 0.12;
-/** The seam: surfaces turn face-down over the overview hold, faster than the deal so the last lands by the loop. */
-const FLIP_DOWN = DURATION - 1.6;
+/** The seam: surfaces turn face-down as the camera settles on the overview, faster than the deal so the last lands by the loop. */
+const FLIP_DOWN = DURATION - 1.2;
 const FLIP_DOWN_STEP = 0.08;
 const FLIP_LIFT_UP = 160;
 const FLIP_LIFT_DOWN = 140;
@@ -172,6 +184,50 @@ function surfaceFlip(i: number, t: number): { angle: number; lift: number } {
   }
   const k = DROP(t - upCue(i), 2.2);
   return { angle: 180 * (1 - k), lift: FLIP_LIFT_UP * Math.sin(Math.PI * clamp(k)) };
+}
+
+/* ── Surfaces near the camera's path fade across transits ────────────── */
+
+const sees = (h: Hold, id: SurfaceId) => h.sees === "all" || h.sees.includes(id);
+const FADE = 0.3;
+
+/**
+ * Opacity of a `fadeInTransit` surface: out over the first 0.3s of a move
+ * away from a hold that sees it, in over the first 0.3s of a move toward one,
+ * and in over the dive's last second (short of the flips) toward the overview.
+ */
+function transitOpacity(id: SurfaceId, t: number): number {
+  for (let i = 0; i < CAMERA.length; i++) {
+    const h = CAMERA[i];
+    if (t >= h.t0 && t <= h.t1) return sees(h, id) ? 1 : 0;
+    const next = CAMERA[i + 1];
+    if (!next || t <= h.t1 || t >= next.t0) continue;
+    const [a, b] = [sees(h, id), sees(next, id)];
+    const s = t - h.t1;
+    if (a && b) return 1;
+    if (a) return 1 - settle(clamp(s / FADE));
+    if (!b) return 0;
+    if (next.sees === "all") return settle(clamp((t - (next.t0 - 1)) / 0.6));
+    return settle(clamp(s / FADE));
+  }
+  return 1;
+}
+
+/**
+ * Shadows lie on the backdrop (z = -420), so a surface's height above it
+ * reads as depth: high surfaces cast wide, soft shadows; low ones tight.
+ */
+const BACKDROP_Z = -420;
+function shadowOf(s: (typeof SURFACES)[number], liftN: number): El {
+  const h = s.pos[2] - BACKDROP_Z;
+  // Held off the backdrop by as far as the surface's tilt swings its edges, so no part of it sinks behind the plane.
+  const tilt = Math.sin((Math.max(Math.abs(s.rot[0]), Math.abs(s.rot[1])) * Math.PI) / 180) * (Math.max(s.w, s.h) / 2);
+  const clear = 12 + tilt * 1.1;
+  const scale = (1 + h / 1400) * (1 + 0.18 * liftN);
+  return {
+    transform: `translate3d(0px, ${r3(18 + h * 0.06)}px, ${r3(-h + clear)}px) scale(${r3(scale)})`,
+    opacity: r3(clamp(0.3 - (0.12 * h) / 600, 0.08, 0.3) / 0.3 * (1 - 0.65 * liftN)),
+  };
 }
 
 /* ── Beats ────────────────────────────────────────────────────────────── */
@@ -285,7 +341,7 @@ const SURFACE_INDEX = Object.fromEntries(SURFACES.map((s, i) => [s.id, i])) as R
 
 /** Every element id the film animates, with its surface; used by the driver and the tests. */
 export const ELEMENT_IDS: string[] = [
-  ...SURFACES.flatMap((s) => [`card:${s.id}`, `shadow:${s.id}`, `mount:${s.id}`]),
+  ...SURFACES.flatMap((s) => [`card:${s.id}`, `shadow:${s.id}`, `mount:${s.id}`, ...(s.fadeInTransit ? [`face:${s.id}`] : [])]),
   ...Object.entries(BEATS).flatMap(([sid, beats]) => [...new Set(beats.map((b) => `${sid}/${b.id}`))]),
   ...FLYERS.map((f) => f.id),
   ...ARCS.map((a) => a.id),
@@ -307,8 +363,11 @@ export function frame(tIn: number, mobile = false): Frame {
     const { angle, lift } = surfaceFlip(i, t);
     const liftN = lift / FLIP_LIFT_UP;
     els[`card:${s.id}`] = { transform: `translateZ(${r3(lift)}px) rotateX(${r3(angle)}deg)` };
-    els[`shadow:${s.id}`] = { transform: `translateZ(-60px) scale(${r3(1 + 0.18 * liftN)})`, opacity: r3(1 - 0.65 * liftN) };
+    const shadow = shadowOf(s, liftN);
+    const fade = s.fadeInTransit ? transitOpacity(s.id, t) : 1;
+    els[`shadow:${s.id}`] = { ...shadow, opacity: r3((shadow.opacity ?? 1) * fade) };
     els[`mount:${s.id}`] = { visible: LIVE[s.id].some(([a, b]) => t >= a && t <= b) };
+    if (s.fadeInTransit) els[`face:${s.id}`] = { opacity: r3(fade) };
 
     const ct = contentT(i, t);
     const grouped: Record<string, { tf: string[]; o: number }> = {};

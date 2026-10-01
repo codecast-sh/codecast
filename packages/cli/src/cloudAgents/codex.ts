@@ -31,7 +31,7 @@ import { threadItemToMessage, type ThreadItem } from "../codexAppServer.js";
 import type { ParsedMessage } from "../parser.js";
 import { splitPatches } from "../repoMirror.js";
 import { CloudApiError, cloudApiErrorOf } from "./http.js";
-import { repoOwnerName } from "./poll.js";
+import { repoOwnerName, secondsToMs } from "./poll.js";
 import { MirrorTranscript } from "./transcript.js";
 import { CloudAgentBusyError, CloudAgentSetupError, type CloudAgentAdapter, type CloudAgentApplyPlan, type CloudAgentGit, type CloudAgentHandle, type CloudAgentListItem, type CloudAgentLogin, type CloudAgentLoginCommand, type CloudAgentMirror } from "./types.js";
 import type { CloudAgentSession } from "./sessions.js";
@@ -326,10 +326,6 @@ function turnError(err: unknown): string {
   return typeof err === "string" && err ? err : cloudApiErrorOf(0, err, "no reason given").message;
 }
 
-function secondsToMs(s: number | null | undefined): number | undefined {
-  return typeof s === "number" && Number.isFinite(s) && s > 0 ? Math.round(s * 1000) : undefined;
-}
-
 /**
  * The tool Codex Cloud records a pull request's title and body with (an MCP
  * server's `make_pr`, `container.make_pr` in a worklog). Its call says nothing
@@ -545,10 +541,7 @@ export function buildCodexCloudTranscript(input: CodexCloudTranscriptInput): str
       if (text) tx.note(`${key}:progress`, text, secondsToMs(turn.created_at) ?? tx.clock);
       continue;
     }
-    if (turn.turn_status === "failed") tx.error(`${key}:error`, `${CODEX.label} turn failed: ${turnError(turn.error)}`);
-    else if (turn.turn_status === "cancelled") tx.note(`${key}:cancelled`, "Cancelled.");
-    else if (turn.turn_status && turn.turn_status !== "completed") tx.note(`${key}:ended`, `${CODEX.label} ended this turn as ${turn.turn_status}.`);
-    tx.turnEnded();
+    tx.endTurn(key, { status: turn.turn_status, label: CODEX.label, reason: turnError(turn.error) });
   }
   return tx.toString();
 }

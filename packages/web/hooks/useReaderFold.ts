@@ -21,6 +21,10 @@ export function useReaderFold<T>(items: T[], timeOf: (item: T) => number, newSin
     hidden,
     /** Index of the first new item within `items`, -1 for none. */
     firstNew: fold.firstNew,
+    /** How many items the fold holds back when closed, whether it is open now. */
+    folded: fold.hidden,
+    expanded: showAll,
     showAll: () => setShowAll(true),
+    toggle: () => setShowAll((v) => !v),
   };
 }

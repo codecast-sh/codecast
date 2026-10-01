@@ -13,6 +13,27 @@ export const CLOUD_BACKFILL_MS = CLOUD_AGENT_BACKFILL_DAYS * 24 * 3600_000;
 /** How many pages of a provider's list one pass reads. */
 export const CLOUD_MAX_LIST_PAGES = 5;
 
+/**
+ * A provider's paged list: `fetchPage` reads one page from a cursor and says
+ * where the next starts (undefined at the end), for up to `maxPages`.
+ */
+export async function collectPages<T>(fetchPage: (cursor: string | undefined) => Promise<{ items: T[]; next?: string }>, maxPages = CLOUD_MAX_LIST_PAGES): Promise<T[]> {
+  const out: T[] = [];
+  let cursor: string | undefined;
+  for (let page = 0; page < maxPages; page++) {
+    const { items, next } = await fetchPage(cursor);
+    out.push(...items);
+    if (!next) break;
+    cursor = next;
+  }
+  return out;
+}
+
+/** A provider's time in seconds (Codex Cloud, the Agents API) as ms; undefined when it names none. */
+export function secondsToMs(s: number | null | undefined): number | undefined {
+  return typeof s === "number" && Number.isFinite(s) && s > 0 ? Math.round(s * 1000) : undefined;
+}
+
 /** The folder a cloud session is placed under when this machine has no checkout of its repo. */
 function cloudMirrorPlaceholderRoot(dirName: string): string {
   return `/${dirName}`;

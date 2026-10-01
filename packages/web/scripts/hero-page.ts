@@ -14,6 +14,10 @@
 //     refuses, and says the bar was last left open, as a visitor opening the
 //     page's own URL sees it (a framed page otherwise starts as the pill).
 //
+// The hero shows a still of this page (public/hero/page.jpg, captured at
+// 851x470 CSS px and 2x) and mounts the live page over it only when a visitor
+// points at it; recapture the still whenever the report changes.
+//
 // Run from packages/web: bun scripts/hero-page.ts
 
 import { mkdirSync, writeFileSync } from "node:fs";

@@ -507,6 +507,13 @@ const CAST_BODY_SUBCOMMANDS = new Set([
   "edit", "update", "decide", "discover", "note",
 ]);
 
+// `cast spawn` and `cast fork` flags that take a value (the optional ones,
+// `--subagent [parent]` and `--cloud [host]`, take the word after them too).
+const SPAWN_VALUE_FLAGS = new Set([
+  "-C", "--dir", "--agent", "--as", "--subagent", "--model", "--effort", "--account", "--worktree", "--device",
+  "--cloud", "--from", "--label", "-s", "--session", "--at", "--start-from", "--claude-args", "--claude-tail",
+]);
+
 // The prose a cast mutation carried: a comment body, a done note, a plan's goal,
 // a trigger's prompt, a pinned thread state. This is the content of the action —
 // the conversation renders it as a message body, so one function decides what
@@ -534,6 +541,19 @@ export function extractCastBodyParts(
 
   if (CAST_BODY_SUBCOMMANDS.has(subcommand)) {
     for (const { flags, label } of CAST_BODY_FLAGS) push(extractFlagValue(args, flags), label);
+  }
+
+  // What a spawn or fork was asked to do: each quoted prompt on the line
+  // (`cast spawn --subagent -- "…"`, `cast fork --tip "…" "…"`). A quoted word
+  // after a flag that takes a value is that value (`--subagent "jx7…"` names a
+  // parent, `--label "…"` a label), and a heredoc prompt is not on the line.
+  if (cat === "spawn" || cat === "fork") {
+    const tokens = tokenizeShellArgs(args);
+    tokens.forEach((t, i) => {
+      const prev = tokens[i - 1];
+      const flagValue = !!prev && !prev.quoted && SPAWN_VALUE_FLAGS.has(prev.value);
+      if (t.quoted && !t.dynamic && !flagValue) push(t.value, "prompt");
+    });
   }
 
   return parts;

@@ -126,15 +126,17 @@ export class CloudAgentSessions {
       this.deps.bindSession(conversationId, created.agentId, session.projectPath, session.repoUrl);
       this.deps.log(`${this.tag} created agent ${created.agentId} for conversation ${conversationId.slice(0, 12)} (${created.url ?? ""})`);
     } else {
-      // Last seen running: busy without asking the provider (each retry of a held message would be a read).
-      if (watcher?.isRunning(session.agentId)) throw new CloudAgentBusyError(this.adapter.spec.label);
+      // Last seen running: busy without asking the provider (each retry of a held message would be a read),
+      // unless the provider steers the running turn with it.
+      if (!this.adapter.steersRunningTurn && watcher?.isRunning(session.agentId)) throw new CloudAgentBusyError(this.adapter.spec.label);
       try {
         await this.adapter.followUp(client, session.agentId, content);
       } catch (err) {
-        if (!(err instanceof CloudAgentBusyError)) throw setupErrorOf(this.adapter, err, session) ?? err;
+        const busy = busyErrorOf(this.adapter, err);
+        if (!busy) throw setupErrorOf(this.adapter, err, session) ?? err;
         // A turn started elsewhere (the provider's site): the mirror follows it, so the next retries are answered above.
         void watcher?.follow(session.agentId);
-        throw err;
+        throw busy;
       }
     }
     this.deps.setStatus(conversationId, "working");
@@ -177,6 +179,16 @@ export function setupErrorOf(adapter: AnyCloudAgentAdapter, err: unknown, sessio
   const specific = adapter.setupErrorOf?.(err, session);
   if (specific) return specific;
   return err instanceof CloudApiError && err.keyRejected ? CloudAgentSetupError.credentialsRejected(adapter, err.message) : null;
+}
+
+/**
+ * A follow-up the agent cannot take yet: the adapter's own busy error, or the
+ * provider answering it with a conflict (409: a turn still runs), which every
+ * provider means the same way.
+ */
+function busyErrorOf(adapter: AnyCloudAgentAdapter, err: unknown): CloudAgentBusyError | null {
+  if (err instanceof CloudAgentBusyError) return err;
+  return err instanceof CloudApiError && err.status === 409 ? new CloudAgentBusyError(adapter.spec.label) : null;
 }
 
 /** The session's repository, starting branch and notice, as its checkout is now. */

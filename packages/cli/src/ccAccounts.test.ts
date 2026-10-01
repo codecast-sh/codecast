@@ -29,7 +29,6 @@ import {
   deleteProfile,
   listProfiles,
   parseUsageResponse,
-  refreshUsageSnapshots,
   readUsageCache,
   readActiveStamp,
   parseStatusLineUsage,
@@ -62,6 +61,7 @@ import {
   sameAccountFingerprint,
   attributeFingerprint,
 } from "./ccAccounts.js";
+import { refreshUsageSnapshots } from "./ccUsagePoll.js";
 import { isolateCodecastDir, type IsolatedCodecastDir } from "./test-helpers/codecastDir.js";
 
 const CRED = JSON.stringify({
