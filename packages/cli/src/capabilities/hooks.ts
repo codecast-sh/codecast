@@ -100,8 +100,8 @@ function mergeMatchers(
   // Moving it to the end would make two of our hooks on one event trade places
   // on every refresh, and each swap is a real write to the user's file.
   const blanket = matchers.find((m) => (m.matcher ?? "") === "");
-  const at = blanket ? blanket.hooks.findIndex((h) => h?.command === command) : -1;
-  for (const m of matchers) m.hooks = m.hooks.filter((h) => h?.command !== command);
+  const at = blanket ? blanket.hooks.findIndex((h) => sameCommand(h?.command, command)) : -1;
+  for (const m of matchers) m.hooks = m.hooks.filter((h) => !sameCommand(h?.command, command));
   // `at` is the first copy, so no copy sat before it and the index still holds.
   if (blanket) blanket.hooks.splice(at >= 0 ? at : blanket.hooks.length, 0, entry);
   else matchers.unshift({ matcher: "", hooks: [entry] });
@@ -264,9 +264,26 @@ export function removeOwnedStatusLine(
 }
 
 /** Every matcher under an event with `command` taken out, empties dropped. */
+/**
+ * Is `entry` the same hook as `command`? An older installer wrote the path as
+ * `$HOME/.claude/hooks/x.sh` and this one writes it absolute. Matching only the
+ * exact string left the old spelling behind on removal while the script was
+ * deleted, so every turn failed on a missing file; on install it registered the
+ * hook twice. Both spellings name one file, so both are one hook.
+ */
+function sameCommand(entry: unknown, command: string): boolean {
+  return typeof entry === "string" && (entry === command || expandHome(entry) === expandHome(command));
+}
+
+function expandHome(command: string): string {
+  const home = process.env.HOME || os.homedir();
+  const bare = command.trim().replace(/^(["'])(.*)\1$/, "$2");
+  return bare.replace(/^(\$HOME|\$\{HOME\}|~)(?=\/)/, home);
+}
+
 function hasCommand(existing: unknown, command: string): boolean {
   return Array.isArray(existing)
-    && (existing as HookMatcher[]).some((m) => Array.isArray(m?.hooks) && m.hooks.some((h) => h?.command === command));
+    && (existing as HookMatcher[]).some((m) => Array.isArray(m?.hooks) && m.hooks.some((h) => sameCommand(h?.command, command)));
 }
 
 function stripCommand(existing: unknown, command: string): HookMatcher[] {
@@ -275,8 +292,8 @@ function stripCommand(existing: unknown, command: string): HookMatcher[] {
   // touch comes back identical, so removing a hook that is not there writes
   // nothing.
   return (existing as HookMatcher[])
-    .map((m) => (Array.isArray(m?.hooks) && m.hooks.some((h) => h?.command === command)
-      ? { ...m, hooks: m.hooks.filter((h) => h?.command !== command) }
+    .map((m) => (Array.isArray(m?.hooks) && m.hooks.some((h) => sameCommand(h?.command, command))
+      ? { ...m, hooks: m.hooks.filter((h) => !sameCommand(h?.command, command)) }
       : m))
     .filter((m) => !Array.isArray(m?.hooks) || m.hooks.length > 0);
 }
