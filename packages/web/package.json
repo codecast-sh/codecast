@@ -12,7 +12,8 @@
     "lint": "eslint .",
     "lint:prune-suppressions": "eslint . --prune-suppressions",
     "typecheck": "tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test",
+    "sim": "bun scripts/sim.ts"
   },
   "dependencies": {
     "@codecast/convex": "workspace:*",

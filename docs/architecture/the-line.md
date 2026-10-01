@@ -257,3 +257,33 @@ anything in a protected category goes through `cast decide`, which pins the
 holder to a person. A stalled hand is killed by the runner's timeout and the
 task returns to open with a comment. Two implement cycles, then the task goes
 to `in_review` blocked with a decision to the person (L4, failure gates).
+
+## L12. The merge step
+
+Written 2026-10-02. A line may end in a merge to the default branch, and it
+is off unless a person turns it on for that line.
+
+Two facts allow a merge, both a person's: the role's `merge` authority grant
+(org-hire.md H4: kind `write`, id `merge`, a `per_day` limit; the one the
+Release Captain template carries) and the line's own switch,
+`org_roles.line_merge`. `cast role line @role --merge on [--per-day N]` and
+the Workflow section of the role page flip the switch; turning it on with no
+grant held needs the limit, which writes the grant through the one authority
+path (ninety days) in the same act. Human only, logged like the line.
+
+The shipped line gains a `merge` node after an approving review:
+`review -> merge [approve]`, `merge -> exit`. It is a script node, `cast line
+merge --run $run_id --branch $branch --into $default_branch --cwd
+$project_path` (the runner now sets `$run_id`). The step asks the server
+first (`orgLineMerge.check`: the switch, the grant and its expiry, today's
+count against the limit), then lands the branch: with a pull request named in
+the handoff's evidence, `gh pr merge --rebase` once every check is green and
+the PR is open and mergeable; without one, a fast forward push of the branch
+head onto the default branch, refused when the branch is behind it. Then it
+records the merge (`orgLineMerge.record`): the role's `counters.merges` for
+today, `workflow_runs.merge` (sha, branch, target, PR), a `review` comment on
+the task as the role, and one line into the role's standing session so the
+role reports the merge to the person it reports to in its own words. Every
+refusal (off, no grant, limit reached, red checks, behind) prints one line
+saying the merge is left to a person and exits 0: an approved task whose
+merge waits for a person is not a failed run.

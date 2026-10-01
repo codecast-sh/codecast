@@ -67,12 +67,21 @@ export function ReviewBar({ conversationId }: { conversationId: string }) {
               <button
                 type="button"
                 className="cc-review-tray-item-main cc-review-tray-jump"
-                title="Jump to quoted passage"
+                title={c.image ? "Jump to the message with this image" : "Jump to quoted passage"}
                 disabled={!composer?.jumpToComment}
                 onClick={() => composer?.jumpToComment?.(c)}
               >
                 <span className="cc-review-tray-quote">
-                  <span className="cc-comment-quote-mark">❝</span>
+                  {c.image
+                    ? (
+                      <span className="cc-review-tray-thumb">
+                        <img src={c.image.src} alt="" draggable={false} />
+                        {c.image.point && (
+                          <span className="cc-review-tray-pin" style={{ left: `${c.image.point.x * 100}%`, top: `${c.image.point.y * 100}%` }} />
+                        )}
+                      </span>
+                    )
+                    : <span className="cc-comment-quote-mark">❝</span>}
                   {(c.quote || "").replace(/\s+/g, " ").trim().slice(0, 140)}
                 </span>
                 {c.body ? <span className="cc-review-tray-note block">{c.body}</span> : null}

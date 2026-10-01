@@ -7,7 +7,8 @@
  * commander already dispatches against IS the spec, and this walks it. Every
  * path, its aliases, its summary, its usage, its flags (the command's own plus
  * the globals it also accepts), its positional arguments, whether it is hidden,
- * and whether the destructive table (destructiveCommands.ts) marks it.
+ * whether the destructive table (destructiveCommands.ts) marks it, and whether
+ * it runs anything when argv stops at it.
  *
  * The lazy groups are the catch. They sit in the tree as placeholders until
  * argv names one (commandGroups.ts), so a walk of the default tree would
@@ -70,6 +71,11 @@ export type AgentContextCommand = {
   destructive: boolean;
   /** Sub-paths, for a group. Empty for a leaf. */
   subcommands: string[];
+  /** Something runs when argv stops here, or goes on with a word that names no
+   *  subcommand: the command's own action, or its default subcommand. False
+   *  for a group that only answers with its help or "unknown command", so a
+   *  word it does not know runs nothing. */
+  runsBare: boolean;
 };
 
 export type AgentContext = {
@@ -91,6 +97,8 @@ type CommandInternals = {
     defaultValue?: unknown;
   }>;
   _getHelpOption?: () => Option | null | undefined;
+  _actionHandler?: unknown;
+  _defaultCommandName?: string;
 };
 
 function flagOf(option: Option, global = false): AgentContextFlag {
@@ -129,6 +137,7 @@ function globalFlags(program: Command): AgentContextFlag[] {
 
 function walk(cmd: Command, path: string[], globals: AgentContextFlag[], out: AgentContextCommand[]): void {
   const children = cmd.commands as Command[];
+  const own = cmd as Command & CommandInternals;
   out.push({
     command: path.join(" "),
     path,
@@ -137,9 +146,10 @@ function walk(cmd: Command, path: string[], globals: AgentContextFlag[], out: Ag
     usage: ["cast", ...path, cmd.usage()].filter(Boolean).join(" "),
     flags: [...cmd.options.map((option) => flagOf(option)), ...globals],
     args: argsOf(cmd),
-    hidden: (cmd as Command & CommandInternals)._hidden === true,
+    hidden: own._hidden === true,
     destructive: isDestructivePath(path),
     subcommands: children.map((child) => [...path, child.name()].join(" ")).sort(),
+    runsBare: Boolean(own._actionHandler || own._defaultCommandName),
   });
   for (const child of children) walk(child, [...path, child.name()], globals, out);
 }

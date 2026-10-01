@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { leadScopeChange, ownerOf, ownsWork, projectLeadOf, projectsWithoutAnOwnerAmongWatchers, scopeListsProject, watchersLabel, type LeadRole } from "./orgLead";
+import { HEAD_OF_PEOPLE_HANDLE, LEGACY_HEAD_OF_PEOPLE_HANDLE, isHeadOfPeopleRole, isWholeWorkspaceRole, leadScopeChange, ownerOf, ownsWork, projectLeadOf, projectsWithoutAnOwnerAmongWatchers, scopeListsProject, watchersLabel, type LeadRole } from "./orgLead";
 
 type Role = LeadRole & { _id: string; handle: string };
 
@@ -80,23 +80,23 @@ describe("projectLeadOf", () => {
   });
 
   test("a whole workspace role leads only what no narrower role covers (S26)", () => {
-    const chief = role("chief-of-staff", []);
+    const head = role("head-of-people", []);
     const eng = role("eng", ["proj_platform"]);
-    expect(projectLeadOf(platform, [chief])).toEqual({ kind: "lead", role: chief, by: "workspace" });
-    expect(projectLeadOf(platform, [chief, eng])).toEqual({ kind: "lead", role: eng, by: "scope" });
-    expect(projectLeadOf({ _id: "proj_site" }, [chief, eng])).toEqual({ kind: "lead", role: chief, by: "workspace" });
+    expect(projectLeadOf(platform, [head])).toEqual({ kind: "lead", role: head, by: "workspace" });
+    expect(projectLeadOf(platform, [head, eng])).toEqual({ kind: "lead", role: eng, by: "scope" });
+    expect(projectLeadOf({ _id: "proj_site" }, [head, eng])).toEqual({ kind: "lead", role: head, by: "workspace" });
   });
 
   test("the area falls back to the whole workspace role when its lead retires", () => {
-    const chief = role("chief-of-staff", []);
+    const head = role("head-of-people", []);
     const eng = role("eng", ["proj_platform"], { status: "retired" });
-    expect(projectLeadOf(platform, [chief, eng])).toEqual({ kind: "lead", role: chief, by: "workspace" });
+    expect(projectLeadOf(platform, [head, eng])).toEqual({ kind: "lead", role: head, by: "workspace" });
   });
 
-  test("a role with no scope leads nothing; the Chief of Staff leads what nobody covers", () => {
+  test("a role with no scope leads nothing; the Head of People leads what nobody covers", () => {
     expect(projectLeadOf(platform, [role("ops", [])])).toEqual({ kind: "none" });
-    const chief = role("chief-of-staff", []);
-    expect(projectLeadOf(platform, [chief, role("ops", [])])).toEqual({ kind: "lead", role: chief, by: "workspace" });
+    const head = role("head-of-people", []);
+    expect(projectLeadOf(platform, [head, role("ops", [])])).toEqual({ kind: "lead", role: head, by: "workspace" });
   });
 
   test("a scope that names only one of the project's plans does not lead the project", () => {
@@ -136,8 +136,8 @@ describe("leadScopeChange: what naming a lead does to the role's scope", () => {
   });
 
   test("a whole workspace scope is never narrowed to the one project", () => {
-    const chief = role("chief-of-staff", []);
-    expect(leadScopeChange("proj_platform", chief, [chief])).toEqual({ kind: "whole_workspace" });
+    const head = role("head-of-people", []);
+    expect(leadScopeChange("proj_platform", head, [head])).toEqual({ kind: "whole_workspace" });
   });
 
   test("a role under a parent that does not look after the project keeps its scope", () => {
@@ -174,43 +174,62 @@ describe("the words and the analyzer's list", () => {
 });
 
 describe("ownerOf: work belongs to the most specific role that covers it (S26)", () => {
-  const chief = role("chief-of-staff", []);
+  const head = role("head-of-people", []);
   const growth = role("growth", ["proj_site"]);
   const launch = role("launch", [], { scope: { project_ids: [], plan_ids: ["plan_launch"] } });
 
-  test("a chief plus one lead: the lead's project is the lead's, the rest the chief's", () => {
-    const roles = [chief, growth];
+  test("a Head of People plus one lead: the lead's project is the lead's, the rest the Head of People's", () => {
+    const roles = [head, growth];
     expect(ownerOf({ project_id: "proj_site" }, roles)).toEqual({ kind: "owner", role: growth });
-    expect(ownerOf({ project_id: "proj_platform" }, roles)).toEqual({ kind: "owner", role: chief });
-    expect(ownerOf({}, roles)).toEqual({ kind: "owner", role: chief });
-    expect(ownsWork(chief, { project_id: "proj_site" }, roles)).toBe(false);
+    expect(ownerOf({ project_id: "proj_platform" }, roles)).toEqual({ kind: "owner", role: head });
+    expect(ownerOf({}, roles)).toEqual({ kind: "owner", role: head });
+    expect(ownsWork(head, { project_id: "proj_site" }, roles)).toBe(false);
   });
 
-  test("remove the lead and its work falls back to the chief", () => {
-    const roles = [chief, { ...growth, status: "retired" }];
-    expect(ownerOf({ project_id: "proj_site" }, roles)).toEqual({ kind: "owner", role: chief });
+  test("remove the lead and its work falls back to the Head of People", () => {
+    const roles = [head, { ...growth, status: "retired" }];
+    expect(ownerOf({ project_id: "proj_site" }, roles)).toEqual({ kind: "owner", role: head });
   });
 
   test("a role naming the plan is more specific than one naming the plan's project", () => {
-    const roles = [chief, growth, launch];
+    const roles = [head, growth, launch];
     expect(ownerOf({ project_id: "proj_site", plan_id: "plan_launch" }, roles)).toEqual({ kind: "owner", role: launch });
     expect(ownerOf({ project_id: "proj_site", plan_id: "plan_other" }, roles)).toEqual({ kind: "owner", role: growth });
   });
 
-  test("a lead reporting to the chief still owns its area: the chief, above it, steps aside", () => {
-    const lead = role("growth", ["proj_site"], under(chief));
-    expect(ownerOf({ project_id: "proj_site" }, [chief, lead])).toEqual({ kind: "owner", role: lead });
+  test("a lead reporting to the Head of People still owns its area: the Head of People, above it, steps aside", () => {
+    const lead = role("growth", ["proj_site"], under(head));
+    expect(ownerOf({ project_id: "proj_site" }, [head, lead])).toEqual({ kind: "owner", role: lead });
   });
 
-  test("scope is opt in: a role with no scope owns nothing, and the Chief of Staff keeps the remainder", () => {
-    const unscoped = role("ops", [], under(chief));
-    expect(ownerOf({}, [chief, unscoped])).toEqual({ kind: "owner", role: chief });
-    expect(ownerOf({}, [chief, role("ops", [])])).toEqual({ kind: "owner", role: chief });
+  test("scope is opt in: a role with no scope owns nothing, and the Head of People keeps the remainder", () => {
+    const unscoped = role("ops", [], under(head));
+    expect(ownerOf({}, [head, unscoped])).toEqual({ kind: "owner", role: head });
+    expect(ownerOf({}, [head, role("ops", [])])).toEqual({ kind: "owner", role: head });
     expect(ownerOf({ project_id: "proj_platform" }, [role("ops", [])])).toEqual({ kind: "none" });
   });
 
   test("work nobody covers, with no whole workspace role, has no owner", () => {
     expect(ownerOf({ project_id: "proj_platform" }, [growth])).toEqual({ kind: "none" });
     expect(ownerOf({}, null)).toEqual({ kind: "none" });
+  });
+});
+
+// The rename (org-staffing.md S30): the old handle still names the Head of
+// People, and a Chief of Staff never covers the workspace.
+describe("isHeadOfPeopleRole and the whole workspace after the rename", () => {
+  test("either handle, unless the row is a chief", () => {
+    expect(isHeadOfPeopleRole({ handle: HEAD_OF_PEOPLE_HANDLE })).toBe(true);
+    expect(isHeadOfPeopleRole({ handle: LEGACY_HEAD_OF_PEOPLE_HANDLE })).toBe(true);
+    expect(isHeadOfPeopleRole({ handle: LEGACY_HEAD_OF_PEOPLE_HANDLE, chief: { reach: "global" } })).toBe(false);
+    expect(isHeadOfPeopleRole({ handle: "growth" })).toBe(false);
+  });
+  test("a chief with no scope owns nothing; a legacy row still covers the remainder", () => {
+    const chief = { _id: "c", handle: "chief-of-staff", chief: { reach: "global" }, scope: { project_ids: [], plan_ids: [] } };
+    const legacy = { _id: "h", handle: "chief-of-staff", scope: { project_ids: [], plan_ids: [] } };
+    expect(isWholeWorkspaceRole(chief)).toBe(false);
+    expect(isWholeWorkspaceRole(legacy)).toBe(true);
+    expect(ownerOf({ project_id: "p1" }, [chief])).toEqual({ kind: "none" });
+    expect(ownerOf({ project_id: "p1" }, [legacy])).toEqual({ kind: "owner", role: legacy });
   });
 });

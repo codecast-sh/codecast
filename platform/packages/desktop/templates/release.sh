@@ -8,12 +8,15 @@
 #   R2_BUCKET         codecast            (bucket name)
 #   R2_PREFIX         desktop             (key prefix inside the bucket)
 #   PUBLIC_BASE_URL   https://dl.codecast.sh/desktop
-#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, R2_ENDPOINT
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, R2_ENDPOINT   (UPLOADER=aws, the default)
 #   NOTARIZE_KEYCHAIN_PROFILE (or APPLE_ID + APPLE_PASSWORD [+ APPLE_TEAM_ID])
 # Optional:
 #   CHANNEL           latest              (feed file <channel>-mac.yml)
 #   ARCH              arm64
 #   BUILD_CMD         "npx electron-builder -m --config electron-builder.config.js"
+#   UPLOADER          aws (default) or wrangler: wrangler writes through its own
+#                     Cloudflare login, so no R2 S3 keys are needed. With several
+#                     accounts on the login, set CLOUDFLARE_ACCOUNT_ID.
 #   AFTER_RELEASE     a command run at the end (codecast rewrites its download URL and commits)
 set -e
 
@@ -28,9 +31,25 @@ export AWS_DEFAULT_REGION=auto
 : "${R2_BUCKET:?Missing R2_BUCKET}"
 : "${R2_PREFIX:?Missing R2_PREFIX}"
 : "${PUBLIC_BASE_URL:?Missing PUBLIC_BASE_URL}"
-: "${AWS_ACCESS_KEY_ID:?Missing AWS_ACCESS_KEY_ID}"
-: "${AWS_SECRET_ACCESS_KEY:?Missing AWS_SECRET_ACCESS_KEY}"
-: "${R2_ENDPOINT:?Missing R2_ENDPOINT}"
+UPLOADER="${UPLOADER:-aws}"
+if [ "$UPLOADER" = aws ]; then
+  : "${AWS_ACCESS_KEY_ID:?Missing AWS_ACCESS_KEY_ID}"
+  : "${AWS_SECRET_ACCESS_KEY:?Missing AWS_SECRET_ACCESS_KEY}"
+  : "${R2_ENDPOINT:?Missing R2_ENDPOINT}"
+elif [ "$UPLOADER" != wrangler ]; then
+  echo "Error: UPLOADER must be aws or wrangler"; exit 1
+fi
+
+# put <file> <key> <content-type> <cache-control> [content-disposition]
+put() {
+  if [ "$UPLOADER" = wrangler ]; then
+    ${WRANGLER:-bunx wrangler} r2 object put "$R2_BUCKET/$R2_PREFIX/$2" --file "$1" --remote \
+      --content-type "$3" --cache-control "$4" ${5:+--content-disposition "$5"} >/dev/null
+  else
+    aws s3 cp "$1" "s3://$R2_BUCKET/$R2_PREFIX/$2" --endpoint-url "$R2_ENDPOINT" \
+      --content-type "$3" --cache-control "$4" ${5:+--content-disposition "$5"} --quiet
+  fi
+}
 CHANNEL="${CHANNEL:-latest}"
 ARCH="${ARCH:-arm64}"
 BUILD_CMD="${BUILD_CMD:-npx electron-builder -m --config electron-builder.config.js}"
@@ -108,12 +127,14 @@ for f in "${ARTIFACTS[@]}"; do
     *) CT="application/octet-stream"; CC="$IMMUTABLE_CC" ;;
   esac
   echo "  $(basename $f)"
-  aws s3 cp "$f" "s3://$R2_BUCKET/$R2_PREFIX/$(basename $f)" \
-    --endpoint-url "$R2_ENDPOINT" \
-    --content-type "$CT" \
-    --cache-control "$CC" \
-    --quiet
+  put "$f" "$(basename $f)" "$CT" "$CC"
 done
+# A stable name for download buttons (<product>-<arch>.dmg), so a website links
+# one URL that always serves the newest build. Short cache: it moves each release.
+LATEST_DMG="${PRODUCT_NAME}-${ARCH}.dmg"
+echo "  $LATEST_DMG (latest alias)"
+put "dist/${PRODUCT_NAME}-${NEW_VERSION}-${ARCH}.dmg" "$LATEST_DMG" "application/x-apple-diskimage" "public, max-age=300" \
+  "attachment; filename=\"${PRODUCT_NAME}.dmg\""
 
 echo ""
 echo "[3/4] Verifying upload..."
@@ -151,3 +172,4 @@ echo ""
 echo "=== $PRODUCT_NAME Desktop v$NEW_VERSION released ==="
 echo "  $PUBLIC_BASE_URL/$FEED"
 echo "  $PUBLIC_BASE_URL/${PRODUCT_NAME}-${NEW_VERSION}-${ARCH}.dmg"
+echo "  $PUBLIC_BASE_URL/${PRODUCT_NAME}-${ARCH}.dmg (always the latest)"

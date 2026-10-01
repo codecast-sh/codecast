@@ -57,7 +57,7 @@ import {
   type OrgScopeChange,
   type OrgTaskStatusChange,
   type OrgTrustChange, authorityWords, type OrgAuthorityChange, type OrgHireChange, type OrgUpgradeChange,
-  type OrgInitiativeChange, type OrgInitiativeOwnerChange, type OrgInitiativeProjectsChange } from "@codecast/shared/contracts/orgProposal";
+  type OrgInitiativeChange, type OrgInitiativeOwnerChange, type OrgInitiativeProjectsChange, type OrgInitiativeShapeChange, metricsWords } from "@codecast/shared/contracts/orgProposal";
 import { performAddProjects, performCreateInitiative, performUpdateInitiative } from "./initiatives";
 import { findInitiative } from "./lib/initiativeRef";
 import { performSetTrust, standingConversationOf } from "./orgRoles";
@@ -112,6 +112,10 @@ export const ANALYSIS_CAPS = {
   said_replies_per_thread: 3,
   call_summary_chars: 1200,
   call_action_items: 10,
+  /** A call that ended with no summary (too short, or the summary failed) still said something: its segments are read, bounded, and the lines that decide or ask are kept. */
+  calls_without_summary: 8,
+  call_segments: 150,
+  call_lines: 8,
   /** The landing read (readLanding): commits per repository over its own window, newest first; at the cap the search says so. */
   landing_commits_per_repo: 1200,
 } as const;
@@ -311,7 +315,9 @@ export async function computeAnalysisOrg(ctx: Ctx, userId: Id<"users">, teamId: 
     };
     // Last activity in the scope and the week's wakes: the one reading
     // org.health uses (orgHealth.roleActivity).
-    const activity = await roleActivity(ctx, userId, role, now, { wholeWorkspaceLatest: latestAnywhere });
+    // The slice's own scan: one session scan for every role, not one each
+    // (nine scoped roles passed Convex's 100 MB read limit, ct-56046).
+    const activity = await roleActivity(ctx, userId, role, now, { wholeWorkspaceLatest: latestAnywhere, scan });
     const caps = capsFor(role);
     const hands = (scan.byParent.get(`role:${String(role._id)}`) ?? []).length;
     const parent = role.reports_to?.kind === "role"
@@ -735,7 +741,11 @@ const ASKED_RE = /\?|\b(?:can|could|would|will) (?:you|someone|anyone|we)\b|\bpl
 export type SaidWhy = "decided" | "asked" | "named";
 export type SaidLine = { at: number; by: string; line: string };
 export type SaidThread = SaidLine & { channel: string; why: SaidWhy[]; replies: SaidLine[] };
-export type SaidCall = { title: string | null; started_at: number; ended_at: number | null; participants: string[]; summary: string | null; action_items: string[] };
+/** `lines` is what a call with no summary said: its decisions and asks, in
+ *  order, from its own transcript (bounded); `summary_status` says why there
+ *  is no summary ("skipped": too little said; "failed"; "pending"; null: never
+ *  tried). A summarised call carries no lines. */
+export type SaidCall = { title: string | null; started_at: number; ended_at: number | null; participants: string[]; summary: string | null; summary_status: string | null; action_items: string[]; lines?: SaidLine[] };
 export type Said = { calls: SaidCall[]; chat: SaidThread[]; truncated: boolean };
 /** Why a line matters: what it decides, asks, or names (a role by handle or
  *  mention, a project by short id or two title words). Empty when nothing. */
@@ -792,10 +802,27 @@ export async function saidChatFrom(ctx: Ctx, read: Array<{ channel: any; msgs: a
   const newest = (t: SaidThread) => Math.max(t.at, ...t.replies.map((r) => r.at));
   return out.sort((a, b) => newest(b) - newest(a));
 }
+/** The lines of an unsummarised call worth the reviewer's eye: those that
+ *  decide or ask, in order, capped; when none does, the first few lines, so a
+ *  short call is still read as what it was. Consecutive lines of one speaker
+ *  join, the way a person hears them. */
+export function saidCallLines(segments: Array<{ at: number; by: string; text: string }>): SaidLine[] {
+  const joined: SaidLine[] = [];
+  for (const s of segments) {
+    const text = s.text.trim();
+    if (!text) continue;
+    const last = joined[joined.length - 1];
+    if (last && last.by === s.by) last.line = `${last.line} ${text}`;
+    else joined.push({ at: s.at, by: s.by, line: text });
+  }
+  const signal = joined.filter((l) => DECIDED_RE.test(l.line) || ASKED_RE.test(l.line));
+  return (signal.length ? signal : joined).slice(0, ANALYSIS_CAPS.call_lines).map((l) => ({ ...l, line: l.line.slice(0, ANALYSIS_CAPS.said_reply_chars) }));
+}
 export async function readSaid(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams">, now: number, chatRead: Array<{ channel: any; msgs: any[] }>, projects: ProjectRef[]): Promise<Said> {
   const cutoff = now - ANALYSIS_WINDOW_MS;
   const calls: SaidCall[] = [];
   const callRows: any[] = await ctx.db.query("transcripts").withIndex("by_team_started", (q: any) => q.eq("team_id", teamId).gte("started_at", cutoff)).order("desc").take(ANALYSIS_CAPS.calls);
+  let unsummarised = 0;
   for (const t of callRows) {
     if ((t.started_at ?? 0) < cutoff || t.status !== "ended") continue;
     if (isRecRoomKey(t.room_key) && !t.rec_shared) continue;
@@ -803,7 +830,17 @@ export async function readSaid(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"
     // ended before words) is not something said: Union had 30 such rows.
     if (!t.summary && !(t.action_items ?? []).length && !(t.participants ?? []).length) continue;
     if (!(await canReadCall(ctx as any, userId, t))) continue;
-    calls.push({ title: t.title ?? null, started_at: t.started_at, ended_at: t.ended_at ?? null, participants: (t.participants ?? []).map((p: any) => p.name), summary: t.summary ? String(t.summary).slice(0, ANALYSIS_CAPS.call_summary_chars) : null, action_items: (t.action_items ?? []).slice(0, ANALYSIS_CAPS.call_action_items).map((a: any) => String(a).slice(0, 200)) });
+    const call: SaidCall = { title: t.title ?? null, started_at: t.started_at, ended_at: t.ended_at ?? null, participants: (t.participants ?? []).map((p: any) => p.name), summary: t.summary ? String(t.summary).slice(0, ANALYSIS_CAPS.call_summary_chars) : null, summary_status: t.summary_status ?? null, action_items: (t.action_items ?? []).slice(0, ANALYSIS_CAPS.call_action_items).map((a: any) => String(a).slice(0, 200)) };
+    // A huddle with people in it and no summary (too short for one, or the
+    // summary failed) is the gap the reviewer used to read as silence: its
+    // own words are read instead, bounded to a few calls and the lines that
+    // decide or ask, so a two minute "let's drop the ads" still reaches it.
+    if (!call.summary && !call.action_items.length && unsummarised < ANALYSIS_CAPS.calls_without_summary) {
+      unsummarised++;
+      const segments: any[] = await ctx.db.query("transcript_segments").withIndex("by_transcript_seq", (q: any) => q.eq("transcript_id", t._id)).take(ANALYSIS_CAPS.call_segments);
+      call.lines = saidCallLines(segments.map((x) => ({ at: t.started_at + (x.t0 ?? 0), by: x.speaker_name ?? "?", text: x.text ?? "" })));
+    }
+    calls.push(call);
   }
   const roleRows: any[] = await ctx.db.query("org_roles").withIndex("by_team", (q: any) => q.eq("team_id", teamId)).collect();
   const threads = await saidChatFrom(ctx, chatRead, roleRows.map((r) => r.handle).filter(Boolean), projects);
@@ -980,7 +1017,7 @@ async function resolveProposalScope(ctx: Ctx, boundary: Boundary, scope: OrgRole
 // person reads before accepting; `leave` is their one edit on the row. Which
 // sessions move is the one ownership rule (org-staffing.md S26, org.ts
 // sessionsOwnedBy): the ones the role now owns, from the person or from a
-// wider role, so a lead that gains an area takes it from the chief of staff.
+// wider role, so a lead that gains an area takes it from the head of people.
 // A role that looks after the whole workspace takes over nothing: it would
 // empty a person's inbox into one seat, which is not what gaining a scope
 // means.
@@ -1508,8 +1545,24 @@ export async function applyInitiative(ctx: Ctx, userId: Id<"users">, boundary: B
   if (existing) return { status: "applied", note: `the goal "${existing.title}" already exists (${existing.short_id})` };
   const project_ids = await projectIdsOf(ctx, boundary, p.projects);
   const owner = p.owner?.trim() ? await resolveReportsTo(ctx, userId, boundary, p.owner) : undefined;
-  const r = await performCreateInitiative(ctx, userId, initiativeWorkspace(boundary), { title: p.title, description: p.description, project_ids, ...(owner ? { owner: { ...owner, ...(owner.kind === "role" ? { role_id: String(owner.role_id) } : { user_id: String(owner.user_id) }) } as any } : {}), ...(p.target_date ? { target_date: p.target_date } : {}) });
-  return { status: "applied", note: `set the goal "${r.row.title}" (${r.short_id}) with ${project_ids.length} project${project_ids.length === 1 ? "" : "s"}${owner ? `, owned by ${p.owner}` : ""}${coverNote(r.scope)}` };
+  // The top level goal it feeds: a goal that exists, or one set earlier in the same proposal (the apply order keeps the proposal's order within a kind).
+  const parent = p.parent?.trim() ? await initiativeByRef(ctx, userId, boundary, p.parent) : null;
+  const r = await performCreateInitiative(ctx, userId, initiativeWorkspace(boundary), { title: p.title, description: p.description, project_ids, ...(owner ? { owner: { ...owner, ...(owner.kind === "role" ? { role_id: String(owner.role_id) } : { user_id: String(owner.user_id) }) } as any } : {}), ...(p.target_date ? { target_date: p.target_date } : {}), ...(parent ? { parent_initiative_id: String(parent._id) } : {}), ...(p.metrics?.length ? { metrics: p.metrics } : {}) });
+  return { status: "applied", note: `set the goal "${r.row.title}" (${r.short_id}) with ${project_ids.length} project${project_ids.length === 1 ? "" : "s"}${owner ? `, owned by ${p.owner}` : ""}${parent ? `, under "${parent.title}" (${parent.short_id})` : ""}${p.metrics?.length ? `, measured by ${metricsWords(p.metrics)}` : ""}${coverNote(r.scope)}` };
+}
+
+export async function applyInitiativeShape(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgInitiativeShapeChange, _opts: ApplyOpts): Promise<ApplyResult> {
+  const initiative = await initiativeByRef(ctx, userId, boundary, p.initiative);
+  const parent = p.parent ? await initiativeByRef(ctx, userId, boundary, p.parent) : null;
+  const fields: Record<string, any> = {};
+  if (p.parent !== undefined) fields.parent_initiative_id = parent ? String(parent._id) : null;
+  if (p.metrics !== undefined) fields.metrics = p.metrics;
+  const sameParent = p.parent === undefined || String(initiative.parent_initiative_id ?? "") === String(parent?._id ?? "");
+  const sameMetrics = p.metrics === undefined || JSON.stringify((initiative.metrics ?? []).map((m: any) => [m.name, m.target])) === JSON.stringify(p.metrics.map((m) => [m.name.trim(), m.target.trim()]));
+  if (sameParent && sameMetrics) return { status: "applied", note: `${initiative.short_id} "${initiative.title}" already reads that way` };
+  await performUpdateInitiative(ctx, userId, initiative, fields);
+  const said = [p.parent !== undefined ? (parent ? `now feeds "${parent.title}" (${parent.short_id})` : "is now a top level goal") : "", p.metrics !== undefined ? (p.metrics.length ? `is measured by ${metricsWords(p.metrics)}` : "has no metric") : ""].filter(Boolean);
+  return { status: "applied", note: `the goal "${initiative.title}" (${initiative.short_id}) ${andListOf(said)}` };
 }
 
 export async function applyInitiativeProjects(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgInitiativeProjectsChange, _opts: ApplyOpts): Promise<ApplyResult> {
@@ -1560,6 +1613,7 @@ async function applyOrgChangeCore(ctx: Ctx, userId: Id<"users">, boundary: Bound
     case "initiative": return applyInitiative(ctx, userId, boundary, change, opts);
     case "initiative_projects": return applyInitiativeProjects(ctx, userId, boundary, change, opts);
     case "initiative_owner": return applyInitiativeOwner(ctx, userId, boundary, change, opts);
+    case "initiative_shape": return applyInitiativeShape(ctx, userId, boundary, change, opts);
   }
 }
 

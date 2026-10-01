@@ -1,0 +1,19 @@
+{
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "notes": "options offered with a recommendation, at the very end of a long message",
+  "label": {
+    "verdict": "needs_input"
+  },
+  "snapshot": {
+    "newestFirst": [
+      {
+        "role": "assistant",
+        "content": "Here is what I found. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. The current model keeps exclusions in free text. \n\nTwo ways forward: (1) a structured `exclusions` field with a backfill, or (2) enforce at match creation only. I lean (1). Which do you want?"
+      },
+      {
+        "role": "user",
+        "content": "how should we store the exclusions"
+      }
+    ]
+  }
+}

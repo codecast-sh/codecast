@@ -21,10 +21,14 @@ describe("line.cast template", () => {
     expect(resolveWorkflowSource("feature")?.label).toBe("builtin:feature");
   });
 
-  test("parses and validates with the five stations", () => {
+  test("parses and validates with the five stations and the merge step", () => {
     expect(graph.name).toBe("line");
     expect(validateWorkflow(graph)).toEqual([]);
-    expect([...graph.nodes.keys()]).toEqual(["start", "exit", "analyze", "implement", "verify", "review"]);
+    expect([...graph.nodes.keys()]).toEqual(["start", "exit", "analyze", "implement", "verify", "review", "merge"]);
+    // The merge step (the-line.md L12) is a script node that reports to the
+    // server about this run; it exits 0 whether it merged or left it.
+    expect(graph.nodes.get("merge")?.type).toBe("command");
+    expect(graph.nodes.get("merge")?.script).toContain("cast line merge --run $run_id --branch $branch");
     expect(graph.nodes.get("analyze")?.type).toBe("agent");
     expect(graph.nodes.get("verify")?.type).toBe("command");
     expect(graph.nodes.get("verify")?.script).toContain("cast ws check");
@@ -49,7 +53,7 @@ describe("line.cast template", () => {
     expect(graph.nodes.get("analyze")?.prompt).toContain("cast task update $task_id --steps -");
   });
 
-  test("edges route on the verdict: changes loops to implement, approve and reject exit", () => {
+  test("edges route on the verdict: changes loops to implement, approve merges then exits, reject exits", () => {
     const from = (id: string) => graph.edges.filter((e) => e.from === id).map((e) => `${e.to}:${e.condition ?? ""}`);
     expect(from("implement")).toEqual(["verify:handoff = done"]);
     expect(from("verify")).toEqual(["review:outcome = success", "implement:outcome = failure"]);
@@ -58,7 +62,8 @@ describe("line.cast template", () => {
     expect(graph.nodes.get("review")?.prompt).toContain("$default_branch...$branch");
     expect(graph.nodes.get("review")?.reviewer).toBe(true);
     expect(graph.nodes.get("implement")?.reviewer).toBeUndefined();
-    expect(from("review")).toEqual(["exit:review_verdict = approve", "implement:review_verdict = changes", "exit:review_verdict = reject"]);
+    expect(from("review")).toEqual(["merge:review_verdict = approve", "implement:review_verdict = changes", "exit:review_verdict = reject"]);
+    expect(from("merge")).toEqual(["exit:"]);
   });
 
   test("script variables expand shell-quoted and leave $( alone", () => {
@@ -66,6 +71,14 @@ describe("line.cast template", () => {
       .toBe("cd \"$(cast ws path 'line-ct-1')\" && echo 'it'\\''s; rm -rf'");
   });
 });
+
+// The offline runs: the merge node talks to the server and git, so every
+// run stubs it (the step's own tests are lineMerge.test.ts).
+const offlineLine = () => {
+  const graph = parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.line);
+  graph.nodes.get("merge")!.script = "true";
+  return graph;
+};
 
 describe("line.cast offline run through the session path", () => {
   let tmpDir: string;
@@ -122,7 +135,7 @@ describe("line.cast offline run through the session path", () => {
   });
 
   test("three hands run in order, implement gets the line worktree, review reads the criteria, approve exits", async () => {
-    const graph = parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.line);
+    const graph = offlineLine();
     graph.nodes.get("verify")!.script = "true";
     const outcome = await runWorkflow(graph, { cwd: tmpDir, taskId: "ct-7", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1, spawnerSession: "owner-sess" });
     expect(outcome).toBe("completed");
@@ -151,7 +164,7 @@ describe("line.cast offline run through the session path", () => {
   });
 
   test("a review round with no fresh verdict fails the run and returns the task to open with a comment", async () => {
-    const graph = parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.line);
+    const graph = offlineLine();
     graph.nodes.get("verify")!.script = "true";
     const settle = globalThis.fetch;
     globalThis.fetch = (async (url: any, init: any) => {
@@ -171,7 +184,7 @@ describe("line.cast offline run through the session path", () => {
   });
 
   test("a hand that never settles is killed and the task returns to open", async () => {
-    const graph = parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.line);
+    const graph = offlineLine();
     const settle = globalThis.fetch;
     globalThis.fetch = (async (url: any, init: any) => {
       if (String(url).endsWith("/cli/inbox")) {
@@ -189,7 +202,7 @@ describe("line.cast offline run through the session path", () => {
   }, 30000);
 
   test("the review hand receives only the branch, title and criteria: no context or error appendix", async () => {
-    const graph = parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.line);
+    const graph = offlineLine();
     // verify fails once so a last_error exists when review runs
     graph.nodes.get("verify")!.script = "test -f ok && exit 0; touch ok; echo boom; exit 1";
     task.description = "SECRET DESCRIPTION";
@@ -208,7 +221,7 @@ describe("line.cast offline run through the session path", () => {
   }, 30000);
 
   test("a blocked handoff stops the run, keeps the task in review, and queues a decision to the run's owner", async () => {
-    const graph = parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.line);
+    const graph = offlineLine();
     const settle = globalThis.fetch;
     globalThis.fetch = (async (url: any, init: any) => {
       const r = await settle(url, init);
@@ -228,7 +241,7 @@ describe("line.cast offline run through the session path", () => {
   }, 30000);
 
   test("a hand that ends with no handoff returns the task to open", async () => {
-    const graph = parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.line);
+    const graph = offlineLine();
     const settle = globalThis.fetch;
     globalThis.fetch = (async (url: any, init: any) => {
       const r = await settle(url, init);
@@ -244,7 +257,7 @@ describe("line.cast offline run through the session path", () => {
   }, 30000);
 
   test("a reject verdict completes the run and queues a decision with the reviewer's note", async () => {
-    const graph = parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.line);
+    const graph = offlineLine();
     graph.nodes.get("verify")!.script = "true";
     const settle = globalThis.fetch;
     globalThis.fetch = (async (url: any, init: any) => {
@@ -263,7 +276,7 @@ describe("line.cast offline run through the session path", () => {
   }, 30000);
 
   test("without an owning session the reject comment says no decision was queued", async () => {
-    const graph = parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.line);
+    const graph = offlineLine();
     graph.nodes.get("verify")!.script = "true";
     const settle = globalThis.fetch;
     globalThis.fetch = (async (url: any, init: any) => {
@@ -279,7 +292,7 @@ describe("line.cast offline run through the session path", () => {
   }, 30000);
 
   test("retries exhausted parks the task in review as blocked", async () => {
-    const graph = parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.line);
+    const graph = offlineLine();
     graph.nodes.get("verify")!.script = "false";
     const outcome = await runWorkflow(graph, { cwd: tmpDir, taskId: "ct-7", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1, spawnerSession: "owner-sess" });
     expect(outcome).toBe("failed");

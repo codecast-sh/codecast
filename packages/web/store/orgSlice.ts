@@ -28,7 +28,7 @@ import {
   type OrgSession,
   type OrgTree,
 } from "../components/org/orgTypes";
-import { CHIEF_OF_STAFF_HANDLE, type OrgChangeStatus, type OrgHealth, type OrgProposalChange, type OrgProposalListRow } from "../components/org/orgStaffingTypes";
+import { HEAD_OF_PEOPLE_HANDLE, isHeadOfPeopleRole, type OrgChangeStatus, type OrgHealth, type OrgProposalChange, type OrgProposalListRow } from "../components/org/orgStaffingTypes";
 import { describeOrgChange, isOrgChangeDecidable, ORG_VERDICT_REVISED, type OrgTenureSpec, type OrgVerdictSeen } from "@codecast/shared/contracts/orgProposal";
 import { isConvexId } from "../lib/entityLinks";
 import { leadScopeChange, type LeadScopeChange } from "@codecast/shared/contracts/orgLead";
@@ -145,7 +145,7 @@ export type OrgSliceData = {
   orgIntentNotice: OrgIntentNotice | null;
 };
 
-/** "Hire a Chief of Staff" (org-staffing.md S6): the one role with the
+/** "Hire a Head of People" (org-staffing.md S6): the one role with the
  *  reserved handle, scoped to the whole company, reporting to the hirer. */
 export type OrgStaffInput = {
   team_id?: string;
@@ -161,7 +161,25 @@ export type OrgStaffInput = {
   seat?: "existing" | "fresh";
 };
 
-/** What orgRoles.staff echoes back (S16): where the chief's thread is and what
+export type OrgHireChiefInput = {
+  reach: { reach: "global" } | { reach: "team"; team_id: string };
+  /** A team reach kept in the person's own boundary: their own chief for that team. */
+  personal?: boolean;
+  given_name?: string;
+  handle?: string;
+  avatar?: string;
+  project_path?: string;
+  adopt_conversation_id?: string;
+};
+
+export type HireChiefResult = {
+  role: { _id: string; short_id: string; handle: string; name: string; given_name: string };
+  standing: { conversation_id: string; short_id?: string } | null;
+  created: boolean;
+  already_existed: boolean;
+};
+
+/** What orgRoles.staff echoes back (S16): where the Head of People's thread is and what
  *  happened to the workspace's old standing agent, so the web can route there
  *  and say what changed. */
 export type StaffResult = {
@@ -254,7 +272,7 @@ export type OrgSliceActions = {
   /** Retire a role: its sessions fall back to their owners. `standingSession`
    *  (S16) says what becomes of its standing agent: keep running it as a plain
    *  agent, or retire it with the seat. Absent lets the server choose — keep
-   *  for the chief of staff, retire for any other seat. */
+   *  for the head of people, retire for any other seat. */
   retireOrgRole: (roleId: string, standingSession?: "keep" | "retire") => void;
   /** Add or drop a chat channel from a role's follow list (agent-channels
    *  C1). Keyed by the role's short id, which is what orgChannels resolves. */
@@ -265,10 +283,14 @@ export type OrgSliceActions = {
    *  the change row to what it was, a refused hire takes the stub off the
    *  tree. The tree kinds need no revert (the next push is authoritative). */
   revertOrgIntent: (intentId: string) => void;
-  /** Hire the chief of staff (org-staffing.md S6): an optimistic role stub
+  /** Hire the head of people (org-staffing.md S6): an optimistic role stub
    *  under the hirer; dispatch runs orgRoles.staff, which provisions the
    *  standing session, arms the review routine and runs the first review. */
-  staffChiefOfStaff: (input: OrgStaffInput) => Promise<StaffResult | undefined>;
+  staffHeadOfPeople: (input: OrgStaffInput) => Promise<StaffResult | undefined>;
+  /** Hire a Chief of Staff (org-staffing.md S30): the person's right hand,
+   *  global by default. The seat row lands through the anchors feed; the
+   *  result carries the role so the caller can say who came online. */
+  hireChiefOfStaff: (input: OrgHireChiefInput) => Promise<HireChiefResult | undefined>;
   /** "Accept all remaining" (org-staffing.md S4): every proposed change flips
    *  to accepted on the draft; dispatch runs orgProposals.acceptAll, which
    *  applies them in order and echoes applied or failed per change. With
@@ -312,10 +334,11 @@ export type OrgSliceState = OrgSliceData & OrgSliceActions;
 // as a promise; the function BODY returns nothing. The slice is written against
 // the body's signature, the store interface against the caller's.
 type OrgSliceImpl = OrgSliceData &
-  Omit<OrgSliceActions, "reparentOrgSession" | "reparentOrgRole" | "staffChiefOfStaff"> & {
+  Omit<OrgSliceActions, "reparentOrgSession" | "reparentOrgRole" | "staffHeadOfPeople" | "hireChiefOfStaff"> & {
+    hireChiefOfStaff: (input: OrgHireChiefInput) => void;
     reparentOrgSession: (conversationId: string, target: OrgReparentSessionTarget, opts?: { row?: OrgSession | null; note?: string; from_session?: string }) => void;
     reparentOrgRole: (roleId: string, reportsTo: OrgParentRef, note?: string) => void;
-    staffChiefOfStaff: (input: OrgStaffInput) => void;
+    staffHeadOfPeople: (input: OrgStaffInput) => void;
   };
 
 type OrgDraft = OrgSliceData;
@@ -373,13 +396,13 @@ export function orgSessionParent(tree: OrgTree, conversationId: string): OrgPare
 
 // ---------------------------------------------------------------- intents
 
-/** The live chief of staff on a tree, if any: the reserved handle, not retired. */
-function liveChief(tree: OrgTree): OrgRole | undefined {
-  return tree.roles.find((r) => r.handle === CHIEF_OF_STAFF_HANDLE && r.status !== "retired");
+/** The live head of people on a tree, if any: the reserved handle, not retired. */
+function liveHead(tree: OrgTree): OrgRole | undefined {
+  return tree.roles.find((r) => isHeadOfPeopleRole(r) && r.status !== "retired");
 }
 
 /** The optimistic row a hand-written hire shows until the server's own arrives.
- *  One factory for the action and the replay, like chiefStub (the root, whose
+ *  One factory for the action and the replay, like headStub (the root, whose
  *  switch stays off). */
 function roleStub(tree: OrgTree, input: OrgCreateRoleInput, now: number): OrgRole {
   const team = tree.workspace.kind === "team";
@@ -410,7 +433,7 @@ function roleStub(tree: OrgTree, input: OrgCreateRoleInput, now: number): OrgRol
   };
 }
 
-function chiefStub(tree: OrgTree, input: OrgStaffInput, now: number): OrgRole {
+function headStub(tree: OrgTree, input: OrgStaffInput, now: number): OrgRole {
   const team = tree.workspace.kind === "team";
   return {
     _id: input.client_id,
@@ -418,8 +441,8 @@ function chiefStub(tree: OrgTree, input: OrgStaffInput, now: number): OrgRole {
     scope_type: team ? "team" : "user",
     ...(team ? { team_id: tree.workspace.id } : { scope_user_id: input.host_user_id }),
     host_user_id: input.host_user_id,
-    name: "Chief of Staff",
-    handle: CHIEF_OF_STAFF_HANDLE,
+    name: "Head of People",
+    handle: HEAD_OF_PEOPLE_HANDLE,
     scope: { project_ids: [], plan_ids: [] },
     reports_to: { kind: "user", user_id: input.host_user_id },
     status: "active",
@@ -466,8 +489,8 @@ export function orgIntentSatisfied(tree: OrgTree, intent: OrgIntent, changes?: R
       return !row || row.decided_by !== undefined;
     }
     case "staff": {
-      const chief = liveChief(tree);
-      return !!chief && chief._id !== intent.stub.client_id;
+      const head = liveHead(tree);
+      return !!head && head._id !== intent.stub.client_id;
     }
     // The server's own row for this handle is the acknowledgement: a live role
     // carrying the handle that is NOT our stub means the create landed.
@@ -521,8 +544,8 @@ export function applyOrgIntent(tree: OrgTree, intent: OrgIntent, row?: OrgSessio
       // applyOrgWithdrawIntent. An undo acts on the record: applyOrgUndoIntent.
       return;
     case "staff": {
-      if (liveChief(tree)) return;
-      tree.roles.push(chiefStub(tree, intent.stub, intent.at));
+      if (liveHead(tree)) return;
+      tree.roles.push(headStub(tree, intent.stub, intent.at));
       return;
     }
     case "createRole": {
@@ -793,7 +816,7 @@ export function orgIntentNoticeText(intent: OrgIntent, reason: "refused" | "expi
   switch (intent.kind) {
     case "decideChange": return `${intent.to === "skipped" ? "Skipping" : "Accepting"} "${intent.line}" ${tail}; the change is back to ${intent.from}.`;
     case "withdraw": return `Withdrawing ${intent.short_id} ${tail}; it is open again.`;
-    case "staff": return `Hiring the Chief of Staff ${tail}.`;
+    case "staff": return `Hiring the Head of People ${tail}.`;
     case "createRole": return `Adding @${intent.stub.handle} ${tail}; the seat is off the chart.`;
     case "roleFields": {
       const what = intent.fields.status === "active" ? "Resuming" : intent.fields.status === "paused" ? "Pausing" : `Updating ${roleFieldKeys(intent.fields).join(", ")} on`;
@@ -912,7 +935,7 @@ export function dropRejectedOrgIntent(state: { orgIntents: OrgIntent[]; dropOrgI
     (action === "withdrawOrgProposal" && i.kind === "withdraw" && i.proposal_id === args[0]) ||
     (action === "acceptAllOrgProposal" && i.kind === "decideChange" && i.proposal_id === args[0]) ||
     (action === "decideOrgProposalAsk" && i.kind === "decideChange" && i.proposal_id === args[0] && i.ask === args[1]) ||
-    (action === "staffChiefOfStaff" && i.kind === "staff" && i.stub.client_id === (args[0] as OrgStaffInput | undefined)?.client_id) ||
+    (action === "staffHeadOfPeople" && i.kind === "staff" && i.stub.client_id === (args[0] as OrgStaffInput | undefined)?.client_id) ||
     (action === "createOrgRole" && i.kind === "createRole" && i.stub.client_id === (args[0] as OrgCreateRoleInput | undefined)?.client_id) ||
     (action === "updateOrgRole" && i.kind === "roleFields" && i.role_id === args[0] && sameValue(roleFieldKeys(i.fields), roleFieldKeys((args[1] as OrgUpdateRoleInput | undefined) ?? {}))) ||
     (action === "setProjectLead" && i.kind === "roleFields" && i.role_id === args[1] && sameValue(roleFieldKeys(i.fields), ["scope"])) ||
@@ -1197,19 +1220,24 @@ export function createOrgSlice(): OrgSliceImpl {
       this.orgIntents = this.orgIntents.filter((i) => i.id !== intentId);
     }),
 
-    // asyncAction: the optimistic chief stub lands on the tree, and the promise
+    // asyncAction: the optimistic head stub lands on the tree, and the promise
     // resolves to the server's staff result (S16) so the caller can route to
     // the seated thread and say what changed.
-    staffChiefOfStaff: asyncAction(function (this: OrgDraft, input: OrgStaffInput) {
+    staffHeadOfPeople: asyncAction(function (this: OrgDraft, input: OrgStaffInput) {
       const tree = this.orgTree;
       if (!tree) return;
       // Idempotent per company (S6): a second click while the first is in
       // flight, or on a company that already has one, adds nothing to the tree.
-      if (liveChief(tree)) return;
+      if (liveHead(tree)) return;
       const intent: OrgIntent = { kind: "staff", id: intentId(), stub: input, at: Date.now() };
       applyOrgIntent(tree, intent);
       pushIntent(this, intent);
     }),
+
+    // The chief's seat is an anchors row the feed echoes, in whichever
+    // boundary it lives (the person's own for a global chief, which is not
+    // the active workspace's tree), so nothing is stubbed on the tree.
+    hireChiefOfStaff: asyncAction(function (this: OrgDraft, _input: OrgHireChiefInput) {}),
 
     // Every change the server would take (proposed or failed, S4) flips to
     // accepted, one intent each, so a refusal of the whole call puts every

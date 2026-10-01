@@ -20,18 +20,18 @@ describe("visibleTeamFeedRows", () => {
   const cached = [
     row({ _id: "gone", user_id: "jonathan" }),
     row({ _id: "human", user_id: ME, is_own: true }),
-    row({ _id: "chief", user_id: ME, acting_user_id: "chief", is_own: true }),
-    row({ _id: "gone-host", user_id: "jonathan", acting_user_id: "chief" }),
+    row({ _id: "head", user_id: ME, acting_user_id: "head", is_own: true }),
+    row({ _id: "gone-host", user_id: "jonathan", acting_user_id: "head" }),
   ];
 
   it("heals pre-removal caches from the current roster without deleting history", () => {
-    expect(visibleTeamFeedRows(cached, new Set([ME, "chief"]), true).map((r) => r._id)).toEqual(["human", "chief"]);
+    expect(visibleTeamFeedRows(cached, new Set([ME, "head"]), true).map((r) => r._id)).toEqual(["human", "head"]);
     expect(cached).toHaveLength(4);
-    expect(visibleTeamFeedRows(cached, new Set([ME, "jonathan", "chief"]), true)).toEqual(cached);
+    expect(visibleTeamFeedRows(cached, new Set([ME, "jonathan", "head"]), true)).toEqual(cached);
   });
 
   it("hides a historical role while org is off, even with a stale bot in the roster", () => {
-    expect(visibleTeamFeedRows(cached, new Set([ME, "chief"]), false).map((r) => r._id)).toEqual(["human"]);
+    expect(visibleTeamFeedRows(cached, new Set([ME, "head"]), false).map((r) => r._id)).toEqual(["human"]);
   });
 
   it("needs the actor as well as its host in the roster", () => {

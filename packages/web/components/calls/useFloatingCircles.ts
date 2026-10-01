@@ -95,6 +95,8 @@ export function useFloatingCircles(opts: {
     if (!root) return;
     const regions: HitRegion[] = [];
     for (const el of Array.from(root.querySelectorAll<HTMLElement>("[data-face-hit]"))) {
+      // A folded seat keeps its room but is not there: glass, not a face.
+      if (el.closest(".face-seat[data-folded]")) continue;
       const r = el.getBoundingClientRect();
       const id = el.closest<HTMLElement>("[data-face-id]")?.dataset.faceId;
       if (r.width > 0) regions.push({ kind: "circle", cx: r.left + r.width / 2, cy: r.top + r.height / 2, r: r.width / 2, id });

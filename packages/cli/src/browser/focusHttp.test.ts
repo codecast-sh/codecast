@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { focusBrowserTab, focusEndpoint, focusRequestedTab, makeBridgeFocusEngine, matchTab, type BridgeFocusDeps, type FocusEngine, type FocusTab } from "./focusHttp.js";
+import { focusBrowserTab, focusEndpoint, probeBrowserTab, focusRequestedTab, makeBridgeFocusEngine, matchTab, type BridgeFocusDeps, type FocusEngine, type FocusTab } from "./focusHttp.js";
 import { shortTabId, tabLine } from "./tabId.js";
 
 const T1 = "2BE86883491FD502B8D986C164423006";
@@ -175,6 +175,18 @@ describe("focusBrowserTab", () => {
     });
     expect(result).toEqual({ ok: true });
     expect(calls).toEqual([`local-chrome:activate:${T1}@9333`]);
+  });
+});
+
+describe("probeBrowserTab", () => {
+  test("finds the tab without activating or raising anything", async () => {
+    const calls: string[] = [];
+    expect(await probeBrowserTab("2be86883", { engines: [engine("builtin", { calls })] })).toEqual({ ok: true });
+    expect(calls).toEqual([]);
+  });
+
+  test("a closed tab is tab-not-found, the same answer focus gives", async () => {
+    expect(await probeBrowserTab("4a2cdc7e", { engines: [engine("builtin")] })).toEqual({ ok: false, reason: "tab-not-found" });
   });
 });
 

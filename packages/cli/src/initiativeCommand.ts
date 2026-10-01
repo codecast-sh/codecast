@@ -9,9 +9,12 @@ import {
   INITIATIVE_STATUSES,
   INITIATIVE_STATUS_LABEL,
   INITIATIVE_UPDATE_HEALTHS,
+  initiativeStanding,
+  metricReadings,
   type InitiativeHealth,
   type InitiativeStatus,
   type InitiativeUpdateHealth,
+  type MetricStanding,
 } from "@codecast/shared/contracts/initiative";
 
 type Palette = Record<"green" | "yellow" | "red" | "cyan" | "dim" | "bold" | "reset", string>;
@@ -51,6 +54,11 @@ export function healthText(c: Palette, health: InitiativeHealth, at?: number): s
   return `${healthColor(c, health)}${INITIATIVE_HEALTH_LABEL[health]}${c.reset}${when}`;
 }
 
+/** A metric's standing against its target, as the one word the page uses. */
+export function metricStandingText(c: Palette, standing: MetricStanding): string {
+  return standing === "met" ? `${c.green}met${c.reset}` : standing === "behind" ? `${c.yellow}behind${c.reset}` : `${c.dim}unread${c.reset}`;
+}
+
 export function progressText(counts?: { total: number; done: number }): string {
   if (!counts?.total) return "no tasks";
   return `${counts.done}/${counts.total} done (${Math.round((counts.done / counts.total) * 100)}%)`;
@@ -64,6 +72,7 @@ export function initiativeLine(c: Palette, row: any): string {
     `${row.projects?.length ?? row.project_ids?.length ?? 0} projects`,
     progressText(row.task_counts),
     row.target_date ? `target ${targetDayOf(row.target_date)}` : null,
+    row.metrics?.length ? `${c.reset}${metricStandingText(c, initiativeStanding(metricReadings(row)))}${c.dim} against ${row.metrics.length === 1 ? "its target" : "its targets"}` : null,
   ].filter(Boolean);
   const icon = INITIATIVE_STATUS_ICONS[row.status as InitiativeStatus] ?? "?";
   return `  ${icon} ${c.cyan}${row.short_id}${c.reset} ${c.bold}${row.title}${c.reset} ${healthText(c, row.health, row.health_at)} ${c.dim}${facts.join(" | ")}${c.reset}`;

@@ -52,7 +52,7 @@ export function useSessionImages({ deferredQueriesEnabled, conversation }: {
       if (!src) continue;
       // An inline base64 image has no address anyone else could open.
       const href = src.startsWith("data:") ? undefined : src;
-      images.push({ src, href, messageId: e.message_id });
+      images.push({ src, href, messageId: e.message_id, storageId: e.storage_id, timestamp: e.timestamp });
     }
     return images;
     // sessionImageUrls is rebuilt per render; its content only grows as the

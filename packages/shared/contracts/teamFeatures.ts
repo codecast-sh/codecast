@@ -49,7 +49,7 @@ export const TEAM_FEATURES: TeamFeatureDescriptor[] = [
   {
     key: "org",
     name: "Organization",
-    desc: "Agent roles with a standing session each, a chief of staff, role assignees on tasks, and the org page. In development.",
+    desc: "Agent roles with a standing session each, a head of people, role assignees on tasks, and the org page. In development.",
     snippets: [],
     personal: true,
   },

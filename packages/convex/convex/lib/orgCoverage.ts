@@ -14,10 +14,10 @@
 // the list, the scope cards and the server all read): an agent's suggestion
 // or an unpromoted insight is not work to cover, so the counts here are the
 // counts a person sees when they click through. Whether to wrap, share or
-// split a lead is the Chief of Staff's reading.
+// split a lead is the Head of People's reading.
 
 import { projectLeadOf, type LeadRole } from "@codecast/shared/contracts/orgLead";
-import type { InitiativeRow } from "@codecast/shared/contracts/initiative";
+import { initiativeChain, initiativeStanding, metricReadings, type InitiativeLink, type InitiativeRow, type MetricReading, type MetricStanding } from "@codecast/shared/contracts/initiative";
 import { isOnProjectBoard } from "@codecast/shared/tasks";
 import { isClosedPlan, type ActivityArea } from "./orgActivity";
 
@@ -26,7 +26,7 @@ export type CoverageProject = { _id: unknown; short_id?: string | null; title: s
 export type CoveragePlan = { _id: unknown; short_id: string; title: string; status: string; project_id?: unknown };
 /** The fields the board rule reads, beside the two links; a raw task row satisfies it. */
 export type CoverageTask = Parameters<typeof isOnProjectBoard>[0] & { status?: string | null; project_id?: unknown; plan_id?: unknown };
-export type CoverageInitiative = Pick<InitiativeRow, "_id" | "short_id" | "title" | "status" | "owner" | "health" | "health_at" | "target_date" | "project_ids" | "parent_initiative_id">;
+export type CoverageInitiative = Pick<InitiativeRow, "_id" | "short_id" | "title" | "status" | "owner" | "health" | "health_at" | "target_date" | "project_ids" | "parent_initiative_id" | "metrics" | "scoreboard">;
 
 export type CoverageInputs = {
   projects: CoverageProject[];
@@ -57,6 +57,12 @@ export type InitiativeCoverage = {
   /** Absent means nobody drives it. */
   owner?: { kind: "role"; handle: string } | { kind: "user"; name: string };
   parent?: string;
+  /** The goals above it, nearest first, up to the top level goal. */
+  chain: InitiativeLink[];
+  /** Each metric read against its target; empty when the goal names none. */
+  metrics: MetricReading[];
+  /** Against the numbers: behind if any metric is, met if every reported one is, else unknown. The owner's `health` is their word; this is the target's. */
+  standing: MetricStanding;
   projects: Array<LeadFacts & { id: string; short_id?: string; title: string; has_work: boolean }>;
   /** Of its projects with work, how many have no lead. */
   projects_without_lead: number;
@@ -126,6 +132,7 @@ export function computeCoverage(input: CoverageInputs): OrgCoverage {
   const projectById = new Map(input.projects.map((p) => [String(p._id), p]));
   const roleById = new Map(input.roles.map((r) => [String(r._id), r]));
   const shortOf = new Map(input.initiatives.map((i) => [String(i._id), i.short_id]));
+  const byId = new Map(input.initiatives.map((i) => [String(i._id), i]));
   const ownerOf = (i: CoverageInitiative): InitiativeCoverage["owner"] => {
     if (i.owner?.kind === "role") {
       const role = roleById.get(String(i.owner.role_id));
@@ -147,6 +154,9 @@ export function computeCoverage(input: CoverageInputs): OrgCoverage {
       target_date: i.target_date,
       owner: ownerOf(i),
       parent: i.parent_initiative_id ? shortOf.get(String(i.parent_initiative_id)) : undefined,
+      chain: initiativeChain(i, (id) => byId.get(id)),
+      metrics: metricReadings(i),
+      standing: initiativeStanding(metricReadings(i)),
       projects: rows,
       projects_without_lead: rows.filter((p) => p.has_work && !p.lead).length,
     };

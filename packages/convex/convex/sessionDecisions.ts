@@ -31,6 +31,7 @@ import { assignCategory, isHumanOnlyCategory } from "./lib/decisionCategory";
 import { artifactUrl } from "./artifacts";
 import { listSessionOwnerIds } from "./sessionOwners";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
+import { resolveAskedPeople } from "./lib/decisionAudience";
 
 export const optionValidator = v.object({
   label: v.string(),
@@ -725,6 +726,10 @@ export type AskArgs = {
   // failure gates; finalizeAnswer resumes the run.
   workflow_run_id?: Id<"workflow_runs">;
   gate_node_id?: string;
+  /** Who answers, named: a person's name, email or id in the session's
+   *  workspace (`cast decide --to`, the morning agenda of org-staffing.md
+   *  S31). The card goes to those people alone; no role hears it. */
+  to?: string[];
 };
 
 // An option's page (the-line.md L6) must be a published page: a mistyped
@@ -830,7 +835,14 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
 
   const existing = openRows.find((r) => r.question === args.question);
   const docId = args.doc_md ? await upsertDecisionDoc(ctx, conversation, args.question, args.doc_md, now, existing?.doc_id) : undefined;
-  const { role, ladder, people, hears } = await routeFor(ctx, conversation, now);
+  const routed = await routeFor(ctx, conversation, now);
+  const addressed = args.to?.length ? await resolveAskedPeople(ctx, conversation, args.to) : null;
+  if (addressed && "error" in addressed) return addressed;
+  // An addressed card (--to) is the named people's alone: the ladder does not
+  // hear it and nobody else is asked.
+  const { role, ladder, people, hears } = addressed
+    ? { ...routed, ladder: { ...routed.ladder, activeRoles: [], hops: [] }, people: addressed.people, hears: null }
+    : routed;
   if (existing) {
     // The re-ask lands on the open row: text, category and task move with it,
     // a --stack appends it (once), and the holder is recomputed because the
@@ -954,6 +966,7 @@ export const ask = mutation({
     // the-line.md L4: the runner's failure gates bind their decision to the run.
     workflow_run_id: v.optional(v.id("workflow_runs")),
     gate_node_id: v.optional(v.string()),
+    to: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);

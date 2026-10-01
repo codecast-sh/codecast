@@ -12,7 +12,7 @@ import { sessionPanePath, startPaneDrag } from "../../lib/stage";
 import { roleLookingAfter } from "../../lib/sessionIdentity";
 import { useInboxStore, useTrackedStore, convHasPendingSend, resolveSessionAuthor, showsBlockedBadge, type InboxSession, type SessionRoleSnapshot } from "../../store/inboxStore";
 import { useNowWhen } from "../../hooks/useCoarseNow";
-import { liveRestartStartedAt } from "../../hooks/useSessionRestart";
+import { latestRestartRow, restartPending } from "../../lib/sessionCommands";
 import { useAckAssignment } from "../../hooks/useAckAssignment";
 import { memberListSig, rosterIdentity } from "../../hooks/useTeamRoster";
 import { anchorIdentitySig, anchorIdentityFromSig } from "../../hooks/useSyncAnchors";
@@ -21,6 +21,7 @@ import { rosterDeviceOf, deviceWakesOnUse } from "../DeviceBadge";
 import { useTipActions, checkMilestone } from "../../tips";
 import { formatIdleDuration } from "../../lib/sessionCard";
 import { SessionCardView, type SessionCardChrome, type SessionCardViewProps } from "./SessionCardView";
+import { useInboxSelection } from "../../lib/inboxSelection";
 
 // The inbox session card's container: the store, the clock, the mutations and
 // every action a gesture reaches. It renders SessionCardView, which draws.
@@ -71,6 +72,7 @@ const openComments = (id: string) => {
   st.requestNavigate(id, { source: "gesture" });
   st.setCommentRailOpen(true);
 };
+const toggleSelect = (id: string) => useInboxSelection.getState().toggle(id);
 const paneDragStart = (sessionId: string) => (e: React.DragEvent, title: string) =>
   startPaneDrag(e, { path: sessionPanePath(sessionId), title });
 
@@ -111,7 +113,9 @@ export const SessionCard = memo(function SessionCard({
   const st = useTrackedStore([
     (s) => s.blockedReviveRequestedAt[cardId],
     (s) => convHasPendingSend(s.pendingMessages[cardId]),
-    (s) => s.restartingSessions[cardId],
+    // This row's restart, from the one sessionCommands home (small: one row
+    // per commanded session), Object.is-stable until the row itself changes.
+    (s) => latestRestartRow(s.sessionCommands, cardId),
     // The three card-chrome toggles fold into one string: they change together
     // (a settings write) and never independently at heartbeat rate.
     (s) => cardChromeSig(s.clientState),
@@ -135,6 +139,9 @@ export const SessionCard = memo(function SessionCard({
   const reviveRequestedAt = st.blockedReviveRequestedAt[cardId];
   const reviveRequestedAtRef = useRef(reviveRequestedAt);
   reviveRequestedAtRef.current = reviveRequestedAt;
+  const restartRow = latestRestartRow(st.sessionCommands, cardId);
+  const restartRowRef = useRef(restartRow);
+  restartRowRef.current = restartRow;
   // Threshold clock, not a raw tick: every card on screen shares the 30s
   // clock, so a plain useCoarseNow re-rendered the WHOLE list once per tick
   // forever. Project the clock onto what this card actually draws from time —
@@ -145,7 +152,7 @@ export const SessionCard = memo(function SessionCard({
       `${formatIdleDuration(session.updated_at)}|${sessionIdleAt(session, t) ? 1 : 0}|` +
       `${showsBlockedBadge(session.pending_api_error, false, reviveRequestedAtRef.current, t) ? 1 : 0}|` +
       `${threadStateView(session, session.message_count, t)?.cardLine ?? ""}|` +
-      `${liveRestartStartedAt(st.restartingSessions, cardId, t) ? 1 : 0}`,
+      `${restartPending(restartRowRef.current, t) ? 1 : 0}`,
     30_000,
   );
   // The machine behind a worktree, read straight off the persisted roster —
@@ -170,9 +177,9 @@ export const SessionCard = memo(function SessionCard({
   // agent bumps far more often) the pulse goes dark — the dot and the bucket now
   // read the SAME staleness check, so they can't disagree.
   const isLive = sessionLiveAt(session, Date.now());
-  // Age-gated because a restart navigated away from has no owner left to clear
-  // its entry; the coarse clock above keeps the age fresh.
-  const restarting = liveRestartStartedAt(st.restartingSessions, cardId, coarseNow) != null;
+  // Clears when the daemon reports or the session is confirmed back; a command
+  // nothing ever answers expires at its deadline (the coarse clock above).
+  const restarting = restartPending(restartRow, coarseNow);
   // Author of THIS session — shown only when it isn't the current user's own. The
   // inbox cache is user-scoped, so a teammate's session is here only because it was
   // opened (deep-link / search / palette). The conversation meta (written on every
@@ -249,6 +256,7 @@ export const SessionCard = memo(function SessionCard({
     [onNavigateToSession],
   );
   const handlePaneDragStart = useMemo(() => paneDragStart(cardId), [cardId]);
+  const selecting = useInboxSelection((sel) => sel.ids.length > 0);
 
   return (
     <SessionCardView
@@ -271,6 +279,8 @@ export const SessionCard = memo(function SessionCard({
       anchorIdentity={anchorIdentity}
       runHost={runHost}
       thumbSrc={thumbSrc}
+      selecting={selecting}
+      onToggleSelect={toggleSelect}
       onPin={handlePin}
       onStash={handleStash}
       onNavigateToSession={onNavigateToSession}

@@ -20,7 +20,7 @@ function row(id: string, userId: string, extra: Record<string, unknown> = {}) {
 beforeEach(() => {
   useInboxStore.setState({
     feedConversations: {
-      [`${TEAM}|`]: [row("a", GONE), row("b", STAYS), row("seat", GONE, { acting_user_id: "users_chief" })],
+      [`${TEAM}|`]: [row("a", GONE), row("b", STAYS), row("seat", GONE, { acting_user_id: "users_head" })],
       [`${TEAM}|repo`]: [row("c", GONE)],
       [`${OTHER}|`]: [row("d", GONE)],
     },

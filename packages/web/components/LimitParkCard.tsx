@@ -11,20 +11,18 @@
 // flags (auto-switch, resume at reset) so it states what codecast will do,
 // not a generic "send a message later"; the action row offers the one manual
 // recovery that helps NOW: continue this session on the freshest saved
-// account (a scoped requestAccountSwitch — never the whole blocked fleet).
+// account (a scoped account switch — never the whole blocked fleet), tracked
+// as the conversation's sessionCommands row like every daemon command.
 
-import { useState } from "react";
 import Link from "next/link";
-import { useMutation } from "convex/react";
-import { toast } from "sonner";
 import { Check, Hourglass, Loader2, RefreshCw, TimerReset, Zap } from "lucide-react";
-import { api } from "@codecast/convex/convex/_generated/api";
-import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { exhaustionBannerCopy, fleetAccount, isExhaustionCurrent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
-import { describeDecision, pendingProposal, fallbackProfiles, formatAgo, formatCountdown, standingLabel } from "@codecast/shared/contracts";
+import { describeDecision, pendingProposal, fallbackProfiles, formatAgo, standingLabel } from "@codecast/shared/contracts";
 import { useLimitRecovery } from "../hooks/useLimitRecovery";
 import { useInboxStore } from "../store/inboxStore";
-import { formatResetLocal, limitResetAsPrinted, limitWindowLabel, parseLimitResetAt } from "../lib/limitReset";
+import { isParkedDispatchError } from "../store/mutativeMiddleware";
+import { DISPATCH_REFUSED, latestSessionCommand, requestAccountSwitchCommand, switchPending } from "../lib/sessionCommands";
+import { formatResetPhrase, limitResetAsPrinted, limitWindowLabel, parseLimitResetAt } from "../lib/limitReset";
 import type { LimitRecoveryAction } from "../lib/limitRecovery";
 
 type Profile = { name: string; email?: string; usage?: CcUsage; login_expired_at?: number; setup_token?: { stored_at: number; expires_at: number } };
@@ -44,15 +42,19 @@ export function LimitParkCard({
   live: boolean;
   compact?: boolean;
 }) {
-  const [requestedTarget, setRequestedTarget] = useState<string>();
+  // This conversation's own switch, if one is in flight or landed: its target
+  // narrates the recovery before the machine's record catches up.
+  const switchRow = useInboxStore((s) => (conversationId
+    ? latestSessionCommand(s.sessionCommands, (r) => r.kind === "switch" && r.conversation_id === conversationId)
+    : undefined));
+  const requestedTarget = switchRow && switchRow.result !== DISPATCH_REFUSED && !switchRow.error ? switchRow.profile : undefined;
   const { now, device, phase } = useLimitRecovery(conversationId, timestamp, live, requestedTarget);
+  const busy = switchPending(switchRow, now);
   const resetAt = parseLimitResetAt(message, timestamp);
   const resetPassed = resetAt != null && now >= resetAt;
   const windowLabel = limitWindowLabel(message);
   const printedReset = limitResetAsPrinted(message);
   const pinnedAccount = useInboxStore((s) => (conversationId ? s.sessions[conversationId]?.cc_account : undefined));
-  const requestSwitch = useMutation(api.accountSwitch.requestAccountSwitch);
-  const [busy, setBusy] = useState(false);
 
   const profiles: Profile[] = device?.profiles ?? [];
   // The account the session ran on: its own token pin when it has one, else
@@ -86,29 +88,24 @@ export function LimitParkCard({
   // about to receive, stamp it revive-in-flight, and hand the daemon the same
   // client id so the echo replaces the painted bubble (the fleet banner's
   // contract, scoped to one conversation).
-  const switchAndContinue = async () => {
+  const switchAndContinue = () => {
     if (!best?.email || !conversationId) return;
     const store = useInboxStore.getState();
     const clientId = `acct-revive-${Math.random().toString(36).slice(2, 10)}-${conversationId}`;
     store.addOptimisticMessage(conversationId, "continue", undefined, clientId);
     store.markBlockedReviveRequested([conversationId]);
-    setRequestedTarget(best.name);
-    setBusy(true);
-    try {
-      await requestSwitch({
-        email: best.email,
-        conversation_ids: [conversationId as Id<"conversations">],
-        include_subagents: true,
-        continue_client_ids: { [conversationId]: clientId },
-      });
-    } catch (err) {
+    // A refusal raises the dispatch-failure toast and ends the row failed;
+    // take back the "continue" painted for it.
+    requestAccountSwitchCommand({
+      email: best.email,
+      conversation_ids: [conversationId],
+      include_subagents: true,
+      continue_client_ids: { [conversationId]: clientId },
+    }, { profile: best.name }).catch((err: unknown) => {
+      if (isParkedDispatchError(err)) return;
       store.removeOptimisticMessage(conversationId, clientId);
       store.clearBlockedReviveRequested([conversationId]);
-      setRequestedTarget(undefined);
-      toast.error(err instanceof Error ? err.message : "Account switch failed");
-    } finally {
-      setBusy(false);
-    }
+    });
   };
   const continueNow = () => {
     if (!conversationId) return;
@@ -138,7 +135,7 @@ export function LimitParkCard({
     ? null
     : resetPassed
       ? `window reset ${formatAgo(now - resetAt)}`
-      : `resets in ${formatCountdown(resetAt - now)} · ${formatResetLocal(resetAt, now)}`;
+      : `resets ${formatResetPhrase(resetAt, now)}`;
 
   // Line 2: what happens next. Reads the owner machine's flags; a viewer
   // whose roster does not carry the owner gets the neutral wording.
@@ -212,7 +209,7 @@ export function LimitParkCard({
             {!resetPassed && canSwitch && (
               <button
                 type="button"
-                onClick={() => void switchAndContinue()}
+                onClick={switchAndContinue}
                 disabled={busy}
                 title={
                   proposal

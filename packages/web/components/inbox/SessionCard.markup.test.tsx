@@ -32,7 +32,7 @@ const readState = mockInboxStore(() => ({
   clientState: { ui: { show_model_badge: true, show_agent_icon: true, show_branch_pill: true, personify_sessions: false } },
   drafts: { "c-draft": { draft_message: "try the retry budget again" } },
   pendingMessages: { "c-pending": [{ _id: "pm1", status: "pending", content: "go" }] },
-  restartingSessions: {},
+  sessionCommands: {},
   blockedReviveRequestedAt: {},
   conversations: {},
   sessions: {

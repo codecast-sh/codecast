@@ -56,7 +56,7 @@ export const APP_SURFACES: AppSurface[] = [
   dash("triggers", "delayed, recurring and event-driven runs (alias /schedules)"),
   dash("schedules", "pre-rename alias of /triggers"),
   dash("sessions", "session list"),
-  dash("anchor", "the workspace's agent: its root role, Chief of Staff by default"),
+  dash("anchor", "the workspace's agent: its root role, Head of People by default"),
   dash("team", "team overview"),
   dash("team/activity", "team activity"),
   dash("team/charts", "team charts"),

@@ -39,7 +39,7 @@ describe("who reports to a role", () => {
   test("a member adds and removes themself; only an admin names someone else", async () => {
     const db = fixtures();
     const ctx = ctxOf(db);
-    const role = await performCreateRole(ctx, ME as any, { name: "Chief", handle: "chief", team_id: TEAM });
+    const role = await performCreateRole(ctx, ME as any, { name: "Chief", handle: "head", team_id: TEAM });
     const joined = await performSetReports(ctx, MATE as any, { role_id: role.short_id, add: [MATE as any] });
     expect(joined.reports_user_ids).toEqual([MATE]);
     await expect(performSetReports(ctx, MATE as any, { role_id: role.short_id, add: [ME as any] })).rejects.toThrow(/admin/);
@@ -53,7 +53,7 @@ describe("who reports to a role", () => {
   test("the whole list from a surface becomes the difference against the stored row", async () => {
     const db = fixtures();
     const ctx = ctxOf(db);
-    const role = await performCreateRole(ctx, ME as any, { name: "Chief", handle: "chief", team_id: TEAM });
+    const role = await performCreateRole(ctx, ME as any, { name: "Chief", handle: "head", team_id: TEAM });
     await performSetReports(ctx, ME as any, { role_id: role.short_id, add: [ME as any, MATE as any] });
     const after = await performSetReports(ctx, ME as any, { role_id: role.short_id, set: [MATE as any] });
     expect(after.reports_user_ids).toEqual([MATE]);
@@ -120,7 +120,7 @@ describe("goals read against the live rows", () => {
 
 describe("the stall notice", () => {
   test("one notice per person per UTC day, only for a stalled high goal", async () => {
-    const db = fixtures({ org_roles: [{ _id: "r1", short_id: "or-1", name: "Chief", handle: "chief", reports_user_ids: [MATE], status: "active" }] });
+    const db = fixtures({ org_roles: [{ _id: "r1", short_id: "or-1", name: "Chief", handle: "head", reports_user_ids: [MATE], status: "active" }] });
     const sent: any[] = [];
     const ctx = { db, runMutation: async (_fn: any, args: any) => { sent.push(args); return { notified: 1 }; } } as any;
     const goal = (over: Record<string, any>) => ({ text: "Close the round", priority: "high", raw: "", refs: [], unresolved: [], moved_at: null, stalled: true, unmatched: false, ...over });

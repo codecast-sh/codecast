@@ -120,7 +120,15 @@ idle(() => {
         // the new worker activates — visibly blinking whichever window the
         // user is looking at (and resetting the palette popup mid-compose).
         // Defer each window's reload until it is hidden; see the helper.
-        onNeedReload: createReloadWhenHidden(),
+        // A window that stays visible also gets lib/updatePrompt's card, but
+        // only for a release that asked for it or an update a day old.
+        onNeedReload: (() => {
+          const reloadWhenHidden = createReloadWhenHidden();
+          return () => {
+            reloadWhenHidden();
+            void import("../lib/updatePrompt").then((m) => m.noteUpdateWaiting()).catch(() => {});
+          };
+        })(),
       })
     )
     .catch(() => {});

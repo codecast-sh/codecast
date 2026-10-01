@@ -39,6 +39,7 @@ import { useCodeComments, useSyncRefCodeComments } from "../../../../../hooks/us
 import { useAttributedSession, useLineComments } from "../../../../../hooks/useLineComments";
 import { useCoarseNow } from "../../../../../hooks/useCoarseNow";
 import { useQueryNoThrow } from "../../../../../hooks/useQueryNoThrow";
+import { commitCarriesDiffs } from "@codecast/shared/contracts/commitDiffs";
 import { useEnsureCommitFiles } from "../../../../../hooks/useRepoBrowse";
 import { useWatchEffect } from "../../../../../hooks/useWatchEffect";
 import {
@@ -561,11 +562,9 @@ function CommitContent({
       ) : (
         <>
           {/* A row that names its files but carries none of their diffs (a
-              commit recorded from a session transcript) asks for them, and
-              says so above the list rather than hiding it. */}
-          {/* The server's rule (commitCarriesDiffs): a push names files with
-              no patch field; a fetch writes one on every file, empty or not. */}
-          {files.every((f) => f.patch === undefined && !f.additions && !f.deletions) && (
+              push, a checkout's publish, a session transcript) asks for them,
+              and says so above the list rather than hiding it. */}
+          {!commitCarriesDiffs(commit.files) && (
             <div className="px-4 pt-4">
               <div className="rounded-lg border border-sol-border/60 py-6">
                 <CommitWithoutFiles repository={repository} sha={commit.sha} named />

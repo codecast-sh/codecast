@@ -76,13 +76,14 @@ test("the band portals into a slot right under the reference's paragraph and the
   );
   const content = document.querySelector(".cc-content")!;
   click(content.querySelector("button")!);
-  const kids = Array.from(content.children).map((c) => c.tagName + (c.hasAttribute("data-reveal-slot") ? "[slot]" : ""));
-  expect(kids).toEqual(["P", "P", "DIV[slot]", "P"]);
+  // A pill in running text opens its band under its own line: the slot sits
+  // inside the paragraph, right after the pill.
+  expect(content.querySelectorAll("p")[1].querySelector("[data-reveal-slot][data-reveal-inline]")).not.toBeNull();
   const band = content.querySelector(".object-reveal")!;
   expect(band.querySelector("[data-path]")?.getAttribute("data-path")).toBe("/tasks/a");
   expect(content.querySelector("button")?.getAttribute("aria-pressed")).toBe("true");
-  // The grip is there for the resize; the header strip and the foot close,
-  // above and below the page. The open-the-page hit does not close.
+  // The grip is there for the resize; the bar above, the header strip and
+  // the foot close. The small Open link in the bar does not close.
   expect(band.querySelector(".object-reveal__grip-bar")).not.toBeNull();
   expect(band.querySelectorAll(".object-reveal__open").length).toBe(1);
   expect(band.querySelector(".object-reveal__open-beside")?.getAttribute("title")).toBe("Open beside");
@@ -96,7 +97,7 @@ test("the band portals into a slot right under the reference's paragraph and the
   click(content.querySelector(".object-reveal__strip")!);
   expect(content.querySelector("[data-reveal-slot]")).toBeNull();
   expect(content.querySelector("button")?.getAttribute("aria-pressed")).toBe("false");
-  // The top bar's X closes it too.
+  // The bar above the frame is itself a close.
   click(content.querySelector("button")!);
   click(content.querySelector(".object-reveal__open [data-reveal-close]")!);
   expect(content.querySelector(".object-reveal")).toBeNull();

@@ -24,9 +24,8 @@ import { createReviewComment, exitReviewMode } from "../lib/reviewActions";
 import { quoteSelectionIntoReply } from "../lib/quoteSelection";
 import { stepReviewBlock } from "../lib/reviewNav";
 import { altChordDirection } from "../shortcuts";
-import { focusComposer } from "../lib/composerControl";
 import { useCurrentUser } from "../hooks/useCurrentUser";
-import { KeyCap, MenuKeyCaps } from "./KeyboardShortcutsHelp";
+import { KeyCap } from "./KeyboardShortcutsHelp";
 import { useReviewComposer } from "./reviewContext";
 
 const RightCommentRail = lazy(() => import("./comments/RightCommentRail").then((m) => ({ default: m.RightCommentRail })));
@@ -75,21 +74,8 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
   // comments doesn't depend on it.
   const commentsEnabled = useInboxStore((s) => s.clientState.ui?.comments_enabled ?? false);
   const myComments = useInboxStore(
-    useShallow((s) => (s.reviewComments[conversationId] ?? []).filter((c) => c.messageId === messageId)),
+    useShallow((s) => (s.reviewComments[conversationId] ?? []).filter((c) => c.messageId === messageId && !c.image)),
   );
-  // The footer belongs to the BATCH, not to keyboard mode. Escape drops the review
-  // target but KEEPS the quotes (exitReviewMode), and that is exactly the moment a
-  // user steps back and asks "now what?" — so the footer has to outlive the target.
-  // Exactly one message carries it: the review target while there is one, else the
-  // message holding the newest quote. Returns a plain id, so the selector is cheap.
-  const footerOwner = useInboxStore((s) => {
-    const list = s.reviewComments[conversationId] ?? [];
-    if (!list.length) return null;
-    const target = s.reviewMessageId;
-    if (target && list.some((c) => c.messageId === target)) return target;
-    return list[list.length - 1].messageId;
-  });
-
   // MODELESS: there is no review mode to enter or exit. Hovering any block always
   // offers Quote/Comment; the rail (and the content-shrink it causes) exists
   // exactly while this message has pending comments — submit/cancel/removing the
@@ -123,8 +109,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
   const [peekBlock, setPeekBlock] = useState<number | null>(null);
   const [rects, setRects] = useState<Rect[]>([]);
   const [stackTops, setStackTops] = useState<Record<string, number>>({});
-  // Bottom of the last stacked card — where the rail footer (what happens next
-  // with these quotes) hangs.
+  // Bottom of the last stacked card, reserved as the inline rail's height.
   const [railBottom, setRailBottom] = useState(0);
   // Float the rail in the left margin (content keeps full width) when there's
   // room; otherwise shrink the text column with an in-flow left rail. railPx is
@@ -413,6 +398,14 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
     [sortedComments, focusRegion],
   );
 
+  // Highlight the block a card refers to: the peeked (hovered) card wins, else
+  // the keyboard-active block. Replaces the in-card quote as the "what does this
+  // comment point at" cue. An unquoted keyboard-lit block also shows its quote
+  // key on the gutter handle (a quoted one already shows N / ⌫ on its chip).
+  const hiBlock = peekBlock != null ? peekBlock : isReviewTarget ? activeBlock : -1;
+  const keyLitBlock =
+    peekBlock == null && isReviewTarget && hiBlock >= 0 && !myComments.some((c) => c.blockIndex === hiBlock) ? hiBlock : null;
+
   return (
     <div
       ref={containerRef}
@@ -433,29 +426,9 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
       onMouseMove={handleMouseMove}
       onMouseLeave={handleMouseLeave}
     >
-      {(() => {
-        // Highlight the block a card refers to: the peeked (hovered) card wins,
-        // else the keyboard-active block. Replaces the in-card quote as the
-        // "what does this comment point at" cue.
-        const hi = peekBlock != null ? peekBlock : isReviewTarget ? activeBlock : -1;
-        if (hi < 0 || !rects[hi]) return null;
-        // The keyboard-lit chunk names its verb: an unquoted block shows the
-        // quote key at its top-left (a quoted one already shows N / ⌫ on its
-        // chip). A sibling of the overlay, not a child — the overlay sits behind
-        // the text, and this must sit above it.
-        const hint = peekBlock == null && isReviewTarget && !editingId && !myComments.some((c) => c.blockIndex === hi);
-        return (
-          <>
-            <div className="cc-active-overlay" style={{ top: rects[hi].top, height: rects[hi].height }} />
-            {hint && (
-              <div className="cc-active-hint" style={{ top: rects[hi].top }}>
-                <KeyCap size="xs">C</KeyCap>
-                quote
-              </div>
-            )}
-          </>
-        );
-      })()}
+      {hiBlock >= 0 && rects[hiBlock] && (
+        <div className="cc-active-overlay" style={{ top: rects[hiBlock].top, height: rects[hiBlock].height }} />
+      )}
 
       <div ref={contentRef} className="cc-content">
         {renderBlock(content)}
@@ -464,28 +437,32 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
       {/* Modeless single verb: hover any block → one Quote handle in the LEFT
           gutter (separated from the meta actions in the top-right corner). Click
           quotes the block into your reply and opens its note focused; leave the
-          note blank for a bare quote. */}
-      {hoverIndex !== null && editingId === null && (
-        <button
-          type="button"
-          data-cc-gutter
-          className="cc-block-quote"
-          // Prefer the live measured offset (re-measured on reflow) over the
-          // mousemove snapshot, so the handle stays pinned to its block's top
-          // even if content above shifts after the cursor stops. hoverTop is the
-          // first-frame fallback before rects has measured.
-          style={{ top: rects[hoverIndex]?.top ?? hoverTop }}
-          title="Quote into your reply"
-          aria-label="Quote this block into your reply"
-          onMouseEnter={cancelClear}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => startComment(hoverIndex)}
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <path d="M9.6 6C7 7.5 5.2 9.9 5.2 13.1c0 2.4 1.5 4 3.5 4 1.8 0 3.1-1.3 3.1-3 0-1.6-1.1-2.8-2.7-2.8-.3 0-.6 0-.7.1.3-1.6 1.6-3.2 3-4.1L9.6 6zm8 0c-2.6 1.5-4.4 3.9-4.4 7.1 0 2.4 1.5 4 3.5 4 1.8 0 3.1-1.3 3.1-3 0-1.6-1.1-2.8-2.7-2.8-.3 0-.6 0-.7.1.3-1.6 1.6-3.2 3-4.1L17.6 6z" />
-          </svg>
-        </button>
-      )}
+          note blank for a bare quote. The keyboard-lit block gets the same handle
+          carrying its key, so mouse and keyboard name the verb in one place. */}
+      {editingId === null &&
+        [...new Set([hoverIndex, keyLitBlock])].map((i) => i !== null && (
+          <button
+            key={i}
+            type="button"
+            data-cc-gutter
+            className={i === keyLitBlock ? "cc-block-quote cc-block-quote-key" : "cc-block-quote"}
+            // Prefer the live measured offset (re-measured on reflow) over the
+            // mousemove snapshot, so the handle stays pinned to its block's top
+            // even if content above shifts after the cursor stops. hoverTop is the
+            // first-frame fallback before rects has measured.
+            style={{ top: rects[i]?.top ?? hoverTop }}
+            title="Quote into your reply"
+            aria-label="Quote this block into your reply"
+            onMouseEnter={cancelClear}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => startComment(i)}
+          >
+            {i === keyLitBlock && <KeyCap size="xs">C</KeyCap>}
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M9.6 6C7 7.5 5.2 9.9 5.2 13.1c0 2.4 1.5 4 3.5 4 1.8 0 3.1-1.3 3.1-3 0-1.6-1.1-2.8-2.7-2.8-.3 0-.6 0-.7.1.3-1.6 1.6-3.2 3-4.1L9.6 6zm8 0c-2.6 1.5-4.4 3.9-4.4 7.1 0 2.4 1.5 4 3.5 4 1.8 0 3.1-1.3 3.1-3 0-1.6-1.1-2.8-2.7-2.8-.3 0-.6 0-.7.1.3-1.6 1.6-3.2 3-4.1L17.6 6z" />
+            </svg>
+          </button>
+        ))}
 
       {/* Mirror of the quote handle on the RIGHT gutter: open a teammate comment
           thread anchored to this whole message in the comment rail. */}
@@ -508,7 +485,16 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
       )}
 
       {engaged && (
-        <div ref={railRef} className="cc-rail">
+        <div
+          ref={railRef}
+          className="cc-rail"
+          // Cards are absolutely stacked, so the inline column has
+          // no height of its own: on a message shorter than its quote stack (one
+          // line with an open note) they'd paint over the rows below. Reserve the
+          // stack's height so the row grows to hold it. Margin mode floats beside
+          // the transcript and needs no reservation.
+          style={railInMargin ? undefined : { minHeight: railBottom }}
+        >
           {sortedComments.map((c, i) => (
             <div
               key={c.id}
@@ -542,26 +528,6 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
             </div>
           ))}
 
-          {/* One quiet line: the quotes ride along on the next send, so the only
-              thing worth saying is how to get to the input. Clicking it does the
-              same as the key. Everything else the rail used to spell out — the
-              count, a send button, the per-card keys — was noise beside cards
-              that already show all of it. */}
-          {footerOwner === messageId && (
-            <button
-              type="button"
-              className="cc-rail-foot"
-              style={{ top: railBottom }}
-              // Without this, mousedown blurs an open note editor, the stack
-              // collapses, and this button jumps away before mouseup — the click
-              // never lands.
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={focusComposer}
-            >
-              <MenuKeyCaps action="compose.focus" />
-              to reply
-            </button>
-          )}
         </div>
       )}
 
@@ -648,7 +614,7 @@ const CommentChip = memo(function CommentChip({
   );
 });
 
-function CommentEditor({
+export function CommentEditor({
   conversationId,
   comment,
   author,

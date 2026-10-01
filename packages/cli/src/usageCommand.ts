@@ -18,6 +18,7 @@ import {
   nextPressuredReset,
   isUsageExhausted,
   isWindowRolled,
+  labeledUsageWindows,
   livePercent,
   switchUsagePercent,
   worstUsagePercent,
@@ -122,15 +123,8 @@ export function buildUsageReport(
   const active = profiles.find((p) => p.active) ?? null;
   const usage = active?.usage;
   const windows: UsageWindowLine[] = [];
-  const push = (label: string, w?: { percent: number; resets_at?: number }) => {
-    if (!w) return;
-    windows.push({ label, percent: livePercent(w, now), resets_at: w.resets_at, rolled: isWindowRolled(w, now) });
-  };
-  if (usage) {
-    push("Session (5h)", usage.session);
-    push("Week (7d)", usage.weekly);
-    push(usage.weekly_scoped?.label ? `${usage.weekly_scoped.label} (7d)` : "Model (7d)", usage.weekly_scoped);
-    for (const s of usage.scoped ?? []) push(s.label, s);
+  for (const w of usage ? labeledUsageWindows(usage) : []) {
+    windows.push({ label: w.label, percent: livePercent(w, now), resets_at: w.resets_at, rolled: isWindowRolled(w, now) });
   }
   const extra = usage?.extra;
   const extraNote =

@@ -43,7 +43,7 @@ const base = (over: Partial<CoverageInputs> = {}): CoverageInputs => ({
     { status: "open", project_id: "p_platform", source: "agent", promoted: true },
     { status: "open", project_id: "p_platform", source: "agent", assignee: "u_ada" },
   ],
-  roles: [role("r_platform", "platform"), role("r_a", "design", ["p_brand"]), role("r_b", "marketing", ["p_brand"]), role("r_root", "chief-of-staff")],
+  roles: [role("r_platform", "platform"), role("r_a", "design", ["p_brand"]), role("r_b", "marketing", ["p_brand"]), role("r_root", "head-of-people")],
   areas: [
     { repository: "acme/app", path_prefix: "packages/web", commits_30d: 40, authors: [], sessions_30d: 12, project_id: "p_platform" },
     { repository: "acme/tools", path_prefix: "", commits_30d: 9, authors: [], sessions_30d: 3 },
@@ -70,14 +70,14 @@ describe("coverage", () => {
   });
 
   test("a paused lead is not a lead: the project counts as without one and names the paused role", () => {
-    const c = computeCoverage(base({ roles: [role("r_platform", "platform", [], { status: "paused" }), role("r_root", "chief-of-staff")] }));
+    const c = computeCoverage(base({ roles: [role("r_platform", "platform", [], { status: "paused" }), role("r_root", "head-of-people")] }));
     expect([c.with_lead, c.with_lead_paused, c.with_work]).toEqual([0, 1, 3]);
     expect(c.projects[1]).toMatchObject({ lead_paused: "@platform", lead_by: "owner" });
     expect(c.projects[1].lead).toBeUndefined();
   });
 
   test("a whole workspace role holds the remainder, which coverage still lists as without a lead", () => {
-    const c = computeCoverage(base({ roles: [role("r_root", "chief-of-staff")] }));
+    const c = computeCoverage(base({ roles: [role("r_root", "head-of-people")] }));
     expect([c.with_lead, c.with_work]).toEqual([0, 3]);
   });
 

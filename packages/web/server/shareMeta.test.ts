@@ -1,5 +1,6 @@
 import { test, expect, describe } from "bun:test";
-import { parseSharePath } from "@codecast/shared/entities";
+import { parseSharePath, sharePath, SHARED_OBJECT_KINDS } from "@codecast/shared/entities";
+import { isStandaloneSharePath } from "../lib/desktopHandoff";
 import { shareMeta } from "./shareData";
 
 const BASE = "https://codecast.sh";
@@ -12,6 +13,16 @@ describe("parseSharePath", () => {
       .toEqual({ kind: "doc", token: "1a221088-1fc3-48c8-a814-71119676adf0" });
     expect(parseSharePath("/share/plan/abc123def")).toEqual({ kind: "plan", token: "abc123def" });
     expect(parseSharePath("/share/message/abc123def")).toEqual({ kind: "message", token: "abc123def" });
+    expect(parseSharePath("/share/task/abc123def")).toEqual({ kind: "task", token: "abc123def" });
+    expect(parseSharePath("/share/call/abc123def")).toEqual({ kind: "call", token: "abc123def" });
+  });
+
+  test("sharePath is its inverse for every kind, and every object kind boots standalone", () => {
+    for (const kind of ["conversation", ...SHARED_OBJECT_KINDS] as const) {
+      const path = sharePath(kind, "abc123def");
+      expect(parseSharePath(path)).toEqual({ kind, token: "abc123def" });
+      expect(isStandaloneSharePath(path)).toBe(kind !== "conversation");
+    }
   });
 
   test("query strings, fragments and trailing slashes do not change the token", () => {
@@ -31,6 +42,35 @@ describe("parseSharePath", () => {
 });
 
 describe("shareMeta", () => {
+  test("decision: the choice once made, the options before", () => {
+    const options = [{ label: "Ship" }, { label: "Wait" }];
+    expect(shareMeta("decision", "t", { question: "Ship now?", status: "pending", options }, BASE)?.description).toBe("Options: Ship, Wait");
+    const done = shareMeta("decision", "t", { question: "Ship now?", status: "answered", answer_index: 1, options }, BASE);
+    expect(done?.title).toBe("Codecast: Ship now?");
+    expect(done?.description).toBe("Decided: Wait");
+    expect(done?.url).toBe(`${BASE}/share/decision/t`);
+  });
+
+  test("run: goal, else step tally", () => {
+    const meta = shareMeta("run", "t", { name: "Audit", nodes: [{ status: "completed" }, { status: "running" }] }, BASE);
+    expect(meta?.description).toBe("1 of 2 steps done");
+  });
+
+  test("task: description peek, else its id and status", () => {
+    const meta = shareMeta("task", "t", { title: "Fix login", short_id: "ct-9", status: "in_progress", description: "" }, BASE);
+    expect(meta?.title).toBe("Codecast: Fix login");
+    expect(meta?.description).toBe("ct-9, in progress");
+    expect(meta?.url).toBe(`${BASE}/share/task/t`);
+  });
+
+  test("call: the recap, else who was on it", () => {
+    const withSummary = shareMeta("call", "t", { title: "Standup", summary: "We **shipped** it", participants: [] }, BASE);
+    expect(withSummary?.description).toBe("We shipped it");
+    const noSummary = shareMeta("call", "t", { recording: false, participants: [{ name: "Ada" }, { name: "Sam" }] }, BASE);
+    expect(noSummary?.title).toBe("Codecast: Shared Huddle");
+    expect(noSummary?.description).toBe("A call with Ada, Sam");
+  });
+
   test("doc: title plus a markdown-stripped body peek", () => {
     const meta = shareMeta("doc", "tok123", {
       title: "US connector taxonomy",
