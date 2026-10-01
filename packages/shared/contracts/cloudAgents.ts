@@ -1,7 +1,8 @@
 /**
  * Cloud agent providers: agent sessions that run on a vendor's machines and
  * that codecast both mirrors and drives (start, follow-up, interrupt) through
- * the daemon: Cursor Cloud Agents and Codex Cloud. Each entry is what the web,
+ * the daemon: Cursor Cloud Agents, Codex Cloud, and OpenAI Agents API
+ * sessions (the managed Codex harness on an API key). Each entry is what the web,
  * the daemon and the launch path need to tell a provider's sessions apart:
  * the agent type it runs under, the launch model keys that select it, the id
  * its sessions carry, where it opens, and how its setup cards read.
@@ -28,8 +29,8 @@ export interface CloudAgentProviderSpec {
   modelPrefix: string;
   /** The id every session it runs carries (conversations.session_id). */
   sessionIdPrefix: string;
-  /** The agent's page on the vendor's site, for its session id or a branch's (cloudAgentRootId). */
-  agentUrl: (sessionId: string) => string;
+  /** The agent's page on the vendor's site, for its session id or a branch's (cloudAgentRootId); none when the vendor has no page per agent. */
+  agentUrl?: (sessionId: string) => string;
   /** The daemon's mirror directory under ~/.codecast (transcripts, state, sessions). */
   mirrorDir: string;
   /**
@@ -60,6 +61,14 @@ export interface CloudAgentProviderSpec {
   login?: { argv: string[]; headlessArgv: string[] };
   /** Tooltip on the composer's "run in the cloud" switch. */
   toggleTitle: string;
+  /**
+   * When several providers run one agent type (Codex: Codex Cloud on the
+   * ChatGPT plan, the Agents API on an API key), the composer's choice
+   * between them: its name there, and what a session costs on it.
+   */
+  lane?: { label: string; cost: string };
+  /** The model a launch that names none runs on, for a provider with no account default of its own. */
+  defaultModel?: string;
   /** Offered by the composer's "run in the cloud" switch (a provider can sync before codecast starts its agents). */
   composer: boolean;
   /**
@@ -136,8 +145,33 @@ export const CLOUD_AGENT_PROVIDERS = {
     login: { argv: ["codex", "login"], headlessArgv: ["codex", "login", "--device-auth"] },
     toggleTitle: "Run this session as a Codex Cloud task: on OpenAI's machines, in this repository's Codex environment, on your ChatGPT plan. Messages you send become its follow-ups.",
     composer: true,
+    lane: { label: "ChatGPT plan", cost: "Counts toward your ChatGPT plan's Codex limits, with no extra charge." },
     launchOptions: { ask: true, maxAttempts: 4 },
     actions: ["create_pr", "apply", "archive", "unarchive"],
+  },
+  // OpenAI Agents API (platform.openai.com): the public, managed Codex
+  // harness, driven with an OpenAI API key from Provider Keys. Its sessions
+  // run in an OpenAI-hosted sandbox that clones the session's repository, and
+  // stream their progress live. The platform has no page per session.
+  codex_api: {
+    id: "codex_api",
+    agentType: "codex",
+    label: "OpenAI Agents API",
+    syncSource: "codex_api",
+    modelPrefix: "api",
+    sessionIdPrefix: "sess_",
+    mirrorDir: "openai-agents",
+    credentialCards: {
+      missing: "OpenAI Agents API sessions need an OpenAI API key on {machine}.",
+      rejected: "OpenAI rejected the API key on {machine}",
+      holdReason: "waiting for an OpenAI API key on {machine}",
+    },
+    keyProvider: "openai",
+    repoAccessUrl: "https://developers.openai.com/api/docs/guides/agents-api/environments/openai-hosted",
+    toggleTitle: "Run this session through the OpenAI Agents API: on OpenAI's machines, in a sandbox with this repository cloned from GitHub, billed to your OpenAI API key. Messages you send become its follow-ups, and steer a turn that is still running.",
+    composer: true,
+    lane: { label: "API key", cost: "Billed to your OpenAI API key: the model's API rates plus sandbox time." },
+    defaultModel: "gpt-5.6-terra",
   },
 } satisfies Record<string, CloudAgentProviderSpec>;
 
@@ -215,9 +249,10 @@ export function cloudAgentLaunchWords(launch: Partial<CloudAgentLaunch>): string
  * The model catalog entries a provider's launch options make (the launch
  * path accepts only listed keys, and a stored stamp reads back through the
  * catalog). The plain key is the one a picker lists; the rest are hidden,
- * set by the composer's own controls.
+ * set by the composer's own controls. `models`: the provider's own models,
+ * each a listed key of its own beside the plain one.
  */
-export function cloudAgentLaunchModelOptions(spec: CloudAgentProviderSpec, hint: string): ModelOption[] {
+export function cloudAgentLaunchModelOptions(spec: CloudAgentProviderSpec, hint: string, models: ModelOption[] = []): ModelOption[] {
   const opts = spec.launchOptions;
   const out: ModelOption[] = [];
   for (const ask of opts?.ask ? [false, true] : [false]) {
@@ -226,6 +261,10 @@ export function cloudAgentLaunchModelOptions(spec: CloudAgentProviderSpec, hint:
       const label = [spec.label, ...cloudAgentLaunchWords({ ask, attempts })].join(" · ");
       out.push({ key, label, hint, cliAlias: key, ...(key === spec.modelPrefix ? {} : { hidden: true }) });
     }
+  }
+  for (const m of models) {
+    const key = cloudAgentLaunchKey(spec, { model: m.key });
+    out.push({ key, label: `${spec.label} · ${m.label}`, hint: m.hint, cliAlias: key });
   }
   return out;
 }

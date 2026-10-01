@@ -40,6 +40,11 @@ const wordsIn = (q: string, text: string) => q.split(/\s+/).filter(Boolean).ever
 export function PaletteSearch({ now }: PartProps) {
   const filmQuery = useFilmTime((t) => typed(MEMORY.query, t, MEMORY.typeAt, MEMORY.typeRate));
   const [typedByVisitor, setTypedByVisitor] = useState<string | null>(null);
+  // cmdk scrolls its selected row into view, through every scrolling
+  // ancestor, the stage's clip included. A row is selected only while the
+  // palette is face-on, where that scroll has nothing to move.
+  const [picked, setPicked] = useState("");
+  const onScreen = useFilmTime((t) => t >= MEMORY.selectFrom && t < MEMORY.selectTo);
   const query = typedByVisitor ?? filmQuery;
   const q = query.trim().toLowerCase();
   const recent = RECENT.filter((r) => sessionMatchesQuery({ ...r, authorName: VIEWER.name }, q)).slice(0, 4);
@@ -48,7 +53,14 @@ export function PaletteSearch({ now }: PartProps) {
   const tasks = searching && wordsIn(q, `${TASK.title} ${TASK.short_id} webhook retry`) ? [TASK] : [];
   return (
     <div className="flex h-full items-start justify-center pt-5" {...fly("palette/memory.palette")}>
-      <CommandPrimitive className={paletteClass} filter={paletteItemScore} loop label="Command menu">
+      <CommandPrimitive
+        className={paletteClass}
+        filter={paletteItemScore}
+        loop
+        label="Command menu"
+        value={onScreen || typedByVisitor !== null ? picked : ""}
+        onValueChange={setPicked}
+      >
         <PaletteSearchBar trailing={<KeyCap>Esc</KeyCap>}>
           <CommandPrimitive.Input
             data-hero-live=""

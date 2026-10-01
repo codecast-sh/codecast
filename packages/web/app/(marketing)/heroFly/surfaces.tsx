@@ -9,11 +9,13 @@
  * matches it.
  */
 
-import { Suspense, type CSSProperties, type ComponentType } from "react";
+import { Suspense, type CSSProperties, type ComponentType, type ReactNode } from "react";
 import { LogoIcon } from "@/components/Logo";
+import { EntityFixtureContext } from "@/lib/entityDisplay";
 import { PhoneFrame } from "../productMocks";
 import type { ChapterPart, HeroChapter, PartProps } from "./chapters/contract";
-import { fly, SurfaceContext } from "./filmClock";
+import { fly, SurfaceContext, useFilmTime } from "./filmClock";
+import { entityStage, ENTITY_STAGES } from "./fixtures";
 import { ARCS, FLYERS } from "./motion";
 import { HeroPartBoundary } from "./sandbox";
 import { LABEL_3W, SURFACES, type ArcPath, type Region, type RegionKey, type Surface } from "./world";
@@ -35,7 +37,9 @@ function RegionSlot({ k, region, parts, now }: { k: RegionKey; region: Region; p
         display: "flex",
         flexDirection: "column",
         justifyContent: region.anchor === "bottom" ? "flex-end" : "flex-start",
-        overflow: "hidden",
+        // clip, not hidden: a hidden box is a scroll container, and a real
+        // view's scrollIntoView or focus would scroll the film inside it.
+        overflow: "clip",
       }}
     >
       {parts.map((p) => (
@@ -50,7 +54,7 @@ function RegionSlot({ k, region, parts, now }: { k: RegionKey; region: Region; p
 }
 
 function SurfaceMount({ s, parts, now }: { s: Surface; parts: Placed[]; now: number }) {
-  const face: CSSProperties = { position: "absolute", inset: 0, backfaceVisibility: "hidden", WebkitBackfaceVisibility: "hidden", borderRadius: s.radius, overflow: "hidden" };
+  const face: CSSProperties = { position: "absolute", inset: 0, backfaceVisibility: "hidden", WebkitBackfaceVisibility: "hidden", borderRadius: s.radius, overflow: "clip" };
   const regions = Object.entries(s.regions).map(([name, region]) => {
     const k = `${s.id}.${name}` as RegionKey;
     return <RegionSlot key={k} k={k} region={region} parts={parts.filter((p) => p.region === k)} now={now} />;
@@ -126,6 +130,12 @@ function Arc({ a }: { a: ArcPath }) {
   );
 }
 
+/** Entity pills and cards read the fixtures in force at film time; only their consumers re-render when the stage turns. */
+function FilmEntities({ children }: { children: ReactNode }) {
+  const stage = useFilmTime(entityStage);
+  return <EntityFixtureContext.Provider value={ENTITY_STAGES[stage]}>{children}</EntityFixtureContext.Provider>;
+}
+
 /** Everything inside the camera: backdrop, surfaces, flyers. The driver writes styles to it; React renders it again only when chapters load. */
 export function World({ chapters, now }: { chapters: HeroChapter[]; now: number }) {
   const parts: Placed[] = chapters
@@ -133,7 +143,7 @@ export function World({ chapters, now }: { chapters: HeroChapter[]; now: number 
     .sort((a, b) => a.order - b.order);
   const flyers: Record<string, ComponentType<PartProps>> = Object.assign({}, ...chapters.map((c) => c.flyers ?? {}));
   return (
-    <>
+    <FilmEntities>
       <div
         style={{
           position: "absolute",
@@ -166,6 +176,6 @@ export function World({ chapters, now }: { chapters: HeroChapter[]; now: number 
       >
         <span className="inline-block -translate-x-1/2 whitespace-nowrap font-mono text-[44px] font-bold text-sol-text/80">3 weeks later</span>
       </div>
-    </>
+    </FilmEntities>
   );
 }

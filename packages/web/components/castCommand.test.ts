@@ -534,6 +534,18 @@ describe("extractCastBodyParts", () => {
     ]);
   });
 
+  test("spawn and fork carry their prompts, not their flag values", () => {
+    expect(extractCastBodyParts("spawn", "", '--subagent --agent codex -- "Retry endpoint, 5 attempts max"')).toEqual([
+      { text: "Retry endpoint, 5 attempts max", label: "prompt" },
+    ]);
+    expect(extractCastBodyParts("spawn", "", '--label "rollout" "First task" "Second task"')).toEqual([
+      { text: "First task", label: "prompt" },
+      { text: "Second task", label: "prompt" },
+    ]);
+    expect(extractCastBodyParts("fork", "", '--tip "Try fixed backoff"')).toEqual([{ text: "Try fixed backoff", label: "prompt" }]);
+    expect(extractCastBodyParts("spawn", "", "--subagent -- - <<'EOF'\nA heredoc brief\nEOF")).toEqual([]);
+  });
+
   test("trigger add reads a heredoc prompt", () => {
     const args = "- --every 4h --title \"Growth audit\" <<'EOF'\nAudit budget allocation.\nEOF";
     expect(extractCastBodyParts("sched", "add", args)).toEqual([

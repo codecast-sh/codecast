@@ -20,11 +20,11 @@ export const DECISION: SessionDecisionItem = {
   session_id: "hero-sid-lead",
   question: OBJECTS.decision.question,
   context_md:
-    "The fork ran both against a 10 minute partner outage. Fixed backoff queued 4,800 retries in the first minute; exponential queued 310.",
+    "The fork ran both through a 10 minute outage: fixed queued 4,800 retries in a minute, exponential 310.",
   options: [
-    { label: "Exponential, capped at 5 attempts", description: "1s, 4s, 16s, 64s, 256s, then the dead letter queue.", cost: "40 lines, ships today" },
-    { label: "Fixed, every 30 seconds", description: "What the fork tried.", cost: "15 lines", risk: "retry storms in an outage" },
-    { label: "Exponential with jitter", description: "Spreads retries across tenants.", cost: "half a day more", risk: "harder to test" },
+    { label: "Exponential, 5 attempts", description: "1s to 256s, then dead letters.", cost: "40 lines, today" },
+    { label: "Fixed, every 30s", cost: "15 lines", risk: "retry storms" },
+    { label: "Exponential with jitter", cost: "half a day", risk: "harder to test" },
   ],
   blocking: true,
   status: "pending",

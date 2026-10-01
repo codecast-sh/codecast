@@ -11,7 +11,7 @@ import { LogoIcon } from "@/components/Logo";
 import { PermissionStackView } from "@/components/PermissionCard";
 import { PhonePermissionCard } from "@/components/PhonePermissionCard";
 import { NotificationRow } from "@/components/notifications/NotificationRow";
-import { NOTIFICATIONS, PERMISSION, PUSH } from "../fixtures/phone";
+import { EARLIER, NOTIFICATIONS, PERMISSION, PUSH } from "../fixtures/phone";
 import { CUES } from "../fixtures/story";
 import { fly, useFilmTime } from "../filmClock";
 import { PHONE_AT } from "./phone.motion";
@@ -66,15 +66,15 @@ function PushBannerCard() {
       className="flex items-start gap-2.5 rounded-[18px] bg-[#2a3135]/95 px-3 py-2.5 text-white shadow-[0_10px_30px_rgba(0,0,0,0.45)]"
       style={{ fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" }}
     >
-      <span className="mt-0.5 flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-[9px] bg-[#002b36]">
+      <span className="mt-0.5 flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-[9px] bg-[#fdf6e3]">
         <LogoIcon size={22} />
       </span>
       <span className="min-w-0 flex-1">
         <span className="flex items-baseline gap-2">
-          <span className="truncate text-[13px] font-semibold leading-tight">{PUSH.title}</span>
-          <span className="ml-auto shrink-0 text-[11px] text-white/55">now</span>
+          <span className="text-[13px] font-semibold leading-tight">{PUSH.title}</span>
+          <span className="ml-auto shrink-0 self-start text-[11px] text-white/55">now</span>
         </span>
-        <span className="mt-0.5 block truncate text-[13px] leading-snug text-white/85">{PUSH.body}</span>
+        <span className="mt-0.5 block text-[13px] leading-snug text-white/85">{PUSH.body}</span>
       </span>
     </div>
   );
@@ -132,6 +132,9 @@ function PhoneApp({ now }: PartProps) {
           />
         </div>
       )}
+      {EARLIER.map((n) => (
+        <NotificationRow key={n._id} notification={{ ...n, created_at: now - n.ago, read: true }} onOpen={noop} />
+      ))}
     </div>
   );
 }
@@ -143,7 +146,8 @@ export function PhoneScreen({ now }: PartProps) {
     <div className="relative h-full">
       <LockScreen now={now} />
       <PhoneApp key={asked ? "asked" : "idle"} now={now} />
-      <div {...fly("phone/phone.banner")} className="absolute inset-x-2 top-2">
+      {/* Under the clock, where iOS stacks a new notification on the lock screen. */}
+      <div {...fly("phone/phone.banner")} className="absolute inset-x-2 top-[150px]">
         <PushBannerCard />
       </div>
     </div>

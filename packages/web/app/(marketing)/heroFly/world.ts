@@ -154,62 +154,66 @@ const P = (x: number, y: number, z: number, pitch: number, yaw: number, roll: nu
 
 export const OVERVIEW = P(570, -20, 0, 34, -6, 0, -5000);
 
-const PAIR = P(1530, -55, -60, 0, 8, -1.5, -400);
+const PAIR = P(1580, -55, -60, 0, 8, -1.5, -140);
 
 export const CAMERA: Hold[] = [
   { t0: 0, t1: 0.9, pose: OVERVIEW, sees: "all" },
   // 1 Inbox: the whole window, slight three-quarter.
   { t0: 2.4, t1: 8.2, pose: P(0, 0, 0, 3, -4, 0, -40), sees: ["desk"], drift: true },
   // 2 Conversation: in on the conversation pane.
-  { t0: 9.0, t1: 14.4, pose: P(250, 0, 0, 2, -5, 0, 80), sees: ["desk"], drift: true },
+  { t0: 9.0, t1: 14.4, pose: P(40, 5, 0, 2, -5, 0, 180), sees: ["desk"], drift: true },
   // 3 Fan out: list and conversation, then the workers boot on the pair.
   { t0: 15.0, t1: 17.6, pose: P(60, 0, 0, 2, -6, 0, 0), sees: ["desk"], drift: true },
-  { t0: 18.6, t1: 20.6, pose: PAIR, sees: ["pairA", "pairB", "phone"], crest: -600, drift: true },
+  { t0: 18.6, t1: 20.6, pose: PAIR, sees: ["pairA", "pairB"], crest: -600, drift: true },
   // 4 Approve: the permission stack on the desk, the phone, then pull back to see both.
-  { t0: 21.4, t1: 23.2, pose: P(250, 120, 0, 2, -4, 0, 60), sees: ["desk"], crest: -700, drift: true },
+  { t0: 21.4, t1: 23.2, pose: P(40, 10, 0, 2, -4, 0, 120), sees: ["desk"], crest: -700, drift: true },
   { t0: 24.2, t1: 26.6, pose: P(860, 30, 180, 0, 16, 2, 70), sees: ["phone", "desk"], crest: -500, crestRoll: 3, drift: true },
   { t0: 27.0, t1: 27.8, pose: P(560, 20, 110, 0, 8, 1, -560), sees: ["phone", "desk"] },
   // 5 Agents talk.
   { t0: 28.8, t1: 33.6, pose: PAIR, sees: ["pairA", "pairB"], crest: -600, drift: true },
   // 6 Decide: the side card on the desk.
-  { t0: 35.0, t1: 39.6, pose: P(390, -50, 0, 2, -4, 0, 60), sees: ["desk"], crest: -900, crestRoll: 2, drift: true },
+  { t0: 35.0, t1: 39.6, pose: P(180, -46, 0, 2, -4, 0, 380), sees: ["desk"], crest: -900, crestRoll: 2, drift: true },
   // 7 Track: the biggest swoop, down to the board.
-  { t0: 41.0, t1: 46.4, pose: P(80, 780, -40, -22, 0, 0, -260), sees: ["board", "desk"], crest: -1100, crestRoll: -3, drift: true },
+  { t0: 41.0, t1: 46.4, pose: P(80, 900, -20, -22, 0, 0, 90), sees: ["board", "desk"], crest: -1100, crestRoll: -3, drift: true },
   // 8 Automate.
-  { t0: 47.8, t1: 52.6, pose: P(1400, 940, -60, -14, 6, 0, -100), sees: ["auto", "board"], crest: -500, drift: true },
+  { t0: 47.8, t1: 52.6, pose: P(1400, 975, -60, -14, 6, 0, 150), sees: ["auto", "board"], crest: -500, drift: true },
   // 9 Team.
-  { t0: 53.8, t1: 60.4, pose: P(2500, 360, -80, 0, 10, 0, -80), sees: ["team"], crest: -800, crestRoll: 2, drift: true },
+  { t0: 53.8, t1: 60.4, pose: P(2500, 360, -80, 0, 10, 0, 40), sees: ["team"], crest: -800, crestRoll: 2, drift: true },
   // 10 Integrations.
-  { t0: 61.8, t1: 67.4, pose: P(2400, -800, -120, 8, 8, 0, -80), sees: ["pr", "team"], crest: -700, drift: true },
+  { t0: 61.8, t1: 67.4, pose: P(2400, -800, -120, 8, 8, 0, 40), sees: ["pr", "team"], crest: -700, drift: true },
   // 11 Publish: a long pan west along the top of the world.
   { t0: 69.0, t1: 73.4, pose: P(0, -1000, -260, 10, 0, 0, -80), sees: ["page"], crest: -1200, crestRoll: -2, drift: true },
   // 12 Memory: past the "3 weeks later" label to the palette, then the blame.
   { t0: 74.8, t1: 77.0, pose: P(-1380, -160, -100, 0, -12, 0, -20), sees: ["palette"], crest: -500, drift: true },
-  { t0: 77.6, t1: 79.6, pose: P(-1400, 380, -40, -2, -10, 0, -120), sees: ["blame", "palette"], drift: true },
+  { t0: 77.6, t1: 79.6, pose: P(-1400, 380, -40, -2, -10, 0, 60), sees: ["blame", "palette"], drift: true },
   // 13 Anywhere: the desk's inset, then the whole world for the seam.
-  { t0: 80.4, t1: 81.4, pose: P(340, 205, 0, 2, -4, 0, 60), sees: ["desk"], crest: -600, drift: true },
+  { t0: 80.4, t1: 81.4, pose: P(340, 205, 0, 2, -4, 0, 350), sees: ["desk"], crest: -600, drift: true },
   { t0: 82.3, t1: 84, pose: OVERVIEW, sees: "all" },
 ];
 
-/** Phones get the same flight framed tighter on each chapter's hero element. Index-aligned with CAMERA. */
+/**
+ * Phones get the same flight framed tighter on each chapter's hero element:
+ * where a surface is wider than the phone's frame, on its leading (left) edge,
+ * where titles and ids start. Index-aligned with CAMERA.
+ */
 export const CAMERA_MOBILE: Partial<Pose>[] = [
   { pitch: 48, dist: -8000 },
-  { x: -120, y: -150, yaw: -2, dist: 300 },
-  { x: 380, y: 0, dist: 320 },
-  { x: -120, y: -100, dist: 300 },
+  { x: -200, y: -45, yaw: -2, dist: 450 },
+  { x: 230, y: 0, dist: 200 },
+  { x: -120, y: -20, dist: 330 },
   { x: 1560, y: 130, yaw: 4, dist: 20 },
   { x: 350, y: 130, dist: 320 },
   { dist: -40 },
   { x: 420, y: 20, dist: -900 },
   { x: 1560, y: 130, yaw: 4, dist: 20 },
   { x: 390, y: -50, dist: 300 },
-  { x: 60, y: 820, dist: 120 },
-  { x: 1400, dist: 260 },
+  { x: -140, dist: 300 },
+  { x: 1240, dist: 240 },
   { x: 2400, dist: 240 },
-  { x: 2400, dist: 240 },
-  { x: 0, pitch: 6, dist: 240 },
-  { x: -1380, y: -170, yaw: -6, dist: 80 },
-  { x: -1400, y: 380, yaw: -5, dist: 220 },
+  { x: 2230, dist: 240 },
+  { x: -150, pitch: 6, dist: 240 },
+  { x: -1380, y: -170, yaw: -6, dist: 250 },
+  { x: -1570, y: 380, yaw: -5, dist: 220 },
   { x: 340, y: 205, dist: 300 },
   { pitch: 48, dist: -8000 },
 ];
@@ -234,7 +238,7 @@ export const SCENES: Scene[] = [
   { id: "conversation", name: "Steer", start: 9, end: 15, hold: 9.0, caption: "Open any session to watch it work, and steer it mid-run." },
   { id: "fanout", name: "Fan out", start: 15, end: 21, hold: 15.0, caption: "One lead spawns workers, and every session lands in the same inbox." },
   { id: "phone", name: "Approve", start: 21, end: 28, hold: 21.4, caption: "A worker needs permission. Approve it from your desk or your phone." },
-  { id: "talk", name: "Agents talk", start: 28, end: 34, hold: 28.8, caption: "Sessions message each other, and fork to try another way." },
+  { id: "talk", name: "Talk", start: 28, end: 34, hold: 28.8, caption: "Sessions message each other, and fork to try another way." },
   { id: "decide", name: "Decide", start: 34, end: 40, hold: 35.0, caption: "Agents queue the calls only you can make, with every option priced out." },
   { id: "work", name: "Track", start: 40, end: 47, hold: 41.0, caption: "Tasks come straight out of the conversation, and agents claim them." },
   { id: "automation", name: "Automate", start: 47, end: 53, hold: 47.8, caption: "Triggers and workflows keep the work moving while you are away." },
@@ -242,7 +246,7 @@ export const SCENES: Scene[] = [
   { id: "integrations", name: "GitHub", start: 61, end: 68, hold: 61.8, caption: "Pull requests know the sessions behind them, from checks to merge." },
   { id: "publish", name: "Publish", start: 68, end: 74, hold: 69.0, caption: "Publish a result as a page your team can comment on." },
   { id: "memory", name: "Memory", start: 74, end: 80, hold: 74.8, caption: "Weeks later, anyone can find why a line of code exists." },
-  { id: "remote", name: "Anywhere", start: 80, end: 84, hold: 80.4, caption: "Sessions run on your laptop, a cloud host or in a browser, all in one place." },
+  { id: "remote", name: "Anywhere", start: 80, end: 84, hold: 80.4, caption: "Sessions run on your laptop or a cloud host and drive real apps, and every one reports to the same inbox." },
 ];
 
 /** Reduced motion: each chapter's settled frame, the end of its last hold. */

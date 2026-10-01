@@ -34,8 +34,8 @@ import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { describeTaskCadence, taskStateLabel } from "./triggerCadence";
 import { AuthorAvatar, SessionSummaryBlock, DiffStat, DottedRow, TaskPeople, type DottedPart } from "./entityDisplay";
+import { taskPriorityBadge } from "../lib/taskPriority";
 import {
-  PRIORITY_CONFIG,
   STATUS_COLOR,
   STATUS_LABEL,
   TYPE_LABEL,
@@ -98,7 +98,7 @@ function CardMetaLine({ type, entity }: { type: EntityType; entity: any }) {
   if (type === "task") {
     const v = taskVisual(entity.status);
     push(<span className={`whitespace-nowrap font-medium ${v.color}`}>{v.label}</span>, "status");
-    const priority = PRIORITY_CONFIG[entity.priority];
+    const priority = taskPriorityBadge(entity.priority);
     if (priority) {
       push(
         <span className={`inline-flex items-center gap-0.5 whitespace-nowrap ${priority.color}`}>

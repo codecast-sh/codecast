@@ -176,6 +176,9 @@ export const ORG_STAFFING_FIXTURE_SESSION_PROPOSAL: OrgProposalRow = {
   ],
 };
 
+/** A week by UTC day, oldest first and today last, the way org.health keys its series. */
+const week = (xs: number[]): Record<string, number> => Object.fromEntries(xs.map((n, i) => [new Date(T0 - (xs.length - 1 - i) * 86_400_000).toISOString().slice(0, 10), n]));
+
 export const ORG_STAFFING_FIXTURE_HEALTH: OrgHealth = {
   roles: [
     {
@@ -183,8 +186,8 @@ export const ORG_STAFFING_FIXTURE_HEALTH: OrgHealth = {
       load: { items_per_day: 9, decisions_per_day: 1.3, live_hands: 4, direct_reports: 0, open_stalls: 3, cap_hit_days: 4 },
       ledger: { open_tasks: 19, in_flight: 11, active_plans: 2 },
       counted: { rule: "scope", projects: 1, plans: 3, tasks: 31, complete: true, note: "1 projects and 3 plans in scope and every task filed under either: 31 tasks, read by index" },
-      spend: { wakes_today: 22, wakes_7d_avg: 27, wakes_cap: 40, tokens_today: 390_000, tokens_7d_avg: 372_000, tokens_cap: 400_000, cap_hits_7d: 4 },
-      flow: { decisions_7d: 9, median_recommend_min: 3, done_7d: 12, handoffs_7d: { done: 10, blocked: 1, needs_context: 1 }, review_stalls: 1, sends_7d: { to: [], from: [] } },
+      spend: { wakes_today: 22, wakes_7d_avg: 31, wakes_cap: 40, tokens_today: 390_000, tokens_7d_avg: 372_000, tokens_cap: 400_000, cap_hits_7d: 4, wakes_by_day: week([41, 40, 12, 18, 44, 40, 22]) },
+      flow: { decisions_7d: 9, median_recommend_min: 3, done_7d: 12, done_by_day: week([2, 3, 0, 1, 3, 2, 1]), decisions_by_day: week([1, 2, 1, 0, 2, 2, 1]), handoffs_7d: { done: 10, blocked: 1, needs_context: 1 }, review_stalls: 1, sends_7d: { to: [], from: [{ role_id: "fixture-role-chief", n: 3 }] } },
       last_move_at: T0 - 86_400_000 * 12, idle_days: 0,
       flags: [
         { code: "overloaded", severity: "warn", detail: "@growth has more reaching it than one role can answer: 4 days at its daily limit this week" },
@@ -223,8 +226,8 @@ export const ORG_STAFFING_FIXTURE_HEALTH: OrgHealth = {
       role_id: "fixture-role-chief", short_id: "or-9", handle: "chief-of-staff",
       load: { items_per_day: 2, decisions_per_day: 0.3, live_hands: 0, direct_reports: 0, open_stalls: 0, cap_hit_days: 0 },
       ledger: { open_tasks: 41, in_flight: 6, active_plans: 5 },
-      spend: { wakes_today: 3, wakes_7d_avg: 4, wakes_cap: 40, tokens_today: 90_000, tokens_7d_avg: 110_000, tokens_cap: 400_000, cap_hits_7d: 0 },
-      flow: { decisions_7d: 2, median_recommend_min: 4, done_7d: 9, handoffs_7d: { done: 3, blocked: 0, needs_context: 0 }, review_stalls: 0, sends_7d: { to: [], from: [] } },
+      spend: { wakes_today: 3, wakes_7d_avg: 4, wakes_cap: 40, tokens_today: 90_000, tokens_7d_avg: 110_000, tokens_cap: 400_000, cap_hits_7d: 0, wakes_by_day: week([4, 5, 3, 6, 4, 3, 3]) },
+      flow: { decisions_7d: 2, median_recommend_min: 4, done_7d: 9, done_by_day: week([1, 2, 1, 1, 2, 1, 1]), decisions_by_day: week([0, 1, 0, 0, 1, 0, 0]), handoffs_7d: { done: 3, blocked: 0, needs_context: 0 }, review_stalls: 0, sends_7d: { to: [{ role_id: GROWTH, n: 3 }], from: [] } },
       last_move_at: null, idle_days: 0,
       flags: [],
       area: {
