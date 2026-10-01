@@ -561,6 +561,9 @@ export function FaceRow({
       }
       data-holding={faces.sendingRoomKey ? "1" : undefined}
       data-stacked={stacked ? "1" : undefined}
+      // The float with the pointer away: the stack beside a call folds to
+      // one "N others" pill, and the pointer coming in opens it.
+      data-rest={density === "float" && !holdCard ? "1" : undefined}
       role="group"
       aria-label="Team"
     >
@@ -612,6 +615,8 @@ export function FaceRow({
               }}
             >
               {outsiders}
+              {/* Drawn only by the float at rest, where the faces fold away. */}
+              <span className="face-row-stack-word">others</span>
             </button>,
           );
         }

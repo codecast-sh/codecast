@@ -1,110 +1,139 @@
 "use client";
-import { useQuery } from "convex/react";
-import { stripTitleHeading } from "@codecast/shared/docs";
+// /share/doc/<token>: a doc set as a document someone sat down to read. The
+// body in reading type, its headings anchored and listed in an outline rail
+// on wide screens, the doc's own timeline under it.
+import { useState, type ReactNode } from "react";
+import type { Components } from "react-markdown";
+import { docTypeLabel, stripTitleHeading } from "@codecast/shared/docs";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useParams } from "next/navigation";
-import { AvatarImg } from "../../../../lib/avatarCache";
-import { MarkdownRenderer } from "../../../../components/tools/MarkdownRenderer";
-import { AppLoader } from "../../../../components/AppLoader";
-import { readSharePreload } from "@/lib/sharePreload";
-import { DocDates } from "../../../../components/DocDates";
 import { formatDateFull, formatDateSmart } from "@codecast/shared/time";
+import { MarkdownBlocks } from "../../../../components/tools/MarkdownRenderer";
+import { MD_COMPONENTS } from "../../../../lib/markdownComponents";
+import { useWatchEffect } from "../../../../hooks/useWatchEffect";
+import { Pill, Section, Rows, Row, ShareHead, SharedObjectPage } from "../../SharedObjectPage";
 
-const DOC_TYPE_LABELS: Record<string, { label: string; color: string }> = {
-  plan: { label: "Plan", color: "text-sol-blue" },
-  design: { label: "Design", color: "text-sol-violet" },
-  spec: { label: "Spec", color: "text-sol-cyan" },
-  investigation: { label: "Investigation", color: "text-sol-yellow" },
-  handoff: { label: "Handoff", color: "text-sol-orange" },
-  note: { label: "Note", color: "text-sol-text-muted" },
-};
+function textOf(node: ReactNode): string {
+  if (node == null || typeof node === "boolean") return "";
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(textOf).join("");
+  return textOf((node as any).props?.children);
+}
 
-function InvalidLink() {
+const slug = (text: string) =>
+  text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "") || "section";
+
+const heading = (Tag: "h1" | "h2" | "h3") =>
+  function ShareHeading({ children }: { children?: ReactNode }) {
+    return (
+      <Tag id={slug(textOf(children))} className={`share-h share-${Tag}`}>
+        {children}
+      </Tag>
+    );
+  };
+
+// Module level, so MarkdownBlocks' memo holds.
+const READING: Components = { ...MD_COMPONENTS, h1: heading("h1"), h2: heading("h2"), h3: heading("h3") };
+
+type OutlineEntry = { depth: number; text: string; id: string };
+
+/** The headings of a markdown body, outside code fences, as the outline lists them. */
+export function outlineOf(markdown: string): OutlineEntry[] {
+  const out: OutlineEntry[] = [];
+  let fenced = false;
+  for (const line of markdown.split("\n")) {
+    if (/^\s*(```|~~~)/.test(line)) fenced = !fenced;
+    if (fenced) continue;
+    const m = /^(#{1,3})\s+(.+?)\s*#*\s*$/.exec(line);
+    if (!m) continue;
+    const text = m[2].replace(/[*_`~]/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
+    out.push({ depth: m[1].length, text, id: slug(text) });
+  }
+  return out;
+}
+
+function Outline({ entries }: { entries: OutlineEntry[] }) {
+  const [active, setActive] = useState<string | null>(null);
+  useWatchEffect(() => {
+    const els = entries.map((e) => document.getElementById(e.id)).filter(Boolean) as HTMLElement[];
+    if (els.length === 0) return;
+    const visible = new Map<string, boolean>();
+    const io = new IntersectionObserver(
+      (records) => {
+        for (const r of records) visible.set(r.target.id, r.isIntersecting);
+        const first = els.find((el) => visible.get(el.id));
+        if (first) setActive(first.id);
+      },
+      { rootMargin: "-72px 0px -60% 0px" },
+    );
+    els.forEach((el) => io.observe(el));
+    return () => io.disconnect();
+  }, [entries]);
+  const top = Math.min(...entries.map((e) => e.depth));
   return (
-    <main className="h-screen flex flex-col bg-sol-base03 items-center justify-center">
-      <div className="text-center max-w-md px-4">
-        <svg className="w-16 h-16 mx-auto mb-4 text-sol-base01" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-        </svg>
-        <h1 className="text-xl text-sol-base0 mb-2">Invalid Link</h1>
-        <p className="text-sol-base00 text-sm">
-          This share link is invalid or the document has been made private.
-        </p>
-      </div>
-    </main>
+    <nav className="share-outline" aria-label="Outline">
+      <span>On this page</span>
+      {entries.map((e, i) => (
+        <a key={i} href={`#${e.id}`} data-depth={e.depth - top + 2} data-active={active === e.id ? "" : undefined}>
+          {e.text}
+        </a>
+      ))}
+    </nav>
   );
 }
 
 export default function SharedDocClient() {
-  const params = useParams();
-  const token = params.token as string;
-
-  const liveDoc = useQuery((api as any).docs.getShared, { share_token: token });
-  const doc = liveDoc !== undefined ? liveDoc : readSharePreload<typeof liveDoc>("doc", token);
-
-  if (doc === undefined) {
-    return (
-<AppLoader className="min-h-0 h-screen bg-sol-base03" />
-    );
-  }
-
-  if (doc === null) return <InvalidLink />;
-
-  const typeInfo = DOC_TYPE_LABELS[doc.doc_type] || DOC_TYPE_LABELS.note;
-
   return (
-    <main className="min-h-screen bg-sol-base03">
-      <div className="max-w-3xl mx-auto px-6 py-12">
-        {/* Header */}
-        <div className="mb-8">
-          <div className="flex items-center gap-3 mb-3">
-            <span className={`text-xs font-medium px-2 py-0.5 rounded border border-current/20 ${typeInfo.color}`}>
-              {typeInfo.label}
-            </span>
-            {doc.labels?.map((l: string) => (
-              <span key={l} className="text-xs text-sol-text-dim px-1.5 py-0.5 rounded border border-sol-border/30">
-                {l}
-              </span>
-            ))}
-          </div>
-          <h1 className="text-2xl font-semibold text-sol-text mb-3">{doc.title}</h1>
-          <div className="flex items-center gap-3 text-xs text-sol-text-dim">
-            {doc.user?.image && (
-              <AvatarImg src={doc.user.image} alt="" className="w-5 h-5 rounded-full" />
-            )}
-            {doc.user?.name && <span className="text-sol-text-muted">{doc.user.name}</span>}
-            <DocDates doc={doc} variant="full" />
-          </div>
-        </div>
-
-        {/* Content */}
-        <article className="prose prose-invert max-w-none">
-          <MarkdownRenderer content={stripTitleHeading(doc.content)} />
-        </article>
-
-        {/* Entries/Comments */}
-        {doc.entries && doc.entries.length > 0 && (
-          <div className="mt-12 border-t border-sol-border/20 pt-8">
-            <h2 className="text-sm font-medium text-sol-text-dim uppercase tracking-wider mb-4">Timeline</h2>
-            <div className="space-y-3">
-              {doc.entries.map((e: any, i: number) => (
-                <div key={i} className="flex gap-3 text-sm">
-                  <span className="text-sol-text-dim shrink-0 w-20" title={formatDateFull(e.timestamp)}>{formatDateSmart(e.timestamp)}</span>
-                  <span className="text-xs text-sol-cyan/70 shrink-0 w-20">{e.type}</span>
-                  <span className="text-sol-text-muted">{e.content}</span>
-                </div>
-              ))}
+    <SharedObjectPage<any>
+      kind="doc"
+      query={(api as any).docs.getShared}
+      noun="doc"
+      aside={(doc) => {
+        const entries = outlineOf(stripTitleHeading(doc.content));
+        return entries.length >= 3 ? <Outline entries={entries} /> : null;
+      }}
+    >
+      {(doc) => (
+        <>
+          <ShareHead
+            badges={
+              <>
+                <Pill tone="blue">{docTypeLabel(doc.doc_type)}</Pill>
+                {doc.labels?.map((l: string) => (
+                  <Pill key={l} quiet>
+                    {l}
+                  </Pill>
+                ))}
+              </>
+            }
+            title={doc.title}
+            user={doc.user}
+            at={doc.created_at}
+            meta={
+              doc.updated_at && doc.updated_at - doc.created_at > 60_000 ? (
+                <span title={formatDateFull(doc.updated_at)}>updated {formatDateSmart(doc.updated_at)}</span>
+              ) : null
+            }
+          />
+          <div className="share-prose">
+            <div className="prose max-w-none">
+              <MarkdownBlocks content={stripTitleHeading(doc.content)} components={READING} />
             </div>
           </div>
-        )}
-
-        {/* Footer */}
-        <div className="mt-16 pt-6 border-t border-sol-border/10 text-center">
-          <a href="https://codecast.sh" className="text-xs text-sol-text-dim hover:text-sol-text-muted transition-colors">
-            Shared via Codecast
-          </a>
-        </div>
-      </div>
-    </main>
+          {doc.entries?.length > 0 && (
+            <div style={{ marginTop: 56 }}>
+              <Section title="Timeline" count={doc.entries.length}>
+                <Rows>
+                  {doc.entries.map((e: any, i: number) => (
+                    <Row key={i} trail={<span title={formatDateFull(e.timestamp)}>{formatDateSmart(e.timestamp)}</span>} note={e.type}>
+                      {e.content}
+                    </Row>
+                  ))}
+                </Rows>
+              </Section>
+            </div>
+          )}
+        </>
+      )}
+    </SharedObjectPage>
   );
 }

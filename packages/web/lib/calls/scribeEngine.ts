@@ -128,6 +128,9 @@ export function createScribeEngine(): ScribeEngine {
   let roomKey = "";
   let transcriptId: string | null = null;
   let startedAt = 0;
+  // Zero on the record's clock: segment t0/t1 are offsets from the huddle's
+  // start, and one huddle is many runs (handoffs, adoptions, off and on).
+  let epoch = 0;
   const pipes = new Map<string, AsrPipe>();
   let lastSpeechEndMs = 0;
   let anySegmentsSinceFlush = false;
@@ -138,7 +141,7 @@ export function createScribeEngine(): ScribeEngine {
   let pacing: ScribePacing | null = null;
 
   function nowMs(): number {
-    return Date.now() - startedAt;
+    return Date.now() - epoch;
   }
 
   function detach(key: string) {
@@ -235,6 +238,7 @@ export function createScribeEngine(): ScribeEngine {
       }
       transcriptId = String(res.transcript_id);
       startedAt = Date.now();
+      epoch = startedAt - (res.elapsed_ms ?? 0);
       lastSpeechEndMs = 0;
       anySegmentsSinceFlush = false;
       addressedSinceFlush = false;

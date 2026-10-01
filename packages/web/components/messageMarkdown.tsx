@@ -79,8 +79,10 @@ function remarkUserHtmlAsText() {
 export const USER_MD_REMARK = [...entityRemarkPlugins, remarkBreaks, remarkUserHtmlAsText];
 // An agent's body: entity pills, and a staffing proposal alone on its line
 // drawn live as a card (org-staffing.md S24: the chief of staff posts a small
-// proposal and writes its `op-N` on its own line). Only that type is promoted
-// here, so a lone task id in a transcript keeps the inline pill it always
-// had; team chat (ChatMessage) promotes every shared reference to a card.
-const ASSISTANT_CARDS: EntityCardsOptions = { types: ["proposal"] };
+// proposal and writes its `op-N` on its own line), and so is a call: `cl-42`
+// alone on its line is the call's card, `cl-42:15-25` the words said in those
+// turns, embedded. Only those types are promoted here, so a lone task id in a
+// transcript keeps the inline pill it always had; team chat (ChatMessage)
+// promotes every shared reference to a card.
+const ASSISTANT_CARDS: EntityCardsOptions = { types: ["proposal", "call"] };
 export const ASSISTANT_MD_REMARK = [...entityRemarkPlugins, [remarkEntityCards, ASSISTANT_CARDS] as [typeof remarkEntityCards, EntityCardsOptions]];

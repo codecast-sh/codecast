@@ -1,9 +1,10 @@
 import { useSyncExternalStore } from "react";
 import { Captions, CaptionsOff } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
+import { useRoomTranscribeOff } from "../../hooks/useRoomTranscribeOff";
 import { getScribeStatus, subscribeScribe } from "../../lib/calls/transcription";
 import { startTranscribing, stopTranscribing } from "../../lib/calls/callManager";
-import { LivePulseDot } from "../SessionActivityLine";
+import { TranscribeSwitchView } from "./TranscribeSwitchView";
 
 // The transcription switch, for the ROOM. Every huddle transcribes on its own
 // (one seated client becomes the scribe), so what a person switches here is a
@@ -14,8 +15,8 @@ import { LivePulseDot } from "../SessionActivityLine";
 // Where the words GO is a separate gesture: the transcript rail manages feeds
 // (sessions, docs, Slack), and adding a feed starts transcription by itself.
 //
-// `live` is the room's truth (transcripts.getLive): true while ANYBODY is
-// transcribing, which is what the switch shows. A window that only knew its
+// `live` is the room's truth (transcripts.getLive): true while the huddle has
+// a record that ANYBODY is transcribing into, which is what the switch shows. A window that only knew its
 // own scribe status would read "off" in a room somebody else is transcribing,
 // and a person pressing it to stop would find nothing changed.
 function useTranscribeToggle(live: boolean) {
@@ -28,7 +29,8 @@ function useTranscribeToggle(live: boolean) {
     startedAt: null,
   }));
   const roomKey = useInboxStore((s) => s.call.roomKey);
-  const on = live || scribe.active;
+  const switchedOff = useRoomTranscribeOff(roomKey);
+  const on = !switchedOff && (live || scribe.active);
   const toggle = async () => {
     if (!roomKey) return;
     if (on) await stopTranscribing(roomKey);
@@ -60,27 +62,6 @@ export function TranscribeControls({ live }: { live: boolean }) {
  *  to flip it, where the words themselves are read. */
 export function TranscribeSwitch({ live, className = "" }: { live: boolean; className?: string }) {
   const { on, toggle } = useTranscribeToggle(live);
-  return (
-    <button
-      onClick={() => void toggle()}
-      role="switch"
-      aria-checked={on}
-      className={`flex items-center gap-1.5 rounded-full px-2 py-0.5 font-mono text-[10.5px] transition-colors ${
-        on
-          ? "bg-sol-green/10 text-sol-green hover:bg-sol-red/10 hover:text-sol-red"
-          : "bg-white/[0.06] text-sol-text-muted hover:bg-sol-green/10 hover:text-sol-green"
-      } ${className}`}
-      title={
-        on
-          ? "Transcribing. Click to stop for the whole huddle; the words so far stay in this thread."
-          : "Not transcribing. Click to start; every word lands in this thread."
-      }
-    >
-      {on ? <LivePulseDot className="h-1.5 w-1.5" /> : <span className="h-1.5 w-1.5 rounded-full bg-sol-text-dim" />}
-      <span>
-        <span className="ts-switch-word">transcribing · </span>
-        {on ? "on" : "off"}
-      </span>
-    </button>
-  );
+  return <TranscribeSwitchView on={on} onToggle={() => void toggle()} className={className} />;
 }
+

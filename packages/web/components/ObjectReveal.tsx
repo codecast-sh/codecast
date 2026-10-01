@@ -22,7 +22,6 @@ import Link from "next/link";
 import { ArrowUpRight, Columns2, PanelBottomClose, PanelBottomOpen, X } from "lucide-react";
 import { RoutePane } from "./RoutePane";
 import { SessionPane } from "./stage/SessionPane";
-import { PaneControls } from "./stage/PaneControls";
 import { PageIcon } from "./RecentVisitRow";
 import { pageAccent } from "../lib/pageAccent";
 import { ErrorBoundary } from "./ErrorBoundary";
@@ -112,25 +111,23 @@ export function RevealButton({
   );
 }
 
-/** The big "open this page" hit. The label opens the object; the columns
- *  icon opens it beside, with a tooltip. `bar` sits above the framed page
- *  and ends in the band's close; `compact` is the card/pill. */
+/** The way out to the object's full page: the label opens it, the columns
+ *  icon opens it beside. `strip` sits in the band's header row, before its
+ *  close; `compact` is the card/pill. */
 export function RevealOpenLink({
   href,
   label,
   onOpen,
-  onClose,
-  variant = "bar",
+  variant = "strip",
 }: {
   href: string;
   label: string;
   onOpen?: (e: React.MouseEvent) => void;
-  onClose?: () => void;
-  variant?: "bar" | "compact";
+  variant?: "strip" | "compact";
 }) {
   const beside = canOpenBeside();
   return (
-    <div className={variant === "bar" ? "object-reveal__open" : "object-reveal-open-compact"}>
+    <div className={variant === "strip" ? "object-reveal-open-strip" : "object-reveal-open-compact"}>
       <Link
         href={href}
         onClick={(e) => {
@@ -142,7 +139,7 @@ export function RevealOpenLink({
       >
         <span className="object-reveal__open-label">
           <span className="object-reveal__open-text">{label}</span>
-          <ArrowUpRight className={variant === "bar" ? "h-4 w-4" : "h-3.5 w-3.5"} />
+          <ArrowUpRight className="h-3.5 w-3.5" />
         </span>
       </Link>
       {beside && (
@@ -157,42 +154,62 @@ export function RevealOpenLink({
             openIn("split", href);
           }}
         >
-          <Columns2 className={variant === "bar" ? "h-4 w-4" : "h-3.5 w-3.5"} />
-        </button>
-      )}
-      {onClose && (
-        <button
-          type="button"
-          className="object-reveal__open-beside"
-          title="Close (Esc)"
-          aria-label="Close"
-          data-reveal-close
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            onClose();
-          }}
-        >
-          <X className={variant === "bar" ? "h-4 w-4" : "h-3.5 w-3.5"} />
+          <Columns2 className="h-3.5 w-3.5" />
         </button>
       )}
     </div>
   );
 }
 
+/** The band's one header row: what is open, the way to its full page, and a
+ *  close that says so. Drawn in the frame and, while the frame's top is
+ *  scrolled away, pinned to the top of the scrolling surface. */
+function RevealStrip({ path, target, onClose }: { path: string; target: RevealTarget; onClose: () => void }) {
+  return (
+    <div className="object-reveal__strip">
+      <PageIcon path={path} className="object-reveal__icon h-3.5 w-3.5 flex-shrink-0" />
+      <span className="min-w-0 flex-1 truncate text-xs leading-none text-sol-text">{target.title}</span>
+      <RevealOpenLink href={target.href} label={target.openLabel ?? "Open"} onOpen={target.onOpen} />
+      <button
+        type="button"
+        className="object-reveal__close"
+        title="Close (Esc)"
+        aria-label="Close"
+        data-reveal-close
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onClose();
+        }}
+      >
+        <X className="h-3.5 w-3.5" />
+        <span>Close</span>
+        <KeyCap size="xs">esc</KeyCap>
+      </button>
+    </div>
+  );
+}
+
 /**
- * Nearest thing the band should fill: an ancestor that opts in with
- * data-reveal-bounds, else the nearest scrolling ancestor — the transcript
- * feed, the chat list, a page's main scroll.
+ * The surface the band scrolls with and takes its height from: the nearest
+ * scrolling ancestor — the transcript feed, the chat list, a page's main scroll.
  */
 function revealBounds(el: HTMLElement): HTMLElement | null {
-  const marked = el.parentElement?.closest<HTMLElement>("[data-reveal-bounds]");
-  if (marked) return marked;
   for (let n = el.parentElement; n; n = n.parentElement) {
     const o = getComputedStyle(n).overflowY;
     if (o === "auto" || o === "scroll") return n;
   }
   return null;
+}
+
+/**
+ * What the band spans side to side: a column inside the scroller that opts in
+ * with data-reveal-span (the decision sheet's reasoning beside its sticky
+ * options), else the whole scroller.
+ */
+function revealSpan(el: HTMLElement, bounds: HTMLElement): HTMLElement {
+  const marked = el.parentElement?.closest<HTMLElement>("[data-reveal-span]");
+  return marked && bounds.contains(marked) ? marked : bounds;
 }
 
 // The band's height is the reader's choice, kept across reveals and reloads;
@@ -207,7 +224,7 @@ function savedHeight(): number | null {
     return null;
   }
 }
-// A band never outgrows the scrolling surface, so its top strip (the close)
+// A band never outgrows the scrolling surface, so its header row (the close)
 // and its page fit in one view.
 const maxBandHeight = (bounds: HTMLElement) => Math.max(MIN_HEIGHT, bounds.clientHeight - 24);
 function bandHeight(bounds: HTMLElement): number {
@@ -228,6 +245,7 @@ function useFullBleed(ref: React.RefObject<HTMLDivElement | null>) {
     if (!el) return;
     const bounds = revealBounds(el);
     if (!bounds) return;
+    const span = revealSpan(el, bounds);
     let raf = 0;
     const apply = () => {
       raf = 0;
@@ -235,10 +253,10 @@ function useFullBleed(ref: React.RefObject<HTMLDivElement | null>) {
       el.style.marginLeft = "0px";
       el.style.width = "auto";
       const zoom = cssZoomOf(el);
-      const b = bounds.getBoundingClientRect();
+      const b = span.getBoundingClientRect();
       const r = el.getBoundingClientRect();
-      el.style.marginLeft = `${(b.left - r.left) / zoom + bounds.clientLeft}px`;
-      el.style.width = `${bounds.clientWidth}px`;
+      el.style.marginLeft = `${(b.left - r.left) / zoom + span.clientLeft}px`;
+      el.style.width = `${span.clientWidth}px`;
       el.style.height = `${bandHeight(bounds)}px`;
     };
     apply();
@@ -246,6 +264,7 @@ function useFullBleed(ref: React.RefObject<HTMLDivElement | null>) {
       if (!raf) raf = requestAnimationFrame(apply);
     });
     ro.observe(bounds);
+    if (span !== bounds) ro.observe(span);
     return () => {
       ro.disconnect();
       if (raf) cancelAnimationFrame(raf);
@@ -410,11 +429,13 @@ function usePinnedClose(ref: React.RefObject<HTMLDivElement | null>): PinSpot | 
         return;
       }
       const h = host.getBoundingClientRect();
+      const span = revealSpan(el, bounds);
+      const s = span.getBoundingClientRect();
       const next = {
         host,
         top: Math.round((b.top - h.top) / zoom + bounds.clientTop),
-        left: Math.round((b.left - h.left) / zoom + bounds.clientLeft),
-        width: bounds.clientWidth,
+        left: Math.round((s.left - h.left) / zoom + span.clientLeft),
+        width: span.clientWidth,
       };
       setSpot((cur) => (cur && cur.top === next.top && cur.left === next.left && cur.width === next.width ? cur : next));
     };
@@ -465,14 +486,6 @@ function RevealBand({ reveal }: { reveal: OpenReveal }) {
       .finished.then(done, done);
   }, [reveal.anchor]);
   const onGripDown = useResizeGrip(ref);
-  // The header strip and the foot are both the close: one click anywhere on
-  // either. Enter and Space do the same from the keyboard.
-  const closeKeys = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      requestClose();
-    }
-  }, [requestClose]);
   // Escape closes the open band from anywhere on the page: it is the one
   // band, so no focus or hover has to say which. Inside the band its own key
   // handler takes it (and stops keys from leaving the band, so a page's own
@@ -534,51 +547,18 @@ function RevealBand({ reveal }: { reveal: OpenReveal }) {
     >
       <div className="object-reveal__lane object-reveal__lane--left" title="Scroll the conversation" />
       <div className="object-reveal__lane object-reveal__lane--right" title="Scroll the conversation" />
-      <RevealOpenLink href={target.href} label={target.openLabel ?? "Open"} onOpen={target.onOpen} onClose={requestClose} />
       {pin && createPortal(
         <div
           className="object-reveal__pin"
           style={{ top: pin.top, left: pin.left, width: pin.width, "--reveal-accent": pageAccent(path) } as React.CSSProperties}
           data-reveal-pin
         >
-          <div
-            className="object-reveal__strip"
-            onClick={requestClose}
-            onKeyDown={closeKeys}
-            role="button"
-            tabIndex={0}
-            aria-label="Close"
-            title="Close (Esc)"
-          >
-            <PageIcon path={path} className="object-reveal__icon h-3 w-3 flex-shrink-0" />
-            <span className="min-w-0 flex-1 truncate text-[11px] leading-none text-sol-text">{target.title}</span>
-            <span className="object-reveal__hint object-reveal__hint--on" aria-hidden>
-              <span className="object-reveal__hint-word">close</span>
-              <KeyCap size="xs">esc</KeyCap>
-            </span>
-            <X className="h-3.5 w-3.5 text-sol-text-muted" />
-          </div>
+          <RevealStrip path={path} target={target} onClose={requestClose} />
         </div>,
         pin.host,
       )}
       <div className="object-reveal__frame">
-      <div
-        className="object-reveal__strip"
-        onClick={requestClose}
-        onKeyDown={closeKeys}
-        role="button"
-        tabIndex={0}
-        aria-label="Close"
-        title="Close"
-      >
-        <PageIcon path={path} className="object-reveal__icon h-3 w-3 flex-shrink-0" />
-        <span className="min-w-0 flex-1 truncate text-[11px] leading-none text-sol-text">{target.title}</span>
-        <span className="object-reveal__hint" aria-hidden>
-          <span className="object-reveal__hint-word">close</span>
-          <KeyCap size="xs">esc</KeyCap>
-        </span>
-        <PaneControls onClose={requestClose} closeTitle="Close (Esc)" />
-      </div>
+      <RevealStrip path={path} target={target} onClose={requestClose} />
       <div className="object-reveal__body">
         <RevealInBandCtx.Provider value={true}>
         <ErrorBoundary name="ObjectReveal" level="panel">
@@ -593,19 +573,6 @@ function RevealBand({ reveal }: { reveal: OpenReveal }) {
           )}
         </ErrorBoundary>
         </RevealInBandCtx.Provider>
-      </div>
-      <div
-        className="object-reveal__foot"
-        onClick={requestClose}
-        onKeyDown={closeKeys}
-        role="button"
-        tabIndex={0}
-        aria-label="Close"
-        title="Close (Esc)"
-      >
-        <X className="h-3.5 w-3.5" />
-        <span>Close</span>
-        <KeyCap size="xs">esc</KeyCap>
       </div>
       </div>
       {/* The grip is only a grip: the rounded bar under the frame, in the

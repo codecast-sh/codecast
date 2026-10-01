@@ -481,3 +481,13 @@ describe("cast read --ask output", () => {
     expect(out).toContain("read 3000 lines (too long to read whole: msg 1500 to -1500 not read)");
   });
 });
+
+describe("formatReadResult names what any client's tool did", () => {
+  test("a Codex command row (the cloud agents' mirrors) shows its command", () => {
+    const out = strip(formatReadResult({
+      conversation: { id: "jx78hw6aaaa", title: "t" },
+      messages: [{ line: 1, role: "assistant", content: "", tool_calls: [{ name: "commandExecution", input: JSON.stringify({ command: "cat README", cwd: "/workspace" }) }] }],
+    } as any));
+    expect(out).toContain("commandExecution cat README");
+  });
+});

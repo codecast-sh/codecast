@@ -70,17 +70,32 @@ export function useOpenReveal(): OpenReveal | null {
   return useSyncExternalStore(subscribeReveal, currentReveal, none);
 }
 
-// The block a reference sits in, which the band opens right under: the card
-// row for a card, else the paragraph, list item, heading or table for a pill.
+// The block a reference sits in: the card row for a card, else the
+// paragraph, list item, heading or table for a pill. A pill in running text
+// opens its band under its own line, not under the whole paragraph: the slot
+// goes right after the pill as a full-width float, which CSS drops below the
+// line box it does not fit on, so the rest of that line stays where it was
+// and the following lines resume under the band. No text node is split, so
+// React's hold on the paragraph is untouched. Code and tables keep the band
+// under the whole block.
 const BLOCK = "p, li, h1, h2, h3, h4, h5, h6, blockquote, pre, table, dl, figure";
+const FLOW = "p, li, h1, h2, h3, h4, h5, h6";
 function placeSlot(anchor: HTMLElement): HTMLElement {
-  const block = anchor.closest<HTMLElement>(".entity-card-row") ?? anchor.closest<HTMLElement>(BLOCK) ?? anchor;
+  const card = anchor.closest<HTMLElement>(".entity-card-row");
+  const block = card ?? anchor.closest<HTMLElement>(BLOCK) ?? anchor;
   const slot = document.createElement("div");
   slot.className = "object-reveal-slot";
   // Chrome, not content: quote units (lib/quoteUnits) skip it, so comment
   // anchors below the band keep their indices while it is open.
   slot.setAttribute("data-reveal-slot", "");
-  block.after(slot);
+  if (!card && block !== anchor && block.matches(FLOW)) {
+    slot.setAttribute("data-reveal-inline", "");
+    // After the pill's caret, which sits beside it.
+    const caret = anchor.nextElementSibling;
+    (caret?.classList.contains("entity-ref__expand") ? caret : anchor).after(slot);
+  } else {
+    block.after(slot);
+  }
   return slot;
 }
 

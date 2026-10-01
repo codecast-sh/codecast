@@ -23,7 +23,8 @@ import { StatusDot } from "./StatusDot";
 import type { WorkState } from "@codecast/shared/contracts";
 import { useConversationMessages } from "../hooks/useConversationMessages";
 import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, isInterruptControlMessage, getProjectName, sessionsWithPendingSend, freshReviveRequestIds, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipProjectFilters, passesFilterTerms, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, resolveFavorite, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
-import { sessionsWakeSig, resolveShowOld, sectionHeaderCount, classifySession, inboxNestParentOf } from "../store/inboxStore";
+import { sessionsWakeSig, resolveShowOld, sectionHeaderCount, classifySession, inboxNestParentOf, NEW_SESSION_HOLD_MS } from "../store/inboxStore";
+import { useFlipAnimation } from "../hooks/useFlipAnimation";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
 import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow } from "../hooks/useCoarseNow";
@@ -1928,6 +1929,15 @@ function NeedsAttentionSection() {
 
 // Inbox-clearing prompt: when more than this many active sessions haven't been
 // touched in over a month, offer to bulk-dismiss them out of the working set.
+// The accent of each section a just-started session can move to when its NEW
+// hold ends, matching the section captions below.
+const HOLD_DEST_COLORS: Partial<Record<string, string>> = {
+  working: "var(--sol-green)",
+  needs_input: "var(--sol-yellow)",
+  done: "var(--sol-cyan)",
+  dormant: "var(--sol-blue)",
+};
+
 const STALE_SESSION_MS = 30 * 24 * 60 * 60 * 1000;
 const STALE_PROMPT_THRESHOLD = 10;
 // "Not now" rests the prompt for this long — persisted in client UI prefs so it
@@ -2108,6 +2118,7 @@ function SessionListPanelImpl({
     s => s.collapsedSections,
     s => s.currentSessionId,
     s => s.pendingSessionCreates,
+    s => s.newSessionHolds,
     s => s.showFavorites,
     s => s.favorites,
     s => s.recentFreezeOrder,
@@ -2233,8 +2244,15 @@ function SessionListPanelImpl({
     // Structural change + the view keys + the question inputs + the epoch tick
     // (coarseNow drives the deadline signature).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessionsWakeSig(s.sessions), inboxScope, meId, s.teamInboxIds, showAllSessions, focusedId, s.sessionsWithQueuedMessages, pendingSendIds, blankOpts, placementDecisionsSig(s.sessionDecisions), s.questionResolutions, s.killedShelf.ids, coarseNow],
+    [sessionsWakeSig(s.sessions), inboxScope, meId, s.teamInboxIds, showAllSessions, focusedId, s.sessionsWithQueuedMessages, pendingSendIds, blankOpts, placementDecisionsSig(s.sessionDecisions), s.questionResolutions, s.killedShelf.ids, s.newSessionHolds, coarseNow],
   );
+  // The section a held row is headed for, as its accent: the fuse and the
+  // landing wash speak in the color of where the row is going.
+  const holdDestColor = (session: InboxSession | undefined): string | undefined => {
+    if (!session) return undefined;
+    const bucket = placed.placements.get(session._id)?.bucket ?? "working";
+    return HOLD_DEST_COLORS[bucket] ?? HOLD_DEST_COLORS.working;
+  };
   const { visibleSessions, oldCount, sorted: sortedSessions, pinned, newSessions, needsInput, done, dormant, working, snoozed: snoozedList, stashed: stashedList, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent, questions: placedQuestions, isQuestion, roleSessionsByLead } = placed;
 
   // -- Schedules in the inbox (status view) --
@@ -2863,6 +2881,23 @@ function SessionListPanelImpl({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const scrolledToRef = useRef<string | null>(null);
 
+  // -- A just-started session leaving NEW --
+  // Its hold expiring re-files it (placeInboxRows). The store subscriber runs
+  // inside set(), before React commits, so the rows still sit where they were:
+  // the "first" measurement the glide needs. The rows it arrives among get a
+  // brief wash in its color (or the collapsed header does).
+  const { beforeReorder: beforeHoldRelease } = useFlipAnimation({ durationMs: 560, containerRef: scrollContainerRef });
+  const [landedIds, setLandedIds] = useState<ReadonlySet<string>>(() => new Set());
+  useMountEffect(() => useInboxStore.subscribe((st, prev) => {
+    if (st.newSessionHolds === prev.newSessionHolds) return;
+    const now = Date.now();
+    const released = Object.keys(prev.newSessionHolds).filter((id) => !(id in st.newSessionHolds) && prev.newSessionHolds[id] <= now);
+    if (released.length === 0) return;
+    beforeHoldRelease();
+    setLandedIds(new Set(released));
+    setTimeout(() => setLandedIds((cur) => (released.every((id) => cur.has(id)) ? new Set() : cur)), 1600);
+  }));
+
   // -- Hide & enter animations --
   // Stash: set aside, agent keeps running (Stashed group). The secondary remove.
   // Deliberately no schedule CHANGE: stash keeps schedules armed (a
@@ -3240,6 +3275,7 @@ function SessionListPanelImpl({
           sectionKey={key}
           collapsed={collapsed}
           monoLabel={opts?.monoLabel}
+          landedColor={collapsed ? holdDestColor(items.find((i) => landedIds.has(i._id))) : undefined}
           onToggle={() => s.toggleCollapsedSection(key)}
         />
         {!collapsed && (() => {
@@ -3285,10 +3321,20 @@ function SessionListPanelImpl({
             const hiddenCount = subs.length - visibleSubs.length;
             const reorderable = !!opts?.reorderable;
             const reorderHere = reorderable && reorderOver?.id === session._id;
+            const heldUntil = s.newSessionHolds[session._id] ?? 0;
+            const holdLeft = heldUntil - Date.now();
+            const destColor = holdLeft > 0 || landedIds.has(session._id) ? holdDestColor(session) : undefined;
+            const justStarted = key === "new" && Date.now() - (session.started_at ?? 0) < 4000;
             return (
               <div
                 key={session._id}
-                className={`border-b border-sol-border/30${reorderable ? " relative" : ""}`}
+                data-flip-key={session._id}
+                style={destColor ? ({
+                  "--hold-dest": destColor,
+                  "--hold-ms": `${NEW_SESSION_HOLD_MS}ms`,
+                  "--hold-delay": `${holdLeft - NEW_SESSION_HOLD_MS}ms`,
+                } as React.CSSProperties) : undefined}
+                className={`relative border-b border-sol-border/30${holdLeft > 0 ? " inbox-held" : ""}${justStarted ? " animate-inbox-row-in" : ""}${landedIds.has(session._id) ? " inbox-landed" : ""}`}
                 onDragOver={reorderable ? (e) => {
                   if (!e.dataTransfer.types.includes("codecast/session-id")) return;
                   e.preventDefault();
@@ -3408,7 +3454,7 @@ function SessionListPanelImpl({
   };
 
   return (
-    <div data-sv-rail className="h-full w-full flex flex-col bg-sol-bg-alt overflow-hidden">
+    <div data-sv-rail data-selecting={selectedIdsRaw.length > 0 ? "true" : undefined} className="h-full w-full flex flex-col bg-sol-bg-alt overflow-hidden">
       {selectedSessions.length > 0 && (
         <InboxSelectionBar
           sessions={selectedSessions}

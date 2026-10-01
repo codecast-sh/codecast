@@ -30,7 +30,7 @@ import {
 import { personName } from "../sessionOwnership";
 import { computeWorkspaceKey } from "./access";
 import { capsFor, trustOf } from "./orgCaps";
-import { listSessionOwnerIds, ownerSetOf } from "../sessionOwners";
+import { listSessionOwnerIds, ownerRowsOf, ownerSetOf, type OwnerRowSnapshot } from "../sessionOwners";
 
 type Ctx = { db: any };
 
@@ -56,8 +56,8 @@ type State = {
   seq: Map<string, number>;
   writes?: Map<string, OrgWrite>;
   records?: Map<string, any>;
-  /** Each touched session's owner set before this row's first owner write. */
-  owners?: Map<string, string[]>;
+  /** Each touched session's owners before this row's first owner write. */
+  owners?: Map<string, { set: string[]; rows: OwnerRowSnapshot[] }>;
 };
 
 export type OrgWrite = { table: string; id: string; before: Record<string, any>; after: Record<string, any> };
@@ -78,11 +78,12 @@ const FIELDS: Record<string, string[]> = {
   org_template_instances: ["pending_upgrade"],
 };
 
-function recordWrite(s: State, table: string, id: string, before: any, after: any) {
+// `keys` names fields outside FIELDS that a caller records itself (a session's owners).
+function recordWrite(s: State, table: string, id: string, before: any, after: any, keys?: string[]) {
   if (!s.writes || !FIELDS[table]) return;
   const prior = s.writes.get(id) ?? { table, id, before: {}, after: {} };
   // An insert reads from the tombstone the undo will leave: a retired role, a done project, a cancelled goal (with nobody driving it and no projects), never an erasure.
-  const keys = before ? FIELDS[table] : table === "anchors" ? ["status", "org_role_id"] : table === "conversations" ? ["org_role_id", "standing_role_id", "anchor_id", "acting_user_id"] : table === "org_roles" || table === "projects" || table === "agent_tasks" ? ["status"] : table === "initiatives" ? ["status", "owner", "project_ids"] : [];
+  keys ??= before ? FIELDS[table] : table === "anchors" ? ["status", "org_role_id"] : table === "conversations" ? ["org_role_id", "standing_role_id", "anchor_id", "acting_user_id"] : table === "org_roles" || table === "projects" || table === "agent_tasks" ? ["status"] : table === "initiatives" ? ["status", "owner", "project_ids"] : [];
   for (const key of keys) {
     const was = before ? before[key] ?? null : table === "org_roles" ? "retired" : table === "projects" ? "done" : table === "anchors" ? key === "status" ? "decommissioned" : null : table === "conversations" ? null : table === "initiatives" ? key === "status" ? "cancelled" : key === "project_ids" ? [] : null : "cancelled";
     const now = after?.[key] ?? null;
@@ -95,19 +96,19 @@ function recordWrite(s: State, table: string, id: string, before: any, after: an
 
 // A session's owners live in session_owners rows, not on the conversation, so
 // the conversation's write carries them as `owner_user_ids`: the set before
-// this row's first owner write, and the set when the row is written.
+// this row's first owner write, and the set when the row is written. The rows
+// as they were ride along in `before.owner_rows`, never compared, so an undo
+// puts each back as it was (who added it, and whether it was acknowledged).
 async function noteOwnersBefore(db: any, s: State, conversationId: any) {
-  if (s.owners && conversationId && !s.owners.has(String(conversationId))) s.owners.set(String(conversationId), await ownerSetOf({ db }, conversationId));
+  if (!s.owners || !conversationId || s.owners.has(String(conversationId))) return;
+  s.owners.set(String(conversationId), { set: await ownerSetOf({ db }, conversationId), rows: await ownerRowsOf({ db }, conversationId) });
 }
 
 async function recordOwners(db: any, s: State) {
   for (const [id, before] of s.owners ?? []) {
-    const after = await ownerSetOf({ db }, id as Id<"conversations">);
-    if (canonical(before) === canonical(after)) continue;
-    const prior = s.writes!.get(id) ?? { table: "conversations", id, before: {}, after: {} };
-    prior.before.owner_user_ids = before;
-    prior.after.owner_user_ids = after;
-    s.writes!.set(id, prior);
+    recordWrite(s, "conversations", id, { owner_user_ids: before.set }, { owner_user_ids: await ownerSetOf({ db }, id as Id<"conversations">) }, ["owner_user_ids"]);
+    const write = s.writes!.get(id);
+    if (write && "owner_user_ids" in write.after) write.before.owner_rows ??= before.rows;
   }
 }
 

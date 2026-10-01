@@ -146,11 +146,14 @@ export function applySyncTable<T extends { _id: string }>(
   for (const [key, entry] of Object.entries(newPending)) {
     if (!key.startsWith(prefix)) continue;
     const rest = key.slice(prefix.length);
-    const colon = rest.indexOf(":");
-    if (colon === -1) {
-      if (entry.type === "exclude") excludeIds.add(rest);
-      else if (entry.type === "include") includeIds.push(rest);
-    } else if (entry.type === "field") {
+    // Ids may carry colons (a room key is "dm:a:b"); field names never do. So
+    // an exclude or include names the whole rest, and a field lock splits at
+    // its LAST colon.
+    if (entry.type === "exclude") excludeIds.add(rest);
+    else if (entry.type === "include") includeIds.push(rest);
+    else if (entry.type === "field") {
+      const colon = rest.lastIndexOf(":");
+      if (colon === -1) continue;
       const id = rest.slice(0, colon);
       if (!fieldsByRecord) fieldsByRecord = new Map();
       let arr = fieldsByRecord.get(id);

@@ -1,3 +1,4 @@
+import { SeatKillDialog } from "./org/SeatKillDialog";
 import { ReactNode, useState, useCallback, useRef, useMemo, memo, createContext, useContext, lazy, Suspense } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useDragGatedLayoutPersist } from "../hooks/useDragGatedLayoutPersist";
@@ -29,6 +30,7 @@ import { Plus, PanelLeft, PanelRight, Menu, MessageSquare, SquareTerminal, Chevr
 import { SetupPromptBanner } from "./SetupPromptBanner";
 import { TriageBar } from "./triage/TriageBar";
 import { TriageNuxGate } from "./triage/TriageNux";
+import { TourLayer, ToursPanel } from "../tours";
 import { NewSnippetsBanner } from "./NewSnippetsBanner";
 import { OrgIntroAnywhere } from "./org/OrgIntroAnywhere";
 import { NativeAppBanner } from "./NativeAppBanner";
@@ -332,7 +334,7 @@ function DashboardSyncEffects() {
  *  badge, the call surfaces. */
 function WindowOnlyEffects() {
   useChatToasts();
-  return <Suspense fallback={null}><CallSyncEffects /></Suspense>;
+  return <><Suspense fallback={null}><CallSyncEffects /></Suspense><SeatKillDialog /></>;
 }
 
 // The window's OS title: the surface, then the specific thing it shows,
@@ -1408,6 +1410,10 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       )}
       <ErrorBoundary name="TriageNux" level="inline">
         <TriageNuxGate />
+      </ErrorBoundary>
+      <ErrorBoundary name="Tours" level="inline">
+        <ToursPanel />
+        <Suspense fallback={null}><TourLayer /></Suspense>
       </ErrorBoundary>
       {/* The dock portals to <body>, so this wrapper is empty (and hidden)
           until the boundary trips. A dock crash used to degrade into the

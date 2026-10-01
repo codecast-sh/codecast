@@ -1,0 +1,26 @@
+{
+  "name": "settle root-cause-fix-proposed",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:root-cause-fix-proposed"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "settle:root-cause-fix-proposed",
+    "title": "settle root-cause-fix-proposed"
+  },
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "trigger": {
+    "type": "settle"
+  },
+  "meta": {
+    "surface": "settle",
+    "visibility": "public",
+    "snapshot": "fixtures/settle/root-cause-fix-proposed.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "c14e0e3c-184f-4e28-848f-64a4d09608eb",
+  "createdAt": "2026-10-01T17:46:22.342Z"
+}

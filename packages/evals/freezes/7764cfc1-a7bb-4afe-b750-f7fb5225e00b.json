@@ -1,0 +1,26 @@
+{
+  "name": "anchor-brief docs-role-opening",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:docs-role-opening"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "anchor-brief:docs-role-opening",
+    "title": "anchor-brief docs-role-opening"
+  },
+  "asOf": "2026-09-28T09:00:00.000Z",
+  "trigger": {
+    "type": "anchor-brief"
+  },
+  "meta": {
+    "surface": "anchor-brief",
+    "visibility": "public",
+    "snapshot": "fixtures/anchor-brief/docs-role-opening.json"
+  },
+  "judge": "the opening turn orients the role to its scope and does no writes",
+  "notes": null,
+  "tags": [],
+  "id": "7764cfc1-a7bb-4afe-b750-f7fb5225e00b",
+  "createdAt": "2026-10-01T17:53:50.188Z"
+}

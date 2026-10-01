@@ -636,7 +636,7 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
               {activeChannel?.kind !== "dm" && activeChannel?.topic
                 ? <span className="ch-head-topic">{activeChannel.topic}</span>
                 : <span className="ch-head-topic" />}
-              {activeChannel && (activeChannel.kind === "dm" || activeChannel.isPrivate) && (
+              {activeChannel && !community && !isGuest && (
                 <ChannelMembersButton channel={activeChannel} />
               )}
               {/* ONE voice control per room. A DM gets the key — it used to
