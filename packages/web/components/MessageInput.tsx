@@ -15,6 +15,7 @@ import { useNowWhen } from "../hooks/useCoarseNow";
 import { formatCountdown, HIBERNATED_COPY } from "@codecast/shared/contracts";
 import { parseLimitResetAt } from "../lib/limitReset";
 import { pendingImageUploads, persistDraftImages, restoreDraftImages, settleDraftImageUpload } from "../lib/draftImages";
+import { cancelPendingSend } from "../lib/cancelPendingSend";
 import { cancelDraftWrite, scheduleDraftWrite } from "../lib/pendingDraftWrites";
 import { isResentCopyOfSentMessage } from "../lib/staleDraft";
 import type { SkillItem } from "../lib/conversationProcessor";
@@ -22,7 +23,7 @@ import { KeyCap, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { toast } from "sonner";
 import { appendToDraft } from "../lib/quoteFormat";
 import { imagePlaceholderToken, insertImagePlaceholder, dropImagePlaceholder } from "../lib/imagePlaceholder";
-import { attachReviewToMessage } from "../lib/reviewActions";
+import { attachReviewToMessage, quotedImageStorageIds } from "../lib/reviewActions";
 import { enterReviewFromComposer } from "../lib/reviewNav";
 import { ReviewBar } from "./ReviewBar";
 import { ComposerSendButton, ComposerShell, ComposerTextarea, ComposerTextRow } from "./ComposerShell";
@@ -855,7 +856,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         : null;
     if (!ref) return;
     try {
-      await useInboxStore.getState().cancelPendingMessage(conversationId, ref);
+      await cancelPendingSend(conversationId, ref, existingPending?.content ?? sentContentRef.current);
       setPendingMessageId(null);
       setSentAt(null);
       setShowStuckBanner(false);
@@ -1531,10 +1532,6 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       await onWorkflowLaunch(goal);
       return;
     }
-    // Auto-attach any pending review quotes/comments so a plain send carries them —
-    // no separate "add to message" step. They prepend the typed reply and the batch
-    // is cleared. (Gate/workflow above return early, so they're unaffected.)
-    message = attachReviewToMessage(conversationId, message);
     // Snapshot the composer's images. Ready ones already carry a storageId;
     // still-uploading ones are handed to the pending bubble (preview + spinner)
     // and finished in the background — either way the input unblocks instantly.
@@ -1549,12 +1546,22 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       row => row.storageId && !memoryImages.some(img => img.storageId === row.storageId)
     ) as typeof memoryImages;
     const submitImages = [...memoryImages, ...draftOnlyImages];
+    // Auto-attach any pending review quotes/comments so a plain send carries them —
+    // no separate "add to message" step. They prepend the typed reply and the batch
+    // is cleared. (Gate/workflow above return early, so they're unaffected.) Images
+    // quoted from the gallery ride along as attachments after the composer's own,
+    // and each quote names its picture by that attachment number. A fork from a
+    // selection sends text only, so its image quotes point by address instead.
+    const forkingFromSelection = !!(isSelectionActive && selectedMessageUuid && onForkFromMessage);
+    const quotedImageIds = forkingFromSelection ? [] : quotedImageStorageIds(conversationId);
+    message = attachReviewToMessage(conversationId, message, quotedImageIds.length ? submitImages.length + 1 : undefined);
+    const quotedImages: OptimisticImage[] = quotedImageIds.map(storage_id => ({ media_type: "image/png", storage_id }));
     const hasUploadingImages = submitImages.some(img => img.uploading);
     const canSend = message.trim() || submitImages.length > 0;
     if (!canSend) return;
 
     // If a message is selected, fork from it then send the new content
-    if (isSelectionActive && selectedMessageUuid && onForkFromMessage) {
+    if (forkingFromSelection) {
       sendingRef.current = true;
       cancelPendingDraft();
       isSelectionEditedRef.current = true;
@@ -1598,11 +1605,11 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     const trimmed = message.trim() || (submitImages.length > 0 ? "[image]" : "");
     // The optimistic bubble shows ready images via storage_id, and still-
     // uploading ones via their local preview + a spinner (dropped on resolve).
-    const optimisticImages: OptimisticImage[] = submitImages.map(img =>
+    const optimisticImages: OptimisticImage[] = [...submitImages.map((img): OptimisticImage =>
       img.storageId
         ? { media_type: img.file.type, storage_id: img.storageId as string }
         : { media_type: img.file.type, preview_url: img.previewUrl, uploading: true }
-    );
+    ), ...quotedImages];
     sendingRef.current = true;
     let clientId: string;
     try {
@@ -1684,9 +1691,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
             : (pendingImageUploads.get(img.previewUrl) ?? Promise.resolve<string | null>(null)),
         }));
         const settled = await Promise.all(tasks.map(t => t.promise.then(storageId => ({ ...t, storageId }))));
-        const resolvedImages: OptimisticImage[] = settled
+        const resolvedImages: OptimisticImage[] = [...settled
           .filter(t => t.storageId)
-          .map(t => ({ media_type: t.mediaType, storage_id: t.storageId as string }));
+          .map(t => ({ media_type: t.mediaType, storage_id: t.storageId as string })), ...quotedImages];
         // Every upload failed and there was no text — nothing real to send.
         // uploadImage already toasted each failure; just fail the bubble.
         if (resolvedImages.length === 0 && !message.trim()) {
@@ -1705,7 +1712,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         await finishSend(resolvedImages.map(i => i.storage_id as string));
       })();
     } else {
-      await finishSend(submitImages.map(img => img.storageId as string));
+      await finishSend([...submitImages.map(img => img.storageId as string), ...quotedImageIds]);
     }
   };
 

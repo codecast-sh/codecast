@@ -7,17 +7,21 @@ import { api } from '@codecast/convex/convex/_generated/api';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { Mono } from '@/constants/fonts';
-import { parseSharePath } from '@codecast/shared/entities';
+import { CODECAST_BASE_URL, parseSharePath, sharePath } from '@codecast/shared/entities';
+import * as WebBrowser from 'expo-web-browser';
 import { setShareTokenScope } from '@codecast/web/lib/shareTokenScope';
 import { useAuth } from '@/lib/auth';
 
 /**
- * The in-app half of codecast.sh/share links — all four kinds:
+ * The in-app half of codecast.sh/share links:
  *
  *   /share/<token>          → the session screen
  *   /share/message/<token>  → the session screen, scrolled to the message
  *   /share/doc/<token>      → the doc screen
  *   /share/plan/<token>     → the plan screen
+ *   /share/task|call/<token> → the web share page, in the in-app browser
+ *                              (their screens read by id, which a link
+ *                              holder may not be allowed to)
  *
  * A share URL carries an opaque token, not an object id, so this screen runs
  * the same public token queries the web share pages use, then replaces itself
@@ -56,7 +60,7 @@ export default function ShareLinkScreen() {
 
   // undefined = still resolving, null = dead link, else the destination.
   const target = useMemo(():
-    | { path: string; conversationId?: string }
+    | { path: string; conversationId?: string; web?: boolean }
     | null
     | undefined => {
     if (!parsed) return null;
@@ -80,6 +84,9 @@ export default function ShareLinkScreen() {
         if (plan === undefined) return undefined;
         return plan?.short_id ? { path: `/plan/${plan.short_id}?share=${token}` } : null;
       }
+      case 'task':
+      case 'call':
+        return { path: `${CODECAST_BASE_URL}${sharePath(kind, token!)}`, web: true };
       default:
         return null;
     }
@@ -89,6 +96,10 @@ export default function ShareLinkScreen() {
     // Signed out, AuthGate is about to bounce this path through login and
     // restore it afterwards — navigating from here too would race it.
     if (!isAuthenticated || !target) return;
+    if (target.web) {
+      void WebBrowser.openBrowserAsync(target.path).finally(() => router.back());
+      return;
+    }
     if (token && target.conversationId) setShareTokenScope(target.conversationId, token);
     router.replace(target.path as any);
   }, [isAuthenticated, target?.path]);

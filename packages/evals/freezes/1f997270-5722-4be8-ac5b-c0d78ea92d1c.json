@@ -1,0 +1,26 @@
+{
+  "name": "settle single-word-ack",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:single-word-ack"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "settle:single-word-ack",
+    "title": "settle single-word-ack"
+  },
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "trigger": {
+    "type": "settle"
+  },
+  "meta": {
+    "surface": "settle",
+    "visibility": "public",
+    "snapshot": "fixtures/settle/single-word-ack.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "1f997270-5722-4be8-ac5b-c0d78ea92d1c",
+  "createdAt": "2026-10-01T17:46:03.731Z"
+}

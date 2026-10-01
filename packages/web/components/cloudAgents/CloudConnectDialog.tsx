@@ -5,8 +5,8 @@
 // API), so the dialog names that machine and fixes it when it opens. It says
 // so when no machine is online, when the one it names is offline, or when that
 // one runs a codecast too old for this, and closes with Done once the
-// provider's own steps finish. Each provider's dialog (ConnectCursorDialog,
-// ConnectCodexDialog) supplies only its steps, and pins its machine with
+// provider's own steps finish. Each provider's dialog (ConnectKeyDialog for a
+// key, ConnectCodexDialog) supplies only its steps, and pins its machine with
 // usePinnedCloudAgentMachine (machine.ts).
 
 import type { ReactNode } from "react";

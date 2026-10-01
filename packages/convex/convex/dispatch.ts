@@ -23,6 +23,8 @@ import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey, fromConvexAgentType
 } from "@codecast/shared/contracts";
 import { applyHideTransition } from "./cleanup";
 import { stampBrowserPaneOfferHandled, writeShareLink } from "./conversations";
+import { writeObjectShareLink } from "./publicShare";
+import { deleteSessionAsOwner } from "./sessionDelete";
 import { reactivateTasksCanceledOnKill } from "./agentTasks";
 import { canAccessDoc } from "./docs";
 import { canSendProductMessage, enqueuePendingMessage, retryPendingMessageForUser, cancelPendingMessageForUser } from "./pendingMessages";
@@ -1310,6 +1312,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   killSessions: async (ctx, userId, [convIds]: [string[]]) => {
     for (const convId of convIds ?? []) await hideForViewerByClientId(ctx, userId, convId, "dismiss");
   },
+  deleteSession: async (ctx, userId, [convId]: [string]) => {
+    const id = ctx.db.normalizeId("conversations", convId);
+    if (id) await deleteSessionAsOwner(ctx, userId, id);
+  },
   restoreSession: async (ctx, userId, [convId]: [string]) => {
     const id = ctx.db.normalizeId("conversations", convId);
     if (id) await unhideConversationForViewer(ctx, userId, id);
@@ -1335,6 +1341,11 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // is not a dispatchable field, so this is its only web write path.
   setShareLink: async (ctx, userId, [convId, token]: [string, string | null]) => {
     await writeShareLink(ctx, userId, convId, token ?? null);
+  },
+
+  // The same switch for docs, plans, tasks and calls (publicShare.ts).
+  setObjectShareLink: async (ctx, userId, [kind, id, token]: [string, string, string | null]) => {
+    await writeObjectShareLink(ctx, userId, kind, id, token ?? null);
   },
 
   // A member's level for a whole team (settings, the share-in-full nudge).
@@ -1469,7 +1480,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     await ctx.db.patch(doc._id, { archived_at: undefined });
   },
 
-  updateDoc: async (ctx, userId, [docId, fields]: [string, { content?: string; title?: string; doc_type?: string; labels?: string[] }]) => {
+  updateDoc: async (ctx, userId, [docId, fields]: [string, { content?: string; title?: string; doc_type?: string; labels?: string[]; overflow?: string }]) => {
     const doc = await ctx.db.get(docId as Id<"docs">);
     if (!doc) throw new Error("Doc not found");
     if (!(await canAccessDoc(ctx, userId, doc))) throw new Error("Unauthorized");
@@ -1478,6 +1489,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (fields.title !== undefined) updates.title = fields.title;
     if (fields.doc_type !== undefined) updates.doc_type = fields.doc_type;
     if (fields.labels !== undefined) updates.labels = fields.labels;
+    if (fields.overflow !== undefined) updates.overflow = fields.overflow;
     await ctx.db.patch(doc._id, updates);
   },
 
@@ -2242,6 +2254,18 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   unlinkChatSlack: async (ctx, _userId, [linkId]: [string]) => {
     if (!isServerId(linkId)) return;
     return await ctx.runMutation!(api.slackSync.unlinkChannel, { link_id: linkId as Id<"slack_channel_links"> });
+  },
+  setChatSlackMember: async (
+    ctx,
+    _userId,
+    [channelId, slackUserId, present]: [string, string, boolean],
+  ) => {
+    if (!isServerId(channelId)) return;
+    return await ctx.runMutation!(api.slackSync.requestSlackMember, {
+      chat_channel_id: channelId as Id<"chat_channels">,
+      slack_user_id: slackUserId,
+      present: !!present,
+    });
   },
   shareChatMessageToSlack: async (ctx, _userId, [messageId]: [string]) => {
     if (!isServerId(messageId)) return;

@@ -1,6 +1,6 @@
 /**
  * Chapter 9, Team (53 to 61s): the team channel with a session answering in
- * it, a huddle with live captions, and the org chart. The views are in
+ * it, and a huddle with live captions beside it. The views are in
  * ./team.tsx, fed by ../fixtures/team.ts. See README.md for the contract.
  */
 

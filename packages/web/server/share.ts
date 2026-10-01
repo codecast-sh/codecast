@@ -2,6 +2,7 @@ import type { Context, Hono, Next } from "hono";
 import { stream } from "hono/streaming";
 import { readFile } from "fs/promises";
 import { join } from "path";
+import { SHARED_OBJECT_KINDS, type SharedObjectKind } from "@codecast/shared/entities";
 import { fetchShared } from "./shareData";
 
 /**
@@ -173,15 +174,13 @@ const MAX_INLINE_JSON = 1_500_000;
 
 // --- Routes -------------------------------------------------------------------
 
-type SsrShareKind = "message" | "doc" | "plan";
-
 // Streamed in two parts: everything up to the root div goes out before the
 // share query is even sent, so the browser starts the chunk downloads while
 // Convex is answering (a cold HTTP query costs 0.5-2s). Then the rendered
 // page, the rest of the shell, and the payload script just before </body> —
 // module scripts are deferred until parsing completes, so it always runs
 // before the hydration pass reads it.
-function shareHandler(kind: SsrShareKind) {
+function shareHandler(kind: SharedObjectKind) {
   return async (c: Context, next: Next) => {
     const token = c.req.param("token") ?? "";
     const shell = await getShell();
@@ -221,9 +220,7 @@ function shareHandler(kind: SsrShareKind) {
 }
 
 export function registerShareRoutes(app: Hono) {
-  app.get("/share/message/:token", shareHandler("message"));
-  app.get("/share/doc/:token", shareHandler("doc"));
-  app.get("/share/plan/:token", shareHandler("plan"));
+  for (const kind of SHARED_OBJECT_KINDS) app.get(`/share/${kind}/:token`, shareHandler(kind));
 
   // Whole-conversation share links: resolve the token server-side and skip the
   // intermediate app boot entirely.

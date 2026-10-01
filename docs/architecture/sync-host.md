@@ -21,7 +21,7 @@ The host:
 
 A follower:
 - skips every global feeder (gated at `useQueryNoThrow` via `REGISTERED_FEEDS`
-  plus the replication classification — see below);
+  plus the replication classification, see below);
 - does not wire `_setIDBWrite` (the host is the single state writer);
 - applies the host's broadcasts through `syncTable`, so its own pending
   protection and no-op bails behave exactly as if the rows came from Convex;
@@ -32,16 +32,16 @@ A follower:
 The engine (`@platform/engine`) gains only pure pieces: the message protocol
 and the patch-to-row extraction. Election, transport, and wiring are web-side.
 Mobile, SSR, and tests have no `BroadcastChannel`/locks and resolve to host
-in-process — their code path is unchanged.
+in-process, so their code path is unchanged.
 
 ## Why the tee is cheap
 
-`mutativeMiddleware` computes a patch list for every store write — actions and
-sync() alike — and hands it to the IDB write-through binding. The host wraps
+`mutativeMiddleware` computes a patch list for every store write (actions and
+sync() alike) and hands it to the IDB write-through binding. The host wraps
 that binding: persist, then extract the patches touching replicated keys into
 row-level updates (`{key, upserts, removes}` for collections, `{key, value}`
 for singletons, read from post-write state) and broadcast them. No middleware
-changes; raw `setState` writes bypass the tee, and that is correct — they are
+changes; raw `setState` writes bypass the tee, and that is correct: they are
 ephemeral by house rule.
 
 ## What replicates
@@ -49,10 +49,10 @@ ephemeral by house rule.
 The classification lives in `clientSyncRegistry.ts` as a per-entry
 `replication` field with a derived default:
 
-- **replicated** — server-backed keys: everything with `feeds`, a
+- **replicated** (server-backed keys): everything with `feeds`, a
   `dispatchTable`/`dispatchFieldTable`, or a `sync` entry, plus explicitly
   marked server-fed keys without registered feeds (`currentUser`, `teams`, …).
-- **local** — per-window state that only rides IDB for boot: `pending`,
+- **local** (per-window state that only rides IDB for boot): `pending`,
   `drafts`, `sidePanelSessionId`, and similar. `pending` must never replicate:
   it is the record of THIS window's unacknowledged writes.
 
@@ -94,7 +94,7 @@ All messages carry `{hostId, seq}`. Followers track `lastSeq`; a gap or a new
 - `ack` (gesture bridge, origin → siblings): the sync-log positions the
   origin's dispatch landed at, with the dispatched patches. Sibling windows
   stamp the same acknowledgement onto their mirrored locks, and the mirrored
-  lock retires at the same position the origin's does — a later remote write
+  lock retires at the same position the origin's does. A later remote write
   (a restore right after a kill) must not wait for a value echo that never
   comes.
 - `sessionsProjection` rides `update` as a whole value (REPLICATED_EPHEMERAL_KEYS):
@@ -110,13 +110,13 @@ deadline; stopping the runtime cancels outstanding send timers.
 
 ## Election
 
-`navigator.locks.request("codecast-sync-host:<principal>")` — first holder is
+`navigator.locks.request("codecast-sync-host:<principal>")`: the first holder is
 host, release on window death promotes the next in line. Web Locks and
 BroadcastChannel are both per-origin and shared across Electron windows of one
 session partition, so desktop and multi-tab web use the same mechanism.
 Windows that do not mount the full shell (palette, people) never request the
 lock; they are followers only. Where the Locks API is missing (React Native,
-SSR, old engines) the window is host with no transport — today's behavior.
+SSR, old engines) the window is host with no transport, which is today's behavior.
 
 Both names carry the account the window acts for (the principal the stored
 JWT names, `lib/authPrincipal.ts`): `codecast-replication-v1:<principal>` and
@@ -148,8 +148,8 @@ else owns, or nobody does, is purged before any reader sees it. Write-through
 and outbox writes refuse the moment the stored JWT names someone else, which
 covers the gap between a sibling's sign-out and this window's storage event.
 
-Promotion (a follower wins the lock): flip `syncRole` to host in the store —
-the feeder gate is reactive, so subscriptions mount; wire `_setIDBWrite` and
+Promotion (a follower wins the lock): flip `syncRole` to host in the store.
+The feeder gate is reactive, so subscriptions mount; wire `_setIDBWrite` and
 the storage-health callback; start serving snapshots. `syncMeta` (the change
 feed cursors) replicates from the host, so a promoted follower resumes the
 sync log from where the dead host stopped. Followers never stamp a CURSOR of
@@ -178,3 +178,11 @@ follower's optimistic write appears in other windows before the echo.
 5. The classification snapshot test fails on any unclassified registry key.
 6. No window renders, persists or dispatches for an account after the stored
    JWT stopped naming it; no row of one account is ever served to another.
+
+The multiplayer sim ([sync-sim.md](sync-sim.md)) checks two of these at every
+settle. `INV-followers` requires each follower's `snapshotEntries` over
+`REPLICATED_STORE_KEYS` to equal the host's byte for byte, which is what
+invariants 2 to 4 are for. `INV-fixpoint` re-runs every feeder a host mounted, one
+catch-up and a byIds pass over every held id, and requires no store write beyond
+`syncMeta` and `syncProgress`: replicated data that disagrees with the server
+shows there before any follower copies it.

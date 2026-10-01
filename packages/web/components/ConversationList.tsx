@@ -20,6 +20,7 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
 import { useInboxStore } from "../store/inboxStore";
 import { LivePulseDot } from "./SessionActivityLine";
+import { peopleOf } from "@codecast/shared/team/memberKind";
 
 function VisibilityDropdown({
   conversationId,
@@ -794,7 +795,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onNavi
   // pointer — workspace scoping reads active_team_id alone (unset = personal).
   const effectiveTeamId = activeTeamId || user?.team_id;
   const teamMembers = useInboxStore((s) => s.teamMembers.length > 0 ? s.teamMembers : null);
-  const hasTeammates = teamMembers && teamMembers.length > 1;
+  const hasTeammates = peopleOf(teamMembers).length > 1;
   const hasTeam = !!effectiveTeamId;
 
   useMountEffect(() => {

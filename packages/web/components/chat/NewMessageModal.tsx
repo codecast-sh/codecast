@@ -24,6 +24,8 @@ import type { ChatChannelView } from "./chatTypes";
 import "./chat.css";
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { isPerson } from "@codecast/shared/team/memberKind";
+
 // New message / new huddle.
 //
 // One field answers "who do I want to talk to" — a person, several people, a
@@ -121,7 +123,7 @@ export function NewMessageModal({
     if (capReached) return [];
     const needle = q.trim().toLowerCase();
     const people = (teamMembers ?? [])
-      .filter((m) => !m.is_bot && String(m._id) !== String(viewer) && !chips.includes(String(m._id)))
+      .filter((m) => isPerson(m) && String(m._id) !== String(viewer) && !chips.includes(String(m._id)))
       .map((m) => ({ m, s: needle ? matchScore(personText(m), needle) : 0 }))
       .filter((x) => x.s !== Infinity)
       .sort((a, b) => a.s - b.s || compareMembersByPresence(a.m, b.m))

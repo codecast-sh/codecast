@@ -21,12 +21,12 @@
 // messages.materializeFileChanges when the line lands.
 
 import { v } from "convex/values";
-import { mutation } from "./functions";
+import { internalMutation, mutation } from "./functions";
 import type { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { resolveCreationPrivacy } from "./privacy";
 import { recordExternalEvent } from "./externalEvents";
-import { resolveTaskLinksFromText, normalizeRepository } from "./lib/gitRefs";
+import { isHarnessScratchBranch, resolveTaskLinksFromText, normalizeRepository } from "./lib/gitRefs";
 import { conversationForCommit } from "./githubWebhooks";
 import { upsertLocalCommit } from "./repos";
 import { localCommitFiles } from "./lib/localCommitFiles";
@@ -125,7 +125,9 @@ export const recordLocal = mutation({
         commitId = row.commit_id;
         conversationId = row.conversation_id;
       }
-      if (!conversationId && e.conversation_id) {
+      // A harness's scratch commit belongs to no session (upsertLocalCommit).
+      const scratch = !!e.commit && isHarnessScratchBranch(branch);
+      if (!scratch && !conversationId && e.conversation_id) {
         const id = ctx.db.normalizeId("conversations", e.conversation_id);
         const conv = id ? await ctx.db.get(id) : null;
         if (id && conv && conv.user_id === userId) conversationId = id;
@@ -133,7 +135,7 @@ export const recordLocal = mutation({
       // The transcript that printed this sha names the session, the way the
       // webhook resolves it; a commit whose line has not synced yet is
       // back-filled when it does (linkLocalCommitToConversation).
-      if (!conversationId && e.commit) conversationId = await conversationForCommit(ctx, e.new_sha, branch, { userId, teamId });
+      if (!scratch && !conversationId && e.commit) conversationId = await conversationForCommit(ctx, e.new_sha, branch, { userId, teamId });
       if (conversationId && commitId) {
         const row = await ctx.db.get(commitId);
         if (row && !row.conversation_id) await ctx.db.patch(commitId, { conversation_id: conversationId });
@@ -189,7 +191,7 @@ export async function linkLocalCommitToConversation(
     .take(5);
   const conversation = await ctx.db.get(conversationId);
   for (const row of candidates) {
-    if (!row.sha.startsWith(prefix) || row.conversation_id) continue;
+    if (!row.sha.startsWith(prefix) || row.conversation_id || isHarnessScratchBranch(row.branch)) continue;
     // The session's own team is the row's team when both are known; a same
     // prefix in another team's repository is someone else's commit.
     if (conversation?.team_id && row.team_id && conversation.team_id !== row.team_id) continue;
@@ -201,3 +203,28 @@ export async function linkLocalCommitToConversation(
     if (evt && !evt.conversation_id) await ctx.db.patch(evt._id, { conversation_id: conversationId });
   }
 }
+
+/**
+ * Unlink a session's harness scratch commits (isHarnessScratchBranch) linked
+ * before upsertLocalCommit refused them, with their activity events.
+ */
+export const unlinkScratchCommits = internalMutation({
+  args: { conversation_id: v.id("conversations"), dry: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("commits")
+      .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", args.conversation_id))
+      .collect();
+    const scratch = rows.filter((row: any) => isHarnessScratchBranch(row.branch));
+    if (args.dry) return { linked: rows.length, scratch: scratch.length };
+    for (const row of scratch) {
+      await ctx.db.patch(row._id, { conversation_id: undefined });
+      const evt = await ctx.db
+        .query("external_events")
+        .withIndex("by_dedupe_key", (q: any) => q.eq("dedupe_key", `commit:${row.sha}`))
+        .first();
+      if (evt?.conversation_id === args.conversation_id) await ctx.db.patch(evt._id, { conversation_id: undefined });
+    }
+    return { linked: rows.length, scratch: scratch.length };
+  },
+});

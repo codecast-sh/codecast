@@ -1,5 +1,5 @@
 import { DORMANT_CLAIM_TTL_MS } from "./agentStatus";
-import { deriveLiveAt, isUnderRole, rowLiveDeadlines, type LiveFactsRow } from "./inboxProjection";
+import { deriveLiveAt, INBOX_CREATE_GRACE_MS, isFreshStart, isUnderRole, rowLiveDeadlines, type LiveFactsRow } from "./inboxProjection";
 import { describe, expect, test } from "bun:test";
 import {
   INBOX_BUCKETS,
@@ -236,6 +236,28 @@ describe("placeInboxRow — bucket precedence", () => {
     // visible under Pinned (two-replica simulation, seed 86).
     expect(placeInboxRow(input({ killed: true, asking: true })).bucket).toBe("idle");
     expect(placeInboxRow(input({ killed: true, asking: true, pinned: true })).bucket).toBe("pinned");
+  });
+
+  test("a fresh start holds new whatever it is doing; a hard block or an ask still escalates", () => {
+    const fresh = placeInboxRow(input({ fresh: true, agentStatus: "working", isIdle: false }));
+    expect(fresh).toEqual({ bucket: "new", work_state: "working" });
+    expect(placeInboxRow(input({ fresh: true, agentStatus: "done" }))).toEqual({ bucket: "new", work_state: "done" });
+    expect(placeInboxRow(input({ fresh: true }))).toEqual({ bucket: "new", work_state: "needs_input" });
+    expect(placeInboxRow(input({ fresh: true, agentStatus: "permission_blocked" })).bucket).toBe("needs_input");
+    expect(placeInboxRow(input({ fresh: true, pendingApiError: true })).bucket).toBe("needs_input");
+    expect(placeInboxRow(input({ fresh: true, asking: true })).bucket).toBe("questions");
+    expect(placeInboxRow(input({ fresh: true, pinned: true })).bucket).toBe("pinned");
+    expect(placeInboxRow(input({ fresh: true, stashed: true })).bucket).toBe("stashed");
+  });
+
+  test("isFreshStart: a person's session for INBOX_CREATE_GRACE_MS, never a spawned one", () => {
+    const t = 1_800_000_000_000;
+    expect(isFreshStart({ started_at: t }, t + INBOX_CREATE_GRACE_MS - 1)).toBe(true);
+    expect(isFreshStart({ started_at: t }, t + INBOX_CREATE_GRACE_MS)).toBe(false);
+    expect(isFreshStart({ started_at: t, spawned_by_conversation_id: "parent" }, t + 1)).toBe(false);
+    expect(isFreshStart({ started_at: null }, t)).toBe(false);
+    // The scheduler wakes when the hold ends, so the row leaves NEW on time.
+    expect(rowLiveDeadlines({ updated_at: t, started_at: t })).toContain(t + INBOX_CREATE_GRACE_MS);
   });
 
   test("a child's ask reaches the parent only through the asking flag", () => {
@@ -665,9 +687,9 @@ describe("field ownership constants", () => {
     for (const f of INBOX_PROJECTION_FIELDS) expect(INBOX_FACT_FIELDS).not.toContain(f);
   });
 
-  test("the caps are the single source and the version is 13", () => {
+  test("the caps are the single source and the version is 15", () => {
     expect(INBOX_WINDOW_CAPS).toEqual({ recent: 200, pinned: 100, dismissed: 200, stashed: 200, snoozed: 200, owned: 200 });
-    expect(INBOX_PROJECTION_VERSION).toBe(14);
+    expect(INBOX_PROJECTION_VERSION).toBe(15);
   });
 });
 
