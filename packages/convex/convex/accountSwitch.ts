@@ -15,6 +15,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id, Doc } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { getAuthenticatedUserId, enqueuePendingMessage } from "./pendingMessages";
+import { findSessionCommandByRequest } from "./daemonCommandUtils";
 import { classifyApiErrorBanner, blockedContinueClientId, CONTINUE_BANNER_KINDS, newestSignificantMessage, isBannerTurn } from "./inboxFilters";
 import {
   actedBlockedConversations,
@@ -22,7 +23,6 @@ import {
   blockedHeadlineCause,
   ccAccountsValidator,
   decideAutoSwitch,
-  decideSwitchAhead,
   fallbackProfiles,
   isWindowRolled,
   usageStanding,
@@ -63,9 +63,10 @@ import {
   codexAccountNeedsRestart,
   listOnlineDevices,
 } from "./ccAccountsShared";
+import { decideSwitchAhead } from "./ccSwitchAhead";
 import { deliverSessionNotificationToParties } from "./notifications";
 import { canOwnerOrTeamAccess } from "./privacy";
-import { withSafetyBlock, describeDecision } from "@codecast/shared/contracts";
+import { withSafetyBlock, describeDecision, peggedWindowLabel } from "@codecast/shared/contracts";
 
 
 // A revive targets the CURRENT incident, not history: pending_api_error flags
@@ -172,30 +173,6 @@ function recoveryDecision(
     parked_count: parkedCount,
     pegged_window: peggedWindowLabel(activeUsage, now),
   };
-}
-
-// The label of the worst pegged limit window on an account — what the human
-// sees closed on the meter (e.g. "Fable (7d)"). Used only to explain a switch
-// or proposal; absent when nothing is pegged. Mirrors the meter's own labels.
-function peggedWindowLabel(usage: CcUsage | undefined | null, now: number): string | undefined {
-  if (!usage) return undefined;
-  const windows: Array<{ label: string; percent: number; resets_at?: number }> = [];
-  // Spread FIRST, then the label: the stored window carries its own raw
-  // `label` ("Fable"), and letting it land last would overwrite the display
-  // label the meters use ("Fable (7d)").
-  if (usage.session) windows.push({ ...usage.session, label: "Session (5h)" });
-  if (usage.weekly) windows.push({ ...usage.weekly, label: "Week (7d)" });
-  if (usage.weekly_scoped)
-    windows.push({ ...usage.weekly_scoped, label: `${usage.weekly_scoped.label ?? "Model"} (7d)` });
-  for (const s of usage.scoped ?? []) windows.push({ label: s.label, percent: s.percent, resets_at: s.resets_at });
-  // Several windows can be pegged at once (a spent 5h session inside a spent
-  // week). The one worth naming is the one that takes LONGEST to clear — it is
-  // what actually keeps the account unusable; the shorter window reopening
-  // changes nothing while the longer one is still shut.
-  const pegged = windows
-    .filter((w) => !isWindowRolled(w, now) && w.percent >= 100)
-    .sort((a, b) => (b.resets_at ?? 0) - (a.resets_at ?? 0))[0];
-  return pegged?.label;
 }
 
 // An automatic pass makes the same decision the revive button makes: the
@@ -327,10 +304,16 @@ export const requestAccountSwitch = mutation({
     // worker counts as included; nothing outside the set is touched or
     // dismissed. Absent = the whole blocked set (the fleet banner, the CLI).
     conversation_ids: v.optional(v.array(v.id("conversations"))),
+    // The web store's id for this switch (requestAccountSwitch). It lands on
+    // the swapping machine's switch_account row, so the row the click painted
+    // settles when that daemon reports; a replayed request queues nothing.
+    request_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Authentication failed: invalid token or session");
+    const replay = args.request_id !== undefined && await findSessionCommandByRequest(ctx, userId, args.request_id);
+    if (replay) return { devices: 1, conversations: 0, command_ids: [replay._id], replayed: true };
 
     const now = Date.now();
     const reviveWanted = args.continue_blocked !== false;
@@ -386,6 +369,13 @@ export const requestAccountSwitch = mutation({
     // A switch that no device could execute is a failure, not a quiet no-op:
     // tell the caller which machines lack the account instead of letting the
     // sessions drift back to blocked after an optimistic success toast.
+    // The primary does the swap, so its row is the switch's outcome; a revive
+    // with no swap binds to the first device that recycles sessions.
+    if (args.request_id !== undefined && res.commandIds.length > 0) {
+      const rows = await Promise.all(res.commandIds.map((id) => ctx.db.get(id)));
+      const bound = rows.find((r: any) => r?.target_device_id === primary?.device_id) ?? rows[0];
+      if (bound) await ctx.db.patch(bound._id, { request_id: args.request_id });
+    }
     if ((args.profile || args.email) && res.devices === 0) {
       throw new Error(
         `No online device has the account ${args.email ?? `"${args.profile}"`} saved` +
@@ -450,8 +440,7 @@ async function recordManualRecovery(
         ? recoveryDecision(device, switching ? "switch" : "continue", blocked.length, now, target ?? { email: targetEmail })
         : undefined,
       exhausted_at: undefined,
-      attempts: [...(state.attempts ?? []), ...[...keys].map((profile) => ({ profile, at: now }))]
-        .slice(-MAX_ATTEMPT_HISTORY),
+      attempts: appendAttempts(state.attempts, keys, now),
     },
   });
 }
@@ -1100,6 +1089,11 @@ const AUTO_SWITCH_COOLDOWN_MS = 3 * 60 * 1000;
 const AUTO_SWITCH_DEBOUNCE_MS = 45 * 1000;
 const MAX_ATTEMPT_HISTORY = 64;
 
+/** The switch state's attempt history with `keys` recorded at `at`, capped. */
+function appendAttempts(attempts: Array<{ profile: string; at: number }> | undefined, keys: Iterable<string>, at: number) {
+  return [...(attempts ?? []), ...[...keys].map((profile) => ({ profile, at }))].slice(-MAX_ATTEMPT_HISTORY);
+}
+
 /**
  * The Codex reset credit this device may spend instead of switching accounts,
  * or null when there is nothing to offer. Three conditions, all required.
@@ -1210,10 +1204,7 @@ export const throttleContinueCheck = internalMutation({
       continueBlocked: true,
       now,
     });
-    const nextAttempts = [
-      ...attempts,
-      ...batch.map((c) => ({ profile: throttleContinueAttemptKey(c._id), at: now })),
-    ].slice(-MAX_ATTEMPT_HISTORY);
+    const nextAttempts = appendAttempts(attempts, batch.map((c) => throttleContinueAttemptKey(c._id)), now);
     if (remaining > 0 || waiting > 0) {
       const at = remaining > 0 ? now + THROTTLE_CONTINUE_SPACING_MS : Math.max(nextDueAt ?? now, now + THROTTLE_CONTINUE_SPACING_MS);
       await book(at, { attempts: nextAttempts });
@@ -1570,19 +1561,6 @@ export const setRecoveryMode = mutation({
   },
 });
 
-/**
- * The auto-switch decision. Runs debounced after a limit banner lands (and
- * self-schedules a re-check at the earliest known limit reset when every
- * account is spent). Preference order:
- *   1. no switch — the active account's 5h window rolled since the newest
- *      park, so a plain "continue" un-parks for free;
- *   2. switch — the saved profile with the most usage headroom that hasn't
- *      already parked sessions this window;
- *   3. exhausted — record it for the UI and re-check at the earliest reset.
- * Every action reuses the manual flow's machinery (the same daemon
- * switch_account command / continue enqueue), so auto and manual behave
- * identically at the execution layer.
- */
 // Switch ahead: on a machine whose sessions run on the fleet store, move the
 // fleet off an account before it runs out rather than after sessions park on
 // it. A switch there costs the running sessions nothing (they follow the store
@@ -1621,11 +1599,7 @@ export const switchAheadCheck = internalMutation({
         ...state,
         last_action_at: now,
         last_action: `ahead:${decision.profile}`,
-        attempts: [
-          ...(state.attempts ?? []),
-          ...(fleet.profile ? [{ profile: fleet.profile, at: now }] : []),
-          { profile: decision.profile, at: now },
-        ].slice(-MAX_ATTEMPT_HISTORY),
+        attempts: appendAttempts(state.attempts, [...(fleet.profile ? [fleet.profile] : []), decision.profile], now),
       },
     });
     console.log(`switchAheadCheck: moving the fleet from "${fleet.profile ?? fleet.email}" to "${decision.profile}" before it runs out`);
@@ -1633,6 +1607,19 @@ export const switchAheadCheck = internalMutation({
   },
 });
 
+/**
+ * The auto-switch decision. Runs debounced after a limit banner lands (and
+ * self-schedules a re-check at the earliest known limit reset when every
+ * account is spent). Preference order:
+ *   1. no switch — the active account's 5h window rolled since the newest
+ *      park, so a plain "continue" un-parks for free;
+ *   2. switch — the saved profile with the most usage headroom that hasn't
+ *      already parked sessions this window;
+ *   3. exhausted — record it for the UI and re-check at the earliest reset.
+ * Every action reuses the manual flow's machinery (the same daemon
+ * switch_account command / continue enqueue), so auto and manual behave
+ * identically at the execution layer.
+ */
 export const autoSwitchCheck = internalMutation({
   args: { user_id: v.id("users") },
   handler: async (ctx, args) => {
@@ -1756,9 +1743,7 @@ export const autoSwitchCheck = internalMutation({
           last_action_at: now,
           last_action: action,
           last_decision: decisionRecord ?? state.last_decision,
-          attempts: [...attempts, ...profileKeys.map((profile) => ({ profile, at: now }))].slice(
-            -MAX_ATTEMPT_HISTORY,
-          ),
+          attempts: appendAttempts(attempts, profileKeys, now),
           exhausted_at: undefined,
           next_check_at: nextCheckAt,
         },

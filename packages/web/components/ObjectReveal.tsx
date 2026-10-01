@@ -112,9 +112,10 @@ export function RevealButton({
   );
 }
 
-/** The big "open this page" hit. The label opens the object; the columns
- *  icon opens it beside, with a tooltip. `bar` sits above the framed page
- *  and ends in the band's close; `compact` is the card/pill. */
+/** The object's way out to its full page. `compact` is the card/pill: the
+ *  label opens the object, the columns icon opens it beside. `bar` sits above
+ *  the framed page: the whole bar is the band's close, with a small Open and
+ *  the beside icon at its end. */
 export function RevealOpenLink({
   href,
   label,
@@ -129,22 +130,46 @@ export function RevealOpenLink({
   variant?: "bar" | "compact";
 }) {
   const beside = canOpenBeside();
+  const bar = variant === "bar" && !!onClose;
+  const open = (
+    <Link
+      href={href}
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen?.(e);
+      }}
+      className={bar ? "object-reveal__open-small" : "object-reveal__open-go"}
+      title={label}
+    >
+      <span className="object-reveal__open-label">
+        <span className="object-reveal__open-text">{bar ? "Open" : label}</span>
+        <ArrowUpRight className="h-3.5 w-3.5" />
+      </span>
+    </Link>
+  );
   return (
-    <div className={variant === "bar" ? "object-reveal__open" : "object-reveal-open-compact"}>
-      <Link
-        href={href}
-        onClick={(e) => {
-          e.stopPropagation();
-          onOpen?.(e);
-        }}
-        className="object-reveal__open-go"
-        title={label}
-      >
-        <span className="object-reveal__open-label">
-          <span className="object-reveal__open-text">{label}</span>
-          <ArrowUpRight className={variant === "bar" ? "h-4 w-4" : "h-3.5 w-3.5"} />
-        </span>
-      </Link>
+    <div className={bar ? "object-reveal__open" : "object-reveal-open-compact"}>
+      {bar ? (
+        <button
+          type="button"
+          className="object-reveal__open-go"
+          title="Close (Esc)"
+          aria-label="Close"
+          data-reveal-close
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onClose!();
+          }}
+        >
+          <span className="object-reveal__open-label">
+            <X className="h-4 w-4" />
+            <span className="object-reveal__open-text">Close</span>
+            <KeyCap size="xs">esc</KeyCap>
+          </span>
+        </button>
+      ) : open}
+      {bar && open}
       {beside && (
         <button
           type="button"
@@ -157,23 +182,7 @@ export function RevealOpenLink({
             openIn("split", href);
           }}
         >
-          <Columns2 className={variant === "bar" ? "h-4 w-4" : "h-3.5 w-3.5"} />
-        </button>
-      )}
-      {onClose && (
-        <button
-          type="button"
-          className="object-reveal__open-beside"
-          title="Close (Esc)"
-          aria-label="Close"
-          data-reveal-close
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            onClose();
-          }}
-        >
-          <X className={variant === "bar" ? "h-4 w-4" : "h-3.5 w-3.5"} />
+          <Columns2 className="h-3.5 w-3.5" />
         </button>
       )}
     </div>
@@ -181,18 +190,25 @@ export function RevealOpenLink({
 }
 
 /**
- * Nearest thing the band should fill: an ancestor that opts in with
- * data-reveal-bounds, else the nearest scrolling ancestor — the transcript
- * feed, the chat list, a page's main scroll.
+ * The surface the band scrolls with and takes its height from: the nearest
+ * scrolling ancestor — the transcript feed, the chat list, a page's main scroll.
  */
 function revealBounds(el: HTMLElement): HTMLElement | null {
-  const marked = el.parentElement?.closest<HTMLElement>("[data-reveal-bounds]");
-  if (marked) return marked;
   for (let n = el.parentElement; n; n = n.parentElement) {
     const o = getComputedStyle(n).overflowY;
     if (o === "auto" || o === "scroll") return n;
   }
   return null;
+}
+
+/**
+ * What the band spans side to side: a column inside the scroller that opts in
+ * with data-reveal-span (the decision sheet's reasoning beside its sticky
+ * options), else the whole scroller.
+ */
+function revealSpan(el: HTMLElement, bounds: HTMLElement): HTMLElement {
+  const marked = el.parentElement?.closest<HTMLElement>("[data-reveal-span]");
+  return marked && bounds.contains(marked) ? marked : bounds;
 }
 
 // The band's height is the reader's choice, kept across reveals and reloads;
@@ -228,6 +244,7 @@ function useFullBleed(ref: React.RefObject<HTMLDivElement | null>) {
     if (!el) return;
     const bounds = revealBounds(el);
     if (!bounds) return;
+    const span = revealSpan(el, bounds);
     let raf = 0;
     const apply = () => {
       raf = 0;
@@ -235,10 +252,10 @@ function useFullBleed(ref: React.RefObject<HTMLDivElement | null>) {
       el.style.marginLeft = "0px";
       el.style.width = "auto";
       const zoom = cssZoomOf(el);
-      const b = bounds.getBoundingClientRect();
+      const b = span.getBoundingClientRect();
       const r = el.getBoundingClientRect();
-      el.style.marginLeft = `${(b.left - r.left) / zoom + bounds.clientLeft}px`;
-      el.style.width = `${bounds.clientWidth}px`;
+      el.style.marginLeft = `${(b.left - r.left) / zoom + span.clientLeft}px`;
+      el.style.width = `${span.clientWidth}px`;
       el.style.height = `${bandHeight(bounds)}px`;
     };
     apply();
@@ -246,6 +263,7 @@ function useFullBleed(ref: React.RefObject<HTMLDivElement | null>) {
       if (!raf) raf = requestAnimationFrame(apply);
     });
     ro.observe(bounds);
+    if (span !== bounds) ro.observe(span);
     return () => {
       ro.disconnect();
       if (raf) cancelAnimationFrame(raf);
@@ -333,37 +351,19 @@ function useScrollHold(ref: React.RefObject<HTMLDivElement | null>, reveal: Open
 }
 
 /**
- * A fresh band grows from the line it opened under to its height, then
- * takes the scroll to itself — as far as the band's bottom needs, but never
- * so far that the line it opened under leaves the top, so the reader keeps
- * the sentence and the page together. Restored bands (a recycled row
- * scrolling back) skip both: they are where the reader left them.
+ * A fresh band grows from the line it opened under to its height. Opening
+ * never moves the conversation: the reader stays exactly where they clicked,
+ * and the band grows down from there. Restored bands (a recycled row
+ * scrolling back) skip the motion: they are where the reader left them.
  */
 function useOpenMotion(ref: React.RefObject<HTMLDivElement | null>, reveal: OpenReveal) {
   useLayoutEffect(() => {
     const el = ref.current;
-    if (!el || !reveal.fresh) return;
-    const settle = () => {
-      const bounds = revealBounds(el);
-      if (!bounds) return;
-      const zoom = cssZoomOf(bounds);
-      const b = bounds.getBoundingClientRect();
-      const overflow = (el.getBoundingClientRect().bottom - b.bottom) / zoom;
-      if (overflow <= 0) return;
-      const room = (reveal.anchor.getBoundingClientRect().top - b.top) / zoom - 12;
-      const delta = Math.min(overflow, room);
-      if (delta <= 0) return;
-      bounds.scrollTo({ top: bounds.scrollTop + delta, behavior: reducedMotion() ? "auto" : "smooth" });
-    };
-    if (reducedMotion() || typeof el.animate !== "function") {
-      settle();
-      return;
-    }
+    if (!el || !reveal.fresh || reducedMotion() || typeof el.animate !== "function") return;
     const anim = el.animate(
       [{ height: "0px", opacity: 0.4 }, { height: el.style.height, opacity: 1 }],
       { duration: 260, easing: EASE_OUT },
     );
-    anim.finished.then(settle, () => {});
     return () => anim.cancel();
   }, [ref, reveal]);
 }
@@ -410,11 +410,13 @@ function usePinnedClose(ref: React.RefObject<HTMLDivElement | null>): PinSpot | 
         return;
       }
       const h = host.getBoundingClientRect();
+      const span = revealSpan(el, bounds);
+      const s = span.getBoundingClientRect();
       const next = {
         host,
         top: Math.round((b.top - h.top) / zoom + bounds.clientTop),
-        left: Math.round((b.left - h.left) / zoom + bounds.clientLeft),
-        width: bounds.clientWidth,
+        left: Math.round((s.left - h.left) / zoom + span.clientLeft),
+        width: span.clientWidth,
       };
       setSpot((cur) => (cur && cur.top === next.top && cur.left === next.left && cur.width === next.width ? cur : next));
     };

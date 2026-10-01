@@ -64,11 +64,15 @@ function RailTip({
   );
 }
 
+const NO_MEMBERS: ChatMember[] = [];
+const NO_PINS: ReturnType<typeof readPins> = [];
+
 function RailRow({
   c,
   active,
   members,
   viewer,
+  standalone,
   onSelect,
   onChannelContextMenu,
 }: {
@@ -76,6 +80,7 @@ function RailRow({
   active: boolean;
   members: ChatMember[];
   viewer: string;
+  standalone?: boolean;
   onSelect: (channelId: string) => void;
   onChannelContextMenu?: (e: React.MouseEvent, channel: ChatChannelView) => void;
 }) {
@@ -87,7 +92,7 @@ function RailRow({
   const roomKey = chatViewRoomKey(c, viewer, members);
   // The same question HuddleButton asks: the strip has no room for the chip,
   // so a live room shows as a ring on the tile and a word in the tooltip.
-  const live = useInboxStore((st) => (st.callOccupancy[roomKey]?.length ?? 0) > 0);
+  const live = useInboxStore((st) => !standalone && (st.callOccupancy[roomKey]?.length ?? 0) > 0);
   const cls = [
     "ch-chan",
     active ? "ch-chan-active" : "",
@@ -146,7 +151,7 @@ function RailRow({
         // name, so the mark says where it comes from and the tooltip the rest.
         <SlackLogo className="ch-chan-slack" muted={c.slack.state !== "live"} title={MIRROR_STATE_LABEL[c.slack.state]} />
       )}
-      <OccupancyChip roomKey={roomKey} className="shrink-0 ch-chan-occ" />
+      {!standalone && <OccupancyChip roomKey={roomKey} className="shrink-0 ch-chan-occ" />}
       {c.muted && <BellOff className="w-3 h-3 shrink-0 opacity-70" aria-label="Muted" />}
       {mentions > 0 ? (
         <span className="ch-chan-badge" aria-label={`${mentions} mentions`}>
@@ -171,6 +176,7 @@ export const ChatChannelRail = memo(function ChatChannelRail({
   onOpenDm,
   onChannelContextMenu,
   showDms = true,
+  standalone = false,
 }: {
   channels: ChatChannelView[];
   activeChannelId?: string;
@@ -178,6 +184,10 @@ export const ChatChannelRail = memo(function ChatChannelRail({
   /** The direct messages section. Off for a rail whose rooms have no roster
    *  to message (the community page). */
   showDms?: boolean;
+  /** Draws from the props alone, reading no viewer's state (roster, pins,
+   *  live rooms) from the store: a rail shown outside the app (the homepage
+   *  tour), whose channels are not the viewer's. */
+  standalone?: boolean;
   onCreate?: () => void;
   /** Opens the new-message modal. */
   onNewMessage?: () => void;
@@ -186,13 +196,13 @@ export const ChatChannelRail = memo(function ChatChannelRail({
   /** Right-click on a row — opens the shared channel menu. */
   onChannelContextMenu?: (e: React.MouseEvent, channel: ChatChannelView) => void;
 }) {
-  const members = useInboxStore((s) => s.teamMembers) as ChatMember[];
-  const viewer = useInboxStore((s) => (s as any).currentUser?._id ?? "");
+  const members = useInboxStore((s) => (standalone ? NO_MEMBERS : s.teamMembers)) as ChatMember[];
+  const viewer = useInboxStore((s) => (standalone ? "" : (s as any).currentUser?._id ?? ""));
   // The channels pinned in the main sidebar, first here too, so the Chat
   // window's rail carries chat's pins the way the main rail does. Pin ids
   // resolve to live channel ids (a channel pinned as a stub keeps the stub).
   const pinnedIds = useInboxStore((s) =>
-    readPins(s)
+    (standalone ? NO_PINS : readPins(s))
       .filter((p) => p.kind === "channel" && !isThreadsPin(p))
       .map((p) => supersededChannelId(s.chatChannels as any, p.id) ?? p.id)
       .join(","),
@@ -224,6 +234,7 @@ export const ChatChannelRail = memo(function ChatChannelRail({
             active={c.id === activeChannelId}
             members={members}
             viewer={String(viewer)}
+            standalone={standalone}
             onSelect={onSelect}
             onChannelContextMenu={onChannelContextMenu}
           />
@@ -246,6 +257,7 @@ export const ChatChannelRail = memo(function ChatChannelRail({
             active={c.id === activeChannelId}
             members={members}
             viewer={String(viewer)}
+            standalone={standalone}
             onSelect={onSelect}
             onChannelContextMenu={onChannelContextMenu}
           />
@@ -268,6 +280,7 @@ export const ChatChannelRail = memo(function ChatChannelRail({
             active={c.id === activeChannelId}
             members={members}
             viewer={String(viewer)}
+            standalone={standalone}
             onSelect={onSelect}
             onChannelContextMenu={onChannelContextMenu}
           />

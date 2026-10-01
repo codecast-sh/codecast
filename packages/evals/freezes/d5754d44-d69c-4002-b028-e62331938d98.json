@@ -1,0 +1,26 @@
+{
+  "name": "handoff flaky-login-test",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:flaky-login-test"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "handoff:flaky-login-test",
+    "title": "handoff flaky-login-test"
+  },
+  "asOf": "2026-01-15T14:07:00.000Z",
+  "trigger": {
+    "type": "handoff"
+  },
+  "meta": {
+    "surface": "handoff",
+    "visibility": "public",
+    "snapshot": "fixtures/handoff/flaky-login-test.json"
+  },
+  "judge": "a cold reader can continue: the brief names the cause (clicking before hydration) and the fix (wait for [data-hydrated] in e2e/login.test.ts), that 50 local runs pass but CI has not run it, the decision to leave CI retries alone and why, and a concrete first step to run the change on CI",
+  "notes": null,
+  "tags": [],
+  "id": "d5754d44-d69c-4002-b028-e62331938d98",
+  "createdAt": "2026-10-01T17:49:19.987Z"
+}

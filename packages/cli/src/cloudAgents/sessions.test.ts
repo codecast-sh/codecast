@@ -6,7 +6,9 @@ import * as path from "path";
 import { CursorCloudAdapter, CursorCloudApi } from "./cursor.js";
 import { CloudApiError } from "./http.js";
 import { CloudAgentSessions, githubRepoAt } from "./sessions.js";
-import { CloudAgentSetupError } from "./types.js";
+import { CloudShapeError } from "./shape.js";
+import { CloudAgentSetupError, CloudAgentUnsentError } from "./types.js";
+import { fakeSessionWatcher } from "../test-helpers/cloudAgentFakes.js";
 import { deviceLabel } from "../remote/device.js";
 
 const cleanups: (() => void)[] = [];
@@ -26,8 +28,9 @@ function adapterWith(api: CursorCloudApi | null): CursorCloudAdapter {
 
 function sessions(api: CursorCloudApi | null, file = path.join(tmp(), "sessions.json")) {
   const statuses: string[] = [];
-  const s = new CloudAgentSessions(adapterWith(api), {
-    watcher: () => ({ follow: async () => {}, setNotice: () => {}, isRunning: () => false }),
+  const adapter = adapterWith(api);
+  const s = new CloudAgentSessions(adapter, {
+    watcher: () => fakeSessionWatcher(adapter),
     bindSession: () => {},
     agentForConversation: () => undefined,
     setStatus: (_c, st) => statuses.push(st),
@@ -80,6 +83,17 @@ describe("Cursor Cloud sessions: failures", () => {
     expect(await s.deliver("c", "hi")).toBe(true);
     expect(created).toEqual([[{ url: "https://github.com/acme/app" }]]);
   }, 30_000);
+
+  test("a create the provider took but answered in a shape codecast can't read is never sent again, for any provider", async () => {
+    const shapeBreak = (wrote: boolean) => ({ createAgent: async () => { throw new CloudShapeError("agent.id", "a string", "a number", "POST /v0/agents", wrote); } }) as unknown as CursorCloudApi;
+    const a = sessions(shapeBreak(true));
+    await a.s.start("c", undefined, "cloud");
+    expect(await a.s.deliver("c", "hi").catch((e) => e)).toBeInstanceOf(CloudAgentUnsentError);
+    // A read before anything was sent (a list the create looks things up in) is the provider changing: held for a retry.
+    const b = sessions(shapeBreak(false));
+    await b.s.start("c", undefined, "cloud");
+    expect(await b.s.deliver("c", "hi").catch((e) => e)).toMatchObject({ kind: "changed" });
+  });
 
   test("a follow-up while a run is going is busy, which the delivery layer retries", async () => {
     const api = { createRun: async () => { throw new CloudApiError(409, "conflict", "run in progress"); } } as unknown as CursorCloudApi;

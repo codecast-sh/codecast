@@ -140,7 +140,7 @@ test("the float sizes the window to itself; the stage does not", () => {
   const stage = win.getContentSize();
   rig.handlers.get("set-call-window-content-size")(sender, { width: 300, height: 300 });
   assert.deepEqual(win.getContentSize(), stage);
-  assert.deepEqual(win.getContentSize(), [960, 640]);
+  assert.deepEqual(win.getContentSize(), [1280, 800]);
 
   rig.handlers.get("set-call-window-size")(sender, "float");
   rig.handlers.get("set-call-window-content-size")(sender, { width: 224, height: 112 });

@@ -24,7 +24,7 @@ import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { isSummarizableMessage } from "./idleSummary";
 import { addConversationToWorkItem } from "./conversationLinks";
 import { performSetThreadState } from "./conversations";
-import { callModel, CHEAP_MODEL } from "./lib/anthropic";
+import { callModel, CHEAP_MODEL, type SurfaceRequest } from "./lib/anthropic";
 import { composeHandoffPrompt, describeAgentRun, normalizeThreadState } from "@codecast/shared/contracts";
 
 export const HANDOFF_MODEL = CHEAP_MODEL;
@@ -103,6 +103,26 @@ ${facts.join("\n")}
 
 Transcript (oldest first; the middle may be omitted):
 ${transcript}`;
+}
+
+/** The brief's input from the source's facts and its shaped transcript. */
+export function handoffBriefInput(
+  source: Pick<HandoffSourceFacts, "title" | "agent_type" | "model" | "thread_state" | "task_short_id" | "plan_short_id">,
+  messages: HandoffTranscriptMessage[],
+): HandoffBriefInput {
+  return {
+    title: source.title ?? "Untitled session",
+    agent: describeAgentRun(source.agent_type, source.model),
+    thread_state: source.thread_state,
+    task_short_id: source.task_short_id,
+    plan_short_id: source.plan_short_id,
+    messages,
+  };
+}
+
+/** The brief request prod posts, and the evals replay. */
+export function handoffBriefRequest(input: HandoffBriefInput): SurfaceRequest {
+  return { model: HANDOFF_MODEL, max_tokens: 1200, temperature: 0, prompt: buildHandoffBriefPrompt(input) };
 }
 
 /** The brief used when the model is unavailable: state plus the last word. */
@@ -208,8 +228,8 @@ export const briefInput = internalQuery({
   },
 });
 
-async function askForBrief(prompt: string): Promise<string | null> {
-  const reply = await callModel({ prompt, max_tokens: 1200, model: HANDOFF_MODEL, label: "Handoff brief" });
+async function askForBrief(input: HandoffBriefInput): Promise<string | null> {
+  const reply = await callModel({ ...handoffBriefRequest(input), label: "Handoff brief" });
   return reply?.text ?? null;
 }
 
@@ -238,15 +258,8 @@ export const start = action({
       conversation_id: args.conversation_id,
     });
     const agentType = args.agent_type ?? (source.agent_type as (typeof AGENT_TYPES)[number] | null) ?? "claude_code";
-    const briefInputs: HandoffBriefInput = {
-      title: source.title ?? "Untitled session",
-      agent: describeAgentRun(source.agent_type, source.model),
-      thread_state: source.thread_state,
-      task_short_id: source.task_short_id,
-      plan_short_id: source.plan_short_id,
-      messages,
-    };
-    const modelBrief = messages.length ? await askForBrief(buildHandoffBriefPrompt(briefInputs)) : null;
+    const briefInputs = handoffBriefInput(source, messages);
+    const modelBrief = messages.length ? await askForBrief(briefInputs) : null;
     const brief = modelBrief ?? fallbackHandoffBrief(briefInputs);
     const prompt = composeHandoffPrompt({ source, brief, direction: args.direction });
 

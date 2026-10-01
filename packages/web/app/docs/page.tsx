@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useMemo, useRef, useEffect } from "react";
+import { sharePageUrl } from "../../lib/utils";
 import { useRouter, useSearchParams, useParams, usePathname } from "next/navigation";
 import Link from "next/link";
 import { useInboxStore, DocItem, DocViewPrefs, ProjectItem } from "../../store/inboxStore";
@@ -134,8 +135,7 @@ function useDocUrlState() {
     ];
     for (const [k, v] of entries) if (v) params.set(k, v);
     const qs = params.toString();
-    const origin = typeof window !== "undefined" ? window.location.origin : "";
-    return `${origin}/docs${qs ? `?${qs}` : ""}`;
+    return sharePageUrl(`/docs${qs ? `?${qs}` : ""}`);
   }, [docType, group, sort, dir, project, label, source]);
 
   // Picking a sort field resets direction to that field's natural default; the

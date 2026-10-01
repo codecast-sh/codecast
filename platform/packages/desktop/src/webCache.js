@@ -351,6 +351,14 @@ function offlinePage(productName) {
 <main><h1>${productName} needs a connection</h1><p>The first launch downloads the app so it can work offline afterwards. Connect to the internet and try again.</p><button onclick="location.reload()">Try again</button></main>`;
 }
 
+function servedHtmlForAsset(request, res, appHosts) {
+  if (request.method !== "GET" || !res.ok) return false;
+  const u = new URL(request.url);
+  const expected = mimeFor(u.pathname);
+  if (!appHosts.has(u.host) || expected.startsWith("text/html") || expected === "application/octet-stream") return false;
+  return /text\/html/i.test(res.headers.get("content-type") || "");
+}
+
 // The Electron protocol handler: a Request in, a Response out. `net` is
 // Electron's net (net.fetch with bypassCustomProtocolHandlers passes the
 // request through unchanged); injected so the test can fake it.
@@ -368,7 +376,16 @@ function createProtocolHandler({ cache, appHosts, passthrough, net, productName 
     };
     if (plan.kind === "file") return fromCache(plan.file);
     try {
-      return await net.fetch(request, { bypassCustomProtocolHandlers: true });
+      const res = await net.fetch(request, { bypassCustomProtocolHandlers: true });
+      // A deploy race can store index.html under a hashed asset URL with a
+      // year long immutable header, and Chromium's cache (shared by net.fetch)
+      // keeps serving it: the window paints unstyled until the hash changes.
+      // An app asset that answers as HTML is fetched again past the cache,
+      // which also overwrites the bad entry.
+      if (servedHtmlForAsset(request, res, appHosts())) {
+        return await net.fetch(request.url, { cache: "reload", bypassCustomProtocolHandlers: true });
+      }
+      return res;
     } catch (err) {
       onNetworkError(err, request.url);
       if (plan.fallback === "cache-file" && plan.file) return fromCache(plan.file);

@@ -7,9 +7,10 @@ import { openTaskValidator } from "./lib/openTasksValidator";
 import { TASK_STATUS_CATEGORIES, TASK_STATUS_COLORS } from "@codecast/shared/tasks";
 import { DOC_TYPES } from "@codecast/shared/docs";
 import { ccAccountsValidator, ccAutoSwitchStateValidator, ccLoginFlowValidator, ccMintFlowValidator } from "./ccAccountsShared";
-import { cloudAgentBlocksValidator, deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
+import { cloudAgentBlocksValidator, cloudSessionSyncFields, deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
 import { capabilityTables } from "./capabilitiesSchema";
 import { externalAuthorValidator } from "./lib/externalAuthor";
+import { chatAttachmentValidator } from "./lib/chatAttachment";
 import { googleOAuthTables } from "./googleOAuthSchema";
 import { oauthConnectorTables } from "./oauthConnectorsSchema";
 import { issueSyncTables, taskExternalValidator, taskCommentExternalValidator } from "./issueSyncSchema";
@@ -237,13 +238,10 @@ export default defineSchema({
     // With sync_mode "all": folders that never upload, the folders inside
     // them and their checkouts' worktrees included.
     sync_excluded: v.optional(v.array(v.string())),
-    // Claude Code cloud sessions (claude.ai/code) sync through the user's
-    // daemons, read with their Claude login. Unset = on.
-    claude_cloud_sync: v.optional(v.boolean()),
-    cursor_cloud_sync: v.optional(v.boolean()),
-    // Codex Cloud tasks (chatgpt.com/codex), read with the daemon's Codex
-    // login. Unset = off: the source's default (CLOUD_SESSION_SOURCES).
-    codex_cloud_sync: v.optional(v.boolean()),
+    // Cloud sessions the user's daemons sync (claude.ai/code, Cursor Cloud,
+    // Codex Cloud, the Agents API): one per CLOUD_SESSION_SOURCES entry,
+    // unset = the source's default there.
+    ...cloudSessionSyncFields,
     team_share_paths: v.optional(v.array(v.string())),
     muted_members: v.optional(v.array(v.id("users"))),
     team_conversations_last_seen: v.optional(v.number()),
@@ -507,6 +505,16 @@ export default defineSchema({
     .index("by_user", ["user_id"])
     // Upsert / restore for one viewer and one session.
     .index("by_user_conversation", ["user_id", "conversation_id"]),
+
+  // A session its owner deleted (sessionDelete.ts). The transcript still sits
+  // on their machine, and the daemon recreates a conversation it finds missing,
+  // so createConversation refuses a session_id listed here for that user.
+  deleted_sessions: defineTable({
+    user_id: v.id("users"),
+    session_id: v.string(),
+    conversation_id: v.string(),
+    deleted_at: v.number(),
+  }).index("by_user_session", ["user_id", "session_id"]),
 
   conversations: defineTable({
     user_id: v.id("users"),
@@ -1847,6 +1855,18 @@ export default defineSchema({
       capped: v.optional(v.boolean()), // stopped at the per import ceiling
       error: v.optional(v.string()),
     })),
+    // Who is in the Slack channel (Slack user ids), for the room's member
+    // panel. Read whole by slackSync.refreshSlackMembers, kept live by the
+    // member_joined/left events, edited by slackSync.setSlackMember. Absent
+    // means never read. Capped at SLACK_MEMBERS_CAP.
+    slack_member_ids: v.optional(v.array(v.string())),
+    slack_members_at: v.optional(v.number()),
+    // The last invite or remove Slack refused, undone on the roster and shown
+    // in the panel. null (not absent) once a later change clears it.
+    member_error: v.optional(v.union(
+      v.object({ message: v.string(), slack_user_id: v.string(), at: v.number() }),
+      v.null(),
+    )),
     created_by: v.id("users"),
     created_at: v.number(),
     updated_at: v.number(),
@@ -2077,6 +2097,9 @@ export default defineSchema({
   // re-run every open search each tick).
   search_mirror_state: defineTable({
     cursor: v.number(),
+    // The fresh walk's position (searchMirror.ts): new messages are copied
+    // seconds after they land, ahead of the settle walk at `cursor`.
+    fresh_cursor: v.optional(v.number()),
     updated_at: v.number(),
   }),
 
@@ -4063,7 +4086,10 @@ export default defineSchema({
     updated_at: v.optional(v.number()),
     resolved_at: v.optional(v.number()),
     resolved_by: v.optional(v.id("users")),
+    // Public sharing: "anyone with the link" (publicShare.ts).
+    share_token: v.optional(v.string()),
   })
+    .index("by_share_token", ["share_token"])
     .index("by_user_status", ["user_id", "status"])
     .index("by_conversation_status", ["conversation_id", "status"])
     // Global recency scan for the email digest sweep: recent pending decisions.
@@ -4116,7 +4142,10 @@ export default defineSchema({
     client_key: v.optional(v.string()),
     created_at: v.number(),
     updated_at: v.number(),
+    // Public sharing: "anyone with the link" (publicShare.ts).
+    share_token: v.optional(v.string()),
   })
+    .index("by_share_token", ["share_token"])
     .index("by_team", ["team_id"])
     .index("by_scope_user", ["scope_user_id"])
     .index("by_short_id", ["short_id"])
@@ -4423,7 +4452,10 @@ export default defineSchema({
     // that from a natural completion, so restoring the session can re-arm
     // exactly the schedules its kill took down. Cleared on reactivation.
     canceled_on_kill_at: v.optional(v.number()),
+    // Public sharing: "anyone with the link" (publicShare.ts).
+    share_token: v.optional(v.string()),
   })
+    .index("by_share_token", ["share_token"])
     .index("by_user_status", ["user_id", "status"])
     .index("by_user_run_at", ["user_id", "run_at"])
     .index("by_status_run_at", ["status", "run_at"])
@@ -4533,7 +4565,10 @@ export default defineSchema({
 
     created_at: v.number(),
     updated_at: v.number(),
+    // Public sharing: "anyone with the link" (publicShare.ts).
+    share_token: v.optional(v.string()),
   })
+    .index("by_share_token", ["share_token"])
     .index("by_user_id", ["user_id"])
     .index("by_user_status", ["user_id", "status"])
     .index("by_team_id", ["team_id"])
@@ -4582,7 +4617,10 @@ export default defineSchema({
     latest_update_id: v.optional(v.id("initiative_updates")),
     created_at: v.number(),
     updated_at: v.number(),
+    // Public sharing: "anyone with the link" (publicShare.ts).
+    share_token: v.optional(v.string()),
   })
+    .index("by_share_token", ["share_token"])
     .index("by_user_id", ["user_id"])
     .index("by_team_id", ["team_id"])
     .index("by_workspace", ["workspace"])
@@ -5055,6 +5093,8 @@ export default defineSchema({
     closed_at: v.optional(v.number()),
     // Provider twin: a Linear issue or a GitHub issue backing this task.
     // Server authored only. docs/architecture/issue-sync.md S1.1.
+    // Public sharing: "anyone with the link" (publicShare.ts).
+    share_token: v.optional(v.string()),
     external: v.optional(taskExternalValidator),
   })
     .index("by_user_id", ["user_id"])
@@ -5066,6 +5106,7 @@ export default defineSchema({
     // architecture/scopes-and-feed.md F2) reading a plan's tasks directly.
     .index("by_plan_id", ["plan_id"])
     .index("by_parent_id", ["parent_id"])
+    .index("by_share_token", ["share_token"])
     .index("by_short_id", ["short_id"])
     .index("by_short_title", ["short_title"])
     .index("by_client_key", ["user_id", "client_key"])
@@ -5213,6 +5254,11 @@ export default defineSchema({
     embedding: v.optional(v.array(v.float64())),
 
     cli_edited_at: v.optional(v.number()),
+
+    // The Overflow: loose writing kept beside the doc rather than in it
+    // (stashed cuts, notes, words to use later). Plain text, edited from the
+    // doc page's side panel and `cast doc overflow`.
+    overflow: v.optional(v.string()),
 
     // Public sharing
     share_token: v.optional(v.string()),
@@ -5769,6 +5815,9 @@ export default defineSchema({
         // this session waits until then, except for words that name it. The
         // hold's expiry schedules the catch up delivery.
         hold_until: v.optional(v.number()),
+        // Session routes: chunks delivered since the last one that carried
+        // the full huddle framing (needsFullBrief). Absent → none yet.
+        briefed_chunks: v.optional(v.number()),
       }),
     ),
     // Monotonic per-transcript segment counter (writer-owned; the scribe is
@@ -5781,6 +5830,13 @@ export default defineSchema({
     // transcript whose beat went stale is a browser tab that died mid-sentence.
     // Same window, same reason, one less table.
     last_beat: v.optional(v.number()),
+    // A HUDDLE'S GRACE. A transcript is the record of one huddle: it lives
+    // from the first seat to the room standing empty, and transcription
+    // switched off and on inside that span is a gap in it, never a new call.
+    // When the last person leaves this stamps the moment the room emptied;
+    // somebody back within HUDDLE_GRACE_MS clears it and the same record goes
+    // on, and otherwise the record ends at this moment (endIdleTranscript).
+    idle_since: v.optional(v.number()),
     // The audio, when there is any. A recording (`rec:` room key) uploads what
     // its microphone heard once it stops; a huddle has no single recording to
     // keep. Best effort by design — the transcript is the artifact, and a
@@ -5806,7 +5862,16 @@ export default defineSchema({
     // team_id says (team_id is routing, never access — canReadCall is the
     // gate). Meaningless on huddles, which have the room's own rules.
     rec_shared: v.optional(v.boolean()),
+    // Public sharing: "anyone with the link" (publicShare.ts). A grant to
+    // read this one call's record, never to join its room.
+    share_token: v.optional(v.string()),
+    // "cl-N" from counters.nextShortId: the handle a call is quoted by in
+    // prose (`cl-42`, `cl-42:15-25` for turns 15 to 25), like ct-/pl-.
+    // Optional only for rows older than the backfill.
+    short_id: v.optional(v.string()),
   })
+    .index("by_short_id", ["short_id"])
+    .index("by_share_token", ["share_token"])
     .index("by_room", ["room_key"])
     .index("by_status", ["status"])
     // The calls page / cast calls: a team's call history, newest first.
@@ -5829,8 +5894,8 @@ export default defineSchema({
     .index("by_transcript_seq", ["transcript_id", "seq"]),
 
   // Text chat alongside a huddle: one thread per room, visible on the call
-  // stage and the call page. Keyed by room (not transcript) so the chat works
-  // before anyone toggles transcription and persists across a room's calls.
+  // stage and the call page. Keyed by room so the chat works before the
+  // huddle has a record; `transcript_id` says which huddle a line belongs to.
   call_chat_messages: defineTable({
     room_key: v.string(),
     team_id: v.optional(v.id("teams")),
@@ -5843,13 +5908,7 @@ export default defineSchema({
     // Images pasted, dropped or picked in the huddle chat. Same shape as
     // chat_messages.attachments so the room reuses the chat tile, and the
     // same storage ids ride to fed sessions as pending_messages.image_storage_ids.
-    attachments: v.optional(v.array(v.object({
-      storage_id: v.id("_storage"),
-      name: v.optional(v.string()),
-      mime: v.optional(v.string()),
-      width: v.optional(v.number()),
-      height: v.optional(v.number()),
-    }))),
+    attachments: v.optional(v.array(chatAttachmentValidator)),
     // Set when an AGENT said this: the session that is fed the huddle live
     // and answered. Rendered with the agent's identity, never as user_id's
     // own words. `source_message_id` is the session message it mirrors, so
@@ -5863,8 +5922,14 @@ export default defineSchema({
     // also carries `agent_conversation_id`. `text` is empty. Written only by
     // callChat.postEvent; never relayed to the fed sessions.
     event: v.optional(v.string()),
+    // The huddle this line was said in: the room's live transcript when it
+    // was written (callChat.insertRoomRow), or the one a line typed before
+    // the record existed was claimed by when it started. Absent on a line
+    // typed in the room while no huddle was running.
+    transcript_id: v.optional(v.id("transcripts")),
   })
-    .index("by_room", ["room_key"]),
+    .index("by_room", ["room_key"])
+    .index("by_transcript", ["transcript_id"]),
 
   // One row per session a live transcript feeds: the cheap answer to "is this
   // session in a huddle right now?", asked on every turn settle so the agent's
@@ -5881,6 +5946,10 @@ export default defineSchema({
     team_id: v.optional(v.id("teams")),
     added_by: v.id("users"),
     last_mirrored_message_id: v.optional(v.id("messages")),
+    // The agent's face in the room: the Tavus conversation that joined the
+    // LiveKit room for this feed and speaks its replies (tavusPal.ts). Set
+    // once the face has joined; ended when this row is deleted.
+    tavus_conversation_id: v.optional(v.string()),
   })
     .index("by_conversation", ["conversation_id"])
     .index("by_transcript", ["transcript_id"]),
@@ -6009,7 +6078,10 @@ export default defineSchema({
     agent_count: v.optional(v.number()),
     created_at: v.number(),
     updated_at: v.number(),
+    // Public sharing: "anyone with the link" (publicShare.ts).
+    share_token: v.optional(v.string()),
   })
+    .index("by_share_token", ["share_token"])
     .index("by_user_id", ["user_id"])
     .index("by_workflow_id", ["workflow_id"])
     .index("by_external_run", ["external_run_id"])
@@ -6468,13 +6540,7 @@ export default defineSchema({
     // `@channel` is deliberately absent in v1 — on a team small enough to share
     // one codecast workspace it is the same blast radius with worse manners.
     mention_scope: v.optional(v.literal("here")),
-    attachments: v.optional(v.array(v.object({
-      storage_id: v.id("_storage"),
-      name: v.optional(v.string()),
-      mime: v.optional(v.string()),
-      width: v.optional(v.number()),
-      height: v.optional(v.number()),
-    }))),
+    attachments: v.optional(v.array(chatAttachmentValidator)),
     // Push-to-talk. Present only on a walkie burst, which is an ordinary chat
     // message written in three steps: created "live" while the sender holds the
     // key, transcript streaming into `content`, then finalized with the audio.
@@ -6795,6 +6861,24 @@ export default defineSchema({
       })),
     })),
   }).index("by_key", ["key"]),
+
+  // What a web page says about itself (Open Graph, Twitter card, <title>),
+  // read once and shared by every message that links it, so a link standing
+  // alone on its line renders as a preview card. Keyed by the URL as
+  // parseLinkPreviewUrl normalizes it. `status` "pending" while the fetch
+  // runs; "failed" keeps a dead or tagless page from being refetched on
+  // every view until the row ages out (linkPreviews.ts).
+  link_previews: defineTable({
+    url: v.string(),
+    status: v.union(v.literal("pending"), v.literal("ok"), v.literal("failed")),
+    title: v.optional(v.string()),
+    description: v.optional(v.string()),
+    image: v.optional(v.string()),
+    site_name: v.optional(v.string()),
+    favicon: v.optional(v.string()),
+    requested_at: v.number(),
+    fetched_at: v.optional(v.number()),
+  }).index("by_url", ["url"]),
 
   ...issueSyncTables,
   ...agentTables,

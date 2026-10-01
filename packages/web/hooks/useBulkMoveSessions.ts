@@ -6,7 +6,8 @@ import { useCallback } from "react";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
-import { deviceDisplayName, useDevices, useMoveSessionToDevice, type Device } from "../components/DeviceBadge";
+import { deviceDisplayName, useDevices, type Device } from "../components/DeviceBadge";
+import { requestSessionMove } from "../lib/sessionCommands";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { planBulkMove } from "../lib/bulkMovePlan";
 
@@ -15,7 +16,6 @@ const api = _api as any;
 export function useBulkMoveSessions() {
   const { devices } = useDevices();
   const createBatch = useMutation(api.sessionMigrations.createBatch);
-  const moveOne = useMoveSessionToDevice();
   return useCallback(async (sessions: any[], device: Device) => {
     const store = useInboxStore.getState();
     const plan = planBulkMove(sessions, device, devices);
@@ -35,7 +35,7 @@ export function useBulkMoveSessions() {
         return;
       }
     }
-    for (const s of plan.reassign) moveOne(s._id, { device_id: device.device_id, is_remote: device.is_remote, label: name });
+    for (const s of plan.reassign) void requestSessionMove(s._id, { device_id: device.device_id, is_remote: device.is_remote, label: name }).catch(() => {});
     const moved = batched + plan.reassign.length;
     const skipped = [...plan.skipped.map((x) => `${x.session.short_id ?? String(x.session._id).slice(0, 8)}: ${x.reason}`), ...batchSkipped];
     if (moved === 0) {
@@ -46,6 +46,6 @@ export function useBulkMoveSessions() {
       description: skipped.slice(0, 3).join("\n") || undefined,
       ...(batchId ? { action: { label: "Progress", onClick: () => useInboxStore.getState().openSettingsModal("migrate") } } : {}),
     });
-  }, [devices, createBatch, moveOne]);
+  }, [devices, createBatch]);
 }
 

@@ -98,6 +98,19 @@ export function isProjectAllowedToSync(projectPath: string, config: Config): boo
   return inFolderList(config.sync_projects, projectPath);
 }
 
+/**
+ * Why a transcript placed in `workspacePath` (null when its workspace is
+ * unknown) stays out of sync, or null when it syncs. The one rule for every
+ * transcript placed by workspace: the live watcher's event and the watchdog's
+ * stale-file pass must never disagree about it.
+ */
+export function transcriptScopeRefusal(workspacePath: string | null, config: Config): string | null {
+  if (!workspacePath) return config.sync_mode === "selected" ? "unknown workspace path" : null;
+  if (isPathExcluded(workspacePath, config.excluded_paths)) return `excluded path ${workspacePath}`;
+  if (!isProjectAllowedToSync(workspacePath, config)) return `non-selected project ${workspacePath}`;
+  return null;
+}
+
 // The live watcher's own view of the same rule: these tmpdirs end up under
 // ~/.claude/projects/<encoded-cwd>/ when tests run, and without filtering the
 // daemon would upload them to the user's production Convex inbox. Tests that

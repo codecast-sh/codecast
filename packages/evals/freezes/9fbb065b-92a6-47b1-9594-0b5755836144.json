@@ -1,0 +1,26 @@
+{
+  "name": "settle report-hands-human-decisions",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:report-hands-human-decisions"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "settle:report-hands-human-decisions",
+    "title": "settle report-hands-human-decisions"
+  },
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "trigger": {
+    "type": "settle"
+  },
+  "meta": {
+    "surface": "settle",
+    "visibility": "public",
+    "snapshot": "fixtures/settle/report-hands-human-decisions.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "9fbb065b-92a6-47b1-9594-0b5755836144",
+  "createdAt": "2026-10-01T17:46:21.318Z"
+}

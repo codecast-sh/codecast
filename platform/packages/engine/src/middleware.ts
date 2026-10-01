@@ -1,12 +1,14 @@
 import { create as mutativeCreate, type Patch } from "mutative";
 import { deriveRegistryMaps, type RegistryMaps } from "./registry";
 import type {
+  ActionFieldLock,
   DispatchFn,
   IDBWriteFn,
   OutboxEnqueueFn,
   OutboxEntry,
   OutboxLoadFn,
   OutboxRemoveFn,
+  PendingEntry,
   PlatformConfig,
 } from "./types";
 
@@ -477,6 +479,119 @@ async function dispatchWithRetry(
   }
 }
 
+const sameValue = (a: unknown, b: unknown) =>
+  a === b || (typeof a === "object" && a !== null && JSON.stringify(a) === JSON.stringify(b));
+
+/**
+ * The field locks one action planted: every field entry in `nextPending` that
+ * is new or replaced, with the row value and lock it displaced. Kept with the
+ * dispatch so a permanent refusal can undo exactly this action.
+ */
+export function collectActionFieldLocks(
+  prevPending: Record<string, PendingEntry>,
+  nextPending: Record<string, PendingEntry>,
+  prevState: Record<string, any>,
+  rowKeyOf: (key: string) => string = () => "_id",
+): ActionFieldLock[] {
+  const locks: ActionFieldLock[] = [];
+  for (const [key, entry] of Object.entries(nextPending)) {
+    if (!entry || prevPending[key] === entry) continue;
+    const first = key.indexOf(":");
+    if (first === -1) continue;
+    const storeKey = key.slice(0, first);
+    const slice = prevState[storeKey];
+    const base = { key, storeKey, ts: entry.ts, ...(prevPending[key] ? { priorLock: prevPending[key] } : {}) };
+    if (entry.type === "field") {
+      // table:id:field, where the id may itself carry colons.
+      const last = key.lastIndexOf(":");
+      if (last <= first) continue;
+      const recordId = key.slice(first + 1, last);
+      const field = key.slice(last + 1);
+      const rowKey = rowKeyOf(storeKey);
+      const row = lockedRow(slice, recordId, rowKey);
+      locks.push({ ...base, recordId, field, value: entry.value, prior: row?.[field], hadPrior: !!row && field in row, rowKey });
+    } else if (Array.isArray(slice) && (entry.type === "include" || entry.type === "exclude")) {
+      // A list row added or removed. (A collection's include/exclude rides
+      // the server's next push as before.)
+      const recordId = key.slice(first + 1);
+      const rowKey = rowKeyOf(storeKey);
+      const index = slice.findIndex((r: any) => r?.[rowKey] === recordId);
+      locks.push({
+        ...base, recordId, field: "", value: entry.value,
+        prior: index === -1 ? undefined : slice[index], hadPrior: index !== -1,
+        membership: entry.type, rowKey, index,
+      });
+    }
+  }
+  return locks;
+}
+
+/**
+ * Undo a refused action's field locks. A lock a later write has replaced is
+ * left alone (that write owns the field now); otherwise the lock goes (or the
+ * one it displaced comes back) and the row gets its prior value, so the
+ * control stops asserting a value the server refused and the next push is
+ * free to land. Returns the next pending map and the rows it rewrote, or null
+ * when nothing was still this action's.
+ */
+export function releaseActionFieldLocks(
+  state: Record<string, any>,
+  locks: ActionFieldLock[],
+): {
+  pending: Record<string, PendingEntry>;
+  slices: Record<string, any>;
+  rows: Array<{ storeKey: string; recordId: string; row: any }>;
+} | null {
+  const current = (state.pending ?? {}) as Record<string, PendingEntry>;
+  let pending: Record<string, PendingEntry> | null = null;
+  const slices: Record<string, any> = {};
+  const rows: Array<{ storeKey: string; recordId: string; row: any }> = [];
+  for (const lock of locks) {
+    const entry = current[lock.key];
+    if (!entry || entry.ts !== lock.ts) continue;
+    if (lock.membership ? entry.type !== lock.membership : entry.type !== "field" || !sameValue(entry.value, lock.value)) continue;
+    if (!pending) pending = { ...current };
+    if (lock.priorLock) pending[lock.key] = lock.priorLock;
+    else delete pending[lock.key];
+    const slice = lock.storeKey in slices ? slices[lock.storeKey] : state[lock.storeKey];
+    const rowKey = lock.rowKey ?? "_id";
+    if (lock.membership) {
+      if (!Array.isArray(slice)) continue;
+      const at = slice.findIndex((r: any) => r?.[rowKey] === lock.recordId);
+      if (lock.membership === "include" && at !== -1) {
+        slices[lock.storeKey] = slice.filter((_: any, i: number) => i !== at);
+      } else if (lock.membership === "exclude" && at === -1 && lock.hadPrior) {
+        const out = [...slice];
+        out.splice(Math.min(lock.index ?? out.length, out.length), 0, lock.prior);
+        slices[lock.storeKey] = out;
+      }
+      continue;
+    }
+    const baseRow = lockedRow(slice, lock.recordId, rowKey);
+    if (!baseRow || !sameValue(baseRow[lock.field], lock.value)) continue;
+    const row = { ...baseRow };
+    if (lock.hadPrior) row[lock.field] = lock.prior;
+    else delete row[lock.field];
+    slices[lock.storeKey] = withLockedRow(slice, lock.recordId, row, rowKey);
+    rows.push({ storeKey: lock.storeKey, recordId: lock.recordId, row });
+  }
+  return pending ? { pending, slices, rows } : null;
+}
+
+// A lock names its row the same way for every store shape: a collection by
+// key, a list by the row's identity field, a singleton by the empty id.
+function lockedRow(slice: any, recordId: string, rowKey = "_id"): any {
+  if (recordId === "") return slice && typeof slice === "object" && !Array.isArray(slice) ? slice : undefined;
+  if (Array.isArray(slice)) return slice.find((r: any) => r?.[rowKey] === recordId);
+  return slice?.[recordId];
+}
+
+function withLockedRow(slice: any, recordId: string, row: any, rowKey = "_id"): any {
+  if (recordId === "") return row;
+  if (Array.isArray(slice)) return slice.map((r: any) => (r?.[rowKey] === recordId ? row : r));
+  return { ...slice, [recordId]: row };
+}
+
 /**
  * Scan mutative patches from an action() and auto-generate pending entries
  * for synced collections. Returns null if no pending changes needed.
@@ -487,6 +602,12 @@ export function generateAutoPending(
   isProtectedSyncCollection: (key: string) => boolean,
   hideAckFields: ReadonlySet<string>,
   isUnprotectedField?: (key: string, field: string) => boolean,
+  shape?: {
+    kindOf: (key: string) => "collection" | "list" | "singleton" | "scalar";
+    rowKeyOf?: (key: string) => string;
+    prevState: Record<string, any>;
+    nextState: Record<string, any>;
+  },
 ): Record<string, any> | null {
   let result: Record<string, any> | null = null;
   const now = Date.now();
@@ -514,6 +635,10 @@ export function generateAutoPending(
 
     const storeKey = String(path[0]);
     if (storeKey === "pending" || !isProtectedSyncCollection(storeKey)) continue;
+
+    // Lists and singletons are diffed whole, once, below.
+    const kind = shape?.kindOf(storeKey) ?? "collection";
+    if (kind !== "collection") continue;
 
     const recordId = String(path[1]);
 
@@ -550,6 +675,52 @@ export function generateAutoPending(
     }
   }
 
+  // A local-first list or singleton: compare the slice before and after the
+  // action rather than reading patch paths (a splice, an unshift or a
+  // `list[i] = {...}` patches positions, not rows). Locks use the collection
+  // key shape. A list row is named by its identity field (rowKeyOf, default
+  // `_id`): a row the action added is an include carrying the row, one it
+  // removed an exclude, and each top-level field it changed a field lock. A
+  // singleton is the empty id: store::field.
+  if (shape) {
+    const touched = new Set<string>();
+    for (const patch of patches) touched.add(String((patch.path as (string | number)[])[0]));
+    for (const storeKey of touched) {
+      if (storeKey === "pending" || !isProtectedSyncCollection(storeKey)) continue;
+      const kind = shape.kindOf(storeKey);
+      if (kind !== "list" && kind !== "singleton") continue;
+      const lock = (key: string, entry: Record<string, any>) => {
+        if (!result) result = { ...currentPending };
+        result[key] = { ...entry, ts: now };
+      };
+      const lockFields = (id: string, before: any, after: any) => {
+        for (const field of new Set([...Object.keys(before ?? {}), ...Object.keys(after ?? {})])) {
+          if (before?.[field] === after?.[field] || isUnprotectedField?.(storeKey, field)) continue;
+          lock(`${storeKey}:${id}:${field}`, { type: "field", value: after?.[field] });
+        }
+      };
+      const prev = shape.prevState[storeKey];
+      const next = shape.nextState[storeKey];
+      if (kind === "singleton") {
+        if (prev && next && typeof prev === "object" && typeof next === "object" && prev !== next) lockFields("", prev, next);
+        continue;
+      }
+      if (!Array.isArray(prev) || !Array.isArray(next) || prev === next) continue;
+      const rowKey = shape.rowKeyOf?.(storeKey) ?? "_id";
+      const byId = (rows: any[]) => new Map(rows.filter((r) => typeof r?.[rowKey] === "string").map((r) => [r[rowKey] as string, r]));
+      const before = byId(prev);
+      const after = byId(next);
+      for (const [id, row] of after) {
+        const old = before.get(id);
+        if (!old) lock(`${storeKey}:${id}`, { type: "include" });
+        else if (old !== row) lockFields(id, old, row);
+      }
+      for (const id of before.keys()) {
+        if (!after.has(id)) lock(`${storeKey}:${id}`, { type: "exclude" });
+      }
+    }
+  }
+
   return result;
 }
 
@@ -583,6 +754,10 @@ export function mutativeMiddleware(
   const storageWatchdogHint = platformConfig.storageWatchdogHint;
   const receiptContinuations = platformConfig.receiptContinuations;
   const viewGuard = platformConfig.viewGuard;
+  const syncKindOf = (key: string) =>
+    maps.syncKindOf?.(key) ?? platformConfig.syncRegistry?.[key]?.kind ?? "collection";
+  const syncRowKeyOf = (key: string) =>
+    maps.rowKeyOf?.(key) ?? platformConfig.syncRegistry?.[key]?.rowKey ?? "_id";
   const groupCtx: GroupPatchesContext = {
     tableMap: maps.dispatchTableMap,
     fieldToTable: maps.dispatchFieldTableMap,
@@ -664,6 +839,34 @@ export function mutativeMiddleware(
       if (!waiter) return;
       receiptWaiters.delete(entryId);
       waiter.resolve(value);
+    };
+
+    // A plain action the server refused for good: undo its field locks (and
+    // the row values they painted) unless a later write owns the field now.
+    const releaseRefusedLocks = (actionName: string, locks: ActionFieldLock[]) => {
+      if (locks.length === 0) return;
+      const state = get();
+      const released = releaseActionFieldLocks(state, locks);
+      if (!released) return;
+      const next: Record<string, any> = { pending: released.pending, ...released.slices };
+      const patches: Patch[] = [{ op: "replace", path: ["pending"], value: released.pending }];
+      // A collection persists row by row; a list or singleton as one value.
+      for (const { storeKey, recordId, row } of released.rows) {
+        if (recordId !== "" && !Array.isArray(released.slices[storeKey])) {
+          patches.push({ op: "replace", path: [storeKey, recordId], value: row });
+        }
+      }
+      for (const [storeKey, slice] of Object.entries(released.slices)) {
+        if (Array.isArray(slice) || !released.rows.some((r) => r.storeKey === storeKey && r.recordId !== "")) {
+          patches.push({ op: "replace", path: [storeKey], value: slice });
+        }
+      }
+      set({ ...state, ...next }, true);
+      if (idbWriteFn) {
+        void Promise.resolve(idbWriteFn(patches, get())).catch((error) => {
+          console.error(`[local-first] failed to persist refused "${actionName}" rollback`, error);
+        });
+      }
     };
 
     const rejectReceiptWaiter = (entryId: string, error: unknown) => {
@@ -989,6 +1192,7 @@ export function mutativeMiddleware(
             // Legacy non-receipt actions still treat a permanent refusal as
             // delivery. Re-driving those forever can only repeat the refusal.
             if (isPermanentDispatchError(e)) {
+              releaseRefusedLocks(entry.action, entry.locks ?? []);
               rejectReceiptWaiter(entry.id, e);
               await capturedRemove?.(entry.id);
               continue;
@@ -1053,6 +1257,7 @@ export function mutativeMiddleware(
         // writes are protected from server sync overwrites.
         let finalState = nextState;
         let finalPatches: Patch[] = patches;
+        let fieldLocks: ActionFieldLock[] = [];
         if (isAct || isAsyncAct) {
           const newPending = generateAutoPending(
             patches,
@@ -1060,8 +1265,10 @@ export function mutativeMiddleware(
             maps.isProtectedSyncCollection,
             hideAckFields,
             maps.isUnprotectedField,
+            { kindOf: syncKindOf, rowKeyOf: syncRowKeyOf, prevState: state, nextState },
           );
           if (newPending) {
+            fieldLocks = collectActionFieldLocks(state.pending ?? {}, newPending, state, syncRowKeyOf);
             finalState = { ...nextState, pending: newPending };
             // Synthetic patch so IDB persists the updated pending
             finalPatches = [...patches, { op: "replace" as const, path: ["pending"] as (string | number)[], value: newPending }];
@@ -1133,6 +1340,7 @@ export function mutativeMiddleware(
             // delete, fork → send) are queued in the same millisecond.
             ts: nextOutboxTimestamp(),
             ...(coalesceKey ? { coalesceKey } : {}),
+            ...(fieldLocks.length > 0 ? { locks: fieldLocks } : {}),
           };
           const capturedDispatch = dispatchBinding;
           const capturedError = dispatchErrorFn;
@@ -1258,8 +1466,11 @@ export function mutativeMiddleware(
               if (e instanceof StaleDispatchBindingError) throw e;
               assertDispatchCurrent(capturedDispatch);
               // Permanent rejection: the server answered and said no — remove
-              // the parked copy so the drain loops don't re-litigate it forever.
+              // the parked copy so the drain loops don't re-litigate it forever,
+              // and lift the locks it planted so the refused value stops
+              // standing over the server's.
               if (isPermanentDispatchError(e)) {
+                releaseRefusedLocks(key, fieldLocks);
                 await retireOutboxEntry(outboxId, enqueued);
                 void drainOutbox(false);
               }

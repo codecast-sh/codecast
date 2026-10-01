@@ -33,6 +33,7 @@ import { useSeedOwnership } from "../../hooks/useSeedOwnership";
 import { bootstrapCut, windowConversationSince, type WindowedConversation } from "../../lib/anchorWindow";
 import { standingRoleIdOf } from "../../lib/sessionIdentity";
 import { settleSessionViewAsk, useSessionViewAsk } from "../../lib/sessionViewVisit";
+import { requestSessionRestart } from "../../lib/sessionCommands";
 import { SeatHeadControls, SeatHeadState, RolePageControl, type SeatStall } from "../../components/org/scope/SeatHead";
 
 // The role page is a whole surface (the board's tabs, the org tree feeder), so
@@ -109,7 +110,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
       if (!forceRestartAttemptedRef.current && isConvexId(sessionId)) {
         forceRestartAttemptedRef.current = true;
         try {
-          await convCommand(sessionId, "restartSession");
+          await requestSessionRestart(sessionId);
           setResumeState("sent");
         } catch (err) {
           // The outbox owns delivery now. Stay in the pending recovery state;

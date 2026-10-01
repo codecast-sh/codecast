@@ -616,7 +616,9 @@ async function scopeMemberIds(ctx: Ctx, resolved: ResolvedScope): Promise<Id<"us
 export async function computeScopeFeed(
   ctx: Ctx,
   resolved: ResolvedScope,
-  opts: { cursor?: string; limit?: number; kinds?: FeedKind[]; now: number },
+  /** `scan`: the caller's org scan, when it holds one, so a caller looping
+   *  over roles reads the sessions once rather than once per role. */
+  opts: { cursor?: string; limit?: number; kinds?: FeedKind[]; now: number; scan?: OrgScan },
 ): Promise<{ rows: FeedRow[]; next_cursor?: string }> {
   const { now } = opts;
   const limit = Math.min(Math.max(1, opts.limit ?? FEED_LIMIT_DEFAULT), FEED_LIMIT_MAX);
@@ -625,7 +627,7 @@ export async function computeScopeFeed(
   const actor = actorCache(ctx);
   const want = (k: FeedKind) => kinds.has(k);
 
-  const sessions = want("session") || want("artifact") || want("commit") || want("decision") ? await sessionsInScope(ctx, resolved, now) : [];
+  const sessions = want("session") || want("artifact") || want("commit") || want("decision") ? await sessionsInScope(ctx, resolved, now, opts.scan) : [];
   const sessionIds = new Set(sessions.map((s) => s.session._id.toString()));
   const sessionRawById = new Map(sessions.map((s) => [s.session._id.toString(), s.raw]));
 

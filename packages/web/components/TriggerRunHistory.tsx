@@ -119,6 +119,7 @@ export function TriggerRunList({
   currentConversationId,
   onOpened,
   ensureInboxRoute,
+  onOpenRun,
   className,
 }: {
   runs: TriggerRun[];
@@ -132,6 +133,8 @@ export function TriggerRunList({
   // there consumes requestNavigate, so after priming the store we route to
   // the inbox — its watchers pick up the parked target + scroll pair intact.
   ensureInboxRoute?: boolean;
+  // Replaces opening a run through the store (the marketing hero's fixture runs).
+  onOpenRun?: (run: TriggerRun) => void;
   className?: string;
 }) {
   const router = useRouter();
@@ -172,6 +175,7 @@ export function TriggerRunList({
               <button
                 onClick={(e) => {
                   e.stopPropagation();
+                  if (onOpenRun) return onOpenRun(run);
                   openRunInStore(run);
                   if (ensureInboxRoute) router.push(`/inbox?s=${run._id}`);
                   onOpened?.();

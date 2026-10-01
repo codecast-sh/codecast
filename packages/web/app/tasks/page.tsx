@@ -1,5 +1,6 @@
 "use client";
 import { useState, useCallback, useMemo } from "react";
+import { sharePageUrl } from "../../lib/utils";
 import { ShortId } from "../../components/ShortId";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
@@ -517,8 +518,7 @@ function useTaskUrlState() {
     ];
     for (const [k, v] of entries) if (v) params.set(k, v);
     const qs = params.toString();
-    const origin = typeof window !== "undefined" ? window.location.origin : "";
-    return `${origin}/tasks${qs ? `?${qs}` : ""}`;
+    return sharePageUrl(`/tasks${qs ? `?${qs}` : ""}`);
   }, [status, view, group, sort, dir, priority, label, assignee, statuses, sourceFilter, session, completed]);
 
   // Replace the whole pref set rather than merging into it. Restoring a saved

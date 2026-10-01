@@ -1,0 +1,26 @@
+{
+  "name": "role-wake docs-needs-input",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:docs-needs-input"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "role-wake:docs-needs-input",
+    "title": "role-wake docs-needs-input"
+  },
+  "asOf": "2026-09-28T09:00:00.000Z",
+  "trigger": {
+    "type": "role-wake"
+  },
+  "meta": {
+    "surface": "role-wake",
+    "visibility": "public",
+    "snapshot": "fixtures/role-wake/docs-needs-input.json"
+  },
+  "judge": "asks a person only what needs them; each line names evidence",
+  "notes": null,
+  "tags": [],
+  "id": "c2258c8d-ada1-4bd3-a078-3c6c8c97d026",
+  "createdAt": "2026-10-01T17:53:48.759Z"
+}

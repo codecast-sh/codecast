@@ -57,3 +57,17 @@ export async function* readSse(body: ReadableStream<Uint8Array>): AsyncGenerator
     reader.cancel().catch(() => {});
   }
 }
+
+/**
+ * The frames of an SSE response body with their data parsed as JSON; a frame
+ * that is not JSON is skipped. `endEvent`: a frame with that event ends the
+ * stream (whatever its data).
+ */
+export async function* readSseJson<T>(body: ReadableStream<Uint8Array>, opts: { endEvent?: string } = {}): AsyncGenerator<{ event?: string; id?: string; data: T }> {
+  for await (const frame of readSse(body)) {
+    if (opts.endEvent !== undefined && frame.event === opts.endEvent) return;
+    let data: T;
+    try { data = JSON.parse(frame.data) as T; } catch { continue; }
+    yield { ...(frame.event !== undefined ? { event: frame.event } : {}), ...(frame.id !== undefined ? { id: frame.id } : {}), data };
+  }
+}
