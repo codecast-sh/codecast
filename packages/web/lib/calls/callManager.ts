@@ -30,7 +30,7 @@ import { memberDisplayName } from "../liveEntities";
 import { RING_STUB, RING_STUB_MS, isRingStub, ringStubId, type RingStub } from "./ringStubs";
 import { startScribe, stopScribe } from "./transcription";
 import { readJoinPrefs, rememberCamera, rememberDevice, rememberMic } from "./joinPrefs";
-import { huddleRoomOptions, SCREEN_SHARE_CAPTURE, SCREEN_SHARE_ENCODING } from "./livekitMedia";
+import { huddleRoomOptions, SCREEN_SHARE_CAPTURE, SCREEN_SHARE_PUBLISH } from "./livekitMedia";
 import { bindPrewarmAudio, bindPrewarmConvex, takePrewarmedRoom, warmRoomPublishesMic } from "./roomPrewarm";
 import { CALL_HEARTBEAT_MS, humanizeConvexError, localTranscribeLanguages } from "@codecast/shared/contracts";
 import {
@@ -1014,15 +1014,11 @@ export async function setScreenShare(on: boolean, sourceId?: string): Promise<vo
       }
       // audio:false — a huddle shares the screen, not system audio (which
       // Chrome only offers for tabs anyway and doubles the mic path).
-      // Capture/encoding for a share of UI: see livekitMedia.ts. Encoding is
-      // passed here as well as on the Room so a huddle that joined before
-      // those defaults existed still publishes a sharp share.
+      // Capture/encoding for a share of UI: see livekitMedia.ts.
       const pub = await room.localParticipant.setScreenShareEnabled(
         on,
         on ? SCREEN_SHARE_CAPTURE : { audio: false },
-        on
-          ? { screenShareEncoding: SCREEN_SHARE_ENCODING, degradationPreference: "maintain-resolution" }
-          : undefined,
+        on ? SCREEN_SHARE_PUBLISH : undefined,
       );
       const live = on ? !!pub?.track : false;
       setCall({ sharing: live });
@@ -1353,28 +1349,40 @@ export async function startTranscribing(
   routes: Array<{ kind: "session" | "doc" | "slack"; target: string; mode: "live" | "after" }> = [],
 ): Promise<boolean> {
   if (!convex || !room) return false;
-  await convex.mutation(api.calls.setRoomTranscribeOff, { room_key: roomKey, off: false }).catch(() => {});
+  await setTranscribeOff(roomKey, false);
   return await startScribe({ convex, room, roomKey, routes });
 }
 
 /** "Stop transcribing", for the whole huddle: the room opts out first, so no
- *  seated client's auto-scribe restarts it, then this run ends — which posts
- *  the digest of what was said so far. */
+ *  seated client's auto-scribe restarts it, then this run stops sending
+ *  words. The huddle's record carries on; switching back on resumes it. */
 export async function stopTranscribing(roomKey: string): Promise<void> {
-  if (convex) {
-    await convex.mutation(api.calls.setRoomTranscribeOff, { room_key: roomKey, off: true }).catch(() => {});
-  }
+  await setTranscribeOff(roomKey, true);
   await stopScribe();
+}
+
+// The switch paints in the same tick (the room's pending flag), so a second
+// press while the first is in flight reads the new state and does not fire
+// the same direction again.
+async function setTranscribeOff(roomKey: string, off: boolean): Promise<void> {
+  if (!convex) return;
+  const store = useInboxStore.getState();
+  store.noteRoomPending(roomKey, { transcribe_off: off });
+  try {
+    await convex.mutation(api.calls.setRoomTranscribeOff, { room_key: roomKey, off });
+  } catch {
+    store.revertRoomPending(roomKey, { transcribe_off: !off });
+  }
 }
 
 export async function setRoomLock(roomKey: string, locked: boolean): Promise<void> {
   if (!convex) return;
   const store = useInboxStore.getState();
-  store.noteLockPending(roomKey, locked);
+  store.noteRoomPending(roomKey, { locked });
   try {
     await convex.mutation(api.calls.setRoomLocked, { room_key: roomKey, locked });
   } catch (err: any) {
-    store.revertLockPending(roomKey, !locked);
+    store.revertRoomPending(roomKey, { locked: !locked });
     toast.error(humanizeConvexError(err, "Could not change the lock"));
   }
 }

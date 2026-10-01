@@ -20,6 +20,11 @@ mock.module("../../../app/inbox/QueuePageClient", () => ({
 mock.module("../../ConversationPlaceholder", () => ({
   ConversationPlaceholder: ({ id }: { id: string }) => <div data-placeholder={id} />,
 }));
+// The shared unavailable note, reduced to a marker that carries the action the
+// pane offers, so the test asserts which state renders rather than its copy.
+mock.module("../../ConversationUnavailable", () => ({
+  ConversationUnavailable: ({ actionLabel }: { actionLabel?: string }) => <div data-unavailable={actionLabel ?? ""} />,
+}));
 
 const { act } = await import("react");
 const { createRoot } = await import("react-dom/client");
@@ -27,7 +32,6 @@ const { SessionPane } = await import("../../stage/SessionPane");
 const { useInboxStore } = await import("../../../store/inboxStore");
 
 const root = createRoot(document.getElementById("root")!);
-const text = () => document.getElementById("root")!.textContent ?? "";
 const q = (sel: string) => document.querySelector(sel);
 const row = (id: string) => ({ _id: id, session_id: id, title: "Teammate session", updated_at: 1, agent_type: "claude_code", message_count: 3, is_idle: true, has_pending: false });
 let n = 0;
@@ -42,7 +46,7 @@ useInboxStore.setState({ sessions: {}, pending: {} } as any);
 fetched = undefined;
 await mount("teammate1");
 assert.ok(q('[data-placeholder="teammate1"]'), "loading shows the placeholder");
-assert.ok(!text().includes("no longer available"));
+assert.equal(q("[data-unavailable]"), null, "loading never says unavailable");
 
 // Found: the row lands in the store and the conversation renders from it.
 fetched = row("teammate1");
@@ -54,14 +58,14 @@ assert.equal(useInboxStore.getState().currentSessionId ?? null, null, "seeding n
 // Unavailable: the honest note.
 fetched = null;
 await mount("gone1");
-assert.ok(text().includes("no longer available"), "a row the server withholds reads as unavailable");
+assert.equal(q("[data-unavailable]")?.getAttribute("data-unavailable"), "Close pane", "a row the server withholds reads as unavailable, with a way to close the pane");
 
 // Killed locally: stays out even though the server still has it.
 useInboxStore.setState({ pending: { "sessions:killed1": { type: "exclude" } } } as any);
 fetched = row("killed1");
 await mount("killed1");
 assert.ok(!(useInboxStore.getState().sessions as any).killed1, "a locally killed session is not seeded back");
-assert.ok(text().includes("no longer available"));
+assert.ok(q("[data-unavailable]"), "a locally killed session reads as unavailable");
 
 await act(async () => root.unmount());
 console.log("session pane missing row verified");

@@ -1,0 +1,32 @@
+{
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "notes": "half-delivered, then stopped mid-work on a tool call (no closing message)",
+  "label": {
+    "verdict": "needs_input"
+  },
+  "snapshot": {
+    "newestFirst": [
+      {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+          {
+            "name": "Bash"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "OTA is live. Now the native build so the TestFlight binary carries the dependency pin and permission strings:"
+      },
+      {
+        "role": "user",
+        "content": "<task-notification><task-id>b1</task-id><status>completed</status></task-notification>"
+      },
+      {
+        "role": "user",
+        "content": "ship it"
+      }
+    ]
+  }
+}

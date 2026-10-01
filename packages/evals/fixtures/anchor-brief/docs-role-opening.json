@@ -1,0 +1,26 @@
+{
+  "asOf": "2026-09-28T09:00:00.000Z",
+  "notes": "A docs role's first turn: it reads its brief and says hello.",
+  "snapshot": {
+    "captured_at": "2026-09-28T09:00:00.000Z",
+    "facts": {
+      "name": "Docs lead",
+      "scopeType": "team",
+      "scopeLabel": "the Fernhill team",
+      "teamName": "Fernhill",
+      "role": {
+        "handle": "docs",
+        "scopeNames": [
+          "Docs site",
+          "API reference"
+        ],
+        "parentName": "Mara",
+        "startsOnItsOwn": false
+      }
+    },
+    "world": "fernhill",
+    "values": {
+      "role": "docs"
+    }
+  }
+}

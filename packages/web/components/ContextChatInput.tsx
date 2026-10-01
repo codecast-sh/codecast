@@ -77,7 +77,7 @@ export function ContextChatInput({
     let contextBody = body || "";
     // Prepend editing instructions for docs so the model knows how to modify them
     if (contextType === "doc" && linkedObjectId && body) {
-      contextBody = `[Document ID: ${linkedObjectId}]\nTo edit this document use: cast doc edit ${linkedObjectId} --old "text to find" --new "replacement text"\nTo update title: cast doc edit ${linkedObjectId} --title "New Title"\nDo not use file Read/Write/Edit tools — this document lives in the database, not the filesystem.\n\n${body}`;
+      contextBody = `[Document ID: ${linkedObjectId}]\nTo edit this document use: cast doc edit ${linkedObjectId} --old "text to find" --new "replacement text"\nTo update title: cast doc edit ${linkedObjectId} --title "New Title"\nTo offer the writer choices instead of replacing their words: cast doc alt (versions they flip between), cast doc ghost (dim text that could go), cast doc overflow --stash (move text aside), cast doc lab (trims and marks). cast doc drafts ${linkedObjectId} lists what is already there.\nDo not use file Read/Write/Edit tools — this document lives in the database, not the filesystem.\n\n${body}`;
     }
     const contextBlock = contextBody
       ? `<context type="${escapeContext(contextType)}" title="${escapeContext(contextTitle)}"${idAttr}>\n${protectContextBody(contextBody)}\n</context>\n\n`
