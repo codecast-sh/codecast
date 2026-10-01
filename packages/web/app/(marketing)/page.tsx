@@ -173,11 +173,11 @@ export default function LandingPage() {
 
           <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold leading-[1.1] tracking-tight mb-6 font-mono lg:-mx-24" style={{ color: '#002b36' }}>
             Every agent session<br />
-            <span className="block mt-3 font-normal text-lg sm:text-[clamp(1.1rem,2.6vw,1.875rem)] sm:whitespace-nowrap" style={{ color: '#657b83' }}>watchable, steerable, searchable — from any device</span>
+            <span className="block mt-3 font-normal text-lg sm:text-[clamp(1.1rem,2.6vw,1.875rem)] sm:whitespace-nowrap" style={{ color: '#657b83' }}>watchable, steerable and searchable from any device</span>
           </h1>
 
           <p className="text-lg leading-relaxed mb-8" style={{ color: '#657b83' }}>
-            <Highlight color="amber">Claude Code</Highlight>, <Highlight color="green">Codex</Highlight>, <Highlight color="blue">Cursor</Highlight>, <Highlight color="violet">OpenCode</Highlight>, and <Highlight color="cyan">pi</Highlight> — any agent, any machine.
+            <Highlight color="amber">Claude Code</Highlight>, <Highlight color="green">Codex</Highlight>, <Highlight color="blue">Cursor</Highlight>, <Highlight color="violet">OpenCode</Highlight>, and <Highlight color="cyan">pi</Highlight>. Any agent, any machine.
           </p>
 
           <div className="max-w-2xl mx-auto mb-6">
@@ -249,7 +249,7 @@ export default function LandingPage() {
             </h2>
             <p className="text-lg text-[#657b83] leading-relaxed mb-6">
               Team memory across every agent conversation. Search it, ask questions of it,
-              and trace any line of code back to the conversation that wrote it —
+              and trace any line of code back to the conversation that wrote it,
               months after the session ended.
             </p>
             <div className="-mt-1 mb-6"><WatchChapter title="Memory" /></div>
@@ -411,7 +411,7 @@ export default function LandingPage() {
                   </div>
                   <div>
                     <h3 className="font-semibold text-lg mb-1">Real local sessions, not cloud runs</h3>
-                    <p className="text-[#839496]">The daemon watches the actual terminal sessions on your machine. Nothing to reconfigure — keep running agents the way you already do.</p>
+                    <p className="text-[#839496]">The daemon watches the actual terminal sessions on your machine. Nothing to reconfigure: keep running agents the way you already do.</p>
                   </div>
                 </div>
 
@@ -423,7 +423,7 @@ export default function LandingPage() {
                   </div>
                   <div>
                     <h3 className="font-semibold text-lg mb-1">Every machine, one place</h3>
-                    <p className="text-[#839496]">Laptop, desktop, or a remote box — sessions sync wherever they run, so the whole team sees them side by side.</p>
+                    <p className="text-[#839496]">Laptop, desktop, or a remote box: sessions sync wherever they run, so the whole team sees them side by side.</p>
                   </div>
                 </div>
 
@@ -435,7 +435,7 @@ export default function LandingPage() {
                   </div>
                   <div>
                     <h3 className="font-semibold text-lg mb-1">Your subscriptions stay yours</h3>
-                    <p className="text-[#839496]">Bring your own agent plans. Codecast never marks up tokens — it records and coordinates the work, it doesn&apos;t resell the model.</p>
+                    <p className="text-[#839496]">Bring your own agent plans. Codecast never marks up tokens. It records and coordinates the work; it doesn&apos;t resell the model.</p>
                   </div>
                 </div>
               </div>
@@ -500,7 +500,7 @@ export default function LandingPage() {
               A live inbox for every session
             </h2>
             <p className="text-lg text-[#657b83] leading-relaxed mb-6">
-              See what every agent is doing at a glance — working, needs input, or idle —
+              See what every agent is doing at a glance (working, needs input, or idle)
               and steer it from web, desktop, or phone. Answer a permission prompt from the
               couch; unblock an agent from your phone.
             </p>
@@ -637,7 +637,7 @@ export default function LandingPage() {
             A full product suite around the record
           </h2>
           <p className="text-lg leading-relaxed max-w-2xl mx-auto" style={{ color: '#657b83' }}>
-            Tasks, plans, docs, and projects live next to your sessions — an issue tracker
+            Tasks, plans, docs, and projects live next to your sessions: an issue tracker
             and shared docs, wired straight into the agents. And agents are first-class users
             of all of it: they pick up tasks, update plans, write docs, message each other,
             and collaborate with you in the same place.
@@ -659,7 +659,7 @@ export default function LandingPage() {
             <h3 className="mt-4 mb-1 font-mono text-lg font-semibold" style={{ color: '#002b36' }}>Docs, written together</h3>
             <p className="text-sm leading-relaxed" style={{ color: '#657b83' }}>
               Shared docs agents read, write, and comment on. Specs go in, plans and findings
-              come out — every edit linked to the session that made it.
+              come out, every edit linked to the session that made it.
             </p>
           </div>
           <div>
@@ -829,8 +829,8 @@ export default function LandingPage() {
             Start the record
           </h2>
           <p className="text-lg text-[#839496] mb-8 max-w-xl mx-auto">
-            Watch everything your agents do live, and search it forever —
-            any agent, any machine. Free for individuals. 30 seconds to install.
+            Watch everything your agents do live, and search it forever.
+            Any agent, any machine. Free for individuals. 30 seconds to install.
           </p>
           <div className="inline-block rounded-lg px-5 py-3 mb-8 font-mono text-base text-[#eee8d5]" style={{ backgroundColor: '#073642', border: '1px solid #586e75' }}>
             <span className="text-[#586e75]">$ </span>curl -fsSL codecast.sh/install | sh

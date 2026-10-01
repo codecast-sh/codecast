@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { AGENT_MODEL_CONFIG, findModelOption, listedModels, modelOptionKey } from "./agentClients";
-import { CLOUD_AGENT_PROVIDERS, cloudAgentCardText, cloudAgentCredentialError, cloudAgentLaunch, cloudAgentLaunchKey, cloudAgentModel, isCloudAgentActionName, signInExpired, cloudAgentProviderForKey, cloudAgentProviderForLaunch, cloudAgentProviderOfSession, cloudAgentProvidersFor, cloudAgentSetupSentence, cloudAgentExpiryDate, isCloudAgentId } from "./cloudAgents";
+import { CLOUD_AGENT_PROVIDERS, cloudAgentCardText, cloudAgentCredentialError, cloudAgentLaunch, cloudAgentLaunchKey, cloudAgentModel, isCloudAgentActionName, signInExpired, cloudAgentProviderForKey, cloudAgentProviderForLaunch, cloudAgentProviderOfSession, cloudAgentProvidersFor, cloudAgentSetupSentence, cloudAgentExpiryDate, isCloudAgentId, cloudAgentSetupCard, CLOUD_AGENT_RETRIED_SUFFIX } from "./cloudAgents";
 import { CLOUD_SESSION_SOURCES, cloudSessionSyncOn, cloudSessionSyncSettings } from "./cloudSessionSync";
 import { CLIENT_ERROR_BANNER_PREFIX, classifyApiErrorBanner } from "./apiErrorBanner";
 import { CURSOR_MODEL_OPTIONS } from "./modelOptions";
@@ -54,8 +54,10 @@ describe("cloud agent providers", () => {
     expect(cloudAgentProviderOfSession("codex", "task_e_6abc48f2d3b0832e9e4bb4b303d1bc45")?.label).toBe("Codex Cloud");
     expect(cloudAgentProviderOfSession("codex", "019a2f3e-7c1d-7e20-9f00-1a2b3c4d5e6f")).toBeNull();
     expect(CLOUD_AGENT_PROVIDERS.codex.agentUrl("task_e_1")).toBe("https://chatgpt.com/codex/tasks/task_e_1");
-    // Codex Cloud starts from the composer too, with its own launch options and header actions.
-    expect(cloudAgentProvidersFor("codex").map((s) => s.id)).toEqual(["codex"]);
+    // Codex starts in the cloud two ways: Codex Cloud on the ChatGPT plan, the Agents API on a key.
+    expect(cloudAgentProvidersFor("codex").map((s) => s.id)).toEqual(["codex", "codex_api"]);
+    expect(cloudAgentProviderOfSession("codex", "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5")?.id).toBe("codex_api");
+    expect(CLOUD_AGENT_PROVIDERS.codex_api.agentUrl).toBeUndefined();
     expect(cloudAgentProviderOfSession("codex", "task_e_1~assttrn_e_2")?.id).toBe("codex");
     expect(isCloudAgentId(CLOUD_AGENT_PROVIDERS.cursor, "bc-1")).toBe(true);
     expect(isCloudAgentId(CLOUD_AGENT_PROVIDERS.cursor, "state.json")).toBe(false);
@@ -63,7 +65,31 @@ describe("cloud agent providers", () => {
 
   test("a Provider Keys entry names the provider whose credential it is", () => {
     expect(cloudAgentProviderForKey("cursor")?.id).toBe("cursor");
-    expect(cloudAgentProviderForKey("openai")).toBeNull();
+    expect(cloudAgentProviderForKey("openai")?.id).toBe("codex_api");
+    expect(cloudAgentProviderForKey("anthropic")).toBeNull();
+  });
+
+  test("the Agents API lane: its own launch keys and models beside Codex Cloud's, and its own cards", () => {
+    const api = CLOUD_AGENT_PROVIDERS.codex_api;
+    expect(cloudAgentProviderForLaunch("codex", "api")?.id).toBe("codex_api");
+    expect(cloudAgentProviderForLaunch("codex", "cloud")?.id).toBe("codex");
+    expect(cloudAgentLaunch("codex", "api:gpt-5.6-luna")).toEqual({ model: "gpt-5.6-luna", ask: false, attempts: 1 });
+    // No launch options: ask and attempts read as off.
+    expect(cloudAgentLaunch("codex", "api:ask+x3")).toEqual({ model: "", ask: false, attempts: 1 });
+    expect(cloudAgentLaunchKey(api, { model: "gpt-6-astra", ask: true, attempts: 2 })).toBe("api:gpt-6-astra");
+    // The picker lists the plain key and one per model the API serves; each reads back from a stamp.
+    const listed = listedModels(AGENT_MODEL_CONFIG.codex).filter((m) => cloudAgentProviderForLaunch("codex", m.key)?.id === "codex_api").map((m) => m.key);
+    expect(listed[0]).toBe("api");
+    expect(listed).toContain(`api:${api.defaultModel}`);
+    expect(listed).not.toContain("api:gpt-5.3-codex-spark");
+    for (const key of listed) expect(modelOptionKey(key, "codex")).toBe(key);
+    expect(findModelOption("codex", "api:gpt-5.6-luna")?.label).toBe("GPT-5.6 Luna");
+    // Both Codex lanes say what they cost.
+    for (const spec of cloudAgentProvidersFor("codex")) expect(spec.lane?.cost).toBeTruthy();
+    const missing = cloudAgentCardText(api.credentialCards.missing, "Mac");
+    expect(cloudAgentCredentialError("codex", missing)?.id).toBe("codex_api");
+    expect(cloudAgentCredentialError("codex", cloudAgentCardText(CLOUD_AGENT_PROVIDERS.codex.credentialCards.missing, "Mac"))?.id).toBe("codex");
+    expect(classifyApiErrorBanner(`${CLIENT_ERROR_BANNER_PREFIX} ${cloudAgentCardText(api.credentialCards.rejected, "Mac")} (Incorrect API key provided).`)).toBe("auth");
   });
 
   test("the daemon's credential cards are recognized by their copy, and are auth banners", () => {
@@ -100,7 +126,7 @@ describe("cloud agent providers", () => {
   });
 
   test("a source syncs by its setting, else by its default: Codex Cloud waits to be turned on", () => {
-    expect(cloudSessionSyncSettings(null)).toEqual({ claude_cloud_sync: true, cursor_cloud_sync: true, codex_cloud_sync: false });
+    expect(cloudSessionSyncSettings(null)).toEqual({ claude_cloud_sync: true, cursor_cloud_sync: true, codex_cloud_sync: false, codex_api_sync: false });
     expect(cloudSessionSyncSettings({ codex_cloud_sync: true, cursor_cloud_sync: false })).toMatchObject({ codex_cloud_sync: true, cursor_cloud_sync: false });
     expect(cloudSessionSyncOn("codex_cloud_sync", undefined)).toBe(false);
     expect(cloudSessionSyncOn("cursor_cloud_sync", undefined)).toBe(true);
@@ -117,5 +143,13 @@ describe("cloud agent providers", () => {
     // A repository or an account refused: the reason is already the vendor's sentence.
     expect(cloudAgentSetupSentence(codex, { kind: "access", reason: "Codex Cloud is not enabled for this workspace" }, "Mac")).toBe("Codex Cloud is not enabled for this workspace.");
     expect(cloudAgentSetupSentence(codex, { kind: "repo", reason: "Codex Cloud can't reach a/b (no environment)" }, "Mac")).toBe("Codex Cloud can't reach a/b (no environment).");
+  });
+
+  test("a setup card names its own provider when two run one agent type", () => {
+    const suffix = CLOUD_AGENT_RETRIED_SUFFIX;
+    expect(cloudAgentSetupCard("codex", `OpenAI Agents API can't reach ashot/private (it is private)${suffix}`)?.id).toBe("codex_api");
+    expect(cloudAgentSetupCard("codex", `Codex Cloud can't reach ashot/private (no environment)${suffix}`)?.id).toBe("codex");
+    expect(cloudAgentSetupCard("codex", "Codex Cloud can't reach ashot/private")).toBeNull();
+    expect(cloudAgentSetupCard("cursor", `Codex Cloud can't reach a/b${suffix}`)).toBeNull();
   });
 });

@@ -15,6 +15,7 @@ import { useNowWhen } from "../hooks/useCoarseNow";
 import { formatCountdown, HIBERNATED_COPY } from "@codecast/shared/contracts";
 import { parseLimitResetAt } from "../lib/limitReset";
 import { pendingImageUploads, persistDraftImages, restoreDraftImages, settleDraftImageUpload } from "../lib/draftImages";
+import { cancelPendingSend } from "../lib/cancelPendingSend";
 import { cancelDraftWrite, scheduleDraftWrite } from "../lib/pendingDraftWrites";
 import { isResentCopyOfSentMessage } from "../lib/staleDraft";
 import type { SkillItem } from "../lib/conversationProcessor";
@@ -855,7 +856,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         : null;
     if (!ref) return;
     try {
-      await useInboxStore.getState().cancelPendingMessage(conversationId, ref);
+      await cancelPendingSend(conversationId, ref, existingPending?.content ?? sentContentRef.current);
       setPendingMessageId(null);
       setSentAt(null);
       setShowStuckBanner(false);

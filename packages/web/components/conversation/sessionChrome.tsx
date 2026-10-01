@@ -23,7 +23,7 @@ import { useProviderKeyCommand, deviceManagedKeys } from "../../lib/useProviderK
 import type { RestartPhase, RestartStage } from "../../hooks/useSessionRestart";
 import { CopyCommand } from "./blocks/shared";
 import { authRemedy, detectProviderFromError } from "./classify";
-import { CloudAgentHeldNote, CloudAgentSetupText, ConnectCloudAgentButton } from "../cloudAgents";
+import { CloudAgentHeldNote, CloudAgentLaneSwitch, CloudAgentSetupText, ConnectCloudAgentButton } from "../cloudAgents";
 import { formatDuration, formatFullTimestamp, formatRelativeTime } from "../../lib/conversationFormat";
 import { MessageMarkdown } from "./markdown";
 import type { ConversationDensity, ParsedApiError } from "./types";
@@ -287,7 +287,12 @@ export function ApiErrorCard({ error, agentType, conversationId, timestamp, comp
     // as a refusal, but no sign-in fixes it.
     heading = `${cloudSetup.label} setup needed`;
     icon = <span className="text-[10px] font-semibold">!</span>;
-    hint = <p className="mt-1.5 text-xs text-sol-text-dim"><CloudAgentHeldNote spec={cloudSetup} credential={false} conversationId={conversationId} /></p>;
+    hint = (
+      <div className="mt-1.5 flex items-center gap-2 flex-wrap text-xs text-sol-text-dim">
+        {live && <CloudAgentLaneSwitch spec={cloudSetup} message={error.message} conversationId={conversationId} />}
+        <span><CloudAgentHeldNote spec={cloudSetup} credential={false} conversationId={conversationId} /></span>
+      </div>
+    );
   } else if (error.isSafety) {
     heading = "Safety review required";
     icon = <span className="text-[10px] font-semibold">!</span>;

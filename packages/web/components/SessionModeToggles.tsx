@@ -47,6 +47,9 @@ export type SessionModeTogglesProps = {
    */
   cloudAgent?: {
     spec: CloudAgentProviderSpec;
+    /** Every provider the agent type can run on (CloudAgentProviderSpec.lane): with more than one, a choice between them while on. */
+    lanes?: CloudAgentProviderSpec[];
+    onPickLane?: (spec: CloudAgentProviderSpec) => void;
     on: boolean;
     onToggle: () => void;
     connected: boolean;
@@ -121,12 +124,34 @@ const ISOLATED_TITLE = "Create session in an isolated git worktree";
 export function SessionModeToggles({ cloudHost, cloudMode, cloudToggleEnabled, onToggleCloud, isolated, onToggleIsolated, shared = false, onToggleShared, startFrom = "checkout", onSetStartFrom, cloudAgent }: SessionModeTogglesProps) {
   const effectiveStartFrom = shared ? "origin_main" : startFrom;
   if (cloudAgent) {
-    const { spec, on, onToggle, connected, launch, onSetLaunch } = cloudAgent;
+    const { spec, on, onToggle, connected, launch, onSetLaunch, onPickLane } = cloudAgent;
     const options = on && launch && onSetLaunch ? spec.launchOptions : undefined;
+    // Several ways to run on one vendor's machines (Codex: your ChatGPT plan or an API key): the switch names the
+    // vendor (never "the cloud", which is a codecast cloud host's switch), the pills say how it is paid for.
+    const lanes = (cloudAgent.lanes ?? []).filter((l) => l.lane);
+    const choosing = lanes.length > 1;
     return (
       <>
         {!on && <ModeSwitch on={isolated} accent="cyan" label="isolated worktree" title={ISOLATED_TITLE} onClick={onToggleIsolated} />}
-        <ModeSwitch on={on} accent="violet" label={`run in ${spec.label}`} title={spec.toggleTitle} onClick={onToggle} />
+        <ModeSwitch
+          on={on}
+          accent="violet"
+          label={choosing ? `run on ${spec.vendor}` : `run in ${spec.label}`}
+          title={choosing && !on ? `Run this session on ${spec.vendor}'s machines: ${lanes.map((l) => `${l.label} on your ${l.lane!.label}`).join(", or ")}` : spec.toggleTitle}
+          onClick={onToggle}
+        />
+        {on && choosing && onPickLane && (
+          <>
+            <PillRadio
+              label="with"
+              title={spec.toggleTitle}
+              options={lanes.map((l) => ({ value: l.id, label: l.lane!.label, title: `${l.label}: ${l.lane!.detail}` }))}
+              value={spec.id}
+              onPick={(id) => { const lane = lanes.find((l) => l.id === id); if (lane) onPickLane(lane); }}
+            />
+            {spec.lane && <span className="text-center text-[11px] text-sol-text-dim" title={spec.lane.detail}>{spec.lane.cost}</span>}
+          </>
+        )}
         {options?.ask && (
           <ModeSwitch
             on={launch!.ask}

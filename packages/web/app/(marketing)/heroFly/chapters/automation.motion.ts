@@ -26,14 +26,13 @@ export function phaseAt(t: number): RunPhase {
   return "rearmed";
 }
 
-/** The surface assembles as the camera arrives: rail, rows in reading order, then the graph and the run. */
-const ENTER = 47.2;
+/** The surface assembles as the camera arrives (49.5): rows in reading order, then the graph and the run, all landed before the camera does. */
+const ENTER = 48.6;
 
 const auto: Beat[] = [
-  { id: "automation.rail", cue: ENTER, preset: "drop", z: 120, rx: -10, y: -14 },
-  ...[0, 1, 2].map((i): Beat => ({ id: `automation.row:${i}`, cue: ENTER + 0.08 + i * 0.06, preset: "drop", z: 140, rx: -12, y: -16 })),
-  { id: "automation.graph", cue: ENTER + 0.32, preset: "drop", z: 160, rx: -14, y: -18 },
-  { id: "automation.run", cue: ENTER + 0.38, preset: "drop", z: 160, rx: -14, y: -18 },
+  ...[0, 1].map((i): Beat => ({ id: `automation.row:${i}`, cue: ENTER + 0.04 + i * 0.05, preset: "drop", z: 140, rx: -12, y: -16 })),
+  { id: "automation.graph", cue: ENTER + 0.12, preset: "drop", z: 160, rx: -14, y: -18 },
+  { id: "automation.run", cue: ENTER + 0.16, preset: "drop", z: 160, rx: -14, y: -18 },
   // The fire: the row answers, then the graph and the run panel as each node starts.
   { id: "automation.row:0", cue: AUTO_AT.fires, dur: 0.45, preset: "pulse", s: 0.02 },
   { id: "automation.graph", cue: AUTO_AT.fires + 0.05, dur: 0.45, preset: "pulse", s: 0.025 },

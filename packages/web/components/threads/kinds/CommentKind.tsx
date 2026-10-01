@@ -143,7 +143,7 @@ export function CommentExpanded({ card, seen, frozenReadAt, focusComposer }: { c
   );
   const agentBusy = comments.some((c) => isAgentComment(c) && (c.agent_status === "thinking" || c.agent_status === "streaming"));
 
-  const earlier = <EarlierButton count={fold.hidden} noun="reply" onClick={fold.showAll} />;
+  const earlier = <EarlierButton fold={fold} noun="reply" />;
 
   if (filePath) {
     return (

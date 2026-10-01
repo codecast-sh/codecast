@@ -13,14 +13,17 @@ import type { EntityFixture } from "@/lib/entityDisplay";
 import type { SessionBlameRange } from "@/lib/repoView";
 import { DAY, HOUR, OBJECTS, PEOPLE, SESSIONS } from "./story";
 
-/** Film-time cues inside the chapter (palette hold 74.8 to 77.0, blame 77.6 to 79.6). */
+/** Film-time cues inside the chapter (palette hold 75.8 to 78.0, blame 79.3 to 81.3). */
 export const MEMORY = {
-  palette: 74.2,
+  palette: 75.2,
   query: "webhook retry",
-  typeAt: 75.0,
+  typeAt: 76.0,
   typeRate: 13,
-  blame: 77.0,
-  focus: 78.3,
+  /** While the camera faces the palette, a row may be selected (see PaletteSearch). */
+  selectFrom: 75.6,
+  selectTo: 78.2,
+  blame: 78.6,
+  focus: 79.9,
 } as const;
 
 /** The query the palette starts searching at: the server tier answers from three letters. */
@@ -54,7 +57,7 @@ export const FILE = {
   top: 33,
   content: [
     'import { ledger } from "./ledger";',
-    'import { deadLetter, enqueue } from "./queue";',
+    'import { deadLetter, enqueue, toFailure } from "./queue";',
     'import type { WebhookEvent } from "./types";',
     "",
     "export const MAX_ATTEMPTS = 5;",
@@ -79,13 +82,13 @@ export const FILE = {
     "}",
     "",
     "export async function deliver(d: Delivery): Promise<void> {",
-    "  const res = await ledger.post(d.event).catch((e) => ({ status: undefined, error: String(e) }));",
+    "  const res = await ledger.post(d.event).catch(toFailure);",
     "  if (res.status && res.status < 300) return;",
-    "  await retry(d, res.status, \"error\" in res ? res.error : undefined);",
+    "  await retry(d, res.status, res.error);",
     "}",
     "",
-    "export async function retry(d: Delivery, status?: number, error?: string): Promise<void> {",
-    "  if (!isRetryable(status)) return deadLetter(d.event, error ?? `status ${status}`);",
+    "export async function retry(d: Delivery, status?: number, error?: string) {",
+    "  if (!isRetryable(status)) return deadLetter(d.event, error ?? `${status}`);",
     "  const attempt = d.attempt + 1;",
     "  if (attempt >= MAX_ATTEMPTS) {",
     "    return deadLetter(d.event, `gave up after ${MAX_ATTEMPTS} attempts`);",

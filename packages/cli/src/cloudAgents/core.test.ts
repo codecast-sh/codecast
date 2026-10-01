@@ -21,6 +21,14 @@ function tmp(): string {
   return d;
 }
 
+async function until(check: () => boolean, ms = 3_000): Promise<void> {
+  const end = Date.now() + ms;
+  while (!check()) {
+    if (Date.now() > end) throw new Error("timed out");
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
 interface FakeAgent { id: string; updatedAt: string; running?: boolean; repo?: string; children?: string[]; branch?: string; gitUnknown?: boolean; replies: string[] }
 interface FakeClient { calls: string[] }
 
@@ -504,6 +512,49 @@ describe("CloudAgentWatcher", () => {
     await w.poll();
     await w.poll();
     expect(client.calls.filter((c) => c.startsWith("mirror"))).toEqual(["mirror bc-v"]);
+  });
+
+  test("a list ordered by creation reads past the horizon: an old agent that runs now, or moved since its mirror, is read", async () => {
+    const OLD = "2026-07-01T00:00:00.000Z";
+    const agents: Record<string, FakeAgent> = {
+      "bc-old": { id: "bc-old", updatedAt: OLD, replies: ["old"] },
+      "bc-woke": { id: "bc-woke", updatedAt: OLD, running: true, replies: ["again"] },
+    };
+    const { adapter, client } = fakeAdapter(agents);
+    const list = adapter.listAgents.bind(adapter);
+    // Newest created first, a page each; an agent's time is its creation.
+    adapter.listAgents = async (c, cursor) => { const { items } = await list(c); return cursor ? { items: items.slice(1) } : { items: items.slice(0, 1), nextCursor: "p2" }; };
+    const w = new CloudAgentWatcher(Object.assign(adapter, { listedByCreation: true }), { rootDir: tmp(), now: NOW });
+    await w.poll();
+    expect(client.calls.filter((c) => c.startsWith("mirror"))).toEqual(["mirror bc-woke"]);
+    // It settled (a new version, the same old time): read once more, then left alone.
+    agents["bc-woke"] = { ...agents["bc-woke"], running: false, updatedAt: "2026-07-01T00:00:01.000Z" };
+    await w.poll();
+    await w.poll();
+    expect(client.calls.filter((c) => c.startsWith("mirror"))).toEqual(["mirror bc-woke", "mirror bc-woke"]);
+  });
+
+  test("an agent deleted on the provider keeps its mirror and is never read again", async () => {
+    const root = tmp();
+    const agents: Record<string, FakeAgent> = { "bc-r": { id: "bc-r", updatedAt: T0, running: true, replies: ["working"] } };
+    const { adapter, client } = fakeAdapter(agents);
+    const logs: string[] = [];
+    const w = new CloudAgentWatcher(adapter, { rootDir: root, now: NOW, log: (m) => logs.push(m) });
+    const events: string[] = [];
+    w.on("unfollowed", (id) => events.push(`unfollowed ${id}`));
+    w.on("error", (e) => events.push(`error ${e.message}`));
+    await w.poll();
+    // Deleted: the list no longer shows it, and a read of it answers 404.
+    adapter.listAgents = async () => ({ items: [] });
+    adapter.mirror = async (c, h) => { c.calls.push(`mirror ${h.agentId} (gone)`); throw new CloudApiError(404, "not_found", "No managed agent resource found"); };
+    await w.poll();
+    await w.poll();
+    await w.follow("bc-r");
+    expect(client.calls.filter((c) => c.endsWith("(gone)"))).toEqual(["mirror bc-r (gone)", "mirror bc-r (gone)"]);
+    expect(events).toEqual(["unfollowed bc-r"]);
+    expect(logs.filter((l) => l.includes("is gone"))).toEqual(["[fake-cloud] bc-r is gone on Fake Cloud: keeping its mirror as it is", "[fake-cloud] bc-r is gone on Fake Cloud: keeping its mirror as it is"]);
+    expect(fs.existsSync(w.transcriptPath("bc-r"))).toBe(true);
+    await until(() => JSON.parse(fs.readFileSync(path.join(root, "state.json"), "utf8")).agents["bc-r"]?.gone === true);
   });
 });
 

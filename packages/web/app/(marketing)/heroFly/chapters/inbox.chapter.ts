@@ -5,12 +5,13 @@
  * ../fixtures/desk.ts. See README.md for the contract.
  */
 
-import { DeskRail, InboxList } from "./inbox";
+import { DeskRail, DeskTopBar, InboxList } from "./inbox";
 import type { HeroChapter } from "./contract";
 
 export const chapter: HeroChapter = {
   id: "inbox",
   parts: [
+    { key: "topbar", region: "desk.topbar", order: 0, Component: DeskTopBar },
     { key: "rail", region: "desk.sidebar", order: 0, Component: DeskRail },
     { key: "list", region: "desk.list", order: 10, Component: InboxList },
   ],

@@ -73,7 +73,7 @@ export function UiSide({ now }: PartProps) {
 /** The flyers: each message in flight, as the card it lands as. */
 export function EnvelopeFlyer({ now }: PartProps) {
   return (
-    <div className="w-[340px] -translate-x-1/2 -translate-y-1/2 rounded-md bg-sol-bg p-1 shadow-[0_18px_40px_-12px_rgba(0,43,54,0.45)]">
+    <div className="w-[500px] -translate-x-1/2 -translate-y-1/2 rounded-md bg-sol-bg p-1 shadow-[0_18px_40px_-12px_rgba(0,43,54,0.45)]">
       <SessionMessageBlock from={SESSIONS.api.shortId} body={MESSAGE} timestamp={now - 1_000} />
     </div>
   );
@@ -81,7 +81,7 @@ export function EnvelopeFlyer({ now }: PartProps) {
 
 export function EnvelopeBackFlyer({ now }: PartProps) {
   return (
-    <div className="w-[300px] -translate-x-1/2 -translate-y-1/2 rounded-md bg-sol-bg p-1 shadow-[0_18px_40px_-12px_rgba(0,43,54,0.45)]">
+    <div className="w-[500px] -translate-x-1/2 -translate-y-1/2 rounded-md bg-sol-bg p-1 shadow-[0_18px_40px_-12px_rgba(0,43,54,0.45)]">
       <SessionMessageBlock from={SESSIONS.ui.shortId} body={REPLY} timestamp={now - 1_000} />
     </div>
   );

@@ -1,0 +1,73 @@
+"use client";
+
+/**
+ * Chapter 13, Anywhere: an inset over the desk naming where the work runs:
+ * the machine row (your laptop and a cloud host), the API worker the lead
+ * spawned on the cloud host as its inbox row, its tmux pane and the page it
+ * drives there, and the `cast browser` call that opened it.
+ */
+
+import type { ReactNode } from "react";
+import { MachineChips } from "@/components/MachineChips";
+import { TmuxAttachPill } from "@/components/TmuxAttachPill";
+import { SessionCardView } from "@/components/inbox/SessionCardView";
+import { WatchAddress } from "@/components/browser/watchControls";
+import { CastCommandBlock } from "@/components/conversation/blocks/castBlocks";
+import { fly, useFilmTime } from "../filmClock";
+import { Veil } from "../film";
+import { CLOUD_HOST, WORKER_HOST, workerRow } from "../fixtures/desk";
+import { ADDRESS, BROWSE, INSET, MACHINES, TMUX_PANE } from "../fixtures/remote";
+import { SESSIONS } from "../fixtures/story";
+import type { PartProps } from "./contract";
+
+const noop = () => {};
+
+function Line({ id, children }: { id: number; children: ReactNode }) {
+  return (
+    <div {...fly(`desk/remote.line:${id}`)} className="flex items-center gap-2 min-w-0">
+      {children}
+    </div>
+  );
+}
+
+/** The window steps back behind the inset while the camera frames it. */
+export function DeskVeil() {
+  return <Veil id="desk/remote.veil" />;
+}
+
+export function Anywhere({ now }: PartProps) {
+  const shown = useFilmTime((t) => t >= INSET.cue);
+  if (!shown) return null;
+  return (
+    <div {...fly("desk/remote.inset")} className="relative z-20 h-full p-3 flex flex-col gap-2 rounded-xl border border-sol-border bg-sol-bg-alt shadow-[0_24px_60px_-20px_rgba(0,43,54,0.45)] overflow-hidden">
+      <Line id={0}>
+        <MachineChips machines={MACHINES} selectedDeviceId={CLOUD_HOST.device_id} open onOpen={noop} onPick={noop} />
+      </Line>
+      <div {...fly("desk/remote.line:1")} className="rounded-md border border-sol-border/40 overflow-hidden">
+        <SessionCardView
+          session={workerRow(now, "api", "approved")}
+          isActive={false}
+          isFavorite={false}
+          sessionLabel={null}
+          now={now}
+          chrome={{ showModelBadge: false, showAgentIcon: true, showBranchPill: true, personifyAll: false }}
+          liveness={{ isLive: true, pendingSend: false, restarting: false, draft: "" }}
+          viewerId={null}
+          author={null}
+          viewers={[]}
+          spawnedByTitle={SESSIONS.lead.title}
+          anchorIdentity={null}
+          runHost={WORKER_HOST.api}
+          onSelect={noop}
+        />
+      </div>
+      <Line id={2}>
+        <TmuxAttachPill tmuxSession={TMUX_PANE} agentType={SESSIONS.api.agent} isLive />
+        <WatchAddress url={ADDRESS} nav={null} />
+      </Line>
+      <div {...fly("desk/remote.line:3")} className="min-w-0">
+        <CastCommandBlock tool={BROWSE.tool} result={BROWSE.result} />
+      </div>
+    </div>
+  );
+}
