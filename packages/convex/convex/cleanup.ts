@@ -1,3 +1,4 @@
+import { refuseSeatKill } from "./lib/seatKill";
 import { internalMutation, mutation } from "./functions";
 import { v } from "convex/values";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
@@ -263,8 +264,8 @@ export async function reapEmptyConversation(
 //           Quick-create eagerly boots a real agent per summon; a 0-message
 //           pre-warm has nothing to preserve — leaving it running leaks a
 //           zombie tmux that keeps the conversation is_connected and
-//           re-surfaces it as a phantom "New session" card.
-//           reapEmptyConversation kills the agent and then deletes the row.
+//           re-surfaces it as a phantom "New session" card. The agent is
+//           killed now; the hidden row goes with gcEmptyConversations.
 //  "kill" — dismiss = kill. Stash is the keep-alive set-aside; dismiss retires
 //           the session: tear the agent down and mark it completed (mirrors the
 //           explicit killSession mutation). Gated on the TRANSITION (`doc` is
@@ -307,6 +308,9 @@ export async function applyHideTransition(
   cascaded: number;
   teardownEnqueued: boolean;
 }> {
+  // An explicit kill naming a role's own session is refused (lib/seatKill);
+  // a cascade from a parent never reaches a seat, and internal reaps carry no forceKill.
+  if (opts?.forceKill && opts.cascade !== false && patch.inbox_dismissed_at) await refuseSeatKill(ctx, doc);
   const classified = classifyHideTransition(patch, doc, await conversationHasNoWork(ctx, doc));
   // Kill is a DESIRED STATE, not an event. classifyHideTransition gates on the
   // FLAG's transition, so a quiet re-assert of an already-set inbox_dismissed_at
@@ -322,7 +326,12 @@ export async function applyHideTransition(
   let canceledMessages = 0;
   let teardownEnqueued = false;
   if (action === "reap") {
-    teardownEnqueued = (await reapEmptyConversation(ctx, doc)) === "kill_enqueued";
+    // Tear the agent down, but leave the row for gcEmptyConversations' grace
+    // window. "No work" here reads only the server: a first message can still
+    // be in the client's outbox (an image uploading, send-and-stash, a kill
+    // from another window), and deleting the row under it loses that message
+    // and strands the client's copy of the session (2026-10-01).
+    teardownEnqueued = await enqueueKillSessionCommand(ctx, doc);
   } else if (action === "kill") {
     // false = an unexecuted kill_session for this conversation is ALREADY on the
     // daemon's queue (enqueueKillSessionCommand's 1h dedupe). The desired state

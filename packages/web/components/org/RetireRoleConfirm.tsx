@@ -1,13 +1,13 @@
 "use client";
 // The one retire confirm (docs/architecture/org-staffing.md S16). Unseating
-// the chief of staff asks what becomes of the agent the person already talks
+// the head of people asks what becomes of the agent the person already talks
 // to; keeping it is the default, so nobody is left without the assistant they
 // had. Any other seat has no such thread and gets the plain confirm. The
 // role's settings page and the org page's panel both draw this, so no retire
 // surface can skip the question.
 import { useState } from "react";
 import type { UnseatChoice } from "../../lib/retireRole";
-import { UNSEAT_CHOICES, isChiefOfStaff } from "../../lib/retireRole";
+import { UNSEAT_CHOICES, isHeadOfPeople } from "../../lib/retireRole";
 
 export function RetireRoleConfirm({ role, lead, onRetire, onCancel }: {
   role: { name: string; handle: string };
@@ -17,12 +17,12 @@ export function RetireRoleConfirm({ role, lead, onRetire, onCancel }: {
   onRetire: (choice: UnseatChoice | undefined) => void;
   onCancel: () => void;
 }) {
-  const chief = isChiefOfStaff(role);
+  const head = isHeadOfPeople(role);
   const [choice, setChoice] = useState<UnseatChoice>("keep");
   return (
-    <div className="flex flex-col gap-2" data-retire-confirm={chief ? "chief" : "role"}>
+    <div className="flex flex-col gap-2" data-retire-confirm={head ? "head" : "role"}>
       {lead && <p className="text-[12px]" style={{ color: "var(--sol-text-secondary)" }}>{lead}</p>}
-      {chief && (
+      {head && (
         <div className="flex flex-col gap-1.5" role="radiogroup" aria-label="What happens to its thread">
           {UNSEAT_CHOICES.map(([value, label, sub]) => (
             <button
@@ -43,7 +43,7 @@ export function RetireRoleConfirm({ role, lead, onRetire, onCancel }: {
         </div>
       )}
       <div className="flex items-center gap-2">
-        <button type="button" onClick={() => onRetire(chief ? choice : undefined)} className="h-7 px-3 rounded-md text-[12px] font-semibold" style={{ background: "var(--sol-red)", color: "var(--sol-bg)" }} data-retire-submit>Retire {role.name}</button>
+        <button type="button" onClick={() => onRetire(head ? choice : undefined)} className="h-7 px-3 rounded-md text-[12px] font-semibold" style={{ background: "var(--sol-red)", color: "var(--sol-bg)" }} data-retire-submit>Retire {role.name}</button>
         <button type="button" onClick={onCancel} className="h-7 px-3 rounded-md text-[12px]" style={{ color: "var(--sol-text-muted)" }}>Cancel</button>
       </div>
     </div>

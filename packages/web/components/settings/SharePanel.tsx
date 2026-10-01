@@ -5,6 +5,7 @@ import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { Button } from "../ui/button";
 import { TeamIcon } from "../TeamIcon";
 import { ShareImpactBand } from "../team/ShareImpactBand";
+import { TeamVisibilityControl } from "./TeamVisibilityControl";
 import { useShareImpact } from "../../hooks/useShareImpact";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { formatShortDate } from "../../lib/utils";
@@ -186,19 +187,21 @@ export function SharePanel({ name, paths, isRepository = false, local, syncsOnSh
     <div className="space-y-3 border-t border-sol-border/40 bg-sol-bg-alt/40 px-4 py-3 sm:px-5" data-share-panel>
       <div role="radiogroup" aria-label={`Who can open ${name}`} className="flex flex-wrap items-center gap-1.5">
         {option("private", <><EyeOff className="h-3.5 w-3.5" />Only me</>)}
-        {teams.map((t) => {
-          const hidden = currentMembershipVisibility(t) === "hidden";
-          return option(
-            String(t._id),
-            <><TeamIcon icon={t.icon} color={t.icon_color} className="h-3.5 w-3.5" />{t.name}</>,
-            hidden,
-            hidden ? `Your level for ${t.name} is Hidden. Raise it in the team header first.` : undefined,
-          );
-        })}
+        {teams.map((t) => option(
+          String(t._id),
+          <><TeamIcon icon={t.icon} color={t.icon_color} className="h-3.5 w-3.5" />{t.name}</>,
+        ))}
         {option("lock", <><Lock className="h-3.5 w-3.5" />Never share</>)}
       </div>
 
-      {team && level ? (
+      {team && level?.value === "hidden" ? (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="min-w-0 flex-1 basis-[16rem] text-xs text-sol-text-muted">
+            Your level for {team.name} is Hidden, so a share would show them nothing. Raise it to share {name}.
+          </p>
+          <TeamVisibilityControl team={team} />
+        </div>
+      ) : team && level ? (
         <>
           <ShareImpactBand
             teamName={team.name}

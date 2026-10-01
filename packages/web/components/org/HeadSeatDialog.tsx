@@ -1,0 +1,99 @@
+"use client";
+// Hiring the Head of People in a workspace that already has an agent is an
+// explained moment (org-staffing.md S16). It must never feel like a takeover
+// of the thread the person already talks to, so this dialog names what will
+// happen and offers two reversible choices. The default keeps the agent they
+// have: no restart, its memory, chat handle and Slack connection kept, the
+// weekly review added to its job. The alternative starts a fresh session and
+// retires the old one, its thread kept and linked.
+import { useState } from "react";
+import { Check } from "lucide-react";
+import { useAnchorSpace } from "../../hooks/useSyncAnchorSpace";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../ui/dialog";
+
+export type HeadSeatChoice = "existing" | "fresh";
+
+export function HeadSeatDialog({ open, onClose, teamId, agentName, messageCount, onConfirm }: {
+  open: boolean;
+  onClose: () => void;
+  /** The team whose standing agent this is; absent = the personal workspace. */
+  teamId?: string;
+  agentName: string;
+  messageCount?: number;
+  onConfirm: (seat: HeadSeatChoice) => void;
+}) {
+  const [choice, setChoice] = useState<HeadSeatChoice>("existing");
+  // How many messages the thread holds. The org tree does not carry it, and the
+  // anchor's conversation is often a stashed stub in the store with no count at
+  // all, so the honest source is the anchor space. Read through the registered
+  // feeder+reader, never the feed query directly (registeredFeeds guard): the
+  // dialog is mounted only while it is open, so the subscription is bounded to
+  // that. It opens at once on what the tree already knows and the count fills
+  // in when the row lands.
+  const { space } = useAnchorSpace(teamId ? "team" : "user", teamId);
+  const count = typeof messageCount === "number" ? messageCount : (space?.anchor?.message_count as number | undefined);
+  const name = agentName || (space?.anchor?.bot_name as string | undefined) || "your agent";
+  const thread = typeof count === "number" ? ` (${count} message${count === 1 ? "" : "s"} so far)` : "";
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-[480px] grid-cols-1" style={{ background: "var(--sol-card)", borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)" }}>
+        <DialogHeader>
+          <DialogTitle className="text-[17px]" style={{ fontFamily: "var(--font-serif)" }}>Hire the Head of People</DialogTitle>
+          <DialogDescription className="text-[12.5px] leading-relaxed" style={{ color: "var(--sol-text-muted)" }}>
+            This workspace already has an agent, <span style={{ color: "var(--sol-text)" }}>{name}</span>{thread}. Making it your Head of People keeps its memory, its chat handle and its Slack connection, and adds the weekly company review to its job.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex flex-col gap-2 mt-1">
+          <SeatChoiceCard
+            selected={choice === "existing"}
+            onSelect={() => setChoice("existing")}
+            title={`Make ${name} the Head of People`}
+            sub="Nothing restarts. It keeps everything and takes on the review."
+          />
+          <SeatChoiceCard
+            selected={choice === "fresh"}
+            onSelect={() => setChoice("fresh")}
+            title="Start a fresh session"
+            sub={`${name} is retired at the same time, so the workspace never has two. Its thread is kept and linked from the new role's page.`}
+          />
+        </div>
+
+        <div className="flex items-center justify-end gap-2 pt-2">
+          <button type="button" onClick={onClose} className="h-8 px-3 rounded-lg text-[12.5px] hover:bg-sol-bg-highlight" style={{ color: "var(--sol-text-muted)" }}>Cancel</button>
+          <button
+            type="button"
+            onClick={() => { onConfirm(choice); onClose(); }}
+            className="h-8 px-3.5 rounded-lg text-[12.5px] font-semibold"
+            style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }}
+          >
+            {choice === "existing" ? "Hire it" : "Start fresh"}
+          </button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function SeatChoiceCard({ selected, onSelect, title, sub }: { selected: boolean; onSelect: () => void; title: string; sub: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-pressed={selected}
+      className="w-full text-left rounded-lg border px-3 py-2.5 transition-colors"
+      style={{
+        borderColor: selected ? "var(--sol-violet)" : "color-mix(in srgb, var(--sol-border) 40%, transparent)",
+        background: selected ? "color-mix(in srgb, var(--sol-violet) 9%, transparent)" : undefined,
+      }}
+    >
+      <div className="flex items-center gap-2">
+        <span className="w-4 h-4 rounded-full inline-flex items-center justify-center shrink-0" style={{ background: selected ? "var(--sol-violet)" : "color-mix(in srgb, var(--sol-border) 45%, transparent)", color: "var(--sol-bg)" }}>
+          {selected && <Check className="w-3 h-3" />}
+        </span>
+        <span className="text-[13px] font-semibold" style={{ color: "var(--sol-text)" }}>{title}</span>
+      </div>
+      <p className="mt-1 ml-6 text-[11.5px] leading-snug" style={{ color: "var(--sol-text-muted)" }}>{sub}</p>
+    </button>
+  );
+}

@@ -1,5 +1,5 @@
 import { isDraft, original } from "mutative";
-import { applySyncRecord, applySyncTable } from "./syncProtocol";
+import { applyShapeLocks, applySyncRecord, applySyncTable } from "./syncProtocol";
 import { defaultIsServerId } from "./middleware";
 import type { MergeSpec, PendingEntry, PlatformConfig, SyncOpts } from "./types";
 
@@ -99,6 +99,16 @@ export function createSyncEngine(config: PlatformConfig): SyncEngine {
   const optionalClearFields = config.optionalClearFields;
   const rekeyExtra = config.rekeyExtra;
 
+  // What an action locked on a local-first list or singleton holds over the
+  // push (applyShapeLocks); a retired lock leaves the pending map.
+  function overlayShapeLocks(draft: any, field: string, value: any, kind: "list" | "singleton", cfg?: SyncOpts): any {
+    const base: any = isDraft(draft) ? original(draft) : draft;
+    const pending = base.pending ?? {};
+    const out = applyShapeLocks(field, kind, value, pending, base[field], { rowKey: cfg?.rowKey, altKey: cfg?.altKey, optionalClearFields });
+    if (out.pending !== pending) draft.pending = out.pending;
+    return out.value;
+  }
+
   function syncTable(draft: any, field: string, incoming: any, opts?: SyncOpts): void {
     if (!incoming && incoming !== 0) return;
     const cfg: SyncOpts = syncRegistry[field] ? { ...syncRegistry[field], ...opts } : (opts || {});
@@ -106,6 +116,7 @@ export function createSyncEngine(config: PlatformConfig): SyncEngine {
 
     if (kind === "scalar" || kind === "list") {
       if (cfg.normalize) incoming = cfg.normalize(incoming);
+      if (kind === "list") incoming = overlayShapeLocks(draft, field, incoming, "list", cfg);
       // No-op re-pushes are common — a list-kind subscription re-emits on any
       // read-set change — and a wholesale assign registers as a change: every
       // subscriber wakes and the persistence layer re-puts the whole meta blob
@@ -127,6 +138,9 @@ export function createSyncEngine(config: PlatformConfig): SyncEngine {
 
     if (kind === "singleton") {
       if (cfg.normalize) incoming = cfg.normalize(incoming);
+      // Before the no-op bail, so an echo retires its lock even when the push
+      // changes nothing on screen.
+      incoming = overlayShapeLocks(draft, field, incoming, "singleton");
       const local = draft[field];
       const initKey = `${field}Initialized`;
       const initialized = draft[initKey] ?? false;

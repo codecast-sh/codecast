@@ -8,10 +8,14 @@ Codecast owns everything except the media. Rooms, rings, authorization and acces
 cast calls                        # calls across your teams, live ones first (-n 50 for more)
 cast call <id>                    # one call: title, participants, summary, action items
 cast call <id> --transcript       # the full transcript, a speaker on every line
+cast call <id> 15:25              # just lines 15 to 25
 cast call <id> --json             # the same as data; always includes the segments
+cast call snap cl-42:15           # a frame of the recorded call when line 15 was said
 ```
 
-`<id>` is a call id from `cast calls`, or a unique prefix of one. A segment in the JSON carries `seq`, `speaker_id`, `speaker_name`, `text`, and its start and end times. You can read a call you took part in, and a call whose room you may enter. A recording of one person's microphone shows in the same list, and it belongs to its creator until they share it with a team.
+`<id>` is a call's short id (`cl-42`) from `cast calls`, its full id, or a unique prefix of one.
+
+A call is a referenceable object like a task or a session. `cl-42` written in a message renders as a live pill with the call's title, length and speakers. Add a range of the line numbers the transcript prints and it names the words themselves: `cl-42:15-25` on its own line embeds those lines with their speakers, and inline it reads as a pill that shows them on hover. Either form links to the call page with those lines selected. A segment in the JSON carries `seq`, `speaker_id`, `speaker_name`, `text`, and its start and end times. You can read a call you took part in, and a call whose room you may enter. A recording of one person's microphone shows in the same list, and it belongs to its creator until they share it with a team.
 
 ## Rooms and presence
 
@@ -36,6 +40,25 @@ Attribution is structural and never inferred. One client in the room is the scri
 Every huddle transcribes unless somebody inside says otherwise. A client starts a run when it joined on purpose and the room has two or more people, and the server decides which client is the scribe. If the scribe's seat lapses, another client adopts the same run, and the old one lets go so no word lands twice.
 
 Transcription is a switch the room owns. It is a field on the room's state row, and anyone seated may flip it either way. It has to live on the room: a flag held by one client would be overruled by the next client that looked. Turning it off ends the run wherever it lives, and the digest of what was already said still posts.
+
+## Video and frames
+
+A huddle can also be recorded as video. Recording starts only when someone in the room presses Record, everyone in the room is told, including anyone who joins later, and anyone seated can stop it. It stops by itself when the huddle ends. The recording runs on the LiveKit server, not in anyone's browser, so it does not depend on whose tab stayed open. Each run keeps two kinds of file: the room as people saw it, with every face, the screen share and everyone's audio, and each screen share on its own at full resolution, where text on the shared screen stays legible. The files live in a private bucket. A reader gets a link that lasts minutes, minted after the same access check as the call itself.
+
+A recorded call answers "what was on screen when they said that". `cast call snap` turns a call reference into a picture an agent can open:
+
+```bash
+cast call snap cl-42:15           # the moment line 15 was said
+cast call snap cl-42@12:34        # 12 minutes 34 seconds into the call (also 754s, 1:02:03)
+cast call snap cl-42:15-25        # frames across lines 15 to 25
+cast call snap cl-42              # the call as it is right now, while it records
+```
+
+Each frame is written as a PNG and printed with what it shows, the line being said at that moment and its citation. A line's frame is taken a beat after its first word, on a whole second, so the citation names the exact frame the agent saw. Across a line range, a screen share yields a frame each time the screen changed, and the room yields evenly spaced frames, eight at most unless `--max` says otherwise (up to 50). A shared screen comes from its own full resolution file whenever one covers the moment. `--composite` asks for the room view instead, and `--screen` says so plainly when no share was recorded then. `-o` takes a file or a directory. Without it, frames go to a private scratch directory that is cleared after a day, because a frame of a private call is as private as the call. `--share` uploads each frame and prints markdown that renders in any message, and `--json` prints the same as data.
+
+The moment comes from the shared clock: a transcript line carries its time since the call started, each file knows the wall clock of its first frame, and one function maps a moment to the file and offset that show it. The command, the call page and a frame embedded in a message all use that function, so they always agree on the picture. The seek itself runs on your machine with ffmpeg over the signed link, reading only the part of the file around that moment. The command needs `ffmpeg` installed and says how to install it when it is missing.
+
+`cl-42@12:34` written in a message renders as that frame of the call, linked to the call page at that time (`?t=754`), for anyone who may read the call. When a snap cannot give a picture it says why and what to try: the call was not recorded, the moment falls outside what was recorded (with the recorded stretches and the nearest moment that works), or the file covering it is still being written, in which case `cast call snap cl-42` shows the live picture.
 
 ## The digest
 

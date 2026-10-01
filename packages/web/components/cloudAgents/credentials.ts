@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from "react";
-import { signInExpired, type CloudAgentProviderId, type CloudAgentProviderSpec, type CloudAgentSetupBlock } from "@codecast/shared/contracts";
+import { isCloudAgentCredentialKind, signInExpired, type CloudAgentProviderId, type CloudAgentProviderSpec, type CloudAgentSetupBlock } from "@codecast/shared/contracts";
 import type { Device } from "../DeviceBadge";
 import { useSettingsData } from "../../hooks/useSyncSettings";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
@@ -31,33 +31,56 @@ function useCodexSignIn(): SignInCheck {
 
 const NEVER: ConnectedCheck = () => false;
 
+/**
+ * Whether a machine's block is about its connection to the provider: its
+ * credentials (isCloudAgentCredentialKind). The rest (the provider changed,
+ * a limit, a workspace or repository the provider refuses) no sign-in or key
+ * fixes, and the machine says them on its own.
+ */
+function blocksConnection(block: CloudAgentSetupBlock | undefined): boolean {
+  return !!block && isCloudAgentCredentialKind(block.kind);
+}
+
 /** What the machine's daemon last found keeps it from reading the provider (turned off for the account, refused), if anything. */
 export function cloudAgentBlockOf(spec: CloudAgentProviderSpec | undefined, device: Device): CloudAgentSetupBlock | undefined {
   return spec ? device.cloud_agent_blocks?.find((b) => b.provider === spec.id) : undefined;
 }
 
 /**
- * The provider's sign-in check, when its credential is a sign-in on the
- * machine (a CLI's own login) rather than a Provider Keys entry. Each
+ * Each provider's sign-in check, when its credential is a sign-in on the
+ * machine (a CLI's own login) rather than a Provider Keys entry. Every
  * provider's check is called here on every render, so the hook rules hold.
  */
+function useSignInChecks(): Partial<Record<string, SignInCheck>> {
+  const codex = useCodexSignIn();
+  return useMemo(() => ({ codex }) satisfies Partial<Record<CloudAgentProviderId, SignInCheck>>, [codex]);
+}
+
 function useSignInCheck(spec: CloudAgentProviderSpec | undefined): SignInCheck | undefined {
-  const checks: Partial<Record<string, SignInCheck>> = { codex: useCodexSignIn() } satisfies Partial<Record<CloudAgentProviderId, SignInCheck>>;
+  const checks = useSignInChecks();
   return spec ? checks[spec.id] : undefined;
+}
+
+/** Whether a machine holds a provider's credential (`signIn`: the provider's sign-in check, if it has one) and its daemon found nothing in the way (blocksConnection). */
+function connectedWith(spec: CloudAgentProviderSpec, signIn: SignInCheck | undefined, device: Device): boolean {
+  const holds = signIn ? signIn(device).connected : !!spec.keyProvider && hasCloudAgentKey(spec.keyProvider)(device);
+  return holds && !blocksConnection(cloudAgentBlockOf(spec, device));
 }
 
 /**
  * Whether a machine can drive a provider's agents (never, without a
  * provider): it holds the credential, and its daemon found nothing in the
- * provider's way. Stable while what it reads holds still.
+ * provider's way (blocksConnection). Stable while what it reads holds still.
  */
 export function useCloudAgentConnected(spec: CloudAgentProviderSpec | undefined): ConnectedCheck {
   const signIn = useSignInCheck(spec);
-  return useMemo<ConnectedCheck>(() => {
-    if (!spec) return NEVER;
-    const holds: ConnectedCheck = signIn ? (device) => signIn(device).connected : spec.keyProvider ? hasCloudAgentKey(spec.keyProvider) : NEVER;
-    return (device) => holds(device) && !cloudAgentBlockOf(spec, device);
-  }, [spec, signIn]);
+  return useMemo<ConnectedCheck>(() => spec ? (device) => connectedWith(spec, signIn, device) : NEVER, [spec, signIn]);
+}
+
+/** useCloudAgentConnected for whichever provider is asked about at the time (a surface choosing between lanes). */
+export function useCloudAgentConnectedTo(): (spec: CloudAgentProviderSpec, device: Device) => boolean {
+  const checks = useSignInChecks();
+  return useCallback((spec, device) => connectedWith(spec, checks[spec.id], device), [checks]);
 }
 
 /** When a machine's sign-in to the provider ran out, if it did (a key never runs out here). */

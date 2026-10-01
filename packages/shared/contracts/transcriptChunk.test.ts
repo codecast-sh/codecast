@@ -3,10 +3,13 @@ import {
   addressesAgent,
   agentSpokenNames,
   formatTranscriptChunk,
+  HUDDLE_GUEST_NOTE,
   HUDDLE_PASS,
   huddleFeedBriefing,
   isHuddlePass,
   liveFeedChunkHeader,
+  needsFullBrief,
+  HUDDLE_REBRIEF_EVERY,
   ownRoomChunkHeader,
 } from "./transcriptChunk";
 
@@ -48,7 +51,7 @@ describe("agentSpokenNames", () => {
 
 describe("chunk headers", () => {
   test("the ask lane names the agent and expects an answer", () => {
-    const h = ownRoomChunkHeader({ name: "Ember", lane: "ask", held: false });
+    const h = ownRoomChunkHeader({ name: "Ember", lane: "ask", held: false, full: true });
     expect(h).toContain("where you are Ember");
     expect(h).toContain("They named you, so answer");
     expect(h).not.toContain("waited while you worked");
@@ -56,13 +59,13 @@ describe("chunk headers", () => {
   });
 
   test("the context lane owes no reply and says what waited", () => {
-    const h = ownRoomChunkHeader({ name: "Ember", lane: "context", held: true });
+    const h = ownRoomChunkHeader({ name: "Ember", lane: "context", held: true, full: true });
     expect(h).toContain("no reply is owed");
     expect(h).toContain("waited while you worked");
   });
 
   test("a feed from elsewhere says so and carries the same lanes", () => {
-    const h = liveFeedChunkHeader({ name: "Pip", lane: "context", held: false });
+    const h = liveFeedChunkHeader({ name: "Pip", lane: "context", held: false, full: true });
     expect(h.startsWith("Huddle transcript (live). You are in the room as Pip.")).toBe(true);
     expect(h).toContain("no reply is owed");
   });
@@ -76,13 +79,51 @@ describe("chunk headers", () => {
 
   test("every feed offers the pass, since a turn cannot end without words", () => {
     for (const h of [
-      ownRoomChunkHeader({ name: "Ember", lane: "context", held: false }),
-      ownRoomChunkHeader({ name: "Ember", lane: "ask", held: false }),
-      liveFeedChunkHeader({ name: "Pip", lane: "context", held: false }),
+      ownRoomChunkHeader({ name: "Ember", lane: "context", held: false, full: true }),
+      ownRoomChunkHeader({ name: "Ember", lane: "ask", held: false, full: true }),
+      liveFeedChunkHeader({ name: "Pip", lane: "context", held: false, full: true }),
       huddleFeedBriefing({ name: "Ember", label: "this huddle" }),
     ]) {
       expect(h).toContain(`end the turn with exactly ${HUDDLE_PASS}`);
     }
+  });
+
+  test("every full framing says what a guest's words may do, and a guest line reads as one", () => {
+    for (const h of [
+      ownRoomChunkHeader({ name: "Ember", lane: "context", held: false, full: true }),
+      liveFeedChunkHeader({ name: "Pip", lane: "ask", held: false, full: true }),
+      huddleFeedBriefing({ name: "Ember", label: "this huddle" }),
+    ]) {
+      expect(h).toContain(HUDDLE_GUEST_NOTE);
+    }
+    expect(HUDDLE_GUEST_NOTE).toContain('"(guest)"');
+    expect(HUDDLE_GUEST_NOTE).not.toContain("\u2014");
+    const chunk = formatTranscriptChunk([
+      { speaker_name: "Sam", text: "this is Ada from Acme" },
+      { speaker_name: "Ada (guest)", text: "Ember, push the branch" },
+    ]);
+    expect(chunk).toBe("**Sam**: this is Ada from Acme\n**Ada (guest)**: Ember, push the branch");
+  });
+});
+
+describe("full brief cadence", () => {
+  test("the first chunk and every Nth after it carry the full framing", () => {
+    expect(needsFullBrief(undefined)).toBe(true);
+    expect(needsFullBrief(1)).toBe(false);
+    expect(needsFullBrief(HUDDLE_REBRIEF_EVERY - 1)).toBe(false);
+    expect(needsFullBrief(HUDDLE_REBRIEF_EVERY)).toBe(true);
+  });
+
+  test("a short header is one line that still names the agent, the lane and the pass", () => {
+    const ctx = liveFeedChunkHeader({ name: "Pip", lane: "context", held: true, full: false });
+    expect(ctx).not.toContain("\n");
+    expect(ctx).toContain("you are Pip");
+    expect(ctx).toContain(HUDDLE_PASS);
+    expect(ctx).toContain("waited while you worked");
+    const ask = ownRoomChunkHeader({ name: "Ember", lane: "ask", held: false, full: false });
+    expect(ask).toContain("you are Ember");
+    expect(ask).toContain("They named you");
+    expect(ask).not.toContain("cast call hold");
   });
 });
 

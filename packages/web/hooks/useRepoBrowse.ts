@@ -9,6 +9,8 @@ import { useWatchEffect } from "./useWatchEffect";
 import { pathSegments, type BlameSessionRef, type BlameSessionResolution, type RepoTreeEntry } from "../lib/repoView";
 import { publicRepoUrl, usePublicRepoRead, useRepoTransport } from "../lib/repoTransport";
 import { useQueryNoThrow } from "./useQueryNoThrow";
+import { useActiveWorkspaceKey } from "./useWorkspaceCollection";
+import { filterByWorkspace } from "../lib/workspaceScope";
 import { WORKTREES_KIND, type WorktreesPayload } from "@codecast/shared/contracts";
 
 // `api` is a proxy, so naming a function prod has not deployed yet still
@@ -437,14 +439,27 @@ export function useRepoLog(
 export type RepositoryRow = { repository: string; team_id: string; installed: boolean };
 
 /** The team whose App installation covers a repository: the roster a
- *  comment on its code can name. Undefined until the list is known. */
+ *  comment on its code can name. Undefined until the list is known. Any of
+ *  the viewer's teams answers, the one being looked at first. */
 export function useRepositoryTeamId(repository: string | undefined): string | undefined {
-  const { rows } = useRepositories();
+  const { rows } = useAllRepositories();
+  const key = useActiveWorkspaceKey();
   const wanted = (repository ?? "").toLowerCase();
-  return rows.find((r) => r.repository.toLowerCase() === wanted)?.team_id;
+  const matches = rows.filter((r) => r.repository.toLowerCase() === wanted);
+  return (filterByWorkspace(matches, key)[0] ?? matches[0])?.team_id;
 }
 
+/** The repositories of the workspace being looked at: one row per repository
+ *  its team reaches. Another team's repositories belong to that team's view. */
 export function useRepositories(): { rows: RepositoryRow[]; ready: boolean; error: Error | undefined } {
+  const all = useAllRepositories();
+  const key = useActiveWorkspaceKey();
+  const rows = useMemo(() => filterByWorkspace(all.rows, key), [all.rows, key]);
+  return { ...all, rows };
+}
+
+/** Every repository the viewer may browse, in any of their teams. */
+function useAllRepositories(): { rows: RepositoryRow[]; ready: boolean; error: Error | undefined } {
   const scope = useRepoViewerScope();
   const key = repoBrowseKey(scope, "repositories", {});
   const select = useCallback((value: unknown) => !key || !scope ? [] : retainRepoBrowseRows(useInboxStore.getState().repoBrowse,

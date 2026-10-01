@@ -28,9 +28,9 @@ export type SeoEntry = {
 
 export const SITE_URL = "https://codecast.sh";
 
-export const DEFAULT_TITLE = "Codecast — watch, steer, and search every agent session";
+export const DEFAULT_TITLE = "Codecast: the workspace for teams and their AI coding agents";
 export const DEFAULT_DESCRIPTION =
-  "Codecast gives your team one place to watch, steer, search, and remember every AI agent session — Claude Code, Codex, Gemini, Cursor — on any machine.";
+  "Chat, calls, tasks, docs, pull requests and decisions, with Claude Code, Codex, Cursor and Gemini working as teammates in every one, and everything linked back to the session that did it.";
 
 const STATIC_ENTRIES: SeoEntry[] = [
   {

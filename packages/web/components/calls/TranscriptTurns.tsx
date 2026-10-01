@@ -7,8 +7,10 @@ import { useState } from "react";
 import { ChevronDown, ChevronRight, ExternalLink } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
-import { firstName, fmtClock, speakerColor } from "./speakers";
-import { groupTurns, type Turn } from "./transcriptTurnModel";
+import { firstName, fmtClock, speakerColor, speakerShortName } from "./speakers";
+import { GuestTag, isGuestParticipant } from "./GuestTag";
+import { groupTurns, turnsAnchor, type Turn } from "./transcriptTurnModel";
+import { CallLinkButton } from "./CallLinkButton";
 
 // The turn list itself. Selection is the calls page's concern: pass isSelected
 // and onTurnClick to get the clickable variant; leave them off for a read-only
@@ -19,6 +21,7 @@ export function TranscriptTurnList({
   onTurnClick,
   compact,
   activeIndex,
+  callId,
 }: {
   turns: Turn[];
   isSelected?: (index: number) => boolean;
@@ -27,8 +30,16 @@ export function TranscriptTurnList({
   compact?: boolean;
   /** The line the audio is currently in, if any. */
   activeIndex?: number | null;
+  /** The call these turns belong to: each turn offers a link to itself. */
+  callId?: string;
 }) {
   const selectable = !!onTurnClick;
+  const link = (t: Turn) => {
+    const anchor = callId ? turnsAnchor([t]) : null;
+    return anchor ? (
+      <CallLinkButton callId={callId!} anchor={anchor} title="Copy a link to this turn" className="ml-1 align-middle" />
+    ) : null;
+  };
   return (
     <>
       {turns.map((t) => {
@@ -45,7 +56,7 @@ export function TranscriptTurnList({
                 "aria-pressed": selected,
                 "aria-label": compact
                   ? `Line at ${fmtClock(t.t0)}`
-                  : `Turn by ${firstName(t.speaker_name)} at ${fmtClock(t.t0)}`,
+                  : `Turn by ${speakerShortName(t.speaker_name)} at ${fmtClock(t.t0)}`,
                 onClick: (e: React.MouseEvent) => onTurnClick(t.index, e),
                 onKeyDown: (e: React.KeyboardEvent) => {
                   if (e.key === "Enter" || e.key === " ") {
@@ -55,7 +66,7 @@ export function TranscriptTurnList({
                 },
               }
             : {})}
-          className={`-mx-2 rounded-md px-2 py-1 ${
+          className={`group -mx-2 rounded-md px-2 py-1 ${
             selectable ? "cursor-pointer transition-colors " : ""
           }${
             selected
@@ -72,19 +83,22 @@ export function TranscriptTurnList({
               <span className="w-10 shrink-0 pt-0.5 font-mono text-[11px] tabular-nums text-sol-text-dim">
                 {fmtClock(t.t0)}
               </span>
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 {t.segments.map((s) => (
                   <p key={s.seq} className="text-[13px] leading-relaxed text-sol-text">
                     {s.text}
                   </p>
                 ))}
               </div>
+              {link(t)}
             </div>
           ) : (
             <>
               <div className={`text-[11px] font-medium ${speakerColor(t.speaker_id)}`}>
                 {firstName(t.speaker_name)}
+                {isGuestParticipant(t.speaker_id, t.speaker_name) && <GuestTag className="ml-1.5 align-[1px]" />}
                 <span className="ml-2 font-normal text-sol-text-dim">{fmtClock(t.t0)}</span>
+                {link(t)}
               </div>
               {t.segments.map((s) => (
                 <p key={s.seq} className="text-[13px] leading-relaxed text-sol-text">
@@ -148,7 +162,7 @@ export function CallTranscriptDisclosure({
           ) : turns.length === 0 ? (
             <div className="text-[12px] text-sol-text-dim">Nothing was transcribed.</div>
           ) : (
-            <TranscriptTurnList turns={turns} />
+            <TranscriptTurnList turns={turns} callId={transcriptId} />
           )}
         </div>
       )}

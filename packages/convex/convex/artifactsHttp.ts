@@ -25,7 +25,7 @@ import {
   editorPage,
 } from "./artifactPages";
 import { renderMarkdownDocument, restyleMarkdownDocument } from "./artifactMarkdown";
-import { presignUrl } from "./lib/awsSigV4";
+import { mediaBucketFromEnv, r2Presign } from "./lib/r2";
 import { CAST_PLAYER_JS } from "./lib/castPlayer";
 import { pageUsesPlayer } from "@codecast/shared/contracts";
 import { sha256Hex, passwordHash, kTokenFor, eTokenFor } from "./lib/artifactGates";
@@ -244,15 +244,9 @@ export const MEDIA_POINTER_TYPE = "application/vnd.cast.media+json";
 const MEDIA_EXT = /^(mp4|webm|mov|m4v|mp3|m4a|ogg|wav)$/;
 const MEDIA_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 
-function mediaConfig() {
-  const endpoint = process.env.R2_ENDPOINT, accessKeyId = process.env.R2_ACCESS_KEY_ID, secretAccessKey = process.env.R2_SECRET_ACCESS_KEY;
-  if (!endpoint || !accessKeyId || !secretAccessKey) return null;
-  return { endpoint, accessKeyId, secretAccessKey, bucket: process.env.R2_BUCKET || "codecast-media", publicBase: (process.env.MEDIA_PUBLIC_BASE || "https://media.codecast.sh").replace(/\/$/, "") };
-}
-
 /** A media URL this deployment minted (so a pointer can never redirect elsewhere). */
 function isOwnMediaUrl(url: unknown): url is string {
-  const cfg = mediaConfig();
+  const cfg = mediaBucketFromEnv();
   if (typeof url !== "string" || !cfg) return false;
   const prefix = `${cfg.publicBase}/media/`;
   return url.startsWith(prefix) && /^[a-f0-9]{64}\.[a-z0-9]{2,4}$/.test(url.slice(prefix.length));
@@ -266,11 +260,10 @@ export const mediaSign = httpAction(async (ctx, request) => {
     if (typeof sha256 !== "string" || !/^[a-f0-9]{64}$/.test(sha256)) return json({ error: "Bad sha256" }, 400);
     if (typeof ext !== "string" || !MEDIA_EXT.test(ext)) return json({ error: `Unsupported media type .${ext}` }, 400);
     if (typeof size !== "number" || size <= 0 || size > MEDIA_MAX_BYTES) return json({ error: "Media files must be under 2GB" }, 413);
-    const cfg = mediaConfig();
+    const cfg = mediaBucketFromEnv();
     if (!cfg) return json({ error: "Media hosting is not configured on this server" }, 501);
     const key = `media/${sha256}.${ext}`;
-    const sign = (method: string, expiresSeconds: number) =>
-      presignUrl({ method, endpoint: cfg.endpoint, path: `/${cfg.bucket}/${key}`, region: "auto", service: "s3", accessKeyId: cfg.accessKeyId, secretAccessKey: cfg.secretAccessKey, expiresSeconds });
+    const sign = (method: "HEAD" | "PUT", expiresSeconds: number) => r2Presign(cfg, method, key, expiresSeconds);
     const url = `${cfg.publicBase}/${key}`;
     // Same bytes already stored: nothing to upload.
     const head = await fetch(await sign("HEAD", 60), { method: "HEAD" });
@@ -1164,6 +1157,9 @@ export const serve = httpAction(async (ctx, request) => {
     html = injectBase(html, doc.version < artifact.version ? `_v/${doc.version}/` : "./");
   }
   html = injectPlayer(html, apiBase);
+  // A card's live thumbnail: the page alone. No bar means no view beacon and
+  // no comment polling, so a gallery of previews counts nothing as a view.
+  if (q.get("preview") === "1") return htmlResponse(html, 200, cachePolicy(artifact));
   // Bake the validated gate tokens into the meta URL so the bar's polling
   // clears the same gates the document did.
   const metaTokens = `${kToken ? `&k=${kToken}` : ""}${artifact.email_gate && q.get("e") ? `&e=${q.get("e")}` : ""}`;

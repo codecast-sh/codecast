@@ -31,6 +31,8 @@ import { assignCategory, isHumanOnlyCategory } from "./lib/decisionCategory";
 import { artifactUrl } from "./artifacts";
 import { listSessionOwnerIds } from "./sessionOwners";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
+import { resolveAskedPeople } from "./lib/decisionAudience";
+import { validateChangeCard, type ChangeCard } from "@codecast/shared/contracts/changeCard";
 
 export const optionValidator = v.object({
   label: v.string(),
@@ -708,6 +710,8 @@ export type AskArgs = {
   options: Array<{ label: string; description?: string; body_md?: string; evidence?: { label: string; url: string }[]; cost?: string; risk?: string; page_slug?: string }>;
   context_md?: string;
   report_slug?: string;
+  /** A change card (LE10) the decision is about; rendered natively by the web. */
+  card?: ChangeCard;
   blocking?: boolean;
   /** A pointer card: answering resolves it and delivers nothing into the
    *  asking session (a staffing proposal's queue card, org-staffing.md S4). */
@@ -725,6 +729,10 @@ export type AskArgs = {
   // failure gates; finalizeAnswer resumes the run.
   workflow_run_id?: Id<"workflow_runs">;
   gate_node_id?: string;
+  /** Who answers, named: a person's name, email or id in the session's
+   *  workspace (`cast decide --to`, the morning agenda of org-staffing.md
+   *  S31). The card goes to those people alone; no role hears it. */
+  to?: string[];
 };
 
 // An option's page (the-line.md L6) must be a published page: a mistyped
@@ -739,8 +747,18 @@ async function missingOptionPage(ctx: Ctx, options: Array<{ page_slug?: string }
   return null;
 }
 
-function validateShape(kind: DecisionKind, args: { question: string; options: any[]; default_option?: number; form?: any }): string | null {
+// A card is held to the same contract `cast card build` checks, so a
+// decision never carries one the web cannot draw.
+function invalidCard(card: unknown): string | null {
+  if (card === undefined) return null;
+  const checked = validateChangeCard(card);
+  return checked.ok ? null : `Invalid change card: ${checked.errors.slice(0, 5).join("; ")}`;
+}
+
+function validateShape(kind: DecisionKind, args: { question: string; options: any[]; default_option?: number; form?: any; card?: unknown }): string | null {
   if (args.question.trim().length === 0) return "Empty question";
+  const cardError = invalidCard(args.card);
+  if (cardError) return cardError;
   if (kind === "form") {
     if (!args.form || args.form.fields.length === 0) return "A form decision needs at least one field";
     const keys = args.form.fields.map((f: any) => f.key);
@@ -830,7 +848,14 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
 
   const existing = openRows.find((r) => r.question === args.question);
   const docId = args.doc_md ? await upsertDecisionDoc(ctx, conversation, args.question, args.doc_md, now, existing?.doc_id) : undefined;
-  const { role, ladder, people, hears } = await routeFor(ctx, conversation, now);
+  const routed = await routeFor(ctx, conversation, now);
+  const addressed = args.to?.length ? await resolveAskedPeople(ctx, conversation, args.to) : null;
+  if (addressed && "error" in addressed) return addressed;
+  // An addressed card (--to) is the named people's alone: the ladder does not
+  // hear it and nobody else is asked.
+  const { role, ladder, people, hears } = addressed
+    ? { ...routed, ladder: { ...routed.ladder, activeRoles: [], hops: [] }, people: addressed.people, hears: null }
+    : routed;
   if (existing) {
     // The re-ask lands on the open row: text, category and task move with it,
     // a --stack appends it (once), and the holder is recomputed because the
@@ -840,6 +865,7 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
       options: args.options,
       context_md: args.context_md,
       report_slug: args.report_slug,
+      card: args.card,
       blocking: args.blocking ?? true,
       default_option: args.default_option,
       kind,
@@ -892,6 +918,7 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
     options: args.options,
     form: args.form,
     report_slug: args.report_slug,
+    card: args.card,
     blocking: args.blocking ?? true,
     silent: args.silent || undefined,
     default_option: args.default_option,
@@ -942,6 +969,7 @@ export const ask = mutation({
     options: v.array(optionValidator),
     context_md: v.optional(v.string()),
     report_slug: v.optional(v.string()),
+    card: v.optional(v.any()),
     blocking: v.optional(v.boolean()),
     default_option: v.optional(v.number()),
     kind: v.optional(kindValidator),
@@ -954,6 +982,7 @@ export const ask = mutation({
     // the-line.md L4: the runner's failure gates bind their decision to the run.
     workflow_run_id: v.optional(v.id("workflow_runs")),
     gate_node_id: v.optional(v.string()),
+    to: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -1006,6 +1035,7 @@ export const edit = mutation({
     options: v.optional(v.array(optionValidator)),
     context_md: v.optional(v.string()),
     report_slug: v.optional(v.string()),
+    card: v.optional(v.any()),
     blocking: v.optional(v.boolean()),
     default_option: v.optional(v.number()),
     // true clears the default (an advisory ask becoming a blocking one).
@@ -1038,7 +1068,7 @@ export const edit = mutation({
     const kind = (args.kind ?? row.kind ?? "single") as DecisionKind;
     const form = args.form ?? row.form;
     let defaultOption = args.clear_default ? undefined : args.default_option ?? row.default_option;
-    const shapeError = validateShape(kind, { question, options, default_option: defaultOption, form }) ?? (await missingOptionPage(ctx, options));
+    const shapeError = validateShape(kind, { question, options, default_option: defaultOption, form, card: args.card }) ?? (await missingOptionPage(ctx, options));
     if (shapeError) return { error: shapeError };
     // A blocking ask has no default; an advisory one needs one.
     if (blocking) defaultOption = undefined;
@@ -1061,6 +1091,7 @@ export const edit = mutation({
       options,
       context_md: args.context_md ?? row.context_md,
       report_slug: args.report_slug ?? row.report_slug,
+      card: args.card ?? row.card,
       blocking,
       default_option: defaultOption,
       kind,
@@ -1655,6 +1686,7 @@ function answerBubbleShape(row: Doc<"session_decisions">) {
     options: row.options,
     form: row.form,
     report_slug: row.report_slug,
+    card: row.card,
     doc_id: row.doc_id,
     blocking: row.blocking,
     default_option: row.default_option,

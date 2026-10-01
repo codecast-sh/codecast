@@ -1,4 +1,4 @@
-import os from "node:os";
+import { machineLoadFactor } from "./machineLoad.js";
 
 // A timer probe that reports the longest stretch the event loop was held
 // while an async job ran. A timer that fires late by more than its interval
@@ -35,7 +35,7 @@ export const LOOP_HOLD_SLO_MS = 1_000;
  *  the queue and stops at the SLO, so a loaded laptop still proves the work
  *  never held the loop past what the daemon promises. */
 export function loopHoldBoundMs(baseMs: number): number {
-  const perCpu = os.loadavg()[0] / Math.max(1, os.cpus().length);
-  if (perCpu <= 2) return baseMs;
-  return Math.min(LOOP_HOLD_SLO_MS, Math.round(baseMs * perCpu));
+  const factor = machineLoadFactor();
+  if (factor === 1) return baseMs;
+  return Math.min(LOOP_HOLD_SLO_MS, Math.round(baseMs * factor));
 }

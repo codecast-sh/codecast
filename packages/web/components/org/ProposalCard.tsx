@@ -1,6 +1,6 @@
 "use client";
 // The body of a proposal card in a conversation (docs/architecture/org-staffing.md
-// S24): the chief of staff writes `op-N` on its own line and the message draws
+// S24): the head of people writes `op-N` on its own line and the message draws
 // the proposal live — its changes as a small tree in the chart's own faces and
 // ghost chrome, their status, and Accept, Skip and Ask. The frame is the
 // shared object card (EntityObjectCard); these are the pieces it composes.

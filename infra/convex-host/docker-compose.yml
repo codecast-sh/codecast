@@ -16,12 +16,14 @@ services:
   backend:
     image: ghcr.io/get-convex/convex-backend@sha256:69885bae73766f625404a5425b22702341e89b43002f1d700864f8364be0d1f8
     restart: unless-stopped
-    # 64 GB of a 247 GB box (see README.md). Postgres gets its own budget; the
-    # OS keeps the rest for page cache. Raise only after measuring growth on
-    # this hardware — more headroom does not fix the growth, it only lengthens
-    # the cycle. The 2026-09-22 resize tripled the spare RAM, so raising this
-    # is now cheap if the heap question (ct-52939) needs it.
-    mem_limit: 64g
+    # 128 GB of a 247 GB box (see README.md). Postgres gets its own budget; the
+    # OS keeps the rest for page cache. Raised from 64 GB on 2026-10-01, live
+    # with `docker update` and no restart, after the container reached the
+    # limit 2,613 times in a day: heap 41 GB growing 2.5 GB a day plus 26 GB
+    # of file cache. More headroom does not fix the growth, it only lengthens
+    # the cycle (ct-52939). A live `docker update` does not survive a
+    # recreate, so this line must match the running value.
+    mem_limit: 128g
     env_file: [.env]
     networks: [codecast]
     volumes:

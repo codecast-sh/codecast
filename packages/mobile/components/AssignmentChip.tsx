@@ -13,7 +13,7 @@ import { Image,
   View,
 } from 'react-native';
 import { Text, TextInput } from '@/components/Themed';
-import { useMutation, useQuery } from 'convex/react';
+import { useQuery } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
@@ -23,6 +23,7 @@ import { useOwners, useOwnerCandidates, pickRoster, type OwnersApi } from '@code
 import { useStoreOwnersEnv, useSessionRoleFacts } from '@codecast/web/hooks/useOwnersStoreEnv';
 import { useSyncOrgTreeFeeder } from '@codecast/web/hooks/useSyncOrgTree';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
+import { requestSessionMove } from '@codecast/web/lib/sessionCommands';
 import { Theme, Spacing, chipText, CHROME_FONT_CAP, CHIP_HEIGHT, themedStyles, useTheme } from '@/constants/Theme';
 import {
   useDevices,
@@ -32,6 +33,7 @@ import {
   relativeSeen,
   type Device,
 } from './DevicesSection';
+import { isPerson } from '@codecast/shared/team/memberKind';
 
 /**
  * The unified assignment control for a session — mobile twin of the web's
@@ -82,8 +84,6 @@ export function AssignmentChip({
   const [sheetVisible, setSheetVisible] = useState(false);
   const insets = useSafeAreaInsets();
   const { devices, byId, loaded } = useDevices();
-  const reassign = useMutation(api.devices.reassignToDevice);
-  const moveToRemote = useMutation(api.devices.moveToRemote);
 
   // Mobile doesn't hydrate the shared store's roster — query it per screen,
   // like the settings screen does, and inject it into the shared owners hook.
@@ -112,32 +112,19 @@ export function AssignmentChip({
     [devices],
   );
 
+  // The shared store's move action: it paints the move's sessionCommands row
+  // (the header reads it) and dispatches it; a refusal comes back here.
   const moveTo = useCallback(
     (target: Device) => {
       if (!conversationId) return;
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       setSheetVisible(false);
       const name = deviceDisplayName(target);
-      const fail = (e: unknown) => showToast(e instanceof Error ? e.message : String(e));
-      if (target.is_remote) {
-        moveToRemote({
-          conversation_id: conversationId as Id<'conversations'>,
-          to_device_id: target.device_id,
-        })
-          .then(() => showToast(`Moving to ${name} — transferring the worktree…`))
-          .catch(fail);
-      } else {
-        // Ownership flips immediately; the header chip updates live. A session
-        // run by a teammate takes the cross-user pull path server-side.
-        reassign({
-          conversation_id: conversationId as Id<'conversations'>,
-          device_id: target.device_id,
-        })
-          .then(() => showToast(`Now running on ${name}`))
-          .catch(fail);
-      }
+      showToast(target.is_remote ? `Moving to ${name} — transferring the worktree…` : `Moving to ${name}…`);
+      requestSessionMove(conversationId, { device_id: target.device_id, is_remote: target.is_remote, label: name })
+        .catch((e: unknown) => showToast(e instanceof Error ? e.message : String(e)));
     },
-    [conversationId, moveToRemote, reassign, showToast],
+    [conversationId, showToast],
   );
 
   if (!conversationId) return null;
@@ -281,7 +268,7 @@ function OwnerSheetRows({
   const Theme = useTheme();
   const { ownerIds, ownerList, toggle, moveToRole, clearAll, currentUser } = owners;
   const serverRoster = useOwnerCandidates(conversationId, currentUser);
-  const selectable = pickRoster(serverRoster, owners.selectable).filter((m: any) => m && !m.is_bot);
+  const selectable = pickRoster(serverRoster, owners.selectable).filter(isPerson);
   const { liveRoles, orgRoleId, currentRole, isStandingThread } = useSessionRoleFacts(conversationId);
   const [rolesOpen, setRolesOpen] = useState(false);
   // Optional note, sent along with the NEXT assignment made from this sheet.
@@ -330,7 +317,7 @@ function OwnerSheetRows({
       )}
 
       <Text style={styles.sectionLabel}>Owners · whose inbox</Text>
-      {currentUser && !currentUser.is_bot && !ownerIds.has(currentUser._id) && (
+      {isPerson(currentUser) && !ownerIds.has(currentUser._id) && (
         <TouchableOpacity style={styles.row} activeOpacity={0.6} onPress={() => { tap(); onDone(); void toggle(currentUser._id); }}>
           <FontAwesome name="user-plus" size={13} color={Theme.cyan} style={{ width: 20 }} />
           <View style={{ flex: 1, minWidth: 0 }}>

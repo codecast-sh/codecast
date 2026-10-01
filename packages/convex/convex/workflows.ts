@@ -28,6 +28,7 @@ const nodeV = v.object({
   temperature: v.optional(v.number()),
   doc: v.optional(v.string()),
   category: v.optional(v.string()),
+  card: v.optional(v.string()),
 });
 
 const edgeV = v.object({

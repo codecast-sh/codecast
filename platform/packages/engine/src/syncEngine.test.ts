@@ -259,3 +259,91 @@ describe("rekeyPending", () => {
     expect(pending["items:keep:title"]).toBeDefined();
   });
 });
+
+describe("local-first list and singleton locks", () => {
+  const cfg = () => makeConfig({ teams: { kind: "list" }, me: { kind: "singleton" } });
+
+  it("holds a list row's locked field over a stale push and retires it on the echo", () => {
+    const engine = createSyncEngine(cfg());
+    const draft = draftOf({
+      teams: [{ _id: "t1", vis: "hidden" }, { _id: "t2", vis: "full" }],
+      pending: { "teams:t1:vis": { type: "field", value: "hidden", ts: 1 } },
+    });
+    engine.syncTable(draft, "teams", [{ _id: "t1", vis: "full" }, { _id: "t2", vis: "full" }]);
+    expect(draft.teams[0].vis).toBe("hidden");
+    expect(draft.pending["teams:t1:vis"]).toBeDefined();
+    engine.syncTable(draft, "teams", [{ _id: "t1", vis: "hidden" }, { _id: "t2", vis: "full" }]);
+    expect(draft.pending["teams:t1:vis"]).toBeUndefined();
+    engine.syncTable(draft, "teams", [{ _id: "t1", vis: "full" }, { _id: "t2", vis: "full" }]);
+    expect(draft.teams[0].vis).toBe("full");
+  });
+
+  it("holds a singleton's locked field, and an identical echo still retires the lock", () => {
+    const engine = createSyncEngine(cfg());
+    const draft = draftOf({
+      me: { _id: "u", status: "away", name: "A" },
+      pending: { "me::status": { type: "field", value: "away", ts: 1 } },
+    });
+    engine.syncTable(draft, "me", { _id: "u", status: "online", name: "B" });
+    expect(draft.me).toEqual({ _id: "u", status: "away", name: "B" });
+    // The server now agrees and the push is identical to what is on screen.
+    engine.syncTable(draft, "me", { _id: "u", status: "away", name: "B" });
+    expect(draft.pending["me::status"]).toBeUndefined();
+    engine.syncTable(draft, "me", { _id: "u", status: "online", name: "B" });
+    expect(draft.me.status).toBe("online");
+  });
+});
+
+describe("local-first list membership", () => {
+  const cfg = () => makeConfig({ marks: { kind: "list", rowKey: "message_id" } });
+
+  it("keeps an added row at its local position until the server lists it", () => {
+    const engine = createSyncEngine(cfg());
+    const added = { _id: "temp_m2", message_id: "m2" };
+    const draft = draftOf({
+      marks: [added, { _id: "s1", message_id: "m1" }],
+      pending: { "marks:m2": { type: "include", ts: 1 } },
+    });
+    engine.syncTable(draft, "marks", [{ _id: "s1", message_id: "m1" }]);
+    expect(draft.marks.map((r: any) => r.message_id)).toEqual(["m2", "m1"]);
+    engine.syncTable(draft, "marks", [{ _id: "s2", message_id: "m2" }, { _id: "s1", message_id: "m1" }]);
+    expect(draft.pending["marks:m2"]).toBeUndefined();
+    expect(draft.marks[0]._id).toBe("s2");
+  });
+
+  it("keeps a removed row out until the server drops it", () => {
+    const engine = createSyncEngine(cfg());
+    const draft = draftOf({
+      marks: [{ _id: "s1", message_id: "m1" }],
+      pending: { "marks:m2": { type: "exclude", ts: 1 } },
+    });
+    engine.syncTable(draft, "marks", [{ _id: "s2", message_id: "m2" }, { _id: "s1", message_id: "m1" }]);
+    expect(draft.marks.map((r: any) => r.message_id)).toEqual(["m1"]);
+    engine.syncTable(draft, "marks", [{ _id: "s1", message_id: "m1" }]);
+    expect(draft.pending["marks:m2"]).toBeUndefined();
+  });
+});
+
+describe("list membership defers to the screen and to altKey", () => {
+  it("retires an include once the server lists the stub's copy by altKey", () => {
+    const engine = createSyncEngine(makeConfig({ teams: { kind: "list", altKey: "client_key" } }));
+    const draft = draftOf({
+      teams: [{ _id: "stub-1", name: "New" }],
+      pending: { "teams:stub-1": { type: "include", ts: 1 } },
+    });
+    engine.syncTable(draft, "teams", [{ _id: "real", client_key: "stub-1", name: "New" }]);
+    expect(draft.teams.map((t: any) => t._id)).toEqual(["real"]);
+    expect(draft.pending["teams:stub-1"]).toBeUndefined();
+  });
+
+  it("retires an include whose row a local sync removed, so no ghost comes back", () => {
+    const engine = createSyncEngine(makeConfig({ teams: { kind: "list" } }));
+    const draft = draftOf({
+      teams: [{ _id: "a" }],
+      pending: { "teams:stub-1": { type: "include", ts: 1 } },
+    });
+    engine.syncTable(draft, "teams", [{ _id: "a" }]);
+    expect(draft.teams.map((t: any) => t._id)).toEqual(["a"]);
+    expect(draft.pending["teams:stub-1"]).toBeUndefined();
+  });
+});

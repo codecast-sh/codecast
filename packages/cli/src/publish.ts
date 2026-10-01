@@ -196,7 +196,7 @@ export function describeEvidence(evidence?: { task?: string | null; plan?: strin
   return `attached to ${target}${evidence.task && evidence.station ? ` at ${evidence.station}` : ""}`;
 }
 
-function printPublishResult(
+export function printPublishResult(
   result: { url: string; version: number; updated?: boolean; unchanged?: boolean; manage_url?: string; edit_url?: string | null; evidence?: { task?: string | null; plan?: string | null; station?: string | null } },
   title: string,
   access?: Record<string, unknown>,
@@ -586,7 +586,7 @@ export async function uploadMedia(deps: PublishDeps, payload: PublishPayload): P
   }
 }
 
-async function publishOnce(
+export async function publishOnce(
   deps: PublishDeps,
   absPath: string,
   options: PublishOptions,

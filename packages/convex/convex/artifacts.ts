@@ -49,21 +49,10 @@ export const MAX_COMMENTS_PER_MINUTE = 12;
 export const MAX_VIEWS_PER_MINUTE = 120;
 export const MAX_COMMENT_CHARS = 2000;
 
-const SLUG_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-const SLUG_LENGTH = 12; // ~71 bits of entropy — the slug IS the access gate.
-
-export function newSlug(length = SLUG_LENGTH): string {
-  const bytes = new Uint8Array(length);
-  crypto.getRandomValues(bytes);
-  let slug = "";
-  for (const b of bytes) slug += SLUG_ALPHABET[b % SLUG_ALPHABET.length];
-  return slug;
-}
-
-/** owner_key / edit_key: same shape as slugs, longer. */
-export function newSecret(): string {
-  return newSlug(20);
-}
+// Slugs and keys come from a leaf module so other features (guest call
+// links) mint unguessable strings the same way without loading this graph.
+import { newSecret, newSlug } from "./lib/slug";
+export { newSecret, newSlug };
 
 export function artifactUrl(slug: string): string {
   return `${siteUrl()}/a/${slug}`;
@@ -1577,6 +1566,8 @@ export const listForWeb = query({
       .query("artifacts")
       .withIndex("by_user", (q) => q.eq("user_id", userId))
       .collect();
+    const viewer = await ctx.db.get(userId);
+    const me = { name: viewer?.name ?? null, image: viewer?.image ?? null };
 
     // Teammates' artifacts: visible in the gallery, but WITHOUT the secrets —
     // manage/edit keys belong to the owner alone. Team edit rights flow
@@ -1620,7 +1611,7 @@ export const listForWeb = query({
     };
 
     const out = [];
-    for (const row of mine) out.push(await shape(row, true));
+    for (const row of mine) out.push(await shape(row, true, me));
     for (const { row, author } of team) out.push(await shape(row, false, author));
     out.sort((a, b) => b.updated_at - a.updated_at);
     return { artifacts: out };

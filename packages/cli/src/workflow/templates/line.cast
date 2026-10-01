@@ -11,6 +11,10 @@
 // handoff: blocked, needs_context, or no handoff at all stops the run and the
 // task stays where the hand left it, with a decision to the run's owner. $worktree and $branch are
 // set when the isolated node spawns (line-<task id>, codecast/line-<task id>).
+// merge (L12) runs after an approving review: `cast line merge` asks the
+// server whether the role's line may merge (its switch, its merge authority,
+// today's count) and lands the branch when checks pass, else says in one
+// line why the merge is left to a person. It never fails the run.
 digraph line {
   graph [goal="$task_title"]
   rankdir=LR
@@ -31,12 +35,17 @@ digraph line {
   review [label="Review", backend=session, agent=claude, reviewer=true,
     prompt="You are the independent reviewer for task $task_id: $task_title\n\nBranch: $branch (check it out, or read `git diff $default_branch...$branch`).\n\nAcceptance criteria:\n- $acceptance_criteria\n\nYou receive only the branch, the title and the criteria. Check each criterion against the diff and by running what you can. Do not fix the code yourself.\n\nEnd your turn with one verdict and the unmet criteria in the note:\n\n  cast task verdict $task_id approve|changes|reject --note -\n\napprove closes the task; changes sends it back to the implementer; reject reopens it as blocked for a person to decide."]
 
+  merge [label="Merge", shape=parallelogram,
+    timeout=600,
+    script="cast line merge --run $run_id --branch $branch --into $default_branch --cwd $project_path"]
+
   start -> analyze
   analyze -> implement
   implement -> verify [condition="handoff = done"]
   verify -> review    [condition="outcome = success"]
   verify -> implement [condition="outcome = failure", label="checks failed"]
-  review -> exit      [condition="review_verdict = approve"]
+  review -> merge     [condition="review_verdict = approve"]
   review -> implement [condition="review_verdict = changes", label="changes"]
   review -> exit      [condition="review_verdict = reject"]
+  merge -> exit
 }

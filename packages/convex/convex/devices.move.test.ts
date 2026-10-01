@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { performMoveSessionToDevice, moveToRemote } from "./devices";
+import { performMoveSessionToDevice, moveToRemote, reassignToDevice } from "./devices";
+import { forConversation, results } from "./sessionCommands";
 import { MACHINE_SWITCH_NOTICE_PREFIX } from "@codecast/shared/contracts";
 
 // The CLI transfer flip (`cast remote move` / `back`). The files are already on
@@ -142,5 +143,36 @@ describe("performMoveSessionToDevice", () => {
         project_path: "/home/ubuntu/work/repo",
       }),
     ).rejects.toThrow("not your conversation");
+  });
+});
+
+// The web's move is a store action keyed by a request id: the id rides the
+// command whose outcome IS the move, a replay of the same dispatch queues
+// nothing, and both store feeds hand back the row under that id.
+describe("device moves from the store carry the request id", () => {
+  const authAs: any = { getUserIdentity: async () => ({ subject: `${ME}|sess`, tokenIdentifier: "x" }) };
+  const run = (fn: any, db: any, args: any) => (fn._handler ?? fn.handler)({ db, auth: authAs }, args);
+
+  test("a remote move binds the source's move_to_device, once", async () => {
+    const db = fixtures();
+    const first = await run(moveToRemote, db, { conversation_id: "conv1", to_device_id: BOX, request_id: "move-1" });
+    const again = await run(moveToRemote, db, { conversation_id: "conv1", to_device_id: BOX, request_id: "move-1" });
+    const moves = commands(db).filter((c: any) => c.command === "move_to_device");
+    expect(moves).toHaveLength(1);
+    expect(moves[0]).toMatchObject({ request_id: "move-1", target_device_id: LAPTOP });
+    expect(again.command_id).toBe(first.command_id);
+    const [row] = await (results as any)._handler({ db, auth: authAs }, { request_ids: ["move-1"] });
+    expect(row).toMatchObject({ _id: "move-1", conversation_id: "conv1", command: "move_to_device", device_id: LAPTOP, executed_at: null });
+  });
+
+  test("a local re-home binds the resume on the destination, and the conversation feed keys it the same", async () => {
+    const db = fixtures({ owner_device_id: BOX });
+    await run(reassignToDevice, db, { conversation_id: "conv1", device_id: LAPTOP, request_id: "move-2" });
+    await run(reassignToDevice, db, { conversation_id: "conv1", device_id: LAPTOP, request_id: "move-2" });
+    const resumes = commands(db).filter((c: any) => c.command === "resume_session");
+    expect(resumes).toHaveLength(1);
+    expect(resumes[0]).toMatchObject({ request_id: "move-2", target_device_id: LAPTOP });
+    const rows = await (forConversation as any)._handler({ db, auth: authAs }, { conversation_id: "conv1" });
+    expect(rows.map((r: any) => [r._id, r.command])).toContainEqual(["move-2", "resume_session"]);
   });
 });

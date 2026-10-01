@@ -15,6 +15,7 @@ import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { isConvexId } from "../../lib/entityLinks";
 import { excerptLabel } from "../../lib/calls/excerptLabel";
 import { fmtClock } from "../triggerCadence";
+import { isCallLive } from "../../lib/calls/callStatus";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -39,7 +40,7 @@ export function SessionCallPill({ conversationId }: { conversationId: string }) 
   const [latest] = calls;
   const face = (
     <>
-      <Phone className={`h-2.5 w-2.5 shrink-0 ${calls.some((c: any) => c.status === "live") ? "text-sol-green" : ""}`} />
+      <Phone className={`h-2.5 w-2.5 shrink-0 ${calls.some(isCallLive) ? "text-sol-green" : ""}`} />
       <span className="truncate">{callName(latest)}</span>
       {calls.length > 1 && <span className="shrink-0 text-sol-text-dim">+{calls.length - 1}</span>}
     </>
@@ -69,7 +70,7 @@ export function SessionCallPill({ conversationId }: { conversationId: string }) 
             {i > 0 && <DropdownMenuSeparator />}
             <DropdownMenuItem onSelect={() => router.push(callExcerptHref(String(c._id)))} className="flex-col items-start gap-0">
               <span className="flex w-full items-center gap-1.5 text-[12.5px] text-sol-text">
-                <Phone className={`h-3 w-3 shrink-0 ${c.status === "live" ? "text-sol-green" : "text-sol-text-dim"}`} />
+                <Phone className={`h-3 w-3 shrink-0 ${isCallLive(c) ? "text-sol-green" : "text-sol-text-dim"}`} />
                 <span className="truncate">{callName(c)}</span>
               </span>
               <span className="pl-[18px] text-[11px] text-sol-text-dim">

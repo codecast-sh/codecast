@@ -1,6 +1,7 @@
 import { execSync, execFileSync, spawnSync, execFileAsync } from "./proc.js";
+import { TOOL_PATH, installCommandFor, installHintFor } from "./toolInstall.js";
 
-const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
+const ENRICHED_PATH = TOOL_PATH;
 
 let _hasTmux: boolean | null = null;
 // A negative answer is re-checked, so an install after boot is noticed; a
@@ -193,34 +194,8 @@ export function resetTmuxCache(): void {
   _hasTmuxCheckedAt = 0;
 }
 
-function installCommand(): string | null {
-  if (process.platform === "darwin") {
-    try {
-      execSync("command -v brew", { stdio: "ignore", timeout: 2000 });
-      return "brew install tmux";
-    } catch {
-      return null;
-    }
-  }
-  if (process.platform === "linux") {
-    for (const [bin, cmd] of [
-      ["apt-get", "sudo apt-get install -y tmux"],
-      ["dnf", "sudo dnf install -y tmux"],
-      ["yum", "sudo yum install -y tmux"],
-      ["pacman", "sudo pacman -S --noconfirm tmux"],
-      ["apk", "sudo apk add tmux"],
-    ] as const) {
-      try {
-        execSync(`command -v ${bin}`, { stdio: "ignore", timeout: 2000 });
-        return cmd;
-      } catch {}
-    }
-  }
-  return null;
-}
-
 export function tryInstallTmux(): boolean {
-  const cmd = installCommand();
+  const cmd = installCommandFor("tmux");
   if (!cmd) return false;
 
   console.log(`Installing tmux: ${cmd}`);
@@ -245,14 +220,7 @@ export function ensureTmux(): boolean {
 
   console.log("tmux is required but not installed.");
 
-  const cmd = installCommand();
-  if (cmd) {
-    console.log(`Install it with: ${cmd}`);
-  } else if (process.platform === "darwin") {
-    console.log("Install Homebrew (https://brew.sh) then run: brew install tmux");
-  } else {
-    console.log("Install tmux using your system package manager.");
-  }
+  console.log(installHintFor("tmux"));
 
   return false;
 }

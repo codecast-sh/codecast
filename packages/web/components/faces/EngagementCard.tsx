@@ -60,13 +60,15 @@ function Line({
   stage,
   children,
   hearing,
+  title,
 }: {
   stage: string;
   children: React.ReactNode;
+  title?: string;
   hearing?: Extract<FaceCard, { kind: "live" }>["hearing"];
 }) {
   return (
-    <div className={`walkie-stage walkie-stage-${stage}`} role="status" aria-live="polite">
+    <div className={`walkie-stage walkie-stage-${stage}`} role="status" aria-live="polite" title={title}>
       <span className="walkie-stage-dot" aria-hidden="true" />
       <span className="engagement-card-words">
         {children}
@@ -96,12 +98,16 @@ function shortName(name: string): string {
 }
 
 /** The stage's own words: "Talking with Ann", "On the line · muted with Ann";
- *  a bare stage (open, incoming) names the person in its hint instead. */
+ *  a bare stage (open, incoming) names the person in its hint instead. On a
+ *  call the strip sits on the track beside the faces it is about, so it is
+ *  one word ("Live", "Talking"): the faces already say who, and the whole
+ *  sentence is the tooltip. */
 function Stage({
   words,
   name,
   hearing,
   muteButton = false,
+  onTrack = false,
 }: {
   words: { stage: string; badge: string; hint: string };
   name: string;
@@ -109,17 +115,20 @@ function Stage({
   /** A mute button beside the line already says "muted" in red: the badge
    *  does not say it twice, and the name keeps its room. */
   muteButton?: boolean;
+  /** Beside the faces on the call's track: the stage alone, no name. */
+  onTrack?: boolean;
 }) {
   const bare = words.stage === "open" || words.stage === "incoming";
-  const badge = muteButton ? sentence(words.badge).replace(/ · muted$/, "") : sentence(words.badge);
+  const said = muteButton ? sentence(words.badge).replace(/ · muted$/, "") : sentence(words.badge);
+  const badge = onTrack ? said.replace(/^On the line/, "Live") : said;
   return (
-    <Line stage={words.stage} hearing={hearing}>
+    <Line stage={words.stage} hearing={hearing} title={onTrack ? words.hint : undefined}>
       {bare ? (
         <span className="walkie-strip-hint">{words.stage === "incoming" ? `${shortName(name)} is talking to you` : words.hint}</span>
       ) : (
         <>
           <span className="walkie-stage-badge">{badge}</span>
-          <span className="walkie-stage-with">{` with ${shortName(name)}`}</span>
+          {!onTrack && <span className="walkie-stage-with">{` with ${shortName(name)}`}</span>}
         </>
       )}
     </Line>
@@ -228,7 +237,7 @@ export function EngagementCard({
         card.words ? edgeOf(card.words.stage) : "walkie-strip-live",
         <>
           {card.words ? (
-            <Stage words={card.words} name={card.title} hearing={card.hearing} muteButton={card.mute} />
+            <Stage words={card.words} name={card.title} hearing={card.hearing} muteButton={card.mute} onTrack />
           ) : (
             <Line stage="locked" hearing={card.hearing}>
               <span className="engagement-card-title">{shortName(card.title)}</span>
