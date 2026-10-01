@@ -6,6 +6,7 @@
 // typed may turn into a codecast mention of somebody they did not name.
 
 import { emojiToShortcode, replaceShortcodes, shortcodeToEmoji } from "@codecast/shared/chat";
+import { parseLinkPreviewUrl } from "@codecast/shared/entities";
 
 export { emojiToShortcode, replaceShortcodes, shortcodeToEmoji };
 
@@ -192,6 +193,18 @@ export type SlackOutboundResolver = {
 
 const HANDLE_RE = /(^|[^\w/])@([A-Za-z0-9][A-Za-z0-9_-]{0,38})\b/g;
 const ENTITY_ID_RE = /(^|[^\w-])((?:ct|pl|tr)-\d+)\b/g;
+
+/** Whether a message carries a web link standing alone on its line, the one
+ *  shape codecast draws as a preview card. Slack is asked to unfurl only
+ *  then, so the mirror shows the same preview and a line of object pills
+ *  (which travel as codecast.sh links) does not unfurl into a stack of cards. */
+export function hasStandalonePreviewLink(md: string): boolean {
+  return md.split("\n").some((line) => {
+    const t = line.trim();
+    const href = /^<?(https?:\/\/\S+?)>?$/.exec(t)?.[1] ?? /^\[[^\]]*\]\((https?:\/\/[^)\s]+)\)$/.exec(t)?.[1];
+    return !!parseLinkPreviewUrl(href);
+  });
+}
 
 /** Convert codecast markdown to Slack mrkdwn. */
 export function markdownToSlack(md: string, resolve: SlackOutboundResolver): string {

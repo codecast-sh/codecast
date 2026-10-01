@@ -15,12 +15,13 @@ import { TypingIndicator } from "@/components/chat/TypingIndicator";
 import { FaceCircle } from "@/components/calls/FaceCircle";
 import { buildPassages, type EventRow } from "@/components/calls/roomThreadModel";
 import { EventLine, PassageBlock, RecapCard } from "@/components/calls/RoomThreadRows";
+import { FeedCard } from "@/components/ActivityFeed";
 import { OrgGraph } from "@/components/org/OrgGraph";
 import { CursorArrow } from "@/components/presence/CursorArrow";
 import "@/components/calls/faces.css";
 import type { PartProps } from "./contract";
 import { fly } from "../filmClock";
-import { CHANNELS, CHAT_PEOPLE, HUDDLE, MESSAGES, ORG_ROLE, REACTIONS, TEAM, orgTree } from "../fixtures/team";
+import { CHANNELS, CHAT_PEOPLE, FEED, HUDDLE, MESSAGES, REACTIONS, TEAM, orgTree } from "../fixtures/team";
 import { PEOPLE, SESSIONS } from "../fixtures/story";
 import { useFilmTime } from "../filmClock";
 
@@ -28,7 +29,7 @@ const noop = () => {};
 const EMPTY = new Set<string>();
 const KNOWN = new Set([PEOPLE.me.handle, PEOPLE.sarah.handle, PEOPLE.maya.handle]);
 const SELF = new Set([PEOPLE.me.handle]);
-const NAMES = new Map([[PEOPLE.me.handle, "Ashot Petrosian"], [PEOPLE.sarah.handle, PEOPLE.sarah.name], [PEOPLE.maya.handle, PEOPLE.maya.name]]);
+const NAMES = new Map([[PEOPLE.me.handle, PEOPLE.me.name], [PEOPLE.sarah.handle, PEOPLE.sarah.name], [PEOPLE.maya.handle, PEOPLE.maya.name]]);
 const MAYA_MEMBER = [{ _id: PEOPLE.maya.id, name: PEOPLE.maya.name, image: CHAT_PEOPLE.maya.avatarUrl }];
 
 /** How far the channel has got: one step per cue passed. */
@@ -79,7 +80,7 @@ function Channel({ now }: { now: number }) {
   const landed = MESSAGES.filter((m) => !("cue" in m) || step >= CHAT_CUES.indexOf(m.cue) + 1);
   const typing = step >= CHAT_CUES.indexOf(TEAM.typing) + 1 && step < CHAT_CUES.indexOf(TEAM.followUp) + 1;
   return (
-    <div className="flex min-w-0 flex-1 flex-col">
+    <div className="ch-main">
       <div className="flex min-h-0 flex-1 flex-col justify-end overflow-hidden pb-1">
         {landed.map((m, i) => (
           <ChannelLine key={m.id} m={m} now={now} step={step} grouped={i > 0 && landed[i - 1].who === m.who} />
@@ -98,7 +99,7 @@ function Huddle({ now }: { now: number }) {
   const passage = useMemo(() => {
     const segments = HUDDLE.segments.slice(0, Math.max(1, said)).map((s, i) => {
       const who = PEOPLE[s.who];
-      return { seq: i, speaker_id: who.id, speaker_name: s.who === "me" ? "Ashot Petrosian" : who.name, text: s.text, t0: s.t0, t1: s.t0 + 5000, at: start + s.t0 };
+      return { seq: i, speaker_id: who.id, speaker_name: who.name, text: s.text, t0: s.t0, t1: s.t0 + 5000, at: start + s.t0 };
     });
     return buildPassages(segments)[0];
   }, [said, start]);
@@ -106,7 +107,7 @@ function Huddle({ now }: { now: number }) {
   const joined: EventRow = {
     _id: "hero-ev-1",
     user_id: PEOPLE.me.id,
-    user_name: "Ashot Petrosian",
+    user_name: PEOPLE.me.name,
     text: "",
     at: start + 20_000,
     mine: false,
@@ -133,6 +134,16 @@ function Huddle({ now }: { now: number }) {
   );
 }
 
+function Feed({ now }: { now: number }) {
+  return (
+    <div className="space-y-1.5 p-3 pt-4">
+      {FEED.map((c) => (
+        <FeedCard key={c._id} conv={{ ...c, updated_at: now - c.ago, author_avatar: null } as any} showActor onNavigate={noop} />
+      ))}
+    </div>
+  );
+}
+
 function Org({ now }: { now: number }) {
   const tree = useMemo(() => orgTree(now), [now]);
   const view = useMemo(() => ({ collapsed: EMPTY, expanded: {} }), []);
@@ -153,8 +164,8 @@ function Org({ now }: { now: number }) {
         canDrag={() => false}
         chrome={false}
       />
-      <div className="absolute" style={{ left: 470, top: 250 }} {...fly("team/team.cursor")}>
-        <CursorArrow color="var(--sol-magenta)" label={`${PEOPLE.maya.name.split(" ")[0]} · @${ORG_ROLE.handle}`} />
+      <div {...fly("team/team.cursor", { position: "absolute", left: 262, top: 205 })}>
+        <CursorArrow color="var(--sol-green)" label={PEOPLE.sarah.name.split(" ")[0]} />
       </div>
     </div>
   );
@@ -163,15 +174,20 @@ function Org({ now }: { now: number }) {
 export function TeamScene({ now }: PartProps) {
   const orgOn = useFilmTime((t) => t >= TEAM.org - 0.05);
   return (
-    <div className="relative flex h-full">
+    <div className="ch-shell relative">
       <div className="pointer-events-none flex shrink-0">
         <ChatChannelRail channels={CHANNELS as ChatChannelView[]} activeChannelId={CHANNELS[0].id} onSelect={noop} showDms={false} />
       </div>
       <Channel now={now} />
-      <div className="w-[360px] shrink-0 border-l border-sol-border/30 bg-sol-bg-alt/30" {...fly("team/team.huddle")}>
-        <Huddle now={now} />
+      <div className="relative w-[360px] shrink-0 border-l border-sol-border/30 bg-sol-bg-alt/30">
+        <div className="absolute inset-0" {...fly("team/team.feed")}>
+          <Feed now={now} />
+        </div>
+        <div className="absolute inset-0" {...fly("team/team.huddle")}>
+          <Huddle now={now} />
+        </div>
       </div>
-      <div className="pointer-events-none absolute inset-y-3 left-[220px] right-3 overflow-hidden rounded-xl border border-sol-border/60 bg-sol-bg shadow-2xl shadow-black/20" {...fly("team/team.org")}>
+      <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-[14px] border border-sol-border/60 bg-sol-bg shadow-2xl shadow-black/20" {...fly("team/team.org")}>
         {orgOn && <Org now={now} />}
       </div>
     </div>

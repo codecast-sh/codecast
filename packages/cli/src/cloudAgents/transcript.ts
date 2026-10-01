@@ -39,6 +39,18 @@ export function mirrorNoteText(text: string): string {
   return `ℹ ${text}`;
 }
 
+/** The statuses of a turn that still runs, across providers (Codex Cloud: pending; the Agents API: queued). */
+const RUNNING_TURN_STATUSES: ReadonlySet<string> = new Set(["pending", "queued", "in_progress"]);
+
+/**
+ * Whether a provider's turn still runs. Any other status has ended it, and
+ * endTurn says how: one codecast does not know reads as ended in the
+ * provider's own word rather than as running forever.
+ */
+export function isRunningTurnStatus(status: string | null | undefined): boolean {
+  return typeof status === "string" && RUNNING_TURN_STATUSES.has(status);
+}
+
 export class MirrorTranscript {
   private readonly lines: string[] = [];
   /** Calls already shown: a call that completes turns later keeps its one row. */
@@ -165,6 +177,21 @@ export class MirrorTranscript {
       ...(m.model ? { model: m.model } : {}),
     });
     if (m.role === "user" && !m.toolResults?.length) this.placeNotice();
+  }
+
+  /**
+   * How a turn ended, then its end: a failure as an error banner (`reason`:
+   * why), a cancel as a note, any other status the provider names as it says
+   * it. Records are id'd by the turn's `key`, so a re-render keeps them.
+   */
+  endTurn(key: string, end: { status: string | null | undefined; label: string; reason?: string; at?: number }): void {
+    const { status, label } = end;
+    // Never before the turn's last row: a provider dates the end in its own (whole second) clock.
+    const at = Math.max(end.at ?? this.clock, this.clock);
+    if (status === "failed") this.error(`${key}:error`, `${label} turn failed: ${end.reason || "no reason given"}`, at);
+    else if (status === "cancelled") this.note(`${key}:cancelled`, "Cancelled.", at);
+    else if (status && status !== "completed") this.note(`${key}:ended`, `${label} ended this turn as ${status}.`, at);
+    this.turnEnded();
   }
 
   turnEnded(): void {

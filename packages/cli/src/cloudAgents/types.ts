@@ -1,15 +1,16 @@
 /**
  * The adapter a cloud agent provider implements (Cursor Cloud Agents, Codex
- * Cloud). The core in this directory owns
+ * Cloud, the OpenAI Agents API). The core in this directory owns
  * everything provider-neutral: the mirror watcher (poll, per-agent state, the
  * mirror directory, transcript emission, priming, own-vs-imported), the
  * transcript records (transcript.ts), the sessions registry (start, deliver,
  * interrupt, held messages, setup errors) and the daemon's registry
  * (registry.ts). An adapter only speaks its vendor's API.
  */
-import { CLOUD_AGENT_RETRIED_SUFFIX, cloudAgentCardText, cloudAgentExpiryDate, cloudAgentSetupSentence, isCloudAgentCredentialKind, type CloudAgentActionName, type CloudAgentLoginStateName, type CloudAgentProviderSpec, type CloudAgentSetupKind } from "@codecast/shared/contracts";
+import { CLOUD_AGENT_REPO_CARD, CLOUD_AGENT_RETRIED_SUFFIX, cloudAgentCardText, cloudAgentExpiryDate, cloudAgentSetupSentence, isCloudAgentCredentialKind, type CloudAgentActionName, type CloudAgentLoginStateName, type CloudAgentProviderSpec, type CloudAgentSetupKind } from "@codecast/shared/contracts";
 import { githubRepo } from "../cloud/gitOrigin.js";
 import { deviceLabel } from "../remote/device.js";
+import type { ProviderKeyVerdict } from "../providerKeyCrypto.js";
 import type { CloudAgentSession } from "./sessions.js";
 
 /** One agent from the provider's list: enough to decide whether it moved. */
@@ -92,6 +93,9 @@ export interface CloudAgentHandle<D> {
   log(msg: string): void;
 }
 
+/** A new agent: its id, its page on the provider's site, and a line its transcript opens with under the first prompt (where the agent works). */
+export interface CloudAgentCreated { agentId: string; url?: string; notice?: string }
+
 export interface CloudAgentAdapter<C = unknown, A = unknown, D = unknown> {
   /** Its mirror directory, credential card copy and session id prefix come from here. */
   readonly spec: CloudAgentProviderSpec;
@@ -111,17 +115,31 @@ export interface CloudAgentAdapter<C = unknown, A = unknown, D = unknown> {
   loadData(raw: unknown): D;
 
   // Mirror side.
+  /**
+   * Its list is ordered by when each agent was created, and an agent carries
+   * no time it last changed (the Agents API): an old one can run again with
+   * no sign of it in its age. The read then goes on past the backfill horizon
+   * (up to CLOUD_MAX_LIST_PAGES) and mirrors an old agent that runs now or
+   * moved since its last mirror.
+   */
+  readonly listedByCreation?: boolean;
   listAgents(client: C, cursor?: string): Promise<{ items: CloudAgentListItem<A>[]; nextCursor?: string }>;
   /** Read the agent and render its transcript. Null skips this pass; for a child agent, null says its parent no longer has it, and it is forgotten. */
   mirror(client: C, handle: CloudAgentHandle<D>, known: A | undefined): Promise<CloudAgentMirror | null>;
-  /** Stop any live work (streams it follows). */
-  stop?(): void;
+  /** The live streams it follows (streams.ts): the watcher stops them when it stops. */
+  readonly streams?: { stop(): void };
 
   // Drive side.
   /** Start the agent with its first message. */
-  create(client: C, session: CloudAgentSession, content: string): Promise<{ agentId: string; url?: string }>;
+  create(client: C, session: CloudAgentSession, content: string): Promise<CloudAgentCreated>;
   /** A follow-up message. Throws CloudAgentBusyError while the agent cannot take one yet. */
   followUp(client: C, agentId: string, content: string): Promise<void>;
+  /**
+   * The provider takes a follow-up while a turn runs and steers that turn
+   * with it (the Agents API): it goes out at once rather than being held
+   * until the turn ends.
+   */
+  readonly steersRunningTurn?: boolean;
   /** Cancel the running turn: what was cancelled, or null when nothing was running. */
   cancel(client: C, agentId: string): Promise<string | null>;
   /**
@@ -133,7 +151,7 @@ export interface CloudAgentAdapter<C = unknown, A = unknown, D = unknown> {
    */
   setupErrorOf?(err: unknown, session?: CloudAgentSession): CloudAgentSetupError | null;
   /** Check a key before it is stored (Settings, Provider keys), when the credential is one. */
-  verifyKey?(key: string): Promise<{ ok: true; account?: string } | { ok: false; error: string }>;
+  verifyKey?(key: string): Promise<ProviderKeyVerdict>;
 
   // Session actions (the header's, CLOUD_AGENT_ACTIONS): each one the spec lists.
   /** Archive the agent on the provider's site, or bring it back. */
@@ -291,19 +309,34 @@ export class CloudAgentSetupError extends CloudAgentHoldError {
    */
   static repoUnreachable(adapter: Pick<AnyCloudAgentAdapter, "spec">, session: Pick<CloudAgentSession, "repoUrl"> | undefined, reason: string, fix: string): CloudAgentSetupError {
     const repo = githubRepo(session?.repoUrl) ?? "this repository";
-    return CloudAgentSetupError.retried(adapter, "repo", `${adapter.spec.label} can't reach ${repo} (${reason}). ${fix}`, `waiting until ${adapter.spec.label} can reach ${repo}`);
+    return CloudAgentSetupError.retried(adapter, "repo", `${adapter.spec.label}${CLOUD_AGENT_REPO_CARD}${repo} (${reason}). ${fix}`, `waiting until ${adapter.spec.label} can reach ${repo}`);
   }
   /** The provider refuses the account (not its credentials). `problem` is the vendor's sentence (what to fix, no closing period). */
   static accessDenied(adapter: Pick<AnyCloudAgentAdapter, "spec">, problem: string): CloudAgentSetupError {
     return CloudAgentSetupError.retried(adapter, "access", problem, `waiting until ${adapter.spec.label} lets this account in`);
   }
+  /** A card that is not about credentials. It opens with the provider's label, which is how the web tells which provider it is (cloudAgentSetupCard). */
   private static retried(adapter: Pick<AnyCloudAgentAdapter, "spec">, kind: CloudAgentSetupKind, problem: string, holdReason: string): CloudAgentSetupError {
-    return new CloudAgentSetupError(adapter, kind, `${problem}${CLOUD_AGENT_RETRIED_SUFFIX}`, problem, holdReason);
+    const named = problem.startsWith(adapter.spec.label) ? problem : `${adapter.spec.label}: ${problem}`;
+    return new CloudAgentSetupError(adapter, kind, `${named}${CLOUD_AGENT_RETRIED_SUFFIX}`, problem, holdReason);
   }
   /** The card's message id: one per conversation and kind. */
   cardKey(conversationId: string): string {
     return `${this.adapter.spec.mirrorDir}-setup:${conversationId}:${this.kind}`;
   }
+}
+
+/** What a key-based adapter is built with: the provider's key on this machine, and the fetch its client uses (tests). */
+export interface KeyedCloudAdapterOptions {
+  /** The provider's key on this machine, or null. */
+  readKey: () => string | null;
+  fetchImpl?: typeof fetch;
+}
+
+/** A key-based provider's API client from the machine's key, or the card that says the machine has none. */
+export function keyedCloudClient<C>(adapter: Pick<AnyCloudAgentAdapter, "spec">, readKey: () => string | null, make: (key: string) => C): C | CloudAgentSetupError {
+  const key = readKey();
+  return key ? make(key) : CloudAgentSetupError.credentialsMissing(adapter);
 }
 
 /** How often a follow-up held behind a running turn is tried again (against the mirror's last read, not the provider). */

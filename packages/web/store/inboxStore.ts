@@ -60,7 +60,7 @@ import { makeCollectionSig } from "./wakeSig";
 import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessage } from "./gestureBridge";
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
-import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, decisionAnswerLabel, hasThreadState, clearedThreadStateFields } from "@codecast/shared/contracts";
+import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, decisionAnswerLabel, hasThreadState, clearedThreadStateFields } from "@codecast/shared/contracts";
 import { liveFactsOf } from "../lib/liveness";
 // The shared inbox projection (docs/architecture/sync-convergence.md): the
 // working-set selection, fold, fact/stamp field ownership, and the epoch clock.
@@ -5149,7 +5149,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // at create. `fallback` covers a stub that was somehow never seeded. Pairs with
   // beginOptimisticSession({ deferCreate })'s materialize() AND the in-app
   // self-heal create (ensureSessionCreated routes through it too).
-  createSessionFromStub: (stubId: string, fallback?: { agentType?: string; projectPath?: string; gitRoot?: string; private?: boolean }) => Promise<any>;
+  createSessionFromStub: (stubId: string, fallback?: { agentType?: string; projectPath?: string; gitRoot?: string; private?: boolean; model?: string; targetDeviceId?: string }) => Promise<any>;
   // The one true path for optimistically creating a session: stubs a local
   // conversation synchronously and rekeys it to the real Convex id when `create`
   // resolves. Every new-session entry point funnels through this so a first
@@ -9477,7 +9477,12 @@ const inboxStoreConfig = (set: any, get: any) => ({
       // that already ended in "user interrupted" (a server echo or the line
       // this window painted moments ago) still reaches the daemon, which
       // judges it, but paints nothing: the conversation already ends there.
-      if ((session || this.conversations[convId]) && !isInterruptControlMessage(lastTimelineMessage(this, convId)?.content)) {
+      // A cloud agent's mirror is the record of how its turn ended (it says
+      // "Cancelled." for a turn the press stopped), and no echo ever settles
+      // a line painted here: it would stay even when nothing was running.
+      const row = session ?? this.conversations[convId];
+      const cloudAgent = !!row && !!cloudAgentProviderOfConversation(agentType, row.session_id, row.model);
+      if (row && !cloudAgent && !isInterruptControlMessage(lastTimelineMessage(this, convId)?.content)) {
         appendOptimisticMessage(this, convId, agentType === "codex" ? "<turn_aborted>" : "[Request interrupted by user]");
       }
     }
@@ -9542,7 +9547,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // compose popup intentionally allows a project-less stub → the daemon starts in
   // $HOME). Tracking + rekey are done by beginOptimisticSession's fire() (or by
   // ensureSessionCreated), so this only creates.
-  createSessionFromStub: (stubId: string, fallback?: { agentType?: string; projectPath?: string; gitRoot?: string; private?: boolean }) => {
+  createSessionFromStub: (stubId: string, fallback?: { agentType?: string; projectPath?: string; gitRoot?: string; private?: boolean; model?: string; targetDeviceId?: string }) => {
     const s = get();
     const cur = (s.sessions[stubId] || s.conversations[stubId]) as any;
     const projectPath = cur?.project_path ?? fallback?.projectPath;
@@ -9554,7 +9559,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     // the full model id ("claude-opus-4-8"); the create wants the contract option
     // key ("opus") — findModelOption matches on key. A model left on a different
     // agent's id (after an agent switch) resolves to "default" and is dropped.
-    const modelKey = modelOptionKey(cur?.model, agentType);
+    const modelKey = modelOptionKey(cur?.model ?? fallback?.model, agentType);
     // The machine shown in the new-session row, passed through verbatim. This
     // used to be re-checked here and DROPPED when it matched what routing would
     // pick anyway — an optimization that quietly became a bug: the picker's
@@ -9563,7 +9568,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     // discard an explicit pick and hand the choice back to a server-side
     // coin flip. The selection is now deterministic and always stamped, so
     // there is nothing left to second-guess.
-    const targetDeviceId = cur?.target_device_id as string | null | undefined;
+    const targetDeviceId = (cur?.target_device_id ?? fallback?.targetDeviceId) as string | null | undefined;
     // "Run in the cloud" is decided by the machine STAMPED on the stub, never by
     // the store flag (a mirror of the composer's derived mode). A stamped
     // wake-on-use host parks the row unless the folder is one the host already

@@ -1,6 +1,6 @@
 "use client";
 import { useQuery } from "convex/react";
-import { stripTitleHeading } from "@codecast/shared/docs";
+import { docTypeLabel, stripTitleHeading } from "@codecast/shared/docs";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useParams } from "next/navigation";
 import { AvatarImg } from "../../../../lib/avatarCache";
@@ -8,16 +8,8 @@ import { MarkdownRenderer } from "../../../../components/tools/MarkdownRenderer"
 import { AppLoader } from "../../../../components/AppLoader";
 import { readSharePreload } from "@/lib/sharePreload";
 import { DocDates } from "../../../../components/DocDates";
+import { docTypeStyle } from "../../../../lib/docTypeStyle";
 import { formatDateFull, formatDateSmart } from "@codecast/shared/time";
-
-const DOC_TYPE_LABELS: Record<string, { label: string; color: string }> = {
-  plan: { label: "Plan", color: "text-sol-blue" },
-  design: { label: "Design", color: "text-sol-violet" },
-  spec: { label: "Spec", color: "text-sol-cyan" },
-  investigation: { label: "Investigation", color: "text-sol-yellow" },
-  handoff: { label: "Handoff", color: "text-sol-orange" },
-  note: { label: "Note", color: "text-sol-text-muted" },
-};
 
 function InvalidLink() {
   return (
@@ -50,7 +42,6 @@ export default function SharedDocClient() {
 
   if (doc === null) return <InvalidLink />;
 
-  const typeInfo = DOC_TYPE_LABELS[doc.doc_type] || DOC_TYPE_LABELS.note;
 
   return (
     <main className="min-h-screen bg-sol-base03">
@@ -58,8 +49,8 @@ export default function SharedDocClient() {
         {/* Header */}
         <div className="mb-8">
           <div className="flex items-center gap-3 mb-3">
-            <span className={`text-xs font-medium px-2 py-0.5 rounded border border-current/20 ${typeInfo.color}`}>
-              {typeInfo.label}
+            <span className={`text-xs font-medium px-2 py-0.5 rounded border border-current/20 ${docTypeStyle(doc.doc_type).color}`}>
+              {docTypeLabel(doc.doc_type)}
             </span>
             {doc.labels?.map((l: string) => (
               <span key={l} className="text-xs text-sol-text-dim px-1.5 py-0.5 rounded border border-sol-border/30">
