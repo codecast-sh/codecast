@@ -1,7 +1,7 @@
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../../convex/convex/_generated/api.js";
 import { cleanNotificationBody } from "../lib/notificationText";
-import type { ShareKind } from "@codecast/shared/entities";
+import { sharePath, type ShareKind } from "@codecast/shared/entities";
 import { CONVEX_URL } from "./convexUrl";
 
 /**
@@ -46,6 +46,8 @@ const SHARE_QUERIES: Record<ShareKind, (token: string) => Promise<unknown>> = {
   message: (t) => convex.query(api.messages.getSharedMessage, { share_token: t }),
   doc: (t) => convex.query((api as any).docs.getShared, { share_token: t }),
   plan: (t) => convex.query((api as any).plans.getShared, { share_token: t }),
+  task: (t) => convex.query(api.publicShare.getSharedTask, { share_token: t }),
+  call: (t) => convex.query(api.publicShare.getSharedCall, { share_token: t }),
 };
 
 /** The shared object behind a token, through the cache. `null` = query failed;
@@ -73,8 +75,7 @@ export function shareMeta(
 ): ShareMeta | null {
   if (!data || typeof data !== "object") return null;
   const d = data as any;
-  const path = kind === "conversation" ? `/share/${token}` : `/share/${kind}/${token}`;
-  const url = `${baseUrl}${path}`;
+  const url = `${baseUrl}${sharePath(kind, token)}`;
 
   switch (kind) {
     case "conversation": {
@@ -102,6 +103,19 @@ export function shareMeta(
       const done = tasks.filter((t) => t.status === "done").length;
       const description = cleanNotificationBody(d.goal || "", 200)
         || (tasks.length ? `${done}/${tasks.length} tasks done` : "A shared plan");
+      return { title: `Codecast: ${title}`, description, url, type: "article" };
+    }
+    case "task": {
+      const title = d.title || "Shared Task";
+      const description = cleanNotificationBody(d.description || "", 200)
+        || `${d.short_id ? `${d.short_id}, ` : ""}${String(d.status || "open").replace("_", " ")}`;
+      return { title: `Codecast: ${title}`, description, url, type: "article" };
+    }
+    case "call": {
+      const title = d.title || (d.recording ? "Shared Recording" : "Shared Huddle");
+      const names: string[] = Array.isArray(d.participants) ? d.participants.map((p: any) => p.name).filter(Boolean) : [];
+      const description = cleanNotificationBody(d.summary || "", 200)
+        || (names.length ? `A call with ${names.join(", ")}` : "A shared call");
       return { title: `Codecast: ${title}`, description, url, type: "article" };
     }
   }

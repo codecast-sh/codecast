@@ -20,6 +20,7 @@ import { memberAvatarUrl } from "../../lib/liveEntities";
 import { memberListSig } from "../../hooks/useTeamRoster";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import "./chat.css";
+import { peopleOf } from "@codecast/shared/team/memberKind";
 
 type Person = {
   slack_user_id: string;
@@ -55,7 +56,7 @@ export function SlackPeopleDialog({ teamId, onClose }: { teamId: string; onClose
     (st) => st.currentUser?._id,
     (st) => slackPeopleSig(st.chatSlackPeople, teamId),
   ]);
-  const members = ((s.teamMembers ?? []) as ChatMember[]).filter((m) => !m.is_bot);
+  const members = peopleOf(s.teamMembers as ChatMember[]);
   const me = String(s.currentUser?._id ?? "");
   const rows = useMemo(
     () => Object.values(s.chatSlackPeople ?? {}).filter((p) => p.team_id === teamId).sort(

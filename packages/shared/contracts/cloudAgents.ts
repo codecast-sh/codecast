@@ -1,7 +1,8 @@
 /**
  * Cloud agent providers: agent sessions that run on a vendor's machines and
  * that codecast both mirrors and drives (start, follow-up, interrupt) through
- * the daemon: Cursor Cloud Agents and Codex Cloud. Each entry is what the web,
+ * the daemon: Cursor Cloud Agents, Codex Cloud, and OpenAI Agents API
+ * sessions (the managed Codex harness on an API key). Each entry is what the web,
  * the daemon and the launch path need to tell a provider's sessions apart:
  * the agent type it runs under, the launch model keys that select it, the id
  * its sessions carry, where it opens, and how its setup cards read.
@@ -19,6 +20,12 @@ export interface CloudAgentProviderSpec {
   agentType: AgentClientId;
   /** Short name for chips and toggles: "Cursor Cloud". */
   label: string;
+  /**
+   * The company whose machines run its agents: "Cursor", "OpenAI". A key's
+   * check and its connect dialog name it, and when several providers of one
+   * vendor run an agent type, the composer's switch does ("run in OpenAI's cloud").
+   */
+  vendor: string;
   /** The account's "sync this source" setting (CLOUD_SESSION_SOURCES). */
   syncSource: CloudSessionSource;
   /**
@@ -28,8 +35,8 @@ export interface CloudAgentProviderSpec {
   modelPrefix: string;
   /** The id every session it runs carries (conversations.session_id). */
   sessionIdPrefix: string;
-  /** The agent's page on the vendor's site, for its session id or a branch's (cloudAgentRootId). */
-  agentUrl: (sessionId: string) => string;
+  /** The agent's page on the vendor's site, for its session id or a branch's (cloudAgentRootId); none when the vendor has no page per agent. */
+  agentUrl?: (sessionId: string) => string;
   /** The daemon's mirror directory under ~/.codecast (transcripts, state, sessions). */
   mirrorDir: string;
   /**
@@ -52,14 +59,29 @@ export interface CloudAgentProviderSpec {
   keyProvider?: string;
   /** Where the person gives the provider access to a repository (named on the "can't reach the repository" card and in the connect dialog). */
   repoAccessUrl: string;
+  /** That page's name, the text of every link to it ("Cursor → Integrations"). */
+  repoAccessLabel: string;
+  /** The vendor's page that lists the account's agents, where a person looks for one codecast could not confirm it started; none when the vendor has no such page. */
+  agentList?: { url: string; label: string };
   /**
    * A sign-in based provider's own CLI sign-in: `argv` opens the machine's
    * browser; a machine with no browser (a cloud host) signs in with
    * `headlessArgv`, which prints a link to open on any device.
    */
   login?: { argv: string[]; headlessArgv: string[] };
-  /** Tooltip on the composer's "run in the cloud" switch. */
+  /** Tooltip on the composer's switch that runs a session on this provider. */
   toggleTitle: string;
+  /**
+   * When several providers run one agent type (Codex: Codex Cloud on the
+   * ChatGPT plan, the Agents API on an API key), the composer's choice
+   * between them: its name there, what a session costs on it and what it
+   * cannot do in one short line the composer shows beside the choice, and
+   * the whole of it (`detail`) for the choice's tooltip and the connect
+   * dialog.
+   */
+  lane?: { label: string; cost: string; detail: string };
+  /** The model a launch that names none runs on, for a provider with no account default of its own. */
+  defaultModel?: string;
   /** Offered by the composer's "run in the cloud" switch (a provider can sync before codecast starts its agents). */
   composer: boolean;
   /**
@@ -99,6 +121,7 @@ export const CLOUD_AGENT_PROVIDERS = {
     id: "cursor",
     agentType: "cursor",
     label: "Cursor Cloud",
+    vendor: "Cursor",
     syncSource: "cursor",
     modelPrefix: "cloud",
     sessionIdPrefix: "bc-",
@@ -111,6 +134,8 @@ export const CLOUD_AGENT_PROVIDERS = {
     },
     keyProvider: "cursor",
     repoAccessUrl: "https://cursor.com/dashboard/integrations",
+    repoAccessLabel: "Cursor → Integrations",
+    agentList: { url: "https://cursor.com/agents", label: "Cursor → Agents" },
     toggleTitle: "Run this session as a Cursor Cloud Agent: on Cursor's machines, on this repository's branch as it is on GitHub. Messages you send become its follow-ups.",
     composer: true,
   },
@@ -121,6 +146,7 @@ export const CLOUD_AGENT_PROVIDERS = {
     id: "codex",
     agentType: "codex",
     label: "Codex Cloud",
+    vendor: "OpenAI",
     syncSource: "codex",
     modelPrefix: "cloud",
     sessionIdPrefix: "task_",
@@ -133,11 +159,48 @@ export const CLOUD_AGENT_PROVIDERS = {
       holdReason: "waiting for a Codex sign-in on {machine}",
     },
     repoAccessUrl: "https://chatgpt.com/codex/settings/environments",
+    repoAccessLabel: "Codex → Environments",
+    agentList: { url: "https://chatgpt.com/codex", label: "Codex tasks" },
     login: { argv: ["codex", "login"], headlessArgv: ["codex", "login", "--device-auth"] },
     toggleTitle: "Run this session as a Codex Cloud task: on OpenAI's machines, in this repository's Codex environment, on your ChatGPT plan. Messages you send become its follow-ups.",
     composer: true,
+    lane: {
+      label: "ChatGPT plan",
+      cost: "Counts toward your ChatGPT plan's Codex limits, no extra charge.",
+      detail: "Counts toward your ChatGPT plan's Codex limits, with no extra charge. Runs in the repository's Codex environment, which reaches private repositories, and can open a pull request or apply its changes to your checkout.",
+    },
     launchOptions: { ask: true, maxAttempts: 4 },
     actions: ["create_pr", "apply", "archive", "unarchive"],
+  },
+  // OpenAI Agents API (platform.openai.com): the public, managed Codex
+  // harness, driven with an OpenAI API key from Provider Keys. Its sessions
+  // run in an OpenAI-hosted sandbox that clones the session's repository, and
+  // stream their progress live. The platform has no page per session.
+  codex_api: {
+    id: "codex_api",
+    agentType: "codex",
+    label: "OpenAI Agents API",
+    vendor: "OpenAI",
+    syncSource: "codex_api",
+    modelPrefix: "api",
+    sessionIdPrefix: "sess_",
+    mirrorDir: "openai-agents",
+    credentialCards: {
+      missing: "OpenAI Agents API sessions need an OpenAI API key on {machine}.",
+      rejected: "OpenAI rejected the API key on {machine}",
+      holdReason: "waiting for an OpenAI API key on {machine}",
+    },
+    keyProvider: "openai",
+    repoAccessUrl: "https://developers.openai.com/api/docs/guides/agents-api/environments/openai-hosted",
+    repoAccessLabel: "OpenAI-hosted sandboxes",
+    toggleTitle: "Run this session through the OpenAI Agents API: on OpenAI's machines, in a sandbox with this repository cloned from GitHub, billed to your OpenAI API key. Messages you send become its follow-ups, and steer a turn that is still running.",
+    composer: true,
+    lane: {
+      label: "API key",
+      cost: "API rates plus sandbox time. Public GitHub repos only; no push.",
+      detail: "Billed to your OpenAI API key at the model's API rates plus sandbox time. Every model call is billed, so a long command the agent keeps checking on costs more the longer it runs. The sandbox clones the repository from GitHub without credentials, so it reaches public repositories only. Work stays in the sandbox: there is no push, pull request or apply, and OpenAI can delete a sandbox after an hour without activity.",
+    },
+    defaultModel: "gpt-5.6-terra",
   },
 } satisfies Record<string, CloudAgentProviderSpec>;
 
@@ -215,9 +278,10 @@ export function cloudAgentLaunchWords(launch: Partial<CloudAgentLaunch>): string
  * The model catalog entries a provider's launch options make (the launch
  * path accepts only listed keys, and a stored stamp reads back through the
  * catalog). The plain key is the one a picker lists; the rest are hidden,
- * set by the composer's own controls.
+ * set by the composer's own controls. `models`: the provider's own models,
+ * each a listed key of its own beside the plain one, named as the model.
  */
-export function cloudAgentLaunchModelOptions(spec: CloudAgentProviderSpec, hint: string): ModelOption[] {
+export function cloudAgentLaunchModelOptions(spec: CloudAgentProviderSpec, hint: string, models: ModelOption[] = []): ModelOption[] {
   const opts = spec.launchOptions;
   const out: ModelOption[] = [];
   for (const ask of opts?.ask ? [false, true] : [false]) {
@@ -226,6 +290,11 @@ export function cloudAgentLaunchModelOptions(spec: CloudAgentProviderSpec, hint:
       const label = [spec.label, ...cloudAgentLaunchWords({ ask, attempts })].join(" · ");
       out.push({ key, label, hint, cliAlias: key, ...(key === spec.modelPrefix ? {} : { hidden: true }) });
     }
+  }
+  for (const m of models) {
+    const key = cloudAgentLaunchKey(spec, { model: m.key });
+    // The model's own name: the composer's lane already says which provider runs it.
+    out.push({ key, label: m.label, hint: m.hint, cliAlias: key });
   }
   return out;
 }
@@ -302,12 +371,6 @@ function isCredentialCard(spec: CloudAgentProviderSpec, message: string): boolea
   return [missing, rejected, expired].some((card) => !!card && cardPattern(card).test(message));
 }
 
-/** The provider whose credential setup card this is (the daemon's "needs a key" / "rejected" card). */
-export function cloudAgentCredentialError(agentType: string | undefined | null, message: string): CloudAgentProviderSpec | null {
-  if (!agentType) return null;
-  return SPECS.find((s) => s.agentType === agentType && isCredentialCard(s, message)) ?? null;
-}
-
 /** Whether a message is any provider's credential setup card: an auth banner, whatever its wording. */
 export function isCloudAgentCredentialCard(message: string): boolean {
   return SPECS.some((s) => isCredentialCard(s, message));
@@ -340,15 +403,90 @@ export function isCloudAgentLoginState(value: unknown): value is CloudAgentLogin
 
 /**
  * What keeps a message from reaching a provider: no credentials, credentials
- * it refuses or that ran out, a repository it cannot reach, or the account
- * itself refused (the product turned off for a workspace).
+ * it refuses or that ran out, a repository it cannot reach, the account
+ * itself refused (the product turned off for a workspace), the provider
+ * answering in a shape codecast does not know (its API changed: the lane is
+ * paused until a check passes), or a limit (the plan's usage used up, or
+ * requests rate limited).
  */
-export const CLOUD_AGENT_SETUP_KINDS = ["key_missing", "key_invalid", "repo", "access"] as const;
+export const CLOUD_AGENT_SETUP_KINDS = ["key_missing", "key_invalid", "repo", "access", "changed", "limit"] as const;
 export type CloudAgentSetupKind = (typeof CLOUD_AGENT_SETUP_KINDS)[number];
+
+/** What a setup problem that is not a credential's says, and what it waits for. */
+interface CloudAgentProblemInfo {
+  /** A card's heading, after the provider's label. */
+  heading: string;
+  /** The composer's word beside its switch while a machine reports it. */
+  held: string;
+  /** What a held message waits for. */
+  until: (spec: CloudAgentProviderSpec) => string;
+  /** Its sentence already says syncing is paused: the surfaces that say what it stops add only that messages wait. */
+  saysPaused?: boolean;
+}
+
+/**
+ * What a setup kind does on the machine that meets it, the rules the daemon
+ * runs by (its cloudAgentSetupPolicy adds only the waits).
+ */
+export interface CloudAgentSetupRules {
+  /**
+   * Which failed calls' verdict of this kind pauses the mirror's reads: any
+   * call, a read (the list or one agent; met on a send or an action it holds
+   * sends only, and the machine still reports it, as `sends_only`), or the
+   * list alone (found on one agent or one session, it is that one's).
+   */
+  pauses: "any" | "read" | "list";
+  /** Paused by one agent's read: that agent is read again before the lane resumes. */
+  tracksAgent?: boolean;
+  /** While the lane is paused for it, a message is held without asking the provider. */
+  blocksSend?: boolean;
+  /** A passing sign-in check (the connect dialog's) disproves it, and the lane resumes. */
+  liftedBySignIn?: boolean;
+}
+
+/** A kind's rules, and its copy: null for a credential kind, whose copy is the spec's credentialCards. */
+interface CloudAgentSetupKindInfo extends CloudAgentSetupRules { copy: CloudAgentProblemInfo | null }
+
+const CREDENTIAL: CloudAgentSetupKindInfo = { pauses: "any", liftedBySignIn: true, copy: null };
+const SETUP_NEEDED: CloudAgentProblemInfo = { heading: "setup needed", held: "needs setup", until: () => "this is fixed" };
+
+/** How often a lane paused because its provider changed checks again (the daemon's schedule, and what its sentence says). */
+export const CLOUD_AGENT_CHANGED_PROBE_MS = 5 * 60_000;
+
+/**
+ * Each setup kind's rules and wording, the one table the daemon and the web
+ * read. A credential kind (a new key or sign-in fixes it) has the spec's
+ * credentialCards for copy; every other kind says what it is here.
+ */
+const CLOUD_AGENT_SETUP_KIND_INFO: Record<CloudAgentSetupKind, CloudAgentSetupKindInfo> = {
+  key_missing: CREDENTIAL,
+  key_invalid: CREDENTIAL,
+  repo: { pauses: "list", copy: SETUP_NEEDED },
+  access: { pauses: "list", liftedBySignIn: true, copy: { heading: "access needed", held: "no access", until: (spec) => `${spec.label} lets this account in` } },
+  // Nothing is read or sent until a check passes: codecast never guesses at an answer it can't read.
+  changed: { pauses: "any", tracksAgent: true, blocksSend: true, copy: { heading: "paused", held: "paused", until: (spec) => `codecast can read ${spec.label} again`, saysPaused: true } },
+  // A plan's window used up says when new work is taken, not when reads are: reads wait only for a read's own 429.
+  limit: { pauses: "read", copy: { heading: "is waiting on a limit", held: "limited", until: () => "the limit resets" } },
+};
 
 /** The kinds a new key or sign-in fixes: the daemon rechecks them every few seconds, the rest back off. */
 export function isCloudAgentCredentialKind(kind: CloudAgentSetupKind): boolean {
-  return kind === "key_missing" || kind === "key_invalid";
+  return CLOUD_AGENT_SETUP_KIND_INFO[kind].copy === null;
+}
+
+/** What a setup kind does on the machine that meets it (CloudAgentSetupRules). */
+export function cloudAgentSetupRules(kind: CloudAgentSetupKind): CloudAgentSetupRules {
+  const { copy: _copy, ...rules } = CLOUD_AGENT_SETUP_KIND_INFO[kind];
+  return rules;
+}
+
+/** What a setup problem that is not a credential's says (its heading, the composer's word, what a held message waits for). Null for a credential kind. */
+export function cloudAgentProblemInfo(kind: CloudAgentSetupKind): CloudAgentProblemInfo | null {
+  return CLOUD_AGENT_SETUP_KIND_INFO[kind].copy;
+}
+
+function isCloudAgentSetupKind(value: string): value is CloudAgentSetupKind {
+  return (CLOUD_AGENT_SETUP_KINDS as readonly string[]).includes(value);
 }
 
 /** What keeps a machine from reading a provider at all, as its heartbeat reports it (devices.cloud_agent_blocks). */
@@ -357,6 +495,10 @@ export interface CloudAgentSetupBlock {
   kind: CloudAgentSetupKind;
   /** The provider's reason, or the vendor's sentence saying what to fix. */
   reason?: string;
+  /** A limit's reset (ms since the epoch), when the provider named it: the web counts it down in the viewer's clock. */
+  resets_at?: number;
+  /** It holds sends alone (a limit a send met): the mirror keeps reading. Absent: nothing syncs either. */
+  sends_only?: boolean;
 }
 
 /**
@@ -381,12 +523,65 @@ export function cloudAgentSetupSentence(spec: CloudAgentProviderSpec, problem: {
 /**
  * How the daemon's setup cards that are not about credentials end (a
  * repository it cannot reach, an account the provider refuses): the message
- * is held and retried, and the web recognizes the card by it.
+ * is held and retried. The web drops it, since the card's own line says so.
  */
 export const CLOUD_AGENT_RETRIED_SUFFIX = "; the message retries on its own.";
 
-/** The provider whose non-credential setup card this is (cloudAgentCredentialError is the credential one). */
-export function cloudAgentSetupCard(agentType: string | undefined | null, message: string): CloudAgentProviderSpec | null {
-  if (!agentType || !message.trim().endsWith(CLOUD_AGENT_RETRIED_SUFFIX)) return null;
-  return SPECS.find((s) => s.agentType === agentType) ?? null;
+/**
+ * The provider answered in a shape codecast does not read, or kept giving
+ * answers it does not expect: the lane on `machine` pauses until a later
+ * check passes. Where it broke goes to the daemon's log, not here.
+ */
+export function cloudAgentChangedProblem(spec: CloudAgentProviderSpec, machine: string): string {
+  return `${spec.label} changed in a way codecast can't read yet. Syncing on ${machine} is paused and checks again every ${CLOUD_AGENT_CHANGED_PROBE_MS / 60_000} minutes`;
+}
+
+/** A limit the provider holds codecast to (`detail`: the plan's window used up, or the requests rate limited). */
+export function cloudAgentLimitProblem(spec: CloudAgentProviderSpec, detail: string): string {
+  return `${spec.label} limit reached: ${detail}`;
+}
+
+/**
+ * A message the provider may have acted on though codecast could not read
+ * its answer (where the answer broke goes to the daemon's log, not here). It
+ * is not sent again, since that could start the agent twice: the person
+ * looks on the provider's site.
+ */
+export function cloudAgentUnsentProblem(spec: CloudAgentProviderSpec): string {
+  const where = spec.agentList ? `at ${spec.agentList.url}` : `on ${spec.vendor}'s site`;
+  return `${spec.label} may have started this, but its answer was not in a form codecast can read. So that it is not started twice, the message is not sent again: look for it ${where}, and send it again if it is not there.`;
+}
+
+/** The other ways to run the provider's agent type on its vendor's machines (Codex Cloud for the Agents API, and back): the composer's lanes but this one. */
+export function cloudAgentOtherLanes(spec: CloudAgentProviderSpec): CloudAgentProviderSpec[] {
+  return spec.lane ? cloudAgentProvidersFor(spec.agentType).filter((s) => s.id !== spec.id && s.lane) : [];
+}
+
+/**
+ * A card the daemon posts in a cloud agent session: a setup problem's, by its
+ * kind (a credential card known only by its words names none), or a message
+ * not sent again.
+ */
+export type CloudAgentCard = { kind: "credential"; problem?: CloudAgentSetupKind } | { kind: "setup"; problem: CloudAgentSetupKind } | { kind: "unsent" };
+
+/**
+ * The message id the daemon posts a card under, which says which card it is:
+ * a setup card is one per conversation and kind (a later one replaces it), a
+ * message not sent again is one per message (`at`).
+ */
+export function cloudAgentCardKey(spec: CloudAgentProviderSpec, conversationId: string, card: CloudAgentSetupKind | "unsent", at = Date.now()): string {
+  return card === "unsent" ? `${spec.mirrorDir}-unsent:${conversationId}:${at}` : `${spec.mirrorDir}-setup:${conversationId}:${card}`;
+}
+
+/**
+ * Which of the daemon's cards a message in a session of `spec` is (the
+ * session's provider comes from the conversation, never from the card), read
+ * from its id (cloudAgentCardKey), or null for none. A credential card is
+ * also known by its words (`message`), as every auth banner is.
+ */
+export function cloudAgentCardOf(spec: CloudAgentProviderSpec, messageId: string | undefined, message: string): CloudAgentCard | null {
+  if (messageId?.startsWith(`${spec.mirrorDir}-unsent:`)) return { kind: "unsent" };
+  const problem = messageId?.startsWith(`${spec.mirrorDir}-setup:`) ? messageId.slice(messageId.lastIndexOf(":") + 1) : "";
+  if (isCloudAgentSetupKind(problem)) return { kind: isCloudAgentCredentialKind(problem) ? "credential" : "setup", problem };
+  return isCredentialCard(spec, message) ? { kind: "credential" } : null;
 }

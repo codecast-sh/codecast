@@ -90,3 +90,12 @@ export function resetSyncTransactionForTests(): void {
   disarm();
   deferredFanOut = null;
 }
+
+/**
+ * Sim seam: true when no transaction is open and no folded publish is held.
+ * The sim only switches windows at such a point, since a held publish belongs
+ * to the store that produced it.
+ */
+export function __syncTransactionIdleForTests(): boolean {
+  return depth === 0 && deferred === null && timer === null;
+}

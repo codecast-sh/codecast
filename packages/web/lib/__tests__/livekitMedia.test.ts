@@ -4,7 +4,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
-import { huddleRoomOptions, SCREEN_SHARE_CAPTURE, SCREEN_SHARE_ENCODING } from "../calls/livekitMedia";
+import { huddleRoomOptions, SCREEN_SHARE_CAPTURE, SCREEN_SHARE_ENCODING, SCREEN_SHARE_PUBLISH } from "../calls/livekitMedia";
 
 describe("huddle LiveKit media", () => {
   test("adaptive stream asks for device pixels, not CSS pixels", () => {
@@ -16,12 +16,12 @@ describe("huddle LiveKit media", () => {
     const pub = huddleRoomOptions({}).publishDefaults;
     expect(pub?.screenShareEncoding).toEqual(SCREEN_SHARE_ENCODING);
     expect(SCREEN_SHARE_ENCODING.maxBitrate).toBeGreaterThanOrEqual(5_000_000);
-    expect(SCREEN_SHARE_ENCODING.maxFramerate).toBe(30);
+    expect(SCREEN_SHARE_ENCODING.maxFramerate).toBe(15);
     expect(pub?.degradationPreference).toBe("maintain-resolution");
   });
 
-  test("capture is 1440p30 with a detail hint so the encoder keeps text", () => {
-    expect(SCREEN_SHARE_CAPTURE.resolution).toEqual({ width: 2560, height: 1440, frameRate: 30 });
+  test("capture is 1440p15 with a detail hint so the encoder keeps text", () => {
+    expect(SCREEN_SHARE_CAPTURE.resolution).toEqual({ width: 2560, height: 1440, frameRate: 15 });
     expect(SCREEN_SHARE_CAPTURE.contentHint).toBe("detail");
     expect(SCREEN_SHARE_CAPTURE.audio).toBe(false);
   });
@@ -42,10 +42,16 @@ describe("huddle LiveKit media", () => {
     }
   });
 
-  test("starting a share passes capture and encoding, not only the Room defaults", () => {
+  test("the share publishes one full-size layer; cameras keep simulcast", () => {
+    expect(SCREEN_SHARE_PUBLISH.simulcast).toBe(false);
+    expect(SCREEN_SHARE_PUBLISH.screenShareEncoding).toEqual(SCREEN_SHARE_ENCODING);
+    expect(huddleRoomOptions({}).publishDefaults?.simulcast).toBeUndefined();
+  });
+
+  test("starting a share passes capture and publish options, not only the Room defaults", () => {
     const src = readFileSync(join(import.meta.dir, "..", "calls", "callManager.ts"), "utf8");
     expect(src).toContain("SCREEN_SHARE_CAPTURE");
-    expect(src).toContain("SCREEN_SHARE_ENCODING");
+    expect(src).toContain("SCREEN_SHARE_PUBLISH");
     expect(src).toContain("setScreenShareEnabled(");
   });
 });

@@ -65,11 +65,16 @@ export type OrgLayoutView = {
    *  that is present (even with an empty list) means "show every loaded
    *  session", not just the first ORG_STACK_VISIBLE. */
   expanded: Readonly<Record<string, OrgSession[]>>;
+  /** People and roles only, no session stacks: the health map draws how work
+   *  moves between seats, and a column of sessions under each would bury it. */
+  structureOnly?: boolean;
 };
 
 export const ORG_SIZES = {
   person: { w: 232, h: 96 },
   role: { w: 232, h: 108 },
+  /** A role on the health map (OrgNodeCards.HealthRoleCard): name, the week's two numbers, its signals. */
+  healthRole: { w: 232, h: 122 },
   session: { w: 220, h: 50 },
   cluster: { w: 220, h: 58 },
   /** Extra card height when a node carries ghost chips. */
@@ -241,10 +246,10 @@ export function buildBranches(tree: OrgTree, view: OrgLayoutView, ghosts?: Pick<
     // books ORG_SIZES.tenureRow for a program, so the two agree by construction.
     const tenure = roleTenureChip(r.tenure, tree);
     const b: Branch = {
-      id, kind: "role", w: ORG_SIZES.role.w, h: ORG_SIZES.role.h + (standingLineOf(r.standing) ? ORG_SIZES.standingRow : 0) + (r.tenure?.kind === "program" ? ORG_SIZES.tenureRow : 0) + seatRowHeight(ghosts?.stubs[id]?.seat) + chipRow(id), role: r,
+      id, kind: "role", w: ORG_SIZES.role.w, h: view.structureOnly ? ORG_SIZES.healthRole.h : ORG_SIZES.role.h + (standingLineOf(r.standing) ? ORG_SIZES.standingRow : 0) + (r.tenure?.kind === "program" ? ORG_SIZES.tenureRow : 0) + seatRowHeight(ghosts?.stubs[id]?.seat) + chipRow(id), role: r,
       ...(tenure ? { tenure } : {}),
       children: collapsed ? [] : kids.map(roleBranch),
-      stack: collapsed ? null : stackFor({ kind: "role", role_id: r._id }, r, view, filed),
+      stack: collapsed || view.structureOnly ? null : stackFor({ kind: "role", role_id: r._id }, r, view, filed),
       collapsed, hidden: 0, overflow: 0, width: 0, height: 0,
     };
     b.overflow = b.stack ? Math.max(0, b.stack.total - b.stack.sessions.length) : collapsed ? r.total : 0;
@@ -259,7 +264,7 @@ export function buildBranches(tree: OrgTree, view: OrgLayoutView, ghosts?: Pick<
     const b: Branch = {
       id, kind: "person", w: ORG_SIZES.person.w, h: ORG_SIZES.person.h + chipRow(id), person: p,
       children: collapsed ? [] : kids.map(roleBranch),
-      stack: collapsed ? null : stackFor({ kind: "user", user_id: p.user_id }, p, view, filed),
+      stack: collapsed || view.structureOnly ? null : stackFor({ kind: "user", user_id: p.user_id }, p, view, filed),
       collapsed, hidden: 0, overflow: 0, width: 0, height: 0,
     };
     b.overflow = b.stack ? Math.max(0, b.stack.total - b.stack.sessions.length) : collapsed ? p.total : 0;

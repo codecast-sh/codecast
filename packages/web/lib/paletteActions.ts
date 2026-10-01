@@ -5,6 +5,7 @@ import { getShortcutsForAction, inputGuardBypass, isEditableTarget, matchShortcu
 import { canControlModel } from "./modelSwitch";
 import { canSwitchSessionAgent } from "./sessionControl";
 import { isForeignSession } from "./liveEntities";
+import { isSessionKilled, isSessionSetAside } from "./sessionRetirement";
 
 export type PaletteTargetType = "session" | "task" | "doc" | "plan" | "project" | "trigger";
 export type PaletteAction = {
@@ -61,9 +62,9 @@ export function paletteActions(type: PaletteTargetType | null, targets: any[], u
       row("session_favorite", target.is_favorite ? many("Remove from favorites", "Remove # from favorites") : many("Add to favorites", "Add # to favorites"), Star, "v", "conv.favorite"),
       row("bucket", many("Label session…", "Label # sessions…"), Tag, "l", "session.moveToBucket"),
       row("device", many("Move to machine…", "Move # sessions to machine…"), ArrowRightLeft, "w"),
-      ...(!target.inbox_killed_at ? [row("snooze", many("Snooze session…", "Snooze # sessions…"), Clock, "z", "session.snooze")] : []),
+      ...(!isSessionKilled(target) ? [row("snooze", many("Snooze session…", "Snooze # sessions…"), Clock, "z", "session.snooze")] : []),
       ...(target.inbox_snoozed_until ? [row("session_unsnooze", "Move to Needs Input now", RefreshCw, "u")] : []),
-      ...((target.dismissed || target.inbox_stashed_at || target.inbox_killed_at || target.inbox_dismissed_at) ? [row("session_restore", many("Restore session to inbox", "Restore # sessions to inbox"), RefreshCw, "u")] : [
+      ...(isSessionSetAside(target) ? [row("session_restore", many("Restore session to inbox", "Restore # sessions to inbox"), RefreshCw, "u")] : [
         row("session_stash", many("Stash session", "Stash # sessions"), Archive, "s", "session.stash"),
         row("session_stash_hide", many("Stash and hide session", "Stash and hide # sessions"), EyeOff, "b", "session.stashHide"),
         row("session_defer", many("Defer session", "Defer # sessions"), Clock, "d", "session.deferAdvance"),
@@ -71,7 +72,8 @@ export function paletteActions(type: PaletteTargetType | null, targets: any[], u
         row("session_done", "Mark done", CheckCircle2, "e"),
         row("session_needs_input", "Mark needs input", CircleDot, "g"),
       ]),
-      ...(!target.inbox_killed_at ? [row("session_kill", many("Kill session", "Kill # sessions"), Square, "k", "session.kill")] : []),
+      ...(!isSessionKilled(target) ? [row("session_kill", many("Kill session", "Kill # sessions"), Square, "k", "session.kill")] : []),
+      ...(!target.persistent ? [row("session_delete", many("Delete session…", "Delete # sessions…"), Trash2, "x")] : []),
       ...(single && target.parent_conversation_id ? [row("session_parent", "View parent conversation", GitBranch)] : []),
       ...(single && target.git_branch ? [row("session_branch", "Copy branch name", GitBranch)] : []),
       ...(single && (target.project_path || target.git_root) ? [row("session_files", "Open project files", Folder)] : []),

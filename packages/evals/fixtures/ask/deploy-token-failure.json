@@ -1,0 +1,94 @@
+{
+ "asOf": "2026-01-15T14:04:40.000Z",
+ "notes": "synthetic session: a staging deploy fails on a missing token, then succeeds once the token is loaded",
+ "judge": "says the first deploy failed because STAGING_TOKEN was not set, and that a later deploy succeeded after the token was loaded from the vault; cites the lines for both",
+ "snapshot": {
+  "question": "Why did the staging deploy fail, and is it fixed?",
+  "title": "Deploy web to staging",
+  "rows": [
+   {
+    "_id": "m1",
+    "role": "user",
+    "content": "Deploy the web build to staging.",
+    "timestamp": 1768485600000,
+    "line": 1
+   },
+   {
+    "_id": "m2",
+    "role": "assistant",
+    "content": "",
+    "timestamp": 1768485640000,
+    "line": 2,
+    "tool_calls": [
+     {
+      "id": "b1",
+      "name": "Bash",
+      "input": "{\"command\": \"bun run deploy:staging\"}"
+     }
+    ]
+   },
+   {
+    "_id": "m3",
+    "role": "user",
+    "content": "",
+    "timestamp": 1768485680000,
+    "line": 3,
+    "tool_results": [
+     {
+      "tool_use_id": "b1",
+      "content": "Building web... done in 38s\nUploading... Error: STAGING_TOKEN is not set\nexit 1",
+      "is_error": true
+     }
+    ]
+   },
+   {
+    "_id": "m4",
+    "role": "assistant",
+    "content": "The deploy failed at the upload step: STAGING_TOKEN is not set in this shell, so the uploader refused to start. The build itself succeeded.",
+    "timestamp": 1768485720000,
+    "line": 4
+   },
+   {
+    "_id": "m5",
+    "role": "user",
+    "content": "It is in the team vault now under staging/deploy, load it and try again.",
+    "timestamp": 1768485760000,
+    "line": 5
+   },
+   {
+    "_id": "m6",
+    "role": "assistant",
+    "content": "",
+    "timestamp": 1768485800000,
+    "line": 6,
+    "tool_calls": [
+     {
+      "id": "b2",
+      "name": "Bash",
+      "input": "{\"command\": \"export STAGING_TOKEN=$(vault read -field=token staging/deploy) && bun run deploy:staging\"}"
+     }
+    ]
+   },
+   {
+    "_id": "m7",
+    "role": "user",
+    "content": "",
+    "timestamp": 1768485840000,
+    "line": 7,
+    "tool_results": [
+     {
+      "tool_use_id": "b2",
+      "content": "Building web... done in 36s\nUploading... done\nDeployed to staging in 41s"
+     }
+    ]
+   },
+   {
+    "_id": "m8",
+    "role": "assistant",
+    "content": "Deployed to staging after loading STAGING_TOKEN from the vault. The staging site serves the new build.",
+    "timestamp": 1768485880000,
+    "line": 8
+   }
+  ]
+ }
+}

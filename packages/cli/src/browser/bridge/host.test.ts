@@ -6,12 +6,14 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
+import * as fs from "node:fs";
 import * as http from "node:http";
 import * as net from "node:net";
+import * as os from "node:os";
 import { WebSocket, WebSocketServer } from "ws";
 import { CdpConnection, CdpError, listTargets } from "../cdp.js";
 import { freePort } from "../instance.js";
-import { probeHost, proveBridgeHost, startBridgeHost, type RunningHost } from "./host.js";
+import { bridgeHostPlistXml, probeHost, proveBridgeHost, startBridgeHost, type RunningHost } from "./host.js";
 import { CLOSE_HANDSHAKE_TIMEOUT } from "./protocol.js";
 import { dial, FakeExtension, TEST_TOKEN as TOKEN } from "./host.testutil.js";
 import { BRIDGE_PROTOCOL, BRIDGE_STORE_URL, bridgeProof, CLOSE_BAD_TOKEN, randomNonce, secretMatches, tabIdOfTarget, targetIdOfTab } from "./protocol.js";
@@ -219,6 +221,18 @@ describe("bridge host auth", () => {
     expect(await probeHost({ port: await freePort(), token: TOKEN })).toBe("down");
   });
 
+  test.if(process.platform === "darwin")("the launchd job plist for the host is valid with awkward paths and values", () => {
+    const file = `${fs.mkdtempSync(`${os.tmpdir()}/cast-plist-`)}/host.plist`;
+    fs.writeFileSync(file, bridgeHostPlistXml("sh.codecast.bridge-host.41729", ["/a b/bun", "/x&y/main.ts", "browser", "bridge-host"], { PATH: "/bin:/usr/bin", CODECAST_DIR: "/tmp/<odd> & dir" }, "/tmp/log path.log"));
+    const lint = Bun.spawnSync(["plutil", "-lint", file]);
+    expect(lint.exitCode).toBe(0);
+    const json = JSON.parse(String(Bun.spawnSync(["plutil", "-convert", "json", "-o", "-", file]).stdout));
+    expect(json.ProgramArguments[1]).toBe("/x&y/main.ts");
+    expect(json.EnvironmentVariables.CODECAST_DIR).toBe("/tmp/<odd> & dir");
+    expect(json.ProcessType).toBe("Interactive");
+    expect(json.KeepAlive).toBe(false);
+  });
+
   test("a port that accepts but never answers is busy, not down", async () => {
     // A starved host on a loaded machine looks exactly like this: the
     // kernel completes the connection, the process never gets to the request.
@@ -227,16 +241,14 @@ describe("bridge host auth", () => {
     await new Promise<void>((r) => silent.listen(port, "127.0.0.1", r));
     try {
       expect(await probeHost({ port, token: TOKEN }, 300)).toBe("busy");
-      // The error names what was measured: a listener that did not answer,
-      // the host's pid and its log. It does not guess at the machine's load;
-      // the host runs at normal priority and answers in under a millisecond
-      // under a load average of 400, so a silent port is a stalled host or
-      // a stranger on the port, not a busy computer.
+      // The error says the host is up and busy, points at the log that names
+      // the traffic, and never hands out a pid: agents told "stalled (pid N)"
+      // killed the host, which dropped every session's tabs and fixed nothing.
       const err = await proveBridgeHost({ port, token: TOKEN, hostPid: 4242 }, 300).then(() => null, (e: Error) => e.message);
-      expect(err).toContain(`listening on 127.0.0.1:${port} but did not answer`);
-      expect(err).toContain("pid 4242");
+      expect(err).toContain(`on 127.0.0.1:${port} is up but did not answer`);
       expect(err).toContain("bridge-host.log");
-      expect(err).not.toMatch(/machine|busy/);
+      expect(err).toContain("do not kill the host");
+      expect(err).not.toContain("4242");
     } finally {
       silent.close();
     }

@@ -29,16 +29,21 @@ import {
 import "@xyflow/react/dist/style.css";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useTheme } from "../ThemeProvider";
-import { ghostNodeIdFor, ghostsFor, layoutOrgTree, parentRefOfNodeId, type OrgGhostOptions, type OrgGhostPlan, type OrgLayoutNode, type OrgLayoutView, focusTargetNodeId, type OrgFocusTarget } from "./orgLayout";
-import { ClusterCard, PersonCard, RoleCard, SessionCard } from "./OrgNodeCards";
+import { ghostNodeIdFor, ghostsFor, layoutOrgTree, parentRefOfNodeId, type OrgGhostOptions, type OrgGhostPlan, type OrgLayoutEdge, type OrgLayoutNode, type OrgLayoutView, focusTargetNodeId, type OrgFocusTarget } from "./orgLayout";
+import { ClusterCard, HealthRoleCard, PersonCard, RoleCard, SessionCard, type HealthRoleNodeData } from "./OrgNodeCards";
 import { computeOrgViewport, FIT_PAD, hiddenRoots } from "./orgViewport";
 import { sameParent, type OrgParentRef, type OrgTree } from "./orgTypes";
 import { changeLine, GHOST, healthFlagsByNode } from "./orgMeta";
 import type { OrgHealth, OrgProposalChange } from "./orgStaffingTypes";
 import { EditChangeForm } from "./StaffingPane";
 import { orgRoleReparentMakesCycle } from "../../store/orgSlice";
+import { ORG_FLOW_EDGE_TYPES, type FlowEdgeData, type FlowSendData } from "./OrgFlowEdges";
+import type { FlowMap, RoleFlow } from "./orgFlow";
 
-const ORG_NODE_TYPES = { person: PersonCard, role: RoleCard, session: SessionCard, cluster: ClusterCard };
+/** The health map fits its whole tree down to this zoom: cards and counts stay legible. */
+const FLOW_READABLE_ZOOM = 0.42;
+
+const ORG_NODE_TYPES = { person: PersonCard, role: RoleCard, session: SessionCard, cluster: ClusterCard, healthRole: HealthRoleCard };
 
 export type OrgReparentRequest = {
   subject: { kind: "session"; id: string; title: string } | { kind: "role"; id: string; title: string };
@@ -63,6 +68,10 @@ export type OrgGraphProps = {
   onOpenSession?: (conversationId: string) => void;
   /** Bumped by the page after a cancelled move, to snap the card back. */
   resetKey?: number;
+  /** The health map (HealthBoard): reporting edges carry the week's work and
+   *  handoffs between roles are drawn across the tree; a focused role keeps
+   *  its edges lit and dims the rest. */
+  flow?: { map: FlowMap; focusNodeId: string | null; roles: Record<string, RoleFlow>; days: string[] };
   /** Width of the panel overlaying the right edge of the canvas (0 = closed).
    *  The fit uses the canvas left of it. */
   panelWidth?: number;
@@ -157,7 +166,7 @@ function toFlowNodes(layout: OrgLayoutNode[], selectedId: string | null, dropTar
 }
 
 function OrgGraphInner(props: OrgGraphProps) {
-  const { tree, view, selectedId, loadingClusters, showMiniMap, onSelect, onToggleCollapse, onExpandCluster, onCollapseCluster, onReparentRequest, onNodeContextMenu, onOpenSession, resetKey, panelWidth = 0, panelHeightFraction = 0, canDrag, changes, health, viewerSession, focusChangeId = null, focusTarget = null, onFocusChange, onDecideChange, onEditRoleChange, chrome = true } = props;
+  const { tree, view, selectedId, loadingClusters, showMiniMap, onSelect, onToggleCollapse, onExpandCluster, onCollapseCluster, onReparentRequest, onNodeContextMenu, onOpenSession, resetKey, panelWidth = 0, panelHeightFraction = 0, canDrag, changes, health, viewerSession, focusChangeId = null, focusTarget = null, onFocusChange, onDecideChange, onEditRoleChange, chrome = true, flow } = props;
   const { theme } = useTheme();
   const rf = useReactFlow();
 
@@ -201,12 +210,19 @@ function OrgGraphInner(props: OrgGraphProps) {
       else setEditing({ change: c, at });
     },
   }), [focusChangeId, onFocusChange, onDecideChange, onEditRoleChange, changeById]);
-  const flowNodes = useMemo(
-    () => toFlowNodes(layout.nodes, selectedId, dropTargetId, draggingId, loadingClusters, handlers, canDrag, ghostHandlers, flagsByNode),
-    [layout, selectedId, dropTargetId, draggingId, loadingClusters, handlers, canDrag, ghostHandlers, flagsByNode],
-  );
+  const flowNodes = useMemo(() => {
+    const nodes = toFlowNodes(layout.nodes, selectedId, dropTargetId, draggingId, loadingClusters, handlers, canDrag, ghostHandlers, flagsByNode);
+    if (!flow) return nodes;
+    // The health map: a role draws its week instead of its sessions.
+    return nodes.map((n) => {
+      const f = n.type === "role" ? flow.roles[n.id] : undefined;
+      if (!f) return n;
+      const data: HealthRoleNodeData = { role: f.role, selected: n.id === selectedId, flow: f, days: flow.days };
+      return { ...n, type: "healthRole", draggable: false, data };
+    });
+  }, [layout, selectedId, dropTargetId, draggingId, loadingClusters, handlers, canDrag, ghostHandlers, flagsByNode, flow]);
   const flowEdges = useMemo<Edge[]>(
-    () => layout.edges.map((e) => ({
+    () => flow ? flowModeEdges(layout.edges, flow.map, flow.focusNodeId) : layout.edges.map((e) => ({
       id: e.id,
       source: e.source,
       target: e.target,
@@ -221,7 +237,7 @@ function OrgGraphInner(props: OrgGraphProps) {
           : { stroke: "color-mix(in srgb, var(--sol-border) 70%, transparent)", strokeWidth: 1.5, opacity: e.faded ? 0.3 : 1 },
       pathOptions: e.kind === "stack" ? undefined : { borderRadius: 14 },
     } as Edge)),
-    [layout],
+    [layout, flow],
   );
 
   // Controlled nodes so a drag moves the card; every layout change re-seeds.
@@ -257,7 +273,7 @@ function OrgGraphInner(props: OrgGraphProps) {
   const fit = useCallback((animate: boolean): boolean => {
     const el = wrapRef.current;
     if (!el || el.clientWidth === 0) return false;
-    const vp = computeOrgViewport(layout.nodes, el.clientWidth, el.clientHeight, panelWidth, focusId, null, el.clientHeight * panelHeightFraction);
+    const vp = computeOrgViewport(layout.nodes, el.clientWidth, el.clientHeight, panelWidth, focusId, null, el.clientHeight * panelHeightFraction, flow ? FLOW_READABLE_ZOOM : undefined);
     if (!vp) return false;
     // Animated viewport moves ride frame timers, which a hidden tab never gets.
     const current = rf.getViewport();
@@ -266,7 +282,7 @@ function OrgGraphInner(props: OrgGraphProps) {
     }
     recomputeCue({ x: vp.x, y: vp.y, zoom: vp.zoom });
     return true;
-  }, [layout, panelWidth, panelHeightFraction, focusId, rf, recomputeCue]);
+  }, [layout, panelWidth, panelHeightFraction, focusId, rf, recomputeCue, flow]);
   const panTo = useCallback((n: OrgLayoutNode, side: "left" | "right") => {
     const el = wrapRef.current;
     if (!el) return;
@@ -320,7 +336,7 @@ function OrgGraphInner(props: OrgGraphProps) {
   useWatchEffect(() => {
     const el = wrapRef.current;
     if (!focusNodeId || !el || !viewportReady) return;
-    const vp = computeOrgViewport(layout.nodes, el.clientWidth, el.clientHeight, panelWidth, focusId, { id: focusNodeId, zoom: rf.getViewport().zoom }, el.clientHeight * panelHeightFraction);
+    const vp = computeOrgViewport(layout.nodes, el.clientWidth, el.clientHeight, panelWidth, focusId, { id: focusNodeId, zoom: rf.getViewport().zoom }, el.clientHeight * panelHeightFraction, flow ? FLOW_READABLE_ZOOM : undefined);
     if (!vp) return;
     userMoved.current = true;
     rf.setViewport({ x: vp.x, y: vp.y, zoom: vp.zoom }, { duration: document.hidden ? 0 : 280 });
@@ -425,6 +441,7 @@ function OrgGraphInner(props: OrgGraphProps) {
       nodes={nodes}
       edges={edges}
       nodeTypes={ORG_NODE_TYPES}
+      edgeTypes={ORG_FLOW_EDGE_TYPES}
       onNodesChange={onNodesChange}
       onNodeClick={onNodeClick}
       onNodeDoubleClick={onNodeDoubleClick}
@@ -537,4 +554,28 @@ export function OrgGraph(props: OrgGraphProps) {
       <OrgGraphInner {...props} />
     </ReactFlowProvider>
   );
+}
+
+/** The health map's edges: a reporting edge into a role carries what reached
+ *  it this week, every other tree edge stays a thin line, and each handoff
+ *  between roles is its own curve, laned when a pair has more than one. */
+function flowModeEdges(edges: OrgLayoutEdge[], map: FlowMap, focus: string | null): Edge[] {
+  const lit = (a: string, b: string) => !focus || a === focus || b === focus;
+  const out: Edge[] = edges.filter((e) => e.kind !== "ghost").map((e) => {
+    const w = e.kind === "tree" ? map.into[e.target] : undefined;
+    if (w) {
+      const data: FlowEdgeData = { n: w.n, max: map.max, hot: w.atLimit, dim: !lit(e.source, e.target), focus: !!focus && e.target === focus };
+      return { id: e.id, source: e.source, target: e.target, type: "flow", selectable: false, focusable: false, data } as Edge;
+    }
+    return { id: e.id, source: e.source, target: e.target, type: "smoothstep", selectable: false, focusable: false, style: { stroke: "color-mix(in srgb, var(--sol-border) 60%, transparent)", strokeWidth: 1.25, opacity: lit(e.source, e.target) ? 0.8 : 0.2 }, pathOptions: { borderRadius: 14 } } as Edge;
+  });
+  const lanes = new Map<string, number>();
+  for (const s of map.sends) {
+    const pair = [s.source, s.target].sort().join("|");
+    const lane = lanes.get(pair) ?? 0;
+    lanes.set(pair, lane + 1);
+    const data: FlowSendData = { n: s.n, max: map.max, dim: !lit(s.source, s.target), focus: !!focus && (s.source === focus || s.target === focus), lane };
+    out.push({ id: s.id, source: s.source, target: s.target, type: "flowSend", selectable: false, focusable: false, zIndex: 1, data } as Edge);
+  }
+  return out;
 }

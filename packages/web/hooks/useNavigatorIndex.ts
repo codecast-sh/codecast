@@ -1,15 +1,14 @@
 import { useMemo } from "react";
-import { isStickyEligible, pickStickyFallbackFromLoaded, stickyPromptContent, mergeNavigatorSources, buildNavigatorRows } from "../lib/messageNavigator";
+import { isStickyEligible, stickyPromptContent, mergeNavigatorSources, buildNavigatorRows } from "../lib/messageNavigator";
 import { isStickyWorthy } from "../components/conversation/classify";
 import type { Message, TimelineItem, UserMessageKind } from "../components/conversation/types";
 import type { UserMessage } from "../store/inboxStore";
 
-export function useNavigatorIndex({ cachedUserMessages, messages, timeline, userMsgKindMap, hasMoreAbove }: {
+export function useNavigatorIndex({ cachedUserMessages, messages, timeline, userMsgKindMap }: {
   cachedUserMessages: UserMessage[] | undefined;
   messages: Message[];
   timeline: TimelineItem[];
   userMsgKindMap: Map<string, UserMessageKind>;
-  hasMoreAbove: boolean | undefined;
 }) {
   // Full navigable-message list from the store cache (populated once by
   // useConversationMessages), unioned with the loaded transcript window.
@@ -69,14 +68,13 @@ export function useNavigatorIndex({ cachedUserMessages, messages, timeline, user
     [timeline],
   );
 
-  const serverStickyFallback = useMemo(() => {
-    if (!hasMoreAbove) return null;
-    const loaded: Message[] = [];
-    for (const item of timeline) {
-      if (item.type === 'message') loaded.push(item.data as Message);
-    }
-    return pickStickyFallbackFromLoaded(serverUserMessages, loaded);
-  }, [serverUserMessages, timeline, hasMoreAbove]);
+  // Ids the window holds, so the sticky resolution can tell which prompts
+  // only the full list can supply (pickStickyFallback).
+  const loadedMessageIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const id of timelineMessageIds) if (id) ids.add(id);
+    return ids;
+  }, [timelineMessageIds]);
 
-  return { serverUserMessages, stickyUserMsgIndices, navigatorTimelineIndices, timelineMessageIds, serverStickyFallback };
+  return { serverUserMessages, stickyUserMsgIndices, navigatorTimelineIndices, timelineMessageIds, loadedMessageIds };
 }

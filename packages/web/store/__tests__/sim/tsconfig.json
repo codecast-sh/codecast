@@ -1,0 +1,21 @@
+{
+  // The multiplayer sim harness and the legacy store sims it grew from
+  // (docs/architecture/multiplayer-sim-harness.md). The app tsconfig excludes
+  // every test file because it has no bun types; this program adds them so
+  // `cast check sim` covers the harness. @types/bun resolves only under
+  // packages/cli today, hence the typeRoots path.
+  "extends": "../../../tsconfig.json",
+  "compilerOptions": {
+    "incremental": false,
+    "typeRoots": ["../../../../cli/node_modules/@types"],
+    "types": ["bun"]
+  },
+  "include": [
+    "./**/*.ts",
+    "../inboxSimHarness.ts",
+    "../inboxConvergenceSim.test.ts",
+    "../inboxMultiWindowSim.test.ts",
+    "../../../scripts/sim.ts"
+  ],
+  "exclude": []
+}
