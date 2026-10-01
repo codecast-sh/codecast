@@ -5,6 +5,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { Card } from "../../components/ui/card";
 import { Input } from "../../components/ui/input";
 import Link from "next/link";
+import { peopleOf } from "@codecast/shared/team/memberKind";
 
 export default function TeamPage() {
   const user = useQuery(api.users.getCurrentUser);
@@ -54,9 +55,8 @@ export default function TeamPage() {
     return "offline";
   };
 
-  const filteredMembers = teamMembers
-    ?.filter((m): m is NonNullable<typeof m> => m !== null)
-    .filter((member) => {
+  const people = peopleOf(teamMembers);
+  const filteredMembers = people.filter((member) => {
       const searchLower = searchTerm.toLowerCase();
       return (
         member.name?.toLowerCase().includes(searchLower) ||
@@ -70,7 +70,7 @@ export default function TeamPage() {
         <div>
           <h1 className="text-2xl font-bold text-sol-text mb-2">Team Directory</h1>
           <p className="text-sol-base1">
-            {teamMembers?.length || 0} member{(teamMembers?.length || 0) !== 1 ? "s" : ""}
+            {people.length} member{people.length !== 1 ? "s" : ""}
           </p>
         </div>
         <Link

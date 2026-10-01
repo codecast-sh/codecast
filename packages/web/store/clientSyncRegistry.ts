@@ -803,6 +803,23 @@ export const CLIENT_SYNC_REGISTRY = {
   notifications: {
     localFirst: true,
   },
+  // The flags a person flips from inside a huddle (calls.setRoomLocked,
+  // calls.setRoomTranscribeOff), one row per live room keyed by room_key. Their
+  // one home: calls.getLiveRooms carries them, and useCallSync files them here
+  // and the roster in `liveRooms`. Snapshot (the feed is the complete set of
+  // live rooms, so an ended room's row goes), never persisted (a huddle is
+  // re-derived on every load). localFirst: setRoomLocked / setRoomTranscribeOff
+  // flip the draft and ride the same-named dispatch side effects, and a push
+  // computed before the write committed cannot flap the control back.
+  // transcribe_off_at is a server clock: the draft stamps its own so this
+  // window's scribe can tell the opt-out is aimed at its run, and the server's
+  // stamp replaces it.
+  callRooms: {
+    sync: {},
+    localFirst: true,
+    unprotectedFields: ["transcribe_off_at"],
+    feeds: ["calls.getLiveRooms"],
+  },
   clientState: {
     persistence: { kind: "meta", key: "clientState" },
     dispatchTable: { table: "client_state", kind: "singleton" },
@@ -1191,6 +1208,9 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   messageFeed: "shared",
   machineRoster: "shared",
   notifications: "shared",
+  // Fed in every window by useCallSync (calls are window effects, not host
+  // feeders), like the liveRooms roster it is split from.
+  callRooms: "local",
   clientState: "shared",
   liveInboxIdList: "shared",
   teamInboxIdSnapshot: "shared",

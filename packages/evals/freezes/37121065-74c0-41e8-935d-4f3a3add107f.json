@@ -1,0 +1,26 @@
+{
+  "name": "title rate-limit-done",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:rate-limit-done"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "title:rate-limit-done",
+    "title": "title rate-limit-done"
+  },
+  "asOf": "2026-01-15T14:30:05.000Z",
+  "trigger": {
+    "type": "title"
+  },
+  "meta": {
+    "surface": "title",
+    "visibility": "public",
+    "snapshot": "fixtures/title/rate-limit-done.json"
+  },
+  "judge": "names the per-sender rate limiting of the billing webhook as the goal (not the flaky test detour), specific enough to find it later; the subtitle reflects the configurable limits and passing tests",
+  "notes": null,
+  "tags": [],
+  "id": "37121065-74c0-41e8-935d-4f3a3add107f",
+  "createdAt": "2026-10-01T17:44:50.922Z"
+}

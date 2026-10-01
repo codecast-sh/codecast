@@ -13,6 +13,7 @@ import {
 import { SettingsOptionGroup, SettingsPanel, SettingsRow, SettingsSection } from "../../../components/settings/ui";
 import { useOsPermission } from "../../../hooks/useOsPermissions";
 import { PermissionRow } from "../../../components/permissions/PermissionRow";
+import { peopleOf } from "@codecast/shared/team/memberKind";
 
 /* This device's OS-level permission (System Settings / browser site
  * permission) — a separate axis from the in-app prefs below: with it off,
@@ -150,9 +151,7 @@ export default function NotificationsSettingsPage() {
   if (!user) return null;
 
   type TeamMember = { _id: Id<"users">; name?: string | null; email?: string | null; github_avatar_url?: string | null; title?: string | null };
-  const otherMembers = (teamMembers ?? []).filter(
-    (m: any) => m != null && m._id !== user._id
-  ) as TeamMember[];
+  const otherMembers = peopleOf(teamMembers as any[]).filter((m) => m._id !== user._id) as TeamMember[];
 
   return (
     <SettingsPanel>

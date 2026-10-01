@@ -1,16 +1,17 @@
 /**
- * Chapter 13, Anywhere (80 to 84s): the same sessions on a laptop, a cloud
- * host and in a browser. PLACEHOLDER: replace each placeholder part with the
- * real views it names, fed by ../fixtures/remote.ts. See README.md for the
- * contract.
+ * Chapter 13, Anywhere (82.3 to 88.8s): the API worker, running on a cloud
+ * host, is opened from its inbox row beside the laptop's sessions, and its
+ * conversation shows it driving a browser there. Views in ./remote.tsx, fed
+ * by ../fixtures/remote.ts.
  */
 
-import { placeholderPart } from "../placeholderParts";
+import { WorkerHeader, WorkerTail } from "./remote";
 import type { HeroChapter } from "./contract";
 
 export const chapter: HeroChapter = {
   id: "remote",
   parts: [
-    placeholderPart("remote", "inset", "desk.inset", 0, "Machines and browser", ["MachineChips", "TmuxAttachPill", "BrowserTabPill", "WatchAddress", "CastCommandBlock (cast computer)"]),
+    { key: "header", region: "desk.header", order: 10, Component: WorkerHeader },
+    { key: "tail", region: "desk.transcript", order: 60, Component: WorkerTail },
   ],
 };

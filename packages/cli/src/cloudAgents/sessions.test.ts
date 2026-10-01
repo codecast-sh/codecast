@@ -7,6 +7,7 @@ import { CursorCloudAdapter, CursorCloudApi } from "./cursor.js";
 import { CloudApiError } from "./http.js";
 import { CloudAgentSessions, githubRepoAt } from "./sessions.js";
 import { CloudAgentSetupError } from "./types.js";
+import { fakeSessionWatcher } from "../test-helpers/cloudAgentFakes.js";
 import { deviceLabel } from "../remote/device.js";
 
 const cleanups: (() => void)[] = [];
@@ -26,8 +27,9 @@ function adapterWith(api: CursorCloudApi | null): CursorCloudAdapter {
 
 function sessions(api: CursorCloudApi | null, file = path.join(tmp(), "sessions.json")) {
   const statuses: string[] = [];
-  const s = new CloudAgentSessions(adapterWith(api), {
-    watcher: () => ({ follow: async () => {}, setNotice: () => {}, isRunning: () => false }),
+  const adapter = adapterWith(api);
+  const s = new CloudAgentSessions(adapter, {
+    watcher: () => fakeSessionWatcher(adapter),
     bindSession: () => {},
     agentForConversation: () => undefined,
     setStatus: (_c, st) => statuses.push(st),

@@ -1,15 +1,10 @@
 // AWS Signature Version 4, shared by the EC2 waker (header signing) and the
 // R2 media store (presigned URLs; R2 speaks the S3 protocol with region "auto").
 
+import { hex, hmacSha256 as hmac } from "./hmac";
+
 const encoder = new TextEncoder();
-
-export const hex = (bytes: ArrayBuffer) => Array.from(new Uint8Array(bytes), (b) => b.toString(16).padStart(2, "0")).join("");
 export const sha256Hex = async (value: string) => hex(await crypto.subtle.digest("SHA-256", encoder.encode(value)));
-
-async function hmac(key: ArrayBuffer, value: string): Promise<ArrayBuffer> {
-  const imported = await crypto.subtle.importKey("raw", key, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  return crypto.subtle.sign("HMAC", imported, encoder.encode(value));
-}
 
 /** 20260924T010203Z */
 export const amzTimestamp = (now: Date) => now.toISOString().replace(/[:-]|\.\d{3}/g, "");

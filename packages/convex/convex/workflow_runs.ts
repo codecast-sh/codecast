@@ -37,7 +37,7 @@ export async function runScope(
 // Owner always; otherwise the run's ACCESS key must grant the viewer. The
 // stored key when present, the write-time compute for rows minted before
 // the backfill (they resolve personal to their owner).
-async function canReadRun(ctx: Ctx, userId: Id<"users">, run: any): Promise<boolean> {
+export async function canReadRun(ctx: Ctx, userId: Id<"users">, run: any): Promise<boolean> {
   if (String(run.user_id) === String(userId)) return true;
   return workspaceGrantsAccess(ctx, userId, await resolveWorkspaceKey(ctx, run));
 }

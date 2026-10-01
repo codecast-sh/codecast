@@ -1,0 +1,32 @@
+{
+  "asOf": "2026-09-28T09:00:00.000Z",
+  "notes": "The team workspace's own agent coming online for the first time.",
+  "judge": "orients the agent to the workspace it serves and how it works there, saves its role to memory as the opening asks, says a one-line hello, and changes nothing through cast",
+  "snapshot": {
+    "captured_at": "2026-09-28T09:00:00.000Z",
+    "facts": {
+      "name": "Fern",
+      "scopeType": "team",
+      "scopeLabel": "the Fernhill team",
+      "teamName": "Fernhill"
+    },
+    "world": "fernhill",
+    "reads": [
+      {
+        "argv": [
+          "brief"
+        ],
+        "out": "Not inside a role's session: pass a handle (cast brief @handle)",
+        "exit": 1
+      },
+      {
+        "argv": [
+          "brief",
+          "--json"
+        ],
+        "out": "Not inside a role's session: pass a handle (cast brief @handle)",
+        "exit": 1
+      }
+    ]
+  }
+}

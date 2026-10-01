@@ -5,6 +5,7 @@
 // destructiveCommands.ts) is offered only when the typed token is a near-miss
 // of that very command. ct-49545.
 
+import { levenshtein } from "@codecast/shared/contracts/levenshtein";
 import { isDestructivePath } from "./destructiveCommands.js";
 
 /** How far a typo may sit from a command before it stops being a typo of it. */
@@ -27,22 +28,6 @@ export type CommandNode = {
   hidden?: boolean;
   children?: readonly CommandNode[];
 };
-
-export function levenshtein(a: string, b: string): number {
-  if (a === b) return 0;
-  if (!a.length) return b.length;
-  if (!b.length) return a.length;
-  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
-  for (let i = 1; i <= a.length; i++) {
-    const row = [i];
-    for (let j = 1; j <= b.length; j++) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      row[j] = Math.min(prev[j]! + 1, row[j - 1]! + 1, prev[j - 1]! + cost);
-    }
-    prev = row;
-  }
-  return prev[b.length]!;
-}
 
 function tokens(node: CommandNode): string[] {
   return [node.name, ...(node.aliases ?? [])];

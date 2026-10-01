@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { captureException } from "@sentry/react";
 import { useInboxStore } from "../store/inboxStore";
 import { subscribeGestures } from "../store/gestureBridge";
+import { applyBridgedGesture } from "../store/syncReplication";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { NavigationProgress } from "@/components/NavigationProgress";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -35,16 +36,7 @@ function PrefsMigration() {
 function GestureBridge() {
   useMountEffect(() => {
     const currentUserId = () => useInboxStore.getState().currentUser?._id?.toString?.() ?? null;
-    const bind = () =>
-      subscribeGestures(currentUserId(), currentUserId, (msg) => {
-        // Follow state is ephemeral window state, not a row: it never enters
-        // the draft, so it takes its own path to the setter.
-        if (msg.kind === "follow") {
-          useInboxStore.getState().setFollowLeader(msg.leaderId, { fromBridge: true });
-          return;
-        }
-        useInboxStore.getState().applyGestureBridge(msg);
-      });
+    const bind = () => subscribeGestures(currentUserId(), currentUserId, applyBridgedGesture);
     let boundTo = currentUserId();
     let stop = bind();
     const unsubscribe = useInboxStore.subscribe(() => {
