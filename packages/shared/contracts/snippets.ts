@@ -689,7 +689,7 @@ A tree lists its programs in \`.codecast/check.toml\` as a \`[projects]\` table 
 
 Point each entry at the tsconfig the package's own \`typecheck\` script runs, not necessarily the plain \`tsconfig.json\`: a build that narrows \`rootDir\` often keeps a widened \`tsconfig.typecheck.json\`, and checking the build config reports hundreds of files-outside-root errors. When a check is red with errors nobody wrote, suspect the entry before the code.
 
-The first ask builds the program (as slow as \`tsc\`); later asks take seconds. If a pass is still running, ask again rather than starting your own \`tsc\`. Sessions in one checkout share a watcher and each worktree gets its own. A watcher stops after 45 idle minutes, and a machine keeps at most six, stopping the longest idle.
+The first ask builds the program (as slow as \`tsc\`); later asks take seconds. If a pass is still running, ask again rather than starting your own \`tsc\`. Sessions in one checkout share a watcher and each worktree gets its own. A machine keeps at most six watchers. When all six are busy an ask waits in a queue and starts when a slot frees, so wait on it rather than polling; a pass nobody waits on gives its slot up, and a watcher stops after 45 idle minutes.
 ${CHECK_SNIPPET_END}
 `;
 
@@ -717,6 +717,7 @@ Every codecast object has a short ID. Written anywhere (messages, summaries, tas
 | Plan    | \`pl-88\`   | \`cast plan ls\` |
 | Trigger | \`tr-42\`   | \`cast trigger ls\` |
 | Doc     | \`doc:<id>\` | \`cast doc ls\`, \`cast doc search\` |
+| Call    | \`cl-42\`   | \`cast calls\` |
 
 Write the bare ID by default (\`Filed under ct-4102.\`); it reads as a normal sentence and still renders in full. Write \`@[Title id]\` (\`@[Fix the auth race ct-4102]\`) when the sentence needs the name. Never paste a 32-character internal ID: it renders as an unreadable blob, and every command accepts the short one.
 ${REFERENCES_SNIPPET_END}
@@ -813,12 +814,13 @@ Team huddles are transcribed with exact speaker attribution, and each call gets 
 \`\`\`bash
 cast calls                        # team call history, live calls first
 cast call <id>                    # one call: summary + action items
-cast call <id> --transcript       # full who-said-what transcript
+cast call <id> --transcript       # full who-said-what transcript, each line labeled with its cl-42:15 reference
+cast call <id> 15:25              # just lines 15 to 25
 cast call <id> --json             # machine-readable, segments too
 cast call hold 3m|off             # hold the room's words while you work
 \`\`\`
 
-When a task or thread refers to what was said on a call, read the transcript and quote the exact line rather than paraphrase it.
+When a task or thread refers to what was said on a call, read the transcript and cite the words rather than paraphrase them. A call's short ID with a line range, \`cl-42:15-25\`, renders as those lines with their speakers when it stands on its own line, and as a pill inline.
 ${CALLS_SNIPPET_END}
 `;
 

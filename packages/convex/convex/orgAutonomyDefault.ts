@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import { internalMutation, internalQuery } from "./functions";
 import type { Id } from "./_generated/dataModel";
-import { CHIEF_OF_STAFF_HANDLE } from "./lib/orgAccess";
+import { HEAD_OF_PEOPLE_HANDLE, isHeadOfPeopleRole } from "./lib/orgAccess";
 import { roleStartsOnItsOwn } from "./lib/orgCaps";
 import { trustForSwitch } from "@codecast/shared/contracts/roleAutonomy";
 
@@ -51,7 +51,7 @@ export async function planAutonomyDefault(ctx: { db: any }): Promise<AutonomyDef
   const out: AutonomyDefaultRow[] = [];
   for (const role of roles) {
     const action: AutonomyDefaultAction = role.status === "retired" ? "retired"
-      : role.handle === CHIEF_OF_STAFF_HANDLE ? "root_off"
+      : isHeadOfPeopleRole(role) ? "root_off"
       : roleStartsOnItsOwn(role) ? "already_on"
       : "turn_on";
     out.push({ role_id: role._id, short_id: role.short_id, handle: role.handle, workspace: await workspaceOf(ctx, role), status: role.status, stored: role.trust ?? null, action });

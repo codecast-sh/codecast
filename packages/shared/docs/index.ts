@@ -195,3 +195,57 @@ export function stripTitleHeading(content: string | null | undefined): string {
   if (!m) return content;
   return front + body.slice(m.end).replace(/^\s*\n/, "");
 }
+
+/** How much of a doc rides along when someone mentions it; the rest is a read away. */
+export const DOC_MENTION_EXCERPT_CHARS = 2000;
+const DOC_MENTION_OUTLINE_MAX = 40;
+
+/**
+ * A long doc as an agent should first see it: the opening whole lines up to
+ * `maxChars`, then the headings that follow with the line each starts on, so
+ * the agent can read exactly the section it needs (`cast doc show <id> 52:`).
+ * Line numbers count raw content lines from 1, the way `cast doc show` pages.
+ */
+export function docMentionExcerpt(content: string, maxChars: number = DOC_MENTION_EXCERPT_CHARS): {
+  excerpt: string;
+  truncated: boolean;
+  shownLines: number;
+  totalLines: number;
+  outline: Array<{ line: number; heading: string }>;
+} {
+  const lines = content.split("\n");
+  if (content.length <= maxChars) {
+    return { excerpt: content, truncated: false, shownLines: lines.length, totalLines: lines.length, outline: [] };
+  }
+  let used = 0;
+  let shownLines = 0;
+  while (shownLines < lines.length && used + lines[shownLines].length + 1 <= maxChars) {
+    used += lines[shownLines].length + 1;
+    shownLines++;
+  }
+  // One enormous first line still shows something.
+  const excerpt = shownLines > 0 ? lines.slice(0, shownLines).join("\n") : lines[0].slice(0, maxChars);
+  const outline: Array<{ line: number; heading: string }> = [];
+  let inFence = false;
+  for (let i = shownLines; i < lines.length && outline.length < DOC_MENTION_OUTLINE_MAX; i++) {
+    if (/^\s*(```|~~~)/.test(lines[i])) inFence = !inFence;
+    if (inFence) continue;
+    const m = lines[i].match(/^(#{1,4})[ \t]+(.+?)[ \t#]*$/);
+    if (m) outline.push({ line: i + 1, heading: `${m[1]} ${m[2].slice(0, 120)}` });
+  }
+  return { excerpt, truncated: true, shownLines: Math.max(shownLines, 1), totalLines: lines.length, outline };
+}
+
+/** The excerpt rendered as markdown, ending with how to read the rest. */
+export function renderDocMentionExcerpt(content: string, docId: string, maxChars?: number): string {
+  const ex = docMentionExcerpt(content, maxChars);
+  if (!ex.truncated) return `${ex.excerpt.trim()}\n\n> \`cast doc show ${docId}\` for the document\n`;
+  let md = `${ex.excerpt.trimEnd()}\n\n… excerpt ends at line ${ex.shownLines} of ${ex.totalLines}.`;
+  if (ex.outline.length) {
+    md += ` Sections after it:\n\n${ex.outline.map((o) => `- L${o.line} ${o.heading}`).join("\n")}\n`;
+  }
+  md += `\n> \`cast doc show ${docId} <from>:<to>\` reads a line range, \`cast doc grep ${docId} '<text>'\` searches it, \`--full\` reads it all\n`;
+  return md;
+}
+
+export * from "./drafting";

@@ -202,6 +202,12 @@ export const GUIDES: Guide[] = [
     category: "Machines and accounts",
   },
   {
+    slug: "codex-cloud",
+    title: "Codex Cloud tasks in codecast",
+    dek: "Sync, start and drive Codex Cloud tasks on your ChatGPT plan: attempts as branches, pull requests, applying changes locally, and what happens when the private API changes.",
+    category: "Machines and accounts",
+  },
+  {
     slug: "usage-limits",
     title: "Usage limits are a pause",
     dek: "Codecast parks a session that hits a limit, then continues it at the reset or on a saved account that still has room.",

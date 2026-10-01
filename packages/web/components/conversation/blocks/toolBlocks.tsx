@@ -267,19 +267,25 @@ export function WorkflowToolBlock({ tool, result }: { tool: ToolCall; result?: T
   const namedWorkflow = typeof parsedInput.name === "string" ? parsedInput.name : "";
 
   const meta = script ? parseWorkflowScriptMeta(script) : {};
-  const isError = !!result?.is_error;
-  const launch = result && !isError ? parseWorkflowLaunch(safeString(result.content)) : {};
+  // A relaunch refused because the run is still going is not a failure: the
+  // card follows that live run instead of wearing red.
+  const stillRunningId = result?.is_error ? safeString(result.content).match(/Workflow (wf_[\w-]+) is still running/)?.[1] : undefined;
+  const isError = !!result?.is_error && !stillRunningId;
+  const launch = result && !result.is_error ? parseWorkflowLaunch(safeString(result.content)) : {};
 
   const scriptBase = (launch.scriptFile || scriptPath).split("/").pop() || "";
   const name = meta.name || namedWorkflow || scriptBase.replace(/(-wf_[\w-]+)?\.[cm]?js$/, "") || "workflow";
   const summary = meta.description || launch.summary || "";
-  const externalRunId = launch.runId || resumeFromRunId;
+  const externalRunId = launch.runId || stillRunningId || resumeFromRunId;
 
   const run = useQuery(
     api.workflow_runs.getByExternalRunForUser,
     externalRunId ? { external_run_id: externalRunId } : "skip"
   );
-  const sm = wfStatusMeta(run?.status);
+  // A stop (TaskStop, Esc, the host exiting) lands as failed + "Stopped";
+  // it reads as a stop, not a crash.
+  const stopped = run?.status === "failed" && run?.fail_reason === "Stopped";
+  const sm = wfStatusMeta(stopped ? "stopped" : run?.status);
 
   const frame = isError
     ? { border: "border-sol-red/30", bg: "bg-sol-red/10", divider: "border-sol-red/20" }
@@ -310,7 +316,7 @@ export function WorkflowToolBlock({ tool, result }: { tool: ToolCall; result?: T
           ) : run ? (
             <span className={`text-[10px] flex items-center gap-1 ${sm.cls}`}>
               {sm.dot ? <span className={`w-1.5 h-1.5 rounded-full ${sm.dot}`} /> : sm.icon}
-              {run.status}
+              {stopped ? "stopped" : run.status}
             </span>
           ) : result ? (
             <span className="text-[10px] flex items-center gap-1 text-sol-cyan/80">
@@ -972,7 +978,6 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
                     <FooterIconButton
                       onClick={(e) => { e.stopPropagation(); setMdFullscreen(true); }}
                       title="Fullscreen"
-                      label="Full Screen"
                     >
                       <FullscreenIcon />
                     </FooterIconButton>
@@ -1083,7 +1088,6 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
                 <FooterIconButton
                   onClick={(e) => { e.stopPropagation(); setCodeFullscreen(true); }}
                   title="Fullscreen"
-                  label="Full Screen"
                 >
                   <FullscreenIcon />
                 </FooterIconButton>

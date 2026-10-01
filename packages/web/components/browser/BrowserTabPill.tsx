@@ -104,7 +104,7 @@ export function BrowserTabPill({ tab }: { tab: BrowserTabRef }) {
         target="_blank"
         rel="noopener noreferrer"
         className={`${BROWSER_ROW_PILL} ${toneClass(state)}`}
-        onMouseEnter={() => prefetchBrowserFocusEndpoint(convex)}
+        onMouseEnter={actions.check}
         onClick={(e) => {
           e.stopPropagation();
           if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;

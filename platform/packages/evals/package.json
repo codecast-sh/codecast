@@ -1,0 +1,33 @@
+{
+  "name": "@platform/evals",
+  "version": "0.1.0",
+  "description": "Read conversations, freeze a moment, replay and simulate it, judge the result: the terminal CLI, the on-disk run layout, and the multiplayer HTML pages, with the app's data behind adapter seams",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./render": "./src/render/index.ts",
+    "./html": "./src/html/index.ts",
+    "./cli": "./src/cli/index.ts",
+    "./fs": "./src/fs/index.ts",
+    "./fixture": "./src/fixture.ts",
+    "./snippet": "./src/snippet.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@platform/cli-kit": "file:../cli-kit",
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.2"
+  }
+}

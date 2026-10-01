@@ -63,7 +63,30 @@ function fieldValue(row: any, field: string): any {
   return field.split(".").reduce((acc, key) => (acc == null ? undefined : acc[key]), row);
 }
 
-export function makeFakeDb(tables: Record<string, any[]>) {
+// Opt-in fidelity for the multiplayer sim (convex/simBackend.testing.ts).
+// Every option is off by default, and with none set the db behaves exactly as
+// it always has, so existing tests see no change.
+export interface FakeDbOptions {
+  // Mint the id of an inserted row; `n` counts inserts into that table from 1.
+  // Minted ids are never reused, even after a rollback, as in convex. When
+  // set, rows are also indexed by id, so get/patch/replace/delete skip the
+  // table scan (rows must then enter and leave through the db or the seed).
+  mintId?: (table: string, n: number) => string;
+  // Stamp `_creationTime` on an insert that lacks one. Strictly increasing,
+  // even when the clock stands still (a virtual clock usually does).
+  creationTime?: () => number;
+  // A patch value of `undefined` removes the field, as convex does. Without
+  // it the key stays on the row holding `undefined`.
+  strictPatch?: boolean;
+}
+
+type JournalEntry =
+  | { kind: "insert"; table: string; id: string }
+  | { kind: "patch"; row: any; before: any }
+  | { kind: "replace"; table: string; index: number; before: any }
+  | { kind: "delete"; table: string; index: number; row: any };
+
+export function makeFakeDb(tables: Record<string, any[]>, opts: FakeDbOptions = {}) {
   const idTables = new Map<string, string>();
   for (const [table, rows] of Object.entries(tables)) {
     for (const row of rows) idTables.set(String(row._id), table);
@@ -72,12 +95,92 @@ export function makeFakeDb(tables: Record<string, any[]>) {
   const patched: Array<{ _id: any; patch: any }> = [];
   const replaced: Array<{ _id: any; doc: any }> = [];
   const deleted: any[] = [];
+  // Id index, kept only when ids are minted (see FakeDbOptions.mintId).
+  const byId = opts.mintId ? new Map<string, any>() : null;
+  if (byId) for (const rows of Object.values(tables)) for (const row of rows) byId.set(String(row._id), row);
+  const mintCounts = new Map<string, number>();
+  let lastCreationTime = -Infinity;
+  let writeCount = 0;
+  // Undo log of the open journal, null when none is open.
+  let journal: JournalEntry[] | null = null;
+  let journalStart = { writes: 0, inserted: 0, patched: 0, replaced: 0, deleted: 0, tables: new Set<string>() };
+  // The table row with this id: a map hit when ids are indexed, else a scan.
+  const rowFor = (id: any): any | null => {
+    const hit = byId?.get(String(id));
+    if (hit) return hit;
+    for (const rows of Object.values(tables)) {
+      const r = rows.find((x: any) => x._id === id);
+      if (r) return r;
+    }
+    return null;
+  };
+  // The row with its table and position, for writes that move it.
+  const locate = (id: any): { table: string; rows: any[]; index: number } | null => {
+    const row = rowFor(id);
+    if (!row) return null;
+    const known = idTables.get(String(id));
+    const table = known && tables[known]?.includes(row)
+      ? known
+      : Object.keys(tables).find((name) => tables[name]!.includes(row));
+    if (!table) return null;
+    const rows = tables[table]!;
+    const index = rows.indexOf(row);
+    return index >= 0 ? { table, rows, index } : null;
+  };
   const db: any = {
     _tables: tables,
     _inserted: inserted,
     _patched: patched,
     _replaced: replaced,
     _deleted: deleted,
+    // Inserts, patches, replaces and deletes so far. A rollback restores it.
+    get __writeCount() { return writeCount; },
+    // Start recording undo entries for every write, until commit or rollback.
+    __beginJournal() {
+      if (journal) throw new Error("fake db: a journal is already open");
+      journal = [];
+      journalStart = {
+        writes: writeCount,
+        inserted: inserted.length,
+        patched: patched.length,
+        replaced: replaced.length,
+        deleted: deleted.length,
+        tables: new Set(Object.keys(tables)),
+      };
+    },
+    __commit() { journal = null; },
+    // Undo every write since __beginJournal, newest first, and close it.
+    __rollback() {
+      const entries = journal ?? [];
+      journal = null;
+      for (const entry of entries.reverse()) {
+        if (entry.kind === "insert") {
+          const rows = tables[entry.table] ?? [];
+          const index = rows.findIndex((x: any) => x._id === entry.id);
+          if (index >= 0) rows.splice(index, 1);
+          byId?.delete(entry.id);
+          idTables.delete(entry.id);
+        } else if (entry.kind === "patch") {
+          for (const key of Object.keys(entry.row)) delete entry.row[key];
+          Object.assign(entry.row, entry.before);
+        } else if (entry.kind === "replace") {
+          tables[entry.table]![entry.index] = entry.before;
+          byId?.set(String(entry.before._id), entry.before);
+        } else {
+          (tables[entry.table] ??= []).splice(entry.index, 0, entry.row);
+          byId?.set(String(entry.row._id), entry.row);
+        }
+      }
+      // A table the journal's first insert created goes too.
+      for (const name of Object.keys(tables)) {
+        if (!journalStart.tables.has(name) && tables[name]!.length === 0) delete tables[name];
+      }
+      writeCount = journalStart.writes;
+      inserted.length = journalStart.inserted;
+      patched.length = journalStart.patched;
+      replaced.length = journalStart.replaced;
+      deleted.length = journalStart.deleted;
+    },
     query(table: string) {
       const filters: Array<[string, any]> = [];
       // A search index is an eq-filter chain plus one substring term — enough to
@@ -196,6 +299,10 @@ export function makeFakeDb(tables: Record<string, any[]>) {
       return builder;
     },
     async get(id: any) {
+      if (byId) {
+        const r = rowFor(id);
+        return r ? { ...r } : null;
+      }
       for (const rows of Object.values(tables)) { const r = rows.find((x: any) => x._id === id); if (r) return { ...r }; }
       return null;
     },
@@ -211,27 +318,67 @@ export function makeFakeDb(tables: Record<string, any[]>) {
       return idTables.get(id) === table ? id : null;
     },
     async insert(table: string, doc: any) {
-      // Skip ids the seed already uses: a seeded "chat_channels_1" and a minted
-      // "chat_channels_1" would make db.get() answer with the wrong row.
-      let n = inserted.length + 1;
-      const taken = (id: string) =>
-        Object.values(tables).some((rows) => rows.some((r: any) => r._id === id));
-      let _id = `${table}_${n}`;
-      while (taken(_id)) _id = `${table}_${++n}`;
+      writeCount++;
+      let _id: string;
+      if (opts.mintId) {
+        const n = (mintCounts.get(table) ?? 0) + 1;
+        mintCounts.set(table, n);
+        _id = opts.mintId(table, n);
+      } else {
+        // Skip ids the seed already uses: a seeded "chat_channels_1" and a minted
+        // "chat_channels_1" would make db.get() answer with the wrong row.
+        let n = inserted.length + 1;
+        const taken = (id: string) =>
+          Object.values(tables).some((rows) => rows.some((r: any) => r._id === id));
+        _id = `${table}_${n}`;
+        while (taken(_id)) _id = `${table}_${++n}`;
+      }
       idTables.set(_id, table);
-      (tables[table] ??= []).push({ _id, ...doc });
+      let row: any = { _id, ...doc };
+      if (opts.creationTime && doc?._creationTime === undefined) {
+        lastCreationTime = Math.max(opts.creationTime(), lastCreationTime + 0.001);
+        row = { _id, _creationTime: lastCreationTime, ...doc };
+      }
+      (tables[table] ??= []).push(row);
+      byId?.set(_id, row);
       inserted.push({ table, doc, _id });
+      journal?.push({ kind: "insert", table, id: _id });
       return _id;
     },
     async patch(id: any, patch: any) {
+      writeCount++;
       patched.push({ _id: id, patch });
+      if (byId || journal || opts.strictPatch) {
+        const r = rowFor(id);
+        if (!r) return;
+        journal?.push({ kind: "patch", row: r, before: { ...r } });
+        Object.assign(r, patch);
+        if (opts.strictPatch) {
+          for (const [key, value] of Object.entries(patch ?? {})) if (value === undefined) delete r[key];
+        }
+        return;
+      }
       for (const rows of Object.values(tables)) {
         const r = rows.find((x: any) => x._id === id);
         if (r) { Object.assign(r, patch); return; }
       }
     },
     async replace(id: any, doc: any) {
+      writeCount++;
       replaced.push({ _id: id, doc });
+      if (byId || journal) {
+        const found = locate(id);
+        if (!found) return;
+        const before = found.rows[found.index];
+        journal?.push({ kind: "replace", table: found.table, index: found.index, before });
+        // A replace keeps the system fields, as convex does.
+        const next = before._creationTime === undefined
+          ? { _id: id, ...doc }
+          : { _id: id, _creationTime: before._creationTime, ...doc };
+        found.rows[found.index] = next;
+        byId?.set(String(id), next);
+        return;
+      }
       for (const rows of Object.values(tables)) {
         const i = rows.findIndex((x: any) => x._id === id);
         if (i >= 0) {
@@ -241,7 +388,16 @@ export function makeFakeDb(tables: Record<string, any[]>) {
       }
     },
     async delete(id: any) {
+      writeCount++;
       deleted.push(id);
+      if (byId || journal) {
+        const found = locate(id);
+        if (!found) return;
+        const [row] = found.rows.splice(found.index, 1);
+        byId?.delete(String(id));
+        journal?.push({ kind: "delete", table: found.table, index: found.index, row });
+        return;
+      }
       for (const rows of Object.values(tables)) { const i = rows.findIndex((x: any) => x._id === id); if (i >= 0) rows.splice(i, 1); }
     },
   };

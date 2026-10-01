@@ -24,7 +24,7 @@ import { parentName } from "../orgMeta";
 import { sameParent, type OrgParentRef, type OrgRole, type OrgTree } from "../orgTypes";
 import { DEFAULT_CAPS, type RoleCaps, type RoleCounters, type ScopeOverlap } from "./scopeTypes";
 import { AUTONOMY_LABEL, autonomyOn, autonomySentence, trustForSwitch } from "@codecast/shared/contracts/roleAutonomy";
-import { CHIEF_OF_STAFF_HANDLE } from "../orgStaffingTypes";
+import { HEAD_OF_PEOPLE_HANDLE, isHeadOfPeopleRole } from "../orgStaffingTypes";
 import { SlackConnect } from "../../anchor/SlackConnect";
 
 const NO_INTENTS: OrgIntent[] = [];
@@ -150,7 +150,7 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
   const capsDirty = capsDraft.hands_per_day !== caps.hands_per_day || capsDraft.wakes_per_day !== caps.wakes_per_day || capsDraft.tokens_per_day !== caps.tokens_per_day;
   // The switch (S23.1): on is direct, off is understand; the root stays off.
   const startsOnItsOwn = autonomyOn(role.trust);
-  const isRoot = role.handle === CHIEF_OF_STAFF_HANDLE;
+  const isRoot = isHeadOfPeopleRole(role);
   const channels = useInboxStore((s) => (s as any).chatChannels as Record<string, any> | undefined);
   const followed = useMemo(() => (role.follow_channel_ids ?? []).map((id) => ({ id, name: channels?.[id]?.name ?? "a channel" })), [role.follow_channel_ids, channels]);
   // The channels it could follow: this workspace's rooms, never a direct message.
@@ -210,7 +210,7 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
         </div>
       </Section>
 
-      <Section title="Area" hint={isRoot ? "The projects and plans it looks after. With none picked, the Chief of Staff covers the whole workspace." : "The projects and plans it looks after. Optional: with none picked it has no area of its own, runs its check and answers what it is asked."}>
+      <Section title="Area" hint={isRoot ? "The projects and plans it looks after. With none picked, the Head of People covers the whole workspace." : "The projects and plans it looks after. Optional: with none picked it has no area of its own, runs its check and answers what it is asked."}>
         <GatedScopeEditor workspace={tree.workspace} role={role} canEdit={canEdit} onChange={(scope, opts) => onUpdate({ scope }, opts)} />
         <OverlapWarning overlaps={overlaps} projectName={projectName} planName={planName} />
       </Section>
@@ -250,7 +250,7 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
 
       <ReportingPeople tree={tree} role={role} canEdit={canEdit} onUpdate={onUpdate} />
 
-      <Section title={AUTONOMY_LABEL} hint={isRoot ? "The Chief of Staff proposes and you decide, so it never starts work on its own." : autonomySentence(startsOnItsOwn)}>
+      <Section title={AUTONOMY_LABEL} hint={isRoot ? "The Head of People proposes and you decide, so it never starts work on its own." : autonomySentence(startsOnItsOwn)}>
         <button
           type="button"
           role="switch"
@@ -322,8 +322,8 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
         </Section>
       )}
 
-      {/* The Chief of Staff is the workspace's agent (S22): its Slack lives here. */}
-      {role.handle === CHIEF_OF_STAFF_HANDLE && canEdit && (
+      {/* The Head of People is the workspace's agent (S22): its Slack lives here. */}
+      {isHeadOfPeopleRole(role) && canEdit && (
         <Section title="Slack" hint="Connect a Slack workspace so a mention there reaches it, and it can post as itself.">
           <SlackConnect scope={tree.workspace.kind} teamId={tree.workspace.kind === "team" ? tree.workspace.id : null} agentName={role.name} />
         </Section>

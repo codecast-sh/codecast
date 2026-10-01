@@ -7,11 +7,12 @@ import { enqueueStartSession } from "./devices";
 import { fromConvexAgentType, workspaceFeatureEnabled } from "@codecast/shared/contracts";
 import { killConversation } from "./conversations";
 import { enqueuePendingMessage, formatSessionMessage, getAuthenticatedUserId } from "./pendingMessages";
-import { CHIEF_OF_STAFF_HANDLE, roleGrants } from "./lib/orgAccess";
+import { HEAD_OF_PEOPLE_HANDLE, isHeadOfPeopleRole, roleGrants } from "./lib/orgAccess";
+import { chiefOpeningFor } from "./lib/orgChief";
 import { standingReportsToFields } from "./lib/standingSeat";
 import { stampSeatOwners } from "./sessionOwners";
 import { roleStartsOnItsOwn } from "./lib/orgCaps";
-import { chiefOfStaffOpening } from "@codecast/shared/contracts/chiefOfStaffPrompt";
+import { headOfPeopleOpening } from "@codecast/shared/contracts/headOfPeoplePrompt";
 
 // An Anchor is codecast's standing agent member: one per team (shared) and one
 // per user (personal). It owns a long-lived `persistent` conversation that is
@@ -97,10 +98,13 @@ export async function visibleAnchorsForUser(
 // The first turn a role's standing session reads (org-roles-standing.md T1):
 // who it is and whom it reports to, what it looks after, how it wakes, that its
 // sessions stay out of the person's inbox, and that its brief is its memory.
-// The Chief of Staff's is the right hand's (shared/contracts/chiefOfStaffPrompt.ts
-// CHIEF_OF_STAFF_OPENING), in the same shape.
+// The Head of People's (shared/contracts/headOfPeoplePrompt.ts) and the Chief
+// of Staff's (chiefOfStaffPrompt.ts, org-staffing.md S30) are their own texts,
+// in the same shape.
 export type RoleBootstrap = {
   handle: string;
+  /** Set on a Chief of Staff: the opening is already built from its reach. */
+  chiefOpening?: string;
   scopeNames: string[];
   parentName: string;
   /** The parent role's handle, when the role reports to a role. */
@@ -117,11 +121,12 @@ function roleOpeningMessage(name: string, workspace: string, role: RoleBootstrap
   const close = role.rebrief
     ? "These are your current instructions. Read `cast brief` now and carry on; there is nothing to announce."
     : "Read `cast brief` now, post a one-line hello, then stand by.";
-  // The chief's first review follows at once and is its first message, so it
+  // The Head of People's first review follows at once and is its first message, so it
   // posts no hello of its own.
-  if (role.handle === CHIEF_OF_STAFF_HANDLE) return `${chiefOfStaffOpening({ workspace, person: role.parentName })}\n\nRead \`cast brief\` now.`;
+  if (role.chiefOpening) return `${role.chiefOpening}\n\n${close}`;
+  if (isHeadOfPeopleRole(role)) return `${headOfPeopleOpening({ workspace, person: role.parentName })}\n\nRead \`cast brief\` now.`;
   const starts = role.startsOnItsOwn
-    ? "You start work on your own: new work goes to a session you start with `cast spawn`, and you say which one."
+    ? "You start work on your own: new work goes to a session you start under you, and you say which one."
     : "You do not start work on your own: you read, answer and recommend, and a person starts the work.";
   // Scope is opt in (org-staffing.md S26): a role that names no area looks
   // after none, and is never told the workspace is its own.
@@ -158,7 +163,9 @@ export async function roleBootstrapOf(ctx: { db: any }, role: any): Promise<Role
     return { handle: role.handle, scopeNames, parentName: parent ? `${parent.name} (@${parent.handle})` : "a role", parentHandle: parent?.handle, startsOnItsOwn: roleStartsOnItsOwn(role) };
   }
   const user = role.reports_to?.user_id ? await ctx.db.get(role.reports_to.user_id) : null;
-  return { handle: role.handle, scopeNames, parentName: user?.name || user?.email?.split("@")[0] || "a person", startsOnItsOwn: roleStartsOnItsOwn(role) };
+  const parentName = user?.name || user?.email?.split("@")[0] || "a person";
+  const chiefOpening = role.chief ? await chiefOpeningFor(ctx, role, parentName) : undefined;
+  return { handle: role.handle, scopeNames, parentName, startsOnItsOwn: roleStartsOnItsOwn(role), ...(chiefOpening ? { chiefOpening } : {}) };
 }
 
 // The first turn that brings the workspace's own standing agent "online" when
@@ -251,15 +258,27 @@ async function findExistingAnchor(
   if (scope.org_role_id) return live.find((a: any) => String(a.org_role_id ?? "") === String(scope.org_role_id)) ?? null;
   const plain = live.find((a: any) => !a.org_role_id);
   if (plain) return plain;
-  // The chief of staff IS the workspace's standing agent (org-staffing.md
-  // S12): once `cast org staff` has seated the anchor as the chief, its row
-  // carries the role pointer and still answers as the workspace anchor, so
-  // Slack, chat and `cast anchor say` keep working as aliases of the chief.
+  // The workspace's standing agent (org-staffing.md S12, S30): the boundary's
+  // own Chief of Staff when one stands (a team's chief, or the global one in
+  // a personal boundary), else the Head of People. Its row carries the role
+  // pointer and still answers as the workspace anchor, so Slack, chat and
+  // `cast anchor say` keep working as aliases of whichever stands.
+  let head: any = null;
   for (const a of live) {
     const role = a.org_role_id ? await ctx.db.get(a.org_role_id) : null;
-    if (role && role.handle === CHIEF_OF_STAFF_HANDLE && role.status !== "retired") return a;
+    if (!role || role.status === "retired") continue;
+    if (role.chief && (role.chief.reach === "global" || String(role.chief.team_id) === String(a.team_id ?? ""))) return a;
+    if (!head && isHeadOfPeopleRole(role)) head = a;
   }
-  return null;
+  return head;
+}
+
+/** The workspace agent rule as a predicate over a seat's role: a chief for
+ *  this boundary, or the Head of People (listAnchors' `is_root`). */
+export function isWorkspaceAgentRole(role: any, teamId: unknown): boolean {
+  if (!role || role.status === "retired") return false;
+  if (role.chief) return role.chief.reach === "global" || String(role.chief.team_id) === String(teamId ?? "");
+  return isHeadOfPeopleRole(role);
 }
 
 // The workspace anchor of a boundary (a team's, or a person's own), or null.
@@ -502,7 +521,7 @@ export async function provisionStandingAgent(
   // An adopted session keeps its owner, history and machine; it gains the
   // role's identity and the standing markers a provisioned row is born with.
   // A team seat is the team's: a private analyzer session that becomes the
-  // chief of staff must be visible to every member, or the org page shows
+  // head of people must be visible to every member, or the org page shows
   // the anchor with no session for everyone but the hirer. Visibility goes
   // through the chokepoint so linked work items get their key recomputed.
   if (adopt) {
@@ -727,16 +746,16 @@ export const listAnchors = query({
       out.push({
         ...a,
         bot_name: bot?.name ?? a.name,
-        // Set once the anchor is a role's seat (the chief of staff, S12).
+        // Set once the anchor is a role's seat (the head of people, S12).
         org_role_id: a.org_role_id ?? null,
         role: role && role.status !== "retired"
-          ? { _id: role._id, short_id: role.short_id, name: role.name, handle: role.handle, avatar: role.avatar ?? null, status: role.status }
+          ? { _id: role._id, short_id: role.short_id, name: role.name, handle: role.handle, avatar: role.avatar ?? null, status: role.status, given_name: role.given_name ?? null, chief: role.chief ?? null, scope_type: role.scope_type }
           : null,
-        // The workspace's root (org-staffing.md S22): the seat of its chief of
-        // staff, by the same rule the root seat migration uses. Every other
-        // role's standing session is a row here too, so a picker that takes
-        // the first row of a workspace lands on whichever lead is oldest.
-        is_root: !!role && role.status !== "retired" && role.handle === CHIEF_OF_STAFF_HANDLE,
+        // The workspace's root (org-staffing.md S22, S30): the seat of its
+        // Chief of Staff when one stands, else of its Head of People. Every
+        // other role's standing session is a row here too, so a picker that
+        // takes the first row of a workspace lands on whichever lead is oldest.
+        is_root: isWorkspaceAgentRole(role, a.team_id),
         bot_avatar: bot?.image ?? null,
         team_name: (team as any)?.name ?? null,
         in_my_team: a.team_id ? teamIds.has(a.team_id.toString()) : false,
@@ -783,7 +802,7 @@ export async function decommissionAnchorRow(ctx: any, anchor: any): Promise<void
       // putting it to sleep; the kill then tears the agent down, cancels what
       // would revive it, and files the card under Killed, out of the inbox.
       await ctx.db.patch(anchor.conversation_id, { persistent: false, inbox_pinned_at: undefined });
-      await killConversation(ctx, conv.user_id, { conversation_id: anchor.conversation_id, mark_completed: true });
+      await killConversation(ctx, conv.user_id, { conversation_id: anchor.conversation_id, mark_completed: true }, { retiring: true });
     }
   }
   const chans = await ctx.db

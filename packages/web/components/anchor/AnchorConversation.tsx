@@ -10,12 +10,12 @@ import { ProjectPathPicker } from "../ProjectPathPicker";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { ChiefOfStaffFace } from "./AnchorIdentity";
+import { HeadOfPeopleFace } from "./AnchorIdentity";
 import { bootstrapCut, windowConversationSince, type WindowedConversation } from "../../lib/anchorWindow";
 import { useSeedOwnership } from "../../hooks/useSeedOwnership";
 import { useSyncOrgTree } from "../../hooks/useSyncOrgTree";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
-import { CHIEF_OF_STAFF_NAME } from "../org/orgStaffingTypes";
+import { HEAD_OF_PEOPLE_NAME } from "../org/orgStaffingTypes";
 
 export function AnchorConversation({ conversationId, hideHeader, seedOwnership = true, onSendOverride, composerNode, autoFocusInput, since, foldBootstrap, foldWorkingTurns, openAtTop, composerPlaceholder, leadNode, leadPinned, stickyPrompt, initialDensity, hideDiff }: {
   conversationId: string;
@@ -46,7 +46,7 @@ export function AnchorConversation({ conversationId, hideHeader, seedOwnership =
   hideDiff?: boolean;
   /** The slide-over owns the workspace's agent by construction, so it seeds
    *  `is_own` before the row lands and the owner UI paints at once. A thread
-   *  embedded elsewhere (the staffing pane's chief of staff, hosted by whoever
+   *  embedded elsewhere (the staffing pane's head of people, hosted by whoever
    *  hired it) passes false and takes ownership from the row itself. */
   seedOwnership?: boolean;
 }) {
@@ -128,16 +128,16 @@ export function AnchorOnboarding({ compact }: { compact?: boolean }) {
     setBusy(true);
     setErr(null);
     try {
-      const r = await useInboxStore.getState().staffChiefOfStaff({
+      const r = await useInboxStore.getState().staffHeadOfPeople({
         ...(team ? { team_id: team.id } : {}),
         ...(project.trim() ? { project_path: project.trim() } : {}),
         host_user_id: String(meId),
-        client_id: `orgrolestub-chief-${Math.random().toString(36).slice(2)}`,
+        client_id: `orgrolestub-head-${Math.random().toString(36).slice(2)}`,
       });
       // The page swaps to the role's page when the tree gains the root; a
       // seat that already stood (a client whose rows were behind) has nothing
       // to wait for, so say so rather than sit on "Bringing it online".
-      if (r?.already_existed) toast.success(`${r.role?.name ?? CHIEF_OF_STAFF_NAME} is already online`);
+      if (r?.already_existed) toast.success(`${r.role?.name ?? HEAD_OF_PEOPLE_NAME} is already online`);
       else if (r?.role) toast.success(`${r.role.name} is coming online`);
     } catch (e: any) {
       setErr(e?.message ?? "Could not bring the agent online");
@@ -151,13 +151,13 @@ export function AnchorOnboarding({ compact }: { compact?: boolean }) {
     <div className={`h-full flex items-center justify-center ${compact ? "px-5" : "px-6"}`}>
       <div className="max-w-md w-full text-center">
         <div className={`mx-auto ${compact ? "mb-3" : "mb-5"} flex items-center justify-center`}>
-          <ChiefOfStaffFace size={compact ? 44 : 56} />
+          <HeadOfPeopleFace size={compact ? 44 : 56} />
         </div>
         <h1 className={`${compact ? "text-base" : "text-xl"} font-semibold tracking-tight mb-2`}>Meet {who}</h1>
         <p className="text-sm text-sol-text-muted mb-5 leading-relaxed">
           {team
-            ? `One standing agent every member of ${team.name} can talk to. It sits at the top of the org as ${CHIEF_OF_STAFF_NAME}: it keeps the team's context, runs routines, answers in chat and Slack, reads how work flows and proposes who should own what.`
-            : `One standing agent that is yours alone. It sits at the top of your org as ${CHIEF_OF_STAFF_NAME}: it keeps your context, tracks your sessions against your goals, runs the routines you give it, and speaks up when something needs you.`}
+            ? `One standing agent every member of ${team.name} can talk to. It sits at the top of the org as ${HEAD_OF_PEOPLE_NAME}: it keeps the team's context, runs routines, answers in chat and Slack, reads how work flows and proposes who should own what.`
+            : `One standing agent that is yours alone. It sits at the top of your org as ${HEAD_OF_PEOPLE_NAME}: it keeps your context, tracks your sessions against your goals, runs the routines you give it, and speaks up when something needs you.`}
         </p>
         <div className="text-left space-y-3">
           <div>
@@ -174,7 +174,7 @@ export function AnchorOnboarding({ compact }: { compact?: boolean }) {
           disabled={busy || !tree || !meId}
           className="mt-5 w-full bg-sol-cyan text-sol-bg font-medium rounded-lg px-4 py-2.5 text-sm disabled:opacity-60 hover:bg-sol-cyan/90 transition-colors"
         >
-          {busy ? "Bringing it online…" : `Hire ${CHIEF_OF_STAFF_NAME}`}
+          {busy ? "Bringing it online…" : `Hire ${HEAD_OF_PEOPLE_NAME}`}
         </button>
         <p className="text-[11px] text-sol-text-dim mt-3">You can rename it and give it a face on its page.</p>
       </div>

@@ -1,0 +1,26 @@
+{
+  "name": "title short-name-plan",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:short-name-plan"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "title:short-name-plan",
+    "title": "title short-name-plan"
+  },
+  "asOf": "2026-01-15T14:00:00.000Z",
+  "trigger": {
+    "type": "title"
+  },
+  "meta": {
+    "surface": "title",
+    "visibility": "public",
+    "snapshot": "fixtures/title/short-name-plan.json"
+  },
+  "judge": "a one or two word name a teammate would say for this plan, specific (not a generic word like Update)",
+  "notes": null,
+  "tags": [],
+  "id": "68202886-bf54-4021-8071-104fb4cc9df1",
+  "createdAt": "2026-10-01T17:44:58.614Z"
+}

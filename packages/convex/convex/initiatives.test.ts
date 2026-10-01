@@ -2,7 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { canAccessInitiative } from "./lib/access";
 import { performCreateRole } from "./orgRoles";
-import { addProject, create, get, list, postUpdate, removeProject, setProjects, update, webGet, webList, webUpdates } from "./initiatives";
+import { addProject, create, get, list, postUpdate, removeProject, report, setProjects, update, webGet, webList, webUpdates } from "./initiatives";
+import { servedInitiatives } from "./lib/roleInitiatives";
 
 // Initiatives (initiatives-projects-role-page.md I1). Pinned here: who may
 // read one, where its health comes from, a role as its owner, and a project
@@ -191,9 +192,10 @@ describe("initiatives: health comes from the latest update", () => {
   });
 });
 
+const growthRole = (db: any, project_ids: string[] = []) =>
+  performCreateRole(ctxOf(db), ME as any, { name: "Head of Growth", handle: "growth", team_id: TEAM, scope: { project_ids: project_ids as any, plan_ids: [] } });
+
 describe("initiatives: the owner is a person or a role", () => {
-  const growthRole = (db: any, project_ids: string[] = []) =>
-    performCreateRole(ctxOf(db), ME as any, { name: "Head of Growth", handle: "growth", team_id: TEAM, scope: { project_ids: project_ids as any, plan_ids: [] } });
 
   test("a handle names a role first, then a person; `me` is the caller; none clears", async () => {
     const db = fixtures();
@@ -347,5 +349,59 @@ describe("initiatives: one level of nesting", () => {
 
     await run(update, db, { id: "in-2", parent_initiative_id: null });
     expect((await run(webGet, db, { ref: "in-2" })).parent_initiative_id).toBeUndefined();
+  });
+});
+
+// I4: a goal is measured by one or two numbers, reported the way a template
+// scoreboard is, and read against the target wherever the goal is read.
+describe("initiatives: metrics and the chain up (I4)", () => {
+  test("one or two metrics with a key from the name; a value is reported with a source by the owner, its role or an admin", async () => {
+    tickingClock();
+    const db = fixtures();
+    const role = await growthRole(db, [P]);
+    await db.insert("users", { name: "Growth bot", is_bot: true });
+    const bot = db._tables.users.at(-1)._id;
+    const anchor = await db.insert("anchors", { bot_user_id: bot, team_id: TEAM });
+    await db.patch(role._id, { anchor_id: anchor });
+    await db.insert("conversations", { user_id: ME, team_id: TEAM, session_id: "sess-growth", standing_role_id: role._id, is_private: false });
+    const made = await run(create, db, { ...inTeam, title: "Reach 1k teams", owner: "@growth", metrics: [{ name: "Weekly active teams", target: "1,000" }, { name: "Paying teams", target: "40" }] });
+    expect(made.row.metrics).toEqual([{ key: "weekly_active_teams", name: "Weekly active teams", target: "1,000" }, { key: "paying_teams", name: "Paying teams", target: "40" }]);
+    await expect(run(update, db, { id: "in-1", metrics: [{ name: "A", target: "1" }, { name: "B", target: "2" }, { name: "C", target: "3" }] })).rejects.toThrow("at most 2 metrics");
+    await expect(run(update, db, { id: "in-1", metrics: [{ name: "A", target: "" }] })).rejects.toThrow("a name and a target");
+
+    // The role's standing session reports as the owner; a key the goal does not declare is refused; a source is required.
+    const r = await run(report, db, { id: "in-1", entries: ["weekly_active_teams=412"], source: "https://x.ai/dash", session_id: "sess-growth" });
+    expect(r.written.weekly_active_teams).toMatchObject({ value: "412", source: "https://x.ai/dash" });
+    await expect(run(report, db, { id: "in-1", entries: ["churn=3"], source: "ct-1" })).rejects.toThrow("Not a scoreboard key of in-1: churn (declared: weekly_active_teams, paying_teams)");
+    await expect(run(report, db, { id: "in-1", entries: ["paying_teams=12"] })).rejects.toThrow("--source must be a link");
+    await expect(run(report, db, { id: "in-1", entries: ["paying_teams=12"], source: "ct-1" }, MATE)).rejects.toThrow("Only the owner or a workspace admin");
+    await run(report, db, { id: "in-1", entries: ["paying_teams=12"], source: "ct-1", observed_at: 1_700_000_000_000 });
+    const row = await db.get(made.id);
+    expect(row.scoreboard.paying_teams).toEqual({ value: "12", observed_at: 1_700_000_000_000, source: "ct-1" });
+
+    // Replacing the list keeps the value of a key that survives and drops the rest.
+    await run(update, db, { id: "in-1", metrics: [{ name: "Paying teams", target: "50" }] });
+    expect((await db.get(made.id)).scoreboard).toEqual({ paying_teams: { value: "12", observed_at: 1_700_000_000_000, source: "ct-1" } });
+    await run(update, db, { id: "in-1", metrics: [] });
+    expect((await db.get(made.id)).metrics).toBeUndefined();
+    expect((await db.get(made.id)).scoreboard).toBeUndefined();
+  });
+
+  test("what an area serves: the goals it owns first, then the ones its projects carry, each read against its target with the chain up", async () => {
+    const db = fixtures();
+    const role = await growthRole(db, [P]);
+    await run(create, db, { ...inTeam, title: "Reach 1k teams", metrics: [{ name: "Weekly active teams", target: "1,000" }] });
+    await run(create, db, { ...inTeam, title: "Win the private network", parent_initiative_id: "in-1", project_ids: [P], metrics: [{ name: "Brokers live", target: "40" }] });
+    await run(create, db, { ...inTeam, title: "Billing", project_ids: [Q], owner: "@growth" });
+    await run(create, db, { ...inTeam, title: "Old", project_ids: [P], status: "completed" });
+    await run(report, db, { id: "in-2", entries: ["brokers_live=12"], source: "ct-9" });
+    const rows = db._tables.initiatives;
+    const served = servedInitiatives(rows, { role_id: String(role._id), project_ids: [P] });
+    expect(served.map((i) => [i.short_id, i.owned])).toEqual([["in-3", true], ["in-2", false]]);
+    expect(served[1].chain).toEqual([{ short_id: "in-1", title: "Reach 1k teams" }]);
+    expect(served[1].metrics[0]).toMatchObject({ key: "brokers_live", value: "12", standing: "behind", progress: 0.3 });
+    expect(served[0].metrics).toEqual([]);
+    // No role: only what the projects carry.
+    expect(servedInitiatives(rows, { project_ids: [Q] }).map((i) => i.short_id)).toEqual(["in-3"]);
   });
 });

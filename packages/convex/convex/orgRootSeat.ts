@@ -1,12 +1,12 @@
 import { v } from "convex/values";
 import { internalMutation, internalQuery } from "./functions";
 import type { Id } from "./_generated/dataModel";
-import { allRolesInBoundary, CHIEF_OF_STAFF_HANDLE, chiefOfStaffIn } from "./lib/orgAccess";
+import { allRolesInBoundary, HEAD_OF_PEOPLE_HANDLE, isHeadOfPeopleRole, headOfPeopleIn } from "./lib/orgAccess";
 import { performStaff } from "./orgRoles";
 
 // One agent at the root (docs/architecture/org-staffing.md S22). A workspace
 // that has a standing agent (an anchors row with no role pointer) and no root
-// role gets one: the anchor's session is seated as the Chief of Staff through
+// role gets one: the anchor's session is seated as the Head of People through
 // the same seating `cast org staff` uses (S16), so nothing restarts and every
 // alias keeps working. Personal workspaces too. Idempotent: a seated anchor
 // carries `org_role_id` and is passed over on the next run.
@@ -14,8 +14,8 @@ import { performStaff } from "./orgRoles";
 // `planRootSeats` is the read-only half: it names every workspace the run
 // would touch and why some are left alone, so the run can be read before it
 // is made. `seatRootRoles` applies that plan, all or nothing: a seating that
-// fails throws out of the mutation, so no workspace is left with a Chief of
-// Staff row and no seat; the plan is read first, and a failed run is fixed
+// fails throws out of the mutation, so no workspace is left with a Head of
+// People row and no seat; the plan is read first, and a failed run is fixed
 // and run again.
 
 export type RootSeatAction =
@@ -63,19 +63,19 @@ export async function planRootSeats(ctx: { db: any }): Promise<RootSeatRow[]> {
       conversation: conv?.short_id ?? null,
       action: "seat",
     };
-    const chief = await chiefOfStaffIn(ctx, boundary);
-    if (chief) row.root_role = chief.short_id;
+    const head = await headOfPeopleIn(ctx, boundary);
+    if (head) row.root_role = head.short_id;
     if (a.org_role_id) row.action = "seated";
     else if (!conv) row.action = "no_session";
     else if (conv.status === "completed") row.action = "dead_session";
-    else if (chief?.anchor_id && String(chief.anchor_id) !== String(a._id)) {
-      const seat = await ctx.db.get(chief.anchor_id);
+    else if (head?.anchor_id && String(head.anchor_id) !== String(a._id)) {
+      const seat = await ctx.db.get(head.anchor_id);
       if (seat && seat.status !== "decommissioned") row.action = "two_roots";
     }
     // A root a person retired while keeping the agent: the workspace still
     // gets a named root (S22), but the plan says which seat it replaces.
-    if (row.action === "seat" && !chief) {
-      const retired = (await allRolesInBoundary(ctx, boundary)).filter((r) => r.handle === CHIEF_OF_STAFF_HANDLE && r.status === "retired").sort((x, y) => (y.updated_at ?? 0) - (x.updated_at ?? 0))[0];
+    if (row.action === "seat" && !head) {
+      const retired = (await allRolesInBoundary(ctx, boundary)).filter((r) => isHeadOfPeopleRole(r) && r.status === "retired").sort((x, y) => (y.updated_at ?? 0) - (x.updated_at ?? 0))[0];
       if (retired) { row.action = "retired_root"; row.retired_root = { short_id: retired.short_id, handle: retired.handle }; }
     }
     out.push(row);

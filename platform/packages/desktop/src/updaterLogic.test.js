@@ -80,6 +80,10 @@ test("swapScript waits for the pid, swaps with rollback, and reopens", () => {
   expect(lines[2]).toContain("mv '/Applications/My App.app' '/Applications/.My App.app.old' && mv '/Applications/.My App.app.incoming' '/Applications/My App.app' || { mv '/Applications/.My App.app.old' '/Applications/My App.app' 2>/dev/null; exit 1; }");
   expect(lines[3]).toContain("xattr -dr com.apple.quarantine");
   expect(lines[5]).toBe("/usr/bin/open '/Applications/My App.app'");
+  // Installing on quit swaps the bundle but leaves the app closed.
+  const quiet = swapScript({ pid: 1, bundlePath: "/a/X.app", incomingPath: "/i", oldPath: "/o", relaunch: false });
+  expect(quiet).toContain("mv '/a/X.app' '/o'");
+  expect(quiet).not.toContain("/usr/bin/open");
   // A single quote inside a path is escaped for /bin/sh.
   expect(swapScript({ pid: 1, bundlePath: "/a/it's.app", incomingPath: "/i", oldPath: "/o" })).toContain(`'/a/it'\\''s.app'`);
 });

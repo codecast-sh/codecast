@@ -165,6 +165,9 @@ test("buildManifest is deterministic over content and changes with any byte", ()
   expect(Object.keys(m1.files)).toEqual(["assets/a.js", "index.html"]);
   fs.writeFileSync(path.join(a, "assets", "a.js"), "2");
   expect(buildManifest(a, { commit: "c" }).release).not.toBe(m1.release);
+  // Host config files are consumed at deploy time and never served.
+  fs.writeFileSync(path.join(a, "_headers"), "/*\n  X: y");
+  expect(Object.keys(buildManifest(a, { commit: "c" }).files)).toEqual(["assets/a.js", "index.html"]);
   // The manifest itself is never part of its own hash.
   writeManifest(a, { commit: "c" });
   expect(buildManifest(a, { commit: "c" }).release).toBe(buildManifest(a, { commit: "c" }).release);
@@ -263,4 +266,27 @@ test("the protocol handler serves files with a mime type and answers an offline 
   // Third-party and POST requests pass through untouched.
   await handle(new Request("https://api.example/x", { method: "POST", body: "b" }));
   expect(passed).toEqual(["https://whisk.email/", "https://whisk.email/x.js", "https://api.example/x"]);
+});
+
+test("an app asset that comes back as HTML is refetched past the cache", async () => {
+  const cache = createWebCache({ dir: tmp(), origin: ORIGIN, fetchImpl: fakeSite(SITE_V1).fetch });
+  cache.init();
+  const calls = [];
+  const net = {
+    fetch: async (req, init) => {
+      const url = typeof req === "string" ? req : req.url;
+      calls.push([url, init.cache ?? "default"]);
+      const fresh = init.cache === "reload";
+      const html = !fresh && url.endsWith(".css");
+      return new Response(html ? "<!doctype html>" : "body{}", { status: 200, headers: { "content-type": html ? "text/html" : "text/css" } });
+    },
+  };
+  const handle = createProtocolHandler({ cache, appHosts: () => new Set(["whisk.email"]), passthrough: [], net });
+  const css = await handle(new Request("https://whisk.email/assets/main-1.css", { headers: { "sec-fetch-dest": "style" } }));
+  expect(await css.text()).toBe("body{}");
+  expect(calls).toEqual([["https://whisk.email/assets/main-1.css", "default"], ["https://whisk.email/assets/main-1.css", "reload"]]);
+  // A page, or another host's asset, is left as the network answered it.
+  calls.length = 0;
+  await handle(new Request("https://cdn.example/x.css"));
+  expect(calls).toEqual([["https://cdn.example/x.css", "default"]]);
 });

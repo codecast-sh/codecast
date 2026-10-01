@@ -43,10 +43,10 @@ export const JOB_AREAS: Record<string, Area[]> = {
   "test-cli": ["cli", "shared", "platform"],
   // The mirror's own job: its package tests, and the drift check. Every other
   // job lists "platform" too, because the mirror is a dependency of all of
-  // them and used to reach them through "shared".
+  // them and is its own area, not part of "shared".
   "test-platform": ["platform"],
   // Every area, because the shared suite reads more than shared: the max lines
-  // ratchet walks every package under packages/, and the chief of staff prompt
+  // ratchet walks every package under packages/, and the head of people prompt
   // test reads its spec from docs/. Gating it on less would let a change break
   // it without CI running it.
   "test-shared": [...AREAS],
@@ -79,7 +79,9 @@ export function jobFlag(job: string): string {
 }
 
 const AREA_PREFIXES: Array<[Exclude<Area, "docs">, string[]]> = [
-  ["cli", ["packages/cli/"]],
+  // packages/evals is the eval home (docs/architecture/evals-home.md). It
+  // imports cli source and its unit tests run as a step of test-cli.
+  ["cli", ["packages/cli/", "packages/evals/"]],
   ["web", ["packages/web/"]],
   ["convex", ["packages/convex/"]],
   ["shared", ["packages/shared/"]],
@@ -129,6 +131,12 @@ export function touchesPlatform(file: string): boolean {
   return file.startsWith("platform/") || /^packages\/[^/]+\/package\.json$/.test(file);
 }
 
+export function touchesComputer(file: string): boolean {
+  return file.startsWith("packages/cli/src/computer/")
+    || file.startsWith("packages/cli/native/computer-use-")
+    || file.startsWith("packages/cli/scripts/computer-");
+}
+
 export type Scope = {
   /** Every area and job flag, in emit order. */
   flags: Record<string, boolean>;
@@ -173,9 +181,12 @@ export function formatScope(scope: Scope): string {
 
 if (import.meta.main) {
   const stdin = await Bun.stdin.text();
+  const computerOnly = process.argv.includes("--computer-only");
   const scope = classifyChangedPaths(stdin.split("\n"));
-  if (scope.forcedBy.length > 0) {
+  if (!computerOnly && scope.forcedBy.length > 0) {
     console.error(`Running every job — unclassified input: ${scope.forcedBy.join(", ")}`);
   }
-  console.log(formatScope(scope));
+  console.log(computerOnly
+    ? `run_test_computer=${stdin.split("\n").some((file) => touchesComputer(file.trim()))}`
+    : formatScope(scope));
 }

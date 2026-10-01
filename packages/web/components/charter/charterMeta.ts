@@ -6,7 +6,7 @@
 // the priority palette and the role lookups the block, the list rows and the
 // org scope panel share.
 import type { OrgRole } from "../org/orgTypes";
-import { CHIEF_OF_STAFF_HANDLE } from "../org/orgStaffingTypes";
+import { HEAD_OF_PEOPLE_HANDLE, isHeadOfPeopleRole } from "../org/orgStaffingTypes";
 import { cleanBudget, type CharterBudget } from "@codecast/convex/convex/lib/charterBudget";
 
 export { cleanBudget, type CharterBudget };
@@ -82,7 +82,7 @@ export function hasCharter(c: CharterFields): boolean {
 }
 
 /** The org page with the staffing composer prefilled (org-staffing.md S5):
- *  the empty state's ask to the chief of staff. */
+ *  the empty state's ask to the head of people. */
 export function composeCharterHref(title: string): string {
   return `/org?compose=${encodeURIComponent(`draft a charter for ${title}`)}`;
 }
@@ -94,8 +94,8 @@ export function composeCharterHref(title: string): string {
  *  workspace has none. */
 export type OrgRoles = OrgRole[] | null | undefined;
 
-export function chiefOfStaffOf(roles: OrgRoles): OrgRole | null {
-  return roles?.find((r) => r.handle === CHIEF_OF_STAFF_HANDLE && r.status !== "retired") ?? null;
+export function headOfPeopleOf(roles: OrgRoles): OrgRole | null {
+  return roles?.find((r) => isHeadOfPeopleRole(r) && r.status !== "retired") ?? null;
 }
 
 /** The live role that owns the row. A retired seat is no owner: the server
@@ -108,10 +108,10 @@ export function ownerRoleOf(roles: OrgRoles, ownerRoleId: string | null | undefi
   return role && role.status !== "retired" ? role : null;
 }
 
-/** The roles a project or plan can be owned by: live ones, the chief of staff
+/** The roles a project or plan can be owned by: live ones, the head of people
  *  excluded (it proposes, it never owns a line). */
 export function ownerCandidates(roles: OrgRoles): OrgRole[] {
-  return (roles ?? []).filter((r) => r.status !== "retired" && r.handle !== CHIEF_OF_STAFF_HANDLE);
+  return (roles ?? []).filter((r) => r.status !== "retired" && !isHeadOfPeopleRole(r));
 }
 
 export function roleHref(role: Pick<OrgRole, "short_id">): string {

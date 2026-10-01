@@ -999,6 +999,9 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
   const initialContext: Record<string, string> = {};
   initialContext["project_path"] = cwd;
   initialContext["default_branch"] = detectDefaultBranch(cwd);
+  // The run's own id, for a node that reports to the server about this run
+  // (the line's merge step, the-line.md L12). Empty on a run with no row.
+  initialContext["run_id"] = options.runId ?? "";
 
   if (options.taskId) {
     initialContext["task_id"] = options.taskId;

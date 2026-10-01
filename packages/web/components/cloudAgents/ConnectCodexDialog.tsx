@@ -9,25 +9,22 @@
 // browser, then checks until it lands. Codecast never refreshes the login:
 // a refresh would sign out the Codex the person runs themselves.
 
-import Link from "next/link";
-import { ExternalLink, RefreshCw } from "lucide-react";
-import { CLOUD_AGENT_BACKFILL_DAYS, CLOUD_AGENT_PROVIDERS, CLOUD_SESSION_SOURCES, cloudSessionSyncOn } from "@codecast/shared/contracts";
+import { RefreshCw } from "lucide-react";
+import { CLOUD_AGENT_PROVIDERS } from "@codecast/shared/contracts";
 import { useCloudAgentLogin } from "../../lib/useProviderKeyCommand";
-import { useInboxStore } from "../../store/inboxStore";
 import { Spinner, Step } from "../MintTokenDialog";
 import { Button } from "../ui/button";
 import { CopyCommand } from "../conversation/blocks/shared";
 import { CloudConnectDialog } from "./CloudConnectDialog";
 import { usePinnedCloudAgentMachine } from "./machine";
 import { useCloudAgentConnected } from "./credentials";
+import { CloudAgentConnectedSync, CloudAgentRepoAccessLink } from "./parts";
 
 const CODEX = CLOUD_AGENT_PROVIDERS.codex;
-const SYNC_FIELD = CLOUD_SESSION_SOURCES[CODEX.syncSource].field;
 
 export function ConnectCodexDialog({ onClose, deviceId }: { onClose: () => void; deviceId?: string | null }) {
   const { device, machine } = usePinnedCloudAgentMachine(deviceId, useCloudAgentConnected(CODEX));
   const { view, waiting, timedOut, signIn, recheck } = useCloudAgentLogin(CODEX.id, device);
-  const syncOn = useInboxStore((s) => cloudSessionSyncOn(SYNC_FIELD, (s.currentUser as Record<string, unknown> | null)?.[SYNC_FIELD] as boolean | undefined));
   const signedIn = view.state === "signed_in";
   const needsSignIn = view.state === "signed_out" || view.state === "expired";
   // A machine with no browser (a cloud host) signs in with a code, from a terminal there.
@@ -52,19 +49,10 @@ export function ConnectCodexDialog({ onClose, deviceId }: { onClose: () => void;
 
       {signedIn && (
         <p className="rounded-md border border-sol-green/30 bg-sol-green/10 p-2.5 text-sol-green">
-          {machine} is signed in to Codex{view.account ? ` as ${view.account}` : ""}{view.plan ? ` (${view.plan} plan)` : ""}.{" "}
-          {syncOn ? `Your Codex Cloud tasks from the last ${CLOUD_AGENT_BACKFILL_DAYS} days sync into your inbox.` : null}
+          {machine} is signed in to Codex{view.account ? ` as ${view.account}` : ""}{view.plan ? ` (${view.plan} plan)` : ""}.
         </p>
       )}
-      {signedIn && !syncOn && (
-        <p className="text-[11px] text-sol-text-dim">
-          To bring your Codex Cloud tasks into your inbox, turn on{" "}
-          <Link href="/settings/sync" onClick={onClose} className="underline decoration-dotted underline-offset-2 hover:text-sol-text">
-            Sync {CLOUD_SESSION_SOURCES[CODEX.syncSource].label}
-          </Link>
-          .
-        </p>
-      )}
+      {signedIn && <CloudAgentConnectedSync spec={CODEX} onNavigate={onClose} />}
 
       {needsSignIn && headless && (
         <p className="rounded-md border border-sol-border bg-sol-bg-alt/60 p-3">
@@ -111,11 +99,7 @@ export function ConnectCodexDialog({ onClose, deviceId }: { onClose: () => void;
         </button>
       )}
       <p className="text-[11px] text-sol-text-dim">
-        Tasks run in the repository's Codex environment. Set one up under{" "}
-        <a href={CODEX.repoAccessUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 underline decoration-dotted underline-offset-2 hover:text-sol-text">
-          Codex → Environments <ExternalLink className="h-2.5 w-2.5" aria-hidden />
-        </a>
-        .
+        Tasks run in the repository's Codex environment. Set one up under <CloudAgentRepoAccessLink spec={CODEX} className="hover:text-sol-text" />.
       </p>
     </CloudConnectDialog>
   );

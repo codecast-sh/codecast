@@ -8,10 +8,13 @@ Codecast owns everything except the media. Rooms, rings, authorization and acces
 cast calls                        # calls across your teams, live ones first (-n 50 for more)
 cast call <id>                    # one call: title, participants, summary, action items
 cast call <id> --transcript       # the full transcript, a speaker on every line
+cast call <id> 15:25              # just lines 15 to 25
 cast call <id> --json             # the same as data; always includes the segments
 ```
 
-`<id>` is a call id from `cast calls`, or a unique prefix of one. A segment in the JSON carries `seq`, `speaker_id`, `speaker_name`, `text`, and its start and end times. You can read a call you took part in, and a call whose room you may enter. A recording of one person's microphone shows in the same list, and it belongs to its creator until they share it with a team.
+`<id>` is a call's short id (`cl-42`) from `cast calls`, its full id, or a unique prefix of one.
+
+A call is a referenceable object like a task or a session. `cl-42` written in a message renders as a live pill with the call's title, length and speakers. Add a range of the line numbers the transcript prints and it names the words themselves: `cl-42:15-25` on its own line embeds those lines with their speakers, and inline it reads as a pill that shows them on hover. Either form links to the call page with those lines selected. A segment in the JSON carries `seq`, `speaker_id`, `speaker_name`, `text`, and its start and end times. You can read a call you took part in, and a call whose room you may enter. A recording of one person's microphone shows in the same list, and it belongs to its creator until they share it with a team.
 
 ## Rooms and presence
 

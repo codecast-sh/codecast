@@ -5,9 +5,11 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { openExternalUrl } from "../lib/desktop";
 
-export function useSlackConnect(teamId: string | undefined, returnTo: string) {
+/** "self": the person's own token. "team": the workspace install itself (an
+ *  admin's gesture), e.g. to grant the app newer scopes. */
+export function useSlackConnect(teamId: string | undefined, returnTo: string, scopeType: "self" | "team" = "self") {
   const getInstallUrl = useAction(api.slack.getInstallUrl);
-  const key = `${teamId}:${returnTo}`;
+  const key = `${scopeType}:${teamId}:${returnTo}`;
   const pending = useRef(false);
   const [attempt, setAttempt] = useState<{ key: string; busy: boolean; started: boolean; error: string | null } | null>(null);
   const current = attempt?.key === key ? attempt : null;
@@ -18,7 +20,7 @@ export function useSlackConnect(teamId: string | undefined, returnTo: string) {
     setAttempt({ key, busy: true, started: false, error: null });
     try {
       const res = await getInstallUrl({
-        scope_type: "self",
+        scope_type: scopeType,
         team_id: teamId as Id<"teams">,
         return_to: returnTo,
         origin: window.location.origin,

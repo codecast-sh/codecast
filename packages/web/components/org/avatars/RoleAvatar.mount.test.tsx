@@ -26,7 +26,7 @@ test("RoleAvatar draws a known key, defaults a handle, and fills its box", async
     root.render(
       React.createElement(React.Fragment, null,
         React.createElement(RoleAvatar, { avatar: "owl", size: 32, title: "Infra lead" }),
-        React.createElement(RoleAvatar, { avatar: "chief-of-staff" }),
+        React.createElement(RoleAvatar, { avatar: "head-of-people" }),
         React.createElement(RoleAvatar, { avatar: "not-a-key" }),
       ),
     );
@@ -37,7 +37,7 @@ test("RoleAvatar draws a known key, defaults a handle, and fills its box", async
   assert.equal(imgs[0].getAttribute("alt"), "Infra lead");
   assert.equal(imgs[0].src.endsWith(AVATAR_URLS.owl) || imgs[0].src.includes("owl"), true);
   assert.equal((imgs[0].parentElement as HTMLElement).style.width, "32px");
-  assert.equal(imgs[1].dataset.avatar, defaultAvatarFor("chief-of-staff"));
+  assert.equal(imgs[1].dataset.avatar, defaultAvatarFor("head-of-people"));
   assert.equal(imgs[1].getAttribute("alt"), imgs[1].dataset.avatar!.replace(/^./, (c) => c.toUpperCase()));
   assert.equal((imgs[1].parentElement as HTMLElement).style.width, "20px");
   assert.equal(imgs[2].dataset.avatar, defaultAvatarFor("not-a-key"));

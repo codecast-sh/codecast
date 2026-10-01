@@ -8,22 +8,26 @@
  * `frame(t)` straight to the DOM and ticks the film clock, so a view
  * re-renders only when a value it derives from film time changes.
  *
+ * With reduced motion the film is a set of chapter stills: it opens paused on
+ * the first, the scrubber picks any, and Play steps through them.
+ *
  * Verification hook: `window.__heroFly` seeks, pauses and plays, and
  * `?hero-t=<seconds>` freezes the film at that time. `?hero-reduced=1`
  * previews the reduced-motion version and `?hero-mobile=1` the phone framing.
  */
 
-import { useRef, useState } from "react";
+import { useRef, useState, type CSSProperties, type RefObject } from "react";
+import { useMountEffect } from "@/hooks/useMountEffect";
 import { useWatchEffect } from "@/hooks/useWatchEffect";
 import { DOTS } from "./chapterDots";
 import { useHeroChapters } from "./heroFly/chapters";
-import { createFilmClock, FilmClockContext } from "./heroFly/filmClock";
+import { createFilmClock, FilmClockContext, POSTER_FRAME } from "./heroFly/filmClock";
+import { STAGE_SIZE as STAGE } from "./heroFly/project";
 import { HeroSandbox } from "./heroFly/sandbox";
 import { frame, wrapT } from "./heroFly/timeline";
 import { World } from "./heroFly/surfaces";
 import { DURATION, POSTER_T, SCENES, STILLS } from "./heroFly/world";
 
-const STAGE = { desktop: { w: 1280, h: 760 }, mobile: { w: 640, h: 800 } };
 const REDUCED_STEP_MS = 5000;
 
 const sceneAt = (t: number) => {
@@ -32,8 +36,10 @@ const sceneAt = (t: number) => {
   return i < 0 ? SCENES.length - 1 : i;
 };
 
+const POSTER_SCENE = sceneAt(POSTER_T);
+
 const DESCRIPTION =
-  "A looping tour of codecast: a live inbox of Claude Code, Codex, Cursor, Gemini and pi sessions; steering a session from its conversation; a lead session spawning two workers; a permission prompt approved from an iPhone; two agents messaging each other and forking; a decision queued for a person; a task filed from the conversation and claimed by an agent; a trigger and a workflow running on their own; the team's channel, huddle and org chart; a pull request going green and merging; a report published as a page; a teammate finding the session weeks later and tracing a line of code to it with cast blame; and sessions running on a laptop, a cloud host and in a browser.";
+  "A looping tour of codecast: a live inbox of Claude Code, Codex, Cursor, Gemini, OpenCode and pi sessions; steering a session from its conversation; a lead session spawning two workers; a permission prompt approved from an iPhone; two agents messaging each other and forking; a decision queued for a person; a task filed from the conversation, claimed by an agent and synced to Linear; a trigger and a workflow running on their own; the team's channel and a huddle with live captions; a pull request going green and merging; a report published as a page; a teammate finding the session weeks later and tracing a line of code to it with cast blame; and sessions running on a laptop and a cloud host, where a worker drives a browser to check its change on staging.";
 
 type HeroFlyApi = {
   seek(seconds: number): void;
@@ -50,36 +56,93 @@ declare global {
   }
 }
 
-/** Prerender scale for the stage, stepped by viewport width; the driver replaces it with the exact fit on mount. */
-const FALLBACK_SCALE_CSS = (() => {
-  const rules: string[] = [".hf-stage{--hf-s:0.8625}"];
-  for (let vw = 320; vw < 1152; vw += 32) {
-    const cw = Math.min(vw, 1152) - 48;
-    rules.push(`@media (min-width:${vw}px){.hf-stage{--hf-s:${(cw / 1280).toFixed(4)}}}`);
-  }
-  rules.push(`@media (min-width:1152px){.hf-stage{--hf-s:0.8625}}`);
-  rules.push("@keyframes hf-cap{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}");
-  return rules.join("");
-})();
+/**
+ * The edge of the film. There is no frame, nothing fades and nothing clips:
+ * the screens are windows on the page, shadows and all. The layer spans the
+ * page's width (100cqw is the film's own width, from the figure) and is the
+ * film's height. What keeps the page clean is the camera, not a clip: a hold
+ * shows only the windows it is about (timeline.ts transitOpacity), and every
+ * visible window stays wholly inside the film's height, lifting out whole
+ * when it must leave across the top or bottom (timeline.test).
+ */
+const BLEED: CSSProperties = {
+  // The page's own width, set by the driver from the root's client width: 100vw counts a classic scrollbar and would push the world's centre off the column's. 100vw is the prerender's guess.
+  width: "var(--hf-page-w, 100vw)",
+  marginInline: "calc(50cqw - var(--hf-page-w, 100vw) / 2)",
+  overflow: "visible",
+};
+
+/**
+ * Prerender scale for the stage: the film box's own width over the stage's
+ * (tan(atan2()) divides two lengths), so the poster fits before the driver
+ * replaces it with the exact fit on mount. Below 640px the box is 4:5 and the
+ * desktop poster sits in its middle until the driver frames it for a phone.
+ */
+const FALLBACK_SCALE_CSS = [
+  ".hf-box{container-type:inline-size}",
+  ".hf-stage{--hf-s:0.8;--hf-s:tan(atan2(100cqw,1280px));top:0}",
+  "@media (max-width:639px){.hf-stage{top:calc(100cqw * 0.328)}}",
+  "@keyframes hf-cap{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}",
+  "@keyframes hf-cap-fade{from{opacity:0}to{opacity:1}}",
+  "@media (prefers-reduced-motion:reduce){.hf-cap{animation-name:hf-cap-fade!important}}",
+  // A region whose views arrive after the prerender (the poster's conversation pane) fades in rather than popping.
+  "@keyframes hf-in{from{opacity:0}}.hf-in{animation:hf-in 300ms ease}",
+  // A region's box lets clicks through to the regions under it; the views placed in it take them (heroFly/surfaces.tsx RegionSlot).
+  "[data-region]>*{pointer-events:auto}",
+].join("");
+
+/** Room a chapter takes beside its name: the dot, the gap after it, the button's padding, and the gap between chapters (px). */
+const CHAPTER_CHROME = 6 + 6 + 12 + 4;
+
+/**
+ * Whether the chapter bar fits every name whole, from the names' own widths
+ * and the bar's, kept as the bar resizes and once the font has loaded; with
+ * each name's width, so a name opening or closing eases to its exact size.
+ */
+function useChapterNamesFit(ref: RefObject<HTMLOListElement | null>): { all: boolean; widths: number[] } {
+  const [fit, setFit] = useState<{ all: boolean; widths: number[] }>({ all: true, widths: [] });
+  useMountEffect(() => {
+    const ol = ref.current;
+    if (!ol) return;
+    const measure = () => {
+      const widths = [...ol.querySelectorAll<HTMLElement>("[data-name]")].map((n) => Math.ceil(n.scrollWidth));
+      const need = widths.reduce((a, w) => a + w + CHAPTER_CHROME, 0);
+      const all = need <= ol.clientWidth;
+      setFit((f) => (f.all === all && f.widths.join() === widths.join() ? f : { all, widths }));
+    };
+    measure();
+    void document.fonts?.ready.then(measure);
+    const ro = new ResizeObserver(measure);
+    ro.observe(ol);
+    return () => ro.disconnect();
+  });
+  return fit;
+}
 
 export function HeroFlythrough() {
   const wrapRef = useRef<HTMLDivElement>(null);
+  const bleedRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const worldRef = useRef<HTMLDivElement>(null);
   const barsRef = useRef<(HTMLSpanElement | null)[]>([]);
+  const scrubRef = useRef<HTMLOListElement>(null);
+  const names = useChapterNamesFit(scrubRef);
   const ctl = useRef<{ toggle(): void; jump(i: number): void } | null>(null);
-  const [scene, setScene] = useState(sceneAt(POSTER_T));
+  const [scene, setScene] = useState(POSTER_SCENE);
   const [playing, setPlaying] = useState(true);
   const [mobile, setMobile] = useState(false);
+  // Bumped when the visitor turns reduced motion on or off mid-visit, so the driver restarts as the film or as stills.
+  const [motionPref, setMotionPref] = useState(0);
   const chapters = useHeroChapters();
   const [clock] = useState(() => createFilmClock());
   const [now] = useState(() => Date.now());
 
   useWatchEffect(() => {
     const wrap = wrapRef.current;
+    const bleed = bleedRef.current;
     const stage = stageRef.current;
     const world = worldRef.current;
-    if (!wrap || !stage || !world) return;
+    if (!wrap || !bleed || !stage || !world) return;
 
     const params = new URLSearchParams(window.location.search);
     const frozenAt = params.get("hero-t");
@@ -89,15 +152,16 @@ export function HeroFlythrough() {
 
     // Chapters load after first paint and views mount elements as the film
     // moves, so the element maps are rebuilt whenever the world's DOM changes.
+    // What was written is remembered per element, so a remount rewrites only
+    // the elements that are new.
     const nodes = new Map<string, HTMLElement | SVGElement>();
     const textNodes = new Map<string, HTMLElement>();
-    const written = new Map<string, string>();
+    const written = new WeakMap<Element, Record<string, string>>();
     let stale = true;
     const scan = () => {
       stale = false;
       nodes.clear();
       textNodes.clear();
-      written.clear();
       world.querySelectorAll<HTMLElement | SVGElement>("[data-fly]").forEach((n) => nodes.set(n.getAttribute("data-fly")!, n));
       world.querySelectorAll<HTMLElement>("[data-fly-text]").forEach((n) => textNodes.set(n.getAttribute("data-fly-text")!, n));
     };
@@ -108,21 +172,24 @@ export function HeroFlythrough() {
       if (!st.playing || reduced) render(st.t);
     });
     mo.observe(world, { childList: true, subtree: true });
-    const put = (key: string, apply: (v: string) => void, v: string) => {
-      if (written.get(key) === v) return;
-      written.set(key, v);
+    const put = (el: Element, key: string, apply: (v: string) => void, v: string) => {
+      let w = written.get(el);
+      if (!w) written.set(el, (w = {}));
+      if (w[key] === v) return;
+      w[key] = v;
       apply(v);
     };
 
     const st = {
       t: POSTER_T,
-      playing: frozenAt === null,
+      // Reduced motion never advances on its own: the stills step only once the visitor presses Play.
+      playing: frozenAt === null && !reduced,
       anchorT: POSTER_T,
       anchorWall: performance.now(),
       onScreen: true,
       docVisible: document.visibilityState !== "hidden",
       mobile: forceMobile || mq.matches,
-      scene: sceneAt(POSTER_T),
+      scene: POSTER_SCENE,
       still: 0,
     };
 
@@ -131,20 +198,20 @@ export function HeroFlythrough() {
       st.t = wrapT(t);
       clock.set(st.t);
       const f = frame(st.t, st.mobile);
-      put("camera", (v) => (world.style.transform = v), f.camera);
-      put("will", (v) => (world.style.willChange = v), f.moving && !reduced ? "transform" : "auto");
+      put(world, "t", (v) => (world.style.transform = v), f.camera);
+      put(world, "will", (v) => (world.style.willChange = v), f.moving && !reduced ? "transform" : "auto");
       for (const id in f.els) {
         const n = nodes.get(id);
         if (!n) continue;
         const e = f.els[id];
-        if (e.transform !== undefined) put(`${id}|t`, (v) => (n.style.transform = v), e.transform);
-        if (e.opacity !== undefined) put(`${id}|o`, (v) => (n.style.opacity = v), String(e.opacity));
-        if (e.visible !== undefined) put(`${id}|v`, (v) => (n.style.visibility = v), e.visible ? "visible" : "hidden");
-        if (e.dash !== undefined) put(`${id}|d`, (v) => (n.style.strokeDashoffset = v), String(e.dash));
+        if (e.transform !== undefined) put(n, "t", (v) => (n.style.transform = v), e.transform);
+        if (e.opacity !== undefined) put(n, "o", (v) => (n.style.opacity = v), String(e.opacity));
+        if (e.visible !== undefined) put(n, "v", (v) => (n.style.visibility = v), e.visible ? "visible" : "hidden");
+        if (e.dash !== undefined) put(n, "d", (v) => (n.style.strokeDashoffset = v), String(e.dash));
       }
       for (const id in f.texts) {
         const n = textNodes.get(id);
-        if (n) put(`${id}|x`, (v) => (n.textContent = v), f.texts[id]);
+        if (n) put(n, "x", (v) => (n.textContent = v), f.texts[id]);
       }
       const k = sceneAt(st.t);
       if (k !== st.scene) {
@@ -155,7 +222,7 @@ export function HeroFlythrough() {
         if (!b) return;
         const sc = SCENES[i];
         const p = i === k ? (reduced ? 1 : (st.t - sc.start) / (sc.end - sc.start)) : 0;
-        put(`bar${i}`, (v) => (b.style.transform = v), `scaleX(${p.toFixed(3)})`);
+        put(b, "t", (v) => (b.style.transform = v), `scaleX(${p.toFixed(3)})`);
       });
     };
 
@@ -164,7 +231,9 @@ export function HeroFlythrough() {
       const s = wrap.clientWidth / w;
       stage.style.width = `${w}px`;
       stage.style.height = `${h}px`;
+      stage.style.top = "0px";
       stage.style.setProperty("--hf-s", String(s));
+      bleed.style.setProperty("--hf-page-w", `${document.documentElement.clientWidth}px`);
     };
 
     let raf = 0;
@@ -231,6 +300,9 @@ export function HeroFlythrough() {
       },
     };
 
+    const reducedMq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const onReduced = () => setMotionPref((n) => n + 1);
+    reducedMq.addEventListener("change", onReduced);
     const onMq = () => {
       st.mobile = forceMobile || mq.matches;
       setMobile(st.mobile);
@@ -240,6 +312,8 @@ export function HeroFlythrough() {
     mq.addEventListener("change", onMq);
     const ro = new ResizeObserver(fit);
     ro.observe(wrap);
+    // The root's width changes without the film's when a scrollbar comes or goes.
+    ro.observe(document.documentElement);
     const io = new IntersectionObserver(([e]) => {
       st.onScreen = e.isIntersecting;
       kick();
@@ -257,6 +331,7 @@ export function HeroFlythrough() {
       setPlaying(false);
       render(Number(frozenAt) || 0);
     } else if (reduced) {
+      setPlaying(false);
       showStill(0, false);
     } else {
       render(POSTER_T);
@@ -268,51 +343,50 @@ export function HeroFlythrough() {
       window.clearInterval(stillTimer);
       window.clearTimeout(fadeTimer);
       mq.removeEventListener("change", onMq);
+      reducedMq.removeEventListener("change", onReduced);
+      stage.style.opacity = "1";
       mo.disconnect();
       ro.disconnect();
       io.disconnect();
       document.removeEventListener("visibilitychange", onVis);
       if (window.__heroFly === api) delete window.__heroFly;
     };
-  }, []);
+  }, [motionPref]);
 
   const size = mobile ? STAGE.mobile : STAGE.desktop;
-  const active = SCENES[scene];
 
   return (
-    <figure role="group" aria-label="Codecast product tour" className="m-0">
+    <figure role="group" aria-label="Codecast product tour" className="m-0" style={{ containerType: "inline-size" }}>
       <style>{FALLBACK_SCALE_CSS}</style>
       <p className="sr-only">{DESCRIPTION}</p>
-      <HeroSandbox fallback={<div className="w-full rounded-2xl aspect-[1280/760] max-sm:aspect-[4/5]" style={{ backgroundColor: "#fdf6e3", border: "1px solid #eee8d5" }} />}>
+      <HeroSandbox fallback={<div className="w-full aspect-[1280/760] max-sm:aspect-[4/5]" />}>
+      {/* No frame, no fade, no clip: the screens sit on the page itself (BLEED). */}
+      <div ref={bleedRef} className="hf-bleed pointer-events-none relative" style={BLEED}>
       <div
         ref={wrapRef}
         aria-hidden
-        className="relative w-full overflow-hidden rounded-2xl bg-sol-bg aspect-[1280/760] max-sm:aspect-[4/5]"
-        style={{ border: "1px solid var(--sol-bg-alt)", boxShadow: "0 40px 80px -40px rgba(0,43,54,0.35)" }}
+        className="hf-box pointer-events-auto relative mx-auto aspect-[1280/760] max-sm:aspect-[4/5]"
+        style={{ width: "100cqw" }}
       >
         <div
           ref={stageRef}
           className="hf-stage absolute left-0 top-0 origin-top-left"
           style={{ width: size.w, height: size.h, transform: "scale(var(--hf-s))", perspective: "1800px", perspectiveOrigin: "50% 50%" }}
         >
-          <div ref={worldRef} className="absolute left-1/2 top-1/2 h-0 w-0" style={{ transformStyle: "preserve-3d", transform: frame(POSTER_T).camera }}>
+          <div ref={worldRef} className="absolute left-1/2 top-1/2 h-0 w-0" style={{ transformStyle: "preserve-3d", transform: POSTER_FRAME.camera }}>
             <FilmClockContext.Provider value={clock}>
               <World chapters={chapters} now={now} />
             </FilmClockContext.Provider>
           </div>
         </div>
-        <div
-          className="pointer-events-none absolute inset-0"
-          style={{ background: "radial-gradient(ellipse 75% 70% at 50% 48%, transparent 60%, color-mix(in srgb, var(--sol-bg) 85%, transparent) 100%)" }}
-        />
+      </div>
       </div>
       </HeroSandbox>
 
-      <div className="mt-4 flex items-center gap-3 font-mono">
+      <div className="relative z-[1] mt-4 flex items-center gap-3 font-mono">
         <button
           type="button"
           onClick={() => ctl.current?.toggle()}
-          aria-pressed={!playing}
           aria-label={playing ? "Pause the tour" : "Play the tour"}
           className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-[#eee8d5]"
           style={{ border: "1px solid #e4ddc8", borderBottomWidth: 2, color: "#586e75", backgroundColor: "#fdf6e3" }}
@@ -323,33 +397,54 @@ export function HeroFlythrough() {
             <svg className="ml-0.5 h-2.5 w-2.5" viewBox="0 0 10 10" fill="currentColor" aria-hidden><path d="M2 1.2v7.6a.6.6 0 0 0 .9.5l6.1-3.8a.6.6 0 0 0 0-1L2.9.7a.6.6 0 0 0-.9.5z" /></svg>
           )}
         </button>
-        <ol className="flex min-w-0 flex-1 gap-1">
-          {SCENES.map((s, i) => (
-            <li key={s.name} className="min-w-0 flex-1">
+        <ol ref={scrubRef} className="flex min-w-0 flex-1 gap-1">
+          {SCENES.map((s, i) => {
+            // Every name whole when the bar fits them all; otherwise the current chapter's name and dots for the rest. Never an ellipsis.
+            const named = names.all || i === scene;
+            return (
+            <li key={s.name} className={names.all ? "min-w-max flex-auto" : i === scene ? "flex-none" : "min-w-0 flex-1"}>
               <button
                 type="button"
                 onClick={() => ctl.current?.jump(i)}
                 aria-current={i === scene ? "step" : undefined}
                 aria-label={`Chapter ${i + 1}: ${s.name}`}
-                className="group relative flex w-full items-center gap-1.5 overflow-hidden rounded-md px-1.5 py-1.5 text-left transition-colors hover:bg-[#eee8d5]/70"
+                className="group relative flex min-h-6 w-full items-center gap-1.5 overflow-hidden rounded-md px-1.5 py-2.5 text-left transition-colors hover:bg-[#eee8d5]/70 sm:py-1.5"
               >
                 <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: DOTS[i % DOTS.length], opacity: i === scene ? 1 : 0.55 }} />
-                <span className={`hidden truncate text-[11px] sm:inline ${i === scene ? "text-[#002b36]" : "text-[#93a1a1] group-hover:text-[#586e75]"}`}>{s.name}</span>
+                <span
+                  data-name
+                  className={`overflow-hidden whitespace-nowrap text-[11px] transition-[max-width,opacity] duration-300 ease-out ${i === scene ? "text-[#002b36]" : "text-[#93a1a1] group-hover:text-[#586e75]"}`}
+                  style={{ maxWidth: named ? (names.widths[i] ?? "none") : 0, opacity: named ? 1 : 0 }}
+                >
+                  {s.name}
+                </span>
                 <span className="absolute inset-x-1.5 bottom-0 h-[2px] rounded-full" style={{ backgroundColor: "#eee8d5" }} />
                 <span
                   ref={(b) => {
                     barsRef.current[i] = b;
                   }}
                   className="absolute inset-x-1.5 bottom-0 h-[2px] origin-left rounded-full"
-                  style={{ backgroundColor: DOTS[i % DOTS.length], transform: `scaleX(${i === scene ? ((POSTER_T - s.start) / (s.end - s.start)).toFixed(3) : 0})` }}
+                  // Constant after mount (the poster's scene, not `scene`), so React never overwrites what the driver wrote.
+                  style={{ backgroundColor: DOTS[i % DOTS.length], transform: `scaleX(${i === POSTER_SCENE ? ((POSTER_T - s.start) / (s.end - s.start)).toFixed(3) : 0})` }}
                 />
               </button>
             </li>
-          ))}
+            );
+          })}
         </ol>
       </div>
-      <figcaption key={scene} className="mt-2 min-h-[40px] text-left font-mono text-[13px] leading-relaxed text-[#657b83]" style={{ animation: "hf-cap 350ms cubic-bezier(0.16,1,0.3,1)" }}>
-        <span className="text-[#002b36]">{active.name}.</span> {active.caption}
+      {/* Every caption sits in one grid cell, so the cell is always the tallest caption's height and nothing below moves as chapters change. */}
+      <figcaption className="relative z-[1] mt-2 grid text-left font-mono text-[13px] leading-relaxed text-[#657b83]">
+        {SCENES.map((s, i) => (
+          <span
+            key={i === scene ? `on${i}` : i}
+            aria-hidden={i !== scene}
+            className={`hf-cap [grid-area:1/1] ${i === scene ? "" : "invisible"}`}
+            style={i === scene ? { animation: "hf-cap 350ms cubic-bezier(0.16,1,0.3,1)" } : undefined}
+          >
+            <span className="text-[#002b36]">{s.name}.</span> {s.caption}
+          </span>
+        ))}
       </figcaption>
     </figure>
   );
