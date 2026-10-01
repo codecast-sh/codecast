@@ -401,6 +401,35 @@ function mergeDayEntries(convEntries: FeedEntry[], gitEntries: FeedEntry[]): Fee
     out.push(conv);
   }
   while (gi < gitEntries.length) out.push(gitEntries[gi++]);
+  return foldGitRuns(out);
+}
+
+// Git rows by one person with no session between them read as one burst of
+// work, however many branches it touched.
+function foldGitRuns(entries: FeedEntry[]): FeedEntry[] {
+  const out: FeedEntry[] = [];
+  let run: ExternalEventGroup[] = [];
+  let runActor: string | undefined;
+  const flush = () => {
+    if (run.length > 0) {
+      const group = mergeExternalEventGroups(run);
+      out.push({ kind: "git", ts: group.at, group });
+    }
+    run = [];
+    runActor = undefined;
+  };
+  for (const entry of entries) {
+    if (entry.kind !== "git") {
+      flush();
+      out.push(entry);
+      continue;
+    }
+    const actor = externalEventGroupActor(entry.group);
+    if (!actor || actor !== runActor) flush();
+    run.push(entry.group);
+    runActor = actor;
+  }
+  flush();
   return out;
 }
 

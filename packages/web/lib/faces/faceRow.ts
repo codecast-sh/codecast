@@ -1,4 +1,5 @@
 import type { FaceState } from "./faceState";
+import { memberKind } from "@codecast/shared/team/memberKind";
 export type { FaceState } from "./faceState";
 // THE FACE ROW: presence, walkie, ringing and calls as the same faces in
 // different states (pl-756).
@@ -491,7 +492,7 @@ export function deriveFaceRow(input: FaceRowInput, prev: FaceRow | null): FaceRo
     if (!id || id === meId) continue;
     // A Slack person is a shadow identity for chat mentions: nobody to call,
     // ring or message from here, so no face (founder, 2026-09-24).
-    if (m.is_bot && m.bot_kind === "slack") continue;
+    if (memberKind(m) === "slack") continue;
     const prevEntry = prevById.get(id);
     // In my room by any of three reports: the occupancy feed, the live rooms
     // list, or their own roster row naming my room. Three sources so a face

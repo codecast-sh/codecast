@@ -26,3 +26,7 @@ test.skipIf(process.platform === "win32")("a spawned child that exits before its
 test.skipIf(process.platform === "win32")("a headless claude child that holds no transcript handle resolves its parent through its pid registry", async () => {
   expect(await resolvedParent("headlessClaudeSpawnFixture.ts")).toBe("parent-conversation");
 }, 130_000);
+
+test.skipIf(process.platform === "win32")("a child cast exec declared resolves its parent with no process left to walk", async () => {
+  expect(await resolvedParent("declaredSpawnFixture.ts")).toBe("parent-conversation");
+}, 130_000);

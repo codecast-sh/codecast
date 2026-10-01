@@ -1,26 +1,24 @@
 /**
- * Chapter 3, Fan out (15 to 21s): the lead spawns two workers; their rows land
- * in the list and they boot on the pair. PLACEHOLDER: replace each placeholder
- * part with the real views it names, fed by ../fixtures/fanout.ts. See
- * README.md for the contract.
+ * Chapter 3, Fan out (15 to 21s): the lead spawns two workers; each flies from
+ * its spawn block to its row under the lead, and they boot on the pair. The
+ * spawn blocks are entries of the lead's transcript (./conversation.tsx) and
+ * the worker rows are rows of the inbox list (./inbox.tsx), so each feed
+ * lifts as one; this chapter owns the pair and the flights between.
  */
 
-import { placeholderFlyer, placeholderPart } from "../placeholderParts";
-import { SESSIONS } from "../fixtures/story";
+import { BootA, BootB, HeaderA, HeaderB, SpawnFlyerA, SpawnFlyerB } from "./fanout";
 import type { HeroChapter } from "./contract";
 
 export const chapter: HeroChapter = {
   id: "fanout",
   parts: [
-    placeholderPart("fanout", "spawn", "desk.transcript", 20, "Spawn blocks", ["CastCommandBlock", "TaskToolBlock", "SessionConstellation"], 90),
-    placeholderPart("fanout", "workerRows", "desk.list", 20, "Worker rows", ["SessionCardView (subagent)"], 110),
-    placeholderPart("fanout", "headerA", "pairA.header", 0, "Worker A header", ["ConversationHeaderBar", "AgentStatusPill"]),
-    placeholderPart("fanout", "headerB", "pairB.header", 0, "Worker B header", ["ConversationHeaderBar", "AgentStatusPill"]),
-    placeholderPart("fanout", "bootA", "pairA.transcript", 10, "Worker A boots", ["UserPrompt", "AssistantBlock"], 80),
-    placeholderPart("fanout", "bootB", "pairB.transcript", 10, "Worker B boots", ["UserPrompt", "AssistantBlock"], 80),
+    { key: "headerA", region: "pairA.header", order: 0, Component: HeaderA },
+    { key: "headerB", region: "pairB.header", order: 0, Component: HeaderB },
+    { key: "bootA", region: "pairA.transcript", order: 10, Component: BootA },
+    { key: "bootB", region: "pairB.transcript", order: 10, Component: BootB },
   ],
   flyers: {
-    "fanout.spawnA": placeholderFlyer(SESSIONS.api.title),
-    "fanout.spawnB": placeholderFlyer(SESSIONS.ui.title),
+    "fanout.spawnA": SpawnFlyerA,
+    "fanout.spawnB": SpawnFlyerB,
   },
 };

@@ -1,0 +1,19 @@
+{
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "notes": "delivered with a courtesy offer, no real question",
+  "label": {
+    "verdict": "done"
+  },
+  "snapshot": {
+    "newestFirst": [
+      {
+        "role": "assistant",
+        "content": "Done — the header is sticky on scroll, verified in the browser at 3 widths, screenshots above. Shout if you want the shadow softer."
+      },
+      {
+        "role": "user",
+        "content": "make the header sticky"
+      }
+    ]
+  }
+}

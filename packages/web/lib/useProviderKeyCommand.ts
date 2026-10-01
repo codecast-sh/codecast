@@ -126,6 +126,8 @@ export function useVerifiedKeySubmit(keyProvider: string, device: Device | null,
     checking: sending || (!!commandId && (outcome === undefined || outcome?.state === "pending")),
     done: outcome?.state === "done",
     account: outcome?.state === "done" ? outcome.account : undefined,
+    /** What a key the provider kept still lacks (it was stored anyway). */
+    detail: outcome?.state === "done" ? outcome.detail : undefined,
     failed: outcome?.state === "failed" ? outcome.error : sendError,
   };
 }

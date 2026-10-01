@@ -48,6 +48,6 @@ export default defineConfig({
     },
   },
   css: { postcss: here },
-  define: { __CODECAST_BUILD__: JSON.stringify({ sha: "preview", builtAt: "", mode: "preview" }) },
+  define: { __CODECAST_BUILD__: JSON.stringify({ sha: "preview", builtAt: "", mode: "preview", promptGeneration: 0, promptMessage: "" }) },
   server: { port: 5199, strictPort: true, host: "127.0.0.1" },
 });

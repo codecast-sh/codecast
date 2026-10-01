@@ -99,7 +99,11 @@ export type InboxTruncation = (typeof INBOX_TRUNCATION_KINDS)[number];
 // facts like any session: blocked or waiting in needs input, asking in
 // questions. A standing session that asks (a `cast decide` in its thread) is
 // no longer hidden by the anchor rule. Nothing lifts a lead for its hands.
-export const INBOX_PROJECTION_VERSION = 14 as const;
+// v15: a session a person started holds NEW for its first
+// INBOX_CREATE_GRACE_MS whatever it is doing, so it never drops out of sight
+// into a section below the fold (or a collapsed one) while its author is
+// still thinking about it. A hard block or an ask still files where it would.
+export const INBOX_PROJECTION_VERSION = 15 as const;
 
 export type InboxProjection = {
   v: typeof INBOX_PROJECTION_VERSION;
@@ -323,6 +327,8 @@ export interface InboxPlacementInput extends WorkStateInput {
   isAnchor: boolean;
   /** Own open ask or permission prompt, a pending `cast decide`, or a child's open ask. */
   asking: boolean;
+  /** A person started this session within INBOX_CREATE_GRACE_MS (not spawned by another session). */
+  fresh?: boolean;
 }
 
 export type InboxPlacement = { bucket: InboxBucket; work_state: WorkState };
@@ -393,6 +399,7 @@ export function placeInboxRow(input: InboxPlacementInput): InboxPlacement {
   else if (input.asking && !input.killed && !input.userRest) bucket = "questions";
   else if (input.pinned) bucket = "pinned";
   else if (input.messageCount === 0) bucket = "new";
+  else if (input.fresh && !isHardBlocked(input)) bucket = "new";
   else bucket = work_state;
   return { bucket, work_state };
 }
@@ -415,12 +422,13 @@ export function placeInboxRow(input: InboxPlacementInput): InboxPlacement {
 // `key`; a queue the reader clears top-down (Needs Input, Done) reads `at`
 // ascending and keeps its own direction.
 
-// A session created this recently holds the top of a freshest-first list: the
-// events the stamps above name have not happened to it yet, so ambient output
-// on older rows would push a session the user just started out of sight. Long
-// enough to notice the new row, short enough that ordinary order returns (Orca
+// How long a session counts as new. A person who just started one is still
+// thinking about it: they come back to adjust the prompt, add a thought, check
+// the first answer. For this long it files under NEW (placeInboxRow) and holds
+// the top of a freshest-first list, so ambient output on older rows cannot
+// push it out of sight; after it, ordinary placement and order return (Orca
 // smart-sort.ts CREATE_GRACE_MS).
-export const INBOX_CREATE_GRACE_MS = 5 * 60_000;
+export const INBOX_CREATE_GRACE_MS = 30 * 60_000;
 
 // A dormant row whose wake nothing can name sits after every named one,
 // freshest park first. The base is far past any wall-clock wake, so the two
@@ -1256,6 +1264,8 @@ export interface LiveFactsRow {
   open_tasks?: unknown[] | null;
   open_tasks_at?: number | null;
   loop_state?: Pick<LoopState, "status" | "wakeup_at"> | null;
+  /** conversations.started_at: only its deadline (a fresh start leaving NEW) is read here. */
+  started_at?: number | null;
 }
 
 export type LiveFacts = {
@@ -1328,6 +1338,8 @@ export function rowLiveDeadlines(row: LiveFactsRow): Array<number | null> {
     row.loop_state?.status === "armed" ? row.loop_state.wakeup_at + LOOP_OVERDUE_GRACE_MS : null,
     // A bare dormant claim outliving its trust (placeProjectableRow).
     u + DORMANT_CLAIM_TTL_MS,
+    // A fresh start leaving NEW (isFreshStart).
+    row.started_at ? row.started_at + INBOX_CREATE_GRACE_MS : null,
   ];
 }
 
@@ -1390,7 +1402,16 @@ export function placeProjectableRow(
     pinned: !!row.inbox_pinned_at,
     isAnchor: !!row.anchor_id,
     asking,
+    fresh: isFreshStart(row, epoch),
   });
+}
+
+// A session a person started within INBOX_CREATE_GRACE_MS. One spawned by
+// another session (a worker, a trigger run) is the spawner's business and
+// files by its own facts from the start.
+export function isFreshStart(row: Pick<ProjectableInboxRow, "started_at" | "spawned_by_conversation_id">, epoch: number): boolean {
+  const started = row.started_at ?? 0;
+  return started > 0 && !row.spawned_by_conversation_id && epoch < started + INBOX_CREATE_GRACE_MS;
 }
 
 // ── The whole projection in one call (design C5/C6) ─────────────────────────

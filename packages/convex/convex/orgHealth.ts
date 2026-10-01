@@ -266,6 +266,8 @@ export function programEndedOf(role: any, now: number, planById: Map<string, any
 // query does the scan and the work, this does the decisions, an action merges.
 export type HealthDecisions = {
   decisionsOf: Record<string, number>;
+  /** The same hops by UTC day of the ask, per role: the week as a series. */
+  decisionsByDay?: Record<string, Record<string, number>>;
   latency: Record<string, number[]>;
   decisionsTruncated: boolean;
   peopleWaiting: Record<string, { n: number; oldest_min: number | null }>;
@@ -289,6 +291,7 @@ export async function readHealthDecisions(ctx: Ctx, teamId: Id<"teams"> | undefi
   const deadlineMin = capacity("decision_latency_min");
   const roleSet = new Set(roleIds.map(String));
   const decisionsOf: Record<string, number> = {};
+  const decisionsByDay: Record<string, Record<string, number>> = {};
   const latency: Record<string, number[]> = {};
   let decisionsTruncated = false;
   const inc = (m: Record<string, number>, k: string) => { m[k] = (m[k] ?? 0) + 1; };
@@ -306,6 +309,7 @@ export async function readHealthDecisions(ctx: Ctx, teamId: Id<"teams"> | undefi
           const note = typeof hop.note === "string" ? hop.note : "";
           if (note.startsWith("skipped")) continue; // a paused or retired seat: never woken
           inc(decisionsOf, rid);
+          inc(decisionsByDay[rid] ??= {}, utcDay(d.created_at));
           if (note.startsWith("escalated")) continue; // a hop from before S28 that passed the question up: no latency sample
           let sampleMin: number | null = null;
           if (hop.recommendation !== undefined) sampleMin = (hop.at - d.created_at) / 60_000;
@@ -326,7 +330,7 @@ export async function readHealthDecisions(ctx: Ctx, teamId: Id<"teams"> | undefi
     }
     peopleWaiting[String(uid)] = { n: inbox.length, oldest_min: oldest === null ? null : Math.floor((now - oldest) / 60_000) };
   }
-  return { decisionsOf, latency, decisionsTruncated, peopleWaiting };
+  return { decisionsOf, decisionsByDay, latency, decisionsTruncated, peopleWaiting };
 }
 
 export type OrgHealth = Awaited<ReturnType<typeof computeOrgHealth>>;
@@ -503,6 +507,7 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
     };
     const handoffs = { done: 0, blocked: 0, needs_context: 0 };
     let done7 = 0, stalls = 0, changed7 = 0, stuckHands = 0;
+    const doneByDay: Record<string, number> = {};
     for (const t of items.tasks) {
       if (t.status === "in_review" && now - (t.updated_at ?? 0) > stallMs) stalls++;
       // A hand that reported blocked or needs context on a task still open is
@@ -512,7 +517,7 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
       if (isOpen(t) && (t.execution_status === "blocked" || t.execution_status === "needs_context")) stuckHands++;
       if ((t.updated_at ?? 0) < cut7) continue;
       changed7++;
-      if (t.status === "done") done7++;
+      if (t.status === "done") { done7++; const day = utcDay(t.updated_at); doneByDay[day] = (doneByDay[day] ?? 0) + 1; }
       if (t.execution_status === "done" || t.execution_status === "done_with_concerns") handoffs.done++;
       else if (t.execution_status === "blocked") handoffs.blocked++;
       else if (t.execution_status === "needs_context") handoffs.needs_context++;
@@ -596,6 +601,9 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
       hands_window: hands.length,
       median_recommend_min: median(dec.latency[rid] ?? []),
       done_7d: done7,
+      /** done_7d by UTC day of the close, and decisions_7d by day of the ask. */
+      done_by_day: doneByDay,
+      decisions_by_day: dec.decisionsByDay?.[rid] ?? {},
       handoffs_7d: handoffs,
       review_stalls: stalls,
       sends_7d: { to: toRows, from: fromRows },

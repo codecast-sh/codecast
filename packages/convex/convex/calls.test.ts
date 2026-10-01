@@ -1,3 +1,4 @@
+import { getFunctionName } from "convex/server";
 import { describe, expect, test } from "bun:test";
 import { createHmac } from "node:crypto";
 import {
@@ -79,6 +80,7 @@ describe("lease constants", () => {
 // the in-mutation sweep just deleted. Exercises the handler against a tiny
 // fake db (same shape as callRooms.test.ts) with a stale own row present.
 import { CALL_MEMBER_STALE_MS as STALE } from "./callRooms";
+import { HUDDLE_GRACE_MS } from "./transcripts";
 describe("joinRoom rejoin after lease lapse", () => {
   test("sweeps the stale own row before deciding refresh vs insert", async () => {
     const now = Date.now();
@@ -343,8 +345,14 @@ function fakeCtx() {
       query: (t: string) => ({
         withIndex: (_i: string, builder: any) => {
           const eqs: Array<[string, any]> = [];
-          builder({ eq(f: string, v: any) { eqs.push([f, v]); return this; } });
-          const hit = (rows[t] ?? []).filter((r) => eqs.every(([f, v]) => String(r[f]) === String(v)));
+          const gtes: Array<[string, number]> = [];
+          builder({
+            eq(f: string, v: any) { eqs.push([f, v]); return this; },
+            gte(f: string, v: number) { gtes.push([f, v]); return this; },
+          });
+          const hit = (rows[t] ?? []).filter(
+            (r) => eqs.every(([f, v]) => String(r[f]) === String(v)) && gtes.every(([f, v]) => (r[f] ?? 0) >= v),
+          );
           return { collect: async () => hit, unique: async () => hit[0] ?? null, first: async () => hit[0] ?? null };
         },
       }),
@@ -589,10 +597,11 @@ describe("invite fan-out", () => {
   });
 });
 
-// The call record's end is tied to the room's lease, not to the scribe's
-// toggle: the last member out ends the room's live transcript; a room whose
-// leases all went stale gets swept. Regression for calls that stayed "live"
-// on the calls page forever after everyone hung up.
+// The call record is the huddle: its end is tied to the room standing empty,
+// never to the transcription switch, and a room emptied for less than the
+// grace (a rejoin, a dropped connection, a hop to another room) is the same
+// huddle. Regressions: calls that stayed "live" forever after everyone hung
+// up, and one conversation split into several records seconds apart.
 describe("transcript ends with the room", () => {
   function seat(rows: Record<string, any[]>, user: string, lastSeen: number) {
     rows.call_members.push({
@@ -601,25 +610,36 @@ describe("transcript ends with the room", () => {
       muted: true, camera: false, sharing: false,
     });
   }
-  function transcript(rows: Record<string, any[]>) {
+  function transcript(rows: Record<string, any[]>, over: Record<string, unknown> = {}) {
     rows.transcripts = [{
       _id: "tr1", room_key: "channel:ch1", team_id: "t1", started_by: "ua",
-      status: "live", started_at: Date.now() - 60_000, routes: [], last_seq: 0,
+      status: "live", started_at: Date.now() - 600_000, routes: [], last_seq: 0, ...over,
     }];
   }
   async function fn(name: string) {
     const mod: any = await import("./calls");
     return mod[name]._handler ?? mod[name].handler;
   }
+  async function tfn(name: string) {
+    const mod: any = await import("./transcripts");
+    return mod[name]._handler ?? mod[name].handler;
+  }
+  const scheduledNames = (scheduled: any[]) => scheduled.map((x) => getFunctionName(x.fn));
 
-  test("leaving as the last member ends the transcript and schedules its summary", async () => {
+  test("the last one out starts the grace; the record ends where the room emptied", async () => {
     const { ctx, rows, scheduled, now } = fakeCtx();
     seat(rows, "ua", now);
     transcript(rows);
     await (await fn("leaveRoom"))(ctx, { room_key: "channel:ch1" });
+    expect(rows.transcripts[0].status).toBe("live");
+    expect(rows.transcripts[0].idle_since).toBeGreaterThanOrEqual(now);
+    expect(scheduledNames(scheduled)).toContain("transcripts:endIdleTranscript");
+    // The grace runs out with nobody back.
+    rows.transcripts[0].idle_since = now - HUDDLE_GRACE_MS;
+    expect(await (await tfn("endIdleTranscript"))(ctx, { transcript_id: "tr1" })).toEqual({ ended: true });
     expect(rows.transcripts[0].status).toBe("ended");
-    expect(rows.transcripts[0].ended_at).toBeGreaterThan(0);
-    expect(scheduled.length).toBeGreaterThan(0);
+    expect(rows.transcripts[0].ended_at).toBe(now - HUDDLE_GRACE_MS);
+    expect(scheduledNames(scheduled)).toContain("transcripts:generateSummary");
   });
 
   test("leaving while others hold a fresh lease keeps the transcript live", async () => {
@@ -629,38 +649,64 @@ describe("transcript ends with the room", () => {
     transcript(rows);
     await (await fn("leaveRoom"))(ctx, { room_key: "channel:ch1" });
     expect(rows.transcripts[0].status).toBe("live");
+    expect(rows.transcripts[0].idle_since).toBeUndefined();
   });
 
-  test("the sweep ends a live transcript whose room leases all went stale", async () => {
+  test("coming back inside the grace carries on the same huddle", async () => {
     const { ctx, rows, now } = fakeCtx();
-    seat(rows, "ua", now - STALE - 1000);
+    transcript(rows, { idle_since: now - 60_000 });
+    rows.call_room_state = [{ _id: "rs1", room_key: "channel:ch1", team_id: "t1", transcribe_off: true, updated_at: now - 90_000 }];
+    rows.chat_channels = [{ _id: "ch1", team_id: "t1", name: "design" }];
+    await (await fn("joinRoom"))(ctx, { room_key: "channel:ch1", muted: true });
+    expect(rows.transcripts[0].status).toBe("live");
+    expect(rows.transcripts[0].idle_since).toBeUndefined();
+    // Same huddle, same switch: it was off and it stays off.
+    expect(rows.call_room_state[0].transcribe_off).toBe(true);
+    // The grace check that fires later finds somebody back and leaves it be.
+    rows.transcripts[0].idle_since = undefined;
+    expect(await (await tfn("endIdleTranscript"))(ctx, { transcript_id: "tr1" })).toEqual({ ended: false });
+  });
+
+  test("taking a seat after the grace ends the previous huddle where it went quiet", async () => {
+    const { ctx, rows, now } = fakeCtx();
+    seat(rows, "ub", now - HUDDLE_GRACE_MS - 1000);
     transcript(rows);
-    const { sweepOrphanedLive } = await import("./transcripts");
-    const h = (sweepOrphanedLive as any)._handler ?? (sweepOrphanedLive as any).handler;
-    const res = await h(ctx, {});
+    rows.chat_channels = [{ _id: "ch1", team_id: "t1", name: "design" }];
+    await (await fn("joinRoom"))(ctx, { room_key: "channel:ch1", muted: true });
+    expect(rows.transcripts[0].status).toBe("ended");
+    expect(rows.transcripts[0].ended_at).toBe(now - HUDDLE_GRACE_MS - 1000);
+  });
+
+  test("the sweep ends a huddle whose room has been empty past the grace", async () => {
+    const { ctx, rows, now } = fakeCtx();
+    seat(rows, "ua", now - HUDDLE_GRACE_MS - 1000);
+    transcript(rows);
+    const res = await (await tfn("sweepOrphanedLive"))(ctx, {});
     expect(res).toEqual({ checked: 1, ended: 1 });
     expect(rows.transcripts[0].status).toBe("ended");
     // Ended when the last lease was refreshed, not when the sweep ran.
-    expect(rows.transcripts[0].ended_at).toBe(now - STALE - 1000);
+    expect(rows.transcripts[0].ended_at).toBe(now - HUDDLE_GRACE_MS - 1000);
   });
 
   test("the sweep leaves an occupied room's transcript alone", async () => {
     const { ctx, rows, now } = fakeCtx();
     seat(rows, "ua", now);
     transcript(rows);
-    const { sweepOrphanedLive } = await import("./transcripts");
-    const h = (sweepOrphanedLive as any)._handler ?? (sweepOrphanedLive as any).handler;
-    expect(await h(ctx, {})).toEqual({ checked: 1, ended: 0 });
+    expect(await (await tfn("sweepOrphanedLive"))(ctx, {})).toEqual({ checked: 1, ended: 0 });
     expect(rows.transcripts[0].status).toBe("live");
   });
 
-  test("taking a seat in an emptied room ends the previous huddle's orphaned transcript", async () => {
+  test("switching transcription back on resumes the record under the presser", async () => {
     const { ctx, rows, now } = fakeCtx();
-    seat(rows, "ub", now - STALE - 1000);
-    transcript(rows);
+    seat(rows, "ua", now);
+    seat(rows, "ub", now);
+    transcript(rows, { started_by: "ub" });
+    rows.call_room_state = [{ _id: "rs1", room_key: "channel:ch1", team_id: "t1", transcribe_off: true, updated_at: now - 1000 }];
     rows.chat_channels = [{ _id: "ch1", team_id: "t1", name: "design" }];
-    await (await fn("joinRoom"))(ctx, { room_key: "channel:ch1", muted: true });
-    expect(rows.transcripts[0].status).toBe("ended");
+    await (await fn("setRoomTranscribeOff"))(ctx, { room_key: "channel:ch1", off: false });
+    expect(rows.transcripts).toHaveLength(1);
+    expect(rows.transcripts[0].started_by).toBe("ua");
+    expect((rows.call_chat_messages ?? []).map((r: any) => [r.event, r.transcript_id])).toEqual([["transcribe_on", "tr1"]]);
   });
 });
 
@@ -1065,7 +1111,7 @@ describe("who scribes", () => {
     const start = await fn("./transcripts", "start");
     const first = await start(ctx, { room_key: "channel:ch1" });
     const again = await start(ctx, { room_key: "channel:ch1", auto: true });
-    expect(again).toEqual({ transcript_id: first.transcript_id, existing: true, role: "scribe" });
+    expect(again).toMatchObject({ transcript_id: first.transcript_id, existing: true, role: "scribe" });
   });
 
   test("a scribe whose seat lease died is replaced, and the run continues under the new scribe", async () => {
@@ -1077,7 +1123,10 @@ describe("who scribes", () => {
     }];
     as(ctx, "ub");
     const res = await (await fn("./transcripts", "start"))(ctx, { room_key: "channel:ch1", auto: true });
-    expect(res).toEqual({ transcript_id: "tr1", existing: true, role: "scribe" });
+    expect(res).toMatchObject({ transcript_id: "tr1", existing: true, role: "scribe" });
+    // The new scribe times its words on the record's clock, a minute in, so
+    // its first line does not sort before everything already said.
+    expect(res.elapsed_ms).toBeGreaterThanOrEqual(60_000);
     // The row was adopted, not forked: same run, same numbering, new owner —
     // which is what lets ub's appends through requireOwnLiveTranscript.
     expect(rows.transcripts).toHaveLength(1);

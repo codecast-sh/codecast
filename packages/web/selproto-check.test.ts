@@ -1,0 +1,27 @@
+import { JSDOM } from "jsdom";
+import { readFileSync } from "fs";
+import { test, expect } from "bun:test";
+test("prototype panels build and toggle", { timeout: 60000 }, () => {
+  const html = readFileSync("/tmp/selproto/index.html", "utf8");
+  const dom = new JSDOM(html);
+  const d = dom.window.document;
+  const script = html.slice(html.lastIndexOf("<script>") + 8, html.lastIndexOf("</script>"));
+  new Function("document", "window", script)(d, dom.window);
+  const panels = d.querySelectorAll(".panel");
+  expect(panels.length).toBe(18);
+  const rail = panels[4].querySelector(".rail")!;
+  expect(rail.querySelector(".count")!.textContent).toBe("3 selected");
+  const cards = rail.querySelectorAll(".card");
+  (cards[3] as any).click();
+  expect(rail.querySelector(".count")!.textContent).toBe("4 selected");
+  expect(cards[3].querySelector(".t")!.getAttribute("data-n")).toBe("4");
+  (rail.querySelector(".done") as any).click();
+  expect(rail.classList.contains("selecting")).toBe(false);
+  (cards[1] as any).click();
+  expect(rail.querySelector(".count")!.textContent).toBe("1 selected");
+  expect(cards[1].querySelector(".t")!.getAttribute("data-n")).toBe("1");
+  d.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape" }));
+  expect(d.querySelectorAll(".card.sel").length).toBe(0);
+  const tray = panels[12].querySelector(".tray")!;
+  expect(tray.textContent).toBe("RowanAlpinePeanut");
+});

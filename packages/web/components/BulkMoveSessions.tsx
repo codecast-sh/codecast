@@ -183,12 +183,12 @@ export function InboxSelectionBar({
 }) {
   const n = sessions.length;
   return (
-    <div className="flex items-center gap-1.5 whitespace-nowrap border-b border-[color:color-mix(in_srgb,var(--sel-accent)_35%,transparent)] bg-[color:var(--sel-fill)] px-2.5 py-1.5 text-xs text-sol-text" title="⌘-click toggles a card, shift-click selects a run">
-      <span className="font-semibold text-[color:var(--sel-accent)]">{n} selected</span>
+    <div data-sel-inverted className="flex items-center gap-1.5 whitespace-nowrap bg-sol-bg px-2.5 py-1.5 text-xs text-sol-text" title="⌘-click toggles a card, shift-click selects a run">
+      <span className="font-semibold">{n} selected</span>
       <div className="ml-auto flex items-center gap-0.5">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button type="button" className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-sol-text hover:bg-sol-bg/60">
+            <button type="button" className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-sol-text hover:bg-sol-bg-highlight">
               <ArrowRightLeft className="h-3 w-3" /> Move to…
             </button>
           </DropdownMenuTrigger>
@@ -198,7 +198,7 @@ export function InboxSelectionBar({
         </DropdownMenu>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button type="button" className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-sol-text hover:bg-sol-bg/60">
+            <button type="button" className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-sol-text hover:bg-sol-bg-highlight">
               <Tag className="h-3 w-3" /> Label
             </button>
           </DropdownMenuTrigger>
@@ -207,16 +207,16 @@ export function InboxSelectionBar({
           </DropdownMenuContent>
         </DropdownMenu>
         {onStash && (
-          <button type="button" className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-sol-text hover:bg-sol-bg/60" onClick={() => { for (const s of sessions) onStash(s._id); onClear(); }}>
+          <button type="button" className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-sol-text hover:bg-sol-bg-highlight" onClick={() => { for (const s of sessions) onStash(s._id); onClear(); }}>
             <Archive className="h-3 w-3" /> Stash
           </button>
         )}
         {onKill && (
-          <button type="button" className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-sol-red hover:bg-sol-red/10" onClick={() => { for (const s of sessions) onKill(s._id); onClear(); }}>
+          <button type="button" className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-sol-red hover:bg-sol-bg-highlight" onClick={() => { for (const s of sessions) onKill(s._id); onClear(); }}>
             <Square className="h-3 w-3" /> Kill
           </button>
         )}
-        <button type="button" title="Leave selection" className="ml-1.5 inline-flex items-center gap-1.5 rounded border border-[color:color-mix(in_srgb,var(--sel-accent)_40%,transparent)] bg-sol-bg px-2 py-0.5 font-semibold text-[color:var(--sel-accent)] hover:bg-sol-bg/70" onClick={onClear}>
+        <button type="button" title="Leave selection" className="ml-1.5 inline-flex items-center gap-1.5 rounded bg-sol-text px-2 py-0.5 font-semibold text-sol-bg hover:opacity-90" onClick={onClear}>
           Done <KeyCap size="xs">Esc</KeyCap>
         </button>
       </div>

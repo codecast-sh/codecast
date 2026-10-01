@@ -6,6 +6,7 @@ import { getAuthenticatedUserId } from "./pendingMessages";
 import { deliverToAnchor, userCanAccessAnchor, userCanAdminAnchor, visibleAnchorsForUser } from "./anchors";
 import { isTeamAdmin, isTeamMember } from "./privacy";
 import { installationForTeam } from "./lib/slackOutbound";
+import { tokenHasScope } from "./lib/slackMirror";
 
 // The Slack adapter. Workspaces connect via the "Add to Slack" OAuth flow, which
 // stores a per-workspace bot token in `slack_installations` (replacing the single
@@ -27,6 +28,9 @@ export const BOT_SCOPES = [
   "channels:read",
   "channels:history",
   "channels:join",
+  // Invite and remove people from a mirrored channel (the room's member panel).
+  "channels:manage",
+  "groups:write",
   "groups:read",
   "groups:history",
   "users:read",
@@ -49,8 +53,7 @@ export const USER_SCOPES = [
 /** The scopes a token needs before a person's DMs can come over. */
 export const DM_SCOPES = ["im:read", "im:history", "mpim:read", "mpim:history", "chat:write", "files:read"];
 export function tokenHasDmScopes(scopes: string | undefined | null): boolean {
-  const have = new Set((scopes ?? "").split(",").map((s) => s.trim()));
-  return DM_SCOPES.every((s) => have.has(s));
+  return DM_SCOPES.every((s) => tokenHasScope(scopes, s));
 }
 
 /** Can this person's own token post a message as them? */

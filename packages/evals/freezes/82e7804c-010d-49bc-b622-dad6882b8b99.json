@@ -1,0 +1,26 @@
+{
+  "name": "suggest approve-plan",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:approve-plan"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "suggest:approve-plan",
+    "title": "suggest approve-plan"
+  },
+  "asOf": "2026-03-02T09:01:20.000Z",
+  "trigger": {
+    "type": "suggest"
+  },
+  "meta": {
+    "surface": "suggest",
+    "visibility": "public",
+    "snapshot": "fixtures/suggest/approve-plan.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "82e7804c-010d-49bc-b622-dad6882b8b99",
+  "createdAt": "2026-10-01T17:42:07.154Z"
+}

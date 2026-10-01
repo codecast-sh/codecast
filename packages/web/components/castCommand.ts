@@ -4,6 +4,7 @@
 // (the "Message to" / "read" blocks and the cast task/plan/doc renderers).
 
 import { extractBrowserTabId } from "../lib/browserFocus";
+import { scanShellWord, tokenizeShellArgs, type ShellToken } from "./shellWords";
 
 // Agents routinely prefix a command with `cd <dir>;` or `cd <dir> &&` to run it
 // from the repo root (e.g. `cd /repo; cast send jx7abcd "hi"`). Strip that leading
@@ -35,146 +36,6 @@ export interface ParsedCastCommand {
 export interface SendBody {
   body: string;
   kind: "literal" | "heredoc" | "dynamic";
-}
-
-/**
- * Decode the first shell word in an argument string. Shell words can be made
- * from adjacent quoted and unquoted segments (`'it'\''s ready'`,
- * `"hello "'world'`), so matching only the first quote pair can silently show
- * a truncated message. Unsupported/expanded syntax is marked dynamic; callers
- * must never present that decoded recipe as the payload that actually arrived.
- */
-function scanShellWord(source: string): { body: string; dynamic: boolean; quoted: boolean; end: number } {
-  let body = "";
-  let dynamic = false;
-  let quoted = false;
-  let quote: "single" | "double" | null = null;
-  // Declared outside the loop so the scan can report where the word ended —
-  // tokenizeShellArgs walks a whole arg string one word at a time.
-  let i = 0;
-
-  for (; i < source.length; i += 1) {
-    const ch = source[i];
-
-    if (quote === "single") {
-      if (ch === "'") quote = null;
-      else body += ch;
-      continue;
-    }
-
-    if (quote === "double") {
-      if (ch === '"') {
-        quote = null;
-        continue;
-      }
-      if (ch === "\\") {
-        const next = source[i + 1];
-        if (next === undefined) {
-          body += "\\";
-          dynamic = true;
-          continue;
-        }
-        if (next === "\n") {
-          i += 1;
-          continue;
-        }
-        if (next === "$" || next === "`" || next === '"' || next === "\\") {
-          body += next;
-          i += 1;
-          continue;
-        }
-        body += `\\${next}`;
-        i += 1;
-        continue;
-      }
-      if (ch === "$" || ch === "`") dynamic = true;
-      body += ch;
-      continue;
-    }
-
-    if (/\s/.test(ch)) break;
-    if (ch === "'") {
-      quote = "single";
-      quoted = true;
-      continue;
-    }
-    if (ch === '"') {
-      quote = "double";
-      quoted = true;
-      continue;
-    }
-    if (ch === "\\") {
-      const next = source[i + 1];
-      if (next === undefined) {
-        body += "\\";
-        dynamic = true;
-      } else if (next === "\n") {
-        i += 1;
-      } else {
-        body += next;
-        i += 1;
-      }
-      continue;
-    }
-
-    // An unquoted shell operator terminates the word: everything scanned so
-    // far IS the argv the shell delivered, and the rest is a separate command
-    // (`"msg"; cast disown …`), a pipe, or a redirect. Don't let a trailing
-    // chained command poison a fully literal message into "dynamic". An
-    // operator with no word before it means the body came from elsewhere.
-    if (/[;&|<>()]/.test(ch)) {
-      if (body.length === 0) dynamic = true;
-      break;
-    }
-
-    // These constructs are expanded by the shell within the word. Keep the
-    // visible recipe, but never call it the delivered body.
-    if (
-      ch === "$" ||
-      ch === "`" ||
-      ch === "*" ||
-      ch === "?" ||
-      ch === "[" ||
-      ch === "{" ||
-      (ch === "~" && body.length === 0)
-    ) {
-      dynamic = true;
-    }
-    body += ch;
-  }
-
-  if (quote !== null) dynamic = true;
-  return { body, dynamic, quoted, end: i };
-}
-
-export interface ShellToken {
-  value: string;
-  dynamic: boolean;
-  quoted: boolean;
-}
-
-// Split an arg string into the shell words the command actually ran with,
-// stopping at a heredoc marker. Everything past `<<` is body text, never argv:
-// a report that mentions "-m" in prose is not a --message flag, and scanning it
-// as one would quote the wrong sentence back at the reader.
-export function tokenizeShellArgs(args: string): ShellToken[] {
-  const tokens: ShellToken[] = [];
-  let rest = args;
-  while (rest.length > 0) {
-    const ws = rest.match(/^\s+/);
-    if (ws) {
-      rest = rest.slice(ws[0].length);
-      continue;
-    }
-    if (rest.startsWith("<<")) break;
-    const { body, dynamic, quoted, end } = scanShellWord(rest);
-    // A word that consumed nothing is an operator (`;`, `|`, `>`): the rest of
-    // the line belongs to another command.
-    if (end === 0) break;
-    tokens.push({ value: body, dynamic, quoted });
-    rest = rest.slice(end);
-  }
-  return tokens;
 }
 
 // The value of a flag (`-m "…"`, `--goal '…'`) in a cast command's args. Reads
@@ -507,6 +368,13 @@ const CAST_BODY_SUBCOMMANDS = new Set([
   "edit", "update", "decide", "discover", "note",
 ]);
 
+// `cast spawn` and `cast fork` flags that take a value (the optional ones,
+// `--subagent [parent]` and `--cloud [host]`, take the word after them too).
+const SPAWN_VALUE_FLAGS = new Set([
+  "-C", "--dir", "--agent", "--as", "--subagent", "--model", "--effort", "--account", "--worktree", "--device",
+  "--cloud", "--from", "--label", "-s", "--session", "--at", "--start-from", "--claude-args", "--claude-tail",
+]);
+
 // The prose a cast mutation carried: a comment body, a done note, a plan's goal,
 // a trigger's prompt, a pinned thread state. This is the content of the action —
 // the conversation renders it as a message body, so one function decides what
@@ -534,6 +402,19 @@ export function extractCastBodyParts(
 
   if (CAST_BODY_SUBCOMMANDS.has(subcommand)) {
     for (const { flags, label } of CAST_BODY_FLAGS) push(extractFlagValue(args, flags), label);
+  }
+
+  // What a spawn or fork was asked to do: each quoted prompt on the line
+  // (`cast spawn --subagent -- "…"`, `cast fork --tip "…" "…"`). A quoted word
+  // after a flag that takes a value is that value (`--subagent "jx7…"` names a
+  // parent, `--label "…"` a label), and a heredoc prompt is not on the line.
+  if (cat === "spawn" || cat === "fork") {
+    const tokens = tokenizeShellArgs(args);
+    tokens.forEach((t, i) => {
+      const prev = tokens[i - 1];
+      const flagValue = !!prev && !prev.quoted && SPAWN_VALUE_FLAGS.has(prev.value);
+      if (t.quoted && !t.dynamic && !flagValue) push(t.value, "prompt");
+    });
   }
 
   return parts;

@@ -20,49 +20,62 @@ function serverRoom(locked: boolean) {
 
 describe("room lock local-first toggle", () => {
   beforeEach(() => {
-    useInboxStore.setState({ liveRooms: [serverRoom(false)], callLockPending: {} } as any);
+    useInboxStore.setState({ liveRooms: [serverRoom(false)], callRoomPending: {} } as any);
   });
 
   it("flips the lock in the same tick and records the pending intent", () => {
-    useInboxStore.getState().noteLockPending(ROOM, true);
+    useInboxStore.getState().noteRoomPending(ROOM, { locked: true });
     const s = useInboxStore.getState() as any;
     expect(s.liveRooms[0].locked).toBe(true);
-    expect(s.callLockPending[ROOM].locked).toBe(true);
+    expect(s.callRoomPending[ROOM].flags.locked).toBe(true);
   });
 
   it("keeps the in-flight lock when a stale live-rooms push arrives", () => {
-    useInboxStore.getState().noteLockPending(ROOM, true);
+    useInboxStore.getState().noteRoomPending(ROOM, { locked: true });
     useInboxStore.getState().syncTable("liveRooms", [serverRoom(false)]);
     const s = useInboxStore.getState() as any;
     expect(s.liveRooms[0].locked).toBe(true);
-    expect(s.callLockPending[ROOM]).toBeDefined();
+    expect(s.callRoomPending[ROOM]).toBeDefined();
   });
 
   it("stops protecting once the server reflects the lock", () => {
-    useInboxStore.getState().noteLockPending(ROOM, true);
+    useInboxStore.getState().noteRoomPending(ROOM, { locked: true });
     useInboxStore.getState().syncTable("liveRooms", [serverRoom(true)]);
     const s = useInboxStore.getState() as any;
     expect(s.liveRooms[0].locked).toBe(true);
-    expect(s.callLockPending[ROOM]).toBeUndefined();
+    expect(s.callRoomPending[ROOM]).toBeUndefined();
   });
 
   it("gives up on a protection the server never accepted", () => {
     useInboxStore.setState({
-      callLockPending: { [ROOM]: { locked: true, at: Date.now() - 60_000 } },
+      callRoomPending: { [ROOM]: { flags: { locked: true }, at: Date.now() - 60_000 } },
       liveRooms: [serverRoom(true)],
     } as any);
     useInboxStore.getState().syncTable("liveRooms", [serverRoom(false)]);
     const s = useInboxStore.getState() as any;
     expect(s.liveRooms[0].locked).toBe(false);
-    expect(s.callLockPending[ROOM]).toBeUndefined();
+    expect(s.callRoomPending[ROOM]).toBeUndefined();
+  });
+
+  it("holds the transcription switch and the lock independently", () => {
+    useInboxStore.getState().noteRoomPending(ROOM, { locked: true });
+    useInboxStore.getState().noteRoomPending(ROOM, { transcribe_off: true });
+    // The server took the lock but has not seen the switch yet.
+    useInboxStore.getState().syncTable("liveRooms", [{ ...serverRoom(true), transcribe_off: false }]);
+    let s = useInboxStore.getState() as any;
+    expect(s.liveRooms[0].transcribe_off).toBe(true);
+    expect(s.callRoomPending[ROOM].flags).toEqual({ transcribe_off: true });
+    useInboxStore.getState().syncTable("liveRooms", [{ ...serverRoom(true), transcribe_off: true }]);
+    s = useInboxStore.getState() as any;
+    expect(s.callRoomPending[ROOM]).toBeUndefined();
   });
 
   it("reverts to the prior state when the mutation is refused", () => {
-    useInboxStore.getState().noteLockPending(ROOM, true);
-    useInboxStore.getState().revertLockPending(ROOM, false);
+    useInboxStore.getState().noteRoomPending(ROOM, { locked: true });
+    useInboxStore.getState().revertRoomPending(ROOM, { locked: false });
     const s = useInboxStore.getState() as any;
     expect(s.liveRooms[0].locked).toBe(false);
-    expect(s.callLockPending[ROOM]).toBeUndefined();
+    expect(s.callRoomPending[ROOM]).toBeUndefined();
   });
 });
 
