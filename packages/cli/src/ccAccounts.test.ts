@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { readLocalCredentialAsync } from "./remote/session-move.js";
+import { readLocalCredentialAsync } from "./ccKeychain.js";
 import {
   buildProfile,
   parseProfile,
@@ -2343,10 +2343,12 @@ describe("switchProfile: keychain vs token (sandboxed $HOME)", () => {
 
   beforeEach(() => {
     home = fs.mkdtempSync(path.join(os.tmpdir(), "cc-switch-test-"));
-    for (const k of ["HOME", "PATH", "CC_ACCOUNTS_FORCE_FILE"]) savedEnv[k] = process.env[k];
+    for (const k of ["HOME", "PATH", "CC_ACCOUNTS_FORCE_FILE", "CODECAST_CC_FLEET"]) savedEnv[k] = process.env[k];
     process.env.HOME = home;
     process.env.PATH = path.join(home, "empty-path");
     process.env.CC_ACCOUNTS_FORCE_FILE = "1";
+    // The keychain and token switches, as a machine without the fleet store runs them.
+    process.env.CODECAST_CC_FLEET = "0";
     fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
     fs.mkdirSync(path.join(home, ".codecast"), { recursive: true });
     fs.writeFileSync(credPath(), CRED);
