@@ -52,7 +52,7 @@ for (const dir of ["downloads", "temp"]) {
   app.setPath(dir, p);
 }
 
-const { pickWindow, chooseLeader, BannerGate } = require("./notificationRouter");
+const { pickWindow, chooseLeader, BannerGate, notificationRoute } = require("./notificationRouter");
 const { createPaletteFace } = require("./paletteFace");
 // The desktop's apps (Chat, Work): which routes live in a window of their own.
 // An ES module the web bundle imports too, so both sides read one table.
@@ -82,6 +82,7 @@ const { createComputerPermissions } = require("./computerPermissions");
 const { createShellAuthority, originOf, installShellCapabilities } = require("./shellAuthority");
 const { createBrowserPanes, defaultRegistryPath: defaultPaneRegistryPath } = require("./browserPanes");
 const { createShareCursors } = require("./shareCursors");
+const { attachSpellMenu } = require("./spellMenu");
 
 let notificationRefs = [];
 
@@ -91,8 +92,10 @@ let notificationRefs = [];
 // and it refuses silently, so the legacy class is only a fallback for a
 // process that never touched the modern API.
 let modernNotify = null;
-function showNativeNotification(title, body, onClick) {
-  if (modernNotify && modernNotify(title, body, onClick)) return;
+// `target` is a banner's click target ({ route, kind }), carried on the banner
+// itself so a click still lands after a relaunch (osPermissions.notify).
+function showNativeNotification(title, body, onClick, target) {
+  if (modernNotify && modernNotify(title, body, onClick, target ? JSON.stringify(target) : undefined)) return;
   if (!Notification.isSupported()) return;
   const notif = new Notification({ title, body, silent: false, urgency: "critical" });
   if (onClick) notif.on("click", onClick);
@@ -1025,7 +1028,10 @@ shellIpc.handle("get-always-on-top", (e) => {
 // ---------------------------------------------------------------------------
 
 const CALL_PANEL_PATH = "/call-panel";
-const CALL_PANEL_SIZE = { width: 960, height: 640, minWidth: 520, minHeight: 380 };
+// Born large: a screen share is drawn into this box, and every css pixel it
+// lacks is a pixel of the sharer's text the viewer never sees (at 960x640 a
+// 1440p share shrank about 3.5x on a 1x monitor). Fit to the work area.
+const CALL_PANEL_SIZE = { width: 1280, height: 800, minWidth: 520, minHeight: 380 };
 // What the float is born as: about one face plus the room its ring needs.
 // The renderer reports the true size a frame later
 // (set-call-window-content-size); this only keeps the first frame from being a
@@ -1237,13 +1243,7 @@ function applyCallWindowSize(win, size, { reveal = true } = {}) {
   if (size === "panel") {
     const bounds = clampToVisibleDisplay(loadCallPanelState().bounds, CALL_PANEL_SIZE);
     win.setMinimumSize(CALL_PANEL_SIZE.minWidth, CALL_PANEL_SIZE.minHeight);
-    win.setBounds(
-      bounds || {
-        ...defaultPanelBounds(),
-        width: CALL_PANEL_SIZE.width,
-        height: CALL_PANEL_SIZE.height,
-      },
-    );
+    win.setBounds(bounds || defaultPanelBounds());
   } else if (size === "wall") {
     const bounds = clampToVisibleDisplay(loadPeopleState().bounds, PEOPLE_SIZE);
     win.setMinimumSize(PEOPLE_SIZE.minWidth, PEOPLE_SIZE.minHeight);
@@ -1285,9 +1285,13 @@ function revealCallWindow(win, size) {
 
 function defaultPanelBounds() {
   const area = screen.getPrimaryDisplay().workArea;
+  const width = Math.min(CALL_PANEL_SIZE.width, area.width);
+  const height = Math.min(CALL_PANEL_SIZE.height, area.height);
   return {
-    x: Math.round(area.x + (area.width - CALL_PANEL_SIZE.width) / 2),
-    y: Math.round(area.y + (area.height - CALL_PANEL_SIZE.height) / 2),
+    x: Math.round(area.x + (area.width - width) / 2),
+    y: Math.round(area.y + (area.height - height) / 2),
+    width,
+    height,
   };
 }
 
@@ -1334,9 +1338,7 @@ function ensureCallWindow(roomKey, opts) {
   const bounds = clampToVisibleDisplay(loadCallPanelState().bounds, CALL_PANEL_SIZE);
   const zoom = getAutoZoomFactor();
   const win = createShellWindow({
-    width: CALL_PANEL_SIZE.width,
-    height: CALL_PANEL_SIZE.height,
-    ...(bounds || {}),
+    ...(bounds || defaultPanelBounds()),
     minWidth: CALL_PANEL_SIZE.minWidth,
     minHeight: CALL_PANEL_SIZE.minHeight,
     // No chrome, in any shape. The circle shapes need a see-through frameless
@@ -1852,7 +1854,12 @@ const lastFocusedAt = new Map();
 // rule, the per-conversation burst cooldown and the completion grace. Policy is
 // in notificationRouter.js; this only says how a banner is actually shown.
 const bannerGate = new BannerGate({
-  deliver: (p) => showNativeNotification(p.title, p.body, () => openNotificationTarget(p.data)),
+  deliver: (p) => showNativeNotification(
+    p.title,
+    p.body,
+    () => openNotificationTarget(p.data),
+    { route: notificationRoute(p.data), kind: p.data?.kind || null },
+  ),
 });
 
 // The windows that count for routing: main + detached tab windows + the Chat
@@ -2014,7 +2021,7 @@ function sendNavigate(win, navPath, tabId) {
 // window at all (macOS keeps the app alive with every window closed), boot the
 // main window and let the deep-link buffer deliver the path on load.
 function openNotificationTarget(data) {
-  const route = data?.route || (data?.conversationId ? `/conversation/${data.conversationId}` : null);
+  const route = notificationRoute(data);
   const pick = pickWindow(describeWindows(), { route, kind: data?.kind || null });
   if (!pick) {
     if (route) deepLinkUrl = `codecast://open${route}`;
@@ -3039,6 +3046,14 @@ const osPermissions = createOsPermissions({
   bundleId: app.isPackaged ? "sh.codecast.desktop" : "com.github.Electron",
 });
 modernNotify = osPermissions.notify;
+// Clicks are heard from boot, not from this run's first banner: a banner
+// posted before a relaunch carries its own target and lands through here.
+osPermissions.listenForClicks((payload) => {
+  let target = null;
+  try { target = JSON.parse(payload); } catch {}
+  const route = target && sanitizeTabPath(target.route);
+  if (route) app.whenReady().then(() => openNotificationTarget({ route, kind: target.kind || null }));
+});
 shellIpc.handle("get-os-permissions", () => osPermissions.getAll());
 shellIpc.handle("request-os-permission", (_e, kind) => osPermissions.request(String(kind)));
 
@@ -3273,7 +3288,25 @@ function registerShortcuts() {
   }
 }
 
+// Every window and pane gets the edit menu with spelling suggestions. DevTools
+// ("remote") draws its own.
+app.on("web-contents-created", (_event, contents) => {
+  if (contents.getType() !== "remote") attachSpellMenu(contents, Menu);
+});
+
 app.whenReady().then(() => {
+  // Electron's notification presenter makes itself the notification center's
+  // delegate the moment it is created, which happens lazily: the first web
+  // page that calls `new Notification` (a site in a browser pane) would take
+  // every later banner click away from ours. Create it now, then claim the
+  // delegate in front of it so its banners are handed back to it. Its
+  // constructor asks for authorization, so an undecided app waits for the
+  // first banner's own prompt (claimed again on every post).
+  if (osPermissions.readNotificationState() !== "ask") {
+    try { Notification.isSupported(); } catch {}
+    osPermissions.listenForClicks();
+  }
+
   // Trust the local mkcert dev cert at the network-service layer. This runs
   // before any cert check, so unlike the "certificate-error" event it also
   // covers the Vite HMR WebSocket — not just the page load. callback(0) =

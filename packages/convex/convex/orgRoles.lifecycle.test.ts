@@ -5,6 +5,8 @@ import { briefingFor, performRebriefRoles } from "./anchors";
 import { charterTemplate, ensureRoleRoutine, performCreateRole, performPauseRole, performProvisionRole, performResetOrg, performReparentRole, performResumeRole, performRetireRole, performStaff, resetOrgPreview, seatingNote, standingConversationOf } from "./orgRoles";
 import { ROLE_CHECK_PROMPT } from "./lib/orgRoutine";
 import { performReparentSession } from "./sessionOwnership";
+import { killConversation } from "./conversations";
+import { applyHideTransition } from "./cleanup";
 import { isBootstrapPrompt, isSessionMessage } from "@codecast/shared/contracts";
 
 // A role's lifecycle a person can trust (docs/architecture/org-staffing.md
@@ -263,5 +265,21 @@ describe("a role's own session belongs to whom the role reports to (S28)", () =>
     await lead(ctx);
     await expect(performReparentSession(ctx, ME as any, { session_id: "mine", target: { kind: "user", owners: [PEER], mode: "set" } as any })).rejects.toThrow("cast org reparent @infra");
     expect(owners(tables, "mine")).toEqual([ME]);
+  });
+});
+
+describe("a role's own session is retired, never killed (S16)", () => {
+  test("every explicit kill door refuses and names the retire; a retire still decommissions it", async () => {
+    const { ctx, tables } = world();
+    const role = await lead(ctx);
+    const seat = tables.conversations.find((c) => c._id === "mine")!;
+    await expect(killConversation(ctx, ME as any, { conversation_id: "mine" as any })).rejects.toThrow("cast role retire @infra");
+    await expect(applyHideTransition(ctx, seat, { inbox_dismissed_at: NOW }, { forceKill: true })).rejects.toThrow("@infra's own session");
+    expect(seat.inbox_killed_at).toBeUndefined();
+    // A plain session still kills.
+    await killConversation(ctx, ME as any, { conversation_id: "work1" as any });
+    expect(tables.conversations.find((c) => c._id === "work1")!.inbox_killed_at).toBeTruthy();
+    await performRetireRole(ctx, ME as any, { role_id: String(role._id) });
+    expect(tables.org_roles[0].status).toBe("retired");
   });
 });

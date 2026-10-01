@@ -1,0 +1,19 @@
+{
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "notes": "error the agent cannot resolve",
+  "label": {
+    "verdict": "needs_input"
+  },
+  "snapshot": {
+    "newestFirst": [
+      {
+        "role": "assistant",
+        "content": "The migration fails at step 3: `permission denied for schema billing`. My role has no DDL on that schema and I can't grant it to myself. Someone with the admin role needs to run `GRANT CREATE ON SCHEMA billing TO app_migrator`."
+      },
+      {
+        "role": "user",
+        "content": "run the migration"
+      }
+    ]
+  }
+}

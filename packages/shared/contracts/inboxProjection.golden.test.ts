@@ -76,6 +76,10 @@ const GOLDEN_HASH_BY_VERSION: Record<number, string> = {
   // v14: escalation removed (org-staffing.md S28); a role's card files by its
   // own facts, and an asking standing session is not hidden.
   14: "d036ac035b87a1bb",
+  // v15: a session a person started holds NEW for its first
+  // INBOX_CREATE_GRACE_MS whatever it is doing. In `sort-classes`, the
+  // freshly born working row `workborn` files under new. No other fixture moved.
+  15: "a4c19200765bdfca",
 };
 
 type Expected = {

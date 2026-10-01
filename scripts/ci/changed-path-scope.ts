@@ -43,7 +43,7 @@ export const JOB_AREAS: Record<string, Area[]> = {
   "test-cli": ["cli", "shared", "platform"],
   // The mirror's own job: its package tests, and the drift check. Every other
   // job lists "platform" too, because the mirror is a dependency of all of
-  // them and used to reach them through "shared".
+  // them and is its own area, not part of "shared".
   "test-platform": ["platform"],
   // Every area, because the shared suite reads more than shared: the max lines
   // ratchet walks every package under packages/, and the chief of staff prompt
@@ -79,7 +79,9 @@ export function jobFlag(job: string): string {
 }
 
 const AREA_PREFIXES: Array<[Exclude<Area, "docs">, string[]]> = [
-  ["cli", ["packages/cli/"]],
+  // packages/evals is the eval home (docs/architecture/evals-home.md). It
+  // imports cli source and its unit tests run as a step of test-cli.
+  ["cli", ["packages/cli/", "packages/evals/"]],
   ["web", ["packages/web/"]],
   ["convex", ["packages/convex/"]],
   ["shared", ["packages/shared/"]],

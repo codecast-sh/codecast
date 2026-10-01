@@ -238,23 +238,27 @@ async function history(
  * Record the inbound event on the source and on the connection it came
  * through, so the integrations page can say "last heard from Linear 4 minutes
  * ago" without a probe (S1.5).
+ *
+ * A connection row is stamped at most once per HEALTH_STAMP_MS. Every client
+ * subscribes to the whole row (githubApp.listInstallations carries the
+ * repository list), so a stamp per webhook re-pushed half a megabyte to every
+ * open tab every few seconds on a busy repository (2026-10-01).
  */
+const HEALTH_STAMP_MS = 60_000;
 async function stampInboundHealth(ctx: any, source: SourceDoc, now: number) {
   await ctx.db.patch(source._id, { last_webhook_at: now, updated_at: now });
   if (!source.team_id) return;
-  if (source.provider === "linear") {
-    const row = await ctx.db
+  const rows = source.provider === "linear"
+    ? [await ctx.db
       .query("app_installations")
       .withIndex("by_provider_team", (q: any) => q.eq("provider", "linear").eq("team_id", source.team_id))
-      .first();
-    if (row) await ctx.db.patch(row._id, { last_webhook_at: now });
-  } else {
-    for (const row of await ctx.db
+      .first()]
+    : await ctx.db
       .query("github_app_installations")
       .withIndex("by_team_id", (q: any) => q.eq("team_id", source.team_id))
-      .collect()) {
-      await ctx.db.patch(row._id, { last_webhook_at: now });
-    }
+      .collect();
+  for (const row of rows) {
+    if (row && !(now - (row.last_webhook_at ?? 0) < HEALTH_STAMP_MS)) await ctx.db.patch(row._id, { last_webhook_at: now });
   }
 }
 

@@ -319,10 +319,9 @@ function NavDropdown({
   const dropdownWidth = Math.min(420, window.innerWidth - 16);
   const margin = 8;
   const left = Math.max(margin, triggerRect.left - dropdownWidth - 8);
-  // Top-align the panel to the trigger. The nav button itself sits below the
-  // header's sticky-message banner, so top-aligning here keeps the panel clear
-  // of that banner without pushing it unnecessarily far down.
-  const top = Math.max(margin, triggerRect.top);
+  // Bottom-align the panel to the trigger: the nav button sits in the scroll
+  // tools above the composer, so the panel grows upward from it.
+  const bottom = Math.max(margin, window.innerHeight - triggerRect.bottom);
 
   const hasComments = comments.length > 0;
 
@@ -331,7 +330,7 @@ function NavDropdown({
       {pinned && <div className="fixed inset-0 z-[9998] pointer-events-auto" onClick={onClose} />}
       <div
         className="fixed z-[9999] bg-sol-bg-alt border border-sol-blue/30 rounded-lg shadow-2xl overflow-hidden flex flex-col"
-        style={{ top, left, width: dropdownWidth, maxHeight: "min(600px, 75vh)" }}
+        style={{ bottom, left, width: dropdownWidth, maxHeight: `min(600px, 75vh, ${window.innerHeight - bottom - margin}px)` }}
         onMouseEnter={onMouseEnter}
         onMouseLeave={onMouseLeave}
         onClick={onPin}

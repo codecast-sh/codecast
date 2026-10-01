@@ -22,7 +22,7 @@ describe("a role's opening message", () => {
     expect(m).toContain("What you cannot answer goes up");
     expect(m).toContain("Your brief is your memory between turns");
     expect(m).toContain("`## Where it stands`");
-    expect(m).toContain("`cast spawn`");
+    expect(m).toContain("`cast spawn --subagent`");
     expect(opening(false)).toContain("You do not start work on your own");
     expect(m.split(/\s+/).length).toBeLessThan(260);
     expect(isBootstrapPrompt(m)).toBe(true);

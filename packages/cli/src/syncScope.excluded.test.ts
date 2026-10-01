@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isProjectAllowedToSync } from "./syncScope.js";
+import { isProjectAllowedToSync, transcriptScopeRefusal } from "./syncScope.js";
 
 test("with everything syncing, excluded folders and the folders inside them do not upload", () => {
   const config = { sync_mode: "all" as const, sync_excluded: ["/home/ada/src/client"] };
@@ -31,4 +31,13 @@ test("an excluded checkout keeps its worktrees outside it from uploading too", (
 
 test("exclusions do not apply to chosen folders mode, which lists what uploads", () => {
   expect(isProjectAllowedToSync("/a/b", { sync_mode: "selected", sync_projects: ["/a"], sync_excluded: ["/a/b"] })).toBe(true);
+});
+
+test("a transcript placed by workspace syncs only where both the exclusions and the selection allow it", () => {
+  const selected = { sync_mode: "selected" as const, sync_projects: ["/a"], excluded_paths: "/a/private" };
+  expect(transcriptScopeRefusal("/a/app", selected)).toBeNull();
+  expect(transcriptScopeRefusal("/a/private/app", selected)).toContain("excluded");
+  expect(transcriptScopeRefusal("/b/app", selected)).toContain("non-selected");
+  expect(transcriptScopeRefusal(null, selected)).toContain("unknown");
+  expect(transcriptScopeRefusal(null, { sync_mode: "all" })).toBeNull();
 });

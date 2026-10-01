@@ -134,6 +134,14 @@ class BurstCooldown extends router.RecentKeys {
   }
 }
 
+// One click target per banner: an explicit route (chat, tasks, docs) wins,
+// else the conversation. The gate, the click and the banner's own payload
+// all read it from here.
+function notificationRoute(data) {
+  if (!data) return null;
+  return data.route || (data.conversationId ? `/conversation/${data.conversationId}` : null);
+}
+
 // True when a window the user is looking at already shows what the banner is
 // about. `sameEntity` needs an entity on both sides, so a routeless banner — or
 // a window sitting on a bare list page — is never "the active view".
@@ -165,7 +173,7 @@ class BannerGate {
   admit(windows, payload) {
     const data = (payload && payload.data) || {};
     const force = data.force === true;
-    const route = data.route || (data.conversationId ? `/conversation/${data.conversationId}` : null);
+    const route = notificationRoute(data);
     // A ring is for a person who is not looking, and "the app is in front" does
     // not mean they are. It skips every rule below except the duplicate collapse.
     if (!force && showsBannerEntity(windows, route)) return { shown: false, reason: "focused-active" };
@@ -207,4 +215,4 @@ class BannerGate {
   }
 }
 
-module.exports = { ...router, BannerGate, bannerRank };
+module.exports = { ...router, BannerGate, bannerRank, notificationRoute };

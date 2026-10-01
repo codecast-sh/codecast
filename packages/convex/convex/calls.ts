@@ -35,8 +35,8 @@ import { isTeamMember } from "./privacy";
 import { channelMemberIds, isRestricted } from "./chatAccess";
 import { bucketTs } from "./presenceState";
 import { teamFeatureOffMessage, teamHasFeature } from "./teamFeatures";
-import { endLiveTranscriptsForRoom } from "./transcripts";
-import { postEvent } from "./callChat";
+import { idleLiveTranscriptsForRoom, resumeOrEndHuddle } from "./transcripts";
+import { liveTranscriptFor, postEvent } from "./callChat";
 import {
   CALL_PUSH_CATEGORY,
   CALL_PUSH_SOUND,
@@ -264,8 +264,10 @@ async function requireUser(ctx: any): Promise<Id<"users">> {
   return userId;
 }
 
-// Sweep a room's dead rows while we're writing to it anyway.
-async function sweepRoom(ctx: any, roomKey: string, now: number) {
+// Sweep a room's dead rows while we're writing to it anyway. Returns the
+// rows as they stood before the sweep: a join into an emptied room dates the
+// quiet from the leases the dead rows last refreshed.
+async function sweepRoom(ctx: any, roomKey: string, now: number): Promise<Doc<"call_members">[]> {
   const rows = await ctx.db
     .query("call_members")
     .withIndex("by_room", (q: any) => q.eq("room_key", roomKey))
@@ -273,6 +275,7 @@ async function sweepRoom(ctx: any, roomKey: string, now: number) {
   for (const m of rows) {
     if (now - m.last_seen >= CALL_MEMBER_STALE_MS) await ctx.db.delete(m._id);
   }
+  return rows;
 }
 
 /**
@@ -374,25 +377,25 @@ export const joinRoom = mutation({
     // common case, and our own stale row must be gone before we decide
     // whether to refresh or insert (patching a row the sweep just deleted
     // threw "Update on nonexistent document").
-    await sweepRoom(ctx, args.room_key, now);
+    const before = await sweepRoom(ctx, args.room_key, now);
 
-    // Taking a seat in an EMPTY room starts a NEW huddle: the previous
-    // huddle's invite grants die here (callRooms.acceptedInviteGrant relies
-    // on this — an accepted invite means "that huddle never ended"). A guest
-    // whose huddle is still running never reaches this: the room holds a
-    // fresh lease, so it is not empty.
+    // Taking a seat in an EMPTY room starts a NEW huddle, unless the last one
+    // emptied inside its grace (transcripts.HUDDLE_GRACE_MS): coming back
+    // after a dropped connection or a hop to another room is the same
+    // conversation, with the same record, grants, lock and switch. A new
+    // huddle kills the previous huddle's invite grants
+    // (callRooms.acceptedInviteGrant relies on this — an accepted invite
+    // means "that huddle never ended"). A guest whose huddle is still running
+    // never reaches this: the room holds a fresh lease, so it is not empty.
     const seated = await ctx.db
       .query("call_members")
       .withIndex("by_room", (q) => q.eq("room_key", args.room_key))
       .collect();
-    if (liveMembers(seated, now).length === 0) {
+    if (liveMembers(seated, now).length === 0 && !(await resumeOrEndHuddle(ctx, args.room_key, now, before))) {
       await expireRoomGrants(ctx, args.room_key);
       // A lock belongs to the huddle that set it, and so do the knocks at its
       // door: the next huddle in this room starts open, with nobody waiting.
       await clearRoomState(ctx, args.room_key);
-      // Same reason: a transcript left "live" by the previous huddle (its
-      // scribe's tab died without stop) must not swallow this new one.
-      await endLiveTranscriptsForRoom(ctx, args.room_key);
     }
 
     // One huddle at a time: joining a room implicitly leaves every other —
@@ -530,15 +533,15 @@ export const leaveRoom = mutation({
       }
     }
     await settleOutboundRings(ctx, userId, args.room_key, now);
-    // The last one out ends the room's transcript: the record must not sit
-    // "live" on the calls page after everyone has hung up.
+    // The last one out starts the huddle's grace: its record ends at this
+    // moment unless somebody is back within HUDDLE_GRACE_MS.
     for (const roomKey of left) {
       const seated = await ctx.db
         .query("call_members")
         .withIndex("by_room", (q) => q.eq("room_key", roomKey))
         .collect();
       if (liveMembers(seated, now).length === 0) {
-        await endLiveTranscriptsForRoom(ctx, roomKey);
+        await idleLiveTranscriptsForRoom(ctx, roomKey, now);
       }
     }
   },
@@ -968,6 +971,17 @@ export const setRoomTranscribeOff = mutation({
     if (args.off && !wasOff) {
       await postEvent(ctx, { room_key: args.room_key, team_id: seat.team_id, user_id: userId, event: "transcribe_off" });
     }
+    // Back on inside the same huddle: its record is still live (off is a gap,
+    // not an end), so the presser takes over as its scribe and says so. A
+    // room with no record yet gets one from the presser's own start, which
+    // writes the line itself.
+    if (!args.off && wasOff) {
+      const live = await liveTranscriptFor(ctx, args.room_key);
+      if (live) {
+        if (String(live.started_by) !== String(userId)) await ctx.db.patch(live._id, { started_by: userId });
+        await postEvent(ctx, { room_key: args.room_key, team_id: seat.team_id, user_id: userId, event: "transcribe_on" });
+      }
+    }
     return { transcribe_off: args.off };
   },
 });
@@ -1182,6 +1196,8 @@ export async function signLivekitJwt(opts: {
   metadata?: string;
   ttlSeconds?: number;
   nowSeconds?: number;
+  // The grant beyond the room name; a participant's join grant by default.
+  grant?: Record<string, boolean>;
 }): Promise<string> {
   const now = opts.nowSeconds ?? Math.floor(Date.now() / 1000);
   const header = { alg: "HS256", typ: "JWT" };
@@ -1194,9 +1210,7 @@ export async function signLivekitJwt(opts: {
     ...(opts.metadata ? { metadata: opts.metadata } : {}),
     video: {
       room: opts.room,
-      roomJoin: true,
-      canPublish: true,
-      canSubscribe: true,
+      ...(opts.grant ?? { roomJoin: true, canPublish: true, canSubscribe: true }),
     },
   };
   const enc = new TextEncoder();

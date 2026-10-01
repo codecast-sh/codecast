@@ -24,44 +24,52 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { huddleChatLineHeader, isHuddlePass, isRecRoomKey } from "@codecast/shared/contracts";
+import { huddleChatLineHeader, isHuddlePass, isRecRoomKey, isToolResultCarrier } from "@codecast/shared/contracts";
 import { characterOf } from "@codecast/shared/contracts/sessionCharacter";
 import { authorizeRoom } from "./callRooms";
 import { MAX_ATTACHMENTS } from "./chatText";
+import { chatAttachmentValidator } from "./lib/chatAttachment";
 
 const MAX_TEXT = 4000;
-// Same shape as chat_messages.attachments / chat.ts's attachmentValidator —
-// huddle images are chat images, stored and rendered the same way.
-const attachmentValidator = v.object({
-  storage_id: v.id("_storage"),
-  name: v.optional(v.string()),
-  mime: v.optional(v.string()),
-  width: v.optional(v.number()),
-  height: v.optional(v.number()),
-});
 const PAGE = 200;
 // A chat bubble, not a report: a long answer is clipped here and the row
 // links to the session that holds the whole of it.
 export const AGENT_LINE_MAX = 1800;
 // Words land in the session by transcript sync a beat after the Stop hook
-// settles the status, so the mirror waits before reading the newest reply,
+// settles the status, so the mirror waits before reading the replies,
 // and looks once more if nothing new had landed yet.
 const MIRROR_DELAY_MS = 4_000;
 const MIRROR_RETRY_MS = 15_000;
 const MIRROR_ATTEMPTS = 2;
+// The most rows one mirror walks past the watermark: a few turns of tool calls.
+const MIRROR_SCAN = 200;
 
 export const list = query({
-  args: { room_key: v.string(), limit: v.optional(v.number()) },
+  args: {
+    room_key: v.string(),
+    // One huddle's lines (the call page), rather than the room's newest.
+    transcript_id: v.optional(v.id("transcripts")),
+    limit: v.optional(v.number()),
+  },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return null;
     const auth = await authorizeRoom(ctx, userId, args.room_key);
     if (!auth.ok) return null;
-    const rows = await ctx.db
-      .query("call_chat_messages")
-      .withIndex("by_room", (q) => q.eq("room_key", args.room_key))
-      .order("desc")
-      .take(Math.min(args.limit ?? PAGE, PAGE));
+    const take = Math.min(args.limit ?? PAGE, PAGE);
+    const rows = args.transcript_id
+      ? (
+          await ctx.db
+            .query("call_chat_messages")
+            .withIndex("by_transcript", (q) => q.eq("transcript_id", args.transcript_id))
+            .order("desc")
+            .take(take)
+        ).filter((r) => r.room_key === args.room_key)
+      : await ctx.db
+          .query("call_chat_messages")
+          .withIndex("by_room", (q) => q.eq("room_key", args.room_key))
+          .order("desc")
+          .take(take);
     rows.reverse();
     const users = new Map<string, { name: string; image?: string }>();
     const agents = new Map<string, AgentIdentity | null>();
@@ -93,6 +101,7 @@ export const list = query({
         attachments: r.attachments,
         at: r._creationTime,
         mine: !agent && !r.event && String(r.user_id) === String(userId),
+        transcript_id: r.transcript_id ? String(r.transcript_id) : null,
         agent,
         event: (r.event ?? null) as RoomEvent | null,
       };
@@ -117,7 +126,7 @@ export async function postEvent(
   },
 ): Promise<Id<"call_chat_messages"> | null> {
   if (isRecRoomKey(args.room_key)) return null;
-  return await ctx.db.insert("call_chat_messages", {
+  return await insertRoomRow(ctx, {
     room_key: args.room_key,
     team_id: args.team_id,
     user_id: args.user_id,
@@ -125,6 +134,40 @@ export async function postEvent(
     event: args.event,
     ...(args.agent_conversation_id ? { agent_conversation_id: args.agent_conversation_id } : {}),
   });
+}
+
+/** The one way a row enters a room's thread: stamped with the huddle it was
+ *  said in. A row that names its huddle keeps it; otherwise it belongs to the
+ *  room's live record, and with none running it waits unstamped for the
+ *  record that starts next to claim it (claimRoomRows). */
+export async function insertRoomRow(
+  ctx: any,
+  row: Omit<Doc<"call_chat_messages">, "_id" | "_creationTime">,
+): Promise<Id<"call_chat_messages">> {
+  const transcript_id = row.transcript_id ?? (await liveTranscriptFor(ctx, row.room_key))?._id;
+  return await ctx.db.insert("call_chat_messages", { ...row, ...(transcript_id ? { transcript_id } : {}) });
+}
+
+/** A huddle's record just started: the lines typed in the room since the
+ *  huddle began (somebody waiting for a ring to be answered, a room with
+ *  transcription switched off before anyone spoke) are this huddle's. */
+export async function claimRoomRows(
+  ctx: any,
+  roomKey: string,
+  transcriptId: Id<"transcripts">,
+  since: number,
+): Promise<number> {
+  const rows: Doc<"call_chat_messages">[] = await ctx.db
+    .query("call_chat_messages")
+    .withIndex("by_room", (q: any) => q.eq("room_key", roomKey).gte("_creationTime", since))
+    .collect();
+  let n = 0;
+  for (const r of rows) {
+    if (r.transcript_id) continue;
+    await ctx.db.patch(r._id, { transcript_id: transcriptId });
+    n++;
+  }
+  return n;
 }
 
 type AgentIdentity = {
@@ -157,7 +200,10 @@ export const post = mutation({
   args: {
     room_key: v.string(),
     text: v.string(),
-    attachments: v.optional(v.array(attachmentValidator)),
+    attachments: v.optional(v.array(chatAttachmentValidator)),
+    // The huddle the line is typed into, from an ended call's page. Absent on
+    // the stage: the line belongs to whatever huddle is running.
+    transcript_id: v.optional(v.id("transcripts")),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -172,12 +218,14 @@ export const post = mutation({
       throw new Error(`At most ${MAX_ATTACHMENTS} attachments per message`);
     }
     if (!text && attachments.length === 0) return;
-    await ctx.db.insert("call_chat_messages", {
+    const named = args.transcript_id ? await ctx.db.get(args.transcript_id) : null;
+    await insertRoomRow(ctx, {
       room_key: args.room_key,
       team_id: auth.teamId,
       user_id: userId,
       text,
       attachments: attachments.length > 0 ? attachments : undefined,
+      ...(named && named.room_key === args.room_key ? { transcript_id: named._id } : {}),
     });
     // The agents in the room hear the line too. Relayed as the transcript's
     // routes deliver (as the feed's adder, off the request path), so a
@@ -207,7 +255,7 @@ export const post = mutation({
   },
 });
 
-async function liveTranscriptFor(ctx: any, roomKey: string): Promise<Doc<"transcripts"> | null> {
+export async function liveTranscriptFor(ctx: any, roomKey: string): Promise<Doc<"transcripts"> | null> {
   const rows: Doc<"transcripts">[] = await ctx.db
     .query("transcripts")
     .withIndex("by_room", (q: any) => q.eq("room_key", roomKey))
@@ -225,11 +273,29 @@ export function agentLineText(m: { content?: string; is_encrypted?: boolean } | 
   return text.length > AGENT_LINE_MAX ? `${text.slice(0, AGENT_LINE_MAX - 1).trimEnd()}…` : text;
 }
 
+/** Each turn's reply, oldest first: the last assistant words before the next
+ *  thing said to the session. A user row that only carries tool results is
+ *  the harness, not a new turn, so narration between tool calls never posts. */
+export function turnReplies<M extends { role: string; content?: string; is_encrypted?: boolean; tool_results?: readonly unknown[] }>(rows: M[]): M[] {
+  const out: M[] = [];
+  let last: M | null = null;
+  for (const m of rows) {
+    if (m.role === "assistant") {
+      if (agentLineText(m)) last = m;
+    } else if (m.role === "user" && !isToolResultCarrier(m)) {
+      if (last) out.push(last);
+      last = null;
+    }
+  }
+  if (last) out.push(last);
+  return out;
+}
+
 /** A fed session settled a turn: show its reply in the huddle chat.
  *
- *  Reads the session's newest assistant message and posts it unless the feed
- *  already mirrored it (the watermark), so a settle republished for the same
- *  turn, a turn that ended without words, or a turn that passed, posts nothing. The huddle may
+ *  Posts the reply of every turn past the feed's watermark (turnReplies), so a
+ *  settle republished for the same turn, a turn that ended without words, or a
+ *  turn that passed, posts nothing. The huddle may
  *  have ended between the settle and now; then the feed row is already gone
  *  and there is nothing to do. */
 export const mirrorAgentTurn = internalMutation({
@@ -245,49 +311,56 @@ export const mirrorAgentTurn = internalMutation({
       await ctx.db.delete(feed._id);
       return { mirrored: false, reason: "huddle_over" };
     }
-    // The newest assistant message with words: a turn usually ends on prose,
-    // but the last row can be a bare tool call, so look a few rows back.
-    const recent = await ctx.db
+    // Every turn since the watermark, oldest first. The settle hands the room's
+    // next words over at once but mirrors a beat later, so a quick next turn
+    // (a [pass] to those words) can land first; reading only the newest reply
+    // let it bury the one before. With no watermark yet, only the newest turn.
+    const seen = feed.last_mirrored_message_id ? await ctx.db.get(feed.last_mirrored_message_id) : null;
+    let since = seen?.timestamp;
+    if (since === undefined) {
+      const recent = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_role_timestamp", (q) =>
+          q.eq("conversation_id", args.conversation_id).eq("role", "assistant"),
+        )
+        .order("desc")
+        .take(4);
+      const newest = recent.find((m) => agentLineText(m).length > 0);
+      since = newest ? (newest.timestamp ?? 0) - 1 : Number.MAX_SAFE_INTEGER;
+    }
+    const after = await ctx.db
       .query("messages")
-      .withIndex("by_conversation_role_timestamp", (q) =>
-        q.eq("conversation_id", args.conversation_id).eq("role", "assistant"),
+      .withIndex("by_conversation_timestamp", (q) =>
+        q.eq("conversation_id", args.conversation_id).gt("timestamp", since),
       )
-      .order("desc")
-      .take(4);
-    const newest = recent.find((m) => agentLineText(m).length > 0) ?? null;
+      .order("asc")
+      .take(MIRROR_SCAN);
+    const replies = turnReplies(after);
     const attempt = args.attempt ?? 0;
-    if (!newest || String(newest._id) === String(feed.last_mirrored_message_id)) {
+    if (replies.length === 0) {
       if (attempt + 1 < MIRROR_ATTEMPTS) {
         await ctx.scheduler.runAfter(MIRROR_RETRY_MS, internal.callChat.mirrorAgentTurn, {
           conversation_id: args.conversation_id,
           attempt: attempt + 1,
         });
       }
-      return { mirrored: false, reason: newest ? "already_mirrored" : "no_words" };
+      return { mirrored: false, reason: seen ? "already_mirrored" : "no_words" };
     }
-    // The watermark must not run backwards: an older message that only now
-    // became the "newest with words" (the real newest was a tool call) is
-    // still older than what the room has seen.
-    if (feed.last_mirrored_message_id) {
-      const seen = await ctx.db.get(feed.last_mirrored_message_id);
-      if (seen && (seen.timestamp ?? 0) >= (newest.timestamp ?? 0)) {
-        return { mirrored: false, reason: "already_mirrored" };
-      }
+    // A turn that passed is seen, and the room gets nothing for it.
+    const posted = replies.filter((m) => !isHuddlePass(m.content));
+    for (const m of posted) {
+      await insertRoomRow(ctx, {
+        room_key: feed.room_key,
+        team_id: feed.team_id,
+        user_id: feed.added_by,
+        text: agentLineText(m),
+        agent_conversation_id: args.conversation_id,
+        source_message_id: m._id,
+        transcript_id: feed.transcript_id,
+      });
     }
-    // The agent passed: the turn is seen, and the room gets nothing.
-    if (isHuddlePass(newest.content)) {
-      await ctx.db.patch(feed._id, { last_mirrored_message_id: newest._id });
-      return { mirrored: false, reason: "passed" };
-    }
-    await ctx.db.insert("call_chat_messages", {
-      room_key: feed.room_key,
-      team_id: feed.team_id,
-      user_id: feed.added_by,
-      text: agentLineText(newest),
-      agent_conversation_id: args.conversation_id,
-      source_message_id: newest._id,
-    });
-    await ctx.db.patch(feed._id, { last_mirrored_message_id: newest._id });
+    await ctx.db.patch(feed._id, { last_mirrored_message_id: replies[replies.length - 1]._id });
+    if (posted.length === 0) return { mirrored: false, reason: "passed" };
     return { mirrored: true };
   },
 });

@@ -1,0 +1,19 @@
+{
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "notes": "report that explicitly hands the human decisions",
+  "label": {
+    "verdict": "needs_input"
+  },
+  "snapshot": {
+    "newestFirst": [
+      {
+        "role": "assistant",
+        "content": "Audit complete: 34 subsystems, 67 verified findings, report in docs/audit.md. Three product/engineering calls are yours: whether to delete the abandoned prompt-optimization pipeline and its five tables (nothing reads it), whether geo constraints should be enforced or stop being collected, and whether the worker-invite signup flow should be opened. The report ends with a ranked plan and four first slices."
+      },
+      {
+        "role": "user",
+        "content": "audit the outreach repo"
+      }
+    ]
+  }
+}
