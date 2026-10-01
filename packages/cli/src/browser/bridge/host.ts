@@ -50,12 +50,13 @@
  * in it, and every tab still needs its own attach.
  */
 
+import { launchdJobPlistXml, startLaunchdJob } from "../../launchdJob.js";
 import * as fs from "node:fs";
-import * as http from "node:http";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
-import { WebSocketServer, WebSocket } from "ws";
+import { WebSocket } from "ws";
+import { serveBridge, type BridgeSocket } from "./transport.js";
 import { spawn, spawnSync } from "../../proc.js";
 import { isPidAlive } from "../../workspace/chrome.js";
 import { browserHome } from "../profile.js";
@@ -64,6 +65,7 @@ import {
   BRIDGE_DEFAULT_PORT, BRIDGE_PROTOCOL, BRIDGE_STORE_URL, bridgeProof, CLOSE_BAD_TOKEN, CLOSE_HANDSHAKE_TIMEOUT, CLOSE_SESSIONS_DROPPED, isNonce, randomNonce, secretMatches, tabIdOfTarget,
   targetIdOfTab, type BridgeGroup, type BridgeReply, type BridgeTab,
 } from "./protocol.js";
+import { eventMessage, RawJson, readEventFrame, readReplyFrame, replyId, replyMessage, TrafficMeter, UNRELAYED_EVENTS } from "./frames.js";
 
 // ---------------------------------------------------------------------------
 // Config and lifecycle (used by the CLI)
@@ -249,14 +251,24 @@ export async function isHostAlive(state: Pick<BridgeState, "port" | "token">, ti
 export async function proveBridgeHost(state: BridgeState, timeoutMs = 1200): Promise<ProvenBridge> {
   const probe = await probeHost(state, timeoutMs);
   if (probe === "alive") return { ...state, proven: true };
-  throw new Error(
+  throw unprovenHostError(state, probe, timeoutMs);
+}
+
+/**
+ * Why the port cannot be used. A busy host is named as busy and nothing else:
+ * an agent told its host was "stalled", with a pid, killed it, and every
+ * session's in-flight command and tab attachment died with it while the
+ * machine stayed exactly as loaded.
+ */
+function unprovenHostError(state: BridgeState, probe: Exclude<HostProbe, "alive">, waitedMs: number): Error {
+  return new Error(
     probe === "impostor"
       ? `something on 127.0.0.1:${state.port} answers like a bridge host but cannot prove it holds the token — ` +
           `stop it, or set CAST_BRIDGE_PORT to move the bridge`
       : probe === "busy"
-        ? `something is listening on 127.0.0.1:${state.port} but did not answer within ${Math.round(timeoutMs / 1000)}s — ` +
-          `a bridge host whose event loop is stalled${state.hostPid ? ` (pid ${state.hostPid})` : ""}, or another program on the port; ` +
-          `its log is ${bridgeHostLogPath()}`
+        ? `the bridge host on 127.0.0.1:${state.port} is up but did not answer within ${Math.round(waitedMs / 1000)}s — ` +
+          `it is busy (the machine is loaded, or a tab is streaming heavy traffic; its log names the traffic: ${bridgeHostLogPath()}). ` +
+          `Retry the command; do not kill the host, which drops every session's tabs and changes nothing about the load`
         : `no bridge host is answering on 127.0.0.1:${state.port}`,
   );
 }
@@ -266,7 +278,9 @@ export async function proveBridgeHost(state: BridgeState, timeoutMs = 1200): Pro
  * each time, until it answers or `budgetMs` runs out. A refusal ("down") is
  * final at once — nothing is listening, waiting would not change that.
  */
-export async function probeHostPatiently(state: Pick<BridgeState, "port" | "token">, budgetMs = 15_000): Promise<HostProbe> {
+const PATIENT_PROBE_MS = 15_000;
+
+export async function probeHostPatiently(state: Pick<BridgeState, "port" | "token">, budgetMs = PATIENT_PROBE_MS): Promise<HostProbe> {
   const deadline = Date.now() + budgetMs;
   let timeout = 1200;
   let probe = await probeHost(state, timeout);
@@ -285,16 +299,20 @@ export function bridgeHostLogPath(): string {
 /** Brings a host up for ensureBridgeHost: the detached respawn, or an in-process host in tests. */
 export type BridgeHostStarter = (state: BridgeState) => void | Promise<void>;
 
+/** The host's plist; the job runs at Interactive priority (see launchdJob.ts for why). */
+export const bridgeHostPlistXml = launchdJobPlistXml;
+
 /**
  * Respawn ourselves as the host, detached, writing to bridgeHostLogPath().
  * Under bun/node the entry script must be repeated; in the compiled binary
  * process.execPath IS the cast binary.
  */
-const respawnDetached: BridgeHostStarter = () => {
+const respawnDetached: BridgeHostStarter = (state) => {
   const base = path.basename(process.execPath).toLowerCase();
   const viaRuntime = base.includes("bun") || base.includes("node");
   const args = viaRuntime ? [process.argv[1], "browser", "bridge-host"] : ["browser", "bridge-host"];
   fs.mkdirSync(browserHome(), { recursive: true, mode: 0o700 });
+  if (startLaunchdJob({ label: `sh.codecast.bridge-host.${state.port}`, argv: [process.execPath, ...args], plistPath: path.join(browserHome(), "bridge-host.plist"), logPath: bridgeHostLogPath() })) return;
   const log = fs.openSync(bridgeHostLogPath(), "a", 0o600);
   try {
     const child = spawn(process.execPath, args, { detached: true, stdio: ["ignore", log, log] });
@@ -341,8 +359,10 @@ export async function ensureBridgeHost(
     while (Date.now() < gone && (await probeHost(state, 500)) !== "down") await sleep(150);
     probe = await probeHost(state, 500);
     if (probe !== "down") return { ...(await proveBridgeHost(state)), started: false };
-  } else if (probe !== "down") {
-    return { ...(await proveBridgeHost(state)), started: false };
+  } else if (probe === "busy") {
+    // Already waited out probeHostPatiently's whole budget: report that wait,
+    // not a fresh one-second probe that says less.
+    throw unprovenHostError(state, probe, PATIENT_PROBE_MS);
   }
 
   await start(state);
@@ -487,7 +507,7 @@ export interface RunningHost {
 
 /** One CDP client (a `cast` process, an agent-browser daemon…). */
 interface Client {
-  ws: WebSocket;
+  ws: BridgeSocket;
   /** sessionId → tabId for the tabs this client has attached. */
   sessions: Map<string, number>;
   discover: boolean;
@@ -508,6 +528,10 @@ interface Client {
 interface PendingExt {
   resolve: (r: BridgeReply) => void;
   reject: (e: Error) => void;
+  /** What the request was, for the traffic log: the op, or the CDP method of a `cdp` op. */
+  label: string;
+  /** A successful reply resolves with its result as JSON bytes (`raw`), never decoded. */
+  raw: boolean;
 }
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
@@ -587,7 +611,7 @@ function cdpError(id: number, message: string, code = -32000) {
  * Start the server in-process. `runBridgeHost` (the CLI entry) wraps this
  * with state-file bookkeeping and signal handling; tests call it directly.
  */
-export function startBridgeHost(opts: {
+export async function startBridgeHost(opts: {
   port: number;
   token: string;
   /** The extension came (true) or went (false); the host process records it.
@@ -598,26 +622,29 @@ export function startBridgeHost(opts: {
   sessionTabs?: SessionTabs;
   /** Called with the partition whenever it changes, for the host process to persist. */
   onSessionTabs?: (tabs: SessionTabs) => void;
+  /** A line naming the traffic of a minute heavy enough to load the host (frames.ts TrafficMeter). */
+  onTraffic?: (line: string) => void;
   /** Keepalive cadence and the silence after which the extension socket is dropped; tests shorten both. */
   pingIntervalMs?: number;
   extensionSilenceMs?: number;
 }): Promise<RunningHost> {
   const { port, token, onExtension, onSessionTabs } = opts;
 
-  let ext: WebSocket | null = null;
+  let ext: BridgeSocket | null = null;
   let extHeardAt = 0;
   let extMeta: { version?: string; protocol?: number; userAgent?: string; boot?: string; bootAt?: number } = {};
   let nextExtId = 1;
   const extPending = new Map<number, PendingExt>();
   const clients = new Set<Client>();
+  const traffic = new TrafficMeter(opts.onTraffic);
 
-  const sendJson = (ws: WebSocket, msg: unknown): void => {
+  const sendJson = (ws: BridgeSocket, msg: unknown): void => {
     if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
   };
 
   // ------------------------------------------------------------ extension
 
-  const extRequest = (op: string, payload: Record<string, unknown> = {}, timeoutMs = 30_000): Promise<BridgeReply> => {
+  const extRequest = (op: string, payload: Record<string, unknown> = {}, timeoutMs = 30_000, raw = false): Promise<BridgeReply> => {
     if (!ext || ext.readyState !== WebSocket.OPEN) {
       return Promise.reject(
         new Error(
@@ -642,6 +669,8 @@ export function startBridgeHost(opts: {
         );
       }, timeoutMs);
       extPending.set(id, {
+        label: op === "cdp" && typeof payload.method === "string" ? payload.method : op,
+        raw,
         resolve: (r) => {
           clearTimeout(timer);
           resolve(r);
@@ -655,8 +684,8 @@ export function startBridgeHost(opts: {
     });
   };
 
-  const extCall = async (op: string, payload: Record<string, unknown> = {}, timeoutMs?: number): Promise<BridgeReply> => {
-    const r = await extRequest(op, payload, timeoutMs);
+  const extCall = async (op: string, payload: Record<string, unknown> = {}, timeoutMs?: number, raw = false): Promise<BridgeReply> => {
+    const r = await extRequest(op, payload, timeoutMs, raw);
     if (!r.ok) throw new Error(String(r.error ?? `${op} failed`));
     return r;
   };
@@ -835,11 +864,35 @@ export function startBridgeHost(opts: {
     return held;
   };
 
-  const onExtMessage = (raw: string): void => {
+  const onExtMessage = (raw: Buffer): void => {
     extHeardAt = Date.now();
+    // The two messages that carry nearly every byte go through as bytes (frames.ts).
+    const event = readEventFrame(raw);
+    if (event) {
+      traffic.note(event.method, raw.length);
+      if (UNRELAYED_EVENTS.has(event.method)) return;
+      for (const c of clients) {
+        for (const [sessionId, tabId] of c.sessions) {
+          if (tabId !== event.tabId || c.ws.readyState !== WebSocket.OPEN) continue;
+          const out = eventMessage(event.method, event.params, sessionId);
+          traffic.sent(c.session, out.length);
+          c.ws.send(out, { binary: false });
+        }
+      }
+      return;
+    }
+    const pendingId = replyId(raw);
+    const pending = pendingId === null ? undefined : extPending.get(pendingId);
+    if (pending) traffic.note(`${pending.label} reply`, raw.length);
+    const reply = pending?.raw ? readReplyFrame(raw) : null;
+    if (reply) {
+      extPending.delete(reply.id);
+      pending!.resolve({ id: reply.id, ok: true, raw: new RawJson(reply.result) });
+      return;
+    }
     let msg: any;
     try {
-      msg = JSON.parse(raw);
+      msg = JSON.parse(String(raw));
     } catch {
       return;
     }
@@ -858,7 +911,8 @@ export function startBridgeHost(opts: {
         if (ext) sendJson(ext, { op: "pong" });
         return;
       case "event": {
-        // Fan out to every session bound to that tab, stamped with ITS id.
+        // An event in a shape frames.ts does not read. Fan out to every
+        // session bound to that tab, stamped with ITS id.
         for (const c of clients) {
           for (const [sessionId, tabId] of c.sessions) {
             if (tabId === msg.tabId) sendJson(c.ws, { method: msg.method, params: msg.params ?? {}, sessionId });
@@ -1023,8 +1077,8 @@ export function startBridgeHost(opts: {
       case "Runtime.runIfWaitingForDebugger":
         return {};
       default: {
-        const r = await extCall("cdp", { tabId, method, params: params ?? {} });
-        return r.result ?? {};
+        const r = await extCall("cdp", { tabId, method, params: params ?? {} }, undefined, true);
+        return r.raw instanceof RawJson ? r.raw : (r.result ?? {});
       }
     }
   };
@@ -1046,7 +1100,11 @@ export function startBridgeHost(opts: {
           return;
         }
         result = await sessionMethod(client, tabId, msg.method, msg.params);
-        sendJson(client.ws, { id: msg.id, sessionId: msg.sessionId, result });
+        if (result instanceof RawJson) {
+          const out = replyMessage(msg.id, result.bytes, msg.sessionId);
+          traffic.sent(client.session, out.length);
+          if (client.ws.readyState === WebSocket.OPEN) client.ws.send(out, { binary: false });
+        } else sendJson(client.ws, { id: msg.id, sessionId: msg.sessionId, result });
       } else {
         result = await browserMethod(client, msg.method, msg.params);
         sendJson(client.ws, { id: msg.id, result });
@@ -1066,43 +1124,35 @@ export function startBridgeHost(opts: {
     return LOOPBACK_HOSTS.has(m[1]) && (!m[2] || parseInt(m[2], 10) === port);
   };
 
-  const httpServer = http.createServer(async (req, res) => {
-    const url = new URL(req.url ?? "/", "http://127.0.0.1");
+  const handleHttp = async (req: Request): Promise<Response> => {
+    const url = new URL(req.url);
     // /healthz is the only unauthenticated route. It says our name, and to a
     // caller that sends a nonce it proves we hold the token (probeHost); the
     // proof grants nothing, it only lets the CLI tell us from a squatter.
     if (url.pathname === "/healthz") {
       const nonce = url.searchParams.get("nonce");
-      res.writeHead(200, { "content-type": "text/plain" });
-      res.end(`cast-bridge protocol=${BRIDGE_PROTOCOL}${isNonce(nonce) ? ` proof=${bridgeProof(token, "healthz", nonce)}` : ""}`);
-      return;
+      return new Response(`cast-bridge protocol=${BRIDGE_PROTOCOL}${isNonce(nonce) ? ` proof=${bridgeProof(token, "healthz", nonce)}` : ""}`);
     }
     // Reject DNS rebinding: a page at evil.example resolving to 127.0.0.1
     // arrives with Host: evil.example and would otherwise read these bodies.
-    if (!isLoopbackHost(req.headers.host) || !secretMatches(token, url.searchParams.get("token"))) {
-      res.writeHead(403, { "content-type": "text/plain" });
-      res.end("forbidden\n");
-      return;
+    if (!isLoopbackHost(req.headers.get("host") ?? undefined) || !secretMatches(token, url.searchParams.get("token"))) {
+      return new Response("forbidden\n", { status: 403 });
     }
-    const json = (status: number, body: unknown) => {
-      res.writeHead(status, { "content-type": "application/json; charset=UTF-8" });
-      res.end(JSON.stringify(body, null, 2));
-    };
+    const json = (status: number, body: unknown) => Response.json(body, { status });
     try {
       switch (url.pathname) {
         case "/json/version":
         case "/json/version/":
-          json(200, {
+          return json(200, {
             Browser: `Chrome (cast bridge, extension ${extMeta.version ?? "?"})`,
             "Protocol-Version": "1.3",
             "User-Agent": extMeta.userAgent ?? "",
             webSocketDebuggerUrl: withSession(`ws://127.0.0.1:${port}/devtools/browser/${token}`, { port, session: url.searchParams.get("session") || undefined }),
           });
-          return;
         case "/json":
         case "/json/list":
         case "/json/list/":
-          json(
+          return json(
             200,
             (await listTabs()).filter(t => canSee({ session: url.searchParams.get("session") || null }, t.tabId)).map((t) => ({
               id: targetIdOfTab(t.tabId),
@@ -1117,69 +1167,57 @@ export function startBridgeHost(opts: {
               attached: t.attached,
             })),
           );
-          return;
         case "/status":
-          json(200, {
+          return json(200, {
             extensionConnected: !!ext && ext.readyState === WebSocket.OPEN,
             extensionVersion: extMeta.version,
             extensionProtocol: extMeta.protocol,
             protocol: BRIDGE_PROTOCOL,
+            transport: server.stats(),
+            memory: process.memoryUsage(),
           });
-          return;
         case "/grant": {
           if (req.method !== "POST") {
-            res.writeHead(405, { "content-type": "text/plain" });
-            res.end("POST\n");
-            return;
+            return new Response("POST\n", { status: 405 });
           }
           const session = url.searchParams.get("session") ?? "";
           const tabId = tabIdOfTarget(url.searchParams.get("target") ?? "");
           if (!session || tabId === null) {
-            json(400, { error: "grant needs session and target" });
-            return;
+            return json(400, { error: "grant needs session and target" });
           }
           const t = (await listTabs()).find((x) => x.tabId === tabId);
           if (!t) {
-            json(404, { error: `no tab ${targetIdOfTab(tabId)} in the real Chrome` });
-            return;
+            return json(404, { error: `no tab ${targetIdOfTab(tabId)} in the real Chrome` });
           }
           if (url.searchParams.get("own") === "1" && !grantedTo(session).has(tabId)) {
-            json(403, { error: `saved tab ${targetIdOfTab(tabId)} ownership could not be verified for this session; no tab was adopted` });
-            return;
+            return json(403, { error: `saved tab ${targetIdOfTab(tabId)} ownership could not be verified for this session; no tab was adopted` });
           }
           if (!isCast(t)) {
-            json(403, { error: `tab ${targetIdOfTab(tabId)} is the human's, not an agent's — only agent tabs can be shared` });
-            return;
+            return json(403, { error: `tab ${targetIdOfTab(tabId)} is the human's, not an agent's — only agent tabs can be shared` });
           }
           await grant(session, tabId);
-          json(200, { ok: true, sessions: sessionsOf(tabId) });
-          return;
+          return json(200, { ok: true, sessions: sessionsOf(tabId) });
         }
         case "/reload":
           if (req.method !== "POST") {
-            res.writeHead(405, { "content-type": "text/plain" });
-            res.end("POST\n");
-            return;
+            return new Response("POST\n", { status: 405 });
           }
           await extCall("reload", {}, 5_000);
-          json(200, { ok: true });
-          return;
+          return json(200, { ok: true });
         default:
-          res.writeHead(404, { "content-type": "text/plain" });
-          res.end("not found\n");
+          return new Response("not found\n", { status: 404 });
       }
     } catch (err) {
-      json(503, { error: (err as Error).message });
+      return json(503, { error: (err as Error).message });
     }
-  });
+  };
 
-  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES, perMessageDeflate: false });
   // Unproven /ext sockets currently mid-handshake (see holdExtHandshake).
   let pendingExtHandshakes = 0;
 
   /** One unproven /ext socket, counted against the concurrent-handshake cap
    *  until its hello is accepted or the socket goes away. */
-  const holdExtHandshake = (ws: WebSocket): { release(): void } => {
+  const holdExtHandshake = (ws: BridgeSocket): { release(): void } => {
     pendingExtHandshakes++;
     let released = false;
     const release = (): void => {
@@ -1198,7 +1236,7 @@ export function startBridgeHost(opts: {
    * a proven socket becomes THE extension; until then it can neither replace
    * the current one nor drive anything.
    */
-  const adoptExtension = (ws: WebSocket, preAuth: { release(): void }): void => {
+  const adoptExtension = (ws: BridgeSocket, preAuth: { release(): void }): void => {
     // A silent socket is a slow worker, not a wrong token: the code says
     // "try again", never "re-pair".
     const hello = setTimeout(() => {
@@ -1246,7 +1284,7 @@ export function startBridgeHost(opts: {
         `worker ${boot ?? "?"} (${sameWorker ? "same worker, " : ""}${age}) via ${typeof msg.trigger === "string" ? msg.trigger : "?"}, v${msg.version ?? "?"}` +
           (recent.length ? `; worker notes: ${recent.join(" | ")}` : ""),
       );
-      ws.on("message", (raw) => onExtMessage(String(raw)));
+      ws.on("message", (raw) => onExtMessage(raw as Buffer));
       ws.on("close", (code, reason) => {
         if (ext !== ws) return;
         ext = null;
@@ -1265,9 +1303,9 @@ export function startBridgeHost(opts: {
     });
   };
 
-  httpServer.on("upgrade", (req, socket, head) => {
-    const url = new URL(req.url ?? "/", "http://127.0.0.1");
-    const origin = req.headers.origin;
+  const upgrade = (req: Request): Response | ((ws: BridgeSocket) => void) => {
+    const url = new URL(req.url);
+    const origin = req.headers.get("origin") ?? undefined;
     const pathToken = /^\/devtools\/browser\/([^/?]+)$/.exec(url.pathname)?.[1];
     const role: "ext" | "cdp" | null =
       url.pathname === "/ext" ? "ext" : pathToken || url.pathname === "/devtools/browser" ? "cdp" : null;
@@ -1282,29 +1320,23 @@ export function startBridgeHost(opts: {
     // non-loopback Host are all "you are not a bridge client"; there is no
     // close code worth spending on them, and completing the upgrade would put
     // a stranger in front of the frame reader.
-    if (!role || !bridgeUpgradeOriginAllowed(origin) || !isLoopbackHost(req.headers.host)) {
-      // end(), not write()+destroy(): the refusal has to reach the client
-      // before the socket goes away, or it reads as a reset and a caller
-      // cannot tell "refused" from "the host died".
-      socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
-      return;
+    if (!role || !bridgeUpgradeOriginAllowed(origin) || !isLoopbackHost(req.headers.get("host") ?? undefined)) {
+      return new Response("forbidden\n", { status: 403 });
     }
 
     // Too many unproven sockets at once is either a bug or a squatter; either
     // way the real extension opens one.
     if (role === "ext" && pendingExtHandshakes >= MAX_PENDING_EXT_HANDSHAKES) {
-      socket.end("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
-      return;
+      return new Response("too many handshakes\n", { status: 503 });
     }
 
     // A wrong token on an otherwise well-formed client DOES get a close code:
     // that is our own tooling, and "bad token" is what tells it to re-pair.
     if (!authed) {
-      wss.handleUpgrade(req, socket, head, (ws) => ws.close(CLOSE_BAD_TOKEN, "bad token"));
-      return;
+      return (ws) => ws.close(CLOSE_BAD_TOKEN, "bad token");
     }
 
-    wss.handleUpgrade(req, socket, head, (ws) => {
+    return (ws) => {
       if (role === "ext") {
         // /ext is the one face that authenticates AFTER the upgrade, so it is
         // the one that needs a budget for what it may say before it has.
@@ -1328,8 +1360,10 @@ export function startBridgeHost(opts: {
         client.sessions.clear();
       });
       ws.on("error", () => {});
-    });
-  });
+    };
+  };
+
+  const server = await serveBridge({ port, maxPayload: MAX_MESSAGE_BYTES, fetch: handleHttp, upgrade, onOverflow: opts.onTraffic });
 
   // Application-level keepalive: protocol pings are invisible to the
   // extension's JavaScript, and it is JS-visible traffic that keeps an MV3
@@ -1346,25 +1380,14 @@ export function startBridgeHost(opts: {
     sendJson(ext, { op: "ping" });
   }, opts.pingIntervalMs ?? 20_000);
 
-  return new Promise((resolve, reject) => {
-    httpServer.once("error", reject);
-    httpServer.listen(port, "127.0.0.1", () => {
-      resolve({
-        port,
-        extensionConnected: () => !!ext && ext.readyState === WebSocket.OPEN,
-        close: () =>
-          new Promise<void>((done) => {
-            clearInterval(pinger);
-            for (const ws of wss.clients) ws.terminate();
-            wss.close();
-            // http.close() waits for every socket to drain, including ones a
-            // rejected upgrade left half-open — destroy them or hang forever.
-            (httpServer as unknown as { closeAllConnections?: () => void }).closeAllConnections?.();
-            httpServer.close(() => done());
-          }),
-      });
-    });
-  });
+  return {
+    port,
+    extensionConnected: () => !!ext && ext.readyState === WebSocket.OPEN,
+    async close() {
+      clearInterval(pinger);
+      await server.close();
+    },
+  };
 }
 
 /** The `cast browser bridge-host` entry: run until told to stop. */
@@ -1396,6 +1419,7 @@ export async function runBridgeHost(): Promise<void> {
       onExtension: record,
       sessionTabs: state.sessionTabs,
       onSessionTabs: (sessionTabs) => { updateBridgeHostState(owner, { sessionTabs }); },
+      onTraffic: log,
     });
   } catch (err) {
     // Lost the port to a host that bound between the probe and the listen:

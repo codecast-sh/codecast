@@ -28,6 +28,21 @@ const flag = (name: string): string | undefined => {
   return i >= 0 ? argv[i + 1] : undefined;
 };
 
+const testPidFile = flag("--test-pid-file");
+if (testPidFile) fs.writeFileSync(testPidFile, String(process.pid));
+
+const testParentPid = Number(flag("--test-parent-pid"));
+if (testParentPid > 0) {
+  setInterval(() => {
+    try {
+      process.kill(testParentPid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") process.exit(0);
+      throw error;
+    }
+  }, 1_000).unref();
+}
+
 const statusFile = flag("--permission-status-file");
 if (statusFile) {
   fs.writeFileSync(statusFile, JSON.stringify({ accessibility: "granted", screenshots: "not-granted" }));
@@ -73,7 +88,7 @@ const capabilities = {
     apps: { list: true, bundleIds: true, pids: true },
     windows: { list: true, targetById: true, targetByIndex: true, focus: false, moveResize: false },
     observation: { screenshot: true, annotatedScreenshot: false, elementFrames: true, ocr: false },
-    actions: { click: true, typeText: true, pressKey: true, hotkey: true, pasteText: true, scroll: true, drag: false, setValue: true, performAction: true },
+    actions: { click: true, typeText: true, pressKey: true, hotkey: true, pasteText: true, scroll: true, drag: true, setValue: true, performAction: true },
     surfaces: { menus: false, dialogs: false, dock: false, menubar: false },
   },
 };

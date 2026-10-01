@@ -24,7 +24,7 @@ export function Switch({ checked, onCheckedChange, disabled, className, id, ...a
       className={`
         relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors
         focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan/50 focus-visible:ring-offset-1 focus-visible:ring-offset-sol-bg
-        ${checked ? "bg-sol-cyan" : "bg-sol-bg-alt"}
+        ${checked ? "bg-sol-cyan" : "bg-sol-border"}
         ${disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}
         ${className || ""}
       `}

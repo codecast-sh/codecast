@@ -8,7 +8,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { isolateCodecastDir, type IsolatedCodecastDir } from "./test-helpers/codecastDir.js";
 import * as os from "node:os";
-import { checkProject, classifyWatchLine, IDLE_EXIT_MS, makeRoom, shouldIdleExit, tscBinary, tscInTree, nearestTsconfig, outputPath, readCheckConfig, readWatchState, resolveProjects, slugOf, watchDir, watchReducer, writeWatchState, type WatchState } from "./check.js";
+import { checkProject, classifyWatchLine, IDLE_EXIT_MS, listQueue, makeRoom, WANTED_MS, shouldIdleExit, tscBinary, tscInTree, nearestTsconfig, outputPath, readCheckConfig, readWatchState, resolveProjects, slugOf, watchDir, watchReducer, writeWatchState, type WatchState } from "./check.js";
 
 let isolation: IsolatedCodecastDir;
 beforeEach(() => {
@@ -260,21 +260,64 @@ describe("the machine wide watcher cap", () => {
     const state: WatchState = { pid: process.pid, project: "busy", tsconfig: "x", root: "/tree", startedAt: 1, inProgress: true, askedAt: 1 };
     writeWatchState(watchDir("/tree", "busy"), state);
     writeWatchState(watchDir("/tree", "idle"), { ...state, project: "idle", inProgress: false, askedAt: 2 });
-    expect(makeRoom(2, () => {}).map((w) => w.project)).toEqual(["idle"]);
+    expect(makeRoom(2, () => {})?.map((w) => w.project)).toEqual(["idle"]);
     expect(readWatchState(watchDir("/tree", "busy"))).not.toBeNull();
   });
 
-  test("refuses a new compiler when all slots are running without killing any", async () => {
-    const state: WatchState = { pid: process.pid, project: "busy", tsconfig: "x", root: "/tree", startedAt: 1, inProgress: true };
+  test("an ask waits in the queue while every slot holds a wanted pass, and gives up at its budget without killing any", async () => {
+    const state: WatchState = { pid: process.pid, project: "busy", tsconfig: "x", root: "/tree", startedAt: 1, inProgress: true, askedAt: Date.now() };
     writeWatchState(watchDir("/tree", "busy"), state);
     const killed: number[] = [];
+    const notes: string[] = [];
     let starts = 0;
     await expect(checkProject({ name: "next", tsconfig: "x" }, "/tree", {
-      maxWatchers: 1, kill: (pid) => killed.push(pid), start: () => { starts++; },
-    })).rejects.toThrow("typecheck capacity is full");
+      maxWatchers: 1, budgetMs: 1, kill: (pid) => killed.push(pid), start: () => { starts++; }, note: (l) => notes.push(l),
+    })).rejects.toThrow("still queued");
+    expect(notes.some((l) => l.startsWith("queued:"))).toBe(true);
     expect(killed).toEqual([]);
     expect(starts).toBe(0);
     expect(readWatchState(watchDir("/tree", "busy"))).not.toBeNull();
+    expect(listQueue()).toEqual([]);
+  });
+
+  test("a queued ask starts its watcher as soon as the slot's pass finishes", async () => {
+    const busyDir = watchDir("/tree", "busy");
+    const busy: WatchState = { pid: process.pid, project: "busy", tsconfig: "x", root: "/tree", startedAt: 1, inProgress: true, askedAt: Date.now() };
+    writeWatchState(busyDir, busy);
+    const killed: number[] = [];
+    const start = (root: string, project: { name: string; tsconfig: string }) =>
+      writeWatchState(watchDir(root, project.name), { pid: process.pid, project: project.name, tsconfig: project.tsconfig, root, startedAt: Date.now(), inProgress: false, finishedAt: Date.now(), errors: 0 });
+    const ask = checkProject({ name: "next", tsconfig: "x" }, "/tree", { maxWatchers: 1, kill: (pid) => killed.push(pid), start });
+    await new Promise((r) => setTimeout(r, 1_500));
+    expect(killed).toEqual([]);
+    writeWatchState(busyDir, { ...busy, inProgress: false, finishedAt: Date.now(), errors: 0 });
+    const r = await ask;
+    expect(r).toMatchObject({ project: "next", errors: 0, started: true });
+    expect(killed).toEqual([process.pid]);
+    expect(readWatchState(busyDir)).toBeNull();
+  });
+
+  test("a program that gave up and asked again keeps its place ahead of later asks", async () => {
+    writeWatchState(watchDir("/tree", "busy"), { pid: process.pid, project: "busy", tsconfig: "x", root: "/tree", startedAt: 1, inProgress: true, askedAt: Date.now() });
+    const opts = { maxWatchers: 1, budgetMs: 1, start: () => {} };
+    await expect(checkProject({ name: "first", tsconfig: "x" }, "/tree", opts)).rejects.toThrow("still queued");
+    const later = checkProject({ name: "later", tsconfig: "x" }, "/tree", { ...opts, budgetMs: 3_000 }).catch(() => {});
+    await new Promise((r) => setTimeout(r, 200));
+    const again = checkProject({ name: "first", tsconfig: "x" }, "/tree", { ...opts, budgetMs: 3_000 }).catch(() => {});
+    await new Promise((r) => setTimeout(r, 200));
+    expect(listQueue().map((t) => t.project)).toEqual(["first", "later"]);
+    await Promise.all([later, again]);
+  });
+
+  test("a running pass nobody waits on gives up its slot; one somebody waits on does not", () => {
+    const now = Date.now();
+    const seed = (project: string, askedAt: number) =>
+      writeWatchState(watchDir("/tree", project), { pid: process.pid, project, tsconfig: "x", root: "/tree", startedAt: 1, inProgress: true, askedAt });
+    seed("wanted", now);
+    expect(makeRoom(1, () => {}, now)).toBeNull();
+    seed("abandoned", now - WANTED_MS - 1);
+    expect(makeRoom(2, () => {}, now)?.map((w) => w.project)).toEqual(["abandoned"]);
+    expect(readWatchState(watchDir("/tree", "wanted"))).not.toBeNull();
   });
 
   test("concurrent starts for different projects cannot exceed the cap", async () => {
@@ -288,7 +331,7 @@ describe("the machine wide watcher cap", () => {
     };
     const results = await Promise.allSettled(["a", "b"].map((name) => checkProject({ name, tsconfig: "x" }, "/tree", { start, maxWatchers: 1, budgetMs: 1 })));
     expect(starts).toHaveLength(1);
-    expect(results.filter((r) => r.status === "rejected" && r.reason.message.includes("capacity is full"))).toHaveLength(1);
+    expect(results.filter((r) => r.status === "rejected" && r.reason.message.includes("still queued"))).toHaveLength(1);
   });
 
   test("the least recently asked watchers are stopped to make room, and their state files go with them", () => {
@@ -300,7 +343,7 @@ describe("the machine wide watcher cap", () => {
     seed("/t2", "a", now - 2_000);
     const killed: number[] = [];
     const evicted = makeRoom(2, (pid) => killed.push(pid));
-    expect(evicted.map((w) => `${w.root}/${w.project}`)).toEqual(["/t1/a", "/t2/a"]);
+    expect(evicted?.map((w) => `${w.root}/${w.project}`)).toEqual(["/t1/a", "/t2/a"]);
     expect(killed).toHaveLength(2);
     expect(readWatchState(watchDir("/t1", "a"))).toBeNull();
     expect(readWatchState(watchDir("/t1", "b"))).not.toBeNull();

@@ -499,6 +499,17 @@ describe("requestAccountSwitch scoped to conversation ids", () => {
     expect(other.pending_api_error).toBe(true);
     expect(worker.pending_api_error).toBe(true);
   });
+  test("a store request id binds the swapping machine's command, and a replay queues nothing", async () => {
+    const f = fixture();
+    const target = f.conversation("conversations_target", "limit");
+    f.tables.conversations.push(target);
+    const args = { conversation_ids: [target._id], request_id: "switch-1" };
+    const first = await (requestAccountSwitch as any)._handler({ db: f.db, auth }, args);
+    const again = await (requestAccountSwitch as any)._handler({ db: f.db, auth }, args);
+    expect(f.tables.daemon_commands).toHaveLength(1);
+    expect(f.tables.daemon_commands[0]).toMatchObject({ command: "switch_account", request_id: "switch-1", target_device_id: "mac" });
+    expect(again.command_ids).toEqual(first.command_ids);
+  });
   test("records what the person did, so the park card can follow it", async () => {
     const f = fixture();
     f.device.cc_accounts.profiles.push({ name: "spare", email: "spare@example.com", token: { expires_at: f.now + 86_400_000 } } as any);

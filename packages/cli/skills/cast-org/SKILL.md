@@ -1,6 +1,6 @@
 ---
 name: cast-org
-description: Talk through the organization of agents and people around this work with the person, in this session: who reports to whom, what each role looks after, where their sessions go. Reads what the code and the sessions say before it trusts a plan or a task, asks what the records cannot settle, and posts each agreed change as a small proposal that renders inline for them to accept. Use when asked who is working on what, to set up or review the org, to hire a lead or a chief of staff, or when the chart has drifted from reality.
+description: Talk through the organization of agents and people around this work with the person, in this session: who reports to whom, what each role looks after, where their sessions go. Reads what the code and the sessions say before it trusts a plan or a task, asks what the records cannot settle, and posts each agreed change as a small proposal that renders inline for them to accept. Use when asked who is working on what, to set up or review the org, to hire a lead or a head of people, or when the chart has drifted from reality.
 argument-hint: "[--team <name>|personal] [what to change, in plain words]"
 ---
 
@@ -84,5 +84,5 @@ again and do not withdraw them.
 A change no proposal carries, a role retired, created or moved by hand, is
 made on the org page and nowhere else; a shell is refused, so point them at
 the page, not at a command. The hire and every accept are theirs: no session
-decides a staffing change. A chief of staff, once hired (`cast org staff`, or
+decides a staffing change. A head of people, once hired (`cast org staff`, or
 the button on the page), holds this conversation weekly without them.

@@ -32,6 +32,7 @@ const restoreGlobals = replaceGlobals({
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 const { createRoot } = await import("react-dom/client");
+const { MemoryRouter } = await import("react-router");
 
 afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
 
@@ -56,7 +57,7 @@ async function mount(ui: React.ReactNode) {
   const pane = document.createElement("div");
   document.body.appendChild(pane);
   const root = createRoot(pane);
-  await act(() => root.render(ui));
+  await act(() => root.render(<MemoryRouter>{ui}</MemoryRouter>));
   return { pane, unmount: () => act(() => root.unmount()) };
 }
 

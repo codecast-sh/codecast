@@ -47,7 +47,7 @@ describe("the kind words", () => {
     }
     expect(kindLabel("task_status")).toBe("Tasks to close or reopen");
     expect(kindLabel("rename")).toBe("Changes this version cannot show yet");
-    expect(kindDescription("rename")).toBe('This version of codecast does not know this kind of change ("rename"). Update codecast, or ask the chief of staff what it does.');
+    expect(kindDescription("rename")).toBe('This version of codecast does not know this kind of change ("rename"). Update codecast, or ask the head of people what it does.');
     expect(kindDescription(undefined)).toMatch(/does not know this kind of change\. Update codecast/);
     expect(changeLine({ kind: "task_status", task: "ct-1", status: "done", reason: "x" })).toBe("Mark task ct-1 done");
     expect(changeLine({ kind: "rename" } as any)).not.toMatch(/not supported in this build/);

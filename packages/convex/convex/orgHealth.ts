@@ -7,7 +7,8 @@ import { scopedFetch } from "./data";
 import { collectOrgSessions, computeScopeFeed, requireWorkspaceCaller, resolveScope, sessionsInScope, stateOf, waitingSinceOf, type OrgScan, type ResolvedScope } from "./org";
 import { findRoleRoutineInAnyStatus } from "./lib/orgRoutine";
 import { parseStandingSection } from "@codecast/shared/contracts/briefStanding";
-import { areaSignalsOf, areaStatusLine, areaStatusOf, newestStandingFirst, type AreaGoal, type AreaInput, type AreaStandingLine, type AreaWaitingSession, type RoleArea } from "@codecast/shared/contracts/orgAreas";
+import { areaSignalsOf, areaStatusLine, areaStatusOf, newestStandingFirst, type AreaGoal, type AreaInitiative, type AreaInput, type AreaStandingLine, type AreaWaitingSession, type RoleArea } from "@codecast/shared/contracts/orgAreas";
+import { readWorkspaceInitiatives, servedInitiatives } from "./lib/roleInitiatives";
 import { planProjectsOf } from "./orgRoles";
 import { capsFor, countersFor, utcDay } from "./lib/orgCaps";
 import { scopeIds } from "./lib/orgScope";
@@ -82,7 +83,7 @@ export function latestEventAnywhere(tasks: any[], plans: any[], scan: OrgScan): 
  *  `idle_days` over the seat's age when it never had an event, and
  *  `wholeWorkspaceLatest` (latestEventAnywhere) is required so no caller can
  *  read a whole workspace role as idle by mistake. */
-export async function roleActivity(ctx: Ctx, userId: Id<"users">, role: any, now: number, opts: { wholeWorkspaceLatest: number | null; resolved?: ResolvedScope | null; lastScopeEventAt?: number | null }): Promise<RoleActivity> {
+export async function roleActivity(ctx: Ctx, userId: Id<"users">, role: any, now: number, opts: { wholeWorkspaceLatest: number | null; resolved?: ResolvedScope | null; lastScopeEventAt?: number | null; scan?: OrgScan }): Promise<RoleActivity> {
   let lastScopeEventAt: number | null = null;
   if (isWholeWorkspaceRole(role)) {
     lastScopeEventAt = opts.wholeWorkspaceLatest;
@@ -92,7 +93,7 @@ export async function roleActivity(ctx: Ctx, userId: Id<"users">, role: any, now
   } else {
     const resolved = opts.resolved !== undefined ? opts.resolved : await resolveScope(ctx, userId, { role_id: String(role._id) });
     if (resolved) {
-      const feed = await computeScopeFeed(ctx, resolved, { limit: 1, now });
+      const feed = await computeScopeFeed(ctx, resolved, { limit: 1, now, scan: opts.scan });
       lastScopeEventAt = feed.rows[0]?.updated_at ?? null;
     }
   }
@@ -266,6 +267,8 @@ export function programEndedOf(role: any, now: number, planById: Map<string, any
 // query does the scan and the work, this does the decisions, an action merges.
 export type HealthDecisions = {
   decisionsOf: Record<string, number>;
+  /** The same hops by UTC day of the ask, per role: the week as a series. */
+  decisionsByDay?: Record<string, Record<string, number>>;
   latency: Record<string, number[]>;
   decisionsTruncated: boolean;
   peopleWaiting: Record<string, { n: number; oldest_min: number | null }>;
@@ -289,6 +292,7 @@ export async function readHealthDecisions(ctx: Ctx, teamId: Id<"teams"> | undefi
   const deadlineMin = capacity("decision_latency_min");
   const roleSet = new Set(roleIds.map(String));
   const decisionsOf: Record<string, number> = {};
+  const decisionsByDay: Record<string, Record<string, number>> = {};
   const latency: Record<string, number[]> = {};
   let decisionsTruncated = false;
   const inc = (m: Record<string, number>, k: string) => { m[k] = (m[k] ?? 0) + 1; };
@@ -306,6 +310,7 @@ export async function readHealthDecisions(ctx: Ctx, teamId: Id<"teams"> | undefi
           const note = typeof hop.note === "string" ? hop.note : "";
           if (note.startsWith("skipped")) continue; // a paused or retired seat: never woken
           inc(decisionsOf, rid);
+          inc(decisionsByDay[rid] ??= {}, utcDay(d.created_at));
           if (note.startsWith("escalated")) continue; // a hop from before S28 that passed the question up: no latency sample
           let sampleMin: number | null = null;
           if (hop.recommendation !== undefined) sampleMin = (hop.at - d.created_at) / 60_000;
@@ -326,7 +331,7 @@ export async function readHealthDecisions(ctx: Ctx, teamId: Id<"teams"> | undefi
     }
     peopleWaiting[String(uid)] = { n: inbox.length, oldest_min: oldest === null ? null : Math.floor((now - oldest) / 60_000) };
   }
-  return { decisionsOf, latency, decisionsTruncated, peopleWaiting };
+  return { decisionsOf, decisionsByDay, latency, decisionsTruncated, peopleWaiting };
 }
 
 export type OrgHealth = Awaited<ReturnType<typeof computeOrgHealth>>;
@@ -344,10 +349,12 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
   const fetchOpts = teamId ? { userId, workspace: "team" as const, teamId } : { userId, workspace: "personal" as const };
   // The open rows of the workspace, complete, plus this week's changes
   // (readWorkTasks): real work only, never the newest N of the table.
-  const [projects, plans, work] = await Promise.all([
+  const [projects, plans, work, initiativeRows] = await Promise.all([
     scopedFetch(ctx, "projects", { ...fetchOpts, limit: HEALTH_CAPS.projects }).then((r) => r.records),
     scopedFetch(ctx, "plans", { ...fetchOpts, limit: HEALTH_CAPS.plans }).then((r) => r.records),
     opts?.work ?? readWorkTasks(ctx, userId, teamId, { perStatus: HEALTH_CAPS.tasks, updatedSince: cut7, recentCap: HEALTH_CAPS.recent_tasks }),
+    // The goals each area feeds (I4), one bounded read for every role row.
+    readWorkspaceInitiatives(ctx, teamId ? `team:${teamId}` : `user:${userId}`),
   ]);
   const tasks = work.tasks;
   const plansByProject = new Map<string, any[]>();
@@ -375,7 +382,7 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
   });
 
   // The projects a narrower role covers, once: its scope names them directly
-  // or through one of their plans. The Chief of Staff's remainder is not
+  // or through one of their plans. The Head of People's remainder is not
   // ownership, and a role with no scope owns nothing (S26), so neither
   // quiets the unowned signal: the remainder is what needs an owner.
   const coveredProjects = new Set<string>();
@@ -503,6 +510,7 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
     };
     const handoffs = { done: 0, blocked: 0, needs_context: 0 };
     let done7 = 0, stalls = 0, changed7 = 0, stuckHands = 0;
+    const doneByDay: Record<string, number> = {};
     for (const t of items.tasks) {
       if (t.status === "in_review" && now - (t.updated_at ?? 0) > stallMs) stalls++;
       // A hand that reported blocked or needs context on a task still open is
@@ -512,7 +520,7 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
       if (isOpen(t) && (t.execution_status === "blocked" || t.execution_status === "needs_context")) stuckHands++;
       if ((t.updated_at ?? 0) < cut7) continue;
       changed7++;
-      if (t.status === "done") done7++;
+      if (t.status === "done") { done7++; const day = utcDay(t.updated_at); doneByDay[day] = (doneByDay[day] ?? 0) + 1; }
       if (t.execution_status === "done" || t.execution_status === "done_with_concerns") handoffs.done++;
       else if (t.execution_status === "blocked") handoffs.blocked++;
       else if (t.execution_status === "needs_context") handoffs.needs_context++;
@@ -596,6 +604,9 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
       hands_window: hands.length,
       median_recommend_min: median(dec.latency[rid] ?? []),
       done_7d: done7,
+      /** done_7d by UTC day of the close, and decisions_7d by day of the ask. */
+      done_by_day: doneByDay,
+      decisions_by_day: dec.decisionsByDay?.[rid] ?? {},
       handoffs_7d: handoffs,
       review_stalls: stalls,
       sends_7d: { to: toRows, from: fromRows },
@@ -608,7 +619,7 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
     // ── The area as a person reads it (org-staffing.md S29) ─────────────
     // One status word, the role's own latest line, the sessions waiting under
     // it, its goals, and its check, derived from the counts above by the
-    // shared reading (orgAreas), so the panel, the CLI, the Chief of Staff's
+    // shared reading (orgAreas), so the panel, the CLI, the Head of People's
     // review and the area watch all say the same thing about an area.
     const standingConvId = standingConvOfRole.get(rid) ?? null;
     const standingEntry = standingConvId ? scan.sessions.get(standingConvId) : undefined;
@@ -639,6 +650,7 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
         done_7d: mine.filter((t) => t.status === "done" && (t.updated_at ?? 0) >= cut7).length,
       }];
     });
+    const initiatives: AreaInitiative[] = servedInitiatives(initiativeRows, { role_id: rid, project_ids: items.projectIds }).map(({ _id, ...i }) => ({ id: _id, ...i }));
     const routine: any = standingRaw ? await findRoleRoutineInAnyStatus(ctx, role, standingRaw) : null;
     const areaInput: AreaInput = {
       role_status: role.status,
@@ -665,6 +677,7 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
       standing_lines: standingLines,
       waiting,
       goals,
+      initiatives,
       checked_at: role.checked_at ?? null,
       check: routine ? { trigger_id: String(routine._id), short_id: routine.short_id ?? null, title: routine.title, status: routine.status, run_at: routine.run_at ?? null, last_run_at: routine.last_run_at ?? null, last_run_summary: routine.last_run_summary ?? null, interval_ms: routine.interval_ms ?? null } : null,
       standing_conversation_id: standingConvId,

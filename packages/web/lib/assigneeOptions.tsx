@@ -14,6 +14,7 @@ import { roleAssigneeInfo, type AssigneeInfo, type AssigneeRole } from "@codecas
 import type { FilterOption } from "../components/FilterDropdown";
 import { AssigneeFace } from "../components/identity/AssigneeFace";
 import { memberAvatarUrl, memberDisplayName } from "./liveEntities";
+import { peopleOf } from "@codecast/shared/team/memberKind";
 
 /** A picker row plus who it names, in the contract's shape, so a picker can
  *  draw the face its own way and hand the info to whatever it writes. */
@@ -30,7 +31,7 @@ export function rolesAndPeopleOptions(teamMembers: readonly RosterRow[], orgRole
       return { key: String(r._id), label: r.name, hint: `@${r.handle}`, section: "Roles", info, face: <AssigneeFace info={info} size={14} hover={false} /> };
     })
     .sort((a, b) => a.label.localeCompare(b.label));
-  const people: AssigneeOption[] = teamMembers.filter((m) => m && !m.is_bot).map((m) => {
+  const people: AssigneeOption[] = peopleOf(teamMembers).map((m) => {
     const name = memberDisplayName(m as any);
     const info: AssigneeInfo = { name, image: memberAvatarUrl(m as any), github_username: m.github_username ?? undefined };
     return { key: m._id, label: name, section: roles.length ? "People" : undefined, info, face: <AssigneeFace info={info} size={14} /> };

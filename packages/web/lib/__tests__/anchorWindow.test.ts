@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { bootstrapCut, isBootstrapMessage, windowConversationSince } from "../anchorWindow";
 
-const boot = { timestamp: 100, role: "user", content: "You are **Chief of Staff**, the standing agent for the **Chief of Staff** role (@chief-of-staff) in the Union workspace. You report to Ashot." };
+const boot = { timestamp: 100, role: "user", content: "You are **Head of People**, the standing agent for the **Head of People** role (@head-of-people) in the Union workspace. You report to Ashot." };
 const anchorBoot = { timestamp: 100, role: "user", content: [{ type: "text", text: "You are **Anchor**, the **team** anchor for Union — every member can reach you" }] };
 const reply = { timestamp: 200, role: "assistant", content: "Here is what I look after." };
 const later = { timestamp: 300, role: "user", content: "You are **not** a bootstrap: this is a person talking." };

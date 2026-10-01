@@ -471,6 +471,16 @@ export async function canAccessPlan(
   return authorizedForCtx(ctx, await accessStampFor(ctx, "plans", plan), userId);
 }
 
+// A signal is born with its stored key (signals.ingest), so the pure stamp is
+// the whole answer.
+export async function canAccessSignal(
+  ctx: AccessCtx,
+  userId: Id<"users">,
+  signal: { user_id: Id<"users">; workspace: string },
+): Promise<boolean> {
+  return authorizedForCtx(ctx, accessStampFromDoc("signals", signal), userId);
+}
+
 // ── Owner-or-team: conversations (faithful, NOT oversimplified) ──
 // Conversations do NOT use the plain owner-or-team rule above. team_id is
 // routing — it's stamped even on private conversations — so "team member" alone

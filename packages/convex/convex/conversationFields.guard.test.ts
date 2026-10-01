@@ -52,7 +52,7 @@ describe("conversation field manifest", () => {
   // Both projections spread identityFieldsOf into their row (the character and
   // role identity, session-characters.md S6), so its body counts as part of
   // each: a field it emits is a field the row carries.
-  const identity = functionBody(source("conversations.ts"), "async function identityFieldsOf");
+  const identity = functionBody(source("lib/sessionIdentityFields.ts"), "async function identityFieldsOf");
   const rowProjections = [
     ["enrichInboxSessionRow", functionBody(source("conversations.ts"), "async function enrichInboxSessionRow") + identity],
     ["buildSubagentChildRow", functionBody(source("conversations.ts"), "async function buildSubagentChildRow") + identity],

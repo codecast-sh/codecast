@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { INBOX_CREATE_GRACE_MS } from "@codecast/shared/contracts";
 import {
+  NEW_SESSION_HOLD_MS,
   placeInboxRows,
   sortSessions,
   __resetInboxPlacementCacheForTests,
@@ -149,5 +150,38 @@ describe("in-bucket order — one stamp per class", () => {
       row("z", { is_idle: true, agent_status: "idle", agent_status_updated_at: NOW - 5 * HOUR, title: "Session blocked stale" }),
     ]);
     expect(titles(p.sorted)).toEqual(["Session blocked stale", "Session done fresh"]);
+  });
+});
+
+// A session the person just started stays in NEW for a moment after the first
+// send (NEW_SESSION_HOLD_MS), then files by its own state. Filing only: the
+// placement keeps the row's real bucket.
+describe("NEW hold after a first send", () => {
+  const busy = (key: string) => row(key, { agent_status: "working", agent_status_updated_at: NOW - 5_000, title: `Session ${key}` });
+  const withHolds = (rows: InboxSession[], holds: Record<string, number>) => ({ ...state(rows), newSessionHolds: holds }) as PlaceInboxState;
+
+  it("a held working row renders in NEW and keeps its working placement", () => {
+    const p = placeInboxRows(withHolds([busy("a"), busy("b")], { [id("a")]: NOW + NEW_SESSION_HOLD_MS }), { scope: "mine", now: NOW });
+    expect(titles(p.newSessions)).toEqual(["Session a"]);
+    expect(titles(p.working)).toEqual(["Session b"]);
+    expect(p.placements.get(id("a"))?.bucket).toBe("working");
+  });
+
+  it("a settled held row stays in NEW until the hold ends, then files by its state", () => {
+    const done = row("d", { is_idle: true, agent_status: "done", turn_completed_at: NOW - 1_000, title: "Session done" });
+    const held = placeInboxRows(withHolds([done], { [id("d")]: NOW + 1_000 }), { scope: "mine", now: NOW });
+    expect(titles(held.newSessions)).toEqual(["Session done"]);
+    __resetInboxPlacementCacheForTests();
+    const after = placeInboxRows(withHolds([done], {}), { scope: "mine", now: NOW });
+    expect(titles(after.newSessions)).toEqual([]);
+    expect(titles(after.done)).toEqual(["Session done"]);
+  });
+
+  it("an expired hold or an ask never holds the row", () => {
+    const asking = row("q", { awaiting_input: true, auq_open: true, title: "Session asking" });
+    const p = placeInboxRows(withHolds([busy("a"), asking], { [id("a")]: NOW - 1, [id("q")]: NOW + 5_000 }), { scope: "mine", now: NOW });
+    expect(titles(p.newSessions)).toEqual([]);
+    expect(titles(p.working)).toEqual(["Session a"]);
+    expect(titles(p.questions)).toEqual(["Session asking"]);
   });
 });

@@ -40,7 +40,7 @@ import { UsageDisplay } from "./UsageDisplay";
 import { StableContextCards } from "./StableContextCards";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { cssZoomOf } from "../lib/cssZoom";
-import { RevealAncestryCtx, RevealInBandCtx, useHostsReveal, useRevealAncestryWith } from "../lib/revealHost";
+import { RevealAncestryCtx, RevealInBandCtx, useHostsReveal, useOpenReveal, useRevealAncestryWith } from "../lib/revealHost";
 import { MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { animatedHideSession } from "../store/undoActions";
 import { toast } from "sonner";
@@ -94,7 +94,7 @@ import { instancesFromMatches, planActivation, skipDeadHit, stepIndex, walkSearc
 import { FilePathContext } from "../lib/filePathLinks";
 import { WorktreesProvider } from "./worktree/WorktreesContext";
 import { SessionWorktreePills } from "./worktree/WorktreePill";
-import { isStickyEligible, pickStickyFallbackFromLoaded, stickyPromptContent, mergeNavigatorSources, buildNavigatorRows, resolveStickyPrompt, resolveNavigatorCurrentId, topVisibleIndexFromRects } from "../lib/messageNavigator";
+import { isStickyEligible, pickStickyFallback, stickyPromptContent, mergeNavigatorSources, buildNavigatorRows, resolveStickyPrompt, resolveNavigatorCurrentId, topVisibleIndexFromRects } from "../lib/messageNavigator";
 import { isToolResultCarrier, foldNudgeRuns, nudgeLabel, type NudgeRow, type ChatWakePrompt } from "./sessionMessage";
 import { CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
 import { composerPresenceEnabled } from "../lib/composerPresence";
@@ -166,7 +166,6 @@ const SessionHuddleButton = lazy(() => import("./calls/OccupancyChip").then((m) 
 
 const EMPTY_PENDING: any[] = [];
 const EMPTY_MESSAGES: any[] = [];
-const EMPTY_ID_SET: ReadonlySet<string> = new Set();
 const EMPTY_MATCH_INSTANCES: MatchInstance[] = [];
 
 /** Search marks for one message inside its virtualizer row. Scoped to the
@@ -440,7 +439,6 @@ const ConversationViewInner = (
     }
   }, [isRenaming]);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
-  const [matchingMessageIds, setMatchingMessageIds] = useState<ReadonlySet<string>>(EMPTY_ID_SET);
   const [matchInstances, setMatchInstances] = useState<MatchInstance[]>(EMPTY_MATCH_INSTANCES);
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
   const [searchStatus, setSearchStatus] = useState<"idle" | "searching" | "done" | "error">("idle");
@@ -595,7 +593,6 @@ const ConversationViewInner = (
     setDiffExpanded(false);
     setShowThinking(false);
     setHighlightedMessageId(null);
-    setMatchingMessageIds(EMPTY_ID_SET);
     setMatchInstances(EMPTY_MATCH_INSTANCES);
     setCurrentMatchIndex(0);
     setSearchStatus("idle");
@@ -1242,7 +1239,7 @@ const ConversationViewInner = (
   }, [handleForkFromMessage, conversation, effectiveIsOwner, convCommand, convexConvId]);
   const { userMsgKindMap, turnAggregates, openAsk, commandExpansionMap, nudgeRuns, isThinking, isWaitingForResponse } = useTimelineTurns({ messages, conversation, hasMoreAbove, timeline, messageAuthors, hasMoreBelow, foldWorkingTurns });
   const { sessionSkills, sessionFilePaths, mentionItemsRef, handleMentionQuery } = useSessionMentions({ currentUser, conversation, managedSession });
-  const { serverUserMessages, stickyUserMsgIndices, navigatorTimelineIndices, timelineMessageIds, serverStickyFallback } = useNavigatorIndex({ cachedUserMessages, messages, timeline, userMsgKindMap, hasMoreAbove });
+  const { serverUserMessages, stickyUserMsgIndices, navigatorTimelineIndices, timelineMessageIds, loadedMessageIds } = useNavigatorIndex({ cachedUserMessages, messages, timeline, userMsgKindMap });
 
   const [activeStickyMsg, setActiveStickyMsgRaw] = useState<{ index: number; content: string; id: string; fromUserId?: string } | null>(null);
   const [navigatorCurrentId, setNavigatorCurrentId] = useState<string | null>(null);
@@ -1340,7 +1337,6 @@ const ConversationViewInner = (
     const target = instances[index];
     if (!target) return;
     setCurrentMatchIndex(index);
-    setHighlightedMessageId(target.messageId);
     pendingHitRef.current = { ...target, dir, startedAt: Date.now(), jumped: false, skipped: 0 };
     setActivationTick((t) => t + 1);
   }, []);
@@ -1366,10 +1362,8 @@ const ConversationViewInner = (
     pendingHitRef.current = null;
     setActiveHit(null);
     setMatchInstances(EMPTY_MATCH_INSTANCES);
-    setMatchingMessageIds(EMPTY_ID_SET);
     setCurrentMatchIndex(0);
     if (!convexConvId || !cleanedHighlight) {
-      setHighlightedMessageId(null);
       setSearchStatus("idle");
       return;
     }
@@ -1385,7 +1379,6 @@ const ConversationViewInner = (
       (all, done) => {
         const instances = instancesFromMatches(all);
         setMatchInstances(instances);
-        setMatchingMessageIds(new Set(all.map((m) => m.message_id)));
         if (done) setSearchStatus("done");
         if (!shown && instances.length > 0) {
           shown = true;
@@ -1780,15 +1773,36 @@ const ConversationViewInner = (
   // shouldAdjustScrollForResize (the library rule minus its scroll-direction
   // clause — see there for why).
   const scrollHoldRef = useRef<{ key: string | number; until: number } | null>(null);
+  // An inline reveal band is the same case: it opens under the reference the
+  // reader just clicked, so its row's growth (and its fold on close) is below
+  // the visible point and must never move the conversation. The row holding
+  // the open band is held while it is open, and for a moment after it closes
+  // while the row settles back.
+  const openReveal = useOpenReveal();
+  const revealRowRef = useRef<{ key: string; until: number } | null>(null);
+  // Like a receipt toggle, opening one latches userScrolled too, so a band
+  // opened near the tail is never re-pinned to the bottom.
+  useLayoutEffect(() => {
+    const anchor = openReveal?.anchor;
+    const key = anchor && containerRef.current?.contains(anchor) ? anchor.closest<HTMLElement>("[data-vkey]")?.dataset.vkey : undefined;
+    if (key) {
+      revealRowRef.current = { key, until: Infinity };
+      setUserScrolled(true);
+    } else if (revealRowRef.current) {
+      revealRowRef.current = { ...revealRowRef.current, until: Date.now() + 800 };
+    }
+  }, [openReveal, setUserScrolled]);
   virtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item, _delta, instance) => {
     const hold = scrollHoldRef.current;
+    const revealRow = revealRowRef.current;
     // getScrollOffset/scrollAdjustments are not on the public type.
     const v = instance as unknown as { getScrollOffset: () => number; scrollAdjustments: number };
     return shouldAdjustScrollForResize({
       itemStart: item.start,
       scrollOffset: v.getScrollOffset() + (v.scrollAdjustments ?? 0),
       scrollDirection: instance.scrollDirection,
-      held: !!hold && item.key === hold.key && Date.now() < hold.until,
+      held: (!!hold && item.key === hold.key && Date.now() < hold.until)
+        || (!!revealRow && String(item.key) === revealRow.key && Date.now() < revealRow.until),
     });
   };
   const rowLookupRef = useRef({ timeline, getItemKey });
@@ -2078,14 +2092,16 @@ const ConversationViewInner = (
   // mount, and once that node is replaced the observer reports the detached
   // node's height, zero, forever. The pinned bubble then sat under the header
   // with its first line cut. The ref callback follows the element instead and
-  // disconnects when it leaves.
+  // disconnects when it leaves. The height is the fractional border box:
+  // offsetHeight rounds (minimal's header is 44.6px, read as 45), and the
+  // sub-pixel strip it leaves under the header shows the scrolled text.
   const bindHeader = useCallback((el: HTMLElement | null) => {
     headerRef.current = el;
     if (!el) return;
-    const measure = () => setHeaderHeight(el.offsetHeight);
+    const measure = () => setHeaderHeight(el.getBoundingClientRect().height);
     const ro = new ResizeObserver(measure);
     measure();
-    ro.observe(el);
+    ro.observe(el, { box: "border-box" });
     return () => ro.disconnect();
   }, []);
 
@@ -2133,7 +2149,7 @@ const ConversationViewInner = (
     let ticking = false;
     const check = () => {
       ticking = false;
-      if ((window as any).__STICKY_DEBUG) { (((window as any).__STICKY_TOP) ??= []).push({ scrollTop: el.scrollTop, headerHeight, stickyDisabled, jumpPending: !!jumpPendingRef.current, idxCount: stickyUserMsgIndices.length, serverFb: serverStickyFallback?.id ?? null, svrLen: (serverUserMessages?.length ?? -1), hasMoreAbove: paginationPropsRef.current.hasMoreAbove, fb: !!fallbackStickyContent }); }
+      if ((window as any).__STICKY_DEBUG) { (((window as any).__STICKY_TOP) ??= []).push({ scrollTop: el.scrollTop, headerHeight, stickyDisabled, jumpPending: !!jumpPendingRef.current, idxCount: stickyUserMsgIndices.length, svrLen: (serverUserMessages?.length ?? -1), hasMoreAbove: paginationPropsRef.current.hasMoreAbove, fb: !!fallbackStickyContent }); }
       // Frozen during a pending jump — the sticky header must not flip to the
       // target edge before the view actually moves there.
       if (jumpPendingRef.current) return;
@@ -2159,17 +2175,27 @@ const ConversationViewInner = (
           st.setViewAnchor(a ? { conversationId: String(conversation._id), ...a } : null);
         }
       }
-      const navId = resolveNavigatorCurrentId(
+      // A prompt the window does not hold wins over the one it resolved when
+      // it is later and still above the top visible row (pickStickyFallback).
+      const topTs = timeline[Math.max(topVisibleIndex, 0)]?.timestamp ?? Infinity;
+      const laterUnloaded = (resolvedIndex: number | undefined) => pickStickyFallback(
+        serverUserMessages, loadedMessageIds, topTs,
+        resolvedIndex === undefined ? -Infinity : timeline[resolvedIndex]?.timestamp ?? -Infinity,
+      );
+      const navAbove = laterUnloaded(resolveStickyPrompt(navigatorTimelineIndices, topVisibleIndex, new Set())?.index);
+      const navId = navAbove?.id ?? resolveNavigatorCurrentId(
         navigatorTimelineIndices,
         timelineMessageIds,
         topVisibleIndex,
-        serverStickyFallback?.id ?? null,
+        null,
       );
       setNavigatorCurrentId(navId);
 
       const bannerOff = stickyDisabled && localStorage.getItem('__STICKY_FORCE') !== '1';
-      const stickyResolved = resolveStickyPrompt(stickyUserMsgIndices, topVisibleIndex, visible);
-      if ((window as any).__STICKY_DEBUG) { (((window as any).__STICKY_LOG) ??= []).push({ scrollTop, headerHeight, stickyDisabled, idxCount: stickyUserMsgIndices.length, topVisibleIndex, navId, stickyIdx: stickyResolved?.index ?? null, serverFb: serverStickyFallback?.id ?? null, fb: !!fallbackStickyContent, clientHeight: el.clientHeight, hasMoreAbove: paginationPropsRef.current.hasMoreAbove, svrLen: (serverUserMessages?.length ?? -1) }); }
+      const stickyInWindow = resolveStickyPrompt(stickyUserMsgIndices, topVisibleIndex, visible);
+      const stickyAbove = laterUnloaded(stickyInWindow?.index);
+      const stickyResolved = stickyAbove ? null : stickyInWindow;
+      if ((window as any).__STICKY_DEBUG) { (((window as any).__STICKY_LOG) ??= []).push({ scrollTop, headerHeight, stickyDisabled, idxCount: stickyUserMsgIndices.length, topVisibleIndex, navId, stickyIdx: stickyResolved?.index ?? null, fb: !!fallbackStickyContent, clientHeight: el.clientHeight, hasMoreAbove: paginationPropsRef.current.hasMoreAbove, svrLen: (serverUserMessages?.length ?? -1) }); }
 
       if (bannerOff) {
         setActiveStickyMsg(null);
@@ -2225,11 +2251,11 @@ const ConversationViewInner = (
         }
         setActiveStickyMsg({ index: stickyResolved.index, content: msg.content!, id: msgId, fromUserId: msg.from_user_id });
         setStickyMsgVisible(!stickyResolved.hidden && !inGap && !hideForNextMsg);
-      } else if (serverStickyFallback) {
-        prevStickyMsgIdRef.current = serverStickyFallback.id;
+      } else if (stickyAbove) {
+        prevStickyMsgIdRef.current = stickyAbove.id;
         prevStickyIdxRef.current = null;
         stickyGapRef.current = null;
-        setActiveStickyMsg({ index: -1, content: serverStickyFallback.content, id: serverStickyFallback.id, fromUserId: serverStickyFallback.fromUserId });
+        setActiveStickyMsg({ index: -1, content: stickyAbove.content, id: stickyAbove.id, fromUserId: stickyAbove.fromUserId });
         setStickyMsgVisible(true);
       } else if (fallbackStickyContent && scrollTop > el.clientHeight) {
         prevStickyMsgIdRef.current = '__fallback__';
@@ -2249,7 +2275,7 @@ const ConversationViewInner = (
     const onScroll = () => { if (!ticking) { ticking = true; requestAnimationFrame(check); } };
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => el.removeEventListener('scroll', onScroll);
-  }, [stickyUserMsgIndices, navigatorTimelineIndices, timelineMessageIds, virtualizer, timeline, fallbackStickyContent, serverStickyFallback, headerHeight, stickyDisabled]);
+  }, [stickyUserMsgIndices, navigatorTimelineIndices, timelineMessageIds, virtualizer, timeline, fallbackStickyContent, serverUserMessages, loadedMessageIds, headerHeight, stickyDisabled]);
 
   const scrollToMessageById = useCallback((messageId: string) => {
     // A folded working turn opens first, then the density's own group: walk
@@ -2728,17 +2754,6 @@ const ConversationViewInner = (
 
   useEventListener("hashchange", () => scrollToHash());
 
-  // Rows that hold a hit at the current density — a folded tool message maps
-  // to the row it shows inside — so the dimming of everything else does not
-  // grey out the very row the active mark lives in.
-  const matchRowIds = useMemo(() => {
-    if (matchingMessageIds.size === 0) return EMPTY_ID_SET;
-    const rows = new Set<string>();
-    const aggregates = { ...turnAggregates, nudgeHeadOf: nudgeRuns.headOf };
-    for (const id of matchingMessageIds) rows.add(jumpRowForMessage(id, feedDensity, aggregates).scrollToId);
-    return rows;
-  }, [matchingMessageIds, feedDensity, turnAggregates, nudgeRuns]);
-
   // Bring the pending search hit into view. One owner for the whole motion:
   // ask the server for the window when the message is not loaded, open the
   // fold it sits in at this density, scroll the virtualizer to its row, then
@@ -2804,7 +2819,6 @@ const ConversationViewInner = (
           if (!next) { pendingHitRef.current = null; return; }
           pendingHitRef.current = next.hit;
           setCurrentMatchIndex(next.index);
-          setHighlightedMessageId(next.hit.messageId);
           break;
         }
         case "activate": {
@@ -3124,7 +3138,6 @@ const ConversationViewInner = (
   // serves every session the inbox selects, and a fold left over from the
   // session that hosted a band used to follow the reader to the next one.
   const hostingReveal = useHostsReveal(headerRef, "[data-cc-conversation]", effectiveConversationId);
-  const compactChrome = inRevealBand || hostingReveal;
   // The pinned prompt floats over the top of the transcript; while a band is
   // open here it would cover the band's close strip, so it steps aside.
   const showSticky = stickyMsgVisible && !!activeStickyMsg && !hostingReveal;
@@ -3625,9 +3638,9 @@ const ConversationViewInner = (
     <BrowserSessionContext.Provider value={browserSession}>
     <RevealAncestryCtx.Provider value={revealAncestry}>
     <ChatWakeContext.Provider value={chatWakeMap}>
-    <ImageGalleryProvider conversationId={conversation?._id} onJumpToMessage={scrollToMessageById}>
+    <ImageGalleryProvider conversationId={conversation?._id} onJumpToMessage={scrollToMessageById} quotable={showMessageInput && effectiveIsOwner}>
     <ReviewComposerContext.Provider value={reviewComposer}>
-    <main data-cc-conversation data-cc-context={showSessionContext ? "" : undefined} data-reveal-chrome={compactChrome ? "" : undefined} className="relative flex flex-col bg-sol-bg h-full overflow-x-clip" onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
+    <main data-cc-conversation data-cc-context={showSessionContext ? "" : undefined} data-reveal-chrome={inRevealBand ? "band" : hostingReveal ? "host" : undefined} className="relative flex flex-col bg-sol-bg h-full overflow-x-clip" onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
       {isDragging && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-sol-bg/80 backdrop-blur-sm" style={{ animation: "fadeIn 150ms ease-out" }}>
           <div className="border-2 border-dashed border-sol-cyan rounded-xl p-12 text-center">
@@ -4517,7 +4530,6 @@ const ConversationViewInner = (
               const content = renderItem(item, virtualItem.index);
               // Only once the scan is complete: pages land oldest first, so dimming
               // earlier would grey out recent rows whose hits are not counted yet.
-              const isSearchDimmed = searchStatus === "done" && matchRowIds.size > 0 && item.type === 'message' && !matchRowIds.has((item.data as Message)._id);
               const itemId = item.type === 'message' ? (item.data as Message)._id : item.type === 'commit' ? `commit-${(item.data as any).sha || (item.data as any)._id}` : item.type === 'external_event' ? `event-${(item.data as any)._id}` : `pr-${(item.data as any)._id}`;
               const isNew = newItemIdsRef.current.has(itemId);
               const isToolRow = item.type === 'message' && isToolReceiptRow(item.data as Message, showThinking);
@@ -4547,7 +4559,7 @@ const ConversationViewInner = (
                   }}
                 >
                   {visible && (
-                    <div className={`conv-col mx-auto px-4 sm:px-5 md:px-6 ${condensedFeed || isToolRow ? "py-px" : "py-0.5 sm:py-1"} ${isNew ? "animate-message-in" : ""} ${isForkSelected ? "ring-2 ring-sol-cyan/60 bg-sol-cyan/5 rounded-lg" : ""} ${isBelowForkSelection ? "opacity-30 pointer-events-none" : ""} ${isSearchDimmed ? "search-dimmed" : ""} transition-opacity`}>
+                    <div className={`conv-col mx-auto px-4 sm:px-5 md:px-6 ${condensedFeed || isToolRow ? "py-px" : "py-0.5 sm:py-1"} ${isNew ? "animate-message-in" : ""} ${isForkSelected ? "ring-2 ring-sol-cyan/60 bg-sol-cyan/5 rounded-lg" : ""} ${isBelowForkSelection ? "opacity-30 pointer-events-none" : ""} transition-opacity`}>
                       {showNewRule && (
                         <TimelineRule color="var(--sol-orange)" label="New messages">
                           <span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-sol-orange">New</span>

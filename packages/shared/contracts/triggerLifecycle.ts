@@ -1,3 +1,6 @@
+import { formatScheduledTask, type RoleCard, type WaitingSession } from "./machineMessages";
+import type { AreaChange } from "./orgAreas";
+
 // Appended to a trigger run's frame when its session is stashed: the agent
 // must know nobody is watching, and that declaring its state is its only way
 // back to the person's eyes. Agent-only text; the web leaves it out of what it
@@ -26,6 +29,28 @@ export function triggerLifecycleInstructions(task: { _id: string; short_id?: str
     "Ongoing mandates remain active until explicitly ended. Do not close unrelated tasks or cancel other triggers.",
     "Preserve safe-mode restrictions: if cancellation is outside this run's authority, report the verified outcome and required cancellation in the completion summary instead of executing it.",
   ].join("\n");
+}
+
+/** The frame a trigger run arrives in: the trigger's prompt with its lifecycle,
+ *  and what the writer read at firing (the role's card, the session that
+ *  waits, a change that lasted, whether the session is stashed). Pure, so the
+ *  server's one writer (agentTasks.triggerFrameFor) and the eval harness's
+ *  role-wake fixtures render the same bytes. */
+export function triggerRunFrame(
+  task: { _id: string; short_id?: string; title?: string; prompt?: string | null; role_id?: string; event_filter?: { event_type?: string } },
+  read: { role: RoleCard | null; waiting?: WaitingSession | null; change?: AreaChange; stashed: boolean },
+): string {
+  const body = [task.prompt, triggerLifecycleInstructions(task)].filter(Boolean).join("\n\n") + (read.stashed ? STASHED_RUN_NOTE : "");
+  return formatScheduledTask({
+    title: task.title || "",
+    task_id: String(task._id),
+    trigger: task.short_id,
+    event: task.event_filter?.event_type,
+    role: read.role,
+    waiting: read.waiting ?? null,
+    ...(read.change ? { change: read.change } : {}),
+    body,
+  });
 }
 
 // The session that OWNS a fresh run. A ONCE trigger armed from inside a

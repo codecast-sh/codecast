@@ -851,3 +851,37 @@ function clipSubject(subject: string, budget: number, isPath: boolean): string {
   }
   return truncateStr(kept, budget);
 }
+
+/**
+ * The hint after a collapsed tool call's summary in the mobile transcript:
+ * how the call came out, in a word or a count ("(3 lines)", "(+4 -1)",
+ * "(error)"), or null when there is nothing to say.
+ */
+export function toolResultHint(toolCall: ToolCallLike, result: { content: string; is_error?: boolean } | undefined): string | null {
+  if (!result) return null;
+  if (result.is_error) return "(error)";
+  const isEditOrWrite = isEditTool(toolCall.name) || isWriteTool(toolCall.name) || toolCall.name === "apply_patch";
+  const isGlobGrep = isGlobTool(toolCall.name) || isGrepTool(toolCall.name) || toolCall.name === "code_search" || toolCall.name === "code_analysis";
+  if (isEditOrWrite) {
+    const match = result.content.match(/with (\d+) additions? and (\d+) removals?/);
+    if (match) return `(+${match[1]} -${match[2]})`;
+    return result.content.includes("has been updated") ? "(ok)" : "";
+  }
+  if (isReadTool(toolCall.name)) {
+    const lines = result.content.split("\n").length;
+    return `(${lines} lines)`;
+  }
+  if (isGlobGrep) {
+    const lines = result.content.trim().split("\n").filter((l: string) => l.trim()).length;
+    return `(${lines} matches)`;
+  }
+  if (isShellTool(toolCall.name) && result.content) {
+    const lines = result.content.trim().split("\n").length;
+    if (lines > 1) return `(${lines} lines)`;
+  }
+  if (toolCall.name === "TaskList") {
+    const taskLines = result.content.split("\n").filter((l: string) => l.match(/#\d+\s+\[/));
+    if (taskLines.length > 0) return `(${taskLines.length} tasks)`;
+  }
+  return null;
+}

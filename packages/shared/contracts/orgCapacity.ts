@@ -135,7 +135,7 @@ export type RoleSignals = {
     /** Sessions filed under the seat inside the scan window, in any state. */
     hands_window?: number;
   };
-  /** A whole workspace seat (the chief of staff) reviews and directs nothing,
+  /** A whole workspace seat (the head of people) reviews and directs nothing,
    *  so work passing it by is its design, not a finding. */
   reviews_only?: boolean;
   /** The scope names no project or plan that still exists. */

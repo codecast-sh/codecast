@@ -10,6 +10,7 @@ import {
   GitPullRequest,
   MessageSquare,
   Network,
+  Phone,
   Signpost,
   Target,
   Zap,
@@ -18,9 +19,7 @@ import { taskVisual } from "./TaskStatusBadge";
 import { stripMarkdown, docContentPreview, docBodyMarkdown } from "../lib/notificationText";
 import { type EntityType } from "../lib/entityLinks";
 import { ACCENT, type Accent } from "../lib/entityCardAccent";
-import { AgentTypeIcon } from "./AgentTypeIcon";
-import { SessionGlyph } from "./identity";
-import { identityRowOf } from "../lib/sessionIdentity";
+import { SessionMark } from "./identity";
 import { cleanUserMessage } from "./sessionMessage";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { getLabelColor } from "../lib/labelColors";
@@ -34,8 +33,8 @@ import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { describeTaskCadence, taskStateLabel } from "./triggerCadence";
 import { AuthorAvatar, SessionSummaryBlock, DiffStat, DottedRow, TaskPeople, type DottedPart } from "./entityDisplay";
+import { taskPriorityBadge } from "../lib/taskPriority";
 import {
-  PRIORITY_CONFIG,
   STATUS_COLOR,
   STATUS_LABEL,
   TYPE_LABEL,
@@ -50,6 +49,9 @@ import { FileDiffList } from "./FileDiffView";
 import { RevealButton, RevealOpenLink, type RevealTarget } from "./ObjectReveal";
 import { ProposalDetail, ProposalMeta, ProposalSnippet } from "./org/ProposalCard";
 import { useProposalChanges, useProposalTree } from "./org/proposalHooks";
+import { TranscriptTurnList } from "./calls/TranscriptTurns";
+import { groupTurns } from "./calls/transcriptTurnModel";
+import { firstName, fmtCallLength } from "./calls/speakers";
 
 // The preview card a SHARED object renders as — the rich sibling of the inline
 // pill. remarkEntityCards promotes a references-only paragraph (or list) into
@@ -75,7 +77,25 @@ const TYPE_ICON: Record<EntityType, any> = {
   decision: Signpost,
   pr: GitPullRequest,
   commit: GitCommitHorizontal,
+  call: Phone,
 };
+
+/** The words a call reference names (`cl-42:15-25`), as turns; null for a whole call. */
+export function CallTurns({ call, limit }: { call: any; limit?: number }) {
+  const turns = groupTurns(call.turns?.segments ?? []);
+  if (!call.turns) return null;
+  if (turns.length === 0) return <p className="text-[11px] italic text-sol-text-dim">Nothing was said in those lines.</p>;
+  const shown = limit ? turns.slice(0, limit) : turns;
+  const hidden = turns.length - shown.length;
+  return (
+    <div className="space-y-0.5">
+      <TranscriptTurnList turns={shown} callId={String(call._id)} />
+      {(hidden > 0 || (!limit && call.turns.more)) && (
+        <p className="text-[10px] text-sol-text-dim">{hidden > 0 ? `${hidden} more turns` : "More on the call page"}</p>
+      )}
+    </div>
+  );
+}
 
 /** The message body under a commit's subject line, or "" when it is a one-liner. */
 function commitBody(commit: any): string {
@@ -89,7 +109,7 @@ function commitBody(commit: any): string {
  * (status, priority) never shrink, and only the wide chips (plan link,
  * author) truncate.
  */
-function CardMetaLine({ type, entity }: { type: EntityType; entity: any }) {
+export function CardMetaLine({ type, entity }: { type: EntityType; entity: any }) {
   const parts: DottedPart[] = [];
   const push = (node: React.ReactNode, key: string, shrink = false) => {
     parts.push({ key, node, shrink });
@@ -98,7 +118,7 @@ function CardMetaLine({ type, entity }: { type: EntityType; entity: any }) {
   if (type === "task") {
     const v = taskVisual(entity.status);
     push(<span className={`whitespace-nowrap font-medium ${v.color}`}>{v.label}</span>, "status");
-    const priority = PRIORITY_CONFIG[entity.priority];
+    const priority = taskPriorityBadge(entity.priority);
     if (priority) {
       push(
         <span className={`inline-flex items-center gap-0.5 whitespace-nowrap ${priority.color}`}>
@@ -170,6 +190,16 @@ function CardMetaLine({ type, entity }: { type: EntityType; entity: any }) {
     if (entity.insertions != null || entity.deletions != null || entity.files_changed != null) {
       push(<DiffStat additions={entity.insertions} deletions={entity.deletions} files={entity.files_changed} />, "stat");
     }
+  } else if (type === "call") {
+    const live = entity.status === "live";
+    push(
+      <span className={`whitespace-nowrap font-medium ${live ? "text-sol-green" : "text-sol-text-muted"}`}>
+        {live ? "Live" : fmtCallLength(entity.started_at, entity.ended_at)}
+      </span>,
+      "state",
+    );
+    const who = (entity.participants ?? []).map((p: any) => firstName(p.name)).join(", ");
+    if (who) push(<span className="truncate">{who}</span>, "who", true);
   } else {
     push(<span className="font-medium text-sol-text-dim">{TYPE_LABEL[type]}</span>, "type");
   }
@@ -220,16 +250,7 @@ function SessionCardBody({ session, expanded }: { session: any; expanded: boolea
         <div className="flex items-start gap-1.5 text-sm leading-snug text-sol-text">
           {/* Who the session is (session-characters.md S3), the agent brand
               on its corner; a plain row keeps the brand alone. */}
-          <SessionGlyph
-            row={identityRowOf(session)}
-            className="flex-shrink-0"
-            badge={<AgentTypeIcon agentType={session.agent_type || "claude_code"} className="w-full h-full p-[1px]" />}
-            fallback={
-              <span className="flex-shrink-0" title={session.agent_type || "claude_code"}>
-                <AgentTypeIcon agentType={session.agent_type || "claude_code"} className="w-3.5 h-3.5" />
-              </span>
-            }
-          />
+          <SessionMark session={session} />
           <span className="min-w-0 font-medium [overflow-wrap:anywhere]">{title}</span>
           {isLive && (
             <span className="relative flex h-1.5 w-1.5 flex-shrink-0" title="Live">
@@ -342,6 +363,13 @@ function CardSnippet({ type, entity, compact }: { type: EntityType; entity: any;
   if (type === "pr") {
     if (!entity.body) return null;
     return <p className={`text-[12px] leading-relaxed text-sol-text-muted ${clamp}`}>{stripMarkdown(entity.body).slice(0, 400)}</p>;
+  }
+  if (type === "call" && entity.turns) {
+    return (
+      <div className="overflow-hidden" style={{ maxHeight: compact ? 72 : 150, ...clipFade(28) }}>
+        <CallTurns call={entity} limit={4} />
+      </div>
+    );
   }
   if (type === "commit") {
     const body = commitBody(entity);
@@ -504,6 +532,10 @@ function CardDetail({ type, entity }: { type: EntityType; entity: any }) {
         <FileDiffList files={entity.files} emptyText="No file changes synced" className="overflow-hidden rounded border border-sol-border/40" />
       </div>
     );
+  }
+  if (type === "call") {
+    if (entity.turns) return <CallTurns call={entity} />;
+    return entity.summary ? <CardMarkdown content={entity.summary} /> : <p className="text-[11px] italic text-sol-text-dim">No summary yet.</p>;
   }
   const summary = entity.description || entity.goal || entity.summary;
   return summary ? <CardMarkdown content={summary} /> : <p className="text-[11px] italic text-sol-text-dim">Nothing more here.</p>;
@@ -806,7 +838,7 @@ export function EntityObjectCard({ refId, count, unresolved }: {
       href={href}
       onOpen={isSession ? openObject : undefined}
       openLabel={openLabel}
-      footerId={(isRepoObject ? repoObjectRefOf(type, entity) : null) ?? entity?.short_id ?? rawId}
+      footerId={(isRepoObject ? repoObjectRefOf(type, entity) : null) ?? (type === "call" ? rawId : entity?.short_id) ?? rawId}
       resolved={!!entity}
       served={served}
       // A session reads as its inbox card — flat, no header strip.
@@ -822,8 +854,8 @@ export function EntityObjectCard({ refId, count, unresolved }: {
           ),
         title: title ?? <span className="font-mono text-sol-text-dim">{rawId}</span>,
         meta: entity ? <CardMetaLine type={type} entity={entity} /> : undefined,
-        timeAgo: relativeTime(entity?.updated_at ?? entity?.timestamp),
-        live: (isSession && entity?.status === "active") || (type === "trigger" && entity?.status === "running"),
+        timeAgo: relativeTime(entity?.updated_at ?? entity?.timestamp ?? entity?.started_at),
+        live: (isSession && entity?.status === "active") || (type === "trigger" && entity?.status === "running") || (type === "call" && entity?.status === "live"),
       }}
       snippet={entity ? <CardSnippet type={type} entity={entity} compact={count > 1} /> : undefined}
       detail={entity ? <CardDetail type={type} entity={entity} /> : null}

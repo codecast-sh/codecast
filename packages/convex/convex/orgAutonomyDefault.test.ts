@@ -18,7 +18,7 @@ function world() {
       { _id: "r_infra", short_id: "or-2", handle: "infra", status: "paused", team_id: TEAM },
       { _id: "r_ops", short_id: "or-3", handle: "ops", status: "active", team_id: TEAM, trust: "decide" },
       { _id: "r_old", short_id: "or-4", handle: "old", status: "retired", team_id: TEAM, trust: "understand" },
-      { _id: "r_chief", short_id: "or-5", handle: "chief-of-staff", status: "active", team_id: TEAM, trust: "understand" },
+      { _id: "r_head", short_id: "or-5", handle: "head-of-people", status: "active", team_id: TEAM, trust: "understand" },
       { _id: "r_mine", short_id: "or-6", handle: "mine", status: "active", scope_user_id: ME, trust: "understand" },
     ],
   };
@@ -31,7 +31,7 @@ describe("orgAutonomyDefault", () => {
     const { ctx } = world();
     const rows = await planAutonomyDefault(ctx);
     expect(Object.fromEntries(rows.map((r) => [r.handle, r.action]))).toEqual({
-      growth: "turn_on", infra: "turn_on", ops: "already_on", old: "retired", "chief-of-staff": "root_off", mine: "turn_on",
+      growth: "turn_on", infra: "turn_on", ops: "already_on", old: "retired", "head-of-people": "root_off", mine: "turn_on",
     });
     expect(rows.find((r) => r.handle === "mine")!.workspace).toBe("Me (personal)");
   });
@@ -44,7 +44,7 @@ describe("orgAutonomyDefault", () => {
     const run = await performTurnOnExistingRoles(ctx, false);
     expect(run.turned_on).toBe(3);
     expect(Object.fromEntries(tables.org_roles.map((r) => [r.handle, r.trust]))).toEqual({
-      growth: "direct", infra: "direct", ops: "decide", old: "understand", "chief-of-staff": "understand", mine: "direct",
+      growth: "direct", infra: "direct", ops: "decide", old: "understand", "head-of-people": "understand", mine: "direct",
     });
     // Idempotent: a second run finds nothing to flip.
     expect((await performTurnOnExistingRoles(ctx, false)).turned_on).toBe(0);

@@ -11,8 +11,8 @@ Companion documents: `heroFly/ARCHITECTURE.md` (the sandbox, the container/view 
 "Retry failed webhooks" is asked for, fanned out to two workers, approved from a phone, discussed between agents, decided by a person, tracked as a task, automated, talked over with the team, merged, published, and found again three weeks later. The cast (`fixtures/story.ts`):
 
 - People: Ashot (the viewer), Sarah Chen, Maya Ortiz.
-- Sessions: the lead **Retry failed webhooks** (claude_code, `jx7hero`), **Webhook API half** (codex, `jx7hapi`), **Dashboard retry UI** (cursor, `jx7hrui`), and the fork **Try fixed backoff** (codex, `jx7hfrk`). Project `~/src/billing`.
-- Objects: task `ct-hero1` "Retry queue for failed webhooks", plan `pl-hero1` "Webhook reliability", the decision "Exponential or fixed backoff?", the trigger "Check CI every 4h", PR acme/billing#482 "Retry failed webhooks with exponential backoff", the page codecast.sh/a/webhook-retries "Webhook retry report", `src/billing/retry.ts:42`, channel #eng, hosts linux-host-1 and macbook.
+- Sessions: the lead **Retry failed webhooks** (claude_code, `jx7c4mq`), **Webhook API half** (codex, `jx7d2wk`), **Dashboard retry UI** (cursor, `jx7f9np`), and the fork **Try fixed backoff** (codex, `jx7gk3t`). Project `~/src/billing`.
+- Objects: task `ct-4182` "Retry queue for failed webhooks", plan `pl-312` "Webhook reliability", the decision "Exponential or fixed backoff?", the trigger "Check CI every 4h", PR acme/billing#482 "Retry failed webhooks with exponential backoff", the page codecast.sh/a/webhook-retries "Webhook retry report", `src/billing/retry.ts:42`, channel #eng, hosts linux-host-1 and macbook.
 - The prompt: "retry failed webhooks with backoff".
 
 ## Globals
@@ -41,7 +41,9 @@ House entrance "drop": from `perspective(800px) translateZ(220px) rotateX(-18deg
 
 ### Camera model
 
-Catmull-Rom through the hold poses (no dead stops), angles interpolated with `glide` per transit. A long lateral move adds a crest: `dist` pulls back by the listed amount at mid-move, and roll leads the turn by 150ms. Each hold drifts 12px and 0.4deg of yaw across its length so it never looks frozen; the two overview holds stay still so the seam is exact. `will-change: transform` is on the world only in transit, so text re-rasterizes sharp at rest. Every hold frames its hero surface at scale 0.93 to 1.12 and within 12deg of face-on (0.8 allowed for the pair and the tilted board); `timeline.test.ts` enforces it on desktop and mobile.
+Catmull-Rom through the hold poses (no dead stops), every transit eased by `camEase`, close to a sine, so no move peaks above about 1.6 times its average speed. A lateral move may add a crest (`dist` pulls back at mid-move) and a roll that starts with the move and settles 150ms before it lands. Each hold drifts (`DRIFT` in world.ts: a 24px slide and 1deg of yaw symmetric about its middle, and a 30px push). A hold names only its angles and the windows it is about (`sees`); `world.ts` solves its position and distance from the projection so those windows are centred in the film box with fixed margins (80 by 36 stage px; on a phone, centred vertically and aligned by `align` where wider than the frame). `will-change: transform` is on the world only in transit. `timeline.test.ts` enforces the centring, the scale and angle of each hold, that every move keeps the frame filled, and (with `filmQa.ts`) that nothing in the film changes faster than an eye can follow between two frames at 60fps.
+
+There is no card flip, no card back and no overview: windows appear and leave as themselves. The code (world.ts, timeline.ts) is the source of truth for poses and positions; the tables below are the original plan and are out of date where they disagree.
 
 ## World layout
 
@@ -62,9 +64,7 @@ World px; x right, y down, z toward the viewer; `pos` is the surface centre. The
 | `blame` | a file with session blame | 900x380 | (-1400, 380, -40) | 0, 10, 0 | `main` |
 | `label3w` | world text "3 weeks later" | 44px mono | (-760, -560, 260) | 0 | |
 
-Every surface's back face (for the deal) is `--sol-bg-alt` with the codecast logo and the chapter name in 13px mono.
-
-A surface is rendered only during the transits either side of a hold that sees it (`Hold.sees`), plus both overviews; everything else is culled with `visibility`.
+A surface is rendered only during the transits either side of a hold that sees it (`Hold.sees`), and fades in and out with the move; everything else is culled with `visibility`.
 
 ## Camera keyframes (desktop)
 
@@ -118,8 +118,7 @@ Times are film seconds; named cues are in `fixtures/story.ts`. "Light interactio
 
 ### 1 Inbox (0 to 9)
 
-- 0.0: every surface lies face-down. 0.15: the deal flips them face-up in flight order, 120ms apart, each rising to translateZ +160 at 45% and landing on `DROP`.
-- 0.9 to 2.4: the camera glides down to the whole desk window.
+- 0.0: the film opens on the whole desk window, already composed (the poster frame is 6.6).
 - The desk: sidebar (Inbox with its count, Feed, Tasks, Docs, Workflows; projects), the inbox list with a section header and six sessions from five agents: one working (green ping), one NEEDS INPUT, one DONE, one idle, one unread, one on a cloud host (worktree chip). Timestamps are offsets from mount.
 - 2.8: agent icons pulse down the column (`SNAP`, 90ms stagger) so the eye reads "every agent".
 - `leadLands` 3.4: the lead's row **Retry failed webhooks** drops in on top; rows below push down on `settle`, 25ms stagger.
@@ -154,7 +153,7 @@ Times are film seconds; named cues are in `fixtures/story.ts`. "Light interactio
 ### 5 Agents talk (28 to 34)
 
 - 28.8: the camera holds on the pair.
-- 29.0 to 29.6: pairA types `cast send jx7hrui "API is on /v2/hooks/retry, schema in the doc"` as a real cast command block.
+- 29.0 to 29.6: pairA types `cast send jx7f9np "API is on /v2/hooks/retry, schema in the doc"` as a real cast command block.
 - Flyer `talk.envelope` at `messageSent` 29.6: the message lifts off pairA and lands on pairB as a "Message from Webhook API half" block, with the doc reference as a real entity pill.
 - Flyer `talk.envelopeBack` at `replySent` 31.2: the reply "Retry states are in, staging green" flies back.
 - `forked` 32.4: pairB's user prompt shows a fork child, **Try fixed backoff**.
@@ -170,7 +169,7 @@ Times are film seconds; named cues are in `fixtures/story.ts`. "Light interactio
 ### 7 Track (40 to 47)
 
 - `taskFiled` 40.2: the lead runs `cast task create` and its transcript shows the task pill.
-- Flyer `work.task` 40.2 to 41.5: the pill falls on a parabola from the desk to the board as the camera makes the biggest swoop, and at `taskLands` 41.6 unfolds into a new top row: status open, `ct-hero1`, the title, the plan pill, an empty assignee, priority high, "now".
+- Flyer `work.task` 40.2 to 41.5: the pill falls on a parabola from the desk to the board as the camera makes the biggest swoop, and at `taskLands` 41.6 unfolds into a new top row: status open, `ct-4182`, the title, the plan pill, an empty assignee, priority high, "now".
 - `taskClaimed` 43.0: the assignee flips to the codex worker, the status crossfades to in progress, and the active-session badge appears.
 - 44.4: the plan's progress bar advances and its graph lights the next wave.
 - Light interaction: clicking status or priority cycles the fixture value.
@@ -212,8 +211,7 @@ Times are film seconds; named cues are in `fixtures/story.ts`. "Light interactio
 ### 13 Anywhere (80 to 84)
 
 - 80.4 to 81.4: the desk's inset: machine chips for macbook and linux-host-1, a tmux attach pill, a browser tab pill over a static screenshot, a `cast computer` command block.
-- 81.4 to 82.3: the camera glides back to the overview; for a moment the world reads as one finished piece of work.
-- 82.4 to 84.0: surfaces flip face-down in reverse flight order, 80ms apart, on `SETTLE`, lifting to translateZ +140 at the apex. Each surface's content resets only while it is face-down (`contentT`), so 84.0 equals 0.0 exactly.
+- The seam: the camera eases home to the opening frame with a small pull-back while the desk window dips out (0.5s), every surface's content resets to t=0 while it is unseen (`contentT`), and the window settles back in (0.75s), so the film's last frame is exactly its first (timeline.ts SEAM).
 
 ## Flyers and arcs
 

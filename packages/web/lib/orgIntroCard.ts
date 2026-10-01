@@ -5,7 +5,7 @@ export const ORG_MEET_TOAST_ID = "org-meet";
 export const ORG_MEET_TITLE = ORG_INTRO_TITLE;
 
 export const ORG_MEET_LINES: readonly [string, string] = [
-  "A chief of staff reads your workspace and proposes the roles it needs.",
+  "A head of people reads your workspace and proposes the roles it needs.",
   "Each role watches one area and brings you only what needs you.",
 ];
 

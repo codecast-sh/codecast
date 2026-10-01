@@ -182,7 +182,7 @@ describe("on the line, hands free", () => {
 
   test("the badge says so, and End and Mute are both there, beside it", () => {
     expect(html).toContain("walkie-stage-locked");
-    expect(html).toContain(">On the line<");
+    expect(html).toContain(">Live<");
     expect(html).toContain("End</button>");
     expect(html).toContain('aria-label="Mute"');
     // A plate, not a box: a soft fill in the ink and no drawn border.
@@ -195,7 +195,7 @@ describe("on the line, hands free", () => {
     const muted = render(live({ mute: true, muted: true, words: words({ locked: true, muted: true, incoming: false }) }));
     // The red Unmute button is the muted mark; the line does not say it twice.
     expect(muted).not.toContain("muted");
-    expect(muted).toContain(">On the line<");
+    expect(muted).toContain(">Live<");
     expect(muted).toContain('aria-label="Unmute"');
     expect(muted).toContain("walkie-strip-mute-on");
     // Muted is the struck icon and the word, in ink: no red on the row.

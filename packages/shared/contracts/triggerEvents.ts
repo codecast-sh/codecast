@@ -69,7 +69,7 @@ export const TRIGGER_EVENT_SHORTHANDS: Record<string, TriggerEventFilter> = {
 export const SESSION_NEEDS_INPUT_EVENT = "session_needs_input";
 
 /**
- * Fired by the area watch for the Chief of Staff, never armed by hand
+ * Fired by the area watch for the Head of People, never armed by hand
  * (docs/architecture/org-staffing.md S29): an area read stuck or overloaded
  * at two checks in a row, or a project with work has no role looking after it.
  */

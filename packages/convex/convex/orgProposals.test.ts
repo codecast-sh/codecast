@@ -545,15 +545,15 @@ describe("supersession", () => {
   });
 });
 
-// A Chief of Staff group: role, routine and adopt in one proposal (S6, S12).
+// A Head of People group: role, routine and adopt in one proposal (S6, S12).
 // The role must not provision a fresh session when its adopt rides in the
 // same proposal: that left two root agents while the note claimed the anchor
 // was adopted. Adopt runs before the routine, which needs the seated session.
 describe("orgProposals.acceptAll seats a role through its adopt, never beside it", () => {
   const group = () => [
-    change({ kind: "role", name: "Chief of Staff", handle: "chief-of-staff", tenure: { kind: "standing" }, reports_to: "me" }),
-    change({ kind: "routine", handle: "chief-of-staff", title: "Company review", prompt: "Run cast org review", every: "7d" }),
-    change({ kind: "adopt", handle: "chief-of-staff", conversation: "jxanaly" }),
+    change({ kind: "role", name: "Head of People", handle: "head-of-people", tenure: { kind: "standing" }, reports_to: "me" }),
+    change({ kind: "routine", handle: "head-of-people", title: "Company review", prompt: "Run cast org review", every: "7d" }),
+    change({ kind: "adopt", handle: "head-of-people", conversation: "jxanaly" }),
   ];
 
   test("role then adopt then routine: one standing session, the adopted one", async () => {
@@ -562,7 +562,7 @@ describe("orgProposals.acceptAll seats a role through its adopt, never beside it
     const out = await performAcceptAll(ctxOf(db), ME as any, { proposal: r.short_id, provision: true });
     expect(out.results.map((x: any) => [x.line.split(" ")[0], x.status])).toEqual([["create", "applied"], ["adopt", "applied"], ["routine", "applied"]]);
     expect(out.results[0].note).toContain("its standing session is the adopt of jxanaly in this proposal");
-    const role = (db as any)._tables.org_roles.find((x: any) => x.handle === "chief-of-staff");
+    const role = (db as any)._tables.org_roles.find((x: any) => x.handle === "head-of-people");
     const standing = (db as any)._tables.conversations.filter((c: any) => String(c.standing_role_id ?? "") === String(role._id));
     expect(standing.map((c: any) => c.short_id)).toEqual(["jxanaly"]);
     const anchors = (db as any)._tables.anchors.filter((a: any) => String(a.org_role_id ?? "") === String(role._id));
@@ -582,13 +582,13 @@ describe("orgProposals.acceptAll seats a role through its adopt, never beside it
     // Accept the role alone: no session yet.
     const role = await performDecideChange(ctx, ME as any, { change_id: String(r.changes[0].id), verdict: "accept", provision: true });
     expect(role.note).toContain("its standing session is the adopt of jxanaly in this proposal");
-    const created = (db as any)._tables.org_roles.find((x: any) => x.handle === "chief-of-staff");
+    const created = (db as any)._tables.org_roles.find((x: any) => x.handle === "head-of-people");
     expect(created.anchor_id).toBeUndefined();
     // Skip the adopt: the seat is provisioned fresh, and the note says why.
     const skip = await performDecideChange(ctx, ME as any, { change_id: String(r.changes[2].id), verdict: "skip", provision: true });
     expect(skip.status).toBe("skipped");
     expect(skip.note).toContain("a fresh standing session was provisioned for it instead");
-    const after = (db as any)._tables.org_roles.find((x: any) => x.handle === "chief-of-staff");
+    const after = (db as any)._tables.org_roles.find((x: any) => x.handle === "head-of-people");
     expect(after.anchor_id).toBeDefined();
     const standing = (db as any)._tables.conversations.filter((c: any) => String(c.standing_role_id ?? "") === String(after._id));
     expect(standing).toHaveLength(1);

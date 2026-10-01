@@ -50,11 +50,11 @@ const row = (_id: string, user_id: string, author_name: string, extra = {}) => (
 const roster = (ids: string[]) => ({ [ROSTER]: { _id: ROSTER, value: ids.map((_id) => ({ _id })) } });
 
 test("current membership and org settings govern old cached feed cards, people and totals", async () => {
-  const cached = [row("mine", ME, "Alexander"), row("gone", "jonathan", "Jonathan"), row("chief", ME, "Chief", { acting_user_id: "chief" })];
+  const cached = [row("mine", ME, "Alexander"), row("gone", "jonathan", "Jonathan"), row("head", ME, "Chief", { acting_user_id: "head" })];
   useInboxStore.setState({
     currentUser: { _id: ME, name: "Alexander" }, clientStateInitialized: true,
     clientState: { ui: { active_team_id: TEAM } }, teams: [{ _id: TEAM, features: { org: true } }],
-    settingsData: roster([ME, "jonathan", "chief"]), sessions: {}, externalEvents: {},
+    settingsData: roster([ME, "jonathan", "head"]), sessions: {}, externalEvents: {},
     feedConversations: { [`${TEAM}|`]: cached }, feedHasMore: { [`${TEAM}|`]: false }, feedCursors: { [`${TEAM}|`]: null },
     pendingInput: { untouched: { text: "keep my draft" } },
   } as any);
@@ -72,7 +72,7 @@ test("current membership and org settings govern old cached feed cards, people a
     };
     await selectPerson("Jonathan");
 
-    await act(async () => useInboxStore.setState({ settingsData: roster([ME, "chief"]) } as any));
+    await act(async () => useInboxStore.setState({ settingsData: roster([ME, "head"]) } as any));
     expect(el.textContent).not.toContain("Jonathan");
     expect(el.textContent).toContain("Chief session");
     expect(el.textContent).toMatch(/2\s*people/);
@@ -87,8 +87,8 @@ test("current membership and org settings govern old cached feed cards, people a
     expect(useInboxStore.getState().pendingInput.untouched).toEqual({ text: "keep my draft" });
 
     await act(async () => useInboxStore.setState({
-      teams: [{ _id: TEAM, features: { org: true } }], settingsData: roster([ME, "chief"]),
-      sessions: { ownRole: { ...row("ownRole", ME, "Own role"), team_id: TEAM, acting_user_id: "chief", is_private: true } },
+      teams: [{ _id: TEAM, features: { org: true } }], settingsData: roster([ME, "head"]),
+      sessions: { ownRole: { ...row("ownRole", ME, "Own role"), team_id: TEAM, acting_user_id: "head", is_private: true } },
     } as any));
     expect(el.textContent).toContain("Own role session");
     await act(async () => useInboxStore.setState({ teams: [{ _id: TEAM, features: { org: false } }] } as any));

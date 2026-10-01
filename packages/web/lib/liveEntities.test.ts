@@ -140,9 +140,9 @@ describe("findEntityInStore", () => {
 // every one of their own sessions counted under the bot.
 describe("derivePeople", () => {
   const HOST = "users_alex";
-  const BOT = "users_chief";
+  const BOT = "users_head";
   const rows = [
-    { user_id: HOST, acting_user_id: BOT, author_name: "Chief of Staff", author_avatar: null },
+    { user_id: HOST, acting_user_id: BOT, author_name: "Head of People", author_avatar: null },
     { user_id: HOST, author_name: "Alexander Green", author_avatar: "a.png" },
     { user_id: HOST, author_name: "Alexander Green", author_avatar: "a.png" },
     { user_id: "users_david", author_name: "David Lu", author_avatar: null },
@@ -151,7 +151,7 @@ describe("derivePeople", () => {
   it("gives the bot its own pill and keeps the host's name and count", () => {
     expect(derivePeople(rows)).toEqual([
       { id: HOST, name: "Alexander Green", image: "a.png", sessions: 2 },
-      { id: BOT, name: "Chief of Staff", image: null, sessions: 1 },
+      { id: BOT, name: "Head of People", image: null, sessions: 1 },
       { id: "users_david", name: "David Lu", image: null, sessions: 1 },
     ]);
   });

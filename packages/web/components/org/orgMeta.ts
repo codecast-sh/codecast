@@ -104,7 +104,7 @@ export function kindLabel(kind: string | undefined): string {
 /** The kind's one sentence, total, with the unknown kind named so the reader
  *  can quote it. */
 export function kindDescription(kind: string | undefined): string {
-  return CHANGE_KIND_META[kind as OrgChange["kind"]]?.describe ?? `This version of codecast does not know this kind of change${kind ? ` ("${kind}")` : ""}. Update codecast, or ask the chief of staff what it does.`;
+  return CHANGE_KIND_META[kind as OrgChange["kind"]]?.describe ?? `This version of codecast does not know this kind of change${kind ? ` ("${kind}")` : ""}. Update codecast, or ask the head of people what it does.`;
 }
 
 /** The one line a change reads as to a person (org-staffing.md S17). The
@@ -147,6 +147,7 @@ export function chipLine(change: OrgChange): string {
     case "initiative": return `+ ${change.title}`;
     case "initiative_projects": return refs(change.projects, "+ ");
     case "initiative_owner": return `owner ${change.owner.startsWith("@") ? at(change.owner) : change.owner}`;
+    case "initiative_shape": return [change.parent === undefined ? "" : change.parent ? `under ${change.parent}` : "top level", change.metrics === undefined ? "" : change.metrics.length ? change.metrics.map((m) => `${m.name} ${m.target}`).join(" \u00b7 ") : "no metric"].filter(Boolean).join(" \u00b7 ");
     default: return changeLine(change);
   }
 }

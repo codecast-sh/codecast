@@ -81,6 +81,9 @@ export type ThreadRow = {
   mine: boolean;
   agent: AgentRef | null;
   event?: string | null;
+  /** The huddle the line was said in (callChat.insertRoomRow); absent while
+   *  it is still sending, or for a line typed with no huddle running. */
+  transcript_id?: string | null;
 };
 
 export type ChatRow = ThreadRow & { event?: null | undefined };
