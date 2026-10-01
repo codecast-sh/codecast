@@ -635,3 +635,88 @@ describe("plan-to-polish workflow (file parse + dry-run)", () => {
     }
   });
 });
+
+// ── Engine upgrades (the-line-end-to-end.md LE14) ────────────────────────────
+
+describe("workflow/runner (LE14: json vars, graph hash, plan ready_tasks)", () => {
+  let tmpDir: string;
+  let cap: ReturnType<typeof captureConsole>;
+  let origFetch: typeof fetch;
+  let calls: Array<{ route: string; body: any }>;
+  let planTasks: any[][];
+
+  beforeEach(() => {
+    tmpDir = makeTmpDir();
+    cap = captureConsole();
+    origFetch = globalThis.fetch;
+    calls = [];
+    planTasks = [];
+    globalThis.fetch = (async (url: any, init: any) => {
+      const route = String(url).replace(/^https?:\/\/[^/]+/, "");
+      calls.push({ route, body: JSON.parse(init?.body || "{}") });
+      if (route === "/cli/plans/get") {
+        const tasks = planTasks.length > 1 ? planTasks.shift()! : planTasks[0] ?? [];
+        return new Response(JSON.stringify({ title: "P", goal: "g", tasks }), { status: 200 });
+      }
+      const body = route === "/cli/workflow-runs/poll-gate" ? { status: "running", gate_response: "A" } : { ok: true };
+      return new Response(JSON.stringify(body), { status: 200 });
+    }) as typeof fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = origFetch;
+    cap.restore();
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  test("a command's JSON stdout routes an edge and expands into the next script", async () => {
+    const g = parseWorkflowSource(`digraph g {
+      start [shape=Mdiamond]
+      scan  [shape=parallelogram, script="echo '{\\"failing\\": 3, \\"name\\": \\"suite\\"}'; echo noise >&2"]
+      many  [shape=parallelogram, script="echo routed-many $scan.json.name"]
+      few   [shape=parallelogram, script="echo routed-few"]
+      exit  [shape=Msquare]
+      start -> scan
+      scan -> many [condition="scan.json.failing >= 2 and outcome = success"]
+      scan -> few  [condition="scan.json.failing < 2"]
+      many -> exit
+      few -> exit
+    }`);
+    expect(await runWorkflow(g, { cwd: tmpDir })).toBe("completed");
+    expect(cap.logs.some(l => l.includes("routed-many suite"))).toBe(true);
+    expect(cap.logs.some(l => l.includes("routed-few"))).toBe(false);
+  });
+
+  test("the run reports a graph hash that ignores formatting but not content", async () => {
+    const { graphHash } = await import("./parser.js");
+    const a = parseWorkflowSource(`digraph g { start [shape=Mdiamond]\n exit [shape=Msquare]\n start -> exit }`);
+    const b = parseWorkflowSource(`digraph g {\n  // same graph\n  start [shape=Mdiamond]\n\n  exit [shape=Msquare]\n  start -> exit\n}`);
+    const c2 = parseWorkflowSource(`digraph g { start [shape=Mdiamond]\n exit [shape=Msquare]\n start -> exit [condition="outcome = success"] }`);
+    expect(graphHash(a)).toBe(graphHash(b));
+    expect(graphHash(a)).not.toBe(graphHash(c2));
+    await runWorkflow(a, { cwd: tmpDir, runId: "run-1", apiToken: "tok", convexSiteUrl: "https://convex.test" });
+    const report = calls.find(c => c.route === "/cli/workflow-runs/progress" && c.body.graph_hash);
+    expect(report?.body.graph_hash).toBe(graphHash(a));
+  });
+
+  test("validateWorkflow reports a malformed condition", () => {
+    const g = parseWorkflowSource(`digraph g { start [shape=Mdiamond]\n exit [shape=Msquare]\n start -> exit [condition="outcome = (success"] }`);
+    expect(validateWorkflow(g).some(e => e.includes("condition"))).toBe(true);
+  });
+
+  test("plan-autopilot loops while ready_tasks > 0 and exits at 0", async () => {
+    const g = parseWorkflowFile(path.resolve(import.meta.dir, "../../workflows/plan-autopilot/workflow.cast"));
+    // Stub the scripts: the routing under test is the check node's.
+    g.nodes.get("dispatch")!.script = "echo dispatched";
+    g.nodes.get("monitor")!.script = "true";
+    const open = { status: "open", short_id: "ct-1" };
+    const done = { status: "done", short_id: "ct-1" };
+    // Initial load, then one refresh per node: the first wave still has a
+    // ready task when check runs, the second does not.
+    planTasks = [[open], [open], [open], [open], [open], [done]];
+    const outcome = await runWorkflow(g, { cwd: tmpDir, planId: "pl-1", runId: "run-1", apiToken: "tok", convexSiteUrl: "https://convex.test" });
+    expect(outcome).toBe("completed");
+    const dispatched = calls.filter(c => c.route === "/cli/workflow-runs/progress" && c.body.node_id === "dispatch" && c.body.node_status === "running");
+    expect(dispatched.length).toBe(2);
+  }, 20000);
+});

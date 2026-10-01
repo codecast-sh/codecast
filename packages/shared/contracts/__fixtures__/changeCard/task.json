@@ -1,0 +1,11 @@
+{
+  "short_id": "ct-56301",
+  "title": "Session titles repeat the first message instead of naming the work",
+  "source": "signal",
+  "cause": { "signal_count": 14, "first_seen": 1758931200000, "sources": ["eval drift", "judge finding", "user report"] },
+  "goal_ref": "in-12.m2",
+  "goal_name": "Inbox scan time under 20 seconds",
+  "goal_why": "A title that repeats the opener makes every row in the inbox look the same, so people open sessions to find out what they are",
+  "risk": "low",
+  "risk_reason": "One prompt, one surface, no schema or code path changes."
+}

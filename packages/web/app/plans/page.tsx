@@ -1,6 +1,6 @@
 "use client";
 
-import { copyToClipboard } from "../../lib/utils";
+import { copyToClipboard, sharePageUrl } from "../../lib/utils";
 import { ShortId } from "../../components/ShortId";
 import { useState, useCallback, useMemo, useRef, type MouseEvent } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
@@ -235,8 +235,7 @@ export default function PlansPage() {
     if (planSource) params.set("source", planSource);
     if (selectedPlan) params.set("plan", selectedPlan);
     const qs = params.toString();
-    const origin = typeof window !== "undefined" ? window.location.origin : "";
-    return `${origin}/plans${qs ? `?${qs}` : ""}`;
+    return sharePageUrl(`/plans${qs ? `?${qs}` : ""}`);
   }, [planSource, selectedPlan]);
   const copyViewLink = useCallback(async () => {
     try {

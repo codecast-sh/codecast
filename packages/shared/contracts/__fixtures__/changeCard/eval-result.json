@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "base": { "ref": "origin/main", "sha": "6420806e2" },
+  "head": { "sha": "a91c03f7b", "dirty": false },
+  "createdAt": "2026-10-02T09:12:00.000Z",
+  "dry": false,
+  "reps": 5,
+  "ok": true,
+  "costUsd": 0.84,
+  "surfaces": [
+    {
+      "surface": "title",
+      "title": "Session title",
+      "separation": "better",
+      "p": 0.004,
+      "base": { "batch": "b-0930", "reps": 5, "passed": 1, "median": 0.4, "mean": 0.42, "costUsd": 0.41 },
+      "branch": { "batch": "b-1002", "reps": 5, "passed": 5, "median": 0.92, "mean": 0.9, "costUsd": 0.43 },
+      "gatesFailed": [],
+      "crashes": 0,
+      "proven": [
+        { "freeze": "fz-1a2b", "passes": true },
+        { "freeze": "fz-3c4d", "passes": true },
+        { "freeze": "fz-5e6f", "passes": true }
+      ],
+      "flips": [
+        {
+          "freeze": "fz-1a2b",
+          "name": "opener is a greeting",
+          "direction": "fixed",
+          "input": "hey can you look at why the deploy keeps failing on railway, it started after the bun upgrade",
+          "before": "Hey can you look at why the deploy keeps failing",
+          "after": "Railway deploy fails after bun upgrade",
+          "note": "Names the problem and where it happens; drops the greeting."
+        },
+        {
+          "freeze": "fz-3c4d",
+          "name": "pasted stack trace",
+          "direction": "fixed",
+          "input": "TypeError: Cannot read properties of undefined (reading 'short_id')\n    at TaskRow (TaskRow.tsx:88)\nthis shows up when I open the board",
+          "before": "TypeError: Cannot read properties of undefined",
+          "after": "Task board crashes on a row without a short id",
+          "note": "Says what breaks for the person, not the exception text."
+        },
+        {
+          "freeze": "fz-5e6f",
+          "name": "long opener with a plan",
+          "direction": "fixed",
+          "input": "I want to move the decision queue to the store. First read how it loads today, then propose the smallest change.",
+          "before": "I want to move the decision queue to the store",
+          "after": "Move the decision queue into the store",
+          "note": "Imperative and short, the way the inbox reads."
+        }
+      ],
+      "ok": true,
+      "reasons": []
+    }
+  ]
+}

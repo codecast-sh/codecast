@@ -13,7 +13,7 @@ describe("org avatars (org-staffing.md S13)", () => {
   test("the default is stable per handle, spreads across the set, and yields to a chosen key", () => {
     expect(defaultAvatarFor("growth")).toBe(defaultAvatarFor("growth"));
     expect(defaultAvatarFor("Growth")).toBe(defaultAvatarFor("growth"));
-    const faces = new Set(["growth", "billing", "chief-of-staff", "platform", "mobile", "infra", "docs", "seo"].map(defaultAvatarFor));
+    const faces = new Set(["growth", "billing", "head-of-people", "platform", "mobile", "infra", "docs", "seo"].map(defaultAvatarFor));
     expect(faces.size).toBeGreaterThan(4);
     expect(avatarOf({ handle: "growth", avatar: AVATAR_KEYS[7] })).toBe(AVATAR_KEYS[7]);
     expect(avatarOf({ handle: "growth", avatar: "not-a-key" })).toBe(defaultAvatarFor("growth"));

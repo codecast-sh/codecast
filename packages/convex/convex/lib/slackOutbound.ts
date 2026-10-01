@@ -8,24 +8,37 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { internal } from "../_generated/api";
-import { linkSendsOutbound, slackSendAuth, type SlackSendAuth } from "./slackMirror";
+import { linkSendsOutbound, slackMemberWriter, slackSendAuth } from "./slackMirror";
 
 export type SlackLink = Doc<"slack_channel_links">;
 // A reader, so a query context and a mutation context both fit.
 type ReadCtx = { db: QueryCtx["db"] };
 
 export async function slackLinksWithSendAuth(ctx: ReadCtx, links: SlackLink[], userId: Id<"users">) {
-  const auth = new Map<string, SlackSendAuth>();
+  // Per installation, once: the viewer's own token and the app's scopes. A DM
+  // link says whether the viewer can post as themselves; a channel link says
+  // which token (if any) may invite and remove people on the Slack side.
+  const tokens = new Map<string, Doc<"slack_user_tokens"> | null>();
+  const installs = new Map<string, Doc<"slack_installations"> | null>();
   for (const link of links) {
-    if (link.kind !== "dm" || auth.has(link.installation_id)) continue;
-    const token = await ctx.db.query("slack_user_tokens")
+    if (tokens.has(link.installation_id)) continue;
+    tokens.set(link.installation_id, await ctx.db.query("slack_user_tokens")
       .withIndex("by_installation_user", (q) => q.eq("installation_id", link.installation_id).eq("user_id", userId))
-      .first();
-    auth.set(link.installation_id, slackSendAuth(token));
+      .first());
+    installs.set(link.installation_id, await ctx.db.get(link.installation_id));
   }
-  return links.map((link) => link.kind === "dm"
-    ? { ...link, viewer_user_id: userId, viewer_slack_auth: auth.get(link.installation_id)! }
-    : link);
+  return links.map((link) => {
+    const token = tokens.get(link.installation_id) ?? null;
+    if (link.kind === "dm") return { ...link, viewer_user_id: userId, viewer_slack_auth: slackSendAuth(token) };
+    return {
+      ...link,
+      member_writer: slackMemberWriter({
+        isPrivate: !!link.slack_channel_private,
+        botScopes: installs.get(link.installation_id)?.scopes,
+        userScopes: token?.scopes,
+      }),
+    };
+  });
 }
 
 export async function slackLinkForChannel(

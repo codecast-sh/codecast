@@ -61,8 +61,8 @@ export async function userCanAdminRole(
 // The one seat per company that reviews the chart (org-staffing.md S6, S12).
 // A leaf constant so anchors.ts and mentionResolve.ts can name the seat
 // without importing orgRoles.ts, which imports both of them.
-import { CHIEF_OF_STAFF_HANDLE } from "@codecast/shared/contracts/orgLead";
-export { CHIEF_OF_STAFF_HANDLE };
+import { HEAD_OF_PEOPLE_HANDLE, LEGACY_HEAD_OF_PEOPLE_HANDLE, isHeadOfPeopleRole } from "@codecast/shared/contracts/orgLead";
+export { HEAD_OF_PEOPLE_HANDLE, isHeadOfPeopleRole };
 
 // A role ref from the CLI is "or-N" or a raw id; the web passes ids.
 export async function resolveRoleRef(ctx: { db: any }, ref: string): Promise<any | null> {
@@ -116,6 +116,25 @@ export async function liveRolesByHandle(ctx: { db: any }, boundary: { team_id?: 
 async function rolesByHandle(ctx: { db: any }, boundary: { team_id?: any; scope_user_id?: any }, handle: string): Promise<any[]> {
   const h = handle.replace(/^@/, "").trim().toLowerCase();
   if (!h || (!boundary.team_id && !boundary.scope_user_id)) return [];
+  const rows = await rowsByExactHandle(ctx, boundary, h);
+  // The Head of People answered to `chief-of-staff` before 2026-10-02
+  // (org-staffing.md S30), and charters, triggers and people still write it.
+  // Written for a boundary where no Chief of Staff (the right hand) carries
+  // the handle, it names the Head of People, under either handle. A row that
+  // carries `chief` is the right hand and keeps the handle for itself.
+  if (h === LEGACY_HEAD_OF_PEOPLE_HANDLE) {
+    const chiefs = rows.filter((r) => r.chief);
+    if (chiefs.length) return chiefs;
+    return [...rows, ...(await rowsByExactHandle(ctx, boundary, HEAD_OF_PEOPLE_HANDLE))].sort((a, b) => a._creationTime - b._creationTime);
+  }
+  if (h === HEAD_OF_PEOPLE_HANDLE) {
+    const legacy = (await rowsByExactHandle(ctx, boundary, LEGACY_HEAD_OF_PEOPLE_HANDLE)).filter((r) => !r.chief);
+    return [...rows, ...legacy].sort((a, b) => a._creationTime - b._creationTime);
+  }
+  return rows;
+}
+
+async function rowsByExactHandle(ctx: { db: any }, boundary: { team_id?: any; scope_user_id?: any }, h: string): Promise<any[]> {
   return boundary.team_id
     ? await ctx.db.query("org_roles").withIndex("by_team_handle", (q: any) => q.eq("team_id", boundary.team_id).eq("handle", h)).collect()
     : await ctx.db.query("org_roles").withIndex("by_scope_user_handle", (q: any) => q.eq("scope_user_id", boundary.scope_user_id).eq("handle", h)).collect();
@@ -134,7 +153,7 @@ export async function roleByHandleForRead(ctx: { db: any }, boundary: { team_id?
   return rows.find((r) => r.status !== "retired") ?? rows[rows.length - 1] ?? null;
 }
 
-// The company's chief of staff, when one stands in the boundary.
-export async function chiefOfStaffIn(ctx: { db: any }, seat: { team_id?: any; scope_user_id?: any }): Promise<any | null> {
-  return liveRoleByHandle(ctx, seat, CHIEF_OF_STAFF_HANDLE);
+// The company's head of people, when one stands in the boundary.
+export async function headOfPeopleIn(ctx: { db: any }, seat: { team_id?: any; scope_user_id?: any }): Promise<any | null> {
+  return liveRoleByHandle(ctx, seat, HEAD_OF_PEOPLE_HANDLE);
 }

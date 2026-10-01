@@ -1,0 +1,26 @@
+{
+  "name": "insight rate-limit-done",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:rate-limit-done"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "insight:rate-limit-done",
+    "title": "insight rate-limit-done"
+  },
+  "asOf": "2026-01-15T14:30:05.000Z",
+  "trigger": {
+    "type": "insight"
+  },
+  "meta": {
+    "surface": "insight",
+    "visibility": "public",
+    "snapshot": "fixtures/insight/rate-limit-done.json"
+  },
+  "judge": "the headline and each turn are supported by the transcript: every ask is the user's, every did item happened",
+  "notes": null,
+  "tags": [],
+  "id": "23d5e903-ec74-4ae8-a08c-9a1d5946c693",
+  "createdAt": "2026-10-01T17:45:03.250Z"
+}

@@ -49,6 +49,58 @@ export async function findSessionCommandByRequest(ctx: DbCtx, userId: Id<"users"
 }
 
 /**
+ * One daemon command as the web's sessionCommands collection holds it. Keyed by
+ * the client's request id when the command carries one, so the row a store
+ * action painted on the click is the row this settles; otherwise by the
+ * command id. Every feed of that collection projects through here.
+ */
+export function sessionCommandRow(command: Doc<"daemon_commands">) {
+  return {
+    _id: command.request_id ?? command._id,
+    command_id: command._id,
+    conversation_id: extractDaemonCommandConversationId(command.args),
+    command: command.command,
+    device_id: command.target_device_id ?? null,
+    requested_at: command.created_at,
+    executed_at: command.executed_at ?? null,
+    result: command.result ?? null,
+    error: command.error ?? null,
+  };
+}
+
+// The commands that narrate a restart or a device move, newest last.
+const CONVERSATION_PROGRESS_COMMANDS = new Set(["kill_session", "resume_session", "move_to_device"]);
+
+/**
+ * The last few kill/resume/move commands for one conversation: the restart
+ * ladder and a move's transfer are several rows, and a remote move's resume is
+ * enqueued later by the source daemon, so a request id alone cannot follow
+ * them. Restart commands are stamped with the RUNNER's user_id
+ * (enqueueKillAndResume), so a second-party owner scans the runner's rows;
+ * anyone else scans their own and sees nothing for a conversation they cannot
+ * command.
+ */
+export async function recentConversationCommands(ctx: DbCtx, userId: Id<"users">, conversationId: string): Promise<Doc<"daemon_commands">[]> {
+  let scanUserId = userId;
+  const convId = ctx.db.normalizeId("conversations", conversationId);
+  if (convId) {
+    const conv = await ctx.db.get(convId);
+    if (conv && conv.owner_user_id === userId && conv.user_id !== userId) scanUserId = conv.user_id;
+  }
+  const pending = await ctx.db.query("daemon_commands")
+    .withIndex("by_user_pending", (q: any) => q.eq("user_id", scanUserId).eq("executed_at", undefined))
+    .collect();
+  const executed = await ctx.db.query("daemon_commands")
+    .withIndex("by_user_pending", (q: any) => q.eq("user_id", scanUserId).gt("executed_at", 0))
+    .order("desc")
+    .take(50);
+  return [...pending, ...executed]
+    .filter((c: any) => CONVERSATION_PROGRESS_COMMANDS.has(c.command) && extractDaemonCommandConversationId(c.args) === conversationId)
+    .sort((a: any, b: any) => a.created_at - b.created_at)
+    .slice(-6);
+}
+
+/**
  * Ask the session's daemon to bring its agent back up, without killing anything
  * first. The one writer for every resume-only caller: the web's Resume button
  * (users.resumeSession), the store dispatch (dispatch.resumeSession), and

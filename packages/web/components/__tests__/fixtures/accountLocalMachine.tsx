@@ -44,7 +44,6 @@ export function createAccountClient() {
         { command_id: "other-command", device_id: otherDevice.device_id },
         { command_id: "local-command", device_id: localDevice.device_id },
       ] };
-      if (name === "accountSwitch:requestAccountSwitch") return { command_ids: ["switch-command"] };
       return {};
     },
     query: async (_ref: any, args: any) => ({ executed_at: 1, result: JSON.stringify({
@@ -55,6 +54,13 @@ export function createAccountClient() {
     }) }),
     watchQuery: () => ({ onUpdate: () => () => {}, localQueryResult: () => undefined, journal: () => undefined }),
   };
+  // An account switch rides the store's dispatch (requestAccountSwitch side
+  // effect), recorded here as the mutation it lands as.
+  useInboxStore.getState()._setDispatch(async (action: string, args: any[]) => {
+    if (action !== "requestAccountSwitch") return {};
+    mutations.push({ name: "accountSwitch:requestAccountSwitch", args: args[1] });
+    return { command_ids: ["switch-command"] };
+  });
   return {
     client: client as unknown as ConvexReactClient,
     mutations,

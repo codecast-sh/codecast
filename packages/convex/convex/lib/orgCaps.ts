@@ -14,7 +14,9 @@ export function utcDay(now: number): string {
   return new Date(now).toISOString().slice(0, 10);
 }
 
-export type RoleCounters = { day: string; hands: number; wakes: number; tokens: number };
+// `merges` (the-line.md L12) is counted only once a line merges, so a row
+// written before it has none and reads as zero.
+export type RoleCounters = { day: string; hands: number; wakes: number; tokens: number; merges?: number };
 
 // Today's counters, reset when the stored day is not today. Every reader and
 // writer of `counters` goes through this so a stale row never leaks yesterday.

@@ -108,7 +108,7 @@ export function ownerSeat(tree: OrgTree | null, owner: InitiativeOwner | undefin
   }
   // A person's anchor: one they host that no role holds, else the workspace's
   // root seat when they host it (org-staffing.md S16: the root agent is the
-  // chief of staff once seated, and it answers to its host).
+  // head of people once seated, and it answers to its host).
   const own = tree.anchors.find((a) => !a.org_role_id && a.host_user_id === owner.user_id);
   const root = own ? null : scopeSeatOf(tree, "workspace").anchor;
   const anchor = own ?? (root && root.host_user_id === owner.user_id ? root : null);

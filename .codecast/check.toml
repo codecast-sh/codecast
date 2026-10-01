@@ -9,3 +9,9 @@ cli = "packages/cli/tsconfig.typecheck.json"
 web = "packages/web/tsconfig.json"
 convex = "packages/convex/convex/tsconfig.json"
 mobile = "packages/mobile/tsconfig.json"
+# The multiplayer sim harness plus the legacy store sims, with bun types
+# (docs/architecture/multiplayer-sim-harness.md section 3.10).
+sim = "packages/web/store/__tests__/sim/tsconfig.json"
+# The eval home (docs/architecture/evals-home.md): its own code plus the
+# convex and cli files the surfaces import.
+evals = "packages/evals/tsconfig.json"
