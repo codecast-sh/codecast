@@ -572,6 +572,18 @@ function shadowEnabled(): boolean {
     return false;
   }
 }
+// The multiplayer simulator's per-window seam (store/__tests__/sim/windowSlots.ts):
+// each slot reads the binding, swaps in another window's value, or makes the
+// value a fresh window starts with. Tests only; production never calls it.
+export function __changeFeedSimSlots() {
+  return {
+    cargoSupported: { get: () => cargoSupported, set: (v: boolean) => { cargoSupported = v; }, fresh: () => true },
+    applyTally: { get: () => applyTally, set: (v: { direct: number; refetch: number }) => { applyTally = v; }, fresh: () => ({ direct: 0, refetch: 0 }) },
+    flushTimer: { get: () => flushTimer, set: (v: ReturnType<typeof setTimeout> | null) => { flushTimer = v; }, fresh: () => null as ReturnType<typeof setTimeout> | null },
+    shadowApplied: { get: () => shadowApplied, set: (v: Set<string> | null) => { shadowApplied = v; }, fresh: () => null as Set<string> | null },
+  };
+}
+
 async function shadowCompare(convex: any, runStart: number): Promise<void> {
   if (!shadowEnabled()) {
     shadowApplied = null;

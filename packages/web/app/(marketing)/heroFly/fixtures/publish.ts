@@ -5,27 +5,25 @@
  *
  * The beat: the lead session answers with a canvas (the retry report as a
  * chart), runs `cast publish`, and the report becomes the page
- * codecast.sh/a/webhook-retries with two viewer comments on it. The page
+ * codecast.sh/a/webhook-retries, and two teammates comment on it. The page
  * itself is built ahead of time by scripts/hero-page.ts from PAGE.
  */
 
 import type { EntityFixture } from "@/lib/entityDisplay";
-import { CUES, MIN, OBJECTS, SESSIONS } from "./story";
+import { CUES, MIN, OBJECTS, PEOPLE, SESSIONS } from "./story";
 
-/** Film-time cues inside the chapter (the camera holds 69.0 to 73.4). */
+/** Film-time cues inside the chapter (the camera holds 69.1 to 73.9). */
 export const PUBLISH = {
-  reply: 68.2,
-  command: 69.0,
+  /** The canvas reply is in place as the camera sets off from the PR (66.9), so the page turns over onto it. */
+  reply: 67.0,
+  command: 69.7,
   published: CUES.published,
-  /** The iframe mounts just before the card lands, so the page has loaded under it. */
-  frame: CUES.published - 0.6,
-  comments: 71.0,
 } as const;
 
 /** The report, as the generated page and the canvas both tell it. */
 export const PAGE = {
   ...OBJECTS.page,
-  author: "Ashot Petrosian",
+  author: PEOPLE.me.name,
   views: 14,
   session: { id: SESSIONS.lead.id, shortId: SESSIONS.lead.shortId, title: SESSIONS.lead.title },
   attempts: [
@@ -56,7 +54,7 @@ const bars = PAGE.attempts
   })
   .join("");
 
-export const CANVAS = `<div data-canvas-title="Webhook retries, 7 days on staging" style="display:grid;gap:12px;font-family:inherit">
+export const CANVAS = `<div data-canvas-title="Webhook retries, last 24h replayed on staging" style="display:grid;gap:12px;font-family:inherit">
 <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
 <div style="padding:8px 10px;border:1px solid var(--sol-border);border-radius:8px"><div style="font-size:18px;font-weight:600;color:var(--sol-green)">0</div><div style="font-size:11px;color:var(--sol-text-muted)">events dropped</div></div>
 <div style="padding:8px 10px;border:1px solid var(--sol-border);border-radius:8px"><div style="font-size:18px;font-weight:600;color:var(--sol-text)">99.98%</div><div style="font-size:11px;color:var(--sol-text-muted)">delivered</div></div>
@@ -67,7 +65,7 @@ export const CANVAS = `<div data-canvas-title="Webhook retries, 7 days on stagin
 
 export const REPLY = {
   ago: 2 * MIN,
-  content: `Here is the week on staging. Every failed delivery recovered, most on the first retry.\n\n\`\`\`cast-canvas\n${CANVAS}\n\`\`\``,
+  content: `I replayed the last 24 hours of failed deliveries on staging. Every one recovered, most on the first retry.\n\n\`\`\`cast-canvas\n${CANVAS}\n\`\`\``,
   command: `cast publish report.html --title "${PAGE.title}"`,
   output: `Published ${PAGE.title}\nhttps://${PAGE.url}`,
 };

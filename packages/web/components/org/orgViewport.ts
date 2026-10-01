@@ -36,6 +36,9 @@ export function computeOrgViewport(
    *  is not refitted around it: only the pan changes. */
   focusTarget?: { id: string; zoom?: number } | null,
   panelHeight = 0,
+  /** The least zoom the fit settles for before it shows the roots alone. The
+   *  health map draws structure only, so it fits the whole tree smaller. */
+  readableZoom = MIN_READABLE_ZOOM,
 ): { x: number; y: number; zoom: number; whole: boolean } | null {
   const all = boundsOf(nodes);
   if (!all || width <= 0 || height <= 0) return null;
@@ -44,7 +47,7 @@ export function computeOrgViewport(
   let zoom = Math.min(1, freeW / all.w, freeH / all.h);
   const focus = focusTarget ? nodes.find((n) => n.id === focusTarget.id) : undefined;
   if (focus) {
-    const z = focusTarget?.zoom ?? Math.max(zoom, MIN_READABLE_ZOOM);
+    const z = focusTarget?.zoom ?? Math.max(zoom, readableZoom);
     return {
       x: FIT_PAD + (freeW - focus.w * z) / 2 - focus.x * z,
       y: FIT_PAD + (freeH - focus.h * z) / 2 - focus.y * z,
@@ -54,11 +57,11 @@ export function computeOrgViewport(
   }
   let target = all;
   let whole = true;
-  if (zoom < MIN_READABLE_ZOOM) {
+  if (zoom < readableZoom) {
     const roots = boundsOf(nodes.filter((n) => ROOT_KINDS.has(n.kind))) ?? all;
     target = roots;
     whole = false;
-    zoom = Math.max(MIN_READABLE_ZOOM, Math.min(1, freeW / roots.w));
+    zoom = Math.max(readableZoom, Math.min(1, freeW / roots.w));
   }
   const tw = target.w * zoom;
   let x: number;

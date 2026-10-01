@@ -275,12 +275,15 @@ export class Net {
 **`packages/shared/contracts/__fixtures__/teamWorldGen.ts`** is pure data with no convex imports.
 
 ```ts
-export interface TeamWorldSpec { users: string[]; teams: { name: string; members: string[]; org?: boolean }[]; rowsPerUser: number; seed: number; }
-export function genTeamWorld(spec): { users: Row[]; teams: Row[]; team_memberships: Row[]; perUser: Record<string, GenWorld> }
+export interface TeamWorldSpec { users: string[]; teams: { name: string; members: string[]; features?: TeamFeatures }[]; rowsPerUser: number; seed: number; epoch: number; }
+export function genTeamWorld(spec): { users: WorldRow[]; teams: WorldRow[]; team_memberships: WorldRow[]; perUser: Record<string, GenWorld> }
+export const userIdFor, teamIdFor, membershipIdFor;  // convexIdFor("user:<name>"), ("team:<name>"), ("member:<team>:<user>")
 ```
 
-- It calls `genWorld(seed * 16 + userIndex, rowsPerUser)` per user, and `genWorld` itself is unchanged.
-- User and team ids come from `convexIdFor("user:<name>")` and `convexIdFor("team:<name>")`.
+- It calls `genWorld(seed * 16 + userIndex, rowsPerUser, epoch, userIdFor(name))` per user, and `genWorld` itself is unchanged. `epoch` is the `inboxEpoch` minute the sessions are dated against. At most 16 users, so per-user seeds stay disjoint.
+- User and team ids come from `convexIdFor("user:<name>")` and `convexIdFor("team:<name>")`. Two names that mint one id throw.
+- A team's first listed member is its admin and the rest are members, as `teams.create` and `teams.join` write them. A user's first team becomes its `team_id` and `active_team_id`. Members join before the oldest generated session starts.
+- `features` is the team row's flag object (`TeamFeatures` from `contracts/teamFeatures.ts`). Scenarios that use team chat need `chat: true`, and role scenarios need `org: true`.
 
 **`sim/world.ts`** has three parts.
 
@@ -294,7 +297,7 @@ export function genTeamWorld(spec): { users: Row[]; teams: Row[]; team_membershi
 1. Insert users, teams and memberships as rows. Team membership inserts go through `makeChangeTrackedDb`, so `scope_added` rows exist.
 2. Insert the per-user conversations and messages as rows. Then patch each through the real `patchConversationVisibility`, which gives real `workspace` keys and access stamps.
 3. Create tasks, docs and plans through their real create mutations.
-4. Provision anchors and org roles through `provisionStandingAgent` via `runInternal` when that runs cleanly over the fake db. Otherwise use seeded rows with a comment naming the blocker. The org flag goes on the team row.
+4. Provision anchors and org roles through `provisionStandingAgent` via `runInternal` when that runs cleanly over the fake db. Otherwise use seeded rows with a comment naming the blocker. The org and chat flags go on the team row through the spec's `features`.
 5. Seed `api_tokens` with `hashToken` from `@platform/auth/convex`.
 6. The genesis gate: `runInternal("teamScopeSweep:sweepPage", { apply: false })` must return zero findings, and `writes()` must be unchanged by the sweep.
 
@@ -468,6 +471,7 @@ It is used only for real OCC, real scheduler timing, HTTP routes, the prod error
 | Path | Unit | What |
 |---|---|---|
 | packages/convex/convex/testDb.ts | U1 | additive options (section 3.2) |
+| packages/shared/package.json | U4 | `exports` entry for `contracts/__fixtures__/teamWorldGen`, so web's `sim/world.ts` can import it by package name |
 | packages/web/store/inboxStore.ts | U2 | `export const __createInboxStoreForTests = createInboxStore`; `export function freshInboxData()` built from `INITIAL_INBOX_DATA` via `cloneInitialValue`, which `clearProtectedInboxMemory` uses; `export function __inboxStoreSimSlots()` returning get/set for the `window` bindings and a reset for the `memo` bindings listed in 3.3 |
 | packages/web/store/gestureBridge.ts | U2 | `__gestureBridgeSimSlots()` for `sourceToken` |
 | packages/web/store/syncTransaction.ts | U2 | `__syncTransactionIdleForTests(): boolean` |
@@ -539,7 +543,7 @@ Acceptance:
 
 **U4 Team world generator.** `teamWorldGen.ts` and its test.
 
-What it builds: section 3.6. The test pins `sha256(JSON.stringify(genWorld(s, 45)))` for the seeds used by the legacy suites (21-32, 81-92, and the convergence seeds). Capture the hashes before writing the generator. It also asserts that no two users' conversation ids or tags collide across seeds 1-50.
+What it builds: section 3.6. The test pins `sha256(JSON.stringify(genWorld(s, n, inboxEpoch(1_800_000_000_000), me)))` for every seed the legacy suites use: the web sims' `seededWorld` seeds (11, 21-32, 71, 72, 81-92, 101, 102, 111) at 45 rows with `me = "u" x 32`, and the convex convergence seeds (500-513 at 90 rows, 77 at 10, 9 at 40) with `me = "users_me"`. Rows draw from one stream in order, so a smaller count is a prefix of the pinned one. Capture the hashes before writing the generator. It also asserts that no two users' conversation ids or tags collide across seeds 1-50.
 
 Acceptance: `cd packages/shared && bun test contracts/__fixtures__/teamWorldGen.test.ts` passes, and `git diff --stat packages/shared/contracts/__fixtures__/inboxProjectionGen.ts` is empty.
 

@@ -11,7 +11,7 @@
 
 import { useState } from "react";
 import { ChevronDown, ExternalLink, KeyRound, Loader2 } from "lucide-react";
-import { CLOUD_AGENT_ACTIONS, CLOUD_AGENT_PROVIDERS, CLOUD_AGENT_RETRIED_SUFFIX, cloudAgentProviderForSyncSource, type CloudAgentProviderSpec } from "@codecast/shared/contracts";
+import { CLOUD_AGENT_ACTIONS, CLOUD_AGENT_PROVIDERS, CLOUD_AGENT_RETRIED_SUFFIX, cloudAgentOtherLanes, cloudAgentProviderForSyncSource, isCloudAgentRepoCard, type CloudAgentProviderSpec } from "@codecast/shared/contracts";
 import { AgentTypeIcon } from "../AgentTypeIcon";
 import { useLiveSessionMeta } from "../../hooks/useLiveSessionMeta";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "../ui/dropdown-menu";
@@ -19,6 +19,11 @@ import { useInboxStore } from "../../store/inboxStore";
 import { convHasPendingSend } from "../../store/inboxOverlays";
 import { cloudAgentUi } from "./providerUi";
 import { machineName, useCloudAgentStatus } from "./machine";
+import { heldSends, moveHeldToLane } from "./lanes";
+import { CloudAgentRepoAccessLink } from "./parts";
+
+export { CloudAgentConnectedSync, CloudAgentRepoAccessLink } from "./parts";
+import type { ServerPendingStatus } from "../../lib/pendingBanner";
 import type { CloudAgentActions } from "./sessionAgent";
 
 /** What waits on a setup problem that is not a credential. */
@@ -26,19 +31,17 @@ const UNTIL_FIXED = "this is fixed";
 
 /**
  * A setup card's sentence (cloudAgentSetupCard) without the retry clause the
- * card's own line says, and the page it names where access is given as a link.
+ * card's own line says, and the page it names where access is given as a
+ * named link.
  */
 export function CloudAgentSetupText({ spec, message }: { spec: CloudAgentProviderSpec; message: string }) {
   const text = message.trim().replace(CLOUD_AGENT_RETRIED_SUFFIX, ".");
   const at = text.indexOf(spec.repoAccessUrl);
   if (at < 0) return <>{text}</>;
-  const page = new URL(spec.repoAccessUrl);
   return (
     <>
       {text.slice(0, at)}
-      <a href={spec.repoAccessUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 underline decoration-dotted underline-offset-2 hover:opacity-80">
-        {page.host}{page.pathname} <ExternalLink className="h-3 w-3" aria-hidden />
-      </a>
+      <CloudAgentRepoAccessLink spec={spec} />
       {text.slice(at + spec.repoAccessUrl.length)}
     </>
   );
@@ -52,9 +55,36 @@ export function CloudAgentSetupText({ spec, message }: { spec: CloudAgentProvide
  */
 export function CloudAgentHeldNote({ spec, credential, conversationId }: { spec: CloudAgentProviderSpec; credential: boolean; conversationId?: string }) {
   const { device } = useCloudAgentStatus(spec, useLiveSessionMeta(conversationId)?.ownerDeviceId);
-  const held = useInboxStore((s) => !!conversationId && convHasPendingSend(s.pendingMessages[conversationId]));
+  // Sent from this window, or held on the server whichever surface sent it (a CLI spawn, another tab).
+  const held = useInboxStore((s) => !!conversationId && (convHasPendingSend(s.pendingMessages[conversationId]) || heldSends(s.pendingMessageStatus?.[conversationId] as ServerPendingStatus | undefined).length > 0));
   const until = credential ? cloudAgentUi(spec).heldUntil(machineName(device)) : UNTIL_FIXED;
   return held ? <>Your message is held and goes out on its own as soon as {until}.</> : <>Nothing is held now: send your message again once {until}.</>;
+}
+
+/**
+ * On a repository card, while the message is held: start it on the
+ * vendor's other lane instead (the Agents API cannot clone a private
+ * repository; Codex Cloud on the ChatGPT plan can). The held message moves to
+ * a new session there, in the same folder and from the same machine.
+ */
+export function CloudAgentLaneSwitch({ spec, message, conversationId }: { spec: CloudAgentProviderSpec; message: string; conversationId?: string }) {
+  const held = useInboxStore((s) => !!conversationId && heldSends(s.pendingMessageStatus?.[conversationId] as ServerPendingStatus | undefined).length > 0);
+  if (!conversationId || !held || !isCloudAgentRepoCard(spec, message)) return null;
+  return (
+    <>
+      {cloudAgentOtherLanes(spec).map((lane) => (
+        <button
+          key={lane.id}
+          type="button"
+          onClick={() => moveHeldToLane(conversationId, lane)}
+          title={`${lane.label}: ${lane.lane!.detail}`}
+          className="inline-flex items-center gap-1 rounded border border-sol-violet/40 bg-sol-violet/10 px-1.5 py-0.5 text-[10px] font-medium text-sol-violet transition-colors hover:bg-sol-violet/20"
+        >
+          Start on {lane.lane!.label} instead
+        </button>
+      ))}
+    </>
+  );
 }
 
 /** A small control that opens the provider's connect dialog. */
@@ -121,10 +151,10 @@ export function CloudAgentSyncConnect({ source }: { source: string }) {
   return <ConnectCloudAgentButton spec={spec} label={connected ? `${cloudAgentUi(spec).connectName} connected` : undefined} />;
 }
 
-/** The provider's page for a session's agent, and where it opens. */
-function agentPage(spec: CloudAgentProviderSpec, agentId: string): { href: string; host: string } {
-  const href = spec.agentUrl(agentId);
-  return { href, host: new URL(href).host };
+/** The provider's page for a session's agent, and where it opens; null when the provider has no page per agent. */
+function agentPage(spec: CloudAgentProviderSpec, agentId: string): { href: string; host: string } | null {
+  const href = spec.agentUrl?.(agentId);
+  return href ? { href, host: new URL(href).host } : null;
 }
 
 /**
@@ -144,14 +174,16 @@ const ROW_STYLES = {
 function ActionRows({ actions, style }: { actions: CloudAgentActions; style: keyof typeof ROW_STYLES }) {
   const { cloud, items, run, pending } = actions;
   if (!cloud?.agentId) return null;
-  const { href, host } = agentPage(cloud.spec, cloud.agentId);
+  const page = agentPage(cloud.spec, cloud.agentId);
   const row = ROW_STYLES[style];
   return (
     <>
-      <DropdownMenuItem onSelect={() => window.open(href, "_blank", "noopener")} className={row.item}>
-        <ExternalLink className={row.icon} />
-        Open on {host}
-      </DropdownMenuItem>
+      {page && (
+        <DropdownMenuItem onSelect={() => window.open(page.href, "_blank", "noopener")} className={row.item}>
+          <ExternalLink className={row.icon} />
+          Open on {page.host}
+        </DropdownMenuItem>
+      )}
       {items.map(({ action, label, title, Icon, disabledReason }) => (
         <DropdownMenuItem key={action} disabled={!!pending || !!disabledReason} onSelect={() => void run(action)} title={title} className={`items-start ${row.item}`}>
           {pending === action ? <Loader2 className={`mt-px shrink-0 animate-spin ${row.icon}`} /> : <Icon className={`mt-px shrink-0 ${row.icon}`} />}
@@ -165,9 +197,9 @@ function ActionRows({ actions, style }: { actions: CloudAgentActions; style: key
   );
 }
 
-/** The session menu's rows for a cloud agent session (ActionRows under the provider's name). Nothing for a local session. */
+/** The session menu's rows for a cloud agent session (ActionRows under the provider's name). Nothing for a local session, or for an agent with no page and no actions. */
 export function CloudAgentMenuItems({ actions }: { actions: CloudAgentActions }) {
-  if (!actions.cloud?.agentId) return null;
+  if (!actions.cloud?.agentId || (!actions.cloud.spec.agentUrl && !actions.items.length)) return null;
   return (
     <>
       <DropdownMenuSeparator />
@@ -199,10 +231,11 @@ export function CloudAgentLink({ actions }: { actions: CloudAgentActions }) {
   if (!agentId) {
     return <span title={`This session runs on ${spec.label}: its agent starts when the first message goes out`} className={CHIP}>{name}</span>;
   }
-  const { href, host } = agentPage(spec, agentId);
+  const page = agentPage(spec, agentId);
   if (!items.length) {
+    if (!page) return <span title={`${spec.label} runs this session. ${spec.vendor} has no page for a single session, so there is nothing to open.`} className={CHIP}>{name}</span>;
     return (
-      <a href={href} target="_blank" rel="noreferrer" title={`This session runs as a ${spec.label} agent: open it on ${host}`} className={`${CHIP} hover:bg-sol-violet/10`}>
+      <a href={page.href} target="_blank" rel="noreferrer" title={`This session runs as a ${spec.label} agent: open it on ${page.host}`} className={`${CHIP} hover:bg-sol-violet/10`}>
         {name}
         <ExternalLink className="h-2.5 w-2.5" aria-hidden />
       </a>

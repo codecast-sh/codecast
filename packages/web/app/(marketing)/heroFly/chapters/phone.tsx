@@ -1,9 +1,10 @@
 "use client";
 
 /**
- * Chapter 4, Approve: the API worker's ask as the desk's permission stack, and
- * on the phone as the daemon's push on the lock screen that opens into the
- * app's notification row and permission card. Approve works on both, locally.
+ * Chapter 4, Approve: the API worker's ask as the permission stack at the
+ * foot of its own conversation, and on the phone as the daemon's push on the
+ * lock screen that opens into the app's notification row and permission
+ * card. Approve works on both, locally.
  */
 
 import { useState } from "react";
@@ -11,9 +12,10 @@ import { LogoIcon } from "@/components/Logo";
 import { PermissionStackView } from "@/components/PermissionCard";
 import { PhonePermissionCard } from "@/components/PhonePermissionCard";
 import { NotificationRow } from "@/components/notifications/NotificationRow";
-import { NOTIFICATIONS, PERMISSION, PUSH } from "../fixtures/phone";
-import { CUES } from "../fixtures/story";
+import { EARLIER, NOTIFICATIONS, PERMISSION, PUSH } from "../fixtures/phone";
+import { CUES, SESSIONS } from "../fixtures/story";
 import { fly, useFilmTime } from "../filmClock";
+import { Veil } from "../film";
 import { PHONE_AT } from "./phone.motion";
 import type { PartProps } from "./contract";
 
@@ -32,14 +34,17 @@ function useLocalAnswer(): [Answer, () => void] {
   return [answer, respond];
 }
 
+/** Allow all is a Claude Code permission mode; the conversation offers it to no other agent. */
+const offersAllowAll = (agent: string) => agent === "claude_code";
+
 const filmAnswer = (t: number): Answer => (t < PHONE_AT.tap ? 0 : t < PHONE_AT.gone ? 1 : 2);
 
-function DeskPermissionAsk() {
+function WorkerPermissionAsk() {
   const [local, respond] = useLocalAnswer();
   const answer = Math.max(useFilmTime(filmAnswer), local);
   if (answer === 2) return null;
   return (
-    <div {...fly("desk/phone.stack")} data-hero-live="" className="border-t border-sol-border/40 px-4 py-1.5">
+    <div {...fly("pairA/phone.stack")} data-hero-live="" className="border-t border-sol-border/40 px-3 py-1.5">
       <PermissionStackView
         pending={[PERMISSION]}
         inflight={new Set(answer === 1 ? [PERMISSION._id] : [])}
@@ -47,16 +52,21 @@ function DeskPermissionAsk() {
         onDeny={respond}
         onApproveAll={respond}
         onDenyAll={respond}
-        onAllowAll={respond}
+        onAllowAll={offersAllowAll(SESSIONS.api.agent) ? respond : undefined}
       />
     </div>
   );
 }
 
-/** The lead's transcript foot while the worker waits on permission. A new ask (the next loop) starts fresh. */
-export function DeskPermission() {
+/** The API worker's transcript foot while it waits on permission. A new ask (the next loop) starts fresh. */
+export function WorkerPermission() {
   const asked = useFilmTime((t) => t >= CUES.permissionAsk);
-  return asked ? <DeskPermissionAsk /> : null;
+  return asked ? <WorkerPermissionAsk /> : null;
+}
+
+/** The dashboard worker steps back while the camera frames the API worker's ask. */
+export function PairVeil() {
+  return <Veil id="pairB/phone.veil" />;
 }
 
 /** The daemon's push as iOS shows it: the app's icon, the push title and body. */
@@ -66,15 +76,15 @@ function PushBannerCard() {
       className="flex items-start gap-2.5 rounded-[18px] bg-[#2a3135]/95 px-3 py-2.5 text-white shadow-[0_10px_30px_rgba(0,0,0,0.45)]"
       style={{ fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" }}
     >
-      <span className="mt-0.5 flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-[9px] bg-[#002b36]">
+      <span className="mt-0.5 flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-[9px] bg-[#fdf6e3]">
         <LogoIcon size={22} />
       </span>
       <span className="min-w-0 flex-1">
         <span className="flex items-baseline gap-2">
-          <span className="truncate text-[13px] font-semibold leading-tight">{PUSH.title}</span>
-          <span className="ml-auto shrink-0 text-[11px] text-white/55">now</span>
+          <span className="text-[13px] font-semibold leading-tight">{PUSH.title}</span>
+          <span className="ml-auto shrink-0 self-start text-[11px] text-white/55">now</span>
         </span>
-        <span className="mt-0.5 block truncate text-[13px] leading-snug text-white/85">{PUSH.body}</span>
+        <span className="mt-0.5 block text-[13px] leading-snug text-white/85">{PUSH.body}</span>
       </span>
     </div>
   );
@@ -112,7 +122,8 @@ function PhoneApp({ now }: PartProps) {
   const answer = Math.max(useFilmTime(filmAnswer), local);
   const done = useFilmTime((t) => t >= PHONE_AT.done);
   return (
-    <div {...fly("phone/phone.app")} className="absolute inset-0 flex flex-col bg-sol-bg pt-1">
+    // At phone width a row's agent name would wrap mid-word ("cod / ex"); the app's rows keep it whole.
+    <div {...fly("phone/phone.app")} className="absolute inset-0 flex flex-col bg-sol-bg pt-1 [&_span.font-medium]:shrink-0 [&_span.font-medium]:whitespace-nowrap">
       {done && (
         <div {...fly("phone/phone.done")}>
           <NotificationRow notification={{ ...NOTIFICATIONS.done, created_at: now - NOTIFICATIONS.done.ago, read: false }} onOpen={noop} />
@@ -132,6 +143,9 @@ function PhoneApp({ now }: PartProps) {
           />
         </div>
       )}
+      {EARLIER.map((n) => (
+        <NotificationRow key={n._id} notification={{ ...n, created_at: now - n.ago, read: true }} onOpen={noop} />
+      ))}
     </div>
   );
 }
@@ -143,7 +157,8 @@ export function PhoneScreen({ now }: PartProps) {
     <div className="relative h-full">
       <LockScreen now={now} />
       <PhoneApp key={asked ? "asked" : "idle"} now={now} />
-      <div {...fly("phone/phone.banner")} className="absolute inset-x-2 top-2">
+      {/* Under the clock, where iOS stacks a new notification on the lock screen. */}
+      <div {...fly("phone/phone.banner")} className="absolute inset-x-2 top-[150px]">
         <PushBannerCard />
       </div>
     </div>

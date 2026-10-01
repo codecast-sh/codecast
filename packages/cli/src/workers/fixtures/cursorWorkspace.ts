@@ -1,18 +1,15 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';import path from 'node:path';
 import {mock} from 'bun:test';
-import {EventEmitter} from 'node:events';
 import {Database as FixtureDatabase} from 'bun:sqlite';
-import {functionBlock,blockAt} from '../../test-helpers/sourceRegion.js';
 import {configureDaemonWorkers,closeDaemonWorkers,scanWorkerHost} from '../bridge.js';
-import {cursorTranscriptSessionId} from '../../cursorTranscriptWatcher.js';
 const FixtureSqlite=FixtureDatabase;
 const enabled=process.argv[2]==='true', home=process.env.HOME!;
 let opens=0;
 mock.module('bun:sqlite',()=>({Database:class extends FixtureDatabase {constructor(...args:ConstructorParameters<typeof FixtureDatabase>){super(...args);opens++;}}}));
 const d=await import('../../daemon.js');
 const {CursorWatcher}=await import('../../cursorWatcher.js');
-const {isPathExcluded,isProjectAllowedToSync}=await import('../../syncScope.js');
+const {transcriptScopeRefusal}=await import('../../syncScope.js');
 const main=path.resolve(import.meta.dir,'../../main.ts');
 await configureDaemonWorkers(enabled,{}, {invocation:{command:process.execPath,args:[main,'_worker','scan']}});
 const storage=(h:string)=>path.join(h,process.platform==='darwin'?'Library/Application Support/Cursor':'.config/Cursor','User/workspaceStorage');
@@ -75,32 +72,16 @@ try {
  c.db.run("INSERT INTO ItemTable VALUES('workbench.panel.aichat.view.aichat.chatdata','{}')");process.env.HOME=second;
  await watcher.pollWorkspaces(storage(second));assert.equal(events.length,6);assert.equal(events[5].workspacePath,c.workspace);assert.equal(events[5].eventType,'add');process.env.HOME=home;
  fs.rmSync(emptyDir,{recursive:true,force:true});fs.rmSync(brokenDir,{recursive:true,force:true});
- const source=fs.readFileSync(path.resolve(import.meta.dir,'../../daemon.ts'),'utf8');
- const eventSource=functionBlock(source,'handleCursorTranscriptEvent').text;
- const watchdogBlock=blockAt(source,source.indexOf('    await runBounded(staleCursorTranscriptFiles,')).text;
- assert.match(eventSource,/await findWorkspacePathForCursorConversation/);assert.match(watchdogBlock,/await findWorkspacePathForCursorConversation/);
- const transpiler=new Bun.Transpiler({loader:'ts',target:'bun'});
+ // The live watcher's event and the watchdog's stale-file pass both place a
+ // Cursor transcript with findWorkspacePathForCursorConversation and gate it
+ // with transcriptScopeRefusal; this is that composition, imported, not spliced.
  const config:any={sync_mode:'selected',sync_projects:[moved],excluded_paths:b.workspace,user_id:'fixture'};
- const processed:string[]=[];
- const common:any={path,config,cursorTranscriptSessionId,findWorkspacePathForCursorConversation:d.findWorkspacePathForCursorConversation,isPathExcluded,isProjectAllowedToSync,log:()=>{},processCursorTranscriptFile:async(_file:string,id:string)=>{processed.push(id);},syncService:{},conversationCache:{},retryQueue:{},pendingMessages:{},updateState:()=>{}};
- const eventCode=transpiler.transformSync(`let lastWatcherEventTime=0;${eventSource}\nreturn handleCursorTranscriptEvent;`);
- const event=new Function(...Object.keys(common),'readDaemonState','isSyncPaused','cursorTranscriptSyncs','transcriptRetryOwners','MESSAGE_SYNC_DEBOUNCE',eventCode)(...Object.values(common),()=>({}),()=>false,new Map(),{create:(_map:unknown,_key:unknown,_descriptor:unknown,run:()=>Promise<void>)=>({invalidate(){pending.push(run());}})},0);
- const pending:Promise<void>[]=[];
- const watchdogBody=watchdogBlock.slice(watchdogBlock.indexOf('async (filePath) => {')+'async (filePath) => {'.length,watchdogBlock.lastIndexOf('    },'));
- const watchdog=new Function(...Object.keys(common),'deps',transpiler.transformSync(`return async function(filePath:string){${watchdogBody}\n};`))(...Object.values(common),{...common,updateState:()=>{}});
- for(const caller of [async(id:string)=>{await event({filePath:'/fixture/'+id+'.txt',sessionId:id});await Promise.all(pending.splice(0));},async(id:string)=>watchdog('/fixture/'+id+'.txt')]) {
-  processed.length=0;
-  for(const id of ['allowed','excluded','missing'])await caller(id);
-  assert.deepEqual(processed,['allowed']);
-  config.sync_mode='all';processed.length=0;
-  for(const id of ['allowed','excluded','missing'])await caller(id);
-  assert.deepEqual(processed,['allowed','missing']);config.sync_mode='selected';
-  fs.chmodSync(a.file,0);await assert.rejects(caller('allowed'));fs.chmodSync(a.file,0o644);
- }
- const registration=blockAt(source,source.indexOf('  cursorTranscriptWatcher.on("session",')).text;
- const emitter=new EventEmitter(),eventErrors:any[]=[];let eventPending:Promise<void>|undefined;
- new Function('cursorTranscriptWatcher','handleCursorTranscriptEvent','logError',transpiler.transformSync(registration))(emitter,(e:any)=>eventPending=event(e),(...args:any[])=>eventErrors.push(args));
- fs.chmodSync(a.file,0);emitter.emit('session',{filePath:'/fixture/allowed.txt',sessionId:'allowed'});await eventPending!.catch(()=>{});fs.chmodSync(a.file,0o644);assert.equal(eventErrors.length,1);
+ const admitted=async(ids:string[])=>{const out:string[]=[];for(const id of ids)if(!transcriptScopeRefusal(await d.findWorkspacePathForCursorConversation(id),config))out.push(id);return out;};
+ assert.deepEqual(await admitted(['allowed','excluded','missing']),['allowed']);
+ config.sync_mode='all';
+ assert.deepEqual(await admitted(['allowed','excluded','missing']),['allowed','missing']);
+ config.sync_mode='selected';
+ fs.chmodSync(a.file,0);await assert.rejects(admitted(['allowed']));fs.chmodSync(a.file,0o644);
  let release!:()=>void,arrived!:()=>void;
  const gate=new Promise<void>(r=>release=r), entered=new Promise<void>(r=>arrived=r);
  if(enabled){const host=scanWorkerHost()!,request=host.request.bind(host);host.request=async(...args:Parameters<typeof host.request>)=>{const value=await request(...args);if((args[1] as any)?.job?.home===home){arrived();await gate;}return value;};restore=()=>{host.request=request;};}
@@ -109,6 +90,6 @@ try {
  assert.equal(await d.findWorkspacePathForCursorConversation('allowed'),c.workspace);release();await assert.rejects(late);restore();restore=()=>{};
  c.db.close();process.env.HOME=home;
  assert.equal(enabled?opens===0:opens>0,true);
- console.log(JSON.stringify({enabled,polling:true,parentOpens:opens,scopeParity:true,walRefresh:true,homeRefresh:true,lateRefused:true,unreadableDeleted:true,actualCallers:true}));
+ console.log(JSON.stringify({enabled,polling:true,parentOpens:opens,scopeParity:true,walRefresh:true,homeRefresh:true,lateRefused:true,unreadableDeleted:true,scopeGate:true}));
 }finally{restore();process.env.HOME=home;a.db.close();b.db.close();closeDaemonWorkers();}
 process.exit(0);

@@ -60,7 +60,7 @@ import { makeCollectionSig } from "./wakeSig";
 import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessage } from "./gestureBridge";
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
-import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, decisionAnswerLabel, hasThreadState, clearedThreadStateFields } from "@codecast/shared/contracts";
+import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, decisionAnswerLabel, hasThreadState, clearedThreadStateFields } from "@codecast/shared/contracts";
 import { liveFactsOf } from "../lib/liveness";
 // The shared inbox projection (docs/architecture/sync-convergence.md): the
 // working-set selection, fold, fact/stamp field ownership, and the epoch clock.
@@ -5149,7 +5149,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // at create. `fallback` covers a stub that was somehow never seeded. Pairs with
   // beginOptimisticSession({ deferCreate })'s materialize() AND the in-app
   // self-heal create (ensureSessionCreated routes through it too).
-  createSessionFromStub: (stubId: string, fallback?: { agentType?: string; projectPath?: string; gitRoot?: string; private?: boolean }) => Promise<any>;
+  createSessionFromStub: (stubId: string, fallback?: { agentType?: string; projectPath?: string; gitRoot?: string; private?: boolean; model?: string; targetDeviceId?: string }) => Promise<any>;
   // The one true path for optimistically creating a session: stubs a local
   // conversation synchronously and rekeys it to the real Convex id when `create`
   // resolves. Every new-session entry point funnels through this so a first
@@ -9477,7 +9477,12 @@ const inboxStoreConfig = (set: any, get: any) => ({
       // that already ended in "user interrupted" (a server echo or the line
       // this window painted moments ago) still reaches the daemon, which
       // judges it, but paints nothing: the conversation already ends there.
-      if ((session || this.conversations[convId]) && !isInterruptControlMessage(lastTimelineMessage(this, convId)?.content)) {
+      // A cloud agent's mirror is the record of how its turn ended (it says
+      // "Cancelled." for a turn the press stopped), and no echo ever settles
+      // a line painted here: it would stay even when nothing was running.
+      const row = session ?? this.conversations[convId];
+      const cloudAgent = !!row && !!cloudAgentProviderOfConversation(agentType, row.session_id, row.model);
+      if (row && !cloudAgent && !isInterruptControlMessage(lastTimelineMessage(this, convId)?.content)) {
         appendOptimisticMessage(this, convId, agentType === "codex" ? "<turn_aborted>" : "[Request interrupted by user]");
       }
     }
@@ -9542,7 +9547,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // compose popup intentionally allows a project-less stub → the daemon starts in
   // $HOME). Tracking + rekey are done by beginOptimisticSession's fire() (or by
   // ensureSessionCreated), so this only creates.
-  createSessionFromStub: (stubId: string, fallback?: { agentType?: string; projectPath?: string; gitRoot?: string; private?: boolean }) => {
+  createSessionFromStub: (stubId: string, fallback?: { agentType?: string; projectPath?: string; gitRoot?: string; private?: boolean; model?: string; targetDeviceId?: string }) => {
     const s = get();
     const cur = (s.sessions[stubId] || s.conversations[stubId]) as any;
     const projectPath = cur?.project_path ?? fallback?.projectPath;
@@ -9554,7 +9559,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     // the full model id ("claude-opus-4-8"); the create wants the contract option
     // key ("opus") — findModelOption matches on key. A model left on a different
     // agent's id (after an agent switch) resolves to "default" and is dropped.
-    const modelKey = modelOptionKey(cur?.model, agentType);
+    const modelKey = modelOptionKey(cur?.model ?? fallback?.model, agentType);
     // The machine shown in the new-session row, passed through verbatim. This
     // used to be re-checked here and DROPPED when it matched what routing would
     // pick anyway — an optimization that quietly became a bug: the picker's
@@ -9563,7 +9568,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     // discard an explicit pick and hand the choice back to a server-side
     // coin flip. The selection is now deterministic and always stamped, so
     // there is nothing left to second-guess.
-    const targetDeviceId = cur?.target_device_id as string | null | undefined;
+    const targetDeviceId = (cur?.target_device_id ?? fallback?.targetDeviceId) as string | null | undefined;
     // "Run in the cloud" is decided by the machine STAMPED on the stub, never by
     // the store flag (a mirror of the composer's derived mode). A stamped
     // wake-on-use host parks the row unless the folder is one the host already
@@ -12762,6 +12767,11 @@ const INITIAL_INBOX_DATA = Object.fromEntries(
     .map(([key, value]) => [key, cloneInitialValue(value)]),
 );
 
+/** A fresh, unaliased copy of the account-neutral data floor. */
+export function freshInboxData(): Record<string, any> {
+  return cloneInitialValue(INITIAL_INBOX_DATA);
+}
+
 // Every clear opens a new hydration epoch: a disk read that started for the
 // account before it (boot hydration, a conversation's tail) finds the epoch
 // moved when it resolves and lands nothing.
@@ -12772,9 +12782,7 @@ export function clearProtectedInboxMemory(): void {
   hydrationEpoch++;
   const state = useInboxStore.getState() as any;
   state._clearRuntimeBindings?.();
-  const reset = Object.fromEntries(
-    Object.entries(INITIAL_INBOX_DATA).map(([key, value]) => [key, cloneInitialValue(value)]),
-  ) as Record<string, any>;
+  const reset = freshInboxData();
   // These few device layout preferences are explicitly account-neutral and
   // already mirrored to localStorage; no server or principal data is retained.
   reset.clientState = { ui: readCriticalUiPrefs() as ClientUI };
@@ -13365,3 +13373,86 @@ export function rebootPersistence(): void {
 // outbox bindings, so running this again would re-open the database and re-seed
 // state that is live.
 if (!survivingInboxStore) bootPersistence();
+
+// -- Simulation seams (docs/architecture/multiplayer-sim-harness.md, section 3.3) --
+//
+// The multiplayer sim runs several windows in one process. Each window gets its
+// own store instance (and with it its own engine closure: dispatch binding,
+// outbox, tees), and the harness swaps this module's per-window bindings in and
+// out around every turn a window takes. Nothing in production calls these.
+
+/** A separate store instance with its own middleware closure. */
+export const __createInboxStoreForTests = createInboxStore;
+
+/** The module bindings that belong to one window, keyed by binding name. */
+export interface InboxStoreWindowSlots {
+  _heldOverlayFacts: typeof _heldOverlayFacts;
+  recentlyRequestedPendingMessages: Map<string, number>;
+  resolvedSessionPreparations: Map<string, Promise<void>>;
+  recentThawTimer: typeof recentThawTimer;
+  _userMsgsProbed: Set<string>;
+  _idbHydrating: Map<string, Promise<boolean>>;
+  hydrationEpoch: number;
+}
+
+// Both levels are mutated in place (a scope's hold is assigned, a landed id is
+// deleted from it), so a snapshot copies both.
+function copyHeldOverlayFacts(h: typeof _heldOverlayFacts): typeof _heldOverlayFacts {
+  const copy: typeof _heldOverlayFacts = {};
+  for (const scope in h) copy[scope] = { ...h[scope] };
+  return copy;
+}
+
+function replaceContents<K, V>(target: Map<K, V>, source: Map<K, V>): void {
+  target.clear();
+  for (const [k, v] of source) target.set(k, v);
+}
+
+/**
+ * get() snapshots the window bindings (collections copied, so the snapshot is
+ * detached from the live binding), set() loads a snapshot back, fresh() is the
+ * state a window that never ran starts from, and resetMemos() drops every
+ * derived memo so no window reads another window's cached result.
+ */
+export function __inboxStoreSimSlots() {
+  return {
+    fresh(): InboxStoreWindowSlots {
+      return {
+        _heldOverlayFacts: {},
+        recentlyRequestedPendingMessages: new Map(),
+        resolvedSessionPreparations: new Map(),
+        recentThawTimer: null,
+        _userMsgsProbed: new Set(),
+        _idbHydrating: new Map(),
+        hydrationEpoch: 0,
+      };
+    },
+    get(): InboxStoreWindowSlots {
+      return {
+        _heldOverlayFacts: copyHeldOverlayFacts(_heldOverlayFacts),
+        recentlyRequestedPendingMessages: new Map(recentlyRequestedPendingMessages),
+        resolvedSessionPreparations: new Map(resolvedSessionPreparations),
+        recentThawTimer,
+        _userMsgsProbed: new Set(_userMsgsProbed),
+        _idbHydrating: new Map(_idbHydrating),
+        hydrationEpoch,
+      };
+    },
+    set(s: InboxStoreWindowSlots): void {
+      _heldOverlayFacts = copyHeldOverlayFacts(s._heldOverlayFacts);
+      replaceContents(recentlyRequestedPendingMessages, s.recentlyRequestedPendingMessages);
+      replaceContents(resolvedSessionPreparations, s.resolvedSessionPreparations);
+      recentThawTimer = s.recentThawTimer;
+      _userMsgsProbed.clear();
+      for (const id of s._userMsgsProbed) _userMsgsProbed.add(id);
+      replaceContents(_idbHydrating, s._idbHydrating);
+      hydrationEpoch = s.hydrationEpoch;
+    },
+    resetMemos(): void {
+      __resetInboxPlacementCacheForTests();
+      _pendingSendSigRef = undefined;
+      _pendingSendSig = "";
+      _lastParityCheckAt = 0;
+    },
+  };
+}

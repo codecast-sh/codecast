@@ -96,7 +96,7 @@ export function DmExpanded({
         <div className="th-card-note">Nothing here yet. Say hello.</div>
       ) : (
         <>
-          <EarlierButton count={fold.hidden} noun="message" onClick={fold.showAll} />
+          <EarlierButton fold={fold} noun="message" />
           <ChatTimelineRows messages={fold.visible} channelId={channelId} frozenReadAt={frozenReadAt} />
         </>
       )}

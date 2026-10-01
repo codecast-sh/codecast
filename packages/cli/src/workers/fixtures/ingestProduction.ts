@@ -111,7 +111,7 @@ const sync:any = new Proxy({
 },{get:(target,key) => key in target ? (target as any)[key] : async () => true});
 const queue:any = {getPendingOperations:()=>queued,hasPendingConversation:()=>false,add:(type:string,params:any)=>{queued.push({type,params});fs.writeFileSync(path.join(home,'queue.json'),JSON.stringify(queued));return 'queued';}};
 const pending:any = {}, cache:any = {}, titleCache:any = {};
-const file = (id:string,content:string) => { const p=path.join(home,id+'.jsonl');fs.writeFileSync(p,content);cache[id]='conv-'+id;return p; };
+const file = (id:string,content:string,ext='.jsonl') => { const p=path.join(home,id+ext);fs.writeFileSync(p,content);cache[id]='conv-'+id;return p; };
 const claudeLine = (id:string,text:string) => JSON.stringify({type:'user',uuid:id,timestamp:'2026-09-05T12:00:00.000Z',message:{role:'user',content:text}})+'\n';
 const claude = (p:string,id:string) => d.processSessionFile(p,id,home,sync,'user',undefined,cache,queue,pending,titleCache,()=>{});
 const codex = (p:string,id:string) => d.processCodexSession(p,id,sync,'user',undefined,cache,queue,pending,titleCache,()=>{});
@@ -140,10 +140,10 @@ try {
     const sources = [
       {id:'cursor-recovery-claude',content:claudeLine('recovered-first','first')+claudeLine('recovered-second','second'),run:claude},
       {id:'cursor-recovery-codex',content:JSON.stringify({type:'session_meta',payload:{id:'cursor-recovery-codex',cwd:home}})+'\n'+JSON.stringify({type:'response_item',timestamp:'2026-09-05T12:00:00Z',payload:{type:'message',role:'user',content:[{type:'input_text',text:'codex cursor recovery'}]}})+'\n',run:codex},
-      {id:'cursor-recovery-cursor',content:'user:\ncursor recovery question\nassistant:\ncursor recovery answer\n',run:cursor},
+      {id:'cursor-recovery-cursor',content:'user:\ncursor recovery question\nassistant:\ncursor recovery answer\n',run:cursor,ext:'.txt'},
     ];
     for (const source of sources) {
-      const p=file(source.id,source.content);
+      const p=file(source.id,source.content,source.ext);
       setPosition(p,Math.floor(Buffer.byteLength(source.content)/2));
       assert.notEqual(Buffer.from(source.content)[getPosition(p)-1],10);
       const before=sends.length;
@@ -239,7 +239,7 @@ try {
   const invalid=file('invalid',claudeLine('unsent','must not consume')+'{broken}\n');
   await assert.rejects(claude(invalid,'invalid'));assert.equal(getPosition(invalid),0);assert.ok(!rows.has('unsent'));
   fs.writeFileSync(invalid,claudeLine('unsent','must not consume'));await claude(invalid,'invalid');assert.ok(rows.has('unsent'));
-  const c=file('cursor','user:\nhello cursor\n\nassistant:\nreply cursor\n');
+  const c=file('cursor','user:\nhello cursor\n\nassistant:\nreply cursor\n','.txt');
   await cursor(c,'cursor');assert.equal(getPosition(c),fs.statSync(c).size);
   const codexText=JSON.stringify({type:'session_meta',payload:{id:'codex',cwd:home}})+'\n'+JSON.stringify({type:'turn_context',payload:{model:'model-before'}})+'\n'+JSON.stringify({type:'response_item',timestamp:'2026-09-05T12:00:00.000Z',payload:{type:'message',role:'assistant',content:[{type:'output_text',text:'codex answer'}]}})+'\n';
   const co=file('codex',codexText);await codex(co,'codex');assert.equal(getPosition(co),fs.statSync(co).size);assert.ok([...rows.values()].some(m=>m.content==='codex answer' && m.model==='model-before'));
