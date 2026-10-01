@@ -2,10 +2,11 @@
 // role looking after one part of the company, said in a status word, the
 // role's own latest line on where it stands, and at most three signals that
 // change what a person would do. org.health derives it on the server from the
-// same measures the flags read, so the panel, `cast org health`, the Chief of
-// Staff's review and the area watch all speak from one reading.
+// same measures the flags read, so the panel, `cast org health`, the Head of
+// People's review and the area watch all speak from one reading.
 //
 // Pure: no reads, no clock. The server hands it the counts it already holds.
+import type { InitiativeLink, InitiativeRow, MetricReading } from "./initiative";
 
 export const AREA_STATUSES = ["waiting_on_you", "stuck", "overloaded", "quiet", "on_track", "paused", "not_started"] as const;
 export type AreaStatus = (typeof AREA_STATUSES)[number];
@@ -23,10 +24,10 @@ export const AREA_STATUS_WORDS: Record<AreaStatus, string> = {
 
 /** Whether a status asks a person for anything; the panel sorts nothing by
  *  it, the watch fires on the two that last. */
-export const AREA_STATUS_ATTENTION: Record<AreaStatus, "person" | "chief" | "none"> = {
+export const AREA_STATUS_ATTENTION: Record<AreaStatus, "person" | "head" | "none"> = {
   waiting_on_you: "person",
-  stuck: "chief",
-  overloaded: "chief",
+  stuck: "head",
+  overloaded: "head",
   quiet: "none",
   on_track: "none",
   paused: "none",
@@ -57,6 +58,21 @@ export type AreaGoal = {
   done_7d: number;
 };
 
+/** An initiative the area feeds (initiatives-projects-role-page.md I4): the
+ *  goal, each metric read against its target, and the chain up to the top
+ *  level goal. `owned` when the role drives it rather than carrying one of
+ *  its projects. On track here means against the target, beside the owner's word. */
+export type AreaInitiative = {
+  id: string;
+  short_id: string;
+  title: string;
+  status: InitiativeRow["status"];
+  health: InitiativeRow["health"];
+  owned: boolean;
+  metrics: MetricReading[];
+  chain: InitiativeLink[];
+};
+
 /** A role's dated line from its brief (briefStanding.StandingLine, minus the raw). */
 export type AreaStandingLine = { project: string; text: string; written_on: string | null; written_at: number | null };
 
@@ -80,10 +96,12 @@ export type RoleArea = {
   signals: AreaSignal[];
   /** The newest dated line the role wrote under "Where it stands", or null. */
   standing: AreaStandingLine | null;
-  /** Every line, newest first, capped. The Chief of Staff's read of the company is these. */
+  /** Every line, newest first, capped. The Head of People's read of the company is these. */
   standing_lines: AreaStandingLine[];
   waiting: AreaWaitingSession[];
   goals: AreaGoal[];
+  /** What the area feeds, owned goals first; absent on rows from before the field. */
+  initiatives?: AreaInitiative[];
   /** When the role last read its brief from its own session. */
   checked_at: number | null;
   check: AreaCheck | null;
@@ -152,7 +170,7 @@ export function areaStatusLine(a: AreaInput, status: AreaStatus): string {
 
 /** At most three signals, in plain words, each one a reason to act: what
  *  waits, what is stuck, what is not moving, what ended. Structure (span, an
- *  unowned project, a stale record) belongs to the Chief of Staff's review,
+ *  unowned project, a stale record) belongs to the Head of People's review,
  *  not to a row (S29). */
 export function areaSignalsOf(a: AreaInput): AreaSignal[] {
   const out: AreaSignal[] = [];
@@ -172,12 +190,12 @@ export function newestStandingFirst<L extends { written_at: number | null }>(lin
   return [...lines].sort((x, y) => (y.written_at ?? -1) - (x.written_at ?? -1));
 }
 
-// ── The change the watch tells the Chief of Staff about (S29) ────────────────
+// ── The change the watch tells the Head of People about (S29) ────────────────
 
 export type AreaChangeKind = "status" | "unowned_project";
 
 /** What lasted: an area that read the same pressing status at two checks in
- *  a row, or a project with work and no owner. Rides the Chief of Staff's
+ *  a row, or a project with work and no owner. Rides the Head of People's
  *  trigger frame as its own block (machineMessages AreaChange). */
 export type AreaChange =
   | { kind: "status"; role_handle: string; role_name: string; from: AreaStatus | null; to: AreaStatus; since: number; line: string }

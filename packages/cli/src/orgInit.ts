@@ -1,7 +1,7 @@
 // `cast org init`, `update`, `review`, `inputs`, `propose`, `proposals`,
 // `apply`, `staff`, `health` (docs/architecture/org-init.md O1, O2;
 // org-staffing.md S3, S4, S6, S8, S24). The analyzer is an agent session
-// briefed by the Chief of Staff prompt (shared/contracts/chiefOfStaffPrompt.ts): it reads how work flows through
+// briefed by the Head of People prompt (shared/contracts/headOfPeoplePrompt.ts): it reads how work flows through
 // the company, then talks it through with the person and posts small
 // proposals (op-N) whose changes a person accepts, edits or skips one by one.
 // Nothing is applied by the analyzer.
@@ -39,9 +39,9 @@ export type OrgInitSummary = {
   sessions_30d: number;
   roles: number;
   git_roots: string[];
-  /** Whether a chief-of-staff role already exists. */
-  chief_of_staff: boolean;
-  /** The person the Chief of Staff reports to, when one is seated: the prompt's {person}. */
+  /** Whether a head-of-people role already exists. */
+  head_of_people: boolean;
+  /** The person the Head of People reports to, when one is seated: the prompt's {person}. */
   person?: string;
   /** Records the activity block (S9) says are behind what happened. */
   stale: { plans: number; tasks: number; projects: number };
@@ -50,7 +50,7 @@ export type OrgInitSummary = {
 };
 
 export const ORG_INIT_LABEL = "org-init";
-export const CHIEF_OF_STAFF_HANDLE = "chief-of-staff";
+export const HEAD_OF_PEOPLE_HANDLE = "head-of-people";
 
 const TEAM_OPT = ["--team <name|id|personal>", "Team workspace (default: the active workspace); personal for your own"] as const;
 
@@ -100,7 +100,7 @@ export function registerOrgInitCommands(program: Command, deps: OrgInitDeps): vo
 
   org
     .command("review")
-    .description("The company review: prints the review prompt for the current agent (the chief of staff's routine runs this); --spawn runs it in a fresh session")
+    .description("The company review: prints the review prompt for the current agent (the head of people's routine runs this); --spawn runs it in a fresh session")
     .option("--spawn", "Run the review in a fresh session instead of printing the prompt here")
     .option("--here", "Print the prompt here (the default)")
     .option(...TEAM_OPT)
@@ -149,8 +149,8 @@ export function registerOrgInitCommands(program: Command, deps: OrgInitDeps): vo
 
   org
     .command("staff")
-    .description("Hire the Chief of Staff: the role, its standing session, a weekly company review, and the first review now. Idempotent per company.")
-    .option("--adopt", "This session becomes the chief of staff's standing session instead of provisioning a new one")
+    .description("Hire the Head of People: the role, its standing session, a weekly company review, and the first review now. Idempotent per company.")
+    .option("--adopt", "This session becomes the head of people's standing session instead of provisioning a new one")
     .option("--seat <existing|fresh>", "With a standing agent already in the workspace: seat it (default, nothing restarts) or start a fresh session and retire it in the same act")
     .option("-C, --dir <path>", "Project directory the provisioned standing session starts in (default: current; ignored with --adopt)")
     .option("--every <duration>", "How often the company review runs", "7d")
@@ -158,6 +158,20 @@ export function registerOrgInitCommands(program: Command, deps: OrgInitDeps): vo
     .option(...TEAM_OPT)
     .option("--json", "Machine-readable output")
     .action(async (options: any) => (await run()).staff(deps, options));
+
+  org
+    .command("chief")
+    .description("Hire a Chief of Staff: your right hand, pinned in the app header. Global (every workspace, yours alone) unless --team names one.")
+    .option("--name <name>", "Its name (default: one that matches its face)")
+    .option("--handle <handle>", "Its handle (default: chief-of-staff)")
+    .option("--avatar <key>", "A face from the set")
+    .option("--personal", "With --team: your own chief for that team, not the team's")
+    .option("--adopt", "This session becomes the chief's standing session instead of provisioning a new one")
+    .option("-C, --dir <path>", "Project directory the provisioned standing session starts in (default: current; ignored with --adopt)")
+    .option("--model <id>", "Model for a freshly provisioned standing session")
+    .option(...TEAM_OPT)
+    .option("--json", "Machine-readable output")
+    .action(async (options: any) => (await run()).chief(deps, options));
 
   org
     .command("health")

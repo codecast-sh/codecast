@@ -60,6 +60,7 @@ import {
   formatTranscriptChunk as formatChunk,
   isRecRoomKey,
   liveFeedChunkHeader,
+  needsFullBrief,
   ownRoomChunkHeader,
   parseRoomKey,
   sessionRoomConversationId,
@@ -68,8 +69,11 @@ import {
 import { characterOf } from "@codecast/shared/contracts/sessionCharacter";
 import { canAccessConversation, requireAccessibleDoc } from "./lib/access";
 import { verifyApiToken } from "./apiTokens";
+import { nextShortId } from "./counters";
 import { enqueuePush } from "./pushRouter";
-import { agentIdentity, postEvent } from "./callChat";
+import { agentIdentity, claimRoomRows, liveTranscriptFor, postEvent } from "./callChat";
+import { scheduleFaceJoin, scheduleFaceLeave } from "./tavusPal";
+import { anthropicBody, CHEAP_MODEL, type SurfaceRequest } from "./lib/anthropic";
 
 export { asrTranscriptionSession };
 
@@ -91,6 +95,7 @@ type Route = {
   sent_seq: number;
   added_by?: Id<"users">;
   hold_until?: number;
+  briefed_chunks?: number;
 };
 
 // Why deliverRoutes is running. A flush is the scribe's lull; the other three
@@ -148,7 +153,8 @@ export function withDefaultRoutes(roomKey: string, routes: Route[]): Route[] {
  *  The room's thread learns who came and went from this same diff: a row
  *  inserted is an agent joining (credited to whoever added the route), a row
  *  deleted while the transcript is live is an agent leaving. The wipe at the
- *  end of a call writes nothing: the call ended, nobody left. */
+ *  end of a call writes nothing: the call ended, nobody left. The agent's face
+ *  in the room (tavusPal.ts) joins and leaves with its row. */
 export async function syncAgentFeeds(ctx: any, t: Doc<"transcripts">): Promise<void> {
   const existing: Doc<"call_agent_feeds">[] = await ctx.db
     .query("call_agent_feeds")
@@ -174,6 +180,7 @@ export async function syncAgentFeeds(ctx: any, t: Doc<"transcripts">): Promise<v
       continue;
     }
     await ctx.db.delete(row._id);
+    await scheduleFaceLeave(ctx, row);
     if (t.status === "live") {
       await postEvent(ctx, {
         room_key: t.room_key,
@@ -192,7 +199,7 @@ export async function syncAgentFeeds(ctx: any, t: Doc<"transcripts">): Promise<v
       )
       .order("desc")
       .first();
-    await ctx.db.insert("call_agent_feeds", {
+    const feedId = await ctx.db.insert("call_agent_feeds", {
       conversation_id: conversationId,
       transcript_id: t._id,
       room_key: t.room_key,
@@ -200,6 +207,7 @@ export async function syncAgentFeeds(ctx: any, t: Doc<"transcripts">): Promise<v
       added_by: addedBy,
       last_mirrored_message_id: newest?._id,
     });
+    await scheduleFaceJoin(ctx, feedId);
     await postEvent(ctx, {
       room_key: t.room_key,
       team_id: t.team_id,
@@ -316,6 +324,10 @@ export const start = mutation({
     transcript_id: Id<"transcripts"> | null;
     existing: boolean;
     role: "scribe" | "observer" | "off";
+    // How far into the huddle this is, so a scribe that takes over (a
+    // handoff, an adoption, transcription back on) times its words on the
+    // record's clock instead of restarting it at zero.
+    elapsed_ms?: number;
   }> => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
@@ -334,8 +346,9 @@ export const start = mutation({
       .collect();
     const live = existing.find((t) => t.status === "live");
     if (live) {
+      const elapsed_ms = Math.max(0, Date.now() - live.started_at);
       if (String(live.started_by) === String(userId)) {
-        return { transcript_id: live._id, existing: true, role: "scribe" };
+        return { transcript_id: live._id, existing: true, role: "scribe", elapsed_ms };
       }
       // A recording never reaches here (only its creator may start on its
       // key), so the seat check reads the room the huddle is actually in.
@@ -348,14 +361,16 @@ export const start = mutation({
       );
       if (scribeSeated) return { transcript_id: live._id, existing: true, role: "observer" };
       await ctx.db.patch(live._id, { started_by: userId });
-      return { transcript_id: live._id, existing: true, role: "scribe" };
+      return { transcript_id: live._id, existing: true, role: "scribe", elapsed_ms };
     }
+    const startedAt = Date.now();
     const id = await ctx.db.insert("transcripts", {
       room_key: args.room_key,
       team_id: auth.teamId,
       started_by: userId,
       status: "live",
-      started_at: Date.now(),
+      started_at: startedAt,
+      short_id: await nextShortId(ctx.db, "cl"),
       routes: withDefaultRoutes(args.room_key, args.routes ?? []).map((r) => ({
         ...r,
         added_by: userId,
@@ -368,8 +383,20 @@ export const start = mutation({
     if (!args.auto) {
       await postEvent(ctx, { room_key: args.room_key, team_id: auth.teamId, user_id: userId, event: "transcribe_on" });
     }
+    // What was typed in the room since this huddle began is this huddle's.
+    if (!isRecRoomKey(args.room_key)) {
+      const seats = liveMembers(
+        await ctx.db
+          .query("call_members")
+          .withIndex("by_room", (q: any) => q.eq("room_key", args.room_key))
+          .collect(),
+        startedAt,
+      );
+      const began = seats.reduce((m: number, r: any) => Math.min(m, r.joined_at ?? startedAt), startedAt);
+      await claimRoomRows(ctx, args.room_key, id, began);
+    }
     await syncAgentFeeds(ctx, (await ctx.db.get(id))!);
-    return { transcript_id: id, existing: false, role: "scribe" };
+    return { transcript_id: id, existing: false, role: "scribe", elapsed_ms: 0 };
   },
 });
 
@@ -391,6 +418,7 @@ export const setRoutes = mutation({
         sent_seq: prior?.sent_seq ?? 0,
         added_by: prior?.added_by ?? userId,
         ...(prior?.hold_until ? { hold_until: prior.hold_until } : {}),
+        ...(prior?.briefed_chunks !== undefined ? { briefed_chunks: prior.briefed_chunks } : {}),
       };
     });
     await ctx.db.patch(t._id, { routes });
@@ -668,7 +696,7 @@ export const cliHoldCall = mutation({
 export const ROLLING_SUMMARY_GAP_MS = 90_000;
 export const ROLLING_SUMMARY_MIN_WORDS = 120;
 
-function countWords(texts: string[]): number {
+export function countWords(texts: string[]): number {
   return texts.reduce((n, text) => n + text.split(/\s+/).filter(Boolean).length, 0);
 }
 
@@ -803,6 +831,10 @@ export const stop = mutation({
     if (!t || String(t.started_by) !== String(userId)) {
       throw new Error("Transcript not found");
     }
+    // A huddle's record is the huddle: switching transcription off is a gap
+    // in it, and only the room standing empty ends it (idleLiveTranscripts).
+    // The scribe stopping here just stops sending words.
+    if (!isRecRoomKey(t.room_key)) return;
     if (t.status === "ended") {
       // A recording the sweep closed while the phone was still capturing:
       // the honest end is when the person actually stopped, not when the
@@ -832,6 +864,7 @@ export async function endTranscript(
     status: "ended",
     ended_at: Math.max(t.started_at, endedAt),
     summary_status: "pending",
+    idle_since: undefined,
   });
   // The fed sessions leave the room with the words: an ended huddle has no
   // chat to mirror a reply into.
@@ -845,24 +878,74 @@ export async function endTranscript(
   });
 }
 
-/** A transcript has no lease of its own; the room's does. When a room has no
- *  live member left, its live transcript is over — nobody is in it to be
- *  transcribed, and the scribe's audio pipes died with their tab. Called from
- *  calls.leaveRoom / joinRoom when they find the room empty, and by the cron
- *  sweep for rooms nobody touched again. */
-export async function endLiveTranscriptsForRoom(ctx: any, roomKey: string): Promise<number> {
-  const rows: Doc<"transcripts">[] = await ctx.db
-    .query("transcripts")
-    .withIndex("by_room", (q: any) => q.eq("room_key", roomKey))
-    .collect();
-  let n = 0;
-  for (const t of rows) {
-    if (t.status !== "live") continue;
-    await endTranscript(ctx, t);
-    n++;
-  }
-  return n;
+/** How long an emptied room's huddle waits for somebody to come back. A
+ *  rejoin, a window handoff, a dropped connection or an accidental hop to
+ *  another room inside this window is the same conversation, and the same
+ *  record carries on. */
+export const HUDDLE_GRACE_MS = 3 * 60_000;
+
+/** When a live huddle went quiet: the stamp the last leave left, else the
+ *  last lease any seat refreshed (a tab that died never leaves). SEATS ONLY:
+ *  a prewarm row is somebody holding a connection open after the huddle
+ *  died, and dating the end from it would inflate the call by up to ninety
+ *  seconds. */
+function quietSince(t: Doc<"transcripts">, rows: Array<{ last_seen: number; prewarm?: boolean }>): number | null {
+  if (t.idle_since) return t.idle_since;
+  const lastSeen = rows.filter(isSeat).reduce((m, r) => Math.max(m, r.last_seen), 0);
+  return lastSeen || null;
 }
+
+/** The last person left the room: its live huddle waits out the grace, and
+ *  ends at the moment the room emptied unless somebody comes back first
+ *  (resumeOrEndHuddle). Called from calls.leaveRoom. */
+export async function idleLiveTranscriptsForRoom(ctx: any, roomKey: string, at: number): Promise<void> {
+  const t = await liveTranscriptFor(ctx, roomKey);
+  if (!t || t.idle_since) return;
+  await ctx.db.patch(t._id, { idle_since: at });
+  await ctx.scheduler.runAfter(HUDDLE_GRACE_MS, internal.transcripts.endIdleTranscript, { transcript_id: t._id });
+}
+
+/** Somebody took a seat in an empty room. Inside the grace the room's live
+ *  huddle goes on (true: same record, same grants, same switch). Past it,
+ *  what was left of the previous huddle ends where it went quiet (its
+ *  scribe's tab may have died without anybody leaving) and the caller starts
+ *  a new huddle (false). `rows` is the room's seat rows before the join swept
+ *  the dead ones. */
+export async function resumeOrEndHuddle(
+  ctx: any,
+  roomKey: string,
+  now: number,
+  rows: Array<{ last_seen: number; prewarm?: boolean }>,
+): Promise<boolean> {
+  const t = await liveTranscriptFor(ctx, roomKey);
+  if (!t) return false;
+  const quiet = quietSince(t, rows) ?? now;
+  if (now - quiet < HUDDLE_GRACE_MS) {
+    if (t.idle_since) await ctx.db.patch(t._id, { idle_since: undefined });
+    return true;
+  }
+  await endTranscript(ctx, t, quiet);
+  return false;
+}
+
+/** The grace ran out on a room leaveRoom left empty. A rejoin cleared the
+ *  stamp (or restamped it on a later leave, which scheduled its own check),
+ *  so only a record still quiet for the whole grace ends here. */
+export const endIdleTranscript = internalMutation({
+  args: { transcript_id: v.id("transcripts") },
+  handler: async (ctx, args) => {
+    const t = await ctx.db.get(args.transcript_id);
+    if (!t || t.status !== "live" || !t.idle_since) return { ended: false };
+    if (Date.now() - t.idle_since < HUDDLE_GRACE_MS - 5_000) return { ended: false };
+    const seated = await ctx.db
+      .query("call_members")
+      .withIndex("by_room", (q) => q.eq("room_key", t.room_key))
+      .collect();
+    if (liveMembers(seated, Date.now()).length > 0) return { ended: false };
+    await endTranscript(ctx, t, t.idle_since);
+    return { ended: true };
+  },
+});
 
 /** Cron backstop: a live transcript whose room holds no fresh lease is an
  *  orphan (the scribe closed the tab, the last member timed out and nobody
@@ -893,16 +976,15 @@ export const sweepOrphanedLive = internalMutation({
         .withIndex("by_room", (q) => q.eq("room_key", t.room_key))
         .collect();
       if (liveMembers(seated, now).length > 0) continue;
-      // The honest end is when the last lease was refreshed, not when the
-      // sweep noticed — otherwise an orphan's duration grows until it runs.
-      //
-      // SEATS ONLY. A prewarm row is a connection held open ahead of a burst
-      // by somebody who opened this DM after the huddle died, so its lease is
-      // the freshest thing in the room and means nothing about when people
-      // stopped talking. Counting it would date the end up to ninety seconds
-      // late and inflate the recording by exactly that.
-      const lastSeen = seated.filter(isSeat).reduce((m, r) => Math.max(m, r.last_seen), 0);
-      await endTranscript(ctx, t, lastSeen || now);
+      // The honest end is when the room went quiet, not when the sweep
+      // noticed, and a room quiet for less than the grace may yet resume.
+      const quiet = quietSince(t, seated);
+      if (quiet === null) {
+        await ctx.db.patch(t._id, { idle_since: now });
+        continue;
+      }
+      if (now - quiet < HUDDLE_GRACE_MS) continue;
+      await endTranscript(ctx, t, quiet);
       ended++;
     }
     return { checked: live.length, ended };
@@ -915,10 +997,85 @@ export const sweepOrphanedLive = internalMutation({
 // and the summary/action items generate within seconds of stop.
 
 // Below this many words there is nothing worth summarizing.
-const SUMMARY_MIN_WORDS = 40;
+export const SUMMARY_MIN_WORDS = 40;
 // Transcript text sent to the model is capped; long calls get the tail
 // (decisions and action items live at the end far more often than the start).
-const SUMMARY_MAX_CHARS = 60_000;
+export const SUMMARY_MAX_CHARS = 60_000;
+
+/**
+ * What a call is, as far as its summary prompt cares. A huddle is one audio
+ * track per person, so who said what is structural and the model can be told
+ * to trust it. A recording is one microphone in a room: it heard everybody and
+ * can tell nobody apart, so the same instruction would invite it to invent an
+ * attribution out of a placeholder speaker label. The two transcripts are not
+ * the same evidence and must not be described to the model as if they were.
+ */
+export type CallSummaryKind = "huddle" | "recording";
+
+export function callSummaryKind(roomKey: string): CallSummaryKind {
+  return isRecRoomKey(roomKey) ? "recording" : "huddle";
+}
+
+/**
+ * The transcript text a call summary reads, or null when the call is under
+ * SUMMARY_MIN_WORDS and gets no model call. A recording's lines carry no
+ * speaker; a long call keeps its last SUMMARY_MAX_CHARS characters.
+ */
+export function callSummarySource(lines: Array<{ speaker: string; text: string }>, kind: CallSummaryKind): string | null {
+  if (countWords(lines.map((l) => l.text)) < SUMMARY_MIN_WORDS) return null;
+  const text = kind === "recording"
+    ? lines.map((l) => l.text).join("\n")
+    : lines.map((l) => `${l.speaker}: ${l.text}`).join("\n");
+  return text.length > SUMMARY_MAX_CHARS ? text.slice(-SUMMARY_MAX_CHARS) : text;
+}
+
+/**
+ * The call summary request over a source from callSummarySource. `rolling` is
+ * the recap of a call still going. No temperature: the API default applies.
+ */
+export function callSummaryRequest(
+  source: string,
+  call: { kind: CallSummaryKind; started_at: number; ended_at?: number; rolling?: boolean },
+): SurfaceRequest {
+  const durationMin = call.ended_at
+    ? Math.max(1, Math.round((call.ended_at - call.started_at) / 60_000))
+    : null;
+  const preamble = call.kind === "recording"
+    ? `This is the transcript of a meeting recorded on ONE microphone in the room${durationMin ? `, about ${durationMin} min` : ""}. Voices are NOT separated and nobody is identified: attribute something to a person only when the words themselves name them, and otherwise write about what was said, not who said it.`
+    : `This is the transcript of a team huddle (voice call)${durationMin ? `, about ${durationMin} min` : ""}${call.rolling ? ", still going: summarize what has been said so far" : ""}. Speakers are exactly attributed.`;
+  return {
+    model: CHEAP_MODEL,
+    max_tokens: 700,
+    prompt: `${preamble}
+
+Write JSON only, this shape:
+{"title": "3-7 word title of what the call was about", "summary": "2-5 sentences: what was discussed, what was decided. Name people for decisions and disagreements. Plain words.", "action_items": ["each concrete follow-up someone committed to, with the owner's name first, e.g. 'Sam: ship the fix behind a flag'"]}
+
+Empty action_items array if there were none — never invent any.
+
+Transcript:
+${source}`,
+  };
+}
+
+/**
+ * The call summary reply as the transcript row stores it. Throws when the
+ * reply holds no JSON object, which the action records as a failed summary.
+ */
+export function parseCallSummaryReply(raw: string): { title?: string; summary?: string; action_items?: string[] } {
+  const match = raw.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error("No JSON in response");
+  const parsed = JSON.parse(match[0]);
+  return {
+    title: typeof parsed.title === "string" ? parsed.title.slice(0, 120) : undefined,
+    summary: typeof parsed.summary === "string" ? parsed.summary.slice(0, 2000) : undefined,
+    action_items: Array.isArray(parsed.action_items)
+      ? parsed.action_items
+          .filter((a: unknown) => typeof a === "string")
+          .slice(0, 20)
+      : undefined,
+  };
+}
 
 export const getForSummary = internalQuery({
   args: { transcript_id: v.id("transcripts") },
@@ -1079,8 +1236,9 @@ export const generateSummary = internalAction({
     // call has its own run.
     const rolling = args.rolling === true;
     if (rolling && t.status !== "live") return;
-    const wordCount = countWords(t.lines.map((l: { text: string }) => l.text));
-    if (wordCount < SUMMARY_MIN_WORDS) {
+    const kind = callSummaryKind(t.room_key);
+    const source = callSummarySource(t.lines, kind);
+    if (source === null) {
       await ctx.runMutation(internal.transcripts.setSummary, {
         transcript_id: args.transcript_id,
         summary_status: "skipped",
@@ -1097,25 +1255,6 @@ export const generateSummary = internalAction({
       });
       return;
     }
-    // A huddle is one audio track per person, so who said what is structural
-    // and the model can be told to trust it. A recording is one microphone in
-    // a room: it heard everybody and can tell nobody apart, so the same
-    // instruction would invite it to invent an attribution out of a placeholder
-    // speaker label. The two transcripts are not the same evidence and must not
-    // be described to the model as if they were.
-    const isRecording = isRecRoomKey(t.room_key);
-    let text = isRecording
-      ? t.lines.map((l: { text: string }) => l.text).join("\n")
-      : t.lines
-          .map((l: { speaker: string; text: string }) => `${l.speaker}: ${l.text}`)
-          .join("\n");
-    if (text.length > SUMMARY_MAX_CHARS) text = text.slice(-SUMMARY_MAX_CHARS);
-    const durationMin = t.ended_at
-      ? Math.max(1, Math.round((t.ended_at - t.started_at) / 60_000))
-      : null;
-    const source = isRecording
-      ? `This is the transcript of a meeting recorded on ONE microphone in the room${durationMin ? `, about ${durationMin} min` : ""}. Voices are NOT separated and nobody is identified: attribute something to a person only when the words themselves name them, and otherwise write about what was said, not who said it.`
-      : `This is the transcript of a team huddle (voice call)${durationMin ? `, about ${durationMin} min` : ""}${rolling ? ", still going: summarize what has been said so far" : ""}. Speakers are exactly attributed.`;
     try {
       const response = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -1124,42 +1263,17 @@ export const generateSummary = internalAction({
           "x-api-key": apiKey,
           "anthropic-version": "2023-06-01",
         },
-        body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 700,
-          messages: [
-            {
-              role: "user",
-              content: `${source}
-
-Write JSON only, this shape:
-{"title": "3-7 word title of what the call was about", "summary": "2-5 sentences: what was discussed, what was decided. Name people for decisions and disagreements. Plain words.", "action_items": ["each concrete follow-up someone committed to, with the owner's name first, e.g. 'Sam: ship the fix behind a flag'"]}
-
-Empty action_items array if there were none — never invent any.
-
-Transcript:
-${text}`,
-            },
-          ],
-        }),
+        body: JSON.stringify(
+          anthropicBody(callSummaryRequest(source, { kind, started_at: t.started_at, ended_at: t.ended_at, rolling })),
+        ),
       });
       if (!response.ok) throw new Error(`Anthropic ${response.status}`);
       const data = await response.json();
-      const raw: string = data?.content?.[0]?.text ?? "";
-      const match = raw.match(/\{[\s\S]*\}/);
-      if (!match) throw new Error("No JSON in response");
-      const parsed = JSON.parse(match[0]);
       await ctx.runMutation(internal.transcripts.setSummary, {
         transcript_id: args.transcript_id,
         summary_status: "done",
         rolling,
-        title: typeof parsed.title === "string" ? parsed.title.slice(0, 120) : undefined,
-        summary: typeof parsed.summary === "string" ? parsed.summary.slice(0, 2000) : undefined,
-        action_items: Array.isArray(parsed.action_items)
-          ? parsed.action_items
-              .filter((a: unknown) => typeof a === "string")
-              .slice(0, 20)
-          : undefined,
+        ...parseCallSummaryReply(data?.content?.[0]?.text ?? ""),
       });
     } catch (err) {
       console.error("Call summary generation failed:", err);
@@ -1476,8 +1590,11 @@ export async function canReadCall(
 function shapeCallRow(t: Doc<"transcripts">) {
   return {
     _id: t._id,
+    short_id: t.short_id ?? null,
     room_key: t.room_key,
     status: t.status,
+    // The room emptied and the huddle is waiting out its grace.
+    idle_since: t.idle_since ?? null,
     started_at: t.started_at,
     ended_at: t.ended_at ?? null,
     title: t.title ?? null,
@@ -1529,9 +1646,26 @@ async function listCallsCore(ctx: any, userId: Id<"users">, limit: number) {
     if (out.length >= limit) break;
     if (seen.has(String(t._id))) continue;
     seen.add(String(t._id));
+    if (await isSilentHuddle(ctx, t)) continue;
     if (await canReadCall(ctx, userId, t)) out.push(shapeCallRow(t));
   }
   return out;
+}
+
+/** A huddle that ended with nothing in it: no word said, no line typed or
+ *  answered (an agent coming and going, the switch flipped, is the room's
+ *  log, not content). A ring answered and hung up, a join to test the
+ *  microphone. It is no call anybody would look for, so the history leaves
+ *  it out. A recording is never silent here: its words can arrive after it
+ *  ends. */
+async function isSilentHuddle(ctx: any, t: Doc<"transcripts">): Promise<boolean> {
+  if (t.status === "live" || isRecRoomKey(t.room_key) || t.last_seq > 0) return false;
+  const line = await ctx.db
+    .query("call_chat_messages")
+    .withIndex("by_transcript", (q: any) => q.eq("transcript_id", t._id))
+    .filter((q: any) => q.eq(q.field("event"), undefined))
+    .first();
+  return !line;
 }
 
 async function getCallCore(
@@ -1548,6 +1682,8 @@ async function getCallCore(
     .collect();
   return {
     ...shapeCallRow(t),
+    // "Anyone with the link" (publicShare.ts): readers may copy it, like a doc's.
+    share_token: t.share_token ?? null,
     // Present only for a recording that finished uploading its audio; a
     // detail view offers playback when there is something to play.
     recording_url: t.recording_storage_id
@@ -1589,6 +1725,107 @@ async function linkedSessions(ctx: any, userId: Id<"users">, transcriptId: Id<"t
   }
   return out;
 }
+
+/** A call named the way prose names it: its short id (`cl-42`) or its full
+ *  id. Null for anything else, and for a call the viewer may not read. */
+export async function resolveCallRef(
+  ctx: any,
+  userId: Id<"users">,
+  ref: string,
+): Promise<Doc<"transcripts"> | null> {
+  const r = ref.trim().toLowerCase();
+  let t: Doc<"transcripts"> | null = null;
+  if (/^cl-\d+$/.test(r)) {
+    t = await ctx.db
+      .query("transcripts")
+      .withIndex("by_short_id", (q: any) => q.eq("short_id", r))
+      .first();
+  } else {
+    const id = ctx.db.normalizeId("transcripts", r);
+    t = id ? await ctx.db.get(id) : null;
+  }
+  return t && (await canReadCall(ctx, userId, t)) ? t : null;
+}
+
+/** The most turns one embedded excerpt carries; a longer range shows its
+ *  head and says how many more the call page holds. */
+export const CALL_EXCERPT_MAX_TURNS = 40;
+
+async function callRefCore(
+  ctx: any,
+  userId: Id<"users">,
+  args: { ref: string; from_seq?: number; to_seq?: number },
+) {
+  const t = await resolveCallRef(ctx, userId, args.ref);
+  if (!t) return null;
+  const row = shapeCallRow(t);
+  const lean = {
+    _id: row._id,
+    short_id: row.short_id,
+    room_key: row.room_key,
+    status: row.status,
+    started_at: row.started_at,
+    ended_at: row.ended_at,
+    title: row.title,
+    participants: row.participants,
+    summary: row.summary,
+    last_seq: row.last_seq,
+  };
+  if (args.from_seq === undefined) return { ...lean, turns: null };
+  const from = Math.min(args.from_seq, args.to_seq ?? args.from_seq);
+  const to = Math.max(args.from_seq, args.to_seq ?? args.from_seq);
+  const segs = await ctx.db
+    .query("transcript_segments")
+    .withIndex("by_transcript_seq", (q: any) =>
+      q.eq("transcript_id", t._id).gte("seq", from).lte("seq", to),
+    )
+    .take(CALL_EXCERPT_MAX_TURNS + 1);
+  return {
+    ...lean,
+    turns: {
+      from_seq: from,
+      to_seq: to,
+      more: segs.length > CALL_EXCERPT_MAX_TURNS,
+      segments: segs.slice(0, CALL_EXCERPT_MAX_TURNS).map((s: Doc<"transcript_segments">) => ({
+        seq: s.seq,
+        speaker_id: s.speaker_id,
+        speaker_name: s.speaker_name,
+        text: s.text,
+        t0: s.t0,
+        t1: s.t1,
+        at: s._creationTime,
+      })),
+    },
+  };
+}
+
+// A call mentioned in prose: `cl-42` is the pill, `cl-42:15-25` the excerpt
+// card with those turns. One query for both, so they cannot disagree.
+export const webGetCallRef = query({
+  args: { ref: v.string(), from_seq: v.optional(v.number()), to_seq: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    return callRefCore(ctx, userId, args);
+  },
+});
+
+// Every call older than its short id gets one, oldest first, so the numbers
+// read in the order the calls happened.
+export const backfillCallShortIds = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const rows = await ctx.db.query("transcripts").collect();
+    rows.sort((a, b) => a.started_at - b.started_at);
+    let n = 0;
+    for (const t of rows) {
+      if (t.short_id) continue;
+      await ctx.db.patch(t._id, { short_id: await nextShortId(ctx.db, "cl") });
+      n++;
+    }
+    return { assigned: n };
+  },
+});
 
 export const webListCalls = query({
   args: { limit: v.optional(v.number()) },
@@ -1707,11 +1944,13 @@ export const cliListCalls = query({
 });
 
 export const cliGetCall = query({
-  args: { api_token: v.string(), transcript_id: v.id("transcripts") },
+  // A call's short id (`cl-42`) or full id.
+  args: { api_token: v.string(), transcript_id: v.string() },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);
     if (!auth) throw new Error("Unauthorized");
-    return getCallCore(ctx, auth.userId, args.transcript_id);
+    const t = await resolveCallRef(ctx, auth.userId, args.transcript_id);
+    return t ? getCallCore(ctx, auth.userId, t._id) : null;
   },
 });
 
@@ -1872,6 +2111,8 @@ export const markRouteSent = internalMutation({
     kind: v.string(),
     target: v.string(),
     sent_seq: v.number(),
+    // A session chunk went out: whether it carried the full framing.
+    full_brief: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const t = await ctx.db.get(args.transcript_id);
@@ -1879,7 +2120,13 @@ export const markRouteSent = internalMutation({
     await ctx.db.patch(t._id, {
       routes: t.routes.map((r) =>
         r.kind === args.kind && r.target === args.target
-          ? { ...r, sent_seq: Math.max(r.sent_seq, args.sent_seq) }
+          ? {
+              ...r,
+              sent_seq: Math.max(r.sent_seq, args.sent_seq),
+              ...(args.full_brief === undefined
+                ? {}
+                : { briefed_chunks: args.full_brief ? 1 : (r.briefed_chunks ?? 0) + 1 }),
+            }
           : r,
       ),
     });
@@ -1970,7 +2217,10 @@ export function sessionDeliveryVerdict(opts: {
     const lastEnd = Math.max(...unsent.map((s) => s.ended_at));
     if (now - lastEnd < CATCH_UP_QUIET_MS) return { deliver: false };
   }
-  return { deliver: true, lane: "context", held: clockDriven };
+  // Words said under a hold are a catch up however they leave: the hold's end
+  // can find the agent still mid-turn, and the scribe's next lull ships them.
+  const saidUnderHold = unsent.some((s) => s.ended_at <= (route.hold_until ?? 0));
+  return { deliver: true, lane: "context", held: clockDriven || saidUnderHold };
 }
 
 export const deliverRoutes = internalAction({
@@ -1996,6 +2246,7 @@ export const deliverRoutes = internalAction({
       // participant feeding an agent speaks as themselves. Routes from before
       // added_by existed fall back to the scribe.
       const asUser = route.added_by ?? transcript.started_by;
+      let fullBrief: boolean | undefined;
       try {
         if (route.kind === "session") {
           const target = pacing[route.target] ?? null;
@@ -2011,7 +2262,13 @@ export const deliverRoutes = internalAction({
           // report about a meeting elsewhere, and the two want different
           // words in front of the same chunk.
           const own = ownRoomTarget(transcript.room_key) === route.target;
-          const headerOpts = { name: target?.names[0] ?? "the agent", lane: verdict.lane, held: verdict.held };
+          fullBrief = needsFullBrief(route.briefed_chunks);
+          const headerOpts = {
+            name: target?.names[0] ?? "the agent",
+            lane: verdict.lane,
+            held: verdict.held,
+            full: fullBrief,
+          };
           await ctx.runMutation(internal.transcripts.deliverToSession, {
             as_user: asUser,
             to: route.target,
@@ -2050,6 +2307,7 @@ export const deliverRoutes = internalAction({
           kind: route.kind,
           target: route.target,
           sent_seq: maxSeq,
+          full_brief: fullBrief,
         });
       } catch (err) {
         // A failing route never blocks the others; the watermark stays put so

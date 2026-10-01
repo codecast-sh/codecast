@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { extractBrowserTabId, focusBrowserTab, reopenBrowserTab, type FocusTabDeps } from "./browserFocus";
+import { extractBrowserTabId, focusBrowserTab, probeBrowserTab, reopenBrowserTab, type FocusTabDeps } from "./browserFocus";
 import type { TerminalEndpoint } from "./terminal/endpoint";
 
 // convex is only touched when no getEndpoint override is passed; every test
@@ -132,6 +132,26 @@ describe("focusBrowserTab — what the pill learns", () => {
     const out = await focusBrowserTab(convex, "4A2CDC7E", {
       getEndpoint: async () => endpoint,
       fetchImpl: daemon(() => ({ ok: false, status: 404, json: async () => { throw new SyntaxError("no body"); } }) as unknown as Response),
+    });
+    expect(out).toEqual({ ok: false, reason: "unreachable" });
+  });
+});
+
+describe("probeBrowserTab", () => {
+  test("asks the probe route, never the focus route, and reads a closed tab as gone", async () => {
+    const seen: { url: string }[] = [];
+    const out = await probeBrowserTab(convex, "4A2CDC7E", {
+      getEndpoint: async () => endpoint,
+      fetchImpl: daemon(() => response(404, { ok: false, reason: "tab-not-found" }), seen),
+    });
+    expect(out).toEqual({ ok: false, reason: "tab-gone" });
+    expect(seen.map((r) => r.url)).toEqual(["http://127.0.0.1:4242/browser/probe?tab=4A2CDC7E"]);
+  });
+
+  test("an older daemon without the route reads as unreachable, which the pill ignores", async () => {
+    const out = await probeBrowserTab(convex, "4A2CDC7E", {
+      getEndpoint: async () => endpoint,
+      fetchImpl: daemon(() => response(404, { error: "not found" })),
     });
     expect(out).toEqual({ ok: false, reason: "unreachable" });
   });

@@ -1,11 +1,9 @@
 import { useSettingsData } from "../../../hooks/useSyncSettings";
 import { useCurrentUser } from "../../../hooks/useCurrentUser";
+import { useInboxStore } from "../../../store/inboxStore";
 import { useCallback } from "react";
-import { useMutation } from "convex/react";
 import { AvatarImg } from "../../../lib/avatarCache";
-import { api } from "@codecast/convex/convex/_generated/api";
 import { Switch } from "../../../components/ui/switch";
-import { toast } from "sonner";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import {
   Bell, BellOff, Users, MessageSquare, Laptop, CheckCircle, Terminal, Mail, MessagesSquare,
@@ -13,6 +11,7 @@ import {
 import { SettingsOptionGroup, SettingsPanel, SettingsRow, SettingsSection } from "../../../components/settings/ui";
 import { useOsPermission } from "../../../hooks/useOsPermissions";
 import { PermissionRow } from "../../../components/permissions/PermissionRow";
+import { peopleOf } from "@codecast/shared/team/memberKind";
 
 /* This device's OS-level permission (System Settings / browser site
  * permission) — a separate axis from the in-app prefs below: with it off,
@@ -84,7 +83,6 @@ const DEFAULT_PREFS = {
 
 export default function NotificationsSettingsPage() {
   const { user } = useCurrentUser();
-  const updatePrefs = useMutation(api.users.updateNotificationPreferences);
   const { data: teamMembers } = useSettingsData("teamMembers");
 
   const prefs = user?.notification_preferences;
@@ -96,63 +94,37 @@ export default function NotificationsSettingsPage() {
     return (prefs as any)?.[key] ?? DEFAULT_PREFS[key];
   }, [prefs]);
 
-  const handleGlobalToggle = useCallback(async (value: boolean) => {
-    try {
-      await updatePrefs({ notifications_enabled: value });
-    } catch {
-      toast.error("Failed to update notification settings");
-    }
+  // Every switch goes through the store (updateNotificationSettings): it
+  // flips now, holds over pushes, and a refusal puts it back with a toast.
+  const updatePrefs = useInboxStore((s) => s.updateNotificationSettings);
+
+  const handleGlobalToggle = useCallback((value: boolean) => {
+    updatePrefs({ notifications_enabled: value });
   }, [updatePrefs]);
 
-  const handleToggleMachinePresence = useCallback(async (value: boolean) => {
-    try {
-      await updatePrefs({ machine_wide_presence: value });
-    } catch {
-      toast.error("Failed to update notification settings");
-    }
+  const handleToggleMachinePresence = useCallback((value: boolean) => {
+    updatePrefs({ machine_wide_presence: value });
   }, [updatePrefs]);
 
-  const handleToggleType = useCallback(async (type: NotifType) => {
+  const handleToggleType = useCallback((type: NotifType) => {
     const current = { ...DEFAULT_PREFS, ...prefs };
-    try {
-      await updatePrefs({
-        notification_preferences: {
-          ...current,
-          [type]: !((current as any)[type] ?? true),
-        },
-      });
-    } catch {
-      toast.error("Failed to update preferences");
-    }
+    updatePrefs({ notification_preferences: { ...current, [type]: !((current as any)[type] ?? true) } });
   }, [prefs, updatePrefs]);
 
-  const handleToggleMute = useCallback(async (memberId: Id<"users">) => {
+  const handleToggleMute = useCallback((memberId: Id<"users">) => {
     const isMuted = mutedMembers.includes(memberId);
-    const next = isMuted
-      ? mutedMembers.filter(id => id !== memberId)
-      : [...mutedMembers, memberId];
-    try {
-      await updatePrefs({ muted_members: next });
-    } catch {
-      toast.error("Failed to update mute settings");
-    }
+    updatePrefs({ muted_members: isMuted ? mutedMembers.filter(id => id !== memberId) : [...mutedMembers, memberId] });
   }, [mutedMembers, updatePrefs]);
 
   const agentCommentLevel = (prefs as any)?.task_agent_comments ?? "needs_person";
-  const setAgentCommentLevel = useCallback(async (level: string) => {
-    try {
-      await updatePrefs({ notification_preferences: { ...DEFAULT_PREFS, ...prefs, task_agent_comments: level } as any });
-    } catch {
-      toast.error("Failed to update preferences");
-    }
+  const setAgentCommentLevel = useCallback((level: string) => {
+    updatePrefs({ notification_preferences: { ...DEFAULT_PREFS, ...prefs, task_agent_comments: level } });
   }, [prefs, updatePrefs]);
 
   if (!user) return null;
 
   type TeamMember = { _id: Id<"users">; name?: string | null; email?: string | null; github_avatar_url?: string | null; title?: string | null };
-  const otherMembers = (teamMembers ?? []).filter(
-    (m: any) => m != null && m._id !== user._id
-  ) as TeamMember[];
+  const otherMembers = peopleOf(teamMembers as any[]).filter((m) => m._id !== user._id) as TeamMember[];
 
   return (
     <SettingsPanel>

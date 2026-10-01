@@ -42,15 +42,21 @@ export function recordEvidence(manifest: OrgTemplate, state: InstanceState, chec
   return record;
 }
 
-/** Scoreboard values the manifest declares, each with a source (H7). */
-export function recordScores(manifest: OrgTemplate, state: InstanceState, entries: string[], input: { source?: string; observedAt?: number }): Record<string, ScoreState> {
-  const declared = new Set((manifest.scoreboard ?? []).map((s) => s.key));
+/**
+ * Scoreboard values the manifest declares, each with a source (H7). The one
+ * reporting path for a number a role observed: a template instance's
+ * scoreboard and an initiative's metrics (shared/contracts/initiative) both
+ * declare keys and both record through here, so `cast org template report`
+ * and `cast initiative report` read and refuse the same way.
+ */
+export function recordScores(declaring: { scoreboard?: Array<{ key: string }> }, state: Pick<InstanceState, "scoreboard">, entries: string[], input: { source?: string; observedAt?: number; what?: string }): Record<string, ScoreState> {
+  const declared = new Set((declaring.scoreboard ?? []).map((s) => s.key));
   const values = pairs(entries, "A scoreboard value");
   if (!Object.keys(values).length) throw new Error("Give at least one key=value");
   const source = href(input.source, "--source");
   const written: Record<string, ScoreState> = {};
   for (const [key, value] of Object.entries(values)) {
-    if (!declared.has(key)) throw new Error(`Not a scoreboard key of this template: ${key}`);
+    if (!declared.has(key)) throw new Error(`Not a scoreboard key of ${input.what ?? "this template"}: ${key}${declared.size ? ` (declared: ${[...declared].join(", ")})` : ""}`);
     if (!value.trim()) throw new Error(`Empty value for ${key}`);
     written[key] = (state.scoreboard ??= {})[key] = { value, observed_at: input.observedAt ?? Date.now(), source };
   }

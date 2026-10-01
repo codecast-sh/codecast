@@ -14,6 +14,16 @@ import { StoreSyncBridge } from '@/components/StoreSyncBridge';
 import { useActiveTeamFeature } from '@/lib/teamFeatures';
 import { useChatRail } from '@/components/chat/ChannelList';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
+import {
+  MOBILE_HEADER_STYLE,
+  MOBILE_HEADER_TITLE_STYLE,
+  MOBILE_TAB,
+  MOBILE_TAB_BADGE_STYLE,
+  MOBILE_TAB_BADGE_TEXT_STYLE,
+  MOBILE_TAB_BAR_STYLE,
+  MOBILE_TAB_ICON_SIZE,
+  MOBILE_TAB_LABEL_STYLE,
+} from '@codecast/shared/render/mobileTabsStyle';
 
 function TabBarIcon(props: {
   name: React.ComponentProps<typeof FontAwesome>['name'];
@@ -27,7 +37,7 @@ function TabBarIcon(props: {
   const { badge, live, ...iconProps } = props;
   return (
     <RNView style={{ position: 'relative' }}>
-      <FontAwesome size={22} style={{ marginBottom: -2 }} {...iconProps} />
+      <FontAwesome size={MOBILE_TAB_ICON_SIZE} style={{ marginBottom: -2 }} {...iconProps} />
       {badge !== undefined && badge > 0 ? (
         <RNView style={badgeStyles.badge}>
           <RNText style={badgeStyles.badgeText}>
@@ -43,21 +53,11 @@ function TabBarIcon(props: {
 
 const badgeStyles = themedStyles((Theme) => StyleSheet.create({
   badge: {
-    position: 'absolute',
-    top: -4,
-    right: -8,
+    ...MOBILE_TAB_BADGE_STYLE,
     backgroundColor: Theme.red,
-    borderRadius: 8,
-    minWidth: 16,
-    height: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 3,
   },
   badgeText: {
-    color: '#fff',
-    fontSize: 9,
-    fontWeight: '700',
+    ...MOBILE_TAB_BADGE_TEXT_STYLE,
     fontVariant: ['tabular-nums'],
   },
   liveDot: {
@@ -94,27 +94,25 @@ export default function TabLayout() {
         tabBarActiveTintColor: Theme.text,
         tabBarInactiveTintColor: Theme.textMuted0,
         tabBarStyle: {
+          ...MOBILE_TAB_BAR_STYLE,
           backgroundColor: Theme.bgAlt,
           borderTopColor: Theme.borderLight,
-          borderTopWidth: 1,
           height: TAB_BAR_HEIGHT,
-          paddingTop: 8,
-          paddingBottom: 28,
         },
         tabBarLabelStyle: {
-          fontSize: 10,
+          ...MOBILE_TAB_LABEL_STYLE,
           fontFamily: Mono.medium,
         },
         headerStyle: {
+          ...MOBILE_HEADER_STYLE,
           backgroundColor: Theme.bgAlt,
-          borderBottomWidth: 1,
           borderBottomColor: Theme.borderLight,
           shadowOpacity: 0,
           elevation: 0,
         },
         headerTitleStyle: {
+          ...MOBILE_HEADER_TITLE_STYLE,
           color: Theme.text,
-          fontSize: 16,
           fontFamily: Mono.semiBold,
         },
         headerTintColor: Theme.text,
@@ -122,19 +120,19 @@ export default function TabLayout() {
       <Tabs.Screen
         name="inbox"
         options={{
-          title: 'Inbox',
+          title: MOBILE_TAB.inbox.title,
           headerShown: false,
-          tabBarIcon: ({ color }) => <TabBarIcon name="inbox" color={color} />,
+          tabBarIcon: ({ color }) => <TabBarIcon name={MOBILE_TAB.inbox.icon} color={color} />,
         }}
       />
       <Tabs.Screen
         name="chat"
         options={{
-          title: 'Chat',
+          title: MOBILE_TAB.chat.title,
           headerShown: false,
           tabBarIcon: ({ color }) => (
             <TabBarIcon
-              name="comments"
+              name={MOBILE_TAB.chat.icon}
               color={color}
               badge={chatRail?.mentionTotal ?? 0}
               live={(liveRooms?.length ?? 0) > 0}
@@ -145,9 +143,9 @@ export default function TabLayout() {
       <Tabs.Screen
         name="tasks"
         options={{
-          title: 'Tasks',
+          title: MOBILE_TAB.tasks.title,
           headerShown: false,
-          tabBarIcon: ({ color }) => <TabBarIcon name="check-square-o" color={color} />,
+          tabBarIcon: ({ color }) => <TabBarIcon name={MOBILE_TAB.tasks.icon} color={color} />,
         }}
       />
       <Tabs.Screen
@@ -159,20 +157,18 @@ export default function TabLayout() {
       <Tabs.Screen
         name="notifications"
         options={{
-          title: 'Notifications',
-          // "Notifications" doesn't fit a 5-tab bar in mono — short label,
-          // full title stays on the screen header.
-          tabBarLabel: 'Alerts',
+          title: MOBILE_TAB.notifications.title,
+          tabBarLabel: MOBILE_TAB.notifications.label,
           tabBarIcon: ({ color }) => (
-            <TabBarIcon name="bell" color={color} badge={unreadCount ?? 0} />
+            <TabBarIcon name={MOBILE_TAB.notifications.icon} color={color} badge={unreadCount ?? 0} />
           ),
         }}
       />
       <Tabs.Screen
         name="settings"
         options={{
-          title: 'Settings',
-          tabBarIcon: ({ color }) => <TabBarIcon name="cog" color={color} />,
+          title: MOBILE_TAB.settings.title,
+          tabBarIcon: ({ color }) => <TabBarIcon name={MOBILE_TAB.settings.icon} color={color} />,
         }}
       />
     </Tabs>

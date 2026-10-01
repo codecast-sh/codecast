@@ -4,6 +4,8 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { isLowSignalPrompt } from "./titleGeneration";
+import { verifyApiToken } from "./apiTokens";
+import { anthropicBody, CHEAP_MODEL, parseJsonBlock, type SurfaceRequest } from "./lib/anthropic";
 
 // Suggested replies for the composer ("suggestion pills"). Fourth member of
 // the Haiku family (titleGeneration, idleSummary, sessionInsights): an
@@ -38,8 +40,60 @@ export function isConversationTurn(m: {
 // The anchor identifies the tail turn suggestions were generated against.
 // The client computes the same value from its store window (message_uuid ??
 // _id of the last real turn), so a matching anchor means "still current".
-function anchorOf(m: { message_uuid?: string | null; _id: Id<"messages"> }): string {
+function anchorOf(m: { message_uuid?: string | null; _id: string }): string {
   return m.message_uuid || m._id.toString();
+}
+
+// How many raw rows (newest first) the suggester reads before keeping only
+// real turns.
+const SUGGESTION_CONTEXT_ROWS = 60;
+
+type SuggestionRow = {
+  _id: string;
+  message_uuid?: string | null;
+  role?: string;
+  content?: string | null;
+  tool_results?: unknown[] | null;
+  timestamp: number;
+};
+
+type SuggestionConversation = {
+  user_id: Id<"users">;
+  title?: string;
+  subtitle?: string;
+  idle_summary?: string;
+  thread_state?: string;
+  project_path?: string;
+  git_branch?: string;
+  status?: string;
+};
+
+// The suggester's context from a conversation's rows in time order, ending at
+// the moment being predicted: the newest SUGGESTION_CONTEXT_ROWS rows, kept
+// to real turns. getSuggestionContext feeds it the live tail; the evals feed
+// it the rows up to a past moment, so both see the same window.
+export function contextFromRows<C extends SuggestionConversation>(rows: SuggestionRow[], conversation: C) {
+  const turns = rows.slice(-SUGGESTION_CONTEXT_ROWS).filter(isConversationTurn);
+  const tail = turns[turns.length - 1];
+  return {
+    conversation: {
+      user_id: conversation.user_id,
+      title: conversation.title,
+      subtitle: conversation.subtitle,
+      idle_summary: conversation.idle_summary,
+      thread_state: conversation.thread_state,
+      project_path: conversation.project_path,
+      git_branch: conversation.git_branch,
+      status: conversation.status,
+    },
+    turns: turns.map((m) => ({
+      role: m.role as string,
+      content: m.content || "",
+      timestamp: m.timestamp,
+    })),
+    tail_role: tail?.role ?? null,
+    anchor: tail ? anchorOf(tail) : null,
+  };
 }
 
 export const getComposerSuggestions = query({
@@ -74,30 +128,9 @@ export const getSuggestionContext = internalQuery({
         q.eq("conversation_id", args.conversation_id)
       )
       .order("desc")
-      .take(60);
+      .take(SUGGESTION_CONTEXT_ROWS);
 
-    const turns = raw.filter(isConversationTurn).reverse();
-    const tail = turns[turns.length - 1];
-
-    return {
-      conversation: {
-        user_id: conversation.user_id,
-        title: conversation.title,
-        subtitle: conversation.subtitle,
-        idle_summary: conversation.idle_summary,
-        thread_state: conversation.thread_state,
-        project_path: conversation.project_path,
-        git_branch: conversation.git_branch,
-        status: conversation.status,
-      },
-      turns: turns.map((m) => ({
-        role: m.role,
-        content: m.content || "",
-        timestamp: m.timestamp,
-      })),
-      tail_role: tail?.role ?? null,
-      anchor: tail ? anchorOf(tail) : null,
-    };
+    return contextFromRows(raw.reverse(), conversation);
   },
 });
 
@@ -231,13 +264,27 @@ export const getRecentUserInputs = internalQuery({
   },
 });
 
+async function readSuggestionProfile(ctx: { db: any }, userId: Id<"users">) {
+  return await ctx.db
+    .query("suggestion_profiles")
+    .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+    .first();
+}
+
 export const getSuggestionProfile = internalQuery({
   args: { user_id: v.id("users") },
+  handler: async (ctx, args) => readSuggestionProfile(ctx, args.user_id),
+});
+
+// The caller's own profile, for the suggest eval (POST /cli/suggestion-profile).
+// The token is the only input: it names the user, so no one can read another
+// person's mined history through it.
+export const getOwnSuggestionProfile = internalQuery({
+  args: { api_token: v.string() },
   handler: async (ctx, args) => {
-    return await ctx.db
-      .query("suggestion_profiles")
-      .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
-      .first();
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+    return await readSuggestionProfile(ctx, auth.userId as Id<"users">);
   },
 });
 
@@ -691,6 +738,12 @@ Conversation:
 ${excerpt}`;
 }
 
+// The Anthropic request the suggester and the miner send. The evals replay
+// the same object, so what they measure is what prod posts.
+export function haikuRequest(prompt: string, maxTokens: number): SurfaceRequest {
+  return { model: CHEAP_MODEL, prompt, max_tokens: maxTokens, temperature: 0.3 };
+}
+
 // One completion call, either provider. The suggester picks its provider from
 // the SUGGESTIONS_PROVIDER env var ("openai" → GPT-5.6 Luna, anything else →
 // Haiku 4.5), so an A/B flip is an env change, not a deploy. Luna quirks:
@@ -729,12 +782,7 @@ export async function llmComplete(opts: {
         "x-api-key": key,
         "anthropic-version": "2023-06-01",
       },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: opts.maxTokens,
-        temperature: 0.3,
-        messages: [{ role: "user", content: opts.prompt }],
-      }),
+      body: JSON.stringify(anthropicBody(haikuRequest(opts.prompt, opts.maxTokens))),
     });
     if (!response.ok) return null;
     const data = await response.json();
@@ -745,40 +793,7 @@ export async function llmComplete(opts: {
   }
 }
 
-// The JSON value the reply starts with. A model that answers `[]` and then
-// explains why it stayed silent has still answered; the explanation is
-// dropped, not the answer. Fences are stripped the same way.
-export function parseJsonBlock(raw: string): unknown | null {
-  const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
-  try {
-    return JSON.parse(cleaned);
-  } catch {
-    const start = cleaned.search(/[\[{]/);
-    if (start < 0) return null;
-    const open = cleaned[start];
-    const close = open === "[" ? "]" : "}";
-    let depth = 0;
-    let inString = false;
-    for (let i = start; i < cleaned.length; i++) {
-      const ch = cleaned[i];
-      if (inString) {
-        if (ch === "\\") i++;
-        else if (ch === '"') inString = false;
-        continue;
-      }
-      if (ch === '"') inString = true;
-      else if (ch === open) depth++;
-      else if (ch === close && --depth === 0) {
-        try {
-          return JSON.parse(cleaned.slice(start, i + 1));
-        } catch {
-          return null;
-        }
-      }
-    }
-    return null;
-  }
-}
+export { parseJsonBlock };
 
 // Two full reusable prompts plus a verdict fit comfortably; the cap only
 // stops a runaway completion.
@@ -905,16 +920,24 @@ export const bakeoffSuggestions = internalAction({
   },
 });
 
+// The suggestion request for one moment on the Anthropic branch: the prompt
+// predictSuggestions renders, at its token cap.
+export function suggestRequest(context: Parameters<typeof buildPrompt>[0], profile: StoredProfile): SurfaceRequest {
+  return haikuRequest(buildPrompt(context, profileForPrompt(profile)), SUGGEST_MAX_TOKENS);
+}
+
 // The whole prediction, from stored context and profile to press-send-ready
 // strings: render the prompt, complete, parse, sanitize. Shared by the live
-// action and the eval script (scripts/suggest-eval.ts), so what the eval
-// grades is exactly what ships. `error` names the failing stage.
+// action and the evals, which pass their own `complete` to replay the request
+// elsewhere, so what the eval grades is exactly what ships. `error` names the
+// failing stage.
 export async function predictSuggestions(
   context: Parameters<typeof buildPrompt>[0],
   profile: StoredProfile,
   provider: "anthropic" | "openai",
+  complete: typeof llmComplete = llmComplete,
 ): Promise<{ suggestions: string[]; error?: "provider_failed" | "invalid_json"; raw?: string }> {
-  const prompt = buildPrompt(context, profileForPrompt(profile));
+  const req = suggestRequest(context, profile);
   // Anything the user has literally said before — recent messages, mined
   // examples, repeated whole inputs — may not come back as a pill…
   const bannedVerbatim = new Set<string>([
@@ -928,7 +951,7 @@ export async function predictSuggestions(
   // immediate echo.
   for (const p of profile.prompts ?? []) bannedVerbatim.delete(normalizeForMatch(p.text));
 
-  const completion = await llmComplete({ provider, prompt, maxTokens: SUGGEST_MAX_TOKENS });
+  const completion = await complete({ provider, prompt: req.prompt, maxTokens: req.max_tokens });
   if (!completion) return { suggestions: [], error: "provider_failed" };
   const parsed = parseJsonBlock(completion.text);
   if (parsed === null) return { suggestions: [], error: "invalid_json", raw: completion.text };

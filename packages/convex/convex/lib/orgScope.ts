@@ -4,7 +4,7 @@
 //
 // A scope is a set of projects and a set of plans. Scope is opt in
 // (org-staffing.md S26): empty sets name no area, and a role with no area owns
-// no work. Only the Chief of Staff with no scope stands for the whole
+// no work. Only the Head of People with no scope stands for the whole
 // workspace, and that rule lives in shared/contracts/orgLead.ts
 // (isWholeWorkspaceRole), never here: these functions read ids alone and say
 // nothing about who owns what. A plan belongs to a project (`plans.project_id`), so a plan is

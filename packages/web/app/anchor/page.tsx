@@ -14,7 +14,7 @@ import { OrgFeatureGate } from "../../components/org/OrgFeatureGate";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { ScopePageInner } from "../../components/org/scope/ScopePage";
 import { AnchorOnboarding, CenteredNote } from "../../components/anchor/AnchorConversation";
-import { CHIEF_OF_STAFF_HANDLE } from "../../components/org/orgStaffingTypes";
+import { isHeadOfPeopleRole } from "../../components/org/orgStaffingTypes";
 import { useMountEffect } from "../../hooks/useMountEffect";
 
 export default function AnchorPage() {
@@ -31,7 +31,7 @@ export default function AnchorPage() {
 
 function RootRolePage() {
   const { tree, ready } = useSyncOrgTree();
-  const root = tree?.roles.find((r) => r.handle === CHIEF_OF_STAFF_HANDLE && r.status !== "retired") ?? null;
+  const root = tree?.roles.find((r) => isHeadOfPeopleRole(r) && r.status !== "retired") ?? null;
 
   // The Slack install completes on /slack/connect and comes back here with
   // ?slack=connected|error.

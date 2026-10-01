@@ -52,8 +52,8 @@ async function verify() {
     });
   };
 
-  const growth = tree.roles.find((r) => r.handle !== "chief-of-staff" && r.status === "active")!;
-  const root_ = tree.roles.find((r) => r.handle === "chief-of-staff");
+  const growth = tree.roles.find((r) => r.handle !== "head-of-people" && r.status === "active")!;
+  const root_ = tree.roles.find((r) => r.handle === "head-of-people");
 
   // ── a hired role: the switch is on, and one click turns it off through the stored field ──
   await render({ ...growth, trust: "direct" } as OrgRole);

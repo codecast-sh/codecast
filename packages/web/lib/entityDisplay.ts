@@ -3,8 +3,7 @@ import { useQuery } from "convex/react";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useRepoObject } from "../hooks/useRepoObject";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { AlertTriangle, ArrowUp, Minus, ArrowDown } from "lucide-react";
-import { entityRoute, isConvexId, entityTypeFromId, entityReferenceLabel, entityShortLabel, parseRepoObjectId, type EntityType } from "./entityLinks";
+import { entityRoute, isConvexId, entityTypeFromId, entityReferenceLabel, entityShortLabel, parseRepoObjectId, parseCallRef, callRefId, formatCallTime, type EntityType } from "./entityLinks";
 import { repoObjectRefOf, repoObjectTitle } from "./repoObjects";
 import { findEntityInStore, resolveAssigneeInfo } from "./liveEntities";
 import { useInboxStore } from "../store/inboxStore";
@@ -12,7 +11,7 @@ import { useSyncOrgProposal } from "../hooks/useSyncOrgProposals";
 const api = _api as any;
 
 
-// The shared vocabulary of inline object references: status/priority/type maps,
+// The shared vocabulary of inline object references: status and type maps,
 // the small display atoms (avatars, summaries, relative time), and the
 // resolution hook that turns a raw id into a live entity. EntityIdPill (the
 // inline pill + hover card) and EntityObjectCard (the shared-object preview
@@ -41,14 +40,6 @@ export const STATUS_LABEL: Record<string, string> = {
 };
 
 
-export const PRIORITY_CONFIG: Record<string, { icon: any; color: string; label: string }> = {
-  urgent: { icon: AlertTriangle, color: "text-red-400", label: "Urgent" },
-  high: { icon: ArrowUp, color: "text-orange-400", label: "High" },
-  medium: { icon: Minus, color: "text-sol-yellow", label: "Medium" },
-  low: { icon: ArrowDown, color: "text-sol-blue", label: "Low" },
-};
-
-
 export const TYPE_LABEL: Record<EntityType, string> = {
   task: "Task",
   plan: "Plan",
@@ -61,6 +52,7 @@ export const TYPE_LABEL: Record<EntityType, string> = {
   decision: "Decision",
   pr: "Pull request",
   commit: "Commit",
+  call: "Call",
 };
 
 
@@ -154,6 +146,9 @@ export type EntityResolution = {
   status: string | undefined;
   /** What the reference is CALLED — title, else short id, else type name. */
   label: string;
+  /** The same name unclipped, for surfaces with the room for it (a reveal
+   *  band's strip, a hover title). */
+  fullLabel: string;
   /** The object's short NAME, for a compact (repeat) mention. */
   shortLabel: string;
   /** In-app route for the object (falls back to the raw id pre-resolution). */
@@ -235,7 +230,14 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   // triggers: a `owner/repo#482` in prose must read as text, not crash.
   const repoObjectArgs = isRepoObject && queryArgs && (queryArgs.id || queryArgs.repository) ? queryArgs : null;
   const repoObject = useRepoObject(live && isRepoObject ? type : null, rawId, repoObjectArgs);
-  const served = fixtures ? fixture?.entity ?? null : isTask ? task : isPlan ? plan : isSession ? session : isTrigger ? trigger : type === "doc" ? doc : type === "project" ? project : type === "initiative" ? initiative : type === "proposal" ? proposal : type === "decision" ? decision : undefined;
+  // A call (`cl-42`) or a stretch of it (`cl-42:15-25`): one query answers
+  // both, the turns riding along only when the reference names some.
+  const callRef = type === "call" ? parseCallRef(rawId) : null;
+  const { data: call } = useQueryNoThrow(
+    api.transcripts.webGetCallRef,
+    live && callRef ? { ref: callRef.call, ...(callRef.turns ?? {}) } : "skip",
+  );
+  const served = fixtures ? fixture?.entity ?? null : isTask ? task : isPlan ? plan : isSession ? session : isTrigger ? trigger : type === "doc" ? doc : type === "project" ? project : type === "initiative" ? initiative : type === "proposal" ? proposal : type === "decision" ? decision : type === "call" ? call : undefined;
 
   // Local-first: the client usually already holds this row, so paint the title
   // on the FIRST frame instead of flashing the raw id until the query answers.
@@ -260,10 +262,18 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
     rawId,
     typeLabel: type ? TYPE_LABEL[type] : null,
   };
-  const label = entityReferenceLabel(labelArgs);
+  // A stretch of a call reads as the call plus the transcript lines it names,
+  // and a moment of it as the call plus the time on the player.
+  const turnsSuffix = callRef?.at_ms != null
+    ? ` @${formatCallTime(callRef.at_ms)}`
+    : callRef?.turns
+      ? ` #${callRef.turns.from_seq}${callRef.turns.to_seq !== callRef.turns.from_seq ? `–${callRef.turns.to_seq}` : ""}`
+      : "";
+  const label = entityReferenceLabel(labelArgs) + turnsSuffix;
+  const fullLabel = resolvedTitle?.trim() ? resolvedTitle.trim() + turnsSuffix : label;
   // Sessions carry a generated short name (title generation writes
   // `short_title`); everything else derives one from its title.
-  const shortLabel = entityShortLabel({ ...labelArgs, shortTitle: entity?.short_title });
+  const shortLabel = entityShortLabel({ ...labelArgs, shortTitle: entity?.short_title }) + turnsSuffix;
 
   // Route that opens this entity. Prefer the resolved Convex id; fall back to
   // the raw id so the link still works in the brief window before the query
@@ -274,8 +284,8 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   // the route carries the full one.
   // An initiative's page is addressed by its `in-N`, a proposal's by its
   // `op-N` and a decision's by its `sd-N`: the form a person reads.
-  const routeId = isRepoObject && type ? repoObjectRefOf(type, entity, 40) ?? rawId : ((type === "initiative" || type === "proposal" || type === "decision") && entity?.short_id) || (entity?._id ?? rawId);
+  const routeId = isRepoObject && type ? repoObjectRefOf(type, entity, 40) ?? rawId : callRef ? callRefId(entity?._id ?? callRef.call, callRef.turns, callRef.at_ms) : ((type === "initiative" || type === "proposal" || type === "decision") && entity?.short_id) || (entity?._id ?? rawId);
   const href = entityRoute(type ?? "session", routeId) ?? "#";
 
-  return { rawId, type, entity, served: fixtures ? true : isRepoObject ? repoObject.ready : served !== undefined, status: entity?.status, label, shortLabel, href };
+  return { rawId, type, entity, served: fixtures ? true : isRepoObject ? repoObject.ready : served !== undefined, status: entity?.status, label, fullLabel, shortLabel, href };
 }

@@ -35,7 +35,7 @@ import {
 } from "../../../components/AccountUsageMeter";
 import { MintTokenButton, SetupTokenBadge, type MintFlow } from "../../../components/MintTokenDialog";
 import { profileHasSetupToken } from "@codecast/convex/convex/ccAccountsShared";
-import { formatAgo, rankByHeadroom, type RecoveryDecision } from "@codecast/shared/contracts";
+import { formatAgo, planTypeLabel, rankByHeadroom, type RecoveryDecision } from "@codecast/shared/contracts";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { useAccountRecoveryToggles } from "../../../hooks/useAccountRecoveryToggles";
 import { RecoveryModeSelect, RecoveryDecisionNote } from "../../../components/RecoveryModeSelect";
@@ -101,7 +101,7 @@ function sessionsBadge(
 
 function planLabel(p: { tier?: string; subscription?: string }): string | null {
   if (!p.subscription) return null;
-  const base = p.subscription.charAt(0).toUpperCase() + p.subscription.slice(1);
+  const base = planTypeLabel(p.subscription);
   if (p.tier?.includes("20x")) return `${base} 20x`;
   if (p.tier?.includes("5x")) return `${base} 5x`;
   return base;

@@ -1,11 +1,13 @@
-import { useRef, useCallback, useLayoutEffect, useState } from "react";
+import { useRef, useCallback, useLayoutEffect, useState, type RefObject } from "react";
 
 const ANIMATION_DURATION_MS = 400;
 
 /** `scale` also animates a change of size (a panel that moves AND resizes);
- *  the default moves only, which is right for rows of a fixed size. */
-export function useFlipAnimation({ scale = false, durationMs = ANIMATION_DURATION_MS }: { scale?: boolean; durationMs?: number } = {}) {
-  const containerRef = useRef<HTMLDivElement>(null);
+ *  the default moves only, which is right for rows of a fixed size.
+ *  `containerRef` measures an element the caller already holds a ref to. */
+export function useFlipAnimation({ scale = false, durationMs = ANIMATION_DURATION_MS, containerRef: externalRef }: { scale?: boolean; durationMs?: number; containerRef?: RefObject<HTMLDivElement | null> } = {}) {
+  const ownRef = useRef<HTMLDivElement>(null);
+  const containerRef = externalRef ?? ownRef;
   const positionsRef = useRef<Map<string, DOMRect>>(new Map());
   const [tick, setTick] = useState(0);
 

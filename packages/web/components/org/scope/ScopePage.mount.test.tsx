@@ -304,8 +304,8 @@ async function verifyScopePage() {
   // ── paused: the note above the composer, resume in one click ──
   env.tree = { ...withStanding, roles: [{ ...withStanding.roles[0], status: "paused" }] };
   await mount("or-1");
-  assert.match(q("[data-chief-paused]")!.textContent!, /Head of Growth is paused: its triggers hold until you resume it\. Messages still reach it\./);
-  await click(qa("[data-chief-paused] button")[0]);
+  assert.match(q("[data-head-paused]")!.textContent!, /Head of Growth is paused: its triggers hold until you resume it\. Messages still reach it\./);
+  await click(qa("[data-head-paused] button")[0]);
   assert.equal(calls.pop(), `update:${growth._id}:{"status":"active"}`);
   env.tree = withStanding;
 

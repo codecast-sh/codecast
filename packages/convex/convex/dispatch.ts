@@ -13,7 +13,7 @@ import { checkRateLimit } from "./rateLimit";
 import { resolveTeamForPath, buildShareUpdate } from "./privacy";
 import { applyMembershipVisibilityChange } from "./teams";
 import { isTeamVisibilityLevel } from "./teamVisibility";
-import { hasRecentPendingDaemonCommand, resumeConversationSession } from "./daemonCommandUtils";
+import { resumeConversationSession } from "./daemonCommandUtils";
 import { resolveAssigneeToUserId, recalcPlanProgress, subscribeUser, resolveWorkerParentConversation, resolveTaskGitContext } from "./tasks";
 import { api, internal } from "./_generated/api";
 import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey, fromConvexAgentType, type ConvexAgentType,
@@ -23,6 +23,8 @@ import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey, fromConvexAgentType
 } from "@codecast/shared/contracts";
 import { applyHideTransition } from "./cleanup";
 import { stampBrowserPaneOfferHandled, writeShareLink } from "./conversations";
+import { writeObjectShareLink } from "./publicShare";
+import { deleteSessionAsOwner } from "./sessionDelete";
 import { reactivateTasksCanceledOnKill } from "./agentTasks";
 import { canAccessDoc } from "./docs";
 import { canSendProductMessage, enqueuePendingMessage, retryPendingMessageForUser, cancelPendingMessageForUser } from "./pendingMessages";
@@ -717,19 +719,31 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   },
   retireOrgRole: async (ctx, _userId, [roleId, standingSession]: [string, "keep" | "retire" | undefined]) => {
     // S16: what becomes of the seat's standing agent. Absent lets the server
-    // choose (keep for the chief of staff, retire for any other seat).
+    // choose (keep for the head of people, retire for any other seat).
     return await ctx.runMutation!((api as any).orgRoles.retire, { role_id: roleId, ...(standingSession ? { standing_session: standingSession } : {}) });
   },
   // Staffing (org-staffing.md S4/S6). The web pushes a role stub for the
-  // chief of staff and flips a proposal's changes to accepted on the draft;
+  // head of people and flips a proposal's changes to accepted on the draft;
   // these are the server writes those rows reconcile against.
-  staffChiefOfStaff: async (ctx, _userId, [input]: [any]) => {
+  staffHeadOfPeople: async (ctx, _userId, [input]: [any]) => {
     return await ctx.runMutation!((api as any).orgRoles.staff, {
       ...(input.team_id ? { team_id: input.team_id } : {}),
       ...(input.adopt_conversation_id ? { adopt_conversation_id: input.adopt_conversation_id } : {}),
       ...(input.project_path ? { project_path: input.project_path } : {}),
       // S16: seat the existing standing agent (default) or start a fresh one.
       ...(input.seat ? { seat: input.seat } : {}),
+    });
+  },
+  // The Chief of Staff (org-staffing.md S30): the person's right hand.
+  hireChiefOfStaff: async (ctx, _userId, [input]: [any]) => {
+    return await ctx.runMutation!((api as any).orgRoles.hireChief, {
+      reach: input.reach,
+      ...(input.personal ? { personal: true } : {}),
+      ...(input.given_name ? { given_name: input.given_name } : {}),
+      ...(input.handle ? { handle: input.handle } : {}),
+      ...(input.avatar ? { avatar: input.avatar } : {}),
+      ...(input.project_path ? { project_path: input.project_path } : {}),
+      ...(input.adopt_conversation_id ? { adopt_conversation_id: input.adopt_conversation_id } : {}),
     });
   },
   // `seen` (org-staffing.md S18): what the page showed when the verdict was
@@ -1202,57 +1216,15 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   resumeSession: async (ctx, userId, [convId]: [string]) =>
     resumeConversationSession(ctx, userId, convId as Id<"conversations">),
 
-  // Web-triggered "move to remote": enqueue a move_to_device command targeted
-  // at the session's CURRENT owner device (the machine that has the checkout +
-  // credential). That daemon performs the local-only transfer (git/jsonl/cred),
-  // then flips ownership + resumes on the destination device.
-  // args: [conversationId, toDeviceId?]  (toDeviceId defaults to the online remote device)
-  moveToRemote: async (ctx, userId, [convId, toDeviceId]: [string, string | undefined]) => {
-    const conv = await ctx.db.get(convId as Id<"conversations">);
-    if (!conv || conv.user_id.toString() !== userId.toString()) throw new Error("Unauthorized");
-
-    const now = Date.now();
-    const ONLINE = 2 * 60 * 1000;
-    const devices = await ctx.db
-      .query("devices")
-      .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
-      .collect();
-    const online = devices.filter((d: any) => now - d.last_seen < ONLINE);
-
-    // Destination: explicit, else the online remote device.
-    const dest = toDeviceId
-      ? online.find((d: any) => d.device_id === toDeviceId)
-      : online.find((d: any) => d.is_remote);
-    if (!dest) throw new Error("No online destination device (start the remote daemon)");
-
-    // Source daemon = current owner if online, else the online local device.
-    const ownerOnline = conv.owner_device_id && online.some((d: any) => d.device_id === conv.owner_device_id);
-    const source = ownerOnline
-      ? conv.owner_device_id
-      : (online.find((d: any) => !d.is_remote)?.device_id ?? null);
-    if (!source) throw new Error("No online source device to perform the move");
-    if (source === dest.device_id) throw new Error("Session is already on that device");
-
-    const pendingCommands = await ctx.db
-      .query("daemon_commands")
-      .withIndex("by_user_pending", (q: any) => q.eq("user_id", userId).eq("executed_at", undefined))
-      .collect();
-    if (hasRecentPendingDaemonCommand(pendingCommands as any, { conversationId: convId, command: "move_to_device" })) {
-      return { deduplicated: true };
-    }
-
-    const commandId = await ctx.db.insert("daemon_commands", {
-      user_id: userId,
-      command: "move_to_device" as const,
-      args: JSON.stringify({
-        conversation_id: convId,
-        session_id: conv.session_id,
-        to_device_id: dest.device_id,
-      }),
-      created_at: now,
-      target_device_id: source, // only the source daemon executes the transfer
-    });
-    return { command_id: commandId, source, dest: dest.device_id };
+  // A device move ("Run here" / "Move to <remote>"), from the store's
+  // moveSessionToDevice, which painted the sessionCommands row keyed by
+  // requestId. A remote destination is a move_to_device on the source daemon
+  // (it transfers the worktree, then resumes there); a local one re-homes the
+  // session and resumes it on that device. Both writers carry the request id.
+  moveSessionToDevice: async (ctx, _userId, [requestId, convId, toDeviceId, toRemote]: [string, string, string, boolean]) => {
+    return toRemote
+      ? await ctx.runMutation!(api.devices.moveToRemote, { conversation_id: convId, to_device_id: toDeviceId, request_id: requestId })
+      : await ctx.runMutation!(api.devices.reassignToDevice, { conversation_id: convId, device_id: toDeviceId, request_id: requestId });
   },
 
   // A cloud session's live mirror into a laptop worktree: the web stamps
@@ -1310,6 +1282,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   killSessions: async (ctx, userId, [convIds]: [string[]]) => {
     for (const convId of convIds ?? []) await hideForViewerByClientId(ctx, userId, convId, "dismiss");
   },
+  deleteSession: async (ctx, userId, [convId]: [string]) => {
+    const id = ctx.db.normalizeId("conversations", convId);
+    if (id) await deleteSessionAsOwner(ctx, userId, id);
+  },
   restoreSession: async (ctx, userId, [convId]: [string]) => {
     const id = ctx.db.normalizeId("conversations", convId);
     if (id) await unhideConversationForViewer(ctx, userId, id);
@@ -1335,6 +1311,11 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // is not a dispatchable field, so this is its only web write path.
   setShareLink: async (ctx, userId, [convId, token]: [string, string | null]) => {
     await writeShareLink(ctx, userId, convId, token ?? null);
+  },
+
+  // The same switch for docs, plans, tasks and calls (publicShare.ts).
+  setObjectShareLink: async (ctx, userId, [kind, id, token]: [string, string, string | null]) => {
+    await writeObjectShareLink(ctx, userId, kind, id, token ?? null);
   },
 
   // A member's level for a whole team (settings, the share-in-full nudge).
@@ -1469,7 +1450,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     await ctx.db.patch(doc._id, { archived_at: undefined });
   },
 
-  updateDoc: async (ctx, userId, [docId, fields]: [string, { content?: string; title?: string; doc_type?: string; labels?: string[] }]) => {
+  updateDoc: async (ctx, userId, [docId, fields]: [string, { content?: string; title?: string; doc_type?: string; labels?: string[]; overflow?: string }]) => {
     const doc = await ctx.db.get(docId as Id<"docs">);
     if (!doc) throw new Error("Doc not found");
     if (!(await canAccessDoc(ctx, userId, doc))) throw new Error("Unauthorized");
@@ -1478,6 +1459,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (fields.title !== undefined) updates.title = fields.title;
     if (fields.doc_type !== undefined) updates.doc_type = fields.doc_type;
     if (fields.labels !== undefined) updates.labels = fields.labels;
+    if (fields.overflow !== undefined) updates.overflow = fields.overflow;
     await ctx.db.patch(doc._id, updates);
   },
 
@@ -2243,6 +2225,47 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (!isServerId(linkId)) return;
     return await ctx.runMutation!(api.slackSync.unlinkChannel, { link_id: linkId as Id<"slack_channel_links"> });
   },
+  // A team's opt-in feature switch (store setTeamFeature paints the teams row).
+  setTeamFeature: async (ctx, _userId, [teamId, feature, enabled]: [string, string, boolean]) => {
+    if (!isServerId(teamId)) return;
+    return await ctx.runMutation!(api.teamFeatures.setTeamFeature, { team_id: teamId as Id<"teams">, feature: feature as any, enabled: !!enabled });
+  },
+  // The viewer's default model for one agent client (store setDefaultModel
+  // paints currentUser.default_models).
+  setDefaultModel: async (ctx, _userId, [agent, model]: [string, string | null]) => {
+    return await ctx.runMutation!(api.users.updateDefaultModel, { agent, model: model ?? null });
+  },
+  // The viewer's own settings on the users row (store actions paint
+  // currentUser first).
+  updateNotificationSettings: async (ctx, _userId, [patch]: [Record<string, any>]) => {
+    return await ctx.runMutation!(api.users.updateNotificationPreferences, patch as any);
+  },
+  setAgentPermissionModes: async (ctx, _userId, [modes]: [Record<string, any>]) => {
+    return await ctx.runMutation!(api.users.updateAgentPermissionModes, modes as any);
+  },
+  setAgentDefaultParams: async (ctx, _userId, [agent, params]: [string, Record<string, string>]) => {
+    return await ctx.runMutation!(api.users.updateAgentDefaultParams, { agent: agent as any, params });
+  },
+  // A huddle's flags, flipped from inside it (store setRoomLocked /
+  // setRoomTranscribeOff paint the callRooms row first).
+  setRoomLocked: async (ctx, _userId, [roomKey, locked]: [string, boolean]) => {
+    return await ctx.runMutation!(api.calls.setRoomLocked, { room_key: roomKey, locked: !!locked });
+  },
+  setRoomTranscribeOff: async (ctx, _userId, [roomKey, off]: [string, boolean]) => {
+    return await ctx.runMutation!(api.calls.setRoomTranscribeOff, { room_key: roomKey, off: !!off });
+  },
+  setChatSlackMember: async (
+    ctx,
+    _userId,
+    [channelId, slackUserId, present]: [string, string, boolean],
+  ) => {
+    if (!isServerId(channelId)) return;
+    return await ctx.runMutation!(api.slackSync.requestSlackMember, {
+      chat_channel_id: channelId as Id<"chat_channels">,
+      slack_user_id: slackUserId,
+      present: !!present,
+    });
+  },
   shareChatMessageToSlack: async (ctx, _userId, [messageId]: [string]) => {
     if (!isServerId(messageId)) return;
     return await ctx.runMutation!(api.slackSync.shareMessageToSlack, { message_id: messageId as Id<"chat_messages"> });
@@ -2318,6 +2341,21 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       client_id: clientId,
       ...(teamId && isServerId(teamId) ? { team_id: teamId as Id<"teams"> } : {}),
     });
+  },
+
+  // Restart (kill + resume ladder) or repair (forced rebuild from history),
+  // from the store's restartSession action: the request id rides the resume
+  // row, so the row painted on the click settles from the daemon's report.
+  restartSession: async (ctx, _userId, [requestId, convId, ghost, repair]: [string, string, Record<string, string | undefined>?, boolean?]) => {
+    return await ctx.runMutation!(repair ? api.conversations.repairSession : api.conversations.restartSession, {
+      ...(ghost ?? {}), conversation_id: convId as Id<"conversations">, request_id: requestId,
+    });
+  },
+
+  // A machine account switch or a blocked-session revive, from the store's
+  // requestAccountSwitch. args are requestAccountSwitch's own.
+  requestAccountSwitch: async (ctx, _userId, [requestId, args]: [string, Record<string, any>]) => {
+    return await ctx.runMutation!(api.accountSwitch.requestAccountSwitch, { ...args, request_id: requestId });
   },
 
   // Generic session daemon-command dispatch: delegates to the existing mutation

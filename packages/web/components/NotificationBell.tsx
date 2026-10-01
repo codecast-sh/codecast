@@ -1,6 +1,6 @@
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useState, useRef, useCallback, useMemo } from "react";
+import { useState, useRef, useCallback, useMemo, forwardRef, type ButtonHTMLAttributes } from "react";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useConvexSync } from "../hooks/useConvexSync";
@@ -13,6 +13,35 @@ import { notificationHref, notificationRoute } from "../lib/notificationTypes";
 import { NotificationList } from "./notifications/NotificationList";
 import { ArrowUpRight, ExternalLink, Check, CheckCheck } from "lucide-react";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
+
+/** The bell in the top bar, with the unread count on its shoulder. */
+export const NotificationBellButton = forwardRef<
+  HTMLButtonElement,
+  ButtonHTMLAttributes<HTMLButtonElement> & { active: boolean; unreadCount?: number }
+>(function NotificationBellButton({ active, unreadCount, ...props }, ref) {
+  return (
+      <TopbarButton
+        ref={ref}
+        {...props}
+        active={active}
+        aria-label="Notifications"
+      >
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={1.5}
+            d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"
+          />
+        </svg>
+        {unreadCount !== undefined && unreadCount > 0 && (
+          <span className="absolute -top-1 -right-1.5 inline-flex items-center justify-center px-1 py-0.5 text-[10px] font-bold leading-none text-white bg-sol-orange rounded-full min-w-[16px] ring-2 ring-sol-bg">
+            {unreadCount > 9 ? '9+' : unreadCount}
+          </span>
+        )}
+      </TopbarButton>
+  );
+});
 
 export function NotificationBell() {
   const router = useRouter();
@@ -89,25 +118,7 @@ export function NotificationBell() {
   return (
     <div className="relative" ref={dropdownRef}>
       <ShortcutTooltip label="Notifications">
-      <TopbarButton
-        onClick={() => setIsOpen(!isOpen)}
-        active={isOpen}
-        aria-label="Notifications"
-      >
-        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={1.5}
-            d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"
-          />
-        </svg>
-        {unreadCount !== undefined && unreadCount > 0 && (
-          <span className="absolute -top-1 -right-1.5 inline-flex items-center justify-center px-1 py-0.5 text-[10px] font-bold leading-none text-white bg-sol-orange rounded-full min-w-[16px] ring-2 ring-sol-bg">
-            {unreadCount > 9 ? '9+' : unreadCount}
-          </span>
-        )}
-      </TopbarButton>
+      <NotificationBellButton onClick={() => setIsOpen(!isOpen)} active={isOpen} unreadCount={unreadCount} />
       </ShortcutTooltip>
 
       {isOpen && (

@@ -92,7 +92,7 @@ test("the first visit: faces, S20's five lines, the two actions, seen once", asy
 
   await mount(false);
   expect(q("[data-org-intro]")!.getAttribute("data-org-intro")).toBe("empty");
-  // Five faces as a small company, the chief above the rail.
+  // Five faces as a small company, the Head of People above the rail.
   const faces = qa("[data-org-intro-company] [data-org-intro-face]").map((f) => f.getAttribute("data-org-intro-face"));
   expect(faces).toEqual(["owl", "fox", "bear", "hare", "crane"]);
   // The five lines, in S20's order, each marked by its own face.
@@ -107,7 +107,7 @@ test("the first visit: faces, S20's five lines, the two actions, seen once", asy
   // One name for one thing: the screen, the card and the lines say organization.
   expect(intro.ORG_INTRO_TITLE).toBe("Meet your organization");
   expect(all).not.toMatch(/\bcompany\b/);
-  for (const must of ["organization has roles", "chief of staff", "proposes the roles", "You decide", "nothing changes until you accept", "Only what needs you", "raises in its own thread", "/cast-org"]) expect(all).toContain(must);
+  for (const must of ["organization has roles", "head of people", "proposes the roles", "You decide", "nothing changes until you accept", "Only what needs you", "raises in its own thread", "/cast-org"]) expect(all).toContain(must);
   // One title in the serif, one set of actions, nothing else to read.
   expect(q("[data-org-intro-title]")!.textContent).toBe(intro.ORG_INTRO_TITLE);
   expect(qa("[data-org-intro-actions] button").length).toBe(2);
@@ -121,8 +121,8 @@ test("the first visit: faces, S20's five lines, the two actions, seen once", asy
   // A face nods when its own line lands.
   for (const l of intro.ORG_INTRO_LINES) expect(q(`[data-org-intro-face="${l.face}"]`)!.style.getPropertyValue("--dn")).toBe(q(`[data-org-intro-line="${l.face}"]`)!.style.getPropertyValue("--d"));
 
-  // No roles: the start asks the chief of staff. Roles: it opens the chart.
-  expect(q("[data-org-intro-start]")!.textContent).toBe("Ask the chief of staff to look at my workspace");
+  // No roles: the start asks the head of people. Roles: it opens the chart.
+  expect(q("[data-org-intro-start]")!.textContent).toBe("Ask the head of people to look at my workspace");
   await act(async () => q<HTMLButtonElement>("[data-org-intro-start]")!.click());
   expect(calls.splice(0)).toEqual(["start"]);
   await mount(true);
@@ -211,10 +211,10 @@ test("the card rises once the page settles and Not now sells it", async () => {
   expect(fake.toasts.map((t) => t.id)).toEqual([card.ORG_MEET_TOAST_ID]);
   const toastRoot = createRoot(document.getElementById("toast")!);
   await paintToast(toastRoot);
-  expect(q("[data-org-meet] .org-meet-title")!.textContent).toBe(card.ORG_MEET_TITLE);
-  expect(qa("[data-org-meet] .org-meet-copy").map((p) => p.textContent)).toEqual([...card.ORG_MEET_LINES]);
-  expect(q("[data-org-meet] img")!.getAttribute("data-avatar")).toBe(intro.ORG_INTRO_CHIEF);
-  await act(async () => q<HTMLButtonElement>("[data-org-meet-later]")!.click());
+  expect(q("[data-org-meet] .rise-card-title")!.textContent).toBe(card.ORG_MEET_TITLE);
+  expect(qa("[data-org-meet] .rise-card-copy").map((p) => p.textContent)).toEqual([...card.ORG_MEET_LINES]);
+  expect(q("[data-org-meet] img")!.getAttribute("data-avatar")).toBe(intro.ORG_INTRO_HEAD_OF_PEOPLE);
+  await act(async () => q<HTMLButtonElement>("[data-org-meet] [data-rise-later]")!.click());
   expect(fake.writes).toEqual([{ org_upsell_seen: true }]);
   expect(fake.dismissed).toEqual([card.ORG_MEET_TOAST_ID]);
   expect(fake.pushes).toEqual([]);
@@ -230,7 +230,7 @@ test("See it opens the org page and sells it; the gates hold it back", async () 
   await sleep(card.ORG_MEET_SETTLE_MS + 150);
   const toastRoot = createRoot(document.getElementById("toast")!);
   await paintToast(toastRoot);
-  await act(async () => q<HTMLButtonElement>("[data-org-meet-see]")!.click());
+  await act(async () => q<HTMLButtonElement>("[data-org-meet] [data-rise-primary]")!.click());
   expect(fake.pushes).toEqual(["/org"]);
   expect(fake.writes).toEqual([{ org_upsell_seen: true }]);
   await act(async () => { toastRoot.unmount(); root.unmount(); });

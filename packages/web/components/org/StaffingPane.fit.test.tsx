@@ -83,7 +83,7 @@ async function verifyFit() {
   const { StaffingPane } = await import("./StaffingPane");
   const { ORG_FIXTURE } = await import("./orgFixture");
   const { ORG_STAFFING_FIXTURE_HEALTH, ORG_STAFFING_FIXTURE_PROPOSAL } = await import("./orgStaffingFixture");
-  const { findChiefOfStaff } = await import("./staffingModel");
+  const { findHeadOfPeople } = await import("./staffingModel");
 
   // The round 12 shapes, the analyzer's own words (~/.cache/org-eval/union/
   // round-12/s1/proposal.json): every title two lines; why 100, 110 and 125
@@ -101,12 +101,12 @@ async function verifyFit() {
   assert.ok(!process.env.FIT_PROPOSAL || real, `${process.env.FIT_PROPOSAL} is not a proposal spec`);
   const proposal = real ?? { ...ORG_STAFFING_FIXTURE_PROPOSAL, title: "Company review: Fixture", asks: round12 };
   const asks = proposal.asks!;
-  const chiefTree = { ...ORG_FIXTURE, roles: [...ORG_FIXTURE.roles, { ...ORG_FIXTURE.roles[0], _id: "fixture-role-chief", short_id: "or-9", handle: "chief-of-staff", name: "Chief of Staff", standing: { conversation_id: "fixture-chief-conv", short_id: "jx7ch1f" } }] };
+  const headOfPeopleTree = { ...ORG_FIXTURE, roles: [...ORG_FIXTURE.roles, { ...ORG_FIXTURE.roles[0], _id: "fixture-role-head", short_id: "or-9", handle: "head-of-people", name: "Head of People", standing: { conversation_id: "fixture-head-conv", short_id: "jx7ch1f" } }] };
   const noop = () => {};
   const root = createRoot(document.getElementById("root")!);
   await act(async () => root.render(React.createElement(StaffingPane, {
-    tree: chiefTree, health: ORG_STAFFING_FIXTURE_HEALTH, proposals: [proposal], proposal, chief: findChiefOfStaff(chiefTree), reviewing: false, now: Date.now(), hasThread: true, selectedChangeId: null, titleInPageHeader: true,
-    onSelectChange: noop, onDecide: noop, onDecideAsk: noop, onEditRole: noop, onSelectNode: noop, onOpenSession: noop, onPickProposal: noop, onHireChief: noop, onProposeNow: noop, onAskAbout: noop, onAskAboutAsk: noop,
+    tree: headOfPeopleTree, health: ORG_STAFFING_FIXTURE_HEALTH, proposals: [proposal], proposal, head: findHeadOfPeople(headOfPeopleTree), reviewing: false, now: Date.now(), hasThread: true, selectedChangeId: null, titleInPageHeader: true,
+    onSelectChange: noop, onDecide: noop, onDecideAsk: noop, onEditRole: noop, onSelectNode: noop, onOpenSession: noop, onPickProposal: noop, onHireHeadOfPeople: noop, onProposeNow: noop, onAskAbout: noop, onAskAboutAsk: noop,
   } as any)));
   const q = (sel: string, from: ParentNode = document) => { const el = from.querySelector(sel); assert.ok(el, `missing ${sel}`); return el!; };
 

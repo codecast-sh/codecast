@@ -1,0 +1,228 @@
+{
+ "asOf": "2026-01-15T14:15:00.000Z",
+ "notes": "synthetic session about renaming a settings page; the question is about something it never discusses",
+ "judge": "says plainly that the session does not discuss a Redis eviction policy, makes no guess at one, and at most names the session's actual topic",
+ "snapshot": {
+  "question": "Which Redis eviction policy did we choose for the session cache?",
+  "title": "Rename settings to Preferences",
+  "rows": [
+   {
+    "_id": "m1",
+    "role": "user",
+    "content": "Next: check that page 1 of the settings flow still renders after the rename to Preferences.",
+    "timestamp": 1768485600000,
+    "line": 1
+   },
+   {
+    "_id": "m2",
+    "role": "assistant",
+    "content": "Page 1 renders. Updated its nav link and breadcrumb from Settings to Preferences, and its route test.",
+    "timestamp": 1768485630000,
+    "line": 2
+   },
+   {
+    "_id": "m3",
+    "role": "user",
+    "content": "Next: check that page 2 of the settings flow still renders after the rename to Preferences.",
+    "timestamp": 1768485660000,
+    "line": 3
+   },
+   {
+    "_id": "m4",
+    "role": "assistant",
+    "content": "Page 2 renders. Updated its nav link and breadcrumb from Settings to Preferences, and its route test.",
+    "timestamp": 1768485690000,
+    "line": 4
+   },
+   {
+    "_id": "m5",
+    "role": "user",
+    "content": "Next: check that page 3 of the settings flow still renders after the rename to Preferences.",
+    "timestamp": 1768485720000,
+    "line": 5
+   },
+   {
+    "_id": "m6",
+    "role": "assistant",
+    "content": "Page 3 renders. Updated its nav link and breadcrumb from Settings to Preferences, and its route test.",
+    "timestamp": 1768485750000,
+    "line": 6
+   },
+   {
+    "_id": "m7",
+    "role": "user",
+    "content": "Next: check that page 4 of the settings flow still renders after the rename to Preferences.",
+    "timestamp": 1768485780000,
+    "line": 7
+   },
+   {
+    "_id": "m8",
+    "role": "assistant",
+    "content": "Page 4 renders. Updated its nav link and breadcrumb from Settings to Preferences, and its route test.",
+    "timestamp": 1768485810000,
+    "line": 8
+   },
+   {
+    "_id": "m9",
+    "role": "user",
+    "content": "Next: check that page 5 of the settings flow still renders after the rename to Preferences.",
+    "timestamp": 1768485840000,
+    "line": 9
+   },
+   {
+    "_id": "m10",
+    "role": "assistant",
+    "content": "Page 5 renders. Updated its nav link and breadcrumb from Settings to Preferences, and its route test.",
+    "timestamp": 1768485870000,
+    "line": 10
+   },
+   {
+    "_id": "m11",
+    "role": "user",
+    "content": "Next: check that page 6 of the settings flow still renders after the rename to Preferences.",
+    "timestamp": 1768485900000,
+    "line": 11
+   },
+   {
+    "_id": "m12",
+    "role": "assistant",
+    "content": "Page 6 renders. Updated its nav link and breadcrumb from Settings to Preferences, and its route test.",
+    "timestamp": 1768485930000,
+    "line": 12
+   },
+   {
+    "_id": "m13",
+    "role": "user",
+    "content": "Next: check that page 7 of the settings flow still renders after the rename to Preferences.",
+    "timestamp": 1768485960000,
+    "line": 13
+   },
+   {
+    "_id": "m14",
+    "role": "assistant",
+    "content": "Page 7 renders. Updated its nav link and breadcrumb from Settings to Preferences, and its route test.",
+    "timestamp": 1768485990000,
+    "line": 14
+   },
+   {
+    "_id": "m15",
+    "role": "user",
+    "content": "Next: check that page 8 of the settings flow still renders after the rename to Preferences.",
+    "timestamp": 1768486020000,
+    "line": 15
+   },
+   {
+    "_id": "m16",
+    "role": "assistant",
+    "content": "Page 8 renders. Updated its nav link and breadcrumb from Settings to Preferences, and its route test.",
+    "timestamp": 1768486050000,
+    "line": 16
+   },
+   {
+    "_id": "m17",
+    "role": "user",
+    "content": "Next: check that page 9 of the settings flow still renders after the rename to Preferences.",
+    "timestamp": 1768486080000,
+    "line": 17
+   },
+   {
+    "_id": "m18",
+    "role": "assistant",
+    "content": "Page 9 renders. Updated its nav link and breadcrumb from Settings to Preferences, and its route test.",
+    "timestamp": 1768486110000,
+    "line": 18
+   },
+   {
+    "_id": "m19",
+    "role": "user",
+    "content": "Next: check that page 10 of the settings flow still renders after the rename to Preferences.",
+    "timestamp": 1768486140000,
+    "line": 19
+   },
+   {
+    "_id": "m20",
+    "role": "assistant",
+    "content": "Page 10 renders. Updated its nav link and breadcrumb from Settings to Preferences, and its route test.",
+    "timestamp": 1768486170000,
+    "line": 20
+   },
+   {
+    "_id": "m21",
+    "role": "user",
+    "content": "Next: check that page 11 of the settings flow still renders after the rename to Preferences.",
+    "timestamp": 1768486200000,
+    "line": 21
+   },
+   {
+    "_id": "m22",
+    "role": "assistant",
+    "content": "Page 11 renders. Updated its nav link and breadcrumb from Settings to Preferences, and its route test.",
+    "timestamp": 1768486230000,
+    "line": 22
+   },
+   {
+    "_id": "m23",
+    "role": "user",
+    "content": "Next: check that page 12 of the settings flow still renders after the rename to Preferences.",
+    "timestamp": 1768486260000,
+    "line": 23
+   },
+   {
+    "_id": "m24",
+    "role": "assistant",
+    "content": "Page 12 renders. Updated its nav link and breadcrumb from Settings to Preferences, and its route test.",
+    "timestamp": 1768486290000,
+    "line": 24
+   },
+   {
+    "_id": "m25",
+    "role": "user",
+    "content": "Next: check that page 13 of the settings flow still renders after the rename to Preferences.",
+    "timestamp": 1768486320000,
+    "line": 25
+   },
+   {
+    "_id": "m26",
+    "role": "assistant",
+    "content": "Page 13 renders. Updated its nav link and breadcrumb from Settings to Preferences, and its route test.",
+    "timestamp": 1768486350000,
+    "line": 26
+   },
+   {
+    "_id": "m27",
+    "role": "user",
+    "content": "Next: check that page 14 of the settings flow still renders after the rename to Preferences.",
+    "timestamp": 1768486380000,
+    "line": 27
+   },
+   {
+    "_id": "m28",
+    "role": "assistant",
+    "content": "Page 14 renders. Updated its nav link and breadcrumb from Settings to Preferences, and its route test.",
+    "timestamp": 1768486410000,
+    "line": 28
+   },
+   {
+    "_id": "m29",
+    "role": "user",
+    "content": "Next: check that page 15 of the settings flow still renders after the rename to Preferences.",
+    "timestamp": 1768486440000,
+    "line": 29
+   },
+   {
+    "_id": "m30",
+    "role": "assistant",
+    "content": "Page 15 renders. Updated its nav link and breadcrumb from Settings to Preferences, and its route test.",
+    "timestamp": 1768486470000,
+    "line": 30
+   },
+   {
+    "_id": "m31",
+    "role": "assistant",
+    "content": "The settings section is now Preferences everywhere: routes, nav, breadcrumbs and the 15 route tests.",
+    "timestamp": 1768486500000,
+    "line": 31
+   }
+  ]
+ }
+}

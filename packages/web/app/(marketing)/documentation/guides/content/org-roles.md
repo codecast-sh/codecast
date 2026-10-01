@@ -42,7 +42,7 @@ When a role gains scope, the host's sessions in that scope that report to no rol
 
 A role is a session, and it wakes the way any session wakes: on its own trigger, and when someone writes to it.
 
-Every role has one recurring [trigger](/documentation/triggers) on its standing session, armed when the role is brought online: a daily check for a role, the weekly company review for the chief of staff. It appears on the Triggers page and on the role page's Triggers tab with its next run, and you change or pause it there like any trigger. Pausing the role pauses every trigger on its seat; resuming brings them back. The check's prompt is short: run `cast brief`, act on what your switch and grants allow, put in front of the person what needs them.
+Every role has one recurring [trigger](/documentation/triggers) on its standing session, armed when the role is brought online: a daily check for a role, the weekly company review for the head of people. It appears on the Triggers page and on the role page's Triggers tab with its next run, and you change or pause it there like any trigger. Pausing the role pauses every trigger on its seat; resuming brings them back. The check's prompt is short: run `cast brief`, act on what your switch and grants allow, put in front of the person what needs them.
 
 Everything else reaches the role as a plain message into its standing session, never wrapped or held:
 
@@ -72,7 +72,7 @@ Staffing is a person's act. `orgRoles.create`, `reparent`, `retire` and the scop
 
 One role is one context window, so the thresholds that size a seat live in one module, `packages/shared/contracts/orgCapacity.ts`, read by the health query and rendered into the analyzer prompt. Load is what reaches the role: 30 work items a day, 4 routed decisions a day, 6 live hands, 3 open stalls. The ledger is what the scope holds (25 open tasks, 8 in flight, 4 active plans). Only load raises `overloaded`. A wide ledger raises `wide_ledger` and never drives a split.
 
-`cast org health` prints the flags for each role: `overloaded`, `bypassed` (work closes in the scope and none of it reaches the seat), `idle` after 14 days, `review_stall` after 24 hours in review, `cap_hit`, `stale_plan`, `stale_task`, `program_ended`. A person with more than 7 direct roles raises `wide_span`. `cast org staff` hires the Chief of Staff (handle `chief-of-staff`): a role over the whole company with a `cast org review` routine every 7 days that posts proposals. It is safe to run twice.
+`cast org health` prints the flags for each role: `overloaded`, `bypassed` (work closes in the scope and none of it reaches the seat), `idle` after 14 days, `review_stall` after 24 hours in review, `cap_hit`, `stale_plan`, `stale_task`, `program_ended`. A person with more than 7 direct roles raises `wide_span`. `cast org staff` hires the Head of People (handle `head-of-people`): a role over the whole company with a `cast org review` routine every 7 days that posts proposals. It is safe to run twice.
 
 ## The line
 
@@ -101,7 +101,7 @@ A session node that passes its timeout (30 minutes by default) is killed and the
 
 ## On the web
 
-`/org` draws people, roles and sessions as one tree. Each session card carries its inbox work state, and a wide cluster folds into a "+N sessions" card. Drag a session or a role onto a person or a role to reparent it; a popover confirms the move. The staffing pane lists the company's flags, the changes of the open proposal, and a composer that talks to the chief of staff.
+`/org` draws people, roles and sessions as one tree. Each session card carries its inbox work state, and a wide cluster folds into a "+N sessions" card. Drag a session or a role onto a person or a role to reparent it; a popover confirms the move. The staffing pane lists the company's flags, the changes of the open proposal, and a composer that talks to the head of people.
 
 `/org/<or-id>` is the scope page. The role's standing conversation fills the left side, so there is one place to type, and a line sent there is the same pending message `cast role wake` enqueues. The panel beside it has the tabs Scope, Feed, Tasks, Line, Plans, Docs, Sessions, Decisions, Brief, Charter, Triggers and Settings. Line shows one column for each station. Sessions groups hands by who acts next. Settings holds the scope editor, trust, caps and the line picker.
 

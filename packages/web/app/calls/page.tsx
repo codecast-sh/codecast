@@ -13,17 +13,19 @@
 // answers inline. The words, the room's typed lines, the agents' answers
 // and the recap read as one thread (components/calls/RoomThread.tsx).
 
+import { isCallLive } from "../../lib/calls/callStatus";
 import { useTeamFeature } from "../../lib/teamFeatures";
 import { useMemo, useRef, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
+import { ShareControl } from "../../components/ShareControl";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { toast } from "sonner";
-import { humanizeConvexError, isRecRoomKey } from "@codecast/shared/contracts";
+import { humanizeConvexError, isRecRoomKey, parseCallAnchor } from "@codecast/shared/contracts";
 import { joinCall } from "../../lib/calls/callManager";
 import { isConvexId, useInboxStore } from "../../store/inboxStore";
 import { Facepile } from "../../components/calls/OccupancyChip";
@@ -31,13 +33,15 @@ import { LiveRoomAction, LiveRoomLabel } from "../../components/calls/LiveNow";
 import { useLiveRooms } from "../../hooks/useLiveRooms";
 import { RoomThread } from "../../components/calls/RoomThread";
 import { buildPassages, flatTurns, type ThreadRow } from "../../components/calls/roomThreadModel";
+import { turnsAnchor } from "../../components/calls/transcriptTurnModel";
+import { copyCallLink } from "../../lib/calls/callLinks";
 import {
   openFeedTargetPicker,
   useSendExcerpt,
   type FeedTarget,
   type TranscriptExcerpt,
 } from "../../components/calls/useCallFeed";
-import { firstName, speakerColor } from "../../components/calls/speakers";
+import { firstName, fmtCallLength, speakerColor } from "../../components/calls/speakers";
 import { CallSessionChips } from "../../components/calls/CallSessionChips";
 import { useMutation } from "convex/react";
 import {
@@ -49,6 +53,7 @@ import {
 } from "../../components/ui/dropdown-menu";
 import {
   Check,
+  Link2,
   Lock,
   Phone,
   PhoneCall,
@@ -65,12 +70,7 @@ import "../../components/calls/recorder.css";
 
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { fmtClock as fmtWhen, fmtDuration } from "../../components/triggerCadence";
-
-/** How long the call ran, in the same form the thread's passages use. */
-function fmtLength(startedAt: number, endedAt: number | null): string {
-  return endedAt ? fmtDuration(Math.max(1000, endedAt - startedAt)) : "live";
-}
+import { fmtClock as fmtWhen } from "../../components/triggerCadence";
 
 /** Where a recording of mine stands in triage, at a glance: private (the
  *  birth state) or the team its creator shared it into. Read-only here — the
@@ -95,7 +95,7 @@ function RecordingScopeChip({ call }: { call: any }) {
 }
 
 function CallListRow({ call, selected }: { call: any; selected: boolean }) {
-  const live = call.status === "live";
+  const live = isCallLive(call);
   // A recording sits in the same list under the same idiom — it is a call
   // object like any other — and the glyph is the whole difference: a
   // microphone rather than a telephone, because one voice in a room is not
@@ -121,18 +121,18 @@ function CallListRow({ call, selected }: { call: any; selected: boolean }) {
         ) : (
           <Phone className="h-3 w-3 shrink-0 text-sol-text-dim" />
         )}
-        {/* An ended huddle nobody spoke in (a test, a silent join) says so in
-            its title, quietly, so the eye passes it and lands on the calls
-            with a name. */}
+        {/* An ended huddle nobody spoke in is only listed when something was
+            typed or answered in it (the history drops empty ones), so it says
+            that, quietly, and the eye lands on the calls with a name. */}
         <span
           className={`min-w-0 flex-1 truncate text-[13px] ${
             silent ? "font-normal text-sol-text-muted" : "font-medium text-sol-text"
           }`}
         >
-          {call.title || (recording ? "Untitled recording" : silent ? "Silent huddle" : "Untitled huddle")}
+          {call.title || (recording ? "Untitled recording" : silent ? "Typed huddle, nothing said" : "Untitled huddle")}
         </span>
         <span className={`shrink-0 text-[11px] ${live ? "text-sol-green" : "text-sol-text-dim"}`}>
-          {fmtLength(call.started_at, call.ended_at)}
+          {fmtCallLength(call.started_at, call.ended_at)}
         </span>
       </div>
       <div className="mt-1 flex items-center gap-2 pl-4">
@@ -240,13 +240,13 @@ function CallDetail({ id }: { id: string }) {
   const recording = isRecRoomKey(call?.room_key);
   const sendExcerpt = useSendExcerpt();
   const isLive = call?.status === "live";
-  // The room's thread: what was typed and what the agents answered. Read
+  // This huddle's thread: what was typed and what the agents answered. Read
   // here, not in the thread, because the passages the thread folds the words
   // into break on these lines, and the selection below indexes those same
   // passages' turns.
   const rows = useQueryNoThrow(
     api.callChat.list,
-    call?.room_key && !recording ? { room_key: call.room_key } : "skip",
+    call?.room_key && !recording ? { room_key: call.room_key, transcript_id: call._id } : "skip",
   ).data as ThreadRow[] | null | undefined;
 
   // Selection: an anchor turn and an end turn — a contiguous range, like
@@ -284,26 +284,23 @@ function CallDetail({ id }: { id: string }) {
   // Selection resets when the viewer moves to another call.
   useWatchEffect(() => clearSelection(), [id]);
 
-  // A link from a session (?turns=<from seq>-<to seq>) opens on the excerpt
-  // that session was sent: those turns selected and in view.
-  const turnsParam = useSearchParams()?.get("turns") ?? null;
+  // A link into the call (callAnchorHref): turns open selected, the recap's
+  // summary or an action item opens the recap. The thread scrolls to it.
+  const searchParams = useSearchParams();
+  const focus = useMemo(() => parseCallAnchor(searchParams), [searchParams]);
   const landed = useRef<string | null>(null);
   useWatchEffect(() => {
-    const key = `${id}:${turnsParam}`;
-    if (!turnsParam || turns.length === 0 || landed.current === key) return;
-    const [from, to] = turnsParam.split("-").map(Number);
-    if (!Number.isFinite(from) || !Number.isFinite(to)) return;
+    if (focus?.kind !== "turns" || turns.length === 0) return;
+    const key = `${id}:${focus.from_seq}-${focus.to_seq}`;
+    if (landed.current === key) return;
     const hit = turns
-      .map((t, i) => (t.segments.some((sg: any) => sg.seq >= from && sg.seq <= to) ? i : -1))
+      .map((t, i) => (t.segments.some((sg: any) => sg.seq >= focus.from_seq && sg.seq <= focus.to_seq) ? i : -1))
       .filter((i) => i >= 0);
     if (hit.length === 0) return;
     landed.current = key;
     setAnchor(hit[0]);
     setEnd(hit[hit.length - 1]);
-    queueMicrotask(() =>
-      document.querySelector(`[data-turn="${turns[hit[0]].index}"]`)?.scrollIntoView({ block: "center" }),
-    );
-  }, [id, turnsParam, turns]);
+  }, [id, focus, turns]);
 
   const live = isLive;
 
@@ -393,7 +390,7 @@ function CallDetail({ id }: { id: string }) {
         </div>
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[12px] text-sol-text-dim">
           <span>{fmtWhen(call.started_at)}</span>
-          <span>{fmtLength(call.started_at, call.ended_at)}</span>
+          <span>{fmtCallLength(call.started_at, call.ended_at)}</span>
           <RecordingScopePicker call={call} />
           {(call.participants || []).length > 0 && (
             <span className="flex flex-wrap items-center gap-1.5">
@@ -410,6 +407,11 @@ function CallDetail({ id }: { id: string }) {
           <CallSessionChips callId={String(call._id)} sessions={call.sessions || []} />
           {sentTick && <span className="text-sol-green">{sentTick}</span>}
           <span className="flex-1" />
+          <ShareControl
+            label={recording ? "recording" : "call"}
+            path={`/calls/${call._id}`}
+            publicShare={{ kind: "call", id: String(call._id), token: call.share_token }}
+          />
           {live && !recording && !inThisRoom && (
             <button
               onClick={() => void joinCall(call.room_key, { intent: "deliberate" })}
@@ -461,6 +463,7 @@ function CallDetail({ id }: { id: string }) {
         surface="page"
         seated={inThisRoom}
         className="min-h-0 flex-1"
+        focus={focus}
         selection={{
           isSelected,
           onTurnClick,
@@ -497,6 +500,13 @@ function CallDetail({ id }: { id: string }) {
               className="flex items-center gap-1.5 rounded-md bg-sol-violet/15 px-2.5 py-1 text-[12px] font-medium text-sol-violet transition-colors hover:bg-sol-violet/25"
             >
               <Send className="h-3 w-3" /> Send to agent
+            </button>
+            <button
+              onClick={() => copyCallLink(String(call._id), turnsAnchor(turns.slice(selLo!, (selHi as number) + 1)))}
+              className="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[12px] font-medium text-sol-text-muted transition-colors hover:bg-sol-bg/60 hover:text-sol-text"
+              title="Copy a link that opens the call on these turns"
+            >
+              <Link2 className="h-3 w-3" /> Copy link
             </button>
             <button
               onClick={clearSelection}
@@ -596,6 +606,18 @@ function RecordMeetingButton() {
 export default function CallsPage() {
   const params = useParams() as { id?: string };
   const selectedId = params?.id ?? null;
+  // A link built from a call's short id (`/calls/cl-42?turns=15-25`) lands
+  // on the call's page under its full id, the anchor kept.
+  const shortRef = selectedId && /^cl-\d+$/i.test(selectedId) ? selectedId : null;
+  const byShort = useQueryNoThrow(api.transcripts.webGetCallRef, shortRef ? { ref: shortRef } : "skip").data as
+    | { _id: string }
+    | null
+    | undefined;
+  const router = useRouter();
+  const search = useSearchParams();
+  useWatchEffect(() => {
+    if (byShort?._id) router.replace(`/calls/${byShort._id}${search?.toString() ? `?${search}` : ""}`);
+  }, [byShort?._id]);
   const callsOn = useTeamFeature("calls");
   // Always asked, whatever the ACTIVE team's calls feature says: recordings
   // are personal — they land here from every team and from none — and the
@@ -608,10 +630,10 @@ export default function CallsPage() {
     | undefined;
   const { liveCalls, pastCalls, transcribedRoomKeys } = useMemo(() => {
     const rows = calls ?? [];
-    const live = rows.filter((r) => r.status === "live");
+    const live = rows.filter(isCallLive);
     return {
       liveCalls: live,
-      pastCalls: rows.filter((r) => r.status !== "live"),
+      pastCalls: rows.filter((r) => !isCallLive(r)),
       transcribedRoomKeys: new Set<string>(live.map((r) => r.room_key).filter(Boolean)),
     };
   }, [calls]);
@@ -674,7 +696,7 @@ export default function CallsPage() {
             </div>
           </div>
           <div className="relative min-w-0 flex-1">
-            {selectedId ? (
+            {selectedId && !shortRef ? (
               <CallDetail id={selectedId} />
             ) : (
               <div className="flex h-full items-center justify-center">

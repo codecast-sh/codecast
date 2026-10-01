@@ -26,12 +26,27 @@ function fieldEchoesPending(
     typeof incoming === "object" && typeof pending === "object"
   ) {
     try {
-      return JSON.stringify(incoming) === JSON.stringify(pending);
+      return sameShape(incoming, pending);
     } catch {
       return false;
     }
   }
   return false;
+}
+
+/** Deep value equality that ignores object key order: a server rebuilds an
+ *  object in its own key order, and a lock on it must still retire. */
+export function sameShape(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a)) {
+    const bb = b as unknown[];
+    return a.length === bb.length && a.every((v, i) => sameShape(v, bb[i]));
+  }
+  const ka = Object.keys(a as object).filter((k) => (a as any)[k] !== undefined);
+  const kb = Object.keys(b as object).filter((k) => (b as any)[k] !== undefined);
+  return ka.length === kb.length && ka.every((k) => sameShape((a as any)[k], (b as any)[k]));
 }
 
 /**
@@ -146,11 +161,14 @@ export function applySyncTable<T extends { _id: string }>(
   for (const [key, entry] of Object.entries(newPending)) {
     if (!key.startsWith(prefix)) continue;
     const rest = key.slice(prefix.length);
-    const colon = rest.indexOf(":");
-    if (colon === -1) {
-      if (entry.type === "exclude") excludeIds.add(rest);
-      else if (entry.type === "include") includeIds.push(rest);
-    } else if (entry.type === "field") {
+    // Ids may carry colons (a room key is "dm:a:b"); field names never do. So
+    // an exclude or include names the whole rest, and a field lock splits at
+    // its LAST colon.
+    if (entry.type === "exclude") excludeIds.add(rest);
+    else if (entry.type === "include") includeIds.push(rest);
+    else if (entry.type === "field") {
+      const colon = rest.lastIndexOf(":");
+      if (colon === -1) continue;
       const id = rest.slice(0, colon);
       if (!fieldsByRecord) fieldsByRecord = new Map();
       let arr = fieldsByRecord.get(id);
@@ -417,4 +435,81 @@ export function applySyncRecord(
   }
 
   return { record: merged, pending: newPending };
+}
+
+/**
+ * A local-first list or singleton holds what an action locked over a server
+ * push, the way a collection row does, and retires each lock the push echoes:
+ * a list row's fields (table:<row id>:field) and its membership, a
+ * singleton's fields (table::field).
+ *
+ * Membership bridges the gap between what is on screen (`local`, the local
+ * intent) and what the server lists: an include keeps a row the server has not
+ * listed yet, at its local position; an exclude keeps out a row it still
+ * lists. Each retires when the server agrees, when the server lists a row
+ * whose `altKey` carries the include's id (a stub's server copy), or when the
+ * screen no longer wants it (a local sync() removed the included row or put
+ * the excluded one back). Returns the inputs untouched when nothing is locked.
+ */
+export function applyShapeLocks(
+  tableName: string,
+  kind: "list" | "singleton",
+  incoming: any,
+  pending: Record<string, PendingEntry>,
+  local: any,
+  opts?: { rowKey?: string; altKey?: string; optionalClearFields?: ReadonlySet<string> },
+): { value: any; pending: Record<string, PendingEntry> } {
+  const prefix = `${tableName}:`;
+  if (!incoming || typeof incoming !== "object" || !Object.keys(pending).some((k) => k.startsWith(prefix))) {
+    return { value: incoming, pending };
+  }
+  const optionalClearFields = opts?.optionalClearFields;
+  if (kind === "singleton") {
+    if (Array.isArray(incoming)) return { value: incoming, pending };
+    const merged = applySyncRecord(tableName, "", incoming, pending, optionalClearFields);
+    return { value: merged.record, pending: sameKeys(merged.pending, pending) ? pending : merged.pending };
+  }
+  if (!Array.isArray(incoming)) return { value: incoming, pending };
+  const rowKey = opts?.rowKey ?? "_id";
+  const altKey = opts?.altKey;
+  const onScreen: any[] = Array.isArray(local) ? local : [];
+  const onScreenAt = (id: string) => onScreen.findIndex((r: any) => r?.[rowKey] === id);
+  let next: Record<string, PendingEntry> = { ...pending };
+  const listed = new Set<string>();
+  for (const r of incoming) {
+    if (typeof r?.[rowKey] === "string") listed.add(r[rowKey]);
+    if (altKey && typeof r?.[altKey] === "string") listed.add(r[altKey]);
+  }
+  const kept: any[] = [];
+  for (const row of incoming) {
+    const id = row?.[rowKey];
+    if (typeof id !== "string") { kept.push(row); continue; }
+    const key = `${tableName}:${id}`;
+    if (next[key]?.type === "exclude") {
+      if (onScreenAt(id) === -1) continue;
+      delete next[key];
+    } else if (next[key]?.type === "include") {
+      delete next[key];
+    }
+    const merged = applySyncRecord(tableName, id, row, next, optionalClearFields);
+    next = merged.pending;
+    kept.push(merged.record);
+  }
+  for (const [key, entry] of Object.entries(next)) {
+    if (!key.startsWith(prefix) || (entry?.type !== "include" && entry?.type !== "exclude")) continue;
+    const id = key.slice(prefix.length);
+    if (entry.type === "exclude") {
+      if (!listed.has(id)) delete next[key];
+      continue;
+    }
+    const at = onScreenAt(id);
+    if (listed.has(id) || at === -1) delete next[key];
+    else kept.splice(Math.min(at, kept.length), 0, onScreen[at]);
+  }
+  return { value: kept, pending: sameKeys(next, pending) ? pending : next };
+}
+
+function sameKeys(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  const ka = Object.keys(a);
+  return ka.length === Object.keys(b).length && ka.every((k) => k in b);
 }

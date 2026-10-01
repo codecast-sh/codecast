@@ -5,7 +5,7 @@
 // Health owns green, yellow and red, so the initiative's own accent is magenta
 // and no chip that is not health ever wears a health colour.
 import { CheckCircle2, Circle, CircleDashed, CircleDot, XCircle, type LucideIcon } from "lucide-react";
-import { INITIATIVE_HEALTH_LABEL, INITIATIVE_STATUS_LABEL, type InitiativeHealth, type InitiativeOwner, type InitiativeStatus } from "@codecast/shared/contracts/initiative";
+import { INITIATIVE_HEALTH_LABEL, INITIATIVE_STATUS_LABEL, type InitiativeHealth, type InitiativeOwner, type InitiativeStatus, type MetricReading, type MetricStanding } from "@codecast/shared/contracts/initiative";
 import { useTrackedStore } from "../../store/inboxStore";
 import { useOrgRoles } from "../../hooks/useOrgRoles";
 import { useTeamRosterIdentity } from "../../hooks/useTeamRoster";
@@ -86,6 +86,33 @@ export function TargetDate({ ts, now, done, className }: { ts?: number; now: num
   return (
     <span className={cn("text-[11.5px] tabular-nums whitespace-nowrap", className)} style={{ color: late ? "var(--sol-red)" : "var(--sol-text-dim)" }} title={late ? "Past its target" : "Target"} data-initiative-target={late ? "late" : "ahead"}>
       {shortDate(ts, now)}
+    </span>
+  );
+}
+
+/** A metric read against its target (I4): one word in a health colour, met or
+ *  behind, and a hollow dot while nobody has reported a value. Beside the
+ *  owner's word so the two can disagree visibly. */
+export function MetricStandingDot({ standing, className }: { standing: MetricStanding; className?: string }) {
+  const color = standing === "met" ? HEALTH_COLOR.on_track : standing === "behind" ? HEALTH_COLOR.at_risk : "var(--sol-text-dim)";
+  return <span className={cn("inline-block w-[7px] h-[7px] rounded-full shrink-0", className)} style={standing === "unknown" ? { border: `1px solid ${color}` } : { background: color }} aria-label={standing} data-metric-standing={standing} />;
+}
+
+/** "412 of 1,000, behind" with a bar toward a reach target. */
+export function MetricReadingLine({ reading, now, className }: { reading: MetricReading; now: number; className?: string }) {
+  return (
+    <span className={cn("inline-flex items-center gap-2 min-w-0 text-[12px]", className)} data-metric={reading.key}>
+      <MetricStandingDot standing={reading.standing} />
+      <span className="truncate" style={{ color: "var(--sol-text)" }}>{reading.name}</span>
+      <span className="tabular-nums whitespace-nowrap" style={{ color: reading.value === null ? "var(--sol-text-dim)" : "var(--sol-text-secondary)" }}>
+        {reading.value === null ? `target ${reading.target}` : `${reading.value} of ${reading.target}`}
+      </span>
+      {reading.progress !== null && (
+        <span className="h-[4px] w-[56px] rounded-full overflow-hidden shrink-0" style={{ background: "color-mix(in srgb, var(--sol-border) 40%, transparent)" }} aria-hidden>
+          <span className="block h-full rounded-full" style={{ width: `${Math.round(reading.progress * 100)}%`, background: reading.standing === "met" ? HEALTH_COLOR.on_track : INITIATIVE_ACCENT }} />
+        </span>
+      )}
+      {reading.observed_at ? <span className="whitespace-nowrap text-[11px]" style={{ color: "var(--sol-text-dim)" }}>{shortDate(reading.observed_at, now)}</span> : null}
     </span>
   );
 }

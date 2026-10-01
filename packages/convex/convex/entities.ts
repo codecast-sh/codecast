@@ -16,6 +16,7 @@ const ID_TYPE_TABLES = [
   ["agent_tasks", "trigger"],
   ["pull_requests", "pr"],
   ["commits", "commit"],
+  ["transcripts", "call"],
 ] as const;
 
 /**

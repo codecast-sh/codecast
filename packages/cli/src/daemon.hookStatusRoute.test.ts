@@ -112,7 +112,7 @@ describe("the hook status sink", () => {
     const admitAt = body.indexOf("admitHookPost(sessionId, data)");
     expect(admitAt).toBeGreaterThan(-1);
     expect(body.slice(admitAt, admitAt + 60)).toContain("return");
-    for (const effect of ["persistHookStatus(sessionId, data)", "handleStatusData(sessionId, data)", "sync.invalidate()"]) {
+    for (const effect of ["persistHookStatus(sessionId, data)", "handleStatusData(sessionId, data)", "existingSync.invalidate()", "claudeTranscriptRetrySync("]) {
       expect(body.indexOf(effect), effect).toBeGreaterThan(admitAt);
     }
   });

@@ -1,6 +1,6 @@
 // The workspace's roles without the rest of the org tree. The `orgTree`
 // singleton carries `updated_at` and `state` for the top sessions under every
-// node, so a surface that only names a role (an owner chip, a chief of staff
+// node, so a surface that only names a role (an owner chip, a head of people
 // lookup) must not subscribe to the whole tree: every message in the
 // workspace would re-render it. This subscribes to a signature of the fields
 // such a surface branches on (store/wakeSig.ts) and hands back a memo-stable
