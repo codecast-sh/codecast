@@ -105,6 +105,7 @@ export function FaceCircle({
   diameter,
   speaking,
   shown,
+  standalone = false,
   onPointerDown,
   onPointerUp,
 }: {
@@ -113,6 +114,9 @@ export function FaceCircle({
   diameter: number;
   speaking: boolean;
   shown: boolean;
+  /** Draws from the props alone, reading no viewer's state (whom they
+   *  follow) from the store: a face shown outside the app (the homepage tour). */
+  standalone?: boolean;
   onPointerDown: (e: React.PointerEvent) => void;
   onPointerUp: (e: React.PointerEvent) => void;
 }) {
@@ -123,7 +127,7 @@ export function FaceCircle({
     active: shown,
   });
   const levelRef = useMicLevelVar<HTMLDivElement>(person.isLocal && !person.muted && shown);
-  const followed = useInboxStore((s) => !!person.id && s.followLeaderId === String(person.id));
+  const followed = useInboxStore((s) => !standalone && !!person.id && s.followLeaderId === String(person.id));
 
   return (
     // The slot is the circle's square and nothing more, so a row of them still

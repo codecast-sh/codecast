@@ -1,5 +1,5 @@
 // The bodies of the `cast org` staffing verbs and the analyzer prompt they
-// build (docs/architecture/chief-of-staff-prompt.md; org-init.md O1, O2).
+// build (docs/architecture/head-of-people-prompt.md; org-init.md O1, O2).
 // orgInit.ts registers the verbs and loads this module inside each action, so
 // the prompt and the proposal contract stay off the CLI boot
 // graph (bench/bootGraph.guard.test.ts).
@@ -7,18 +7,19 @@ import * as fs from "fs";
 import * as path from "path";
 import { spawn } from "./proc.js";
 import { fmt } from "./colors.js";
-import { chiefOfStaffPrompt } from "@codecast/shared/contracts/chiefOfStaffPrompt";
+import { headOfPeoplePrompt } from "@codecast/shared/contracts/headOfPeoplePrompt";
 import {
   ORG_CHANGE_KINDS, describeOrgChange, extractOrgProposal, orgChangeDependencies, orgChangeError, orgReviseOpError, orderOrgChanges, parseOrgProposalSpec,
   type OrgChange, type OrgProposalMode, type OrgReviseOp, type OrgSpecChange,
 } from "@codecast/shared/contracts/orgProposal";
 import { formatRelative } from "@codecast/shared/time";
+import { metricLine } from "@codecast/shared/contracts/initiative";
 import { formatDuration, parseDuration } from "./stackCommand.js";
-import { CHIEF_OF_STAFF_HANDLE, ORG_INIT_LABEL, type OrgInitDeps, type OrgInitMode, type OrgInitSummary } from "./orgInit.js";
+import { HEAD_OF_PEOPLE_HANDLE, isHeadOfPeopleRole, ORG_INIT_LABEL, type OrgInitDeps, type OrgInitMode, type OrgInitSummary } from "./orgInit.js";
 
 // ── The prompt ───────────────────────────────────────────────────────────────
 //
-// The Chief of Staff's own text (shared/contracts/chiefOfStaffPrompt.ts), the
+// The Head of People's own text (shared/contracts/headOfPeoplePrompt.ts), the
 // same one its opening message carries, with the workspace, the person and
 // the verbs' --team flag filled in.
 
@@ -32,7 +33,7 @@ export type PromptFacts = {
 };
 
 export function buildOrgAnalyzerPrompt(opts: PromptFacts): string {
-  return chiefOfStaffPrompt({ workspace: opts.workspace, person: opts.summary.person ?? "the person who asked for this review", mode: opts.mode, team: opts.teamFlag, open: opts.open });
+  return headOfPeoplePrompt({ workspace: opts.workspace, person: opts.summary.person ?? "the person who asked for this review", mode: opts.mode, team: opts.teamFlag, open: opts.open });
 }
 
 /** Where coverage stands before the proposal (I2), as `cast org inputs` prints it. */
@@ -65,9 +66,9 @@ export function orderForApply<T extends { context_md?: string | null }>(decision
   return orderOrgChanges(decisions, (d) => extractOrgProposal(d.context_md));
 }
 
-/** The person the Chief of Staff reports to, as the inputs name them. */
+/** The person the Head of People reports to, as the inputs name them. */
 function personOf(roles: any[]): string | undefined {
-  const to = roles.find((r) => r?.handle === CHIEF_OF_STAFF_HANDLE)?.reports_to;
+  const to = roles.find((r) => (!!r && isHeadOfPeopleRole(r)))?.reports_to;
   return typeof to === "string" && to.trim() && !to.startsWith("@") ? to : undefined;
 }
 
@@ -81,7 +82,7 @@ export function summarizeInputs(inputs: any): OrgInitSummary {
     sessions_30d: inputs?.sessions?.total ?? 0,
     roles: roles.length,
     git_roots: (inputs?.git_roots ?? []).map((g: any) => g.git_root).filter(Boolean),
-    chief_of_staff: roles.some((r) => r?.handle === CHIEF_OF_STAFF_HANDLE),
+    head_of_people: roles.some((r) => (!!r && isHeadOfPeopleRole(r))),
     ...((personOf(roles) ?? inputs?.members?.find((m: any) => m?.is_me)?.name) ? { person: personOf(roles) ?? inputs.members.find((m: any) => m?.is_me).name } : {}),
     stale: {
       plans: inputs?.activity?.stale?.plans?.length ?? 0,
@@ -152,7 +153,12 @@ export async function showInputs(deps: OrgInitDeps, options: any): Promise<void>
   for (const r of inputs.org.roles) console.log(`  ${fmt.muted("role")} @${r.handle} ${r.name} ${fmt.muted(`· ${r.idle ? "idle" : `${r.idle_days}d since a scope event`} · ${r.wakes_7d.total} wakes/7d${r.wakes_7d.days_at_cap ? ` (${r.wakes_7d.days_at_cap} days at cap)` : ""}${r.overlaps.length ? ` · overlaps ${r.overlaps.map((o: any) => `@${o.handle}`).join(", ")}` : ""}`)}`);
   if (inputs.org.projects_without_role.length) console.log(`  ${fmt.muted("no role:")} ${inputs.org.projects_without_role.map((p: any) => p.title).join(", ")}`);
   // Who answers for the work (I1, I2): the initiatives, then the before count.
-  for (const i of inputs.coverage?.initiatives ?? []) console.log(`  ${fmt.muted("initiative")} ${i.short_id} ${i.title} ${fmt.muted(`· ${i.status} · ${String(i.health).replace(/_/g, " ")} · ${i.owner ? (i.owner.handle ?? i.owner.name) : "no owner"}${i.projects_without_lead ? ` · ${i.projects_without_lead} of its projects with no lead` : ""}`)}`);
+  for (const i of inputs.coverage?.initiatives ?? []) {
+    const chain = i.chain?.length ? ` · under ${i.chain.map((c: any) => c.short_id).join(", under ")}` : "";
+    const numbers = (i.metrics ?? []).map((m: any) => metricLine(m)).join(" · ");
+    console.log(`  ${fmt.muted("initiative")} ${i.short_id} ${i.title} ${fmt.muted(`· ${i.status} · ${String(i.health).replace(/_/g, " ")} · ${i.owner ? (i.owner.handle ?? i.owner.name) : "no owner"}${chain}${i.projects_without_lead ? ` · ${i.projects_without_lead} of its projects with no lead` : ""}`)}`);
+    if (numbers) console.log(`    ${fmt.muted(numbers)}`);
+  }
   if (s.coverage) console.log(`  ${fmt.muted("coverage:")} ${coverageLine(s.coverage)}`);
   // Where the work is (S9): the busiest areas and the records behind them.
   for (const a of (inputs.activity?.areas ?? []).slice(0, 8)) console.log(`  ${fmt.muted("area")} ${a.repository ? `${a.repository}${a.path_prefix ? "/" : ""}` : ""}${a.path_prefix || fmt.muted(" (commits with no file list: could not verify)")} ${fmt.muted(`· ${a.commits_30d} commits · ${a.sessions_30d} sessions${a.authors?.length ? ` · ${a.authors.slice(0, 3).map((x: any) => x.name).join(", ")}` : ""}`)}`);
@@ -381,7 +387,7 @@ export async function applyStack(deps: OrgInitDeps, stackRef: string, options: a
 export async function staff(deps: OrgInitDeps, options: any): Promise<void> {
   const { ws, args } = await membership(deps, options);
   const session = deps.callingSession();
-  if (options.adopt && !session) fail("--adopt makes THIS session the chief of staff's standing session, so it runs inside a session. At a shell, run it without --adopt to provision one.");
+  if (options.adopt && !session) fail("--adopt makes THIS session the head of people's standing session, so it runs inside a session. At a shell, run it without --adopt to provision one.");
   let every_ms: number;
   try { every_ms = parseDuration(String(options.every ?? "7d")); } catch (e: any) { fail(`--every: ${e?.message ?? e}`); }
   // A provisioned standing session needs a project path, like every other
@@ -392,11 +398,36 @@ export async function staff(deps: OrgInitDeps, options: any): Promise<void> {
   if (!r || r.error) fail(r?.error ?? `You are not a member of ${deps.workspaceLabel(ws)}.`);
   if (options.json) { console.log(JSON.stringify(r, null, 2)); return; }
   const role = r.role ?? {};
-  console.log(`${fmt.success("✓")} ${r.already_existed ? "already staffed" : r.adopted ? "adopted" : "hired"} ${fmt.highlight(role.name ?? "Chief of Staff")} ${fmt.muted(`@${role.handle ?? CHIEF_OF_STAFF_HANDLE}${role.short_id ? ` · ${role.short_id}` : ""}`)}`);
+  console.log(`${fmt.success("✓")} ${r.already_existed ? "already staffed" : r.adopted ? "adopted" : "hired"} ${fmt.highlight(role.name ?? "Head of People")} ${fmt.muted(`@${role.handle ?? HEAD_OF_PEOPLE_HANDLE}${role.short_id ? ` · ${role.short_id}` : ""}`)}`);
   if (r.standing?.short_id) console.log(`  ${fmt.muted("standing session:")} ${r.standing.short_id}${r.adopted ? fmt.muted(r.seated === "existing" && !options.adopt ? " (the workspace's standing agent, seated; nothing restarted)" : " (this session)") : ""}`);
   if (r.previous_standing?.short_id) console.log(`  ${fmt.muted("previous standing agent retired; its thread is kept:")} ${r.previous_standing.short_id}`);
   if (r.routine?.short_id) console.log(`  ${fmt.muted("company review:")} every ${formatDuration(every_ms)} ${fmt.muted(`(${r.routine.short_id})`)}`);
   if (!r.already_existed) console.log(`  ${fmt.muted("first review: running now; cast org proposals lists it when posted")}`);
+}
+
+// ── chief ────────────────────────────────────────────────────────────────────
+// Hire a Chief of Staff (org-staffing.md S30): the person's right hand. Global
+// (every workspace, theirs alone) unless --team names one; --personal keeps a
+// team's chief in the person's own boundary.
+
+export async function chief(deps: OrgInitDeps, options: any): Promise<void> {
+  const session = deps.callingSession();
+  if (options.adopt && !session) fail("--adopt makes THIS session the chief's standing session, so it runs inside a session. At a shell, run it without --adopt to provision one.");
+  let reach: any = { reach: "global" };
+  if (options.team) {
+    const { ws, args } = await membership(deps, options);
+    if (!args.team_id) fail(`You are not a member of ${deps.workspaceLabel(ws)}.`);
+    reach = { reach: "team", team_id: args.team_id };
+  } else if (options.personal) fail("--personal goes with --team: a global Chief of Staff is always yours alone.");
+  const project_path = options.adopt ? undefined : options.dir ? path.resolve(String(options.dir).replace(/^~/, process.env.HOME || "~")) : deps.realCwd();
+  const r = await deps.cliPost("/cli/org/chief", { reach, personal: !!options.personal, given_name: options.name, handle: options.handle, avatar: options.avatar, model: options.model, ...(options.adopt ? { adopt_conversation_id: session } : { project_path }), from_session: session });
+  if (!r || r.error) fail(r?.error ?? "Could not hire a Chief of Staff.");
+  if (options.json) { console.log(JSON.stringify(r, null, 2)); return; }
+  const role = r.role ?? {};
+  const where = reach.reach === "global" ? "across every workspace" : options.personal ? "for the team, yours alone" : "for the team";
+  console.log(`${fmt.success("✓")} ${r.already_existed ? "already standing" : r.adopted ? "adopted" : "hired"} ${fmt.highlight(role.given_name ?? "Chief of Staff")} ${fmt.muted(`· Chief of Staff, ${where} · @${role.handle}${role.short_id ? ` · ${role.short_id}` : ""}`)}`);
+  if (r.standing?.short_id) console.log(`  ${fmt.muted("standing session:")} ${r.standing.short_id}${r.adopted ? fmt.muted(" (this session)") : ""}`);
+  if (reach.reach === "global" && !r.already_existed) console.log(`  ${fmt.muted("it is pinned in the app header on every page; cast role update --given-name renames it")}`);
 }
 
 // ── health ───────────────────────────────────────────────────────────────────

@@ -25353,9 +25353,9 @@
       "line": 921
     },
     {
-      "id": "orgRoles.backfillSeatedChiefs",
+      "id": "orgRoles.backfillSeatedHeads",
       "module": "orgRoles",
-      "name": "backfillSeatedChiefs",
+      "name": "backfillSeatedHeads",
       "ctor": "internalMutation",
       "kind": "internal",
       "exposure": "internal",
@@ -25623,9 +25623,9 @@
       "line": 958
     },
     {
-      "id": "orgRoles.seatedChiefs",
+      "id": "orgRoles.seatedHeads",
       "module": "orgRoles",
-      "name": "seatedChiefs",
+      "name": "seatedHeads",
       "ctor": "internalQuery",
       "kind": "internal",
       "exposure": "internal",

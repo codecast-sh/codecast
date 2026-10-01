@@ -9,6 +9,7 @@ import {
   ExternalLink,
   LayoutGrid,
   Lock,
+  Maximize2,
   MessageSquare,
   MicOff,
   Minimize2,
@@ -29,11 +30,12 @@ import {
   setScreenShare,
   subscribeCallTiles,
   type ParticipantTile } from "../../lib/calls/callManager";
-import { parseRoomKey } from "@codecast/shared/contracts";
+import { isAgentFaceIdentity, parseRoomKey } from "@codecast/shared/contracts";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { useRoomTranscribeOff } from "../../hooks/useRoomTranscribeOff";
 import { getScribeStatus, subscribeScribe } from "../../lib/calls/transcription";
 import { TranscribeControls } from "./TranscribePanel";
 import { AddPeopleButton } from "./AddPeople";
@@ -47,7 +49,8 @@ import { DeviceChips } from "./DeviceRows";
 import { faceTrackingNote } from "./useFaceCrop";
 import { firstName } from "./speakers";
 import { ScreenCursors } from "./ScreenCursors";
-import { useScreenCursorSender } from "../../hooks/useScreenCursorSender";
+import { useNaturalSize, useScreenCursorSender } from "../../hooks/useScreenCursorSender";
+import { useShareZoom } from "../../hooks/useShareZoom";
 import { FollowChip } from "./FollowInCall";
 import { useOutgoingRings, useRoomDescription } from "../../hooks/useCallRoom";
 import { useRoomLock } from "../../hooks/useLiveRooms";
@@ -72,6 +75,7 @@ import { useAgentsInRoom } from "./useCallFeed";
 import { useRoomThreadUnread } from "../../hooks/useRoomThreadUnread";
 import { EdgeResizeHandle, useEdgeResize } from "../../hooks/useEdgeResize";
 import { UnreadCount } from "./UnreadCount";
+import { AgentReplyPeek } from "./AgentReplyPeek";
 import { takeCallThreadRequest } from "../../lib/calls/callStage";
 
 // The media notice, with the fix in reach: when the error is a device the OS
@@ -224,6 +228,9 @@ export function CallStage({
       }
     | null
     | undefined;
+  // The record outlives a switch to off (off is a gap in the huddle), so the
+  // words are flowing only while it is live and the room has not opted out.
+  const transcribing = !!live && !useRoomTranscribeOff(call.roomKey);
 
   const [view, setView] = useState<StageView>("auto");
   const [threadOpen, setThreadOpen] = useState(takeCallThreadRequest);
@@ -233,7 +240,7 @@ export function CallStage({
   // The thread's rows, read here so the header can count what arrived while
   // the rail was closed (lib/calls/roomThreadSeen: the same count the door to
   // the call in the app header wears when this stage is collapsed).
-  const { rows, unread } = useRoomThreadUnread(call.roomKey, threadOpen);
+  const { rows, unread, latest } = useRoomThreadUnread(call.roomKey, threadOpen);
   const toggleThread = () => {
     if (threadOpen && !prefersReducedMotion()) setRailClosing(true);
     setThreadOpen((o) => !o);
@@ -386,6 +393,9 @@ export function CallStage({
             switch: the dot says the room is being transcribed whether or not
             the rail is open, and the switch itself lives in the thread. The
             count is what landed in the thread while it was closed. */}
+        {/* The thread button carries the peek: an agent's answer that
+            landed while the rail was closed hangs under it for a moment. */}
+        <span className="relative shrink-0">
         <StageChromeButton
           onClick={toggleThread}
           active={threadOpen}
@@ -395,14 +405,14 @@ export function CallStage({
             (!threadOpen && agentWorking ? ", an agent is working" : "")
           }
           title={
-            live
+            transcribing
               ? "Transcribing. Open the thread: the words, the chat, the agents in the room."
               : "Open the thread: chat with the room, add an agent, start transcribing."
           }
         >
           <span className="relative">
             <MessageSquare className="h-3.5 w-3.5" />
-            {live && <LivePulseDot className="absolute -right-1 -top-1 h-1.5 w-1.5" />}
+            {transcribing && <LivePulseDot className="absolute -right-1 -top-1 h-1.5 w-1.5" />}
           </span>
           <span className="stage-word-tight">thread</span>
           {!threadOpen && agentWorking && (
@@ -412,8 +422,10 @@ export function CallStage({
               <span />
             </span>
           )}
-          <UnreadCount count={unread} />
+          <UnreadCount count={unread} agent={!!latest?.agent} />
         </StageChromeButton>
+        <AgentReplyPeek row={latest} onOpen={() => !threadOpen && toggleThread()} />
+        </span>
 
         <HeaderRule />
 
@@ -523,7 +535,7 @@ export function CallStage({
           style={{ gridTemplateRows: threadOpen ? "0fr" : "1fr" }}
         >
           <div className="min-h-0 overflow-hidden">
-            <CaptionsLane live={live ?? null} />
+            <CaptionsLane live={transcribing ? live! : null} />
           </div>
         </div>
         {call.error && <CallErrorNotice error={call.error} fix={call.errorFix} />}
@@ -917,25 +929,48 @@ export function StageVideo({
   // mapping between the pointer and the share's pixels.
   const cursorsOn = tile.kind === "screen" && !!contain;
   const sender = useScreenCursorSender(tile, ref);
+  // A big share tile can be read at the share's own size or fullscreen
+  // (hooks/useShareZoom). The video sits in a frame inside a scroller: fitted,
+  // the frame is the tile; at 1:1 it is the share's size and the scroller
+  // pans it. Cursors draw over the frame, so they map in both.
+  const zoomable = cursorsOn && !small;
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const frameRef = useRef<HTMLDivElement>(null);
+  const natural = useNaturalSize(ref, tile.track);
+  const zoom = useShareZoom(boxRef, scrollRef, natural, zoomable);
   return (
     <div
       ref={boxRef}
       data-sv-screen-tile={cursorsOn ? "cursors" : undefined}
       onPointerMove={cursorsOn ? sender.onPointerMove : undefined}
       onPointerLeave={cursorsOn ? sender.onPointerLeave : undefined}
+      onDoubleClick={zoom.canFullscreen ? zoom.toggleFullscreen : undefined}
       className={`group relative overflow-hidden bg-black/60 transition-shadow duration-300 ${
         speaking ? SPEAKING_RING : ""
       } ${small ? "aspect-video w-full rounded-lg" : "h-full w-full rounded-xl"}`}
     >
-      <video
-        ref={ref}
-        autoPlay
-        playsInline
-        muted={tile.isLocal}
-        className={`h-full w-full ${contain ? "object-contain" : "object-cover"} ${
-          tile.isLocal && tile.kind === "camera" ? "-scale-x-100" : ""
-        }`}
-      />
+      <div
+        ref={scrollRef}
+        {...zoom.panHandlers}
+        className={`absolute inset-0 flex ${zoom.actual ? "cursor-grab overflow-auto active:cursor-grabbing" : "overflow-hidden"}`}
+      >
+        <div
+          ref={frameRef}
+          className={`relative shrink-0 ${zoom.actual ? "m-auto" : "h-full w-full"}`}
+          style={zoom.actualSize ?? undefined}
+        >
+          <video
+            ref={ref}
+            autoPlay
+            playsInline
+            muted={tile.isLocal}
+            className={`h-full w-full ${contain ? "object-contain" : "object-cover"} ${
+              tile.isLocal && tile.kind === "camera" ? "-scale-x-100" : ""
+            }`}
+          />
+          {cursorsOn && <ScreenCursors tile={tile} boxRef={frameRef} videoRef={ref} />}
+        </div>
+      </div>
       <span className="absolute bottom-2 left-2 flex items-center gap-1.5">
         <span
           className={`flex items-center gap-1.5 rounded-full bg-black/45 font-mono text-white/90 backdrop-blur ${
@@ -947,10 +982,39 @@ export function StageVideo({
           {muted && tile.kind === "camera" && <MicOff className="h-3 w-3 text-sol-red/90" />}
         </span>
         {/* Follow them in the app. A shared screen carries it at rest: that
-            is the moment it is for. A camera tile reveals it on hover. */}
-        {!small && <FollowChip identity={tile.identity} name={tile.name} variant="tile" always={tile.kind === "screen"} />}
+            is the moment it is for. A camera tile reveals it on hover. An
+            agent's face has no app to follow. */}
+        {!small && !isAgentFaceIdentity(tile.identity) && <FollowChip identity={tile.identity} name={tile.name} variant="tile" always={tile.kind === "screen"} />}
       </span>
-      {cursorsOn && <ScreenCursors tile={tile} boxRef={boxRef} videoRef={ref} />}
+      {zoomable && (
+        <span
+          onDoubleClick={(e) => e.stopPropagation()}
+          className={`absolute bottom-2 right-2 flex items-center gap-0.5 rounded-full bg-black/45 p-0.5 font-mono text-[11.5px] text-white/85 backdrop-blur transition-opacity duration-150 focus-within:opacity-100 group-hover:opacity-100 ${
+            zoom.actual || zoom.fullscreen ? "opacity-100" : "opacity-0"
+          }`}
+        >
+          <button
+            type="button"
+            onClick={zoom.toggleActual}
+            className={`rounded-full px-2 py-0.5 transition-colors hover:bg-white/15 hover:text-white ${zoom.actual ? "bg-white/20 text-white" : ""}`}
+            title={zoom.actual ? "Fit the share to the tile" : "Show the share at its real size, one pixel per pixel. Drag to pan"}
+            aria-pressed={zoom.actual}
+          >
+            {zoom.actual ? "fit" : "1:1"}
+          </button>
+          {zoom.canFullscreen && (
+            <button
+              type="button"
+              onClick={zoom.toggleFullscreen}
+              className="rounded-full p-1 transition-colors hover:bg-white/15 hover:text-white"
+              title={zoom.fullscreen ? "Exit fullscreen" : "Fullscreen (or double-click the share)"}
+              aria-label={zoom.fullscreen ? "Exit fullscreen" : "Fullscreen"}
+            >
+              {zoom.fullscreen ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+            </button>
+          )}
+        </span>
+      )}
     </div>
   );
 }

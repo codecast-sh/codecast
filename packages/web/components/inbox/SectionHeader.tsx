@@ -1,3 +1,5 @@
+import type { CSSProperties } from "react";
+
 // The collapsible caption over an inbox section: its name, its count and the
 // chevron. The color rides on the header element itself so simple view can
 // tint the divider rule with currentColor; children set their own.
@@ -8,6 +10,7 @@ export function SectionHeader({
   sectionKey,
   collapsed,
   monoLabel,
+  landedColor,
   onToggle,
 }: {
   label: string;
@@ -20,6 +23,8 @@ export function SectionHeader({
   /** A monospace, normal-case, truncating label instead of the uppercased
    *  caption, for long mixed-case identifiers like a plan heading. */
   monoLabel?: boolean;
+  /** A row just moved into this collapsed section: wash the header in its color. */
+  landedColor?: string;
   onToggle?: () => void;
 }) {
   return (
@@ -28,8 +33,10 @@ export function SectionHeader({
       data-inbox-section={sectionKey}
       data-inbox-section-count={count}
       onClick={onToggle}
-      className={`w-full px-3 py-1.5 bg-sol-bg border-b border-sol-border/30 flex items-center justify-between gap-2 ${color}`}
+      className={`relative w-full px-3 py-1.5 bg-sol-bg border-b border-sol-border/30 flex items-center justify-between gap-2 ${color}`}
+      style={landedColor ? ({ "--hold-dest": landedColor } as CSSProperties) : undefined}
     >
+      {landedColor && <span key={landedColor} aria-hidden className="absolute inset-0 pointer-events-none animate-inbox-landed" />}
       {monoLabel ? (
         <span className={`text-[10px] font-semibold flex items-center gap-1.5 min-w-0 ${color}`}>
           <span className="truncate font-mono">{label}</span>

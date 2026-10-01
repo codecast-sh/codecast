@@ -95,7 +95,7 @@ export function revisedSince(changes: OrgProposalChange[], since: number): OrgPr
   return changes.filter((c) => c.revision && c.revision.at > since && !isOrgQuietChange(c.change)).sort((a, b) => b.revision!.at - a.revision!.at);
 }
 
-/** "Chief of Staff removed 1, changed 2 and added 1 since you last looked."
+/** "Head of People removed 1, changed 2 and added 1 since you last looked."
  *  `who` may be the agent phrase, so the line capitalises its first letter. */
 export function revisedLine(rows: OrgProposalChange[], who: string): string {
   const n = { removed: 0, amended: 0, added: 0 };

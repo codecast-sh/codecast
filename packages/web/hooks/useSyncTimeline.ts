@@ -76,6 +76,9 @@ const commitDetailSig = (c: any) =>
     c.message, c.timestamp, c.branch ?? "", c.conversation_id ?? "",
     c.pr_id ?? "", c.pr_number ?? "", (c.task_ids ?? []).join(","),
     (c.files ?? []).length, c.insertions ?? "", c.deletions ?? "",
+    // A fetch fills in the patches of files the row already named and counted,
+    // so the page must wake on their arrival, not only on the file list.
+    (c.files ?? []).filter((f: any) => f.patch !== undefined).length,
   ].join("|");
 
 export function useCommit(sha: string | undefined): any | undefined {

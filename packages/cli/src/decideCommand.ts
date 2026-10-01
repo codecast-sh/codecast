@@ -501,6 +501,8 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
     .option("--stack <ds-N>", "Append to a decision stack (cast stack create); ls: list that stack's members")
     .option("--category <c>", "Proposed category: approach|scope|priority|retry|review|allocation (the server may pin a protected one)")
     .option("--kind <k>", `single|multi|rank|form (default single)`)
+    .option("--line <label>", "Ask for one line of text instead of a choice: a form with one text field (sets --kind form)")
+    .option("--to <who>", "Who answers: a person's name, email or @handle in the session's workspace (repeatable; default: whoever the session reports to)", (val: string, acc: string[]) => [...acc, val], [] as string[])
     .option("--doc <file>", stdinText("Markdown document as the decision's long body (creates a decision doc)"))
     .option("--spec <file>", "JSON spec: { question, kind, category, options[{label,description,body_md,evidence,cost,risk,page}], form{fields}, doc_md, task, station, stack, advisory, default }")
     .option(
@@ -531,7 +533,10 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       const spec: DecideSpec | null = options.spec ? parseDecideSpec(bodyFromArg(options.spec, "--spec")) : null;
       const rawOptions = options.option as string[];
       let optionList: DecideOption[] | undefined = rawOptions.length > 0 ? rawOptions.map(parseDecideOption) : spec?.options;
-      const kind: DecideKind = options.kind ?? spec?.kind ?? "single";
+      // --line is the one-field form a person answers in a line (the morning
+      // agenda, org-staffing.md S33): the label is the field's.
+      const lineForm = options.line ? { fields: [{ key: "answer", label: String(options.line), type: "text" as const }] } : undefined;
+      const kind: DecideKind = options.kind ?? spec?.kind ?? (lineForm ? "form" : "single");
       if (!DECIDE_KINDS.includes(kind)) fail(`--kind must be one of ${DECIDE_KINDS.join("|")}.`);
       if (kind === "form" && !optionList) optionList = [];
       if (optionList && !sub && ((kind !== "form" && optionList.length < 2) || optionList.length > 9)) {
@@ -745,10 +750,11 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
         kind,
         category,
         doc_md: docMd,
-        form: spec?.form,
+        form: lineForm ?? spec?.form,
         task,
         station: options.station ?? spec?.station,
         stack: options.stack ?? spec?.stack,
+        ...(options.to?.length ? { to: options.to } : {}),
       });
 
       if (options.json) {

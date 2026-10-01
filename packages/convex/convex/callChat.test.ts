@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { getFunctionName } from "convex/server";
-import { agentLineText, list, mirrorAgentTurn, post, postEvent, scheduleFedSessionSettle } from "./callChat";
+import { agentLineText, claimRoomRows, list, mirrorAgentTurn, post, postEvent, scheduleFedSessionSettle } from "./callChat";
 import { setRoomTranscribeOff } from "./calls";
 import { syncAgentFeeds } from "./transcripts";
 import { makeFakeDb } from "./testDb";
@@ -258,6 +258,32 @@ describe("mirrorAgentTurn", () => {
     expect(ctx._scheduled).toHaveLength(0);
   });
 
+  // The settle delivers the room's next words at once but mirrors 4s later, so
+  // a quick next turn (a [pass] to that chunk) can land before the mirror runs.
+  // The overtaken reply still reaches the room (jx74ymd, 2026-10-01: a page
+  // link the room asked for never showed in the huddle chat).
+  test("a reply overtaken by a quick next turn still lands in the room", async () => {
+    const ctx = ctxWith({
+      call_agent_feeds: [feed()],
+      transcripts: [transcript()],
+      messages: [
+        { _id: "m1", conversation_id: "conv1", role: "assistant", content: "earlier", timestamp: 1 },
+        { _id: "m2", conversation_id: "conv1", role: "user", content: "Rosie, explain it in a page", timestamp: 2 },
+        { _id: "m3", conversation_id: "conv1", role: "assistant", content: "Looking.", tool_calls: [{ id: "x", name: "Bash", input: "{}" }], timestamp: 3 },
+        { _id: "m4", conversation_id: "conv1", role: "user", content: "", tool_results: [{ tool_use_id: "x", content: "ok" }], timestamp: 4 },
+        { _id: "m5", conversation_id: "conv1", role: "assistant", content: "Here's the page:\n\nhttps://codecast.sh/a/abcdefgh12", timestamp: 5 },
+        { _id: "m6", conversation_id: "conv1", role: "user", content: "more chatter from the room", timestamp: 6 },
+        { _id: "m7", conversation_id: "conv1", role: "assistant", content: "[pass]", timestamp: 7 },
+      ],
+      call_chat_messages: [],
+    });
+    const out = await call(mirrorAgentTurn, ctx, { conversation_id: "conv1", attempt: 0 });
+    expect(out).toEqual({ mirrored: true });
+    // One line per turn: the turn's last words, never its narration mid-work.
+    expect(ctx.db._tables.call_chat_messages.map((r: any) => r.source_message_id)).toEqual(["m5"]);
+    expect(ctx.db._patched).toEqual([{ _id: "f1", patch: { last_mirrored_message_id: "m7" } }]);
+  });
+
   test("a session nobody is feeding is left alone", async () => {
     const ctx = ctxWith({ call_agent_feeds: [], transcripts: [], messages: [], call_chat_messages: [] });
     const out = await call(mirrorAgentTurn, ctx, { conversation_id: "conv1", attempt: 0 });
@@ -461,9 +487,80 @@ describe("the room's transcription switch", () => {
     // The flag is already set: another press is not another event.
     await call(setRoomTranscribeOff, ctx, { room_key: "channel:chan1", off: true });
     expect(ctx.db._tables.call_chat_messages).toHaveLength(1);
-    // Switching on is told by the fresh run transcripts.start writes, not here.
+    // With no record running, switching on is told by the fresh run
+    // transcripts.start writes, not here.
     await call(setRoomTranscribeOff, ctx, { room_key: "channel:chan1", off: false });
     expect(ctx.db._tables.call_chat_messages).toHaveLength(1);
     expect(ctx.db._tables.call_room_state[0]).toMatchObject({ transcribe_off: false });
+  });
+});
+
+// A room's thread outlives its huddles; each line belongs to the huddle it was
+// said in, so a call page shows its own lines and never a previous call's.
+describe("a line belongs to the huddle it was said in", () => {
+  const seated = {
+    call_members: [{ _id: "cm1", room_key: "session:conv1", user_id: "ua", team_id: "team1", joined_at: 500, last_seen: Date.now(), expires_at: Date.now() + 60_000 }],
+    call_rooms: [],
+    call_room_state: [],
+    call_invites: [],
+    users: [{ _id: "ua", name: "Ada Lovelace", email: "ada@x.org" }],
+    team_members: [{ team_id: "team1", user_id: "ua" }],
+    teams: [{ _id: "team1", features: { calls: true } }],
+    conversations: [{ ...conversation, team_id: "team1" }],
+    call_agent_feeds: [],
+  };
+
+  test("a line typed while a huddle runs is stamped with its record; an event too", async () => {
+    const ctx = ctxWith({ ...seated, call_chat_messages: [], transcripts: [transcript()] }, { userId: "ua" });
+    await call(post, ctx, { room_key: "session:conv1", text: "hello" });
+    await postEvent(ctx, { room_key: "session:conv1", user_id: "ua" as any, event: "transcribe_off" });
+    expect(ctx.db._tables.call_chat_messages.map((r: any) => r.transcript_id)).toEqual(["t1", "t1"]);
+  });
+
+  test("a line typed on an ended call's page goes to that call, not the room's next", async () => {
+    const ctx = ctxWith(
+      { ...seated, call_chat_messages: [], transcripts: [transcript({ _id: "old", status: "ended", ended_at: 2_000 }), transcript({ _id: "now" })] },
+      { userId: "ua" },
+    );
+    await call(post, ctx, { room_key: "session:conv1", text: "one more thing", transcript_id: "old" });
+    expect(ctx.db._tables.call_chat_messages[0].transcript_id).toBe("old");
+  });
+
+  test("lines typed before the record started are claimed by it; an earlier huddle's are not", async () => {
+    const ctx = ctxWith(
+      {
+        ...seated,
+        transcripts: [transcript({ _id: "prev", status: "ended" })],
+        call_chat_messages: [
+          { _id: "a", _creationTime: 100, room_key: "session:conv1", user_id: "ua", text: "last week", transcript_id: "prev" },
+          { _id: "b", _creationTime: 200, room_key: "session:conv1", user_id: "ua", text: "between huddles" },
+          { _id: "c", _creationTime: 600, room_key: "session:conv1", user_id: "ua", text: "anyone there?" },
+        ],
+      },
+      { userId: "ua" },
+    );
+    expect(await claimRoomRows(ctx, "session:conv1", "next" as any, 500)).toBe(1);
+    expect(ctx.db._tables.call_chat_messages.map((r: any) => [r._id, r.transcript_id])).toEqual([
+      ["a", "prev"],
+      ["b", undefined],
+      ["c", "next"],
+    ]);
+  });
+
+  test("the call page reads one huddle's lines; the stage reads the room's", async () => {
+    const ctx = ctxWith(
+      {
+        ...seated,
+        call_chat_messages: [
+          { _id: "a", _creationTime: 10, room_key: "session:conv1", team_id: "team1", user_id: "ua", text: "from before", transcript_id: "prev" },
+          { _id: "b", _creationTime: 20, room_key: "session:conv1", team_id: "team1", user_id: "ua", text: "now", transcript_id: "t1" },
+        ],
+      },
+      { userId: "ua" },
+    );
+    const page = await call(list, ctx, { room_key: "session:conv1", transcript_id: "t1" });
+    expect(page.map((r: any) => [r._id, r.transcript_id])).toEqual([["b", "t1"]]);
+    const stage = await call(list, ctx, { room_key: "session:conv1" });
+    expect(stage.map((r: any) => r._id)).toEqual(["a", "b"]);
   });
 });

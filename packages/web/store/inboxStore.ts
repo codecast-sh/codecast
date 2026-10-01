@@ -1,4 +1,5 @@
 import { followersSig, sameViewAnchor, type FollowerRow, type ViewAnchor } from "../lib/follow";
+import type { SharedObjectKind } from "@codecast/shared/entities";
 import { carryRingStubs } from "../lib/calls/ringStubs";
 import { nextMembershipVisibility, type TeamVisibilityLevel, type VisibilityChangeMode } from "@codecast/convex/convex/teamVisibility";
 import { queuedMessagesFromPending } from "./pendingMessageJournal";
@@ -19,7 +20,7 @@ import {
 import { adoptWorkspaceSnapshot, createWorkspace, serializeWorkspace, hydrateWorkspace, autoAllowed as wsAutoAllowedPure, isSessionRailOpen, isCommentRailOpen, SESSION_LIST_PANE, TERMINAL_PANE, type PersistedWorkspace, showPane, hidePane, togglePane, setPresentation as wsSetPresentationPure, setSize as wsSetSizePure, type WorkspaceState, type SlotId, type Pane, type Presentation } from "./workspace";
 import { applyWorkbench as applyWorkbenchPure, captureWorkbench, chipFilterOf, resolveWorkbenchFilter, type WorkbenchSnapshot } from "./workbench";
 import { declareViewNav, hasViewNavigated, recordNavEvent, type ViewNavSource } from "./viewNav";
-import { applySyncTable, applySyncRecord, applySyncPatch, type PendingEntry } from "./syncProtocol";
+import { applySyncTable, applySyncRecord, applySyncPatch, applyShapeLocks, type PendingEntry } from "./syncProtocol";
 import { syncTransaction } from "./syncTransaction";
 import { installStoreListenerCensus } from "./storeListenerCensus";
 import { current, isDraft, original } from "mutative";
@@ -60,7 +61,7 @@ import { makeCollectionSig } from "./wakeSig";
 import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessage } from "./gestureBridge";
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
-import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, decisionAnswerLabel, hasThreadState, clearedThreadStateFields } from "@codecast/shared/contracts";
+import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, decisionAnswerLabel, hasThreadState, clearedThreadStateFields } from "@codecast/shared/contracts";
 import { liveFactsOf } from "../lib/liveness";
 // The shared inbox projection (docs/architecture/sync-convergence.md): the
 // working-set selection, fold, fact/stamp field ownership, and the epoch clock.
@@ -177,6 +178,27 @@ export type CreateModalKind = 'task' | 'plan' | 'doc' | 'chat' | 'huddle';
 // A trigger strip request (see triggerStripRequest): taskId null means the
 // conversation's all-triggers view; expand asks the strip to open.
 export type TriggerStripRequest = { convId: string; taskId: string | null; expand: boolean; nonce: number };
+/** accountSwitch.requestAccountSwitch's args, as the store action forwards them. */
+export type AccountSwitchArgs = {
+  profile?: string;
+  email?: string;
+  device_id?: string;
+  continue_blocked?: boolean;
+  include_subagents?: boolean;
+  continue_client_ids?: Record<string, string>;
+  conversation_ids?: string[];
+};
+
+// One row per command target: a new request for the same conversation (or
+// machine, for a switch) replaces the last, and rows age out after a day. Every store action that paints a sessionCommands row goes through here.
+function stampSessionCommand(draft: { sessionCommands: Record<string, any> }, row: Record<string, any>) {
+  const now = Date.now();
+  for (const [id, prev] of Object.entries(draft.sessionCommands)) {
+    const sameTarget = row.conversation_id ? prev.conversation_id === row.conversation_id : prev.kind === row.kind && prev.device_id === row.device_id;
+    if (sameTarget || now - (prev.executed_at ?? prev.requested_at ?? now) > 86400_000) delete draft.sessionCommands[id];
+  }
+  draft.sessionCommands[row._id] = { requested_at: now, executed_at: null, result: null, error: null, ...row };
+}
 
 // Imported for internal use AND re-exported so the many call sites that import
 // `isConvexId` from the store keep working.
@@ -203,6 +225,7 @@ import {
 } from "./stageSplit";
 import { divertSessionOpen } from "../lib/openIntent";
 import type { PalettePick } from "../lib/palettePick";
+import type { TourRun } from "../tours/types";
 export { isConvexId };
 
 // Canonical entity-derivation helpers live in lib/liveEntities. Re-exported here
@@ -1095,10 +1118,29 @@ export type TaskExternal = {
 /** S1.2: a comment pulled from, or pushed to, the provider. */
 export type TaskCommentExternal = { provider: IssueProvider; id: string; url?: string; author?: string };
 
+/** Every kind with an "anyone with the link" switch besides conversations. */
+export type PublicShareKind = Exclude<SharedObjectKind, "message">;
+
+/** Where each shareable kind keeps its cached rows, for the optimistic write. */
+const SHARE_COLLECTIONS: Record<PublicShareKind, string[]> = {
+  doc: ["docs", "docDetails"],
+  plan: ["plans"],
+  task: ["tasks"],
+  call: [],
+  project: ["projects"],
+  initiative: ["initiatives"],
+  decision: ["sessionDecisions", "decisionDetails", "handledDecisions"],
+  stack: ["decisionStacks"],
+  trigger: ["agentTasks", "foreignTriggers"],
+  run: ["workflowRuns"],
+};
+
 export type TaskItem = {
   _id: string;
   short_id: string;
   title: string;
+  /** "Anyone with the link" is on (convex publicShare.ts). */
+  share_token?: string;
   description?: string;
   task_type: string;
   status: string;
@@ -1543,6 +1585,9 @@ export type DocDetail = DocItem & {
 export type { TaskViewPrefs, DocViewPrefs, PlanViewPrefs, SavedView, SavedViewRow, InboxViewMode, ClientLayouts, ClientDismissed, ClientTips } from "./clientPrefsTypes";
 import type { TaskViewPrefs, DocViewPrefs, PlanViewPrefs, SavedView, SavedViewRow, InboxViewMode, ClientLayouts, ClientDismissed, ClientTips } from "./clientPrefsTypes";
 
+/** What the header slide-over shows (components/anchor/AnchorPanel). */
+export type AnchorPanelTarget = { kind: "anchor"; id: string } | { kind: "session"; id: string };
+
 export type ClientUI = {
   theme?: "light" | "dark";
   visual_style?: "classic" | "minimal";
@@ -1628,6 +1673,9 @@ export type ClientUI = {
   // User-set height (px) of the trigger full-prompt viewport (TriggerPromptView
   // drag handle). Layout pref → unstamped, per-device local_wins.
   trigger_prompt_height?: number;
+  // The doc page's drafting layer (alternatives' underline and pager, Lab
+  // flags) is showing. Off, a doc reads as plain prose; ghosts stay dimmed.
+  doc_drafting?: boolean;
   // "Show old sessions" — reveal cached rows the live (authoritative) inbox
   // subscription no longer returns. Default hide. Successor to the removed
   // show_old_sessions key, whose blanket-local_wins sync made one browse click
@@ -1754,6 +1802,14 @@ export type ClientUI = {
   // device stays pinned on the others. Unstamped, local_wins let an empty
   // array on a second client clobber the pin (ct-51761).
   sidebar_pins?: Array<{ kind: "project" | "view" | "channel"; id: string; label: string }>;
+  // The roles and sessions pinned in the app header (org-staffing.md S30,
+  // lib/headerPins). A role pins by its org_roles id, a session by its
+  // conversation id; the header resolves each from the anchors and sessions
+  // collections at render, so a pin the viewer can no longer see is simply
+  // not drawn and grants nothing. Absent is the DEFAULT (the person's global
+  // Chief of Staff, else the active workspace's agent); an empty list is a
+  // person who unpinned everything. Stamped (per user, every device).
+  header_pins?: Array<{ kind: "role" | "session"; id: string }>;
   // The Threads page's "include agent sessions" toggle. Off unless exactly
   // true. Stamped (STAMPED_UI_KEYS): a per-user view preference.
   threads_include_sessions?: boolean;
@@ -2994,6 +3050,8 @@ export type PlaceInboxState = {
   pendingSessionCreates?: Record<string, unknown>;
   blockedReviveRequestedAt?: Record<string, number>;
   currentSessionId?: string | null;
+  /** NEW holds after a first send (newSessionHolds). Presentation only: filing, never placement. */
+  newSessionHolds?: Record<string, number>;
   /** In-flight field locks (the triage_gesture overlay's input). */
   pending?: InboxOverlayState["pending"];
 };
@@ -3079,14 +3137,15 @@ export const placementDecisionsSig = makeCollectionSig((d: any) =>
   d?.status === "pending" ? `${d._id}|${d.conversation_id}` : "");
 
 const EMPTY_PLACEMENT_OBJ: Record<string, never> = {};
-let _placementDeadlineMemo: {
+type PlacementDeadlineMemo = {
   sessions: PlaceInboxState["sessions"];
   revive: PlaceInboxState["blockedReviveRequestedAt"];
   stamps: NonNullable<PlaceInboxState["sessionsProjection"]>[string]["stamps"] | undefined;
   now: number;
   validUntil: number;
   sig: string;
-} | null = null;
+};
+let _placementDeadlineMemo: PlacementDeadlineMemo | null = null;
 
 // The DEADLINE signature — the chokepoint's deadline heap, folded to one
 // string. Every TIME-driven placement input is in it: rows past the liveness
@@ -3327,6 +3386,7 @@ export function placeInboxRows(
     Object.keys(pendingCreates).sort().join(","),
     placementDecisionsSig(decisions),
     state.questionResolutions,
+    state.newSessionHolds,
     state.killedShelf?.ids,
   ];
   const memo = _placedMemo.get(slot);
@@ -3541,6 +3601,7 @@ export function placeInboxRows(
   // flight (the create_stub overlay's pending half).
   const isEngagedBlank = (s: InboxSession) =>
     deps.pendingCreateIds.has(s._id) || overlaysAffecting(s._id, deps).some((o) => o === "focused" || o === "draft_blank");
+  const holds = state.newSessionHolds ?? EMPTY_PLACEMENT_OBJ as Record<string, number>;
   const questions: InboxSession[] = [];
   const pinned: InboxSession[] = [];
   const newSessions: InboxSession[] = [];
@@ -3556,6 +3617,13 @@ export function placeInboxRows(
       // any content files it under WORKING; an engaged blank renders in NEW.
       if (isConvexId(s._id)) continue;
       b = (s.message_count ?? 0) > 0 || deps.pendingSendIds.has(s._id) ? "working" : "new";
+    }
+    // A session the person just started stays where they put it for a moment
+    // after the first send, then moves on (NEW_SESSION_HOLD_MS). Filing only:
+    // the placement, the tally and the digest keep the row's real bucket.
+    if ((holds[s._id] ?? 0) > now && HELD_IN_NEW.has(b)) {
+      newSessions.push(s);
+      continue;
     }
     switch (b) {
       case "questions": questions.push(s); break;
@@ -3724,6 +3792,17 @@ function assertPlacementParity(
   }
 }
 
+// The "your move" rows (Ctrl+I, queue advance): questions, NEEDS INPUT and
+// DONE, plus a fresh start held in NEW whose turn has settled on the person.
+export function yourMoveOf(placed: PlacedInbox): (s: InboxSession) => boolean {
+  const keep = new Set([...placed.needsInput, ...placed.done].map((s) => s._id));
+  for (const s of placed.newSessions) {
+    const ws = placed.placements.get(s._id)?.work_state;
+    if (ws === "needs_input" || ws === "done") keep.add(s._id);
+  }
+  return (s) => placed.isQuestion(s) || keep.has(s._id);
+}
+
 export function visualOrderSessions(
   placed: PlacedInbox,
   projectFilters?: readonly ProjectFilterTerm[],
@@ -3767,8 +3846,7 @@ export function visualOrderSessions(
     }
   }
   if (opts.yourMove) {
-    const keep = new Set([...placed.needsInput, ...placed.done].map((s) => s._id));
-    return result.filter((s) => placed.isQuestion(s) || keep.has(s._id));
+    return result.filter(yourMoveOf(placed));
   }
   return result;
 }
@@ -4591,8 +4669,7 @@ export function computeVisualOrder(state: {
   if (state.showFavorites) {
     const order = favoritesVisualOrder(state.sessions, chipProjectFilters(state), state.favorites);
     if (!opts.yourMove) return order;
-    const keep = new Set([...placed.needsInput, ...placed.done].map((s) => s._id));
-    return order.filter((s) => placed.isQuestion(s) || keep.has(s._id));
+    return order.filter(yourMoveOf(placed));
   }
   const bucketByConv = convBucketMap(state.bucketAssignments);
   const mode = resolveInboxViewMode(state.clientState.ui);
@@ -4613,8 +4690,7 @@ export function computeVisualOrder(state: {
     if (!opts.yourMove) return flat;
     // A flat card still wears the bucket verdict (its badge reads from the same
     // placement), so "your move" is the same membership walked in flat order.
-    const keep = new Set([...placed.needsInput, ...placed.done].map((s) => s._id));
-    return flat.filter((s) => placed.isQuestion(s) || keep.has(s._id));
+    return flat.filter(yourMoveOf(placed));
   }
   // Grouped/bucket: the placed status sections over the SAME visible set. The
   // bucket branch below splits pinned out and regroups the rest by label/project.
@@ -4739,17 +4815,27 @@ export function findReusableBlankSession(
 
 // -- Store interface --
 
-/** One live huddle as calls.getLiveRooms projects it. A room the viewer may
- *  not see the anchor of arrives `redacted` with no title — the room is still
- *  joinable (the team wall holds), only its name is withheld. */
-export type LiveRoom = {
-  room_key: string;
-  team_id: string;
+/** The flags a person toggles from inside a huddle: one `callRooms` row per
+ *  live room, keyed by room_key. calls.getLiveRooms carries them and
+ *  useCallSync files them here, apart from the roster (`liveRooms`). */
+export type CallRoomFlags = {
+  _id: string;
   /** The room's door, as a fact about the ROOM: what the lock glyph paints. */
   locked: boolean;
   /** The huddle turned transcription off (calls.setRoomTranscribeOff) — what
    *  keeps every seated client's auto-scribe from starting it again. */
-  transcribe_off?: boolean;
+  transcribe_off: boolean;
+  /** When the opt-out was switched on; null while transcription is on. */
+  transcribe_off_at: number | null;
+};
+
+/** One live huddle as calls.getLiveRooms projects it, minus the room flags
+ *  (those live in `callRooms`). A room the viewer may not see the anchor of
+ *  arrives `redacted` with no title — the room is still joinable (the team
+ *  wall holds), only its name is withheld. */
+export type LiveRoom = {
+  room_key: string;
+  team_id: string;
   /** May THIS viewer walk in right now — the server's own authorizeRoom answer.
    *  A lock shuts the open door only, so a member of the room or a guest
    *  holding a live grant is still true here while `locked` is too. This, never
@@ -4810,18 +4896,6 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   viewingDismissedId: string | null;
   pendingNavigateId: string | null;
   renamingSessionId: string | null;
-  // Kill+restarts in flight, keyed by conversation id → startedAt. Written by
-  // useSessionRestart so surfaces beyond the open conversation (the inbox row)
-  // can show the recovery. Ephemeral — never persisted; readers must treat an
-  // entry older than the ~2m give-up budget as expired, because a restart
-  // started then navigated away from has no live owner to clear it.
-  restartingSessions: Record<string, number>;
-  // Device moves in flight ("Run here" / "Move to remote Mac"), keyed by
-  // conversation id. Written by useMoveSessionToDevice (DeviceBadge) so the
-  // conversation header can narrate the move like a restart. Ephemeral — never
-  // persisted; readers expire entries by age since a move navigated away from
-  // has no live owner to clear it.
-  movingSessions: Record<string, { started_at: number; to_device_id: string; to_remote: boolean; to_label: string; error?: string }>;
   pendingScrollToMessageId: string | null;
   // The bookmarked message's known timestamp, carried alongside the scroll
   // target so the conversation view can open the window AROUND it on first
@@ -5093,6 +5167,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // -- Wrapped actions (middleware creates aliases from do_* -> *) --
   stashSession: (id: string, opts?: { hidden?: boolean }) => void;
   killSession: (id: string) => void;
+  deleteSession: (id: string) => void;
   killSessions: (ids: string[]) => void;
   markSessionsDismissed: (ids: string[]) => void;
   markBlockedAcknowledged: (ids: string[]) => void;
@@ -5115,6 +5190,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   setPrivacy: (id: string, isPrivate: boolean) => void;
   /** "Anyone with the link" on (a freshly minted token) or off (null). */
   setShareLink: (id: string, token: string | null) => void;
+  setObjectShareLink: (kind: PublicShareKind, id: string, token: string | null) => void;
   dismissBrowserPaneOffer: (id: string, at: number) => void;
   setTeamVisibility: (id: string, visibility: "summary" | "full" | null) => void;
   /** My level for a whole team. `mode` matters only when the level goes up:
@@ -5139,6 +5215,15 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   resumeSession: (convId: string) => Promise<any>;
   sendEscape: (convId: string) => Promise<any>;
   hibernateSession: (requestId: string, convId: string, sessionId: string, ownerDeviceId: string) => Promise<any>;
+  // Daemon commands tracked as sessionCommands rows keyed by requestId (see
+  // lib/sessionCommands): the row paints on the call and the echo settles it.
+  restartSession: (requestId: string, convId: string, ghost?: Record<string, unknown>, repair?: boolean) => Promise<any>;
+  moveSessionToDevice: (requestId: string, convId: string, toDeviceId: string, toRemote: boolean, toLabel?: string) => Promise<any>;
+  requestAccountSwitch: (requestId: string, args: AccountSwitchArgs, intent?: { profile?: string; email?: string }) => Promise<any>;
+  // Local bookkeeping on a command row: the session was seen back (restart) or
+  // the account confirmed (switch); dismiss drops a settled row from view.
+  confirmSessionCommand: (requestId: string) => void;
+  dismissSessionCommand: (requestId: string) => void;
   convCommand: (convId: string, command: string, extraArgs?: Record<string, any>, optimistic?: Record<string, any>) => Promise<any>;
   createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: "isolated" | "shared"; cloud_start_from?: "checkout" | "origin_main"; agent_definition?: string; private?: boolean }) => Promise<any>;
   // Create the server session for a DEFERRED stub, sourcing project + agent from
@@ -5149,7 +5234,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // at create. `fallback` covers a stub that was somehow never seeded. Pairs with
   // beginOptimisticSession({ deferCreate })'s materialize() AND the in-app
   // self-heal create (ensureSessionCreated routes through it too).
-  createSessionFromStub: (stubId: string, fallback?: { agentType?: string; projectPath?: string; gitRoot?: string; private?: boolean }) => Promise<any>;
+  createSessionFromStub: (stubId: string, fallback?: { agentType?: string; projectPath?: string; gitRoot?: string; private?: boolean; model?: string; targetDeviceId?: string }) => Promise<any>;
   // The one true path for optimistically creating a session: stubs a local
   // conversation synchronously and rekeys it to the real Convex id when `create`
   // resolves. Every new-session entry point funnels through this so a first
@@ -5169,7 +5254,9 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // Ghost removal: hard-drop cached session rows nothing will re-deliver
   // (orphaned optimistic stubs). Plants the exclude pending entries that
   // authorize the IDB row delete and block re-adds.
-  pruneGhostSessions: (ids: string[]) => void;
+  // serverDeleted: the server proved the conversation gone (coverage poll's
+  // "missing"), so unsettled local messages no longer protect the row.
+  pruneGhostSessions: (ids: string[], opts?: { serverDeleted?: boolean }) => void;
   // Receiver for the cross-window gesture bridge — see gestureBridge.ts.
   applyGestureBridge: (msg: GestureMessage) => void;
   pruneFeedEntities: (collection: FeedCollection, ids: string[]) => void;
@@ -5359,6 +5446,10 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // In-memory map: stub id → in-flight createSession dispatch promise. Lets
   // consumers await rekey directly instead of polling. Not synced/persisted.
   pendingSessionCreates: Record<string, Promise<string>>;
+  // In-memory, this window only: session id → when its NEW hold ends. The
+  // first send into a blank session stamps it (appendOptimisticMessage) and an
+  // expired hold deletes itself (releaseExpiredNewSessionHolds). Not synced/persisted.
+  newSessionHolds: Record<string, number>;
   trackSessionCreate: (stubId: string, promise: Promise<string>) => void;
   awaitSessionCreate: (stubId: string) => Promise<string> | undefined;
   // Re-create a stub whose createSession was given up (outbox cap / lost to a
@@ -5468,7 +5559,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   ) => void;
   deleteTrigger: (taskId: string) => void;
   // A recurring trigger's cadence, changed in place (the org page's area rows
-  // and the Chief of Staff's review, org-staffing.md S29): the row's interval
+  // and the Head of People's review, org-staffing.md S29): the row's interval
   // flips on the draft, the named side effect runs agentTasks.webUpdate.
   setTriggerInterval: (taskId: string, intervalMs: number) => void;
   // Remove rows from a NON-localFirst collection without planting tombstones —
@@ -5697,15 +5788,23 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
    *  (components/stage/StagePickLayer). Ephemeral gesture — raw set. */
   stagePick: { path: string; title?: string } | null;
   setStagePick: (pick: { path: string; title?: string } | null) => void;
-  // The intro tour (components/triage/TriageNux). Ephemeral modal toggle;
-  // whether it has RUN is durable, in clientState.tips.
-  triageNuxOpen: boolean;
-  setTriageNuxOpen: (open: boolean) => void;
+  // The tour that is running (tours/): which one, which step, and whether a
+  // person asked for it (a replay) or it started itself. Ephemeral modal
+  // state; whether a tour has been SEEN is durable, in clientState.tips
+  // (tours/seen.ts). The Tours panel lists every tour.
+  tour: TourRun | null;
+  setTour: (run: TourRun | null) => void;
+  toursPanelOpen: boolean;
+  setToursPanelOpen: (open: boolean) => void;
   // The global anchor panel: a slide-over holding one anchor's conversation,
   // reachable from every page. Ephemeral (a modal toggle, never persisted).
   // `anchorId` is the LAST anchor shown, so re-opening lands where you were.
-  anchorPanel: { open: boolean; anchorId: string | null };
-  openAnchorPanel: (anchorId?: string | null) => void;
+  // `target` is what the panel shows: a standing agent by its anchors row, or
+  // any pinned session by its conversation (org-staffing.md S30); null means
+  // the first header pin. It is the LAST target shown, so re-opening lands
+  // where you were.
+  anchorPanel: { open: boolean; target: AnchorPanelTarget | null };
+  openAnchorPanel: (target?: AnchorPanelTarget | null) => void;
   closeAnchorPanel: () => void;
   toggleAnchorPanel: () => void;
 
@@ -5791,7 +5890,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   removeAgentChain: (id: string) => void;
 
   addTaskComment: (shortId: string, text: string, commentType?: string, imageIds?: string[]) => Promise<any>;
-  updateDoc: (id: string, fields: { content?: string; title?: string; doc_type?: string; labels?: string[] }) => void;
+  updateDoc: (id: string, fields: { content?: string; title?: string; doc_type?: string; labels?: string[]; overflow?: string }) => void;
   pinDoc: (id: string, pinned: boolean) => Promise<any>;
   archiveDoc: (id: string) => Promise<any>;
   restoreArchivedDoc: (id: string) => void;
@@ -5821,14 +5920,19 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // on the row I clicked, and the auto-accept in useCallRing — the admit ring
   // for a door I knocked on must not ask me to answer it.
   callKnocked: Record<string, number>;
-  // In-flight lock toggles, room_key → desired state. Local-first: the lock
-  // glyph flips on click and this protects it through getLiveRooms pushes
-  // computed before setRoomLocked committed (same shape as myStatusPending).
-  callLockPending: Record<string, { locked: boolean; at: number }>;
+  callRooms: Record<string, CallRoomFlags>;
   noteKnock: (roomKey: string) => void;
   clearKnock: (roomKey: string) => void;
-  noteLockPending: (roomKey: string, locked: boolean) => void;
-  revertLockPending: (roomKey: string, locked: boolean) => void;
+  setRoomLocked: (roomKey: string, locked: boolean) => void;
+  setTeamFeature: (teamId: string, feature: string, enabled: boolean) => void;
+  setDefaultModel: (agentClient: string, model: string | null) => void;
+  updateNotificationSettings: (patch: { notifications_enabled?: boolean; notification_preferences?: Record<string, any>; muted_members?: string[]; machine_wide_presence?: boolean }) => void;
+  setAgentPermissionModes: (modes: { claude?: string; codex?: string; gemini?: string; muse?: string }) => void;
+  setAgentDefaultParams: (agent: string, params: Record<string, string>) => void;
+  /** Resolves once the server holds the flag: switching transcription back on
+   *  must land before the scribe asks transcripts.start, which refuses a room
+   *  that is still opted out. The switch itself paints synchronously. */
+  setRoomTranscribeOff: (roomKey: string, off: boolean) => Promise<unknown>;
   // Ephemeral media-plane state, written only by lib/calls/callManager. The
   // dock renders from THIS synchronously (local-first: joining paints
   // "connecting" before any server or SFU round-trip).
@@ -5856,17 +5960,6 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   teamUnreadCount: number | null;
   favorites: any[];
   bookmarks: any[];
-  // In-flight optimistic bookmark toggles, keyed by message_id → desired state.
-  // Memory-only (unregistered, so never persisted). The bookmarks list sync
-  // re-applies these on top of each server push and clears an entry once the
-  // server agrees, so an unrelated heartbeat re-push of listBookmarks can't
-  // revert a toggle before its own mutation has committed.
-  bookmarkPending: Record<string, { bookmarked: boolean; conversationId: string }>;
-
-  // The viewer's in-flight manual status flip (setMyStatus). teamMembers is a
-  // wholesale-replaced list, so the teamMembers normalize re-applies this on
-  // top of each push until the server reflects it (or the TTL expires).
-  myStatusPending: { userId: string; status: string; at: number } | null;
 
   // -- Selectors --
   getSession: (id: string) => InboxSession | undefined;
@@ -5920,9 +6013,34 @@ function appendOptimisticMessage(draft: Draft, convId: string, content: string, 
       : draft.sessions[convId]?.updated_at,
     ...(images && images.length > 0 ? { images } : {}),
   };
+  if ((draft.sessions[convId]?.message_count ?? 0) === 0 && !draft.pendingMessages[convId]?.length && !isInterruptControlMessage(content)) {
+    holdInNew(draft, convId);
+  }
   if (!draft.pendingMessages[convId]) draft.pendingMessages[convId] = [];
   draft.pendingMessages[convId].push(msg);
   return id;
+}
+
+// How long a just-started session stays in NEW after its first send before it
+// moves to the section its state names. Long enough to add a thought or fix
+// the prompt without hunting for the row; short enough that NEW never fills.
+export const NEW_SESSION_HOLD_MS = 30_000;
+const HELD_IN_NEW: ReadonlySet<InboxBucket | null> = new Set<InboxBucket | null>(["working", "needs_input", "done", "dormant"]);
+
+function holdInNew(draft: Draft, convId: string) {
+  const until = Date.now() + NEW_SESSION_HOLD_MS;
+  draft.newSessionHolds[convId] = until;
+  setTimeout(releaseExpiredNewSessionHolds, until - Date.now() + 50);
+}
+
+// Drops every expired hold in one write (ids may have been rekeyed since the
+// timer was armed, so it sweeps rather than naming one). Ephemeral UI state.
+export function releaseExpiredNewSessionHolds() {
+  const holds = useInboxStore.getState().newSessionHolds;
+  const now = Date.now();
+  const live = Object.entries(holds).filter(([, until]) => until > now);
+  if (live.length === Object.keys(holds).length) return;
+  useInboxStore.setState({ newSessionHolds: Object.fromEntries(live) });
 }
 
 function messageReplayKey(message: Message): string | null {
@@ -6147,6 +6265,8 @@ export type MergeSpec = MergePolicy | MergeSpecMap | MergeFn;
 
 export type SyncOpts = {
   kind?: "collection" | "singleton" | "list" | "scalar";
+  // A local-first list's row identity (default `_id`): see RegistrySyncOpts.
+  rowKey?: string;
   merge?: Record<string, MergeSpec>;
   altKey?: string;
   keepSelected?: string;
@@ -6529,7 +6649,9 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
       }
     },
   },
-  currentUser: { kind: "singleton", normalize: quantizePresence },
+  // localFirst (clientSyncRegistry): a field an action set (status, walkie
+  // pref, cloud sync switches) holds over pushes until the server echoes it.
+  currentUser: { ...REGISTRY_SYNC_OPTS.currentUser, normalize: quantizePresence },
   // Server-authoritative call state: wholesale replace (no local edits to
   // protect — the optimistic layer for calls is the ephemeral `call` slice,
   // not these rows). Timestamps are bucketed server-side (calls.ts), so
@@ -6541,87 +6663,17 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   callConfig: { kind: "singleton" },
   // Live huddles, wholesale-replaced on every push (the server sorts rooms
   // and rosters and buckets timestamps, so a heartbeat that changed nothing
-  // bails on the JSON compare). The one local edit to protect is an in-flight
-  // lock toggle: a push computed before setRoomLocked committed would flap the
-  // glyph back for a beat. Protection lives in normalize, like teamMembers, so
-  // the no-change bail still swallows heartbeat pushes.
-  liveRooms: {
-    kind: "list",
-    normalize: (list: any, draft?: any) => {
-      if (!Array.isArray(list)) return list;
-      const pending = draft?.callLockPending as Record<string, { locked: boolean; at: number }> | undefined;
-      if (!pending || Object.keys(pending).length === 0) return list;
-      return list.map((room: any) => {
-        const p = room && pending[room.room_key];
-        if (!p) return room;
-        // The TTL keeps a failed mutation from pinning a lock the server never
-        // accepted; agreement clears the entry and stops the protection.
-        if (Date.now() - p.at > 30_000 || room.locked === p.locked) {
-          delete pending[room.room_key];
-          return room;
-        }
-        return { ...room, locked: p.locked };
-      });
-    },
-  },
+  // bails on the JSON compare). Nothing local to protect: the flags a person
+  // flips live in `callRooms`, which useCallSync splits off this feed.
+  liveRooms: { kind: "list" },
   roomKnocks: { kind: "list" },
-  teams: { kind: "list" },
-  teamMembers: {
-    kind: "list",
-    // Beyond presence quantization, overlay the viewer's in-flight manual
-    // status (setMyStatus): the roster is wholesale-replaced on every push,
-    // and a push computed before the updateProfile mutation committed would
-    // flap the optimistic pill back for a beat. Protection lives in normalize,
-    // not transform, so the equality bail still swallows no-op heartbeat
-    // pushes. Cleared once the server reflects the status; the TTL keeps a
-    // failed dispatch from pinning a status the server never accepted.
-    normalize: (list: any, draft?: any) => {
-      if (!Array.isArray(list)) return list;
-      const mapped = list.map(quantizePresence);
-      const pending = draft?.myStatusPending;
-      if (!pending) return mapped;
-      if (Date.now() - pending.at > 30_000) {
-        draft.myStatusPending = null;
-        return mapped;
-      }
-      const idx = mapped.findIndex((m: any) => m && String(m._id) === pending.userId);
-      if (idx === -1) return mapped;
-      if ((mapped[idx].status ?? "available") === pending.status) {
-        draft.myStatusPending = null; // server caught up — stop protecting
-      } else {
-        mapped[idx] = { ...mapped[idx], status: pending.status };
-      }
-      return mapped;
-    },
-  },
+  // teams, teamMembers and bookmarks are localFirst lists (clientSyncRegistry
+  // carries their kind, row identity and altKey): an action's change to a row
+  // or to membership holds over pushes until the server agrees. teamMembers
+  // adds presence quantization on top.
+  teamMembers: { ...REGISTRY_SYNC_OPTS.teamMembers, normalize: (list: any) => (Array.isArray(list) ? list.map(quantizePresence) : list) },
   teamUnreadCount: { kind: "scalar" },
   favorites: { kind: "list", normalize: (list: any, state: any) => reconcileFavoritesWithLocks(list ?? [], state) },
-  bookmarks: {
-    kind: "list",
-    // Local-first reconciliation: a list-kind sync wholesale-replaces the store,
-    // which would clobber an optimistic toggle whose own mutation hasn't
-    // committed yet (listBookmarks re-runs on any heartbeat that bumps a
-    // bookmarked conversation's updated_at). Re-apply each in-flight toggle on
-    // top of the server push; clear it once the server reflects the same state.
-    transform: (state: any, list: any) => {
-      const pending = state.bookmarkPending as Record<string, { bookmarked: boolean; conversationId: string }>;
-      const ids = pending ? Object.keys(pending) : [];
-      if (ids.length === 0) return;
-      const present = new Set((list as any[]).map((b) => b.message_id));
-      let next = state.bookmarks as any[];
-      for (const messageId of ids) {
-        const { bookmarked, conversationId } = pending[messageId];
-        if (present.has(messageId) === bookmarked) {
-          delete pending[messageId]; // server caught up — stop protecting
-          continue;
-        }
-        next = bookmarked
-          ? [{ _id: `temp_${messageId}`, conversation_id: conversationId, message_id: messageId, created_at: Date.now() }, ...next]
-          : next.filter((b) => b.message_id !== messageId);
-      }
-      state.bookmarks = next;
-    },
-  },
 };
 
 // Rename pending protection entries from oldId → newId so field
@@ -6933,6 +6985,10 @@ function scheduleResolvedChatChannelSends(channelId: string): void {
 
 function rekeyId(draft: any, oldId: string, newId: string) {
   if (oldId === newId) return;
+  if (draft.newSessionHolds?.[oldId]) {
+    draft.newSessionHolds[newId] = draft.newSessionHolds[oldId];
+    delete draft.newSessionHolds[oldId];
+  }
   if (draft.sessions[oldId]) {
     draft.sessions[newId] = { ...draft.sessions[oldId], _id: newId };
     delete draft.sessions[oldId];
@@ -7254,13 +7310,7 @@ function hideSessionInDraft(
   const me = draft.currentUser?._id?.toString?.();
   const hidden: string[] = [];
   const forgotten: string[] = [];
-  let newSessionId = draft.currentSessionId;
-  if (draft.currentSessionId && allIds.includes(draft.currentSessionId)) {
-    // Advance in the order the user is LOOKING at (active view mode, same as
-    // j/k), not the default grouped layout's order.
-    const next = nextSessionPastRemoved(computeVisualOrder(draft), draft.currentSessionId, new Set(allIds));
-    newSessionId = next?._id ?? null;
-  }
+  const newSessionId = sessionPastRemoved(draft, allIds);
   for (const sid of allIds) {
     // A local-only stub (optimistic create that never landed server-side)
     // can't be hidden durably: the server never knew it, so the reconcile's
@@ -7311,18 +7361,29 @@ function hideSessionInDraft(
       if (wasPinned) conv.inbox_pinned_at = null;
     }
   }
-  // Dismiss-and-advance: every caller of hideSessionInDraft is a user
-  // stash/kill/dismiss, so moving to the next session is gesture-class.
+  advanceSelection(draft, newSessionId);
+  return { hidden, forgotten, ts: now };
+}
+
+// The session to show once `removedIds` leave the list: the current one if it
+// survives, else the next in the order the user is LOOKING at (active view
+// mode, same as j/k), not the default grouped layout's order.
+function sessionPastRemoved(draft: any, removedIds: string[]): string | null {
+  if (!draft.currentSessionId || !removedIds.includes(draft.currentSessionId)) return draft.currentSessionId;
+  const next = nextSessionPastRemoved(computeVisualOrder(draft), draft.currentSessionId, new Set(removedIds));
+  return next?._id ?? null;
+}
+
+// Move the selection after a user removed rows (stash, kill, dismiss, delete):
+// gesture-class navigation. The active inbox tab's `?s=` moves in lockstep, as
+// commitCurrentSession does for normal navigation; otherwise the tab path stays
+// on the removed session and the inbox's re-assert effect snaps the view back
+// onto it the next time it runs (e.g. when the tab is re-activated).
+function advanceSelection(draft: any, newSessionId: string | null) {
   declareViewNav("gesture");
   draft.currentSessionId = newSessionId;
   recordCurrentConversationPointer(draft, newSessionId ?? undefined);
-  // Keep the active inbox tab's `?s=` in lockstep with the advanced selection,
-  // exactly as commitCurrentSession does for normal navigation. Without this the
-  // tab path stays pointed at the just-hidden session, and the inbox's re-assert
-  // effect snaps the view back onto it (resurfacing the dismissed/killed session
-  // as a peek) the next time it runs — e.g. when the tab is re-activated.
   syncActiveInboxTabPath(draft, newSessionId);
-  return { hidden, forgotten, ts: now };
 }
 
 // The focused session fell out of the list the panel renders — a filter changed
@@ -7769,6 +7830,36 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
   });
 }
 
+// Session ids a server-deleted prune skipped because the conversation was open;
+// retried by the subscription at the end of this module once the view moves.
+// One set per page, not per module evaluation: a hot swap keeps the store and
+// its first subscription, which must keep seeing the set the new config writes.
+const deferredDeletedSessions: Set<string> = ((globalThis as any).__deferredDeletedSessions ??= new Set<string>());
+
+// The one way a cached session row is dropped by hand: its three twins, its
+// pagination, and the excludes that authorize the IDB delete and block a
+// re-add. Shared by the ghost prune and the change-feed prune. An open view or
+// an optimistic create is never dropped. An unsettled local message protects
+// the row unless the server has proven the conversation gone (serverDeleted):
+// then nothing can ever settle it, and keeping it strands a ghost (2026-10-01).
+function dropSessionInDraft(draft: Draft, id: string, now: number, serverDeleted = false): boolean {
+  if (draft.currentSessionId === id) {
+    if (serverDeleted) deferredDeletedSessions.add(id);
+    return false;
+  }
+  if (!serverDeleted && pendingRowsUnsettled(draft.pendingMessages[id])) return false;
+  if (id in draft.pendingSessionCreates) return false;
+  deferredDeletedSessions.delete(id);
+  delete draft.sessions[id];
+  delete draft.conversations[id];
+  delete draft.messages[id];
+  delete draft.pendingMessages[id];
+  delete draft.pagination[id];
+  draft.pending[`sessions:${id}`] = { type: "exclude", ts: now };
+  draft.pending[`conversations:${id}`] = { type: "exclude", ts: now };
+  return true;
+}
+
 const inboxStoreConfig = (set: any, get: any) => ({
   // -- Initial state --
   // Every registered collection starts as {} by registration alone; explicit
@@ -7791,8 +7882,6 @@ const inboxStoreConfig = (set: any, get: any) => ({
   viewingDismissedId: null,
   pendingNavigateId: null,
   renamingSessionId: null,
-  restartingSessions: {},
-  movingSessions: {},
   pendingScrollToMessageId: null,
   pendingScrollToMessageTimestamp: null,
   pendingHighlightQuery: null,
@@ -8049,6 +8138,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   getReviewComments: (conversationId: string) => get().reviewComments[conversationId] ?? [],
 
   pendingSessionCreates: {},
+  newSessionHolds: {},
 
   currentConversation: {},
   isolatedWorktreeMode: false,
@@ -8581,6 +8671,20 @@ const inboxStoreConfig = (set: any, get: any) => ({
     announceHide(this, "kill", hideSessionInDraft(this, id, "kill"));
   }),
 
+  // Delete for good (sessionDelete.deleteSession, by action name): the server
+  // tears the agent down, removes the row and its content, and tombstones the
+  // session id so the daemon never recreates it. Owner-only; the menus offer it
+  // only on the viewer's own rows.
+  deleteSession: action(function (this: Draft, id: string) {
+    advanceSelection(this, sessionPastRemoved(this, [id]));
+    delete this.sessions[id];
+    delete this.conversations[id];
+    delete this.messages[id];
+    delete this.pendingMessages[id];
+    delete this.pagination[id];
+    broadcastGesture({ kind: "forget", ids: [id], ts: Date.now() }, bridgeUserId(this));
+  }),
+
   // Bulk kill ("Kill all" on the Stashed bucket): one action so the patches
   // ride a single dispatch and the kill sound plays once, not N times. Scale
   // is the user-curated stash list (tens) — each row NEEDS its own server
@@ -8690,7 +8794,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // excludes are what authorize the IDB row delete (a bare store-shrink is
   // ignored by the diff). A sync() — never re-dispatched; excludes are planted
   // manually (only action() auto-plants).
-  pruneGhostSessions: sync(function (this: Draft, ids: string[]) {
+  pruneGhostSessions: sync(function (this: Draft, ids: string[], opts?: { serverDeleted?: boolean }) {
     const now = Date.now();
     const removed: string[] = [];
     for (const id of ids) {
@@ -8701,17 +8805,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       // arrives on a later crawl, and the broadcast would order sibling windows
       // to drop a row on evidence this window doesn't have.
       if (!(id in this.sessions) && !(id in this.conversations)) continue;
-      if (this.currentSessionId === id) continue;
-      if (pendingRowsUnsettled(this.pendingMessages[id])) continue;
-      if (id in this.pendingSessionCreates) continue;
-      removed.push(id);
-      delete this.sessions[id];
-      delete this.conversations[id];
-      delete this.messages[id];
-      delete this.pendingMessages[id];
-      delete this.pagination[id];
-      this.pending[`sessions:${id}`] = { type: "exclude", ts: now };
-      this.pending[`conversations:${id}`] = { type: "exclude", ts: now };
+      if (dropSessionInDraft(this, id, now, opts?.serverDeleted)) removed.push(id);
     }
     // A sibling window still holding the ghost in memory would re-put the whole
     // row and resurrect it (see gestureBridge.ts). Only the ids actually removed
@@ -8739,16 +8833,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const now = Date.now();
     for (const id of ids) {
       if (collection === "sessions") {
-        if (this.currentSessionId === id) continue;
-        if (pendingRowsUnsettled(this.pendingMessages[id])) continue;
-        if (id in this.pendingSessionCreates) continue;
-        delete this.sessions[id];
-        delete this.conversations[id];
-        delete this.messages[id];
-        delete this.pendingMessages[id];
-        delete this.pagination[id];
-        this.pending[`sessions:${id}`] = { type: "exclude", ts: now };
-        this.pending[`conversations:${id}`] = { type: "exclude", ts: now };
+        dropSessionInDraft(this, id, now);
       } else {
         const coll = (this as any)[collection] as Record<string, any> | undefined;
         if (coll && id in coll) delete coll[id];
@@ -9271,6 +9356,19 @@ const inboxStoreConfig = (set: any, get: any) => ({
     });
   }),
 
+  // The same switch for every other shareable kind (convex publicShare.ts),
+  // same caller-minted token. Patches every cached copy of the object
+  // (SHARE_COLLECTIONS); a kind with no cached copy (calls) only dispatches.
+  setObjectShareLink: action(function (this: Draft, kind: PublicShareKind, id: string, token: string | null) {
+    for (const key of SHARE_COLLECTIONS[kind]) {
+      const coll = (this as any)[key] as Record<string, any> | undefined;
+      if (!coll) continue;
+      for (const row of coll[id] ? [coll[id]] : Object.values(coll).filter((r: any) => r?._id === id)) {
+        row.share_token = token ?? undefined;
+      }
+    }
+  }),
+
   setTeamVisibility: action(function (this: Draft, id: string, visibility: "summary" | "full" | null) {
     patchConversationRows(this, id, (c) => {
       c.team_visibility = visibility ?? undefined;
@@ -9278,9 +9376,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
     });
   }),
 
-  // `teams` is a wholesale-synced list, so the row is patched optimistically
-  // with the same transition the server applies (teamVisibility.ts) and the
-  // next getUserTeams push confirms it.
+  // The row is patched with the same transition the server applies
+  // (teamVisibility.ts); `teams` is a localFirst list, so the change holds
+  // until getUserTeams echoes it and rolls back if the server refuses.
   setTeamMembershipVisibility: action(function (this: Draft, teamId: string, visibility: TeamVisibilityLevel, mode: VisibilityChangeMode = "everything") {
     const team = (this.teams as any[]).find((t) => t && String(t._id) === String(teamId));
     if (!team) return;
@@ -9289,43 +9387,38 @@ const inboxStoreConfig = (set: any, get: any) => ({
     team.visibility_history = next.visibility_history;
   }),
 
-  // Bookmarks are a wholesale-synced list (no field protection), so toggle the
-  // local list optimistically; the toggleBookmark side-effect performs the
-  // authoritative add/delete and the next sync replaces the list from server.
+  // `bookmarks` is a localFirst list keyed by message_id: the add or remove
+  // holds until listBookmarks agrees, and the toggleBookmark side effect does
+  // the authoritative add/delete.
   toggleBookmark: action(function (this: Draft, conversationId: string, messageId: string) {
     const list = this.bookmarks as any[];
     const idx = list.findIndex((b) => b.message_id === messageId);
-    const nowBookmarked = idx === -1;
     if (idx !== -1) list.splice(idx, 1);
     // Prepend (not push) so a fresh bookmark lands at the top, matching the
     // server's newest-first ordering — otherwise it would flash at the bottom
     // until the next sync re-sorts it.
     else list.unshift({ _id: `temp_${messageId}`, conversation_id: conversationId, message_id: messageId, created_at: Date.now() });
-    if (!this.bookmarkPending) this.bookmarkPending = {};
-    this.bookmarkPending[messageId] = { bookmarked: nowBookmarked, conversationId };
   }),
 
-  // Manual presence status. Local-first: the roster row is the read path
-  // (TeamAvatarBar's bar + hover card), so patch it in the draft — the pill
-  // flips the instant it's clicked. teamMembers is wholesale-replaced on every
-  // push, so myStatusPending protects the flip until the server echoes it
-  // (see the teamMembers entry in SYNC_REGISTRY). The setMyStatus dispatch
-  // side-effect runs the authoritative users.updateProfile.
+  // Manual presence status. The roster row is the read path (TeamAvatarBar's
+  // bar + hover card), so patch it in the draft and the pill flips the instant
+  // it's clicked; teamMembers and currentUser are localFirst, so the flip holds
+  // over presence pushes until the server echoes it. The setMyStatus dispatch
+  // side effect runs the authoritative users.updateProfile.
   setMyStatus: action(function (this: Draft, status: "available" | "busy" | "away") {
     const meId = String(this.currentUser?._id ?? "");
     if (!meId) return;
     if (this.currentUser) (this.currentUser as any).status = status;
-    const idx = (this.teamMembers as any[]).findIndex((m) => m && String(m._id) === meId);
-    if (idx !== -1) this.teamMembers[idx] = { ...(this.teamMembers[idx] as any), status };
-    this.myStatusPending = { userId: meId, status, at: Date.now() };
+    const me = (this.teamMembers as any[]).find((m) => m && String(m._id) === meId);
+    if (me) me.status = status;
   }),
 
   // The walkie door. Local-first for the same reason as the status above, and
   // one more: useWalkieSync reads walkie_pref straight off currentUser to
   // decide whether a teammate's burst may play here, so a pref that waited on a
   // round trip would leave the door in its old state for a beat after somebody
-  // deliberately shut it. No pending guard — unlike the roster row, currentUser
-  // re-pushes only when the doc itself changes, by which time this IS the value.
+  // deliberately shut it. currentUser is localFirst, so the pref holds over
+  // presence pushes until the server echoes it.
   setWalkiePref: action(function (this: Draft, pref: "team" | "off") {
     if (this.currentUser) (this.currentUser as any).walkie_pref = pref;
   }),
@@ -9451,13 +9544,47 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // instant UI; asyncAction returns the server result (e.g. fork's new id), so
   // callers that await the old mutation are a drop-in swap.
   hibernateSession: asyncAction(function (this: Draft, requestId: string, convId: string, _sessionId: string, _ownerDeviceId: string) {
-    for (const [id, row] of Object.entries(this.sessionCommands)) {
-      if (row.conversation_id === convId || (row.executed_at && Date.now() - row.executed_at > 86400_000)) delete this.sessionCommands[id];
-    }
-    this.sessionCommands[requestId] = {
-      _id: requestId, conversation_id: convId, command: "hibernate_session",
-      requested_at: Date.now(), executed_at: null, result: null, error: null,
-    };
+    stampSessionCommand(this, { _id: requestId, conversation_id: convId, command: "hibernate_session" });
+  }),
+
+  // Kill + resume (or, with repair, the forced rebuild from history). The row
+  // binds to the resume command, whose outcome is the restart's; a repair is
+  // the restart's escalation, so it keeps the restart's click as started_at.
+  restartSession: asyncAction(function (this: Draft, requestId: string, convId: string, _ghost?: Record<string, unknown>, repair?: boolean) {
+    const prev = Object.values(this.sessionCommands).find((r: any) => r.conversation_id === convId && r.kind === "restart" && !r.confirmed_at);
+    stampSessionCommand(this, {
+      _id: requestId, conversation_id: convId, command: "resume_session", kind: repair ? "repair" : "restart",
+      ...(repair && prev ? { started_at: prev.started_at ?? prev.requested_at } : {}),
+    });
+  }),
+
+  // "Run here" / "Move to <device>": a remote destination binds to the source
+  // daemon's move_to_device, a local one to the resume on that device.
+  moveSessionToDevice: asyncAction(function (this: Draft, requestId: string, convId: string, toDeviceId: string, toRemote: boolean, toLabel?: string) {
+    stampSessionCommand(this, {
+      _id: requestId, conversation_id: convId, command: toRemote ? "move_to_device" : "resume_session", kind: "move",
+      to_device_id: toDeviceId, to_remote: toRemote, to_label: toLabel ?? toDeviceId,
+    });
+  }),
+
+  // A machine's account switch, or a revive scoped to one conversation. The
+  // row binds to the swapping machine's switch_account command.
+  requestAccountSwitch: asyncAction(function (this: Draft, requestId: string, args: AccountSwitchArgs, intent?: { profile?: string; email?: string }) {
+    stampSessionCommand(this, {
+      _id: requestId, command: "switch_account", kind: "switch",
+      device_id: args.device_id ?? null,
+      conversation_id: args.conversation_ids?.length === 1 ? args.conversation_ids[0] : null,
+      profile: intent?.profile ?? args.profile, email: intent?.email ?? args.email,
+    });
+  }),
+
+  confirmSessionCommand: sync(function (this: Draft, requestId: string) {
+    const row = this.sessionCommands[requestId];
+    if (row && !row.confirmed_at) row.confirmed_at = Date.now();
+  }),
+
+  dismissSessionCommand: sync(function (this: Draft, requestId: string) {
+    delete this.sessionCommands[requestId];
   }),
 
   convCommand: asyncAction(function (this: Draft, convId: string, command: string, _extraArgs?: Record<string, any>, optimistic?: Record<string, any>) {
@@ -9477,7 +9604,12 @@ const inboxStoreConfig = (set: any, get: any) => ({
       // that already ended in "user interrupted" (a server echo or the line
       // this window painted moments ago) still reaches the daemon, which
       // judges it, but paints nothing: the conversation already ends there.
-      if ((session || this.conversations[convId]) && !isInterruptControlMessage(lastTimelineMessage(this, convId)?.content)) {
+      // A cloud agent's mirror is the record of how its turn ended (it says
+      // "Cancelled." for a turn the press stopped), and no echo ever settles
+      // a line painted here: it would stay even when nothing was running.
+      const row = session ?? this.conversations[convId];
+      const cloudAgent = !!row && !!cloudAgentProviderOfConversation(agentType, row.session_id, row.model);
+      if (row && !cloudAgent && !isInterruptControlMessage(lastTimelineMessage(this, convId)?.content)) {
         appendOptimisticMessage(this, convId, agentType === "codex" ? "<turn_aborted>" : "[Request interrupted by user]");
       }
     }
@@ -9542,7 +9674,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // compose popup intentionally allows a project-less stub → the daemon starts in
   // $HOME). Tracking + rekey are done by beginOptimisticSession's fire() (or by
   // ensureSessionCreated), so this only creates.
-  createSessionFromStub: (stubId: string, fallback?: { agentType?: string; projectPath?: string; gitRoot?: string; private?: boolean }) => {
+  createSessionFromStub: (stubId: string, fallback?: { agentType?: string; projectPath?: string; gitRoot?: string; private?: boolean; model?: string; targetDeviceId?: string }) => {
     const s = get();
     const cur = (s.sessions[stubId] || s.conversations[stubId]) as any;
     const projectPath = cur?.project_path ?? fallback?.projectPath;
@@ -9554,7 +9686,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     // the full model id ("claude-opus-4-8"); the create wants the contract option
     // key ("opus") — findModelOption matches on key. A model left on a different
     // agent's id (after an agent switch) resolves to "default" and is dropped.
-    const modelKey = modelOptionKey(cur?.model, agentType);
+    const modelKey = modelOptionKey(cur?.model ?? fallback?.model, agentType);
     // The machine shown in the new-session row, passed through verbatim. This
     // used to be re-checked here and DROPPED when it matched what routing would
     // pick anyway — an optimization that quietly became a bug: the picker's
@@ -9563,7 +9695,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     // discard an explicit pick and hand the choice back to a server-side
     // coin flip. The selection is now deterministic and always stamped, so
     // there is nothing left to second-guess.
-    const targetDeviceId = cur?.target_device_id as string | null | undefined;
+    const targetDeviceId = (cur?.target_device_id ?? fallback?.targetDeviceId) as string | null | undefined;
     // "Run in the cloud" is decided by the machine STAMPED on the stub, never by
     // the store flag (a mirror of the composer's derived mode). A stamped
     // wake-on-use host parks the row unless the folder is one the host already
@@ -9913,8 +10045,17 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const kind = config.kind ?? "collection";
     const base = (isDraft(this) ? original(this) : this) as any;
 
+    // A local-first list or singleton holds what an action locked over the push
+    // (applyShapeLocks); a retired lock leaves the pending map.
+    const holdLocks = (value: any, shape: "list" | "singleton") => {
+      const out = applyShapeLocks(field, shape, value, base.pending ?? {}, base[field], { rowKey: config.rowKey, altKey: config.altKey });
+      if (out.pending !== base.pending) (this as any).pending = out.pending;
+      return out.value;
+    };
+
     if (kind === "scalar" || kind === "list") {
       if (config.normalize) incoming = config.normalize(incoming, this);
+      if (kind === "list") incoming = holdLocks(incoming, "list");
       // No-op re-pushes are common — a list-kind subscription re-emits on any
       // read-set change (teamMembers was measured re-pushing ~every 2s on
       // presence heartbeats) — and a wholesale assign registers as a change:
@@ -9937,6 +10078,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
     if (kind === "singleton") {
       if (config.normalize) incoming = config.normalize(incoming, this);
+      // Before the no-op bail, so an echo retires its lock even when the push
+      // changes nothing on screen.
+      incoming = holdLocks(incoming, "singleton");
       const local = (this as any)[field];
       const comparable = base[field];
       const initKey = `${field}Initialized`;
@@ -12075,13 +12219,14 @@ const inboxStoreConfig = (set: any, get: any) => ({
     }
   }),
 
-  updateDoc: action(function (this: Draft, id: string, fields: { content?: string; title?: string; doc_type?: string; labels?: string[] }) {
+  updateDoc: action(function (this: Draft, id: string, fields: { content?: string; title?: string; doc_type?: string; labels?: string[]; overflow?: string }) {
     let changed = false;
     if (this.docs[id]) {
       if (fields.content !== undefined && fields.content !== this.docs[id].content) { this.docs[id].content = fields.content; changed = true; }
       if (fields.title !== undefined && fields.title !== this.docs[id].title) { this.docs[id].title = fields.title; changed = true; }
       if (fields.doc_type !== undefined && fields.doc_type !== (this.docs[id] as any).doc_type) { (this.docs[id] as any).doc_type = fields.doc_type; changed = true; }
       if (fields.labels !== undefined) { (this.docs[id] as any).labels = fields.labels; changed = true; }
+      if (fields.overflow !== undefined) { (this.docs[id] as any).overflow = fields.overflow; changed = true; }
       if (changed) this.docs[id].updated_at = Date.now();
     }
     if (this.docDetails[id]) {
@@ -12089,6 +12234,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       if (fields.title !== undefined) this.docDetails[id].title = fields.title;
       if (fields.doc_type !== undefined) (this.docDetails[id] as any).doc_type = fields.doc_type;
       if (fields.labels !== undefined) (this.docDetails[id] as any).labels = fields.labels;
+      if (fields.overflow !== undefined) (this.docDetails[id] as any).overflow = fields.overflow;
       if (changed) this.docDetails[id].updated_at = Date.now();
     }
   }),
@@ -12132,11 +12278,13 @@ const inboxStoreConfig = (set: any, get: any) => ({
   toggleShortcutsPanel: () => set({ shortcutsPanelOpen: !get().shortcutsPanelOpen }),
   stagePick: null,
   setStagePick: (pick: { path: string; title?: string } | null) => set({ stagePick: pick }),
-  triageNuxOpen: false,
-  setTriageNuxOpen: (open: boolean) => set({ triageNuxOpen: open }),
-  anchorPanel: { open: false, anchorId: null },
-  openAnchorPanel: (anchorId?: string | null) => set({
-    anchorPanel: { open: true, anchorId: anchorId === undefined ? get().anchorPanel.anchorId : anchorId },
+  tour: null,
+  setTour: (run: TourRun | null) => set({ tour: run }),
+  toursPanelOpen: false,
+  setToursPanelOpen: (open: boolean) => set({ toursPanelOpen: open }),
+  anchorPanel: { open: false, target: null },
+  openAnchorPanel: (target?: AnchorPanelTarget | null) => set({
+    anchorPanel: { open: true, target: target === undefined ? get().anchorPanel.target : target },
   }),
   closeAnchorPanel: () => set({ anchorPanel: { ...get().anchorPanel, open: false } }),
   toggleAnchorPanel: () => set({ anchorPanel: { ...get().anchorPanel, open: !get().anchorPanel.open } }),
@@ -12575,8 +12723,6 @@ const inboxStoreConfig = (set: any, get: any) => ({
   teamUnreadCount: null,
   favorites: [],
   bookmarks: [],
-  bookmarkPending: {},
-  myStatusPending: null,
 
   myCalls: { incoming: [], outgoing: [], membership: null },
   callOccupancy: {},
@@ -12584,7 +12730,6 @@ const inboxStoreConfig = (set: any, get: any) => ({
   liveRooms: [],
   roomKnocks: [],
   callKnocked: {},
-  callLockPending: {},
   call: {
     phase: "idle" as const,
     roomKey: null,
@@ -12615,29 +12760,60 @@ const inboxStoreConfig = (set: any, get: any) => ({
       delete next[roomKey];
       return { callKnocked: next };
     }),
-  noteLockPending: (roomKey: string, locked: boolean) =>
-    set((s: any) => ({
-      callLockPending: { ...s.callLockPending, [roomKey]: { locked, at: Date.now() } },
-      // Paint the flip now — the liveRooms echo reconciles, and the pending
-      // entry above keeps an in-flight push from reverting it meanwhile.
-      liveRooms: (s.liveRooms as any[]).map((r) =>
-        r.room_key === roomKey ? { ...r, locked } : r,
-      ),
-    })),
-  // The mutation was refused: paint the state it never left and stop
-  // protecting it. Without this the optimistic glyph would stand until some
-  // unrelated change happened to re-push getLiveRooms.
-  revertLockPending: (roomKey: string, locked: boolean) =>
-    set((s: any) => {
-      const next = { ...s.callLockPending };
-      delete next[roomKey];
-      return {
-        callLockPending: next,
-        liveRooms: (s.liveRooms as any[]).map((r) =>
-          r.room_key === roomKey ? { ...r, locked } : r,
-        ),
-      };
-    }),
+
+  // A team's opt-in feature (admin only on the server). `teams` is a
+  // localFirst list: the sidebar row appears or vanishes on the click, and a
+  // refusal puts the switch back.
+  setTeamFeature: action(function (this: Draft, teamId: string, feature: string, enabled: boolean) {
+    const team = (this.teams as any[]).find((t) => t && String(t._id) === String(teamId));
+    if (!team) return;
+    team.features = { ...(team.features ?? {}), [feature]: enabled };
+  }),
+
+  // The viewer's codecast-wide default model for one agent client
+  // (users.default_models, applied server-side at launch). currentUser is a
+  // localFirst singleton, so the pin holds until the echo and rolls back if
+  // the server refuses.
+  setDefaultModel: action(function (this: Draft, agentClient: string, model: string | null) {
+    if (!this.currentUser) return;
+    const next: Record<string, string> = { ...((this.currentUser as any).default_models ?? {}) };
+    if (model === null) delete next[agentClient];
+    else next[agentClient] = model;
+    (this.currentUser as any).default_models = next;
+  }),
+
+  // The viewer's settings on the users row. currentUser is a localFirst
+  // singleton: each switch holds until the echo and rolls back (with the
+  // standard dispatch toast) if the server refuses, and two quick toggles
+  // build on the store's value, not a stale copy.
+  updateNotificationSettings: action(function (this: Draft, patch: Record<string, any>) {
+    if (!this.currentUser) return;
+    Object.assign(this.currentUser as any, patch);
+  }),
+  setAgentPermissionModes: action(function (this: Draft, modes: Record<string, any>) {
+    if (!this.currentUser) return;
+    (this.currentUser as any).agent_permission_modes = { ...modes };
+  }),
+  setAgentDefaultParams: action(function (this: Draft, agent: string, params: Record<string, string>) {
+    if (!this.currentUser) return;
+    (this.currentUser as any).agent_default_params = { ...((this.currentUser as any).agent_default_params ?? {}), [agent]: params };
+  }),
+
+  // The room flags: draft flip, then the same-named dispatch side effect
+  // (convex/dispatch.ts) runs the mutation. callRooms is localFirst, so a
+  // getLiveRooms push computed before the write committed cannot flap the
+  // control back, and a refused write surfaces like every other dispatch.
+  setRoomLocked: action(function (this: Draft, roomKey: string, locked: boolean) {
+    const row = (this.callRooms[roomKey] ??= { _id: roomKey, locked: false, transcribe_off: false, transcribe_off_at: null });
+    row.locked = locked;
+    return { roomKey, locked };
+  }),
+  setRoomTranscribeOff: asyncAction(function (this: Draft, roomKey: string, off: boolean) {
+    const row = (this.callRooms[roomKey] ??= { _id: roomKey, locked: false, transcribe_off: false, transcribe_off_at: null });
+    row.transcribe_off = off;
+    row.transcribe_off_at = off ? Date.now() : null;
+    return { roomKey, off };
+  }),
 
   // =====================
   // SELECTORS
@@ -12762,6 +12938,11 @@ const INITIAL_INBOX_DATA = Object.fromEntries(
     .map(([key, value]) => [key, cloneInitialValue(value)]),
 );
 
+/** A fresh, unaliased copy of the account-neutral data floor. */
+export function freshInboxData(): Record<string, any> {
+  return cloneInitialValue(INITIAL_INBOX_DATA);
+}
+
 // Every clear opens a new hydration epoch: a disk read that started for the
 // account before it (boot hydration, a conversation's tail) finds the epoch
 // moved when it resolves and lands nothing.
@@ -12772,9 +12953,7 @@ export function clearProtectedInboxMemory(): void {
   hydrationEpoch++;
   const state = useInboxStore.getState() as any;
   state._clearRuntimeBindings?.();
-  const reset = Object.fromEntries(
-    Object.entries(INITIAL_INBOX_DATA).map(([key, value]) => [key, cloneInitialValue(value)]),
-  ) as Record<string, any>;
+  const reset = freshInboxData();
   // These few device layout preferences are explicitly account-neutral and
   // already mirrored to localStorage; no server or principal data is retained.
   reset.clientState = { ui: readCriticalUiPrefs() as ClientUI };
@@ -13365,3 +13544,131 @@ export function rebootPersistence(): void {
 // outbox bindings, so running this again would re-open the database and re-seed
 // state that is live.
 if (!survivingInboxStore) bootPersistence();
+
+// A server-deleted session that was open when the prune ran is dropped as soon
+// as the view moves off it (dropSessionInDraft deferred it).
+if (!survivingInboxStore) useInboxStore.subscribe((state, prev) => {
+  if (state.currentSessionId === prev.currentSessionId || deferredDeletedSessions.size === 0) return;
+  const ids = [...deferredDeletedSessions].filter((id) => id !== state.currentSessionId);
+  if (ids.length) state.pruneGhostSessions(ids, { serverDeleted: true });
+});
+
+// -- Simulation seams (docs/architecture/multiplayer-sim-harness.md, section 3.3) --
+//
+// The multiplayer sim runs several windows in one process. Each window gets its
+// own store instance (and with it its own engine closure: dispatch binding,
+// outbox, tees), and the harness swaps this module's per-window bindings in and
+// out around every turn a window takes. Nothing in production calls these.
+
+/** A separate store instance with its own middleware closure. */
+export const __createInboxStoreForTests = createInboxStore;
+
+/** The module bindings that belong to one window, keyed by binding name. */
+export interface InboxStoreWindowSlots {
+  _heldOverlayFacts: typeof _heldOverlayFacts;
+  recentlyRequestedPendingMessages: Map<string, number>;
+  resolvedSessionPreparations: Map<string, Promise<void>>;
+  recentThawTimer: ReturnType<typeof setTimeout> | null;
+  _userMsgsProbed: Set<string>;
+  _idbHydrating: Map<string, Promise<boolean>>;
+  hydrationEpoch: number;
+  _lastParityCheckAt: number;
+  // The placement caches. Each browser window keeps its own, and every key
+  // checks the window's own state refs, so a window's next turn may reuse them.
+  _membershipKey: string | null;
+  _membershipVal: InboxMembership | null;
+  _visibleKey: unknown[] | null;
+  _visibleVal: InboxVisible | null;
+  _pendingSendSigRef: unknown;
+  _pendingSendSig: string;
+  _placementDeadlineMemo: PlacementDeadlineMemo | null;
+  _placedMemo: typeof _placedMemo;
+}
+
+// Both levels are mutated in place (a scope's hold is assigned, a landed id is
+// deleted from it), so a snapshot copies both.
+function copyHeldOverlayFacts(h: typeof _heldOverlayFacts): typeof _heldOverlayFacts {
+  const copy: typeof _heldOverlayFacts = {};
+  for (const scope in h) copy[scope] = { ...h[scope] };
+  return copy;
+}
+
+function replaceContents<K, V>(target: Map<K, V>, source: Map<K, V>): void {
+  target.clear();
+  for (const [k, v] of source) target.set(k, v);
+}
+
+/**
+ * get() snapshots the window bindings (collections copied, so the snapshot is
+ * detached from the live binding), set() loads a snapshot back, fresh() is the
+ * state a window that never ran starts from, and resetMemos() drops the
+ * placement caches.
+ */
+export function __inboxStoreSimSlots() {
+  return {
+    fresh(): InboxStoreWindowSlots {
+      return {
+        _heldOverlayFacts: {},
+        recentlyRequestedPendingMessages: new Map(),
+        resolvedSessionPreparations: new Map(),
+        recentThawTimer: null,
+        _userMsgsProbed: new Set(),
+        _idbHydrating: new Map(),
+        hydrationEpoch: 0,
+        _lastParityCheckAt: 0,
+        _membershipKey: null,
+        _membershipVal: null,
+        _visibleKey: null,
+        _visibleVal: null,
+        _pendingSendSigRef: undefined,
+        _pendingSendSig: "",
+        _placementDeadlineMemo: null,
+        _placedMemo: new Map(),
+      };
+    },
+    get(): InboxStoreWindowSlots {
+      return {
+        _heldOverlayFacts: copyHeldOverlayFacts(_heldOverlayFacts),
+        recentlyRequestedPendingMessages: new Map(recentlyRequestedPendingMessages),
+        resolvedSessionPreparations: new Map(resolvedSessionPreparations),
+        recentThawTimer,
+        _userMsgsProbed: new Set(_userMsgsProbed),
+        _idbHydrating: new Map(_idbHydrating),
+        hydrationEpoch,
+        _lastParityCheckAt,
+        _membershipKey,
+        _membershipVal,
+        _visibleKey,
+        _visibleVal,
+        _pendingSendSigRef,
+        _pendingSendSig,
+        _placementDeadlineMemo,
+        _placedMemo: new Map(_placedMemo),
+      };
+    },
+    set(s: InboxStoreWindowSlots): void {
+      _heldOverlayFacts = copyHeldOverlayFacts(s._heldOverlayFacts);
+      replaceContents(recentlyRequestedPendingMessages, s.recentlyRequestedPendingMessages);
+      replaceContents(resolvedSessionPreparations, s.resolvedSessionPreparations);
+      recentThawTimer = s.recentThawTimer;
+      _userMsgsProbed.clear();
+      for (const id of s._userMsgsProbed) _userMsgsProbed.add(id);
+      replaceContents(_idbHydrating, s._idbHydrating);
+      hydrationEpoch = s.hydrationEpoch;
+      _lastParityCheckAt = s._lastParityCheckAt;
+      _membershipKey = s._membershipKey;
+      _membershipVal = s._membershipVal;
+      _visibleKey = s._visibleKey;
+      _visibleVal = s._visibleVal;
+      _pendingSendSigRef = s._pendingSendSigRef;
+      _pendingSendSig = s._pendingSendSig;
+      _placementDeadlineMemo = s._placementDeadlineMemo;
+      replaceContents(_placedMemo, s._placedMemo);
+    },
+    resetMemos(): void {
+      __resetInboxPlacementCacheForTests();
+      _pendingSendSigRef = undefined;
+      _pendingSendSig = "";
+    },
+  };
+}

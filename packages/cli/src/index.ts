@@ -2,7 +2,8 @@
 import { DEFAULT_WEB_URL } from "./config/readLocalConfig.js";
 import { registerSessionParkingCommands } from "./sessionParkingCommand.js";
 import { registerSyncVerbs } from "./cloud/syncCli.js";
-import { chiefForward, isChiefAnchor } from "./anchorAlias.js";
+import { headForward, isSeatedAnchor } from "./anchorAlias.js";
+import { roleIdentity } from "@codecast/shared/contracts/orgIdentity";
 import { planProgressLabel } from "./planProgress.js";
 import { registerSessionSendCommand } from "./sessionSendCommand.js";
 import { fleetCountText, type FleetCounts } from "./fleetCounts.js";
@@ -32,14 +33,19 @@ import { fileURLToPath } from "url";
 import { maskToken } from "./redact.js";
 import { parseConversationRef, buildConversationUrl } from "./conversationRef.js";
 import { matchProject, looksLikeConvexId } from "./projectRef.js";
-import { INITIATIVE_STATUS_ICONS, healthText, initiativeLine, parseInitiativeHealth, parseInitiativeStatus, progressText, scopeSentence } from "./initiativeCommand.js";
+import { groundUpdateBody } from "@codecast/shared/contracts/goalsBrief";
+import { INITIATIVE_STATUS_ICONS, healthText, initiativeLine, metricStandingText, parseInitiativeHealth, parseInitiativeStatus, progressText, scopeSentence } from "./initiativeCommand.js";
+import { metricLine, metricReadings } from "@codecast/shared/contracts/initiative";
 import { targetDayOf, targetDayStamp } from "@codecast/shared/time";
 import {
   parseEntityUrl,
   buildEntityUrl,
+  CODECAST_BASE_URL,
   entityTypeFromId,
   normalizeEntityType,
   type EntityType,
+  parseCallRef,
+  callRefId,
 } from "@codecast/shared/entities";
 import {
   SNIPPET_CATALOG,
@@ -65,6 +71,7 @@ import {
   fenceForeignText,
   FOREIGN_TEXT_CAPS,
   callLinkHow,
+  callAnchorHref,
 } from "@codecast/shared/contracts";
 import type { SessionPresence } from "./formatter.js";
 import {
@@ -82,6 +89,7 @@ import { cliFetch, cliFetchRead, cliSearchRequest } from "./cliHttp.js";
 import type { OrgTarget } from "./orgTarget.js";
 import { registerOrgInitCommands } from "./orgInit.js";
 import { registerOrgTemplateCommands } from "./orgTemplate.js";
+import { registerOrgRoleOpsCommands } from "./orgRoleOps.js";
 import {
   loadWorkspaceRoster,
   resolveWorkspaceForRead,
@@ -102,6 +110,7 @@ import { writeThreadStatePulse } from "./threadStateStamp.js";
 import { AuthServer } from "./authServer.js";
 import { startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons, UNVERIFIABLE_MARK } from "./colors.js";
+import { planReadiness, resolvedTaskIds, isUnblocked } from "./planReadiness.js";
 import { ensureTmux, tryInstallTmux, tmuxRun, hasTmux, listCodecastPanes, pickPaneForSession } from "./tmux.js";
 import { editHarnessJson, removeHarnessFile, withHarnessCause, writeHarnessFile } from "./harness.js";
 import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, getChatVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure, getDecideVersion, getCallsVersion, getLimitsVersion, getComputerVersion, getCheckVersion, getSkillsVersion, getPrVersion} from "./update.js";
@@ -113,6 +122,7 @@ import { BUILD_ID_VALUE_RE, daemonBuildUnchanged } from "./daemonBuildGate.js";
 import { DAEMON_STOP_SIGKILL_MS } from "./shutdownBudget.js";
 import { findOtherDaemonPids, snapshotProcessTable } from "./processTable.js";
 import { expandCommandStdinDashes, readStdinBody, rejectBareDash, stdinText } from "./sendBody.js";
+import { registerDocDraftingCommands } from "./docDraftingCommand.js";
 import { commandTree, unknownCommandNextStep } from "./commandSuggestion.js";
 import { requireDestructiveConfirm } from "./destructiveCommands.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
@@ -1115,6 +1125,16 @@ function readDaemonState(): DaemonState | null {
   }
 }
 
+/** Rewrite fields of the daemon's state file when it exists; an undefined
+ *  value drops the field. Best effort: a failed write leaves the file as is. */
+function patchDaemonState(patch: Partial<DaemonState>): void {
+  const state = readDaemonState();
+  if (!state) return;
+  try {
+    fs.writeFileSync(STATE_FILE, JSON.stringify({ ...state, ...patch }, null, 2), { mode: 0o600 });
+  } catch {}
+}
+
 function formatRelativeTime(timestamp: string | number): string {
   const ts = typeof timestamp === "number" ? timestamp : new Date(timestamp).getTime();
   if (!Number.isFinite(ts)) return "unknown";
@@ -1797,16 +1817,7 @@ async function runLogin(setupToken: string): Promise<void> {
 
     writeConfig(config);
 
-    const stateFile = path.join(CONFIG_DIR, "daemon.state");
-    if (fs.existsSync(stateFile)) {
-      try {
-        const currentState = JSON.parse(fs.readFileSync(stateFile, "utf-8"));
-        const newState = { ...currentState, authExpired: false };
-        fs.writeFileSync(stateFile, JSON.stringify(newState, null, 2), { mode: 0o600 });
-      } catch {
-        // Ignore errors
-      }
-    }
+    patchDaemonState({ authExpired: false });
 
     console.log("Linked successfully!\n");
     console.log(`User ID: ${config.user_id}`);
@@ -1909,16 +1920,7 @@ async function runAuth(): Promise<void> {
 
   writeConfig(config);
 
-  const stateFile = path.join(CONFIG_DIR, "daemon.state");
-  if (fs.existsSync(stateFile)) {
-    try {
-      const currentState = JSON.parse(fs.readFileSync(stateFile, "utf-8"));
-      const newState = { ...currentState, authExpired: false };
-      fs.writeFileSync(stateFile, JSON.stringify(newState, null, 2), { mode: 0o600 });
-    } catch {
-      // Ignore errors
-    }
-  }
+  patchDaemonState({ authExpired: false });
 
   console.log(`${fmt.success(icons.check)} ${c.bold}Authenticated successfully!${c.reset}\n`);
   console.log(`  ${fmt.muted("User")}     ${fmt.id(config.user_id || "")}`);
@@ -10062,7 +10064,9 @@ function fmtCallDuration(row: { started_at: number; ended_at: number | null }): 
 }
 
 async function resolveCallId(ref: string): Promise<string> {
-  // Full convex id or a unique prefix of a recent call's id.
+  // A short id (cl-42) or full id resolves on the server; otherwise a unique
+  // prefix of a recent call's id.
+  if (parseCallRef(ref)) return ref.toLowerCase();
   const rows: any[] = await cliPost("/cli/calls/list", { limit: 200 });
   const exact = rows.find((r) => r._id === ref);
   if (exact) return exact._id;
@@ -10109,7 +10113,7 @@ program
       const title = r.title || r.room_key;
       const sum = r.summary ? "" : live ? "" : ` ${c.dim}(no summary)${c.reset}`;
       console.log(
-        `${dot} ${c.cyan}${r._id.slice(0, 8)}${c.reset} ${fmtCallWhen(r.started_at)} ${c.dim}${fmtCallDuration(r)}${c.reset}  ${c.bold}${title}${c.reset}${sum}`,
+        `${dot} ${c.cyan}${r.short_id ?? r._id.slice(0, 8)}${c.reset} ${fmtCallWhen(r.started_at)} ${c.dim}${fmtCallDuration(r)}${c.reset}  ${c.bold}${title}${c.reset}${sum}`,
       );
       console.log(`   ${c.dim}${who}${c.reset}`);
     }
@@ -10120,12 +10124,20 @@ program
   .command("call")
   .description(
     "Show one call: title, participants, summary, action items — and the\n" +
-    "full speaker-attributed transcript with --transcript\n\n" +
+    "full speaker-attributed transcript with --transcript. Each transcript line\n" +
+    "is labeled with the reference that cites it, so a message can name the exact words:\n" +
+    "  cl-42           # in a message: the call, as a live pill (a card alone on its line)\n" +
+    "  cl-42:15-25     # in a message: lines 15 to 25, embedded alone on a line\n" +
+    "  cast call cl-42 15:25   # print just those lines\n" +
+    "and a link can too:\n" +
+    "  https://codecast.sh/calls/<id>?turns=<from>-<to>   # those lines, selected\n" +
+    "  https://codecast.sh/calls/<id>?part=summary        # the summary\n" +
+    "  https://codecast.sh/calls/<id>?part=action-<n>     # action item n (from 1)\n\n" +
     "cast call hold <duration>|off   # from a session a live huddle feeds: hold\n" +
     "                                # the room's words for a stretch of work"
   )
-  .argument("<id>", "Call id (or unique prefix) from `cast calls`, or `hold`")
-  .argument("[duration]", "With `hold`: 3m, 90s, 1h, or `off` to lift it")
+  .argument("<id>", "Call short id (cl-42), id or unique prefix from `cast calls`, or `hold`")
+  .argument("[duration]", "Lines to print (15:25, 15-25 or 15), or with `hold`: 3m, 90s, 1h, or `off`")
   .option("--transcript", "Print the full attributed transcript")
   .option("--json", "Machine-readable output (always includes segments)")
   .option("--for <session>", "With `hold`: the fed session (default: the current one)")
@@ -10165,19 +10177,54 @@ program
       );
       return;
     }
-    const id = await resolveCallId(ref);
+    // Lines ride the ref (`cl-42:15-25`) or the second argument (`15:25`).
+    const lines = duration ? parseCallRef(`cl-0:${duration.replace(":", "-")}`)?.turns : null;
+    if (duration && !lines) {
+      console.error(`Lines are a range of line numbers: 15:25, 15-25 or 15 (got "${duration}")`);
+      process.exit(1);
+    }
+    const asRef = parseCallRef(ref);
+    const turns = lines ?? asRef?.turns ?? null;
+    const id = await resolveCallId(asRef ? asRef.call : ref);
     const call: any = await cliPost("/cli/calls/get", { transcript_id: id });
     if (!call) {
       console.error("Call not found or not accessible");
       process.exit(1);
     }
+    const handle = call.short_id ?? String(call._id);
+    // A line is labeled with what cites it (`cl-42:563`), because an agent
+    // quotes the label it reads: a bare `#563` renders as pull request 563 in
+    // any conversation bound to a repository. A full id per line would bury
+    // the words, so a call without a short id shows the number alone.
+    const lineLabel = (seq: number) => (call.short_id ? callRefId(call.short_id, { from_seq: seq, to_seq: seq }) : String(seq));
+    if (turns) {
+      const segs = (call.segments || []).filter((s: any) => s.seq >= turns.from_seq && s.seq <= turns.to_seq);
+      if (options.json) {
+        console.log(JSON.stringify({ ref: callRefId(handle, turns), title: call.title, segments: segs }, null, 2));
+        return;
+      }
+      console.log(`${c.bold}${call.title || call.room_key}${c.reset} ${c.dim}lines ${turns.from_seq}-${turns.to_seq}${c.reset}`);
+      let lastSpeaker = "";
+      for (const s of segs) {
+        if (s.speaker_name !== lastSpeaker) {
+          console.log(`${c.cyan}${s.speaker_name}${c.reset}`);
+          lastSpeaker = s.speaker_name;
+        }
+        console.log(`  ${c.dim}${lineLabel(s.seq)}${c.reset} ${s.text}`);
+      }
+      if (segs.length === 0) console.log(`${c.dim}(no lines in that range; this call runs 1-${call.last_seq})${c.reset}`);
+      console.log(`\n${c.dim}Embed these words in a message: ${c.reset}${callRefId(handle, turns)}${c.dim} on its own line${c.reset}`);
+      return;
+    }
+    const callUrl = (anchor?: Parameters<typeof callAnchorHref>[1]) => `${CODECAST_BASE_URL}${callAnchorHref(String(call._id), anchor)}`;
     if (options.json) {
-      console.log(JSON.stringify(call, null, 2));
+      console.log(JSON.stringify({ url: callUrl(), ...call }, null, 2));
       return;
     }
     const live = call.status === "live";
     console.log(`${c.bold}${call.title || call.room_key}${c.reset} ${live ? `${c.green}LIVE${c.reset}` : c.dim + fmtCallDuration(call) + c.reset}`);
-    console.log(`${c.dim}${fmtCallWhen(call.started_at)} · ${call.room_key}${c.reset}`);
+    console.log(`${c.dim}${handle} · ${fmtCallWhen(call.started_at)} · ${call.room_key}${c.reset}`);
+    console.log(`${c.dim}${callUrl()}${c.reset}`);
     const who = (call.participants || []).map((p: any) => p.name).join(", ");
     if (who) console.log(`${c.dim}speakers:${c.reset} ${who}`);
     if (call.summary) {
@@ -10189,7 +10236,7 @@ program
     }
     if ((call.action_items || []).length > 0) {
       console.log(`\n${c.bold}Action items${c.reset}`);
-      for (const a of call.action_items) console.log(`  - ${a}`);
+      call.action_items.forEach((a: string, i: number) => console.log(`  ${i + 1}. ${a}`));
     }
     if ((call.sessions || []).length > 0) {
       console.log(`\n${c.bold}Sessions${c.reset}`);
@@ -10205,7 +10252,16 @@ program
           console.log(`${c.cyan}${s.speaker_name}${c.reset}`);
           lastSpeaker = s.speaker_name;
         }
-        console.log(`  ${s.text}`);
+        console.log(`  ${c.dim}${lineLabel(s.seq)}${c.reset} ${s.text}`);
+      }
+      const segs = call.segments || [];
+      if (segs.length > 0) {
+        const sample = { from_seq: segs[0].seq, to_seq: segs[Math.min(2, segs.length - 1)].seq };
+        console.log(
+          `\n${c.dim}Embed lines in a message: ${c.reset}${callRefId(handle, sample)}${c.dim} on its own line (inline it reads as a pill)` +
+          `\nLink lines: ${callUrl({ kind: "turns", ...sample })}` +
+          ` (?turns=<from>-<to>; ?part=summary or ?part=action-<n> for the recap)${c.reset}`,
+        );
       }
     } else if ((call.segments || []).length > 0) {
       console.log(`\n${c.dim}${call.segments.length} transcript lines — add --transcript to print them${c.reset}`);
@@ -12827,7 +12883,7 @@ function describeEventScope(filter: { event_type: string; action?: string; repos
 
 // ── The workspace's agent ────────────────────────────────────────────────────
 // One standing agent per workspace (personal or team): the root role of its
-// org, named Chief of Staff by default (docs/architecture/org-staffing.md
+// org, named Head of People by default (docs/architecture/org-staffing.md
 // S22). It owns a long-lived session that never completes, is woken by
 // events, and delegates code work to `cast spawn` hands. `cast anchor` is the
 // alias this agent has always answered to; every verb here is a door onto
@@ -12843,7 +12899,7 @@ const anchor = program
 
 anchor
   .command("create")
-  .description("Seat the workspace's agent: its root role, Chief of Staff by default (same as cast org staff)")
+  .description("Seat the workspace's agent: its root role, Head of People by default (same as cast org staff)")
   .option("--team [id]", "Seat the team's agent (default: your active team)")
   .option("-C, --dir <path>", "Project the agent lives and works in (default: current)")
   .option("--json", "Machine-readable output")
@@ -12890,9 +12946,9 @@ anchor
       return;
     }
     const where = scopeType === "team" ? "the team" : "your personal workspace";
-    const name = result.role?.name ?? "Chief of Staff";
+    const name = result.role?.name ?? "Head of People";
     if (result.already_existed) {
-      console.log(`${c.yellow}•${c.reset} ${where} already has its agent, ${c.cyan}${name}${c.reset} ${c.dim}(${result.short_id ?? ""}) · cast role show ${result.role?.handle ?? "chief-of-staff"}${c.reset}`);
+      console.log(`${c.yellow}•${c.reset} ${where} already has its agent, ${c.cyan}${name}${c.reset} ${c.dim}(${result.short_id ?? ""}) · cast role show ${result.role?.handle ?? "head-of-people"}${c.reset}`);
     } else {
       console.log(
         `${c.green}✓${c.reset} ${c.bold}${name}${c.reset} seated for ${where} ` +
@@ -12935,12 +12991,12 @@ anchor
     for (const a of anchors) {
       const scope = a.scope_type === "team" ? "team" : "personal";
       const conv = a.conversation_id ? String(a.conversation_id).slice(0, 7) : "(no session)";
-      const chief = isChiefAnchor(a) ? ` ${c.dim}·${c.reset} ${c.magenta}Chief of Staff${c.reset}` : "";
+      const head = isSeatedAnchor(a) ? ` ${c.dim}·${c.reset} ${c.magenta}Head of People${c.reset}` : "";
       console.log(
-        `  ${c.cyan}${a.bot_name}${c.reset} ${c.dim}·${c.reset} ${scope} ${c.dim}·${c.reset} ${a.status} ${c.dim}· ${conv}${c.reset}${chief}`,
+        `  ${c.cyan}${a.bot_name}${c.reset} ${c.dim}·${c.reset} ${scope} ${c.dim}·${c.reset} ${a.status} ${c.dim}· ${conv}${c.reset}${head}`,
       );
     }
-    const fwd = chiefForward(anchors.find((a) => isChiefAnchor(a)), "ls");
+    const fwd = headForward(anchors.find((a) => isSeatedAnchor(a)), "ls");
     if (fwd) console.log(`${c.dim}${fwd.note}${c.reset}`);
   });
 
@@ -12969,7 +13025,7 @@ anchor
       console.error(`${noAgentLine(scopeType)}`);
       process.exit(1);
     }
-    const fwd = chiefForward(anchorRow, "wake", { message, from_session: callingSession() });
+    const fwd = headForward(anchorRow, "wake", { message, from_session: callingSession() });
     if (fwd?.route) {
       console.log(`${c.dim}${fwd.note}${c.reset}`);
       const result = await cliPost(fwd.route, fwd.body);
@@ -13001,7 +13057,7 @@ anchor
       console.error(`${noAgentLine(scopeType)}`);
       process.exit(1);
     }
-    const fwd = chiefForward(anchorRow, "brief");
+    const fwd = headForward(anchorRow, "brief");
     if (fwd?.route) {
       console.log(`${c.dim}${fwd.note}${c.reset}`);
       await cliPost(fwd.route, fwd.body);
@@ -13036,7 +13092,7 @@ anchor
       console.error(`${noAgentLine(scopeType)}`);
       process.exit(1);
     }
-    const fwd = chiefForward(anchorRow, "rm");
+    const fwd = headForward(anchorRow, "rm");
     if (fwd?.route) {
       console.log(`${c.dim}${fwd.note}${c.reset}`);
       await cliPost(fwd.route, fwd.body);
@@ -13254,6 +13310,8 @@ roleGroup
   .description("Show the workflow a role's tasks run on, or change it with --set (human only)")
   .argument("<handle>", "The role: @handle or its short id (or-N)")
   .option("--set <slug>", "The workflow slug: a shipped template (line, feature) or one you pushed")
+  .option("--merge <on|off>", "The line's merge step (the-line.md L12): on, an approved branch merges into the default branch when checks pass, under the role's merge authority")
+  .option("--per-day <n>", "With --merge on: grant (or reset) the merge authority's daily limit", parseInt)
   .option("--team <name|id>", "Team workspace (default: the active workspace)")
   .option("--json", "Machine-readable output")
   .action(async (handle: string, options: any) => {
@@ -13261,6 +13319,14 @@ roleGroup
     const target = await resolveOrgTarget(handle, ws);
     if (target.kind !== "role") { console.error(`"${handle}" is a person, not a role.`); process.exit(1); }
     const from_session = process.env.CODECAST_SESSION_ID || process.env.CODECAST_MANAGED_SESSION || undefined;
+    if (options.merge !== undefined) {
+      if (options.merge !== "on" && options.merge !== "off") { console.error("--merge takes on or off"); process.exit(1); }
+      const role = await cliPost("/cli/role/line/merge", { role_id: target.role_id, on: options.merge === "on", ...(options.perDay !== undefined ? { per_day: options.perDay } : {}), from_session });
+      if (options.json) { console.log(JSON.stringify(role, null, 2)); return; }
+      const m = role.merge;
+      console.log(`${c.green}✓${c.reset} @${role.handle} ${c.dim}(${role.short_id})${c.reset} line: ${role.line_workflow_slug ?? "line"}, merge step ${m.on ? `on (${m.limit ?? "no"} a day, ${m.used} used today)` : "off"}${m.on && !m.allowed ? ` ${c.yellow}${m.reason}${c.reset}` : ""}`);
+      return;
+    }
     if (options.set) {
       // The slug must name something run-daemon can execute (L9): a shipped
       // template, or a workflow the host pushed under that slug.
@@ -13274,7 +13340,8 @@ roleGroup
       : await cliPost("/cli/role/line", { role_id: target.role_id });
     if (options.json) { console.log(JSON.stringify(role, null, 2)); return; }
     const was = options.set && role.previous_line_workflow_slug !== role.line_workflow_slug ? ` ${c.dim}(was ${role.previous_line_workflow_slug})${c.reset}` : "";
-    console.log(`${options.set ? `${c.green}✓${c.reset} ` : ""}@${role.handle} ${c.dim}(${role.short_id})${c.reset} line: ${role.line_workflow_slug}${was}`);
+    const mergeWord = role.merge ? `, merge step ${role.merge.on ? `on (${role.merge.limit ?? "no"} a day)` : "off"}` : "";
+    console.log(`${options.set ? `${c.green}✓${c.reset} ` : ""}@${role.handle} ${c.dim}(${role.short_id})${c.reset} line: ${role.line_workflow_slug}${was}${mergeWord}`);
   });
 
 // ── Standing roles (docs/architecture/org-roles-standing.md T5) ─────────────
@@ -13317,8 +13384,11 @@ async function resolvePlanId(ref: string): Promise<string> {
 
 // The switch (org-staffing.md S23.1), read through the shared mapping: the
 // row's stored word never reaches the person.
+// The role as a person reads it (org-staffing.md S30): its given name, then
+// its title (with a chief's reach) beside the handle.
 function printRoleLine(r: any) {
-  console.log(`${c.bold}${r.name}${c.reset} ${c.dim}@${r.handle} · ${r.short_id} · ${r.status} · ${autonomyWords(autonomyOn(r.trust))}${r.review_backend ? ` · review on ${r.review_backend}` : ""}${c.reset}`);
+  const id = roleIdentity(r, { teamName: r.team_name ?? null });
+  console.log(`${c.bold}${id.name}${c.reset} ${c.dim}${id.subtitle} · @${r.handle} · ${r.short_id} · ${r.status} · ${autonomyWords(autonomyOn(r.trust))}${r.review_backend ? ` · review on ${r.review_backend}` : ""}${c.reset}`);
 }
 
 // `--tenure standing` or `--tenure program:<pl-N|project:ref|YYYY-MM-DD>[:review]`
@@ -13485,7 +13555,7 @@ for (const verb of ["pause", "resume", "retire", "restart"] as const) {
     }[verb])
     .argument("<handle>", "@handle, or-N, or id")
     .option("--team <name|id>", "Team workspace")
-    .option("--standing <keep|retire>", "retire only: keep the standing session running as a plain agent (default for the chief of staff) or retire it with the role")
+    .option("--standing <keep|retire>", "retire only: keep the standing session running as a plain agent (default for the head of people) or retire it with the role")
     .option("--json", "Machine-readable output")
     .action(async (handle: string, options: any) => {
       const role_id = await resolveRoleId(handle, options.team);
@@ -13604,7 +13674,8 @@ roleGroup
   .command("update")
   .description("Edit a role's name, handle, charter text, review backend, tenure or avatar")
   .argument("<handle>", "@handle, or-N, or id")
-  .option("--name <name>", "Display name")
+  .option("--name <name>", "The role title (Head of Growth)")
+  .option("--given-name <name>", "The name it goes by (Ada); 'none' lets it pick one to match its face")
   .option("--handle <handle>", "New handle")
   .option("--charter <text>", stdinText("Charter text"))
   .option("--review-backend <agent>", "Agent for the line's review station; must differ from the role's own")
@@ -13615,7 +13686,8 @@ roleGroup
   .action(async (ref: string, options: any) => {
     const role_id = await resolveRoleId(ref, options.team);
     const avatar = options.avatar === undefined ? undefined : (options.avatar.trim().toLowerCase() === "none" ? "" : options.avatar);
-    const result = await cliPost("/cli/role/update", { role_id, name: options.name, handle: options.handle, charter: options.charter, review_backend: options.reviewBackend, tenure: options.tenure ? parseTenureFlag(options.tenure) : undefined, avatar, from_session: callingSession() });
+    const given_name = options.givenName === undefined ? undefined : (options.givenName.trim().toLowerCase() === "none" ? null : options.givenName);
+    const result = await cliPost("/cli/role/update", { role_id, name: options.name, given_name, handle: options.handle, charter: options.charter, review_backend: options.reviewBackend, tenure: options.tenure ? parseTenureFlag(options.tenure) : undefined, avatar, from_session: callingSession() });
     if (options.json) { console.log(JSON.stringify(result, null, 2)); return; }
     printRoleLine(result);
   });
@@ -13825,7 +13897,7 @@ org
   .command("retire")
   .description("Retire a role; its area falls back to the role that covers it, else its sessions to their owners")
   .argument("<role>", "Role short id (or-N), id, or @handle")
-  .option("--standing <keep|retire>", "The standing session: keep it running as a plain agent (default for the chief of staff) or retire it with the role")
+  .option("--standing <keep|retire>", "The standing session: keep it running as a plain agent (default for the head of people) or retire it with the role")
   .option("--team <name|id>", "Team workspace (default: the active workspace)")
   .option("--json", "Machine-readable output")
   .action(async (ref: string, options: any) => {
@@ -13907,6 +13979,7 @@ org
 const orgDeps = { cliPost, readWorkspace, workspaceArgs, workspaceLabel, webUrl: () => readConfig()?.web_url || WEB_URL, callingSession, realCwd: getRealCwd };
 registerOrgInitCommands(program, orgDeps);
 registerOrgTemplateCommands(program, orgDeps);
+registerOrgRoleOpsCommands(program, { ...orgDeps, resolveRoleId });
 
 // ── Team chat ────────────────────────────────────────────────────────────────
 // Channels, flat threads and the anchor answering in one. `cast chat reply` is
@@ -14748,7 +14821,7 @@ trigger
   .command("add")
   .description("Set a new trigger")
   .argument("<prompt>", stdinText("Instruction for the agent when the trigger fires"))
-  .option("--in <duration>", "Run after delay (e.g., 30m, 2h, 1d)")
+  .option("--in <duration>", "Run after delay (e.g., 30m, 2h, 1d); with --every, the first run, which sets the time of day")
   .option("--every <duration>", "Run on interval (e.g., 4h, 1d)")
   .option("--on <event>", `Run on event (${EVENT_NAMES})`)
   .option("--repo <owner/name>", "Only fire for this repository (pull request events default to the checkout's origin; pass \"\" for every repository)")
@@ -14784,6 +14857,11 @@ trigger
     let run_at: number | undefined;
     let interval_ms: number | undefined;
     let event_filter: { event_type: string; action?: string; repository?: string; pr_number?: number } | undefined;
+    const delay = options.in ? parseDuration(options.in) : undefined;
+    if (options.in && !delay) {
+      console.error(`Invalid duration: ${options.in}`);
+      process.exit(1);
+    }
 
     if (options.every) {
       schedule_type = "recurring";
@@ -14792,16 +14870,14 @@ trigger
         console.error(`Invalid duration: ${options.every}`);
         process.exit(1);
       }
-      run_at = Date.now() + interval_ms;
+      // --in sets the first run, and the first run anchors the cadence: every
+      // later run lands on that grid (nextArmingAfterRun), so `--in 6h --every
+      // 24h` is a daily run at that time of day.
+      run_at = Date.now() + (delay ?? interval_ms);
     } else if (options.on) {
       schedule_type = "event";
       event_filter = await buildEventFilter(options.on, options);
-    } else if (options.in) {
-      const delay = parseDuration(options.in);
-      if (!delay) {
-        console.error(`Invalid duration: ${options.in}`);
-        process.exit(1);
-      }
+    } else if (delay) {
       run_at = Date.now() + delay;
     } else {
       run_at = Date.now();
@@ -16563,9 +16639,20 @@ work
   .option("--no-human", "Take the task off the human's board")
   .option("--steps <lines>", stdinText("Acceptance criteria as ordered steps, one per line (replaces the list)"))
   .option("--criteria <lines>", stdinText("Acceptance criteria, one per line (replaces the list)"))
+  .option("--goal-ref <ref>", "The goal the cause threatens: a metric ref (in-N:key) or project short id from cast goals, or none; '' clears")
+  .option("--category <kind>", "What kind of change it needs: code, prompt, ux, infra or data")
+  .option("--risk <level>", "How much review it needs: low, review or plan")
+  .option("--readiness <state>", "Whether it can be worked as it stands: ready, needs_context or not_actionable")
+  .option("--readiness-note <text>", "One line on why")
   .action(async (shortId: string, options: any) => {
     const sessionId = detectCurrentSessionId();
     const body: Record<string, any> = { short_id: shortId };
+    try {
+      Object.assign(body, groundUpdateBody(options));
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
     if (sessionId) body.conversation_id = sessionId;
     const lines = (raw: string) => raw.split("\n").map((l) => l.replace(/^\s*(?:[-*]|\d+[.)])\s*/, "").trim()).filter(Boolean);
     if (options.steps) body.steps = lines(options.steps).map((title) => ({ title }));
@@ -17214,6 +17301,16 @@ function initiativeHealthArg(text: string): string {
   return health;
 }
 
+// "Weekly active teams=1000" is a metric with its target; 'none' clears the list.
+function initiativeMetricsArg(raw: string[]): Array<{ name: string; target: string }> {
+  if (raw.length === 1 && NONE(raw[0])) return [];
+  return raw.map((entry) => {
+    const at = entry.indexOf("=");
+    if (at <= 0 || !entry.slice(at + 1).trim()) { console.error(`Invalid --metric "${entry}" — use name=target, like "Weekly active teams=1000"`); process.exit(1); }
+    return { name: entry.slice(0, at).trim(), target: entry.slice(at + 1).trim() };
+  });
+}
+
 async function initiativeProjectIds(refs: string[] | undefined, team?: string): Promise<string[] | undefined> {
   if (!refs?.length) return undefined;
   const ids: string[] = [];
@@ -17241,12 +17338,14 @@ initiativeCmd
   .option("--target <date>", "Target date (YYYY-MM-DD)")
   .option("--priority <p>", "p0, p1, p2, p3")
   .option("--project <ref>", "A project it carries (repeatable): id, short id or title substring", collectRepeatable)
-  .option("--parent <in-N>", "The initiative this one sits under (one level)")
+  .option("--parent <in-N>", "The top level goal this one feeds (one level)")
+  .option("--metric <name=target>", "A number the goal is measured by, with its target (repeatable, at most two): \"Weekly active teams=1000\"", collectRepeatable)
   .option("--labels <labels>", "Comma-separated labels")
   .option("--team <name|id|personal>", "Workspace to create in (default: the active team)")
   .action(async (title: string, options: any) => {
     const ws = await writeWorkspace(options.team);
     const body: Record<string, any> = { title, ...workspaceScope(ws) };
+    if (options.metric) body.metrics = initiativeMetricsArg(options.metric);
     if (options.description) body.description = options.description;
     if (options.owner) body.owner = options.owner;
     if (options.status) {
@@ -17307,6 +17406,12 @@ initiativeCmd
     if (row.parent) facts.push(`under ${c.cyan}${row.parent.short_id}${c.reset} ${row.parent.title}`);
     console.log(`  ${c.dim}${facts.join(" | ")}${c.reset}`);
     if (row.labels?.length) console.log(`  ${c.dim}Labels: ${row.labels.join(", ")}${c.reset}`);
+    const readings = metricReadings(row);
+    if (readings.length) {
+      console.log(`\n  ${c.bold}Metrics${c.reset} ${c.dim}on track means against the target${c.reset}`);
+      for (const m of readings) console.log(`  ${metricStandingText(c, m.standing)} ${metricLine(m)} ${c.dim}· ${m.key}${m.source ? ` · ${m.source}` : ""}${c.reset}`);
+      console.log(fmt.muted(`  Report a value: cast initiative report ${row.short_id} ${readings[0].key}=<value> --source <link or short id>`));
+    }
     if (row.description) console.log(`\n${row.description.split("\n").map((l: string) => `  ${l}`).join("\n")}`);
     console.log(`\n  ${c.bold}Projects (${row.projects.length})${c.reset} ${c.dim}${progressText(row.task_counts)}${c.reset}`);
     if (!row.projects.length) console.log(fmt.muted("  None yet: cast initiative add-project " + row.short_id + " <project>"));
@@ -17375,11 +17480,13 @@ initiativeCmd
   .option("--owner <who>", "me, @handle, or or-N ('none' clears)")
   .option("--target <date>", "Target date (YYYY-MM-DD; 'none' clears)")
   .option("--priority <p>", "p0, p1, p2, p3 ('none' clears)")
-  .option("--parent <in-N>", "The initiative this one sits under ('none' clears)")
+  .option("--parent <in-N>", "The top level goal this one feeds ('none' clears)")
+  .option("--metric <name=target>", "The numbers the goal is measured by, with targets (repeatable, at most two; replaces; 'none' clears)", collectRepeatable)
   .option("--labels <labels>", "Comma-separated labels (replaces; 'none' clears)")
   .action(async (ref: string, options: any) => {
     const body: Record<string, any> = { id: ref };
     if (options.title) body.title = options.title;
+    if (options.metric) body.metrics = initiativeMetricsArg(options.metric);
     if (options.description !== undefined) body.description = NONE(options.description) ? null : options.description;
     if (options.status) {
       body.status = parseInitiativeStatus(options.status);
@@ -17391,11 +17498,32 @@ initiativeCmd
     if (options.parent !== undefined) body.parent_initiative_id = NONE(options.parent) ? null : options.parent;
     if (options.labels !== undefined) body.labels = NONE(options.labels) ? [] : options.labels.split(",").map((s: string) => s.trim());
     if (Object.keys(body).length === 1) {
-      console.error("Nothing to change — pass --title, --description, --status, --owner, --target, --priority, --parent, or --labels");
+      console.error("Nothing to change — pass --title, --description, --status, --owner, --target, --priority, --parent, --metric, or --labels");
       process.exit(1);
     }
     const result = await cliPost("/cli/initiatives/update", body);
     printInitiativeWrite("Updated initiative", result, await tryCliPost("/cli/initiatives/get", { id: result.id }));
+  });
+
+// A role reports a metric's value the way a template instance reports its
+// scoreboard (`cast org template report`): key=value pairs, one source a person
+// can open, the same recordScores path on the server.
+initiativeCmd
+  .command("report <in-N> <key=value...>")
+  .description("Report a metric's current value, with its source (the owner, its role, or an admin)")
+  .requiredOption("--source <href>", "A link or codecast short id a person can open")
+  .option("--observed-at <iso>", "When the value was observed (default: now)")
+  .action(async (ref: string, entries: string[], options: any) => {
+    const body: Record<string, any> = { id: ref, entries, source: options.source };
+    if (options.observedAt) {
+      body.observed_at = Date.parse(options.observedAt);
+      if (!Number.isFinite(body.observed_at)) { console.error(`Invalid --observed-at "${options.observedAt}" — use an ISO date`); process.exit(1); }
+    }
+    const sessionId = detectCurrentSessionId();
+    if (sessionId) body.session_id = sessionId;
+    const result = await cliPost("/cli/initiatives/report", body);
+    console.log(`${c.green}ok${c.reset} Reported ${Object.keys(result.written).join(", ")} on ${c.cyan}${result.short_id}${c.reset}`);
+    for (const m of metricReadings(result.row)) console.log(`  ${metricStandingText(c, m.standing)} ${metricLine(m)}`);
   });
 
 // --- Plans ---
@@ -17526,9 +17654,15 @@ doc
   .option("-L, --lines <n>", "Lines per page", "200")
   .option("-n, --line-numbers", "Prefix each line with its number")
   .option("--full", "Print the entire document without paging")
+  .option("--clean", "Without drafting markup: the versions showing, ghosts kept as plain text")
+  .option("--final", "As it would publish: drafting markup removed and ghosted text left out")
   .action(async (id: string, range: string | undefined, options: any) => {
     const result = await cliPost("/cli/docs/get", { id });
     if (!result) { console.error("Doc not found"); process.exit(1); }
+    if (options.clean || options.final) {
+      const { stripDrafting } = await import("@codecast/shared/docs/drafting");
+      result.content = stripDrafting(result.content || "", { dropGhosts: !!options.final });
+    }
     const lines = (result.content || "").split("\n");
     const total = lines.length;
 
@@ -17651,6 +17785,8 @@ doc
       console.log(`${c.green}ok${c.reset} Updated doc ${c.cyan}${id}${c.reset}`);
     }
   });
+
+registerDocDraftingCommands(doc, { post: cliPost, sessionId: detectCurrentSessionId });
 
 doc
   .command("search")
@@ -18209,7 +18345,7 @@ plan
 
     const plan = result;
     const allTasks = plan.tasks || [];
-    const openTasks = allTasks.filter((t: any) => t.status === "open" || t.status === "backlog");
+    const { open: openTasks, ready: readyTasks, blocked } = planReadiness<any>(allTasks);
 
     if (openTasks.length === 0) {
       console.log(fmt.muted("No open tasks to orchestrate."));
@@ -18219,12 +18355,6 @@ plan
       return;
     }
 
-    const resolvedIds = new Set(allTasks.filter((t: any) => t.status === "done" || t.status === "dropped").flatMap((t: any) => [t._id, t.short_id]));
-    const readyTasks = openTasks.filter((t: any) => {
-      if (!t.blocked_by || t.blocked_by.length === 0) return true;
-      return t.blocked_by.every((d: string) => resolvedIds.has(d));
-    });
-
     const maxAgents = parseInt(options.max, 10) || 3;
     const toSpawn = readyTasks.slice(0, maxAgents);
 
@@ -18232,7 +18362,6 @@ plan
     console.log(`  ${c.bold}Ready:${c.reset} ${readyTasks.length} tasks, spawning ${toSpawn.length}`);
     if (readyTasks.length > maxAgents) console.log(fmt.muted(`  ${readyTasks.length - maxAgents} queued for next wave`));
 
-    const blocked = openTasks.filter((t: any) => t.blocked_by?.length && !t.blocked_by.every((d: string) => resolvedIds.has(d)));
     if (blocked.length) console.log(fmt.muted(`  ${blocked.length} blocked on dependencies`));
     console.log();
 
@@ -18577,12 +18706,7 @@ plan
       const plan = await cliPost("/cli/plans/get", { short_id: planId });
       if (!plan) { console.error("Plan not found"); process.exit(1); }
       const allTasks = plan.tasks || [];
-      const resolvedIds = new Set(allTasks.filter((t: any) => t.status === "done" || t.status === "dropped").flatMap((t: any) => [t._id, t.short_id]));
-      const open = allTasks.filter((t: any) => t.status === "open" || t.status === "backlog");
-      const ready = open.filter((t: any) => {
-        if (!t.blocked_by || t.blocked_by.length === 0) return true;
-        return t.blocked_by.every((d: string) => resolvedIds.has(d));
-      });
+      const { ready } = planReadiness<any>(allTasks);
       console.log(`\n  ${c.bold}Autopilot dry-run${c.reset} for ${c.cyan}${planId}${c.reset}`);
       console.log(`  ${ready.length} ready tasks, would spawn ${Math.min(ready.length, maxAgents)} agents:\n`);
       for (const t of ready.slice(0, maxAgents)) {
@@ -18811,7 +18935,7 @@ plan
       }
 
       // Find ready tasks (dropped dependencies count as resolved)
-      const resolvedIds = new Set(allTasks.filter((t: any) => t.status === "done" || t.status === "dropped").flatMap((t: any) => [t._id, t.short_id]));
+      const resolvedIds = resolvedTaskIds(allTasks);
       const taskOutcomes = new Map<string, string>();
       for (const t of allTasks) {
         if (t.status === "done") taskOutcomes.set(t.short_id, t.execution_status || "done");
@@ -18820,9 +18944,7 @@ plan
       const openTasks = allTasks.filter((t: any) => t.status === "open" || t.status === "backlog");
       const readyTasks = openTasks.filter((t: any) => {
         if (activeAgents.has(t.short_id)) return false;
-        if (!t.blocked_by || t.blocked_by.length === 0) return evaluateCondition(t, taskOutcomes);
-        if (!t.blocked_by.every((d: string) => resolvedIds.has(d))) return false;
-        return evaluateCondition(t, taskOutcomes);
+        return isUnblocked(t, resolvedIds) && evaluateCondition(t, taskOutcomes);
       });
 
       const slots = maxAgents - activeAgents.size;
@@ -18923,12 +19045,7 @@ plan
     const open = tasks.filter((t: any) => t.status === "open" || t.status === "backlog");
     const dropped = tasks.filter((t: any) => t.status === "dropped");
 
-    const resolvedIds = new Set([...done, ...dropped].flatMap((t: any) => [t._id, t.short_id]));
-    const ready = open.filter((t: any) => {
-      if (!t.blocked_by || t.blocked_by.length === 0) return true;
-      return t.blocked_by.every((d: string) => resolvedIds.has(d));
-    });
-    const blocked = open.filter((t: any) => t.blocked_by?.length > 0 && !t.blocked_by.every((d: string) => resolvedIds.has(d)));
+    const { ready, blocked } = planReadiness<any>(tasks);
 
     const withConcerns = tasks.filter((t: any) => t.execution_status === "done_with_concerns");
     const needsContext = tasks.filter((t: any) => t.execution_status === "needs_context");
@@ -19059,20 +19176,8 @@ plan
     if (!plan) { console.error("Plan not found"); process.exit(1); }
 
     const tasks = plan.tasks || [];
-    const resolvedIds = new Set(
-      tasks.filter((t: any) => t.status === "done" || t.status === "dropped")
-        .flatMap((t: any) => [t._id, t.short_id])
-    );
-    const open = tasks.filter((t: any) => t.status === "open" || t.status === "backlog");
+    const { open, ready, blocked } = planReadiness<any>(tasks);
     const inProgress = tasks.filter((t: any) => t.status === "in_progress");
-
-    const ready = open.filter((t: any) => {
-      if (!t.blocked_by || t.blocked_by.length === 0) return true;
-      return t.blocked_by.every((d: string) => resolvedIds.has(d));
-    });
-    const blocked = open.filter((t: any) =>
-      t.blocked_by?.length > 0 && !t.blocked_by.every((d: string) => resolvedIds.has(d))
-    );
 
     console.log(`\n  ${c.bold}${plan.title}${c.reset} ${c.dim}(${planId})${c.reset}\n`);
 
@@ -19982,11 +20087,7 @@ program
     const priorAccess = readDaemonState()?.cursorAccess;
     // Drop the recorded outcome so the poll below reads THIS run's probe, not
     // a stale verdict from before a System Settings change.
-    try {
-      const st = JSON.parse(fs.readFileSync(STATE_FILE, "utf-8"));
-      delete st.cursorAccess;
-      fs.writeFileSync(STATE_FILE, JSON.stringify(st, null, 2), { mode: 0o600 });
-    } catch {}
+    patchDaemonState({ cursorAccess: undefined });
     if (process.platform === "darwin" && priorAccess !== "granted") {
       console.log("Restarting the daemon. macOS will ask:");
       console.log('  "codecast would like to access data from other apps" — click Allow.');

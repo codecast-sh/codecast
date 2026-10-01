@@ -1,0 +1,26 @@
+{
+  "name": "settle yes-no-buried-after-report",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:yes-no-buried-after-report"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "settle:yes-no-buried-after-report",
+    "title": "settle yes-no-buried-after-report"
+  },
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "trigger": {
+    "type": "settle"
+  },
+  "meta": {
+    "surface": "settle",
+    "visibility": "public",
+    "snapshot": "fixtures/settle/yes-no-buried-after-report.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "6c670475-5132-4881-9faa-d27e09c9f082",
+  "createdAt": "2026-10-01T17:46:24.501Z"
+}

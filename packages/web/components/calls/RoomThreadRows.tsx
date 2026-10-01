@@ -16,6 +16,8 @@ import { prefersReducedMotion } from "../../hooks/useBottomAnchoredList";
 import { Avatar } from "./Avatar";
 import { SessionFace } from "../identity";
 import { TranscriptTurnList } from "./TranscriptTurns";
+import { CallLinkButton } from "./CallLinkButton";
+import { turnsAnchor } from "./transcriptTurnModel";
 import { firstName, fmtClock, speakerColor } from "./speakers";
 import { HEARS, type EventRow, type Passage, type ThreadRow } from "./roomThreadModel";
 import "../chat/chat.css";
@@ -67,6 +69,7 @@ export function PassageBlock({
   dayOf,
   onToggle,
   selection,
+  callId,
 }: {
   passage: Passage;
   /** Per thread instance: the stage rail and the call page can both be mounted. */
@@ -81,6 +84,8 @@ export function PassageBlock({
   dayOf: number | undefined;
   onToggle: () => void;
   selection?: RoomThreadSelection;
+  /** The call the passage belongs to: its turns and its head offer links. */
+  callId?: string;
 }) {
   const units = recording ? "line" : "turn";
   const n = passage.turns.length;
@@ -98,13 +103,16 @@ export function PassageBlock({
             isSelected={selection?.isSelected}
             onTurnClick={selection?.onTurnClick}
             activeIndex={selection?.activeIndex ?? null}
+            callId={callId}
           />
         </div>
       </section>
     );
   }
+  const anchor = callId ? turnsAnchor(passage.turns) : null;
   return (
     <section className={className}>
+      <div className="group flex items-baseline">
       <button
         type="button"
         className="rt-passage-head"
@@ -141,6 +149,8 @@ export function PassageBlock({
         </span>
         {!open && <span className="rt-passage-preview">{passage.preview}</span>}
       </button>
+      {anchor && <CallLinkButton callId={callId!} anchor={anchor} title="Copy a link to this passage" className="ml-1" />}
+      </div>
       <Fold open={open}>
         <div id={bodyId} className="rt-passage-body">
           <TranscriptTurnList
@@ -149,6 +159,7 @@ export function PassageBlock({
             onTurnClick={selection?.onTurnClick}
             compact={recording}
             activeIndex={selection?.activeIndex ?? null}
+            callId={callId}
           />
         </div>
       </Fold>
@@ -165,8 +176,27 @@ function firstSentence(text: string): string {
   return (m ? m[0] : text).trim();
 }
 
-export function RecapCard({ summary, items, live }: { summary: string; items: string[]; live: boolean }) {
+export function RecapCard({
+  summary,
+  items,
+  live,
+  callId,
+  focus,
+}: {
+  summary: string;
+  items: string[];
+  live: boolean;
+  /** The call the recap belongs to: the summary and each item offer links. */
+  callId?: string;
+  /** A link landed on the summary or on one item: the recap opens for it. */
+  focus?: string | null;
+}) {
   const [open, setOpen] = useState(false);
+  const [openedFor, setOpenedFor] = useState<string | null>(null);
+  if (focus && focus !== openedFor) {
+    setOpenedFor(focus);
+    setOpen(true);
+  }
   const label = live ? "So far" : "Summary";
   return (
     <section className={`rt-recap${open ? " rt-recap-open" : ""}`}>
@@ -188,7 +218,12 @@ export function RecapCard({ summary, items, live }: { summary: string; items: st
       </button>
       <Fold open={open}>
         <div className="rt-recap-body">
-          <p>{summary}</p>
+          <p className="group" data-call-anchor="summary">
+            {summary}
+            {callId && (
+              <CallLinkButton callId={callId} anchor={{ kind: "summary" }} title="Copy a link to the summary" className="ml-1 align-middle" />
+            )}
+          </p>
           {items.length > 0 && (
             <div className="rt-recap-items">
               <div className="rt-recap-items-label">
@@ -196,9 +231,19 @@ export function RecapCard({ summary, items, live }: { summary: string; items: st
               </div>
               <ul>
                 {items.map((a, i) => (
-                  <li key={i}>
+                  <li key={i} className="group" data-call-anchor={`action-${i}`}>
                     <span className="text-sol-violet">→</span>
-                    <span>{a}</span>
+                    <span>
+                      {a}
+                      {callId && (
+                        <CallLinkButton
+                          callId={callId}
+                          anchor={{ kind: "action", index: i }}
+                          title="Copy a link to this action item"
+                          className="ml-1 align-middle"
+                        />
+                      )}
+                    </span>
                   </li>
                 ))}
               </ul>

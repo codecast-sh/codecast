@@ -642,40 +642,18 @@ a.th-task-meta:hover { color: var(--sol-cyan); }
   padding: 4px 0 10px;
 }
 
+/* The rows are the conversation view's own blocks (UserPrompt bleeds 1rem
+   past its column), so the gutter matches that bleed. */
 .th-session-rows {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 6px 14px 2px;
+  padding: 6px 28px 2px;
 }
-
-.th-session-row {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding-left: 8px;
-  border-left: 2px solid color-mix(in srgb, var(--sol-border) 40%, transparent);
-}
-.th-session-row-user { border-left-color: color-mix(in srgb, var(--sol-blue) 45%, transparent); }
-
-.th-session-row-head {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--sol-text-dim);
-}
-.th-session-row-user .th-session-row-head { color: color-mix(in srgb, var(--sol-blue) 80%, var(--sol-text)); }
-
-/* A message is a window, not a transcript: clamp long ones, the side panel
-   has the whole thing. */
-.th-session-row-body { color: var(--sol-text-secondary); }
+.th-session-rows > .th-task-earlier { align-self: center; }
 
 .th-session-row-tools {
   display: inline-flex;
+  margin: 2px 0 10px 32px;
   align-items: center;
   gap: 4px;
   font-size: 11px;

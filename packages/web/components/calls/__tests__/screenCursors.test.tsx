@@ -1,17 +1,13 @@
-import { afterAll, beforeAll, expect, mock, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 import { act } from "react";
 import { JSDOM } from "jsdom";
 import { RoomEvent } from "livekit-client";
 import { replaceGlobals } from "../../../test-helpers/globals";
 
 import { closeDomWindow } from "../../../test-helpers/domGlobals";
-// The room is replaced only for getRoom (the local identity); everything else
-// stays real, so other files that spread this module keep their exports.
-const realCallManager = { ...(await import("../../../lib/calls/callManager")) };
-mock.module("../../../lib/calls/callManager", () => ({
-  ...realCallManager,
-  getRoom: () => ({ localParticipant: { identity: "u-me" } }),
-}));
+// The overlay asks for its room (the local identity) through a prop, so the
+// test hands it one that knows only who "I" am.
+const localRoom = () => ({ localParticipant: { identity: "u-me" } }) as any;
 
 const { bindCallCursors, encodeCursorMessage, resetCallCursors } = await import("../../../lib/calls/callCursors");
 const { ScreenCursors } = await import("../ScreenCursors");
@@ -44,7 +40,6 @@ const {createRoot} = await import("react-dom/client");
 afterAll(() => {
   closeDomWindow(dom);
   restoreGlobals();
-  mock.module("../../../lib/calls/callManager", () => realCallManager);
 });
 
 // A room that only remembers its handlers, so the test can deliver a packet
@@ -68,7 +63,7 @@ function Tile() {
   return (
     <div ref={(el) => { boxRef.current = el; }}>
       <video ref={(el) => { videoRef.current = el; }} />
-      <ScreenCursors tile={tile} boxRef={boxRef} videoRef={videoRef} />
+      <ScreenCursors tile={tile} boxRef={boxRef} videoRef={videoRef} getRoom={localRoom} />
     </div>
   );
 }

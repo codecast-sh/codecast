@@ -293,6 +293,12 @@ describe("daemon restart gating", () => {
     // wait minutes on a provider and report their own result.
     expect(body).toContain("if (DETACHED_COMMANDS.has(cmd.command)) void run.catch(");
     expect(body).toContain("else await run;");
+    // The bypass is pinned by name. A command added here runs unordered with
+    // the rest of its batch, so a state change (restart, kill, escape) must
+    // never join it without a reviewed edit to this list.
+    const detached = /const DETACHED_COMMANDS: ReadonlySet<string> = new Set\((\[[^\]]*\])\);/.exec(daemon);
+    expect(detached, "DETACHED_COMMANDS is one Set literal").not.toBeNull();
+    expect(JSON.parse(detached![1])).toEqual(["cloud_agent_action"]);
     // And the old per-path loops are gone: one call site, inside the batch.
     expect(daemon.split(/(?<!function )executeRemoteCommand\(/).length - 1).toBe(1);
   });

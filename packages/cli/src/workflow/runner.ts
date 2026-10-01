@@ -2,6 +2,8 @@ import { FOREIGN_TEXT_CAPS, capForeignText, escapeForeignControlChars, inlineFor
 import { definitionLaunchFlags } from "../agentLaunch.js";
 import { countingSemaphore } from "../semaphore.js";
 import { WorkflowGraph, WorkflowNode, WorkflowRunState, NodeOutcome } from "./types";
+import { evalCondition, extractJsonOutput, lookupContextVar } from "./condition";
+import { planReadiness } from "../planReadiness.js";
 import { spawnSync } from "../proc.js";
 import { applyUnattended } from "../unattended.js";
 import { deviceId } from "../remote/device.js";
@@ -9,27 +11,6 @@ import * as fs from "fs";
 import * as path from "path";
 import * as readline from "readline";
 import { c } from "../colors.js";
-
-// ─── Condition evaluator ──────────────────────────────────
-
-function evalCondition(condition: string, context: Record<string, string>): boolean {
-  // Substitute context values
-  const expanded = condition.replace(/\b([a-zA-Z_][a-zA-Z0-9_.]*)\b/g, (match) => {
-    return context[match] !== undefined ? context[match] : match;
-  });
-
-  // Simple condition patterns
-  const eqMatch = expanded.match(/^(\S+)\s*=\s*(\S+)$/);
-  if (eqMatch) return eqMatch[1] === eqMatch[2];
-
-  const neqMatch = expanded.match(/^(\S+)\s*!=\s*(\S+)$/);
-  if (neqMatch) return neqMatch[1] !== neqMatch[2];
-
-  const containsMatch = expanded.match(/^(\S+)\s+contains\s+(\S+)$/i);
-  if (containsMatch) return containsMatch[1].includes(containsMatch[2]);
-
-  return false;
-}
 
 function resolveNextNode(
   graph: WorkflowGraph,
@@ -71,14 +52,34 @@ function resolveNextNode(
 
 // ─── Node handlers ────────────────────────────────────────
 
+// Every node's result lands under `<id>.output` (capped for prompts). When the
+// result is JSON, or ends in a fenced json block, the parsed value is kept
+// whole under `<id>.json` so `$<id>.json.<path>` and conditions can read its
+// fields past the output cap.
+const NODE_JSON_CAP = 64_000;
+export function recordNodeOutput(context: Record<string, string>, nodeId: string, text: string, jsonSource = text): void {
+  context[`${nodeId}.output`] = text.slice(0, 4000);
+  const parsed = extractJsonOutput(jsonSource);
+  const json = parsed === undefined ? undefined : JSON.stringify(parsed);
+  if (json !== undefined && json.length <= NODE_JSON_CAP) context[`${nodeId}.json`] = json;
+  else delete context[`${nodeId}.json`];
+}
+
 // $var in a script expands like $var in a prompt, but each value is
 // single-quoted so a task title with shell metacharacters stays data. `$(`
 // and `${` are left to the shell (no \w follows the `$`).
+// A dotted name ($scan.json.count) expands when the whole name resolves;
+// otherwise only its first word does and the rest stays literal text.
 export function expandScriptVars(script: string, context: Record<string, string>): string {
-  return script.replace(/\$(\w+)/g, (match, key) => {
-    const value = context[key];
-    if (value === undefined) return match;
-    return `'${value.replace(/'/g, `'\\''`)}'`;
+  return script.replace(/\$(\w+(?:\.\w+)*)/g, (match, key: string) => {
+    const parts = key.split(".");
+    for (let n = parts.length; n >= 1; n--) {
+      const value = lookupContextVar(context, parts.slice(0, n).join("."));
+      if (value === undefined) continue;
+      const rest = parts.slice(n).map(p => `.${p}`).join("");
+      return `'${value.replace(/'/g, `'\\''`)}'${rest}`;
+    }
+    return match;
   });
 }
 
@@ -106,7 +107,7 @@ async function executeCommand(
       console.log(c.dim + output.slice(0, 2000) + c.reset);
     }
 
-    context[`${node.id}.output`] = output.trim().slice(0, 4000);
+    recordNodeOutput(context, node.id, output.trim(), result.stdout || "");
     context[`${node.id}.exit_code`] = String(result.status ?? 0);
 
     if (result.status === 0) {
@@ -119,7 +120,7 @@ async function executeCommand(
     }
   } catch (err: any) {
     console.log(`  ${c.red}✗ error: ${err.message}${c.reset}`);
-    context[`${node.id}.output`] = err.message;
+    recordNodeOutput(context, node.id, err.message);
     return "failure";
   }
 }
@@ -203,7 +204,7 @@ async function executeAgent(
       console.log(`${c.dim}${stderr.slice(0, 200)}${c.reset}`);
     }
 
-    context[`${node.id}.output`] = output.slice(0, 4000);
+    recordNodeOutput(context, node.id, output);
     if (sessionId) context[`${node.id}.session_id`] = sessionId;
 
     if (result.status === 0) {
@@ -264,7 +265,7 @@ async function executeCliAgent(
 
     if (!runtime.isAlive(handle)) {
       const output = runtime.getOutput(handle, 500);
-      context[`${node.id}.output`] = output.text.slice(0, 4000);
+      recordNodeOutput(context, node.id, output.text);
       context[`${node.id}.session_id`] = sessionName;
 
       if (output.markers.status === "blocked") {
@@ -431,7 +432,7 @@ async function executeSessionNode(
     if (!settled) continue;
     const pinned = await cliCall(options, "/cli/sessions/state/get", { session: conversationId });
     const pinnedText: string = typeof pinned?.text === "string" ? pinned.text : (typeof pinned?.state?.text === "string" ? pinned.state.text : "");
-    context[`${node.id}.output`] = `work_state: ${state}${pinnedText ? `\n${pinnedText}` : ""}`.slice(0, 4000);
+    recordNodeOutput(context, node.id, `work_state: ${state}${pinnedText ? `\n${pinnedText}` : ""}`);
     const pinnedStatus: string = pinned?.status || pinned?.state?.status || "";
     if (pinnedStatus === "blocked") {
       console.log(`  ${c.yellow}blocked${c.reset}: ${pinnedText.split("\n")[0] || "(no detail)"}`);
@@ -698,7 +699,7 @@ export function expandPromptVars(template: string, graph: WorkflowGraph, context
   return template.replace(/\$(\w+(?:\.\w+)*)/g, (_, key) => {
     if (key === "goal") return goal;
     if (key === "human_message") return context["human.message"] || "";
-    return context[key] ?? "";
+    return lookupContextVar(context, key) ?? "";
   });
 }
 
@@ -732,7 +733,7 @@ function buildNodePrompt(
 
   // Add relevant context
   const contextEntries = Object.entries(context)
-    .filter(([k, _v]) => !k.endsWith(".output") && !["outcome", "last_error", "human.message"].includes(k))
+    .filter(([k, _v]) => !k.endsWith(".output") && !k.endsWith(".json") && !["outcome", "last_error", "human.message"].includes(k))
     .slice(0, 10);
   if (contextEntries.length > 0) {
     parts.push(`\n# Context\n${contextEntries.map(([k, v]) => `- ${k}: ${v}`).join("\n")}`);
@@ -832,6 +833,25 @@ async function loadTaskContext(options: RunOptions, context: Record<string, stri
   // handoff (an inline question, a decision, a crash) reads as none and no
   // edge fires, which is the failure path.
   context["handoff"] = String(task.status || "") === "in_review" ? String(task.execution_status || "none") : "none";
+}
+
+// The plan fields node prompts and edge conditions read, refreshed after
+// every node like the task's: `ready_tasks` counts the plan's tasks that can
+// start now, so plan-autopilot's loop routes on the plan as it is.
+async function loadPlanContext(options: RunOptions, context: Record<string, string>): Promise<void> {
+  if (!options.planId) return;
+  const plan = await cliCall(options, "/cli/plans/get", { short_id: options.planId });
+  if (!plan) return;
+  context["plan_title"] = inlineForeignText(plan.title);
+  context["plan_goal"] = capForeignText(
+    escapeForeignControlChars(plan.goal || ""),
+    FOREIGN_TEXT_CAPS.descriptionChars,
+  );
+  context["plan_acceptance_criteria"] = (plan.acceptance_criteria || [])
+    .map((c: string) => inlineForeignText(c)).join("\n- ");
+  const { open, ready } = planReadiness<any>(plan.tasks || []);
+  context["ready_tasks"] = String(ready.length);
+  context["open_tasks"] = String(open.length);
 }
 
 // The repo's default branch, for prompts that diff a hand's branch against it.
@@ -987,7 +1007,8 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
     graph.goal = options.goalOverride;
   }
 
-  const errors = (await import("./parser")).validateWorkflow(graph);
+  const { validateWorkflow, graphHash } = await import("./parser");
+  const errors = validateWorkflow(graph);
   if (errors.length > 0) {
     console.error(`${c.red}Workflow validation errors:${c.reset}`);
     errors.forEach(e => console.error(`  ${c.red}✗ ${e}${c.reset}`));
@@ -999,6 +1020,10 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
   const initialContext: Record<string, string> = {};
   initialContext["project_path"] = cwd;
   initialContext["default_branch"] = detectDefaultBranch(cwd);
+  // The run's own id, for a node that reports to the server about this run
+  // (the line's merge step, the-line.md L12). Empty on a run with no row.
+  initialContext["run_id"] = options.runId ?? "";
+  const hash = graphHash(graph);
 
   if (options.taskId) {
     initialContext["task_id"] = options.taskId;
@@ -1007,25 +1032,7 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
 
   if (options.planId) {
     initialContext["plan_id"] = options.planId;
-    if (options.apiToken && options.convexSiteUrl) {
-      try {
-        const resp = await fetch(`${options.convexSiteUrl}/cli/plans/get`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ api_token: options.apiToken, short_id: options.planId }),
-        });
-        const plan = await resp.json() as any;
-        if (plan && !plan.error) {
-          initialContext["plan_title"] = inlineForeignText(plan.title);
-          initialContext["plan_goal"] = capForeignText(
-            escapeForeignControlChars(plan.goal || ""),
-            FOREIGN_TEXT_CAPS.descriptionChars,
-          );
-          initialContext["plan_acceptance_criteria"] = (plan.acceptance_criteria || [])
-            .map((c: string) => inlineForeignText(c)).join("\n- ");
-        }
-      } catch {}
-    }
+    await loadPlanContext(options, initialContext);
   }
 
   // Expand $variables in the graph goal
@@ -1050,6 +1057,14 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
       node_id: startNode.id,
       node_status: "running",
       run_status: "running",
+    });
+    // Its own report: a server without the graph_hash arg rejects the whole
+    // call, and the run must still read as running there.
+    await reportProgress(options, {
+      current_node_id: startNode.id,
+      node_id: startNode.id,
+      node_status: "running",
+      graph_hash: hash,
     });
   }
 
@@ -1227,6 +1242,9 @@ async function runNodeLoop(
     // on the task as it is now. Verdicts older than this node read as none.
     if (options.taskId && current.type !== "start" && !options.dryRun) {
       await loadTaskContext(options, state.context, nodeStartedAt);
+    }
+    if (options.planId && current.type !== "start" && !options.dryRun) {
+      await loadPlanContext(options, state.context);
     }
 
     // ── Stage 4: Record outcome in context and per-node map ───────────────────

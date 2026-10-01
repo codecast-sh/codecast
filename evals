@@ -1,0 +1,5 @@
+#!/bin/sh
+# ./evals: codecast's eval home (packages/evals). Never mounted under `cast`,
+# so the CLI's boot path and release binaries carry no eval code.
+root="$(cd "$(dirname "$0")" && pwd)"
+exec bun "$root/packages/evals/src/index.ts" "$@"

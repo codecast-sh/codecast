@@ -40,8 +40,9 @@ function session(id: string, agent_status: string, updatedAt = STATUS_TS) {
   return { _id: `managed_sessions_${id}`, user_id: USER, conversation_id: `conversations_${id}`, agent_status, agent_status_updated_at: updatedAt };
 }
 
-function world(workers: any[], sessions: any[], parent: Record<string, any> = {}) {
+function world(workers: any[], sessions: any[], parent: Record<string, any> = {}, messages: any[] = []) {
   const tables: Record<string, any[]> = {
+    messages,
     conversations: [{ _id: PARENT, user_id: USER, session_id: "parent-session", status: "active", short_id: "jx75xx3", ...parent }, ...workers],
     managed_sessions: sessions,
     pending_messages: [],
@@ -104,6 +105,37 @@ describe("a spawned worker's settle wakes its parent", () => {
     const { ctx, tables } = world([worker("a", { thread_state_status: "dormant" })], [session("a", "idle")]);
     await tell(ctx, "a");
     expect(wakes(tables)[0].content).toContain('title="Worker a ended its turn"');
+  });
+
+  test("with nothing pinned, the report is the last thing a person typed, never a machine message", async () => {
+    // jx7fee0 settled with no `cast state`; its last user-role row was a harness
+    // <task-notification>, and the lead read that raw XML as the worker's report.
+    const notification = "<task-notification> <task-id>bq6r273mk</task-id> <tool-use-id>toolu_01Hk</tool-use-id> <output-file>/tmp/x</output-file></task-notification>";
+    const msg = (i: number, role: string, content: string, extra: Record<string, any> = {}) =>
+      ({ _id: `messages_${i}`, conversation_id: "conversations_a", role, content, timestamp: NOW - 100_000 + i, ...extra });
+    const typed = [
+      msg(1, "user", "Reword the fee copy so it matches mobile"),
+      msg(2, "assistant", "Rewording it now."),
+      msg(3, "user", "", { tool_results: [{ tool_use_id: "t", content: "ok" }] }),
+      msg(4, "user", '<session-message from="jx75xx3">any news?</session-message>'),
+      msg(5, "user", notification),
+    ];
+    const pinless = { thread_state: undefined, thread_state_status: undefined, last_message_preview: notification };
+    const { ctx, tables } = world([worker("a", pinless)], [session("a", "idle")], {}, typed);
+    await tell(ctx, "a");
+    const [wake] = wakes(tables);
+    expect(wake.content).toContain(">Reword the fee copy so it matches mobile</worker-report>");
+    expect(wake.content).not.toContain("task-notification");
+
+    // Nothing a person typed: the report stays empty rather than showing plumbing.
+    const machineOnly = world([worker("a", pinless)], [session("a", "idle")], {}, [msg(5, "user", notification)]);
+    await tell(machineOnly.ctx, "a");
+    expect(wakes(machineOnly.tables)[0].content).toContain('why="ended" since="1800000000000"></worker-report>');
+
+    // A person writing from the web arrives wrapped; the report is their words.
+    const fromWeb = world([worker("a", pinless)], [session("a", "idle")], {}, [msg(1, "user", '<user-message from="Ashot">\nShip the fee copy\n</user-message>'), msg(5, "user", notification)]);
+    await tell(fromWeb.ctx, "a");
+    expect(wakes(fromWeb.tables)[0].content).toContain(">Ship the fee copy</worker-report>");
   });
 
   test("workers that settle together reach the parent as one message", async () => {

@@ -1,0 +1,87 @@
+{
+ "asOf": "2026-03-02T09:01:20.000Z",
+ "notes": "Synthetic. The agent stops for a verdict on a plan and the developer sends a reusable prompt from their profile; the truth also sits in recent, so scrubTruth must remove it.",
+ "snapshot": {
+  "conversation": {
+   "title": "CSV importer drops last row",
+   "project_path": "/work/ledger"
+  },
+  "rows": [
+   {
+    "_id": "line:1",
+    "role": "user",
+    "content": "the csv importer drops the last row when the file has no trailing newline. find out why",
+    "timestamp": 1772442020000,
+    "line": 1
+   },
+   {
+    "_id": "line:2",
+    "role": "assistant",
+    "content": "Looking at the importer now.",
+    "timestamp": 1772442040000,
+    "line": 2
+   },
+   {
+    "_id": "line:3",
+    "role": "user",
+    "content": "",
+    "timestamp": 1772442060000,
+    "line": 3,
+    "tool_results": [
+     {}
+    ]
+   },
+   {
+    "_id": "line:4",
+    "role": "assistant",
+    "content": "Found it. `splitRows` in `importer/parse.ts` only emits a row when it sees a newline, so a final row without one is never flushed.\n\nPlan:\n1. Flush the pending buffer after the loop in `splitRows` when it is non-empty.\n2. Leave the quoting logic untouched.\n\nShould I go ahead with this fix?",
+    "timestamp": 1772442080000,
+    "line": 4
+   }
+  ],
+  "profile": {
+   "frequent": [
+    {
+     "text": "run the tests again",
+     "count": 6
+    }
+   ],
+   "phrases": [
+    {
+     "text": "add a regression test",
+     "count": 9
+    },
+    {
+     "text": "keep it minimal",
+     "count": 5
+    }
+   ],
+   "patterns": [
+    {
+     "pattern": "Asks for a regression test alongside every bug fix",
+     "example": "fix it and add a regression test for the date bug",
+     "count": 11
+    },
+    {
+     "pattern": "Approves plans tersely, often adding one constraint",
+     "example": "ok go, but keep the public api unchanged",
+     "count": 8
+    }
+   ],
+   "prompts": [
+    {
+     "text": "go ahead, and add a regression test that fails before the fix and passes after it",
+     "count": 7
+    }
+   ],
+   "generated_at": 1772323200000,
+   "recent": [
+    "go ahead, and add a regression test that fails before the fix and passes after it",
+    "why does the importer use a regex here",
+    "ok go, but keep the public api unchanged"
+   ]
+  },
+  "truth": "go ahead, and add a regression test that fails before the fix and passes after it",
+  "truthAt": 1772442110000
+ }
+}

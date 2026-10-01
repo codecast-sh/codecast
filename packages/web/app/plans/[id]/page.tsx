@@ -3,16 +3,15 @@ import { RepositoryLinks } from "../../../components/repo/RepositoryLinks";
 import { ShortId } from "../../../components/ShortId";
 import { useCallback, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { useMutation, useQuery } from "convex/react";
+import { useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useMountEffect } from "../../../hooks/useMountEffect";
 import { useInboxStore } from "../../../store/inboxStore";
-import { shareOrigin, canonicalUrl } from "../../../lib/utils";
 import { AuthGuard } from "../../../components/AuthGuard";
 import { AppLoader } from "../../../components/AppLoader";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { DocumentDetailLayout } from "../../../components/DocumentDetailLayout";
-import { SharePopover } from "../../../components/SharePopover";
+import { ShareControl } from "../../../components/ShareControl";
 import "../../../components/editor/editor.css";
 import {
   PlanProgressBar,
@@ -132,8 +131,6 @@ export default function PlanDetailPage() {
   // trip. NULL (an access verdict) seeds nothing.
   useConvexSync(queryPlan, ingestPlanDetail);
   const webUpdate = useInboxStore((s) => s.updatePlan);
-  const generateShareLink = useMutation(api.plans.generateShareLink);
-  const unshareLink = useMutation(api.plans.unsharePlan);
 
   // plan.tasks / plan.progress / plan.status are a server-query snapshot, so
   // optimistic edits (updateTask status/assignee, updatePlan status) wouldn't
@@ -180,7 +177,7 @@ export default function PlanDetailPage() {
 
   // The charter (org-staffing.md S7): the store row first, so an inline edit
   // paints in the same tick; the query snapshot fills the rest. The org tree
-  // feeds the owner chip and the chief of staff link, per view as /org does;
+  // feeds the owner chip and the head of people link, per view as /org does;
   // the page reads only the roles, so session churn under a node does not
   // re-render it. Null roles until the tree lands: the chip says loading.
   useSyncOrgTreeFeeder();
@@ -269,18 +266,7 @@ export default function PlanDetailPage() {
             </>
           }
           topBarRight={
-            <SharePopover
-              hasTeam={false}
-              hasShareToken={!!(plan as any).share_token}
-              shareUrl={(plan as any).share_token ? `${shareOrigin()}/share/plan/${(plan as any).share_token}` : null}
-              pageUrl={canonicalUrl()}
-              forwardLabel="plan"
-              onRevokeShareLink={() => unshareLink({ short_id: plan.short_id })}
-              onGenerateShareLink={async () => {
-                const result = await generateShareLink({ short_id: plan.short_id });
-                return `${shareOrigin()}/share/plan/${result.share_token}`;
-              }}
-            />
+            <ShareControl label="plan" path={`/plans/${plan.short_id}`} publicShare={{ kind: "plan", id: plan._id, token: (storePlan ?? plan).share_token }} />
           }
           metaContent={
             <>

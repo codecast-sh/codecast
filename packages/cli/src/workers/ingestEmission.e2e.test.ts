@@ -1,60 +1,42 @@
 import { test, expect } from 'bun:test';
-import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-const run = promisify(execFile);
-const sha = (text: string) => createHash('sha256').update(text).digest('hex');
+import { loadScaledMs } from '../test-helpers/machineLoad.js';
+import { productionHome, runProduction, settled, resultRow, records, releaseProductionHome, mutantCopy } from './fixtures/productionRun.js';
+
 for (const scenario of [{mutant:false,client:undefined},{mutant:true,client:'claude'},{mutant:true,client:'gemini'},{mutant:true,client:'cursorDb'}]) for (const enabled of [false, true]) test(`emission known receipt clock recovery worker=${enabled} mutant=${scenario.mutant} client=${scenario.client??'all'}`, async () => {
   const {mutant,client}=scenario;
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'f3-review-control-')), bin = path.join(root, 'bin'), tmp = path.join(root, 'tmux');
-  fs.mkdirSync(bin); fs.mkdirSync(tmp);
-  for (const name of ['tmux', 'ps', 'lsof', 'claude', 'codex', 'gemini', 'opencode', 'pi', 'grok']) fs.writeFileSync(path.join(bin, name), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
-  let producer: string | undefined, productionSha256: string | undefined, scratchSha256: string | undefined;
+  const home = productionHome('f3-review-control-');
   try {
-    if (mutant) {
-      const original = fs.readFileSync(path.join(import.meta.dir, 'ingestJobs.ts'), 'utf8');
-      const needle = 'result.receiptSignatures.push(ingestReceiptSignature(message,source));';
-      expect(original.split(needle).length).toBe(2);
-      const scratch = original.replace(needle, "result.receiptSignatures.push(createHash('sha256').update(JSON.stringify(message)).digest('hex'));").replace(/((?:from\s+|import\()['"])([^'"]+)(['"])/g, (all, start, spec, end) => spec.startsWith('.') ? start + path.resolve(import.meta.dir, spec) + end : all);
-      producer = path.join(root, 'ingestJobs-generated-clock.ts'); fs.writeFileSync(producer, scratch);
-      productionSha256 = sha(original); scratchSha256 = sha(scratch);
-    }
-    const result = await run(process.execPath, [path.join(import.meta.dir, 'fixtures/ingestProduction.ts'), String(enabled), 'emission-review'], {
-      env: { ...process.env, HOME: root, TMUX_TMPDIR: tmp, TMUX: '', PATH: bin + path.delimiter + process.env.PATH, NODE_ENV: 'test', F3_FIXTURE_EMISSION_CLIENT: client, F3_FIXTURE_PHYSICAL_TASKKEY: mutant ? '1' : '0', F3_FIXTURE_INGEST_PRODUCER: producer },
-      timeout: 30_000, maxBuffer: 2 * 1024 * 1024,
-    }).then(output => ({ ok: true, code: 0, ...output }), error => ({ ok: false, code: error.code, stdout: error.stdout ?? '', stderr: error.stderr ?? '', error: String(error) }));
-    const workerSources=fs.readdirSync(root).filter(name=>/^worker-source-\d+\.json$/.test(name)).map(name=>JSON.parse(fs.readFileSync(path.join(root,name),'utf8')));
-    const invocations = fs.readdirSync(root).filter(name => /^invocations-\d+\.jsonl$/.test(name)).flatMap(name => fs.readFileSync(path.join(root, name), 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)));
-    console.log(JSON.stringify({ enabled, mutant, client, productionSha256, scratchSha256, outcome: result, workerSources, invocations }));
+    const mutation = mutant ? mutantCopy(home.root, path.join(import.meta.dir, 'ingestJobs.ts'), 'result.receiptSignatures.push(ingestReceiptSignature(message,source));', "result.receiptSignatures.push(createHash('sha256').update(JSON.stringify(message)).digest('hex'));", 'ingestJobs-generated-clock.ts') : undefined;
+    const producer = mutation?.file;
+    const result = await settled(runProduction(home, [String(enabled), 'emission-review'], {
+      env: { F3_FIXTURE_EMISSION_CLIENT: client, F3_FIXTURE_PHYSICAL_TASKKEY: mutant ? '1' : '0', F3_FIXTURE_INGEST_PRODUCER: producer },
+      timeoutMs: 30_000,
+    }));
+    const workerSources = records(home.root, /^worker-source-\d+\.json$/);
+    const invocations = records(home.root, /^invocations-\d+\.jsonl$/, { lines: true });
+    console.log(JSON.stringify({ enabled, mutant, client, productionSha256: mutation?.originalSha256, scratchSha256: mutation?.scratchSha256, outcome: result, workerSources, invocations }));
     expect(workerSources.length).toBe(enabled?1:0);
     const copiedSource = result.stderr.split('\n').find((line:string)=>line.startsWith('F3_DAEMON_SOURCE '));
     expect(copiedSource).toBeDefined();
     const sourceReceipt=JSON.parse(copiedSource!.slice('F3_DAEMON_SOURCE '.length));
     expect(sourceReceipt.originalDaemonSha256).toMatch(/^[0-9a-f]{64}$/);
     expect(sourceReceipt.copiedDaemonSha256).toMatch(/^[0-9a-f]{64}$/);
-    if (mutant) {
+    if (mutation) {
       expect(result.ok).toBe(false);
       expect(result.stderr).toContain('known receipt must not resend generated timestamp occurrences');
       expect(invocations.length).toBeGreaterThan(0);
-      expect(invocations.every(row => row.sha256 === scratchSha256 && row.producer === producer)).toBe(true);
+      expect(invocations.every(row => row.sha256 === mutation.scratchSha256 && row.producer === producer)).toBe(true);
       const pids = new Set(invocations.map(row => row.pid));
-      const supervisor = fs.readdirSync(root).filter(name => /^producer-\d+\.json$/.test(name)).map(name => JSON.parse(fs.readFileSync(path.join(root, name), 'utf8'))).find(row => row.ppid === process.pid);
+      const supervisor = records(home.root, /^producer-\d+\.json$/).find(row => row.ppid === process.pid);
       expect(supervisor).toBeDefined(); expect(pids.size).toBe(1); expect(pids.has(supervisor.pid)).toBe(!enabled);
     } else {
       expect(result.ok).toBe(true);
-      const row = JSON.parse(result.stdout.trim().split('\n').at(-1)!);
+      const row = resultRow(result.stdout);
       expect(row.review).toEqual({ formats: 3, clockReread: true, nativeTextChange: true, identicalOccurrences: true, filtered: true, toolsImages: true, queuedShiftedWindow: true, cursorDbCountWindow: true });
       if (enabled) { expect(row.parentParses).toBe(0); expect(row.workerPid).toBeGreaterThan(0); }
     }
   } finally {
-    const owned = fs.readdirSync(root).filter(name => /^fixture-process-\d+\.json$/.test(name)).map(name => JSON.parse(fs.readFileSync(path.join(root, name), 'utf8')).pid as number);
-    const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false; throw error; } };
-    const end = Date.now() + 2000;
-    while (owned.some(alive) && Date.now() < end) await new Promise(resolve => setTimeout(resolve, 10));
-    const remaining = owned.filter(alive); console.log(JSON.stringify({ enabled, mutant, ownedPids: owned, remaining }));
-    expect(remaining).toEqual([]); if (!remaining.length) fs.rmSync(root, { recursive: true, force: true });
+    await releaseProductionHome(home.root);
   }
-}, 40_000);
+}, loadScaledMs(40_000));

@@ -90,7 +90,7 @@ function normalizeTitle(title: string): string[] {
     .filter((w) => w.length > 2);
 }
 
-function titleSimilarity(a: string, b: string): number {
+export function titleSimilarity(a: string, b: string): number {
   const wordsA = new Set(normalizeTitle(a));
   const wordsB = new Set(normalizeTitle(b));
   if (wordsA.size === 0 || wordsB.size === 0) return 0;

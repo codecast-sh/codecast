@@ -1,6 +1,8 @@
 import { WorkflowGraph, WorkflowNode, WorkflowEdge, NodeShape, NodeType } from "./types";
 import * as fs from "fs";
 import * as path from "path";
+import { createHash } from "crypto";
+import { conditionError } from "./condition";
 
 // --- Tokenizer ---
 
@@ -367,6 +369,8 @@ export function validateWorkflow(graph: WorkflowGraph): string[] {
   for (const edge of graph.edges) {
     if (!graph.nodes.has(edge.from)) errors.push(`Edge references unknown node: ${edge.from}`);
     if (!graph.nodes.has(edge.to)) errors.push(`Edge references unknown node: ${edge.to}`);
+    const conditionErr = edge.condition ? conditionError(edge.condition) : null;
+    if (conditionErr) errors.push(`Edge ${edge.from} -> ${edge.to} condition "${edge.condition}": ${conditionErr}`);
   }
 
   // Check command nodes have scripts
@@ -380,4 +384,19 @@ export function validateWorkflow(graph: WorkflowGraph): string[] {
   }
 
   return errors;
+}
+
+// A content hash of the graph as parsed (the-line-end-to-end.md LE14), so a
+// run records exactly which graph it executed. Whitespace, comments and
+// attribute order in the source do not change it; any node, edge or graph
+// attribute does. Taken before the runner expands $vars into the goal.
+export function graphHash(graph: WorkflowGraph): string {
+  const sorted = (o: object) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined).sort(([a], [b]) => a.localeCompare(b)));
+  const { nodes, edges, ...attrs } = graph;
+  const canonical = JSON.stringify({
+    graph: sorted(attrs),
+    nodes: [...nodes.values()].sort((a, b) => a.id.localeCompare(b.id)).map(sorted),
+    edges: edges.map(sorted),
+  });
+  return createHash("sha256").update(canonical).digest("hex").slice(0, 16);
 }
