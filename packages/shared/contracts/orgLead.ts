@@ -7,7 +7,7 @@
 // Work belongs to the most specific live role that covers it (ownerOf):
 // - a role whose scope names the work's plan, over
 // - a role whose scope names the work's project, over
-// - the Chief of Staff, which looks after whatever no narrower role covers.
+// - the Head of People, which looks after whatever no narrower role covers.
 // Scope is opt in: any other role with no projects and no plans owns no work.
 // It is a standing role that runs its routine and answers what it is asked.
 // A child's scope sits inside its parent's (scopes-and-feed.md F1), so a head
@@ -54,14 +54,14 @@ export function scopeListsProject(role: LeadRole, projectId: unknown): boolean {
 
 const scopeListsPlan = (role: LeadRole, planId: unknown) => (role.scope?.plan_ids ?? []).some((p) => String(p) === String(planId));
 
-export const CHIEF_OF_STAFF_HANDLE = "chief-of-staff";
+export const HEAD_OF_PEOPLE_HANDLE = "head-of-people";
 
 /** The role names projects or plans it looks after. */
 export const hasScope = (r: LeadRole) => (r.scope?.project_ids ?? []).length > 0 || (r.scope?.plan_ids ?? []).length > 0;
 
-/** The one role that looks after what no narrower role covers: the Chief of
- *  Staff, while it names no scope. Any other role without a scope owns nothing. */
-export const isWholeWorkspaceRole = (r: LeadRole) => !hasScope(r) && r.handle === CHIEF_OF_STAFF_HANDLE;
+/** The one role that looks after what no narrower role covers: the Head of
+ *  People, while it names no scope. Any other role without a scope owns nothing. */
+export const isWholeWorkspaceRole = (r: LeadRole) => !hasScope(r) && r.handle === HEAD_OF_PEOPLE_HANDLE;
 
 /** A piece of work as the rule reads it: the plan it is filed under and the
  *  project it belongs to (a plan's own project when the work names none).

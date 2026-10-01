@@ -18,6 +18,7 @@
 // progress goes to stderr and the results to stdout. `--as` and `--chain`
 // read the workspace's definitions, so they need `cast auth`.
 
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -52,6 +53,8 @@ import { defaultConfigDir } from "./config/configDir.js";
 import { readAuthConfig } from "./config/readAuthConfig.js";
 import { apiPost } from "./castApi.js";
 import { countingSemaphore } from "./semaphore.js";
+import { sessionIdFromEnv } from "./sessionIdentity.js";
+import { declareSpawnParent } from "./spawnParents.js";
 import {
   compileChainWorkflow,
   compileParallelWorkflow,
@@ -211,6 +214,8 @@ interface ResolvedLaunch {
   binary: string;
   binaryArgs: string[];
   warnings: string[];
+  /** The session id the child was told to use, when its client takes one. */
+  childSessionId?: string;
 }
 
 /** Flags + an optional definition -> the binary and argv. Explicit flags win
@@ -239,6 +244,7 @@ function resolveLaunch(prompt: string, flags: ExecFlags, definition: AgentDefini
     : getPermissionFlags(agent, config);
 
   const appendParts = [defFlags?.appendSystemPrompt, flags.appendSystemPrompt].filter(Boolean) as string[];
+  const childSessionId = agent === "claude" && !flags.resumeId && !flags.continueLast ? randomUUID() : undefined;
   const { binaryArgs, ignored } = buildPrintArgs({
     agentType: agent,
     prompt,
@@ -258,9 +264,23 @@ function resolveLaunch(prompt: string, flags: ExecFlags, definition: AgentDefini
     worktree: flags.isolated || resolved.isolated ? true : undefined,
     autoApprove: flags.permissionMode !== "default",
     extraArgs: defFlags?.args,
+    assignedClaudeSessionId: childSessionId,
   });
   for (const flag of ignored) warnings.push(`${agent} does not support ${flag}; ignoring`);
-  return { agent, binary: launchBinary(agent), binaryArgs, warnings };
+  return { agent, binary: launchBinary(agent), binaryArgs, warnings, childSessionId };
+}
+
+/** Start a resolved launch. A child with a known session id is declared as the
+ *  calling session's own first, so the daemon nests it under that session
+ *  instead of filing it as a loose inbox card. */
+export function startLaunch(
+  launch: Pick<ResolvedLaunch, "binary" | "binaryArgs" | "childSessionId">,
+  opts: RunChildOptions,
+  start: ChildLauncher = runChild,
+  callerSessionId: string | null = sessionIdFromEnv(),
+): Promise<ChildResult> {
+  if (launch.childSessionId && callerSessionId) declareSpawnParent(CONFIG_DIR, launch.childSessionId, callerSessionId);
+  return start(launch.binary, launch.binaryArgs, opts);
 }
 
 // ─── Definitions and chains from the workspace ──────────────────────────────
@@ -361,7 +381,7 @@ export async function runChain(deps: GroupDeps, chainName: string, task: string,
     say(`▸ step ${i + 1}/${chain.steps.length} ${step.agent} (${launch.agent})`);
     await run.node(nodeId, "running");
     const started = Date.now();
-    const result = await startChild(launch.binary, launch.binaryArgs, { cwd: opts.dir, timeoutMs: opts.timeoutMs, inheritStdin: false, capture: true });
+    const result = await startLaunch(launch, { cwd: opts.dir, timeoutMs: opts.timeoutMs, inheritStdin: false, capture: true }, startChild);
     const ms = Date.now() - started;
     steps.push({ agent: step.agent, prompt, code: result.code, output: result.output, ms });
     if (result.code !== 0) {
@@ -549,7 +569,7 @@ export function registerExecCommand(program: Command, deps: GroupDeps): void {
               say(`▸ task ${i + 1}/${prompts.length} started (${launch.agent})`);
               await run.node(nodeId, "running");
               const started = Date.now();
-              const result = await runChild(launch.binary, launch.binaryArgs, { cwd: dir, timeoutMs, inheritStdin: false, capture: true });
+              const result = await startLaunch(launch, { cwd: dir, timeoutMs, inheritStdin: false, capture: true });
               const ms = Date.now() - started;
               say(`${result.code === 0 ? "✓" : "✗"} task ${i + 1}/${prompts.length} ${result.code === 0 ? "done" : `failed (exit ${result.code})`} in ${Math.round(ms / 1000)}s`);
               await run.node(nodeId, result.code === 0 ? "completed" : "failed", {
@@ -596,7 +616,7 @@ export function registerExecCommand(program: Command, deps: GroupDeps): void {
         return;
       }
       try {
-        const result = await runChild(launch.binary, launch.binaryArgs, { cwd: dir, timeoutMs, inheritStdin });
+        const result = await startLaunch(launch, { cwd: dir, timeoutMs, inheritStdin });
         process.exit(result.code);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

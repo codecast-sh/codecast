@@ -609,3 +609,30 @@ describe("applyHideTransition — explicit kill forces teardown", () => {
     expect(tables.agent_tasks[0].canceled_on_kill_at).toBeGreaterThan(0);
   });
 });
+
+// "No work" at hide time reads only the server, so a first message still in the
+// client's outbox looks like an empty pre-warm. Deleting the row then loses the
+// message and leaves the client a session the server no longer has (var's ghost
+// "Ne..." row and its presence crash, 2026-10-01). The hide kills the agent and
+// leaves the row to gcEmptyConversations' grace window.
+describe("applyHideTransition — hiding an empty pre-warm keeps the row", () => {
+  for (const field of ["inbox_dismissed_at", "inbox_stashed_at"] as const) {
+    test(`${field}: kill enqueued, conversation not deleted`, async () => {
+      const tables: Record<string, any[]> = {
+        conversations: [{ _id: "c9", user_id: "u1", message_count: 0 }],
+        managed_sessions: [],
+        messages: [],
+        pending_messages: [],
+        client_state: [],
+        daemon_commands: [],
+      };
+      const db = makeFakeDb(tables);
+      const doc = { ...tables.conversations[0] };
+      const { action, teardownEnqueued } = await applyHideTransition({ db }, doc, { [field]: Date.now() });
+      expect(action).toBe("reap");
+      expect(teardownEnqueued).toBe(true);
+      expect(db._deleted).not.toContain("c9");
+      expect(tables.conversations.map((c) => c._id)).toContain("c9");
+    });
+  }
+});

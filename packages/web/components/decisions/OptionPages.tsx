@@ -1,11 +1,11 @@
 "use client";
 
-import { useState } from "react";
 import { ArrowUpRight, Check, Columns2 } from "lucide-react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useTrackedStore, type SessionDecisionItem } from "../../store/inboxStore";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
-import { pageFrameSrc, pageShareUrl, pageThumbUrl } from "../../lib/publishedPageUrls";
+import { pageFrameSrc, pageShareUrl } from "../../lib/publishedPageUrls";
+import { PageThumb } from "../PageThumb";
 import { openBrowserPane } from "../../lib/stage";
 import { optionPageSlugs } from "../../lib/decisionQueue";
 import "./decisions.css";
@@ -58,14 +58,10 @@ function OptionPageCard({ index, label, slug, picked, onAnswer }: { index: numbe
     (st) => (st as any).artifacts?.[slug]?.version,
     (st) => (st as any).artifacts?.[slug]?.has_thumb,
   ]);
-  const row = (s as any).artifacts?.[slug] as { title?: string; version?: number; has_thumb?: boolean } | undefined;
+  const row = (s as any).artifacts?.[slug] as { title?: string; version?: number; has_thumb?: boolean; has_password?: boolean; email_gate?: boolean } | undefined;
   const { data: meta } = useQueryNoThrow(api.artifacts.getShared, row ? "skip" : { slug });
   const title: string = row?.title ?? meta?.title ?? "Published page";
   const version = row?.version ?? meta?.version ?? 0;
-  const [thumbFailed, setThumbFailed] = useState(false);
-  // A page published without a thumbnail says so on its row: draw the
-  // fallback at once instead of a broken image until the request fails.
-  const noThumb = thumbFailed || row?.has_thumb === false;
   const openPane = () => openBrowserPane({ kind: "url", url: pageFrameSrc(slug) });
 
   return (
@@ -89,11 +85,13 @@ function OptionPageCard({ index, label, slug, picked, onAnswer }: { index: numbe
         <span className="min-w-0 flex-1 truncate text-[13px] text-sol-text" title={label}>{label}</span>
       </div>
       <button type="button" onClick={openPane} className="decision-option-page-thumb" title="Open beside your work, as a pane" aria-label={`Open ${title} in a pane`}>
-        {noThumb ? (
-          <span className="w-full h-full flex items-center justify-center text-sol-text-dim font-mono text-2xl select-none">{"</>"}</span>
-        ) : (
-          <img src={pageThumbUrl(slug, version)} alt="" loading="lazy" onError={() => setThumbFailed(true)} />
-        )}
+        <PageThumb
+          slug={slug}
+          version={version}
+          hasThumb={row?.has_thumb}
+          gated={!!row?.has_password || !!row?.email_gate}
+          fallback={<span className="w-full h-full flex items-center justify-center text-sol-text-dim font-mono text-2xl select-none">{"</>"}</span>}
+        />
       </button>
       <div className="flex items-center gap-2 px-3 py-1.5 text-[11px] min-w-0">
         <span className="min-w-0 flex-1 truncate text-sol-text-muted" title={title}>{title}</span>

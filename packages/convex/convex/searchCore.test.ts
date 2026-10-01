@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   parseSearchTerms,
   rankConversationsByCoverage,
+  groupMessagesByConversation,
   conversationMatchesAllTerms,
   contentMatchesAnyTerm,
 } from "./searchCore";
@@ -113,5 +114,22 @@ describe("web-path helpers stay intact", () => {
     const terms = parseSearchTerms("daemon heartbeat");
     expect(contentMatchesAnyTerm("the daemon restarted", terms)).toBe(true);
     expect(contentMatchesAnyTerm("unrelated text", terms)).toBe(false);
+  });
+});
+
+describe("groupMessagesByConversation", () => {
+  test("keeps messages holding any term, per conversation, and honors userOnly", () => {
+    const terms = parseSearchTerms("jon stewart crossfire");
+    const pool = [
+      { conversation_id: "a", role: "assistant", content: "Jon Stewart on Crossfire" },
+      { conversation_id: "a", role: "user", content: "unrelated" },
+      { conversation_id: "b", role: "user", content: "call Jon back" },
+    ];
+    const all = groupMessagesByConversation(pool, terms);
+    expect([...all.keys()]).toEqual(["a", "b"]);
+    expect(all.get("a")).toHaveLength(1);
+    expect([...groupMessagesByConversation(pool, terms, true).keys()]).toEqual(["b"]);
+    // b covers 1 of 3 words, below the half a three-word query needs.
+    expect(rankConversationsByCoverage(all, terms).map((r) => r.convId)).toEqual(["a"]);
   });
 });

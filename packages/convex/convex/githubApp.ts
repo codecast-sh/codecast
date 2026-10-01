@@ -6,7 +6,7 @@ import { syncPRCommits } from "./githubWebhooks";
 import type { QueryCtx } from "./functions";
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
-import { isTeamMember } from "./privacy";
+import { isTeamMember, resolveTeamForPath } from "./privacy";
 import { requireUser } from "./lib/auth";
 import { normalizeRepository, repositoryOwner } from "./lib/gitRefs";
 import {
@@ -730,6 +730,69 @@ export const moveInstallationToTeam = internalMutation({
   },
 });
 
+/**
+ * Take back what an installation routed to its team for repositories that no
+ * longer route there (routingTeamForInstallation): a person's repositories
+ * they never shared with the team. Webhook-born rows are deleted, since GitHub
+ * still holds them and sharing the repository brings them back through the
+ * backfill; a commit a session recorded keeps its row and drops only the team,
+ * so the session alone decides who reads it. Operator only: run it page by
+ * page, external_events, then commits, then pull_requests, until `done`.
+ */
+export const withdrawUnroutedRepositoryRows = internalMutation({
+  args: {
+    installation_id: v.number(),
+    table: v.union(v.literal("external_events"), v.literal("commits"), v.literal("pull_requests")),
+    cursor: v.optional(v.union(v.string(), v.null())),
+    dry: v.optional(v.boolean()),
+    page_size: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const installation = await ctx.db
+      .query("github_app_installations")
+      .withIndex("by_installation_id", (q) => q.eq("installation_id", args.installation_id))
+      .first();
+    if (!installation) throw new Error(`No installation ${args.installation_id}`);
+    const team = installation.team_id;
+    if (!team) throw new Error("Only a team installation routes rows to a team");
+
+    const page = await (ctx.db.query(args.table) as any)
+      .withIndex(MOVABLE_REPOSITORY_TABLES[args.table], (q: any) => q.eq("team_id", team))
+      .paginate({ cursor: args.cursor ?? null, numItems: args.page_size ?? 200 });
+    const routes = new Map<string, boolean>();
+    const withdrawn: Record<string, number> = {};
+    for (const row of page.page) {
+      if (!row.repository || !installationCoversRepo(installation, row.repository)) continue;
+      const key = normalizeRepository(row.repository);
+      if (!routes.has(key)) {
+        const routed = await routingTeamForInstallation(ctx, installation, row.repository);
+        routes.set(key, String(routed) === String(team));
+      }
+      if (routes.get(key)) continue;
+      withdrawn[key] = (withdrawn[key] ?? 0) + 1;
+      if (args.dry) continue;
+      if (args.table === "commits" && row.conversation_id) {
+        await ctx.db.patch(row._id, { team_id: undefined });
+      } else {
+        if (args.table === "pull_requests") await deletePullRequestDependents(ctx, row._id);
+        await ctx.db.delete(row._id);
+      }
+    }
+    return { withdrawn, done: page.isDone, cursor: page.continueCursor };
+  },
+});
+
+/** The rows that exist only beside one pull request. */
+async function deletePullRequestDependents(ctx: { db: any }, prId: Id<"pull_requests">) {
+  for (const table of ["pull_request_sessions", "reviews", "review_comments"] as const) {
+    const rows = await ctx.db
+      .query(table)
+      .withIndex("by_pull_request", (q: any) => q.eq("pull_request_id", prId))
+      .collect();
+    for (const row of rows) await ctx.db.delete(row._id);
+  }
+}
+
 // ── Resolving an installation for a repository ──
 //
 // An installation is a credential: resolving one is what lets a caller mint a
@@ -794,10 +857,63 @@ async function installationsCoveringRepo(
  * teams moves where NEW activity lands, and leaving the team ends it. An
  * owner in no team routes nowhere: the install still serves their own
  * imports and pushes, which name their workspace themselves.
+ *
+ * A PERSON'S repositories reach a team one at a time. A personal install, or a
+ * team install on a GitHub user account, covers whatever that person keeps on
+ * GitHub, side projects and private repositories included, so a repository
+ * routes to the team only when its owner shares it there through the same
+ * repository rule that shares their sessions (Settings › Sync). Without that
+ * rule it routes nowhere: no rows, no browsing, no listing for teammates.
  */
 export async function routingTeamForInstallation(
   ctx: { db: any },
-  installation: { _id?: any; installation_id: number; team_id?: Id<"teams">; scope_user_id?: Id<"users">; workspace?: string },
+  installation: InstallationScope,
+  repository: string,
+): Promise<Id<"teams"> | undefined> {
+  const team = await installationScopeTeam(ctx, installation);
+  const owner = installationOwner(installation);
+  if (!team || !owner) return team;
+  return (await ownerSharesRepository(ctx, owner, repository, team)) ? team : undefined;
+}
+
+type InstallationScope = {
+  _id?: any;
+  installation_id: number;
+  team_id?: Id<"teams">;
+  scope_user_id?: Id<"users">;
+  account_type?: "User" | "Organization";
+  installed_by_user_id?: Id<"users">;
+  workspace?: string;
+};
+
+/**
+ * The person whose repositories an installation covers, or undefined for an
+ * organization's team install. GitHub lets only the account's owner install
+ * the App on a user account, so its installer is that person.
+ */
+export function installationOwner(installation: InstallationScope): Id<"users"> | undefined {
+  if (installation.scope_user_id) return installation.scope_user_id;
+  return installation.account_type === "User" ? installation.installed_by_user_id : undefined;
+}
+
+/** Does `ownerId`'s repository rule share `repository` with `teamId`? */
+async function ownerSharesRepository(
+  ctx: { db: any },
+  ownerId: Id<"users">,
+  repository: string,
+  teamId: Id<"teams">,
+): Promise<boolean> {
+  const mappings = await ctx.db
+    .query("directory_team_mappings")
+    .withIndex("by_user_id", (q: any) => q.eq("user_id", ownerId))
+    .collect();
+  const share = resolveTeamForPath(mappings, undefined, undefined, undefined, normalizeRepository(repository));
+  return !share.isPrivate && !!share.teamId && String(share.teamId) === String(teamId);
+}
+
+async function installationScopeTeam(
+  ctx: { db: any },
+  installation: InstallationScope,
 ): Promise<Id<"teams"> | undefined> {
   if (!installation.team_id) {
     if (!installation.scope_user_id) return undefined;
@@ -816,14 +932,14 @@ export async function routingTeamForInstallation(
 
 const installationTeam = routingTeamForInstallation;
 
-/** The personal installation `userId` owns that covers `repository`, or null. */
+/** The installation on `userId`'s own repositories that covers `repository`, or null (installationOwner). */
 async function personalInstallationForRepo(
   ctx: QueryCtx,
   userId: Id<"users">,
   repository: string,
 ): Promise<Doc<"github_app_installations"> | null> {
   for (const installation of await installationsCoveringRepo(ctx, repository)) {
-    if (installation.scope_user_id && String(installation.scope_user_id) === String(userId)) return installation;
+    if (String(installationOwner(installation)) === String(userId)) return installation;
   }
   return null;
 }
@@ -844,7 +960,7 @@ export const getInstallationForRepoInTeam = internalQuery({
   },
   handler: async (ctx, args) => {
     for (const installation of await installationsCoveringRepo(ctx, args.repository)) {
-      const team = await installationTeam(ctx, installation);
+      const team = await installationTeam(ctx, installation, args.repository);
       if (team && String(team) === String(args.team_id)) return installation;
     }
     return null;
@@ -892,7 +1008,7 @@ export async function installationForRepo(
   const covering = await installationsCoveringRepo(ctx, args.repository);
   if (args.team_id) {
     for (const installation of covering) {
-      const team = await installationTeam(ctx, installation);
+      const team = await installationTeam(ctx, installation, args.repository);
       if (team && String(team) === String(args.team_id)) return installation;
     }
     return await personalInstallationForRepo(ctx, args.user_id, args.repository);
@@ -901,7 +1017,7 @@ export async function installationForRepo(
   const personal = await personalInstallationForRepo(ctx, args.user_id, args.repository);
   if (personal) return personal;
   for (const installation of covering) {
-    const team = await installationTeam(ctx, installation);
+    const team = await installationTeam(ctx, installation, args.repository);
     if (!team || !(await isTeamMember(ctx, args.user_id, team))) continue;
     return installation;
   }
@@ -1269,6 +1385,11 @@ export const fetchPull = action({
       user_id: userId,
     });
     if (!installation?.team_id) return { ok: false, reason: "no_team_installation" };
+    // The install's team takes the row only if the repository routes there
+    // (routingTeamForInstallation): a person's unshared repository does not.
+    if (!(await ctx.runQuery(internal.githubApp.getInstallationForRepoInTeam, { repository, team_id: installation.team_id }))) {
+      return { ok: false, reason: "no_team_installation" };
+    }
     const { token } = await ctx.runAction(internal.githubApp.getInstallationToken, {
       installation_id: installation.installation_id,
     });
@@ -1332,6 +1453,10 @@ export const backfillInstallationPulls = internalAction({
 
       let filesLeft = BACKFILL_FILES_CAP;
       repositoryLoop: for (const repository of repositories) {
+        // A person's repository comes in only once they share it with the team.
+        if (!(await ctx.runQuery(internal.githubApp.getInstallationForRepoInTeam, { repository, team_id: teamId }))) {
+          continue repositoryLoop;
+        }
         // One page of recently updated closed pull requests, then every open
         // page up to the cap; a short page ends the open scan.
         for (let i = 0; i <= BACKFILL_OPEN_PAGES; i++) {

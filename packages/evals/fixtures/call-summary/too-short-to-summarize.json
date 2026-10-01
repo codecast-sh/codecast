@@ -1,0 +1,23 @@
+{
+ "asOf": "2026-01-14T17:01:00.000Z",
+ "notes": "synthetic call under 40 words: prod skips the model call, so the replay is an empty pass graded by gates only",
+ "judge": null,
+ "snapshot": {
+  "kind": "huddle",
+  "started_at": 1768410000000,
+  "ended_at": 1768410060000,
+  "rolling": false,
+  "lines": [
+   {
+    "speaker": "Mara",
+    "text": "Can you hear me?",
+    "at": 1768410005000
+   },
+   {
+    "speaker": "Theo",
+    "text": "Yes, but I have to run. Let us talk tomorrow.",
+    "at": 1768410012000
+   }
+  ]
+ }
+}

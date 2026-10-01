@@ -245,7 +245,13 @@ describe("personal installations", () => {
   function ctxWithActive(installations: any[], owner: string, activeTeam: string | null) {
     const t = tables(installations);
     t.users = [{ _id: owner, active_team_id: activeTeam ?? undefined }];
+    t.directory_team_mappings = activeTeam ? [shareRule(owner, activeTeam)] : [];
     return { db: makeFakeDb(t) } as any;
+  }
+
+  /** The owner shares acme/widgets with `team` (Settings › Sync); without it nothing routes. */
+  function shareRule(owner: string, team: string) {
+    return { _id: `rule_${owner}`, user_id: owner, team_id: team, auto_share: true, path_prefix: "/code/widgets", repository: "acme/widgets" };
   }
 
   test("the owner resolves it with no team named", async () => {
@@ -284,6 +290,9 @@ describe("personal installations", () => {
     // Not any other team, even one the owner could see.
     const inB = await (getInstallationForRepoInTeam as any)._handler(c, { repository: "acme/widgets", team_id: TEAM_B });
     expect(inB).toBeNull();
+    // A repository the owner never shared with the team routes nowhere.
+    c.db._tables.directory_team_mappings.length = 0;
+    expect(await (getInstallationForRepoInTeam as any)._handler(c, { repository: "acme/widgets", team_id: TEAM_A })).toBeNull();
   });
 
   test("a member of the routing team reaches it in that team; a stranger does not", async () => {
@@ -294,6 +303,7 @@ describe("personal installations", () => {
     const t = tables([personalInstallation(USER_A)]);
     t.users = [{ _id: USER_A, active_team_id: TEAM_A }];
     t.team_memberships.push({ _id: "tm_b_in_a", user_id: USER_B, team_id: TEAM_A, role: "member", joined_at: 2 });
+    t.directory_team_mappings = [shareRule(USER_A, TEAM_A)];
     const both = { db: makeFakeDb(t) } as any;
     const asTeammate = await (getInstallationForRepo as any)._handler(both, { repository: "acme/widgets", user_id: USER_B, team_id: TEAM_A });
     expect(asTeammate?.installation_id).toBe(777);

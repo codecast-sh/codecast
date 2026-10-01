@@ -9,25 +9,27 @@ import { ProjectLeadMark } from "../charter/ProjectLeadChip";
 import Link from "next/link";
 import { Handle, Position, useStore, type NodeProps, type Node } from "@xyflow/react";
 import { ChevronDown, ChevronRight, GitFork, Layers, Shield, Crown, Check, Pencil, X, Clock, Sparkles, AlertTriangle } from "lucide-react";
-import { AgentIcon } from "../ConversationList";
 import { Avatar } from "../tasks/TaskCommentStream";
 import { compactAge } from "../../lib/threadState";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { cn } from "../../lib/utils";
+import { isHeadOfPeople } from "../../lib/retireRole";
 import type { OrgPerson, OrgRole, OrgSession, StateCounts, OrgParentRef } from "./orgTypes";
 import { ORG_STATE_ORDER } from "./orgTypes";
 import { CHANGE_KIND_WORD, GHOST, ORG_STATE_META, SEVERITY_META, standingLineOf } from "./orgMeta";
 import { RoleFace } from "./RoleFace";
 import { GhostTag } from "./ghostChrome";
 import { CHIP_STATUS, ghostFrameStyle } from "./orgMeta";
-import { RoleHoverCard, SessionGlyph } from "../identity";
+import { RoleHoverCard, SessionIdentityLine, SessionMark } from "../identity";
 import type { OrgStandingState } from "./orgTypes";
 import type { HealthFlag, OrgChangeStatus } from "./orgStaffingTypes";
-import { CHIEF_OF_STAFF_HANDLE } from "./orgStaffingTypes";
+import { HEAD_OF_PEOPLE_HANDLE } from "./orgStaffingTypes";
 import type { OrgGhostChip, OrgGhostMeta, OrgGhostMove, OrgGhostStub } from "./orgLayout";
 import { ORG_SIZES, seatRowHeight } from "./orgLayout";
 import { seatSentence } from "@codecast/shared/contracts/orgProposal";
 import { FLAG_LABEL } from "./staffingModel";
+import { RoleWeekBody } from "./orgFlowViz";
+import type { RoleFlow } from "./orgFlow";
 
 /** Five proportional segments in state order; an empty parent draws a hairline. */
 export function StateBar({ counts, className }: { counts: StateCounts; className?: string }) {
@@ -262,11 +264,14 @@ function Ports() {
 }
 
 function Frame({
-  children, selected, dropTarget, dragging, className, style, accent,
+  children, selected, dropTarget, dragging, className, style, accent, kind,
 }: {
   children: ReactNode; selected?: boolean; dropTarget?: boolean; dragging?: boolean; className?: string; style?: React.CSSProperties;
   /** The colour the selection ring and the drop halo take. */
   accent?: string;
+  /** What the card is, for the tours to point at (data-org-node): me, person,
+   *  head, role, session, ghost. */
+  kind?: string;
 }) {
   const ring = dropTarget
     ? `0 0 0 2px var(--sol-bg), 0 0 0 4px ${accent ?? "var(--sol-cyan)"}, 0 12px 28px -12px ${accent ?? "var(--sol-cyan)"}`
@@ -278,6 +283,7 @@ function Frame({
   return (
     <div
       className={cn("relative w-full h-full rounded-xl border transition-[box-shadow,transform] duration-150", className)}
+      data-org-node={kind}
       style={{
         background: "var(--sol-card)",
         borderColor: dropTarget ? (accent ?? "var(--sol-cyan)") : "color-mix(in srgb, var(--sol-border) 38%, transparent)",
@@ -363,7 +369,7 @@ export const PersonCard = memo(function PersonCard({ id, data }: NodeProps<Node<
   const { person: p, collapsed, hidden, overflow } = data;
   const action = actionOf(data);
   return (
-    <Frame selected={data.selected} dropTarget={data.dropTarget} accent="var(--sol-cyan)" className="px-3 py-2.5">
+    <Frame selected={data.selected} dropTarget={data.dropTarget} accent="var(--sol-cyan)" className="px-3 py-2.5" kind={p.is_me ? "me" : "person"}>
       <Ports />
       <FlagDots flags={data.flags} />
       {action && <GhostActions meta={action.meta} word={action.word} data={data} />}
@@ -449,6 +455,7 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
       dragging={data.dragging}
       accent="var(--sol-violet)"
       className="px-3 pt-3 pb-2.5"
+      kind={ghost && !ghost.solid ? "ghost" : isHeadOfPeople(r) ? "head" : "role"}
       style={ghost ? ghostFrameStyle(ghost) : {
         // A seat: a double rule at the top, like a name plate on a desk.
         borderTopWidth: 3,
@@ -537,7 +544,7 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
       <div className="mt-2 flex items-center gap-1 min-w-0 overflow-hidden">
         {noArea ? (
           <span className="text-[10px] px-1.5 h-[18px] inline-flex items-center rounded-md border" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)", color: "var(--sol-text-dim)" }}>
-            {r.handle === CHIEF_OF_STAFF_HANDLE ? "whole workspace" : "no area of its own"}
+            {r.handle === HEAD_OF_PEOPLE_HANDLE ? "whole workspace" : "no area of its own"}
           </span>
         ) : (
           <>
@@ -578,6 +585,24 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
 
 export type SessionNodeData = CardData & { session: OrgSession; parent: OrgParentRef };
 
+// ---------------------------------------------------------------- role, in health mode
+
+export type HealthRoleNodeData = { role: OrgRole; selected?: boolean; flow: RoleFlow; days: string[] };
+
+/** A role on the health map (HealthBoard): its week instead of its sessions.
+ *  The top rule takes the area's status colour, so a stuck or overloaded seat
+ *  reads across the whole chart before any number does. */
+export const HealthRoleCard = memo(function HealthRoleCard({ data }: NodeProps<Node<HealthRoleNodeData>>) {
+  const { flow: f } = data;
+  return (
+    <Frame selected={data.selected} accent={f.color} className="px-3 pt-3.5 pb-2.5" kind={isHeadOfPeople(data.role) ? "head" : "role"} style={{ borderTopWidth: 3, borderTopColor: f.color, opacity: data.role.status === "paused" ? 0.7 : 1 }}>
+      <Ports />
+      <span className="absolute -top-[11px] left-3 flex items-center h-[18px] px-1.5 rounded-md text-[10px] font-medium" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)", fontFamily: "var(--font-mono)" }}>@{data.role.handle}</span>
+      <RoleWeekBody f={f} days={data.days} />
+    </Frame>
+  );
+});
+
 export const SessionCard = memo(function SessionCard({ data }: NodeProps<Node<SessionNodeData>>) {
   const s = data.session;
   const st = ORG_STATE_META[s.state] ?? ORG_STATE_META.idle;
@@ -592,7 +617,7 @@ export const SessionCard = memo(function SessionCard({ data }: NodeProps<Node<Se
     // one names the session, line two the role it joins, in the ghost violet.
     const tagStatus = ghost.status === "failed" ? "failed" : ghost.solid ? "accepted" : "proposed";
     return (
-      <Frame selected={data.selected} accent="var(--sol-violet)" className="pl-3 pr-2.5 py-1.5 flex items-center gap-2" style={{ borderRadius: 10, ...ghostFrameStyle(ghost), borderTopWidth: 1.5 }}>
+      <Frame selected={data.selected} accent="var(--sol-violet)" className="pl-3 pr-2.5 py-1.5 flex items-center gap-2" style={{ borderRadius: 10, ...ghostFrameStyle(ghost), borderTopWidth: 1.5 }} kind={ghost.solid ? "session" : "ghost"}>
         <Ports />
         <GhostActions meta={ghost} word={CHANGE_KIND_WORD.adopt} data={data} />
         <span className="inline-flex items-center justify-center w-6 h-6 rounded-md shrink-0" style={{ background: GHOST.fill, color: GHOST.color, opacity: dim ? GHOST.opacity : 1 }}>
@@ -615,7 +640,7 @@ export const SessionCard = memo(function SessionCard({ data }: NodeProps<Node<Se
     );
   }
   return (
-    <Frame selected={data.selected} dragging={data.dragging} accent={st.color} className="pl-3.5 pr-2.5 py-1.5 flex items-center gap-2 overflow-hidden" style={{ borderRadius: 10 }}>
+    <Frame selected={data.selected} dragging={data.dragging} accent={st.color} className="pl-3.5 pr-2.5 py-1.5 flex items-center gap-2 overflow-hidden" style={{ borderRadius: 10 }} kind="session">
       <Ports />
       <span className="absolute left-0 top-0 bottom-0 w-[3px]" style={{ background: st.color, opacity: s.state === "idle" ? 0.4 : 1 }} aria-hidden />
       {s.state === "working" && (
@@ -623,16 +648,10 @@ export const SessionCard = memo(function SessionCard({ data }: NodeProps<Node<Se
       )}
       {/* Who the session is (session-characters.md S3), the agent brand on
           its corner; a session nobody personified keeps the brand alone. */}
-      <SessionGlyph
-        row={{ _id: s._id, title: s.title, character_avatar: s.character_avatar ?? null, character_name: s.character_name ?? null }}
-        size={20}
-        className="shrink-0"
-        badge={<AgentIcon agentType={s.agent_type} className="w-full h-full" />}
-        fallback={<AgentIcon agentType={s.agent_type} className="w-4 h-4" />}
-      />
+      <SessionMark session={s as any} size={20} iconClassName="w-4 h-4" className="shrink-0" />
       <div className="min-w-0 flex-1">
-        <div className="truncate text-[13px] leading-[1.25] font-medium" style={{ color: "var(--sol-text)" }} title={s.title}>
-          {s.title || "Untitled"}
+        <div className="flex min-w-0 text-[13px] leading-[1.25]" title={s.title}>
+          <SessionIdentityLine row={s as any} title={s.title || "Untitled"} titleClassName="font-medium" />
         </div>
         <div className="flex items-center gap-1.5 text-[9.5px] leading-tight mt-[1px]" style={{ color: "var(--sol-text-dim)", fontFamily: "var(--font-mono)" }}>
           <ShortId id={s.short_id} />

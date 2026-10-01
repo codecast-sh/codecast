@@ -129,7 +129,7 @@ describe("org.analysisInputs", () => {
       org_roles: [
         { _id: "org_roles_g", user_id: ME, team_id: TEAM, short_id: "or-1", name: "Growth lead", handle: "growth", status: "active", scope: { project_ids: [P], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, created_at: 1, updated_at: 1 },
         // A whole workspace role leads nothing, so it hides no gap.
-        { _id: "org_roles_c", user_id: ME, team_id: TEAM, short_id: "or-2", name: "Chief of Staff", handle: "chief-of-staff", status: "active", scope: { project_ids: [], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, created_at: 1, updated_at: 1 },
+        { _id: "org_roles_c", user_id: ME, team_id: TEAM, short_id: "or-2", name: "Head of People", handle: "head-of-people", status: "active", scope: { project_ids: [], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, created_at: 1, updated_at: 1 },
       ],
     });
     const { coverage } = await computeAnalysisInputs(ctxOf(db), ME as any, TEAM, NOW);
@@ -152,7 +152,7 @@ describe("org.analysisInputs", () => {
         { ...base, _id: "conversations_h1", short_id: "jxh1", title: "helper", started_at: NOW - 2 * D, parent_conversation_id: "conversations_old", is_subagent: true },
         { ...base, _id: "conversations_h2", short_id: "jxh2", title: "helper", started_at: NOW - D, parent_conversation_id: "conversations_old", is_subagent: true },
         { ...base, _id: "conversations_young", short_id: "jxyoung", title: "Fix a bug", started_at: NOW - 2 * D },
-        { ...base, _id: "conversations_standing", short_id: "jxstand", title: "Chief of Staff", started_at: NOW - 60 * D, standing_role_id: "org_roles_1", anchor_id: "anchors_1" },
+        { ...base, _id: "conversations_standing", short_id: "jxstand", title: "Head of People", started_at: NOW - 60 * D, standing_role_id: "org_roles_1", anchor_id: "anchors_1" },
       ],
       agent_tasks: [
         { _id: "agent_tasks_1", user_id: ME, short_id: "tr-886", title: "Daily growth run", originating_conversation_id: "conversations_old", schedule_type: "recurring", interval_ms: D, status: "scheduled" },

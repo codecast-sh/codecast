@@ -8,21 +8,21 @@ import { isNonTabRoute } from "./tabRoutes";
 import { ORG_STATE_META } from "../components/org/orgMeta";
 import type { FeedKind } from "../components/org/scope/scopeTypes";
 import type { OrgAnchor, OrgRole, OrgTree } from "../components/org/orgTypes";
-import { CHIEF_OF_STAFF_HANDLE } from "../components/org/orgStaffingTypes";
+import { HEAD_OF_PEOPLE_HANDLE } from "../components/org/orgStaffingTypes";
 
 /** The seat a scope page opens on, by the id in its address: a role by short
  *  id or row id, or "workspace" for the root. `anchor` is the seat's anchor
  *  row. The root's standing agent is the workspace anchor no role holds, else
- *  the Chief of Staff's seat (org-staffing.md S16: the workspace's one root
- *  agent is the chief once seated), so the root never offers to create a
+ *  the Head of People's seat (org-staffing.md S16: the workspace's one root
+ *  agent is the Head of People once seated), so the root never offers to create a
  *  second anchor beside the one it has. */
 export function scopeSeatOf(tree: OrgTree | null, id: string): { role: OrgRole | null; anchor: OrgAnchor | null } {
   if (!tree) return { role: null, anchor: null };
   const role = id === "workspace" ? null : tree.roles.find((r) => r.short_id === id || r._id === id) ?? null;
   if (role) return { role, anchor: role.anchor_id ? tree.anchors.find((a) => a.anchor_id === role.anchor_id) ?? null : null };
   const roleAnchorIds = new Set(tree.roles.map((r) => r.anchor_id).filter(Boolean));
-  const chief = tree.roles.find((r) => r.handle === CHIEF_OF_STAFF_HANDLE && r.status !== "retired" && r.anchor_id);
-  return { role: null, anchor: tree.anchors.find((a) => !roleAnchorIds.has(a.anchor_id)) ?? (chief ? tree.anchors.find((a) => a.anchor_id === chief.anchor_id) ?? null : null) };
+  const head = tree.roles.find((r) => r.handle === HEAD_OF_PEOPLE_HANDLE && r.status !== "retired" && r.anchor_id);
+  return { role: null, anchor: tree.anchors.find((a) => !roleAnchorIds.has(a.anchor_id)) ?? (head ? tree.anchors.find((a) => a.anchor_id === head.anchor_id) ?? null : null) };
 }
 
 /** Who may reshape a role: an admin of the workspace (every personal
@@ -102,7 +102,7 @@ export function feedLinkIsServerOwned(href: string): boolean {
   return isNonTabRoute(href);
 }
 
-/** The page for the workspace, or for the Chief of Staff with no scope, names
+/** The page for the workspace, or for the Head of People with no scope, names
  *  every project (org-staffing.md S26). Any other role reads its own scope,
  *  and one with none looks after no work: the server resolves it to nothing. */
 export type ScopeQueryRef = { role_id: string } | { scope: { project_ids: string[]; plan_ids: string[] }; team_id?: string };

@@ -25,9 +25,9 @@ import { internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 import { requireUser } from "./lib/auth";
-import { canAccessCommit, canAccessConversation, canAccessPullRequest, canAccessTask, isTeamMember } from "./lib/access";
-import { conversationFromSessionTrailer, extractSessionTrailer, normalizeRepository, repositoryOwner } from "./lib/gitRefs";
-import { installationCoversRepo, routingTeamForInstallation } from "./githubApp";
+import { activeTeamMembershipFor, canAccessCommit, canAccessConversation, canAccessPullRequest, canAccessTask, isTeamMember } from "./lib/access";
+import { conversationFromSessionTrailer, extractSessionTrailer, isHarnessScratch, normalizeRepository, repositoryOwner } from "./lib/gitRefs";
+import { installationCoversRepo, installationOwner, routingTeamForInstallation } from "./githubApp";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { resolveCreationPrivacy } from "./privacy";
 import { applyCommitFilesTo } from "./commits";
@@ -87,8 +87,12 @@ async function installationForUser(
     if (!installationCoversRepo(candidate, repository)) continue;
     // Browsing stamps every cached row with a team, so an installation admits
     // a viewer through the team it routes to (githubApp.routingTeamForInstallation):
-    // its own team, or for a personal install the owner's current team.
-    const team = await routingTeamForInstallation(ctx, candidate);
+    // its own team, or for a personal install the owner's current team. The
+    // person whose repository it is browses it wherever they are working.
+    const routed = await routingTeamForInstallation(ctx, candidate, repository);
+    const team = routed ?? (String(installationOwner(candidate)) === String(userId)
+      ? (await activeTeamMembershipFor(ctx as any, userId))?.teamId
+      : undefined);
     if (!team || !(await isTeamMember(ctx, userId, team))) continue;
     return { team_id: team, installation_id: candidate.installation_id };
   }
@@ -117,7 +121,7 @@ async function installationForRepository(
 ): Promise<{ team_id: Id<"teams">; installation_id: number } | null> {
   for (const candidate of await installationsForOwner(ctx, repository)) {
     if (!installationCoversRepo(candidate, repository)) continue;
-    const team = await routingTeamForInstallation(ctx, candidate);
+    const team = await routingTeamForInstallation(ctx, candidate, repository);
     if (!team) continue;
     return { team_id: team, installation_id: candidate.installation_id };
   }
@@ -171,13 +175,24 @@ async function repositoriesForUser(ctx: { db: any }, userId: Id<"users">) {
     .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
     .collect();
 
+  // One row per team and repository: a repository two of the viewer's teams
+  // reach lists under each, so every workspace shows what it holds. Keyed by
+  // the canonical spelling so a display-case entry and the rows activity
+  // wrote are one repository; the first spelling seen is what is shown.
   const found = new Map<string, { repository: string; team_id: Id<"teams">; installed: boolean }>();
-  const addInstallation = (installation: any, teamId: Id<"teams">) => {
+  const add = (repository: string, team_id: Id<"teams">, installed: boolean) => {
+    const key = `${team_id}|${normalizeRepository(repository)}`;
+    if (!normalizeRepository(repository) || found.has(key)) return;
+    found.set(key, { repository, team_id, installed });
+  };
+  // Each installed repository lists under the team it routes to (a person's
+  // repository only where they share it).
+  const addInstallation = async (installation: any, viewerTeam?: Id<"teams">) => {
     if (installation.suspended_at) return;
-    // Keyed by the canonical spelling so a display-case entry and the rows
-    // activity wrote are one repository; the display name is what is shown.
     for (const repo of installation.repositories ?? []) {
-      found.set(normalizeRepository(repo.full_name), { repository: repo.full_name, team_id: teamId, installed: true });
+      const team = await routingTeamForInstallation(ctx, installation, repo.full_name);
+      if (!team || (viewerTeam && String(team) !== String(viewerTeam))) continue;
+      add(repo.full_name, team, true);
     }
   };
   // The viewer's personal installs list under the team they route to.
@@ -185,17 +200,14 @@ async function repositoriesForUser(ctx: { db: any }, userId: Id<"users">) {
     .query("github_app_installations")
     .withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", userId))
     .collect();
-  for (const installation of personal) {
-    const team = await routingTeamForInstallation(ctx, installation);
-    if (team) addInstallation(installation, team);
-  }
+  for (const installation of personal) await addInstallation(installation);
   for (const membership of memberships) {
     const installations = await ctx.db
       .query("github_app_installations")
       .withIndex("by_team_id", (q: any) => q.eq("team_id", membership.team_id))
       .collect();
 
-    for (const installation of installations) addInstallation(installation, membership.team_id);
+    for (const installation of installations) await addInstallation(installation, membership.team_id);
 
     // Repositories teammates publish from their own checkouts need no
     // installation at all; they are browsable from the cache the daemon fills.
@@ -204,8 +216,7 @@ async function repositoriesForUser(ctx: { db: any }, userId: Id<"users">) {
       .withIndex("by_team_id", (q: any) => q.eq("team_id", membership.team_id))
       .collect();
     for (const source of sources) {
-      if (!source.enabled || found.has(source.repository)) continue;
-      found.set(source.repository, { repository: source.repository, team_id: membership.team_id, installed: false });
+      if (source.enabled) add(source.repository, membership.team_id, false);
     }
 
     // An installation with access to every repository lists none, so the
@@ -220,11 +231,7 @@ async function repositoriesForUser(ctx: { db: any }, userId: Id<"users">) {
       .order("desc")
       .take(500);
 
-    for (const row of [...prs, ...commits]) {
-      const key = normalizeRepository(row.repository);
-      if (!key || found.has(key)) continue;
-      found.set(key, { repository: row.repository, team_id: membership.team_id, installed: false });
-    }
+    for (const row of [...prs, ...commits]) add(row.repository, membership.team_id, false);
   }
   return [...found.values()].sort((a, b) => a.repository.localeCompare(b.repository));
 }
@@ -662,7 +669,7 @@ export const ingestLocal = mutation({
     let created = 0;
     for (const commit of args.commits ?? []) {
       const { conversation_id: claimed, ...fields } = commit;
-      const result = await upsertLocalCommit(ctx, { userId, teamId, repository, commit: fields, claimedConversationId: claimed });
+      const result = await upsertLocalCommit(ctx, { userId, teamId, repository, root: args.root, commit: fields, claimedConversationId: claimed });
       if (result.created) created++;
     }
     return { published: true, rows: args.rows.length, commits_created: created };
@@ -694,10 +701,14 @@ export type LocalCommitFields = {
  * row's current session is the same person's). Without one, a session claimed by the daemon is written only
  * when it belongs to the caller; a row that had no session learns one, a row
  * that has one keeps it.
+ *
+ * A commit seen only in a harness scratch checkout (isHarnessScratch) links
+ * to no session. Seen again on a real branch, it takes that branch and links
+ * the ordinary way.
  */
 export async function upsertLocalCommit(
   ctx: { db: any },
-  args: { userId: Id<"users">; teamId: Id<"teams">; repository: string; commit: LocalCommitFields; claimedConversationId?: string },
+  args: { userId: Id<"users">; teamId: Id<"teams">; repository: string; root?: string; commit: LocalCommitFields; claimedConversationId?: string },
 ): Promise<{ commit_id: Id<"commits">; created: boolean; conversation_id?: Id<"conversations"> }> {
   const repository = normalizeRepository(args.repository);
   // numstat carries no status; the commits row wants GitHub's file shape.
@@ -707,13 +718,14 @@ export async function upsertLocalCommit(
     .query("commits")
     .withIndex("by_sha", (q: any) => q.eq("sha", args.commit.sha))
     .first();
-  const fromTrailer = await conversationFromSessionTrailer(ctx, args.commit.message, {
+  const scratch = isHarnessScratch({ branch: args.commit.branch, root: args.root });
+  const fromTrailer = scratch ? undefined : await conversationFromSessionTrailer(ctx, args.commit.message, {
     userId: args.userId,
     teamId: args.teamId,
     current: dup?.conversation_id,
   });
   let conversationId: Id<"conversations"> | undefined = fromTrailer;
-  if (!conversationId && args.claimedConversationId) {
+  if (!scratch && !conversationId && args.claimedConversationId) {
     const id = ctx.db.normalizeId("conversations", args.claimedConversationId);
     const conv = id ? await ctx.db.get(id) : null;
     if (conv && conv.user_id === args.userId) conversationId = id;
@@ -724,6 +736,7 @@ export async function upsertLocalCommit(
     const patch: Record<string, any> = {};
     if (fromTrailer ? dup.conversation_id !== fromTrailer : conversationId && !dup.conversation_id) patch.conversation_id = conversationId;
     if (!dup.files?.length && files?.length) patch.files = files;
+    if (!scratch && args.commit.branch && isHarnessScratch({ branch: dup.branch })) patch.branch = args.commit.branch;
     if (Object.keys(patch).length) await ctx.db.patch(dup._id, patch);
     return { commit_id: dup._id, created: false, conversation_id: fromTrailer ?? dup.conversation_id ?? conversationId };
   }

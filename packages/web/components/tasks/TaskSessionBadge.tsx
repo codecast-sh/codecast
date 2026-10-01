@@ -1,11 +1,12 @@
 "use client";
 import { ActiveSessionBadge } from "../LivenessDot";
-import { useInboxStore, type TaskItem } from "../../store/inboxStore";
+import type { TaskItem } from "../../store/inboxStore";
+import { useTaskActiveSession } from "./taskActiveSession";
 
 // The one session a task row points at: the live one when a session is
 // working it, else the session the task came from. Clicking opens it beside.
 export function TaskSessionBadge({ task, compact, className }: { task: TaskItem; compact?: boolean; className?: string }) {
-  const activeSession = useInboxStore((s) => s.taskActiveSessions[task._id]) ?? null;
+  const activeSession = useTaskActiveSession(task._id);
   if (activeSession) return <ActiveSessionBadge session={activeSession} compact={compact} className={className} />;
   const origin = task.origin_session;
   if (!origin) return null;

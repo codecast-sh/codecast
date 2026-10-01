@@ -1557,7 +1557,7 @@ const assigneeNameOf = (info: AssigneeInfo | undefined): string | undefined =>
   !info ? undefined : info.kind === "role" ? `@${info.handle}` : info.name;
 
 // Display names for a set of assignee values; see assigneeInfoFor.
-async function assigneeNamesFor(ctx: any, assignees: (string | undefined)[]): Promise<Record<string, string>> {
+export async function assigneeNamesFor(ctx: any, assignees: (string | undefined)[]): Promise<Record<string, string>> {
   const info = await assigneeInfoFor(ctx, assignees);
   return Object.fromEntries(Object.entries(info).map(([id, i]) => [id, assigneeNameOf(i)!]));
 }
@@ -4681,5 +4681,28 @@ export const getDependencyChain = query({
       critical_path: criticalPath,
       cycles,
     };
+  },
+});
+
+// Support path: delete a task outright with its comments and history
+// (packages/convex/run.sh). The product's own verb is "dropped"; this is for a
+// row its owner wants gone from the database.
+export const adminDeleteTask = internalMutation({
+  args: { short_id: v.string() },
+  handler: async (ctx, args) => {
+    const task = await ctx.db
+      .query("tasks")
+      .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
+      .first();
+    if (!task) return { found: false };
+    for (const table of ["task_comments", "task_history"] as const) {
+      const rows = await ctx.db
+        .query(table)
+        .withIndex("by_task_id", (q: any) => q.eq("task_id", task._id))
+        .collect();
+      for (const row of rows) await ctx.db.delete(row._id);
+    }
+    await ctx.db.delete(task._id);
+    return { found: true, title: task.title, user_id: task.user_id, created_from: task.created_from_conversation ?? null, conversation_ids: task.conversation_ids ?? [] };
   },
 });

@@ -2,7 +2,7 @@ import { internalMutation, mutation, query } from "./functions";
 import { internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { applyPause, applyResume, applyRunNow, applyTaskUpdate, cancelTasksOriginatingFrom, ensureRoleEventTriggers, insertTask } from "./agentTasks";
-import { CHIEF_OF_STAFF_JOB } from "@codecast/shared/contracts/chiefOfStaffPrompt";
+import { HEAD_OF_PEOPLE_JOB } from "@codecast/shared/contracts/headOfPeoplePrompt";
 import { defaultAvatarFor, isAvatarKey } from "@codecast/shared/contracts/orgAvatars";
 import { ORG_AUTHORITY_KINDS, authorityWords, orgTenureError, type OrgAuthorityGrant } from "@codecast/shared/contracts/orgProposal";
 import { intervalMs } from "@codecast/shared/contracts/orgTemplateManifest";
@@ -12,7 +12,7 @@ import { requireWorkspaceFeature } from "./lib/teamFeatureGuard";
 import { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { nextShortId } from "./counters";
-import { CHIEF_OF_STAFF_HANDLE, chiefOfStaffIn, liveRolesByHandle, requireRole, resolveRoleRef, rolesInBoundary, userCanAccessRole, userCanAdminRole } from "./lib/orgAccess";
+import { HEAD_OF_PEOPLE_HANDLE, headOfPeopleIn, liveRolesByHandle, requireRole, resolveRoleRef, rolesInBoundary, userCanAccessRole, userCanAdminRole } from "./lib/orgAccess";
 import { performRehomeSessions, performReparentSession, personName, reportsToLine, roleMayHoldSession } from "./sessionOwnership";
 import { sessionsOwnedBy } from "./lib/orgOwnership";
 import { notifySessionAssigned, notifySessionOwnershipChanged } from "./sessionAssignmentNotifications";
@@ -82,7 +82,7 @@ function requireHandle(handle: string): string {
 // The role lookup and its gate live in lib/orgAccess so the session
 // reparent core (sessionOwnership.ts) can use them without importing this
 // module. Re-exported for the callers that read them from here.
-export { CHIEF_OF_STAFF_HANDLE, resolveRoleRef, rolesInBoundary };
+export { HEAD_OF_PEOPLE_HANDLE, resolveRoleRef, rolesInBoundary };
 
 // Two rows share an access boundary when they are the same team role space or
 // the same personal space. A role may only report to a role in its boundary.
@@ -361,7 +361,7 @@ async function performCreateRoleCore(
     review_backend: normalizeBackend(args.review_backend),
     // The switch (org-staffing.md S23.1): on for every role a person hires,
     // off for the root, which proposes and never applies (S12).
-    trust: trustForSwitch(handle !== CHIEF_OF_STAFF_HANDLE),
+    trust: trustForSwitch(handle !== HEAD_OF_PEOPLE_HANDLE),
     caps: { ...DEFAULT_CAPS },
     tenure,
     avatar,
@@ -414,8 +414,8 @@ async function updateRole(
     const handle = requireHandle(args.handle);
     // The switch ceiling and the one seat per company rule both key on the
     // handle (org-staffing.md S6), so the seat keeps it: retire or hire.
-    if (handle !== role.handle && (role.handle === CHIEF_OF_STAFF_HANDLE || handle === CHIEF_OF_STAFF_HANDLE)) {
-      throw new Error("The Chief of Staff keeps its handle: retire it with cast role retire, or hire one with cast org staff");
+    if (handle !== role.handle && (role.handle === HEAD_OF_PEOPLE_HANDLE || handle === HEAD_OF_PEOPLE_HANDLE)) {
+      throw new Error("The Head of People keeps its handle: retire it with cast role retire, or hire one with cast org staff");
     }
     if (handle !== role.handle && (await handleTaken(ctx, role, handle, role._id))) {
       throw new Error(`Handle @${handle} is already taken in this workspace`);
@@ -543,11 +543,11 @@ async function performRetireRoleCore(ctx: any, userId: Id<"users">, args: Retire
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   if (role.status === "retired") return { ...role, cleared: 0, sessions_released: 0, rehomed: 0, interrupted: 0, cancelled_triggers: 0, standing_session: "kept" };
   const now = Date.now();
-  // Unseating the chief of staff (org-staffing.md S16) keeps the workspace's
+  // Unseating the head of people (org-staffing.md S16) keeps the workspace's
   // standing agent by default: the person is never left without the
   // assistant they had. Any other seat goes down with its role unless asked
   // to stay.
-  const keepStanding = (args.standing_session ?? (role.handle === CHIEF_OF_STAFF_HANDLE ? "keep" : "retire")) === "keep";
+  const keepStanding = (args.standing_session ?? (role.handle === HEAD_OF_PEOPLE_HANDLE ? "keep" : "retire")) === "keep";
   // Live hands hear it first (before org_role_id is cleared, or handsOf finds
   // nothing): stop at a safe point; the session now reports to its owner.
   const interrupted = await interruptHands(ctx, role, userId, "role-retired",
@@ -624,7 +624,7 @@ async function performRetireRoleCore(ctx: any, userId: Id<"users">, args: Retire
   await ctx.db.patch(role._id, { status: "retired", updated_at: now });
   const retired = await ctx.db.get(role._id);
   // The area falls back (org-staffing.md S26): a released session whose work
-  // another live role now owns by the one rule goes to it, the chief of staff
+  // another live role now owns by the one rule goes to it, the head of people
   // for what no narrower role covers, the way a lead's gain took it; the rest
   // stay with their owners.
   const remaining = args.fall_back === false ? [] : await rolesInBoundary(ctx, role);
@@ -1064,13 +1064,13 @@ export async function refuseUnlessHuman(ctx: any, args: { api_token?: string; fr
 }
 
 // Scope is opt in (org-staffing.md S26): a role that names no projects and no
-// plans looks after no area, and only the Chief of Staff then stands for the
+// plans looks after no area, and only the Head of People then stands for the
 // whole workspace.
 export function charterTemplate(role: { name: string; handle: string; charter?: string | null }, scopeNames: string[], parentName: string): string {
   const job = scopeNames.length
     ? `${role.name} looks after the work in its area on behalf of ${parentName}: it keeps the area's plans and tasks moving, reports what changed and why, and raises what needs a person with a recommendation.`
     : `${role.name} works on behalf of ${parentName}: it runs its routine, answers what it is asked, and raises what needs a person with a recommendation.`;
-  const none = role.handle === CHIEF_OF_STAFF_HANDLE ? `- the whole workspace, apart from what a lead looks after` : `- no area of its own`;
+  const none = role.handle === HEAD_OF_PEOPLE_HANDLE ? `- the whole workspace, apart from what a lead looks after` : `- no area of its own`;
   return [
     `# Charter: ${role.name} (@${role.handle})`,
     ``,
@@ -1198,20 +1198,20 @@ export const provision = mutation({
   handler: async (ctx, { api_token, ...args }) => performProvisionRole(ctx, await requireCaller(ctx, api_token), args),
 });
 
-// ── The Chief of Staff (docs/architecture/org-staffing.md S6) ────────────────
+// ── The Head of People (docs/architecture/org-staffing.md S6) ────────────────
 //
-// One role per company, handle `chief-of-staff`, scope the whole company,
+// One role per company, handle `head-of-people`, scope the whole company,
 // its switch off and never on: it reads how work flows, proposes the
 // chart, and applies nothing. `performStaff` creates it, provisions or adopts
 // its standing session, arms the weekly company review on that session and
 // runs the first review at once. Idempotent per company.
 
-export const CHIEF_OF_STAFF_NAME = "Chief of Staff";
+export const HEAD_OF_PEOPLE_NAME = "Head of People";
 export { COMPANY_REVIEW_TITLE, COMPANY_REVIEW_EVERY_MS, COMPANY_REVIEW_PROMPT, ROLE_CHECK_EVERY_MS, ROLE_CHECK_PROMPT, roleRoutineFor };
 
-/** The chief of staff's charter: its job, in the words of its own prompt. */
-export function chiefOfStaffCharter(person: string): string {
-  return CHIEF_OF_STAFF_JOB.split("{person}").join(person);
+/** The head of people's charter: its job, in the words of its own prompt. */
+export function headOfPeopleCharter(person: string): string {
+  return HEAD_OF_PEOPLE_JOB.split("{person}").join(person);
 }
 
 // The seating note (org-staffing.md S16): one message from the person who
@@ -1249,7 +1249,7 @@ export async function ensureRoleRoutine(ctx: Ctx, role: any, standing: any, ever
   // cancelled, whatever door arms the role again.
   const found = await findRoleRoutineInAnyStatus(ctx, role, standing);
   const live = found && isLiveTrigger(found) ? await refreshRoutine(ctx, role, standing, found) : null;
-  // The route up is armed with the routine (S28), and the Chief of Staff's
+  // The route up is armed with the routine (S28), and the Head of People's
   // area change trigger with it (S29), so every door that arms one arms all.
   if (found && !live) {
     await ensureRoleEventTriggers(ctx, role, standing);
@@ -1298,29 +1298,29 @@ export async function performStaff(
   previous_standing: { conversation_id: Id<"conversations">; short_id?: string } | null;
 }> {
   const boundary = args.team_id ? { team_id: args.team_id } : { scope_user_id: userId };
-  const existing = (await rolesInBoundary(ctx, boundary)).find((r) => r.handle === CHIEF_OF_STAFF_HANDLE);
+  const existing = (await rolesInBoundary(ctx, boundary)).find((r) => r.handle === HEAD_OF_PEOPLE_HANDLE);
   const role = existing ?? await performCreateRole(ctx, userId, {
-    name: CHIEF_OF_STAFF_NAME,
-    handle: CHIEF_OF_STAFF_HANDLE,
+    name: HEAD_OF_PEOPLE_NAME,
+    handle: HEAD_OF_PEOPLE_HANDLE,
     team_id: args.team_id,
     reports_to: { kind: "user", user_id: args.reports_to ?? userId },
-    charter: chiefOfStaffCharter(personName(await ctx.db.get(args.reports_to ?? userId))),
+    charter: headOfPeopleCharter(personName(await ctx.db.get(args.reports_to ?? userId))),
   });
   const created = !existing;
   // A seat that already stands is left as it is: the standing session, its
   // routine and its first review happened once. Only a seat with no session
   // yet (created earlier without provisioning) is provisioned now.
   // A seat whose anchor was decommissioned on its own (`cast anchor rm`) is
-  // empty again: staff fills it rather than reporting a dead chief as hired.
+  // empty again: staff fills it rather than reporting a dead head as hired.
   const seatAnchor = existing?.anchor_id ? await ctx.db.get(existing.anchor_id) : null;
   const already_existed = !!seatAnchor && seatAnchor.status !== "decommissioned";
   if (already_existed && args.adopt_conversation_id) {
     const named = await findConversationByAnyRefWhere(ctx, args.adopt_conversation_id, async () => true);
     if (!named || String(named._id) !== String(seatAnchor.conversation_id)) {
-      throw new Error("The Chief of Staff already runs in another session; retire it first to use this one");
+      throw new Error("The Head of People already runs in another session; retire it first to use this one");
     }
   }
-  // The chief of staff IS the workspace's standing agent (S12, S16). With a
+  // The head of people IS the workspace's standing agent (S12, S16). With a
   // standing agent already in the workspace and no session named, the
   // default seats it: nothing restarts, the anchors row gains the role
   // pointer. `fresh` starts a new session and retires the old agent in the
@@ -1329,7 +1329,7 @@ export async function performStaff(
   const anchor = already_existed ? null : await workspaceAnchorFor(ctx, boundary);
   const seat: SeatChoice = args.seat ?? (args.adopt_conversation_id || anchor ? "existing" : "fresh");
   if (already_existed && args.seat && args.seat !== "existing") {
-    throw new Error("The Chief of Staff already has a session; retire it first to start a fresh one");
+    throw new Error("The Head of People already has a session; retire it first to start a fresh one");
   }
   let previousStanding: { conversation_id: Id<"conversations">; short_id?: string } | null = null;
   let adoptId = args.adopt_conversation_id;
@@ -1388,18 +1388,18 @@ export async function performStaff(
   };
 }
 
-// One-time backfill (S16): a chief seated before seating learned to explain
+// One-time backfill (S16): a Head of People seated before seating learned to explain
 // itself sits in a thread still titled after the anchor, with no note. Bring
 // every such seat up to the shipped behaviour: keep the current title in
 // seat_previous, retitle after the role, and post the seating note from the
 // role's host. Idempotent: a thread that carries seat_previous is skipped.
-// Run once on prod: `npx convex run orgRoles:backfillSeatedChiefs '{"dry_run":true}'`, then without.
-export async function performBackfillSeatedChiefs(ctx: any, dryRun: boolean): Promise<{ dry_run: boolean; updated: Array<{ role: string; conversation: string | null; previous_title: string | null; title: string; workspace: string }>; skipped: number }> {
+// Run once on prod: `npx convex run orgRoles:backfillSeatedHeads '{"dry_run":true}'`, then without.
+export async function performBackfillSeatedHeads(ctx: any, dryRun: boolean): Promise<{ dry_run: boolean; updated: Array<{ role: string; conversation: string | null; previous_title: string | null; title: string; workspace: string }>; skipped: number }> {
   const roles: any[] = await ctx.db.query("org_roles").collect();
   const updated: Array<{ role: string; conversation: string | null; previous_title: string | null; title: string; workspace: string }> = [];
   let skipped = 0;
   for (const role of roles) {
-    if (role.handle !== CHIEF_OF_STAFF_HANDLE || role.status === "retired" || !role.anchor_id) continue;
+    if (role.handle !== HEAD_OF_PEOPLE_HANDLE || role.status === "retired" || !role.anchor_id) continue;
     const standing = await standingConversationOf(ctx, role);
     // Refresh only: a routine a person cancelled stays cancelled.
     if (standing && !dryRun) await roleRoutineOf(ctx, role, standing);
@@ -1421,19 +1421,19 @@ export async function performBackfillSeatedChiefs(ctx: any, dryRun: boolean): Pr
   return { dry_run: dryRun, updated, skipped };
 }
 
-export const backfillSeatedChiefs = internalMutation({
+export const backfillSeatedHeads = internalMutation({
   args: { dry_run: v.optional(v.boolean()) },
-  handler: async (ctx, args) => performBackfillSeatedChiefs(ctx, !!args.dry_run),
+  handler: async (ctx, args) => performBackfillSeatedHeads(ctx, !!args.dry_run),
 });
 
-// What each seated chief's thread looks like now: for verifying the backfill.
-export const seatedChiefs = internalQuery({
+// What each seated Head of People's thread looks like now: for verifying the backfill.
+export const seatedHeads = internalQuery({
   args: {},
   handler: async (ctx) => {
     const roles: any[] = await ctx.db.query("org_roles").collect();
     const out: any[] = [];
     for (const role of roles) {
-      if (role.handle !== CHIEF_OF_STAFF_HANDLE || role.status === "retired") continue;
+      if (role.handle !== HEAD_OF_PEOPLE_HANDLE || role.status === "retired") continue;
       const standing = await standingConversationOf(ctx, role);
       const pending: any[] = standing
         ? await ctx.db.query("pending_messages").withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", standing._id).eq("status", "pending")).collect()
@@ -1611,7 +1611,7 @@ async function performSetTrustCore(ctx: any, userId: Id<"users">, args: SetTrust
   if (on === null) throw new Error(`Say on or off${args.trust ? ` (not "${args.trust}")` : ""}: cast role autonomy @${role.handle} on|off`);
   // The root proposes and applies nothing (org-staffing.md S12, S23.1): its
   // switch stays off.
-  if (role.handle === CHIEF_OF_STAFF_HANDLE && on) throw new Error("The workspace's root role does not start work on its own: it proposes, a person applies");
+  if (role.handle === HEAD_OF_PEOPLE_HANDLE && on) throw new Error("The workspace's root role does not start work on its own: it proposes, a person applies");
   const previous = trustOf(role);
   const previousOn = roleStartsOnItsOwn(role);
   const trust = trustForSwitch(on);

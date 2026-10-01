@@ -44,7 +44,7 @@ const act: <T>(cb: () => T | Promise<T>) => Promise<T> = (React as any).act;
 const SEAT = "seat0000000000000000000000000000";
 const HAND = "hand0000000000000000000000000000";
 const STRAY = "stray000000000000000000000000000";
-const ROLE = "role-chief";
+const ROLE = "role-head";
 const env = { qs: "" };
 
 // Only the transports and the heavy leaves are faked; the inbox page, the
@@ -114,12 +114,12 @@ mock.module("../org/scope/ScopePage", () => ({
 const { useInboxStore } = await import("../../store/inboxStore");
 const { createRoot } = await import("react-dom/client");
 
-const roleSnapshot = { _id: ROLE, name: "Chief of Staff", handle: "chief-of-staff", avatar: null };
+const roleSnapshot = { _id: ROLE, name: "Head of People", handle: "head-of-people", avatar: null };
 const row = (id: string, extra: Record<string, unknown>) => ({ _id: id, title: id, started_at: 1, updated_at: Date.now(), message_count: 3, is_idle: true, agent_type: "claude_code", ...extra });
 const seed = (rows: Record<string, Record<string, unknown>> = {}) => useInboxStore.setState({
   clientStateInitialized: true,
   showMySessions: false,
-  orgTree: { roles: [{ _id: ROLE, short_id: "or-10", name: "Chief of Staff", handle: "chief-of-staff", status: "active" }] } as any,
+  orgTree: { roles: [{ _id: ROLE, short_id: "or-10", name: "Head of People", handle: "head-of-people", status: "active" }] } as any,
   sessions: {
     [SEAT]: row(SEAT, { standing_role_id: ROLE, role: roleSnapshot }),
     [HAND]: row(HAND, { org_role_id: ROLE, role: roleSnapshot }),

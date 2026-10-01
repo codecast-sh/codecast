@@ -1,10 +1,10 @@
-# Staffing: the company model, the chief of staff, and proposals on the chart
+# Staffing: the company model, the head of people, and proposals on the chart
 
 Builds on org-roles.md, org-roles-standing.md, org-init.md, scopes-and-feed.md.
 The org already runs. This layer designs it and keeps it flowing: an agent reads
 how work moves, proposes the organization as ghost nodes on the org page, and a
 person accepts, edits or skips each change. The same agent can hold a standing
-role, the Chief of Staff, with a routine that reviews the company on a cadence.
+role, the Head of People, with a routine that reviews the company on a cadence.
 
 ## S1. The company model
 
@@ -20,7 +20,7 @@ The words the product uses, on every surface and in every prompt:
 | Program (plan) | A bounded effort under a project with a goal and criteria | plans |
 | Budget | Daily caps on a role (hands, wakes, tokens); rolled up the line | org_roles.caps |
 | Staffing | Which roles exist, their scope, who they report to, their budget | org_proposals |
-| Chief of Staff | The role that reviews the company and proposes staffing | org_roles (handle chief-of-staff) |
+| Head of People | The role that reviews the company and proposes staffing | org_roles (handle head-of-people) |
 
 A proposal is staffing and budgeting in one: it moves scope, people and budget.
 
@@ -143,7 +143,7 @@ a node with the detail on hover; the staffing pane lists the company's flags.
 ## S4. Proposals
 
 A proposal is a structured set of changes with a rationale each, authored by an
-agent (the chief of staff, an analyzer run) or a person, decided change by
+agent (the head of people, an analyzer run) or a person, decided change by
 change.
 
 ```
@@ -189,7 +189,7 @@ Withdraw button (an optimistic store action with an org intent, dispatched to
 `orgProposals.withdraw`); the newer one says "Replaces op-4" under its title.
 
 The queue: creating a proposal inserts one advisory decision for the person
-it addresses ("Chief of Staff proposes N changes", link `/org?proposal=op-N`,
+it addresses ("Head of People proposes N changes", link `/org?proposal=op-N`,
 default "review on the org page"); answering it does nothing but clear the card.
 The existing decision stack path (`cast org init`, templates) stays; `cast org
 init` and `cast org update` now write a proposal and print its short id, and
@@ -221,35 +221,35 @@ header (proposal title, author, age, N of M decided), the company's flags
 (bottlenecks and span of control, each linking to its node), the change list
 (status, one line, accept/edit/skip, click to focus the ghost), the rationale
 with evidence links for the selected change, "Accept all remaining", and a
-composer that talks to the chief of staff's standing session (a send through
+composer that talks to the head of people's standing session (a send through
 the existing pending message rail; the thread renders below the composer
 through the embedded conversation view). With no open proposal the pane shows
-the health summary and the composer. With no chief of staff it shows two
-buttons: "Hire a Chief of Staff" and "Propose an org now".
+the health summary and the composer. With no head of people it shows two
+buttons: "Hire a Head of People" and "Propose an org now".
 
 Phone: the pane is the bottom sheet; ghosts render the same.
 
-## S6. The Chief of Staff
+## S6. The Head of People
 
 `orgRoles.staff({ team_id?, reports_to?: user, adopt_conversation_id? })`:
-creates the role (name "Chief of Staff", handle `chief-of-staff`, scope the
+creates the role (name "Head of People", handle `head-of-people`, scope the
 whole company, reports to the hiring person, trust understand, charter from
 the template below), provisions its standing session (or adopts the given
 conversation: sets standing_role_id and persistent on the existing row and
 creates the anchors row pointing at it), arms one routine on the standing
 session ("Company review", every 7 days, prompt: run `cast org review`), and
 runs the first review at once. Idempotent per company. `cast org staff
-[--adopt] [--every 7d]` is the CLI; "Hire a Chief of Staff" is the button.
+[--adopt] [--every 7d]` is the CLI; "Hire a Head of People" is the button.
 
 The charter (principle level, in orgRoles.ts next to the role charter
-template): you are the chief of staff of this company; the executives decide,
+template): you are the head of people of this company; the executives decide,
 you propose; read how work flows before you touch the chart; the capacity
 model and the stability rules; propose the smallest change that removes a
 bottleneck; every change carries evidence a person can click; never apply;
 write for a founder who reads it on a phone; escalate anything about budget
 or people to the person you report to.
 
-Trust never rises above understand for the chief of staff: it applies nothing.
+Trust never rises above understand for the head of people: it applies nothing.
 
 Seating (S12, S16) as shipped: `staff` also takes `seat: "existing" | "fresh"`
 (default existing when a standing agent exists, else a fresh session is
@@ -291,7 +291,7 @@ It is written at principle level and says:
 - How to review: read the flags, the chatter graph, decision latency, review stalls, unowned and unfiled work; propose the smallest change that removes the bottleneck; respect the stability rules; say what you expect to change and how you will know.
 - How to write: a proposal spec (`cast org propose --spec proposal.json`) with a rationale, evidence links, expected effect and risk per change; a summary a founder can read on a phone.
 - The honesty rules (empty project: intake draft; inaccessible: could not verify; no manufactured tasks) and what to escalate.
-- When no chief of staff exists and the company has two or more roles or three or more projects, counted after the proposal's own changes, offer an adopt change: this session becomes the chief of staff.
+- When no head of people exists and the company has two or more roles or three or more projects, counted after the proposal's own changes, offer an adopt change: this session becomes the head of people.
 
 The prompt is graded, not just tested: a real run on this workspace, scored by reviewers against a rubric (grounded evidence, span within model, budgets sum, smallest change, no invented work, readable on a phone).
 
@@ -407,14 +407,14 @@ passive fact. The web shows one toast that says both things ("jx7abc now
 reports to Samvit; the session was told"), and the chart moves the node in
 the same tick through the org intent journal.
 
-## S12. The Chief of Staff is the workspace's standing agent
+## S12. The Head of People is the workspace's standing agent
 
 The word anchor leaves the product. The workspace's root standing agent is
-the Chief of Staff: `cast org staff` adopts the existing anchor conversation
+the Head of People: `cast org staff` adopts the existing anchor conversation
 as the chief's standing session when one exists, so nothing restarts and
 the Slack binding, `@anchor` in chat and `cast anchor say` keep working as
-aliases of the chief (`@chief-of-staff`). The org page draws the root seat as
-"Chief of Staff"; `/anchor` redirects to its scope page; the anchors table
+aliases of the chief (`@head-of-people`). The org page draws the root seat as
+"Head of People"; `/anchor` redirects to its scope page; the anchors table
 stays as the implementation detail it is. Coalescing default is two minutes.
 
 ## S13. Personified roles
@@ -435,7 +435,7 @@ The first time a person opens /org (no roles in the workspace and the
 canvas: who reports to whom today (their own node highlighted), what a role is
 and how to hire one, how proposals arrive as ghosts and the two buttons that
 start one. Each step is one sentence and one highlight; the last step's
-buttons are the real "Hire a Chief of Staff" and "Propose an org now". The
+buttons are the real "Hire a Head of People" and "Propose an org now". The
 guide can be dismissed and never returns; a "How this page works" link in the
 toolbar reopens it. The empty workspace canvas is designed, not blank: the
 person's own node, the two buttons, one paragraph.
@@ -449,14 +449,14 @@ header, the queue card and the analyzer's summary page all carry it.
 ## S16. Seating the workspace's standing agent is an explained moment
 
 One workspace has one root standing agent. It used to be called the anchor;
-its job is now named Chief of Staff. Hiring must never feel like a takeover of
+its job is now named Head of People. Hiring must never feel like a takeover of
 a thread the person already talks to, so the transition is explicit, announced
 and reversible.
 
 **The hire form names what will happen.** When a workspace already has a
 standing agent, the form opens on that fact: "This workspace already has a
-standing agent, <name> (thread jx7abcd, N messages). Seating it as Chief of
-Staff keeps its memory, its chat handle and its Slack binding, and adds the
+standing agent, <name> (thread jx7abcd, N messages). Seating it as Head of
+People keeps its memory, its chat handle and its Slack binding, and adds the
 weekly company review to its job." Two choices, the first selected:
 
 - **Seat the existing agent.** No restart, no second session.
@@ -467,22 +467,22 @@ weekly company review to its job." Two choices, the first selected:
 **The thread says what changed.** Seating posts one message into the thread,
 from the person who did it, that names the new job in a sentence, links the
 role page, and says what did not change (its memory, its handle, its chat).
-The agent's next turn is the chief of staff briefing, so the first thing the
+The agent's next turn is the head of people briefing, so the first thing the
 person reads after the change is the agent restating its job in its own words.
 
 **The thread looks like the role.** Once seated, the conversation's title is
 the role's display name, the header carries its avatar and `@handle` with a
-link to the scope page, and the inbox card says "Chief of Staff" rather than
+link to the scope page, and the inbox card says "Head of People" rather than
 "Anchor". `/anchor` redirects to the scope page, and the first redirect shows
 one line saying where it went and why.
 
-**Unseating is one act.** Retiring the chief of staff asks whether the
+**Unseating is one act.** Retiring the head of people asks whether the
 standing session should keep running as a plain agent (default) or be
 retired with the seat. Keeping it restores its old title and clears the role
 pointers, so the person is never left without the assistant they had.
 
 The word anchor survives only as an alias in the CLI and in chat; every
-surface reads Chief of Staff.
+surface reads Head of People.
 
 ## S17. A proposal a person can read cold
 
@@ -522,7 +522,7 @@ A structured list of changes cannot answer "why is growth in there" or take
 the agent that wrote the proposal, rendered inline beside the changes, not
 as a composer bolted to the bottom.
 
-**One thread per proposal.** The proposal's author (the chief of staff, or
+**One thread per proposal.** The proposal's author (the head of people, or
 the session that ran the review) holds a thread bound to `op-N`. The pane
 renders it with the existing conversation view, so a person reads and writes
 there exactly as they do in a session, and the thread survives a reload.
@@ -666,7 +666,7 @@ guide (three spotlight steps over the real canvas) stays as the way back from
 
 **What a person needs to know, in five sentences.** Your company has roles:
 agents that each keep watching one area of work, with a face, a boss,
-sessions that report to them and tasks they own. A chief of staff reads your
+sessions that report to them and tasks they own. A head of people reads your
 workspace, commits, sessions, plans and tasks, and proposes the roles it
 needs; you decide, and nothing changes until you accept. A role triages its
 own sessions and puts in front of you only what needs you, with one line
@@ -686,7 +686,7 @@ title and the app's mono for the lines. The palette is the app's own
 (`--sol-*`), warm and cream in light, the same faces in dark. No dark
 charcoal with an amber accent, no uppercase letterspaced kicker, no italic
 clause in an accent colour, no rule above the title. Two actions and only
-two: the one that starts (Ask the chief of staff to look at my workspace, or
+two: the one that starts (Ask the head of people to look at my workspace, or
 Open the chart when roles already exist) and Later. Later never returns on
 its own; "How this page works" in the header reopens it. Seen is one pref,
 `org_intro_seen`, written by either action or by the first accept of a
@@ -696,7 +696,7 @@ not once per browser.
 **The introduction anywhere.** Once per person, on the next visit to any
 page after the feature is available in their workspace, a card rises from the
 bottom right corner: one face, one title ("Meet your organization"), two
-lines (a chief of staff reads your workspace and proposes the roles it needs;
+lines (a head of people reads your workspace and proposes the roles it needs;
 each role watches one area and brings you only what needs you), and two
 actions: See it, which opens the org page on the first visit above, and Not
 now. It rises once the page has settled, never over a composer with text in
@@ -826,18 +826,18 @@ applied again.
 
 ## S22. One agent at the root
 
-Written 2026-09-21. The founder: "anchor + chief of staff / org stuff being
+Written 2026-09-21. The founder: "anchor + head of people / org stuff being
 separate does not make sense, these need to become a single cohesive thing,
 having both separate is confusing." S12 decided this in words and the product
 did not follow: the sidebar still lists Anchor under Agents, /anchor is its
 own page with its own header, the chart draws an "Anchor · standing agent"
-card beside a "Chief of Staff · role" card, the anchor chip and panel in the
-app shell know nothing about roles, and a workspace without a chief of staff
+card beside a "Head of People · role" card, the anchor chip and panel in the
+app shell know nothing about roles, and a workspace without a head of people
 has an anchor with no place on the chart at all. Two names, two pages, two
 cards, one thing.
 
 **There is one root agent per workspace, and it is a role.** The workspace's
-standing agent is the root role of its org, named Chief of Staff by default
+standing agent is the root role of its org, named Head of People by default
 and renamable like any role, with a face, a charter, a brief, sessions that
 report to it, tasks it owns, and the whole workspace as its scope. A
 workspace that has an anchor and no root role has one from the moment this
@@ -878,7 +878,7 @@ internal mutation that walks live anchors with no role pointer and calls
 `performStaff` for each with `seat: "existing"`, so the session is adopted,
 the note and the briefing land in it, and the weekly review is armed. The run
 is all or nothing: a seating that fails throws out of the mutation, so no
-workspace is left with a Chief of Staff row and no seat. A workspace whose
+workspace is left with a Head of People row and no seat. A workspace whose
 root role already stands in another session is reported as `two_roots` and
 left for a person; one whose root a person retired while keeping the agent is
 still seated, and the plan names it `retired_root` with the seat it replaces.
@@ -992,7 +992,7 @@ words; its inbox card gained the same count.
 
 ## S24. The review is a conversation
 
-The Chief of Staff reviews the company the way a good chief of staff talks to a founder. It reads everything first: activity, records, sessions, calls, chat and health. Then it talks. Its messages are short and in plain words, and each one moves the conversation forward. It asks when it cannot settle something from the records. It takes the answer and moves on. The person can steer it at any point, and it follows.
+The Head of People reviews the company the way a good head of people talks to a founder. It reads everything first: activity, records, sessions, calls, chat and health. Then it talks. Its messages are short and in plain words, and each one moves the conversation forward. It asks when it cannot settle something from the records. It takes the answer and moves on. The person can steer it at any point, and it follows.
 
 The heart of the conversation is the reporting structure: who reports to whom, what each role looks after, and where the person's sessions go. The chief says that plainly and early. Everything else serves it, such as closing records that are already done, or proposing a goal.
 
@@ -1006,7 +1006,7 @@ The same conversation runs on the org page, beside the chart, and from `/cast-or
 
 A role is a session. It wakes the way any session wakes, and nothing else wakes it.
 
-- Its triggers, created with the role and controlled by the person like any other trigger: on the Triggers page and on the role's Triggers tab, with the next run, where they edit, pause or cancel them. A role has two: its check ("Check <area>", daily by default; the Chief of Staff's is the weekly Company review), and "A session under you needs input", which fires when a session that reports to the role is waiting (S28). A trigger the person cancelled stays cancelled. Pausing a role pauses the triggers it paused and resuming resumes only those; one the person paused by hand stays paused.
+- Its triggers, created with the role and controlled by the person like any other trigger: on the Triggers page and on the role's Triggers tab, with the next run, where they edit, pause or cancel them. A role has two: its check ("Check <area>", daily by default; the Head of People's is the weekly Company review), and "A session under you needs input", which fires when a session that reports to the role is waiting (S28). A trigger the person cancelled stays cancelled. Pausing a role pauses the triggers it paused and resuming resumes only those; one the person paused by hand stays paused.
 - An ordinary message: a person writing to it, a chat mention, a question routed to it, a role that reports to it. It arrives as a plain message.
 
 A change in the role's area wakes nothing. When a trigger fires, its run arrives in the role's thread in one frame, built in one place for every path that delivers it (`triggerFrameFor` in `convex/agentTasks.ts`; the daemon asks for the same frame through `agentTasks.injectFrame`): the trigger's prompt, the role's card, and, for a needs-input run, the waiting session.
@@ -1016,15 +1016,15 @@ A change in the role's area wakes nothing. When a trigger fires, its run arrives
 
 ## S26. Work belongs to the most specific role that covers it
 
-The Chief of Staff owns what no narrower role has claimed. When a lead takes an area, that area leaves the chief; when the lead goes, the area falls back. Two roles never answer for the same work.
+The Head of People owns what no narrower role has claimed. When a lead takes an area, that area leaves the chief; when the lead goes, the area falls back. Two roles never answer for the same work.
 
-Scope is opt in. A role that names no projects and no plans owns no work: it is a standing role that runs its routine and answers what it is asked (a release lead that walks the merge train, a person's permanent assistant). Only the Chief of Staff, while it names no scope, stands for the whole workspace.
+Scope is opt in. A role that names no projects and no plans owns no work: it is a standing role that runs its routine and answers what it is asked (a release lead that walks the merge train, a person's permanent assistant). Only the Head of People, while it names no scope, stands for the whole workspace.
 
-One entity for everything is a Chief of Staff and nothing else: it covers the workspace and owns all of it. Leads are added one area at a time, each taking its area from the chief, and the chief keeps the rest. Moving between the two is adding or removing a lead; nothing is reconfigured.
+One entity for everything is a Head of People and nothing else: it covers the workspace and owns all of it. Leads are added one area at a time, each taking its area from the chief, and the chief keeps the rest. Moving between the two is adding or removing a lead; nothing is reconfigured.
 
-Reporting and ownership are separate. Leads report to the person by default; the Chief of Staff is the person's right hand beside them. Its opening message says so: it keeps the person's goals in view, answers anything, routes a request to the owner, and brings decisions with a recommendation. Reviewing the structure is one of its jobs, run in its own thread: it starts no session for it, so a chief that does not start work on its own still reviews.
+Reporting and ownership are separate. Leads report to the person by default; the Head of People is the person's right hand beside them. Its opening message says so: it keeps the person's goals in view, answers anything, routes a request to the owner, and brings decisions with a recommendation. Reviewing the structure is one of its jobs, run in its own thread: it starts no session for it, so a chief that does not start work on its own still reviews.
 
-The rule has one home, `ownerOf` in `packages/shared/contracts/orgLead.ts`: a role naming the work's plan beats one naming its project, which beats the Chief of Staff; on a named area the role closest to the work wins. `projectLeadOf`, the takeover and its preview (`convex/lib/orgOwnership.ts sessionsOwnedBy`), the line's pick, a retired role's tasks and sessions, and org health's remainder all read it. Reading is unchanged: the chief's scope feed still shows everything.
+The rule has one home, `ownerOf` in `packages/shared/contracts/orgLead.ts`: a role naming the work's plan beats one naming its project, which beats the Head of People; on a named area the role closest to the work wins. `projectLeadOf`, the takeover and its preview (`convex/lib/orgOwnership.ts sessionsOwnedBy`), the line's pick, a retired role's tasks and sessions, and org health's remainder all read it. Reading is unchanged: the chief's scope feed still shows everything.
 
 ## S27. A reset clears the org
 
@@ -1052,17 +1052,42 @@ Written 2026-09-29, replacing escalation (`cast escalate`, org-roles-run-work.md
 
 ## S29. The health panel is a loop
 
-Written 2026-09-30. The org page's health panel ("Company health", the staffing pane with no proposal open) had become a list of 126 findings in the capacity model's own words: live hands, cap hit days, breach 2, ledger 563 open, "(model: 3)", a roles-per-person bar and "roles under strain" chips. None of it said what was happening or what to do, and hands no longer exist as a word. The panel is now the loop the org runs on: roles look after areas, the Chief of Staff watches the whole and proposes changes, the person decides. It shows that loop in this order, on stubbed data and on the real org alike.
+Written 2026-09-30. The org page's health panel ("Company health", the staffing pane with no proposal open) had become a list of 126 findings in the capacity model's own words: live hands, cap hit days, breach 2, ledger 563 open, "(model: 3)", a roles-per-person bar and "roles under strain" chips. None of it said what was happening or what to do, and hands no longer exist as a word. The panel is now the loop the org runs on: roles look after areas, the Head of People watches the whole and proposes changes, the person decides. It shows that loop in this order, on stubbed data and on the real org alike.
 
 **Needs you.** Only what a person must act on now: decisions the org routed to them (a lead's `cast decide` in its own thread, or one from a session under a role that no role could answer, read from the person's own decision queue), a role whose standing session declared itself waiting on a person, and a proposal still open that the pane is not already showing. A single-choice decision answers in place; everything else opens in one click. A decision and a blocked pin from the same thread are one ask. Empty, it says "Nothing needs you."
 
-**Areas.** One row per role in tree order (the Chief of Staff first, then each person's roles with their reports under them; retired roles left out): the face, the name, one status word, and the role's latest dated line from `## Where it stands` in its brief. The status is derived on the server from measures that exist in today's product and nothing else, most pressing first: *waiting on you* (its standing session declared blocked, or stopped on a prompt), *stuck* (a session under it waiting more than a day unanswered, a task in review more than a day, an open task whose session reported blocked), *overloaded* (more reached it this week than one role answers: `orgCapacity.isOverloaded`, said in words), *quiet* (nothing moved in its area for two weeks), else *on track*; *paused* and *not started* read from the role row. A row opens inline to its goals and progress (each project in its area with its goal and this week's counts), the sessions waiting under it (oldest first, each opening the session), at most three signals in plain words that change what a person would do, its check (last, next, pause, run now, the cadence editable in place, "change" to the trigger's page), and "Ask @role", one line into the role's own thread. Signals that matter only to structure (span, an unowned project, a stale record, a wide ledger) never reach a row; they are inputs to the Chief of Staff's review.
+**Areas.** One row per role in tree order (the Head of People first, then each person's roles with their reports under them; retired roles left out): the face, the name, one status word, and the role's latest dated line from `## Where it stands` in its brief. The status is derived on the server from measures that exist in today's product and nothing else, most pressing first: *waiting on you* (its standing session declared blocked, or stopped on a prompt), *stuck* (a session under it waiting more than a day unanswered, a task in review more than a day, an open task whose session reported blocked), *overloaded* (more reached it this week than one role answers: `orgCapacity.isOverloaded`, said in words), *quiet* (nothing moved in its area for two weeks), else *on track*; *paused* and *not started* read from the role row. A row opens inline to its goals and progress (each project in its area with its goal and this week's counts), the sessions waiting under it (oldest first, each opening the session), at most three signals in plain words that change what a person would do, its check (last, next, pause, run now, the cadence editable in place, "change" to the trigger's page), and "Ask @role", one line into the role's own thread. Signals that matter only to structure (span, an unowned project, a stale record, a wide ledger) never reach a row; they are inputs to the Head of People's review.
 
 **The Chief's read.** Its latest read of the company: the `Company:` line it writes under `## Where it stands` at the end of every review (the prompt asks for it; the trigger's last run summary stands in until the first), its newest proposal with how far it is decided, the next review with its trigger (cadence editable, Review now, pause), and the composer into its thread, which is where a person iterates on the structure.
 
-**One reading.** `org.health` carries the area beside the flags on every role row (`area`: status, status line, signals, the standing lines newest first, the waiting sessions, the goals, `checked_at`, the check trigger, the standing session), derived by `@codecast/shared/contracts/orgAreas` from the counts health already holds, so the panel, `cast org health` (which now prints areas and hides the counts behind `--json`), the Chief of Staff's review and the area watch say the same thing about an area. The flags stay as the Chief's evidence and are reworded in the same plain terms: no threshold in a sentence, no hand, cap, ledger or breach word, no "(model: N)". The daily limit (S23.2) is the one operating word a flag still carries, as "reached its daily limit".
+**One reading.** `org.health` carries the area beside the flags on every role row (`area`: status, status line, signals, the standing lines newest first, the waiting sessions, the goals, `checked_at`, the check trigger, the standing session), derived by `@codecast/shared/contracts/orgAreas` from the counts health already holds, so the panel, `cast org health` (which now prints areas and hides the counts behind `--json`), the Head of People's review and the area watch say the same thing about an area. The flags stay as the Chief's evidence and are reworded in the same plain terms: no threshold in a sentence, no hand, cap, ledger or breach word, no "(model: N)". The daily limit (S23.2) is the one operating word a flag still carries, as "reached its daily limit".
 
-**Continuous.** The loop keeps itself current without the person asking. Signals are live, roles write their line at every check, and a change that lasts reaches the Chief of Staff through the trigger system the way a waiting session reaches a lead (S28): one event trigger on the chief's standing session, "An area needs your review" (`lib/orgRoutine.CHIEF_AREA_CHANGE_SPEC`, event `org_area_change`), armed with its routine and route up (`ensureRoleEventTriggers`), visible and controllable on its page, fired once per episode with the change in its frame (`triggerFrameFor` carries an `<area-change>` block beside the waiting session; the run block draws it). The area watch (`orgWatch.ts`, a cron every six hours) reads health for every workspace with a live chief, remembers each area's status on its role row (`org_roles.area_watch`: status, since, passes, told), and fires when a status that needs the chief (stuck, overloaded) has held across two passes in a row and was not yet told for this episode, and once for each project with work and no owner (`org_roles.unowned_told` on the chief, pruned when the project gains an owner). A paused or cancelled trigger, or a workspace with the org off, is not told and the episode still counts as told, so nothing fires twice when it comes back; the panel shows the status live either way. What needs a person (waiting on you) never goes to the chief: it is already in front of the person.
+**Continuous.** The loop keeps itself current without the person asking. Signals are live, roles write their line at every check, and a change that lasts reaches the Head of People through the trigger system the way a waiting session reaches a lead (S28): one event trigger on the chief's standing session, "An area needs your review" (`lib/orgRoutine.HEAD_AREA_CHANGE_SPEC`, event `org_area_change`), armed with its routine and route up (`ensureRoleEventTriggers`), visible and controllable on its page, fired once per episode with the change in its frame (`triggerFrameFor` carries an `<area-change>` block beside the waiting session; the run block draws it). The area watch (`orgWatch.ts`, a cron every six hours) reads health for every workspace with a live chief, remembers each area's status on its role row (`org_roles.area_watch`: status, since, passes, told), and fires when a status that needs the chief (stuck, overloaded) has held across two passes in a row and was not yet told for this episode, and once for each project with work and no owner (`org_roles.unowned_told` on the chief, pruned when the project gains an owner). A paused or cancelled trigger, or a workspace with the org off, is not told and the episode still counts as told, so nothing fires twice when it comes back; the panel shows the status live either way. What needs a person (waiting on you) never goes to the chief: it is already in front of the person.
 
 **What is gone.** The findings list, the roles-per-person bar, the strain chips, `spanOfControl` and `bottleneckRoles`, and every place the panel read a flag's detail to a person. `FLAG_LABEL` and the node badges on the chart stay for the flags that remain.
 
+
+
+## S30. Head of People, and the Chief of Staff as the person's right hand
+
+Written 2026-10-02, from the founder. The one root role carried two jobs: it reviewed the structure every week and owned the remainder (S6, S26, S29), and it was the person's right hand that answers anything and routes the rest (the opening in `headOfPeoplePrompt.ts`). The jobs come apart. The structure role is the **Head of People**; the **Chief of Staff** is the person's right hand, separate from it, and a person may have more than one.
+
+**Head of People** (`head-of-people`) is today's root role under a new name: one per workspace, proposes roles, scopes and record fixes in the weekly Company review, owns the work no narrower role covers (`isWholeWorkspaceRole`), reads the area watch (S29). Its opening loses the right hand paragraph and keeps the rest. The handle moves from `chief-of-staff` to `head-of-people` in `orgLead.ts` (`HEAD_OF_PEOPLE_HANDLE`; the old constant name stays as a deprecated alias for one release). A migration (`migrations:renameChiefOfStaffToHeadOfPeople`) rewrites every live or retired role row with the old handle (name "Head of People" where the name was the default "Chief of Staff", `handle`, the standing session's title through `seatTitlePatch`, and the review trigger's title and prompt where they carry the old words); it logs one org change batch per workspace. Old references keep resolving at ONE site: `rolesByHandle` in `lib/orgAccess.ts` canonicalises `chief-of-staff` to `head-of-people` when no live Chief of Staff stands in the boundary (below), so `cast role wake @chief-of-staff`, `@chief-of-staff` in chat, a charter that sends unowned work to `@chief-of-staff`, and the anchor aliases all still land. The templates under `~/src/platform/packs` say `@head-of-people`.
+
+**Chief of Staff** is a role (an `org_roles` row, so it has a face, a brief, a standing session, triggers, a page and a seat in the inbox like any role) marked by `org_roles.chief?: { reach: "global" } | { reach: "team"; team_id }`. It names no scope and owns no work (S26 already allows the standing role). What tells one from another is where its row lives (ACCESS) and what it reaches (its brief and routine):
+
+| kind | row lives in | reaches | who sees its thread |
+|---|---|---|---|
+| global (the default hire) | the person's boundary, `user:<id>` | every workspace the person is in | the person alone |
+| personal, for one team | `user:<id>`, `chief.team_id` set | that team's work | the person alone |
+| team | the team's boundary, `team:<id>` | that team | every member; the hirer hosts it |
+
+It runs on its host's daemon as every role does, so it sees exactly what its host can see and nothing more. The global one reaches across workspaces with no new query and no new grant: its session is personal, and it reads each workspace the way the person does from a shell, `--team` on every write and the read defaults of `resolveWorkspaceForRead` (CLAUDE.md, "reads may default, writes must be explicit"). The server never joins across boundaries for it; `listAnchors` already returns every row the viewer may see, personal and per team, and that is what the header draws from. A personal per team chief is the same row shape with its working directory and brief pointed at one team. A team chief's thread is team visible through the same chokepoint a team seat uses today (`patchConversationVisibility` in `provisionStandingAgent`). Several chiefs may stand in one boundary; the default handle is `chief-of-staff` for the first and `chief-of-staff-<team slug>` for a personal per team one, and the hire form lets the person change it as for any role.
+
+What a chief can do is what the opening says today, scoped to its reach: answer anything, route a request in an owned area to that lead (`cast role wake @handle --team`), bring decisions with a recommendation, keep the person's goals in its brief, raise what needs the person in its own thread (S28). It never reviews the structure; that is the Head of People's. In team chat and Slack the "workspace's agent" (`@anchor`, `cast anchor say`, `anchor_channels`) is the team's Chief of Staff when one stands, else the Head of People, so a team with no chief answers as before. `rootAgentOf` on the web follows the same rule.
+
+**Names.** Every role shows a person like name with its role as the subtitle: "Ada · Chief of Staff, global", "Rowan · Head of People", "Ember · Growth lead". The stored `org_roles.name` stays the role title (every reader keeps working); a new optional `org_roles.given_name` is the name a person chose, and until they do the role wears `characterNameFor(role._id, avatarOf(role))` from `sessionCharacter.ts`, the same bank sessions already use, so no migration invents names and every role has one on every device. One reader, `roleIdentity(role)` in `@codecast/shared/contracts/orgIdentity.ts`, returns `{ name, title, subtitle }` (the subtitle adds a chief's reach: "global", the team's name, or "personal, <team>"); the org node, the scope page header, the inbox card, the chat pill, the wake card, the proposal ghost, the header pin and `cast role show` draw from it. The hire form offers the name beside the face (the picker sessions have) and `cast role name <ref> <name>` sets it.
+
+**Pins.** The app header pins roles or sessions. Storage is `clientState.ui.header_pins?: Array<{ kind: "role"; id } | { kind: "session"; id }>`, a stamped per user pref like `sidebar_pins` (one person, every device; an absent key is the default, never an empty list). The default pin is the person's global Chief of Staff when one stands; with none, the header keeps today's chip, the active workspace's agent, and that chip offers "Hire your Chief of Staff". A pinned role is drawn from the `anchors` collection (its seat row carries the role identity and the live status the chip reads now, `deriveAnchorStatus`); a pinned session from `sessions`. A pin whose row the viewer can no longer see (left the team, role retired, session gone) is not drawn and is dropped the next time the list is written, so access is still one equality per row and a pin grants nothing. Each pinned face opens the existing slide-over (`AnchorPanel`, generalised to take a conversation id instead of assuming the root agent) on its thread; `anchor.toggle` opens the first pin. "Pin to header" / "Unpin" sit in a role page's header menu and a session's header menu, and on the pinned face itself. The `useRootAgent` chip stays as the fallback and the onboarding cue; nothing else about the slide-over or `/anchor` changes.
+
+**What this does to existing rows.** The rename touches every root role in prod, team and personal alike. The personal workspace's root (the person's own agent, S22) becomes a Head of People too, which is a structure reviewer of a workspace that usually has no leads; the alternative is to convert it into the person's global Chief of Staff, since that is what the person has been talking to. The migration takes `personal_root: "head_of_people" | "chief_of_staff"` and does the latter only when told, so the choice is made per run, not by the code.

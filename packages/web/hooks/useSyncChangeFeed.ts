@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, syncLogScopeMetaKey } from "../store/inboxStore";
@@ -572,6 +572,36 @@ function shadowEnabled(): boolean {
     return false;
   }
 }
+/**
+ * Sim seam: the cargo latch, the apply tally and its flush timer, and the
+ * shadow set belong to one window. get() snapshots them (collections copied,
+ * so the snapshot is detached), set() loads a snapshot back, fresh() is what
+ * a window that never ran starts from.
+ */
+export function __changeFeedSimSlots() {
+  type Slots = {
+    cargoSupported: boolean;
+    applyTally: { direct: number; refetch: number };
+    flushTimer: ReturnType<typeof setTimeout> | null;
+    shadowApplied: Set<string> | null;
+  };
+  return {
+    fresh: (): Slots => ({ cargoSupported: true, applyTally: { direct: 0, refetch: 0 }, flushTimer: null, shadowApplied: null }),
+    get: (): Slots => ({
+      cargoSupported,
+      applyTally: { ...applyTally },
+      flushTimer,
+      shadowApplied: shadowApplied && new Set(shadowApplied),
+    }),
+    set: (s: Slots): void => {
+      cargoSupported = s.cargoSupported;
+      applyTally = { ...s.applyTally };
+      flushTimer = s.flushTimer;
+      shadowApplied = s.shadowApplied && new Set(s.shadowApplied);
+    },
+  };
+}
+
 async function shadowCompare(convex: any, runStart: number): Promise<void> {
   if (!shadowEnabled()) {
     shadowApplied = null;
@@ -602,34 +632,49 @@ async function shadowCompare(convex: any, runStart: number): Promise<void> {
   }
 }
 
-export function useSyncChangeFeed(): void {
-  const convex = useConvex();
-  const hydrated = useInboxStore((s) => s.clientStateInitialized);
-  const runningRef = useRef(false);
-  const rerunRef = useRef(false);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const run = useCallback(() => {
-    if (runningRef.current) {
+/**
+ * One catch-up at a time for a client: a wake that arrives mid-run queues
+ * exactly one follow-up. The hook and the multiplayer simulator's windows
+ * both drive catch-up through this. `onSettled` runs after each pass, before
+ * a queued follow-up starts.
+ */
+export function createCatchUpRunner(
+  convex: any,
+  opts: { onError?: (e: unknown) => void; onSettled?: () => void } = {},
+): () => void {
+  let running = false;
+  let rerun = false;
+  const run = () => {
+    if (running) {
       // A wake arrived mid-run (e.g. our own catch-up's writes bumped a head).
       // Queue exactly one follow-up so nothing is dropped.
-      rerunRef.current = true;
+      rerun = true;
       return;
     }
-    runningRef.current = true;
+    running = true;
     // The digest compare's quiescence gate: a range replay is in flight.
     const release = beginSyncInflight("range");
     catchUp(convex)
-      .catch((e) => console.warn("[syncLog] catch-up failed", e))
+      .catch(opts.onError ?? ((e) => console.warn("[syncLog] catch-up failed", e)))
       .finally(() => {
         release();
-        runningRef.current = false;
-        if (rerunRef.current) {
-          rerunRef.current = false;
+        running = false;
+        opts.onSettled?.();
+        if (rerun) {
+          rerun = false;
           run();
         }
       });
-  }, [convex]);
+  };
+  return run;
+}
+
+export function useSyncChangeFeed(): void {
+  const convex = useConvex();
+  const hydrated = useInboxStore((s) => s.clientStateInitialized);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const run = useMemo(() => createCatchUpRunner(convex), [convex]);
 
   const scheduleRun = useCallback(() => {
     if (debounceRef.current) return;

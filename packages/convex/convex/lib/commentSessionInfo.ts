@@ -1,5 +1,6 @@
 import { Id } from "../_generated/dataModel";
 import { canAccessConversation } from "./access";
+import { identityFieldsOf } from "./sessionIdentityFields";
 
 // A comment posted from inside a session carries a conversation_id back-link;
 // the web renders the session's title as the comment author (an agent's
@@ -7,13 +8,14 @@ import { canAccessConversation } from "./access";
 // task comments must attach this — the client merges them all into the same
 // tasks[id].comments field, so one un-enriched channel (the change-feed
 // catch-up was the culprit) clobbers the enriched rows and every session
-// author falls back to the bare author string.
+// author falls back to the bare author string. The identity fields ride along
+// so the author wears the session's face and character name.
 export type CommentSessionInfo = {
   _id: string;
   session_id: string;
   title: string | null;
   agent_type: string | null;
-};
+} & Awaited<ReturnType<typeof identityFieldsOf>>;
 
 export async function attachCommentSessionInfo<
   T extends { conversation_id?: Id<"conversations"> | null },
@@ -33,6 +35,7 @@ export async function attachCommentSessionInfo<
             session_id: conv.session_id,
             title: conv.title || conv.subtitle || null,
             agent_type: conv.agent_type || null,
+            ...(await identityFieldsOf(conv, (id: any) => ctx.db.get(id))),
           };
         }
         cache.set(key, session_info);

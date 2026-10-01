@@ -187,6 +187,8 @@ export type NotifyNativeData = {
   silent?: boolean;
   /** Show it even while an app window is focused (the web layer has decided). */
   force?: boolean;
+  /** Second line under the title (macOS). */
+  subtitle?: string;
 };
 export type DesktopWindowState = { active: string | null; open: Array<{ id?: string | null; path: string }>; inCall?: boolean };
 export type DesktopWindowRole = { leader: boolean; appFocused: boolean; anyInCall: boolean };

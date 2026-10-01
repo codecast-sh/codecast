@@ -38,7 +38,7 @@ const GOOD: Record<OrgChange["kind"], OrgChange> = {
   trust: { kind: "trust", handle: "growth", trust: "decide" },
   routine: { kind: "routine", handle: "growth", title: "Weekly funnel", prompt: "Read the funnel and report.", every: "7d" },
   project_meta: { kind: "project_meta", project: "pr-1", goal: "Ship the onboarding", success_metrics: ["activation 40%"], priority: "p1", owner: "@growth", non_goals: ["paid ads"], risks: ["one engineer"] },
-  adopt: { kind: "adopt", handle: "chief-of-staff", conversation: "jx7abcd" },
+  adopt: { kind: "adopt", handle: "head-of-people", conversation: "jx7abcd" },
   file: { kind: "file", plan: "pl-1", project: "Platform" },
   plan_status: { kind: "plan_status", plan: "pl-7", status: "done", reason: "every task closed" },
   task_status: { kind: "task_status", task: "ct-42", status: "done", reason: "commits landed, still open" },
@@ -75,7 +75,7 @@ describe("org change validation", () => {
       [{ kind: "project_meta", project: "pr-1" }, "changes nothing"],
       [{ kind: "project_meta", project: "pr-1", priority: "p9" }, "priority is one of"],
       [{ kind: "project_meta", project: "pr-1", success_metrics: "x" }, "lists of strings"],
-      [{ kind: "adopt", handle: "chief-of-staff" }, "adopt needs the conversation"],
+      [{ kind: "adopt", handle: "head-of-people" }, "adopt needs the conversation"],
       [{ kind: "adopt", conversation: "jx7abcd" }, "handle is required"],
     ];
     for (const [raw, fault] of faults) {
@@ -134,7 +134,7 @@ describe("orderOrgChanges and describeOrgChange", () => {
     expect(describeOrgChange(GOOD.trust)).toBe("autonomy @growth on");
     expect(describeOrgChange(GOOD.routine)).toBe("routine on @growth: Weekly funnel every 7d");
     expect(describeOrgChange(GOOD.project_meta)).toBe("charter pr-1 owner @growth p1: Ship the onboarding");
-    expect(describeOrgChange(GOOD.adopt)).toBe("adopt session jx7abcd as @chief-of-staff's standing session");
+    expect(describeOrgChange(GOOD.adopt)).toBe("adopt session jx7abcd as @head-of-people's standing session");
     expect(describeOrgChange(GOOD.plan_status)).toBe("mark plan pl-7 done");
     expect(describeOrgChange(GOOD.task_status)).toBe("mark task ct-42 done");
     expect(describeOrgChange(GOOD.project_status)).toBe("mark project Legacy paused");
@@ -439,9 +439,9 @@ describe("what one change needs from another (orgChangeDependencies)", () => {
   test("a role, its adopt and its routine name each other by seq; unrelated rows say nothing", async () => {
     const { orgChangeDependencies } = await import("./orgProposal");
     const rows = [
-      { seq: 1, change: { kind: "role", name: "Chief of Staff", handle: "chief-of-staff" } as OrgChange },
-      { seq: 2, change: { kind: "routine", handle: "@chief-of-staff", title: "Review", prompt: "p", every: "7d" } as OrgChange },
-      { seq: 3, change: { kind: "adopt", handle: "chief-of-staff", conversation: "jx733c7" } as OrgChange },
+      { seq: 1, change: { kind: "role", name: "Head of People", handle: "head-of-people" } as OrgChange },
+      { seq: 2, change: { kind: "routine", handle: "@head-of-people", title: "Review", prompt: "p", every: "7d" } as OrgChange },
+      { seq: 3, change: { kind: "adopt", handle: "head-of-people", conversation: "jx733c7" } as OrgChange },
       { seq: 4, change: { kind: "role", name: "Growth", handle: "growth" } as OrgChange },
       { seq: 5, change: { kind: "file", plan: "pl-1", project: "P" } as OrgChange },
     ];

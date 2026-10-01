@@ -6,14 +6,18 @@ async function source(path: string): Promise<string> {
 
 describe("parked convCommand caller policy", () => {
   test("restart surfaces keep a durably parked request in their recovery state", async () => {
-    const [restartHook, queuePage, globalPanel] = await Promise.all([
+    const [restartHook, commands, queuePage, globalPanel] = await Promise.all([
       source("../../hooks/useSessionRestart.ts"),
+      source("../../lib/sessionCommands.ts"),
       source("../../app/inbox/QueuePageClient.tsx"),
       source("../../components/GlobalSessionPanel.tsx"),
     ]);
 
     expect(restartHook).toContain("if (isParkedDispatchError(err)) return;");
-    expect(restartHook).toContain('setPhase("failed")');
+    // A parked restart keeps its row in flight; any other refusal settles the
+    // row failed, which is what the hook's phase reads.
+    expect(commands).toContain("if (!isParkedDispatchError(error)) recordSessionCommandDispatchError(requestId, error);");
+    expect(restartHook).toContain("restartPhaseOf(gesture, now)");
     expect(queuePage.match(/isParkedDispatchError/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
     expect(queuePage).toContain('setResumeState("failed")');
     expect(globalPanel.match(/isParkedDispatchError/g)?.length ?? 0).toBeGreaterThanOrEqual(4);
@@ -41,11 +45,12 @@ describe("parked convCommand caller policy", () => {
   });
 
   test("fire-and-forget session controls observe their asyncAction rejection", async () => {
-    // The composer owns rewind, a hook owns permission mode, the container owns Escape.
+    // The conversation view owns rewind, a hook owns permission mode, and the
+    // shared composer controls own Escape (the view and Threads cards both use it).
     const conversationView = [
       await source("../../components/ConversationView.tsx"),
-      await source("../../components/MessageInput.tsx"),
       await source("../../hooks/usePermissionModeSwitch.ts"),
+      await source("../../hooks/useSessionComposerControls.ts"),
     ].join("\n");
 
     for (const command of [

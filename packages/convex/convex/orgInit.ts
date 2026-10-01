@@ -57,7 +57,7 @@ import {
   type OrgScopeChange,
   type OrgTaskStatusChange,
   type OrgTrustChange, authorityWords, type OrgAuthorityChange, type OrgHireChange, type OrgUpgradeChange,
-  type OrgInitiativeChange, type OrgInitiativeOwnerChange, type OrgInitiativeProjectsChange } from "@codecast/shared/contracts/orgProposal";
+  type OrgInitiativeChange, type OrgInitiativeOwnerChange, type OrgInitiativeProjectsChange, type OrgInitiativeShapeChange, metricsWords } from "@codecast/shared/contracts/orgProposal";
 import { performAddProjects, performCreateInitiative, performUpdateInitiative } from "./initiatives";
 import { findInitiative } from "./lib/initiativeRef";
 import { performSetTrust, standingConversationOf } from "./orgRoles";
@@ -311,7 +311,9 @@ export async function computeAnalysisOrg(ctx: Ctx, userId: Id<"users">, teamId: 
     };
     // Last activity in the scope and the week's wakes: the one reading
     // org.health uses (orgHealth.roleActivity).
-    const activity = await roleActivity(ctx, userId, role, now, { wholeWorkspaceLatest: latestAnywhere });
+    // The slice's own scan: one session scan for every role, not one each
+    // (nine scoped roles passed Convex's 100 MB read limit, ct-56046).
+    const activity = await roleActivity(ctx, userId, role, now, { wholeWorkspaceLatest: latestAnywhere, scan });
     const caps = capsFor(role);
     const hands = (scan.byParent.get(`role:${String(role._id)}`) ?? []).length;
     const parent = role.reports_to?.kind === "role"
@@ -980,7 +982,7 @@ async function resolveProposalScope(ctx: Ctx, boundary: Boundary, scope: OrgRole
 // person reads before accepting; `leave` is their one edit on the row. Which
 // sessions move is the one ownership rule (org-staffing.md S26, org.ts
 // sessionsOwnedBy): the ones the role now owns, from the person or from a
-// wider role, so a lead that gains an area takes it from the chief of staff.
+// wider role, so a lead that gains an area takes it from the head of people.
 // A role that looks after the whole workspace takes over nothing: it would
 // empty a person's inbox into one seat, which is not what gaining a scope
 // means.
@@ -1508,8 +1510,24 @@ export async function applyInitiative(ctx: Ctx, userId: Id<"users">, boundary: B
   if (existing) return { status: "applied", note: `the goal "${existing.title}" already exists (${existing.short_id})` };
   const project_ids = await projectIdsOf(ctx, boundary, p.projects);
   const owner = p.owner?.trim() ? await resolveReportsTo(ctx, userId, boundary, p.owner) : undefined;
-  const r = await performCreateInitiative(ctx, userId, initiativeWorkspace(boundary), { title: p.title, description: p.description, project_ids, ...(owner ? { owner: { ...owner, ...(owner.kind === "role" ? { role_id: String(owner.role_id) } : { user_id: String(owner.user_id) }) } as any } : {}), ...(p.target_date ? { target_date: p.target_date } : {}) });
-  return { status: "applied", note: `set the goal "${r.row.title}" (${r.short_id}) with ${project_ids.length} project${project_ids.length === 1 ? "" : "s"}${owner ? `, owned by ${p.owner}` : ""}${coverNote(r.scope)}` };
+  // The top level goal it feeds: a goal that exists, or one set earlier in the same proposal (the apply order keeps the proposal's order within a kind).
+  const parent = p.parent?.trim() ? await initiativeByRef(ctx, userId, boundary, p.parent) : null;
+  const r = await performCreateInitiative(ctx, userId, initiativeWorkspace(boundary), { title: p.title, description: p.description, project_ids, ...(owner ? { owner: { ...owner, ...(owner.kind === "role" ? { role_id: String(owner.role_id) } : { user_id: String(owner.user_id) }) } as any } : {}), ...(p.target_date ? { target_date: p.target_date } : {}), ...(parent ? { parent_initiative_id: String(parent._id) } : {}), ...(p.metrics?.length ? { metrics: p.metrics } : {}) });
+  return { status: "applied", note: `set the goal "${r.row.title}" (${r.short_id}) with ${project_ids.length} project${project_ids.length === 1 ? "" : "s"}${owner ? `, owned by ${p.owner}` : ""}${parent ? `, under "${parent.title}" (${parent.short_id})` : ""}${p.metrics?.length ? `, measured by ${metricsWords(p.metrics)}` : ""}${coverNote(r.scope)}` };
+}
+
+export async function applyInitiativeShape(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgInitiativeShapeChange, _opts: ApplyOpts): Promise<ApplyResult> {
+  const initiative = await initiativeByRef(ctx, userId, boundary, p.initiative);
+  const parent = p.parent ? await initiativeByRef(ctx, userId, boundary, p.parent) : null;
+  const fields: Record<string, any> = {};
+  if (p.parent !== undefined) fields.parent_initiative_id = parent ? String(parent._id) : null;
+  if (p.metrics !== undefined) fields.metrics = p.metrics;
+  const sameParent = p.parent === undefined || String(initiative.parent_initiative_id ?? "") === String(parent?._id ?? "");
+  const sameMetrics = p.metrics === undefined || JSON.stringify((initiative.metrics ?? []).map((m: any) => [m.name, m.target])) === JSON.stringify(p.metrics.map((m) => [m.name.trim(), m.target.trim()]));
+  if (sameParent && sameMetrics) return { status: "applied", note: `${initiative.short_id} "${initiative.title}" already reads that way` };
+  await performUpdateInitiative(ctx, userId, initiative, fields);
+  const said = [p.parent !== undefined ? (parent ? `now feeds "${parent.title}" (${parent.short_id})` : "is now a top level goal") : "", p.metrics !== undefined ? (p.metrics.length ? `is measured by ${metricsWords(p.metrics)}` : "has no metric") : ""].filter(Boolean);
+  return { status: "applied", note: `the goal "${initiative.title}" (${initiative.short_id}) ${andListOf(said)}` };
 }
 
 export async function applyInitiativeProjects(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgInitiativeProjectsChange, _opts: ApplyOpts): Promise<ApplyResult> {
@@ -1560,6 +1578,7 @@ async function applyOrgChangeCore(ctx: Ctx, userId: Id<"users">, boundary: Bound
     case "initiative": return applyInitiative(ctx, userId, boundary, change, opts);
     case "initiative_projects": return applyInitiativeProjects(ctx, userId, boundary, change, opts);
     case "initiative_owner": return applyInitiativeOwner(ctx, userId, boundary, change, opts);
+    case "initiative_shape": return applyInitiativeShape(ctx, userId, boundary, change, opts);
   }
 }
 

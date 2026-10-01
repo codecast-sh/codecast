@@ -9,23 +9,13 @@ import {
 } from "./agentAuth";
 import { parseAgentAuthReceiverOutput, type RemoteHost } from "./session-move";
 import { jwtClaims } from "../codexAuthDecode";
+import { codexAuthJson, jwt } from "../test-helpers/codexCloudFixtures";
 
 const NOW = Date.parse("2026-09-07T12:00:00Z");
 
-function jwt(claims: Record<string, unknown>): string {
-  const b64 = (s: string) => Buffer.from(s).toString("base64url");
-  return `${b64('{"alg":"RS256"}')}.${b64(JSON.stringify(claims))}.sig`;
-}
-
 /** The host's real ChatGPT-mode blob shape: OPENAI_API_KEY null BESIDE tokens. */
 function codexBlob(exp: number, extra: Record<string, unknown> = {}): string {
-  return JSON.stringify({
-    auth_mode: "chatgpt",
-    OPENAI_API_KEY: null,
-    tokens: { id_token: jwt({ email: "a@b.c" }), access_token: jwt({ exp }), refresh_token: "rt", account_id: "acc" },
-    last_refresh: "2026-09-05T01:20:00.123456Z",
-    ...extra,
-  });
+  return codexAuthJson(exp, { OPENAI_API_KEY: null, last_refresh: "2026-09-05T01:20:00.123456Z", ...extra });
 }
 
 let dir: string, home: string;

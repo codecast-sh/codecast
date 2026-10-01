@@ -1,11 +1,11 @@
 // Mounts the charter block (org-staffing.md S7) in jsdom: every field renders
 // from the charter it is given, each inline edit reaches onChange as a patch,
-// and the empty state points at the chief of staff when one exists and opens
+// and the empty state points at the head of people when one exists and opens
 // the fields when none does.
 import assert from "node:assert/strict";
 import { afterAll, describe, it } from "bun:test";
 import { ORG_FIXTURE } from "../org/orgFixture";
-import { CHIEF_OF_STAFF_HANDLE } from "../org/orgStaffingTypes";
+import { HEAD_OF_PEOPLE_HANDLE } from "../org/orgStaffingTypes";
 import type { CharterPatch } from "./charterMeta";
 
 // One DOM and one React for the file, set up at module level so the import
@@ -159,18 +159,18 @@ describe("CharterBlock", () => {
     t.unmount();
   }, SLOW);
 
-  it("empty with no chief of staff: the link says it hires one (that is what /org will do) and carries no parenthetical", async () => {
+  it("empty with no head of people: the link says it hires one (that is what /org will do) and carries no parenthetical", async () => {
     const t = await setup();
     await t.render({ charter: {} });
     assert.equal(document.querySelector("[data-charter]")?.getAttribute("data-charter"), "empty");
     assert.match(t.text(), /No charter yet\./);
     const link = document.querySelector<HTMLAnchorElement>("a");
-    assert.ok(link, "the ask is a link even with no chief of staff");
-    assert.equal(link.textContent!.trim(), "Hire a Chief of Staff to draft one");
+    assert.ok(link, "the ask is a link even with no head of people");
+    assert.equal(link.textContent!.trim(), "Hire a Head of People to draft one");
     assert.equal(link.getAttribute("data-charter-ask"), "hire");
     assert.equal(link.getAttribute("href"), `/org?compose=${encodeURIComponent("draft a charter for Codecast: Product")}`);
     assert.doesNotMatch(t.text(), /none hired yet|\(/, "no parenthetical patching the label");
-    assert.equal(t.buttons().filter((b) => /Chief of Staff/.test(b.textContent ?? "")).length, 0, "the ask is never a button that opens blank fields");
+    assert.equal(t.buttons().filter((b) => /Head of People/.test(b.textContent ?? "")).length, 0, "the ask is never a button that opens blank fields");
     await t.click(t.button("or write it"));
     assert.equal(document.querySelector("[data-charter]")?.getAttribute("data-charter"), "project");
     assert.ok(t.button("Add a metric"));
@@ -179,13 +179,13 @@ describe("CharterBlock", () => {
     t.unmount();
   }, SLOW);
 
-  it("empty with a chief of staff: the link asks the seat by handle and lands on /org with the composer prefilled", async () => {
+  it("empty with a head of people: the link asks the seat by handle and lands on /org with the composer prefilled", async () => {
     const t = await setup();
-    const chief = { ...role, _id: "role-chief", short_id: "or-99", handle: CHIEF_OF_STAFF_HANDLE, name: "Chief of Staff", status: "active" as const };
-    await t.render({ charter: {}, roles: [...ORG_FIXTURE.roles, chief] });
+    const head = { ...role, _id: "role-head", short_id: "or-99", handle: HEAD_OF_PEOPLE_HANDLE, name: "Head of People", status: "active" as const };
+    await t.render({ charter: {}, roles: [...ORG_FIXTURE.roles, head] });
     const link = document.querySelector<HTMLAnchorElement>("a");
     assert.ok(link);
-    assert.equal(link.textContent!.trim(), `Ask @${CHIEF_OF_STAFF_HANDLE} to draft one`);
+    assert.equal(link.textContent!.trim(), `Ask @${HEAD_OF_PEOPLE_HANDLE} to draft one`);
     assert.equal(link.getAttribute("data-charter-ask"), "ask");
     assert.equal(link.getAttribute("href"), `/org?compose=${encodeURIComponent("draft a charter for Codecast: Product")}`);
     assert.doesNotMatch(t.text(), /none hired yet|Hire a/);
@@ -198,7 +198,7 @@ describe("CharterBlock", () => {
     const t = await setup();
     await t.render({ charter: {}, roles: null });
     const link = document.querySelector<HTMLAnchorElement>("a")!;
-    assert.equal(link.textContent!.trim(), "Ask the Chief of Staff to draft one");
+    assert.equal(link.textContent!.trim(), "Ask the Head of People to draft one");
     assert.equal(link.getAttribute("data-charter-ask"), "unknown");
     assert.doesNotMatch(t.text(), /Hire a|none hired/);
     t.unmount();

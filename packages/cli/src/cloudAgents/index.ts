@@ -3,13 +3,14 @@
  * adapter here plus its CLOUD_AGENT_PROVIDERS entry in the shared contracts.
  */
 import { defaultConfigDir } from "../config/configDir.js";
-import { providerApiKey } from "../providerKeyStore.js";
+import { managedProviderKey } from "../providerKeyStore.js";
 import { CodexCloudAdapter } from "./codex.js";
 import { CursorCloudAdapter } from "./cursor.js";
+import { OpenAIAgentsAdapter } from "./openaiAgents.js";
 import type { AnyCloudAgentAdapter, CloudAgentLoginCommand } from "./types.js";
 
 export { CloudAgentRegistry, type CloudAgentRuntime } from "./registry.js";
-export { CloudAgentHoldError, CloudAgentSetupError, CloudAgentBusyError, logTag, type CloudAgentGit, type CloudAgentLoginCommand, type CloudAgentLoginState } from "./types.js";
+export { CloudAgentHoldError, CloudAgentSetupError, CloudAgentBusyError, CloudAgentUnsentError, logTag, type CloudAgentGit, type CloudAgentLoginCommand, type CloudAgentLoginState } from "./types.js";
 export { readMetaJson } from "./transcript.js";
 
 export interface CloudAgentAdapterDeps {
@@ -19,7 +20,8 @@ export interface CloudAgentAdapterDeps {
 
 export function cloudAgentAdapters(configDir = defaultConfigDir(), deps: CloudAgentAdapterDeps = {}): AnyCloudAgentAdapter[] {
   return [
-    new CursorCloudAdapter({ readKey: () => providerApiKey("cursor", configDir) }),
+    new CursorCloudAdapter({ readKey: () => managedProviderKey("cursor", configDir) }),
     new CodexCloudAdapter({ runLogin: deps.runLogin }),
+    new OpenAIAgentsAdapter({ readKey: () => managedProviderKey("openai", configDir) }),
   ];
 }

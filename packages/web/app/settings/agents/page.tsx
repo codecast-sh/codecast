@@ -1,7 +1,6 @@
 import { useCurrentUser } from "../../../hooks/useCurrentUser";
+import { useInboxStore } from "../../../store/inboxStore";
 import { useState } from "react";
-import { useMutation } from "convex/react";
-import { api } from "@codecast/convex/convex/_generated/api";
 import { Shield, SlidersHorizontal } from "lucide-react";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
@@ -37,9 +36,7 @@ const museOptions: { value: MuseMode; label: string; description: string; flag: 
 export default function AgentsPage() {
   const { user } = useCurrentUser();
   const modes = user?.agent_permission_modes;
-  const updateModes = useMutation(api.users.updateAgentPermissionModes);
   const defaultParams = user?.agent_default_params;
-  const updateDefaultParamsMutation = useMutation(api.users.updateAgentDefaultParams);
 
   const claude = modes?.claude ?? "default";
   const codex = modes?.codex ?? "default";
@@ -48,34 +45,25 @@ export default function AgentsPage() {
   // so the switch shows Yolo selected when nothing is stored.
   const muse = modes?.muse ?? "bypass";
 
-  const handleUpdate = async (updates: {
+  // Both go through the store (setAgentPermissionModes / setAgentDefaultParams):
+  // the choice shows now, holds over pushes, and a refusal puts it back with
+  // the standard dispatch toast.
+  const handleUpdate = (updates: {
     claude?: ClaudeMode;
     codex?: CodexMode;
     gemini?: GeminiMode;
     muse?: MuseMode;
   }) => {
-    try {
-      await updateModes({
-        claude: updates.claude ?? claude,
-        codex: updates.codex ?? codex,
-        gemini: updates.gemini ?? gemini,
-        muse: updates.muse ?? muse,
-      });
-      toast.success("Permission mode updated");
-    } catch (err) {
-      toast.error(`Failed to update: ${err instanceof Error ? err.message : String(err)}`);
-    }
+    useInboxStore.getState().setAgentPermissionModes({
+      claude: updates.claude ?? claude,
+      codex: updates.codex ?? codex,
+      gemini: updates.gemini ?? gemini,
+      muse: updates.muse ?? muse,
+    });
   };
 
-  const updateDefaultParams = async (args: { agent: string; params: Record<string, string> }) => {
-    try {
-      await updateDefaultParamsMutation({
-        agent: args.agent as "claude" | "codex" | "gemini" | "cursor" | "muse",
-        params: args.params,
-      });
-    } catch (err) {
-      toast.error(`Failed to update: ${err instanceof Error ? err.message : String(err)}`);
-    }
+  const updateDefaultParams = (args: { agent: string; params: Record<string, string> }) => {
+    useInboxStore.getState().setAgentDefaultParams(args.agent, args.params);
   };
 
   return (
@@ -193,28 +181,25 @@ function AgentParams({
   name: string;
   agent: "claude" | "codex" | "gemini" | "cursor" | "muse";
   params?: Record<string, string>;
-  onUpdate: (args: { agent: string; params: Record<string, string> }) => Promise<void>;
+  onUpdate: (args: { agent: string; params: Record<string, string> }) => void;
 }) {
   const [newKey, setNewKey] = useState("");
   const [newValue, setNewValue] = useState("");
 
   const entries = Object.entries(params ?? {});
 
-  const handleAdd = async () => {
+  const handleAdd = () => {
     if (!newKey.trim() || !newValue.trim()) return;
     const key = newKey.replace(/^--/, "").trim();
-    const updated = { ...(params ?? {}), [key]: newValue.trim() };
-    await onUpdate({ agent, params: updated });
+    onUpdate({ agent, params: { ...(params ?? {}), [key]: newValue.trim() } });
     setNewKey("");
     setNewValue("");
-    toast.success(`Added --${key} ${newValue.trim()}`);
   };
 
-  const handleDelete = async (key: string) => {
+  const handleDelete = (key: string) => {
     const updated = { ...(params ?? {}) };
     delete updated[key];
-    await onUpdate({ agent, params: updated });
-    toast.success(`Removed --${key}`);
+    onUpdate({ agent, params: updated });
   };
 
   return (

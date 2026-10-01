@@ -14,7 +14,7 @@
 // the list, the scope cards and the server all read): an agent's suggestion
 // or an unpromoted insight is not work to cover, so the counts here are the
 // counts a person sees when they click through. Whether to wrap, share or
-// split a lead is the Chief of Staff's reading.
+// split a lead is the Head of People's reading.
 
 import { projectLeadOf, type LeadRole } from "@codecast/shared/contracts/orgLead";
 import type { InitiativeRow } from "@codecast/shared/contracts/initiative";

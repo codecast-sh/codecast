@@ -61,8 +61,8 @@ health and target.
 project page shows the initiatives it belongs to under its lead. A role's
 scope view (R3) lists the initiatives its projects contribute to, and the
 initiatives it owns first. The task board gets an Initiative axis (through
-the task's project), and `cast task ls --initiative in-N`. The chief of
-staff's weekly review reads initiatives as the top of the tree: its letter
+the task's project), and `cast task ls --initiative in-N`. The head of
+people's weekly review reads initiatives as the top of the tree: its letter
 opens with how each active initiative is doing before it says anything about
 records. The CLI: `cast initiative create "Title" -d - [--owner @role|me]
 [--target 2026-12-01] [--project <id>...]`, `ls`, `show`, `update`,

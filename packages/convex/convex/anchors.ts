@@ -7,11 +7,11 @@ import { enqueueStartSession } from "./devices";
 import { fromConvexAgentType, workspaceFeatureEnabled } from "@codecast/shared/contracts";
 import { killConversation } from "./conversations";
 import { enqueuePendingMessage, formatSessionMessage, getAuthenticatedUserId } from "./pendingMessages";
-import { CHIEF_OF_STAFF_HANDLE, roleGrants } from "./lib/orgAccess";
+import { HEAD_OF_PEOPLE_HANDLE, roleGrants } from "./lib/orgAccess";
 import { standingReportsToFields } from "./lib/standingSeat";
 import { stampSeatOwners } from "./sessionOwners";
 import { roleStartsOnItsOwn } from "./lib/orgCaps";
-import { chiefOfStaffOpening } from "@codecast/shared/contracts/chiefOfStaffPrompt";
+import { headOfPeopleOpening } from "@codecast/shared/contracts/headOfPeoplePrompt";
 
 // An Anchor is codecast's standing agent member: one per team (shared) and one
 // per user (personal). It owns a long-lived `persistent` conversation that is
@@ -97,8 +97,8 @@ export async function visibleAnchorsForUser(
 // The first turn a role's standing session reads (org-roles-standing.md T1):
 // who it is and whom it reports to, what it looks after, how it wakes, that its
 // sessions stay out of the person's inbox, and that its brief is its memory.
-// The Chief of Staff's is the right hand's (shared/contracts/chiefOfStaffPrompt.ts
-// CHIEF_OF_STAFF_OPENING), in the same shape.
+// The Head of People's is the right hand's (shared/contracts/headOfPeoplePrompt.ts
+// HEAD_OF_PEOPLE_OPENING), in the same shape.
 export type RoleBootstrap = {
   handle: string;
   scopeNames: string[];
@@ -117,11 +117,11 @@ function roleOpeningMessage(name: string, workspace: string, role: RoleBootstrap
   const close = role.rebrief
     ? "These are your current instructions. Read `cast brief` now and carry on; there is nothing to announce."
     : "Read `cast brief` now, post a one-line hello, then stand by.";
-  // The chief's first review follows at once and is its first message, so it
+  // The Head of People's first review follows at once and is its first message, so it
   // posts no hello of its own.
-  if (role.handle === CHIEF_OF_STAFF_HANDLE) return `${chiefOfStaffOpening({ workspace, person: role.parentName })}\n\nRead \`cast brief\` now.`;
+  if (role.handle === HEAD_OF_PEOPLE_HANDLE) return `${headOfPeopleOpening({ workspace, person: role.parentName })}\n\nRead \`cast brief\` now.`;
   const starts = role.startsOnItsOwn
-    ? "You start work on your own: new work goes to a session you start with `cast spawn`, and you say which one."
+    ? "You start work on your own: new work goes to a session you start under you, and you say which one."
     : "You do not start work on your own: you read, answer and recommend, and a person starts the work.";
   // Scope is opt in (org-staffing.md S26): a role that names no area looks
   // after none, and is never told the workspace is its own.
@@ -251,13 +251,13 @@ async function findExistingAnchor(
   if (scope.org_role_id) return live.find((a: any) => String(a.org_role_id ?? "") === String(scope.org_role_id)) ?? null;
   const plain = live.find((a: any) => !a.org_role_id);
   if (plain) return plain;
-  // The chief of staff IS the workspace's standing agent (org-staffing.md
-  // S12): once `cast org staff` has seated the anchor as the chief, its row
+  // The head of people IS the workspace's standing agent (org-staffing.md
+  // S12): once `cast org staff` has seated the anchor as the Head of People, its row
   // carries the role pointer and still answers as the workspace anchor, so
-  // Slack, chat and `cast anchor say` keep working as aliases of the chief.
+  // Slack, chat and `cast anchor say` keep working as aliases of the Head of People.
   for (const a of live) {
     const role = a.org_role_id ? await ctx.db.get(a.org_role_id) : null;
-    if (role && role.handle === CHIEF_OF_STAFF_HANDLE && role.status !== "retired") return a;
+    if (role && role.handle === HEAD_OF_PEOPLE_HANDLE && role.status !== "retired") return a;
   }
   return null;
 }
@@ -502,7 +502,7 @@ export async function provisionStandingAgent(
   // An adopted session keeps its owner, history and machine; it gains the
   // role's identity and the standing markers a provisioned row is born with.
   // A team seat is the team's: a private analyzer session that becomes the
-  // chief of staff must be visible to every member, or the org page shows
+  // head of people must be visible to every member, or the org page shows
   // the anchor with no session for everyone but the hirer. Visibility goes
   // through the chokepoint so linked work items get their key recomputed.
   if (adopt) {
@@ -727,16 +727,16 @@ export const listAnchors = query({
       out.push({
         ...a,
         bot_name: bot?.name ?? a.name,
-        // Set once the anchor is a role's seat (the chief of staff, S12).
+        // Set once the anchor is a role's seat (the head of people, S12).
         org_role_id: a.org_role_id ?? null,
         role: role && role.status !== "retired"
           ? { _id: role._id, short_id: role.short_id, name: role.name, handle: role.handle, avatar: role.avatar ?? null, status: role.status }
           : null,
-        // The workspace's root (org-staffing.md S22): the seat of its chief of
-        // staff, by the same rule the root seat migration uses. Every other
+        // The workspace's root (org-staffing.md S22): the seat of its head of
+        // people, by the same rule the root seat migration uses. Every other
         // role's standing session is a row here too, so a picker that takes
         // the first row of a workspace lands on whichever lead is oldest.
-        is_root: !!role && role.status !== "retired" && role.handle === CHIEF_OF_STAFF_HANDLE,
+        is_root: !!role && role.status !== "retired" && role.handle === HEAD_OF_PEOPLE_HANDLE,
         bot_avatar: bot?.image ?? null,
         team_name: (team as any)?.name ?? null,
         in_my_team: a.team_id ? teamIds.has(a.team_id.toString()) : false,
@@ -783,7 +783,7 @@ export async function decommissionAnchorRow(ctx: any, anchor: any): Promise<void
       // putting it to sleep; the kill then tears the agent down, cancels what
       // would revive it, and files the card under Killed, out of the inbox.
       await ctx.db.patch(anchor.conversation_id, { persistent: false, inbox_pinned_at: undefined });
-      await killConversation(ctx, conv.user_id, { conversation_id: anchor.conversation_id, mark_completed: true });
+      await killConversation(ctx, conv.user_id, { conversation_id: anchor.conversation_id, mark_completed: true }, { retiring: true });
     }
   }
   const chans = await ctx.db

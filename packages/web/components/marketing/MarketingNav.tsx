@@ -61,8 +61,8 @@ export function MarketingNav({
       className="backdrop-blur-sm sticky top-0 z-50"
       style={{ borderBottom: "1px solid #eee8d5", backgroundColor: "rgba(253,246,227,0.8)" }}
     >
-      <div className={`${containerClassName} mx-auto px-6 ${crumb ? "py-3" : "py-4"} flex items-center justify-between`}>
-        <div className="flex items-center gap-6">
+      <div className={`${containerClassName} mx-auto px-4 sm:px-6 ${crumb ? "py-3" : "py-4"} flex items-center justify-between gap-2`}>
+        <div className="flex items-center gap-6 shrink-0">
           <Link href="/" aria-label="Codecast home">
             <Logo size="md" className="[--logo-c:#444444] text-[#002b36]" />
           </Link>
@@ -73,7 +73,7 @@ export function MarketingNav({
             </div>
           )}
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
           {MARKETING_NAV_LINKS.map(({ href, label }) => (
             <Link
               key={href}
@@ -88,7 +88,7 @@ export function MarketingNav({
               a visitor on a phone or a Mac should always see there is an app. */}
           <Link
             href="/download"
-            className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm font-medium transition-colors hover:bg-[#eee8d5]"
+            className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 sm:px-3 py-1.5 text-sm font-medium transition-colors hover:bg-[#eee8d5]"
             style={{ borderColor: active === "/download" ? INK : "#93a1a1", color: INK }}
           >
             {apple ? <AppleIcon className="w-4 h-4" /> : <Download className="w-4 h-4" />}
@@ -105,7 +105,8 @@ export function MarketingNav({
             </Link>
           ) : (
             <>
-              <Link href="/login">
+              {/* Phones have room for one auth button; signup links to sign in. */}
+              <Link href="/login" className="hidden sm:block">
                 <Button variant="ghost" className="font-medium text-[#657b83] hover:text-[#002b36] hover:bg-[#eee8d5]">
                   Sign in
                 </Button>

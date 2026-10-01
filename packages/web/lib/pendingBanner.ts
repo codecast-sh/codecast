@@ -87,6 +87,16 @@ export function serverPendingRows(pending?: ServerPendingStatus | null): ServerP
   return pending.inflight?.length ? pending.inflight : [pending];
 }
 
+/** The messages a session holds that have not reached it, from its server pending rows (whichever window sent them), oldest first. */
+function heldSends(pending: ServerPendingStatus | null | undefined): ServerPendingRow[] {
+  return serverPendingRows(pending).filter((r) => r.status === "pending" && !!r.content);
+}
+
+/** A conversation's held sends, read from the store's server pending rows (a selector). */
+export function heldSendsOf(s: { pendingMessageStatus?: Record<string, unknown> }, conversationId: string | undefined): ServerPendingRow[] {
+  return conversationId ? heldSends(s.pendingMessageStatus?.[conversationId] as ServerPendingStatus | undefined) : [];
+}
+
 type PendingRowRef = { message_id: string; client_id?: string; status?: string; hold_reason?: string };
 type PendingLookup = PendingRowRef & { inflight?: PendingRowRef[] };
 

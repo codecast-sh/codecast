@@ -43,4 +43,8 @@ describe("resolveMentionClickNavigation", () => {
   it("does not hijack target=_blank anchors", () => {
     expect(resolveMentionClickNavigation({ ...base, href: "/team/abc", target: "_blank" })).toBeNull();
   });
+
+  it("never routes a mention inside the homepage hero's sandbox", () => {
+    expect(resolveMentionClickNavigation({ ...base, href: "/team/abc", insideHero: true })).toBeNull();
+  });
 });

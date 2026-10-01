@@ -22,7 +22,7 @@
 The private-API risk is contained in the design:
 - one adapter,
 - contract tests on recorded fixtures,
-- a daily live canary that turns the lane off with a clear banner if OpenAI changes something.
+- a kill switch in the watcher that pauses the lane with a clear banner when OpenAI changes something, and a daily live canary that tells the team.
 
 ## What the research established
 
@@ -55,7 +55,8 @@ Ask mode is `run_environment_in_qa_mode: true`, inferred from the field name. Th
 - **New (announced at DevDay today, 2026-09-29)** uses reusable, *published* VM environments. Each task gets an isolated VM, its state is kept for 7 days, and tasks continue on web, mobile and desktop.
   - Every turn in the API already carries `app_server_events` / `thread_events` fields, which are empty on legacy tasks. The likely reading is that new tasks run the Codex app-server in the VM and record its events there.
   - If so, codecast's existing Codex app-server parser renders them with little new code. **This is the first spike** (see Phase 0).
-  - Ashot's account has no new-style environment yet: `/wham/machines` is empty and the only environment is `wham-public/wham-universal`.
+  - Ashot's account has no new-style environment yet: `/wham/machines` is empty and every environment is `wham-public/wham-universal`.
+  - Still true on 2026-10-02: the account's Create environment form offers only the container type (image `universal`, setup script, container caching), and the official CLI (0.159.3) still finds environments only through `/environments` and `/environments/by-repo`. Spike (a) waits on OpenAI rolling VM environments out to the account (ct-56164 tracks it).
 
 ### Agents API: the public lane (verified in the docs)
 
@@ -99,14 +100,14 @@ The Cursor Cloud work already has every generic piece. It's extracted into `clou
 | Sessions registry: start / deliver / interrupt, held messages with reasons, setup-failure cards | `create`, `followUp`, `cancel`, `archive`, setup checks |
 | Header chip, branch → `git_branch`, key/login status, the Sync-page switch (`CLOUD_SESSION_SOURCES`) | URLs, labels |
 
-Sources: `cursor` (done), `codex_cloud` (plan, `/wham`), `codex_api` (Agents API). The web composer's "run in the cloud" switch, the model half-filter and the Connect dialog pattern are reused as they are.
+Sources: `cursor` (done), `codex` (plan, `/wham`; setting `codex_cloud_sync`), `codex_api` (Agents API; setting `codex_api_sync`). The web composer's "run in the cloud" switch, the model half-filter and the Connect dialog pattern are reused as they are.
 
 ### 2. Codex Cloud (plan) lane: every capability
 
 | Capability | How |
 |---|---|
 | **Sync** every task (including `@codex` tasks from GitHub, Linear and Slack) | Poll `/tasks/list` every 30s while any task is pending, 5 min otherwise, and read changed tasks with `/turns`. Legacy work logs render tool calls (shell commands and outputs) and messages. New-VM tasks render through the app-server parser once confirmed. |
-| **Start** from the composer | Codex + "run in the cloud" → environment picker, auto-picked from the repo's GitHub remote the way the CLI does it (`/environments/by-repo`), plus an attempts picker (1 to 4). `POST /tasks`. |
+| **Start** from the composer | Codex + "run in the cloud" → the environment is auto-picked from the repo's GitHub remote the way the CLI does it (`/environments/by-repo`, else any that lists the repo, a pinned one first), plus an attempts picker (1 to 4). `POST /tasks`. There is no picker in the composer: pinning an environment on chatgpt.com is how a repo with several chooses, and the transcript names the environment under the first prompt. |
 | **Ask mode** | Toggle, `run_environment_in_qa_mode: true`. |
 | **Follow-ups** | `POST /tasks {follow_up}`. A message sent while the agent is busy is held and delivered when the turn ends (same mechanism as Cursor). |
 | **Interrupt** | Escape → `POST /tasks/{id}/cancel`. |
@@ -130,9 +131,10 @@ Sources: `cursor` (done), `codex_cloud` (plan, `/wham`), `codex_api` (Agents API
 
 ### 4. Risk containment for the private lane
 
-- **One adapter file.** Every private call goes through `codexCloudApi.ts`, which sends the official CLI's headers (`User-Agent: codex_cli_rs/<ver> … (codex_cloud_tasks_*)`).
+- **One adapter file.** Every private call goes through `CodexCloudApi` in `packages/cli/src/cloudAgents/codex.ts`, over `codexBackendRequest` in `codexBackendUsage.ts`. It sends the headers codecast's Codex usage meter already sent to `/wham/usage` before this work (`codexBackendHeadersFromAuth`: the bearer token, `ChatGPT-Account-Id`, `User-Agent: codex-cli`, `OpenAI-Beta: codex-1`, `originator: Codex Desktop`). One header builder serves both, and every call was verified live with it; the spike's raw client sent the CLI's `codex_cli_rs/<ver> … codex_cloud_tasks_tui` agent instead, which the API does not require.
 - **Contract tests** on recorded, scrubbed payloads for list, task, turns (legacy and new), follow-up, cancel and error shapes.
-- **Daily live canary** (a trigger): read-only list + task read. If a shape breaks, the lane turns itself off for that machine with a banner ("Codex Cloud changed; syncing paused, codecast is updating"). Nothing guesses at a changed schema.
+- **Kill switch** in the watcher (`report()` in `cloudAgents/watcher.ts`): a shape break, three unexpected 4xx answers in a row, or a pass where every task read answered unexpectedly pauses the lane on that machine with a banner ("Codex Cloud changed in a way codecast can't read yet"), and a check every 5 minutes resumes it. Nothing guesses at a changed schema.
+- **Daily live canary** (trigger tr-1254 on Ashot's machine): its precheck, `packages/cli/scripts/cloud-agent-canary.ts codex`, reads one list page and mirrors one task through the adapter's own read path and shape guard, writing nothing. A clean read skips the run and spends nothing; a break starts a read-only session that reports what changed and asks for attention.
 - **Opt-in:** off until the person turns on "Sync Codex Cloud tasks" (a new `CLOUD_SESSION_SOURCES` entry) or starts one from the composer.
 - **No token refresh, no scraping, no browser automation.**
 
@@ -142,10 +144,10 @@ Sources: `cursor` (done), `codex_cloud` (plan, `/wham`), `codex_api` (Agents API
 |---|---|---|
 | **0. Spikes** (½ day) | (a) Create one new-style environment and one task; capture its `/turns` shape and `app_server_events`. (b) One follow-up via `POST /tasks {follow_up}` without the web's anti-abuse headers. (c) Cancel and archive live. (d) Ask mode. | Recorded fixtures for each; go/no-go per capability |
 | **1. Core extraction** | Move Cursor Cloud's mirror, sessions and UI into `cloudAgents/` behind adapters; Cursor keeps working unchanged | Existing Cursor Cloud tests + e2e rerun |
-| **2. Codex Cloud sync** | Mirror, both transcript generations, header chip, branch, Sync switch, usage chip, sign-in dialog, expired/403 cards | Ashot's past tasks import correctly; a new task started on chatgpt.com appears within 30s |
-| **3. Codex Cloud drive** | Start (environment + attempts + ask), follow-ups, held-while-busy, cancel, attempts as branches, Create PR, Apply locally, archive | Browser e2e: start on `ashot/wetrip`, follow-up, cancel, best-of-2, apply |
+| **2. Codex Cloud sync** | Mirror, both transcript generations, header chip, branch, Sync switch, usage chip, sign-in dialog, expired/403 cards | Ashot's past tasks import correctly; a new task started on chatgpt.com appears within the 5-minute idle poll (30s while a task runs or right after a send) |
+| **3. Codex Cloud drive** | Start (environment + attempts + ask), follow-ups, held-while-busy, cancel, attempts as branches, Create PR, Apply locally, archive | Browser e2e: start on `ashot/chatdoc` (the account's existing environment), follow-up, cancel, best-of-2, apply |
 | **4. Agents API lane** | OpenAI key verification, session create/stream/follow-up/cancel into the same mirror | Browser e2e on an API key |
-| **5. Hardening** | Canary trigger, kill switch, docs/README, Enterprise 403 path | Canary run + forced-failure test |
+| **5. Hardening** | Canary trigger, kill switch, docs/README, Enterprise 403 path | Canary run + forced-failure test (the canary exits "changed" on a patched list with a mistyped field and on an unexpected 422; the kill switch is covered by watcher and contract tests; the Enterprise 403 and plan-limit 429 paths are fixture-only, no such account to test live) |
 
 ## Decisions for Ashot
 

@@ -9,7 +9,6 @@ import {
   isStickyEligible,
   stickyPromptContent,
   pickStickyFallback,
-  pickStickyFallbackFromLoaded,
   resolveStickyPrompt,
   mergeNavigatorSources,
   topVisibleIndexFromRects,
@@ -297,7 +296,7 @@ describe("countCommentsByMessage", () => {
   });
 });
 
-describe("pickStickyFallbackFromLoaded", () => {
+describe("pickStickyFallback against the top visible row", () => {
   const user = (id: string, content: string, timestamp: number) => ({ _id: id, role: "user" as const, content, timestamp });
   const all = [
     user("p1", "first prompt", 100),
@@ -305,17 +304,24 @@ describe("pickStickyFallbackFromLoaded", () => {
     user("p3", "third prompt", 300),
   ];
 
-  test("builds the loaded set and earliest timestamp from the loaded list", () => {
-    const loaded = [
-      { _id: "p3", timestamp: 300 },
-      { _id: "x", timestamp: 350 },
-    ];
-    expect(pickStickyFallbackFromLoaded(all, loaded)?.id).toBe("p2");
+  test("a window holding the opening prompt and the tail shows the latest prompt above the reader, not the opening one", () => {
+    // Loaded: p1 (an early row stretching the window back) plus a tail of
+    // replies and machine rows at 400+. Reading the tail, the window resolves
+    // p1; p3 is later and still above, so it wins.
+    const loaded = new Set(["p1", "reply-a", "reply-b"]);
+    expect(pickStickyFallback(all, loaded, 450, 100)?.id).toBe("p3");
+  });
+
+  test("a loaded prompt newer than every unloaded one keeps its place", () => {
+    expect(pickStickyFallback(all, new Set(["p3"]), 450, 300)).toBeNull();
+  });
+
+  test("prompts after the top visible row never claim it", () => {
+    expect(pickStickyFallback(all, new Set(), 250)?.id).toBe("p2");
   });
 
   test("empty loaded window falls back to the latest prompt overall", () => {
-    expect(pickStickyFallbackFromLoaded(all, [])?.id).toBe("p3");
-    expect(pickStickyFallbackFromLoaded(undefined, [])).toBeNull();
+    expect(pickStickyFallback(all, new Set(), Infinity)?.id).toBe("p3");
   });
 
   test("interruption notices never replace the last human prompt", () => {
@@ -325,8 +331,8 @@ describe("pickStickyFallbackFromLoaded", () => {
       "<turn_aborted>user aborted",
     ].map((content, index) => user(`notice-${index}`, content, 400 + index));
     for (const notice of notices) expect(isStickyEligible(notice.content)).toBe(false);
-    expect(pickStickyFallbackFromLoaded([...all, ...notices], [{ _id: "reply", timestamp: 500 }])?.id).toBe("p3");
-    expect(pickStickyFallbackFromLoaded(notices, [])).toBeNull();
+    expect(pickStickyFallback([...all, ...notices], new Set(["reply"]), 500)?.id).toBe("p3");
+    expect(pickStickyFallback(notices, new Set(), Infinity)).toBeNull();
   });
 });
 
