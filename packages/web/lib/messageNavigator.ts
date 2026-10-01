@@ -310,40 +310,28 @@ export function isStickyEligible(content: string): boolean {
   return display.length > 0 && !isSystemMessage(display);
 }
 
-// Pick the latest user message that sits ABOVE the loaded window — the most
-// recent prompt the reader scrolled past but that isn't paginated in yet.
-// Returning the first not-loaded message instead would always surface the
-// conversation's opening prompt when parked deep in a long thread.
+// The latest prompt that is NOT in the loaded window and sits between the
+// prompt the window resolved (afterTs) and the top visible row (beforeTs).
+// The sticky header shows the latest prompt at or above what the reader is
+// looking at; the window can only resolve prompts it holds, so a later one it
+// does not hold (scrolled past every loaded prompt, a window that reaches far
+// back through one early row, a gap) has to come from the full prompt list
+// or the header falls back to an older prompt, as far back as the opening one.
 export function pickStickyFallback(
   userMessages: StickySourceMessage[] | null | undefined,
   loadedIds: Set<string>,
-  earliestLoadedTs: number,
-): { id: string; content: string; fromUserId?: string } | null {
+  beforeTs: number,
+  afterTs = -Infinity,
+): { id: string; content: string; fromUserId?: string; timestamp: number } | null {
   if (!userMessages || userMessages.length === 0) return null;
   for (let i = userMessages.length - 1; i >= 0; i--) {
     const msg = userMessages[i];
-    if (msg.role !== "user") continue;
+    if (msg.timestamp <= afterTs) return null;
+    if (msg.role !== "user" || msg.timestamp >= beforeTs) continue;
     if (loadedIds.has(msg._id) || !isStickyEligible(msg.content)) continue;
-    if (msg.timestamp >= earliestLoadedTs) continue;
-    return { id: msg._id, content: msg.content, fromUserId: msg.from_user_id };
+    return { id: msg._id, content: msg.content, fromUserId: msg.from_user_id, timestamp: msg.timestamp };
   }
   return null;
-}
-
-// Same pick, but assembling the loaded-window inputs (id set + earliest
-// timestamp) from the loaded messages themselves — both platforms hand their
-// loaded list straight in instead of building the Set by hand.
-export function pickStickyFallbackFromLoaded(
-  userMessages: StickySourceMessage[] | null | undefined,
-  loaded: { _id: string; timestamp?: number }[],
-): { id: string; content: string; fromUserId?: string } | null {
-  const loadedIds = new Set<string>();
-  let earliestLoadedTs = Infinity;
-  for (const m of loaded) {
-    loadedIds.add(m._id);
-    if (typeof m.timestamp === "number" && m.timestamp < earliestLoadedTs) earliestLoadedTs = m.timestamp;
-  }
-  return pickStickyFallback(userMessages, loadedIds, earliestLoadedTs);
 }
 
 // Active sticky prompt = the latest sticky-worthy row at or above the top

@@ -1,0 +1,19 @@
+{
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "notes": "design spec delivered for a feature, implementation still ahead",
+  "label": {
+    "verdict": "needs_input"
+  },
+  "snapshot": {
+    "newestFirst": [
+      {
+        "role": "assistant",
+        "content": "Design written to docs/account-switch.md: token storage per account, proactive refresh, daemon handshake changes, and a two-step migration. Implementation touches auth.ts, daemon.ts and the keychain wrapper."
+      },
+      {
+        "role": "user",
+        "content": "add multi-account switching to the CLI"
+      }
+    ]
+  }
+}

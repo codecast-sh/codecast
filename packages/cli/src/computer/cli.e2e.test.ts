@@ -111,12 +111,10 @@ describe("the verb group is registered and answers without a helper", () => {
     for (const verb of [
       "capabilities", "permissions", "list-apps", "list-windows", "get-app-state", "click",
       "perform-secondary-action", "scroll", "type-text", "press-key", "hotkey", "paste-text", "set-value",
+      "drag",
     ]) {
       expect(help).toContain(verb);
     }
-    // v1 ships no drag verb: it cannot be verified, and Orca's delivery does
-    // nothing in many apps while reporting success.
-    expect(help).not.toContain("cast computer drag");
   });
 
   cliTest("an invented verb fails instead of printing help to stdout", () => {
@@ -193,13 +191,13 @@ describe("the verb group is registered and answers without a helper", () => {
 });
 
 describe("against the built helper", () => {
-  granted("capabilities reports protocol 1, no drag and no focus verb", () => {
+  granted("capabilities reports protocol 1, drag and no focus verb", () => {
     const run = runCli(["computer", "capabilities", "--json"]);
     expect(run.status).toBe(0);
     const caps = run.json() as any;
     expect(caps.ok).toBe(true);
     expect(caps.protocolVersion).toBe(1);
-    expect(caps.supports.actions.drag).toBe(false);
+    expect(caps.supports.actions.drag).toBe(true);
     expect(caps.supports.windows.focus).toBe(false);
   });
 

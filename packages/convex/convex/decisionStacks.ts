@@ -36,6 +36,11 @@ async function authUser(ctx: any, apiToken?: string): Promise<Id<"users"> | null
 // The stack the caller may act on. `admin` = reshape (policy, reorder,
 // delegate): owner, personal owner, or team admin; else any member may read
 // and add.
+/** May `userId` read this stack? The same rule accessibleStack applies by ref. */
+export async function canReadStack(ctx: Ctx, userId: Id<"users">, stack: StackRow): Promise<boolean> {
+  return userCanAccessRole(ctx, userId, seatOf(stack));
+}
+
 async function accessibleStack(
   ctx: Ctx,
   userId: Id<"users">,

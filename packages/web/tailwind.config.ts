@@ -40,6 +40,8 @@ const config: Config = {
     // its two buttons stayed flex-1 at desktop width and squeezed to 49px).
     "./hooks/**/*.{js,ts,jsx,tsx}",
     "./lib/**/*.{js,ts,jsx,tsx}",
+    // tours/ draws the spotlight card and the Tours panel.
+    "./tours/**/*.{js,ts,jsx,tsx}",
   ],
   theme: {
   	extend: {

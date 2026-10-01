@@ -1,0 +1,19 @@
+{
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "notes": "findings report with problems listed but no ask",
+  "label": {
+    "verdict": "done"
+  },
+  "snapshot": {
+    "newestFirst": [
+      {
+        "role": "assistant",
+        "content": "Report sent to team-lead.\n\n**Findings: six real omissions, roughly 12,600 lines of uncovered code.**\n\nMethod was a literal name match against the inventory. Of 102 route files, 2 are unmatched; of 88 lib files, 4. I added rows S29–S34 for them. I also confirmed `routes/webhooks/**` is genuinely covered. The common cause: boundaries enumerate files by name, so anything whose name never surfaced ended up with no owner."
+      },
+      {
+        "role": "user",
+        "content": "check inventory coverage"
+      }
+    ]
+  }
+}

@@ -17,7 +17,7 @@
 // status snapshot via subscribe/getSnapshot; nothing here touches the store
 // except through convex mutations.
 import { Room, RoomEvent, Track } from "livekit-client";
-import { addressesAgent, agentSpokenNames, MID_TURN_AGENT_STATUSES } from "@codecast/shared/contracts";
+import { addressesAgent, agentSpokenNames, isAgentFaceIdentity, MID_TURN_AGENT_STATUSES } from "@codecast/shared/contracts";
 import { useInboxStore } from "../../store/inboxStore";
 import { characterFor } from "../sessionIdentity";
 import { findSessionRow } from "./findSessionRow";
@@ -97,8 +97,11 @@ function attachRoomTracks() {
       me.name || "Me",
     );
   }
-  // Every subscribed remote audio track.
+  // Every subscribed remote audio track but an agent's face: its words are
+  // already the agent's reply in the room's chat, and transcribing them would
+  // hand the agent its own words back as the room talking.
   for (const p of room.remoteParticipants.values()) {
+    if (isAgentFaceIdentity(p.identity)) continue;
     const pub = p.getTrackPublication(Track.Source.Microphone);
     if (pub?.isSubscribed && pub.track?.mediaStreamTrack) {
       attachTrack(
@@ -116,7 +119,18 @@ function attachRoomTracks() {
  *  true when a run is now live here; false when somebody else's run already
  *  covers the room, the huddle opted out (`auto` only), or the server
  *  refused — in which case no track was attached and nothing is held. */
-export async function startScribe(opts: {
+// One start at a time: the switch and the auto-scribe can both ask in the
+// same beat (switching back on clears the opt-out the auto-scribe watches),
+// and two runs opening pipes would append every word twice.
+let starting: Promise<boolean> | null = null;
+export function startScribe(opts: Parameters<typeof startScribeOnce>[0]): Promise<boolean> {
+  starting ??= startScribeOnce(opts).finally(() => {
+    starting = null;
+  });
+  return starting;
+}
+
+async function startScribeOnce(opts: {
   convex: ConvexHandle;
   room: Room;
   roomKey: string;

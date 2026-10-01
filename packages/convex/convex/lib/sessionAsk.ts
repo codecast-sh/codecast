@@ -1,7 +1,8 @@
 // `cast read <id> --ask "<question>"`: the pure half. The action in
 // sessionAsk.ts scans one conversation in bounded steps; each step turns a
 // message row into an AskLine here, and the action then picks which lines a
-// model reads (selectAskContext) and writes the prompt (buildAskPrompt).
+// model reads (selectAskContext) and writes the prompt (buildAskPrompt), both
+// through askAnswerRequest, the request the evals replay too.
 //
 // Line numbers are `cast read`'s: the 1-based index among non-empty rows, so a
 // citation "msg 412" is `cast read <id> 412`.
@@ -10,6 +11,7 @@
 
 import { countMatches } from "@codecast/shared/search";
 import { formatToolName, isEditTool, isWriteTool, toolPathFromInput, toolSummary } from "@codecast/shared/render";
+import { CHEAP_MODEL, type SurfaceRequest } from "./anthropic";
 import { citationSpans, spanLines } from "./sessionAskCitations";
 import { isCompactionMessage, isNavigableUserMessage, stripContextTags, type FilterableMessage } from "../userMessagesFilter";
 
@@ -258,6 +260,16 @@ export async function readSession(
   return { lines, complete: false, headLines: head.length, tailLines: tail.length };
 }
 
+/**
+ * A read of rows already in hand (oldest first, each non-empty), numbered the
+ * way the scan numbers a session it reads whole. The evals take this path to
+ * the lines the action would have read.
+ */
+export function readRows(rows: Array<AskMessage & { _id: string }>, terms: string[]): Promise<AskRead> {
+  const newestFirst = rows.map((m) => ({ id: m._id, creation_time: m.timestamp, ...toAskLine(m, 0, terms) })).reverse();
+  return readSession(async () => ({ lines: newestFirst }), { maxSteps: 1, maxMs: Infinity });
+}
+
 // ── Choosing what the model reads ─────────────────────────────────────────
 
 export interface AskContextOptions {
@@ -479,6 +491,52 @@ ${excerpts}
 </${EXCERPTS_TAG}>
 
 Question again: ${input.question}${input.unread ? `\nThe messages between msg ${input.unread.headLines} and msg -${input.unread.tailLines} were not read; say so in the answer.` : ""}`;
+}
+
+// ── The two requests ──────────────────────────────────────────────────────
+// The action posts these, and the evals replay them, so a prompt measured
+// offline is the prompt prod sends.
+
+/** Characters of excerpt the model reads: about 50k tokens, a few cents. */
+export const ASK_BUDGET_CHARS = 180_000;
+
+/** The first call: the model's extra search terms for the question. */
+export function askTermsRequest(question: string): SurfaceRequest {
+  return { model: CHEAP_MODEL, max_tokens: 200, temperature: 0, prompt: buildTermsPrompt(question) };
+}
+
+/** What the scan searches for: the question's own words plus the terms call's reply. */
+export function askTerms(question: string, termsReply: string | null | undefined): string[] {
+  return dedupeTerms([...questionTerms(question), ...parseTermsReply(termsReply)]);
+}
+
+export interface AskAnswerInput {
+  question: string;
+  title: string;
+  read: AskRead;
+  termCount: number;
+  extraFiles?: Map<number, string[]>;
+}
+
+/** The second call: the lines chosen from a read, and the answer request over them. */
+export function askAnswerRequest(input: AskAnswerInput): { context: AskContext; request: SurfaceRequest } {
+  const { read } = input;
+  const unread = read.complete ? undefined : { headLines: read.headLines, tailLines: read.tailLines };
+  const context = selectAskContext(read.lines, {
+    budget: ASK_BUDGET_CHARS,
+    termCount: input.termCount,
+    extraFiles: input.extraFiles,
+    unreadAfter: unread?.headLines,
+  });
+  const prompt = buildAskPrompt({
+    question: input.question,
+    title: input.title,
+    totalLines: read.lines.length,
+    shownLines: context.shownLines.length,
+    excerpts: context.text,
+    unread,
+  });
+  return { context, request: { model: CHEAP_MODEL, max_tokens: 1500, temperature: 0, system: ASK_SYSTEM_PROMPT, prompt } };
 }
 
 /** Message numbers the answer cites (msg 12, msg 12–15, msg 12-msg 15, msg -3), in order, deduplicated. */

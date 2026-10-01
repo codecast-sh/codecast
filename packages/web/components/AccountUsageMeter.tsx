@@ -11,7 +11,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
 import { RefreshCw } from "lucide-react";
 import { isWindowRolled, worstUsagePercent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
-import { formatAgo, formatCountdown } from "@codecast/shared/contracts";
+import { formatAgo, formatCountdown, labeledUsageWindows } from "@codecast/shared/contracts";
 import { usageTone } from "../lib/usageTone";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -119,22 +119,8 @@ export function AccountUsageBars({ usage, now }: { usage?: CcUsage | null; now: 
   const stale = now - usage.fetched_at > STALE_AFTER_MS;
   return (
     <div className="space-y-0.5">
-      {usage.session && (
-        <UsageMeterRow label="Session" percent={usage.session.percent} resetsAt={usage.session.resets_at} now={now} />
-      )}
-      {usage.weekly && (
-        <UsageMeterRow label="Week" percent={usage.weekly.percent} resetsAt={usage.weekly.resets_at} now={now} />
-      )}
-      {usage.weekly_scoped && (
-        <UsageMeterRow
-          label={usage.weekly_scoped.label ?? "Model"}
-          percent={usage.weekly_scoped.percent}
-          resetsAt={usage.weekly_scoped.resets_at}
-          now={now}
-        />
-      )}
-      {usage.scoped?.map((s) => (
-        <UsageMeterRow key={s.label} label={s.label} percent={s.percent} resetsAt={s.resets_at} now={now} />
+      {labeledUsageWindows(usage).map((w) => (
+        <UsageMeterRow key={w.label} label={w.name} percent={w.percent} resetsAt={w.resets_at} now={now} />
       ))}
       {usage.extra && showExtraSpend(usage.extra) && (
         <UsageMeterRow

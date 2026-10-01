@@ -1,8 +1,8 @@
 // Mounts the staffing pane in jsdom against the fixture proposal and health
 // and checks its states: a proposal as its asks (org-staffing.md S19: one
 // line of header, one card per ask with Accept, Skip and Ask about this, the
-// rows inside the fold, one line of cost), the health summary with no
-// proposal, and the two buttons with no chief of staff. It ends with S19's
+// rows inside the fold, one line of cost), the pointer to the health page
+// with no proposal, and the two buttons with no chief of staff. It ends with S19's
 // own test applied to the first screen: every word a cold reader meets before
 // scrolling, checked against the words the glossary exists to define.
 // Run: bun components/org/StaffingPane.mount.test.tsx
@@ -280,104 +280,13 @@ async function verifyStaffingPane() {
   assert.match(firstScreen, /Ask about this/);
   assert.match(firstScreen, /If you accept:/);
 
-  // ── a paused chief of staff is said, with Resume ──
-  const pausedTree = { ...chiefTree, roles: chiefTree.roles.map((r) => r.handle === "chief-of-staff" ? { ...r, status: "paused" as const } : r) };
-  await render({ proposal: null, selectedChangeId: null, tree: pausedTree, chief: findChiefOfStaff(pausedTree), onResumeChief: (id: string) => calls.push(`resume:${id}`) });
-  assert.match(q("[data-chief-paused]")!.textContent!, /is paused: its triggers hold until you resume it\. Messages still reach it\./);
-  await act(async () => button("Resume").click());
-  assert.equal(calls.pop(), "resume:fixture-role-chief");
-  assert.ok(q("[data-thread]"), "the thread still renders under the notice");
-  await render({ proposal: null, selectedChangeId: null });
-  assert.equal(q("[data-chief-paused]"), null);
-
-  // ── no proposal, a chief: the loop (S29) ──
-  // Needs you, then one row per area in tree order, then the chief's read.
-  // No findings list, no roles per person bar, no strain chips, and none of
-  // the old model's words anywhere a person reads.
-  const queue: any[] = [{ key: "decide:1", source: "decide", conversationId: "fixture-growth-conv", question: "Which plan names go on the pricing page?", options: [{ label: "Starter and Pro" }, { label: "Free, Pro, Team" }], blocking: true, createdAt: Date.now() - 3_600_000, decisionId: "sd-77" }];
-  const loopCalls: string[] = [];
-  const loop = {
-    queue,
-    onAnswerDecision: (id: string, i: number) => loopCalls.push(`answer:${id}:${i}`),
-    onTrigger: (id: string, verb: string) => loopCalls.push(`trigger:${id}:${verb}`),
-    onSetTriggerEvery: (id: string, ms: number) => loopCalls.push(`every:${id}:${ms}`),
-    onSendToRole: (conv: string, body: string) => loopCalls.push(`send:${conv}:${body}`),
-  };
-  await render({ proposal: null, selectedChangeId: null, ...loop });
+  // ── no proposal, a chief: the health page has it, and the sheet says so ──
+  await render({ proposal: null, selectedChangeId: null, onOpenHealth: () => calls.push("health") });
   assert.equal(q("[data-staffing-mode]")!.getAttribute("data-staffing-mode"), "health");
-  assert.match(text(), /Company health/);
-  assert.doesNotMatch(text(), /Findings|Roles per person|under strain|live hands|cap hit|ledger|model:|breach|\bhands?\b/i);
-  assert.equal(q("[data-span]"), null);
-  assert.equal(q("[data-bottlenecks]"), null);
-  assert.equal(q("[data-flags]"), null);
-  // Needs you: the decision the growth lead routed, answerable in place, and
-  // the open proposal the pane is not showing.
-  assert.equal(q("[data-needs-you]")!.getAttribute("data-needs-you"), "2");
-  assert.match(q('[data-needs-you-item="proposal"]')!.textContent!, /Split growth.*6 changes to decide/);
-  await act(async () => (q('[data-needs-you-item="proposal"] [data-needs-you-open]') as HTMLButtonElement).click());
-  assert.equal(calls.pop(), "pick:op-7");
-  assert.match(q('[data-needs-you-item="decision"]')!.textContent!, /Which plan names go on the pricing page\?.*Head of Growth asks/);
-  await act(async () => (qa("[data-needs-you-options] button")[1] as HTMLButtonElement).click());
-  assert.equal(loopCalls.pop(), "answer:sd-77:1");
-  await act(async () => (q('[data-needs-you-item="decision"] [data-needs-you-open]') as HTMLButtonElement).click());
-  assert.equal(calls.pop(), "open:fixture-growth-conv");
-  // Areas in tree order: the chief first, then growth, each with its status word and its own line.
-  const rows = qa("[data-area-row]");
-  assert.deepEqual(rows.map((r) => r.getAttribute("data-area-row")), ["chief-of-staff", "growth"]);
-  assert.deepEqual(rows.map((r) => r.querySelector("[data-area-status]")!.textContent), ["on track", "stuck"]);
-  assert.match(rows[1].querySelector("[data-area-standing]")!.textContent!, /Two landing pages shipped this week/);
-  assert.match(rows[0].querySelector("[data-area-standing]")!.textContent!, /Growth is carrying the quarter/);
-  // A row opens inline: goals, the sessions waiting, at most three signals, the check with its verbs, and Ask @role.
-  await act(async () => (rows[1].querySelector("button") as HTMLButtonElement).click());
-  const detail = q('[data-area-detail="growth"]')!;
-  assert.match(detail.querySelector("[data-area-status-line]")!.textContent!, /^Stuck: 1 session under it waiting unanswered, 1 task stuck in review\.$/);
-  assert.match(q('[data-area-goal="fixture-project-growth"]')!.textContent!, /Growth: Double signups from organic search by December12 done this week · 11 in progress · 19 open/);
-  assert.equal(qa("[data-area-waiting-session]").length, 2);
-  assert.match(qa("[data-area-waiting-session]")[0].textContent!, /Pricing page copy.*blocked.*Which plan names go on the page\?/);
-  await act(async () => (qa("[data-area-waiting-session]")[0] as HTMLButtonElement).click());
-  assert.equal(calls.pop(), "open:fixture-growth-2");
-  assert.equal(qa("[data-area-signal]").length, 3);
-  assert.match(detail.querySelector('[data-area-check="scheduled"]')!.textContent!, /Last check 5h ago.*next in/);
-  await act(async () => (detail.querySelector('[data-area-check] [aria-label="Pause"]') as HTMLButtonElement).click());
-  assert.equal(loopCalls.pop(), "trigger:fixture-trigger-growth-check:pause");
-  await act(async () => (detail.querySelector('[data-area-check] [aria-label="Check now"]') as HTMLButtonElement).click());
-  assert.equal(loopCalls.pop(), "trigger:fixture-trigger-growth-check:runNow");
-  const cadence = detail.querySelector<HTMLSelectElement>("[data-area-cadence]")!;
-  assert.equal(cadence.value, String(86_400_000));
-  await act(async () => { cadence.value = String(7 * 86_400_000); cadence.dispatchEvent(new (window as any).Event("change", { bubbles: true })); });
-  assert.equal(loopCalls.pop(), `every:fixture-trigger-growth-check:${7 * 86_400_000}`);
-  assert.match(detail.querySelector("[data-area-check-link]")!.getAttribute("href")!, /\/triggers\/tr-41$/);
-  const ask = detail.querySelector<HTMLInputElement>('[data-ask-role="growth"] input')!;
-  await act(async () => { const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!; setter.call(ask, "Why is the pricing page waiting?"); ask.dispatchEvent(new (window as any).Event("input", { bubbles: true })); });
-  await act(async () => { detail.querySelector("form")!.dispatchEvent(new (window as any).Event("submit", { bubbles: true, cancelable: true })); });
-  assert.equal(loopCalls.pop(), "send:fixture-growth-conv:Why is the pricing page waiting?");
-  assert.ok(q("[data-ask-role-sent]"));
-  await act(async () => (detail.querySelector("[data-area-open-node]") as HTMLButtonElement).click());
-  assert.equal(calls.pop(), "node:role:fixture-role-growth");
-  // The chief's read: its Company line, and its review with Review now.
-  assert.match(q("[data-chief-narrative]")!.textContent!, /^Growth is carrying the quarter/);
-  await act(async () => (q('[data-chief-read] [aria-label="Review now"]') as HTMLButtonElement).click());
-  assert.equal(loopCalls.pop(), "trigger:fixture-trigger-company-review:runNow");
-  assert.ok(q("[data-thread]"), "the chief's composer stays under the loop");
-  // Nothing routed: it says so in three words.
-  await render({ proposal: null, selectedChangeId: null, ...loop, queue: [], proposals: [] });
-  assert.equal(q("[data-needs-you]")!.getAttribute("data-needs-you"), "empty");
-  assert.match(q('[data-needs-you="empty"]')!.textContent!, /^Nothing needs you\.$/);
-
-  // Health missing on this backend says so, and the areas still list from the tree.
-  await render({ proposal: null, selectedChangeId: null, health: null, healthMissing: true });
-  assert.match(text(), /does not read the company's health yet/);
-  assert.equal(qa("[data-area-row]").length, 2);
-
-  // A read that failed with nothing cached says so with a retry; with a
-  // cached copy the areas stay and one line says the read failed.
-  await render({ proposal: null, selectedChangeId: null, health: null, healthMissing: false, healthError: "Too many reads in a single function execution", onRetryHealth: () => calls.push("retryHealth") });
-  assert.match(text(), /Health could not be read: Too many reads/);
-  await act(async () => q<HTMLButtonElement>("[data-health-error] button")!.click());
-  assert.equal(calls.pop(), "retryHealth");
-  await render({ proposal: null, selectedChangeId: null, healthMissing: false, healthError: "the host is busy" });
-  assert.ok(q("[data-health-stale]"));
-  assert.equal(qa("[data-area-row]").length, 2);
+  assert.match(q("[data-health-pointer]")!.textContent!, /No proposal is open/);
+  assert.equal(q("[data-composer]"), null, "the chief's conversation lives on the health page");
+  await act(async () => q<HTMLButtonElement>("[data-open-health]")!.click());
+  assert.equal(calls.pop(), "health");
 
   // ── no chief of staff: the two buttons, then reviewing ──
   await render({ proposal: null, selectedChangeId: null, tree: ORG_FIXTURE, chief: null });

@@ -217,6 +217,11 @@ export function useGlobalShortcutActions() {
     useInboxStore.getState().toggleShortcutsPanel();
   }, []));
 
+  useShortcutAction('ui.openTours', useCallback(() => {
+    const s = useInboxStore.getState();
+    s.setToursPanelOpen(!s.toursPanelOpen);
+  }, []));
+
   useShortcutAction('ui.openSettings', useCallback(() => {
     const s = useInboxStore.getState();
     if (s.settingsModalSection) s.closeSettingsModal();

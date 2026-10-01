@@ -14,7 +14,14 @@ export type PendingComment = {
   // editor can offer posting it as a durable team comment at that anchor.
   filePath?: string;
   fileLine?: number;
+  // Set on an image quoted from the session gallery. `quote` then holds a
+  // plain description of where the image came from, and the image itself is
+  // pointed at by its attachment number when it rides along on the send, else
+  // by its address.
+  image?: QuotedImage;
 };
+
+export type QuotedImage = { src: string; href?: string; storageId?: string };
 
 // Prefix every line with "> " so multi-line and structured text (lists, code)
 // stay inside one blockquote. Blank lines become a bare ">" to keep the quote
@@ -37,11 +44,25 @@ export function formatQuotedReply(quote: string, body?: string): string {
   return bq || reply;
 }
 
+// What an image quote's blockquote says: the image first (the `[Image N]`
+// token the composer uses for attachments when it is attached to the send, its
+// address as a markdown image otherwise), then where it came from.
+export function imageQuoteText(c: Pick<PendingComment, "quote" | "image">, attachmentNumber?: number): string {
+  if (!c.image) return c.quote;
+  const head = attachmentNumber ? `[Image ${attachmentNumber}]` : c.image.href ? `![image](${c.image.href})` : "[image]";
+  return c.quote ? `${head}\n${c.quote}` : head;
+}
+
 // A batch of inline comments, in the order given, separated by blank lines.
 // Comments with no body still emit their quote (treated as a plain quote).
-export function formatPendingComments(comments: Pick<PendingComment, "quote" | "body">[]): string {
+// `attachmentNumbers` maps an image comment's id to its position among the
+// send's attached images.
+export function formatPendingComments(
+  comments: (Pick<PendingComment, "quote" | "body" | "image"> & { id?: string })[],
+  attachmentNumbers?: ReadonlyMap<string, number>,
+): string {
   return comments
-    .map((c) => formatQuotedReply(c.quote, c.body))
+    .map((c) => formatQuotedReply(imageQuoteText(c, c.id ? attachmentNumbers?.get(c.id) : undefined), c.body))
     .filter(Boolean)
     .join("\n\n");
 }

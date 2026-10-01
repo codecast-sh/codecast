@@ -7,8 +7,28 @@ export type SlackDirection = "both" | "slack_to_codecast" | "codecast_to_slack";
 
 export type SlackSendAuth = "ready" | "connect" | "reconnect";
 
+export function tokenHasScope(scopes: string | undefined | null, scope: string): boolean {
+  return (scopes ?? "").split(",").some((s) => s.trim() === scope);
+}
+
 export function tokenCanPost(scopes: string | undefined | null): boolean {
-  return (scopes ?? "").split(",").some((scope) => scope.trim() === "chat:write");
+  return tokenHasScope(scopes, "chat:write");
+}
+
+/** Which token may change who is in a mirrored Slack channel: the app's, once
+ *  it holds the manage scope for that kind of channel; else, for a private
+ *  channel, the person's own (groups:write); else nobody until the workspace
+ *  is reconnected with the newer scopes. */
+export type SlackMemberWriter = "bot" | "user" | null;
+
+export function slackMemberWriter(opts: {
+  isPrivate: boolean;
+  botScopes?: string | null;
+  userScopes?: string | null;
+}): SlackMemberWriter {
+  if (tokenHasScope(opts.botScopes, opts.isPrivate ? "groups:write" : "channels:manage")) return "bot";
+  if (opts.isPrivate && tokenHasScope(opts.userScopes, "groups:write")) return "user";
+  return null;
 }
 
 export function slackSendAuth(token: { scopes?: string } | null): SlackSendAuth {
@@ -133,3 +153,17 @@ export const DIRECTION_SENTENCE: Record<SlackDirection, string> = {
   slack_to_codecast: "Messages here appear there.",
   codecast_to_slack: "Messages from codecast appear here.",
 };
+
+/** The Slack roster after one change: a whole read (`set`), or one join or
+ *  leave. Returns the SAME array when nothing changed, so a caller can skip
+ *  the write. Bounded by `cap`: a huge channel keeps its first `cap` ids. */
+export function nextSlackMembers(
+  current: string[],
+  change: { set?: string[]; add?: string; remove?: string },
+  cap: number,
+): string[] {
+  if (change.set) return [...new Set(change.set)].slice(0, cap);
+  if (change.add && !current.includes(change.add) && current.length < cap) return [...current, change.add];
+  if (change.remove && current.includes(change.remove)) return current.filter((id) => id !== change.remove);
+  return current;
+}

@@ -121,7 +121,7 @@ function roleOpeningMessage(name: string, workspace: string, role: RoleBootstrap
   // posts no hello of its own.
   if (role.handle === CHIEF_OF_STAFF_HANDLE) return `${chiefOfStaffOpening({ workspace, person: role.parentName })}\n\nRead \`cast brief\` now.`;
   const starts = role.startsOnItsOwn
-    ? "You start work on your own: new work goes to a session you start with `cast spawn`, and you say which one."
+    ? "You start work on your own: new work goes to a session you start under you, and you say which one."
     : "You do not start work on your own: you read, answer and recommend, and a person starts the work.";
   // Scope is opt in (org-staffing.md S26): a role that names no area looks
   // after none, and is never told the workspace is its own.
@@ -783,7 +783,7 @@ export async function decommissionAnchorRow(ctx: any, anchor: any): Promise<void
       // putting it to sleep; the kill then tears the agent down, cancels what
       // would revive it, and files the card under Killed, out of the inbox.
       await ctx.db.patch(anchor.conversation_id, { persistent: false, inbox_pinned_at: undefined });
-      await killConversation(ctx, conv.user_id, { conversation_id: anchor.conversation_id, mark_completed: true });
+      await killConversation(ctx, conv.user_id, { conversation_id: anchor.conversation_id, mark_completed: true }, { retiring: true });
     }
   }
   const chans = await ctx.db

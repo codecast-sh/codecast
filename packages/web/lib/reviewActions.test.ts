@@ -1,6 +1,6 @@
 import { test, expect, describe, beforeEach } from "bun:test";
 import { useInboxStore } from "../store/inboxStore";
-import { takeReviewBatch, attachReviewToMessage, createReviewComment } from "./reviewActions";
+import { takeReviewBatch, attachReviewToMessage, createReviewComment, toggleImageQuote, quotedImageStorageIds } from "./reviewActions";
 import { formatPlanFeedback, formatDocFeedback, formatPendingComments, sortPendingComments, type PendingComment } from "./quoteFormat";
 
 const CONV = "conv-test";
@@ -126,6 +126,47 @@ describe("attachReviewToMessage", () => {
 
   test("leaves the typed message untouched when no quotes are pending", () => {
     expect(attachReviewToMessage(CONV, "just text")).toBe("just text");
+  });
+});
+
+describe("image quotes from the gallery", () => {
+  const shot = { src: "https://x.convex.cloud/api/storage/s1", href: "https://x.convex.cloud/api/storage/s1", storageId: "s1", messageId: "m1" };
+  const remote = { src: "https://example.com/a.png", href: "https://example.com/a.png", messageId: "m2" };
+
+  beforeEach(() => {
+    useInboxStore.setState({
+      messages: {
+        [CONV]: [
+          { _id: "m1", role: "assistant", content: "Here is the dashboard after the fix", timestamp: 1_700_000_000_000 },
+          { _id: "m1b", role: "assistant", content: "", timestamp: 1_700_000_050_000, tool_calls: [{ id: "tu1", name: "Read", input: JSON.stringify({ file_path: "/tmp/shot.png" }) }] },
+          { _id: "m2", role: "user", content: "", timestamp: 1_700_000_100_000, images: [{ storage_id: "s2", tool_use_id: "tu1" }] },
+        ],
+      },
+    } as any);
+  });
+
+  test("toggling quotes an image into the batch beside paragraph quotes, and toggling again removes it", () => {
+    seed([mk("1", 0, "a paragraph", "")]);
+    expect(toggleImageQuote(CONV, shot)).toBe(true);
+    const added = useInboxStore.getState().reviewComments[CONV].find((c) => c.image);
+    expect(added?.image).toEqual({ src: shot.src, href: shot.href, storageId: "s1" });
+    expect(added?.quote).toStartWith("Image from your message at ");
+    expect(added?.quote).toEndWith(': "Here is the dashboard after the fix"');
+    expect(toggleImageQuote(CONV, shot)).toBe(false);
+    expect(useInboxStore.getState().reviewComments[CONV].map((c) => c.id)).toEqual(["1"]);
+  });
+
+  test("an attached image quote names its attachment number; one without stored bytes points by address", () => {
+    toggleImageQuote(CONV, shot);
+    toggleImageQuote(CONV, remote);
+    expect(quotedImageStorageIds(CONV)).toEqual(["s1"]);
+    const text = attachReviewToMessage(CONV, "match these", 3);
+    expect(text).toMatch(/^> \[Image 3\]\n> Image from your message at .*\n\n> !\[image\]\(https:\/\/example\.com\/a\.png\)\n> Image returned by your Read call at .*: `\/tmp\/shot\.png`\n\nmatch these$/);
+  });
+
+  test("without attachment numbers every image quote points by address", () => {
+    toggleImageQuote(CONV, shot);
+    expect(takeReviewBatch(CONV)).toStartWith(`> ![image](${shot.href})\n> Image from your message`);
   });
 });
 
