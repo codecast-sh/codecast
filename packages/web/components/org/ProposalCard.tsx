@@ -96,12 +96,13 @@ const tagStatus = (status: ProposalTreeRow["status"]) => (status === "failed" ? 
 
 /** One node as the tree draws it: the face, the name in the ghost's frame
  *  while proposed, the row's tag, and the delta chip when the change is not
- *  an edge. A retire is hatched and struck; a skipped row is struck and dim. */
+ *  an edge. A retire is hatched and struck; a record being closed is struck;
+ *  a skipped row is struck and dim. */
 function NodeLine({ row }: { row: ProposalTreeRow }) {
   const status = tagStatus(row.status);
   const proposed = row.status === "proposed" || row.status === "failed";
   const retire = row.kind === "retire";
-  const struck = retire || row.status === "skipped";
+  const struck = retire || !!row.closes || row.status === "skipped";
   const m = row.unresolved ? CHIP_STATUS.failed : CHIP_STATUS[row.status];
   const name = row.node.name;
   return (
@@ -118,7 +119,7 @@ function NodeLine({ row }: { row: ProposalTreeRow }) {
         {row.node.kind === "role" && <span className="truncate text-[10px] text-sol-text-dim">@{row.node.handle}</span>}
         {row.node.kind === "session" && <span className="truncate font-mono text-[10px] text-sol-text-dim">{row.node.short_id}</span>}
       </span>
-      <GhostTag label={row.unresolved ? "unknown" : row.tag} status={row.unresolved ? "failed" : status} tone={retire && status === "proposed" ? "color-mix(in srgb, var(--sol-red) 70%, var(--sol-text))" : undefined} />
+      <GhostTag label={row.unresolved ? "unknown" : row.tag} status={row.unresolved ? "failed" : status} tone={status !== "proposed" ? undefined : retire ? "color-mix(in srgb, var(--sol-red) 70%, var(--sol-text))" : row.closes ? (row.closes === "done" ? "var(--sol-green)" : "color-mix(in srgb, var(--sol-red) 70%, var(--sol-text))") : undefined} />
       {row.status !== "proposed" && row.status !== "applied" && row.status !== "accepted" && <StatusPill status={row.status} />}
       {(row.status === "applied" || row.status === "accepted") && (
         <span className="inline-flex items-center gap-0.5 text-[10px] font-medium" style={{ color: CHANGE_STATUS_META[row.status].color }} data-tree-status={row.status}>

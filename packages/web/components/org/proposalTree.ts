@@ -41,6 +41,9 @@ export type ProposalTreeRow = {
   chip: string | null;
   /** The subject's handle answers to nothing live: drawn as a warning. */
   unresolved: boolean;
+  /** The status a record's change closes it with (done, dropped,
+   *  abandoned), drawn struck so the card reads as closing the record. */
+  closes: "done" | "dropped" | "abandoned" | null;
   /** The line under the row, so the card says what a message would
    *  otherwise spell out beside it: a new role's scope and seat, a record's
    *  reason for its new status. */
@@ -96,7 +99,7 @@ export function proposalTreeRows(tree: OrgTree | null, changes: readonly OrgProp
 
   return ordered.map((c): ProposalTreeRow => {
     const ch = editedOrgChange(c.change, c.edits);
-    const base = { change_id: c._id, seq: c.seq, kind: ch.kind, status: c.status, line: describeOrgChange(ch), from: null, chip: null, unresolved: false, detail: null } as const;
+    const base = { change_id: c._id, seq: c.seq, kind: ch.kind, status: c.status, line: describeOrgChange(ch), from: null, chip: null, unresolved: false, detail: null, closes: null } as const;
     switch (ch.kind) {
       case "role": {
         // The stub ghostsFor pushed (keyed by the change id), else the live
@@ -123,7 +126,8 @@ export function proposalTreeRows(tree: OrgTree | null, changes: readonly OrgProp
       case "task_status": case "plan_status": case "project_status": {
         const record = ch.kind === "task_status" ? "task" : ch.kind === "plan_status" ? "plan" : "project";
         const ref = ch.kind === "task_status" ? ch.task : ch.kind === "plan_status" ? ch.plan : ch.project;
-        return { ...base, tag: ch.status, node: { kind: "record", id: ref, name: ch.title ?? ref, record }, parent: null, detail: ch.reason };
+        const closes = ch.status === "done" || ch.status === "dropped" || ch.status === "abandoned" ? ch.status : null;
+        return { ...base, tag: `→ ${ch.status}`, node: { kind: "record", id: ref, name: ch.title ?? ref, record }, parent: null, detail: ch.reason, closes };
       }
       case "retire": {
         const { face, unresolved } = roleFace(ch.handle);
