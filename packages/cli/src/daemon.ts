@@ -9831,16 +9831,8 @@ async function resolveTeamLeadConversation(
           queue.push(child);
         }
       }
-      try {
-        const regPath = path.join(process.env.HOME || "", ".claude", "sessions", `${pid}.json`);
-        if (fs.existsSync(regPath)) {
-          const reg = JSON.parse(fs.readFileSync(regPath, "utf-8"));
-          const sid = reg?.sessionId;
-          if (typeof sid === "string" && conversationCache[sid]) {
-            leadConvIds.add(conversationCache[sid]);
-          }
-        }
-      } catch {}
+      const sid = readPidRegistrySessionId(pid);
+      if (sid && conversationCache[sid]) leadConvIds.add(conversationCache[sid]);
     }
     // Exactly one live non-member agent in this tmux session — that's the lead.
     // Zero or several means we can't tell; stay unlinked rather than guess.
@@ -9897,14 +9889,33 @@ const SPAWN_LINK_MAX_ATTEMPTS = 3;
 const pendingNativeParents = new Map<string, { parentSessionId: string; description?: string }>();
 const retiringCodexReviews = new Set<string>();
 
+function pidRegistryDir(): string {
+  return path.join(process.env.HOME || "", ".claude", "sessions");
+}
+
 function readPidRegistrySessionId(pid: number): string | null {
   try {
-    const regPath = path.join(process.env.HOME || "", ".claude", "sessions", `${pid}.json`);
+    const regPath = path.join(pidRegistryDir(), `${pid}.json`);
     if (!fs.existsSync(regPath)) return null;
     const reg = JSON.parse(fs.readFileSync(regPath, "utf-8"));
     return typeof reg?.sessionId === "string" ? reg.sessionId : null;
   } catch {
     return null;
+  }
+}
+
+// A headless claude (`claude -p`, which is what `cast exec` runs) has no tty
+// and appends to its transcript without holding it open, so neither lsof nor
+// findSessionProcess finds it. It still registers its own pid.
+function pidsRegisteredForSession(sessionId: string): number[] {
+  try {
+    return fs.readdirSync(pidRegistryDir())
+      .map((name) => /^(\d+)\.json$/.exec(name)?.[1])
+      .filter((pid): pid is string => !!pid)
+      .map(Number)
+      .filter((pid) => readPidRegistrySessionId(pid) === sessionId);
+  } catch {
+    return [];
   }
 }
 
@@ -9988,7 +9999,7 @@ async function walkSpawnerCandidates(
   let pids = await pidsWithFileOpen(filePath);
   if (pids.length === 0) {
     const proc = await findSessionProcess(sessionId, agentType).catch(() => null);
-    if (proc) pids = [proc.pid];
+    pids = proc ? [proc.pid] : pidsRegisteredForSession(sessionId);
   }
   if (pids.length === 0) return [];
   const psOut = (await psSnapshotLines(["-axo", "pid=,ppid="])).join("\n");
