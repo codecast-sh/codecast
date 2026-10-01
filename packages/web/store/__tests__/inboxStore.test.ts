@@ -3289,6 +3289,25 @@ describe("pruneGhostSessions — verified removal of GC'd blanks", () => {
     expect(s.sessions[CREATING]).toBeDefined();
     expect(s.pending[`sessions:${CURRENT}`]).toBeUndefined();
   });
+
+  // var's ghost (2026-10-01): a session deleted server-side while a send was
+  // still unsettled. Nothing can settle that send, so the guard kept the row
+  // forever. A proven deletion drops it, and an open one goes when the view moves.
+  it("drops a server-deleted session even with an unsettled send", () => {
+    useInboxStore.getState().pruneGhostSessions([SENDING], { serverDeleted: true });
+    const s = useInboxStore.getState();
+    expect(s.sessions[SENDING]).toBeUndefined();
+    expect(s.pendingMessages[SENDING]).toBeUndefined();
+    expect(s.pending[`sessions:${SENDING}`]?.type).toBe("exclude");
+  });
+
+  it("defers a server-deleted open session until the view moves off it", () => {
+    useInboxStore.getState().pruneGhostSessions([CURRENT], { serverDeleted: true });
+    expect(useInboxStore.getState().sessions[CURRENT]).toBeDefined();
+    useInboxStore.getState().navigateToSession(GONE);
+    expect(useInboxStore.getState().currentSessionId).toBe(GONE);
+    expect(useInboxStore.getState().sessions[CURRENT]).toBeUndefined();
+  });
 });
 
 // Local-first mutation actions: each must (1) mutate the store synchronously so
@@ -4454,9 +4473,10 @@ describe("dismiss/kill advances in the ACTIVE view order, like j/k", () => {
     const MIN = 60_000;
     seedCurrentSession({
       sessions: {
-        [A]: waiting(A, now - 30 * MIN, now - 10 * MIN),
-        [B]: waiting(B, now - 20 * MIN, now - 30 * MIN),
-        [C]: waiting(C, now - 10 * MIN, now - 20 * MIN),
+        // Started past INBOX_CREATE_GRACE_MS, so no row holds NEW.
+        [A]: waiting(A, now - 30 * MIN, now - 70 * MIN),
+        [B]: waiting(B, now - 20 * MIN, now - 90 * MIN),
+        [C]: waiting(C, now - 10 * MIN, now - 80 * MIN),
       },
       conversations: {
         [A]: { _id: A } as any,

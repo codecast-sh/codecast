@@ -9,6 +9,7 @@ import { useWatchEffect } from "../hooks/useWatchEffect";
 import { AssigneeSelect } from "./AssigneeSelect";
 import type { AssigneeInfo } from "@codecast/shared/contracts/orgAssignee";
 import { Switch } from "./ui/switch";
+import { CreateDialog, CreateDialogTitle, CreateChipCaret, createChipClass, createMenuItemClass, CREATE_MENU_CLASS, CREATE_MENU_SEARCH_CLASS } from "./CreateDialog";
 import { DocEditor } from "./editor/DocEditor";
 import type { MentionItem } from "./editor/MentionList";
 import { toast } from "sonner";
@@ -21,9 +22,9 @@ import {
   ArrowDown,
   Minus,
   Check,
-  ChevronDown,
   Tag,
   Search,
+  CheckSquare,
 } from "lucide-react";
 
 const api = _api as any;
@@ -63,27 +64,27 @@ function PropertyChip<T extends string>({
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs border border-sol-border/30 hover:border-sol-border/60 text-sol-text-muted hover:text-sol-text transition-colors"
+        className={createChipClass(false, open)}
+        aria-expanded={open}
       >
         <Icon className={`w-3.5 h-3.5 ${current.color || ""}`} />
         <span>{current.label}</span>
-        <ChevronDown className="w-3 h-3 opacity-60" />
+        <CreateChipCaret open={open} />
       </button>
       {open && (
-        <div className="absolute top-full left-0 mt-1 w-40 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[250] py-1">
+        <div className={CREATE_MENU_CLASS}>
           {options.map((opt) => {
             const OptIcon = opt.icon;
             return (
               <button
                 key={opt.key}
+                type="button"
                 onClick={() => { onChange(opt.key); setOpen(false); }}
-                className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors ${
-                  opt.key === value ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"
-                }`}
+                className={createMenuItemClass(opt.key === value)}
               >
                 <OptIcon className={`w-3.5 h-3.5 ${opt.color || ""}`} />
-                <span className="flex-1 text-left">{opt.label}</span>
-                {opt.key === value && <Check className="w-3 h-3 text-sol-cyan" />}
+                <span className="flex-1">{opt.label}</span>
+                {opt.key === value && <Check className="w-3.5 h-3.5 text-sol-cyan" />}
               </button>
             );
           })}
@@ -131,11 +132,8 @@ function LabelsChip({ value, onChange }: { value: string[]; onChange: (v: string
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors border ${
-          value.length > 0
-            ? "border-sol-border/60 bg-sol-bg-alt text-sol-text"
-            : "border-sol-border/30 hover:border-sol-border/60 text-sol-text-dim hover:text-sol-text"
-        }`}
+        className={createChipClass(value.length > 0, open)}
+        aria-expanded={open}
       >
         <Tag className="w-3.5 h-3.5" />
         {value.length > 0 ? (
@@ -143,17 +141,17 @@ function LabelsChip({ value, onChange }: { value: string[]; onChange: (v: string
         ) : (
           <span>Labels</span>
         )}
-        <ChevronDown className="w-3 h-3 opacity-60" />
+        <CreateChipCaret open={open} />
       </button>
       {open && (
-        <div className="absolute top-full left-0 mt-1 w-48 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[250] overflow-hidden">
-          <div className="flex items-center gap-2 px-3 py-2 border-b border-sol-border/30">
+        <div className={`${CREATE_MENU_CLASS} w-52`}>
+          <div className={CREATE_MENU_SEARCH_CLASS}>
             <Search className="w-3.5 h-3.5 text-sol-text-dim flex-shrink-0" />
             <input
               ref={inputRef}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Type to search or create..."
+              placeholder="Search or create a label"
               className="flex-1 text-xs bg-transparent text-sol-text placeholder:text-sol-text-dim outline-none"
               onKeyDown={(e) => {
                 if (e.key === "Escape") setOpen(false);
@@ -161,11 +159,12 @@ function LabelsChip({ value, onChange }: { value: string[]; onChange: (v: string
               }}
             />
           </div>
-          <div className="py-1 max-h-48 overflow-y-auto">
+          <div className="max-h-52 overflow-y-auto">
             {canCreate && (
               <button
+                type="button"
                 onClick={createAndAdd}
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-sol-cyan hover:bg-sol-bg-alt transition-colors"
+                className={`${createMenuItemClass()} text-sol-cyan hover:text-sol-cyan`}
               >
                 <Plus className="w-3 h-3 flex-shrink-0" />
                 <span className="flex-1 text-left">Create &quot;{search.trim()}&quot;</span>
@@ -176,10 +175,9 @@ function LabelsChip({ value, onChange }: { value: string[]; onChange: (v: string
               return (
                 <button
                   key={label}
+                  type="button"
                   onClick={() => toggle(label)}
-                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors ${
-                    value.includes(label) ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"
-                  }`}
+                  className={createMenuItemClass(value.includes(label))}
                 >
                   <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${color.dot}`} />
                   <span className="flex-1 text-left">{label}</span>
@@ -278,75 +276,57 @@ export function CreateTaskModal({ onClose, teamMembers, currentUser, defaults }:
   }, [title, priority, status, taskStatuses, assignee, labels, createMore, createTask, onClose, workspaceArgs, defaults]);
 
   return (
-    <div
-      className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[10001] flex items-start justify-center pt-[10vh] animate-in fade-in duration-150"
-      onClick={onClose}
-      onKeyDown={(e) => {
-        if (e.key === "Escape") onClose();
-        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); handleSubmit(); }
-      }}
+    <CreateDialog
+      icon={<CheckSquare className="h-3 w-3 text-sol-cyan" />}
+      noun="task"
+      onClose={onClose}
+      onSubmit={handleSubmit}
+      canSubmit={!!title.trim()}
+      submitLabel="Create task"
+      width="lg"
+      footerStart={
+        <label className="flex cursor-pointer select-none items-center gap-2 text-xs text-sol-text-dim transition-colors hover:text-sol-text">
+          <Switch checked={createMore} onCheckedChange={setCreateMore} aria-label="Create another" />
+          <span>Create another</span>
+        </label>
+      }
     >
-      <div
-        className="bg-sol-bg border border-sol-border rounded-2xl shadow-2xl w-full max-w-[640px] animate-in slide-in-from-bottom-4 fade-in duration-200"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="px-6 pt-6 pb-1">
-          <input
-            ref={titleRef}
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="Task title"
-            autoFocus
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.metaKey && !e.ctrlKey) e.preventDefault();
-            }}
-            className="w-full text-xl font-semibold text-sol-text placeholder:text-sol-text-dim/40 bg-transparent outline-none"
-          />
-        </div>
-
-        <div className="px-6 pb-4 min-h-[120px] max-h-[280px] overflow-y-auto doc-editor-compact">
-          <DocEditor
-            key={editorKey}
-            content=""
-            onUpdate={(md) => { descriptionRef.current = md; }}
-            onMentionQuery={handleMentionQuery}
-            onImageUpload={handleImageUpload}
-            placeholder="Add description... use @ to mention, paste images"
-            className="text-sm"
-          />
-        </div>
-
-        <div className="flex items-center gap-2 px-6 py-3 border-t border-sol-border/40 flex-wrap">
-          <PropertyChip value={status as any} options={statusOptions as any} onChange={(v) => setStatus(v)} />
-          <PropertyChip value={priority as any} options={CREATE_PRIORITY_OPTIONS as any} onChange={(v) => setPriority(v)} />
-          <LabelsChip value={labels} onChange={setLabels} />
-          <AssigneeSelect
-            value={assignee}
-            valueInfo={assigneeInfo}
-            onChange={(id, info) => { setAssignee(id); setAssigneeInfo(info); }}
-            teamMembers={teamMembers}
-            currentUser={currentUser}
-          />
-        </div>
-
-        <div className="flex items-center gap-3 px-6 py-4 border-t border-sol-border/40">
-          <label className="flex items-center gap-2 text-xs text-sol-text-dim cursor-pointer select-none hover:text-sol-text transition-colors">
-            <Switch checked={createMore} onCheckedChange={setCreateMore} />
-            <span>Create another</span>
-          </label>
-          <div className="flex-1" />
-          <span className="text-[11px] text-sol-text-dim/50 mr-1 hidden sm:inline">
-            {typeof navigator !== "undefined" && /Mac/.test(navigator.userAgent) ? "\u2318" : "Ctrl"}+&#x21B5;
-          </span>
-          <button
-            onClick={handleSubmit}
-            disabled={!title.trim()}
-            className="px-5 py-2 text-sm rounded-lg bg-sol-cyan text-sol-bg font-semibold hover:brightness-110 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
-          >
-            Create task
-          </button>
-        </div>
+      <div className="px-5 pt-3">
+        <CreateDialogTitle
+          ref={titleRef}
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder="Task title"
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.metaKey && !e.ctrlKey) e.preventDefault();
+          }}
+        />
       </div>
-    </div>
+
+      <div className="px-5 pb-3 pt-1 min-h-[120px] max-h-[280px] overflow-y-auto doc-editor-compact">
+        <DocEditor
+          key={editorKey}
+          content=""
+          onUpdate={(md) => { descriptionRef.current = md; }}
+          onMentionQuery={handleMentionQuery}
+          onImageUpload={handleImageUpload}
+          placeholder="Add description... use @ to mention, paste images"
+          className="text-sm"
+        />
+      </div>
+
+      <div className="flex flex-wrap items-center gap-1.5 px-5 pb-3.5">
+        <PropertyChip value={status as any} options={statusOptions as any} onChange={(v) => setStatus(v)} />
+        <PropertyChip value={priority as any} options={CREATE_PRIORITY_OPTIONS as any} onChange={(v) => setPriority(v)} />
+        <LabelsChip value={labels} onChange={setLabels} />
+        <AssigneeSelect
+          value={assignee}
+          valueInfo={assigneeInfo}
+          onChange={(id, info) => { setAssignee(id); setAssigneeInfo(info); }}
+          teamMembers={teamMembers}
+          currentUser={currentUser}
+        />
+      </div>
+    </CreateDialog>
   );
 }

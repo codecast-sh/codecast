@@ -38,7 +38,22 @@ export type ChunkHeaderOpts = {
   /** The words waited while the agent worked, or while it held the room off
    *  with `cast call hold`, and arrive together as one catch up. */
   held: boolean;
+  /** Carry the whole framing (lane, reply and hold notes). Off, the header
+   *  is one line that names the lane; see `needsFullBrief`. */
+  full: boolean;
 };
+
+// The full framing is several paragraphs, and a live feed sends a chunk at
+// every pause in the room. It leads the first chunk a route delivers and
+// every Nth after that, so an agent whose context was compacted meets it
+// again; every other chunk carries the one line header.
+export const HUDDLE_REBRIEF_EVERY = 8;
+
+/** Whether the next chunk on a route carries the full framing, given how
+ *  many chunks it has delivered since the last one that did. */
+export function needsFullBrief(chunksSinceBrief: number | undefined): boolean {
+  return chunksSinceBrief === undefined || chunksSinceBrief >= HUDDLE_REBRIEF_EVERY;
+}
 
 /** The names a spoken line may use for an agent: its character name, and its
  *  brand said as a name ("Claude", "Codex"). A room with one Claude in it
@@ -82,10 +97,11 @@ export function isHuddlePass(text: string | null | undefined): boolean {
 
 // What every session fed a live huddle is told about where its words go: the
 // reply it ends its turn with is shown in the huddle's chat, beside the people
-// talking, unless it passes. Said in one place so the briefing, the own-room
-// header and the generic feed header cannot drift apart on this.
+// talking, and spoken by its face when the call has one, unless it passes.
+// Said in one place so the briefing, the own-room header and the generic feed
+// header cannot drift apart on this.
 export const HUDDLE_REPLY_NOTE =
-  `Your reply at the end of this turn is shown in the huddle's chat, next to the people talking, and anything they type in that chat reaches you here. Keep it short and conversational, the way you would speak in a room; put long output in a doc or a file and say where it is. When you have nothing the room needs, end the turn with exactly ${HUDDLE_PASS} and nothing else: the room sees nothing. Never post a line only to say you are listening or following along.`;
+  `Your reply at the end of this turn is shown in the huddle's chat, next to the people talking, and when you have a face in the call it says the reply out loud; anything they type in that chat reaches you here. Write it to be heard: short and conversational, the way you would speak in a room, with no code or tables. Put long output in a doc or a file and say where it is. When you have nothing the room needs, end the turn with exactly ${HUDDLE_PASS} and nothing else: the room sees nothing. Never post a line only to say you are listening or following along.`;
 
 // How an agent asks the room for time. The words keep flowing into the
 // transcript; they arrive together when the hold ends, and a line that names
@@ -99,6 +115,11 @@ const LANE_NOTE: Record<ChunkLane, string> = {
     "Nobody named you, so no reply is owed: this is what the room is saying, for context. Carry on with what you were doing unless something here is for you or you can add something the room needs. When there is nothing to add, pass.",
 };
 
+const LANE_LINE: Record<ChunkLane, string> = {
+  ask: "They named you: answer, briefly, once the thought is complete.",
+  context: `Nobody named you: end with ${HUDDLE_PASS} unless the room needs something from you.`,
+};
+
 const HELD_NOTE = "These words waited while you worked and arrive together as one catch up.";
 
 // The lead-in for the live feed of a session's OWN huddle. Every other feed
@@ -107,6 +128,7 @@ const HELD_NOTE = "These words waited while you worked and arrive together as on
 // that more is coming, or the agent treats a mid-sentence pause as the end of
 // the thought and answers a half-finished ask.
 export function ownRoomChunkHeader(opts: ChunkHeaderOpts): string {
+  if (!opts.full) return shortHeader(`Your huddle, where you are ${opts.name}.`, opts);
   return [
     `People are talking in this session's huddle, where you are ${opts.name}. Below is what they said, transcribed as they said it — speaker attribution is exact, and more will arrive while the huddle runs.${opts.held ? ` ${HELD_NOTE}` : ""}`,
     LANE_NOTE[opts.lane],
@@ -118,12 +140,17 @@ export function ownRoomChunkHeader(opts: ChunkHeaderOpts): string {
 // The lead-in for the live feed of a huddle that is NOT this session's own:
 // a meeting happening elsewhere, pointed at this agent by a participant.
 export function liveFeedChunkHeader(opts: ChunkHeaderOpts): string {
+  if (!opts.full) return shortHeader(`Huddle (live), where you are ${opts.name}.`, opts);
   return [
     `Huddle transcript (live). You are in the room as ${opts.name}.${opts.held ? ` ${HELD_NOTE}` : ""}`,
     LANE_NOTE[opts.lane],
     HUDDLE_REPLY_NOTE,
     HUDDLE_HOLD_NOTE,
   ].join("\n\n");
+}
+
+function shortHeader(lead: string, opts: ChunkHeaderOpts): string {
+  return [lead, opts.held ? HELD_NOTE : null, LANE_LINE[opts.lane]].filter(Boolean).join(" ");
 }
 
 /** The first message a session spawned FOR a huddle reads: what it is

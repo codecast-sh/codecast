@@ -6,6 +6,7 @@ import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { extractTitleJson } from "./titleGeneration";
+import { CHEAP_MODEL } from "./lib/anthropic";
 import { isRefusalProse } from "./idleSummary";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { enqueuePush } from "./pushRouter";
@@ -16,7 +17,7 @@ import { armedTriggerKindFor } from "./dormancy";
 import { restoreToInbox } from "./inboxFilters";
 import { configuredCloudWakeHosts, getCloudWakeHostForConversation } from "./cloudWake";
 import { enqueuePendingMessage, reachableRole } from "./pendingMessages";
-import { triggerFiringSource, normalizeThreadState, runOwnerWakeOf, runParentOf, runResultThreadOf, triggerLifecycleInstructions, formatScheduledTask, STASHED_RUN_NOTE, type RoleCard, type RunOutcome, type WaitingSession } from "@codecast/shared/contracts";
+import { triggerFiringSource, normalizeThreadState, runOwnerWakeOf, runParentOf, runResultThreadOf, triggerRunFrame, formatScheduledTask, type RoleCard, type RunOutcome, type WaitingSession } from "@codecast/shared/contracts";
 import type { AreaChange } from "@codecast/shared/contracts/orgAreas";
 import { findRoleEventTrigger, ROLE_NEEDS_INPUT_SPEC, roleEventSpecsFor, type RoleEventSpec } from "./lib/orgRoutine";
 import { earliestUsageResetAt, listOnlineDevices } from "./ccAccountsShared";
@@ -866,17 +867,7 @@ async function roleCardOf(ctx: TaskCtx, roleId: Id<"org_roles"> | undefined): Pr
 
 export async function triggerFrameFor(ctx: TaskCtx, task: Doc<"agent_tasks">, conversation: Doc<"conversations"> | null, waiting?: WaitingSession, change?: AreaChange): Promise<string> {
   const stashed = !!conversation && !conversation.inbox_killed_at && !!conversation.inbox_stashed_at;
-  const body = [task.prompt, triggerLifecycleInstructions(task)].filter(Boolean).join("\n\n") + (stashed ? STASHED_RUN_NOTE : "");
-  return formatScheduledTask({
-    title: task.title || "",
-    task_id: String(task._id),
-    trigger: task.short_id,
-    event: task.event_filter?.event_type,
-    role: await roleCardOf(ctx, task.role_id),
-    waiting: waiting ?? null,
-    ...(change ? { change } : {}),
-    body,
-  });
+  return triggerRunFrame(task, { role: await roleCardOf(ctx, task.role_id), waiting, change, stashed });
 }
 
 // The route up (org-staffing.md S28): a session that reports to a role needs
@@ -2647,7 +2638,7 @@ export const generateDisplaySummary = internalAction({
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
+          model: CHEAP_MODEL,
           max_tokens: 300,
           // Deterministic: the same prompt must yield the same summary.
           temperature: 0,

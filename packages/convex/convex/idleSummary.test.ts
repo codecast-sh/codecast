@@ -1,9 +1,13 @@
-import { describe, expect, test } from "bun:test";
-import { buildSettlePrompt, parseSettleReply, parseSettleVerdict, shapeFinalMessage, shapeSettleTail, SETTLE_FINAL_HEAD_CHARS, SETTLE_FINAL_TAIL_CHARS, SETTLE_CONTEXT_CHARS } from "./idleSummary";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { convexTest } from "convex-test";
+import { internal } from "./_generated/api";
+import schema from "./schema";
+import { captureFetch, goldenBody, recordGolden, loadGolden, type GoldenCase } from "./__golden__/golden.testkit";
+import { buildSettlePrompt, parseSettleReply, parseSettleVerdict, settleRequest, shapeFinalMessage, shapeSettleTail, SETTLE_FINAL_HEAD_CHARS, SETTLE_FINAL_TAIL_CHARS, SETTLE_CONTEXT_CHARS, SETTLE_TAIL_MESSAGES } from "./idleSummary";
 
 // The settle classifier's pure half. What the model is asked, and how its
-// answer is read, must be stable — scripts/settle-eval.ts grades the live model
-// against the same builder.
+// answer is read, must be stable: the settle eval (`./evals check settle`)
+// grades the live model against the same builder.
 describe("shapeSettleTail", () => {
   const rows = (turns: Array<[string, string]>) => turns.map(([role, content]) => ({ role, content })).reverse();
 
@@ -80,5 +84,91 @@ describe("buildSettlePrompt / parseSettleReply", () => {
     expect(parseSettleVerdict("DONE")).toBe("done");
     // No VERDICT line: whole text is the summary, verdict null.
     expect(parseSettleReply("Deployed and verified")).toEqual({ verdict: null, summary: "Deployed and verified" });
+  });
+});
+
+// ── Request golden ───────────────────────────────────────────────────────────
+// The exact bodies generateIdleSummary posts, recorded from the code before
+// settleRequest existed. Synthetic tails only (the repo is public), run through
+// the real getMessagesForSummary query under convex-test so the 30-row window,
+// the filters and the final-message shaping are all in the bytes.
+const S0 = 1_760_000_000_000;
+type SettleRow = {
+  role: "user" | "assistant";
+  content?: string;
+  tool_calls?: Array<{ id: string; name: string; input: string }>;
+  tool_results?: Array<{ tool_use_id: string; content: string }>;
+};
+const settleFixtures: Array<{ name: string; rows: SettleRow[] }> = [
+  {
+    name: "asks-a-choice",
+    rows: [
+      { role: "user", content: "Find out why the deploy failed" },
+      { role: "assistant", content: "", tool_calls: [{ id: "a", name: "Bash", input: "{}" }] },
+      { role: "user", tool_results: [{ tool_use_id: "a", content: "exit 1" }] },
+      { role: "assistant", content: 'The deploy failed on a missing env var. Two ways forward: set it in the dashboard, or default it in code. Which do you want — "dashboard" or "code"?' },
+    ],
+  },
+  {
+    name: "long-report-past-window",
+    rows: [
+      ...Array.from({ length: 34 }, (_, i): SettleRow =>
+        i % 3 === 2
+          ? { role: "user", tool_results: [{ tool_use_id: `r${i}`, content: "ok" }] }
+          : { role: i % 3 === 0 ? "user" : "assistant", content: `Turn ${i}: ${"context about the audit scope and the files read. ".repeat(10)}` }),
+      { role: "user", content: "[Request interrupted by user]" },
+      {
+        role: "assistant",
+        content: `Audit done.\n\`\`\`cast-canvas\n<div>${"cell ".repeat(400)}</div>\n\`\`\`\n${"Finding: the cache key ignores the team. ".repeat(60)}\n\`\`\`ts\n${"const x = 1;\n".repeat(60)}\`\`\`\nThree risks remain; the report lists each with a fix.`,
+      },
+    ],
+  },
+  {
+    name: "halted-mid-call",
+    rows: [
+      { role: "user", content: "Ship the OTA and then the native build" },
+      { role: "assistant", content: "OTA is live. Now the native build:" },
+      { role: "assistant", content: "", tool_calls: [{ id: "b", name: "Bash", input: "{\"command\":\"eas build\"}" }] },
+    ],
+  },
+];
+
+describe("settle request golden", () => {
+  const fetchStub = captureFetch();
+  beforeEach(() => fetchStub.install());
+  afterEach(() => fetchStub.restore());
+
+  test("generateIdleSummary posts the recorded body for each fixture", async () => {
+    const actual: GoldenCase[] = [];
+    for (const fx of settleFixtures) {
+      const t = convexTest(schema, { "./_generated/server.ts": () => import("./_generated/server"), "./idleSummary.ts": () => import("./idleSummary") });
+      const conversation_id = await t.run(async (ctx) => {
+        const user_id = await ctx.db.insert("users", { name: "Fixture" } as any);
+        const id = await ctx.db.insert("conversations", {
+          user_id, agent_type: "claude_code", session_id: `s-${fx.name}`, started_at: S0, updated_at: S0,
+          message_count: fx.rows.length, is_private: true, status: "active",
+        } as any);
+        for (const [i, row] of fx.rows.entries()) await ctx.db.insert("messages", { conversation_id: id, timestamp: S0 + i * 1000, ...row } as any);
+        return id;
+      });
+      fetchStub.bodies.length = 0;
+      await t.action(internal.idleSummary.generateIdleSummary, { conversation_id });
+      expect(fetchStub.bodies.length).toBe(1);
+      actual.push({ case: fx.name, body: fetchStub.bodies[0] });
+    }
+    expect(actual).toEqual(recordGolden("settle", actual));
+  });
+});
+
+// The evals hold a tail, not a database: settleRequest over the same rows,
+// shaped the same way, must post the bytes the action posts.
+describe("settle request from rows", () => {
+  test("settleRequest(shapeSettleTail(rows)) equals the golden", () => {
+    const golden = loadGolden("settle");
+    for (const fx of settleFixtures) {
+      const newestFirst = [...fx.rows].reverse().slice(0, SETTLE_TAIL_MESSAGES);
+      const body = goldenBody(settleRequest(shapeSettleTail(newestFirst)));
+      expect(body).toBe(golden.find((g) => g.case === fx.name)!.body);
+    }
   });
 });

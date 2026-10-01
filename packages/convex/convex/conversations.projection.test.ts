@@ -634,7 +634,7 @@ describe("fast-field ownership of subagent child rows", () => {
   const tables = () => ({
     conversations: [
       conv("parent", { updated_at: EPOCH - MIN }),
-      conv("idle_child", { is_subagent: true, parent_conversation_id: "conversations_parent", updated_at: EPOCH - 3 * H, message_count: 44 }),
+      conv("idle_child", { is_subagent: true, parent_conversation_id: "conversations_parent", updated_at: EPOCH - 3 * H, message_count: 44, usage_totals: { updated_at: EPOCH - 3 * H, context_tokens: 91_000 } }),
       conv("old_child", { is_subagent: true, parent_conversation_id: "conversations_parent", updated_at: EPOCH - 40 * DAY, message_count: 7 }),
       conv("blank_child", { is_subagent: true, parent_conversation_id: "conversations_parent", updated_at: EPOCH - MIN, message_count: 0 }),
     ],
@@ -648,7 +648,7 @@ describe("fast-field ownership of subagent child rows", () => {
 
     // Inside the window: stripped on the list, carried by the overlay.
     for (const f of INBOX_FAST_FIELDS) expect(byId.get("conversations_idle_child")[f]).toBeNull();
-    expect(liveness.conversations_idle_child).toMatchObject({ updated_at: EPOCH - 3 * H, message_count: 44 });
+    expect(liveness.conversations_idle_child).toMatchObject({ updated_at: EPOCH - 3 * H, message_count: 44, context_tokens: 91_000, last_model_call_at: EPOCH - 3 * H });
     expect(liveness.conversations_idle_child.bucket).toBeUndefined();
 
     // Outside the recency window: the overlay never sees it, so the list keeps them.
@@ -656,10 +656,12 @@ describe("fast-field ownership of subagent child rows", () => {
     expect(liveness.conversations_old_child).toBeUndefined();
 
     // The invariant the bug broke: a stripped row always has an overlay writer.
+    // updated_at is null on a list row only when stripped; a wake-cost field
+    // is also null on a row that never made a model call.
     for (const row of sessions) {
-      for (const f of INBOX_FAST_FIELDS) {
-        if (row[f] === null) expect(liveness[row._id]?.[f], `${row._id}.${f}`).not.toBeNull();
-      }
+      if (row.updated_at !== null) continue;
+      for (const f of INBOX_FAST_FIELDS) expect(liveness[row._id]?.[f], `${row._id}.${f}`).not.toBeUndefined();
+      expect(liveness[row._id].updated_at, row._id).not.toBeNull();
     }
   });
 

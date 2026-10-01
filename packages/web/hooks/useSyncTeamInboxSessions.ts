@@ -23,6 +23,24 @@ export function applyTeamInboxIds(sessions: any[], teamId: string | null) {
   useInboxStore.getState().setTeamInboxIds(ids, teamId);
 }
 
+// The team list's args, shared by the subscription and the recovery probe.
+export function teamInboxArgs(teamId: string | undefined) {
+  return { activeTeamId: teamId as Id<"teams"> | undefined, include_liveness: false };
+}
+
+// Facts merge onto rows; stamps + the projection envelope land in the TEAM
+// slot of sessionsProjection, keyed by team id, so the personal overlay and
+// the team overlay never write the same slot (sync-convergence C1). Team
+// stamps ship but are not compared (the replica lacks team visibility
+// inputs); they exist for freshness scheduling. False when the payload held
+// no liveness map and nothing was applied.
+export function applyTeamLivenessPayload(teamId: string | undefined, data: any): boolean {
+  const liveness = data?.liveness ?? data;
+  if (!liveness || typeof liveness !== "object") return false;
+  useInboxStore.getState().applyInboxLivenessPayload(`team:${teamId ?? ""}`, data);
+  return true;
+}
+
 /**
  * Inbox "team mode" sync. When the user's scope is "team", subscribe to the
  * team-scoped inbox (every team-visible session across the active team) and
@@ -46,9 +64,7 @@ export function useSyncTeamInboxSessions() {
   // A freshly created team holds an optimistic stub id until the server
   // echoes; a stub is not an Id<"teams">, so skip rather than throw.
   const active = scope === "team" && (!activeTeamId || isConvexId(String(activeTeamId)));
-  const teamArgs = active
-    ? { activeTeamId: activeTeamId as Id<"teams"> | undefined, include_liveness: false }
-    : "skip";
+  const teamArgs = active ? teamInboxArgs(activeTeamId) : "skip";
 
   const teamSessions = useQuery(api.conversations.listTeamInboxSessions, teamArgs as any);
   const teamLiveness = useQuery(
@@ -71,15 +87,9 @@ export function useSyncTeamInboxSessions() {
     lastSyncRef.current = Date.now();
   }, [syncTable, activeTeamId, convex]), { coalesceMs: 300 });
 
-  // Facts merge onto rows; stamps + the projection envelope land in the TEAM
-  // slot of sessionsProjection — keyed by team id, so the personal overlay and
-  // the team overlay never write the same slot (sync-convergence C1). Team
-  // stamps ship but are not compared (the replica lacks team visibility
-  // inputs); they exist for freshness scheduling.
+  // Liveness overlay into the team projection slot (applyTeamLivenessPayload).
   useConvexSync(teamLiveness, useCallback((data: any) => {
-    const liveness = data?.liveness ?? data;
-    if (!liveness || typeof liveness !== "object") return;
-    useInboxStore.getState().applyInboxLivenessPayload(`team:${activeTeamId ?? ""}`, data);
+    if (!applyTeamLivenessPayload(activeTeamId, data)) return;
     lastLivenessRef.current = Date.now();
   }, [activeTeamId]), { coalesceMs: 300 });
 
@@ -101,8 +111,7 @@ export function useSyncTeamInboxSessions() {
   useRecoveryPoll(lastSyncRef, useCallback(async (signal: AbortSignal) => {
     if (!active) return;
     const fresh: any = await queryWithSignal(convex, api.conversations.listTeamInboxSessions, {
-      activeTeamId: activeTeamId as Id<"teams"> | undefined,
-      include_liveness: false,
+      ...teamInboxArgs(activeTeamId),
       _probe: Date.now(),
     }, signal);
     if (signal.aborted) return;
@@ -123,8 +132,8 @@ export function useSyncTeamInboxSessions() {
     if (signal.aborted) return;
     const liveness = fresh?.liveness;
     if (!liveness) return;
-    // Same applier as the subscription — a recovery pass must not fork shapes.
-    useInboxStore.getState().applyInboxLivenessPayload(`team:${activeTeamId ?? ""}`, fresh);
+    // Same applier as the subscription: a recovery pass must not fork shapes.
+    if (!applyTeamLivenessPayload(activeTeamId, fresh)) return;
     lastLivenessRef.current = Date.now();
   }, [convex, active, activeTeamId]), 15_000);
 

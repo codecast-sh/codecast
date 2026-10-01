@@ -60,6 +60,8 @@ export function filedTask(now: number, stage: TaskStage): TaskItem {
     assignee_info: claimed ? ME : null,
     origin_session: { conversation_id: LEAD_LINK._id, session_id: LEAD_LINK.session_id, title: LEAD_LINK.title, started_by: PEOPLE.me.name, last_message_at: now - MIN },
     created_from_conversation: LEAD_LINK._id,
+    // The billing project syncs with Linear: the new task has its issue by the time it is claimed.
+    external: claimed ? { provider: "linear", id: "hero-lin-214", identifier: "BIL-214", url: "https://linear.app/acme/issue/BIL-214", remote_updated_at: now - 30_000, synced_at: now - 30_000 } : undefined,
     created_at: now - MIN,
     updated_at: now - MIN,
   };
@@ -76,10 +78,10 @@ export function planTasks(now: number, advanced: boolean): TaskItem[] {
     ...t,
   });
   return [
-    task({ _id: "hero-t2", short_id: "ct-hero2", title: "Sign webhook payloads with HMAC", status: "in_progress", priority: "medium", labels: ["webhooks", "security"], assignee: PEOPLE.sarah.id, assignee_info: SARAH }, 2 * HOUR),
+    task({ _id: "hero-t2", short_id: "ct-4183", title: "Sign webhook payloads with HMAC", status: "in_progress", priority: "medium", labels: ["webhooks", "security"], assignee: PEOPLE.sarah.id, assignee_info: SARAH }, 2 * HOUR),
     task({
       _id: "hero-t3",
-      short_id: "ct-hero3",
+      short_id: "ct-4184",
       title: "Dead-letter queue for poisoned events",
       status: advanced ? "done" : "in_review",
       priority: "high",
@@ -89,17 +91,17 @@ export function planTasks(now: number, advanced: boolean): TaskItem[] {
       source: "agent",
       source_agent_type: SESSIONS.ui.agent,
     }, advanced ? 30_000 : 5 * HOUR),
-    task({ _id: "hero-t4", short_id: "ct-hero4", title: "Page on-call when retries run out", status: "open", priority: "medium", labels: ["ops"] }, DAY),
+    task({ _id: "hero-t4", short_id: "ct-4185", title: "Page on-call when retries run out", status: "open", priority: "medium", labels: ["ops"] }, DAY),
     task({
       _id: "hero-t5",
-      short_id: "ct-hero5",
+      short_id: "ct-4186",
       title: "Backfill events Stripe sent while we were down",
       status: "open",
       priority: "low",
       labels: ["data"],
-      external: { provider: "linear", id: "hero-lin-212", identifier: "BIL-212", url: "https://linear.app/acme/issue/BIL-212", remote_updated_at: now - 2 * DAY },
+      external: { provider: "linear", id: "hero-lin-212", identifier: "BIL-212", url: "https://linear.app/acme/issue/BIL-212", remote_updated_at: now - 2 * DAY, synced_at: now - 2 * DAY },
     }, 2 * DAY),
-    task({ _id: "hero-t6", short_id: "ct-hero6", title: "Idempotency keys on webhook handlers", status: "done", priority: "high", labels: ["webhooks"], assignee: PEOPLE.sarah.id, assignee_info: SARAH }, 3 * DAY),
+    task({ _id: "hero-t6", short_id: "ct-4187", title: "Idempotency keys on webhook handlers", status: "done", priority: "high", labels: ["webhooks"], assignee: PEOPLE.sarah.id, assignee_info: SARAH }, 3 * DAY),
   ];
 }
 
@@ -110,18 +112,20 @@ export function planProgress(tasks: TaskItem[]) {
   return { total: tasks.length, done, in_progress: active, open: tasks.length - done - active };
 }
 
-/** The new task's activity trail: filed by the lead, then claimed by the API worker. */
+/** The new task's activity trail, in order: filed by the lead (the task's own created_at, a minute ago), moved to in progress, then claimed by the API worker (filedSessions). */
 export function filedHistory(now: number, stage: TaskStage) {
   if (stage !== "claimed") return [];
   return [
-    { _id: "hero-h1", created_at: now - 20_000, action: "updated", field: "status", old_value: "open", new_value: "in_progress", actor: ME },
+    // The billing project syncs with Linear: the claim opens the task's issue there, as the trail records it (issue-sync S5).
+    { _id: "hero-h0", created_at: now - 32_000, action: "synced_to_provider", new_value: "BIL-214", actor: ME },
+    { _id: "hero-h1", created_at: now - 30_000, action: "updated", field: "status", old_value: "open", new_value: "in_progress", actor: ME },
   ];
 }
 
 export function filedSessions(now: number, stage: TaskStage) {
   return [
     { ...LEAD_LINK, started_at: now - 40 * MIN, updated_at: now - MIN },
-    ...(stage === "claimed" ? [{ ...API_LINK, started_at: now - 21_000, updated_at: now - 10_000, is_active: true }] : []),
+    ...(stage === "claimed" ? [{ ...API_LINK, started_at: now - 20_000, updated_at: now - 10_000, is_active: true }] : []),
   ];
 }
 

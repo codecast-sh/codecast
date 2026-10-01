@@ -13,6 +13,7 @@ import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { ChatAvatar } from '@/components/chat/MessageRow';
+import { isPerson } from '@codecast/shared/team/memberKind';
 
 // New message: pick one teammate and land in the 1:1, or several and land in
 // the group. openDm is idempotent on the member set, so tapping through to an
@@ -44,7 +45,7 @@ export default function NewMessageScreen() {
   const candidates = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return (teamMembers ?? [])
-      .filter((m: any) => m && !m.is_bot && String(m._id) !== viewerId)
+      .filter((m: any) => isPerson(m) && String(m._id) !== viewerId)
       .filter((m: any) =>
         !needle
         || (m.name ?? '').toLowerCase().includes(needle)

@@ -237,6 +237,47 @@ describe("paneReconcileTarget", () => {
     expect(paneReconcileTarget("busy", "thinking")).toBeNull();
   });
 
+  // ct-56131: a spawned worker two hours into ONE turn, inside a long Bash
+  // call. Claude Code 2.1.287 prints no "esc to interrupt", so the status line
+  // is the pane's only sign of the turn, and past an hour its elapsed time
+  // gains an hour part. The pane read idle, the reconcile settled the session,
+  // and the worker's parent was told it had ended its turn eleven times. The
+  // pane below is that worker's capture with its text replaced.
+  describe("a turn that has run for more than an hour", () => {
+    const paneAt = (statusLine: string) => `⏺ Probing the page state and taking a screenshot · 16s
+  ⎿  $ cast browser eval --stdin <<'EOF' 2>&1 | tail -2
+     (() => { const st = window.__inboxStore && window.__inboxStore.getState(); return { hasStore: !!st }; })()… (7s)
+     (ctrl+b ctrl+b (twice) to run in background)
+
+${statusLine}
+
+────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────
+  session 18%, resets in 3h 41m · week 9%, resets in 3d 16h
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+`;
+    const stateOf = (statusLine: string) => classifyTmuxLiveState(extractTmuxLiveRegion(paneAt(statusLine)));
+
+    test("stays working mid-turn, whatever units the elapsed time carries", () => {
+      for (const elapsed of ["50s", "59m 59s", "1h 0m 0s", "2h 2m 38s", "1d 3h 12m"]) {
+        const state = stateOf(`✶ Clauding… (${elapsed} · ↓ 109.4k tokens)`);
+        expect(state).toBe("busy");
+        expect(paneReconcileTarget(state, "working")).toBeNull();
+      }
+    });
+
+    test("a session already settled by the false idle climbs back to working", () => {
+      expect(paneReconcileTarget(stateOf("✶ Clauding… (2h 2m 38s · ↓ 109.4k tokens)"), "idle")).toBe("working");
+    });
+
+    test("the real end of that turn still settles", () => {
+      const state = stateOf("✻ Churned for 2h 2m 51s · done 9:59 PM");
+      expect(state).toBe("idle");
+      expect(paneReconcileTarget(state, "working")).toBe("idle");
+    });
+  });
+
   // The "stuck working" inbox bug: a tmux session parked on a buffered
   // AskUserQuestion. Claude Code hides the question's tool_use from the JSONL until
   // answered, so the transcript can't see it — only the pane can. The pane reconcile

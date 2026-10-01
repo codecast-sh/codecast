@@ -11,11 +11,29 @@ import {
   DropdownMenuLabel,
 } from "./ui/dropdown-menu";
 import { Check, ChevronDown, Plus, User, UserPlus } from "lucide-react";
-import { useState, lazy, Suspense } from "react";
+import { useState, lazy, Suspense, forwardRef, type ButtonHTMLAttributes } from "react";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { TeamCrest } from "./team/TeamCrest";
 
 const InviteModal = lazy(() => import("./InviteModal").then(m => ({ default: m.InviteModal })));
+
+/** The picker's trigger: the workspace's crest (or the person glyph) and its name. */
+export const TeamSwitcherButton = forwardRef<
+  HTMLButtonElement,
+  ButtonHTMLAttributes<HTMLButtonElement> & { team?: { icon?: string; icon_color?: string } | null; label: string }
+>(function TeamSwitcherButton({ team, label, ...props }, ref) {
+  return (
+    <button ref={ref} {...props} className="flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-sol-base02/50 transition-colors text-sm">
+      {team ? (
+        <TeamCrest icon={team.icon} color={team.icon_color} size="sm" className="w-5 h-5 rounded" />
+      ) : (
+        <User className="w-4 h-4 text-sol-base1" />
+      )}
+      <span className="text-sol-text font-medium max-w-[120px] truncate">{label}</span>
+      <ChevronDown className="w-3.5 h-3.5 text-sol-base1" />
+    </button>
+  );
+});
 
 /**
  * The workspace picker. It switches the whole workspace (`useSwitchWorkspace`)
@@ -69,17 +87,7 @@ export function TeamSwitcher({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button className="flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-sol-base02/50 transition-colors text-sm">
-          {activeTeam ? (
-            <TeamCrest icon={activeTeam.icon} color={activeTeam.icon_color} size="sm" className="w-5 h-5 rounded" />
-          ) : (
-            <User className="w-4 h-4 text-sol-base1" />
-          )}
-          <span className="text-sol-text font-medium max-w-[120px] truncate">
-            {activeTeam?.name || (teamsOnly ? "Choose a team" : "Personal")}
-          </span>
-          <ChevronDown className="w-3.5 h-3.5 text-sol-base1" />
-        </button>
+        <TeamSwitcherButton team={activeTeam} label={activeTeam?.name || (teamsOnly ? "Choose a team" : "Personal")} />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-56 bg-sol-bg border-sol-border">
         <DropdownMenuLabel className="text-sol-base1 text-xs">{teamsOnly ? "Team" : "Workspace"}</DropdownMenuLabel>

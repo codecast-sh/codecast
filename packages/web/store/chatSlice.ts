@@ -42,7 +42,7 @@ import { inActiveWorkspace } from "../lib/workspaceScope";
 import { dmKeyFor, dmOtherIds, isLiveVoiceRow, mentionUserIds, type ChatMentionRef, type ChatVoiceStatus } from "@codecast/shared/chat";
 import { normalizeChannelName } from "@codecast/convex/convex/chatText";
 import { humanizeConvexError } from "@codecast/shared/contracts";
-import { mirrorState, mergeLinkOptions, type SlackDirection, type SlackLinkOptions, type SlackSendAuth } from "@codecast/convex/convex/lib/slackMirror";
+import { mirrorState, mergeLinkOptions, nextSlackMembers, type SlackDirection, type SlackLinkOptions, type SlackMemberWriter, type SlackSendAuth } from "@codecast/convex/convex/lib/slackMirror";
 import { action, asyncAction, sync } from "./mutativeMiddleware";
 import type { PendingEntry } from "./syncProtocol";
 import { isConvexId } from "../lib/entityLinks";
@@ -134,6 +134,13 @@ export type ChatSlackLinkRow = {
   outbound_count?: number;
   last_error?: string;
   last_error_at?: number;
+  /** Who is in the Slack channel (Slack user ids), for the member panel. */
+  slack_member_ids?: string[];
+  slack_members_at?: number;
+  /** The last invite or remove Slack refused (already undone on the roster). */
+  member_error?: { message: string; slack_user_id: string; at: number } | null;
+  /** Which token may invite and remove people there; null until Slack is reconnected with the newer scopes. */
+  member_writer?: SlackMemberWriter;
   /** The history import, while and after it runs (convex slack_channel_links.backfill). */
   backfill?: {
     window: string;
@@ -534,6 +541,7 @@ export type ChatSliceActions = {
   updateChatSlackLink: (linkId: string, patch: ChatSlackLinkPatch) => void;
   /** Drop the mirror. The row leaves the store at once. */
   unlinkChatSlack: (linkId: string) => void;
+  setChatSlackMember: (channelId: string, slackUserId: string, present: boolean) => void;
   /** Send one line that was kept local (or predates the link) into Slack. */
   shareChatMessageToSlack: (messageId: string) => void;
   /** Archive (or restore) a channel. Optimistic: the row leaves the rail at
@@ -1081,6 +1089,22 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
       return { linkId, patch };
     }),
 
+    // Invite or remove someone on the Slack side of a mirrored room. The
+    // roster flips here; the server does the same and undoes it (with the
+    // reason on member_error) if Slack refuses.
+    setChatSlackMember: action(function (this: ChatDraft, channelId: string, slackUserId: string, present: boolean) {
+      const link = Object.values(this.chatSlackLinks).find((l) => l.chat_channel_id === channelId && l.kind !== "dm");
+      if (!link) return;
+      link.slack_member_ids = nextSlackMembers(
+        link.slack_member_ids ?? [],
+        present ? { add: slackUserId } : { remove: slackUserId },
+        Number.MAX_SAFE_INTEGER,
+      );
+      link.member_error = null;
+      link.updated_at = Date.now();
+      return { channelId, slackUserId, present };
+    }),
+
     unlinkChatSlack: action(function (this: ChatDraft, linkId: string) {
       if (!this.chatSlackLinks[linkId]) return;
       delete this.chatSlackLinks[linkId];
@@ -1103,13 +1127,18 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
       return { channelId, archived };
     }),
 
+    // The roster lives on the server-derived rail row; the draft edits that
+    // row so the member panel moves at once, and the next listChannels push
+    // (which the server's channel bump triggers) carries the same set.
     addChatChannelMembers: action(function (this: ChatDraft, channelId: string, memberIds: string[]) {
-      // Nothing local: the roster lives on the server-derived rail row. The
-      // action exists for its dispatch.
+      const row = this.chatRail.find((r) => String(r.channel_id) === channelId);
+      if (row) row.member_ids = [...new Set([...(row.member_ids ?? []), ...memberIds])];
       return { channelId, memberIds };
     }),
 
     removeChatChannelMember: action(function (this: ChatDraft, channelId: string, userId: string) {
+      const row = this.chatRail.find((r) => String(r.channel_id) === channelId);
+      if (row?.member_ids) row.member_ids = row.member_ids.filter((id) => String(id) !== userId);
       if (userId === viewerId(this)) {
         // Leaving: the room disappears for you now. The server deletes the
         // membership + read rows; locally the channel row goes so the rail and

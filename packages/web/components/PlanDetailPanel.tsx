@@ -32,10 +32,6 @@ import {
   ChevronDown,
   ChevronRight,
   Plus,
-  ArrowUp,
-  ArrowDown,
-  Minus,
-  AlertTriangle,
   Zap,
   Timer,
   Activity,
@@ -44,6 +40,7 @@ import {
   RotateCw,
   Play,
 } from "lucide-react";
+import { taskPriority } from "../lib/taskPriority";
 import Markdown from "react-markdown";
 import { entityRemarkPlugins } from "../lib/remarkEntityIds";
 import { EntityAwareCode, EntityAwareLink } from "./EntityIdPill";
@@ -76,13 +73,6 @@ const TASK_STATUS_CONFIG: Record<string, { icon: typeof Circle; color: string; l
 
 
 const TASK_STATUS_CYCLE = ["open", "in_progress", "done"];
-
-const PRIORITY_CONFIG: Record<string, { icon: typeof Minus; color: string; label: string }> = {
-  urgent: { icon: AlertTriangle, color: "text-sol-red", label: "Urgent" },
-  high: { icon: ArrowUp, color: "text-sol-orange", label: "High" },
-  medium: { icon: Minus, color: "text-sol-text-dim", label: "Medium" },
-  low: { icon: ArrowDown, color: "text-sol-text-dim", label: "Low" },
-};
 
 const PRIORITY_CYCLE = ["low", "medium", "high", "urgent"];
 
@@ -727,7 +717,7 @@ export function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId:
         {activeTasks.map((task: any) => {
           const tc = TASK_STATUS_CONFIG[task.status] || TASK_STATUS_CONFIG.open;
           const TaskIcon = tc.icon;
-          const pc = task.priority ? PRIORITY_CONFIG[task.priority] : PRIORITY_CONFIG.medium;
+          const pc = taskPriority(task.priority);
           const PriorityIcon = pc?.icon;
           const hasExec = task.execution_status && !!getExecStatusConfig(task.execution_status);
           const isExpanded = expandedTask === task._id;

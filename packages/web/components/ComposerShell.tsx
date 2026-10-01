@@ -23,6 +23,7 @@ export function ComposerShell({
   between,
   fieldTop,
   children,
+  foot,
   after,
 }: {
   rootRef?: Ref<HTMLDivElement>;
@@ -51,6 +52,9 @@ export function ComposerShell({
   fieldTop?: ReactNode;
   /** The text row: usually a ComposerTextRow. */
   children: ReactNode;
+  /** A toolbar row under the field, usually a ComposerFoot. Inside the form,
+   *  so a send button placed there still submits. */
+  foot?: ReactNode;
   /** After the frame (the image lightbox portal). */
   after?: ReactNode;
 }) {
@@ -81,6 +85,7 @@ export function ComposerShell({
               {fieldTop}
               {children}
             </div>
+            {foot}
           </form>
         </div>
       </div>
@@ -107,8 +112,8 @@ export function ComposerTextRow({
   tucked?: boolean;
   /** Buttons before send (expand, stash, hand off, fork). */
   actions?: ReactNode;
-  /** Usually a ComposerSendButton. */
-  send: ReactNode;
+  /** Usually a ComposerSendButton. Absent when a ComposerFoot carries it. */
+  send?: ReactNode;
   /** A ComposerTextarea, plus anything that overlays it in the same cell. */
   children: ReactNode;
 }) {
@@ -120,10 +125,26 @@ export function ComposerTextRow({
       <div className="grid flex-1 min-w-0">
         {children}
       </div>
-      <div ref={sendRef} className={`shrink-0 flex items-end gap-1 ${tucked ? "basis-full justify-end" : ""}`}>
-        {actions}
-        {send}
-      </div>
+      {(actions || send) && (
+        <div ref={sendRef} className={`shrink-0 flex items-center gap-1 ${tucked ? "basis-full justify-end" : ""}`}>
+          {actions}
+          {send}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The toolbar row under a framed composer (team chat, a thread, the palette):
+ * the surface's own controls on the left, the send cluster pinned right, all
+ * on one centre line.
+ */
+export function ComposerFoot({ start, end }: { start?: ReactNode; end: ReactNode }) {
+  return (
+    <div className="flex items-center gap-1.5 min-h-[36px] pt-0.5 pb-1.5">
+      <div className="flex flex-1 min-w-0 items-center gap-1.5">{start}</div>
+      <div className="shrink-0 flex items-center gap-1">{end}</div>
     </div>
   );
 }

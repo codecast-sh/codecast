@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { EyeOff, MoreHorizontal, PinOff, Sparkles } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
+import { startTour } from "../../tours/engine";
 import { isInboxSessionView } from "../../lib/inboxRouting";
 import { focusedActionSessionId } from "../../shortcuts/actions";
 import { KeyCap, MenuKeyCaps, ShortcutTooltip } from "../KeyboardShortcutsHelp";
@@ -199,7 +200,7 @@ export function TriageBar() {
                 );
               })}
               <CtxSeparator />
-              <CtxItem icon={Sparkles} onSelect={() => useInboxStore.getState().setTriageNuxOpen(true)}>
+              <CtxItem icon={Sparkles} onSelect={() => startTour("inbox", { replay: true })}>
                 How the inbox works
               </CtxItem>
               <CtxItem icon={EyeOff} onSelect={toggleTriageBarCompact}>
