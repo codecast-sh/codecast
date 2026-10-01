@@ -1,9 +1,9 @@
-import { forwardRef, useImperativeHandle, useState, useCallback, useRef, useMemo } from "react";
+import { forwardRef, useImperativeHandle, useState, useCallback, useMemo } from "react";
 import { useMentionServerSearch, useActiveMentionScope, SERVER_MENTION_TYPES } from "../../hooks/useMentionQuery";
-import { mergeMentionSuggestions, mentionViewTimes } from "../../lib/mentionRanking";
+import { mergeMentionSuggestions, mentionViewTimes, orderMentionItems } from "../../lib/mentionRanking";
 import { useInboxStore } from "../../store/inboxStore";
 import type { MentionItem } from "../../lib/mentionItem";
-import { MentionSuggestion } from "./MentionSuggestion";
+import { MentionMenu } from "./MentionMenu";
 import { personifyAllNow } from "../../hooks/usePersonifyAll";
 
 // The row type lives in lib/mentionItem so a library file (mentionRanking,
@@ -19,7 +19,6 @@ interface MentionListProps {
 export const MentionList = forwardRef<any, MentionListProps>(
   ({ items, command, query }, ref) => {
     const [selection, setSelection] = useState({ query, index: 0 });
-    const containerRef = useRef<HTMLDivElement>(null);
     const activeScope = useActiveMentionScope();
     const datesOnly = items.length > 0 && items.every((item) => item.type === "date");
     const { items: serverItems, loading: serverLoading } = useMentionServerSearch(
@@ -27,7 +26,7 @@ export const MentionList = forwardRef<any, MentionListProps>(
       { teamId: activeScope.kind === "team" ? activeScope.teamId : null, types: SERVER_MENTION_TYPES },
     );
     const allItems = useMemo(
-      () => datesOnly ? items : mergeMentionSuggestions(items, serverItems, mentionViewTimes(useInboxStore.getState()), Infinity, query ?? "", personifyAllNow()),
+      () => datesOnly ? items : orderMentionItems(mergeMentionSuggestions(items, serverItems, mentionViewTimes(useInboxStore.getState()), Infinity, query ?? "", personifyAllNow())),
       [items, serverItems, datesOnly, query],
     );
     const selectedIndex = selection.query === query ? Math.min(selection.index, Math.max(0, allItems.length - 1)) : 0;
@@ -39,7 +38,6 @@ export const MentionList = forwardRef<any, MentionListProps>(
       if (!allItems.length) return;
       const index = (selectedIndex + delta + allItems.length) % allItems.length;
       setSelection({ query, index });
-      containerRef.current?.querySelectorAll("[role=option]")[index]?.scrollIntoView({ block: "nearest" });
     };
     useImperativeHandle(ref, () => ({
       onKeyDown: ({ event }: { event: KeyboardEvent }) => {
@@ -50,23 +48,16 @@ export const MentionList = forwardRef<any, MentionListProps>(
       },
     }));
     return (
-      <div ref={containerRef} role="listbox" aria-label="Mention suggestions" className="bg-sol-bg border border-sol-border/50 rounded-lg shadow-xl py-1.5 w-[420px] max-w-[calc(100vw-24px)] max-h-[400px] overflow-y-auto overflow-x-hidden">
-        {allItems.length > 0 && allItems[0].type !== "date" && <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-sol-text-dim">Recently viewed · then updated</div>}
-        {allItems.map((item, index) => (
-          <button
-            key={`${item.type}:${item.id}`} type="button" role="option" aria-selected={index === selectedIndex}
-            data-mention-id={item.id}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => selectItem(index)}
-            onMouseEnter={() => setSelection({ query, index })}
-            className={`w-full text-left px-3 py-2 flex items-center gap-2.5 ${index === selectedIndex ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"}`}
-          >
-            <MentionSuggestion item={item} />
-          </button>
-        ))}
-        {serverLoading && <div className="px-3 py-2 text-[11px] text-sol-text-dim" role="status">Searching everything…</div>}
-        {!allItems.length && !serverLoading && <div className="px-3 py-2 text-xs text-sol-text-dim text-center">No results</div>}
-      </div>
+      <MentionMenu
+        items={allItems}
+        selectedIndex={selectedIndex}
+        onHover={(index) => setSelection({ query, index })}
+        onPick={selectItem}
+        query={query}
+        loading={serverLoading}
+        heading={datesOnly ? "Dates" : undefined}
+        className="w-[520px] max-w-[calc(100vw-24px)]"
+      />
     );
   },
 );
