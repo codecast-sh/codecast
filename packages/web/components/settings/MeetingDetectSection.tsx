@@ -9,7 +9,7 @@ import {
   setMeetingDetect,
   type MeetingDetectConfig,
   type MeetingDetectMode,
-} from "../../lib/desktop";
+} from "../../lib/desktopMeetings";
 import { SettingsOptionGroup, SettingsSection } from "./ui";
 
 // Record a meeting when one starts.

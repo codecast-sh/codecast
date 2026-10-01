@@ -46,7 +46,6 @@ components/PlanTaskHoverCard.tsx 1
 components/SetupPromptBanner.tsx 1
 components/Sidebar.tsx 1
 components/WatchButton.tsx 1
-components/conversation/blocks/castBlocks.tsx 4
 components/conversation/blocks/toolBlocks.tsx 1
 components/conversation/blocks/turnBlocks.tsx 2
-components/editor/CollabDocEditor.tsx 2
+components/editor/CollabDocEditor.tsx 1

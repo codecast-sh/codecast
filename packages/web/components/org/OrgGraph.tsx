@@ -8,6 +8,7 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
 import type { PlanItem, ProjectItem } from "../../store/inboxStore";
 import { useEventListener } from "../../hooks/useEventListener";
+import { STILL_FLOW_PROPS } from "../../lib/stillFlow";
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -89,9 +90,15 @@ export type OrgGraphProps = {
   /** Edit on a role change opens the hire dialog prefilled (the page owns
    *  it); every other kind gets the inline form here on the canvas. */
   onEditRoleChange?: (change: OrgProposalChange) => void;
+  /** False draws the chart as a still picture (the marketing hero): no zoom
+   *  controls or edge cues, and no pan, zoom, drag or wheel capture. Default true. */
+  chrome?: boolean;
 };
 
 const DRAGGABLE = new Set(["session", "role"]);
+
+// The chart's own gestures; chrome off swaps in STILL_FLOW_PROPS for them.
+const CHART_FLOW_PROPS = { nodesConnectable: false, elementsSelectable: true, panOnScroll: true, zoomOnDoubleClick: false } as const;
 const DROP_TARGETS = new Set(["person", "role"]);
 
 function titleOf(n: OrgLayoutNode): string {
@@ -150,7 +157,7 @@ function toFlowNodes(layout: OrgLayoutNode[], selectedId: string | null, dropTar
 }
 
 function OrgGraphInner(props: OrgGraphProps) {
-  const { tree, view, selectedId, loadingClusters, showMiniMap, onSelect, onToggleCollapse, onExpandCluster, onCollapseCluster, onReparentRequest, onNodeContextMenu, onOpenSession, resetKey, panelWidth = 0, panelHeightFraction = 0, canDrag, changes, health, viewerSession, focusChangeId = null, focusTarget = null, onFocusChange, onDecideChange, onEditRoleChange } = props;
+  const { tree, view, selectedId, loadingClusters, showMiniMap, onSelect, onToggleCollapse, onExpandCluster, onCollapseCluster, onReparentRequest, onNodeContextMenu, onOpenSession, resetKey, panelWidth = 0, panelHeightFraction = 0, canDrag, changes, health, viewerSession, focusChangeId = null, focusTarget = null, onFocusChange, onDecideChange, onEditRoleChange, chrome = true } = props;
   const { theme } = useTheme();
   const rf = useReactFlow();
 
@@ -320,14 +327,15 @@ function OrgGraphInner(props: OrgGraphProps) {
     recomputeCue({ x: vp.x, y: vp.y, zoom: vp.zoom });
   }, [focusNodeId, focusSeq, viewportReady, panelWidth, panelHeightFraction]);
 
-  // Escape clears the selection unless the user is typing somewhere.
+  // Escape clears the selection unless the user is typing somewhere. Only
+  // listening while there is something to clear keeps a resting chart off the window.
   useEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
     const el = document.activeElement as HTMLElement | null;
     if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
     if (editing) { setEditing(null); return; }
     if (selectedId) onSelect(null);
-  });
+  }, editing || selectedId ? window : null);
 
   const findDropTarget = useCallback((node: Node): OrgLayoutNode | null => {
     // A ghost stub has the type of a role but is a change, not a seat: a drop
@@ -427,19 +435,16 @@ function OrgGraphInner(props: OrgGraphProps) {
       onNodeDrag={onNodeDrag}
       onNodeDragStop={onNodeDragStop}
       colorMode={theme === "dark" ? "dark" : "light"}
-      nodesConnectable={false}
-      elementsSelectable
       selectNodesOnDrag={false}
-      panOnScroll
-      zoomOnDoubleClick={false}
       minZoom={0.25}
       maxZoom={1.75}
       proOptions={{ hideAttribution: true }}
       className="org-flow"
       style={{ background: "transparent" }}
+      {...(chrome ? CHART_FLOW_PROPS : STILL_FLOW_PROPS)}
     >
       <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} color="color-mix(in srgb, var(--sol-border) 40%, transparent)" />
-      <Controls showInteractive={false} position="bottom-left" className="!shadow-none !border !rounded-lg overflow-hidden" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)" }} />
+      {chrome && <Controls showInteractive={false} position="bottom-left" className="!shadow-none !border !rounded-lg overflow-hidden" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)" }} />}
       {showMiniMap && (
         <MiniMap
           pannable
@@ -452,8 +457,8 @@ function OrgGraphInner(props: OrgGraphProps) {
         />
       )}
     </ReactFlow>
-    <EdgeCue side="left" hidden={edgeCue.left} onPan={panTo} offset={0} />
-    <EdgeCue side="right" hidden={edgeCue.right} onPan={panTo} offset={panelWidth} />
+    {chrome && <EdgeCue side="left" hidden={edgeCue.left} onPan={panTo} offset={0} />}
+    {chrome && <EdgeCue side="right" hidden={edgeCue.right} onPan={panTo} offset={panelWidth} />}
     {editing && (
       <EditChangePopover
         change={editing.change}

@@ -149,7 +149,7 @@ const DOT: Record<LocalMirror["status"], string> = {
 };
 
 /** A start or stop the laptop has not answered: its daemon is offline, or too old to know the command. */
-export const MIRROR_UNANSWERED_MS = 90_000;
+const MIRROR_UNANSWERED_MS = 90_000;
 function unanswered(m: LocalMirror, now: number): boolean {
   return (m.status === "starting" || m.status === "stopping") && now - m.at > MIRROR_UNANSWERED_MS;
 }

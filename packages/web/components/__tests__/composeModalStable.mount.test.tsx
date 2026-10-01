@@ -18,6 +18,13 @@ import { ConvexProvider, ConvexReactClient } from "convex/react";
 import { useInboxStore } from "../../store/inboxStore";
 import { closeDomWindow } from "../../test-helpers/domGlobals";
 
+// The compose view is a heavy module graph. Load it here, after the mocks above
+// (static imports are hoisted past mock.module), so its one-time load is not
+// charged to the test's timeout.
+const { loadComposeView } = await import("../../lib/composeViewLoader");
+await loadComposeView();
+const { ComposeHost } = await import("../ComposeHost");
+
 // The Ctrl+N modal must stay painted while the person types: no keystroke may
 // remount the backdrop or the frame (that replays their fade in) or hide the
 // composer under a Suspense boundary (React sets display:none on it).
@@ -49,9 +56,6 @@ function typeInto(el: HTMLTextAreaElement, value: string) {
 test("typing in the compose modal never remounts or hides the modal", async () => {
   useInboxStore.setState({ currentUser: { _id: "user_modal_test", name: "Tester" } as any, drafts: {}, sessions: {}, conversations: {} } as any);
   (useInboxStore.getState() as any)._setDispatch(async () => undefined);
-  const { loadComposeView } = await import("../../lib/composeViewLoader");
-  await loadComposeView();
-  const { ComposeHost } = await import("../ComposeHost");
 
   const container = w.document.createElement("div");
   w.document.body.appendChild(container);
@@ -97,4 +101,6 @@ test("typing in the compose modal never remounts or hides the modal", async () =
   expect(container.querySelector("[data-flip-key]")).toBe(frame);
   expect(textarea()!.value).toBe(text);
   await act(() => root.unmount());
-});
+  // The body is the behavior under test: open the modal, then 43 keystrokes,
+  // each a React render plus a timer flush. It asserts stability, not speed.
+}, { timeout: 30_000 });

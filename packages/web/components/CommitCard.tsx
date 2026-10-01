@@ -2,7 +2,8 @@ import { useState } from "react";
 import Link from "next/link";
 import { FileDiffList, type DiffFile } from "./FileDiffView";
 import { commitPageHref } from "../lib/repoView";
-import { SessionTrailerLine, useSessionTrailer } from "./SessionTrailer";
+import { SessionTrailerLine } from "./SessionTrailer";
+import { useSessionTrailer } from "../hooks/useSessionTrailer";
 
 type CommitCardProps = {
   sha: string;

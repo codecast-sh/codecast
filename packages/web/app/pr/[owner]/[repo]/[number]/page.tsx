@@ -19,6 +19,8 @@ import { MergeMenu, MoreMenu, ReviewMenu } from "../../../../../components/pr/PR
 import { PRLineThread, type NoteMode } from "../../../../../components/pr/PRThread";
 import { PRReviewBar } from "../../../../../components/pr/PRReviewBar";
 import { PRTimeline } from "../../../../../components/pr/PRTimeline";
+import { PRTabBar } from "../../../../../components/pr/PRTabBar";
+import { PR_TABS, TAB_BAR_PX } from "../../../../../components/pr/prTabs";
 import { useCurrentUser } from "../../../../../hooks/useCurrentUser";
 import { useEventListener } from "../../../../../hooks/useEventListener";
 import { useWatchEffect } from "../../../../../hooks/useWatchEffect";
@@ -66,15 +68,6 @@ const api = _api as any;
 
 type Tab = PrView;
 
-/** The tab bar's height: file headers and link targets land just under it. */
-const TAB_BAR_PX = 41;
-
-const TABS: { key: Tab; label: string; icon: typeof GitPullRequest; digit: string }[] = [
-  { key: "conversation", label: "Conversation", icon: MessagesSquare, digit: "1" },
-  { key: "files", label: "Files", icon: FileDiff, digit: "2" },
-  { key: "commits", label: "Commits", icon: GitCommitHorizontal, digit: "3" },
-  { key: "checks", label: "Checks", icon: ListChecks, digit: "4" },
-];
 
 
 /** Where the header ends, in the scroller's own coordinates: the scroll
@@ -383,7 +376,7 @@ export function PRContent({
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const el = e.target as HTMLElement | null;
     if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
-    const hit = TABS.find((t) => t.digit === e.key);
+    const hit = PR_TABS.find((t) => t.digit === e.key);
     if (hit) { setTab(hit.key); return; }
     if (e.key === "r" && isAuthenticated) {
       e.preventDefault();
@@ -518,55 +511,19 @@ export function PRContent({
         )}
       />
 
-      <nav
-        aria-label="Pull request views"
-        className="pr-tabs sticky top-0 z-30 flex items-end gap-1 border-b border-sol-border/60 bg-sol-bg/95 backdrop-blur px-4 overflow-x-auto"
-        style={{ height: TAB_BAR_PX }}
-      >
-        {TABS.map(({ key, label, icon: Icon, digit }) => (
-          <Link
-            key={key}
-            href={prViewHref(repository, number, key, family)}
-            aria-current={tab === key ? "page" : undefined}
-            className={`group flex items-center gap-2 border-b-2 px-3 pb-2 pt-2.5 text-[12px] whitespace-nowrap transition-colors ${
-              tab === key
-                ? "border-current text-sol-text"
-                : "border-transparent text-sol-text-muted hover:text-sol-text"
-            }`}
-            style={tab === key ? { color: "var(--pr-accent)" } : undefined}
-          >
-            <Icon className="pr-tab-icon w-3.5 h-3.5" />
-            {label}
-            {key === "files" && files.length > 0 && (
-              <span className="text-[11px] text-sol-text-dim">{files.length}</span>
-            )}
-            {key === "files" && notes.length > 0 && (
-              <span className="rounded-full border border-dashed border-sol-yellow/60 px-1.5 text-[10px] text-sol-yellow" title="Notes in your review, not sent yet">
-                {notes.length}
-              </span>
-            )}
-            {key === "commits" && (pr.commits_count ?? pr.commits?.length ?? 0) > 0 && (
-              <span className="text-[11px] text-sol-text-dim">{pr.commits_count ?? pr.commits.length}</span>
-            )}
-            {key === "checks" && (pr.checks?.length ?? 0) > 0 && (
-              <span className="text-[11px] text-sol-text-dim">{pr.checks.length}</span>
-            )}
-            <span className="pr-tab-key opacity-0 group-hover:opacity-100 transition-opacity">
-              <KeyCap size="xs">{digit}</KeyCap>
-            </span>
-          </Link>
-        ))}
-        <button
-          type="button"
-          onClick={() => rootRef.current?.scrollTo({ top: 0, behavior: "smooth" })}
-          className={`pr-mini-title ml-auto min-w-0 truncate pb-2.5 pl-4 text-left text-[12px] text-sol-text-muted hover:text-sol-text transition-opacity duration-200 ${pastHeader ? "opacity-100" : "opacity-0 pointer-events-none"}`}
-          aria-hidden={!pastHeader}
-          tabIndex={pastHeader ? 0 : -1}
-          title="Back to the top"
-        >
-          <span className="font-mono text-sol-text-dim">#{number}</span> {pr.title}
-        </button>
-      </nav>
+      <PRTabBar
+        repository={repository}
+        number={number}
+        title={pr.title}
+        tab={tab}
+        family={family}
+        filesCount={files.length}
+        notesCount={notes.length}
+        commitsCount={pr.commits_count ?? pr.commits?.length ?? 0}
+        checksCount={pr.checks?.length ?? 0}
+        pastHeader={pastHeader}
+        onTop={() => rootRef.current?.scrollTo({ top: 0, behavior: "smooth" })}
+      />
 
       {/* The content grows to fill a short view, so the review bar rests at the
           bottom of the window rather than right under the last line. */}

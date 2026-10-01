@@ -9,10 +9,16 @@ import { isHumanOnlyCategory } from "@codecast/convex/convex/lib/decisionCategor
 import { SessionGlyph } from "../identity";
 import { identityRowOf } from "../../lib/sessionIdentity";
 import { categoryMeaning } from "../../lib/decisionCategory";
+import { askingSessionDeps } from "./askingSessionDeps";
 
 // Who is in a decision: the session that asked, the person who holds it, and
 // what its category means. One rendering for the queue card and the document
 // page, so the same question never introduces its parties two ways.
+
+/** The asking session's store row, as far as the line draws it. */
+export type AskingSessionRow = { _id?: string; title?: string; project_path?: string; status?: string; [key: string]: unknown };
+
+type AskingDecision = Pick<SessionDecisionItem, "conversation_id" | "_id" | "question" | "session_title" | "project_path">;
 
 /** The asking session as one line: a live dot, its name, its project. The
  *  name comes from the store row when the session is cached, else the row's
@@ -22,19 +28,27 @@ export function AskingSession({
   decision,
   className = "",
 }: {
-  decision: Pick<SessionDecisionItem, "conversation_id" | "_id" | "question" | "session_title" | "project_path">;
+  decision: AskingDecision;
   className?: string;
 }) {
-  const s = useTrackedStore([
-    (st) => st.sessions[decision.conversation_id]?.title,
-    (st) => st.sessions[decision.conversation_id]?.project_path,
-    (st) => st.sessions[decision.conversation_id]?.status,
-    // Identity, so the face re-renders when someone changes the character.
-    (st) => st.sessions[decision.conversation_id]?.character_avatar,
-    (st) => st.sessions[decision.conversation_id]?.standing_role_id,
-  ]);
-  const session = s.sessions[decision.conversation_id];
+  const s = useTrackedStore(askingSessionDeps(decision.conversation_id));
   const jumpToAsk = useJumpToDecisionAsk(decision.conversation_id, decision._id, decision.question);
+  return <AskingSessionView decision={decision} session={s.sessions[decision.conversation_id]} onJumpToAsk={jumpToAsk} className={className} />;
+}
+
+/** The asking-session line drawn from props: the session's row (absent when
+ *  the store has never seen it) and what a plain click on its name does. */
+export function AskingSessionView({
+  decision,
+  session,
+  onJumpToAsk,
+  className = "",
+}: {
+  decision: AskingDecision;
+  session?: AskingSessionRow;
+  onJumpToAsk: () => void;
+  className?: string;
+}) {
   const title = session?.title || decision.session_title;
   const project = session?.project_path || decision.project_path;
   const live = session?.status === "running" || session?.status === "working";
@@ -50,7 +64,7 @@ export function AskingSession({
         onClick={(e) => {
           if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
           e.preventDefault();
-          void jumpToAsk();
+          void onJumpToAsk();
         }}
       >
         {title || "a session with no name yet"}

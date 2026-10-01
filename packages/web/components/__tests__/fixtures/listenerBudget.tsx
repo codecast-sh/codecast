@@ -66,7 +66,8 @@ const act: <T>(cb: () => T | Promise<T>) => Promise<T> = (React as any).act;
 const { useInboxStore } = await import("../../../store/inboxStore");
 const { readStoreListenerCount } = await import("../../../store/storeListenerCensus");
 const { flushSyncPublishes } = await import("../../../store/syncTransaction");
-const { SessionListPanel, SessionCard } = await import("../../GlobalSessionPanel");
+const { SessionListPanel } = await import("../../GlobalSessionPanel");
+const { SessionCard } = await import("../../inbox/SessionCard");
 
 const SESSION_COUNT = 100;
 

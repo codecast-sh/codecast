@@ -39,9 +39,11 @@ const manifestByHref = new Map(ROUTES.map((r) => [routeHref(r.path), r] as const
 // contribute no prefix; the only path-carrying parent is SettingsLayout (`path="settings"`).
 // We walk the JSX line by line, tracking a stack of (path-prefix, brace-depth) frames.
 
-function parseAppRoutePaths(src: string): string[] {
+// Each route also says whether it renders nothing (`element={null}`), which the manifest
+// records as `component: null`.
+function parseAppRoutePaths(src: string): { path: string; rendersNothing: boolean }[] {
   const lines = src.split("\n");
-  const paths: string[] = [];
+  const paths: { path: string; rendersNothing: boolean }[] = [];
   // Stack of path prefixes contributed by ancestor <Route> elements that are still open.
   const prefixStack: string[] = [];
   // Parallel stack of the running brace/paren depth at which each prefix was pushed, so we
@@ -66,7 +68,7 @@ function parseAppRoutePaths(src: string): string[] {
         const prefix = prefixStack.length ? prefixStack[prefixStack.length - 1] : "";
         const seg = indexRoute ? "" : pathMatch![1];
         const abs = indexRoute ? prefix : join2(prefix, seg);
-        paths.push(abs);
+        paths.push({ path: abs, rendersNothing: /\belement=\{null\}/.test(line) });
         if (!selfClosed) {
           // Path-carrying parent (e.g. <Route path="settings" element=...>): becomes a prefix.
           prefixStack.push(abs);
@@ -95,8 +97,10 @@ function parseAppRoutePaths(src: string): string[] {
   return paths;
 }
 
-const appPaths = parseAppRoutePaths(appSrc);
+const appRoutes = parseAppRoutePaths(appSrc);
+const appPaths = appRoutes.map((r) => r.path);
 const appHrefs = new Set(appPaths.map(routeHref));
+const appEmptyHrefs = new Set(appRoutes.filter((r) => r.rendersNothing).map((r) => routeHref(r.path)));
 
 // -- (2) TabContent parser: extract the static form of every routing pattern --------------
 //
@@ -229,11 +233,11 @@ describe("routes.manifest parser sanity", () => {
 });
 
 describe("(d) every ROUTES entry has the required fields", () => {
-  it("path is a string and component is a lazy ref; flags are well-typed", () => {
+  it("path is a string and component is a lazy ref or null; flags are well-typed", () => {
     for (const r of ROUTES) {
       expect(typeof r.path).toBe("string");
       expect(r.component).toBeDefined();
-      // lazy() refs are objects exposing $$typeof / _payload.
+      // lazy() refs are objects exposing $$typeof / _payload; null is a route that renders nothing.
       expect(typeof r.component === "object" || typeof r.component === "function").toBe(true);
       expect(typeof r.layout).toBe("string");
       if (r.tab !== undefined) expect(typeof r.tab).toBe("string");
@@ -243,6 +247,11 @@ describe("(d) every ROUTES entry has the required fields", () => {
         expect(["public", "shell"]).toContain(r.guestKind);
       }
     }
+  });
+
+  it("a null component is exactly a route App.tsx renders as element={null}", () => {
+    const empty = ROUTES.filter((r) => r.component === null).map((r) => routeHref(r.path));
+    expect(empty.sort()).toEqual([...appEmptyHrefs].sort());
   });
 
   it("has no duplicate paths", () => {
@@ -398,10 +407,11 @@ export type { RouteEntry };
 // (e) The CLI's surface list (@codecast/shared/contracts/appSurfaces) is what
 // `cast app goto` resolves and `cast app sweep` walks. It must name every
 // signed-in page a URL alone can reach, and nothing the router no longer serves.
+// A splat (`*`) is a parameter too: it names no one page.
 describe("(e) every param-free signed-in route is a cast app surface", () => {
   const signedIn = ROUTES.filter(
     (r) =>
-      !r.path.includes(":") &&
+      !/[:*]/.test(r.path) &&
       !r.guestOk &&
       (r.layout === "dashboardShell" || r.layout === "standalone" || r.layout === "settings"),
   );

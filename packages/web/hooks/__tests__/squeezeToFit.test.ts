@@ -10,6 +10,9 @@ import { applySqueeze } from "../useSqueezeToFit";
 const web = join(import.meta.dir, "..", "..");
 const css = readFileSync(join(web, "app/globals.css"), "utf8");
 const view = readFileSync(join(web, "components/ConversationView.tsx"), "utf8");
+// ConversationView owns the squeeze hook; the head row it measures is drawn
+// by ConversationHeaderBar.
+const headerBar = readFileSync(join(web, "components/conversation/ConversationHeaderBar.tsx"), "utf8");
 const placeholder = readFileSync(join(web, "components/ConversationPlaceholder.tsx"), "utf8");
 
 /** A row whose content width depends on the squeeze level it carries. */
@@ -33,7 +36,7 @@ describe("conversation header squeeze", () => {
   });
 
   test("the conversation head row is not the wrapping panel variant", () => {
-    for (const src of [view, placeholder]) {
+    for (const src of [headerBar, placeholder]) {
       const heads = src.match(/className="cc-panel__head[^"]*gap-2 min-w-0"/g) ?? [];
       expect(heads.length).toBe(1);
       expect(heads[0]).not.toContain("cc-panel__head--flow");

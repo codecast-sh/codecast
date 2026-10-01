@@ -10,7 +10,7 @@ import {
   MeetingRecordFailed,
   MeetingRecordingNote,
 } from "../../components/calls/MeetingOfferToast";
-import { canDetectMeetings, onMeetingDetected, type MeetingOffer } from "../desktop";
+import { canDetectMeetings, onMeetingDetected, type MeetingOffer } from "../desktopMeetings";
 import { getRecorderStatus, startRecording } from "./recorder";
 
 /** One card per app, so an app that starts twice replaces its card rather than
