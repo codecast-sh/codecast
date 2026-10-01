@@ -1,4 +1,4 @@
-import { FolderGit2, Map as MapIcon, Clock, Waypoints, Cpu, Link as LinkIcon } from "lucide-react";
+import { FolderGit2, Map as MapIcon, Clock, Waypoints, Cpu, Link as LinkIcon, ListTodo } from "lucide-react";
 import type { ReactNode } from "react";
 import { Command as CommandPrimitive } from "cmdk";
 import { SessionGlyph, SessionIdentityLine } from "./identity";
@@ -8,6 +8,7 @@ import { AvatarImg } from "../lib/avatarCache";
 import { getProjectName } from "../store/inboxStore";
 import { getLabelColor } from "../lib/labelColors";
 import { itemClass } from "./paletteStyles";
+import { ShortId } from "./ShortId";
 import { formatDateSmart } from "@codecast/shared/time";
 
 // Presentational rows of the Cmd+K palette. CommandPalette owns the data and
@@ -196,6 +197,44 @@ export function PaletteSearchResultRow({ result, onSelect }: {
           : "filter"}
       </span>
       <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{formatDateSmart(result.updatedAt)}</span>
+    </CommandPrimitive.Item>
+  );
+}
+
+/** The palette's top bar: the search glyph, the field (children) and what
+ *  trails it (the Esc keycap). */
+export function PaletteSearchBar({ children, trailing }: { children: ReactNode; trailing?: ReactNode }) {
+  return (
+    <div className="flex items-center gap-3 px-4 py-3 border-b border-sol-border/60">
+      <div className="text-sol-text-dim">
+        <NavIcon type="search" className="w-[18px] h-[18px]" />
+      </div>
+      {children}
+      {trailing}
+    </div>
+  );
+}
+
+export type PaletteTaskRowTask = { _id: string; title?: string; short_id?: string; updated_at: number; [key: string]: unknown };
+
+/** A "Tasks" row: the task glyph, title, status, short id, age. */
+export function PaletteTaskRow({ task, status, onSelect }: {
+  task: PaletteTaskRowTask;
+  status: { label: string; color: string } | undefined;
+  onSelect: () => void;
+}) {
+  return (
+    <CommandPrimitive.Item
+    data-palette-type="task" data-palette-id={task._id} data-palette-title={task.title} data-palette-short-id={task.short_id}
+      value={`__entity__ ${task.title} ${task.short_id}|||${task._id}`}
+      onSelect={onSelect}
+      className={itemClass}
+    >
+      <ListTodo className="w-4 h-4 flex-shrink-0 text-sol-cyan" />
+      <span className="truncate flex-1">{task.title || "Untitled"}</span>
+      {status && <span className={`text-[10px] flex-shrink-0 ${status.color}`}>{status.label}</span>}
+      <ShortId id={task.short_id} className="text-[10px] text-sol-text-dim tabular-nums" />
+      <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{formatDateSmart(task.updated_at)}</span>
     </CommandPrimitive.Item>
   );
 }

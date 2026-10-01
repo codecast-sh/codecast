@@ -1,0 +1,1262 @@
+<!doctype html>
+<html lang="en">
+<head><script>(function(){
+  var mem={};
+  var store={getItem:function(k){return k.indexOf("__cc_min")===0?"0":(k in mem?mem[k]:null);},setItem:function(k,v){mem[k]=String(v);},removeItem:function(k){delete mem[k];}};
+  try{Object.defineProperty(window,"localStorage",{value:store,configurable:true});}catch(e){}
+  var real=window.fetch.bind(window);
+  window.fetch=function(u,o){
+    if(typeof u==="string"&&u.indexOf("data:")===0)return real(u,o);
+    return Promise.resolve(new Response("{}",{status:200,headers:{"Content-Type":"application/json"}}));
+  };
+})();</script>
+<meta property="og:title" content="Webhook retry report">
+<meta property="og:description" content="A page published by Ashot Petrosian with codecast">
+<meta property="og:url" content="https://codecast.sh/a/webhook-retries">
+<meta property="og:site_name" content="codecast">
+<meta property="og:type" content="article">
+<meta name="twitter:card" content="summary">
+<meta name="robots" content="noindex">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Webhook retry report</title>
+<style>
+  :root { --ink: #073642; --mut: #586e75; --dim: #93a1a1; --line: #e8e2cf; --bg: #fdf6e3; --card: #fffdf6; --green: #859900; --red: #dc322f; --blue: #268bd2; --amber: #b58900; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.55 ui-sans-serif, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 28px 32px 48px; }
+  .kicker { font: 600 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .04em; color: var(--mut); }
+  h1 { font-size: 26px; line-height: 1.2; margin: 8px 0 6px; letter-spacing: -.01em; }
+  .lede { color: var(--mut); margin: 0 0 22px; max-width: 56ch; }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 22px; }
+  .stat { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .stat b { display: block; font-size: 22px; letter-spacing: -.01em; }
+  .stat span { font-size: 12px; color: var(--mut); }
+  .stat .good { color: var(--green); }
+  h2 { font-size: 15px; margin: 0 0 10px; }
+  .chart { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px 16px 10px; margin-bottom: 22px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 4px; border-bottom: 1px solid var(--line); }
+  th { font-weight: 600; color: var(--mut); font-size: 12px; }
+  td.n { text-align: right; font-variant-numeric: tabular-nums; }
+  .pill { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px; background: rgba(133,153,0,.14); color: var(--green); }
+</style>
+</head>
+<body>
+<style id="__cc_style">
+  /* codecast web styles: JetBrains Mono (same Google Fonts source the web
+     app uses) + the Solarized token palette from globals.css. */
+  @import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap");
+  /* Pinned to the viewport top; the html margin reserves exactly the bar's
+     height so the artifact's content starts below it — pinned, not overlaying.
+     Colors ride on custom properties; html.__cc_dark (set by JS from the
+     artifact's measured background luminance) flips the whole palette so the
+     bar reads as part of the page instead of a white strip over a dark one. */
+  html { margin-top: 40px !important; }
+  /* Minimized: the bar slides away and a small corner pill brings it back. */
+  html.__cc_min { margin-top: 0 !important; }
+  html.__cc_min #__cc_bar { transform: translateY(-100%); box-shadow: none; pointer-events: none; }
+  html.__cc_min #__cc_pill { display: inline-flex; }
+  #__cc_bar, .__cc_panel, #__cc_hint, #__cc_pill, #__cc_mlist {
+    --cc-bg: rgba(253,252,250,.9); --cc-ink: #002b36; --cc-mut: #586e75; --cc-dim: rgba(0,43,54,.48);
+    --cc-line: rgba(88,110,117,.22); --cc-hov: rgba(0,43,54,.06); --cc-card: #ffffff; --cc-soft: #faf9f7;
+    --cc-inbd: rgba(0,43,54,.22); --cc-blue: #268bd2; --cc-green: #859900; --cc-coral: #e86c5d;
+    --cc-shadow: rgba(0,43,54,.16); }
+  html.__cc_dark #__cc_bar, html.__cc_dark .__cc_panel, html.__cc_dark #__cc_hint, html.__cc_dark #__cc_pill, html.__cc_dark #__cc_mlist {
+    --cc-bg: rgba(0,43,54,.85); --cc-ink: #fdf6e3; --cc-mut: #93a1a1; --cc-dim: rgba(253,246,227,.45);
+    --cc-line: rgba(147,161,161,.18); --cc-hov: rgba(147,161,161,.1); --cc-card: #08404e; --cc-soft: #073642;
+    --cc-inbd: rgba(147,161,161,.32); --cc-blue: #268bd2; --cc-green: #859900;
+    --cc-shadow: rgba(0,0,0,.5); }
+  #__cc_bar { position: fixed; top: 0; left: 0; right: 0; height: 40px; z-index: 2147483647;
+    display: flex; align-items: center; gap: 2px;
+    box-sizing: border-box;
+    padding: 0 calc(10px + env(safe-area-inset-right)) 0 calc(12px + env(safe-area-inset-left));
+    font: 500 12px/1 "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: var(--cc-bg); color: var(--cc-mut);
+    -webkit-backdrop-filter: saturate(1.6) blur(12px); backdrop-filter: saturate(1.6) blur(12px);
+    border-bottom: 1px solid var(--cc-line); box-shadow: 0 1px 8px rgba(0,0,0,.05);
+    text-align: left; transition: transform .22s ease; }
+  #__cc_pill { position: fixed; top: 8px; right: calc(8px + env(safe-area-inset-right)); z-index: 2147483647;
+    display: none; align-items: center; justify-content: center; width: 30px; height: 30px;
+    border: 1px solid var(--cc-line); border-radius: 999px; background: var(--cc-bg); color: var(--cc-ink);
+    -webkit-backdrop-filter: saturate(1.6) blur(12px); backdrop-filter: saturate(1.6) blur(12px);
+    cursor: pointer; padding: 0; margin: 0; opacity: .55; transition: opacity .15s ease, transform .15s ease;
+    -webkit-tap-highlight-color: transparent; }
+  #__cc_pill:hover { opacity: 1; transform: scale(1.06); }
+  #__cc_pill svg { display: block; }
+  #__cc_bar .__cc_brand { color: var(--cc-ink); text-decoration: none; display: inline-flex; align-items: center;
+    opacity: .85; margin-right: 8px; }
+  #__cc_bar .__cc_brand:hover { opacity: 1; }
+  #__cc_bar .__cc_title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-weight: 500; color: var(--cc-ink); opacity: .82; letter-spacing: .01em; margin-right: 8px; }
+  #__cc_bar .__cc_sess { color: var(--cc-blue); text-decoration: none; white-space: nowrap; font-weight: 400;
+    opacity: .8; padding: 5px 7px; border-radius: 7px; max-width: 28ch; overflow: hidden; text-overflow: ellipsis; }
+  #__cc_bar .__cc_sess:hover { opacity: 1; background: var(--cc-hov); }
+  #__cc_bar .__cc_when { color: var(--cc-dim); font-weight: 400; white-space: nowrap; padding: 0 7px; }
+  #__cc_bar .__cc_dot { color: var(--cc-dim); opacity: .6; }
+  #__cc_bar button { all: unset; cursor: pointer; padding: 5px 8px; border-radius: 7px; font: inherit; white-space: nowrap;
+    display: inline-flex; align-items: center; gap: 5px; color: var(--cc-mut);
+    -webkit-tap-highlight-color: transparent; transition: background .1s ease, color .1s ease; }
+  #__cc_bar button:hover { background: var(--cc-hov); color: var(--cc-ink); }
+  #__cc_bar button[hidden] { display: none; }
+  #__cc_bar button svg { flex: none; opacity: .8; }
+  #__cc_bar #__cc_ver { border: 1px solid var(--cc-line); border-radius: 999px; padding: 3px 9px; gap: 4px;
+    font-weight: 600; color: var(--cc-ink); }
+  #__cc_bar #__cc_ver:hover { border-color: var(--cc-inbd); background: var(--cc-hov); }
+  #__cc_bar #__cc_ver.__cc_old { color: #c07a28; border-color: rgba(192,122,40,.45); }
+  #__cc_bar #__cc_new { background: var(--cc-coral); color: #ffffff; font-weight: 600; margin: 0 2px; padding: 5px 10px; }
+  #__cc_bar #__cc_new:hover { background: #d85b4c; color: #ffffff; }
+  #__cc_bar #__cc_latest { color: var(--cc-blue); text-decoration: none; padding: 5px 8px; border-radius: 7px; white-space: nowrap;
+    display: inline-flex; align-items: center; gap: 3px; }
+  #__cc_bar #__cc_latest:hover { background: var(--cc-hov); }
+  #__cc_bar #__cc_ccount { color: var(--cc-dim); font-size: 10px; font-weight: 600; }
+  #__cc_bar #__cc_ccount:empty { display: none; }
+  .__cc_panel { position: fixed; top: 46px; right: 10px; z-index: 2147483647; min-width: 272px; max-width: min(92vw, 400px);
+    max-height: 72vh; overflow-y: auto; overscroll-behavior: contain;
+    background: var(--cc-card); color: var(--cc-mut); border-radius: 12px;
+    box-shadow: 0 10px 32px var(--cc-shadow), 0 0 0 1px var(--cc-line);
+    font: 400 12px/1.45 "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 8px; text-align: left;
+    opacity: 0; transform: translateY(-4px); transition: opacity .16s ease, transform .16s ease; }
+  .__cc_panel.__cc_in { opacity: 1; transform: none; }
+  .__cc_panel[hidden] { display: none; }
+  .__cc_panel a { color: inherit; text-decoration: none; }
+  .__cc_panel .__cc_row { display: flex; justify-content: space-between; gap: 14px; align-items: baseline; padding: 6px 8px; border-radius: 7px; }
+  .__cc_panel .__cc_row:hover { background: var(--cc-hov); }
+  .__cc_panel .__cc_vlabel { font-weight: 600; color: var(--cc-ink); }
+  .__cc_panel a.__cc_cur .__cc_vlabel::after { content: " · current"; font-weight: 400; color: var(--cc-green); }
+  .__cc_panel a.__cc_viewing { background: rgba(232,108,93,.12); }
+  .__cc_panel .__cc_vwhen { color: var(--cc-dim); white-space: nowrap; }
+  .__cc_panel .__cc_note { padding: 6px 8px; color: var(--cc-dim); }
+  .__cc_panel .__cc_dlink { opacity: .6; margin-left: 8px; }
+  .__cc_panel .__cc_dlink:hover { opacity: 1; color: var(--cc-blue); }
+  .__cc_panel .__cc_ph { display: flex; align-items: baseline; gap: 8px; padding: 4px 8px 8px; }
+  .__cc_panel .__cc_pht { font-weight: 600; color: var(--cc-ink); font-size: 13px; }
+  .__cc_panel .__cc_phn { color: var(--cc-dim); }
+  .__cc_panel .__cc_h2 { font-weight: 600; color: var(--cc-ink); padding: 12px 8px 4px; font-size: 10px; text-transform: uppercase; letter-spacing: .07em; opacity: .7; }
+  .__cc_panel .__cc_kv { display: flex; align-items: center; gap: 8px; padding: 5px 8px; flex-wrap: wrap; }
+  .__cc_panel .__cc_k { color: var(--cc-ink); }
+  .__cc_panel .__cc_v { color: var(--cc-dim); }
+  .__cc_panel .__cc_v.__cc_on { color: var(--cc-green); }
+  .__cc_panel .__cc_sp { flex: 1; }
+  .__cc_panel .__cc_btn { all: unset; cursor: pointer; padding: 5px 10px; border-radius: 7px; background: var(--cc-hov); color: var(--cc-ink);
+    white-space: nowrap; -webkit-tap-highlight-color: transparent; }
+  .__cc_panel .__cc_btn:hover { filter: brightness(.96); }
+  html.__cc_dark .__cc_panel .__cc_btn:hover { filter: brightness(1.2); }
+  .__cc_panel .__cc_btn:disabled { opacity: .5; cursor: default; }
+  .__cc_panel .__cc_btn.__cc_danger { color: #c25446; background: rgba(179,55,42,.1); }
+  .__cc_panel .__cc_btn.__cc_danger:hover { background: rgba(179,55,42,.18); }
+  .__cc_panel .__cc_chips { display: flex; gap: 6px; padding: 4px 8px; flex-wrap: wrap; }
+  .__cc_panel .__cc_chip2 { all: unset; cursor: pointer; padding: 4px 10px; border-radius: 999px; background: var(--cc-hov); color: var(--cc-ink);
+    -webkit-tap-highlight-color: transparent; }
+  .__cc_panel .__cc_chip2:hover { filter: brightness(.96); }
+  html.__cc_dark .__cc_panel .__cc_chip2:hover { filter: brightness(1.2); }
+  .__cc_panel .__cc_chip2.__cc_segon { background: var(--cc-ink); color: var(--cc-card); }
+  .__cc_panel .__cc_in2 { font: inherit; flex: 1; min-width: 120px; padding: 6px 9px; border: 1px solid var(--cc-inbd); border-radius: 7px;
+    color: var(--cc-ink); background: var(--cc-card); outline: none; box-sizing: border-box; }
+  .__cc_panel .__cc_in2::placeholder { color: var(--cc-dim); }
+  .__cc_panel .__cc_in2:focus { border-color: var(--cc-coral); box-shadow: 0 0 0 3px rgba(232,108,93,.15); }
+  .__cc_panel .__cc_draft { margin: 2px 8px 8px; padding: 0; }
+  .__cc_panel .__cc_dtop { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .__cc_panel .__cc_dnum { width: 18px; height: 18px; border-radius: 50% 50% 50% 4px; background: var(--cc-coral); color: #ffffff; font-weight: 600;
+    font-size: 10px; display: inline-flex; align-items: center; justify-content: center; flex: none; }
+  .__cc_panel .__cc_dsnip { color: var(--cc-dim); font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .__cc_panel .__cc_x { all: unset; cursor: pointer; padding: 2px 7px; border-radius: 6px; opacity: .5; font-size: 14px; }
+  .__cc_panel .__cc_x:hover { opacity: 1; background: var(--cc-hov); }
+  .__cc_panel .__cc_ta { font: inherit; width: 100%; box-sizing: border-box; border: 1px solid var(--cc-inbd); border-radius: 7px;
+    padding: 7px 9px; color: var(--cc-ink); resize: vertical; min-height: 44px; outline: none; background: var(--cc-card); }
+  .__cc_panel .__cc_ta::placeholder { color: var(--cc-dim); }
+  .__cc_panel .__cc_ta:focus { border-color: var(--cc-coral); box-shadow: 0 0 0 3px rgba(232,108,93,.15); }
+  .__cc_panel .__cc_addrow { display: flex; gap: 6px; padding: 6px 8px; }
+  .__cc_panel .__cc_who { padding: 2px 8px 6px; display: flex; }
+  .__cc_panel .__cc_actions { display: flex; gap: 6px; margin: 2px 8px 6px; }
+  .__cc_panel .__cc_send { all: unset; cursor: pointer; flex: 1; text-align: center; padding: 8px 12px;
+    border-radius: 8px; background: var(--cc-coral); color: #ffffff; font-weight: 600; -webkit-tap-highlight-color: transparent; }
+  .__cc_panel .__cc_send:hover { background: #d85b4c; }
+  .__cc_panel .__cc_send:disabled { opacity: .45; cursor: default; }
+  .__cc_panel .__cc_ghost { all: unset; cursor: pointer; text-align: center; padding: 8px 12px; border-radius: 8px;
+    color: var(--cc-mut); -webkit-tap-highlight-color: transparent; }
+  .__cc_panel .__cc_ghost:hover { background: var(--cc-hov); color: var(--cc-ink); }
+  .__cc_panel .__cc_ghost:disabled { opacity: .45; cursor: default; }
+  .__cc_panel .__cc_cerr { color: #c25446; padding: 0 8px 6px; }
+  .__cc_panel .__cc_okwrap { text-align: center; padding: 22px 12px 26px; }
+  .__cc_panel .__cc_okmark { width: 36px; height: 36px; margin: 0 auto 10px; border-radius: 50%; background: rgba(61,138,61,.14);
+    color: var(--cc-green); font-size: 18px; line-height: 36px; }
+  .__cc_panel .__cc_okt { font-weight: 600; color: var(--cc-ink); margin-bottom: 4px; }
+  .__cc_panel .__cc_oks { color: var(--cc-dim); }
+  .__cc_panel .__cc_cmt { margin: 0 8px; padding: 9px 2px; border-top: 1px solid var(--cc-line); }
+  .__cc_panel .__cc_cmeta { color: var(--cc-dim); margin-bottom: 2px; }
+  .__cc_panel .__cc_ctext { color: var(--cc-ink); margin: 4px 0 8px; white-space: pre-wrap; word-break: break-word; }
+  .__cc_panel .__cc_stag { font-size: 10px; font-weight: 600; white-space: nowrap; }
+  .__cc_panel .__cc_stag.__cc_pend { color: #c07a28; }
+  .__cc_panel .__cc_stag.__cc_sent { color: var(--cc-dim); }
+  /* Avatars (shared by the panel and the fixed mention layer). */
+  .__cc_panel .__cc_av, #__cc_mlist .__cc_av { width: 20px; height: 20px; border-radius: 50%; flex: none; object-fit: cover; display: block; }
+  .__cc_panel .__cc_avi, #__cc_mlist .__cc_avi { width: 20px; height: 20px; border-radius: 50%; flex: none; background: var(--cc-hov); color: var(--cc-mut);
+    font-size: 10px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; text-transform: uppercase; }
+  /* ------------------------------------------------------------------ */
+  /* Discussion panel: its own layout — sticky header, flush sections.  */
+  /* ------------------------------------------------------------------ */
+  #__cc_cpanel { padding: 0; min-width: 316px; max-width: min(92vw, 420px); }
+  #__cc_cpanel .__cc_phdr { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 8px;
+    padding: 11px 14px 10px; background: var(--cc-card); border-bottom: 1px solid var(--cc-line); border-radius: 12px 12px 0 0; }
+  #__cc_cpanel .__cc_phdr .__cc_pht { font-weight: 600; color: var(--cc-ink); font-size: 13px; letter-spacing: .01em; }
+  #__cc_cpanel .__cc_phdr .__cc_phn { color: var(--cc-dim); font-size: 10px; font-weight: 600; background: var(--cc-hov);
+    padding: 2px 7px; border-radius: 999px; }
+  #__cc_cpanel .__cc_meid { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 4px;
+    border: 1px solid var(--cc-line); border-radius: 999px; color: var(--cc-mut); font-size: 11px; max-width: 18ch; }
+  #__cc_cpanel .__cc_meid .__cc_mename { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #__cc_cpanel .__cc_meid .__cc_av, #__cc_cpanel .__cc_meid .__cc_avi { width: 16px; height: 16px; font-size: 8px; }
+  #__cc_cpanel a.__cc_signin { color: var(--cc-blue); cursor: pointer; font-size: 11px; padding: 4px 8px; border-radius: 7px; }
+  #__cc_cpanel a.__cc_signin:hover { background: var(--cc-hov); }
+  #__cc_cpanel .__cc_pbody { padding: 10px 10px 0; }
+  #__cc_cpanel .__cc_pbody > :last-child { margin-bottom: 10px; }
+  #__cc_cpanel .__cc_pbody > .__cc_threads:last-child { margin-bottom: 0; }
+  /* Sheet mode keeps the flush layout; the home-indicator inset rides on the
+     last row instead of panel padding. */
+  #__cc_cpanel.__cc_sheet { padding: 0; }
+  #__cc_cpanel.__cc_sheet .__cc_phdr { border-radius: 0; }
+  #__cc_cpanel.__cc_sheet .__cc_pbody > :last-child { margin-bottom: calc(14px + env(safe-area-inset-bottom)); }
+  #__cc_cpanel.__cc_sheet .__cc_pbody > .__cc_threads:last-child { margin-bottom: 0; }
+  #__cc_cpanel.__cc_sheet .__cc_thread:last-child { padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
+  #__cc_cpanel .__cc_empty { text-align: center; padding: 26px 18px 24px; color: var(--cc-dim); }
+  #__cc_cpanel .__cc_empty svg { opacity: .4; margin-bottom: 8px; }
+  #__cc_cpanel .__cc_empty .__cc_e1 { color: var(--cc-mut); font-weight: 600; margin-bottom: 3px; }
+  #__cc_cpanel .__cc_empty .__cc_e2 { font-size: 11px; }
+  /* Composer. One container (the panel) — interior structure comes from
+     whitespace and hairlines, never nested outlined boxes. The only "box" is
+     the input itself: a flat soft slab with no border. */
+  #__cc_cpanel .__cc_draft { margin: 0 0 10px; padding: 0; }
+  #__cc_cpanel .__cc_draft .__cc_dtop { margin-bottom: 5px; }
+  #__cc_cpanel .__cc_dlabel { color: var(--cc-dim); font-size: 10px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; }
+  #__cc_cpanel .__cc_ta, #__cc_cpanel .__cc_in2 { background: var(--cc-soft); border: none; border-radius: 8px;
+    padding: 8px 10px; box-shadow: none; }
+  html.__cc_dark #__cc_cpanel .__cc_ta, html.__cc_dark #__cc_cpanel .__cc_in2 { background: rgba(147,161,161,.08); }
+  #__cc_cpanel .__cc_ta { min-height: 52px; }
+  #__cc_cpanel .__cc_ta:focus, #__cc_cpanel .__cc_in2:focus { border: none;
+    box-shadow: inset 0 0 0 1.5px rgba(232,108,93,.38); }
+  #__cc_cpanel .__cc_addrow { display: flex; gap: 2px; padding: 0; margin-left: -7px; }
+  #__cc_cpanel .__cc_addrow .__cc_btn { display: inline-flex; align-items: center; gap: 6px; background: none; border: none;
+    border-radius: 7px; padding: 5px 9px; color: var(--cc-mut); font-size: 11px; }
+  #__cc_cpanel .__cc_addrow .__cc_btn:hover { color: var(--cc-ink); background: var(--cc-hov); filter: none; }
+  #__cc_cpanel .__cc_addrow .__cc_btn svg { opacity: .65; flex: none; }
+  #__cc_cpanel .__cc_asme { display: flex; align-items: center; gap: 6px; padding: 6px 1px 0; color: var(--cc-dim); font-size: 11px; }
+  #__cc_cpanel .__cc_asme .__cc_av, #__cc_cpanel .__cc_asme .__cc_avi { width: 15px; height: 15px; font-size: 8px; }
+  #__cc_cpanel .__cc_who { padding: 6px 0 0; display: flex; }
+  #__cc_cpanel .__cc_actions { display: flex; gap: 6px; margin: 8px 0 2px; }
+  #__cc_cpanel .__cc_cerr { padding: 4px 1px 0; }
+  #__cc_cpanel .__cc_cerr:empty { display: none; }
+  #__cc_cpanel .__cc_pendrow { margin: 10px 0 0; padding: 8px 1px 0; border-top: 1px solid var(--cc-line); font-size: 11px; }
+  /* Threads: avatar-column grid, replies on a connector line. */
+  #__cc_cpanel .__cc_threads { margin: 4px -10px -10px; }
+  #__cc_cpanel .__cc_thread { position: relative; padding: 10px 14px 9px; border-top: 1px solid var(--cc-line); }
+  #__cc_cpanel .__cc_thread:last-child { border-radius: 0 0 12px 12px; }
+  #__cc_cpanel .__cc_thread.__cc_sel { background: rgba(38,139,210,.07); }
+  #__cc_cpanel .__cc_thread.__cc_sel::before { content: ""; position: absolute; left: 0; top: 10px; bottom: 10px; width: 2px;
+    border-radius: 2px; background: var(--cc-blue); }
+  #__cc_cpanel .__cc_cmt2 { display: grid; grid-template-columns: 22px 1fr auto; column-gap: 9px; align-items: start; }
+  #__cc_cpanel .__cc_cmt2 .__cc_av, #__cc_cpanel .__cc_cmt2 .__cc_avi { width: 22px; height: 22px; margin-top: 1px; }
+  #__cc_cpanel .__cc_cmhead { display: flex; align-items: baseline; gap: 6px; min-width: 0; padding-top: 3px; }
+  #__cc_cpanel .__cc_cname { font-weight: 600; color: var(--cc-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #__cc_cpanel .__cc_vck { color: var(--cc-green); font-size: 10px; flex: none; }
+  #__cc_cpanel .__cc_ctime { color: var(--cc-dim); font-size: 10px; white-space: nowrap; flex: none; }
+  #__cc_cpanel .__cc_cbody { grid-column: 2 / 4; min-width: 0; }
+  #__cc_cpanel .__cc_ctext { margin: 3px 0 0; font-size: 12px; }
+  #__cc_cpanel .__cc_csnip { margin: 4px 0 1px; padding: 1px 0 1px 8px; border-left: 2px solid var(--cc-inbd);
+    color: var(--cc-dim); font-style: italic; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #__cc_cpanel .__cc_jump { all: unset; cursor: pointer; color: var(--cc-dim); flex: none; padding: 3px 5px; border-radius: 6px;
+    opacity: 0; transition: opacity .12s ease; margin-top: 1px; }
+  #__cc_cpanel .__cc_thread:hover .__cc_jump { opacity: .7; }
+  #__cc_cpanel .__cc_jump:hover { background: var(--cc-hov); color: var(--cc-blue); opacity: 1 !important; }
+  #__cc_cpanel .__cc_replies { margin: 6px 0 0 10px; padding-left: 19px; border-left: 2px solid var(--cc-line); }
+  #__cc_cpanel .__cc_reply { padding: 7px 0 0; }
+  #__cc_cpanel .__cc_reply .__cc_cmt2 { grid-template-columns: 18px 1fr auto; column-gap: 8px; }
+  #__cc_cpanel .__cc_reply .__cc_av, #__cc_cpanel .__cc_reply .__cc_avi { width: 18px; height: 18px; font-size: 9px; }
+  #__cc_cpanel .__cc_rbtn { all: unset; cursor: pointer; color: var(--cc-dim); font-size: 11px; padding: 3px 7px;
+    border-radius: 6px; margin: 5px 0 0 24px; opacity: .55; transition: opacity .12s ease; }
+  #__cc_cpanel .__cc_rwrap, #__cc_cpanel .__cc_rbtn { margin-left: 31px; }
+  #__cc_cpanel .__cc_thread:hover .__cc_rbtn { opacity: 1; }
+  #__cc_cpanel .__cc_rbtn:hover { background: var(--cc-hov); color: var(--cc-ink); }
+  #__cc_cpanel .__cc_rwrap { margin: 8px 0 2px 24px; padding: 0; }
+  #__cc_cpanel .__cc_rwrap .__cc_actions { margin: 6px 0 0; }
+  #__cc_cpanel .__cc_rwrap .__cc_who { padding: 0 0 6px; }
+  /* @mention autocomplete: a fixed top layer on <body>, immune to panel
+     scroll/stacking (the in-panel version lost z-order fights with buttons). */
+  #__cc_mlist { position: fixed; z-index: 2147483647; background: var(--cc-card); border: 1px solid var(--cc-line);
+    border-radius: 10px; box-shadow: 0 12px 32px var(--cc-shadow); padding: 4px; min-width: 224px; max-width: 320px;
+    max-height: 218px; overflow-y: auto; overscroll-behavior: contain;
+    font: 400 12px/1.45 "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  #__cc_mlist .__cc_mrow { display: flex; align-items: center; gap: 8px; padding: 6px 9px; border-radius: 7px; cursor: pointer;
+    color: var(--cc-ink); }
+  #__cc_mlist .__cc_mrow .__cc_mh { color: var(--cc-dim); margin-left: auto; font-size: 10px; padding-left: 10px; flex: none; }
+  #__cc_mlist .__cc_mrow.__cc_mon { background: var(--cc-hov); }
+  .__cc_panel .__cc_pendrow { display: flex; align-items: center; gap: 8px; margin: 6px 8px 0; padding: 5px 2px;
+    color: var(--cc-dim); }
+  .__cc_panel .__cc_pendrow .__cc_sendall { all: unset; cursor: pointer; padding: 4px 10px; border-radius: 7px;
+    color: var(--cc-coral); font-weight: 600; white-space: nowrap; -webkit-tap-highlight-color: transparent; }
+  .__cc_panel .__cc_pendrow .__cc_sendall:hover { background: var(--cc-hov); }
+  .__cc_panel .__cc_pendrow .__cc_sendall:disabled { opacity: .5; cursor: default; }
+  #__cc_pins { position: absolute; top: 0; left: 0; width: 100%; height: 0; overflow: visible; z-index: 2147483645; pointer-events: none; }
+  #__cc_pins .__cc_pin { position: absolute; transform: translate(-50%,-100%); width: 18px; height: 18px;
+    border-radius: 50% 50% 50% 4px; background: #e86c5d; color: #ffffff; font: 600 10px/18px "JetBrains Mono", ui-monospace, Menlo, monospace;
+    text-align: center; box-shadow: 0 1px 5px rgba(0,0,0,.2); pointer-events: auto; cursor: pointer;
+    animation: __cc_pop .18s ease; }
+  #__cc_pins .__cc_pin.__cc_spin { width: 12px; height: 12px; background: #ffffff; border: 2px solid #e86c5d;
+    box-sizing: border-box; border-radius: 50% 50% 50% 3px; font-size: 0; opacity: .6; }
+  #__cc_pins .__cc_pin.__cc_spin:hover { opacity: 1; transform: translate(-50%,-100%) scale(1.25); }
+  #__cc_pins .__cc_pin.__cc_flash { animation: __cc_pulse .9s ease 2; }
+  @keyframes __cc_pop { from { transform: translate(-50%,-100%) scale(.6); opacity: 0; } }
+  @keyframes __cc_pulse { 50% { transform: translate(-50%,-100%) scale(1.5); } }
+  #__cc_hint { position: fixed; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+    z-index: 2147483647; background: var(--cc-ink); color: var(--cc-card); padding: 11px 18px; border-radius: 999px;
+    font: 500 12px/1 "JetBrains Mono", ui-monospace, Menlo, monospace; box-shadow: 0 6px 20px rgba(0,0,0,.3); white-space: nowrap; }
+  html.__cc_pinmode, html.__cc_pinmode * { cursor: crosshair !important; }
+  /* Bottom-sheet mode. The media query catches real narrow layout viewports;
+     the .__cc_sheet class is the same rules applied by JS from screen.width,
+     because an artifact WITHOUT a viewport meta lays out at ~980px on phones
+     and the media query alone would never fire there. */
+  @media (max-width: 640px) {
+    #__cc_bar .__cc_when { display: none; }
+    .__cc_panel { left: 0; right: 0; top: auto; bottom: 0; max-width: none; min-width: 0; max-height: 78vh;
+      border-radius: 16px 16px 0 0; padding: 8px 10px calc(14px + env(safe-area-inset-bottom));
+      box-shadow: 0 -8px 32px var(--cc-shadow); transform: translateY(24px); }
+    .__cc_panel::before { content: ""; display: block; width: 38px; height: 4px; border-radius: 2px;
+      background: var(--cc-inbd); margin: 2px auto 10px; }
+    .__cc_panel.__cc_in { transform: none; }
+    .__cc_panel .__cc_row { padding: 11px 8px; }
+    .__cc_panel .__cc_kv { padding: 8px; }
+    .__cc_panel .__cc_btn { padding: 8px 12px; }
+    .__cc_panel .__cc_chip2 { padding: 8px 12px; }
+    .__cc_panel .__cc_send { padding: 13px 12px; }
+    .__cc_panel .__cc_ghost { padding: 13px 12px; }
+    .__cc_panel .__cc_ta { min-height: 56px; }
+  }
+  .__cc_panel.__cc_sheet { left: 0; right: 0; top: auto; bottom: 0; max-width: none; min-width: 0; max-height: 78vh;
+    border-radius: 16px 16px 0 0; padding: 8px 10px calc(14px + env(safe-area-inset-bottom));
+    box-shadow: 0 -8px 32px var(--cc-shadow); transform: translateY(24px); }
+  .__cc_panel.__cc_sheet::before { content: ""; display: block; width: 38px; height: 4px; border-radius: 2px;
+    background: var(--cc-inbd); margin: 2px auto 10px; }
+  .__cc_panel.__cc_sheet.__cc_in { transform: none; }
+  .__cc_panel.__cc_sheet .__cc_row { padding: 11px 8px; }
+  .__cc_panel.__cc_sheet .__cc_send { padding: 13px 12px; }
+  .__cc_panel.__cc_sheet .__cc_ghost { padding: 13px 12px; }
+  @media (max-width: 480px) {
+    #__cc_bar { gap: 0; }
+    #__cc_bar .__cc_sess { display: none; }
+  }
+</style>
+<div id="__cc_bar">
+  <a class="__cc_brand" href="https://codecast.sh" target="_blank" rel="noopener noreferrer" title="Published with codecast"><svg width="22" height="22" style="width:22px;height:22px;display:inline-block;vertical-align:middle;flex:none;max-width:none;min-width:0" viewBox="290 340 440 340" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="currentColor" d="M484.642334,414.398438 C441.085785,414.100739 407.961426,431.836365 389.038177,470.938019 C359.991791,530.957275 397.919464,599.922302 462.212036,610.452393 C488.377197,614.737732 512.859131,609.315125 534.993835,594.283020 C536.985901,592.930176 538.769653,590.998291 541.395325,590.790649 C542.830750,592.057068 542.358704,593.648865 542.360229,595.064209 C542.383118,615.894470 542.245728,636.725830 542.454224,657.553894 C542.495239,661.645569 540.944946,663.478516 537.347595,664.804260 C457.310547,694.300720 365.884827,658.371399 330.527679,577.853210 C318.822357,551.196838 314.364532,523.336731 317.783875,494.457825 C326.474518,421.058838 381.311096,368.253448 444.614929,354.822266 C476.047852,348.153107 507.120667,349.994629 537.405273,361.541992 C541.135986,362.964569 542.456543,364.823730 542.420715,368.821503 C542.237122,389.316772 542.366028,409.814758 542.335571,430.311707 C542.333191,431.888306 542.886780,433.635895 541.039673,435.579559 C524.470764,423.311615 505.857056,415.935822 484.642334,414.398438z"/><path fill="#e86c5d" d="M595.160889,540.159180 C602.995361,532.661072 610.436890,525.255066 618.219727,518.227051 C621.594788,515.179443 621.862915,513.288818 618.369263,510.015167 C605.976135,498.402374 593.950073,486.398682 581.638672,474.697052 C578.746277,471.947968 577.631470,469.026062 577.653381,465.050171 C577.786804,440.902161 577.692810,416.752869 577.674988,392.604004 C577.673828,390.969238 577.674927,389.334503 577.674927,387.822937 C580.475952,386.927032 581.524963,388.753571 582.754211,389.949341 C611.163818,417.584045 639.573853,445.218567 667.919434,472.919006 C680.901062,485.605255 693.661133,498.519287 706.712463,511.132599 C709.948914,514.260376 709.647461,516.128052 706.514099,519.115662 C674.820679,549.334167 643.279907,579.712769 611.649353,609.997375 C601.908936,619.323242 592.027832,628.502197 582.202148,637.738831 C581.252808,638.631287 580.419067,639.758240 578.788452,639.713379 C577.032288,638.391235 577.739929,636.409241 577.736206,634.708374 C577.682861,610.393066 577.748169,586.077332 577.625610,561.762512 C577.608215,558.319458 578.534119,555.799866 581.153076,553.487549 C585.892944,549.302612 590.338135,544.783875 595.160889,540.159180z"/></svg></a>
+  <span class="__cc_title">Webhook retry report</span>
+  <a class="__cc_sess" href="https://codecast.sh/conversation/hero-s-lead" target="_blank" rel="noopener noreferrer" title="Open the session that published this (jx7hero)">Retry failed webhooks</a>
+  <button id="__cc_new" type="button" hidden></button>
+  <span class="__cc_when" id="__cc_when" data-ts="1790780400000">updated Sep 30, 2026</span>
+  <button id="__cc_ver" type="button" title="Version history">v2 <svg width="9" height="9" style="width:9px;height:9px;display:inline-block;vertical-align:middle;flex:none;max-width:none;min-width:0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+  <button id="__cc_cbtn" type="button" title="Discuss this page"><svg width="14" height="14" style="width:14px;height:14px;display:inline-block;vertical-align:middle;flex:none;max-width:none;min-width:0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg><span id="__cc_ccount">2</span></button>
+  <button id="__cc_menu" type="button" title="More"><svg width="15" height="15" style="width:15px;height:15px;display:inline-block;vertical-align:middle;flex:none;max-width:none;min-width:0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg></button>
+  <button id="__cc_hide" type="button" title="Hide this bar"><svg width="13" height="13" style="width:13px;height:13px;display:inline-block;vertical-align:middle;flex:none;max-width:none;min-width:0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m17 14-5-5-5 5"/></svg></button>
+</div>
+<button id="__cc_pill" type="button" title="Show the codecast bar"><svg width="15" height="15" style="width:15px;height:15px;display:inline-block;vertical-align:middle;flex:none;max-width:none;min-width:0" viewBox="290 340 440 340" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="currentColor" d="M484.642334,414.398438 C441.085785,414.100739 407.961426,431.836365 389.038177,470.938019 C359.991791,530.957275 397.919464,599.922302 462.212036,610.452393 C488.377197,614.737732 512.859131,609.315125 534.993835,594.283020 C536.985901,592.930176 538.769653,590.998291 541.395325,590.790649 C542.830750,592.057068 542.358704,593.648865 542.360229,595.064209 C542.383118,615.894470 542.245728,636.725830 542.454224,657.553894 C542.495239,661.645569 540.944946,663.478516 537.347595,664.804260 C457.310547,694.300720 365.884827,658.371399 330.527679,577.853210 C318.822357,551.196838 314.364532,523.336731 317.783875,494.457825 C326.474518,421.058838 381.311096,368.253448 444.614929,354.822266 C476.047852,348.153107 507.120667,349.994629 537.405273,361.541992 C541.135986,362.964569 542.456543,364.823730 542.420715,368.821503 C542.237122,389.316772 542.366028,409.814758 542.335571,430.311707 C542.333191,431.888306 542.886780,433.635895 541.039673,435.579559 C524.470764,423.311615 505.857056,415.935822 484.642334,414.398438z"/><path fill="#e86c5d" d="M595.160889,540.159180 C602.995361,532.661072 610.436890,525.255066 618.219727,518.227051 C621.594788,515.179443 621.862915,513.288818 618.369263,510.015167 C605.976135,498.402374 593.950073,486.398682 581.638672,474.697052 C578.746277,471.947968 577.631470,469.026062 577.653381,465.050171 C577.786804,440.902161 577.692810,416.752869 577.674988,392.604004 C577.673828,390.969238 577.674927,389.334503 577.674927,387.822937 C580.475952,386.927032 581.524963,388.753571 582.754211,389.949341 C611.163818,417.584045 639.573853,445.218567 667.919434,472.919006 C680.901062,485.605255 693.661133,498.519287 706.712463,511.132599 C709.948914,514.260376 709.647461,516.128052 706.514099,519.115662 C674.820679,549.334167 643.279907,579.712769 611.649353,609.997375 C601.908936,619.323242 592.027832,628.502197 582.202148,637.738831 C581.252808,638.631287 580.419067,639.758240 578.788452,639.713379 C577.032288,638.391235 577.739929,636.409241 577.736206,634.708374 C577.682861,610.393066 577.748169,586.077332 577.625610,561.762512 C577.608215,558.319458 578.534119,555.799866 581.153076,553.487549 C585.892944,549.302612 590.338135,544.783875 595.160889,540.159180z"/></svg></button>
+<div id="__cc_hist" class="__cc_panel" hidden></div>
+<div id="__cc_menupanel" class="__cc_panel" hidden></div>
+<div id="__cc_cpanel" class="__cc_panel" hidden></div>
+<div id="__cc_mgr" class="__cc_panel" hidden></div>
+<script>(function(){
+  var CC={"metaUrl":"data:application/json,%7B%22version%22%3A2%2C%22updated_at%22%3A1790780400000%2C%22kind%22%3A%22html%22%2C%22views%22%3A14%2C%22comment_count%22%3A2%2C%22comments%22%3A%5B%7B%22id%22%3A%22hero-cm1%22%2C%22author_name%22%3A%22Sarah%20Chen%22%2C%22author_avatar%22%3Anull%2C%22verified%22%3Atrue%2C%22parent_id%22%3Anull%2C%22text%22%3A%22Can%20we%20page%20someone%20when%20an%20event%20reaches%20attempt%205%3F%22%2C%22anchor%22%3A%22%7B%5C%22x%5C%22%3A0.9%2C%5C%22y%5C%22%3A0.47%7D%22%2C%22version%22%3A2%2C%22created_at%22%3A1790779920000%2C%22delivered%22%3Afalse%7D%2C%7B%22id%22%3A%22hero-cm2%22%2C%22author_name%22%3A%22Maya%20Ortiz%22%2C%22author_avatar%22%3Anull%2C%22verified%22%3Atrue%2C%22parent_id%22%3Anull%2C%22text%22%3A%22Putting%20this%20chart%20on%20the%20billing%20dashboard.%22%2C%22anchor%22%3A%22%7B%5C%22x%5C%22%3A0.9%2C%5C%22y%5C%22%3A0.27%7D%22%2C%22version%22%3A2%2C%22created_at%22%3A1790780160000%2C%22delivered%22%3Afalse%7D%5D%2C%22session%22%3A%7B%22short_id%22%3A%22jx7hero%22%2C%22title%22%3A%22Retry%20failed%20webhooks%22%7D%2C%22gated%22%3A%7B%22password%22%3Afalse%2C%22email%22%3Afalse%7D%2C%22versions%22%3A%5B%7B%22version%22%3A2%2C%22title%22%3A%22Webhook%20retry%20report%22%2C%22size%22%3A4560%2C%22published_at%22%3A1790780400000%7D%2C%7B%22version%22%3A1%2C%22title%22%3A%22Webhook%20retry%20report%22%2C%22size%22%3A4560%2C%22published_at%22%3A1790778840000%7D%5D%7D","apiBase":"https://hero.invalid","shareUrl":"https://codecast.sh/a/webhook-retries","slug":"webhook-retries","version":2,"currentVersion":2,"kind":"html","views":14,"comments":2,"live":false,"editMode":"owner","gated":{"password":false,"email":false}};
+  var frag=new URLSearchParams(location.hash.replace(/^#/,""));
+  var ownerKey=frag.get("o")||"";
+  var editKey=frag.get("ed")||"";
+  var gateEmail=frag.get("em")||"";
+  // Signed-in commenter identity, minted by codecast.sh/pages/auth and carried
+  // back here in the fragment (the sandbox's opaque origin has no storage that
+  // survives navigation, so the fragment IS the session).
+  var idTok=frag.get("i")||"";
+  // The viewing gates this document cleared, in the query string the origin
+  // validated before serving us. Echoed back on every write so the mutation
+  // re-checks them: it is reachable without going through this page.
+  var qs=new URLSearchParams(location.search);
+  var gateK=qs.get("k")||"";
+  var gateE=qs.get("e")||"";
+  // Opaque-origin storage: localStorage throws under the sandbox CSP, so every
+  // touch is guarded and falls back to page-lifetime memory.
+  var mem={};
+  var sGet=function(k){try{var v=localStorage.getItem(k);if(v!=null)return v;}catch(e){}return mem[k]||"";};
+  var sSet=function(k,v){mem[k]=v;try{localStorage.setItem(k,v);}catch(e){}};
+  var el=function(tag,cls,text){var n=document.createElement(tag);if(cls)n.className=cls;if(text!=null)n.textContent=text;return n;};
+  var host=function(){return document.body||document.documentElement;};
+  // Match the artifact instead of fighting it: measure the page's effective
+  // background luminance and flip the bar (and panels) to the dark palette on
+  // dark pages. Re-checked on load because stylesheets can land after us.
+  var bgLum=function(node){try{
+    var c=getComputedStyle(node).backgroundColor||"";
+    var m=c.match(/rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:[,\s/]+([\d.]+))?/);
+    if(!m)return null;
+    if(m[4]!=null&&parseFloat(m[4])<.4)return null;
+    return (0.2126*(+m[1])+0.7152*(+m[2])+0.0722*(+m[3]))/255;
+  }catch(e){return null;}};
+  var applyTheme=function(){
+    var l=document.body?bgLum(document.body):null;
+    if(l==null)l=bgLum(document.documentElement);
+    if(l==null)l=1;
+    document.documentElement.classList.toggle("__cc_dark",l<0.5);
+  };
+  applyTheme();
+  if(document.readyState!=="complete")window.addEventListener("load",applyTheme);
+  // Pages with their own light/dark switch (the markdown theme, many
+  // dashboards) flip a class or attribute on <html> or <body>, or follow the
+  // OS: follow them. Toggling __cc_dark to the value it already has records
+  // no mutation, so the observer cannot feed itself.
+  try{
+    var reTheme=function(){requestAnimationFrame(applyTheme);};
+    var mo=new MutationObserver(reTheme);
+    var watchEl=function(n){if(n)mo.observe(n,{attributes:true,attributeFilter:["class","style","data-theme"]});};
+    watchEl(document.documentElement);
+    if(document.body)watchEl(document.body);else document.addEventListener("DOMContentLoaded",function(){watchEl(document.body);});
+    var osq=matchMedia("(prefers-color-scheme: dark)");
+    if(osq.addEventListener)osq.addEventListener("change",reTheme);
+  }catch(e){}
+  var rel=function(ts){var s=Math.max(0,(Date.now()-ts)/1e3);
+    return s<60?"just now":s<3600?Math.floor(s/60)+"m ago":s<86400?Math.floor(s/3600)+"h ago":s<2592e3?Math.floor(s/86400)+"d ago":new Date(ts).toLocaleDateString();};
+  var inFmt=function(ts){var s=(ts-Date.now())/1e3;
+    return s<=0?"expired":s<3600?"in "+Math.ceil(s/60)+"m":s<86400?"in "+Math.ceil(s/3600)+"h":"in "+Math.ceil(s/86400)+"d";};
+  var w=document.getElementById("__cc_when");
+  if(w){var ts=+w.getAttribute("data-ts");var tick=function(){w.textContent="updated "+rel(ts);};tick();setInterval(tick,6e4);}
+  var copyText=function(u,done){
+    var fallback=function(){var t=document.createElement("textarea");t.value=u;t.style.position="fixed";t.style.opacity="0";
+      host().appendChild(t);t.select();try{document.execCommand("copy");done();}catch(e){window.prompt("Copy:",u);}t.remove();};
+    if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(u).then(done,fallback);}else{fallback();}
+  };
+  var flashLabel=function(btn,label,back){btn.textContent=label;setTimeout(function(){btn.textContent=back;},1400);};
+  // Minimize: bar slides away, the corner pill brings it back. Per-page
+  // persistence (best effort — the opaque origin usually has no storage).
+  // A framed page (embedded in a conversation, the decision queue, another
+  // site) starts minimized: the embedder supplies its own chrome, and a 40px
+  // bar inside a 420px frame is mostly bar. The pill still restores it, and
+  // an explicit restore ("0") wins over the framed default where storage holds.
+  var minKey="__cc_min:"+(CC.slug||location.pathname);
+  var framed=false;try{framed=window.self!==window.top;}catch(e){framed=true;}
+  var setMin=function(on,remember){
+    document.documentElement.classList.toggle("__cc_min",on);
+    if(remember)sSet(minKey,on?"1":"0");
+    if(on&&typeof closeAll==="function")closeAll();
+  };
+  var hideB=document.getElementById("__cc_hide");
+  var pillB=document.getElementById("__cc_pill");
+  if(hideB)hideB.addEventListener("click",function(e){e.stopPropagation();setMin(true,true);});
+  if(pillB)pillB.addEventListener("click",function(e){e.stopPropagation();setMin(false,true);});
+  var minPref=sGet(minKey);
+  if(minPref==="1"||(framed&&minPref!=="0"))setMin(true,false);
+  if(!CC.metaUrl)return;
+  var api=function(path,body){return fetch(CC.apiBase+path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).then(function(r){return r.json();});};
+  // View beacon — one per page load; carries the gate email when present.
+  try{api("/cli/artifacts/view",{slug:CC.slug,email:gateEmail||undefined,k:gateK||undefined,e:gateE||undefined});}catch(e){}
+  // Resolve the identity token to a display identity (+ @mention roster for
+  // teammates). Server-authoritative: a bad token silently degrades the page
+  // back to anonymous commenting.
+  var me=null,meLoaded=!idTok;
+  if(idTok){
+    api("/cli/artifacts/identity",{slug:CC.slug,token:idTok}).then(function(r){
+      meLoaded=true;
+      if(r&&!r.error&&r.name){me=r;}else{idTok="";}
+      if(typeof renderC==="function"&&cpanel&&!cpanel.hidden)renderC();
+    },function(){meLoaded=true;});
+  }
+  var signinUrl=function(){
+    var origin="https://codecast.sh";
+    try{origin=new URL(CC.shareUrl).origin;}catch(e){}
+    return origin+"/pages/auth?slug="+encodeURIComponent(CC.slug)+"&back="+encodeURIComponent(location.href);
+  };
+  var avatarNode=function(x){
+    if(x&&x.avatar){var im=document.createElement("img");im.className="__cc_av";im.src=x.avatar;im.alt="";im.referrerPolicy="no-referrer";return im;}
+    return el("span","__cc_avi",((x&&x.name)||"?").slice(0,1));
+  };
+  // Version links stay on whatever host serves this document. r is a
+  // cache-buster (new URL → new cache key past the 60s edge/browser cache).
+  // EVERY navigation must carry the gate tokens (k/e) and live flag forward,
+  // or a reload on a gated page lands back on the password wall. This helper
+  // (and the a.back rewrite in pageShell) is the single place that encodes
+  // WHERE tokens live: the query string. If gated bundle assets ever move
+  // tokens into the path (e.g. /_k/<tok>/ under a base href), both must
+  // change in the same commit or in-page nav strands unlocked viewers.
+  var keepHash=location.hash||"";
+  var withQ=function(extra){var q=new URLSearchParams(location.search);var out=new URLSearchParams();
+    ["k","e","live"].forEach(function(p){var val=q.get(p);if(val)out.set(p,val);});
+    Object.keys(extra).forEach(function(p){out.set(p,String(extra[p]));});
+    return location.pathname+"?"+out.toString()+keepHash;};
+  var verUrl=function(n,current){return withQ(current?{r:n}:{v:n});};
+  var reloadFresh=function(){location.href=withQ({r:Date.now()});};
+  var latest=document.getElementById("__cc_latest");
+  if(latest)latest.setAttribute("href",verUrl(CC.currentVersion,true));
+  // --- panel machinery: dropdowns on desktop, bottom sheets on mobile ---
+  var panels=["__cc_hist","__cc_menupanel","__cc_cpanel","__cc_mgr"].map(function(id){return document.getElementById(id);});
+  // Sheet mode from the PHYSICAL screen, not the layout viewport: a document
+  // without a viewport meta lays out at ~980px on phones, so a media query
+  // alone would keep desktop dropdowns on mobile.
+  if((screen.width||9999)<=680||matchMedia("(max-width: 640px)").matches){
+    panels.forEach(function(p){if(p)p.classList.add("__cc_sheet");});
+  }
+  var closeAll=function(){panels.forEach(function(p){if(p){p.hidden=true;p.classList.remove("__cc_in");}});};
+  var show=function(p){
+    panels.forEach(function(q){if(q&&q!==p){q.hidden=true;q.classList.remove("__cc_in");}});
+    // Forced reflow between unhide and the class add makes the entrance
+    // transition reliable without rAF (which Chrome throttles in occluded
+    // windows and embedded iframes — the class must land regardless).
+    if(p.hidden){p.hidden=false;void p.offsetWidth;p.classList.add("__cc_in");}
+  };
+  document.addEventListener("click",closeAll);
+  panels.forEach(function(p){if(p)p.addEventListener("click",function(e){e.stopPropagation();});});
+  var fetchMeta=function(cb){fetch(CC.metaUrl,{cache:"no-store"}).then(function(r){return r.json();}).then(cb,function(){});};
+  var setCount=function(){var cc=document.getElementById("__cc_ccount");if(cc)cc.textContent=CC.comments?String(CC.comments):"";};
+  // --- history panel (restore appears with the owner key) ---
+  var chip=document.getElementById("__cc_ver");
+  var hist=document.getElementById("__cc_hist");
+  if(chip&&hist){
+    var render=function(m){
+      hist.innerHTML="";
+      (m.versions||[]).forEach(function(v){
+        var a=document.createElement("a");a.className="__cc_row";
+        a.href=verUrl(v.version,v.version===m.version);
+        if(v.version===m.version)a.className+=" __cc_cur";
+        if(v.version===CC.version)a.className+=" __cc_viewing";
+        var l=document.createElement("span");l.className="__cc_vlabel";l.textContent="v"+v.version;
+        if(v.edited_by){var eb=document.createElement("span");eb.style.opacity=".6";eb.style.fontWeight="400";eb.textContent=" by "+v.edited_by;l.appendChild(eb);}
+        if(v.version!==m.version){
+          var d=document.createElement("a");d.className="__cc_dlink";d.textContent="diff";
+          d.href=withQ({diff:v.version+".."+m.version});
+          d.title="What changed between v"+v.version+" and v"+m.version;
+          d.addEventListener("click",function(e){e.stopPropagation();});
+          l.appendChild(d);
+          if(ownerKey){
+            var rb=document.createElement("a");rb.className="__cc_dlink";rb.textContent="restore";rb.href="#";
+            rb.title="Republish v"+v.version+" as the newest version";
+            rb.addEventListener("click",function(e){e.preventDefault();e.stopPropagation();rb.textContent="restoring…";
+              api("/cli/artifacts/manage",{slug:CC.slug,owner_key:ownerKey,rollback_to:v.version}).then(function(r){
+                if(r&&r.ok)reloadFresh();else rb.textContent="failed";
+              },function(){rb.textContent="failed";});});
+            l.appendChild(rb);
+          }
+        }
+        var t=document.createElement("span");t.className="__cc_vwhen";t.textContent=rel(v.published_at);
+        a.appendChild(l);a.appendChild(t);hist.appendChild(a);
+      });
+      if(!hist.childNodes.length){hist.appendChild(el("div","__cc_note","No history yet"));}
+    };
+    chip.addEventListener("click",function(e){
+      e.stopPropagation();
+      if(!hist.hidden){closeAll();return;}
+      hist.innerHTML="";hist.appendChild(el("div","__cc_note","Loading…"));
+      show(hist);
+      fetchMeta(render);
+    });
+  }
+  // --- comments ---
+  // Three tiers: DRAFTS (this page load only) → PENDING (stored, visible to
+  // every viewer, NOT yet sent to the author's session) → SENT. Saved
+  // comments come from ?meta=1 and render as hollow pins + a list in the
+  // panel; "Send all" flushes everything pending to the session as one batch.
+  var cbtn=document.getElementById("__cc_cbtn");
+  var cpanel=document.getElementById("__cc_cpanel");
+  var drafts=[];
+  var saved=[],savedLoaded=false;
+  // Inline reply composers: which thread is open, and per-thread draft text
+  // (kept out of the DOM so meta refreshes don't eat what's being typed).
+  var replyState={open:null,text:{}};
+  var pendingCount=function(){return saved.filter(function(c){return !c.delivered;}).length;};
+  // @mention autocomplete on a textarea — teammates only (me.roster is empty
+  // for everyone else, which disables this entirely).
+  var wireMentions=function(ta){
+    if(!me||!me.roster||!me.roster.length)return;
+    // The list is a FIXED layer on <body>, never inside the scrolling panel:
+    // in-panel absolute positioning lost stacking fights with later siblings
+    // (the send button rendered on top) and clipped at the panel edge.
+    var list=null,items=[],sel=0,start=-1;
+    var close=function(){if(list){list.remove();list=null;}items=[];start=-1;};
+    var restyle=function(){if(!list)return;[].forEach.call(list.children,function(n,i){n.className="__cc_mrow"+(i===sel?" __cc_mon":"");});};
+    var pick=function(u){
+      var handle=u.username||u.name;
+      var v=ta.value,pos=ta.selectionStart;
+      ta.value=v.slice(0,start)+"@"+handle+" "+v.slice(pos);
+      var np=start+handle.length+2;
+      ta.setSelectionRange(np,np);
+      ta.dispatchEvent(new Event("input",{bubbles:false}));
+      close();ta.focus();
+    };
+    var place=function(){
+      if(!list)return;
+      var tr=ta.getBoundingClientRect();
+      var lw=Math.min(Math.max(224,tr.width),320);
+      var left=Math.min(Math.max(8,tr.left),window.innerWidth-lw-8);
+      list.style.left=left+"px";list.style.width=lw+"px";
+      // Below the textarea when it fits, above when it doesn't.
+      var lh=Math.min(list.scrollHeight+2,218);
+      if(tr.bottom+lh+12<window.innerHeight){list.style.top=(tr.bottom+4)+"px";list.style.bottom="auto";}
+      else{list.style.top="auto";list.style.bottom=(window.innerHeight-tr.top+4)+"px";}
+    };
+    var update=function(){
+      var pos=ta.selectionStart,vv=ta.value.slice(0,pos);
+      var m=vv.match(/@([A-Za-z0-9_.-]*)$/);
+      if(!m){close();return;}
+      start=pos-m[0].length;
+      var qq=m[1].toLowerCase();
+      var hits=me.roster.filter(function(u){
+        return (u.username||"").toLowerCase().indexOf(qq)===0||(u.name||"").toLowerCase().indexOf(qq)===0;
+      }).slice(0,6);
+      if(!hits.length){close();return;}
+      if(!list){
+        list=el("div",null);list.id="__cc_mlist";
+        list.addEventListener("click",function(e){e.stopPropagation();});
+        host().appendChild(list);
+      }
+      list.innerHTML="";items=hits;sel=0;
+      hits.forEach(function(u,i){
+        var r=el("div","__cc_mrow"+(i===0?" __cc_mon":""));
+        r.appendChild(avatarNode(u));
+        var nm2=el("span",null,u.name);nm2.style.overflow="hidden";nm2.style.textOverflow="ellipsis";nm2.style.whiteSpace="nowrap";
+        r.appendChild(nm2);
+        if(u.username)r.appendChild(el("span","__cc_mh","@"+u.username));
+        r.addEventListener("mousedown",function(e){e.preventDefault();pick(u);});
+        list.appendChild(r);
+      });
+      place();
+    };
+    ta.addEventListener("input",update);
+    ta.addEventListener("keydown",function(e){
+      if(!list)return;
+      if(e.key==="ArrowDown"){e.preventDefault();sel=(sel+1)%items.length;restyle();}
+      else if(e.key==="ArrowUp"){e.preventDefault();sel=(sel-1+items.length)%items.length;restyle();}
+      else if(e.key==="Enter"||e.key==="Tab"){e.preventDefault();pick(items[sel]);}
+      else if(e.key==="Escape"){e.stopPropagation();close();}
+    });
+    ta.addEventListener("blur",function(){setTimeout(close,150);});
+    // The anchor moves under panel scroll / window resize; keep up or fold.
+    cpanel.addEventListener("scroll",place);
+    window.addEventListener("resize",close);
+  };
+  var parseAnchor=function(c){if(c.__a!==undefined)return c.__a;try{c.__a=c.anchor?JSON.parse(c.anchor):null;}catch(e){c.__a=null;}return c.__a;};
+  // Where a saved comment's pin goes. Prefer the recorded page-fraction point
+  // (exact if the content hasn't changed), then the element selector, then a
+  // right-edge rail marker when only a vertical fraction survives.
+  var posFor=function(an){
+    if(!an)return null;
+    var docEl=document.documentElement;
+    var docH=Math.max(docEl.scrollHeight,1),docW=Math.max(docEl.scrollWidth,1);
+    if(typeof an.y==="number"&&typeof an.x==="number")return{x:an.x*docW,y:an.y*docH};
+    if(an.sel){try{var n=document.querySelector(an.sel);if(n){var r=n.getBoundingClientRect();
+      if(r.width||r.height)return{x:r.left+window.pageXOffset+Math.min(r.width/2,300),y:r.top+window.pageYOffset+10};}}catch(e){}}
+    if(typeof an.y==="number")return{x:docW-26,y:an.y*docH};
+    return null;
+  };
+  var pinLayer=null,hint=null,pinMode=false;
+  var pinsOn=function(){if(!pinLayer){pinLayer=document.createElement("div");pinLayer.id="__cc_pins";host().appendChild(pinLayer);}return pinLayer;};
+  var renderPins=function(){
+    var savedPos=saved.map(function(c){return{c:c,p:posFor(parseAnchor(c))};}).filter(function(s){return !!s.p;});
+    if(!pinLayer&&!savedPos.length&&!drafts.some(function(d){return d.px!=null;}))return;
+    pinsOn().innerHTML="";
+    savedPos.forEach(function(s){
+      var p=el("div","__cc_pin __cc_spin","");
+      p.style.left=s.p.x+"px";p.style.top=s.p.y+"px";
+      p.title=s.c.author_name+": "+s.c.text.slice(0,80);
+      p.setAttribute("data-cid",s.c.id);
+      p.addEventListener("click",function(e){e.stopPropagation();openC(null,s.c.id,true);});
+      pinLayer.appendChild(p);
+    });
+    drafts.forEach(function(d,i){
+      if(d.px==null)return;
+      var p=el("div","__cc_pin",String(i+1));
+      p.style.left=d.px+"px";p.style.top=d.py+"px";
+      p.title=d.text?d.text:"Draft comment "+(i+1);
+      p.addEventListener("click",function(e){e.stopPropagation();openC(i);});
+      pinLayer.appendChild(p);
+    });
+  };
+  var refreshSaved=function(cb){fetchMeta(function(m){
+    if(!m)return;
+    saved=m.comments||[];savedLoaded=true;
+    if(typeof m.comment_count==="number")CC.comments=m.comment_count;
+    setCount();renderPins();
+    if(cb)cb();
+  });};
+  // ?c=<comment id> — a notification deep link: open the discussion with that
+  // comment's thread selected, and jump the page to its pin when it has one.
+  var focusCid=(new URLSearchParams(location.search)).get("c")||"";
+  if(focusCid){
+    refreshSaved(function(){
+      var target=null;saved.forEach(function(x){if(x.id===focusCid)target=x;});
+      var tid=target&&target.parent_id?target.parent_id:focusCid;
+      openC(null,tid,true);
+      var p=target?posFor(parseAnchor(target)):null;
+      if(!p){var top2=null;saved.forEach(function(x){if(x.id===tid)top2=x;});if(top2)p=posFor(parseAnchor(top2));}
+      if(p){
+        window.scrollTo({top:Math.max(0,p.y-140),behavior:"smooth"});
+        var pin=pinLayer&&pinLayer.querySelector('[data-cid="'+tid+'"]');
+        if(pin){pin.classList.remove("__cc_flash");void pin.offsetWidth;pin.classList.add("__cc_flash");}
+      }
+    });
+  }else if(CC.comments>0)refreshSaved();
+  // Fraction-based pin positions depend on the laid-out document size.
+  var rszT=null;
+  window.addEventListener("resize",function(){clearTimeout(rszT);rszT=setTimeout(renderPins,150);});
+  var exitPin=function(){pinMode=false;document.documentElement.classList.remove("__cc_pinmode");if(hint){hint.remove();hint=null;}};
+  var enterPin=function(){
+    closeAll();pinMode=true;document.documentElement.classList.add("__cc_pinmode");
+    if(!hint){hint=el("div",null,"Tap anywhere to pin your comment — Esc cancels");hint.id="__cc_hint";host().appendChild(hint);}
+  };
+  document.addEventListener("keydown",function(e){if(e.key==="Escape"){exitPin();closeAll();}});
+  var selPath=function(n){try{
+    var parts=[],d=0;
+    while(n&&n.nodeType===1&&d<4&&n!==document.body&&n!==document.documentElement){
+      if(n.id){parts.unshift("#"+n.id);return parts.join(">");}
+      var tag=n.tagName.toLowerCase(),ix=1,s=n;
+      while((s=s.previousElementSibling))if(s.tagName===n.tagName)ix++;
+      parts.unshift(tag+":nth-of-type("+ix+")");
+      n=n.parentElement;d++;
+    }
+    return parts.join(">");
+  }catch(e){return "";}};
+  document.addEventListener("click",function(e){
+    if(!pinMode)return;
+    var t=e.target;
+    if(t&&t.closest&&t.closest("#__cc_bar,.__cc_panel,#__cc_hint,#__cc_pins"))return;
+    e.preventDefault();e.stopPropagation();
+    var snip="";try{snip=String(window.getSelection()||"").trim();}catch(x){}
+    if(!snip&&t&&t.textContent)snip=t.textContent.replace(/\s+/g," ").trim();
+    snip=snip.slice(0,120);
+    var docH=Math.max(document.documentElement.scrollHeight,1);
+    var docW=Math.max(document.documentElement.scrollWidth,1);
+    var a={y:Math.round(e.pageY/docH*1000)/1000,x:Math.round(e.pageX/docW*1000)/1000};
+    if(snip)a.snippet=snip;
+    var sp=t?selPath(t):"";
+    if(sp)a.sel=sp;
+    drafts.push({text:"",anchor:a,px:e.pageX,py:e.pageY});
+    exitPin();renderPins();openC(drafts.length-1);
+  },true);
+  var syncSend=function(){
+    var n=drafts.filter(function(d){return d.text.trim();}).length;
+    var b=document.getElementById("__cc_sendbtn");
+    if(b){b.disabled=!n;b.textContent=ownerKey?(n>1?"Send "+n+" to session":"Send to session"):(n>1?"Post "+n+" comments":"Comment");}
+    var g=document.getElementById("__cc_savebtn");
+    if(g){g.disabled=!n;}
+  };
+  // deliver=false → post into the page's discussion. deliver=true is the
+  // owner's gesture (needs the #o= key; the server enforces it too): the
+  // batch goes into the publishing session as one message.
+  var doSend=function(name,deliver){
+    var ready=drafts.filter(function(d){return d.text.trim();});
+    if(!ready.length)return;
+    var b=document.getElementById("__cc_sendbtn");
+    var g=document.getElementById("__cc_savebtn");
+    var errBox=cpanel.querySelector(".__cc_cerr");
+    if(b){b.disabled=true;if(deliver)b.textContent="Sending…";}
+    if(g){g.disabled=true;if(!deliver)g.textContent="Saving…";}
+    sSet("__cc_name",name||"");
+    api("/cli/artifacts/comment",{slug:CC.slug,author_name:me?me.name:((name||"").trim()||"anonymous"),
+      author_email:gateEmail||undefined,version:CC.version,
+      k:gateK||undefined,e:gateE||undefined,
+      deliver:deliver?undefined:false,
+      owner_key:ownerKey||undefined,
+      identity_token:idTok||undefined,
+      comments:ready.map(function(d){var c={text:d.text.trim()};if(d.anchor)c.anchor=JSON.stringify(d.anchor);return c;})})
+    .then(function(r){
+      if(!r||r.error){if(errBox)errBox.textContent=(r&&r.error)||"Send failed — try again";syncSend();return;}
+      drafts=[];renderPins();
+      cpanel.innerHTML="";
+      var ok=el("div","__cc_okwrap");
+      ok.appendChild(el("div","__cc_okmark","✓"));
+      ok.appendChild(el("div","__cc_okt",(deliver?"Sent ":"Posted ")+ready.length+(ready.length===1?" comment":" comments")));
+      ok.appendChild(el("div","__cc_oks",deliver
+        ?(r.delivered?"Delivered to your session.":"Posted — the session could not be reached, use \u201CSend all\u201D later.")
+        :"Now part of this page's discussion."));
+      cpanel.appendChild(ok);
+      refreshSaved(function(){setTimeout(function(){if(!cpanel.hidden)renderC();},1600);});
+    },function(){if(errBox)errBox.textContent="Network error — your drafts are kept";syncSend();});
+  };
+  // "Send all" (owner-only): flush the discussion's unsent comments to the
+  // session in one batch message.
+  var sendAll=function(btn){
+    btn.disabled=true;btn.textContent="Sending…";
+    api("/cli/artifacts/comment",{slug:CC.slug,deliver_pending:true,owner_key:ownerKey})
+    .then(function(r){
+      if(!r||r.error){btn.textContent="Failed";setTimeout(function(){if(!cpanel.hidden)renderC();},1600);return;}
+      refreshSaved(function(){if(!cpanel.hidden)renderC();});
+    },function(){btn.textContent="Network error";setTimeout(function(){if(!cpanel.hidden)renderC();},1600);});
+  };
+  var pinSvg='<svg width="12" height="12" style="width:12px;height:12px;display:inline-block;vertical-align:middle;flex:none;max-width:none;min-width:0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>';
+  var noteSvg='<svg width="12" height="12" style="width:12px;height:12px;display:inline-block;vertical-align:middle;flex:none;max-width:none;min-width:0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>';
+  var jumpSvg='<svg width="11" height="11" style="width:11px;height:11px;display:inline-block;vertical-align:middle;flex:none;max-width:none;min-width:0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>';
+  var bigBubbleSvg='<svg width="22" height="22" style="width:22px;height:22px;display:inline-block;vertical-align:middle;flex:none;max-width:none;min-width:0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
+  var iconBtn=function(cls,svg,label){var b=el("button",cls);b.type="button";b.innerHTML=svg;b.appendChild(document.createTextNode(label));return b;};
+  // renderC(focusIdx, scrollToCid, highlightCid): focusIdx focuses a draft's
+  // textarea; scrollToCid scrolls a comment into view; highlightCid paints the
+  // selected state (deep links and pin jumps — NOT reply-opens).
+  var renderC=function(focusIdx,scrollToCid,highlightCid){
+    cpanel.innerHTML="";
+    var head=el("div","__cc_phdr");
+    head.appendChild(el("span","__cc_pht","Discussion"));
+    if(saved.length>0)head.appendChild(el("span","__cc_phn",String(saved.length)));
+    head.appendChild(el("span","__cc_sp"));
+    if(me){
+      var mh=el("span","__cc_meid");mh.title="Commenting as "+me.name;
+      mh.appendChild(avatarNode(me));
+      mh.appendChild(el("span","__cc_mename",me.name.split(" ")[0]));
+      head.appendChild(mh);
+    }else if(meLoaded){
+      var sa=document.createElement("a");sa.className="__cc_signin";sa.href=signinUrl();
+      sa.textContent="Sign in";sa.title="Comment with your codecast profile \u2014 hops to codecast.sh and comes right back";
+      head.appendChild(sa);
+    }
+    cpanel.appendChild(head);
+    var body=el("div","__cc_pbody");
+    cpanel.appendChild(body);
+    if(!drafts.length&&!saved.length){
+      var em=el("div","__cc_empty");
+      var ei=el("div");ei.innerHTML=bigBubbleSvg;em.appendChild(ei);
+      em.appendChild(el("div","__cc_e1","No comments yet"));
+      em.appendChild(el("div","__cc_e2","Pin a note on the page, or select text to comment on it."));
+      body.appendChild(em);
+    }
+    drafts.forEach(function(d,i){
+      var card=el("div","__cc_draft");card.setAttribute("data-i",String(i));
+      var top=el("div","__cc_dtop");
+      if(d.px!=null){
+        top.appendChild(el("span","__cc_dnum",String(i+1)));
+        if(d.anchor&&d.anchor.snippet)top.appendChild(el("span","__cc_dsnip","\u201C"+d.anchor.snippet.slice(0,60)+(d.anchor.snippet.length>60?"…":"")+"\u201D"));
+        else top.appendChild(el("span","__cc_dlabel","Pinned"));
+      }else if(d.anchor&&d.anchor.snippet){
+        top.appendChild(el("span","__cc_dsnip","\u201C"+d.anchor.snippet.slice(0,60)+(d.anchor.snippet.length>60?"…":"")+"\u201D"));
+      }else{
+        top.appendChild(el("span","__cc_dlabel","Note"));
+      }
+      top.appendChild(el("span","__cc_sp"));
+      var rm=el("button","__cc_x","×");rm.type="button";rm.title="Remove this draft";
+      rm.addEventListener("click",function(){drafts.splice(i,1);renderPins();renderC();});
+      top.appendChild(rm);
+      card.appendChild(top);
+      var ta=document.createElement("textarea");ta.className="__cc_ta";ta.placeholder="Write your comment…";ta.value=d.text;ta.rows=2;
+      ta.addEventListener("input",function(){d.text=ta.value;syncSend();});
+      wireMentions(ta);
+      card.appendChild(ta);
+      body.appendChild(card);
+    });
+    var addrow=el("div","__cc_addrow");
+    var pinB=iconBtn("__cc_btn",pinSvg,"Pin on page");
+    pinB.title="Tap a spot on the page and comment on it";
+    pinB.addEventListener("click",function(){enterPin();});
+    var genB=iconBtn("__cc_btn",noteSvg,"General note");
+    genB.title="A comment about the whole page";
+    genB.addEventListener("click",function(){drafts.push({text:"",anchor:null,px:null,py:null});renderC(drafts.length-1);});
+    addrow.appendChild(pinB);addrow.appendChild(genB);
+    body.appendChild(addrow);
+    if(drafts.length){
+      var nm={value:sGet("__cc_name")||(gateEmail?gateEmail.split("@")[0]:"")};
+      if(me){
+        // Verified identity: comments post under the account's name/avatar.
+        var as=el("div","__cc_asme");
+        as.appendChild(avatarNode(me));
+        as.appendChild(el("span",null,"Commenting as "+me.name));
+        body.appendChild(as);
+      }else{
+        var who=el("div","__cc_who");
+        var nmi=document.createElement("input");nmi.type="text";nmi.className="__cc_in2";nmi.placeholder="Your name";
+        nmi.value=nm.value;
+        nmi.addEventListener("input",function(){nm.value=nmi.value;sSet("__cc_name",nmi.value);});
+        who.appendChild(nmi);body.appendChild(who);
+      }
+      body.appendChild(el("div","__cc_cerr",""));
+      var actions=el("div","__cc_actions");
+      if(ownerKey){
+        // Owner: the primary gesture is pushing the batch into the session;
+        // posting to the discussion only is the quiet alternative.
+        var save=el("button","__cc_ghost","Post without sending");save.type="button";save.id="__cc_savebtn";
+        save.title="Add to the discussion without messaging your session";
+        save.addEventListener("click",function(){doSend(nm.value,false);});
+        var send=el("button","__cc_send","Send to session");send.type="button";send.id="__cc_sendbtn";
+        send.title="Deliver to your session now";
+        send.addEventListener("click",function(){doSend(nm.value,true);});
+        actions.appendChild(save);actions.appendChild(send);
+      }else{
+        // Viewers post into the discussion; only the owner can message the
+        // session (the server enforces this regardless of the request).
+        var post=el("button","__cc_send","Comment");post.type="button";post.id="__cc_sendbtn";
+        post.title="Post to this page's discussion";
+        post.addEventListener("click",function(){doSend(nm.value,false);});
+        actions.appendChild(post);
+      }
+      body.appendChild(actions);
+    }
+    // Owner call to action: comments not yet flushed into the session.
+    var pend=pendingCount();
+    if(pend>0&&ownerKey){
+      var pr=el("div","__cc_pendrow");
+      pr.style.display="flex";pr.style.alignItems="center";pr.style.gap="8px";pr.style.color="var(--cc-dim)";
+      pr.appendChild(el("span",null,pend+" not in your session yet"));
+      pr.appendChild(el("span","__cc_sp"));
+      var sa2=el("button","__cc_sendall","Send all");sa2.type="button";
+      sa2.title="Deliver every unsent comment to your session as one batch";
+      sa2.addEventListener("click",function(){sendAll(sa2);});
+      pr.appendChild(sa2);
+      body.appendChild(pr);
+    }
+    if(saved.length){
+      // Threads: top-level comments newest-first, replies chronological
+      // under their comment. A reply whose thread got resolved away renders
+      // as its own top-level row instead of vanishing.
+      var topIds={};
+      saved.forEach(function(c){if(!c.parent_id)topIds[c.id]=1;});
+      var tops=[],repl={};
+      saved.forEach(function(c){
+        if(c.parent_id&&topIds[c.parent_id]){(repl[c.parent_id]=repl[c.parent_id]||[]).push(c);}
+        else tops.push(c);
+      });
+      var jumpTo=function(c){
+        var p=posFor(parseAnchor(c));
+        if(p)window.scrollTo({top:Math.max(0,p.y-140),behavior:"smooth"});
+        var pin=pinLayer&&pinLayer.querySelector('[data-cid="'+c.id+'"]');
+        if(pin){pin.classList.remove("__cc_flash");void pin.offsetWidth;pin.classList.add("__cc_flash");}
+      };
+      // One comment (or reply) as an avatar-column grid row.
+      var cmtRow=function(c,isReply){
+        var row=el("div","__cc_cmt2");
+        row.appendChild(avatarNode({name:c.author_name,avatar:c.author_avatar}));
+        var hd=el("div","__cc_cmhead");
+        hd.appendChild(el("span","__cc_cname",c.author_name));
+        if(c.verified){var ck=el("span","__cc_vck","\u2713");ck.title="Signed-in codecast user";hd.appendChild(ck);}
+        hd.appendChild(el("span","__cc_ctime",rel(c.created_at)));
+        // Delivery state is session bookkeeping — meaningful to the owner,
+        // noise to everyone else.
+        if(ownerKey&&!c.delivered)hd.appendChild(el("span","__cc_stag __cc_pend","unsent"));
+        row.appendChild(hd);
+        if(!isReply&&posFor(parseAnchor(c))){
+          var jb=el("button","__cc_jump");jb.type="button";jb.innerHTML=jumpSvg;
+          jb.title="Jump to this comment's spot on the page";
+          jb.addEventListener("click",function(e){e.stopPropagation();jumpTo(c);});
+          row.appendChild(jb);
+        }
+        var bd=el("div","__cc_cbody");
+        var an=parseAnchor(c);
+        if(an&&an.snippet)bd.appendChild(el("div","__cc_csnip","\u201C"+String(an.snippet).slice(0,72)+(String(an.snippet).length>72?"…":"")+"\u201D"));
+        bd.appendChild(el("div","__cc_ctext",c.text));
+        row.appendChild(bd);
+        return row;
+      };
+      var replyComposer=function(tid){
+        var wrap=el("div","__cc_rwrap");
+        if(!me){
+          var rw=el("div","__cc_who");
+          var rn=document.createElement("input");rn.type="text";rn.className="__cc_in2";rn.placeholder="Your name";
+          rn.value=sGet("__cc_name")||(gateEmail?gateEmail.split("@")[0]:"");
+          rn.addEventListener("input",function(){sSet("__cc_name",rn.value);});
+          rw.appendChild(rn);wrap.appendChild(rw);
+        }
+        var ta=document.createElement("textarea");ta.className="__cc_ta";ta.rows=2;ta.placeholder="Reply\u2026";
+        ta.value=replyState.text[tid]||"";
+        ta.addEventListener("input",function(){replyState.text[tid]=ta.value;});
+        wireMentions(ta);
+        wrap.appendChild(ta);
+        var acts=el("div","__cc_actions");
+        var cx=el("button","__cc_ghost","Cancel");cx.type="button";
+        cx.addEventListener("click",function(){replyState.open=null;renderC();});
+        var rb=el("button","__cc_send","Reply");rb.type="button";
+        rb.addEventListener("click",function(){
+          var txt=(replyState.text[tid]||"").trim();
+          if(!txt)return;
+          rb.disabled=true;rb.textContent="Posting\u2026";
+          api("/cli/artifacts/comment",{slug:CC.slug,
+            author_name:me?me.name:(sGet("__cc_name")||"anonymous"),
+            author_email:gateEmail||undefined,version:CC.version,
+            k:gateK||undefined,e:gateE||undefined,
+            deliver:false,owner_key:ownerKey||undefined,identity_token:idTok||undefined,
+            parent_id:tid,comments:[{text:txt}]})
+          .then(function(r){
+            if(!r||r.error){rb.disabled=false;rb.textContent="Reply";return;}
+            replyState.open=null;delete replyState.text[tid];
+            refreshSaved(function(){if(!cpanel.hidden)renderC(null,tid);});
+          },function(){rb.disabled=false;rb.textContent="Reply";});
+        });
+        acts.appendChild(cx);acts.appendChild(rb);
+        wrap.appendChild(acts);
+        return wrap;
+      };
+      var threads=el("div","__cc_threads");
+      tops.slice().reverse().forEach(function(c){
+        var card=el("div","__cc_thread"+(highlightCid===c.id?" __cc_sel":""));
+        card.setAttribute("data-cid",c.id);
+        card.appendChild(cmtRow(c,false));
+        var kids=repl[c.id]||[];
+        if(kids.length){
+          var rlist=el("div","__cc_replies");
+          kids.sort(function(a,b){return a.created_at-b.created_at;}).forEach(function(k){
+            var rc=el("div","__cc_reply");
+            rc.setAttribute("data-cid",k.id);
+            rc.appendChild(cmtRow(k,true));
+            rlist.appendChild(rc);
+          });
+          card.appendChild(rlist);
+        }
+        if(replyState.open===c.id){
+          card.appendChild(replyComposer(c.id));
+        }else{
+          var rbn=el("button","__cc_rbtn","Reply");rbn.type="button";
+          rbn.addEventListener("click",function(e){e.stopPropagation();replyState.open=c.id;renderC(null,c.id);
+            var t2=cpanel.querySelector('[data-cid="'+c.id+'"] textarea');if(t2)t2.focus();});
+          card.appendChild(rbn);
+        }
+        threads.appendChild(card);
+      });
+      body.appendChild(threads);
+    }
+    syncSend();
+    if(focusIdx!=null){var t=cpanel.querySelector('[data-i="'+focusIdx+'"] textarea');if(t)t.focus();}
+    if(scrollToCid){var sc=cpanel.querySelector('[data-cid="'+scrollToCid+'"]');if(sc)sc.scrollIntoView({block:"nearest"});}
+  };
+  var openC=function(focusIdx,scrollToCid,highlight){
+    show(cpanel);renderC(focusIdx,scrollToCid,highlight?scrollToCid:null);
+    // First open: the saved list may not be loaded yet (count of 0 skips the
+    // boot fetch). Refresh, then re-render only if nothing is being typed.
+    if(!savedLoaded)refreshSaved(function(){if(!cpanel.hidden&&!drafts.length)renderC(null,scrollToCid,highlight?scrollToCid:null);});
+  };
+  if(cbtn&&cpanel){
+    cbtn.addEventListener("click",function(e){
+      e.stopPropagation();
+      if(!cpanel.hidden){closeAll();return;}
+      // A live text selection becomes an anchored draft immediately.
+      var s="";try{s=String(window.getSelection()||"").trim();}catch(x){}
+      if(s){
+        var a={snippet:s.slice(0,120)};
+        try{
+          var r0=window.getSelection().getRangeAt(0).getBoundingClientRect();
+          var docH=Math.max(document.documentElement.scrollHeight,1);
+          var docW=Math.max(document.documentElement.scrollWidth,1);
+          a.y=Math.round((r0.top+r0.height/2+window.pageYOffset)/docH*1000)/1000;
+          a.x=Math.round((r0.left+r0.width/2+window.pageXOffset)/docW*1000)/1000;
+          drafts.push({text:"",anchor:a,px:Math.round(r0.left+r0.width/2+window.pageXOffset),py:Math.round(r0.top+window.pageYOffset)});
+        }catch(x){drafts.push({text:"",anchor:a,px:null,py:null});}
+        renderPins();
+        openC(drafts.length-1);
+      }else{
+        openC();
+      }
+    });
+  }
+  // --- manage sheet (owner key only) ---
+  var mgr=document.getElementById("__cc_mgr");
+  var mgrPw=false;
+  var mnote=function(msg){mgr.innerHTML="";mgr.appendChild(el("div","__cc_note",msg));};
+  var mreq=function(extra){
+    var b={slug:CC.slug,owner_key:ownerKey},k;
+    for(k in extra)b[k]=extra[k];
+    api("/cli/artifacts/manage",b).then(function(j){
+      if(!j||j.error){mnote((j&&j.error)||"Failed to load");return;}
+      renderMgr(j);
+    },function(){mnote("Network error");});
+  };
+  var mset=function(setObj){mreq({set:setObj});};
+  var renderMgr=function(j){
+    mgr.innerHTML="";
+    var ac=j.access||{},st=j.stats||{};
+    var head=el("div","__cc_ph");head.appendChild(el("span","__cc_pht","Manage sharing"));mgr.appendChild(head);
+    var views=st.views||0;
+    mgr.appendChild(el("div","__cc_note",views+" view"+(views===1?"":"s")+(st.last_viewed_at?" · last viewed "+rel(st.last_viewed_at):"")));
+
+    mgr.appendChild(el("div","__cc_h2","Access"));
+    var pw=el("div","__cc_kv");
+    pw.appendChild(el("span","__cc_k","Password"));
+    pw.appendChild(el("span","__cc_v"+(ac.has_password?" __cc_on":""),ac.has_password?"required":"off"));
+    pw.appendChild(el("span","__cc_sp"));
+    if(!mgrPw){
+      var setb=el("button","__cc_btn",ac.has_password?"Change":"Set");setb.type="button";
+      setb.addEventListener("click",function(){mgrPw=true;renderMgr(j);});
+      pw.appendChild(setb);
+      if(ac.has_password){
+        var rmb=el("button","__cc_btn __cc_danger","Remove");rmb.type="button";rmb.title="Anyone with the link will be able to view";
+        rmb.addEventListener("click",function(){rmb.disabled=true;mset({password:null});});
+        pw.appendChild(rmb);
+      }
+    }
+    mgr.appendChild(pw);
+    if(mgrPw){
+      var pr=el("div","__cc_kv");
+      var pin=document.createElement("input");pin.type="text";pin.className="__cc_in2";pin.placeholder="New password";
+      pin.setAttribute("autocapitalize","off");pin.setAttribute("autocomplete","off");
+      var sv=el("button","__cc_btn","Save");sv.type="button";
+      var commit=function(){if(pin.value){mgrPw=false;mset({password:pin.value});}};
+      sv.addEventListener("click",commit);
+      pin.addEventListener("keydown",function(e){if(e.key==="Enter")commit();});
+      var cx=el("button","__cc_btn","Cancel");cx.type="button";
+      cx.addEventListener("click",function(){mgrPw=false;renderMgr(j);});
+      pr.appendChild(pin);pr.appendChild(sv);pr.appendChild(cx);
+      mgr.appendChild(pr);
+      pin.focus();
+    }
+    var eg=el("div","__cc_kv");
+    eg.appendChild(el("span","__cc_k","Email gate"));
+    eg.appendChild(el("span","__cc_v"+(ac.email_gate?" __cc_on":""),ac.email_gate?"on":"off"));
+    eg.appendChild(el("span","__cc_sp"));
+    var tg=el("button","__cc_btn"+(ac.email_gate?" __cc_danger":""),ac.email_gate?"Turn off":"Turn on");tg.type="button";
+    tg.title=ac.email_gate?"Viewers will no longer have to identify themselves":"Viewers must enter their email to view";
+    tg.addEventListener("click",function(){tg.disabled=true;mset({email_gate:!ac.email_gate});});
+    eg.appendChild(tg);
+    mgr.appendChild(eg);
+    if(j.session_short_id){
+      var sl=el("div","__cc_kv");
+      sl.appendChild(el("span","__cc_k","Session link"));
+      sl.appendChild(el("span","__cc_v"+(ac.show_session?" __cc_on":""),ac.show_session?"shown":"hidden"));
+      sl.appendChild(el("span","__cc_sp"));
+      var sb=el("button","__cc_btn",ac.show_session?"Hide":"Show");sb.type="button";
+      sb.title=ac.show_session?"Remove the link to your session from the page":"Let viewers open the session that published this page";
+      sb.addEventListener("click",function(){sb.disabled=true;mset({show_session:!ac.show_session});});
+      sl.appendChild(sb);
+      mgr.appendChild(sl);
+    }
+    var co=el("div","__cc_kv");
+    co.appendChild(el("span","__cc_k","Comments"));
+    co.appendChild(el("span","__cc_v"+(ac.comments_enabled?" __cc_on":""),ac.comments_enabled?"on":"off"));
+    co.appendChild(el("span","__cc_sp"));
+    var cb2=el("button","__cc_btn"+(ac.comments_enabled?" __cc_danger":""),ac.comments_enabled?"Turn off":"Turn on");cb2.type="button";
+    cb2.title=ac.comments_enabled?"Viewers can no longer comment; the existing discussion is hidden":"Let viewers discuss this page";
+    cb2.addEventListener("click",function(){cb2.disabled=true;mset({comments:!ac.comments_enabled});});
+    co.appendChild(cb2);
+    mgr.appendChild(co);
+    var ex=el("div","__cc_kv");
+    ex.appendChild(el("span","__cc_k","Expires"));
+    ex.appendChild(el("span","__cc_v",ac.expires_at?inFmt(ac.expires_at):"never"));
+    mgr.appendChild(ex);
+    var chips=el("div","__cc_chips");
+    [["1h",3600e3],["24h",86400e3],["7d",604800e3],["30d",2592e6],["never",null]].forEach(function(p){
+      var b=el("button","__cc_chip2",p[0]);b.type="button";
+      b.addEventListener("click",function(){b.disabled=true;mset({expires_in_ms:p[1]});});
+      chips.appendChild(b);
+    });
+    mgr.appendChild(chips);
+
+    mgr.appendChild(el("div","__cc_h2","Editing"));
+    var seg=el("div","__cc_chips");
+    ["owner","link","team"].forEach(function(m){
+      var b=el("button","__cc_chip2"+((ac.edit_mode||"owner")===m?" __cc_segon":""),m);b.type="button";
+      b.addEventListener("click",function(){if((ac.edit_mode||"owner")!==m){b.disabled=true;mset({edit_mode:m});}});
+      seg.appendChild(b);
+    });
+    mgr.appendChild(seg);
+    mgr.appendChild(el("div","__cc_note",
+      {owner:"Only you can publish edits.",
+       link:"Anyone with the edit link can publish new versions — and read the source, password or not.",
+       team:"Your teammates can publish edits — and read the source, password or not."}[ac.edit_mode||"owner"]||""));
+
+    mgr.appendChild(el("div","__cc_h2","Links"));
+    var lr=el("div","__cc_chips");
+    var base=CC.shareUrl||location.href.split("#")[0];
+    var cm=el("button","__cc_btn","Copy manage link");cm.type="button";
+    cm.addEventListener("click",function(){copyText(base+"#o="+ownerKey,function(){flashLabel(cm,"Copied","Copy manage link");});});
+    lr.appendChild(cm);
+    if(j.edit_url){
+      var ce=el("button","__cc_btn","Copy edit link");ce.type="button";
+      ce.addEventListener("click",function(){copyText(j.edit_url,function(){flashLabel(ce,"Copied","Copy edit link");});});
+      lr.appendChild(ce);
+    }
+    mgr.appendChild(lr);
+
+    var openC2=(j.comments||[]).filter(function(c){return c.status==="open";});
+    CC.comments=openC2.length;setCount();
+    if(openC2.length){
+      mgr.appendChild(el("div","__cc_h2","Open comments ("+openC2.length+")"));
+      openC2.forEach(function(c){
+        var row=el("div","__cc_cmt");
+        row.appendChild(el("div","__cc_cmeta",c.author_name+(c.verified?" \u2713":"")+(c.author_email?" <"+c.author_email+">":"")+" · v"+c.version+" · "+rel(c.created_at)));
+        var an=null;try{an=c.anchor?JSON.parse(c.anchor):null;}catch(e){}
+        if(an&&an.snippet)row.appendChild(el("div","__cc_dsnip","\u201C"+String(an.snippet).slice(0,80)+"\u201D"));
+        row.appendChild(el("div","__cc_ctext",c.text));
+        var rb=el("button","__cc_btn","Resolve");rb.type="button";
+        rb.addEventListener("click",function(){rb.disabled=true;rb.textContent="Resolving…";mreq({resolve_comment_id:c.id});});
+        row.appendChild(rb);
+        mgr.appendChild(row);
+      });
+    }
+    if((j.viewers||[]).length){
+      mgr.appendChild(el("div","__cc_h2","Seen by"));
+      j.viewers.forEach(function(v){
+        var row=el("div","__cc_kv");
+        row.appendChild(el("span","__cc_k",v.email));
+        row.appendChild(el("span","__cc_sp"));
+        row.appendChild(el("span","__cc_v",(v.view_count||1)+"× · first "+rel(v.first_seen)+" · last "+rel(v.last_seen)));
+        mgr.appendChild(row);
+      });
+    }
+  };
+  var openManage=function(){show(mgr);mnote("Loading…");mreq({});};
+  // --- overflow menu: source, views, edit, manage (owner) ---
+  var menuBtn=document.getElementById("__cc_menu");
+  var menu=document.getElementById("__cc_menupanel");
+  if(menuBtn&&menu){
+    menuBtn.addEventListener("click",function(e){
+      e.stopPropagation();
+      if(!menu.hidden){closeAll();return;}
+      menu.innerHTML="";
+      var add=function(label,fn){var a=document.createElement("a");a.className="__cc_row";a.href="#";
+        var s=document.createElement("span");s.textContent=label;a.appendChild(s);
+        a.addEventListener("click",function(ev){ev.preventDefault();fn();});menu.appendChild(a);return a;};
+      // Copy moved off the bar into this menu; the row flashes in place.
+      var cp=add("Copy link",function(){});
+      cp.addEventListener("click",function(){
+        var s=cp.querySelector("span");
+        copyText(CC.shareUrl||location.href.split("#")[0],function(){if(s)flashLabel(s,"Copied","Copy link");setTimeout(closeAll,900);});
+      });
+      add("View source",function(){var x={src:1};if(CC.version!==CC.currentVersion)x.v=CC.version;location.href=withQ(x);});
+      if(ownerKey||editKey||CC.editMode==="link"){
+        add("Edit this page",function(){location.href=withQ({edit:1});});
+      }
+      if(ownerKey){
+        add("Manage sharing…",openManage);
+      }
+      if(CC.views){menu.appendChild(el("div","__cc_note",CC.views+" view"+(CC.views===1?"":"s")));}
+      show(menu);
+    });
+  }
+  // --- new-version badge / live reload (also refreshes the comment count) ---
+  if(CC.version===CC.currentVersion){
+    var badge=document.getElementById("__cc_new");
+    var poll=function(){
+      fetchMeta(function(m){
+        if(!m)return;
+        if(typeof m.comment_count==="number"&&m.comment_count!==CC.comments){CC.comments=m.comment_count;setCount();}
+        // Keep saved comments (and their pins) live so another viewer's
+        // comments show up without a reload. Re-render only on real change —
+        // and never redraw the panel itself mid-typing.
+        if(m.comments){
+          var sig=function(list){return list.map(function(c){return c.id+(c.delivered?"+":"-");}).join(",");};
+          if(sig(m.comments)!==sig(saved)){saved=m.comments;savedLoaded=true;renderPins();}
+        }
+        if(m.version>CC.version){
+          if(CC.live){location.href=verUrl(m.version,true);return;}
+          if(badge){
+            badge.textContent="v"+m.version+" published — reload";
+            badge.hidden=false;
+            badge.onclick=function(){location.href=verUrl(m.version,true);};
+          }
+        }
+      });
+    };
+    setInterval(poll,CC.live?5e3:3e4);
+  }
+})();</script>
+<main>
+  <div class="kicker">acme/billing · PR #482 · 7 days on staging</div>
+  <h1>Webhook retry report</h1>
+  <p class="lede">Failed Stripe deliveries now retry with exponential backoff, at most 5 attempts over about thirty minutes. Nothing was dropped this week.</p>
+  <div class="stats">
+    <div class="stat"><b class="good">0</b><span>events dropped (41 the week before)</span></div>
+    <div class="stat"><b>99.98%</b><span>delivered, retries included</span></div>
+    <div class="stat"><b>2m 10s</b><span>median time to recover</span></div>
+  </div>
+  <div class="chart" id="recovered">
+    <h2>Where a failed event recovers</h2>
+    <svg viewBox="0 0 680 200" width="100%" role="img" aria-label="Recoveries by attempt">
+      <rect x="30" y="47" width="84" height="123" rx="6" fill="#268bd2"/><text x="72" y="39" text-anchor="middle" font-size="13" font-weight="600" fill="#073642">82%</text><text x="72" y="190" text-anchor="middle" font-size="12" fill="#586e75">1st retry</text><rect x="160" y="150" width="84" height="20" rx="6" fill="#93c1e3"/><text x="202" y="142" text-anchor="middle" font-size="13" font-weight="600" fill="#073642">13%</text><text x="202" y="190" text-anchor="middle" font-size="12" fill="#586e75">2nd</text><rect x="290" y="164" width="84" height="6" rx="6" fill="#93c1e3"/><text x="332" y="156" text-anchor="middle" font-size="13" font-weight="600" fill="#073642">4%</text><text x="332" y="190" text-anchor="middle" font-size="12" fill="#586e75">3rd</text><rect x="420" y="168" width="84" height="2" rx="6" fill="#93c1e3"/><text x="462" y="160" text-anchor="middle" font-size="13" font-weight="600" fill="#073642">1%</text><text x="462" y="190" text-anchor="middle" font-size="12" fill="#586e75">4th</text><rect x="550" y="170" width="84" height="0" rx="6" fill="#93c1e3"/><text x="592" y="162" text-anchor="middle" font-size="13" font-weight="600" fill="#073642">0%</text><text x="592" y="190" text-anchor="middle" font-size="12" fill="#586e75">5th</text>
+      <line x1="20" y1="170" x2="660" y2="170" stroke="#e8e2cf"/>
+    </svg>
+  </div>
+  <h2>Why deliveries failed</h2>
+  <table>
+    <tr><th>Reason</th><th class="n">Events</th><th class="n">Recovered</th></tr>
+    <tr><td>502 from the ledger</td><td class="n">25</td><td class="n"><span class="pill">25 of 25</span></td></tr><tr><td>Timeout after 10s</td><td class="n">11</td><td class="n"><span class="pill">11 of 11</span></td></tr><tr><td>429 rate limited</td><td class="n">4</td><td class="n"><span class="pill">4 of 4</span></td></tr><tr><td>Connection reset</td><td class="n">1</td><td class="n"><span class="pill">1 of 1</span></td></tr>
+  </table>
+</main>
+</body>
+</html>
