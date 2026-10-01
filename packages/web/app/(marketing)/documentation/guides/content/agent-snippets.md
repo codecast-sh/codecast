@@ -50,7 +50,7 @@ One snippet goes further: messaging is on by default for anyone with memory enab
 
 ## The shared "Referencing objects" section
 
-Sessions, tasks, plans, triggers, and docs all have short IDs (`jx7c6zk`, `ct-4102`, `pl-88`, `tr-42`). Write one in prose anywhere in codecast and it renders as a live reference card. Rather than each snippet teaching its own object's ID format, a single `## Referencing objects` section explains all of them. Any snippet that introduces an object installs this section alongside itself. It is written once per file and refreshed in place, so enabling five features still yields exactly one copy.
+Sessions, tasks, plans, triggers, calls, and docs all have short IDs (`jx7c6zk`, `ct-4102`, `pl-88`, `tr-42`, `cl-42`). Write one in prose anywhere in codecast and it renders as a live reference card. Rather than each snippet teaching its own object's ID format, a single `## Referencing objects` section explains all of them. Any snippet that introduces an object installs this section alongside itself. It is written once per file and refreshed in place, so enabling five features still yields exactly one copy.
 
 ## Per-device control from the web
 

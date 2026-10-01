@@ -6,7 +6,7 @@
 
 import { createContext, useRef, useState } from "react";
 import { useConvex } from "convex/react";
-import { focusBrowserTab, reopenBrowserTab, type BrowserSessionRef, type BrowserTabFailure } from "../lib/browserFocus";
+import { focusBrowserTab, probeBrowserTab, reopenBrowserTab, type BrowserSessionRef, type BrowserTabFailure } from "../lib/browserFocus";
 import { useWatchEffect } from "./useWatchEffect";
 import { useMountEffect } from "./useMountEffect";
 import { bridge } from "../lib/desktop";
@@ -29,6 +29,8 @@ export type BrowserTabActionState =
   | { kind: "note"; text: string };
 
 const NOTE_MS = 6_000;
+// A hover probe lists every browser's tabs; once per pill per window is plenty.
+const PROBE_EVERY_MS = 5_000;
 
 /** The daemon raised the browser too, but macOS 14+ honors that only when no
  *  other app is active. In the desktop app, which is active because the human
@@ -63,13 +65,14 @@ export function useBrowserTabActions(
   tab: { tabId: string | null; url: string | null; gone?: boolean },
   session: BrowserSessionRef,
   onReopened?: (tabId: string) => void,
-): { state: BrowserTabActionState; tabId: string | null; focus: () => void; reopen: () => void; dismiss: () => void } {
+): { state: BrowserTabActionState; tabId: string | null; focus: () => void; reopen: () => void; dismiss: () => void; check: () => void } {
   const convex = useConvex();
   const canReopen = !!tab.url && !!(session.sessionUuid || session.tmuxSession);
   const goneOffer: BrowserTabActionState | null = tab.gone && canReopen ? { kind: "offer", reason: "tab-gone" } : null;
   const [state, setState] = useState<BrowserTabActionState>(goneOffer ?? { kind: "idle" });
   const [tabId, setTabId] = useState(tab.tabId);
   const noteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const probedAt = useRef(0);
   // The row's tab wins whenever it changes (a later row named another tab).
   useWatchEffect(() => setTabId(tab.tabId), [tab.tabId]);
   // A stop landing later in the transcript turns an idle pill into the offer.
@@ -100,6 +103,21 @@ export function useBrowserTabActions(
     });
   };
 
+  // The transcript learns a tab is gone only when the agent's stop syncs back,
+  // seconds or more after the tab closed. Asking the daemon on hover turns
+  // the pill into the reopen offer before the click instead of after it.
+  const check = () => {
+    if (!canReopen || state.kind !== "idle" || (!tabId && !bySession)) return;
+    const now = Date.now();
+    if (now - probedAt.current < PROBE_EVERY_MS) return;
+    probedAt.current = now;
+    void probeBrowserTab(convex, tabId ?? session).then((out) => {
+      if (out.ok || (out.reason !== "tab-gone" && out.reason !== "browser-stopped")) return;
+      const reason = out.reason;
+      setState((s) => (s.kind === "idle" ? { kind: "offer", reason } : s));
+    });
+  };
+
   const reopen = () => {
     if (!tab.url || state.kind === "busy") return;
     setState({ kind: "busy", verb: "reopening" });
@@ -112,6 +130,10 @@ export function useBrowserTabActions(
     });
   };
 
-  const dismiss = () => setState({ kind: "idle" });
-  return { state, tabId, focus, reopen, dismiss };
+  // Declining the offer also stops the hover probe from making it again.
+  const dismiss = () => {
+    probedAt.current = Infinity;
+    setState({ kind: "idle" });
+  };
+  return { state, tabId, focus, reopen, dismiss, check };
 }

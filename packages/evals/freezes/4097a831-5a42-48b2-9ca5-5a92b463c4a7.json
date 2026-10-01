@@ -1,0 +1,26 @@
+{
+  "name": "call-summary webhook-limits-huddle",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:webhook-limits-huddle"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "call-summary:webhook-limits-huddle",
+    "title": "call-summary webhook-limits-huddle"
+  },
+  "asOf": "2026-01-14T17:09:00.000Z",
+  "trigger": {
+    "type": "call-summary"
+  },
+  "meta": {
+    "surface": "call-summary",
+    "visibility": "public",
+    "snapshot": "fixtures/call-summary/webhook-limits-huddle.json"
+  },
+  "judge": "the summary says the team decided to ship per-sender rate limits behind a flag on Thursday with the reseller at 200; the action items are exactly the three commitments (Iris emails the reseller, Theo adds a 429 dashboard panel, Mara reviews the branch) with those owners, and nothing invented",
+  "notes": null,
+  "tags": [],
+  "id": "4097a831-5a42-48b2-9ca5-5a92b463c4a7",
+  "createdAt": "2026-10-01T17:45:11.602Z"
+}

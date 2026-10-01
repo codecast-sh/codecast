@@ -33,6 +33,7 @@ import syncEngine from "./content/sync-engine.md?raw";
 import teamChat from "./content/team-chat.md?raw";
 import calls from "./content/calls.md?raw";
 import remoteAndCloudSessions from "./content/remote-and-cloud-sessions.md?raw";
+import codexCloud from "./content/codex-cloud.md?raw";
 
 const CONTENT: Record<string, string> = {
   "agent-snippets": agentSnippets,
@@ -63,6 +64,7 @@ const CONTENT: Record<string, string> = {
   "team-chat": teamChat,
   "calls": calls,
   "remote-and-cloud-sessions": remoteAndCloudSessions,
+  "codex-cloud": codexCloud,
 };
 
 export function getGuideContent(slug: string): string | undefined {

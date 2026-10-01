@@ -601,8 +601,8 @@ export function ImageBlock({ image }: { image: ImageData }) {
   }, [src]);
 
   useWatchEffect(() => {
-    if (src && gallery) gallery.register({ src, href, messageId });
-  }, [src, href, messageId, gallery]);
+    if (src && gallery) gallery.register({ src, href, messageId, storageId: image.storage_id });
+  }, [src, href, messageId, image.storage_id, gallery]);
 
   // Keep the same reserved height when a stored image is missing or undecodable.
   // Returning null here used to collapse image-heavy transcript rows after load,

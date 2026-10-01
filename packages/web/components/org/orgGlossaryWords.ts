@@ -6,9 +6,9 @@
 // sessions, its triggers, a proposal, a goal.
 import type { OrgTree } from "./orgTypes";
 import type { OrgHealth, OrgProposalRow } from "./orgStaffingTypes";
-import { CHIEF_OF_STAFF_HANDLE } from "./orgStaffingTypes";
+import { isHeadOfPeopleRole } from "./orgStaffingTypes";
 
-export type GlossaryWord = "role" | "area" | "charter" | "session" | "trigger" | "proposal" | "goal" | "chief_of_staff";
+export type GlossaryWord = "role" | "area" | "charter" | "session" | "trigger" | "proposal" | "goal" | "head_of_people";
 
 export type GlossaryEntry = {
   word: GlossaryWord;
@@ -22,7 +22,7 @@ export type GlossaryEntry = {
   own: boolean;
 };
 
-export const GLOSSARY_ORDER: GlossaryWord[] = ["role", "area", "charter", "session", "trigger", "proposal", "goal", "chief_of_staff"];
+export const GLOSSARY_ORDER: GlossaryWord[] = ["role", "area", "charter", "session", "trigger", "proposal", "goal", "head_of_people"];
 
 export const GLOSSARY_TERM: Record<GlossaryWord, string> = {
   role: "Role",
@@ -32,7 +32,7 @@ export const GLOSSARY_TERM: Record<GlossaryWord, string> = {
   trigger: "Trigger",
   proposal: "Proposal",
   goal: "Goal",
-  chief_of_staff: "Chief of staff",
+  head_of_people: "Head of people",
 };
 
 const DEFINITION: Record<GlossaryWord, string> = {
@@ -41,9 +41,9 @@ const DEFINITION: Record<GlossaryWord, string> = {
   charter: "A short written statement of what a role or a project is for, so a role can tell its own work from someone else's.",
   session: "The pieces of work under a role, each in its own thread; the role answers them so you do not have to.",
   trigger: "What wakes a role on its own: its check on a schedule, or a session under it that is waiting; a message from you wakes it too.",
-  proposal: "A change to the org that the chief of staff suggests in conversation; you accept it, skip it or ask about it, and nothing moves until you accept.",
+  proposal: "A change to the org that the head of people suggests in conversation; you accept it, skip it or ask about it, and nothing moves until you accept.",
   goal: "Something the company is trying to reach, with the projects that carry it and the person or role that drives it.",
-  chief_of_staff: "The role at your side: it keeps your goals in view, looks after whatever no other role has taken, and reviews the org with you.",
+  head_of_people: "The role at your side: it keeps your goals in view, looks after whatever no other role has taken, and reviews the org with you.",
 };
 
 const handle = (h: string) => `@${h.replace(/^@/, "")}`;
@@ -53,13 +53,13 @@ const listOf = (xs: string[], max = 2) => xs.length <= max ? xs.join(" and ") : 
  * The entries with examples from this workspace. A role with an area names
  * the role example and the area example; a charter on a role names the
  * charter; the health read names the sessions; the open proposal names the
- * proposal; the chief names itself. Where the workspace has none of that
+ * proposal; the Head of People names itself. Where the workspace has none of that
  * yet, the example says what one would be.
  */
 export function glossaryEntries(tree: OrgTree | null | undefined, health: OrgHealth | null | undefined, proposal: Pick<OrgProposalRow, "short_id" | "changes" | "counts"> | null | undefined): GlossaryEntry[] {
   const roles = (tree?.roles ?? []).filter((r) => r.status !== "retired");
-  const chief = roles.find((r) => r.handle === CHIEF_OF_STAFF_HANDLE) ?? null;
-  const scoped = roles.find((r) => r.scope_names.projects.length + r.scope_names.plans.length > 0 && r.handle !== CHIEF_OF_STAFF_HANDLE) ?? roles.find((r) => r.handle !== CHIEF_OF_STAFF_HANDLE) ?? roles[0] ?? null;
+  const head = roles.find((r) => isHeadOfPeopleRole(r)) ?? null;
+  const scoped = roles.find((r) => r.scope_names.projects.length + r.scope_names.plans.length > 0 && !isHeadOfPeopleRole(r)) ?? roles.find((r) => !isHeadOfPeopleRole(r)) ?? roles[0] ?? null;
   const chartered = roles.find((r) => r.charter?.trim()) ?? null;
   const healthRole = health?.roles.find((r) => r.load.live_hands > 0) ?? null;
   const healthName = (id: string) => roles.find((r) => r._id === id)?.handle ?? healthRole?.handle ?? "";
@@ -85,12 +85,12 @@ export function glossaryEntries(tree: OrgTree | null | undefined, health: OrgHea
     ? { text: `The one open now: ${total} ${total === 1 ? "change" : "changes"}, ${decided} decided.`, own: true }
     : { text: "\"Add a Platform lead and move the sync plans under it.\" Accept, Skip or Ask.", own: false };
   const goalEx = { text: "\"Ship the mobile app by March\", carried by two projects and driven by the Platform lead.", own: false };
-  const chiefEx = chief
-    ? { text: `${handle(chief.handle)}, ${chief.status === "paused" ? "hired and paused" : "hired"}.`, own: true }
-    : { text: "Not hired here yet; \"Hire a Chief of Staff\" on the org page hires one.", own: false };
+  const headEx = head
+    ? { text: `${handle(head.handle)}, ${head.status === "paused" ? "hired and paused" : "hired"}.`, own: true }
+    : { text: "Not hired here yet; \"Hire a Head of People\" on the org page hires one.", own: false };
 
   const examples: Record<GlossaryWord, { text: string; own: boolean }> = {
-    role: roleEx, area: areaEx, charter: charterEx, session: sessionEx, trigger: triggerEx, proposal: proposalEx, goal: goalEx, chief_of_staff: chiefEx,
+    role: roleEx, area: areaEx, charter: charterEx, session: sessionEx, trigger: triggerEx, proposal: proposalEx, goal: goalEx, head_of_people: headEx,
   };
   return GLOSSARY_ORDER.map((word) => ({ word, term: GLOSSARY_TERM[word], definition: DEFINITION[word], example: examples[word].text, own: examples[word].own }));
 }
@@ -112,7 +112,7 @@ export const HOW_THIS_WORKS: { heading: string; body: string }[] = [
   },
   {
     heading: "Where a proposal comes from",
-    body: "The chief of staff reads how work actually moves through the company: which plans finished, which tasks nobody touched, where decisions pile up. Then it talks it over with you and makes small proposals as you go, each with the evidence behind it. It reviews the company every week; you can also ask for a review at any time.",
+    body: "The head of people reads how work actually moves through the company: which plans finished, which tasks nobody touched, where decisions pile up. Then it talks it over with you and makes small proposals as you go, each with the evidence behind it. It reviews the company every week; you can also ask for a review at any time.",
   },
   {
     heading: "What accepting does",

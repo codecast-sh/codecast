@@ -46,7 +46,23 @@ export function IdentityFace({ row, size = 18, className, hover = true, onPick, 
   // The hover trigger is the flex item in the caller's row, not the face, and
   // its default (min-w-0) lets a crowded row squeeze it narrower than the
   // face, which then spills over its neighbour. A face has a fixed size.
-  const trigger = "inline-flex flex-shrink-0 items-center";
-  if (id.kind === "role") return <RoleHoverCard role={id.role} side={side} align={align} triggerClassName={trigger}>{face}</RoleHoverCard>;
-  return <SessionHoverCard row={row} side={side} align={align} triggerClassName={trigger}>{face}</SessionHoverCard>;
+  return <IdentityHover row={row} personifyAll={personifyAll} side={side} align={align} triggerClassName="inline-flex flex-shrink-0 items-center">{face}</IdentityHover>;
+}
+
+/** Who-is-this hover over any children: a role opens the role card, a
+ *  character the session card, a plain session nothing. IdentityFace wraps its
+ *  face in it; a surface that names the session beside the face (a message's
+ *  speaker line) wraps both, so the name opens the same card. */
+export function IdentityHover({ row, personifyAll, side = "bottom", align = "start", triggerClassName, children }: {
+  row: IdentityRow & Record<string, unknown>;
+  personifyAll?: boolean;
+  side?: Side;
+  align?: Align;
+  triggerClassName?: string;
+  children: ReactNode;
+}) {
+  const id = sessionIdentity(row, usePersonifyAll(personifyAll));
+  if (id.kind === "plain") return <>{children}</>;
+  if (id.kind === "role") return <RoleHoverCard role={id.role} side={side} align={align} triggerClassName={triggerClassName}>{children}</RoleHoverCard>;
+  return <SessionHoverCard row={row} side={side} align={align} triggerClassName={triggerClassName}>{children}</SessionHoverCard>;
 }

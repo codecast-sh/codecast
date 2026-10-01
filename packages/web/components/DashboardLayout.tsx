@@ -1,3 +1,4 @@
+import { SeatKillDialog } from "./org/SeatKillDialog";
 import { ReactNode, useState, useCallback, useRef, useMemo, memo, createContext, useContext, lazy, Suspense } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useDragGatedLayoutPersist } from "../hooks/useDragGatedLayoutPersist";
@@ -29,6 +30,7 @@ import { Plus, PanelLeft, PanelRight, Menu, MessageSquare, SquareTerminal, Chevr
 import { SetupPromptBanner } from "./SetupPromptBanner";
 import { TriageBar } from "./triage/TriageBar";
 import { TriageNuxGate } from "./triage/TriageNux";
+import { TourLayer, ToursPanel } from "../tours";
 import { NewSnippetsBanner } from "./NewSnippetsBanner";
 import { OrgIntroAnywhere } from "./org/OrgIntroAnywhere";
 import { NativeAppBanner } from "./NativeAppBanner";
@@ -44,7 +46,7 @@ import { DaemonStatusChip } from "./DaemonStatusChip";
 import { AccountUsageChip } from "./AccountUsageChip";
 import { StatusDot } from "./StatusDot";
 import { TopbarButton, TopbarDivider } from "./TopbarButton";
-import { AnchorChip, AnchorPanel } from "./anchor/AnchorPanel";
+import { HeaderPins, AnchorPanel } from "./anchor/AnchorPanel";
 import { useSyncAnchors } from "../hooks/useSyncAnchors";
 import { useSyncTeamExternalEvents } from "../hooks/useSyncExternalEvents";
 import { useSyncIssueSyncSources } from "../hooks/useSyncIssueSyncSources";
@@ -52,6 +54,7 @@ import { useSyncAgentDefinitions } from "../hooks/useSyncAgentDefinitions";
 import { useSyncInitiatives } from "../hooks/useInitiatives";
 import { useSyncSettings } from "../hooks/useSyncSettings";
 import { useIsSyncHost, useSyncReplication } from "../hooks/useSyncRole";
+import { useSessionCommandResults } from "../hooks/useSessionCommands";
 import { useEnsureDispatch } from "../hooks/useEnsureDispatch";
 import { usePendingMessageCoverage } from "../hooks/usePendingMessageCoverage";
 import { SyncStatusChip } from "./SyncStatusChip";
@@ -323,16 +326,26 @@ function DashboardSyncEffects() {
         A component boundary rather than a conditional hook: PANE_EMBED cannot
         change while the document lives, but the rule stays visible. */}
     {PANE_EMBED ? null : <WindowOnlyEffects />}
+    <SessionCommandResultsFeeder />
     {isSyncHost ? <HostFeeders /> : null}
     {isSyncHost ? <ChatPrefetchFeeder /> : null}
   </>;
+}
+
+/** Settles this window's daemon commands (restart, move, switch, hibernate)
+ *  wherever they were asked from. The collection is per-window, so every
+ *  window feeds its own: never host-gated. Its own component, so a new
+ *  request re-renders only this. */
+function SessionCommandResultsFeeder() {
+  useSessionCommandResults();
+  return null;
 }
 
 /** What belongs to a window rather than to a route: unread toasts, the title
  *  badge, the call surfaces. */
 function WindowOnlyEffects() {
   useChatToasts();
-  return <Suspense fallback={null}><CallSyncEffects /></Suspense>;
+  return <><Suspense fallback={null}><CallSyncEffects /></Suspense><SeatKillDialog /></>;
 }
 
 // The window's OS title: the surface, then the specific thing it shows,
@@ -1192,8 +1205,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
                   <Plus />
                 </TopbarButton>
               </ShortcutTooltip>
-              <ErrorBoundary name="AnchorChip" level="inline">
-                <AnchorChip />
+              <ErrorBoundary name="HeaderPins" level="inline">
+                <HeaderPins />
               </ErrorBoundary>
               <ErrorBoundary name="NotificationBell" level="inline">
                 <NotificationBell />
@@ -1408,6 +1421,10 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       )}
       <ErrorBoundary name="TriageNux" level="inline">
         <TriageNuxGate />
+      </ErrorBoundary>
+      <ErrorBoundary name="Tours" level="inline">
+        <ToursPanel />
+        <Suspense fallback={null}><TourLayer /></Suspense>
       </ErrorBoundary>
       {/* The dock portals to <body>, so this wrapper is empty (and hidden)
           until the boundary trips. A dock crash used to degrade into the

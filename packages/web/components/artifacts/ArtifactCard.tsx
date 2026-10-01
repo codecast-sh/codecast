@@ -4,7 +4,6 @@
 // packages/convex/convex/artifacts.ts toCliRow + listForWeb extras).
 
 import { copyToClipboard } from "../../lib/utils";
-import { useState } from "react";
 import { AvatarImg } from "../../lib/avatarCache";
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -30,7 +29,7 @@ import {
 import { ContextMenu, useContextMenu, CtxItem, CtxHeader, CtxSeparator } from "../ui/context-menu";
 import { ForwardCtxItem } from "../menus/ObjectContextMenus";
 import { EntityIdPill } from "../EntityIdPill";
-import { pageThumbUrl } from "../../lib/publishedPageUrls";
+import { PageThumb } from "../PageThumb";
 import { relativeTime, withEditParam } from "./artifactCardUtils";
 
 export type ArtifactRow = {
@@ -96,14 +95,11 @@ export function ArtifactCard({
   artifact: ArtifactRow;
   onTeamEdit?: (a: ArtifactRow) => void;
 }) {
-  const [thumbFailed, setThumbFailed] = useState(false);
   const deleteArtifact = useMutation(api.artifacts.deleteForWeb);
   const kind = KIND_GLYPH[a.kind] ?? KIND_GLYPH.html;
-  // The thumb endpoint refuses gated artifacts (no visual leak in unfurls), so
-  // don't even try when a gate is on.
+  // The serve route refuses gated artifacts' capture and content alike (no
+  // visual leak), so a gated card shows its kind glyph.
   const gated = !!a.has_password || !!a.email_gate;
-  const showThumb = a.has_thumb && !gated && !thumbFailed;
-  const thumbUrl = pageThumbUrl(a.slug, a.version);
   const age = relativeTime(a.updated_at);
   const expired = !!a.expires_at && a.expires_at < Date.now();
 
@@ -179,19 +175,18 @@ export function ArtifactCard({
         className={`block aspect-[1.91/1] w-full overflow-hidden border-b border-sol-border/30 ${expired ? "opacity-50" : ""}`}
         title={`Open ${a.url}`}
       >
-        {showThumb ? (
-          <img
-            src={thumbUrl}
-            alt={a.title}
-            loading="lazy"
-            onError={() => setThumbFailed(true)}
-            className="w-full h-full object-cover object-top"
-          />
-        ) : (
-          <div className={`w-full h-full flex items-center justify-center ${kind.cls}`}>
-            <span className="font-mono text-3xl opacity-70 select-none">{kind.glyph}</span>
-          </div>
-        )}
+        <PageThumb
+          slug={a.slug}
+          version={a.version}
+          hasThumb={a.has_thumb}
+          gated={gated}
+          title={a.title}
+          fallback={
+            <div className={`w-full h-full flex items-center justify-center ${kind.cls}`}>
+              <span className="font-mono text-3xl opacity-70 select-none">{kind.glyph}</span>
+            </div>
+          }
+        />
       </a>
 
       {/* Hover actions */}

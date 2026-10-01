@@ -59,6 +59,12 @@ export * from "./transcribeLanguage";
 export * from "./callPush";
 export * from "./transcriptChunk";
 export * from "./callLinks";
+// A call's recordings (LiveKit Egress files) and the one rule that finds the
+// file and offset showing a moment of the call; and guests, the people who
+// join from a link without an account. Shared by Convex, web, mobile and the
+// CLI's frame grab.
+export * from "./callRecordings";
+export * from "./callGuests";
 // The row a finished huddle leaves in its chat room or session: one formatter
 // for the digest markdown and the <huddle-summary> wire tag, one parser back.
 export * from "./huddleDigest";

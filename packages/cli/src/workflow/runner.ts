@@ -2,6 +2,7 @@ import { FOREIGN_TEXT_CAPS, capForeignText, escapeForeignControlChars, inlineFor
 import { definitionLaunchFlags } from "../agentLaunch.js";
 import { countingSemaphore } from "../semaphore.js";
 import { WorkflowGraph, WorkflowNode, WorkflowRunState, NodeOutcome } from "./types";
+import { evalCondition, extractJsonOutput, lookupContextVar } from "./condition";
 import { spawnSync } from "../proc.js";
 import { applyUnattended } from "../unattended.js";
 import { deviceId } from "../remote/device.js";
@@ -9,27 +10,6 @@ import * as fs from "fs";
 import * as path from "path";
 import * as readline from "readline";
 import { c } from "../colors.js";
-
-// ─── Condition evaluator ──────────────────────────────────
-
-function evalCondition(condition: string, context: Record<string, string>): boolean {
-  // Substitute context values
-  const expanded = condition.replace(/\b([a-zA-Z_][a-zA-Z0-9_.]*)\b/g, (match) => {
-    return context[match] !== undefined ? context[match] : match;
-  });
-
-  // Simple condition patterns
-  const eqMatch = expanded.match(/^(\S+)\s*=\s*(\S+)$/);
-  if (eqMatch) return eqMatch[1] === eqMatch[2];
-
-  const neqMatch = expanded.match(/^(\S+)\s*!=\s*(\S+)$/);
-  if (neqMatch) return neqMatch[1] !== neqMatch[2];
-
-  const containsMatch = expanded.match(/^(\S+)\s+contains\s+(\S+)$/i);
-  if (containsMatch) return containsMatch[1].includes(containsMatch[2]);
-
-  return false;
-}
 
 function resolveNextNode(
   graph: WorkflowGraph,
@@ -71,14 +51,34 @@ function resolveNextNode(
 
 // ─── Node handlers ────────────────────────────────────────
 
+// Every node's result lands under `<id>.output` (capped for prompts). When the
+// result is JSON, or ends in a fenced json block, the parsed value is kept
+// whole under `<id>.json` so `$<id>.json.<path>` and conditions can read its
+// fields past the output cap.
+const NODE_JSON_CAP = 64_000;
+export function recordNodeOutput(context: Record<string, string>, nodeId: string, text: string, jsonSource = text): void {
+  context[`${nodeId}.output`] = text.slice(0, 4000);
+  const parsed = extractJsonOutput(jsonSource);
+  const json = parsed === undefined ? undefined : JSON.stringify(parsed);
+  if (json !== undefined && json.length <= NODE_JSON_CAP) context[`${nodeId}.json`] = json;
+  else delete context[`${nodeId}.json`];
+}
+
 // $var in a script expands like $var in a prompt, but each value is
 // single-quoted so a task title with shell metacharacters stays data. `$(`
 // and `${` are left to the shell (no \w follows the `$`).
+// A dotted name ($scan.json.count) expands when the whole name resolves;
+// otherwise only its first word does and the rest stays literal text.
 export function expandScriptVars(script: string, context: Record<string, string>): string {
-  return script.replace(/\$(\w+)/g, (match, key) => {
-    const value = context[key];
-    if (value === undefined) return match;
-    return `'${value.replace(/'/g, `'\\''`)}'`;
+  return script.replace(/\$(\w+(?:\.\w+)*)/g, (match, key: string) => {
+    const parts = key.split(".");
+    for (let n = parts.length; n >= 1; n--) {
+      const value = lookupContextVar(context, parts.slice(0, n).join("."));
+      if (value === undefined) continue;
+      const rest = parts.slice(n).map(p => `.${p}`).join("");
+      return `'${value.replace(/'/g, `'\\''`)}'${rest}`;
+    }
+    return match;
   });
 }
 
@@ -106,7 +106,7 @@ async function executeCommand(
       console.log(c.dim + output.slice(0, 2000) + c.reset);
     }
 
-    context[`${node.id}.output`] = output.trim().slice(0, 4000);
+    recordNodeOutput(context, node.id, output.trim(), result.stdout || "");
     context[`${node.id}.exit_code`] = String(result.status ?? 0);
 
     if (result.status === 0) {
@@ -119,7 +119,7 @@ async function executeCommand(
     }
   } catch (err: any) {
     console.log(`  ${c.red}✗ error: ${err.message}${c.reset}`);
-    context[`${node.id}.output`] = err.message;
+    recordNodeOutput(context, node.id, err.message);
     return "failure";
   }
 }
@@ -203,7 +203,7 @@ async function executeAgent(
       console.log(`${c.dim}${stderr.slice(0, 200)}${c.reset}`);
     }
 
-    context[`${node.id}.output`] = output.slice(0, 4000);
+    recordNodeOutput(context, node.id, output);
     if (sessionId) context[`${node.id}.session_id`] = sessionId;
 
     if (result.status === 0) {
@@ -264,7 +264,7 @@ async function executeCliAgent(
 
     if (!runtime.isAlive(handle)) {
       const output = runtime.getOutput(handle, 500);
-      context[`${node.id}.output`] = output.text.slice(0, 4000);
+      recordNodeOutput(context, node.id, output.text);
       context[`${node.id}.session_id`] = sessionName;
 
       if (output.markers.status === "blocked") {
@@ -431,7 +431,7 @@ async function executeSessionNode(
     if (!settled) continue;
     const pinned = await cliCall(options, "/cli/sessions/state/get", { session: conversationId });
     const pinnedText: string = typeof pinned?.text === "string" ? pinned.text : (typeof pinned?.state?.text === "string" ? pinned.state.text : "");
-    context[`${node.id}.output`] = `work_state: ${state}${pinnedText ? `\n${pinnedText}` : ""}`.slice(0, 4000);
+    recordNodeOutput(context, node.id, `work_state: ${state}${pinnedText ? `\n${pinnedText}` : ""}`);
     const pinnedStatus: string = pinned?.status || pinned?.state?.status || "";
     if (pinnedStatus === "blocked") {
       console.log(`  ${c.yellow}blocked${c.reset}: ${pinnedText.split("\n")[0] || "(no detail)"}`);
@@ -698,7 +698,7 @@ export function expandPromptVars(template: string, graph: WorkflowGraph, context
   return template.replace(/\$(\w+(?:\.\w+)*)/g, (_, key) => {
     if (key === "goal") return goal;
     if (key === "human_message") return context["human.message"] || "";
-    return context[key] ?? "";
+    return lookupContextVar(context, key) ?? "";
   });
 }
 
@@ -732,7 +732,7 @@ function buildNodePrompt(
 
   // Add relevant context
   const contextEntries = Object.entries(context)
-    .filter(([k, _v]) => !k.endsWith(".output") && !["outcome", "last_error", "human.message"].includes(k))
+    .filter(([k, _v]) => !k.endsWith(".output") && !k.endsWith(".json") && !["outcome", "last_error", "human.message"].includes(k))
     .slice(0, 10);
   if (contextEntries.length > 0) {
     parts.push(`\n# Context\n${contextEntries.map(([k, v]) => `- ${k}: ${v}`).join("\n")}`);
@@ -999,6 +999,9 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
   const initialContext: Record<string, string> = {};
   initialContext["project_path"] = cwd;
   initialContext["default_branch"] = detectDefaultBranch(cwd);
+  // The run's own id, for a node that reports to the server about this run
+  // (the line's merge step, the-line.md L12). Empty on a run with no row.
+  initialContext["run_id"] = options.runId ?? "";
 
   if (options.taskId) {
     initialContext["task_id"] = options.taskId;

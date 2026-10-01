@@ -4,7 +4,7 @@
 // owner role, non goals, risks, and the advisory budget line. Every field
 // edits inline; the caller turns each patch into the store action
 // (updateProject / updatePlan) so the row paints first and the dispatch side
-// effect carries the write. Empty: one line and the ask to the chief of staff.
+// effect carries the write. Empty: one line and the ask to the head of people.
 import { useWorkspaceFeature } from "../../lib/teamFeatures";
 import { useState } from "react";
 import Link from "next/link";
@@ -13,7 +13,7 @@ import { cn } from "../../lib/utils";
 import { InlineEdit } from "../org/OrgScopePanel";
 import { OwnerRoleChip, PriorityPill } from "./CharterChips";
 import {
-  chiefOfStaffOf,
+  headOfPeopleOf,
   cleanBudget,
   composeCharterHref,
   formatTokens,
@@ -28,13 +28,13 @@ import {
 
 export type CharterBlockProps = {
   kind: CharterKind;
-  /** The project's or plan's title: the ask to the chief of staff names it. */
+  /** The project's or plan's title: the ask to the head of people names it. */
   title: string;
   charter: CharterFields;
   canEdit: boolean;
   onChange: (patch: CharterPatch) => void;
-  /** The workspace's roles (useOrgRoles): the owner chip and the chief of
-   *  staff come from them. Null while they load. */
+  /** The workspace's roles (useOrgRoles): the owner chip and the head of
+   *  people come from them. Null while they load. */
   roles: OrgRoles;
   /** A project with no owner: the chip opens the hire form prefilled. */
   onHire?: () => void;
@@ -130,7 +130,7 @@ function BudgetLine({ budget, canEdit, onChange }: { budget: CharterFields["budg
         className="text-[11.5px] font-mono !w-auto"
       />
       <span style={{ color: "var(--sol-text-dim)" }}>hands/day</span>
-      <span className="text-[10px] uppercase tracking-[0.08em] ml-1 px-1.5 h-[16px] inline-flex items-center rounded border" style={{ color: "var(--sol-text-dim)", borderColor: "color-mix(in srgb, var(--sol-border) 45%, transparent)" }} title="A guide for the owner role and the chief of staff; the role's own limits still bound it">advisory</span>
+      <span className="text-[10px] uppercase tracking-[0.08em] ml-1 px-1.5 h-[16px] inline-flex items-center rounded border" style={{ color: "var(--sol-text-dim)", borderColor: "color-mix(in srgb, var(--sol-border) 45%, transparent)" }} title="A guide for the owner role and the head of people; the role's own limits still bound it">advisory</span>
     </div>
   );
 }
@@ -139,12 +139,12 @@ export function CharterBlock({ kind, title, charter, canEdit, onChange, roles, o
   // "No charter yet" until someone opens the fields or a value lands.
   const [opened, setOpened] = useState(false);
   const filled = hasCharter(charter);
-  const chief = chiefOfStaffOf(roles);
+  const head = headOfPeopleOf(roles);
   const accent = charter.priority ? PRIORITY_META[charter.priority].color : "color-mix(in srgb, var(--sol-border) 70%, transparent)";
 
-  // The ask always goes to /org with the composer prefilled: with a chief of
-  // staff the draft request lands in its standing session; without one the
-  // staffing pane opens on "Hire a Chief of Staff" and the compose text
+  // The ask always goes to /org with the composer prefilled: with a head of
+  // people the draft request lands in its standing session; without one the
+  // staffing pane opens on "Hire a Head of People" and the compose text
   // survives the hire, so the ask arrives once the seat exists. The label
   // names what the click does: ask the seat by handle when one exists, hire
   // one when the roles are known and none holds it. With no roles to read
@@ -152,8 +152,8 @@ export function CharterBlock({ kind, title, charter, canEdit, onChange, roles, o
   // is unknown, not absent, so the label stays the plain ask.
   const rolesLoaded = roles != null;
   const orgOn = useWorkspaceFeature("org");
-  const hires = rolesLoaded && !chief;
-  const askLabel = chief ? `Ask @${chief.handle} to draft one` : hires ? "Hire a Chief of Staff to draft one" : "Ask the Chief of Staff to draft one";
+  const hires = rolesLoaded && !head;
+  const askLabel = head ? `Ask @${head.handle} to draft one` : hires ? "Hire a Head of People to draft one" : "Ask the Head of People to draft one";
   const AskIcon = hires ? UserRoundPlus : Sparkles;
   if (!filled && !opened) {
     return (
@@ -164,8 +164,8 @@ export function CharterBlock({ kind, title, charter, canEdit, onChange, roles, o
           href={composeCharterHref(title)}
           className="inline-flex items-center gap-1 font-medium hover:underline"
           style={{ color: "var(--sol-cyan)" }}
-          title={chief ? `Sends "draft a charter for ${title}" to @${chief.handle}` : hires ? "Opens the org page on hiring a Chief of Staff; the draft request follows the hire" : "Sends the draft request to the Chief of Staff"}
-          data-charter-ask={chief ? "ask" : hires ? "hire" : "unknown"}
+          title={head ? `Sends "draft a charter for ${title}" to @${head.handle}` : hires ? "Opens the org page on hiring a Head of People; the draft request follows the hire" : "Sends the draft request to the Head of People"}
+          data-charter-ask={head ? "ask" : hires ? "hire" : "unknown"}
         >
           <AskIcon className="w-3 h-3" /> {askLabel}
         </Link>)}

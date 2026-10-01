@@ -8,12 +8,13 @@
 // two per view queries: the board counts and the brief. Every edit is a store
 // action that moves the page in the same tick and rides dispatch to orgRoles.*.
 import { useCallback, useMemo, useRef, useState } from "react";
+import { useTourAutoStart } from "../../../tours/useTourAutoStart";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
-import { Archive, ArrowLeft, MoreHorizontal, Network, PanelRightClose, PanelRightOpen, Pause, Play } from "lucide-react";
+import { Archive, ArrowLeft, MoreHorizontal, Network, PanelRightClose, PanelRightOpen, Pause, Pin, PinOff, Play } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../ui/dropdown-menu";
 import { useInboxStore, useTrackedStore, type PlanItem, type ProjectItem } from "../../../store/inboxStore";
 import { useSyncOrgTree } from "../../../hooks/useSyncOrgTree";
@@ -43,7 +44,8 @@ import { ScopePanel } from "./ScopePanel";
 import { scopeDefaultTab, scopeTabFromParam, scopeWorkViewFromParam, type ScopeTabKey } from "../../../lib/scopeTabs";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../ui/dialog";
 import { RetireRoleConfirm } from "../RetireRoleConfirm";
-import { CHIEF_OF_STAFF_HANDLE } from "../orgStaffingTypes";
+import { isHeadOfPeopleRole, roleWords } from "../orgStaffingTypes";
+import { isHeaderPinned, toggleHeaderPin } from "../../../lib/headerPins";
 import { ConversationWithPanel } from "./ConversationWithPanel";
 import { usePanelLayout } from "../../../hooks/usePanelLayout";
 import { briefFirstLine } from "./scopeTypes";
@@ -72,6 +74,8 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
 
   const isRoot = id === "workspace";
   const { role, anchor } = useMemo(() => scopeSeatOf(tree, id), [tree, id]);
+  // A role's page introduces itself the first time one is opened (tours/).
+  useTourAutoStart("org-role", !!role && !!tree && !phone);
 
   const projects = useWorkspaceCollection<ProjectItem>("projects");
   const plans = useWorkspaceCollection<PlanItem>("plans");
@@ -124,7 +128,7 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
   // Pause and retire live in the header's menu and nowhere else; retire asks
   // first, in one dialog.
   const [retireOpen, setRetireOpen] = useState(false);
-  // S16: the chief's confirm says what becomes of its standing agent; keeping
+  // S16: the Head of People's confirm says what becomes of its standing agent; keeping
   // it restores its old title, so the person is never left without the
   // assistant they had.
   const retire = useCallback((standingSession?: "keep" | "retire") => {
@@ -231,7 +235,9 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
     );
   }
 
-  const name = role ? role.name : anchor?.name || tree.workspace.name || "Workspace";
+  const pinned = useInboxStore((st) => role ? isHeaderPinned(st, "role", role._id) : false);
+  const words = role ? roleWords(role, tree.workspace.kind === "team" ? tree.workspace.name : null) : null;
+  const name = words ? words.name : anchor?.name || tree.workspace.name || "Workspace";
   const handle = role ? role.handle : "workspace";
   const paused = role?.status === "paused";
   const noStanding = !standingId;
@@ -278,7 +284,7 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
       {/* header: one row. The face, the name, its state line, who it reports
           to; the rare controls (pause, retire) sit behind the menu, and the
           board is an icon. The composer below is Talk. */}
-      <header className={cn("scope-head-cq shrink-0 border-b", phone ? "px-2.5 py-1.5" : "px-4 py-2")} style={{ borderColor: "color-mix(in srgb, var(--sol-border) 22%, transparent)", background: stateMeta ? `linear-gradient(180deg, color-mix(in srgb, ${stateMeta.color} 5%, var(--sol-bg)) 0%, var(--sol-bg) 100%)` : undefined }}>
+      <header data-scope-head className={cn("scope-head-cq shrink-0 border-b", phone ? "px-2.5 py-1.5" : "px-4 py-2")} style={{ borderColor: "color-mix(in srgb, var(--sol-border) 22%, transparent)", background: stateMeta ? `linear-gradient(180deg, color-mix(in srgb, ${stateMeta.color} 5%, var(--sol-bg)) 0%, var(--sol-bg) 100%)` : undefined }}>
         <div className="flex items-center gap-2 min-w-0">
           {session?.onBack ? (
             <button type="button" onClick={session.onBack} className={HEAD_ICON} style={{ color: "var(--sol-text-muted)" }} aria-label="Back to the inbox" data-scope-back="inbox">
@@ -292,6 +298,7 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
           {/* The role's face (S13); the root workspace has none. */}
           {role && <RoleFace role={role} size={phone ? 24 : 28} className="shrink-0" />}
           <h1 className={cn("shrink-0 max-w-[40%] font-semibold tracking-tight leading-none truncate", phone ? "text-[15px]" : "text-[17px]")} style={{ fontFamily: "var(--font-serif)" }} title={`@${handle}`}>{name}</h1>
+          {words && <span className="shrink-0 whitespace-nowrap text-[11.5px]" style={{ color: "var(--sol-text-dim)" }} data-scope-title>{words.subtitle}</span>}
           {!role && <span className="shrink-0 inline-flex items-center gap-1 text-[11px]" style={{ color: "var(--sol-text-dim)" }}><Network className="w-3 h-3" /> whole workspace</span>}
           {stateMeta?.label && (
             <span className="shrink-0 whitespace-nowrap inline-flex items-center gap-1.5 h-[18px] px-1.5 rounded-md text-[10.5px] font-medium border" style={{ borderColor: `color-mix(in srgb, ${stateMeta.color} 45%, transparent)`, color: stateMeta.color }} data-scope-state={stateMeta.label}>
@@ -324,6 +331,10 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="min-w-[200px]">
+                <DropdownMenuItem onSelect={() => toggleHeaderPin("role", role._id)} data-scope-action="pin">
+                  {pinned ? <PinOff className="w-3.5 h-3.5" /> : <Pin className="w-3.5 h-3.5" />}
+                  <span>{pinned ? "Unpin from header" : "Pin to header"}</span>
+                </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => update({ status: paused ? "active" : "paused" })} data-scope-action="pause">
                   {paused ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
                   <span>{paused ? "Resume role" : "Pause role"}</span>
@@ -381,11 +392,11 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
 }
 
 /** What a role looks after, in words (org-staffing.md S26): its projects and
- *  plans; the whole workspace for the Chief of Staff while it names none; and
+ *  plans; the whole workspace for the Head of People while it names none; and
  *  for any other role with none, no area of its own. */
 function areaOf(role: OrgRole | null): { names: string[]; whole: boolean } {
   const names = role ? [...role.scope_names.projects.map((p) => p.title), ...role.scope_names.plans.map((p) => p.title)] : [];
-  return { names, whole: names.length === 0 && (!role || role.handle === CHIEF_OF_STAFF_HANDLE) };
+  return { names, whole: names.length === 0 && (!role || isHeadOfPeopleRole(role)) };
 }
 
 /** What retiring does, said once, where the person confirms it. */

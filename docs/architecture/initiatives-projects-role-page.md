@@ -61,8 +61,8 @@ health and target.
 project page shows the initiatives it belongs to under its lead. A role's
 scope view (R3) lists the initiatives its projects contribute to, and the
 initiatives it owns first. The task board gets an Initiative axis (through
-the task's project), and `cast task ls --initiative in-N`. The chief of
-staff's weekly review reads initiatives as the top of the tree: its letter
+the task's project), and `cast task ls --initiative in-N`. The head of
+people's weekly review reads initiatives as the top of the tree: its letter
 opens with how each active initiative is doing before it says anything about
 records. The CLI: `cast initiative create "Title" -d - [--owner @role|me]
 [--target 2026-12-01] [--project <id>...]`, `ls`, `show`, `update`,
@@ -205,3 +205,74 @@ trips. The initiative page reads its own creation row from the log and says
 initiative when the evidence shows one shared goal, an owner when an active
 initiative has none, both as changes, and apply nothing. The letter's goals
 paragraph is unchanged.
+
+## I4. The goal tree: parents, metrics, and the chain every role sees
+
+Written 2026-10-02 from the founder's four directions: initiatives are the
+goal tree the org plans against; each carries one or two numbers; everything
+feeds up to the top level goals and every role is told how; and the review
+reads what was said on calls, summarised or not.
+
+**The tree.** An initiative's `parent_initiative_id` (I1, one level) is the
+top level goal it feeds. The review proposes the tree: the `initiative`
+change gains `parent` (a ref, or the title of a goal set earlier in the same
+proposal; parents are listed before their children, since the apply order
+keeps the proposal's order within a kind) and `metrics`; a fourth goal kind,
+`initiative_shape: { initiative, parent?: ref | null, metrics?, title? }`,
+places a goal that exists in the tree and says how it is measured. Both
+apply through `performUpdateInitiative` and log as `initiative_shape` (its
+own inverse: the parent and the metrics restore as fields; the S21 round
+trip table carries it). `cast initiative create|set --parent` and
+`--metric "Name=target"` are the shell.
+
+**The numbers.** `initiatives.metrics` holds at most two
+`{ key, name, target }` (`INITIATIVE_METRICS_MAX`, the key a slug of the
+name, `metricKeyOf`). The values live in `initiatives.scoreboard` under the
+key, the template scoreboard's own shape, and are written by the one
+reporting path `cast org template report` uses: `recordScores`
+(shared/contracts/orgTemplateState) takes any declaring set of keys, so
+`cast initiative report in-N key=value --source <href> [--observed-at]`
+(`initiatives.report`, `/cli/initiatives/report`) refuses an undeclared key,
+an empty value and a source nobody can open the same way. Who may report is
+who may post an update: the owner, the owning role's standing session, or a
+workspace admin. A reported number is not an org change and writes no log
+row.
+
+**Read against the target.** `metricReading` (shared/contracts/initiative)
+reads a value against its target in the target's own direction ("1,000" is
+reached; "under 5%" is stayed below) and answers `met`, `behind` or
+`unknown`, with a progress fraction toward a reach target;
+`initiativeStanding` folds a goal's readings into one word (behind if any is,
+met only when every reported one is). `metricLine` is the sentence a role
+and a person both read ("Weekly active teams: 412 of 1,000, behind (3 days
+ago)"). The owner's `health` stays what they said; the standing is the
+target's, and every surface shows them side by side so they can disagree
+visibly: the initiative page's "Measured by" section (edit in place, the
+report command printed until a value lands, the chain under it), `cast
+initiative show` and `ls`, the health panel's area rows, and the review's
+`coverage.initiatives` (`metrics`, `standing`, `chain`).
+
+**The chain every role sees.** `lib/roleInitiatives.servedInitiatives` is
+the one reading of what an area feeds: the open initiatives a role owns,
+then the ones its projects carry, each with its readings and
+`initiativeChain` (nearest parent first, up to the top). The role card in
+every wake (`agentTasks.roleCardOf`, `RoleCard.initiatives`) carries them as
+`Serves:` lines (`roleCardInitiativeLine`, written and read by the one frame
+writer and reader in machineMessages), and the run block draws them under
+the card. `org.health` puts the same reading on each area row
+(`RoleArea.initiatives`), which the health panel draws as "Serves" under the
+goals. The review prompt says the tree is what the company plans against,
+that on track means against the target, that a number is proposed only
+where a person or a charter named it, and that a role serving no goal, or a
+goal no role carries, is a finding.
+
+**What a call said.** The review read ended calls only through their
+generated summary, so a huddle too short for one (`summary_status:
+"skipped"`, under forty words) or one whose summary failed reached it as
+silence. `readSaid` now reads such a call's own segments, bounded
+(`ANALYSIS_CAPS.calls_without_summary` calls, `call_segments` rows each,
+`call_lines` lines kept), joins one speaker's consecutive lines, keeps the
+lines that decide or ask (the chat rules, `DECIDED_RE` and `ASKED_RE`) and
+falls back to the first few when none does, as `lines` on the call beside
+`summary_status`. A summarised call carries no lines, and the whole block
+stays under the one `said_bytes` budget.

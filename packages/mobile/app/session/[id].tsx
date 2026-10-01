@@ -25,7 +25,7 @@ import { useComposerField, nativeComposerText } from '@/lib/composerField';
 import { NativePressable } from '@/lib/gestureHandler';
 import { isTrustedImageSrc } from '@/lib/convex';
 import { parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUnwrappedSessionReport, parseUserMessage, isScheduledTaskMessage, parseChatWakePrompt, chatWakePlace, chatWakeAction, parseHuddleSummaryTag, isToolResultCarrier, type ChatWakePrompt } from '@codecast/web/components/sessionMessage';
-import { buildNavigatorRows, sampleTicks, isStickyEligible, pickStickyFallbackFromLoaded, resolveStickyPrompt, countCommentsByMessage, type NavigatorRow } from '@codecast/web/lib/messageNavigator';
+import { buildNavigatorRows, sampleTicks, isStickyEligible, pickStickyFallback, resolveStickyPrompt, countCommentsByMessage, type NavigatorRow } from '@codecast/web/lib/messageNavigator';
 import { resolveSessionTitle } from '@codecast/web/lib/sessionTitle';
 import { isHiddenSystemNotice, isWarningSystemNotice } from '@codecast/web/lib/conversationProcessor';
 import { MessageNavigatorSheet } from '@/components/session/MessageNavigatorSheet';
@@ -48,6 +48,7 @@ import { EntityPill } from '@/components/EntityPill';
 import { CastCanvas, canvasAvailable, looksLikeHtmlMessage } from '@/components/CastCanvas';
 import { useSessionRestart, ghostRestartContextFor } from '@codecast/web/hooks/useSessionRestart';
 import { Theme, Spacing, chipShell, chipText, chipTint, CHROME_FONT_CAP, themedStyles, useTheme } from '@/constants/Theme';
+import { MOBILE_AGENT_LABEL, MOBILE_AGENT_TINT, MOBILE_COMPOSER_PLACEHOLDER, MOBILE_COMPOSER_STATUS, MOBILE_SESSION_HEADER_HEIGHT, MOBILE_PULSE, MOBILE_SESSION_STYLE as S, mobileRelativeTime } from '@codecast/shared/render/mobileSessionStyle';
 import {
   extractNestedActions,
   toolSummary,
@@ -64,6 +65,7 @@ import {
   isTodoTool,
   toolPathFromInput,
   toolIcon,
+  toolResultHint,
   type ToolColorToken,
 } from '@codecast/shared/render';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -428,23 +430,7 @@ function DiffBlock({ oldStr, newStr, filePath }: { oldStr: string; newStr: strin
 
 // --- Message components ---
 
-function formatRelativeTime(ts: number): string {
-  const now = Date.now();
-  const diff = now - ts;
-  const seconds = Math.floor(diff / 1000);
-  const minutes = Math.floor(seconds / 60);
-  const hours = Math.floor(minutes / 60);
-  const days = Math.floor(hours / 24);
-
-  if (seconds < 60) return 'just now';
-  if (minutes < 60) return `${minutes}m ago`;
-  if (hours < 24) return `${hours}h ago`;
-  if (days < 7) return `${days}d ago`;
-  return new Date(ts).toLocaleDateString([], {
-    month: 'short',
-    day: 'numeric',
-  });
-}
+const formatRelativeTime = (ts: number): string => mobileRelativeTime(ts);
 
 function formatTimestamp(ts: number): string {
   return new Date(ts).toLocaleDateString([], {
@@ -482,22 +468,12 @@ function formatModel(model?: string): string {
 
 function formatAgentType(agentType?: string): string {
   if (!agentType) return 'Unknown';
-  if (agentType === 'claude_code') return 'Claude';
-  if (agentType === 'codex') return 'Codex';
-  if (agentType === 'cursor') return 'Cursor';
-  if (agentType === 'gemini') return 'Gemini';
-  if (agentType === 'opencode') return 'OpenCode';
-  if (agentType === 'pi') return 'pi';
-  if (agentType === 'grok') return 'Grok';
-  return agentType.charAt(0).toUpperCase() + agentType.slice(1);
+  return MOBILE_AGENT_LABEL[agentType] ?? agentType.charAt(0).toUpperCase() + agentType.slice(1);
 }
 
 function agentTypeColor(agentType?: string): string {
-  if (agentType === 'codex') return '#10b981';
-  if (agentType === 'cursor') return '#60a5fa';
-  if (agentType === 'gemini') return '#1a73e8';
-  if (agentType === 'opencode') return '#f97316';
-  if (agentType === 'pi') return '#14b8a6';
+  const tint = agentType ? MOBILE_AGENT_TINT[agentType] : undefined;
+  if (tint) return tint;
   if (agentType === 'grok') return Theme.text;
   return Theme.accent;
 }
@@ -2089,36 +2065,8 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
   const isEdit = isEditTool(toolCall.name) || toolCall.name === 'apply_patch';
   const isWrite = isWriteTool(toolCall.name);
 
-  // Compute result summary like web does
-  const getResultSummary = () => {
-    if (!result) return null;
-    if (result.is_error) return '(error)';
-    const isEditOrWrite = isEditTool(toolCall.name) || isWriteTool(toolCall.name) || toolCall.name === 'apply_patch';
-    const isGlobGrep = isGlobTool(toolCall.name) || isGrepTool(toolCall.name) || toolCall.name === 'code_search' || toolCall.name === 'code_analysis';
-    if (isEditOrWrite) {
-      const match = result.content.match(/with (\d+) additions? and (\d+) removals?/);
-      if (match) return `(+${match[1]} -${match[2]})`;
-      return result.content.includes('has been updated') ? '(ok)' : '';
-    }
-    if (isRead) {
-      const lines = result.content.split('\n').length;
-      return `(${lines} lines)`;
-    }
-    if (isGlobGrep) {
-      const lines = result.content.trim().split('\n').filter((l: string) => l.trim()).length;
-      return `(${lines} matches)`;
-    }
-    if (isBash && result.content) {
-      const lines = result.content.trim().split('\n').length;
-      if (lines > 1) return `(${lines} lines)`;
-    }
-    if (toolCall.name === 'TaskList') {
-      const taskLines = result.content.split('\n').filter((l: string) => l.match(/#\d+\s+\[/));
-      if (taskLines.length > 0) return `(${taskLines.length} tasks)`;
-    }
-    return null;
-  };
-  const resultSummary = getResultSummary();
+  // How the call came out, the shared hint the web's phone view reads too.
+  const resultSummary = toolResultHint(toolCall, result);
 
   let parsedInput: Record<string, any> = {};
   try { parsedInput = JSON.parse(toolCall.input); } catch {}
@@ -2455,13 +2403,7 @@ function SystemMessage({ message }: { message: Message }) {
 }
 
 function assistantLabel(agentType?: string): string {
-  if (agentType === 'codex') return 'Codex';
-  if (agentType === 'cursor') return 'Cursor';
-  if (agentType === 'gemini') return 'Gemini';
-  if (agentType === 'opencode') return 'OpenCode';
-  if (agentType === 'pi') return 'pi';
-  if (agentType === 'grok') return 'Grok';
-  return 'Claude';
+  return (agentType && MOBILE_AGENT_LABEL[agentType]) || 'Claude';
 }
 
 function formatTokenCount(n: number): string {
@@ -3051,20 +2993,9 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
 
 // --- Message input ---
 
-// Agent statuses surfaced in the composer, with their tint and label. Statuses
-// not listed here (idle, disconnected) render nothing.
-const AGENT_STATUS_META: Record<string, { color: string; label: string }> = {
-  working: { color: Theme.greenBright, label: 'Working' },
-  thinking: { color: Theme.violet, label: 'Thinking' },
-  compacting: { color: '#f59e0b', label: 'Compacting' },
-  // Both settle verdicts that park the session on a machine wake read as one
-  // word, matching the inbox's Dormant section: "waiting" is the daemon's
-  // inference from open background work, "dormant" the agent's declaration.
-  waiting: { color: Theme.blue, label: 'Dormant' },
-  dormant: { color: Theme.blue, label: 'Dormant' },
-  permission_blocked: { color: Theme.orange, label: 'Needs Input' },
-  connected: { color: Theme.cyan, label: 'Connected' },
-};
+// Agent statuses surfaced in the composer, with their tint and label (the
+// shared spec, which the web's phone views read too).
+const AGENT_STATUS_META = MOBILE_COMPOSER_STATUS;
 
 function seedComposerDraft(conversationId: string, draftProp?: string | null): string {
   const store = useInboxStore.getState();
@@ -3357,7 +3288,7 @@ function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversa
     </RNView>
   );
 
-  const placeholder = isActive ? "Type a message..." : "Send to resume session...";
+  const placeholder = isActive ? MOBILE_COMPOSER_PLACEHOLDER.active : MOBILE_COMPOSER_PLACEHOLDER.idle;
 
   // Suggestion pills (off-by-default pref, same stamped key as web). Idle =
   // the agent is not actively producing; a pill tap sends its text directly
@@ -3518,7 +3449,7 @@ const DESIGN_MOCK_CONVO: ConversationData = {
 
 // Height of the compact custom title bar (back + title + actions), below the
 // safe-area inset. The collapsing metadata strip is positioned just under it.
-const HEADER_BAR_HEIGHT = 40;
+const HEADER_BAR_HEIGHT = MOBILE_SESSION_HEADER_HEIGHT;
 
 // Android IME inset, driven straight from the keyboard events. KAV's Android
 // path can't be trusted for this: it never resets to 0 from a hide event —
@@ -4212,12 +4143,13 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   const stickyIndicesRef = useRef(stickyIndices);
   stickyIndicesRef.current = stickyIndices;
 
-  // The latest prompt ABOVE the loaded window, for when the reader scrolled
-  // past every loaded prompt (web's serverStickyFallback).
-  const stickyFallback = useMemo(() => {
-    if (!hasMoreAbove) return null;
-    return pickStickyFallbackFromLoaded(navSourceMessages, allMessages);
-  }, [hasMoreAbove, allMessages, navSourceMessages]);
+  // The full prompt list and the ids the window holds: a prompt the window
+  // does not hold can still be the one above the reader (pickStickyFallback).
+  const navSourceRef = useRef(navSourceMessages);
+  navSourceRef.current = navSourceMessages;
+  const loadedIds = useMemo(() => new Set(allMessages.map(m => m._id)), [allMessages]);
+  const loadedIdsRef = useRef(loadedIds);
+  loadedIdsRef.current = loadedIds;
 
   // Viewability drives the active sticky prompt. The handler and its config
   // must keep ONE identity for the FlatList's lifetime, so the handler reads
@@ -4249,7 +4181,11 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     const resolved = topVisibleIndex >= 0
       ? resolveStickyPrompt(stickyIndicesRef.current, topVisibleIndex, visibleOriginal)
       : null;
-    const next = resolved ? { id: msgs[resolved.index]._id, hidden: resolved.hidden } : null;
+    // Before the first viewability event, the window's first row stands in
+    // for the top visible one.
+    const topTs = msgs[Math.max(topVisibleIndex, 0)]?.timestamp ?? Infinity;
+    const above = pickStickyFallback(navSourceRef.current, loadedIdsRef.current, topTs, resolved ? msgs[resolved.index].timestamp : -Infinity);
+    const next = above ? { id: above.id, hidden: false } : resolved ? { id: msgs[resolved.index]._id, hidden: resolved.hidden } : null;
     const prev = stickyActiveRef.current;
     if (prev?.id === next?.id && prev?.hidden === next?.hidden) return;
     stickyActiveRef.current = next;
@@ -4268,11 +4204,10 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   // the array identity changes.
   useEffect(() => {
     resolveStickyFromViewable();
-  }, [allMessages, resolveStickyFromViewable]);
+  }, [allMessages, navSourceMessages, resolveStickyFromViewable]);
 
-  // Active prompt: the resolution inside the window when one lands, else the prompt
-  // above the loaded window. Also the navigator's current row.
-  const activeStickyId = stickyActive?.id ?? stickyFallback?.id ?? null;
+  // Active prompt, also the navigator's current row.
+  const activeStickyId = stickyActive?.id ?? null;
 
   const stickyPrompt = useMemo<StickyPrompt | null>(() => {
     // Mid jump the window is reloading and activeStickyId churns; the claim
@@ -4434,6 +4369,8 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     isLive: !!isActive,
     ghostContext: restartGhostContext,
     notify: restartNotify,
+    // The phone has no dispatch-failure toast; say a refused restart here.
+    onRefused: showToast,
   });
 
   const handleMoreActions = useCallback(() => {
@@ -4735,8 +4672,8 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     if (isActive) {
       const pulse = Animated.loop(
         Animated.sequence([
-          Animated.timing(activePulse, { toValue: 0.3, duration: 1000, useNativeDriver: true }),
-          Animated.timing(activePulse, { toValue: 1, duration: 1000, useNativeDriver: true }),
+          Animated.timing(activePulse, { toValue: MOBILE_PULSE.live.low, duration: MOBILE_PULSE.live.leg, useNativeDriver: true }),
+          Animated.timing(activePulse, { toValue: 1, duration: MOBILE_PULSE.live.leg, useNativeDriver: true }),
         ])
       );
       pulse.start();
@@ -5525,28 +5462,18 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   // Pinned compact title bar (back + title + actions). Sits above the
   // collapsing metadata strip and stays put while it scrolls away.
   pinnedHeader: {
+    ...S.pinnedHeader,
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
     zIndex: 70,
     backgroundColor: Theme.bgAlt,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 6,
-    gap: 2,
   },
-  headerIconBtn: {
-    width: 34,
-    height: 34,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
+  headerIconBtn: S.headerIconBtn,
   headerFace: { marginRight: 8 },
   headerTitleText: {
-    flex: 1,
-    fontSize: 15,
-    fontWeight: '600',
+    ...S.headerTitleText,
     color: Theme.text,
   },
   floatingSessionHeader: {
@@ -5558,19 +5485,12 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     backgroundColor: Theme.bgAlt,
   },
   floatingSessionCard: {
+    ...S.floatingSessionCard,
     backgroundColor: Theme.bgAlt,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Theme.borderLight,
-    paddingHorizontal: 12,
-    paddingVertical: 4,
   },
-  sessionMeta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    flexWrap: 'nowrap',
-    paddingRight: 8,
-  },
+  sessionMeta: S.sessionMeta,
   metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -5580,40 +5500,26 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   metaChipText: chipText,
   metaBadge: chipText,
   messageCountText: {
-    fontSize: 11,
+    ...S.messageCountText,
     color: Theme.textMuted,
-    fontWeight: '500',
-    letterSpacing: 0.2,
   },
   activeDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
+    ...S.dot,
     backgroundColor: Theme.greenBright,
     shadowColor: Theme.greenBright,
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.8,
     shadowRadius: 4,
   },
-  messageList: {
-    padding: 16,
-  },
+  messageList: S.messageList,
   permissionsContainer: {
     marginBottom: 16,
   },
-  messageBubble: {
-    marginBottom: 2,
-    borderRadius: 12,
-    overflow: 'hidden',
-  },
+  messageBubble: S.messageBubble,
   userBubble: {
+    ...S.userBubble,
     backgroundColor: Theme.userBubble + '26',
-    borderWidth: 1,
     borderColor: Theme.userBubble + '66',
-    alignSelf: 'stretch',
-    maxWidth: '100%',
-    marginTop: 12,
-    marginBottom: 4,
   },
   assistantBubble: {
     backgroundColor: 'transparent',
@@ -5622,41 +5528,23 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     // screens (tablets) the expanded tool/diff card squeezed to header width.
     alignSelf: 'stretch',
   },
-  assistantBubbleFirst: {
-    marginTop: 8,
-  },
-  bubbleHeader: {
-    flexDirection: 'row',
-    justifyContent: 'flex-start',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 14,
-    paddingTop: 10,
-    paddingBottom: 4,
-  },
-  bubbleRole: {
-    fontSize: 12,
-    fontWeight: '500',
-  },
+  assistantBubbleFirst: S.assistantBubbleFirst,
+  bubbleHeader: S.bubbleHeader,
+  bubbleRole: S.bubbleRole,
   userRole: {
     color: Theme.userBubble,
   },
   assistantRole: {
     color: Theme.textMuted0,
   },
-  bubbleTime: {
-    fontSize: 11,
-  },
+  bubbleTime: S.bubbleTime,
   userTime: {
     color: Theme.textDim,
   },
   assistantTime: {
     color: Theme.textDim,
   },
-  bubbleContent: {
-    paddingHorizontal: 14,
-    paddingBottom: 10,
-  },
+  bubbleContent: S.bubbleContent,
   bubbleContentCollapsed: {
     maxHeight: 300,
     overflow: 'hidden',
@@ -5673,10 +5561,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     fontWeight: '500',
     color: Theme.cyan,
   },
-  bubbleText: {
-    fontSize: 14,
-    lineHeight: 20,
-  },
+  bubbleText: S.bubbleText,
   userText: {
     color: Theme.text,
   },
@@ -5810,38 +5695,24 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     fontFamily: 'SpaceMono',
     flex: 1,
   },
-  toolCallOnlyBubble: {
-    marginBottom: 1,
-  },
-  toolCallsCompact: {
-    paddingHorizontal: 14,
-    paddingVertical: 2,
-    gap: 1,
-  },
-  toolCallsContainer: {
-    paddingHorizontal: 14,
-    paddingBottom: 8,
-    gap: 2,
-  },
+  toolCallOnlyBubble: S.toolCallOnlyBubble,
+  toolCallsCompact: S.toolCallsCompact,
+  toolCallsContainer: S.toolCallsContainer,
   toolCallContainer: {
     marginVertical: 0,
   },
-  toolCallHeader: {
-    fontSize: 12,
-    lineHeight: 18,
-  },
+  toolCallHeader: S.toolCallHeader,
   toolCallName: {
-    fontSize: 12,
-    fontWeight: '600',
+    ...S.toolCallName,
     fontFamily: 'SpaceMono',
   },
   toolCallSummary: {
-    fontSize: 12,
+    ...S.toolCallSummary,
     color: Theme.textMuted,
     fontFamily: 'SpaceMono',
   },
   toolCallResultHint: {
-    fontSize: 11,
+    ...S.toolCallResultHint,
     color: Theme.textDim,
     fontFamily: 'SpaceMono',
   },
@@ -5954,48 +5825,23 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     backgroundColor: Theme.bg,
     borderRadius: 10,
   },
-  imageButton: {
-    width: 32,
-    height: 32,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
+  imageButton: S.imageButton,
   // One rounded card: full-width input on top, action row underneath. Buttons
   // living below the text (not beside it) is what gives the input the whole
   // screen width, matching the web/reference composer.
   composerCard: {
-    marginHorizontal: 10,
-    marginTop: 6,
+    ...S.composerCard,
     backgroundColor: Theme.bg,
-    borderRadius: 20,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Theme.borderLight,
   },
-  composerActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 8,
-    paddingBottom: 8,
-    paddingTop: 2,
-  },
-  composerSpacer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  composerStatus: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
+  composerActions: S.composerActions,
+  composerSpacer: S.composerSpacer,
+  composerStatus: S.composerStatus,
   composerStatusText: chipText,
   textInput: {
-    paddingHorizontal: 14,
-    paddingTop: 10,
-    paddingBottom: 4,
+    ...S.textInput,
     color: Theme.text,
-    fontSize: 15,
-    minHeight: 38,
     // maxHeight is set inline from the window height (grows to ~1/3 screen).
   },
   // Keeps wrapped text clear of the floating expand button in the top-right.
@@ -6045,13 +5891,8 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     textAlignVertical: 'top',
   },
   sendButton: {
+    ...S.sendButton,
     backgroundColor: Theme.blue,
-    minWidth: 44,
-    height: 44,
-    borderRadius: 22,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 12,
   },
   sendButtonDisabled: {
     backgroundColor: Theme.bgHighlight,
@@ -6760,20 +6601,14 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     fontWeight: '500',
   },
   // Agent dot
-  agentDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    marginRight: 4,
-  },
+  agentDot: S.agentDot,
   // Table
   // Code copy button
   // Model badge in header
   modelBadge: {
-    fontSize: 9,
+    ...S.modelBadge,
     color: Theme.textDim,
     fontFamily: 'SpaceMono',
-    marginLeft: 4,
   },
   // Commit cards
   commitCard: {
@@ -6835,17 +6670,11 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   // Thinking label
   // User avatar
   userAvatar: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
+    ...S.userAvatar,
     backgroundColor: Theme.userBubble + '40',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 4,
   },
   userAvatarText: {
-    fontSize: 10,
-    fontWeight: '700',
+    ...S.userAvatarText,
     color: Theme.userBubble,
   },
   // Skeleton loading
@@ -6945,11 +6774,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     right: 0,
     height: 80,
   },
-  metaBadgeIcon: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
+  metaBadgeIcon: S.metaBadgeIcon,
   planFullscreen: {
     flex: 1,
     backgroundColor: Theme.bg,

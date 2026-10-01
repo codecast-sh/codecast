@@ -51,7 +51,9 @@ const DEFINE_CAST_PLAYER = String.raw`function (opts) {
   var CSS = [
     ":host{--accent:var(--cast-accent,#2aa198);--fg:var(--cast-fg,#fff);--bg:var(--cast-bg,#0c0b10);--panel:var(--cast-panel,rgba(18,15,22,.72));--track:var(--cast-track,rgba(255,255,255,.26));--radius:var(--cast-radius,14px);display:block;position:relative;aspect-ratio:var(--cast-aspect,16/9);background:var(--bg);border-radius:var(--radius);overflow:hidden;color:var(--fg);font-family:var(--cast-font,inherit);-webkit-tap-highlight-color:transparent;outline:none;user-select:none;-webkit-user-select:none;isolation:isolate}",
     ":host(:focus-visible){box-shadow:0 0 0 3px var(--accent)}",
-    ":host([data-theater]){position:fixed;inset:0;z-index:2147483000;border-radius:0;aspect-ratio:auto}",
+    // Theater sits in the top layer (a popover), so a transformed or clipping
+    // ancestor cannot trap it; !important beats the inline box upgrade() copies.
+    ":host([data-theater]){position:fixed!important;inset:0!important;width:auto!important;height:auto!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;border:0!important;z-index:2147483000;border-radius:0;aspect-ratio:auto}",
     ":host([data-idle]){cursor:none}",
     "video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:var(--bg)}",
     "video.off{visibility:hidden}",
@@ -59,7 +61,6 @@ const DEFINE_CAST_PLAYER = String.raw`function (opts) {
     ":host([data-started]) .poster{opacity:0;pointer-events:none}",
     ".shade{position:absolute;left:0;right:0;bottom:0;height:34%;background:linear-gradient(to top,rgba(0,0,0,.55),rgba(0,0,0,.16) 60%,rgba(0,0,0,0));pointer-events:none;transition:opacity .4s ease}",
     ".big{position:absolute;left:50%;top:50%;width:92px;height:92px;margin:-46px 0 0 -46px;border-radius:50%;border:0;background:var(--panel);color:var(--fg);display:grid;place-items:center;cursor:pointer;-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);box-shadow:0 12px 44px rgba(0,0,0,.38),inset 0 0 0 1px rgba(255,255,255,.14);transition:transform .3s cubic-bezier(.2,.9,.3,1.35),opacity .3s ease,background .2s ease}",
-    ".big:hover{transform:scale(1.07);background:var(--accent)}",
     ".big svg{width:40px;height:40px}",
     ".big.play svg{margin-left:5px}",
     ":host([data-playing]) .big{opacity:0;transform:scale(.8);pointer-events:none}",
@@ -70,21 +71,20 @@ const DEFINE_CAST_PLAYER = String.raw`function (opts) {
     ":host(:not([data-started])) .shade{opacity:.6}",
     ".scrub{position:relative;height:24px;display:flex;align-items:center;gap:3px;cursor:pointer;touch-action:none}",
     ".seg{position:relative;flex:1 1 0;height:4px;border-radius:3px;background:var(--track);overflow:hidden;transition:height .16s ease}",
-    ".scrub:hover .seg,:host([data-drag]) .seg{height:6px}",
+    ":host([data-drag]) .seg{height:6px}",
     ".seg.hot{height:9px!important}",
     ".seg i{position:absolute;left:0;top:0;bottom:0;width:0}",
     ".seg .buf{background:rgba(255,255,255,.3)}",
     ".seg .fill{background:var(--accent)}",
     ".knob{position:absolute;top:50%;left:0;width:14px;height:14px;margin:-7px 0 0 -7px;border-radius:50%;background:var(--fg);box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 50%,transparent),0 2px 8px rgba(0,0,0,.4);transform:scale(0);transition:transform .16s ease;pointer-events:none}",
-    ".scrub:hover .knob,:host([data-drag]) .knob{transform:scale(1)}",
+    ":host([data-drag]) .knob{transform:scale(1)}",
     ".tip{position:absolute;bottom:32px;left:0;transform:translateX(-50%);background:var(--panel);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);padding:7px 11px;border-radius:10px;white-space:nowrap;pointer-events:none;opacity:0;transition:opacity .15s ease;box-shadow:0 6px 20px rgba(0,0,0,.3)}",
     ".tip b{display:block;font-weight:700;font-size:13px;line-height:1.3}",
     ".tip span{opacity:.75;font-variant-numeric:tabular-nums;font-size:12px}",
-    ".scrub:hover .tip,:host([data-drag]) .tip{opacity:1}",
+    ":host([data-drag]) .tip{opacity:1}",
     ".row{display:flex;align-items:center;gap:4px;margin-top:2px}",
     "button{font:inherit}",
     "button.ic{flex:none;width:40px;height:40px;border:0;border-radius:11px;background:transparent;color:var(--fg);display:grid;place-items:center;cursor:pointer;transition:background .15s ease,transform .15s ease}",
-    "button.ic:hover{background:rgba(255,255,255,.14)}",
     "button.ic:active{transform:scale(.92)}",
     "button.ic svg{width:22px;height:22px}",
     "button.ic.on{color:var(--accent)}",
@@ -98,7 +98,6 @@ const DEFINE_CAST_PLAYER = String.raw`function (opts) {
     ".menu{position:absolute;right:14px;bottom:78px;width:min(360px,calc(100% - 28px));max-height:calc(100% - 104px);overflow:auto;background:var(--panel);-webkit-backdrop-filter:blur(18px);backdrop-filter:blur(18px);border-radius:16px;padding:6px;opacity:0;transform:translateY(10px) scale(.98);transform-origin:bottom right;pointer-events:none;transition:opacity .22s ease,transform .22s ease;box-shadow:0 18px 48px rgba(0,0,0,.4),inset 0 0 0 1px rgba(255,255,255,.1)}",
     ":host([data-menu]) .menu{opacity:1;transform:none;pointer-events:auto}",
     ".menu button{display:flex;gap:12px;align-items:baseline;width:100%;text-align:left;border:0;background:transparent;color:var(--fg);font-size:14px;line-height:1.35;padding:9px 11px;border-radius:10px;cursor:pointer}",
-    ".menu button:hover{background:rgba(255,255,255,.1)}",
     ".menu button.on{background:color-mix(in srgb,var(--accent) 34%,transparent)}",
     ".menu em{flex:none;font-style:normal;font-variant-numeric:tabular-nums;opacity:.62;font-size:12px;min-width:40px}",
     ".toast{position:absolute;left:20px;top:18px;max-width:calc(100% - 40px);background:var(--panel);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);padding:9px 15px;border-radius:12px;font-size:15px;font-weight:700;opacity:0;transform:translateY(-8px);transition:opacity .4s ease,transform .4s ease;pointer-events:none;box-shadow:0 8px 24px rgba(0,0,0,.3)}",
@@ -109,7 +108,9 @@ const DEFINE_CAST_PLAYER = String.raw`function (opts) {
     "@keyframes cast-spin{to{transform:rotate(360deg)}}",
     ".err{position:absolute;inset:0;display:none;place-items:center;text-align:center;padding:24px;font-size:15px;background:var(--bg)}",
     ":host([data-error]) .err{display:grid}",
-    "@media (max-width:600px){.title{font-size:13px}.time{font-size:12px;margin:0 4px}.rate,.volwrap,.skip{display:none}.big{width:72px;height:72px;margin:-36px 0 0 -36px}}",
+    // A tap leaves :hover stuck on touch screens, so hover looks only apply where a pointer hovers.
+    "@media (hover:hover){.big:hover{transform:scale(1.07);background:var(--accent)}.scrub:hover .seg{height:6px}.scrub:hover .knob{transform:scale(1)}.scrub:hover .tip{opacity:1}button.ic:hover{background:rgba(255,255,255,.14)}.menu button:hover{background:rgba(255,255,255,.1)}}",
+    "@media (max-width:600px){.title{font-size:13px}.time{font-size:12px;margin:0 4px}button.rate,button.skip,.volwrap{display:none}.big{width:72px;height:72px;margin:-36px 0 0 -36px}}",
     "@media (prefers-reduced-motion:reduce){*{transition:none!important;animation-duration:2s!important}}"
   ].join("");
 
@@ -177,7 +178,7 @@ const DEFINE_CAST_PLAYER = String.raw`function (opts) {
     else $(".poster").remove();
 
     [this.v, this.w].forEach(function (vid) {
-      vid.addEventListener("timeupdate", function (e) { if (e.target === self.v) self._sync(); });
+      vid.addEventListener("timeupdate", function (e) { if (e.target === self.v) { self._sync(); self._nativeHandoff(); } });
       vid.addEventListener("progress", function (e) { if (e.target === self.v) self._sync(); });
       vid.addEventListener("ended", function (e) { if (e.target === self.v) self._ended(); });
       vid.addEventListener("waiting", function (e) { if (e.target === self.v) self.setAttribute("data-wait", ""); });
@@ -284,7 +285,10 @@ const DEFINE_CAST_PLAYER = String.raw`function (opts) {
     var self = this, c = this.ch[k];
     if (!c) return;
     var changed = k !== this.i;
-    if (this.w.dataset.k === String(k) && this.w.getAttribute("src")) {
+    // iPhone fullscreen belongs to one <video>, so that element plays every chapter.
+    if (this.v.webkitDisplayingFullscreen) {
+      if (this.v.dataset.k !== String(k)) { this.v.src = c.src; this.v.dataset.k = String(k); }
+    } else if (this.w.dataset.k === String(k) && this.w.getAttribute("src")) {
       var old = this.v; this.v = this.w; this.w = old;
       this.v.classList.remove("off"); this.w.classList.add("off");
       this.w.pause();
@@ -312,6 +316,12 @@ const DEFINE_CAST_PLAYER = String.raw`function (opts) {
     this._sync();
   };
 
+  // iPhone closes its fullscreen player when a video ends, so the next chapter
+  // takes over a moment early while it is open.
+  P._nativeHandoff = function () {
+    var v = this.v;
+    if (v.webkitDisplayingFullscreen && !v.paused && v.duration && v.duration - v.currentTime < 0.35 && this.i + 1 < this.ch.length) this._load(this.i + 1, 0, true);
+  };
   P._ended = function () {
     if (this.i + 1 < this.ch.length) { this._load(this.i + 1, 0, true); return; }
     this.setAttribute("data-ended", "");
@@ -347,13 +357,23 @@ const DEFINE_CAST_PLAYER = String.raw`function (opts) {
   P.toggleFullscreen = function () {
     var fsEl = document.fullscreenElement || document.webkitFullscreenElement;
     if (fsEl) { (document.exitFullscreen || document.webkitExitFullscreen).call(document); return; }
-    if (this.hasAttribute("data-theater")) { this.removeAttribute("data-theater"); this._fsIcon(); return; }
+    if (this.hasAttribute("data-theater")) {
+      if (this.hidePopover && this.hasAttribute("popover")) { try { this.hidePopover(); } catch (e) {} this.removeAttribute("popover"); }
+      this.removeAttribute("data-theater"); this._fsIcon(); return;
+    }
     var req = this.requestFullscreen || this.webkitRequestFullscreen;
     var enabled = document.fullscreenEnabled || document.webkitFullscreenEnabled;
     var self = this;
-    // A frame without allow="fullscreen" refuses; fill the frame instead.
-    var theater = function () { self.setAttribute("data-theater", ""); self._fsIcon(); };
-    if (!req || !enabled) { theater(); return; }
+    // A frame without allow="fullscreen" refuses; fill the window instead.
+    var theater = function () {
+      if (self.showPopover) { self.popover = "manual"; try { self.showPopover(); } catch (e) {} }
+      self.setAttribute("data-theater", ""); self._fsIcon();
+    };
+    if (!req || !enabled) {
+      // An iPhone fullscreens only a <video>, in its own player.
+      if (this.v.webkitEnterFullscreen && this.v.readyState >= 1) { try { this.v.webkitEnterFullscreen(); return; } catch (e) {} }
+      theater(); return;
+    }
     try { var p = req.call(this); if (p && p.catch) p.catch(theater); } catch (e) { theater(); }
   };
   P._fsIcon = function () {

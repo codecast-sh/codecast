@@ -40,7 +40,7 @@ export function SessionIdentityLine({
   // The name never shrinks while the title has room to give (any shrink, even
   // a subpixel, shows the ellipsis), but a name longer than the whole line
   // ellipsizes instead of painting under the chips after it, the handle giving
-  // way before the name. The cap leaves the colon room.
+  // way before the name. The cap leaves the separator room.
   const whoClass = "inline-flex min-w-0 max-w-[calc(100%-1.5rem)] flex-shrink-0 items-center gap-1.5";
   return (
     // data-sv-title marks the row's title line for the minimal style's type
@@ -50,7 +50,7 @@ export function SessionIdentityLine({
       {id.kind === "role"
         ? <RoleHoverCard role={id.role} side="bottom" triggerClassName={whoClass}>{who}</RoleHoverCard>
         : (line.name || line.handle) && <span className={whoClass}>{who}</span>}
-      {line.name && line.title && <span aria-hidden className="flex-shrink-0 text-sol-text-dim/60">:</span>}
+      {line.name && line.title && <span aria-hidden className="flex-shrink-0 text-sol-text-dim/60">·</span>}
       {line.title && (
         <span className={`min-w-0 truncate ${line.name ? "text-sol-text-dim" : "text-sol-text"} ${titleClassName ?? ""}`}>
           {line.title}
