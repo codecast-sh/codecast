@@ -13,6 +13,8 @@
  * 32-char ids: their table was simply never registered here.
  */
 
+import { isPrivateHost } from "../contracts/browserPaneOffer";
+
 export type EntityType = "task" | "plan" | "session" | "doc" | "project" | "initiative" | "proposal" | "trigger" | "decision" | "pr" | "commit";
 
 /** The public web origin that serves codecast object pages. */
@@ -722,6 +724,38 @@ export function parseClaudeArtifactUrl(href: string | undefined | null): { id: s
 
 export function claudeArtifactUrl(id: string): string {
   return `https://claude.ai/public/artifacts/${id}`;
+}
+
+// ---------------------------------------------------------------------------
+// Web links
+//
+// A link to anywhere else on the web previews the way Slack unfurls one: the
+// page's own meta tags (title, description, image) drawn as a card when the
+// link stands alone on its line.
+// ---------------------------------------------------------------------------
+
+/**
+ * The URL a web link previews as, or null when it is not a public page: our
+ * own hosts, codecast objects (GitHub pull requests and commits included),
+ * published pages and Claude artifacts (each has its own card), private or
+ * bare hosts, IP literals, and every scheme but http(s). Message markdown,
+ * the server that reads the meta tags, and Slack mirroring all ask this one
+ * question.
+ */
+export function parseLinkPreviewUrl(href: string | undefined | null): string | null {
+  if (!href || typeof href !== "string" || !/^https?:\/\//i.test(href.trim())) return null;
+  let u: URL;
+  try {
+    u = new URL(href.trim());
+  } catch {
+    return null;
+  }
+  const host = u.hostname.toLowerCase();
+  if (!host || host.startsWith("[") || /^\d+\.\d+\.\d+\.\d+$/.test(host) || isPrivateHost(host)) return null;
+  if (u.username || u.password) return null;
+  if (isAppHost(u.host) || parseEntityUrl(u.href) || parseClaudeArtifactUrl(u.href)) return null;
+  u.hash = "";
+  return u.href;
 }
 
 /**

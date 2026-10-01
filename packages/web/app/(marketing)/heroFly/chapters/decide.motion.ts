@@ -14,9 +14,9 @@ export const DECIDE_AT = {
   /** The tap lands; the card records the answer a moment later. */
   tap: CUES.decisionAnswered - 0.15,
   answered: CUES.decisionAnswered + 0.1,
-  /** The answered card clears off the conversation it covered. */
-  cleared: 39.25,
-  gone: 39.8,
+  /** The answered card reads for a beat, then clears off the conversation it covered. */
+  cleared: 40.75,
+  gone: 41.3,
 } as const;
 
 export const motion: ChapterMotion = {
@@ -26,7 +26,10 @@ export const motion: ChapterMotion = {
       { id: "decide.card", cue: DECIDE_AT.cleared, preset: "liftOut", dur: 0.5, y: -20, z: 90 },
       { id: "decide.card", cue: DECIDE_AT.cleared, preset: "fadeOut", dur: 0.45 },
       { id: "decide.tap", cue: DECIDE_AT.tap, preset: "ring", dur: 0.6 },
-      { id: "decide.answer", cue: DECIDE_AT.answered, preset: "popIn", dur: 0.4, s: 0.94 },
+      // The answered card fades in over the pending one, and the recorded answer gives one beat.
+      { id: "decide.answered", cue: DECIDE_AT.tap, preset: "fadeIn", dur: 0.25 },
+      { id: "decide.pending", cue: DECIDE_AT.tap + 0.2, preset: "fadeOut", dur: 0.3 },
+      { id: "decide.answer", cue: DECIDE_AT.answered, preset: "pulse", s: 0.03, dur: 0.35 },
     ],
   },
 };

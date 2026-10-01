@@ -55,10 +55,8 @@ export interface CloudAgentWatcherOptions {
   /** Import every agent on the account (the account's sync setting). Off,
    *  only the agents codecast started (and their children) are mirrored. */
   importAll?: () => boolean;
-  /** Whether codecast started this agent. */
-  isOwnAgent?: (agentId: string) => boolean;
-  /** Whether codecast started any agent: with importAll off and none, a pass reads nothing and is skipped. */
-  hasOwnAgents?: () => boolean;
+  /** The agents codecast started: with importAll off, the only ones listed (none: a pass reads nothing and is skipped). */
+  ownAgents?: () => ReadonlySet<string>;
   /** This machine's checkout of the repository an agent works on (where its session is placed), or null. */
   resolveRepoDir?: (repo: { owner: string; name: string }, agentId?: string) => Promise<string | null>;
   now?: () => number;
@@ -77,6 +75,8 @@ interface AgentState {
   git?: CloudAgentGit | null;
   /** Running when last mirrored: mirrored by id until it settles, even once the list stops showing it. */
   running?: boolean;
+  /** Deleted on the provider (a read of it answered 404): its mirror stays as it is, and it is never read by id again. */
+  gone?: boolean;
 }
 
 export declare interface CloudAgentWatcher {
@@ -95,8 +95,7 @@ export class CloudAgentWatcher<Adapter extends AnyCloudAgentAdapter = AnyCloudAg
   readonly rootDir: string;
   private readonly statePath: string;
   private readonly importAll: () => boolean;
-  private readonly isOwnAgent: (agentId: string) => boolean;
-  private readonly hasOwnAgents: () => boolean;
+  private readonly ownAgents: () => ReadonlySet<string>;
   private readonly resolveRepoDir: (repo: { owner: string; name: string }, agentId?: string) => Promise<string | null>;
   private readonly now: () => number;
   private readonly log: (msg: string) => void;
@@ -134,8 +133,7 @@ export class CloudAgentWatcher<Adapter extends AnyCloudAgentAdapter = AnyCloudAg
     this.rootDir = opts.rootDir ?? codecastPath(adapter.spec.mirrorDir);
     this.statePath = path.join(this.rootDir, "state.json");
     this.importAll = opts.importAll ?? (() => true);
-    this.isOwnAgent = opts.isOwnAgent ?? (() => false);
-    this.hasOwnAgents = opts.hasOwnAgents ?? (() => true);
+    this.ownAgents = opts.ownAgents ?? (() => new Set());
     this.resolveRepoDir = opts.resolveRepoDir ?? (async () => null);
     this.now = opts.now ?? Date.now;
     this.log = opts.log ?? (() => {});
@@ -206,11 +204,13 @@ export class CloudAgentWatcher<Adapter extends AnyCloudAgentAdapter = AnyCloudAg
     this.cadence.start();
   }
 
-  stop(): void {
+  /** Stop polling and following. Resolves once the mirrors already under way have written what they read. */
+  async stop(): Promise<void> {
     this.cadence.stop();
-    this.adapter.stop?.();
+    this.adapter.streams?.stop();
     for (const t of this.renderTimers.values()) clearTimeout(t);
     this.renderTimers.clear();
+    await Promise.allSettled([...this.mirroring.values()]);
   }
 
   /** One pass: list agents, mirror the ones that moved. Never throws. */
@@ -220,7 +220,9 @@ export class CloudAgentWatcher<Adapter extends AnyCloudAgentAdapter = AnyCloudAg
     const running = Object.values(this.state.agents).some((st) => st.running);
     // Nothing to import, nothing of codecast's to follow and nothing left to
     // settle or re-render: not even a list call.
-    if (!this.importAll() && !this.hasOwnAgents() && !running && !this.staleOnDisk.size) {
+    const importAll = this.importAll();
+    const own = this.ownAgents();
+    if (!importAll && !own.size && !running && !this.staleOnDisk.size) {
       this.cadence.busy = false;
       // Still read the sign-in on disk (no call to the provider), so a machine
       // that signs in stops reporting it has none. A refusal the provider gave
@@ -241,18 +243,27 @@ export class CloudAgentWatcher<Adapter extends AnyCloudAgentAdapter = AnyCloudAg
       let cursor: string | undefined;
       let busy = false;
       const listed = new Set<string>();
+      // Without import, the list is read for codecast's own agents only: once each has been seen, the pages after hold none.
+      const unseen = importAll ? null : new Set([...own].filter((id) => !this.state.agents[id]?.gone));
       for (let page = 0; page < CLOUD_MAX_LIST_PAGES; page++) {
         const data = await this.listPage(client, cursor);
         let reachedHorizon = false;
         for (const item of data.items ?? []) {
-          if (item.updatedAtMs < horizon) { reachedHorizon = true; continue; }
-          if (!this.importAll() && !this.isOwnAgent(item.id)) continue;
+          if (item.updatedAtMs < horizon) {
+            // A list by last change ends at the horizon. One by creation goes on, and of the old agents reads
+            // only one running now or one mirrored before that moved since.
+            if (!this.adapter.listedByCreation) { reachedHorizon = true; continue; }
+            const st = this.state.agents[item.id];
+            if (!item.active && !(st && st.updatedAt !== item.version)) continue;
+          }
+          if (unseen && !own.has(item.id)) continue;
+          unseen?.delete(item.id);
           listed.add(item.id);
           if (item.active) busy = true;
           if (this.state.agents[item.id]?.updatedAt === item.version && !item.active) continue;
           await this.mirrorInPass(item.id, item.agent);
         }
-        if (reachedHorizon || !data.nextCursor) break;
+        if (reachedHorizon || !data.nextCursor || unseen?.size === 0) break;
         cursor = data.nextCursor;
       }
       // Mirrored by id: children (the list does not show them; found through
@@ -264,6 +275,7 @@ export class CloudAgentWatcher<Adapter extends AnyCloudAgentAdapter = AnyCloudAg
         // Listed, or mirrored right now (a child its parent just handed what it read): not read again.
         if (listed.has(id) || this.mirroring.has(id)) continue;
         const st = this.state.agents[id];
+        if (st?.gone) continue;
         if (!(st?.parent && !st.updatedAt) && !st?.running && !this.staleOnDisk.has(id)) continue;
         await this.mirrorInPass(id);
         if (this.state.agents[id]?.running && !this.failing.has(id)) busy = true;
@@ -323,18 +335,25 @@ export class CloudAgentWatcher<Adapter extends AnyCloudAgentAdapter = AnyCloudAg
     try {
       await this.mirror(agentId, known);
     } catch (err) {
-      const st = this.state.agents[agentId];
-      if (err instanceof CloudApiError && err.status === 404 && st?.running) {
-        // Deleted while it ran: nothing is left to settle it by.
-        delete st.running;
-        this.followed.delete(agentId);
-        this.emit("unfollowed", agentId);
-        void this.saveState();
-      }
       const count = (failed?.count ?? 0) + 1;
       this.failing.set(agentId, { count, retryAt: this.now() + Math.min(FAILED_BASE_MS * 2 ** (count - 1), FAILED_MAX_MS) });
       this.emitError(new Error(`${agentId}: ${errorText(err)}`));
     }
+  }
+
+  /**
+   * The agent was deleted on the provider: its mirror and session stay as
+   * they are, and it is not read again (a deleted one that ran is let go:
+   * nothing is left to settle it by).
+   */
+  private markGone(agentId: string): void {
+    const { running, ...st } = this.state.agents[agentId] ?? {};
+    this.state.agents[agentId] = { ...st, gone: true };
+    this.followed.delete(agentId);
+    this.failing.delete(agentId);
+    if (running) this.emit("unfollowed", agentId);
+    this.log(`${logTag(this.adapter)} ${agentId} is gone on ${this.adapter.spec.label}: keeping its mirror as it is`);
+    void this.saveState();
   }
 
   /** Poll fast for a while, starting with the next pass: the account just turned sync on, or the machine just signed in. */
@@ -372,7 +391,13 @@ export class CloudAgentWatcher<Adapter extends AnyCloudAgentAdapter = AnyCloudAg
   private async mirrorOnce(agentId: string, known?: unknown): Promise<void> {
     const client = this.client();
     if (!client) return;
-    const result = await this.adapter.mirror(client, this.handle(agentId), known);
+    let result: CloudAgentMirror | null;
+    try {
+      result = await this.adapter.mirror(client, this.handle(agentId), known);
+    } catch (err) {
+      if (err instanceof CloudApiError && err.status === 404) return this.markGone(agentId);
+      throw err;
+    }
     if (!result) {
       // A child its parent no longer has: forgotten, or every pass would read it again.
       if (this.state.agents[agentId]?.parent) {
@@ -392,7 +417,7 @@ export class CloudAgentWatcher<Adapter extends AnyCloudAgentAdapter = AnyCloudAg
       void this.mirrorNow(child.agentId, child.known);
     }
     // The git the agent reports now (kept while the adapter cannot tell): a branch it no longer names is not announced again at start.
-    const { git: _git, running: _wasRunning, ...st } = this.state.agents[agentId] ?? {};
+    const { git: _git, running: _wasRunning, gone: _gone, ...st } = this.state.agents[agentId] ?? {};
     const git = result.git !== undefined ? result.git : priorGit;
     this.state.agents[agentId] = {
       ...st,

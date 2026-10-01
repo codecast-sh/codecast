@@ -60,6 +60,8 @@ export function filedTask(now: number, stage: TaskStage): TaskItem {
     assignee_info: claimed ? ME : null,
     origin_session: { conversation_id: LEAD_LINK._id, session_id: LEAD_LINK.session_id, title: LEAD_LINK.title, started_by: PEOPLE.me.name, last_message_at: now - MIN },
     created_from_conversation: LEAD_LINK._id,
+    // The billing project syncs with Linear: the new task has its issue by the time it is claimed.
+    external: claimed ? { provider: "linear", id: "hero-lin-214", identifier: "BIL-214", url: "https://linear.app/acme/issue/BIL-214", remote_updated_at: now - 30_000, synced_at: now - 30_000 } : undefined,
     created_at: now - MIN,
     updated_at: now - MIN,
   };
@@ -97,7 +99,7 @@ export function planTasks(now: number, advanced: boolean): TaskItem[] {
       status: "open",
       priority: "low",
       labels: ["data"],
-      external: { provider: "linear", id: "hero-lin-212", identifier: "BIL-212", url: "https://linear.app/acme/issue/BIL-212", remote_updated_at: now - 2 * DAY },
+      external: { provider: "linear", id: "hero-lin-212", identifier: "BIL-212", url: "https://linear.app/acme/issue/BIL-212", remote_updated_at: now - 2 * DAY, synced_at: now - 2 * DAY },
     }, 2 * DAY),
     task({ _id: "hero-t6", short_id: "ct-hero6", title: "Idempotency keys on webhook handlers", status: "done", priority: "high", labels: ["webhooks"], assignee: PEOPLE.sarah.id, assignee_info: SARAH }, 3 * DAY),
   ];

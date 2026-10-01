@@ -153,3 +153,27 @@ test("a cloud agent provider replaces the host controls: its own switch, and a c
   expect(byText(connected.host, "connect Cursor")).toBeUndefined();
   connected.unmount();
 });
+
+test("an agent type with several cloud providers: the switch names the vendor (not the cloud host's words), and while on, a choice of how with what each costs", () => {
+  const { codex, codex_api } = CLOUD_AGENT_PROVIDERS;
+  const lanes = [codex, codex_api];
+  const picked: string[] = [];
+  const props = { cloudHost: cloud, cloudMode: false, cloudToggleEnabled: true, onToggleCloud: () => {}, isolated: false, onToggleIsolated: () => {} };
+  const off = mount(<SessionModeToggles {...props} cloudAgent={{ spec: codex, lanes, onPickLane: (l) => picked.push(l.id), on: false, onToggle: () => {}, connected: true }} />);
+  expect(byText(off.host, "run in the cloud")).toBeUndefined();
+  // Its place, not its models: a local Codex session runs on OpenAI's models too.
+  const sw = byText(off.host, "run in OpenAI's cloud");
+  expect(sw.getAttribute("title")).toBe("Run this session on OpenAI's machines: Codex Cloud on your ChatGPT plan, or OpenAI Agents API on your API key");
+  expect(byText(off.host, "API key")).toBeUndefined();
+  off.unmount();
+
+  const on = mount(<SessionModeToggles {...props} cloudAgent={{ spec: codex_api, lanes, onPickLane: (l) => picked.push(l.id), on: true, onToggle: () => {}, connected: false }} />);
+  expect(byText(on.host, "API key").getAttribute("aria-checked")).toBe("true");
+  expect(byText(on.host, "ChatGPT plan").getAttribute("title")).toBe(`Codex Cloud: ${codex.lane.detail}`);
+  expect(on.host.textContent).toContain(codex_api.lane.cost);
+  // Its key is missing: the guided key dialog's control.
+  expect(byText(on.host, "connect OpenAI")).toBeDefined();
+  click(byText(on.host, "ChatGPT plan"));
+  expect(picked).toEqual(["codex"]);
+  on.unmount();
+});

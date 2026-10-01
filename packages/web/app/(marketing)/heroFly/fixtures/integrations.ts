@@ -33,11 +33,9 @@ function checks(now: number, passed: number): PrCheck[] {
 }
 
 const BODY = [
-  "Failed webhook deliveries now retry with exponential backoff: 2, 4, 8 and 16 minutes with jitter, capped at 5 attempts. An event that still fails moves to the dead-letter queue.",
+  "Failed webhook deliveries retry with exponential backoff (2, 4, 8, 16 minutes, with jitter), capped at 5 attempts; then the event moves to the dead-letter queue.",
   "",
-  `- Queue and backoff in \`${OBJECTS.blame.file}\``,
-  "- Retry state on the delivery row, so a restart picks up where it left off",
-  "- 212 tests pass, 14 of them new",
+  `- Queue and backoff in \`${OBJECTS.blame.file}\`; 212 tests pass, 14 new`,
 ].join("\n");
 
 /** The pull request row as the page reads it. */
@@ -48,7 +46,7 @@ export function pullRequest(now: number, s: PrStage) {
     number: OBJECTS.pr.number,
     title: OBJECTS.pr.title,
     body: BODY,
-    state: s.merged ? "merged" : "open",
+    state: (s.merged ? "merged" : "open") as "merged" | "open",
     draft: false,
     author_github_username: AUTHOR,
     head_ref: HEAD_REF,
@@ -91,7 +89,6 @@ export function events(now: number, s: PrStage) {
       title: `3 commits to ${HEAD_REF}`,
       actor_login: AUTHOR,
       conversation_id: SESSIONS.api.id,
-      task_ids: ["hero-t1"],
       task_short_id: OBJECTS.task.shortId,
       meta: { branch: HEAD_REF, commit_count: 3 },
       created_at: now - 5 * MIN,

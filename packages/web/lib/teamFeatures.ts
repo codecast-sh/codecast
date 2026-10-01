@@ -14,6 +14,7 @@
  * every store tick. Each hook below subscribes to a BOOLEAN instead, so a
  * teams-list refresh that changes nothing re-renders nobody.
  */
+import { createContext, useContext } from "react";
 import { useInboxStore } from "../store/inboxStore";
 import { TEAM_FEATURES, workspaceFeatureEnabled, type TeamFeatureKey } from "@codecast/shared/contracts";
 import { anyHolderHasFeature, defineFeatures, holderHasFeature } from "@platform/flags";
@@ -29,10 +30,16 @@ export function teamHasFeature(teams: any[], teamId: string | null | undefined, 
   return holderHasFeature(TEAM_FEATURE_CATALOG, team, key);
 }
 
+/** A fixed answer for every feature, in place of the viewer's teams: the
+ *  marketing hero renders the same views whatever team the visitor is in. */
+export const TeamFeatureOverride = createContext<Partial<Record<TeamFeatureKey, boolean>> | null>(null);
+
 /** Is `key` on for the ACTIVE team? Personal workspace = off. Subscribes to a
  *  boolean, so a teams-list refresh that changes nothing re-renders nobody. */
 export function useTeamFeature(key: TeamFeatureKey): boolean {
-  return useInboxStore((s) => teamHasFeature(s.teams, s.clientState.ui?.active_team_id, key));
+  const override = useContext(TeamFeatureOverride);
+  const live = useInboxStore((s) => !override && teamHasFeature(s.teams, s.clientState.ui?.active_team_id, key));
+  return override ? !!override[key] : live;
 }
 
 /** Is `key` on for ANY of the viewer's teams? For surfaces that span teams

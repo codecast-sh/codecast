@@ -10,7 +10,19 @@
 // migration to start reporting.
 
 import { v } from "convex/values";
-import { CLOUD_AGENT_SETUP_KINDS } from "@codecast/shared/contracts";
+import { CLOUD_AGENT_SETUP_KINDS, CLOUD_SESSION_SOURCES, type CloudSessionSyncField } from "@codecast/shared/contracts";
+
+const optionalBoolean = v.optional(v.boolean());
+
+/**
+ * The account's cloud session sync settings, one optional boolean per
+ * source in CLOUD_SESSION_SOURCES (unset = the source's default there): the
+ * user row's fields and updateSyncSettings' arguments, so a new source is one
+ * entry in the shared contract.
+ */
+export const cloudSessionSyncFields = Object.fromEntries(
+  Object.values(CLOUD_SESSION_SOURCES).map(({ field }) => [field, optionalBoolean]),
+) as Record<CloudSessionSyncField, typeof optionalBoolean>;
 
 export const deviceSettingsValidator = v.object({
   snippets: v.optional(v.record(v.string(), v.boolean())),
