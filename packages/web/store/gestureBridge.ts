@@ -230,3 +230,14 @@ export function subscribeGestures(
     }
   };
 }
+
+/** Sim seam: each simulated window carries its own bridge identity. */
+export function __gestureBridgeSimSlots() {
+  return {
+    fresh: (): { sourceToken: string | null } => ({ sourceToken: null }),
+    get: (): { sourceToken: string | null } => ({ sourceToken }),
+    set: (s: { sourceToken: string | null }): void => {
+      sourceToken = s.sourceToken;
+    },
+  };
+}

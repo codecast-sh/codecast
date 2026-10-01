@@ -54,6 +54,8 @@ interface WorkflowGraphViewProps {
   // no pan, zoom or wheel capture (the marketing hero shows it inside a page
   // that must keep scrolling). Default true.
   chrome?: boolean;
+  /** The margin fitView keeps around the graph, as a fraction of the box. Default 0.2. */
+  fitPadding?: number;
 }
 
 // Solarized palette
@@ -332,7 +334,7 @@ function buildGraph(wfNodes: WFNode[], wfEdges: WFEdge[], p: SolPalette, nodeSta
   return { nodes, edges };
 }
 
-export function WorkflowGraphView({ nodes: wfNodes, edges: wfEdges, onNodeSelect, selectedNodeId, nodeStatuses, currentNodeId, chrome = true }: WorkflowGraphViewProps) {
+export function WorkflowGraphView({ nodes: wfNodes, edges: wfEdges, onNodeSelect, selectedNodeId, nodeStatuses, currentNodeId, chrome = true, fitPadding = 0.2 }: WorkflowGraphViewProps) {
   const { theme } = useTheme();
   const p = SOL[theme];
 
@@ -362,7 +364,7 @@ export function WorkflowGraphView({ nodes: wfNodes, edges: wfEdges, onNodeSelect
         }}
         onPaneClick={() => onNodeSelect?.(null)}
         fitView
-        fitViewOptions={{ padding: 0.2 }}
+        fitViewOptions={{ padding: fitPadding }}
         minZoom={0.15}
         maxZoom={2}
         colorMode={theme}

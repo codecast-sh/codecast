@@ -13,6 +13,8 @@
  * 32-char ids: their table was simply never registered here.
  */
 
+import { isPrivateHost } from "../contracts/browserPaneOffer";
+
 export type EntityType = "task" | "plan" | "session" | "doc" | "project" | "initiative" | "proposal" | "trigger" | "decision" | "pr" | "commit";
 
 /** The public web origin that serves codecast object pages. */
@@ -724,6 +726,38 @@ export function claudeArtifactUrl(id: string): string {
   return `https://claude.ai/public/artifacts/${id}`;
 }
 
+// ---------------------------------------------------------------------------
+// Web links
+//
+// A link to anywhere else on the web previews the way Slack unfurls one: the
+// page's own meta tags (title, description, image) drawn as a card when the
+// link stands alone on its line.
+// ---------------------------------------------------------------------------
+
+/**
+ * The URL a web link previews as, or null when it is not a public page: our
+ * own hosts, codecast objects (GitHub pull requests and commits included),
+ * published pages and Claude artifacts (each has its own card), private or
+ * bare hosts, IP literals, and every scheme but http(s). Message markdown,
+ * the server that reads the meta tags, and Slack mirroring all ask this one
+ * question.
+ */
+export function parseLinkPreviewUrl(href: string | undefined | null): string | null {
+  if (!href || typeof href !== "string" || !/^https?:\/\//i.test(href.trim())) return null;
+  let u: URL;
+  try {
+    u = new URL(href.trim());
+  } catch {
+    return null;
+  }
+  const host = u.hostname.toLowerCase();
+  if (!host || host.startsWith("[") || /^\d+\.\d+\.\d+\.\d+$/.test(host) || isPrivateHost(host)) return null;
+  if (u.username || u.password) return null;
+  if (isAppHost(u.host) || parseEntityUrl(u.href) || parseClaudeArtifactUrl(u.href)) return null;
+  u.hash = "";
+  return u.href;
+}
+
 /**
  * The path and fragment of an href that addresses one of OUR pages: an
  * absolute URL on an app host, or a path-only href. Anything on another host
@@ -800,20 +834,30 @@ export function parseMessageRefPayload(payload: string | undefined | null): Mess
  * token (a UUID minted when the owner shares it) rather than an id:
  *
  *   /share/<token>            → a whole conversation
- *   /share/message/<token>    → a message excerpt
- *   /share/doc/<token>        → a doc
- *   /share/plan/<token>       → a plan
+ *   /share/<kind>/<token>     → every other kind in SHARED_OBJECT_KINDS
  *
- * One grammar, three consumers: the web server (bot unfurls + SSR), the
- * mobile deep-link router, and the mobile /share resolver screen. The
- * sub-kind segment set is closed on purpose — an unknown segment is not a
- * token, it is a URL we do not own yet.
+ * One grammar, every consumer: the web server (routes, bot unfurls, SSR), the
+ * standalone share boot, the desktop handoff gate, the mobile deep-link
+ * router and the mobile /share resolver screen. The sub-kind segment set is
+ * closed on purpose — an unknown segment is not a token, it is a URL we do
+ * not own yet. Adding a kind is one entry here; the type then makes each
+ * consumer's table incomplete until it handles the new kind.
  */
-export type ShareKind = "conversation" | "message" | "doc" | "plan";
+export const SHARED_OBJECT_KINDS = ["message", "doc", "plan", "task", "call"] as const;
+export type SharedObjectKind = (typeof SHARED_OBJECT_KINDS)[number];
+export type ShareKind = "conversation" | SharedObjectKind;
+
+const SHARE_TOKEN_SRC = "[A-Za-z0-9_-]{6,80}";
+const SHARE_PATH_RE = new RegExp(`^/share/(?:(${SHARED_OBJECT_KINDS.join("|")})/)?(${SHARE_TOKEN_SRC})/?$`);
 
 export function parseSharePath(path: string): { kind: ShareKind; token: string } | null {
   const clean = (path || "").split(/[?#]/)[0];
-  const m = /^\/share\/(?:(message|doc|plan)\/)?([A-Za-z0-9_-]{6,80})\/?$/.exec(clean);
+  const m = SHARE_PATH_RE.exec(clean);
   if (!m) return null;
   return { kind: (m[1] as ShareKind) ?? "conversation", token: m[2] };
+}
+
+/** The path a share token is opened at: the inverse of parseSharePath. */
+export function sharePath(kind: ShareKind, token: string): string {
+  return kind === "conversation" ? `/share/${token}` : `/share/${kind}/${token}`;
 }

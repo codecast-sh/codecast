@@ -40,10 +40,8 @@ import {
   changeFields,
   changeLine,
   changeTenure,
-  chiefRead,
   isDecidable,
   isSyncChange,
-  needsYou,
   openProposals,
   staffingMode,
   syncEvidence,
@@ -52,7 +50,6 @@ import {
   type AreaRow,
   type ChangeField,
   type ChiefRead,
-  type NeedsYouItem,
 } from "./staffingModel";
 
 export type StaffingPaneProps = {
@@ -139,6 +136,8 @@ export type StaffingPaneProps = {
    *  switch when the proposal lives in a workspace the viewer can open. The
    *  active workspace's own body would answer a question nobody asked. */
   link?: ProposalLinkLine;
+  /** The health page (HealthBoard), where the sheet sends a person with no proposal open. */
+  onOpenHealth?: () => void;
 };
 
 export type ProposalLinkLine =
@@ -166,7 +165,6 @@ export function StaffingPane(props: StaffingPaneProps) {
           staff's composer stays for the health summary and for a proposal no
           agent wrote. */}
       {mode === "proposal" && !props.hasThread && <Composer chief={props.chief} onOpenSession={props.onOpenSession} onResume={props.onResumeChief} />}
-      {mode === "health" && <Composer chief={props.chief} onOpenSession={props.onOpenSession} onResume={props.onResumeChief} />}
     </div>
   );
 }
@@ -672,7 +670,7 @@ export function EditChangeForm({ change, onCancel, onAccept }: { change: OrgProp
 
 /** What the health read could not do: a server without it, a failed read
  *  with nothing cached, or a stale copy. Never painted as a clean company. */
-function HealthNote({ missing, error, hasHealth, onRetry }: { missing?: boolean; error?: string; hasHealth: boolean; onRetry?: () => void }) {
+export function HealthNote({ missing, error, hasHealth, onRetry }: { missing?: boolean; error?: string; hasHealth: boolean; onRetry?: () => void }) {
   const retry = onRetry ? <button type="button" onClick={onRetry} className="ml-1.5 underline underline-offset-2" style={{ color: "var(--sol-blue)" }}>Retry</button> : null;
   if (missing) return <p className="mt-2 text-[12px] px-1" style={{ color: "var(--sol-text-dim)" }}>This server does not read the company's health yet.</p>;
   if (error && !hasHealth) return <p className="mt-2 text-[12px] px-1" style={{ color: "var(--sol-red)" }} data-health-error>Health could not be read: {error}{retry}</p>;
@@ -682,65 +680,6 @@ function HealthNote({ missing, error, hasHealth, onRetry }: { missing?: boolean;
 
 const ago = (now: number, at: number | null | undefined): string => (at ? agoOf(now - at) : "");
 
-// ---- needs you
-
-function NeedsYou({ items, now, onAnswer, onOpenSession, onPickProposal }: { items: NeedsYouItem[]; now: number; onAnswer?: (decisionId: string, index: number) => void; onOpenSession: (id: string) => void; onPickProposal: (shortId: string) => void }) {
-  return (
-    <>
-      <SectionLabel right={items.length > 0 ? <span className="text-[10.5px] tabular-nums" style={{ color: "var(--sol-orange)" }}>{items.length}</span> : undefined}>Needs you</SectionLabel>
-      {items.length === 0 ? (
-        <p className="text-[12.5px] px-1" style={{ color: "var(--sol-text-dim)" }} data-needs-you="empty">Nothing needs you.</p>
-      ) : (
-        <div className="flex flex-col gap-1.5" data-needs-you={items.length}>
-          {items.map((it) => (
-            <div key={it.key} className="rounded-lg border px-2.5 py-2" data-needs-you-item={it.kind} style={{ borderColor: "color-mix(in srgb, var(--sol-orange) 35%, transparent)", background: "color-mix(in srgb, var(--sol-orange) 6%, transparent)" }}>
-              {it.kind === "decision" && (
-                <>
-                  <div className="flex items-start gap-2">
-                    {it.role && <RoleFace role={it.role} size={18} className="shrink-0 mt-[1px]" />}
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-[12.5px] leading-snug" style={{ color: "var(--sol-text)" }}>{it.item.question}</span>
-                      <span className="block text-[11px] mt-0.5" style={{ color: "var(--sol-text-dim)" }}>{it.role ? `${it.role.name} asks` : "asked"} · {ago(now, it.item.createdAt)}</span>
-                    </span>
-                    <button type="button" onClick={() => onOpenSession(it.item.conversationId)} className="shrink-0 inline-flex items-center gap-1 text-[11.5px] h-6 px-1.5 rounded-md hover:bg-sol-bg-highlight" style={{ color: "var(--sol-violet)" }} data-needs-you-open>Open <ExternalLink className="w-3 h-3" /></button>
-                  </div>
-                  {it.canAnswerInPlace && onAnswer && (
-                    <div className="mt-1.5 flex flex-wrap gap-1" data-needs-you-options>
-                      {it.item.options.map((o, i) => (
-                        <OrgButton key={i} size="sm" primary={it.item.defaultOption === i} onClick={() => onAnswer(it.item.decisionId!, i)} title={o.description}>{o.label}</OrgButton>
-                      ))}
-                    </div>
-                  )}
-                </>
-              )}
-              {it.kind === "blocked" && (
-                <div className="flex items-start gap-2">
-                  <RoleFace role={it.role} size={18} className="shrink-0 mt-[1px]" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-[12.5px] leading-snug" style={{ color: "var(--sol-text)" }}>{it.line}</span>
-                    <span className="block text-[11px] mt-0.5" style={{ color: "var(--sol-text-dim)" }}>{it.role.name} is waiting on you{it.role.standing?.state_at ? ` · ${ago(now, it.role.standing.state_at)}` : ""}</span>
-                  </span>
-                  <button type="button" onClick={() => onOpenSession(it.conversationId)} className="shrink-0 inline-flex items-center gap-1 text-[11.5px] h-6 px-1.5 rounded-md hover:bg-sol-bg-highlight" style={{ color: "var(--sol-violet)" }} data-needs-you-open>Open <ExternalLink className="w-3 h-3" /></button>
-                </div>
-              )}
-              {it.kind === "proposal" && (
-                <div className="flex items-start gap-2">
-                  <Sparkles className="w-4 h-4 shrink-0 mt-[1px]" style={{ color: "var(--sol-violet)" }} />
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-[12.5px] leading-snug" style={{ color: "var(--sol-text)" }}>{it.proposal.title}</span>
-                    <span className="block text-[11px] mt-0.5" style={{ color: "var(--sol-text-dim)" }}>{it.remaining === 1 ? "1 change" : `${it.remaining} changes`} to decide · {ago(now, it.proposal.created_at)}</span>
-                  </span>
-                  <OrgButton size="sm" primary onClick={() => onPickProposal(it.proposal.short_id)} data-needs-you-open>Open</OrgButton>
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-    </>
-  );
-}
-
 // ---- areas
 
 function StatusWord({ row }: { row: AreaRow }) {
@@ -749,7 +688,7 @@ function StatusWord({ row }: { row: AreaRow }) {
 
 /** The role's check (or the company review) as a person controls it: when
  *  it last looked, when it looks next, pause and run now, and the cadence. */
-function CheckLine({ check, checkedAt, now, word, onTrigger, onSetEvery }: { check: AreaCheck | null; checkedAt: number | null; now: number; word: "check" | "review"; onTrigger?: (id: string, verb: "pause" | "resume" | "runNow") => void; onSetEvery?: (id: string, ms: number) => void }) {
+export function CheckLine({ check, checkedAt, now, word, onTrigger, onSetEvery }: { check: AreaCheck | null; checkedAt: number | null; now: number; word: "check" | "review"; onTrigger?: (id: string, verb: "pause" | "resume" | "runNow") => void; onSetEvery?: (id: string, ms: number) => void }) {
   const paused = check?.status === "paused";
   const live = !!check && (check.status === "scheduled" || check.status === "running" || paused);
   const last = checkedAt ?? check?.last_run_at ?? null;
@@ -777,7 +716,7 @@ function CheckLine({ check, checkedAt, now, word, onTrigger, onSetEvery }: { che
 }
 
 /** "Ask @growth": one line into the role's own thread; the answer lands there. */
-function AskRole({ role, conversationId, onSend, onOpenSession }: { role: OrgRole; conversationId: string | null; onSend?: (conversationId: string, text: string) => void; onOpenSession: (id: string) => void }) {
+export function AskRole({ role, conversationId, onSend, onOpenSession }: { role: OrgRole; conversationId: string | null; onSend?: (conversationId: string, text: string) => void; onOpenSession: (id: string) => void }) {
   const [text, setText] = useState("");
   const [sent, setSent] = useState(false);
   if (!conversationId) return <p className="text-[11.5px]" style={{ color: "var(--sol-text-dim)" }}>It has no session yet, so there is nobody to ask.</p>;
@@ -807,7 +746,7 @@ const DETAIL_LABEL = "text-[10px] font-semibold uppercase tracking-[0.08em]";
 
 /** A row opened: the area's goals and progress, the sessions waiting under
  *  it, at most three signals, its check, and a line to the role. */
-function AreaDetail({ row, now, onOpenSession, onSelectNode, onTrigger, onSetEvery, onSend }: { row: AreaRow; now: number; onOpenSession: (id: string) => void; onSelectNode: (nodeId: string) => void; onTrigger?: (id: string, verb: "pause" | "resume" | "runNow") => void; onSetEvery?: (id: string, ms: number) => void; onSend?: (conversationId: string, text: string) => void }) {
+export function AreaDetail({ row, now, onOpenSession, onSelectNode, onTrigger, onSetEvery, onSend }: { row: AreaRow; now: number; onOpenSession: (id: string) => void; onSelectNode: (nodeId: string) => void; onTrigger?: (id: string, verb: "pause" | "resume" | "runNow") => void; onSetEvery?: (id: string, ms: number) => void; onSend?: (conversationId: string, text: string) => void }) {
   const a = row.area;
   const conv = a?.standing_conversation_id ?? row.role.standing?.conversation_id ?? null;
   const goals = a?.goals ?? [];
@@ -909,7 +848,7 @@ function Areas({ rows, now, open, onToggle, onOpenSession, onSelectNode, onTrigg
 
 // ---- the chief's read
 
-function ChiefReadSection({ read, now, onPickProposal, onTrigger, onSetEvery }: { read: ChiefRead; now: number; onPickProposal: (shortId: string) => void; onTrigger?: (id: string, verb: "pause" | "resume" | "runNow") => void; onSetEvery?: (id: string, ms: number) => void }) {
+export function ChiefReadSection({ read, now, onPickProposal, onTrigger, onSetEvery }: { read: ChiefRead; now: number; onPickProposal: (shortId: string) => void; onTrigger?: (id: string, verb: "pause" | "resume" | "runNow") => void; onSetEvery?: (id: string, ms: number) => void }) {
   const [lead, ...rest] = read.narrative;
   const [more, setMore] = useState(false);
   const p = read.proposed;
@@ -953,25 +892,15 @@ function ChiefReadSection({ read, now, onPickProposal, onTrigger, onSetEvery }: 
 
 // ---------------------------------------------------------------- health: the loop
 
+/** Every proposal is decided: the company's health is its own page
+ *  (HealthBoard), so the sheet says so and goes there. */
 function HealthBody(props: StaffingPaneProps) {
-  const { tree, health, now } = props;
-  const items = useMemo(() => needsYou(tree, health, props.queue ?? [], props.proposals, props.proposal), [tree, health, props.queue, props.proposals, props.proposal]);
-  const rows = useMemo(() => areaRows(tree, health), [tree, health]);
-  const read = useMemo(() => chiefRead(tree, health, props.proposals), [tree, health, props.proposals]);
-  const [openRole, setOpenRole] = useState<string | null>(null);
   return (
-    <>
-      <h2 className="text-[19px] leading-tight font-semibold tracking-tight" style={{ fontFamily: "var(--font-serif)", color: "var(--sol-text)" }}>Company health</h2>
-      <p className="mt-1 text-[12px]" style={{ color: "var(--sol-text-muted)" }}>
-        {props.reviewing ? "A review of the company is running; a proposal appears here when it lands." : health ? `What needs you, how each area is doing, and what ${read?.chief.name ?? "the Chief of Staff"} makes of it. Read ${ago(now, health.generated_at) || "just now"}.` : "What needs you, how each area is doing, and what the Chief of Staff makes of it."}
-      </p>
-      {props.reviewing && props.reviewSessionId && <ReviewSessionLink id={props.reviewSessionId} onOpenSession={props.onOpenSession} />}
-      {props.reviewEnded && <ReviewEndedLine sessionId={props.reviewSessionId} onOpenSession={props.onOpenSession} />}
-      <HealthNote missing={props.healthMissing} error={props.healthError} hasHealth={!!health} onRetry={props.onRetryHealth} />
-      <NeedsYou items={items} now={now} onAnswer={props.onAnswerDecision} onOpenSession={props.onOpenSession} onPickProposal={props.onPickProposal} />
-      <Areas rows={rows} now={now} open={openRole} onToggle={(id) => setOpenRole((cur) => (cur === id ? null : id))} onOpenSession={props.onOpenSession} onSelectNode={props.onSelectNode} onTrigger={props.onTrigger} onSetEvery={props.onSetTriggerEvery} onSend={props.onSendToRole} />
-      {read && <ChiefReadSection read={read} now={now} onPickProposal={props.onPickProposal} onTrigger={props.onTrigger} onSetEvery={props.onSetTriggerEvery} />}
-    </>
+    <div data-health-pointer>
+      <h2 className="text-[17px] leading-tight font-semibold tracking-tight" style={{ fontFamily: "var(--font-serif)", color: "var(--sol-text)" }}>No proposal is open</h2>
+      <p className="mt-1 text-[12.5px] leading-relaxed" style={{ color: "var(--sol-text-muted)" }}>How the company is doing, what is waiting on you and the chief of staff's conversation are on the health page.</p>
+      {props.onOpenHealth && <OrgButton primary size="sm" className="mt-3" onClick={props.onOpenHealth} data-open-health>Open the health page</OrgButton>}
+    </div>
   );
 }
 
@@ -1011,7 +940,7 @@ function NoChiefBody(props: StaffingPaneProps) {
 
 /** A review that stopped with nothing posted: said plainly, with the way in
  *  to see why, above the buttons that start another. */
-function ReviewEndedLine({ sessionId, onOpenSession }: { sessionId?: string | null; onOpenSession: (id: string) => void }) {
+export function ReviewEndedLine({ sessionId, onOpenSession }: { sessionId?: string | null; onOpenSession: (id: string) => void }) {
   return (
     <div className="rounded-lg border px-3 py-2 text-[12px] flex items-center gap-2 flex-wrap" data-review-ended style={{ borderColor: "color-mix(in srgb, var(--sol-orange) 45%, transparent)", background: "color-mix(in srgb, var(--sol-orange) 8%, transparent)", color: "var(--sol-text-secondary)" }}>
       <span className="min-w-0 flex-1">The review stopped without making a proposal.</span>
@@ -1022,7 +951,7 @@ function ReviewEndedLine({ sessionId, onOpenSession }: { sessionId?: string | nu
 
 /** The session "Propose an org now" started: a way in while it works, and
  *  the way to see why nothing landed if the review ends without a proposal. */
-function ReviewSessionLink({ id, onOpenSession }: { id: string; onOpenSession: (id: string) => void }) {
+export function ReviewSessionLink({ id, onOpenSession }: { id: string; onOpenSession: (id: string) => void }) {
   return (
     <button type="button" onClick={() => onOpenSession(id)} className="mt-2 inline-flex items-center gap-1 text-[11.5px] px-1.5 h-6 rounded-md hover:bg-sol-bg-highlight" style={{ color: "var(--sol-violet)" }} data-review-session>
       Open the review <ExternalLink className="w-3 h-3" />
@@ -1051,12 +980,12 @@ function AreasPreview(props: StaffingPaneProps) {
  *  banners (a line that has not reached the agent, kill and restart), so a
  *  dead session speaks up per message; what the embed cannot know is the
  *  role's own state, so a paused chief is said here, with the way out. */
-function Composer({ chief, onOpenSession, onResume }: { chief: OrgRole | null; onOpenSession: (id: string) => void; onResume?: (roleId: string) => void }) {
+export function Composer({ chief, onOpenSession, onResume, fill }: { chief: OrgRole | null; onOpenSession: (id: string) => void; onResume?: (roleId: string) => void; /** The health page's own column: the thread takes the full height. */ fill?: boolean }) {
   const conv = chief?.standing?.conversation_id ?? null;
   const paused = chief?.status === "paused";
   return (
-    <div className="mt-6 pt-4 border-t" style={{ borderColor: BORDER }} data-composer>
-      <div className="flex items-center justify-between mb-2">
+    <div className={fill ? "flex flex-col h-full min-h-0" : "mt-6 pt-4 border-t"} style={fill ? undefined : { borderColor: BORDER }} data-composer>
+      <div className={cn("flex items-center justify-between", fill ? "hidden" : "mb-2")}>
         <span className="text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Chief of staff</span>
         {conv && (
           <button type="button" onClick={() => onOpenSession(conv)} className="inline-flex items-center gap-1 text-[11px] px-1.5 h-[20px] rounded-md hover:bg-sol-bg-highlight" style={{ color: "var(--sol-violet)" }}>
@@ -1076,7 +1005,7 @@ function Composer({ chief, onOpenSession, onResume }: { chief: OrgRole | null; o
       ) : !conv ? (
         <p className="text-[12px] px-1" style={{ color: "var(--sol-text-dim)" }}>The chief of staff has not started yet. Its conversation appears here when it does.</p>
       ) : (
-        <div className="rounded-xl border overflow-hidden" style={{ borderColor: BORDER, height: "min(420px, 45dvh)" }}>
+        <div className={cn("overflow-hidden", fill ? "flex-1 min-h-0" : "rounded-xl border")} style={fill ? undefined : { borderColor: BORDER, height: "min(420px, 45dvh)" }}>
           <AnchorConversation conversationId={conv} hideHeader seedOwnership={false} />
         </div>
       )}

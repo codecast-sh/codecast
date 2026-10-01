@@ -511,8 +511,16 @@ const CLAUDE_MODEL: AgentModelConfig = {
   efforts: CLAUDE_EFFORT_LEVELS,
   midSession: true,
 };
+// The Agents API runs the Codex models the API serves: every listed one but
+// Codex Spark, which /v1/models does not list.
+const AGENTS_API_MODELS = CODEX_MODEL_OPTIONS.filter((m) => m.cliAlias && m.key !== "gpt-5.3-codex-spark");
+const AGENTS_API_DEFAULT = AGENTS_API_MODELS.find((m) => m.key === CLOUD_AGENT_PROVIDERS.codex_api.defaultModel)?.label;
 const CODEX_MODEL: AgentModelConfig = {
-  models: [...CODEX_MODEL_OPTIONS, ...cloudAgentLaunchModelOptions(CLOUD_AGENT_PROVIDERS.codex, "A Codex Cloud task on your ChatGPT plan, in this repository's Codex environment")],
+  models: [
+    ...CODEX_MODEL_OPTIONS,
+    ...cloudAgentLaunchModelOptions(CLOUD_AGENT_PROVIDERS.codex, "A Codex Cloud task on your ChatGPT plan, in this repository's Codex environment"),
+    ...cloudAgentLaunchModelOptions(CLOUD_AGENT_PROVIDERS.codex_api, `An OpenAI Agents API session on your API key, on ${AGENTS_API_DEFAULT}`, AGENTS_API_MODELS),
+  ],
   efforts: CODEX_EFFORT_LEVELS,
   midSession: false,
 };

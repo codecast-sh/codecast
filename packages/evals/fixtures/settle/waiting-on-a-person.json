@@ -1,0 +1,19 @@
+{
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "notes": "waiting on another person mid-thread (not a machine)",
+  "label": {
+    "verdict": "needs_input"
+  },
+  "snapshot": {
+    "newestFirst": [
+      {
+        "role": "assistant",
+        "content": "Mockups are posted in #design. Waiting on Sam's sign-off before I cut the branch — nothing more I can do until then."
+      },
+      {
+        "role": "user",
+        "content": "get the design signed off"
+      }
+    ]
+  }
+}

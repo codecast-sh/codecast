@@ -1,0 +1,23 @@
+{
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "notes": "earlier turn had a machine wait; final message delivers",
+  "label": {
+    "verdict": "done"
+  },
+  "snapshot": {
+    "newestFirst": [
+      {
+        "role": "assistant",
+        "content": "CI green: 212 tests, 0 failures. Merged the branch and closed ct-4102. That's the whole request."
+      },
+      {
+        "role": "user",
+        "content": "<task-notification><task-id>b1</task-id><status>completed</status></task-notification>"
+      },
+      {
+        "role": "assistant",
+        "content": "CI is running in the background — I'll be re-invoked when it finishes."
+      }
+    ]
+  }
+}

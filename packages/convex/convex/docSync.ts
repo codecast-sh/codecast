@@ -1,5 +1,5 @@
 import { mutation, query } from "./functions";
-import { docTitleFromContent } from "@codecast/shared/docs";
+import { docTitleFromContent, serializeDraftRuns } from "@codecast/shared/docs";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
@@ -324,7 +324,9 @@ export function toMarkdown(node: any, ctx: { indent: string; ordered: boolean; i
   }
 
   const inline = (n: any) => toMarkdown(n, ctx);
-  const children = node.content.map(inline).join("");
+  // Drafting marks (alternatives, ghosts, Lab flags) open once around every
+  // adjacent node that carries them, so a span holding bold text stays one span.
+  const children = serializeDraftRuns(node.content, inline);
 
   switch (node.type) {
     case "heading":

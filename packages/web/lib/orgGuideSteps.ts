@@ -1,4 +1,3 @@
-import { staffingPaneWord } from "../components/org/orgMeta";
 
 export type OrgGuideStep = {
   id: string;
@@ -35,12 +34,12 @@ export function orgGuideSteps({ meNodeId, roleNodeId, openProposal }: { meNodeId
   steps.push(openProposal ? {
     id: "proposals",
     target: '[data-org-guide="staffing"]',
-    sentence: `${staffingPaneWord(true)} opens the one waiting for you, as a conversation with ${openProposal.remaining === 1 ? "one change" : `${openProposal.remaining} changes`} to decide.`,
+    sentence: `Health shows how work flows through the company and what waits on you, starting with the open proposal: ${openProposal.remaining === 1 ? "one change" : `${openProposal.remaining} changes`} to decide.`,
     action: { id: "open_proposal", label: "Open the proposal" },
   } : {
     id: "proposals",
     target: '[data-org-guide="staffing"]',
-    sentence: `${staffingPaneWord(false)} shows how the company is doing and starts the next proposal.`,
+    sentence: "Health shows how work flows through the company this week, what waits on you, and the chief of staff to talk it over with.",
   });
   steps.push({
     id: "hire",

@@ -12,6 +12,7 @@
 // a store action that moves the page in the same tick and rides dispatch to
 // the side effect of its own name.
 import { useMemo, useState, type ReactNode } from "react";
+import { ShareControl } from "../ShareControl";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, CalendarDays, Flag, PanelRightClose, PanelRightOpen } from "lucide-react";
@@ -121,6 +122,7 @@ export function InitiativePageInner({ id }: { id: string }) {
               <Flag className="w-4 h-4 shrink-0" style={{ color: INITIATIVE_ACCENT }} />
               <Title initiative={initiative} phone={phone} />
               {initiative.short_id && <span className="shrink-0 whitespace-nowrap inline-flex items-center h-[20px] px-1.5 rounded-md text-[10.5px] font-medium" style={{ background: INITIATIVE_ACCENT, color: "var(--sol-bg)", fontFamily: "var(--font-mono)" }}>{initiative.short_id}</span>}
+              <ShareControl label="initiative" path={`/initiatives/${initiative.short_id || initiative._id}`} />
             </div>
             {/* Line two: status, who drives it, how it is going, when it is due, how far along. */}
             <div className={cn("mt-2 flex items-center gap-x-4 gap-y-1.5 flex-wrap", phone ? "text-[12px]" : "text-[12.5px]")}>
