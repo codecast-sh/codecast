@@ -26,6 +26,7 @@
     "./contracts/orgLog": "./contracts/orgLog.ts",
     "./contracts/orgCapacity": "./contracts/orgCapacity.ts",
     "./contracts/orgAreas": "./contracts/orgAreas.ts",
+    "./contracts/orgReview": "./contracts/orgReview.ts",
     "./contracts/headOfPeoplePrompt": "./contracts/headOfPeoplePrompt.ts",
     "./contracts/chiefOfStaffPrompt": "./contracts/chiefOfStaffPrompt.ts",
     "./contracts/orgIdentity": "./contracts/orgIdentity.ts",
@@ -71,7 +72,9 @@
     "./ratchet": "./ratchet/index.ts",
     "./analytics": "./analytics/index.ts",
     "./agents": "./agents/index.ts",
-    "./search": "./search/index.ts"
+    "./search": "./search/index.ts",
+    "./async": "./async/index.ts",
+    "./changes": "./changes/index.ts"
   },
   "dependencies": {
     "css-tree": "3.2.1",

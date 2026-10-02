@@ -60,6 +60,16 @@ const teamFeaturesValidator = v.object({
   chat: v.optional(v.boolean()),
   calls: v.optional(v.boolean()),
   org: v.optional(v.boolean()),
+  changes: v.optional(v.boolean()),
+});
+
+// A ship of one surface (cli, desktop, backend...) as Changes records it on a
+// story ("shipped in cli 1.1.163") and on a day's edition.
+const changeReleaseValidator = v.object({
+  surface: v.string(),
+  version: v.optional(v.string()),
+  sha: v.string(),
+  at: v.number(),
 });
 
 // The entity kinds that can participate in entity-conversation links.
@@ -366,6 +376,9 @@ export default defineSchema({
     // Opt-in features; default off. Enforced server-side at each feature's
     // access chokepoint (teamFeatures.requireTeamFeature), hidden client-side.
     features: v.optional(teamFeaturesValidator),
+    // IANA zone the team's day is cut in (Changes editions, lib/teamDay.ts).
+    // Unset: the earliest admin's users.timezone, else UTC.
+    timezone: v.optional(v.string()),
     // The one team whose "community" chat channels are the product's public
     // space (codecast.sh/community). Set by an operator
     // (chat.designateCommunityTeam), never by a team's own members: the flag
@@ -3756,13 +3769,17 @@ export default defineSchema({
     .index("by_user_date", ["user_id", "date"])
     .index("by_team_date", ["team_id", "date"]),
 
+  // A digest of a day, week or month. Two kinds of row share the table: a
+  // person's digest (user_id set, events listed) and a team's Changes edition
+  // (user_id unset, keyed by team, repository, scope and date), which carries
+  // its standfirst in `narrative` and points at change_stories by story_key.
   digests: defineTable({
-    user_id: v.id("users"),
+    user_id: v.optional(v.id("users")),
     team_id: v.optional(v.id("teams")),
     scope: v.union(v.literal("day"), v.literal("week"), v.literal("month")),
     date: v.string(),
     narrative: v.string(),
-    events: v.array(v.object({
+    events: v.optional(v.array(v.object({
       time: v.number(),
       t: v.string(),
       event: v.string(),
@@ -3770,12 +3787,124 @@ export default defineSchema({
       session_id: v.optional(v.id("conversations")),
       session_title: v.optional(v.string()),
       project: v.optional(v.string()),
-    })),
+    }))),
     session_count: v.optional(v.number()),
     generated_at: v.number(),
+    // Team edition fields (docs/proposals/changes-page.md 7.5).
+    repository: v.optional(v.string()),
+    headline: v.optional(v.string()),
+    lead_story_key: v.optional(v.string()),
+    section_order: v.optional(v.array(v.string())),
+    brief_story_keys: v.optional(v.array(v.string())),
+    releases: v.optional(v.array(changeReleaseValidator)),
+    stats: v.optional(v.object({
+      commits: v.number(),
+      stories: v.number(),
+      releases: v.number(),
+      people: v.number(),
+      sessions: v.number(),
+      private_sessions: v.number(),
+    })),
+    inputs_hash: v.optional(v.string()),
+    model: v.optional(v.string()),
+    input_tokens: v.optional(v.number()),
+    output_tokens: v.optional(v.number()),
+    cost_usd: v.optional(v.number()),
+    // facts: stats headline only; written: prose for a live day; final: the
+    // pass after the day ended; failed / capped: prose unavailable, facts stay.
+    status: v.optional(v.union(
+      v.literal("facts"),
+      v.literal("written"),
+      v.literal("final"),
+      v.literal("failed"),
+      v.literal("capped"),
+    )),
   })
     .index("by_user_scope_date", ["user_id", "scope", "date"])
-    .index("by_team_scope_date", ["team_id", "scope", "date"]),
+    .index("by_team_scope_date", ["team_id", "scope", "date"])
+    .index("by_team_repo_scope_date", ["team_id", "repository", "scope", "date"]),
+
+  // One story of a team's Changes edition: one intent, built from the commits
+  // and team-visible sessions behind it (docs/proposals/changes-page.md 7.1,
+  // 8.1). Team-only by construction, so no `workspace` key: every input passed
+  // teamVisibleInputs() when the row was written, and private sessions appear
+  // only as a count. `date` is the team-local day (lib/teamDay.ts).
+  change_stories: defineTable({
+    team_id: v.id("teams"),
+    repository: v.string(),
+    date: v.string(),
+    story_key: v.string(),
+    area: v.string(),
+    branch: v.string(),
+    on_default_branch: v.boolean(),
+    commit_shas: v.array(v.string()),
+    conversation_ids: v.array(v.id("conversations")),
+    pr_ids: v.array(v.id("pull_requests")),
+    author_names: v.array(v.string()),
+    actor_user_ids: v.array(v.id("users")),
+    insertions: v.number(),
+    deletions: v.number(),
+    files_changed: v.number(),
+    area_counts: v.record(v.string(), v.number()),
+    release: v.optional(changeReleaseValidator),
+    risks: v.array(v.object({ code: v.string(), evidence: v.array(v.string()) })),
+    first_at: v.number(),
+    last_at: v.number(),
+    // Deterministic text from layer 0 first, replaced by prose when it lands.
+    headline: v.string(),
+    dek: v.string(),
+    body: v.optional(v.string()),
+    kind: v.string(),
+    importance: v.number(),
+    why_source: v.optional(v.union(
+      v.literal("session"),
+      v.literal("commit"),
+      v.literal("pr"),
+      v.literal("none"),
+    )),
+    risk_lines: v.optional(v.record(v.string(), v.string())),
+    prose_status: v.union(
+      v.literal("pending"),
+      v.literal("written"),
+      v.literal("failed"),
+      v.literal("skipped"),
+    ),
+    inputs_hash: v.string(),
+    generated_at: v.optional(v.number()),
+    model: v.optional(v.string()),
+    input_tokens: v.optional(v.number()),
+    output_tokens: v.optional(v.number()),
+    cost_usd: v.optional(v.number()),
+    private_session_count: v.number(),
+  })
+    .index("by_team_repo_date", ["team_id", "repository", "date"])
+    .index("by_team_date", ["team_id", "date"])
+    .index("by_story_key", ["story_key"])
+    // The per-team daily prose cap sums cost over rows generated today.
+    .index("by_team_generated_at", ["team_id", "generated_at"]),
+
+  // Which visible session (and its owner) fed which story, so a visibility
+  // or membership change finds the stories to reset without a scan.
+  change_story_inputs: defineTable({
+    story_id: v.id("change_stories"),
+    team_id: v.id("teams"),
+    conversation_id: v.id("conversations"),
+    owner_id: v.id("users"),
+  })
+    .index("by_story", ["story_id"])
+    .index("by_conversation", ["conversation_id"])
+    .index("by_owner", ["owner_id", "team_id"]),
+
+  // A team day whose Changes edition needs rebuilding, debounced: the first
+  // mark schedules one rebuild and later marks ride it (changes-page.md 7.7).
+  // `since` is the first mark; a row older than 15 minutes reads as stale.
+  change_dirty: defineTable({
+    team_id: v.id("teams"),
+    repository: v.string(),
+    date: v.string(),
+    since: v.number(),
+    scheduled_id: v.optional(v.id("_scheduled_functions")),
+  }).index("by_key", ["team_id", "repository", "date"]),
 
   notifications: defineTable({
     recipient_user_id: v.id("users"),
@@ -4464,6 +4593,11 @@ export default defineSchema({
     // Event triggers ignore it — the webhook already IS the evidence.
     precheck: v.optional(v.string()),
     requested_run_source: v.optional(v.literal("manual")),
+    // A focus a person gave the next run (org-staffing.md S24: "Plan the
+    // goal tree" from the Head of People's thread): a key of
+    // ORG_REVIEW_FOCUSES, carried into the run's frame and cleared when the
+    // run completes. One trigger, one run path; the focus only narrows it.
+    requested_run_focus: v.optional(v.string()),
     last_run_source: v.optional(v.string()),
     // `cast trigger add --spawn --wake`: a clean report of a once run wakes
     // the session that armed it (runOwnerWakeOf) instead of only posting
@@ -5844,6 +5978,19 @@ export default defineSchema({
     // sorts its rooms — a heartbeat writing last_seen must not re-push the
     // whole list to everyone on the team.
     .index("by_team", ["team_id"]),
+
+  // A HANG-UP, kept so the person's other clients hear it. A seat is one per
+  // person per room, so pressing End on one device deletes the seat a tab on
+  // another device is still holding media for. That tab's next heartbeat finds
+  // no row, and without this mark it reads as a lease sweep (the laptop slept)
+  // and takes the seat back: End undone within 15s. With it, the heartbeat
+  // answers "hung up" and that client leaves too. One row per person and room,
+  // cleared by the next real join.
+  call_hangups: defineTable({
+    user_id: v.id("users"),
+    room_key: v.string(),
+    at: v.number(),
+  }).index("by_user_room", ["user_id", "room_key"]),
 
   // A ring. Sync-driven, not push-driven: the recipient's client subscribes to
   // its own ringing rows (calls.getMyCalls) and renders the toast/sound
