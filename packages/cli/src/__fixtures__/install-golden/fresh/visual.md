@@ -1,7 +1,7 @@
 
 ## Visual Canvas
 
-When structure or magnitude carries the meaning (comparisons, flows, timelines, metrics, dashboards), make a `cast-canvas` block of self-contained HTML/CSS/SVG the centerpiece of the reply; codecast renders it inline, themed, expandable to fullscreen. Keep markdown for ordinary prose.
+When structure or magnitude carries the meaning (comparisons, flows, timelines, metrics, dashboards), make a `cast-canvas` block of self-contained HTML/CSS/SVG the centerpiece of the reply, or of a `cast decide` context, where the human weighs options and a comparison they can see beats one they must assemble from prose; codecast renders it inline, themed, expandable to fullscreen. Keep markdown for ordinary prose.
 
 ```cast-canvas
 <div data-canvas-title="Shown in the header"> … </div>

@@ -491,7 +491,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       [] as string[]
     )
     .option("--question <text>", stdinText("edit: replace the question"))
-    .option("--context <text>", stdinText("Markdown context: the reasoning, the tradeoff, what happens under each choice"))
+    .option("--context <text>", stdinText("Markdown context: the reasoning, the tradeoff, what happens under each choice; a cast-canvas block renders inline, so options worth comparing can sit side by side"))
     .option("--report <file>", "HTML/markdown report published as the decision's body (reuses cast publish)")
     .option("--card <card.json>", "A change card (cast card build) the decision is about; the queue draws it natively. Without -o the options are Ship, Revise, Drop")
     .option("--advisory", "Don't block: proceed with --default. Only when the default is cheap to undo — the answer often lands an hour later and may override you")

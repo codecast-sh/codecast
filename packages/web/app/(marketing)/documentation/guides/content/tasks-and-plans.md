@@ -16,7 +16,7 @@ The snippet is mostly judgment, not commands. Its rules:
 
 - **Create a task** when the work will change code or produce a deliverable and will run long enough for someone to check on it. Skip it for questions, quick lookups, and small changes that finish in minutes.
 - **Create a plan** only for work with multiple distinct parts. Single-task work gets a task.
-- **Bind before you build.** `cast task start ct-4102` claims the task and binds the session to it; `cast plan bind pl-88` attaches to a plan. Sizable work done unbound is invisible to the human tracking it.
+- **Bind before you build.** `cast task start ct-4102` claims the task and binds the session to it; `cast plan bind pl-88` attaches to a plan. Sizable work done unbound is invisible to the human tracking it. A task has one owning session: starting a task another session is still working on is refused with that session's id so the two can coordinate, and `cast task start --take` moves ownership.
 - **Check existing work first.** Search before creating: `cast task ls -q "auth"`, `cast plan ls -q "auth"`, `cast task ready` for unclaimed work. Claim rather than duplicate.
 - **Escalate explicitly.** `BLOCKED: <reason>`, `NEEDS_CONTEXT: <what>`, and `DONE_WITH_CONCERNS: <concern>` are recognized markers that flag the session for human attention.
 

@@ -215,7 +215,7 @@ A human tracks your work through a dashboard: report status through tasks and pl
 
 **Plans are for coordination** across multiple tasks or sessions. Many steps, frontend plus backend, or investigate-then-fix do not by themselves warrant one. \`cast plan create "Title" -g "goal"\`, then \`cast task create "Title" --plan <plan_id>\`.
 
-**Bind before you build.** When work warrants a task or plan, bind to it (\`cast task start <id>\` or \`cast plan bind <plan_id>\`); unbound work is invisible to the human tracking it. When your focus moves, move the binding to the task you are actually advancing.
+**Bind before you build.** When work warrants a task or plan, bind to it (\`cast task start <id>\` or \`cast plan bind <plan_id>\`); unbound work is invisible to the human tracking it. When your focus moves, move the binding to the task you are actually advancing. A task has one owning session: starting one that another session is still working on is refused until you settle with that session who continues (\`cast read\`, \`cast send\`), and \`--take\` moves ownership when that is agreed or the owner is gone.
 
 **Check existing work first.** Your context lists active tasks and plans. Search by topic (\`cast task ls -q "<topic>"\`, \`cast plan ls -q "<topic>"\`), use \`cast task ready\` for unclaimed work, and claim with \`cast task start <id>\` instead of creating a duplicate.
 
@@ -313,7 +313,7 @@ export const VISUAL_SNIPPET_END = "<!-- /codecast-visual -->";
 export const VISUAL_SNIPPET = `
 ## Visual Canvas
 
-When structure or magnitude carries the meaning (comparisons, flows, timelines, metrics, dashboards), make a \`cast-canvas\` block of self-contained HTML/CSS/SVG the centerpiece of the reply; codecast renders it inline, themed, expandable to fullscreen. Keep markdown for ordinary prose.
+When structure or magnitude carries the meaning (comparisons, flows, timelines, metrics, dashboards), make a \`cast-canvas\` block of self-contained HTML/CSS/SVG the centerpiece of the reply, or of a \`cast decide\` context, where the human weighs options and a comparison they can see beats one they must assemble from prose; codecast renders it inline, themed, expandable to fullscreen. Keep markdown for ordinary prose.
 
 \`\`\`cast-canvas
 <div data-canvas-title="Shown in the header"> … </div>
@@ -689,7 +689,7 @@ A tree lists its programs in \`.codecast/check.toml\` as a \`[projects]\` table 
 
 Point each entry at the tsconfig the package's own \`typecheck\` script runs, not necessarily the plain \`tsconfig.json\`: a build that narrows \`rootDir\` often keeps a widened \`tsconfig.typecheck.json\`, and checking the build config reports hundreds of files-outside-root errors. When a check is red with errors nobody wrote, suspect the entry before the code.
 
-The first ask builds the program (as slow as \`tsc\`); later asks take seconds. If a pass is still running, ask again rather than starting your own \`tsc\`. Sessions in one checkout share a watcher and each worktree gets its own. A machine keeps at most six watchers. When all six are busy an ask waits in a queue and starts when a slot frees, so wait on it rather than polling; a pass nobody waits on gives its slot up, and a watcher stops after 45 idle minutes.
+The first ask builds the program (as slow as \`tsc\`); later asks take seconds. If a pass is still running, ask again rather than starting your own \`tsc\`. Sessions in one checkout share a watcher. A worktree is a tree of its own and holds a program of its own, gigabytes of memory for each project, though its first pass starts from the main checkout's last one and rechecks only what differs. Work in the shared checkout unless parallel edits would collide, and give worktrees to the agents whose edits need them, never to every agent of a fan-out by default. A machine keeps at most six watchers. When all six are busy an ask waits in a queue and starts when a slot frees, so wait on it rather than polling; a pass nobody waits on gives its slot up, and a watcher stops after 45 idle minutes.
 ${CHECK_SNIPPET_END}
 `;
 
@@ -873,7 +873,7 @@ cast decide "<q>" -o … -o … --option-page 2=alt.html   # an option with its 
 cast stack remove ds-N sd-N | reorder ds-N sd-a,sd-b | policy ds-N --due tomorrow   # tend a stack; overdue sorts first
 \`\`\`
 
-**The card is the whole message.** It renders in the queue and inline right here, so it must carry everything: what you found, what each option costs, why you cannot pick, and what you will do meanwhile. A bare question is useless; the queue shows nothing else unless they open the session. For a decision that deserves evidence (a migration, an audit, a design), attach an HTML report with \`--report report.html\`; it renders embedded with the question. After posting, say nothing more about it: no summary of the options, no "I have queued…". If your reply would only repeat the card, end your turn.
+**The card is the whole message.** It renders in the queue and inline right here, so it must carry everything: what you found, what each option costs, why you cannot pick, and what you will do meanwhile. A bare question is useless; the queue shows nothing else unless they open the session. The context renders as markdown, \`cast-canvas\` blocks included, and most decisions read faster as a picture: when the options differ along something a reader compares (cost, risk, effort, a metric, before and after), open the context with a canvas that lays them side by side, and keep prose for the reasoning a picture cannot carry. For a decision that deserves evidence (a migration, an audit, a design), attach an HTML report with \`--report report.html\`; it renders embedded with the question. After posting, say nothing more about it: no summary of the options, no "I have queued…". If your reply would only repeat the card, end your turn.
 
 **Keep your decisions correct.** When facts change, \`cast decide edit\` rewrites the open decision's question, options, context or report in place, keeping its spot in the queue; \`cast decide cancel\` withdraws one that no longer applies. Both act on this session's open decision. \`cast decide ls\` lists every decision you posted with its id, answer, age and messages since it was asked (the id also comes back when you post). An answered decision cannot be edited; act on the answer. Before ending a long turn and whenever you post, cancel open asks the work has moved past: an answer to a question that stopped mattering costs attention and earns nothing.
 

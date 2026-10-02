@@ -1,4 +1,4 @@
-The visual canvas lets an agent answer with a designed page instead of a wall of text. When structure or magnitude carries the meaning — comparisons, flows, timelines, metrics, dashboards — the agent emits a `cast-canvas` block of self-contained HTML, CSS, and SVG, and codecast renders it inline in the conversation: themed to match the app, expandable to fullscreen.
+The visual canvas lets an agent answer with a designed page instead of a wall of text. When structure or magnitude carries the meaning — comparisons, flows, timelines, metrics, dashboards — the agent emits a `cast-canvas` block of self-contained HTML, CSS, and SVG, and codecast renders it inline in the conversation: themed to match the app, expandable to fullscreen. The same block renders in a `cast decide` context, so a decision in the queue can open with its options laid side by side instead of described in paragraphs.
 
 The visual snippet teaches agents the format and, just as important, the restraint: reach for a canvas when a visual beats prose; the default stays markdown. It is installed via [the snippet system](/documentation/agent-snippets).
 
