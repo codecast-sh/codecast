@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { HEALTH_CAPS, computeOrgHealth, roleActivity } from "./orgHealth";
+import { collectOrgSessions } from "./org";
 
 // org.health (docs/architecture/org-staffing.md S3): the flow signals per
 // role, per person and for the company, read from the same scan org.tree uses
@@ -265,11 +266,11 @@ describe("org.health", () => {
     })), ME as any, TEAM, NOW);
     expect(owned.company.unowned_projects).toEqual([]);
     const db = fixtures();
-    await db.insert("org_roles", { short_id: "or-9", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Chief of Staff", handle: "chief-of-staff", scope: { project_ids: [], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, status: "active", charter: "x", created_by: ME, created_at: NOW - 30 * D, updated_at: 1 });
+    await db.insert("org_roles", { short_id: "or-9", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Head of People", handle: "head-of-people", scope: { project_ids: [], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, status: "active", charter: "x", created_by: ME, created_at: NOW - 30 * D, updated_at: 1 });
     const whole = await computeOrgHealth(ctxOf(db), ME as any, TEAM, NOW);
-    // Hiring the chief of staff does not turn the unowned signal off.
+    // Hiring the head of people does not turn the unowned signal off.
     expect(whole.company.unowned_projects).toEqual([{ id: R, title: "Orphan" }]);
-    const cos = whole.roles.find((x) => x.handle === "chief-of-staff")!;
+    const cos = whole.roles.find((x) => x.handle === "head-of-people")!;
     // Its ledger is what no narrower role covers: the unfiled task, the loose plan's open task, the two projectless plans; its idle clock is the newest event anywhere.
     expect(cos.ledger).toEqual({ open_tasks: 3, in_flight: 0, active_plans: 2 });
     expect(cos.load).toMatchObject({ items_per_day: 0, decisions_per_day: 0, live_hands: 0, open_stalls: 0, cap_hit_days: 0 });
@@ -281,7 +282,7 @@ describe("org.health", () => {
     expect(whole.roles.find((x) => x.handle === "growth")!.ledger.open_tasks).toBe(27);
     // Retire the lead and its area falls back to the root seat (S26).
     db._tables.org_roles.find((r: any) => r._id === GROWTH).status = "retired";
-    const after = (await computeOrgHealth(ctxOf(db), ME as any, TEAM, NOW)).roles.find((x) => x.handle === "chief-of-staff")!;
+    const after = (await computeOrgHealth(ctxOf(db), ME as any, TEAM, NOW)).roles.find((x) => x.handle === "head-of-people")!;
     expect(after.counted).toMatchObject({ rule: "remainder", projects: 2, plans: 4 });
     expect(after.ledger.open_tasks).toBe(3 + 27);
   });
@@ -318,10 +319,26 @@ describe("org.health", () => {
     expect(a.wakes_7d).toMatchObject({ total: 8, days_at_cap: 2, cap_hit_days: 2 });
     expect(a).toMatchObject({ idle: false, age_days: 30 });
     // A whole workspace role reads the clock it is handed; with no event anywhere its age decides.
-    const cos = { _id: "x", handle: "chief-of-staff", scope: { project_ids: [], plan_ids: [] }, created_at: NOW - 20 * D };
+    const cos = { _id: "x", handle: "head-of-people", scope: { project_ids: [], plan_ids: [] }, created_at: NOW - 20 * D };
     expect(await roleActivity(ctxOf(db), ME as any, cos, NOW, { wholeWorkspaceLatest: NOW - D })).toMatchObject({ idle_days: 1, idle: false });
     expect(await roleActivity(ctxOf(db), ME as any, cos, NOW, { wholeWorkspaceLatest: null })).toMatchObject({ idle_days: null, age_days: 20, idle: true });
     expect(HEALTH_CAPS.tasks).toBe(2000);
+  });
+
+  test("roleActivity reads the caller's scan instead of scanning the sessions again (ct-56046)", async () => {
+    // The analyzer's org slice calls roleActivity once per role; a scan per
+    // role passed Convex's 100 MB read limit on a nine role workspace.
+    const db = fixtures();
+    const growth = await db.get(GROWTH as any);
+    let conversationReads = 0;
+    const counting = { db: { ...db, query: (table: string) => { if (table === "conversations") conversationReads++; return db.query(table); } } } as any;
+    const own = await roleActivity(counting, ME as any, growth, NOW, { wholeWorkspaceLatest: null });
+    const scanning = conversationReads;
+    const scan = await collectOrgSessions(ctxOf(db), ME as any, TEAM, NOW);
+    conversationReads = 0;
+    const shared = await roleActivity(counting, ME as any, growth, NOW, { wholeWorkspaceLatest: null, scan });
+    expect(shared).toEqual(own);
+    expect(conversationReads).toBeLessThan(scanning);
   });
 });
 

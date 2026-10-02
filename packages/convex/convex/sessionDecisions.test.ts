@@ -988,3 +988,31 @@ describe("edit, withdraw and option pages (the-line.md L6, L10)", () => {
     expect(tables.decision_grants).toHaveLength(0);
   });
 });
+
+describe("a change card on a decision (LE11)", () => {
+  const card = JSON.parse(fs.readFileSync(path.join(__dirname, "../../shared/contracts/__fixtures__/changeCard/card.json"), "utf-8"));
+  const ask = (ctx: any, c: unknown) =>
+    askCore(ctx, { userId: HOST }, {
+      session_id: "sess-ask",
+      question: c && typeof c === "object" ? (c as any).cause?.title ?? "Ship it?" : "Ship it?",
+      options: [{ label: "Ship" }, { label: "Revise" }, { label: "Drop" }],
+      card: c as any,
+      category: "review",
+    });
+
+  test("a valid card is stored on the row and read back by get", async () => {
+    const { ctx, tables } = seed();
+    const r = await ask(ctx, card);
+    expect(r.error).toBeUndefined();
+    expect(tables.session_decisions[0].card.cause.task).toBe("ct-56301");
+  });
+
+  test("a card that breaks its contract is refused with the field that broke", async () => {
+    const { ctx, tables } = seed();
+    const r = await ask(ctx, { ...card, proof: { before: [{ name: "x", ok: true, detail: "" }], after: [] } });
+    expect(r.error).toContain("Invalid change card");
+    expect(r.error).toContain("proof.before");
+    expect(tables.session_decisions ?? []).toHaveLength(0);
+  });
+});
+

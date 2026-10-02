@@ -3,6 +3,7 @@ import { routeUpWaitingSession } from "./agentTasks";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { isLowSignalPrompt } from "./titleGeneration";
+import { callModel, CHEAP_MODEL, type SurfaceRequest } from "./lib/anthropic";
 
 // Which rows carry human-readable conversation: real user/assistant text, not
 // tool-result carriers or machine noise (task notifications, interruption
@@ -217,8 +218,8 @@ export function shapeFinalMessage(text: string): string {
 }
 
 // Pure shaping over the newest-first raw rows, shared by the query below and
-// the eval script (scripts/settle-eval.ts) so what the model is graded on is
-// what it sees in prod.
+// the settle eval (packages/evals/src/surfaces/settle) so what the model is
+// graded on is what it sees in prod.
 export function shapeSettleTail(
   newestFirst: Array<{ role?: string; content?: string | null; tool_results?: unknown[] | null; tool_calls?: unknown[] | null }>,
 ): SettleTailMessage[] {
@@ -274,7 +275,7 @@ export const getMessagesForSummary = internalQuery({
   },
 });
 
-// The classifier prompt, pure so the eval script grades the exact prod text.
+// The classifier prompt, pure so the settle eval grades the exact prod text.
 export function buildSettlePrompt(messages: SettleTailMessage[]): string {
   const messageText = messages
     .map((m) => {
@@ -306,13 +307,17 @@ Conversation:
 ${messageText}`;
 }
 
+/** The settle classifier request prod posts for a shaped tail. */
+export function settleRequest(tail: SettleTailMessage[]): SurfaceRequest {
+  return { model: CHEAP_MODEL, max_tokens: 200, temperature: 0, prompt: buildSettlePrompt(tail) };
+}
+
 export const generateIdleSummary = internalAction({
   args: {
     conversation_id: v.id("conversations"),
   },
   handler: async (ctx, args) => {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) return;
+    if (!process.env.ANTHROPIC_API_KEY) return;
 
     const messages = await ctx.runQuery(internal.idleSummary.getMessagesForSummary, {
       conversation_id: args.conversation_id,
@@ -320,32 +325,10 @@ export const generateIdleSummary = internalAction({
 
     if (messages.length === 0) return;
 
-    const prompt = buildSettlePrompt(messages);
-
     try {
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 200,
-          temperature: 0,
-          messages: [{ role: "user", content: prompt }],
-        }),
-      });
-
-      if (!response.ok) {
-        console.error("Idle summary API error:", response.status);
-        return;
-      }
-
-      const data = await response.json();
-      const raw = data.content?.[0]?.text?.trim() ?? "";
-      const { verdict, summary } = parseSettleReply(raw);
+      const reply = await callModel({ ...settleRequest(messages), label: "Idle summary" });
+      if (!reply) return;
+      const { verdict, summary } = parseSettleReply(reply.text);
       const usableSummary = summary && isUsableIdleSummary(summary) ? summary : undefined;
 
       // The verdict is written even when the summary line fails the prose

@@ -90,7 +90,7 @@ function normalizeTitle(title: string): string[] {
     .filter((w) => w.length > 2);
 }
 
-function titleSimilarity(a: string, b: string): number {
+export function titleSimilarity(a: string, b: string): number {
   const wordsA = new Set(normalizeTitle(a));
   const wordsB = new Set(normalizeTitle(b));
   if (wordsA.size === 0 || wordsB.size === 0) return 0;
@@ -102,13 +102,13 @@ function titleSimilarity(a: string, b: string): number {
   return union > 0 ? intersection / union : 0;
 }
 
-const DEDUP_SIMILARITY_THRESHOLD = 0.5;
+export const DEDUP_SIMILARITY_THRESHOLD = 0.5;
 const PLAN_REFRESH_SIMILARITY_THRESHOLD = 0.25;
 
 // Every insight should produce at least one task. We extract:
 // 1. The goal itself (shipped = done feature, progress = in_progress task, blocked = blocked bug)
-// 2. Each blocker as a separate high-priority bug
-// 3. next_action as a follow-up task
+// 2. next_action as a follow-up task
+// (Blockers become signals instead: signals.ingestInsightBlockers.)
 export const mineTasksFromInsights = internalMutation({
   args: {
     user_id: v.id("users"),
@@ -330,31 +330,11 @@ export const mineTasksFromInsights = internalMutation({
         tasksCreated++;
       }
 
-      // 2. Each blocker as a separate high-priority bug (dedup against existing)
-      if (insight.blockers?.length) {
-        for (const blocker of insight.blockers) {
-          if (findSimilarTask(blocker)) {
-            tasksDeduped++;
-            continue;
-          }
-          const taskId = await ctx.db.insert("tasks", {
-            ...base,
-            short_id: await nextShortId(ctx.db, "ct"),
-            title: blocker,
-            description: `Blocker from: ${insight.goal || insight.summary}`,
-            task_type: "bug",
-            status: "open",
-            priority: "high",
-            attempt_count: 0,
-            created_at: ts,
-            updated_at: ts,
-          });
-          existingTasks.push({ ...base, _id: taskId, title: blocker, status: "open", task_type: "bug", priority: "high", short_id: "", description: "", attempt_count: 0, created_at: ts, updated_at: ts } as any);
-          tasksCreated++;
-        }
-      }
+      // 2. Blockers are not mined here: the insight generator files each new
+      // one as a signal (signals.ingestInsightBlockers), the one door causes
+      // open through (the-line-end-to-end.md LE3).
 
-      // 3. next_action as a follow-up task (dedup against existing)
+      // next_action as a follow-up task (dedup against existing)
       if (insight.next_action && insight.next_action !== insight.goal) {
         if (!findSimilarTask(insight.next_action)) {
           const taskId = await ctx.db.insert("tasks", {

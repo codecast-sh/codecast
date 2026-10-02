@@ -6,6 +6,7 @@ import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { extractTitleJson } from "./titleGeneration";
+import { callModel } from "./lib/anthropic";
 import { isRefusalProse } from "./idleSummary";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { enqueuePush } from "./pushRouter";
@@ -16,9 +17,11 @@ import { armedTriggerKindFor } from "./dormancy";
 import { restoreToInbox } from "./inboxFilters";
 import { configuredCloudWakeHosts, getCloudWakeHostForConversation } from "./cloudWake";
 import { enqueuePendingMessage, reachableRole } from "./pendingMessages";
-import { triggerFiringSource, normalizeThreadState, runOwnerWakeOf, runParentOf, runResultThreadOf, triggerLifecycleInstructions, formatScheduledTask, STASHED_RUN_NOTE, type RoleCard, type RunOutcome, type WaitingSession } from "@codecast/shared/contracts";
+import { triggerFiringSource, normalizeThreadState, runOwnerWakeOf, runParentOf, runResultThreadOf, triggerRunFrame, formatScheduledTask, type RoleCard, type RunOutcome, type WaitingSession } from "@codecast/shared/contracts";
 import type { AreaChange } from "@codecast/shared/contracts/orgAreas";
 import { findRoleEventTrigger, ROLE_NEEDS_INPUT_SPEC, roleEventSpecsFor, type RoleEventSpec } from "./lib/orgRoutine";
+import { roleServedInitiatives } from "./lib/roleInitiatives";
+import { metricLine } from "@codecast/shared/contracts/initiative";
 import { earliestUsageResetAt, listOnlineDevices } from "./ccAccountsShared";
 import { performSetThreadState } from "./conversations";
 
@@ -150,7 +153,7 @@ export async function applyCancel(ctx: TaskCtx, task: Doc<"agent_tasks">) {
 // and undo-of-hide need to reverse exactly that side effect. Also revives a
 // failed schedule. Recurring re-arms one interval out (not an immediate fire);
 // a once-task keeps its future run_at or re-arms a minute out.
-async function applyReactivate(ctx: TaskCtx, task: Doc<"agent_tasks">) {
+export async function applyReactivate(ctx: TaskCtx, task: Doc<"agent_tasks">) {
   if (task.status !== "completed" && task.status !== "failed") return false;
   await patchTask(ctx, task, {
     status: "scheduled",
@@ -848,6 +851,7 @@ async function roleCardOf(ctx: TaskCtx, roleId: Id<"org_roles"> | undefined): Pr
   const reports_to = to?.kind === "role" ? (parent ? `@${parent.handle}` : "") : (parent?.name ?? "");
   const projects: any[] = (await Promise.all((role.scope?.project_ids ?? []).map((id: any) => ctx.db.get(id)))).filter(Boolean);
   const plans: any[] = (await Promise.all((role.scope?.plan_ids ?? []).map((id: any) => ctx.db.get(id)))).filter(Boolean);
+  const served = await roleServedInitiatives(ctx, role);
   const firstLine = (t: unknown, n: number) => {
     const line = String(t ?? "").split("\n")[0].trim();
     if (line.length <= n) return line;
@@ -861,22 +865,15 @@ async function roleCardOf(ctx: TaskCtx, roleId: Id<"org_roles"> | undefined): Pr
     scope: [...projects, ...plans].map((r) => r.title).filter(Boolean),
     ...(firstLine(role.charter, 240) ? { charter: firstLine(role.charter, 240) } : {}),
     goals: projects.map((p) => firstLine(p.goal, 160)).filter(Boolean).slice(0, 3),
+    // What the area feeds, up to the top level goal, with each number read
+    // against its target: the link from a role's day to the company's goals.
+    ...(served.length ? { initiatives: served.map((i) => ({ short_id: i.short_id, title: i.title, metrics: i.metrics.map((m) => metricLine(m)), chain: i.chain.map((c) => c.title) })) } : {}),
   };
 }
 
 export async function triggerFrameFor(ctx: TaskCtx, task: Doc<"agent_tasks">, conversation: Doc<"conversations"> | null, waiting?: WaitingSession, change?: AreaChange): Promise<string> {
   const stashed = !!conversation && !conversation.inbox_killed_at && !!conversation.inbox_stashed_at;
-  const body = [task.prompt, triggerLifecycleInstructions(task)].filter(Boolean).join("\n\n") + (stashed ? STASHED_RUN_NOTE : "");
-  return formatScheduledTask({
-    title: task.title || "",
-    task_id: String(task._id),
-    trigger: task.short_id,
-    event: task.event_filter?.event_type,
-    role: await roleCardOf(ctx, task.role_id),
-    waiting: waiting ?? null,
-    ...(change ? { change } : {}),
-    body,
-  });
+  return triggerRunFrame(task, { role: await roleCardOf(ctx, task.role_id), waiting, change, stashed });
 }
 
 // The route up (org-staffing.md S28): a session that reports to a role needs
@@ -1725,7 +1722,7 @@ export const webList = query({
 // rules), so this grants nothing a transcript view doesn't already show.
 // Management verbs follow the same rule (getManageableTask); only delete
 // stays owner-only.
-async function canViewTask(
+export async function canViewTask(
   ctx: { db: any },
   userId: Id<"users">,
   task: Doc<"agent_tasks">
@@ -2620,8 +2617,7 @@ export const generateDisplaySummary = internalAction({
   // export from the module type — breaking every internal.agentTasks.
   // generateDisplaySummary reference at deploy-time typecheck.
   handler: async (ctx, args): Promise<void> => {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
+    if (!process.env.ANTHROPIC_API_KEY) {
       console.error("ANTHROPIC_API_KEY not configured");
       return;
     }
@@ -2639,32 +2635,15 @@ export const generateDisplaySummary = internalAction({
           : "once";
 
     try {
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 300,
-          // Deterministic: the same prompt must yield the same summary.
-          temperature: 0,
-          messages: [
-            { role: "user", content: buildTaskSummaryPrompt({ prompt: task.prompt, scheduleLine }) },
-          ],
-        }),
+      // The cheap model, at temperature 0: the same prompt must yield the
+      // same summary.
+      const reply = await callModel({
+        prompt: buildTaskSummaryPrompt({ prompt: task.prompt, scheduleLine }),
+        max_tokens: 300,
+        label: "Task summary Haiku",
       });
-
-      if (!response.ok) {
-        console.error("Task summary Haiku error:", response.status, await response.text());
-        return;
-      }
-
-      const data = await response.json();
-      const text = data.content?.[0]?.text?.trim();
-      if (!text) return;
+      if (!reply) return;
+      const text = reply.text;
 
       const parsed = extractTitleJson(text);
       const title = parsed?.title?.trim();
