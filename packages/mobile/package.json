@@ -28,6 +28,7 @@
     "@platform/analytics": "file:../../platform/packages/analytics",
     "@platform/flags": "file:../../platform/packages/flags",
     "@react-navigation/native": "^7.1.8",
+    "@sentry/cli": "3.4.0",
     "@sentry/react-native": "^8.5.0",
     "convex": "^1.31.2",
     "expo": "~54.0.29",

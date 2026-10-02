@@ -20,7 +20,7 @@
     },
     "packages/cli": {
       "name": "@codecast/cli",
-      "version": "1.1.162",
+      "version": "1.1.163",
       "bin": {
         "codecast": "./dist/main.js",
         "cast": "./dist/main.js",
@@ -79,7 +79,7 @@
     },
     "packages/electron": {
       "name": "@codecast/electron",
-      "version": "1.1.122",
+      "version": "1.1.123",
       "dependencies": {
         "@platform/desktop": "file:../../platform/packages/desktop",
         "electron-updater": "^6.3.0",
@@ -120,6 +120,7 @@
         "@platform/analytics": "file:../../platform/packages/analytics",
         "@platform/flags": "file:../../platform/packages/flags",
         "@react-navigation/native": "^7.1.8",
+        "@sentry/cli": "3.4.0",
         "@sentry/react-native": "^8.5.0",
         "convex": "^1.31.2",
         "expo": "~54.0.29",
@@ -5153,13 +5154,13 @@
 
     "@codecast/cli/@platform/auth/convex": ["convex@1.36.1", "", { "dependencies": { "esbuild": "0.27.0", "prettier": "^3.0.0", "ws": "8.18.0" }, "peerDependencies": { "@auth0/auth0-react": "^2.0.1", "@clerk/clerk-react": "^4.12.8 || ^5.0.0", "@clerk/react": "^6.4.3", "react": "^18.0.0 || ^19.0.0-0 || ^19.0.0" }, "optionalPeers": ["@auth0/auth0-react", "@clerk/clerk-react", "@clerk/react", "react"], "bin": { "convex": "bin/main.js" } }, "sha512-NVnwNqU+h8jyPuS0Itvj4MPH9c2yF+tA/RNoSDpCqiLhmYD4+kZxm0dDkVM0QDzz66wem9NqheBb9YQGsHwzBQ=="],
 
-    "@codecast/cli/@platform/snippets/@platform/cli-kit": ["@platform/cli-kit@file:platform/packages/cli-kit", {}],
+    "@codecast/cli/@platform/snippets/@platform/cli-kit": ["@platform/cli-kit@file:platform/packages/cli-kit", { "devDependencies": { "@types/bun": "latest", "@types/node": "^22.0.0", "typescript": "^5.7.2" } }],
 
     "@codecast/cli/convex/esbuild": ["esbuild@0.25.4", "", { "optionalDependencies": { "@esbuild/aix-ppc64": "0.25.4", "@esbuild/android-arm": "0.25.4", "@esbuild/android-arm64": "0.25.4", "@esbuild/android-x64": "0.25.4", "@esbuild/darwin-arm64": "0.25.4", "@esbuild/darwin-x64": "0.25.4", "@esbuild/freebsd-arm64": "0.25.4", "@esbuild/freebsd-x64": "0.25.4", "@esbuild/linux-arm": "0.25.4", "@esbuild/linux-arm64": "0.25.4", "@esbuild/linux-ia32": "0.25.4", "@esbuild/linux-loong64": "0.25.4", "@esbuild/linux-mips64el": "0.25.4", "@esbuild/linux-ppc64": "0.25.4", "@esbuild/linux-riscv64": "0.25.4", "@esbuild/linux-s390x": "0.25.4", "@esbuild/linux-x64": "0.25.4", "@esbuild/netbsd-arm64": "0.25.4", "@esbuild/netbsd-x64": "0.25.4", "@esbuild/openbsd-arm64": "0.25.4", "@esbuild/openbsd-x64": "0.25.4", "@esbuild/sunos-x64": "0.25.4", "@esbuild/win32-arm64": "0.25.4", "@esbuild/win32-ia32": "0.25.4", "@esbuild/win32-x64": "0.25.4" }, "bin": { "esbuild": "bin/esbuild" } }, "sha512-8pgjLUcUjcgDg+2Q4NYXnPbo/vncAY4UmyaCm0jZevERqCHZIaWwdJHkf8XQtu4AxSKCdvrUbT0XUr1IdZzI8Q=="],
 
-    "@codecast/evals/@platform/evals/@platform/cli-kit": ["@platform/cli-kit@file:platform/packages/cli-kit", {}],
+    "@codecast/evals/@platform/evals/@platform/cli-kit": ["@platform/cli-kit@file:platform/packages/cli-kit", { "devDependencies": { "@types/bun": "latest", "@types/node": "^22.0.0", "typescript": "^5.7.2" } }],
 
-    "@codecast/evals/@platform/snippets/@platform/cli-kit": ["@platform/cli-kit@file:platform/packages/cli-kit", {}],
+    "@codecast/evals/@platform/snippets/@platform/cli-kit": ["@platform/cli-kit@file:platform/packages/cli-kit", { "devDependencies": { "@types/bun": "latest", "@types/node": "^22.0.0", "typescript": "^5.7.2" } }],
 
     "@codecast/web/@tanstack/react-virtual/@tanstack/virtual-core": ["@tanstack/virtual-core@3.17.0", "", {}, "sha512-gOxY/hFkPh/XQYhnThBHzkbkX3Ed+z/iushyz+R+JAr213aXxUDgQoTgTdrDpBSRsjFM73P/KfUyWmaF9WHMkQ=="],
 
