@@ -54,7 +54,7 @@ A human tracks your work through a dashboard: report status through tasks and pl
 
 **Plans are for coordination** across multiple tasks or sessions. Many steps, frontend plus backend, or investigate-then-fix do not by themselves warrant one. `cast plan create "Title" -g "goal"`, then `cast task create "Title" --plan <plan_id>`.
 
-**Bind before you build.** When work warrants a task or plan, bind to it (`cast task start <id>` or `cast plan bind <plan_id>`); unbound work is invisible to the human tracking it. When your focus moves, move the binding to the task you are actually advancing.
+**Bind before you build.** When work warrants a task or plan, bind to it (`cast task start <id>` or `cast plan bind <plan_id>`); unbound work is invisible to the human tracking it. When your focus moves, move the binding to the task you are actually advancing. A task has one owning session: starting one that another session is still working on is refused until you settle with that session who continues (`cast read`, `cast send`), and `--take` moves ownership when that is agreed or the owner is gone.
 
 **Check existing work first.** Your context lists active tasks and plans. Search by topic (`cast task ls -q "<topic>"`, `cast plan ls -q "<topic>"`), use `cast task ready` for unclaimed work, and claim with `cast task start <id>` instead of creating a duplicate.
 
