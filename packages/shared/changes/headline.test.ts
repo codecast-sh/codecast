@@ -6,6 +6,8 @@ describe("cleanSubject", () => {
     expect(cleanSubject("feat(web): line pages, share pages, org staffing and app updates")).toBe("Line pages, share pages, org staffing and app updates");
     expect(cleanSubject("fix(cli): match a hook entry by the file it names, not its spelling.")).toBe("Match a hook entry by the file it names, not its spelling");
     expect(cleanSubject("Added zoom support")).toBe("Added zoom support");
+    expect(cleanSubject("chore: npm audit fixes")).toBe("npm audit fixes");
+    expect(cleanSubject("fix(cli): cast check reuses the watcher")).toBe("cast check reuses the watcher");
   });
 
   test("keeps the revert and short ids", () => {

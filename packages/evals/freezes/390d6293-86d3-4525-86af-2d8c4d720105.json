@@ -1,0 +1,26 @@
+{
+  "name": "changes-story private-session-withheld",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:private-session-withheld"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "changes-story:private-session-withheld",
+    "title": "changes-story private-session-withheld"
+  },
+  "asOf": "2026-01-14T18:00:00.000Z",
+  "trigger": {
+    "type": "changes-story"
+  },
+  "meta": {
+    "surface": "changes-story",
+    "visibility": "public",
+    "snapshot": "fixtures/changes-story/private-session-withheld.json"
+  },
+  "judge": "describes the new account activity CSV export (90 days, streamed) for whoever uses it, gives no reason for it, and names no person, customer or session",
+  "notes": null,
+  "tags": [],
+  "id": "390d6293-86d3-4525-86af-2d8c4d720105",
+  "createdAt": "2026-10-02T23:33:35.436Z"
+}

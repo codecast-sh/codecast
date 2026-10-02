@@ -115,8 +115,8 @@ export type OrgRole = {
   /** The person like name a person chose (org-staffing.md S30); absent, the
    *  role wears its face's character name. Read through roleWords/roleIdentity. */
   given_name?: string | null;
-  /** Set on a Chief of Staff (S30): what it reaches. */
-  chief?: { reach: "global" } | { reach: "team"; team_id: string } | null;
+  /** Set on an Executive Assistant (S30): what it reaches. */
+  assistant?: { reach: "global" } | { reach: "team"; team_id: string } | null;
   /** The standing agent this seat replaced, when it was seated fresh (S16):
    *  the old thread is kept, not deleted, and the role's page links it so a
    *  workspace never loses the assistant it had. Rides org.tree on the role

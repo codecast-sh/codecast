@@ -44,6 +44,7 @@ const JoinTeam = lazy(() => import("@/app/join/[code]/page"));
 
 const Inbox = lazy(() => import("@/app/inbox/page"));
 const Feed = lazy(() => import("@/app/feed/page"));
+const Changes = lazy(() => import("@/app/changes/page"));
 const Crosstalk = lazy(() => import("@/app/crosstalk/page"));
 const Browser = lazy(() => import("@/app/browser/page"));
 const Org = lazy(() => import("@/app/org/page"));
@@ -218,6 +219,7 @@ export function App() {
             <Route element={<DashboardShell />}>
               <Route path="inbox" element={<E name="Inbox"><Inbox /></E>} />
               <Route path="feed" element={<E name="Feed"><Feed /></E>} />
+              <Route path="changes" element={<E name="Changes"><Changes /></E>} />
               <Route path="crosstalk" element={<E name="Crosstalk"><Crosstalk /></E>} />
               <Route path="browser" element={<E name="Browser"><Browser /></E>} />
               <Route path="org" element={<E name="Org"><Org /></E>} />

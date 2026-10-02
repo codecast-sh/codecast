@@ -129,6 +129,20 @@ export type ShortcutAction =
   | 'threads.reply'
   | 'threads.openIn'
   | 'threads.markAllRead'
+  | 'changes.prevDay'
+  | 'changes.nextDay'
+  | 'changes.today'
+  | 'changes.next'
+  | 'changes.prev'
+  | 'changes.evidence'
+  | 'changes.open'
+  | 'changes.waiting'
+  | 'changes.risks'
+  | 'changes.branches'
+  | 'changes.mode'
+  | 'changes.filter'
+  | 'changes.copyLink'
+  | 'changes.escape'
   | 'task.status'
   | 'task.priority'
   | 'task.labels'
@@ -405,6 +419,24 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'r', action: 'threads.reply', when: 'threads', description: 'Reply — focus the composer' },
   { key: 'o', action: 'threads.openIn', when: 'threads', description: 'Open the task, room or page' },
   { key: 'shift+i', action: 'threads.markAllRead', when: 'threads', description: 'Mark every thread in the view read' },
+  // The Changes edition (components/changes, spec 6.1). The page activates
+  // the context while it is the active pane and its handlers decline
+  // otherwise. Escape fires from the filter field too, so it can clear it.
+  { key: '[', action: 'changes.prevDay', when: 'changes', description: 'Previous day (week in week view)' },
+  { key: ']', action: 'changes.nextDay', when: 'changes', description: 'Next day (week in week view)' },
+  { key: 't', action: 'changes.today', when: 'changes', description: 'Today' },
+  { key: 'j', action: 'changes.next', when: 'changes', description: 'Next story' },
+  { key: 'k', action: 'changes.prev', when: 'changes', description: 'Previous story' },
+  { key: 'e', action: 'changes.evidence', when: 'changes', description: 'Open or close the story evidence' },
+  { key: 'enter', action: 'changes.evidence', when: 'changes', description: 'Open or close the story evidence' },
+  { key: 'o', action: 'changes.open', when: 'changes', description: 'Open the story session, else its largest commit' },
+  { key: 'u', action: 'changes.waiting', when: 'changes', description: 'What is waiting to ship' },
+  { key: 'r', action: 'changes.risks', when: 'changes', description: 'Risks only' },
+  { key: 'b', action: 'changes.branches', when: 'changes', description: 'Main or all branches' },
+  { key: 'w', action: 'changes.mode', when: 'changes', description: 'Day or week' },
+  { key: '/', action: 'changes.filter', when: 'changes', description: 'Filter stories' },
+  { key: 'c', action: 'changes.copyLink', when: 'changes', description: 'Copy a link to the story' },
+  { key: 'escape', action: 'changes.escape', when: 'changes', skipInputCheck: true, description: 'Close the evidence, then clear filters' },
   { key: 's', action: 'task.status', when: 'tasks', description: 'Set status' },
   { key: 'p', action: 'task.priority', when: 'tasks', description: 'Set priority' },
   { key: 'l', action: 'task.labels', when: 'tasks', description: 'Edit labels' },

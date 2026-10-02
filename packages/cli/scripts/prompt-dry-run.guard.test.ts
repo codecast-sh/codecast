@@ -302,6 +302,8 @@ function harnessWorld(stream: object[]) {
     'printf "%s\\n" "$@" > "$FAKE_CLAUDE_REC/argv"',
     'cat > "$FAKE_CLAUDE_REC/stdin"',
     'printf "%s\\n" "${CLAUDE_CODE_MAX_OUTPUT_TOKENS:-unset}" "${CLAUDE_CODE_DISABLE_THINKING:-unset}" "${CLAUDE_CODE_OAUTH_TOKEN:-unset}" > "$FAKE_CLAUDE_REC/env"',
+    // What a Bash command sees first on PATH after the user's profile shadowed it, once CLAUDE_ENV_FILE is sourced.
+    '( PATH="/profile/bin:$PATH"; . "$CLAUDE_ENV_FILE"; printf "%s" "${PATH%%:*}" ) > "$FAKE_CLAUDE_REC/path-first"',
     'cat "$FAKE_CLAUDE_STREAM"',
     "",
   ].join("\n"), 0o755);
@@ -401,6 +403,8 @@ describe("prompt-dry-run.ts", () => {
     expect(argv[argv.indexOf("-p") + 1]).toBe("--allowedTools");
     expect(argv.join(" ")).not.toContain(h.prompt);
     expect(JSON.parse(fs.readFileSync(path.join(h.runDir, "said.json"), "utf8"))).toEqual(["First.\n\n────────\n\nstill first", "Second."]);
+    // The guard stays first on every Bash command even when the profile puts the real cast ahead of it.
+    expect(h.recorded("path-first")).toBe(path.join(path.dirname(HARNESS), "prompt-dry-run-bin"));
   }, 30_000);
 
   test("each --then is one more turn resumed into the same session, in order, with a turn line in calls.log", () => {

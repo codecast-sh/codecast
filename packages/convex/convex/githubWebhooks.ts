@@ -23,7 +23,9 @@ import { internal, api } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { recordPRMergedActivity, resolveActorUserIdForTeam } from "./pull_requests";
 import { recordExternalEvent } from "./externalEvents";
+import { markCommitDirty } from "./lib/changesDirty";
 import { checkLabel, repositoryOwner } from "@codecast/shared/contracts";
+import { parseReleaseTag } from "@codecast/shared/changes";
 import {
   patchPullRequest,
   firePrTrigger as fireTrigger,
@@ -1335,6 +1337,43 @@ export function pushCommitFiles(commit: { added?: string[]; modified?: string[];
   return out;
 }
 
+/**
+ * A pushed version tag is a release (Changes, spec 7.3): one `release` event
+ * naming the tag, the commit it points at, and the surface and version the tag
+ * name spells. A deleted tag, or one with no version in it, records nothing.
+ */
+export async function recordTagPush(
+  ctx: { db: any },
+  payload: any,
+  repository: string,
+  tag: string,
+  at: number,
+): Promise<{ success: boolean; reason: string; commits_created: number }> {
+  const skip = (reason: string) => ({ success: true, reason, commits_created: 0 });
+  if (payload.deleted) return skip("Tag deleted");
+  const release = parseReleaseTag(tag);
+  if (!release) return skip("Tag names no version");
+  const teamId = await resolveTeamForRepository(ctx, repository);
+  if (!teamId) return skip("No installation for this repository");
+  // An annotated tag's `after` is the tag object; head_commit is what it tags.
+  const sha: string | undefined = payload.head_commit?.id ?? payload.after;
+  await recordExternalEvent(ctx, {
+    source: "github",
+    team_id: teamId,
+    repository,
+    kind: "release",
+    actor_login: payload.pusher?.name ?? payload.sender?.login,
+    actor_avatar_url: payload.sender?.avatar_url,
+    title: tag,
+    url: `https://github.com/${repository}/releases/tag/${tag.split("/").map(encodeURIComponent).join("/")}`,
+    sha,
+    meta: { tag, surface: release.surface, version: release.version },
+    dedupe_key: `release:${repository}:${tag}:${sha ?? ""}`,
+    created_at: at || undefined,
+  });
+  return skip("Tag recorded as a release");
+}
+
 export const processPushEvent = internalMutation({
   args: {
     event_id: v.id("github_webhook_events"),
@@ -1349,6 +1388,11 @@ export const processPushEvent = internalMutation({
     const commits: any[] = payload.commits ?? [];
     const ref: string = payload.ref ?? "";
 
+    // A tag push usually carries no commits (they arrived on the branch), so
+    // it is read before the empty-push check below.
+    if (repository && ref.startsWith("refs/tags/")) {
+      return await recordTagPush(ctx, payload, repository, ref.slice("refs/tags/".length), event.created_at);
+    }
     if (!repository || commits.length === 0) {
       return { success: true, reason: "No commits in push event", commits_created: 0 };
     }
@@ -1428,6 +1472,7 @@ export const processPushEvent = internalMutation({
         });
         created++;
       }
+      await markCommitDirty(ctx, commitId);
 
       await recordExternalEvent(ctx, {
         source: "github",

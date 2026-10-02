@@ -23,6 +23,11 @@
  * dereferencing undefined at render (the docs list crashed on "decision"
  * when the tuple and the list page's map were two hand-kept copies).
  */
+// docSync.submitSteps refuses steps from an editor that opened the doc before
+// a CLI/API rewrite (docs.resetSync); the editor remounts from the new snapshot
+// on its own, so the web error reporter ignores this wording.
+export const DOC_REWRITTEN_ERROR = "Document was rewritten outside the editor; reload it";
+
 export const DOC_TYPES = [
   "note",
   "plan",

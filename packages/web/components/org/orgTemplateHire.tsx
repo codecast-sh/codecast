@@ -11,6 +11,7 @@ import type { OrgRole, OrgTree } from "./orgTypes";
 import { buildOrgTemplateCommand, type TemplateDraft, type TemplateProject } from "./orgTemplateCommand";
 import { DEFAULT_LEAD_TEMPLATE_ID, askedInputs, buildHireSpec, grantsToAsk, hireErrors, humanSetupCount, isDefaultLeadTemplate, resolvedConfig, secretInputs, slugOf, type HireDraft } from "./orgTemplateSpec";
 import { useTemplateActions, useTemplateCatalog } from "../../hooks/useTemplateHire";
+import { LearningSwitch } from "./TemplateSections";
 import { RoleAvatar } from "./avatars";
 import { avatarOf } from "@codecast/shared/contracts/orgAvatars";
 
@@ -173,6 +174,7 @@ export function OrgTemplateHire({ projects, workspace, roles = [], initialProjec
           </label>
         </div>
       )}
+      {manifest && <LearningSwitch teamId={teamId} canEdit compact />}
       {spec && manifest && (
         <div className="rounded-lg border border-sol-border/50 px-3 py-2.5 text-[12px] leading-relaxed" data-template-preview>
           <p className="font-semibold text-sol-text">What you will decide</p>

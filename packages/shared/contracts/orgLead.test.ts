@@ -216,20 +216,20 @@ describe("ownerOf: work belongs to the most specific role that covers it (S26)",
 });
 
 // The rename (org-staffing.md S30): the old handle still names the Head of
-// People, and a Chief of Staff never covers the workspace.
+// People, and an Executive Assistant never covers the workspace.
 describe("isHeadOfPeopleRole and the whole workspace after the rename", () => {
-  test("either handle, unless the row is a chief", () => {
+  test("either handle, unless the row is an assistant", () => {
     expect(isHeadOfPeopleRole({ handle: HEAD_OF_PEOPLE_HANDLE })).toBe(true);
     expect(isHeadOfPeopleRole({ handle: LEGACY_HEAD_OF_PEOPLE_HANDLE })).toBe(true);
-    expect(isHeadOfPeopleRole({ handle: LEGACY_HEAD_OF_PEOPLE_HANDLE, chief: { reach: "global" } })).toBe(false);
+    expect(isHeadOfPeopleRole({ handle: LEGACY_HEAD_OF_PEOPLE_HANDLE, assistant: { reach: "global" } })).toBe(false);
     expect(isHeadOfPeopleRole({ handle: "growth" })).toBe(false);
   });
-  test("a chief with no scope owns nothing; a legacy row still covers the remainder", () => {
-    const chief = { _id: "c", handle: "chief-of-staff", chief: { reach: "global" }, scope: { project_ids: [], plan_ids: [] } };
+  test("an assistant with no scope owns nothing; a legacy row still covers the remainder", () => {
+    const assistant = { _id: "c", handle: "executive-assistant", assistant: { reach: "global" }, scope: { project_ids: [], plan_ids: [] } };
     const legacy = { _id: "h", handle: "chief-of-staff", scope: { project_ids: [], plan_ids: [] } };
-    expect(isWholeWorkspaceRole(chief)).toBe(false);
+    expect(isWholeWorkspaceRole(assistant)).toBe(false);
     expect(isWholeWorkspaceRole(legacy)).toBe(true);
-    expect(ownerOf({ project_id: "p1" }, [chief])).toEqual({ kind: "none" });
+    expect(ownerOf({ project_id: "p1" }, [assistant])).toEqual({ kind: "none" });
     expect(ownerOf({ project_id: "p1" }, [legacy])).toEqual({ kind: "owner", role: legacy });
   });
 });

@@ -38,7 +38,9 @@
 //  2. CODECAST_DIR points at an empty directory, so a real `cast` the agent
 //     finds is "Not authenticated" and cannot post, send or pin anything.
 //  3. `cast` on PATH is the guard beside this script (prompt-dry-run-bin/cast,
-//     or the directory given as --guard): reads pass through with the real
+//     or the directory given as --guard), put first on PATH again before
+//     every Bash command through CLAUDE_ENV_FILE, since the user's profile
+//     would otherwise shadow it: reads pass through with the real
 //     state directory restored, writes are refused and logged, and
 //     `--serve <dir>` answers reads from files there (the legacy org files,
 //     and any argv captured under reads/ by its key), refusing a read that
@@ -152,6 +154,14 @@ env.RUN_DIR = runDir;
 env.DRY_RUN_REAL_CODECAST_DIR = process.env.CODECAST_DIR ?? "";
 if (serveDir) env.DRY_RUN_SERVE_DIR = serveDir;
 env.PATH = `${guardDir}:${env.PATH ?? ""}`;
+// The Bash tool runs each command over a snapshot of the user's shell, and a
+// snapshot cut short under load carries no PATH line, so the command sources
+// the profile and its `~/.local/bin` puts the real cast first (7 of 8 parallel
+// runs at load 650, 2026-10-02). Claude Code sources CLAUDE_ENV_FILE before
+// every command, after the profile, so the guard is first on every call.
+const envFile = path.join(configDir, "dry-run-env.sh");
+fs.writeFileSync(envFile, `export PATH='${guardDir.replace(/'/g, `'\\''`)}':"$PATH"\n`);
+env.CLAUDE_ENV_FILE = envFile;
 if (maxOutputTokens) env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = maxOutputTokens;
 // A prod call has no thinking, no CLAUDE.md and no memory. What claude still
 // adds on a subscription login is fixed: an SDK identity line in the system

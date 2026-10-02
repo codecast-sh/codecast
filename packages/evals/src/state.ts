@@ -8,7 +8,7 @@ import type { SurfaceMeta } from './surface';
 
 // The cadence state: per surface, the source hash its last real run saw, the
 // hash an agent surface was last flagged at, its crash streak, and its last
-// cost and wall time per rep. Hashes come from git at HEAD and never from the disk, so a
+// cost and wall time per rep on each model. Hashes come from git at HEAD and never from the disk, so a
 // half-saved edit never makes a surface stale.
 
 export interface SurfaceState {
@@ -17,9 +17,18 @@ export interface SurfaceState {
   /** The hash an unattended `check --stale` refused on its budget: named once per source change, then left for a run by hand. */
   lastRefusedHash?: string;
   crash?: { hash: string; count: number };
-  lastCostPerRep?: number;
-  /** A rep's average wall time in the last real run, as the machine's load and that run's parallelism left it. */
-  lastSecondsPerRep?: number;
+  /**
+   * Per model: a rep's average cost and wall time in the last real run on it,
+   * as the machine's load and that run's parallelism left it. Keyed by model
+   * because a pin move changes both several times over (org-review: $1.76 a
+   * rep on sonnet, about $7 on opus).
+   */
+  perRep?: Record<string, RepCost>;
+}
+
+export interface RepCost {
+  usd: number;
+  seconds: number;
 }
 
 export type EvalsState = Record<string, SurfaceState>;
@@ -40,29 +49,36 @@ export function writeState(state: EvalsState, path = homePaths().state): void {
   renameSync(tmp, path);
 }
 
-/** One rep's expected cost: the last real run's average, or the surface's declared ceiling before any real run. */
-export function perRepUsd(meta: SurfaceMeta, state: EvalsState): number {
-  return state[meta.id]?.lastCostPerRep ?? meta.maxUsdPerRep;
+/** One rep's expected cost on a model: the last real run's average on it, or the surface's declared ceiling before any real run on that model. */
+export function perRepUsd(meta: SurfaceMeta, state: EvalsState, model = meta.model): number {
+  return state[meta.id]?.perRep?.[model]?.usd ?? meta.maxUsdPerRep;
 }
 
 /** What `check` estimates for one surface, and refuses on when it is over `--budget`. */
-export function checkCostUsd(meta: SurfaceMeta, freezes: number, state: EvalsState, reps = meta.reps.check): number {
-  return reps * freezes * perRepUsd(meta, state);
+export function checkCostUsd(meta: SurfaceMeta, freezes: number, state: EvalsState, reps = meta.reps.check, model = meta.model): number {
+  return reps * freezes * perRepUsd(meta, state, model);
 }
 
 /**
  * About how long `check` takes with `parallel` reps in flight: each
- * surface's reps at its last recorded seconds per rep, spread over the
- * slots. Null until every surface has a real run on record.
+ * surface's reps at its last recorded seconds per rep on their model, spread
+ * over the slots. Null until every surface has a real run on that model on record.
  */
-export function checkMinutes(work: Array<{ meta: SurfaceMeta; reps: number }>, state: EvalsState, parallel: number): number | null {
+export function checkMinutes(work: Array<{ meta: SurfaceMeta; reps: number; model?: string }>, state: EvalsState, parallel: number): number | null {
   let seconds = 0;
   for (const w of work) {
-    const per = state[w.meta.id]?.lastSecondsPerRep;
+    const per = state[w.meta.id]?.perRep?.[w.model ?? w.meta.model]?.seconds;
     if (per == null) return null;
     seconds += w.reps * per;
   }
   return seconds / Math.max(1, parallel) / 60;
+}
+
+/** Each model's average cost and wall time over a run set's real reps, for SurfaceState.perRep. */
+export function repCostsByModel(reps: Array<{ model?: string | null; costUsd: number; realMs: number }>, fallbackModel: string): Record<string, RepCost> {
+  const by = new Map<string, Array<{ costUsd: number; realMs: number }>>();
+  for (const r of reps) by.set(r.model ?? fallbackModel, [...(by.get(r.model ?? fallbackModel) ?? []), r]);
+  return Object.fromEntries([...by].map(([model, rs]) => [model, { usd: rs.reduce((t, r) => t + r.costUsd, 0) / rs.length, seconds: rs.reduce((t, r) => t + r.realMs, 0) / rs.length / 1000 }]));
 }
 
 /**

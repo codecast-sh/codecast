@@ -9,6 +9,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { TEAM_FEATURE_KEYS } from "@codecast/shared/contracts";
 import { applyFeatureChange } from "@platform/flags";
 import { TEAM_FEATURE_CATALOG } from "./lib/teamFeatureGuard";
+import { changesFlagChanged } from "./lib/changesDirty";
 
 export {
   TEAM_FEATURE_CATALOG,
@@ -48,6 +49,7 @@ export const setTeamFeature = mutation({
       enabled: args.enabled,
     });
     await ctx.db.patch(args.team_id, { features });
+    await changesFlagChanged(ctx, args.team_id, team?.features, features);
     return { features };
   },
 });
@@ -72,6 +74,7 @@ export const setTeamFeatureInternal = internalMutation({
       enabled: args.enabled,
     });
     await ctx.db.patch(args.team_id, { features });
+    await changesFlagChanged(ctx, args.team_id, team?.features, features);
     return { team: team?.name ?? null, features };
   },
 });

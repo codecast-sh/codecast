@@ -2561,6 +2561,26 @@ div.ch-reaction-tip {
 }
 @keyframes ch-att-shimmer { to { background-position: -200% 0; } }
 
+/* Sent before its upload finished: the local preview, dimmed under a ring. */
+.ch-att-uploading {
+  position: relative;
+  cursor: default;
+}
+.ch-att-uploading img { opacity: 0.55; }
+.ch-att-spinner {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 22px;
+  height: 22px;
+  margin: -11px 0 0 -11px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--sol-text) 18%, transparent);
+  border-top-color: var(--sol-text);
+  animation: ch-att-spin 0.8s linear infinite;
+}
+@keyframes ch-att-spin { to { transform: rotate(360deg); } }
+
 .ch-att-missing {
   display: inline-flex;
   align-items: center;

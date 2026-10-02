@@ -765,6 +765,12 @@ export const resetSync = mutation({
     for (const d of deltas) await ctx.db.delete(d._id);
 
     const json = JSON.stringify(markdownToDoc(args.content || ""));
+    // Past every version an open editor can hold, snapshots AND deltas: the
+    // newest snapshot often trails the deltas. A version at or below one a tab
+    // already reached would let that tab keep syncing steps written against
+    // the old content on top of the new (docSync's stepsAfter refuses only
+    // clients behind the rewrite).
+    const version = Math.max(0, ...snapshots.map((s: any) => s.version), ...deltas.map((d: any) => d.version)) + 1;
 
     if (snapshots.length > 0) {
       const latest = snapshots.reduce((a: any, b: any) => a.version > b.version ? a : b);
@@ -773,13 +779,13 @@ export const resetSync = mutation({
       await ctx.db.patch(latest._id, {
         content_gz: packSnapshotContent(json),
         content: undefined,
-        version: latest.version + 1,
+        version,
       });
       for (const s of snapshots) {
         if (s._id !== latest._id) await ctx.db.delete(s._id);
       }
     } else {
-      await ctx.db.insert("doc_snapshots", { id: docId, version: 1, content_gz: packSnapshotContent(json) });
+      await ctx.db.insert("doc_snapshots", { id: docId, version, content_gz: packSnapshotContent(json) });
     }
     await ctx.db.patch(args.id, { cli_edited_at: Date.now() });
     return { success: true };

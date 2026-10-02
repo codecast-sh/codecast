@@ -42,14 +42,33 @@ const pinnedMatches = (reported: string | null, pinned: string) => {
 
 /** The gates every call and agent run gets, read from what the harness wrote; `allowedHere` adds the snapshot's own allowed refusals (SurfaceImpl.allowedRefusals). */
 export function routeGates(meta: SurfaceMeta, result: Pick<ReplayResult, 'calls' | 'agents'>, allowedHere: string[] = []): GateResult[] {
-  const runs: Array<{ label: string; model: string; usage: CallResult['modelUsage']; isError: boolean; exitCode: number }> = [
+  const runs: Array<{ label: string; model: string; usage: CallResult['modelUsage']; loop?: Record<string, number>; isError: boolean; exitCode: number }> = [
     ...result.calls.map((c, i) => ({ label: `call${i + 1}`, model: c.request.model, usage: c.modelUsage, isError: c.isError, exitCode: c.exitCode })),
-    ...result.agents.map((a, i) => ({ label: `agent${i + 1}`, model: a.model, usage: a.modelUsage, isError: a.isError, exitCode: a.exitCode })),
+    ...result.agents.map((a, i) => ({ label: `agent${i + 1}`, model: a.model, usage: a.modelUsage, loop: a.loopTurns, isError: a.isError, exitCode: a.exitCode })),
   ];
-  const offPin = runs.filter((r) => !pinnedMatches(dominantModel(r.usage), r.model));
+  // An agent's own loop must run on the pin, every message of it; the `Agent` subagents it chooses to start are its behaviour, named in the evidence.
+  // A call, or an agent run with no stream to read, answered on the model with the most output.
+  const loopOf = (r: (typeof runs)[number]) => (r.loop && Object.keys(r.loop).length ? r.loop : null);
+  const offModels = (r: (typeof runs)[number]): string[] => {
+    const loop = loopOf(r);
+    if (loop) return Object.keys(loop).filter((m) => !pinnedMatches(m, r.model));
+    const dominant = dominantModel(r.usage);
+    return pinnedMatches(dominant, r.model) ? [] : [dominant ?? 'nothing'];
+  };
+  const subagents = runs.flatMap((r) => {
+    const loop = loopOf(r);
+    if (!loop) return [];
+    const others = Object.entries(r.usage).filter(([m, u]) => !(m in loop) && Number(u?.outputTokens ?? 0) > 0);
+    return others.length ? [`${r.label}'s subagents answered on ${others.map(([m, u]) => `${m} (${u?.outputTokens} output tokens)`).join(', ')}`] : [];
+  });
+  const offPin = runs.filter((r) => offModels(r).length > 0);
   const failed = runs.filter((r) => r.isError || r.exitCode !== 0);
   const gates = [
-    gate('model-as-pinned', offPin.length === 0, offPin.length ? offPin.map((r) => `${r.label} pinned ${r.model}, answered on ${dominantModel(r.usage) ?? 'nothing'}`).join('; ') : `${runs.length} run(s) answered on the pinned model`),
+    gate(
+      'model-as-pinned',
+      offPin.length === 0,
+      [offPin.length ? offPin.map((r) => `${r.label} pinned ${r.model}, ${loopOf(r) ? 'its loop answered' : 'answered'} on ${offModels(r).join(', ')}`).join('; ') : `${runs.length} run(s) answered on the pinned model`, ...subagents].join('; '),
+    ),
     gate('ok', failed.length === 0, failed.length ? failed.map((r) => `${r.label} exit ${r.exitCode}${r.isError ? ', is_error' : ''}`).join('; ') : `${runs.length} run(s) exited clean`),
   ];
   if (meta.route === 'call') {
@@ -107,15 +126,36 @@ export const sentFields = (calls: CallResult[], agents: AgentResult[]): Pick<Run
 });
 
 /**
- * What every rep of one check shares: the spend so far, the estimated cost of
- * the reps still running (so parallel reps cannot all start under a budget
- * they would cross together), and why the check stopped, once it has.
+ * What every rep of one check shares: the spend so far, each lane's reps
+ * still running (so parallel reps cannot all start under a budget they would
+ * cross together), and why the check stopped, once it has. A lane is one
+ * surface on one model.
  */
 export interface RepLedger {
   usd: number;
-  inFlightUsd?: number;
+  lanes?: Record<string, LaneLedger>;
   stoppedBy?: 'budget' | 'time';
 }
+
+export interface LaneLedger {
+  /** The estimate the check started with (state.ts perRepUsd). */
+  est: number;
+  running: number;
+  done: number;
+  doneUsd: number;
+}
+
+/**
+ * What one more rep on a lane is expected to cost: the starting estimate, or
+ * the average of the reps this check already finished there when that is
+ * more. A history from another freeze mix can sit far under a lane's real
+ * cost, and reps in flight finish past any stop, so the reservation follows
+ * what the check is measuring.
+ */
+export const laneRepUsd = (l: LaneLedger): number => Math.max(l.est, l.done ? l.doneUsd / l.done : 0);
+
+/** What the reps still running are expected to add to the spend. */
+export const reservedUsd = (ledger: RepLedger): number => Object.values(ledger.lanes ?? {}).reduce((t, l) => t + l.running * laneRepUsd(l), 0);
 
 export interface ReplayRunOptions extends ReplayOptions {
   /** The `check` invocation this belongs to; a fresh one when unset. */
@@ -124,7 +164,7 @@ export interface ReplayRunOptions extends ReplayOptions {
   budgetUsd?: number | null;
   /** Shared across every freeze and rep of one check. */
   spent?: RepLedger;
-  /** The expected cost of one rep, for the budget stop. */
+  /** The expected cost of one rep on this freeze's surface and model, for the budget stop (raised by what the check's finished reps cost; laneRepUsd). */
   estPerRep?: number;
   /** Epoch ms after which no rep starts: a check bounds its own wall time, so a session that started it in the background cannot leave it running. */
   deadline?: number | null;
@@ -164,14 +204,18 @@ export const treeFacts = (metas: SurfaceMeta[]): TreeFacts => ({ head: gitHead()
 /** The reps `replayFreeze` runs for a requested count. */
 export const repCount = (reps: number): number => Math.max(1, Math.min(reps, MAX_REPS));
 
+/** The model a freeze replays on: the --model override, else an agent surface's production session model when its capture read one, else the pin. */
+export function replayModel(meta: SurfaceMeta, f: Freeze, override?: string | null): string {
+  const capturedModel = meta.route === 'agent' ? (f.meta as { model?: string } | undefined)?.model : undefined;
+  return override ?? capturedModel ?? meta.model;
+}
+
 export async function prepareFreeze(f: Freeze, o: ReplayRunOptions, facts?: TreeFacts): Promise<PreparedFreeze> {
   const surfaceId = String((f.meta as { surface?: string } | undefined)?.surface ?? '');
   const meta = surfaceMeta(surfaceId);
   if (!meta) throw new Error(`freeze ${f.id.slice(0, 8)} names no known surface (${surfaceId || 'none'})`);
   const impl = await loadSurface(surfaceId);
-  // An agent surface runs on the production session's model when its capture could read one.
-  const capturedModel = meta.route === 'agent' ? (f.meta as { model?: string } | undefined)?.model : undefined;
-  const model = o.model ?? capturedModel ?? meta.model;
+  const model = replayModel(meta, f, o.model);
   const tree = facts ?? treeFacts([meta]);
   const run: PreparedFreeze['run'] = {
     freezeId: f.id,
@@ -212,8 +256,8 @@ export async function replayRep(p: PreparedFreeze, rep: number, reps: number, o:
   const startedAt = Date.now();
   const dir = join(root, runFolderName(meta.id, f.id, rep, startedAt));
   const base = { dir, freeze: f, scenario, rep, startedAt };
-  const est = o.estPerRep ?? 0;
-  const overBudget = o.budgetUsd != null && spent.usd + (spent.inFlightUsd ?? 0) + est > o.budgetUsd;
+  const lane = ((spent.lanes ??= {})[`${meta.id} ${model}`] ??= { est: o.estPerRep ?? 0, running: 0, done: 0, doneUsd: 0 });
+  const overBudget = o.budgetUsd != null && spent.usd + reservedUsd(spent) + laneRepUsd(lane) > o.budgetUsd;
   const overTime = o.deadline != null && startedAt >= o.deadline;
   if (overBudget || overTime) {
     spent.stoppedBy = overTime ? 'time' : 'budget';
@@ -222,7 +266,7 @@ export async function replayRep(p: PreparedFreeze, rep: number, reps: number, o:
     o.onLine?.(`stopped before ${scenario} rep ${rep}: ${why}`);
     return { summary: summarizeRunFolder(root, dir.slice(root.length + 1)), crashed: false, stopped: true };
   }
-  spent.inFlightUsd = (spent.inFlightUsd ?? 0) + est;
+  lane.running++;
   o.onLine?.(`${scenario} rep ${rep} of ${reps}`);
   let crashed = false;
   try {
@@ -284,10 +328,14 @@ export async function replayRep(p: PreparedFreeze, rep: number, reps: number, o:
       }
     }
   } finally {
-    spent.inFlightUsd = Math.max(0, (spent.inFlightUsd ?? 0) - est);
+    lane.running--;
   }
   const summary = summarizeRunFolder(root, dir.slice(root.length + 1));
-  if (summary) spent.usd += summary.costUsd;
+  if (summary) {
+    spent.usd += summary.costUsd;
+    lane.done++;
+    lane.doneUsd += summary.costUsd;
+  }
   return { summary, crashed, stopped: false };
 }
 

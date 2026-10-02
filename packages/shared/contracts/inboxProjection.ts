@@ -664,7 +664,7 @@ export function isOrphanOrSubagent(conv: InboxRowIdentity): boolean {
 }
 
 // The parent a child's state rolls up to (its open ask lifts the parent into
-// QUESTIONS; its producing status keeps the parent working). ONE rule for the
+// QUESTIONS; its producing status parks the settled parent). ONE rule for the
 // server pool grouping (groupPoolChildren) and the replica's asking
 // derivation, so a parent can never be lifted on one side only:
 //   - a row that is never its own member (isOrphanOrSubagent) rolls up to its

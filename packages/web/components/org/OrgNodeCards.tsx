@@ -501,7 +501,7 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
             <RoleHoverCard role={r} side="right" disabled={!!ghost || !!data.dragging} triggerClassName="inline">{roleWords(r).name}</RoleHoverCard>
           </div>
           <div className="mt-[3px] text-[10.5px] flex items-center gap-1.5 whitespace-nowrap overflow-hidden" style={{ color: "var(--sol-text-dim)" }}>
-            {/* The role is the subtitle (S30): "Head of People", "Growth lead", "Chief of Staff, global". */}
+            {/* The role is the subtitle (S30): "Head of People", "Growth lead", "Executive Assistant, global". */}
             <span className="truncate max-w-[62%]" style={{ opacity: dim ? GHOST.opacity : 1 }} data-role-title>{roleWords(r).subtitle}</span>
             {paused && <span className="px-1 rounded-sm" style={{ background: "color-mix(in srgb, var(--sol-yellow) 14%, transparent)", color: "var(--sol-yellow)" }}>paused</span>}
             {ghost && <GhostTag label={ghost.solid ? ghost.status : "proposed"} status={ghost.status === "failed" ? "failed" : ghost.solid ? "accepted" : "proposed"} />}

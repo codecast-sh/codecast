@@ -1,0 +1,26 @@
+{
+  "name": "changes-edition branch-flood",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:branch-flood"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "changes-edition:branch-flood",
+    "title": "changes-edition branch-flood"
+  },
+  "asOf": "2026-01-14T18:00:00.000Z",
+  "trigger": {
+    "type": "changes-edition"
+  },
+  "meta": {
+    "surface": "changes-edition",
+    "visibility": "public",
+    "snapshot": "fixtures/changes-edition/branch-flood.json"
+  },
+  "judge": "on a day of 760 commits, the headline and standfirst pick out what mattered (the sync conflict fix, annual billing, the mobile releases) instead of listing everything, the standfirst stays within 60 words, the lead is one of the two importance 5 stories, and the branch work is not presented as shipped",
+  "notes": null,
+  "tags": [],
+  "id": "362dc3f3-9030-43a2-901b-1956c7ed5d8a",
+  "createdAt": "2026-10-02T23:33:59.031Z"
+}

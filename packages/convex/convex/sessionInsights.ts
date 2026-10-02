@@ -5,6 +5,7 @@ import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { isConversationTeamVisible, teamVisibleConvTeam } from "./privacy";
 import { canAccessConversation } from "./lib/access";
+import { markInsightDirty } from "./lib/changesDirty";
 import { pullRequestsLinkedToConversation } from "./lib/prSessions";
 import { CHEAP_MODEL, postMessages, replyText, type SurfaceRequest } from "./lib/anthropic";
 
@@ -581,6 +582,7 @@ export const upsertSessionInsight = internalMutation({
         metadata: args.metadata,
       });
     }
+    await markInsightDirty(ctx, args.conversation_id, args.team_id);
 
     return insightId;
   },

@@ -1,13 +1,16 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, statSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { previousRunSet } from '../commands/check';
+import { rescoreRun } from '../commands/grade';
 import { runSnapshot } from '../commands/snapshot';
+import type { SurfaceRun } from './runs';
 import { surfaceMeta } from '../registry';
 import { servedReadKey } from '../served';
 import type { AgentResult, CallResult } from '../surface';
-import { assertAnswered, harnessFailure } from './dryRun';
+import { assertAnswered, harnessFailure, loopTurnsOf } from './dryRun';
 import { dominantModel, routeGates, scoreOf } from './replay';
 
 const call = (over: Partial<CallResult> = {}): CallResult => ({
@@ -39,6 +42,26 @@ describe('route gates', () => {
     expect(g['model-as-pinned']!.pass).toBe(false);
     expect(g['model-as-pinned']!.evidence.summary).toContain('answered on other');
     expect(dominantModel({ a: { outputTokens: 1 }, b: { outputTokens: 3 } })).toBe('b');
+  });
+
+  test("an agent's own loop decides model-as-pinned; the subagents it starts are named, not counted", () => {
+    // b4c3120d seed8 on 2026-10-02: the loop stayed on the pin and handed record batches to sonnet subagents, which wrote more output.
+    const delegating = { ...agent([]), modelUsage: { pin: { outputTokens: 39228 }, sub: { outputTokens: 47016 } }, loopTurns: { pin: 57 } };
+    const g = byId(routeGates(agentMeta, { calls: [], agents: [delegating] }))['model-as-pinned']!;
+    expect(g.pass).toBe(true);
+    expect(g.evidence.summary).toContain("agent1's subagents answered on sub (47016 output tokens)");
+    // A loop message on another model fails it, however little it wrote.
+    const drifted = byId(routeGates(agentMeta, { calls: [], agents: [{ ...delegating, loopTurns: { pin: 56, other: 1 } }] }))['model-as-pinned']!;
+    expect(drifted.pass).toBe(false);
+    expect(drifted.evidence.summary).toContain('agent1 pinned pin, its loop answered on other');
+    // No stream to read: the model with the most output, as for a call.
+    expect(byId(routeGates(agentMeta, { calls: [], agents: [{ ...delegating, loopTurns: {} }] }))['model-as-pinned']!.pass).toBe(false);
+  });
+
+  test("the loop's model is read per message from the stream; a subagent's messages carry their parent tool use", () => {
+    const line = (id: string, model: string, parent: string | null) => JSON.stringify({ type: 'assistant', parent_tool_use_id: parent, message: { id, model, content: [] } });
+    const stream = [line('m1', 'pin', null), line('m1', 'pin', null), line('m2', 'pin', null), line('s1', 'sub', 'toolu_1'), '{"type":"user"}', 'not json'].join('\n');
+    expect(loopTurnsOf(stream)).toEqual({ pin: 2 });
   });
 
   test('a reply prod would have truncated fails prod-budget', () => {
@@ -103,5 +126,42 @@ describe('snapshot', () => {
     } finally {
       delete process.env.CODECAST_EVALS_HOME;
     }
+  });
+});
+
+describe('rescore', () => {
+  test("grades a rep's route gates again from its harness files and keeps the surface's own gates and checks", async () => {
+    const dir = join(mkdtempSync(join(tmpdir(), 'evals-rescore-')), 'org-review-0bc4cd18-seed1-2026-10-02T17-44-53-948Z');
+    const sub = join(dir, 'agent1', 'agent');
+    mkdirSync(sub, { recursive: true });
+    const model = surfaceMeta('org-review')!.model;
+    writeFileSync(join(sub, 'args.json'), JSON.stringify({ model }));
+    writeFileSync(join(sub, 'exit.txt'), '0\n');
+    writeFileSync(join(sub, 'out.json'), JSON.stringify({ is_error: false, total_cost_usd: 7, modelUsage: { [model]: { outputTokens: 10 }, other: { outputTokens: 99 } } }));
+    writeFileSync(join(sub, 'stream.jsonl'), JSON.stringify({ type: 'assistant', parent_tool_use_id: null, message: { id: 'm', model, content: [] } }));
+    writeFileSync(join(sub, 'calls.log'), 'SERVED org inputs --team U --json\nLIVE task show ct-1\nREFUSED brief edit -\n');
+    writeFileSync(join(dir, 'run.json'), JSON.stringify({ model, dry: false, freezeId: 'f' }));
+    const gate = (id: string, pass: boolean) => ({ id, pass, decidedBy: 'mechanical', evidence: { summary: '' } });
+    // Stored as the 2026-10-02 first batch was: zeroed by the brief edit, and by a subagent-heavy usage.
+    const stored = { pass: false, score: 0, passMark: 0.7, gates: [gate('model-as-pinned', false), gate('ok', true), gate('frozen-reads', true), gate('no-unexpected-writes', false), gate('no-wrong-close', true)], checks: [{ id: 'records', weight: 1, score: 0.8 }], missedFloors: [], judgeCostUsd: null, judgeModel: null, scoredAt: 'x', scenario: 'org-review-0bc4cd18', title: 't', seed: 1 };
+    writeFileSync(join(dir, 'score.json'), JSON.stringify(stored));
+    const r = (await rescoreRun(dir))!;
+    expect(r.after.gates.map((g) => `${g.id}:${g.pass}`)).toEqual(['model-as-pinned:true', 'ok:true', 'frozen-reads:true', 'no-unexpected-writes:true', 'no-wrong-close:true']);
+    expect(r.after.score).toBeCloseTo(0.8);
+    expect(r.after.pass).toBe(true);
+    expect(JSON.parse(readFileSync(join(dir, 'score.json'), 'utf8'))).toMatchObject({ score: r.after.score, seed: 1, scenario: 'org-review-0bc4cd18' });
+    expect(JSON.parse(readFileSync(join(dir, 'score.before-rescore.json'), 'utf8')).score).toBe(0);
+    // Another role's brief stays a refused write on a rescore too.
+    writeFileSync(join(sub, 'calls.log'), 'REFUSED brief edit --for @docs -\n');
+    expect((await rescoreRun(dir))!.after.gates.find((g) => g.id === 'no-unexpected-writes')!.pass).toBe(false);
+  });
+});
+
+describe('the previous run set', () => {
+  const run = (freezeId: string, batch: string, status = 'pass'): SurfaceRun => ({ id: `${freezeId}-${batch}`, scenario: 's', title: 't', seed: 1, startedAt: batch, createdAt: batch, status: status as SurfaceRun['status'], score: 1, gatesFailed: [], missedFloors: [], sends: 0, costUsd: 0, realMs: 0, virtualMs: 0, freezeId, batch, liveReads: 0 });
+
+  test("is each freeze's newest other batch, so a later run of one freeze hides no other freeze's set", () => {
+    const history = [run('a', 'b1'), run('b', 'b1'), run('a', 'b2'), run('a', 'b3', 'dry'), run('b', 'b2', 'unscored'), run('a', 'now')];
+    expect(previousRunSet(history, 'now').map((r) => r.id).sort()).toEqual(['a-b2', 'b-b1']);
   });
 });

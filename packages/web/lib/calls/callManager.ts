@@ -29,6 +29,7 @@ import { memberDisplayName } from "../liveEntities";
 import { RING_STUB, RING_STUB_MS, isRingStub, ringStubId, type RingStub } from "./ringStubs";
 import { startScribe, stopScribe } from "./transcription";
 import { readJoinPrefs, rememberCamera, rememberDevice, rememberMic } from "./joinPrefs";
+import { switchRecorderMic } from "./recorder";
 import { huddleRoomOptions, SCREEN_SHARE_CAPTURE, SCREEN_SHARE_PUBLISH } from "./livekitMedia";
 import { bindPrewarmAudio, bindPrewarmConvex, takePrewarmedRoom, warmRoomPublishesMic } from "./roomPrewarm";
 import { CALL_HEARTBEAT_MS, humanizeConvexError, localTranscribeLanguages } from "@codecast/shared/contracts";
@@ -818,12 +819,24 @@ async function yieldRoomToOtherWindow(): Promise<void> {
  *  its own (a reloaded window whose row on the server outlived it): the row
  *  is what everyone else sees, so End must be able to delete it regardless. */
 export async function leaveCall(roomKey?: string): Promise<void> {
-  if (voiceHostElsewhere() && !currentRoomKey && (await sendVoiceCommand("leaveCall", roomKey ? [roomKey] : []))) return;
+  if (voiceHostElsewhere() && !currentRoomKey) {
+    // The host hangs up; this window lets go of the row at the press too.
+    noteLeft(roomKey ?? useInboxStore.getState().call.roomKey);
+    if (await sendVoiceCommand("leaveCall", roomKey ? [roomKey] : [])) return;
+  }
   return leaveCallHere(roomKey);
+}
+
+/** Hanging up is final at the press: the row stops reading the server's seat
+ *  and rings for this room as ours, though they outlive the press by the
+ *  leave's round trip (seconds, under load). */
+function noteLeft(roomKey: string | null | undefined): void {
+  if (roomKey) setCall({ left: { roomKey, at: Date.now() } });
 }
 
 async function leaveCallHere(shown?: string): Promise<void> {
   const roomKey = currentRoomKey ?? useInboxStore.getState().call.roomKey ?? shown ?? null;
+  noteLeft(roomKey);
   callGen++;
   deliberateRoomKey = null;
   walkieJoinedSeat = null;
@@ -1063,6 +1076,8 @@ export async function switchDevice(
   // call settings panel offers the same picker with no room to switch: the
   // choice is the person's either way, and the next join reads it.
   rememberDevice(kind, deviceId);
+  // A meeting recording holds its own microphone, outside any room.
+  if (kind === "audioinput") void switchRecorderMic(deviceId);
   if (!room) return;
   try {
     await room.switchActiveDevice(kind, deviceId);

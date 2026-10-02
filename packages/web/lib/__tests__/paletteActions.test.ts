@@ -214,4 +214,14 @@ describe("palette item ranking", () => {
     expect(actions.find(a => a.key === "session_kill")?.label).toBe("Kill 3 sessions");
     expect(actions.find(a => a.key === "bucket")?.label).toBe("Label 3 sessions…");
   });
+  test("a teammate: follow where they are, reach them, then their profile", () => {
+    const person = { _id: "u-sam", name: "Samvit", username: "samvit", member: {}, online: true, following: false, session: { _id: "c1", title: "Deals lead" } };
+    const actions = paletteActions("person", [person], "me", true);
+    expect(actions.map(a => a.key)).toEqual(["person_follow", "person_message", "person_huddle", "open", "newtab", "copylink"]);
+    expect(actions[0].label).toBe("Follow · Deals lead");
+    expect(paletteObjectPath("person", person)).toBe("/team/samvit");
+    // Offline: nothing to follow; chat off: no message.
+    expect(paletteActions("person", [{ ...person, online: false, session: null }], "me", false).map(a => a.key)).toEqual(["person_huddle", "open", "newtab", "copylink"]);
+    expect(paletteActions("person", [{ ...person, following: true }], "me", true)[0].label).toBe("Stop following");
+  });
 });

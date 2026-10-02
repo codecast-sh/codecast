@@ -188,10 +188,21 @@ export function tallyUnread(
     /** A voice burst still being spoken (@codecast/shared/chat isLiveVoiceRow).
      *  It has not notified yet, so it is not a message to be behind on. */
     voiceLive?: boolean;
+    /** Posted by an agent under the viewer's id. A bot has no read position,
+     *  so its lines do not count as the viewer reading. */
+    agent?: boolean;
   }[],
   lastReadAt: number | undefined,
   viewerId: string,
 ): UnreadTally {
+  // Posting is reading, the server's rule (chat.ts postChatMessage): the
+  // viewer's own newest line is a read mark even before the synced read row
+  // catches up, or when that line was sent from another device. It covers
+  // what came strictly before it.
+  let ownAt = 0;
+  for (const m of messages) {
+    if (m.authorId === viewerId && !m.agent && m.createdAt > ownAt) ownAt = m.createdAt;
+  }
   let unread = 0;
   let mentions = 0;
   for (const m of messages) {
@@ -199,6 +210,7 @@ export function tallyUnread(
     if (m.voiceLive) continue;
     if (m.authorId === viewerId) continue;
     if (lastReadAt !== undefined && m.createdAt <= lastReadAt) continue;
+    if (m.createdAt < ownAt) continue;
     // The server's rule, mirrored exactly: a thread reply does not tick the
     // channel's number (the channel view can never clear it), but a mention
     // counts wherever it lives — being named must never be invisible.

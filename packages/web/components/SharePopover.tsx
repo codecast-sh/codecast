@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, Forward, Link as LinkIcon } from "lucide-react";
+import { Forward, Link as LinkIcon } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
 import { copyToClipboard } from "../lib/utils";
@@ -99,7 +99,6 @@ export function SharePopover({
   const chatOn = useTeamFeature("chat");
   const [isOpen, setIsOpen] = useState(false);
   const [isUpdatingLink, setIsUpdatingLink] = useState(false);
-  const [copied, setCopied] = useState(false);
 
   const currentMode: VisibilityMode = isPrivate ? "private" : (teamVisibility as VisibilityMode || "summary");
   const status = getShareStatus(isPrivate, teamVisibility, hasShareToken, hasTeam);
@@ -125,10 +124,9 @@ export function SharePopover({
 
   const handleCopyLink = async () => {
     if (!link) return;
+    setIsOpen(false);
     await copyToClipboard(link);
-    setCopied(true);
     toast.success("Link copied");
-    setTimeout(() => setCopied(false), 2000);
   };
 
   const tooltipLabel = canManage ? (status.label || "Share settings") : "Share";
@@ -211,8 +209,8 @@ export function SharePopover({
                 title={link}
                 className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-md bg-sol-cyan px-3 py-1.5 text-xs font-semibold text-sol-base03 hover:brightness-110 transition-colors"
               >
-                {copied ? <Check className="w-3.5 h-3.5" /> : <LinkIcon className="w-3.5 h-3.5" />}
-                {copied ? "Copied" : "Copy link"}
+                <LinkIcon className="w-3.5 h-3.5" />
+                Copy link
               </button>
             )}
             {chatOn && (forwardUrl || pageUrl) && (

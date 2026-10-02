@@ -3,6 +3,7 @@ import { isNotificationLeader, isVoiceHost } from "./desktop";
 import { agentAlertsSuppressed, deliverAlert, reportAlertError } from "./notificationDelivery";
 import type { CueSpec } from "./cueSpec";
 import {
+  DORMANT_SETTLE,
   KILL_DOOR,
   STASH_AWAY,
   WALKIE_AWAY,
@@ -212,6 +213,11 @@ export function soundKill() {
   playCue(KILL_DOOR);
 }
 
+export function soundDormant() {
+  if (!isEnabled("ui")) return;
+  playCue(DORMANT_SETTLE);
+}
+
 // A chat message that raised a toast. One sound for every chat toast, quiet
 // or loud — the way Slack's "Knock Brush" is one sound: the CARD says how much
 // the message matters, the sound only says "someone spoke". A separate louder
@@ -373,8 +379,8 @@ function playRingMotif(master = RING_MASTER_BY_CYCLE[0]) {
 export function soundMeetingDetected() {
   if (!isEnabled("calls")) return;
   play([
-    { freq: 587.33, start: 0, dur: 0.22, gain: 0.45, type: "sine" },
-    { freq: 783.99, start: 0.11, dur: 0.3, gain: 0.35, type: "sine" },
+    { freq: 587.33, start: 0, dur: 0.2, gain: 0.2, type: "sine" },
+    { freq: 783.99, start: 0.1, dur: 0.26, gain: 0.15, type: "sine" },
   ], 0.05);
 }
 

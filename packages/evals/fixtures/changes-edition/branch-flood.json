@@ -1,0 +1,695 @@
+{
+ "asOf": "2026-01-14T18:00:00.000Z",
+ "notes": "synthetic: a Littlebird-shaped day, 760 commits, 44 default-branch stories, ten busy branches, four releases",
+ "snapshot": {
+  "input": {
+   "date": "2026-01-14",
+   "stats": {
+    "commits": 760,
+    "stories": 44,
+    "releases": 4,
+    "people": 23,
+    "sessions": 6
+   },
+   "releases": [
+    {
+     "surface": "ios",
+     "version": "5.12.0",
+     "sha": "b4e1a09c7",
+     "time": "11:20"
+    },
+    {
+     "surface": "android",
+     "version": "5.12.0",
+     "sha": "c7d2e18f4",
+     "time": "11:45"
+    },
+    {
+     "surface": "web",
+     "version": "2026.1.14",
+     "sha": "e3a9b6d21",
+     "time": "15:10"
+    },
+    {
+     "surface": "api",
+     "sha": "f19c4a7e3",
+     "time": "17:30"
+    }
+   ],
+   "stories": [
+    {
+     "key": "s1",
+     "area": "billing",
+     "kind": "feature",
+     "importance": 5,
+     "headline": "Teams can pay annually with a 15% discount",
+     "dek": "The plan picker, invoices and proration all handle yearly plans.",
+     "insertions": 920,
+     "deletions": 140,
+     "authors": 2,
+     "sessions": 2,
+     "risks": [],
+     "release": "web 2026.1.14"
+    },
+    {
+     "key": "s2",
+     "area": "sync",
+     "kind": "fix",
+     "importance": 5,
+     "headline": "Edits made offline no longer overwrite newer edits from other devices",
+     "dek": "Conflicting edits are merged field by field instead of last write wins.",
+     "insertions": 640,
+     "deletions": 210,
+     "authors": 3,
+     "sessions": 2,
+     "risks": [
+      "schema"
+     ]
+    },
+    {
+     "key": "s3",
+     "area": "android",
+     "kind": "perf",
+     "importance": 4,
+     "headline": "Android cold start is about 40% faster",
+     "dek": "Fonts and the note index now load after the first screen draws.",
+     "insertions": 310,
+     "deletions": 260,
+     "authors": 2,
+     "sessions": 1,
+     "risks": [],
+     "release": "android 5.12.0"
+    },
+    {
+     "key": "s4",
+     "area": "api",
+     "kind": "feature",
+     "importance": 4,
+     "headline": "Shared notebooks can be read through the public API",
+     "dek": "",
+     "insertions": 480,
+     "deletions": 60,
+     "authors": 2,
+     "sessions": 1,
+     "risks": []
+    },
+    {
+     "key": "s5",
+     "area": "ios",
+     "kind": "fix",
+     "importance": 4,
+     "headline": "The iOS app no longer crashes when a photo upload is cancelled",
+     "dek": "",
+     "insertions": 85,
+     "deletions": 30,
+     "authors": 1,
+     "sessions": 1,
+     "risks": [],
+     "release": "ios 5.12.0"
+    },
+    {
+     "key": "s6",
+     "area": "ios",
+     "kind": "fix",
+     "importance": 2,
+     "headline": "Widgets refresh after sign-out",
+     "dek": "",
+     "insertions": 304,
+     "deletions": 61,
+     "authors": 1,
+     "sessions": 0,
+     "risks": []
+    },
+    {
+     "key": "s7",
+     "area": "web",
+     "kind": "fix",
+     "importance": 2,
+     "headline": "Pasted tables keep their column widths",
+     "dek": "",
+     "insertions": 312,
+     "deletions": 33,
+     "authors": 1,
+     "sessions": 0,
+     "risks": []
+    },
+    {
+     "key": "s8",
+     "area": "sync",
+     "kind": "perf",
+     "importance": 2,
+     "headline": "Sync batches small edits into one request",
+     "dek": "",
+     "insertions": 316,
+     "deletions": 19,
+     "authors": 1,
+     "sessions": 0,
+     "risks": []
+    },
+    {
+     "key": "s9",
+     "area": "sync",
+     "kind": "fix",
+     "importance": 2,
+     "headline": "Sync status icon stops spinning after an error",
+     "dek": "",
+     "insertions": 267,
+     "deletions": 48,
+     "authors": 2,
+     "sessions": 0,
+     "risks": []
+    },
+    {
+     "key": "s10",
+     "area": "web",
+     "kind": "feature",
+     "importance": 2,
+     "headline": "Notes can be pinned from the sidebar",
+     "dek": "",
+     "insertions": 275,
+     "deletions": 20,
+     "authors": 2,
+     "sessions": 1,
+     "risks": []
+    },
+    {
+     "key": "s11",
+     "area": "api",
+     "kind": "fix",
+     "importance": 2,
+     "headline": "Pagination cursor survives a deleted note",
+     "dek": "",
+     "insertions": 238,
+     "deletions": 7,
+     "authors": 1,
+     "sessions": 0,
+     "risks": []
+    },
+    {
+     "key": "s12",
+     "area": "android",
+     "kind": "fix",
+     "importance": 2,
+     "headline": "Back gesture closes the search panel first",
+     "dek": "",
+     "insertions": 168,
+     "deletions": 57,
+     "authors": 1,
+     "sessions": 0,
+     "risks": []
+    },
+    {
+     "key": "s13",
+     "area": "billing",
+     "kind": "fix",
+     "importance": 2,
+     "headline": "Tax rounding matches the invoice total",
+     "dek": "",
+     "insertions": 189,
+     "deletions": 36,
+     "authors": 2,
+     "sessions": 0,
+     "risks": []
+    },
+    {
+     "key": "s14",
+     "area": "billing",
+     "kind": "fix",
+     "importance": 2,
+     "headline": "Failed card retries email the owner once, not daily",
+     "dek": "",
+     "insertions": 197,
+     "deletions": 8,
+     "authors": 2,
+     "sessions": 1,
+     "risks": []
+    },
+    {
+     "key": "s15",
+     "area": "infra",
+     "kind": "perf",
+     "importance": 2,
+     "headline": "Image resizing moved to a queue",
+     "dek": "",
+     "insertions": 119,
+     "deletions": 86,
+     "authors": 2,
+     "sessions": 1,
+     "risks": []
+    },
+    {
+     "key": "s16",
+     "area": "api",
+     "kind": "fix",
+     "importance": 2,
+     "headline": "Rate limit headers report the right reset time",
+     "dek": "",
+     "insertions": 127,
+     "deletions": 58,
+     "authors": 2,
+     "sessions": 0,
+     "risks": []
+    },
+    {
+     "key": "s17",
+     "area": "web",
+     "kind": "fix",
+     "importance": 2,
+     "headline": "Export to PDF keeps embedded images",
+     "dek": "",
+     "insertions": 78,
+     "deletions": 87,
+     "authors": 1,
+     "sessions": 0,
+     "risks": []
+    },
+    {
+     "key": "s18",
+     "area": "android",
+     "kind": "fix",
+     "importance": 2,
+     "headline": "Notification taps open the right notebook",
+     "dek": "",
+     "insertions": 41,
+     "deletions": 74,
+     "authors": 2,
+     "sessions": 1,
+     "risks": []
+    },
+    {
+     "key": "s19",
+     "area": "web",
+     "kind": "fix",
+     "importance": 2,
+     "headline": "Search highlights every match in long notes",
+     "dek": "",
+     "insertions": 49,
+     "deletions": 46,
+     "authors": 2,
+     "sessions": 0,
+     "risks": []
+    },
+    {
+     "key": "s20",
+     "area": "ios",
+     "kind": "fix",
+     "importance": 2,
+     "headline": "Dark mode colors fixed in the share sheet",
+     "dek": "",
+     "insertions": 57,
+     "deletions": 18,
+     "authors": 2,
+     "sessions": 0,
+     "risks": []
+    },
+    {
+     "key": "s21",
+     "area": "ios",
+     "kind": "fix",
+     "importance": 2,
+     "headline": "Keyboard no longer covers the last line of a note",
+     "dek": "",
+     "insertions": 20,
+     "deletions": 5,
+     "authors": 1,
+     "sessions": 1,
+     "risks": []
+    },
+    {
+     "key": "s22",
+     "area": "infra",
+     "kind": "infra",
+     "importance": 1,
+     "headline": "Database backups verified nightly",
+     "dek": "",
+     "insertions": 308,
+     "deletions": 47,
+     "authors": 1,
+     "sessions": 1,
+     "risks": []
+    },
+    {
+     "key": "s23",
+     "area": "android",
+     "kind": "test",
+     "importance": 1,
+     "headline": "Screenshot tests for the editor toolbar",
+     "dek": "",
+     "insertions": 242,
+     "deletions": 83,
+     "authors": 1,
+     "sessions": 1,
+     "risks": []
+    },
+    {
+     "key": "s24",
+     "area": "billing",
+     "kind": "docs",
+     "importance": 1,
+     "headline": "Billing FAQ explains annual plans",
+     "dek": "",
+     "insertions": 271,
+     "deletions": 34,
+     "authors": 2,
+     "sessions": 0,
+     "risks": []
+    },
+    {
+     "key": "s25",
+     "area": "android",
+     "kind": "infra",
+     "importance": 1,
+     "headline": "Gradle cache shared across CI jobs",
+     "dek": "",
+     "insertions": 279,
+     "deletions": 6,
+     "authors": 2,
+     "sessions": 0,
+     "risks": []
+    },
+    {
+     "key": "s26",
+     "area": "api",
+     "kind": "infra",
+     "importance": 1,
+     "headline": "API errors report to the new tracker",
+     "dek": "",
+     "insertions": 201,
+     "deletions": 84,
+     "authors": 2,
+     "sessions": 0,
+     "risks": []
+    },
+    {
+     "key": "s27",
+     "area": "android",
+     "kind": "release",
+     "importance": 1,
+     "headline": "Android 5.12.0 released",
+     "dek": "",
+     "insertions": 205,
+     "deletions": 70,
+     "authors": 2,
+     "sessions": 0,
+     "risks": [],
+     "release": "android 5.12.0"
+    },
+    {
+     "key": "s28",
+     "area": "docs",
+     "kind": "docs",
+     "importance": 1,
+     "headline": "Security page lists the new subprocessors",
+     "dek": "",
+     "insertions": 226,
+     "deletions": 49,
+     "authors": 1,
+     "sessions": 0,
+     "risks": []
+    },
+    {
+     "key": "s29",
+     "area": "docs",
+     "kind": "docs",
+     "importance": 1,
+     "headline": "Contributing guide names the review rota",
+     "dek": "",
+     "insertions": 230,
+     "deletions": 35,
+     "authors": 1,
+     "sessions": 1,
+     "risks": []
+    },
+    {
+     "key": "s30",
+     "area": "billing",
+     "kind": "test",
+     "importance": 1,
+     "headline": "Proration covered for mid-month upgrades",
+     "dek": "",
+     "insertions": 234,
+     "deletions": 21,
+     "authors": 1,
+     "sessions": 0,
+     "risks": []
+    },
+    {
+     "key": "s31",
+     "area": "web",
+     "kind": "release",
+     "importance": 1,
+     "headline": "Web 2026.1.14 deployed",
+     "dek": "",
+     "insertions": 160,
+     "deletions": 85,
+     "authors": 1,
+     "sessions": 0,
+     "risks": [],
+     "release": "web 2026.1.14"
+    },
+    {
+     "key": "s32",
+     "area": "api",
+     "kind": "docs",
+     "importance": 1,
+     "headline": "API reference lists the notebook endpoints",
+     "dek": "",
+     "insertions": 164,
+     "deletions": 71,
+     "authors": 1,
+     "sessions": 1,
+     "risks": []
+    },
+    {
+     "key": "s33",
+     "area": "docs",
+     "kind": "docs",
+     "importance": 1,
+     "headline": "Changelog template updated",
+     "dek": "",
+     "insertions": 193,
+     "deletions": 22,
+     "authors": 2,
+     "sessions": 0,
+     "risks": []
+    },
+    {
+     "key": "s34",
+     "area": "web",
+     "kind": "test",
+     "importance": 1,
+     "headline": "Editor tests run in parallel",
+     "dek": "",
+     "insertions": 123,
+     "deletions": 72,
+     "authors": 2,
+     "sessions": 0,
+     "risks": []
+    },
+    {
+     "key": "s35",
+     "area": "ios",
+     "kind": "release",
+     "importance": 1,
+     "headline": "iOS 5.12.0 released",
+     "dek": "",
+     "insertions": 131,
+     "deletions": 44,
+     "authors": 2,
+     "sessions": 1,
+     "risks": [],
+     "release": "ios 5.12.0"
+    },
+    {
+     "key": "s36",
+     "area": "infra",
+     "kind": "infra",
+     "importance": 1,
+     "headline": "Load balancer health checks tightened",
+     "dek": "",
+     "insertions": 152,
+     "deletions": 23,
+     "authors": 1,
+     "sessions": 1,
+     "risks": []
+    },
+    {
+     "key": "s37",
+     "area": "docs",
+     "kind": "docs",
+     "importance": 1,
+     "headline": "Onboarding guide rewritten for teams",
+     "dek": "",
+     "insertions": 156,
+     "deletions": 9,
+     "authors": 1,
+     "sessions": 0,
+     "risks": []
+    },
+    {
+     "key": "s38",
+     "area": "infra",
+     "kind": "infra",
+     "importance": 1,
+     "headline": "Preview environments shut down after two days idle",
+     "dek": "",
+     "insertions": 82,
+     "deletions": 73,
+     "authors": 1,
+     "sessions": 0,
+     "risks": []
+    },
+    {
+     "key": "s39",
+     "area": "web",
+     "kind": "infra",
+     "importance": 1,
+     "headline": "Web bundle drops an unused chart library",
+     "dek": "",
+     "insertions": 86,
+     "deletions": 59,
+     "authors": 1,
+     "sessions": 1,
+     "risks": []
+    },
+    {
+     "key": "s40",
+     "area": "sync",
+     "kind": "infra",
+     "importance": 1,
+     "headline": "Sync worker logs carry a request id",
+     "dek": "",
+     "insertions": 90,
+     "deletions": 45,
+     "authors": 1,
+     "sessions": 0,
+     "risks": []
+    },
+    {
+     "key": "s41",
+     "area": "ios",
+     "kind": "infra",
+     "importance": 1,
+     "headline": "iOS build uses the new signing setup",
+     "dek": "",
+     "insertions": 94,
+     "deletions": 31,
+     "authors": 1,
+     "sessions": 0,
+     "risks": []
+    },
+    {
+     "key": "s42",
+     "area": "api",
+     "kind": "test",
+     "importance": 1,
+     "headline": "Contract tests for webhooks",
+     "dek": "",
+     "insertions": 115,
+     "deletions": 10,
+     "authors": 2,
+     "sessions": 0,
+     "risks": []
+    },
+    {
+     "key": "s43",
+     "area": "infra",
+     "kind": "infra",
+     "importance": 1,
+     "headline": "Staging resets every Sunday",
+     "dek": "",
+     "insertions": 45,
+     "deletions": 60,
+     "authors": 2,
+     "sessions": 0,
+     "risks": []
+    },
+    {
+     "key": "s44",
+     "area": "sync",
+     "kind": "test",
+     "importance": 1,
+     "headline": "Conflict merge covered by property tests",
+     "dek": "",
+     "insertions": 53,
+     "deletions": 32,
+     "authors": 2,
+     "sessions": 1,
+     "risks": []
+    }
+   ],
+   "branches": [
+    {
+     "branch": "feat/realtime-cursors",
+     "commits": 96,
+     "area": "web"
+    },
+    {
+     "branch": "feat/offline-attachments",
+     "commits": 81,
+     "area": "sync"
+    },
+    {
+     "branch": "release/ios-5.13",
+     "commits": 64,
+     "area": "ios"
+    },
+    {
+     "branch": "feat/android-widgets",
+     "commits": 57,
+     "area": "android"
+    },
+    {
+     "branch": "spike/vector-search",
+     "commits": 49,
+     "area": "api"
+    },
+    {
+     "branch": "feat/team-roles",
+     "commits": 44,
+     "area": "api"
+    },
+    {
+     "branch": "chore/deps-january",
+     "commits": 38,
+     "area": "infra"
+    },
+    {
+     "branch": "feat/annual-plans-emails",
+     "commits": 31,
+     "area": "billing"
+    },
+    {
+     "branch": "fix/ios-memory",
+     "commits": 27,
+     "area": "ios"
+    },
+    {
+     "branch": "docs/api-v2",
+     "commits": 22,
+     "area": "docs"
+    }
+   ],
+   "blocked": [
+    "Realtime cursors wait on a decision about presence limits per notebook"
+   ]
+  },
+  "people": [
+   "Priya Raman",
+   "Tomas Ek",
+   "Dana Whitfield",
+   "Ines Moreau",
+   "Kofi Mensah",
+   "Mateo Silva",
+   "Hana Sato",
+   "Olu Adeyemi"
+  ]
+ },
+ "label": {
+  "leads": [
+   "s1",
+   "s2"
+  ]
+ },
+ "judge": "on a day of 760 commits, the headline and standfirst pick out what mattered (the sync conflict fix, annual billing, the mobile releases) instead of listing everything, the standfirst stays within 60 words, the lead is one of the two importance 5 stories, and the branch work is not presented as shipped"
+}

@@ -18,13 +18,9 @@ export type DraftImageRow = {
   uploading?: boolean;
 };
 
-// In-flight image uploads keyed by blob previewUrl. Module-level (not a
-// component ref) because the composer remounts whenever its key flips — a new
-// session getting its session_id stamped, or a stub conversation rekeying to
-// its real id — and the successor instance must be able to re-attach to
-// uploads the previous instance started. Entries are consumed on send/clear;
-// settled entries linger until then so late subscribers always find them.
-export const pendingImageUploads = new Map<string, Promise<string | null>>();
+import { awaitUpload, pendingImageUploads, releaseUpload } from "./pendingUploads";
+
+export { pendingImageUploads };
 
 /** Image row handed out of MessageInput's onGateSend. */
 export type ComposerGateImage = {
@@ -40,20 +36,20 @@ export type ComposerAttachment = {
   mime?: string;
 };
 
-/** Wait out in-flight uploads and drop the ones that failed. ChatComposer and
- *  the huddle composer share this so a remount cannot lose a paste. */
+/** Wait out in-flight uploads and drop the ones that failed. The huddle and
+ *  palette composers share this so a remount cannot lose a paste; it owns the
+ *  in-flight uploads it was handed and releases each once settled. */
 export async function settleComposerAttachments(
   images: ComposerGateImage[] | undefined | null,
 ): Promise<ComposerAttachment[]> {
   const list = images ?? [];
   const settled = await Promise.all(
     list.map(async (img) => ({
-      storageId:
-        img.storageId ??
-        (await (pendingImageUploads.get(img.previewUrl) ?? Promise.resolve(null))),
+      storageId: img.storageId ?? (await awaitUpload(img.previewUrl)),
       mime: img.mime,
     })),
   );
+  for (const img of list) if (!img.storageId) releaseUpload(img.previewUrl);
   return settled
     .filter((img): img is { storageId: string; mime: string } => !!img.storageId)
     .map((img) => ({ storage_id: img.storageId, mime: img.mime }));

@@ -46,6 +46,16 @@ crons.interval(
   {}
 );
 
+// Changes editions (docs/proposals/changes-page.md 7.7): days of the last
+// three with commits and no final edition, for teams with Changes on, are
+// marked dirty, and rebuilds that died are scheduled again.
+crons.interval(
+  "reconcile changes days",
+  { hours: 6 },
+  internal.changesSchedule.reconcile,
+  {}
+);
+
 crons.interval(
   "reclaim stale agent tasks",
   { minutes: 5 },

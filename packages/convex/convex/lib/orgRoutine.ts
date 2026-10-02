@@ -21,8 +21,9 @@ export const COMPANY_REVIEW_PROMPT = "Company review. Run `cast org review` and 
 
 export const ROLE_CHECK_EVERY_MS = 24 * 60 * 60 * 1000;
 export const ROLE_CHECK_PROMPT = [
-  `Check your area. Run \`cast brief\`: it shows what changed since you last looked, which of your sessions wait on a person, and how the people who report to you are doing against their goals.`,
-  `Act on what is yours to act on. Put in front of the person what needs them, with your recommendation. When nothing needs doing, say so in one line and end the turn.`,
+  `Check your area. Run \`cast brief\`: it points to what moved since you last looked, which of your sessions wait on a person, and how the people who report to you are doing against their goals.`,
+  `The brief names what moved; the work itself says where it stands. Your own lines and a session's pinned state were written before the move, so read each session that moved (\`cast read <id>\`) before you report it or keep a line about it.`,
+  `Act on what is yours to act on, and leave your brief's lines true to what you read. Put in front of the person what needs them, with your recommendation. When nothing needs doing, say so in one line and end the turn.`,
 ].join("\n");
 
 export function roleRoutineFor(role: { handle: string; name: string }): { title: string; prompt: string; every_ms: number } {

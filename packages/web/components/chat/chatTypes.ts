@@ -45,11 +45,13 @@ export type ChatReaction = {
 export type ChatAgentStatus = "thinking" | "streaming" | "done" | "error" | "listening" | "passed";
 
 export type ChatAttachmentView = {
+  /** Empty while the image is still uploading; `preview_url` paints meanwhile. */
   storage_id: string;
   name?: string;
   mime?: string;
   width?: number;
   height?: number;
+  preview_url?: string;
 };
 
 export type ChatMessageView = {

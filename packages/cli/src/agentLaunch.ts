@@ -10,8 +10,7 @@
 // fence the trigger scheduler already uses, so "read only" means the same
 // thing on every surface.
 
-import * as fs from "node:fs";
-import * as path from "node:path";
+import { promptFileShellWord } from "./launchPrompt.js";
 import { resolveAgentLaunch, type AgentClientId, type AgentDefinitionSpec, type ResolvedAgentLaunch } from "@codecast/shared/contracts";
 
 // Schedules run permissive by default (`mode: "apply"`); safe mode
@@ -97,8 +96,6 @@ export function describeDropped(name: string, dropped: string[]): string | null 
 
 // ── Daemon launch: a typed shell fragment past the argv allowlist ──────────
 
-const PROMPT_PATH_RE = /^[A-Za-z0-9_./-]+$/;
-
 /** The daemon's argv allowlist drops any arg with quotes, parens or newlines,
  *  so a definition's tool policy and prompt cannot ride buildLaunchArgs. They
  *  are appended to the typed command instead: tool flags shell-escaped, the
@@ -116,11 +113,7 @@ export function definitionLaunchFragment(
   const dropped = [...flags.dropped];
   if (prompt) {
     if (agent === "claude" || agent === "pi") {
-      fs.mkdirSync(io.dir, { recursive: true, mode: 0o700 });
-      const file = path.join(io.dir, `${io.key.replace(/[^A-Za-z0-9_-]/g, "_")}.md`);
-      if (!PROMPT_PATH_RE.test(file)) throw new Error(`prompt path is not shell-safe: ${file}`);
-      fs.writeFileSync(file, prompt, { mode: 0o600 });
-      parts.push(`${flags.systemPrompt ? "--system-prompt" : "--append-system-prompt"} "$(cat ${file})"`);
+      parts.push(`${flags.systemPrompt ? "--system-prompt" : "--append-system-prompt"} ${promptFileShellWord(io.dir, io.key, prompt)}`);
     } else {
       dropped.push(`system prompt (${agent} has no system prompt flag; the spawn seeds it into the first turn)`);
     }

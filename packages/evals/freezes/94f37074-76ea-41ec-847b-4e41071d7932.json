@@ -1,0 +1,26 @@
+{
+  "name": "changes-story batch-commit",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:batch-commit"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "changes-story:batch-commit",
+    "title": "changes-story batch-commit"
+  },
+  "asOf": "2026-01-14T18:00:00.000Z",
+  "trigger": {
+    "type": "changes-story"
+  },
+  "meta": {
+    "surface": "changes-story",
+    "visibility": "public",
+    "snapshot": "fixtures/changes-story/batch-commit.json"
+  },
+  "judge": "tells receivers of webhooks that failed deliveries now retry for about an hour, gives the session's reason (one failure used to drop the event while a partner's server blipped), and does not present the web, mobile or docs parts of the batch commit as this story's change",
+  "notes": null,
+  "tags": [],
+  "id": "94f37074-76ea-41ec-847b-4e41071d7932",
+  "createdAt": "2026-10-02T23:33:15.243Z"
+}

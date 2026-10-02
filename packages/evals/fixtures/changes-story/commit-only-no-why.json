@@ -1,0 +1,103 @@
+{
+ "asOf": "2026-01-14T18:00:00.000Z",
+ "notes": "synthetic: a commit-only story whose commits say what changed and never why",
+ "snapshot": {
+  "story": {
+   "area": "web",
+   "branch": "main",
+   "commit_shas": [
+    "8923f5028d8acd0f8af9f427b3dfba046f5afcc8",
+    "ccdd294d0a33b7ffed96a16094b87fdb9ab595ae",
+    "d7e6fd45c110edcc10ae417367634b9f185628bd"
+   ],
+   "area_counts": {
+    "web": 5
+   },
+   "risks": [],
+   "conversation_ids": [],
+   "kind": "feature",
+   "importance": 2
+  },
+  "commits": [
+   {
+    "sha": "8923f5028d8acd0f8af9f427b3dfba046f5afcc8",
+    "subject": "refactor(web): move the invoice table into its own component",
+    "author_name": "Tomas Ek",
+    "author_email": "tomas.ek@example.com",
+    "timestamp": 1768388400000,
+    "branch": "main",
+    "conversation_id": null,
+    "insertions": 180,
+    "deletions": 150,
+    "areas": {
+     "web": {
+      "touches": 3,
+      "insertions": 180,
+      "deletions": 150
+     }
+    },
+    "top_paths": [
+     "packages/web/components/InvoiceTable.tsx",
+     "packages/web/pages/Invoices.tsx"
+    ],
+    "body": "Splits InvoiceTable out of the Invoices page. No behavior change."
+   },
+   {
+    "sha": "ccdd294d0a33b7ffed96a16094b87fdb9ab595ae",
+    "subject": "feat(web): sort invoices by due date by default",
+    "author_name": "Tomas Ek",
+    "author_email": "tomas.ek@example.com",
+    "timestamp": 1768390500000,
+    "branch": "main",
+    "conversation_id": null,
+    "insertions": 24,
+    "deletions": 8,
+    "areas": {
+     "web": {
+      "touches": 2,
+      "insertions": 24,
+      "deletions": 8
+     }
+    },
+    "top_paths": [
+     "packages/web/components/InvoiceTable.tsx",
+     "packages/web/lib/invoiceSort.ts"
+    ]
+   },
+   {
+    "sha": "d7e6fd45c110edcc10ae417367634b9f185628bd",
+    "subject": "test(web): cover the invoice sort order",
+    "author_name": "Tomas Ek",
+    "author_email": "tomas.ek@example.com",
+    "timestamp": 1768391400000,
+    "branch": "main",
+    "conversation_id": null,
+    "insertions": 60,
+    "deletions": 0,
+    "areas": {
+     "web": {
+      "touches": 1,
+      "insertions": 60,
+      "deletions": 0
+     }
+    },
+    "top_paths": [
+     "packages/web/lib/invoiceSort.test.ts"
+    ]
+   }
+  ],
+  "sessions": [],
+  "prs": [],
+  "people": [
+   "Priya Raman",
+   "Tomas Ek",
+   "Dana Whitfield",
+   "Ines Moreau",
+   "Kofi Mensah"
+  ]
+ },
+ "label": {
+  "why": "none"
+ },
+ "judge": "says invoices are now sorted by due date by default (and the table was split out with no behavior change) without offering any reason or motive, because no input states one"
+}

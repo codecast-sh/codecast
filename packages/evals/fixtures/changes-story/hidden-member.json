@@ -1,0 +1,105 @@
+{
+ "asOf": "2026-01-14T18:00:00.000Z",
+ "notes": "synthetic: the owner's membership is hidden, so only commits and the PR reach the prompt",
+ "snapshot": {
+  "story": {
+   "area": "api",
+   "branch": "main",
+   "commit_shas": [
+    "20fd0da3e3d5beaffcbf7da82774d91ec8d7804c",
+    "5f9452d37871887445051acb63bc0526a614f4eb"
+   ],
+   "area_counts": {
+    "api": 5
+   },
+   "risks": [
+    {
+     "code": "schema",
+     "evidence": [
+      "20fd0da3e3d5beaffcbf7da82774d91ec8d7804c"
+     ]
+    }
+   ],
+   "conversation_ids": [],
+   "kind": "feature",
+   "importance": 2
+  },
+  "commits": [
+   {
+    "sha": "20fd0da3e3d5beaffcbf7da82774d91ec8d7804c",
+    "subject": "feat(api): store a timezone on each workspace",
+    "author_name": "Kofi Mensah",
+    "author_email": "kofi.mensah@example.com",
+    "timestamp": 1768396800000,
+    "branch": "main",
+    "conversation_id": "conv-hidden",
+    "insertions": 90,
+    "deletions": 4,
+    "areas": {
+     "api": {
+      "touches": 3,
+      "insertions": 90,
+      "deletions": 4
+     }
+    },
+    "top_paths": [
+     "packages/api/db/migrations/0042_workspace_timezone.sql",
+     "packages/api/db/schema.ts",
+     "packages/api/workspaces/update.ts"
+    ]
+   },
+   {
+    "sha": "5f9452d37871887445051acb63bc0526a614f4eb",
+    "subject": "feat(api): send the daily digest at 8am in the workspace's timezone",
+    "author_name": "Kofi Mensah",
+    "author_email": "kofi.mensah@example.com",
+    "timestamp": 1768400400000,
+    "branch": "main",
+    "conversation_id": "conv-hidden",
+    "insertions": 120,
+    "deletions": 35,
+    "areas": {
+     "api": {
+      "touches": 2,
+      "insertions": 120,
+      "deletions": 35
+     }
+    },
+    "top_paths": [
+     "packages/api/digest/schedule.ts",
+     "packages/api/digest/schedule.test.ts"
+    ]
+   }
+  ],
+  "sessions": [],
+  "prs": [
+   {
+    "number": 212,
+    "title": "Send digests at local time",
+    "body": "Digests went out at 8am UTC, which is the middle of the night for teams in the Americas and mid afternoon in Asia, so most people read them a day late. This stores a timezone per workspace and sends at 8am local time."
+   }
+  ],
+  "people": [
+   "Priya Raman",
+   "Tomas Ek",
+   "Dana Whitfield",
+   "Ines Moreau",
+   "Kofi Mensah"
+  ],
+  "withheld": [
+   {
+    "session": "jx7k2mh",
+    "owner": "Kofi Mensah",
+    "reason": "owner at hidden membership level",
+    "phrases": [
+     "Lindqvist",
+     "churn call"
+    ]
+   }
+  ]
+ },
+ "label": {
+  "why": "pr"
+ },
+ "judge": "says daily digests now arrive at 8am in each workspace's own timezone, takes the reason from pull request #212, words the schema risk as one line a teammate can act on, and names no person or session"
+}

@@ -74,7 +74,8 @@ function world() {
     mock.module("../../../hooks/useOrgSessionsUnder", () => ({ useOrgSessionsUnder: () => ({ data: undefined }) }));
     mock.module("../../../hooks/useWorkspaceCollection", () => ({ useWorkspaceCollection: (key: string) => collections[key] ?? [] }));
     mock.module("../../../hooks/useIsPhone", () => ({ useIsPhone: () => env.phone, useMinWidth: () => env.wide, PHONE_MAX_WIDTH: 768 }));
-    mock.module("../../../hooks/useCoarseNow", () => ({ useCoarseNow: () => T0 }));
+    const realNow = { ...(await import("../../../hooks/useCoarseNow")) };
+    mock.module("../../../hooks/useCoarseNow", () => ({ ...realNow, useCoarseNow: () => T0 }));
     mock.module("../../../hooks/useScopeQueries", () => ({
       useScopeSummary: () => ({ data: env.summary, missing: false }),
       useRoleBrief: () => ({ data: env.brief, missing: false }),

@@ -19,6 +19,7 @@ import { internalMutation, query } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
 import { requireUser } from "./lib/auth";
 import { normalizeRepository } from "./lib/gitRefs";
+import { markEventDirty } from "./lib/changesDirty";
 import {
   canAccessConversation,
   canAccessPlan,
@@ -49,6 +50,9 @@ const metaValidator = v.object({
   head_ref: v.optional(v.string()),
   pr_state: v.optional(v.string()),
   shepherd_state: v.optional(v.string()),
+  surface: v.optional(v.string()),
+  version: v.optional(v.string()),
+  tag: v.optional(v.string()),
 });
 
 export const recordArgs = {
@@ -133,7 +137,7 @@ export async function recordExternalEvent(ctx: { db: any }, args: RecordArgs): P
   const pr = args.pr_id && args.pr_number === undefined ? await ctx.db.get(args.pr_id) : null;
 
   const taskIds = args.task_ids ?? [];
-  return await ctx.db.insert("external_events", {
+  const id = await ctx.db.insert("external_events", {
     team_id: args.team_id,
     source: args.source,
     repository: normalizeRepository(args.repository),
@@ -160,6 +164,8 @@ export async function recordExternalEvent(ctx: { db: any }, args: RecordArgs): P
     dedupe_key: args.dedupe_key,
     created_at: args.created_at ?? Date.now(),
   });
+  await markEventDirty(ctx, { ...args, created_at: args.created_at ?? Date.now() });
+  return id;
 }
 
 export const record = internalMutation({
