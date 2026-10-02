@@ -7,7 +7,7 @@
 import { Fragment, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, Copy } from "lucide-react";
 import { formatTokens } from "@codecast/shared/render/changeCardHtml";
 import type { InitiativeRow } from "@codecast/shared/contracts/initiative";
 import type { SessionDecisionItem, TaskItem } from "../../store/inboxStore";
@@ -49,18 +49,21 @@ const STATIONS: Station[] = [
   { key: "build", name: "In build", short: "Build", what: "The sweep starts the top cause while you hold fewer than five open cards.", cmd: "cast workflow run line --task ct-N" },
   { key: "awaiting", name: "Awaiting you", short: "You", wide: true, what: "Each run ends in one change card with its proof. Cards wait here for your answer.", cmd: "cast workflow runs" },
   { key: "watching", name: "Watching", short: "Watch", what: "A shipped cause is watched. A repeat of its signal reopens it; a quiet watch resolves it.", cmd: "cast task update ct-N --watch-days 7" },
-  { key: "closed", name: "Closed", short: "Closed", sub: "last 7d", what: "Causes shipped, dissolved or resolved in the last seven days.", cmd: "cast task ls --status done" },
+  { key: "closed", name: "Closed", short: "Closed", sub: "last 7d", what: "Causes shipped, dissolved or resolved in the last seven days.", cmd: "cast task ls -s done" },
 ];
+
+/** The first command a new line needs: file one signal by hand. */
+const FIRST_SIGNAL = `cast signal add --source person --kind bug --fingerprint first-signal --title "What you saw"`;
 
 const taskHref = (t: { short_id?: string; _id: string }) => `/tasks/${t.short_id ?? t._id}`;
 
 // Columns size from the container so the whole line fits a laptop; an empty
-// station is a slimmer tile so the live ones get the width, never so slim its
-// command wraps. Below sm the stations snap one per screen and scroll sideways.
-// A tight set takes over when the flow is narrower than the roomy minimums
-// (a laptop with the inbox panel open); past that the flow scrolls.
-const ROOMY = { rail: "30px", empty: "minmax(176px, 0.6fr)", wide: "minmax(272px, 1.4fr)", live: "minmax(196px, 1fr)" };
-const TIGHT = { rail: "16px", empty: "minmax(164px, 0.55fr)", wide: "minmax(244px, 1.4fr)", live: "minmax(172px, 1fr)" };
+// station is a slimmer tile so the live ones get the width, and its command
+// wraps at spaces. Below sm the stations snap one per screen and scroll
+// sideways. The tight set takes over under 1360px (a laptop, or a wide screen
+// with the inbox panel open): all six live stations fit in 1160px of flow.
+const ROOMY = { rail: "24px", empty: "minmax(148px, 0.6fr)", wide: "minmax(256px, 1.4fr)", live: "minmax(180px, 1fr)" };
+const TIGHT = { rail: "12px", empty: "minmax(124px, 0.55fr)", wide: "minmax(216px, 1.4fr)", live: "minmax(156px, 1fr)" };
 const NARROW = { rail: "18px", empty: "68vw", wide: "86vw", live: "86vw" };
 const template = (set: typeof ROOMY, emptyOf: (s: Station) => boolean) =>
   STATIONS.flatMap((s, i) => [...(i ? [set.rail] : []), emptyOf(s) ? set.empty : s.wide ? set.wide : set.live]).join(" ");
@@ -102,6 +105,12 @@ export function LinePage() {
     closed: flow.closed.items.map((c) => taskHref(c.task)),
   }), [flow, buildBlocks, taskById, parkedOpen]);
 
+  const columns: Record<StationKey, Column<unknown>> = flow as unknown as Record<StationKey, Column<unknown>>;
+  // Sense counts today's signals but lists the week's sources.
+  const empty = (key: StationKey) => (key === "sense" ? flow.sense.items.length === 0 : columns[key].count === 0);
+  // Nothing anywhere: the floor folds into one band that teaches the start.
+  const allEmpty = STATIONS.every((s) => empty(s.key));
+
   // Until the viewer moves, the cursor sits where the work is: a card waiting
   // on them, else the first station holding anything.
   const defaultCol = flow.awaiting.count > 0
@@ -122,11 +131,12 @@ export function LinePage() {
       if (e.metaKey || e.ctrlKey || e.altKey || hasOpenModal()) return;
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable)) return;
-      // Sideways skips stations with nothing in them; a number jumps to any.
+      // Sideways skips stations with nothing in them, unless every station
+      // is empty; a number jumps to any.
       const side = (dc: number) => {
         e.preventDefault();
         for (let c = col + dc; c >= 0 && c < STATIONS.length; c += dc) {
-          if (hrefs[STATIONS[c].key].length > 0) return setFocus({ col: c, row: 0 });
+          if (allEmpty || hrefs[STATIONS[c].key].length > 0) return setFocus({ col: c, row: 0 });
         }
       };
       const down = (dr: number) => {
@@ -139,7 +149,7 @@ export function LinePage() {
       if (e.key === "ArrowUp" || e.key === "k") return down(-1);
       const jump = Number(e.key);
       if (jump >= 1 && jump <= STATIONS.length) { e.preventDefault(); return setFocus({ col: jump - 1, row: 0 }); }
-      if ((e.key === "c" || e.key === "C") && rows === 0) { e.preventDefault(); void copyText(STATIONS[col].cmd, "Command copied"); return; }
+      if ((e.key === "c" || e.key === "C") && rows === 0) { e.preventDefault(); void copyText(allEmpty ? FIRST_SIGNAL : STATIONS[col].cmd, "Command copied"); return; }
       if (e.key === "Enter" && !cardTakesReturn) {
         const href = hrefs[STATIONS[col].key][row];
         if (href) { e.preventDefault(); router.push(href); }
@@ -147,7 +157,7 @@ export function LinePage() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [hrefs, col, row, rows, router, cardTakesReturn]);
+  }, [hrefs, col, row, rows, router, cardTakesReturn, allEmpty]);
 
   // Keep the cursor on screen: the station sideways, the row inside it.
   useWatchEffect(() => {
@@ -158,10 +168,7 @@ export function LinePage() {
     station?.querySelector<HTMLElement>(`[data-line-row="${row}"]`)?.scrollIntoView({ block: "nearest" });
   }, [col, row]);
 
-  const columns: Record<StationKey, Column<unknown>> = flow as unknown as Record<StationKey, Column<unknown>>;
   const at = (key: StationKey, i: number) => STATIONS[col].key === key && row === i;
-  // Sense counts today's signals but lists the week's sources.
-  const empty = (key: StationKey) => (key === "sense" ? flow.sense.items.length === 0 : columns[key].count === 0);
   const grid = {
     "--line-cols": template(ROOMY, (s) => empty(s.key)),
     "--line-cols-tight": template(TIGHT, (s) => empty(s.key)),
@@ -192,7 +199,7 @@ export function LinePage() {
     <div className="line-floor h-full flex flex-col min-h-0" data-line-page>
       <header className="shrink-0 px-4 sm:px-6 pt-5 pb-4 flex flex-col gap-3">
         <div className="flex items-center gap-3 flex-wrap">
-          <h1 className="text-[13px] text-sol-text-muted leading-none">The line</h1>
+          <h1 className="text-[13px] font-semibold text-sol-text leading-none">The line</h1>
           <span className="hidden md:inline text-[11px] text-sol-text-dim leading-none">a signal in the world to a shipped, watched change</span>
           <div className="ml-auto flex items-center gap-3 text-[11px] text-sol-text-dim">
             <Link href="/questions" className="hover:text-sol-text">all questions</Link>
@@ -200,12 +207,13 @@ export function LinePage() {
           </div>
         </div>
         <Headline parts={lineHeadline(flow, now)} />
-        <Throughput t={flow.throughput} />
+        {!allEmpty && <Throughput t={flow.throughput} />}
       </header>
 
+      {allEmpty ? <Onboarding focusedCol={col} now={now} states={STATIONS.map((s) => columns[s.key].state)} onFocus={(i) => setFocus({ col: i, row: 0 })} /> : (<>
       <nav className="line-tabs sm:hidden shrink-0 flex gap-1 overflow-x-auto px-4 pb-2" aria-label="Stations">
         {STATIONS.map((s, i) => (
-          <button key={s.key} onClick={() => showStation(i)} data-active={shown === i ? "true" : undefined} className="line-tab shrink-0 rounded-full px-2.5 py-1 text-[11.5px] whitespace-nowrap">
+          <button key={s.key} onClick={() => showStation(i)} data-active={shown === i ? "true" : undefined} className="line-tab shrink-0 rounded-full px-2.5 py-1 text-[11px] whitespace-nowrap">
             {s.short} <span className="tabular-nums" data-zero={columns[s.key].count === 0 ? "true" : undefined}>{columns[s.key].count}</span>
           </button>
         ))}
@@ -267,6 +275,7 @@ export function LinePage() {
           ))}
         </div>
       </div>
+      </>)}
 
       <footer className="shrink-0 hidden sm:flex items-center gap-4 px-6 py-2 border-t border-sol-border/30 text-[11px] text-sol-text-dim">
         <span className="flex items-center gap-1"><KeyCap size="xs">←</KeyCap><KeyCap size="xs">→</KeyCap> stations</span>
@@ -276,7 +285,7 @@ export function LinePage() {
           {focusedCard && options > 0 && <span className="text-sol-yellow/90 flex items-center gap-1"><KeyCap size="xs">1</KeyCap>{options > 1 && <>-<KeyCap size="xs">{String(options)}</KeyCap></>} answer the card</span>}
           {rows > 0
             ? <span className="flex items-center gap-1"><KeyCap size="xs">↵</KeyCap> {cardTakesReturn ? "submit" : "open"}</span>
-            : <span className="flex items-center gap-1"><KeyCap size="xs">c</KeyCap> copy the command</span>}
+            : <span className="flex items-center gap-1"><KeyCap size="xs">c</KeyCap> {allEmpty ? "copy the first command" : "copy the command"}</span>}
         </span>
       </footer>
     </div>
@@ -295,7 +304,7 @@ const TONE: Record<HeadlinePart["tone"], string> = {
 
 function Headline({ parts }: { parts: HeadlinePart[] }) {
   return (
-    <p className="line-headline text-[17px] sm:text-[19px] leading-snug" data-line-headline>
+    <p className="line-headline text-[19px] leading-snug" data-line-headline>
       {parts.map((p, i) => (
         <Fragment key={i}>
           {i > 0 && <span className="text-sol-text-dim">, </span>}
@@ -308,23 +317,30 @@ function Headline({ parts }: { parts: HeadlinePart[] }) {
 }
 
 function Throughput({ t }: { t: ReturnType<typeof buildLineFlow>["throughput"] }) {
-  const cells: Array<{ label: string; value: number | string | null; tone?: string; tip?: string }> = [
-    { label: "signals in", value: t.signalsIn },
-    { label: "causes opened", value: t.opened },
-    { label: "dissolved", value: t.dissolved },
-    { label: "shipped", value: t.shipped },
-    { label: "reopened in watch", value: t.reopened, tone: t.reopened ? "text-sol-red" : undefined },
+  const moved = t.signalsIn + t.opened + t.dissolved + t.shipped + t.reopened > 0;
+  if (!moved) {
+    return <p className="text-[11px] text-sol-text-dim" data-line-throughput="quiet">No signals this week. Throughput appears once the line moves.</p>;
+  }
+  const cells: Array<{ label: string; value: number | string | null; tone?: string; tip?: string; spark?: number[] }> = [
+    { label: "signals in", value: t.signalsIn, spark: t.daily.signalsIn },
+    { label: "causes opened", value: t.opened, spark: t.daily.opened },
+    { label: "dissolved", value: t.dissolved, spark: t.daily.dissolved },
+    { label: "shipped", value: t.shipped, spark: t.daily.shipped },
+    { label: "reopened in watch", value: t.reopened, tone: t.reopened ? "text-sol-red" : undefined, spark: t.daily.reopened },
     { label: "signal to ship", value: t.medianToShip === null ? null : formatElapsed(0, t.medianToShip) },
     { label: "tokens per ship", value: t.tokensPerShip === null ? null : formatTokens(Math.round(t.tokensPerShip)), tip: "Cost per shipped change, in run tokens: runs record tokens, not dollars, so tokens stand in for cost" },
   ];
   return (
     <div className="line-meter rounded-xl grid grid-cols-4 lg:grid-cols-7 overflow-hidden" data-line-throughput>
       {cells.map((c) => (
-        <div key={c.label} className="line-meter-cell px-3 sm:px-4 py-2.5 min-w-0" title={c.tip ?? c.label}>
-          {c.value === null
-            ? <div className="h-[20px] sm:h-[22px] flex items-end text-[11.5px] text-sol-text-dim/80 whitespace-nowrap">none yet</div>
-            : <div className={cn("line-num text-[20px] sm:text-[22px] text-sol-text", c.tone)} data-zero={c.value === 0 ? "true" : undefined}>{c.value}</div>}
-          <div className="mt-1 text-[10.5px] sm:text-[11px] text-sol-text-dim truncate">{c.label}</div>
+        <div key={c.label} className="line-meter-cell px-3 sm:px-4 py-2.5 min-w-0" title={c.tip ?? (c.spark ? `${c.label}, per day over the last 7 days` : c.label)}>
+          <div className="h-[19px] flex items-end gap-2">
+            {c.value === null
+              ? <span className="text-[11px] text-sol-text-dim whitespace-nowrap">none yet</span>
+              : <span className={cn("line-num text-[19px] text-sol-text", c.tone)} data-zero={c.value === 0 ? "true" : undefined}>{c.value}</span>}
+            {c.spark && c.value !== 0 && <Spark values={c.spark} bar={3} height={14} className="ml-auto self-end" label={`${c.label} per day, last 7 days`} />}
+          </div>
+          <div className="mt-1 text-[11px] text-sol-text-dim truncate">{c.label}</div>
         </div>
       ))}
     </div>
@@ -335,6 +351,8 @@ function Throughput({ t }: { t: ReturnType<typeof buildLineFlow>["throughput"] }
 
 function stateWords(state: StageState, now: number): string {
   const since = state.since ? formatElapsed(state.since, now) : null;
+  if (state.kind === "idle") return state.why;
+  if (state.kind === "ask") return `${state.why}${since ? `, oldest ${since}` : ""}`;
   if (state.kind === "paused") return `paused${since ? ` ${since}` : ""} · ${state.why}`;
   if (state.kind === "failing") return `failing${since ? ` ${since}` : ""} · ${state.why}`;
   if (state.kind === "starved") return `starved · ${state.why}${since ? `, last ${since} ago` : ""}`;
@@ -345,7 +363,9 @@ function stateWords(state: StageState, now: number): string {
 const STATE_TONE: Record<StageState["kind"], string> = {
   failing: "text-sol-red",
   paused: "text-sol-yellow",
-  starved: "text-sol-orange/80",
+  starved: "text-sol-orange",
+  ask: "text-sol-yellow",
+  idle: "text-sol-text-dim",
   clear: "text-sol-text-dim",
   running: "text-sol-text-muted",
 };
@@ -372,23 +392,23 @@ function StationColumn({ station, index, column, empty, moved, focused, now, onF
       data-state={state.kind}
       data-empty={empty ? "true" : undefined}
       onMouseDown={onFocus}
-      className="line-col relative rounded-[10px] flex flex-col min-h-0 min-w-0 snap-center"
+      className="line-col group relative rounded-[10px] flex flex-col min-h-0 min-w-0 snap-center"
       style={{ "--i": index } as CSSProperties}
     >
       <div className="line-col-head shrink-0 px-3 pt-3 pb-2.5 border-b border-sol-border/25">
-        <div className="flex items-start gap-2 h-[38px]">
+        <div className="flex items-start gap-2 h-[40px]">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5 h-[24px]">
               <KeyCap size="xs">{String(index + 1)}</KeyCap>
-              <h2 className="text-[13px] text-sol-text whitespace-nowrap truncate">{station.name}</h2>
+              <h2 className="text-[13px] font-medium text-sol-text whitespace-nowrap truncate">{station.name}</h2>
             </div>
-            <div className="text-[10px] text-sol-text-dim whitespace-nowrap truncate">
+            <div className="text-[11px] text-sol-text-dim whitespace-nowrap truncate">
               {station.sub ?? (moved > 0 ? `+${moved} in 7d` : "")}
             </div>
           </div>
           <div className="shrink-0 text-right">
-            <div className={cn("line-num line-col-count text-sol-text", empty ? "text-[18px] pt-[3px]" : "text-[24px]")} data-zero={empty ? "true" : undefined}>{column.count}</div>
-            {column.oldestAt && <div className="mt-0.5 text-[10px] text-sol-text-dim whitespace-nowrap" title="the oldest item here">oldest {formatElapsed(column.oldestAt, now)}</div>}
+            <div className={cn("line-num line-col-count", state.kind === "ask" ? "text-[28px] text-sol-yellow" : "text-[19px] pt-[3px] text-sol-text")} data-zero={empty ? "true" : undefined}>{column.count}</div>
+            {column.oldestAt && <div className="mt-0.5 text-[11px] text-sol-text-dim whitespace-nowrap" title="the oldest item here">oldest {formatElapsed(column.oldestAt, now)}</div>}
           </div>
         </div>
         <div className="mt-1 flex items-start gap-2 text-[11px] h-[30px]" data-line-state title={words}>
@@ -412,26 +432,71 @@ function Rail({ live, moved, into }: { live: boolean; moved: number; into: strin
   );
 }
 
-/** An empty station: what feeds it and the command, on one line that scrolls
- *  sideways before it ever wraps. Focused, c copies the command. */
+/** An empty station: what feeds it and the command that does. */
 function Empty({ station, focused, after }: { station: Station; focused: boolean; after?: ReactNode }) {
   return (
-    <div className="line-empty h-full rounded-lg flex flex-col gap-2.5 p-2.5" data-line-empty>
-      <p className="text-[11.5px] text-sol-text-muted leading-relaxed">{station.what}</p>
-      <div className="line-cmd-scroll overflow-x-auto min-w-0">
-        <code className="line-cmd inline-block whitespace-nowrap rounded px-2 py-1 text-[10.5px] text-sol-text-muted">{station.cmd}</code>
-      </div>
-      <div className="-mt-1 h-[18px]">
-        <button
-          type="button"
-          onClick={() => void copyText(station.cmd, "Command copied")}
-          className={cn("shrink-0 flex items-center gap-1 text-[10.5px] text-sol-text-dim hover:text-sol-text transition-opacity", focused ? "opacity-100" : "opacity-0 pointer-events-none")}
-          tabIndex={focused ? 0 : -1}
-        >
-          <KeyCap size="xs">c</KeyCap> copy
-        </button>
-      </div>
+    <div className="line-empty rounded-lg flex flex-col gap-2.5 p-2.5" data-line-empty>
+      <p className="text-[11px] text-sol-text-muted leading-relaxed">{station.what}</p>
+      <Cmd cmd={station.cmd} shown={focused} />
       {after}
+    </div>
+  );
+}
+
+/** A command chip that wraps at spaces, never clips, with a copy button
+ *  inside it: shown on hover, or always when the station holds the cursor. */
+function Cmd({ cmd, shown, primary }: { cmd: string; shown?: boolean; primary?: boolean }) {
+  return (
+    <div className={cn("line-cmd group/cmd relative rounded-md min-w-0", primary && "line-cmd-primary")} data-line-cmd>
+      <code className={cn("block whitespace-pre-wrap break-normal [overflow-wrap:anywhere] pl-2 pr-7 py-1.5 leading-[16px]", primary ? "text-[13px] text-sol-text" : "text-[11px] text-sol-text-muted")}>{cmd}</code>
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); void copyText(cmd, "Command copied"); }}
+        title="Copy the command"
+        aria-label="Copy the command"
+        className={cn(
+          "absolute top-1 right-1 w-5 h-5 rounded flex items-center justify-center text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-opacity",
+          shown || primary ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-hover/cmd:opacity-100 focus-visible:opacity-100",
+        )}
+      >
+        <Copy className="w-3 h-3" />
+      </button>
+    </div>
+  );
+}
+
+/** The line before anything has reached it: the six stations as one short
+ *  strip and the first command. The columns grow once something flows. */
+function Onboarding({ focusedCol, states, now, onFocus }: { focusedCol: number; states: StageState[]; now: number; onFocus: (i: number) => void }) {
+  return (
+    <div className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 pb-6" data-line-onboarding>
+      <ol className="line-band rounded-xl grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 overflow-hidden">
+        {STATIONS.map((s, i) => (
+          <li
+            key={s.key}
+            data-line-col={i}
+            data-focused={focusedCol === i ? "true" : undefined}
+            onMouseDown={() => onFocus(i)}
+            className="line-band-cell relative p-3 min-w-0"
+            style={{ "--i": i } as CSSProperties}
+          >
+            <div className="flex items-center gap-1.5">
+              <KeyCap size="xs">{String(i + 1)}</KeyCap>
+              <span className="text-[13px] font-medium text-sol-text">{s.name}</span>
+              <span className="line-lamp ml-auto" data-kind={states[i].kind} title={stateWords(states[i], now)} />
+            </div>
+            <p className="mt-2 text-[11px] leading-relaxed text-sol-text-muted">{s.what}</p>
+          </li>
+        ))}
+      </ol>
+      <div className="line-start mt-5 max-w-[720px] rounded-xl p-4 sm:p-5">
+        <div className="text-[19px] text-sol-text leading-snug">File the first signal.</div>
+        <p className="mt-1.5 text-[13px] text-sol-text-muted leading-relaxed">
+          A signal is one thing someone saw. It opens a cause, the line builds a fix, and you answer one card.
+          Finders like Sentry, PostHog and evals file signals on their own once connected.
+        </p>
+        <div className="mt-4"><Cmd cmd={FIRST_SIGNAL} primary /></div>
+      </div>
     </div>
   );
 }
@@ -455,15 +520,16 @@ function RowLink({ href, focused, index, children, className }: { href: string; 
 
 // ── Rows ──
 
-function Spark({ values }: { values: number[] }) {
+/** Bars oldest first; the last few, when non-zero, read bright. */
+function Spark({ values, bar = 4, height = 20, label = "signals per hour, last 24 hours", className }: { values: number[]; bar?: number; height?: number; label?: string; className?: string }) {
   const max = Math.max(1, ...values);
-  const w = 4;
   const gap = 1;
+  const hot = Math.max(1, Math.round(values.length / 8));
   return (
-    <svg className="line-spark" width={values.length * (w + gap)} height={20} viewBox={`0 0 ${values.length * (w + gap)} 20`} aria-label="signals per hour, last 24 hours">
+    <svg className={cn("line-spark shrink-0", className)} width={values.length * (bar + gap)} height={height} viewBox={`0 0 ${values.length * (bar + gap)} ${height}`} aria-label={label}>
       {values.map((v, i) => {
-        const h = v === 0 ? 1 : Math.max(3, Math.round((v / max) * 20));
-        return <rect key={i} x={i * (w + gap)} y={20 - h} width={w} height={h} rx={1} data-hot={i >= values.length - 3 && v > 0 ? "true" : undefined} opacity={v === 0 ? 0.35 : 1} />;
+        const h = v === 0 ? 1 : Math.max(3, Math.round((v / max) * height));
+        return <rect key={i} x={i * (bar + gap)} y={height - h} width={bar} height={h} rx={1} data-hot={i >= values.length - hot && v > 0 ? "true" : undefined} opacity={v === 0 ? 0.35 : 1} />;
       })}
     </svg>
   );
@@ -474,8 +540,8 @@ function SenseRow({ src, now, focused, index, href }: { src: SenseSource; now: n
     <RowLink href={href} focused={focused} index={index}>
       <div className="flex items-center gap-2">
         <span className="text-[13px] text-sol-text">{src.source}</span>
-        <span className="text-[10px] text-sol-text-dim truncate min-w-0">{src.kinds.join(" · ")}</span>
-        <span className="ml-auto shrink-0 text-[12px] text-sol-text tabular-nums">{src.day}<span className="text-sol-text-dim"> / {src.week}</span></span>
+        <span className="text-[11px] text-sol-text-dim truncate min-w-0">{src.kinds.join(" · ")}</span>
+        <span className="ml-auto shrink-0 text-[13px] text-sol-text tabular-nums">{src.day}<span className="text-sol-text-dim"> / {src.week}</span></span>
       </div>
       <div className="mt-1.5"><Spark values={src.spark} /></div>
       <div className="mt-1 text-[11px] text-sol-text-dim truncate" title={src.newest.title}>
@@ -498,10 +564,10 @@ function CauseRowView({ row, rank, max, focused, index, muted }: { row: CauseRow
   return (
     <RowLink href={taskHref(t)} focused={focused} index={index} className={muted ? "opacity-70" : undefined}>
       <div className="flex items-start gap-2">
-        {rank !== undefined && <span className="line-num text-[15px] text-sol-text-dim w-4 shrink-0 pt-px">{rank}</span>}
-        <span className="text-[12.5px] text-sol-text leading-snug line-clamp-2 flex-1 min-w-0">{t.title}</span>
+        {rank !== undefined && <span className="line-num text-[13px] text-sol-text-dim w-4 shrink-0 pt-px">{rank}</span>}
+        <span className="text-[13px] text-sol-text leading-snug line-clamp-2 flex-1 min-w-0">{t.title}</span>
       </div>
-      <div className={cn("mt-1.5 flex items-center gap-1.5 flex-wrap text-[10.5px]", rank !== undefined && "pl-6")}>
+      <div className={cn("mt-1.5 flex items-center gap-1.5 flex-wrap text-[11px]", rank !== undefined && "pl-6")}>
         <span className="text-sol-text tabular-nums" title="signals attached">×{row.signals}</span>
         <span className={cn("px-1.5 py-px rounded border max-w-[10rem] truncate", GOAL_TONE[row.goal.kind])} title={row.goal.ref || "the ground node has not run"}>{row.goal.label}</span>
         {t.category && <span className="text-sol-text-dim">{t.category}</span>}
@@ -539,15 +605,15 @@ function BuildRowView({ row, now, focused, index }: { row: BuildBlock["rows"][nu
     <RowLink href={runHref(r._id)} focused={focused} index={index} className={row.stalled ? "opacity-60" : undefined}>
       <div className="flex items-start gap-2">
         <span className={cn("mt-1 w-1.5 h-1.5 rounded-full shrink-0", row.stalled ? "border border-sol-text-dim" : r.status === "paused" ? "bg-sol-yellow" : "line-live-dot")} />
-        <span className="text-[12.5px] text-sol-text leading-snug line-clamp-2 flex-1 min-w-0" title={row.name}>{row.name}</span>
+        <span className="text-[13px] text-sol-text leading-snug line-clamp-2 flex-1 min-w-0" title={row.name}>{row.name}</span>
         <span className={cn("text-[11px] tabular-nums shrink-0", old ? "text-sol-orange" : "text-sol-text-dim")} title={old ? "at this step over a day" : undefined}>{formatElapsed(row.since, now)}</span>
       </div>
-      <div className="mt-1 pl-3.5 flex items-center gap-1.5 text-[10.5px] text-sol-text-dim min-w-0">
+      <div className="mt-1 pl-3.5 flex items-center gap-1.5 text-[11px] text-sol-text-dim min-w-0">
         {row.chip && <span className="shrink-0 max-w-[60%] truncate px-1.5 rounded border border-sol-border/60 text-sol-text-muted">{row.chip}</span>}
         {row.workflow && <span className="truncate">{row.workflow}</span>}
         {ref && <span className="ml-auto font-mono shrink-0">{ref}</span>}
       </div>
-      {row.node?.activity && <div className="mt-1 pl-3.5 text-[10.5px] text-sol-text-muted truncate" title={row.node.activity}>{row.node.activity}</div>}
+      {row.node?.activity && <div className="mt-1 pl-3.5 text-[11px] text-sol-text-muted truncate" title={row.node.activity}>{row.node.activity}</div>}
     </RowLink>
   );
 }
@@ -557,13 +623,13 @@ function WatchRowView({ row, focused, index }: { row: WatchRow; focused: boolean
   return (
     <RowLink href={taskHref(row.task)} focused={focused} index={index}>
       <div className="flex items-start gap-2">
-        <span className="text-[12.5px] text-sol-text leading-snug line-clamp-2 flex-1 min-w-0">{row.task.title}</span>
+        <span className="text-[13px] text-sol-text leading-snug line-clamp-2 flex-1 min-w-0">{row.task.title}</span>
         <span className="text-[11px] text-sol-text tabular-nums shrink-0">{row.daysLeft}d left</span>
       </div>
       <div className="line-bar mt-1.5 h-[3px] rounded-full overflow-hidden">
         <span className="block h-full rounded-full" style={{ width: `${Math.max(4, Math.min(100, (row.daysLeft / span) * 100))}%` }} />
       </div>
-      <div className="mt-1 flex gap-2 text-[10.5px] text-sol-text-dim">
+      <div className="mt-1 flex gap-2 text-[11px] text-sol-text-dim">
         <span>×{row.task.cause?.signal_count ?? 0} before ship</span>
         <span className="ml-auto font-mono">{row.task.short_id}</span>
       </div>
@@ -582,10 +648,10 @@ function ClosedRowView({ row, now, focused, index }: { row: ClosedRow; now: numb
   return (
     <RowLink href={taskHref(row.task)} focused={focused} index={index}>
       <div className="flex items-start gap-2">
-        <span className={cn("text-[12px] w-3 shrink-0", o.tone)}>{o.glyph}</span>
-        <span className={cn("text-[12.5px] leading-snug line-clamp-2 flex-1 min-w-0", row.outcome === "dissolved" ? "text-sol-text-muted" : "text-sol-text")}>{row.task.title}</span>
+        <span className={cn("text-[13px] w-3 shrink-0", o.tone)}>{o.glyph}</span>
+        <span className={cn("text-[13px] leading-snug line-clamp-2 flex-1 min-w-0", row.outcome === "dissolved" ? "text-sol-text-muted" : "text-sol-text")}>{row.task.title}</span>
       </div>
-      <div className="mt-1 pl-5 flex gap-2 text-[10.5px] text-sol-text-dim min-w-0">
+      <div className="mt-1 pl-5 flex gap-2 text-[11px] text-sol-text-dim min-w-0">
         <span className="truncate"><span className={o.tone}>{row.outcome}</span> · {formatElapsed(row.at, now)} ago</span>
         <span className="ml-auto shrink-0 font-mono">{row.task.short_id}</span>
       </div>

@@ -5,7 +5,7 @@
 // identity and the live status the chip reads) and the sessions collection,
 // so a pin whose row the viewer cannot see is not drawn and grants nothing.
 //
-// An ABSENT list is the default: the person's global Chief of Staff when one
+// An ABSENT list is the default: the person's global Executive Assistant when one
 // stands, else the active workspace's agent, which is what the header showed
 // before pins. An empty list is a person who unpinned everything.
 
@@ -39,13 +39,13 @@ export type ResolvedPin = {
   isDefault: boolean;
 };
 
-/** The person's global Chief of Staff, when one stands among the rows they see. */
-export function globalChiefOf(anchors: AnchorRow[]): AnchorRow | null {
-  return anchors.find((a) => a.scope_type === "user" && a.role?.chief?.reach === "global" && a.role.status !== "retired") ?? null;
+/** The person's global Executive Assistant, when one stands among the rows they see. */
+export function globalAssistantOf(anchors: AnchorRow[]): AnchorRow | null {
+  return anchors.find((a) => a.scope_type === "user" && a.role?.assistant?.reach === "global" && a.role.status !== "retired") ?? null;
 }
 
-/** The one line a role row reads as: its given name, and its title with a
- *  chief's reach ("Ada", "Chief of Staff, global"). A row not yet seated reads
+/** The one line a role row reads as: its given name, and its title with an
+ *  assistant's reach ("Ada", "Executive Assistant, global"). A row not yet seated reads
  *  as the workspace's agent. */
 export function anchorIdentityWords(a: AnchorRow | null | undefined): { name: string; subtitle: string } {
   if (a?.role) {
@@ -62,7 +62,7 @@ export function resolveHeaderPins(
   activeTeamId: string | null | undefined,
 ): ResolvedPin[] {
   if (pins === null) {
-    const def = globalChiefOf(anchors) ?? rootAgentOf(anchors, activeTeamId);
+    const def = globalAssistantOf(anchors) ?? rootAgentOf(anchors, activeTeamId);
     if (!def) return [];
     const words = anchorIdentityWords(def);
     return [{ key: `anchor:${def._id}`, pin: null, anchor: def, conversationId: def.conversation_id ? String(def.conversation_id) : null, ...words, isDefault: true }];
@@ -99,6 +99,6 @@ export function toggleHeaderPin(kind: HeaderPin["kind"], id: string): void {
 export function defaultPinsOf(state: any): HeaderPin[] {
   const anchors: AnchorRow[] = Object.values(state.anchors ?? {}).filter((a: any) => a.status !== "decommissioned") as AnchorRow[];
   const activeTeamId = (state.clientState?.ui?.active_team_id as string | undefined) ?? null;
-  const def = globalChiefOf(anchors) ?? rootAgentOf(anchors, activeTeamId);
+  const def = globalAssistantOf(anchors) ?? rootAgentOf(anchors, activeTeamId);
   return def?.role ? [{ kind: "role", id: String(def.role._id) }] : [];
 }

@@ -818,12 +818,24 @@ async function yieldRoomToOtherWindow(): Promise<void> {
  *  its own (a reloaded window whose row on the server outlived it): the row
  *  is what everyone else sees, so End must be able to delete it regardless. */
 export async function leaveCall(roomKey?: string): Promise<void> {
-  if (voiceHostElsewhere() && !currentRoomKey && (await sendVoiceCommand("leaveCall", roomKey ? [roomKey] : []))) return;
+  if (voiceHostElsewhere() && !currentRoomKey) {
+    // The host hangs up; this window lets go of the row at the press too.
+    noteLeft(roomKey ?? useInboxStore.getState().call.roomKey);
+    if (await sendVoiceCommand("leaveCall", roomKey ? [roomKey] : [])) return;
+  }
   return leaveCallHere(roomKey);
+}
+
+/** Hanging up is final at the press: the row stops reading the server's seat
+ *  and rings for this room as ours, though they outlive the press by the
+ *  leave's round trip (seconds, under load). */
+function noteLeft(roomKey: string | null | undefined): void {
+  if (roomKey) setCall({ left: { roomKey, at: Date.now() } });
 }
 
 async function leaveCallHere(shown?: string): Promise<void> {
   const roomKey = currentRoomKey ?? useInboxStore.getState().call.roomKey ?? shown ?? null;
+  noteLeft(roomKey);
   callGen++;
   deliberateRoomKey = null;
   walkieJoinedSeat = null;

@@ -33,3 +33,19 @@ restore_env() { if [ -n "$HOLD" ] && [ -f "$HOLD" ]; then mv "$HOLD" "$ROOT/.env
 trap restore_env EXIT
 
 env -u CONVEX_DEPLOYMENT npx convex deploy -y "$@"
+restore_env
+
+# Tell the Changes page the backend now runs this commit (deploy marker,
+# docs/proposals/changes-page.md 7.3). A mark that cannot be recorded (cast
+# missing or logged out, offline, an older server) warns and never fails the
+# deploy, which has already succeeded. --dry-run prints the mark instead.
+SHA="$(git rev-parse HEAD)"
+MARK_DRY=""
+case " $* " in *" --dry-run "*) MARK_DRY="--dry-run" ;; esac
+if ! command -v cast >/dev/null 2>&1; then
+    echo "warning: deploy marker skipped: cast is not on PATH" >&2
+elif CAST_HTTP_TIMEOUT_MS=15000 cast ship mark --surface backend --sha "$SHA" $MARK_DRY; then
+    :
+else
+    echo "warning: deploy marker for backend at ${SHA:0:7} not recorded; the deploy itself succeeded" >&2
+fi

@@ -22,12 +22,12 @@ describe("roleIdentity", () => {
     expect(roleIdentity({ _id: "or3", name: "Ops chief", handle: "chief-of-staff" }).title).toBe("Ops chief");
   });
 
-  test("a chief's subtitle carries its reach", () => {
-    const base = { _id: "or2", name: "Chief of Staff", handle: "chief-of-staff", given_name: "Ada" };
-    expect(roleIdentityLine({ ...base, chief: { reach: "global" }, scope_type: "user" })).toBe("Ada · Chief of Staff, global");
-    expect(roleIdentity({ ...base, chief: { reach: "team", team_id: "t1" }, scope_type: "team" }, { teamName: "Acme" }).subtitle).toBe("Chief of Staff, Acme");
-    expect(roleIdentity({ ...base, chief: { reach: "team", team_id: "t1" }, scope_type: "user" }, { teamName: "Acme" }).subtitle).toBe("Chief of Staff, personal, Acme");
-    // The title is the chief's whatever the row's name says.
-    expect(roleIdentity({ ...base, name: "Right hand", chief: { reach: "global" } }).title).toBe("Chief of Staff");
+  test("an assistant's subtitle carries its reach", () => {
+    const base = { _id: "or2", name: "Executive Assistant", handle: "executive-assistant", given_name: "Ada" };
+    expect(roleIdentityLine({ ...base, assistant: { reach: "global" }, scope_type: "user" })).toBe("Ada · Executive Assistant, global");
+    expect(roleIdentity({ ...base, assistant: { reach: "team", team_id: "t1" }, scope_type: "team" }, { teamName: "Acme" }).subtitle).toBe("Executive Assistant, Acme");
+    expect(roleIdentity({ ...base, assistant: { reach: "team", team_id: "t1" }, scope_type: "user" }, { teamName: "Acme" }).subtitle).toBe("Executive Assistant, personal, Acme");
+    // The title is the assistant's whatever the row's name says.
+    expect(roleIdentity({ ...base, name: "Right hand", assistant: { reach: "global" } }).title).toBe("Executive Assistant");
   });
 });

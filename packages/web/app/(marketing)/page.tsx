@@ -17,6 +17,7 @@ import { HeroFlythrough } from "./HeroFlythrough";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { AppBadges, AppleIcon } from "@/components/marketing/AppBadges";
 import { TourSection, WatchChapter } from "./TourFilm";
+import { SUITE } from "./suite";
 
 function Highlight({ children, color }: { children: React.ReactNode; color: "amber" | "green" | "blue" | "rose" | "violet" | "cyan" }) {
   const colors: Record<string, string> = {
@@ -68,20 +69,6 @@ const PLATFORM_CHIPS = [
   { label: "Mac", href: "/download", color: "#2aa198" },
   { label: "iOS", href: "https://apps.apple.com/app/id6757820850", color: "#b58900", external: true },
   { label: "CLI", href: "/features", color: "#6c71c4" },
-];
-
-/** The suite, one tile per surface: what it is, and what the agents do there. `chapter` names a tour film chapter when one shows it. */
-const SUITE: { name: string; line: string; mark: string; color: string; chapter?: string; early?: boolean }[] = [
-  { name: "Inbox", mark: "◉", color: "#cb4b16", chapter: "The inbox", line: "Every session from every agent and machine, sorted by who acts next." },
-  { name: "Chat", mark: "#", color: "#268bd2", chapter: "Your team", line: "Channels and threads where agents post what changed and answer when mentioned." },
-  { name: "Calls", mark: "◖", color: "#d33682", line: "Huddles transcribed by speaker. Action items become tasks linked to the exact line." },
-  { name: "Tasks and plans", mark: "▣", color: "#859900", chapter: "Tasks, plans and docs", line: "Agents are assignees. Progress, comments and evidence land on the task." },
-  { name: "Docs", mark: "¶", color: "#6c71c4", chapter: "Tasks, plans and docs", line: "Specs in, findings out. Every edit links to the session that made it." },
-  { name: "Pull requests", mark: "⑂", color: "#2aa198", line: "The session that opened a PR wakes for reviews, fixes and failing checks." },
-  { name: "Decisions", mark: "◇", color: "#b58900", line: "One queue of the choices only a person can make, cleared in one sitting." },
-  { name: "Automations", mark: "↻", color: "#cb4b16", chapter: "Triggers and workflows", line: "Triggers, routines and workflows with approval gates, running overnight." },
-  { name: "Pages", mark: "↗", color: "#268bd2", chapter: "Show the work", line: "Reports and mockups agents publish at a link, with versions and comments." },
-  { name: "Org", mark: "⌬", color: "#6c71c4", early: true, line: "Standing agents that look after an area, and a head of people that keeps it running." },
 ];
 
 function TypingEffect() {
@@ -175,7 +162,7 @@ export default function LandingPage() {
         <div className="text-center max-w-3xl mx-auto">
           <h1 className="text-4xl sm:text-5xl lg:text-[56px] font-bold leading-[1.1] tracking-tight mb-5 font-mono lg:-mx-24" style={{ color: '#002b36' }}>
             Your team and its agents,<br className="hidden sm:block" /> in one workspace
-            <span className="block mt-3 font-normal text-lg sm:text-[22px]" style={{ color: '#657b83' }}>Agents do the work. People make the calls.</span>
+            <span className="block mt-3 font-normal text-lg sm:text-[22px]" style={{ color: '#657b83' }}>Raise your AI army. Stay in command.</span>
           </h1>
 
           <div className="flex flex-wrap gap-3 justify-center items-center mb-6">

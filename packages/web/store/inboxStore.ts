@@ -1813,7 +1813,7 @@ export type ClientUI = {
   // conversation id; the header resolves each from the anchors and sessions
   // collections at render, so a pin the viewer can no longer see is simply
   // not drawn and grants nothing. Absent is the DEFAULT (the person's global
-  // Chief of Staff, else the active workspace's agent); an empty list is a
+  // Executive Assistant, else the active workspace's agent); an empty list is a
   // person who unpinned everything. Stamped (per user, every device).
   header_pins?: Array<{ kind: "role" | "session"; id: string }>;
   // The Threads page's "include agent sessions" toggle. Off unless exactly
@@ -6007,6 +6007,10 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
      *  always a grant this app holds itself; the codecast computer grants have
      *  no part in a call. */
     errorFix: AppPermissionKind | null;
+    /** The room this window last hung up on, and when. The server's seat and
+     *  rings for it outlive the press by a round trip; the face row reads
+     *  them as gone from here (lib/faces/faceRow `leftRoom`). */
+    left?: { roomKey: string; at: number } | null;
   };
   setCallState: (patch: Partial<InboxStoreState["call"]>) => void;
   teamUnreadCount: number | null;

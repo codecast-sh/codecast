@@ -4188,7 +4188,7 @@ cliRoute("/cli/org/analysis-inputs", async (ctx, body) => ctx.runAction((api as 
 // The head of people (docs/architecture/org-staffing.md S6): `cast org staff
 // [--adopt] [--every 7d]` and the "Hire a Head of People" button.
 cliRoute("/cli/org/staff", async (ctx, body) => ctx.runMutation(api.orgRoles.staff, body));
-cliRoute("/cli/org/chief", async (ctx, body) => ctx.runMutation(api.orgRoles.hireChief, body));
+cliRoute("/cli/org/assistant", async (ctx, body) => ctx.runMutation(api.orgRoles.hireAssistant, body));
 cliRoute("/cli/org/apply-decision", async (ctx, body) => ctx.runMutation((api as any).orgInit.applyDecision, body));
 // Staffing (docs/architecture/org-staffing.md S3, S4): the health signals and
 // the proposal lifecycle. Decide, accept-all and withdraw refuse a session
@@ -4816,6 +4816,9 @@ cliRoute("/cli/pr/notes", async (ctx, body) => {
   const notes = await ctx.runQuery((api as any).codeComments.pendingReview, { api_token: body.api_token, pull_request_id: pr.id });
   return { repository: pr.repository, number: pr.number, notes };
 });
+
+// `cast ship mark`: a deploy marker for the Changes page (changesDeploy.ts).
+cliRoute("/cli/changes/mark-deploy", async (ctx, body) => ctx.runMutation((api as any).changesDeploy.markDeploy, body));
 
 cliRoute("/cli/sessions/own", async (ctx, body) => ctx.runMutation(api.sessionOwnership.addSessionOwner, body));
 cliRoute("/cli/sessions/disown", async (ctx, body) => ctx.runMutation(api.sessionOwnership.removeSessionOwner, body));

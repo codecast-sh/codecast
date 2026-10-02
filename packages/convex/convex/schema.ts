@@ -1346,12 +1346,12 @@ export default defineSchema({
     // rows wear the character name of their face (shared/contracts/
     // orgIdentity.roleIdentity). Every surface reads the name through it.
     given_name: v.optional(v.string()),
-    // Set on a Chief of Staff, the person's right hand (S30): what it reaches.
+    // Set on an Executive Assistant, the person's right hand (S30): what it reaches.
     // Its row's boundary (scope_type) is ACCESS; `reach` is what its brief and
-    // routine look across. A global chief lives in the person's own boundary;
-    // a team's reach in a personal boundary is a person's own chief for one
-    // team. A chief names no scope and owns no work.
-    chief: v.optional(v.union(
+    // routine look across. A global assistant lives in the person's own boundary;
+    // a team's reach in a personal boundary is a person's own assistant for one
+    // team. An assistant names no scope and owns no work.
+    assistant: v.optional(v.union(
       v.object({ reach: v.literal("global") }),
       v.object({ reach: v.literal("team"), team_id: v.id("teams") }),
     )),
@@ -1362,7 +1362,7 @@ export default defineSchema({
       handle: v.string(),
       name: v.string(),
       charter: v.optional(v.string()),
-      // The personal root converted into the person's global Chief of Staff:
+      // The personal root converted into the person's global Executive Assistant:
       // the review routine it had (cancelled) and the routine it got (armed).
       converted: v.optional(v.boolean()),
       review_trigger_id: v.optional(v.id("agent_tasks")),
@@ -3456,6 +3456,8 @@ export default defineSchema({
     // | pr_review_comment | pr_check | pr_merged | pr_closed | pr_reopened
     // | pr_behind | pr_conflict | pr_ready | pr_review_requested
     // | pr_ready_for_review | pr_draft | pr_edited | code_comment
+    // Ship kinds (Changes, spec 7.3): release (a version tag push) | deploy
+    // (cast ship mark); meta carries surface, version and tag.
     // Issue kinds (issue sync): issue_opened | issue_assigned | issue_closed
     // | issue_reopened | issue_commented | issue_status | issue_edited
     kind: v.string(),
@@ -3501,6 +3503,9 @@ export default defineSchema({
       head_ref: v.optional(v.string()),
       pr_state: v.optional(v.string()),
       shepherd_state: v.optional(v.string()),
+      surface: v.optional(v.string()),
+      version: v.optional(v.string()),
+      tag: v.optional(v.string()),
     })),
     dedupe_key: v.string(),
     created_at: v.number(),

@@ -49,6 +49,9 @@ const metaValidator = v.object({
   head_ref: v.optional(v.string()),
   pr_state: v.optional(v.string()),
   shepherd_state: v.optional(v.string()),
+  surface: v.optional(v.string()),
+  version: v.optional(v.string()),
+  tag: v.optional(v.string()),
 });
 
 export const recordArgs = {

@@ -48,8 +48,7 @@ import {
   DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu";
 import { VAULT_SORT_OPTIONS, type VaultSortMode } from "../../lib/vault/explorerModel";
-import { useTabActive } from "../../hooks/usePagePresence";
-import { useShortcutAction } from "../../shortcuts";
+import { usePaneShortcutAction } from "../../shortcuts";
 import { VaultExplorer } from "../../components/vault/VaultExplorer";
 import { VaultNoteView } from "../../components/vault/VaultNoteView";
 import { VaultFileView } from "../../components/vault/VaultFileView";
@@ -461,10 +460,8 @@ function VaultContent() {
   // Ctrl/Cmd+Shift+F focuses vault search — but only while the vault is the
   // visible tab; declining leaves the chord to the conversation's favorite
   // binding, which shares it.
-  const isTabActive = useTabActive();
   const searchInputRef = useRef<HTMLInputElement | null>(null);
-  useShortcutAction("vault.search", () => {
-    if (!isTabActive) return false;
+  usePaneShortcutAction("vault.search", () => {
     setLeftTab("search");
     requestAnimationFrame(() => searchInputRef.current?.select());
     return true;
@@ -488,13 +485,13 @@ function VaultContent() {
   );
   const toggleEdit = useCallback(() => applyMode(toggleVaultEditMode), [applyMode]);
 
-  useShortcutAction("vault.toggleEdit", () => {
-    if (!isTabActive || showGraph) return false;
+  usePaneShortcutAction("vault.toggleEdit", () => {
+    if (showGraph) return false;
     return toggleEdit();
   });
 
-  useShortcutAction("vault.sourceMode", () => {
-    if (!isTabActive || showGraph) return false;
+  usePaneShortcutAction("vault.sourceMode", () => {
+    if (showGraph) return false;
     return applyMode(toggleVaultSourceMode);
   });
 
@@ -502,8 +499,8 @@ function VaultContent() {
   // page-find keeps working) unless a note is actually on screen in reading
   // mode — the editor has CodeMirror's own search panel.
   const [findOpen, setFindOpen] = useState(false);
-  useShortcutAction("vault.find", () => {
-    if (!isTabActive || showGraph || !activePath) return false;
+  usePaneShortcutAction("vault.find", () => {
+    if (showGraph || !activePath) return false;
     if (document.querySelector(".cm-content")) return false;
     setFindOpen((v) => !v);
     return true;
