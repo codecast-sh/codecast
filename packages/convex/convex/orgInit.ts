@@ -32,7 +32,7 @@ import {
   planProjectsOf,
   resolveScopeRef,
   rolesInBoundary, performSetAuthority, performSetProjectLead } from "./orgRoles";
-import { performAcceptUpgrade, performUpsertInstance } from "./orgTemplates";
+import { performAcceptUpgrade, performCatalog, performUpsertInstance, templateLine } from "./orgTemplates";
 import { capsFor, countersFor, roleStartsOnItsOwn, trustOf } from "./lib/orgCaps";
 import { autonomyChangeWords } from "@codecast/shared/contracts/roleAutonomy";
 import { findDecision } from "./sessionDecisions";
@@ -118,6 +118,9 @@ export const ANALYSIS_CAPS = {
   call_lines: 8,
   /** The landing read (readLanding): commits per repository over its own window, newest first; at the cap the search says so. */
   landing_commits_per_repo: 1200,
+  /** The templates the workspace may hire (its own and Codecast's), one line each: under 4 KB of the inputs at both caps. */
+  templates: 12,
+  template_description_chars: 160,
 } as const;
 /** A flagged record's landing is searched over three months, not the activity
  *  window: on Union a 30 day read found a landing for 4 of 44 stale records
@@ -716,11 +719,16 @@ export async function computeAnalysisSignals(ctx: Ctx, userId: Id<"users">, team
     const pending: any[] = await ctx.db.query("session_decisions").withIndex("by_user_status_created", (q: any) => q.eq("user_id", memberId).eq("status", "pending").gte("created_at", cutoff)).order("desc").take(ANALYSIS_CAPS.decisions);
     for (const d of pending) bump(decisionsByCategory, d.category ?? "uncategorized");
   }
+  // The roles a person can hire ready made (org-hire.md H3): a release with
+  // its files, so a hire change that names one can be carried out.
+  const hireable = (await performCatalog(ctx, userId, { team_id: teamId })).filter((t) => t.installable);
   return {
     insights: { total: insightRows.length, themes: topOf(themes, 30), outcomes: objOf(outcomes), headlines },
     insights_truncated: insightRows.length >= ANALYSIS_CAPS.insights,
     channels,
     said,
+    templates: hireable.slice(0, ANALYSIS_CAPS.templates).map((t) => templateLine(t, ANALYSIS_CAPS.template_description_chars)),
+    templates_truncated: hireable.length > ANALYSIS_CAPS.templates,
     decisions_open_by_category: objOf(decisionsByCategory),
   };
 }
@@ -876,12 +884,14 @@ export function mergeAnalysisInputs(
     ...rest,
     // A list at its cap is a floor, not a count; the analyzer reports it as
     // "could not verify" rather than as the total.
-    truncated: { ...truncated, insights: signals.insights_truncated },
+    truncated: { ...truncated, insights: signals.insights_truncated, templates: signals.templates_truncated },
     ...org,
     insights: signals.insights,
     channels: signals.channels,
     // What people said (calls and chat), read for the reviewer's eye.
     said: signals.said,
+    // The roles that can be hired from a template, one line each.
+    templates: signals.templates,
     decisions_open_by_category: signals.decisions_open_by_category,
     // Ground in what is happening (S9): where code lands, who is in it, and
     // which records the evidence says are done.

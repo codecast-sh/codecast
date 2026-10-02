@@ -44,7 +44,7 @@ describe("the Head of People prompt", () => {
 // The opening is the structure role's (org-staffing.md S30), in the shape of
 // every role's opening: whom it reports to, its job, how it wakes, where its
 // sessions go, and where it remembers, in about 200 words. The right hand is
-// the Chief of Staff's opening (chiefOfStaffPrompt.ts), not this one.
+// the Executive Assistant's opening (executiveAssistantPrompt.ts), not this one.
 describe("the Head of People opening", () => {
   const o = headOfPeopleOpening({ workspace: "Acme", person: "Ada" });
 

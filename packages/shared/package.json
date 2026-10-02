@@ -28,7 +28,7 @@
     "./contracts/orgAreas": "./contracts/orgAreas.ts",
     "./contracts/orgReview": "./contracts/orgReview.ts",
     "./contracts/headOfPeoplePrompt": "./contracts/headOfPeoplePrompt.ts",
-    "./contracts/chiefOfStaffPrompt": "./contracts/chiefOfStaffPrompt.ts",
+    "./contracts/executiveAssistantPrompt": "./contracts/executiveAssistantPrompt.ts",
     "./contracts/orgIdentity": "./contracts/orgIdentity.ts",
     "./contracts/goalsBrief": "./contracts/goalsBrief.ts",
     "./contracts/roleAutonomy": "./contracts/roleAutonomy.ts",

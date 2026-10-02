@@ -15,13 +15,14 @@ import { mutation, query } from "./functions";
 import { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId, reachableRole, tellRole } from "./pendingMessages";
 import { canAccessProject, requireTeamAdmin, requireTeamMembership, resolveWorkspaceKey, workspaceGrantsAccess, workspaceKey, type WorkspaceKey } from "./lib/access";
-import { validateTemplate, type OrgTemplate } from "@codecast/shared/contracts/orgTemplateManifest";
+import { compareVersions, validateTemplate, type OrgTemplate } from "@codecast/shared/contracts/orgTemplateManifest";
 import { markSetup, nextHumanAsk, readiness, recordEvidence, recordScores, setupRows, type InstanceState, type SetupText } from "@codecast/shared/contracts/orgTemplateState";
 import { routineState, type RoutineReadiness } from "@codecast/shared/contracts/orgTemplateReadiness";
 import { applyActivate, getManageableTask } from "./agentTasks";
 import { refuseUnlessHuman, standingConversationOf } from "./orgRoles";
 import { DEVICE_ONLINE_MS, pickOwnerDevice } from "./deviceRouting";
 import type { OrgTemplateBindArgs, OrgTemplateBindResult, OrgTemplateBindSecret } from "@codecast/shared/contracts/orgTemplateBind";
+import { truncateStr } from "@codecast/shared/render";
 
 /** The one value beside a workspace key that grants visibility: a template every workspace may hire. */
 export const CODECAST_TEMPLATE_ACCESS = "codecast";
@@ -104,11 +105,7 @@ export async function performPublish(ctx: Ctx, userId: Id<"users">, args: Publis
   return { ...(await ctx.db.get(existing._id)), action: same ? ("updated" as const) : ("released" as const) };
 }
 
-export function compareVersions(a: string, b: string): number {
-  const pa = a.split(".").map(Number), pb = b.split(".").map(Number);
-  for (let i = 0; i < 3; i++) if (pa[i]! !== pb[i]!) return pa[i]! - pb[i]!;
-  return 0;
-}
+export { compareVersions };
 
 /** What the hire form lists: a viewer's own templates and Codecast's, with what each asks for. */
 export async function performCatalog(ctx: Ctx, userId: Id<"users">, args: { team_id?: Id<"teams"> }) {
@@ -129,6 +126,11 @@ export function catalogEntry(row: any) {
     asks: { inputs: (m.inputs ?? []).length, secrets: (m.inputs ?? []).filter((i) => i.kind === "secret").length, authority: (m.authority ?? []).length, setup: (m.setup ?? []).length, routines: m.routines.length },
     manifest: m,
   };
+}
+/** A catalog entry as the org reviewer reads it (orgInit's `templates`): one
+ *  line saying what the role does, and the release a hire change pins. */
+export function templateLine(t: ReturnType<typeof catalogEntry>, descriptionChars: number) {
+  return { id: t.template_id as string, name: t.name as string, description: truncateStr(String(t.description ?? "").replace(/\s+/g, " ").trim(), descriptionChars), version: t.latest.version as string, digest: t.latest.digest as string, status: t.latest_status as string | null };
 }
 export async function performGetTemplate(ctx: Ctx, userId: Id<"users">, args: { template_id: string; team_id?: Id<"teams"> }) {
   const row = await visibleTemplate(ctx, args.template_id, await callerWorkspace(ctx, userId, args.team_id));

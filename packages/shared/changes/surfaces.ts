@@ -2,7 +2,7 @@
 // surface is a product that goes out on its own clock; a story is "shipped in"
 // the first release after its last commit whose surface covers the story's
 // area. Surfaces are detected from signals, never configured.
-import { areaOf, isRestamp, parseRelease } from "./classify";
+import { areaOf, isRestamp, parseRelease, scopeNamesArea } from "./classify";
 import { onDefaultBranch } from "./dedupe";
 import type { ChangeCommit, ReleaseBurst, ShipEvent } from "./types";
 
@@ -13,6 +13,7 @@ export const SURFACE_PATHS: Record<string, readonly string[]> = {
   backend: ["packages/convex/"],
   web: ["packages/web/", "packages/shared/"],
   extension: ["packages/browser-extension/", "packages/chrome-extension/"],
+  mobile: ["packages/mobile/"],
 };
 
 /** The catch-all surface for a team whose releases name no mapped surface; it covers every area. */
@@ -22,10 +23,15 @@ const SURFACE_AREAS: Record<string, ReadonlySet<string>> = Object.fromEntries(
   Object.entries(SURFACE_PATHS).map(([s, paths]) => [s, new Set(paths.map((p) => areaOf(`${p}x`)))]),
 );
 
-/** Whether a surface ships changes in this area. An unmapped surface covers everything. */
+/**
+ * Whether a surface ships changes in this area. Only the catch-all `release`
+ * covers everything; any other unmapped surface (a release scope such as
+ * `api`) covers just the area its name points at.
+ */
 export function surfaceCoversArea(surface: string, area: string): boolean {
+  if (surface === RELEASE_SURFACE) return true;
   const areas = SURFACE_AREAS[surface];
-  return areas ? areas.has(area) : true;
+  return areas ? areas.has(area) : scopeNamesArea(surface, area);
 }
 
 /** Surfaces with at least one ship in the window (spec 7.3: one signal in 30 days). */

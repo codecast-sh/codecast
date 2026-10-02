@@ -86,8 +86,13 @@ class FixtureWindow implements InvariantWindow {
   }
   // The inbox feeders a host mounts: the base list's ids, the liveness
   // overlay, every session either names (by id, as the floor fetches them)
-  // and, in team mode, the team list.
-  async refeed(): Promise<void> {
+  // and, in team mode, the team list. `only` names the feeds to re-run, as
+  // SimWindow.refeed takes them; the fixture's overlay is "liveness".
+  async refeed(only?: readonly string[]): Promise<void> {
+    if (only) {
+      if (only.includes("liveness")) applyMineLivenessPayload(await this.client.query("conversations:sessionsLiveness", {}));
+      return;
+    }
     const list: any = await this.client.query("conversations:listInboxSessions", LIST_INBOX_SESSIONS_ARGS);
     const sessions: any[] = list?.sessions ?? list ?? [];
     const payload: any = await this.client.query("conversations:sessionsLiveness", {});
@@ -258,6 +263,30 @@ describe("invariants", () => {
     const world = fixture(20);
     await world.host("ada", ADA, undefined, { listFeeder: true });
     await clean(world, "INV-fixpoint");
+  });
+
+  // The base lists are measured, not refed ahead: a value cargo or a local
+  // write left on a row differently from the list is a write of the pass.
+  test("INV-fixpoint: a row value the list writes differently moves on the refeed", async () => {
+    const world = fixture(22);
+    const ada = await world.host("ada", ADA, undefined, { listFeeder: true });
+    await clean(world, "INV-fixpoint");
+    const id = Object.keys(ada.store.getState().sessions).find(isConvexId)!;
+    await plant(ada, (s) => ({ sessions: { ...s.sessions, [id]: { ...s.sessions[id], title: "written by cargo" } } }));
+    expect(await planted(world, "INV-fixpoint", world.labels.label(id))).toContain("replace title");
+  });
+
+  // Null and absent are two spellings of an unset field, and the delta merge
+  // replaces the row between them.
+  test("INV-fixpoint: a field held as null where the list omits it", async () => {
+    const world = fixture(23);
+    const ada = await world.host("ada", ADA, undefined, { listFeeder: true });
+    await clean(world, "INV-fixpoint");
+    const state = ada.store.getState() as any;
+    const id = Object.keys(state.sessions).find((k) => isConvexId(k) && !("owner_name" in state.sessions[k]))!;
+    expect(id).toBeDefined();
+    await plant(ada, (s) => ({ sessions: { ...s.sessions, [id]: { ...s.sessions[id], owner_name: null } } }));
+    expect(await planted(world, "INV-fixpoint", world.labels.label(id))).toContain("remove owner_name");
   });
 
   // ct-56050: sync-log cargo once landed every raw conversation column on the

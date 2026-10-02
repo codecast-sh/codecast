@@ -18,7 +18,7 @@ import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useTeamRosterIdentity } from "../hooks/useTeamRoster";
-import { useShortcutContext, useShortcutAction, isMac, hasOpenModal } from "../shortcuts";
+import { useShortcutContext, usePaneShortcutAction, isMac, hasOpenModal } from "../shortcuts";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useShallow } from "zustand/react/shallow";
 import { composerAgentStatus, useManagedSessionFields, useSessionEscape } from "../hooks/useSessionComposerControls";
@@ -2043,19 +2043,19 @@ const ConversationViewInner = (
   }, [isOwner, forkSelectionIdx]);
 
   useShortcutContext('conversation');
-  useShortcutAction('conv.toggleTree', useCallback(() => {
+  usePaneShortcutAction('conv.toggleTree', useCallback(() => {
     if (!isOwner || forkSelectionIdx !== null) return false;
     setMapDrill(null); // open at the branch tree
     setTreePopoverOpen((o) => !o);
     return true;
   }, [isOwner, forkSelectionIdx]));
 
-  useShortcutAction('conv.copyLink', useCallback(() => {
+  usePaneShortcutAction('conv.copyLink', useCallback(() => {
     const url = `${shareOrigin()}/conversation/${conversation?._id}`;
     copyToClipboard(url).then(() => toast.success("Link copied!"));
   }, [conversation?._id]));
 
-  useShortcutAction('conv.favorite', useCallback(() => {
+  usePaneShortcutAction('conv.favorite', useCallback(() => {
     if (!conversation || !isOwner) return;
     toggleFavoriteMutation(conversation._id);
     toast.success(conversation.is_favorite ? "Removed from favorites" : "Added to favorites");
@@ -2065,23 +2065,23 @@ const ConversationViewInner = (
   // key behind the floating "Quote into reply" button); with nothing selected it
   // enters inline review on the assistant reply nearest the viewport center, so a
   // keyboard-only user can start quoting/commenting without a mouse.
-  useShortcutAction('conv.review', useCallback(() => {
+  usePaneShortcutAction('conv.review', useCallback(() => {
     if (!conversation) return;
     if (quoteSelectionIntoReply(conversation._id)) return;
     enterReviewNearCenter();
   }, [conversation]));
 
-  useShortcutAction('conv.toggleDiff', useCallback(() => {
+  usePaneShortcutAction('conv.toggleDiff', useCallback(() => {
     if (!conversation?.git_branch) return;
     setDiffExpanded((s) => !s);
   }, [conversation?.git_branch]));
 
-  useShortcutAction('conv.toggleThinking', useCallback(() => {
+  usePaneShortcutAction('conv.toggleThinking', useCallback(() => {
     if (!hasAnyThinking) return;
     setShowThinking((s) => !s);
   }, [hasAnyThinking]));
 
-  useShortcutAction('conv.ask', useCallback(() => {
+  usePaneShortcutAction('conv.ask', useCallback(() => {
     if (guest || !conversation?._id) return;
     openAskPanel();
   }, [guest, conversation?._id, openAskPanel]));
@@ -2985,7 +2985,7 @@ const ConversationViewInner = (
   // Bound through the shortcut registry (not a raw keydown) so the key combo, this
   // handler, and every tooltip / help-panel mention all read from one definition —
   // rebind 'conv.cycleDensity' once and the binding and its docs move together.
-  useShortcutAction('conv.cycleDensity', useCallback(() => {
+  usePaneShortcutAction('conv.cycleDensity', useCallback(() => {
     setDensity(FEED_DENSITY_CYCLE[(FEED_DENSITY_CYCLE.indexOf(feedDensity) + 1) % FEED_DENSITY_CYCLE.length]);
   }, [feedDensity, setDensity]));
 

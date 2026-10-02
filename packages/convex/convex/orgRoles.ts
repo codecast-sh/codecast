@@ -6,8 +6,8 @@ import { HEAD_OF_PEOPLE_JOB } from "@codecast/shared/contracts/headOfPeoplePromp
 import { defaultAvatarFor, isAvatarKey } from "@codecast/shared/contracts/orgAvatars";
 import { ORG_AUTHORITY_KINDS, authorityWords, orgTenureError, type OrgAuthorityGrant } from "@codecast/shared/contracts/orgProposal";
 import { intervalMs } from "@codecast/shared/contracts/orgTemplateManifest";
-import { CHIEF_OF_STAFF_HANDLE, CHIEF_OF_STAFF_NAME, leadScopeChange, type ChiefReach } from "@codecast/shared/contracts/orgLead";
-import { CHIEF_OF_STAFF_JOB } from "@codecast/shared/contracts/chiefOfStaffPrompt";
+import { EXECUTIVE_ASSISTANT_HANDLE, EXECUTIVE_ASSISTANT_NAME, leadScopeChange, type AssistantReach } from "@codecast/shared/contracts/orgLead";
+import { EXECUTIVE_ASSISTANT_JOB } from "@codecast/shared/contracts/executiveAssistantPrompt";
 import { roleIdentity } from "@codecast/shared/contracts/orgIdentity";
 import { cleanCharacterName } from "@codecast/shared/contracts/sessionCharacter";
 import { v } from "convex/values";
@@ -68,8 +68,8 @@ const reportsToValidator = v.union(
   v.object({ kind: v.literal("role"), role_id: v.id("org_roles") }),
 );
 const scopeValidator = v.object({ project_ids: v.array(v.id("projects")), plan_ids: v.array(v.id("plans")) });
-// A Chief of Staff's reach (org-staffing.md S30), as the schema stores it.
-const chiefValidator = v.union(
+// An Executive Assistant's reach (org-staffing.md S30), as the schema stores it.
+const assistantValidator = v.union(
   v.object({ reach: v.literal("global") }),
   v.object({ reach: v.literal("team"), team_id: v.id("teams") }),
 );
@@ -104,11 +104,12 @@ function sameBoundary(a: { team_id?: any; scope_user_id?: any }, b: { team_id?: 
 
 // Handles are unique among the boundary's live roles: a retired role's handle
 // is free to reuse, the way a retired seat's title is.
-// Taken means a live row carries exactly this handle: the legacy rule that
-// lets `chief-of-staff` find the Head of People (orgAccess.rolesByHandle)
-// must not keep a Chief of Staff from being hired under its own default.
-async function handleTaken(ctx: Ctx, boundary: { team_id?: any; scope_user_id?: any }, handle: string, exceptId?: any): Promise<boolean> {
-  return (await liveRolesByHandle(ctx, boundary, handle)).some((r) => r.handle === handle && (!exceptId || r._id.toString() !== exceptId.toString()));
+// The Head of People holds both its handle and the one it had before the
+// rename (orgAccess.rolesByHandle), so no other role can take either, and an
+// Executive Assistant never can: a lookup by them finds the Head of People alone.
+async function handleTaken(ctx: Ctx, boundary: { team_id?: any; scope_user_id?: any }, handle: string, of: { _id?: any; assistant?: unknown } = {}): Promise<boolean> {
+  if (of.assistant && isHeadOfPeopleRole({ handle })) return true;
+  return (await liveRolesByHandle(ctx, boundary, handle)).some((r) => !of._id || r._id.toString() !== of._id.toString());
 }
 
 async function resolveReportsTo(ctx: Ctx, userId: Id<"users">, boundary: { team_id?: any; scope_user_id?: any }, target: ReportsTo): Promise<ReportsTo> {
@@ -329,8 +330,8 @@ export type CreateRoleArgs = {
   name: string; handle: string; team_id?: Id<"teams">; scope?: Scope; reports_to?: ReportsTo; charter?: string; review_backend?: string; tenure?: TenureSpec; avatar?: string; host_user_id?: Id<"users">;
   /** The person like name (org-staffing.md S30); absent, the role wears its face's character name. */
   given_name?: string;
-  /** A Chief of Staff (S30): what it reaches. A chief owns no work, so a scope is refused. */
-  chief?: ChiefReach;
+  /** An Executive Assistant (S30): what it reaches. An assistant owns no work, so a scope is refused. */
+  assistant?: AssistantReach;
   /** False when the caller runs the knowledge handoff itself (a split, S34):
    *  by default a role born onto an area takes its lines from the role that
    *  owned it (S32). */
@@ -352,7 +353,7 @@ async function performCreateRoleCore(
   if (args.team_id && !(await userCanAccessRole(ctx, userId, { team_id: args.team_id }))) {
     throw new Error("You are not a member of that team");
   }
-  if (await handleTaken(ctx, boundary, handle)) throw new Error(`Handle @${handle} is already taken in this workspace`);
+  if (await handleTaken(ctx, boundary, handle, { assistant: args.assistant })) throw new Error(`Handle @${handle} is already taken in this workspace`);
   const reports_to = await resolveReportsTo(ctx, userId, boundary, args.reports_to ?? { kind: "user", user_id: userId });
   // Standing or program (S10) and the face (S13): tenure refs resolve to ids
   // inside the boundary; the avatar defaults to the handle's own face.
@@ -361,9 +362,9 @@ async function performCreateRoleCore(
   const now = Date.now();
   // A role born with a scope ("Add a lead" on a project page) obeys the same
   // containment rule as an edit; overlaps are the caller's to show.
-  if (args.chief && args.scope && !isScopeless(args.scope)) throw new Error("A Chief of Staff owns no area: it names no scope");
-  if (args.chief?.reach === "team" && !(await userCanAccessRole(ctx, userId, { team_id: args.chief.team_id as Id<"teams"> }))) {
-    throw new Error("You are not a member of the team that Chief of Staff would reach");
+  if (args.assistant && args.scope && !isScopeless(args.scope)) throw new Error("An Executive Assistant owns no area: it names no scope");
+  if (args.assistant?.reach === "team" && !(await userCanAccessRole(ctx, userId, { team_id: args.assistant.team_id as Id<"teams"> }))) {
+    throw new Error("You are not a member of the team that Executive Assistant would reach");
   }
   const scope = args.scope && !isScopeless(args.scope)
     ? (await checkScope(ctx, userId, { _id: "new", ...boundary, reports_to, scope: EMPTY_SCOPE }, args.scope)).scope
@@ -401,7 +402,7 @@ async function performCreateRoleCore(
     tenure,
     avatar,
     ...(given_name ? { given_name } : {}),
-    ...(args.chief ? { chief: args.chief } : {}),
+    ...(args.assistant ? { assistant: args.assistant } : {}),
     created_by: userId,
     created_at: now,
     updated_at: now,
@@ -458,7 +459,7 @@ async function updateRole(
     if (handle !== role.handle && (isHeadOfPeopleRole(role) || handle === HEAD_OF_PEOPLE_HANDLE)) {
       throw new Error("The Head of People keeps its handle: retire it with cast role retire, or hire one with cast org staff");
     }
-    if (handle !== role.handle && (await handleTaken(ctx, role, handle, role._id))) {
+    if (handle !== role.handle && (await handleTaken(ctx, role, handle, role))) {
       throw new Error(`Handle @${handle} is already taken in this workspace`);
     }
     patch.handle = handle;
@@ -782,7 +783,7 @@ export const create = mutation({
     tenure: v.optional(tenureValidator),
     avatar: v.optional(v.string()),
     given_name: v.optional(v.string()),
-    chief: v.optional(chiefValidator),
+    assistant: v.optional(assistantValidator),
     // `cast role create` provisions the standing session in the same call
     // unless --no-session; these ride along to provisionStandingAgent.
     provision: v.optional(v.boolean()),
@@ -1461,41 +1462,41 @@ export async function performStaff(
   };
 }
 
-// ── The Chief of Staff (org-staffing.md S30) ─────────────────────────────────
+// ── The Executive Assistant (org-staffing.md S30) ────────────────────────────
 //
-// The person's right hand: a role marked `chief`, no scope, no review. Where
-// its row lives is ACCESS (a global or a personal per team chief in the
-// person's own boundary, a team chief in the team's); `reach` is what it
-// looks across. `performHireChief` creates it, provisions or adopts its
+// The person's right hand: a role marked `assistant`, no scope, no review. Where
+// its row lives is ACCESS (a global or a personal per team assistant in the
+// person's own boundary, a team assistant in the team's); `reach` is what it
+// looks across. `performHireAssistant` creates it, provisions or adopts its
 // standing session and arms its routine. Idempotent per boundary and reach.
 
-/** The chief's charter: its job paragraph, with the person filled in. */
-export function chiefOfStaffCharter(person: string): string {
-  return CHIEF_OF_STAFF_JOB.split("{person}").join(person).split("{reach}").join("what they work on");
+/** The assistant's charter: its job paragraph, with the person filled in. */
+export function executiveAssistantCharter(person: string): string {
+  return EXECUTIVE_ASSISTANT_JOB.split("{person}").join(person).split("{reach}").join("what they work on");
 }
 
-/** The default handle of a chief in a boundary: `chief-of-staff` for the
- *  first, `chief-of-staff-<team slug>` for a person's own chief for one team,
+/** The default handle of an assistant in a boundary: `executive-assistant` for the
+ *  first, `executive-assistant-<team slug>` for a person's own assistant for one team,
  *  then a numbered one, so several can stand in one boundary. */
-export function defaultChiefHandle(reach: ChiefReach<unknown>, personal: boolean, teamName: string | null, taken: (h: string) => boolean): string {
+export function defaultAssistantHandle(reach: AssistantReach<unknown>, personal: boolean, teamName: string | null, taken: (h: string) => boolean): string {
   const slug = (teamName ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 16);
-  const base = reach.reach === "team" && personal && slug ? `${CHIEF_OF_STAFF_HANDLE}-${slug}` : CHIEF_OF_STAFF_HANDLE;
+  const base = reach.reach === "team" && personal && slug ? `${EXECUTIVE_ASSISTANT_HANDLE}-${slug}` : EXECUTIVE_ASSISTANT_HANDLE;
   if (!taken(base)) return base;
   for (let n = 2; n < 100; n++) if (!taken(`${base}-${n}`)) return `${base}-${n}`;
-  throw new Error("No free handle for a Chief of Staff in this workspace");
+  throw new Error("No free handle for an Executive Assistant in this workspace");
 }
 
-/** The live chiefs of one boundary. */
-export async function chiefsIn(ctx: Ctx, boundary: { team_id?: any; scope_user_id?: any }): Promise<any[]> {
-  return (await rolesInBoundary(ctx, boundary)).filter((r) => r.chief);
+/** The live assistants of one boundary. */
+export async function assistantsIn(ctx: Ctx, boundary: { team_id?: any; scope_user_id?: any }): Promise<any[]> {
+  return (await rolesInBoundary(ctx, boundary)).filter((r) => r.assistant);
 }
 
-export async function performHireChief(
+export async function performHireAssistant(
   ctx: any,
   userId: Id<"users">,
   args: {
-    reach: ChiefReach<Id<"teams">>;
-    /** A team reach in the person's own boundary: their own chief for that team. Global is always personal. */
+    reach: AssistantReach<Id<"teams">>;
+    /** A team reach in the person's own boundary: their own assistant for that team. Global is always personal. */
     personal?: boolean;
     given_name?: string;
     handle?: string;
@@ -1518,18 +1519,18 @@ export async function performHireChief(
   const boundary = personal ? { scope_user_id: userId } : { team_id: teamId! };
   const team = teamId ? await ctx.db.get(teamId) : null;
   if (teamId && !team) throw new Error("Team not found");
-  const sameReach = (r: any) => r.chief && r.chief.reach === args.reach.reach && String(r.chief.team_id ?? "") === String(teamId ?? "");
-  const existing = (await chiefsIn(ctx, boundary)).find(sameReach);
+  const sameReach = (r: any) => r.assistant && r.assistant.reach === args.reach.reach && String(r.assistant.team_id ?? "") === String(teamId ?? "");
+  const existing = (await assistantsIn(ctx, boundary)).find(sameReach);
   const inBoundary = await rolesInBoundary(ctx, boundary);
   const role = existing ?? await performCreateRole(ctx, userId, {
-    name: CHIEF_OF_STAFF_NAME,
-    handle: args.handle ?? defaultChiefHandle(args.reach, personal, team?.name ?? null, (h) => inBoundary.some((r) => r.handle === h)),
+    name: EXECUTIVE_ASSISTANT_NAME,
+    handle: args.handle ?? defaultAssistantHandle(args.reach, personal, team?.name ?? null, (h) => inBoundary.some((r) => r.handle === h)),
     given_name: args.given_name,
     avatar: args.avatar,
     team_id: personal ? undefined : teamId,
     reports_to: { kind: "user", user_id: userId },
-    charter: chiefOfStaffCharter(personName(await ctx.db.get(userId))),
-    chief: args.reach,
+    charter: executiveAssistantCharter(personName(await ctx.db.get(userId))),
+    assistant: args.reach,
   });
   const seatAnchor = existing?.anchor_id ? await ctx.db.get(existing.anchor_id) : null;
   const already_existed = !!seatAnchor && seatAnchor.status !== "decommissioned";
@@ -1541,7 +1542,7 @@ export async function performHireChief(
       adopt_conversation_id: args.adopt_conversation_id,
       project_path: args.project_path,
       model: args.model,
-      announce: args.adopt_conversation_id ? chiefSeatingNote(role, identity.name, team?.name ?? null) : undefined,
+      announce: args.adopt_conversation_id ? assistantSeatingNote(role, identity.name, team?.name ?? null) : undefined,
     });
   const fresh = await ctx.db.get(role._id);
   const standing = await standingConversationOf(ctx, fresh);
@@ -1560,20 +1561,20 @@ export async function performHireChief(
   };
 }
 
-/** The seating note when a thread a person already talks to becomes their chief (S16 shape). */
-export function chiefSeatingNote(role: { short_id: string; handle: string }, name: string, teamName: string | null): string {
+/** The seating note when a thread a person already talks to becomes their assistant (S16 shape). */
+export function assistantSeatingNote(role: { short_id: string; handle: string }, name: string, teamName: string | null): string {
   return [
-    `You are now ${name}, Chief of Staff${teamName ? ` for ${teamName}` : " across every workspace"} (@${role.handle}): ${siteUrl()}/org/${role.short_id}.`,
+    `You are now ${name}, Executive Assistant${teamName ? ` for ${teamName}` : " across every workspace"} (@${role.handle}): ${siteUrl()}/org/${role.short_id}.`,
     `Your job now is to be the right hand: keep the goals in view, answer anything, route what a lead owns to that lead, and bring every decision with a recommendation.`,
     `Nothing else changed: your memory, your handle, your chat and Slack bindings and this thread are as they were.`,
     `The next message is your briefing. Once you have read it, restate your job in your own words.`,
   ].join("\n");
 }
 
-export const hireChief = mutation({
+export const hireAssistant = mutation({
   args: {
     api_token: v.optional(v.string()),
-    reach: chiefValidator,
+    reach: assistantValidator,
     personal: v.optional(v.boolean()),
     given_name: v.optional(v.string()),
     handle: v.optional(v.string()),
@@ -1583,7 +1584,7 @@ export const hireChief = mutation({
     project_path: v.optional(v.string()),
     model: v.optional(v.string()),
   },
-  handler: async (ctx, { api_token, ...args }) => performHireChief(ctx, await requireCaller(ctx, api_token), args),
+  handler: async (ctx, { api_token, ...args }) => performHireAssistant(ctx, await requireCaller(ctx, api_token), args),
 });
 
 // One-time backfill (S16): a Head of People seated before seating learned to explain
