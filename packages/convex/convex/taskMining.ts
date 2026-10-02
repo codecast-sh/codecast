@@ -1200,56 +1200,7 @@ export const webGetTaskDetail = query({
 
     const linkedConversations: any[] = [];
     const seenConvIds = new Set<string>();
-    if (task.conversation_ids) {
-      for (const convId of task.conversation_ids) {
-        const conv = await ctx.db.get(convId);
-        if (conv && await canAccessConversation(ctx, userId, conv)) {
-          seenConvIds.add(conv._id.toString());
-          const isActive = conv.status === "active" && (conv.updated_at > fiveMinutesAgo || liveConvIds.has(conv._id.toString()));
-          const entry: any = {
-            _id: conv._id,
-            session_id: conv.session_id,
-            title: conv.title || conv.subtitle,
-            headline: (conv as any).headline,
-            project_path: conv.project_path,
-            message_count: conv.message_count || 0,
-            is_active: isActive,
-            started_at: (conv as any).started_at || conv._creationTime,
-            updated_at: conv.updated_at,
-            agent_type: conv.agent_type,
-            outcome_type: (conv as any).outcome_type,
-            git_branch: (conv as any).git_branch,
-            git_remote_url: conv.git_remote_url,
-            // Triage/visibility stamps: the client seeds these snapshots into its
-            // sessions cache (useOpenLinkedSession), so a stashed/dismissed session
-            // must not seed as an active row (ct-42666).
-            ...inboxVisibilityFields(conv),
-          };
-          if (isActive) {
-            const recentMsgs = await ctx.db
-              .query("messages")
-              .withIndex("by_conversation_timestamp", (q: any) => q.eq("conversation_id", conv._id))
-              .order("desc")
-              .take(5);
-            entry.recent_messages = recentMsgs.reverse().map((m: any) => ({
-              _id: m._id,
-              role: m.role,
-              content: typeof m.content === "string" ? m.content.slice(0, 300) : "",
-              timestamp: m.timestamp,
-            }));
-          }
-          linkedConversations.push(entry);
-        }
-      }
-    }
-    const allConvs = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_updated", (q: any) => q.eq("user_id", task.user_id))
-      .order("desc")
-      .take(100)
-      .then((convs: any[]) => convs.filter((c: any) => c.active_task_id === task._id));
-    for (const conv of allConvs) {
-      if (seenConvIds.has(conv._id.toString()) || !await canAccessConversation(ctx, userId, conv)) continue;
+    const pushLinked = async (conv: any) => {
       seenConvIds.add(conv._id.toString());
       const isActive = conv.status === "active" && (conv.updated_at > fiveMinutesAgo || liveConvIds.has(conv._id.toString()));
       const entry: any = {
@@ -1271,6 +1222,9 @@ export const webGetTaskDetail = query({
         // must not seed as an active row (ct-42666).
         ...inboxVisibilityFields(conv),
       };
+      if (String(conv.active_task_id ?? "") === String(task._id) && String(conv.review_of_task_id ?? "") !== String(task._id)) {
+        entry.bound = true;
+      }
       if (isActive) {
         const recentMsgs = await ctx.db
           .query("messages")
@@ -1285,7 +1239,27 @@ export const webGetTaskDetail = query({
         }));
       }
       linkedConversations.push(entry);
+    };
+    for (const convId of task.conversation_ids ?? []) {
+      if (seenConvIds.has(convId.toString())) continue;
+      const conv = await ctx.db.get(convId);
+      if (conv && await canAccessConversation(ctx, userId, conv)) await pushLinked(conv);
     }
+    const allConvs = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_updated", (q: any) => q.eq("user_id", task.user_id))
+      .order("desc")
+      .take(100)
+      .then((convs: any[]) => convs.filter((c: any) => c.active_task_id === task._id));
+    for (const conv of allConvs) {
+      if (seenConvIds.has(conv._id.toString()) || !await canAccessConversation(ctx, userId, conv)) continue;
+      await pushLinked(conv);
+    }
+    // The task's one owning session (lib/taskOwner.ts): the newest bound one,
+    // which is the only one once every binding goes through claimTaskOwnership.
+    const owner = linkedConversations.filter((lc) => lc.bound).sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0))[0];
+    for (const lc of linkedConversations) delete lc.bound;
+    if (owner) owner.is_owner = true;
 
     for (const lc of linkedConversations) {
       const insight = await ctx.db

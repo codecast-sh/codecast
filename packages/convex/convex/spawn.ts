@@ -1,5 +1,6 @@
 import { mutation } from "./functions";
 import { v } from "convex/values";
+import { boundSessionsOf } from "./lib/taskOwner";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
@@ -437,13 +438,16 @@ export async function gateHandStart(ctx: { db: any }, spawner: any | null): Prom
 }
 
 // The task a review hand judges and the role doing its work: the role of the
-// first session still bound to the task (active_task_id) that carries one.
+// task's owning session, else of the latest linked session that carries one.
+// A hand that handed this task off and started its next task has moved its
+// binding (lib/taskOwner.ts), yet the work under review is still its role's.
 async function resolveReviewTarget(ctx: { db: any }, userId: Id<"users">, shortId: string): Promise<{ task: any; role: any | null }> {
   const task = await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", shortId)).first();
   if (!task || !(await canAccessTask(ctx, userId, task))) throw new Error(`Task not found: ${shortId}`);
-  for (const id of task.conversation_ids ?? []) {
-    const conv = await ctx.db.get(id);
-    if (!conv || String(conv.active_task_id) !== String(task._id)) continue;
+  const bound = await boundSessionsOf(ctx, task);
+  const linked = (await Promise.all([...(task.conversation_ids ?? [])].reverse().map((id: any) => ctx.db.get(id))))
+    .filter((c: any) => c && String(c.review_of_task_id ?? "") !== String(task._id));
+  for (const conv of [...bound, ...linked]) {
     const role = await roleOfConversation(ctx, conv);
     if (role) return { task, role };
   }
