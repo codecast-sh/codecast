@@ -64,7 +64,7 @@ import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession, enqueueHibernateSession, requireSessionCommandTarget, findSessionCommandByRequest, recentConversationCommands, validateSessionCommandRequestId } from "./daemonCommandUtils";
 import { normalizePaneUrl } from "@codecast/shared/contracts/browserPaneOffer";
 import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, toConvexAgentType, normalizeThreadState, parseThreadStateStatus, clearedThreadStateFields, formatAgentSwitchNotice, findModelOption, canSessionBecomeAgent, agentForksFromAnyMessage, agentForksNatively, computeConversationTaskStats, isTodoStatTool } from "@codecast/shared/contracts";
-import { shouldShowInInbox, isOrphanOrSubagent, isSessionIdle, deriveSessionActivity, lastRoleIsUserOf, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, userRestOf, userRestStampOf, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
+import { shouldShowInInbox, isOrphanOrSubagent, isSessionIdle, deriveSessionActivity, lastRoleIsUserOf, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentIsProducing, userRestOf, userRestStampOf, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
 import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { armedTriggerHomeLoader, isArmedTriggerHome, isArmedTriggerHomeOfKind, isArmedLoopHome } from "./dormancy";
 import { subagentLinkFields } from "./ccAccountsShared";
@@ -8346,7 +8346,71 @@ async function buildUserSessionMaps(
     .query("managed_sessions")
     .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
     .collect();
+  return sessionMapsFromManagedRows(managedSessions, now);
+}
 
+// Liveness maps for a NAMED set of conversations, for a caller that asked for
+// specific sessions (`cast sessions <id> -w`). Same facts buildUserSessionMaps
+// derives, read per conversation instead of over every managed_sessions row the
+// user has: a watch on two sessions re-ran on every heartbeat of every session
+// the user ran and read ~2,000 documents a run, 3.5 of the backend's 32 cores
+// on 2026-10-02 (ct-53363). Covers the named rows and the children enrichment
+// reads for them (the same newest-20 range enrichInboxSessionRow takes), keeps
+// only the viewer's own managed rows exactly as the user-wide read does, and
+// reads latestHeartbeat as the newest row of by_user_heartbeat, the same maximum.
+// Teammates read per named lead. The full scan pools every teammate its
+// windows hold; a lead with more live teammates than this is beyond any team
+// the product spawns.
+const NAMED_TEAMMATE_CAP = 50;
+
+async function buildNamedSessionMaps(
+  ctx: any,
+  userId: Id<"users">,
+  convs: any[],
+  now: number,
+): Promise<{ maps: InboxSessionMaps; children: any[] }> {
+  // Two links make a child: parent_conversation_id (subagents, orphans, the
+  // range enrichment reads) and spawned_by_conversation_id (agent team
+  // teammates, whose asks surface on the lead through rollupParentIdOf).
+  const childLists = await Promise.all(convs.flatMap((conv: any) => [
+    ctx.db
+      .query("conversations")
+      .withIndex("by_parent_conversation_id", (q: any) => q.eq("parent_conversation_id", conv._id))
+      .order("desc")
+      .take(20),
+    ctx.db
+      .query("conversations")
+      .withIndex("by_spawned_by", (q: any) => q.eq("spawned_by_conversation_id", conv._id))
+      .order("desc")
+      .take(NAMED_TEAMMATE_CAP),
+  ]));
+  const covered = new Map<string, any>();
+  for (const c of [...convs, ...childLists.flat()]) covered.set(c._id.toString(), c);
+  const uid = userId.toString();
+  const [newest, rowLists] = await Promise.all([
+    ctx.db
+      .query("managed_sessions")
+      .withIndex("by_user_heartbeat", (q: any) => q.eq("user_id", userId))
+      .order("desc")
+      .first(),
+    Promise.all([...covered.values()].map((c: any) => ctx.db
+      .query("managed_sessions")
+      .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", c._id))
+      .collect())),
+  ]);
+  const own = rowLists.flat().filter((s: any) => s.user_id?.toString() === uid);
+  return { maps: sessionMapsFromManagedRows(own, now, newest?.last_heartbeat), children: childLists.flat() };
+}
+
+// The one derivation of InboxSessionMaps from managed_sessions rows, shared by
+// the user-wide and the named reads so the two cannot classify a row apart.
+// `userLatestHeartbeat` is the newest heartbeat over ALL the user's rows when
+// the caller read fewer than all of them.
+function sessionMapsFromManagedRows(
+  managedSessions: any[],
+  now: number,
+  userLatestHeartbeat?: number,
+): InboxSessionMaps {
   const liveConvIds = new Set<string>();
   const lastHeartbeatMap = new Map<string, number>();
   let latestHeartbeat: number | undefined;
@@ -8386,6 +8450,9 @@ async function buildUserSessionMaps(
     agentStatusMap.set(cid, s.agent_status);
   }
 
+  if (typeof userLatestHeartbeat === "number" && (latestHeartbeat === undefined || userLatestHeartbeat > latestHeartbeat)) {
+    latestHeartbeat = userLatestHeartbeat;
+  }
   const userDaemonAlive = userDaemonAliveAt({ latestHeartbeat }, now);
 
   return { agentStatusMap, agentStatusUpdatedAtMap, settleFactsMap, hibernatedAtMap, tmuxSessionMap, permissionModeMap, agentStartedAtMap, openTasksMap, liveConvIds, userDaemonAlive, lastHeartbeatMap, latestHeartbeat };
@@ -8650,7 +8717,7 @@ async function enrichInboxSessionRow(
   const subagentChildren: any[] = [];
   // Parked (dismissed/stashed) rows skip the children scan entirely: every
   // caller discards their subagent children (a parked parent's children never
-  // render), and the "producing child keeps parent working" refinement is
+  // render), and the "producing child parks its parent" refinement is
   // deliberately never applied to parked rows — same rule as
   // enrichLivenessFields, whose overlay value wins on the web client anyway.
   // This scan was one indexed query per shown row, and parked rows are the
@@ -8676,7 +8743,7 @@ async function enrichInboxSessionRow(
       implementationSession = { _id: implChild._id.toString(), title: implChild.title };
     }
     // Until when a subagent child is genuinely PRODUCING, not merely alive (see
-    // subagentKeepsParentWorking): a settled parent is parked on it until then
+    // subagentIsProducing): a settled parent is parked on it until then
     // (classifyWorkState's childProducing).
     producingUntil = producingUntilOf(children, maps);
     for (const c of children) {
@@ -9083,6 +9150,12 @@ export async function scanInboxConversations(
     // child rows carry the fields. Off for team scope, whose list never
     // strips them.
     subagentWindow?: boolean;
+    // The caller named its sessions (extraConvIds) and wants only those: skip
+    // every window and the owner window, admit the named rows by the same
+    // rule, and read their liveness per conversation (buildNamedSessionMaps).
+    // Each named row classifies exactly as the full scan would; it never
+    // folds, the way a deliberately named row never does.
+    namedOnly?: boolean;
   },
 ): Promise<{
   conversations: any[];
@@ -9115,6 +9188,9 @@ export async function scanInboxConversations(
   truncated: Set<InboxTruncation>;
   // Pinned rows past the newest INBOX_PINNED_CHILDREN_SCAN, in pin order.
   pinnedOverflowIds: Set<string>;
+  // Named path only: teammates of the named rows the windows would have
+  // pooled, for groupPoolChildren. Never rows of their own.
+  poolChildren: any[];
 }> {
   const dismissedCutoff = now - INBOX_DISMISSED_WINDOW_MS;
   const sessionWindowCutoff = now - INBOX_SESSION_WINDOW_MS;
@@ -9139,11 +9215,15 @@ export async function scanInboxConversations(
   // top-level window is the union of two index ranges, merged newest-first.
   // Each range reads cap + 1 so a full window is distinguishable from an
   // overflowing one at the cost of one row.
+  // The named path reads no window at all. A query starts the moment it is
+  // built, not when it is awaited, so a window must not even be constructed:
+  // its read set alone would re-run the caller on every write it covers.
+  const noWindows = !!opts.namedOnly;
   const topLevelWindow = (
     rangeFor: (isSubagent: false | undefined) => Promise<any[]>,
     sortKey: string,
     kind: InboxTruncation,
-  ) => Promise.all([rangeFor(undefined), rangeFor(false)])
+  ) => noWindows ? Promise.resolve([] as any[]) : Promise.all([rangeFor(undefined), rangeFor(false)])
     .then(([a, b]: [any[], any[]]) => {
       const merged = [...a, ...b].sort((x, y) => y[sortKey] - x[sortKey]);
       if (merged.length > INBOX_WINDOW_CAP) truncated.add(kind);
@@ -9169,7 +9249,7 @@ export async function scanInboxConversations(
     .take(INBOX_WINDOW_CAP + 1), "updated_at", "recent");
 
   // Newest pins first, so overflow drops the oldest pin, never a fresh one.
-  const pinnedConversationsQ = ctx.db
+  const pinnedConversationsQ = noWindows ? Promise.resolve([] as any[]) : ctx.db
     .query("conversations")
     .withIndex("by_user_pinned", (q: any) =>
       q.eq("user_id", userId).gt("inbox_pinned_at", 0)
@@ -9222,7 +9302,7 @@ export async function scanInboxConversations(
   // Owner rows are keyed by user alone (no denormalized updated_at — that would
   // make every conversation heartbeat fan out and patch all of its owner rows),
   // so hydrate here and apply the same recency/status window as the main scan.
-  const ownerRowsQ = ctx.db
+  const ownerRowsQ = noWindows ? Promise.resolve([] as any[]) : ctx.db
     .query("session_owners")
     .withIndex("by_user", (q: any) => q.eq("user_id", userId))
     .order("desc")
@@ -9241,7 +9321,7 @@ export async function scanInboxConversations(
   // they are returned on their own, not merged into the candidate set. The
   // index pins the filing stamps to absent, so a parked parent's children
   // (stamped by the hide cascade, discarded by every caller) are never read.
-  const recentSubagentsQ: Promise<any[]> = opts.subagentWindow && !opts.teamScope
+  const recentSubagentsQ: Promise<any[]> = opts.subagentWindow && !opts.teamScope && !noWindows
     ? ctx.db
       .query("conversations")
       .withIndex("by_user_plain_updated", (q: any) => plainRange(q, true))
@@ -9268,7 +9348,8 @@ export async function scanInboxConversations(
   const ownerRowFor = (conv: any): Promise<any | null> => {
     const idStr = conv._id.toString();
     const held = myOwnerRowById.get(idStr);
-    if (held || !truncated.has("owned")) return Promise.resolve(held ?? null);
+    // An empty owner window proves nothing when it was never read.
+    if (held || (!truncated.has("owned") && !opts.namedOnly)) return Promise.resolve(held ?? null);
     let hit = ownerLookups.get(idStr);
     if (!hit) {
       hit = sessionOwnerRow(ctx, conv._id, userId).then((row: any) => {
@@ -9429,9 +9510,20 @@ export async function scanInboxConversations(
     }
   }
 
-  const maps = opts.includeLiveness
-    ? await buildUserSessionMaps(ctx, userId, now)
-    : EMPTY_INBOX_MAPS;
+  // The named path's children: liveness for them, and the teammates the full
+  // scan's windows would have pooled, so a teammate's ask still surfaces on
+  // its lead (groupPoolChildren) without the teammate becoming a row here.
+  let poolChildren: any[] = [];
+  let maps: InboxSessionMaps;
+  if (!opts.includeLiveness) {
+    maps = EMPTY_INBOX_MAPS;
+  } else if (opts.namedOnly) {
+    const named = await buildNamedSessionMaps(ctx, userId, conversations, now);
+    maps = named.maps;
+    poolChildren = named.children.filter((c: any) => !byId.has(c._id.toString()) && pooledByWindows(c, userId, now));
+  } else {
+    maps = await buildUserSessionMaps(ctx, userId, now);
+  }
 
   // buildUserSessionMaps only covers managed_sessions belonging to THIS user;
   // an owned foreign-run session's daemon rows belong to the running account,
@@ -9454,7 +9546,8 @@ export async function scanInboxConversations(
   // overflows names itself in `truncated` like the scan's own caps.
   const uidStr = userId.toString();
   const selectionInput: any[] = [];
-  for (const c of conversations) {
+  // Named rows are deliberate: outside the selection, so they never fold.
+  for (const c of opts.namedOnly ? [] : conversations) {
     const idStr = c._id.toString();
     if (c.user_id.toString() !== uidStr && !ownedByMeIds.has(idStr)) continue;
     selectionInput.push(ownedByMeIds.has(idStr) ? { ...c, owned_by_me: true } : c);
@@ -9465,8 +9558,24 @@ export async function scanInboxConversations(
 
   return {
     conversations, maps, deliberateIds, clusterCutoff, selectionIds: new Set(selection.members.keys()), belowFold,
-    ownedByMeIds, myOwnerRowById, ownerRowFor, truncated, pinnedOverflowIds, recentSubagents,
+    ownedByMeIds, myOwnerRowById, ownerRowFor, truncated, pinnedOverflowIds, recentSubagents, poolChildren,
   };
+}
+
+// Would one of the windows above have read this row? The named path asks it
+// of a named row's teammates, which the full scan pools only when a window
+// holds them: the runner's own top level rows, live or completed, updated
+// inside the session window or filed inside the dismissed window, never a
+// killed row unless pinned.
+function pooledByWindows(c: any, userId: Id<"users">, now: number): boolean {
+  if (c.is_subagent || c.user_id?.toString() !== userId.toString()) return false;
+  if (c.status !== "active" && c.status !== "completed") return false;
+  if (c.inbox_pinned_at) return true;
+  if (c.inbox_killed_at) return false;
+  const filedAt = c.inbox_dismissed_at ?? c.inbox_stashed_at;
+  if (filedAt !== undefined) return filedAt >= now - INBOX_DISMISSED_WINDOW_MS;
+  if (c.inbox_snoozed_until) return true;
+  return c.updated_at >= now - INBOX_SESSION_WINDOW_MS;
 }
 
 // The per-row fold flag over a scan: a selection member reads the shared fold
@@ -9508,6 +9617,8 @@ export async function computeInboxSessions(
     // inbox opts in: the web base list must never carry a bucket (the overlay
     // owns it — sync-convergence C1). Requires includeLiveness.
     projection?: boolean;
+    // Only the named extraConvIds, read per conversation (scan's namedOnly).
+    namedOnly?: boolean;
     // Debug-only (timing harness) — see InboxEnrichSkip.
     _skip?: InboxEnrichSkip;
   },
@@ -9535,6 +9646,7 @@ export async function computeInboxSessions(
     extraConvIds: opts.extraConvIds,
     teamScope: opts.teamScope,
     subagentWindow: fastFieldsInOverlay,
+    namedOnly: opts.namedOnly,
   });
   const { conversations, maps, truncated, pinnedOverflowIds } = scan;
   // The child rows whose fast fields the overlay owns (see the scan's
@@ -9603,7 +9715,7 @@ export async function computeInboxSessions(
     // The same placement the liveness overlay stamps (computeSessionsLiveness):
     // one classifier, one alphabet. The asking inputs come from the candidate
     // pool plus the children the per-row scans already read.
-    const childrenByParent = groupPoolChildren(conversations);
+    const childrenByParent = groupPoolChildren([...conversations, ...scan.poolChildren]);
     for (const r of enrichedRows) {
       if (r.subagentChildren.length === 0) continue;
       const pid = r.conv._id.toString();
@@ -9855,16 +9967,16 @@ function isLiveAt(maps: Pick<InboxSessionMaps, "liveConvIds"> & Partial<Pick<Inb
   return maps.liveConvIds.has(cid);
 }
 
-// Does this child keep its parent in "working" at instant `now`? Pure over the
-// child doc and the maps; see subagentKeepsParentWorking for the two proofs.
-function childKeepsParentWorking(
+// Is this child still producing for its parent at instant `now`? Pure over the
+// child doc and the maps; see subagentIsProducing for the two proofs.
+function childIsProducing(
   c: any,
   maps: Pick<InboxSessionMaps, "liveConvIds" | "agentStatusMap"> & Partial<Pick<InboxSessionMaps, "lastHeartbeatMap">>,
   now: number,
 ): boolean {
   const cid = c._id.toString();
   const live = isLiveAt(maps, cid, now);
-  return subagentKeepsParentWorking({
+  return subagentIsProducing({
     isSubagent: !!c.is_subagent,
     convStatus: c.status,
     updatedAt: c.updated_at,
@@ -9896,7 +10008,7 @@ export function groupPoolChildren(pool: any[]): Map<string, any[]> {
 // per recompute instead of a per-parent by_parent_conversation_id scan for every idle
 // row (~one indexed query per row — the op-count blowout behind "too many system
 // operations" timeouts on this heartbeat-hot path). The derivation is sound because
-// subagentKeepsParentWorking accepts only two proofs, and both pools are already in
+// subagentIsProducing accepts only two proofs, and both pools are already in
 // hand: a child that synced output within the last 5 minutes sits at the top of the
 // recent window scan, and a live child with an active agent status is in
 // maps.liveConvIds (its doc hydrated by hydrateLivePool when the window missed it —
@@ -9910,15 +10022,15 @@ export function deriveProducingParents(
   const parents = new Set<string>();
   for (const c of pool) {
     if (!c.parent_conversation_id) continue;
-    if (childKeepsParentWorking(c, maps, now)) parents.add(c.parent_conversation_id.toString());
+    if (childIsProducing(c, maps, now)) parents.add(c.parent_conversation_id.toString());
   }
   return parents;
 }
 
 // The candidate pool plus every live conversation the windows missed (a live
-// child of a parent outside the window still keeps that parent working).
+// child of a parent outside the window still parks that parent).
 // The candidate pool the child rollups read: the scan's rows, every LIVE
-// conversation (a producing child keeps its parent working), and every row
+// conversation (a producing child parks its settled parent), and every row
 // holding a pending `cast decide` (a spawned worker's decision lifts its
 // parent whether or not the worker is still live).
 async function hydrateLivePool(ctx: any, conversations: any[], maps: InboxSessionMaps, extraIds: Iterable<string> = []): Promise<any[]> {
@@ -10132,14 +10244,14 @@ function daemonAliveUntil(maps: Pick<InboxSessionMaps, "lastHeartbeatMap" | "lat
 }
 
 // The instant after which no child keeps this parent producing. "A child is
-// producing" (childKeepsParentWorking) only ever turns false as time passes
+// producing" (childIsProducing) only ever turns false as time passes
 // (a grace lapses, a heartbeat dies, a status decays), so its flip is the
 // largest child deadline at which the predicate still held one instant
 // before. Evaluated through the predicate itself — never a re-derived
 // formula — so the fact cannot disagree with the rule.
 function producingUntilOf(children: any[], maps: InboxSessionMaps): number | null {
   if (children.length === 0) return null;
-  const producing = (t: number) => children.some((c: any) => childKeepsParentWorking(c, maps, t));
+  const producing = (t: number) => children.some((c: any) => childIsProducing(c, maps, t));
   let until: number | null = null;
   for (const c of children) {
     const chb = maps.lastHeartbeatMap.get(c._id.toString());
@@ -10249,7 +10361,7 @@ function placeLivenessRowAt(
 // org.ts): the caller's managed-session maps with the foreign rows' liveness
 // merged, the same per-row reads, and placeLivenessRowAt — one classifier,
 // one alphabet. `childrenByParent` (keyed by nestParentIdOf) supplies the
-// producing rollup that keeps a parent working while a child streams. The
+// producing rollup that parks a settled parent while a child streams. The
 // asking input only moves the bucket, never work_state, so the row's own ask
 // is all it needs.
 export async function classifyWorkStates(
@@ -10757,10 +10869,16 @@ export const inboxForCLI = query({
     }
 
     const extraConvIds = [...(labelConvIds ?? []), ...requestedIds];
+    // Named sessions only (`cast sessions <id> …`, above all its -w watches,
+    // which agents keep open on their workers): read just those rows instead of
+    // building the whole inbox and filtering it, so a watch re-runs when its
+    // own sessions change rather than on every write to any of ~2,000 rows.
+    const namedOnly = requestedIds.size > 0 && !labelConvIds;
     let { sessions, hidden_count } = await computeInboxSessions(ctx, userId, {
       show_all: !!args.show_all,
       extraConvIds: extraConvIds.length ? extraConvIds : undefined,
       projection: true,
+      namedOnly,
     });
 
     // Project bounding (label views): scope the inbox to one project so labels

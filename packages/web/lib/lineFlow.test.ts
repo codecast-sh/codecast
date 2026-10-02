@@ -129,8 +129,11 @@ describe("buildLineFlow", () => {
     expect(f.sense.state.kind).toBe("running");
   });
 
-  it("stage states: starved when empty, paused behind open cards, failing on a failed run", () => {
-    expect(flow({}).sense.state).toMatchObject({ kind: "starved", why: "no finder has written yet" });
+  it("stage states: idle before the first signal, starved when signals stop, paused behind open cards, failing on a failed run", () => {
+    expect(flow({}).sense.state).toMatchObject({ kind: "idle", why: "waiting for the first signal" });
+    expect(flow({ signals: [signal("s1", { created_at: NOW - 3 * DAY })] }).sense.state).toMatchObject({ kind: "starved", why: "no signal in 24h" });
+    expect(flow({ tasks: [cause("a")] }).build.state).toMatchObject({ kind: "starved", why: "causes wait, nothing building" });
+    expect(flow({ decisions: [card("d1")] }).awaiting.state.kind).toBe("ask");
     const capped = flow({ tasks: [cause("a")], decisions: [1, 2, 3, 4, 5].map((i) => card(`d${i}`, { created_at: NOW - i * HOUR })) });
     expect(capped.causes.state).toMatchObject({ kind: "paused", why: "queued behind 5 open cards", since: NOW - HOUR });
     const failing = flow({ tasks: [cause("a")], runs: [run("r1", { task_id: "a", status: "failed", fail_reason: "tests red", updated_at: NOW - HOUR })] });
@@ -155,12 +158,20 @@ describe("buildLineFlow", () => {
       reopened: 1,
       medianToShip: 3.5 * DAY,
       tokensPerShip: 2000,
+      daily: {
+        signalsIn: [0, 0, 0, 0, 0, 0, 1],
+        opened: [0, 0, 0, 0, 0, 2, 0],
+        dissolved: [0, 0, 0, 0, 0, 0, 1],
+        shipped: [0, 0, 0, 0, 0, 0, 2],
+        reopened: [0, 0, 0, 0, 0, 0, 1],
+      },
     });
   });
 
-  it("downstream stations read clear when empty; upstream ones starve", () => {
+  it("a line that never started is idle, never starved; downstream stations read clear", () => {
     const f = flow({});
-    expect([f.sense.state.kind, f.causes.state.kind, f.build.state.kind]).toEqual(["starved", "starved", "starved"]);
+    expect(f.started).toBe(false);
+    expect([f.sense.state.kind, f.causes.state.kind, f.build.state.kind]).toEqual(["idle", "idle", "idle"]);
     expect([f.awaiting.state.kind, f.watching.state.kind, f.closed.state.kind]).toEqual(["clear", "clear", "clear"]);
   });
 
@@ -208,8 +219,9 @@ describe("lineHeadline", () => {
   });
   it("ends calm when nothing waits", () => {
     expect(text(flow({ tasks: [cause("a")], runs: [run("r1", { task_id: "a" })] }))).toBe("1 building, nothing waiting on you");
-    expect(text(flow({ runs: [run("r1")] }))).toBe("The line is quiet: nothing building, nothing waiting on you");
-    expect(text(flow({}))).toBe("The line is quiet: nothing building, nothing waiting on you");
+    expect(text(flow({ tasks: [cause("a", { status: "done", closed_at: NOW - 9 * DAY })] }))).toBe("The line is quiet: nothing building, nothing waiting on you");
+    expect(text(flow({ runs: [run("r1")] }))).toBe("Nothing has reached the line yet");
+    expect(text(flow({}))).toBe("Nothing has reached the line yet");
   });
 });
 

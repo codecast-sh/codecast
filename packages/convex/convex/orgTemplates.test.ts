@@ -123,7 +123,7 @@ describe("the instance row, its record and lessons", () => {
     const lesson = await performFileLesson(ctx(db), MATE, { ...key, body: "Pair the parity test with a module resolution guard; a registered route without its page passes parity and disables the prerender.", evidence: [{ label: "SEO ledger", href: "ct-48700" }] });
     expect(lesson.status).toBe("open");
     const mine = await performListLessons(ctx(db), MATE, key);
-    expect(mine).toHaveLength(1); expect(Object.keys(mine[0]!).sort()).toEqual(["body", "created_at", "id", "released_in", "status"]);
+    expect(mine).toHaveLength(1); expect(Object.keys(mine[0]!).sort()).toEqual(["about", "body", "created_at", "id", "kind", "released_in", "source", "status"]); expect(mine[0]).toMatchObject({ source: "role" });
     await expect(performListLessons(ctx(db), MATE, { template_id: "growth", team_id: ACME })).resolves.toEqual([]);
     await expect(performListLessons(ctx(db), MATE, { template_id: "growth", as_codecast: true })).rejects.toThrow();
     const forPublisher = await performListLessons(ctx(db), ME, { template_id: "growth", as_codecast: true });

@@ -217,6 +217,9 @@ interface VaultState {
   selectedTag: string | null;
   setSelectedTag: (tag: string | null) => void;
   openTagPane: (tag: string) => void;
+  /** Bumped by every openTagPane. The Files page opens its side panel on a
+   *  bump, whichever state owns it (the store flag, or a split pane's own). */
+  tagPaneRequest: number;
   /** One-shot explorer reveal request (breadcrumb click): expand + scroll. */
   revealTarget: string | null;
   requestReveal: (path: string) => void;
@@ -770,6 +773,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   rightPanelTab: "backlinks" as const,
   rightPanelOpen: readRightPanelOpen(),
   selectedTag: null,
+  tagPaneRequest: 0,
   bookmarks: [],
   bookmarksVaultId: null,
   opError: null,
@@ -915,8 +919,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   clearReveal: () => set({ revealTarget: null }),
   setSelectedTag: (tag) => set({ selectedTag: tag }),
   openTagPane: (tag) => {
-    get().setRightPanelOpen(true);
-    set({ rightPanelTab: "tags", selectedTag: tag });
+    set((s) => ({ rightPanelTab: "tags", selectedTag: tag, tagPaneRequest: s.tagPaneRequest + 1 }));
   },
 
   toggleDir: (path) =>

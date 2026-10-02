@@ -8,10 +8,12 @@ import { useRouter } from "next/navigation";
 import type { SeatConversation } from "../../../app/inbox/QueuePageClient";
 import { askSessionView } from "../../../lib/sessionViewVisit";
 
-export function useSeat({ conversationId, speaker, lead, offer, canTalk, hideDiff, onSessionView }: {
+export function useSeat({ conversationId, speaker, ask, lead, offer, canTalk, hideDiff, onSessionView }: {
   conversationId: string | null | undefined;
   /** Who the composer addresses: "Ask <speaker> for anything". */
   speaker: string;
+  /** What the composer invites, when the seat has a narrower job than "anything". */
+  ask?: string;
   lead: ReactNode;
   /** What the seat offers to do next, above its composer (RoleOffer). */
   offer?: ReactNode;
@@ -30,7 +32,7 @@ export function useSeat({ conversationId, speaker, lead, offer, canTalk, hideDif
       stickyPrompt: false,
       initialDensity: "condensed",
       foldWorkingTurns: true,
-      composerPlaceholder: `Ask ${speaker} for anything…`,
+      composerPlaceholder: `Ask ${speaker} ${ask ?? "for anything"}…`,
       composerNode: offer,
       hideDiff,
     },
@@ -38,5 +40,5 @@ export function useSeat({ conversationId, speaker, lead, offer, canTalk, hideDif
     // From a page's own route the plain view is the session's address; the
     // pane that opens it reads the ask (lib/sessionViewVisit).
     onSessionView: onSessionView ?? (() => { if (!conversationId) return; askSessionView(conversationId); router.push(`/conversation/${conversationId}`); }),
-  }), [lead, offer, speaker, hideDiff, canTalk, onSessionView, conversationId, router]);
+  }), [lead, offer, speaker, ask, hideDiff, canTalk, onSessionView, conversationId, router]);
 }

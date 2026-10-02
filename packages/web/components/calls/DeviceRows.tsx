@@ -93,13 +93,41 @@ function DeviceSelect({ kind, devices, compact }: { kind: Kind; devices: MediaDe
           compact ? "text-[11px]" : "text-xs"
         }`}
       >
-        {devices.map((d, i) => (
-          <option key={d.deviceId || i} value={d.deviceId}>
-            {d.deviceId === "default" ? `System default (${deviceName(d, kind, i)})` : deviceName(d, kind, i)}
-          </option>
-        ))}
+        <DeviceOptions kind={kind} devices={devices} />
       </select>
     </label>
+  );
+}
+
+function DeviceOptions({ kind, devices }: { kind: Kind; devices: MediaDeviceInfo[] }) {
+  return (
+    <>
+      {devices.map((d, i) => (
+        <option key={d.deviceId || i} value={d.deviceId}>
+          {d.deviceId === "default" ? `System default (${deviceName(d, kind, i)})` : deviceName(d, kind, i)}
+        </option>
+      ))}
+    </>
+  );
+}
+
+/** The microphone alone, as a bare select, for a surface that records without
+ *  a room (the meeting recorder). Same write path as every other picker. */
+export function MicSelect({ className = "" }: { className?: string }) {
+  const { lists } = useDeviceLists();
+  const devices = lists?.audioinput ?? [];
+  const value = useChosenId("audioinput", devices);
+  if (devices.length === 0) return null;
+  return (
+    <select
+      value={value}
+      onChange={(e) => void switchDevice("audioinput", e.target.value)}
+      title="Microphone"
+      aria-label="Microphone"
+      className={className}
+    >
+      <DeviceOptions kind="audioinput" devices={devices} />
+    </select>
   );
 }
 

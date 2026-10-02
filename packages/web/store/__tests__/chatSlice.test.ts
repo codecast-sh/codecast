@@ -12,6 +12,7 @@ import {
 } from "../inboxStore";
 import { chatReactionSyncOpts } from "../../lib/ingestChatPage";
 import { _resetChatRailMemo, type ChatMessageRow } from "../chatSlice";
+import { pendingImageUploads } from "../../lib/pendingUploads";
 
 type DispatchCall = { action: string; args: any[]; result?: unknown };
 
@@ -113,6 +114,84 @@ describe("chat store slice", () => {
       expect(rows[0]._id).toBe(realId);
       expect(chatSendState(rows[0])).toBe("sent");
       expect(useInboxStore.getState().chatMessages[clientId]).toBeUndefined();
+    });
+
+    describe("with an image still uploading", () => {
+      const preview = "blob:test/upload-1";
+      let finish: (storageId: string | null) => void;
+
+      beforeEach(() => {
+        pendingImageUploads.set(preview, new Promise((resolve) => { finish = resolve; }));
+      });
+      afterEach(() => pendingImageUploads.clear());
+
+      const settle = async (storageId: string | null) => {
+        finish(storageId);
+        await new Promise((r) => setTimeout(r, 0));
+      };
+
+      it("paints the message with the preview at once and dispatches only after the upload", async () => {
+        const clientId = useInboxStore.getState().sendChatMessage(CHANNEL, "", {
+          attachments: [{ storage_id: "", mime: "image/png", preview_url: preview }],
+        });
+
+        const rows = messagesIn(CHANNEL);
+        expect(rows).toHaveLength(1);
+        expect(rows[0].attachments).toEqual([{ storage_id: "", mime: "image/png", preview_url: preview }]);
+        expect(chatSendState(rows[0])).toBe("pending");
+        expect(calls).toHaveLength(0);
+
+        await settle("storage-abc");
+
+        expect(calls).toHaveLength(1);
+        expect(calls[0].action).toBe("dispatchChatSend");
+        expect(calls[0].args[2]).toBe(clientId);
+        // The journal carries the stored image, never the blob.
+        expect(calls[0].args[3].attachments).toEqual([{ storage_id: "storage-abc", mime: "image/png" }]);
+        expect(useInboxStore.getState().chatMessages[clientId].attachments).toEqual([{ storage_id: "storage-abc", mime: "image/png" }]);
+        expect(pendingImageUploads.has(preview)).toBe(false);
+      });
+
+      it("an edit while uploading is what gets sent", async () => {
+        const clientId = useInboxStore.getState().sendChatMessage(CHANNEL, "first", {
+          attachments: [{ storage_id: "", mime: "image/png", preview_url: preview }],
+        });
+        useInboxStore.getState().editChatMessage(clientId, "second");
+        expect(calls).toHaveLength(0);
+
+        await settle("storage-abc");
+        expect(calls).toHaveLength(1);
+        expect(calls[0].args[1]).toBe("second");
+      });
+
+      it("a failed upload with nothing typed takes the message back", async () => {
+        const clientId = useInboxStore.getState().sendChatMessage(CHANNEL, "", {
+          attachments: [{ storage_id: "", mime: "image/png", preview_url: preview }],
+        });
+        await settle(null);
+        expect(calls).toHaveLength(0);
+        expect(useInboxStore.getState().chatMessages[clientId]).toBeUndefined();
+      });
+
+      it("a failed upload with text sends the text", async () => {
+        useInboxStore.getState().sendChatMessage(CHANNEL, "look", {
+          attachments: [{ storage_id: "", mime: "image/png", preview_url: preview }],
+        });
+        await settle(null);
+        expect(calls).toHaveLength(1);
+        expect(calls[0].args[1]).toBe("look");
+        expect(calls[0].args[3].attachments).toBeUndefined();
+      });
+
+      it("a message discarded while uploading never leaves", async () => {
+        const clientId = useInboxStore.getState().sendChatMessage(CHANNEL, "x", {
+          attachments: [{ storage_id: "", mime: "image/png", preview_url: preview }],
+        });
+        useInboxStore.getState().deleteChatMessage(clientId);
+        await settle("storage-abc");
+        expect(calls).toHaveLength(0);
+        expect(useInboxStore.getState().chatMessages[clientId]).toBeUndefined();
+      });
     });
 
     it("another channel's page never prunes this one (delta overlay)", () => {

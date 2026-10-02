@@ -474,3 +474,31 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+/* The recording page's microphone line: which mic, and a meter that says it
+   is hearing. Same bars as the pill, wider, so a silent mic is obvious. */
+.rec-mic {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px 2px 7px;
+  border-radius: 7px;
+  border: 1px solid color-mix(in srgb, var(--sol-red) 30%, transparent);
+  color: var(--sol-text-muted);
+  min-width: 0;
+}
+
+.rec-mic-select {
+  min-width: 0;
+  max-width: 220px;
+  background: transparent;
+  color: var(--sol-text);
+  font-size: 11.5px;
+  outline: none;
+  cursor: pointer;
+  text-overflow: ellipsis;
+}
+
+.rec-mic-level {
+  height: 14px;
+}

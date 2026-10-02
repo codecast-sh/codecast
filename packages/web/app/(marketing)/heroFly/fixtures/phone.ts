@@ -33,12 +33,11 @@ export const TEST_RESULT: ToolResult = { tool_use_id: TEST_CALL.id, content: "Te
 /** The person on the phone, as the app's transcript names them. */
 export const ME = PEOPLE.me.name;
 
-/** The worker's session as the phone's header and strip show it. */
+/** The worker's session as the phone's header and strip show it. No branch: at a phone's width its chip would run off the strip's edge (the app's strip scrolls sideways and clips it there). */
 export const PHONE_SESSION = {
   title: SESSIONS.api.title,
   agent: SESSIONS.api.agent,
   model: WORKERS.api.model,
-  branch: "retry-webhooks",
 } as const;
 
 /** What the worker had done before the question, oldest first: the task the lead handed it (the spawn's prompt, which the app shows as Alex's own message, since the lead runs as Alex), its plan, and its first two calls (fixtures/fanout.ts). */

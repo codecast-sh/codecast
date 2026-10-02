@@ -1,13 +1,32 @@
 import type { ComponentType } from "react";
 import { sessionIdentity } from "./sessionIdentity";
-import { Archive, ArrowRightLeft, ArrowUp, Bot, CheckCircle2, CircleDot, Clock, Copy, CornerDownRight, Cpu, ExternalLink, EyeOff, FileText, Folder, Forward, GitBranch, Link, Moon, Pencil, Pin, PinOff, Play, RefreshCw, Square, Star, Tag, Trash2, User, CalendarDays, Plus, Smile } from "lucide-react";
+import { cleanTitle } from "./conversationProcessor";
+import { Archive, ArrowRightLeft, ArrowUp, Bot, CheckCircle2, CircleDot, Clock, Copy, CornerDownRight, Cpu, ExternalLink, EyeOff, FileText, Folder, Forward, GitBranch, Link, Moon, Pencil, Pin, PinOff, Play, RefreshCw, Square, Star, Tag, Trash2, User, CalendarDays, Plus, Smile, MessageSquare, Headphones, ArrowRight } from "lucide-react";
 import { getShortcutsForAction, inputGuardBypass, isEditableTarget, matchShortcut, type ShortcutAction } from "../shortcuts/registry";
 import { canControlModel } from "./modelSwitch";
 import { canSwitchSessionAgent } from "./sessionControl";
 import { isForeignSession } from "./liveEntities";
 import { isSessionKilled, isSessionSetAside } from "./sessionRetirement";
 
-export type PaletteTargetType = "session" | "task" | "doc" | "plan" | "project" | "trigger";
+/** The entities a route or a collection names (paletteTarget). */
+export type PaletteEntityType = "session" | "task" | "doc" | "plan" | "project" | "trigger";
+/** Plus "person", a teammate: its row is a PalettePerson, built where the
+ *  palette drills into them (CommandPalette), never read from a collection. */
+export type PaletteTargetType = PaletteEntityType | "person";
+
+/** A teammate as a palette target: the roster member plus the facts its
+ *  verbs branch on, read live while the palette is drilled into them. */
+export type PalettePerson = {
+  _id: string;
+  name: string;
+  username?: string;
+  member: any;
+  online: boolean;
+  following: boolean;
+  /** The session they have open, as the row the palette opens: a stub
+   *  carrying the id until the inbox row (or a fetched one) is known. */
+  session: { _id: string; title?: string } | null;
+};
 export type PaletteAction = {
   key: string;
   label: string;
@@ -17,6 +36,7 @@ export type PaletteAction = {
 };
 
 export function paletteObjectPath(type: PaletteTargetType, target: any): string {
+  if (type === "person") return `/team/${target.username || target._id}`;
   const route = { session: "conversation", task: "tasks", doc: "docs", plan: "plans", project: "projects", trigger: "triggers" }[type];
   return `/${route}/${target._id}`;
 }
@@ -33,6 +53,22 @@ export function paletteActions(type: PaletteTargetType | null, targets: any[], u
   if (!type || !target) return [];
   const single = targets.length === 1;
   const row = (key: string, label: string, icon: PaletteAction["icon"], hotkey?: string, shortcutAction?: ShortcutAction): PaletteAction => ({ key, label, icon, hotkey: shortcutAction ? undefined : hotkey, shortcutAction });
+  // A teammate: where they are first (follow), then the ways to reach them,
+  // then their profile. The huddle row's word is live call state, so the
+  // palette renders it from its own hook (PersonHuddleItem) and it has no
+  // hotkey here.
+  if (type === "person") {
+    const p = target as PalettePerson;
+    return [
+      ...(p.following ? [row("person_follow", "Stop following", ArrowRight, "f")]
+        : p.online ? [row("person_follow", p.session ? `Follow · ${p.session.title ? cleanTitle(p.session.title) : "a session"}` : "Follow", ArrowRight, "f")] : []),
+      ...(chatOn ? [row("person_message", "Message", MessageSquare, "m")] : []),
+      row("person_huddle", "Huddle", Headphones),
+      row("open", "Open profile", User, "o"),
+      row("newtab", "Open profile in new tab", ExternalLink, "n"),
+      row("copylink", "Copy profile link", Link, "c"),
+    ];
+  }
   const common = single ? [
     row("open", "Open", ExternalLink, "o"),
     row("newtab", "Open in new tab", ExternalLink, "n"),

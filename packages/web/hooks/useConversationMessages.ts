@@ -136,7 +136,10 @@ export function useConversationMessages(
   // initialization latches per conversation, so without this a second jump —
   // same message or a different one — on the same mounted pane never re-fires
   // the around-window query and silently stays put.
-  targetNonce?: number
+  targetNonce?: number,
+  // Open on the conversation's first page instead of the live tail (share-link
+  // guests read from the beginning). An explicit target or highlight wins.
+  openAtStart?: boolean
 ) {
   // Follow the optimistic-create rekey. When a stub conversation resolves to
   // its real Convex id, rekeyId deletes the stub rows in the same store
@@ -181,12 +184,16 @@ export function useConversationMessages(
       : "skip"
   );
 
-  const effectiveTargetTimestamp = targetMessageTimestamp?.timestamp ?? targetTimestamp ?? highlightMessageResult?.timestamp;
+  // The beginning is a target like any other: the around-window centered on
+  // timestamp 0 is the first page, and no tail subscription runs for it.
+  const startTarget = !!openAtStart && !effectiveTargetMessageId && !cleanedHighlightQuery;
+  const effectiveTargetTimestamp = targetMessageTimestamp?.timestamp ?? targetTimestamp ?? highlightMessageResult?.timestamp ?? (startTarget ? 0 : undefined);
   const highlightNotFound = !!(cleanedHighlightQuery && highlightMessageResult === null);
   const targetNotFound = !!(effectiveTargetMessageId && targetMessageTimestamp === null);
   const hasTarget = !!(
     (effectiveTargetMessageId && !targetNotFound) ||
-    (cleanedHighlightQuery && !highlightNotFound)
+    (cleanedHighlightQuery && !highlightNotFound) ||
+    startTarget
   );
   const targetTimestampReady = hasTarget && effectiveTargetTimestamp !== undefined;
 
@@ -202,7 +209,7 @@ export function useConversationMessages(
   // on, and the end-jump would complete inside the re-engaged target window
   // ("down arrow just scrolls to the bottom of the top page"). Keyed by target
   // so a NEW deep-link mid-visit still engages target mode.
-  const targetKey = effectiveTargetMessageId ?? cleanedHighlightQuery ?? null;
+  const targetKey = effectiveTargetMessageId ?? cleanedHighlightQuery ?? (startTarget ? "start" : null);
   const targetKeyRef = useRef(targetKey);
   targetKeyRef.current = targetKey;
   const dismissedTargetKeyRef = useRef<string | null>(null);
@@ -212,7 +219,7 @@ export function useConversationMessages(
     jumpGenRef.current++;
     setTrackedConvId(conversationId);
     dismissedTargetKeyRef.current = null;
-    setTargetMode(!!(effectiveTargetMessageId || cleanedHighlightQuery));
+    setTargetMode(!!(effectiveTargetMessageId || cleanedHighlightQuery || startTarget));
     setJumpTimestamp(null);
     setJumpMode(null);
   }

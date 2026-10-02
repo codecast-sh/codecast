@@ -31,6 +31,7 @@ const settings = (name: string, what: string): AppSurface => ({ name, path: `/${
 export const APP_SURFACES: AppSurface[] = [
   { ...dash("inbox", "the agent inbox: sessions grouped by who acts next"), alsoLandsOn: ["/conversation/"] },
   dash("feed", "team activity feed"),
+  dash("changes", "the daily edition of what the team shipped and why (?d=YYYY-MM-DD picks the day)"),
   dash("crosstalk", "agents talking to each other across sessions"),
   dash("org", "the org tree: people, roles and every session, edited by reparenting"),
   dash("browser", "a web page as a pane: the address rides the query string (?u=<url>)"),

@@ -16,8 +16,14 @@ export function clip(text: string, max: number): string {
   return `${(space > max * 0.6 ? cut.slice(0, space) : cut).replace(/[\s,;:.]+$/, "")}…`;
 }
 
-/** Capitalize a plain leading word only: `jx7c6zk`, `#412`, `cast_check` and `foo.ts` stay verbatim. */
-const capitalize = (s: string) => (/^[a-z][a-z'-]*([\s,;:!?)]|$)/.test(s) ? s[0].toUpperCase() + s.slice(1) : s);
+/** Tools whose names are written in lowercase; a subject leading with one keeps it. */
+const LOWERCASE_NAMES = new Set(["npm", "npx", "pnpm", "bunx", "gh", "tmux", "iterm", "eas", "cast"]);
+
+/** Capitalize a plain leading word only: `jx7c6zk`, `#412`, `cast_check`, `foo.ts` and `npm` stay verbatim. */
+const capitalize = (s: string) => {
+  const m = /^([a-z][a-z'-]*)(?:[\s,;:!?)]|$)/.exec(s);
+  return m && !LOWERCASE_NAMES.has(m[1]) ? s[0].toUpperCase() + s.slice(1) : s;
+};
 
 const GIT_REVERT = /^Revert\s+"(.+)"\s*$/;
 

@@ -64,7 +64,7 @@ export async function performSplitRole(ctx: any, userId: Id<"users">, args: Spli
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   if (role.status === "retired") throw new Error("That role is retired");
   if (role.handing_over) throw new Error(`@${role.handle} is already handing its area over; wait for that to close or close it first`);
-  if (isHeadOfPeopleRole(role) || role.chief) throw new Error("The Head of People and a Chief of Staff own no area to split: hire leads for the areas instead");
+  if (isHeadOfPeopleRole(role) || role.assistant) throw new Error("The Head of People and an Executive Assistant own no area to split: hire leads for the areas instead");
   // Refs resolve inside the original's boundary, the way `cast role scope` reads them.
   const halves = [] as Array<{ handle: string; items: Resolved[] }>;
   for (const h of args.halves) {

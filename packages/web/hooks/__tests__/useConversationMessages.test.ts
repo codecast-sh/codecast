@@ -82,3 +82,20 @@ describe("mergeUnconfirmedMessages", () => {
     expect(mergeUnconfirmedMessages(server, [pending("a", 5)])).toBe(server);
   });
 });
+
+describe("share-link guests open at the beginning", () => {
+  const hook = readFileSync(join(import.meta.dir, "../useConversationMessages.ts"), "utf8");
+  const page = readFileSync(join(import.meta.dir, "../../app/conversation/[id]/ConversationPageClient.tsx"), "utf8");
+
+  it("the guest view asks for the first page, not the live tail", () => {
+    const at = page.indexOf("function GuestConversationView");
+    const call = page.slice(page.indexOf("useConversationMessages(", at), page.indexOf(";", page.indexOf("useConversationMessages(", at)));
+    expect(call).toMatch(/,\s*true\)$/);
+  });
+
+  it("the start is a target centered on timestamp 0, so target mode is on from the first render", () => {
+    expect(hook).toContain("(startTarget ? 0 : undefined)");
+    const hasTarget = hook.slice(hook.indexOf("const hasTarget = !!("), hook.indexOf(");", hook.indexOf("const hasTarget = !!(")));
+    expect(hasTarget).toContain("startTarget");
+  });
+});

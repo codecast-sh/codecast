@@ -84,9 +84,11 @@ export type LineDecision = {
 
 export type GoalRow = { short_id?: string; title: string; priority?: "p0" | "p1" | "p2" | "p3" };
 
-/** starved is for upstream stations, where emptiness is a problem; clear is a
- *  downstream station with nothing in it, which is the good outcome. */
-export type StageKind = "running" | "paused" | "starved" | "failing" | "clear";
+/** idle: nothing has reached the station yet, or nothing waits for it, which
+ *  is not trouble. starved: Sense when signals used to arrive and stopped, or
+ *  In build while causes wait and nothing builds. clear: a downstream station
+ *  with nothing in it, the good outcome. ask: cards wait on the viewer. */
+export type StageKind = "running" | "ask" | "paused" | "starved" | "failing" | "idle" | "clear";
 export type StageState = { kind: StageKind; since?: number | null; why: string };
 
 export type GoalChip = { ref: string; label: string; kind: "initiative" | "project" | "unknown" | "parked" | "ungrounded" };
@@ -132,6 +134,8 @@ export type Throughput = {
   medianToShip: number | null;
   /** Mean run tokens per shipped cause; null with none shipped. */
   tokensPerShip: number | null;
+  /** Per day over the last seven days, oldest first, for each count. */
+  daily: Record<"signalsIn" | "opened" | "dissolved" | "shipped" | "reopened", number[]>;
 };
 
 /** How many items entered each station this week: the count on the rail
@@ -149,6 +153,9 @@ export type LineFlow<D extends LineDecision = LineDecision> = {
   closed: Column<ClosedRow>;
   throughput: Throughput;
   moved: Moved;
+  /** Anything has ever reached the line: a signal in the window or any cause.
+   *  Until then every station is idle and the page teaches instead. */
+  started: boolean;
 };
 
 // Workflow names that say nothing about the run (dynamic workflows all carry
@@ -230,6 +237,16 @@ function median(values: number[]): number | null {
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
 }
 
+/** Counts per day over the seven days ending now, oldest first. */
+function perDay(times: Array<number | null | undefined>, now: number): number[] {
+  const days = new Array(7).fill(0);
+  for (const t of times) {
+    if (typeof t !== "number" || t > now || t < now - WEEK) continue;
+    days[Math.min(6, Math.floor((t - (now - WEEK)) / DAY))]++;
+  }
+  return days;
+}
+
 const oldest = (times: Array<number | null | undefined>): number | null => {
   let min: number | null = null;
   for (const t of times) if (typeof t === "number" && (min === null || t < min)) min = t;
@@ -279,9 +296,12 @@ export function buildLineFlow<D extends LineDecision>(input: {
   sources.sort((a, b) => b.day - a.day || b.week - a.week || b.newest.created_at - a.newest.created_at);
   const daySignals = input.signals.filter((s) => s.created_at >= dayAgo);
   const lastSignal = input.signals.reduce<number | null>((m, s) => (m === null || s.created_at > m ? s.created_at : m), null);
+  const started = input.signals.length > 0 || causes.length > 0;
   const senseState: StageState = daySignals.length > 0
     ? { kind: "running", since: lastSignal, why: "signals arriving" }
-    : { kind: "starved", since: lastSignal, why: lastSignal ? "no signal in 24h" : "no finder has written yet" };
+    : started
+      ? { kind: "starved", since: lastSignal, why: "no signal in 24h" }
+      : { kind: "idle", why: "waiting for the first signal" };
 
   // ── awaiting you: the viewer's line cards ──
   const awaitingItems = input.decisions
@@ -353,7 +373,7 @@ export function buildLineFlow<D extends LineDecision>(input: {
     ? { kind: "paused", since: gateCards[cardsCap - 1]?.created_at ?? null, why: `queued behind ${gateCards.length} open cards` }
     : openRows.length > 0
       ? { kind: "running", why: `${ranked.length} ready to admit` }
-      : { kind: "starved", since: lastSignal, why: "no open cause" };
+      : { kind: "idle", why: started ? "no open cause" : "opens on the first signal" };
 
   const buildState: StageState = lastEnded?.status === "failed"
     ? { kind: "failing", since: lastEnded.updated_at, why: lastEnded.fail_reason?.trim() || "last run failed" }
@@ -361,10 +381,12 @@ export function buildLineFlow<D extends LineDecision>(input: {
       ? { kind: "paused", since: pausedRuns[0].run.updated_at, why: `${pausedRuns.length} run${pausedRuns.length === 1 ? "" : "s"} paused${stalledNote}` }
       : fresh.length > 0
         ? { kind: "running", why: `${fresh.length} building${stalledNote}` }
-        : { kind: "starved", since: lastEnded?.updated_at ?? null, why: `${ranked.length ? "causes wait, nothing building" : "nothing admitted"}${stalledNote}` };
+        : ranked.length
+          ? { kind: "starved", since: lastEnded?.updated_at ?? null, why: `causes wait, nothing building${stalledNote}` }
+          : { kind: "idle", since: lastEnded?.updated_at ?? null, why: `nothing to build${stalledNote}` };
 
   const awaitingState: StageState = awaitingItems.length > 0
-    ? { kind: "running", since: awaitingItems[0].created_at ?? null, why: "waiting on you" }
+    ? { kind: "ask", since: awaitingItems[0].created_at ?? null, why: "waiting on you" }
     : { kind: "clear", why: "nothing to answer" };
   const watchState: StageState = watchItems.length > 0 ? { kind: "running", why: "counting signals" } : { kind: "clear", why: "nothing in watch" };
   const closedState: StageState = closedItems.length > 0 ? { kind: "running", why: "this week" } : { kind: "clear", why: "nothing closed this week" };
@@ -383,6 +405,13 @@ export function buildLineFlow<D extends LineDecision>(input: {
     reopened: input.signals.filter((s) => s.reopened && s.created_at >= weekAgo).length,
     medianToShip: median(shippedThisWeek.filter((t) => t.cause?.first_seen).map((t) => (t.closed_at ?? 0) - t.cause!.first_seen)),
     tokensPerShip: shippedThisWeek.length && tokens ? tokens / shippedThisWeek.length : null,
+    daily: {
+      signalsIn: perDay(input.signals.map((s) => s.created_at), now),
+      opened: perDay(causes.map((t) => t.created_at), now),
+      dissolved: perDay(causes.filter((t) => t.status === "dropped").map((t) => t.closed_at), now),
+      shipped: perDay(shippedThisWeek.map((t) => t.closed_at), now),
+      reopened: perDay(input.signals.filter((s) => s.reopened).map((s) => s.created_at), now),
+    },
   };
 
   return {
@@ -393,6 +422,7 @@ export function buildLineFlow<D extends LineDecision>(input: {
     watching: { items: watchItems, count: watchItems.length, oldestAt: oldest(watchItems.map((w) => w.task.closed_at)), state: watchState },
     closed: { items: closedItems, count: closedItems.length, oldestAt: oldest(closedItems.map((c) => c.at)), state: closedState },
     throughput,
+    started,
     moved: {
       causes: throughput.opened,
       build: lineRuns.filter((r) => r.created_at >= weekAgo).length,
@@ -434,6 +464,7 @@ export function lineHeadline(flow: LineFlow, now: number): HeadlinePart[] {
   if (causes.state.kind === "paused") parts.push({ text: `admission paused, ${causes.state.why}`, tone: "warn" });
   else if (causes.items.length > 0) parts.push({ text: `${plural(causes.items.length, "cause", "causes")} ready to admit`, tone: "calm" });
   if (watching.count > 0) parts.push({ text: `${watching.count} in watch`, tone: "calm" });
+  if (!flow.started && parts.length === 0) return [{ text: "Nothing has reached the line yet", tone: "calm" }];
   if (awaiting.count === 0) parts.push({ text: parts.length ? "nothing waiting on you" : "The line is quiet: nothing building, nothing waiting on you", tone: "calm" });
   return parts;
 }

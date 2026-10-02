@@ -4,7 +4,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore, InboxSession, isConvexId } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
-import { useRecoveryPoll } from "./useRecoveryPoll";
+import { INBOX_RECOVERY_STALE_MS, useRecoveryPoll } from "./useRecoveryPoll";
 import { queryWithSignal } from "../lib/queryWithSignal";
 import { warmVisibleSessions } from "./inboxWarm";
 
@@ -126,7 +126,7 @@ export function useSyncTeamInboxSessions() {
     if (!applyTeamListPayload(fresh, (activeTeamId as string | undefined) ?? null)) return;
     warmVisibleSessions(convex);
     lastSyncRef.current = Date.now();
-  }, [convex, active, activeTeamId]), 15_000);
+  }, [convex, active, activeTeamId]), INBOX_RECOVERY_STALE_MS);
 
   useRecoveryPoll(lastLivenessRef, useCallback(async (signal: AbortSignal) => {
     if (!active) return;
@@ -140,7 +140,7 @@ export function useSyncTeamInboxSessions() {
     // Same applier as the subscription: a recovery pass must not fork shapes.
     if (!applyTeamLivenessPayload(activeTeamId, fresh)) return;
     lastLivenessRef.current = Date.now();
-  }, [convex, active, activeTeamId]), 15_000);
+  }, [convex, active, activeTeamId]), INBOX_RECOVERY_STALE_MS);
 
   return teamSessions;
 }

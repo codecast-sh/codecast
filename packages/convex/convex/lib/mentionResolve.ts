@@ -18,7 +18,7 @@ import {
 import { entityMentionRegex } from "@codecast/shared/entities";
 import { emailLocalHandle } from "../chatText";
 import { liveRoleByHandle } from "./orgAccess";
-import { CHIEF_OF_STAFF_HANDLE } from "@codecast/shared/contracts/orgLead";
+import { EXECUTIVE_ASSISTANT_HANDLE, HEAD_OF_PEOPLE_HANDLE } from "@codecast/shared/contracts/orgLead";
 import { findConversationByAnyRefWhere } from "../conversationSessionLookup";
 import { canSendProductMessage } from "../pendingMessages";
 
@@ -194,13 +194,22 @@ export async function resolveChatMentions(
   // The team's role, then the sender's personal one; never a retired seat.
   const roleByHandle = async (handle: string): Promise<Doc<"org_roles"> | null> =>
     (await liveRoleByHandle(ctx, { team_id: teamId }, handle)) ?? (await liveRoleByHandle(ctx, { scope_user_id: senderId }, handle));
+  const workspaceAgentRole = async (): Promise<Doc<"org_roles"> | null> => {
+    for (const boundary of [{ team_id: teamId }, { scope_user_id: senderId }]) {
+      for (const h of [EXECUTIVE_ASSISTANT_HANDLE, HEAD_OF_PEOPLE_HANDLE]) {
+        const role = await liveRoleByHandle(ctx, boundary, h);
+        if (role) return role;
+      }
+    }
+    return null;
+  };
   for (const written of handles) {
     // `@anchor` names the workspace's agent once one stands (org-staffing.md
-    // S12, S30): the team's Chief of Staff when one does, else the Head of
+    // S12, S30): the team's Executive Assistant when one does, else the Head of
     // People. The bot named Anchor is its identity, so the mention reaches
-    // the seat, not the bot. `@chief-of-staff` with no chief standing reaches
-    // the Head of People through rolesByHandle's legacy rule.
-    const handle = written.toLowerCase() === ANCHOR_ALIAS ? (await roleByHandle(CHIEF_OF_STAFF_HANDLE))?.handle ?? written : written;
+    // the seat, not the bot. `@chief-of-staff` reaches the Head of People
+    // through rolesByHandle's legacy rule.
+    const handle = written.toLowerCase() === ANCHOR_ALIAS ? (await workspaceAgentRole())?.handle ?? written : written;
     const person = matchHandle(roster, written);
     if (person && !person.is_bot) continue;
     if (SESSION_SHORT_ID_RE.test(handle)) {

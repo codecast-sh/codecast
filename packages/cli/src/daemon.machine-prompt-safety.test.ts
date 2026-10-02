@@ -8,6 +8,7 @@ import { AGENT_CLIENTS } from "../../shared/contracts/agentClients";
 import { authorizesTeardown } from "../../shared/contracts/liveness";
 import { isClaudeAutoContinueLine, isRecoveryContinueClientId } from "../../shared/contracts/apiErrorBanner";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission";
+import { LaunchPromptCarriedError, transcriptHasUserPrompt } from "./launchPrompt";
 import { clearPromptHolds, holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, setPendingRedrive } from "./pendingPromptHold";
 import { clientAcceptsBracketedPaste, deliverTextIntoPane, pasteAndSubmitText, prepareInjectedContent, PASTE_START, PASTE_END } from "./tmuxPaste";
 import { blockAt, functionBlock } from "./test-helpers/sourceRegion";
@@ -127,6 +128,7 @@ function fixture(transport = "tmux", cached = true) {
   const messages = new Map<string, any>();
   const statuses: Array<{ messageId: string; status: string }> = [];
   const injectedMessageTs = new Map<string, { ts: number; conversationId: string; confirmed: boolean; pasted: boolean }>();
+  const launchPromptCarries = new Map<string, { conversationId: string; tmuxSession: string; projectPath: string; sessionId: string; transcript: string; startedAt: number }>();
   const syncService = {
     getConversationOwnerInfo: async () => null,
     claimPendingMessageForDelivery: async (id: string) => messages.get(id) ?? { _id: id, conversation_id: "conv" },
@@ -139,6 +141,7 @@ function fixture(transport = "tmux", cached = true) {
   const deps = {
     fs, os, path, randomUUID, CONFIG_DIR: directory, EXEC_TIMEOUT_MS: 1000,
     isMachineDeliveredMessage, AGENT_CLIENTS, authorizesTeardown, PendingDeliveryHeldError, createDeliveryAdmission,
+    LaunchPromptCarriedError, transcriptHasUserPrompt, launchPromptCarries,
     holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, typedPollAnswer,
     clientAcceptsBracketedPaste, deliverTextIntoPane, pasteAndSubmitText, prepareInjectedContent, PASTE_START, PASTE_END,
     tmuxExec, execAsync,
@@ -224,12 +227,13 @@ function fixture(transport = "tmux", cached = true) {
       "buildAppleScript", "captureAppleScriptPane", "injectViaAppleScript", "writeTerminalInjectionScript",
       "findKittyWindowId", "mapKeyForKitty", "kittySendText", "writeKittyInjectionPayload", "injectViaKitty",
       "findWezTermPaneId", "weztermSendText", "weztermSendKeys", "injectViaWezTerm", "normalizeTty", "getTerminalLabel", "injectViaTerminal",
-      "deliverMessage", "autoResumeSessionInner", "probeStartedPane", "classifyStartedPane", "paneContentAfterLaunchEcho",
+      "deliverMessage", "deliverMessageIntoSession", "launchPromptCarried", "settleLaunchPrompt",
+      "autoResumeSessionInner", "probeStartedPane", "classifyStartedPane", "paneContentAfterLaunchEcho",
     ];
     const constants = [
       "RESUME_CWD_PICKER_RE", "DRAIN_MAX_CYCLES", "stripComposerChrome", "TMUX_WINDOW_WIDTH", "TMUX_WINDOW_HEIGHT", "TMUX_SIZE_ARGS", "TMUX_ONLY_TERMINALS", "DELIVERY_TIMEOUT_MS", "TRUST_PROMPT_RE",
       "PANE_TITLE_WORKING", "SUBMIT_VERDICT_TTL_MS", "submitVerdicts",
-      "ANSI_ESCAPE_RE",
+      "ANSI_ESCAPE_RE", "LAUNCH_PROMPT_CARRY_MS", "LAUNCH_PROMPT_SETTLE_MS",
     ].map(name => {
       const line = source.split("\n").find(l => new RegExp(`^(?:export )?\\s*const ${name} =`).test(l));
       if (!line) throw new Error(`Missing constant ${name}`);
@@ -275,7 +279,7 @@ function fixture(transport = "tmux", cached = true) {
   }
   const api = fixtureFactory(...Object.values(deps));
   return {
-    ...api, state, events, bodies, commands, captureSizes, hooks, timers, clock, prompt, pendingInteractivePrompts, lastEmittedSyntheticPrompt, closed, statuses, deps,
+    ...api, state, events, bodies, commands, captureSizes, hooks, timers, clock, prompt, launchPromptCarries, directory, pendingInteractivePrompts, lastEmittedSyntheticPrompt, closed, statuses, deps,
     deliver: (body: string, id = "update") => api.deliverMessage("conv", body, deps.conversationCache, syncService, id, {}),
     scan: async (rows: Array<{ _id: string; content: string }>) => {
       for (const row of rows) messages.set(row._id, { ...row, conversation_id: "conv" });
@@ -811,5 +815,64 @@ describe("machine prompt delivery safety", () => {
     expect(answer.script).toContain('tell s to write text "Enter" without newline');
     const machinePaste = f.buildAppleScript("iTerm2", "/dev/ttys-test", session("hello"), null, false, true, false);
     expect(machinePaste.script).not.toContain('tell s to write text ""');
+  });
+
+  // A session launched with its first message as the prompt argument: delivery
+  // confirms that message from the transcript and never puts it in the composer.
+  describe("a message the launch command carried", () => {
+    const userRow = JSON.stringify({ type: "user", message: { role: "user", content: "the brief" } });
+    const carry = (f: ReturnType<typeof fixture>, opts: { taken?: boolean; age?: number } = {}) => {
+      const transcript = path.join(f.directory, "sid.jsonl");
+      if (opts.taken) fs.writeFileSync(transcript, `${JSON.stringify({ type: "mode", mode: "normal" })}\n${userRow}\n`);
+      f.launchPromptCarries.set("update", { conversationId: "conv", tmuxSession: "target", projectPath: f.directory, sessionId: "sid", transcript, startedAt: f.clock.now - (opts.age ?? 0) });
+    };
+
+    test.each([true, false])("is delivered by its transcript row, not a paste (session linked: %s)", async cached => {
+      const f = fixture("tmux", cached);
+      f.state.menu = null;
+      carry(f, { taken: true });
+      await expect(f.deliver("the brief")).resolves.toBe(true);
+      expect(f.events).toEqual([]);
+      expect(f.launchPromptCarries.size).toBe(0);
+    });
+
+    test("is not pasted by a delivery that was already waiting for the session to start", async () => {
+      const f = fixture("tmux", false);
+      f.state.menu = null;
+      // The start registers the carry after delivery's first admission, while
+      // delivery is still reading the pane for readiness.
+      f.hooks.capture = () => { if (!f.launchPromptCarries.size) carry(f, { taken: true }); };
+      await expect(f.deliver("the brief")).resolves.toBe(true);
+      expect(f.events).toEqual([]);
+      expect(f.bodies).toEqual([]);
+    });
+
+    test("is held while the agent is still booting, and pasted by nobody", async () => {
+      const f = fixture();
+      f.state.menu = null;
+      carry(f);
+      await expect(f.deliver("the brief")).rejects.toThrow("AGENT_STDIN_NOT_READY");
+      expect(f.events).toEqual([]);
+      expect(f.launchPromptCarries.size).toBe(1);
+    }, 60_000);
+
+    test("goes back to the composer when the launch died", async () => {
+      const f = fixture();
+      f.state.menu = "zsh: command not found: claude";
+      carry(f);
+      await expect(f.deliver("the brief")).resolves.toBe(false);
+      expect(f.events).toEqual([]);
+      f.state.menu = null;
+      await expect(f.deliver("the brief")).resolves.toBe(true);
+      expect(f.bodies).toEqual(["the brief"]);
+    });
+
+    test("goes back to the composer once the carry has lapsed", async () => {
+      const f = fixture();
+      f.state.menu = null;
+      carry(f, { age: 11 * 60_000 });
+      await expect(f.deliver("the brief")).resolves.toBe(true);
+      expect(f.bodies).toEqual(["the brief"]);
+    });
   });
 });
