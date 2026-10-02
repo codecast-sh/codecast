@@ -54,3 +54,20 @@ test("precheck skip records the claimed source and preserves lease ownership", a
   expect(history).toHaveLength(1);
   expect(history[0]).toMatchObject({ kind: "skipped_precheck", source: "recurring" });
 });
+
+// A focus a person gave one run (orgReview.ts): it rides the row through the
+// claim, so the frame the daemon asks for after claiming still names it, and
+// the completed run clears it so the next firing is the routine's own.
+test("a focused run keeps its focus through the claim and drops it when the run completes", async () => {
+  const { ctx, task, args } = await fixture();
+  await applyRunNow(ctx, task, "goal_tree");
+  expect(task.requested_run_focus).toBe("goal_tree");
+  await (claimTask as any)._handler(ctx, args);
+  expect(task.status).toBe("running");
+  expect(task.requested_run_focus).toBe("goal_tree");
+  await (completeTaskRun as any)._handler(ctx, args);
+  expect(task.requested_run_focus).toBeUndefined();
+  await applyRunNow(ctx, task, "goal_tree");
+  await applyRunNow(ctx, task);
+  expect(task.requested_run_focus).toBeUndefined();
+});

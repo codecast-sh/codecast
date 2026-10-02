@@ -3,9 +3,10 @@
 // read by org.brief and org.health as well as the role writers.
 
 import { ORG_AREA_CHANGE_EVENT, SESSION_NEEDS_INPUT_EVENT } from "@codecast/shared/contracts";
+import { COMPANY_REVIEW_TITLE } from "@codecast/shared/contracts/orgReview";
 import { isHeadOfPeopleRole } from "./orgAccess";
 
-export const COMPANY_REVIEW_TITLE = "Company review";
+export { COMPANY_REVIEW_TITLE };
 export const COMPANY_REVIEW_EVERY_MS = 7 * 24 * 60 * 60 * 1000;
 
 // The routine's prompt (org-staffing.md S26): reviewing the structure is one

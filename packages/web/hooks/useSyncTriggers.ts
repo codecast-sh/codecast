@@ -8,6 +8,7 @@ import { ARMED_STATUSES, foreignTriggerConvIds, mergeTriggerRosters, type TaskRo
 import { makeCollectionSig } from "../store/wakeSig";
 import { useSyncCollection, keyRowsBy } from "./useSyncCollection";
 import { useCollectionRows } from "./useCollectionRows";
+import { useQueryNoThrow } from "./useQueryNoThrow";
 
 const api = _api as any;
 
@@ -19,7 +20,7 @@ export function useSyncTriggers(enabled = true) {
 // The fields trigger surfaces render; a change to anything else on the row
 // (lease stamps, retry counters) doesn't wake them.
 export const triggerSig = (t: any) =>
-  `${t.status}|${t.run_at ?? 0}|${t.last_run_at ?? 0}|${t.run_count ?? 0}|${t.display_title ?? t.title}|${t.display_summary ?? ""}|${t.last_run_needs_attention ? 1 : 0}|${t.last_run_failed ? 1 : 0}|${t.last_run_summary ?? ""}|${t.last_run_conversation_id ?? ""}|${t.schedule_type}|${t.interval_ms ?? 0}|${t.mode}|${t.prompt}|${t.precheck ?? ""}|${t.last_precheck_skip_at ?? 0}|${t.last_precheck_skip_reason ?? ""}|${t.last_run_source ?? ""}`;
+  `${t.status}|${t.run_at ?? 0}|${t.last_run_at ?? 0}|${t.run_count ?? 0}|${t.display_title ?? t.title}|${t.display_summary ?? ""}|${t.last_run_needs_attention ? 1 : 0}|${t.last_run_failed ? 1 : 0}|${t.last_run_summary ?? ""}|${t.last_run_conversation_id ?? ""}|${t.schedule_type}|${t.interval_ms ?? 0}|${t.mode}|${t.prompt}|${t.precheck ?? ""}|${t.last_precheck_skip_at ?? 0}|${t.last_precheck_skip_reason ?? ""}|${t.last_run_source ?? ""}|${t.requested_run_source ?? ""}|${t.requested_run_focus ?? ""}`;
 const newestFirst = (a: any, b: any) => (b.created_at ?? 0) - (a.created_at ?? 0);
 
 // Which conversations the viewer sees carry an armed trigger their own roster
@@ -76,6 +77,31 @@ export function useTriggers(): { tasks: any[]; ready: boolean } {
   const foreign = useCollectionRows<any>("foreignTriggers", { sig: triggerSig, sort: newestFirst });
   const tasks = useMemo(() => mergeTriggerRosters(own, foreign, newestFirst), [own, foreign]);
   return { tasks, ready };
+}
+
+/**
+ * Reader: every trigger armed on one standing session (org-staffing.md S25),
+ * armed first, then by next run. The viewer's own roster cannot carry a
+ * trigger armed under another account (the seat's host), so the per
+ * conversation query fills in what the roster lacks, as the header strip
+ * does. Empty without a conversation.
+ */
+export function useSeatTriggers(conversationId: string | null | undefined): TaskRow[] {
+  const { tasks: own } = useTriggers();
+  const { data: foreign } = useQueryNoThrow(api.agentTasks.webListForConversation, conversationId && isConvexId(conversationId) ? { conversation_id: conversationId } : "skip");
+  return useMemo<TaskRow[]>(() => {
+    if (!conversationId) return [];
+    const seen = new Set<string>();
+    const all: TaskRow[] = [];
+    for (const t of [...(own as TaskRow[]), ...((foreign ?? []) as TaskRow[])]) {
+      if (t.originating_conversation_id !== conversationId || seen.has(t._id)) continue;
+      seen.add(t._id);
+      all.push(t);
+    }
+    const armed = (t: TaskRow) => (ARMED_STATUSES.has(t.status) ? 0 : 1);
+    all.sort((a, b) => armed(a) - armed(b) || (a.run_at ?? Infinity) - (b.run_at ?? Infinity));
+    return all;
+  }, [own, foreign, conversationId]);
 }
 
 /**

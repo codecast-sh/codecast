@@ -19,6 +19,7 @@ import { configuredCloudWakeHosts, getCloudWakeHostForConversation } from "./clo
 import { enqueuePendingMessage, reachableRole } from "./pendingMessages";
 import { triggerFiringSource, normalizeThreadState, runOwnerWakeOf, runParentOf, runResultThreadOf, triggerRunFrame, formatScheduledTask, type RoleCard, type RunOutcome, type WaitingSession } from "@codecast/shared/contracts";
 import type { AreaChange } from "@codecast/shared/contracts/orgAreas";
+import { isOrgReviewFocusKey, type OrgReviewFocusKey } from "@codecast/shared/contracts/orgReview";
 import { findRoleEventTrigger, ROLE_NEEDS_INPUT_SPEC, roleEventSpecsFor, type RoleEventSpec } from "./lib/orgRoutine";
 import { roleServedInitiatives } from "./lib/roleInitiatives";
 import { metricLine } from "@codecast/shared/contracts/initiative";
@@ -130,8 +131,11 @@ export async function applyActivate(ctx: TaskCtx, task: Doc<"agent_tasks">) {
   return true;
 }
 
-export async function applyRunNow(ctx: TaskCtx, task: Doc<"agent_tasks">) {
-  await patchTask(ctx, task, { status: "scheduled", ...offCadence(task, Date.now()), requested_run_source: "manual" });
+/** Run now. `focus` narrows this one run (ORG_REVIEW_FOCUSES): it rides the
+ *  row into the run's frame and clears when the run completes; a plain run
+ *  now clears a focus still waiting. */
+export async function applyRunNow(ctx: TaskCtx, task: Doc<"agent_tasks">, focus?: OrgReviewFocusKey) {
+  await patchTask(ctx, task, { status: "scheduled", ...offCadence(task, Date.now()), requested_run_source: "manual", requested_run_focus: focus });
   return true;
 }
 
@@ -1165,6 +1169,8 @@ function completedTaskRunFields(
     last_run_needs_attention: !!args.needs_attention,
     lease_holder: undefined,
     lease_expires_at: undefined,
+    // The focus was for this run; the next one is the routine's own.
+    requested_run_focus: undefined,
   };
   if (!isLateSummary) {
     updates.run_count = task.run_count + 1;
@@ -2057,7 +2063,20 @@ export const webCreate = mutation({
 export const webPause = webTaskAction(applyPause);
 export const webResume = webTaskAction(applyResume);
 export const webReactivate = webTaskAction(applyReactivate);
-export const webRunNow = webTaskAction(applyRunNow);
+// Run now from the web, with an optional focus for this one run (the Head
+// of People's "Plan the goal tree"): the same verb, logged the same way.
+export const webRunNow = mutation({
+  args: { task_id: v.id("agent_tasks"), focus: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Unauthorized");
+    if (args.focus !== undefined && !isOrgReviewFocusKey(args.focus)) throw new Error(`Unknown review focus: ${args.focus}`);
+    const task = await getManageableTask(ctx, args.task_id, userId);
+    if (!task) return false;
+    const focus = args.focus as OrgReviewFocusKey | undefined;
+    return logVerb(ctx, task, { userId, source: "web" }, (c, t) => applyRunNow(c, t, focus));
+  },
+});
 export const webCancel = webTaskAction(applyCancel);
 
 // Delete a trigger row with its revision history, then restamp the old home:

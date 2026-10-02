@@ -273,6 +273,9 @@ export interface ScheduledTaskFrame {
   trigger?: string;
   /** The event that fired it; absent on a scheduled or manual run. */
   event?: string;
+  /** What a person focused this run on (orgReview.ts ORG_REVIEW_FOCUSES), as
+   *  the run line says it; absent on the routine's own run. */
+  focus?: string;
   waiting?: WaitingSession | null;
   /** A change in the company that lasted (org-staffing.md S29), when the
    *  area watch fired the Head of People's trigger for it. */
@@ -295,7 +298,7 @@ const tagAttr = (head: string, k: string) => {
 
 /** The one writer of the frame a trigger run arrives in. */
 export function formatScheduledTask(f: ScheduledTaskFrame): string {
-  const head = tagAttrs([["title", f.title], ["task-id", f.task_id], ["trigger", f.trigger], ["event", f.event]]);
+  const head = tagAttrs([["title", f.title], ["task-id", f.task_id], ["trigger", f.trigger], ["event", f.event], ["focus", f.focus]]);
   const w = f.waiting;
   const waiting = w
     ? `\n<waiting-session ${tagAttrs([["id", w.short_id], ["title", w.title], ["why", w.why], ["since", String(w.since)], ["role", w.role], ["decision", w.decision]])}>${w.state.trim()}</waiting-session>\n\n`
@@ -386,6 +389,7 @@ export function parseScheduledTask(rawContent: string | null | undefined): Sched
     ...(tagAttr(m[1], "task-id") ? { task_id: tagAttr(m[1], "task-id") } : {}),
     ...(tagAttr(m[1], "trigger") ? { trigger: tagAttr(m[1], "trigger") } : {}),
     ...(tagAttr(m[1], "event") ? { event: tagAttr(m[1], "event") } : {}),
+    ...(tagAttr(m[1], "focus") ? { focus: tagAttr(m[1], "focus") } : {}),
     waiting,
     ...(change ? { change } : {}),
     ...(workers.length ? { workers } : {}),

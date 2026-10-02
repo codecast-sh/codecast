@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { formatScheduledTask, parseScheduledTask, type RoleCard } from "./machineMessages";
+import { ORG_REVIEW_FOCUSES } from "./orgReview";
 import { runOwnerOf, runOwnerWakeOf, runParentOf, runResultThreadOf, STASHED_RUN_NOTE, triggerLifecycleInstructions, triggerRunFrame } from "./triggerLifecycle";
 
 // A fresh run's owner is the session that armed a once trigger; every other
@@ -121,5 +122,17 @@ describe("triggerRunFrame", () => {
     const frame = triggerRunFrame(routine, { role, stashed: false });
     expect(frame).not.toContain("Trigger lifecycle defaults");
     expect(parseScheduledTask(frame)).toMatchObject({ trigger: "tr-1", role, body: "Check your area." });
+  });
+
+  // A focus a person gave one run (orgReview.ts): named on the frame, its
+  // words ahead of the routine's own, and gone from the next plain run.
+  test("a focused run names its focus and leads with the focus's words; an unknown key is no focus", () => {
+    const focused = triggerRunFrame({ ...routine, requested_run_focus: "goal_tree" }, { role, stashed: false });
+    const read = parseScheduledTask(focused)!;
+    expect(read.focus).toBe(ORG_REVIEW_FOCUSES.goal_tree.label);
+    expect(read.body).toBe(`${ORG_REVIEW_FOCUSES.goal_tree.prompt}\n\nCheck your area.`);
+    expect(read.role).toEqual(role);
+    expect(parseScheduledTask(triggerRunFrame(routine, { role, stashed: false }))!.focus).toBeUndefined();
+    expect(triggerRunFrame({ ...routine, requested_run_focus: "nonsense" }, { role, stashed: false })).toBe(before(routine, role, false));
   });
 });
