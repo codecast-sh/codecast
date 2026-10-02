@@ -32,12 +32,20 @@ export async function isSessionOwner(
   conversationId: Id<"conversations">,
   userId: Id<"users">,
 ): Promise<boolean> {
-  const row = await ctx.db
+  return !!(await sessionOwnerRow(ctx, conversationId, userId));
+}
+
+// The user's own session_owners row for a conversation, or null.
+export async function sessionOwnerRow(
+  ctx: { db: any },
+  conversationId: Id<"conversations">,
+  userId: Id<"users">,
+): Promise<any | null> {
+  return (await ctx.db
     .query("session_owners")
     .withIndex("by_conversation_user", (q: any) =>
       q.eq("conversation_id", conversationId).eq("user_id", userId))
-    .first();
-  return !!row;
+    .first()) ?? null;
 }
 
 // The person who started this session: the original author if the session

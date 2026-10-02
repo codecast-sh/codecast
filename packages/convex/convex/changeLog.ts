@@ -9,6 +9,7 @@
 // The pure helpers (scopeFromDoc / decidePatchScope) are unit-tested without a
 // db; the db-touching emit/lookup are thin shells around them.
 import {
+  appendSyncAction,
   buildCargo,
   emitScopeAction,
   emitSyncActions,
@@ -16,6 +17,7 @@ import {
   revokeStaleScope,
   scopesForChange,
   syncLogDisabled,
+  userScopeKey,
   type ActionExtra,
   type SyncAckCollector,
 } from "./syncLog";
@@ -48,7 +50,7 @@ function syncScopeFromStamp(stamp: AccessStamp | null): ChangeScope {
   return {
     owner_user_id: stamp?.access_owner,
     workspace: stamp?.access_key,
-    assignee: stamp?.access_grants?.[0],
+    grants: stamp?.access_grants ?? [],
   };
 }
 
@@ -79,9 +81,10 @@ export type ChangeScope = {
   owner_user_id: string | undefined;
   team_id?: string | undefined;
   // Access facts the sync log fans out on (sync-log-cargo): the stored
-  // workspace key and a task's assignee. change_log ignores them.
+  // workspace key and the explicit per-user grants (a task's assignee, a
+  // conversation's session owners). change_log ignores them.
   workspace?: string;
-  assignee?: string;
+  grants?: string[];
 };
 
 // The owner/team scope of an entity, read straight off its document. Every
@@ -159,6 +162,30 @@ export async function emitChange(
   }
 }
 
+// A new session owner gets the conversation in their own user scope, whichever
+// writer added the row (addSessionOwnerRow, an undo's restore insert, the
+// legacy-owner backfill). The action is thin: no cargo, so the owner's applier
+// fetches the row through byIds, which admits owners. Its stamp comes from the
+// post-write conversation, whose grants now name the new owner, so getRange
+// projects it as an upsert for them. A runner who is also an owner already
+// holds the conversation in that scope, so nothing is appended for them.
+//
+// Owner REMOVAL emits nothing, on purpose. A revocation delete in the departed
+// owner's scope reaches their client as a held-row delete: a byIds probe, then
+// a durable exclude that prunes the row from their team board even when the
+// session is still team-visible to them. Disown keeps its own path: the row
+// leaves their inbox list, and their client asks byIds about it without
+// pruning (web settleDisownClaims): a returned row keeps its stamps, an
+// omitted one loses only its ownership claim.
+async function emitOwnerAdded(rawDb: any, collector: SyncAckCollector | null, conversationId: any, ownerId: string): Promise<void> {
+  const conv = await rawDb.get(conversationId);
+  if (!conv?.user_id || String(conv.user_id) === ownerId) return;
+  await appendSyncAction(rawDb, collector, userScopeKey(ownerId), "conversations", String(conversationId), "upsert", {
+    table: "conversations",
+    access: () => accessStampFor({ db: rawDb }, "conversations", conv),
+  });
+}
+
 // Wrap a raw Convex DatabaseWriter so every insert/patch/replace/delete to a
 // tracked table also upserts the entity's change_log row AND appends the entity's
 // sync-log actions (syncLog.ts — the ordered per-scope log that supersedes this
@@ -209,6 +236,8 @@ export function makeChangeTrackedDb(rawDb: any, collector: SyncAckCollector | nu
         }
       } else if (table === "team_memberships" && doc?.user_id && doc?.team_id) {
         await emitScopeAction(rawDb, collector, String(doc.user_id), String(doc.team_id), "scope_added");
+      } else if (table === "session_owners" && doc?.user_id && doc?.conversation_id && !syncLogDisabled()) {
+        await emitOwnerAdded(rawDb, collector, doc.conversation_id, String(doc.user_id));
       }
       return id;
     },

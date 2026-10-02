@@ -1,4 +1,5 @@
 import { mutation, syncAckPositions } from "./functions";
+import { claimTaskOwnership } from "./lib/taskOwner";
 import { normalizeCharacterFields } from "@codecast/shared/contracts/sessionCharacter";
 import { guardClientResolution, personMayResolve, reopenCore, settleClientResolution } from "./sessionDecisions";
 import { createStackWithCore, removeFromStackCore, reorderStackCore } from "./decisionStacks";
@@ -593,12 +594,11 @@ async function linkConversationToObject(
         .first();
       if (!membership) return;
     }
-    await ctx.db.patch(conversationId, {
-      active_task_id: objectId as Id<"tasks">,
-    });
     // The list append and the association rail (best-effort; legacy fields
     // stay authoritative) are one helper — see conversationLinks.ts.
     await addConversationToWorkItem(ctx, userId, "task", task, conversationId);
+    // A person linked this session to the task: it becomes the one owner.
+    await claimTaskOwnership(ctx, conv, task, { take: true });
     return;
   }
 
@@ -1678,10 +1678,11 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // Trigger verbs (store triggerAction / deleteTrigger). The client flipped
   // the agent_tasks row on its draft; these run the real mutations, which own
   // leases, rescheduling and the run-now kick.
+  // runNow may carry a focus for that one run (orgReview.ts); the other verbs ignore it.
   triggerAction: async (
     ctx,
     userId,
-    [taskId, verb]: [string, "pause" | "resume" | "runNow" | "cancel" | "reactivate"],
+    [taskId, verb, focus]: [string, "pause" | "resume" | "runNow" | "cancel" | "reactivate", string?],
   ) => {
     const fn = {
       pause: api.agentTasks.webPause,
@@ -1691,7 +1692,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       reactivate: api.agentTasks.webReactivate,
     }[verb];
     if (!fn) throw new Error(`Unknown trigger verb: ${verb}`);
-    return await (ctx as any).runMutation(fn, { task_id: taskId });
+    return await (ctx as any).runMutation(fn, { task_id: taskId, ...(verb === "runNow" && focus ? { focus } : {}) });
   },
   deleteTrigger: async (ctx, userId, [taskId]: [string]) => {
     await (ctx as any).runMutation(api.agentTasks.webDelete, { task_id: taskId });
