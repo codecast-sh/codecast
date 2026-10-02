@@ -1,14 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { CHIEF_OF_STAFF_HANDLE, registerOrgInitCommands } from "./orgInit";
+import { HEAD_OF_PEOPLE_HANDLE, registerOrgInitCommands } from "./orgInit";
 import { Command } from "commander";
 import { apply, applyStack, buildOrgAnalyzerPrompt, buildReviseOps, coverageLine, findOpenOrgProposal, listProposals, orderForApply, proposalUrl, propose, revise, runAnalyzer, staff, summarizeInputs } from "./orgInitRun";
-import { chiefOfStaffPrompt } from "@codecast/shared/contracts/chiefOfStaffPrompt";
+import { headOfPeoplePrompt } from "@codecast/shared/contracts/headOfPeoplePrompt";
 import { orgProposalBlock } from "@codecast/shared/contracts/orgProposal";
 
-// The review prompt is the Chief of Staff's own text
-// (docs/architecture/chief-of-staff-prompt.md), filled in for the workspace.
+// The review prompt is the Head of People's own text
+// (docs/architecture/head-of-people-prompt.md), filled in for the workspace.
 
-const summary = { projects: 2, plans: 1, tasks_open: 5, members: 3, sessions_30d: 40, roles: 0, git_roots: ["/Users/me/src/app"], chief_of_staff: false, stale: { plans: 0, tasks: 0, projects: 0 } };
+const summary = { projects: 2, plans: 1, tasks_open: 5, members: 3, sessions_30d: 40, roles: 0, git_roots: ["/Users/me/src/app"], head_of_people: false, stale: { plans: 0, tasks: 0, projects: 0 } };
 const deps = (over: Partial<Parameters<typeof runAnalyzer>[0]> = {}) => ({
   cliPost: async () => null,
   readWorkspace: async () => ({ kind: "team" as const, team_id: "teams_a" }),
@@ -35,26 +35,26 @@ function trapExit(): { code: () => number | undefined; restore: () => void } {
 }
 
 describe("buildOrgAnalyzerPrompt", () => {
-  test("is the Chief of Staff's own text, with the workspace, the person and the --team flag filled in", () => {
+  test("is the Head of People's own text, with the workspace, the person and the --team flag filled in", () => {
     const p = buildOrgAnalyzerPrompt({ mode: "review", workspace: "Acme", teamFlag: "Acme", summary: { ...summary, person: "Ada" } });
-    expect(p).toBe(chiefOfStaffPrompt({ workspace: "Acme", person: "Ada", mode: "review", team: "Acme" }));
-    expect(p.startsWith("You are the Chief of Staff for Acme. You report to Ada.")).toBe(true);
+    expect(p).toBe(headOfPeoplePrompt({ workspace: "Acme", person: "Ada", mode: "review", team: "Acme" }));
+    expect(p.startsWith("You are the Head of People for Acme. You report to Ada.")).toBe(true);
     expect(p).toContain('`cast org propose --team "Acme" --spec <file>`');
   });
-  test("with no chief of staff seated, the person is whoever asked for the review", () => {
+  test("with no head of people seated, the person is whoever asked for the review", () => {
     expect(buildOrgAnalyzerPrompt({ mode: "init", workspace: "Acme", summary })).toContain("You report to the person who asked for this review.");
   });
 });
 
 describe("summarizeInputs", () => {
-  test("counts open tasks, lists git roots, sees a chief of staff and whom it reports to, and counts the stale records", () => {
+  test("counts open tasks, lists git roots, sees a head of people and whom it reports to, and counts the stale records", () => {
     expect(summarizeInputs({
       projects: [{}, {}], plans: [{}], tasks: { by_status: { open: 3, done: 9, in_progress: 1, dropped: 2 } },
-      members: [{}], sessions: { total: 7 }, org: { roles: [{ handle: "growth", reports_to: "@chief-of-staff" }, { handle: CHIEF_OF_STAFF_HANDLE, reports_to: "Ada" }] }, git_roots: [{ git_root: "/a" }, { git_root: "/b" }],
+      members: [{}], sessions: { total: 7 }, org: { roles: [{ handle: "growth", reports_to: "@head-of-people" }, { handle: HEAD_OF_PEOPLE_HANDLE, reports_to: "Ada" }] }, git_roots: [{ git_root: "/a" }, { git_root: "/b" }],
       activity: { areas: [], people: [], stale: { plans: [{ short_id: "pl-1" }], tasks: [{}, {}], projects: [] } },
-    })).toEqual({ projects: 2, plans: 1, tasks_open: 4, members: 1, sessions_30d: 7, roles: 2, git_roots: ["/a", "/b"], chief_of_staff: true, person: "Ada", stale: { plans: 1, tasks: 2, projects: 0 } });
+    })).toEqual({ projects: 2, plans: 1, tasks_open: 4, members: 1, sessions_30d: 7, roles: 2, git_roots: ["/a", "/b"], head_of_people: true, person: "Ada", stale: { plans: 1, tasks: 2, projects: 0 } });
     // Inputs from a backend without the activity block count nothing stale.
-    expect(summarizeInputs(null)).toEqual({ projects: 0, plans: 0, tasks_open: 0, members: 0, sessions_30d: 0, roles: 0, git_roots: [], chief_of_staff: false, stale: { plans: 0, tasks: 0, projects: 0 } });
+    expect(summarizeInputs(null)).toEqual({ projects: 0, plans: 0, tasks_open: 0, members: 0, sessions_30d: 0, roles: 0, git_roots: [], head_of_people: false, stale: { plans: 0, tasks: 0, projects: 0 } });
   });
 });
 
@@ -88,7 +88,7 @@ describe("runAnalyzer", () => {
     expect(cap.said()).toContain("https://codecast.sh/org?proposal=op-7");
     expect(cap.said()).not.toContain("cast org apply");
     expect(cap.said()).not.toContain("withdraw");
-    expect(cap.said()).not.toContain("You are the Chief of Staff");
+    expect(cap.said()).not.toContain("You are the Head of People");
     expect(calls.filter(([p]) => p === "/cli/org/proposals").map(([, b]) => b)).toEqual([{ team_id: "teams_a", status: "open" }]);
   });
   // The weekly routine's ordinary Monday: last week's proposal is still open,
@@ -98,7 +98,7 @@ describe("runAnalyzer", () => {
     const cap = capture();
     try { await runAnalyzer(d, "review", {}); } finally { cap.restore(); }
     const p = cap.said();
-    expect(p).toContain("You are the Chief of Staff for Acme.");
+    expect(p).toContain("You are the Head of People for Acme.");
     expect(p).toContain('Still open: op-7 "Company review: Acme", 1 of 6 changes decided.');
     expect(p).not.toContain("--withdraw");
   });
@@ -106,7 +106,7 @@ describe("runAnalyzer", () => {
     const { deps: d } = fake([]);
     const cap = capture();
     try { await runAnalyzer(d, "review", {}); } finally { cap.restore(); }
-    expect(cap.said()).toContain("You are the Chief of Staff for Acme.");
+    expect(cap.said()).toContain("You are the Head of People for Acme.");
     expect(cap.said()).not.toContain("Still open:");
   });
 });
@@ -167,7 +167,7 @@ describe("propose", () => {
     const d = deps({ cliPost: async (path: string, b: any) => { body = [path, b]; return { short_id: "op-9", changes: [{}, {}] }; }, callingSession: () => "sess-1" });
     const cap = capture();
     try {
-      await propose(d, { spec: specFile({ title: "Staffing for Acme", summary_md: "S", mode: "init", changes: [{ change: { kind: "role", name: "Growth", handle: "growth" }, rationale: "r" }, { change: { kind: "adopt", handle: "chief-of-staff", conversation: "sess-1" }, rationale: "r" }] }) });
+      await propose(d, { spec: specFile({ title: "Staffing for Acme", summary_md: "S", mode: "init", changes: [{ change: { kind: "role", name: "Growth", handle: "growth" }, rationale: "r" }, { change: { kind: "adopt", handle: "head-of-people", conversation: "sess-1" }, rationale: "r" }] }) });
     } finally { cap.restore(); }
     expect(body[0]).toBe("/cli/org/propose");
     expect(body[1].team_id).toBe("teams_a");
@@ -235,7 +235,7 @@ describe("apply op-N", () => {
 describe("staff", () => {
   const post = async (options: any, session?: string) => {
     let body: any;
-    const d = { ...deps({ cliPost: async (_p: string, b: any) => { body = b; return { role: { name: "Chief of Staff", handle: "chief-of-staff", short_id: "or-9" }, standing: { short_id: "jx7chief" }, routine: { short_id: "tr-1" }, created: true, adopted: !!options.adopt, already_existed: false }; }, callingSession: () => session }), realCwd: () => "/Users/me/src/app" };
+    const d = { ...deps({ cliPost: async (_p: string, b: any) => { body = b; return { role: { name: "Head of People", handle: "head-of-people", short_id: "or-9" }, standing: { short_id: "jx7chief" }, routine: { short_id: "tr-1" }, created: true, adopted: !!options.adopt, already_existed: false }; }, callingSession: () => session }), realCwd: () => "/Users/me/src/app" };
     const cap = capture();
     try { await staff(d, options); } finally { cap.restore(); }
     return { body, said: cap.said() };

@@ -280,6 +280,26 @@ describe("classifyTmuxLiveState", () => {
     expect(classifyTmuxLiveState(extractTmuxLiveRegion(finished))).toBe("idle");
   });
 
+  // While hooks run, Claude Code puts their progress ahead of the elapsed time
+  // inside the parentheses. Read as idle, the pane reconcile settled a session
+  // mid-turn and it sat in needs input for five minutes (2026-10-02, jx7f4ks).
+  test("busy when the status line names running hooks before the elapsed time", () => {
+    const running = `⏺ Running timeout 500 cast check web 2>&1 | grep -E "Extern…
+  ⎿  $ timeout 500 cast check web 2>&1 | head
+
+✻ Considering… (running PreToolUse hooks… 1/2 · 36m 18s · ↓ 14.1k tokens)
+
+────────────────────────────────────────
+❯
+────────────────────────────────────────
+  session 23%, resets in 3h 21m · week 10%, resets in 3d 15h
+  ⏵⏵ bypass permissions on · 1 shell · ← for agents
+`;
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(running))).toBe("busy");
+    const finished = running.replace(/✻ Considering…[^\n]*/, "✻ Churned for 1s · done 10:22 AM");
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(finished))).toBe("idle");
+  });
+
   // Claude Code 2.1.284 renders queued messages, a "⎿ Tip:" line and notices
   // between the status line and the box. Read as idle, a busy agent's queued
   // message was judged lost and written a second time (2026-09-29, jx74ek4).

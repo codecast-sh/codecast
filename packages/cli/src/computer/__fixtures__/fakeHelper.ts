@@ -22,11 +22,28 @@
 import * as fs from "node:fs";
 import * as net from "node:net";
 
+import { FAKE_SUPPORTS } from "./fakeSupports";
+
 const argv = process.argv.slice(2);
 const flag = (name: string): string | undefined => {
   const i = argv.indexOf(name);
   return i >= 0 ? argv[i + 1] : undefined;
 };
+
+const testPidFile = flag("--test-pid-file");
+if (testPidFile) fs.writeFileSync(testPidFile, String(process.pid));
+
+const testParentPid = Number(flag("--test-parent-pid"));
+if (testParentPid > 0) {
+  setInterval(() => {
+    try {
+      process.kill(testParentPid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") process.exit(0);
+      throw error;
+    }
+  }, 1_000).unref();
+}
 
 const statusFile = flag("--permission-status-file");
 if (statusFile) {
@@ -69,13 +86,7 @@ const capabilities = {
   provider: "codecast-computer-macos-fake",
   providerVersion,
   protocolVersion,
-  supports: {
-    apps: { list: true, bundleIds: true, pids: true },
-    windows: { list: true, targetById: true, targetByIndex: true, focus: false, moveResize: false },
-    observation: { screenshot: true, annotatedScreenshot: false, elementFrames: true, ocr: false },
-    actions: { click: true, typeText: true, pressKey: true, hotkey: true, pasteText: true, scroll: true, drag: false, setValue: true, performAction: true },
-    surfaces: { menus: false, dialogs: false, dock: false, menubar: false },
-  },
+  supports: FAKE_SUPPORTS,
 };
 
 const server = net.createServer((socket) => {

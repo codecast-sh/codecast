@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { computeIngestSyncDelta, provenSyncedPrefix, samePersistedFile, transcriptSignatureWatermark } from "./ingestClient.js";
+import { withMirrorSynced, writeMirrorSynced } from "../cloudAgents/transcript.js";
 
 const sig = (text: string) => createHash("sha256").update(text).digest("hex");
 const msgs = (n: number) => Array.from({ length: n }, (_, i) => ({ uuid: `m${i}` }));
@@ -101,5 +103,37 @@ describe("a cloud agent mirror across a restart", () => {
     expect(keep).toBeLessThan(emptyReturn);
     // A conversation this pass created is kept once, after it exists; a known one is not kept twice.
     expect(pass).toContain("if (mirror && conversationId !== keptConversation) await cloudAgents.keepSession(");
+  });
+
+  // A best-of-3 Codex Cloud task's main session kept 214 rows of another
+  // attempt (jx7d2sy, 2026-10-02): its mirror was re-rendered to one attempt
+  // as the daemon started, when nothing remembered what had been synced.
+  test("a mirror re-rendered across a restart retracts the rows it no longer holds, for the same conversation only", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mirror-synced-"));
+    try {
+      const file = path.join(dir, "task_e_1.jsonl");
+      writeMirrorSynced(file, "conv-1", ["t:user", "t:attempt1", "t:attempt3"]);
+      const now = [{ uuid: "t:user" }, { uuid: "t:attempt1" }, { uuid: "t:note" }];
+      const s = now.map((m) => sig(m.uuid));
+      // The ledger proves nothing for a rewritten file: the saved set alone.
+      const synced = withMirrorSynced(null, file, "conv-1")!;
+      const { newMessages, orphanUuids } = await computeIngestSyncDelta(now, s, synced);
+      expect(orphanUuids).toEqual(["t:attempt3"]);
+      expect(newMessages.map((m) => m.uuid)).toEqual(["t:user", "t:attempt1", "t:note"]);
+      // What the ledger proved stays as proved; the saved rows add only what it lacks.
+      const proved = new Map([["t:user", s[0]]]);
+      expect(await computeIngestSyncDelta(now, s, withMirrorSynced(proved, file, "conv-1")!)).toMatchObject({ orphanUuids: ["t:attempt3"], newMessages: [{ uuid: "t:attempt1" }, { uuid: "t:note" }] });
+      // A recreated conversation never has rows of the old one retracted.
+      expect(withMirrorSynced(null, file, "conv-2")).toBeNull();
+      expect(fs.statSync(path.join(dir, "synced.json")).mode & 0o777).toBe(0o600);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the pass seeds a mirror's synced set from what it saved, and saves it after each commit", () => {
+    const pass = daemon.slice(daemon.indexOf("async function processTranscriptDeltaSessionPass("));
+    expect(pass).toContain("(mirror ? withMirrorSynced(restored ?? null, filePath, conversationCache[sessionId]) : restored)");
+    expect(pass).toContain("writeMirrorSynced(filePath, conversationId, finalSynced.keys())");
   });
 });

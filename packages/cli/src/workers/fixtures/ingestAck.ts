@@ -4,6 +4,8 @@ import path from 'node:path';
 import { execFile } from "../../proc.js";
 import {promisify} from 'node:util';
 import {RetryQueue} from '../../retryQueue.js';
+import {loadScaledMs} from '../../test-helpers/machineLoad.js';
+import {pollUntil} from '../../test-helpers/pollUntil.js';
 const backend=path.resolve(import.meta.dir,'../../../../convex/convex');
 const {ackInjectedForDaemon}=await import(path.join(backend,'pendingMessages.ts'));
 const {makeFakeDb}=await import(path.join(backend,'testDb.ts'));
@@ -23,13 +25,8 @@ export async function ackCustody(f:any) {
     ackInjectedMessages:(...args:any[])=>{calls.push(args);const result=ackInjectedForDaemon({db} as any,args[0],args[1],args[2]);acks.push(result);return result;},
   },{get:(target,key)=>key in target?(target as any)[key]:async()=>true});
   const queue=new RetryQueue({persistPath:path.join(home,'ack-retry.json'),initialDelayMs:1,maxDelayMs:1});
-  const source=fs.readFileSync(path.resolve(import.meta.dir,'../../daemon.ts'),'utf8');
-  const start=source.indexOf('    if (op.type === "addMessages") {',source.indexOf('retryQueue.setExecutor'));
-  const end=source.indexOf('    if (op.type === "addMessage") {',start);
-  assert.ok(start>0&&end>start);
-  const body=new Bun.Transpiler({loader:'ts'}).transformSync('async function execute(op:any){'+source.slice(start,end)+'}');
-  const executor=new Function('syncService','retryQueue','updateState','log',body+';return execute;')(sync,queue,()=>{},()=>{});
-  queue.setExecutor(executor);
+  // The daemon's own retry executor, with the sync state main() hands it.
+  queue.setExecutor((op:any)=>d.executeRetryOperation(op,{syncService:sync,retryQueue:queue,updateState:()=>{},conversationCache:cache,pendingMessages:pending}));
   const setup=(id:string)=>{cache[id]='conv-'+id;tables.conversations.push({_id:cache[id],user_id:'fixture-owner',has_pending_messages:true});const p=path.join(home,id+'.jsonl');fs.writeFileSync(p,claudeLine(id+'-baseline','baseline'));return p;};
   // `pasted` is the fact collectPastedInjectedIds reads: a pre-paste mark is
   // not a paste, and an ack on one would terminalize a row whose paste never
@@ -41,12 +38,10 @@ export async function ackCustody(f:any) {
   const status=(id:string)=>tables.pending_messages.find((p:any)=>p._id===id)?.status;
   try {
     const id='ack-queued',p=setup(id);failed=true;await assert.rejects(run(p,id),/retains unread data/);assert.equal(getPosition(p),0);assert.equal(queue.getQueueSize(),1);
-    failed=false;queue.start();queue.notifyConnectionRestored();const deadline=Date.now()+3000;
-    while(queue.getQueueSize()&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,10));
-    assert.equal(queue.getQueueSize(),0);queue.stop();
+    failed=false;queue.start();queue.notifyConnectionRestored();await pollUntil(()=>!queue.getQueueSize(),'queued ACK retry drain',{ms:3000,every:10});queue.stop();
     const newer=paste(id,'newer-not-echoed');
     fs.writeFileSync(path.join(home,'ack-restart.json'),JSON.stringify({file:p,id,conversationId:cache[id],pending:tables.pending_messages.find((row:any)=>row._id===newer),row:rows.get(cache[id]+':'+id+'-baseline')}));
-    const restarted=await promisify(execFile)(process.execPath,[path.join(import.meta.dir,'ingestProduction.ts'),String(f.enabled),'ack-restart'],{env:process.env,timeout:15_000,maxBuffer:1024*1024});
+    const restarted=await promisify(execFile)(process.execPath,[path.join(import.meta.dir,'ingestProduction.ts'),String(f.enabled),'ack-restart'],{env:process.env,timeout:loadScaledMs(15_000),maxBuffer:1024*1024});
     assert.ok(restarted.stdout.includes('"coldAckSuppressed":true'));
     await run(p,id);await Promise.all(acks);
     assert.equal(status(newer),'injected','queued reread must not ACK a newer prompt');assert.equal(rows.get(cache[id]+':'+id+'-baseline').client_id,undefined);assert.equal(calls.length,0);
