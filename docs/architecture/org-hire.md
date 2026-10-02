@@ -465,6 +465,86 @@ files the project under one.
   person who did not build it, with the setup list cleared one item at a
   time and the first routine activated from the role page.
 
+## H12. The learning loop: opted-in instances teach the template
+
+H9 moves a lesson when a role chooses to write one. H12 adds the loop that
+finds lessons nobody wrote, on a schedule, and carries them through H9's own
+pipeline (lesson rows, publisher review, release, update policies) to every
+instance. Decided by the founder on 2026-10-02: opt in per workspace, offline
+as Codecast's own work, lessons generalized before they leave the workspace.
+
+**The opt-in** is one row per workspace, `org_template_learning: { workspace
+(the access key), enabled, changed_by, changed_at }`; no row means off. It is
+a person's choice: a team's admin, or the owner of a personal workspace, never
+an agent session. One switch with one sentence
+(`LEARNING_OPT_IN_SENTENCE`, shared, so every surface says the same thing)
+shows where a person meets a template: the hire form and the role page's
+Template section. The sentence says what leaves (generalized lessons only:
+never transcripts, quotes, names, customer data or code) and what comes back
+(improvements to the templates the workspace uses). `cast org template
+learning [on|off]` is the same switch from a person's terminal. The role page
+lists the lessons learned from that role, so the workspace reads exactly what
+left it.
+
+**Extraction runs on the server, inside the workspace's boundary.** The
+publisher's scheduled run never reads a session: a transcript that reached the
+run would sit in the Codecast team's session history, which is the thing the
+opt-in promises cannot happen. `cast org template learn pass <template>`
+calls the action `orgTemplateLearning.learnPass` (Codecast's publishers only,
+Codecast's templates only). For each instance of the template whose workspace
+is opted in, the server:
+
+1. builds a digest of what happened since the instance's last pass
+   (`learning.at` on the instance row): what people typed to the role in its
+   standing session and its hands, with the role's line before each; setup
+   steps left open or skipped; routines that failed, were never turned on or
+   are not ready; evidence that failed or went stale. The opt-in is read
+   again here, at the read, so a workspace that turned it off is not read by a
+   pass already under way.
+2. asks a model for lessons about the template, with the instruction to
+   generalize: say what the template should do differently, and carry nothing
+   that identifies the workspace.
+3. refuses any lesson that carries an email, a URL or domain, an id (codecast
+   short ids, session ids, long hex, issue numbers), a quoted passage, a code
+   block, or a name from the workspace (its people, team, projects, instance,
+   handle, answers and host), by `lessonLeaks` in
+   `shared/contracts/orgTemplateLearning.ts`. A refused lesson is dropped and
+   counted by its reason; its text goes nowhere.
+4. files what passed through H9's lesson path (`org_template_lessons`, the
+   publisher's key, `source: "learning"`, no evidence links) and advances the
+   instance's cursor. A structural signal (a stalled step, a failed run) is
+   remembered on the instance so one stall teaches once.
+
+**From lessons to a release** is the publisher's run, on the machine with the
+template folders (`~/src/platform/packs/<id>`): a recurring `--spawn` trigger
+whose prompt is `docs/prompts/template-learning.md`, gated by
+`cast org template learn due`. Per template it runs the pass, reads `cast org
+template learn status`, and when a draft is due (three open lessons, or one
+older than two weeks) folds the open lessons into the folder, bumps the
+version, writes the changelog, validates (`cast org template inspect`, the
+pack's tests), publishes as canary, marks the lessons accepted and moves the
+canary instances (`learn rollout`). When the canary is clean it publishes the
+same version as stable and marks the lessons released. A lesson that would
+widen an authority, a cap or a tool is never folded in (H9); it stays open for
+a person.
+
+**Clean** is decided in code (`canaryVerdict`): the release has been canary
+for three days, at least one canary instance runs it, every one of them has
+completed a routine run on it, none has a failed last run, and no lesson
+learned since names that version. With no canary instance, nothing promotes
+without a person.
+
+**Instances follow their policy** (H9), through one mechanism: an upgrade
+waits on the instance row as `pending_upgrade` and the host step performs it.
+`cast org template bind` now upgrades from the record first when the row
+carries an accepted upgrade or `--to <version>` is given (download, verify
+against the release's digest, the existing journalled upgrade). Canary:
+`learn rollout` sets the pending upgrade and queues the host step on each
+canary instance's machine, which is what a person chose with "the publisher
+updates it". Stable: the role page's update line gains Update (the upgrade
+proposal) and, once accepted, the button that runs it on the machine. Manual:
+`bind --to` by hand.
+
 ## As built (2026-09-18), in files the W7 wave does not touch
 
 - **Manifest v2** in `packages/cli/src/orgTemplateArtifact.ts` (`validateTemplate`,

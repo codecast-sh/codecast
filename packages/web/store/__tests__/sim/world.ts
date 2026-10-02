@@ -30,6 +30,7 @@ import { makeSimBackend, type Principal, type SimBackend, type SimClient } from 
 import { SimLabels } from "./labels";
 import { Net, type Delivery } from "./net";
 import * as realm from "./realm";
+import { INBOX_RECOVERY_STALE_MS } from "../../../hooks/useRecoveryPoll";
 import { makeActors, type Actors } from "./actors";
 import { SimDevice } from "./device";
 import { windowOnline, type BootScope, type SimWindow, type SimWindowWorld } from "./window";
@@ -128,6 +129,12 @@ export class SimWorld implements SimWindowWorld {
   readonly seed: number;
   /** Epoch minute the generated sessions are dated against. */
   readonly epoch: number;
+
+  /** After a clock jump, each host runs the recovery polls the app would have (SimWindow.recoveryPoll). */
+  afterAdvance(ms: number): void {
+    if (ms < INBOX_RECOVERY_STALE_MS) return;
+    for (const w of this.windows.values()) if (w.role === "host" && !w.closed) w.recoveryPoll();
+  }
 
   private readonly opts: WorldOptions;
   private readonly teams = new Map<string, TeamOptions & { members: string[] }>();

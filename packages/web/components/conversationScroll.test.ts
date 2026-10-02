@@ -84,6 +84,7 @@ describe("shouldLoadOlder", () => {
     isLoadingOlder: false,
     isLoadingNewer: false,
     cooldownActive: false,
+    underfilled: false,
   };
 
   test("loads when the user has scrolled up to near the top", () => {
@@ -129,6 +130,22 @@ describe("shouldLoadOlder", () => {
 
   test("stands down during a pagination/jump cooldown", () => {
     expect(shouldLoadOlder({ ...can, cooldownActive: true })).toBe(false);
+  });
+
+  // A tail window of tool calls folds to one short row in condensed and compact,
+  // so the list never scrolls and no scroll-up can ever ask for the prompt and
+  // the reply above it: the reader saw a blank conversation. A list that cannot
+  // scroll loads older pages until it can, without waiting for intent.
+  test("loads while the window does not fill the viewport, with no scroll intent", () => {
+    expect(shouldLoadOlder({ ...can, userScrolled: false, nearTop: true, underfilled: true })).toBe(true);
+  });
+
+  test("an underfilled window still waits for in-flight loads and the cooldown", () => {
+    const fill = { ...can, userScrolled: false, underfilled: true };
+    expect(shouldLoadOlder({ ...fill, isLoadingOlder: true })).toBe(false);
+    expect(shouldLoadOlder({ ...fill, isLoadingNewer: true })).toBe(false);
+    expect(shouldLoadOlder({ ...fill, cooldownActive: true })).toBe(false);
+    expect(shouldLoadOlder({ ...fill, hasMoreAbove: false })).toBe(false);
   });
 
   test("resumes once the user scrolls up after following the tail", () => {

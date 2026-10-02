@@ -18,7 +18,7 @@ import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useTeamRosterIdentity } from "../hooks/useTeamRoster";
-import { useShortcutContext, useShortcutAction, isMac, hasOpenModal } from "../shortcuts";
+import { useShortcutContext, usePaneShortcutAction, isMac, hasOpenModal } from "../shortcuts";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useShallow } from "zustand/react/shallow";
 import { composerAgentStatus, useManagedSessionFields, useSessionEscape } from "../hooks/useSessionComposerControls";
@@ -142,7 +142,7 @@ import { AssistantBlock, CompactCollapsedTurn, ForkSeedMark, GitDiffPanel, Story
 import { COMPACT_TAIL_HEIGHT, EMPTY_CHILD_CONVERSATIONS, EMPTY_RECEIPT_ENTRIES } from "../lib/conversationTurnDefaults";
 import { FOLD_KEPT_USER_KINDS, canAnchorForkChips, classifyUserMessage, cleanStickyContent, extractCompactionSummaryContent, isAlwaysVisibleToolCall, isHiddenStubMessage, isStickyWorthy, isToolReceiptRow, normalizePendingContent, parseCastCommand, parseWorkflowEventContent, sameStringArray, stripSystemTags } from "./conversation/classify";
 import { formatMessagePartsForCopy, formatRelativeTime } from "../lib/conversationFormat";
-import { ConversationAgeFacts, ConversationMetadata, ConversationTaskProgress, ConversationTaskStatsMenuItem, DensityMenuOptions, DeviceMoveStatusStrip, EdgeMessagesIndicator, HandoffMarker, MessagesUnavailableState, RestartStatusStrip, SessionGalleryButton, SqueezedHeaderActions, TimelineRule } from "./conversation/sessionChrome";
+import { ConversationAgeFacts, ConversationMetadata, ConversationTaskProgress, ConversationTaskStatsMenuItem, DensityMenuOptions, DeviceMoveStatusStrip, EdgeMessagesIndicator, HandoffMarker, MessagesUnavailableState, RestartStatusStrip, SessionGalleryButton, SqueezedHeaderActions, ThreadTailLoader, TimelineRule } from "./conversation/sessionChrome";
 import { DENSITY_BY_CONVERSATION, DENSITY_OPTIONS, FEED_DENSITY_CYCLE, defaultDensity } from "../lib/conversationDensity";
 import { followRestoredConversation } from "../lib/followRestoredConversation";
 import { NewSessionView, NonOwnerMessageInput, ProjectSwitcher } from "./conversation/sessionControls";
@@ -2043,19 +2043,19 @@ const ConversationViewInner = (
   }, [isOwner, forkSelectionIdx]);
 
   useShortcutContext('conversation');
-  useShortcutAction('conv.toggleTree', useCallback(() => {
+  usePaneShortcutAction('conv.toggleTree', useCallback(() => {
     if (!isOwner || forkSelectionIdx !== null) return false;
     setMapDrill(null); // open at the branch tree
     setTreePopoverOpen((o) => !o);
     return true;
   }, [isOwner, forkSelectionIdx]));
 
-  useShortcutAction('conv.copyLink', useCallback(() => {
+  usePaneShortcutAction('conv.copyLink', useCallback(() => {
     const url = `${shareOrigin()}/conversation/${conversation?._id}`;
     copyToClipboard(url).then(() => toast.success("Link copied!"));
   }, [conversation?._id]));
 
-  useShortcutAction('conv.favorite', useCallback(() => {
+  usePaneShortcutAction('conv.favorite', useCallback(() => {
     if (!conversation || !isOwner) return;
     toggleFavoriteMutation(conversation._id);
     toast.success(conversation.is_favorite ? "Removed from favorites" : "Added to favorites");
@@ -2065,23 +2065,23 @@ const ConversationViewInner = (
   // key behind the floating "Quote into reply" button); with nothing selected it
   // enters inline review on the assistant reply nearest the viewport center, so a
   // keyboard-only user can start quoting/commenting without a mouse.
-  useShortcutAction('conv.review', useCallback(() => {
+  usePaneShortcutAction('conv.review', useCallback(() => {
     if (!conversation) return;
     if (quoteSelectionIntoReply(conversation._id)) return;
     enterReviewNearCenter();
   }, [conversation]));
 
-  useShortcutAction('conv.toggleDiff', useCallback(() => {
+  usePaneShortcutAction('conv.toggleDiff', useCallback(() => {
     if (!conversation?.git_branch) return;
     setDiffExpanded((s) => !s);
   }, [conversation?.git_branch]));
 
-  useShortcutAction('conv.toggleThinking', useCallback(() => {
+  usePaneShortcutAction('conv.toggleThinking', useCallback(() => {
     if (!hasAnyThinking) return;
     setShowThinking((s) => !s);
   }, [hasAnyThinking]));
 
-  useShortcutAction('conv.ask', useCallback(() => {
+  usePaneShortcutAction('conv.ask', useCallback(() => {
     if (guest || !conversation?._id) return;
     openAskPanel();
   }, [guest, conversation?._id, openAskPanel]));
@@ -2461,9 +2461,11 @@ const ConversationViewInner = (
   maybeLoadOlderRef.current = () => {
     const sc = containerRef.current;
     const pp = paginationPropsRef.current;
-    if (!sc || !pp.onLoadOlder) return;
-    if (!loadOlderArmedRef.current) return;
+    if (!sc || !pp.onLoadOlder || sc.clientHeight === 0) return;
+    const underfilled = sc.scrollHeight <= sc.clientHeight;
+    if (!loadOlderArmedRef.current && !underfilled) return;
     if (!shouldLoadOlder({
+      underfilled,
       nearTop: sc.scrollTop < TOP_LOAD_TRIGGER_PX,
       userScrolled: userScrolledRef.current,
       hasMoreAbove: pp.hasMoreAbove,
@@ -2510,6 +2512,18 @@ const ConversationViewInner = (
   useWatchEffect(() => {
     updateScrollProgress(virtualizer);
   }, [conversation?.message_count, messages.length, timeline.length, conversation?.loaded_start_index, totalSize, virtualizer, updateScrollProgress]);
+
+  // A window shorter than the viewport fills itself: no scroll-up can arm a
+  // load on a list that cannot scroll. Re-checked as rows land and loads end.
+  // A landed page holds a short cooldown, so check again once it lapses.
+  useWatchEffect(() => {
+    if (!initialScrollDone) return;
+    maybeLoadOlderRef.current();
+    const wait = paginationCooldownRef.current - Date.now();
+    if (wait <= 0) return;
+    const timer = setTimeout(() => maybeLoadOlderRef.current(), wait + 16);
+    return () => clearTimeout(timer);
+  }, [initialScrollDone, timeline.length, totalSize, hasMoreAbove, isLoadingOlder]);
 
   // Pixel-perfect page mount, both directions. The virtualizer's own
   // anchorTo:'end' is estimate-based and doesn't hold the scroll when a page
@@ -2985,7 +2999,7 @@ const ConversationViewInner = (
   // Bound through the shortcut registry (not a raw keydown) so the key combo, this
   // handler, and every tooltip / help-panel mention all read from one definition —
   // rebind 'conv.cycleDensity' once and the binding and its docs move together.
-  useShortcutAction('conv.cycleDensity', useCallback(() => {
+  usePaneShortcutAction('conv.cycleDensity', useCallback(() => {
     setDensity(FEED_DENSITY_CYCLE[(FEED_DENSITY_CYCLE.indexOf(feedDensity) + 1) % FEED_DENSITY_CYCLE.length]);
   }, [feedDensity, setDensity]));
 
@@ -4115,7 +4129,7 @@ const ConversationViewInner = (
                       </>
                     )}
                     {isOwner && (
-                      <DropdownMenuItem onSelect={() => setTimeout(() => useInboxStore.setState({ renamingSessionId: conversation._id }))}>
+                      <DropdownMenuItem onSelect={() => setTimeout(() => useInboxStore.getState().openSessionRename(conversation))}>
                         <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                         </svg>
@@ -4589,18 +4603,15 @@ const ConversationViewInner = (
                 </div>
               );
             })}
-            {/* Later messages indicator at bottom (chevron, or spinner while loading);
-                hide the idle state when near top to avoid confusing placement.
-                Gated on hasMoreBelow so it only appears in target mode (a deep-linked
-                window with content below). In normal mode hasMoreBelow is always
-                false, so the initial-page LoadingFirstPage that lights isLoadingNewer
-                no longer flashes a spurious "loading" pill on a fresh open. */}
-            {(hasMoreBelow && (!isNearTop || isLoadingNewer)) && (
-              <EdgeMessagesIndicator dir="down" loading={!!isLoadingNewer}>
-                Scroll down to load more
-              </EdgeMessagesIndicator>
-            )}
           </div>
+          )}
+          {/* Later pages exist only in target mode (a deep-linked window); in
+              normal mode hasMoreBelow is always false, so the first-page load
+              that lights isLoadingNewer never shows this. */}
+          {hasMoreBelow && (
+            <div className="conv-col mx-auto px-4 sm:px-5 md:px-6">
+              <ThreadTailLoader loading={!!isLoadingNewer} />
+            </div>
           )}
           {handedOffTo && !hasMoreBelow && (
             <div className="conv-col mx-auto px-4 sm:px-5 md:px-6">

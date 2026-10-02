@@ -111,15 +111,15 @@ export function getLabelColor(name: string): LabelColor {
 }
 
 /**
- * A name's colour without claiming a slot: its earlier claim if it has one,
- * else its natural hash slot. Reads the registry, never writes it or
- * localStorage, so a surface that renders names which are not the viewer's
- * (the marketing hero's fixtures) cannot shift the colours of their own.
+ * A name's colour from its name alone: its natural hash slot, never the
+ * registry. It neither claims a slot nor reads the viewer's claims, so a
+ * surface that renders names which are not the viewer's (the marketing hero's
+ * fixtures) can neither shift the colours of the viewer's own labels nor be
+ * tinted by them.
  */
 export function peekLabelColor(name: string): LabelColor {
   const lower = name.toLowerCase();
-  if (LABEL_COLORS[lower]) return LABEL_COLORS[lower];
-  return HASH_PALETTE[assignedSlot.get(lower) ?? fnv1a(lower) % HASH_PALETTE.length];
+  return LABEL_COLORS[lower] ?? HASH_PALETTE[fnv1a(lower) % HASH_PALETTE.length];
 }
 
 /** True inside a surface whose label names must never claim colour slots (the marketing hero sets it, app/(marketing)/heroFly/sandbox.tsx). */

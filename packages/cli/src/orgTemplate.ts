@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import type { OrgInitDeps } from "./orgInit.js";
 import { readStdinBody } from "./sendBody.js";
+import { LEARNING_OPT_IN_LABEL, LEARNING_OPT_IN_SENTENCE } from "@codecast/shared/contracts/orgTemplateLearning";
 
 export function registerOrgTemplateCommands(program: Command, deps: OrgInitDeps): void {
   const org = program.commands.find((c) => c.name() === "org");
@@ -39,6 +40,7 @@ export function registerOrgTemplateCommands(program: Command, deps: OrgInitDeps)
     });
   context(template.command("bind <instance>").description("Host step after approval: write the instance file from the answers, bind secret inputs to files on this machine, find or create the ledger tasks"))
     .option("--secret <key=path>", "Bind a secret input to a file on this host (repeatable); the path is recorded by hash, its contents never leave the machine", (value: string, all: string[]) => [...all, value], [])
+    .option("--to <version>", "Move the instance to this published release first; without it, an upgrade accepted on the server (a person's Update, or the publisher's canary rollout) is performed")
     .action(async (instance: string, options: any) => {
       const { bindTemplate } = await import("./orgTemplateRun.js");
       console.log(JSON.stringify(await bindTemplate(deps, instance, options), null, 2));
@@ -72,6 +74,45 @@ export function registerOrgTemplateCommands(program: Command, deps: OrgInitDeps)
       const text = body === "-" ? readStdinBody() : body;
       console.log(JSON.stringify(await lessonTemplate(deps, instance, text, options), null, 2));
     });
+  context(template.command("lessons <template>").description("Lessons filed on a template, for its publisher; with --instance, the lessons from one instance in this checkout and where each stands"))
+    .option("--codecast", "Read as Codecast, the publisher of its templates (its admins only)")
+    .option("--instance", "The argument is an instance in this checkout: list the lessons that came from it")
+    .option("--status <open|accepted|declined|released>", "Only lessons in this state")
+    .action(async (target: string, options: any) => output(await (await import("./orgTemplateRun.js")).listLessons(deps, target, options)));
+  template.command("lesson-status <id...>").description("The publisher's verdict on lessons: accepted into a draft, declined, or released in a version")
+    .option("--accept", "Folded into the next release").option("--decline", "Not acted on").option("--released-in <version>", "Shipped in this stable version").option("--json", "Machine-readable output")
+    .action(async (ids: string[], options: any) => output(await (await import("./orgTemplateRun.js")).setLessonStatus(deps, ids, options)));
+  template.command("learning [on|off]").description(`${LEARNING_OPT_IN_LABEL}: show the workspace's choice, or set it (a team admin, from their own terminal; an agent session is refused). ${LEARNING_OPT_IN_SENTENCE}`)
+    .option("--team <name|id>", "Team workspace").option("--personal", "Personal workspace").option("--session <id>", "Calling session (default: current)").option("--json", "Machine-readable output")
+    .action(async (set: string | undefined, options: any) => {
+      if (set !== undefined && set !== "on" && set !== "off") throw new Error("Give on or off, or nothing to read the current choice");
+      const state = (await (await import("./orgTemplateRun.js")).templateLearning(deps, set, options)) as any;
+      if (options.json) { output(state); return; }
+      console.log(`${LEARNING_OPT_IN_LABEL}: ${state.enabled ? "on" : "off"}${state.changed_by ? ` (set by ${state.changed_by}, ${new Date(state.changed_at).toISOString().slice(0, 10)})` : ""}`);
+      console.log(LEARNING_OPT_IN_SENTENCE);
+    });
+  // The learning loop's publisher side (org-hire.md H12): Codecast's admins, on the machine with the template folders.
+  const learn = template.command("learn").description("The learning loop, for the publisher of Codecast's templates: read opted-in instances into lessons, see when a draft or a promotion is due, move canary instances");
+  learn.command("pass <template>").description("Read each opted-in instance of the template on the server and file generalized lessons; prints what was filed and counts, never a session's words")
+    .option("--json", "Machine-readable output")
+    .action(async (id: string) => {
+      const result = await (await import("./orgTemplateRun.js")).learnPass(deps, id);
+      output(result);
+      if (result.read > 0 && result.failed === result.read) { console.error("Every model call of the pass failed; nothing was learned. Check ANTHROPIC_API_KEY on the deployment."); process.exitCode = 1; }
+    });
+  learn.command("status <template>").description("Open lessons, whether a draft is due and its next version, the canary release with its instances and whether it ran clean")
+    .option("--json", "Machine-readable output")
+    .action(async (id: string) => output(await (await import("./orgTemplateRun.js")).learnStatus(deps, id)));
+  learn.command("due").description("Whether the loop has anything to do across Codecast's templates; exits 1 when nothing is due (a trigger's --precheck)")
+    .option("--json", "Machine-readable output")
+    .action(async () => {
+      const result = await (await import("./orgTemplateRun.js")).learnDue(deps);
+      output(result);
+      if (!result.due) process.exitCode = 1;
+    });
+  learn.command("rollout <template>").description("Move the instances that follow canary to the canary release: each gets the upgrade and its host step queued on its machine")
+    .option("--json", "Machine-readable output")
+    .action(async (id: string) => output(await (await import("./orgTemplateRun.js")).learnRollout(deps, id)));
   template.command("publish <folder...>").description("Publish release folders as templates under a workspace, or as Codecast for every workspace; several folders publish in one run (a gallery: packs/*)")
     .option("--team <name|id>", "Publishing team workspace").option("--personal", "Publish under your personal workspace").option("--codecast", "Publish as Codecast (its admins only)")
     .option("--status <draft|canary|stable>", "Release status", "draft").option("--changelog <text>", "What changed in this version; '-' reads stdin; default: the folder's CHANGELOG.md")

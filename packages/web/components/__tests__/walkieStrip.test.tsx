@@ -255,7 +255,7 @@ describe("a ring", () => {
   });
 
   test("out: who, the status, and a cancel in the ring card's own button", () => {
-    const html = render({ kind: "ring-out", roomKey: ROOM, to: "u-ann", name: NAME, cancel: true, status: "ringing" });
+    const html = render({ kind: "ring-out", roomKey: ROOM, to: "u-ann", name: NAME, cancel: true, status: "ringing", hangUp: false });
     expect(html).toContain("Ringing <span class=\"engagement-card-title\">Riley</span>");
     expect(html).toContain("Ringing");
     expect(html).toContain(">Cancel<".replace(">", ""));

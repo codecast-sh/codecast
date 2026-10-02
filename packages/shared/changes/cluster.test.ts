@@ -185,6 +185,18 @@ describe("rules (a) to (c) in isolation", () => {
     expect(holding(r.stories, "a")[0].pr_ids).toEqual(["pr1"]);
     expect(holding(r.stories, "b")[0].pr_ids).toEqual(["pr2", "pr9"]);
   });
+
+  test("a private session's own task and PR links stay out of the story, and the bulk risk still fires", () => {
+    const big = commit({ sha: "p1", subject: "feat(web): big private work", conversation_id: "secret", task_ids: ["ct-9"], pr_id: "pr-secret", paths: { "packages/web/a.ts": 2000 } });
+    const s = holding(build({ commits: [big], visible: [] }).stories, "p1")[0];
+    expect(s.task_ids).toEqual([]);
+    expect(s.pr_ids).toEqual([]);
+    expect(s.private_conversation_count).toBe(1);
+    expect(s.risks.map((x) => x.code)).toEqual(["bulk"]);
+    const open = holding(build({ commits: [big], visible: [{ conversation_id: "secret" }] }).stories, "p1")[0];
+    expect(open.task_ids).toEqual(["ct-9"]);
+    expect(open.pr_ids).toEqual(["pr-secret"]);
+  });
 });
 
 /** A Littlebird-shaped day: 760 commits, 45 branches, sparse sessions, a few batch commits and twins. */

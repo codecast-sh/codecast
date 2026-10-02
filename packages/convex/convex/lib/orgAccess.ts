@@ -119,19 +119,10 @@ async function rolesByHandle(ctx: { db: any }, boundary: { team_id?: any; scope_
   const rows = await rowsByExactHandle(ctx, boundary, h);
   // The Head of People answered to `chief-of-staff` before 2026-10-02
   // (org-staffing.md S30), and charters, triggers and people still write it.
-  // Written for a boundary where no Chief of Staff (the right hand) carries
-  // the handle, it names the Head of People, under either handle. A row that
-  // carries `chief` is the right hand and keeps the handle for itself.
-  if (h === LEGACY_HEAD_OF_PEOPLE_HANDLE) {
-    const chiefs = rows.filter((r) => r.chief);
-    if (chiefs.length) return chiefs;
-    return [...rows, ...(await rowsByExactHandle(ctx, boundary, HEAD_OF_PEOPLE_HANDLE))].sort((a, b) => a._creationTime - b._creationTime);
-  }
-  if (h === HEAD_OF_PEOPLE_HANDLE) {
-    const legacy = (await rowsByExactHandle(ctx, boundary, LEGACY_HEAD_OF_PEOPLE_HANDLE)).filter((r) => !r.chief);
-    return [...rows, ...legacy].sort((a, b) => a._creationTime - b._creationTime);
-  }
-  return rows;
+  // Either handle names the Head of People, whichever its row carries.
+  const other = h === LEGACY_HEAD_OF_PEOPLE_HANDLE ? HEAD_OF_PEOPLE_HANDLE : h === HEAD_OF_PEOPLE_HANDLE ? LEGACY_HEAD_OF_PEOPLE_HANDLE : null;
+  if (!other) return rows;
+  return [...rows, ...(await rowsByExactHandle(ctx, boundary, other))].filter(isHeadOfPeopleRole).sort((a, b) => a._creationTime - b._creationTime);
 }
 
 async function rowsByExactHandle(ctx: { db: any }, boundary: { team_id?: any; scope_user_id?: any }, h: string): Promise<any[]> {

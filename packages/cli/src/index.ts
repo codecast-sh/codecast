@@ -13490,7 +13490,7 @@ async function resolvePlanId(ref: string): Promise<string> {
 // The switch (org-staffing.md S23.1), read through the shared mapping: the
 // row's stored word never reaches the person.
 // The role as a person reads it (org-staffing.md S30): its given name, then
-// its title (with a chief's reach) beside the handle.
+// its title (with an assistant's reach) beside the handle.
 function printRoleLine(r: any) {
   console.log(roleLine(r));
 }

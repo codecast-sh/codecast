@@ -1,4 +1,4 @@
-import { Bookmark, Copy, Link2, Maximize2, MessageSquare, Share2, Split } from "lucide-react";
+import { Bookmark, Copy, Link2, Maximize2, MessageSquare, Split, TextSelect } from "lucide-react";
 
 type MessageActionToolbarProps = {
   messageId?: string;
@@ -41,7 +41,7 @@ export function MessageActionToolbar({
   bookmarkTitle = "Bookmark message",
   copyTitle = "Copy message",
   copyLinkTitle = "Copy link to message",
-  shareTitle = "Share message",
+  shareTitle = "Select messages to share",
 }: MessageActionToolbarProps) {
   const bookmarkLabel = isBookmarked ? "Remove bookmark" : bookmarkTitle;
 
@@ -54,7 +54,7 @@ export function MessageActionToolbar({
           title={shareTitle}
           aria-label={shareTitle}
         >
-          <Share2 className={iconClassName} />
+          <TextSelect className={iconClassName} />
         </button>
       )}
       {onCopyLink && (

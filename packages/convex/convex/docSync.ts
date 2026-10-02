@@ -1,6 +1,6 @@
 import { mutation, query } from "./functions";
-import { docTitleFromContent, serializeDraftRuns } from "@codecast/shared/docs";
-import { v } from "convex/values";
+import { DOC_REWRITTEN_ERROR, docTitleFromContent, serializeDraftRuns } from "@codecast/shared/docs";
+import { ConvexError, v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
@@ -429,6 +429,46 @@ export const latestVersion = query({
   },
 });
 
+/**
+ * The steps a client at `version` is missing, oldest first, or "gap" when the
+ * history cannot bring it forward.
+ *
+ * The history is contiguous except across a rewrite: `docs.resetSync` (a CLI
+ * or API edit) deletes every delta and writes the new content as a snapshot
+ * past the newest version any client holds. A client from before the rewrite
+ * then sees either the first remaining delta starting after its version, or
+ * no deltas and a newer snapshot. Its steps describe the old content, so they
+ * can be neither sent to it nor accepted from it; it must reload the snapshot
+ * (the web editor's isSyncGap does).
+ */
+async function stepsAfter(
+  ctx: any,
+  id: string,
+  version: number,
+): Promise<{ steps: string[]; clientIds: (string | number)[] } | "gap"> {
+  const deltas = await ctx.db
+    .query("doc_deltas")
+    .withIndex("id_version", (q: any) => q.eq("id", id).gt("version", version))
+    .take(MAX_DELTA_FETCH);
+  const steps: string[] = [];
+  const clientIds: (string | number)[] = [];
+  if (deltas.length === 0) {
+    const snapshot = await ctx.db
+      .query("doc_snapshots")
+      .withIndex("id_version", (q: any) => q.eq("id", id).gt("version", version))
+      .first();
+    return snapshot ? "gap" : { steps, clientIds };
+  }
+  const start = deltas[0].version - deltas[0].steps.length;
+  if (start > version) return "gap";
+  deltas.forEach((delta: any, i: number) => {
+    // The first delta can straddle the client's version; skip what it holds.
+    const own = i === 0 ? delta.steps.slice(version - start) : delta.steps;
+    for (const step of own) { steps.push(step); clientIds.push(delta.clientId); }
+  });
+  return { steps, clientIds };
+}
+
 export const getSteps = query({
   args: { id: v.string(), version: v.number() },
   returns: v.object({
@@ -439,29 +479,8 @@ export const getSteps = query({
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx);
     await requireSyncableEntity(ctx, userId, args.id);
-    const deltas = await ctx.db
-      .query("doc_deltas")
-      .withIndex("id_version", (q: any) =>
-        q.eq("id", args.id).gt("version", args.version),
-      )
-      .take(MAX_DELTA_FETCH);
-    const steps: string[] = [];
-    const clientIds: (string | number)[] = [];
-    if (deltas.length > 0) {
-      const firstDelta = deltas[0];
-      const startOffset = firstDelta.version - firstDelta.steps.length;
-      if (startOffset < args.version) {
-        const sliced = firstDelta.steps.slice(args.version - startOffset);
-        for (const step of sliced) { steps.push(step); clientIds.push(firstDelta.clientId); }
-        for (let i = 1; i < deltas.length; i++) {
-          for (const step of deltas[i].steps) { steps.push(step); clientIds.push(deltas[i].clientId); }
-        }
-      } else {
-        for (const delta of deltas) {
-          for (const step of delta.steps) { steps.push(step); clientIds.push(delta.clientId); }
-        }
-      }
-    }
+    const missing = await stepsAfter(ctx, args.id, args.version);
+    const { steps, clientIds } = missing === "gap" ? { steps: [], clientIds: [] } : missing;
     return { steps, clientIds, version: args.version + steps.length };
   },
 });
@@ -484,19 +503,16 @@ export const submitSteps = mutation({
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx);
     await requireSyncableEntity(ctx, userId, args.id);
-    const changes = await ctx.db
-      .query("doc_deltas")
-      .withIndex("id_version", (q: any) =>
-        q.eq("id", args.id).gt("version", args.version),
-      )
-      .take(MAX_DELTA_FETCH);
-    if (changes.length > 0) {
-      const steps: string[] = [];
-      const clientIds: (string | number)[] = [];
-      for (const delta of changes) {
-        for (const step of delta.steps) { steps.push(step); clientIds.push(delta.clientId); }
-      }
-      return { status: "needs-rebase" as const, clientIds, steps };
+    const missing = await stepsAfter(ctx, args.id, args.version);
+    if (missing === "gap") {
+      // Steps written against content that no longer exists would land in the
+      // history as if they followed the rewrite, and every other client would
+      // then apply them to the new content (ProseMirror's "Invalid content for
+      // node"). Refuse them; the editor's gap detector remounts this tab.
+      throw new ConvexError(DOC_REWRITTEN_ERROR);
+    }
+    if (missing.steps.length > 0) {
+      return { status: "needs-rebase" as const, clientIds: missing.clientIds, steps: missing.steps };
     }
     await ctx.db.insert("doc_deltas", {
       id: args.id,

@@ -298,20 +298,21 @@ export function deriveSessionActivity(input: SessionActivityInput): SessionActiv
   return { isIdle, isUnresponsive, lastRoleIsUser, recentlyUpdated };
 }
 
-// How recently a subagent must have produced output to keep its parent in
-// "working" on the strength of recent activity alone. Wider than the
-// AGENT_IDLE_GRACE so a child mid-tool-call (quiet but live) doesn't drop its
-// parent out of "working" prematurely.
+// How recently a subagent must have produced output to count as producing on
+// the strength of recent activity alone. Wider than the AGENT_IDLE_GRACE so a
+// child mid-tool-call (quiet but live) doesn't release its parent's park
+// prematurely.
 export const SUBAGENT_PRODUCING_GRACE_MS = 5 * 60 * 1000;
 
-// Whether a subagent child is still PRODUCING, and so should keep its idle
-// parent classified as "working" (the orchestrator-waiting-on-its-workers case).
+// Whether a subagent child is still PRODUCING, and so parks its settled parent
+// as dormant: a background workflow's workers or a background Agent, whose
+// result is the parent's next turn (classifyWorkState's childProducing).
 // The trap this guards against: "alive" is not "working". `convStatus` is the
 // conversation status — "active" for nearly every non-completed conversation,
 // never the agent status — and a managed session keeps heartbeating (so the
 // caller's `isLive` stays true) for hours after its agent has gone idle, e.g. a
 // forked subagent that finished but whose daemon is still up. Either signal
-// alone would pin a long-finished parent in "working" forever. So we accept two
+// alone would pin a long-finished parent in "dormant" forever. So we accept two
 // independent proofs of real work:
 //   - recent output: the child synced something within the grace window. This
 //     stands alone and covers Task-tool subagents that have no managed session
@@ -319,7 +320,7 @@ export const SUBAGENT_PRODUCING_GRACE_MS = 5 * 60 * 1000;
 //   - a live session whose agent_status is genuinely active. The caller passes
 //     the child's agent_status already coerced for heartbeat staleness (so a
 //     re-asserted-stale "working" on a long-quiet child reads as not-active).
-export function subagentKeepsParentWorking(input: {
+export function subagentIsProducing(input: {
   isSubagent: boolean;
   convStatus: string;
   updatedAt: number;

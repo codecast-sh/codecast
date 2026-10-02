@@ -734,9 +734,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       ...(input.seat ? { seat: input.seat } : {}),
     });
   },
-  // The Chief of Staff (org-staffing.md S30): the person's right hand.
-  hireChiefOfStaff: async (ctx, _userId, [input]: [any]) => {
-    return await ctx.runMutation!((api as any).orgRoles.hireChief, {
+  // The Executive Assistant (org-staffing.md S30): the person's right hand.
+  hireExecutiveAssistant: async (ctx, _userId, [input]: [any]) => {
+    return await ctx.runMutation!((api as any).orgRoles.hireAssistant, {
       reach: input.reach,
       ...(input.personal ? { personal: true } : {}),
       ...(input.given_name ? { given_name: input.given_name } : {}),
