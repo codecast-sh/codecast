@@ -57,19 +57,27 @@ export function registerSessionSendCommand(program: Command, io: SendIo): void {
         body,
         ...(options.raw ? { raw: true } : { wake: options.wake === true }),
       });
-      const fromNote = result.from_short_id && result.from_short_id !== "unknown"
-        ? ` ${c.dim}from${c.reset} ${c.cyan}${result.from_short_id}${c.reset}`
-        : "";
-      const teamNote = result.cross_user ? ` ${c.dim}(teammate's session)${c.reset}` : "";
-      io.print(`${c.green}✓${c.reset} sent to ${c.cyan}${result.to_short_id || sessionId}${c.reset}${fromNote}${teamNote}`);
-      if (!options.raw && (!result.from_short_id || result.from_short_id === "unknown")) {
-        io.print(`${c.yellow}!${c.reset} ${c.dim}the server queued this message without resolving its sender; check --from before sending again${c.reset}`);
-      }
-      if (result.target_live === false) {
-        io.print(`${c.yellow}!${c.reset} ${c.dim}that session has no live daemon right now — queued; you'll be told if it can't be delivered${c.reset}`);
-      }
-      if (result.auto_owned) {
-        io.print(`${c.dim}you now own this session — it'll sit in your inbox until dismissed (cast disown ${result.to_short_id || sessionId} to release)${c.reset}`);
-      }
+      printSendResult(result, io.print, { target: sessionId, fromSession: !options.raw });
     });
+}
+
+// One report for every send into a session (cast send, cast role wake): what
+// reached whom, and an honest headline when the target has no live daemon to
+// take it, since the message then waits in the queue instead of arriving.
+export function printSendResult(result: any, print: (text: string) => void, opts: { target: string; label?: string; fromSession: boolean }): void {
+  const to = opts.label ?? `${c.cyan}${result.to_short_id || opts.target}${c.reset}`;
+  const unattributed = !result.from_short_id || result.from_short_id === "unknown";
+  const fromNote = !unattributed ? ` ${c.dim}from${c.reset} ${c.cyan}${result.from_short_id}${c.reset}` : "";
+  const teamNote = result.cross_user ? ` ${c.dim}(teammate's session)${c.reset}` : "";
+  if (result.target_live === false) {
+    print(`${c.yellow}…${c.reset} queued for ${to}${fromNote}${teamNote}: it has no live daemon right now, so it is delivered when that daemon comes back. You'll be told if it is still waiting after a few minutes.`);
+  } else {
+    print(`${c.green}✓${c.reset} sent to ${to}${fromNote}${teamNote}`);
+  }
+  if (opts.fromSession && unattributed) {
+    print(`${c.yellow}!${c.reset} ${c.dim}the server queued this message without resolving its sender; check --from before sending again${c.reset}`);
+  }
+  if (result.auto_owned) {
+    print(`${c.dim}you now own this session — it'll sit in your inbox until dismissed (cast disown ${result.to_short_id || opts.target} to release)${c.reset}`);
+  }
 }

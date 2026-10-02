@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { applyCancel, applyPause } from "./agentTasks";
 import { briefingFor, performRebriefRoles } from "./anchors";
-import { charterTemplate, ensureRoleRoutine, performCreateRole, performPauseRole, performProvisionRole, performResetOrg, performReparentRole, performResumeRole, performRetireRole, performStaff, resetOrgPreview, seatingNote, standingConversationOf } from "./orgRoles";
+import { charterTemplate, ensureRoleRoutine, performCreateRole, performWakeRole, performPauseRole, performProvisionRole, performResetOrg, performReparentRole, performResumeRole, performRetireRole, performStaff, resetOrgPreview, seatingNote, standingConversationOf } from "./orgRoles";
 import { ROLE_CHECK_PROMPT } from "./lib/orgRoutine";
 import { performReparentSession } from "./sessionOwnership";
 import { killConversation } from "./conversations";
@@ -281,5 +281,29 @@ describe("a role's own session is retired, never killed (S16)", () => {
     expect(tables.conversations.find((c) => c._id === "work1")!.inbox_killed_at).toBeTruthy();
     await performRetireRole(ctx, ME as any, { role_id: String(role._id) });
     expect(tables.org_roles[0].status).toBe("retired");
+  });
+});
+
+describe("a wake reaches the role the way cast send does", () => {
+  test("from a session it names that session, so the role can answer with cast send", async () => {
+    const { ctx, tables } = world({ conversations: [] });
+    tables.conversations.push(
+      { _id: "mine", user_id: ME, session_id: "s-mine", short_id: "jxmine1", status: "active", agent_type: "claude_code", updated_at: NOW, message_count: 4, team_id: TEAM, project_path: "/repo" },
+      { _id: "peers", user_id: PEER, session_id: "s-peer", short_id: "jxpeer1", status: "active", agent_type: "claude_code", updated_at: NOW, message_count: 4, team_id: TEAM, project_path: "/repo" },
+    );
+    const role = await lead(ctx);
+    const res = await performWakeRole(ctx, PEER as any, { role_id: String(role._id), message: "send me only what needs Ashot", from_session: "s-peer" });
+    const row = tables.pending_messages.find((m) => String(m._id) === String(res.pending_message_id))!;
+    expect(row.content).toContain('<session-message from="jxpeer1"');
+    expect(String(row.from_conversation_id)).toBe("peers");
+    expect(res).toMatchObject({ from_short_id: "jxpeer1", cross_user: true, target_live: false });
+  });
+
+  test("from a terminal it carries the person's name", async () => {
+    const { ctx, tables } = world();
+    const role = await lead(ctx);
+    const res = await performWakeRole(ctx, PEER as any, { role_id: String(role._id), message: "how is infra?" });
+    const row = tables.pending_messages.find((m) => String(m._id) === String(res.pending_message_id))!;
+    expect(row.content).toContain('<user-message from="Peer"');
   });
 });

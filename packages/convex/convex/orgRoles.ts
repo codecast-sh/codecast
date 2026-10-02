@@ -34,7 +34,7 @@ import { areaMoves, areasOf, beginAreaHandoff, handOverAreaMoves, ownerSnapshot 
 import { syncRoleAgenda } from "./orgAgenda";
 import { mergeAllowance } from "./lib/lineMerge";
 import { announceSeating, decommissionAnchorRow, provisionStandingAgent, roleBootstrapOf, seatTitlePatch, userCanAdminAnchor, workspaceAnchorFor } from "./anchors";
-import { enqueuePendingMessage, formatSessionMessage, tellRole } from "./pendingMessages";
+import { enqueuePendingMessage, formatSessionMessage, tellRole, performSessionSend } from "./pendingMessages";
 import { standingReportsToFields } from "./lib/standingSeat";
 import { stampSeatOwners } from "./sessionOwners";
 import { enqueueKillAndResume, performSetThreadState } from "./conversations";
@@ -1897,19 +1897,17 @@ async function performSetAuthorityCore(ctx: any, userId: Id<"users">, args: { ro
   return { ...after, authority };
 }
 
-// wake — a person (or their session) writes to the role: a plain message
-// into its standing session (org-staffing.md S25).
+// wake — a person (or their session) writes to the role: a message into its
+// standing session (org-staffing.md S25), delivered exactly as `cast send`
+// delivers it, so the role knows who wrote and can answer with `cast send`.
+// From a terminal with no session it carries the person's name.
 export async function performWakeRole(ctx: any, userId: Id<"users">, args: { role_id: string; message: string; from_session?: string }): Promise<any> {
   const role = await requireRole(ctx, userId, args.role_id, "access");
   const conv = await standingConversationOf(ctx, role);
   if (!conv) throw new Error("This role has no standing session yet");
-  const from = await callerSession(ctx, userId, args.from_session);
-  const pendingId = await enqueuePendingMessage(ctx, conv, userId, {
-    content: args.message,
-    from_conversation_id: from?._id,
-    human: !from,
-  });
-  return { role_id: role._id, conversation_id: conv._id, short_id: conv.short_id, pending_message_id: pendingId };
+  const from = args.from_session?.trim() || undefined;
+  const sent = await performSessionSend(ctx, userId, { to: String(conv._id), target: conv, from, body: args.message, direct: !from });
+  return { role_id: role._id, conversation_id: conv._id, short_id: conv.short_id, pending_message_id: sent.message_id, ...sent };
 }
 
 // The role read its brief from its own session: the clock `cast brief` diffs
