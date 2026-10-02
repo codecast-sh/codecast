@@ -3137,7 +3137,7 @@ function sharedPlacementOf(s: InboxSession, live: LiveFacts, asking: boolean, ep
 // Structural signature for the pending `cast decide` rows the questions
 // section branches on. Shared by the panel's subscription deps.
 export const placementDecisionsSig = makeCollectionSig((d: any) =>
-  d?.status === "pending" ? `${d._id}|${d.conversation_id}` : "");
+  d?.status === "pending" ? `${d._id}|${d.conversation_id}|${d.blocking}|${d.stack_id ?? ""}` : "");
 
 const EMPTY_PLACEMENT_OBJ: Record<string, never> = {};
 let _placementDeadlineMemo: {

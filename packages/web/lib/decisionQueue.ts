@@ -264,14 +264,27 @@ export function sortQueue(items: QueueItem[]): QueueItem[] {
   });
 }
 
+/**
+ * Whether a `cast decide` row belongs in the stack: the queue, its badge, the
+ * rail's QUESTIONS section and /questions. A blocking ask parks its session, so
+ * it waits on a person. An advisory ask does not: the agent is already working
+ * on its default, so it stays inside its own session (the card's fold pill)
+ * and never interrupts. The one exception is a row someone filed into a named
+ * stack on purpose, which is where "answer all defaults" resolves advisories.
+ */
+export function isStackedAsk(d: Pick<SessionDecisionItem, "status" | "blocking" | "stack_id">): boolean {
+  return d.status === "pending" && (d.blocking || !!d.stack_id);
+}
+
 /** `cast decide` rows still awaiting an answer, newest-authored payload wins. */
 export function decisionQueueItems(
   decisions: Record<string, SessionDecisionItem>,
-  sessions: Record<string, InboxSession>
+  sessions: Record<string, InboxSession>,
+  include: (d: SessionDecisionItem) => boolean = (d) => d.status === "pending",
 ): QueueItem[] {
   const out: QueueItem[] = [];
   for (const d of Object.values(decisions)) {
-    if (d.status !== "pending") continue;
+    if (!include(d)) continue;
     out.push({
       key: `decide:${d._id}`,
       source: "decide",
@@ -360,7 +373,7 @@ export function pendingDecisionConvIds(
 ): Set<string> {
   const ids = new Set<string>();
   for (const d of Object.values(decisions)) {
-    if (d.status !== "pending") continue;
+    if (!isStackedAsk(d)) continue;
     if (meId && d.asked_user_ids && !d.asked_user_ids.some((id) => String(id) === String(meId))) continue;
     ids.add(d.conversation_id);
   }

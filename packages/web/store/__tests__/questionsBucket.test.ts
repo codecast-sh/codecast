@@ -40,9 +40,9 @@ const place = (rows: InboxSession[], decisions: Record<string, SessionDecisionIt
   placeSections(Object.fromEntries(rows.map((s) => [s._id, s])), new Set(), undefined, { sessionDecisions: decisions });
 
 describe("the questions bucket", () => {
-  // The bug the pass existed for: an advisory decide keeps the agent working,
-  // and Working was never sampled — the queue badge said 1 while the rail
-  // showed nothing. Pin is the same story: asking outranks pinned.
+  // A blocking decide whose agent still reads as working (the status lags the
+  // park) must not hide in Working while the badge counts it. Pin is the same
+  // story: asking outranks pinned.
   it("files a working or pinned session with a pending decide under QUESTIONS, out of its section", () => {
     const working = row("w1", { agent_status: "working", is_idle: false });
     const pinned = row("p1", { is_pinned: true, inbox_pinned_at: T0 });
@@ -54,6 +54,20 @@ describe("the questions bucket", () => {
     expect(placed.isQuestion(pinned)).toBe(true);
     expect(placed.placements.get("w1")).toMatchObject({ bucket: "questions", work_state: "working" });
     expect(placed.tally.shown.questions).toBe(2);
+  });
+
+  // An advisory ask keeps its agent working on the default: it stays in its
+  // session's own card and never enters the stack, unless someone filed it
+  // into a named stack on purpose.
+  it("an advisory decide lifts nothing unless it sits in a named stack", () => {
+    const working = row("w1", { agent_status: "working", is_idle: false });
+    const stacked = row("w2", { agent_status: "working", is_idle: false });
+    const placed = place([working, stacked], {
+      a: { ...decide("w1"), blocking: false, default_option: 0 },
+      b: { ...decide("w2"), blocking: false, default_option: 0, stack_id: "ds1" },
+    });
+    expect(ids(placed.questions)).toEqual(["w2"]);
+    expect(ids(placed.working)).toEqual(["w1"]);
   });
 
   it("an answered decide lifts nothing", () => {

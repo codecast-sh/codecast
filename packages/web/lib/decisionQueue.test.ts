@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
   decisionQueueItems,
+  isStackedAsk,
   queueTier,
   sessionHasOpenQuestion,
   sortQueue,
@@ -170,5 +171,17 @@ describe("sessionHasOpenQuestion", () => {
   it("still accepts a session whose banner kind is the self-retrying 'error'", () => {
     const s = session({ awaiting_input: true, pending_api_error_kind: "error" } as any);
     expect(sessionHasOpenQuestion(s)).toBe(true);
+  });
+});
+
+describe("isStackedAsk", () => {
+  const d = (over: Partial<SessionDecisionItem>) => ({ status: "pending", blocking: true, ...over }) as SessionDecisionItem;
+  it("stacks a pending blocking ask and leaves an advisory one in its session", () => {
+    expect(isStackedAsk(d({}))).toBe(true);
+    expect(isStackedAsk(d({ blocking: false, default_option: 0 }))).toBe(false);
+    expect(isStackedAsk(d({ status: "answered" }))).toBe(false);
+  });
+  it("keeps an advisory ask someone filed into a named stack", () => {
+    expect(isStackedAsk(d({ blocking: false, default_option: 0, stack_id: "ds1" }))).toBe(true);
   });
 });
