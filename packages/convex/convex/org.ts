@@ -616,7 +616,9 @@ async function scopeMemberIds(ctx: Ctx, resolved: ResolvedScope): Promise<Id<"us
 export async function computeScopeFeed(
   ctx: Ctx,
   resolved: ResolvedScope,
-  opts: { cursor?: string; limit?: number; kinds?: FeedKind[]; now: number },
+  /** `scan`: the caller's org scan, when it holds one, so a caller looping
+   *  over roles reads the sessions once rather than once per role. */
+  opts: { cursor?: string; limit?: number; kinds?: FeedKind[]; now: number; scan?: OrgScan },
 ): Promise<{ rows: FeedRow[]; next_cursor?: string }> {
   const { now } = opts;
   const limit = Math.min(Math.max(1, opts.limit ?? FEED_LIMIT_DEFAULT), FEED_LIMIT_MAX);
@@ -625,13 +627,13 @@ export async function computeScopeFeed(
   const actor = actorCache(ctx);
   const want = (k: FeedKind) => kinds.has(k);
 
-  const sessions = want("session") || want("artifact") || want("commit") || want("decision") ? await sessionsInScope(ctx, resolved, now) : [];
+  const sessions = want("session") || want("artifact") || want("commit") || want("decision") ? await sessionsInScope(ctx, resolved, now, opts.scan) : [];
   const sessionIds = new Set(sessions.map((s) => s.session._id.toString()));
   const sessionRawById = new Map(sessions.map((s) => [s.session._id.toString(), s.raw]));
 
   const sources = new Map<FeedKind, FeedRow[]>();
   // The read budget (F2). A query on this backend may read 4,096 documents,
-  // and the chief of staff's whole workspace feed died on it with 860 tasks
+  // and the head of people's whole workspace feed died on it with 860 tasks
   // in scope (2026-09-17): three sources read once per task (pages attached,
   // decisions asked, runs bound) on top of every doc of every project. The
   // scope's own rows (projects, plans, tasks, the sessions in scope) are the
@@ -1089,9 +1091,9 @@ export type BriefFacts = {
 const BRIEF_CHANGES_MAX = 40;
 const WHOLE_WORKSPACE_TASK_CAP = 2000;
 
-// The Chief of Staff with no scope looks after every project, plan and task in
+// The Head of People with no scope looks after every project, plan and task in
 // its boundary (org-staffing.md S26); resolveScope answers nothing for that
-// case, so read them here. Projects ride along so the chief reads
+// case, so read them here. Projects ride along so the Head of People reads
 // every charter in its frame.
 async function wholeWorkspaceItems(ctx: Ctx, role: any): Promise<{ projects: any[]; tasks: any[]; plans: any[] }> {
   const key = role.team_id ? `team:${role.team_id}` : `user:${role.scope_user_id}`;

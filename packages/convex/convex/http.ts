@@ -10,7 +10,10 @@ import { callback as connectorCallback, CONNECTOR_CALLBACK_PATH } from "./oauthC
 import { installCallbackHandler } from "./githubApp";
 import { verifyLinearSignature, linearDeliveryId } from "./linearWebhooks";
 import { readConversationRange } from "./conversations";
+import { SHARED_CALL_VIDEO_PATHS, signForCli } from "./callRecordings";
+import { callRecordingsBucketFromEnv, r2FreshGetUrl } from "./lib/r2";
 import { ipRateLimited } from "./lib/httpRateLimit";
+import { timingSafeEqualHex } from "./lib/hmac";
 import {
   serve as repoPublicServe,
   preflight as repoPublicPreflight,
@@ -180,15 +183,6 @@ http.route({
   method: "GET",
   handler: httpAction(installCallbackHandler),
 });
-
-// Constant-time hex-string compare so webhook signature verification can't be
-// timing-probed (a plain `!==` short-circuits on the first differing byte).
-function timingSafeEqualHex(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let mismatch = 0;
-  for (let i = 0; i < a.length; i++) mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return mismatch === 0;
-}
 
 http.route({
   path: "/api/webhooks/github-app",
@@ -1517,6 +1511,7 @@ http.route({
                 station: body.station,
                 stack: body.stack,
                 category: body.category,
+                card: body.card,
               });
       } else {
         if (!session_id || !question || !Array.isArray(options)) {
@@ -1545,6 +1540,10 @@ http.route({
           // the-line.md L4: the runner's failure gates bind to their run.
           workflow_run_id: body.workflow_run_id,
           gate_node_id: body.gate_node_id,
+          // An addressed card (org-staffing.md S31): the named people alone.
+          to: body.to,
+          // LE11: the change card the decision is about.
+          card: body.card,
         });
       }
 
@@ -4046,6 +4045,7 @@ for (const [verb, fn] of [
   ["add-project", "addProject"],
   ["remove-project", "removeProject"],
   ["post", "postUpdate"],
+  ["report", "report"],
 ] as const) {
   cliRoute(`/cli/initiatives/${verb}`, async (ctx, body) => ctx.runMutation(api.initiatives[fn], body));
 }
@@ -4153,6 +4153,15 @@ cliRoute("/cli/role/self", async (ctx, body) => ctx.runQuery(api.orgRoles.selfFo
 // The scope's line (the-line.md L2): `cast role line <handle> [--set <slug>]`.
 cliRoute("/cli/role/line", async (ctx, body) => ctx.runQuery(api.orgRoles.line, body));
 cliRoute("/cli/role/line/set", async (ctx, body) => ctx.runMutation(api.orgRoles.setLine, body));
+// The line's merge step (the-line.md L12): the switch, and the runner's two
+// calls around the merge itself.
+cliRoute("/cli/role/line/merge", async (ctx, body) => ctx.runMutation(api.orgLineMerge.setLineMerge, body));
+cliRoute("/cli/line/merge/check", async (ctx, body) => ctx.runQuery(api.orgLineMerge.check, body));
+cliRoute("/cli/line/merge/record", async (ctx, body) => ctx.runMutation(api.orgLineMerge.record, body));
+// Knowledge handoff (org-staffing.md S32) and the split (S34).
+cliRoute("/cli/role/handoff", async (ctx, body) => ctx.runMutation(api.orgHandoff.write, body));
+cliRoute("/cli/role/handoff/settle", async (ctx, body) => ctx.runMutation(api.orgHandoff.settle, body));
+cliRoute("/cli/role/split", async (ctx, body) => ctx.runMutation(api.orgSplit.split, body));
 cliRoute("/cli/brief/get", async (ctx, { from_session, ...body }) => {
   const brief = await ctx.runQuery(api.org.brief, body);
   // Read from the role's own session, the brief's "changed since" clock moves
@@ -4176,9 +4185,10 @@ cliRoute("/cli/org/scope-summary", async (ctx, body) => {
 // An action: three bounded queries merged, so a large workspace's inputs
 // never cross one query's execution limit.
 cliRoute("/cli/org/analysis-inputs", async (ctx, body) => ctx.runAction((api as any).orgInit.analysisInputs, body));
-// The chief of staff (docs/architecture/org-staffing.md S6): `cast org staff
-// [--adopt] [--every 7d]` and the "Hire a Chief of Staff" button.
+// The head of people (docs/architecture/org-staffing.md S6): `cast org staff
+// [--adopt] [--every 7d]` and the "Hire a Head of People" button.
 cliRoute("/cli/org/staff", async (ctx, body) => ctx.runMutation(api.orgRoles.staff, body));
+cliRoute("/cli/org/chief", async (ctx, body) => ctx.runMutation(api.orgRoles.hireChief, body));
 cliRoute("/cli/org/apply-decision", async (ctx, body) => ctx.runMutation((api as any).orgInit.applyDecision, body));
 // Staffing (docs/architecture/org-staffing.md S3, S4): the health signals and
 // the proposal lifecycle. Decide, accept-all and withdraw refuse a session
@@ -4324,11 +4334,35 @@ cliRoute("/cli/role/unfollow", async (ctx, body) => {
 cliRoute("/cli/work/create", async (ctx, body) => {
   return await ctx.runMutation(api.tasks.create, body);
 });
+// Signals (the-line-end-to-end.md LE3): the one typed door in, and its reads.
+cliRoute("/cli/signal/add", async (ctx, body) => {
+  return await ctx.runAction(api.signals.ingest, body);
+});
+cliRoute("/cli/signal/ls", async (ctx, body) => {
+  return await ctx.runQuery(api.signals.listForCli, body);
+});
+cliRoute("/cli/signal/show", async (ctx, body) => {
+  return await ctx.runQuery(api.signals.showForCli, body);
+});
+// The goals brief the ground node reads (the-line-end-to-end.md LE5).
+cliRoute("/cli/goals/brief", async (ctx, body) => {
+  return await ctx.runQuery(api.goals.brief, body);
+});
 cliRoute("/cli/calls/list", async (ctx, body) => {
   return await ctx.runQuery(api.transcripts.cliListCalls, body);
 });
 cliRoute("/cli/calls/get", async (ctx, body) => {
   return await ctx.runQuery(api.transcripts.cliGetCall, body);
+});
+// `cast call snap`: a call's recorded files with the clock to align them, for
+// the CLI to seek with its own ffmpeg. body: { call: "cl-42" | full id }. The
+// URLs are signed here, at request time, for ten minutes: the CLI is not a
+// subscription and needs neither a stable URL nor a long one, and a query
+// result can never hand it one signed in a window that has lapsed. Files
+// still recording carry their live frame instead (callRecordings.signForCli).
+cliRoute("/cli/calls/recordings", async (ctx, body) => {
+  const res = await ctx.runQuery(internal.callRecordings.cliCallRecordings, { api_token: body.api_token, call: body.call });
+  return res ? await signForCli(res) : null;
 });
 // `cast call hold <duration>|off`: a fed agent asks its huddle for time.
 cliRoute("/cli/calls/hold", async (ctx, body) => {
@@ -4573,6 +4607,9 @@ cliRoute("/cli/docs/unshare", async (ctx, body) => {
 cliRoute("/cli/docs/delete", async (ctx, body) => {
   return await ctx.runMutation(api.docs.remove, body);
 });
+// `cast doc lab`: a Lab tool (alternatives, trim, flag, typos) run on the
+// stored doc, its result written in as drafting markup (docLab.runOnDoc).
+cliRoute("/cli/docs/lab", async (ctx, body) => ctx.runAction((api as any).docLab.runOnDoc, body));
 cliRoute("/cli/docs/patch", async (ctx, body) => {
   const result = await ctx.runMutation(api.docs.patch, body);
   if (result.content) {
@@ -4899,6 +4936,32 @@ cliRoute("/cli/work/evidence", async (ctx, body) => ctx.runQuery(api.taskEvidenc
 // scripts run, but the page can never touch convex.codecast.sh state.
 http.route({ pathPrefix: "/cli/a/", method: "GET", handler: artifactServe });
 
+// A publicly shared call's video (callRecordings.sharedCallVideos): the share
+// page's <video> points here, and every request (each range a player asks
+// for) re-checks the link and the choice to include video, then redirects to
+// a URL into the private bucket signed now for ten minutes. Turning the link
+// off stops the video at the next request; no URL into the bucket is ever
+// written into the page.
+//
+// Registered under the prefixes the Caddy proxy in front of this deployment
+// forwards to HTTP actions (infra/convex-proxy/Caddyfile), the way the public
+// repo routes below are: any other path lands on the backend and 404s. The
+// page is handed the /cli/ address (SHARED_CALL_VIDEO_PATHS[0]), the one prod
+// carries today.
+const sharedCallVideo = httpAction(async (ctx, request) => {
+  const u = new URL(request.url);
+  const token = u.searchParams.get("token") ?? "";
+  const at = Number(u.searchParams.get("at"));
+  const notFound = () => new Response("Not found", { status: 404, headers: { "Cache-Control": "no-store" } });
+  if (!token || !Number.isFinite(at)) return notFound();
+  const key = await ctx.runQuery(internal.publicShare.sharedCallVideoObject, { share_token: token, at });
+  const bucket = callRecordingsBucketFromEnv();
+  if (!key || !bucket) return notFound();
+  const { url } = await r2FreshGetUrl(bucket, key);
+  return new Response(null, { status: 302, headers: { Location: url, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } });
+});
+for (const path of SHARED_CALL_VIDEO_PATHS) http.route({ path, method: "GET", handler: sharedCallVideo });
+
 // Reading a public repository with no account at all — the standalone /r/ shell
 // runs on this. The handler is repoPublicHttp.ts; see the file header for why a
 // refusal there is deliberately indistinguishable from a missing repository.
@@ -4932,5 +4995,12 @@ const emailUnsubscribe = httpAction(async (ctx, request) => {
 });
 http.route({ path: "/cli/email/unsubscribe", method: "GET", handler: emailUnsubscribe });
 http.route({ path: "/cli/email/unsubscribe", method: "POST", handler: emailUnsubscribe });
+
+// The caller's own suggestion profile, read by the suggest eval (packages/evals).
+// Only api_token is forwarded: the token decides whose profile it is, and any
+// other field in the body, a user id included, never reaches the query.
+cliRoute("/cli/suggestion-profile", async (ctx, body) =>
+  ctx.runQuery(internal.composerSuggestions.getOwnSuggestionProfile, { api_token: String(body?.api_token ?? "") }),
+);
 
 export default http;

@@ -4,6 +4,7 @@ import { internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { canAccessConversation } from "./lib/access";
 import { isLowSignalPrompt, sampleEvenly } from "./titleGeneration";
+import { CHEAP_MODEL, callModel } from "./lib/anthropic";
 
 // Story and Summary are chunked first-person retellings of a session. Rather
 // than summarize every message (which just reproduces the conversation at 1:1),
@@ -13,7 +14,6 @@ import { isLowSignalPrompt, sampleEvenly } from "./titleGeneration";
 // are grouped into a few PHASES. Both are cached as JSON and regenerate when the
 // conversation has grown enough.
 
-const SUMMARY_MODEL = "claude-haiku-4-5-20251001";
 const MAX_USER_ROWS = 600;
 const MAX_ASSISTANT_ROWS = 1500;
 // Regenerate once this many messages arrived since the cached level was built.
@@ -202,7 +202,7 @@ export const writeLevel = internalMutation({
       [args.level]: args.json,
       [`${args.level}_message_count`]: args.message_count,
       generated_at: args.generated_at,
-      model: SUMMARY_MODEL,
+      model: CHEAP_MODEL,
     };
     if (existing) await ctx.db.patch(existing._id, patch);
     else await ctx.db.insert("conversation_summaries", { conversation_id: args.conversation_id, ...patch } as any);
@@ -211,19 +211,9 @@ export const writeLevel = internalMutation({
 
 // ── Haiku ────────────────────────────────────────────────────────────────────
 
-async function callHaiku(apiKey: string, prompt: string, maxTokens: number): Promise<string | null> {
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-    body: JSON.stringify({ model: SUMMARY_MODEL, max_tokens: maxTokens, temperature: 0, messages: [{ role: "user", content: prompt }] }),
-  });
-  if (!response.ok) {
-    console.error("storyMode Haiku error:", response.status, await response.text());
-    return null;
-  }
-  const data = await response.json();
-  const text = data.content?.[0]?.text?.trim();
-  return text ? stripModelPreamble(text) : null;
+async function callHaiku(prompt: string, maxTokens: number): Promise<string | null> {
+  const reply = await callModel({ prompt, max_tokens: maxTokens, label: "storyMode Haiku" });
+  return reply ? stripModelPreamble(reply.text) : null;
 }
 
 // Haiku sometimes prefixes a reasoning block despite instructions. Drop a
@@ -295,7 +285,6 @@ ${notes}
 async function mapBeats<T>(
   items: T[][],
   buildPrompt: (group: T[]) => string,
-  apiKey: string,
   anchorOf: (group: T[]) => { anchor_prompt: string; anchor_message_id: string; anchor_timestamp: number },
 ): Promise<Beat[]> {
   const out: Beat[] = new Array(items.length);
@@ -306,7 +295,7 @@ async function mapBeats<T>(
         const idx = i + j;
         const anchor = anchorOf(group);
         try {
-          const text = await callHaiku(apiKey, buildPrompt(group), 700);
+          const text = await callHaiku(buildPrompt(group), 700);
           const parsed = text ? parseHeadingBody(text) : null;
           out[idx] = {
             heading: parsed?.heading?.trim() || "",
@@ -330,15 +319,14 @@ export const generateStory = action({
   handler: async (ctx, args): Promise<{ ok: boolean; beats: number }> => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return { ok: false, beats: 0 };
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) { console.error("ANTHROPIC_API_KEY not configured"); return { ok: false, beats: 0 }; }
+    if (!process.env.ANTHROPIC_API_KEY) { console.error("ANTHROPIC_API_KEY not configured"); return { ok: false, beats: 0 }; }
 
     const input = await ctx.runQuery(internal.storyMode.getStoryInput, { conversation_id: args.conversation_id, user_id: userId });
     if (!input || input.turns.length === 0) return { ok: false, beats: 0 };
 
     const turns = input.turns as Turn[];
     const groups = chunkInto(turns, beatCount(turns.length));
-    const beats = await mapBeats(groups, buildBeatPrompt, apiKey, (g) => ({
+    const beats = await mapBeats(groups, buildBeatPrompt, (g) => ({
       anchor_prompt: g[0].prompt,
       anchor_message_id: g[0].promptId,
       anchor_timestamp: g[0].promptTs,
@@ -361,8 +349,7 @@ export const generateSummary = action({
   handler: async (ctx, args): Promise<{ ok: boolean; phases: number }> => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return { ok: false, phases: 0 };
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) { console.error("ANTHROPIC_API_KEY not configured"); return { ok: false, phases: 0 }; }
+    if (!process.env.ANTHROPIC_API_KEY) { console.error("ANTHROPIC_API_KEY not configured"); return { ok: false, phases: 0 }; }
 
     // Summary is built FROM the story beats. Ensure they exist first.
     let cached = await ctx.runQuery(internal.storyMode.getCachedStory, { conversation_id: args.conversation_id, user_id: userId });
@@ -374,7 +361,7 @@ export const generateSummary = action({
 
     const beats = cached.beats as Beat[];
     const groups = chunkInto(beats, phaseCount(beats.length));
-    const phases = await mapBeats(groups, buildPhasePrompt, apiKey, (g) => ({
+    const phases = await mapBeats(groups, buildPhasePrompt, (g) => ({
       anchor_prompt: g[0].anchor_prompt,
       anchor_message_id: g[0].anchor_message_id,
       anchor_timestamp: g[0].anchor_timestamp,
@@ -397,13 +384,12 @@ export const generateSummary = action({
 export const generateStoryInternal = internalAction({
   args: { conversation_id: v.id("conversations"), user_id: v.id("users") },
   handler: async (ctx, args): Promise<{ ok: boolean }> => {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) return { ok: false };
+    if (!process.env.ANTHROPIC_API_KEY) return { ok: false };
     const input = await ctx.runQuery(internal.storyMode.getStoryInput, { conversation_id: args.conversation_id, user_id: args.user_id });
     if (!input || input.turns.length === 0) return { ok: false };
     const turns = input.turns as Turn[];
     const groups = chunkInto(turns, beatCount(turns.length));
-    const beats = await mapBeats(groups, buildBeatPrompt, apiKey, (g) => ({
+    const beats = await mapBeats(groups, buildBeatPrompt, (g) => ({
       anchor_prompt: g[0].prompt,
       anchor_message_id: g[0].promptId,
       anchor_timestamp: g[0].promptTs,

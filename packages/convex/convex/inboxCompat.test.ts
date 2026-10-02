@@ -153,8 +153,8 @@ describe("un-flagged listInboxSessions payload — golden shape", () => {
 describe("fact-field signature (sync-convergence C1)", () => {
   test("the server strip list derives exactly from the shared INBOX_FACT_FIELDS", () => {
     expect([...INBOX_LIVENESS_FIELDS, ...INBOX_FAST_FIELDS].sort()).toEqual([...INBOX_FACT_FIELDS].sort());
-    // The fast split is pinned: exactly the two per-message churn fields.
-    expect([...INBOX_FAST_FIELDS]).toEqual(["message_count", "updated_at"]);
+    // The fast split is pinned: the per-message and per-model-call churn fields.
+    expect([...INBOX_FAST_FIELDS]).toEqual(["message_count", "updated_at", "context_tokens", "last_model_call_at"]);
   });
 
   test("an un-flagged (liveness-on) row and an overlay row cover every fact field between them", async () => {

@@ -626,8 +626,8 @@ export const acceptOneInTransaction = internalMutation({
 export async function performWithdrawProposal(ctx: Ctx, userId: Id<"users">, args: { proposal: string; from_session?: string }): Promise<any> {
   const proposal = await findProposal(ctx, args.proposal);
   if (!proposal) throw new Error(`Proposal not found: ${args.proposal}`);
-  // A session may withdraw only the proposal it posted itself (the chief of
-  // staff taking back its own review); a person decides or withdraws anything
+  // A session may withdraw only the proposal it posted itself (the head of
+  // people taking back its own review); a person decides or withdraws anything
   // else on the org page or at a plain shell. With no session, the author's
   // account or an admin of the boundary may withdraw.
   if (args.from_session) {

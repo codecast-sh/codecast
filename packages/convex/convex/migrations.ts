@@ -7,6 +7,12 @@ import { commitRecordedBy } from "./githubWebhooks";
 import { repositoryOfCheckout } from "./users";
 import { standingReportsToFields } from "./lib/standingSeat";
 import { listSessionOwnerIds, stampSeatOwners } from "./sessionOwners";
+import { CHIEF_OF_STAFF_NAME, HEAD_OF_PEOPLE_HANDLE, HEAD_OF_PEOPLE_NAME, LEGACY_HEAD_OF_PEOPLE_HANDLE } from "@codecast/shared/contracts/orgLead";
+import { chiefOfStaffCharter, ensureRoleRoutine, headOfPeopleCharter, roleRoutineOf, standingConversationOf } from "./orgRoles";
+import { personName } from "./sessionOwnership";
+import { seatTitlePatch } from "./anchors";
+import { findRoleRoutineInAnyStatus, isLiveTrigger } from "./lib/orgRoutine";
+import { applyCancel, applyReactivate } from "./agentTasks";
 
 // One-time backfill: stamp conversations.model from each conversation's newest
 // assistant message carrying a real model id ("<synthetic>" = error banner, not
@@ -687,4 +693,117 @@ export const stampStandingSeats = internalMutation({
     }
     return { dryRun, roles: roles.length, stamped: out.length, changes: out };
   },
+});
+
+// The Head of People rename (org-staffing.md S30). Every role that still
+// answers to `chief-of-staff` and is not a Chief of Staff is the Head of
+// People under its old name: a team's gets the new handle, the birth name
+// where it kept the default, the Head of People's charter, its seat retitled
+// and its review routine refreshed. The personal workspace's root is the
+// agent the person already talks to, so with `personal_root: "convert"` it
+// becomes their global Chief of Staff instead: the handle stays (it is the
+// chief's default), the charter becomes the chief's, the Company review is
+// cancelled and the chief's daily check armed. Every row records what
+// changed in `renamed_from`, and `reverse: true` puts it back. Dry by default.
+//   npx convex run migrations:renameHeadOfPeople '{"dryRun":false,"personal_root":"convert"}'
+//   npx convex run migrations:renameHeadOfPeople '{"dryRun":false,"only":["or-19","or-35"]}'   (team roots only)
+//   npx convex run migrations:renameHeadOfPeople '{"dryRun":false,"scope":"team"}'
+export type RenameHeadPlanRow = {
+  role: string; workspace: string; action: "rename" | "convert" | "reverse" | "skip";
+  from: { handle: string; name: string }; to: { handle: string; name: string };
+  seat: string | null; retitle: boolean; charter: boolean;
+  /** Convert only: the review trigger cancelled, and whether the personal
+   *  workspace has other roles and so still needs a Head of People. */
+  review_cancelled?: string | null; needs_head_of_people?: boolean;
+  reason?: string;
+};
+
+export type RenameHeadArgs = {
+  dryRun?: boolean;
+  personal_root?: "head_of_people" | "convert";
+  reverse?: boolean;
+  /** Only these roles (short ids like "or-19"), so a run can take the team
+   *  roots now and leave other people's personal agents for later. */
+  only?: string[];
+  /** Only team roots, or only personal roots. */
+  scope?: "team" | "user";
+};
+
+export async function performRenameHeadOfPeople(
+  ctx: any,
+  args: RenameHeadArgs,
+): Promise<{ dryRun: boolean; reverse: boolean; rows: RenameHeadPlanRow[] }> {
+  const dryRun = args.dryRun ?? true;
+  const reverse = !!args.reverse;
+  const convertPersonal = (args.personal_root ?? "head_of_people") === "convert";
+  const only = args.only?.length ? new Set(args.only.map((s) => s.trim())) : null;
+  const all: any[] = await ctx.db.query("org_roles").collect();
+  const roles = all.filter((r) => (!only || only.has(r.short_id) || only.has(String(r._id))) && (!args.scope || r.scope_type === args.scope));
+  const rows: RenameHeadPlanRow[] = [];
+  const now = Date.now();
+  for (const role of roles) {
+    const workspace = role.team_id ? ((await ctx.db.get(role.team_id))?.name ?? "a team") : `${personName(await ctx.db.get(role.scope_user_id ?? role.host_user_id))}'s personal workspace`;
+    const standing = await standingConversationOf(ctx, role);
+    const seat = standing?.short_id ?? null;
+    if (reverse) {
+      const was = role.renamed_from;
+      if (!was) continue;
+      const retitle = !!standing && standing.title === role.name;
+      rows.push({ role: role.short_id, workspace, action: "reverse", from: { handle: role.handle, name: role.name }, to: { handle: was.handle, name: was.name }, seat, retitle, charter: was.charter !== undefined, review_cancelled: was.review_trigger_id ? String(was.review_trigger_id) : null });
+      if (dryRun) continue;
+      await ctx.db.patch(role._id, { handle: was.handle, name: was.name, charter: was.charter, chief: undefined, renamed_from: undefined, updated_at: now });
+      if (retitle) await ctx.db.patch(standing._id, { ...seatTitlePatch(standing, was.name), updated_at: now });
+      if (was.routine_trigger_id) { const t = await ctx.db.get(was.routine_trigger_id); if (t && isLiveTrigger(t)) await applyCancel(ctx, t); }
+      if (was.review_trigger_id) { const t = await ctx.db.get(was.review_trigger_id); if (t) await applyReactivate(ctx, t); }
+      continue;
+    }
+    if (role.handle !== LEGACY_HEAD_OF_PEOPLE_HANDLE || role.chief || role.renamed_from) continue;
+    if (role.status === "retired") {
+      // A retired seat keeps its name in history; only its handle moves, so
+      // a later hire does not meet a dead row under the live handle.
+      rows.push({ role: role.short_id, workspace, action: "rename", from: { handle: role.handle, name: role.name }, to: { handle: HEAD_OF_PEOPLE_HANDLE, name: role.name }, seat, retitle: false, charter: false, reason: "retired" });
+      if (!dryRun) await ctx.db.patch(role._id, { handle: HEAD_OF_PEOPLE_HANDLE, renamed_from: { handle: role.handle, name: role.name, at: now }, updated_at: now });
+      continue;
+    }
+    const person = personName(await ctx.db.get(role.reports_to?.kind === "user" ? role.reports_to.user_id : role.host_user_id));
+    const defaultName = role.name === CHIEF_OF_STAFF_NAME;
+    if (role.scope_type === "user" && convertPersonal) {
+      const others = all.filter((r) => r._id !== role._id && String(r.scope_user_id ?? "") === String(role.scope_user_id) && r.status !== "retired");
+      const review = standing ? await findRoleRoutineInAnyStatus(ctx, role, standing) : null;
+      rows.push({ role: role.short_id, workspace, action: "convert", from: { handle: role.handle, name: role.name }, to: { handle: role.handle, name: CHIEF_OF_STAFF_NAME }, seat, retitle: !!standing && standing.title === role.name && !defaultName, charter: true, review_cancelled: review && isLiveTrigger(review) ? (review.short_id ?? String(review._id)) : null, needs_head_of_people: others.length > 0 });
+      if (dryRun) continue;
+      const renamed_from: any = { handle: role.handle, name: role.name, charter: role.charter, converted: true, at: now, ...(review ? { review_trigger_id: review._id } : {}) };
+      await ctx.db.patch(role._id, { chief: { reach: "global" }, name: CHIEF_OF_STAFF_NAME, charter: chiefOfStaffCharter(person), renamed_from, updated_at: now });
+      if (review && isLiveTrigger(review)) await applyCancel(ctx, review);
+      if (standing) {
+        if (standing.title === role.name && !defaultName) await ctx.db.patch(standing._id, { ...seatTitlePatch(standing, CHIEF_OF_STAFF_NAME), updated_at: now });
+        const routine = await ensureRoleRoutine(ctx, await ctx.db.get(role._id), standing);
+        await ctx.db.patch(role._id, { renamed_from: { ...renamed_from, routine_trigger_id: routine.id } });
+      }
+      continue;
+    }
+    const name = defaultName ? HEAD_OF_PEOPLE_NAME : role.name;
+    const retitle = !!standing && standing.title === role.name && defaultName;
+    // The charter was the opening's job paragraph (the right hand's); a
+    // charter a person wrote is theirs and stays.
+    const charter = !role.charter || /right hand|keep .* goals in view/i.test(role.charter);
+    rows.push({ role: role.short_id, workspace, action: "rename", from: { handle: role.handle, name: role.name }, to: { handle: HEAD_OF_PEOPLE_HANDLE, name }, seat, retitle, charter });
+    if (dryRun) continue;
+    await ctx.db.patch(role._id, { handle: HEAD_OF_PEOPLE_HANDLE, name, ...(charter ? { charter: headOfPeopleCharter(person) } : {}), renamed_from: { handle: role.handle, name: role.name, ...(charter ? { charter: role.charter } : {}), at: now }, updated_at: now });
+    if (retitle) await ctx.db.patch(standing._id, { ...seatTitlePatch(standing, name), updated_at: now });
+    // The routine's prompt names the role; refresh brings it up to date.
+    if (standing) await roleRoutineOf(ctx, await ctx.db.get(role._id), standing);
+  }
+  return { dryRun, reverse, rows };
+}
+
+export const renameHeadOfPeople = internalMutation({
+  args: {
+    dryRun: v.optional(v.boolean()),
+    personal_root: v.optional(v.union(v.literal("head_of_people"), v.literal("convert"))),
+    reverse: v.optional(v.boolean()),
+    only: v.optional(v.array(v.string())),
+    scope: v.optional(v.union(v.literal("team"), v.literal("user"))),
+  },
+  handler: async (ctx, args) => performRenameHeadOfPeople(ctx, args),
 });
