@@ -1,0 +1,225 @@
+[
+ {
+  "id": "e0000000000000000000000000000001",
+  "devcontainer": null,
+  "machine_id": "wham-public/wham-universal",
+  "label": "acme/example",
+  "is_pinned": false,
+  "description": "acme workspace",
+  "workspace_dir": "/workspace",
+  "agent_network_access": {
+   "mode": "on"
+  },
+  "codex_github_direct": null,
+  "github_connector_id": null,
+  "enable_gitlab_webhooks": false,
+  "repos": [
+   "github-100000001"
+  ],
+  "setup": [
+   ""
+  ],
+  "maintenance_setup": [
+   ""
+  ],
+  "repo_map": {
+   "github-100000001": {
+    "id": "100000001",
+    "name": "example",
+    "owner": {
+     "login": "acme",
+     "id": 10001,
+     "type": "User",
+     "avatar_url": "",
+     "url": "https://api.github.com/users/acme"
+    },
+    "repository_full_name": "acme/example",
+    "clone_url": "https://github.com/acme/example.git",
+    "default_branch": "main",
+    "git_commits_url": "https://api.github.com/repos/acme/example/git/commits{/sha}",
+    "git_refs_url": "https://api.github.com/repos/acme/example/git/refs{/sha}",
+    "git_url": "git://github.com/acme/example.git",
+    "visibility": "private",
+    "archived": false,
+    "allow_auto_merge": false,
+    "allow_merge_commit": false,
+    "allow_rebase_merge": true,
+    "allow_squash_merge": true,
+    "allow_update_branch": false,
+    "language": null,
+    "size": 85706,
+    "master_branch": null,
+    "permissions": {
+     "admin": true,
+     "maintain": true,
+     "push": true,
+     "pull": true
+    }
+   }
+  },
+  "env_vars": {},
+  "secrets": {},
+  "secrets_with_domains": {},
+  "task_count": 13,
+  "creator_id": "user-FIXTURE",
+  "share_settings": "workspace",
+  "share_targets": [],
+  "permissions": {
+   "can_write": true,
+   "can_delete": true
+  },
+  "created_at": 1749091247.067704,
+  "auto_setup_settings": {
+   "use_auto_setup": true
+  },
+  "cache_settings": {
+   "post_setup_cache_enabled": true,
+   "cache_invalidation_key": ""
+  },
+  "etag": "\"0a02d6cf-0000-0200-0000-6abc48f30000\"",
+  "enable_authtranslator": false,
+  "enable_docker_in_docker": false
+ },
+ {
+  "id": "e0000000000000000000000000000003",
+  "devcontainer": null,
+  "machine_id": "wham-public/wham-universal",
+  "label": "acme/study",
+  "is_pinned": false,
+  "description": "",
+  "workspace_dir": "/workspace",
+  "agent_network_access": {
+   "mode": "on"
+  },
+  "codex_github_direct": null,
+  "github_connector_id": null,
+  "enable_gitlab_webhooks": false,
+  "repos": [
+   "github-100000003"
+  ],
+  "setup": "",
+  "maintenance_setup": "",
+  "repo_map": {
+   "github-100000003": {
+    "id": "1042354562",
+    "name": "study",
+    "owner": {
+     "login": "acme",
+     "id": 10001,
+     "type": "User",
+     "avatar_url": "",
+     "url": "https://api.github.com/users/acme"
+    },
+    "repository_full_name": "acme/study",
+    "clone_url": "https://github.com/acme/study.git",
+    "default_branch": "main",
+    "git_commits_url": "https://api.github.com/repos/acme/study/git/commits{/sha}",
+    "git_refs_url": "https://api.github.com/repos/acme/study/git/refs{/sha}",
+    "git_url": "git://github.com/acme/study.git",
+    "visibility": "private",
+    "archived": null,
+    "allow_auto_merge": false,
+    "allow_merge_commit": true,
+    "allow_rebase_merge": true,
+    "allow_squash_merge": true,
+    "allow_update_branch": false,
+    "language": null,
+    "size": 853,
+    "master_branch": null,
+    "permissions": null
+   }
+  },
+  "env_vars": {},
+  "secrets": {},
+  "secrets_with_domains": {},
+  "task_count": 0,
+  "creator_id": "user-FIXTURE",
+  "share_settings": "workspace",
+  "share_targets": [],
+  "permissions": {
+   "can_write": true,
+   "can_delete": true
+  },
+  "created_at": 1755975473.372208,
+  "auto_setup_settings": {
+   "use_auto_setup": true
+  },
+  "cache_settings": {
+   "post_setup_cache_enabled": true,
+   "cache_invalidation_key": ""
+  },
+  "etag": "\"00000000-0000-0000-0000-000000000000\"",
+  "enable_authtranslator": false,
+  "enable_docker_in_docker": false
+ },
+ {
+  "id": "e0000000000000000000000000000002",
+  "devcontainer": null,
+  "machine_id": "wham-public/wham-universal",
+  "label": "acme/workmate",
+  "is_pinned": false,
+  "description": "",
+  "workspace_dir": "/workspace",
+  "agent_network_access": {
+   "mode": "on"
+  },
+  "codex_github_direct": null,
+  "github_connector_id": null,
+  "enable_gitlab_webhooks": false,
+  "repos": [
+   "github-100000002"
+  ],
+  "setup": "",
+  "maintenance_setup": null,
+  "repo_map": {
+   "github-100000002": {
+    "id": "878755508",
+    "name": "workmate",
+    "owner": {
+     "login": "acme",
+     "id": 10001,
+     "type": "User",
+     "avatar_url": "",
+     "url": "https://api.github.com/users/acme"
+    },
+    "repository_full_name": "acme/workmate",
+    "clone_url": "https://github.com/acme/workmate.git",
+    "default_branch": "main",
+    "git_commits_url": "https://api.github.com/repos/acme/workmate/git/commits{/sha}",
+    "git_refs_url": "https://api.github.com/repos/acme/workmate/git/refs{/sha}",
+    "git_url": "git://github.com/acme/workmate.git",
+    "visibility": "private",
+    "archived": null,
+    "allow_auto_merge": false,
+    "allow_merge_commit": true,
+    "allow_rebase_merge": true,
+    "allow_squash_merge": true,
+    "allow_update_branch": false,
+    "language": null,
+    "size": 26934,
+    "master_branch": null,
+    "permissions": null
+   }
+  },
+  "env_vars": {},
+  "secrets": {},
+  "secrets_with_domains": {},
+  "task_count": 1,
+  "creator_id": "user-FIXTURE",
+  "share_settings": "workspace",
+  "share_targets": [],
+  "permissions": {
+   "can_write": true,
+   "can_delete": true
+  },
+  "created_at": 1749091148.059133,
+  "auto_setup_settings": null,
+  "cache_settings": {
+   "post_setup_cache_enabled": true,
+   "cache_invalidation_key": ""
+  },
+  "etag": "\"2e007674-0000-0200-0000-68a225450000\"",
+  "enable_authtranslator": false,
+  "enable_docker_in_docker": false
+ }
+]
