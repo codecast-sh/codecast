@@ -1,15 +1,16 @@
 # Codex Cloud Phase 0 spike findings (2026-09-29)
 
-These are live results against `chatgpt.com/backend-api/wham` on a Pro account, using the one existing environment `684103af114c8191883cdf307e30b7b3` (`ashot/chatdoc`, legacy machine `wham-public/wham-universal`). Scrubbed payloads are in `packages/cli/src/__fixtures__/codexCloud/`. The spike client is `/tmp/wham/w.ts`.
+These are live results against `chatgpt.com/backend-api/wham` on a Pro account, using the one existing environment (`ashot/chatdoc`, legacy machine `wham-public/wham-universal`). Scrubbed payloads are in `packages/cli/src/__fixtures__/codexCloud/`. Replaced with placeholders: environment ids, GitHub repository and account ids, emails, environment variables, secrets, and the repositories' source (partial_repo_snapshot contents, diffs and terminal output), since this repository is public. Kept as recorded: the task, turn and attempt ids and the repository name `ashot/chatdoc` with its owner login, which the tests name and which work only with the account's own sign-in. The spike client is `/tmp/wham/w.ts`.
 
 Every capability the proposal needs works. Details below.
 
 ## Auth and headers
 
-Every call carries these headers:
+Every call needs only:
 - `Authorization: Bearer <tokens.access_token>`
 - `ChatGPT-Account-ID: <tokens.account_id>`, both read from `~/.codex/auth.json`
-- `User-Agent: codex_cli_rs/<ver> (...) codex_cloud_tasks_tui`
+
+The spike client also sent the CLI's `User-Agent: codex_cli_rs/<ver> (...) codex_cloud_tasks_tui`. Codecast sends instead the headers its Codex usage meter already sent to `/wham/usage` (`codexBackendHeadersFromAuth` in `codexBackendUsage.ts`: `User-Agent: codex-cli`, `OpenAI-Beta: codex-1`, `originator: Codex Desktop`), so one header builder serves every wham call. Every endpoint below was verified with them too.
 
 The web app sends extra anti-abuse headers on create. Neither create nor follow-up needs them.
 
@@ -67,7 +68,7 @@ Both formats must render.
 | By repo | `GET /environments/by-repo/github/{owner}/{repo}` | used by the CLI's auto-pick |
 | Search | `GET /tasks/search?query&limit&cursor` | exists (web client) |
 
-`/machines` returns `[]` on this account. No new-style (VM) environment exists here yet. New tasks on the legacy environment already use app-server events, so the renderer covers both generations.
+`/machines` returns `[]` on this account. No new-style (VM) environment exists here yet. New tasks on the legacy environment already use app-server events, so the renderer covers both generations. Re-checked 2026-10-02: still `[]`, and the account's Create environment form offers only the container type, so the VM generation stays unverified (ct-56164).
 
 ## Spike artifacts left on the account
 
@@ -78,3 +79,19 @@ Four small tasks on `ashot/chatdoc`, each titled with "codecast spike":
 - cancelled, now archived
 
 Draft PR ashot/chatdoc#18 was closed and its branch deleted. Validators may create more small ask-mode tasks on this environment. They must close any PR they open and archive their tasks when done.
+
+## OpenAI Agents API: facts verified live (2026-10-01)
+
+Two tiny sessions on `gpt-5.6-terra` (both deleted). Recordings are in `packages/cli/src/__fixtures__/openaiAgents/`. The public docs cover the rest; these are what the docs leave out or what codecast relies on:
+
+- Session ids start with `sess_`. Turns are `turn_`, items `msg_`, `rs_` and `exec_`.
+- `POST /v1/agents/sessions` with `stream: true` answers `201 text/event-stream`. Its first event is `agent.session.created` with the session id. Frames carry `event:` (the type) and no `id:`.
+- A follow-up or a cancel (`POST …/events`) answers `202` with an empty body.
+- `last_active_at` never moves: after two turns it still equalled `created_at`. A session's `usage.total_tokens` and `status` do move, so they are what tells a listed session changed.
+- A command cut off by a cancel streams as `command_execution` with `status: "incomplete"`, but the saved items list never gets it. The stream is the only record of it.
+- A stream opened on an idle session sends `agent.session.environment.ready` and then stays open with nothing more. A follower has to close it itself when the turn ends.
+- Items carry no timestamps; turns do (seconds). The user's message is an item of its turn (`role: "user"`, `output_index: null`).
+- Error bodies are `{error: {type, code, message, param}}`. A bad key is `401 invalid_api_key`; a missing beta header is `400 invalid_beta`. A restricted key missing a scope is also a 401, with no code and "Missing scopes: ..." in the message, so only `invalid_api_key` says the key itself is bad.
+- An idle sandbox is replaced, not ended: a follow-up 62 minutes after the last turn ran normally, in a fresh sandbox without the file the first turn wrote. The session's `environment.id` did not change (it encodes the session's creation time), so the idle gap between turns is the only sign. The transcript says so on a turn that starts more than an hour after the previous one ended.
+- A session OpenAI deleted answers `404` ("No managed agent resource found"). The mirror then marks it gone and never reads it by id again.
+- Without credentials, a sandbox's `setup_commands` can clone public GitHub repositories over HTTPS (`octocat/Hello-World` cloned fine). Private ones need a credential: a vault's `environment_variable` credential is the documented way, and it means storing the person's GitHub token at OpenAI.

@@ -36,7 +36,7 @@ Web carries a second layer of defence. A query that merely ENRICHES a surface go
 
 ## Prompt dry runs
 
-A prompt dry run (a headless `claude -p` that grades a prompt: the org analyzer, a role's standing text, a wake frame) goes through `packages/cli/scripts/prompt-dry-run.ts` and nothing else. The daemon syncs every transcript under `~/.claude/projects` as a session, hooks or no hooks, so a bare `claude -p` with hooks off, detached and its transcript deleted afterwards still sits in the founder's inbox for as long as it runs; four sessions leaked runs that way on four days before the cause was found (2026-09-19). The harness gives each run a private `CLAUDE_CONFIG_DIR` under its run directory (the transcript never enters the watched tree), reads the login from the keychain and hands it to the child through its environment only, points `CODECAST_DIR` at an empty directory so a real `cast` the agent finds cannot post, and puts a guard `cast` on PATH (`scripts/prompt-dry-run-bin/cast`: reads pass through, writes are refused and logged, `--serve <dir>` answers `cast org inputs` and `cast org health` from saved files). `bun packages/cli/scripts/prompt-dry-run.ts --run <dir> --prompt <file> [--serve <dir>] [--guard <dir>]`; the run leaves `out.json`, `reply.txt`, `exit.txt`, `took.txt` and `calls.log` in its directory. Never edit a harness script while a run is alive: bash reads a script as it executes it.
+A prompt dry run (a headless `claude -p` that grades a prompt: the org analyzer, a role's standing text, a wake frame) goes through `packages/cli/scripts/prompt-dry-run.ts` and nothing else. The daemon syncs every transcript under `~/.claude/projects` as a session, hooks or no hooks, so a bare `claude -p` with hooks off, detached and its transcript deleted afterwards still sits in the founder's inbox for as long as it runs; four sessions leaked runs that way on four days before the cause was found (2026-09-19). The harness gives each run a private `CLAUDE_CONFIG_DIR` under its run directory (the transcript never enters the watched tree), reads the login from the keychain and hands it to the child through its environment only, points `CODECAST_DIR` at an empty directory so a real `cast` the agent finds cannot post, and puts a guard `cast` on PATH (`scripts/prompt-dry-run-bin/cast`: reads pass through, writes are refused and logged, `--serve <dir>` answers reads from a captured world: the legacy org files, and any argv saved under `reads/` by its key, refusing a read that the dir's `frozen` list names and that was not captured; `calls.log` marks each call SERVED, UNSERVED, LIVE, HELP, UNKNOWN (a command the CLI does not have, answered by the guard and run nowhere) or REFUSED). `bun packages/cli/scripts/prompt-dry-run.ts --run <dir> --prompt <file> --model <id> [--serve <dir>] [--guard <dir>]`. `--model` is required, because an unpinned run takes the account default and two runs on different accounts cannot be compared; without it the harness exits 2. `--call` grades one model call instead of an agent: the prompt file is the whole user message, `--system <file>` is the system prompt, and there are no tools and one turn, so an eval of a prod prompt carries no Claude Code context the prod call lacks. `--max-output-tokens N` caps the reply the way prod's `max_tokens` does. The run leaves `args.json` (the knobs it used), `out.json`, `reply.txt`, `exit.txt`, `took.txt` and `calls.log` in its directory. To grade a prod prompt against real moments, use `./evals` (below and `docs/architecture/evals.md`), which drives this harness. Never edit a harness script while a run is alive: bash reads a script as it executes it.
 
 ## CLI releases
 
@@ -178,3 +178,51 @@ __navLog()                                  // audit trail of every view change 
 ```
 
 Raw `setState` writes to `currentSessionId`/`pendingNavigateId` are reverted by the view-motion guard (`store/viewNav.ts`): every change of the visible conversation must declare a source, and machine-initiated sources can't move the view mid-session. If a "random session jump" is ever reported, read `__navLog()` first — it names the writer.
+
+## Prompt evals (`evals`)
+
+`./evals` replays the prod prompts in this tree against frozen codecast
+moments and grades the replies. Reads never change anything, and every read
+takes `--json`. The design is `docs/architecture/evals.md`.
+
+A surface is one prod prompt (title, settle, insight, call-summary, ask,
+handoff, suggest, org-review, role-wake, anchor-brief). A conversation is a
+codecast session: `convo inbox` lists your sessions and `convo show
+<session>` reads one. A ref names its surface, `<surface>@<ref>`:
+`title@jx7c6zk:142` (a session and line), `call-summary@<callId>`,
+`role-wake@tr-42`, `org-review@union-base8` (a snapshot name), or
+`<surface>@fixture:<case>` for a committed synthetic case.
+
+The loop: `./evals freeze create title@jx7c6zk:142` → `./evals check title
+--reps 5` (the baseline) → edit the prompt → `./evals check title` →
+`./evals freeze results <id>`.
+
+```bash
+./evals                                   # every surface: route, model, freezes, last runs, stale
+./evals convo inbox | show <session> | find "<text>"
+./evals freeze create <surface>@<ref> [--judge "the reply must …"]
+./evals freeze list | show <id> | results <id> | diff <id> --run A --run B
+./evals freeze replay <id> --reps 3       # one freeze; check replays them all
+./evals freeze judge <id> "the reply must …" [--rejudge]
+./evals check [surface…] [--reps n] [--model id] [--budget usd] [--dry]
+./evals stale [surface…]                  # the precheck: exit 0 when a surface changed
+./evals runs [show|score|diff] …          # every eval run, from the evidence folders
+./evals doctor                            # what is missing here
+```
+
+`check` replays every freeze of a surface through `prompt-dry-run.ts` on
+its pinned model and prints a verdict against the previous run set. Never
+claim a win without `separated: better` (an exact one-sided Mann-Whitney at
+p <= 0.05 with 5+ reps a side). Gates are decided in code, and a single gate
+failure in any sample fails the variant. Agent surfaces (org-review,
+role-wake, anchor-brief) are run by hand only: the cadence triggers flag them
+and never run them.
+
+Two data homes. Synthetic fixtures and their freeze pointers are committed
+under `packages/evals`. Everything real (private freezes, snapshots, runs,
+labels, pages) lives in `EVALS_HOME` (`~/.local/share/codecast/evals`,
+or `CODECAST_EVALS_HOME`), and its `labels/` is a git repo pushed to the
+private `ashot/codecast-eval-labels`. The repo is public: real content,
+transcripts, names, ids or labels never enter git.
+
+<!-- /platform-evals -->

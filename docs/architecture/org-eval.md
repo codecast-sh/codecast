@@ -9,17 +9,23 @@ mostly on the letter's writing. This is the loop that grades the whole thing.
 
 ## The loop
 
-One round: build the ground truth once per workspace; run the analyzer on
-the workspace's saved inputs through `packages/cli/scripts/prompt-dry-run.ts`
-(never a bare `claude -p`); check the spec; render the proposal on the real
-proposal page (the DEV preview mounted on the run's proposal JSON, in the
-founder's Chrome, desktop and phone width); grade substance and presentation
-against the rubric below; write the round to `~/.cache/org-eval/<workspace>/
-round-N/` (inputs hash, prompt hash, proposal.json, captures, grades,
-the three worst things); change the prompt or the page at the site that
-caused the worst thing; run again. A change is kept only when the next
-round's grades say it helped and nothing else fell. Three samples per
-prompt variant before believing a difference, because runs vary.
+One round: build the ground truth once per workspace; capture the
+workspace's inputs as a served snapshot (`./evals snapshot org-review --team T
+--name <ws>-baseN`) and freeze it (`./evals freeze create
+org-review@<ws>-baseN`); run the analyzer on it with `./evals check
+org-review`, which goes through `packages/cli/scripts/prompt-dry-run.ts`
+(never a bare `claude -p`) and grades every sample's spec and substance
+against the labels; render the proposal on the real proposal page (the DEV
+preview mounted on the run's proposal JSON, in the founder's Chrome, desktop
+and phone width) with `./evals capture org-review <runDir>`, which grades the
+presentation against the rubric below. Each sample is a run folder under
+`EVALS_HOME/runs/` holding the inputs hash, the prompt hash, proposal.json,
+the captures and the grades; note the three worst things beside it. Change
+the prompt or the page at the site that caused the worst thing; run again. A
+change is kept only when the next round separates better
+(`docs/architecture/evals.md`, "The separation rule") and nothing else fell:
+8 samples per prompt variant before believing a difference, because runs
+vary. `./evals grade org-review <dir>` regrades an older output dir.
 
 Init and update are both graded. Update is a second run whose served inputs
 are the first run's inputs with its proposal applied (and, once S21 lands,
@@ -37,7 +43,10 @@ name it or not, and why; the initiatives and whether each has an owner; the
 work that happens outside any project; a sample of 30 stale looking records
 read on their own pages and labelled by hand (landed, stalled, never
 started, alive). This is written once to `ground-truth.md` with the evidence
-beside each line, and corrected when a round shows it was wrong.
+beside each line, and corrected when a round shows it was wrong. The ground
+truth and the grade sets built from it are real workspace content, so they
+live in the private labels repo, `EVALS_HOME/labels/org-review/<workspace>/`,
+committed and pushed after every edit, and never in this repo.
 
 ## Substance rubric (each 0 to 3, with the evidence)
 
