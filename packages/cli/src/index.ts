@@ -16574,6 +16574,7 @@ work
   .command("start")
   .description("Start working on a task (set in_progress)")
   .argument("<short_id>", "Task short ID")
+  .option("--take", "Take the task from the session that owns it even while that session is still working")
   .option("--spawn", "Also hand the task to a fresh agent session (the server spawns it, so this works from any shell)")
   .option("--agent <type>", "Agent type for --spawn: claude (default) or codex")
   .option("--message <text>", stdinText("First message for the spawned session (default: the task's own brief)"))
@@ -16582,7 +16583,7 @@ work
     // the task to the session's role, so a wrong session hands it to the wrong
     // party. Same for done, handoff, verdict and drop below.
     const sessionId = ownSessionId(getRealCwd());
-    const result = await cliPost("/cli/work/update", buildTaskStartBody(shortId, sessionId));
+    const result = await cliPost("/cli/work/update", buildTaskStartBody(shortId, sessionId, { take: options.take }));
     console.log(`${c.green}ok${c.reset} Started ${c.cyan}${shortId}${c.reset}`);
     for (const line of startedLines(result)) console.log(`${c.dim}${line}${c.reset}`);
 

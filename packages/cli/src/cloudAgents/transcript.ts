@@ -433,9 +433,12 @@ export function withMirrorSynced(seeded: Map<string, string> | null, transcriptP
   return synced;
 }
 
+/** Saves what readMirrorSynced reads back; a set already saved as it is is not written again. */
 export function writeMirrorSynced(transcriptPath: string, conversationId: string, uuids: Iterable<string>): void {
   const file = path.join(path.dirname(transcriptPath), "synced.json");
+  const body = JSON.stringify({ conversationId, uuids: [...uuids] });
+  try { if (fs.readFileSync(file, "utf8") === body) return; } catch {}
   const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify({ conversationId, uuids: [...uuids] }), { mode: 0o600 });
+  fs.writeFileSync(tmp, body, { mode: 0o600 });
   fs.renameSync(tmp, file);
 }

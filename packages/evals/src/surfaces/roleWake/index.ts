@@ -9,10 +9,10 @@ import { cliFetchRead } from '../../../../cli/src/cliHttp';
 import { defaultConfigDir, readAuthConfig } from '../../../../cli/src/config/readAuthConfig';
 import { ROLE_NEEDS_INPUT_SPEC, roleRoutineFor } from '../../../../convex/convex/lib/orgRoutine';
 import { apiConfig } from '../../adapters/convo';
-import { readFrozenVerbs } from '../../served';
 import { gate, type Captured, type CaptureCtx, type SurfaceImpl } from '../../surface';
 import { meta } from './meta';
-import { claudeModel, describeTurn, findSnapshot, harnessNote, servedDirFor, type SnapshotDir, type StandingWorld } from './world';
+import { standingGates, type StandingLabel } from './actions';
+import { claudeModel, describeTurn, findSnapshot, servedDirFor, withHarnessNote, type SnapshotDir, type StandingWorld } from './world';
 
 // role-wake: one firing of a role's trigger in its standing session. The role
 // gets the frame the server builds for every trigger run (triggerRunFrame: the
@@ -57,6 +57,9 @@ export function frameOf(snap: RoleWakeSnap): string {
   const task = { _id: `fixture-${f.trigger}`, short_id: f.trigger, title: spec.title, prompt: spec.prompt, role_id: `fixture-${f.role.handle}`, ...(spec.event ? { event_filter: { event_type: spec.event } } : {}) };
   return triggerRunFrame(task, { role: f.role, waiting: f.waiting ?? null, stashed: Boolean(f.stashed) });
 }
+
+/** What the agent gets, and what the judge reads it got: the frame, then the harness note. */
+const briefingOf = (snap: RoleWakeSnap): string => withHarnessNote(frameOf(snap), snap, [BRIEF_NOTE]);
 
 const briefOf = (out: { parsed?: unknown }): string | null => ((out.parsed as { brief?: string | null } | undefined)?.brief ?? null);
 
@@ -126,14 +129,14 @@ const impl: SurfaceImpl = {
 
   async replay(snap: RoleWakeSnap, ctx) {
     const serveDir = servedDirFor(snap, ctx, meta);
-    const a = await ctx.agent({ prompt: `${frameOf(snap)}\n${harnessNote(readFrozenVerbs(serveDir), [BRIEF_NOTE])}`, serveDir, model: ctx.model, maxTurns: 80 });
+    const a = await ctx.agent({ prompt: briefingOf(snap), serveDir, model: ctx.model, maxTurns: 80 });
     const written = join(a.runSubdir, 'brief.md');
     const brief = existsSync(written) ? readFileSync(written, 'utf8') : null;
     if (brief !== null) writeFileSync(join(ctx.runDir, 'brief.md'), brief);
     return { reply: a.said.join('\n\n'), parsed: { brief } };
   },
 
-  gates(snap: RoleWakeSnap, out) {
+  gates(snap: RoleWakeSnap, out, label?: StandingLabel) {
     const brief = briefOf(out);
     const scope = parseScheduledTask(frameOf(snap))?.role?.scope ?? [];
     const lines = parseStandingSection(brief);
@@ -145,10 +148,14 @@ const impl: SurfaceImpl = {
         : scope.length && !lines.length
           ? gate('brief-parses', false, `brief.md has no line under "## Where it stands" that parses, for a role that looks after ${scope.join(', ')}`)
           : gate('brief-parses', true, `${lines.length} standing line(s) parse`);
-    return [parses, gate('no-stale-lines', stale.length === 0, stale.length ? `older than a week at the wake: ${stale.map((l) => l.raw).join(' | ')}` : 'no standing line is older than a week at the wake')];
+    return [
+      parses,
+      gate('no-stale-lines', stale.length === 0, stale.length ? `older than a week at the wake: ${stale.map((l) => l.raw).join(' | ')}` : 'no standing line is older than a week at the wake'),
+      ...standingGates(out.agents, label, 1, brief === null ? [] : [brief]),
+    ];
   },
 
-  describe: (snap: RoleWakeSnap) => describeTurn(frameOf(snap), snap.captured_at, 'wake'),
+  describe: (snap: RoleWakeSnap) => describeTurn(briefingOf(snap), snap.captured_at, 'wake'),
 
   productionReply: () => null,
 };

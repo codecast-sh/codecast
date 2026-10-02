@@ -212,6 +212,8 @@ export interface ProofSummary {
   broke: string[];
   /** "3 of 3 checks went red to green", or the honest version of it. */
   label: string;
+  /** The same in a dense line: "proof 3/3", "proof 1/2, 1 broke". */
+  short: string;
 }
 
 export function proofSummary(proof: ChangeCard["proof"]): ProofSummary {
@@ -224,8 +226,14 @@ export function proofSummary(proof: ChangeCard["proof"]): ProofSummary {
   let label: string;
   if (!redBefore.length) label = proof.after.length ? `${proof.after.length} ${noun(proof.after.length)}, none shown red first` : "No proof recorded";
   else label = `${fixed} of ${redBefore.length} ${noun(redBefore.length)} went red to green`;
-  if (broke.length) label += `, ${broke.length} broke`;
-  return { red: redBefore.length, fixed, stillRed, broke, label };
+  let short = redBefore.length ? `proof ${fixed}/${redBefore.length}` : "no proof";
+  if (broke.length) { label += `, ${broke.length} broke`; short += `, ${broke.length} broke`; }
+  return { red: redBefore.length, fixed, stillRed, broke, label, short };
+}
+
+/** The card's own checks in a dense line, named apart from the proof: "checks 3/3". */
+export function checksLabel(checks: ReadonlyArray<{ ok: boolean }>): string {
+  return `checks ${checks.filter((c) => c.ok).length}/${checks.length}`;
 }
 
 export function riskLabel(risk: ChangeCard["risk"]): string {

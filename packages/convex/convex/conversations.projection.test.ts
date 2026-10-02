@@ -169,7 +169,7 @@ describe("overlay projection — placement rules", () => {
         { _id: "messages_auq", conversation_id: "conversations_child_auq", role: "assistant", timestamp: EPOCH - MIN, tool_calls: [{ name: "AskUserQuestion" }] },
       ],
       session_decisions: [
-        { _id: "session_decisions_1", user_id: ME, conversation_id: "conversations_decide", status: "pending" },
+        { _id: "session_decisions_1", user_id: ME, conversation_id: "conversations_decide", status: "pending", blocking: true },
         { _id: "session_decisions_2", user_id: ME, conversation_id: "conversations_parent_quiet", status: "answered" },
       ],
     };
@@ -179,6 +179,14 @@ describe("overlay projection — placement rules", () => {
     expect(liveness.conversations_parent_perm).toMatchObject({ asking: true, bucket: "questions" });
     expect(liveness.conversations_parent_auq).toMatchObject({ asking: true, bucket: "questions" });
     expect(liveness.conversations_parent_quiet).toMatchObject({ asking: false });
+    // The child half of the rollup ships as a fact (ct-56051): a replica that
+    // never holds the asking child still lifts the parent. A row asking on its
+    // own (prompt or decide) carries false.
+    expect(liveness.conversations_parent_perm.child_asking).toBe(true);
+    expect(liveness.conversations_parent_auq.child_asking).toBe(true);
+    expect(liveness.conversations_parent_quiet.child_asking).toBe(false);
+    expect(liveness.conversations_own.child_asking).toBe(false);
+    expect(liveness.conversations_decide.child_asking).toBe(false);
     // Children are never projection MEMBERS — no bucket, no digest entry —
     // but the live probed ones ride the map as FACT-ONLY rows so a replica can
     // compute the parent rollup itself (C1).
@@ -206,6 +214,22 @@ describe("overlay projection — placement rules", () => {
     }
   });
 
+  test("an advisory decide lifts nothing unless someone filed it into a named stack (isStackedAsk)", async () => {
+    const tables = {
+      conversations: [
+        conv("advisory", { updated_at: EPOCH - MIN }),
+        conv("stacked", { updated_at: EPOCH - MIN }),
+      ],
+      session_decisions: [
+        { _id: "sd_adv", user_id: ME, conversation_id: "conversations_advisory", status: "pending", blocking: false, default_option: 0 },
+        { _id: "sd_stk", user_id: ME, conversation_id: "conversations_stacked", status: "pending", blocking: false, default_option: 0, stack_id: "decision_stacks_1" },
+      ],
+    };
+    const { liveness } = await computeSessionsLiveness({ db: db(tables) }, ME as any);
+    expect(liveness.conversations_advisory.bucket).not.toBe("questions");
+    expect(liveness.conversations_stacked).toMatchObject({ asking: true, bucket: "questions" });
+  });
+
   test("a session you run but do not own is not in your overlay at all, decide or no decide", async () => {
     const THEM = "users_them";
     const tables = {
@@ -219,6 +243,7 @@ describe("overlay projection — placement rules", () => {
           user_id: ME,
           conversation_id: "conversations_hosted",
           status: "pending",
+          blocking: true,
           asked_user_ids: [THEM],
         },
       ],
@@ -250,6 +275,7 @@ describe("overlay projection — placement rules", () => {
           user_id: ME,
           conversation_id: "conversations_hosted",
           status: "pending",
+          blocking: true,
           asked_user_ids: [THEM],
         },
       ],

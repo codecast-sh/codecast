@@ -84,17 +84,29 @@ overlay own those fields (D1).
 
 **Fan out follows access, not routing (review blocker).** The transport's scopes are derived
 from the access facts of the post write document: the owner's user scope always; the
-workspace key's team when the stored key is a team key; each explicit grant (a task's
-assignee) in their own user scope; conversations owner only. A routing `team_id` whose
+workspace key's team when the stored key is a team key (never for conversations, whose team
+activity is a separate graduated axis); each explicit grant in their own user scope: a
+task's assignee, and a conversation's session owners other than its runner
+(`checkConversationAccess` admits every owner, and a co-owner's triage dispatch is accepted,
+so its ack must land a position in a scope their window tracks; ct-56044). A routing `team_id` whose
 workspace is `user:<owner>` (private inside a team) therefore never enters the team scope —
 no existence leak, no projected delete probes — and every reader who may read a row holds a
 scope it fans to, which is the property retiring the live lists needs (a task assigned to
 you with no team, or in a team you are not in, reaches your user scope; today only
 `webList`'s assignee union carries it). Assignee and workspace changes are scope moves (D4):
-the departed scope gets a revocation delete.
+the departed scope gets a revocation delete. Session owners are the exception in both
+directions. A `session_owners` insert, whichever writer adds it, appends a thin upsert (no
+cargo) for the conversation in the new owner's user scope, so their applier fetches it
+through `byIds`, which admits owners. An owner removal appends nothing: a revocation delete
+would reach the departed owner's client as a held-row delete, a `byIds` probe and a durable
+exclude that prunes the row from their team board even when the session stays team-visible
+to them. Disown keeps its own path (list absence plus `reconcileDisownedSessions`). The cost
+is one indexed `session_owners` read per non-churn conversation write and one head
+allocation per co-owner.
 
 **The stamp.** Each action row carries `access_owner`, `access_key` (the resolved workspace
-key — stored, else computed — never for conversations) and `access_grants` (assignee). It is
+key — stored, else computed — never for conversations) and `access_grants` (a task's
+assignee; a conversation's session owners other than the runner, sorted). It is
 ALWAYS read from the post write document, one memoized read per tracked write (a reused
 stamp can outlive a scope move or a delete tombstone; review). `getRange` projects every row
 per caller: owner, grant, or held key → the row with cargo; a row with no stamp → no cargo
@@ -257,7 +269,8 @@ below the floor forever and trip the retention alarm).
 - Server unit: merge patch associativity and idempotence; unset handling; coalesce merge;
   denylist → `omitted` only, size guard and kill switch → `partial`; access projection (owner / grant / workspace /
   none → delete); revoke then restore under coalescing; conversations carry no team scope
-  cargo; churn exemption unchanged.
+  cargo; conversations fan to and grant their session owners (an owner insert appends a
+  thin upsert in the owner's scope, a removal appends nothing); churn exemption unchanged.
 - Client unit: patch onto base with a pending lock (lock wins, ack retires it); full row
   path; no base → byIds; partial → refetch; fact strip; unset; delete → authorized absence.
 - Guard tests (syncLog.test.ts): `access_key` appears only in syncLog.ts, schema.ts,

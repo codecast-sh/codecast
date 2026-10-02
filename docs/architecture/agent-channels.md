@@ -31,7 +31,15 @@ every line. Three delivery modes and a small set of noise rules.
    The mentioned party replies with `cast chat send --thread <root>` (the
    reply carries `origin: agent` and its session), and the reply is relayed to
    the mentioning session as a session message when the mention came from a
-   session (extend `buildSessionRelay`).
+   session (extend `buildSessionRelay`). That relay is an agent waking an
+   agent, so it spends the same hourly caps a mention does
+   (`takeMentionWakeCaps`, per sender and per target) and folds past them the
+   same way: the line is stamped `mention_folded`, nothing is enqueued, and the
+   mentioning session reads the reply on its next wake. A folded relay counts
+   as delivered for the mention rail, so a reply that also names the asker is
+   not charged twice. Without this, one mention each way would license an
+   unbounded loop of replies. A person's reply on a session's thread is not a
+   mention reply and spends none of these caps.
 3. Digest. A role's routine can post a daily digest of a channel or of its
    scope into a channel (project updates already do this for projects); the
    routine is a trigger the role owns.
@@ -98,11 +106,13 @@ the bot or `@growth` would name a bot that wakes nothing. Only a 7 character
 it (`canSendProductMessage`).
 
 `chat_messages.mention_folded: true` marks a line whose role or session
-mention was over a cap and was not woken. `sendMessage`, `sendAsAnchor` and
+mention, or whose mention-reply relay, was over a cap and was not woken; the
+relay then reports `session_relay.skipped: "folded"` with the conversation it
+would have reached. `sendMessage`, `sendAsAnchor` and
 `replyAsAnchor` return `mention_wakes: { roles, sessions, folded, skipped:
 string[] }`; a retried `sendMessage` returns the same shape zeroed. `skipped`
 reasons: `role_has_no_session:<handle>`, `relayed:<short id>` (the thread
-relay already carried the line to that session), `excluded_actor:<handle>`
+relay already carried the line to that session, or folded it there), `excluded_actor:<handle>`
 (the T3 loop rules: a role's own hand or a subordinate role wrote the line),
 `delivery_failed:<handle>`. The caps are taken after every free skip, so a
 mention that cannot wake anyone spends no credit.

@@ -123,11 +123,15 @@ function resolveDesktopConfig(input) {
   }
   // An app's own entries in the application menu: { label, action(api) },
   // or { type: "separator" }. The action gets the shell API at click time.
+  // `tray: true` adds the entry to the menu bar icon too, and `visible(api)`
+  // hides it while it does not apply; api.refreshMenus() reads it again.
   const appItems = Array.isArray(menu.appItems) ? menu.appItems : [];
   for (const item of appItems) {
     if (!item || (item.type !== "separator" && (typeof item.label !== "string" || typeof item.action !== "function"))) {
       fail("menu.appItems entries need { label, action } or { type: \"separator\" }");
     }
+    if (item.visible !== undefined && typeof item.visible !== "function") fail("menu.appItems visible must be a function of the api");
+    if (item.tray !== undefined && typeof item.tray !== "boolean") fail("menu.appItems tray must be a boolean");
   }
   const helpLinks = Array.isArray(menu.helpLinks) ? menu.helpLinks : [];
   for (const item of helpLinks) {

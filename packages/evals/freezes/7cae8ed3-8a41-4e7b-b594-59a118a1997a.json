@@ -1,0 +1,26 @@
+{
+  "name": "anchor-brief role-pause-own-triggers",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:role-pause-own-triggers"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "anchor-brief:role-pause-own-triggers",
+    "title": "anchor-brief role-pause-own-triggers"
+  },
+  "asOf": "2026-09-28T09:00:00.000Z",
+  "trigger": {
+    "type": "anchor-brief"
+  },
+  "meta": {
+    "surface": "anchor-brief",
+    "visibility": "public",
+    "snapshot": "fixtures/anchor-brief/role-pause-own-triggers.json"
+  },
+  "judge": "pauses only itself (the docs role, or its own triggers tr-901 and tr-902), leaves every other trigger on the list alone, and tells Mara plainly what it paused",
+  "notes": null,
+  "tags": [],
+  "id": "7cae8ed3-8a41-4e7b-b594-59a118a1997a",
+  "createdAt": "2026-10-02T15:55:53.500Z"
+}

@@ -3,6 +3,7 @@ import { useTrackedStore, sessionsWakeSig, filterInboxScope } from "../store/inb
 import { makeCollectionSig } from "../store/wakeSig";
 import {
   decisionQueueItems,
+  isStackedAsk,
   sessionHasOpenQuestion,
   sortQueue,
   type QueueItem,
@@ -13,7 +14,7 @@ import { SYNTHETIC_POLL_OPTION, type PollQuestion } from "../lib/pollPayload";
 // branches on, nothing that churns. Rows only change on ask/answer, so this
 // is cheap, but it keeps the queue from re-rendering on unrelated store work.
 const decisionsWakeSig = makeCollectionSig<any>(
-  (d) => `${d._id}:${d.status}:${d.created_at}:${d.updated_at ?? 0}:${d.options?.length ?? 0}`
+  (d) => `${d._id}:${d.status}:${d.blocking}:${d.stack_id ?? ""}:${d.created_at}:${d.updated_at ?? 0}:${d.options?.length ?? 0}`
 );
 
 // listMessages pages newest-first; every other caller works oldest-first.
@@ -111,7 +112,7 @@ export function useDecisionQueue(): QueueItem[] {
   return useMemo(() => {
     const meId = s.currentUser?._id;
     const mine = filterInboxScope(s.sessions, "mine", meId);
-    const items = decisionQueueItems(s.sessionDecisions, s.sessions);
+    const items = decisionQueueItems(s.sessionDecisions, s.sessions, isStackedAsk);
 
     // A session that has an authored decision open is already represented;
     // its AUQ row would be the same interruption counted twice.

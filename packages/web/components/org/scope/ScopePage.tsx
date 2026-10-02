@@ -215,6 +215,7 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
   // The composer is Talk (F4.1): the host, the person the role reports to
   // and an admin send; anyone else reads and asks to send.
   const seat = useSeat({ conversationId: standingId, speaker, lead, canTalk: canEditBrief, hideDiff: panelOpen, onSessionView });
+  const pinned = useInboxStore((st) => role ? isHeaderPinned(st, "role", role._id) : false);
 
   // -------- not found / loading
   if (!tree) {
@@ -235,7 +236,6 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
     );
   }
 
-  const pinned = useInboxStore((st) => role ? isHeaderPinned(st, "role", role._id) : false);
   const words = role ? roleWords(role, tree.workspace.kind === "team" ? tree.workspace.name : null) : null;
   const name = words ? words.name : anchor?.name || tree.workspace.name || "Workspace";
   const handle = role ? role.handle : "workspace";

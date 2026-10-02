@@ -84,10 +84,12 @@ registerEvals(program, {
   sims: myLauncher,                           // lists and runs scenarios
   htmlDir: '.sim/html',
 });
-await runEvalsCli(program);
+process.exitCode = await runEvalsCli(program);
 ```
 
-A seam the app leaves unset fails with one sentence naming it. Eaiden's
+`runEvalsCli` returns the run's exit code and leaves `process.exitCode` as it
+found it, so only the bin entry decides how the process exits. A seam the app
+leaves unset fails with one sentence naming it. Eaiden's
 adapters (`~/src/eaiden/tools/xrun/src/adapters`) are the worked example.
 
 ## Tests

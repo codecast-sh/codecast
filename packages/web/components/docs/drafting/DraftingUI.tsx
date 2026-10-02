@@ -467,7 +467,7 @@ export function OverflowPanel({ d }: { d: Drafting }) {
 
   // Mod+Enter moves the selected text (or the paragraph at the caret) into the
   // doc at the editor's own selection.
-  const useInDoc = () => {
+  const moveIntoDoc = () => {
     const el = ref.current;
     const editor = d.editor;
     if (!el || !editor || editor.isDestroyed) return;
@@ -503,7 +503,7 @@ export function OverflowPanel({ d }: { d: Drafting }) {
         onFocus={() => { focused.current = true; }}
         onBlur={() => { focused.current = false; commit(local); }}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); useInDoc(); }
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); moveIntoDoc(); }
           if (e.key === "Escape") { e.preventDefault(); d.setOverflowOpen(false); d.editor?.commands.focus(); }
         }}
         placeholder={"Writing you want nearby but not in the doc: cuts, notes, words you like, an outline."}

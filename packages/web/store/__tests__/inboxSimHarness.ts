@@ -953,7 +953,7 @@ export const SERVER_EVENTS: Record<string, ServerEvent> = {
   decisionQueued: async (s, rng, step) => {
     const id = memberIds(s, rng);
     if (!id) return;
-    await s.backend.db.insert("session_decisions", { user_id: ME, conversation_id: id, status: "pending", created_at: now(), title: `decision ${step}` });
+    await s.backend.db.insert("session_decisions", { user_id: ME, conversation_id: id, status: "pending", blocking: true, created_at: now(), title: `decision ${step}` });
   },
   decisionAnswered: async (s) => {
     const open = (s.backend.db._tables.session_decisions ?? []).find((d: any) => d.status === "pending");

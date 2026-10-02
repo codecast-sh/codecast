@@ -1,4 +1,5 @@
 import { mutation, syncAckPositions } from "./functions";
+import { claimTaskOwnership } from "./lib/taskOwner";
 import { normalizeCharacterFields } from "@codecast/shared/contracts/sessionCharacter";
 import { guardClientResolution, personMayResolve, reopenCore, settleClientResolution } from "./sessionDecisions";
 import { createStackWithCore, removeFromStackCore, reorderStackCore } from "./decisionStacks";
@@ -593,12 +594,11 @@ async function linkConversationToObject(
         .first();
       if (!membership) return;
     }
-    await ctx.db.patch(conversationId, {
-      active_task_id: objectId as Id<"tasks">,
-    });
     // The list append and the association rail (best-effort; legacy fields
     // stay authoritative) are one helper — see conversationLinks.ts.
     await addConversationToWorkItem(ctx, userId, "task", task, conversationId);
+    // A person linked this session to the task: it becomes the one owner.
+    await claimTaskOwnership(ctx, conv, task, { take: true });
     return;
   }
 

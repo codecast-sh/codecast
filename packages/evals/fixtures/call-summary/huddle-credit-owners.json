@@ -1,0 +1,71 @@
+{
+  "asOf": "2026-01-15T18:10:00.000Z",
+  "notes": "Red list #18: a three person huddle where one commitment changes hands, one is asked of a person not on the call, and two ideas are dropped.",
+  "judge": "the action items are exactly four, with these owners: Lucia writes the migration script (Ravi handed it to her), Ravi writes the rollback runbook, Lucia checks the new terms with Priya, Dana sends the customer email on Thursday; nothing for the status page copy, the feature flag, or Priya",
+  "label": {
+    "owners": [
+      "Dana",
+      "Lucia",
+      "Lucia",
+      "Ravi"
+    ]
+  },
+  "snapshot": {
+    "kind": "huddle",
+    "started_at": 1768500000000,
+    "ended_at": 1768500600000,
+    "rolling": false,
+    "lines": [
+      {
+        "speaker": "Dana",
+        "text": "Quick sync on the pricing migration. We switch every account to the new plans on the first.",
+        "at": 1768500000000
+      },
+      {
+        "speaker": "Ravi",
+        "text": "I'll write the migration script this week, it maps each old plan to its new one.",
+        "at": 1768500055000
+      },
+      {
+        "speaker": "Lucia",
+        "text": "Ravi, you're out Friday. I'll take the migration script so it's done before the first.",
+        "at": 1768500110000
+      },
+      {
+        "speaker": "Ravi",
+        "text": "Fair, thanks. Then I'll write the rollback runbook instead, in case the mapping is wrong.",
+        "at": 1768500165000
+      },
+      {
+        "speaker": "Dana",
+        "text": "Someone should update the status page copy at some point.",
+        "at": 1768500220000
+      },
+      {
+        "speaker": "Ravi",
+        "text": "Priya will probably want to review the new terms before customers see them.",
+        "at": 1768500275000
+      },
+      {
+        "speaker": "Dana",
+        "text": "Lucia, can you check the terms with Priya this week?",
+        "at": 1768500330000
+      },
+      {
+        "speaker": "Lucia",
+        "text": "Sure, I'll check them with her on Wednesday.",
+        "at": 1768500385000
+      },
+      {
+        "speaker": "Ravi",
+        "text": "We could put the switch behind a feature flag. Actually no, it's one cutover, let's not.",
+        "at": 1768500440000
+      },
+      {
+        "speaker": "Dana",
+        "text": "Agreed. I'll send the customer email on Thursday morning. That's everything.",
+        "at": 1768500495000
+      }
+    ]
+  }
+}

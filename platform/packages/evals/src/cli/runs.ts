@@ -24,10 +24,12 @@ export function registerRuns(program: Command, sources: EvalSources): void {
     .option('--since <t>', 'window: 24h, 7d, 2w')
     .option('--status <s>', 'pass, fail, crash, unscored, running')
     .option('--freeze <id>', 'replays of one freeze')
-    .option('-n, --limit <n>', 'rows (default 30)', (v) => Number(v), 30)
+    .option('-n, --limit <n>', 'rows (default 30; a --since window lists every run in it)', (v) => Number(v))
     .action(async (flags) => {
       const src = need(sources, 'runs', 'run source');
-      const rows = await src.list({ scenario: flags.scenario, since: since(flags.since), limit: flags.limit, status: flags.status, freezeId: flags.freeze });
+      // A window is its own bound: cutting it at 30 would silently drop the rest of the days asked for.
+      const limit = flags.limit ?? (flags.since ? undefined : 30);
+      const rows = await src.list({ scenario: flags.scenario, since: since(flags.since), limit, status: flags.status, freezeId: flags.freeze });
       if (flags.json) return json(rows);
       out(renderRunList(rows, opts(flags)));
     });

@@ -15,6 +15,7 @@
 // the last assistant message, and the response says so (brief_source).
 
 import { action, internalQuery } from "./functions";
+import { claimTaskOwnership } from "./lib/taskOwner";
 import { v } from "convex/values";
 import { internal, api } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -344,7 +345,12 @@ export async function applyHandoffLink(
   // session lists the way `cast task start` / `cast plan bind` add a session.
   if (source.active_task_id) {
     const task = await ctx.db.get(source.active_task_id);
-    if (task) await addConversationToWorkItem(ctx, userId, "task", task, child._id);
+    if (task) {
+      await addConversationToWorkItem(ctx, userId, "task", task, child._id);
+      // Ownership travels with the work: the child owns the task, the source lets go.
+      const childRow = await ctx.db.get(child._id);
+      if (childRow) await claimTaskOwnership(ctx, childRow, { ...task, conversation_ids: [...(task.conversation_ids ?? []), source._id] }, { take: true });
+    }
   }
   if (source.active_plan_id) {
     const plan = await ctx.db.get(source.active_plan_id);

@@ -240,7 +240,11 @@ export function CallStage({
     | undefined;
   // The record outlives a switch to off (off is a gap in the huddle), so the
   // words are flowing only while it is live and the room has not opted out.
-  const transcribing = !!live && !useRoomTranscribeOff(call.roomKey);
+  // The hook is read before the test, never behind it: short circuited, it
+  // ran only once the record answered, and the hook count changing between
+  // renders crashed the whole stage.
+  const transcribeOff = useRoomTranscribeOff(call.roomKey);
+  const transcribing = !!live && !transcribeOff;
 
   const [view, setView] = useState<StageView>("auto");
   const [threadOpen, setThreadOpen] = useState(takeCallThreadRequest);

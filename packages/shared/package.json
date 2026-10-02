@@ -71,7 +71,8 @@
     "./ratchet": "./ratchet/index.ts",
     "./analytics": "./analytics/index.ts",
     "./agents": "./agents/index.ts",
-    "./search": "./search/index.ts"
+    "./search": "./search/index.ts",
+    "./async": "./async/index.ts"
   },
   "dependencies": {
     "css-tree": "3.2.1",

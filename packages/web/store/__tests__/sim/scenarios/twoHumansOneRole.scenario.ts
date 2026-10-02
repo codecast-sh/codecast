@@ -8,11 +8,9 @@
 // inside Convex's optimistic concurrency never meet here. That half needs the
 // disposable deployment recipe in docs/architecture/sync-sim.md.
 //
-// Known: the role path holds, but the standing session flaps in its host's
-// inbox (INV-fixpoint). byIds drops the owner_name/owner_email the list stamps
-// (ct-56053) and the owned_by_me of ct-56011, and on some orders the hire's
-// insert cargo leaves raw fields the inbox row lacks (ct-56050). The runs
-// leave INV-fixpoint out and pass; all three must go before the known check flips.
+// The standing session is one row in its host's inbox however it arrives:
+// the list, byIds and the hire's insert cargo write it the same way
+// (INV-fixpoint, INV-row-shape).
 
 import { scenario, type ScenarioWorld } from "../dsl";
 import { mentionLine, mentionTarget, mentionWakes } from "../invariantReads";
@@ -53,4 +51,4 @@ async function twoHumansOneRole(w: ScenarioWorld): Promise<void> {
   await expectTurnOrder(w, lead, ["ada", "bo", "bo", "ada"]);
 }
 
-scenario({ name: "twoHumansOneRole", known: { "INV-fixpoint": ["ct-56011", "ct-56053", "ct-56050"] } }, twoHumansOneRole);
+scenario({ name: "twoHumansOneRole" }, twoHumansOneRole);

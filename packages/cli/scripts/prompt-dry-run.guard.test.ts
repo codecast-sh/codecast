@@ -401,4 +401,22 @@ describe("prompt-dry-run.ts", () => {
     expect(argv.join(" ")).not.toContain(h.prompt);
     expect(JSON.parse(fs.readFileSync(path.join(h.runDir, "said.json"), "utf8"))).toEqual(["First.\n\n────────\n\nstill first", "Second."]);
   }, 30_000);
+
+  test("each --then is one more turn resumed into the same session, in order, with a turn line in calls.log", () => {
+    const h = harnessWorld([
+      { type: "assistant", message: { content: [{ type: "text", text: "Said." }] } },
+      { type: "result", result: "Said.", is_error: false, num_turns: 1, total_cost_usd: 0.01, session_id: "s-1" },
+    ]);
+    write(path.join(h.dir, "then2.md"), "Second message.");
+    write(path.join(h.dir, "then3.md"), "Third message.");
+    expect(h.run("--run", h.runDir, "--prompt", h.prompt, "--model", "m", "--account", "fake", "--then", path.join(h.dir, "then2.md"), "--then", path.join(h.dir, "then3.md")).code).toBe(0);
+    for (const n of ["2", "3"]) {
+      expect(JSON.parse(fs.readFileSync(path.join(h.runDir, `said${n}.json`), "utf8"))).toEqual(["Said."]);
+      expect(fs.existsSync(path.join(h.runDir, `out${n}.json`))).toBe(true);
+    }
+    const argv = h.recorded("argv")!.split("\n");
+    expect(argv[argv.indexOf("--resume") + 1]).toBe("s-1");
+    expect(argv[argv.indexOf("-p") + 1]).toBe("Third message.");
+    expect(fs.readFileSync(path.join(h.runDir, "calls.log"), "utf8")).toBe("# turn 2\n# turn 3\n");
+  }, 30_000);
 });

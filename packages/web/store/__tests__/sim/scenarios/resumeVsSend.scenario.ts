@@ -10,11 +10,7 @@
 // `ack` is one delivery (paste, echo, ack), and the real daemon's in-flight
 // and injection dedup windows, which guard that gap, are not modelled.
 //
-// Known: INV-fixpoint fails on the owned_by_me flap (ct-56011), and on the
-// echo's title-generation stamp, which reaches the replica through sync-log
-// cargo and the next list push removes (ct-56050). Both must go before the
-// known check flips. With INV-fixpoint left out every default run passes;
-// an order whose last liveness push predates a row's heartbeat deadline
+// An order whose last liveness push predates a row's heartbeat deadline
 // places it apart from the server (INV-sessions-mine, ct-56054), on no default seed.
 
 import { scenario, type ScenarioWorld } from "../dsl";
@@ -58,4 +54,4 @@ export async function resumeVsSend(w: ScenarioWorld): Promise<void> {
   for (const s of [s1, s2]) await expectOneDelivery(w, s);
 }
 
-scenario({ name: "resumeVsSend", known: { "INV-fixpoint": ["ct-56011", "ct-56050"] } }, resumeVsSend);
+scenario({ name: "resumeVsSend" }, resumeVsSend);

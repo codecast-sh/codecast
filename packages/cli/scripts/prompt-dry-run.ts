@@ -62,11 +62,14 @@
 // so a prompt of any size works; the harness note (what to write instead of
 // posting) belongs in that file, not here.
 //
-// `--then <file>` is a second turn: once the first result is in, the file's
-// text is sent as the person's reply into the same session (claude --resume,
-// same private config dir), and out2.json / reply2.txt hold that turn. It is
-// how a conversational prompt is graded past its opening, since a dry run
-// cannot hear a person. The config dir is removed after the last turn.
+// `--then <file>` is a later turn: once the previous result is in, the file's
+// text is sent as the next message into the same session (claude --resume,
+// same private config dir). Repeat it for more turns, in order; turn N writes
+// outN.json, replyN.txt and saidN.json, and calls.log gets a `# turn N` line
+// before its calls. It is how a conversational prompt is graded past its
+// opening, since a dry run cannot hear a person, and how a standing session's
+// later wakes are replayed after its opening. A turn that fails ends the run.
+// The config dir is removed after the last turn.
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
@@ -85,7 +88,7 @@ function refuse(message: string): never {
   process.exit(2);
 }
 if (!arg("run") || !arg("prompt") || !fs.existsSync(promptFile)) {
-  refuse("usage: prompt-dry-run.ts --run <dir> --prompt <file> --model <id> [--call [--system <file>]] [--max-output-tokens N] [--max-turns N] [--tools A,B] [--guard <dir>] [--serve <dir>] [--account <profile>] [--then <reply file>]");
+  refuse("usage: prompt-dry-run.ts --run <dir> --prompt <file> --model <id> [--call [--system <file>]] [--max-output-tokens N] [--max-turns N] [--tools A,B] [--guard <dir>] [--serve <dir>] [--account <profile>] [--then <file>]...");
 }
 const model = arg("model");
 if (!model || model.startsWith("--")) refuse("--model is required: an unpinned run takes the account default and cannot be compared");
@@ -101,8 +104,8 @@ const maxTurns = call ? "1" : arg("max-turns", "80")!;
 const tools = call ? [] : (arg("tools", "Bash,Read,Write,Edit") ?? "").split(",").filter(Boolean);
 const guardDir = path.resolve(arg("guard") ?? path.join(import.meta.dir, "prompt-dry-run-bin"));
 const serveDir = arg("serve") ? path.resolve(arg("serve")!) : undefined;
-const thenFile = arg("then") ? path.resolve(arg("then")!) : undefined;
-if (thenFile && !fs.existsSync(thenFile)) refuse(`--then: no such file ${thenFile}`);
+const thenFiles = process.argv.flatMap((a, i) => (a === "--then" && process.argv[i + 1] ? [path.resolve(process.argv[i + 1])] : []));
+for (const f of thenFiles) if (!fs.existsSync(f)) refuse(`--then: no such file ${f}`);
 
 /** A saved profile's setup token (`cast accounts token <name>`): a fixed sign-in
  *  in a 0600 env file, so a run can spend that account's window while the
@@ -248,11 +251,17 @@ function runTurn(name: string, promptText?: string, resume?: string): Promise<{ 
 
 const first = await runTurn("out");
 let code = first.code;
-if (thenFile && first.code === 0 && first.sessionId) {
-  const second = await runTurn("out2", fs.readFileSync(thenFile, "utf8").trim(), first.sessionId);
-  code = second.code;
-} else if (thenFile) {
-  fs.writeFileSync(path.join(runDir, "reply2.txt"), `(no second turn: first turn exit ${first.code}, session ${first.sessionId ?? "unknown"})\n`);
+let sessionId = first.sessionId;
+for (const [i, file] of thenFiles.entries()) {
+  const n = i + 2;
+  if (code !== 0 || !sessionId) {
+    fs.writeFileSync(path.join(runDir, `reply${n}.txt`), `(no turn ${n}: turn ${n - 1} exit ${code}, session ${sessionId ?? "unknown"})\n`);
+    break;
+  }
+  fs.appendFileSync(path.join(runDir, "calls.log"), `# turn ${n}\n`);
+  const next = await runTurn(`out${n}`, fs.readFileSync(file, "utf8").trim(), sessionId);
+  code = next.code;
+  sessionId = next.sessionId ?? sessionId;
 }
 fs.writeFileSync(path.join(runDir, "exit.txt"), `${code}\n`);
 fs.writeFileSync(path.join(runDir, "took.txt"), `${Math.round((Date.now() - started) / 1000)}s\n`);

@@ -37,7 +37,7 @@
 // text heuristic. Those all fail the same way — the moment the ranking is
 // wrong once, the founder stops trusting the order, and an untrusted queue is
 // worse than a list, because a list at least admits it is unsorted.
-import { BLOCKED_BANNER_KINDS } from "@codecast/shared/contracts";
+import { BLOCKED_BANNER_KINDS, isStackedAsk } from "@codecast/shared/contracts";
 import { nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 import type { DecisionKind, DecisionOption, InboxSession, SessionDecisionItem } from "../store/inboxStore";
 
@@ -264,14 +264,23 @@ export function sortQueue(items: QueueItem[]): QueueItem[] {
   });
 }
 
+/**
+ * Whether a `cast decide` row belongs in the stack: the queue, its badge, the
+ * rail's QUESTIONS section and /questions. The rule is shared with the server's
+ * pending-decide set (inboxProjection.ts), so an advisory ask lifts its session
+ * on neither side.
+ */
+export { isStackedAsk };
+
 /** `cast decide` rows still awaiting an answer, newest-authored payload wins. */
 export function decisionQueueItems(
   decisions: Record<string, SessionDecisionItem>,
-  sessions: Record<string, InboxSession>
+  sessions: Record<string, InboxSession>,
+  include: (d: SessionDecisionItem) => boolean = (d) => d.status === "pending",
 ): QueueItem[] {
   const out: QueueItem[] = [];
   for (const d of Object.values(decisions)) {
-    if (d.status !== "pending") continue;
+    if (!include(d)) continue;
     out.push({
       key: `decide:${d._id}`,
       source: "decide",
@@ -360,7 +369,7 @@ export function pendingDecisionConvIds(
 ): Set<string> {
   const ids = new Set<string>();
   for (const d of Object.values(decisions)) {
-    if (d.status !== "pending") continue;
+    if (!isStackedAsk(d)) continue;
     if (meId && d.asked_user_ids && !d.asked_user_ids.some((id) => String(id) === String(meId))) continue;
     ids.add(d.conversation_id);
   }

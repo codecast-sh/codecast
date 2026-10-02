@@ -45,6 +45,7 @@ import {
   INBOX_WINDOW_CAPS,
   isSessionActivityFresh,
   isAssignedAwayFromViewer,
+  isStackedAsk,
   type InboxBucket,
   type InboxPlacement,
   type InboxProjection,
@@ -67,7 +68,7 @@ import { shouldShowInInbox, isOrphanOrSubagent, isSessionIdle, deriveSessionActi
 import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { armedTriggerHomeLoader, isArmedTriggerHome, isArmedTriggerHomeOfKind, isArmedLoopHome } from "./dormancy";
 import { subagentLinkFields } from "./ccAccountsShared";
-import { isSessionOwner } from "./sessionOwners";
+import { isSessionOwner, sessionOwnerRow } from "./sessionOwners";
 import { hideConversationForViewer, unhideConversationForViewer, viewerHiddenConversationIds } from "./inboxHides";
 import { approxMessageBytes, filterUserMessages, isImportNotice, isNavigableUserMessage, toNavigatorRow, type FilteredUserMessage } from "./userMessagesFilter";
 import {
@@ -6623,11 +6624,13 @@ export const listFavoriteSessions = query({
       ? await buildUserSessionMaps(ctx, userId, now)
       : EMPTY_INBOX_MAPS;
 
+    const getDoc = makeMemoGet(ctx);
     const results: any[] = [];
     for (const conv of favorites) {
       if (!shouldShowInInbox(conv)) continue;
       // clusterCutoff 0: favorites are deliberately kept — never gap-hide them.
-      const { row } = await enrichInboxSessionRow(ctx, conv, maps, now, false);
+      const { row } = await enrichInboxSessionRow(ctx, conv, maps, now, false, undefined, getDoc);
+      await stampInboxViewerFields(row, conv, userId, await sessionOwnerRow(ctx, conv._id, userId), getDoc);
       results.push(row);
     }
 
@@ -6660,10 +6663,12 @@ export const listKilledSessions = query({
       .withIndex("by_user_killed", (q) => q.eq("user_id", userId).gt("inbox_killed_at", 0))
       .order("desc")
       .paginate(args.paginationOpts);
+    const getDoc = makeMemoGet(ctx);
     const rows: any[] = [];
     for (const conv of result.page) {
       if (isOrphanOrSubagent(conv)) continue;
-      const { row } = await enrichInboxSessionRow(ctx, conv, EMPTY_INBOX_MAPS, now, false);
+      const { row } = await enrichInboxSessionRow(ctx, conv, EMPTY_INBOX_MAPS, now, false, undefined, getDoc);
+      await stampInboxViewerFields(row, conv, userId, await sessionOwnerRow(ctx, conv._id, userId), getDoc);
       stripInboxLiveness(row);
       rows.push(row);
     }
@@ -8491,6 +8496,46 @@ export function makeMemoGet(ctx: any): (id: any) => Promise<any> {
   };
 }
 
+// The viewer-relative half of an inbox row: what this row means to the person
+// reading it, on top of enrichInboxSessionRow's viewer-free half. EVERY feeder
+// of the client's `sessions` cache (the base list, byIds, the completeness
+// floor, favorites, the killed shelf) stamps through here, so one row is
+// written one way whichever feeder delivered it last (the delta syncTable
+// replaces the whole row; a field one feeder omits flaps on every catch-up).
+//   - owned_by_me, always a boolean: the viewer holds a session_owners row;
+//   - author_name/author_email on a row the viewer does not run;
+//   - assigned_ping on an owner row someone else added and the viewer has not
+//     acked (ackSessionAssignment clears it);
+//   - owner_name/owner_email, the PRIMARY owner's (the row shows one chip; the
+//     full owner set is fetched on demand by the session panel).
+export async function stampInboxViewerFields(
+  row: any,
+  conv: any,
+  viewerId: Id<"users">,
+  myOwnerRow: any | null,
+  getDoc: (id: any) => Promise<any>,
+): Promise<void> {
+  if (conv.user_id.toString() !== viewerId.toString()) {
+    const author = await getDoc(conv.user_id);
+    row.author_name = author?.name ?? author?.email ?? null;
+    row.author_email = author?.email ?? null;
+  }
+  row.owned_by_me = !!myOwnerRow;
+  if (myOwnerRow && !myOwnerRow.seen_at && myOwnerRow.added_by?.toString() !== viewerId.toString()) {
+    const byDoc = await getDoc(myOwnerRow.added_by);
+    row.assigned_ping = {
+      by_name: byDoc?.name ?? byDoc?.email ?? "A teammate",
+      note: myOwnerRow.note ?? null,
+      at: myOwnerRow.added_at,
+    };
+  }
+  if (conv.owner_user_id) {
+    const ownerDoc = await getDoc(conv.owner_user_id);
+    row.owner_name = ownerDoc?.name ?? null;
+    row.owner_email = ownerDoc?.email ?? null;
+  }
+}
+
 async function enrichInboxSessionRow(
   ctx: any,
   conv: any,
@@ -9309,11 +9354,13 @@ export async function scanInboxConversations(
     if (conv.user_id.toString() !== userId.toString()) {
       // Not the runner — admit only if they're an owner. ownedByMeIds covers the
       // rows the owner scan already saw; the lookup catches one filed past its
-      // cap. Record it so enrichment stamps owned_by_me.
-      const owned =
-        ownedByMeIds.has(idStr) || (await isSessionOwner(ctx, conv._id, userId));
-      if (!owned) continue;
-      ownedByMeIds.add(idStr);
+      // cap. Record its row so enrichment stamps owned_by_me and assigned_ping.
+      if (!ownedByMeIds.has(idStr)) {
+        const mine = await sessionOwnerRow(ctx, conv._id, userId);
+        if (!mine) continue;
+        ownedByMeIds.add(idStr);
+        myOwnerRowById.set(idStr, mine);
+      }
     }
     if (conv.status !== "active" && conv.status !== "completed") continue;
     byId.set(idStr, conv);
@@ -9510,33 +9557,9 @@ export async function computeInboxSessions(
       const impl = implHandoffByParent.get(conv._id.toString());
       if (impl) row.implementation_session = { _id: impl._id.toString(), title: impl.title };
     }
-    if (conv.user_id.toString() !== userId.toString()) {
-      const author = await getDoc(conv.user_id);
-      row.author_name = author?.name ?? author?.email ?? null;
-      row.author_email = author?.email ?? null;
-    }
-    // owned_by_me reflects membership in the session's owner SET (any owner, not
-    // just the cached primary) — precomputed by the scan, so no per-row lookup.
-    // owner_name/email stay the PRIMARY owner's: the list row shows a single
-    // chip, and the full owner set is fetched on demand by the session panel.
-    row.owned_by_me = ownedByMeIds.has(conv._id.toString());
-    // Unacknowledged handoff: someone ELSE added me as an owner and I haven't
-    // acked it. Stamped on the row so the sidebar can render it prominently;
-    // ackSessionAssignment (or the in-conversation banner) clears it.
-    const myRow = myOwnerRowById.get(conv._id.toString());
-    if (myRow && !myRow.seen_at && myRow.added_by?.toString() !== userId.toString()) {
-      const byDoc = await getDoc(myRow.added_by);
-      row.assigned_ping = {
-        by_name: byDoc?.name ?? byDoc?.email ?? "A teammate",
-        note: myRow.note ?? null,
-        at: myRow.added_at,
-      };
-    }
-    if (conv.owner_user_id) {
-      const ownerDoc = await getDoc(conv.owner_user_id);
-      row.owner_name = ownerDoc?.name ?? null;
-      row.owner_email = ownerDoc?.email ?? null;
-    }
+    // The scan holds my owner rows (the owner window plus any extra id it
+    // admitted past that window's cap), so no per-row lookup here.
+    await stampInboxViewerFields(row, conv, userId, myOwnerRowById.get(conv._id.toString()) ?? null, getDoc);
     return { conv, row, subagentChildren, dismissed, stashed, hidden };
   }));
   // The stamp for a subagent child row, assembled below and applied where the
@@ -9607,6 +9630,7 @@ export async function computeInboxSessions(
     if (r.dismissed || r.stashed) continue;
     for (const child of r.subagentChildren) {
       const childRow = await buildSubagentChildRow(child, maps, now, r.conv._id, (id) => ctx.db.get(id));
+      await stampInboxViewerFields(childRow, child, userId, myOwnerRowById.get(child._id.toString()) ?? null, getDoc);
       stampChildRow?.(child, childRow);
       childRowIds.add(childRow._id.toString());
       results.push(childRow);
@@ -9738,6 +9762,9 @@ type LivenessFields = {
   auq_open: boolean;
   daemon_alive_until: number | null;
   producing_until: number | null;
+  // A child (rollupParentIdOf) is asking: the rollup the replica cannot
+  // compute when that child lives outside its scan window. Member rows only.
+  child_asking?: boolean;
   // What the agent is doing now (conversations.activity), overlay borne so a
   // tool call rides the flush push the overlay already makes and never
   // re-pushes the session list. Clients show it only while the row is working
@@ -9893,7 +9920,8 @@ function isOpenAskUserQuestion(msg: any): boolean {
   return !!msg && msg.role === "assistant" && !!msg.tool_calls?.some((tc: any) => tc.name === "AskUserQuestion");
 }
 
-// Pending `cast decide` questions for the user. Same people set as
+// Pending `cast decide` questions for the user that lift a session into
+// QUESTIONS (isStackedAsk: blocking, or filed into a named stack). Same people set as
 // listForUserCore: decision_inbox (assignment), then the legacy owner index
 // for rows minted before asked_user_ids existed. session_decisions.user_id
 // is the RUNNER — using it here kept a hosted session's questions on the
@@ -9907,7 +9935,7 @@ export async function loadPendingDecisionConvIds(ctx: any, userId: Id<"users">):
     .collect();
   for (const r of inbox) {
     const d = await ctx.db.get(r.decision_id);
-    if (!d || d.status !== "pending") continue;
+    if (!d || !isStackedAsk(d)) continue;
     if (d.asked_user_ids !== undefined && !d.asked_user_ids.some((id: any) => String(id) === uid)) continue;
     ids.add(d.conversation_id.toString());
   }
@@ -9916,7 +9944,7 @@ export async function loadPendingDecisionConvIds(ctx: any, userId: Id<"users">):
     .withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", "pending"))
     .collect();
   for (const r of legacy) {
-    if (r.asked_user_ids !== undefined) continue;
+    if (r.asked_user_ids !== undefined || !isStackedAsk(r)) continue;
     ids.add(r.conversation_id.toString());
   }
   return ids;
@@ -10335,6 +10363,12 @@ export async function computeSessionsLiveness(
     );
     liveness[cid] = {
       ...lv,
+      // The child half of the asking rollup, as a fact (the producing_until
+      // precedent): the asking child may be a live pool row the replica never
+      // holds, and its fact-only overlay row cannot create one. A parent with
+      // its own pending decide is lifted by that, and its children are not
+      // probed in this execution (buildAskingParents), so it reads false.
+      child_asking: askingParents.has(cid) && !pendingDecisionIds.has(cid),
       bucket: placement.bucket,
       work_state: placement.work_state,
       asking,
@@ -10858,10 +10892,12 @@ export async function collectInboxSessionsPaginated(
     if (conv.inbox_dismissed_at || conv.inbox_stashed_at) continue; // dismissed/stashed: own accumulation path
     if (!shouldShowInInbox(conv)) continue;
     const { row, subagentChildren } = await enrichInboxSessionRow(ctx, conv, maps, now, false, { auq: true }, getDoc);
+    await stampInboxViewerFields(row, conv, userId, await sessionOwnerRow(ctx, conv._id, userId), getDoc);
     stripInboxLiveness(row);
     rows.push(row);
     for (const child of subagentChildren) {
       const childRow = await buildSubagentChildRow(child, maps, now, conv._id, (id) => ctx.db.get(id));
+      await stampInboxViewerFields(childRow, child, userId, await sessionOwnerRow(ctx, child._id, userId), getDoc);
       stripInboxLiveness(childRow);
       rows.push(childRow);
     }
@@ -11019,6 +11055,7 @@ export const getInboxSessionsByIds = query({
 // Auth-free body of getInboxSessionsByIds, exported for tests.
 export async function collectInboxSessionsByIds(ctx: any, userId: Id<"users">, ids: string[]) {
   const now = inboxEpoch(Date.now());
+  const getDoc = makeMemoGet(ctx);
   const sessions: any[] = [];
   for (const raw of ids.slice(0, 300)) {
     const id = ctx.db.normalizeId("conversations", raw);
@@ -11028,11 +11065,12 @@ export async function collectInboxSessionsByIds(ctx: any, userId: Id<"users">, i
     // The runner, or an owner (session_owners) — the same admission the scan's
     // owned window applies, so a replica can heal an assigned row it missed.
     // The owner seat is stamped so the client's foreign-row rule keeps it.
-    const owned = conv.user_id.toString() !== userId.toString();
-    if (owned && !(await isSessionOwner(ctx, conv._id, userId))) continue;
+    // One owner-row read gives admission, owned_by_me and assigned_ping.
+    const myOwnerRow = await sessionOwnerRow(ctx, conv._id, userId);
+    if (conv.user_id.toString() !== userId.toString() && !myOwnerRow) continue;
     if (conv.status !== "active" && conv.status !== "completed") continue;
-    const { row } = await enrichInboxSessionRow(ctx, conv, EMPTY_INBOX_MAPS, now, false, { auq: true });
-    if (owned) row.owned_by_me = true;
+    const { row } = await enrichInboxSessionRow(ctx, conv, EMPTY_INBOX_MAPS, now, false, { auq: true }, getDoc);
+    await stampInboxViewerFields(row, conv, userId, myOwnerRow, getDoc);
     stripInboxLiveness(row);
     sessions.push(row);
   }

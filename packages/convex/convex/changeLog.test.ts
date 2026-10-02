@@ -5,6 +5,7 @@ import {
   trackedTableOf,
   makeChangeTrackedDb,
 } from "./changeLog";
+import { makeSyncAckCollector } from "./syncLog";
 
 // Minimal in-memory stand-in for the Convex DatabaseWriter surface the
 // interceptor touches. Ids are "<table>:<n>" so normalizeId is a prefix check and
@@ -72,7 +73,11 @@ function makeFakeDb() {
       return api;
     },
   };
-  return { db, changeRows: () => [...ensure("change_log").values()] };
+  const syncRows = (scope?: string) =>
+    [...ensure("sync_actions").values()]
+      .filter((r) => !scope || r.scope_key === scope)
+      .sort((a, b) => a.position - b.position);
+  return { db, changeRows: () => [...ensure("change_log").values()], syncRows };
 }
 
 describe("scopeFromDoc", () => {
@@ -198,5 +203,52 @@ describe("makeChangeTrackedDb — emission", () => {
     await tdb.patch(id, { content: "x" });
     await tdb.delete(id);
     expect(changeRows()).toHaveLength(0);
+  });
+});
+
+// ct-56044: a co-owner (a session_owners row) may triage a conversation, so the
+// sync log must land its actions in the co-owner's own scope, or the acks they
+// get back name only the runner's scope and their locks never retire.
+describe("makeChangeTrackedDb: session owners fan-out", () => {
+  async function ownedConversation() {
+    const f = makeFakeDb();
+    const conv = await makeChangeTrackedDb(f.db).insert("conversations", { user_id: "users:ada", title: "anchor" });
+    return { ...f, conv };
+  }
+
+  test("a session_owners insert emits a thin upsert in the new owner's scope, stamped with their grant", async () => {
+    const { db, conv, syncRows } = await ownedConversation();
+    await makeChangeTrackedDb(db).insert("session_owners", { conversation_id: conv, user_id: "users:bo", added_by: "users:ada", added_at: 1 });
+    const rows = syncRows("user:users:bo");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ entity_type: "conversations", entity_id: conv, op: "upsert", access_owner: "users:ada", access_grants: ["users:bo"] });
+    expect(rows[0].patch).toBeUndefined();
+  });
+
+  test("the runner joining as an owner appends nothing new", async () => {
+    const { db, conv, syncRows } = await ownedConversation();
+    const before = syncRows().length;
+    await makeChangeTrackedDb(db).insert("session_owners", { conversation_id: conv, user_id: "users:ada", added_by: "users:ada", added_at: 1 });
+    expect(syncRows()).toHaveLength(before);
+  });
+
+  test("a co-owner's patch lands positions in both the runner's and the co-owner's scope", async () => {
+    const { db, conv, syncRows } = await ownedConversation();
+    await db.insert("session_owners", { conversation_id: conv, user_id: "users:bo", added_by: "users:ada", added_at: 1 });
+    const collector = makeSyncAckCollector();
+    await makeChangeTrackedDb(db, collector).patch(conv, { pinned_at: 5 });
+    expect(collector.positions.map((p) => p.scope_key).sort()).toEqual(["user:users:ada", "user:users:bo"]);
+    expect(syncRows("user:users:bo")[0]).toMatchObject({ op: "upsert", access_grants: ["users:bo"] });
+    expect(syncRows("user:users:bo")[0].patch).toMatchObject({ pinned_at: 5 });
+  });
+
+  test("removing an owner emits nothing in the departed owner's scope, and later writes stop reaching it", async () => {
+    const { db, conv, syncRows } = await ownedConversation();
+    const row = await makeChangeTrackedDb(db).insert("session_owners", { conversation_id: conv, user_id: "users:bo", added_by: "users:ada", added_at: 1 });
+    const boBefore = syncRows("user:users:bo").map((r) => ({ ...r }));
+    await makeChangeTrackedDb(db).delete(row);
+    await makeChangeTrackedDb(db).patch(conv, { title: "renamed" });
+    expect(syncRows("user:users:bo")).toEqual(boBefore);
+    expect(syncRows("user:users:ada")[0].access_grants).toBeUndefined();
   });
 });

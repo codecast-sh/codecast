@@ -4,6 +4,8 @@ import { applyPatches, classifyHideTransition, dispatch } from "./dispatch";
 import { reconfigureSession } from "./conversations";
 import { getReceipt } from "./localFirstCommands";
 import { makeFakeDb } from "./testDb";
+import { makeChangeTrackedDb } from "./changeLog";
+import { makeSyncAckCollector } from "./syncLog";
 import { shouldShowInInbox } from "./inboxFilters";
 
 // The conversation hide-transition hook in applyPatches is the ONE place the
@@ -88,6 +90,17 @@ describe("applyPatches conversation owner gate", () => {
       await applyPatches({ db } as any, user as any, stashPatch);
       expect(db._tables.conversations[0].inbox_stashed_at).toBe(111);
     }
+  });
+
+  // ct-56044: the ack a co-owner gets back must hold a position in a scope
+  // their window tracks (their own user scope), or their locks never retire.
+  test("a secondary owner's accepted triage acks a position in their own scope", async () => {
+    const db = fixtures();
+    const collector = makeSyncAckCollector();
+    await applyPatches({ db: makeChangeTrackedDb(db, collector) } as any, SECONDARY as any, stashPatch);
+    const scopes = collector.positions.map((p) => p.scope_key);
+    expect(scopes).toContain(`user:${SECONDARY}`);
+    expect(scopes).toContain(`user:${RUNNER}`);
   });
 
   test("a non-owner's patch is dropped", async () => {

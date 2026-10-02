@@ -1334,9 +1334,9 @@ export function EntityIdPill({
             is looking, so the split pill reads before they click. */}
         {canReveal && (
           <div className="flex items-center justify-between gap-2 border-t border-sol-border/60 px-3 py-1.5 text-[10px] text-sol-text-dim">
-            <span className="inline-flex items-center gap-1.5">
-              <ChevronDown className="h-3 w-3" />
-              The arrow opens it here
+            <span className="inline-flex min-w-0 items-center gap-1.5">
+              <ChevronDown className="h-3 w-3 shrink-0" />
+              <span className="truncate">The arrow opens it here</span>
             </span>
             <RevealOpenLink href={href} label={openLabel} onOpen={handleOpen} variant="compact" />
           </div>

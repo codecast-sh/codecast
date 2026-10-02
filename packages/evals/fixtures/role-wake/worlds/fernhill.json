@@ -78,7 +78,8 @@
         "show",
         "ct-412"
       ],
-      "out": "ct-412 Regenerate the webhooks reference · in_review · docs\n  The webhooks section is regenerated from the schema. Review waits on sd-55: six customer guides still link to the v1 events table."
+      "out": "ct-412 Regenerate the webhooks reference · in_review · docs\n  The webhooks section is regenerated from the schema. Review waits on sd-55: six customer guides still link to the v1 events table.",
+      "prefix": true
     },
     {
       "argv": [
@@ -86,7 +87,8 @@
         "show",
         "ct-418"
       ],
-      "out": "ct-418 Billing page still describes the old plans · backlog · docs\n  The billing page lists the Starter and Team plans, retired on 2026-09-15. jx7bil3 is rewriting it."
+      "out": "ct-418 Billing page still describes the old plans · backlog · docs\n  The billing page lists the Starter and Team plans, retired on 2026-09-15. jx7bil3 is rewriting it.",
+      "prefix": true
     },
     {
       "argv": [
@@ -102,14 +104,16 @@
         "read",
         "jx7bil3"
       ],
-      "out": "Rewrite the billing page for the new plans (jx7bil3) · working · 22 messages\n\n[21] assistant: Drafted the new plans table; checking the annual discount against the pricing service.\n[22] assistant: Opening the pull request once the discount matches."
+      "out": "Rewrite the billing page for the new plans (jx7bil3) · working · 22 messages\n\n[21] assistant: Drafted the new plans table; checking the annual discount against the pricing service.\n[22] assistant: Opening the pull request once the discount matches.",
+      "prefix": true
     },
     {
       "argv": [
         "read",
         "jx7ref2"
       ],
-      "out": "Regenerate the webhooks reference (jx7ref2) · needs input · 41 messages\n\n[38] user: Regenerate the webhooks section of the API reference from the schema.\n[39] assistant: Done for v2. The schema no longer defines the v1 events, but six customer guides still link to the v1 table.\n[40] assistant: Posted sd-55: drop the v1 events table, or keep it marked deprecated until the guides move?\n[41] assistant: Waiting on sd-55 before I open the pull request."
+      "out": "Regenerate the webhooks reference (jx7ref2) · needs input · 41 messages\n\n[38] user: Regenerate the webhooks section of the API reference from the schema.\n[39] assistant: Done for v2. The schema no longer defines the v1 events, but six customer guides still link to the v1 table.\n[40] assistant: Posted sd-55: drop the v1 events table, or keep it marked deprecated until the guides move?\n[41] assistant: Waiting on sd-55 before I open the pull request.",
+      "prefix": true
     },
     {
       "argv": [
@@ -150,7 +154,211 @@
         "-q",
         "webhooks"
       ],
-      "out": "  ct-412  in_review  Regenerate the webhooks reference  · docs\n  ct-397  done       Document webhook retries and signatures  · docs"
+      "out": "  ct-412  in_review  Regenerate the webhooks reference  · docs\n  ct-397  done       Document webhook retries and signatures  · docs",
+      "prefix": true
+    },
+    {
+      "argv": [
+        "search",
+        "webhooks",
+        "reference"
+      ],
+      "out": "Sessions\n  jx7ref2  Regenerate the webhooks reference  · needs input\nTasks\n  ct-412  in_review  Regenerate the webhooks reference  · docs\n  ct-397  done       Document webhook retries and signatures  · docs",
+      "prefix": true
+    },
+    {
+      "argv": [
+        "chat",
+        "search",
+        "webhooks"
+      ],
+      "out": "No messages match \"webhooks\"."
+    },
+    {
+      "argv": [
+        "task",
+        "context",
+        "ct-412"
+      ],
+      "out": "ct-412 Regenerate the webhooks reference · in_review · docs\n  The webhooks section is regenerated from the schema. Review waits on sd-55: six customer guides still link to the v1 events table.\n  Plan: pl-31 Reference from schema\n  Sessions: jx7ref2 (needs input)"
+    },
+    {
+      "argv": [
+        "task",
+        "show",
+        "sd-55"
+      ],
+      "out": "No task matches sd-55. Decisions are read with: cast decide show sd-55",
+      "exit": 1
+    },
+    {
+      "argv": [
+        "task",
+        "ls",
+        "-q",
+        "billing"
+      ],
+      "out": "  ct-418  backlog  Billing page still describes the old plans  · docs"
+    },
+    {
+      "argv": [
+        "task",
+        "ls",
+        "-q",
+        "billing",
+        "page"
+      ],
+      "out": "  ct-418  backlog  Billing page still describes the old plans  · docs"
+    },
+    {
+      "argv": [
+        "task",
+        "ls",
+        "-a",
+        "-q",
+        "billing"
+      ],
+      "out": "  ct-418  backlog  Billing page still describes the old plans  · docs"
+    },
+    {
+      "argv": [
+        "plan",
+        "ls",
+        "-q",
+        "billing"
+      ],
+      "out": "No plans match \"billing\"."
+    },
+    {
+      "argv": [
+        "sessions",
+        "--state",
+        "working"
+      ],
+      "out": "Sessions · you\nWorking (1)\n  jx7bil3  Rewrite the billing page for the new plans"
+    },
+    {
+      "argv": [
+        "task",
+        "ls",
+        "--label",
+        "docs"
+      ],
+      "out": "  ct-412  in_review  Regenerate the webhooks reference  · docs\n  ct-415  backlog    Retire the hand-written reference pages  · docs\n  ct-418  backlog    Billing page still describes the old plans  · docs"
+    },
+    {
+      "argv": [
+        "search",
+        "billing",
+        "page"
+      ],
+      "out": "Sessions\n  jx7bil3  Rewrite the billing page for the new plans  · working\nTasks\n  ct-418  backlog  Billing page still describes the old plans  · docs",
+      "prefix": true
+    },
+    {
+      "argv": [
+        "task",
+        "ls",
+        "-q",
+        "webhook"
+      ],
+      "out": "  ct-412  in_review  Regenerate the webhooks reference  · docs\n  ct-397  done       Document webhook retries and signatures  · docs",
+      "prefix": true
+    },
+    {
+      "argv": [
+        "task",
+        "ls",
+        "-q",
+        "docs"
+      ],
+      "out": "  ct-412  in_review  Regenerate the webhooks reference  · docs\n  ct-415  backlog    Retire the hand-written reference pages  · docs\n  ct-418  backlog    Billing page still describes the old plans  · docs",
+      "prefix": true
+    },
+    {
+      "argv": [
+        "plan",
+        "ls",
+        "-q",
+        "docs"
+      ],
+      "out": "  pl-31  active  Reference from schema  3/5",
+      "prefix": true
+    },
+    {
+      "argv": [
+        "search",
+        "webhooks reference"
+      ],
+      "out": "Sessions\n  jx7ref2  Regenerate the webhooks reference  · needs input\nTasks\n  ct-412  in_review  Regenerate the webhooks reference  · docs\n  ct-397  done       Document webhook retries and signatures  · docs",
+      "prefix": true
+    },
+    {
+      "argv": [
+        "search",
+        "billing page"
+      ],
+      "out": "Sessions\n  jx7bil3  Rewrite the billing page for the new plans  · working\nTasks\n  ct-418  backlog  Billing page still describes the old plans  · docs",
+      "prefix": true
+    },
+    {
+      "argv": [
+        "sessions",
+        "jx7bil3"
+      ],
+      "out": "Rewrite the billing page for the new plans (jx7bil3) · working · docs\n  last: Opening the pull request once the discount matches.",
+      "prefix": true
+    },
+    {
+      "argv": [
+        "sessions",
+        "--label",
+        "docs"
+      ],
+      "out": "Sessions · you\nneeds input 1  ·  working 1\n\nNeeds input (1)\n  jx7ref2  Regenerate the webhooks reference   asks whether to drop the v1 events table (sd-55)\nWorking (1)\n  jx7bil3  Rewrite the billing page for the new plans",
+      "prefix": true
+    },
+    {
+      "argv": [
+        "summary",
+        "jx7bil3"
+      ],
+      "out": "Rewrite the billing page for the new plans (jx7bil3): drafting the new plans table, checking the annual discount against the pricing service, then opening the pull request.",
+      "prefix": true
+    },
+    {
+      "argv": [
+        "diff",
+        "jx7bil3"
+      ],
+      "out": "jx7bil3 · 1 file changed: docs/billing.md",
+      "prefix": true
+    },
+    {
+      "argv": [
+        "task",
+        "context",
+        "ct-418"
+      ],
+      "out": "ct-418 Billing page still describes the old plans · backlog · docs\n  The billing page lists the Starter and Team plans, retired on 2026-09-15. jx7bil3 is rewriting it.",
+      "prefix": true
+    },
+    {
+      "argv": [
+        "plan",
+        "status",
+        "pl-31"
+      ],
+      "out": "pl-31 Reference from schema · active · 3 of 5 tasks done",
+      "prefix": true
+    },
+    {
+      "argv": [
+        "pr",
+        "ls"
+      ],
+      "out": "No open pull requests.",
+      "prefix": true
     }
   ]
 }

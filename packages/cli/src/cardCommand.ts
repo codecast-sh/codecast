@@ -15,6 +15,7 @@ import {
   assembleChangeCard,
   CHANGE_VERDICTS,
   proofSummary,
+  checksLabel,
   validateChangeCard,
   type CardEvidenceInput,
   type ChangeCard,
@@ -147,7 +148,7 @@ async function buildCard(deps: PublishDeps, options: BuildOptions): Promise<void
   } else {
     console.log(`${fmt.label("card:")} ${outJson}`);
     console.log(`${fmt.label("page:")} ${outHtml}`);
-    console.log(fmt.muted(`  ${proofSummary(card.proof).label} · ${card.checks.filter((c) => c.ok).length}/${card.checks.length} checks · ${card.examples.length} examples`));
+    console.log(fmt.muted(`  ${proofSummary(card.proof).label} · ${checksLabel(card.checks)} · ${card.examples.length} examples`));
     if (errors.length) {
       console.error(fmt.error(`\nThe card is not ready (${errors.length}):`));
       for (const e of errors) console.error(`  ${e}`);

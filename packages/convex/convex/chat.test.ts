@@ -25,6 +25,8 @@ import {
   markAllThreadsRead,
   markRead,
   markThreadRead,
+  MENTION_WAKES_PER_SENDER_HOUR,
+  MENTION_WAKES_PER_TARGET_HOUR,
   openDm,
   listChannelMembers,
   removeChannelMember,
@@ -3443,6 +3445,78 @@ describe("agent channels: roles and sessions in chat", () => {
     });
     expect(bystander.session_relay.skipped).toBe("agent_authored");
     expect(pending(ctx).length).toBe(2);
+  });
+
+  // Alice's session asks Bob's in a thread; returns the thread root.
+  async function askBob(ctx: any) {
+    const root = await call(sendMessage, ctx, {
+      channel_id: CHANNEL, content: "deploy check", origin: "agent", origin_session_id: "sess-alice",
+    });
+    await call(sendMessage, ctx, {
+      channel_id: CHANNEL, thread_root_id: root.message_id, content: "@jx7bobb is prod green?",
+      origin: "agent", origin_session_id: "sess-alice",
+    });
+    return root.message_id as string;
+  }
+  const quota = (ctx: any, key: string) =>
+    ctx.db._tables.chat_agent_quota.find((q: any) => q.key === key && q.bucket === hourBucket())?.count ?? 0;
+
+  test("a session's mention reply spends both hourly caps and folds past the sender's", async () => {
+    const ctx = context(ALICE, seed());
+    const thread = await askBob(ctx);
+    const answer = await call(sendMessage, as(ctx, BOB), {
+      channel_id: CHANNEL, thread_root_id: thread, content: "yes, all green",
+      origin: "agent", origin_session_id: "sess-bob",
+    });
+    expect(answer.session_relay.delivered).toBe(true);
+    // The answer is an agent waking an agent: it costs what a mention costs.
+    expect(quota(ctx, `mention_from:${BOB}`)).toBe(1);
+    expect(quota(ctx, "mention_to:conv-alice")).toBe(1);
+
+    const capped = context(ALICE, seed({
+      chat_agent_quota: [{ _id: "q1", key: `mention_from:${BOB}`, bucket: hourBucket(), count: MENTION_WAKES_PER_SENDER_HOUR, updated_at: 1 }],
+    }));
+    const thread2 = await askBob(capped);
+    const folded = await call(sendMessage, as(capped, BOB), {
+      channel_id: CHANNEL, thread_root_id: thread2, content: "yes, all green",
+      origin: "agent", origin_session_id: "sess-bob",
+    });
+    expect(folded.session_relay).toEqual({ delivered: false, skipped: "folded", session_short_id: "jx7alic", conversation_id: "conv-alice" });
+    expect(row(capped, folded.message_id).mention_folded).toBe(true);
+    // Only the ask reached a session; Alice's reads the answer on its next wake.
+    expect(pending(capped).map((p: any) => p.conversation_id)).toEqual(["conv-bob"]);
+  });
+
+  test("a folded mention reply that also names the asker does not charge the sender twice", async () => {
+    // Alice's session is team visible here, so Bob's reply can name it.
+    const ctx = context(ALICE, seed({
+      conversations: seed().conversations.map((c: any) =>
+        c._id === "conv-alice" ? { ...c, team_id: TEAM, is_private: false } : c),
+      chat_agent_quota: [{ _id: "q1", key: "mention_to:conv-alice", bucket: hourBucket(), count: MENTION_WAKES_PER_TARGET_HOUR, updated_at: 1 }],
+    }));
+    const thread = await askBob(ctx);
+    const answer = await call(sendMessage, as(ctx, BOB), {
+      channel_id: CHANNEL, thread_root_id: thread, content: "@jx7alic yes, all green",
+      origin: "agent", origin_session_id: "sess-bob",
+    });
+    expect(answer.session_relay.skipped).toBe("folded");
+    // The rail sees the line already folded into that session and spends nothing.
+    expect(answer.mention_wakes).toEqual({ roles: 0, sessions: 0, folded: 0, skipped: ["relayed:jx7alic"] });
+    expect(quota(ctx, `mention_from:${BOB}`)).toBe(1);
+    expect(row(ctx, answer.message_id).mention_folded).toBe(true);
+  });
+
+  test("a person's reply on a session's thread relays without touching the hourly mention caps", async () => {
+    const ctx = context(ALICE, seed({
+      chat_agent_quota: [{ _id: "q1", key: `mention_from:${ALICE}`, bucket: hourBucket(), count: MENTION_WAKES_PER_SENDER_HOUR, updated_at: 1 }],
+    }));
+    const root = await call(sendMessage, ctx, {
+      channel_id: CHANNEL, content: "is prod green?", origin: "agent", origin_session_id: "sess-alice",
+    });
+    const reply = await call(sendMessage, ctx, { channel_id: CHANNEL, thread_root_id: root.message_id, content: "yes, green" });
+    expect(reply.session_relay.delivered).toBe(true);
+    expect(row(ctx, reply.message_id).mention_folded).toBeUndefined();
+    expect(quota(ctx, "mention_to:conv-alice")).toBe(0);
   });
 
   test("linesSince returns compact lines after a stamp, oldest first, only from readable channels", async () => {

@@ -114,11 +114,24 @@ describe('gates', () => {
   });
 });
 
+/** A `cast` that only says it was reached live: the guard must never get that far in a closed world. */
+let fakeCast = '';
+const fakeCastDir = () => {
+  if (fakeCast) return fakeCast;
+  fakeCast = mkdtempSync(join(tmpdir(), 'evals-fakecast-'));
+  writeFileSync(join(fakeCast, 'cast'), '#!/bin/sh\necho "LIVE $*"\n');
+  chmodSync(join(fakeCast, 'cast'), 0o755);
+  return fakeCast;
+};
+
+// Each guard call is a bash script that spawns shasum and friends. Idle, a
+// call takes tens of milliseconds; at a load of 1000 (2026-10-02) the cases
+// below, 4 to 11 calls each, took 6 to 10s, so they get this long.
+const GUARD_MS = 30_000;
+
 /** Runs the real guard the way a replay's agent does, with no model: what calls.log records decides the route gates. */
 function guard(serveDir: string, run: string, ...argv: string[]) {
-  const fake = mkdtempSync(join(tmpdir(), 'evals-fakecast-'));
-  writeFileSync(join(fake, 'cast'), '#!/bin/sh\necho "LIVE $*"\n');
-  chmodSync(join(fake, 'cast'), 0o755);
+  const fake = fakeCastDir();
   const r = Bun.spawnSync(['bash', GUARD, ...argv], { env: { ...process.env, RUN_DIR: run, DRY_RUN_SERVE_DIR: serveDir, PATH: `${fake}:${process.env.PATH}` } });
   return { code: r.exitCode, out: r.stdout.toString() };
 }
@@ -130,7 +143,7 @@ describe('served reads', () => {
     const served = servedDirFor(fixtureSnap('docs-check'), { runDir }, meta);
     // A synthetic world is closed: every read answers from it or fails, so a made-up id never reaches the live workspace.
     expect(readFrozenVerbs(served)).toEqual([EVERY_READ]);
-    const agent = (): AgentResult => ({ runSubdir: runDir, said: [], calls: readFileSync(join(runDir, 'calls.log'), 'utf8').split('\n').filter(Boolean), costUsd: 0, modelUsage: { [meta.model]: { outputTokens: 1 } }, isError: false, exitCode: 0, model: meta.model, realMs: 0 });
+    const agent = (): AgentResult => ({ runSubdir: runDir, said: [], turns: [[]], calls: readFileSync(join(runDir, 'calls.log'), 'utf8').split('\n').filter(Boolean), costUsd: 0, modelUsage: { [meta.model]: { outputTokens: 1 } }, isError: false, exitCode: 0, model: meta.model, realMs: 0 });
     const frozen = () => routeGates(meta, { calls: [], agents: [agent()] }).find((g) => g.id === 'frozen-reads')!;
 
     expect(guard(served, runDir, 'brief')).toMatchObject({ code: 0, out: expect.stringContaining('Docs lead @docs') });
@@ -142,7 +155,7 @@ describe('served reads', () => {
     const g = frozen();
     expect(g.pass).toBe(false);
     expect(g.evidence.summary).toContain('cast brief was not captured, so it was refused: add it to meta.frozenReads');
-  });
+  }, GUARD_MS);
 
   test("a fixture world is closed: the ids its story names are served, and any other read fails, never live", () => {
     const runDir = join(home, 'run');
@@ -153,7 +166,17 @@ describe('served reads', () => {
     const log = readFileSync(join(runDir, 'calls.log'), 'utf8');
     expect(log).not.toMatch(/^LIVE /m);
     expect(log).toContain('UNSERVED plan show pl-99');
-  });
+  }, GUARD_MS);
+
+  test("a read the world marks as a prefix answers any longer argv; an unmarked one does not", () => {
+    const runDir = join(home, 'run');
+    mkdirSync(runDir, { recursive: true });
+    const served = servedDirFor(fixtureSnap('docs-check'), { runDir }, meta);
+    const transcript = guard(served, runDir, 'read', 'jx7ref2').out;
+    expect(guard(served, runDir, 'read', 'jx7ref2', '--ask', 'what is it waiting on?')).toMatchObject({ code: 0, out: transcript });
+    expect(guard(served, runDir, 'read', 'jx7ref2', '--full').out).toBe(transcript);
+    expect(guard(served, runDir, 'plan', 'show', 'pl-31', '--json')).toMatchObject({ code: 1, out: '' });
+  }, GUARD_MS);
 
   test("the seat's values serve the role's own brief as the bare argv it types, as a capture's aliases do", () => {
     const runDir = join(home, 'run');

@@ -15,4 +15,6 @@ export const meta: SurfaceMeta = {
   maxUsdPerRep: 1.5,
   criteria: 'the opening turn orients the role to its scope and does no writes',
   ...STANDING_READS,
+  // A chat wake tells the agent to fill its placeholder with `cast chat reply`; that write is the wake's, not the agent's choice.
+  allowedRefusals: ['^chat reply '],
 };

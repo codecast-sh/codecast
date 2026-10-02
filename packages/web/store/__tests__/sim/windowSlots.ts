@@ -177,6 +177,7 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "lib/sounds.ts:ctx": { shared: "audio output; bun has no AudioContext, so it stays null" },
   "lib/sounds.ts:soundedAt": { shared: "arrival sound de-dupe; affects only whether a sound plays" },
   "lib/syncLogCargo.ts:FACT_FIELDS": CONSTANT,
+  "lib/syncLogCargo.ts:ROW_FIELDS": CONSTANT,
   "lib/tabRoutes.ts:NON_TAB_EXACT": CONSTANT,
   "lib/sessionCommands.ts:SESSION_COMMAND_ACTIONS": CONSTANT,
 };

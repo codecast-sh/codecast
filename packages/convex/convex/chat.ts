@@ -178,7 +178,7 @@ const ANCHOR_THREAD_EXCERPT = 12;
 // How long a placeholder may say "thinking" before the thread is told the answer
 // is not coming. Long enough for a dormant daemon to wake, resume the standing
 // session and take a turn; short enough that nobody watches a dead spinner.
-const ANCHOR_REPLY_TIMEOUT_MS = 10 * 60_000;
+export const ANCHOR_REPLY_TIMEOUT_MS = 10 * 60_000;
 
 // ── Access ──────────────────────────────────────────────────────────────────
 
@@ -2315,9 +2315,10 @@ export const sendMessage = mutation({
       try {
         mentionWakes = await wakeMentionedParties(ctx, {
           channel, message, root, senderId: userId, senderName: actorName, roles, sessions,
-          // The thread relay above already handed this line to that session:
-          // naming the thread's own session must not cost it a second turn.
-          alreadyDelivered: relay.delivered ? relay.conversation_id : null,
+          // The thread relay above already handed this line to that session,
+          // or folded it there past the hourly caps: naming the thread's own
+          // session must not cost it a second turn or the sender a second wake.
+          alreadyDelivered: relay.delivered || relay.skipped === "folded" ? relay.conversation_id : null,
           answeredBySeat,
         });
       } catch (error) {
@@ -3665,7 +3666,9 @@ function buildChatWake(opts: {
   return lines.join("\n");
 }
 
-function buildAnchorWake(opts: {
+// Exported for packages/evals, whose anchor-brief fixtures render a chat wake
+// through it so a replay grades the wake prod sends.
+export function buildAnchorWake(opts: {
   channelName: string;
   channelKind: string | undefined;
   channelTopic: string | undefined;
@@ -3845,7 +3848,10 @@ async function collectChatExcerpt(
 //     own-or-team rule `cast send` uses (canSendProductMessage). Reading a
 //     thread in a channel does not grant the right to run somebody's agent.
 //  3. Rate-limited per sender, and it DEGRADES: a skipped relay costs an
-//     answer, a thrown one would cost the message.
+//     answer, a thrown one would cost the message. A mention reply (a session
+//     answering the session that named it) also spends the hourly mention
+//     caps and folds past them, so two sessions cannot wake each other
+//     without end.
 //  4. Idempotent on the message id, like the wake — a retried send never
 //     injects the same line twice.
 async function maybeRelayToOriginSession(
@@ -3902,6 +3908,16 @@ async function maybeRelayToOriginSession(
     if (error instanceof ConvexError) return no("rate_limited");
     throw error;
   }
+  const shortId = (conversation as any).short_id ?? conversation._id.toString().slice(0, 7);
+  // A mention reply is an agent waking an agent, so it spends the same hourly
+  // caps a mention does (C2). Over them it folds like a mention: the row is
+  // stamped and the asker reads the answer on its next wake. The folded line
+  // still names its conversation, so the mention rail does not charge the
+  // sender a second time for the same line.
+  if (mentionReply && !(await takeMentionWakeCaps(ctx, opts.senderId, String(conversation._id)))) {
+    if (!opts.message.mention_folded) await patchChat(ctx, opts.message._id, { mention_folded: true });
+    return { delivered: false, skipped: "folded", session_short_id: shortId, conversation_id: conversation._id.toString() };
+  }
 
   const nonce = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
   const { entries, channelEntries } = await collectChatExcerpt(ctx, {
@@ -3933,7 +3949,7 @@ async function maybeRelayToOriginSession(
   return {
     delivered: true,
     skipped: null,
-    session_short_id: (conversation as any).short_id ?? conversation._id.toString().slice(0, 7),
+    session_short_id: shortId,
     conversation_id: conversation._id.toString(),
   };
 }
@@ -3942,7 +3958,8 @@ type RelayResult = {
   delivered: boolean;
   skipped: string | null;
   session_short_id: string | null;
-  /** The canonical conversation the line was injected into, when delivered. */
+  /** The canonical conversation the line was injected into when delivered,
+   *  or would have been when it folded past the hourly caps. */
   conversation_id: string | null;
 };
 
@@ -4240,6 +4257,25 @@ async function enforceAgentPostQuota(
 
 type MentionWakeResult = { roles: number; sessions: number; folded: number; skipped: string[] };
 
+// The hourly wake caps (C2): one more wake from `senderId` and one more into
+// `targetKey`, or false when either is spent and the wake must fold. Checked
+// per target so one folded target does not fold the rest, and taken LAST by
+// every caller, after each check that can skip the target for free: a wake
+// that cannot happen must not spend the sender's hourly credit. The mention
+// rail and the mention-reply relay both spend through here, so an agent
+// answering an agent costs what a fresh mention costs.
+async function takeMentionWakeCaps(
+  ctx: MutationCtx,
+  senderId: Id<"users">,
+  targetKey: string,
+  hour = hourBucket(),
+): Promise<boolean> {
+  const sender = await takeQuota(ctx, `mention_from:${senderId}`, hour, MENTION_WAKES_PER_SENDER_HOUR);
+  if (!sender.ok) return false;
+  const target = await takeQuota(ctx, `mention_to:${targetKey}`, hour, MENTION_WAKES_PER_TARGET_HOUR);
+  return target.ok;
+}
+
 // Wake the roles and sessions a line named. This is the ONE exception to "an
 // agent line wakes nobody": an explicit mention is a request for that party's
 // action, whoever typed it. Every wake is an idempotent pending message keyed on
@@ -4281,15 +4317,7 @@ export async function wakeMentionedParties(
     ? await ctx.db.get(ctx.db.normalizeId("conversations", selfSession) ?? (selfSession as Id<"conversations">))
     : null;
 
-  // Both caps, checked per target so one folded target does not fold the rest.
-  // Taken LAST, after every check that can skip the target for free: a mention
-  // that cannot wake anyone must not spend the sender's hourly credit.
-  const underCaps = async (targetKey: string): Promise<boolean> => {
-    const sender = await takeQuota(ctx, `mention_from:${opts.senderId}`, hour, MENTION_WAKES_PER_SENDER_HOUR);
-    if (!sender.ok) return false;
-    const target = await takeQuota(ctx, `mention_to:${targetKey}`, hour, MENTION_WAKES_PER_TARGET_HOUR);
-    return target.ok;
-  };
+  const underCaps = (targetKey: string) => takeMentionWakeCaps(ctx, opts.senderId, targetKey, hour);
   const quoted = (lead: string, tail: string[]) => buildChatWake({
     channelName: opts.channel.name,
     channelKind: opts.channel.kind,

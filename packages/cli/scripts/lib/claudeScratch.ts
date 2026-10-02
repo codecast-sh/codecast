@@ -14,6 +14,7 @@ import * as path from "node:path";
 import { execFile, spawnSync } from "node:child_process";
 import { promisify } from "node:util";
 import { ccKeychainReadArgs, ccKeychainReadItems, ccKeychainWriteItem } from "../../src/ccKeychain.ts";
+import { machineClaudeFeatureCache } from "../../src/test-helpers/claudeFeatureCache.ts";
 
 const run = promisify(execFile);
 
@@ -53,17 +54,7 @@ export function seedConfigDir(configDir: string, opts: { claudeMd?: string; sett
   fs.mkdirSync(configDir, { recursive: true });
   const state = path.join(configDir, ".claude.json");
   if (!fs.existsSync(state)) {
-    let features: Record<string, unknown> = {};
-    try {
-      const machine = JSON.parse(fs.readFileSync(path.join(process.env.HOME ?? "", ".claude.json"), "utf8"));
-      features = machine.cachedGrowthBookFeatures ?? {};
-    } catch { /* no machine cache */ }
-    fs.writeFileSync(state, JSON.stringify({
-      hasCompletedOnboarding: true,
-      theme: "dark",
-      cachedGrowthBookFeatures: features,
-      cachedGrowthBookFeaturesAt: Date.now(),
-    }));
+    fs.writeFileSync(state, JSON.stringify({ hasCompletedOnboarding: true, theme: "dark", ...machineClaudeFeatureCache() }));
   }
   if (opts.claudeMd !== undefined) fs.writeFileSync(path.join(configDir, "CLAUDE.md"), opts.claudeMd);
   if (opts.settings !== undefined) fs.writeFileSync(path.join(configDir, "settings.json"), JSON.stringify(opts.settings, null, 2));

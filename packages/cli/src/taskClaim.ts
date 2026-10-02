@@ -15,11 +15,21 @@ import { ASSIGNEE_MEANS, isRoleAssignee, type AssigneeInfo } from "@codecast/sha
 // `ownSessionId` (the agent's own exported id, then the process walk), which
 // is the same witness that stamps source:"agent" on create.
 
-export function buildTaskStartBody(shortId: string, sessionId: string | null): Record<string, any> {
+export function buildTaskStartBody(shortId: string, sessionId: string | null, opts: { take?: boolean } = {}): Record<string, any> {
   const body: Record<string, any> = { short_id: shortId, status: "in_progress" };
   if (sessionId) body.conversation_id = sessionId;
   else body.assignee = "me";
+  if (opts.take) body.take = true;
   return body;
+}
+
+// A task has one owning session (convex lib/taskOwner.ts). The start that
+// moved the binding names each session it released; one still working is the
+// taker's to tell, because it keeps acting on the task until it hears.
+export function releasedOwnerLines(result: { released_owners?: Array<{ short_id: string; live: boolean }> } | null | undefined): string[] {
+  return (result?.released_owners ?? []).map((o) => o.live
+    ? `Took ownership from ${o.short_id}, which is still working: tell it with cast send ${o.short_id} "..."`
+    : `Took ownership from ${o.short_id}, which had gone quiet`);
 }
 
 // `cast task start` from a session that works for a role hands the task to that
@@ -33,9 +43,9 @@ export function startedForRoleLine(result: { assigned_role?: { handle: string; n
 // What `cast task start` prints after "Started": the role that took it, when
 // one did, and always what an assignee means (R7), because the start is the
 // moment a session reads the task's names and decides what it may do.
-export function startedLines(result: Parameters<typeof startedForRoleLine>[0]): string[] {
+export function startedLines(result: Parameters<typeof startedForRoleLine>[0] & Parameters<typeof releasedOwnerLines>[0]): string[] {
   const role = startedForRoleLine(result);
-  return [...(role ? [role] : []), ASSIGNEE_MEANS];
+  return [...releasedOwnerLines(result), ...(role ? [role] : []), ASSIGNEE_MEANS];
 }
 
 // `cast task ls --chain`: one group per assignee, the person first and then

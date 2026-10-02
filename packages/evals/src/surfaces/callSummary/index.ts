@@ -34,6 +34,14 @@ export interface CallSummarySnap {
 
 type Parsed = ReturnType<typeof parseCallSummaryReply> | { error: string } | null;
 
+/** A fixture's label: the owner of each action item the call holds, one entry per item (prod's format puts the owner's name first). */
+export interface CallSummaryLabel {
+  owners?: string[];
+}
+
+/** The owner an action item names: the text before its first colon, as prod's prompt asks ("Sam: ship the fix"). */
+const ownerOf = (item: string): string => (item.includes(':') ? item.slice(0, item.indexOf(':')).replace(/\s*\([^)]*\)/g, '').trim() : '(no owner)');
+
 const REF_FORMS = 'call-summary@ needs a call id, like call-summary@<callId> (from `cast calls`)';
 
 export function callSummarySurfaceRequest(snap: CallSummarySnap) {
@@ -95,7 +103,7 @@ const impl: SurfaceImpl = {
     return { reply: [parsed.title, parsed.summary, ...(parsed.action_items ?? []).map((a) => `- ${a}`)].filter(Boolean).join('\n'), parsed };
   },
 
-  gates(snap: CallSummarySnap, out) {
+  gates(snap: CallSummarySnap, out, label?: CallSummaryLabel) {
     const words = countWords(snap.lines.map((l) => l.text));
     const short = words < SUMMARY_MIN_WORDS;
     const called = out.calls.length > 0;
@@ -110,6 +118,12 @@ const impl: SurfaceImpl = {
     const parsed = out.parsed as Parsed;
     const ok = Boolean(parsed && !('error' in parsed) && parsed.summary && Array.isArray(parsed.action_items));
     gates.push(gate('parse', ok, ok ? 'title, summary and action items parse' : parsed && 'error' in parsed ? parsed.error : 'the JSON has no summary or no action_items array'));
+    if (ok && label?.owners) {
+      const got = (parsed as { action_items: string[] }).action_items.map(ownerOf).sort();
+      const want = [...label.owners].sort();
+      const same = got.length === want.length && got.every((o, i) => o === want[i]);
+      gates.push(gate('owners-credited', same, same ? `one item each for ${want.join(', ')}` : `items credit ${got.join(', ') || 'nobody'}; the call's commitments belong to ${want.join(', ')}`));
+    }
     return gates;
   },
 
