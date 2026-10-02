@@ -933,6 +933,19 @@ html[data-idle] *::after {
   opacity: 0;
 }
 
+/* List peek (GenericListView renderPreview): the panel slides in once when
+   space opens it; moving the peek between rows swaps content without motion. */
+@keyframes listPeekIn {
+  from { opacity: 0; transform: translateX(16px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.animate-list-peek-in {
+  animation: listPeekIn 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-list-peek-in { animation: schedRosterFade 120ms ease-out both; }
+}
+
 /* Schedules roster popover — emerges from the dock button it's anchored to
    (transform-origin: bottom), crisp strong ease-out. Opening the roster is an
    occasional action, so the entrance is warranted; reduced-motion drops the
@@ -6038,8 +6051,10 @@ pre[class*="language-"] {
   align-items: center;
   gap: 2px;
   height: 28px;
+  flex-shrink: 0;
   padding: 0 4px 0 10px;
   border-radius: 8px;
+  white-space: nowrap;
   background: color-mix(in srgb, var(--sol-cyan) 12%, transparent);
 }
 .object-reveal-open-compact .object-reveal__open-go {
@@ -6189,34 +6204,38 @@ pre[class*="language-"] {
   display: block;
   clear: both;
 }
-/* The grip is only a grip: a full-width hit strip in the gutter under the
-   frame, with the rounded bar always drawn in the object's colour so the
-   resize reads before the pointer finds it, and brighter under the pointer. */
-.object-reveal__grip {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
+/* The bottom-edge resize grip (components/HeightGrip): a full-width hit strip
+   in the gutter under a frame, with the rounded bar always drawn so the resize
+   reads before the pointer finds it, and brighter under the pointer. */
+.height-grip {
+  --grip-accent: var(--sol-text-dim);
   height: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: row-resize;
-  z-index: 2;
   touch-action: none;
 }
-.object-reveal__grip-bar {
+.height-grip__bar {
   width: 48px;
   height: 4px;
   border-radius: 2px;
-  background: color-mix(in srgb, var(--reveal-accent) 45%, var(--sol-bg));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--reveal-accent) 25%, transparent);
+  background: color-mix(in srgb, var(--grip-accent) 45%, var(--sol-bg));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--grip-accent) 25%, transparent);
   transition: background 120ms, transform 120ms, width 120ms;
 }
-.object-reveal__grip:hover .object-reveal__grip-bar,
-.object-reveal[data-resizing] .object-reveal__grip-bar {
+.height-grip:hover .height-grip__bar,
+.height-grip[data-resizing] .height-grip__bar {
   width: 64px;
-  background: var(--reveal-accent);
+  background: var(--grip-accent);
+}
+.object-reveal__grip {
+  --grip-accent: var(--reveal-accent);
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 2;
 }
 .object-reveal[data-resizing] { cursor: row-resize; user-select: none; }
 
