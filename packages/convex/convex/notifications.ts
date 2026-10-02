@@ -736,10 +736,11 @@ export async function deriveConversationVerdict(
     isIdle = true;
   }
 
-  // An idle parent whose subagent child is still producing is WORKING on the
-  // web (subagentKeepsParentWorking) — don't push mid-orchestration. Cheap
+  // An idle parent whose subagent child is still producing is parked on it
+  // (classifyWorkState's childProducing) — don't push mid-orchestration. Cheap
   // recent-output arm first; the child's managed session is read only when
   // that arm fails.
+  let childProducing = false;
   if (isIdle && !awaitingInput) {
     const children = await ctx.db
       .query("conversations")
@@ -751,7 +752,7 @@ export async function deriveConversationVerdict(
         isSubagent: true, convStatus: c.status, updatedAt: c.updated_at,
         isLive: false, agentStatus: undefined, now,
       })) {
-        isIdle = false;
+        childProducing = true;
         break;
       }
       const childSession = await ctx.db
@@ -763,7 +764,7 @@ export async function deriveConversationVerdict(
         isSubagent: true, convStatus: c.status, updatedAt: c.updated_at,
         isLive: true, agentStatus: trustedAgentStatus(childSession?.agent_status, c.updated_at, now), now,
       })) {
-        isIdle = false;
+        childProducing = true;
         break;
       }
     }
@@ -782,6 +783,7 @@ export async function deriveConversationVerdict(
     armedTriggerHome: isArmedTriggerHome(conv, armedHomes.standing),
     armedLoopHome: isArmedLoopHome(conv, now),
     armedOnceTriggerHome: isArmedTriggerHome(conv, armedHomes.once),
+    childProducing,
     settleVerdict: isSettleVerdictCurrent(conv) ? conv.settle_verdict : null,
     declaredStatus: conv.thread_state_status ?? null,
     sessionBoundary: boundary,

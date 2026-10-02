@@ -78,6 +78,17 @@ describe("codecast-status hook event mapping", () => {
     expect(out.message).toBeUndefined();
   });
 
+  // Claude Code fires a subagent's hooks under the lead's session_id, marked by
+  // agent_id. A background workflow's workers kept flipping a lead that had
+  // ended its turn from waiting back to working, for hours.
+  test("a subagent's tool use reports nothing; its permission prompt still blocks", () => {
+    const sub = { session_id: "sub-1", agent_id: "a23ece06753e47e16", agent_type: "general-purpose" };
+    expect(reported({ ...sub, hook_event_name: "PreToolUse", tool_name: "Bash" })).toBe(false);
+    expect(reported({ ...sub, hook_event_name: "SessionStart", source: "compact" })).toBe(false);
+    expect(reported({ ...sub, hook_event_name: "PreCompact" })).toBe(false);
+    expect(runHook({ ...sub, hook_event_name: "PermissionRequest", tool_name: "Edit", file_path: "/tmp/x" }).status).toBe("permission_blocked");
+  });
+
   test("Stop -> idle and UserPromptSubmit -> thinking are unchanged", () => {
     expect(runHook({ session_id: "stop-1", hook_event_name: "Stop" }).status).toBe("idle");
     expect(runHook({ session_id: "ups-1", hook_event_name: "UserPromptSubmit" }).status).toBe("thinking");
@@ -342,5 +353,17 @@ describe("UserPromptSubmit stays off python3", () => {
     expect(runHook({ session_id: "ups-nopy2", hook_event_name: "UserPromptSubmit" }).status).toBe("thinking");
     const out = JSON.parse(fs.readFileSync(statusFile("ups-nopy"), "utf-8"));
     expect(out.status).toBe("thinking");
+  });
+});
+
+describe("codecast-status hook reads agent_id from the envelope only", () => {
+  test("a main-thread tool whose input names agent_id still reports working", () => {
+    const out = runHook({
+      session_id: "main-agent-key",
+      hook_event_name: "PreToolUse",
+      tool_name: "mcp__x__lookup",
+      tool_input: { agent_id: "not-a-subagent" },
+    });
+    expect(out.status).toBe("working");
   });
 });
