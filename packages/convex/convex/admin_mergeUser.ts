@@ -27,6 +27,8 @@ const USER_REFS: Array<{ table: string; field: string; index: string | null }> =
   { table: "team_activity_events", field: "actor_user_id", index: "by_actor" },
   { table: "session_insights", field: "actor_user_id", index: "by_actor_generated_at" },
   { table: "day_timelines", field: "user_id", index: "by_user_date" },
+  // Team Changes editions have no user_id; the index equality never reaches
+  // them, so a merge leaves a team's editions alone.
   { table: "digests", field: "user_id", index: "by_user_scope_date" },
   { table: "notifications", field: "recipient_user_id", index: "by_recipient" },
   { table: "agent_tasks", field: "user_id", index: "by_user_run_at" },

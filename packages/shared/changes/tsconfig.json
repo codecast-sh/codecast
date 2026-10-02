@@ -1,0 +1,14 @@
+{
+  // The Changes layer 0 module and its tests, with bun types, so
+  // `cast check packages/shared/changes/tsconfig.json` covers it before (and
+  // beside) the convex and web programs that import it. @types/bun resolves
+  // only under packages/cli, hence the typeRoots path.
+  "extends": "../../../tsconfig.json",
+  "compilerOptions": {
+    "incremental": false,
+    "typeRoots": ["../../cli/node_modules/@types"],
+    "types": ["bun"]
+  },
+  "include": ["./**/*.ts", "./**/*.json"],
+  "exclude": []
+}

@@ -1,0 +1,768 @@
+{
+ "2026-10-02": [
+  {
+   "sha": "c0e2a7aed",
+   "subject": "chore(cli): bump version to 1.1.163",
+   "author_name": "github-actions[bot]",
+   "author_email": "41898282+github-actions[bot]@users.noreply.github.com",
+   "timestamp": 1790954830000,
+   "created_at": 1790954830000,
+   "branch": null,
+   "conversation_id": null,
+   "insertions": 1,
+   "deletions": 1,
+   "areas": {
+    "cli": {
+     "touches": 1,
+     "insertions": 1,
+     "deletions": 1
+    }
+   },
+   "top_paths": [
+    "packages/cli/package.json"
+   ],
+   "schema_paths": []
+  },
+  {
+   "sha": "830683c2f",
+   "subject": "chore(cli): restamp daemon build id from the committed tree",
+   "author_name": "Ashot Petrosian",
+   "author_email": "ashot@almostcandid.com",
+   "timestamp": 1790954481000,
+   "created_at": 1790954481000,
+   "branch": null,
+   "conversation_id": "jx7bptrwftzn5n82mbhxtm02ks8fg9ra",
+   "insertions": 1,
+   "deletions": 1,
+   "areas": {
+    "cli": {
+     "touches": 1,
+     "insertions": 1,
+     "deletions": 1
+    }
+   },
+   "top_paths": [
+    "packages/cli/src/daemonBuildId.ts"
+   ],
+   "schema_paths": []
+  },
+  {
+   "sha": "7d0984529",
+   "subject": "chore(platform): refresh vendored platform packages",
+   "author_name": "Ashot Petrosian",
+   "author_email": "ashot@almostcandid.com",
+   "timestamp": 1790951162000,
+   "created_at": 1790951222000,
+   "branch": "main",
+   "conversation_id": "jx7bptrwftzn5n82mbhxtm02ks8fg9ra",
+   "insertions": 4410,
+   "deletions": 39,
+   "areas": {
+    "platform": {
+     "touches": 53,
+     "insertions": 4410,
+     "deletions": 39
+    }
+   },
+   "top_paths": [
+    "platform/packages/evals/src/model.ts",
+    "platform/packages/evals/src/evals.test.ts",
+    "platform/packages/evals/src/fs/runs.ts",
+    "platform/packages/evals/src/render/runs.ts",
+    "platform/packages/evals/src/render/convo.ts",
+    "platform/packages/evals/src/html/page.ts",
+    "platform/packages/engine/src/middleware.ts",
+    "platform/packages/evals/src/story.ts"
+   ],
+   "schema_paths": []
+  },
+  {
+   "sha": "f44387928",
+   "subject": "refactor(shared): org contracts, head of people prompt and shared render updates",
+   "author_name": "Ashot Petrosian",
+   "author_email": "ashot@almostcandid.com",
+   "timestamp": 1790951163000,
+   "created_at": 1790951223000,
+   "branch": "main",
+   "conversation_id": "jx7bptrwftzn5n82mbhxtm02ks8fg9ra",
+   "insertions": 5980,
+   "deletions": 428,
+   "areas": {
+    "shared": {
+     "touches": 89,
+     "insertions": 5980,
+     "deletions": 428
+    }
+   },
+   "top_paths": [
+    "packages/shared/docs/drafting.ts",
+    "packages/shared/contracts/changeCard.ts",
+    "packages/shared/contracts/callRecordings.ts",
+    "packages/shared/contracts/cloudAgents.ts",
+    "packages/shared/render/changeCardHtml.ts",
+    "packages/shared/contracts/callRecordings.test.ts",
+    "packages/shared/contracts/callGuests.ts",
+    "packages/shared/contracts/changeCard.test.ts"
+   ],
+   "schema_paths": []
+  },
+  {
+   "sha": "65c80e05c",
+   "subject": "feat(convex): org initiatives, line merge, workflow runs and backend updates",
+   "author_name": "Ashot Petrosian",
+   "author_email": "ashot@almostcandid.com",
+   "timestamp": 1790951164000,
+   "created_at": 1790951224000,
+   "branch": "main",
+   "conversation_id": "jx7bptrwftzn5n82mbhxtm02ks8fg9ra",
+   "insertions": 20053,
+   "deletions": 2866,
+   "areas": {
+    "convex": {
+     "touches": 222,
+     "insertions": 20053,
+     "deletions": 2866
+    }
+   },
+   "top_paths": [
+    "packages/convex/convex/callRecordings.ts",
+    "packages/convex/convex/callGuests.ts",
+    "packages/convex/convex/callRecordings.test.ts",
+    "packages/convex/convex/callGuests.test.ts",
+    "packages/convex/convex/signals.ts",
+    "packages/convex/convex/transcripts.ts",
+    "packages/convex/convex/schema.ts",
+    "packages/convex/convex/simBackend.testing.ts"
+   ],
+   "schema_paths": [
+    "packages/convex/convex/schema.ts"
+   ]
+  },
+  {
+   "sha": "926be8efb",
+   "subject": "feat(cli): cloud agents, line merge, workflow wake and command updates",
+   "author_name": "Ashot Petrosian",
+   "author_email": "ashot@almostcandid.com",
+   "timestamp": 1790951164000,
+   "created_at": 1790951224000,
+   "branch": "main",
+   "conversation_id": "jx7bptrwftzn5n82mbhxtm02ks8fg9ra",
+   "insertions": 16957,
+   "deletions": 3161,
+   "areas": {
+    "cli": {
+     "touches": 209,
+     "insertions": 16957,
+     "deletions": 3161
+    }
+   },
+   "top_paths": [
+    "packages/cli/src/callSnap.ts",
+    "packages/cli/src/daemon.ts",
+    "packages/cli/src/__fixtures__/openaiAgents/command-output-stream.json",
+    "packages/cli/src/cloudAgents/openaiAgents.ts",
+    "packages/cli/src/cloudAgents/codex.contract.test.ts",
+    "packages/cli/src/__fixtures__/openaiAgents/create-stream.json",
+    "packages/cli/src/callSnap.test.ts",
+    "packages/cli/src/workflow/templates.test.ts"
+   ],
+   "schema_paths": []
+  },
+  {
+   "sha": "0de614861",
+   "subject": "feat(web): line pages, share pages, org staffing and app updates",
+   "author_name": "Ashot Petrosian",
+   "author_email": "ashot@almostcandid.com",
+   "timestamp": 1790951165000,
+   "created_at": 1790951225000,
+   "branch": "main",
+   "conversation_id": "jx7bptrwftzn5n82mbhxtm02ks8fg9ra",
+   "insertions": 44888,
+   "deletions": 10374,
+   "areas": {
+    "web": {
+     "touches": 689,
+     "insertions": 44888,
+     "deletions": 10374
+    }
+   },
+   "top_paths": [
+    "packages/web/store/__tests__/inboxSimHarness.ts",
+    "packages/web/store/inboxStore.ts",
+    "packages/web/components/editor/DraftingExtension.ts",
+    "packages/web/store/__tests__/sim/dsl.ts",
+    "packages/web/app/(marketing)/page.tsx",
+    "packages/web/components/docs/drafting/DraftingUI.tsx",
+    "packages/web/components/calls/CallStage.tsx",
+    "packages/web/store/__tests__/sim/invariants.ts"
+   ],
+   "schema_paths": []
+  },
+  {
+   "sha": "153304c35",
+   "subject": "feat(mobile): component and screen updates",
+   "author_name": "Ashot Petrosian",
+   "author_email": "ashot@almostcandid.com",
+   "timestamp": 1790951167000,
+   "created_at": 1790951227000,
+   "branch": "main",
+   "conversation_id": "jx7bptrwftzn5n82mbhxtm02ks8fg9ra",
+   "insertions": 468,
+   "deletions": 347,
+   "areas": {
+    "mobile": {
+     "touches": 16,
+     "insertions": 468,
+     "deletions": 347
+    }
+   },
+   "top_paths": [
+    "packages/mobile/app/session/[id].tsx",
+    "packages/mobile/app/call.tsx",
+    "packages/mobile/components/calls/GuestDoor.tsx",
+    "packages/mobile/app/(tabs)/_layout.tsx",
+    "packages/mobile/components/AssignmentChip.tsx",
+    "packages/mobile/constants/Theme.ts",
+    "packages/mobile/app/share/[...share].tsx",
+    "packages/mobile/components/EntityPill.tsx"
+   ],
+   "schema_paths": []
+  },
+  {
+   "sha": "1ca7da95d",
+   "subject": "feat(electron): spell menu, permissions and notification routing",
+   "author_name": "Ashot Petrosian",
+   "author_email": "ashot@almostcandid.com",
+   "timestamp": 1790951167000,
+   "created_at": 1790951227000,
+   "branch": "main",
+   "conversation_id": "jx7bptrwftzn5n82mbhxtm02ks8fg9ra",
+   "insertions": 336,
+   "deletions": 60,
+   "areas": {
+    "electron": {
+     "touches": 9,
+     "insertions": 336,
+     "deletions": 60
+    }
+   },
+   "top_paths": [
+    "packages/electron/native/notifications.mm",
+    "packages/electron/main.js",
+    "packages/electron/spellMenu.js",
+    "packages/electron/osPermissions.js",
+    "packages/electron/spellMenu.test.js",
+    "packages/electron/osPermissions.test.js",
+    "packages/electron/notificationRouter.js",
+    "packages/electron/callWindow.main.test.js"
+   ],
+   "schema_paths": []
+  },
+  {
+   "sha": "f19093190",
+   "subject": "fix(extension): background bridge updates",
+   "author_name": "Ashot Petrosian",
+   "author_email": "ashot@almostcandid.com",
+   "timestamp": 1790951167000,
+   "created_at": 1790951227000,
+   "branch": "main",
+   "conversation_id": "jx7bptrwftzn5n82mbhxtm02ks8fg9ra",
+   "insertions": 7,
+   "deletions": 0,
+   "areas": {
+    "browser-extension": {
+     "touches": 1,
+     "insertions": 7,
+     "deletions": 0
+    }
+   },
+   "top_paths": [
+    "packages/browser-extension/background.js"
+   ],
+   "schema_paths": []
+  },
+  {
+   "sha": "e747f6fe4",
+   "subject": "feat(evals): prompt evals package and runner",
+   "author_name": "Ashot Petrosian",
+   "author_email": "ashot@almostcandid.com",
+   "timestamp": 1790951168000,
+   "created_at": 1790951228000,
+   "branch": "main",
+   "conversation_id": "jx7bptrwftzn5n82mbhxtm02ks8fg9ra",
+   "insertions": 11528,
+   "deletions": 0,
+   "areas": {
+    "root": {
+     "touches": 1,
+     "insertions": 5,
+     "deletions": 0
+    },
+    "evals": {
+     "touches": 152,
+     "insertions": 11523,
+     "deletions": 0
+    }
+   },
+   "top_paths": [
+    "packages/evals/src/commands/line.ts",
+    "packages/evals/src/surfaces/orgReview/grade.test.ts",
+    "packages/evals/src/surfaces/suggest/index.ts",
+    "packages/evals/src/surfaces/orgReview/grade.ts",
+    "packages/evals/src/cli.test.ts",
+    "packages/evals/src/commands/check.ts",
+    "packages/evals/fixtures/title/rate-limit-done.json",
+    "packages/evals/src/surfaces/orgReview/present.ts"
+   ],
+   "schema_paths": []
+  },
+  {
+   "sha": "7e409b4df",
+   "subject": "feat(infra): call face worker and convex host compose",
+   "author_name": "Ashot Petrosian",
+   "author_email": "ashot@almostcandid.com",
+   "timestamp": 1790951168000,
+   "created_at": 1790951228000,
+   "branch": "main",
+   "conversation_id": "jx7bptrwftzn5n82mbhxtm02ks8fg9ra",
+   "insertions": 96,
+   "deletions": 6,
+   "areas": {
+    "infra": {
+     "touches": 5,
+     "insertions": 96,
+     "deletions": 6
+    }
+   },
+   "top_paths": [
+    "infra/call-face-worker/worker.mjs",
+    "infra/convex-host/docker-compose.yml",
+    "infra/call-face-worker/package.json",
+    "infra/call-face-worker/Dockerfile",
+    "infra/call-face-worker/railway.json"
+   ],
+   "schema_paths": []
+  },
+  {
+   "sha": "e7d2da040",
+   "subject": "ci: workflow, changed path scope and check config",
+   "author_name": "Ashot Petrosian",
+   "author_email": "ashot@almostcandid.com",
+   "timestamp": 1790951168000,
+   "created_at": 1790951228000,
+   "branch": "main",
+   "conversation_id": "jx7bptrwftzn5n82mbhxtm02ks8fg9ra",
+   "insertions": 377,
+   "deletions": 169,
+   "areas": {
+    "codecast": {
+     "touches": 1,
+     "insertions": 6,
+     "deletions": 0
+    },
+    "github": {
+     "touches": 2,
+     "insertions": 111,
+     "deletions": 142
+    },
+    "root": {
+     "touches": 1,
+     "insertions": 30,
+     "deletions": 3
+    },
+    "plans": {
+     "touches": 1,
+     "insertions": 4,
+     "deletions": 4
+    },
+    "scripts": {
+     "touches": 3,
+     "insertions": 226,
+     "deletions": 20
+    }
+   },
+   "top_paths": [
+    ".github/workflows/ci.yml",
+    "scripts/ci/ci-workflow.contract.test.ts",
+    "scripts/ci/changed-path-scope.test.ts",
+    "scripts/ci/changed-path-scope.ts",
+    "bun.lock",
+    ".github/actions/setup-bun/action.yml",
+    "plans/security-entrypoint-inventory.json",
+    ".codecast/check.toml"
+   ],
+   "schema_paths": []
+  },
+  {
+   "sha": "2bbfa75bd",
+   "subject": "docs: architecture, proposals and agent guide updates",
+   "author_name": "Ashot Petrosian",
+   "author_email": "ashot@almostcandid.com",
+   "timestamp": 1790951169000,
+   "created_at": 1790951229000,
+   "branch": "main",
+   "conversation_id": "jx7bptrwftzn5n82mbhxtm02ks8fg9ra",
+   "insertions": 2790,
+   "deletions": 363,
+   "areas": {
+    "root": {
+     "touches": 2,
+     "insertions": 53,
+     "deletions": 1
+    },
+    "docs": {
+     "touches": 16,
+     "insertions": 2737,
+     "deletions": 362
+    }
+   },
+   "top_paths": [
+    "docs/proposals/the-line-end-to-end/index.html",
+    "docs/architecture/multiplayer-sim-harness.md",
+    "docs/architecture/sync-sim.md",
+    "docs/architecture/evals-home.md",
+    "docs/architecture/evals.md",
+    "docs/architecture/the-line-end-to-end.md",
+    "docs/architecture/org-staffing.md",
+    "docs/prompting.md"
+   ],
+   "schema_paths": []
+  },
+  {
+   "sha": "f692b70ca",
+   "subject": "chore(electron): release desktop 1.1.123",
+   "author_name": "Ashot Petrosian",
+   "author_email": "ashot@almostcandid.com",
+   "timestamp": 1790954481000,
+   "created_at": 1790954541000,
+   "branch": "main",
+   "conversation_id": "jx7bptrwftzn5n82mbhxtm02ks8fg9ra",
+   "insertions": 2,
+   "deletions": 2,
+   "areas": {
+    "electron": {
+     "touches": 1,
+     "insertions": 1,
+     "deletions": 1
+    },
+    "web": {
+     "touches": 1,
+     "insertions": 1,
+     "deletions": 1
+    }
+   },
+   "top_paths": [
+    "packages/electron/package.json",
+    "packages/web/server/index.ts"
+   ],
+   "schema_paths": []
+  },
+  {
+   "sha": "3d5b5984f",
+   "subject": "chore(cli): restamp daemon build id from the committed tree",
+   "author_name": "Ashot Petrosian",
+   "author_email": "ashot@almostcandid.com",
+   "timestamp": 1790954481000,
+   "created_at": 1790954541000,
+   "branch": "main",
+   "conversation_id": "jx7bptrwftzn5n82mbhxtm02ks8fg9ra",
+   "insertions": 1,
+   "deletions": 1,
+   "areas": {
+    "cli": {
+     "touches": 1,
+     "insertions": 1,
+     "deletions": 1
+    }
+   },
+   "top_paths": [
+    "packages/cli/src/daemonBuildId.ts"
+   ],
+   "schema_paths": []
+  },
+  {
+   "sha": "ca172db32",
+   "subject": "chore(cli): bump version to 1.1.163",
+   "author_name": "github-actions[bot]",
+   "author_email": "41898282+github-actions[bot]@users.noreply.github.com",
+   "timestamp": 1790954830000,
+   "created_at": 1790954890000,
+   "branch": "main",
+   "conversation_id": null,
+   "insertions": 1,
+   "deletions": 1,
+   "areas": {
+    "cli": {
+     "touches": 1,
+     "insertions": 1,
+     "deletions": 1
+    }
+   },
+   "top_paths": [
+    "packages/cli/package.json"
+   ],
+   "schema_paths": []
+  },
+  {
+   "sha": "3250f11ca",
+   "subject": "test(cli): scrubbed Codex Cloud fixtures and spike findings",
+   "author_name": "Ashot Petrosian",
+   "author_email": "ashot@almostcandid.com",
+   "timestamp": 1790959022000,
+   "created_at": 1790959082000,
+   "branch": "main",
+   "conversation_id": "jx778f85yqqw98xjyxyym30s1s8favmm",
+   "insertions": 10965,
+   "deletions": 0,
+   "areas": {
+    "docs": {
+     "touches": 1,
+     "insertions": 97,
+     "deletions": 0
+    },
+    "cli": {
+     "touches": 14,
+     "insertions": 10868,
+     "deletions": 0
+    }
+   },
+   "top_paths": [
+    "packages/cli/src/__fixtures__/codexCloud/turns.legacy.json",
+    "packages/cli/src/__fixtures__/codexCloud/task.bestOf2.json",
+    "packages/cli/src/__fixtures__/codexCloud/turns.bestOf2.json",
+    "packages/cli/src/__fixtures__/codexCloud/turns.askFollowUp.json",
+    "packages/cli/src/__fixtures__/codexCloud/turns.ask.json",
+    "packages/cli/src/__fixtures__/codexCloud/list.json",
+    "packages/cli/src/__fixtures__/codexCloud/environments.json",
+    "packages/cli/src/__fixtures__/codexCloud/followUp.response.json"
+   ],
+   "schema_paths": []
+  }
+ ],
+ "2026-10-01": [
+  {
+   "sha": "955c2cb1d",
+   "subject": "fix(cli): fleet migration finds the agent among the pane shell's own children and dates idleness by real messages",
+   "author_name": "Ashot Petrosian",
+   "author_email": "ashot@almostcandid.com",
+   "timestamp": 1790830325000,
+   "created_at": 1790830385000,
+   "branch": "main",
+   "conversation_id": "jx778f85yqqw98xjyxyym30s1s8favmm",
+   "insertions": 23,
+   "deletions": 5,
+   "areas": {
+    "cli": {
+     "touches": 2,
+     "insertions": 23,
+     "deletions": 5
+    }
+   },
+   "top_paths": [
+    "packages/cli/src/daemon.ts",
+    "packages/cli/src/daemon.hibernation.fallback.test.ts"
+   ],
+   "schema_paths": []
+  },
+  {
+   "sha": "39acc4396",
+   "subject": "chore(cli): restamp daemon build id",
+   "author_name": "Ashot Petrosian",
+   "author_email": "ashot@almostcandid.com",
+   "timestamp": 1790831113000,
+   "created_at": 1790831173000,
+   "branch": "main",
+   "conversation_id": "jx778f85yqqw98xjyxyym30s1s8favmm",
+   "insertions": 1,
+   "deletions": 1,
+   "areas": {
+    "cli": {
+     "touches": 1,
+     "insertions": 1,
+     "deletions": 1
+    }
+   },
+   "top_paths": [
+    "packages/cli/src/daemonBuildId.ts"
+   ],
+   "schema_paths": []
+  },
+  {
+   "sha": "b3d486bce",
+   "subject": "chore(cli): restamp daemon build id from the committed tree",
+   "author_name": "Ashot Petrosian",
+   "author_email": "ashot@almostcandid.com",
+   "timestamp": 1790831306000,
+   "created_at": 1790831366000,
+   "branch": "main",
+   "conversation_id": "jx778f85yqqw98xjyxyym30s1s8favmm",
+   "insertions": 1,
+   "deletions": 1,
+   "areas": {
+    "cli": {
+     "touches": 1,
+     "insertions": 1,
+     "deletions": 1
+    }
+   },
+   "top_paths": [
+    "packages/cli/src/daemonBuildId.ts"
+   ],
+   "schema_paths": []
+  },
+  {
+   "sha": "2bb06540a",
+   "subject": "chore(cli): bump version to 1.1.162",
+   "author_name": "github-actions[bot]",
+   "author_email": "41898282+github-actions[bot]@users.noreply.github.com",
+   "timestamp": 1790831696000,
+   "created_at": 1790831756000,
+   "branch": "main",
+   "conversation_id": null,
+   "insertions": 1,
+   "deletions": 1,
+   "areas": {
+    "cli": {
+     "touches": 1,
+     "insertions": 1,
+     "deletions": 1
+    }
+   },
+   "top_paths": [
+    "packages/cli/package.json"
+   ],
+   "schema_paths": []
+  },
+  {
+   "sha": "b47af5aaa",
+   "subject": "chore(electron): bump desktop to v1.1.122",
+   "author_name": "Ashot Petrosian",
+   "author_email": "ashot@almostcandid.com",
+   "timestamp": 1790836374000,
+   "created_at": 1790836434000,
+   "branch": "main",
+   "conversation_id": null,
+   "insertions": 2,
+   "deletions": 2,
+   "areas": {
+    "electron": {
+     "touches": 1,
+     "insertions": 1,
+     "deletions": 1
+    },
+    "web": {
+     "touches": 1,
+     "insertions": 1,
+     "deletions": 1
+    }
+   },
+   "top_paths": [
+    "packages/electron/package.json",
+    "packages/web/server/index.ts"
+   ],
+   "schema_paths": []
+  },
+  {
+   "sha": "07017d24f",
+   "subject": "test(shared): codex launch rail lists the agents api keys",
+   "author_name": "Ashot Petrosian",
+   "author_email": "ashot@almostcandid.com",
+   "timestamp": 1790856246000,
+   "created_at": 1790856306000,
+   "branch": "main",
+   "conversation_id": "jx778f85yqqw98xjyxyym30s1s8favmm",
+   "insertions": 3,
+   "deletions": 0,
+   "areas": {
+    "shared": {
+     "touches": 1,
+     "insertions": 3,
+     "deletions": 0
+    }
+   },
+   "top_paths": [
+    "packages/shared/contracts/agentClients.test.ts"
+   ],
+   "schema_paths": []
+  },
+  {
+   "sha": "79bf51995",
+   "subject": "fix(cli): match a hook entry by the file it names, not its spelling",
+   "body": "An older install wrote $HOME/.claude/hooks/x.sh; removal matched only the\nabsolute path, deleted the script and left the entry, failing every Stop.",
+   "author_name": "Jason Benn",
+   "author_email": "jasoncbenn@gmail.com",
+   "timestamp": 1790886524000,
+   "created_at": 1790886584000,
+   "branch": "main",
+   "conversation_id": null,
+   "insertions": 42,
+   "deletions": 5,
+   "areas": {
+    "cli": {
+     "touches": 2,
+     "insertions": 42,
+     "deletions": 5
+    }
+   },
+   "top_paths": [
+    "packages/cli/src/capabilities/hooks.ts",
+    "packages/cli/src/harnessHooksInstall.test.ts"
+   ],
+   "schema_paths": []
+  }
+ ],
+ "2026-09-30": [
+  {
+   "sha": "9dddac2af",
+   "subject": "feat: org template text, session ask, notification types, cli and convex updates",
+   "author_name": "Ashot Petrosian",
+   "author_email": "ashot@almostcandid.com",
+   "timestamp": 1790822815000,
+   "created_at": 1790822875000,
+   "branch": "main",
+   "conversation_id": null,
+   "insertions": 2940,
+   "deletions": 386,
+   "areas": {
+    "animation-plans": {
+     "touches": 6,
+     "insertions": 10,
+     "deletions": 10
+    },
+    "docs": {
+     "touches": 5,
+     "insertions": 1507,
+     "deletions": 8
+    },
+    "cli": {
+     "touches": 38,
+     "insertions": 450,
+     "deletions": 188
+    },
+    "convex": {
+     "touches": 30,
+     "insertions": 801,
+     "deletions": 172
+    },
+    "shared": {
+     "touches": 8,
+     "insertions": 172,
+     "deletions": 8
+    }
+   },
+   "top_paths": [
+    "docs/architecture/evals-home.md",
+    "docs/architecture/multiplayer-sim-harness.md",
+    "packages/convex/convex/orgTemplates.test.ts",
+    "packages/cli/src/daemon.ts",
+    "packages/convex/convex/orgTemplates.ts",
+    "packages/convex/convex/agentTasks.cadence.test.ts",
+    "packages/shared/render/permissionCardStyle.ts",
+    "packages/convex/convex/slackSync.ts"
+   ],
+   "schema_paths": [
+    "packages/convex/convex/schema.ts"
+   ]
+  }
+ ]
+}
