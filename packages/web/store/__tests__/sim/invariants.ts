@@ -23,6 +23,7 @@ import { armedTriggerKindFor } from "@codecast/convex/convex/dormancy";
 import { visibleAnchorsForUser } from "@codecast/convex/convex/anchors";
 import { MENTION_WAKES_PER_SENDER_HOUR, MENTION_WAKES_PER_TARGET_HOUR } from "@codecast/convex/convex/chat";
 import { canonical } from "@codecast/shared/contracts/orgChange";
+import { INBOX_FACT_FIELDS, isInboxRowField } from "@codecast/shared/contracts";
 import { snapshotEntries } from "@platform/engine";
 import { placeInboxRows, syncLogScopeMetaKey, useInboxStore } from "../../inboxStore";
 import { HIDDEN_OVERRIDE_SETTLE_MS } from "../../inboxOverlays";
@@ -75,6 +76,11 @@ import {
 
 // ── The catalog ─────────────────────────────────────────────────────────────
 
+// A sessions row holds what the base feeders write: the row's body
+// (INBOX_ROW_FIELDS) and the facts.
+const FACT_FIELD_SET: ReadonlySet<string> = new Set(INBOX_FACT_FIELDS);
+const inRowShape = (k: string) => isInboxRowField(k) || FACT_FIELD_SET.has(k);
+
 export const INVARIANTS: readonly Invariant[] = [
   {
     id: "INV-sessions-mine",
@@ -119,8 +125,8 @@ export const INVARIANTS: readonly Invariant[] = [
     async check(world, w) {
       const host = world.devices.find((d) => d.followers.includes(w!))?.host;
       if (!host) return [{ message: `follower ${w!.name} belongs to no device` }];
-      const h = snapshotEntries(host.store.getState(), REPLICATED_STORE_KEYS);
-      const f = snapshotEntries(w!.store.getState(), REPLICATED_STORE_KEYS);
+      const h = withoutWindowClocks(snapshotEntries(host.store.getState(), REPLICATED_STORE_KEYS));
+      const f = withoutWindowClocks(snapshotEntries(w!.store.getState(), REPLICATED_STORE_KEYS));
       const out: Violation[] = [];
       for (const key of REPLICATED_STORE_KEYS) {
         if (stable(h[key]) === stable(f[key])) continue;
@@ -451,6 +457,29 @@ export const INVARIANTS: readonly Invariant[] = [
     },
   },
   {
+    // The row is an allowlist (sync-convergence C1 field ownership): a key no
+    // base feeder writes can only have ridden in on cargo or a local write,
+    // and the next list or byIds push removes it. A field under a pending
+    // local write is the exception: an action may carry its server field on
+    // the row until the write is acknowledged.
+    id: "INV-row-shape",
+    meaning: "every sessions row holds only the inbox row's fields (INBOX_ROW_FIELDS plus the facts), or a field a pending local write holds",
+    keys: ["sessions"],
+    on: "window",
+    async check(_world, w) {
+      const state = w!.store.getState() as any;
+      const out: Violation[] = [];
+      for (const [id, row] of Object.entries<Row>(state.sessions ?? {})) {
+        if (!isConvexId(id)) continue;
+        const extra = Object.keys(row).filter((k) => !inRowShape(k) && !state.pending?.[`sessions:${id}:${k}`]);
+        if (!extra.length) continue;
+        out.push({ message: `sessions[${id}] holds ${extra.sort().join(", ")}, outside the inbox row's fields`, row: { table: "conversations", id, server: null, replica: row } });
+        if (out.length >= MAX_ROWS_PER_CHECK) break;
+      }
+      return out;
+    },
+  },
+  {
     id: "INV-fixpoint",
     meaning: "re-running every mounted feeder, one catch-up and a byIds pass over every held id changes nothing",
     keys: FIXPOINT_FED_KEYS,
@@ -515,6 +544,20 @@ export const INVARIANTS: readonly Invariant[] = [
     },
   },
 ];
+
+// A replicated slot's receive stamp is the receiving window's own monotonic
+// clock (applyReplicatedProjection stamps it on apply), so a follower applying
+// the host's slot later holds a different one by design.
+function withoutWindowClocks(entries: Record<string, unknown>): Record<string, unknown> {
+  const proj = entries.sessionsProjection as Record<string, Record<string, unknown>> | undefined;
+  if (!proj || typeof proj !== "object") return entries;
+  const slots = Object.fromEntries(Object.entries(proj).map(([k, slot]) => {
+    if (!slot || typeof slot !== "object") return [k, slot];
+    const { receivedAtMono: _r, ...rest } = slot;
+    return [k, rest];
+  }));
+  return { ...entries, sessionsProjection: slots };
+}
 
 // ── Running the catalog ─────────────────────────────────────────────────────
 

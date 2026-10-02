@@ -240,9 +240,13 @@ export function notifiedWrites(before: any, after: any): StorePatch[] {
         out.push({ op: sub in b ? (sub in a ? "replace" : "add") : "remove", path: [key, sub] });
         continue;
       }
-      // Both sides hold the row: name the fields that moved.
+      // Both sides hold the row: name the fields that moved. A null and an
+      // absent key are two spellings, and a row written both ways flaps.
       for (const f of new Set([...Object.keys(x), ...Object.keys(y)])) {
-        if (stable(x[f]) !== stable(y[f])) out.push({ op: f in y ? (f in x ? "replace" : "add") : "remove", path: [key, sub, f] });
+        const inX = x[f] !== undefined;
+        const inY = y[f] !== undefined;
+        if (inX === inY && stable(x[f]) === stable(y[f])) continue;
+        out.push({ op: inY ? (inX ? "replace" : "add") : "remove", path: [key, sub, f] });
       }
     }
   }

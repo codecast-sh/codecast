@@ -201,7 +201,7 @@ export class SimWindow implements RealmWindow {
       onError: (e) => this.report("catch-up", e),
       onSettled: () => this.afterCatchUp(),
     });
-    this.mount("inbox", api.conversations.listInboxSessions, () => LIST_INBOX_SESSIONS_ARGS, (data) => void applyInboxListPayload(data));
+    this.mount("inbox", api.conversations.listInboxSessions, () => LIST_INBOX_SESSIONS_ARGS, (data) => void applyInboxListPayload(data, this.client));
     this.mount("liveness", api.conversations.sessionsLiveness, () => ({}), (data) => void applyMineLivenessPayload(data));
     // The decision queue: the questions bucket's input (useSyncSessionDecisions).
     this.mount("decisions", api.sessionDecisions.listForUser, () => ({}), (data) => applyCollectionFeed("sessionDecisions", data));

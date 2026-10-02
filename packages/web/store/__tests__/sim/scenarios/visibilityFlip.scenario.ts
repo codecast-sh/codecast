@@ -3,14 +3,10 @@
 // gains the session and loses it again, the task created from it follows the
 // session back to private, and INV-sweep (run at every settle) finds no stale
 // workspace key.
-//
-// Known: INV-fixpoint fails every settled window on the owned_by_me flap
-// (ct-56011) before any step here can, so the runs leave it out and every
-// mode and seed passes; the known check flips once ct-56011 lands.
 
 import { scenario } from "../dsl";
 
-scenario({ name: "visibilityFlip", known: { "INV-fixpoint": "ct-56011" } }, async (w) => {
+scenario({ name: "visibilityFlip" }, async (w) => {
   w.team("acme");
   w.user("ada", ["acme"]).user("bo", ["acme"]);
   const s = w.session("ada", "s", { private: true });

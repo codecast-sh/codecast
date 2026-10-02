@@ -10,12 +10,9 @@
 // A literal "waiting" settle schedules no needs-input check
 // (managedSessions.scheduleNeedsInputCheck), so the stall is permission_blocked.
 //
-// Known: INV-fixpoint fails every settled window on the owned_by_me flap
-// (ct-56011), so the runs leave it out. The role half then holds in every
-// mode and seed of a 20-seed sweep. Red on ct-56051 at interleave seed 114430
-// only: INV-sessions-mine, because bo's generated parent bo/g2 has a live
-// teammate older than the list window, which lifts it to questions on the
-// server only.
+// bo's generated parent bo/g2 has a live teammate older than the list window
+// that lifts it to questions on the server; the overlay's child_asking fact
+// carries that to the replica, which never holds the teammate (ct-56051).
 
 import { api } from "@codecast/convex/convex/_generated/api";
 import { scenario, type ScenarioWorld } from "../dsl";
@@ -47,4 +44,4 @@ export async function roleTriggerScope(w: ScenarioWorld): Promise<void> {
   }
 }
 
-scenario({ name: "roleTriggerScope", red: { task: "ct-56051", invariant: "INV-sessions-mine", modes: ["interleave"], seeds: [114430] }, known: { "INV-fixpoint": "ct-56011" } }, roleTriggerScope);
+scenario({ name: "roleTriggerScope" }, roleTriggerScope);

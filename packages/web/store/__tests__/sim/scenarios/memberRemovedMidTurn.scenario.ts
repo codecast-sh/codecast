@@ -8,14 +8,13 @@
 // task (INV-workspace-rows), no acme cursor left (INV-cursors), no surviving
 // lock or outbox entry, and the anchor list (INV-roles).
 //
-// Known: INV-fixpoint fails every settled window on the owned_by_me flap
-// (ct-56011), so the runs leave it out and pass; the known check flips once
-// ct-56011 lands. Sweep seed 473531 also fails INV-sessions-mine (ct-56051).
+// Known: INV-fixpoint fails on the task t, whose first byIds adds the comments
+// the task list never carries (ct-56354), so the runs leave it out.
 
 import { api } from "@codecast/convex/convex/_generated/api";
 import { scenario } from "../dsl";
 
-scenario({ name: "memberRemovedMidTurn", known: { "INV-fixpoint": "ct-56011" } }, async (w) => {
+scenario({ name: "memberRemovedMidTurn", known: { "INV-fixpoint": "ct-56354" } }, async (w) => {
   w.team("acme", { features: { org: true } });
   w.user("ada", ["acme"]).user("bo", ["acme"]);
   const s = w.session("ada", "s");

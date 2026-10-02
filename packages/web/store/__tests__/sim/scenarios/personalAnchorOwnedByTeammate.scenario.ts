@@ -6,16 +6,14 @@
 // triage), and bo's ack must retire bo's locks: once the clock passes the
 // settle window, INV-pending-locks fails any lock bo still holds.
 //
-// Red on ct-56044 (INV-pending-locks, every run): a conversation's sync-log
-// actions fan out to its runner's scope only (changeLog.scopeFromDoc reads
-// user_id; syncLog.scopesForChange), so bo's locks carry acks in
-// user:<ada>, a scope bo never holds, and never retire. Known: INV-fixpoint
-// (ct-56011) is left out, or every run would stop there first.
+// Guards ct-56044: a conversation's sync-log actions fan out to every session
+// owner's user scope (the access stamp grants them, syncLog.scopesForChange),
+// so bo's acks carry a position in user:<bo> and his locks retire.
 
 import { HIDDEN_OVERRIDE_SETTLE_MS } from "../../../inboxOverlays";
 import { scenario } from "../dsl";
 
-scenario({ name: "personalAnchorOwnedByTeammate", red: { task: "ct-56044", invariant: "INV-pending-locks" }, known: { "INV-fixpoint": "ct-56011" } }, async (w) => {
+scenario({ name: "personalAnchorOwnedByTeammate" }, async (w) => {
   w.team("acme");
   w.user("ada", ["acme"]).user("bo", ["acme"]);
   const s = w.session("ada", "anchor", { private: true, row: { persistent: true } });

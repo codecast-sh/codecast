@@ -3,16 +3,17 @@
 // agent to agent wakes stay under the hourly mention caps per sender and per
 // target (INV-ping-pong), and the net quiesces within the default budget.
 //
-// Red: after the opening mention every reply reaches the other session through
-// the mention-reply relay, which spends only a per-minute limit and never the
-// hourly caps, so each session is woken about 30 times in the hour (ct-56047).
+// After the opening mention every reply reaches the other session through the
+// mention-reply relay. That relay spends the same hourly caps a mention does
+// and folds past them, so each sender wakes the other at most
+// MENTION_WAKES_PER_SENDER_HOUR times in the hour (ct-56047).
 
 import { scenario } from "../dsl";
 
 const ROUNDS = 30;
 const HOP_MS = 2 * 60_000;
 
-scenario({ name: "agentPingPong", red: { task: "ct-56047", invariant: "INV-ping-pong" } }, async (w) => {
+scenario({ name: "agentPingPong" }, async (w) => {
   w.team("acme", { features: { chat: true } }).user("ada", ["acme"]).user("bo", ["acme"]);
   // Session mentions resolve by short id (`@jx` + 5 characters).
   const ping = w.session("ada", "ping", { agentStatus: "working", row: { short_id: "jxpinga" } });

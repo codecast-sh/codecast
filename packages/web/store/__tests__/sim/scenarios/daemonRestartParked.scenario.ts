@@ -6,10 +6,6 @@
 // stay parked and read the same in every window (INV-sessions-mine,
 // INV-followers), and the armed trigger stays consistent with its session
 // (INV-triggers).
-//
-// Known: INV-fixpoint fails every settled window on the owned_by_me flap
-// (ct-56011), so the runs leave it out and every mode and seed passes; the
-// known check (nothing left out) flips once ct-56011 lands.
 
 import { HEARTBEAT_ALIVE_MS } from "@codecast/shared/contracts";
 import { scenario, type ScenarioWorld } from "../dsl";
@@ -50,4 +46,4 @@ export async function daemonRestartParked(w: ScenarioWorld): Promise<void> {
   await expectNoDuplicateSessions(w);
 }
 
-scenario({ name: "daemonRestartParked", known: { "INV-fixpoint": "ct-56011" } }, daemonRestartParked);
+scenario({ name: "daemonRestartParked" }, daemonRestartParked);
