@@ -30,8 +30,8 @@ export type Area = (typeof AREAS)[number];
 
 // Which areas make each ci.yml job worth running. A job runs when any of its
 // areas changed. The mapping follows what the job actually executes: `lint`
-// only lints packages/web, `typecheck` filters to cli + web + convex, and every
-// package test reads @codecast/shared.
+// only lints packages/web, `typecheck` filters to cli + web (with the sim
+// program) + convex + evals, and every package test reads @codecast/shared.
 export const JOB_AREAS: Record<string, Area[]> = {
   build: ["cli", "web", "shared", "extension", "platform"],
   // The cli program's rootDir is the repo root and it imports the convex
@@ -40,13 +40,17 @@ export const JOB_AREAS: Record<string, Area[]> = {
   lint: ["web"],
   "test-convex": ["convex", "shared", "platform"],
   "test-web": ["web", "shared", "platform"],
-  "test-cli": ["cli", "shared", "platform"],
+  // "convex" because the eval home's unit tests run as a step of this job and
+  // import convex prompt builders and parsers directly (titleRequest,
+  // settleRequest, haikuRequest, anthropicBody and more), so a convex-only
+  // change can break them.
+  "test-cli": ["cli", "convex", "shared", "platform"],
   // The mirror's own job: its package tests, and the drift check. Every other
   // job lists "platform" too, because the mirror is a dependency of all of
-  // them and used to reach them through "shared".
+  // them and is its own area, not part of "shared".
   "test-platform": ["platform"],
   // Every area, because the shared suite reads more than shared: the max lines
-  // ratchet walks every package under packages/, and the chief of staff prompt
+  // ratchet walks every package under packages/, and the head of people prompt
   // test reads its spec from docs/. Gating it on less would let a change break
   // it without CI running it.
   "test-shared": [...AREAS],
@@ -79,7 +83,9 @@ export function jobFlag(job: string): string {
 }
 
 const AREA_PREFIXES: Array<[Exclude<Area, "docs">, string[]]> = [
-  ["cli", ["packages/cli/"]],
+  // packages/evals is the eval home (docs/architecture/evals-home.md). It
+  // imports cli source and its unit tests run as a step of test-cli.
+  ["cli", ["packages/cli/", "packages/evals/"]],
   ["web", ["packages/web/"]],
   ["convex", ["packages/convex/"]],
   ["shared", ["packages/shared/"]],
@@ -129,6 +135,22 @@ export function touchesPlatform(file: string): boolean {
   return file.startsWith("platform/") || /^packages\/[^/]+\/package\.json$/.test(file);
 }
 
+export function touchesComputer(file: string): boolean {
+  return file.startsWith("packages/cli/src/computer/")
+    || file.startsWith("packages/cli/native/computer-use-")
+    || file.startsWith("packages/cli/scripts/computer-");
+}
+
+/**
+ * The computer helper's gate. Fails closed like classifyChangedPaths: an empty
+ * diff is a missing base or a failed git command far more often than a real
+ * no-op, so it runs the helper lane rather than skipping it.
+ */
+export function computerScope(files: string[]): boolean {
+  const paths = files.map((file) => file.trim()).filter(Boolean);
+  return paths.length === 0 || paths.some(touchesComputer);
+}
+
 export type Scope = {
   /** Every area and job flag, in emit order. */
   flags: Record<string, boolean>;
@@ -173,9 +195,12 @@ export function formatScope(scope: Scope): string {
 
 if (import.meta.main) {
   const stdin = await Bun.stdin.text();
+  const computerOnly = process.argv.includes("--computer-only");
   const scope = classifyChangedPaths(stdin.split("\n"));
-  if (scope.forcedBy.length > 0) {
+  if (!computerOnly && scope.forcedBy.length > 0) {
     console.error(`Running every job — unclassified input: ${scope.forcedBy.join(", ")}`);
   }
-  console.log(formatScope(scope));
+  console.log(computerOnly
+    ? `run_test_computer=${computerScope(stdin.split("\n"))}`
+    : formatScope(scope));
 }
