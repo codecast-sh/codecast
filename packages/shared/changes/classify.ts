@@ -130,20 +130,31 @@ const SCOPE_SURFACE: Record<string, string> = {
   convex: "backend",
 };
 
+/** Scopes that bump a dependency, never the product's own version. */
+const DEPENDENCY_SCOPES = new Set(["deps", "dep", "deps-dev", "dev-deps", "dependencies", "dependency", "npm", "pip", "cargo", "gomod", "bundler", "lockfile"]);
+
 /**
  * A version-bump commit (spec 7.1 step 3): `chore(cli): bump version to
  * 1.1.163`, `chore(electron): release desktop 1.1.123`. The surface is the
  * word the subject names before the version, else the scope mapped to its
- * surface, else `release`.
+ * surface, else `release`. A dependency bump (`chore(deps): bump lodash from
+ * 1.0.0 to 2.0.0`) is not a release.
  */
 export function parseRelease(subject: string): ReleaseMatch | null {
   const m = RELEASE.exec(subject.trim());
   if (!m) return null;
   const scope = m[1]?.trim().toLowerCase() || null;
+  if (scope && DEPENDENCY_SCOPES.has(scope)) return null;
   const words = m[2].toLowerCase().split(/[^a-z-]+/);
+  // `bump X from A to B` names a dependency unless X is the version itself, whose new value is B.
+  let version = m[3];
+  if (words.includes("from")) {
+    if (!words.includes("version")) return null;
+    version = /\bto\s+v?(\d+\.\d+\.\d+)/i.exec(subject)?.[1] ?? version;
+  }
   const named = SURFACE_WORDS.find((w) => words.includes(w));
   const surface = named ?? (scope ? SCOPE_SURFACE[scope] ?? scope : "release");
-  return { surface, version: m[3], scope };
+  return { surface, version, scope };
 }
 
 const RESTAMP = /^chore\([^)]*\): restamp\b/i;

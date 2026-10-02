@@ -6007,6 +6007,10 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
      *  always a grant this app holds itself; the codecast computer grants have
      *  no part in a call. */
     errorFix: AppPermissionKind | null;
+    /** The room this window last hung up on, and when. The server's seat and
+     *  rings for it outlive the press by a round trip; the face row reads
+     *  them as gone from here (lib/faces/faceRow `leftRoom`). */
+    left?: { roomKey: string; at: number } | null;
   };
   setCallState: (patch: Partial<InboxStoreState["call"]>) => void;
   teamUnreadCount: number | null;

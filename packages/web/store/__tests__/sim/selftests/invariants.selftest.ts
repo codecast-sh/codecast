@@ -260,6 +260,30 @@ describe("invariants", () => {
     await clean(world, "INV-fixpoint");
   });
 
+  // The base lists are measured, not refed ahead: a value cargo or a local
+  // write left on a row differently from the list is a write of the pass.
+  test("INV-fixpoint: a row value the list writes differently moves on the refeed", async () => {
+    const world = fixture(22);
+    const ada = await world.host("ada", ADA, undefined, { listFeeder: true });
+    await clean(world, "INV-fixpoint");
+    const id = Object.keys(ada.store.getState().sessions).find(isConvexId)!;
+    await plant(ada, (s) => ({ sessions: { ...s.sessions, [id]: { ...s.sessions[id], title: "written by cargo" } } }));
+    expect(await planted(world, "INV-fixpoint", world.labels.label(id))).toContain("replace title");
+  });
+
+  // Null and absent are two spellings of an unset field, and the delta merge
+  // replaces the row between them.
+  test("INV-fixpoint: a field held as null where the list omits it", async () => {
+    const world = fixture(23);
+    const ada = await world.host("ada", ADA, undefined, { listFeeder: true });
+    await clean(world, "INV-fixpoint");
+    const state = ada.store.getState() as any;
+    const id = Object.keys(state.sessions).find((k) => isConvexId(k) && !("owner_name" in state.sessions[k]))!;
+    expect(id).toBeDefined();
+    await plant(ada, (s) => ({ sessions: { ...s.sessions, [id]: { ...s.sessions[id], owner_name: null } } }));
+    expect(await planted(world, "INV-fixpoint", world.labels.label(id))).toContain("remove owner_name");
+  });
+
   // ct-56050: sync-log cargo once landed every raw conversation column on the
   // row; the next list or byIds push removed it again.
   test("INV-row-shape: a raw conversation field carried onto a sessions row is outside the row", async () => {

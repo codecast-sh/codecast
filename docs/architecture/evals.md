@@ -189,11 +189,11 @@ fails every rep and waits on a prompt fix proven by ablation.
 | # | Freeze | Surface | The turn | Gate |
 |---|---|---|---|---|
 | 14 | `7cae8ed3` role-pause-own-triggers | anchor-brief | the docs role's opening, then its host types "pause yourself"; `cast trigger ls` lists the host's whole roster | `pause-scope` |
-| 15 | `e01b02e5` conflicting-ship-hold | anchor-brief | the team agent's opening, then a thread wake where the founder said publish tonight and a teammate says hold | judged only |
+| 15 | `e01b02e5` conflicting-ship-hold | anchor-brief | the team agent's opening, then a thread wake where the founder said publish tonight and a teammate says hold | `raises-decision` |
 | 16 | `5db63f13` thread-pass-or-answer | anchor-brief | the team agent's opening, then six wakes in a thread it follows: three ask it something, three are people talking to each other | `pass-or-answer` |
 | 17 | `0bd46dcc` personal-matter-dm-only | anchor-brief | the team agent's opening, then a teammate types a medical reason for time off into its team-readable session | `private-routing` |
 | 18 | `e33185e6` huddle-credit-owners | call-summary | three speakers; one commitment changes hands, one names a person not on the call, two ideas are dropped | `owners-credited` |
-| 20 | `810e418c` stale-teammate-status | role-wake | the docs role's check an hour after its last; its brief's lines on Theo's two sessions are an hour old and both sessions have moved | `reread-before-status` |
+| 20 | `810e418c` stale-teammate-status | role-wake | the docs role's check an hour after its last. Its `cast brief` is prod's printout of prod-shaped facts: the people block lists Theo's two sessions as changed, with their live work state (done, needs input) and the state lines their agents pinned before they moved; its own standing lines are an hour old. Only the transcripts say what happened | `reread-before-status` |
 
 Results on 2026-10-02, 3 reps each on the pinned models (sonnet-5-5 for the
 agent surfaces, haiku-4-5 for call-summary), on the final tree:

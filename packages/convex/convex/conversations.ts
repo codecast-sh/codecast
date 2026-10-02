@@ -64,7 +64,7 @@ import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession, enqueueHibernateSession, requireSessionCommandTarget, findSessionCommandByRequest, recentConversationCommands, validateSessionCommandRequestId } from "./daemonCommandUtils";
 import { normalizePaneUrl } from "@codecast/shared/contracts/browserPaneOffer";
 import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, toConvexAgentType, normalizeThreadState, parseThreadStateStatus, clearedThreadStateFields, formatAgentSwitchNotice, findModelOption, canSessionBecomeAgent, agentForksFromAnyMessage, agentForksNatively, computeConversationTaskStats, isTodoStatTool } from "@codecast/shared/contracts";
-import { shouldShowInInbox, isOrphanOrSubagent, isSessionIdle, deriveSessionActivity, lastRoleIsUserOf, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, userRestOf, userRestStampOf, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
+import { shouldShowInInbox, isOrphanOrSubagent, isSessionIdle, deriveSessionActivity, lastRoleIsUserOf, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentIsProducing, userRestOf, userRestStampOf, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
 import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { armedTriggerHomeLoader, isArmedTriggerHome, isArmedTriggerHomeOfKind, isArmedLoopHome } from "./dormancy";
 import { subagentLinkFields } from "./ccAccountsShared";
@@ -8650,7 +8650,7 @@ async function enrichInboxSessionRow(
   const subagentChildren: any[] = [];
   // Parked (dismissed/stashed) rows skip the children scan entirely: every
   // caller discards their subagent children (a parked parent's children never
-  // render), and the "producing child keeps parent working" refinement is
+  // render), and the "producing child parks its parent" refinement is
   // deliberately never applied to parked rows — same rule as
   // enrichLivenessFields, whose overlay value wins on the web client anyway.
   // This scan was one indexed query per shown row, and parked rows are the
@@ -8676,7 +8676,7 @@ async function enrichInboxSessionRow(
       implementationSession = { _id: implChild._id.toString(), title: implChild.title };
     }
     // Until when a subagent child is genuinely PRODUCING, not merely alive (see
-    // subagentKeepsParentWorking): a settled parent is parked on it until then
+    // subagentIsProducing): a settled parent is parked on it until then
     // (classifyWorkState's childProducing).
     producingUntil = producingUntilOf(children, maps);
     for (const c of children) {
@@ -9855,16 +9855,16 @@ function isLiveAt(maps: Pick<InboxSessionMaps, "liveConvIds"> & Partial<Pick<Inb
   return maps.liveConvIds.has(cid);
 }
 
-// Does this child keep its parent in "working" at instant `now`? Pure over the
-// child doc and the maps; see subagentKeepsParentWorking for the two proofs.
-function childKeepsParentWorking(
+// Is this child still producing for its parent at instant `now`? Pure over the
+// child doc and the maps; see subagentIsProducing for the two proofs.
+function childIsProducing(
   c: any,
   maps: Pick<InboxSessionMaps, "liveConvIds" | "agentStatusMap"> & Partial<Pick<InboxSessionMaps, "lastHeartbeatMap">>,
   now: number,
 ): boolean {
   const cid = c._id.toString();
   const live = isLiveAt(maps, cid, now);
-  return subagentKeepsParentWorking({
+  return subagentIsProducing({
     isSubagent: !!c.is_subagent,
     convStatus: c.status,
     updatedAt: c.updated_at,
@@ -9896,7 +9896,7 @@ export function groupPoolChildren(pool: any[]): Map<string, any[]> {
 // per recompute instead of a per-parent by_parent_conversation_id scan for every idle
 // row (~one indexed query per row — the op-count blowout behind "too many system
 // operations" timeouts on this heartbeat-hot path). The derivation is sound because
-// subagentKeepsParentWorking accepts only two proofs, and both pools are already in
+// subagentIsProducing accepts only two proofs, and both pools are already in
 // hand: a child that synced output within the last 5 minutes sits at the top of the
 // recent window scan, and a live child with an active agent status is in
 // maps.liveConvIds (its doc hydrated by hydrateLivePool when the window missed it —
@@ -9910,15 +9910,15 @@ export function deriveProducingParents(
   const parents = new Set<string>();
   for (const c of pool) {
     if (!c.parent_conversation_id) continue;
-    if (childKeepsParentWorking(c, maps, now)) parents.add(c.parent_conversation_id.toString());
+    if (childIsProducing(c, maps, now)) parents.add(c.parent_conversation_id.toString());
   }
   return parents;
 }
 
 // The candidate pool plus every live conversation the windows missed (a live
-// child of a parent outside the window still keeps that parent working).
+// child of a parent outside the window still parks that parent).
 // The candidate pool the child rollups read: the scan's rows, every LIVE
-// conversation (a producing child keeps its parent working), and every row
+// conversation (a producing child parks its settled parent), and every row
 // holding a pending `cast decide` (a spawned worker's decision lifts its
 // parent whether or not the worker is still live).
 async function hydrateLivePool(ctx: any, conversations: any[], maps: InboxSessionMaps, extraIds: Iterable<string> = []): Promise<any[]> {
@@ -10132,14 +10132,14 @@ function daemonAliveUntil(maps: Pick<InboxSessionMaps, "lastHeartbeatMap" | "lat
 }
 
 // The instant after which no child keeps this parent producing. "A child is
-// producing" (childKeepsParentWorking) only ever turns false as time passes
+// producing" (childIsProducing) only ever turns false as time passes
 // (a grace lapses, a heartbeat dies, a status decays), so its flip is the
 // largest child deadline at which the predicate still held one instant
 // before. Evaluated through the predicate itself — never a re-derived
 // formula — so the fact cannot disagree with the rule.
 function producingUntilOf(children: any[], maps: InboxSessionMaps): number | null {
   if (children.length === 0) return null;
-  const producing = (t: number) => children.some((c: any) => childKeepsParentWorking(c, maps, t));
+  const producing = (t: number) => children.some((c: any) => childIsProducing(c, maps, t));
   let until: number | null = null;
   for (const c of children) {
     const chb = maps.lastHeartbeatMap.get(c._id.toString());
@@ -10249,7 +10249,7 @@ function placeLivenessRowAt(
 // org.ts): the caller's managed-session maps with the foreign rows' liveness
 // merged, the same per-row reads, and placeLivenessRowAt — one classifier,
 // one alphabet. `childrenByParent` (keyed by nestParentIdOf) supplies the
-// producing rollup that keeps a parent working while a child streams. The
+// producing rollup that parks a settled parent while a child streams. The
 // asking input only moves the bucket, never work_state, so the row's own ask
 // is all it needs.
 export async function classifyWorkStates(

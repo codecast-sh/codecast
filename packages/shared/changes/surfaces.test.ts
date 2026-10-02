@@ -29,12 +29,26 @@ describe("dedupe", () => {
 });
 
 describe("surfaces", () => {
-  test("path map covers areas; an unmapped surface covers all", () => {
+  test("path map covers areas; only the catch-all release covers all", () => {
     expect(surfaceCoversArea("cli", "shared")).toBe(true);
     expect(surfaceCoversArea("desktop", "web")).toBe(true);
     expect(surfaceCoversArea("backend", "web")).toBe(false);
     expect(surfaceCoversArea("extension", "browser-extension")).toBe(true);
+    expect(surfaceCoversArea("mobile", "mobile")).toBe(true);
+    expect(surfaceCoversArea("mobile", "cli")).toBe(false);
     expect(surfaceCoversArea("release", "anything")).toBe(true);
+    expect(surfaceCoversArea("api", "api")).toBe(true);
+    expect(surfaceCoversArea("api", "web")).toBe(false);
+  });
+
+  test("a mobile release ships only mobile stories", () => {
+    const { bursts } = releaseBursts([commit({ sha: "m1", subject: "chore(mobile): bump app version to 1.0.4", timestamp: T0 })], "main");
+    const mobile = bursts[0].releases;
+    expect(mobile.map((r) => r.surface)).toEqual(["mobile"]);
+    expect(assignRelease("cli", T0 - MIN, mobile)).toBeNull();
+    expect(assignRelease("mobile", T0 - MIN, mobile)?.sha).toBe("m1");
+    const stories = [{ area: "cli", last_at: T0 + MIN, on_default_branch: true }, { area: "mobile", last_at: T0 + MIN, on_default_branch: true }];
+    expect(waitingStories(stories, mobile[0]).map((s) => s.area)).toEqual(["mobile"]);
   });
 
   test("bursts chain releases within 10 minutes and fold the nearest restamp", () => {
