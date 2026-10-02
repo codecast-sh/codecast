@@ -253,11 +253,11 @@ describe("Codex Cloud transcript: legacy tasks (worklog)", () => {
     const log2 = Object.values(other.turn_mapping!).map((n) => n.turn!).find((t) => t.type === "assistant")!.worklog!.messages!;
     const at = (log2.at(-1)!.create_time ?? 0) + 1;
     log2.push(
-      { id: "web", author: { role: "assistant" }, create_time: at, content: { content_type: "code", text: JSON.stringify({ q: "mastra" }) }, recipient: "browser.search" },
+      { id: "web", author: { role: "assistant" }, create_time: at, content: { content_type: "code", text: JSON.stringify({ q: "agentkit" }) }, recipient: "browser.search" },
       { id: "web-r", author: { role: "tool", name: "browser.search" }, create_time: at, content: { content_type: "text", parts: ["3 results"] }, recipient: "all" },
     );
     const web = read(other).messages.find((m) => m.uuid!.endsWith(":web"))!;
-    expect(web.toolCalls![0]).toMatchObject({ name: "browser.search", input: { q: "mastra" } });
+    expect(web.toolCalls![0]).toMatchObject({ name: "browser.search", input: { q: "agentkit" } });
     expect(web.toolResults![0]).toMatchObject({ toolUseId: "web", content: "3 results" });
     // A terminal reply cut short still reads as its lines, never as raw JSON.
     expect(messages.some((m) => m.toolResults?.[0]?.content.startsWith('{"type"'))).toBe(false);
@@ -265,7 +265,7 @@ describe("Codex Cloud transcript: legacy tasks (worklog)", () => {
 
   test("the answer keeps its text and file citations; a follow-up's diff is its own change", () => {
     const answer = messages.find((m) => m.uuid!.endsWith(":answer"))!;
-    expect(answer.content).toStartWith("### Summary\n- Added Mastra as a backend dependency");
+    expect(answer.content).toStartWith("### Summary\n- Added Agentkit as a backend dependency");
     expect(answer.content).toContain("`package.json:40-47`");
     const followUpTurn = "assttrn_e_68aa10af1a50832ea120eb9608419b86";
     const diff = messages.find((m) => m.uuid === `task:${followUpTurn}:diff`)!;
@@ -294,12 +294,12 @@ describe("Codex Cloud transcript: legacy tasks (worklog)", () => {
     const turns = clone(LEGACY);
     const first = Object.values(turns.turn_mapping!).map((n) => n.turn!).filter((t) => t.type === "assistant").sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0))[0];
     const log = first.worklog!.messages!;
-    log.push({ id: "final", author: { role: "assistant" }, create_time: (log.at(-1)!.create_time ?? 0) + 1, content: { content_type: "text", parts: ["### Summary\n- Added Mastra【F:package.json†L40-L47】【F:server/AI.ts†L19-L22】"] }, recipient: "all", end_turn: true });
+    log.push({ id: "final", author: { role: "assistant" }, create_time: (log.at(-1)!.create_time ?? 0) + 1, content: { content_type: "text", parts: ["### Summary\n- Added Agentkit【F:package.json†L40-L47】【F:server/AI.ts†L19-L22】"] }, recipient: "all", end_turn: true });
     const all = read(turns).messages;
     const key = first.id.slice(first.id.indexOf("~") + 1);
     const answers = all.filter((m) => m.uuid!.includes(key) && m.content.startsWith("### Summary"));
     expect(answers.map((m) => m.uuid)).toEqual([`task:${key}:final`]);
-    expect(answers[0].content).toBe("### Summary\n- Added Mastra `package.json:40-47` `server/AI.ts:19-22`");
+    expect(answers[0].content).toBe("### Summary\n- Added Agentkit `package.json:40-47` `server/AI.ts:19-22`");
     // The other turns' logs have no end_turn answer: theirs still comes from the output items.
     expect(all.filter((m) => m.uuid!.endsWith(":answer"))).toHaveLength(3);
   });
