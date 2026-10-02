@@ -57,6 +57,8 @@ const Artifacts = lazyPage("@/app/artifacts/page", () => import("@/app/artifacts
 const Notifications = lazyPage("@/app/notifications/page", () => import("@/app/notifications/page"));
 // The decision queue: one question at a time, full width.
 const Questions = lazyPage("@/app/questions/page", () => import("@/app/questions/page"));
+// The line: the whole factory as one flow (the-line-end-to-end.md LE13).
+const Line = lazyPage("@/app/line/page", () => import("@/app/line/page"));
 const DecisionDetail = lazyPage("@/app/decisions/[id]/page", () => import("@/app/decisions/[id]/page"));
 const DecisionStacks = lazyPage("@/app/decisions/stacks/page", () => import("@/app/decisions/stacks/page"));
 const DecisionStack = lazyPage("@/app/decisions/stacks/[id]/page", () => import("@/app/decisions/stacks/[id]/page"));
@@ -166,6 +168,7 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/config$/, paramNames: [], component: ConfigPage },
   { pattern: /^\/notifications$/, paramNames: [], component: Notifications },
   { pattern: /^\/questions$/, paramNames: [], component: Questions },
+  { pattern: /^\/line$/, paramNames: [], component: Line },
   { pattern: /^\/threads$/, paramNames: [], component: Threads },
   { pattern: /^\/admin\/daemon-logs$/, paramNames: [], component: AdminDaemonLogs },
 ];

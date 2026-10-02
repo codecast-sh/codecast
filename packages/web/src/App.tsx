@@ -57,6 +57,7 @@ const Explore = lazy(() => import("@/app/explore/page"));
 const Timeline = lazy(() => import("@/app/timeline/page"));
 const Notifications = lazy(() => import("@/app/notifications/page"));
 const Questions = lazy(() => import("@/app/questions/page"));
+const Line = lazy(() => import("@/app/line/page"));
 const DecisionDetail = lazy(() => import("@/app/decisions/[id]/page"));
 const DecisionStacks = lazy(() => import("@/app/decisions/stacks/page"));
 const DecisionStack = lazy(() => import("@/app/decisions/stacks/[id]/page"));
@@ -69,6 +70,14 @@ const Share = lazy(() => import("@/app/share/[token]/page"));
 const ShareMessage = lazy(() => import("@/app/share/message/[token]/page"));
 const ShareDoc = lazy(() => import("@/app/share/doc/[token]/page"));
 const SharePlan = lazy(() => import("@/app/share/plan/[token]/page"));
+const ShareTask = lazy(() => import("@/app/share/task/[token]/page"));
+const ShareCall = lazy(() => import("@/app/share/call/[token]/page"));
+const ShareProject = lazy(() => import("@/app/share/project/[token]/page"));
+const ShareInitiative = lazy(() => import("@/app/share/initiative/[token]/page"));
+const ShareDecision = lazy(() => import("@/app/share/decision/[token]/page"));
+const ShareStack = lazy(() => import("@/app/share/stack/[token]/page"));
+const ShareTrigger = lazy(() => import("@/app/share/trigger/[token]/page"));
+const ShareRun = lazy(() => import("@/app/share/run/[token]/page"));
 const PublicProfile = lazy(() => import("@/app/u/[username]/page"));
 
 const CommitView = lazy(() => import("@/app/commit/[owner]/[repo]/[sha]/page"));
@@ -227,6 +236,7 @@ export function App() {
               <Route path="search" element={<E name="Search"><Search /></E>} />
               <Route path="notifications" element={<E name="Notifications"><Notifications /></E>} />
               <Route path="questions" element={<E name="Questions"><Questions /></E>} />
+              <Route path="line" element={<E name="Line"><Line /></E>} />
               <Route path="decisions/stacks" element={<E name="DecisionStacks"><DecisionStacks /></E>} />
               <Route path="decisions/stacks/:id" element={<E name="DecisionStack"><DecisionStack /></E>} />
               <Route path="decisions/:id" element={<E name="DecisionDetail"><DecisionDetail /></E>} />
@@ -289,6 +299,14 @@ export function App() {
             <Route path="share/message/:token" element={<E name="ShareMessage"><ShareMessage /></E>} />
             <Route path="share/doc/:token" element={<E name="ShareDoc"><ShareDoc /></E>} />
             <Route path="share/plan/:token" element={<E name="SharePlan"><SharePlan /></E>} />
+            <Route path="share/task/:token" element={<E name="ShareTask"><ShareTask /></E>} />
+            <Route path="share/call/:token" element={<E name="ShareCall"><ShareCall /></E>} />
+            <Route path="share/project/:token" element={<E name="ShareProject"><ShareProject /></E>} />
+            <Route path="share/initiative/:token" element={<E name="ShareInitiative"><ShareInitiative /></E>} />
+            <Route path="share/decision/:token" element={<E name="ShareDecision"><ShareDecision /></E>} />
+            <Route path="share/stack/:token" element={<E name="ShareStack"><ShareStack /></E>} />
+            <Route path="share/trigger/:token" element={<E name="ShareTrigger"><ShareTrigger /></E>} />
+            <Route path="share/run/:token" element={<E name="ShareRun"><ShareRun /></E>} />
 
             {/* Browsing a repository, inside the dashboard: its source, its
                 commits, the refs it has, its pull requests, its search. Every

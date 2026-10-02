@@ -13,7 +13,7 @@ import { CHANGE_KIND_META, kindLabel } from "./orgMeta";
 import type { OrgCreateRoleInput } from "../../store/orgSlice";
 import type { HireRoleInitial, HireRoleTouched } from "./HireRoleDialog";
 import {
-  CHIEF_OF_STAFF_HANDLE,
+  HEAD_OF_PEOPLE_HANDLE, isHeadOfPeopleRole,
   type HealthFlag,
   type OrgChange,
   type OrgChangeStatus,
@@ -26,11 +26,11 @@ import {
 
 // ---------------------------------------------------------------- mode
 
-export type StaffingMode = "proposal" | "health" | "no_chief";
+export type StaffingMode = "proposal" | "health" | "no_head_of_people";
 
-/** The chief of staff, when hired: a live role with the reserved handle. */
-export function findChiefOfStaff(tree: OrgTree | null): OrgRole | null {
-  return tree?.roles.find((r) => r.handle === CHIEF_OF_STAFF_HANDLE && r.status !== "retired") ?? null;
+/** The head of people, when hired: a live role with the reserved handle. */
+export function findHeadOfPeople(tree: OrgTree | null): OrgRole | null {
+  return tree?.roles.find((r) => isHeadOfPeopleRole(r) && r.status !== "retired") ?? null;
 }
 
 /** Open proposals, newest first. */
@@ -39,10 +39,10 @@ export function openProposals(rows: OrgProposalRow[]): OrgProposalRow[] {
 }
 
 /** What the pane shows (S5): a proposal when one is open, else the health
- *  summary, else, with no chief of staff at all, the two hire buttons. */
+ *  summary, else, with no head of people at all, the two hire buttons. */
 export function staffingMode(tree: OrgTree | null, proposal: OrgProposalRow | null): StaffingMode {
   if (proposal) return "proposal";
-  return findChiefOfStaff(tree) ? "health" : "no_chief";
+  return findHeadOfPeople(tree) ? "health" : "no_head_of_people";
 }
 
 // ---------------------------------------------------------------- a review in flight
@@ -366,7 +366,7 @@ export function relatedFlags(flags: HealthFlagRow[], changes: OrgProposalChange[
 // ---------------------------------------------------------------- the loop (S29)
 
 /** The status word's colour: what needs a person is warm, what needs the
- *  chief is yellow, a quiet or paused area is dim, on track is green. */
+ *  head is yellow, a quiet or paused area is dim, on track is green. */
 export const AREA_STATUS_COLOR: Record<AreaStatus, string> = {
   waiting_on_you: "var(--sol-orange)",
   stuck: "var(--sol-yellow)",
@@ -377,7 +377,7 @@ export const AREA_STATUS_COLOR: Record<AreaStatus, string> = {
   not_started: "var(--sol-text-dim)",
 };
 
-/** Roles as the chart draws them: the Chief of Staff first, then each
+/** Roles as the chart draws them: the Head of People first, then each
  *  person's other roles, each followed by the roles under it, depth first.
  *  Retired roles are left out. */
 export function rolesInTreeOrder(tree: OrgTree | null): OrgRole[] {
@@ -388,7 +388,7 @@ export function rolesInTreeOrder(tree: OrgTree | null): OrgRole[] {
     const key = r.reports_to.kind === "role" ? `role:${r.reports_to.role_id}` : "person";
     byParent.set(key, [...(byParent.get(key) ?? []), r]);
   }
-  const rank = (r: OrgRole) => (r.handle === CHIEF_OF_STAFF_HANDLE ? 0 : 1);
+  const rank = (r: OrgRole) => (isHeadOfPeopleRole(r) ? 0 : 1);
   const sorted = (rows: OrgRole[]) => [...rows].sort((a, b) => rank(a) - rank(b) || a.created_at - b.created_at);
   const out: OrgRole[] = [];
   const seen = new Set<string>();
@@ -469,28 +469,6 @@ export function needsYou(tree: OrgTree | null, health: OrgHealth | null, queue: 
     out.push({ kind: "proposal", key: `proposal:${p._id}`, proposal: p, remaining: proposalProgress(p).remaining });
   }
   return out;
-}
-
-export type ChiefRead = {
-  chief: OrgRole;
-  area: RoleArea | null;
-  /** The chief's read of the company: its "Company" line first, else its newest line. */
-  narrative: RoleArea["standing_lines"];
-  /** Its newest proposal, of any status, with how far it is decided. */
-  proposed: { proposal: OrgProposalRow; progress: ProposalProgress } | null;
-};
-
-/** The Chief of Staff's latest review as the panel shows it (S29). */
-export function chiefRead(tree: OrgTree | null, health: OrgHealth | null, proposals: OrgProposalRow[]): ChiefRead | null {
-  const chief = findChiefOfStaff(tree);
-  if (!chief) return null;
-  const area = health?.roles.find((r) => r.role_id === chief._id)?.area ?? null;
-  const lines = area?.standing_lines ?? [];
-  const company = lines.filter((l) => /^company$/i.test(l.project.trim()));
-  const narrative = company.length ? [...company, ...lines.filter((l) => !company.includes(l))] : lines;
-  const mine = proposals.filter((p) => p.author.kind === "role" && (p.author.id === chief._id || p.author.handle === chief.handle)).sort((a, b) => b.created_at - a.created_at);
-  const latest = mine[0] ?? null;
-  return { chief, area, narrative, proposed: latest ? { proposal: latest, progress: proposalProgress(latest) } : null };
 }
 
 /** The cadences a check or a review can be set to in place. */
@@ -628,7 +606,7 @@ export function changeEdits(change: OrgChange, fields: ChangeField[]): Record<st
   return edits;
 }
 
-/** The `?compose=` text a URL carries for the chief of staff's composer (a
+/** The `?compose=` text a URL carries for the head of people's composer (a
  *  charter empty state links here with "draft a charter for X"), else null. */
 export function composeParam(search: string | null | undefined): string | null {
   if (!search) return null;

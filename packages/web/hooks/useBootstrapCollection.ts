@@ -15,6 +15,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useConvex } from "convex/react";
 import { useInboxStore } from "../store/inboxStore";
+import { mapSlots } from "../store/simSlot";
 import { useIsSyncHost } from "./useSyncRole";
 
 type Opts = {
@@ -56,6 +57,15 @@ export function resetBootstrapFloors(): void {
   done.clear();
 }
 
+/**
+ * Sim seam: the floors belong to one window. get() snapshots them (the map is
+ * copied, so the snapshot is detached), set() loads a snapshot back, fresh()
+ * is what a window that never ran starts from.
+ */
+export function __bootstrapSimSlots() {
+  return mapSlots({ done });
+}
+
 // Entries from an earlier epoch or principal can never be asked for again;
 // drop them so the map stays the size of one page session's live floors.
 function forgetFloorsOutside(prefix: string): void {
@@ -94,6 +104,87 @@ function principalOf(s: any): string | null {
   return id ? String(id) : null;
 }
 
+// Keyed by principal and epoch (review): account A's floor must not stand in
+// for account B's, and a resync or rejoin must recut every mounted floor.
+const floorPrefix = (principal: string | null, epoch: number) => `${principal}:${epoch}:`;
+export function bootstrapFloorKey(principal: string | null, epoch: number, key: string, args: unknown): string {
+  return `${floorPrefix(principal, epoch)}${bootstrapKey(key, args)}`;
+}
+
+/** Every scope the floor's rows fan out from has a stamped cursor (false while unresolved). */
+export function floorScopesStamped(s: any, scopes: string[] | null): boolean {
+  return !!scopes && scopes.every((k) => s.syncLogScopeStamps[k] !== undefined);
+}
+
+export type BootstrapFloorRun = {
+  convex: { query: (query: any, args: any) => Promise<any> };
+  key: string;
+  query: any;
+  args: Record<string, any>;
+  principal: string | null;
+  epoch: number;
+  /** Read at each step, so a caller can swap options while the floor runs. */
+  opts: () => Opts;
+  onReady?: () => void;
+};
+
+/**
+ * Cut one bootstrap floor (its gates already open): fetch once per key,
+ * overlay the rows as a delta, fenced on the epoch and principal it was cut
+ * at. Returns the cancel. The hook runs this from its effect; the multiplayer
+ * simulator runs it from a window's turn.
+ */
+export function startBootstrapFloor(run: BootstrapFloorRun): () => void {
+  const { convex, key, query, args, principal, epoch, opts } = run;
+  const scope = opts().liveLoadingScope;
+  let cancelled = false;
+  if (scope) useInboxStore.getState().setLiveLoading(scope, true);
+  forgetFloorsOutside(floorPrefix(principal, epoch));
+  const live = () => {
+    const s = useInboxStore.getState();
+    return s.syncLogFloorEpoch === epoch && principalOf(s) === principal;
+  };
+  loadFloorOnce(
+    bootstrapFloorKey(principal, epoch, key, args),
+    async () => {
+      const data = await convex.query(query, args);
+      const select = opts().select;
+      return select ? select(data) : data;
+    },
+    (rows) => {
+      if (rows.length) useInboxStore.getState().syncTable(key, rows as any, { isDelta: true, ...opts().syncOpts } as any);
+    },
+    live,
+  ).then((rows) => {
+    if (cancelled || !live()) return;
+    opts().onRows?.(rows);
+    run.onReady?.();
+  }).catch((e) => console.warn(`[bootstrap] ${key} floor failed`, e))
+    .finally(() => { if (scope && !cancelled) useInboxStore.getState().setLiveLoading(scope, false); });
+  return () => {
+    cancelled = true;
+    if (scope) useInboxStore.getState().setLiveLoading(scope, false);
+  };
+}
+
+/**
+ * The floor a window cuts from one read of its state, or null while a gate is
+ * closed (not hydrated, or a scope not yet stamped). Host-only is the
+ * caller's gate. The hook reads the same inputs through subscriptions.
+ */
+export function bootstrapFloorFor(
+  s: any,
+  convex: BootstrapFloorRun["convex"],
+  key: string,
+  query: any,
+  args: Record<string, any> | "skip",
+  opts: Opts = {},
+): BootstrapFloorRun | null {
+  const principal = principalOf(s);
+  if (args === "skip" || !s.clientStateInitialized || !floorScopesStamped(s, floorScopeKeys(args, principal))) return null;
+  return { convex, key, query, args, principal, epoch: s.syncLogFloorEpoch, opts: () => opts };
+}
+
 export function useBootstrapCollection(
   key: string,
   query: any,
@@ -110,47 +201,17 @@ export function useBootstrapCollection(
   // its query and the heads capture. Per scope: the scopes this floor's rows
   // fan out from, not "some scope was stamped once".
   const scopes = floorScopeKeys(args, principal);
-  const stamped = useInboxStore((s) => !!scopes && scopes.every((k) => s.syncLogScopeStamps[k] !== undefined));
+  const stamped = useInboxStore((s) => floorScopesStamped(s, scopes));
   const [ready, setReady] = useState(false);
   const [nonce, setNonce] = useState(0);
   const optsRef = useRef(opts);
   optsRef.current = opts;
-  // Keyed by principal and epoch (review): account A's floor must not stand in
-  // for account B's, and a resync or rejoin must recut every mounted floor.
-  const prefix = `${principal}:${epoch}:`;
-  const argsKey = args === "skip" ? "skip" : `${prefix}${bootstrapKey(key, args)}`;
+  const argsKey = args === "skip" ? "skip" : bootstrapFloorKey(principal, epoch, key, args);
 
   // eslint-disable-next-line no-restricted-syntax -- one-shot bootstrap per args
   useEffect(() => {
     if (args === "skip" || !isSyncHost || !hydrated || !stamped) return;
-    const scope = optsRef.current.liveLoadingScope;
-    let cancelled = false;
-    if (scope) useInboxStore.getState().setLiveLoading(scope, true);
-    forgetFloorsOutside(prefix);
-    const live = () => {
-      const s = useInboxStore.getState();
-      return s.syncLogFloorEpoch === epoch && principalOf(s) === principal;
-    };
-    loadFloorOnce(
-      argsKey,
-      async () => {
-        const data = await convex.query(query, args);
-        return optsRef.current.select ? optsRef.current.select(data) : data;
-      },
-      (rows) => {
-        if (rows.length) useInboxStore.getState().syncTable(key, rows as any, { isDelta: true, ...optsRef.current.syncOpts } as any);
-      },
-      live,
-    ).then((rows) => {
-      if (cancelled || !live()) return;
-      optsRef.current.onRows?.(rows);
-      setReady(true);
-    }).catch((e) => console.warn(`[bootstrap] ${key} floor failed`, e))
-      .finally(() => { if (scope && !cancelled) useInboxStore.getState().setLiveLoading(scope, false); });
-    return () => {
-      cancelled = true;
-      if (scope) useInboxStore.getState().setLiveLoading(scope, false);
-    };
+    return startBootstrapFloor({ convex, key, query, args, principal, epoch, opts: () => optsRef.current, onReady: () => setReady(true) });
   }, [argsKey, isSyncHost, hydrated, stamped, nonce]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const refresh = () => { done.delete(argsKey); setNonce((n) => n + 1); };

@@ -88,13 +88,15 @@ export function parseDesktopDeepLinkPath(url: string): string | null {
 // site (codecast.sh itself: the landing page and its public pages; a visitor
 // looking at the site is not opening a conversation, and parseDesktopDeepLinkPath
 // already returns null for "/"), auth/oauth flows, the standalone share pages
-// (/share/message|doc|plan, often opened by people without the app; a
+// (/share/<kind>/<token>, often opened by people without the app; a
 // conversation share never reaches this gate as a document, because the web
 // server answers /share/<token> with a redirect to its /conversation/<id>
 // form), published artifacts (/a/<slug>, same audience), the standalone
 // repository pages (/r/<owner>/<name>/…: code links pasted into chat, guest
 // readable, meant to stay in the browser like a GitHub link), the in-app
-// palette popup, downloads, and API routes.
+// palette popup, downloads, and API routes. A guest's meeting page (/meet/
+// <token>) above all: it is opened by somebody outside the team, and the app
+// on that machine, if there is one, is signed in as somebody else.
 // The community rooms (/community) are a public page too: a link from the
 // marketing site or a search result opens them in the browser, whether or not
 // the reader owns the desktop app. So is a public profile (/:username), which
@@ -107,6 +109,7 @@ const HANDOFF_DENY = [
   /^\/oauth/,
   /^\/slack\/connect(\/|$)/,
   /^\/share\//,
+  /^\/meet\//,
   /^\/a\//,
   /^\/r(\/|$)/,
   /^\/community(\/|$)/,
@@ -126,7 +129,7 @@ const HANDOFF_DENY = [
 // this set, so drift fails loudly.
 export const IN_SHELL_ROOT_SEGMENTS = new Set([
   // Tab pages (RoutePane patterns)
-  "inbox", "feed", "crosstalk", "org", "browser", "chat", "community", "search", "notifications", "questions", "threads", "docs", "capabilities", "plans", "tasks", "files", "vault", "pages", "artifacts",
+  "inbox", "feed", "crosstalk", "org", "browser", "chat", "community", "search", "notifications", "questions", "line", "threads", "docs", "capabilities", "plans", "tasks", "files", "vault", "pages", "artifacts",
   "projects", "initiatives", "workflows", "routines", "triggers", "schedules", "sessions", "anchor", "team", "config", "calls",
   // Standalone shell pages (own <Route>, not in RoutePane)
   "explore", "timeline", "windows", "orchestration", "roadmap", "cli",
@@ -577,11 +580,15 @@ function closeTab(): void {
 
 /**
  * Share pages that boot standalone (src/shareBoot.tsx) instead of the app:
- * /share/message|doc|plan/<token>. /share/<token> is NOT one — it resolves to
- * a conversation and needs the app.
+ * /share/<kind>/<token>, every kind in SHARED_OBJECT_KINDS (this file imports
+ * nothing, so it reads the shape rather than the list). /share/<token> is NOT
+ * one — it resolves to a conversation and needs the app. A guest's meeting
+ * page (/meet/<token>, app/meet) is: it is for somebody with no account, so
+ * nothing the app's boot puts in front of a page (auth, the inbox) may
+ * stand in their way.
  */
 export function isStandaloneSharePath(path: string): boolean {
-  return /^\/share\/(message|doc|plan)\/[^/]+\/?$/.test(path);
+  return /^\/share\/[a-z]+\/[^/]+\/?$/.test(path) || /^\/meet\/[^/]+\/?$/.test(path);
 }
 
 /**

@@ -3,6 +3,7 @@ import { useRecorderSync } from "../../hooks/useRecorder";
 import { useCallRing } from "../../hooks/useCallRing";
 import { useWalkieSync } from "../../hooks/useWalkieSync";
 import { useRoomThreadAlerts } from "../../hooks/useRoomThreadAlerts";
+import { useRecordingNoticeToast } from "./RoomRecording";
 
 export function CallSyncEffects() {
   useCallSync();
@@ -10,5 +11,6 @@ export function CallSyncEffects() {
   useWalkieSync();
   useRecorderSync();
   useRoomThreadAlerts();
+  useRecordingNoticeToast();
   return null;
 }

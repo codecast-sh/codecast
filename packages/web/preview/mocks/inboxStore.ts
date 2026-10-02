@@ -22,7 +22,7 @@ export const useInboxStore = create<any>(() => ({
   openPalette: (opts: unknown) => console.log("openPalette", opts),
   machineRoster: devices,
   machineRosterLive: true,
-  movingSessions: {},
+  sessionCommands: {},
   resolveLiveSessionId: (id: string) => id,
   setMachineRoster: () => {},
   getConvexId: (id: string) => id,

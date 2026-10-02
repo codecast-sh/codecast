@@ -198,6 +198,15 @@ export function ExternalEventRow({
   // ("updated to 8f7eb2d") has said it.
   const commitSaid = !!event.refs.commit && title.toLowerCase().includes(shortSha(event.refs.commit.sha).toLowerCase());
 
+  const visibleRefs = useMemo((): ExternalEventRef => {
+    const out: ExternalEventRef = {};
+    for (const key of Object.keys(event.refs) as (keyof ExternalEventRef)[]) {
+      if (has(key)) (out as Record<string, unknown>)[key] = event.refs[key];
+    }
+    if (commitSaid) delete out.commit;
+    return out;
+  }, [event.refs, has, commitSaid]);
+
   return (
     <div
       data-event-kind={event.kind}
@@ -279,45 +288,64 @@ export function ExternalEventRow({
         ) : null}
 
         {compact ? null : (
-          <div className="flex items-center gap-1 flex-wrap mt-1 empty:mt-0">
-            {has("session_id") ? (
-              <EntityIdPill id={event.refs.session_id} type="session" />
-            ) : null}
-            {has("task_id") || has("task_short_id") ? (
-              <EntityIdPill shortId={event.refs.task_short_id} id={event.refs.task_id} type="task" />
-            ) : null}
-            {has("plan_id") ? <EntityIdPill id={event.refs.plan_id} type="plan" /> : null}
-            {has("project_id") ? <EntityIdPill id={event.refs.project_id} type="project" /> : null}
-            {has("pr") ? (
-              <Pill href={prPath(event.refs.pr)} onNavigate={onNavigate} title={event.refs.pr!.repository}>
-                #{event.refs.pr!.number}
-              </Pill>
-            ) : null}
-            {has("commit") && !commitSaid ? (
-              <Pill
-                href={commitPath(event.refs.commit)}
-                onNavigate={onNavigate}
-                title={event.refs.commit!.sha}
-              >
-                <span className="font-mono">{shortSha(event.refs.commit!.sha)}</span>
-              </Pill>
-            ) : null}
-            {has("file") ? (
-              <Pill href={filePath(event.refs.file)} onNavigate={onNavigate} title={event.refs.file!.path}>
-                <span className="font-mono truncate">
-                  {event.refs.file!.path.split("/").pop()}
-                  {event.refs.file!.line ? `:${event.refs.file!.line}` : ""}
-                </span>
-              </Pill>
-            ) : null}
-            {has("issue") ? (
-              <Pill href={event.refs.issue!.url} external title={event.refs.issue!.provider}>
-                {event.refs.issue!.key}
-              </Pill>
-            ) : null}
-          </div>
+          <EventRefPills
+            refs={visibleRefs}
+            sessionIds={visibleRefs.session_id ? [visibleRefs.session_id] : []}
+            onNavigate={onNavigate}
+          />
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The objects an event (or a run of them) belongs to, as a row of pills. The
+ * row sets the type size itself: a reference pill is sized in em, so without
+ * it a session title takes whatever size the surrounding page uses.
+ */
+export function EventRefPills({
+  refs,
+  sessionIds,
+  onNavigate,
+}: {
+  refs: ExternalEventRef;
+  sessionIds: string[];
+  onNavigate?: (path: string) => void;
+}) {
+  return (
+    <div className="flex items-center gap-1 flex-wrap mt-1 empty:mt-0 text-[11px] leading-5" onClick={(e) => e.stopPropagation()}>
+      {sessionIds.map((id) => (
+        <EntityIdPill key={id} id={id} type="session" />
+      ))}
+      {refs.task_id || refs.task_short_id ? (
+        <EntityIdPill shortId={refs.task_short_id} id={refs.task_id} type="task" />
+      ) : null}
+      {refs.plan_id ? <EntityIdPill id={refs.plan_id} type="plan" /> : null}
+      {refs.project_id ? <EntityIdPill id={refs.project_id} type="project" /> : null}
+      {refs.pr ? (
+        <Pill href={prPath(refs.pr)} onNavigate={onNavigate} title={refs.pr.repository}>
+          #{refs.pr.number}
+        </Pill>
+      ) : null}
+      {refs.commit ? (
+        <Pill href={commitPath(refs.commit)} onNavigate={onNavigate} title={refs.commit.sha}>
+          <span className="font-mono">{shortSha(refs.commit.sha)}</span>
+        </Pill>
+      ) : null}
+      {refs.file ? (
+        <Pill href={filePath(refs.file)} onNavigate={onNavigate} title={refs.file.path}>
+          <span className="font-mono truncate">
+            {refs.file.path.split("/").pop()}
+            {refs.file.line ? `:${refs.file.line}` : ""}
+          </span>
+        </Pill>
+      ) : null}
+      {refs.issue ? (
+        <Pill href={refs.issue.url} external title={refs.issue.provider}>
+          {refs.issue.key}
+        </Pill>
+      ) : null}
     </div>
   );
 }

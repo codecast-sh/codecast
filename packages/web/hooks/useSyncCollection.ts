@@ -91,6 +91,17 @@ export type SyncCollectionResult = {
   retry: () => void;
 };
 
+/**
+ * One push of a feeder into its collection: pull the rows out with `select`
+ * and hand them to syncTable. Nothing is synced when there are no rows (the
+ * query is loading, or the server refused the caller with `null`).
+ */
+export function applyCollectionFeed(key: string, data: any, select?: (data: any) => any, syncOpts?: SyncOpts): void {
+  const rows = select ? select(data) : data;
+  if (rows === undefined || rows === null) return;
+  useInboxStore.getState().syncTable(key, rows, syncOpts);
+}
+
 export function useSyncCollection<Query extends FunctionReference<"query">>(
   key: string,
   query: Query,
@@ -104,18 +115,13 @@ export function useSyncCollection<Query extends FunctionReference<"query">>(
   const gatedArgs = authSettled ? args : "skip";
   const { data, error, retry } = useQueryNoThrow(query, gatedArgs, opts?.breakAfterMs ? { breakAfterMs: opts.breakAfterMs } : undefined);
   useFeederError(getFunctionName(query), error);
-  const syncTable = useInboxStore((s) => s.syncTable);
   const select = opts?.select;
   const syncOpts = opts?.syncOpts;
   useConvexSync(
     data,
     useCallback(
-      (payload: any) => {
-        const rows = select ? select(payload) : payload;
-        if (rows === undefined || rows === null) return;
-        syncTable(key, rows, syncOpts);
-      },
-      [key, select, syncOpts, syncTable],
+      (payload: any) => applyCollectionFeed(key, payload, select, syncOpts),
+      [key, select, syncOpts],
     ),
     opts?.coalesceMs ? { coalesceMs: opts.coalesceMs } : undefined,
   );

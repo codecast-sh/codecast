@@ -4,6 +4,7 @@ import { useDesktopWindowRole } from "../../hooks/useDesktopWindowRole";
 import { useFaceRowSelect } from "../../hooks/useFaceRow";
 import { showCallPanel, voiceHostElsewhere } from "../../lib/desktop";
 import type { FaceRow } from "../../lib/faces/faceRow";
+import { CallCardRecordingMark } from "./RoomRecording";
 
 /**
  * "In a huddle in another window."
@@ -33,6 +34,8 @@ export function ElsewhereCallPill({ className = "" }: { className?: string }) {
     >
       <Headphones className="h-3 w-3 shrink-0" aria-hidden="true" />
       In a huddle in another window
+      {/* The window behind this one is recording the room: said here too. */}
+      <CallCardRecordingMark />
     </button>
   );
 }

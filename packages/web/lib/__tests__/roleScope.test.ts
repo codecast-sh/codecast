@@ -105,16 +105,16 @@ describe("buildRoleScope", () => {
     expect(child.whole).toBe(false);
   });
 
-  test("the Chief of Staff with no scope is the whole workspace; any other role with no scope looks after nothing", () => {
+  test("the Head of People with no scope is the whole workspace; any other role with no scope looks after nothing", () => {
     const loose: OrgRole = { ...growth, scope: { project_ids: [], plan_ids: [] }, scope_names: { projects: [], plans: [] } };
     expect(buildRoleScope(sourceFromTree({ ...tree, roles: [loose] }, loose), { ...rows, roles: [loose] }, TODAY).projects).toEqual([]);
-    const chief: OrgRole = { ...loose, handle: "chief-of-staff" };
-    const whole = buildRoleScope(sourceFromTree({ ...tree, roles: [chief] }, chief), { ...rows, roles: [chief] }, TODAY);
+    const head: OrgRole = { ...loose, handle: "head-of-people" };
+    const whole = buildRoleScope(sourceFromTree({ ...tree, roles: [head] }, head), { ...rows, roles: [head] }, TODAY);
     expect(whole.whole).toBe(true);
     expect(whole.projects.map((p) => p.title)).toEqual(["Growth"]);
     // It leads what no narrower role covers (org-staffing.md S26), and nothing a lead does.
     expect(whole.projects[0].leads).toBe(true);
-    const seat: OrgRole = { ...chief, _id: "chief" as never, handle: "chief-of-staff" };
+    const seat: OrgRole = { ...head, _id: "head" as never, handle: "head-of-people" };
     const withLead = buildRoleScope(sourceFromTree({ ...tree, roles: [seat, growth] }, seat), { ...rows, roles: [seat, growth] }, TODAY);
     expect(withLead.projects.find((p) => p.title === "Growth")?.leads ?? false).toBe(false);
   });

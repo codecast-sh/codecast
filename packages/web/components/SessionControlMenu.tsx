@@ -1,8 +1,10 @@
 import { useState, type ReactNode } from "react";
 import { useConvex } from "convex/react";
 import { toast } from "sonner";
-import { ArrowLeft, ArrowRight, ChevronRight, Split } from "lucide-react";
-import { AGENT_MODEL_CONFIG, cloudAgentLaunch, cloudAgentLaunchWords, findModelOption, modelAgentKey, type ConvexAgentType } from "@codecast/shared/contracts";
+import { ArrowLeft, ArrowRight, ChevronRight, MoveRight, Split } from "lucide-react";
+import { AGENT_MODEL_CONFIG, cloudAgentLaunch, cloudAgentLaunchWords, findModelOption, isCloudAgentBranch, modelAgentKey, type ConvexAgentType } from "@codecast/shared/contracts";
+import { formatShortcutParts, getShortcutsForAction, useShortcuts } from "../shortcuts";
+import { KeyCap } from "./KeyboardShortcutsHelp";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useLiveSessionMeta } from "../hooks/useLiveSessionMeta";
 import { useInboxStore, type InboxSession } from "../store/inboxStore";
@@ -283,6 +285,10 @@ export function SessionControlPanel({
   const modelText = model ? modelLabel(agentType, model) : "";
   const options = moveAgentOptions(agentType, messageCount);
   const verbs = sessionMoveVerbs(agentType, sessionId, model);
+  // One of a cloud agent's attempts (a best-of-N launch, or a branch of one): switched in the branch map.
+  const attempts = (model ? cloudAgentLaunch(agentType, model)?.attempts ?? 0 : 0) > 1 || isCloudAgentBranch(agentType, sessionId);
+  const { dispatchAction } = useShortcuts();
+  const mapKey = getShortcutsForAction("conv.toggleTree")[0];
 
   const stateLine = cloudNote
     ?? (!controllable
@@ -364,7 +370,24 @@ export function SessionControlPanel({
         </div>
       )}
 
-      <DropdownMenuSeparator className={controllable ? "" : "hidden"} />
+      {attempts && (
+        <div className="py-1">
+          <DropdownMenuItem
+            data-attempts-row
+            onSelect={() => { onClose(); dispatchAction("conv.toggleTree"); }}
+            className="group mx-1 flex items-center gap-2.5 px-2 py-1.5"
+          >
+            <Split className="h-3.5 w-3.5 shrink-0 text-sol-text-dim transition-colors group-focus:text-sol-cyan" />
+            <span className="flex min-w-0 flex-col">
+              <span className="text-xs text-sol-text">Switch attempt</span>
+              <span className="truncate text-[10px] text-sol-text-dim">Each attempt is a branch: open the branch map</span>
+            </span>
+            {mapKey && <span className="ml-auto flex shrink-0 gap-0.5">{formatShortcutParts(mapKey).map((k) => <KeyCap key={k} size="xs">{k}</KeyCap>)}</span>}
+          </DropdownMenuItem>
+        </div>
+      )}
+
+      <DropdownMenuSeparator className={controllable || attempts ? "" : "hidden"} />
       <div className={SECTION_LABEL}>Move this session</div>
       <div className="pb-1">
         {verbs.map((verb) => {
@@ -480,12 +503,12 @@ export function HeaderModelControl({
             data-session-control-trigger
             className="group flex items-center gap-1 font-mono rounded px-1 -mx-1 transition-colors hover:bg-sol-bg-alt hover:text-sol-text-secondary"
             title={cloudNote
-              ? `${cloudNote} · fork, hand off`
+              ? `${cloudNote} · switch attempt, fork, hand off`
               : `Model: ${overlayModel ?? "default"}${overlayEffort ? ` · ${overlayEffort} effort` : ""} · model, agent, fork, hand off`}
           >
-            {/* A cloud launch that asked for nothing more names what the panel does instead: fork or hand off. */}
-            {!label && cloud && <Split className="h-2.5 w-2.5 shrink-0" aria-hidden />}
-            <span className="truncate max-w-none">{label || (cloud ? "fork" : "model")}</span>
+            {/* A cloud launch that asked for nothing more names what the panel does instead: move it (fork or hand off). */}
+            {!label && cloud && <MoveRight className="h-2.5 w-2.5 shrink-0" aria-hidden />}
+            <span className="truncate max-w-none">{label || (cloud ? "move" : "model")}</span>
             {glyph && <span className="text-sol-text-dim/80">{glyph}</span>}
             <svg className="w-2.5 h-2.5 opacity-50 group-hover:opacity-80 transition-opacity" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />

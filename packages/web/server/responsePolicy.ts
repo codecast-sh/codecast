@@ -75,6 +75,11 @@ export interface ResponsePolicyOptions {
 
 const HOUR_MS = 60 * 60 * 1000;
 
+/** Pages no search engine should list: guest meeting links (/meet/<token>). */
+export function isUnindexedPath(pathname: string): boolean {
+  return /^\/meet(\/|$)/.test(pathname);
+}
+
 export function createResponsePolicy(options: ResponsePolicyOptions = {}): MiddlewareHandler {
   const { sampleRate = 0.1, maxReportingPerHour = 120, random = Math.random, now = Date.now } = options;
   const endpoint = cspReportEndpoint(options.sentryDsn, options);
@@ -99,6 +104,11 @@ export function createResponsePolicy(options: ResponsePolicyOptions = {}): Middl
     c.header("Referrer-Policy", "strict-origin-when-cross-origin");
     c.header("Permissions-Policy", "camera=(self), microphone=(self), display-capture=(self), clipboard-read=(self), clipboard-write=(self)");
     c.header("Strict-Transport-Security", HSTS);
+    // A guest link is a door into a live meeting, and one pasted somewhere
+    // public must not become a search result. A header, not a robots.txt
+    // Disallow: unfurl bots honor robots.txt too, and the card is how the
+    // link is meant to travel.
+    if (isUnindexedPath(new URL(c.req.url).pathname)) c.header("X-Robots-Tag", "noindex, nofollow");
     if (!c.res.headers.get("Content-Type")?.includes("text/html")) return;
     if (shouldReport()) {
       // report-uri for Firefox and Safari; Chrome prefers report-to when the

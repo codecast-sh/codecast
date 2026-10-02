@@ -3,19 +3,19 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
-    <title>Codecast — watch, steer, and search every agent session</title>
+    <title>Codecast: the workspace for teams and their AI coding agents</title>
     <!-- Safari on iOS draws its native "Open in the App Store" strip from this; the id matches SITE_LINKS.appStore. -->
     <meta name="apple-itunes-app" content="app-id=6757820850" />
-    <meta name="description" content="Codecast gives your team one place to watch, steer, search, and remember every AI agent session — Claude Code, Codex, Gemini, Cursor — on any machine." />
-    <meta property="og:title" content="Codecast — watch, steer, and search every agent session" />
-    <meta property="og:description" content="Every agent session in one place your team can watch, steer, and search — any agent, any machine." />
+    <meta name="description" content="Chat, calls, tasks, docs, pull requests and decisions, with Claude Code, Codex, Cursor and Gemini working as teammates in every one, and everything linked back to the session that did it." />
+    <meta property="og:title" content="Codecast: the workspace for teams and their AI coding agents" />
+    <meta property="og:description" content="Your team and its agents, in one workspace. Agents do the work, people make the calls." />
     <meta property="og:site_name" content="codecast" />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://codecast.sh" />
     <meta property="og:image" content="https://codecast.sh/logo-final.png" />
     <meta name="twitter:card" content="summary" />
-    <meta name="twitter:title" content="Codecast — watch, steer, and search every agent session" />
-    <meta name="twitter:description" content="Every agent session in one place your team can watch, steer, and search — any agent, any machine." />
+    <meta name="twitter:title" content="Codecast: the workspace for teams and their AI coding agents" />
+    <meta name="twitter:description" content="Your team and its agents, in one workspace. Agents do the work, people make the calls." />
     <meta name="twitter:image" content="https://codecast.sh/logo-final.png" />
     <link rel="icon" href="/favicon.ico" sizes="any" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
@@ -34,7 +34,18 @@
     </noscript>
     <script>
       (function() {
-        var theme = localStorage.getItem('codecast-theme') || 'light';
+        // The homepage is light Classic for every visitor (its hero renders the
+        // real app's views, and globals.css restyles them under .dark and
+        // .minimal-style); the visitor's own theme starts when the app does.
+        // The same paths as lib/themeBootLock.ts, whose lock ThemeProvider starts with.
+        if (location.pathname === '/') return;
+        // A share link is mostly opened by people who have never used the
+        // app: with no saved choice, the page follows their system.
+        var saved = localStorage.getItem('codecast-theme');
+        var theme = saved || (location.pathname.indexOf('/share/') === 0 && window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        // A guest's meeting page (app/meet) is the call's dark room whatever
+        // the system asks for: the loader before it must not flash light.
+        if (location.pathname.indexOf('/meet/') === 0) theme = 'dark';
         document.documentElement.classList.add(theme);
         var visualStyle = localStorage.getItem('codecast-visual-style');
         if (visualStyle === 'minimal' || visualStyle === 'codex') {
@@ -60,7 +71,7 @@
       }
       html.dark #boot-shell { background: #002b36; }
       html.minimal-style #boot-shell { background: #ffffff; color: #8a8a85; }
-      html.dark.minimal-style #boot-shell { background: #212121; color: #9b9b9b; }
+      html.dark.minimal-style #boot-shell { background: #161615; color: #7c7a74; }
       #boot-shell[data-hidden="true"] { opacity: 0; pointer-events: none; }
       #boot-shell .indicator {
         display: flex;

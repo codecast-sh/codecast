@@ -4,10 +4,13 @@
  * ../fixtures/decide.ts.
  */
 
-import { DecisionCard } from "./decide";
+import { DecideVeil, DecisionCard } from "./decide";
 import type { HeroChapter } from "./contract";
 
 export const chapter: HeroChapter = {
   id: "decide",
-  parts: [{ key: "card", region: "desk.side", order: 0, Component: DecisionCard }],
+  parts: [
+    { key: "veil", region: "desk.scrim", order: 0, Component: DecideVeil },
+    { key: "card", region: "desk.side", order: 0, Component: DecisionCard },
+  ],
 };

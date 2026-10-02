@@ -721,3 +721,58 @@ describe("dmUnreadOf", () => {
     expect(dmUnreadOf(st(null), "someone-else")).toBe(null);
   });
 });
+
+// ── guests ──────────────────────────────────────────────────────────────────
+
+describe("a guest in my call", () => {
+  const ROOM = "people:u-ann,u-me";
+  const GUEST = "guest:g1";
+  const inCall = (over: Partial<FaceRowInput> = {}) =>
+    input({
+      occupancy: { [ROOM]: [seat(ME), seat(ANN)] },
+      liveRooms: [{ room_key: ROOM, members: [seat(ME), seat(ANN)], guests: [{ identity: GUEST, name: "Ada", joined_at: NOW - 60_000 }] }],
+      call: call(ROOM),
+      ...over,
+    });
+
+  test("is a face of their own, linked to me by the call and marked a guest", () => {
+    const row = deriveFaceRow(inCall(), null);
+    const g = entry(row, GUEST);
+    expect(g).toMatchObject({ name: "Ada", tier: "linked", state: "live-with-me", guest: true, unread: 0, ask: 0 });
+    expect(g.joinedAgo).toBe(60_000);
+    expect(row.links).toContainEqual({ from: ME, to: GUEST, kind: "call" });
+  });
+
+  test("speaks and shows their camera by their identity", () => {
+    const row = deriveFaceRow(inCall({ call: call(ROOM, { speaking: [GUEST], cameras: [GUEST] }) }), null);
+    expect(entry(row, GUEST)).toMatchObject({ state: "speaking", level: "voice", video: "remote" });
+  });
+
+  test("wears their real microphone once the media says it", () => {
+    const row = deriveFaceRow(inCall({ call: call(ROOM, { guests: [{ identity: GUEST, muted: true }] }) }), null);
+    expect(entry(row, GUEST)).toMatchObject({ muted: true, guest: true });
+  });
+
+  test("is not drawn as here when my connected call's media does not have them", () => {
+    // Let in by the server's lease, but not in the media: a reload waiting on
+    // a press, a dropped page. A face that cannot be heard is no face.
+    const row = deriveFaceRow(inCall({ call: call(ROOM, { guests: [] }) }), null);
+    expect(row.entries.some((e) => e.id === GUEST)).toBe(false);
+    // A host too old to say draws them from the server's list as before.
+    expect(entry(deriveFaceRow(inCall({ call: call(ROOM, { guests: null }) }), null), GUEST)).toBeTruthy();
+  });
+
+  test("is nobody to a viewer who is not in that call", () => {
+    const row = deriveFaceRow(inCall({ call: call("people:u-bob,u-me"), occupancy: {} }), null);
+    expect(row.entries.some((e) => e.id === GUEST)).toBe(false);
+  });
+
+  test("a guest arriving or renaming moves the input signature", () => {
+    const idle = { sending: null, incoming: null, liveRoom: null, unavailable: null, canReply: false, asr: "live", error: null } as any;
+    const st = (guests: { identity: string; name: string }[]) =>
+      ({ ...useInboxStore.getState(), liveRooms: [{ room_key: ROOM, members: [seat(ME)], guests }] }) as any;
+    const sig = (guests: { identity: string; name: string }[]) => (faceRowInputSig as any)(st(guests), idle, null, [], NOW);
+    expect(sig([{ identity: GUEST, name: "Ada" }])).not.toBe(sig([]));
+    expect(sig([{ identity: GUEST, name: "Ada L" }])).not.toBe(sig([{ identity: GUEST, name: "Ada" }]));
+  });
+});

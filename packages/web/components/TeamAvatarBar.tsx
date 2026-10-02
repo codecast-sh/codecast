@@ -20,8 +20,10 @@ import { memberDisplayName } from "./presence/memberPresence";
 import { popOutPeople } from "./people/popOutPeople";
 import { FaceRow } from "./faces/FaceRow";
 import { EngagementCard } from "./faces/EngagementCard";
+import { CallCardRecordingMark } from "./calls/RoomRecording";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
+import { peopleOf } from "@codecast/shared/team/memberKind";
 
 interface TeamAvatarBarProps {
   teamId?: Id<"teams">;
@@ -81,7 +83,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
   // default team would render that team's roster inside the personal space.
   const effectiveTeamId = propTeamId ?? activeTeamId;
   // A scalar: the roster array itself re-pushes on every heartbeat.
-  const rosterCount = useInboxStore((s) => s.teamMembers.length);
+  const rosterCount = useInboxStore((s) => peopleOf(s.teamMembers).length);
   const callsEnabled = useCallsAvailable();
   // THE ROW. One subscription, signature gated: a heartbeat, a level tick or
   // a mute that moves no face hands back the same row and this bar sleeps.
@@ -184,7 +186,18 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
             full stage (video, screen share, transcript) opens only when
             asked; on the desktop the call already has a window, so this
             raises it, or gives it one. */}
-        <EngagementCard card={row.card} density="bar" accessory={inCall && <OpenCallButton onClick={openTheCall} />} />
+        <EngagementCard
+          card={row.card}
+          density="bar"
+          accessory={
+            inCall && (
+              <>
+                <CallCardRecordingMark />
+                <OpenCallButton onClick={openTheCall} />
+              </>
+            )
+          }
+        />
       </FaceRow>
       {/* The faces that did not fit, counted right after the ones that did:
           the count belongs to the roster, not to the controls after it. On a
@@ -279,7 +292,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
  *  long as the call does. */
 function OpenCallButton({ onClick }: { onClick: () => void }) {
   const roomKey = useInboxStore((s) => s.call.roomKey ?? null);
-  const { unread } = useRoomThreadUnread(roomKey);
+  const { unread, latest } = useRoomThreadUnread(roomKey);
   const label = canPopOutCall() ? "Pop out the call" : "Open the call";
   return (
     <ShortcutTooltip label={label}>
@@ -296,7 +309,7 @@ function OpenCallButton({ onClick }: { onClick: () => void }) {
           aria-label={unread > 0 ? `${label}, ${unread} new in its chat` : label}
         >
           <SquareArrowOutUpRight className="h-3.5 w-3.5" />
-          <UnreadCount count={unread} className="absolute -right-1.5 -top-1.5" />
+          <UnreadCount count={unread} agent={!!latest?.agent} className="absolute -right-1.5 -top-1.5" />
         </button>
       </span>
     </ShortcutTooltip>

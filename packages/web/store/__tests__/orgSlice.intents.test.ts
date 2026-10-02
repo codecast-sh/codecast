@@ -272,12 +272,12 @@ describe("org intents", () => {
     // inside the permanent-error block and its notices reach a toast.
     const { readFileSync } = await import("node:fs");
     const { join } = await import("node:path");
-    const src = readFileSync(join(import.meta.dir, "..", "..", "hooks", "useEnsureDispatch.ts"), "utf8");
+    const src = readFileSync(join(import.meta.dir, "..", "..", "lib", "dispatchBinding.ts"), "utf8");
     const permanent = src.indexOf("if (isPermanentDispatchError(error)) {");
     const drop = src.indexOf("dropRejectedOrgIntent(useInboxStore.getState(), action, args, error)");
     expect(permanent).toBeGreaterThan(0);
     expect(drop).toBeGreaterThan(permanent);
-    expect(src.slice(permanent, drop)).not.toMatch(/\n\s{6}}\n/); // no block closes between them
+    expect(src.slice(permanent, drop)).not.toMatch(/\n\s{2}}\n/); // no block closes between them
     expect(src).toMatch(/for \(const text of dropRejectedOrgIntent\(.*\)\) toast\.error\(text\)/);
   });
 
@@ -381,30 +381,30 @@ describe("org intents", () => {
   });
 
   it("a hire puts a stub on the tree that a stale push keeps, the echo replaces, and a refusal removes", () => {
-    const input = { host_user_id: ME, client_id: "orgrolestub-chief-1", team_id: ORG_FIXTURE.workspace.id };
+    const input = { host_user_id: ME, client_id: "orgrolestub-head-1", team_id: ORG_FIXTURE.workspace.id };
     let st = staffing();
-    st = run(st, "staffChiefOfStaff", input);
-    expect(st.orgTree!.roles.some((r) => r._id === input.client_id && r.handle === "chief-of-staff")).toBe(true);
+    st = run(st, "staffHeadOfPeople", input);
+    expect(st.orgTree!.roles.some((r) => r._id === input.client_id && r.handle === "head-of-people")).toBe(true);
     expect(st.orgIntents.map((i) => i.kind)).toEqual(["staff"]);
     // Idempotent: a second click adds nothing.
-    st = run(st, "staffChiefOfStaff", { ...input, client_id: "orgrolestub-chief-2" });
-    expect(st.orgTree!.roles.filter((r) => r.handle === "chief-of-staff")).toHaveLength(1);
-    // A push without the chief keeps the stub.
+    st = run(st, "staffHeadOfPeople", { ...input, client_id: "orgrolestub-head-2" });
+    expect(st.orgTree!.roles.filter((r) => r.handle === "head-of-people")).toHaveLength(1);
+    // A push without the Head of People keeps the stub.
     const stale = mergeOrgTree(clone(), st.orgIntents);
     expect(stale.intents).toHaveLength(1);
     expect(stale.tree.roles.some((r) => r._id === input.client_id)).toBe(true);
     // The echo names the real row: intent gone, stub gone with the replaced tree.
     const echo = clone();
-    echo.roles.push({ ...echo.roles[0], _id: "real-chief", short_id: "or-9", handle: "chief-of-staff", name: "Chief of Staff" });
+    echo.roles.push({ ...echo.roles[0], _id: "real-head", short_id: "or-9", handle: "head-of-people", name: "Head of People" });
     const settled = mergeOrgTree(echo, st.orgIntents);
     expect(settled.intents).toHaveLength(0);
     expect(settled.tree).toBe(echo);
     // The rail refuses the hire: the stub comes off the draft's tree.
     const reverted: string[] = [];
-    dropRejectedOrgIntent({ orgIntents: st.orgIntents, dropOrgIntent: () => {}, revertOrgIntent: (id) => reverted.push(id) }, "staffChiefOfStaff", [input]);
+    dropRejectedOrgIntent({ orgIntents: st.orgIntents, dropOrgIntent: () => {}, revertOrgIntent: (id) => reverted.push(id) }, "staffHeadOfPeople", [input]);
     expect(reverted).toHaveLength(1);
     st = run(st, "revertOrgIntent", reverted[0]);
-    expect(st.orgTree!.roles.some((r) => r.handle === "chief-of-staff")).toBe(false);
+    expect(st.orgTree!.roles.some((r) => r.handle === "head-of-people")).toBe(false);
     expect(st.orgIntents).toEqual([]);
   });
 

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   accountChipProvider,
+  planAgentType,
   claudeChipLabel,
   pickAccountChipDevice,
   resolveAccountChip,
@@ -149,6 +150,17 @@ describe("accountChipProvider", () => {
         hasCodex: true,
       }),
     ).toBe("codex");
+  });
+});
+
+describe("planAgentType", () => {
+  test("a Codex Cloud session shows the Codex plan meter; an Agents API session, billed to a key, names no plan", () => {
+    expect(planAgentType({ agent_type: "codex", session_id: "task_e_abc" })).toBe("codex");
+    expect(planAgentType({ agent_type: "codex", session_id: "sess_abc" })).toBeNull();
+    // Launched, before its session id: the launch model names the lane.
+    expect(planAgentType({ agent_type: "codex", model: "api" })).toBeNull();
+    expect(planAgentType({ agent_type: "codex", session_id: "019a-local-rollout" })).toBe("codex");
+    expect(planAgentType({ agent_type: "claude_code" })).toBe("claude_code");
   });
 });
 

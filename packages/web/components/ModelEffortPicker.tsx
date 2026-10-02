@@ -1,12 +1,9 @@
 import { useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { useMutation } from "convex/react";
-import { api } from "@codecast/convex/convex/_generated/api";
 import {
   AGENT_MODEL_CONFIG,
   modelAgentKey,
-  cloudAgentModel,
-  cloudAgentProvidersFor,
+  cloudAgentProviderForLaunch,
   findModelOption,
   isDynamicModelKey,
   dynamicModelOption,
@@ -42,30 +39,16 @@ import { commitModelChange, notifyModelToast as notifyToast } from "../lib/model
  * The user's codecast-wide default model for one agent client, with a
  * local-first setter. The default lives on the user row (users.default_models)
  * and is applied server-side by enqueueStartSession, so every new session
- * launches with an explicit model flag. The optimistic write goes through the
- * currentUser singleton sync (the mutation's echo carries the same value);
- * on failure the snapshot is synced back and the error toasted.
+ * launches with an explicit model flag. The store's setDefaultModel action
+ * paints currentUser (a localFirst singleton) and dispatches the write; a
+ * refusal puts the old pin back and toasts like any dispatch.
  */
 function useDefaultModelPin(agentType: string | undefined) {
   const clientId = modelAgentKey(agentType);
   const defaultKey = useInboxStore(
     (s) => ((s as any).currentUser?.default_models ?? {})[clientId] as string | undefined,
   );
-  const update = useMutation(api.users.updateDefaultModel);
-  const setDefault = (key: string | null) => {
-    const st = useInboxStore.getState() as any;
-    const cur = st.currentUser;
-    if (cur) {
-      const merged: Record<string, string> = { ...(cur.default_models ?? {}) };
-      if (key === null) delete merged[clientId];
-      else merged[clientId] = key;
-      st.syncTable("currentUser", { ...cur, default_models: merged });
-    }
-    update({ agent: clientId, model: key }).catch((e: any) => {
-      notifyToast(`Failed to save default model: ${e?.message ?? e}`);
-      if (cur) (useInboxStore.getState() as any).syncTable("currentUser", cur);
-    });
-  };
+  const setDefault = (key: string | null) => useInboxStore.getState().setDefaultModel(clientId, key);
   return { defaultKey, setDefault };
 }
 
@@ -106,12 +89,14 @@ export function ModelEffortRows({
   // Dynamic clients: Default + the curated featured head; typing searches the
   // device's full inventory. Everything else: the shared curated rail.
   const rail = midSession ? liveRailOptions(cfg) : launchRailOptions(cfg);
-  // A client with a cloud agent provider (Cursor) lists its local and its
-  // cloud models side by side; the composer's "run in the cloud" switch
-  // picks the half, so show that half.
-  const cloudHalf = cloudAgentProvidersFor(agentType).length ? cloudAgentModel(agentType, modelKey) !== null : null;
+  // A client with cloud agent providers (Cursor; Codex: Codex Cloud and the
+  // Agents API) lists its local models and each provider's side by side; the
+  // composer's "run in the cloud" switch and its choice of provider pick
+  // which, so show only those (local ones for a local launch). No cloud
+  // agent takes an effort from codecast, so a cloud launch offers none.
+  const lane = cloudAgentProviderForLaunch(agentType, modelKey)?.id ?? null;
   const models = (dynamic ? [cfg.models[0], ...featured] : rail.models)
-    .filter((m) => cloudHalf === null || (cloudAgentModel(agentType, m.key) !== null) === cloudHalf);
+    .filter((m) => (cloudAgentProviderForLaunch(agentType, m.key)?.id ?? null) === lane);
   const q = search.trim().toLowerCase();
   const matches = dynamic && q
     ? all.filter((id) => id.toLowerCase().includes(q) && !models.some((m) => m.key === id)).slice(0, 24)
@@ -183,7 +168,7 @@ export function ModelEffortRows({
           </div>
         </>
       )}
-      {cfg.efforts.length > 0 && <>
+      {cfg.efforts.length > 0 && !lane && <>
         <DropdownMenuSeparator />
         <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-sol-text-dim">Effort</DropdownMenuLabel>
         {/* Chips size to their label and wrap — clients with many effort levels
@@ -242,7 +227,8 @@ export function LaunchModelPill({ conversationId }: { conversationId: string }) 
     : "default";
   const opt = cfg.models.find((m) => m.key === modelKey)
     ?? (isDynamicModelKey(modelKey) ? dynamicModelOption(modelKey) : undefined);
-  const glyph = effortGlyph(live?.effort);
+  // A cloud agent launch runs at its provider's effort, whatever one was picked before.
+  const glyph = cloudAgentProviderForLaunch(agentType, modelKey) ? null : effortGlyph(live?.effort);
 
   return (
     <DropdownMenu>

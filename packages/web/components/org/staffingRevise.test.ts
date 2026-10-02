@@ -10,25 +10,25 @@ import { ORG_FIXTURE } from "./orgFixture";
 import { parseProposalMessage } from "@codecast/shared/contracts";
 import { aboutChangeHeader, parseAboutChange, withAboutChange } from "@codecast/shared/contracts/orgProposal";
 
-const chiefTree = { ...ORG_FIXTURE, roles: [...ORG_FIXTURE.roles, { ...ORG_FIXTURE.roles[0], _id: "fixture-role-chief", short_id: "or-9", handle: "chief-of-staff", name: "Chief of Staff", standing: { conversation_id: "fixture-chief-standing", short_id: "jx7stnd" } }] };
+const headOfPeopleTree = { ...ORG_FIXTURE, roles: [...ORG_FIXTURE.roles, { ...ORG_FIXTURE.roles[0], _id: "fixture-role-head", short_id: "or-9", handle: "head-of-people", name: "Head of People", standing: { conversation_id: "fixture-head-standing", short_id: "jx7stnd" } }] };
 
 describe("proposalThread", () => {
   test("the server's pointer wins, named after the role", () => {
-    const t = proposalThread(ORG_STAFFING_FIXTURE_REVISED_PROPOSAL, chiefTree);
-    expect(t).toMatchObject({ conversationId: "fixture-chief-conv", shortId: "jx7ch1f", name: "Chief of Staff", named: true });
-    expect(t!.role?._id).toBe("fixture-role-chief");
+    const t = proposalThread(ORG_STAFFING_FIXTURE_REVISED_PROPOSAL, headOfPeopleTree);
+    expect(t).toMatchObject({ conversationId: "fixture-head-conv", shortId: "jx7ch1f", name: "Head of People", named: true });
+    expect(t!.role?._id).toBe("fixture-role-head");
   });
   test("a session author's conversation is the thread until the pointer lands", () => {
-    const t = proposalThread(ORG_STAFFING_FIXTURE_SESSION_PROPOSAL, chiefTree);
+    const t = proposalThread(ORG_STAFFING_FIXTURE_SESSION_PROPOSAL, headOfPeopleTree);
     expect(t).toMatchObject({ conversationId: "fixture-conv-review", shortId: "jx7rev1", name: "the author of this proposal", named: false, role: null });
   });
   test("a role author without a pointer answers from its standing session", () => {
     const { thread: _t, ...noPointer } = ORG_STAFFING_FIXTURE_PROPOSAL;
-    expect(proposalThread(noPointer, chiefTree)?.conversationId).toBe("fixture-chief-standing");
+    expect(proposalThread(noPointer, headOfPeopleTree)?.conversationId).toBe("fixture-head-standing");
     expect(proposalThread(noPointer, ORG_FIXTURE)).toBeNull();
   });
   test("null on the row means a person posted it: nobody to talk to", () => {
-    expect(proposalThread({ ...ORG_STAFFING_FIXTURE_PROPOSAL, thread: null }, chiefTree)).toBeNull();
+    expect(proposalThread({ ...ORG_STAFFING_FIXTURE_PROPOSAL, thread: null }, headOfPeopleTree)).toBeNull();
   });
 });
 
@@ -60,8 +60,8 @@ describe("what a revise did", () => {
     expect(revisedSince(rows, latest)).toEqual([]);
     const all = revisedSince(rows, 0);
     expect(all.map((c) => c.revision!.kind)).toEqual(["added", "removed"] /* the amended row is a limit (S23.2): never read, so never in the strip */);
-    expect(revisedLine(all, "Chief of Staff")).toBe("Chief of Staff removed 1 and added 1 since you last looked.");
-    expect(revisedLine(all.slice(0, 1), "Chief of Staff")).toBe("Chief of Staff added 1 since you last looked.");
+    expect(revisedLine(all, "Head of People")).toBe("Head of People removed 1 and added 1 since you last looked.");
+    expect(revisedLine(all.slice(0, 1), "Head of People")).toBe("Head of People added 1 since you last looked.");
     expect(revisedLine([], "x")).toBe("");
     expect(revisedLine(all.slice(0, 1), "the author of this proposal")).toBe("The author of this proposal added 1 since you last looked.");
   });

@@ -6,6 +6,7 @@ import { PANE_EMBED } from "./browserPane";
 import { extractDeepLinkIntent, parseDesktopDeepLinkPath } from "./desktopHandoff";
 import { cmpVersions, parseShellVersion } from "./desktopFloor";
 import { agentAlertsSuppressed, deliverAlert } from "./notificationDelivery";
+import type { GuestMedia } from "./calls/callMedia";
 import type { MeetingDetectConfig, MeetingDetectMode, MeetingOffer } from "./desktopMeetings";
 
 declare global {
@@ -392,6 +393,10 @@ export type VoiceMirror = {
     camera: boolean;
     speaking: string[];
     cameras?: string[];
+    /** The room's guests in the host's media, with their microphones
+     *  (callMedia.guestMediaOf): a guest has no seat to say either. Absent
+     *  from an older host. */
+    guests?: GuestMedia[];
   };
 };
 
