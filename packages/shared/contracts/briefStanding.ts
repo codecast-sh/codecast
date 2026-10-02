@@ -19,12 +19,16 @@
 export type StandingLine = {
   /** The project as the role wrote it: a title or a short id. */
   project: string;
-  /** The sentence, without the date. */
+  /** The sentence, without the date and without the source mark. */
   text: string;
   /** The day the role wrote it, as written (YYYY-MM-DD), or null. */
   written_on: string | null;
   /** The same day as a timestamp (UTC midnight), or null. */
   written_at: number | null;
+  /** The role the line came from when it was copied in by a handoff
+   *  (org-staffing.md S32): its handle, without the @. Null for the role's
+   *  own words. */
+  from: string | null;
   /** The line as written. */
   raw: string;
 };
@@ -34,6 +38,9 @@ const ANY_HEADING = /^#{1,6}\s/;
 const LIST_LINE = /^(?:[-*+]|\d+[.)])\s+(.+?)\s*$/;
 const TRAILING_DATE = /\s*\(?\s*(\d{4}-\d{2}-\d{2})\s*\)?\s*$/;
 const DATE_AFTER_NAME = /\s*[(,]\s*(\d{4}-\d{2}-\d{2})\s*\)?\s*$/;
+// The source mark a handoff writes at the end of a copied line, before the
+// date: "(from @growth)". Read off the text so the sentence stays clean.
+const TRAILING_FROM = /\s*\(from @([a-z0-9-]{2,32})\)\s*$/i;
 
 /** A line's age matters past this: the panel says how old it is, the frame
  *  marks it. */
@@ -61,8 +68,38 @@ export function parseStandingLine(line: string): StandingLine | null {
   };
   rest = take(rest, TRAILING_DATE);
   if (written_on === null) project = strip(take(project, DATE_AFTER_NAME));
+  let from: string | null = null;
+  const src = rest.match(TRAILING_FROM);
+  if (src) { from = src[1].toLowerCase(); rest = rest.slice(0, src.index).trim(); }
   if (!project || !rest) return null;
-  return { project, text: rest, written_on, written_at, raw };
+  return { project, text: rest, written_on, written_at, from, raw };
+}
+
+/** A standing line as a handoff copies it into the receiving role's brief
+ *  (org-staffing.md S30): the outgoing role's sentence, marked with where it
+ *  came from, dated the day it was written so its age carries over. */
+export function standingLineFrom(line: StandingLine, fromHandle: string): string {
+  const date = line.written_on ? ` (${line.written_on})` : "";
+  return `- ${line.project}: ${line.text} (from @${fromHandle.replace(/^@/, "")})${date}`;
+}
+
+/** `narrative` with `lines` added under its "Where it stands" section, which
+ *  is created at the end when the brief has none. A line for a project the
+ *  section already names is skipped: the receiver's own word stands. */
+export function withStandingLines(narrative: string | null | undefined, lines: string[]): string {
+  const text = (narrative ?? "").replace(/\s+$/, "");
+  const have = parseStandingSection(text);
+  const fresh = lines.filter((l) => { const p = parseStandingLine(l); return p && !have.some((h) => norm(h.project) === norm(p.project)); });
+  if (!fresh.length) return text;
+  const rows = text.split("\n");
+  const head = rows.findIndex((l) => STANDING_HEADING.test(l));
+  if (head < 0) return [text, "", "## Where it stands", ...fresh].filter((l, i, a) => !(i === 0 && l === "" && a.length > 1)).join("\n");
+  let end = head + 1;
+  while (end < rows.length && !ANY_HEADING.test(rows[end])) end++;
+  // Insert before the blank lines that close the section, so the list stays one list.
+  let at = end;
+  while (at > head + 1 && rows[at - 1].trim() === "") at--;
+  return [...rows.slice(0, at), ...fresh, ...rows.slice(at)].join("\n");
 }
 
 /** Every line under the section, in the order written. The section ends at

@@ -18,3 +18,21 @@ export const PENDING_MESSAGE_STATUSES = [
 ] as const;
 
 export type PendingMessageStatus = (typeof PENDING_MESSAGE_STATUSES)[number];
+
+/**
+ * The daemon's delivery acks after a transcript sync (DWB-03). The rows this
+ * process pasted and the user turns just committed are both in order, so the
+ * newest common suffix pairs each pasted row with the transcript line that
+ * echoed it, and the server stamps that line's client_id exactly. Older
+ * pastes with no echo yet stay injected for healing.
+ */
+export function pairDeliveryAcks(
+  pastedIds: readonly string[],
+  transcriptIds: readonly string[],
+): { pendingMessageId: string; transcriptMessageId: string }[] {
+  const n = Math.min(pastedIds.length, transcriptIds.length);
+  return pastedIds.slice(pastedIds.length - n).map((pendingMessageId, i) => ({
+    pendingMessageId,
+    transcriptMessageId: transcriptIds[transcriptIds.length - n + i]!,
+  }));
+}

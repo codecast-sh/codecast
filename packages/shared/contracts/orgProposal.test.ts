@@ -38,7 +38,7 @@ const GOOD: Record<OrgChange["kind"], OrgChange> = {
   trust: { kind: "trust", handle: "growth", trust: "decide" },
   routine: { kind: "routine", handle: "growth", title: "Weekly funnel", prompt: "Read the funnel and report.", every: "7d" },
   project_meta: { kind: "project_meta", project: "pr-1", goal: "Ship the onboarding", success_metrics: ["activation 40%"], priority: "p1", owner: "@growth", non_goals: ["paid ads"], risks: ["one engineer"] },
-  adopt: { kind: "adopt", handle: "chief-of-staff", conversation: "jx7abcd" },
+  adopt: { kind: "adopt", handle: "head-of-people", conversation: "jx7abcd" },
   file: { kind: "file", plan: "pl-1", project: "Platform" },
   plan_status: { kind: "plan_status", plan: "pl-7", status: "done", reason: "every task closed" },
   task_status: { kind: "task_status", task: "ct-42", status: "done", reason: "commits landed, still open" },
@@ -49,6 +49,7 @@ const GOOD: Record<OrgChange["kind"], OrgChange> = {
   initiative: { kind: "initiative", title: "Win the private network", description: "Quiet is onboarded and three brokers trade through us.", projects: ["Callers", "Broker network"], owner: "@calling" },
   initiative_projects: { kind: "initiative_projects", initiative: "in-2", title: "Win the private network", projects: ["Callers"] },
   initiative_owner: { kind: "initiative_owner", initiative: "in-2", title: "Win the private network", owner: "@calling" },
+  initiative_shape: { kind: "initiative_shape", initiative: "in-2", title: "Win the private network", parent: "Reach 1k teams", metrics: [{ name: "Brokers live", target: "40" }] },
 };
 
 describe("org change validation", () => {
@@ -75,7 +76,7 @@ describe("org change validation", () => {
       [{ kind: "project_meta", project: "pr-1" }, "changes nothing"],
       [{ kind: "project_meta", project: "pr-1", priority: "p9" }, "priority is one of"],
       [{ kind: "project_meta", project: "pr-1", success_metrics: "x" }, "lists of strings"],
-      [{ kind: "adopt", handle: "chief-of-staff" }, "adopt needs the conversation"],
+      [{ kind: "adopt", handle: "head-of-people" }, "adopt needs the conversation"],
       [{ kind: "adopt", conversation: "jx7abcd" }, "handle is required"],
     ];
     for (const [raw, fault] of faults) {
@@ -134,7 +135,7 @@ describe("orderOrgChanges and describeOrgChange", () => {
     expect(describeOrgChange(GOOD.trust)).toBe("autonomy @growth on");
     expect(describeOrgChange(GOOD.routine)).toBe("routine on @growth: Weekly funnel every 7d");
     expect(describeOrgChange(GOOD.project_meta)).toBe("charter pr-1 owner @growth p1: Ship the onboarding");
-    expect(describeOrgChange(GOOD.adopt)).toBe("adopt session jx7abcd as @chief-of-staff's standing session");
+    expect(describeOrgChange(GOOD.adopt)).toBe("adopt session jx7abcd as @head-of-people's standing session");
     expect(describeOrgChange(GOOD.plan_status)).toBe("mark plan pl-7 done");
     expect(describeOrgChange(GOOD.task_status)).toBe("mark task ct-42 done");
     expect(describeOrgChange(GOOD.project_status)).toBe("mark project Legacy paused");
@@ -253,6 +254,14 @@ describe("goal changes", () => {
     expect(changeLine({ kind: "initiative_projects", initiative: "in-2", projects: ["Callers", "Broker network"] })).toBe("Add Callers and Broker network to the goal in-2");
     expect(changeLine(GOOD.initiative_owner)).toBe("Make @calling the owner of the goal Win the private network");
     expect(changeLine({ kind: "initiative_owner", initiative: "in-2", owner: "Ashot Petrosian" })).toBe("Make Ashot Petrosian the owner of the goal in-2");
+    // The tree and the numbers (I4): on the create, and on a goal that exists.
+    expect(changeLine({ ...GOOD.initiative, parent: "Reach 1k teams", metrics: [{ name: "Brokers live", target: "40" }, { name: "Weekly active teams", target: "1,000" }] })).toBe("Set a goal: Win the private network, carried by Callers and Broker network, owned by @calling, under Reach 1k teams, measured by Brokers live (target 40) and Weekly active teams (target 1,000)");
+    expect(changeLine(GOOD.initiative_shape)).toBe("Put the goal Win the private network under Reach 1k teams and measured by Brokers live (target 40)");
+    expect(changeLine({ kind: "initiative_shape", initiative: "in-2", parent: null })).toBe("Make the goal in-2 a top level goal");
+    expect(changeLine({ kind: "initiative_shape", initiative: "in-2", metrics: [] })).toBe("Put the goal in-2 with no metric");
+    expect(orgChangeError({ kind: "initiative_shape", initiative: "in-2" })).toContain("needs a parent or metrics");
+    expect(orgChangeError({ kind: "initiative_shape", initiative: "in-2", metrics: [{ name: "A", target: "1" }, { name: "B", target: "2" }, { name: "C", target: "3" }] })).toContain("at most two");
+    expect(orgChangeError({ ...GOOD.initiative, metrics: [{ name: "A" }] })).toContain("{ name, target }");
   });
   test("one subject per proposal, and the owner handle counts as a role the change names", async () => {
     const { orgChangeKey, orgChangeHandles } = await import("./orgProposal");
@@ -439,9 +448,9 @@ describe("what one change needs from another (orgChangeDependencies)", () => {
   test("a role, its adopt and its routine name each other by seq; unrelated rows say nothing", async () => {
     const { orgChangeDependencies } = await import("./orgProposal");
     const rows = [
-      { seq: 1, change: { kind: "role", name: "Chief of Staff", handle: "chief-of-staff" } as OrgChange },
-      { seq: 2, change: { kind: "routine", handle: "@chief-of-staff", title: "Review", prompt: "p", every: "7d" } as OrgChange },
-      { seq: 3, change: { kind: "adopt", handle: "chief-of-staff", conversation: "jx733c7" } as OrgChange },
+      { seq: 1, change: { kind: "role", name: "Head of People", handle: "head-of-people" } as OrgChange },
+      { seq: 2, change: { kind: "routine", handle: "@head-of-people", title: "Review", prompt: "p", every: "7d" } as OrgChange },
+      { seq: 3, change: { kind: "adopt", handle: "head-of-people", conversation: "jx733c7" } as OrgChange },
       { seq: 4, change: { kind: "role", name: "Growth", handle: "growth" } as OrgChange },
       { seq: 5, change: { kind: "file", plan: "pl-1", project: "P" } as OrgChange },
     ];
