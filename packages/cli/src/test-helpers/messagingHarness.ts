@@ -21,6 +21,7 @@ import * as http from "node:http";
 import type * as net from "node:net";
 import { hasBinary } from "./binaryProbe.js";
 import { pollUntil } from "./pollUntil.js";
+import { machineClaudeFeatureCache } from "./claudeFeatureCache.js";
 import { shellQuote, spawnTmuxPane as spawnPane, type SpawnTmuxPaneOptions } from "./tmuxPane.js";
 import { randomUUID } from "node:crypto";
 import { Database } from "bun:sqlite";
@@ -356,6 +357,10 @@ interface PaneContext {
   endpointUrl: string;
   /** The session id we asked for, for clients that accept one at launch. */
   launchSessionId: string;
+  /** Seed claude with this machine's cached remote flags (see spawnClientPane). */
+  machineFeatures?: boolean;
+  /** Claude's renderer ("fullscreen" is the opt-in TUI). */
+  tui?: "fullscreen";
 }
 
 interface ClientRecipe {
@@ -430,8 +435,11 @@ function readIfExists(p: string): string | null {
  * and the failure looks like a delivery bug. So all three answers are seeded
  * here, under the keys the real home records them in. No credential is written:
  * a test points claude at its own endpoint with ANTHROPIC_AUTH_TOKEN.
+ * `machineFeatures` copies this machine's cached remote flags in as well
+ * (claudeFeatureCache.ts), so the pane handles input the way a real one does,
+ * and `tui` picks the renderer.
  */
-export function seedClaudeHome(homeDir: string, projectCwd: string): void {
+export function seedClaudeHome(homeDir: string, projectCwd: string, opts: { machineFeatures?: boolean; tui?: "fullscreen" } = {}): void {
   fs.mkdirSync(path.join(homeDir, ".claude"), { recursive: true });
   fs.writeFileSync(path.join(homeDir, ".claude.json"), JSON.stringify({
     hasCompletedOnboarding: true,
@@ -441,11 +449,13 @@ export function seedClaudeHome(homeDir: string, projectCwd: string): void {
     numStartups: 5,
     firstStartTime: "2026-01-01T00:00:00.000Z",
     projects: { [fs.realpathSync(projectCwd)]: { hasTrustDialogAccepted: true, allowedTools: [] } },
+    ...(opts.machineFeatures ? machineClaudeFeatureCache() : {}),
   }, null, 2));
   fs.writeFileSync(path.join(homeDir, ".claude", "settings.json"), JSON.stringify({
     skipDangerousModePermissionPrompt: true,
     skipAutoPermissionPrompt: true,
     env: { DISABLE_AUTOUPDATER: "1" },
+    ...(opts.tui ? { tui: opts.tui } : {}),
   }, null, 2));
 }
 
@@ -528,7 +538,7 @@ const CLIENT_RECIPES: Record<MatrixClientId, ClientRecipe> = {
   // want to use this API key?" dialog before the composer ever appears.)
   claude: {
     launch: (ctx) => {
-      seedClaudeHome(ctx.homeDir, ctx.cwd);
+      seedClaudeHome(ctx.homeDir, ctx.cwd, { machineFeatures: ctx.machineFeatures, tui: ctx.tui });
       return {
         env: {
           HOME: ctx.homeDir,
@@ -762,7 +772,10 @@ export interface ClientPane {
 
 export const MATRIX_TMUX_PREFIX = "cc-matrix-test";
 
-export function spawnClientPane(client: MatrixClientId, opts: { endpointUrl: string }): ClientPane {
+/** A real client in a pane of its own. `machineFeatures` (claude only) starts
+ *  it with this machine's cached remote flags, so a paste is wrapped the way
+ *  the human's own sessions wrap it; `tui` (claude only) picks the renderer. */
+export function spawnClientPane(client: MatrixClientId, opts: { endpointUrl: string; machineFeatures?: boolean; tui?: "fullscreen" }): ClientPane {
   const recipe = CLIENT_RECIPES[client];
   const scratchRoot = path.join(os.tmpdir(), TEST_SCRATCH_DIRNAME);
   fs.mkdirSync(scratchRoot, { recursive: true });
@@ -774,6 +787,8 @@ export function spawnClientPane(client: MatrixClientId, opts: { endpointUrl: str
     homeDir,
     endpointUrl: opts.endpointUrl,
     launchSessionId: randomUUID().toLowerCase(),
+    machineFeatures: opts.machineFeatures,
+    tui: opts.tui,
   };
   const tmuxSession = `${MATRIX_TMUX_PREFIX}-${client}-${randomUUID().slice(0, 8)}`;
   const target = `${tmuxSession}:0.0`;

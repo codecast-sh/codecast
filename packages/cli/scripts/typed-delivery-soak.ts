@@ -29,7 +29,7 @@
 // environment only, no hooks and no settings from the machine.
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { spawn, type ChildProcess } from "node:child_process";
+import { cpuLoad } from "../src/test-helpers/cpuLoad.ts";
 import {
   capturePane, composerReady, dialogSignature, dismissDialogs, launchClaude as launchScratch,
   sendKey as sendKeyTo, sendLiteral as sendLiteralTo, sleep, tmux, unplantLogins, waitFor as waitForPane,
@@ -100,22 +100,9 @@ function nextPayload(i: number): Payload {
 }
 
 // ---- load ------------------------------------------------------------------
-// `yes` is spawned directly, never through a shell: killing `sh -c "yes"`
-// leaves `yes` running under launchd, and 88 of them starved the machine on
-// 2026-09-20. Each runs in its own process group so the kill reaches it even
-// if bun's handle is gone, and a signal that ends this process runs the same
-// cleanup.
-const loaders: ChildProcess[] = [];
-function loadOn(n: number) {
-  for (let i = 0; i < n; i++) loaders.push(spawn("yes", [], { stdio: "ignore", detached: true }));
-}
-function loadOff() {
-  for (const p of loaders.splice(0)) {
-    if (p.pid) { try { process.kill(-p.pid, "SIGKILL"); } catch { /* already gone */ } }
-    try { p.kill("SIGKILL"); } catch { /* already gone */ }
-  }
-}
-process.on("exit", loadOff);
+const load = cpuLoad();
+const loadOn = load.on;
+const loadOff = load.off;
 for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(sig, () => { loadOff(); unplantLogins(); process.exit(1); });
 
 // ---- dialog probe ----------------------------------------------------------
