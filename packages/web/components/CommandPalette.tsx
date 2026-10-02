@@ -1566,7 +1566,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   const chatOn = useTeamFeature("chat");
   const callsOn = useCallsAvailable();
   const orgOn = useWorkspaceFeature("org");
-  const featureOn = (f: TeamFeatureKey | undefined) => !f || (f === "chat" ? chatOn : f === "org" ? orgOn : callsOn);
+  const changesOn = useTeamFeature("changes");
+  const featuresOn: Record<TeamFeatureKey, boolean> = { chat: chatOn, calls: callsOn, org: orgOn, changes: changesOn };
+  const featureOn = (f: TeamFeatureKey | undefined) => !f || featuresOn[f];
 
   // Merge locally-loaded inbox sessions (own, instant) with the server list (own +
   // team-visible). Shows local sessions immediately, re-merges once when the server
