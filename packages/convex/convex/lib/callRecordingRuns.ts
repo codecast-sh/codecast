@@ -46,6 +46,14 @@ export const RECORDING_POLL_MS = 10_000;
  *  between the insert and the answer. Past this it is failed, not pending. */
 export const EGRESS_ACCEPT_TIMEOUT_MS = 60_000;
 
+/** A file LiveKit acknowledged but never began writing. A healthy egress
+ *  goes active in seconds; one that has not after this will not (a track
+ *  composite asked for an MP4 and pictures together sat in "starting" for
+ *  twelve minutes, 2026-10-02). It is failed and stopped, so the call says
+ *  the file is missing and why instead of the row vanishing when the run
+ *  ends with nothing written. */
+export const EGRESS_BEGIN_TIMEOUT_MS = 120_000;
+
 /** A row we asked LiveKit to stop that still is not finished after this is
  *  asked again; a stop request can be lost like any other. */
 export const STOP_RETRY_MS = 30_000;

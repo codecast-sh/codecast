@@ -11,6 +11,7 @@ import "../../chat/ChatMessage";
 import { ASSISTANT_MD_REMARK, MESSAGE_MD_COMPONENTS } from "../../messageMarkdown";
 import { EntityFixtureContext } from "../../../lib/entityDisplay";
 import { ConvexProvider } from "convex/react";
+import { MemoryRouter } from "react-router";
 import { heroConvexStub } from "../../../app/(marketing)/heroFly/convexStub";
 
 const call = {
@@ -39,13 +40,15 @@ const fixtures = {
 };
 const render = (md: string) =>
   renderToStaticMarkup(
-    <ConvexProvider client={heroConvexStub}>
-      <EntityFixtureContext.Provider value={fixtures}>
-        <ReactMarkdown remarkPlugins={ASSISTANT_MD_REMARK as any} components={MESSAGE_MD_COMPONENTS as any}>
-          {md}
-        </ReactMarkdown>
-      </EntityFixtureContext.Provider>
-    </ConvexProvider>,
+    <MemoryRouter>
+      <ConvexProvider client={heroConvexStub}>
+        <EntityFixtureContext.Provider value={fixtures}>
+          <ReactMarkdown remarkPlugins={ASSISTANT_MD_REMARK as any} components={MESSAGE_MD_COMPONENTS as any}>
+            {md}
+          </ReactMarkdown>
+        </EntityFixtureContext.Provider>
+      </ConvexProvider>
+    </MemoryRouter>,
   );
 
 describe("call references in an agent's message", () => {
