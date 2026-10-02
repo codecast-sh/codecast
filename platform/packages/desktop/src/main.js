@@ -77,7 +77,13 @@ function createDesktopApp(userConfig, electron = require("electron")) {
 
   function showNativeNotification(title, body, onClick, opts = {}) {
     if (!Notification.isSupported()) return;
-    const notif = new Notification({ title, body, silent: opts.silent === true, urgency: "critical" });
+    const notif = new Notification({
+      title,
+      body,
+      ...(opts.subtitle ? { subtitle: String(opts.subtitle) } : {}),
+      silent: opts.silent === true,
+      urgency: "critical",
+    });
     if (onClick) notif.on("click", onClick);
     notif.on("close", () => { notificationRefs = notificationRefs.filter(n => n !== notif); });
     notificationRefs.push(notif);
@@ -398,6 +404,9 @@ function createDesktopApp(userConfig, electron = require("electron")) {
   }
 
   function openWindow(opts) {
+    // A window on one of the app's own files is a file:// document; list that
+    // origin too or the preload keeps the bridge from the app's own page.
+    const origins = opts.file ? `${ORIGINS_ARG},file://` : ORIGINS_ARG;
     const win = new BrowserWindow({
       width: opts.width || 720,
       height: opts.height || 560,
@@ -406,7 +415,7 @@ function createDesktopApp(userConfig, electron = require("electron")) {
       resizable: opts.resizable !== false,
       titleBarStyle: opts.titleBarStyle || "hiddenInset",
       trafficLightPosition: cfg.window.trafficLightPosition,
-      webPreferences: { ...PRELOAD_PREFS, additionalArguments: [BRIDGE_ARG, ORIGINS_ARG, ...(opts.args || [])] },
+      webPreferences: { ...PRELOAD_PREFS, additionalArguments: [BRIDGE_ARG, origins, ...(opts.args || [])] },
       ...windowIcon(),
       show: false,
       backgroundColor: opts.backgroundColor || cfg.window.backgroundColor,
@@ -1290,21 +1299,26 @@ function createDesktopApp(userConfig, electron = require("electron")) {
   }
 
   // Apply the staged update: a detached helper waits for THIS process to exit,
-  // swaps the bundle via two atomic renames, clears quarantine, then relaunches
-  // us in the FOREGROUND. Quitting ourselves is what lets the rename succeed.
+  // swaps the bundle via two atomic renames and clears quarantine. "Restart"
+  // relaunches us in the FOREGROUND; a plain quit installs it for next launch,
+  // so an ignored banner never leaves a downloaded update unapplied.
   let updateInstallTriggered = false;
-  function installUpdateAndRestart() {
-    if (updateInstallTriggered || !stagedUpdate) return;
+  function applyStagedUpdate({ relaunch }) {
+    if (updateInstallTriggered || !stagedUpdate) return false;
     updateInstallTriggered = true;
     const { incomingPath, bundlePath } = stagedUpdate;
     const oldPath = path.join(path.dirname(bundlePath), `.${BUNDLE_NAME}.old`);
-    const script = swapScript({ pid: process.pid, bundlePath, incomingPath, oldPath });
+    const script = swapScript({ pid: process.pid, bundlePath, incomingPath, oldPath, relaunch });
     try {
       spawn("/bin/sh", ["-c", script], { detached: true, stdio: "ignore" }).unref();
     } catch (e) {
       console.error("update swap helper failed to spawn:", e?.message);
     }
-    app.quit();
+    return true;
+  }
+  // Quitting ourselves is what lets the rename succeed.
+  function installUpdateAndRestart() {
+    if (applyStagedUpdate({ relaunch: true })) app.quit();
   }
 
   // App defined IPC (config.ipc): "app:<name>" channels, each handler
@@ -1360,7 +1374,7 @@ function createDesktopApp(userConfig, electron = require("electron")) {
     if (!recentBanners.claim(router.RecentKeys.keyFor(payload))) return { shown: false, reason: "duplicate" };
     // `route` is the one click target (chat message, task, doc...); the bare
     // conversationId form predates it and stays as the fallback.
-    showNativeNotification(title, body, () => openNotificationTarget(data), { silent: data?.silent === true });
+    showNativeNotification(title, body, () => openNotificationTarget(data), { silent: data?.silent === true, subtitle: data?.subtitle });
     return { shown: true };
   });
 
@@ -1658,6 +1672,7 @@ function createDesktopApp(userConfig, electron = require("electron")) {
 
   app.on("will-quit", () => {
     globalShortcut.unregisterAll();
+    applyStagedUpdate({ relaunch: false });
   });
 
   const api = {
