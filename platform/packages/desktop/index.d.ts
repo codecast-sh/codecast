@@ -50,7 +50,7 @@ export interface DesktopConfigInput {
     newSessionLabel?: string | null;
     dockItems?: MenuItemSpec[];
     /** The app's own entries in the application menu. */
-    appItems?: Array<{ label: string; action: (api: DesktopAppApi) => void } | { type: "separator" }>;
+    appItems?: Array<{ label: string; action: (api: DesktopAppApi) => void; tray?: boolean; visible?: (api: DesktopAppApi) => boolean } | { type: "separator" }>;
   };
   /** Floating palette window. Absent = no palette. */
   palette?: { path: string; width?: number; height?: number } | null;
@@ -160,6 +160,8 @@ export interface DesktopAppApi {
   emit(name: string, payload?: unknown): void;
   /** A window on the shell's preload for the app's own page (a file or a URL). Returns the BrowserWindow. */
   openWindow(opts: { file?: string; url?: string; width?: number; height?: number; minWidth?: number; minHeight?: number; resizable?: boolean; titleBarStyle?: string; backgroundColor?: string; parent?: unknown; args?: string[] }): unknown;
+  /** Rebuild the tray and app menus so `visible` on app items is read again. */
+  refreshMenus(): void;
 }
 
 export type WebRelease = { release: string; dir: string };
