@@ -11,12 +11,14 @@ import {
   applyVoiceMirror,
   getWalkieStatus,
   observeWalkie,
+  onHostExpand,
   refreshWalkie,
   runVoiceCommand,
   startBurst,
   walkieCallState,
 } from "../calls/walkie";
 import { runCallCommand } from "../calls/callManager";
+import { focusExistingHuddle } from "../calls/huddleWindow";
 import { deriveFaceRow, faceRowInputFrom, faceRowInputSig } from "../faces/faceRow";
 import { walkieDoorOpen } from "../calls/walkieDoor";
 import { useInboxStore } from "../../store/inboxStore";
@@ -143,6 +145,32 @@ describe("the door: the host hears for the whole app", () => {
   });
 });
 
+describe("raising the call from another window", () => {
+  it("asks the host to expand a call it holds, even one it has not reported as a huddle", async () => {
+    // A walkie that became a call: the host holds the room, but the shell's
+    // record of "the call panel hosts a room" can lag or miss it, so the
+    // shell's show finds nothing to raise and this window's own call slice is
+    // idle. The pop out then did nothing at all. The host is always reachable
+    // by command, so the expand goes there.
+    const s = shell();
+    s.role({ ...ROLE, voiceWindow: true });
+    applyVoiceMirror({
+      walkie: { ...getWalkieStatus(), sending: null, incoming: null, liveRoom: { key: "dm:a:b", mode: "call", since: 1 } },
+      call: { roomKey: "dm:a:b", phase: "connected", muted: false, micDenied: false, camera: false },
+    });
+    expect(await focusExistingHuddle()).toBe(true);
+    expect(s.commands).toEqual([["expandCall", []]]);
+  });
+
+  it("the host carries the expand out", async () => {
+    let expanded = 0;
+    onHostExpand(() => expanded++);
+    await runVoiceCommand("expandCall", []);
+    onHostExpand(null);
+    expect(expanded).toBe(1);
+  });
+});
+
 describe("the engine as a remote", () => {
   it("draws the host's status and call facts off the mirror, not its own idle slice", () => {
     const s = shell();
@@ -166,7 +194,7 @@ describe("the engine as a remote", () => {
     // This window's own call slice is idle — the host holds the room — and a
     // key reading it would call the burst "dropped".
     expect(useInboxStore.getState().call.phase).toBe("idle");
-    expect(walkieCallState()).toEqual({ roomKey: "dm:a:b", phase: "connected", muted: false, micDenied: false, camera: false, speaking: [], cameras: [] });
+    expect(walkieCallState()).toEqual({ roomKey: "dm:a:b", phase: "connected", muted: false, micDenied: false, camera: false, speaking: [], cameras: [], guests: null });
   });
 
   it("draws the host's cameras and speakers on its face row, and re-derives when they move", () => {

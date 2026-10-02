@@ -94,7 +94,7 @@ export interface Actors {
  * What the actors need of a world. SimWorld is one; the legacy suites'
  * SimServer (inboxSimHarness.ts) is another, so both drive one copy of the verbs.
  */
-export type ActorWorld = Pick<SimWorld, "net" | "start" | "row" | "labels" | "idOf" | "clientAs" | "daemonClientAs" | "realm">;
+export type ActorWorld = Pick<SimWorld, "net" | "start" | "row" | "labels" | "idOf" | "clientAs" | "daemonClientAs" | "realm"> & Partial<Pick<SimWorld, "afterAdvance">>;
 
 export function makeActors(world: ActorWorld): Actors {
   const log: ActorLogEntry[] = [];
@@ -313,6 +313,7 @@ export function makeActors(world: ActorWorld): Actors {
     advance: (ms) =>
       verb("clock", "advance", `${ms}ms`, async () => {
         world.realm.advance(ms);
+        world.afterAdvance?.(ms);
       }),
   };
 

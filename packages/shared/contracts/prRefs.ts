@@ -119,3 +119,37 @@ export function codecastPrUrl(repository: string, number: number, origin = "http
 export function checkLabel(check: { name: string; event?: string }): string {
   return check.event ? `${check.name} (${check.event})` : check.name;
 }
+
+export type ShepherdPrState = {
+  state?: string;
+  draft?: boolean;
+  mergeable?: boolean | null;
+  mergeable_state?: string;
+  behind_by?: number;
+  checks_state?: string;
+  review_decision?: string;
+};
+
+/**
+ * The PR's status in one word, ordered by what the shepherd must handle first.
+ *
+ * Merged and closed end the story. Then come the states only the author can
+ * clear (conflicts, a stale base, red CI, requested changes), then the states
+ * that mean waiting (CI still running, nobody has reviewed), and finally the
+ * good news. A card and a wake prompt both read this one value, so they can
+ * never disagree about where the PR stands.
+ */
+export function foldShepherdState(pr: ShepherdPrState): string {
+  if (pr.state === "merged") return "merged";
+  if (pr.state === "closed") return "closed";
+  if (pr.mergeable === false || pr.mergeable_state === "dirty") return "conflicts";
+  if ((pr.behind_by ?? 0) > 0 || pr.mergeable_state === "behind") return "behind";
+  if (pr.checks_state === "failure") return "ci_red";
+  if (pr.review_decision === "changes_requested") return "changes_requested";
+  if (pr.checks_state === "pending") return "ci_pending";
+  if (!pr.review_decision || pr.review_decision === "none" || pr.review_decision === "review_required") {
+    return "review_pending";
+  }
+  if (pr.review_decision === "approved") return "approved";
+  return "ready";
+}

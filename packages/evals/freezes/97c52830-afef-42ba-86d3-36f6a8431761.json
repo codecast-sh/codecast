@@ -1,0 +1,26 @@
+{
+  "name": "changes-edition release-day",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:release-day"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "changes-edition:release-day",
+    "title": "changes-edition release-day"
+  },
+  "asOf": "2026-01-14T18:00:00.000Z",
+  "trigger": {
+    "type": "changes-edition"
+  },
+  "meta": {
+    "surface": "changes-edition",
+    "visibility": "public",
+    "snapshot": "fixtures/changes-edition/release-day.json"
+  },
+  "judge": "the headline says what the day was about and names the cli 1.4.2 release, the standfirst makes no claim the stories do not support, the lead is the webhook retry or the digest timezone story, and housekeeping (s7, s8, s9) is in brief rather than the lead",
+  "notes": null,
+  "tags": [],
+  "id": "97c52830-afef-42ba-86d3-36f6a8431761",
+  "createdAt": "2026-10-02T23:33:52.160Z"
+}

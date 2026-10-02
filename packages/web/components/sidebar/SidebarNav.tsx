@@ -10,7 +10,7 @@
 
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { FolderGit2, Globe, Waypoints, Workflow, Zap, MessageSquare, MessagesSquare, FolderKanban, Flag } from "lucide-react";
+import { FolderGit2, Globe, Waypoints, Workflow, Zap, MessageSquare, MessagesSquare, FolderKanban, Flag, Newspaper } from "lucide-react";
 import { RailHeading, NavCount, NavSection, type SectionRowSpec } from "./navPrimitives";
 import { DocsNavIcon, SessionsNavIcon, TasksNavIcon } from "./navIcons";
 import { TeamIcon } from "../TeamIcon";
@@ -180,6 +180,8 @@ export type SidebarNavActive = {
   line: boolean;
   triggers: boolean;
   org: boolean;
+  /** Absent where the rail never shows Changes (the marketing hero). */
+  changes?: boolean;
   rootAgent: boolean;
   windows: boolean;
 };
@@ -205,6 +207,7 @@ export function SidebarNavView({
   tasks,
   docs,
   orgOn,
+  changesOn,
   agent,
 }: {
   isNarrow: boolean;
@@ -223,6 +226,8 @@ export function SidebarNavView({
   tasks: NavSectionList;
   docs: NavSectionList;
   orgOn: boolean;
+  /** The active team has Changes on (teams.features.changes): its row sits under Feed. */
+  changesOn?: boolean;
   /** The workspace's agent: its name, its hover title and its face. */
   agent: { label: string; title: string; icon: ReactNode };
 }) {
@@ -234,6 +239,17 @@ export function SidebarNavView({
         {inbox}
         {threads}
         {feed}
+        {changesOn && (
+          <NavSection
+            label="Changes"
+            href="/changes"
+            isActive={!!active.changes}
+            isNarrow={isNarrow}
+            onMobileClose={onMobileClose}
+            title="Changes: what the team shipped and why, day by day"
+            icon={<Newspaper className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
+          />
+        )}
         {questions}
         {chat}
         {calls}

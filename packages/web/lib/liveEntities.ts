@@ -325,6 +325,29 @@ export function resolveTaskLinkedConversations(
 }
 
 /**
+ * Does this linked session own the task? The binding lives on the session
+ * (its `active_task`), so a store row decides; the detail snapshot's
+ * `is_owner` stands in only for a session the store does not hold.
+ */
+export function sessionOwnsTask(
+  snapshot: { is_owner?: boolean },
+  live: { active_task?: { _id: string } | null } | null | undefined,
+  taskId: string | null | undefined,
+): boolean {
+  if (!taskId) return !!snapshot.is_owner;
+  return live ? live.active_task?._id === taskId : !!snapshot.is_owner;
+}
+
+/** The task's one owning session among its linked sessions, or null. */
+export function taskOwnerOf<T extends { _id: string; is_owner?: boolean }>(
+  linked: T[],
+  sessions: Record<string, any> | null | undefined,
+  taskId: string | null | undefined,
+): T | null {
+  return linked.find((c) => sessionOwnsTask(c, sessions?.[c._id], taskId)) ?? null;
+}
+
+/**
  * Conversation page href for a linked session. Always the Convex conversation
  * id — `session_id` is the daemon handle and 404s at /conversation/<session_id>.
  */

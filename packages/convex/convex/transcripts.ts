@@ -1129,9 +1129,9 @@ export function callSummaryRequest(
     prompt: `${preamble}
 
 Write JSON only, this shape:
-{"title": "3-7 word title of what the call was about", "summary": "2-5 sentences: what was discussed, what was decided. Name people for decisions and disagreements. Plain words.", "action_items": ["each concrete follow-up someone committed to, with the owner's name first, e.g. 'Sam: ship the fix behind a flag'"]}
+{"title": "3-7 word title of what the call was about", "summary": "2-5 sentences: what was discussed, what was decided. Name people for decisions and disagreements. Plain words.", "action_items": ["one per commitment, written as 'Owner: what they will do'"]}
 
-Empty action_items array if there were none — never invent any.
+An action item is a commitment: work a person took on, by offering it or by agreeing when asked. Its owner is whoever holds the work when the call ends, who is not always the person who first raised or offered it. An idea, a suggestion or a wish that nobody took on is not an action item, whoever voiced it; it belongs in the summary if anywhere. Never invent an item or an owner. When nobody committed to anything, action_items is empty.
 
 Transcript:
 ${source}`,

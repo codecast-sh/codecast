@@ -18,6 +18,9 @@ import {
   Phone,
   Signpost,
   Check,
+  CircleCheck,
+  CircleMinus,
+  CircleQuestionMark,
   Zap,
   GitPullRequest,
   GitCommitHorizontal,
@@ -289,11 +292,14 @@ function PlanHoverContent({ plan }: { plan: any }) {
   );
 }
 
-const DECISION_STATE: Record<string, { label: string; color: string }> = {
-  pending: { label: "Open", color: "text-sol-yellow" },
-  answered: { label: "Answered", color: "text-sol-green" },
-  dismissed: { label: "Dismissed", color: "text-sol-text-dim" },
-  withdrawn: { label: "Withdrawn", color: "text-sol-text-dim" },
+// One state vocabulary for a decision reference. The pill keeps the
+// decision's yellow in every state (color names the object type); its glyph
+// says whether the question is still open, and a settled one fades.
+const DECISION_STATE: Record<string, { label: string; color: string; icon: typeof Signpost }> = {
+  pending: { label: "Open", color: "text-sol-yellow", icon: CircleQuestionMark },
+  answered: { label: "Answered", color: "text-sol-green", icon: CircleCheck },
+  dismissed: { label: "Dismissed", color: "text-sol-text-dim", icon: CircleMinus },
+  withdrawn: { label: "Withdrawn", color: "text-sol-text-dim", icon: CircleMinus },
 };
 
 // What a decision reference has to answer at a glance: the question, whether
@@ -1105,6 +1111,8 @@ export function EntityIdPill({
   // `!type` guard further down, but the guard sits below the hooks and so runs
   // after this — every value it protects has to stand on its own until then.
   const taskV = taskVisual(status);
+  const decisionV = DECISION_STATE[status ?? "pending"] ?? DECISION_STATE.pending;
+  const decisionSettled = type === "decision" && (status ?? "pending") !== "pending";
 
   // Who a session IS (session-characters.md S3): once a session wears a
   // character or a role, the reference reads as that person — the face in
@@ -1130,7 +1138,7 @@ export function EntityIdPill({
             : type === "proposal"
               ? Network
             : type === "decision"
-              ? Signpost
+              ? decisionV.icon
             : type === "call"
               ? Phone
             : isPr
@@ -1242,7 +1250,7 @@ export function EntityIdPill({
           onMouseEnter={revealOpen ? closeNow : openSoon}
           onMouseLeave={closeSoon}
           data-reveal-open={revealOpen ? "" : undefined}
-          className={`not-prose entity-ref${compact ? " entity-ref-compact" : ""}${canReveal ? " entity-ref--split" : ""} inline-flex items-center gap-[0.2em] px-[0.2em] rounded-[0.2em] text-[1em] font-medium leading-none ${revealOpen ? "underline" : "no-underline"} ${colors} transition-colors cursor-pointer align-baseline hover:underline decoration-current/40 underline-offset-2`}
+          className={`not-prose entity-ref${compact ? " entity-ref-compact" : ""}${canReveal ? " entity-ref--split" : ""} inline-flex items-center gap-[0.2em] px-[0.2em] rounded-[0.2em] text-[1em] font-medium leading-none ${revealOpen ? "underline" : "no-underline"} ${colors}${decisionSettled ? " opacity-60" : ""} transition-colors cursor-pointer align-baseline hover:underline decoration-current/40 underline-offset-2`}
           title={fullLabel !== pillLabel ? fullLabel : undefined}
         >
           <span className="relative flex-shrink-0 opacity-80 inline-flex items-center">
@@ -1272,7 +1280,7 @@ export function EntityIdPill({
           aria-expanded={revealOpen}
           aria-label={revealOpen ? "Hide full page" : "Show full page here"}
           title={revealOpen ? "Hide full page" : "Show full page here"}
-          className={`not-prose entity-ref__expand ${colors.split(" ").filter((c) => c.startsWith("text-")).join(" ")}`}
+          className={`not-prose entity-ref__expand ${colors.split(" ").filter((c) => c.startsWith("text-")).join(" ")}${decisionSettled ? " opacity-60" : ""}`}
         >
           <ChevronDown aria-hidden className="entity-ref__caret" />
         </button>

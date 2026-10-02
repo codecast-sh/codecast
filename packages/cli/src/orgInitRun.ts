@@ -405,27 +405,27 @@ export async function staff(deps: OrgInitDeps, options: any): Promise<void> {
   if (!r.already_existed) console.log(`  ${fmt.muted("first review: running now; cast org proposals lists it when posted")}`);
 }
 
-// ── chief ────────────────────────────────────────────────────────────────────
-// Hire a Chief of Staff (org-staffing.md S30): the person's right hand. Global
-// (every workspace, theirs alone) unless --team names one; --personal keeps a
-// team's chief in the person's own boundary.
+// ── assistant ────────────────────────────────────────────────────────────────
+// Hire an Executive Assistant (org-staffing.md S30): the person's right hand.
+// Global (every workspace, theirs alone) unless --team names one; --personal
+// keeps a team's assistant in the person's own boundary.
 
-export async function chief(deps: OrgInitDeps, options: any): Promise<void> {
+export async function assistant(deps: OrgInitDeps, options: any): Promise<void> {
   const session = deps.callingSession();
-  if (options.adopt && !session) fail("--adopt makes THIS session the chief's standing session, so it runs inside a session. At a shell, run it without --adopt to provision one.");
+  if (options.adopt && !session) fail("--adopt makes THIS session the assistant's standing session, so it runs inside a session. At a shell, run it without --adopt to provision one.");
   let reach: any = { reach: "global" };
   if (options.team) {
     const { ws, args } = await membership(deps, options);
     if (!args.team_id) fail(`You are not a member of ${deps.workspaceLabel(ws)}.`);
     reach = { reach: "team", team_id: args.team_id };
-  } else if (options.personal) fail("--personal goes with --team: a global Chief of Staff is always yours alone.");
+  } else if (options.personal) fail("--personal goes with --team: a global Executive Assistant is always yours alone.");
   const project_path = options.adopt ? undefined : options.dir ? path.resolve(String(options.dir).replace(/^~/, process.env.HOME || "~")) : deps.realCwd();
-  const r = await deps.cliPost("/cli/org/chief", { reach, personal: !!options.personal, given_name: options.name, handle: options.handle, avatar: options.avatar, model: options.model, ...(options.adopt ? { adopt_conversation_id: session } : { project_path }), from_session: session });
-  if (!r || r.error) fail(r?.error ?? "Could not hire a Chief of Staff.");
+  const r = await deps.cliPost("/cli/org/assistant", { reach, personal: !!options.personal, given_name: options.name, handle: options.handle, avatar: options.avatar, model: options.model, ...(options.adopt ? { adopt_conversation_id: session } : { project_path }), from_session: session });
+  if (!r || r.error) fail(r?.error ?? "Could not hire an Executive Assistant.");
   if (options.json) { console.log(JSON.stringify(r, null, 2)); return; }
   const role = r.role ?? {};
   const where = reach.reach === "global" ? "across every workspace" : options.personal ? "for the team, yours alone" : "for the team";
-  console.log(`${fmt.success("✓")} ${r.already_existed ? "already standing" : r.adopted ? "adopted" : "hired"} ${fmt.highlight(role.given_name ?? "Chief of Staff")} ${fmt.muted(`· Chief of Staff, ${where} · @${role.handle}${role.short_id ? ` · ${role.short_id}` : ""}`)}`);
+  console.log(`${fmt.success("✓")} ${r.already_existed ? "already standing" : r.adopted ? "adopted" : "hired"} ${fmt.highlight(role.given_name ?? "Executive Assistant")} ${fmt.muted(`· Executive Assistant, ${where} · @${role.handle}${role.short_id ? ` · ${role.short_id}` : ""}`)}`);
   if (r.standing?.short_id) console.log(`  ${fmt.muted("standing session:")} ${r.standing.short_id}${r.adopted ? fmt.muted(" (this session)") : ""}`);
   if (reach.reach === "global" && !r.already_existed) console.log(`  ${fmt.muted("it is pinned in the app header on every page; cast role update --given-name renames it")}`);
 }

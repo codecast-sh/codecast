@@ -25,8 +25,8 @@ export interface StandingLabel {
 /** The verbs that write: what a turn sends, posts, decides or changes. */
 const WRITE = /\bcast\s+((?:anchor\s+say|chat\s+(?:reply|send)|trigger\s+(?:pause|cancel|rm|delete|update|resume|add)|role\s+(?:pause|resume|retire|wake)|decide(?!\s+(?:ls|show)\b)|send)\b[^\n`]*)/g;
 
-/** The code in a message: fenced blocks and inline spans, where a named command sits. Prose that mentions a verb is not a command. */
-const codeIn = (text: string): string[] => [...text.matchAll(/```[^\n]*\n([\s\S]*?)```|`([^`\n]+)`/g)].map((m) => m[1] ?? m[2] ?? '');
+/** The code in a message: fenced blocks and inline spans, where a named command sits. Prose that mentions a verb is not a command. An inline span may run over lines inside one paragraph, as markdown allows (a command with a heredoc body); WRITE still reads only its first line. */
+const codeIn = (text: string): string[] => [...text.matchAll(/```[^\n]*\n([\s\S]*?)```|`((?:[^`\n]|\n(?!\s*\n))+)`/g)].map((m) => m[1] ?? m[2] ?? '');
 
 /** calls.log lines per turn: `# turn N` (prompt-dry-run.ts) starts turn N, everything before it is turn 1. */
 export function callsByTurn(calls: string[]): string[][] {

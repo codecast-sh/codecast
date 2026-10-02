@@ -44,6 +44,7 @@ import { normalizeChannelName } from "@codecast/convex/convex/chatText";
 import { humanizeConvexError } from "@codecast/shared/contracts";
 import { mirrorState, mergeLinkOptions, nextSlackMembers, type SlackDirection, type SlackLinkOptions, type SlackMemberWriter, type SlackSendAuth } from "@codecast/convex/convex/lib/slackMirror";
 import { action, asyncAction, sync } from "./mutativeMiddleware";
+import { awaitUpload, deliverableAttachments, hasPendingUploads, releaseUpload } from "../lib/pendingUploads";
 import type { PendingEntry } from "./syncProtocol";
 import { isConvexId } from "../lib/entityLinks";
 import { tallyUnread } from "../lib/chatTimeline";
@@ -60,11 +61,15 @@ export type ChatNotifyLevel = "all" | "mentions" | "none";
 export type ChatAgentStatus = "thinking" | "streaming" | "done" | "error";
 
 export type ChatAttachment = {
+  /** Empty while the image is still uploading. */
   storage_id: string;
   name?: string;
   mime?: string;
   width?: number;
   height?: number;
+  /** Local only: the composer's blob preview, painted while the upload runs.
+   *  Never journaled; the send waits for the storage id (sendChatMessage). */
+  preview_url?: string;
 };
 
 export type ChatChannelRow = {
@@ -468,6 +473,9 @@ export type ChatSliceActions = {
   /** The durable half of a send. Called by sendChatMessage and by retry; never
    *  call it directly — the client id has to exist first. */
   dispatchChatSend: (channelId: string, content: string, clientId: string, opts?: ChatSendOptions) => Promise<any>;
+  /** Paints a send whose images are still uploading; nothing is journaled
+   *  until they settle. Rewrites the content of a row already painted. */
+  paintChatSend: (channelId: string, content: string, clientId: string, opts?: ChatSendOptions) => void;
   retryChatSend: (rowId: string) => void;
   markChatSendFailed: (rowId: string, reason?: string) => void;
   discardChatSend: (rowId: string) => void;
@@ -613,6 +621,35 @@ function findReadRow(draft: ChatDraft, channelId: string): ChatReadRow | undefin
   return undefined;
 }
 
+/** The optimistic row a send paints: the client id is its row id, its
+ *  retry handle and the server's dedupe key. */
+function paintOptimisticSend(
+  draft: ChatDraft,
+  channelId: string,
+  content: string,
+  clientId: string,
+  opts?: ChatSendOptions,
+): void {
+  const now = Date.now();
+  draft.chatMessages[clientId] = {
+    _id: clientId,
+    client_id: clientId,
+    channel_id: channelId,
+    thread_root_id: opts?.threadRootId,
+    broadcast: opts?.threadRootId && opts?.broadcast ? true : undefined,
+    user_id: viewerId(draft),
+    author_kind: "user",
+    content,
+    attachments: opts?.attachments,
+    origin: opts?.origin,
+    sync_local_only: opts?.syncLocalOnly ? true : undefined,
+    created_at: now,
+    updated_at: now,
+  };
+  // Posting is reading, exactly as the server treats it.
+  upsertRead(draft, channelId, { last_read_at: now });
+}
+
 /** Upsert this viewer's read row for a channel. A missing row is meaningful
  *  server-side ("never opened"), so the optimistic write creates it the same way
  *  the server does — the first read or post joins the channel. */
@@ -698,16 +735,39 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
     sendChatMessage: (channelId: string, content: string, opts?: ChatSendOptions) => {
       const clientId = newChatMessageClientId();
       const { onSent, ...journaled } = opts ?? {};
-      const sent = get().dispatchChatSend(channelId, content, clientId, opts ? journaled : undefined) as
-        | Promise<ChatSendResult | undefined>
-        | undefined;
-      // (The impl type says void because the BODY returns nothing; the
-      // middleware wraps an asyncAction to resolve with the dispatch result.)
-      if (onSent && sent && typeof sent.then === "function") {
-        // Delivery is the outbox's problem (a failed send marks the row); the
-        // callback only ever hears a success.
-        sent.then((res) => onSent(res && typeof res === "object" ? res : undefined), () => {});
+      const deliver = (text: string, sendOpts: ChatSendOptions | undefined) => {
+        const sent = get().dispatchChatSend(channelId, text, clientId, sendOpts) as
+          | Promise<ChatSendResult | undefined>
+          | undefined;
+        // (The impl type says void because the BODY returns nothing; the
+        // middleware wraps an asyncAction to resolve with the dispatch result.)
+        if (onSent && sent && typeof sent.then === "function") {
+          // Delivery is the outbox's problem (a failed send marks the row); the
+          // callback only ever hears a success.
+          sent.then((res) => onSent(res && typeof res === "object" ? res : undefined), () => {});
+        }
+      };
+      if (!hasPendingUploads(journaled.attachments)) {
+        deliver(content, opts ? journaled : undefined);
+        return clientId;
       }
+      // Images still uploading: the message is in the conversation NOW, with
+      // the blob previews, and the durable send leaves once every upload has
+      // settled. The outbox cannot carry an upload (its bytes are a blob URL
+      // that dies with the page), so the journal entry waits for storage ids.
+      get().paintChatSend(channelId, content, clientId, journaled);
+      const pending = journaled.attachments!;
+      void Promise.all(
+        pending.map(async (a) => (a.storage_id ? a : { ...a, storage_id: (await awaitUpload(a.preview_url)) ?? "" })),
+      ).then((settled) => {
+        const row = get().chatMessages[clientId] as ChatMessageRow | undefined;
+        // Taken back while it uploaded, or every upload failed with nothing
+        // typed (uploadImage already toasted each failure).
+        const attachments = deliverableAttachments(settled);
+        if (row && !row.content && !attachments) get().discardChatSend(clientId);
+        else if (row) deliver(row.content, { ...journaled, attachments });
+        for (const a of pending) if (!a.storage_id) releaseUpload(a.preview_url);
+      });
       return clientId;
     },
 
@@ -732,29 +792,25 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
         // id — the list keeps its place instead of the message jumping to the end,
         // and chat.sendMessage still dedupes anything that did land.
         existing.content = content;
+        existing.attachments = opts?.attachments;
         delete existing._failedAt;
         delete existing._failReason;
         delete this.pending[`chatMessages:${clientId}`];
         return;
       }
-      const now = Date.now();
-      this.chatMessages[clientId] = {
-        _id: clientId,
-        client_id: clientId,
-        channel_id: channelId,
-        thread_root_id: opts?.threadRootId,
-        broadcast: opts?.threadRootId && opts?.broadcast ? true : undefined,
-        user_id: viewerId(this),
-        author_kind: "user",
-        content,
-        attachments: opts?.attachments,
-        origin: opts?.origin,
-        sync_local_only: opts?.syncLocalOnly ? true : undefined,
-        created_at: now,
-        updated_at: now,
-      };
-      // Posting is reading, exactly as the server treats it.
-      upsertRead(this, channelId, { last_read_at: now });
+      paintOptimisticSend(this, channelId, content, clientId, opts);
+    }),
+
+    paintChatSend: sync(function (
+      this: ChatDraft,
+      channelId: string,
+      content: string,
+      clientId: string,
+      opts?: ChatSendOptions,
+    ) {
+      const existing = this.chatMessages[clientId];
+      if (existing) existing.content = content;
+      else paintOptimisticSend(this, channelId, content, clientId, opts);
     }),
 
     retryChatSend: (rowId: string) => {
@@ -763,7 +819,7 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
       get().dispatchChatSend(row.channel_id, row.content, rowId, {
         threadRootId: row.thread_root_id,
         broadcast: row.broadcast,
-        attachments: row.attachments,
+        attachments: deliverableAttachments(row.attachments),
         origin: row.origin,
         syncLocalOnly: row.sync_local_only,
       });
@@ -868,11 +924,13 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
       const row = get().chatMessages[messageId] as ChatMessageRow | undefined;
       if (!row || row.deleted_at) return;
       if (isConvexId(messageId)) get().dispatchChatEdit(messageId, content);
+      // Still uploading: the deferred send reads the row's content when it leaves.
+      else if (hasPendingUploads(row.attachments) && !row._failedAt) get().paintChatSend(row.channel_id, content, messageId);
       else {
         get().dispatchChatSend(row.channel_id, content, messageId, {
           threadRootId: row.thread_root_id,
           broadcast: row.broadcast,
-          attachments: row.attachments,
+          attachments: deliverableAttachments(row.attachments),
           origin: row.origin,
         });
       }
@@ -1578,6 +1636,7 @@ export function selectChatRail(
           // A teammate mid-burst is heard, not missed: the badge waits for the
           // release, exactly as the rail's count does.
           voiceLive: isLiveVoiceRow(m),
+          agent: !!m.author_kind && m.author_kind !== "user",
         })),
         read?.last_read_at,
         viewer,

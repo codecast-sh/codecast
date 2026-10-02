@@ -25,8 +25,10 @@ import {
   MessageSquare,
   MessageSquareCode,
   Pencil,
+  Rocket,
   RotateCcw,
   ShieldCheck,
+  Tag,
   UserCheck,
 } from "lucide-react";
 import { repoBlobHref } from "./repoView";
@@ -139,6 +141,10 @@ export const EXTERNAL_EVENT_STYLE: Record<string, ExternalEventStyle> = {
   pr_edited: { icon: Pencil, accent: "muted", verb: "edited" },
   code_comment: { icon: MessageSquare, accent: "magenta", verb: "commented on" },
   file: { icon: FileDiff, accent: "blue", verb: "changed" },
+  // Ship signals (the Changes page): a version tag push, and a deploy marker
+  // from `cast ship mark`. Green: the moment code reaches people.
+  release: { icon: Tag, accent: "green", verb: "released" },
+  deploy: { icon: Rocket, accent: "green", verb: "deployed" },
 };
 
 /**

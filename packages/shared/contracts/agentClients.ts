@@ -726,30 +726,6 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
       hooksConfig: { path: "~/.cursor/hooks.json", shape: "unverified" },
     },
   },
-  gemini: {
-    id: "gemini",
-    displayName: "Gemini",
-    convexId: "gemini",
-    executionTransports: ["tmux"],
-    binary: "gemini",
-    launchArgs: [],
-    printMode: { kind: "flag", token: "-p", promptAsValue: true },
-    // gemini resumes the most-recent session and ignores the id (daemon fact).
-    resumeCmd: () => `gemini --resume latest`,
-    transcriptRoots: ["~/.gemini/tmp"],
-    watcherKind: "jsonl-dir",
-    // Fresh-launch site (daemon.ts:11989) gemini branch, verbatim: />\s*$|gemini/i
-    // (ASCII `>` at line end, or the word "gemini"). The shared readiness path
-    // (/[❯›]/) matches NEITHER of these, so gemini launch-readiness detection
-    // depends entirely on which site ct-39077 wires — this is the one the
-    // per-client code actually uses at launch.
-    promptReadyPattern: />\s*$|gemini/i,
-    tmuxPrefix: "gm",
-    // reconstitute: the daemon has always rebuilt a missing gemini session through
-    // the claude JSONL writer + `gemini --resume latest` (a sanctioned oddity, not
-    // a fork mechanism — `fork` stays absent).
-    capabilities: { panePromptMonitoring: false, reconstitute: true },
-  },
   opencode: {
     id: "opencode",
     displayName: "OpenCode",
@@ -1055,6 +1031,32 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
       // (no verified paths), typedComposerInput (no newline-key evidence),
       // forkCmd (no native fork), liveEvents (no event bus researched).
     },
+  },
+  gemini: {
+    // Last in every picker: Google retired Gemini CLI for consumer accounts on
+    // 2026-06-18 in favor of Antigravity CLI (`agy`). Kept for existing sessions.
+    id: "gemini",
+    displayName: "Gemini",
+    convexId: "gemini",
+    executionTransports: ["tmux"],
+    binary: "gemini",
+    launchArgs: [],
+    printMode: { kind: "flag", token: "-p", promptAsValue: true },
+    // gemini resumes the most-recent session and ignores the id (daemon fact).
+    resumeCmd: () => `gemini --resume latest`,
+    transcriptRoots: ["~/.gemini/tmp"],
+    watcherKind: "jsonl-dir",
+    // Fresh-launch site (daemon.ts:11989) gemini branch, verbatim: />\s*$|gemini/i
+    // (ASCII `>` at line end, or the word "gemini"). The shared readiness path
+    // (/[❯›]/) matches NEITHER of these, so gemini launch-readiness detection
+    // depends entirely on which site ct-39077 wires — this is the one the
+    // per-client code actually uses at launch.
+    promptReadyPattern: />\s*$|gemini/i,
+    tmuxPrefix: "gm",
+    // reconstitute: the daemon has always rebuilt a missing gemini session through
+    // the claude JSONL writer + `gemini --resume latest` (a sanctioned oddity, not
+    // a fork mechanism — `fork` stays absent).
+    capabilities: { panePromptMonitoring: false, reconstitute: true },
   },
 };
 

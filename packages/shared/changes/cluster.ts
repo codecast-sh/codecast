@@ -174,7 +174,7 @@ export function buildLayerZero(input: LayerZeroInput): LayerZeroResult {
   // (a) sessions, merged through shared tasks.
   const unions = new Unions();
   const taskOwner = new Map<string, string>();
-  const tasksOf = (id: string, u?: Unit) => [...(visible.get(id)?.task_ids ?? []), ...(u?.commit.task_ids ?? [])];
+  const tasksOf = (id: string, u: Unit) => [...(visible.get(id)?.task_ids ?? []), ...commitLinks(u.commit, visible).task_ids];
   for (const u of units) {
     const id = anchors(u);
     if (!id) continue;
@@ -275,6 +275,11 @@ export function buildLayerZero(input: LayerZeroInput): LayerZeroResult {
 
 const uniq = <T,>(xs: Iterable<T>) => [...new Set(xs)];
 
+/** A commit's own task and PR links, withheld when its session failed the gate: they would name private work. */
+function commitLinks(c: ChangeCommit, visible: ReadonlyMap<string, VisibleConversation>): { task_ids: readonly string[]; pr_id: string | null } {
+  return c.conversation_id && !visible.has(c.conversation_id) ? { task_ids: [], pr_id: null } : { task_ids: c.task_ids ?? [], pr_id: c.pr_id ?? null };
+}
+
 function toStory(c: Cluster, input: LayerZeroInput, defaultBranch: string, visible: Map<string, VisibleConversation>, ships: readonly ShipEvent[]): LayerZeroStory {
   const units = c.units;
   const commits = uniq(units.map((u) => u.commit));
@@ -287,10 +292,11 @@ function toStory(c: Cluster, input: LayerZeroInput, defaultBranch: string, visib
   const convIds = uniq(whole.map((u) => u.commit.conversation_id).filter((id): id is string => !!id));
   const conversation_ids = convIds.filter((id) => visible.has(id)).sort();
   const conversations = conversation_ids.map((id) => visible.get(id)!);
-  const task_ids = uniq([...whole.flatMap((u) => u.commit.task_ids ?? []), ...conversations.flatMap((v) => v.task_ids ?? [])]).sort();
+  const links = whole.map((u) => commitLinks(u.commit, visible));
+  const task_ids = uniq([...links.flatMap((l) => l.task_ids), ...conversations.flatMap((v) => v.task_ids ?? [])]).sort();
   const shas = new Set(commits.map((x) => x.sha));
   const pr_ids = uniq([
-    ...whole.map((u) => u.commit.pr_id).filter((id): id is string => !!id),
+    ...links.map((l) => l.pr_id).filter((id): id is string => !!id),
     ...(input.prs ?? [])
       .filter((p) => p.shas?.some((s) => shas.has(s)) || p.conversation_ids?.some((id) => conversation_ids.includes(id)))
       .map((p) => p.id),

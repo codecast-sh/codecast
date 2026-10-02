@@ -11,6 +11,7 @@ import {
 } from "@platform/analytics/errors";
 import { CODECAST_EVENTS, type CodecastEventName, type CodecastEventProps } from "@codecast/shared/analytics";
 import { CHUNK_LOAD_ERROR_PATTERNS } from "./chunkReloadGuard";
+import { DOC_REWRITTEN_ERROR } from "@codecast/shared/docs";
 
 type AnalyticsRuntime = typeof import("@platform/analytics/web-runtime");
 
@@ -127,6 +128,9 @@ const IGNORED_ERROR_PATTERNS: RegExp[] = [
   // CSS wording, and Safari's "Importing a module script failed" kept opening
   // issues for the same condition.
   ...CHUNK_LOAD_ERROR_PATTERNS.map(literalPattern),
+  // A doc editor behind a CLI rewrite: the server refuses its steps and the
+  // editor's gap detector remounts it from the new snapshot (docSync.stepsAfter).
+  literalPattern(DOC_REWRITTEN_ERROR),
 ];
 
 function isIgnoredError(message: string | undefined): boolean {

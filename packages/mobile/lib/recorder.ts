@@ -31,18 +31,19 @@ import {
 import { startAsrCapture, type AsrCapture } from './asrCapture';
 import { getCallSnapshot } from './calls/callManager';
 import { uploadUriToStorage } from './uploadToStorage';
-import { optionalNative } from './optionalNative';
+import { nativeLoadError, nativeModulePresent, optionalNative } from './optionalNative';
 
 // expo-audio is a NATIVE dependency, lazily required and probed exactly the
 // way lib/calls/ringtone.ts does it: a JS bundle (OTA or dev server) newer
 // than the installed binary must degrade to an honest message, never crash at
 // import. The package's inner requireNativeModule fires on first property
 // access, outside any try we could wrap around the import.
-let audio: typeof import('expo-audio') | null | undefined;
+// Only a loaded package is kept: a miss is probed again on the next press, so
+// one failed load does not turn the button into a permanent error.
+let audio: typeof import('expo-audio') | null = null;
 function getAudio() {
-  if (audio !== undefined) return audio;
   // eslint-disable-next-line @typescript-eslint/no-var-requires
-  audio = optionalNative('ExpoAudio', () => require('expo-audio'));
+  if (!audio) audio = optionalNative('ExpoAudio', () => require('expo-audio'));
   return audio;
 }
 
@@ -214,7 +215,12 @@ export async function startRecording(convex: ConvexReactClient): Promise<void> {
   set({ ...IDLE, phase: 'starting' });
   const a = getAudio();
   if (!a) {
-    set({ phase: 'error', error: 'Recording needs a newer version of the app.' });
+    set({
+      phase: 'error',
+      error: nativeModulePresent('ExpoAudio')
+        ? `The recorder could not load: ${nativeLoadError('ExpoAudio') ?? 'unknown error'}`
+        : 'Recording needs a newer version of the app.',
+    });
     return;
   }
   if (callOwnsAudio()) {
@@ -441,11 +447,6 @@ export async function stopRecording(): Promise<string | null> {
     .catch(() => {});
   set({ ...IDLE, transcriptId: id });
   return id;
-}
-
-/** Clear a failure the person has read, so the button goes back to Record. */
-export function dismissRecorderError(): void {
-  if (snapshot.phase === 'error') set({ ...IDLE });
 }
 
 /** Hand the audio session back. Leaving it in recording mode keeps the phone

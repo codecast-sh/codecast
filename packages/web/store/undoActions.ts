@@ -1,4 +1,5 @@
 import { askRetireInstead } from "../lib/seatKill";
+import { soundDormant } from "../lib/sounds";
 import { bridgeUserId, useInboxStore, type InboxSession, type ConversationMeta } from "./inboxStore";
 import type { UserRest } from "@codecast/shared/contracts";
 import { broadcastGesture } from "./gestureBridge";
@@ -19,13 +20,16 @@ const ENTER_WAIT_MS = 1000;
  * timer, a rAF) paints the row at full size first, and the keyframe then
  * snaps it to zero height and grows it back: the flash this replaces.
  */
-export function animateSessionEnter(id: string) {
+export function animateSessionEnter(id: string, leaving?: Element | null) {
   if (typeof document === "undefined" || typeof MutationObserver === "undefined") return;
   const selector = `[data-session-id="${id}"]`;
   // Already on screen: nothing is entering, and animating it would blink it.
-  if (document.querySelector(selector)) return;
+  // A row moving between sections is the exception: the card on screen is the
+  // one leaving, and the entrance belongs to the copy that mounts in its place.
+  const entering = () => Array.from(document.querySelectorAll(selector)).find((el) => el !== leaving);
+  if (entering()) return;
   const observer = new MutationObserver(() => {
-    const card = document.querySelector(selector);
+    const card = entering();
     if (!card) return;
     stop();
     const target = (card.parentElement ?? card) as HTMLElement;
@@ -50,27 +54,30 @@ export type HideSessionMode = "stash" | "kill";
 /** `hidden` = "Stash and hide": the stash survives trigger wakes (stash mode only). */
 export type HideSessionOpts = { hidden?: boolean };
 
+/** Collapse a session card out of its list, then run `then` (the store write
+ *  that moves the row). Runs `then` at once when the card is not on screen. */
+function animateSessionExit(id: string, then: (leaving: Element | null) => void) {
+  const card = document.querySelector(`[data-session-id="${id}"]`);
+  const wrapper = card?.parentElement;
+  if (!wrapper) return then(null);
+  // Measure the real height (parent + any subagent rows) so the collapse
+  // animates the whole stack, not just the first 80px the old cap allowed.
+  wrapper.style.setProperty('--row-h', `${wrapper.offsetHeight}px`);
+  wrapper.classList.add('session-dismissing');
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    then(card);
+  };
+  wrapper.addEventListener('animationend', finish, { once: true });
+  setTimeout(finish, 250);
+}
+
 /** Animate a session card sliding out, then call undoableHideSession. */
 export function animatedHideSession(id: string, mode: HideSessionMode, opts?: HideSessionOpts) {
   if (mode === "kill" && askRetireInstead(id)) return;
-  const card = document.querySelector(`[data-session-id="${id}"]`);
-  const wrapper = card?.parentElement;
-  if (wrapper) {
-    // Measure the real height (parent + any subagent rows) so the collapse
-    // animates the whole stack, not just the first 80px the old cap allowed.
-    wrapper.style.setProperty('--row-h', `${wrapper.offsetHeight}px`);
-    wrapper.classList.add('session-dismissing');
-    let done = false;
-    const finish = () => {
-      if (done) return;
-      done = true;
-      undoableHideSession(id, mode, opts);
-    };
-    wrapper.addEventListener('animationend', finish, { once: true });
-    setTimeout(finish, 250);
-  } else {
-    undoableHideSession(id, mode, opts);
-  }
+  animateSessionExit(id, () => undoableHideSession(id, mode, opts));
 }
 
 type StoreState = ReturnType<typeof useInboxStore.getState>;
@@ -299,6 +306,26 @@ export function undoableSetSessionRest(id: string, rest: UserRest) {
     useInboxStore.getState().setSessionRest(id, rest));
 }
 
+/** File a session under a rest verdict the way stash moves it: the card
+ *  collapses out of its section and grows into the one it lands in. Dormant
+ *  sounds its own cue, once per gesture however many rows it files. */
+export function animatedSetSessionRest(ids: string | string[], rest: UserRest) {
+  const list = typeof ids === "string" ? [ids] : ids;
+  if (list.length === 0) return;
+  if (rest === "dormant") soundDormant();
+  for (const id of list) {
+    // Already filed there: the row stays put, so nothing should leave or enter.
+    if (useInboxStore.getState().sessions[id]?.user_rest === rest) {
+      undoableSetSessionRest(id, rest);
+      continue;
+    }
+    animateSessionExit(id, (leaving) => {
+      animateSessionEnter(id, leaving);
+      undoableSetSessionRest(id, rest);
+    });
+  }
+}
+
 /**
  * File many sessions under one rest verdict at once: the drop on a status
  * section, the multi-selection menu and the selection bar all land here.
@@ -309,7 +336,7 @@ export function fileSessionsAsRest(ids: string[], rest: UserRest) {
   const rows = ids.map((id) => store.sessions[id]).filter((row): row is InboxSession => !!row);
   const live = rows.filter((row) => !row.inbox_killed_at);
   if (live.length === 0) { if (rows.length) toast.error("A killed session can't be filed — restore it first"); return; }
-  for (const row of live) undoableSetSessionRest(row._id, rest);
+  animatedSetSessionRest(live.map((row) => row._id), rest);
   toast.success(live.length > 1 ? `${live.length} sessions: ${USER_REST_LABEL[rest]}` : USER_REST_LABEL[rest]);
 }
 

@@ -1,5 +1,6 @@
 import { useRef, useState, memo } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
+import { useOverflows } from "../../../hooks/useOverflows";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -20,16 +21,10 @@ function PlanBlockImpl({ content, timestamp, collapsed, messageId, conversationI
   const [isExpanded, setIsExpanded] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
-  const [isOverflowing, setIsOverflowing] = useState(false);
+  const isOverflowing = useOverflows(contentRef, PLAN_MAX_HEIGHT, [content]);
 
   const isRealMessageId = !!messageId && isConvexId(messageId);
   const { isBookmarked, toggleBookmark: handleToggleBookmark } = useMessageBookmark(conversationId, messageId);
-
-  useWatchEffect(() => {
-    if (contentRef.current && !isExpanded) {
-      setIsOverflowing(contentRef.current.scrollHeight > PLAN_MAX_HEIGHT);
-    }
-  }, [content, isExpanded]);
 
   useWatchEffect(() => {
     if (!fullscreen) return;

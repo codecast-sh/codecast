@@ -11,6 +11,7 @@ import { CollapsibleBody } from "../../CollapsibleBody";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { EntityIdPill } from "../../EntityIdPill";
 import { useEntityResolution } from "../../../lib/entityDisplay";
+import { RelativeTimeNow } from "../../../lib/conversationFormat";
 import { THREAD_STATE_STATUS_META } from "../../../lib/threadState";
 import { entityRemarkPlugins } from "../../../lib/remarkEntityIds";
 import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS } from "../../messageMarkdown";
@@ -83,6 +84,8 @@ function CastEntityCard({ type, shortId, convexId }: { type: "task" | "plan" | "
   // transcript renders this, so the flash was everywhere.
   const rawId = convexId ?? shortId ?? "";
   const entity = useEntityResolution(rawId, type).entity;
+  // The surface's instant when it fixes one (the marketing hero's film), else the wall clock.
+  const now = useContext(RelativeTimeNow) ?? Date.now();
 
   if (!entity) {
     if (shortId) return <EntityIdPill shortId={shortId} />;
@@ -97,7 +100,7 @@ function CastEntityCard({ type, shortId, convexId }: { type: "task" | "plan" | "
 
   const status = entity.status || (type === "doc" ? null : "open");
   const sc = status ? (CAST_STATUS_COLORS[status] || CAST_STATUS_COLORS.open) : null;
-  const age = Date.now() - (entity.updated_at || (entity as any)._creationTime || Date.now());
+  const age = now - (entity.updated_at || (entity as any)._creationTime || now);
   const ageStr = age < 3600000 ? `${Math.max(1, Math.round(age / 60000))}m`
     : age < 86400000 ? `${Math.round(age / 3600000)}h`
     : `${Math.round(age / 86400000)}d`;

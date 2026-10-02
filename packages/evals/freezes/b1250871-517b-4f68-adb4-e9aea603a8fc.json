@@ -1,0 +1,26 @@
+{
+  "name": "changes-story hidden-member",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:hidden-member"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "changes-story:hidden-member",
+    "title": "changes-story hidden-member"
+  },
+  "asOf": "2026-01-14T18:00:00.000Z",
+  "trigger": {
+    "type": "changes-story"
+  },
+  "meta": {
+    "surface": "changes-story",
+    "visibility": "public",
+    "snapshot": "fixtures/changes-story/hidden-member.json"
+  },
+  "judge": "says daily digests now arrive at 8am in each workspace's own timezone, takes the reason from pull request #212, words the schema risk as one line a teammate can act on, and names no person or session",
+  "notes": null,
+  "tags": [],
+  "id": "b1250871-517b-4f68-adb4-e9aea603a8fc",
+  "createdAt": "2026-10-02T23:33:45.252Z"
+}

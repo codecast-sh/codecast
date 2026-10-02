@@ -747,15 +747,21 @@ export function useChatMessageRow(messageId: string | undefined): ChatMessageRow
  *  Threads have their own badge (hooks/useThreadsSync useThreadUnread). */
 export function useChatUnread(): { channels: number; mentions: number } {
   const rail = useChatRail();
-  return useMemo(() => {
-    let channels = 0;
-    let mentions = 0;
-    for (const c of rail) {
-      if ((c.unreadCount ?? 0) > 0 && !c.muted) channels++;
-      mentions += c.mentionCount ?? 0;
-    }
-    return { channels, mentions };
-  }, [rail]);
+  return useMemo(() => chatUnreadTotals(rail), [rail]);
+}
+
+/** The plain-function core of useChatUnread, for a caller totalling a subset
+ *  of the rail (the sidebar's Chat row leaves out channels pinned above it). */
+export function chatUnreadTotals(
+  rows: ReadonlyArray<{ unreadCount?: number; mentionCount?: number; muted?: boolean }>,
+): { channels: number; mentions: number } {
+  let channels = 0;
+  let mentions = 0;
+  for (const c of rows) {
+    if ((c.unreadCount ?? 0) > 0 && !c.muted) channels++;
+    mentions += c.mentionCount ?? 0;
+  }
+  return { channels, mentions };
 }
 
 /** Fetch one message by id when the store has never seen it — the permalink

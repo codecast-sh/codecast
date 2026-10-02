@@ -71,8 +71,10 @@ export type SyncCollectionOpts<T = any> = {
   /** Pull the rows out of a wrapped payload (`{ artifacts: [...] }`) or reshape
    *  rows that lack `_id` (key them here — syncTable keys by `_id`). */
   select?: (data: T) => any;
-  /** Per-call SyncOpts, merged over the registry defaults for this key. */
-  syncOpts?: SyncOpts;
+  /** Per-call SyncOpts, merged over the registry defaults for this key. A
+   *  function reads them off each payload, for a feed whose answer says how
+   *  far it is complete (the scope a prune may trust). */
+  syncOpts?: SyncOpts | ((data: T) => SyncOpts | undefined);
   /** Batch a hot subscription's pushes into one trailing apply. */
   coalesceMs?: number;
   /** Circuit-break a subscription that never resolves (see useQueryNoThrow). */
@@ -96,10 +98,10 @@ export type SyncCollectionResult = {
  * and hand them to syncTable. Nothing is synced when there are no rows (the
  * query is loading, or the server refused the caller with `null`).
  */
-export function applyCollectionFeed(key: string, data: any, select?: (data: any) => any, syncOpts?: SyncOpts): void {
+export function applyCollectionFeed(key: string, data: any, select?: (data: any) => any, syncOpts?: SyncCollectionOpts["syncOpts"]): void {
   const rows = select ? select(data) : data;
   if (rows === undefined || rows === null) return;
-  useInboxStore.getState().syncTable(key, rows, syncOpts);
+  useInboxStore.getState().syncTable(key, rows, typeof syncOpts === "function" ? syncOpts(data) : syncOpts);
 }
 
 export function useSyncCollection<Query extends FunctionReference<"query">>(

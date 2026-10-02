@@ -1346,12 +1346,12 @@ export default defineSchema({
     // rows wear the character name of their face (shared/contracts/
     // orgIdentity.roleIdentity). Every surface reads the name through it.
     given_name: v.optional(v.string()),
-    // Set on a Chief of Staff, the person's right hand (S30): what it reaches.
+    // Set on an Executive Assistant, the person's right hand (S30): what it reaches.
     // Its row's boundary (scope_type) is ACCESS; `reach` is what its brief and
-    // routine look across. A global chief lives in the person's own boundary;
-    // a team's reach in a personal boundary is a person's own chief for one
-    // team. A chief names no scope and owns no work.
-    chief: v.optional(v.union(
+    // routine look across. A global assistant lives in the person's own boundary;
+    // a team's reach in a personal boundary is a person's own assistant for one
+    // team. An assistant names no scope and owns no work.
+    assistant: v.optional(v.union(
       v.object({ reach: v.literal("global") }),
       v.object({ reach: v.literal("team"), team_id: v.id("teams") }),
     )),
@@ -1362,7 +1362,10 @@ export default defineSchema({
       handle: v.string(),
       name: v.string(),
       charter: v.optional(v.string()),
-      // The personal root converted into the person's global Chief of Staff:
+      // The charter doc's content before the run rewrote it (the doc is what
+      // the agent reads; the row's charter is its first draft).
+      charter_doc: v.optional(v.string()),
+      // The personal root converted into the person's global Executive Assistant:
       // the review routine it had (cancelled) and the routine it got (armed).
       converted: v.optional(v.boolean()),
       review_trigger_id: v.optional(v.id("agent_tasks")),
@@ -1770,6 +1773,11 @@ export default defineSchema({
     update_policy: v.union(v.literal("manual"), v.literal("canary"), v.literal("stable")),
     // An accepted upgrade change (H9) waits here for the host step (bind --to).
     pending_upgrade: v.optional(v.object({ to: v.string(), digest: v.string(), accepted_at: v.number(), accepted_by: v.id("users") })),
+    // When the row took the release it is pinned to: a canary's runs count from here (H12).
+    version_at: v.optional(v.number()),
+    // The learning pass's cursor (H12): when this instance was last read, and
+    // the structural signals already taught, so one stall teaches once.
+    learning: v.optional(v.object({ at: v.number(), seen: v.array(v.string()) })),
     // The host step asked for from the web (H3): the daemon command that runs
     // bind on the machine holding the checkout. The role page reads its outcome.
     bind_request: v.optional(v.object({ command_id: v.id("daemon_commands"), device_id: v.string(), device_label: v.string(), requested_at: v.number(), requested_by: v.id("users") })),
@@ -1811,12 +1819,28 @@ export default defineSchema({
     status: v.union(v.literal("open"), v.literal("accepted"), v.literal("declined"), v.literal("released")),
     released_in: v.optional(v.string()),
     task_id: v.optional(v.id("tasks")),
+    // Who wrote it: the role itself (H9), or the learning pass (H12), whose
+    // lessons passed the leak check and say what they are about in the
+    // template's own ids. Absent on rows written before the pass existed.
+    source: v.optional(v.union(v.literal("role"), v.literal("learning"))),
+    kind: v.optional(v.union(v.literal("redirect"), v.literal("setup"), v.literal("routine"), v.literal("evidence"))),
+    about: v.optional(v.string()),
     created_by: v.id("users"),
     created_at: v.number(),
     updated_at: v.number(),
   })
     .index("by_template_status", ["template_id", "status"])
     .index("by_instance", ["instance_key"]),
+
+  // A workspace's choice to let Codecast learn from its template roles (H12).
+  // `workspace` is the ACCESS key of the workspace that chose; no row, or
+  // `enabled: false`, means its sessions are never read by a learning pass.
+  org_template_learning: defineTable({
+    workspace: v.string(),
+    enabled: v.boolean(),
+    changed_by: v.id("users"),
+    changed_at: v.number(),
+  }).index("by_workspace", ["workspace"]),
 
   // A Slack workspace connected via the "Add to Slack" OAuth flow. Holds the
   // per-workspace bot token (replaces the single app-level SLACK_BOT_TOKEN env
@@ -3456,6 +3480,8 @@ export default defineSchema({
     // | pr_review_comment | pr_check | pr_merged | pr_closed | pr_reopened
     // | pr_behind | pr_conflict | pr_ready | pr_review_requested
     // | pr_ready_for_review | pr_draft | pr_edited | code_comment
+    // Ship kinds (Changes, spec 7.3): release (a version tag push) | deploy
+    // (cast ship mark); meta carries surface, version and tag.
     // Issue kinds (issue sync): issue_opened | issue_assigned | issue_closed
     // | issue_reopened | issue_commented | issue_status | issue_edited
     kind: v.string(),
@@ -3501,6 +3527,9 @@ export default defineSchema({
       head_ref: v.optional(v.string()),
       pr_state: v.optional(v.string()),
       shepherd_state: v.optional(v.string()),
+      surface: v.optional(v.string()),
+      version: v.optional(v.string()),
+      tag: v.optional(v.string()),
     })),
     dedupe_key: v.string(),
     created_at: v.number(),
@@ -3811,14 +3840,16 @@ export default defineSchema({
     output_tokens: v.optional(v.number()),
     cost_usd: v.optional(v.number()),
     // facts: stats headline only; written: prose for a live day; final: the
-    // pass after the day ended; failed / capped: prose unavailable, facts stay.
+    // pass after the day ended; failed: prose unavailable, facts stay.
     status: v.optional(v.union(
       v.literal("facts"),
       v.literal("written"),
       v.literal("final"),
       v.literal("failed"),
-      v.literal("capped"),
     )),
+    // When the team's daily prose cap first left a story or the edition of
+    // this day unwritten. Independent of status: a written edition can be capped.
+    capped_at: v.optional(v.number()),
   })
     .index("by_user_scope_date", ["user_id", "scope", "date"])
     .index("by_team_scope_date", ["team_id", "scope", "date"])
@@ -3890,6 +3921,9 @@ export default defineSchema({
     team_id: v.id("teams"),
     conversation_id: v.id("conversations"),
     owner_id: v.id("users"),
+    // The mode the story was built at. A rebuild at a narrower mode resets
+    // the prose. Absent reads as `full`, the widest.
+    mode: v.optional(v.union(v.literal("summary"), v.literal("full"))),
   })
     .index("by_story", ["story_id"])
     .index("by_conversation", ["conversation_id"])

@@ -12,10 +12,12 @@
 // its size (meetingOfferSize) and the shell reshapes the window around it,
 // which is also the reveal signal on first paint.
 //
-// Every face starts TINY — a one-line capsule, the size of a system
+// Every face starts TINY, a one-line capsule, the size of a system
 // notification — and expands on a click of its body:
 //   offer     [mic] FaceTime  (Record) (x)   → the full question: copy, plus
-//             Not now and Never for this app. A chime when it appears.
+//             Not now and Never for this app. A soft chime when it appears;
+//             left untouched it fades away after OFFER_LINGER_MS
+//             (components/calls/MeetingOfferToast, shared with the toast).
 //   recording [dot] 12:04 ▮▮▮ (stop)         → the last words heard, the
 //             open-transcript jump, proof the microphone works. The recording
 //             runs IN THIS WINDOW (the same per-window recorder engine every
@@ -33,22 +35,16 @@
 // In-app toasts (MeetingOfferToast) remain the path for shells that predate
 // this window: those route offers to an app window, never here.
 import { useRef, useState } from "react";
-import { Ban, Maximize2, Mic, Square, X } from "lucide-react";
+import { Maximize2, Square } from "lucide-react";
 import { isElectron } from "../../lib/desktop";
 import {
-  getMeetingDetect,
   meetingOfferHide,
   meetingOfferOpenCall,
   meetingOfferSize,
   onMeetingDetected,
-  setMeetingDetect,
   type MeetingOffer,
 } from "../../lib/desktopMeetings";
-import {
-  getRecorderStatus,
-  startRecording,
-  stopRecording,
-} from "../../lib/calls/recorder";
+import { getRecorderStatus, stopRecording } from "../../lib/calls/recorder";
 import {
   useRecorderLevelVar,
   useRecorderStatus,
@@ -58,12 +54,12 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { fmtClock } from "../../components/calls/speakers";
 import { soundMeetingDetected } from "../../lib/sounds";
-import { RECORD_OFFER_COPY } from "../../lib/calls/recordOfferCopy";
+import { MeetingOfferFace } from "../../components/calls/MeetingOfferToast";
 import "../../components/calls/recorder.css";
 
 export default function MeetingOfferPage() {
   return (
-    <div className="dark h-screen w-screen text-sol-text">
+    <div className="dark h-screen w-screen">
       <MeetingOfferRoot />
     </div>
   );
@@ -74,64 +70,26 @@ function MeetingOfferRoot() {
   const status = useRecorderStatus();
   const [offer, setOffer] = useState<MeetingOffer | null>(null);
   const [expanded, setExpanded] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [starting, setStarting] = useState(false);
 
   const recording = status.phase === "recording" || status.phase === "stopping";
 
-  const reset = () => {
+  const hide = () => {
     setOffer(null);
     setExpanded(false);
-    setError(null);
-    setStarting(false);
-  };
-
-  const hide = () => {
-    reset();
     meetingOfferHide();
-  };
-
-  const record = async () => {
-    setStarting(true);
-    setError(null);
-    const id = await startRecording();
-    setStarting(false);
-    if (id) {
-      // The recording face begins the way the offer did: tiny.
-      setExpanded(false);
-      return;
-    }
-    // The engine puts the honest reason on its status — a refused microphone,
-    // a recognizer that would not start. Expand so the sentence has room, and
-    // keep the card up: the answer to most of them is to try again.
-    setError(getRecorderStatus().error ?? "Could not start the recording.");
-    setExpanded(true);
-  };
-
-  // Read the never list before adding to it — the shell owns it, and an app
-  // window may have answered "never" for something else since this appeared.
-  const never = async () => {
-    const app = offer?.app;
-    hide();
-    if (!app) return;
-    const current = await getMeetingDetect();
-    const list = current?.never ?? [];
-    if (!list.includes(app)) await setMeetingDetect({ never: [...list, app] });
   };
 
   useWatchEffect(() => {
     const handle = (next: MeetingOffer) => {
-      // A recording already running in this window answers the question — and
+      // A recording already running in this window answers the question, and
       // auto mode must not stack a second one on top of the first.
       if (getRecorderStatus().phase !== "idle") return;
       setOffer(next);
       setExpanded(false);
-      setError(null);
       soundMeetingDetected();
-      if (next.decision === "auto") void record();
     };
     if (isElectron()) onMeetingDetected(handle);
-    // Browser dev hook — the real trigger needs the desktop shell, so this is
+    // Browser dev hook: the real trigger needs the desktop shell, so this is
     // the only way to see the faces at /meeting-offer in a browser:
     // __meetingOffer("Zoom") / __meetingOffer("Zoom", "auto").
     if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
@@ -140,8 +98,8 @@ function MeetingOfferRoot() {
     }
   }, []);
 
-  // A recording that ends — from the Stop here, or the engine settling after
-  // a failure mid-run — leaves nothing to show: put the window away.
+  // A recording that ends (from the Stop here, or the engine settling after a
+  // failure mid-run) leaves nothing to show: put the window away.
   const wasRecording = useRef(false);
   useWatchEffect(() => {
     if (recording) wasRecording.current = true;
@@ -167,82 +125,25 @@ function MeetingOfferRoot() {
     const ro = new ResizeObserver(report);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [offer, recording, expanded]);
+  }, [!!offer, recording]);
 
-  if (recording) {
-    return (
-      <RecordingFace
-        bodyRef={bodyRef}
-        name={offer?.name}
-        expanded={expanded}
-        onToggle={() => setExpanded((e) => !e)}
-      />
-    );
-  }
-  if (!offer) return null;
-
-  if (!expanded) {
-    return (
-      <div ref={bodyRef} className="rec-win" role="status">
-        <button
-          type="button"
-          className="rec-win-expand"
-          title="More choices"
-          onClick={() => setExpanded(true)}
-        >
-          <span className="rec-win-mark" aria-hidden="true">
-            <Mic className="h-2.5 w-2.5" />
-          </span>
-          <span className="rec-win-name">{offer.name}</span>
-          <span className="rec-win-dim">meeting?</span>
-        </button>
-        <button type="button" className="rec-win-go" onClick={record} disabled={starting}>
-          {starting ? "Mic…" : "Record"}
-        </button>
-        <button
-          type="button"
-          className="rec-win-ghost"
-          title="Not now"
-          aria-label="Not now"
-          onClick={hide}
-        >
-          <X className="h-3 w-3" />
-        </button>
-      </div>
-    );
-  }
-
+  if (!recording && !offer) return null;
   return (
-    <div ref={bodyRef} className="rec-win rec-win-card">
-      <span className="rec-win-mark mt-0.5" aria-hidden="true">
-        <Mic className="h-2.5 w-2.5" />
-      </span>
-      <div className="min-w-0 flex-1">
-        <button
-          type="button"
-          className="rec-win-expand w-full text-left"
-          title="Shrink"
-          onClick={() => setExpanded(false)}
-        >
-          <span className="rec-win-name">{offer.name} looks like a meeting</span>
-        </button>
-        <p className="mt-1 text-[11px] leading-relaxed text-sol-text-muted">
-          {RECORD_OFFER_COPY}
-        </p>
-        {error && <p className="mt-1.5 text-[11px] leading-snug text-sol-red">{error}</p>}
-        <div className="mt-2 flex items-center gap-1.5">
-          <button type="button" className="rec-win-go" onClick={record} disabled={starting}>
-            {starting ? "Waiting for the mic…" : error ? "Try again" : "Record"}
-          </button>
-          <button type="button" className="rec-win-quiet" onClick={hide}>
-            Not now
-          </button>
-          <button type="button" className="rec-win-quiet" onClick={never}>
-            <Ban className="h-3 w-3" />
-            Never for {offer.name}
-          </button>
-        </div>
-      </div>
+    <div ref={bodyRef} className="w-max">
+      {recording ? (
+        <RecordingFace name={offer?.name} expanded={expanded} onToggle={() => setExpanded((e) => !e)} />
+      ) : (
+        offer && (
+          <MeetingOfferFace
+            key={offer.at}
+            offer={offer}
+            onClose={hide}
+            // The recording face begins the way the offer did: tiny.
+            onStarted={() => setExpanded(false)}
+            autoStart={offer.decision === "auto"}
+          />
+        )
+      )}
     </div>
   );
 }
@@ -252,12 +153,10 @@ function MeetingOfferRoot() {
  *  way this ends, and it is visible in every state — the capsule IS the
  *  floating stop button. */
 function RecordingFace({
-  bodyRef,
   name,
   expanded,
   onToggle,
 }: {
-  bodyRef: React.RefObject<HTMLDivElement | null>;
   name?: string;
   expanded: boolean;
   onToggle: () => void;
@@ -313,14 +212,14 @@ function RecordingFace({
 
   if (!expanded) {
     return (
-      <div ref={bodyRef} className="rec-win" role="status">
+      <div className="rec-win" role="status">
         {header}
       </div>
     );
   }
 
   return (
-    <div ref={bodyRef} className="rec-win rec-win-col">
+    <div className="rec-win rec-win-col">
       <div className="flex items-center gap-2">{header}</div>
       <div className="rec-win-tail">
         {last || status.error || "listening — words appear as people speak"}

@@ -435,7 +435,7 @@ describe("overlay projection — the time flip", () => {
     expect(liveness.conversations_g.stale_bucket).toBe("needs_input");
   });
 
-  test("child term: a live producing subagent keeps the parent working until the child's own term lapses", async () => {
+  test("child term: a live producing subagent parks the settled parent until the child's own term lapses", async () => {
     // The child is quiet past its producing grace and kept alive only by its
     // live active status, so the parent's first flip is the child's heartbeat.
     const childAt = EPOCH - 10 * MIN;
@@ -450,7 +450,7 @@ describe("overlay projection — the time flip", () => {
       ],
     };
     const { liveness } = await computeSessionsLiveness({ db: db(tables) }, ME as any);
-    expect(liveness.conversations_p.bucket).toBe("working");
+    expect(liveness.conversations_p.bucket).toBe("dormant");
     expect(liveness.conversations_p.bucket_stale_at).toBe(childHeartbeat + HEARTBEAT_ALIVE_MS);
     expect(liveness.conversations_p.stale_bucket).toBe("needs_input");
   });
@@ -935,7 +935,8 @@ describe("the replica's live derivation is the server's", () => {
     expect(checkedLive).toBeGreaterThanOrEqual(8);
     expect(checkedFlip).toBeGreaterThanOrEqual(5);
     expect(liveness.conversations_graced).toMatchObject({ agent_status_updated_at: EPOCH - 30_000, last_role_is_user: false, is_idle: false });
-    expect(liveness.conversations_parent.is_idle).toBe(false);
+    // Settled with a producing subagent: idle, and parked on the child.
+    expect(liveness.conversations_parent).toMatchObject({ is_idle: true, bucket: "dormant" });
     expect(liveness.conversations_parent.producing_until).toBeGreaterThan(EPOCH);
     expect(liveness.conversations_unanswered).toMatchObject({ last_role_is_user: true, agent_status: null });
     expect(liveness.conversations_decay).toMatchObject({ agent_status: "idle", is_idle: true });

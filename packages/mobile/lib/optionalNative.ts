@@ -41,8 +41,21 @@ export function nativeModulePresent(nativeName: string): boolean {
  */
 export function optionalNative<T>(nativeName: string, load: () => T): T | null {
   try {
-    return nativeModulePresent(nativeName) ? load() : null;
-  } catch {
+    if (!nativeModulePresent(nativeName)) return null;
+    const mod = load();
+    loadErrors.delete(nativeName);
+    return mod;
+  } catch (err) {
+    loadErrors.set(nativeName, err instanceof Error ? err.message : String(err));
+    console.warn(`[optionalNative] ${nativeName} is in the binary but its package failed to load`, err);
     return null;
   }
+}
+
+const loadErrors = new Map<string, string>();
+
+/** Why the last load of a module the binary does have threw, or null. Lets a
+ *  caller tell "update the app" apart from a JS failure it should surface. */
+export function nativeLoadError(nativeName: string): string | null {
+  return loadErrors.get(nativeName) ?? null;
 }
