@@ -3562,6 +3562,17 @@ const ConversationViewInner = (
     return null;
   };
 
+  // The "New" rule sits above the first unseen row that draws something. An
+  // unseen row folded into a group that started before it (a tool call joining
+  // the receipt above) renders nothing, and a rule over it would point at an
+  // empty tail; when every unseen row is folded away there is no rule at all.
+  let newRuleIndex = -1;
+  if (firstUnseenIndex >= 0) {
+    for (let i = firstUnseenIndex; i < timeline.length; i++) {
+      if (renderItem(timeline[i], i)) { newRuleIndex = i; break; }
+    }
+  }
+
   // "Continued in" chips at the feed's end. Derived per (children, inline map,
   // messages) change rather than per render — it walked all loaded messages
   // on every pass.
@@ -4539,7 +4550,7 @@ const ConversationViewInner = (
               // turn that died on a tool result ends on an empty row, and the
               // idle stamp and trailing handoffs must not vanish with it.
               const isTail = virtualItem.index === timeline.length - 1;
-              const showNewRule = virtualItem.index === firstUnseenIndex;
+              const showNewRule = virtualItem.index === newRuleIndex;
               const rulesHere = handoffRulesAt(virtualItem.index);
               const showIdleGap = isTail && shouldShowIdleGap({ lastActivityAt, now, hasMoreBelow: !!hasMoreBelow, agentStatus: managedSession?.agent_status });
               const tailRules = isTail && !hasMoreBelow ? handoffRulesAt(timeline.length) : undefined;

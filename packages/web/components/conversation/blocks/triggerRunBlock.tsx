@@ -85,6 +85,8 @@ function RoleWakeBlock({ frame, timestamp }: { frame: ScheduledTaskFrame; timest
       <div role="button" tabIndex={0} onClick={() => setOpen(!open)} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen(!open); } }} className="flex min-w-0 cursor-pointer items-center gap-2 px-3 py-1.5" title={open ? "Hide what woke it" : "Show what woke it"}>
         <Zap className="w-3.5 h-3.5 shrink-0 text-sol-violet/70" />
         <span className="min-w-0 shrink truncate" onClick={stop}>{frame.trigger ? <EntityIdPill shortId={frame.trigger} /> : <span className="text-xs text-sol-text-muted">{frame.title}</span>}</span>
+        {/* What the person focused this run on (orgReview.ts), on the closed line. */}
+        {frame.focus && <span className="min-w-0 shrink truncate text-[12px] text-sol-text-muted" data-run-focus={frame.focus}>{frame.focus}</span>}
         {w && (
           <span className="flex min-w-0 shrink items-center gap-1.5 text-[12px]" data-waiting-session={w.short_id}>
             <span className="shrink-0" onClick={stop}><EntityIdPill shortId={w.short_id} compact /></span>

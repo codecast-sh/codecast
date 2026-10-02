@@ -82,10 +82,7 @@ function useLiveMention(item: SuggestionItem) {
   const status = current.type === "person" || (current.type === "session" && liveJson === "{}") ? undefined : current.status;
 
   const name = persona?.name
-    ?? (current.type === "file" ? current.label.split("/").pop() ?? current.label
-      : current.type === "skill" ? `/${current.label}`
-      : current.type === "channel" ? current.label
-      : current.label);
+    ?? (current.type === "file" ? current.label.split("/").pop() ?? current.label : current.label);
 
   // The meta run after the name: what kind of thing it is and where it lives.
   const meta: string[] = [];

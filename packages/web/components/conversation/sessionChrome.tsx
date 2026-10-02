@@ -25,7 +25,7 @@ import { CopyCommand } from "./blocks/shared";
 import { authRemedy, detectProviderFromError } from "./classify";
 import { cloudAgentCardHeading, CloudAgentSetupHint, CloudAgentSetupText } from "../cloudAgents";
 import { useCloudAgentSetupCard } from "../cloudAgents/sessionAgent";
-import { formatDuration, formatFullTimestamp, formatRelativeTime } from "../../lib/conversationFormat";
+import { formatDuration, formatFullTimestamp, formatRelativeTime, useRelativeTime } from "../../lib/conversationFormat";
 import { MessageMarkdown } from "./markdown";
 import type { ConversationDensity, ParsedApiError } from "./types";
 import { DENSITY_OPTIONS } from "../../lib/conversationDensity";
@@ -649,11 +649,12 @@ export function ConversationMetadata({
  *  ends the duration where a session's span ends (a cloud agent's mirror:
  *  its last message), else it runs to now. */
 export function ConversationAgeFacts({ startedAt, endedAt, messageCount, conversationId }: { startedAt?: number; endedAt?: number; messageCount?: number; conversationId?: string }) {
+  const relativeTime = useRelativeTime();
   if (!startedAt && !messageCount) return null;
   return (
     <div className="flex items-center gap-1 text-[10px] sm:text-xs text-sol-text-dim flex-shrink-0">
       {startedAt && (
-        <span className="flex-shrink-0" title={formatFullTimestamp(startedAt)}>{formatRelativeTime(startedAt)}</span>
+        <span className="flex-shrink-0" title={formatFullTimestamp(startedAt)}>{relativeTime(startedAt)}</span>
       )}
       {messageCount !== undefined && messageCount > 0 && (
         <button
