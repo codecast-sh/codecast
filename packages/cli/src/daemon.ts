@@ -12556,6 +12556,10 @@ async function processTranscriptDeltaSessionPass(
     const hostedHere = keptConversation ? await cloudAgents.keepSession(sessionId, keptConversation, ingest.metadata) : true;
     if ((newMessages.length === 0 && orphanUuids.length === 0) || !hostedHere) {
       markExamined(ingestSource(ingest)?.file ?? filePath);
+      // Nothing to send: every row is proven synced, the set a later rewrite is judged against.
+      if (mirror && keptConversation && hostedHere) {
+        try { writeMirrorSynced(filePath, keptConversation, nextSynced.keys()); } catch {}
+      }
       return;
     }
 
