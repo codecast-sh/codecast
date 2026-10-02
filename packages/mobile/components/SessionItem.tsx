@@ -10,6 +10,7 @@ import * as Haptics from 'expo-haptics';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Feather from '@expo/vector-icons/Feather';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
+import { MOBILE_PULSE, MOBILE_SESSION_STYLE } from '@codecast/shared/render/mobileSessionStyle';
 import { AgentLogoSvg } from '@/components/AgentLogo';
 import { MobileIdentityFace, MobileSessionIdentityLine, useSessionIdentityRow } from '@/components/identity';
 
@@ -160,8 +161,8 @@ export function PulsingDot({ color }: { color: string }) {
   useEffect(() => {
     const animation = RNAnimated.loop(
       RNAnimated.sequence([
-        RNAnimated.timing(opacity, { toValue: 0.3, duration: 800, useNativeDriver: true }),
-        RNAnimated.timing(opacity, { toValue: 1, duration: 800, useNativeDriver: true }),
+        RNAnimated.timing(opacity, { toValue: MOBILE_PULSE.status.low, duration: MOBILE_PULSE.status.leg, useNativeDriver: true }),
+        RNAnimated.timing(opacity, { toValue: 1, duration: MOBILE_PULSE.status.leg, useNativeDriver: true }),
       ])
     );
     animation.start();
@@ -593,11 +594,7 @@ export const styles = themedStyles((Theme) => StyleSheet.create({
     alignItems: 'center',
     marginRight: Spacing.sm,
   },
-  statusDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-  },
+  statusDot: MOBILE_SESSION_STYLE.dot,
   conversationTitle: {
     fontSize: 15,
     fontWeight: '500',
