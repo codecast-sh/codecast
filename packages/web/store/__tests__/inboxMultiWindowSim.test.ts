@@ -120,12 +120,9 @@ describe("a kill from a follower window stays killed", () => {
     expect(goneEverywhere(everyWindow([A, B]), q)).toEqual({ "A-host": true, "A-w1": true, "B-host": true, "B-w1": true });
   });
 
-  // Red on ct-56048: the kill bridged from A-w1 leaves A-host a lock on the
-  // sessions twin's inbox_dismissed_at that no ack names and no echo retires,
-  // so B's restore cannot land on A until a digest heal. The legacy harness
-  // acked every lock its fake dispatch wrote, which hid this. Drop .failing
-  // when ct-56048 lands.
-  it.failing("a restore elsewhere reaches every window through the log, never through a crawl", async () => {
+  // A kill bridged from A-w1 leaves A-host exactly the sender's locks, which
+  // the bridged ack retires, so B's restore lands on A through the log.
+  it("a restore elsewhere reaches every window through the log, never through a crawl", async () => {
     const server = new SimServer(seededWorld(72));
     const A = await bootDevice(server, "A", 1, 1);
     const B = await bootDevice(server, "B", 2, 0);
@@ -216,16 +213,7 @@ describe("randomized interleavings across four windows on two devices", () => {
     // the heal, and pinned loosely so a channel regression that makes EVERY
     // seed depend on the heal is visible.
     console.log(`[sim:multi-window] seeds converged through the heal: ${healedSeeds.join(", ") || "none"}`);
-    // ct-56048: a gesture bridged to a sibling window plants field locks that
-    // no ack retires, so seeds 81 to 86 need one host heal on the real
-    // dispatch path (the legacy fake dispatch acked every lock it wrote, which
-    // hid it). Those seeds are named here, and the old pin (fewer than half
-    // the seeds heal) holds over every other seed, so a regression elsewhere
-    // still shows. Drop the set when ct-56048 lands.
-    const ct56048Seeds = new Set([81, 82, 83, 84, 85, 86]);
-    const others = seeds.filter((seed) => !ct56048Seeds.has(seed));
-    const healedOthers = healedSeeds.filter((h) => !ct56048Seeds.has(Number(h.slice(0, h.indexOf(":")))));
-    expect(healedOthers.length).toBeLessThan(Math.max(1, others.length / 2));
+    expect(healedSeeds.length).toBeLessThan(Math.max(1, seeds.length / 2));
   });
 });
 

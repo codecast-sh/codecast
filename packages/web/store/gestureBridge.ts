@@ -53,7 +53,11 @@ export type GestureMessage =
   // `hidden` = "Stash and hide" (stash mode only): the receiver writes the
   // same inbox_stash_hidden the sender did, so both windows agree on whether
   // a trigger wake brings the row back.
-  | { kind: "hide"; mode: "kill" | "stash"; hidden?: boolean; ids: string[]; forget?: string[]; ts: number }
+  // `writes` is, per id, the exact bridged fields the sender wrote and their
+  // values. The receiver writes and locks exactly those, so it holds the
+  // sender's own locks and the write's bridged acknowledgement retires every
+  // one. A message from an older bundle omits it and gets the full transition.
+  | { kind: "hide"; mode: "kill" | "stash"; hidden?: boolean; ids: string[]; forget?: string[]; writes?: Record<string, Partial<Record<BridgedField, number | boolean | null>>>; ts: number }
   | { kind: "restore"; ids: string[]; ts: number }
   /** Follow mode changed in one window (started, or stopped with null): the
    *  siblings mirror the state so a face in the huddle window and the pill in
@@ -165,6 +169,16 @@ export function broadcastGesture(msg: GestureMessage, userId: string | null): vo
   }
 }
 
+// Only the bridged fields may cross in a verbatim field map: the receiver
+// writes it as given, so an unrecognized key would let a malformed post edit
+// arbitrary row state.
+function isBridgedFieldMap(fields: unknown): boolean {
+  if (!fields || typeof fields !== "object") return false;
+  return Object.entries(fields).every(([k, v]) =>
+    (BRIDGED_FIELDS as readonly string[]).includes(k) &&
+    (v === null || typeof v === "number" || typeof v === "boolean"));
+}
+
 function isGestureMessage(data: unknown): data is Envelope {
   if (!data || typeof data !== "object") return false;
   const e = data as Partial<Envelope>;
@@ -174,16 +188,13 @@ function isGestureMessage(data: unknown): data is Envelope {
       (e.pinnedAt === null || typeof e.pinnedAt === "number");
   }
   if (e.kind === "fields") {
-    if (typeof e.id !== "string" || !e.fields || typeof e.fields !== "object") return false;
-    // Only the four bridged fields may cross — this message writes verbatim, so
-    // an unrecognized key would let a malformed post edit arbitrary row state.
-    return Object.entries(e.fields).every(([k, v]) =>
-      (BRIDGED_FIELDS as readonly string[]).includes(k) &&
-      (v === null || typeof v === "number" || typeof v === "boolean"));
+    if (typeof e.id !== "string") return false;
+    return isBridgedFieldMap(e.fields);
   }
   if (e.kind === "hide") {
     if (e.forget !== undefined && !Array.isArray(e.forget)) return false;
     if (e.hidden !== undefined && typeof e.hidden !== "boolean") return false;
+    if (e.writes !== undefined && (!e.writes || typeof e.writes !== "object" || !Object.values(e.writes).every(isBridgedFieldMap))) return false;
     return Array.isArray(e.ids) && (e.mode === "kill" || e.mode === "stash");
   }
   if (e.kind === "forget") {
