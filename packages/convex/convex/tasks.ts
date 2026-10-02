@@ -74,6 +74,7 @@ import {
   visibleInTeamList,
 } from "./lib/access";
 import { forbidden, notFound } from "./lib/auth";
+import { claimTaskOwnership, type TaskOwnerRef } from "./lib/taskOwner";
 export { canAccessTask };
 
 // The six status CATEGORIES (see @codecast/shared/tasks/statuses.ts). Teams
@@ -899,22 +900,6 @@ export async function guardParentClose(
 
 export const REVIEW_VERDICTS = ["approve", "changes", "reject"] as const;
 export type ReviewVerdict = (typeof REVIEW_VERDICTS)[number];
-
-// The sessions doing a task's work: every conversation the task links that
-// is still bound to it (active_task_id, set by `cast task start`). This is
-// server state, not a claim in the request body, so a hand cannot step out
-// of its role by omitting or forging conversation_id.
-async function boundConversations(ctx: any, task: any): Promise<any[]> {
-  const out: any[] = [];
-  for (const id of task.conversation_ids ?? []) {
-    const conv = await ctx.db.get(id);
-    if (!conv || String(conv.active_task_id) !== String(task._id)) continue;
-    // A session started to review this task judges the work; it never does it.
-    if (String(conv.review_of_task_id ?? "") === String(task._id)) continue;
-    out.push(conv);
-  }
-  return out;
-}
 
 /** Is `conv` the conversation `ancestorId`, or a fork of it (at any depth
  *  that a real fork chain reaches)? A fork carries the filing session's whole
@@ -1941,6 +1926,9 @@ export const update = mutation({
     blocks: v.optional(v.array(v.string())),
     last_session_summary: v.optional(v.string()),
     conversation_id: v.optional(v.string()),
+    // `cast task start --take`: move the task's one owning session here even
+    // while the current owner is still working (lib/taskOwner.ts).
+    take: v.optional(v.boolean()),
     // Structured execution fields
     steps: v.optional(v.array(v.object({
       title: v.string(),
@@ -2076,6 +2064,7 @@ export const update = mutation({
     // resolveSessionConversation).
     let linkedConvId: Id<"conversations"> | undefined;
     let startedForRole: any | null = null;
+    let releasedOwners: TaskOwnerRef[] = [];
     const conv = args.conversation_id
       ? await resolveSessionConversation(ctx, auth.userId, args.conversation_id)
       : null;
@@ -2126,9 +2115,11 @@ export const update = mutation({
         const taker = await roleTakingTask(ctx, task, conv, assigneeBoundary);
         if (taker) { updates.assignee = String(taker._id); startedForRole = taker; }
       }
-      // Only bind conversation to task on explicit start.
-      if (explicitStart && (!conv.active_task_id || conv.active_task_id === task._id)) {
-        await ctx.db.patch(conv._id, { active_task_id: task._id });
+      // Only bind conversation to task on explicit start. The start makes this
+      // session the task's one owner and moves its own focus here, so a
+      // session bound to another task rebinds rather than silently staying.
+      if (explicitStart) {
+        releasedOwners = (await claimTaskOwnership(ctx, conv, task, { take: args.take === true, now })).released;
         if (task.plan_id && !conv.active_plan_id) {
           const relatedPlan = await ctx.db.get(task.plan_id);
           if (
@@ -2191,6 +2182,10 @@ export const update = mutation({
 
     await patchTask(ctx, task, updates);
     if (hold) await noteMovedPastHold(ctx, task, hold, nextStatus ?? task.status, actor.name || "unknown", auth.userId);
+    if (conv && releasedOwners.length) {
+      const from = releasedOwners.map((o) => o.short_id).join(", ");
+      await insertTaskComment(ctx, task._id, { author: actor.name || "unknown", text: `Session ${conv.short_id ?? conv._id} took over as owner from ${from}.`, comment_type: "note", conversation_id: conv._id }, auth.userId);
+    }
     // blocked_by/blocks are raw overwrites; reflect the delta onto each
     // referenced task's other side so the stored mirror stays coherent.
     for (const [field, mirrorField] of [["blocked_by", "blocks"], ["blocks", "blocked_by"]] as const) {
@@ -2243,6 +2238,9 @@ export const update = mutation({
       // Set when this start handed the task to the caller's role, so the CLI
       // can say so.
       assigned_role: startedForRole && updates.assignee !== task.assignee ? { handle: startedForRole.handle, name: startedForRole.name } : undefined,
+      // Sessions this start released as the task's owner, so the CLI can say
+      // which one lost the binding and whether it was still working.
+      released_owners: releasedOwners.length ? releasedOwners.map(({ short_id, title, live }) => ({ short_id, title, live })) : undefined,
     };
   },
 });
@@ -3763,6 +3761,9 @@ export async function spawnSessionForTask(
   // session pill (from active_task_id) while session_count stays 0, so it
   // wrongly drops out of the "Has session" filter.
   await addConversationToWorkItem(ctx, userId, "task", task, conversationId);
+  // The launcher chose this session to do the work: it becomes the task's one
+  // owner, and any earlier bound session lets go.
+  await claimTaskOwnership(ctx, await ctx.db.get(conversationId), task, { take: true, now });
 
   // NB: intentionally do NOT reassign the task to "agent" — the launcher stays
   // the owner. The active run is already conveyed by the task status and the

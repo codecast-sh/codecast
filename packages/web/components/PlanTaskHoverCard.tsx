@@ -10,6 +10,7 @@ import Link from "next/link";
 import { Target } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { taskVisual } from "./TaskStatusBadge";
+import { openBeside } from "../lib/stage";
 
 const api = _api as any;
 
@@ -150,13 +151,21 @@ export function TaskBadge({
 }) {
   const { icon: Icon, color } = taskVisual(task.status);
   const router = useRouter();
+  const path = `/tasks/${task._id}`;
 
+  // The session owns this task: the task opens beside the conversation so the
+  // two read together. A modified click, or a stage with no room, navigates.
   return (
     <button
-      onClick={() => router.push(`/tasks/${task._id}`)}
-      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] flex-shrink-0 bg-sol-violet/10 text-sol-violet border border-sol-violet/20 hover:bg-sol-violet/20 transition-colors max-w-[200px] ${className || ""}`}
+      onClick={(e) => {
+        if (!(e.metaKey || e.ctrlKey || e.shiftKey) && openBeside(path)) return;
+        router.push(path);
+      }}
+      title={`This session owns ${task.short_id}: ${task.title}`}
+      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] flex-shrink-0 bg-sol-violet/10 text-sol-violet border border-sol-violet/20 hover:bg-sol-violet/20 transition-colors max-w-[240px] ${className || ""}`}
     >
       <Icon className={`w-2.5 h-2.5 flex-shrink-0 ${color}`} />
+      <span className="font-mono flex-shrink-0 opacity-70">{task.short_id}</span>
       <span className="truncate">{task.title}</span>
     </button>
   );

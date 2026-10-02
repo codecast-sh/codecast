@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { buildTaskStartBody } from "./taskClaim.js";
+import { buildTaskStartBody, startedLines } from "./taskClaim.js";
+import { ASSIGNEE_MEANS } from "@codecast/shared/contracts/orgAssignee";
 
 describe("buildTaskStartBody", () => {
   test("a human shell claims by assignee, with no session binding", () => {
@@ -12,6 +13,20 @@ describe("buildTaskStartBody", () => {
     const body = buildTaskStartBody("ct-1", "sess-1");
     expect(body).toEqual({ short_id: "ct-1", status: "in_progress", conversation_id: "sess-1" });
     expect("assignee" in body).toBe(false);
+  });
+
+  test("--take asks the server to move ownership from a working session", () => {
+    expect(buildTaskStartBody("ct-1", "sess-1", { take: true })).toMatchObject({ take: true });
+    expect("take" in buildTaskStartBody("ct-1", "sess-1")).toBe(false);
+  });
+});
+
+describe("task start names the sessions it took ownership from", () => {
+  test("a working owner gets a tell-it line, a quiet one a plain note, both before the role line", () => {
+    const lines = startedLines({ released_owners: [{ short_id: "jx7aaaa", live: true }, { short_id: "jx7bbbb", live: false }] });
+    expect(lines[0]).toContain("cast send jx7aaaa");
+    expect(lines[1]).toBe("Took ownership from jx7bbbb, which had gone quiet");
+    expect(lines.at(-1)).toBe(ASSIGNEE_MEANS);
   });
 });
 
@@ -89,8 +104,7 @@ describe("cast task verdict argument parsing", () => {
   });
 });
 
-import { groupTasksByAssignee, startedForRoleLine, startedLines } from "./taskClaim.js";
-import { ASSIGNEE_MEANS } from "@codecast/shared/contracts/orgAssignee";
+import { groupTasksByAssignee, startedForRoleLine } from "./taskClaim.js";
 import { snippetSection } from "@codecast/shared/contracts";
 
 describe("a role as assignee in the CLI (org-roles-run-work.md R5)", () => {

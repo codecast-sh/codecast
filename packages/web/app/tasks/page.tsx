@@ -1308,6 +1308,11 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
           flatItems={displayFlat}
           disableKeyboard={showCreate}
           renderRow={renderTaskRow}
+          renderPreview={(t, onClose, onOpen) => (
+            <ErrorBoundary name="TaskPeek" level="panel">
+              <TaskDetailContent taskId={t._id} variant="inline" onClose={onClose} onOpen={onOpen} />
+            </ErrorBoundary>
+          )}
           getItemId={(t) => t._id}
           getItemRoute={(t) => (projectId ? `/projects/${projectId}/${t._id}` : `/tasks/${t._id}`)}
           getSearchText={(t) => `${t.short_id} ${t.title}`}

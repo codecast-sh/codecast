@@ -1055,6 +1055,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
           <TaskSessionList
             sessions={linkedConversations}
             originId={data.created_from_conversation}
+            taskId={(data as any)._id}
             onOpen={openLinkedSession}
           />
 
