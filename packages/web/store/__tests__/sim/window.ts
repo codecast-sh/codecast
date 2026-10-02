@@ -31,7 +31,8 @@
 // What the sim leaves out: React, IndexedDB (the outbox is an in-memory Map
 // per window), the hooks' 300ms push coalescing (each push applies on its own
 // delivery), the 1.5s heads debounce and the 60s safety-net catch-up tick,
-// the other recovery polls (a sim subscription stalls only when lagged),
+// the recovery polls except after a clock jump (recoveryPoll; a sim
+// subscription stalls only when lagged),
 // message warming, and the currentUser and clientState feeders: boot seeds
 // both once from the world, so a server-side change to either (another
 // device's workspace switch, the CLI's) never reaches a sim window.
@@ -99,6 +100,9 @@ function clientError(name: string, error: any): Error {
   if (error?.data !== undefined) out.data = error.data;
   return out;
 }
+
+// The feeds the recovery polls re-run (useSyncInboxSessions, useSyncTeamInboxSessions).
+const RECOVERY_POLL_FEEDS = ["inbox", "liveness", "team", "teamLiveness"] as const;
 
 export class SimWindow implements RealmWindow {
   readonly store: SimStore = __createInboxStoreForTests();
@@ -307,6 +311,21 @@ export class SimWindow implements RealmWindow {
             () => !this.closed,
           ).catch((e) => this.report("coverage", e));
         }),
+    });
+  }
+
+  /**
+   * One pass of the inbox recovery polls (useRecoveryPoll over the base lists
+   * and the liveness overlays): each re-runs its feed at the current time once
+   * no push arrived within INBOX_RECOVERY_STALE_MS. A time-bounded window a
+   * clock jump moves reaches the app's store this way, with no data change to
+   * push it, so the world runs one after each such jump (SimWorld.afterAdvance).
+   */
+  recoveryPoll(): number {
+    return this.world.net.enqueue(this.conn, {
+      label: "poll: inbox recovery",
+      producer: `${this.name} recovery`,
+      run: () => this.run(() => this.refeed(RECOVERY_POLL_FEEDS)),
     });
   }
 

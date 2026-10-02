@@ -3011,7 +3011,15 @@ function groupDeps(): GroupDeps {
 program
   .command("auth")
   .description("Authenticate with cast using browser OAuth flow")
-  .action(async () => {
+  // Commander accepts excess arguments, so `cast auth status` (a natural guess
+  // by agents) used to open the browser sign-in page instead of reporting.
+  .argument("[action]", "status: show auth state without signing in")
+  .action(async (action?: string) => {
+    if (action === "status") return showStatus({ network: false });
+    if (action) {
+      console.error(`Unknown auth action "${action}". Run ${fmt.cmd("cast auth")} to sign in or ${fmt.cmd("cast auth status")} to check.`);
+      process.exit(1);
+    }
     await runAuth();
   });
 
@@ -9939,7 +9947,7 @@ program
     "  cast handoff --session abc123 -o /tmp/h.md"
   )
   .option("-s, --session <id>", "Source session (default: the session running this command, else the project's most recent)")
-  .option("--to <agent>", "Agent for the new session: claude, codex, cursor, gemini, opencode, pi, grok, or same (the source's own)")
+  .option("--to <agent>", `Agent for the new session: ${Object.keys(AGENT_CLIENTS).join(", ")}, or same (the source's own)`)
   .option("--model <model>", "Model for the new session (e.g. opus, sonnet); --model alone keeps the source's agent")
   .option("--effort <level>", "Reasoning effort for the new session (claude: low|medium|high|max; varies by agent)")
   .option("--account <name>", "Claude account profile the new session runs on (cast accounts token <name>)")
@@ -13490,7 +13498,7 @@ async function resolvePlanId(ref: string): Promise<string> {
 // The switch (org-staffing.md S23.1), read through the shared mapping: the
 // row's stored word never reaches the person.
 // The role as a person reads it (org-staffing.md S30): its given name, then
-// its title (with a chief's reach) beside the handle.
+// its title (with an assistant's reach) beside the handle.
 function printRoleLine(r: any) {
   console.log(roleLine(r));
 }

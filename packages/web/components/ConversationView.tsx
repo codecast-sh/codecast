@@ -18,14 +18,14 @@ import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useTeamRosterIdentity } from "../hooks/useTeamRoster";
-import { useShortcutContext, useShortcutAction, isMac, hasOpenModal } from "../shortcuts";
+import { useShortcutContext, usePaneShortcutAction, isMac, hasOpenModal } from "../shortcuts";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useShallow } from "zustand/react/shallow";
 import { composerAgentStatus, useManagedSessionFields, useSessionEscape } from "../hooks/useSessionComposerControls";
 import { useStorageImageUrls } from "../hooks/useStorageImageUrl";
 import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from "../lib/sessionImages";
 import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
-import { shareTokenArg } from "../lib/shareTokenScope";
+import { getShareTokenScope, shareTokenArg } from "../lib/shareTokenScope";
 import { BrowserPaneOfferChip } from "./browser/BrowserPaneOfferChip";
 import { BrowserSessionContext } from "../hooks/useBrowserTabActions";
 import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
@@ -142,7 +142,7 @@ import { AssistantBlock, CompactCollapsedTurn, ForkSeedMark, GitDiffPanel, Story
 import { COMPACT_TAIL_HEIGHT, EMPTY_CHILD_CONVERSATIONS, EMPTY_RECEIPT_ENTRIES } from "../lib/conversationTurnDefaults";
 import { FOLD_KEPT_USER_KINDS, canAnchorForkChips, classifyUserMessage, cleanStickyContent, extractCompactionSummaryContent, isAlwaysVisibleToolCall, isHiddenStubMessage, isStickyWorthy, isToolReceiptRow, normalizePendingContent, parseCastCommand, parseWorkflowEventContent, sameStringArray, stripSystemTags } from "./conversation/classify";
 import { formatMessagePartsForCopy, formatRelativeTime } from "../lib/conversationFormat";
-import { ConversationAgeFacts, ConversationMetadata, ConversationTaskProgress, ConversationTaskStatsMenuItem, DensityMenuOptions, DeviceMoveStatusStrip, EdgeMessagesIndicator, HandoffMarker, MessagesUnavailableState, RestartStatusStrip, SessionGalleryButton, SqueezedHeaderActions, TimelineRule } from "./conversation/sessionChrome";
+import { ConversationAgeFacts, ConversationMetadata, ConversationTaskProgress, ConversationTaskStatsMenuItem, DensityMenuOptions, DeviceMoveStatusStrip, EdgeMessagesIndicator, HandoffMarker, MessagesUnavailableState, RestartStatusStrip, SessionGalleryButton, SqueezedHeaderActions, ThreadTailLoader, TimelineRule } from "./conversation/sessionChrome";
 import { DENSITY_BY_CONVERSATION, DENSITY_OPTIONS, FEED_DENSITY_CYCLE, defaultDensity } from "../lib/conversationDensity";
 import { followRestoredConversation } from "../lib/followRestoredConversation";
 import { NewSessionView, NonOwnerMessageInput, ProjectSwitcher } from "./conversation/sessionControls";
@@ -2043,19 +2043,23 @@ const ConversationViewInner = (
   }, [isOwner, forkSelectionIdx]);
 
   useShortcutContext('conversation');
-  useShortcutAction('conv.toggleTree', useCallback(() => {
+  usePaneShortcutAction('conv.toggleTree', useCallback(() => {
     if (!isOwner || forkSelectionIdx !== null) return false;
     setMapDrill(null); // open at the branch tree
     setTreePopoverOpen((o) => !o);
     return true;
   }, [isOwner, forkSelectionIdx]));
 
-  useShortcutAction('conv.copyLink', useCallback(() => {
-    const url = `${shareOrigin()}/conversation/${conversation?._id}`;
-    copyToClipboard(url).then(() => toast.success("Link copied!"));
-  }, [conversation?._id]));
+  // A viewer who came in on a share link passes on that link: the bare
+  // conversation URL denies anyone without the token.
+  const copyConversationLink = useCallback(() => {
+    const token = getShareTokenScope(conversation?._id);
+    const url = token ? `${shareOrigin()}/share/${token}` : `${shareOrigin()}/conversation/${conversation?._id}`;
+    copyToClipboard(url).then(() => toast.success("Link copied")).catch(() => toast.error("Failed to copy"));
+  }, [conversation?._id]);
+  usePaneShortcutAction('conv.copyLink', copyConversationLink);
 
-  useShortcutAction('conv.favorite', useCallback(() => {
+  usePaneShortcutAction('conv.favorite', useCallback(() => {
     if (!conversation || !isOwner) return;
     toggleFavoriteMutation(conversation._id);
     toast.success(conversation.is_favorite ? "Removed from favorites" : "Added to favorites");
@@ -2065,23 +2069,23 @@ const ConversationViewInner = (
   // key behind the floating "Quote into reply" button); with nothing selected it
   // enters inline review on the assistant reply nearest the viewport center, so a
   // keyboard-only user can start quoting/commenting without a mouse.
-  useShortcutAction('conv.review', useCallback(() => {
+  usePaneShortcutAction('conv.review', useCallback(() => {
     if (!conversation) return;
     if (quoteSelectionIntoReply(conversation._id)) return;
     enterReviewNearCenter();
   }, [conversation]));
 
-  useShortcutAction('conv.toggleDiff', useCallback(() => {
+  usePaneShortcutAction('conv.toggleDiff', useCallback(() => {
     if (!conversation?.git_branch) return;
     setDiffExpanded((s) => !s);
   }, [conversation?.git_branch]));
 
-  useShortcutAction('conv.toggleThinking', useCallback(() => {
+  usePaneShortcutAction('conv.toggleThinking', useCallback(() => {
     if (!hasAnyThinking) return;
     setShowThinking((s) => !s);
   }, [hasAnyThinking]));
 
-  useShortcutAction('conv.ask', useCallback(() => {
+  usePaneShortcutAction('conv.ask', useCallback(() => {
     if (guest || !conversation?._id) return;
     openAskPanel();
   }, [guest, conversation?._id, openAskPanel]));
@@ -2461,9 +2465,11 @@ const ConversationViewInner = (
   maybeLoadOlderRef.current = () => {
     const sc = containerRef.current;
     const pp = paginationPropsRef.current;
-    if (!sc || !pp.onLoadOlder) return;
-    if (!loadOlderArmedRef.current) return;
+    if (!sc || !pp.onLoadOlder || sc.clientHeight === 0) return;
+    const underfilled = sc.scrollHeight <= sc.clientHeight;
+    if (!loadOlderArmedRef.current && !underfilled) return;
     if (!shouldLoadOlder({
+      underfilled,
       nearTop: sc.scrollTop < TOP_LOAD_TRIGGER_PX,
       userScrolled: userScrolledRef.current,
       hasMoreAbove: pp.hasMoreAbove,
@@ -2510,6 +2516,18 @@ const ConversationViewInner = (
   useWatchEffect(() => {
     updateScrollProgress(virtualizer);
   }, [conversation?.message_count, messages.length, timeline.length, conversation?.loaded_start_index, totalSize, virtualizer, updateScrollProgress]);
+
+  // A window shorter than the viewport fills itself: no scroll-up can arm a
+  // load on a list that cannot scroll. Re-checked as rows land and loads end.
+  // A landed page holds a short cooldown, so check again once it lapses.
+  useWatchEffect(() => {
+    if (!initialScrollDone) return;
+    maybeLoadOlderRef.current();
+    const wait = paginationCooldownRef.current - Date.now();
+    if (wait <= 0) return;
+    const timer = setTimeout(() => maybeLoadOlderRef.current(), wait + 16);
+    return () => clearTimeout(timer);
+  }, [initialScrollDone, timeline.length, totalSize, hasMoreAbove, isLoadingOlder]);
 
   // Pixel-perfect page mount, both directions. The virtualizer's own
   // anchorTo:'end' is estimate-based and doesn't hold the scroll when a page
@@ -2985,7 +3003,7 @@ const ConversationViewInner = (
   // Bound through the shortcut registry (not a raw keydown) so the key combo, this
   // handler, and every tooltip / help-panel mention all read from one definition —
   // rebind 'conv.cycleDensity' once and the binding and its docs move together.
-  useShortcutAction('conv.cycleDensity', useCallback(() => {
+  usePaneShortcutAction('conv.cycleDensity', useCallback(() => {
     setDensity(FEED_DENSITY_CYCLE[(FEED_DENSITY_CYCLE.indexOf(feedDensity) + 1) % FEED_DENSITY_CYCLE.length]);
   }, [feedDensity, setDensity]));
 
@@ -3109,7 +3127,8 @@ const ConversationViewInner = (
   // A cloud agent session's actions (Create PR, Apply, Archive), in the palette as in the header and the session menu.
   const cloudAgentActions = useCloudAgentActions(conversation?._id, effectiveIsOwner);
   // A session with an agent process of its own (not a cloud agent's): the one a restart or a resume command reaches.
-  const hasLocalAgent = !!conversation?.session_id && !cloudAgentActions.cloud;
+  // A share guest has no machine for a resume command to run on.
+  const hasLocalAgent = !guest && !!conversation?.session_id && !cloudAgentActions.cloud;
   usePaletteSessionCommands(conversation?._id, [
     ...cloudAgentActions.palette,
     { key: "view_restart", label: "Restart session", icon: PaletteRestart, available: !!isOwner && hasLocalAgent, run: handleRestartSession },
@@ -3713,7 +3732,7 @@ const ConversationViewInner = (
                 onDoubleClick={() => { if (isOwner) useInboxStore.setState({ renamingSessionId: conversation!._id }); }}
               />
             )}
-        titlePills={conversation && <>
+        titlePills={conversation && !guest && <>
             <AnchorHeaderPill conversationId={conversation._id.toString()} />
             <SessionCallPill conversationId={conversation._id.toString()} />
             <BrowserPaneOfferChip conversationId={conversation._id.toString()} />
@@ -3741,7 +3760,9 @@ const ConversationViewInner = (
                   controlOpen={sessionControlOpen}
                   onControlOpenChange={setSessionControlOpen}
                 />
-                {/* Ahead of the branch: on a phone the strip truncates, and what runs the session matters more than its branch. */}
+                {/* Ahead of the branch: on a phone the strip truncates, and what runs the session matters more than its branch.
+                    A share guest gets what ran and when; the rest links into a workspace they cannot open. */}
+                {!guest && <>
                 <CloudAgentLink actions={cloudAgentActions} />
                 <BranchCodeLink session={conversation} />
                 <SessionWorktreePills session={conversation} repository={codeRepository} className="text-[10px] max-w-[180px]" />
@@ -3773,11 +3794,13 @@ const ConversationViewInner = (
                 </Link>
               </span>
             )}
+                </>}
                 <ConversationAgeFacts startedAt={conversation.started_at} endedAt={cloudAgentActions.cloud ? conversation.messages?.at(-1)?.timestamp : undefined} messageCount={conversation.message_count} conversationId={conversation._id} />
         </>)}
         actions={conversation && (<>
 
-                {parentLinkId && (
+                {/* Lineage chips (parent, handoffs, branch map) open sessions a share guest cannot read. */}
+                {!guest && parentLinkId && (
                   <Link
                     href={convLink(parentLinkId)}
                     onClick={(e) => {
@@ -3799,14 +3822,14 @@ const ConversationViewInner = (
                   </Link>
                 )}
 
-                {handedOffFrom && (
+                {!guest && handedOffFrom && (
                   <HandoffLinkChip details={handedOffFrom} direction="from" convLink={convLink} navigateToSession={navigateToSession} />
                 )}
-                {handedOffTo && (
+                {!guest && handedOffTo && (
                   <HandoffLinkChip details={handedOffTo} direction="to" convLink={convLink} navigateToSession={navigateToSession} />
                 )}
 
-                {((conversation.fork_children?.length ?? 0) > 0 || conversation.forked_from) && (() => {
+                {!guest && ((conversation.fork_children?.length ?? 0) > 0 || conversation.forked_from) && (() => {
                   // Family size from the details payload alone (no store sub):
                   // me + my children, plus parent + my siblings when forked.
                   const familyCount =
@@ -3845,9 +3868,9 @@ const ConversationViewInner = (
                 {/* Kept in simple view (dimmed, copy sub-button hidden inside
                     the pill): the live tmux badge is how you reach the
                     terminal split, which simple view users still want. */}
-                <span data-simple-dim className="inline-flex items-stretch">
+                {!guest && <span data-simple-dim className="inline-flex items-stretch">
                   <TmuxAttachPill tmuxSession={managedSession?.tmux_session} agentType={conversation?.agent_type} isLive={isSessionLive} conversationKey={conversation?._id.toString()} />
-                </span>
+                </span>}
                 </span>
                 {/* Where a cloud session's edits land on a laptop, when mirrored (LocalMirror.tsx). */}
                 {conversation?._id && !guest && <LocalMirrorChip conversationId={String(conversation._id)} compact={simpleViewPref} />}
@@ -3990,14 +4013,14 @@ const ConversationViewInner = (
                         globals.css) come back here as menu rows. Mounted on
                         open, so it reads the row's current level. */}
                     <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">Copy</DropdownMenuLabel>
-                    <DropdownMenuItem onSelect={() => { copyToClipboard(`${shareOrigin()}/conversation/${conversation?._id}`).then(() => toast.success("Link copied")).catch(() => toast.error("Failed to copy")); }}>
+                    <DropdownMenuItem onSelect={copyConversationLink}>
                       <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
                       </svg>
                       Copy link
                       <MenuKeyCaps action="conv.copyLink" />
                     </DropdownMenuItem>
-                    {conversation?.short_id && (
+                    {!guest && conversation?.short_id && (
                       <DropdownMenuItem onSelect={() => { setTimeout(() => { copyToClipboard(conversation.short_id!).then(() => toast.success("ID copied")).catch(() => toast.error("Failed to copy")); }); }}>
                         <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" />
@@ -4009,7 +4032,7 @@ const ConversationViewInner = (
                         its copy here so the hamburger stays the full command
                         surface in that mode. The tmux pill keeps its own copy
                         button in both modes. */}
-                    {simpleViewPref && conversation?.git_branch && (
+                    {!guest && simpleViewPref && conversation?.git_branch && (
                       <DropdownMenuItem onSelect={() => { setTimeout(() => { copyToClipboard(conversation.git_branch!).then(() => toast.success("Branch copied")).catch(() => toast.error("Failed to copy")); }); }}>
                         <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M7 7a2 2 0 100-4 2 2 0 000 4zm0 0v6m0 0a2 2 0 100 4 2 2 0 000-4zm10-6a2 2 0 100-4 2 2 0 000 4zm0 0a5 5 0 01-5 5h-2" />
@@ -4043,14 +4066,14 @@ const ConversationViewInner = (
                         </DropdownMenuItem>
                       </>
                     )}
-                    {chatOn && (
+                    {!guest && chatOn && (
                       <DropdownMenuItem onSelect={() => setTimeout(() => openForwardToChat({ url: `${shareOrigin()}/conversation/${conversation?._id}`, label: "session" }))}>
                         <Forward className="w-3 h-3 mr-1.5" />
                         Send to chat
                       </DropdownMenuItem>
                     )}
                     {/* A phone hides the header's facts strip, so the cloud agent's link and actions live here too. */}
-                    <CloudAgentMenuItems actions={cloudAgentActions} />
+                    {!guest && <CloudAgentMenuItems actions={cloudAgentActions} />}
                     <DropdownMenuSeparator />
                     <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">View</DropdownMenuLabel>
                     <SqueezedHeaderActions rowRef={squeezeRowRef}>
@@ -4090,19 +4113,19 @@ const ConversationViewInner = (
                         <MenuKeyCaps action="conv.toggleThinking" />
                       </DropdownMenuItem>
                     )}
-                    <DropdownMenuItem onClick={() => {
+                    {!guest && <DropdownMenuItem onClick={() => {
                       const next = !stickyDisabled;
                       updateUI({ sticky_headers_disabled: next });
                       if (next) { setStickyMsgVisible(false); setActiveStickyMsg(null); }
                     }}>
                       {stickyDisabled ? "Enable sticky headers" : "Disable sticky headers"}
-                    </DropdownMenuItem>
+                    </DropdownMenuItem>}
                     {minimalStyle && (
                       <DropdownMenuItem onClick={() => updateUI({ show_session_context: !showSessionContext })}>
                         {showSessionContext ? "Hide schedule and plan" : "Show schedule and plan"}
                       </DropdownMenuItem>
                     )}
-                    {conversation.git_branch && (
+                    {!guest && conversation.git_branch && (
                       <DropdownMenuItem onClick={() => setDiffExpanded(!diffExpanded)}>
                         {diffExpanded ? "Hide git diff" : "Show git diff"}
                         <MenuKeyCaps action="conv.toggleDiff" />
@@ -4115,7 +4138,7 @@ const ConversationViewInner = (
                       </>
                     )}
                     {isOwner && (
-                      <DropdownMenuItem onSelect={() => setTimeout(() => useInboxStore.setState({ renamingSessionId: conversation._id }))}>
+                      <DropdownMenuItem onSelect={() => setTimeout(() => useInboxStore.getState().openSessionRename(conversation))}>
                         <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                         </svg>
@@ -4168,7 +4191,8 @@ const ConversationViewInner = (
                         </DropdownMenuItem>
                       </>
                     )}
-                    {(parentLinkId || handedOffFrom || handedOffTo || conversation.forked_from_details || (conversation.fork_children?.length ?? 0) > 0 || conversation.forked_from) && (
+                    {/* Lineage, stats and usage describe the workspace around the session, not the transcript a guest is reading. */}
+                    {!guest && (parentLinkId || handedOffFrom || handedOffTo || conversation.forked_from_details || (conversation.fork_children?.length ?? 0) > 0 || conversation.forked_from) && (
                       <>
                     <DropdownMenuSeparator />
                     <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">Lineage</DropdownMenuLabel>
@@ -4216,7 +4240,7 @@ const ConversationViewInner = (
                     )}
                       </>
                     )}
-                    {((conversation.fork_count ?? 0) > 0 || (conversation.fork_children?.length ?? 0) > 0 || (conversation.compaction_count ?? 0) > 0 || subagentMenuItems) && (
+                    {!guest && ((conversation.fork_count ?? 0) > 0 || (conversation.fork_children?.length ?? 0) > 0 || (conversation.compaction_count ?? 0) > 0 || subagentMenuItems) && (
                       <>
                     <DropdownMenuSeparator />
                     <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">Stats</DropdownMenuLabel>
@@ -4237,8 +4261,8 @@ const ConversationViewInner = (
                     {subagentMenuItems}
                       </>
                     )}
-                    {conversation?._id && <ConversationTaskStatsMenuItem conversationId={conversation._id} />}
-                    {latestUsage && (
+                    {!guest && conversation?._id && <ConversationTaskStatsMenuItem conversationId={conversation._id} />}
+                    {!guest && latestUsage && (
                       <>
                         <DropdownMenuSeparator />
                         <div className="px-2 py-1.5">
@@ -4250,7 +4274,7 @@ const ConversationViewInner = (
         </>)}
         end={headerEnd}
         strips={<>
-          {conversation?._id && <ConversationTaskProgress conversationId={conversation._id} />}
+          {conversation?._id && !guest && <ConversationTaskProgress conversationId={conversation._id} />}
           <RestartStatusStrip
             phase={restartPhase}
             stage={restartStripStage}
@@ -4258,7 +4282,7 @@ const ConversationViewInner = (
             startedAt={restartStartedAt}
             onRetry={handleRestartSession}
           />
-          {conversation?._id && <DeviceMoveStatusStrip conversationId={conversation._id} />}
+          {conversation?._id && !guest && <DeviceMoveStatusStrip conversationId={conversation._id} />}
         </>}
       >
         {conversation && (
@@ -4281,7 +4305,7 @@ const ConversationViewInner = (
             it, so the sticky prompt card, files-changed pill and jump toast
             all anchor below the terminal — including live during a resize
             drag. */}
-        {conversation && (
+        {conversation && !guest && (
           <ErrorBoundary name="ConversationTerminal" level="inline" fallback={null}>
             <Suspense fallback={null}>
               <ConversationTerminalSplit convKey={conversation._id.toString()} tmuxSession={managedSession?.tmux_session} />
@@ -4293,7 +4317,7 @@ const ConversationViewInner = (
         {/* Unacked handoff strip. Lives INSIDE the header so headerHeight's
             ResizeObserver counts it and the sticky-message overlay (anchored at
             top: headerHeight) lands below instead of covering it. */}
-        {conversation && <AssignedToYouBanner conversationId={conversation._id.toString()} />}
+        {conversation && !guest && <AssignedToYouBanner conversationId={conversation._id.toString()} />}
       </ConversationHeaderBar>
 
       {askOpen && !guest && conversation?._id && (
@@ -4589,18 +4613,15 @@ const ConversationViewInner = (
                 </div>
               );
             })}
-            {/* Later messages indicator at bottom (chevron, or spinner while loading);
-                hide the idle state when near top to avoid confusing placement.
-                Gated on hasMoreBelow so it only appears in target mode (a deep-linked
-                window with content below). In normal mode hasMoreBelow is always
-                false, so the initial-page LoadingFirstPage that lights isLoadingNewer
-                no longer flashes a spurious "loading" pill on a fresh open. */}
-            {(hasMoreBelow && (!isNearTop || isLoadingNewer)) && (
-              <EdgeMessagesIndicator dir="down" loading={!!isLoadingNewer}>
-                Scroll down to load more
-              </EdgeMessagesIndicator>
-            )}
           </div>
+          )}
+          {/* Later pages exist only in target mode (a deep-linked window); in
+              normal mode hasMoreBelow is always false, so the first-page load
+              that lights isLoadingNewer never shows this. */}
+          {hasMoreBelow && (
+            <div className="conv-col w-full mx-auto px-4 sm:px-5 md:px-6">
+              <ThreadTailLoader loading={!!isLoadingNewer} />
+            </div>
           )}
           {handedOffTo && !hasMoreBelow && (
             <div className="conv-col mx-auto px-4 sm:px-5 md:px-6">

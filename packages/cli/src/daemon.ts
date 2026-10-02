@@ -279,6 +279,7 @@ import {
   pasteAndSubmitText,
   prepareInjectedContent,
 } from "./tmuxPaste.js";
+import { LaunchPromptCarriedError, launchPromptFragment, pickLaunchPrompt, transcriptHasUserPrompt } from "./launchPrompt.js";
 import { formatFeedResults } from "./formatter.js";
 import {
   attachTerminalServer,
@@ -6244,6 +6245,13 @@ async function executeRemoteCommand(
           break;
         }
 
+        // A message already waiting for this conversation (a spawn's brief)
+        // rides the launch command as claude's prompt argument. Pasted into
+        // the composer it would reach the model wrapped as third party text,
+        // which a fresh worker may decline to act on (launchPrompt.ts).
+        const launchPrompt = agentType === "claude" && conversationId ? await waitingLaunchPrompt(conversationId) : null;
+        if (launchPrompt) cmdText += launchPrompt.fragment;
+
         try {
           // Kill-before-create makes start_session idempotent: clicking the folder
           // switcher repeatedly just keeps respawning into the latest cwd.
@@ -6272,6 +6280,12 @@ async function executeRemoteCommand(
             markClaudeSessionLive(tmuxSession, launchedAccount);
           }
           await stampCodexPaneAccount(agentType, tmuxSession, conversationId);
+          if (launchPrompt && conversationId && assignedClaudeSessionId) {
+            carryLaunchPrompt(launchPrompt.messageId, {
+              conversationId, tmuxSession, projectPath: cwd, sessionId: assignedClaudeSessionId,
+              transcript: path.join(process.env.HOME || "", ".claude", "projects", claudeProjectDirName(cwd), `${assignedClaudeSessionId}.jsonl`),
+            });
+          }
           tmuxExecSync(["send-keys", "-t", tmuxSession, "-l", cmdText], { timeout: 5000 });
           tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
           const resultObj: Record<string, any> = { tmux_session: tmuxSession, agent_type: agentType, project_path: cwd };
@@ -25087,6 +25101,88 @@ async function downloadImage(storageId: string, syncService: SyncService): Promi
 // timeout. Each awaited step reports itself when it takes longer than a pane
 // round trip should, so the next hang names its cause.
 const SLOW_DELIVERY_STEP_MS = 5_000;
+// Messages a session was launched with as its prompt argument, by message id.
+// In memory only: across a daemon restart the transcript echo settles the row.
+type LaunchPromptCarry = { conversationId: string; tmuxSession: string; projectPath: string; sessionId: string; transcript: string; startedAt: number };
+const launchPromptCarries = new Map<string, LaunchPromptCarry>();
+// How long a carry stands in for delivery. A boot under load takes minutes;
+// past this the message goes through the composer like any other.
+const LAUNCH_PROMPT_CARRY_MS = 10 * 60_000;
+// One delivery attempt's wait for the prompt to reach the transcript, well
+// inside the delivery budget.
+const LAUNCH_PROMPT_SETTLE_MS = 60_000;
+
+function launchPromptCarried(messageId: string): boolean {
+  const carry = launchPromptCarries.get(messageId);
+  if (!carry) return false;
+  if (Date.now() - carry.startedAt < LAUNCH_PROMPT_CARRY_MS) return true;
+  launchPromptCarries.delete(messageId);
+  return false;
+}
+
+/** The message waiting for a conversation that is about to start, shaped as
+ *  the tail of its launch command. Null when nothing is waiting, when the
+ *  message needs the composer, or when the lookup fails: the start then goes
+ *  ahead bare and delivery pastes as before. */
+async function waitingLaunchPrompt(conversationId: string): Promise<{ messageId: string; fragment: string } | null> {
+  const config = readConfig();
+  if (!syncServiceRef || !config?.auth_token) return null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const rows = await Promise.race([
+      syncServiceRef.getClient().query("pendingMessages:getPendingMessagesForDaemon" as any, { api_token: config.auth_token, device_id: deviceId() }),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("timed out")), 5000); }),
+    ]);
+    const picked = Array.isArray(rows) ? pickLaunchPrompt(rows, conversationId) : null;
+    if (!picked) return null;
+    assertLegacyDeliveryEnvelope(picked.row);
+    return { messageId: picked.row._id, fragment: launchPromptFragment(path.join(CONFIG_DIR, "launch-prompts"), conversationId, picked.text) };
+  } catch (err) {
+    log(`Launch prompt lookup skipped for ${conversationId.slice(0, 12)}: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/** Record that a launch command carries this message, and mark the row
+ *  injected before the command is typed: the agent echoes the prompt within
+ *  moments of booting, and the echo's ack needs a row to promote. */
+function carryLaunchPrompt(messageId: string, carry: Omit<LaunchPromptCarry, "startedAt">): void {
+  for (const id of launchPromptCarries.keys()) launchPromptCarried(id);
+  launchPromptCarries.set(messageId, { ...carry, startedAt: Date.now() });
+  if (syncServiceRef) markInjectedBestEffort(syncServiceRef, messageId, undefined, { conversationId: carry.conversationId });
+  logDelivery(`msg=${messageId.slice(0, 8)} rides the launch command of ${carry.tmuxSession} as its prompt argument`);
+}
+
+/** Delivery's answer for a message a launch command carried: true once the
+ *  transcript holds the prompt. A pane that died gives the message back to the
+ *  ordinary path; one still booting holds it for the next attempt. */
+async function settleLaunchPrompt(messageId: string): Promise<boolean> {
+  const carry = launchPromptCarries.get(messageId);
+  if (!carry) return false;
+  const pane: StartedSessionInfo = { tmuxSession: carry.tmuxSession, projectPath: carry.projectPath, startedAt: carry.startedAt, agentType: "claude", sessionId: carry.sessionId };
+  const deadline = Date.now() + LAUNCH_PROMPT_SETTLE_MS;
+  for (;;) {
+    const jsonl = await fs.promises.readFile(carry.transcript, "utf-8").catch(() => "");
+    if (transcriptHasUserPrompt(jsonl)) {
+      launchPromptCarries.delete(messageId);
+      logDelivery(`msg=${messageId.slice(0, 8)} delivered as the launch prompt of ${carry.tmuxSession}`);
+      return true;
+    }
+    // The probe also answers the trust dialog a first launch in a folder shows.
+    const probe = await probeStartedPane(pane);
+    if (probe.state === "gone" || probe.state === "fatal") {
+      launchPromptCarries.delete(messageId);
+      logDelivery(`msg=${messageId.slice(0, 8)} launch prompt lost: ${carry.tmuxSession} is ${probe.state}`);
+      return false;
+    }
+    if (Date.now() >= deadline) break;
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+  throw new Error(`AGENT_STDIN_NOT_READY: ${carry.tmuxSession} has not taken its launch prompt yet`);
+}
+
 async function deliveryStep<T>(messageId: string, step: string, run: () => Promise<T>): Promise<T> {
   const started = Date.now();
   // Report while still pending: a step that never returns (the 180s delivery
@@ -25103,7 +25199,16 @@ async function deliveryStep<T>(messageId: string, step: string, run: () => Promi
   }
 }
 
-async function deliverMessage(
+async function deliverMessage(...args: Parameters<typeof deliverMessageIntoSession>): Promise<boolean> {
+  try {
+    return await deliverMessageIntoSession(...args);
+  } catch (err) {
+    if (!(err instanceof LaunchPromptCarriedError)) throw err;
+    return settleLaunchPrompt(args[4]);
+  }
+}
+
+async function deliverMessageIntoSession(
   conversationId: string,
   content: string,
   conversationCache: ConversationCache,
@@ -25113,7 +25218,14 @@ async function deliverMessage(
   agentTypeHint?: AgentClientId,
 ): Promise<boolean> {
   logDelivery(`deliverMessage called: conv=${conversationId.slice(0, 12)} msgId=${messageId.slice(0, 12)} content="${content.slice(0, 80)}"`);
-  const admit = createDeliveryAdmission(syncService, messageId, conversationId);
+  const admitPending = createDeliveryAdmission(syncService, messageId, conversationId);
+  // Asked before every injection, so a delivery already under way when the
+  // session launched with this message can never put a second copy in front
+  // of the agent.
+  const admit = async (): Promise<void> => {
+    if (launchPromptCarried(messageId)) throw new LaunchPromptCarriedError();
+    await admitPending();
+  };
   await deliveryStep(messageId, "admit_first", admit);
   touchHostActivity();
   // A slash command or a poll answer can open an interactive prompt in the

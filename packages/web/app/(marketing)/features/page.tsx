@@ -3,369 +3,165 @@
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { InstallTabs } from "@/components/install-tabs";
+import { SITE_LINKS } from "@/lib/siteLinks";
 import { useRouteMeta } from "../pageMeta";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
+import { SOL, Terminal, Cmd } from "../blog/blogChrome";
+import { SUITE } from "../suite";
 
-function TerminalIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-    </svg>
-  );
-}
-
-function SearchIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-    </svg>
-  );
-}
-
-function BrainIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-    </svg>
-  );
-}
-
-function GitIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
-    </svg>
-  );
-}
-
-function UsersIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
-    </svg>
-  );
-}
-
-
-function LightbulbIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-    </svg>
-  );
-}
-
-function CodeBlock({ children, title }: { children: string; title?: string }) {
-  return (
-    <div className="bg-[#002b36] rounded-lg overflow-hidden">
-      {title && (
-        <div className="px-4 py-2 bg-[#073642] border-b border-[#094959] text-xs text-[#586e75] font-mono">
-          {title}
-        </div>
-      )}
-      <pre className="p-4 text-sm font-mono text-[#93a1a1] overflow-x-auto">
-        {children}
-      </pre>
-    </div>
-  );
-}
-
-const FEATURE_CATEGORIES = [
-  {
-    title: "Session Memory",
-    problem: "Every AI session starts from scratch",
-    description: "A permanent, searchable record of every conversation your agents have had. Agents recall past decisions and search their own history, so your team stops re-solving solved problems.",
-    icon: BrainIcon,
-    color: "purple",
-    commands: [
-      { cmd: 'cast ask "how did we implement auth?"', desc: "Ask across every session" },
-      { cmd: 'cast context "add stripe"', desc: "Relevant prior sessions" },
-      { cmd: "cast handoff", desc: "Context transfer doc" },
-    ],
-  },
-  {
-    title: "Search & Blame",
-    problem: '"How did we do this before?"',
-    description: "Search every session your team has had -- full text and semantic, with time and member filters. Trace any line of code back to the conversation that wrote it with cast blame.",
-    icon: SearchIcon,
-    color: "blue",
-    commands: [
-      { cmd: 'cast search "auth" -s 7d', desc: "Search last 7 days" },
-      { cmd: "cast blame src/auth.ts", desc: "Line-level agent attribution" },
-      { cmd: "cast read abc123 10:20", desc: "Read messages 10-20" },
-    ],
-  },
-  {
-    title: "Session Inbox",
-    problem: "Any agent, any machine",
-    description: "One inbox for the real local sessions you already run -- Claude Code, Codex, Cursor, Gemini, on any machine. See live status, pin important work, defer noise, and answer agents waiting for input.",
-    icon: TerminalIcon,
-    color: "amber",
-    commands: [
-      { cmd: "Ctrl+J/K to navigate sessions", desc: "Keyboard-first triage" },
-      { cmd: "Pin, stash, defer, kill", desc: "Session management" },
-      { cmd: "Send messages from web UI", desc: "Resume in new terminal" },
-    ],
-  },
-  {
-    title: "Steer From Anywhere",
-    problem: "Tied to your desk to unblock agents",
-    description: "Web dashboard, native macOS app with global shortcuts, and iOS app. Answer a permission prompt from your phone; get a push notification the moment an agent needs input.",
-    icon: SearchIcon,
-    color: "blue",
-    commands: [
-      { cmd: "Cmd+K command palette", desc: "Jump to anything" },
-      { cmd: "Desktop: Cmd+Shift+Space", desc: "Global palette" },
-      { cmd: "iOS: push notifications", desc: "Unblock from your phone" },
-    ],
-  },
-  {
-    title: "Plans & Orchestration",
-    problem: "Multi-session features fall apart",
-    description: "Create plans, decompose into tasks, and orchestrate parallel agent execution in waves. Each agent gets full context. Failed tasks retry automatically.",
-    icon: GitIcon,
-    color: "green",
-    commands: [
-      { cmd: "cast plan create 'Auth overhaul'", desc: "Create a plan" },
-      { cmd: "cast plan orchestrate <id>", desc: "Run in parallel waves" },
-      { cmd: "cast plan status <id>", desc: "Track progress" },
-    ],
-  },
-  {
-    title: "Tasks & Auto-Mining",
-    problem: "Work items lost in conversation",
-    description: "Tasks are mined automatically from agent sessions with confidence scoring. Triage suggested tasks, organize by plan, track status from backlog through completion.",
-    icon: LightbulbIcon,
-    color: "red",
-    commands: [
-      { cmd: "cast task create 'Fix bug' -p high", desc: "Create task" },
-      { cmd: "cast task ls --status open", desc: "List open tasks" },
-      { cmd: "cast task done <id>", desc: "Mark complete" },
-    ],
-  },
-  {
-    title: "Team Collaboration",
-    problem: "Invisible work and duplicated effort",
-    description: "See what teammates are building in real-time. Share sessions by project directory. Activity feeds show who's working on what. Privacy controls at every level.",
-    icon: UsersIcon,
-    color: "orange",
-    commands: [
-      { cmd: "cast links", desc: "Get shareable URLs" },
-      { cmd: "cast private abc123", desc: "Mark session private" },
-      { cmd: "cast bookmark abc123 42", desc: "Bookmark a message" },
-    ],
-  },
-  {
-    title: "Documents & Knowledge",
-    problem: "Decisions live in people's heads",
-    description: "Create specs, designs, and notes with a rich editor. @mention sessions, tasks, and plans. Track architectural decisions with rationale. All searchable by your agent.",
-    icon: BrainIcon,
-    color: "purple",
-    commands: [
-      { cmd: "cast doc create 'Auth Design'", desc: "Create document" },
-      { cmd: "cast decisions add 'Use Convex'", desc: "Record decision" },
-      { cmd: "cast learn add 'http-pattern'", desc: "Save code pattern" },
-    ],
-  },
-];
+/** The commands an agent (or a person) runs on each surface of the suite, keyed by its name in SUITE. */
+const SURFACE_COMMANDS: Record<string, string[]> = {
+  Inbox: ["cast sessions -w", "cast feed --state needs-input", 'cast send jx7hero "ship it"'],
+  Chat: ['cast chat read --channel eng --since 2h', 'cast chat send --channel eng "PR #482 is up"'],
+  Calls: ["cast calls", "cast call <id> --transcript"],
+  "Tasks and plans": ['cast task create "Retry webhooks" -p high', "cast task start ct-482", 'cast plan create "Auth overhaul"'],
+  Docs: ['cast doc create "Auth flow"', "cast doc grep <id> '^#'"],
+  "Pull requests": ["cast pr show", "cast pr threads", "cast pr shepherd on"],
+  Decisions: ['cast decide "Backoff?" -o "Exponential" -o "Fixed"', "cast decide ls"],
+  Automations: ['cast trigger add "Check CI" --in 30m', "cast workflow run flow.cast --task ct-482"],
+  Pages: ["cast publish report.html", "cast publish comments report.html"],
+};
 
 const QUICK_START_STEPS = [
-  {
-    step: 1,
-    title: "Install",
-    code: "curl -fsSL https://codecast.sh/install | sh",
-    detail: "Single command install. Works on macOS, Linux, and WSL.",
-  },
-  {
-    step: 2,
-    title: "Authenticate",
-    code: "cast auth",
-    detail: "Opens browser for OAuth. Takes 10 seconds.",
-  },
-  {
-    step: 3,
-    title: "Start syncing",
-    code: "cast start",
-    detail: "Background daemon watches and syncs automatically.",
-  },
+  { title: "Install", code: "curl -fsSL codecast.sh/install | sh", detail: "One command on macOS, Linux and WSL." },
+  { title: "Sign in", code: "cast auth", detail: "Opens the browser to connect this machine to your workspace." },
+  { title: "Keep working", code: "claude / codex / cursor / gemini / opencode / pi", detail: "A background daemon picks up every session as it runs. Nothing to reconfigure." },
 ];
 
-const COMMAND_REFERENCE = [
+const COMMAND_REFERENCE: { category: string; color: string; commands: [string, string][] }[] = [
   {
-    category: "Core",
+    category: "Sessions",
+    color: SOL.orange,
     commands: [
-      { cmd: "auth", desc: "Browser OAuth authentication" },
-      { cmd: "start / stop / status", desc: "Daemon management" },
-      { cmd: "sync", desc: "Manual sync all conversations" },
-      { cmd: "config [key] [value]", desc: "View or set configuration" },
-      { cmd: "logs -f", desc: "View daemon logs (follow mode)" },
-      { cmd: "setup", desc: "Auto-start daemon on login" },
+      ["sessions [-w]", "Who acts next, live"],
+      ["feed", "The team's recent sessions"],
+      ["read <id> [15:25]", "Read a session's messages"],
+      ["send <id> <text>", "Start a turn in another session"],
+      ["stash / restore / kill", "Tidy the inbox"],
     ],
   },
   {
-    category: "Search & Browse",
+    category: "Memory",
+    color: SOL.violet,
     commands: [
-      { cmd: "search <query>", desc: "Full-text search with -s/-e time filters" },
-      { cmd: "feed", desc: "Browse recent sessions (-g for global)" },
-      { cmd: "read <id> [range]", desc: "Read messages (e.g., 10:20)" },
-      { cmd: "resume <query>", desc: "Search and resume a session" },
+      ["search <query>", "Every session, with file:, pr: and commit: filters"],
+      ["ask <question>", "Answer from the team's history"],
+      ["context <task>", "Prior sessions before you start"],
+      ["blame <file>", "Each line to the session that wrote it"],
+      ["diff / summary <id>", "What a session changed and why"],
     ],
   },
   {
-    category: "Analysis",
+    category: "Agents",
+    color: SOL.cyan,
     commands: [
-      { cmd: "diff [id]", desc: "Files changed, commits, tools used" },
-      { cmd: "summary [id]", desc: "Generate session summary" },
-      { cmd: "handoff", desc: "Context transfer document" },
-      { cmd: "context <query>", desc: "Pre-work intelligence" },
-      { cmd: "ask <question>", desc: "Natural language query" },
+      ["spawn --subagent <task>", "A worker you manage"],
+      ["fork <direction> ...", "Branch this conversation"],
+      ["switch --agent codex", "Same session, another agent"],
+      ["exec <prompt>", "Run a prompt anywhere, print the result"],
+      ["handoff [--to codex]", "Context for the next session"],
     ],
   },
   {
-    category: "File Intelligence",
+    category: "Work",
+    color: SOL.green,
     commands: [
-      { cmd: "blame <file>", desc: "Sessions that touched a file" },
-      { cmd: "similar --file <path>", desc: "Sessions with related files" },
+      ["task create / start / done", "Agents hold tasks like people do"],
+      ["plan create / bind", "Coordinate many sessions"],
+      ["doc create / edit / grep", "Specs and findings"],
+      ["decide <question>", "Queue a call only a person can make"],
+      ["decisions add <title>", "Record why, searchable later"],
     ],
   },
   {
-    category: "Collaboration",
+    category: "Team",
+    color: SOL.blue,
     commands: [
-      { cmd: "links", desc: "Dashboard and share URLs" },
-      { cmd: "private [id]", desc: "Manage private sessions" },
-      { cmd: "bookmark <id> <msg>", desc: "Bookmark specific messages" },
+      ["chat read / send", "Channels and threads"],
+      ["calls / call <id>", "Summaries, action items, transcripts"],
+      ["pr show / review / shepherd", "Pull requests with their sessions"],
+      ["label set <name>", "File sessions by effort"],
     ],
   },
   {
-    category: "Knowledge",
+    category: "Automation",
+    color: SOL.yellow,
     commands: [
-      { cmd: "decisions [add|delete]", desc: "Track architectural decisions" },
-      { cmd: "learn [add|show|search]", desc: "Save code patterns" },
-      { cmd: "memory", desc: "Install agent memory component" },
-    ],
-  },
-  {
-    category: "Documents",
-    commands: [
-      { cmd: 'doc create "<title>" -t type', desc: "Create document (note, design, spec, etc.)" },
-      { cmd: "doc ls", desc: "List documents with type filters" },
-      { cmd: "overview", desc: "Show all plans, tasks, and agents" },
-    ],
-  },
-  {
-    category: "Workflows",
-    commands: [
-      { cmd: "workflow run <plan-id>", desc: "Execute workflow from plan" },
-      { cmd: "plan set-workflow <id> <file>", desc: "Attach workflow to plan" },
-      { cmd: "plan orchestrate <id>", desc: "Parallel wave execution" },
+      ["trigger add --in / --every / --on", "Follow-ups, routines, webhooks"],
+      ["workflow run <file>", "Graphs with approval gates"],
+      ["publish <file>", "A page at a link, versioned"],
+      ["browser / computer", "Drive Chrome and native apps"],
     ],
   },
 ];
 
+const MEMORY_POINTS = [
+  "Searches past sessions before starting work",
+  "Recalls decisions and the reasons behind them",
+  "Finds the sessions that touched the same files",
+  "Hands its context to the next session or agent",
+];
 
-export default function CLIPage() {
+export default function FeaturesPage() {
   useRouteMeta("/features");
 
   return (
-    <main className="min-h-screen bg-stone-50 w-full">
+    <main className="min-h-screen w-full overflow-x-hidden" style={{ backgroundColor: SOL.base3 }}>
       <MarketingNav active="/features" />
 
       {/* Hero */}
-      <section className="max-w-6xl mx-auto px-6 pt-20 pb-16">
-        <div className="text-center max-w-3xl mx-auto">
-          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-50 border border-amber-200 text-amber-700 text-sm font-medium mb-6">
-            <TerminalIcon className="w-4 h-4" />
-            Any agent, any machine
-          </div>
-
-          <h1 className="text-5xl md:text-6xl font-bold text-stone-900 leading-[1.1] tracking-tight mb-6">
-            See, steer, and remember<br />
-            <span className="text-stone-400">every coding agent session.</span>
-          </h1>
-
-          <p className="text-xl text-stone-600 leading-relaxed max-w-2xl mx-auto mb-8">
-            A permanent, searchable record of every agent conversation, the agents you already run
-            -- Claude Code, Codex, Cursor, Gemini -- on any machine, and a live inbox you can steer
-            from any device, all in one place.
-          </p>
-
-          <div className="mb-8">
-            <InstallTabs location="features" />
-          </div>
+      <section className="max-w-4xl mx-auto px-6 pt-16 sm:pt-20 pb-10 text-center">
+        <h1 className="text-4xl sm:text-5xl md:text-6xl font-bold leading-[1.1] tracking-tight mb-6 font-mono" style={{ color: SOL.base03 }}>
+          One command line<br />
+          <span style={{ color: SOL.base1 }}>for the whole workspace</span>
+        </h1>
+        <p className="text-lg sm:text-xl leading-relaxed max-w-2xl mx-auto mb-8" style={{ color: SOL.base00 }}>
+          Every surface in Codecast is a command. Your agents use <code className="font-mono text-[0.9em]">cast</code> to
+          pick up tasks, answer threads, open pull requests and ask for decisions, the same way you
+          do from the app. Claude Code, Codex, Cursor, Gemini, OpenCode and pi, on any machine.
+        </p>
+        <div className="max-w-2xl mx-auto text-left">
+          <InstallTabs location="features" />
         </div>
       </section>
 
-      {/* Demo Terminal */}
-      <section className="max-w-4xl mx-auto px-6 pb-20">
-        <div className="relative">
-          <div className="absolute -inset-4 bg-gradient-to-r from-amber-500/20 via-orange-500/20 to-red-500/20 rounded-2xl blur-xl opacity-50"></div>
-          <div className="relative bg-[#002b36] rounded-xl border border-[#094959] shadow-2xl overflow-hidden">
-            <div className="flex items-center gap-2 px-4 py-2.5 bg-[#073642] border-b border-[#094959]">
-              <div className="flex gap-1.5">
-                <div className="w-3 h-3 rounded-full bg-[#dc322f]"></div>
-                <div className="w-3 h-3 rounded-full bg-[#b58900]"></div>
-                <div className="w-3 h-3 rounded-full bg-[#859900]"></div>
-              </div>
-              <span className="text-xs font-mono text-[#586e75] ml-2">Terminal</span>
-            </div>
-            <div className="p-4 font-mono text-sm space-y-4">
-              <div>
-                <span className="text-[#859900]">$</span>
-                <span className="text-[#93a1a1]"> cast search &quot;auth bug&quot; -s 7d</span>
-              </div>
-              <div className="text-[#586e75] text-xs">
-                Searching sessions from last 7 days...
-              </div>
-              <div className="border-l-2 border-[#268bd2] pl-3 space-y-1">
-                <div className="text-[#93a1a1]">
-                  <span className="text-[#b58900]">[abc123]</span> Fixed OAuth callback error
-                </div>
-                <div className="text-[#586e75] text-xs">
-                  2 days ago | 34 messages | src/auth/callback.ts
-                </div>
-                <div className="text-[#657b83] text-xs mt-1">
-                  ... found the <span className="text-[#cb4b16]">auth bug</span> in the token refresh logic...
-                </div>
-              </div>
-              <div className="border-l-2 border-[#268bd2] pl-3 space-y-1">
-                <div className="text-[#93a1a1]">
-                  <span className="text-[#b58900]">[def456]</span> Implement session management
-                </div>
-                <div className="text-[#586e75] text-xs">
-                  5 days ago | 67 messages | src/auth/session.ts
-                </div>
-              </div>
-              <div className="mt-4">
-                <span className="text-[#859900]">$</span>
-                <span className="text-[#93a1a1]"> cast resume &quot;OAuth callback&quot;</span>
-              </div>
-              <div className="text-[#859900]">
-                Opening: Fixed OAuth callback error
-              </div>
-            </div>
-          </div>
-        </div>
+      {/* Demo */}
+      <section className="max-w-3xl mx-auto px-6 pb-16">
+        <Terminal label="Terminal">
+          <Cmd>cast ask &quot;how did we implement auth?&quot;</Cmd>
+          <span style={{ color: SOL.base01 }}>Searching 3 relevant sessions...{"\n"}</span>
+          <span style={{ color: SOL.base1 }}>Found in </span>
+          <span style={{ color: SOL.yellow }}>OAuth implementation</span>
+          <span style={{ color: SOL.base01 }}> (3 days ago, sarah, codex){"\n"}</span>
+          <span style={{ color: SOL.base00 }}>  Refresh the token before the redirect, sessions stored in Convex.{"\n\n"}</span>
+          <Cmd>cast task start ct-482</Cmd>
+          <span style={{ color: SOL.green }}>Started </span>
+          <span style={{ color: SOL.base1 }}>Retry failed webhooks</span>
+          <span style={{ color: SOL.base01 }}> · bound to this session{"\n\n"}</span>
+          <Cmd>cast decide &quot;Exponential or fixed backoff?&quot; -o Exponential -o Fixed</Cmd>
+          <span style={{ color: SOL.yellow }}>Queued for @ashot</span>
+          <span style={{ color: SOL.base01 }}> · 3 agents keep working while you decide</span>
+        </Terminal>
       </section>
 
-      {/* Quick Start */}
-      <section className="bg-white border-y border-stone-200 py-20">
+      {/* Quick start */}
+      <section className="py-16 sm:py-20" style={{ backgroundColor: SOL.base2 }}>
         <div className="max-w-4xl mx-auto px-6">
           <div className="text-center mb-12">
-            <h2 className="text-3xl font-bold text-stone-900 mb-4">Get started in 30 seconds</h2>
-            <p className="text-lg text-stone-500">Three commands to persistent AI memory</p>
+            <h2 className="text-3xl font-bold mb-4 font-mono" style={{ color: SOL.base03 }}>Up in 30 seconds</h2>
+            <p className="text-lg" style={{ color: SOL.base00 }}>Install, sign in, and keep running your agents the way you do now.</p>
           </div>
-
           <div className="space-y-6">
-            {QUICK_START_STEPS.map((step) => (
-              <div key={step.step} className="flex gap-6 items-start">
-                <div className="w-10 h-10 rounded-full bg-stone-900 text-white flex items-center justify-center font-mono font-bold text-lg shrink-0">
-                  {step.step}
+            {QUICK_START_STEPS.map((step, i) => (
+              <div key={step.title} className="flex gap-4 sm:gap-6 items-start">
+                <div className="w-10 h-10 rounded-full flex items-center justify-center font-mono font-bold text-lg shrink-0" style={{ backgroundColor: SOL.blue, color: SOL.base3 }}>
+                  {i + 1}
                 </div>
-                <div className="flex-1">
-                  <h3 className="font-semibold text-stone-900 mb-1">{step.title}</h3>
-                  <p className="text-sm text-stone-500 mb-2">{step.detail}</p>
-                  <code className="block bg-stone-100 rounded-lg px-4 py-2 text-sm font-mono text-stone-800">
-                    {step.code}
+                <div className="flex-1 min-w-0">
+                  <h3 className="font-semibold font-mono mb-1" style={{ color: SOL.base03 }}>{step.title}</h3>
+                  <p className="text-sm mb-2" style={{ color: SOL.base00 }}>{step.detail}</p>
+                  <code className="block rounded-lg px-4 py-2 text-sm font-mono overflow-x-auto whitespace-nowrap" style={{ backgroundColor: SOL.base03, color: SOL.base1 }}>
+                    <span style={{ color: SOL.green }}>$ </span>{step.code}
                   </code>
                 </div>
               </div>
@@ -374,48 +170,34 @@ export default function CLIPage() {
         </div>
       </section>
 
-      {/* Feature Categories */}
-      <section className="max-w-6xl mx-auto px-6 py-20">
-        <div className="text-center mb-16">
-          <h2 className="text-3xl font-bold text-stone-900 mb-4">
-            The system of record for agent work
+      {/* The suite, with the commands behind each surface */}
+      <section className="max-w-6xl mx-auto px-6 py-16 sm:py-20">
+        <div className="text-center mb-12 max-w-3xl mx-auto">
+          <h2 className="text-3xl sm:text-4xl font-bold mb-4 font-mono" style={{ color: SOL.base03 }}>
+            Every surface, from the terminal
           </h2>
-          <p className="text-lg text-stone-500 max-w-2xl mx-auto">
-            Remember every conversation, watch the sessions you already run on any machine,
-            and steer them from anywhere. Tasks, plans, and team collaboration build on top.
+          <p className="text-lg leading-relaxed" style={{ color: SOL.base00 }}>
+            The commands agents run on each part of the workspace. Whatever they do lands where your
+            team already looks, linked to the session that did it.
           </p>
         </div>
 
-        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-8">
-          {FEATURE_CATEGORIES.map((category) => (
-            <div key={category.title} className="bg-white rounded-xl border border-stone-200 p-6">
-              <div className={`w-12 h-12 rounded-lg flex items-center justify-center mb-4 ${
-                category.color === "purple" ? "bg-purple-100" :
-                category.color === "blue" ? "bg-blue-100" :
-                category.color === "amber" ? "bg-amber-100" :
-                category.color === "green" ? "bg-green-100" :
-                category.color === "orange" ? "bg-orange-100" :
-                "bg-red-100"
-              }`}>
-                <category.icon className={`w-6 h-6 ${
-                  category.color === "purple" ? "text-purple-600" :
-                  category.color === "blue" ? "text-blue-600" :
-                  category.color === "amber" ? "text-amber-600" :
-                  category.color === "green" ? "text-green-600" :
-                  category.color === "orange" ? "text-orange-600" :
-                  "text-red-600"
-                }`} />
+        <div className="grid gap-px sm:grid-cols-2 lg:grid-cols-3 rounded-xl overflow-hidden" style={{ backgroundColor: "#e4ddc8", border: "1px solid #e4ddc8" }}>
+          {SUITE.map(({ name, line, mark, color, early }, i) => (
+            <div key={name} className={`group flex flex-col p-6 transition-colors hover:bg-[#fffbee]${i === SUITE.length - 1 && SUITE.length % 3 === 1 ? " lg:col-span-3" : ""}`} style={{ backgroundColor: SOL.base3 }}>
+              <div className="flex items-center justify-between mb-4">
+                <span className="w-9 h-9 rounded-lg flex items-center justify-center font-mono text-lg transition-transform group-hover:-rotate-6" style={{ backgroundColor: `color-mix(in srgb, ${color} 13%, transparent)`, color }} aria-hidden>{mark}</span>
+                {early && (
+                  <span className="font-mono text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded" style={{ color: SOL.violet, backgroundColor: "rgba(108,113,196,0.1)" }}>Early access</span>
+                )}
               </div>
-              <p className="text-xs font-medium text-stone-400 uppercase tracking-wide mb-1">{category.problem}</p>
-              <h3 className="text-lg font-semibold text-stone-900 mb-2">{category.title}</h3>
-              <p className="text-sm text-stone-500 mb-4">{category.description}</p>
-              <div className="space-y-2">
-                {category.commands.map((cmd) => (
-                  <div key={cmd.cmd} className="flex items-start gap-2 text-xs">
-                    <code className="bg-stone-100 px-2 py-1 rounded font-mono text-stone-700 shrink-0">
-                      {cmd.cmd.length > 30 ? cmd.cmd.slice(0, 30) + "..." : cmd.cmd}
-                    </code>
-                  </div>
+              <h3 className="font-mono font-semibold mb-1.5" style={{ color: SOL.base03 }}>{name}</h3>
+              <p className="text-sm leading-relaxed mb-4" style={{ color: SOL.base00 }}>{line}</p>
+              <div className="mt-auto space-y-1.5">
+                {(SURFACE_COMMANDS[name] ?? []).map((cmd) => (
+                  <code key={cmd} className="block font-mono text-xs px-2 py-1 rounded truncate" style={{ backgroundColor: SOL.base2, color: SOL.base02 }} title={cmd}>
+                    {cmd}
+                  </code>
                 ))}
               </div>
             </div>
@@ -423,25 +205,26 @@ export default function CLIPage() {
         </div>
       </section>
 
-      {/* Command Reference */}
-      <section className="bg-stone-900 text-white py-20">
+      {/* Command reference */}
+      <section className="py-16 sm:py-20" style={{ backgroundColor: SOL.base03 }}>
         <div className="max-w-6xl mx-auto px-6">
           <div className="text-center mb-12">
-            <h2 className="text-3xl font-bold mb-4">Command reference</h2>
-            <p className="text-lg text-stone-400">All commands at a glance</p>
+            <h2 className="text-3xl font-bold mb-4 font-mono" style={{ color: SOL.base3 }}>Command reference</h2>
+            <p className="text-lg" style={{ color: SOL.base1 }}>
+              The ones you will reach for most. <code className="font-mono">cast --help</code> lists the rest.
+            </p>
           </div>
-
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
             {COMMAND_REFERENCE.map((section) => (
-              <div key={section.category} className="bg-[#073642] rounded-xl p-5">
-                <h3 className="font-semibold text-amber-400 mb-4 text-sm uppercase tracking-wide">
+              <div key={section.category} className="rounded-xl p-5" style={{ backgroundColor: SOL.base02, border: "1px solid #094959" }}>
+                <h3 className="font-mono font-semibold mb-4 text-sm uppercase tracking-wide" style={{ color: section.color }}>
                   {section.category}
                 </h3>
                 <div className="space-y-3">
-                  {section.commands.map((cmd) => (
-                    <div key={cmd.cmd} className="text-sm">
-                      <code className="text-[#93a1a1] font-mono">{cmd.cmd}</code>
-                      <p className="text-[#586e75] text-xs mt-0.5">{cmd.desc}</p>
+                  {section.commands.map(([cmd, desc]) => (
+                    <div key={cmd} className="text-sm">
+                      <code className="font-mono" style={{ color: SOL.base1 }}>{cmd}</code>
+                      <p className="text-xs mt-0.5" style={{ color: SOL.base01 }}>{desc}</p>
                     </div>
                   ))}
                 </div>
@@ -451,87 +234,55 @@ export default function CLIPage() {
         </div>
       </section>
 
-      {/* Agent Memory Deep Dive */}
-      <section className="max-w-5xl mx-auto px-6 py-20">
+      {/* Agent memory */}
+      <section className="max-w-5xl mx-auto px-6 py-16 sm:py-20">
         <div className="grid md:grid-cols-2 gap-12 items-center">
           <div>
-            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-purple-50 border border-purple-200 text-purple-700 text-sm font-medium mb-4">
-              <BrainIcon className="w-4 h-4" />
-              Agent Memory
-            </div>
-            <h2 className="text-3xl font-bold text-stone-900 mb-4">
-              History that doesn't evaporate
+            <div className="font-mono text-sm mb-4" style={{ color: SOL.violet }}>Agent memory</div>
+            <h2 className="text-3xl font-bold mb-4 font-mono" style={{ color: SOL.base03 }}>
+              History that outlives the terminal
             </h2>
-            <p className="text-lg text-stone-600 leading-relaxed mb-6">
-              Install the memory component and your agent can search past sessions, recall decisions,
-              and read team context -- not just the current conversation. Its history stops disappearing
-              when the terminal closes.
+            <p className="text-lg leading-relaxed mb-6" style={{ color: SOL.base00 }}>
+              The installer teaches each agent the commands above, so it reads the team&apos;s past sessions,
+              decisions and docs before it starts, not just the conversation in front of it.
             </p>
-            <ul className="space-y-3 text-stone-600">
-              <li className="flex items-center gap-3">
-                <svg className="w-5 h-5 text-purple-500 shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                </svg>
-                Search past sessions automatically when starting work
-              </li>
-              <li className="flex items-center gap-3">
-                <svg className="w-5 h-5 text-purple-500 shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                </svg>
-                Recall architectural decisions and rationale
-              </li>
-              <li className="flex items-center gap-3">
-                <svg className="w-5 h-5 text-purple-500 shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                </svg>
-                Find sessions that touched the same files
-              </li>
-              <li className="flex items-center gap-3">
-                <svg className="w-5 h-5 text-purple-500 shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                </svg>
-                Generate handoff docs for session continuity
-              </li>
+            <ul className="space-y-3">
+              {MEMORY_POINTS.map((point) => (
+                <li key={point} className="flex items-start gap-3" style={{ color: SOL.base00 }}>
+                  <span className="font-mono shrink-0" style={{ color: SOL.violet }} aria-hidden>→</span>
+                  {point}
+                </li>
+              ))}
             </ul>
           </div>
-          <div>
-            <CodeBlock title="~/.claude/CLAUDE.md">{`## Memory
-
-You have access to past sessions via cast.
-Search proactively when starting tasks.
-
-\`\`\`bash
-# Search & Browse
-cast search "auth" -s 7d
-cast context "stripe integration"
-cast ask "why did we use Convex?"
-
-# Recall & Resume
-cast handoff
-cast decisions list
-cast blame src/auth.ts
-\`\`\``}</CodeBlock>
-          </div>
+          <Terminal label="~/.claude/CLAUDE.md" wrap>
+            <span style={{ color: SOL.blue }}>## Memory{"\n\n"}</span>
+            <span style={{ color: SOL.base1 }}>Past conversations hold the decisions and prior work you need.{"\n"}Search them when starting a task.{"\n\n"}</span>
+            <Cmd>cast search &quot;auth&quot; -s 7d</Cmd>
+            <Cmd>cast search &quot;file:src/auth.ts&quot;</Cmd>
+            <Cmd>cast ask &quot;why did we use Convex?&quot;</Cmd>
+            <Cmd>cast blame src/auth.ts</Cmd>
+          </Terminal>
         </div>
       </section>
 
       {/* CTA */}
       <section className="max-w-4xl mx-auto px-6 pb-20">
-        <div className="bg-stone-900 rounded-2xl p-12 text-center">
-          <h2 className="text-3xl font-bold text-white mb-4">
-            See, steer, and remember
+        <div className="rounded-2xl p-8 sm:p-12 text-center" style={{ backgroundColor: SOL.base03 }}>
+          <h2 className="text-3xl font-bold mb-4 font-mono" style={{ color: SOL.base3 }}>
+            Bring your agents to work
           </h2>
-          <p className="text-lg text-stone-400 mb-8 max-w-xl mx-auto">
-            Every agent conversation, recorded and searchable. Every live session, steerable from anywhere. Any agent, any machine -- free for individuals.
+          <p className="text-lg mb-8 max-w-xl mx-auto" style={{ color: SOL.base0 }}>
+            One workspace for your team and every agent it runs. Free for individuals, MIT licensed, self-hostable.
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <Link href="/signup">
-              <Button size="lg" className="bg-white text-stone-900 hover:bg-stone-100 text-base px-8 h-12 font-medium">
+              <Button size="lg" className="bg-[#fdf6e3] text-[#002b36] hover:bg-[#eee8d5] text-base px-8 h-12 font-medium">
                 Get started free
               </Button>
             </Link>
-            <Link href="https://github.com/codecast-sh/features" target="_blank">
-              <Button size="lg" variant="outline" className="border-stone-600 bg-transparent text-white hover:bg-stone-800 hover:text-white text-base px-8 h-12 font-medium">
+            <Link href={SITE_LINKS.githubRepo} target="_blank">
+              <Button size="lg" variant="outline" className="border-[#586e75] bg-transparent text-white hover:bg-[#073642] hover:text-white text-base px-8 h-12 font-medium">
                 View on GitHub
               </Button>
             </Link>

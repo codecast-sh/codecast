@@ -186,19 +186,7 @@ function matchRoute(path: string): { component: React.LazyExoticComponent<any>; 
   return null;
 }
 
-/**
- * One route, rendered as a pane. `navigate` makes the pane self-routing (the
- * TabParamsCtx contract): with it set, `useRouter().push` from inside re-points
- * this pane instead of moving the tab.
- */
-export function RoutePane({
-  tabId,
-  path,
-  isActive,
-  isVisible,
-  navigate,
-  leafId,
-}: {
+interface PaneScope {
   tabId: string;
   path: string;
   isActive: boolean;
@@ -208,7 +196,12 @@ export function RoutePane({
   /** Set when this pane is a stage leaf: a page that draws its own header
    *  hosts the pane's close and expand controls (components/browser). */
   leafId?: string;
-}) {
+}
+
+/** The TabParamsCtx value for one pane, and the route it matched. Every pane
+ *  provides it, a route pane here and a session pane in the stage, so
+ *  useTabActive answers for the pane a page sits in. */
+export function usePaneScope({ tabId, path, isActive, isVisible, navigate, leafId }: PaneScope) {
   const matched = useMemo(() => matchRoute(path), [path]);
   const ctxValue = useMemo(() => {
     return {
@@ -221,6 +214,16 @@ export function RoutePane({
       leafId,
     };
   }, [tabId, path, matched, isActive, isVisible, navigate, leafId]);
+  return { matched, ctxValue };
+}
+
+/**
+ * One route, rendered as a pane. `navigate` makes the pane self-routing (the
+ * TabParamsCtx contract): with it set, `useRouter().push` from inside re-points
+ * this pane instead of moving the tab.
+ */
+export function RoutePane(props: PaneScope) {
+  const { matched, ctxValue } = usePaneScope(props);
 
   if (!matched) return null;
   const Component = matched.component;

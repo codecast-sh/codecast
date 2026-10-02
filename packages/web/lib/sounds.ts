@@ -3,6 +3,7 @@ import { isNotificationLeader, isVoiceHost } from "./desktop";
 import { agentAlertsSuppressed, deliverAlert, reportAlertError } from "./notificationDelivery";
 import type { CueSpec } from "./cueSpec";
 import {
+  DORMANT_SETTLE,
   KILL_DOOR,
   STASH_AWAY,
   WALKIE_AWAY,
@@ -210,6 +211,11 @@ export function soundDismiss() {
 export function soundKill() {
   if (!isEnabled("ui")) return;
   playCue(KILL_DOOR);
+}
+
+export function soundDormant() {
+  if (!isEnabled("ui")) return;
+  playCue(DORMANT_SETTLE);
 }
 
 // A chat message that raised a toast. One sound for every chat toast, quiet

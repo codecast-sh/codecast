@@ -14,8 +14,10 @@
   --cc-green: color-mix(in oklab, var(--cc-green-fill) 82%, var(--sol-text));
   --cc-green-ink: color-mix(in oklab, var(--cc-green-fill) var(--cc-ink), var(--sol-text));
   --cc-yellow-ink: color-mix(in oklab, var(--sol-yellow) var(--cc-ink), var(--sol-text));
-  --cc-red-ink: color-mix(in oklab, var(--sol-red) calc(var(--cc-ink) + 16%), var(--sol-text));
-  --cc-blue-ink: color-mix(in oklab, var(--sol-blue) calc(var(--cc-ink) + 12%), var(--sol-text));
+  /* Red and blue are darker than green and yellow in light themes and dimmer
+     in dark ones, so one fixed mix clears 4.5:1 in both. */
+  --cc-red-ink: color-mix(in oklab, var(--sol-red) 74%, var(--sol-text));
+  --cc-blue-ink: color-mix(in oklab, var(--sol-blue) 74%, var(--sol-text));
 }
 .change-card, .change-card-answer {
   --cc-gap: 1.25rem; color: var(--sol-text-muted); font-size: 13px;

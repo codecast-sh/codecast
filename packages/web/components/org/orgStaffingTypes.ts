@@ -168,8 +168,8 @@ import { roleIdentity, type RoleIdentity } from "@codecast/shared/contracts/orgI
 export { roleIdentity, type RoleIdentity };
 
 /** How a role is named on every web surface (S30): its given name, with its
- *  title (and a chief's reach) as the subtitle. The tree names teams, so a
- *  chief for a team reads "Chief of Staff, <team>". */
-export function roleWords(role: { _id: string; name: string; handle: string; avatar?: string | null; given_name?: string | null; chief?: any; scope_type?: "team" | "user"; team_id?: string }, teamName?: string | null): RoleIdentity {
+ *  title (and an assistant's reach) as the subtitle. The tree names teams, so an
+ *  assistant for a team reads "Executive Assistant, <team>". */
+export function roleWords(role: { _id: string; name: string; handle: string; avatar?: string | null; given_name?: string | null; assistant?: any; scope_type?: "team" | "user"; team_id?: string }, teamName?: string | null): RoleIdentity {
   return roleIdentity(role, { teamName: teamName ?? null });
 }

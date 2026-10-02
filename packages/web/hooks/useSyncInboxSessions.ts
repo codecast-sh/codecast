@@ -8,7 +8,7 @@ import { warmVisibleSessions } from "./inboxWarm";
 import { toast } from "sonner";
 import { soundIdle } from "../lib/sounds";
 import { useConvexSync } from "./useConvexSync";
-import { useRecoveryPoll } from "./useRecoveryPoll";
+import { INBOX_RECOVERY_STALE_MS, useRecoveryPoll } from "./useRecoveryPoll";
 import { queryWithSignal } from "../lib/queryWithSignal";
 import { useEnsureDispatch } from "./useEnsureDispatch";
 import { useLiveInboxSessions, applyInboxListPayload, LIST_INBOX_SESSIONS_ARGS } from "./useLiveInboxSessions";
@@ -362,7 +362,7 @@ export function useSyncInboxSessions() {
     if (signal.aborted || !applyInboxListPayload(fresh, convex)) return;
     warm();
     lastSyncRef.current = Date.now();
-  }, [convex, syncTable, warm]), 15_000);
+  }, [convex, syncTable, warm]), INBOX_RECOVERY_STALE_MS);
 
   // Liveness can stall independently of the base list — recover it on the same
   // cadence so a frozen subscription doesn't leave every session reading a stale
@@ -371,7 +371,7 @@ export function useSyncInboxSessions() {
     const fresh: any = await queryWithSignal(convex, api.conversations.sessionsLiveness, { _probe: Date.now() }, signal);
     if (signal.aborted || !applyMineLivenessPayload(fresh)) return;
     lastLivenessSyncRef.current = Date.now();
-  }, [convex]), 15_000);
+  }, [convex]), INBOX_RECOVERY_STALE_MS);
 
   // currentUser carries daemon_last_seen — the input to the CLI-offline banner.
   // Its subscription stalls independently of listInboxSessions (sessions can

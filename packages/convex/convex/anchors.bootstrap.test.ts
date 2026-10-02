@@ -48,9 +48,9 @@ describe("a role's opening message", () => {
     expect(isBootstrapPrompt(m)).toBe(true);
   });
 
-  test("a chief's is the right hand's, built from its reach (org-staffing.md S30)", () => {
-    const m = bootstrapMessage({ name: "Chief of Staff", scopeType: "user", scopeLabel: "personal", ownerName: "Ashot", role: { handle: "chief-of-staff", scopeNames: [], parentName: "Ashot", startsOnItsOwn: true, chiefOpening: "You are Ada, Ashot's Chief of Staff for everything Ashot works on." } });
-    expect(m.startsWith("You are Ada, Ashot's Chief of Staff")).toBe(true);
+  test("an assistant's is the right hand's, built from its reach (org-staffing.md S30)", () => {
+    const m = bootstrapMessage({ name: "Executive Assistant", scopeType: "user", scopeLabel: "personal", ownerName: "Ashot", role: { handle: "executive-assistant", scopeNames: [], parentName: "Ashot", startsOnItsOwn: true, assistantOpening: "You are Ada, Ashot's Executive Assistant for everything Ashot works on." } });
+    expect(m.startsWith("You are Ada, Ashot's Executive Assistant")).toBe(true);
     expect(m).toContain("Read `cast brief` now, post a one-line hello, then stand by.");
     expect(isBootstrapPrompt(m)).toBe(true);
   });

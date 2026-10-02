@@ -12,6 +12,7 @@ import { ConversationUnavailable } from "../../../components/ConversationUnavail
 import { ConversationDiffLayout } from "../../../components/ConversationDiffLayout";
 import type { ConversationData } from "../../../components/conversation/types";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
+import { LogoMark } from "../../../components/Logo";
 import { useConversationMessages } from "../../../hooks/useConversationMessages";
 import { useInboxStore, isConvexId } from "../../../store/inboxStore";
 import { isForeignSession } from "../../../lib/liveEntities";
@@ -116,6 +117,7 @@ function GuestConversationView({
     useInboxStore.setState({ pendingNavigateId: null, pendingScrollToMessageId: null, pendingScrollToMessageTimestamp: null, pendingHighlightQuery: null });
     if (msgId) setJumpTargetId(msgId);
   }, [pendingNavigateId, id]);
+  // Opens on the first page: a share link reads from the beginning.
   const {
     conversation,
     hasMoreAbove,
@@ -129,7 +131,25 @@ function GuestConversationView({
     jumpToTimestamp,
     effectiveTargetMessageId,
     isJumpingToTarget,
-  } = useConversationMessages(id, jumpTargetId ?? targetMessageId, highlightQuery);
+  } = useConversationMessages(id, jumpTargetId ?? targetMessageId, highlightQuery, undefined, undefined, true);
+
+  // The guest frame has no app chrome, so the header carries the way in: the
+  // mark home, and sign-in back to this same conversation.
+  const [chrome] = useState(() => ({
+    lead: (
+      <a href="/" aria-label="codecast" className="flex-shrink-0 opacity-80 hover:opacity-100 transition-opacity">
+        <LogoMark size={18} />
+      </a>
+    ),
+    end: (
+      <a
+        href={`/login?return_to=${encodeURIComponent(window.location.pathname + window.location.search)}`}
+        className="ml-1 text-[11px] font-medium px-2.5 py-0.5 rounded-full bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/25 transition-colors whitespace-nowrap"
+      >
+        Sign in
+      </a>
+    ),
+  }));
 
   if (!conversation) return <ConversationLoadingSkeleton id={id} />;
 
@@ -151,6 +171,8 @@ function GuestConversationView({
             onJumpToTimestamp={jumpToTimestamp}
             isOwner={false}
             guest
+            headerLeft={chrome.lead}
+            headerEnd={chrome.end}
             showMessageInput={false}
             targetMessageId={effectiveTargetMessageId}
             isJumpingToTarget={isJumpingToTarget}

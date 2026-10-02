@@ -12,12 +12,15 @@ async function verifyHireFlow() {
   Object.defineProperty(navigator, "clipboard", { value: { writeText: async (text: string) => { copied.push(text); } } });
   const { mock } = await import("bun:test");
   const project = { _id: "project-1", title: "Product", workspace: "team:fixture-team", status: "active", task_counts: { total: 0, done: 0, in_progress: 0 }, plan_count: 0, doc_count: 0, active_plan_count: 0, created_at: 1, updated_at: 1 };
-  mock.module("../../hooks/useWorkspaceCollection", () => ({ useWorkspaceCollection: (key: string) => key === "projects" ? [project] : [] }));
+  // The hook module's other exports stay real: a mock that names one export drops the rest for every importer in the graph.
+  const realWorkspace = { ...(await import("../../hooks/useWorkspaceCollection")) };
+  mock.module("../../hooks/useWorkspaceCollection", () => ({ ...realWorkspace, useWorkspaceCollection: (key: string) => key === "projects" ? [project] : [] }));
   mock.module("../../hooks/useScopeQueries", () => ({ useScopeSummary: () => ({ data: undefined }) }));
   // The form's other server read: what the new role would take over (R1).
   mock.module("../../hooks/useTakeoverPreviews", () => ({ useTakeoverPreviews: () => ({ byKey: {}, ready: true }) }));
   // The template reads and writes (org-hire.md H3): one catalog entry, and a post that records the spec.
   const proposed: any[] = [];
+  const learningSet: boolean[] = []; let learningOn = false; const lessonRows: any[] = [];
   const manifest = { schemaVersion: 2, id: "growth", version: "2.0.0", name: "CMO", description: "One project CMO", role: { name: "CMO", handle: "{{instance}}-cmo", charter: "c.md", caps: { hands_per_day: 4, wakes_per_day: 12, tokens_per_day: 200000 } }, inputs: [{ key: "product.domain", label: "Apex domain", kind: "string", required: true }, { key: "accounts.ads", label: "Ads credentials", kind: "secret" }], authority: [{ id: "site-write", kind: "write", label: "Ship pages" }], setup: [{ id: "sc", title: "Verify the domain", who: "human" }], routines: [{ id: "weekly", title: "Weekly", every: "7d", prompt: "w.md" }] };
   const catalog = [
     { template_id: "eng-lead", workspace: "codecast", name: "Engineering Lead", description: "Leads one project", latest: { version: "1.0.0", digest: "e".repeat(64) }, latest_status: "stable", installable: true, asks: { inputs: 0, secrets: 0, authority: 0, setup: 0, routines: 1 }, manifest: { ...manifest, id: "eng-lead", name: "Engineering Lead", inputs: [], authority: [], setup: [], role: { ...manifest.role, handle: "{{instance}}-eng" } } },
@@ -28,7 +31,9 @@ async function verifyHireFlow() {
   mock.module("../../hooks/useTemplateHire", () => ({
     useTemplateCatalog: () => ({ templates: catalog, ready: true }),
     useTemplateInstance: () => ({ instance: null, ready: true }),
-    useTemplateActions: () => ({ propose: async (spec: any) => { proposed.push(spec); return { short_id: "op-9", link: "/org?proposal=op-9" }; }, markSetup: async () => {}, activate: async () => {}, requestBind: async () => ({}) }),
+    useTemplateActions: () => ({ propose: async (spec: any) => { proposed.push(spec); return { short_id: "op-9", link: "/org?proposal=op-9" }; }, markSetup: async () => {}, activate: async () => {}, requestBind: async () => ({}), setLearning: async (_team: string | undefined, enabled: boolean) => { learningSet.push(enabled); learningOn = enabled; } }),
+    useTemplateLearning: () => ({ learning: { enabled: learningOn, can_change: true, changed_by: null }, ready: true }),
+    useInstanceLessons: () => ({ lessons: lessonRows, ready: true }),
     sealSecret: async () => ({}),
   }));
   const React = await import("react");
@@ -89,6 +94,11 @@ async function verifyHireFlow() {
   assert.equal(document.querySelector("[data-hire-stage]")!.getAttribute("data-hire-stage"), "form");
   assert.ok(document.querySelector('[data-template-chosen="growth"]'));
   assert.equal(button("Propose the hire").disabled, true);
+  // The learning switch (H12) meets the person here too, off, with its one sentence; a flip is one write.
+  assert.equal(document.querySelector("[data-template-learning]")!.getAttribute("data-template-learning"), "false");
+  assert.match(document.querySelector("[data-template-learning]")!.textContent!, /generalized lessons about the template: never transcripts, quotes, names, customer data or code/);
+  await act(async () => document.querySelector<HTMLInputElement>('[data-template-learning] input[role="switch"]')!.click());
+  assert.deepEqual(learningSet, [true]);
   // Back to the gallery and forward again keeps nothing half typed.
   await act(async () => document.querySelector<HTMLButtonElement>("[data-template-back]")!.click());
   assert.ok(document.querySelector("[data-template-gallery]"));
