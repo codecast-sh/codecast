@@ -1097,9 +1097,16 @@ setInterval(() => {
 // Debugger and tab plumbing
 // --------------------------------------------------------------------------
 
+// Events no client reads, never relayed. A websocket frame event carries the
+// whole frame: a Convex app tab streams megabytes a second of them, and
+// forwarding them queued every command reply behind traffic nobody wanted
+// (2026-10-01). The host drops the same set (bridge/frames.ts UNRELAYED_EVENTS).
+const UNRELAYED_EVENTS = new Set(["Network.webSocketFrameReceived", "Network.webSocketFrameSent"]);
+
 chrome.debugger.onEvent.addListener((source, method, params) => {
   // A navigation tore every context down, our world with it.
   if (method === "Runtime.executionContextsCleared" && source.tabId) worlds.delete(source.tabId);
+  if (UNRELAYED_EVENTS.has(method)) return;
   if (source.tabId && attached.has(source.tabId)) {
     send({ op: "event", tabId: source.tabId, method, params: params || {} });
   }
