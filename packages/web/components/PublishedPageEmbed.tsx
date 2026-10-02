@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation } from "convex/react";
 import Link from "next/link";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -17,6 +17,7 @@ import { SNIPPET_CATALOG } from "@codecast/shared/contracts";
 import { snippetEnabledOn } from "../lib/newSnippets";
 import { ClaudeIcon } from "./BrandIcons";
 import { useDevices } from "./DeviceBadge";
+import { HeightGrip, savedGripHeight } from "./HeightGrip";
 
 const api = _api as any;
 
@@ -197,6 +198,9 @@ export function PublishedPageActions({ slug, expanded, onToggleExpand }: {
 
 const EMBED_HEIGHT = 420;
 const EMBED_HEIGHT_EXPANDED = "70vh";
+// The frame height a reader drags to, kept across embeds and reloads.
+const EMBED_HEIGHT_KEY = "codecast.pageEmbed.height";
+const EMBED_MIN_HEIGHT = 120;
 
 /**
  * Block-level inline embed of a published page: a titled card framing the
@@ -213,6 +217,13 @@ export function PublishedPageEmbed({ slug, caption, height }: {
 }) {
   const meta = usePageMeta(slug);
   const [expanded, setExpanded] = useState(false);
+  // A given height (a slice inside a decision card) wins over the reader's
+  // saved one until they drag this frame.
+  const [dragged, setDragged] = useState(() => height ?? savedGripHeight(EMBED_HEIGHT_KEY, EMBED_MIN_HEIGHT) ?? EMBED_HEIGHT);
+  const onResized = useCallback((h: number) => {
+    setDragged(h);
+    setExpanded(false);
+  }, []);
   const frameRef = useRef<HTMLIFrameElement>(null);
   const { theme, onLoad } = useFrameTheme(frameRef);
   // The theme at mount rides the address so the first paint already matches;
@@ -252,9 +263,16 @@ export function PublishedPageEmbed({ slug, caption, height }: {
         src={src}
         onLoad={onLoad}
         className="w-full bg-sol-card"
-        style={{ height: expanded ? EMBED_HEIGHT_EXPANDED : (height ?? EMBED_HEIGHT) }}
+        style={{ height: expanded ? EMBED_HEIGHT_EXPANDED : dragged }}
         sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
         title={title}
+      />
+      <HeightGrip
+        target={frameRef}
+        storageKey={EMBED_HEIGHT_KEY}
+        min={EMBED_MIN_HEIGHT}
+        onResized={onResized}
+        className="border-t border-sol-border bg-sol-bg-alt"
       />
     </PageCard>
   );

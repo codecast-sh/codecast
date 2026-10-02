@@ -84,7 +84,7 @@ test("the band portals into a slot right under the reference's paragraph and the
   expect(content.querySelector("button")?.getAttribute("aria-pressed")).toBe("true");
   // The grip is there for the resize; the bar above, the header strip and
   // the foot close. The small Open link in the bar does not close.
-  expect(band.querySelector(".object-reveal__grip-bar")).not.toBeNull();
+  expect(band.querySelector(".object-reveal__grip .height-grip__bar")).not.toBeNull();
   expect(band.querySelectorAll(".object-reveal__open").length).toBe(1);
   expect(band.querySelector(".object-reveal__open-beside")?.getAttribute("title")).toBe("Open beside");
   expect(band.querySelector(".object-reveal__frame")?.firstElementChild?.classList.contains("object-reveal__strip")).toBe(true);

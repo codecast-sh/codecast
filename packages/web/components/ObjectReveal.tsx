@@ -33,6 +33,7 @@ import { openIn } from "../lib/openIntent";
 import { useRouter } from "next/navigation";
 import { useTabContext } from "../lib/tabParams";
 import { cssZoomOf } from "../lib/cssZoom";
+import { HeightGrip, maxGripHeight, savedGripHeight, scrollParentOf } from "./HeightGrip";
 import { useInboxStore } from "../store/inboxStore";
 import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
 import { useEventListener } from "../hooks/useEventListener";
@@ -189,17 +190,9 @@ export function RevealOpenLink({
   );
 }
 
-/**
- * The surface the band scrolls with and takes its height from: the nearest
- * scrolling ancestor — the transcript feed, the chat list, a page's main scroll.
- */
-function revealBounds(el: HTMLElement): HTMLElement | null {
-  for (let n = el.parentElement; n; n = n.parentElement) {
-    const o = getComputedStyle(n).overflowY;
-    if (o === "auto" || o === "scroll") return n;
-  }
-  return null;
-}
+// The surface the band scrolls with and takes its height from: the nearest
+// scrolling ancestor (the transcript feed, the chat list, a page's main scroll).
+const revealBounds = scrollParentOf;
 
 /**
  * What the band spans side to side: a column inside the scroller that opts in
@@ -215,20 +208,9 @@ function revealSpan(el: HTMLElement, bounds: HTMLElement): HTMLElement {
 // until they drag, it is a share of the scrolling surface.
 const HEIGHT_KEY = "codecast.reveal.height";
 const MIN_HEIGHT = 160;
-function savedHeight(): number | null {
-  try {
-    const n = Number(localStorage.getItem(HEIGHT_KEY));
-    return n >= MIN_HEIGHT ? n : null;
-  } catch {
-    return null;
-  }
-}
-// A band never outgrows the scrolling surface, so its top strip (the close)
-// and its page fit in one view.
-const maxBandHeight = (bounds: HTMLElement) => Math.max(MIN_HEIGHT, bounds.clientHeight - 24);
 function bandHeight(bounds: HTMLElement): number {
-  const saved = savedHeight();
-  return Math.min(maxBandHeight(bounds), saved ?? Math.round(bounds.clientHeight * 0.6));
+  const saved = savedGripHeight(HEIGHT_KEY, MIN_HEIGHT);
+  return Math.min(maxGripHeight(bounds, MIN_HEIGHT), saved ?? Math.round(bounds.clientHeight * 0.6));
 }
 
 // Full bleed by measurement, not by CSS math: the band sits under an unknown
@@ -269,51 +251,6 @@ function useFullBleed(ref: React.RefObject<HTMLDivElement | null>) {
       if (raf) cancelAnimationFrame(raf);
     };
   }, [ref]);
-}
-
-/** Drag the grip under the frame to resize the band; the height persists. */
-function useResizeGrip(ref: React.RefObject<HTMLDivElement | null>) {
-  return useCallback(
-    (e: React.PointerEvent<HTMLDivElement>) => {
-      const el = ref.current;
-      if (!el || e.button !== 0) return;
-      e.preventDefault();
-      e.stopPropagation();
-      const grip = e.currentTarget;
-      grip.setPointerCapture?.(e.pointerId);
-      const zoom = cssZoomOf(el);
-      const startY = e.clientY;
-      const startH = el.getBoundingClientRect().height / zoom;
-      const bounds = revealBounds(el);
-      const max = bounds ? maxBandHeight(bounds) : Infinity;
-      let h = startH;
-      el.dataset.resizing = "";
-      const move = (ev: PointerEvent) => {
-        const top = el.getBoundingClientRect().top;
-        h = Math.max(MIN_HEIGHT, Math.min(max, startH + (ev.clientY - startY) / zoom));
-        el.style.height = `${Math.round(h)}px`;
-        // The grip is the bottom edge: keep the top of the band where it was
-        // so a drag moves the bottom, not the sentence the band opened under.
-        if (bounds) {
-          const drift = (el.getBoundingClientRect().top - top) / zoom;
-          if (Math.abs(drift) >= 1) bounds.scrollTop += drift;
-        }
-      };
-      const up = () => {
-        grip.removeEventListener("pointermove", move);
-        grip.removeEventListener("pointerup", up);
-        grip.removeEventListener("pointercancel", up);
-        delete el.dataset.resizing;
-        try {
-          localStorage.setItem(HEIGHT_KEY, String(Math.round(h)));
-        } catch {}
-      };
-      grip.addEventListener("pointermove", move);
-      grip.addEventListener("pointerup", up);
-      grip.addEventListener("pointercancel", up);
-    },
-    [ref],
-  );
 }
 
 const reducedMotion = () =>
@@ -466,7 +403,6 @@ function RevealBand({ reveal }: { reveal: OpenReveal }) {
     el.animate([{ height: el.style.height, opacity: 1 }, { height: "0px", opacity: 0 }], { duration: 180, easing: "cubic-bezier(0.4, 0, 1, 1)", fill: "forwards" })
       .finished.then(done, done);
   }, [reveal.anchor]);
-  const onGripDown = useResizeGrip(ref);
   // The header strip and the foot are both the close: one click anywhere on
   // either. Enter and Space do the same from the keyboard.
   const closeKeys = useCallback((e: React.KeyboardEvent) => {
@@ -612,16 +548,7 @@ function RevealBand({ reveal }: { reveal: OpenReveal }) {
       </div>
       {/* The grip is only a grip: the rounded bar under the frame, in the
           gutter, always drawn so the resize reads before the pointer finds it. */}
-      <div
-        className="object-reveal__grip"
-        onPointerDown={onGripDown}
-        role="separator"
-        aria-orientation="horizontal"
-        aria-label="Drag to resize"
-        title="Drag to resize"
-      >
-        <span className="object-reveal__grip-bar" />
-      </div>
+      <HeightGrip target={ref} storageKey={HEIGHT_KEY} min={MIN_HEIGHT} className="object-reveal__grip" />
     </div>
   );
 }
