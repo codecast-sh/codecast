@@ -1,18 +1,15 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';import path from 'node:path';
 import {mock} from 'bun:test';
-import {EventEmitter} from 'node:events';
 import {Database as FixtureDatabase} from 'bun:sqlite';
-import {functionBlock,blockAt} from '../../test-helpers/sourceRegion.js';
 import {configureDaemonWorkers,closeDaemonWorkers,scanWorkerHost} from '../bridge.js';
-import {cursorTranscriptSessionId} from '../../cursorTranscriptWatcher.js';
+import {pollUntil} from '../../test-helpers/pollUntil.js';
 const FixtureSqlite=FixtureDatabase;
 const enabled=process.argv[2]==='true', home=process.env.HOME!;
 let opens=0;
 mock.module('bun:sqlite',()=>({Database:class extends FixtureDatabase {constructor(...args:ConstructorParameters<typeof FixtureDatabase>){super(...args);opens++;}}}));
 const d=await import('../../daemon.js');
 const {CursorWatcher}=await import('../../cursorWatcher.js');
-const {isPathExcluded,isProjectAllowedToSync}=await import('../../syncScope.js');
 const main=path.resolve(import.meta.dir,'../../main.ts');
 await configureDaemonWorkers(enabled,{}, {invocation:{command:process.execPath,args:[main,'_worker','scan']}});
 const storage=(h:string)=>path.join(h,process.platform==='darwin'?'Library/Application Support/Cursor':'.config/Cursor','User/workspaceStorage');
@@ -75,32 +72,35 @@ try {
  c.db.run("INSERT INTO ItemTable VALUES('workbench.panel.aichat.view.aichat.chatdata','{}')");process.env.HOME=second;
  await watcher.pollWorkspaces(storage(second));assert.equal(events.length,6);assert.equal(events[5].workspacePath,c.workspace);assert.equal(events[5].eventType,'add');process.env.HOME=home;
  fs.rmSync(emptyDir,{recursive:true,force:true});fs.rmSync(brokenDir,{recursive:true,force:true});
- const source=fs.readFileSync(path.resolve(import.meta.dir,'../../daemon.ts'),'utf8');
- const eventSource=functionBlock(source,'handleCursorTranscriptEvent').text;
- const watchdogBlock=blockAt(source,source.indexOf('    await runBounded(staleCursorTranscriptFiles,')).text;
- assert.match(eventSource,/await findWorkspacePathForCursorConversation/);assert.match(watchdogBlock,/await findWorkspacePathForCursorConversation/);
- const transpiler=new Bun.Transpiler({loader:'ts',target:'bun'});
+ // Both real callers place a Cursor transcript with findWorkspacePathForCursorConversation
+ // and gate it with transcriptScopeRefusal: the live watcher's event (its retry owner
+ // runs the pass) and the watchdog's stale-file pass. Each must admit the same files,
+ // and each must refuse to guess when the workspace database cannot be read.
  const config:any={sync_mode:'selected',sync_projects:[moved],excluded_paths:b.workspace,user_id:'fixture'};
  const processed:string[]=[];
- const common:any={path,config,cursorTranscriptSessionId,findWorkspacePathForCursorConversation:d.findWorkspacePathForCursorConversation,isPathExcluded,isProjectAllowedToSync,log:()=>{},processCursorTranscriptFile:async(_file:string,id:string)=>{processed.push(id);},syncService:{},conversationCache:{},retryQueue:{},pendingMessages:{},updateState:()=>{}};
- const eventCode=transpiler.transformSync(`let lastWatcherEventTime=0;${eventSource}\nreturn handleCursorTranscriptEvent;`);
- const event=new Function(...Object.keys(common),'readDaemonState','isSyncPaused','cursorTranscriptSyncs','transcriptRetryOwners','MESSAGE_SYNC_DEBOUNCE',eventCode)(...Object.values(common),()=>({}),()=>false,new Map(),{create:(_map:unknown,_key:unknown,_descriptor:unknown,run:()=>Promise<void>)=>({invalidate(){pending.push(run());}})},0);
- const pending:Promise<void>[]=[];
- const watchdogBody=watchdogBlock.slice(watchdogBlock.indexOf('async (filePath) => {')+'async (filePath) => {'.length,watchdogBlock.lastIndexOf('    },'));
- const watchdog=new Function(...Object.keys(common),'deps',transpiler.transformSync(`return async function(filePath:string){${watchdogBody}\n};`))(...Object.values(common),{...common,updateState:()=>{}});
- for(const caller of [async(id:string)=>{await event({filePath:'/fixture/'+id+'.txt',sessionId:id});await Promise.all(pending.splice(0));},async(id:string)=>watchdog('/fixture/'+id+'.txt')]) {
-  processed.length=0;
-  for(const id of ['allowed','excluded','missing'])await caller(id);
-  assert.deepEqual(processed,['allowed']);
-  config.sync_mode='all';processed.length=0;
-  for(const id of ['allowed','excluded','missing'])await caller(id);
-  assert.deepEqual(processed,['allowed','missing']);config.sync_mode='selected';
-  fs.chmodSync(a.file,0);await assert.rejects(caller('allowed'));fs.chmodSync(a.file,0o644);
+ const syncService:any=new Proxy({addMessages:async(p:any)=>{processed.push(p.conversationId.replace('conv-',''));return {ids:p.messages.map((_:any,i:number)=>String(i))};}},{get:(target,key)=>key in target?(target as any)[key]:async()=>true});
+ const deps:any={config,syncService,conversationCache:{allowed:'conv-allowed',excluded:'conv-excluded',missing:'conv-missing'},retryQueue:{hasPendingConversation:()=>false,getPendingOperations:()=>[],add:()=>'memory'},pendingMessages:{},titleCache:{},updateState:()=>{}};
+ let round=0;
+ const transcript=(id:string)=>{const filePath=path.join(home,'transcripts',String(round),id+'.txt');fs.mkdirSync(path.dirname(filePath),{recursive:true});fs.writeFileSync(filePath,'user:\nhello '+id+'\n');return filePath;};
+ const syncs=new Map<string,any>();
+ const event=async(id:string)=>{const filePath=transcript(id);await d.handleCursorTranscriptEvent({filePath,sessionId:id,eventType:'add'},syncs,deps);const sync=syncs.get(filePath);if(sync){await pollUntil(()=>processed.includes(id),'Cursor transcript pass',{ms:10_000,every:10});sync.stop();syncs.delete(filePath);}};
+ const watchdog=(id:string)=>d.syncStaleCursorTranscript(transcript(id),deps);
+ for(const caller of [event,watchdog]) {
+  const run=async()=>{round++;processed.length=0;for(const id of ['allowed','excluded','missing'])await caller(id);return [...processed].sort();};
+  assert.deepEqual(await run(),['allowed']);
+  config.sync_mode='all';assert.deepEqual(await run(),['allowed','missing']);config.sync_mode='selected';
  }
- const registration=blockAt(source,source.indexOf('  cursorTranscriptWatcher.on("session",')).text;
- const emitter=new EventEmitter(),eventErrors:any[]=[];let eventPending:Promise<void>|undefined;
- new Function('cursorTranscriptWatcher','handleCursorTranscriptEvent','logError',transpiler.transformSync(registration))(emitter,(e:any)=>eventPending=event(e),(...args:any[])=>eventErrors.push(args));
- fs.chmodSync(a.file,0);emitter.emit('session',{filePath:'/fixture/allowed.txt',sessionId:'allowed'});await eventPending!.catch(()=>{});fs.chmodSync(a.file,0o644);assert.equal(eventErrors.length,1);
+ // Unreadable: the watchdog's pass rejects, and the live event, whose emitter has
+ // no one to throw to, logs the failure instead of syncing or leaving it unhandled.
+ const daemonLog=path.join(process.env.TMPDIR||'/tmp','codecast-test-daemon.log');
+ const logged=()=>fs.existsSync(daemonLog)?fs.readFileSync(daemonLog,'utf8'):'';
+ fs.chmodSync(a.file,0);
+ try{
+  round++;processed.length=0;await assert.rejects(watchdog('allowed'));
+  const unreadable=transcript('allowed');await d.handleCursorTranscriptEvent({filePath:unreadable,sessionId:'allowed',eventType:'add'},syncs,deps);
+  assert.ok(logged().includes(`Cursor transcript event failed (${unreadable})`),'event failure reaches logError');
+  assert.equal(syncs.has(unreadable),false);assert.deepEqual(processed,[]);
+ }finally{fs.chmodSync(a.file,0o644);}
  let release!:()=>void,arrived!:()=>void;
  const gate=new Promise<void>(r=>release=r), entered=new Promise<void>(r=>arrived=r);
  if(enabled){const host=scanWorkerHost()!,request=host.request.bind(host);host.request=async(...args:Parameters<typeof host.request>)=>{const value=await request(...args);if((args[1] as any)?.job?.home===home){arrived();await gate;}return value;};restore=()=>{host.request=request;};}

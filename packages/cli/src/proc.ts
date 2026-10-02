@@ -10,6 +10,8 @@
  * signatures are identical, so only the import line changes.
  */
 import * as cp from "node:child_process";
+import * as fs from "node:fs";
+import * as nodePath from "node:path";
 import { routeProbe } from "./workers/bridge.js";
 import { promisify } from "node:util";
 import { SLOW_SYNC_SPAWN_MS, reportSpawnTimeout, timeSync } from "./slowSync.js";
@@ -121,11 +123,109 @@ export async function keychainReadAsync(args: string[], timeoutMs = KEYCHAIN_REA
   }
 }
 
-/** Absolute path `name` resolves to on PATH (or on `pathEnv`), or null when it is not installed. */
+/** Absolute path `name` resolves to on PATH (or on `pathEnv`), or null when it is not installed.
+ *  Windows has no `which`, so there the PATH is walked here (findOnPath). */
 export function whichBin(name: string, pathEnv?: string): string | null {
+  if (process.platform === "win32") return findOnPath(name, pathEnv ?? process.env.PATH ?? process.env.Path ?? "");
   const r = spawnSync("which", [name], { encoding: "utf-8", ...(pathEnv ? { env: { ...process.env, PATH: pathEnv } } : {}) });
   const found = r.status === 0 ? r.stdout.trim() : "";
   return found || null;
+}
+
+/** `which` done by hand: the first directory on `pathEnv` holding `name`, as
+ *  Windows resolves it (each PATHEXT extension tried, `ffmpeg` finding
+ *  `ffmpeg.exe`) or as POSIX does (an executable file). Exported for tests,
+ *  which pass the platform and a fake file check. */
+export function findOnPath(
+  name: string,
+  pathEnv: string,
+  opts: { platform?: NodeJS.Platform; pathext?: string; isFile?: (p: string) => boolean } = {},
+): string | null {
+  const platform = opts.platform ?? process.platform;
+  const win = platform === "win32";
+  const pathLib = win ? nodePath.win32 : nodePath.posix;
+  const isFile =
+    opts.isFile ??
+    ((p: string) => {
+      try {
+        if (!fs.statSync(p).isFile()) return false;
+        if (!win) fs.accessSync(p, fs.constants.X_OK);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+  const exts = win
+    ? ["", ...(opts.pathext ?? process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)]
+    : [""];
+  // A name that already carries its extension (`ffmpeg.exe`) is tried as is.
+  const candidates = (dir: string) => exts.map((ext) => pathLib.join(dir, name + ext));
+  if (name.includes("/") || (win && name.includes("\\"))) return candidates("").find(isFile) ?? null;
+  for (const dir of pathEnv.split(win ? ";" : ":")) {
+    if (!dir) continue;
+    const hit = candidates(dir.replace(/^"(.*)"$/, "$1")).find(isFile);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+// ── Telling a person how to install a tool ────────────────────────────────
+// tmux was the first tool the CLI shells out to that a machine may lack, and
+// grew this per-platform ladder; ffmpeg (`cast call snap`) needs the same
+// answer, so it lives beside whichBin and both read it. A package manager is
+// looked up, never assumed: a Mac without Homebrew gets "install Homebrew,
+// then …" rather than a `brew` command that fails, and a Linux box gets the
+// manager it actually has.
+
+/** PATH as a login shell would have it. Agents and the daemon often start
+ *  with a bare PATH that lacks Homebrew, so a tool installed there would read
+ *  as missing. */
+export const TOOL_PATH =
+  process.platform === "win32"
+    ? process.env.PATH ?? process.env.Path ?? ""
+    : [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(nodePath.delimiter);
+
+/** How to name a package manager in a command a person will paste: by name
+ *  when their PATH has it, by absolute path when only the login shell's does
+ *  (an agent on a bare PATH has /opt/homebrew/bin/brew but no `brew`), null
+ *  when the machine lacks it. */
+function commandName(bin: string): string | null {
+  const found = whichBin(bin, TOOL_PATH);
+  if (!found) return null;
+  return whichBin(bin) ? bin : found;
+}
+
+/** The command that installs `pkg` with a package manager this machine has,
+ *  or null when there is none we know. Runnable as is. */
+export function installCommandFor(pkg: string): string | null {
+  if (process.platform === "darwin") {
+    const brew = commandName("brew");
+    return brew ? `${brew} install ${pkg}` : null;
+  }
+  if (process.platform === "linux") {
+    for (const [bin, args] of [
+      ["apt-get", `install -y ${pkg}`],
+      ["dnf", `install -y ${pkg}`],
+      ["yum", `install -y ${pkg}`],
+      ["pacman", `-S --noconfirm ${pkg}`],
+      ["apk", `add ${pkg}`],
+    ] as const) {
+      const name = commandName(bin);
+      if (name) return `sudo ${name} ${args}`;
+    }
+  }
+  return null;
+}
+
+/** One sentence a person can act on: the install command when there is one,
+ *  otherwise what to do first. `winget` is the package id on Windows, where
+ *  a tool's id rarely matches its name. */
+export function installHintFor(pkg: string, opts: { winget?: string } = {}): string {
+  const cmd = installCommandFor(pkg);
+  if (cmd) return `Install it with: ${cmd}`;
+  if (process.platform === "darwin") return `Install Homebrew (https://brew.sh), then run: brew install ${pkg}`;
+  if (process.platform === "win32" && opts.winget) return `Install it with: winget install ${opts.winget}`;
+  return `Install ${pkg} with your system package manager.`;
 }
 
 /**

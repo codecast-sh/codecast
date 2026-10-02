@@ -71,30 +71,7 @@
           "line_range_start": 1,
           "line_range_end": 99,
           "content": [
-           "# chatdoc",
-           "",
-           "mono-repo, shared code base for client, server, and desktop (desktop is just a thin wrapper on the website)",
-           "",
-           "",
-           "see flags set in common_init that you can use in the code to distinguish between cases.",
-           "",
-           "### in the root directory:",
-           "",
-           "install node",
-           "",
-           "```",
-           "```",
-           "python -m venv .",
-           "source bin/activate",
-           "```",
-           "",
-           "install python 3.9.18",
-           "",
-           "```",
-           "pip install -r requirements.txt",
-           "```",
-           "",
-           "run starlette server:"
+           "// placeholder"
           ],
           "contains_end_of_file": true
          }
@@ -109,10 +86,10 @@
       "pr_message": "### Motivation\n- Add a simple Codecast spike marker to the repository README so the presence of the spike is recorded in the project documentation.\n\n### Description\n- Appended the HTML comment `<!-- codecast spike -->` to the end of `README\u2026",
       "output_diff": {
        "type": "output_diff",
-       "repo_id": "/workspace/chatdoc",
+       "repo_id": "/workspace/example",
        "base_commit_sha": "665c3aa023f2217806d0261adbaa14031c69bf79",
        "preapply_patch_base_commit_sha": null,
-       "diff": "diff --git a/README.md b/README.md\nindex d4f092e725e7f604f4c9ac3c69fd7c2d8393d270..4369eb03eb3f5055d3cf161a6b0d18f4f8d426dd 100644\n--- a/README.md\n+++ b/README.md\n@@ -74,25 +74,26 @@ alias server=\"echo -n -e \\\"\\033]0;NODE SERVER\\007\\\" && cd\u2026",
+       "diff": "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-placeholder\n+placeholder (changed)\n",
        "external_storage_diff": {
         "file_id": "file_000000005724820c80120be9e6cb00a9",
         "ttl": null
@@ -177,7 +154,7 @@
          "agentRole": null,
          "cliVersion": "0.144.0-alpha.4",
          "createdAt": 1790723901,
-         "cwd": "/workspace/chatdoc",
+         "cwd": "/workspace/example",
          "ephemeral": false,
          "extra": null,
          "forkedFromId": null,
@@ -304,7 +281,7 @@
         "item": {
          "content": [
           {
-           "text": "<environment_context>\n  <cwd>/workspace/chatdoc</cwd>\n  <shell>bash</shell>\n  <current_date>2026-09-29</current_date>\n  <timezone>Etc/UTC</timezone>\n  <filesystem><workspace_roots><root>/workspace/chatdoc</root></workspace_roots><permission\u2026",
+           "text": "<environment_context>\n  <cwd>/workspace/example</cwd>\n  <shell>bash</shell>\n  <current_date>2026-09-29</current_date>\n  <timezone>Etc/UTC</timezone>\n  <filesystem><workspace_roots><root>/workspace/example</root></workspace_roots><permission\u2026",
            "type": "input_text"
           }
          ],
@@ -551,7 +528,7 @@
         "item": {
          "call_id": "call_ayIoRAIIes3m1oExyGzdzGXL",
          "id": "ctc_002a1f09118d189c016abc475447c487d1abae6648fb07cfe2",
-         "input": "const r = await tools.exec_command({cmd:\"nl -ba README.md | tail -n 6 && git show --stat --oneline --decorate HEAD && git diff --check HEAD^ HEAD -- README.md && git status --short\",\"workdir\":\"/workspace/chatdoc\",\"yield_time_ms\":10000,\"max_\u2026",
+         "input": "const r = await tools.exec_command({cmd:\"nl -ba README.md | tail -n 6 && git show --stat --oneline --decorate HEAD && git diff --check HEAD^ HEAD -- README.md && git status --short\",\"workdir\":\"/workspace/example\",\"yield_time_ms\":10000,\"max_\u2026",
          "internal_chat_message_metadata_passthrough": {
           "turn_id": "01a0ef76-481e-73a0-9f77-d33e1bd2eedd"
          },
@@ -577,7 +554,7 @@
            "type": "unknown"
           }
          ],
-         "cwd": "/workspace/chatdoc",
+         "cwd": "/workspace/example",
          "durationMs": 0,
          "exitCode": 0,
          "id": "exec-70d75e99-217d-4dbb-8b38-35596850b84b",
@@ -689,14 +666,14 @@
     "pull_request_data": null,
     "created_at": 1790723745.967977,
     "internal_only_rollouts": null,
-    "environment_id": "684103af114c8191883cdf307e30b7b3",
+    "environment_id": "e0000000000000000000000000000001",
     "environment": {
-     "id": "684103af114c8191883cdf307e30b7b3",
+     "id": "e0000000000000000000000000000001",
      "devcontainer": null,
      "machine_id": "wham-public/wham-universal",
-     "label": "ashot/chatdoc",
+     "label": "acme/example",
      "is_pinned": false,
-     "description": "vello.ai workspace for ai and teams",
+     "description": "acme workspace",
      "workspace_dir": "/workspace",
      "agent_network_access": {
       "mode": "on"
@@ -705,7 +682,7 @@
      "github_connector_id": null,
      "enable_gitlab_webhooks": false,
      "repos": [
-      "github-660451227"
+      "github-100000001"
      ],
      "setup": [
       ""
@@ -714,22 +691,22 @@
       ""
      ],
      "repo_map": {
-      "github-660451227": {
+      "github-100000001": {
        "id": "660451227",
-       "name": "chatdoc",
+       "name": "example",
        "owner": {
-        "login": "ashot",
-        "id": 42649,
+        "login": "acme",
+        "id": 10001,
         "type": "User",
         "avatar_url": "",
-        "url": "https://api.github.com/users/ashot"
+        "url": "https://api.github.com/users/acme"
        },
-       "repository_full_name": "ashot/chatdoc",
-       "clone_url": "https://github.com/ashot/chatdoc.git",
+       "repository_full_name": "acme/example",
+       "clone_url": "https://github.com/acme/example.git",
        "default_branch": "main",
-       "git_commits_url": "https://api.github.com/repos/ashot/chatdoc/git/commits{/sha}",
-       "git_refs_url": "https://api.github.com/repos/ashot/chatdoc/git/refs{/sha}",
-       "git_url": "git://github.com/ashot/chatdoc.git",
+       "git_commits_url": "https://api.github.com/repos/acme/example/git/commits{/sha}",
+       "git_refs_url": "https://api.github.com/repos/acme/example/git/refs{/sha}",
+       "git_url": "git://github.com/acme/example.git",
        "visibility": "private",
        "archived": false,
        "allow_auto_merge": false,
@@ -935,30 +912,7 @@
           "line_range_start": 1,
           "line_range_end": 99,
           "content": [
-           "# chatdoc",
-           "",
-           "mono-repo, shared code base for client, server, and desktop (desktop is just a thin wrapper on the website)",
-           "",
-           "",
-           "see flags set in common_init that you can use in the code to distinguish between cases.",
-           "",
-           "### in the root directory:",
-           "",
-           "install node",
-           "",
-           "```",
-           "```",
-           "python -m venv .",
-           "source bin/activate",
-           "```",
-           "",
-           "install python 3.9.18",
-           "",
-           "```",
-           "pip install -r requirements.txt",
-           "```",
-           "",
-           "run starlette server:"
+           "// placeholder"
           ],
           "contains_end_of_file": true
          }
@@ -973,10 +927,10 @@
       "pr_message": "### Motivation\n- Mark the repository README as a \"codecast spike\" by adding a small HTML comment marker to the end of the file to signal the spike state.\n\n### Description\n- Append the single line `<!-- codecast spike -->` to the end of `REA\u2026",
       "output_diff": {
        "type": "output_diff",
-       "repo_id": "/workspace/chatdoc",
+       "repo_id": "/workspace/example",
        "base_commit_sha": "665c3aa023f2217806d0261adbaa14031c69bf79",
        "preapply_patch_base_commit_sha": null,
-       "diff": "diff --git a/README.md b/README.md\nindex d4f092e725e7f604f4c9ac3c69fd7c2d8393d270..4369eb03eb3f5055d3cf161a6b0d18f4f8d426dd 100644\n--- a/README.md\n+++ b/README.md\n@@ -74,25 +74,26 @@ alias server=\"echo -n -e \\\"\\033]0;NODE SERVER\\007\\\" && cd\u2026",
+       "diff": "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-placeholder\n+placeholder (changed)\n",
        "external_storage_diff": {
         "file_id": "file_00000000e17081f7bc6e78b1d7c0f065",
         "ttl": null
@@ -1041,7 +995,7 @@
          "agentRole": null,
          "cliVersion": "0.144.0-alpha.4",
          "createdAt": 1790723898,
-         "cwd": "/workspace/chatdoc",
+         "cwd": "/workspace/example",
          "ephemeral": false,
          "extra": null,
          "forkedFromId": null,
@@ -1168,7 +1122,7 @@
         "item": {
          "content": [
           {
-           "text": "<environment_context>\n  <cwd>/workspace/chatdoc</cwd>\n  <shell>bash</shell>\n  <current_date>2026-09-29</current_date>\n  <timezone>Etc/UTC</timezone>\n  <filesystem><workspace_roots><root>/workspace/chatdoc</root></workspace_roots><permission\u2026",
+           "text": "<environment_context>\n  <cwd>/workspace/example</cwd>\n  <shell>bash</shell>\n  <current_date>2026-09-29</current_date>\n  <timezone>Etc/UTC</timezone>\n  <filesystem><workspace_roots><root>/workspace/example</root></workspace_roots><permission\u2026",
            "type": "input_text"
           }
          ],
@@ -1549,14 +1503,14 @@
     "pull_request_data": null,
     "created_at": 1790723745.968152,
     "internal_only_rollouts": null,
-    "environment_id": "684103af114c8191883cdf307e30b7b3",
+    "environment_id": "e0000000000000000000000000000001",
     "environment": {
-     "id": "684103af114c8191883cdf307e30b7b3",
+     "id": "e0000000000000000000000000000001",
      "devcontainer": null,
      "machine_id": "wham-public/wham-universal",
-     "label": "ashot/chatdoc",
+     "label": "acme/example",
      "is_pinned": false,
-     "description": "vello.ai workspace for ai and teams",
+     "description": "acme workspace",
      "workspace_dir": "/workspace",
      "agent_network_access": {
       "mode": "on"
@@ -1565,7 +1519,7 @@
      "github_connector_id": null,
      "enable_gitlab_webhooks": false,
      "repos": [
-      "github-660451227"
+      "github-100000001"
      ],
      "setup": [
       ""
@@ -1574,22 +1528,22 @@
       ""
      ],
      "repo_map": {
-      "github-660451227": {
+      "github-100000001": {
        "id": "660451227",
-       "name": "chatdoc",
+       "name": "example",
        "owner": {
-        "login": "ashot",
-        "id": 42649,
+        "login": "acme",
+        "id": 10001,
         "type": "User",
         "avatar_url": "",
-        "url": "https://api.github.com/users/ashot"
+        "url": "https://api.github.com/users/acme"
        },
-       "repository_full_name": "ashot/chatdoc",
-       "clone_url": "https://github.com/ashot/chatdoc.git",
+       "repository_full_name": "acme/example",
+       "clone_url": "https://github.com/acme/example.git",
        "default_branch": "main",
-       "git_commits_url": "https://api.github.com/repos/ashot/chatdoc/git/commits{/sha}",
-       "git_refs_url": "https://api.github.com/repos/ashot/chatdoc/git/refs{/sha}",
-       "git_url": "git://github.com/ashot/chatdoc.git",
+       "git_commits_url": "https://api.github.com/repos/acme/example/git/commits{/sha}",
+       "git_refs_url": "https://api.github.com/repos/acme/example/git/refs{/sha}",
+       "git_url": "git://github.com/acme/example.git",
        "visibility": "private",
        "archived": false,
        "allow_auto_merge": false,

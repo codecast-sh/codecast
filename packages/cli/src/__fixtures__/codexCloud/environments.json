@@ -1,11 +1,11 @@
 [
  {
-  "id": "684103af114c8191883cdf307e30b7b3",
+  "id": "e0000000000000000000000000000001",
   "devcontainer": null,
   "machine_id": "wham-public/wham-universal",
-  "label": "ashot/chatdoc",
+  "label": "acme/example",
   "is_pinned": false,
-  "description": "vello.ai workspace for ai and teams",
+  "description": "acme workspace",
   "workspace_dir": "/workspace",
   "agent_network_access": {
    "mode": "on"
@@ -14,7 +14,7 @@
   "github_connector_id": null,
   "enable_gitlab_webhooks": false,
   "repos": [
-   "github-660451227"
+   "github-100000001"
   ],
   "setup": [
    ""
@@ -23,22 +23,22 @@
    ""
   ],
   "repo_map": {
-   "github-660451227": {
+   "github-100000001": {
     "id": "660451227",
-    "name": "chatdoc",
+    "name": "example",
     "owner": {
-     "login": "ashot",
-     "id": 42649,
+     "login": "acme",
+     "id": 10001,
      "type": "User",
      "avatar_url": "",
-     "url": "https://api.github.com/users/ashot"
+     "url": "https://api.github.com/users/acme"
     },
-    "repository_full_name": "ashot/chatdoc",
-    "clone_url": "https://github.com/ashot/chatdoc.git",
+    "repository_full_name": "acme/example",
+    "clone_url": "https://github.com/acme/example.git",
     "default_branch": "main",
-    "git_commits_url": "https://api.github.com/repos/ashot/chatdoc/git/commits{/sha}",
-    "git_refs_url": "https://api.github.com/repos/ashot/chatdoc/git/refs{/sha}",
-    "git_url": "git://github.com/ashot/chatdoc.git",
+    "git_commits_url": "https://api.github.com/repos/acme/example/git/commits{/sha}",
+    "git_refs_url": "https://api.github.com/repos/acme/example/git/refs{/sha}",
+    "git_url": "git://github.com/acme/example.git",
     "visibility": "private",
     "archived": false,
     "allow_auto_merge": false,
@@ -81,10 +81,10 @@
   "enable_docker_in_docker": false
  },
  {
-  "id": "68aa0f315f3c819194a0f17f60453ceb",
+  "id": "e0000000000000000000000000000003",
   "devcontainer": null,
   "machine_id": "wham-public/wham-universal",
-  "label": "ashot/satstudy",
+  "label": "acme/study",
   "is_pinned": false,
   "description": "",
   "workspace_dir": "/workspace",
@@ -95,27 +95,27 @@
   "github_connector_id": null,
   "enable_gitlab_webhooks": false,
   "repos": [
-   "github-1042354562"
+   "github-100000003"
   ],
   "setup": "",
   "maintenance_setup": "",
   "repo_map": {
-   "github-1042354562": {
+   "github-100000003": {
     "id": "1042354562",
-    "name": "satstudy",
+    "name": "study",
     "owner": {
-     "login": "ashot",
-     "id": 42649,
+     "login": "acme",
+     "id": 10001,
      "type": "User",
      "avatar_url": "",
-     "url": "https://api.github.com/users/ashot"
+     "url": "https://api.github.com/users/acme"
     },
-    "repository_full_name": "ashot/satstudy",
-    "clone_url": "https://github.com/ashot/satstudy.git",
+    "repository_full_name": "acme/study",
+    "clone_url": "https://github.com/acme/study.git",
     "default_branch": "main",
-    "git_commits_url": "https://api.github.com/repos/ashot/satstudy/git/commits{/sha}",
-    "git_refs_url": "https://api.github.com/repos/ashot/satstudy/git/refs{/sha}",
-    "git_url": "git://github.com/ashot/satstudy.git",
+    "git_commits_url": "https://api.github.com/repos/acme/study/git/commits{/sha}",
+    "git_refs_url": "https://api.github.com/repos/acme/study/git/refs{/sha}",
+    "git_url": "git://github.com/acme/study.git",
     "visibility": "private",
     "archived": null,
     "allow_auto_merge": false,
@@ -148,15 +148,15 @@
    "post_setup_cache_enabled": true,
    "cache_invalidation_key": ""
   },
-  "etag": "\"a300f868-0000-0200-0000-68aa0f310000\"",
+  "etag": "\"00000000-0000-0000-0000-000000000000\"",
   "enable_authtranslator": false,
   "enable_docker_in_docker": false
  },
  {
-  "id": "6841034c0f14819186ac782974ed93bc",
+  "id": "e0000000000000000000000000000002",
   "devcontainer": null,
   "machine_id": "wham-public/wham-universal",
-  "label": "ashot/vello-workmate",
+  "label": "acme/workmate",
   "is_pinned": false,
   "description": "",
   "workspace_dir": "/workspace",
@@ -167,27 +167,27 @@
   "github_connector_id": null,
   "enable_gitlab_webhooks": false,
   "repos": [
-   "github-878755508"
+   "github-100000002"
   ],
   "setup": "",
   "maintenance_setup": null,
   "repo_map": {
-   "github-878755508": {
+   "github-100000002": {
     "id": "878755508",
-    "name": "vello-workmate",
+    "name": "workmate",
     "owner": {
-     "login": "ashot",
-     "id": 42649,
+     "login": "acme",
+     "id": 10001,
      "type": "User",
      "avatar_url": "",
-     "url": "https://api.github.com/users/ashot"
+     "url": "https://api.github.com/users/acme"
     },
-    "repository_full_name": "ashot/vello-workmate",
-    "clone_url": "https://github.com/ashot/vello-workmate.git",
+    "repository_full_name": "acme/workmate",
+    "clone_url": "https://github.com/acme/workmate.git",
     "default_branch": "main",
-    "git_commits_url": "https://api.github.com/repos/ashot/vello-workmate/git/commits{/sha}",
-    "git_refs_url": "https://api.github.com/repos/ashot/vello-workmate/git/refs{/sha}",
-    "git_url": "git://github.com/ashot/vello-workmate.git",
+    "git_commits_url": "https://api.github.com/repos/acme/workmate/git/commits{/sha}",
+    "git_refs_url": "https://api.github.com/repos/acme/workmate/git/refs{/sha}",
+    "git_url": "git://github.com/acme/workmate.git",
     "visibility": "private",
     "archived": null,
     "allow_auto_merge": false,

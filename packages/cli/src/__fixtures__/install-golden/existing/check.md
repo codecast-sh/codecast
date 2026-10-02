@@ -43,6 +43,6 @@ A tree lists its programs in `.codecast/check.toml` as a `[projects]` table of `
 
 Point each entry at the tsconfig the package's own `typecheck` script runs, not necessarily the plain `tsconfig.json`: a build that narrows `rootDir` often keeps a widened `tsconfig.typecheck.json`, and checking the build config reports hundreds of files-outside-root errors. When a check is red with errors nobody wrote, suspect the entry before the code.
 
-The first ask builds the program (as slow as `tsc`); later asks take seconds. If a pass is still running, ask again rather than starting your own `tsc`. Sessions in one checkout share a watcher and each worktree gets its own. A watcher stops after 45 idle minutes, and a machine keeps at most six, stopping the longest idle.
+The first ask builds the program (as slow as `tsc`); later asks take seconds. If a pass is still running, ask again rather than starting your own `tsc`. Sessions in one checkout share a watcher and each worktree gets its own. A machine keeps at most six watchers. When all six are busy an ask waits in a queue and starts when a slot frees, so wait on it rather than polling; a pass nobody waits on gives its slot up, and a watcher stops after 45 idle minutes.
 <!-- cast @VERSION@ -->
 <!-- /codecast-check -->

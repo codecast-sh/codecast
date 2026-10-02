@@ -33,7 +33,7 @@
     "intent": "qa",
     "cancellation_requested_at": null
    },
-   "environment_label": "ashot/chatdoc",
+   "environment_label": "acme/example",
    "branch_name": "main",
    "fix_task_id": null,
    "initial_intent": "qa"
@@ -88,14 +88,14 @@
   "pull_request_data": null,
   "created_at": 1790723652.61147,
   "internal_only_rollouts": null,
-  "environment_id": "684103af114c8191883cdf307e30b7b3",
+  "environment_id": "e0000000000000000000000000000001",
   "environment": {
-   "id": "684103af114c8191883cdf307e30b7b3",
+   "id": "e0000000000000000000000000000001",
    "devcontainer": null,
    "machine_id": "wham-public/wham-universal",
-   "label": "ashot/chatdoc",
+   "label": "acme/example",
    "is_pinned": false,
-   "description": "vello.ai workspace for ai and teams",
+   "description": "acme workspace",
    "workspace_dir": "/workspace",
    "agent_network_access": {
     "mode": "on"
@@ -104,7 +104,7 @@
    "github_connector_id": null,
    "enable_gitlab_webhooks": false,
    "repos": [
-    "github-660451227"
+    "github-100000001"
    ],
    "setup": [
     ""
@@ -113,22 +113,22 @@
     ""
    ],
    "repo_map": {
-    "github-660451227": {
+    "github-100000001": {
      "id": "660451227",
-     "name": "chatdoc",
+     "name": "example",
      "owner": {
-      "login": "ashot",
-      "id": 42649,
+      "login": "acme",
+      "id": 10001,
       "type": "User",
       "avatar_url": "",
-      "url": "https://api.github.com/users/ashot"
+      "url": "https://api.github.com/users/acme"
      },
-     "repository_full_name": "ashot/chatdoc",
-     "clone_url": "https://github.com/ashot/chatdoc.git",
+     "repository_full_name": "acme/example",
+     "clone_url": "https://github.com/acme/example.git",
      "default_branch": "main",
-     "git_commits_url": "https://api.github.com/repos/ashot/chatdoc/git/commits{/sha}",
-     "git_refs_url": "https://api.github.com/repos/ashot/chatdoc/git/refs{/sha}",
-     "git_url": "git://github.com/ashot/chatdoc.git",
+     "git_commits_url": "https://api.github.com/repos/acme/example/git/commits{/sha}",
+     "git_refs_url": "https://api.github.com/repos/acme/example/git/refs{/sha}",
+     "git_url": "git://github.com/acme/example.git",
      "visibility": "private",
      "archived": null,
      "allow_auto_merge": false,

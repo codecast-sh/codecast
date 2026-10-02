@@ -103,7 +103,7 @@
          "agentRole": null,
          "cliVersion": "0.144.0-alpha.4",
          "createdAt": 1790724345,
-         "cwd": "/workspace/chatdoc",
+         "cwd": "/workspace/example",
          "ephemeral": false,
          "extra": null,
          "forkedFromId": null,
@@ -230,7 +230,7 @@
         "item": {
          "content": [
           {
-           "text": "<environment_context>\n  <cwd>/workspace/chatdoc</cwd>\n  <shell>bash</shell>\n  <current_date>2026-09-29</current_date>\n  <timezone>Etc/UTC</timezone>\n  <filesystem><workspace_roots><root>/workspace/chatdoc</root></workspace_roots><permission\u2026",
+           "text": "<environment_context>\n  <cwd>/workspace/example</cwd>\n  <shell>bash</shell>\n  <current_date>2026-09-29</current_date>\n  <timezone>Etc/UTC</timezone>\n  <filesystem><workspace_roots><root>/workspace/example</root></workspace_roots><permission\u2026",
            "type": "input_text"
           }
          ],
@@ -364,7 +364,7 @@
             "type": "input_text"
            },
            {
-            "text": "--- AGENTS files ---\n../chatdoc/node_modules/.pnpm/@supabase+realtime-js@2.117.2/node_modules/@supabase/realtime-js/AGENTS.md\n../chatdoc/node_modules/.pnpm/next@16.3.7_@babel+core@7.29.7_@types+node@20.19.43_babel-plugin-macros@3.1.0_react-\u2026",
+            "text": "--- AGENTS files ---\n../example/node_modules/.pnpm/@supabase+realtime-js@2.117.2/node_modules/@supabase/realtime-js/AGENTS.md\n../example/node_modules/.pnpm/next@16.3.7_@babel+core@7.29.7_@types+node@20.19.43_babel-plugin-macros@3.1.0_react-\u2026",
             "type": "input_text"
            }
           ],
@@ -381,7 +381,7 @@
        "params": {
         "completedAtMs": 1790724353851,
         "item": {
-         "aggregatedOutput": "../chatdoc/node_modules/.pnpm/@supabase+realtime-js@2.117.2/node_modules/@supabase/realtime-js/AGENTS.md\n../chatdoc/node_modules/.pnpm/next@16.3.7_@babel+core@7.29.7_@types+node@20.19.43_babel-plugin-macros@3.1.0_react-dom_d39ca8b4fa38a76ff\u2026",
+         "aggregatedOutput": "../example/node_modules/.pnpm/@supabase+realtime-js@2.117.2/node_modules/@supabase/realtime-js/AGENTS.md\n../example/node_modules/.pnpm/next@16.3.7_@babel+core@7.29.7_@types+node@20.19.43_babel-plugin-macros@3.1.0_react-dom_d39ca8b4fa38a76ff\u2026",
          "command": "/bin/bash -lc \"printf '%s\\\\n' '--- AGENTS files ---'; find .. -name AGENTS.md -print; printf '%s\\\\n' '--- top-level directories ---'; find . -mindepth 1 -maxdepth 1 -type d -printf '%f\\\\n' | sort; printf '%s\\\\n' '--- package.json ---'; sed \u2026",
          "commandActions": [
           {
@@ -398,11 +398,11 @@
           {
            "command": "sed -n '1,80p' package.json",
            "name": "package.json",
-           "path": "/workspace/chatdoc/package.json",
+           "path": "/workspace/example/package.json",
            "type": "read"
           }
          ],
-         "cwd": "/workspace/chatdoc",
+         "cwd": "/workspace/example",
          "durationMs": 164,
          "exitCode": 0,
          "id": "exec-e885faac-1410-47f5-bc3c-169eb8372df0",
@@ -523,14 +523,14 @@
     "pull_request_data": null,
     "created_at": 1790724339.873407,
     "internal_only_rollouts": null,
-    "environment_id": "684103af114c8191883cdf307e30b7b3",
+    "environment_id": "e0000000000000000000000000000001",
     "environment": {
-     "id": "684103af114c8191883cdf307e30b7b3",
+     "id": "e0000000000000000000000000000001",
      "devcontainer": null,
      "machine_id": "wham-public/wham-universal",
-     "label": "ashot/chatdoc",
+     "label": "acme/example",
      "is_pinned": false,
-     "description": "vello.ai workspace for ai and teams",
+     "description": "acme workspace",
      "workspace_dir": "/workspace",
      "agent_network_access": {
       "mode": "on"
@@ -539,7 +539,7 @@
      "github_connector_id": null,
      "enable_gitlab_webhooks": false,
      "repos": [
-      "github-660451227"
+      "github-100000001"
      ],
      "setup": [
       ""
@@ -548,22 +548,22 @@
       ""
      ],
      "repo_map": {
-      "github-660451227": {
+      "github-100000001": {
        "id": "660451227",
-       "name": "chatdoc",
+       "name": "example",
        "owner": {
-        "login": "ashot",
-        "id": 42649,
+        "login": "acme",
+        "id": 10001,
         "type": "User",
         "avatar_url": "",
-        "url": "https://api.github.com/users/ashot"
+        "url": "https://api.github.com/users/acme"
        },
-       "repository_full_name": "ashot/chatdoc",
-       "clone_url": "https://github.com/ashot/chatdoc.git",
+       "repository_full_name": "acme/example",
+       "clone_url": "https://github.com/acme/example.git",
        "default_branch": "main",
-       "git_commits_url": "https://api.github.com/repos/ashot/chatdoc/git/commits{/sha}",
-       "git_refs_url": "https://api.github.com/repos/ashot/chatdoc/git/refs{/sha}",
-       "git_url": "git://github.com/ashot/chatdoc.git",
+       "git_commits_url": "https://api.github.com/repos/acme/example/git/commits{/sha}",
+       "git_refs_url": "https://api.github.com/repos/acme/example/git/refs{/sha}",
+       "git_url": "git://github.com/acme/example.git",
        "visibility": "private",
        "archived": false,
        "allow_auto_merge": false,

@@ -24,6 +24,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { CLIENT_ERROR_BANNER_PREFIX } from "@codecast/shared/contracts";
 import type { ImageBlock, ParsedMessage, ToolCall, ToolResult } from "../parser.js";
+import { cloudApiErrorOf } from "./apiError.js";
 
 export interface MirrorToolUse { id: string; name: string; input: Record<string, unknown> }
 
@@ -37,6 +38,28 @@ export interface MirrorTranscriptOptions {
 /** A line codecast adds to a cloud agent's thread, set off from what the agent said. */
 export function mirrorNoteText(text: string): string {
   return `ℹ ${text}`;
+}
+
+/** The statuses of a turn that still runs, across providers (Codex Cloud: pending; the Agents API: queued). */
+const RUNNING_TURN_STATUSES: ReadonlySet<string> = new Set(["pending", "queued", "in_progress"]);
+
+/**
+ * Whether a provider's turn still runs. Any other status has ended it, and
+ * endTurn says how: one codecast does not know reads as ended in the
+ * provider's own word rather than as running forever.
+ */
+export function isRunningTurnStatus(status: string | null | undefined): boolean {
+  return typeof status === "string" && RUNNING_TURN_STATUSES.has(status);
+}
+
+/**
+ * Why a turn failed, in whichever shape the provider gave it: its own
+ * sentence, or an error object read as its HTTP errors are (cloudApiErrorOf),
+ * its message else its code. `fallback` when it says nothing.
+ */
+export function turnError(err: unknown, fallback?: string): string {
+  const said = typeof err === "string" ? err : (({ message, code }) => message || code)(cloudApiErrorOf(0, err, ""));
+  return said || fallback || "no reason given";
 }
 
 export class MirrorTranscript {
@@ -165,6 +188,24 @@ export class MirrorTranscript {
       ...(m.model ? { model: m.model } : {}),
     });
     if (m.role === "user" && !m.toolResults?.length) this.placeNotice();
+  }
+
+  /**
+   * How a turn ended, then its end: a failure as an error banner (`reason`:
+   * why), a cancel as a note, any other status the provider names as it says
+   * it. A completed turn the agent gave no answer in (`answered` false) says
+   * so, rather than stopping on its last working note. Records are id'd by
+   * the turn's `key`, so a re-render keeps them.
+   */
+  endTurn(key: string, end: { status: string | null | undefined; label: string; reason?: string; at?: number; answered?: boolean }): void {
+    const { status, label } = end;
+    // Never before the turn's last row: a provider dates the end in its own (whole second) clock.
+    const at = Math.max(end.at ?? this.clock, this.clock);
+    if (status === "failed") this.error(`${key}:error`, `${label} turn failed: ${end.reason || "no reason given"}`, at);
+    else if (status === "cancelled") this.note(`${key}:cancelled`, "Cancelled.", at);
+    else if (status === "completed" && end.answered === false) this.note(`${key}:unanswered`, `${label} finished this turn without an answer.`, at);
+    else if (status && status !== "completed") this.note(`${key}:ended`, `${label} ended this turn as ${status}.`, at);
+    this.turnEnded();
   }
 
   turnEnded(): void {
@@ -357,4 +398,44 @@ export async function mirrorHistoryId(meta: MirrorMeta, ownId: string): Promise<
     at = await readMetaJson(path.join(path.dirname(at.dir), id));
   }
   return id;
+}
+
+/**
+ * The message uuids a mirror's sync put into its conversation, kept beside the
+ * mirror (synced.json) so they outlive the daemon. A mirror is rewritten
+ * whole, and a format bump re-renders every one as the daemon starts, when the
+ * in-memory record of what was synced is empty: without this, a row the new
+ * rendering drops (another attempt's, a note that moved) stays in the
+ * conversation for good. Read only for the same conversation.
+ */
+export function readMirrorSynced(transcriptPath: string, conversationId: string): string[] {
+  try {
+    const saved = JSON.parse(fs.readFileSync(path.join(path.dirname(transcriptPath), "synced.json"), "utf8")) as { conversationId?: unknown; uuids?: unknown };
+    if (saved.conversationId !== conversationId || !Array.isArray(saved.uuids)) return [];
+    return saved.uuids.filter((u): u is string => typeof u === "string");
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * A mirror's synced set after a restart: what the ledger proves (seeded from
+ * the file as it is now), plus every row the mirror's sync put in the
+ * conversation before. A row the rewritten mirror no longer holds is then an
+ * orphan, retracted like a branch switch's; one it still holds is offered
+ * again (its signature unknown), which the server takes as a no-op.
+ */
+export function withMirrorSynced(seeded: Map<string, string> | null, transcriptPath: string, conversationId: string | undefined): Map<string, string> | null {
+  const prior = conversationId ? readMirrorSynced(transcriptPath, conversationId) : [];
+  if (!prior.length) return seeded;
+  const synced = new Map(seeded ?? []);
+  for (const uuid of prior) if (!synced.has(uuid)) synced.set(uuid, "");
+  return synced;
+}
+
+export function writeMirrorSynced(transcriptPath: string, conversationId: string, uuids: Iterable<string>): void {
+  const file = path.join(path.dirname(transcriptPath), "synced.json");
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify({ conversationId, uuids: [...uuids] }), { mode: 0o600 });
+  fs.renameSync(tmp, file);
 }

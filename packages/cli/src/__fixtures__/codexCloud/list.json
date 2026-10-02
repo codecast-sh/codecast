@@ -17,7 +17,7 @@
      "intent": "qa",
      "cancellation_requested_at": null
     },
-    "environment_label": "ashot/chatdoc",
+    "environment_label": "acme/example",
     "branch_name": "main",
     "fix_task_id": null,
     "initial_intent": "qa"
@@ -49,7 +49,7 @@
      "intent": "pr",
      "cancellation_requested_at": null
     },
-    "environment_label": "ashot/chatdoc",
+    "environment_label": "acme/example",
     "branch_name": "main",
     "fix_task_id": null,
     "initial_intent": "pr"
@@ -58,11 +58,11 @@
    "has_unread_turn": false,
    "pull_requests": [
     {
-     "id": "github-660451227-18",
+     "id": "github-100000001-18",
      "assistant_turn_id": "task_e_6abc46a0eecc832eaa9d4fd8533529f9~assttrn_e_6abc46a1f7c4832eb1e4d2b13b688ead",
      "pull_request": {
       "number": 18,
-      "url": "https://github.com/ashot/chatdoc/pull/18",
+      "url": "https://github.com/acme/example/pull/18",
       "state": "open",
       "merged": false,
       "mergeable": false,
@@ -74,16 +74,16 @@
       "base_sha": "665c3aa023f2217806d0261adbaa14031c69bf79",
       "head_sha": "e606c5a0df849aaedb2fca231a1a9a2fa33107af",
       "head_repo_id": 660451227,
-      "head_repo_full_name": "ashot/chatdoc",
+      "head_repo_full_name": "acme/example",
       "merge_commit_sha": null,
       "comments": null,
       "diff": null,
       "user": {
-       "login": "ashot",
-       "name": "ashot",
+       "login": "acme",
+       "name": "acme",
        "email": "person@example.com",
        "avatar_url": "",
-       "id": 42649
+       "id": 10001
       },
       "commits": 1,
       "changed_files": 1,
@@ -111,7 +111,7 @@
      "intent": "qa",
      "cancellation_requested_at": null
     },
-    "environment_label": "ashot/chatdoc",
+    "environment_label": "acme/example",
     "branch_name": "main",
     "fix_task_id": null,
     "initial_intent": "qa"
@@ -141,7 +141,7 @@
      "intent": "pr",
      "cancellation_requested_at": null
     },
-    "environment_label": "ashot/chatdoc",
+    "environment_label": "acme/example",
     "branch_name": "main",
     "fix_task_id": null,
     "initial_intent": "pr"
@@ -150,11 +150,11 @@
    "has_unread_turn": false,
    "pull_requests": [
     {
-     "id": "github-660451227-16",
+     "id": "github-100000001-16",
      "assistant_turn_id": "task_e_68a9ee23c274832ead7c2cafefe64e56~assttrn_e_68ae1b3ef17c832e9366e9f5791b746e",
      "pull_request": {
       "number": 16,
-      "url": "https://github.com/ashot/chatdoc/pull/16",
+      "url": "https://github.com/acme/example/pull/16",
       "state": "open",
       "merged": false,
       "mergeable": false,
@@ -171,8 +171,8 @@
       "comments": null,
       "diff": null,
       "user": {
-       "login": "ashot",
-       "name": "ashot",
+       "login": "acme",
+       "name": "acme",
        "email": "person@example.com",
        "avatar_url": "",
        "id": null
@@ -188,7 +188,7 @@
   },
   {
    "id": "task_e_68a2281944ac832ebf254a91186bd800",
-   "title": "Implement web search feature in Vello",
+   "title": "Implement web search feature",
    "has_generated_title": true,
    "updated_at": 1755975979.330325,
    "created_at": 1755457561.268341,
@@ -210,7 +210,7 @@
      "intent": "pr",
      "cancellation_requested_at": null
     },
-    "environment_label": "ashot/chatdoc",
+    "environment_label": "acme/example",
     "branch_name": "main",
     "fix_task_id": null,
     "initial_intent": "pr"
@@ -219,11 +219,11 @@
    "has_unread_turn": false,
    "pull_requests": [
     {
-     "id": "github-660451227-15",
+     "id": "github-100000001-15",
      "assistant_turn_id": "task_e_68a2281944ac832ebf254a91186bd800~assttrn_e_68a2281a19f4832e9533b1a4d92f2f4a",
      "pull_request": {
       "number": 15,
-      "url": "https://github.com/ashot/chatdoc/pull/15",
+      "url": "https://github.com/acme/example/pull/15",
       "state": "open",
       "merged": false,
       "mergeable": false,
@@ -231,7 +231,7 @@
       "title": "feat: add web search toggle and support",
       "body": "## Summary\n- add user-level web search toggle in settings\n- wire web search tool to Anthropic API and assistant configuration\n- expose store methods for enabling web search\n\n## Testing\n- `npm test` *(fails: Missing script \"test\")*\n\n\n------\n\u2026",
       "base": "main",
-      "head": "codex/implement-web-search-feature-in-vello",
+      "head": "codex/implement-web-search-feature",
       "base_sha": "fb4a03d22c71eec2b6cee9fd149880643f504ed9",
       "head_sha": "773a596336132f95798243876fb198785ec009e3",
       "head_repo_id": null,
@@ -240,8 +240,8 @@
       "comments": null,
       "diff": null,
       "user": {
-       "login": "ashot",
-       "name": "ashot",
+       "login": "acme",
+       "name": "acme",
        "email": "person@example.com",
        "avatar_url": "",
        "id": null
@@ -279,7 +279,7 @@
      "intent": "pr",
      "cancellation_requested_at": null
     },
-    "environment_label": "ashot/chatdoc",
+    "environment_label": "acme/example",
     "branch_name": "main",
     "fix_task_id": null,
     "initial_intent": "pr"

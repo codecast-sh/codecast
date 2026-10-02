@@ -39,6 +39,27 @@ For each cluster, one of:
 - Nothing, with the reason: the rule is present and the fix is elsewhere
   (a hook, a tool, a prompt), named.
 
-Report as a table ordered by frequency. With `write`, apply the instruction
+## File each cluster as a signal
+
+A cluster that needs a change goes through the signal door, so the line can
+take it up as a cause, and the same rule seen next week counts toward that
+cause instead of opening another:
+
+```bash
+cast signal add --source lesson --kind cohesion \
+  --fingerprint lesson:<rule-slug> \
+  --title "<the rule, one line>" \
+  --subject <the instruction file or area it concerns> \
+  --detail - <<'BODY'
+<how many sessions hit it, their short ids, and the proposed line or decision>
+BODY
+```
+
+The slug names the rule, not this week's wording (`lesson:edit-only-owned-files`),
+so a rerun over a later window lands on the same cause. A signal only
+suggests a cause, so file it in both modes.
+
+Report as a table ordered by frequency, with the signal and the cause each
+cluster reached. With `write`, apply the instruction
 lines and record the decisions, then say what went where. Without it, the
 table is the deliverable and the human chooses.

@@ -1,26 +1,28 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
-import { CLIENT_ERROR_BANNER_PREFIX, cloudAgentCredentialError } from "@codecast/shared/contracts";
+import { CLIENT_ERROR_BANNER_PREFIX, cloudAgentCardOf } from "@codecast/shared/contracts";
 import { parseMirrorTranscriptFile } from "../parser.js";
 import { cloudApiErrorOf, CloudApiError } from "./http.js";
 import { execFileSync } from "child_process";
 import { CLOUD_AGENT_ACTION_SUBTYPE, CLOUD_AGENT_PROVIDERS } from "@codecast/shared/contracts";
 import { readTranscriptIngest } from "../workers/ingestClient.js";
-import { buildCodexCloudTranscript, CodexCloudAdapter, CodexCloudApi, codexCitations, codexTaskLines, codexTaskTitle, isRunningTurnStatus, taskGit, taskRepo, taskTurnChain, type CodexKnown, type WhamTask, type WhamTurn, type WhamTurns } from "./codex.js";
+import { buildCodexCloudTranscript, CodexCloudAdapter, CodexCloudApi, codexCitations, codexTaskLines, codexTaskTitle, taskGit, taskRepo, taskTurnChain, type CodexKnown, type WhamTask, type WhamTurn, type WhamTurns } from "./codex.js";
+import { isRunningTurnStatus } from "./transcript.js";
 import { CloudAgentRegistry } from "./registry.js";
 import { checkCloudAgentLogin } from "./registry.js";
-import { applyInCheckout, CloudAgentSessions, setupErrorOf, type CloudAgentSession } from "./sessions.js";
+import { applyInCheckout, CloudAgentSessions, cloudSetupErrorOf, type CloudAgentSession } from "./sessions.js";
 import { porcelainEntries } from "../gitPlane.js";
 import { classifyMirrorTranscriptTail, mirrorMessageUuid, readMetaJson } from "./transcript.js";
 import { CloudAgentBusyError, CloudAgentSetupError, type CloudAgentLoginCommand } from "./types.js";
 import { CloudAgentWatcher } from "./watcher.js";
 import { deviceLabel } from "../remote/device.js";
+import { json, type FakeCloudCall } from "../test-helpers/cloudFetch.js";
+import { fakeSessionWatcher, tmp, until } from "../test-helpers/cloudAgentFakes.js";
+import { clone, CODEX_NOW, CODEX_VALID, codexAuthJson, codexFixture, whamFetch } from "../test-helpers/codexCloudFixtures.js";
 
 // Real payloads from chatgpt.com/backend-api/wham (2026-09-29), scrubbed.
-const FIXTURES = path.join(import.meta.dir, "..", "__fixtures__", "codexCloud");
-const fixture = <T = any>(name: string): T => JSON.parse(fs.readFileSync(path.join(FIXTURES, name), "utf8"));
+const fixture = codexFixture;
 const ASK = fixture<WhamTurns>("turns.ask.json");
 const FOLLOW_UP = fixture<WhamTurns>("turns.askFollowUp.json");
 const BEST_OF_2 = fixture<WhamTurns>("turns.bestOf2.json");
@@ -33,52 +35,24 @@ function read(turns: WhamTurns, opts: { taskId?: string; notice?: string; pullRe
   return { jsonl, messages: parseMirrorTranscriptFile("codex", jsonl, "task") };
 }
 
-const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 const assistantTurn = (turns: WhamTurns, placement = 0) => Object.values(turns.turn_mapping!).map((n) => n.turn!).find((t) => t.type === "assistant" && (t.attempt_placement ?? 0) === placement)!;
 
-/** A JWT with the claims given (unsigned: codecast only reads its own machine's file). */
-function jwt(claims: Record<string, unknown>): string {
-  return `e30.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.sig`;
-}
-function authJson(expSeconds: number): string {
-  return JSON.stringify({
-    auth_mode: "chatgpt",
-    tokens: {
-      access_token: jwt({ exp: expSeconds }),
-      refresh_token: "rt",
-      account_id: "acct-1",
-      id_token: jwt({ email: "person@example.com", "https://api.openai.com/auth": { chatgpt_plan_type: "pro" } }),
-    },
-  });
-}
-const NOW = 1_790_724_000_000;
-const VALID = authJson(NOW / 1000 + 3600);
-const EXPIRED = authJson(NOW / 1000 - 3600);
+const NOW = CODEX_NOW;
+const VALID = CODEX_VALID;
+const EXPIRED = codexAuthJson(NOW / 1000 - 3600);
 
-/** A fetch over the wham API: routes by method and path, records every call. */
+/** A fetch over the wham API (whamFetch) whose routes get the request body. */
 function wham(routes: Record<string, (body: any) => Response>) {
-  const calls: Array<{ method: string; path: string; body?: any; headers: Record<string, string> }> = [];
-  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = new URL(String(input));
-    const p = url.pathname.replace("/backend-api/wham", "");
-    const method = init?.method ?? "GET";
-    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
-    calls.push({ method, path: `${p}${url.search}`, body, headers: init?.headers as Record<string, string> });
-    const hit = routes[`${method} ${p}`];
-    return hit ? hit(body) : new Response(JSON.stringify({ detail: "Invalid task ID" }), { status: 404 });
-  }) as typeof fetch;
-  return { fetchImpl, calls };
+  // Routes are read at call time: a test swaps one between polls.
+  return whamFetch(new Proxy({} as Record<string, (call: FakeCloudCall) => Response>, { get: (_, k) => (typeof k === "string" && routes[k] ? (call: FakeCloudCall) => routes[k](call.body) : undefined) }));
 }
-const json = (v: unknown, status = 200) => () => new Response(JSON.stringify(v), { status });
 
 function adapter(auth: string | null, fetchImpl?: typeof fetch, extra: Partial<ConstructorParameters<typeof CodexCloudAdapter>[0]> = {}) {
   return new CodexCloudAdapter({ readAuth: () => auth, fetchImpl, now: () => NOW, ...extra });
 }
 
-const SESSION: CloudAgentSession = { model: "", repoUrl: "https://github.com/ashot/chatdoc", startingRef: "main" };
+const SESSION: CloudAgentSession = { model: "", repoUrl: "https://github.com/acme/example", repo: { owner: "acme", name: "example" }, startingRef: "main" };
 
-const cleanups: (() => void)[] = [];
-afterEach(() => { for (const fn of cleanups.splice(0)) try { fn(); } catch {} });
 
 describe("Codex Cloud transcript: tasks with app-server events", () => {
   test("an ask task: prompt, reasoning, the command with its output, the answer, turn end", () => {
@@ -137,7 +111,7 @@ describe("Codex Cloud transcript: tasks with app-server events", () => {
     // Recording the pull request's title and body is not a row of its own: the pull request row says it.
     expect(messages.some((m) => m.toolCalls?.some((c) => /make_pr/i.test(c.name)))).toBe(false);
     const pr = messages.find((m) => m.uuid!.endsWith(":pr"))!;
-    expect(pr.content).toStartWith("**docs: add codecast spike marker** · [pull request #18](https://github.com/ashot/chatdoc/pull/18)");
+    expect(pr.content).toStartWith("**docs: add codecast spike marker** · [pull request #18](https://github.com/acme/example/pull/18)");
     const diff = messages.find((m) => m.toolCalls?.[0]?.name === "fileChange")!;
     expect(diff.toolCalls![0].input).toEqual({ changes: "update: README.md" });
     expect(diff.toolResults![0].content).toStartWith("diff --git a/README.md b/README.md");
@@ -147,25 +121,25 @@ describe("Codex Cloud transcript: tasks with app-server events", () => {
 
   test("the task's repository and pushed branch: its pull request's head", () => {
     const chain = taskTurnChain(BEST_OF_2);
-    expect(taskRepo(chain)).toBe("ashot/chatdoc");
+    expect(taskRepo(chain)).toBe("acme/example");
     const task = LIST.items.find((t) => t.id === "task_e_6abc46a0eecc832eaa9d4fd8533529f9")!;
-    expect(taskGit(task.id, task, chain, "ashot/chatdoc")).toEqual({
+    expect(taskGit(task.id, task, chain, "acme/example")).toEqual({
       agentId: task.id,
-      repoUrl: "https://github.com/ashot/chatdoc",
+      repoUrl: "https://github.com/acme/example",
       branch: "codex/add-codecast-spike-comment-to-readme.md",
-      prUrl: "https://github.com/ashot/chatdoc/pull/18",
+      prUrl: "https://github.com/acme/example/pull/18",
     });
     // An ask task pushed nothing: no branch, never the environment's base branch ("main" in task_status_display).
     const ask = LIST.items.find((t) => t.id === "task_e_6abc48f2d3b0832e9e4bb4b303d1bc45")!;
     expect(ask.task_status_display?.branch_name).toBe("main");
-    expect(taskGit(ask.id, ask, taskTurnChain(ASK), "ashot/chatdoc")).toBeNull();
+    expect(taskGit(ask.id, ask, taskTurnChain(ASK), "acme/example")).toBeNull();
   });
 
   test("a task Codex has not named yet has no title: the session takes its prompt's until the real one comes", () => {
     const created = fixture("create.response.json").task as WhamTask;
     expect(created.title).toBe("New task");
     expect(codexTaskTitle(created)).toBeUndefined();
-    expect(codexTaskTitle(LIST.items[0])).toBe(LIST.items[0].title);
+    expect(codexTaskTitle(LIST.items[0])).toBe(LIST.items[0].title ?? undefined);
   });
 
   test("a pull request another attempt opened is that attempt's branch's, never the task's own line's", () => {
@@ -176,10 +150,10 @@ describe("Codex Cloud transcript: tasks with app-server events", () => {
     delete assistantTurn(turns, 0).pull_request_data;
     const { messages } = read(turns, { pullRequests: task.pull_requests });
     expect(messages.find((m) => m.uuid!.endsWith(":pr"))!.content).not.toContain("pull request #18");
-    expect(taskGit(task.id, task, taskTurnChain(turns), "ashot/chatdoc")?.prUrl).toBeUndefined();
+    expect(taskGit(task.id, task, taskTurnChain(turns), "acme/example")?.prUrl).toBeUndefined();
     const branch = buildCodexCloudTranscript({ taskId: task.id, lineId: other.id, turns, createdAt: 1, pullRequests: task.pull_requests });
-    expect(parseMirrorTranscriptFile("codex", branch, task.id).find((m) => m.uuid!.endsWith(":pr"))!.content).toContain("[pull request #18](https://github.com/ashot/chatdoc/pull/18)");
-    expect(taskGit(other.id, task, taskTurnChain(turns, other.id), "ashot/chatdoc")).toMatchObject({ agentId: other.id, prUrl: "https://github.com/ashot/chatdoc/pull/18" });
+    expect(parseMirrorTranscriptFile("codex", branch, task.id).find((m) => m.uuid!.endsWith(":pr"))!.content).toContain("[pull request #18](https://github.com/acme/example/pull/18)");
+    expect(taskGit(other.id, task, taskTurnChain(turns, other.id), "acme/example")).toMatchObject({ agentId: other.id, prUrl: "https://github.com/acme/example/pull/18" });
   });
 
   test("attempts with no placement (older tasks) take the order they started in, each numbered once", () => {
@@ -265,14 +239,14 @@ describe("Codex Cloud transcript: legacy tasks (worklog)", () => {
     const ls = messages.find((m) => m.toolCalls?.[0]?.input.command === "ls")!;
     expect(ls.toolCalls![0].name).toBe("commandExecution");
     // The empty read that followed it (feed_chars with no chars) adds its output to the command.
-    expect(ls.toolResults![0].content).toContain("root@4304f0c5e18f:/workspace# ls\nchatdoc");
+    expect(ls.toolResults![0].content).toContain("root@4304f0c5e18f:/workspace# ls\nexample");
     expect(messages.filter((m) => m.toolCalls?.[0]?.input.command === "")).toHaveLength(0);
     // A key typed into the terminal (Ctrl-C to stop a command) reads as a terminal echoes it.
     const turns = clone(LEGACY);
     const log = Object.values(turns.turn_mapping!).map((n) => n.turn!).find((t) => t.type === "assistant")!.worklog!.messages!;
     log.push({ id: "ctrl-c", author: { role: "assistant" }, create_time: (log.at(-1)!.create_time ?? 0) + 1, content: { content_type: "code", text: JSON.stringify({ session_name: "shell", chars: "\u0003" }) }, recipient: "container.feed_chars" });
     expect(read(turns).messages.find((m) => m.uuid!.endsWith(":ctrl-c"))!.toolCalls![0].input.command).toBe("^C");
-    const narration = messages.find((m) => m.thinking?.startsWith("I'll check out the /workspace/chatdoc repo"))!;
+    const narration = messages.find((m) => m.thinking?.startsWith("I'll check out the /workspace/example repo"))!;
     expect(narration.content).toBe("");
     // Any other tool is the item Codex records it as now, its reply as its output.
     const other = clone(LEGACY);
@@ -297,7 +271,7 @@ describe("Codex Cloud transcript: legacy tasks (worklog)", () => {
     const diff = messages.find((m) => m.uuid === `task:${followUpTurn}:diff`)!;
     expect(diff.toolResults![0].content).toStartWith("diff --git a/server/AI.ts");
     // The last turn opened pull request #16: its summary links it.
-    expect(messages.filter((m) => m.uuid!.endsWith(":pr")).at(-1)!.content).toContain("[pull request #16](https://github.com/ashot/chatdoc/pull/16)");
+    expect(messages.filter((m) => m.uuid!.endsWith(":pr")).at(-1)!.content).toContain("[pull request #16](https://github.com/acme/example/pull/16)");
   });
 
   test("opening the shell and recording the pull request add no rows, and their replies join no command", () => {
@@ -340,7 +314,7 @@ describe("Codex Cloud API", () => {
     expect(page.items[0]).toMatchObject({ id: "task_e_6abc48f2d3b0832e9e4bb4b303d1bc45", updatedAtMs: Math.round(1790724360.440929 * 1000), active: false });
     expect(page.items[0].version).toContain("completed");
     expect(page.nextCursor).toBe(LIST.cursor);
-    expect(calls[0].path).toBe("/tasks/list?limit=20&task_filter=current");
+    expect(`${calls[0].path}${calls[0].search}`).toBe("/tasks/list?limit=20&task_filter=current");
     // The machine's own Codex headers.
     expect(calls[0].headers.Authorization).toStartWith("Bearer ");
     expect(calls[0].headers["ChatGPT-Account-Id"]).toBe("acct-1");
@@ -363,12 +337,12 @@ describe("Codex Cloud sign-in (read only, never refreshed)", () => {
   test("no login is the missing-credentials card; an expired token is its own card, naming the machine and the date", () => {
     const missing = adapter(null).client() as CloudAgentSetupError;
     expect(missing.kind).toBe("key_missing");
-    expect(cloudAgentCredentialError("codex", missing.message)?.id).toBe("codex");
+    expect(cloudAgentCardOf(CLOUD_AGENT_PROVIDERS.codex, undefined, missing.message)?.kind).toBe("credential");
     const expired = adapter(EXPIRED).client() as CloudAgentSetupError;
     expect(expired.kind).toBe("key_invalid");
     expect(expired.message).toBe(`The Codex sign-in on ${deviceLabel()} expired ${new Date(NOW - 3600_000).toLocaleDateString("en-US", { month: "short", day: "numeric" })}.`);
     expect(expired.message).not.toContain("refused");
-    expect(cloudAgentCredentialError("codex", expired.message)?.id).toBe("codex");
+    expect(cloudAgentCardOf(CLOUD_AGENT_PROVIDERS.codex, undefined, expired.message)?.kind).toBe("credential");
     expect(expired.holdReason).toBe(`waiting for a Codex sign-in on ${deviceLabel()}`);
     expect(adapter(VALID).client()).toBeInstanceOf(CodexCloudApi);
   });
@@ -377,12 +351,12 @@ describe("Codex Cloud sign-in (read only, never refreshed)", () => {
     const apiKey = adapter(JSON.stringify({ OPENAI_API_KEY: "sk-test", tokens: null })).client() as CloudAgentSetupError;
     expect(apiKey.kind).toBe("key_missing");
     expect(apiKey.reason).toContain("API key");
-    expect(cloudAgentCredentialError("codex", apiKey.message)?.id).toBe("codex");
+    expect(cloudAgentCardOf(CLOUD_AGENT_PROVIDERS.codex, undefined, apiKey.message)?.kind).toBe("credential");
   });
 
   test("check (the core's verdict): the account and plan Codex names; signed out, expired, refused and turned off each say so", async () => {
     const ok = wham({ "GET /usage": json({ email: "person@example.com", plan_type: "pro" }), "GET /tasks/list": json({ items: [] }) });
-    expect(await checkCloudAgentLogin(adapter(VALID, ok.fetchImpl))).toEqual({ state: "signed_in", account: "person@example.com", plan: "pro" });
+    expect(await checkCloudAgentLogin(adapter(VALID, ok.fetchImpl))).toEqual({ state: "signed_in", account: "person@example.com", plan: "Pro" });
     expect(await checkCloudAgentLogin(adapter(null))).toEqual({ state: "signed_out" });
     const apiKey = await checkCloudAgentLogin(adapter(JSON.stringify({ OPENAI_API_KEY: "sk-test" })));
     expect(apiKey.state).toBe("signed_out");
@@ -436,7 +410,7 @@ describe("Codex Cloud drive", () => {
     const running = clone(ASK);
     assistantTurn(running).turn_status = "pending";
     const id = "task_e_6abc48f2d3b0832e9e4bb4b303d1bc45";
-    const { fetchImpl, calls } = wham({ [`GET /tasks/${id}/turns`]: json(running), [`GET /tasks/${id}`]: json({ task: {} }), [`POST /tasks/${id}/cancel`]: json({ success: true }) });
+    const { fetchImpl, calls } = wham({ [`GET /tasks/${id}/turns`]: json(running), [`GET /tasks/${id}`]: json({ task: { id } }), [`POST /tasks/${id}/cancel`]: json({ success: true }) });
     const a = adapter(VALID, fetchImpl);
     const api = a.client() as CodexCloudApi;
     await expect(a.followUp(api, id, "more")).rejects.toBeInstanceOf(CloudAgentBusyError);
@@ -447,47 +421,43 @@ describe("Codex Cloud drive", () => {
   });
 
   test("create picks the repository's environment; none is a setup card with the environments link", async () => {
-    const env = { id: "env1", label: "ashot/chatdoc", env_vars: { SECRET: "x" }, secrets: { K: "v" }, repo_map: { r: { repository_full_name: "ashot/chatdoc", default_branch: "main" } } };
-    const ok = wham({ "GET /environments/by-repo/github/ashot/chatdoc": json([env]), "POST /tasks": json({ task: { id: "task_e_new" } }) });
+    const env = { id: "env1", label: "acme/example", env_vars: { SECRET: "x" }, secrets: { K: "v" }, repo_map: { r: { repository_full_name: "acme/example", default_branch: "main" } } };
+    const ok = wham({ "GET /environments/by-repo/github/acme/example": json([env]), "POST /tasks": json({ task: { id: "task_e_new" } }) });
     const a = adapter(VALID, ok.fetchImpl);
-    expect(await a.create(a.client() as CodexCloudApi, { ...SESSION, startingRef: undefined }, "hi")).toEqual({ agentId: "task_e_new", url: "https://chatgpt.com/codex/tasks/task_e_new" });
+    expect(await a.create(a.client() as CodexCloudApi, { ...SESSION, startingRef: undefined }, "hi")).toEqual({ agentId: "task_e_new", url: "https://chatgpt.com/codex/tasks/task_e_new", notice: 'Runs in the Codex environment "acme/example".' });
     expect(ok.calls.at(-1)!.body.new_task).toEqual({ environment_id: "env1", branch: "main", run_environment_in_qa_mode: false });
-    const none = wham({ "GET /environments/by-repo/github/ashot/chatdoc": json([]), "GET /environments": json([{ ...env, id: "other", repo_map: { r: { repository_full_name: "ashot/elsewhere" } } }]) });
+    const none = wham({ "GET /environments/by-repo/github/acme/example": json([]), "GET /environments": json([{ ...env, id: "other", repo_map: { r: { repository_full_name: "acme/elsewhere" } } }]) });
     const b = adapter(VALID, none.fetchImpl);
     const err = await b.create(b.client() as CodexCloudApi, SESSION, "hi").catch((e) => e);
     expect(err).toBeInstanceOf(CloudAgentSetupError);
-    expect(err.message).toContain("https://chatgpt.com/codex/settings/environments");
+    expect(err.message).toContain("https://chatgpt.com/codex/cloud/settings/environments");
   });
 
-  test("a 403 names the admin permission, or the repository Codex cannot reach; a 401 is the sign-in card", () => {
+  test("a 403 names the admin permission, or the repository Codex cannot reach; a 401 is the sign-in card", async () => {
     const a = adapter(VALID);
-    const off = setupErrorOf(a, new CloudApiError(403, undefined, "Forbidden"), SESSION)!;
+    const off = (await cloudSetupErrorOf(a, undefined, new CloudApiError(403, undefined, "Forbidden"), SESSION))!;
     expect(off.kind).toBe("access");
     expect(off.holdReason).toBe("waiting until Codex Cloud lets this account in");
     expect(off.message).toContain("Use Codex in the cloud");
-    expect(cloudAgentCredentialError("codex", off.message)).toBeNull();
-    const repo = setupErrorOf(a, new CloudApiError(403, "repo_not_accessible", "Repository is not accessible"), SESSION)!;
+    expect(cloudAgentCardOf(CLOUD_AGENT_PROVIDERS.codex, off.cardKey("c"), off.message)).toEqual({ kind: "setup", problem: "access" });
+    const repo = (await cloudSetupErrorOf(a, undefined, new CloudApiError(403, "repo_not_accessible", "Repository is not accessible"), SESSION))!;
     expect(repo.kind).toBe("repo");
-    expect(repo.message).toContain("ashot/chatdoc");
-    const signIn = setupErrorOf(a, new CloudApiError(401, undefined, "Could not parse your authentication token."), SESSION)!;
+    expect(repo.message).toContain("acme/example");
+    const signIn = (await cloudSetupErrorOf(a, undefined, new CloudApiError(401, undefined, "Could not parse your authentication token."), SESSION))!;
     expect(signIn.kind).toBe("key_invalid");
-    expect(cloudAgentCredentialError("codex", signIn.message)?.id).toBe("codex");
+    expect(cloudAgentCardOf(CLOUD_AGENT_PROVIDERS.codex, undefined, signIn.message)?.kind).toBe("credential");
   });
 });
 
 describe("Codex Cloud mirror (the core watcher over the adapter)", () => {
-  function mirrorDir(): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-cloud-"));
-    cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));
-    return dir;
-  }
+  const mirrorDir = () => tmp("codex-cloud-");
   const ask = LIST.items.find((t) => t.id === "task_e_6abc48f2d3b0832e9e4bb4b303d1bc45")!;
   const routes = { "GET /tasks/list": json({ items: [ask] }), [`GET /tasks/${ask.id}/turns`]: json(ASK) };
 
   test("a pass writes the task's transcript and meta (title, url, placed in its repo's checkout), and emits it", async () => {
     const rootDir = mirrorDir();
     const { fetchImpl } = wham(routes);
-    const watcher = new CloudAgentWatcher(adapter(VALID, fetchImpl), { rootDir, now: () => NOW, resolveRepoDir: async (r) => r.name === "chatdoc" ? "/Users/me/src/chatdoc" : null });
+    const watcher = new CloudAgentWatcher(adapter(VALID, fetchImpl), { rootDir, now: () => NOW, resolveRepoDir: async (r) => r.name === "example" ? "/Users/me/src/example" : null });
     const events: string[] = [];
     const git: unknown[] = [];
     watcher.on("session", (e) => events.push(`${e.eventType} ${e.sessionId}`));
@@ -495,7 +465,7 @@ describe("Codex Cloud mirror (the core watcher over the adapter)", () => {
     await watcher.poll();
     expect(events).toEqual([`add ${ask.id}`]);
     const meta = await readMetaJson(path.join(rootDir, ask.id));
-    expect(meta).toMatchObject({ cwd: "/Users/me/src/chatdoc", title: "List top-level directories and read package.json" });
+    expect(meta).toMatchObject({ cwd: "/Users/me/src/example", title: "List top-level directories and read package.json" });
     const written = fs.readFileSync(watcher.transcriptPath(ask.id), "utf8");
     expect(written).toBe(buildCodexCloudTranscript({ taskId: ask.id, turns: ASK, createdAt: Math.round(ask.created_at! * 1000) }));
     // An ask task pushed no branch of its own, which is said (it clears one a session carries).
@@ -554,7 +524,7 @@ describe("Codex Cloud mirror (the core watcher over the adapter)", () => {
 
   test("with the account's sync off and nothing of codecast's to follow, a pass does not call the API at all", async () => {
     const { fetchImpl, calls } = wham(routes);
-    const watcher = new CloudAgentWatcher(adapter(VALID, fetchImpl), { rootDir: mirrorDir(), now: () => NOW, importAll: () => false, hasOwnAgents: () => false });
+    const watcher = new CloudAgentWatcher(adapter(VALID, fetchImpl), { rootDir: mirrorDir(), now: () => NOW, importAll: () => false, ownAgents: () => new Set() });
     await watcher.poll();
     expect(calls).toEqual([]);
   });
@@ -574,11 +544,6 @@ const A0 = assistantTurn(BEST_OF_2, 0);
 const A1 = assistantTurn(BEST_OF_2, 1);
 const PROMPT = A1.previous_turn_id!.split("~")[1];
 
-function tmpDir(prefix: string): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));
-  return dir;
-}
 function handle(agentId: string) {
   return { agentId, data: () => ({}), save() {}, notice: async () => undefined, scheduleRender() {}, follow: async () => {}, log() {} };
 }
@@ -636,14 +601,15 @@ describe("Codex Cloud attempts as branches", () => {
   });
 
   test("the watcher writes each branch with its fork point, and the ingest reads it as a fork of the task's session at the prompt", async () => {
-    const rootDir = tmpDir("codex-branches-");
+    const rootDir = tmp("codex-branches-");
     const routes: Record<string, (b: any) => Response> = { "GET /tasks/list": json({ items: [BEST_TASK] }), [`GET /tasks/${BEST_TASK.id}/turns`]: json(BEST_OF_2) };
     const { fetchImpl, calls } = wham(routes);
     const watcher = new CloudAgentWatcher(adapter(VALID, fetchImpl), { rootDir, now: () => NOW });
     const events: string[] = [];
     watcher.on("session", (e) => events.push(`${e.eventType} ${e.sessionId}`));
     await watcher.poll();
-    await new Promise((r) => setTimeout(r, 20));
+    // The branch is mirrored right after its parent, off the pass.
+    await until(() => events.length >= 2);
     expect(events.sort()).toEqual([`add ${A1.id}`, `add ${BEST_TASK.id}`].sort());
     expect(await readMetaJson(path.join(rootDir, A1.id))).toMatchObject({ parentAgentId: BEST_TASK.id, forkAt: PROMPT, title: `Attempt 2: ${BEST_TASK.title}` });
     const ingest = await readTranscriptIngest({ client: "codex", file: watcher.transcriptPath(A1.id), sessionId: A1.id, offset: 0, mirror: true });
@@ -659,7 +625,7 @@ describe("Codex Cloud attempts as branches", () => {
     routes["GET /tasks/list"] = json({ items: [{ ...BEST_TASK, updated_at: BEST_TASK.updated_at! + 5 }] });
     routes[`GET /tasks/${BEST_TASK.id}/turns`] = json(moved);
     await watcher.poll();
-    await new Promise((r) => setTimeout(r, 20));
+    await until(() => fs.readFileSync(watcher.transcriptPath(A1.id), "utf8").includes("follow-up b2"));
     expect(turnReads()).toBe(2);
     expect(fs.readFileSync(watcher.transcriptPath(A1.id), "utf8")).toContain("follow-up b2");
     expect(fs.readFileSync(watcher.transcriptPath(BEST_TASK.id), "utf8")).not.toContain("follow-up b2");
@@ -669,18 +635,20 @@ describe("Codex Cloud attempts as branches", () => {
 describe("Codex Cloud launch options (the composer's ask mode and attempts)", () => {
   const codex = CLOUD_AGENT_PROVIDERS.codex;
   test("create: the repository's pinned environment, the branch, ask mode and attempts", async () => {
-    const envA = { id: "envA", repo_map: { r: { repository_full_name: "ashot/chatdoc", default_branch: "main" } }, env_vars: { SECRET: "x" } };
-    const envB = { ...envA, id: "envB", is_pinned: true };
-    const { fetchImpl, calls } = wham({ "GET /environments/by-repo/github/ashot/chatdoc": json([envA, envB]), "POST /tasks": json({ task: { id: "task_e_new" } }) });
+    const envA = { id: "envA", repo_map: { r: { repository_full_name: "acme/example", default_branch: "main" } }, env_vars: { SECRET: "x" } };
+    const envB = { ...envA, id: "envB", label: "example (pinned)", is_pinned: true };
+    const { fetchImpl, calls } = wham({ "GET /environments/by-repo/github/acme/example": json([envA, envB]), "POST /tasks": json({ task: { id: "task_e_new" } }) });
     const a = adapter(VALID, fetchImpl);
-    await a.create(a.client() as CodexCloudApi, { ...SESSION, ask: true, attempts: 2 }, "what does it do?");
+    const created = await a.create(a.client() as CodexCloudApi, { ...SESSION, ask: true, attempts: 2 }, "what does it do?");
+    // The session says which environment it runs in (a repository with several picks by pinning one).
+    expect(created.notice).toBe('Runs in the Codex environment "example (pinned)".');
     expect(calls.at(-1)!.body).toEqual({
       new_task: { environment_id: "envB", branch: "main", run_environment_in_qa_mode: true },
       input_items: [{ type: "message", role: "user", content: [{ content_type: "text", text: "what does it do?" }] }],
       metadata: { best_of_n: 2 },
     });
     // No environment made for the repository: one whose repositories name it.
-    const other = wham({ "GET /environments/by-repo/github/ashot/chatdoc": json([]), "GET /environments": json([{ ...envA, id: "elsewhere", repo_map: { r: { repository_full_name: "ashot/other" } } }, { ...envA, id: "named" }]), "POST /tasks": json({ task: { id: "task_e_new" } }) });
+    const other = wham({ "GET /environments/by-repo/github/acme/example": json([]), "GET /environments": json([{ ...envA, id: "elsewhere", repo_map: { r: { repository_full_name: "acme/other" } } }, { ...envA, id: "named" }]), "POST /tasks": json({ task: { id: "task_e_new" } }) });
     const b = adapter(VALID, other.fetchImpl);
     await b.create(b.client() as CodexCloudApi, SESSION, "hi");
     expect(other.calls.at(-1)!.body.new_task.environment_id).toBe("named");
@@ -688,11 +656,11 @@ describe("Codex Cloud launch options (the composer's ask mode and attempts)", ()
   });
 
   test("the composer's session becomes the task: start records the launch, the first message creates the task with it and binds the conversation", async () => {
-    const repo = tmpDir("codex-repo-");
+    const repo = tmp("codex-repo-");
     execFileSync("git", ["-C", repo, "init", "-q"]);
-    execFileSync("git", ["-C", repo, "remote", "add", "origin", "git@github.com:ashot/chatdoc.git"]);
-    const env = { id: "env1", repo_map: { r: { repository_full_name: "ashot/chatdoc", default_branch: "main" } } };
-    const { fetchImpl, calls } = wham({ "GET /environments/by-repo/github/ashot/chatdoc": json([env]), "POST /tasks": json({ task: { id: "task_e_new" } }) });
+    execFileSync("git", ["-C", repo, "remote", "add", "origin", "git@github.com:acme/example.git"]);
+    const env = { id: "env1", repo_map: { r: { repository_full_name: "acme/example", default_branch: "main" } } };
+    const { fetchImpl, calls } = wham({ "GET /environments/by-repo/github/acme/example": json([env]), "POST /tasks": json({ task: { id: "task_e_new" } }) });
     const binds: string[] = [];
     const queued: string[] = [];
     const reg = new CloudAgentRegistry([adapter(VALID, fetchImpl)], {
@@ -707,7 +675,7 @@ describe("Codex Cloud launch options (the composer's ask mode and attempts)", ()
       retitleSession: async () => true,
       markArchived: async () => true,
       log: () => {},
-    }, () => path.join(tmpDir("codex-sessions-"), "sessions.json"));
+    }, () => path.join(tmp("codex-sessions-"), "sessions.json"));
     expect(await reg.start("codex", "conv-1", repo, "cloud:ask+x2", "explain the repo")).toEqual({});
     expect(queued).toEqual(["conv-1 explain the repo"]);
     expect(await reg.start("codex", "conv-local", repo, "gpt-5.5", "hi")).toBeNull();
@@ -739,13 +707,14 @@ describe("Codex Cloud drive: follow-ups, held while busy, cancel", () => {
   test("held while busy: known from the mirror's last read without asking Codex, and the hold says why", async () => {
     const { fetchImpl, calls } = wham({});
     const statuses: string[] = [];
-    const s = new CloudAgentSessions(adapter(VALID, fetchImpl), {
-      watcher: () => ({ follow: async () => {}, setNotice: () => {}, isRunning: (id) => id === BEST_TASK.id }),
+    const a = adapter(VALID, fetchImpl);
+    const s = new CloudAgentSessions(a, {
+      watcher: () => fakeSessionWatcher(a, { isRunning: (id) => id === BEST_TASK.id }),
       bindSession: () => {},
       agentForConversation: () => BEST_TASK.id,
       setStatus: (_c, st) => statuses.push(st),
       log: () => {},
-    }, path.join(tmpDir("codex-sessions-"), "sessions.json"));
+    }, path.join(tmp("codex-sessions-"), "sessions.json"));
     const err = await s.deliver("conv-1", "next").catch((e) => e);
     expect(err).toBeInstanceOf(CloudAgentBusyError);
     expect(err.holdReason).toBe("waiting for Codex Cloud to finish the running turn");
@@ -759,10 +728,11 @@ describe("Codex Cloud drive: follow-ups, held while busy, cancel", () => {
     assistantTurn(running, 0).turn_status = "in_progress";
     const { fetchImpl, calls } = wham({ [`GET /tasks/${BEST_TASK.id}/turns`]: json(running), [`GET /tasks/${BEST_TASK.id}`]: json({ task: BEST_TASK }) });
     const followed: string[] = [];
-    const s = new CloudAgentSessions(adapter(VALID, fetchImpl), {
-      watcher: () => ({ follow: async (id) => { followed.push(id); }, setNotice: () => {}, isRunning: (id) => followed.includes(id) }),
+    const a = adapter(VALID, fetchImpl);
+    const s = new CloudAgentSessions(a, {
+      watcher: () => fakeSessionWatcher(a, { follow: async (id) => { followed.push(id); }, isRunning: (id) => followed.includes(id) }),
       bindSession: () => {}, agentForConversation: () => BEST_TASK.id, setStatus: () => {}, log: () => {},
-    }, path.join(tmpDir("codex-sessions-"), "sessions.json"));
+    }, path.join(tmp("codex-sessions-"), "sessions.json"));
     await expect(s.deliver("conv-1", "next")).rejects.toBeInstanceOf(CloudAgentBusyError);
     expect(followed).toEqual([BEST_TASK.id]);
     const reads = calls.length;
@@ -795,7 +765,7 @@ describe("Codex Cloud session actions", () => {
 
   test("Create PR: a draft from the branch's changes without Codex's tag, and its link once Codex opened it", async () => {
     const turns = withoutPr(BEST_OF_2);
-    const answers = [{ turn: { ...A1, pull_request_data: null, pull_request_status: "creating" } }, { turn: { ...A1, pull_request_status: "created", pull_request_data: { url: "https://github.com/ashot/chatdoc/pull/99", number: 99, head: "codex/branch-2" } } }];
+    const answers = [{ turn: { ...A1, pull_request_data: null, pull_request_status: "creating" } }, { turn: { ...A1, pull_request_status: "created", pull_request_data: { url: "https://github.com/acme/example/pull/99", number: 99, head: "codex/branch-2" } } }];
     const { fetchImpl, calls } = wham({
       [`GET /tasks/${BEST_TASK.id}/turns`]: json(turns),
       [`GET /tasks/${BEST_TASK.id}`]: json({ task: { ...BEST_TASK, pull_requests: [], external_pull_requests: [] } }),
@@ -803,19 +773,19 @@ describe("Codex Cloud session actions", () => {
       [`GET /tasks/${BEST_TASK.id}/turns/${A1.id}`]: () => new Response(JSON.stringify(answers.shift())),
     });
     const a = adapter(VALID, fetchImpl, { sleep: async () => {} });
-    expect(await a.createPullRequest(a.client() as CodexCloudApi, A1.id)).toEqual({ url: "https://github.com/ashot/chatdoc/pull/99" });
+    expect(await a.createPullRequest(a.client() as CodexCloudApi, A1.id)).toEqual({ url: "https://github.com/acme/example/pull/99" });
     expect(calls.find((c) => c.method === "POST")).toMatchObject({ path: `/tasks/${BEST_TASK.id}/turns/${A1.id}/pr`, body: { mode: "draft", add_codex_tag: false } });
     // One the task already has (on the turn, or only in the task's pull requests) is its link, with nothing sent.
     const open = wham({ [`GET /tasks/${BEST_TASK.id}/turns`]: json(BEST_OF_2), [`GET /tasks/${BEST_TASK.id}`]: json({ task: BEST_TASK }) });
     const b = adapter(VALID, open.fetchImpl);
-    expect((await b.createPullRequest(b.client() as CodexCloudApi, BEST_TASK.id)).url).toBe("https://github.com/ashot/chatdoc/pull/18");
+    expect((await b.createPullRequest(b.client() as CodexCloudApi, BEST_TASK.id)).url).toBe("https://github.com/acme/example/pull/18");
     expect(open.calls.some((c) => c.method === "POST")).toBe(false);
     // A later follow-up that changed code on a line that already has a pull request: that one, not a second.
     const later = clone(BEST_OF_2);
     later.current_turn_id = followUpOn(later, A0, "m1", { output_items: [{ type: "follow_up_diff", output_diff: { diff: "diff --git a/b b/b\n" } }] }).answer.id;
     const moved = wham({ [`GET /tasks/${BEST_TASK.id}/turns`]: json(later), [`GET /tasks/${BEST_TASK.id}`]: json({ task: BEST_TASK }) });
     const d = adapter(VALID, moved.fetchImpl);
-    expect((await d.createPullRequest(d.client() as CodexCloudApi, BEST_TASK.id)).url).toBe("https://github.com/ashot/chatdoc/pull/18");
+    expect((await d.createPullRequest(d.client() as CodexCloudApi, BEST_TASK.id)).url).toBe("https://github.com/acme/example/pull/18");
     expect(moved.calls.some((c) => c.method === "POST")).toBe(false);
     // An ask task changed no code.
     const ask = wham({ [`GET /tasks/${ASK_TASK.id}/turns`]: json(ASK), [`GET /tasks/${ASK_TASK.id}`]: json({ task: ASK_TASK }) });
@@ -829,7 +799,7 @@ describe("Codex Cloud session actions", () => {
       return a.applyPlan(a.client() as CodexCloudApi, line);
     };
     const a1 = await plan(BEST_OF_2, A1.id);
-    expect(a1).toMatchObject({ repo: "ashot/chatdoc", what: "attempt 2's changes" });
+    expect(a1).toMatchObject({ repo: "acme/example", what: "attempt 2's changes" });
     expect(a1.diff).toStartWith("diff --git a/README.md b/README.md");
     // Attempt 1 changed nothing: attempt 2 is still attempt 2, with its own diff
     // (Codex's CLI would count it as attempt 1, since it skips attempts without one).
@@ -852,15 +822,15 @@ describe("Codex Cloud session actions", () => {
   });
 
   test("applyInCheckout: refused without a checkout or with local changes to a file it touches; else git apply at the checkout's root", async () => {
-    const repo = tmpDir("codex-apply-");
+    const repo = tmp("codex-apply-");
     const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } });
     git("init", "-q");
     fs.writeFileSync(path.join(repo, "README.md"), "hi\n");
     git("add", "README.md");
     git("commit", "-qm", "init");
     const diff = "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1,2 @@\n hi\n+codecast test p3\n";
-    const plan = { repo: "ashot/chatdoc", diff, what: "the task's changes" };
-    await expect(applyInCheckout(plan, null)).rejects.toThrow("has no checkout of ashot/chatdoc");
+    const plan = { repo: "acme/example", diff, what: "the task's changes" };
+    await expect(applyInCheckout(plan, null)).rejects.toThrow("has no checkout of acme/example");
     fs.writeFileSync(path.join(repo, "README.md"), "local edit\n");
     await expect(applyInCheckout(plan, repo)).rejects.toThrow("has local changes to a file these changes touch (README.md)");
     git("checkout", "--", "README.md");
@@ -872,19 +842,21 @@ describe("Codex Cloud session actions", () => {
     const root = fs.realpathSync(repo);
     expect(await applyInCheckout(plan, sub)).toEqual({ root, files: ["README.md"] });
     expect(fs.readFileSync(path.join(repo, "README.md"), "utf8")).toBe("hi\ncodecast test p3\n");
-    // Applied again, git's own words say why not.
-    await expect(applyInCheckout(plan, repo)).rejects.toThrow("has local changes to a file these changes touch (README.md)");
-    git("checkout", "--", "README.md");
+    // Applied again: the local changes are these, said as such rather than asked to be stashed, committed or not.
+    expect(await applyInCheckout(plan, repo)).toEqual({ root, files: ["README.md"], already: true });
+    git("commit", "-qam", "applied");
+    expect(await applyInCheckout(plan, repo)).toEqual({ root, files: ["README.md"], already: true });
+    git("reset", "-q", "--hard", "HEAD~1");
     await expect(applyInCheckout({ ...plan, diff: diff.replace(" hi", " not there") }, repo)).rejects.toThrow("patch does not apply");
-    await expect(applyInCheckout(plan, tmpDir("codex-not-git-"))).rejects.toThrow("is not a git checkout of ashot/chatdoc");
+    await expect(applyInCheckout(plan, tmp("codex-not-git-"))).rejects.toThrow("is not a git checkout of acme/example");
   }, 30_000);
 
   test("a task started from a second checkout (a worktree) stays there, its branches too, and Apply runs there", async () => {
     const commit = (dir: string) => execFileSync("git", ["-C", dir, "commit", "-q", "--allow-empty", "-m", "init"], { env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } });
     const checkout = (prefix: string) => {
-      const dir = fs.realpathSync(tmpDir(prefix));
+      const dir = fs.realpathSync(tmp(prefix));
       execFileSync("git", ["-C", dir, "init", "-q"]);
-      execFileSync("git", ["-C", dir, "remote", "add", "origin", "git@github.com:ashot/chatdoc.git"]);
+      execFileSync("git", ["-C", dir, "remote", "add", "origin", "git@github.com:acme/example.git"]);
       fs.writeFileSync(path.join(dir, "README.md"), "hi\n");
       execFileSync("git", ["-C", dir, "add", "README.md"]);
       commit(dir);
@@ -892,7 +864,7 @@ describe("Codex Cloud session actions", () => {
     };
     const worktree = checkout("codex-worktree-");
     const other = checkout("codex-other-repo-");
-    execFileSync("git", ["-C", other, "remote", "set-url", "origin", "git@github.com:ashot/other.git"]);
+    execFileSync("git", ["-C", other, "remote", "set-url", "origin", "git@github.com:acme/other.git"]);
     const turns = withoutPr(BEST_OF_2);
     // The fixture's diffs are cut short: attempt 2 gets one that applies.
     assistantTurn(turns, 1).output_items = [{ type: "pr", output_diff: { diff: "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1,2 @@\n hi\n+attempt 2\n" } }];
@@ -901,11 +873,11 @@ describe("Codex Cloud session actions", () => {
       bindSession: () => {}, agentForConversation: (c) => ({ "conv-main": BEST_TASK.id, "conv-branch": A1.id } as Record<string, string>)[c], setStatus: () => {},
       addLine: async () => {}, enqueueMessage: async () => {}, hostSession: async () => "hosted", releaseSession: () => {},
       placeSession: async () => true, retitleSession: async () => true, markArchived: async () => true, log: () => {},
-    }, () => path.join(tmpDir("codex-sessions-"), "sessions.json"));
+    }, () => path.join(tmp("codex-sessions-"), "sessions.json"));
     const runtime = reg.runtimes[0];
     await runtime.sessions.start("conv-main", worktree, "cloud");
     runtime.sessions.get("conv-main")!.agentId = BEST_TASK.id;
-    const watcher = new CloudAgentWatcher(runtime.adapter, { rootDir: tmpDir("codex-mirror-"), now: () => NOW, resolveRepoDir: (repo, agentId) => reg.checkoutOf(runtime, agentId, repo) });
+    const watcher = new CloudAgentWatcher(runtime.adapter, { rootDir: tmp("codex-mirror-"), now: () => NOW, resolveRepoDir: (repo, agentId) => reg.checkoutOf(runtime, agentId, repo) });
     reg.useWatcher(watcher);
     await watcher.poll();
     const cwdOf = async (id: string) => (await readMetaJson(path.dirname(watcher.transcriptPath(id))))?.cwd;
@@ -914,7 +886,7 @@ describe("Codex Cloud session actions", () => {
     expect(await cwdOf(BEST_TASK.id)).toBe(worktree);
     expect(await cwdOf(A1.id)).toBe(worktree);
     // A folder that is not a checkout of the task's repository is no placement for it.
-    expect(await runtime.sessions.startedIn(BEST_TASK.id, { owner: "ashot", name: "other" })).toBeNull();
+    expect(await runtime.sessions.startedIn(BEST_TASK.id, { owner: "acme", name: "other" })).toBeNull();
     const { message } = await reg.act("conv-branch", "apply");
     expect(message).toBe(`Applied attempt 2's changes to ${worktree} (1 file, not committed).`);
     expect(fs.readFileSync(path.join(worktree, "README.md"), "utf8")).toBe("hi\nattempt 2\n");
@@ -934,7 +906,7 @@ describe("Codex Cloud session actions", () => {
       addLine: async (c, line) => { expect(line).toMatchObject({ role: "system", subtype: CLOUD_AGENT_ACTION_SUBTYPE }); notes.push(`${c}: ${line.content}`); },
       enqueueMessage: async () => {}, hostSession: async () => "hosted", releaseSession: () => {},
       placeSession: async () => true, retitleSession: async () => true, markArchived: async () => true, log: () => {},
-    }, () => path.join(tmpDir("codex-sessions-"), "sessions.json"));
+    }, () => path.join(tmp("codex-sessions-"), "sessions.json"));
     expect((await reg.act("conv-ask", "archive")).message).toBe("Archived on Codex Cloud. It stays here; Unarchive brings it back there.");
     await reg.act("conv-ask", "unarchive");
     expect(calls.filter((c) => c.method === "POST").map((c) => c.path)).toEqual([`/tasks/${ASK_TASK.id}/archive`, `/tasks/${ASK_TASK.id}/recover`]);
