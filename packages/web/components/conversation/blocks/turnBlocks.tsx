@@ -6,6 +6,7 @@ import { LogoIcon } from "../../Logo";
 import { useRouter } from "next/navigation";
 import { useRef, useState, useMemo, useCallback, memo, useContext } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
+import { useOverflows } from "../../../hooks/useOverflows";
 import { createPortal } from "react-dom";
 import { AvatarImg } from "../../../lib/avatarCache";
 import { BrowserTabPill } from "../../browser/BrowserTabPill";
@@ -151,7 +152,6 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
   const contentRef = useRef<HTMLDivElement>(null);
   const [isTruncated, setIsTruncated] = useState(false);
   const [contentExpanded, setContentExpanded] = useState(false);
-  const [isOverflowing, setIsOverflowing] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const rawContent = stripPastedContent(content)
     .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
@@ -172,11 +172,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
     }
   }, [effectivelyCollapsed, content]);
 
-  useWatchEffect(() => {
-    if (!effectivelyCollapsed && contentRef.current && !contentExpanded) {
-      setIsOverflowing(contentRef.current.scrollHeight > USER_CONTENT_MAX_HEIGHT);
-    }
-  }, [content, effectivelyCollapsed, contentExpanded]);
+  const isOverflowing = useOverflows(contentRef, USER_CONTENT_MAX_HEIGHT, [content, effectivelyCollapsed]);
 
   useWatchEffect(() => {
     if (!fullscreen) return;
@@ -990,9 +986,14 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
 
 export const CompactCollapsedTurn = memo(function CompactCollapsedTurn({ content, onExpand }: { content: string; onExpand: () => void }) {
   const body = stripSystemTags(content || "").trim();
+  const clipRef = useRef<HTMLDivElement>(null);
+  // The fade only covers a reply the tail actually clips; a short one would
+  // sit entirely under it, so it shows in full below the button instead.
+  const clipped = useOverflows(clipRef, COMPACT_TAIL_HEIGHT, [body]);
   return (
-    <div className="relative group/ct pl-8">
+    <div className={`relative group/ct pl-8 ${clipped ? "" : "pt-7"}`}>
       <div
+        ref={clipRef}
         className="relative overflow-hidden flex flex-col justify-end"
         style={{ maxHeight: COMPACT_TAIL_HEIGHT }}
       >
@@ -1000,7 +1001,7 @@ export const CompactCollapsedTurn = memo(function CompactCollapsedTurn({ content
           <MessageMarkdown content={body} />
         </div>
       </div>
-      <div className="absolute -top-px left-0 right-0 h-24 pointer-events-none bg-gradient-to-b from-[var(--sol-bg)] via-[var(--sol-bg)] to-transparent" />
+      {clipped && <div className="absolute -top-px left-0 right-0 h-24 pointer-events-none bg-gradient-to-b from-[var(--sol-bg)] via-[var(--sol-bg)] to-transparent" />}
       <button
         onClick={onExpand}
         className="not-prose absolute top-1 left-8 inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full border border-sol-border/70 bg-sol-bg-alt text-[11px] font-medium text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/50 shadow-sm transition-colors"
@@ -1141,9 +1142,9 @@ function AssistantBlockImpl({
   // the chip, inside this row. Compact-expanded turns arrive as density "full".
   const condensed = density === "condensed";
   const [contentExpanded, setContentExpanded] = useState(true);
-  const [isOverflowing, setIsOverflowing] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
+  const isOverflowing = useOverflows(contentRef, CONTENT_MAX_HEIGHT, [content]);
 
   const safeContent = content ? safeString(content) : content;
   const strippedContent = safeContent ? stripSystemTags(safeContent) : safeContent;
@@ -1236,17 +1237,6 @@ function AssistantBlockImpl({
     )
   );
 
-  useWatchEffect(() => {
-    if (!contentRef.current) return;
-    const el = contentRef.current;
-    const check = () => {
-      setIsOverflowing(el.scrollHeight > CONTENT_MAX_HEIGHT);
-    };
-    check();
-    const obs = new ResizeObserver(check);
-    obs.observe(el);
-    return () => obs.disconnect();
-  }, [content]);
 
   useWatchEffect(() => {
     if (!fullscreen) return;

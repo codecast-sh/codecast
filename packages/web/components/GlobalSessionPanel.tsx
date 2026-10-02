@@ -2734,8 +2734,8 @@ function SessionListPanelImpl({
   // Dropping a card on a status section files it there: the user's rest
   // verdict, undoable like the menu gesture. One stable handler per verdict.
   const dropSessionOnRest = useMemo(() => Object.fromEntries(
-    USER_RESTS.map((rest) => [rest, (draggedId: string) => fileSessionsAsRest(selectionIdsFor(draggedId), rest)]),
-  ) as Record<UserRest, (draggedId: string) => void>, []);
+    USER_RESTS.map((rest) => [rest, (ids: string[]) => fileSessionsAsRest(ids, rest)]),
+  ) as Record<UserRest, (ids: string[]) => void>, []);
 
   // Section drop targets: whole group is droppable.
   const [dragOverSectionKey, setDragOverSectionKey] = useState<string | null>(null);
@@ -3139,7 +3139,8 @@ function SessionListPanelImpl({
       // Present = the whole section is a drop target for a dragged session
       // card. The "by label" view files the session under the label (null
       // removes it); the status sections stamp the user's rest verdict.
-      onDropSession?: (draggedId: string) => void;
+      // Receives only the dragged rows not already in this section.
+      onDropSession?: (ids: string[]) => void;
       // "time" view only: each row accepts a dragged session card as a reorder drop.
       reorderable?: boolean;
       // Render the heading as a monospace, normal-case, truncating label instead
@@ -3176,7 +3177,11 @@ function SessionListPanelImpl({
             const draggedId = e.dataTransfer.getData("codecast/session-id");
             if (!draggedId) return;
             e.preventDefault();
-            opts!.onDropSession!(draggedId);
+            // Dropping a card back into the section it already sits in is a
+            // no-op: it would otherwise re-file a row the list already shows there.
+            const here = new Set(items.flatMap((i) => [i._id, ...(globalSubByParent.get(i._id) || []).map((sub) => sub._id)]));
+            const ids = selectionIdsFor(draggedId).filter((id) => !here.has(id));
+            if (ids.length) opts!.onDropSession!(ids);
           },
         }
       : {};
@@ -3629,14 +3634,14 @@ function SessionListPanelImpl({
         {renderSection("Pinned", filteredPinned, "text-sol-magenta")}
         {bucketView.labelGroups.map(({ bucket, items }) => (
           <div key={bucket._id}>
-            {renderSection(bucket.name, items, getLabelColor(bucket.name).text, undefined, undefined, { key: `bucket_${bucket._id}`, onDropSession: (id) => dropSessionOnLabel(id, bucket._id) })}
+            {renderSection(bucket.name, items, getLabelColor(bucket.name).text, undefined, undefined, { key: `bucket_${bucket._id}`, onDropSession: (ids) => labelSessions(ids, bucket._id) })}
           </div>
         ))}
         {/* Unlabeled sessions group by project — the auto-derived label tier.
             Dropping a card here strips its label (back to its own project). */}
         {bucketView.projectGroups.map(({ name, items }) => (
           <div key={`proj-${name}`}>
-            {renderSection(name, items, name === "other" ? "text-sol-text-dim" : getLabelColor(name).text, undefined, undefined, { key: `bucketproj_${name}`, onDropSession: (id) => dropSessionOnLabel(id, null) })}
+            {renderSection(name, items, name === "other" ? "text-sol-text-dim" : getLabelColor(name).text, undefined, undefined, { key: `bucketproj_${name}`, onDropSession: (ids) => labelSessions(ids, null) })}
           </div>
         ))}
         </>

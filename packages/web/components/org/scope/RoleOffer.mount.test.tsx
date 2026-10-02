@@ -14,6 +14,10 @@ import type { OrgTree } from "../orgTypes";
 
 restoreInboxStoreAfterAll();
 
+// The world imports the store's graph once; on a loaded machine that alone
+// outlasts bun's default 5s.
+const WORLD_TIMEOUT_MS = 180_000;
+
 let worldOnce: Promise<any> | null = null;
 function world() {
   worldOnce ??= (async () => {
@@ -54,7 +58,8 @@ function world() {
     const realProposals = { ...(await import("../../../hooks/useSyncOrgProposals")) };
     mock.module("../../../hooks/useSyncOrgProposals", () => ({ ...realProposals, useSyncOrgProposals: () => ({ ready: true, missing: false }) }));
     mock.module("../../../hooks/useCollectionRows", () => ({ useCollectionRows: (key: string, opts: any) => (key === "orgProposals" ? env.proposals.filter((p) => !opts?.where || opts.where(p)) : []) }));
-    mock.module("../../../hooks/useCoarseNow", () => ({ useCoarseNow: () => NOW }));
+    const realNow = { ...(await import("../../../hooks/useCoarseNow")) };
+    mock.module("../../../hooks/useCoarseNow", () => ({ ...realNow, useCoarseNow: () => NOW }));
     mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => React.createElement("a", { href, ...rest }, children) }));
     mock.module("../RoleFace", () => ({ RoleFace: ({ role }: any) => React.createElement("span", { "data-role-face": role.handle }) }));
     const realPill = { ...(await import("../../EntityIdPill")) };
@@ -84,7 +89,7 @@ test("renders only in the Head of People's own thread, and only with a live Comp
   w.env.tasks = [w.review({ status: "cancelled" })];
   await w.mount();
   assert.equal(w.q("[data-role-offer]"), null, "a cancelled routine offers nothing");
-});
+}, WORLD_TIMEOUT_MS);
 
 test("offers to set up, then to review; each press is the trigger's run now, the goal tree with its focus", async () => {
   const w = await world();
@@ -103,7 +108,7 @@ test("offers to set up, then to review; each press is the trigger's run now, the
   assert.equal(w.q("[data-offer-action='goal-tree']")!.textContent, "Plan the goal tree");
   await w.click("[data-offer-action='goal-tree']");
   assert.deepEqual(w.calls, ["trigger:task-review:runNow:goal_tree"]);
-});
+}, WORLD_TIMEOUT_MS);
 
 test("an open proposal is one click away, with what is left to decide", async () => {
   const w = await world();
@@ -118,7 +123,7 @@ test("an open proposal is one click away, with what is left to decide", async ()
   await w.mount();
   assert.equal(w.q("[data-offer-open]"), null);
   assert.ok(w.q("[data-offer-action='set-up']"), "and does not count as this org's set up");
-});
+}, WORLD_TIMEOUT_MS);
 
 test("a run in flight shows its state and offers no second run", async () => {
   const w = await world();
@@ -139,7 +144,7 @@ test("a run in flight shows its state and offers no second run", async () => {
   assert.match(w.q("[data-offer-run='reviewing']")!.textContent!, /4m/);
   assert.equal(w.q("[data-offer-action]"), null);
   w.env.tree = { ...w.env.tree, roles: w.env.tree.roles.map((r: any) => (r._id === "role-head" ? w.head : r)) };
-});
+}, WORLD_TIMEOUT_MS);
 
 test("a paused review says so and resumes with the trigger's own verb", async () => {
   const w = await world();
@@ -149,7 +154,7 @@ test("a paused review says so and resumes with the trigger's own verb", async ()
   assert.equal(w.q("[data-offer-action='set-up']"), null);
   await w.click("[data-offer-action='resume']");
   assert.deepEqual(w.calls, ["trigger:task-review:resume:"]);
-});
+}, WORLD_TIMEOUT_MS);
 
 test("a reader who may not talk to the seat sees the proposal and no run buttons", async () => {
   const w = await world();
@@ -162,7 +167,7 @@ test("a reader who may not talk to the seat sees the proposal and no run buttons
   assert.ok(w.q("[data-offer-open='op-4']"));
   assert.equal(w.q("[data-offer-action]"), null);
   w.env.tree = tree; w.env.meId = String((tree.people.find((p: any) => p.is_me) ?? tree.people[0]).user_id);
-});
+}, WORLD_TIMEOUT_MS);
 
 test("the fake seam moves the row and dispatches nothing", async () => {
   const w = await world();
@@ -175,4 +180,4 @@ test("the fake seam moves the row and dispatches nothing", async () => {
   assert.equal(w.q("[data-role-offer]")!.getAttribute("data-role-offer"), "starting");
   await w.act(async () => { w.fakeRoleOffer(null); });
   assert.ok(w.q("[data-offer-action='set-up']"), "clearing the fake returns the row to the store");
-});
+}, WORLD_TIMEOUT_MS);

@@ -702,7 +702,7 @@ describe("the engagement card renders the model's card", () => {
 
   test("ring out: the status and a cancel", async () => {
     const log: Pressed[] = [];
-    const card: FaceCard = { kind: "ring-out", roomKey: ROOM, to: ANN, name: "Ann", cancel: true, status: "ringing" };
+    const card: FaceCard = { kind: "ring-out", roomKey: ROOM, to: ANN, name: "Ann", cancel: true, status: "ringing", hangUp: false };
     const h = await mount(<EngagementCard card={card} density="bar" actions={actionsInto(log)} />);
     expect(h.q(".ring-card-line")!.textContent).toBe("Ringing Ann");
     await h.click(h.q('[data-card-action="cancel"]')!);
@@ -710,7 +710,7 @@ describe("the engagement card renders the model's card", () => {
   });
 
   test("the card hangs under the row it is given to", async () => {
-    const card: FaceCard = { kind: "ring-out", roomKey: ROOM, to: ANN, name: "Ann", cancel: true, status: "ringing" };
+    const card: FaceCard = { kind: "ring-out", roomKey: ROOM, to: ANN, name: "Ann", cancel: true, status: "ringing", hangUp: false };
     const row = rowOf([me({ state: "ringing-them" }), entry(ANN, "Ann", { state: "ringing-them", tier: "linked" })], [link(ANN, "ring")]);
     const h = await mount(
       <FaceRow row={row} density="bar" viewerId={ME}>

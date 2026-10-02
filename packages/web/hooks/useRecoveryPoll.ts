@@ -144,6 +144,12 @@ export function createRecoveryController(opts: {
 // visibility/focus/online refreshes the moment the user returns or the network
 // is back.
 //
+// How long the inbox's base lists and liveness overlays may go without a push
+// before their recovery poll re-runs them (useSyncInboxSessions,
+// useSyncTeamInboxSessions). The simulator runs the same polls after a clock
+// jump this long (sim/window.ts recoveryPoll).
+export const INBOX_RECOVERY_STALE_MS = 15_000;
+
 // eslint-disable-next-line no-restricted-syntax -- polled recovery; the effect manages its own interval
 export function useRecoveryPoll(
   lastSyncRef: MutableRefObject<number>,

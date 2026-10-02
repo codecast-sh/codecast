@@ -289,11 +289,14 @@ function PlanHoverContent({ plan }: { plan: any }) {
   );
 }
 
-const DECISION_STATE: Record<string, { label: string; color: string }> = {
-  pending: { label: "Open", color: "text-sol-yellow" },
-  answered: { label: "Answered", color: "text-sol-green" },
-  dismissed: { label: "Dismissed", color: "text-sol-text-dim" },
-  withdrawn: { label: "Withdrawn", color: "text-sol-text-dim" },
+// One state vocabulary for a decision reference: the hover card's label and
+// glyph color, and the pill's own chrome. An open decision wears the queue's
+// yellow signpost; a settled one stops asking for attention.
+const DECISION_STATE: Record<string, { label: string; color: string; pill: string; icon: typeof Signpost }> = {
+  pending: { label: "Open", color: "text-sol-yellow", pill: "bg-sol-yellow/[0.08] text-sol-yellow hover:bg-sol-yellow/[0.16]", icon: Signpost },
+  answered: { label: "Answered", color: "text-sol-green", pill: "bg-sol-green/[0.08] text-sol-green hover:bg-sol-green/[0.16]", icon: Check },
+  dismissed: { label: "Dismissed", color: "text-sol-text-dim", pill: "bg-sol-text-dim/[0.08] text-sol-text-dim hover:bg-sol-text-dim/[0.16]", icon: Signpost },
+  withdrawn: { label: "Withdrawn", color: "text-sol-text-dim", pill: "bg-sol-text-dim/[0.08] text-sol-text-dim hover:bg-sol-text-dim/[0.16]", icon: Signpost },
 };
 
 // What a decision reference has to answer at a glance: the question, whether
@@ -1105,6 +1108,7 @@ export function EntityIdPill({
   // `!type` guard further down, but the guard sits below the hooks and so runs
   // after this — every value it protects has to stand on its own until then.
   const taskV = taskVisual(status);
+  const decisionV = DECISION_STATE[status ?? "pending"] ?? DECISION_STATE.pending;
 
   // Who a session IS (session-characters.md S3): once a session wears a
   // character or a role, the reference reads as that person — the face in
@@ -1130,7 +1134,7 @@ export function EntityIdPill({
             : type === "proposal"
               ? Network
             : type === "decision"
-              ? Signpost
+              ? decisionV.icon
             : type === "call"
               ? Phone
             : isPr
@@ -1155,9 +1159,9 @@ export function EntityIdPill({
             // A proposal is the org page's violet, the colour of the ghosts it draws.
             : type === "proposal"
               ? "bg-sol-violet/[0.08] text-sol-violet hover:bg-sol-violet/[0.16]"
-            // A decision wears the queue's yellow.
+            // A decision's color says whether it is still open (DECISION_STATE).
             : type === "decision"
-              ? "bg-sol-yellow/[0.08] text-sol-yellow hover:bg-sol-yellow/[0.16]"
+              ? decisionV.pill
             : type === "call"
               ? "bg-sol-red/[0.08] text-sol-red hover:bg-sol-red/[0.16]"
             : isPr

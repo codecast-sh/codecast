@@ -22,4 +22,6 @@ export const meta: SurfaceMeta = {
   frozenReads: [['org', 'inputs', '--team', '{team}', '--json'], ['org', 'health', '--team', '{team}', '--json'], ['org', 'ls', '--team', '{team}', '--json']],
   // `brief` too: the analyzer ends a review by writing its brief, and a read of it must never reach the live workspace.
   frozenVerbs: ['org', 'brief'],
+  // The prompt ends every review by writing the analyzer's read into its brief (`cast brief edit -`); that write is the prompt's, not the analyzer's choice.
+  allowedRefusals: ['^brief( .*)? edit( |$)'],
 };

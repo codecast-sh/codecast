@@ -161,9 +161,9 @@ export type OrgStaffInput = {
   seat?: "existing" | "fresh";
 };
 
-export type OrgHireChiefInput = {
+export type OrgHireAssistantInput = {
   reach: { reach: "global" } | { reach: "team"; team_id: string };
-  /** A team reach kept in the person's own boundary: their own chief for that team. */
+  /** A team reach kept in the person's own boundary: their own assistant for that team. */
   personal?: boolean;
   given_name?: string;
   handle?: string;
@@ -172,7 +172,7 @@ export type OrgHireChiefInput = {
   adopt_conversation_id?: string;
 };
 
-export type HireChiefResult = {
+export type HireAssistantResult = {
   role: { _id: string; short_id: string; handle: string; name: string; given_name: string };
   standing: { conversation_id: string; short_id?: string } | null;
   created: boolean;
@@ -287,10 +287,10 @@ export type OrgSliceActions = {
    *  under the hirer; dispatch runs orgRoles.staff, which provisions the
    *  standing session, arms the review routine and runs the first review. */
   staffHeadOfPeople: (input: OrgStaffInput) => Promise<StaffResult | undefined>;
-  /** Hire a Chief of Staff (org-staffing.md S30): the person's right hand,
+  /** Hire an Executive Assistant (org-staffing.md S30): the person's right hand,
    *  global by default. The seat row lands through the anchors feed; the
    *  result carries the role so the caller can say who came online. */
-  hireChiefOfStaff: (input: OrgHireChiefInput) => Promise<HireChiefResult | undefined>;
+  hireExecutiveAssistant: (input: OrgHireAssistantInput) => Promise<HireAssistantResult | undefined>;
   /** "Accept all remaining" (org-staffing.md S4): every proposed change flips
    *  to accepted on the draft; dispatch runs orgProposals.acceptAll, which
    *  applies them in order and echoes applied or failed per change. With
@@ -334,8 +334,8 @@ export type OrgSliceState = OrgSliceData & OrgSliceActions;
 // as a promise; the function BODY returns nothing. The slice is written against
 // the body's signature, the store interface against the caller's.
 type OrgSliceImpl = OrgSliceData &
-  Omit<OrgSliceActions, "reparentOrgSession" | "reparentOrgRole" | "staffHeadOfPeople" | "hireChiefOfStaff"> & {
-    hireChiefOfStaff: (input: OrgHireChiefInput) => void;
+  Omit<OrgSliceActions, "reparentOrgSession" | "reparentOrgRole" | "staffHeadOfPeople" | "hireExecutiveAssistant"> & {
+    hireExecutiveAssistant: (input: OrgHireAssistantInput) => void;
     reparentOrgSession: (conversationId: string, target: OrgReparentSessionTarget, opts?: { row?: OrgSession | null; note?: string; from_session?: string }) => void;
     reparentOrgRole: (roleId: string, reportsTo: OrgParentRef, note?: string) => void;
     staffHeadOfPeople: (input: OrgStaffInput) => void;
@@ -1234,10 +1234,10 @@ export function createOrgSlice(): OrgSliceImpl {
       pushIntent(this, intent);
     }),
 
-    // The chief's seat is an anchors row the feed echoes, in whichever
-    // boundary it lives (the person's own for a global chief, which is not
+    // The assistant's seat is an anchors row the feed echoes, in whichever
+    // boundary it lives (the person's own for a global assistant, which is not
     // the active workspace's tree), so nothing is stubbed on the tree.
-    hireChiefOfStaff: asyncAction(function (this: OrgDraft, _input: OrgHireChiefInput) {}),
+    hireExecutiveAssistant: asyncAction(function (this: OrgDraft, _input: OrgHireAssistantInput) {}),
 
     // Every change the server would take (proposed or failed, S4) flips to
     // accepted, one intent each, so a refusal of the whole call puts every
