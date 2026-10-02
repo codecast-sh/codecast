@@ -6,7 +6,7 @@ import { identityRowOf } from "../lib/sessionIdentity";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { AvatarImg } from "../lib/avatarCache";
 import { getProjectName } from "../store/inboxStore";
-import { getLabelColor } from "../lib/labelColors";
+import { useLabelColor } from "../lib/labelColors";
 import { itemClass } from "./paletteStyles";
 import { ShortId } from "./ShortId";
 import { formatDateSmart } from "@codecast/shared/time";
@@ -106,6 +106,7 @@ export function PaletteSessionRow({ conv, bucket, onSelect }: {
   bucket: { name: string } | null;
   onSelect: () => void;
 }) {
+  const getLabelColor = useLabelColor();
   const isTeam = conv.isOwn === false;
   const project = getProjectName(conv.git_root, conv.project_path);
   return (

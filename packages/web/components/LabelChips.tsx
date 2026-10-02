@@ -1,4 +1,4 @@
-import { getLabelColor } from "../lib/labelColors";
+import { useLabelColor } from "../lib/labelColors";
 
 /** How many labels may spell out their name, most rows carrying 3-4 of them. */
 const MAX_NAMED = 2;
@@ -25,6 +25,7 @@ export function LabelChips({
   className?: string;
   onLabelClick?: (label: string) => void;
 }) {
+  const getLabelColor = useLabelColor();
   if (!labels || labels.length === 0) return null;
   return (
     <div className={`flex items-center gap-1 flex-shrink-0 ${className}`}>

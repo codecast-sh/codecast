@@ -13,7 +13,7 @@ import { threadStateView, THREAD_STATE_PIN_CLASS, THREAD_STATE_STATUS_META } fro
 import { getProjectName, isFork, isAgentActive, showsBlockedBadge, type InboxSession, type SessionRoleSnapshot } from "../../store/inboxStore";
 import { nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 import { msgCountColor, formatModel } from "../../lib/conversationProcessor";
-import { getLabelColor } from "../../lib/labelColors";
+import { useLabelColor } from "../../lib/labelColors";
 import { ViewerFaces } from "../presence/ViewerFaces";
 import { DeviceIcon, deviceDisplayName, type Device } from "../DeviceBadge";
 import { SessionWorktreeChip } from "../SessionWorktreeChip";
@@ -186,6 +186,7 @@ export function SessionCardView({
   onPaneDragStart,
   onDropFiles,
 }: SessionCardViewProps) {
+  const getLabelColor = useLabelColor();
   // Idempotent, so a container that already applied it (for its own clock
   // signature) hands the same row through.
   const session = withSafetyBlock(row);
