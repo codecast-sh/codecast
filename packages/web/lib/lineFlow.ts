@@ -4,7 +4,8 @@
 //
 //   sense      signals by source, a 24h sparkline each           (signals)
 //   causes     open causes ranked by computed priority (LE5)      (tasks with `cause`)
-//   in build   live runs by their current node                   (workflowRuns)
+//   in build   live runs on a cause, by their current node      (workflowRuns)
+//              (other live runs only count, as "not from the line")
 //   awaiting   the viewer's pending gate decisions on runs        (sessionDecisions)
 //   watching   shipped causes inside their watch (LE12)          (tasks.watch_until)
 //   closed     causes closed this week: shipped, dissolved, or
@@ -65,6 +66,7 @@ export type LineFlowRun = LineRun & {
   goal_override?: string;
   gate_decision_status?: string;
   total_tokens?: number;
+  phases?: Array<{ title: string }>;
   created_at: number;
   updated_at: number;
 };
@@ -82,7 +84,9 @@ export type LineDecision = {
 
 export type GoalRow = { short_id?: string; title: string; priority?: "p0" | "p1" | "p2" | "p3" };
 
-export type StageKind = "running" | "paused" | "starved" | "failing";
+/** starved is for upstream stations, where emptiness is a problem; clear is a
+ *  downstream station with nothing in it, which is the good outcome. */
+export type StageKind = "running" | "paused" | "starved" | "failing" | "clear";
 export type StageState = { kind: StageKind; since?: number | null; why: string };
 
 export type GoalChip = { ref: string; label: string; kind: "initiative" | "project" | "unknown" | "parked" | "ungrounded" };
@@ -99,7 +103,19 @@ export type SenseSource = {
 
 export type CauseRow = { task: LineCauseTask; score: number; signals: number; goal: GoalChip };
 /** stalled: live by status but silent for a day; it holds no hand that is working. */
-export type BuildRow = { run: LineFlowRun; node: LiveNode | null; since: number; task?: LineCauseTask; stalled: boolean };
+export type BuildRow = {
+  run: LineFlowRun;
+  node: LiveNode | null;
+  since: number;
+  task?: LineCauseTask;
+  stalled: boolean;
+  /** What the run is called: never a bare "workflow". */
+  name: string;
+  /** The workflow it runs, when that adds to the name. */
+  workflow: string | null;
+  /** The step it is at (the node label), null when the run names none. */
+  step: string | null;
+};
 export type WatchRow = { task: LineCauseTask; until: number; daysLeft: number };
 export type ClosedOutcome = "shipped" | "dissolved" | "resolved";
 export type ClosedRow = { task: LineCauseTask; outcome: ClosedOutcome; at: number };
@@ -118,15 +134,59 @@ export type Throughput = {
   tokensPerShip: number | null;
 };
 
+/** How many items entered each station this week: the count on the rail
+ *  that leads into it. */
+export type Moved = { causes: number; build: number; awaiting: number; watching: number; closed: number };
+
 export type LineFlow<D extends LineDecision = LineDecision> = {
   sense: Column<SenseSource>;
   causes: Column<CauseRow> & { parked: CauseRow[] };
-  build: Column<BuildRow>;
+  /** otherRuns: live runs whose task is not a cause; the page counts them
+   *  apart so In build never claims work the line did not start. */
+  build: Column<BuildRow> & { otherRuns: number };
   awaiting: Column<D>;
   watching: Column<WatchRow>;
   closed: Column<ClosedRow>;
   throughput: Throughput;
+  moved: Moved;
 };
+
+// Workflow names that say nothing about the run (dynamic workflows all carry
+// the first one).
+const GENERIC_WORKFLOW = new Set(["workflow", "routine", "run"]);
+
+/** "eval-rehaul-wave1" reads as "eval rehaul wave1"; prose stays as it is. */
+export function humanizeSlug(s: string): string {
+  return /^[a-z0-9]+([-_][a-z0-9]+)+$/i.test(s) ? s.replace(/[-_]+/g, " ") : s;
+}
+
+const firstLine = (s: string | undefined | null, max = 90): string | null => {
+  const line = s?.split("\n").map((l) => l.trim()).find(Boolean);
+  if (!line) return null;
+  return line.length > max ? `${line.slice(0, max - 1).trimEnd()}…` : line;
+};
+
+/** The step a run is at: its current node's label, else the phase of the
+ *  agent a dynamic workflow is running. */
+function runStep(run: LineFlowRun, node: LiveNode | null): string | null {
+  if (node?.label && node.label !== node.id) return node.label;
+  const live = (run.node_statuses as Array<{ status: string; phase?: string; label?: string }> | undefined)?.find((n) => n.status === "running");
+  return live?.phase ?? node?.label ?? null;
+}
+
+/** A run's name: its task, its goal, its first phase, its workflow when that
+ *  is a real name, and only then its step and a short id. */
+export function runName(run: LineFlowRun, task?: { title: string }, step?: string | null): { name: string; workflow: string | null } {
+  const wf = run.workflow_name?.trim();
+  const workflow = wf && !GENERIC_WORKFLOW.has(wf.toLowerCase()) ? humanizeSlug(wf) : null;
+  const name = task?.title
+    ?? run.task_title
+    ?? firstLine(run.goal_override)
+    ?? firstLine(run.phases?.[0]?.title)
+    ?? workflow
+    ?? `${step ?? "run"} · ${run._id.slice(-5)}`;
+  return { name, workflow: workflow && workflow !== name ? workflow : null };
+}
 
 export const isCause = (t: { cause?: unknown }) => !!t.cause;
 const terminal = (status: string) => status === "done" || status === "dropped";
@@ -232,20 +292,25 @@ export function buildLineFlow<D extends LineDecision>(input: {
   // ── in build: live runs not waiting on a person ──
   const buildItems: BuildRow[] = [];
   const buildTasks = new Set<string>();
+  let otherRuns = 0;
+  const lineRuns = input.runs.filter((r) => !!r.task_id && causeById.has(r.task_id));
   for (const run of input.runs) {
     if (!isLiveRun(run) && run.status !== "pending") continue;
+    const task = run.task_id ? causeById.get(run.task_id) : undefined;
+    if (!task) { otherRuns++; continue; }
     const atGate = run.status === "paused" && !!run.gate_decision_id && (run.gate_decision_status ?? "pending") === "pending";
-    if (run.task_id) buildTasks.add(run.task_id);
+    buildTasks.add(task._id);
     if (atGate) continue;
     const node = runLiveNode(run);
-    buildItems.push({ run, node, since: node?.started_at ?? run.created_at, task: run.task_id ? causeById.get(run.task_id) : undefined, stalled: now - (run.updated_at ?? run.created_at) > DAY });
+    const step = runStep(run, node);
+    buildItems.push({ run, node, since: node?.started_at ?? run.created_at, task, stalled: now - (run.updated_at ?? run.created_at) > DAY, step, ...runName(run, task, step) });
   }
   buildItems.sort((a, b) => Number(a.stalled) - Number(b.stalled) || a.since - b.since);
   const fresh = buildItems.filter((b) => !b.stalled);
   const stalled = buildItems.length - fresh.length;
   const stalledNote = stalled ? `, ${stalled} stalled` : "";
   const pausedRuns = fresh.filter((b) => b.run.status === "paused");
-  const lastEnded = input.runs
+  const lastEnded = lineRuns
     .filter((r) => (r.status === "completed" || r.status === "failed") && r.updated_at >= weekAgo)
     .sort((a, b) => b.updated_at - a.updated_at)[0];
 
@@ -300,9 +365,9 @@ export function buildLineFlow<D extends LineDecision>(input: {
 
   const awaitingState: StageState = awaitingItems.length > 0
     ? { kind: "running", since: awaitingItems[0].created_at ?? null, why: "waiting on you" }
-    : { kind: "starved", why: "nothing to answer" };
-  const watchState: StageState = watchItems.length > 0 ? { kind: "running", why: "counting signals" } : { kind: "starved", why: "nothing in watch" };
-  const closedState: StageState = closedItems.length > 0 ? { kind: "running", why: "this week" } : { kind: "starved", why: "nothing closed this week" };
+    : { kind: "clear", why: "nothing to answer" };
+  const watchState: StageState = watchItems.length > 0 ? { kind: "running", why: "counting signals" } : { kind: "clear", why: "nothing in watch" };
+  const closedState: StageState = closedItems.length > 0 ? { kind: "running", why: "this week" } : { kind: "clear", why: "nothing closed this week" };
 
   // ── throughput, this week ──
   // A ship is a done close this week that the quiet watch close did not make.
@@ -323,10 +388,81 @@ export function buildLineFlow<D extends LineDecision>(input: {
   return {
     sense: { items: sources, count: daySignals.length, oldestAt: oldest(daySignals.map((s) => s.created_at)), state: senseState },
     causes: { items: ranked, parked, count: openRows.length, oldestAt: oldest(openRows.map((r) => r.task.cause?.first_seen ?? r.task.created_at)), state: causesState },
-    build: { items: buildItems, count: buildItems.length, oldestAt: oldest(buildItems.map((b) => b.since)), state: buildState },
+    build: { items: buildItems, otherRuns, count: buildItems.length, oldestAt: oldest(buildItems.map((b) => b.since)), state: buildState },
     awaiting: { items: awaitingItems, count: awaitingItems.length, oldestAt: oldest(awaitingItems.map((d) => d.created_at)), state: awaitingState },
     watching: { items: watchItems, count: watchItems.length, oldestAt: oldest(watchItems.map((w) => w.task.closed_at)), state: watchState },
     closed: { items: closedItems, count: closedItems.length, oldestAt: oldest(closedItems.map((c) => c.at)), state: closedState },
     throughput,
+    moved: {
+      causes: throughput.opened,
+      build: lineRuns.filter((r) => r.created_at >= weekAgo).length,
+      awaiting: input.decisions.filter((d) => !!d.blocking && !!d.workflow_run_id && (d.created_at ?? 0) >= weekAgo).length,
+      watching: throughput.shipped,
+      closed: closedItems.length,
+    },
   };
+}
+
+/** "3d", "5h", "12m": the largest unit, for a sentence. */
+export function ageShort(ms: number): string {
+  const m = Math.max(0, Math.floor(ms / 60_000));
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  return h < 24 ? `${h}h` : `${Math.floor(h / 24)}d`;
+}
+
+export type HeadlinePart = { text: string; tone: "ask" | "warn" | "fail" | "live" | "calm" };
+
+/** One sentence from the flow's state, what needs the founder first: cards
+ *  waiting on them, then what is building and what stalled or failed, then
+ *  what waits to be admitted. Ends on the calm part when nothing waits. */
+export function lineHeadline(flow: LineFlow, now: number): HeadlinePart[] {
+  const parts: HeadlinePart[] = [];
+  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  const { awaiting, build, causes, watching } = flow;
+  if (awaiting.count > 0) {
+    parts.push({ text: `${plural(awaiting.count, "card waits", "cards wait")} on you${awaiting.oldestAt ? `, oldest ${ageShort(now - awaiting.oldestAt)}` : ""}`, tone: "ask" });
+  }
+  const fresh = build.items.filter((b) => !b.stalled).length;
+  if (fresh > 0) parts.push({ text: `${fresh} building`, tone: "live" });
+  const stalled = build.items.filter((b) => b.stalled);
+  if (stalled.length > 0) {
+    const silent = Math.max(...stalled.map((b) => now - (b.run.updated_at ?? b.run.created_at)));
+    parts.push({ text: `${stalled.length} stalled ${ageShort(silent)}`, tone: "warn" });
+  }
+  if (build.state.kind === "failing") parts.push({ text: `last run failed${build.state.since ? ` ${ageShort(now - build.state.since)} ago` : ""}`, tone: "fail" });
+  if (causes.state.kind === "paused") parts.push({ text: `admission paused, ${causes.state.why}`, tone: "warn" });
+  else if (causes.items.length > 0) parts.push({ text: `${plural(causes.items.length, "cause", "causes")} ready to admit`, tone: "calm" });
+  if (watching.count > 0) parts.push({ text: `${watching.count} in watch`, tone: "calm" });
+  if (awaiting.count === 0) parts.push({ text: parts.length ? "nothing waiting on you" : "The line is quiet: nothing building, nothing waiting on you", tone: "calm" });
+  return parts;
+}
+
+/** A block of In build rows: a step holding two or more runs gets a labelled
+ *  group; runs alone at their step sit in an unlabelled block and carry the
+ *  step as a chip. order is the row's keyboard index across blocks. */
+export type BuildBlock = { label: string | null; stalled: boolean; rows: Array<BuildRow & { order: number; chip: string | null }> };
+
+export function groupBuild(items: BuildRow[]): BuildBlock[] {
+  const labelOf = (b: BuildRow) => (b.stalled ? "stalled, silent a day" : b.step ?? (b.run.status === "pending" ? "starting" : null));
+  const counts = new Map<string, number>();
+  for (const b of items) { const l = labelOf(b); if (l) counts.set(l, (counts.get(l) ?? 0) + 1); }
+  const blocks: BuildBlock[] = [];
+  const byLabel = new Map<string, BuildBlock>();
+  for (const b of items) {
+    const l = labelOf(b);
+    const grouped = !!l && (counts.get(l) ?? 0) >= 2;
+    if (grouped) {
+      let block = byLabel.get(l!);
+      if (!block) { block = { label: l, stalled: b.stalled, rows: [] }; byLabel.set(l!, block); blocks.push(block); }
+      block.rows.push({ ...b, order: 0, chip: null });
+      continue;
+    }
+    const last = blocks[blocks.length - 1];
+    const block = last && last.label === null ? last : (blocks.push({ label: null, stalled: false, rows: [] }), blocks[blocks.length - 1]);
+    block.rows.push({ ...b, order: 0, chip: l });
+  }
+  let order = 0;
+  for (const block of blocks) for (const r of block.rows) r.order = order++;
+  return blocks;
 }
