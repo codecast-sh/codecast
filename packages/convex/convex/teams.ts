@@ -11,6 +11,7 @@ import {
   type VisibilityChangeMode,
 } from "./teamVisibility";
 import { canAccessConversation } from "./lib/access";
+import { invalidateForMember, withdrawMember } from "./lib/changesDirty";
 import {
   PRESENCE_FRESH_MS,
   bucketTs,
@@ -647,6 +648,7 @@ export async function endMembership(
     .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", teamId))
     .collect();
   for (const dm of mappings) await ctx.db.delete(dm._id);
+  await withdrawMember(ctx, userId, teamId);
 
   const user = await ctx.db.get(userId);
   if (!user) return;
@@ -1431,6 +1433,7 @@ export async function applyMembershipVisibilityChange(
   }
   const next = nextMembershipVisibility(membership, visibility, mode, Date.now());
   await ctx.db.patch(membership._id, next);
+  await invalidateForMember(ctx, userId, teamId);
   return next;
 }
 

@@ -30,8 +30,8 @@ export type LeadProject = { _id: unknown; owner_role_id?: unknown };
 export type LeadRole = {
   _id: unknown;
   handle?: string;
-  /** Set on a Chief of Staff (S30); such a role never covers the workspace. */
-  chief?: unknown;
+  /** Set on an Executive Assistant (S30); such a role never covers the workspace. */
+  assistant?: unknown;
   status?: string;
   scope?: { project_ids?: readonly unknown[]; plan_ids?: readonly unknown[] } | null;
   reports_to?: { kind: string; role_id?: unknown } | null;
@@ -59,29 +59,29 @@ const scopeListsPlan = (role: LeadRole, planId: unknown) => (role.scope?.plan_id
 export const HEAD_OF_PEOPLE_HANDLE = "head-of-people";
 /** The name the role is born with (org-staffing.md S22: renamable like any role). */
 export const HEAD_OF_PEOPLE_NAME = "Head of People";
-/** The handle the role carried before 2026-10-02 (org-staffing.md S30), when
- *  it was called the Chief of Staff. Rows in prod keep it until
- *  `migrations:renameHeadOfPeople` runs, and old references (charters,
- *  triggers, a person's habit) keep naming it, so every reader accepts both.
- *  A row that carries `chief` is a Chief of Staff (the right hand), never the
- *  Head of People, whatever its handle. */
+/** The handle and birth name the role carried before 2026-10-02
+ *  (org-staffing.md S30), when it was called the Chief of Staff. Rows in prod
+ *  keep them until `migrations:renameHeadOfPeople` runs, and old references
+ *  (charters, triggers, a person's habit) keep naming the handle, so every
+ *  reader accepts both and the old one always finds the Head of People. */
 export const LEGACY_HEAD_OF_PEOPLE_HANDLE = "chief-of-staff";
+export const LEGACY_HEAD_OF_PEOPLE_NAME = "Chief of Staff";
 
-/** The person's right hand (S30): a role marked by `chief`, with no scope.
- *  `chief-of-staff` is the default handle of the first one in a boundary. */
-export const CHIEF_OF_STAFF_HANDLE = "chief-of-staff";
-export const CHIEF_OF_STAFF_NAME = "Chief of Staff";
+/** The person's right hand (S30): a role marked by `assistant`, with no
+ *  scope. `executive-assistant` is the default handle of the first one in a
+ *  boundary. A row that carries `assistant` is never the Head of People. */
+export const EXECUTIVE_ASSISTANT_HANDLE = "executive-assistant";
+export const EXECUTIVE_ASSISTANT_NAME = "Executive Assistant";
 
-export type ChiefReach<TeamId = unknown> = { reach: "global" } | { reach: "team"; team_id: TeamId };
+export type AssistantReach<TeamId = unknown> = { reach: "global" } | { reach: "team"; team_id: TeamId };
 
 /** True for the Head of People of a boundary: its handle, or the handle it
- *  had before the rename, on a row that is not a Chief of Staff. */
-export const isHeadOfPeopleRole = (r: { handle?: string; chief?: unknown }): boolean =>
-  !r.chief && (r.handle === HEAD_OF_PEOPLE_HANDLE || r.handle === LEGACY_HEAD_OF_PEOPLE_HANDLE);
+ *  had before the rename, on a row that is not an Executive Assistant. */
+export const isHeadOfPeopleRole = (r: { handle?: string; assistant?: unknown }): boolean =>
+  !r.assistant && (r.handle === HEAD_OF_PEOPLE_HANDLE || r.handle === LEGACY_HEAD_OF_PEOPLE_HANDLE);
 
 /** The handle a reader looks up for the one typed: the old handle still finds
- *  the Head of People. A boundary with a live Chief of Staff under that
- *  handle keeps it for the chief (orgAccess.rolesByHandle decides). */
+ *  the Head of People. */
 export const canonicalHeadHandle = (h: string) => (h === LEGACY_HEAD_OF_PEOPLE_HANDLE ? HEAD_OF_PEOPLE_HANDLE : h);
 
 /** The role names projects or plans it looks after. */

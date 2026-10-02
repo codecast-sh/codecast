@@ -73,6 +73,11 @@ export async function runCall(req: SurfaceRequest, dir: string, opts: { dry: boo
     ['--run', run, '--prompt', join(dir, 'prompt.md'), '--call', ...(req.system ? ['--system', join(dir, 'system.md')] : []), '--model', req.model, '--max-output-tokens', String(req.max_tokens)],
     dir,
   );
+  return readCallRun(req, run, exitCode, Date.now() - started);
+}
+
+/** What a finished call run wrote, read back: a fresh call and `rescore` read it the same way. */
+export function readCallRun(req: SurfaceRequest, run: string, exitCode: number, realMs: number): CallResult {
   const out = readJson(join(run, 'out.json'));
   return {
     request: req,
@@ -85,7 +90,7 @@ export async function runCall(req: SurfaceRequest, dir: string, opts: { dry: boo
     harnessFailure: harnessFailure(out, exitCode),
     exitCode,
     dir: run,
-    realMs: Date.now() - started,
+    realMs,
   };
 }
 
@@ -116,8 +121,37 @@ export async function runAgent(opts: AgentOptions, dir: string, flags: { dry: bo
     ],
     dir,
   );
-  // Turn 1 writes out.json and said.json, turn N outN.json and saidN.json.
-  const names = ['', ...thenFiles.map((_, i) => String(i + 2))];
+  return readAgentRun(runSubdir, opts.model, 1 + thenFiles.length, exitCode, Date.now() - started);
+}
+
+/**
+ * The model each top-level assistant message of a run answered on, counted
+ * by message (the stream repeats a message once per content block). A
+ * message an `Agent` subagent wrote carries its parent's tool use id, so it
+ * is the subagent's, not the loop's.
+ */
+export function loopTurnsOf(streamText: string): Record<string, number> {
+  const seen = new Map<string, string>();
+  for (const line of streamText.split('\n')) {
+    if (!line.includes('"assistant"')) continue;
+    let e: any;
+    try {
+      e = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (e?.type !== 'assistant' || e.parent_tool_use_id || !e.message?.model) continue;
+    seen.set(String(e.message.id ?? `${seen.size}`), String(e.message.model));
+  }
+  const turns: Record<string, number> = {};
+  for (const model of seen.values()) turns[model] = (turns[model] ?? 0) + 1;
+  return turns;
+}
+
+/** What a finished agent run of `turnCount` turns wrote, read back: a fresh run and `rescore` read it the same way. */
+export function readAgentRun(runSubdir: string, model: string, turnCount: number, exitCode: number, realMs: number): AgentResult {
+  // Turn 1 writes out.json, said.json and stream.jsonl, turn N outN.json, saidN.json and streamN.jsonl.
+  const names = Array.from({ length: turnCount }, (_, i) => (i === 0 ? '' : String(i + 1)));
   const outs = names.map((n) => readJson(join(runSubdir, `out${n}.json`)));
   const turns = names.map((n) => ((readJson(join(runSubdir, `said${n}.json`)) ?? []) as string[]).map((s) => s.trim()).filter(Boolean));
   const last = outs.at(-1);
@@ -128,11 +162,12 @@ export async function runAgent(opts: AgentOptions, dir: string, flags: { dry: bo
     calls: readText(join(runSubdir, 'calls.log')).split('\n').filter(Boolean),
     costUsd: outs.reduce((sum, o) => sum + Number(o?.total_cost_usd ?? 0), 0),
     modelUsage: mergeUsage(outs.map(usageOf)),
+    loopTurns: loopTurnsOf(names.map((n) => readText(join(runSubdir, `stream${n}.jsonl`))).join('\n')),
     isError: Boolean(last?.is_error) || exitCode !== 0 || !last,
     // A later turn missing its out.json may only follow an earlier turn's own failure.
     harnessFailure: outs.map((o, i) => (o || i === 0 ? harnessFailure(o, exitCode) : undefined)).find(Boolean),
     exitCode,
-    model: opts.model,
-    realMs: Date.now() - started,
+    model,
+    realMs,
   };
 }

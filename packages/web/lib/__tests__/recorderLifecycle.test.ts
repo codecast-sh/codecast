@@ -17,7 +17,9 @@ import {
   getRecorderStatus,
   startRecording,
   stopRecording,
+  switchRecorderMic,
 } from "../calls/recorder";
+import { useInboxStore } from "../../store/inboxStore";
 
 // ── the fake browser ───────────────────────────────────────────────────────
 
@@ -27,7 +29,11 @@ class FakeTrack {
    *  flip when the loopback feed lands. */
   constraints: Record<string, unknown> | null = null;
   onended: (() => void) | null = null;
+  deviceId = "default";
   constructor(public kind: string = "audio") {}
+  getSettings() {
+    return { deviceId: this.deviceId };
+  }
   applyConstraints(c: Record<string, unknown>) {
     this.constraints = c;
     return Promise.resolve();
@@ -102,6 +108,8 @@ class FakeMediaRecorder {
 }
 
 let micTracks: FakeTrack[] = [];
+/** The audio constraints of every getUserMedia call, in order. */
+let micAsks: any[] = [];
 /** What getUserMedia does when the recorder asks. */
 let micGrants = true;
 /** The desktop loopback feed: what getDisplayMedia does when the recorder
@@ -152,6 +160,7 @@ const called = (name: string) => mutations.filter((m) => m.name === name);
 beforeEach(() => {
   mutations = [];
   micTracks = [];
+  micAsks = [];
   micGrants = true;
   displayGrants = true;
   sysTracks = [];
@@ -181,9 +190,11 @@ beforeEach(() => {
   install("MediaStream", (globalThis as any).MediaStream);
   install("navigator", {
     mediaDevices: {
-      getUserMedia: async () => {
+      getUserMedia: async (c: any) => {
+        micAsks.push(c?.audio);
         if (!micGrants) throw new Error("NotAllowedError");
         const track = new FakeTrack();
+        if (c?.audio?.deviceId?.ideal) track.deviceId = c.audio.deviceId.ideal;
         micTracks.push(track);
         return new (globalThis as any).MediaStream([track]);
       },
@@ -329,6 +340,42 @@ describe("the recorder", () => {
     const beatsAfterStop = called("transcripts:beat").length;
     await Bun.sleep(20);
     expect(called("transcripts:beat").length).toBe(beatsAfterStop);
+  });
+});
+
+describe("choosing the microphone", () => {
+  const remember = (id: string) => useInboxStore.getState().updateClientUI({ call_mic_device_id: id } as any);
+  afterEach(() => remember(""));
+
+  test("a recording opens the remembered microphone", async () => {
+    remember("usb-1");
+    await startRecording();
+    expect(micAsks[0].deviceId).toEqual({ ideal: "usb-1" });
+    expect(micAsks[0].echoCancellation).toBe(false);
+  });
+
+  test("a switch mid-recording moves to the new mic and closes the old one", async () => {
+    await startRecording();
+    await switchRecorderMic("usb-2");
+    expect(micTracks).toHaveLength(2);
+    expect(micAsks[1].deviceId).toEqual({ ideal: "usb-2" });
+    expect(micTracks[0].readyState).toBe("ended");
+    expect(micTracks[1].readyState).toBe("live");
+    // Still one recording: no second transcript, no second file.
+    expect(getRecorderStatus().phase).toBe("recording");
+    expect(called("transcripts:start")).toHaveLength(1);
+    expect(FakeMediaRecorder.made).toHaveLength(1);
+    // Picking the mic already in use opens nothing.
+    await switchRecorderMic("usb-2");
+    expect(micTracks).toHaveLength(2);
+    await stopRecording();
+    expect(micTracks.every((t) => t.readyState === "ended")).toBe(true);
+    expect(FakeAudioContext.open()).toBe(0);
+  });
+
+  test("a switch while idle opens nothing", async () => {
+    await switchRecorderMic("usb-2");
+    expect(micTracks).toHaveLength(0);
   });
 });
 

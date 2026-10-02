@@ -10,6 +10,7 @@
 
 import { lazy, Suspense, useCallback, useMemo, useRef, useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { useTabContext } from "../../lib/tabParams";
 import { useVaultLocalPath } from "../../hooks/useVaultLocalPath";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useConvex } from "convex/react";
@@ -48,8 +49,7 @@ import {
   DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu";
 import { VAULT_SORT_OPTIONS, type VaultSortMode } from "../../lib/vault/explorerModel";
-import { useTabActive } from "../../hooks/usePagePresence";
-import { useShortcutAction } from "../../shortcuts";
+import { usePaneShortcutAction } from "../../shortcuts";
 import { VaultExplorer } from "../../components/vault/VaultExplorer";
 import { VaultNoteView } from "../../components/vault/VaultNoteView";
 import { VaultFileView } from "../../components/vault/VaultFileView";
@@ -303,12 +303,26 @@ function VaultContent() {
   const showGraph = searchParams.get("view") === "graph";
 
   // The side panel (backlinks / outline / tags) is closed by default and
-  // toggled from a button in the content pane. The store flag is the truth;
-  // this effect drives the resizable panel to match it. Expanding resizes to
-  // an explicit width rather than calling expand(): the library's restored
-  // size can land below the collapse midpoint and clamp straight back to 0.
-  const rightPanelOpen = useVaultStore((s) => s.rightPanelOpen);
-  const setRightPanelOpen = useVaultStore((s) => s.setRightPanelOpen);
+  // toggled from a button in the content pane. In a full Files tab the store
+  // flag is the truth and is remembered; in a split pane (a file link opened
+  // beside a conversation) both side panels start closed and the side panel's
+  // state is the pane's own, so reading a linked file never inherits the full
+  // tab's layout. This effect drives the resizable panel to match. Expanding
+  // resizes to an explicit width rather than calling expand(): the library's
+  // restored size can land below the collapse midpoint and clamp straight back to 0.
+  const inSplitPane = !!useTabContext()?.leafId;
+  const storeRightPanelOpen = useVaultStore((s) => s.rightPanelOpen);
+  const setStoreRightPanelOpen = useVaultStore((s) => s.setRightPanelOpen);
+  const [paneRightPanelOpen, setPaneRightPanelOpen] = useState(false);
+  const rightPanelOpen = inSplitPane ? paneRightPanelOpen : storeRightPanelOpen;
+  const setRightPanelOpen = inSplitPane ? setPaneRightPanelOpen : setStoreRightPanelOpen;
+  const tagPaneRequest = useVaultStore((s) => s.tagPaneRequest);
+  const seenTagPaneRequest = useRef(tagPaneRequest);
+  useWatchEffect(() => {
+    if (seenTagPaneRequest.current === tagPaneRequest) return;
+    seenTagPaneRequest.current = tagPaneRequest;
+    setRightPanelOpen(true);
+  }, [tagPaneRequest]);
   const sidePanelRef = usePanelRef();
   const sideAppliedRef = useRef<boolean | null>(null);
   useWatchEffect(() => {
@@ -340,9 +354,9 @@ function VaultContent() {
     // is reachable; before that the ref is empty and the effect must retry.
   }, [rightPanelOpen, showGraph, connection]);
   // The explorer column costs ~200px that a narrow pane can't spare — Files
-  // opened beside a conversation, mostly. Local state, decided by the pane's
-  // own width at first layout: a narrow split starts with the tree hidden, a
-  // full tab shows it. The toggles live in the tree titlebar (hide) and the
+  // opened beside a conversation, mostly. Local state: a split pane starts
+  // with the tree hidden, as does any pane narrow at first layout; a full tab
+  // shows it. The toggles live in the tree titlebar (hide) and the
   // content pane's top-left corner (show).
   const treePanelRef = usePanelRef();
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -354,7 +368,7 @@ function VaultContent() {
   // is known to be wide enough — mounting it into a pane that cannot satisfy
   // its pixel minimums livelocks the panel library.
   const [paneNarrow, setPaneNarrow] = useState<boolean | null>(null);
-  const [treeOpen, setTreeOpen] = useState(true);
+  const [treeOpen, setTreeOpen] = useState(!inSplitPane);
   const treeAppliedRef = useRef<boolean | null>(null);
   const treeExpandingRef = useRef(false);
   const firstMeasureRef = useRef(true);
@@ -461,10 +475,8 @@ function VaultContent() {
   // Ctrl/Cmd+Shift+F focuses vault search — but only while the vault is the
   // visible tab; declining leaves the chord to the conversation's favorite
   // binding, which shares it.
-  const isTabActive = useTabActive();
   const searchInputRef = useRef<HTMLInputElement | null>(null);
-  useShortcutAction("vault.search", () => {
-    if (!isTabActive) return false;
+  usePaneShortcutAction("vault.search", () => {
     setLeftTab("search");
     requestAnimationFrame(() => searchInputRef.current?.select());
     return true;
@@ -488,13 +500,13 @@ function VaultContent() {
   );
   const toggleEdit = useCallback(() => applyMode(toggleVaultEditMode), [applyMode]);
 
-  useShortcutAction("vault.toggleEdit", () => {
-    if (!isTabActive || showGraph) return false;
+  usePaneShortcutAction("vault.toggleEdit", () => {
+    if (showGraph) return false;
     return toggleEdit();
   });
 
-  useShortcutAction("vault.sourceMode", () => {
-    if (!isTabActive || showGraph) return false;
+  usePaneShortcutAction("vault.sourceMode", () => {
+    if (showGraph) return false;
     return applyMode(toggleVaultSourceMode);
   });
 
@@ -502,8 +514,8 @@ function VaultContent() {
   // page-find keeps working) unless a note is actually on screen in reading
   // mode — the editor has CodeMirror's own search panel.
   const [findOpen, setFindOpen] = useState(false);
-  useShortcutAction("vault.find", () => {
-    if (!isTabActive || showGraph || !activePath) return false;
+  usePaneShortcutAction("vault.find", () => {
+    if (showGraph || !activePath) return false;
     if (document.querySelector(".cm-content")) return false;
     setFindOpen((v) => !v);
     return true;
@@ -786,7 +798,11 @@ function VaultContent() {
       <Group
         orientation="horizontal"
         className="flex-1 min-h-0"
-        defaultLayout={{ "vault-tree": 20, "vault-content": rightPanelOpen ? 58 : 80, "vault-side": rightPanelOpen ? 22 : 0 }}
+        defaultLayout={{
+          "vault-tree": treeOpen ? 20 : 0,
+          "vault-content": 100 - (treeOpen ? 20 : 0) - (rightPanelOpen ? 22 : 0),
+          "vault-side": rightPanelOpen ? 22 : 0,
+        }}
       >
         {paneNarrow === false && (
           <>
@@ -899,7 +915,7 @@ function VaultContent() {
               onResize={(size) => {
                 // A drag all the way shut is a close; keep the store honest so
                 // the toggle button reopens it instead of doing nothing.
-                if (size.asPercentage === 0 && useVaultStore.getState().rightPanelOpen) {
+                if (size.asPercentage === 0 && rightPanelOpen) {
                   sideAppliedRef.current = false;
                   setRightPanelOpen(false);
                 }

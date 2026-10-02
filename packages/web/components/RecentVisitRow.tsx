@@ -1,5 +1,5 @@
 import { useMemo, type ReactNode } from "react";
-import { MessageSquare, Tag, Folder, FileText, ListTodo, Map as MapIcon, Search, Inbox, LayoutGrid, Hash, Lock, Rss, Globe, Workflow, Zap, FolderKanban, Flag } from "lucide-react";
+import { MessageSquare, Tag, Folder, FileText, ListTodo, Map as MapIcon, Search, Inbox, LayoutGrid, Hash, Lock, Rss, Globe, Workflow, Zap, FolderKanban, Flag, Newspaper } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { visitTimeAgo, type ResolvedVisit } from "../lib/recentVisits";
 import { getLabelColor } from "../lib/labelColors";
@@ -23,6 +23,7 @@ export function PageIcon({ path, className }: { path: string; className: string 
   if (path.startsWith("/chat/")) return <Hash className={className} />;
   if (path.startsWith("/chat")) return <MessageSquare className={className} />;
   if (path.startsWith("/feed")) return <Rss className={className} />;
+  if (path.startsWith("/changes")) return <Newspaper className={className} />;
   if (path.startsWith("/files") || path.startsWith("/vault")) return <Folder className={className} />;
   if (path.startsWith("/pages") || path.startsWith("/artifacts")) return <Globe className={className} />;
   if (isBrowserRoutePath(path)) return <Globe className={className} />;

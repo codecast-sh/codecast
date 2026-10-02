@@ -129,7 +129,7 @@ const HANDOFF_DENY = [
 // this set, so drift fails loudly.
 export const IN_SHELL_ROOT_SEGMENTS = new Set([
   // Tab pages (RoutePane patterns)
-  "inbox", "feed", "crosstalk", "org", "browser", "chat", "community", "search", "notifications", "questions", "line", "threads", "docs", "capabilities", "plans", "tasks", "files", "vault", "pages", "artifacts",
+  "inbox", "feed", "changes", "crosstalk", "org", "browser", "chat", "community", "search", "notifications", "questions", "line", "threads", "docs", "capabilities", "plans", "tasks", "files", "vault", "pages", "artifacts",
   "projects", "initiatives", "workflows", "routines", "triggers", "schedules", "sessions", "anchor", "team", "config", "calls",
   // Standalone shell pages (own <Route>, not in RoutePane)
   "explore", "timeline", "windows", "orchestration", "roadmap", "cli",

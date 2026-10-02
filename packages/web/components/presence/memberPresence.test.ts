@@ -343,10 +343,13 @@ describe("teammateWhereabouts", () => {
     expect(rows[0].since).toBe(NOW - 120_000);
   });
 
-  it("never lists the viewer or an offline teammate, even with a session id on the row", () => {
-    const ids = teammateWhereabouts(roster, me, "c").map((r) => r.id);
-    expect(ids).not.toContain(me);
-    expect(ids).not.toContain("u-cy");
+  it("never lists the viewer; an offline teammate only when named, with no session", () => {
+    expect(teammateWhereabouts(roster, me, "m").map((r) => r.id)).not.toContain(me);
+    expect(teammateWhereabouts(roster, me, "").map((r) => r.id)).not.toContain("u-cy");
+    const rows = teammateWhereabouts(roster, me, "cy");
+    expect(rows.map((r) => r.id)).toEqual(["u-cy"]);
+    expect(rows[0].conversationId).toBeNull();
+    expect(rows[0].online).toBe(false);
   });
 
   it("a teammate around but in no session appears only when the query names them", () => {

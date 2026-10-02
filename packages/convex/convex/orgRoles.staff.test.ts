@@ -573,8 +573,8 @@ describe("orgRoles.staff", () => {
     expect(tables.agent_tasks).toHaveLength(3);
   });
 
-  test("the charter is the right hand's job its opening states, for the person it reports to", () => {
-    expect(headOfPeopleCharter("Ada").startsWith("Your job is to keep Ada's goals in view and the company moving toward them.")).toBe(true);
+  test("the charter is the structure job its opening states, for the person it reports to", () => {
+    expect(headOfPeopleCharter("Ada").startsWith("Your job is to keep the company's structure true to how the work runs")).toBe(true);
     expect(headOfPeopleCharter("Ada")).not.toContain("{person}");
   });
 });

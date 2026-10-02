@@ -33,16 +33,34 @@ export function useTemplateInstance(roleId: string | undefined) {
   return { instance: data as any, ready: data !== undefined, error };
 }
 
-/** The person's writes: post the hire as a proposal, mark a setup item, activate a routine, run the host step. */
+/** The workspace's choice to let Codecast learn from its template roles (H12): its state and whether this person may change it. */
+export function useTemplateLearning(teamId: string | undefined) {
+  const { data } = useQueryNoThrow(api.orgTemplateLearning.learning, teamId === undefined ? {} : { team_id: teamId as Id<"teams"> });
+  const fx = fixture() as any;
+  if (fx?.learning) return { learning: fx.learning as { enabled: boolean; can_change: boolean; changed_by: string | null }, ready: true };
+  return { learning: data as { enabled: boolean; can_change: boolean; changed_by: string | null } | undefined, ready: data !== undefined };
+}
+
+/** The lessons that left this instance's workspace (H9, H12) and where each stands with the publisher. */
+export function useInstanceLessons(instanceKey: string | undefined) {
+  const { data } = useQueryNoThrow(api.orgTemplates.listLessons, instanceKey ? { instance_key: instanceKey } : "skip");
+  const fx = fixture() as any;
+  if (fx?.lessons) return { lessons: fx.lessons as any[], ready: true };
+  return { lessons: (data ?? []) as any[], ready: data !== undefined };
+}
+
+/** The person's writes: post the hire as a proposal, mark a setup item, activate a routine, run the host step, choose learning. */
 export function useTemplateActions() {
   const propose = useMutation(api.orgProposals.create);
   const setup = useMutation(api.orgTemplates.setup);
   const activate = useMutation(api.orgTemplates.activateRoutine);
   const bind = useMutation(api.orgTemplates.requestBind);
+  const learning = useMutation(api.orgTemplateLearning.setLearning);
   return {
     propose: (args: { team_id?: string; title: string; summary_md: string; mode: string; changes: unknown[]; asks: unknown[] }) => propose({ ...args, team_id: args.team_id as Id<"teams"> | undefined }) as Promise<any>,
     markSetup: (instanceKey: string, id: string, status: "done" | "open" | "skipped") => setup({ instance_key: instanceKey, id, status, from_agent: false }),
     activate: (taskId: string) => activate({ task_id: taskId as Id<"agent_tasks"> }),
+    setLearning: (teamId: string | undefined, enabled: boolean) => learning({ ...(teamId ? { team_id: teamId as Id<"teams"> } : {}), enabled }) as Promise<any>,
     /** The host step (H3): the daemon on the machine with the checkout runs bind. Secrets are sealed
      *  to that machine's key in the browser (sealSecret) before they reach here; never a plain value. */
     requestBind: (instanceKey: string, secrets: { key: string; payload: { provider: string; epk: string; iv: string; ct: string } }[], deviceId?: string) => bind({ instance_key: instanceKey, secrets, ...(deviceId ? { device_id: deviceId } : {}) }) as Promise<{ command_id: string; device: { device_id: string; label: string }; already_pending: boolean }>,

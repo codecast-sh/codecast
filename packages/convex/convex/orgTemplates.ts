@@ -15,13 +15,15 @@ import { mutation, query } from "./functions";
 import { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId, reachableRole, tellRole } from "./pendingMessages";
 import { canAccessProject, requireTeamAdmin, requireTeamMembership, resolveWorkspaceKey, workspaceGrantsAccess, workspaceKey, type WorkspaceKey } from "./lib/access";
-import { validateTemplate, type OrgTemplate } from "@codecast/shared/contracts/orgTemplateManifest";
+import { compareVersions, validateTemplate, type OrgTemplate } from "@codecast/shared/contracts/orgTemplateManifest";
 import { markSetup, nextHumanAsk, readiness, recordEvidence, recordScores, setupRows, type InstanceState, type SetupText } from "@codecast/shared/contracts/orgTemplateState";
 import { routineState, type RoutineReadiness } from "@codecast/shared/contracts/orgTemplateReadiness";
+import type { LessonKind } from "@codecast/shared/contracts/orgTemplateLearning";
 import { applyActivate, getManageableTask } from "./agentTasks";
 import { refuseUnlessHuman, standingConversationOf } from "./orgRoles";
 import { DEVICE_ONLINE_MS, pickOwnerDevice } from "./deviceRouting";
 import type { OrgTemplateBindArgs, OrgTemplateBindResult, OrgTemplateBindSecret } from "@codecast/shared/contracts/orgTemplateBind";
+import { truncateStr } from "@codecast/shared/render";
 
 /** The one value beside a workspace key that grants visibility: a template every workspace may hire. */
 export const CODECAST_TEMPLATE_ACCESS = "codecast";
@@ -29,33 +31,33 @@ const RELEASE_STATUSES = ["draft", "canary", "stable"] as const;
 type ReleaseStatus = (typeof RELEASE_STATUSES)[number];
 const digestRe = /^[a-f0-9]{64}$/;
 
-type Ctx = { db: any; storage?: any };
+export type Ctx = { db: any; storage?: any };
 
-async function requireCaller(ctx: Ctx, apiToken?: string): Promise<Id<"users">> {
+export async function requireCaller(ctx: Ctx, apiToken?: string): Promise<Id<"users">> {
   const userId = await getAuthenticatedUserId(ctx, apiToken);
   if (!userId) throw new Error("Authentication failed: invalid token or session");
   return userId;
 }
 
 /** The key a caller publishes or hires under: a team they belong to, else their own. */
-async function callerWorkspace(ctx: Ctx, userId: Id<"users">, teamId?: Id<"teams">): Promise<WorkspaceKey> {
+export async function callerWorkspace(ctx: Ctx, userId: Id<"users">, teamId?: Id<"teams">): Promise<WorkspaceKey> {
   if (teamId) { await requireTeamMembership(ctx as any, userId, teamId); return workspaceKey({ type: "team", teamId }); }
   return workspaceKey({ type: "personal", userId });
 }
 
 /** Publishing as Codecast is the Codecast team's admins' act; the team is named on the deployment. */
-async function requireCodecastPublisher(ctx: Ctx, userId: Id<"users">): Promise<void> {
+export async function requireCodecastPublisher(ctx: Ctx, userId: Id<"users">): Promise<void> {
   const teamId = process.env.CODECAST_TEMPLATES_TEAM_ID as Id<"teams"> | undefined;
   if (!teamId) throw new Error("Publishing as codecast is not enabled on this deployment (CODECAST_TEMPLATES_TEAM_ID)");
   await requireTeamAdmin(ctx as any, userId, teamId);
 }
 
-async function templateRow(ctx: Ctx, templateId: string, access: WorkspaceKey): Promise<any> {
+export async function templateRow(ctx: Ctx, templateId: string, access: WorkspaceKey): Promise<any> {
   const rows: any[] = await ctx.db.query("org_templates").withIndex("by_template_id", (q: any) => q.eq("template_id", templateId)).collect();
   return rows.find((r) => r.workspace === access) ?? null;
 }
 /** The template a viewer in `access` may hire: their own workspace's, else Codecast's. */
-async function visibleTemplate(ctx: Ctx, templateId: string, access: WorkspaceKey): Promise<any> {
+export async function visibleTemplate(ctx: Ctx, templateId: string, access: WorkspaceKey): Promise<any> {
   return (await templateRow(ctx, templateId, access)) ?? (await templateRow(ctx, templateId, CODECAST_TEMPLATE_ACCESS));
 }
 
@@ -104,11 +106,7 @@ export async function performPublish(ctx: Ctx, userId: Id<"users">, args: Publis
   return { ...(await ctx.db.get(existing._id)), action: same ? ("updated" as const) : ("released" as const) };
 }
 
-export function compareVersions(a: string, b: string): number {
-  const pa = a.split(".").map(Number), pb = b.split(".").map(Number);
-  for (let i = 0; i < 3; i++) if (pa[i]! !== pb[i]!) return pa[i]! - pb[i]!;
-  return 0;
-}
+export { compareVersions };
 
 /** What the hire form lists: a viewer's own templates and Codecast's, with what each asks for. */
 export async function performCatalog(ctx: Ctx, userId: Id<"users">, args: { team_id?: Id<"teams"> }) {
@@ -125,10 +123,15 @@ export function catalogEntry(row: any) {
   return {
     template_id: row.template_id, workspace: row.workspace, name: row.name, description: row.description, avatar: row.avatar,
     latest: row.latest, installable: !!latest?.storage_id, latest_status: latest?.status ?? null, changelog: latest?.changelog ?? null,
-    releases: row.releases.map((r: any) => ({ version: r.version, status: r.status, published_at: r.published_at, installable: !!r.storage_id })),
+    releases: row.releases.map((r: any) => ({ version: r.version, digest: r.digest, status: r.status, published_at: r.published_at, installable: !!r.storage_id })),
     asks: { inputs: (m.inputs ?? []).length, secrets: (m.inputs ?? []).filter((i) => i.kind === "secret").length, authority: (m.authority ?? []).length, setup: (m.setup ?? []).length, routines: m.routines.length },
     manifest: m,
   };
+}
+/** A catalog entry as the org reviewer reads it (orgInit's `templates`): one
+ *  line saying what the role does, and the release a hire change pins. */
+export function templateLine(t: ReturnType<typeof catalogEntry>, descriptionChars: number) {
+  return { id: t.template_id as string, name: t.name as string, description: truncateStr(String(t.description ?? "").replace(/\s+/g, " ").trim(), descriptionChars), version: t.latest.version as string, digest: t.latest.digest as string, status: t.latest_status as string | null };
 }
 export async function performGetTemplate(ctx: Ctx, userId: Id<"users">, args: { template_id: string; team_id?: Id<"teams"> }) {
   const row = await visibleTemplate(ctx, args.template_id, await callerWorkspace(ctx, userId, args.team_id));
@@ -200,24 +203,28 @@ export async function performUpsertInstance(ctx: Ctx, userId: Id<"users">, args:
   let id = existing?._id;
   if (existing) {
     if (existing.workspace !== access || String(existing.project_id) !== String(args.project_id)) throw new Error("Instance belongs to another project or workspace");
-    await ctx.db.patch(existing._id, { ...fields, instance_key: args.instance_key, phase: args.phase ?? existing.phase, update_policy: args.update_policy ?? existing.update_policy });
+    // A release change starts the row's time on that release (H12, the canary's
+    // runs count from here), and an accepted upgrade that has arrived stops waiting.
+    const moved = existing.version !== args.version || existing.digest !== args.digest;
+    const arrived = existing.pending_upgrade?.to === args.version && existing.pending_upgrade?.digest === args.digest;
+    await ctx.db.patch(existing._id, { ...fields, instance_key: args.instance_key, phase: args.phase ?? existing.phase, update_policy: args.update_policy ?? existing.update_policy, ...(moved ? { version_at: now } : {}), ...(arrived ? { pending_upgrade: undefined } : {}) });
   } else {
-    id = await ctx.db.insert("org_template_instances", { instance_key: args.instance_key, workspace: access, phase: args.phase ?? "ready", update_policy: args.update_policy ?? "manual", ...fields, created_by: userId, created_at: now });
+    id = await ctx.db.insert("org_template_instances", { instance_key: args.instance_key, workspace: access, phase: args.phase ?? "ready", update_policy: args.update_policy ?? "manual", ...fields, version_at: now, created_by: userId, created_at: now });
   }
   const row = await ctx.db.get(id);
   await tellRoleOfBind(ctx, userId, existing, row, release.manifest as OrgTemplate, args.from_session);
   return row;
 }
 
-type RoutineRow = { id: string; title: string; every: string; mode: "propose" | "apply"; external: boolean; retired: boolean; trigger: { id: string; short_id?: string; status: string; run_at?: number; precheck?: string; interval_ms?: number } | null };
+type RoutineRow = { id: string; title: string; every: string; mode: "propose" | "apply"; external: boolean; retired: boolean; trigger: { id: string; short_id?: string; status: string; run_at?: number; precheck?: string; interval_ms?: number; run_count?: number; last_run_at?: number; last_run_failed?: boolean } | null };
 /** The pinned release's routines with the trigger each is bound to: the role page's Triggers rows, and the list a role hears after a bind. */
-async function routineRows(ctx: Ctx, row: any, manifest: OrgTemplate | undefined): Promise<RoutineRow[]> {
+export async function routineRows(ctx: Ctx, row: any, manifest: OrgTemplate | undefined): Promise<RoutineRow[]> {
   const rows: RoutineRow[] = [];
   for (const r of manifest?.routines ?? []) {
     const bound = row.routines?.[r.id];
     const trigger = bound?.triggerId ? await ctx.db.get(bound.triggerId as Id<"agent_tasks">) : null;
     // The trigger carries the title with the instance's values filled in; the manifest's may still hold tokens.
-    rows.push({ id: r.id, title: trigger?.title ?? r.title, every: r.every, mode: r.mode ?? "propose", external: !!bound?.external, retired: !!bound?.retired, trigger: trigger ? { id: String(trigger._id), short_id: trigger.short_id, status: trigger.status, run_at: trigger.run_at, precheck: trigger.precheck, interval_ms: trigger.interval_ms } : null });
+    rows.push({ id: r.id, title: trigger?.title ?? r.title, every: r.every, mode: r.mode ?? "propose", external: !!bound?.external, retired: !!bound?.retired, trigger: trigger ? { id: String(trigger._id), short_id: trigger.short_id, status: trigger.status, run_at: trigger.run_at, precheck: trigger.precheck, interval_ms: trigger.interval_ms, run_count: trigger.run_count, last_run_at: trigger.last_run_at, last_run_failed: trigger.last_run_failed } : null });
   }
   return rows;
 }
@@ -278,7 +285,7 @@ async function tellRoleOfBind(ctx: Ctx, userId: Id<"users">, before: any, row: a
   });
 }
 
-async function instanceFor(ctx: Ctx, userId: Id<"users">, instanceKey: string): Promise<{ row: any; manifest: OrgTemplate }> {
+export async function instanceFor(ctx: Ctx, userId: Id<"users">, instanceKey: string): Promise<{ row: any; manifest: OrgTemplate }> {
   const row = await ctx.db.query("org_template_instances").withIndex("by_instance_key", (q: any) => q.eq("instance_key", instanceKey)).first();
   if (!row || !(await workspaceGrantsAccess(ctx as any, userId, row.workspace))) throw new Error("Instance not found");
   const template = await visibleTemplate(ctx, row.template_id, row.workspace);
@@ -289,7 +296,7 @@ async function instanceFor(ctx: Ctx, userId: Id<"users">, instanceKey: string): 
   return { row, manifest: release.manifest as OrgTemplate };
 }
 /** The instance record plus the authority its role holds (org_roles.authority), for readiness. */
-const stateOf = (row: any, role?: any): InstanceState => ({ evidence: row.evidence, scoreboard: row.scoreboard, setup: row.setup, authority: (role?.authority ?? []).map((g: any) => ({ id: g.id, expires_at: g.expires_at })) });
+export const stateOf = (row: any, role?: any): InstanceState => ({ evidence: row.evidence, scoreboard: row.scoreboard, setup: row.setup, authority: (role?.authority ?? []).map((g: any) => ({ id: g.id, expires_at: g.expires_at })) });
 
 // ── The instance record (H5 to H7) ──────────────────────────────────────────
 
@@ -348,7 +355,7 @@ export async function performInstanceForRole(ctx: Ctx, userId: Id<"users">, args
   // last request went, so the page shows one button and its progress.
   const bind_host = await bindHostOf(ctx, userId, row);
   const host_step = await hostStepOf(ctx, row);
-  return { ...status, routines, secrets, scoreboard, bind_host: { device: bind_host.device, dir: bind_host.dir, reason: bind_host.reason }, host_step, template: template ? { name: template.name, avatar: template.avatar, latest_stable: latest, changelog: template.releases.find((r: any) => r.version === latest)?.changelog } : null, update_available: latest && row.update_policy === "stable" && compareVersions(latest, row.version) > 0 ? latest : null };
+  return { ...status, routines, secrets, scoreboard, bind_host: { device: bind_host.device, dir: bind_host.dir, reason: bind_host.reason }, host_step, template: template ? { name: template.name, avatar: template.avatar, latest_stable: latest, changelog: template.releases.find((r: any) => r.version === latest)?.changelog } : null, update_available: latest && row.update_policy === "stable" && compareVersions(latest, row.version) > 0 ? latest : null, update_digest: template?.releases.find((r: any) => r.version === latest)?.digest ?? null };
 }
 
 // ── The host step from the web (H3): a daemon runs bind ─────────────────────
@@ -420,6 +427,16 @@ export async function performRequestBind(ctx: Ctx, userId: Id<"users">, args: { 
     if (!secretKeys.has(s.key)) throw new Error(`Not a secret input of this template: ${s.key}`);
     if (!s.payload || s.payload.provider !== s.key || !s.payload.epk || !s.payload.iv || !s.payload.ct) throw new Error(`Secret ${s.key} must arrive sealed to the machine's key`);
   }
+  return enqueueBind(ctx, userId, row, { secrets, device_id: args.device_id });
+}
+/**
+ * One `org_template_bind` command for the machine bindHostOf names, recorded
+ * on the row. One request at a time: a pending one is returned, not doubled.
+ * A person's host step (above) and the publisher's canary rollout
+ * (orgTemplateLearning.performRollout, H12) both queue through here.
+ */
+export async function enqueueBind(ctx: Ctx, userId: Id<"users">, row: any, args: { secrets?: OrgTemplateBindSecret[]; device_id?: string } = {}) {
+  const secrets = args.secrets ?? [];
   const current = await hostStepOf(ctx, row);
   if (current.state === "pending" && row.bind_request) return { command_id: row.bind_request.command_id, device: { device_id: row.bind_request.device_id, label: row.bind_request.device_label }, already_pending: true };
   const host = await bindHostOf(ctx, userId, row);
@@ -446,6 +463,11 @@ export async function performRequestBind(ctx: Ctx, userId: Id<"users">, args: { 
 /** A lesson leaves the hiring workspace as a row the publisher sees; the writer keeps only its status. */
 export async function performFileLesson(ctx: Ctx, userId: Id<"users">, args: { instance_key: string; body: string; evidence?: { label: string; href: string }[] }) {
   const { row } = await instanceFor(ctx, userId, args.instance_key);
+  return fileLessonRow(ctx, userId, row, { ...args, source: "role" });
+}
+export type LessonFields = { body: string; evidence?: { label: string; href: string }[]; source: "role" | "learning"; kind?: LessonKind; about?: string };
+/** The one writer of a lesson row: the role's own lesson (above) and the learning pass (orgTemplateLearning, H12) both end here. */
+export async function fileLessonRow(ctx: Ctx, userId: Id<"users">, row: any, args: LessonFields) {
   const body = args.body.trim();
   if (body.length < 20) throw new Error("Say what was learned, with its evidence: at least a sentence");
   if (body.length > 20000) throw new Error("A lesson is a proposal, not a report; keep it under 20000 characters");
@@ -454,7 +476,8 @@ export async function performFileLesson(ctx: Ctx, userId: Id<"users">, args: { i
   const now = Date.now();
   const id = await ctx.db.insert("org_template_lessons", {
     template_id: row.template_id, workspace: template.workspace, from_workspace: row.workspace, instance_key: row.instance_key,
-    release: { version: row.version, digest: row.digest }, body, evidence: args.evidence ?? [], status: "open", created_by: userId, created_at: now, updated_at: now,
+    release: { version: row.version, digest: row.digest }, body, evidence: args.evidence ?? [], status: "open", source: args.source, ...(args.kind ? { kind: args.kind } : {}), ...(args.about ? { about: args.about } : {}),
+    created_by: userId, created_at: now, updated_at: now,
   });
   const lesson = await ctx.db.get(id);
   return { id: lesson._id, status: lesson.status, created_at: lesson.created_at };
@@ -464,13 +487,14 @@ export async function performListLessons(ctx: Ctx, userId: Id<"users">, args: { 
   if (args.instance_key) {
     const { row } = await instanceFor(ctx, userId, args.instance_key);
     const rows: any[] = await ctx.db.query("org_template_lessons").withIndex("by_instance", (q: any) => q.eq("instance_key", row.instance_key)).collect();
-    return rows.map((l) => ({ id: l._id, status: l.status, released_in: l.released_in, created_at: l.created_at, body: l.body }));
+    return rows.map((l) => ({ id: l._id, status: l.status, released_in: l.released_in, created_at: l.created_at, body: l.body, source: l.source ?? "role", kind: l.kind, about: l.about }));
   }
   if (!args.template_id) throw new Error("Name a template or an instance");
   const access = args.as_codecast ? CODECAST_TEMPLATE_ACCESS : await callerWorkspace(ctx, userId, args.team_id);
   if (args.as_codecast) await requireCodecastPublisher(ctx, userId);
   const rows: any[] = await ctx.db.query("org_template_lessons").withIndex("by_template_status", (q: any) => q.eq("template_id", args.template_id)).collect();
-  return rows.filter((l) => l.workspace === access);
+  // A learned lesson (H12) reaches its publisher without where it came from: no workspace, no instance, no author.
+  return rows.filter((l) => l.workspace === access).map((l) => l.source === "learning" ? (({ from_workspace, instance_key, created_by, ...rest }) => rest)(l) : l);
 }
 export async function performSetLessonStatus(ctx: Ctx, userId: Id<"users">, args: { lesson_id: Id<"org_template_lessons">; status: "accepted" | "declined" | "released"; released_in?: string; task_id?: Id<"tasks"> }) {
   const lesson = await ctx.db.get(args.lesson_id);

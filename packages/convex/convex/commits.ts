@@ -5,6 +5,7 @@ import { internal, api } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { canAccessConversation, canAccessCommit } from "./lib/access";
 import { isConversationTeamVisible } from "./privacy";
+import { markCommitDirty } from "./lib/changesDirty";
 import { extractRepoFromRemoteUrl, normalizeRepository } from "@codecast/shared/contracts";
 import { commitCarriesDiffs } from "@codecast/shared/contracts/commitDiffs";
 
@@ -67,6 +68,7 @@ export const addCommit = mutation({
       pr_number: args.pr_number,
       files: args.files,
     });
+    await markCommitDirty(ctx, commitId);
 
     if (args.conversation_id) {
       const conversation = await ctx.db.get(args.conversation_id);
@@ -144,7 +146,7 @@ export const linkCommitToSession = mutation({
 // be attributed and are withheld (fail closed). Giving `commits` an owner
 // column is the real fix; until then these read as "signed in, and either the
 // row is yours by conversation or it is not served".
-async function accessibleCommits<
+export async function accessibleCommits<
   T extends { conversation_id?: Id<"conversations">; team_id?: Id<"teams"> },
 >(
   ctx: Parameters<typeof canAccessCommit>[0],

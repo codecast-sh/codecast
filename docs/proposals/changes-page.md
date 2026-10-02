@@ -362,7 +362,7 @@ Haiku 4.5 at $1 / $5 per million tokens in / out; Sonnet at about $3 / $15.
 | Littlebird (~760 commits, main only gets prose) | ~40 main | 40 × $0.0045 × 1.5 ≈ $0.27 | Sonnet, 4 × (15k in, 1.2k out) ≈ $0.25 | about $0.52 |
 | Week (phase 2) | | | 1 Sonnet call | about $0.05 / week |
 
-- **Per-team daily cap: $2.** Every call writes `model`, `input_tokens`, `output_tokens`, `cost_usd` on its row; `rebuildDay` sums today's cost for the team from `change_stories` and `digests` before calling. At the cap it stops, the deterministic text stays, and the footer says "Prose paused for today (daily limit)".
+- **Per-team daily cap: $2.** Every call writes `model`, `input_tokens`, `output_tokens`, `cost_usd` on its row; `rebuildDay` sums today's cost for the team from `change_stories` and `digests` before calling. At the cap it stops, the deterministic text stays, the day's edition gets `capped_at`, and the footer says "Prose paused for today (daily limit)" whenever `capped_at` is set, whether or not the edition already has prose. The cap counts the spend on rows of one team day (its stories and editions), not calls made on one calendar day, so a 14-day backfill can spend up to the cap on each day it builds, and rows deleted by pruning take their spend with them. The check runs before each call while up to 8 story calls are in flight, so a day can pass the cap by a few cents.
 - Branch-only stories never get prose in MVP; they live in In the works as counts.
 
 ### 7.9 Evals
@@ -412,7 +412,7 @@ Indexes: `by_team_repo_date [team_id, repository, date]`, `by_story_key [story_k
 
 **`digests` (reshaped; unused today, only `admin_mergeUser.ts` touches it)**:
 - `user_id` becomes optional (it is required at schema.ts:3760); `events` becomes optional; `narrative` keeps the standfirst so old rows stay valid.
-- Add optional: `repository`, `headline`, `lead_story_key`, `section_order: string[]`, `brief_story_keys: string[]`, `releases: [{surface, version?, sha, at}]`, `stats: {commits, stories, releases, people, sessions, private_sessions}`, `inputs_hash`, `model`, `input_tokens`, `output_tokens`, `cost_usd`, `status: "facts"|"written"|"final"|"failed"|"capped"`.
+- Add optional: `repository`, `headline`, `lead_story_key`, `section_order: string[]`, `brief_story_keys: string[]`, `releases: [{surface, version?, sha, at}]`, `stats: {commits, stories, releases, people, sessions, private_sessions}`, `inputs_hash`, `model`, `input_tokens`, `output_tokens`, `cost_usd`, `status: "facts"|"written"|"final"|"failed"`, `capped_at` (when the daily cap first left prose of the day unwritten, independent of status).
 - Scope stays `day | week | month`; team editions use `day` and `week`.
 - Add index `by_team_repo_scope_date [team_id, repository, scope, date]`.
 - `admin_mergeUser.ts` must skip rows with no `user_id`.

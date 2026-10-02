@@ -143,7 +143,12 @@ function usePanelPlacement(anchor: HTMLElement, panel: React.RefObject<HTMLDivEl
     const left = Math.max(8, Math.min(window.innerWidth - PANEL_W - 8, align === "end" ? rect.right - PANEL_W : rect.left));
     const below = rect.bottom + GAP;
     const above = below + h > window.innerHeight - 8 && rect.top - GAP - h >= 8;
-    setPos({ left, top: above ? rect.top - GAP - h : below, above });
+    const top = above ? rect.top - GAP - h : below;
+    // The layout effect below measures after every render, so a placement
+    // that has not moved must not set state: a fresh object each time is a
+    // render each time, and React gives up on the loop ("Maximum update
+    // depth exceeded"), taking the whole call window down with it.
+    setPos((p) => (p && p.left === left && p.top === top && p.above === above ? p : { left, top, above }));
   }, [anchor, panel, align]);
   useLayoutEffect(() => {
     place();

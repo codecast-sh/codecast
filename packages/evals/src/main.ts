@@ -15,7 +15,7 @@ import { codecastRunSource } from './adapters/runs';
 import { registerCapture } from './commands/capture';
 import { registerCheck } from './commands/check';
 import { registerDoctor } from './commands/doctor';
-import { registerGrade } from './commands/grade';
+import { registerGrade, registerRescore } from './commands/grade';
 import { registerLine } from './commands/line';
 import { registerPublish } from './commands/publish';
 import { registerSnapshot } from './commands/snapshot';
@@ -69,6 +69,7 @@ A ref names its surface (<surface>@<ref>). ${fmt.cmd('./evals')} lists the surfa
   registerEvals(program, sources);
   registerSnapshot(program);
   registerGrade(program);
+  registerRescore(program);
   registerCapture(program);
   registerDoctor(program);
   registerSnippet(program);

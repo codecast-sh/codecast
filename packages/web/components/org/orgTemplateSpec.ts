@@ -87,6 +87,18 @@ export function grantsToAsk(m: OrgTemplate, config: Record<string, string>): Org
   return out;
 }
 
+/** The update line's proposal (org-hire.md H9): one upgrade change the person decides; the host step then performs it. */
+export function buildUpgradeSpec(i: { instance: string; template_id: string; version: string; update_available: string; update_digest: string; template?: { name?: string; changelog?: string | null } | null }): HireSpec {
+  const name = i.template?.name ?? i.template_id;
+  const title = `Update ${i.instance} to ${name} ${i.update_available}`;
+  return {
+    title, mode: "request",
+    summary_md: [`${i.instance} runs ${name} ${i.version}; ${i.update_available} is the newest stable release.`, i.template?.changelog ? `\nWhat changed:\n\n${i.template.changelog}` : "", `\nAfter you accept, its machine moves it on the next host step (the role page's button, or cast org template bind ${i.instance}). The role's identity, caps and secrets are untouched; an update never widens what it may do.`].filter(Boolean).join("\n"),
+    changes: [{ kind: "upgrade", instance: i.instance, template: i.template_id, to: i.update_available, digest: i.update_digest }],
+    asks: [{ title, why: `${name} ${i.update_available} carries the publisher's latest lessons.`, effect: `${i.instance} runs ${i.update_available} after its next host step`, seqs: [1] }],
+  };
+}
+
 export function buildHireSpec(d: HireDraft): HireSpec {
   const errors = hireErrors(d);
   if (errors.length || !d.template || !d.project) throw new Error(errors[0] ?? "Incomplete hire");

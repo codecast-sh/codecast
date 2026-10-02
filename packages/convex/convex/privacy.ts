@@ -53,7 +53,7 @@ export async function isTeamAdmin(
   return m?.role === "admin";
 }
 
-async function getOwnerMembership(
+export async function getOwnerMembership(
   ctx: DbCtx,
   ownerId: Id<"users">,
   teamId: Id<"teams">

@@ -5,14 +5,15 @@
 <h1 align="center">codecast</h1>
 
 <p align="center">
-  <strong>See, steer, and remember every coding agent session.</strong><br/>
-  Any agent, any machine — Claude Code, Codex, Cursor, and Gemini, on the machines you already run them.
+  <strong>Your team and its agents, in one workspace.</strong><br/>
+  Raise your AI army. Stay in command.
 </p>
 
 <p align="center">
-  <a href="https://codecast.sh">Web Dashboard</a> &middot;
+  <a href="https://codecast.sh">Web App</a> &middot;
   <a href="#install">Install CLI</a> &middot;
   <a href="#features">Features</a> &middot;
+  <a href="https://codecast.sh/documentation">Docs</a> &middot;
   <a href="docs/SELF-HOSTING.md">Self-Hosting</a> &middot;
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
@@ -23,13 +24,13 @@
 
 ---
 
-Your agents' history stops evaporating when the terminal closes. Codecast keeps a permanent, searchable record of every conversation your team's agents have had — search it with `cast search`, ask questions across it with `cast ask`, and trace any line of code back to the session that wrote it with `cast blame`.
+Codecast is the workspace where a team works alongside its coding agents. Chat, calls, tasks, docs, pull requests and decisions live in one place, with Claude Code, Codex, Cursor, Gemini, OpenCode and pi as teammates in every one. Everything links back to the session that did it.
 
-It records the agents you already run — Claude Code, Codex CLI, Cursor, and Gemini today, with OpenCode and pi coming — as real local terminal sessions, not just cloud runs. A background daemon watches your agent history files wherever you run them and syncs every conversation in real time.
+It works with the agents you already run. A background daemon watches the history files they write, on your laptop or a cloud host, and syncs every session live. There is nothing to reconfigure: start `claude` or `codex` in a terminal and the session joins the workspace, with the tasks, docs and threads around it.
 
-A live inbox shows every session — working, needs input, idle — steerable from web, desktop, and phone. Answer a permission prompt from the couch, or unblock an agent from your phone. Tasks, plans, documents, and multi-agent orchestration build on top.
+One person can run dozens of agents and still be in command of them. An inbox sorts every session by who acts next. A decision queue collects the choices only a person can make. A permanent record lets you search every conversation, ask questions across it, and trace any line of code back to the session that wrote it with `cast blame`.
 
-![Codecast dashboard showing live agent sessions and conversation viewer](docs/screenshots/hero.png)
+![Codecast workspace showing live agent sessions and an open conversation](docs/screenshots/hero.png)
 
 ## Install
 
@@ -45,173 +46,157 @@ On Windows:
 irm codecast.sh/install.ps1 | iex
 ```
 
-That's it. The installer ships a prebuilt binary — no runtime required. The daemon runs in the background, watching your agent history files and syncing conversations as they happen.
+The installer ships a prebuilt binary, so no runtime is required. The daemon runs in the background, watching your agent history files and syncing conversations as they happen.
 
 **Requirements:** macOS, Linux, or Windows
 
 ## Features
 
-### Session Memory
+| | |
+|---|---|
+| **Inbox** | Every session from every agent and machine, sorted by who acts next. |
+| **Memory** | Search, ask and blame across every conversation your team's agents have had. |
+| **Chat** | Channels and threads where agents post what changed and answer when mentioned. |
+| **Calls** | Huddles transcribed by speaker. Action items become tasks linked to the exact line. |
+| **Tasks and plans** | Agents are assignees. Progress, comments and evidence land on the task. |
+| **Docs** | Specs in, findings out. Every edit links to the session that made it. |
+| **Pull requests** | The session that opened a PR wakes for reviews, fixes and failing checks. |
+| **Decisions** | One queue of the choices only a person can make, cleared in one sitting. |
+| **Automations** | Triggers, routines and workflows with approval gates, running overnight. |
+| **Pages** | Reports and mockups agents publish at a link, with versions and comments. |
+| **Org** (early) | Standing agents that look after an area, and a head of people that keeps it running. |
 
-Your agents' history doesn't evaporate when the terminal closes. Every conversation becomes a permanent, searchable record — queryable from your terminal or from inside an agent session, so your team stops re-solving the same problems.
+### Inbox
 
-- **Full-text and semantic search** — `cast search` across every session your team has had, with member, time, and label filters
-- **Ask the corpus** — `cast ask "how does auth work?"` answers questions across every conversation; `cast context` surfaces relevant prior sessions before you start
-- **`cast blame`** — git blame where the author column is the agent conversation that wrote each line (`cast blame src/auth.ts`), via a VS Code / Cursor extension, vim, or the CLI
-- **Handoffs** — `cast handoff` generates a context transfer document so a fresh session picks up where the last one left off
-- **Agent memory** — when an agent runs `cast search` or `cast ask`, it queries your whole team history — long-term memory that persists across sessions
+Codecast watches your local agent history files and syncs conversations in real time. The inbox is a triage queue: sessions are grouped by who acts next (needs input, working, idle, done) so the ones waiting on you are at the top. Pin important sessions, stash noisy ones, file them under labels, kill what's done.
 
-### Session Sync & Inbox
+![Inbox triage queue: sessions grouped by label with live status, model badges, and summaries alongside the open conversation](docs/screenshots/inbox.png)
 
-Codecast watches your local agent history files and syncs conversations to the server in real time. The inbox is a triage queue — sessions are categorized by status (working, idle, needs input, errored) and sorted by priority. Pin important sessions, stash noisy ones, file them under labels, kill what's done.
+- **Every agent.** Claude Code, Codex, Cursor, Gemini, OpenCode and pi, plus cloud agents from Cursor and OpenAI. See [Supported Agents](#supported-agents) for what each one can do.
+- **Every machine.** Laptops and cloud hosts in one list. `cast migrate` moves live sessions between them without losing a message.
+- **Live state.** See which agents are working, waiting on you, or stalled, with model badges and scheduled-run indicators.
+- **Labels.** File sessions under your own labels (`Ctrl+L`), then switch between label and project views (`Ctrl+Shift+L`).
+- **Stash or kill.** Set a session aside without stopping its agent, or kill the agent outright. Killed sessions stay resumable.
+- **Privacy.** Conversations are private by default, secrets are redacted before sync, and end-to-end encryption is optional.
 
-![Inbox triage queue: session feed grouped by label with live status, model badges, and summaries alongside the open conversation](docs/screenshots/inbox.png)
+### Conversations
 
-- **Multi-agent support** — Claude Code, Codex CLI, Cursor, and Gemini, with OpenCode and pi coming
-- **Live status tracking** — see which agents are working, idle, waiting for input, or errored, with model badges and scheduled-run indicators
-- **Session categories** — Pinned > Working > Needs Input > Idle > Deferred, with parent/child grouping for sub-sessions
-- **Labels** — file sessions under your own labels (`Ctrl+L`), then switch between label and project views (`Ctrl+Shift+L`)
-- **Stash vs. kill** — set a session aside without stopping its agent, or kill the agent outright; killed sessions stay resumable
-- **Activity feed** — daily digest view organized by project, with narrative summaries and session cards
-- **Privacy controls** — mark conversations private, redact API keys and secrets automatically
-- **Encryption** — optional end-to-end encryption for sensitive conversations
-
-### Conversation Viewer
-
-Every conversation is rendered with syntax-highlighted code blocks, collapsible tool calls, and inline insights. You can send messages to sessions directly from the web UI — they're injected into the live terminal session, with delivery verification and retry.
+Every conversation renders with syntax-highlighted code, collapsible tool calls, and per-edit diffs. Messages you send from the web, desktop or phone are injected into the live terminal session, with delivery verification and retry.
 
 ![Conversation view showing code blocks, tool call summaries, and insight blocks](docs/screenshots/conversation.png)
 
-- **Tool call rendering** — Bash commands, file reads, grep results, and edits shown as compact summaries with expandable detail
-- **Inline review** — quote and comment on any assistant reply (`R`), batch comments in the composer, and send them as one review
-- **Forking** — branch any conversation from any message (`Alt+F`), instantly and local-first; fork chips show the tree inline and `cast tree` prints it
-- **Message compose** — send messages to any session, queue follow-ups, approve or deny permission prompts with `Y`/`N`
-- **File changes** — see which files were touched, with diffs materialized per edit
-- **Kill & restart** — restart a dead or wedged session from the web, with step-by-step progress and recovery
-- **Sub-session hierarchy** — parent sessions show child agent sessions inline
+- **Steer from anywhere.** Send messages, queue follow-ups, and approve or deny permission prompts with `Y`/`N`.
+- **Inline review.** Quote and comment on any assistant reply (`R`), batch the comments, and send them as one review.
+- **Forking.** Branch a conversation from any message (`Alt+F`). Fork chips show the tree inline and `cast tree` prints it.
+- **File changes.** See which files a session touched, with a diff for each edit.
+- **Kill and restart.** Restart a dead or wedged session from the web, with step-by-step progress.
+- **Subagents.** Workers a session spawns nest under it and show inline.
 
-### Models & Accounts
+### Memory
 
-Control which model and effort level a session uses — from the web, for both new and running sessions — and switch between Claude Code accounts without touching a browser.
+Your agents' history does not evaporate when the terminal closes. Every conversation becomes a permanent, searchable record, readable from your terminal or from inside an agent session, so your team stops solving the same problem twice.
 
-- **Model & effort control** — pick model and reasoning effort when starting a session, or change them mid-flight; one-shot `/model` and `/effort` from the composer
-- **Account profiles** — `cast accounts` saves each Claude Code login as a profile and switches between them instantly
-- **Usage-limit handling** — blocked sessions surface a banner and can be revived on another account
+- **Search.** `cast search` across every session, with filters for member, time, label, file, commit and pull request.
+- **Ask.** `cast ask "how does auth work?"` answers across every conversation. `cast read <id> --ask` answers from one session, with line citations.
+- **Blame.** `cast blame src/auth.ts` is git blame whose author column is the conversation that wrote each line. Agent commits carry a `Codecast-Session` trailer, so `git log` leads back to the session too.
+- **Handoffs.** `cast handoff` writes a context transfer so a fresh session picks up where the last one stopped.
+- **Agent memory.** When an agent runs `cast search` or `cast ask`, it queries your whole team's history.
 
-### Command Palette & Search
+### Chat
 
-A Linear-style command palette (`Cmd+K`) for fast navigation across everything — sessions, tasks, plans, docs, and built-in actions — plus a dedicated search page with keyword and semantic modes.
+Team channels and threads, shared by people and agents. Agents post the facts other people need (a decision, a release, a blocker) and answer in the thread when you mention them.
 
-![Command palette showing recent sessions and jump-to navigation](docs/screenshots/command-palette.png)
+- **Mentions.** `@name` notifies a teammate. Mentioning the workspace's agent or a session starts a turn that replies in the thread.
+- **Live references.** Task, plan, session and doc ids render as pills with their title and current state.
+- **From the terminal.** `cast chat read`, `send`, `thread` and `search` give agents and scripts the same channels.
 
-- **Full-text search** across all sessions and entities, with member, time, and label filters
-- **Quick navigation** — jump to inbox, tasks, docs, dashboard, settings; recently viewed sessions at your fingertips
-- **Session actions** — pin, stash, kill, label, rename directly from the palette
-- **Keyboard-first** — 70+ context-aware shortcuts for power users (`?` shows them all)
+### Calls
 
-### Tasks
+Team huddles with exact speaker attribution in the transcript. When a call ends it gets a title, a summary and action items, and each action item can become a task linked to the line where it was agreed.
 
-Tasks are mined automatically from agent sessions or created manually. They support status cycling, priority levels, labels, plan binding, and dependency tracking.
+- **Readable by agents.** `cast calls` lists them and `cast call <id> --transcript` prints who said what, so an agent can quote the call instead of guessing.
+- **On every surface.** Web, desktop and mobile.
+
+### Tasks, plans and docs
+
+Tasks are assigned to agents the same way they are assigned to people. An agent claims a task, reports progress on it, attaches evidence, and marks it done with what it verified.
 
 ![Tasks page with plan grouping, status filters, and label chips](docs/screenshots/tasks.png)
 
-- **Auto-mining** — tasks are extracted from session insights with confidence scoring
-- **Triage system** — suggested tasks can be accepted, dismissed, or edited before promotion
-- **Plan grouping** — tasks organized under plans with progress tracking
-- **Status workflow** — backlog, open, in_progress, in_review, done, dropped
-- **Multiple views** — list view with status grouping, or kanban board with drag-drop
-- **Start an agent** — assign a task to an agent and it launches a session with the task bound
-- **Filters** — by status, priority, labels, assignee, source agent, project
+- **Start an agent from a task.** Assign a task and a session launches with the task bound.
+- **Subtasks and projects.** Break a task into steps, group work into projects, and view it as a list or a kanban board.
+- **Plans.** A plan groups tasks toward a goal. `cast plan orchestrate` runs its tasks in parallel waves across agents, and `autopilot` keeps going until the plan is done.
+- **Linear and GitHub.** Import a Linear team or a GitHub repo as a project. Issues sync both ways.
+- **Docs.** A collaborative editor for specs, findings and handoffs. `@mention` any session, task, plan or doc and it renders as a live reference.
 
-### Plans
+### Pull requests
 
-Plans are higher-level initiatives that group tasks toward a goal. They contain rich documents, task lists with progress bars, and links to the sessions that worked on them.
+A pull request carries its checks, reviews, threads, and the session that owns it. That session wakes when a review lands or a check fails, makes the fix, pushes, and answers the thread.
 
-- **Rich documents** — plans contain TipTap-powered documents with headings, lists, code blocks
-- **Task decomposition** — break plans into tasks from the UI or CLI
-- **Progress tracking** — see done/in_progress/total at a glance
-- **Session linking** — sessions auto-link to the plans and tasks they work on
-- **Orchestration** — wave-based parallel execution of plan tasks across multiple agents
-- **Retrospectives** — auto-generated learnings and friction points after plan completion
+- **Review as a batch.** Hold a note on each line, then send them as one review with one verdict.
+- **Linked work.** Every pull request and commit links to the sessions that wrote it.
+- **From the terminal.** `cast pr show`, `threads`, `review` and `watch`.
 
-### Documents
+### Decisions
 
-A collaborative document editor for specs, designs, investigations, handoffs, and notes. Documents can be linked to plans and sessions, and support entity mentions to cross-reference anything in the system.
+Agents queue the choices only a person can make (a schema, a spend, a tradeoff of taste) instead of interrupting or guessing. Each decision carries its options, what each one costs, and the evidence, so you can clear the queue in one sitting from web or phone. The answer goes back to the session as its next instruction.
 
-- **Document types** — note, plan, design, spec, investigation, handoff
-- **Rich editor** — TipTap with ProseMirror-based collaborative sync
-- **Entity mentions** — `@mention` sessions, tasks, plans, or docs inline; references render as pills with hover previews
-- **Date mentions** — `#` inserts dates that link to that day's activity
-- **Slash commands** — `/` for quick formatting and entity insertion
-- **Markdown export** — copy any document as clean markdown
+### Automations
 
-### Profiles & Notifications
+Work that runs without you.
 
-Every member gets a public profile, and you can subscribe to the entities you care about.
+- **Triggers.** Run an agent after a delay (`--in 30m`), on a schedule (`--every 4h`), or on an event (`--on pr_comment`, `--on issue_opened`). A `--precheck` command skips runs when nothing changed, and `--safe` makes a run read-only.
+- **Workflows.** Execution graphs with agent steps, shell commands, conditions, loops and human approval gates, bound to a task or plan and shown live.
+- **Results where you read them.** A run reports into the session that armed it and reaches your inbox only when it needs you.
 
-- **Public profiles** — `codecast.sh/<handle>` with an activity feed, 180-day contribution heatmap, timeline chart, and punchcard
-- **Watch anything** — subscribe to sessions, tasks, plans, or docs and get notified on activity
-- **Notification center** — entity events collected in one place, routed by what you watch
+### Pages
 
-### Scheduled Agents
+`cast publish` turns a report, dashboard, mockup or markdown file into a page at a stable link. Pages keep every version (view, diff, roll back), take viewer comments, and can be gated by password, email or expiry. A published link embeds live in the conversation that made it.
 
-Schedule follow-up work that runs autonomously — check CI in 30 minutes, review PRs every 4 hours, respond when a PR comment lands.
+### Org (early)
 
-- **Triggers** — one-shot delays (`--in 30m`), recurring intervals (`--every 4h`), or webhook events (`--on pr_comment`)
-- **Cloud agents page** — see upcoming and past runs, with full conversation logs
-- **Device affinity** — scheduled tasks run on the machine that owns the project
-- **Context carryover** — capture the current session's context for the follow-up run
+Standing agents that each look after an area of the work and report up a line, with a head of people that keeps it running. Off by default; enable it per team.
 
-### Workflows
+### Fleets and cloud hosts
 
-Visual workflow definitions with node-based execution. Define agent, prompt, command, human gate, conditional, and parallel nodes — then run them with live progress tracking.
+- **Spawn and fork.** `cast spawn` starts a fresh session on any agent, `cast fork` branches the current conversation in several directions at once, and `cast spawn --subagent` runs workers that report back to the session that started them.
+- **Any agent, mid-flight.** `cast switch --agent codex` continues the same session under a different agent or model.
+- **Cloud hosts.** `--cloud` runs a session on your own cloud machine, starting from your checkout as it stands.
+- **Worktrees.** `cast ws acquire <name>` gives parallel work an isolated worktree with its own env files and ports.
+- **A real browser and desktop.** `cast browser` lets an agent drive your own Chrome, signed in as you. `cast computer` lets it operate native macOS apps.
 
-- **Node types** — agent, prompt, command, human gate, conditional, parallel
-- **Human gates** — pause workflows for human input via the regular message composer
-- **Live execution** — real tmux sessions per node, streamed to the dashboard
-- **Session integration** — workflow runs create primary conversations visible in the inbox
+### Models and accounts
 
-### Teams
+- **Model and effort.** Pick the model and reasoning effort when starting a session, or change them while it runs.
+- **Account profiles.** `cast accounts` saves each Claude Code login and switches between them.
+- **Usage limits.** A session that hits a limit parks and resumes on its own, at the window reset or on another saved account.
 
-Share conversations, tasks, and plans across your team with granular privacy controls.
+### Command palette and search
 
-- **Directory-based sharing** — map project directories to teams for automatic conversation sharing
-- **Team activity feed** — see what your teammates' agents are working on
-- **Session messaging** — `cast send <id> "text"` messages any session, yours or a teammate's; replies arrive attributed to the sender
-- **Privacy levels** — full, summary, or hidden visibility per conversation
-- **Workspace scoping** — switch between personal and team workspaces, each with their own tasks, plans, and docs
+A command palette (`Cmd+K`) for everything: sessions, tasks, plans, docs, and actions. A search page covers every session with keyword and semantic modes.
 
-### Desktop App
+![Command palette showing recent sessions and jump-to navigation](docs/screenshots/command-palette.png)
 
-A native macOS app with global keyboard shortcuts, notifications, and a floating command palette.
+More than 70 context-aware shortcuts keep the whole app usable from the keyboard (`?` shows them all).
 
-- **Global window toggle** — `Cmd+Alt+Space` from anywhere to summon codecast
-- **Global palette** — `Ctrl+Alt+Space` for the floating command palette; `Ctrl+Shift+N` to compose a new session without leaving your editor
-- **Native notifications** — get notified when agents need input or finish work
-- **Auto-updates** — stays current automatically via electron-updater
+### Teams and privacy
 
-### Editor Integrations
+- **Share by directory.** Map a project directory to a team and its sessions are shared from then on. Everything else stays private.
+- **Visibility levels.** Full, summary, or hidden, per conversation and per member.
+- **Workspaces.** Switch between personal and team workspaces, each with its own tasks, plans and docs.
+- **Message any session.** `cast send <id> "text"` reaches your sessions or a teammate's, and replies arrive attributed to the sender.
 
-Bring session attribution into your editor with `cast blame` — a drop-in `git blame` replacement whose author column shows the codecast session that wrote each line.
+### Desktop, mobile and editor
 
-- **VS Code / Cursor extension** — blame decorations that link lines to their conversations, with open-at-revision support
-- **Vim** — works with vim-fugitive's blame view; jump from a line to the conversation that produced it
-- **CLI** — `cast blame src/auth.ts` in any terminal, including porcelain output for tooling
-
-### Mobile App
-
-An iOS app for monitoring agent sessions on the go.
-
-- **Session browsing** — swipe-to-pin, syntax-highlighted code viewing
-- **Tasks & plans** — browse tasks and plan details with live sync
-- **Push notifications** — stay informed about agent status
-- **Inbox parity** — same session queue and categorization as the web
+- **Desktop.** A native macOS app with a global window toggle (`Cmd+Alt+Space`), a floating command palette (`Ctrl+Alt+Space`), native notifications, and auto-updates.
+- **Mobile.** An iOS app with the same inbox, push notifications when an agent needs you, and approve or deny for permission prompts.
+- **Editor.** A VS Code and Cursor extension shows `cast blame` in the gutter and opens the conversation behind a line. Vim works through fugitive.
 
 ## CLI
 
-The `cast` CLI is an agentic interface that integrates your coding agents — Claude Code, Codex, Cursor, and Gemini, with OpenCode and pi coming — into a shared system with global session memory, tasks, plans, docs, and team collaboration. It installs lightweight snippets into each agent's config, giving them access to the full Codecast system from within any conversation.
+The `cast` CLI is how agents take part in the workspace. `cast install` writes short instructions into each agent's config, so every agent can search the record, work tasks, post to chat, queue decisions and schedule its own follow-ups from inside a conversation. Every command also works from your terminal.
 
-### Agent Integration
+### Agent integration
 
 ```bash
 cast install            # Install snippets into agent configs
@@ -219,29 +204,25 @@ cast stable team        # Inject recent team activity into every new session
 cast stable solo -g     # Inject your sessions across all projects
 ```
 
-`cast install` writes to `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, and `~/.cursor/rules/codecast.mdc`, teaching each agent how to use `cast` commands for memory, tasks, plans, and scheduling. After installation, your agents can search past sessions, create and manage tasks, and schedule follow-up work — without any manual copy-paste.
+`cast install` writes to `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, and `~/.cursor/rules/codecast.mdc`. `cast stable` injects a rolling window of recent conversations into every new session, so agents start aware of what has been happening across the project or team.
 
-`cast stable` injects a rolling context window of recent conversations into every new agent session, so agents start with awareness of what's been happening across the project or team.
-
-### Session Memory
+### Memory
 
 ```bash
 cast feed               # Browse recent conversations
 cast read <id> 15:25    # Read messages 15-25 of a session
+cast read <id> --ask "what did this conclude?"   # One session, with citations
 cast search "auth bug"  # Full-text search across all sessions
-cast search "error" -g -s 7d  # Global search, last 7 days
-cast ask "how does X work"     # Query across all sessions
-cast context "implement auth"  # Find relevant prior sessions
-cast similar --file src/auth.ts  # Sessions that touched a file
+cast search "file:src/auth.ts"   # Sessions that touched a file (also commit:, pr:, label:)
+cast ask "how does X work"       # Query across all sessions
+cast context "implement auth"    # Find relevant prior sessions
 cast blame src/auth.ts  # Which session wrote each line?
-cast summary <id>       # Generate a session summary
+cast summary <id>       # Goal, approach, outcome, files
 cast diff --today       # Aggregate all work done today
 cast handoff            # Generate a context transfer document
 ```
 
-These commands work both from your terminal and from inside agent sessions. When an agent calls `cast search` or `cast ask`, it's querying across every conversation your team has had — giving it long-term memory that persists across sessions.
-
-### Live Sessions
+### Live sessions
 
 ```bash
 cast sessions           # Work-state snapshot of your sessions
@@ -249,19 +230,20 @@ cast sessions -w        # Stream state changes live
 cast sessions --state needs-input  # What's waiting on you
 cast send <id> "text"   # Message another session
 cast resume auth bug    # Search history and resume the match
-cast attach             # tmux session picker TUI
-cast fork --from 15     # Branch a conversation from message 15
-cast tree <id>          # Show a conversation's fork tree
-cast accounts           # Save and switch Claude Code account profiles
+cast attach             # tmux session picker
+cast spawn "fix the flaky test"          # A fresh session
+cast fork "try approach A" "try approach B"   # Branch this conversation
+cast switch --agent codex                # Continue here under another agent
+cast migrate start --to <host> --label rollout   # Move sessions between machines
 ```
 
-`cast sessions` is the terminal twin of the web inbox: it groups sessions by NEEDS INPUT → WORKING → IDLE, and `-w` streams transitions as they happen — useful for monitoring a fleet of agents or waiting for one to go idle.
+`cast sessions` is the terminal twin of the web inbox. It groups sessions by who acts next, and `-w` streams transitions as they happen, which is how one session watches a fleet of others.
 
-### Task & Plan Orchestration
+### Tasks and plans
 
 ```bash
 cast task create "Fix auth bug" -p high
-cast task start <id>
+cast task start <id>              # Claim it (add --spawn to hand it to a fresh agent)
 cast task done <id> -m "Fixed by adding guard"
 cast plan create "Auth Overhaul" -g "Replace old auth middleware"
 cast plan decompose <id>          # Break plan into tasks
@@ -270,32 +252,38 @@ cast plan autopilot <id>          # Continuous orchestration with monitoring
 cast overview                     # Top-down view of all plans and tasks
 ```
 
-Plans support wave-based parallel execution: `autopilot` spawns agents for ready tasks, monitors progress, merges completed work, advances to the next wave, and self-reschedules if it hits a runtime limit.
-
-### Documents, Decisions & Scheduling
+### Team, pull requests and decisions
 
 ```bash
-cast doc create "Auth Design" -t design
+cast chat read --channel <id> --since 2h
+cast chat send --channel <id> "Release is out"
+cast calls                        # Team call history
+cast call <id> --transcript       # Who said what
+cast pr show                      # Checks, reviews, threads, owning session
+cast pr review 123 --request-changes -b "..."
+cast decide "Which schema?" -o "A :: what happens" -o "B :: what happens instead"
 cast decisions add "Use JWT" --reason "Stateless, works across services"
-cast learn add "convex-http" --description "HTTP action pattern"
-cast schedule add "Check CI" --in 30m
-cast schedule add "Review PRs" --every 4h
-cast schedule add "Respond to comments" --on pr_comment
 ```
 
-**Reading long documents.** `cast doc show` paginates instead of dumping the whole
-file, and prints a footer telling you how to get the next page. `cast doc grep`
-searches *within* one doc's body (unlike `cast doc search`, which matches titles
-across the corpus). The natural loop is outline → search → jump-to-range:
+### Triggers, workflows and pages
 
 ```bash
-cast doc grep <id> '^#'           # outline: every heading, with line numbers
-cast doc show <id>                # first page (200 lines) + a "next:" hint
-cast doc show <id> -p 2           # next page
-cast doc show <id> 800:1000       # an explicit line range
-cast doc show <id> 800: -n        # line 800 to the end, with a line-number gutter
-cast doc grep <id> 'scoring' -C 2 # find a term in the body, 2 lines of context
-cast doc show <id> --full         # opt out of paging, dump the whole thing
+cast trigger add "Check if CI is green on main" --in 30m
+cast trigger add "Review open PRs" --every 4h --spawn
+cast trigger add "Respond to new review comments" --on pr_comment
+cast workflow run flow.cast --task <id>
+cast publish report.html          # A stable link, versioned on every republish
+```
+
+### Docs
+
+```bash
+cast doc create "Auth Design"
+cast doc grep <id> '^#'           # Outline: every heading, with line numbers
+cast doc show <id>                # First page (200 lines) and a "next:" hint
+cast doc show <id> 800:1000       # An explicit line range
+cast doc grep <id> 'scoring' -C 2 # Find a term in the body
+cast doc search "auth"            # Match doc titles across the workspace
 ```
 
 ### Daemon
@@ -314,12 +302,14 @@ cast setup              # Auto-start on login (launchd/systemd/Task Scheduler)
 codecast/
   packages/
     cli/                CLI daemon, commands, and background sync engine
-    web/                Vite + React web dashboard
+    web/                Vite + React web app
     convex/             Self-hosted Convex backend (schema, queries, mutations)
     electron/           Native macOS desktop app
     mobile/             iOS/Android app (Expo + React Native)
     shared/             Encryption and cross-platform utilities
     vscode-extension/   VS Code / Cursor blame integration
+    browser-extension/  Chrome extension behind `cast browser`
+    evals/              Prompt evals against frozen moments
   scripts/              Deploy, build, and dev server scripts
   docs/                 Specs, plans, and design documents
   infra/                Self-hosted Convex infrastructure (Railway)
@@ -327,13 +317,11 @@ codecast/
 
 ### Supported Agents
 
-codecast integrates six agent CLIs. Support is not all-or-nothing: each client
+codecast integrates nine agent clients, local and cloud. Support is not all-or-nothing: each client
 is a registry descriptor (`packages/shared/contracts/agentClients.ts`) that
 declares only the capabilities it actually has. A capability a client lacks is
-simply absent — the session never breaks. The matrix below states the real
+simply absent, and the session never breaks. The matrix below states the real
 per-client reality as merged; ✓ = supported, — = not available.
-
-*OpenCode and pi integration is implemented in-tree and in active testing — treat as pre-release until it ships in a release.*
 
 | Agent | History location | Launch from web | Transcript sync | `cast send` | State detection | Resume | Fork | Model control | Permissions |
 |-------|------------------|:---------------:|:---------------:|:-----------:|:---------------:|:------:|:----:|:-------------:|:-----------:|
@@ -349,10 +337,10 @@ per-client reality as merged; ✓ = supported, — = not available.
 
 1. OpenCode forks through an `opencode serve` sidecar (`POST /session/:id/fork`, ct-39079/ct-39150): a fork at the conversation tip copies the full session, a mid-history fork truncates to the fork point to match the copied transcript. If the sidecar is unreachable the fork degrades to a fresh session rather than fabricated context.
 2. OpenCode launches auto-approved (`--auto`): the daemon reads its turn state from the SQLite store and can't answer the TUI's permission prompts, so there is no per-session permission control.
-3. pi reattaches to the same transcript on resume (no per-resume fork file), and its in-file branch tree renders the active branch only — so there is no separate fork surface.
+3. pi reattaches to the same transcript on resume (no per-resume fork file), and its in-file branch tree renders the active branch only, so there is no separate fork surface.
 4. pi is multi-provider and switches models in its own UI; codecast tracks the active model from the transcript rather than driving a picker.
 5. A managed `cursor-agent` launches with `--force` (Run Everything): the web cannot see its "Run this command?" menu. `agent_permission_modes.cursor: "default"` opts back into the menu, which then holds delivery until someone answers it in the terminal.
-6. Gemini has no transcript-tail classifier, so its working/idle state is not read from the transcript. It degrades safely to a heartbeat-liveness fallback (a dead daemon reads as finished within ~90s) and a one-hour trust window (a quiet session that never cleared "working" reads as idle) — never a permanently stuck spinner.
+6. Gemini has no transcript-tail classifier, so its working/idle state is not read from the transcript. It degrades safely to a heartbeat-liveness fallback (a dead daemon reads as finished within ~90s) and a one-hour trust window (a quiet session that never cleared "working" reads as idle), never a permanently stuck spinner.
 7. Gemini resume reopens the most-recent session (the CLI ignores a specific id).
 8. Codex fork creates the branch with the parent's history inherited, but a follow-up turn on the fork is not yet deliverable: the daemon regenerates a rollout under a new id that codex's own session store doesn't have, so `codex resume <fork-id>` can't reopen it (ct-39170). The branch is a readable dead end until that fork resumes through the app-server the way the parent does.
 9. Pick a `Cloud · …` model under Cursor (or `cast spawn --agent cursor --model cloud`). The first message creates a Cursor Cloud Agent on the project's GitHub repo and pushed branch, later messages are follow-up runs, and Escape cancels the running one. It needs a Cursor API key on the machine that drives it (`cast keys set cursor`). With a key set, every cloud agent on the account from the last 30 days syncs in, and the workers a multitask agent forks nest under it as subagents.
@@ -366,7 +354,8 @@ per-client reality as merged; ✓ = supported, — = not available.
 | Frontend | React 19, Vite 6, TailwindCSS, TipTap, Zustand |
 | Backend | Self-hosted Convex (real-time sync, auth, full-text search) |
 | CLI | Bun (compiled to standalone binaries), Commander, Chokidar |
-| Desktop | Electron 33, electron-updater |
+| Desktop | Electron 44, electron-updater |
+| Calls | LiveKit |
 | Mobile | Expo 54, React Native |
 
 ## Development
@@ -487,7 +476,7 @@ Self-hosters: replace the URLs with your own. See [Self-Hosting](docs/SELF-HOSTI
 | `Ctrl+[ / ]` | Toggle left / right sidebars |
 | `?` | Toggle shortcuts help |
 
-The full registry — 70+ context-aware shortcuts — is available in-app via `?`.
+The full registry of 70+ context-aware shortcuts is available in-app via `?`.
 
 ## License
 

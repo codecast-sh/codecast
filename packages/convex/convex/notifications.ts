@@ -21,7 +21,7 @@ import {
   classifyWorkState,
   type WorkState,
   needsInputKind,
-  subagentKeepsParentWorking,
+  subagentIsProducing,
   userRestOf,
   isSettleVerdictCurrent,
   HEARTBEAT_ALIVE_MS,
@@ -748,7 +748,7 @@ export async function deriveConversationVerdict(
       .take(20);
     for (const c of children) {
       if (!c.is_subagent || c.status !== "active") continue;
-      if (subagentKeepsParentWorking({
+      if (subagentIsProducing({
         isSubagent: true, convStatus: c.status, updatedAt: c.updated_at,
         isLive: false, agentStatus: undefined, now,
       })) {
@@ -760,7 +760,7 @@ export async function deriveConversationVerdict(
         .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", c._id))
         .first();
       const childAlive = !!childSession?.last_heartbeat && now - childSession.last_heartbeat < HEARTBEAT_ALIVE_MS;
-      if (childAlive && subagentKeepsParentWorking({
+      if (childAlive && subagentIsProducing({
         isSubagent: true, convStatus: c.status, updatedAt: c.updated_at,
         isLive: true, agentStatus: trustedAgentStatus(childSession?.agent_status, c.updated_at, now), now,
       })) {

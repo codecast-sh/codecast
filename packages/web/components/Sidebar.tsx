@@ -21,7 +21,7 @@ import { useCollectionRows } from "../hooks/useCollectionRows";
 import { useNeedsInputCount } from "../hooks/useNeedsInputCount";
 import { useDecisionQueue } from "../hooks/useDecisionQueue";
 import { waitingOnPerson } from "../lib/decisionQueue";
-import { useChatUnread, useChatRail, useChatMembers, useOpenDm, supersededChannelId } from "../hooks/useChatSync";
+import { chatUnreadTotals, useChatRail, useChatMembers, useOpenDm, supersededChannelId } from "../hooks/useChatSync";
 import { useThreadUnread } from "../hooks/useThreadsSync";
 import { ChannelContextMenu } from "./chat/ChannelMenu";
 import { useChannelMenu } from "../hooks/useChannelMenu";
@@ -198,6 +198,7 @@ const ChatNavRow = memo(function ChatNavRow({
   isActive,
   isNarrow,
   pathname,
+  pinsShown,
   expanded,
   onToggle,
   onMobileClose,
@@ -205,11 +206,13 @@ const ChatNavRow = memo(function ChatNavRow({
   isActive: boolean;
   isNarrow: boolean;
   pathname: string | null;
+  /** The pinned rail is on screen with its channel pins, so those carry their
+   *  own unread signals and the Chat row leaves them out of its totals. */
+  pinsShown: boolean;
   expanded: boolean;
   onToggle: () => void;
   onMobileClose?: () => void;
 }) {
-  const { channels, mentions } = useChatUnread();
   const rail = useChatRail();
   const router = useRouter();
   // Signature-gated roster (useChatMembers), not the raw array: this row is
@@ -243,6 +246,9 @@ const ChatNavRow = memo(function ChatNavRow({
   // would duplicate it, so the sublist skips it.
   const ordered = [...rail.filter((c) => c.kind !== "dm"), ...rail.filter((c) => c.kind === "dm")]
     .filter((c) => !pinnedLiveIdSet.includes(c.id));
+  // Count what the pins don't already show: a pinned DM's mentions badge its
+  // pinned row, and repeating them on Chat points at a list that hides them.
+  const { channels, mentions } = chatUnreadTotals(pinsShown ? ordered : rail);
   const items = ordered.map((c) => {
     const counterpart = dmCounterpart(c, teamMembers);
     const dmIcon = counterpart ? (
@@ -600,6 +606,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   // The org feature is per team, default off: with it off the Org row and
   // the workspace agent row do not exist, like chat.
   const orgOn = useWorkspaceFeature("org");
+  const changesOn = useTeamFeature("changes");
   const chatOn = useTeamFeature("chat");
   const callsOn = useCallsAvailable();
   const isTasks = pathname === "/tasks" || pathname?.startsWith("/tasks/");
@@ -993,6 +1000,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             isActive={!!isChat}
             isNarrow={isNarrow}
             pathname={pathname}
+            pinsShown={!isNarrow && !scope}
             expanded={viewSectionOverride.chat ?? !!isChat}
             onToggle={() => setViewSectionOverride((v) => ({ ...v, chat: !(v.chat ?? !!isChat) }))}
             onMobileClose={onMobileClose}
@@ -1024,6 +1032,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             line: pathname === "/line",
             triggers: isTriggers,
             org: !!isOrg,
+            changes: pathname === "/changes",
             rootAgent: isRootAgent,
             windows: !!isWindows,
           }}
@@ -1031,6 +1040,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
           tasks={{ items: taskViewItems, expanded: viewSectionOverride.tasks ?? isTasks, onToggle: () => setViewSectionOverride((o) => ({ ...o, tasks: !(o.tasks ?? isTasks) })) }}
           docs={{ items: docViewItems, expanded: viewSectionOverride.docs ?? (isDocs || isPlans), onToggle: () => setViewSectionOverride((o) => ({ ...o, docs: !(o.docs ?? (isDocs || isPlans)) })) }}
           orgOn={orgOn}
+          changesOn={changesOn}
           agent={{
             label: rootAgent ? agentName(rootAgent) : "Workspace agent",
             title: rootAgent ? `${agentName(rootAgent)}, the workspace's agent` : "Set up the workspace's agent",

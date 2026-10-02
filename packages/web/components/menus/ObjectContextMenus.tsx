@@ -50,7 +50,7 @@ import {
   type DocItem,
 } from "../../store/inboxStore";
 import { closeTaskWithGuard, setTaskParent } from "../../lib/taskActions";
-import { undoableArchiveDoc, undoableHideSession, undoableDeferSession, undoableSetSessionRest } from "../../store/undoActions";
+import { undoableArchiveDoc, undoableHideSession, undoableDeferSession, animatedSetSessionRest } from "../../store/undoActions";
 import { copyToClipboard, shareOrigin, cn } from "../../lib/utils";
 import { openForwardToChat } from "../../lib/forwardToChat";
 import { useTeamFeature } from "../../lib/teamFeatures";
@@ -596,14 +596,14 @@ export function SessionMenuItems({
           <CtxItem
             icon={Moon}
             shortcut="session.dormantAdvance"
-            onSelect={() => undoableSetSessionRest(id, "dormant")}
+            onSelect={() => animatedSetSessionRest(id, "dormant")}
           >
             Dormant — a machine wakes it
           </CtxItem>
-          <CtxItem icon={CheckCircle2} onSelect={() => undoableSetSessionRest(id, "done")}>
+          <CtxItem icon={CheckCircle2} onSelect={() => animatedSetSessionRest(id, "done")}>
             Mark done
           </CtxItem>
-          <CtxItem icon={CircleDot} onSelect={() => undoableSetSessionRest(id, "needs_input")}>
+          <CtxItem icon={CircleDot} onSelect={() => animatedSetSessionRest(id, "needs_input")}>
             Mark needs input
           </CtxItem>
         </>

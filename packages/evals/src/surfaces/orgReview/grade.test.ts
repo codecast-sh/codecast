@@ -3,9 +3,9 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { scoreOf } from '../../adapters/replay';
+import { routeGates, scoreOf } from '../../adapters/replay';
 import { REPO_ROOT } from '../../paths';
-import { gate } from '../../surface';
+import { gate, type AgentResult } from '../../surface';
 import { servedReadKey } from '../../served';
 import { assembleProposals } from './assemble';
 import { buildBriefing, CHECK_SCRIPT } from './build';
@@ -98,6 +98,20 @@ describe('org-review, synthetic', () => {
       expect(meta.sources).toContain(p);
       expect(existsSync(join(REPO_ROOT, p))).toBe(true);
     }
+  });
+
+  test("the analyzer may write its own brief, as the prompt asks; another role's brief and any other write still fail", () => {
+    const agent = (calls: string[]): AgentResult => ({ runSubdir: '/tmp/a', said: [], turns: [[]], calls, costUsd: 0, modelUsage: { [meta.model]: { outputTokens: 1 } }, isError: false, exitCode: 0, model: meta.model, realMs: 0 });
+    const writes = (line: string) => routeGates(meta, { calls: [], agents: [agent([line])] }).find((g) => g.id === 'no-unexpected-writes')!.pass;
+    expect(writes('REFUSED brief edit -')).toBe(true);
+    expect(writes('REFUSED brief edit - --team Union')).toBe(true);
+    expect(writes('REFUSED brief --team Union edit -')).toBe(true);
+    expect(writes('REFUSED brief edit --for @docs -')).toBe(false);
+    expect(writes('REFUSED brief edit - --for=@docs')).toBe(false);
+    expect(writes('REFUSED brief --team Union edit - --for @docs')).toBe(false);
+    expect(writes('REFUSED brief @docs edit -')).toBe(false);
+    expect(writes('REFUSED task update ct-1 -s done')).toBe(false);
+    expect(writes('REFUSED briefing edit -')).toBe(false);
   });
 
   test('grading and capture refuse a dir inside the archive, and only there', () => {

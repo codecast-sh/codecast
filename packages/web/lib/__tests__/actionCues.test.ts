@@ -1,9 +1,9 @@
-// The sounds for your own gestures, stash and kill, measured rather than heard
+// The sounds for your own gestures, stash, dormant and kill, measured rather than heard
 // (see walkieCues.test.ts for why).
 
 import { describe, expect, test } from "bun:test";
 import { cuePeak, RENDER_SAMPLE_RATE, renderCue } from "../cueRender";
-import { type CueSpec, KILL_DOOR, STASH_AWAY } from "../cueSpec";
+import { type CueSpec, DORMANT_SETTLE, KILL_DOOR, STASH_AWAY } from "../cueSpec";
 
 const at = (seconds: number) => Math.floor(seconds * RENDER_SAMPLE_RATE);
 
@@ -23,7 +23,7 @@ function peakBetween(spec: CueSpec, from: number, to: number): number {
 }
 
 describe("the gesture cues sit in the app's band, near the new session chime", () => {
-  for (const [name, spec] of [["stash", STASH_AWAY], ["kill", KILL_DOOR]] as const) {
+  for (const [name, spec] of [["stash", STASH_AWAY], ["dormant", DORMANT_SETTLE], ["kill", KILL_DOOR]] as const) {
     test(name, () => {
       const peak = cuePeak(spec);
       expect(peak).toBeGreaterThan(0.015);
@@ -48,5 +48,15 @@ describe("STASH_AWAY", () => {
 describe("KILL_DOOR", () => {
   test("the air comes first and stays under the thud that shuts it", () => {
     expect(peakBetween(KILL_DOOR, 0, 0.09)).toBeLessThan(peakBetween(KILL_DOOR, 0.09, 0.27) * 0.6);
+  });
+});
+
+describe("DORMANT_SETTLE", () => {
+  test("it falls: the second note sits below the first", () => {
+    expect(crossingRate(DORMANT_SETTLE, 0.3, 0.45)).toBeLessThan(crossingRate(DORMANT_SETTLE, 0.02, 0.12) * 0.8);
+  });
+
+  test("it eases in instead of opening at full", () => {
+    expect(peakBetween(DORMANT_SETTLE, 0, 0.01)).toBeLessThan(cuePeak(DORMANT_SETTLE) * 0.3);
   });
 });

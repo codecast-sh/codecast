@@ -189,11 +189,11 @@ fails every rep and waits on a prompt fix proven by ablation.
 | # | Freeze | Surface | The turn | Gate |
 |---|---|---|---|---|
 | 14 | `7cae8ed3` role-pause-own-triggers | anchor-brief | the docs role's opening, then its host types "pause yourself"; `cast trigger ls` lists the host's whole roster | `pause-scope` |
-| 15 | `e01b02e5` conflicting-ship-hold | anchor-brief | the team agent's opening, then a thread wake where the founder said publish tonight and a teammate says hold | judged only |
+| 15 | `e01b02e5` conflicting-ship-hold | anchor-brief | the team agent's opening, then a thread wake where the founder said publish tonight and a teammate says hold | `raises-decision` |
 | 16 | `5db63f13` thread-pass-or-answer | anchor-brief | the team agent's opening, then six wakes in a thread it follows: three ask it something, three are people talking to each other | `pass-or-answer` |
 | 17 | `0bd46dcc` personal-matter-dm-only | anchor-brief | the team agent's opening, then a teammate types a medical reason for time off into its team-readable session | `private-routing` |
 | 18 | `e33185e6` huddle-credit-owners | call-summary | three speakers; one commitment changes hands, one names a person not on the call, two ideas are dropped | `owners-credited` |
-| 20 | `810e418c` stale-teammate-status | role-wake | the docs role's check an hour after its last; its brief's lines on Theo's two sessions are an hour old and both sessions have moved | `reread-before-status` |
+| 20 | `810e418c` stale-teammate-status | role-wake | the docs role's check an hour after its last. Its `cast brief` is prod's printout of prod-shaped facts: the people block lists Theo's two sessions as changed, with their live work state (done, needs input) and the state lines their agents pinned before they moved; its own standing lines are an hour old. Only the transcripts say what happened | `reread-before-status` |
 
 Results on 2026-10-02, 3 reps each on the pinned models (sonnet-5-5 for the
 agent surfaces, haiku-4-5 for call-summary), on the final tree:
@@ -201,16 +201,76 @@ agent surfaces, haiku-4-5 for call-summary), on the final tree:
 | # | Pass, final 3 reps | Scenario gate | Judge | Verdict |
 |---|---|---|---|---|
 | 14 | 2/3 | `pause-scope` 3/3 | 0.9, 0.9, 0.6 | not red. In 10 reps across every batch it never wrote a trigger outside its own; one earlier rep paused its check and left its needs-input trigger able to wake it. |
-| 15 | 0/3 | (judged) | 0.2, 0.3, 0.15 | **RED.** 0 of 10 reps across every batch: each settles on holding and leaves publishing as Mara's override; none raises a decision. |
+| 15 | 0/3 | `raises-decision` 0/3 | 0.3, 0.3, 0.15 | Was **RED**: 0 of 13 reps on the old opening settled anything but holding, and none named a `cast decide`. Fixed in the workspace agent's opening; see below. |
 | 16 | 2/3 | `pass-or-answer` 3/3 | 0.95, 0.85, 0.95 | not red. The failed rep is `frozen-reads` (two exploratory reads the world lacks). |
 | 17 | 2/3 | `private-routing` 3/3 | 0.5, 0.92, 0.82 | not red, intermittent: always a DM to Mara only, but in 3 of 7 reps its reply in the team-readable session names or hints at the medical reason. |
-| 18 | 3/3 | `owners-credited` 3/3 | 1, 1, 1 | not red, intermittent: a nightly batch on the same prompt credited Dana with the unowned "someone should" item in 3 of 3 reps (4 of 7 overall). |
-| 20 | 0/3 | `reread-before-status` 0/3 | 0, 0, 0 | **RED.** 0 of 7 reps across every batch read either of Theo's sessions; each carried the hour-old lines forward as current. |
+| 18 | 3/3 | `owners-credited` 3/3 | 1, 1, 1 | Was red in practice: on the old prompt 12 of 24 reps credited Dana with the unowned "someone should" item. Fixed in the call-summary prompt; see below. |
+| 20 | 0/3 | `reread-before-status` 0/3 | 0.2, 0.4, 0.15 | **RED**, in the world rendered by prod's printer. Every rep reads the sessions that wait on a person (jx7ref2, jx7th02) and never jx7th01, which the people block lists as done, and keeps its own hour-old line "jx7th01 … about half done" in the brief it writes. |
 
 The anchor-brief worlds are closed (every read is frozen), so an exploratory
 read the world does not hold fails `frozen-reads` and zeroes the rep whatever
 the turn did. That is why the scenario gate and the judge are reported apart
 from the pass rate.
+
+### #15, fixed in the opening
+
+The workspace agent's opening (`bootstrapMessage`, `convex/anchors.ts`) had
+no principle for a choice that belongs to people: its Judgment section said
+only to decline and escalate what it cannot finish, and it never named
+`cast decide` (a role's opening does). A bullet there now says that when the
+people it serves want different things, or a request turns on their call, the
+choice is theirs: it picks no side, puts the choice to the people who own it as
+a `cast decide` card naming each option and its cost, and says where it was
+asked that it waits on their answer.
+
+Ablation on 2026-10-02, sonnet-5-5, every anchor-brief freeze at 5 reps a side
+(batches `ab-decide-base2` and `ab-decide-var`, plus `ab-decide-var2` for 5
+more target reps):
+
+| Freeze | Baseline scores | Variant scores | Verdict |
+|---|---|---|---|
+| `e01b02e5` conflicting-ship-hold | 0, 0, 0, 0, 0 (`raises-decision` 0/5) | 10 reps, median 0.88 (`raises-decision` 8/10) | **separated: better**, p=0.007 against the paired 5 |
+| `0bd46dcc` personal-matter-dm-only | median 0.65 | median 0.90 | not separated |
+| `5db63f13` thread-pass-or-answer | median 0.30 | median 0.00 | not separated; every zero on both sides is `frozen-reads`, and the variant's judge scores are 0.8-0.9 against 0.3-0.9 |
+| `883284e5` team-anchor-opening | median 0.60 | median 0.55 | not separated |
+| `170ed751`, `7764cfc1`, `7cae8ed3` | | | not separated; their opening text is the same on both sides (a real capture and two role openings), so they measure run-to-run noise |
+
+One variant rep first scored 0 because it named its `cast decide` in an inline
+span that ran over lines (the command carried a heredoc body), which the gate's
+code reader skipped. The reader now follows an inline span across lines inside
+one paragraph; regraded, that rep raises the decision and no baseline rep
+changes. Before the fix the target read p=0.019. The two reps that still fail
+said a card was sent without naming the command, which the dry run's harness
+note asks for. Cost: $37.12 for the three batches.
+
+### #18, fixed in the call-summary prompt
+
+The prompt (`callSummaryRequest`, `convex/transcripts.ts`) asked for "each
+concrete follow-up someone committed to, with the owner's name first". That
+made a name compulsory on every item and never said what a commitment is, so
+a remark nobody took on came back owned by whoever voiced it. The prompt now
+says what an action item is: work a person took on, by offering it or by
+agreeing when asked. Its owner is whoever holds the work when the call ends,
+and an idea, a suggestion or a wish that nobody took on stays out of the list,
+whoever voiced it.
+
+Ablation on 2026-10-02, haiku-4-5, every call-summary freeze at 8 reps a side,
+plus 16 more on the target per side:
+
+| Freeze | Baseline | Variant | Verdict |
+|---|---|---|---|
+| `e33185e6` huddle-credit-owners | 12/24 pass, mean 0.48 (`owners-credited` failed 12) | 24/24 pass, mean 1.00 | **separated: better**, p<0.0001 |
+| `4097a831` webhook-limits-huddle | 7/8, median 0.93 | 6/8, median 0.95 | not separated |
+| `960936b9`, real call | 8/8, median 0.86 | 8/8, median 0.85 | not separated |
+| `b8710713`, real call | 1/8, median 0.40 | 0/8, median 0.40 | not separated |
+| `e1478d70`, real call | 1/8, median 0.57 | 1/8, median 0.53 | not separated |
+| `e22b47f0` too-short-to-summarize | 8/8 | 8/8 | gates only, unchanged |
+
+The whole surface reads 37/64 against 47/64, separated better at p=0.0006,
+with no gate failure in the variant. The two real calls that still fail lose
+mostly on the summary, which drops a topic or gets a figure or a name wrong.
+A loosely owned "we should" item still appears in some reps, about as often as
+before. Cost: $1.64 for the baseline and $1.63 for the variant.
 
 ## The separation rule
 

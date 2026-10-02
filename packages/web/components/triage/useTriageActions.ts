@@ -8,7 +8,7 @@ import {
   animatedHideSession,
   type HideSessionOpts,
   undoableDeferSession,
-  undoableSetSessionRest,
+  animatedSetSessionRest,
   undoablePinSession,
 } from "../../store/undoActions";
 import { useTriggerKillNotice } from "../../hooks/useTriggerKillNotice";
@@ -66,7 +66,7 @@ export function useTriageActions(isOnInboxPage: boolean) {
     const idx = ordered.findIndex((s) => s._id === id);
     const next = ordered[idx + 1] ?? ordered.find((s) => s._id !== id);
     if (verb === "defer") undoableDeferSession(id);
-    else undoableSetSessionRest(id, verb);
+    else animatedSetSessionRest(id, verb);
     if (!closeOverlayIfCurrent(id) && next) {
       if (isOnInboxPage) store.setCurrentSession(next._id);
       else store.selectPanelSession(next._id);

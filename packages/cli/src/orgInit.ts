@@ -15,7 +15,7 @@ import type { Command } from "commander";
 export type OrgInitMode = "init" | "review";
 
 export interface OrgInitDeps {
-  cliPost: (urlPath: string, body: Record<string, any>) => Promise<any>;
+  cliPost: (urlPath: string, body: Record<string, any>, opts?: { timeoutMs?: number }) => Promise<any>;
   readWorkspace: (explicitTeam?: string) => Promise<{ kind: "team" | "personal"; [k: string]: any }>;
   workspaceArgs: (ws: any) => { team_id?: string };
   workspaceLabel: (ws: any) => string;
@@ -160,19 +160,20 @@ export function registerOrgInitCommands(program: Command, deps: OrgInitDeps): vo
     .option("--json", "Machine-readable output")
     .action(async (options: any) => (await run()).staff(deps, options));
 
-  org
-    .command("chief")
-    .description("Hire a Chief of Staff: your right hand, pinned in the app header. Global (every workspace, yours alone) unless --team names one.")
+  // `chief` is the name the command had before the role was renamed (S30).
+  for (const [name, opts] of [["assistant", {}], ["chief", { hidden: true }]] as const) org
+    .command(name, opts)
+    .description("Hire an Executive Assistant: your right hand, pinned in the app header. Global (every workspace, yours alone) unless --team names one.")
     .option("--name <name>", "Its name (default: one that matches its face)")
-    .option("--handle <handle>", "Its handle (default: chief-of-staff)")
+    .option("--handle <handle>", "Its handle (default: executive-assistant)")
     .option("--avatar <key>", "A face from the set")
-    .option("--personal", "With --team: your own chief for that team, not the team's")
-    .option("--adopt", "This session becomes the chief's standing session instead of provisioning a new one")
+    .option("--personal", "With --team: your own assistant for that team, not the team's")
+    .option("--adopt", "This session becomes the assistant's standing session instead of provisioning a new one")
     .option("-C, --dir <path>", "Project directory the provisioned standing session starts in (default: current; ignored with --adopt)")
     .option("--model <id>", "Model for a freshly provisioned standing session")
     .option(...TEAM_OPT)
     .option("--json", "Machine-readable output")
-    .action(async (options: any) => (await run()).chief(deps, options));
+    .action(async (options: any) => (await run()).assistant(deps, options));
 
   org
     .command("health")

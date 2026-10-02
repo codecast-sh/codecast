@@ -16,9 +16,9 @@ import { useSeedOwnership } from "../../hooks/useSeedOwnership";
 import { useSyncOrgTree } from "../../hooks/useSyncOrgTree";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { HEAD_OF_PEOPLE_NAME } from "../org/orgStaffingTypes";
-import { CHIEF_OF_STAFF_HANDLE, CHIEF_OF_STAFF_NAME } from "@codecast/shared/contracts/orgLead";
+import { EXECUTIVE_ASSISTANT_HANDLE, EXECUTIVE_ASSISTANT_NAME } from "@codecast/shared/contracts/orgLead";
 import { RoleFace } from "../org/RoleFace";
-import type { HireChiefResult } from "../../store/orgSlice";
+import type { HireAssistantResult } from "../../store/orgSlice";
 
 export function AnchorConversation({ conversationId, hideHeader, seedOwnership = true, onSendOverride, composerNode, autoFocusInput, since, foldBootstrap, foldWorkingTurns, openAtTop, composerPlaceholder, leadNode, leadPinned, stickyPrompt, initialDensity, hideDiff }: {
   conversationId: string;
@@ -120,9 +120,9 @@ export function CenteredNote({ children }: { children: React.ReactNode }) {
  *  slide-over; the page uses the full form. */
 export function AnchorOnboarding({ compact }: { compact?: boolean }) {
   const { tree } = useSyncOrgTree();
-  // A personal workspace's agent is the person's global Chief of Staff
+  // A personal workspace's agent is the person's global Executive Assistant
   // (org-staffing.md S30); a team's is its Head of People.
-  if (tree && tree.workspace.kind !== "team") return <HireChiefCard compact />;
+  if (tree && tree.workspace.kind !== "team") return <HireAssistantCard compact />;
   return <HireHeadOfPeopleCard compact />;
 }
 
@@ -167,7 +167,7 @@ function HireHeadOfPeopleCard({ compact }: { compact?: boolean }) {
         <h1 className={`${compact ? "text-base" : "text-xl"} font-semibold tracking-tight mb-2`}>Meet {who}</h1>
         <p className="text-sm text-sol-text-muted mb-5 leading-relaxed">
           {team
-            ? `One standing agent every member of ${team.name} can talk to. It sits at the top of the org as ${HEAD_OF_PEOPLE_NAME}: it reads how work flows, proposes who should own what in a weekly review, looks after what no lead owns, and answers in chat and Slack until the team hires a Chief of Staff.`
+            ? `One standing agent every member of ${team.name} can talk to. It sits at the top of the org as ${HEAD_OF_PEOPLE_NAME}: it reads how work flows, proposes who should own what in a weekly review, looks after what no lead owns, and answers in chat and Slack until the team hires an Executive Assistant.`
             : `One standing agent that is yours alone. It sits at the top of your org as ${HEAD_OF_PEOPLE_NAME}: it reads how your work flows and proposes the roles that would carry it.`}
         </p>
         <div className="text-left space-y-3">
@@ -193,11 +193,11 @@ function HireHeadOfPeopleCard({ compact }: { compact?: boolean }) {
   );
 }
 
-/** Hire a Chief of Staff (org-staffing.md S30): the person's right hand,
+/** Hire an Executive Assistant (org-staffing.md S30): the person's right hand,
  *  named, global by default; a team's, or the person's own for one team,
  *  when asked. The seat lands through the anchors feed and becomes the
  *  header's default pin. `compact` fits the slide-over. */
-export function HireChiefCard({ compact, onHired }: { compact?: boolean; onHired?: (r: HireChiefResult) => void }) {
+export function HireAssistantCard({ compact, onHired }: { compact?: boolean; onHired?: (r: HireAssistantResult) => void }) {
   const { tree } = useSyncOrgTree();
   const team = tree?.workspace.kind === "team" ? tree.workspace : null;
   const [name, setName] = useState("");
@@ -210,25 +210,25 @@ export function HireChiefCard({ compact, onHired }: { compact?: boolean; onHired
     setBusy(true);
     setErr(null);
     try {
-      const r = await useInboxStore.getState().hireChiefOfStaff({
+      const r = await useInboxStore.getState().hireExecutiveAssistant({
         reach: reach === "global" || !team ? { reach: "global" } : { reach: "team", team_id: team.id },
         ...(reach === "personal_team" ? { personal: true } : {}),
         ...(name.trim() ? { given_name: name.trim() } : {}),
         ...(project.trim() ? { project_path: project.trim() } : {}),
       });
       if (r?.already_existed) toast.success(`${r.role.given_name} is already online`);
-      else if (r?.role) toast.success(`${r.role.given_name} is coming online as your ${CHIEF_OF_STAFF_NAME}`);
+      else if (r?.role) toast.success(`${r.role.given_name} is coming online as your ${EXECUTIVE_ASSISTANT_NAME}`);
       if (r) onHired?.(r);
     } catch (e: any) {
-      setErr(e?.message ?? "Could not hire a Chief of Staff");
+      setErr(e?.message ?? "Could not hire an Executive Assistant");
     } finally {
       setBusy(false);
     }
   };
 
   const Option = ({ value, label, hint }: { value: typeof reach; label: string; hint: string }) => (
-    <label className={`flex items-start gap-2 rounded-md border px-2.5 py-2 cursor-pointer ${reach === value ? "border-sol-cyan/50 bg-sol-cyan/5" : "border-sol-border/60 hover:bg-sol-bg-highlight/40"}`} data-chief-reach={value}>
-      <input type="radio" name="chief-reach" className="mt-[3px]" checked={reach === value} onChange={() => setReach(value)} />
+    <label className={`flex items-start gap-2 rounded-md border px-2.5 py-2 cursor-pointer ${reach === value ? "border-sol-cyan/50 bg-sol-cyan/5" : "border-sol-border/60 hover:bg-sol-bg-highlight/40"}`} data-assistant-reach={value}>
+      <input type="radio" name="assistant-reach" className="mt-[3px]" checked={reach === value} onChange={() => setReach(value)} />
       <span className="min-w-0">
         <span className="block text-[12.5px] font-medium">{label}</span>
         <span className="block text-[11px] text-sol-text-dim leading-snug">{hint}</span>
@@ -237,25 +237,25 @@ export function HireChiefCard({ compact, onHired }: { compact?: boolean; onHired
   );
 
   return (
-    <div className={`h-full flex items-center justify-center ${compact ? "px-5" : "px-6"}`} data-hire-chief>
+    <div className={`h-full flex items-center justify-center ${compact ? "px-5" : "px-6"}`} data-hire-assistant>
       <div className="max-w-md w-full">
         <div className={`mx-auto ${compact ? "mb-3" : "mb-5"} flex items-center justify-center`}>
-          <RoleFace role={{ handle: CHIEF_OF_STAFF_HANDLE, avatar: null, name: CHIEF_OF_STAFF_NAME }} size={compact ? 44 : 56} />
+          <RoleFace role={{ handle: EXECUTIVE_ASSISTANT_HANDLE, avatar: null, name: EXECUTIVE_ASSISTANT_NAME }} size={compact ? 44 : 56} />
         </div>
-        <h1 className={`${compact ? "text-base" : "text-xl"} font-semibold tracking-tight mb-2 text-center`}>Hire your {CHIEF_OF_STAFF_NAME}</h1>
+        <h1 className={`${compact ? "text-base" : "text-xl"} font-semibold tracking-tight mb-2 text-center`}>Hire your {EXECUTIVE_ASSISTANT_NAME}</h1>
         <p className="text-sm text-sol-text-muted mb-4 leading-relaxed text-center">
           Your right hand: it keeps your goals in view, answers anything, sends what a lead owns to that lead, and brings every decision with a recommendation. It lives here in the header, on every page.
         </p>
         <div className="space-y-3">
           <div>
             <span className="text-xs text-sol-text-dim">Name</span>
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ada" maxLength={24} className="mt-1 w-full rounded-md border border-sol-border/60 bg-sol-bg px-2.5 py-1.5 text-sm" data-chief-name />
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ada" maxLength={24} className="mt-1 w-full rounded-md border border-sol-border/60 bg-sol-bg px-2.5 py-1.5 text-sm" data-assistant-name />
             <span className="text-[11px] text-sol-text-dim/70">Leave blank and it picks one to match its face.</span>
           </div>
           <div className="space-y-1.5">
             <Option value="global" label="Across all your workspaces" hint="Yours alone. Sees what you see, everywhere you work." />
             {team && <Option value="team" label={`For ${team.name}, shared with the team`} hint="Every member can talk to it; it answers in chat and Slack." />}
-            {team && <Option value="personal_team" label={`For ${team.name}, yours alone`} hint="Your own chief for this team's work." />}
+            {team && <Option value="personal_team" label={`For ${team.name}, yours alone`} hint="Your own assistant for this team's work." />}
           </div>
           <div>
             <span className="text-xs text-sol-text-dim">Project it lives and works in</span>
@@ -263,8 +263,8 @@ export function HireChiefCard({ compact, onHired }: { compact?: boolean; onHired
           </div>
         </div>
         {err && <div className="text-sol-red text-xs mt-3">{err}</div>}
-        <button onClick={hire} disabled={busy || !tree} className="mt-4 w-full bg-sol-cyan text-sol-bg font-medium rounded-lg px-4 py-2.5 text-sm disabled:opacity-60 hover:bg-sol-cyan/90 transition-colors" data-chief-hire>
-          {busy ? "Bringing it online…" : `Hire ${CHIEF_OF_STAFF_NAME}`}
+        <button onClick={hire} disabled={busy || !tree} className="mt-4 w-full bg-sol-cyan text-sol-bg font-medium rounded-lg px-4 py-2.5 text-sm disabled:opacity-60 hover:bg-sol-cyan/90 transition-colors" data-assistant-hire>
+          {busy ? "Bringing it online…" : `Hire ${EXECUTIVE_ASSISTANT_NAME}`}
         </button>
       </div>
     </div>

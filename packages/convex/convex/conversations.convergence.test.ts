@@ -13,12 +13,14 @@ import {
   INBOX_WINDOW_CAPS,
   digestProjection,
   inboxEpoch,
+  isUnderRole,
   projectInbox,
+  rollupParentIdOf,
   selectWorkingSet,
   type ProjectableInboxRow,
 } from "@codecast/shared/contracts";
 import { GEN_DAY, GEN_HOUR, convexIdFor, genWorld, makeRng, type GenWorld } from "@codecast/shared/contracts/__fixtures__/inboxProjectionGen";
-import { makeFakeDb } from "./testDb";
+import { makeFakeDb, schemaIndexes } from "./testDb";
 import schema from "./schema";
 
 // SERVER DETERMINISM over GENERATED worlds (sync-convergence C2/C4, the
@@ -352,4 +354,79 @@ describe("the row shape is INBOX_ROW_FIELDS plus the facts", () => {
     expect([...written].filter((k) => !shape.has(k)).sort()).toEqual([]);
     expect([...shape].filter((k) => !written.has(k)).sort()).toEqual([]);
   });
+});
+
+// `cast sessions <id> -w` reads only the named rows (namedOnly, ct-53363). It
+// must place each named row exactly where the full inbox build places it:
+// agents watch their workers this way and act on every transition. Two
+// differences are allowed, both already defined behavior: a named row is
+// deliberate and never folds, and a row that rides a lead (an agent team
+// teammate, a session under a role) keeps its own bucket when its lead was not
+// named, as settleRiders does for any absent lead. work_state, which the watch
+// reports, never rides. Every other field of every named row, and of the
+// subagent child rows listed under them, must match byte for byte.
+describe("named sessions read alone classify as the full inbox does", () => {
+  const strip = (row: any, raw: any) => {
+    const { below_fold, bucket, ...rest } = row;
+    const rides = !!raw && (rollupParentIdOf(raw) !== null || isUnderRole(raw));
+    return rides ? rest : { ...rest, bucket };
+  };
+  // The schema's real indexes: the narrow path reads latestHeartbeat as the
+  // newest row of by_user_heartbeat, which only an index ordered by
+  // last_heartbeat answers the way convex does.
+  const indexedDb = (world: GenWorld) => makeFakeDb(
+    { users: [{ _id: ME, name: "Me", email: "me@example.com" }], messages: [], ...world },
+    { indexes: schemaIndexes(schema as any) },
+  );
+  test("every named row and its child rows match the full build, fold aside", async () => {
+    let compared = 0;
+    for (const seed of SEEDS) {
+      const world = genWorld(seed, 80, EPOCH, ME);
+      const rng = makeRng(seed * 7 + 1);
+      const topLevel = world.conversations.filter((c: any) => !c.is_subagent && !c.parent_conversation_id);
+      const named = topLevel.filter(() => rng() < 0.15).slice(0, 8).map((c: any) => c._id);
+      if (named.length === 0) continue;
+      _resetChildAuqProbeCacheForTests();
+      const full = await computeInboxSessions({ db: indexedDb(clone(world)) }, ME as any, { show_all: true, projection: true, extraConvIds: named });
+      _resetChildAuqProbeCacheForTests();
+      const narrow = await computeInboxSessions({ db: indexedDb(clone(world)) }, ME as any, { show_all: true, projection: true, extraConvIds: named, namedOnly: true });
+      const fullById = new Map(full.sessions.map((s: any) => [s._id, s]));
+      const narrowIds = new Set(narrow.sessions.map((s: any) => s._id));
+      for (const id of named) expect(narrowIds.has(id)).toBe(fullById.has(id));
+      for (const row of narrow.sessions) {
+        const twin = fullById.get(row._id);
+        expect(twin).toBeDefined();
+        const raw = world.conversations.find((c: any) => c._id === row._id);
+        expect({ seed, ...strip(row, raw) }).toEqual({ seed, ...strip(twin, raw) });
+        expect(row.below_fold).toBe(false);
+        compared++;
+      }
+    }
+    expect(compared).toBeGreaterThan(20);
+  }, 120_000);
+
+  test("the narrow read uses no window and no user wide liveness read", async () => {
+    const world = genWorld(SEEDS[0], 80, EPOCH, ME);
+    const named = world.conversations.filter((c: any) => !c.is_subagent && !c.parent_conversation_id).slice(0, 2).map((c: any) => c._id);
+    const db = indexedDb(clone(world));
+    const indexes: string[] = [];
+    const wrapped = new Proxy(db, {
+      get(target: any, prop: string) {
+        if (prop !== "query") return target[prop];
+        return (table: string) => {
+          const q = target.query(table);
+          const withIndex = q.withIndex.bind(q);
+          q.withIndex = (name: string, fn?: any) => { indexes.push(`${table}.${name}`); return withIndex(name, fn); };
+          return q;
+        };
+      },
+    });
+    await computeInboxSessions({ db: wrapped }, ME as any, { show_all: true, projection: true, extraConvIds: named, namedOnly: true });
+    // The reads that made a watch re-run on any write to any of the user's
+    // sessions: the five conversation windows, the owner window and the
+    // user wide managed_sessions read. None may run on the named path.
+    const userWide = indexes.filter((i) => /conversations\.by_user_(plain_updated|pinned|live_)|session_owners\.by_user$|managed_sessions\.by_user_id$/.test(i));
+    expect(userWide).toEqual([]);
+    expect(indexes).toContain("managed_sessions.by_user_heartbeat");
+  }, 120_000);
 });

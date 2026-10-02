@@ -40,6 +40,7 @@ import { createMicMeter, type MicMeter } from "./micMeter";
 import { createScribeEngine, type ConvexHandle } from "./scribeEngine";
 import { peekOsPermissions, permissionHint, refreshOsPermissions } from "../osPermissions";
 import { isDesktop } from "../desktop";
+import { readJoinPrefs } from "./joinPrefs";
 
 const api = _api as any;
 
@@ -93,6 +94,10 @@ let systemAudio = false;
 // the raw microphone stream, as it always was.
 let mixCtx: AudioContext | null = null;
 let mixDest: MediaStreamAudioDestinationNode | null = null;
+let micSource: MediaStreamAudioSourceNode | null = null;
+// Bumped on every microphone switch, so a slow device open that a newer pick
+// overtook lets go of what it opened instead of installing it.
+let micGen = 0;
 
 /** One snapshot out of two sources — this module's own phase and the scribe
  *  engine's words — recomputed on either moving, so a React subscriber sees a
@@ -194,14 +199,7 @@ export async function startRecording(): Promise<string | null> {
   setPhase("starting");
 
   try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      // A meeting in the room is what this is listening for, so the processing
-      // that exists to isolate ONE near voice works against it: echo
-      // cancellation subtracts what the speakers are playing, which here is
-      // half the meeting. Automatic gain stays on — it is what lets somebody
-      // across the table be heard at all.
-      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true },
-    });
+    stream = await openMic(readJoinPrefs().micDeviceId);
   } catch {
     // Name the actual remedy when the OS knows one (System Settings on the
     // desktop, the site setting in a browser).
@@ -236,13 +234,7 @@ export async function startRecording(): Promise<string | null> {
   }
 
   recTranscriptId = transcriptId;
-  const who = me();
-  engine.attach("mic", track, who.id, who.name);
-
-  meter = createMicMeter(track);
-  dropMeterFeed = meter.subscribe(() => {
-    for (const cb of levelSubscribers) cb();
-  });
+  attachMic(track);
 
   startAudioFile(buildFileStream(stream));
 
@@ -290,10 +282,7 @@ export async function stopRecording(): Promise<void> {
   // sentence somebody pressed stop right after.
   await engine.stop({ graceful: true });
 
-  dropMeterFeed?.();
-  dropMeterFeed = null;
-  meter?.stop();
-  meter = null;
+  dropMeter();
   for (const cb of levelSubscribers) cb();
   stopStream();
   closeMix();
@@ -313,6 +302,84 @@ export async function stopRecording(): Promise<void> {
         .catch(() => {});
     }
   }
+}
+
+/** The microphone, opened for a meeting. The remembered pick is asked for as
+ *  `ideal`, so a headset that was unplugged since falls back to the system
+ *  default instead of failing the recording. */
+function openMic(deviceId: string | undefined, opts: { echoCancellation?: boolean } = {}): Promise<MediaStream> {
+  return navigator.mediaDevices.getUserMedia({
+    // A meeting in the room is what this is listening for, so the processing
+    // that exists to isolate ONE near voice works against it: echo
+    // cancellation subtracts what the speakers are playing, which here is
+    // half the meeting. Automatic gain stays on — it is what lets somebody
+    // across the table be heard at all.
+    audio: {
+      echoCancellation: opts.echoCancellation ?? false,
+      noiseSuppression: false,
+      autoGainControl: true,
+      ...(deviceId ? { deviceId: { ideal: deviceId } } : {}),
+    },
+  });
+}
+
+/** One microphone track into the recognizer and the meter. */
+function attachMic(track: MediaStreamTrack) {
+  const who = me();
+  engine.attach("mic", track, who.id, who.name);
+  meter = createMicMeter(track);
+  dropMeterFeed = meter.subscribe(() => {
+    for (const cb of levelSubscribers) cb();
+  });
+}
+
+function dropMeter() {
+  dropMeterFeed?.();
+  dropMeterFeed = null;
+  meter?.stop();
+  meter = null;
+}
+
+/**
+ * Move a running recording to another microphone, mid-sentence if need be.
+ * The recognizer, the meter and the audio file's mix each let go of the old
+ * track and take the new one; the transcript and the file carry on as one.
+ * A no-op while nothing is recording: the pick is remembered by the picker
+ * (switchDevice) and the next recording opens it.
+ */
+export async function switchRecorderMic(deviceId: string): Promise<void> {
+  if (phase !== "recording" || !stream) return;
+  const current = stream.getAudioTracks()[0]?.getSettings?.().deviceId;
+  if (current && current === deviceId) return;
+  const gen = ++micGen;
+  const transcriptId = recTranscriptId;
+  let next: MediaStream;
+  try {
+    // With the computer's audio in hand the mic subtracts the speakers (see
+    // addSystemAudio), and a switch keeps that.
+    next = await openMic(deviceId, { echoCancellation: systemAudio });
+  } catch {
+    return;
+  }
+  const track = next.getAudioTracks()[0];
+  if (!track || gen !== micGen || phase !== "recording" || recTranscriptId !== transcriptId) {
+    for (const t of next.getTracks()) t.stop();
+    return;
+  }
+  const old = stream;
+  stream = next;
+  engine.detach("mic");
+  dropMeter();
+  attachMic(track);
+  for (const cb of levelSubscribers) cb();
+  if (mixCtx && mixDest) {
+    try {
+      micSource?.disconnect();
+      micSource = mixCtx.createMediaStreamSource(next);
+      micSource.connect(mixDest);
+    } catch {}
+  }
+  for (const t of old?.getTracks() ?? []) t.stop();
 }
 
 function stopStream() {
@@ -392,7 +459,8 @@ function buildFileStream(mic: MediaStream): MediaStream {
     if (typeof AudioContext !== "function") return mic;
     const ctx = new AudioContext();
     const dest = ctx.createMediaStreamDestination();
-    ctx.createMediaStreamSource(mic).connect(dest);
+    micSource = ctx.createMediaStreamSource(mic);
+    micSource.connect(dest);
     mixCtx = ctx;
     mixDest = dest;
     return dest.stream;
@@ -406,6 +474,7 @@ function closeMix() {
   mixCtx?.close().catch(() => {});
   mixCtx = null;
   mixDest = null;
+  micSource = null;
 }
 
 // ── the audio file ──────────────────────────────────────────────────────────

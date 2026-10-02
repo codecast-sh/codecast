@@ -6,7 +6,9 @@ import { captureException } from "@sentry/react";
 import { ChevronRight, Loader2, Lock } from "lucide-react";
 import { Section } from "../identity/RoleScopeView";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
-import { sealSecret, useTemplateActions, useTemplateInstance } from "../../hooks/useTemplateHire";
+import { sealSecret, useInstanceLessons, useTemplateActions, useTemplateInstance, useTemplateLearning } from "../../hooks/useTemplateHire";
+import { buildUpgradeSpec } from "./orgTemplateSpec";
+import { LEARNING_OPT_IN_LABEL, LEARNING_OPT_IN_SENTENCE } from "@codecast/shared/contracts/orgTemplateLearning";
 
 // A template role's right column, under its project card (docs/architecture/
 // org-hire.md H5 to H8, H11): the setup list with the one open item first and
@@ -15,9 +17,11 @@ import { sealSecret, useTemplateActions, useTemplateInstance } from "../../hooks
 // ready routine, the scoreboard, and the release. Shown only when the role has
 // an instance; an ordinary role renders nothing.
 
-export function TemplateSections({ roleId, canEdit }: { roleId: string; canEdit: boolean }) {
+export function TemplateSections({ roleId, canEdit, teamId }: { roleId: string; canEdit: boolean; teamId?: string }) {
   const { instance } = useTemplateInstance(roleId);
-  const { markSetup, activate } = useTemplateActions();
+  const { markSetup, activate, propose } = useTemplateActions();
+  const { lessons } = useInstanceLessons(instance?.instance_key);
+  const [proposed, setProposed] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Which guides a person opened or closed; the one open ask starts open.
@@ -116,12 +120,59 @@ export function TemplateSections({ roleId, canEdit }: { roleId: string; canEdit:
       <Section density="page" label="Template" name="template-release">
         <ul className="space-y-0.5 px-2.5 pb-1.5 text-[12px] text-sol-text-muted">
           <li>{instance.template?.name ?? instance.template_id} {instance.version} <span className="text-sol-text-dim">sha256 {String(instance.digest).slice(0, 12)}</span>{instance.host ? <span className="text-sol-text-dim"> · on {instance.host.machine}</span> : null}</li>
-          {instance.update_available && <li className="text-sol-text" data-template-update={instance.update_available}>Update available: {instance.update_available}{instance.pending_upgrade ? ` (accepted; on its machine, run cast org template bind ${instance.instance} --to ${instance.pending_upgrade.to})` : ""}</li>}
+          {instance.update_available && (
+            <li className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sol-text" data-template-update={instance.update_available}>
+              <span>Update available: {instance.update_available}{instance.pending_upgrade ? ` (accepted; its machine moves it on the next host step)` : proposed ? ` (proposed: ${proposed})` : ""}</span>
+              {canEdit && !instance.pending_upgrade && !proposed && instance.update_digest && <button type="button" disabled={busy === "update"} onClick={() => void act("update", async () => { const r = await propose({ team_id: teamId, ...buildUpgradeSpec(instance) }); setProposed(r.short_id); })} className="shrink-0 rounded-md border border-sol-border/50 px-2 py-0.5 text-[11px] text-sol-text hover:bg-sol-bg-highlight disabled:opacity-50" data-template-update-propose>Update</button>}
+              {proposed && <Link href={`/org?proposal=${proposed}`} className="text-[11px] text-sol-cyan hover:underline">decide it</Link>}
+            </li>
+          )}
           {((instance.secrets ?? []) as any[]).map((s) => <li key={s.key} data-template-secret={s.key} data-bound={s.bound}>{s.label}: {s.bound ? <span className="text-sol-green">set</span> : <span className="text-sol-yellow">missing</span>}</li>)}
         </ul>
         {instance.phase === "ready" && ((instance.secrets ?? []) as any[]).some((s) => !s.bound) && <HostStep instance={instance} canEdit={canEdit} purpose="secrets" />}
+        {instance.pending_upgrade && instance.phase === "ready" && <HostStep instance={instance} canEdit={canEdit} purpose="update" />}
+        <LearningSwitch teamId={teamId} canEdit={canEdit} />
+        {lessons.length > 0 && (
+          <ul className="mt-1 space-y-1 px-2.5 pb-1.5 text-[12px]" data-template-lessons={lessons.length}>
+            <li className="text-sol-text-dim">What left this workspace as lessons, in general terms, and where each stands with the publisher:</li>
+            {lessons.map((l: any) => <li key={l.id} className="flex items-start gap-2" data-template-lesson={l.status}><span className={`shrink-0 ${l.status === "released" ? "text-sol-green" : l.status === "declined" ? "text-sol-text-dim" : "text-sol-text-muted"}`}>{l.status}{l.released_in ? ` in ${l.released_in}` : ""}</span><span className="text-sol-text-muted">{l.body}</span></li>)}
+          </ul>
+        )}
       </Section>
       {error && <p role="alert" className="px-2.5 text-[12px] text-sol-red">{error}</p>}
+    </div>
+  );
+}
+
+/**
+ * The one switch (org-hire.md H12), with its one sentence: what leaves the
+ * workspace and what comes back. A team's admin or the owner of a personal
+ * workspace flips it; everyone else reads it. Shown where a person meets a
+ * template: the role page here, and the hire form.
+ */
+export function LearningSwitch({ teamId, canEdit, compact }: { teamId: string | undefined; canEdit: boolean; compact?: boolean }) {
+  const { learning, ready } = useTemplateLearning(teamId);
+  const { setLearning } = useTemplateActions();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const enabled = !!learning?.enabled;
+  const may = canEdit && !!learning?.can_change;
+  const flip = async () => {
+    if (!may || busy) return;
+    setBusy(true); setError(null);
+    try { await setLearning(teamId, !enabled); } catch (e) { captureException(e); setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+  };
+  return (
+    <div className={`${compact ? "" : "mx-2.5 mt-1.5 mb-1.5"} rounded-lg border border-sol-border/50 px-2.5 py-2 text-[12px] leading-relaxed`} data-template-learning={ready ? String(enabled) : "loading"}>
+      <label className="flex cursor-pointer items-start gap-2">
+        <input type="checkbox" role="switch" aria-checked={enabled} checked={enabled} disabled={!ready || !may || busy} onChange={() => void flip()} className="mt-[3px]" />
+        <span>
+          <span className="font-semibold text-sol-text">{LEARNING_OPT_IN_LABEL}</span>
+          <span className="block text-sol-text-muted">{LEARNING_OPT_IN_SENTENCE}</span>
+          {ready && !may && <span className="block text-sol-text-dim">{enabled ? "On" : "Off"}{learning?.changed_by ? `, set by ${learning.changed_by}` : ""}. A team admin changes it.</span>}
+        </span>
+      </label>
+      {error && <p role="alert" className="mt-1 text-sol-red">{error}</p>}
     </div>
   );
 }
@@ -135,17 +186,17 @@ export function TemplateSections({ roleId, canEdit }: { roleId: string; canEdit:
  * behind a fold for anyone who prefers it. The same control binds a missing
  * secret once the instance is ready (`purpose: "secrets"`).
  */
-function HostStep({ instance, canEdit, purpose }: { instance: any; canEdit: boolean; purpose: "setup" | "secrets" }) {
+function HostStep({ instance, canEdit, purpose }: { instance: any; canEdit: boolean; purpose: "setup" | "secrets" | "update" }) {
   const { requestBind } = useTemplateActions();
   const [values, setValues] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const host = instance.bind_host as { device: { device_id: string; label: string; online: boolean; can_receive_secrets: boolean; pubkey: string | null } | null; dir: string | null; reason: string | null } | undefined;
   const step = (instance.host_step ?? { state: "idle" }) as { state: "idle" | "pending" | "failed" | "done"; device_label?: string; error?: string; result?: { phase?: string; bound?: string[] } };
-  const secrets = ((instance.secrets ?? []) as { key: string; label: string; bound: boolean }[]).filter((s) => purpose === "setup" || !s.bound);
+  const secrets = purpose === "update" ? [] : ((instance.secrets ?? []) as { key: string; label: string; bound: boolean }[]).filter((s) => purpose === "setup" || !s.bound);
   const typed = secrets.filter((s) => (values[s.key] ?? "").length > 0);
   const device = host?.device ?? null;
-  const cli = `cast org template bind ${instance.instance}${secrets.length ? ` --secret ${secrets[0]!.key}=<path>` : ""}`;
+  const cli = `cast org template bind ${instance.instance}${purpose === "update" ? ` --to ${instance.pending_upgrade?.to}` : secrets.length ? ` --secret ${secrets[0]!.key}=<path>` : ""}`;
   const run = async () => {
     if (!device || !host?.dir || busy) return;
     setBusy(true); setError(null);
@@ -157,10 +208,11 @@ function HostStep({ instance, canEdit, purpose }: { instance: any; canEdit: bool
     } catch (e) { captureException(e); setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   };
-  const label = purpose === "setup" ? `Set up on ${device?.label ?? "its machine"}` : `Bind on ${device?.label ?? "its machine"}`;
+  const label = `${purpose === "setup" ? "Set up" : purpose === "update" ? `Move to ${instance.pending_upgrade?.to}` : "Bind"} on ${device?.label ?? "its machine"}`;
   return (
     <div className="px-2.5 pb-1.5 text-[12px] leading-relaxed" data-template-host-step={step.state} data-host-purpose={purpose}>
       {purpose === "setup" && step.state !== "pending" && <p className="text-sol-text-muted">The hire is accepted. Its machine still has to install the template and create its triggers, paused; nothing runs until you activate one.</p>}
+      {purpose === "update" && step.state !== "pending" && <p className="text-sol-text-muted">The update to {instance.pending_upgrade?.to} is accepted. Its machine installs that release and keeps the role, its triggers and its secrets as they are.</p>}
       {step.state === "pending" ? (
         <p className="mt-1 flex items-center gap-2 text-sol-text" role="status"><Loader2 className="h-3.5 w-3.5 animate-spin text-sol-violet" /> Setting up on {step.device_label ?? device?.label ?? "its machine"}…{device && !device.online ? <span className="text-sol-text-dim">it is offline, so this runs when it wakes.</span> : null}</p>
       ) : (

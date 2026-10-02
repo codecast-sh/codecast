@@ -217,7 +217,7 @@ function RoleOverview(p: ScopePanelProps & { role: OrgRole }) {
           <PersonGoals person={me} roleHandle={role.handle} now={p.now} own />
         </section>
       )}
-      <TemplateSections roleId={role._id} canEdit={p.canEdit} />
+      <TemplateSections roleId={role._id} canEdit={p.canEdit} teamId={p.tree.workspace.kind === "team" ? p.tree.workspace.id : undefined} />
 
       <details className="group" data-scope-section="notes">
         <summary className={cn(BLOCK_LABEL, "cursor-pointer select-none list-none flex items-center gap-1.5 mb-0")} style={{ color: "var(--sol-text-dim)" }}>

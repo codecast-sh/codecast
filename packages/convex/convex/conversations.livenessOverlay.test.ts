@@ -2,11 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { deriveProducingParents } from "./conversations";
 
 // The sessionsLiveness overlay used to run a by_parent_conversation_id scan for
-// every idle inbox row to decide "does a producing subagent child keep this
-// parent working?" — one indexed query per row, which blew Convex's system
+// every idle inbox row to decide "is a subagent child of this parent still
+// producing?" — one indexed query per row, which blew Convex's system
 // operation budget on heartbeat recomputes for a full inbox window. The scan is
 // now replaced by ONE derived set; these tests pin the derivation to the exact
-// acceptance rule of subagentKeepsParentWorking (see inboxFilters.ts): a child
+// acceptance rule of subagentIsProducing (see inboxFilters.ts): a child
 // counts only with output in the last 5 minutes, or while live with an active
 // agent status.
 
@@ -32,7 +32,7 @@ function maps(overrides: Partial<{ liveConvIds: Set<string>; agentStatusMap: Map
 }
 
 describe("deriveProducingParents", () => {
-  test("child with recent output keeps its parent working", () => {
+  test("child with recent output counts as producing for its parent", () => {
     const parents = deriveProducingParents([child({})], maps(), NOW);
     expect(parents.has(PARENT)).toBe(true);
   });

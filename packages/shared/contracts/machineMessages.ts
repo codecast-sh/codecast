@@ -488,7 +488,7 @@ export function isUnwrappedSessionReport(rawContent: string | null | undefined):
 // thread after it (web lib/anchorWindow), and the inbox card's preview, the
 // sticky prompt header and the navigator skip it through
 // isMachineDeliveredMessage, so no surface can show it as the person's words.
-export const BOOTSTRAP_PROMPT_RE = /^\s*You are (\*\*[^*]+\*\*, the (standing agent for|\*\*(team|personal)\*\* (anchor|workspace's standing agent))|the (Head of People|Chief of Staff) for |[^,\n]{1,40}, [^\n]{1,60}'s Chief of Staff for |the \*\*[^*]+\*\* \(@[a-z0-9-]+\) in )/;
+export const BOOTSTRAP_PROMPT_RE = /^\s*You are (\*\*[^*]+\*\*, the (standing agent for|\*\*(team|personal)\*\* (anchor|workspace's standing agent))|the (Head of People|Chief of Staff) for |[^,\n]{1,40}, [^\n]{1,60}'s (Chief of Staff|Executive Assistant) for |the \*\*[^*]+\*\* \(@[a-z0-9-]+\) in )/;
 
 export function isBootstrapPrompt(rawContent: string | null | undefined): boolean {
   if (!rawContent) return false;
