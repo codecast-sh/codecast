@@ -23,6 +23,7 @@ import { armedTriggerKindFor } from "@codecast/convex/convex/dormancy";
 import { visibleAnchorsForUser } from "@codecast/convex/convex/anchors";
 import { MENTION_WAKES_PER_SENDER_HOUR, MENTION_WAKES_PER_TARGET_HOUR } from "@codecast/convex/convex/chat";
 import { canonical } from "@codecast/shared/contracts/orgChange";
+import { DISPATCHABLE_CONVERSATION_FIELDS, INBOX_FACT_FIELDS, INBOX_ROW_FIELDS } from "@codecast/shared/contracts";
 import { snapshotEntries } from "@platform/engine";
 import { placeInboxRows, syncLogScopeMetaKey, useInboxStore } from "../../inboxStore";
 import { HIDDEN_OVERRIDE_SETTLE_MS } from "../../inboxOverlays";
@@ -35,7 +36,7 @@ import { teamInboxArgs } from "../../../hooks/useSyncTeamInboxSessions";
 import type { FailureContext } from "./report";
 import {
   FIXPOINT_FED_KEYS,
-  LIVENESS_FEEDS,
+  EPOCH_FEEDS,
   MAX_ROWS_PER_CHECK,
   WORKSPACE_TABLES,
   asUser,
@@ -74,6 +75,19 @@ import {
 } from "./invariantReads";
 
 // ── The catalog ─────────────────────────────────────────────────────────────
+
+// A sessions row holds what the base feeders write (INBOX_ROW_FIELDS and the
+// facts) plus what the store's own actions write on it on purpose: the raw
+// stamps the sync rail dispatches from the row (inbox_deferred_at rides beside
+// its is_deferred twin), and the fields the sharing actions patch onto every
+// cached copy (patchConversationRows), which a reader holds only until it
+// takes the server's value (lib/teamFeedRows).
+const LOCAL_ROW_FIELDS: Readonly<Record<string, string>> = {
+  team_visibility: "setPrivacy / setTeamVisibility, the optimistic team level",
+  share_token: "setShareLink, the caller-minted token",
+  profile_pinned_at: "setShareLink clears it with the token",
+};
+const ROW_SHAPE = new Set<string>([...INBOX_ROW_FIELDS, ...INBOX_FACT_FIELDS, ...DISPATCHABLE_CONVERSATION_FIELDS, ...Object.keys(LOCAL_ROW_FIELDS)]);
 
 export const INVARIANTS: readonly Invariant[] = [
   {
@@ -119,8 +133,8 @@ export const INVARIANTS: readonly Invariant[] = [
     async check(world, w) {
       const host = world.devices.find((d) => d.followers.includes(w!))?.host;
       if (!host) return [{ message: `follower ${w!.name} belongs to no device` }];
-      const h = snapshotEntries(host.store.getState(), REPLICATED_STORE_KEYS);
-      const f = snapshotEntries(w!.store.getState(), REPLICATED_STORE_KEYS);
+      const h = withoutWindowClocks(snapshotEntries(host.store.getState(), REPLICATED_STORE_KEYS));
+      const f = withoutWindowClocks(snapshotEntries(w!.store.getState(), REPLICATED_STORE_KEYS));
       const out: Violation[] = [];
       for (const key of REPLICATED_STORE_KEYS) {
         if (stable(h[key]) === stable(f[key])) continue;
@@ -451,6 +465,29 @@ export const INVARIANTS: readonly Invariant[] = [
     },
   },
   {
+    // The row is an allowlist (sync-convergence C1 field ownership): a key no
+    // base feeder writes can only have ridden in on cargo or a local write,
+    // and the next list or byIds push removes it. A field under a pending
+    // local write is the exception: an action may carry its server field on
+    // the row until the write is acknowledged.
+    id: "INV-row-shape",
+    meaning: "every sessions row holds only the inbox row's fields (INBOX_ROW_FIELDS plus the facts), a field the store's own actions write on it, or a field a pending local write holds",
+    keys: ["sessions"],
+    on: "window",
+    async check(_world, w) {
+      const state = w!.store.getState() as any;
+      const out: Violation[] = [];
+      for (const [id, row] of Object.entries<Row>(state.sessions ?? {})) {
+        if (!isConvexId(id)) continue;
+        const extra = Object.keys(row).filter((k) => !ROW_SHAPE.has(k) && !state.pending?.[`sessions:${id}:${k}`]);
+        if (!extra.length) continue;
+        out.push({ message: `sessions[${id}] holds ${extra.sort().join(", ")}, outside the inbox row's fields`, row: { table: "conversations", id, server: null, replica: row } });
+        if (out.length >= MAX_ROWS_PER_CHECK) break;
+      }
+      return out;
+    },
+  },
+  {
     id: "INV-fixpoint",
     meaning: "re-running every mounted feeder, one catch-up and a byIds pass over every held id changes nothing",
     keys: FIXPOINT_FED_KEYS,
@@ -458,12 +495,12 @@ export const INVARIANTS: readonly Invariant[] = [
     when: (w) => w.role === "host",
     async check(world, w) {
       const direct = asUser(world, userOf(w!));
-      // Bring the liveness overlays to the current epoch first, as
-      // production's stale-payload probe does: they are the one writer of the
-      // time-derived facts (C1), and a push from an earlier minute differs
-      // from a fresh execution because time moved, not because two feeders
-      // disagree.
-      await w!.run(async () => { await w!.refeed?.(LIVENESS_FEEDS); });
+      // Bring the time-bounded feeds to the current epoch first, as
+      // production's probes do (EPOCH_FEEDS): the overlays are the one writer
+      // of the time-derived facts (C1) and the base lists select through
+      // time windows, so a push from an earlier minute differs from a fresh
+      // execution because time moved, not because two feeders disagree.
+      await w!.run(async () => { await w!.refeed?.(EPOCH_FEEDS); });
       const before = w!.store.getState() as any;
       // Every write of the pass counts, the way the window's IDB tee sees it:
       // a row two feeders write two ways flaps and lands where it started. A
@@ -515,6 +552,20 @@ export const INVARIANTS: readonly Invariant[] = [
     },
   },
 ];
+
+// A replicated slot's receive stamp is the receiving window's own monotonic
+// clock (applyReplicatedProjection stamps it on apply), so a follower applying
+// the host's slot later holds a different one by design.
+function withoutWindowClocks(entries: Record<string, unknown>): Record<string, unknown> {
+  const proj = entries.sessionsProjection as Record<string, Record<string, unknown>> | undefined;
+  if (!proj || typeof proj !== "object") return entries;
+  const slots = Object.fromEntries(Object.entries(proj).map(([k, slot]) => {
+    if (!slot || typeof slot !== "object") return [k, slot];
+    const { receivedAtMono: _r, ...rest } = slot;
+    return [k, rest];
+  }));
+  return { ...entries, sessionsProjection: slots };
+}
 
 // ── Running the catalog ─────────────────────────────────────────────────────
 

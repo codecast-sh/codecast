@@ -62,14 +62,20 @@ const tookMs = (a: AgentResult): number => {
 
 export function writeRunFolder(rec: RunRecord): string {
   mkdirSync(rec.dir, { recursive: true });
-  const at = rec.freeze.asOf;
-  const realAt = () => new Date().toISOString();
+  // A replay has no simulated clock: it runs now, on the moment its freeze
+  // names (freeze.asOf, which the freeze keeps). Its virtual time is wall
+  // time, so `startedAt` is when the rep began and a run lists on the day it
+  // ran, never on the frozen moment's date.
+  const startedAt = new Date(rec.startedAt).toISOString();
   const events: RunEvent[] = [];
   const sends: RunSend[] = [];
-  const emit = (kind: string, payload: Record<string, unknown>) => events.push({ seq: events.length + 1, virtualAt: at, realAt: realAt(), kind, payload });
+  const emit = (kind: string, payload: Record<string, unknown>) => {
+    const at = new Date().toISOString();
+    events.push({ seq: events.length + 1, virtualAt: at, realAt: at, kind, payload });
+  };
   const send = (text: string, label: string) => {
     emit('send_captured', { label, detail: { to: 'owner', text, rail: 'session' } });
-    const seq = events.length;
+    const { seq, virtualAt: at } = events.at(-1)!;
     sends.push({ seq, at, label, rail: 'session', to: 'owner', text, chars: text.length, isGroup: false, audience: 'owner' });
   };
   const calls: CallResult[] = rec.result?.calls ?? [];
@@ -87,7 +93,7 @@ export function writeRunFolder(rec: RunRecord): string {
 
   const costUsd = calls.reduce((s, c) => s + c.costUsd, 0) + agents.reduce((s, a) => s + a.costUsd, 0);
   const realElapsedMs = Math.max(Date.now() - rec.startedAt, calls.reduce((s, c) => s + c.realMs, 0) + agents.reduce((s, a) => s + tookMs(a), 0));
-  const result = { scenario: rec.scenario, seed: rec.rep, title: rec.freeze.name, startedAt: at, endedBecause: rec.endedBecause, stopReason: rec.error ?? null, steps: calls.length + agents.length, virtualElapsedMs: 0, realElapsedMs, costUsd, captures: calls.length + agents.length };
+  const result = { scenario: rec.scenario, seed: rec.rep, title: rec.freeze.name, startedAt, endedBecause: rec.endedBecause, stopReason: rec.error ?? null, steps: calls.length + agents.length, virtualElapsedMs: 0, realElapsedMs, costUsd, captures: calls.length + agents.length };
 
   writeFileSync(join(rec.dir, 'result.json'), JSON.stringify(result, null, 2));
   writeFileSync(join(rec.dir, 'events.jsonl'), events.map((e) => JSON.stringify(e)).join('\n'));

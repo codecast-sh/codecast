@@ -8,6 +8,7 @@
 // the replica cannot derive (the enrichment audit's verdicts, pl-498).
 import {
   INBOX_FACT_FIELDS,
+  INBOX_ROW_FIELDS,
   isSettleVerdictCurrent,
   userRestOf,
 } from "@codecast/shared/contracts";
@@ -54,6 +55,7 @@ const SESSION_RENAMES: Record<string, string> = {
 };
 
 const FACT_FIELDS = new Set<string>(INBOX_FACT_FIELDS as readonly string[]);
+const ROW_FIELDS = new Set<string>(INBOX_ROW_FIELDS as readonly string[]);
 
 function teamIdFromWorkspace(ws: unknown): string | undefined {
   return typeof ws === "string" && ws.startsWith("team:") ? ws.slice(5) : undefined;
@@ -137,37 +139,42 @@ function planSessions(
   existing: Record<string, any> | undefined,
   refetchIn: boolean,
 ): CargoPlan {
-  const fields: Record<string, any> = {};
+  // Every non-fact raw change, renamed: the inputs the derived twins read.
+  // The liveness overlay is the single writer of fact fields (convergence
+  // C1), so a conversations patch never writes them, even the raw ones like
+  // updated_at/message_count.
+  const changed: Record<string, any> = {};
   let refetch = refetchIn;
   for (const [k, v] of Object.entries(raw)) {
-    // The liveness overlay is the single writer of fact fields (convergence
-    // C1) — a conversations patch must never write them, even the raw ones
-    // like updated_at/message_count.
     if (FACT_FIELDS.has(k)) continue;
-    const target = SESSION_RENAMES[k] ?? k;
     let value = v;
     if (k === "loop_state" && value && typeof value === "object" && value.status === "stopped") value = null;
-    fields[target] = value === undefined ? null : value;
+    changed[SESSION_RENAMES[k] ?? k] = value === undefined ? null : value;
   }
   // Absent → null: enrichment spells every optional as `?? null`.
-  const unset: string[] = [];
   for (const k of unsetIn) {
     if (FACT_FIELDS.has(k)) continue;
-    fields[SESSION_RENAMES[k] ?? k] = null;
+    changed[SESSION_RENAMES[k] ?? k] = null;
   }
+  // Only the row's own fields land (INBOX_ROW_FIELDS). Any other raw column
+  // (title_gen_scheduled_at, persistent, short_id...) is not on the row the
+  // list and byIds write, so landing it would flap on their next push.
+  const fields: Record<string, any> = {};
+  for (const [k, v] of Object.entries(changed)) if (ROW_FIELDS.has(k)) fields[k] = v;
+  const unset: string[] = [];
   // Derived twins, recomputed from the merged row with the shared helpers.
-  const merged = { ...(existing ?? {}), ...fields };
-  if ("inbox_pinned_at" in fields) fields.is_pinned = !!fields.inbox_pinned_at;
-  if ("anchor_id" in fields) fields.is_anchor = !!fields.anchor_id;
-  if ("is_subagent" in fields) fields.is_subagent = fields.is_subagent === true;
+  const merged = { ...(existing ?? {}), ...changed };
+  if ("inbox_pinned_at" in changed) fields.is_pinned = !!changed.inbox_pinned_at;
+  if ("anchor_id" in changed) fields.is_anchor = !!changed.anchor_id;
+  if ("is_subagent" in changed) fields.is_subagent = changed.is_subagent === true;
   const updatedAt = typeof merged.updated_at === "number" ? merged.updated_at : 0;
-  if ("inbox_deferred_at" in fields) {
+  if ("inbox_deferred_at" in changed) {
     fields.is_deferred = !!merged.inbox_deferred_at && merged.inbox_deferred_at >= updatedAt;
   }
-  if ("inbox_rest" in fields || "inbox_rest_at" in fields) {
+  if ("inbox_rest" in changed || "inbox_rest_at" in changed) {
     fields.user_rest = userRestOf({ inbox_rest: merged.inbox_rest, inbox_rest_at: merged.inbox_rest_at, updated_at: updatedAt });
   }
-  if ("settle_verdict" in fields || "settle_verdict_at" in fields) {
+  if ("settle_verdict" in changed || "settle_verdict_at" in changed) {
     fields.settle_verdict = isSettleVerdictCurrent({ settle_verdict_at: merged.settle_verdict_at, updated_at: updatedAt })
       ? (merged.settle_verdict ?? null)
       : null;

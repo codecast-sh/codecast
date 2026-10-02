@@ -194,8 +194,12 @@ export async function servesById(world: InvariantWorld, id: string, userId: stri
 
 /** Store keys the fixpoint pass may move without it counting as a patch. */
 export const FIXPOINT_BOOKKEEPING: ReadonlySet<string> = new Set(["syncMeta", "syncProgress"]);
-// The window feeds that carry the time-derived liveness facts (window.ts startHost).
-export const LIVENESS_FEEDS = ["liveness", "teamLiveness"] as const;
+// The window feeds whose result moves with the clock alone and which
+// production re-runs at the current epoch without a data change (window.ts
+// startHost): the liveness overlays (the digest compare's stale-payload
+// probe) and the base lists, whose working-set windows are time-bounded (the
+// recovery poll's `_probe` query in useSyncInboxSessions).
+export const EPOCH_FEEDS = ["liveness", "teamLiveness", "inbox", "team"] as const;
 
 /**
  * Keys a window can feed from a real feeder, and so the fixpoint pass

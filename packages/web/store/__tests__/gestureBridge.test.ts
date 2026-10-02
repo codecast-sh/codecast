@@ -1294,3 +1294,74 @@ followTest("a follow gesture crosses to a sibling window and a malformed one is 
   stop();
   followFactory(null);
 });
+
+// ct-56048: a kill of a plain row dispatches inbox_dismissed_at alone, but the
+// receiver locked all four hide fields plus retained-value barriers. The row
+// never echoes again, so the extra locks outlived their settle window.
+describe("gesture bridge lock parity", () => {
+  const fieldLocks = (pending: Record<string, any>, id: string) =>
+    Object.fromEntries(Object.entries(pending)
+      .filter(([k, v]) => (k.startsWith(`sessions:${id}:`) || k.startsWith(`conversations:${id}:`)) && v?.type === "field")
+      .map(([k, v]) => [k, v.value]));
+
+  it("a kill of a plain row leaves the sibling exactly the sender's locks, and the bridged ack retires every one", () => {
+    const plain = () => seed({
+      sessions: { [REAL_A]: session(REAL_A, { is_pinned: false, inbox_pinned_at: null } as any) },
+      conversations: { [REAL_A]: { _id: REAL_A } },
+    });
+    plain();
+    const store = useInboxStore.getState() as any;
+    store._setOutbox(() => {}, () => {}, async () => []);
+    store._setDispatch(() => Promise.resolve());
+    useInboxStore.getState().killSession(REAL_A);
+    const senderLocks = fieldLocks(useInboxStore.getState().pending, REAL_A);
+    const msg = hub.posted[0].data as GestureMessage & { kind: "hide" };
+    expect(msg.writes).toEqual({ [REAL_A]: { inbox_dismissed_at: msg.ts } });
+    expect(Object.keys(senderLocks).sort()).toEqual([`conversations:${REAL_A}:inbox_dismissed_at`, `sessions:${REAL_A}:inbox_dismissed_at`]);
+
+    // The sibling, holding the same plain row.
+    plain();
+    useInboxStore.getState().applyGestureBridge(msg);
+    expect(fieldLocks(useInboxStore.getState().pending, REAL_A)).toEqual(senderLocks);
+    expect(useInboxStore.getState().sessions[REAL_A].inbox_dismissed_at).toBe(msg.ts);
+
+    useInboxStore.getState().syncTable("syncMeta", { "synclog:v1:user:me": { cursor: 10 } }, { kind: "singleton" });
+    useInboxStore.getState().applyGestureBridge({
+      kind: "ack", sentAt: msg.ts + 1, ts: msg.ts + 1, ack: [{ scope_key: "user:me", position: 7 }],
+      patches: { conversations: { [REAL_A]: { inbox_dismissed_at: msg.ts } } },
+    });
+    expect(fieldLocks(useInboxStore.getState().pending, REAL_A)).toEqual({});
+  });
+
+  it("a kill of a pinned row bridges the pin clear it wrote, is_pinned included", () => {
+    seed({
+      sessions: { [REAL_A]: session(REAL_A, { is_pinned: true, inbox_pinned_at: 5 } as any) },
+      conversations: { [REAL_A]: { _id: REAL_A, inbox_pinned_at: 5 } },
+    });
+    useInboxStore.getState().killSession(REAL_A);
+    const msg = hub.posted[0].data as GestureMessage & { kind: "hide" };
+    expect(msg.writes?.[REAL_A]).toEqual({ inbox_dismissed_at: msg.ts, is_pinned: false, inbox_pinned_at: null });
+  });
+
+  it("a row dropped by a forget or a prune leaves no field locks, only its excludes", () => {
+    const withLocks = () => seed({
+      sessions: { [REAL_A]: session(REAL_A) },
+      conversations: { [REAL_A]: { _id: REAL_A } },
+      pending: {
+        [`sessions:${REAL_A}:inbox_dismissed_at`]: { type: "field", value: 1, ts: 1 },
+        [`conversations:${REAL_A}:inbox_dismissed_at`]: { type: "field", value: 1, ts: 1 },
+      },
+    });
+    withLocks();
+    useInboxStore.getState().applyGestureBridge({ kind: "forget", ids: [REAL_A], ts: 2 });
+    let pending = useInboxStore.getState().pending;
+    expect(fieldLocks(pending, REAL_A)).toEqual({});
+    expect(pending[`sessions:${REAL_A}`]).toMatchObject({ type: "exclude" });
+
+    withLocks();
+    useInboxStore.getState().pruneGhostSessions([REAL_A]);
+    pending = useInboxStore.getState().pending;
+    expect(fieldLocks(pending, REAL_A)).toEqual({});
+    expect(pending[`conversations:${REAL_A}`]).toMatchObject({ type: "exclude" });
+  });
+});

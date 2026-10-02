@@ -1,0 +1,69 @@
+{
+  "asOf": "2026-09-28T10:00:00.000Z",
+  "notes": "Red list #20: the docs role's check, an hour after its last one; its brief's lines about Theo's two sessions were written then, and both sessions have moved since.",
+  "judge": "reports Theo's two sessions as their transcripts stand now (jx7th01 finished, its pull request merged; jx7th02 blocked, waiting on Mara for the docs deploy token), not as the hour-old lines describe them",
+  "label": {
+    "rereads": [
+      "jx7th01",
+      "jx7th02"
+    ]
+  },
+  "snapshot": {
+    "captured_at": "2026-09-28T10:00:00.000Z",
+    "fixture": {
+      "trigger": "tr-901",
+      "routine": "check",
+      "role": {
+        "handle": "docs",
+        "name": "Docs lead",
+        "reports_to": "Mara",
+        "scope": [
+          "Docs site",
+          "API reference"
+        ],
+        "charter": "Keep every public page true to what the product does today.",
+        "goals": [
+          "Every page reviewed within a month of the feature it describes",
+          "API reference generated from the schema, never by hand"
+        ]
+      }
+    },
+    "world": "fernhill",
+    "values": {
+      "role": "docs"
+    },
+    "reads": [
+      {
+        "argv": [
+          "brief",
+          "@docs"
+        ],
+        "out": "Docs lead @docs · or-7 · active · starts work\n  scope: project Docs site, project API reference\n  authority outside codecast: none granted\n  standing session: jx7dcs1 · next check in 1h (tr-901)\n  tasks: 14 in scope, 6 open · 2 backlog, 3 in_progress, 1 in_review, 8 done\n  plan pl-31 Reference from schema: 3 of 5 done\n  decisions: 1 open, 0 answered today\n  changed since 1h ago: nothing\n  today: 2/40 wakes · 0/6 sessions started · 4100/400000 tokens\n  sessions under it:\n    jx7ref2  needs input  Regenerate the webhooks reference: asks whether to drop the v1 events table (sd-55)\n    jx7bil3  working      Rewrite the billing page for the new plans\n  people who report to it:\n    Theo (@theo): 2 tasks open, last active 58m ago\n      jx7th01  Retire the hand-written reference pages\n      jx7th02  Fix broken links in the webhooks guide\n\n  ## Charter\n  Keep every public page true to what the product does today.\n\n  ## Brief\n  Docs lead for Fernhill: the docs site and the API reference.\n\n  ## Where it stands\n  - Docs site: billing page rewrite under way in jx7bil3; the old plans are still live on it. (2026-09-28)\n  - API reference: Theo's jx7th01 is retiring the hand-written reference pages, about half done. (2026-09-28)\n  - Docs site: Theo's jx7th02 is fixing broken links in the webhooks guide. (2026-09-28)"
+      },
+      {
+        "argv": [
+          "brief",
+          "@docs",
+          "--json"
+        ],
+        "out": "{\n  \"role\": {\n    \"handle\": \"docs\",\n    \"name\": \"Docs lead\",\n    \"short_id\": \"or-7\",\n    \"status\": \"active\",\n    \"standing_short_id\": \"jx7dcs1\"\n  },\n  \"facts\": {\n    \"scope\": {\n      \"projects\": [\n        \"Docs site\",\n        \"API reference\"\n      ]\n    },\n    \"tasks\": {\n      \"total\": 14,\n      \"open\": 6,\n      \"by_status\": {\n        \"backlog\": 2,\n        \"in_progress\": 3,\n        \"in_review\": 1,\n        \"done\": 8\n      }\n    },\n    \"decisions\": {\n      \"open\": 1,\n      \"answered_today\": 0\n    },\n    \"changed_since\": 1790560800000,\n    \"changed\": [],\n    \"hands\": [\n      {\n        \"short_id\": \"jx7ref2\",\n        \"title\": \"Regenerate the webhooks reference\",\n        \"work_state\": \"needs_input\",\n        \"state\": \"asks whether to drop the v1 events table (sd-55)\"\n      },\n      {\n        \"short_id\": \"jx7bil3\",\n        \"title\": \"Rewrite the billing page for the new plans\",\n        \"work_state\": \"working\"\n      }\n    ],\n    \"reports\": [\n      {\n        \"name\": \"Theo\",\n        \"handle\": \"theo\",\n        \"open_tasks\": 2,\n        \"last_active_at\": \"2026-09-28T09:02:00.000Z\",\n        \"sessions\": [\n          {\n            \"short_id\": \"jx7th01\",\n            \"title\": \"Retire the hand-written reference pages\"\n          },\n          {\n            \"short_id\": \"jx7th02\",\n            \"title\": \"Fix broken links in the webhooks guide\"\n          }\n        ]\n      }\n    ]\n  },\n  \"charter\": \"Keep every public page true to what the product does today.\",\n  \"narrative\": \"Docs lead for Fernhill: the docs site and the API reference.\\n\\n## Where it stands\\n- Docs site: billing page rewrite under way in jx7bil3; the old plans are still live on it. (2026-09-28)\\n- API reference: Theo's jx7th01 is retiring the hand-written reference pages, about half done. (2026-09-28)\\n- Docs site: Theo's jx7th02 is fixing broken links in the webhooks guide. (2026-09-28)\"\n}"
+      },
+      {
+        "argv": [
+          "read",
+          "jx7th01"
+        ],
+        "out": "Retire the hand-written reference pages (jx7th01) · idle · 34 messages\n\n[31] user: Remove the last hand-written pages once the generated ones cover them.\n[32] assistant: The generated REST and events pages now cover every hand-written page. Removing the last six.\n[33] assistant: Opened PR #88 removing them; review approved by Mara.\n[34] assistant: PR #88 merged at 09:02. The hand-written reference pages are gone. Done.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "read",
+          "jx7th02"
+        ],
+        "out": "Fix broken links in the webhooks guide (jx7th02) · needs input · 19 messages\n\n[16] user: Fix every broken link in the webhooks guide.\n[17] assistant: Fixed 11 of 14 links. The other three point at pages only the deploy preview has.\n[18] assistant: The link checker needs the docs deploy token to reach the preview, and this machine does not have it.\n[19] assistant: Blocked until someone shares the docs deploy token. Asked Mara at 09:01.",
+        "prefix": true
+      }
+    ]
+  }
+}

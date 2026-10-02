@@ -95,6 +95,19 @@ execution's value: a "stopped" from the day a daemon died outlived the managed r
 filed a declared done session under Needs Input on every replica while the stamp beside
 it said done.
 
+**The row body is an allowlist, written one way by every feeder.** Besides the facts, a
+sessions row holds exactly `INBOX_ROW_FIELDS` (shared module): what
+`enrichInboxSessionRow`, `buildSubagentChildRow` and the viewer stamps write, a set a
+convex test pins against a conversation with every schema field set. Every feeder of
+the never-prune `sessions` cache (the live list, byIds, the completeness floor,
+favorites and the killed shelf) stamps the viewer-relative fields through one helper,
+`stampInboxViewerFields`: `owned_by_me` (always a boolean), `author_name` and
+`author_email` on a row the viewer does not run, `owner_name` and `owner_email`, and
+`assigned_ping`. A delta merge replaces the whole row, so a field one feeder writes and
+another omits flaps on every catch-up. Sync-log cargo lands a raw conversation field
+only when, after its rename, it is a row field; any other column would ride in and be
+removed by the next push.
+
 Rows the scan does not cover (past a window cap, killed and unpinned, outside every
 window) keep their last synced facts until a crawl or a semantic transition refreshes
 the row. Those rows are also outside the stamped set, so the compare does not cover
@@ -115,7 +128,8 @@ The server derives it per overlay execution with zero writes: own open question 
 permission prompt (from the message probe), pending `cast decide` rows (one
 session_decisions read), and the child rollup (bounded child probes). The replica
 derives the same thing from replicated inputs: its own `awaiting_input` fact, the
-synced session_decisions collection, and its replica children's facts. This is
+synced session_decisions collection, its replica children's facts, and the parent's
+`child_asking` fact for a child it does not hold (C3). This is
 deliberate: an ask flips at tool prompt cadence across subagent fleets, and stamping it
 on the parent row would serialize every flip on the row the message flush path already
 patches, plus the scope's sync head. Write time denormalization is reserved for low
@@ -208,7 +222,14 @@ parent a child's ask lifts: a subagent or orphan rolls up to its `parent_convers
 a plan handoff (parent pointer plus parent message) is its own member and speaks for
 itself; an agent team teammate rolls up to its lead. The server pool grouping and the
 replica's asking derivation both group by it, and a child's pending `cast decide` lifts
-its parent on both sides.
+its parent on both sides. Which pending decide lifts at all is one shared rule too,
+`isStackedAsk`: a blocking ask, or an advisory one someone filed into a named stack. An
+advisory ask leaves its agent working on the default, so it lifts nothing on either side.
+The server's asking child may be a live pool row outside the replica's window, which
+the replica never holds (its fact-only overlay row creates no row), so the child half
+of the rollup also ships as a fact on the parent's overlay row, `child_asking` (the
+`producing_until` precedent): the replica lifts a parent that carries it, under the same
+stash, dismiss and kill guard as a held child.
 
 ### C4 The working set
 
@@ -333,7 +354,8 @@ message is a user turn (`last_role_is_user`, probed), the row's own heartbeat
 (`last_heartbeat`), the instant the daemon stops vouching for the row
 (`daemon_alive_until`, the user's daemons folded in), the instant its last producing
 child goes quiet (`producing_until`), and whether an AskUserQuestion poll is open
-(`auq_open`). Those six ship as facts, and ONE shared function, `deriveLiveAt(facts, t)`,
+(`auq_open`). Those six ship as facts (beside `child_asking`, the asking rollup's child
+half, C3), and ONE shared function, `deriveLiveAt(facts, t)`,
 is the idle rule: the overlay runs it at its epoch to stamp the row, the replica runs it
 at its own clock to render, and the time flip runs it at each deadline on both sides.
 Every term is monotone in `t` for fixed facts, so re-running it over the already coerced

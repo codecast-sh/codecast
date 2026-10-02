@@ -1,0 +1,26 @@
+{
+  "name": "call-summary huddle-credit-owners",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:huddle-credit-owners"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "call-summary:huddle-credit-owners",
+    "title": "call-summary huddle-credit-owners"
+  },
+  "asOf": "2026-01-15T18:10:00.000Z",
+  "trigger": {
+    "type": "call-summary"
+  },
+  "meta": {
+    "surface": "call-summary",
+    "visibility": "public",
+    "snapshot": "fixtures/call-summary/huddle-credit-owners.json"
+  },
+  "judge": "the action items are exactly four, with these owners: Lucia writes the migration script (Ravi handed it to her), Ravi writes the rollback runbook, Lucia checks the new terms with Priya, Dana sends the customer email on Thursday; nothing for the status page copy, the feature flag, or Priya",
+  "notes": null,
+  "tags": [],
+  "id": "e33185e6-261c-43ef-b2ff-e76dcd2e5698",
+  "createdAt": "2026-10-02T15:56:36.915Z"
+}

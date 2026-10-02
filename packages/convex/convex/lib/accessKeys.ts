@@ -8,6 +8,7 @@
 // live in access.ts, which re-exports this file so callers see one layer.
 import { Id } from "../_generated/dataModel";
 import { isTeamMember, teamVisibleConvTeam } from "../privacy";
+import { listSessionOwnerIds } from "../sessionOwners";
 
 type AccessCtx = { db: any };
 
@@ -17,9 +18,11 @@ type AccessCtx = { db: any };
 // built HERE, next to the rules it encodes, and canAccessTask/Doc/Plan/Project
 // are defined as "evaluate the stamp" — the log and the byIds queries cannot
 // disagree by construction. `access_owner` is user_id; `access_key` is the
-// workspace key (stored, else computed — never for conversations, whose rule is
-// not owner-or-team and never reaches this layer); `access_grants` are explicit
-// per-user grants (a task's assignee).
+// workspace key (stored, else computed; never for conversations, whose team
+// rule is graduated visibility and never reaches this layer); `access_grants`
+// are explicit per-user grants: a task's assignee, and a conversation's
+// session owners other than its runner (checkConversationAccess admits every
+// owner, so the sync log must authorize and fan to them too).
 export type AccessStamp = {
   access_owner?: string;
   access_key?: string;
@@ -43,11 +46,22 @@ export function isUserGrant(assignee: unknown): assignee is string {
   return typeof assignee === "string" && assignee.length > 0 && !assignee.startsWith("agent:");
 }
 
-/** Stamp with the lazy key compute for rows minted before the backfill. */
+/**
+ * Stamp with the reads the pure builder cannot do: the lazy key compute for
+ * rows minted before the backfill, and a conversation's owner grants (one
+ * indexed session_owners read). The owner set lives in its own table, so the
+ * pure builder never sees it.
+ */
 export async function accessStampFor(ctx: AccessCtx, table: string, doc: any): Promise<AccessStamp | null> {
   const stamp = accessStampFromDoc(table, doc);
   if (!stamp) return null;
-  if (table !== "conversations" && !stamp.access_key) {
+  if (table === "conversations") {
+    const grants = (await listSessionOwnerIds(ctx, doc._id))
+      .map(String)
+      .filter((id) => id !== stamp.access_owner)
+      .sort();
+    if (grants.length) stamp.access_grants = [...new Set(grants)];
+  } else if (!stamp.access_key) {
     stamp.access_key = await resolveWorkspaceKey(ctx, doc);
   }
   return stamp;

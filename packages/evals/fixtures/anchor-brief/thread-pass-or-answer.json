@@ -1,0 +1,297 @@
+{
+  "asOf": "2026-09-28T09:00:00.000Z",
+  "notes": "Red list #16: six replies wake the team agent in a thread it follows; three ask it something by name, three are people talking to each other.",
+  "judge": "answers the three lines that ask Fern something (what blocks the webhooks reference, who is rewriting the billing page, the Thursday reminder) with a short reply each, and passes every line people say to each other, the request to ping Priya included",
+  "label": {
+    "placeholders": {
+      "answer": [
+        "cm7ph162",
+        "cm7ph164",
+        "cm7ph166"
+      ],
+      "pass": [
+        "cm7ph161",
+        "cm7ph163",
+        "cm7ph165"
+      ]
+    }
+  },
+  "snapshot": {
+    "captured_at": "2026-09-28T09:00:00.000Z",
+    "facts": {
+      "name": "Fern",
+      "scopeType": "team",
+      "scopeLabel": "the Fernhill team",
+      "teamName": "Fernhill"
+    },
+    "world": "fernhill",
+    "reads": [
+      {
+        "argv": [
+          "brief"
+        ],
+        "out": "Not inside a role's session: pass a handle (cast brief @handle)",
+        "exit": 1
+      },
+      {
+        "argv": [
+          "brief",
+          "--json"
+        ],
+        "out": "Not inside a role's session: pass a handle (cast brief @handle)",
+        "exit": 1
+      },
+      {
+        "argv": [
+          "chat",
+          "thread",
+          "cm7launch"
+        ],
+        "out": "This dry run holds no record of the thread beyond what the wake quotes: the excerpt in the wake is the thread as it stands.",
+        "exit": 1,
+        "prefix": true
+      },
+      {
+        "argv": [
+          "chat",
+          "read",
+          "--channel",
+          "ch7launch"
+        ],
+        "out": "This dry run holds no record of the thread beyond what the wake quotes: the excerpt in the wake is the thread as it stands.",
+        "exit": 1,
+        "prefix": true
+      }
+    ],
+    "turns": [
+      {
+        "chat": {
+          "channelName": "launch",
+          "channelKind": "channel",
+          "teamName": "Fernhill",
+          "threadRootId": "cm7launch",
+          "channelId": "ch7launch",
+          "askerName": "Theo",
+          "addressed": false,
+          "entries": [
+            {
+              "name": "Mara",
+              "content": "@Fern we're planning the v2 docs launch in this thread. Keep an eye on it and jump in when we ask you something."
+            },
+            {
+              "name": "Fern",
+              "content": "Following along."
+            },
+            {
+              "name": "Theo",
+              "content": "I can take the changelog if you write the blog post, Mara."
+            }
+          ],
+          "channelEntries": [],
+          "placeholderId": "cm7ph161",
+          "nonce": "n16thr1ead"
+        }
+      },
+      {
+        "chat": {
+          "channelName": "launch",
+          "channelKind": "channel",
+          "teamName": "Fernhill",
+          "threadRootId": "cm7launch",
+          "channelId": "ch7launch",
+          "askerName": "Mara",
+          "addressed": false,
+          "entries": [
+            {
+              "name": "Mara",
+              "content": "@Fern we're planning the v2 docs launch in this thread. Keep an eye on it and jump in when we ask you something."
+            },
+            {
+              "name": "Fern",
+              "content": "Following along."
+            },
+            {
+              "name": "Theo",
+              "content": "I can take the changelog if you write the blog post, Mara."
+            },
+            {
+              "name": "Mara",
+              "content": "Deal. Fern, what's still blocking the webhooks reference?"
+            }
+          ],
+          "channelEntries": [],
+          "placeholderId": "cm7ph162",
+          "nonce": "n16thr2ead"
+        }
+      },
+      {
+        "chat": {
+          "channelName": "launch",
+          "channelKind": "channel",
+          "teamName": "Fernhill",
+          "threadRootId": "cm7launch",
+          "channelId": "ch7launch",
+          "askerName": "Theo",
+          "addressed": false,
+          "entries": [
+            {
+              "name": "Mara",
+              "content": "@Fern we're planning the v2 docs launch in this thread. Keep an eye on it and jump in when we ask you something."
+            },
+            {
+              "name": "Fern",
+              "content": "Following along."
+            },
+            {
+              "name": "Theo",
+              "content": "I can take the changelog if you write the blog post, Mara."
+            },
+            {
+              "name": "Mara",
+              "content": "Deal. Fern, what's still blocking the webhooks reference?"
+            },
+            {
+              "name": "Theo",
+              "content": "Mara, can you ping Priya about the hero image for the post?"
+            }
+          ],
+          "channelEntries": [],
+          "placeholderId": "cm7ph163",
+          "nonce": "n16thr3ead"
+        }
+      },
+      {
+        "chat": {
+          "channelName": "launch",
+          "channelKind": "channel",
+          "teamName": "Fernhill",
+          "threadRootId": "cm7launch",
+          "channelId": "ch7launch",
+          "askerName": "Theo",
+          "addressed": false,
+          "entries": [
+            {
+              "name": "Mara",
+              "content": "@Fern we're planning the v2 docs launch in this thread. Keep an eye on it and jump in when we ask you something."
+            },
+            {
+              "name": "Fern",
+              "content": "Following along."
+            },
+            {
+              "name": "Theo",
+              "content": "I can take the changelog if you write the blog post, Mara."
+            },
+            {
+              "name": "Mara",
+              "content": "Deal. Fern, what's still blocking the webhooks reference?"
+            },
+            {
+              "name": "Theo",
+              "content": "Mara, can you ping Priya about the hero image for the post?"
+            },
+            {
+              "name": "Theo",
+              "content": "Fern, who is rewriting the billing page right now?"
+            }
+          ],
+          "channelEntries": [],
+          "placeholderId": "cm7ph164",
+          "nonce": "n16thr4ead"
+        }
+      },
+      {
+        "chat": {
+          "channelName": "launch",
+          "channelKind": "channel",
+          "teamName": "Fernhill",
+          "threadRootId": "cm7launch",
+          "channelId": "ch7launch",
+          "askerName": "Mara",
+          "addressed": false,
+          "entries": [
+            {
+              "name": "Mara",
+              "content": "@Fern we're planning the v2 docs launch in this thread. Keep an eye on it and jump in when we ask you something."
+            },
+            {
+              "name": "Fern",
+              "content": "Following along."
+            },
+            {
+              "name": "Theo",
+              "content": "I can take the changelog if you write the blog post, Mara."
+            },
+            {
+              "name": "Mara",
+              "content": "Deal. Fern, what's still blocking the webhooks reference?"
+            },
+            {
+              "name": "Theo",
+              "content": "Mara, can you ping Priya about the hero image for the post?"
+            },
+            {
+              "name": "Theo",
+              "content": "Fern, who is rewriting the billing page right now?"
+            },
+            {
+              "name": "Mara",
+              "content": "Yes, I'll ask her this afternoon. Thanks Theo!"
+            }
+          ],
+          "channelEntries": [],
+          "placeholderId": "cm7ph165",
+          "nonce": "n16thr5ead"
+        }
+      },
+      {
+        "chat": {
+          "channelName": "launch",
+          "channelKind": "channel",
+          "teamName": "Fernhill",
+          "threadRootId": "cm7launch",
+          "channelId": "ch7launch",
+          "askerName": "Mara",
+          "addressed": false,
+          "entries": [
+            {
+              "name": "Mara",
+              "content": "@Fern we're planning the v2 docs launch in this thread. Keep an eye on it and jump in when we ask you something."
+            },
+            {
+              "name": "Fern",
+              "content": "Following along."
+            },
+            {
+              "name": "Theo",
+              "content": "I can take the changelog if you write the blog post, Mara."
+            },
+            {
+              "name": "Mara",
+              "content": "Deal. Fern, what's still blocking the webhooks reference?"
+            },
+            {
+              "name": "Theo",
+              "content": "Mara, can you ping Priya about the hero image for the post?"
+            },
+            {
+              "name": "Theo",
+              "content": "Fern, who is rewriting the billing page right now?"
+            },
+            {
+              "name": "Mara",
+              "content": "Yes, I'll ask her this afternoon. Thanks Theo!"
+            },
+            {
+              "name": "Mara",
+              "content": "Fern, remind us here on Thursday at 10 to check the schema freeze before we publish."
+            }
+          ],
+          "channelEntries": [],
+          "placeholderId": "cm7ph166",
+          "nonce": "n16thr6ead"
+        }
+      }
+    ]
+  }
+}

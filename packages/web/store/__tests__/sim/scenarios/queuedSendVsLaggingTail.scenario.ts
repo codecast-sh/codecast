@@ -7,9 +7,6 @@
 // once the tail lands. INV-pending-sends checks at every settle that each
 // client_id is on one pending row and every bubble is echoed, settled or failed.
 //
-// Known: INV-fixpoint fails every settled window on the owned_by_me flap
-// (ct-56011) before the scenario's own checks run, so the runs leave it out;
-// every default run then passes, the send rendering once in every order.
 // Sweep seed 157409 also fails INV-sessions-mine on a generated anchor (ct-56054).
 
 import { stripPastedContent } from "@codecast/shared/contracts";
@@ -35,7 +32,7 @@ async function expectSendRendersOnce(w: ScenarioWorld, win: SimWindow, session: 
   if (wrong) w.fail({ ...w.reportBase(), invariant: { id: "expect.sendRendersOnce", meaning }, message: wrong, window: windowContext(win), row: { table: "conversations", id, server: (await w.row(session)) ?? null, replica: rows[0] ?? null } });
 }
 
-scenario({ name: "queuedSendVsLaggingTail", known: { "INV-fixpoint": "ct-56011" } }, async (w) => {
+scenario({ name: "queuedSendVsLaggingTail" }, async (w) => {
   w.user("ada");
   const s = w.session("ada", "s", { agentStatus: "working" });
   const a = await w.device("ada");

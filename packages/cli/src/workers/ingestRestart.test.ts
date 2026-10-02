@@ -135,5 +135,7 @@ describe("a cloud agent mirror across a restart", () => {
     const pass = daemon.slice(daemon.indexOf("async function processTranscriptDeltaSessionPass("));
     expect(pass).toContain("(mirror ? withMirrorSynced(restored ?? null, filePath, conversationCache[sessionId]) : restored)");
     expect(pass).toContain("writeMirrorSynced(filePath, conversationId, finalSynced.keys())");
+    // A mirror with nothing to send has every row proven synced: saved too, so one synced before this existed is covered.
+    expect(pass).toContain("writeMirrorSynced(filePath, keptConversation, nextSynced.keys())");
   });
 });

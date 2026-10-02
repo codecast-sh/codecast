@@ -1,0 +1,26 @@
+{
+  "name": "anchor-brief thread-pass-or-answer",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:thread-pass-or-answer"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "anchor-brief:thread-pass-or-answer",
+    "title": "anchor-brief thread-pass-or-answer"
+  },
+  "asOf": "2026-09-28T09:00:00.000Z",
+  "trigger": {
+    "type": "anchor-brief"
+  },
+  "meta": {
+    "surface": "anchor-brief",
+    "visibility": "public",
+    "snapshot": "fixtures/anchor-brief/thread-pass-or-answer.json"
+  },
+  "judge": "answers the three lines that ask Fern something (what blocks the webhooks reference, who is rewriting the billing page, the Thursday reminder) with a short reply each, and passes every line people say to each other, the request to ping Priya included",
+  "notes": null,
+  "tags": [],
+  "id": "5db63f13-1865-409f-9b7a-d4816cf30512",
+  "createdAt": "2026-10-02T15:56:17.466Z"
+}

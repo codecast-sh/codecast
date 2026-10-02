@@ -79,11 +79,10 @@ A ref names its surface (<surface>@<ref>). ${fmt.cmd('./evals')} lists the surfa
   const args = process.argv.slice(2);
   const bare = args.every((a) => a.startsWith('-')) && !args.some((a) => ['-h', '--help', '-V', '--version'].includes(a));
   try {
-    await runEvalsCli(program, bare ? [...process.argv.slice(0, 2), 'status', ...args] : process.argv);
+    return await runEvalsCli(program, bare ? [...process.argv.slice(0, 2), 'status', ...args] : process.argv);
   } catch (e) {
     // A refusal or a missing input is one line; EVALS_DEBUG=1 shows where it came from.
     process.stderr.write(`evals: ${e instanceof Error ? (process.env.EVALS_DEBUG ? e.stack : e.message) : String(e)}\n`);
-    process.exitCode = 1;
+    return 1;
   }
-  return Number(process.exitCode ?? 0);
 }

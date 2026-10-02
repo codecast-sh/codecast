@@ -293,29 +293,36 @@ export function teamScopeKey(teamId: string): SyncScopeKey {
   return `team:${teamId}`;
 }
 
-// The scopes an entity's actions land in — derived from ACCESS, not routing
-// (sync-log-cargo E4, review): owner always; the workspace key's team when the
-// stored key is a team key; each explicit grant (a task's assignee) in their
-// own user scope; conversations owner-only (the inbox is owner-only and team
-// activity is a separate axis). A routing team_id whose workspace is
-// user:<owner> (private inside a team) therefore never enters the team scope:
-// no existence leak, no projected-delete probes, and every reader who may read
-// a row holds a scope it fans to — the property retiring the live lists needs.
-// Pure — unit-tested.
+// The scopes an entity's actions land in, derived from ACCESS, not routing
+// (sync-log-cargo E4, review): owner always; each explicit grant in their own
+// user scope (a task's assignee, a conversation's session owners); the
+// workspace key's team when the stored key is a team key, never for
+// conversations (their team activity is a separate graduated axis). A routing
+// team_id whose workspace is user:<owner> (private inside a team) therefore
+// never enters the team scope: no existence leak, no projected-delete probes,
+// and every reader who may read a row holds a scope it fans to, which is the
+// property retiring the live lists needs. Cost of the owner fan-out: one
+// indexed session_owners read per non-churn conversation write (the stamp) and
+// one head allocation per co-owner. Pure, unit-tested.
 export function scopesForChange(entityType: ChangeEntity, scope: ChangeScope): SyncScopeKey[] {
   if (!scope.owner_user_id) return [];
   const scopes = [userScopeKey(scope.owner_user_id)];
-  if (entityType === "conversations") return scopes;
+  const addGrant = (g: string) => {
+    if (g === scope.owner_user_id) return;
+    const key = userScopeKey(g);
+    if (!scopes.includes(key)) scopes.push(key);
+  };
+  if (entityType === "conversations") {
+    for (const g of scope.grants ?? []) addGrant(g);
+    return scopes;
+  }
   const ws = scope.workspace;
   if (typeof ws === "string" && ws.startsWith("team:")) scopes.push(teamScopeKey(ws.slice(5)));
-  if (entityType === "tasks" && isUserGrant(scope.assignee) && scope.assignee !== scope.owner_user_id) {
-    const g = userScopeKey(scope.assignee!);
-    if (!scopes.includes(g)) scopes.push(g);
+  if (entityType === "tasks") {
+    for (const g of scope.grants ?? []) if (isUserGrant(g)) addGrant(g);
   }
   return scopes;
 }
-
-
 
 async function headFor(db: any, scopeKey: SyncScopeKey): Promise<any | null> {
   return db

@@ -1,13 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { Check, GitPullRequest, Target, X } from "lucide-react";
+import { Check, GitPullRequest, X } from "lucide-react";
 import {
   cardVerdictIndexes,
+  checksLabel,
   proofSummary,
   riskLabel,
   verdictLabel,
+  verdictOfOption,
   type CardCheck,
   type ChangeCard,
   type ChangeVerdict,
@@ -41,13 +43,41 @@ const prLabel = (url: string) => {
 /**
  * `recommend` draws the card's own verdict. A surface that also shows the
  * Ship / Revise / Drop controls turns it off: ChangeCardAnswer carries the
- * recommendation, so it is said once. `change` on the line is off where the
- * change sentence already reads nearby.
+ * recommendation, so it is said once. `outcome` replaces it once the decision
+ * is answered, so a settled card says what happened, not what was proposed.
+ * `change` on the line is off where the change sentence already reads nearby.
  */
-export function ChangeCardView({ card, density = "full", recommend = true, change = true }: { card: ChangeCard; density?: ChangeCardDensity; recommend?: boolean; change?: boolean }) {
+export function ChangeCardView({ card, density = "full", recommend = true, change = true, outcome }: { card: ChangeCard; density?: ChangeCardDensity; recommend?: boolean; change?: boolean; outcome?: ReactNode }) {
   const animate = useFirstSight(card.cause.task);
-  if (density === "line") return <ChangeCardLine card={card} recommend={recommend} change={change} />;
-  return <ChangeCardFull card={card} inline={density === "inline"} recommend={recommend} animate={animate} />;
+  if (density === "line") return <ChangeCardLine card={card} recommend={recommend && !outcome} change={change} />;
+  return <ChangeCardFull card={card} inline={density === "inline"} recommend={recommend} outcome={outcome} animate={animate} />;
+}
+
+const VERDICT_DONE: Record<ChangeVerdict, string> = { ship: "Shipped", revise: "Sent back to revise", drop: "Dropped" };
+
+/**
+ * What a settled card decision came to: the verdict in its tone, who gave it
+ * and when, plus the Revise note. Null while pending or when the answer is not
+ * one of Ship, Revise and Drop.
+ */
+export function cardOutcome(decision: Pick<SessionDecisionItem, "status" | "options" | "answer_index" | "answer_text" | "resolved_at">, by: string, now: number) {
+  if (decision.status !== "answered" || decision.answer_index === undefined) return null;
+  const verdict = verdictOfOption(decision.options[decision.answer_index]?.label);
+  if (!verdict) return null;
+  const ago = decision.resolved_at ? formatTimeAgo(decision.resolved_at, now) : "";
+  const when = !ago ? "" : ago === "now" ? " · just now" : /^\d+[mhd]$/.test(ago) ? ` · ${ago} ago` : ` · ${ago}`;
+  const note = decision.answer_text?.replace(/^revise:\s*/i, "").trim();
+  return {
+    tone: VERDICT_TONE[verdict],
+    pill: `${VERDICT_DONE[verdict]} by ${by}${when}`,
+    line: (
+      <div className={`cc-outcome cc-tone-${VERDICT_TONE[verdict]}`} data-cc-outcome>
+        <span className="cc-outcome-verdict">{VERDICT_DONE[verdict]}</span>
+        <span className="text-sol-text-dim">by {by}{when}</span>
+        {note && <span className="basis-full text-sol-text-muted">{note}</span>}
+      </div>
+    ),
+  };
 }
 
 // The wire fill is the card's one motion moment, and it plays the first time
@@ -99,19 +129,20 @@ function ProofStrip({ card }: { card: ChangeCard }) {
     <section className="cc-section" data-cc-proof>
       <div className="cc-kicker-row">
         <h3 className="cc-kicker">Proof</h3>
-        <span className={`cc-proof-label ${summary.stillRed.length || summary.broke.length ? "text-sol-red" : summary.red ? "text-sol-green" : "text-sol-text-dim"}`}>{summary.label}</span>
-        {(commonBefore || commonAfter) && (
-          <span className="cc-proof-common">
-            <span className="text-sol-red">{commonBefore || "failed"}</span>
-            <span className="cc-arrow" aria-hidden>→</span>
-            <span className="text-sol-green">{commonAfter || "passes"}</span>
-          </span>
-        )}
+        <span className={`cc-proof-label ${summary.stillRed.length || summary.broke.length ? "text-sol-red" : summary.red ? "cc-text-green" : "text-sol-text-dim"}`}>{summary.label}</span>
       </div>
       {red.length === 0 && !broke.length ? (
         <div className="text-[12px] text-sol-text-dim">Nothing was shown failing before the change.</div>
       ) : (
         <ol className="cc-proof">
+          {/* Column labels sit over the dots they name; the detail most rows
+              share rides on them as a tooltip instead of a caption. */}
+          <li className="cc-proof-head" aria-hidden>
+            <span className="cc-track-labels">
+              <span title={commonBefore || undefined}>main</span>
+              <span title={commonAfter || undefined}>branch</span>
+            </span>
+          </li>
           {red.map((b, i) => {
             const a = after.get(b.name);
             const fixed = a?.ok === true;
@@ -130,9 +161,9 @@ function ProofStrip({ card }: { card: ChangeCard }) {
                 <span className="cc-proof-detail">
                   {!shared && (
                     <>
-                      <span className="text-sol-red/80">{beforeText}</span>
+                      <span className="cc-proof-before" title={beforeText}>{beforeText}</span>
                       <span className="cc-arrow" aria-hidden>→</span>
-                      <span className={fixed ? "text-sol-green" : "text-sol-red"}>{afterText}</span>
+                      <span className={`cc-proof-after ${fixed ? "cc-text-green" : "text-sol-red"}`} title={afterText}>{afterText}</span>
                     </>
                   )}
                 </span>
@@ -147,7 +178,7 @@ function ProofStrip({ card }: { card: ChangeCard }) {
                 <span className="cc-dot cc-dot-red" />
               </span>
               <span className="cc-proof-name">{a.name}</span>
-              <span className="cc-proof-detail"><span className="text-sol-red">broke: {a.detail || "fails after the change"}</span></span>
+              <span className="cc-proof-detail"><span className="cc-proof-after text-sol-red" title={a.detail || undefined}>broke: {a.detail || "fails after the change"}</span></span>
             </li>
           ))}
         </ol>
@@ -172,28 +203,13 @@ function CheckRow({ check }: { check: CardCheck }) {
 
 const squash = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
-/**
- * The input line of an example, minus whatever the Before already says. A
- * Before that only repeats the start of the input leaves just the rest of it
- * ("…on railway, it started after the bun upgrade"), which is what the After
- * drew on; an input that adds nothing is dropped.
- */
-export function exampleInputRest(input: string, before: string): string {
-  const b = squash(before);
-  if (!b) return input;
+/** Whether an example's input says anything its Before does not; one that only repeats it is dropped. */
+export function exampleInputAdds(input: string, before: string): boolean {
   const i = squash(input);
-  if (!i.startsWith(b)) return input;
-  // Walk the raw input until its squashed prefix covers the Before.
-  for (let k = before.length; k <= input.length; k++) {
-    if (squash(input.slice(0, k)) === b && !/[a-z0-9]/i.test(input[k] ?? "")) {
-      const rest = input.slice(k).replace(/^[\s,.;:!?…-]+/, "").trim();
-      return rest ? `…${rest}` : "";
-    }
-  }
-  return input;
+  return !!i && i !== squash(before);
 }
 
-function ChangeCardFull({ card, inline, recommend, animate }: { card: ChangeCard; inline: boolean; recommend: boolean; animate: boolean }) {
+function ChangeCardFull({ card, inline, recommend, outcome, animate }: { card: ChangeCard; inline: boolean; recommend: boolean; outcome?: ReactNode; animate: boolean }) {
   const now = useCoarseNow(60_000);
   const [allExamples, setAllExamples] = useState(false);
   const examples = allExamples ? card.examples : card.examples.slice(0, 1);
@@ -217,28 +233,19 @@ function ChangeCardFull({ card, inline, recommend, animate }: { card: ChangeCard
             {card.cause.sources.map((src) => <span key={src} className="cc-source">{src}</span>)}
           </div>
         )}
-      </header>
-
-      {/* The decision itself: what changes, then what was wrong. */}
-      <div className="cc-sentences">
-        <div className="cc-change">
-          <h3 className="cc-kicker">What changes</h3>
-          <p>{card.change}</p>
-        </div>
-        <div className="cc-wrong">
-          <h3 className="cc-kicker">What was wrong</h3>
-          <p>{card.wrong}</p>
-        </div>
+        {/* The goal it serves, one muted line; its ref shows on hover. */}
         {hasGoal && (
-          <div className="cc-goal">
-            <Target className="w-3.5 h-3.5 text-sol-cyan shrink-0 mt-[3px]" />
-            <div className="min-w-0">
-              <span className="text-sol-text">{card.goal.name || card.goal.ref}</span>
-              <span className="font-mono text-[11px] text-sol-text-dim ml-2">{card.goal.ref}</span>
-              {card.goal.why && <div className="text-sol-text-dim text-[12px] mt-0.5">{card.goal.why}</div>}
-            </div>
+          <div className="cc-cause-row cc-goal" title={card.goal.why || undefined}>
+            serves <span className="text-sol-text-muted">{card.goal.name || card.goal.ref}</span>
+            {card.goal.name && <span className="cc-goal-ref">{card.goal.ref}</span>}
           </div>
         )}
+      </header>
+
+      {/* The decision itself: the change speaks for itself, what was wrong supports it. */}
+      <div className="cc-sentences">
+        <p className="cc-change">{card.change}</p>
+        <p className="cc-wrong"><span className="cc-leadin">What was wrong:</span> {card.wrong}</p>
       </div>
 
       <ProofStrip card={card} />
@@ -248,10 +255,11 @@ function ChangeCardFull({ card, inline, recommend, animate }: { card: ChangeCard
           <div className="cc-kicker-row"><h3 className="cc-kicker">Examples</h3><span className="text-[11px] text-sol-text-dim">{card.examples.length} before and after</span></div>
           <div className="space-y-3">
             {examples.map((ex, i) => {
-              const rest = exampleInputRest(ex.input, ex.before);
               return (
                 <div key={i} className="cc-example">
-                  {rest && <div className="cc-example-input" title={ex.input}>{rest}</div>}
+                  {exampleInputAdds(ex.input, ex.before) && (
+                    <div className="cc-example-input" title={ex.input}><span className="cc-input-label">Input</span>{ex.input}</div>
+                  )}
                   <div className="cc-pair">
                     <div className="cc-side cc-before"><span className="cc-side-label">Before</span><span>{ex.before}</span></div>
                     <div className="cc-side cc-after">
@@ -274,7 +282,7 @@ function ChangeCardFull({ card, inline, recommend, animate }: { card: ChangeCard
 
       {card.checks.length > 0 && (
         <section className="cc-section">
-          <h3 className="cc-kicker">Checks</h3>
+          <h3 className="cc-label">Checks</h3>
           <ul className="cc-checks">{card.checks.map((c) => <CheckRow key={c.name} check={c} />)}</ul>
         </section>
       )}
@@ -300,12 +308,12 @@ function ChangeCardFull({ card, inline, recommend, animate }: { card: ChangeCard
         </div>
       </dl>
 
-      {recommend && (
+      {outcome ?? (recommend && (
         <div className={`cc-recommend cc-tone-${tone}`}>
           <span className="cc-recommend-verdict">Recommends {verdictLabel(card.recommend.verdict)}</span>
           <span className="text-sol-text-muted">{card.recommend.why}</span>
         </div>
-      )}
+      ))}
     </article>
   );
 }
@@ -314,16 +322,16 @@ function ChangeCardFull({ card, inline, recommend, animate }: { card: ChangeCard
 
 function ChangeCardLine({ card, recommend, change }: { card: ChangeCard; recommend: boolean; change: boolean }) {
   const summary = proofSummary(card.proof);
-  const okChecks = card.checks.filter((c) => c.ok).length;
+  const checksOk = card.checks.every((c) => c.ok);
   const tone = VERDICT_TONE[card.recommend.verdict] ?? "blue";
   return (
     <div className="change-card cc-line" data-change-card={card.cause.task}>
       {change && card.change && <div className="cc-line-change" title={card.change}>{card.change}</div>}
       <div className="cc-line-row">
         <ProofPips card={card} />
-        <span className={summary.stillRed.length || summary.broke.length ? "text-sol-red" : "text-sol-text"}>{summary.label}</span>
+        <span className={summary.stillRed.length || summary.broke.length ? "text-sol-red" : "text-sol-text"} title={summary.label}>{summary.short}</span>
         <span className="cc-sep">·</span>
-        <span className={okChecks === card.checks.length ? "text-sol-text-muted" : "text-sol-red"}>{okChecks}/{card.checks.length} checks</span>
+        <span className={checksOk ? "text-sol-text-muted" : "text-sol-red"}>{checksLabel(card.checks)}</span>
         <span className="cc-sep">·</span>
         <span><span className="text-sol-green">+{card.diff.added}</span> <span className="text-sol-red">−{card.diff.removed}</span></span>
         <span className="cc-sep">·</span>

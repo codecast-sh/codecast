@@ -14,6 +14,7 @@ import {
   toAskLine,
   type AskMessage,
 } from '../../../../convex/convex/lib/sessionAsk';
+import { citationSpans, spanLines } from '../../../../convex/convex/lib/sessionAskCitations';
 import { readConversation, toRows, type MessageRow } from '../../adapters/convo';
 import { readSessionMoment, SESSION_LINE_FORMS } from '../../adapters/moment';
 import { gate, type SurfaceImpl } from '../../surface';
@@ -46,6 +47,26 @@ export interface AskParsed {
   shown: number[];
   /** The cited numbers that resolve to a shown line (prod's citationTargets). */
   resolved: number[];
+  /** The citations that name a line the model was not shown (citationCheck). */
+  invented: string[];
+  /** Lines inside a cited range that were not shown, between two ends that were. */
+  unshownInRanges: number;
+}
+
+/**
+ * A citation is real when every line it names on its own was shown: a single
+ * message, or both ends of a range. A range between two shown lines may pass
+ * over lines the budget left out (the prompt marks them "not shown"); those
+ * are counted, not called invented.
+ */
+export function citationCheck(answer: string, shownLines: number[]): Pick<AskParsed, 'invented' | 'unshownInRanges'> {
+  const shown = new Set(shownLines);
+  const spans = citationSpans(answer);
+  const real = spans.filter((s) => shown.has(s.from) && shown.has(s.to));
+  return {
+    invented: spans.filter((s) => !real.includes(s)).map((s) => `msg ${s.from}${s.to === s.from ? '' : `–${s.to}`}`),
+    unshownInRanges: real.reduce((n, s) => n + spanLines(s).filter((l) => !shown.has(l)).length, 0),
+  };
 }
 
 /** The judge reads the question with a selection made from the question's own words, in this many characters. */
@@ -144,16 +165,17 @@ const impl: SurfaceImpl = {
       cited: citedLines(answer.text),
       shown: context.shownLines,
       resolved: citationTargets(answer.text, read.lines, shown).map((c) => c.line),
+      ...citationCheck(answer.text, context.shownLines),
     };
     return { reply: answer.text, parsed, extra: { terms, shown_lines: context.shownLines.length, matched_lines: context.matchedLines, scanned_lines: read.lines.length } };
   },
 
   gates(_snap: AskSnap, out) {
     const p = out.parsed as AskParsed;
-    const unresolved = p.cited.filter((l) => !p.resolved.includes(l));
+    const gaps = p.unshownInRanges ? `; its ranges pass over ${p.unshownInRanges} line(s) it was not shown` : '';
     return [
       gate('parse', p.modelTerms.length > 0, p.modelTerms.length ? `terms: ${p.modelTerms.join(', ')}` : `parseTermsReply found no JSON array of strings in the terms reply: ${out.calls[0]?.text.slice(0, 120) ?? '(no call)'}`),
-      gate('citations-real', unresolved.length === 0, unresolved.length ? `cites msg ${unresolved.join(', msg ')}, which the model was not shown` : p.cited.length ? `all ${p.cited.length} citations are lines it was shown` : 'cites no lines'),
+      gate('citations-real', p.invented.length === 0, p.invented.length ? `cites ${p.invented.join(', ')}, which the model was not shown` : p.cited.length ? `every citation names lines it was shown${gaps}` : 'cites no lines'),
     ];
   },
 

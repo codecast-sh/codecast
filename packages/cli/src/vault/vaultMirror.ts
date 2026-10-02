@@ -29,6 +29,7 @@ import * as path from "path";
 import { CachedJsonStore } from "../cachedJsonStore.js";
 import { chunkMessagesBySize } from "../syncService.js";
 import { cliFetch } from "../cliHttp.js";
+import { mapLimit } from "@codecast/shared/async";
 import { parseNote } from "@codecast/shared/vault";
 import { registeredVaults } from "./vaultRegistry.js";
 import {
@@ -215,21 +216,6 @@ export function diffScanAgainstLedger(
   }
   const removed = Object.keys(known).filter((p) => !seen.has(p));
   return { changed, unchanged, removed };
-}
-
-/** Bounded-concurrency map. Bodies upload in parallel but never in a stampede. */
-async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const out: R[] = new Array(items.length);
-  let next = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    for (;;) {
-      const i = next++;
-      if (i >= items.length) return;
-      out[i] = await fn(items[i]);
-    }
-  });
-  await Promise.all(workers);
-  return out;
 }
 
 export class VaultMirror {

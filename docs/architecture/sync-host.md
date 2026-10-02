@@ -24,7 +24,10 @@ A follower:
   plus the replication classification, see below);
 - does not wire `_setIDBWrite` (the host is the single state writer);
 - applies the host's broadcasts through `syncTable`, so its own pending
-  protection and no-op bails behave exactly as if the rows came from Convex;
+  protection and no-op bails behave exactly as if the rows came from Convex.
+  The one difference is the overlay facts on a sessions row: a follower
+  mounts no overlay, so the host's row is their only writer and they land
+  verbatim, a null included, where a base channel's null would be preserved;
 - keeps its own Convex client, dispatch, and outbox: writes go to the server
   directly, and per-view queries (a conversation's messages, a doc body)
   subscribe as before.
@@ -86,7 +89,11 @@ All messages carry `{hostId, seq}`. Followers track `lastSeq`; a gap or a new
   row merges through `syncTable` with every lock the host already held on it
   carried across the merge (`protectReplicatedWrite`), because the row's
   value echo would otherwise retire the gesture bridge's lock a moment after
-  it was planted. So the origin window and its host both hold protection for
+  it was planted. The same write can reach the host by the bridge and by the
+  mut, in either order with its acknowledgement, so both paths keep the
+  acknowledgement a lock already carries, and a field write that finds the
+  value already landed with no lock on it (acknowledged and echoed) plants
+  none. So the origin window and its host both hold protection for
   the write, and a stale feed push on the host cannot revert it before the
   server echo. A whole-row overlay of a follower's copy would put the host's
   fresher fields back a step (the follower's copy is a replication hop

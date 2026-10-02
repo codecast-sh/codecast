@@ -617,6 +617,9 @@ export type InboxSession = {
   auq_open?: boolean | null;
   daemon_alive_until?: number | null;
   producing_until?: number | null;
+  // A child of this row is asking (overlay fact, ct-56051): lifts the parent
+  // into QUESTIONS when the asking child is not held here.
+  child_asking?: boolean | null;
   tmux_session?: string | null;
   permission_mode?: string | null;
   // When the agent process behind this session started. Background watches and
@@ -3137,7 +3140,7 @@ function sharedPlacementOf(s: InboxSession, live: LiveFacts, asking: boolean, ep
 // Structural signature for the pending `cast decide` rows the questions
 // section branches on. Shared by the panel's subscription deps.
 export const placementDecisionsSig = makeCollectionSig((d: any) =>
-  d?.status === "pending" ? `${d._id}|${d.conversation_id}` : "");
+  d?.status === "pending" ? `${d._id}|${d.conversation_id}|${d.blocking}|${d.stack_id ?? ""}` : "");
 
 const EMPTY_PLACEMENT_OBJ: Record<string, never> = {};
 let _placementDeadlineMemo: {
@@ -3232,16 +3235,19 @@ function deriveInboxAsking(
     return sessionHasOpenQuestion(s, state.questionResolutions);
   };
   const askingChildParents = new Set<string>();
+  // Only lift parents the feed still stands behind — a frozen child snapshot
+  // past its parent's stash/dismiss can claim permission_blocked forever.
+  const liftable = (p: InboxSession | undefined) => !!p && !p.inbox_stashed_at && !p.inbox_dismissed_at && !p.inbox_killed_at;
   for (const s of Object.values(mineAll)) {
+    // The overlay's child_asking fact: an asking child this replica never
+    // holds (a live pool row outside its window) still lifts the parent.
+    if (s.child_asking && liftable(s)) askingChildParents.add(s._id);
     if (s.inbox_killed_at) continue;
     // The shared rollup rule (rollupParentIdOf): the same grouping the server
     // pool applies, so a parent is lifted on both sides or neither.
     const parent = rollupParentIdOf(s);
     if (!parent || !asks(s)) continue;
-    // Only lift parents the feed still stands behind — a frozen child snapshot
-    // past its parent's stash/dismiss can claim permission_blocked forever.
-    const parentRow = mineAll[parent];
-    if (!parentRow || parentRow.inbox_stashed_at || parentRow.inbox_dismissed_at || parentRow.inbox_killed_at) continue;
+    if (!liftable(mineAll[parent])) continue;
     askingChildParents.add(parent);
   }
   const askingOf = (s: InboxSession) => asks(s) || askingChildParents.has(s._id);
@@ -4970,7 +4976,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // the same field locks the follower holds, so a stale server push cannot
   // undo the write on the host before the server echoes it — the follower's
   // dispatch is the one server write; the host only mirrors its intent.
-  protectReplicatedWrite: (key: string, entries: Array<{ id: string; field: string; value: unknown; ts?: number }>) => void;
+  protectReplicatedWrite: (key: string, entries: Array<{ id: string; field: string; value: unknown; ts?: number; ack?: unknown }>) => void;
   // A follower window's field writes (its action's exact patches), applied on
   // the host: the value lands on the row this window holds, under the same
   // field lock the follower holds, until the server echoes it. Rows this
@@ -7308,6 +7314,14 @@ function dropTeamFeedCacheIn(
   }
 }
 
+type HideResult = {
+  hidden: string[];
+  forgotten: string[];
+  /** Per hidden id, the bridged fields the gesture wrote and their values. */
+  writes: Record<string, Partial<Record<BridgedField, number | boolean | null>>>;
+  ts: number;
+};
+
 // `stashHidden` is the stash's mode ("Stash and hide": survives trigger wakes).
 // Every stash writes inbox_stash_hidden explicitly — true or null — so a
 // re-stash never inherits the previous gesture's mode; a kill clears it with
@@ -7318,7 +7332,7 @@ function hideSessionInDraft(
   mode: "stash" | "kill",
   now: number = Date.now(),
   stashHidden = false,
-): { hidden: string[]; forgotten: string[]; ts: number } {
+): HideResult {
   const field = mode === "kill" ? "inbox_dismissed_at" : "inbox_stashed_at";
   const stashHiddenValue = mode === "stash" && stashHidden ? true : null;
   const sessionValues = Object.values(draft.sessions) as InboxSession[];
@@ -7338,6 +7352,7 @@ function hideSessionInDraft(
   const me = draft.currentUser?._id?.toString?.();
   const hidden: string[] = [];
   const forgotten: string[] = [];
+  const writes: HideResult["writes"] = {};
   const newSessionId = sessionPastRemoved(draft, allIds);
   for (const sid of allIds) {
     // A local-only stub (optimistic create that never landed server-side)
@@ -7370,27 +7385,34 @@ function hideSessionInDraft(
     hidden.push(sid);
     const sess = draft.sessions[sid];
     const wasPinned = sess?.is_pinned;
+    // The bridged fields this gesture writes on either twin, with their exact
+    // values: a sibling locks these and nothing else (applyGestureInDraft), so
+    // every lock it holds is one this write's acknowledgement retires.
+    const wrote: Partial<Record<BridgedField, number | boolean | null>> = { [field]: now };
     if (sess) {
       sess[field] = now;
       if (sess.inbox_snoozed_until) sess.inbox_snoozed_until = null;
-      if (mode === "kill" && sess.inbox_stashed_at) sess.inbox_stashed_at = null;
-      if (mode === "stash" || sess.inbox_stash_hidden) sess.inbox_stash_hidden = stashHiddenValue;
+      if (mode === "kill" && sess.inbox_stashed_at) { sess.inbox_stashed_at = null; wrote.inbox_stashed_at = null; }
+      if (mode === "stash" || sess.inbox_stash_hidden) { sess.inbox_stash_hidden = stashHiddenValue; wrote.inbox_stash_hidden = stashHiddenValue; }
       if (wasPinned) {
         sess.is_pinned = false;
         sess.inbox_pinned_at = null;
+        wrote.is_pinned = false;
+        wrote.inbox_pinned_at = null;
       }
     }
     const conv = draft.conversations[sid];
     if (conv) {
       conv[field] = now;
       if (conv.inbox_snoozed_until) conv.inbox_snoozed_until = null;
-      if (mode === "kill" && conv.inbox_stashed_at) conv.inbox_stashed_at = null;
-      if (mode === "stash" || conv.inbox_stash_hidden) conv.inbox_stash_hidden = stashHiddenValue;
-      if (wasPinned) conv.inbox_pinned_at = null;
+      if (mode === "kill" && conv.inbox_stashed_at) { conv.inbox_stashed_at = null; wrote.inbox_stashed_at = null; }
+      if (mode === "stash" || conv.inbox_stash_hidden) { conv.inbox_stash_hidden = stashHiddenValue; wrote.inbox_stash_hidden = stashHiddenValue; }
+      if (wasPinned) { conv.inbox_pinned_at = null; wrote.inbox_pinned_at = null; }
     }
+    writes[sid] = wrote;
   }
   advanceSelection(draft, newSessionId);
-  return { hidden, forgotten, ts: now };
+  return { hidden, forgotten, writes, ts: now };
 }
 
 // The session to show once `removedIds` leave the list: the current one if it
@@ -7628,7 +7650,7 @@ function writeCharacterInDraft(draft: Draft, id: string, next: { avatar?: string
 function announceHide(
   draft: any,
   mode: "stash" | "kill",
-  result: { hidden: string[]; forgotten: string[]; ts: number },
+  result: HideResult,
   stashHidden = false,
 ) {
   if (result.hidden.length === 0 && result.forgotten.length === 0) return;
@@ -7639,6 +7661,7 @@ function announceHide(
       ...(stashHidden ? { hidden: true } : {}),
       ids: result.hidden,
       ...(result.forgotten.length ? { forget: result.forgotten } : {}),
+      writes: result.writes,
       ts: result.ts,
     },
     bridgeUserId(draft),
@@ -7723,6 +7746,10 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
       sessions?: Record<string, any>;
       conversations?: Record<string, any>;
     },
+    // exact: the message names every field the sender wrote, so the receiver
+    // locks exactly those (the sender's own lock set, each retired by the
+    // write's bridged acknowledgement) and plants no barrier locks.
+    opts: { exact?: boolean } = {},
   ) => {
     if (!transitionNotNewer(id, constrained, msg.ts)) return false;
     for (const coll of ["sessions", "conversations"] as const) {
@@ -7734,8 +7761,11 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
       };
       // A coupled field the message does not visibly change still takes part
       // in its ordering barrier. Lock its retained value at this transition's
-      // timestamp so a delayed coupled gesture cannot cross the barrier.
-      for (const field of constrained) {
+      // timestamp so a delayed coupled gesture cannot cross the barrier. A
+      // field nothing dispatched is never acknowledged, so on a row that never
+      // echoes again (a kill) such a lock outlives its settle window: an exact
+      // message skips it.
+      if (!opts.exact) for (const field of constrained) {
         if (!Object.prototype.hasOwnProperty.call(next, field)) next[field] = row[field];
       }
       for (const [field, value] of Object.entries(next)) write(coll, id, field, value);
@@ -7759,6 +7789,7 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
       if (draft.pendingMessages[fid]?.length) continue;
       if (fid in draft.pendingSessionCreates) continue;
       delete draft.sessions[fid];
+      dropRowFieldLocks(draft, fid, scope === "session-row" ? ["sessions"] : ["sessions", "conversations"]);
       // The exclude is what authorizes the durable IDB row delete — a bare
       // store-shrink is ignored by the collection diff (same reason
       // pruneGhostSessions plants them) — and it also stops a delta crawl from
@@ -7788,8 +7819,16 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
     // forget broadcast — see gestureBridge.ts.
     if (msg.forget?.length) forget(msg.forget, msg.ts);
     const field = msg.mode === "kill" ? "inbox_dismissed_at" : "inbox_stashed_at";
+    const constrained = ["inbox_dismissed_at", "inbox_stashed_at", "inbox_stash_hidden", "inbox_pinned_at"];
     for (const sid of msg.ids) {
-      if (!acceptTransition(sid, ["inbox_dismissed_at", "inbox_stashed_at", "inbox_stash_hidden", "inbox_pinned_at"], {
+      const wrote = msg.writes?.[sid];
+      if (wrote) {
+        const { is_pinned, ...shared } = wrote;
+        acceptTransition(sid, constrained, { shared, ...(is_pinned !== undefined ? { sessions: { is_pinned } } : {}) }, { exact: true });
+        continue;
+      }
+      // An older bundle's message names no writes: the full transition.
+      if (!acceptTransition(sid, constrained, {
         shared: {
           [field]: msg.ts,
           ...(msg.mode === "kill" ? { inbox_stashed_at: null } : {}),
@@ -7858,6 +7897,28 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
   });
 }
 
+// Whether a lock's value and a row value are the same write. Objects compare
+// by JSON: both sides may have crossed a structured-clone boundary.
+function sameLockValue(a: unknown, b: unknown): boolean {
+  return a === b || (a !== null && b !== null && typeof a === "object" && typeof b === "object" && JSON.stringify(a) === JSON.stringify(b));
+}
+
+// A field lock, carrying the acknowledgement it already holds when it is
+// re-planted (stampSyncAckInDraft writes `ack` onto the entry).
+function fieldLockEntry(value: unknown, ts: number, ack?: unknown): PendingEntry {
+  return (ack ? { type: "field", value, ts, ack } : { type: "field", value, ts }) as PendingEntry;
+}
+
+// A dropped row's field locks (`<coll>:<id>:<field>`) go with it: nothing
+// will ever echo or acknowledge a row this window no longer holds. The row's
+// exclude (`<coll>:<id>`) is not a field lock and is kept.
+function dropRowFieldLocks(draft: any, id: string, colls: readonly ("sessions" | "conversations")[] = ["sessions", "conversations"]): void {
+  const prefixes = colls.map((c) => `${c}:${id}:`);
+  for (const key of Object.keys(draft.pending)) {
+    if (prefixes.some((p) => key.startsWith(p))) delete draft.pending[key];
+  }
+}
+
 // Session ids a server-deleted prune skipped because the conversation was open;
 // retried by the subscription at the end of this module once the view moves.
 // One set per page, not per module evaluation: a hot swap keeps the store and
@@ -7883,6 +7944,7 @@ function dropSessionInDraft(draft: Draft, id: string, now: number, serverDeleted
   delete draft.messages[id];
   delete draft.pendingMessages[id];
   delete draft.pagination[id];
+  dropRowFieldLocks(draft, id);
   draft.pending[`sessions:${id}`] = { type: "exclude", ts: now };
   draft.pending[`conversations:${id}`] = { type: "exclude", ts: now };
   return true;
@@ -7997,26 +8059,36 @@ const inboxStoreConfig = (set: any, get: any) => ({
       const row = rows[id];
       if (!row) continue;
       for (const [field, value] of Object.entries(fields[id])) {
+        // The same write can reach this window twice (the gesture bridge and
+        // the follower's replicated mut), in either order with its server
+        // acknowledgement. A row already holding the value with no lock on it
+        // has had it acknowledged and echoed: a fresh lock there would wait
+        // for an echo that already came. A lock already holding the value
+        // keeps the acknowledgement the bridge stamped on it.
+        const k = `${key}:${id}:${field}`;
+        const prev = this.pending[k] as any;
+        const locked = prev?.type === "field";
+        if (!locked && value !== undefined && sameLockValue(row[field], value)) continue;
         if (value === undefined) delete row[field];
         else row[field] = value;
-        this.pending[`${key}:${id}:${field}`] = { type: "field", value, ts };
+        const ack = locked && prev.ack && sameLockValue(prev.value, value) ? prev.ack : undefined;
+        this.pending[k] = fieldLockEntry(value, ts, ack);
       }
     }
   }),
-  protectReplicatedWrite: sync(function (this: Draft, key: string, entries: Array<{ id: string; field: string; value: unknown; ts?: number }>) {
+  protectReplicatedWrite: sync(function (this: Draft, key: string, entries: Array<{ id: string; field: string; value: unknown; ts?: number; ack?: unknown }>) {
     const rows = (this as any)[key] as Record<string, any> | undefined;
     if (!rows) return;
     const now = Date.now();
-    for (const { id, field, value, ts = now } of entries) {
+    for (const { id, field, value, ts = now, ack } of entries) {
       const row = rows[id];
       if (!row) continue;
       // Lock only a value that landed: the merge may have kept a fresher
       // local value (an in-flight write of this window's own).
-      const held = row[field];
-      const same = held === value ||
-        (held !== null && value !== null && typeof held === "object" && typeof value === "object" && JSON.stringify(held) === JSON.stringify(value));
-      if (!same) continue;
-      this.pending[`${key}:${id}:${field}`] = { type: "field", value, ts };
+      if (!sameLockValue(row[field], value)) continue;
+      // The lock is the one this window held, acknowledgement included: a
+      // re-plant without it waits for an echo a killed row never sends.
+      this.pending[`${key}:${id}:${field}`] = fieldLockEntry(value, ts, ack);
     }
   }),
   // sync(): the id set is server truth (or its persisted snapshot) — persist to
@@ -8727,11 +8799,12 @@ const inboxStoreConfig = (set: any, get: any) => ({
     // matched only the last row — every sibling lock planted for an earlier row
     // held a value the server would never echo, and so would never retire.
     const now = Date.now();
-    const merged = { hidden: [] as string[], forgotten: [] as string[], ts: now };
+    const merged: HideResult = { hidden: [], forgotten: [], writes: {}, ts: now };
     for (const id of ids) {
       const r = hideSessionInDraft(this, id, "kill", now);
       merged.hidden.push(...r.hidden);
       merged.forgotten.push(...r.forgotten);
+      Object.assign(merged.writes, r.writes);
     }
     announceHide(this, "kill", merged);
   }),

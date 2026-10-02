@@ -9,7 +9,7 @@ import { readFixture } from '../../adapters/resolver';
 import { runSnapshot } from '../../commands/snapshot';
 import { servedReadKey } from '../../served';
 import { servedDirFor } from '../roleWake/world';
-import impl, { captureAnchorBrief, openingOf, replyAfter, type AnchorBriefSnap } from './index';
+import impl, { captureAnchorBrief, openingOf, replyAfter, turnText, type AnchorBriefSnap } from './index';
 import { meta } from './meta';
 
 let home: string;
@@ -35,6 +35,19 @@ describe('the opening', () => {
 
   test('a real freeze replays the opening prod sent', () => {
     expect(openingOf({ captured_at: 'x', opening: { text: 'You are the lead.', at: 'y', line: 3 } })).toBe('You are the lead.');
+  });
+});
+
+describe('turns after the opening', () => {
+  test("a person's message goes as typed; a chat wake renders through prod's builder with prod's deadline", () => {
+    const pause = fixtureSnap('role-pause-own-triggers');
+    expect(turnText(pause.turns![0]!)).toStartWith('Pause yourself until Monday');
+    const thread = fixtureSnap('thread-pass-or-answer');
+    const wake = turnText(thread.turns![1]!);
+    expect(wake).toContain('Mara replied in a thread you follow.');
+    expect(wake).toContain('cast chat reply cm7ph162 --pass');
+    expect(wake).toContain('within 10 minutes');
+    expect(impl.describe(thread).map((m) => m.id)).toEqual(['opening', 'turn-2', 'turn-3', 'turn-4', 'turn-5', 'turn-6', 'turn-7']);
   });
 });
 

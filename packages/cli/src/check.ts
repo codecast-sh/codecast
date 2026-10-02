@@ -191,6 +191,87 @@ export function watchDir(root: string, project: string): string {
 export const statePath = (dir: string): string => path.join(dir, "state.json");
 export const outputPath = (dir: string): string => path.join(dir, "diagnostics.txt");
 export const logPath = (dir: string): string => path.join(dir, "watch.log");
+/** tsc's incremental state for the program, rewritten by tsc after every pass. */
+export const buildInfoPath = (dir: string): string => path.join(dir, "tsbuildinfo");
+
+/**
+ * The checkout a worktree was made from: the directory holding the shared
+ * git dir. Null for a tree that is its own main checkout, or outside git.
+ */
+export function mainCheckoutOf(root: string): string | null {
+  const r = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: root, encoding: "utf-8", timeout: 10_000 });
+  const common = (r.stdout ?? "").trim();
+  if (!common || path.basename(common) !== ".git") return null;
+  const main = path.dirname(common);
+  return path.resolve(main) === path.resolve(root) ? null : main;
+}
+
+/**
+ * Re-home another tree's tsc build info onto this tree. tsc records every
+ * file of the program by its path relative to the build info, and reuses a
+ * file's check only when the path and the content hash both match. A file
+ * of the donor tree maps to the same relative path here, except one this
+ * tree reaches through a symlink back into the donor (the shared
+ * node_modules a worktree links to): that stays the donor's path, which is
+ * where tsc resolves it from here too. Content tsc finds changed is checked
+ * again, so a stale or wrong mapping costs time, never a missed error.
+ */
+export function rebaseBuildInfo(text: string, from: { root: string; dir: string }, to: { root: string; dir: string }): string | null {
+  let info: { fileNames?: unknown };
+  try {
+    info = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(info.fileNames)) return null;
+  const real = (p: string): string | null => {
+    try {
+      return fs.realpathSync(p);
+    } catch {
+      return null;
+    }
+  };
+  info.fileNames = info.fileNames.map((name) => {
+    if (typeof name !== "string") return name;
+    const donorFile = path.resolve(from.dir, name);
+    const rel = path.relative(from.root, donorFile);
+    let target = donorFile;
+    if (!rel.startsWith("..") && !path.isAbsolute(rel)) {
+      const here = path.join(to.root, rel);
+      const shared = real(here);
+      target = shared !== null && shared === real(donorFile) && here !== shared ? donorFile : here;
+    }
+    return path.relative(to.dir, target);
+  });
+  return JSON.stringify(info);
+}
+
+/**
+ * A tree's first watcher starts from its main checkout's last pass instead
+ * of from nothing: a fresh worktree differs from main in a handful of files,
+ * so tsc re-checks those and their dependents and trusts the rest. A fleet
+ * of worktrees each building a 2 to 6 GB program cold is what swapped this
+ * machine for a night (2026-10-02). Best effort: any failure leaves a cold
+ * build, the old behaviour.
+ */
+export function seedBuildInfo(root: string, project: string): boolean {
+  const dir = watchDir(root, project);
+  if (fs.existsSync(buildInfoPath(dir))) return false;
+  const main = mainCheckoutOf(root);
+  if (!main) return false;
+  const donorDir = watchDir(main, project);
+  let text: string;
+  try {
+    text = fs.readFileSync(buildInfoPath(donorDir), "utf-8");
+  } catch {
+    return false;
+  }
+  const rebased = rebaseBuildInfo(text, { root: main, dir: donorDir }, { root, dir });
+  if (!rebased) return false;
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(buildInfoPath(dir), rebased);
+  return true;
+}
 
 export function readWatchState(dir: string): WatchState | null {
   try {
@@ -294,7 +375,10 @@ export async function runWatcher(root: string, project: string, tsconfig: string
   const state: WatchState = { pid: process.pid, project, tsconfig, root, startedAt: Date.now(), inProgress: true, askedAt: Date.now(), ...(own ? { tsc: own } : {}) };
   writeWatchState(dir, state);
   const reduce = watchReducer(dir, state);
-  const child = spawn(own ?? "tsc", ["--noEmit", "--watch", "--preserveWatchOutput", "--pretty", "false", "-p", path.join(root, tsconfig)], {
+  if (seedBuildInfo(root, project)) console.log(`seeded the first pass from ${mainCheckoutOf(root)}`);
+  // Incremental: a restarted watcher (the slot cap stops idle ones) and a
+  // seeded worktree re-check only what changed since the recorded pass.
+  const child = spawn(own ?? "tsc", ["--noEmit", "--watch", "--preserveWatchOutput", "--pretty", "false", "--incremental", "--tsBuildInfoFile", buildInfoPath(dir), "-p", path.join(root, tsconfig)], {
     cwd: path.dirname(path.join(root, tsconfig)),
     stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, NODE_OPTIONS: process.env.NODE_OPTIONS || TSC_NODE_OPTIONS },

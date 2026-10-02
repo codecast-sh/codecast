@@ -70,6 +70,8 @@ If a pass runs for more than 5 seconds, the asker prints that it is waiting for 
 
 The tree is the unit of sharing. Sessions in one checkout share a watcher for each project. A worktree has a different root, so it gets its own watcher on first use.
 
+Watchers build incrementally. Each records its last pass in its state directory, so a watcher that was stopped and started again rechecks only what changed since. A worktree's first watcher starts from the main checkout's last pass: files that match main are trusted, and only the files the worktree changed, plus whatever depends on them, are checked again. Paths a worktree links back into the main checkout, such as a shared `node_modules`, keep pointing at main. The worktree still holds a whole program in memory, so a worktree for every agent of a fan-out costs gigabytes each. Keep worktrees for edits that would collide.
+
 Each watcher holds a whole program in memory, so two rules bound the total. A watcher exits after 45 minutes with no ask, measured from the later of the last ask and the last finished pass. A pass in flight never counts as idle, because a first pass on a loaded machine can take longer than the idle window. A machine also keeps at most six watchers. When a seventh is needed, the one asked least recently is stopped, and the ask prints which one. The environment variable `CAST_CHECK_MAX_WATCHERS` changes the cap.
 
 `cast check-status` lists each live watcher with its project, tree, pid and last pass, or `checking` while a pass runs. A state file whose process has died is removed during that listing, so a later ask starts a new watcher.

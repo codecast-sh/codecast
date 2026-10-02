@@ -2,10 +2,16 @@
    ChangeCardView. Calm surfaces, one signature: the proof strip, where each
    check's wire fills from red to green. Themed only with --sol-* tokens. */
 
-.change-card { --cc-gap: 1.25rem; color: var(--sol-text-muted); font-size: 13px; }
+/* Solarized green reads olive on the dark surface; the after side pulls it
+   toward cyan and the text color so it lands harder than the before. */
+.change-card, .change-card-answer {
+  --cc-green: color-mix(in oklab, color-mix(in srgb, var(--sol-green) 68%, var(--sol-cyan)) 82%, var(--sol-text));
+  --cc-gap: 1.25rem; color: var(--sol-text-muted); font-size: 13px;
+}
+.cc-text-green { color: var(--cc-green); }
 .change-card.cc-inline { --cc-gap: 1rem; }
 
-.cc-tone-green { --cc-tone: var(--sol-green); }
+.cc-tone-green { --cc-tone: color-mix(in oklab, color-mix(in srgb, var(--sol-green) 68%, var(--sol-cyan)) 82%, var(--sol-text)); }
 .cc-tone-yellow { --cc-tone: var(--sol-yellow); }
 .cc-tone-red { --cc-tone: var(--sol-red); }
 .cc-tone-blue { --cc-tone: var(--sol-blue); }
@@ -28,7 +34,9 @@
   color: var(--sol-text-dim);
   font-weight: 500;
 }
-.cc-kicker-row { display: flex; align-items: baseline; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.6rem; }
+.cc-kicker-row { display: flex; align-items: baseline; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.6rem; min-width: 0; }
+/* Quieter than a kicker: sentence case, no tracking. */
+.cc-label { font-size: 12px; color: var(--sol-text-dim); font-weight: 500; }
 .cc-chip {
   display: inline-flex; align-items: center; padding: 0 0.4rem; height: 1.25rem;
   border: 1px solid; border-radius: 4px; font-family: var(--font-mono, ui-monospace), monospace; font-size: 11px;
@@ -43,21 +51,35 @@
 .cc-source { padding: 0 0.4rem; border-radius: 999px; font-size: 11px; border: 1px solid color-mix(in srgb, var(--sol-border) 80%, transparent); }
 
 /* the decision: what changes leads, what was wrong supports it */
-.cc-sentences { display: flex; flex-direction: column; gap: 0.85rem; }
-.cc-change p { margin-top: 0.35rem; color: var(--sol-text); font-size: 19px; line-height: 1.4; font-weight: 500; letter-spacing: -0.005em; text-wrap: pretty; }
-.cc-inline .cc-change p { font-size: 16.5px; }
-.cc-wrong p { margin-top: 0.3rem; color: var(--sol-text-muted); font-size: 13.5px; line-height: 1.55; text-wrap: pretty; }
-.cc-goal { display: flex; gap: 0.5rem; padding-top: 0.6rem; border-top: 1px dashed color-mix(in srgb, var(--sol-border) 70%, transparent); font-size: 13px; }
+.cc-sentences { display: flex; flex-direction: column; gap: 0.6rem; }
+.cc-change { color: var(--sol-text); font-size: 19px; line-height: 1.4; font-weight: 500; letter-spacing: -0.005em; text-wrap: pretty; }
+.cc-inline .cc-change { font-size: 16.5px; }
+.cc-wrong { color: var(--sol-text-muted); font-size: 13.5px; line-height: 1.55; text-wrap: pretty; }
+.cc-leadin { color: var(--sol-text); font-weight: 500; }
+.cc-goal { gap: 0.35rem; cursor: default; }
+.cc-goal-ref { font-family: var(--font-mono, ui-monospace), monospace; font-size: 11px; opacity: 0; transition: opacity 150ms; }
+.cc-goal:hover .cc-goal-ref { opacity: 1; }
 
 /* the proof strip */
 .cc-proof-label { font-size: 12px; }
-.cc-proof-common { margin-left: auto; display: inline-flex; align-items: baseline; gap: 0.4rem; font-size: 11.5px; }
 .cc-proof { display: flex; flex-direction: column; gap: 0.15rem; }
-.cc-proof-row {
+/* A two column table: the track is the main and branch columns, labelled over
+   their dots; a row's own detail stacks under its name. */
+.cc-proof-head, .cc-proof-row {
   display: grid;
-  grid-template-columns: 4.25rem minmax(0, 1.3fr) minmax(0, 1fr);
+  grid-template-columns: 4.75rem minmax(0, 1fr);
   align-items: center;
-  gap: 0.75rem;
+  column-gap: 0.75rem;
+}
+.cc-proof-head { padding: 0 0.5rem; margin: 0 -0.5rem 0.1rem; }
+.cc-track-labels {
+  display: flex; justify-content: space-between;
+  font-family: var(--font-mono, ui-monospace), monospace; font-size: 10px; line-height: 1;
+}
+.cc-track-labels > :first-child { color: color-mix(in srgb, var(--sol-red) 80%, var(--sol-text-dim)); }
+.cc-track-labels > :last-child { color: var(--cc-green); }
+.cc-proof-row {
+  row-gap: 0.1rem;
   padding: 0.35rem 0.5rem;
   margin: 0 -0.5rem;
   border-radius: 6px;
@@ -67,11 +89,11 @@
 .cc-track { display: flex; align-items: center; gap: 0; }
 .cc-dot { width: 9px; height: 9px; border-radius: 999px; flex-shrink: 0; }
 .cc-dot-red { background: var(--sol-red); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sol-red) 16%, transparent); }
-.cc-dot-green { background: var(--sol-green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sol-green) 16%, transparent); }
+.cc-dot-green { background: var(--cc-green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sol-green) 22%, transparent); }
 .cc-wire { position: relative; flex: 1; height: 2px; margin: 0 5px; border-radius: 2px; background: color-mix(in srgb, var(--sol-red) 35%, transparent); overflow: hidden; }
 .cc-wire-fill {
   position: absolute; inset: 0;
-  background: linear-gradient(90deg, var(--sol-red), var(--sol-green));
+  background: linear-gradient(90deg, var(--sol-red), var(--cc-green));
   transform-origin: left center;
 }
 /* The one motion moment, the first time a card is seen (useFirstSight). */
@@ -80,23 +102,20 @@
   animation-delay: calc(120ms + var(--i, 0) * 70ms);
 }
 .is-red .cc-wire-fill { background: var(--sol-red); opacity: 0.5; }
-.is-broke .cc-wire-fill { background: linear-gradient(90deg, var(--sol-green), var(--sol-red)); }
+.is-broke .cc-wire-fill { background: linear-gradient(90deg, var(--cc-green), var(--sol-red)); }
 .cc-proof-name { color: var(--sol-text); font-size: 12.5px; line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
-.cc-proof-detail { display: flex; gap: 0.4rem; align-items: baseline; font-size: 12px; min-width: 0; }
+/* before → after on one line: the before gives way first, both clip with a tooltip. */
+.cc-proof-detail { grid-column: 2; display: flex; gap: 0.4rem; align-items: baseline; font-size: 12px; line-height: 1.4; min-width: 0; }
 .cc-proof-detail:empty { display: none; }
-.cc-proof-detail { flex-wrap: wrap; line-height: 1.4; }
-.cc-proof-detail > span { min-width: 0; overflow-wrap: anywhere; }
+.cc-proof-before, .cc-proof-after { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-proof-before { flex: 0 10000 auto; min-width: min(6rem, 30%); color: color-mix(in srgb, var(--sol-red) 80%, transparent); }
+.cc-proof-after { flex: 0 1 auto; }
 .cc-arrow { color: var(--sol-text-dim); flex-shrink: 0; }
-@media (max-width: 640px) {
-  .cc-proof-row { grid-template-columns: 3.25rem minmax(0, 1fr); row-gap: 0.1rem; }
-  .cc-proof-detail { grid-column: 2; }
-}
-.cc-inline .cc-proof-row { grid-template-columns: 3.25rem minmax(0, 1fr); row-gap: 0.1rem; }
-.cc-inline .cc-proof-detail { grid-column: 2; }
 
 /* examples */
+.cc-input-label { font-family: inherit; font-size: 10.5px; color: var(--sol-text-dim); opacity: 0.8; margin-right: 0.5rem; }
 .cc-example-input {
-  font-family: var(--font-mono, ui-monospace), monospace; font-size: 11.5px; color: var(--sol-text-dim);
+  font-family: var(--font-mono, ui-monospace), monospace; font-size: 11.5px; color: var(--sol-text-muted);
   white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
   padding-left: 0.6rem; border-left: 2px solid color-mix(in srgb, var(--sol-border) 90%, transparent);
 }
@@ -107,13 +126,13 @@
 .cc-before { color: var(--sol-text-muted); border-color: color-mix(in srgb, var(--sol-red) 22%, transparent); background: color-mix(in srgb, var(--sol-red) 6%, transparent); }
 .cc-after {
   color: var(--sol-text);
-  border-color: color-mix(in srgb, var(--sol-green) 40%, transparent);
-  border-left: 2px solid var(--sol-green);
-  background: color-mix(in srgb, var(--sol-green) 16%, transparent);
+  border-color: color-mix(in srgb, var(--cc-green) 55%, transparent);
+  border-left: 2px solid var(--cc-green);
+  background: color-mix(in srgb, var(--cc-green) 13%, transparent);
 }
 .cc-side-label { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 600; }
 .cc-before .cc-side-label { color: var(--sol-red); }
-.cc-after .cc-side-label { color: var(--sol-green); }
+.cc-after .cc-side-label { color: var(--cc-green); }
 .cc-example-note { margin-top: 0.25rem; padding-top: 0.35rem; border-top: 1px solid color-mix(in srgb, var(--sol-green) 22%, transparent); font-size: 12px; color: var(--sol-text-muted); }
 
 /* checks and facts */
@@ -123,7 +142,7 @@
 .cc-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.75rem 1.25rem; padding-top: 0.9rem; border-top: 1px solid color-mix(in srgb, var(--sol-border) 70%, transparent); }
 .cc-inline .cc-facts { grid-template-columns: 1fr 1fr; }
 @media (max-width: 640px) { .cc-facts { grid-template-columns: 1fr; } }
-.cc-fact dt { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--sol-text-dim); margin-bottom: 0.2rem; }
+.cc-fact dt { font-size: 12px; color: var(--sol-text-dim); margin-bottom: 0.15rem; }
 .cc-fact dd { color: var(--sol-text); font-size: 13px; }
 .cc-pr { display: inline-flex; align-items: center; gap: 0.25rem; margin-left: 0.5rem; color: var(--sol-blue); font-size: 12px; }
 .cc-pr:hover { text-decoration: underline; }
@@ -135,6 +154,10 @@
   background: color-mix(in srgb, var(--cc-tone) 7%, transparent);
 }
 .cc-recommend-verdict { color: var(--cc-tone); font-weight: 600; white-space: nowrap; }
+/* A settled card's last word: what was decided, by whom, when. */
+.cc-outcome { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.35rem 0.6rem; font-size: 13px; line-height: 1.5; padding-top: 0.9rem; border-top: 1px solid color-mix(in srgb, var(--sol-border) 70%, transparent); }
+.cc-outcome-verdict { color: var(--cc-tone); font-weight: 600; }
+.cc-outcome-pill { color: var(--cc-tone); border: 1px solid color-mix(in srgb, var(--cc-tone) 45%, transparent); background: color-mix(in srgb, var(--cc-tone) 8%, transparent); }
 
 /* the queue's line */
 .cc-line { display: flex; flex-direction: column; gap: 0.35rem; }
@@ -143,7 +166,7 @@
 .cc-sep { color: var(--sol-text-dim); opacity: 0.6; }
 .cc-pips { display: inline-flex; gap: 3px; margin-right: 0.15rem; }
 .cc-pip { width: 14px; height: 6px; border-radius: 3px; }
-.cc-pip-fixed { background: linear-gradient(90deg, var(--sol-red) 0 35%, var(--sol-green) 65% 100%); }
+.cc-pip-fixed { background: linear-gradient(90deg, var(--sol-red) 0 35%, var(--cc-green) 65% 100%); }
 .cc-pip-red { background: var(--sol-red); }
 .cc-line-verdict { margin-left: auto; padding: 0 0.45rem; border-radius: 999px; color: var(--cc-tone); border: 1px solid color-mix(in srgb, var(--cc-tone) 40%, transparent); white-space: nowrap; }
 
@@ -189,5 +212,5 @@
 @media (max-width: 640px) {
   /* A phone has no room to pin the bar; it leads the page and scrolls with it. */
   .cc-verdict-bar { position: static; backdrop-filter: none; }
-  .cc-change p { font-size: 17px; }
+  .cc-change { font-size: 17px; }
 }

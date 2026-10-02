@@ -3,7 +3,7 @@
  *
  *   const program = new Command().name('xrun');
  *   registerEvals(program, { name: 'xrun', convo, freezes, freezeResolver, replayer, runs, sims, htmlDir });
- *   await runEvalsCli(program);
+ *   process.exitCode = await runEvalsCli(program);
  *
  * Every read view takes --json, --no-color, --width and --full. Colour is
  * off when stdout is not a terminal, so an agent reading through a pipe
@@ -29,17 +29,26 @@ export function registerEvals(program: Command, sources: EvalSources): void {
   if (sources.sims) registerSim(program, sources);
 }
 
-/** Parse and run, turning a usage error into one line and exit 1 rather than a stack. */
-export async function runEvalsCli(program: Command, argv: string[] = process.argv): Promise<void> {
+/**
+ * Parse and run one invocation and return its exit code: 1 for a usage
+ * error, printed as one line rather than a stack, otherwise the code a
+ * command set on process.exitCode. The process's own exit code is left as it
+ * was, so an in-process caller (a test) never inherits a failed run; the bin
+ * entry sets it from the return value.
+ */
+export async function runEvalsCli(program: Command, argv: string[] = process.argv): Promise<number> {
+  // 0, never undefined: Bun ignores an assignment of undefined and keeps the old code.
+  const outer = process.exitCode ?? 0;
+  process.exitCode = 0;
   try {
     await program.parseAsync(argv);
+    return Number(process.exitCode ?? 0);
   } catch (err) {
-    if (err instanceof UsageError) {
-      process.stderr.write(`${program.name()}: ${err.message}\n`);
-      process.exitCode = 1;
-      return;
-    }
-    throw err;
+    if (!(err instanceof UsageError)) throw err;
+    process.stderr.write(`${program.name()}: ${err.message}\n`);
+    return 1;
+  } finally {
+    process.exitCode = outer;
   }
 }
 

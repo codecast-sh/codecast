@@ -170,7 +170,7 @@ export default function LandingPage() {
     <main className="min-h-screen w-full overflow-x-hidden" style={{ backgroundColor: '#fdf6e3' }}>
       <MarketingNav active="/" />
 
-      {/* Hero: the headline, then the film, then the ways in. */}
+      {/* Hero: the headline and the ways in, then the film, then the rest of the pitch. */}
       <section className="mx-auto px-6 pt-6 pb-6">
         <div className="text-center max-w-3xl mx-auto">
           <h1 className="text-4xl sm:text-5xl lg:text-[56px] font-bold leading-[1.1] tracking-tight mb-5 font-mono lg:-mx-24" style={{ color: '#002b36' }}>
@@ -178,19 +178,7 @@ export default function LandingPage() {
             <span className="block mt-3 font-normal text-lg sm:text-[22px]" style={{ color: '#657b83' }}>Agents do the work. People make the calls.</span>
           </h1>
 
-        </div>
-        {/* The first screen goes to the film: its width follows the viewport's height (about 230px of headline above, 90px of scrubber and caption below), between 640px and 1240px, and a phone gets the full width. */}
-        <div className="relative mx-auto" style={{ width: "min(100%, clamp(640px, min(100vw - 96px, (100svh - 346px) * 1280 / 760), 1240px))" }}>
-          <HeroFlythrough />
-        </div>
-      </section>
-
-      <section className="max-w-6xl mx-auto px-6 pt-6 pb-20">
-        <div className="text-center max-w-3xl mx-auto">
-          <p className="text-lg leading-loose mb-6" style={{ color: '#657b83' }}>
-            Chat, calls, tasks, docs, pull requests and decisions, with <Highlight color="amber">Claude Code</Highlight>, <Highlight color="green">Codex</Highlight>, <Highlight color="blue">Cursor</Highlight>, <Highlight color="rose">Gemini</Highlight>, <Highlight color="violet">OpenCode</Highlight> and <Highlight color="cyan">pi</Highlight> as teammates in every one. Everything links back to the session that did it.
-          </p>
-          <div className="flex flex-col sm:flex-row gap-3 justify-center items-center mb-10">
+          <div className="flex flex-wrap gap-3 justify-center items-center mb-6">
             <Link href="/signup">
               <Button variant="outline" className="bg-transparent text-sm px-5 h-10 font-medium border-[#93a1a1] text-[#586e75] hover:bg-[#cb4b16] hover:border-[#cb4b16] hover:text-[#fdf6e3] transition-colors">
                 Get started free
@@ -209,6 +197,18 @@ export default function LandingPage() {
               </Button>
             </Link>
           </div>
+        </div>
+        {/* The first screen goes to the film: its width follows the viewport's height (about 230px of headline and 56px of buttons above, 90px of scrubber and caption below), between 640px and 1240px, and a phone gets the full width. */}
+        <div className="relative mx-auto" style={{ width: "min(100%, clamp(640px, min(100vw - 96px, (100svh - 402px) * 1280 / 760), 1240px))" }}>
+          <HeroFlythrough />
+        </div>
+      </section>
+
+      <section className="max-w-6xl mx-auto px-6 pt-6 pb-20">
+        <div className="text-center max-w-3xl mx-auto">
+          <p className="text-lg leading-loose mb-6" style={{ color: '#657b83' }}>
+            Chat, calls, tasks, docs, pull requests and decisions, with <span className="whitespace-nowrap"><Highlight color="amber">Claude Code</Highlight>,</span> <span className="whitespace-nowrap"><Highlight color="green">Codex</Highlight>,</span> <span className="whitespace-nowrap"><Highlight color="blue">Cursor</Highlight>,</span> <span className="whitespace-nowrap"><Highlight color="rose">Gemini</Highlight>,</span> <Highlight color="violet">OpenCode</Highlight> and <Highlight color="cyan">pi</Highlight> as teammates in every one. Everything links back to the session that did it.
+          </p>
           <div className="max-w-2xl mx-auto mb-6">
             <div className="relative">
               <div className="absolute -inset-3 bg-gradient-to-r from-[#b58900]/25 via-[#cb4b16]/25 to-[#dc322f]/25 rounded-2xl blur-lg opacity-70"></div>

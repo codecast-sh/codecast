@@ -640,8 +640,18 @@ export function GenericListView<T>({
   // /tasks), and navigating back to the list route closes it, in place with no
   // re-mount. Click always opens — re-clicking the open row is a no-op, closing
   // belongs to Esc/✕ — while space keeps the keyboard toggle.
+  //
+  // A list with renderPreview peeks instead: space opens the focused row in a
+  // panel beside the list, the panel follows j/k and clicks, and the list keeps
+  // the keyboard, so a run of items reads without going in and out. Enter
+  // still opens the full page; space or Esc puts the peek away.
   const openDetail = (item: T) => router.push(getItemRoute(item));
   const toggleDetail = (item: T) => {
+    if (renderPreview) {
+      const id = getItemId(item);
+      setPreviewId((cur) => (cur === id ? null : id));
+      return;
+    }
     const route = getItemRoute(item);
     const base = route.replace(/\/[^/]+$/, "");
     router.push(currentPath === route ? base : route);
@@ -891,6 +901,8 @@ export function GenericListView<T>({
     const handler = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
       if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
+      // Arrows belong to an open menu or listbox (filter dropdowns, pickers).
+      if (e.key.startsWith("Arrow") && target.closest?.('[role="menu"],[role="listbox"],[role="dialog"]')) return;
 
       const stop = () => { e.preventDefault(); };
 
@@ -936,12 +948,12 @@ export function GenericListView<T>({
         return;
       }
 
-      if (e.key === "j" && !e.metaKey && !e.ctrlKey) {
+      if ((e.key === "j" || e.key === "ArrowDown") && !e.metaKey && !e.ctrlKey) {
         stop();
         setFocusIndex((i) => Math.min(i + 1, visibleItems.length - 1));
         return;
       }
-      if (e.key === "k" && !e.metaKey && !e.ctrlKey) {
+      if ((e.key === "k" || e.key === "ArrowUp") && !e.metaKey && !e.ctrlKey) {
         stop();
         setFocusIndex((i) => Math.max(i - 1, 0));
         return;
@@ -972,7 +984,7 @@ export function GenericListView<T>({
     previewId, selectedIds, paletteShortcuts, onTabChange, getItemRoute, getItemId, currentPath,
     onCreate, openPalette, toggleSelect, router, extraKeyHandler, onItemEdit, renderPreview, getSearchText]);
 
-  const previewItem = previewId ? flatItems.find((item) => getItemId(item) === previewId) || null : null;
+  const previewItem = previewId ? visibleItems.find((item) => getItemId(item) === previewId) || null : null;
 
   useEffect(() => {
     if (!hasMore || !onLoadMore || isLoadingMore) return;
@@ -1048,7 +1060,8 @@ export function GenericListView<T>({
       isSelected,
       isEditing,
       // Click opens the detail in place (space toggles) by driving the URL.
-      onClick: () => { setFocusIndex(globalIdx); openDetail(item); },
+      // While a peek is open a click moves it rather than leaving the list.
+      onClick: () => { setFocusIndex(globalIdx); if (previewId) setPreviewId(id); else openDetail(item); },
       onSelect: () => toggleSelect(id),
       onContextMenu: (e: React.MouseEvent) => {
         if (contextMenuContent) {
@@ -1427,10 +1440,14 @@ export function GenericListView<T>({
               </div>
             )}
           </div>
-          {previewItem && renderPreview && renderPreview(
-            previewItem,
-            () => setPreviewId(null),
-            () => router.push(getItemRoute(previewItem))
+          {previewItem && renderPreview && (
+            <div className="flex flex-shrink-0 animate-list-peek-in">
+              {renderPreview(
+                previewItem,
+                () => setPreviewId(null),
+                () => router.push(getItemRoute(previewItem))
+              )}
+            </div>
           )}
         </div>
       )}

@@ -5845,6 +5845,19 @@ export default defineSchema({
     // whole list to everyone on the team.
     .index("by_team", ["team_id"]),
 
+  // A HANG-UP, kept so the person's other clients hear it. A seat is one per
+  // person per room, so pressing End on one device deletes the seat a tab on
+  // another device is still holding media for. That tab's next heartbeat finds
+  // no row, and without this mark it reads as a lease sweep (the laptop slept)
+  // and takes the seat back: End undone within 15s. With it, the heartbeat
+  // answers "hung up" and that client leaves too. One row per person and room,
+  // cleared by the next real join.
+  call_hangups: defineTable({
+    user_id: v.id("users"),
+    room_key: v.string(),
+    at: v.number(),
+  }).index("by_user_room", ["user_id", "room_key"]),
+
   // A ring. Sync-driven, not push-driven: the recipient's client subscribes to
   // its own ringing rows (calls.getMyCalls) and renders the toast/sound
   // locally. TTL'd — a ring older than CALL_INVITE_TTL_MS reads as expired and

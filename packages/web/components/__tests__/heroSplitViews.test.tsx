@@ -103,3 +103,11 @@ test("WorkingStatusLine renders exactly its view once it has read the clock and 
     spy.mockRestore();
   }
 });
+
+test("the working line says Escape stops the turn only when asked to (an owner's empty composer)", () => {
+  const now = 1_790_000_000_000;
+  const hinted = renderToStaticMarkup(<WorkingStatusLineView startedAt={now - 95_000} now={now} label="running" stopHint />);
+  expect(hinted).toContain("data-stop-hint");
+  expect(hinted).toContain(">Esc</kbd>");
+  expect(renderToStaticMarkup(<WorkingStatusLineView startedAt={now - 95_000} now={now} label="running" />)).not.toContain("data-stop-hint");
+});

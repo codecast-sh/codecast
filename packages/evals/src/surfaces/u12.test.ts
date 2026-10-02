@@ -143,6 +143,18 @@ describe('call-summary', () => {
     expect((await replayWith(callSummary, long, '{"summary": "s", "action_items": []}')).gates['tail-rule']).toBe(true);
   });
 
+  test("owners-credited: a label's owners must be exactly the owners the items name first", async () => {
+    const kase = fixture('call-summary', 'huddle-credit-owners');
+    const snap: CallSummarySnap = kase.snapshot;
+    const owners = async (items: string[]) => {
+      const r = await replayWith(callSummary, snap, JSON.stringify({ title: 't', summary: 's', action_items: items }));
+      return byId(callSummary.gates(snap, r.out, kase.label))['owners-credited'];
+    };
+    expect(await owners(['Lucia: write the migration script', 'Ravi: write the rollback runbook', 'Lucia (with Priya): check the new terms', 'Dana: send the customer email Thursday'])).toBe(true);
+    expect(await owners(['Ravi: write the migration script', 'Ravi: write the rollback runbook', 'Lucia: check the new terms', 'Dana: send the customer email Thursday'])).toBe(false);
+    expect(await owners(['Lucia: write the migration script', 'Ravi: write the rollback runbook', 'Lucia: check the new terms', 'Dana: send the customer email Thursday', 'Priya: review the terms'])).toBe(false);
+  });
+
   test('a call snapshot maps cast call --json the way prod reads segments', () => {
     const snap = callSnapshot({
       _id: 'c1',

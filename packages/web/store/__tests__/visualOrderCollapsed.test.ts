@@ -199,16 +199,15 @@ describe("computeVisualOrder trigger view", () => {
   });
 });
 
-// QUESTIONS: a session that asked something (a pending `cast decide` row)
-// lifts out of its status section into the leading Questions group — the
-// original bug was Working/Pinned never being sampled, so an advisory decide
-// showed in the queue badge but nowhere in the rail. Nav must walk it first,
-// and a collapsed Questions section must skip it like any other section.
+// QUESTIONS: a session that asked something (a pending blocking `cast decide`
+// row) lifts out of its status section into the leading Questions group, even
+// while its agent still reads as working. Nav must walk it first, and a
+// collapsed Questions section must skip it like any other section.
 describe("computeVisualOrder lifts questions", () => {
   const decide = {
     _id: "d1", conversation_id: cid("wk1"), session_id: "session-wk1",
     question: "q", options: [{ label: "a" }, { label: "b" }],
-    blocking: false, status: "pending" as const, created_at: Date.now(),
+    blocking: true, status: "pending" as const, created_at: Date.now(),
   };
 
   it("a working session with a pending decide walks first, out of Working", () => {

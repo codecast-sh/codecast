@@ -423,6 +423,38 @@ test("window bounds persist and come back only when they land on a display", asy
   expect(el2.windows[0].opts).toMatchObject({ width: 1000, height: 700 });
 });
 
+test("app items reach the tray when asked, follow visible, and refresh", async () => {
+  const el = fakeElectron();
+  let paused = false;
+  const api = createDesktopApp(
+    {
+      ...CONFIG,
+      menu: {
+        ...CONFIG.menu,
+        appItems: [
+          { label: "Mac Setup…", action: () => {} },
+          { label: "Pause", tray: true, visible: () => !paused, action: () => { paused = true; } },
+          { label: "Resume", tray: true, visible: () => paused, action: () => { paused = false; } },
+        ],
+      },
+    },
+    el,
+  );
+  el.app._fireReady();
+  await new Promise((r) => setTimeout(r, 5));
+  const trayLabels = () => el.tray.menu.map((i) => i.label).filter(Boolean);
+  const appLabels = () => el.appMenu[0].submenu.map((i) => i.label).filter(Boolean);
+  expect(trayLabels()).toContain("Pause");
+  expect(trayLabels()).not.toContain("Resume");
+  expect(trayLabels()).not.toContain("Mac Setup…");
+  expect(appLabels()).toEqual(expect.arrayContaining(["Mac Setup…", "Pause"]));
+  el.tray.menu.find((i) => i.label === "Pause").click();
+  api.refreshMenus();
+  expect(trayLabels()).toContain("Resume");
+  expect(trayLabels()).not.toContain("Pause");
+  expect(appLabels()).toContain("Resume");
+});
+
 test("app defined ipc handlers, events, menu items and windows", async () => {
   const el = fakeElectron();
   const seen = [];

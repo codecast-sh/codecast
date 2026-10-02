@@ -189,7 +189,7 @@ describe("helpers", () => {
       before: [{ name: "a", ok: false, detail: "" }, { name: "b", ok: false, detail: "" }],
       after: [{ name: "a", ok: true, detail: "" }, { name: "b", ok: false, detail: "" }, { name: "c", ok: false, detail: "" }],
     };
-    expect(proofSummary(p)).toEqual({ red: 2, fixed: 1, stillRed: ["b"], broke: ["c"], label: "1 of 2 checks went red to green, 1 broke" });
+    expect(proofSummary(p)).toEqual({ red: 2, fixed: 1, stillRed: ["b"], broke: ["c"], label: "1 of 2 checks went red to green, 1 broke", short: "proof 1/2, 1 broke" });
     expect(proofSummary({ before: [], after: [] }).label).toBe("No proof recorded");
   });
 

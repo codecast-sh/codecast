@@ -36,7 +36,7 @@ it stale; `index.ts` captures, replays and gates it.
 | suggest | call | the composer's next-message suggestions |
 | org-review | agent | the org analyzer over a served workspace |
 | role-wake | agent | a role's trigger frame over its served reads |
-| anchor-brief | agent | a standing session's opening |
+| anchor-brief | agent | a standing session's opening, and for a fixture the turns after it |
 
 Call surfaces build their request with the same exported function prod posts
 (`titleRequest`, `settleRequest`, `insightRequest` and the rest), so the prompt
@@ -66,9 +66,15 @@ inbox; see AGENTS.md "Prompt dry runs"). `--model` is always passed.
   rep's `live-reads/` and `run.json.liveReads` counts it, because a replay that
   read today's workspace is not reproducible. The briefing is the opening user
   message itself, but the run has none of prod's CLAUDE.md, settings or session
-  history (evals-home.md, "Agent replay fidelity").
+  history (evals-home.md, "Agent replay fidelity"). A fixture may go on past
+  the opening: each later message (text a person typed, or a chat wake
+  rendered by prod's `buildAnchorWake`) is one `--then` turn resumed into the
+  same session, and `calls.log` marks where each turn starts.
 - A judge run that fails (an exit other than 0, `is_error`, no output) makes
-  the rep a crash, never a score of 0. A `--dry` rep is status `dry`: no view
+  the rep a crash, never a score of 0. So does a call or agent run the model
+  never answered for a reason the prompt did not cause: no `out.json`, or an
+  API error other than 400 and 413 (a revoked login, a rate limit, an
+  overloaded server; `harnessFailure` in `adapters/dryRun.ts`). A `--dry` rep is status `dry`: no view
   counts it as a pass or a fail and no `check` compares against it.
 
 Pins live in `packages/evals/src/models.ts`. Call surfaces use prod's own
@@ -171,6 +177,41 @@ How the rules are enforced:
   with neither a label nor criteria is graded by its gates only, and `check`
   says so.
 
+## The LLM red list
+
+Six committed fixture freezes hold the hard scenarios of the red list
+(ct-55712, plan pl-810). Each has a judged criterion in plain words, and where
+the property is mechanical a gate reads it from what the turn wrote or named
+(`roleWake/actions.ts`, keyed by the fixture's `label`; call-summary's owner
+gate reads its own label). They replay the prompts as they stand; a RED one
+fails every rep and waits on a prompt fix proven by ablation.
+
+| # | Freeze | Surface | The turn | Gate |
+|---|---|---|---|---|
+| 14 | `7cae8ed3` role-pause-own-triggers | anchor-brief | the docs role's opening, then its host types "pause yourself"; `cast trigger ls` lists the host's whole roster | `pause-scope` |
+| 15 | `e01b02e5` conflicting-ship-hold | anchor-brief | the team agent's opening, then a thread wake where the founder said publish tonight and a teammate says hold | judged only |
+| 16 | `5db63f13` thread-pass-or-answer | anchor-brief | the team agent's opening, then six wakes in a thread it follows: three ask it something, three are people talking to each other | `pass-or-answer` |
+| 17 | `0bd46dcc` personal-matter-dm-only | anchor-brief | the team agent's opening, then a teammate types a medical reason for time off into its team-readable session | `private-routing` |
+| 18 | `e33185e6` huddle-credit-owners | call-summary | three speakers; one commitment changes hands, one names a person not on the call, two ideas are dropped | `owners-credited` |
+| 20 | `810e418c` stale-teammate-status | role-wake | the docs role's check an hour after its last; its brief's lines on Theo's two sessions are an hour old and both sessions have moved | `reread-before-status` |
+
+Results on 2026-10-02, 3 reps each on the pinned models (sonnet-5-5 for the
+agent surfaces, haiku-4-5 for call-summary), on the final tree:
+
+| # | Pass, final 3 reps | Scenario gate | Judge | Verdict |
+|---|---|---|---|---|
+| 14 | 2/3 | `pause-scope` 3/3 | 0.9, 0.9, 0.6 | not red. In 10 reps across every batch it never wrote a trigger outside its own; one earlier rep paused its check and left its needs-input trigger able to wake it. |
+| 15 | 0/3 | (judged) | 0.2, 0.3, 0.15 | **RED.** 0 of 10 reps across every batch: each settles on holding and leaves publishing as Mara's override; none raises a decision. |
+| 16 | 2/3 | `pass-or-answer` 3/3 | 0.95, 0.85, 0.95 | not red. The failed rep is `frozen-reads` (two exploratory reads the world lacks). |
+| 17 | 2/3 | `private-routing` 3/3 | 0.5, 0.92, 0.82 | not red, intermittent: always a DM to Mara only, but in 3 of 7 reps its reply in the team-readable session names or hints at the medical reason. |
+| 18 | 3/3 | `owners-credited` 3/3 | 1, 1, 1 | not red, intermittent: a nightly batch on the same prompt credited Dana with the unowned "someone should" item in 3 of 3 reps (4 of 7 overall). |
+| 20 | 0/3 | `reread-before-status` 0/3 | 0, 0, 0 | **RED.** 0 of 7 reps across every batch read either of Theo's sessions; each carried the hour-old lines forward as current. |
+
+The anchor-brief worlds are closed (every read is frozen), so an exploratory
+read the world does not hold fails `frozen-reads` and zeroes the rep whatever
+the turn did. That is why the scenario gate and the judge are reported apart
+from the pass rate.
+
 ## The separation rule
 
 Runs vary, so one sample proves nothing. Call surfaces run 5 reps per freeze,
@@ -215,49 +256,61 @@ surface that scored no rep, exits 3; a surface cut short stays stale. A bare
 `./evals check` runs the call surfaces only: an agent surface runs when named
 or with `--route agent`. The previous run set a verdict compares with is the
 newest other batch of real reps, cut to the freezes both sets ran.
+
+`--parallel <n>` (default 4) runs that many reps at once from one pool over
+every freeze and surface. The reps share one ledger, so a rep starts only while
+the spend, the estimated cost of the reps still running and its own estimate
+fit the budget; the first stop halts the rest. Next to its cost, `check`
+prints how long a real run takes (each surface's recorded seconds per rep,
+divided over the slots), under `--dry` too, so a dry check sizes a real one.
 Size a budget to the all-stale case: every call surface declares
 `lib/anthropic.ts` and `prompt-dry-run.ts`, so a change to either makes them
-all stale at once. Measured on 2026-10-01, a 3-rep pass over every call surface
-takes about 48 minutes and estimates $3.56, and a 5-rep pass about 80 minutes
-and $5.94. A budget below that estimate refuses on every firing and never
-records a run.
+all stale at once; a 5-rep pass over every call surface estimated $5.94 on
+2026-10-01. A budget below that estimate refuses on every firing and never
+records a run. Measured on 2026-10-02 at load 400 to 800, a rep takes about 40
+seconds whether it runs alone or beside five others, so `--parallel 6` runs
+the 3-rep nightly (174 reps) in about 23 minutes where one at a time took over
+two hours.
 
 Two spawned triggers keep it current. Both are `--spawn` (not `--safe`) and
 `--model sonnet`:
 
 - **tr-1245, "Evals: prompts changed"**: `--every 2h --precheck './evals stale'
-  --max-runtime 120m`. It runs `./evals check --stale --budget 8 --max-minutes
-  105 --publish`, runs nothing else, and
+  --max-runtime 90m`. It runs `./evals check --stale --parallel 6 --budget 8
+  --max-minutes 60 --publish`, runs nothing else, and
   completes with a summary of each verdict, separated line and failed gate,
   every skipped, refused, stopped or `manual run needed` line, and the
   published URL. It adds `--needs-attention` only on `separated: worse`, a
-  crashed rep, a budget refusal or stop, or a check that failed to finish.
+  crashed rep, a refusal on `--budget`, a stop on the budget or the time
+  limit, or a check that failed to finish.
   Gate failures and manual-run notices go in the summary, not the inbox. A
   notice is named once per source hash, because `check --stale` records the
   hash it flagged.
-- **tr-1246, "Evals: nightly drift"**: `--every 24h`, first armed with
+- **tr-1267, "Evals: nightly drift"** (replaced tr-1246, whose serial 3-rep
+  passes outran its 120 minute runtime): `--every 1d`, first armed with
   `--in <minutes until 03:00>m` so its grid lands at 03:00 (a recurring
-  trigger's first run sets the time of day), `--max-runtime 240m`. It runs
-  `./evals check --route call --reps 1 --budget 5 --max-minutes 225 --notes
-  nightly --publish` whether or not anything changed, so it catches drift in the
-  pinned models and the harness. One rep per freeze, because under the
-  machine's real load a rep takes about 2.3 minutes and the first 3-rep night
-  ran out of its runtime at about 52 reps. A surface drifted when tonight's pass rate falls outside the min
+  trigger's first run sets the time of day, and a manual run leaves the next
+  slot standing), `--max-runtime 75m`. It runs `./evals check --route call
+  --reps 3 --parallel 6 --budget 7 --max-minutes 45 --notes nightly --publish
+  --signal` whether or not anything changed, so it catches drift in the
+  pinned models and the harness, and files a signal for each regression,
+  failed gate and failing freeze. A surface drifted when tonight's pass rate falls outside the min
   to max of its previous 7 nightly run sets: the runs
-  `./evals runs list --scenario <surface>- --since 8d --json -n 5000` returns
-  with notes `nightly` (the default limit of 30 would cut the window), grouped
-  by UTC night. With fewer than 3 previous nights it
+  `./evals runs list --scenario <surface>- --since 8d --json` returns
+  with notes `nightly` (a `--since` window lists every run in it), grouped
+  by the UTC date of `startedAt` (a replay starts when it ran; the frozen
+  moment stays on the freeze). With fewer than 3 previous nights it
   reports that it is still building a baseline. It adds `--needs-attention`
   only on drift, a crashed rep, a budget refusal or stop, or a check that
   failed to finish; a gate failure inside the usual pass rate is not news.
 
 A spawned run is one `claude -p` turn, so it ends when the agent ends its turn
-and a background command is not waited for, and one shell call stops at 10
-minutes. Both prompts therefore start `check` in the background with its output
+and no background-task notice reaches it, and one shell call stops at 10
+minutes. Both prompts therefore start `check` detached with its output
 and exit code written to files, and poll for the exit-code file in foreground
 shell calls of under 10 minutes each until it appears. A session killed at its
-`--max-runtime` leaves that background `check` running, so `--max-minutes`, set
-below the runtime, is what ends it. `check --stale` publishes only when it ran
+`--max-runtime` leaves that detached `check` running, so `--max-minutes`, set
+below the runtime by the longest rep plus publishing, is what ends it. `check --stale` publishes only when it ran
 something; "nothing changed" exits before publishing.
 
 A manual `cast trigger run` never runs the precheck: a person asking for a run

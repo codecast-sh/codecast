@@ -9,7 +9,7 @@ import { homePaths } from '../paths';
 import { loadSurface, surfaceMeta } from '../registry';
 import { dirtySurfaces, gitHead, sourceHashes } from '../state';
 import { gate, type AgentResult, type CallResult, type ReplayCtx, type ReplayResult, type SurfaceMeta } from '../surface';
-import { runAgent, runCall } from './dryRun';
+import { assertAnswered, runAgent, runCall } from './dryRun';
 import { judgeReply, PASS_AT } from './judge';
 import { loadLabel, loadSnapshot, SnapshotMismatch, type LoadedSnapshot } from './resolver';
 
@@ -106,13 +106,24 @@ export const sentFields = (calls: CallResult[], agents: AgentResult[]): Pick<Run
   liveReads: agents.reduce((n, a) => n + a.calls.filter((l) => l.startsWith('LIVE ')).length, 0),
 });
 
+/**
+ * What every rep of one check shares: the spend so far, the estimated cost of
+ * the reps still running (so parallel reps cannot all start under a budget
+ * they would cross together), and why the check stopped, once it has.
+ */
+export interface RepLedger {
+  usd: number;
+  inFlightUsd?: number;
+  stoppedBy?: 'budget' | 'time';
+}
+
 export interface ReplayRunOptions extends ReplayOptions {
   /** The `check` invocation this belongs to; a fresh one when unset. */
   batch?: string;
   /** Stop before a rep that would take the spend past this. */
   budgetUsd?: number | null;
-  /** Spend so far across the whole check, shared between freezes. */
-  spent?: { usd: number };
+  /** Shared across every freeze and rep of one check. */
+  spent?: RepLedger;
   /** The expected cost of one rep, for the budget stop. */
   estPerRep?: number;
   /** Epoch ms after which no rep starts: a check bounds its own wall time, so a session that started it in the background cannot leave it running. */
@@ -128,35 +139,54 @@ export interface ReplayOutcome {
   costUsd: number;
 }
 
-export async function replayFreeze(f: Freeze, o: ReplayRunOptions): Promise<ReplayOutcome> {
+/** One freeze, loaded once for all its reps. */
+export interface PreparedFreeze {
+  f: Freeze;
+  meta: SurfaceMeta;
+  impl: Awaited<ReturnType<typeof loadSurface>>;
+  root: string;
+  model: string;
+  scenario: string;
+  run: Omit<RunJson, 'promptSha' | 'judgeModel' | 'temperatureProd' | 'liveReads'>;
+  loaded: LoadedSnapshot | null;
+  mismatch: string | null;
+}
+
+/** What a rep records about the tree: HEAD, and each surface's source hash and dirtiness. One read per check, not per freeze. */
+export interface TreeFacts {
+  head: string;
+  hashes: Map<string, string>;
+  dirty: Set<string>;
+}
+
+export const treeFacts = (metas: SurfaceMeta[]): TreeFacts => ({ head: gitHead(), hashes: sourceHashes(metas), dirty: dirtySurfaces(metas) });
+
+/** The reps `replayFreeze` runs for a requested count. */
+export const repCount = (reps: number): number => Math.max(1, Math.min(reps, MAX_REPS));
+
+export async function prepareFreeze(f: Freeze, o: ReplayRunOptions, facts?: TreeFacts): Promise<PreparedFreeze> {
   const surfaceId = String((f.meta as { surface?: string } | undefined)?.surface ?? '');
   const meta = surfaceMeta(surfaceId);
   if (!meta) throw new Error(`freeze ${f.id.slice(0, 8)} names no known surface (${surfaceId || 'none'})`);
   const impl = await loadSurface(surfaceId);
-  const root = homePaths().runs;
-  const batch = o.batch ?? new Date().toISOString();
   // An agent surface runs on the production session's model when its capture could read one.
   const capturedModel = meta.route === 'agent' ? (f.meta as { model?: string } | undefined)?.model : undefined;
   const model = o.model ?? capturedModel ?? meta.model;
-  const run: Omit<RunJson, 'promptSha' | 'judgeModel' | 'temperatureProd' | 'liveReads'> = {
+  const tree = facts ?? treeFacts([meta]);
+  const run: PreparedFreeze['run'] = {
     freezeId: f.id,
     notes: o.notes ?? null,
     model,
     route: meta.route,
-    sourceHash: sourceHashes([meta]).get(meta.id)!,
+    sourceHash: tree.hashes.get(meta.id)!,
     budgetUsd: o.budgetUsd ?? null,
-    gitHead: gitHead(),
-    dirty: dirtySurfaces([meta]).has(meta.id),
+    gitHead: tree.head,
+    dirty: tree.dirty.has(meta.id),
     dry: Boolean(o.dry),
     temperatureReplay: 'cli-default',
-    batch,
+    batch: o.batch ?? new Date().toISOString(),
     title: f.name,
   };
-  const scenario = `${meta.id}-${f.id.slice(0, 8)}`;
-  const spent = o.spent ?? { usd: 0 };
-  const outcome: ReplayOutcome = { runs: [], crashes: 0, budgetHit: false, costUsd: 0 };
-  const reps = Math.max(1, Math.min(o.reps, MAX_REPS));
-
   let loaded: LoadedSnapshot | null = null;
   let mismatch: string | null = null;
   try {
@@ -165,22 +195,37 @@ export async function replayFreeze(f: Freeze, o: ReplayRunOptions): Promise<Repl
     if (!(e instanceof SnapshotMismatch)) throw e;
     mismatch = e.message;
   }
+  return { f, meta, impl, root: homePaths().runs, model, scenario: `${meta.id}-${f.id.slice(0, 8)}`, run, loaded, mismatch };
+}
 
-  for (let rep = 1; rep <= reps; rep++) {
-    const startedAt = Date.now();
-    const dir = join(root, runFolderName(meta.id, f.id, rep, startedAt));
-    const base = { dir, freeze: f, scenario, rep, startedAt };
-    const overBudget = o.budgetUsd != null && spent.usd + (o.estPerRep ?? 0) > o.budgetUsd;
-    const overTime = o.deadline != null && startedAt >= o.deadline;
-    if (overBudget || overTime) {
-      const why = overTime ? `the time limit (${new Date(o.deadline!).toISOString()}) has passed` : `the $${o.budgetUsd} budget is spent`;
-      writeRunFolder({ ...base, endedBecause: 'budget', error: overTime ? `time limit reached after $${spent.usd.toFixed(4)}` : `budget $${o.budgetUsd} reached after $${spent.usd.toFixed(4)}`, run: { ...run, ...sentFields([], []), promptSha: null, judgeModel: null } });
-      o.onLine?.(`stopped before rep ${rep}: ${why}`);
-      outcome.budgetHit = true;
-      outcome.stoppedBy = overTime ? 'time' : 'budget';
-      break;
-    }
-    o.onLine?.(`${scenario} rep ${rep} of ${reps}`);
+/**
+ * One rep of a prepared freeze. It starts only while the shared ledger has
+ * room under the budget and the deadline has not passed; the first rep that
+ * finds no room writes the stop as a run folder and marks the ledger, and
+ * every later one returns `stopped` without a trace. A rep that throws is a
+ * crash, recorded and counted.
+ */
+export async function replayRep(p: PreparedFreeze, rep: number, reps: number, o: ReplayRunOptions): Promise<{ summary: RunSummary | null; crashed: boolean; stopped: boolean }> {
+  const { f, meta, impl, root, model, scenario, run, loaded, mismatch } = p;
+  const spent = o.spent ?? { usd: 0 };
+  if (spent.stoppedBy) return { summary: null, crashed: false, stopped: true };
+  const startedAt = Date.now();
+  const dir = join(root, runFolderName(meta.id, f.id, rep, startedAt));
+  const base = { dir, freeze: f, scenario, rep, startedAt };
+  const est = o.estPerRep ?? 0;
+  const overBudget = o.budgetUsd != null && spent.usd + (spent.inFlightUsd ?? 0) + est > o.budgetUsd;
+  const overTime = o.deadline != null && startedAt >= o.deadline;
+  if (overBudget || overTime) {
+    spent.stoppedBy = overTime ? 'time' : 'budget';
+    const why = overTime ? `the time limit (${new Date(o.deadline!).toISOString()}) has passed` : `the $${o.budgetUsd} budget is spent`;
+    writeRunFolder({ ...base, endedBecause: 'budget', error: overTime ? `time limit reached after $${spent.usd.toFixed(4)}` : `budget $${o.budgetUsd} reached after $${spent.usd.toFixed(4)}`, run: { ...run, ...sentFields([], []), promptSha: null, judgeModel: null } });
+    o.onLine?.(`stopped before ${scenario} rep ${rep}: ${why}`);
+    return { summary: summarizeRunFolder(root, dir.slice(root.length + 1)), crashed: false, stopped: true };
+  }
+  spent.inFlightUsd = (spent.inFlightUsd ?? 0) + est;
+  o.onLine?.(`${scenario} rep ${rep} of ${reps}`);
+  let crashed = false;
+  try {
     if (mismatch || !loaded) {
       const gates = [gate('snapshot', false, mismatch ?? 'no snapshot')];
       writeRunFolder({ ...base, endedBecause: 'done', score: scoreOf(gates, []), run: { ...run, ...sentFields([], []), promptSha: null, judgeModel: null } });
@@ -198,12 +243,14 @@ export async function replayFreeze(f: Freeze, o: ReplayRunOptions): Promise<Repl
           const r = await runCall(o.model && req.model === meta.model ? { ...req, model: o.model } : req, join(dir, `call${calls.length + 1}`), { dry: Boolean(o.dry) });
           if (opts?.grader) r.grader = true;
           calls.push(r);
+          assertAnswered(r, `call${calls.length}`);
           return r;
         },
         async agent(opts) {
           prompts.push(opts.prompt);
-          const a = await runAgent({ ...opts, serveDir: opts.serveDir ?? loaded!.dir }, join(dir, `agent${agents.length + 1}`), { dry: Boolean(o.dry) });
+          const a = await runAgent({ ...opts, serveDir: opts.serveDir ?? loaded.dir }, join(dir, `agent${agents.length + 1}`), { dry: Boolean(o.dry) });
           agents.push(a);
+          assertAnswered(a, `agent${agents.length}`);
           return a;
         },
       };
@@ -230,20 +277,45 @@ export async function replayFreeze(f: Freeze, o: ReplayRunOptions): Promise<Repl
         const score = scoreOf(gates, checks, judged);
         writeRunFolder({ ...base, endedBecause: 'done', result, score, run: { ...run, ...sentFields(calls, agents), promptSha: out.promptSha ?? promptShaOf(calls, prompts), judgeModel: judged?.model ?? null } });
       } catch (e) {
-        outcome.crashes++;
+        crashed = true;
         const error = e instanceof Error ? (e.stack ?? e.message) : String(e);
         writeRunFolder({ ...base, endedBecause: 'failed', error, result: { reply: '', calls, agents }, run: { ...run, ...sentFields(calls, agents), promptSha: promptShaOf(calls, prompts), judgeModel: null } });
         o.onLine?.(`${scenario} rep ${rep} crashed: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
-    const summary = summarizeRunFolder(root, dir.slice(root.length + 1));
-    if (summary) {
-      outcome.runs.push(summary);
-      outcome.costUsd += summary.costUsd;
-      spent.usd += summary.costUsd;
-    }
+  } finally {
+    spent.inFlightUsd = Math.max(0, (spent.inFlightUsd ?? 0) - est);
   }
-  return outcome;
+  const summary = summarizeRunFolder(root, dir.slice(root.length + 1));
+  if (summary) spent.usd += summary.costUsd;
+  return { summary, crashed, stopped: false };
+}
+
+/** Folds rep results into one outcome; stop folders are kept, so a run list shows where a check stopped. */
+export function outcomeOf(results: Array<{ summary: RunSummary | null; crashed: boolean; stopped: boolean }>, spent: RepLedger): ReplayOutcome {
+  const runs = results.flatMap((r) => (r.summary ? [r.summary] : []));
+  const budgetHit = results.some((r) => r.stopped);
+  return {
+    runs,
+    crashes: results.filter((r) => r.crashed).length,
+    budgetHit,
+    ...(budgetHit ? { stoppedBy: spent.stoppedBy ?? 'budget' } : {}),
+    costUsd: runs.reduce((s, r) => s + r.costUsd, 0),
+  };
+}
+
+/** Replays a freeze's reps one after another (`freeze replay`); `check` runs reps through its own pool. */
+export async function replayFreeze(f: Freeze, o: ReplayRunOptions): Promise<ReplayOutcome> {
+  const p = await prepareFreeze(f, o);
+  const spent = o.spent ?? { usd: 0 };
+  const reps = repCount(o.reps);
+  const results: Array<Awaited<ReturnType<typeof replayRep>>> = [];
+  for (let rep = 1; rep <= reps; rep++) {
+    const r = await replayRep(p, rep, reps, { ...o, spent });
+    results.push(r);
+    if (r.stopped) break;
+  }
+  return outcomeOf(results, spent);
 }
 
 export const codecastReplayer: Replayer = {

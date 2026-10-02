@@ -5,7 +5,7 @@ import type { ConvoMessage } from '@platform/evals';
 import { UsageError } from '@platform/evals/cli';
 
 import { fixturesDir, homePaths } from '../../paths';
-import { EVERY_READ, fillAliases, recordSentence, servedReadKey, writeFrozenVerbs, writeServedRead } from '../../served';
+import { EVERY_READ, fillAliases, readFrozenVerbs, recordSentence, servedReadKey, writeFrozenVerbs, writeServedRead } from '../../served';
 import type { ReplayCtx, SurfaceMeta } from '../../surface';
 
 // What role-wake and anchor-brief share: both replay one turn of a role's
@@ -20,6 +20,8 @@ export interface FixtureRead {
   argv: string[];
   out: string;
   exit?: number;
+  /** Also answers every longer argv that starts with this one (`read <id>` answers `read <id> --full`), an approximation a synthetic world may make. */
+  prefix?: boolean;
 }
 
 /** A synthetic workspace several fixtures read: what `cast` answers inside it. */
@@ -72,7 +74,7 @@ export function servedDirFor(world: StandingWorld, ctx: Pick<ReplayCtx, 'runDir'
   }
   const dir = join(ctx.runDir, 'served');
   mkdirSync(dir, { recursive: true });
-  for (const r of reads.values()) writeServedRead(dir, r.argv, r.out, r.exit ?? 0);
+  for (const r of reads.values()) writeServedRead(dir, r.argv, r.out, r.exit ?? 0, { prefix: r.prefix });
   writeFrozenVerbs(dir, [EVERY_READ]);
   return dir;
 }
@@ -145,6 +147,16 @@ export function harnessNote(frozen: string[], extra: string[] = []): string {
     '',
   ].join('\n');
 }
+
+/** The verbs a world's served dir freezes: a fixture's world freezes every read, a captured one says so in its `frozen` file. */
+export const frozenVerbsOf = (world: StandingWorld): string[] => (world.served ? readFrozenVerbs(join(homePaths().snapshots, world.served)) : [EVERY_READ]);
+
+/**
+ * A standing turn's first message as the agent gets it: the production text,
+ * then the harness note. The replay sends it and the judge reads it, so the
+ * judge knows a command the agent named stands for one it was told not to run.
+ */
+export const withHarnessNote = (text: string, world: StandingWorld, extra: string[] = []): string => `${text}\n${harnessNote(frozenVerbsOf(world), extra)}`;
 
 /** The turn's opening as the judge and the conversation views see it. */
 export function describeTurn(text: string, at: string, id: string): ConvoMessage[] {

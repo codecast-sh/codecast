@@ -20,6 +20,7 @@ import {
 } from "./syncLog";
 import { prunablePrefix } from "./syncLogPrune";
 import { canAccessTask, heldKeysFor } from "./lib/access";
+import { accessStampFor } from "./lib/accessKeys";
 import { rollUpUsage } from "./messages";
 
 // Same fake-DatabaseWriter convention as changeLog.test.ts: ids are
@@ -104,7 +105,7 @@ function makeFakeDb() {
 
 describe("scopesForChange (access-derived fan-out)", () => {
   test("tasks land in owner + the WORKSPACE team + the assignee's scope", () => {
-    expect(scopesForChange("tasks", { owner_user_id: "users:1", team_id: "teams:9", workspace: "team:teams:9", assignee: "users:2" }))
+    expect(scopesForChange("tasks", { owner_user_id: "users:1", team_id: "teams:9", workspace: "team:teams:9", grants: ["users:2"] }))
       .toEqual(["user:users:1", "team:teams:9", "user:users:2"]);
   });
   test("private inside a team (team_id set, workspace user:owner) never enters the team scope", () => {
@@ -112,12 +113,16 @@ describe("scopesForChange (access-derived fan-out)", () => {
       .toEqual(["user:users:1"]);
   });
   test("a task assigned to me with no team reaches me through my user scope", () => {
-    expect(scopesForChange("tasks", { owner_user_id: "users:1", workspace: "user:users:1", assignee: "users:7" }))
+    expect(scopesForChange("tasks", { owner_user_id: "users:1", workspace: "user:users:1", grants: ["users:7"] }))
       .toEqual(["user:users:1", "user:users:7"]);
   });
-  test("conversations are owner-only even with a team", () => {
+  test("conversations never fan to a team, even with a team key", () => {
     expect(scopesForChange("conversations", { owner_user_id: "users:1", team_id: "teams:9", workspace: "team:teams:9" }))
       .toEqual(["user:users:1"]);
+  });
+  test("conversations fan to the runner and every session owner, once each", () => {
+    expect(scopesForChange("conversations", { owner_user_id: "users:1", team_id: "teams:9", grants: ["users:2", "users:1", "users:3", "users:2"] }))
+      .toEqual(["user:users:1", "user:users:2", "user:users:3"]);
   });
   test("no owner means no scopes (already-gone row)", () => {
     expect(scopesForChange("tasks", { owner_user_id: undefined, team_id: "teams:9" })).toEqual([]);
@@ -630,12 +635,30 @@ describe("mergeCargo (coalesce merge, E2)", () => {
 });
 
 describe("access stamp + projection (E4)", () => {
-  test("stamp: owner always, workspace key for scoped tables, assignee grant for tasks, none for conversations", () => {
+  test("stamp: owner always, workspace key for scoped tables, assignee grant for tasks, no key for conversations", () => {
     expect(accessStampFromDoc("tasks", { user_id: "u1", workspace: "team:T", assignee: "u2" }))
       .toEqual({ access_owner: "u1", access_key: "team:T", access_grants: ["u2"] });
     expect(accessStampFromDoc("conversations", { user_id: "u1", workspace: "team:T" }))
       .toEqual({ access_owner: "u1" });
     expect(accessStampFromDoc("docs", null)).toBeNull();
+  });
+  test("stamp: a conversation grants its session owners other than the runner, sorted", async () => {
+    const { db } = makeFakeDb();
+    const conv = await db.insert("conversations", { user_id: "users:1" });
+    for (const u of ["users:3", "users:1", "users:2"]) {
+      await db.insert("session_owners", { conversation_id: conv, user_id: u, added_by: u, added_at: 1 });
+    }
+    expect(await accessStampFor({ db }, "conversations", await db.get(conv)))
+      .toEqual({ access_owner: "users:1", access_grants: ["users:2", "users:3"] });
+    const lone = await db.insert("conversations", { user_id: "users:1" });
+    expect(await accessStampFor({ db }, "conversations", await db.get(lone))).toEqual({ access_owner: "users:1" });
+  });
+  test("projectAction: a co-owner gets the conversation's cargo, a teammate who is no owner a delete", () => {
+    const row = { position: 3, entity_type: "conversations", entity_id: "c1", op: "upsert",
+      patch: { title: "anchor" }, access_owner: "ada", access_grants: ["bo"] };
+    expect(projectAction(row, { userId: "bo", heldKeys: new Set(["user:bo", "team:T"]) }).patch).toEqual({ title: "anchor" });
+    expect(projectAction(row, { userId: "cy", heldKeys: new Set(["user:cy", "team:T"]) }))
+      .toEqual({ position: 3, entity_type: "conversations", entity_id: "c1", op: "delete" });
   });
   test("authorizedFor: owner, grant, held key; pre-cargo rows pass", () => {
     const held = new Set(["user:u9", "team:T"]);
@@ -875,7 +898,7 @@ describe("source guards", () => {
     const stamp = accessStampFromDoc("tasks", { user_id: "u1", workspace: "user:u1", assignee: "agent:claude" });
     expect(stamp).not.toBeNull();
     expect(stamp?.access_grants).toBeUndefined();
-    expect(scopesForChange("tasks", { owner_user_id: "u1", workspace: "user:u1", assignee: "agent:claude" })).toEqual(["user:u1"]);
+    expect(scopesForChange("tasks", { owner_user_id: "u1", workspace: "user:u1", grants: ["agent:claude"] })).toEqual(["user:u1"]);
   });
   test("coalescing onto a cargo-less existing row cannot emit a thin patch (review blocker)", () => {
     const m = mergeCargo({ op: "upsert" } as any, { patch: { title: "t" } });

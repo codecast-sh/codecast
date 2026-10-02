@@ -690,6 +690,24 @@ export function rollupParentIdOf(row: RollupRow): string | null {
   return null;
 }
 
+// Whether a pending `cast decide` row lifts its session into QUESTIONS (and
+// counts in the queue, its badge and /questions). ONE rule for the server's
+// pending-decide set and the replica's, so a session is never lifted on one
+// side only. A blocking ask parks its session, so it waits on a person. An
+// advisory ask does not: the agent is already working on its default, so it
+// stays inside its own session and never interrupts. The exception is a row
+// someone filed into a named stack on purpose, which is where "answer all
+// defaults" resolves advisories.
+export interface StackedAskRow {
+  status: string;
+  blocking?: boolean;
+  stack_id?: unknown;
+}
+
+export function isStackedAsk(d: StackedAskRow): boolean {
+  return d.status === "pending" && (!!d.blocking || !!d.stack_id);
+}
+
 // ── Riding the lead ─────────────────────────────────────────────────────────
 //
 // A member whose state rolls up to another member (rollupParentIdOf: an
@@ -1167,6 +1185,7 @@ export interface ProjectableInboxRow extends WorkingSetRow {
   auq_open?: boolean | null;
   daemon_alive_until?: number | null;
   producing_until?: number | null;
+  child_asking?: boolean | null;
   open_tasks?: unknown[] | null;
   open_tasks_at?: number | null;
 }
@@ -1481,6 +1500,9 @@ export const INBOX_FACT_FIELDS = [
   "auq_open",
   "daemon_alive_until",
   "producing_until",
+  // A child of this row is asking (the asking rollup's child half), stamped
+  // on member rows: the child may sit outside the replica's window (ct-56051).
+  "child_asking",
   // What the agent is doing right now (conversations.activity): stamped at
   // message ingest from the newest tool call, cleared when the turn settles.
   // Overlay borne so a tool call never changes the session list result; the
@@ -1494,6 +1516,37 @@ export const INBOX_FACT_FIELDS = [
 ] as const;
 
 export type InboxFactField = (typeof INBOX_FACT_FIELDS)[number];
+
+// The inbox row's BODY fields: every key a base sessions channel writes
+// besides the facts (enrichInboxSessionRow, stampInboxViewerFields and
+// buildSubagentChildRow in conversations.ts). A row is an allowlist, not the
+// raw conversation: sync-log cargo lands a raw field only when (after its
+// rename) it is one of these, or the next list or byIds push would remove it
+// again. A convex test pins this set to what those three functions write.
+export const INBOX_ROW_FIELDS = [
+  "_id", "session_id", "user_id", "team_id", "status", "is_private",
+  "title", "subtitle", "started_at", "agent_type", "model", "effort", "cc_account", "transcript_revision",
+  "project_path", "git_root", "git_branch", "git_remote_url", "worktree_name", "worktree_branch",
+  "parent_conversation_id", "parent_message_uuid", "spawned_by_conversation_id", "forked_from",
+  "is_subagent", "is_workflow_sub", "is_workflow_primary", "agent_team_name", "agent_name",
+  "handed_off_from_conversation_id", "handed_off_from_details", "handed_off_to_conversation_id", "handed_off_to_details",
+  "implementation_session",
+  "inbox_pinned_at", "is_pinned", "inbox_dismissed_at", "inbox_stashed_at", "inbox_stash_hidden",
+  "inbox_snoozed_until", "inbox_killed_at", "is_deferred", "inbox_rest", "inbox_rest_at", "user_rest",
+  "settle_verdict", "is_favorite",
+  "has_pending", "last_user_message", "pending_api_error", "pending_api_error_at", "pending_api_error_kind", "session_error",
+  "idle_summary", "thread_state", "thread_state_at", "thread_state_msg_count", "thread_state_status",
+  "open_comment_threads", "last_comment_at", "last_comment_author", "last_comment_author_id", "last_comment_excerpt",
+  "active_plan", "active_task", "agent_task_id", "armed_trigger_kind", "loop_state", "pr_status",
+  "workflow_run_id", "workflow_run_name", "workflow_run_status", "workflow_run_started_at",
+  "workflow_run_activity", "workflow_run_agents_done", "workflow_run_agents_total",
+  "anchor_id", "is_anchor", "org_role_id", "standing_role_id", "role", "acting_user_id",
+  "character_avatar", "character_name", "icon", "icon_color", "image_preview_url", "browser_pane_offer",
+  "owner_device_id", "owner_user_id", "author_avatar", "local_mirror", "migration_batch_id",
+  "cloud_placement", "cloud_seed", "cloud_workspace", "cloud_context_too_large",
+  // The viewer stamps (stampInboxViewerFields).
+  "owned_by_me", "author_name", "author_email", "assigned_ping", "owner_name", "owner_email",
+] as const;
 
 // The activity line on a session row: a present tense phrase built by the
 // shared phrase library (render/toolCall activityLine), the raw tool name it

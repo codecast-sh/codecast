@@ -17,13 +17,14 @@ import { formatTimeAgo } from "../../lib/messageNavigator";
 import { groupDecisions, stackDue, type DecisionGroup } from "../../lib/decisionGroups";
 import { DecisionCompactCard } from "./DecisionCompactCard";
 import { decisionHref } from "../../lib/decisionLinks";
+import { isStackedAsk } from "../../lib/decisionQueue";
 import { StackChecklist } from "./StackChecklist";
 
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 const api = _api as any;
 
-const pendingWhere = (d: SessionDecisionItem) => d.status === "pending";
-const pendingSig = (d: SessionDecisionItem) => `${d.created_at}:${d.updated_at ?? 0}:${d.stack_id ?? ""}:${d.holder_key ?? ""}:${d.task_id ?? ""}`;
+const pendingWhere = isStackedAsk;
+const pendingSig = (d: SessionDecisionItem) => `${d.blocking}:${d.created_at}:${d.updated_at ?? 0}:${d.stack_id ?? ""}:${d.holder_key ?? ""}:${d.task_id ?? ""}`;
 const handledSig = (d: HandledDecisionItem) => `${d.status}:${d.resolved_at ?? 0}`;
 
 // The queue (D5): every pending decision the viewer holds, grouped by stack,
