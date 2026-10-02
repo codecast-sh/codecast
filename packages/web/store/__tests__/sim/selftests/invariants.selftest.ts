@@ -41,6 +41,7 @@ import {
 } from "../invariantReads";
 import { coverageGaps, NOT_COMPARED } from "../invariantCoverage";
 import { formatFailure } from "../report";
+import { isConvexId } from "../../../../lib/entityLinks";
 
 // ── Fixture ─────────────────────────────────────────────────────────────────
 
@@ -227,7 +228,7 @@ describe("invariants", () => {
     expect(INVARIANTS.map((i) => i.id)).toEqual([
       "INV-sessions-mine", "INV-followers", "INV-team-inbox", "INV-workspace-rows", "INV-sweep",
       "INV-cursors", "INV-pending-locks", "INV-outbox", "INV-triggers", "INV-pending-sends", "INV-chat",
-      "INV-roles", "INV-ping-pong", "INV-fixpoint",
+      "INV-roles", "INV-ping-pong", "INV-row-shape", "INV-fixpoint",
     ]);
     expect(INVARIANTS.filter((i) => i.always).map((i) => i.id)).toEqual(["INV-workspace-rows", "INV-pending-sends", "INV-chat"]);
   });
@@ -251,12 +252,25 @@ describe("invariants", () => {
     await planted(world, "INV-fixpoint", "task:ghost");
   });
 
-  // Red: the base list stamps owned_by_me on every row, byIds only on foreign
-  // ones, so a window mounting both flaps the row on every catch-up.
-  test.failing("INV-fixpoint: the base list and byIds write one row the same way (red: ct-56011)", async () => {
+  // The base list and byIds stamp the viewer fields through one helper
+  // (stampInboxViewerFields), so a window mounting both never flaps a row.
+  test("INV-fixpoint: the base list and byIds write one row the same way", async () => {
     const world = fixture(20);
     await world.host("ada", ADA, undefined, { listFeeder: true });
     await clean(world, "INV-fixpoint");
+  });
+
+  // ct-56050: sync-log cargo once landed every raw conversation column on the
+  // row; the next list or byIds push removed it again.
+  test("INV-row-shape: a raw conversation field carried onto a sessions row is outside the row", async () => {
+    const world = fixture(21);
+    const ada = await world.host("ada", ADA);
+    await clean(world, "INV-row-shape");
+    const id = Object.keys(ada.store.getState().sessions).find(isConvexId)!;
+    expect(id).toBeDefined();
+    await plant(ada, (s) => ({ sessions: { ...s.sessions, [id]: { ...s.sessions[id], title_gen_scheduled_at: T0, persistent: true } } }));
+    const text = await planted(world, "INV-row-shape", world.labels.label(id));
+    expect(text).toContain("persistent, title_gen_scheduled_at");
   });
 
   test("INV-sessions-mine: a replica missing a placed row disagrees with the canonical projection", async () => {
@@ -468,7 +482,7 @@ describe("invariants", () => {
     expect((await checkInvariants(world, { mode: "always" })).map((f) => report(world, f))).toEqual([]);
   }, 120_000);
 
-  test.failing("a settled SimWorld passes the fixpoint pass (red: ct-56011)", async () => {
+  test("a settled SimWorld passes the fixpoint pass", async () => {
     await clean(await settledWorld(), "INV-fixpoint");
   }, 120_000);
 

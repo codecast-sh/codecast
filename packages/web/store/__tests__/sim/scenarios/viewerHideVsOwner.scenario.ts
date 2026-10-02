@@ -5,16 +5,15 @@
 // triage stamps, ada's windows (host and follower) still list it, and bo's
 // team slot leaves it out (INV-team-inbox checks the slot at every settle).
 //
-// Red on ct-56045 (expect.shows, interleave seed 239423): when bo's team push
-// lands before bo's inbox floor starts (16 of the first 20 interleave seeds,
-// 239423 first), the floor's warm-cache probe re-reads ada's row through
-// byIds, which serves only rows bo runs or owns, and prunes it with a durable
-// exclude, so bo's team board never shows it. Known: INV-fixpoint (ct-56011)
-// is left out, or every run would stop there first.
+// Guards ct-56045: when bo's team push lands before bo's inbox floor starts
+// (16 of the first 20 interleave seeds, 239423 first), the floor's warm-cache
+// probe must leave ada's row alone. byIds serves only rows bo runs or owns, so
+// probing it would prune it with a durable exclude and empty bo's team board;
+// the probe asks only for ids byIds could return (byIdsCouldReturn).
 
 import { scenario } from "../dsl";
 
-scenario({ name: "viewerHideVsOwner", red: { task: "ct-56045", invariant: "expect.shows", modes: ["interleave"], seeds: [239423] }, known: { "INV-fixpoint": "ct-56011" } }, async (w) => {
+scenario({ name: "viewerHideVsOwner" }, async (w) => {
   w.team("acme");
   w.user("ada", ["acme"]).user("bo", ["acme"]);
   const s = w.session("ada", "s", { agentStatus: "working" });

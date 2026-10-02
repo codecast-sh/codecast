@@ -209,9 +209,8 @@ describe("dsl", () => {
     }
   }, SLOW);
 
-  // A window's point checks. INV-fixpoint is left out: every settled window
-  // fails it today on the owned_by_me flap tracked in ct-56011.
-  const WINDOW = { skipInvariants: { "INV-fixpoint": "ct-56011" }, env: {} };
+  // A window's point checks, with every invariant on.
+  const WINDOW = { env: {} };
 
   test("window point checks: shows, hides, inspect, and a failing check's report", async () => {
     const said = spyOn(console, "error").mockImplementation(() => {});
