@@ -1,3 +1,5 @@
+import { createContext, useContext } from "react";
+
 // Theme-aware label palette. Text uses a dark shade (-700) in light mode and a
 // light shade (-400) in dark mode so labels stay legible on either surface; the
 // dot is a saturated -500 that reads on both. Tailwind's JIT only emits classes
@@ -53,13 +55,36 @@ function fnv1a(str: string): number {
 // Hashing alone can't keep a handful of names apart on a small palette (the
 // birthday problem — 6 names on 8 slots collide 92% of the time), so names
 // claim slots first-come: a new name takes its hash slot, or probes to the
-// next free one if a different name already holds it. Names keep their color
-// for the life of the page; once every slot is claimed, later names fall back
-// to the raw hash slot. Server renders never see per-user names, so the
-// registry is browser-only to keep server output pure.
+// next free one if a different name already holds it. A claim is permanent:
+// the registry is persisted to localStorage, so a name keeps its color across
+// reloads and routes instead of depending on which names rendered before it.
+// Once every slot is claimed, later names fall back to the raw hash slot.
+// Server renders never see per-user names, so the registry is browser-only to
+// keep server output pure.
+const STORAGE_KEY = `codecast:label-color-slots:${HASH_PALETTE.length}`;
+const MAX_ASSIGNED = 512;
 const assignedSlot = new Map<string, number>();
 const takenSlots = new Set<number>();
 const canRegister = typeof window !== "undefined";
+
+function loadAssigned() {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || "{}") as Record<string, unknown>;
+    for (const [name, slot] of Object.entries(saved)) {
+      if (typeof slot !== "number" || slot < 0 || slot >= HASH_PALETTE.length) continue;
+      assignedSlot.set(name, slot);
+      takenSlots.add(slot);
+    }
+  } catch {}
+}
+
+function saveAssigned() {
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(Object.fromEntries(assignedSlot)));
+  } catch {}
+}
+
+if (canRegister) loadAssigned();
 
 function slotFor(lower: string): number {
   const n = HASH_PALETTE.length;
@@ -69,17 +94,40 @@ function slotFor(lower: string): number {
   if (existing !== undefined) return existing;
   let slot = natural;
   while (takenSlots.has(slot) && takenSlots.size < n) slot = (slot + 1) % n;
-  if (assignedSlot.size < 512) {
+  if (assignedSlot.size < MAX_ASSIGNED) {
     assignedSlot.set(lower, slot);
     takenSlots.add(slot);
+    saveAssigned();
   }
   return slot;
 }
 
-export function getLabelColor(name: string) {
+export type LabelColor = (typeof HASH_PALETTE)[number];
+
+export function getLabelColor(name: string): LabelColor {
   const lower = name.toLowerCase();
   if (LABEL_COLORS[lower]) return LABEL_COLORS[lower];
   return HASH_PALETTE[slotFor(lower)];
+}
+
+/**
+ * A name's colour without claiming a slot: its earlier claim if it has one,
+ * else its natural hash slot. Reads the registry, never writes it or
+ * localStorage, so a surface that renders names which are not the viewer's
+ * (the marketing hero's fixtures) cannot shift the colours of their own.
+ */
+export function peekLabelColor(name: string): LabelColor {
+  const lower = name.toLowerCase();
+  if (LABEL_COLORS[lower]) return LABEL_COLORS[lower];
+  return HASH_PALETTE[assignedSlot.get(lower) ?? fnv1a(lower) % HASH_PALETTE.length];
+}
+
+/** True inside a surface whose label names must never claim colour slots (the marketing hero sets it, app/(marketing)/heroFly/sandbox.tsx). */
+export const LabelColorsReadOnly = createContext(false);
+
+/** The colour lookup for the surface a component renders in: `getLabelColor`, or `peekLabelColor` under LabelColorsReadOnly. */
+export function useLabelColor(): (name: string) => LabelColor {
+  return useContext(LabelColorsReadOnly) ? peekLabelColor : getLabelColor;
 }
 
 export const DEFAULT_LABELS = Object.keys(LABEL_COLORS);

@@ -28,7 +28,7 @@ export function projectColorClass(color?: string): string {
  * shared prefix ("Codecast: …") truncates to the same few characters, so the
  * swatch is doing the telling-apart, not the text.
  */
-export function projectDotClass(project: { color?: string; title?: string }): string {
+export function projectDotClass(project: { color?: string; title?: string }, colorOf: typeof getLabelColor = getLabelColor): string {
   if (project.color) return projectColorClass(project.color);
-  return getLabelColor(project.title || "").dot;
+  return colorOf(project.title || "").dot;
 }
