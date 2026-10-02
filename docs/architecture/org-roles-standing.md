@@ -74,7 +74,7 @@ docs.doc_type        + "charter" | "brief"   (schema, CLI DOC_TYPE_ICONS, Create
 A role wakes through triggers and messages and nothing else (org-staffing.md
 S25). Its scheduled wake is one recurring trigger on its standing session
 (`lib/orgRoutine.ts`: the daily check for a role, the weekly company review
-for the chief of staff), armed at provision and refreshed to the current
+for the head of people), armed at provision and refreshed to the current
 prompt through `orgRoles.ensureRoleRoutine`; the person sees it on the
 Triggers page and the role page's Triggers tab, and role pause and resume
 pause and resume every trigger on the seat. Everything that asks the role for
