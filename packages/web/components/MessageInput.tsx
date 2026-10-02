@@ -1508,9 +1508,15 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       cancelPendingDraft();
       setMessage("");
       messageRef.current = "";
-      // In-flight uploads keep their blobs alive in pendingImageUploads; the
-      // settled ones are done with theirs.
-      clearAllImages(true);
+      // In-flight uploads go to the receiver with their blob and registry
+      // entry (it releases them once settled); the settled ones are done with
+      // theirs.
+      pastedImagesRef.current.forEach(img => {
+        if (img.uploading) return;
+        pendingImageUploads.delete(img.previewUrl);
+        URL.revokeObjectURL(img.previewUrl);
+      });
+      clearAllImages(false);
       useInboxStore.getState().clearDraftFinal(conversationId);
       sendingRef.current = false;
       await onGateSend(text, gateImages);

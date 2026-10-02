@@ -7,6 +7,7 @@
 import { browserPathLabel, isBrowserRoutePath } from "./browserPane";
 import { isConvexId } from "@codecast/shared/entities";
 import { conversationIdFromPath, directConversationId, shareTokenInPath } from "./desktopHandoff";
+import { changesDayLabel } from "./changesDay";
 
 const REPO_SECTION_LABEL: Record<string, string> = {
   commits: "Commits",
@@ -52,6 +53,15 @@ export function pathLabel(path: string): string {
       const op = new URLSearchParams(path.split("?")[1] ?? "").get("proposal");
       if (op && /^op-\d+$/i.test(op)) return `Proposal ${op.toLowerCase()}`;
     } catch {}
+  }
+  // A Changes tab names the edition it shows ("Changes, Fri 2 Oct"); with no
+  // day in the query it is today's, and the bare name says so.
+  if (clean === "/changes") {
+    try {
+      const day = changesDayLabel(new URLSearchParams(path.split("#")[0].split("?")[1] ?? "").get("d"));
+      if (day) return `Changes, ${day}`;
+    } catch {}
+    return "Changes";
   }
   // A Files tab is titled by the open file, not the encoded query string.
   // /vault is the permanent pre-rename alias, so both prefixes title the same.

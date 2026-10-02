@@ -5,8 +5,9 @@
 // whether a recording is already running, and the microphone itself. The cards
 // live in components/calls/MeetingOfferToast; this decides which one appears.
 import { toast } from "sonner";
+import type { ReactNode } from "react";
 import {
-  MeetingOfferCard,
+  MeetingOfferFace,
   MeetingRecordFailed,
   MeetingRecordingNote,
 } from "../../components/calls/MeetingOfferToast";
@@ -19,22 +20,32 @@ function offerToastId(app: string) {
   return `meeting-offer:${app}`;
 }
 
+/** The faces are dark glass in every theme, hugging the toaster's right edge
+ *  the way the desktop window hugs the screen corner. */
+function glass(face: ReactNode) {
+  return <div className="dark flex w-full justify-end">{face}</div>;
+}
+
+/** The offer times itself out (MeetingOfferFace's drain, paused on hover and
+ *  stopped by any interaction), so sonner's own timer stays out of it. */
 export function showMeetingOffer(offer: MeetingOffer) {
-  toast.custom((id) => <MeetingOfferCard toastId={id} offer={offer} />, {
-    id: offerToastId(offer.app),
+  const id = offerToastId(offer.app);
+  const close = () => toast.dismiss(id);
+  toast.custom(() => glass(<MeetingOfferFace offer={offer} onClose={close} onStarted={close} />), {
+    id,
     duration: Infinity,
   });
 }
 
 export function showAutoRecordNote(offer: MeetingOffer) {
-  toast.custom(() => <MeetingRecordingNote offer={offer} />, {
+  toast.custom(() => glass(<MeetingRecordingNote offer={offer} />), {
     id: `meeting-auto:${offer.app}`,
-    duration: 8000,
+    duration: 5000,
   });
 }
 
 export function showRecordFailed(offer: MeetingOffer, message: string) {
-  toast.custom(() => <MeetingRecordFailed offer={offer} message={message} />, {
+  toast.custom(() => glass(<MeetingRecordFailed offer={offer} message={message} />), {
     id: `meeting-failed:${offer.app}`,
     duration: 10000,
   });

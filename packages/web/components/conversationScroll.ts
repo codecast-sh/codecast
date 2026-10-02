@@ -83,6 +83,12 @@ export interface LoadOlderInput {
   isLoadingNewer: boolean;
   /** A pagination/jump cooldown is active; auto-load must stand down. */
   cooldownActive: boolean;
+  /**
+   * The loaded window renders no taller than the viewport, so the list cannot
+   * scroll and no scroll-up can ever ask for what sits above it (a tail of
+   * tool calls folds to a single row in condensed and compact).
+   */
+  underfilled: boolean;
 }
 
 /**
@@ -99,6 +105,9 @@ export interface LoadOlderInput {
  */
 export function shouldLoadOlder(i: LoadOlderInput): boolean {
   if (!i.hasMoreAbove || i.isLoadingOlder || i.isLoadingNewer || i.cooldownActive) return false;
+  // Nothing on screen can move while the list cannot scroll, and loading stops
+  // once the content overflows, so filling the viewport needs no intent.
+  if (i.underfilled) return true;
   if (!i.userScrolled) return false;
   return i.nearTop;
 }

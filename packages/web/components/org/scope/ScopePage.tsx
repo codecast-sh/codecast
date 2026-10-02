@@ -218,7 +218,7 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
   // What the seat offers next sits above its composer; only the Head of
   // People's thread has one (RoleOffer renders nothing anywhere else).
   const offer = useMemo(() => (standingId ? <RoleOffer conversationId={standingId} /> : null), [standingId]);
-  const seat = useSeat({ conversationId: standingId, speaker, lead, offer, canTalk: canEditBrief, hideDiff: panelOpen, onSessionView });
+  const seat = useSeat({ conversationId: standingId, speaker, ask: role && isHeadOfPeopleRole(role) ? "about the org, a role or a goal" : undefined, lead, offer, canTalk: canEditBrief, hideDiff: panelOpen, onSessionView });
   const pinned = useInboxStore((st) => role ? isHeaderPinned(st, "role", role._id) : false);
 
   // -------- not found / loading
@@ -414,6 +414,9 @@ function retireSentence(role: OrgRole, parent: string): string {
  *  who it reports to. */
 export function ScopeLead({ role }: { role: OrgRole | null }) {
   const { names, whole } = areaOf(role);
+  if (role && isHeadOfPeopleRole(role)) {
+    return <SeatLead data-scope-lead>I keep the org true to how the work runs: who owns what, who reports to whom, and the goals it all serves. Ask me about the structure, a role or a goal.</SeatLead>;
+  }
   return (
     <SeatLead data-scope-lead>
       {names.length > 0 ? `I look after ${names.join(", ")}.` : whole ? "I look after the whole workspace." : "I have no area of my own: I run my check and answer what I am asked."} Ask me for anything here: I answer, or start a session for the work and tell you which.

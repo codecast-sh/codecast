@@ -30,7 +30,7 @@ export type { FaceState } from "./faceState";
 // shared by React (hooks/useFaceRow) and non React readers (engine callbacks,
 // the desktop bridge). It is memoized on a signature of its inputs, so a store
 // push that changed nothing a face draws hands back the same row object.
-import { parseRoomKey } from "@codecast/shared/contracts";
+import { CALL_HEARTBEAT_MS, CALL_MEMBER_STALE_MS, parseRoomKey } from "@codecast/shared/contracts";
 import { JOIN_TITLE_MS, getJoinAnnouncement, subscribeJoinAnnouncement, type JoinAnnouncement } from "../calls/joinAnnounce";
 import { getCallTiles, subscribeCallTiles } from "../calls/callManager";
 import {
@@ -140,7 +140,10 @@ export type FaceCard =
    *  few seconds. Same controls as `live`, so nothing disappears under the notice. */
   | { kind: "joined-notice"; roomKey: string; text: string; end: true; mute: boolean; muted: boolean; camera: boolean; cameraOn: boolean }
   | { kind: "ring-in"; roomKey: string; from: string; name: string; answer: true; decline: true }
-  | { kind: "ring-out"; roomKey: string; to: string; name: string; cancel: true; status: string };
+  /** `hangUp`: the ring goes out from a room the viewer sits in alone, so
+   *  Cancel ends the call with it rather than leaving them on a line with
+   *  nobody. */
+  | { kind: "ring-out"; roomKey: string; to: string; name: string; cancel: true; status: string; hangUp: boolean };
 
 export type FaceRow = {
   entries: FaceEntry[];
@@ -217,6 +220,8 @@ export type FaceRowInput = {
     /** The room's guests in the media, with their microphones; null when the
      *  window holding the media is too old to say. */
     guests?: { identity: string; muted: boolean }[] | null;
+    /** The room this window last hung up on (the call slice's `left`). */
+    left?: { roomKey: string; at: number } | null;
   };
   followLeaderId: string | null;
   rings: {
@@ -268,6 +273,35 @@ function seatsIn(input: FaceRowInput, roomKey: string | null): FaceSeat[] {
  * decides against the other two: a room the walkie holds is engaged even when
  * the call plane went idle under it.
  */
+/** A hang up holds for as long as the server could still list our seat: its
+ *  lease, and the sweep that clears it, when the leave itself never lands. */
+const LEFT_HOLD_MS = CALL_MEMBER_STALE_MS + CALL_HEARTBEAT_MS;
+
+/** The input as of the press: the room this window just hung up on holds no
+ *  seat of ours and no ring of ours, whatever the next push still says. The
+ *  server drops both on the leave; this reads them dropped from the press. */
+function withoutLeftRoom(input: FaceRowInput): FaceRowInput {
+  const left = input.call.left;
+  const me = input.viewer?.id;
+  if (!left || !me || input.now - left.at >= LEFT_HOLD_MS) return input;
+  const key = left.roomKey;
+  // Back in it (a rejoin, a fresh ring to the same person): the press is over.
+  if (input.walkie.liveRoom?.key === key || (input.call.phase !== "idle" && input.call.roomKey === key)) return input;
+  const seated = (seats: FaceSeat[]) => seats.some((m) => idOf(m.user_id) === me);
+  const unseat = (seats: FaceSeat[]) => seats.filter((m) => idOf(m.user_id) !== me);
+  const stale =
+    input.rings.outgoing.some((r) => r.room_key === key) ||
+    seated(input.occupancy[key] ?? []) ||
+    input.liveRooms.some((r) => r.room_key === key && seated(r.members));
+  if (!stale) return input;
+  return {
+    ...input,
+    occupancy: input.occupancy[key] ? { ...input.occupancy, [key]: unseat(input.occupancy[key]) } : input.occupancy,
+    liveRooms: input.liveRooms.map((r) => (r.room_key === key ? { ...r, members: unseat(r.members) } : r)),
+    rings: { ...input.rings, outgoing: input.rings.outgoing.filter((r) => r.room_key !== key) },
+  };
+}
+
 function engagedRoomOf(input: FaceRowInput): string | null {
   const walkieRoom = input.walkie.liveRoom?.key ?? null;
   if (walkieRoom) return walkieRoom;
@@ -426,7 +460,7 @@ function cardOf(
   // ring goes out, so until somebody else is seated the card is the ring out
   // (ringing, declined, no answer), not a live call with nobody on it.
   const ringOutHere = other ? undefined : input.rings.outgoing.find((r) => r.room_key === room && r.status !== "accepted");
-  if (room && mode === "call" && ringOutHere) return ringOutCard(ringOutHere);
+  if (room && mode === "call" && ringOutHere) return ringOutCard(ringOutHere, true);
   if (room && mode) {
     const end = true as const;
     const mute = mode === "call";
@@ -466,11 +500,11 @@ function cardOf(
   }
   const ringOut =
     input.rings.outgoing.find((r) => (r.status ?? "ringing") === "ringing") ?? input.rings.outgoing.find((r) => r.status !== "accepted");
-  if (ringOut) return ringOutCard(ringOut);
+  if (ringOut) return ringOutCard(ringOut, false);
   return { kind: "none" };
 }
 
-function ringOutCard(r: FaceRowInput["rings"]["outgoing"][number]): FaceCard {
+function ringOutCard(r: FaceRowInput["rings"]["outgoing"][number], hangUp: boolean): FaceCard {
   return {
     kind: "ring-out",
     roomKey: r.room_key,
@@ -478,6 +512,7 @@ function ringOutCard(r: FaceRowInput["rings"]["outgoing"][number]): FaceCard {
     name: r.to_name ?? "Teammate",
     cancel: true,
     status: r.status ?? "ringing",
+    hangUp,
   };
 }
 
@@ -485,7 +520,8 @@ function ringOutCard(r: FaceRowInput["rings"]["outgoing"][number]): FaceCard {
  * The row. Pure: everything it reads is in `input`, and `prev` is the row it
  * last produced (or null), which is what lets a state hold through a seam.
  */
-export function deriveFaceRow(input: FaceRowInput, prev: FaceRow | null): FaceRow {
+export function deriveFaceRow(raw: FaceRowInput, prev: FaceRow | null): FaceRow {
+  const input = withoutLeftRoom(raw);
   const viewer = input.viewer;
   if (!viewer?.id) return EMPTY_ROW;
   const meId = viewer.id;
@@ -764,7 +800,7 @@ export function faceRowInputSig(
     occupancySig(st.callOccupancy),
     liveRoomsSig(st.liveRooms),
     walkieRowSig(walkie),
-    `${call.phase}|${call.roomKey ?? ""}|${call.muted ? 1 : 0}|${call.micDenied ? 1 : 0}|${call.camera ? 1 : 0}|${call.speaking.join(",")}|${call.cameras.join(",")}|${(call.guests ?? []).map((g) => `${g.identity}:${g.muted ? 1 : 0}`).join(",")}`,
+    `${call.phase}|${call.roomKey ?? ""}|${call.muted ? 1 : 0}|${call.micDenied ? 1 : 0}|${call.camera ? 1 : 0}|${call.speaking.join(",")}|${call.cameras.join(",")}|${(call.guests ?? []).map((g) => `${g.identity}:${g.muted ? 1 : 0}`).join(",")}|${st.call?.left ? `${st.call.left.roomKey}@${st.call.left.at}` : ""}`,
     st.followLeaderId ?? "",
     ringsSig(st.myCalls),
     announcement ? `${announcement.roomKey}|${announcement.at}` : "",
@@ -811,6 +847,7 @@ export function faceRowInputFrom(
       speaking: call.speaking,
       cameras: call.cameras,
       guests: call.guests,
+      left: st.call?.left ?? null,
     },
     followLeaderId: st.followLeaderId ?? null,
     rings: { incoming: st.myCalls?.incoming ?? [], outgoing: st.myCalls?.outgoing ?? [] },

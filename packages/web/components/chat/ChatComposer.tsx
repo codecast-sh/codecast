@@ -8,7 +8,6 @@ import { ComposerAttachButton } from "./ComposerAttachButton";
 import { KeyCap, MenuKeyCaps } from "../KeyboardShortcutsHelp";
 import { useTypingMembers, useTypingReporter } from "../../hooks/useChatTyping";
 import { TypingIndicator } from "./TypingIndicator";
-import { settleComposerAttachments } from "../../lib/draftImages";
 import { slackComposerDelivery } from "../../lib/slackDelivery";
 import { useSlackConnect } from "../../hooks/useSlackConnect";
 import { useTrackedStore } from "../../store/inboxStore";
@@ -29,10 +28,10 @@ import "./chat.css";
 // already know.
 //
 // Images ride the same machinery: paste/drop/pick lands in MessageInput's
-// thumbnail strip and its upload pipeline; the gate hands the settled storage
-// ids over as chat attachments. A send with uploads still in flight awaits
-// their promises (module-level, so a remount can't lose them) and dispatches
-// the moment they settle — the box itself already cleared.
+// thumbnail strip and its upload pipeline, and the gate hands them over as chat
+// attachments. A send with uploads still in flight goes into the conversation
+// at once with their blob previews; the store delivers it the moment they
+// settle (sendChatMessage).
 //
 // The draft key is the composer's identity (lib/chatDraftKey).
 //
@@ -124,9 +123,11 @@ export const ChatComposer = memo(function ChatComposer({
         onGateSend={async (text: string, images) => {
           typing.stop();
           const content = text.trim();
-          const attachments: ChatAttachment[] = await settleComposerAttachments(images);
-          // Every upload failed and nothing was typed — uploadImage already
-          // toasted each failure; there is nothing real to send.
+          const attachments: ChatAttachment[] = (images ?? []).map((img) =>
+            img.storageId
+              ? { storage_id: img.storageId, mime: img.mime }
+              : { storage_id: "", mime: img.mime, preview_url: img.previewUrl },
+          );
           if (!content && attachments.length === 0) return;
           const sendOpts: { broadcast?: boolean; syncLocalOnly?: boolean } = {};
           if (offerBroadcast && broadcast) sendOpts.broadcast = true;

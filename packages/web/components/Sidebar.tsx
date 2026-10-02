@@ -600,6 +600,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   // The org feature is per team, default off: with it off the Org row and
   // the workspace agent row do not exist, like chat.
   const orgOn = useWorkspaceFeature("org");
+  const changesOn = useTeamFeature("changes");
   const chatOn = useTeamFeature("chat");
   const callsOn = useCallsAvailable();
   const isTasks = pathname === "/tasks" || pathname?.startsWith("/tasks/");
@@ -1024,6 +1025,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             line: pathname === "/line",
             triggers: isTriggers,
             org: !!isOrg,
+            changes: pathname === "/changes",
             rootAgent: isRootAgent,
             windows: !!isWindows,
           }}
@@ -1031,6 +1033,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
           tasks={{ items: taskViewItems, expanded: viewSectionOverride.tasks ?? isTasks, onToggle: () => setViewSectionOverride((o) => ({ ...o, tasks: !(o.tasks ?? isTasks) })) }}
           docs={{ items: docViewItems, expanded: viewSectionOverride.docs ?? (isDocs || isPlans), onToggle: () => setViewSectionOverride((o) => ({ ...o, docs: !(o.docs ?? (isDocs || isPlans)) })) }}
           orgOn={orgOn}
+          changesOn={changesOn}
           agent={{
             label: rootAgent ? agentName(rootAgent) : "Workspace agent",
             title: rootAgent ? `${agentName(rootAgent)}, the workspace's agent` : "Set up the workspace's agent",

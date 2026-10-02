@@ -31,7 +31,6 @@ import { fmtClock } from '@codecast/web/components/calls/speakers';
 import { Text as RNText } from '@/components/Themed';
 import { Theme, Spacing, FontSize, BorderRadius, CHROME_FONT_CAP, themedStyles, useTheme } from '@/constants/Theme';
 import {
-  dismissRecorderError,
   getRecorderSnapshot,
   startRecording,
   stopRecording,
@@ -88,16 +87,14 @@ export default function RecordScreen() {
 
   const onPress = useCallback(async () => {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    if (rec.phase === 'error') {
-      dismissRecorderError();
-      return;
-    }
     if (rec.phase === 'recording') {
       const id = await stopRecording();
       if (id) router.push({ pathname: '/recording/[id]', params: { id } } as never);
       return;
     }
-    if (rec.phase === 'idle') await startRecording(convex);
+    // The error card says "tap to try again", so a tap from error is a fresh
+    // attempt, not a dismissal that needs a second tap.
+    if (rec.phase === 'idle' || rec.phase === 'error') await startRecording(convex);
   }, [rec.phase, convex, router]);
 
   const busy = rec.phase === 'starting' || rec.phase === 'finishing';

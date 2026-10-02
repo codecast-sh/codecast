@@ -9,6 +9,7 @@ import { RepositoryPaletteItems } from "./repo/RepositoryPaletteItems";
 import { getPaletteSessionCommands } from "../lib/paletteSessionCommands";
 import { withInboxView } from "../lib/inboxViewHistory";
 import { useTeamFeature, useCallsAvailable, useWorkspaceFeature, workspaceHasFeatureNow } from "../lib/teamFeatures";
+import { localDay } from "../lib/changesDay";
 import type { TeamFeatureKey } from "@codecast/shared/contracts";
 import { useState, useCallback, useMemo, useRef, memo, lazy, Suspense } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -85,7 +86,10 @@ const PaletteMessageInput = lazy(() =>
   import("./MessageInput").then((m) => ({ default: m.MessageInput })),
 );
 import { forkSessionAsAgent, switchSessionAgent } from "../lib/sessionAgentActions";
-import { paletteActions, paletteObjectPath, paletteDigitIndex, paletteActionForKey, paletteItemScore, type PaletteTargetType } from "../lib/paletteActions";
+import { paletteActions, paletteObjectPath, paletteDigitIndex, paletteActionForKey, paletteItemScore, type PaletteTargetType, type PalettePerson } from "../lib/paletteActions";
+import { useOpenDm } from "../hooks/useChatSync";
+import { useLiveRoomOfMember } from "../hooks/useLiveRooms";
+import { useMemberHuddle } from "./presence/useMemberHuddle";
 import { useWorkspaceCollection } from "../hooks/useWorkspaceCollection";
 import { captureException } from "@sentry/react";
 import { isInboxRoute } from "../lib/inboxRouting";
@@ -94,7 +98,7 @@ import type { WorkbenchSnapshot } from "../store/workbench";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { getLabelColor, DEFAULT_LABELS } from "../lib/labelColors";
 import { toast } from "sonner";
-import { undoableArchiveDoc, undoableHideSession, undoableDeferSession, undoableSetSessionRest } from "../store/undoActions";
+import { undoableArchiveDoc, undoableHideSession, undoableDeferSession, animatedSetSessionRest } from "../store/undoActions";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
 import { STATUS_OPTIONS, PRIORITY_OPTIONS, PLAN_STATUS_OPTIONS, DOC_TYPE_OPTIONS } from "./menus/entityOptions";
 import { statusByKey, statusEntityOptions, statusWriteFields, taskStatusKey, useTeamTaskStatusList } from "../lib/taskStatuses";
@@ -152,6 +156,7 @@ import {
   Zap,
   CornerDownRight,
   Headphones,
+  ChevronRight,
   PictureInPicture2,
   Users,
   Sparkles,
@@ -216,7 +221,8 @@ const AGENT_COLORS: Record<string, string> = Object.fromEntries(
 // they'd otherwise pad the empty-palette view that lives or dies by scan speed.
 const NAV_PAGES: ReadonlyArray<{
   label: string;
-  path: string;
+  /** A function when the address depends on when the row is picked (yesterday's edition). */
+  path: string | (() => string);
   icon: string;
   keywords: string;
   secondary?: boolean;
@@ -241,6 +247,9 @@ const NAV_PAGES: ReadonlyArray<{
   { label: "Team Directory", path: "/team", icon: "grid", keywords: "members people profiles directory roster" },
   { label: "Initiatives", path: "/initiatives", icon: "grid", keywords: "initiative goals objectives company strategy roadmap health progress owner" },
   { label: "Org", path: "/org", icon: "grid", keywords: "organization org chart roles reporting structure hierarchy people sessions tree reparent", feature: "org" },
+  { label: "Changes", path: "/changes", icon: "newspaper", keywords: "open changes edition shipped released landed today commits stories what changed changelog", feature: "changes" },
+  { label: "Changes: yesterday", path: () => `/changes?d=${localDay(-1)}`, icon: "newspaper", keywords: "edition shipped landed commits stories what changed", feature: "changes", secondary: true },
+  { label: "Changes: risks only", path: "/changes?risk=1", icon: "newspaper", keywords: "edition risky risk flags deploy shipped what changed", feature: "changes", secondary: true },
   { label: "Search", path: "/search", icon: "search", keywords: "find query" },
   { label: "Settings", path: "/settings", icon: "settings", keywords: "preferences config profile general" },
   { label: "Workflows", path: "/routines", icon: "workflow", keywords: "orchestration runs graph dot gates routines", secondary: true },
@@ -302,66 +311,88 @@ function getShortPath(p: string): string {
 }
 
 // ─── Action submenu component (Linear-style) ───────────────────
+/** A teammate row as a palette target. `session` is the row their follow
+ *  opens: a fetched one when the caller has it, else the inbox row or a stub. */
+function palettePerson(row: TeammateWhereabouts, following: boolean, session?: { _id: string; title?: string } | null): PalettePerson {
+  const id = row.conversationId;
+  return {
+    _id: row.id,
+    name: row.name,
+    username: row.member?.username,
+    member: row.member,
+    online: row.online,
+    following,
+    session: id ? (session ?? useInboxStore.getState().sessions[id] ?? { _id: id, title: row.title }) : null,
+  };
+}
+
 /**
- * One palette row for where a teammate is. In a session: "Go where Ann is"
- * over the session's title, and selecting it opens that session through the
- * palette's own session path (navigateToSession). A session outside this
- * inbox is fetched as an inbox row (useMissingSessionRow) so the line names
- * it and the row the palette injects carries its real title and author,
- * not a blank stub. Around but in no session: a muted row that cannot be
- * selected, so the name still answers a search without offering a jump.
+ * One palette row per teammate: their name, and where they are under it.
+ * Selecting it drills into the person (the palette's own drilled view), where
+ * following, messaging, a huddle and their profile live as actions. A session
+ * outside this inbox is fetched as an inbox row (useMissingSessionRow) so the
+ * line names it and the follow opens a row with its real title and author,
+ * not a blank stub.
  */
 export function TeammateItem({
   row,
   className,
-  onGo,
+  onOpen,
   following = false,
 }: {
   row: TeammateWhereabouts;
   className: string;
-  /** Start (or stop) following the teammate; the session they have open, if
-   *  any, is handed along so the follow starts where they are at once. */
-  onGo: (row: TeammateWhereabouts, conv: { _id: string; title?: string } | null) => void;
-  /** This window already follows them: the row offers to stop. */
+  onOpen: (person: PalettePerson) => void;
+  /** This window already follows them. */
   following?: boolean;
 }) {
   const id = row.conversationId;
   const fetched = useMissingSessionRow(id && !row.inStore ? id : null);
-  if (!id) {
-    // Around but in no session: still followable (the mirror covers every
-    // route, not only sessions), so the row reads like the others.
-    return (
-      <CommandPrimitive.Item
-        value={`__teammate__ follow ${row.name}|||${row.id}`}
-        onSelect={() => onGo(row, null)}
-        className={className}
-      >
-        <MemberFace member={row.member} size={16} title="" showHuddle={false} />
-        <div className="flex-1 min-w-0">
-          <div className="truncate">{following ? `Stop following ${row.name}` : `Follow ${row.name}`}</div>
-          <div className="truncate text-[11px] text-sol-text-dim mt-0.5">around, not in a session</div>
-        </div>
-      </CommandPrimitive.Item>
-    );
-  }
   const title = row.title ?? fetched?.title;
+  const where = !id
+    ? row.online ? "around, not in a session" : "offline"
+    : title ? cleanTitle(title) : fetched === null ? "a session that no longer opens" : "a session";
   return (
     <CommandPrimitive.Item
-      value={`__teammate__ follow ${row.name}|||${row.id}`}
-      data-palette-type="session" data-palette-id={id} data-palette-title={title}
-      onSelect={() => onGo(row, fetched ?? useInboxStore.getState().sessions[id] ?? { _id: id })}
+      value={`__teammate__ ${row.name}|||${row.id}`}
+      data-palette-type="person" data-palette-id={row.id} data-palette-title={row.name}
+      onSelect={() => onOpen(palettePerson(row, following, fetched))}
       className={className}
     >
       <MemberFace member={row.member} size={16} title="" showHuddle={false} />
       <div className="flex-1 min-w-0">
-        <div className="truncate">{following ? `Stop following ${row.name}` : `Follow ${row.name}`}</div>
-        <div className="truncate text-[11px] text-sol-text-dim mt-0.5">
-          {title ? cleanTitle(title) : fetched === null ? "a session that no longer opens" : "a session"}
-        </div>
+        <div className="truncate">{row.name}</div>
+        <div className="truncate text-[11px] text-sol-text-dim mt-0.5">{following ? `following · ${where}` : where}</div>
       </div>
       {row.since !== undefined && Date.now() - row.since >= 60_000 && (
         <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">for {compactDuration(Date.now() - row.since)}</span>
       )}
+      <ChevronRight className="w-3.5 h-3.5 flex-shrink-0 text-sol-text-dim" />
+    </CommandPrimitive.Item>
+  );
+}
+
+/** The huddle verb on a drilled teammate. Its word (Huddle, Join huddle,
+ *  Knock, Add to call) is live call state from the face card's own hook, so
+ *  it renders here, mounted only while the palette is on a person. */
+function PersonHuddleItem({ person, className, onDone }: { person: PalettePerson; className: string; onDone: () => void }) {
+  const callsOn = useCallsAvailable();
+  const viewerId = useInboxStore((s) => String(s.currentUser?._id ?? ""));
+  const member = useInboxStore((s) => s.teamMembers.find((m: any) => String(m?._id) === person._id) ?? person.member);
+  const room = useLiveRoomOfMember(person._id);
+  const huddle = useMemberHuddle(member, viewerId, room, person.name);
+  if (!callsOn || !person.online) return null;
+  return (
+    <CommandPrimitive.Item
+      data-palette-action="person_huddle"
+      value={`action ${huddle.label}|||person_huddle`}
+      disabled={huddle.waiting}
+      title={huddle.title}
+      onSelect={() => { huddle.go(); onDone(); }}
+      className={className}
+    >
+      <Headphones className="w-4 h-4 flex-shrink-0" />
+      <span className="truncate flex-1">{huddle.label}</span>
     </CommandPrimitive.Item>
   );
 }
@@ -392,7 +423,9 @@ export function ActionSubmenu({
   teamMembers?: any[];
   currentUser?: any;
 }) {
-  const [search, setSearch] = useState(mode === "rename" ? targets[0]?.title || "" : initialSearch);
+  // Rename seeds the field with the current name, shown the way lists show it.
+  const seedSearch = () => mode !== "rename" ? initialSearch : targetType === "session" ? cleanTitle(targets[0]?.title || "") : targets[0]?.title || "";
+  const [search, setSearch] = useState(seedSearch);
   const [highlightIndex, setHighlightIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -459,7 +492,7 @@ export function ActionSubmenu({
   );
 
   useWatchEffect(() => {
-    setSearch(mode === "rename" ? targets[0]?.title || "" : initialSearch);
+    setSearch(seedSearch());
     setHighlightIndex(0);
     setAgentStep("pick");
     setSelectedAgentKey(null);
@@ -1499,7 +1532,13 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
 
   const { open: paletteOpen, targets: initialTargets, targetType: initialTargetType, initialMode, initialQuery: paletteInitialQuery, pick } = useInboxStore((s) => s.palette);
   const [drilled, setDrilled] = useState<{ type: PaletteTargetType; row: any; query: string } | null>(null);
-  const targets = useMemo(() => drilled ? [drilled.row] : initialTargets, [drilled, initialTargets]);
+  const followLeaderId = useInboxStore((s) => s.followLeaderId);
+  // A drilled teammate's follow state reads the store, not the row taken at
+  // drill time, so the verb flips the moment the follow does.
+  const targets = useMemo(
+    () => !drilled ? initialTargets : drilled.type === "person" ? [{ ...drilled.row, following: followLeaderId === drilled.row._id }] : [drilled.row],
+    [drilled, initialTargets, followLeaderId],
+  );
   const targetType = drilled?.type ?? initialTargetType;
   const paletteRef = useRef<HTMLDivElement>(null);
   // Pick mode (lib/palettePick.ts): the palette is an entity chooser for a
@@ -1525,7 +1564,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   const { killWithNotice } = useTriggerKillNotice();
   const { user: currentUser } = useCurrentUser();
   const teamMembers = useInboxStore((s) => s.teamMembers.length > 0 ? s.teamMembers : undefined);
-  const followLeaderId = useInboxStore((s) => s.followLeaderId);
+  const openDm = useOpenDm();
 
   const open = standalone || paletteOpen;
 
@@ -2105,6 +2144,24 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     [openRecentVisit, closePalette],
   );
 
+  // A teammate's verbs, from the drilled person or a root "name › verb" row.
+  // The huddle is not here: its word is live call state (PersonHuddleItem).
+  const runPersonAction = useCallback((person: PalettePerson, actionKey: string) => {
+    const state = useInboxStore.getState();
+    const path = paletteObjectPath("person", person);
+    if (actionKey === "person_follow") {
+      if (state.followLeaderId === person._id) { state.setFollowLeader(null); closePalette(); return; }
+      state.setFollowLeader(person._id);
+      if (person.session) navigateToSession(state.sessions[person.session._id] ?? person.session);
+      else closePalette();
+      return;
+    }
+    if (actionKey === "person_message") { closePalette(); openDm([person._id]); return; }
+    if (actionKey === "open") { navigate(path); return; }
+    if (actionKey === "newtab") { window.open(path, "_blank"); closePalette(); return; }
+    if (actionKey === "copylink") { void copyToClipboard(`${shareOrigin()}${path}`).then(() => toast.success("Profile link copied")); closePalette(); }
+  }, [closePalette, navigate, navigateToSession, openDm]);
+
   // Root action handlers
   const handleRootAction = useCallback((actionKey: string) => {
     if (!targets.length) return;
@@ -2119,6 +2176,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
 
     const state = useInboxStore.getState();
     if (!targetType) return;
+    if (targetType === "person") { runPersonAction(target as PalettePerson, actionKey); return; }
     const path = paletteObjectPath(targetType, target);
     const viewCommand = targetType === "session" && targets.length === 1 ? getPaletteSessionCommands(target._id).find(command => command.key === actionKey) : undefined;
     if (viewCommand) { closePalette(); viewCommand.run(); return; }
@@ -2206,9 +2264,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         session_stash_hide: (id) => undoableHideSession(id, "stash", { hidden: true }),
         session_unsnooze: (id) => state.wakeSnoozedSession(id),
         session_defer: (id) => undoableDeferSession(id),
-        session_dormant: (id) => undoableSetSessionRest(id, "dormant"),
-        session_done: (id) => undoableSetSessionRest(id, "done"),
-        session_needs_input: (id) => undoableSetSessionRest(id, "needs_input"),
+        session_dormant: (id) => animatedSetSessionRest(id, "dormant"),
+        session_done: (id) => animatedSetSessionRest(id, "done"),
+        session_needs_input: (id) => animatedSetSessionRest(id, "needs_input"),
       };
       const run = each[actionKey];
       if (!run) return;
@@ -2219,7 +2277,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       closePalette();
       return;
     }
-  }, [targets, targetType, closePalette, pinDoc, router, navigate, navigateToSession, killWithNotice, openCreateModal]);
+  }, [targets, targetType, closePalette, pinDoc, router, navigate, navigateToSession, killWithNotice, openCreateModal, runPersonAction]);
 
   const hasTargets = targets.length > 0 && targetType;
   const target = targets[0] as any;
@@ -2227,6 +2285,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   const contextLabel = useMemo(() => {
     if (!hasTargets) return "";
     if (targets.length === 1) {
+      if (targetType === "person") return (target as PalettePerson).name;
       if (targetType === "session") {
         const s = target as InboxSession;
         return cleanTitle(s.title || "Untitled");
@@ -2250,6 +2309,31 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       : [];
     return options.filter(option => action.key !== "agent_switch" || option.key !== `agent:${target?.agent_type || "claude_code"}`).filter((option: any) => (action.key !== "agent_switch" && action.key !== "agent_fork") || canSessionBecomeAgent(option.agentType, target?.message_count)).filter(option => `${action.label} ${option.label}`.toLowerCase().includes(query.toLowerCase()) || query.toLowerCase().split(/\s+/).every(word => `${action.label} ${option.label}`.toLowerCase().includes(word))).map(option => ({ action, option }));
   }).slice(0, 8);
+
+  // "samvit mes" → Samvit Ramadurgam › Message: a query naming a teammate and
+  // one of their verbs offers the verb at the root, the same one-step reach
+  // the rows above give a picked target's options. Each word finds people by
+  // the roster's own rule; a row needs a word the name does not answer, so
+  // the name alone still lists just the person.
+  const personVerbMatches = useMemo(() => {
+    const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (!open || picking || hasTargets || words.length < 2) return [];
+    const state = useInboxStore.getState() as any;
+    const viewerId = state.currentUser?._id ? String(state.currentUser._id) : null;
+    const people = new Map<string, TeammateWhereabouts>();
+    for (const w of words) {
+      for (const r of teammateWhereabouts(state.teamMembers ?? [], viewerId, w, state.sessions, state.followLeaderId ?? null)) {
+        if (matchScore(r.name, w) !== Infinity) people.set(r.id, r);
+      }
+    }
+    return [...people.values()].flatMap((row) => {
+      if (words.every((w) => matchScore(row.name, w) !== Infinity)) return [];
+      const person = palettePerson(row, state.followLeaderId === row.id);
+      return paletteActions("person", [person], viewerId ?? undefined, chatOn)
+        .filter((a) => a.key !== "person_huddle" && matchScore(`${row.name} ${a.label}`, query) !== Infinity)
+        .map((action) => ({ person, action }));
+    }).slice(0, 6);
+  }, [open, picking, hasTargets, query, chatOn]);
 
   const showFavorites = favorites && favorites.length > 0;
   const showBookmarks = bookmarks && bookmarks.length > 0;
@@ -2487,6 +2571,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
               const selected = rows.find(row => row.getAttribute("aria-selected") === "true");
               const type = selected?.dataset.paletteType as PaletteTargetType | undefined;
               const id = selected?.dataset.paletteId;
+              if (type === "person") { e.preventDefault(); selected!.click(); return; }
               if (type && id) {
                 e.preventDefault();
                 const store = useInboxStore.getState();
@@ -2559,8 +2644,13 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
 
         {!picking && query.trim() && <RepositoryPaletteItems query={query} navigate={navigate} itemClass={itemClass} groupClass={groupClass} />}
 
-        {!picking && nestedMatches.length > 0 && (
+        {!picking && (nestedMatches.length > 0 || personVerbMatches.length > 0) && (
           <CommandPrimitive.Group heading="Go to action" className={groupClass}>
+            {personVerbMatches.map(({ person, action }) => (
+              <CommandPrimitive.Item key={`personverb-${person._id}-${action.key}`} value={`__entity__ ${person.name} ${action.label}`} data-palette-action={action.key} className={itemClass} onSelect={() => runPersonAction(person, action.key)}>
+                <MemberFace member={person.member} size={16} title="" showHuddle={false} /><span className="truncate text-sol-text-dim">{person.name}</span><span aria-hidden>›</span><span className="flex-1 truncate">{action.label}</span>
+              </CommandPrimitive.Item>
+            ))}
             {nestedMatches.map(({ action, option }) => (
               <CommandPrimitive.Item key={`nested-${action.key}-${option.key}`} value={`__entity__ ${action.label} ${option.label}`} data-palette-action={action.key} className={itemClass} onSelect={() => { setEnteredViaRoot(true); setActionSearch(option.label); setActionMode(action.key as ActionMode); }}>
                 <action.icon className="w-4 h-4 shrink-0" /><span className="truncate text-sol-text-dim">{action.label.replace(/[…]|\.\.\./g, "")}</span><span aria-hidden>›</span><span className="flex-1 truncate">{option.label}</span><KeyCap size="xs">→</KeyCap>
@@ -2576,6 +2666,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           >
             {actions.map((action) => {
               const Icon = action.icon;
+              if (action.key === "person_huddle") return <PersonHuddleItem key="action-person_huddle" person={target as PalettePerson} className={itemClass} onDone={closePalette} />;
               return (
                 <CommandPrimitive.Item
                   key={`action-${action.key}`}
@@ -2715,17 +2806,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 row={row}
                 className={itemClass}
                 following={followLeaderId === row.id}
-                onGo={(r, conv) => {
-                  const st = useInboxStore.getState();
-                  if (st.followLeaderId === r.id) {
-                    st.setFollowLeader(null);
-                    closePalette();
-                    return;
-                  }
-                  st.setFollowLeader(r.id);
-                  if (conv) navigateToSession(conv);
-                  else closePalette();
-                }}
+                onOpen={(person) => { setDrilled({ type: "person", row: person, query }); setQuery(""); }}
               />
             ))}
           </CommandPrimitive.Group>
@@ -3111,9 +3192,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         <CommandPrimitive.Group heading="Pages" className={groupClass}>
           {(query.trim() ? NAV_PAGES : NAV_PAGES.filter((p) => !p.secondary)).filter((p) => featureOn(p.feature)).map((page) => (
             <CommandPrimitive.Item
-              key={page.path + page.label}
+              key={typeof page.path === "string" ? page.path + page.label : page.label}
               value={`${page.label} ${page.keywords}`}
-              onSelect={() => navigate(page.path)}
+              onSelect={() => navigate(typeof page.path === "function" ? page.path() : page.path)}
               className={itemClass}
             >
               <span className="text-sol-text-dim flex-shrink-0">

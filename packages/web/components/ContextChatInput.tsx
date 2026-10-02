@@ -7,7 +7,7 @@ import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
 import { resolveContextRow, resolveContextProjectPath } from "../lib/contextProjectPath";
 import { soundNewSession } from "../lib/sounds";
 import { AgentTypeIcon } from "./AgentTypeIcon";
-import { fromConvexAgentType, type AgentClientId } from "@codecast/shared/contracts";
+import { AGENT_LAUNCH_OPTIONS, fromConvexAgentType, type AgentClientId } from "@codecast/shared/contracts";
 
 type AgentKey = AgentClientId;
 const escapeContext = (value: string) =>
@@ -16,16 +16,19 @@ const escapeContext = (value: string) =>
 // edit strings) while preventing body content from closing the envelope.
 const protectContextBody = (value: string) =>
   value.replace(/<\/context>/gi, "<\\/context>");
-const AGENT_TYPES: { key: AgentKey; convex: string; label: string; active: string }[] = [
-  { key: "claude", convex: "claude_code", label: "Claude", active: "bg-sol-yellow/20 text-sol-yellow border-sol-yellow/50" },
-  { key: "codex", convex: "codex", label: "Codex", active: "bg-emerald-500/20 text-emerald-400 border-emerald-500/50" },
-  { key: "cursor", convex: "cursor", label: "Cursor", active: "bg-purple-500/20 text-purple-400 border-purple-500/50" },
-  { key: "gemini", convex: "gemini", label: "Gemini", active: "bg-blue-500/20 text-blue-400 border-blue-500/50" },
-  { key: "opencode", convex: "opencode", label: "OpenCode", active: "bg-orange-500/20 text-orange-400 border-orange-500/50" },
-  { key: "pi", convex: "pi", label: "pi", active: "bg-teal-500/20 text-teal-400 border-teal-500/50" },
-  { key: "grok", convex: "grok", label: "Grok", active: "bg-sol-text/15 text-sol-text border-sol-text/40" },
-  { key: "muse", convex: "muse", label: "Muse Spark", active: "bg-emerald-500/15 text-emerald-400 border-emerald-500/40" },
-];
+const AGENT_ACTIVE_CLASS: Record<AgentKey, string> = {
+  claude: "bg-sol-yellow/20 text-sol-yellow border-sol-yellow/50",
+  codex: "bg-emerald-500/20 text-emerald-400 border-emerald-500/50",
+  cursor: "bg-purple-500/20 text-purple-400 border-purple-500/50",
+  gemini: "bg-blue-500/20 text-blue-400 border-blue-500/50",
+  opencode: "bg-orange-500/20 text-orange-400 border-orange-500/50",
+  pi: "bg-teal-500/20 text-teal-400 border-teal-500/50",
+  grok: "bg-sol-text/15 text-sol-text border-sol-text/40",
+  muse: "bg-emerald-500/15 text-emerald-400 border-emerald-500/40",
+};
+const AGENT_TYPES = AGENT_LAUNCH_OPTIONS.map((o) => ({
+  key: o.id, convex: o.convexType, label: o.label, active: AGENT_ACTIVE_CLASS[o.id],
+}));
 
 interface ContextChatInputProps {
   contextType: string;

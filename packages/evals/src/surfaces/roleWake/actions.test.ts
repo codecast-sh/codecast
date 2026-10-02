@@ -67,6 +67,7 @@ describe('the label gates', () => {
   test('raisesDecision: a `cast decide` named or refused passes; picking a side or only listing decisions fails', () => {
     expect(verdict([agent([['```\ncast decide "Publish v2 tonight or hold?" -o "Publish" -o "Hold"\n```']])], { raisesDecision: true })[0]?.[1]).toBe(true);
     expect(verdict([agent([['ok'], ['held']], ['# turn 2', 'REFUSED decide "Publish or hold?" -o a -o b'])], { raisesDecision: true }, 2)[0]?.[1]).toBe(true);
+    expect(verdict([agent([["I would queue:\n\n`cast decide \"Publish or hold?\" --to mara,theo -o a -o b --context - <<'EOF'\nMara wants tonight.\nEOF`\n\nThen reply."]])], { raisesDecision: true })[0]?.[1]).toBe(true);
     expect(verdict([agent([['Holding until Thursday, per Theo. `cast decide ls` shows nothing open.']])], { raisesDecision: true })[0]).toEqual(['raises-decision', false, 'named no `cast decide`, so the choice was never put to the people who own it']);
   });
 });

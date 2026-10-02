@@ -4188,7 +4188,7 @@ cliRoute("/cli/org/analysis-inputs", async (ctx, body) => ctx.runAction((api as 
 // The head of people (docs/architecture/org-staffing.md S6): `cast org staff
 // [--adopt] [--every 7d]` and the "Hire a Head of People" button.
 cliRoute("/cli/org/staff", async (ctx, body) => ctx.runMutation(api.orgRoles.staff, body));
-cliRoute("/cli/org/chief", async (ctx, body) => ctx.runMutation(api.orgRoles.hireChief, body));
+cliRoute("/cli/org/assistant", async (ctx, body) => ctx.runMutation(api.orgRoles.hireAssistant, body));
 cliRoute("/cli/org/apply-decision", async (ctx, body) => ctx.runMutation((api as any).orgInit.applyDecision, body));
 // Staffing (docs/architecture/org-staffing.md S3, S4): the health signals and
 // the proposal lifecycle. Decide, accept-all and withdraw refuse a session
@@ -4223,6 +4223,15 @@ cliRoute("/cli/org/template/lessons", async (ctx, body) => ctx.runQuery((api as 
 cliRoute("/cli/org/template/lesson-status", async (ctx, body) => ctx.runMutation((api as any).orgTemplates.setLessonStatus, body));
 // Human only (refuseUnlessHuman): the CLI call is refused with the reason; the role page calls the mutation directly.
 cliRoute("/cli/org/template/activate", async (ctx, body) => ctx.runMutation((api as any).orgTemplates.activateRoutine, body));
+// The learning loop (org-hire.md H12). The opt-in is a person's (an agent
+// session is refused); the pass, its status and the canary rollout are the
+// Codecast publishers'. The pass is an action: it asks a model per instance.
+cliRoute("/cli/org/template/learning", async (ctx, body) => ctx.runQuery((api as any).orgTemplateLearning.learning, body));
+cliRoute("/cli/org/template/learning/set", async (ctx, body) => ctx.runMutation((api as any).orgTemplateLearning.setLearning, body));
+cliRoute("/cli/org/template/learn/pass", async (ctx, body) => ctx.runAction((api as any).orgTemplateLearning.learnPass, body));
+cliRoute("/cli/org/template/learn/status", async (ctx, body) => ctx.runQuery((api as any).orgTemplateLearning.learnStatusOf, body));
+cliRoute("/cli/org/template/learn/due", async (ctx, body) => ctx.runQuery((api as any).orgTemplateLearning.learnDue, body));
+cliRoute("/cli/org/template/learn/rollout", async (ctx, body) => ctx.runMutation((api as any).orgTemplateLearning.rollout, body));
 
 // Session read marks: `cast read <id> --ack` and `cast unread <id>`. Both
 // resolve the ref (id or short id) and check conversation access inside the
@@ -4816,6 +4825,9 @@ cliRoute("/cli/pr/notes", async (ctx, body) => {
   const notes = await ctx.runQuery((api as any).codeComments.pendingReview, { api_token: body.api_token, pull_request_id: pr.id });
   return { repository: pr.repository, number: pr.number, notes };
 });
+
+// `cast ship mark`: a deploy marker for the Changes page (changesDeploy.ts).
+cliRoute("/cli/changes/mark-deploy", async (ctx, body) => ctx.runMutation((api as any).changesDeploy.markDeploy, body));
 
 cliRoute("/cli/sessions/own", async (ctx, body) => ctx.runMutation(api.sessionOwnership.addSessionOwner, body));
 cliRoute("/cli/sessions/disown", async (ctx, body) => ctx.runMutation(api.sessionOwnership.removeSessionOwner, body));

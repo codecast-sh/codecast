@@ -122,7 +122,7 @@ function RoleOfferRow({ tree, role, conversationId }: { tree: OrgTree; role: Org
   const openChip = openProposal && (
     <Link href={entityRoute("proposal", openProposal.short_id) ?? "/org"} className={cn(CHIP, "no-underline")} style={CHIP_STYLE} title={openProposal.title} data-offer-open={openProposal.short_id}>
       Open the proposal
-      {toDecide > 0 && <span className="text-[11px]" style={{ color: "var(--sol-text-dim)" }}>{toDecide} to decide</span>}
+      {toDecide > 0 && <span className="text-[11px]" style={{ color: "var(--sol-text-dim)" }}>· {toDecide} to decide</span>}
       <ArrowUpRight className="h-3 w-3 opacity-60" />
     </Link>
   );

@@ -28,6 +28,13 @@ describe("rootAgentOf", () => {
     expect(rootAgentOf([infra, unmarked], "t1")?._id).toBe("head-old");
   });
 
+  // S30: a workspace's Executive Assistant answers as its agent ahead of the Head of People.
+  test("an Executive Assistant is the root over the Head of People", () => {
+    const assistant = row({ _id: "ea", scope_type: "user", team_id: null, name: "Executive Assistant", is_root: true, role: { _id: "r44", short_id: "or-44", name: "Executive Assistant", handle: "executive-assistant", avatar: "bear", status: "active", assistant: { reach: "global" } } as any });
+    expect(rootAgentOf([infra, head, personal, assistant], null)?._id).toBe("ea");
+    expect(rootAgentOf([infra, head, personal, assistant], "t1")?._id).toBe("head");
+  });
+
   test("a seat that is no role's yet stands in for a root that is not hired", () => {
     const bare = row({ _id: "bare", name: "Anchor" });
     expect(rootAgentOf([infra, bare], "t1")?._id).toBe("bare");

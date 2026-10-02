@@ -444,6 +444,8 @@ export interface TeammateWhereabouts {
   name: string;
   /** The session they have open, or null when they are around but not in one. */
   conversationId: string | null;
+  /** Off line rows still answer a search by name: message and profile reach them. */
+  online: boolean;
   /** The session's title when the store holds the row; the caller fetches otherwise. */
   title: string | undefined;
   inStore: boolean;
@@ -460,11 +462,12 @@ export function teammateRowText(name: string): string {
 }
 
 /**
- * One row per online teammate. A teammate in a session always makes the
- * list (ranked by how well the query names them or the gesture); a teammate
- * who is around but in no session appears only when the query names them,
- * so the group stays as small as the team's activity. Offline teammates and
- * the viewer never appear.
+ * One row per teammate the palette offers. A teammate in a session always
+ * makes the list (ranked by how well the query names them or the gesture); a
+ * teammate who is around but in no session, or offline, appears only when the
+ * query names them, so the group stays as small as the team's activity while
+ * a name still finds the person. Offline rows carry no session (a roster id
+ * on them is stale) and sort last. The viewer never appears.
  */
 export function teammateWhereabouts(
   members: any[],
@@ -481,9 +484,9 @@ export function teammateWhereabouts(
     const id = m?._id ? String(m._id) : "";
     if (!id || id === viewerId || !isPerson(m)) continue;
     const followed = followingId !== null && id === followingId;
-    if (!followed && memberPresenceState(m) === "offline") continue;
+    const online = memberPresenceState(m) !== "offline";
     const name = memberDisplayName(m);
-    const conversationId = m.viewing_conversation_id ? String(m.viewing_conversation_id) : null;
+    const conversationId = online && m.viewing_conversation_id ? String(m.viewing_conversation_id) : null;
     let score: number;
     if (conversationId || followed) {
       score = Math.min(matchScore(teammateRowText(name), q), followed ? matchScore(`stop following ${name}`, q) : Infinity);
@@ -498,6 +501,7 @@ export function teammateWhereabouts(
       id,
       name,
       conversationId,
+      online,
       title: row?.title,
       inStore: !!row,
       since: typeof m.viewing_since === "number" ? m.viewing_since : undefined,
@@ -508,6 +512,7 @@ export function teammateWhereabouts(
     (a, b) =>
       a.score - b.score ||
       Number(!a.conversationId) - Number(!b.conversationId) ||
+      Number(!a.online) - Number(!b.online) ||
       a.name.localeCompare(b.name),
   );
 }

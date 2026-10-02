@@ -12,7 +12,7 @@ import { fill, receiptPath, setupText, setupWords } from "./orgTemplateText.js";
 export { receiptPath };
 import { markSetup, nextHumanAsk, readiness, readinessHeader, recordEvidence, recordScores, setupRows, type InstanceState } from "./orgTemplateState.js";
 
-export type TemplateOptions = { dir: string; project?: string; team?: string; personal?: boolean; session?: string; adopt?: string[]; input?: string[]; secret?: string[]; reportsTo?: string; apply?: boolean; dryRun?: boolean; status?: string; source?: string; detail?: string[]; evidence?: string; observedAt?: string; done?: boolean; skip?: boolean; open?: boolean };
+export type TemplateOptions = { dir: string; project?: string; team?: string; personal?: boolean; session?: string; adopt?: string[]; input?: string[]; secret?: string[]; to?: string; reportsTo?: string; apply?: boolean; dryRun?: boolean; status?: string; source?: string; detail?: string[]; evidence?: string; observedAt?: string; done?: boolean; skip?: boolean; open?: boolean };
 export type TemplateReceipt = InstanceState & {
   schemaVersion: 1;
   instance: string;
@@ -94,13 +94,14 @@ const key_in = (row: Record<string, string>, key: string) => Object.prototype.ha
 export function loaderPrompt(receipt: TemplateReceipt, routine: string): string {
   return `Read the pinned instance receipt ${receiptPath(receipt.project.dir, receipt.instance)}. Run this command before doing any work:\n\ncast org template instructions ${quoteTemplateArg(receipt.instance)} ${quoteTemplateArg(routine)} --dir ${quoteTemplateArg(receipt.project.dir)}\n\nUse only the verified instructions it returns. If verification fails, stop and report the error. The role's human charter, trust, grants and project scope still apply. This loader grants no spending, publishing, credentials or filesystem isolation.`;
 }
-async function request(deps: OrgInitDeps, endpoint: string, body: Record<string, unknown>): Promise<any> {
-  const result = await deps.cliPost(endpoint, body);
+async function request(deps: OrgInitDeps, endpoint: string, body: Record<string, unknown>, opts?: { timeoutMs?: number }): Promise<any> {
+  const result = await deps.cliPost(endpoint, body, opts);
   if (result == null || result.error) throw new Error(result?.error || `${endpoint}: empty response`);
   return result;
 }
-function boundary(receipt: TemplateReceipt): { team_id?: string } {
-  return receipt.workspace.kind === "team" ? { team_id: receipt.workspace.id } : {};
+/** The workspace argument a server call takes, from a receipt or a resolved org tree. */
+function boundary(of: { workspace: { kind: string; id: string } }): { team_id?: string } {
+  return of.workspace.kind === "team" ? { team_id: of.workspace.id } : {};
 }
 function sameWorkspace(actual: any, expected: TemplateReceipt["workspace"]): void {
   if (!actual || actual.kind !== expected.kind || actual.id !== expected.id) throw new Error("Workspace does not match the instance receipt");
@@ -337,6 +338,7 @@ export const ledgerMarker = (receipt: TemplateReceipt, ledger: string) => `org-t
  */
 export async function bindTemplate(deps: OrgInitDeps, instance: string, options: TemplateOptions): Promise<TemplateReceipt> {
   const dir = canonicalDirectory(options.dir);
+  await upgradeFromRecord(deps, instance, { ...options, dir });
   return locked(dir, instance, async () => {
     const receipt = fs.existsSync(receiptPath(dir, instance)) ? readReceipt(dir, instance) : await adoptHiredInstance(deps, instance, dir, options);
     const artifact = verifiedArtifact(receipt);
@@ -400,6 +402,47 @@ export async function bindTemplate(deps: OrgInitDeps, instance: string, options:
   });
 }
 
+
+/** A published release as an artifact on this host (H1, install from the record): downloaded and verified against the release's digest. */
+async function releaseArtifact(deps: OrgInitDeps, release: { template_id: string; version: string; digest: string }, workspace: { team_id?: string }): Promise<TemplateArtifact> {
+  const found = await request(deps, "/cli/org/template/release", { ...release, ...workspace });
+  if (!found.storage_url) throw new Error(`Release ${release.template_id}@${release.version} was published without its snapshot; publish it again (cast org template publish <folder>) or install from the folder`);
+  const response = await (deps.fetchUrl ?? fetch)(found.storage_url);
+  if (!response.ok) throw new Error(`Release download failed: HTTP ${response.status}`);
+  const artifact = artifactFromSnapshot(new Uint8Array(await response.arrayBuffer()), release.digest);
+  if (artifact.manifest.id !== release.template_id || artifact.manifest.version !== release.version) throw new Error("Release snapshot names another template or version");
+  return artifact;
+}
+
+/**
+ * The host step moves the instance to another release before it binds, when
+ * one is waiting (H9, H12): `--to <version>` by hand, else the upgrade the
+ * server row carries as accepted (a person's Update, or the publisher's
+ * canary rollout). The release comes from the record and goes through the
+ * same journalled upgrade as a folder does, so it refuses a change to the
+ * role's identity or caps and can be rolled back. Nothing waiting: nothing done.
+ */
+async function upgradeFromRecord(deps: OrgInitDeps, instance: string, options: TemplateOptions): Promise<void> {
+  if (!fs.existsSync(receiptPath(options.dir, instance))) {
+    if (options.to) throw new Error(`No instance ${instance} in ${options.dir} to move to ${options.to}; bind it first`);
+    return;
+  }
+  const receipt = readReceipt(options.dir, instance);
+  if (receipt.upgrade) throw new Error("An upgrade is incomplete; rerun cast org template upgrade with its target release, or the original release to roll back");
+  const workspace = boundary(receipt);
+  let target: { version: string; digest: string } | undefined;
+  if (options.to) {
+    const template = await request(deps, "/cli/org/template/get", { template_id: receipt.template.id, ...workspace });
+    const release = (template.releases ?? []).find((r: any) => r.version === options.to);
+    if (!release?.digest) throw new Error(`${receipt.template.id}@${options.to} is not a published release (published: ${(template.releases ?? []).map((r: any) => r.version).join(", ") || "none"})`);
+    target = { version: release.version, digest: release.digest };
+  } else if (receipt.instanceId) {
+    const pending = (await request(deps, "/cli/org/template/instance-status", { instance_key: receipt.key })).pending_upgrade;
+    if (pending) target = { version: pending.to, digest: pending.digest };
+  }
+  if (!target || (target.version === receipt.template.version && target.digest === receipt.template.hash)) return;
+  await upgradeTemplate(deps, instance, await releaseArtifact(deps, { template_id: receipt.template.id, ...target }, workspace), { ...options, apply: true });
+}
 
 /**
  * The instance's own record (H5 to H7). The server row is the record; the
@@ -465,6 +508,51 @@ export async function lessonTemplate(deps: OrgInitDeps, instance: string, body: 
   return request(deps, "/cli/org/template/lesson", { instance_key: receipt.key, body, evidence });
 }
 
+/** Lessons as their reader may see them (H9, H12): a template's, for its publisher, or one instance's own. */
+export async function listLessons(deps: OrgInitDeps, target: string, options: { dir: string; team?: string; personal?: boolean; codecast?: boolean; instance?: boolean; status?: string }): Promise<any[]> {
+  const rows: any[] = options.instance
+    ? await request(deps, "/cli/org/template/lessons", { instance_key: readReceipt(options.dir, target).key })
+    : await request(deps, "/cli/org/template/lessons", { template_id: target, ...(options.codecast ? { as_codecast: true } : boundary(await currentWorkspace(deps, options))) });
+  return options.status ? rows.filter((l) => l.status === options.status) : rows;
+}
+/** The publisher's verdict on lessons: accepted into a draft, declined, or released in a version. */
+export async function setLessonStatus(deps: OrgInitDeps, ids: string[], options: { accept?: boolean; decline?: boolean; releasedIn?: string }): Promise<unknown[]> {
+  const chosen = [options.accept && "accepted", options.decline && "declined", options.releasedIn && "released"].filter(Boolean) as string[];
+  if (chosen.length !== 1) throw new Error("Give exactly one of --accept, --decline or --released-in <version>");
+  const out: unknown[] = [];
+  for (const lesson_id of ids) {
+    const row = await request(deps, "/cli/org/template/lesson-status", { lesson_id, status: chosen[0], ...(options.releasedIn ? { released_in: options.releasedIn } : {}) });
+    out.push({ id: row._id, status: row.status, released_in: row.released_in });
+  }
+  return out;
+}
+/** The workspace's opt-in to the learning loop (H12): read it, or set it. Setting is a person's: the server refuses an agent session. */
+export async function templateLearning(deps: OrgInitDeps, set: "on" | "off" | undefined, options: { team?: string; personal?: boolean; session?: string }): Promise<unknown> {
+  const args = boundary(await currentWorkspace(deps, options));
+  if (!set) return request(deps, "/cli/org/template/learning", args);
+  return request(deps, "/cli/org/template/learning/set", { ...args, enabled: set === "on", from_session: options.session || sessionIdFromEnv() || undefined });
+}
+type PassResult = { template_id: string; read: number; failed: number; filed: unknown[]; refused: Record<string, number>; remaining: number };
+/**
+ * The learning pass for one template (H12), Codecast's publishers only: the
+ * server reads each opted-in instance, asks a model and files what passes the
+ * leak check. It reads a few instances per call, so this asks again while any
+ * remain and the last call got somewhere.
+ */
+export async function learnPass(deps: OrgInitDeps, template: string): Promise<PassResult> {
+  const total: PassResult = { template_id: template, read: 0, failed: 0, filed: [], refused: {}, remaining: 0 };
+  for (let round = 0; round < 12; round++) {
+    const part: PassResult = await request(deps, "/cli/org/template/learn/pass", { template_id: template }, { timeoutMs: 600_000 });
+    total.read += part.read; total.failed += part.failed; total.filed.push(...part.filed); total.remaining = part.remaining;
+    for (const [kind, n] of Object.entries(part.refused)) total.refused[kind] = (total.refused[kind] ?? 0) + n;
+    if (!part.remaining || part.read === part.failed) break;
+  }
+  return total;
+}
+export const learnStatus = (deps: OrgInitDeps, template: string) => request(deps, "/cli/org/template/learn/status", { template_id: template });
+export const learnDue = (deps: OrgInitDeps) => request(deps, "/cli/org/template/learn/due", {});
+export const learnRollout = (deps: OrgInitDeps, template: string) => request(deps, "/cli/org/template/learn/rollout", { template_id: template });
+
 export type PublishOptions = { team?: string; personal?: boolean; codecast?: boolean; status?: string; changelog?: string; reviewProject?: string };
 /** The release snapshot, uploaded so a host can install from the record (H1); the storage id the publish row keeps. */
 async function uploadSnapshot(deps: OrgInitDeps, artifact: TemplateArtifact): Promise<string> {
@@ -511,8 +599,7 @@ export async function publishTemplates(deps: OrgInitDeps, sources: string[], opt
   return out;
 }
 export async function catalogTemplates(deps: OrgInitDeps, options: { team?: string; personal?: boolean }): Promise<unknown> {
-  const { workspace } = await currentWorkspace(deps, options);
-  return request(deps, "/cli/org/template/catalog", workspace.kind === "team" ? { team_id: workspace.id } : {});
+  return request(deps, "/cli/org/template/catalog", boundary(await currentWorkspace(deps, options)));
 }
 
 export async function reconcileTemplate(deps: OrgInitDeps, instance: string, options: TemplateOptions): Promise<TemplateReceipt> {
@@ -583,7 +670,7 @@ async function provisionAndArm(deps: OrgInitDeps, receipt: TemplateReceipt, tree
  */
 async function adoptHiredInstance(deps: OrgInitDeps, instance: string, dir: string, options: TemplateOptions): Promise<TemplateReceipt> {
   const tree = await currentWorkspace(deps, options);
-  const args = tree.workspace.kind === "team" ? { team_id: tree.workspace.id } : {};
+  const args = boundary(tree);
   const rows: any[] = await request(deps, "/cli/org/template/instances", args);
   const candidates = rows.filter((r) => r.instance === instance && r.phase !== "retired");
   if (candidates.length === 0) throw new Error(`No instance ${instance} here or on the server: nothing was hired under that name in this workspace, and no receipt exists in ${dir}`);
@@ -593,12 +680,7 @@ async function adoptHiredInstance(deps: OrgInitDeps, instance: string, dir: stri
   const project = await verifiedProject(deps, tree, dir, String(row.project_id));
   const role = (tree.roles ?? []).find((r: any) => r._id === row.role_id);
   if (!role) throw new Error("The hire's role is not in this workspace");
-  const release = await request(deps, "/cli/org/template/release", { template_id: row.template_id, version: row.version, digest: row.digest, ...args });
-  if (!release.storage_url) throw new Error(`Release ${row.template_id}@${row.version} was published without its snapshot; publish it again (cast org template publish <folder>) or install from the folder`);
-  const response = await (deps.fetchUrl ?? fetch)(release.storage_url);
-  if (!response.ok) throw new Error(`Release download failed: HTTP ${response.status}`);
-  const artifact = artifactFromSnapshot(new Uint8Array(await response.arrayBuffer()), row.digest);
-  if (artifact.manifest.id !== row.template_id || artifact.manifest.version !== row.version) throw new Error("Release snapshot names another template or version");
+  const artifact = await releaseArtifact(deps, { template_id: row.template_id, version: row.version, digest: row.digest }, args);
   const key = randomUUID();
   const receipt: TemplateReceipt = {
     schemaVersion: 1, instance, key, project, workspace: tree.workspace, warnings: projectWarnings(project), sourceSession: "web", phase: "provisioning",
@@ -757,13 +839,13 @@ async function finishUpgrade(deps: OrgInitDeps, receipt: TemplateReceipt): Promi
   delete receipt.upgrade;
   save(receipt);
 }
-export async function upgradeTemplate(deps: OrgInitDeps, instance: string, source: string, options: TemplateOptions): Promise<any> {
+export async function upgradeTemplate(deps: OrgInitDeps, instance: string, source: string | TemplateArtifact, options: TemplateOptions): Promise<any> {
   const execute = async () => {
     const receipt = readReceipt(options.dir, instance);
     const tree = await checkContext(deps, receipt, options);
     verifyRole(tree, receipt);
     await verifyStanding(deps, tree, receipt);
-    const next = readArtifact(source);
+    const next = typeof source === "string" ? readArtifact(source) : source;
     if (receipt.upgrade) {
       const intent = receipt.upgrade;
       const direction = next.hash === intent.to.hash ? "forward" : next.hash === intent.from.hash ? "rollback" : undefined;

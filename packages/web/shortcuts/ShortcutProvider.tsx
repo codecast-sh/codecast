@@ -8,6 +8,8 @@
 import { createShortcutRuntime } from "./runtime";
 import { shortcutCatalog } from "./registry";
 import { onShortcutUsed } from "../tips/useTips";
+import { useTabActive } from "../hooks/usePagePresence";
+import type { ShortcutAction } from "./registry";
 
 const runtime = createShortcutRuntime(shortcutCatalog, {
   // Some regions own their own single-letter keys and must not leak them to the
@@ -34,3 +36,11 @@ export const ShortcutProvider = kit.ShortcutProvider;
 export const useShortcuts = kit.useShortcuts;
 export const useShortcutAction = kit.useShortcutAction;
 export const useShortcutContext = kit.useShortcutContext;
+
+/** A shortcut that acts on the pane it is mounted in. Visited tabs stay
+ *  mounted hidden and a split shows several panes, so every copy of a page
+ *  registers; only the copy in the active pane may answer, the rest decline. */
+export function usePaneShortcutAction(action: ShortcutAction, handler: () => boolean | void): void {
+  const active = useTabActive();
+  useShortcutAction(action, () => (active ? handler() : false));
+}

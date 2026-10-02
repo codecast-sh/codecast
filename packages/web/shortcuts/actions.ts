@@ -199,7 +199,8 @@ export function useGlobalShortcutActions() {
   useShortcutAction('session.rename', useCallback(() => {
     const store = useInboxStore.getState();
     const currentId = focusedActionSessionId(store, isOnInboxPage);
-    if (currentId) useInboxStore.setState({ renamingSessionId: currentId });
+    const session = currentId ? store.sessions[currentId] ?? store.conversations[currentId] : null;
+    if (session) store.openSessionRename(session);
   }, [isOnInboxPage]));
 
   useShortcutAction('session.moveToBucket', useCallback(() => {

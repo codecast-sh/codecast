@@ -40,6 +40,15 @@ describe("pathLabel — query strings never leak into labels", () => {
     expect(pathLabel("/chat/threads")).toBe("Threads");
     expect(pathLabel("/chat/threads?m=abc")).toBe("Threads");
   });
+
+  it("titles a Changes tab by the edition's day, and the bare page as Changes", () => {
+    expect(pathLabel("/changes")).toBe("Changes");
+    expect(pathLabel("/changes?d=2026-10-02")).toBe("Changes, Fri 2 Oct");
+    expect(pathLabel("/changes?repo=codecast-sh/codecast&d=2026-10-01&area=cli,web&story=abc#top")).toBe("Changes, Thu 1 Oct");
+    expect(pathLabel("/changes?risk=1")).toBe("Changes");
+    expect(pathLabel("/changes?d=2026-02-31")).toBe("Changes");
+    expect(pathLabel("/changes?d=yesterday")).toBe("Changes");
+  });
 });
 
 describe("conversationTabPath", () => {

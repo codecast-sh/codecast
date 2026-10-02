@@ -42,7 +42,8 @@ export function nativeModulePresent(nativeName: string): boolean {
 export function optionalNative<T>(nativeName: string, load: () => T): T | null {
   try {
     return nativeModulePresent(nativeName) ? load() : null;
-  } catch {
+  } catch (err) {
+    console.warn(`[optionalNative] ${nativeName} is in the binary but its package failed to load`, err);
     return null;
   }
 }
