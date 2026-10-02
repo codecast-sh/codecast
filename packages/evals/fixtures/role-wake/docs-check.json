@@ -1,0 +1,29 @@
+{
+  "asOf": "2026-09-28T09:00:00.000Z",
+  "notes": "A docs role's daily check: one session waits on it, and one standing line is two weeks old.",
+  "snapshot": {
+    "captured_at": "2026-09-28T09:00:00.000Z",
+    "fixture": {
+      "trigger": "tr-901",
+      "routine": "check",
+      "role": {
+        "handle": "docs",
+        "name": "Docs lead",
+        "reports_to": "Mara",
+        "scope": [
+          "Docs site",
+          "API reference"
+        ],
+        "charter": "Keep every public page true to what the product does today.",
+        "goals": [
+          "Every page reviewed within a month of the feature it describes",
+          "API reference generated from the schema, never by hand"
+        ]
+      }
+    },
+    "world": "fernhill",
+    "values": {
+      "role": "docs"
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "settle findings-report-no-ask",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:findings-report-no-ask"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "settle:findings-report-no-ask",
+    "title": "settle findings-report-no-ask"
+  },
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "trigger": {
+    "type": "settle"
+  },
+  "meta": {
+    "surface": "settle",
+    "visibility": "public",
+    "snapshot": "fixtures/settle/findings-report-no-ask.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "693b45a3-3720-410e-8158-8bff6cc6c877",
+  "createdAt": "2026-10-01T17:46:18.959Z"
+}
