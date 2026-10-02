@@ -258,6 +258,8 @@ export async function heartbeatOnce(roomKey: string): Promise<void> {
   // stamp the swept row had (`walkieJoinedSeat`), so a conversation that
   // survived the sleep is still a conversation to everyone watching.
   const cur = useInboxStore.getState().call;
+  // hungUp: the person pressed End on another device. Leave with them.
+  if (res?.hungUp && cur.roomKey === roomKey) return leaveCall(roomKey);
   if (res?.ok === false && cur.roomKey === roomKey && cur.phase === "connected") {
     await controlJoin(roomKey).catch(() => void leaveCall());
   }

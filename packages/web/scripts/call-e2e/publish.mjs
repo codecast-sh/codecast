@@ -31,6 +31,12 @@
 //   --no-screen            skip the screen share track
 //   --tone                 publish a microphone track: an 880 Hz pip at every
 //                          wall clock second and a 1320 Hz pip at every scene cut
+//   --speak <s>            publish a microphone track that says a numbered line
+//                          every <s> seconds ("Marker 3. This is line 3 of
+//                          the recording test."), spoken by macOS `say`, so
+//                          the scribe writes transcript lines to snap at.
+//                          Each line logs the wall time it began.
+//                          Takes the place of --tone.
 //   --screen-size WxH      share resolution (default 1920x1080)
 //   --screen-fps N         share frame rate (default 10)
 //   --camera-size WxH      camera resolution (default 960x540)
@@ -60,7 +66,11 @@
 // joins any room without the app's authorization; that is the point of a
 // harness, and why the secret never leaves the 0600 cache. A real member's
 // identity here really does look like that member to everyone in the room.
-import { mkdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+const run = promisify(execFile);
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 // livekit.mjs first: it quiets the SDK logger before rtc-node loads.
@@ -195,6 +205,57 @@ function toneLoop() {
   return state;
 }
 
+// Speech: each line is rendered by `say` and decoded to 48 kHz mono PCM by
+// ffmpeg just before it is spoken, so it can name the scene showing at that
+// moment. Silence fills the gaps (a track that stops sending looks muted).
+function speechLoop(everyS) {
+  const source = new AudioSource(SAMPLE_RATE, 1, 100);
+  const state = { source, stopped: false, lines: 0 };
+  const dir = mkdtempSync(join(tmpdir(), "call-e2e-speak-"));
+  // Rendered off the event loop, one line ahead: a synchronous `say` on a
+  // loaded machine takes seconds and would stall every video loop with it.
+  const render = async (n) => {
+    const aiff = join(dir, `line-${n}.aiff`);
+    const text = `Marker ${n}. This is line ${n} of the recording test.`;
+    await run("say", ["-o", aiff, text]);
+    const { stdout } = await run("ffmpeg", ["-v", "error", "-i", aiff, "-f", "s16le", "-ac", "1", "-ar", String(SAMPLE_RATE), "-"], { encoding: "buffer", maxBuffer: 64 << 20 });
+    return { text, pcm: new Int16Array(stdout.buffer, stdout.byteOffset, stdout.byteLength >> 1) };
+  };
+  state.start = async () => {
+    let next = Date.now() + 2000;
+    let upcoming = render(1).catch((err) => (log(`speak failed: ${err.message}`), null));
+    let ready = null;
+    upcoming.then((r) => (ready = r));
+    let pcm = null;
+    let at = 0;
+    while (!state.stopped) {
+      const frame = new Int16Array(AUDIO_FRAME);
+      if (!pcm && ready && Date.now() >= next) {
+        state.lines++;
+        pcm = ready.pcm;
+        at = 0;
+        log(`speak ${state.lines} at ${new Date().toISOString()}: "${ready.text}"`);
+        ready = null;
+        next = Date.now() + everyS * 1000;
+        upcoming = render(state.lines + 1).catch((err) => (log(`speak failed: ${err.message}`), null));
+        upcoming.then((r) => (ready = r));
+      }
+      if (pcm) {
+        frame.set(pcm.subarray(at, at + AUDIO_FRAME));
+        at += AUDIO_FRAME;
+        if (at >= pcm.length) pcm = null;
+      }
+      await source.captureFrame(new AudioFrame(frame, SAMPLE_RATE, 1, AUDIO_FRAME));
+    }
+  };
+  state.stop = async () => {
+    state.stopped = true;
+    rmSync(dir, { recursive: true, force: true });
+    await source.close().catch(() => {});
+  };
+  return state;
+}
+
 // ── Join and publish ──────────────────────────────────────────────────────
 const env = loadLivekitEnv({ refresh: Boolean(flags["refresh-env"]) });
 const token = await participantToken(env, { room, identity, name, metadata });
@@ -253,7 +314,12 @@ if (!flags["no-camera"]) {
   });
 }
 
-if (flags.tone) {
+if (flags.speak !== undefined) {
+  const speech = speechLoop(num("speak", 12) || 12);
+  await publish("microphone (speech)", speech, LocalAudioTrack.createAudioTrack("microphone", speech.source), {
+    source: TrackSource.SOURCE_MICROPHONE,
+  });
+} else if (flags.tone) {
   const tone = toneLoop();
   await publish("microphone (tone)", tone, LocalAudioTrack.createAudioTrack("microphone", tone.source), {
     source: TrackSource.SOURCE_MICROPHONE,

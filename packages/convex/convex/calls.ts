@@ -379,6 +379,10 @@ export const joinRoom = mutation({
       });
     }
 
+    // Walking back in takes back the hang-up.
+    const hangup = await hangupOf(ctx, userId, args.room_key);
+    if (hangup) await ctx.db.delete(hangup._id);
+
     // Sweep the room's dead rows FIRST — a rejoin after >45s away is the
     // common case, and our own stale row must be gone before we decide
     // whether to refresh or insert (patching a row the sweep just deleted
@@ -503,9 +507,25 @@ export const heartbeat = mutation({
     // here, after our own row is fresh, puts a bound on it: a seat whose lease
     // lapsed is deleted within one heartbeat of anyone still in the room.
     await sweepRoom(ctx, args.room_key, now);
+    // No seat because the person pressed End somewhere else: this client
+    // hangs up too, rather than taking the seat back as after a sleep.
+    if (!row && (await hangupOf(ctx, userId, args.room_key))) return { ok: false, hungUp: true };
     return { ok: !!row };
   },
 });
+
+function hangupOf(ctx: any, userId: Id<"users">, roomKey: string) {
+  return ctx.db
+    .query("call_hangups")
+    .withIndex("by_user_room", (q: any) => q.eq("user_id", userId).eq("room_key", roomKey))
+    .unique();
+}
+
+async function markHangup(ctx: any, userId: Id<"users">, roomKey: string, now: number) {
+  const existing = await hangupOf(ctx, userId, roomKey);
+  if (existing) await ctx.db.patch(existing._id, { at: now });
+  else await ctx.db.insert("call_hangups", { user_id: userId, room_key: roomKey, at: now });
+}
 
 // Hanging up settles every ring the caller left outstanding for that room:
 // otherwise the callee's phone rings the full TTL for a call that no longer
@@ -545,6 +565,7 @@ export const leaveRoom = mutation({
         left.add(m.room_key);
       }
     }
+    for (const roomKey of left) await markHangup(ctx, userId, roomKey, now);
     await settleOutboundRings(ctx, userId, args.room_key, now);
     // The last one out starts the huddle's grace: its record ends at this
     // moment unless somebody is back within HUDDLE_GRACE_MS.

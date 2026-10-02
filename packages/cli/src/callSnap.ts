@@ -424,6 +424,41 @@ export function frameArgs(source: string, offsetMs: number | null, out: string):
   ];
 }
 
+/** How far back from a file's end the last-picture fallback reads. A share
+ *  writes a keyframe a second while it sends anything at all, so the last
+ *  picture is always inside this; the bound keeps the read to a few MB. */
+export const TAIL_READ_MS = 15_000;
+
+/**
+ * The last picture a file holds, for a moment past its final frame. -sseof
+ * reads only the file's tail, -update writes each decoded frame over the
+ * last so the output ends as the final one, and showinfo logs every frame's
+ * time (-copyts keeps it on the file's own clock), so the caller can say
+ * when the picture is from.
+ */
+export function lastFrameArgs(source: string, out: string): string[] {
+  const jpeg = /\.jpe?g$/i.test(out);
+  return [
+    "-nostdin", "-hide_banner", "-loglevel", "info",
+    "-rw_timeout", RW_TIMEOUT_US,
+    "-sseof", `-${secs(TAIL_READ_MS)}`,
+    "-i", source,
+    "-copyts", "-an", "-vf", "showinfo", "-update", "1",
+    ...(jpeg ? ["-q:v", "2"] : []),
+    "-y", out,
+  ];
+}
+
+/** The file time (ms) of the last frame showinfo logged, or null. */
+export function lastShownMs(log: string): number | null {
+  let last: number | null = null;
+  for (const m of log.matchAll(/pts_time:\s*(-?[\d.]+)/g)) {
+    const t = Number(m[1]);
+    if (Number.isFinite(t)) last = Math.round(t * 1000);
+  }
+  return last;
+}
+
 /**
  * A scene pass over `durMs` of a file from `startMs`: keyframes only decoded
  * (a screen file carries one a second), shrunk before scoring, every score
@@ -963,14 +998,20 @@ export async function planSnap(input: PlanInput): Promise<SnapPlan> {
     }
     const live = liveFrame(input, all);
     if (!live) {
-      const starting = all.some((r) => r.status === "starting" || (r.status === "recording" && !r.live_frame_url));
+      // Only the room's file writes a live picture (LiveKit will not write
+      // one beside a screen's file), so a screen being recorded is never
+      // "starting" for want of one: it is readable once it is saved.
+      const starting = all.some((r) => (r.status === "starting" && (!input.strictScreen || r.kind === "screen")) || (r.kind === "composite" && r.status === "recording" && !r.live_frame_url));
+      const screenRecording = all.some((r) => r.kind === "screen" && r.status === "recording");
       throw new SnapError(
         "not_live",
-        starting
-          ? `${handle}'s recording is starting. Try again in a few seconds.`
-          : input.strictScreen && all.some((r) => r.status === "recording")
-            ? `Nobody is sharing a screen in ${handle} right now. Drop --screen for the room.`
-            : `${handle} is not being recorded right now. A call has video only while someone in the huddle has pressed Record.`,
+        input.strictScreen && screenRecording
+          ? `A shared screen in ${handle} is being recorded, and its own picture can be read once the recording is saved. For the call as it is now, with the share in it, drop --screen.`
+          : starting
+            ? `${handle}'s recording is starting. Try again in a few seconds.`
+            : input.strictScreen && all.some((r) => r.status === "recording")
+              ? `Nobody is sharing a screen in ${handle} right now. Drop --screen for the room.`
+              : `${handle} is not being recorded right now. A call has video only while someone in the huddle has pressed Record.`,
       );
     }
     return { frames: [{ ...live, atMs: recs.server_now - recs.call_started_at }], notes, range: null };
@@ -1098,21 +1139,41 @@ function parseMax(raw: SnapOptions["max"]): number {
 
 /** Grabs one planned frame to `out`. A moment in a file's last fraction of
  *  a second can fall past the final frame ffmpeg decodes, which writes
- *  nothing and exits 0; one retry a second earlier covers it. */
-async function grab(ffmpeg: FfmpegRunner, source: string, frame: PlannedFrame, out: string): Promise<void> {
+ *  nothing and exits 0; one retry a second earlier covers it.
+ *
+ *  A moment can also sit well past a file's final frame and still inside
+ *  the span its row claims. LiveKit reports how long the egress ran, not
+ *  how much picture it wrote, and a screen share sends frames only when the
+ *  screen changes: a slide left up for the last ten seconds of a run is
+ *  ten seconds with no frame in the file (measured 2026-10-02: a 25.5 s
+ *  run held 14.7 s of picture). The screen at that moment is the last
+ *  picture the file holds, so that is the frame, and the caller is told
+ *  how far back it was written (heldFromMs, ms into the file). */
+async function grab(ffmpeg: FfmpegRunner, source: string, frame: PlannedFrame, out: string): Promise<{ heldFromMs: number | null }> {
   const attempts = frame.offsetMs === null ? [null] : [frame.offsetMs, Math.max(0, frame.offsetMs - 1000)];
   let last: FfmpegResult | null = null;
-  for (const offset of attempts) {
+  const wrote = () => fs.existsSync(out) && fs.statSync(out).size > 0;
+  const clear = () => {
     try {
       fs.rmSync(out, { force: true });
     } catch {
       // A file we cannot remove is one ffmpeg -y will report on.
     }
+  };
+  for (const offset of attempts) {
+    clear();
     last = await ffmpeg(frameArgs(source, offset, out), { timeoutMs: GRAB_TIMEOUT_MS });
     if (last.code !== 0) break;
-    if (fs.existsSync(out) && fs.statSync(out).size > 0) return;
+    if (wrote()) return { heldFromMs: null };
   }
   if (last && last.code !== 0) throw new SnapError("ffmpeg_failed", ffmpegFailure(last.stderr, last.code === null));
+  if (frame.offsetMs !== null) {
+    clear();
+    const tail = await ffmpeg(lastFrameArgs(source, out), { timeoutMs: GRAB_TIMEOUT_MS });
+    if (tail.code !== 0) throw new SnapError("ffmpeg_failed", ffmpegFailure(tail.stderr, tail.code === null));
+    const heldFromMs = lastShownMs(tail.stderr);
+    if (wrote() && heldFromMs !== null && heldFromMs <= frame.offsetMs) return { heldFromMs };
+  }
   throw new SnapError("ffmpeg_failed", `ffmpeg found no frame at ${formatCallTime(frame.atMs)} in the recording.`);
 }
 
@@ -1194,8 +1255,14 @@ export async function snapCall(targetRaw: string | undefined, options: SnapOptio
     for (const [i, f] of plan.frames.entries()) {
       if (plan.frames.length > 1) deps.progress?.(`Frame ${i + 1}/${plan.frames.length} at ${formatCallTime(f.atMs)}`);
       const out = paths[i];
-      await grab(run, await source(f.recording, f.live), f, out);
+      const { heldFromMs } = await grab(run, await source(f.recording, f.live), f, out);
       if (!options.out) secureTempFile(out);
+      // The picture is older than the moment: say from when, on the call's
+      // own clock, so a reader never takes a held frame for a fresh one.
+      const heldAtMs = heldFromMs !== null && f.offsetMs !== null ? f.atMs - (f.offsetMs - heldFromMs) : null;
+      if (heldAtMs !== null && f.atMs - heldAtMs >= 1000) {
+        notes.push(`No new picture of ${recordingSubject(f.recording)} was written after ${formatCallTime(heldAtMs)}, so the frame for ${formatCallTime(f.atMs)} is the last one, from ${formatCallTime(heldAtMs)}.`);
+      }
       const said = lineAt(call.segments, f.atMs);
       const ref = callRefId(handle, null, f.atMs);
       const shows = recordingSubject(f.recording);
@@ -1208,7 +1275,7 @@ export async function snapCall(targetRaw: string | undefined, options: SnapOptio
         shows,
         live: f.live,
         recording_id: f.recording.id,
-        offset_ms: f.offsetMs,
+        offset_ms: heldFromMs ?? f.offsetMs,
         call_url: `${deps.baseUrl}${callMomentHref(recs.transcript_id, f.atMs)}`,
         line: said
           ? {

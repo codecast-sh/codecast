@@ -86,6 +86,7 @@ import {
   announceRecordEnd,
   egressPatch,
   EGRESS_ACCEPT_TIMEOUT_MS,
+  EGRESS_BEGIN_TIMEOUT_MS,
   huddleKeepers,
   LIVE_FRAME_INTERVAL_S,
   liveRoomRun,
@@ -714,7 +715,7 @@ export const settleFromObject = internalMutation({
  *  the room racing each other start one egress, not two). */
 export const claimScreen = internalMutation({
   args: { run_id: v.id("call_recordings"), track_sid: v.string(), identity: v.string(), name: v.string() },
-  handler: async (ctx, args): Promise<{ id: Id<"call_recordings">; r2_key: string; live_frame_key: string } | null> => {
+  handler: async (ctx, args): Promise<{ id: Id<"call_recordings">; r2_key: string } | null> => {
     const run = await ctx.db.get(args.run_id);
     if (!run || (run.status !== "starting" && run.status !== "recording")) return null;
     const taken = await ctx.db
@@ -726,7 +727,13 @@ export const claimScreen = internalMutation({
     const now = Date.now();
     const file = { transcriptId: String(run.transcript_id), kind: "screen" as const, requestedAt: run.requested_at, trackSid: args.track_sid };
     const r2_key = callRecordingKey(file);
-    const live_frame_key = liveFrameKey(callRecordingLiveFramePrefix(file));
+    // No live frame for a screen file. LiveKit will not start a track
+    // composite asked for an MP4 and pictures together: it sits in
+    // "starting" until stopped ("Stop called before pipeline could start"),
+    // while either output alone starts in seconds (probed 2026-10-02, 0 of 4
+    // runs with both, 4 of 4 with one). The file is what a screen is
+    // recorded for; a live picture of the call comes from the room's file,
+    // which shows the share too.
     const id = await ctx.db.insert("call_recordings", {
       transcript_id: run.transcript_id,
       room_key: run.room_key,
@@ -734,7 +741,6 @@ export const claimScreen = internalMutation({
       kind: "screen",
       status: "starting",
       r2_key,
-      live_frame_key,
       track_sid: args.track_sid,
       participant_identity: args.identity,
       participant_name: args.name || undefined,
@@ -743,7 +749,7 @@ export const claimScreen = internalMutation({
       requested_at: now,
       updated_at: now,
     });
-    return { id, r2_key, live_frame_key };
+    return { id, r2_key };
   },
 });
 
@@ -770,9 +776,9 @@ function startErrorMessage(err: unknown): string {
 }
 
 /** The live frame output for a file, or nothing for a row without one. */
-function liveFrameFor(row: { live_frame_key?: string | null }, size?: { width: number; height: number } | null): LiveFrameOutput | undefined {
+function liveFrameFor(row: { live_frame_key?: string | null }): LiveFrameOutput | undefined {
   if (!row.live_frame_key) return undefined;
-  return { prefix: row.live_frame_key.replace(/\.jpeg$/, ""), intervalSeconds: LIVE_FRAME_INTERVAL_S, ...(size ? { width: size.width, height: size.height } : {}) };
+  return { prefix: row.live_frame_key.replace(/\.jpeg$/, ""), intervalSeconds: LIVE_FRAME_INTERVAL_S };
 }
 
 /** The room's running egresses, or null when LiveKit could not be asked. */
@@ -813,7 +819,7 @@ async function recordNewShares(
   participants: Awaited<ReturnType<typeof listParticipants>>,
 ): Promise<void> {
   for (const share of screenSharesToRecord(participants, rows)) {
-    const claim: { id: Id<"call_recordings">; r2_key: string; live_frame_key: string } | null = await ctx.runMutation(internal.callRecordings.claimScreen, {
+    const claim: { id: Id<"call_recordings">; r2_key: string } | null = await ctx.runMutation(internal.callRecordings.claimScreen, {
       run_id: run._id,
       track_sid: share.trackSid,
       identity: share.identity,
@@ -830,8 +836,6 @@ async function recordNewShares(
           filepath: claim.r2_key,
           upload: egressS3Upload(bucket),
           ...(advanced ? { advanced } : {}),
-          // At the share's own size: a frame of a screen is for reading it.
-          liveFrame: liveFrameFor(claim, advanced),
         }),
       );
       const applied = await ctx.runMutation(internal.callRecordings.applyEgress, { id: claim.id, egress, attach: true });
@@ -973,6 +977,10 @@ export const reconcileRun = internalAction({
         continue;
       }
       const applied = await ctx.runMutation(internal.callRecordings.applyEgress, { id: row._id, egress });
+      if (applied.status === "starting" && egress.status === "starting" && now - row.requested_at > EGRESS_BEGIN_TIMEOUT_MS) {
+        await ctx.runMutation(internal.callRecordings.failRecording, { id: row._id, error: "LiveKit accepted this recording but never began writing it." });
+        continue;
+      }
       // A stop that LiveKit has not acted on after a while is asked again.
       if (applied.status === "stopping" && (egress.status === "starting" || egress.status === "active") && now - row.updated_at > STOP_RETRY_MS) {
         await stopEgress(cfg, row.egress_id).catch((err) => console.warn(`[callRecordings] stop retry failed for ${row.egress_id}:`, err));

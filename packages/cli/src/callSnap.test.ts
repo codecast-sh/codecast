@@ -20,6 +20,9 @@ import {
   parseSnapTarget,
   pickSceneMoments,
   sceneArgs,
+  lastFrameArgs,
+  lastShownMs,
+  TAIL_READ_MS,
   serveSources,
   SignedSources,
   snapCall,
@@ -426,6 +429,23 @@ describe("snapCall", () => {
     h.cleanup();
   });
 
+  test("now, with a share being recorded: the room's live picture; --screen says when the share's own can be read", async () => {
+    // The server writes a live picture for the room's file only (LiveKit
+    // will not start a screen file asked for pictures too).
+    const live = recordings({ call_ended_at: null, server_now: T + min(3) }, [
+      { _id: "c1", run_id: "r1", kind: "composite", status: "recording", started_at: T + s(50), url: null, live_frame_url: "https://r2/c1.jpeg" },
+      { _id: "s1", run_id: "r1", kind: "screen", status: "recording", started_at: T + s(120), participant_name: "Ana", url: null, live_frame_url: null },
+    ]);
+    const h = harness(live);
+    const res = await snapCall("cl-42", {}, h.deps);
+    expect(res.frames[0]).toMatchObject({ live: true, kind: "composite", offset_ms: null });
+    expect(h.calls[0]).toContain("https://r2/c1.jpeg");
+    const strict = await refusal(snapCall("cl-42", { screen: true }, h.deps));
+    expect(strict.code).toBe("not_live");
+    expect(strict.message).toBe("A shared screen in cl-42 is being recorded, and its own picture can be read once the recording is saved. For the call as it is now, with the share in it, drop --screen.");
+    h.cleanup();
+  });
+
   test("--share uploads and carries the markdown; the public image's alt names the moment, not the call's title", async () => {
     const h = harness(recordings());
     const res = await snapCall("cl-42:2", { share: true }, h.deps);
@@ -495,6 +515,45 @@ describe("snapCall", () => {
     expect(err.code).toBe("ffmpeg_failed");
     expect(err.message).toContain("403");
     h.cleanup();
+  });
+
+  test("a moment past a file's last written picture takes that picture and says from when", async () => {
+    // LiveKit's duration is how long the egress ran; a share that stopped
+    // changing wrote nothing after its last change (cl-107, 2026-10-02: a
+    // 25.5 s run held 14.7 s of picture). Line 2's frame is 11 s into the
+    // share's file; the file's last frame is at 6.5 s.
+    const h = harness(recordings());
+    const seen: string[][] = [];
+    const sparse: FfmpegRunner = async (args) => {
+      seen.push(args);
+      if (!args.includes("-sseof")) return { code: 0, stdout: "", stderr: "" };
+      fs.writeFileSync(args[args.length - 1], "png");
+      return { code: 0, stdout: "", stderr: "[Parsed_showinfo_0] n:0 pts:5 pts_time:5.000\n[Parsed_showinfo_0] n:1 pts:6 pts_time:6.500\n" };
+    };
+    const res = await snapCall("cl-42:2", {}, { ...h.deps, ffmpeg: sparse });
+    expect(seen).toHaveLength(3);
+    expect(res.frames[0]).toMatchObject({ at_ms: s(131), offset_ms: 6500 });
+    expect(res.notes).toContain("No new picture of Ana's screen was written after 2:06, so the frame for 2:11 is the last one, from 2:06.");
+    h.cleanup();
+  });
+
+  test("a file with no picture at all still refuses", async () => {
+    const h = harness(recordings());
+    const empty: FfmpegRunner = async () => ({ code: 0, stdout: "", stderr: "" });
+    const err = await refusal(snapCall("cl-42:2", {}, { ...h.deps, ffmpeg: empty }));
+    expect(err.code).toBe("ffmpeg_failed");
+    expect(err.message).toBe("ffmpeg found no frame at 2:11 in the recording.");
+    h.cleanup();
+  });
+
+  test("last picture: a tail read on the file's own clock, the last logged time wins", () => {
+    const args = lastFrameArgs("https://bucket/s.mp4", "/o/f.png");
+    expect(args.indexOf("-sseof")).toBeLessThan(args.indexOf("-i"));
+    expect(args[args.indexOf("-sseof") + 1]).toBe(`-${(TAIL_READ_MS / 1000).toFixed(3)}`);
+    expect(args).toContain("-copyts");
+    expect(args.slice(-2)).toEqual(["-y", "/o/f.png"]);
+    expect(lastShownMs("pts_time:14.328\nx pts_time:14.461333 y")).toBe(14461);
+    expect(lastShownMs("no frames")).toBeNull();
   });
 
   test("the moment as a second word, the way an agent types it after `cast call cl-42 15:25`", async () => {

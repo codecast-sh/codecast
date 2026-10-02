@@ -15,6 +15,7 @@ import schema from "./schema";
 import { hashToken } from "./apiTokens";
 import { sha256Hex } from "./lib/hash";
 import { signForCli, signingMoment } from "./callRecordings";
+import { EGRESS_BEGIN_TIMEOUT_MS } from "./lib/callRecordingRuns";
 
 // The first test pays for loading the calls module graph.
 setDefaultTimeout(60_000);
@@ -258,14 +259,17 @@ describe("pressing Record", () => {
     expect(row.live_frame_key).toBe(`calls/${res.transcript_id}/${row.requested_at}-composite-live.jpeg`);
     expect(row.egress_id).toBe("EG_1");
 
-    // Ana's share got its own file at her screen's size, with a live frame
-    // at that size; LiveKit's recorder did not.
+    // Ana's share got its own file at her screen's size, and only the file:
+    // LiveKit never starts a track composite asked for pictures beside an
+    // MP4 (the share's file was lost on two real runs, 2026-10-02).
+    // LiveKit's recorder got none.
     const track = world.calls.filter((c) => c.method === "Egress/StartTrackCompositeEgress");
     expect(track).toHaveLength(1);
     expect(track[0].body).toMatchObject({ video_track_id: "TR_scr", advanced: { width: 2880, height: 1800, framerate: 15, key_frame_interval: 1 } });
-    expect(track[0].body.image_outputs[0]).toMatchObject({ width: 2880, height: 1800 });
+    expect(track[0].body).not.toHaveProperty("image_outputs");
     const [screen] = (await rows(t)).filter((r: any) => r.kind === "screen");
     expect(screen).toMatchObject({ run_id: row._id, participant_identity: String(ana), participant_name: "Ana", status: "starting", egress_id: "EG_2" });
+    expect(screen.live_frame_key).toBeUndefined();
     expect(screen.r2_key).toBe(`calls/${res.transcript_id}/${row.requested_at}-screen-TR_scr.mp4`);
 
     // A second press, by anyone, is the same recording.
@@ -323,12 +327,12 @@ describe("a run, start to finish", () => {
     const live = await as(String(ben)).query(api.callRecordings.getRoomRecording, { room_key: room });
     expect(live.live).toMatchObject({ status: "recording", started_at: c0, call_short_id: call.short_id });
 
-    // While it records, the CLI gets the live frame of each file, never a
-    // file URL (nothing is in the bucket yet).
+    // While it records, the CLI gets the room's live frame, never a file URL
+    // (nothing is in the bucket yet). The screen file has no live frame.
     const during = await signForCli(await t.query(internal.callRecordings.cliCallRecordings, { api_token: TOKEN, call: call.short_id }));
-    expect(during.recordings.map((r: any) => [r.kind, r.url, new URL(r.live_frame_url).pathname])).toEqual([
+    expect(during.recordings.map((r: any) => [r.kind, r.url, r.live_frame_url && new URL(r.live_frame_url).pathname])).toEqual([
       ["composite", null, `/codecast-call-recordings/${comp0.live_frame_key}`],
-      ["screen", null, `/codecast-call-recordings/${scr0.live_frame_key}`],
+      ["screen", null, null],
     ]);
     expect(during.live_frame_interval_ms).toBe(2000);
     expect(during.recordings.some((r: any) => "r2_key" in r || "live_frame_key" in r)).toBe(false);
@@ -355,7 +359,7 @@ describe("a run, start to finish", () => {
     await look(t, recording_id);
     await settle(t);
     expect((await as(String(ana)).query(api.callRecordings.getRoomRecording, { room_key: room })).live).toBeNull();
-    expect(world.deletes.sort()).toEqual([comp0.live_frame_key, scr0.live_frame_key].sort());
+    expect(world.deletes).toEqual([comp0.live_frame_key]);
     expect((await rows(t)).every((r: any) => r.live_frame_key === undefined)).toBe(true);
     // Stopped by a press: told once, not again when the file lands.
     expect(await events(t)).toEqual(["record_on", "record_off:pressed"]);
@@ -484,6 +488,36 @@ describe("a run, start to finish", () => {
     await look(t, recording_id);
     expect((await rows(t))[0]).toMatchObject({ status: "ready", stop_reason: "limit" });
     expect(await events(t)).toEqual(["record_on", "record_off:limit"]);
+  });
+});
+
+describe("a file LiveKit never begins", () => {
+  test("a screen file still starting past the limit fails and is stopped; the room keeps recording", async () => {
+    // The shape of the share files lost on 2026-10-02: accepted, never
+    // written, and gone without a word once the run ended.
+    const { t, ana, room, as } = await seed();
+    world.setParticipants([screenShare(String(ana))]);
+    const { recording_id } = await as(String(ana)).mutation(api.callRecordings.startRecording, { room_key: room });
+    await settle(t);
+    await quietLoops(t);
+    const comp = (await rows(t)).find((r: any) => r.kind === "composite");
+    world.activate("EG_1", comp.r2_key, Date.now() - 10_000);
+    await look(t, recording_id);
+    expect((await rows(t)).find((r: any) => r.kind === "screen").status).toBe("starting");
+    expect(world.stops()).toEqual([]);
+
+    await t.run(async (ctx: any) => {
+      const screen = (await ctx.db.query("call_recordings").collect()).find((r: any) => r.kind === "screen");
+      await ctx.db.patch(screen._id, { requested_at: Date.now() - EGRESS_BEGIN_TIMEOUT_MS - 1_000 });
+    });
+    await look(t, recording_id);
+    await settle(t);
+    const after = await rows(t);
+    expect(after.find((r: any) => r.kind === "screen")).toMatchObject({ status: "failed", error: "LiveKit accepted this recording but never began writing it.", stop_reason: "failed" });
+    expect(after.find((r: any) => r.kind === "composite").status).toBe("recording");
+    expect(world.stops()).toEqual(["EG_2"]);
+    // The room is told about its own video, not about one share's file.
+    expect(await events(t)).toEqual(["record_on"]);
   });
 });
 
