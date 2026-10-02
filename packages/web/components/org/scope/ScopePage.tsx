@@ -34,6 +34,7 @@ import { AnchorOnboarding } from "../../anchor/AnchorConversation";
 import { InboxConversation, type SeatSession } from "../../../app/inbox/QueuePageClient";
 import { useSeat } from "./useSeat";
 import { SeatLead } from "./SeatLead";
+import { RoleOffer } from "./RoleOffer";
 import { useDiffViewerStore } from "../../../store/diffViewerStore";
 import { RoleFace } from "../RoleFace";
 import { RolePausedNote } from "../RolePausedNote";
@@ -214,7 +215,11 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
   const speaker = role ? role.name : anchor?.name ?? "the workspace agent";
   // The composer is Talk (F4.1): the host, the person the role reports to
   // and an admin send; anyone else reads and asks to send.
-  const seat = useSeat({ conversationId: standingId, speaker, lead, canTalk: canEditBrief, hideDiff: panelOpen, onSessionView });
+  // What the seat offers next sits above its composer; only the Head of
+  // People's thread has one (RoleOffer renders nothing anywhere else).
+  const offer = useMemo(() => (standingId ? <RoleOffer conversationId={standingId} /> : null), [standingId]);
+  const seat = useSeat({ conversationId: standingId, speaker, lead, offer, canTalk: canEditBrief, hideDiff: panelOpen, onSessionView });
+  const pinned = useInboxStore((st) => role ? isHeaderPinned(st, "role", role._id) : false);
 
   // -------- not found / loading
   if (!tree) {
@@ -235,7 +240,6 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
     );
   }
 
-  const pinned = useInboxStore((st) => role ? isHeaderPinned(st, "role", role._id) : false);
   const words = role ? roleWords(role, tree.workspace.kind === "team" ? tree.workspace.name : null) : null;
   const name = words ? words.name : anchor?.name || tree.workspace.name || "Workspace";
   const handle = role ? role.handle : "workspace";

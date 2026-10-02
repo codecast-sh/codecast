@@ -11,7 +11,7 @@
 
 import { useWorkspaceFeature } from "../../lib/teamFeatures";
 import { TopbarButton } from "../TopbarButton";
-import { lazy, Suspense, useRef, useState } from "react";
+import { lazy, Suspense, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowUpRight, X } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
@@ -22,6 +22,7 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { globalChiefOf, isHeaderPinned, readHeaderPins, resolveHeaderPins, toggleHeaderPin, type ResolvedPin } from "../../lib/headerPins";
 import { Pin, PinOff } from "lucide-react";
 import { SessionFace } from "../identity/SessionFace";
+import { RoleOffer } from "../org/scope/RoleOffer";
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 
@@ -48,6 +49,10 @@ export function AnchorPanel() {
     : target?.kind === "session" ? pins.find((p) => p.conversationId === target.id) ?? sessionPin(target.id)
     : null) ?? pins[0] ?? null;
   const current = shown?.anchor ?? null;
+  // What the seat offers next, above its composer: the Head of People's
+  // review (RoleOffer renders nothing for any other thread).
+  const offerFor = shown?.conversationId ?? null;
+  const offer = useMemo(() => (offerFor ? <RoleOffer conversationId={offerFor} /> : null), [offerFor]);
   const root = useRootAgent();
   const router = useRouter();
   // No global chief yet: the panel offers the hire above whatever it shows (S30).
@@ -123,7 +128,7 @@ export function AnchorPanel() {
             <HireChiefCard compact onHired={() => setHiring(false)} />
           ) : shown ? (
             shown.conversationId
-              ? <AnchorConversation conversationId={shown.conversationId} hideHeader foldBootstrap foldWorkingTurns />
+              ? <AnchorConversation conversationId={shown.conversationId} hideHeader foldBootstrap foldWorkingTurns composerNode={offer} />
               : <div className="h-full flex items-center justify-center text-sol-text-dim text-sm">Coming online…</div>
           ) : root ? (
             // The workspace has its agent but nothing is pinned: the way to a right hand (S30).
