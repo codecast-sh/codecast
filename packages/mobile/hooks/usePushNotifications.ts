@@ -8,11 +8,12 @@ import { api } from '@codecast/convex/convex/_generated/api';
 import { useRouter } from 'expo-router';
 import { chatPushIsOnScreen } from '@/lib/chatFocus';
 import { useNotificationCatchUp } from '@/hooks/useNotificationCatchUp';
-import { acceptInvite, declineInvite } from '@/lib/calls/callManager';
+import { acceptInvite, declineInvite, joinCall } from '@/lib/calls/callManager';
 import { useAuth } from '@/lib/auth';
 import {
   CALL_PUSH_ACTION_DECLINE,
   CALL_PUSH_ACTION_JOIN,
+  CALL_GUEST_WAITING_PUSH_TYPE,
   CALL_PUSH_CATEGORY,
   CALL_PUSH_TYPE_MISSED,
   CALL_PUSH_TYPE_RING,
@@ -135,6 +136,14 @@ export function usePushNotifications() {
           pathname: '/recording/[id]',
           params: { id: recordingPush.recordingId },
         } as never);
+        return;
+      }
+      if (data.type === CALL_GUEST_WAITING_PUSH_TYPE && typeof data.room_key === 'string') {
+        // Somebody on a guest link is at the door of a room nobody is in:
+        // the push exists so its creator walks in and lets them in. Joining
+        // is the answer (the door is in the call screen).
+        void joinCall(data.room_key);
+        router.push('/call');
         return;
       }
       if (data.type === CALL_PUSH_TYPE_MISSED) {
