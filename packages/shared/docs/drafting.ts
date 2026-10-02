@@ -511,22 +511,48 @@ export function draftMarkFor(span: { kind: DraftKind; attrs: AltAttrs | GhostAtt
 }
 
 /**
- * Plain text that may hold drafting spans, as text nodes carrying drafting
- * marks. Everything outside the spans stays literal text, as the server's
- * markdown reader already treats it.
+ * One line of markdown as inline nodes: drafting spans become drafting marks,
+ * and the inline syntax the server's writer emits (docSync wrapMarks: bold,
+ * italic, strike, code, links) becomes the matching editor marks.
  */
 export function draftTextNodes(text: string, marks: PMMark[] = []): PMNode[] {
   const top = findDraftSpans(text).filter((s, _, all) => !all.some((o) => o !== s && o.start <= s.start && o.end >= s.end));
-  if (!top.length) return text ? [{ type: "text", text, ...(marks.length ? { marks } : {}) }] : [];
   const out: PMNode[] = [];
   let at = 0;
   for (const s of top) {
-    if (s.start > at) out.push({ type: "text", text: text.slice(at, s.start), ...(marks.length ? { marks } : {}) });
+    if (s.start > at) out.push(...inlineMarkdownNodes(text.slice(at, s.start), marks));
     out.push(...draftTextNodes(s.inner, [...marks, draftMarkFor(s)]));
     at = s.end;
   }
-  if (at < text.length) out.push({ type: "text", text: text.slice(at), ...(marks.length ? { marks } : {}) });
+  if (at < text.length) out.push(...inlineMarkdownNodes(text.slice(at), marks));
   return out;
+}
+
+// Earliest match wins; code is literal inside. A new mark goes first so the
+// writer, which wraps marks in array order, nests the syntax the same way back.
+const INLINE_MARKS: { re: RegExp; mark: (m: RegExpExecArray) => PMMark; literal?: boolean }[] = [
+  { re: /`([^`\n]+)`/, mark: () => ({ type: "code" }), literal: true },
+  { re: /\[([^\]\n]+)\]\(([^)\s]+)\)/, mark: (m) => ({ type: "link", attrs: { href: m[2] } }) },
+  { re: /\*\*(?=\S)(.+?)(?<=\S)\*\*/, mark: () => ({ type: "bold" }) },
+  { re: /~~(?=\S)(.+?)(?<=\S)~~/, mark: () => ({ type: "strike" }) },
+  { re: /(?<!\*)\*(?=[^\s*])(.+?)(?<=[^\s*])\*(?!\*)/, mark: () => ({ type: "italic" }) },
+];
+
+function inlineMarkdownNodes(text: string, marks: PMMark[]): PMNode[] {
+  if (!text) return [];
+  let best: { m: RegExpExecArray; spec: (typeof INLINE_MARKS)[number] } | null = null;
+  for (const spec of INLINE_MARKS) {
+    const m = spec.re.exec(text);
+    if (m && (!best || m.index < best.m.index)) best = { m, spec };
+  }
+  if (!best) return [{ type: "text", text, ...(marks.length ? { marks } : {}) }];
+  const { m, spec } = best;
+  const inner = [spec.mark(m), ...marks];
+  return [
+    ...inlineMarkdownNodes(text.slice(0, m.index), marks),
+    ...(spec.literal ? [{ type: "text", text: m[1], marks: inner }] : inlineMarkdownNodes(m[1], inner)),
+    ...inlineMarkdownNodes(text.slice(m.index + m[0].length), marks),
+  ];
 }
 
 // ── The Lab ─────────────────────────────────────────────────────────

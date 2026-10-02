@@ -1,7 +1,7 @@
 import { Extension, Mark, getMarkRange, mergeAttributes, type Editor } from "@tiptap/core";
 import { Plugin, PluginKey, TextSelection, type EditorState, type Transaction } from "@tiptap/pm/state";
 import { Decoration, DecorationSet, type EditorView } from "@tiptap/pm/view";
-import type { Mark as PMMark, MarkType, Node as PMNode } from "@tiptap/pm/model";
+import { Fragment, Slice, type Mark as PMMark, type MarkType, type Node as PMNode } from "@tiptap/pm/model";
 import {
   CLOSE_TAG,
   DRAFT_MARKS,
@@ -11,6 +11,7 @@ import {
   altAttrsFor,
   draftMarkTag,
   fullAltList,
+  isDraftMark,
   normalizeAlts,
   type AltOption,
   type LabResult,
@@ -619,8 +620,40 @@ export function stashSelection(view: EditorView, onStash: (text: string) => void
   return true;
 }
 
+/**
+ * What a copy carries: the prose as shown. Ghosted text is dropped and the
+ * alternatives and flags unwrap to the text on screen, so the clipboard (plain
+ * and HTML) never holds the drafting markup the doc stores.
+ */
+export function cleanDraftingFragment(fragment: Fragment): Fragment {
+  const out: PMNode[] = [];
+  fragment.forEach((node) => {
+    if (node.isText) {
+      if (node.marks.some((m) => m.type.name === DRAFT_MARKS.ghost)) return;
+      out.push(node.mark(node.marks.filter((m) => !isDraftMark({ type: m.type.name }))));
+    } else {
+      out.push(node.copy(cleanDraftingFragment(node.content)));
+    }
+  });
+  return Fragment.fromArray(out);
+}
+
+const DraftingClipboard = Extension.create({
+  name: "draftingClipboard",
+  addProseMirrorPlugins() {
+    return [
+      new Plugin({
+        key: new PluginKey("draftingClipboard"),
+        props: {
+          transformCopied: (slice) => new Slice(cleanDraftingFragment(slice.content), slice.openStart, slice.openEnd),
+        },
+      }),
+    ];
+  },
+});
+
 /** The drafting marks every editor loads, so no editor drops drafting markup it opens. */
-export const DRAFTING_MARKS = [DraftAltsMark, DraftGhostMark, DraftFlagMark];
+export const DRAFTING_MARKS = [DraftAltsMark, DraftGhostMark, DraftFlagMark, DraftingClipboard];
 
 /** The drafting behaviour (pager, cycling, shortcuts) the doc page's editor adds on top of the marks. */
 export const DraftingExtension = Extension.create<DraftingOptions>({

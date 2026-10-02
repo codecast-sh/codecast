@@ -47,6 +47,17 @@ describe("drafting in the editor", () => {
     e.destroy();
   });
 
+  test("a copy carries the prose as shown, never the drafting markup", () => {
+    let src = shared.addAlternatives("Like a paperclip, for example.", "paperclip", ["thumbtack", "eraser"], { ai: true });
+    src = shared.ghostText(src, ", for example");
+    const e = make(src);
+    const slice = e.view.someProp("transformCopied", (f: any) => f(e.state.doc.slice(0, e.state.doc.content.size), e.view));
+    const text = e.storage.markdown.serializer.serialize(slice.content).trim();
+    expect(text).toBe("Like a paperclip.");
+    expect(md(e)).toBe(src);
+    e.destroy();
+  });
+
   test("cycling swaps the word in place and fixes the article", () => {
     const e = make(shared.addAlternatives("Like a paperclip, for example.", "paperclip", ["thumbtack", "eraser"]));
     const pos = D.findTextRanges(e.state.doc, "paperclip")[0].from;
