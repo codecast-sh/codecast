@@ -87,6 +87,7 @@ import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useMediaMoment } from "../../hooks/useMediaMoment";
 import { RecordingMark } from "../../components/calls/RecordingMark";
+import { RecorderMic } from "../../components/calls/RecorderMic";
 import { fmtClock as fmtWhen } from "../../components/triggerCadence";
 
 /** Where a recording of mine stands in triage, at a glance: private (the
@@ -556,6 +557,7 @@ function CallDetail({ id }: { id: string }) {
           <span>{fmtWhen(call.started_at)}</span>
           <span>{fmtCallLength(call.started_at, call.ended_at)}</span>
           <RecordingScopePicker call={call} />
+          {recording && live && <RecorderMic transcriptId={String(call._id)} />}
           {(call.participants || []).length > 0 && (
             <span className="flex flex-wrap items-center gap-1.5">
               {(call.participants || []).map((p: any) => (

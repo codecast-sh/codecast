@@ -22,6 +22,7 @@ import { useDevices, useDeviceMoveStatus } from "../DeviceBadge";
 import { useProviderKeyCommand, deviceManagedKeys } from "../../lib/useProviderKeyCommand";
 import type { RestartPhase, RestartStage } from "../../hooks/useSessionRestart";
 import { CopyCommand } from "./blocks/shared";
+import { Spinner } from "../ui/spinner";
 import { authRemedy, detectProviderFromError } from "./classify";
 import { cloudAgentCardHeading, CloudAgentSetupHint, CloudAgentSetupText } from "../cloudAgents";
 import { useCloudAgentSetupCard } from "../cloudAgents/sessionAgent";
@@ -146,6 +147,21 @@ export function TimelineRule({
   );
 }
 
+// The end of a window that has later pages: the thread trails off into a faint
+// rule with a quiet spinner, since reaching it is what loads the next page.
+export function ThreadTailLoader({ loading }: { loading: boolean }) {
+  return (
+    <TimelineRule color="color-mix(in srgb, var(--sol-text-dim) 35%, transparent)" className="mt-6 mb-10 animate-in fade-in duration-700" label="Later messages">
+      <span className="flex items-center gap-2 px-1 text-[11px] tracking-wide text-sol-text-dim">
+        <Spinner className={`w-3 h-3 text-sol-cyan transition-opacity duration-500 ${loading ? "opacity-90" : "opacity-60"}`} />
+        <span className={`transition-opacity duration-500 ${loading ? "opacity-100" : "opacity-75"}`}>
+          {loading ? "Loading later messages" : "Later messages"}
+        </span>
+      </span>
+    </TimelineRule>
+  );
+}
+
 // One handoff, drawn where it landed in the timeline: the rule names who
 // passed the session to whom, and the note they wrote sits under it as a
 // message from the assigner. Every viewer sees it — it is the record of the
@@ -203,10 +219,7 @@ export function EdgeMessagesIndicator({
     <div data-cc-edge={dir} className={`sticky ${isUp ? "top-0" : "bottom-0"} z-10 flex justify-center py-1 sm:py-2 pointer-events-none`}>
       <div className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-0.5 sm:py-1 rounded-full bg-sol-bg border border-sol-border text-sol-text-muted0 text-[10px] sm:text-xs shadow-sm pointer-events-auto">
         {loading ? (
-          <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-          </svg>
+          <Spinner className="w-3 h-3" />
         ) : (
           <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={isUp ? "M5 15l7-7 7 7" : "M19 9l-7 7-7-7"} />

@@ -94,6 +94,12 @@ export function templatePath(value: string): string {
   if (!value || isAbsolutePath(value) || value.includes("\\") || value.includes("\0") || value.split("/").some((p) => !p || p === "." || p === "..") || value.includes("{{")) throw new Error(`Unsafe artifact path: ${value}`);
   return value;
 }
+/** Order two release versions (major.minor.patch): negative when `a` is older. */
+export function compareVersions(a: string, b: string): number {
+  const pa = a.split(".").map(Number), pb = b.split(".").map(Number);
+  for (let i = 0; i < 3; i++) if (pa[i]! !== pb[i]!) return pa[i]! - pb[i]!;
+  return 0;
+}
 export function intervalMs(every: string): number {
   const match = /^([1-9][0-9]*)(m|h|d|w)$/.exec(every);
   if (!match) throw new Error(`Invalid cadence: ${every}`);

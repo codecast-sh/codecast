@@ -45,7 +45,8 @@ import BlogTeamSees from "@/app/(marketing)/blog/what-your-team-sees/page";
 import CompareIndex from "@/app/(marketing)/compare/page";
 import Compare from "@/app/(marketing)/compare/ComparePage";
 
-export { SEO_ROUTES, SITE_URL, seoFor } from "@/lib/seoRoutes";
+export { SEO_ROUTES, SITE_URL, seoFor, cardHeading, cardImagePath } from "@/lib/seoRoutes";
+export { buildBlogFeed, BLOG_FEED_PATH } from "@/lib/blogFeed";
 
 // One client for all renders; nothing subscribes during renderToString, so no
 // WebSocket is ever opened.

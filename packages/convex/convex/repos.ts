@@ -35,6 +35,7 @@ import { matchFileLines, newResolveCaches, resolveCommitSessions, type BlameView
 import { contentLinesToMatch } from "@codecast/shared/blame";
 import { WORKTREES_KIND, mergeWorktreesPayload, type WorktreesPayload } from "@codecast/shared/contracts";
 import { localCommitFiles } from "./lib/localCommitFiles";
+import { markCommitDirty } from "./lib/changesDirty";
 
 const MINUTE = 60 * 1000;
 const TTL: Record<string, number> = {
@@ -737,7 +738,10 @@ export async function upsertLocalCommit(
     if (fromTrailer ? dup.conversation_id !== fromTrailer : conversationId && !dup.conversation_id) patch.conversation_id = conversationId;
     if (!dup.files?.length && files?.length) patch.files = files;
     if (!scratch && args.commit.branch && isHarnessScratch({ branch: dup.branch })) patch.branch = args.commit.branch;
-    if (Object.keys(patch).length) await ctx.db.patch(dup._id, patch);
+    if (Object.keys(patch).length) {
+      await ctx.db.patch(dup._id, patch);
+      await markCommitDirty(ctx, dup._id);
+    }
     return { commit_id: dup._id, created: false, conversation_id: fromTrailer ?? dup.conversation_id ?? conversationId };
   }
   const commit_id = await ctx.db.insert("commits", {
@@ -747,6 +751,7 @@ export async function upsertLocalCommit(
     team_id: args.teamId,
     ...(conversationId ? { conversation_id: conversationId } : {}),
   });
+  await markCommitDirty(ctx, commit_id);
   return { commit_id, created: true, conversation_id: conversationId };
 }
 

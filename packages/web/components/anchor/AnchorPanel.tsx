@@ -6,7 +6,7 @@
 // conversation. Ephemeral state in the store (`anchorPanel`), opened by a
 // header pin, the shortcut, or the palette; a role's page is the full home,
 // with its scope beside the conversation. With no target the panel shows the
-// first header pin: the person's global Chief of Staff by default, else the
+// first header pin: the person's global Executive Assistant by default, else the
 // active workspace's agent.
 
 import { useWorkspaceFeature } from "../../lib/teamFeatures";
@@ -19,7 +19,7 @@ import { agentName, agentTitle, deriveAnchorStatus, useAnchors, useRootAgent, ty
 import { AnchorAvatar, AnchorScopePill } from "./AnchorIdentity";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
-import { globalChiefOf, isHeaderPinned, readHeaderPins, resolveHeaderPins, toggleHeaderPin, type ResolvedPin } from "../../lib/headerPins";
+import { globalAssistantOf, isHeaderPinned, readHeaderPins, resolveHeaderPins, toggleHeaderPin, type ResolvedPin } from "../../lib/headerPins";
 import { Pin, PinOff } from "lucide-react";
 import { SessionFace } from "../identity/SessionFace";
 import { RoleOffer } from "../org/scope/RoleOffer";
@@ -32,8 +32,8 @@ const AnchorConversation = lazy(() =>
 const AnchorOnboarding = lazy(() =>
   import("./AnchorConversation").then((module) => ({ default: module.AnchorOnboarding })),
 );
-const HireChiefCard = lazy(() =>
-  import("./AnchorConversation").then((module) => ({ default: module.HireChiefCard })),
+const HireAssistantCard = lazy(() =>
+  import("./AnchorConversation").then((module) => ({ default: module.HireAssistantCard })),
 );
 
 export function AnchorPanel() {
@@ -55,8 +55,8 @@ export function AnchorPanel() {
   const offer = useMemo(() => (offerFor ? <RoleOffer conversationId={offerFor} /> : null), [offerFor]);
   const root = useRootAgent();
   const router = useRouter();
-  // No global chief yet: the panel offers the hire above whatever it shows (S30).
-  const hasGlobalChief = !!globalChiefOf(anchors);
+  // No global assistant yet: the panel offers the hire above whatever it shows (S30).
+  const hasGlobalAssistant = !!globalAssistantOf(anchors);
   const [hiring, setHiring] = useState(false);
 
   // Keep mounted after first open so the conversation's scroll/composer state
@@ -113,10 +113,10 @@ export function AnchorPanel() {
           </ShortcutTooltip>
         </div>
       </header>
-      {shown && !hasGlobalChief && !hiring && (
-        <button type="button" onClick={() => setHiring(true)} className="shrink-0 flex items-center gap-2 px-3 py-1.5 text-[11.5px] border-b border-sol-border/60 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/40 text-left" data-hire-chief-cta>
+      {shown && !hasGlobalAssistant && !hiring && (
+        <button type="button" onClick={() => setHiring(true)} className="shrink-0 flex items-center gap-2 px-3 py-1.5 text-[11.5px] border-b border-sol-border/60 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/40 text-left" data-hire-assistant-cta>
           <AnchorAvatar anchor={null} size={16} />
-          <span>Hire your Chief of Staff: a right hand across every workspace, pinned here.</span>
+          <span>Hire your Executive Assistant: a right hand across every workspace, pinned here.</span>
         </button>
       )}
       {hiring && (
@@ -124,15 +124,15 @@ export function AnchorPanel() {
       )}
       <div className="flex-1 min-h-0">
         <Suspense fallback={<div className="h-full flex items-center justify-center text-sol-text-dim text-sm">Loading…</div>}>
-          {hiring && !hasGlobalChief ? (
-            <HireChiefCard compact onHired={() => setHiring(false)} />
+          {hiring && !hasGlobalAssistant ? (
+            <HireAssistantCard compact onHired={() => setHiring(false)} />
           ) : shown ? (
             shown.conversationId
               ? <AnchorConversation conversationId={shown.conversationId} hideHeader foldBootstrap foldWorkingTurns composerNode={offer} />
               : <div className="h-full flex items-center justify-center text-sol-text-dim text-sm">Coming online…</div>
           ) : root ? (
             // The workspace has its agent but nothing is pinned: the way to a right hand (S30).
-            <HireChiefCard compact />
+            <HireAssistantCard compact />
           ) : (
             <AnchorOnboarding compact />
           )}
@@ -209,7 +209,7 @@ function sessionPin(id: string): ResolvedPin | null {
 }
 
 /** The header pins (org-staffing.md S30): one face per pinned role or
- *  session, the person's global Chief of Staff by default, else the active
+ *  session, the person's global Executive Assistant by default, else the active
  *  workspace's agent. One glance says whether a role needs you or is
  *  working; one click opens the panel on it. A right click unpins. */
 export function HeaderPins() {

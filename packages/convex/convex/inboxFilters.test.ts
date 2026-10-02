@@ -22,7 +22,7 @@ import {
   classifyRetirement,
   normalizeWorkStateFilter,
   trustedAgentStatus,
-  subagentKeepsParentWorking,
+  subagentIsProducing,
   SUBAGENT_PRODUCING_GRACE_MS,
   STATUS_TRUST_TTL_MS,
   AGENT_IDLE_GRACE_MS,
@@ -1106,7 +1106,7 @@ describe("trustedAgentStatus (lapsed heartbeat)", () => {
   });
 });
 
-describe("subagentKeepsParentWorking", () => {
+describe("subagentIsProducing", () => {
   const NOW = 10_000_000;
   const base = {
     isSubagent: true,
@@ -1118,33 +1118,33 @@ describe("subagentKeepsParentWorking", () => {
   };
 
   test("non-subagent children never pin the parent", () => {
-    expect(subagentKeepsParentWorking({ ...base, isSubagent: false, isLive: true, agentStatus: "working" })).toBe(false);
+    expect(subagentIsProducing({ ...base, isSubagent: false, isLive: true, agentStatus: "working" })).toBe(false);
   });
 
   test("a completed-conversation child never pins the parent", () => {
-    expect(subagentKeepsParentWorking({ ...base, convStatus: "completed", isLive: true, agentStatus: "working" })).toBe(false);
+    expect(subagentIsProducing({ ...base, convStatus: "completed", isLive: true, agentStatus: "working" })).toBe(false);
   });
 
   // The actual bug: a forked subagent that finished (agent idle) but whose
   // daemon keeps heartbeating — live, but not producing — must NOT keep its
   // long-finished parent stuck in "working".
-  test("a live-but-idle subagent does NOT keep the parent working", () => {
-    expect(subagentKeepsParentWorking({ ...base, isLive: true, agentStatus: "idle" })).toBe(false);
+  test("a live-but-idle subagent is NOT producing", () => {
+    expect(subagentIsProducing({ ...base, isLive: true, agentStatus: "idle" })).toBe(false);
   });
 
-  test("a live subagent whose agent is genuinely active keeps the parent working", () => {
-    expect(subagentKeepsParentWorking({ ...base, isLive: true, agentStatus: "working" })).toBe(true);
-    expect(subagentKeepsParentWorking({ ...base, isLive: true, agentStatus: "thinking" })).toBe(true);
+  test("a live subagent whose agent is genuinely active is producing", () => {
+    expect(subagentIsProducing({ ...base, isLive: true, agentStatus: "working" })).toBe(true);
+    expect(subagentIsProducing({ ...base, isLive: true, agentStatus: "thinking" })).toBe(true);
   });
 
   test("an active agent_status that isn't live (dead daemon) doesn't pin the parent", () => {
-    expect(subagentKeepsParentWorking({ ...base, isLive: false, agentStatus: "working" })).toBe(false);
+    expect(subagentIsProducing({ ...base, isLive: false, agentStatus: "working" })).toBe(false);
   });
 
   // Recent output is its own proof of work — covers Task-tool subagents with no
   // managed session (no agent_status to read, never "live").
-  test("a subagent that produced output within the grace keeps the parent working", () => {
-    expect(subagentKeepsParentWorking({
+  test("a subagent that produced output within the grace is producing", () => {
+    expect(subagentIsProducing({
       ...base,
       updatedAt: NOW - (SUBAGENT_PRODUCING_GRACE_MS - 1_000),
       isLive: false,
@@ -1153,7 +1153,7 @@ describe("subagentKeepsParentWorking", () => {
   });
 
   test("just past the producing grace with no live-active session, the parent settles", () => {
-    expect(subagentKeepsParentWorking({
+    expect(subagentIsProducing({
       ...base,
       updatedAt: NOW - (SUBAGENT_PRODUCING_GRACE_MS + 1_000),
       isLive: false,

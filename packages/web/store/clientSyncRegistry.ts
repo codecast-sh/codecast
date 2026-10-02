@@ -1,4 +1,5 @@
 import { DISPATCHABLE_CONVERSATION_FIELDS } from "@codecast/shared/contracts";
+import { deliverableAttachments } from "../lib/pendingUploads";
 
 export type PersistenceKind = "collection" | "meta";
 export type DispatchTableKind = "collection" | "singleton";
@@ -401,6 +402,18 @@ export const CLIENT_SYNC_REGISTRY = {
     // A row must know which channel it belongs to; anything else is a foreign
     // document that would render as a message with no home.
     validRow: (row: any) => typeof row?.channel_id === "string" && typeof row?.content === "string",
+    // A send painted while its images uploaded (chatSlice sendChatMessage) had
+    // no outbox entry yet, and the reload took the upload and its blob with
+    // it: show it as a failed send carrying what can still be delivered.
+    hydrateRow: (row: any) => {
+      if (!row?.attachments?.some((a: any) => !a.storage_id) || row._failedAt) return row;
+      return {
+        ...row,
+        attachments: deliverableAttachments(row.attachments),
+        _failedAt: Date.now(),
+        _failReason: "The image upload was interrupted",
+      };
+    },
   },
   chatReactions: {
     persistence: { kind: "collection", key: "chatReactions" },

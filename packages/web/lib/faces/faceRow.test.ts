@@ -580,6 +580,41 @@ describe("the card", () => {
     expect(deriveFaceRow(input({ rings: ring("accepted") }), null).card.kind).toBe("none");
   });
 
+  test("a ring out from a room I sit in alone is a hang up; one from outside it is not", () => {
+    const ring = { incoming: [], outgoing: [{ to_user: ANN, room_key: DM_ANN, to_name: "Ann", status: "ringing" }] };
+    const inside = deriveFaceRow(input({ call: call(DM_ANN), occupancy: { [DM_ANN]: [seat(ME)] }, rings: ring }), null);
+    expect(inside.card).toMatchObject({ kind: "ring-out", hangUp: true });
+    // Still joining (the stub ring is up from the press): Cancel hangs up too.
+    const joining = deriveFaceRow(input({ call: call(DM_ANN, { phase: "ringing_out" }), rings: ring }), null);
+    expect(joining.card).toMatchObject({ kind: "ring-out", hangUp: true });
+    expect(deriveFaceRow(input({ rings: ring }), null).card).toMatchObject({ kind: "ring-out", hangUp: false });
+  });
+
+  test("a hang up lets go at the press: the server's seat and rings for that room read gone", () => {
+    // The push after the press still lists my seat and my ring; the engine is idle.
+    const stale = {
+      liveRooms: [{ room_key: DM_ANN, members: [seat(ME)] }],
+      occupancy: { [DM_ANN]: [seat(ME)] },
+      rings: { incoming: [], outgoing: [{ to_user: ANN, room_key: DM_ANN, to_name: "Ann", status: "ringing" }] },
+    };
+    // Without a press this is a seat that outlived a reloaded window: shown, so End can clear it.
+    expect(deriveFaceRow(input(stale), null).card).toMatchObject({ kind: "ring-out", hangUp: true });
+    const left = { roomKey: DM_ANN, at: NOW - 2_000 };
+    const after = deriveFaceRow(input({ ...stale, call: { ...input().call, left } }), null);
+    expect(after.card.kind).toBe("none");
+    expect(after.me).toBeNull();
+    expect(states(after)[ANN]).not.toBe("ringing-them");
+    // A ring of my own into another room still shows.
+    const other = { to_user: BOB, room_key: DM_BOB, to_name: "Bob", status: "ringing" };
+    const elsewhere = deriveFaceRow(input({ ...stale, rings: { incoming: [], outgoing: [...stale.rings.outgoing, other] }, call: { ...input().call, left } }), null);
+    expect(elsewhere.card).toMatchObject({ kind: "ring-out", to: BOB });
+    // Back in the same room (a fresh call to Ann): the hang up is over.
+    const back = deriveFaceRow(input({ ...stale, call: { ...call(DM_ANN, { phase: "ringing_out" }), left } }), null);
+    expect(back.card).toMatchObject({ kind: "ring-out", to: ANN, hangUp: true });
+    // A seat the server still lists a lease and a sweep later is real again.
+    expect(deriveFaceRow(input({ ...stale, call: { ...input().call, left }, now: NOW + 60_000 }), null).card.kind).not.toBe("none");
+  });
+
   test("a locked walkie call carries the on the line words and a mute", () => {
     const row = deriveFaceRow(
       input({ walkie: walkie(burstRoom(DM_ANN, "call")), occupancy: { [DM_ANN]: [seat(ME), seat(ANN)] }, call: call(DM_ANN, { muted: true }) }),

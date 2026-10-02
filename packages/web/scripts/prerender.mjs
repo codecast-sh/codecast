@@ -7,8 +7,11 @@
  *      dist/prerender/<path>/index.html — the built index.html shell with the
  *      route's rendered markup injected into #root and its real title,
  *      description, canonical, and og tags swapped into <head>.
+ *      Each route also gets a 1200x630 social card at dist/og/ (og-cards.mjs),
+ *      which its og:image points at.
  *   3. Writes dist/prerender/manifest.json (what server/bot-meta.ts serves
- *      snapshots from) and dist/sitemap.xml.
+ *      snapshots from), dist/sitemap.xml, dist/llms.txt and the blog feed
+ *      (dist/blog/rss.xml, from lib/blogFeed.ts).
  *
  * FAIL-OPEN: SEO must never block a deploy. Any failure logs loudly and exits
  * 0 — the server falls back to the SPA shell for routes with no snapshot.
@@ -61,9 +64,10 @@ function jsonLd(entry, siteUrl) {
   return `<script type="application/ld+json">${JSON.stringify(data)}</script>`;
 }
 
-function buildHead(entry, siteUrl) {
+function buildHead(entry, siteUrl, card) {
   const url = entry.path === "/" ? siteUrl : `${siteUrl}${entry.path}`;
   const ld = jsonLd(entry, siteUrl);
+  const image = card ? `${siteUrl}${card.path}` : `${siteUrl}/logo-final.png`;
   return [
     `<title>${esc(entry.title)}</title>`,
     `<meta name="description" content="${esc(entry.description)}" />`,
@@ -71,13 +75,20 @@ function buildHead(entry, siteUrl) {
     `<meta property="og:title" content="${esc(entry.title)}" />`,
     `<meta property="og:description" content="${esc(entry.description)}" />`,
     `<meta property="og:site_name" content="codecast" />`,
-    `<meta property="og:type" content="website" />`,
+    `<meta property="og:type" content="${entry.path.startsWith("/blog/") ? "article" : "website"}" />`,
     `<meta property="og:url" content="${esc(url)}" />`,
-    `<meta property="og:image" content="${siteUrl}/logo-final.png" />`,
-    `<meta name="twitter:card" content="summary" />`,
+    `<meta property="og:image" content="${esc(image)}" />`,
+    ...(card
+      ? [
+          `<meta property="og:image:width" content="${card.width}" />`,
+          `<meta property="og:image:height" content="${card.height}" />`,
+          `<meta property="og:image:alt" content="${esc(card.alt)}" />`,
+        ]
+      : []),
+    `<meta name="twitter:card" content="${card ? "summary_large_image" : "summary"}" />`,
     `<meta name="twitter:title" content="${esc(entry.title)}" />`,
     `<meta name="twitter:description" content="${esc(entry.description)}" />`,
-    `<meta name="twitter:image" content="${siteUrl}/logo-final.png" />`,
+    `<meta name="twitter:image" content="${esc(image)}" />`,
     ...(ld ? [ld] : []),
   ].join("\n    ");
 }
@@ -100,7 +111,7 @@ async function main() {
   );
 
   const entryMod = await import(pathToFileURL(join(WEB_ROOT, "dist-ssr", "prerender-entry.mjs")).href);
-  const { render, SEO_ROUTES, SITE_URL } = entryMod;
+  const { render, SEO_ROUTES, SITE_URL, buildBlogFeed, BLOG_FEED_PATH, cardHeading, cardImagePath } = entryMod;
 
   const shellRaw = readFileSync(join(DIST, "index.html"), "utf-8");
   const ROOT_DIV = '<div id="root"></div>';
@@ -109,6 +120,26 @@ async function main() {
   if (!shell.includes("<head>")) throw new Error("dist/index.html has no <head>");
 
   rmSync(OUT, { recursive: true, force: true });
+  rmSync(join(DIST, "og"), { recursive: true, force: true });
+
+  // 2a. Social cards (dist/og/), before the documents that point at them.
+  // Loaded here so a broken card dependency costs the images, never the snapshots.
+  let carded = new Set();
+  let cardSize = null;
+  try {
+    const { renderCards, CARD_WIDTH, CARD_HEIGHT } = await import("./og-cards.mjs");
+    cardSize = { width: CARD_WIDTH, height: CARD_HEIGHT };
+    carded = await renderCards({
+      entries: SEO_ROUTES,
+      cardHeading,
+      cardImagePath,
+      outDir: DIST,
+      logoPath: join(WEB_ROOT, "public", "logo-final.png"),
+    });
+  } catch (err) {
+    console.error("social cards FAILED entirely (every route keeps the default image):", err?.message ?? err);
+  }
+
   const manifest = [];
   let failed = 0;
   for (const entry of SEO_ROUTES) {
@@ -116,7 +147,7 @@ async function main() {
       const html = render(entry.path);
       if (!html || html.length < 500) throw new Error(`suspiciously small render (${html.length} bytes)`);
       const doc = shell
-        .replace("<head>", `<head>\n    ${buildHead(entry, SITE_URL)}`)
+        .replace("<head>", `<head>\n    ${buildHead(entry, SITE_URL, carded.has(entry.path) ? { ...cardSize, path: cardImagePath(entry.path), alt: cardHeading(entry) } : null)}`)
         .replace(ROOT_DIV, `<div id="root">${html}</div>`);
       const dir = entry.path === "/" ? OUT : join(OUT, ...entry.path.split("/").filter(Boolean));
       mkdirSync(dir, { recursive: true });
@@ -139,6 +170,11 @@ async function main() {
     join(DIST, "sitemap.xml"),
     `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>\n`,
   );
+
+  // RSS feed for the blog, from the same posts.ts the routes derive from.
+  const feedFile = join(DIST, ...BLOG_FEED_PATH.split("/").filter(Boolean));
+  mkdirSync(dirname(feedFile), { recursive: true });
+  writeFileSync(feedFile, buildBlogFeed());
 
   // 4. llms.txt — a plain-text site map for AI crawlers (llmstxt.org format).
   // Derived from the same manifest, so it stays current for free.
@@ -172,7 +208,7 @@ If you are a coding agent (or assisting a developer) and want to set up Codecast
       agentSection,
   );
 
-  console.log(`prerendered ${manifest.length}/${SEO_ROUTES.length} routes → dist/prerender, sitemap.xml + llms.txt written`);
+  console.log(`prerendered ${manifest.length}/${SEO_ROUTES.length} routes → dist/prerender, ${carded.size} social cards → dist/og, sitemap.xml + llms.txt + blog feed written`);
   if (failed > 0) console.error(`WARNING: ${failed} route(s) failed to prerender — fix before the next deploy`);
 }
 

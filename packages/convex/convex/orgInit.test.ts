@@ -36,6 +36,7 @@ function fixtures(extra: Record<string, any[]> = {}) {
     counters: [],
     org_roles: [],
     org_role_history: [],
+    org_templates: [],
     anchors: [],
     initiatives: [],
     inbox_buckets: [{ _id: "inbox_buckets_1", user_id: ME, name: "growth", sort_order: 0 }],
@@ -301,6 +302,27 @@ describe("org.analysisInputs", () => {
     expect(mine.said).toEqual({ calls: [], chat: [], truncated: false });
   });
 
+  // The reviewer proposes a hire only from what the hire form could carry out (org-hire.md H3).
+  test("templates: the hireable catalog, one line each with the release a hire pins; a release with no files and another workspace's template are not there", async () => {
+    const release = (version: string, digest: string, storage_id?: string) => ({ latest: { version, digest }, releases: [{ version, digest, status: "canary", published_at: 1, ...(storage_id ? { storage_id } : {}) }], manifest: { routines: [] } });
+    const db = fixtures({
+      org_templates: [
+        { _id: "ot1", template_id: "eng-lead", workspace: "codecast", name: "Engineering Lead", description: `Leads one  project.\n${"x".repeat(ANALYSIS_CAPS.template_description_chars)}`, ...release("1.1.0", "a".repeat(64), "st1") },
+        { _id: "ot2", template_id: "ours", workspace: WS, name: "Ours", description: "Our own role", ...release("0.2.0", "b".repeat(64), "st2") },
+        { _id: "ot3", template_id: "no-files", workspace: "codecast", name: "No files", description: "Published without a snapshot", ...release("1.0.0", "c".repeat(64)) },
+        { _id: "ot4", template_id: "theirs", workspace: `user:${OUTSIDER}`, name: "Theirs", description: "Another workspace's", ...release("1.0.0", "d".repeat(64), "st4") },
+      ],
+    });
+    const r = await computeAnalysisInputs(ctxOf(db), ME as any, TEAM, NOW);
+    expect(r.templates).toEqual([
+      { id: "ours", name: "Ours", description: "Our own role", version: "0.2.0", digest: "b".repeat(64), status: "canary" },
+      { id: "eng-lead", name: "Engineering Lead", description: `${`Leads one project. ${"x".repeat(ANALYSIS_CAPS.template_description_chars)}`.slice(0, ANALYSIS_CAPS.template_description_chars)}...`, version: "1.1.0", digest: "a".repeat(64), status: "canary" },
+    ]);
+    expect(r.truncated.templates).toBe(false);
+    // A personal workspace sees Codecast's only.
+    expect((await computeAnalysisInputs(ctxOf(db), ME as any, undefined, NOW)).templates.map((t) => t.id)).toEqual(["eng-lead"]);
+  });
+
   test("said stops at its byte budget, newest threads first, and says so", async () => {
     const many = (n: number, f: (i: number) => any) => Array.from({ length: n }, (_, i) => f(i));
     // One channel's read (the cap) at the line cap is under the budget; four are not.
@@ -440,7 +462,7 @@ describe("org.analysisInputs", () => {
     const landing = await readLanding(ctx, ME as any, TEAM, NOW, activity.repos, landingRecordsOf(activity.activity));
     expect(mergeAnalysisInputs(ME as any, TEAM, "Acme", work, org, signals, NOW, withLanding(activity.activity, landing), activity.coverage)).toEqual(whole);
     expect(work.handoff.latest_event).toBe(NOW - H);
-    expect(Object.keys(whole.truncated).sort()).toEqual(["docs", "insights", "plans", "projects", "tasks"]);
+    expect(Object.keys(whole.truncated).sort()).toEqual(["docs", "insights", "plans", "projects", "tasks", "templates"]);
     // The activity block is its own slice (S9): areas, people and stale lists.
     expect(whole.activity).toBeDefined();
     expect(Object.keys(whole.activity.stale).sort()).toEqual(["plans", "projects", "tasks"]);
@@ -458,9 +480,11 @@ describe("org.analysisInputs", () => {
       chat_messages: many(ANALYSIS_CAPS.messages_per_channel + 5, (i) => ({ _id: `cm_c${i}`, channel_id: "chat_channels_c0", user_id: ME, content: "hi", created_at: NOW - i * 1000 })),
       session_decisions: many(ANALYSIS_CAPS.decisions + 5, (i) => ({ _id: `sd_c${i}`, conversation_id: S1, session_id: "s1", user_id: ME, short_id: `sd-${i}`, question: "?", options: [{ label: "a" }, { label: "b" }], blocking: true, status: "pending", category: "approach", created_at: NOW - i * 1000 })),
       bucket_assignments: many(ANALYSIS_CAPS.assignments + 5, (i) => ({ _id: `ba_c${i}`, user_id: ME, conversation_id: S1, bucket_id: "inbox_buckets_1" })),
+      org_templates: many(ANALYSIS_CAPS.templates + 5, (i) => ({ _id: `ot_c${i}`, template_id: `t${i}`, workspace: "codecast", name: `T${i}`, description: "x", latest: { version: "1.0.0", digest: "a".repeat(64) }, releases: [{ version: "1.0.0", digest: "a".repeat(64), status: "stable", storage_id: "st", published_at: 1 }], manifest: { routines: [] } })),
     });
     const r = await computeAnalysisInputs(ctxOf(db), ME as any, TEAM, NOW);
-    expect(r.truncated).toEqual({ projects: true, plans: true, tasks: true, docs: true, insights: true });
+    expect(r.truncated).toEqual({ projects: true, plans: true, tasks: true, docs: true, insights: true, templates: true });
+    expect(r.templates).toHaveLength(ANALYSIS_CAPS.templates);
     expect(r.projects.length).toBe(ANALYSIS_CAPS.projects);
     expect(r.plans.length).toBe(ANALYSIS_CAPS.plans);
     // Tasks are read per status (every open row) plus the window's changes,

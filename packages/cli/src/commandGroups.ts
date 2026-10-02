@@ -296,6 +296,15 @@ Subcommands:
     load: () => import("./prCommand.js").then((m) => m.registerPrCommand),
   },
   {
+    token: "ship",
+    description: `Ship signals: record that a surface deployed, for the team's Changes page
+
+Subcommands:
+  cast ship mark --surface backend      Mark HEAD of this checkout as deployed
+  cast ship mark --surface web --sha <sha> --version 1.2.3`,
+    load: () => import("./shipCommand.js").then((m) => m.registerShipCommand),
+  },
+  {
     token: "switch",
     hasOptions: true,
     description: `Change the agent or model on this session without forking

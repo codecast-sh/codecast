@@ -289,11 +289,14 @@ function PlanHoverContent({ plan }: { plan: any }) {
   );
 }
 
-const DECISION_STATE: Record<string, { label: string; color: string }> = {
-  pending: { label: "Open", color: "text-sol-yellow" },
-  answered: { label: "Answered", color: "text-sol-green" },
-  dismissed: { label: "Dismissed", color: "text-sol-text-dim" },
-  withdrawn: { label: "Withdrawn", color: "text-sol-text-dim" },
+// One state vocabulary for a decision reference: the hover card's label and
+// glyph color, and the pill's own chrome. An open decision wears the queue's
+// yellow signpost; a settled one stops asking for attention.
+const DECISION_STATE: Record<string, { label: string; color: string; pill: string; icon: typeof Signpost }> = {
+  pending: { label: "Open", color: "text-sol-yellow", pill: "bg-sol-yellow/[0.08] text-sol-yellow hover:bg-sol-yellow/[0.16]", icon: Signpost },
+  answered: { label: "Answered", color: "text-sol-green", pill: "bg-sol-green/[0.08] text-sol-green hover:bg-sol-green/[0.16]", icon: Check },
+  dismissed: { label: "Dismissed", color: "text-sol-text-dim", pill: "bg-sol-text-dim/[0.08] text-sol-text-dim hover:bg-sol-text-dim/[0.16]", icon: Signpost },
+  withdrawn: { label: "Withdrawn", color: "text-sol-text-dim", pill: "bg-sol-text-dim/[0.08] text-sol-text-dim hover:bg-sol-text-dim/[0.16]", icon: Signpost },
 };
 
 // What a decision reference has to answer at a glance: the question, whether
@@ -1105,6 +1108,10 @@ export function EntityIdPill({
   // `!type` guard further down, but the guard sits below the hooks and so runs
   // after this — every value it protects has to stand on its own until then.
   const taskV = taskVisual(status);
+  const decisionV = DECISION_STATE[status ?? "pending"] ?? DECISION_STATE.pending;
+  const __V = (globalThis as any).__decisionPillVariant ?? "A";
+  const decisionOpen = type === "decision" && (status ?? "pending") === "pending";
+  const decisionSettled = type === "decision" && !decisionOpen;
 
   // Who a session IS (session-characters.md S3): once a session wears a
   // character or a role, the reference reads as that person — the face in
@@ -1130,7 +1137,7 @@ export function EntityIdPill({
             : type === "proposal"
               ? Network
             : type === "decision"
-              ? Signpost
+              ? (__V === "C" ? Signpost : decisionV.icon)
             : type === "call"
               ? Phone
             : isPr
@@ -1242,7 +1249,7 @@ export function EntityIdPill({
           onMouseEnter={revealOpen ? closeNow : openSoon}
           onMouseLeave={closeSoon}
           data-reveal-open={revealOpen ? "" : undefined}
-          className={`not-prose entity-ref${compact ? " entity-ref-compact" : ""}${canReveal ? " entity-ref--split" : ""} inline-flex items-center gap-[0.2em] px-[0.2em] rounded-[0.2em] text-[1em] font-medium leading-none ${revealOpen ? "underline" : "no-underline"} ${colors} transition-colors cursor-pointer align-baseline hover:underline decoration-current/40 underline-offset-2`}
+          className={`not-prose entity-ref${compact ? " entity-ref-compact" : ""}${canReveal ? " entity-ref--split" : ""} inline-flex items-center gap-[0.2em] px-[0.2em] rounded-[0.2em] text-[1em] font-medium leading-none ${revealOpen ? "underline" : "no-underline"} ${colors}${decisionSettled && __V !== "A" ? " opacity-60" : ""} transition-colors cursor-pointer align-baseline hover:underline decoration-current/40 underline-offset-2`}
           title={fullLabel !== pillLabel ? fullLabel : undefined}
         >
           <span className="relative flex-shrink-0 opacity-80 inline-flex items-center">
@@ -1253,8 +1260,8 @@ export function EntityIdPill({
             ) : (
               <Icon className={`w-[1em] h-[1em] block ${isTask ? taskV.color : ""}`} />
             )}
-            {((isSession && status === "active") || (isTrigger && status === "running")) && (
-              <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-sol-green" />
+            {((isSession && status === "active") || (isTrigger && status === "running") || (decisionOpen && __V === "C")) && (
+              <span className={`absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full ${decisionOpen ? "bg-sol-yellow" : "bg-sol-green"}`} />
             )}
           </span>
           {/* The label, not the icon, gives the pill its baseline, so the
