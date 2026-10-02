@@ -12,6 +12,12 @@
 #  - any argv from reads/<key>.out, exit code from reads/<key>.exit (0 when
 #    absent). The key is the sha256 of each argument followed by \x1f, the same
 #    key packages/evals/src/served.ts computes when it captures the reads;
+#  - an argv with no capture of its own, from the longest leading part of it
+#    filed with a `.prefix` marker beside its `.out`: a synthetic world marks
+#    `read <id>` that way, so `cast read <id> --full` or `--ask "..."` answers
+#    with the transcript the world holds rather than failing. The marker holds
+#    the argv its key was made from, so the match is a string compare and no
+#    call hashes more than its own argv;
 #  - a read whose first word, or first two words, is a line of `frozen` and
 #    was not captured is refused, so a replay never reads the live workspace
 #    for something its snapshot was meant to hold. A `*` line freezes every
@@ -53,15 +59,26 @@ read_key() {
   else printf '%s\x1f' "$@" | sha256sum | cut -d' ' -f1; fi
 }
 
+# serve_read <key>: answer from the read filed under that key, with its exit code.
+serve_read() {
+  local code=0
+  mark SERVED
+  cat "$SERVE/reads/$1.out"
+  [ -f "$SERVE/reads/$1.exit" ] && code="$(tr -dc 0-9 < "$SERVE/reads/$1.exit")"
+  exit "${code:-0}"
+}
 if [ -n "$SERVE" ] && [ $# -gt 0 ]; then
   key="$(read_key "$@")"
-  if [ -f "$SERVE/reads/$key.out" ]; then
-    mark SERVED
-    cat "$SERVE/reads/$key.out"
-    code=0
-    [ -f "$SERVE/reads/$key.exit" ] && code="$(tr -dc 0-9 < "$SERVE/reads/$key.exit")"
-    exit "${code:-0}"
-  fi
+  [ -f "$SERVE/reads/$key.out" ] && serve_read "$key"
+  printf -v joined '%s\x1f' "$@"
+  best="" best_len=0
+  for marker in "$SERVE"/reads/*.prefix; do
+    [ -f "$marker" ] || continue
+    pre=""; IFS= read -r -d '' pre < "$marker" || true
+    [ -n "$pre" ] && [ "${#pre}" -gt "$best_len" ] && [ "${#pre}" -lt "${#joined}" ] && [[ "$joined" == "$pre"* ]] || continue
+    best="${marker##*/}"; best="${best%.prefix}"; best_len=${#pre}
+  done
+  [ -n "$best" ] && [ -f "$SERVE/reads/$best.out" ] && serve_read "$best"
 fi
 
 # A read, by verb. `org review` prints the review prompt and only starts a

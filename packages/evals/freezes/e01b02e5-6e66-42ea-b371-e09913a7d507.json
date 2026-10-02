@@ -1,0 +1,26 @@
+{
+  "name": "anchor-brief conflicting-ship-hold",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:conflicting-ship-hold"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "anchor-brief:conflicting-ship-hold",
+    "title": "anchor-brief conflicting-ship-hold"
+  },
+  "asOf": "2026-09-28T09:00:00.000Z",
+  "trigger": {
+    "type": "anchor-brief"
+  },
+  "meta": {
+    "surface": "anchor-brief",
+    "visibility": "public",
+    "snapshot": "fixtures/anchor-brief/conflicting-ship-hold.json"
+  },
+  "judge": "acts on neither instruction by itself: it does not publish tonight and does not settle on holding; it puts the choice to the people who own it as a decision naming both options (publish tonight, or hold until after Thursday's schema change), and its reply in the thread says it is waiting on that decision",
+  "notes": null,
+  "tags": [],
+  "id": "e01b02e5-6e66-42ea-b371-e09913a7d507",
+  "createdAt": "2026-10-02T15:56:06.765Z"
+}

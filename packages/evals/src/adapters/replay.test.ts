@@ -7,6 +7,7 @@ import { runSnapshot } from '../commands/snapshot';
 import { surfaceMeta } from '../registry';
 import { servedReadKey } from '../served';
 import type { AgentResult, CallResult } from '../surface';
+import { assertAnswered, harnessFailure } from './dryRun';
 import { dominantModel, routeGates, scoreOf } from './replay';
 
 const call = (over: Partial<CallResult> = {}): CallResult => ({
@@ -22,7 +23,7 @@ const call = (over: Partial<CallResult> = {}): CallResult => ({
   realMs: 1,
   ...over,
 });
-const agent = (calls: string[]): AgentResult => ({ runSubdir: '/tmp/a', said: ['hi'], calls, costUsd: 0.1, modelUsage: { pin: { outputTokens: 50 } }, isError: false, exitCode: 0, model: 'pin', realMs: 1 });
+const agent = (calls: string[]): AgentResult => ({ runSubdir: '/tmp/a', said: ['hi'], turns: [['hi']], calls, costUsd: 0.1, modelUsage: { pin: { outputTokens: 50 } }, isError: false, exitCode: 0, model: 'pin', realMs: 1 });
 const byId = (gates: Array<{ id: string; pass: boolean; evidence: { summary: string } }>) => Object.fromEntries(gates.map((g) => [g.id, g]));
 
 describe('route gates', () => {
@@ -61,6 +62,23 @@ describe('route gates', () => {
     expect(floored.score).toBeCloseTo(0.9);
     expect(floored.pass).toBe(false);
     expect(floored.missedFloors).toEqual([{ id: 'criteria', score: 0.6, must: 0.7 }]);
+  });
+});
+
+describe('a run the model never answered', () => {
+  // The out.json the harness wrote on 2026-10-01 when the copied login was revoked mid-check.
+  const revoked = { is_error: true, terminal_reason: 'api_error', api_error_status: 401, result: 'Failed to authenticate: OAuth token revoked.', modelUsage: {} };
+
+  test('an API error the prompt did not cause, or no out.json, is a harness failure; a 400 and a clean reply are not', () => {
+    expect(harnessFailure(revoked, 1)).toBe('API error 401: Failed to authenticate: OAuth token revoked.');
+    expect(harnessFailure(null, 2)).toBe('the harness wrote no out.json (exit 2)');
+    expect(harnessFailure({ ...revoked, api_error_status: 400, result: 'prompt is too long' }, 1)).toBeUndefined();
+    expect(harnessFailure({ is_error: false, terminal_reason: 'completed', result: '{}' }, 0)).toBeUndefined();
+  });
+
+  test('the rep crashes instead of failing model-as-pinned, ok and the surface gates', () => {
+    expect(() => assertAnswered(call({ harnessFailure: harnessFailure(revoked, 1), dir: '/tmp/x/run' }), 'call1')).toThrow('call1 never reached the model: API error 401');
+    expect(() => assertAnswered(call(), 'call1')).not.toThrow();
   });
 });
 

@@ -8,11 +8,12 @@ describe('served read keys', () => {
     expect(servedReadKey(['org', 'review', '--team', 'T'])).toBe('c3c8e1815ea12c65ef7b12528037651900c290fc2fe246959cf0beb491c3b04a');
   });
 
+  // One pipeline of three processes: instant when idle, seconds at a load of 1000.
   test('matches the shell form the guard runs', () => {
     const argv = ['org', 'inputs', '--team', 'a b', '--json'];
     const r = Bun.spawnSync(['bash', '-c', `printf '%s\\x1f' "$@" | shasum -a 256 | cut -d' ' -f1`, 'x', ...argv]);
     expect(r.stdout.toString().trim()).toBe(servedReadKey(argv));
-  });
+  }, 20_000);
 
   test('placeholders fill, and a missing one names itself', () => {
     expect(fillArgv(['org', 'ls', '--team', '{team}'], { team: 'T' })).toEqual(['org', 'ls', '--team', 'T']);

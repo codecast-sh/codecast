@@ -14,12 +14,19 @@ export function servedReadKey(argv: string[]): string {
     .digest('hex');
 }
 
-/** Files one read in a served dir where the guard looks for it: reads/<key>.out, and its exit code beside it. */
-export function writeServedRead(dir: string, argv: string[], out: string, code: number): void {
+/**
+ * Files one read in a served dir where the guard looks for it: reads/<key>.out,
+ * and its exit code beside it. `prefix` adds a reads/<key>.prefix marker, so
+ * the guard answers any longer argv that starts with this one and has no
+ * capture of its own (`read <id> --full` from `read <id>`).
+ */
+export function writeServedRead(dir: string, argv: string[], out: string, code: number, opts: { prefix?: boolean } = {}): void {
   const key = servedReadKey(argv);
   mkdirSync(join(dir, 'reads'), { recursive: true });
   writeFileSync(join(dir, 'reads', `${key}.out`), out);
   writeFileSync(join(dir, 'reads', `${key}.exit`), `${code}\n`);
+  // The marker holds the argv as its key was made from it, so the guard matches a longer argv by string, without hashing.
+  if (opts.prefix) writeFileSync(join(dir, 'reads', `${key}.prefix`), argv.map((a) => `${a}\x1f`).join(''));
 }
 
 /** The `frozen` line that freezes every read: a synthetic world answers from its record or not at all. */

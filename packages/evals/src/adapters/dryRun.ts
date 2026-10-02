@@ -28,6 +28,35 @@ async function harness(args: string[], cwd: string): Promise<number> {
 
 const usageOf = (out: any): CallResult['modelUsage'] => (out?.modelUsage ?? {}) as CallResult['modelUsage'];
 
+/** Each turn's usage summed per model, so a run of several turns reports what all of them spent. */
+function mergeUsage(all: CallResult['modelUsage'][]): CallResult['modelUsage'] {
+  const merged: CallResult['modelUsage'] = {};
+  for (const usage of all) {
+    for (const [model, u] of Object.entries(usage)) {
+      const m = (merged[model] ??= {});
+      for (const k of ['outputTokens', 'inputTokens', 'costUSD'] as const) if (u?.[k] !== undefined) m[k] = (m[k] ?? 0) + Number(u[k]);
+    }
+  }
+  return merged;
+}
+
+/**
+ * Why a harness run never got the model's answer for a reason the prompt did
+ * not cause, or undefined: no out.json at all, or an API error such as a
+ * revoked login, a rate limit or an overloaded server. A 400 or 413 is the
+ * request's own fault, so it stays a graded failure.
+ */
+export function harnessFailure(out: any, exitCode: number): string | undefined {
+  if (!out) return `the harness wrote no out.json (exit ${exitCode})`;
+  if (out.terminal_reason !== 'api_error' || out.api_error_status === 400 || out.api_error_status === 413) return undefined;
+  return `API error ${out.api_error_status ?? 'with no status'}: ${String(out.result ?? '').slice(0, 200)}`;
+}
+
+/** A run the model never answered says nothing about the prompt: the rep is a crash, not a 0 on every gate. */
+export function assertAnswered(r: CallResult | AgentResult, label: string): void {
+  if (r.harnessFailure) throw new Error(`${label} never reached the model: ${r.harnessFailure}; see ${'runSubdir' in r ? r.runSubdir : r.dir}`);
+}
+
 /** One single-call run: the request's prompt (and system) as files, the harness's --call mode, out.json read back. */
 export async function runCall(req: SurfaceRequest, dir: string, opts: { dry: boolean }): Promise<CallResult> {
   mkdirSync(dir, { recursive: true });
@@ -53,6 +82,7 @@ export async function runCall(req: SurfaceRequest, dir: string, opts: { dry: boo
     modelUsage: usageOf(out),
     costUsd: Number(out?.total_cost_usd ?? 0),
     isError: Boolean(out?.is_error) || exitCode !== 0 || !out,
+    harnessFailure: harnessFailure(out, exitCode),
     exitCode,
     dir: run,
     realMs: Date.now() - started,
@@ -67,10 +97,13 @@ export async function runAgent(opts: AgentOptions, dir: string, flags: { dry: bo
   const runSubdir = join(dir, 'agent');
   const started = Date.now();
   if (flags.dry) {
-    return { runSubdir, said: ['(dry run: no agent ran)'], calls: [], costUsd: 0, modelUsage: { [opts.model]: { outputTokens: 1 } }, isError: false, exitCode: 0, model: opts.model, realMs: 0 };
+    return { runSubdir, said: ['(dry run: no agent ran)'], turns: [['(dry run: no agent ran)']], calls: [], costUsd: 0, modelUsage: { [opts.model]: { outputTokens: 1 } }, isError: false, exitCode: 0, model: opts.model, realMs: 0 };
   }
-  let thenFile: string | undefined;
-  if (opts.then) writeFileSync((thenFile = join(dir, 'then.md')), opts.then);
+  const thenFiles = (opts.then ?? []).map((text, i) => {
+    const file = join(dir, `then${i + 2}.md`);
+    writeFileSync(file, text);
+    return file;
+  });
   const exitCode = await harness(
     [
       '--run', runSubdir,
@@ -79,18 +112,25 @@ export async function runAgent(opts: AgentOptions, dir: string, flags: { dry: bo
       ...(opts.serveDir ? ['--serve', opts.serveDir] : []),
       ...(opts.maxTurns ? ['--max-turns', String(opts.maxTurns)] : []),
       ...(opts.tools ? ['--tools', opts.tools.join(',')] : []),
-      ...(thenFile ? ['--then', thenFile] : []),
+      ...thenFiles.flatMap((f) => ['--then', f]),
     ],
     dir,
   );
-  const out = readJson(join(runSubdir, 'out.json'));
+  // Turn 1 writes out.json and said.json, turn N outN.json and saidN.json.
+  const names = ['', ...thenFiles.map((_, i) => String(i + 2))];
+  const outs = names.map((n) => readJson(join(runSubdir, `out${n}.json`)));
+  const turns = names.map((n) => ((readJson(join(runSubdir, `said${n}.json`)) ?? []) as string[]).map((s) => s.trim()).filter(Boolean));
+  const last = outs.at(-1);
   return {
     runSubdir,
-    said: ((readJson(join(runSubdir, 'said.json')) ?? []) as string[]).map((s) => s.trim()).filter(Boolean),
+    said: turns.flat(),
+    turns,
     calls: readText(join(runSubdir, 'calls.log')).split('\n').filter(Boolean),
-    costUsd: Number(out?.total_cost_usd ?? 0),
-    modelUsage: usageOf(out),
-    isError: Boolean(out?.is_error) || exitCode !== 0 || !out,
+    costUsd: outs.reduce((sum, o) => sum + Number(o?.total_cost_usd ?? 0), 0),
+    modelUsage: mergeUsage(outs.map(usageOf)),
+    isError: Boolean(last?.is_error) || exitCode !== 0 || !last,
+    // A later turn missing its out.json may only follow an earlier turn's own failure.
+    harnessFailure: outs.map((o, i) => (o || i === 0 ? harnessFailure(o, exitCode) : undefined)).find(Boolean),
     exitCode,
     model: opts.model,
     realMs: Date.now() - started,

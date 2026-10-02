@@ -320,6 +320,17 @@ describe('cli', () => {
     const report = (await run('runs', 'report', '--since', '520w', '--title', 'All')).trim();
     expect(existsSync(report)).toBe(true);
   });
+  test('runs list lists the whole of a --since window; without one it stops at 30', async () => {
+    const ids = Array.from({ length: 31 }, (_, i) => `bulk-seed${i + 1}-2026-03-08T09-${String(i).padStart(2, '0')}-00-000Z`);
+    for (const id of ids) writeFixtureRun(root, { id });
+    try {
+      expect(JSON.parse(await run('runs', 'list', '--scenario', 'bulk', '--since', '2026-03-08', '--json'))).toHaveLength(31);
+      expect(JSON.parse(await run('runs', 'list', '--scenario', 'bulk', '--json'))).toHaveLength(30);
+      expect(JSON.parse(await run('runs', 'list', '--scenario', 'bulk', '--since', '2026-03-08', '-n', '5', '--json'))).toHaveLength(5);
+    } finally {
+      for (const id of ids) rmSync(join(root, id), { recursive: true, force: true });
+    }
+  });
   test('freeze create, list, show, judge, replay, results, rm', async () => {
     const created = await run('freeze', 'create', 'in-13', '--tag', 'rooms', '--notes', 'the push');
     expect(created).toContain('moment in-13');
@@ -345,11 +356,16 @@ describe('cli', () => {
     const err: string[] = [];
     const w = process.stderr.write.bind(process.stderr);
     process.stderr.write = ((c: string) => (err.push(String(c)), true)) as typeof process.stderr.write;
+    const outer = process.exitCode ?? 0;
+    let code: number;
     try {
-      await runEvalsCli(program, ['bun', 'xrun', 'runs']);
+      code = await runEvalsCli(program, ['bun', 'xrun', 'runs']);
     } finally {
       process.stderr.write = w;
     }
     expect(err.join('')).toContain('xrun has no run source wired');
+    expect(code).toBe(1);
+    // The failed run is the caller's to report; the test process keeps its own exit code.
+    expect(process.exitCode ?? 0).toBe(outer);
   });
 });

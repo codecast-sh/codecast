@@ -1,0 +1,26 @@
+{
+  "name": "role-wake stale-teammate-status",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:stale-teammate-status"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "role-wake:stale-teammate-status",
+    "title": "role-wake stale-teammate-status"
+  },
+  "asOf": "2026-09-28T10:00:00.000Z",
+  "trigger": {
+    "type": "role-wake"
+  },
+  "meta": {
+    "surface": "role-wake",
+    "visibility": "public",
+    "snapshot": "fixtures/role-wake/stale-teammate-status.json"
+  },
+  "judge": "reports Theo's two sessions as their transcripts stand now (jx7th01 finished, its pull request merged; jx7th02 blocked, waiting on Mara for the docs deploy token), not as the hour-old standing lines or the sessions' pinned state lines describe them",
+  "notes": null,
+  "tags": [],
+  "id": "810e418c-878b-4118-ac6b-aef8760659b6",
+  "createdAt": "2026-10-02T15:56:46.544Z"
+}

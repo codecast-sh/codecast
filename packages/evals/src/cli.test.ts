@@ -151,15 +151,43 @@ describe('./evals', () => {
     expect(r.out).toContain('dry: 3 rep(s) ran through the wiring');
     expect(runDirs(w)).toHaveLength(3);
     // A dry rep is never a pass or a fail: no view counts it, and no check takes it for a baseline.
-    const listed = JSON.parse(w.run('runs', 'list', '--json').out) as Array<{ freezeId: string; status: string; model: string }>;
+    const listed = JSON.parse(w.run('runs', 'list', '--since', '1d', '--json').out) as Array<{ freezeId: string; status: string; model: string; startedAt: string; createdAt: string }>;
     expect(listed).toHaveLength(3);
     expect(listed.every((x) => x.freezeId === id && x.status === 'dry' && x.model === echoMeta.model)).toBe(true);
+    // A replay runs now on a moment frozen on 2026-01-01: it starts, and lists, when it ran.
+    expect(listed.every((x) => x.startedAt === x.createdAt)).toBe(true);
     const results = JSON.parse(w.run('freeze', 'results', id.slice(0, 8), '--json').out) as { replays: Array<{ verdict: { gates: Array<{ id: string; pass: boolean }> } }> };
     expect(results.replays).toHaveLength(3);
     const gates = results.replays[0]!.verdict.gates.map((g) => `${g.id}:${g.pass}`);
     expect(gates).toEqual(['model-as-pinned:true', 'ok:true', 'prod-budget:true', 'echoed:true']);
     const run = JSON.parse(readFileSync(join(w.home, 'runs', runDirs(w)[0]!, 'run.json'), 'utf8'));
     expect(run).toMatchObject({ freezeId: id, route: 'call', dry: true, temperatureProd: [0], temperatureReplay: 'cli-default', liveReads: 0, judgeModel: 'claude-sonnet-5-5' });
+  });
+
+  test('check --parallel runs every rep of every freeze through one pool', () => {
+    const w = world();
+    writeFileSync(join(w.pkg, 'fixtures', 'echo', 'b.json'), JSON.stringify({ asOf: '2026-01-01T00:00:00.000Z', snapshot: { text: 'and this' } }, null, 2));
+    w.git('add', '-A');
+    w.git('commit', '-qm', 'second fixture');
+    w.run('freeze', 'create', 'echo@fixture:a');
+    w.run('freeze', 'create', 'echo@fixture:b');
+    const r = w.run('check', 'echo', '--dry', '--reps', '3', '--parallel', '4');
+    expect(r.code).toBe(0);
+    expect(r.out).toContain('dry: 6 rep(s) ran through the wiring');
+    expect(runDirs(w)).toHaveLength(6);
+    expect(new Set(runDirs(w).map((d) => d.replace(/-\d{4}-\d{2}-\d{2}T.*$/, ''))).size).toBe(6);
+    expect(w.run('check', 'echo', '--parallel', '0').err).toContain('--parallel takes a positive whole number, not "0"');
+  });
+
+  test('a time stop over a parallel pool writes one stop and exits 3 with the surface left stale', () => {
+    const w = world();
+    w.run('freeze', 'create', 'echo@fixture:a');
+    const r = w.run('check', 'echo', '--dry', '--reps', '4', '--parallel', '4', '--max-minutes', '0.000001');
+    expect(r.code).toBe(3);
+    expect(r.out).toContain('minute limit passed');
+    expect(r.out).toContain('never reached: echo');
+    expect(runDirs(w)).toHaveLength(1);
+    expect(w.run('stale', 'echo').code).toBe(0);
   });
 
   test('check refuses before running when the estimate is over --budget', () => {

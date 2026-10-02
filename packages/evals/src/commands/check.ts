@@ -1,14 +1,15 @@
 import { InvalidArgumentError, type Command } from 'commander';
+import { mapLimit } from '@codecast/shared/async';
 import type { EvalSources, Freeze, RunSummary } from '@platform/evals';
 import { fmt } from '@platform/cli-kit/colors';
 import { formatCost } from '@platform/cli-kit/format';
 import { stripAnsi } from '@platform/cli-kit/render';
 
-import { repPassed, replayFreeze } from '../adapters/replay';
+import { outcomeOf, prepareFreeze, repCount, repPassed, replayRep, treeFacts, type RepLedger } from '../adapters/replay';
 import { hasSnapshot, loadLabel, loadSnapshot } from '../adapters/resolver';
 import { codecastRunSource, surfaceRuns } from '../adapters/runs';
 import { loadSurface } from '../registry';
-import { addSpend, checkCostUsd, DAILY_USD, patchSurfaceState, perRepUsd, readState, sourceHashes, spentToday, staleness, suggestedBudget } from '../state';
+import { addSpend, checkCostUsd, checkMinutes, DAILY_USD, patchSurfaceState, perRepUsd, readState, spentToday, staleness, suggestedBudget } from '../state';
 import { evalSignals, reportSignals, type SurfaceVerdict } from '../signals';
 import { separate, separationLine } from '../stats';
 import type { SurfaceMeta } from '../surface';
@@ -22,10 +23,18 @@ import { pickSurfaces } from './stale';
 // spent, and exits 1 on a refusal, a gate failure, a crash or a separated
 // regression, and EXIT_INCOMPLETE when part of what was asked never ran. A
 // bare `check` runs the call surfaces only: agent surfaces run by name or
-// with --route agent.
+// with --route agent. Every rep of every freeze goes through one pool of
+// --parallel slots, so a wide check finishes in a fraction of its serial time.
 
 /** The exit code of a check that stopped short: a budget stop, or a requested surface with no rep scored. */
 export const EXIT_INCOMPLETE = 3;
+
+/**
+ * Reps in flight at once by default. Each rep is a harness process plus a
+ * `claude -p`, so this stays modest for a loaded machine; measured on
+ * 2026-10-02 at load 400 to 800 (docs/architecture/evals-home.md 2.9).
+ */
+export const DEFAULT_PARALLEL = 4;
 
 /** A commander parser for a positive number; NaN would disable every spend check, so it is a usage error. */
 export const positiveNumber = (flag: string, integer = false) => (v: string): number => {
@@ -54,6 +63,8 @@ export interface CheckFlags {
   daily?: number;
   /** Start no rep after this many minutes: the run stops like a budget stop, and exits EXIT_INCOMPLETE. */
   maxMinutes?: number;
+  /** Reps in flight at once across every freeze and surface (default DEFAULT_PARALLEL). */
+  parallel?: number;
 }
 
 interface Plan {
@@ -61,6 +72,12 @@ interface Plan {
   freezes: Freeze[];
   reps: number;
   perRep: number;
+}
+
+interface Job {
+  plan: Plan;
+  freeze: Freeze;
+  rep: number;
 }
 
 const surfaceOf = (f: Freeze): string => String((f.meta as { surface?: string } | undefined)?.surface ?? '');
@@ -170,8 +187,14 @@ export async function runCheck(ids: string[], flags: CheckFlags, sources: EvalSo
 
   const estimate = flags.dry ? 0 : plans.reduce((s, p) => s + checkCostUsd(p.meta, p.freezes.length, state, p.reps), 0);
   const totalReps = plans.reduce((s, p) => s + p.reps * p.freezes.length, 0);
-  console.log(`${totalReps} reps over ${plans.length} surface(s), estimated ${formatCost(estimate)}${flags.dry ? ' (dry: nothing is spent)' : ''}`);
-  const hashes = sourceHashes(plans.map((p) => p.meta));
+  const parallel = flags.parallel ?? DEFAULT_PARALLEL;
+  // The time is what a real run would take, so a dry check sizes one for free.
+  const minutes = checkMinutes(plans.map((p) => ({ meta: p.meta, reps: p.reps * p.freezes.length })), state, parallel);
+  const took = minutes != null ? `about ${Math.ceil(minutes)} min at --parallel ${parallel}` : null;
+  console.log(`${totalReps} reps over ${plans.length} surface(s), estimated ${formatCost(estimate)}${flags.dry ? ` (dry: nothing is spent${took ? `; a real run takes ${took}` : ''})` : took ? ` and ${took}` : ''}`);
+  if (minutes != null && flags.maxMinutes && minutes > flags.maxMinutes) console.log(fmt.warning(`the time estimate is over --max-minutes ${flags.maxMinutes}: expect a time stop; fewer --reps or more --parallel`));
+  const facts = treeFacts(plans.map((p) => p.meta));
+  const hashes = facts.hashes;
   if (flags.budget != null && estimate > flags.budget) {
     console.log(`refused: the estimate ${formatCost(estimate)} is over the --budget ${formatCost(flags.budget)}; fewer --reps, fewer surfaces, or a bigger budget`);
     // An unattended refusal is named once per source change; the next firing leaves these surfaces for a run by hand.
@@ -187,30 +210,25 @@ export async function runCheck(ids: string[], flags: CheckFlags, sources: EvalSo
   const stopAt = flags.stale && budget != null ? Math.min(budget, Math.max(0, (flags.daily ?? DAILY_USD) - spentToday())) : budget;
 
   const batch = flags.batch ?? new Date().toISOString();
-  const spent = { usd: 0 };
+  const spent: RepLedger = { usd: 0 };
   const deadline = flags.maxMinutes ? Date.now() + flags.maxMinutes * 60_000 : null;
-  let stoppedBy: 'budget' | 'time' = 'budget';
+  const opts = (plan: Plan) => ({ reps: plan.reps, model: flags.model ?? null, dry: Boolean(flags.dry), notes: flags.notes ?? null, batch, budgetUsd: stopAt, spent, estPerRep: plan.perRep, deadline, onLine: (l: string) => console.log(fmt.muted(l)) });
+  // Jobs in surface order, so a stop leaves the later surfaces unreached rather than every surface half run.
+  const prepared = new Map(await Promise.all(plans.flatMap((plan) => plan.freezes.map(async (f) => [f.id, await prepareFreeze(f, opts(plan), facts)] as const))));
+  const jobs: Job[] = plans.flatMap((plan) => plan.freezes.flatMap((freeze) => Array.from({ length: repCount(plan.reps) }, (_, i) => ({ plan, freeze, rep: i + 1 }))));
+  const results = await mapLimit(jobs, parallel, (j) => replayRep(prepared.get(j.freeze.id)!, j.rep, repCount(j.plan.reps), opts(j.plan)));
+  const budgetHit = Boolean(spent.stoppedBy);
   let failed = false;
-  let budgetHit = false;
   const report: string[] = [];
   const verdicts: SurfaceVerdict[] = [];
   for (const plan of plans) {
-    if (budgetHit) break;
-    const runs: RunSummary[] = [];
-    let crashes = 0;
-    const spentBefore = spent.usd;
-    for (const f of plan.freezes) {
-      const outcome = await replayFreeze(f, { reps: plan.reps, model: flags.model ?? null, dry: Boolean(flags.dry), notes: flags.notes ?? null, batch, budgetUsd: stopAt, spent, estPerRep: plan.perRep, deadline, onLine: (l) => console.log(fmt.muted(l)) });
-      runs.push(...outcome.runs);
-      crashes += outcome.crashes;
-      if (outcome.budgetHit) {
-        budgetHit = true;
-        stoppedBy = outcome.stoppedBy ?? 'budget';
-        break;
-      }
-    }
-    if (!flags.dry) addSpend(spent.usd - spentBefore);
+    const outcome = outcomeOf(results.filter((_, i) => jobs[i]!.plan === plan), spent);
+    const runs = outcome.runs;
+    const crashes = outcome.crashes;
+    if (!flags.dry) addSpend(outcome.costUsd);
     const scored = runs.filter((r) => r.status !== 'unscored');
+    // A surface the stop cut off before its first rep never ran: it is named below, not graded.
+    if (budgetHit && !scored.length) continue;
     if (!scored.length) unrun.push(plan.meta.id);
     // The previous run set: the newest other batch of real reps on these freezes; a dry rep is wiring, never a baseline.
     const history = (await surfaceRuns(plan.meta.id)).filter((r) => r.batch && r.batch !== batch && r.status !== 'dry' && plan.freezes.some((f) => f.id === r.freezeId));
@@ -234,20 +252,21 @@ export async function runCheck(ids: string[], flags: CheckFlags, sources: EvalSo
     });
 
     const hash = hashes.get(plan.meta.id)!;
-    const real = scored.filter((r) => r.status !== 'crash');
-    // A surface the budget cut short has not run on these sources, so it stays stale for the next firing.
+    const real = scored.filter((r) => r.status !== 'crash' && r.status !== 'dry');
+    // A surface the stop cut short has not run on these sources, so it stays stale for the next firing.
+    const cutShort = budgetHit && scored.length < plan.freezes.length * repCount(plan.reps);
     if (flags.state !== false) patchSurfaceState(plan.meta.id, (s) => ({
       ...s,
       crash: crashes ? { hash, count: s.crash?.hash === hash ? s.crash.count + 1 : 1 } : undefined,
-      ...(flags.dry || crashes || budgetHit ? {} : { lastRunHash: hash }),
-      ...(!flags.dry && real.length ? { lastCostPerRep: real.reduce((sum, r) => sum + r.costUsd, 0) / real.length } : {}),
+      ...(flags.dry || crashes || cutShort ? {} : { lastRunHash: hash }),
+      ...(!flags.dry && real.length ? { lastCostPerRep: real.reduce((sum, r) => sum + r.costUsd, 0) / real.length, lastSecondsPerRep: real.reduce((sum, r) => sum + r.realMs, 0) / real.length / 1000 } : {}),
     }));
   }
 
   console.log('');
   for (const line of report) console.log(line);
   const neverReached = plans.filter((p) => !verdicts.some((v) => v.surface === p.meta.id)).map((p) => p.meta.id);
-  if (budgetHit) console.log(fmt.warning(`stopped: ${stoppedBy === 'time' ? `the ${flags.maxMinutes} minute limit passed` : `the ${formatCost(stopAt ?? 0)} budget is spent`} (endedBecause: budget)${neverReached.length ? `; never reached: ${neverReached.join(', ')}` : ''} (exit ${EXIT_INCOMPLETE})`));
+  if (budgetHit) console.log(fmt.warning(`stopped: ${spent.stoppedBy === 'time' ? `the ${flags.maxMinutes} minute limit passed` : `the ${formatCost(stopAt ?? 0)} budget is spent`} (endedBecause: budget)${neverReached.length ? `; never reached: ${neverReached.join(', ')}` : ''} (exit ${EXIT_INCOMPLETE})`));
   if (unrun.length) console.log(fmt.warning(`incomplete: ${[...new Set(unrun)].join(', ')} scored no rep here (exit ${EXIT_INCOMPLETE})`));
   console.log(`\nNext: ./evals runs list --since 1h · ./evals freeze results <freeze> · ./evals runs diff <A> <B>`);
   const published = flags.publish ? await publishSite({ since: '24h' }) : undefined;
@@ -271,6 +290,7 @@ export function registerCheck(program: Command, sources: EvalSources): void {
     .option('--budget <usd>', 'refuse when the estimate is over, stop when the spend reaches it (default: stop at the estimate and half again)', positiveNumber('--budget'))
     .option('--daily <usd>', `with --stale: refuse once today's spend reaches this (default ${DAILY_USD})`, positiveNumber('--daily'))
     .option('--max-minutes <n>', 'start no rep after this many minutes; stops like the budget (exit 3)', positiveNumber('--max-minutes'))
+    .option('--parallel <n>', `reps in flight at once, across freezes and surfaces (default ${DEFAULT_PARALLEL})`, positiveNumber('--parallel', true))
     .option('--dry', 'canned model output: proves the wiring, spends nothing')
     .option('--notes <text>', 'what changed, kept on every rep')
     .option('--publish', 'publish the report afterwards')
