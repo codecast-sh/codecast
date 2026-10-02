@@ -34,7 +34,7 @@ import { PlanBlock } from "./planBlock";
 import { UserIcon } from "./shared";
 import { agentBorderMap, agentColorMap, agentTextMap } from "../../../lib/conversationBlockStyles";
 import { cleanCommandExpansion, cleanStickyContent, parseCommandInvocation, parseTaskNotification, parseTeammateMessages } from "../classify";
-import { formatFullTimestamp, formatRelativeTime, stripAnsiCodes } from "../../../lib/conversationFormat";
+import { formatFullTimestamp, formatRelativeTime, stripAnsiCodes, useRelativeTime } from "../../../lib/conversationFormat";
 import { CMD_MD_COMPONENTS, MD_COMPONENTS_NO_IMG, MD_COMPONENTS_NO_PRE, hasRichMarkdown } from "../../../lib/conversationMarkdown";
 import { ReactMarkdown } from "../markdown";
 import { TimelineRule } from "../sessionChrome";
@@ -673,6 +673,7 @@ export function ScheduleWakeupBlock({ tool, result, timestamp }: { tool: ToolCal
 }
 
 export function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, pendingReason, recipientConversationId, variant = "session", color, summary, linkToConversationId }: { from: string; name?: string; body: string; timestamp?: number; pendingStatus?: string; pendingReason?: string; recipientConversationId?: string; variant?: "session" | "teammate" | "agent"; color?: string; summary?: string; linkToConversationId?: string }) {
+  const relativeTime = useRelativeTime();
   const s = useTrackedStore([
     st => pendingStatus && recipientConversationId ? st.sessions[recipientConversationId]?.agent_status : undefined,
   ]);
@@ -771,7 +772,7 @@ export function SessionMessageBlock({ from, name, body, timestamp, pendingStatus
             it has waited, not where it belongs, and saying so is what stops
             the row reading as history that jumped out of order. */}
         {timestamp != null && timestamp > 0 && (
-          <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{isPending ? `waiting ${formatRelativeTime(timestamp)}` : formatRelativeTime(timestamp)}</span>
+          <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{isPending ? `waiting ${relativeTime(timestamp)}` : relativeTime(timestamp)}</span>
         )}
       </div>
       {/* A message from another session is someone else's context, not this

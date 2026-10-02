@@ -55,7 +55,7 @@ import { usePersonifyAll } from "../../../hooks/usePersonifyAll";
 import { ScheduleWakeupBlock, TeammateMessageCard } from "./systemBlocks";
 import { BrowserWatchButton, SendMessageBlock, SkillBlock, TaskCreateUpdateBlock, TaskListBlock, TaskToolBlock, TeamCreateBlock, TodoWriteBlock, ToolBlock, WorkflowToolBlock } from "./toolBlocks";
 import { isAlwaysVisibleToolCall, parseApiErrorContent, parseCastCommand, parseContextBlocks, parseSkillBlocks, parseTeammateMessages, stripSystemTags } from "../classify";
-import { copyMessageLink, formatFullTimestamp, formatMessagePartsForCopy, formatRelativeTime, forwardMessageToChat, safeString } from "../../../lib/conversationFormat";
+import { copyMessageLink, formatFullTimestamp, formatMessagePartsForCopy, formatRelativeTime, forwardMessageToChat, safeString, useRelativeTime } from "../../../lib/conversationFormat";
 import { MessageMarkdown, ReactMarkdown } from "../markdown";
 import { linkifyMentions } from "../../../lib/conversationMarkdown";
 import { renderAssistantBody } from "../../../lib/renderAssistantBody";
@@ -146,6 +146,7 @@ function CancelPendingButton({ onClick, disabled }: { onClick: () => void; disab
 }
 
 function UserPromptImpl({ content, timestamp, messageId, conversationId, collapsed, userName, avatarUrl, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection, onForkFromMessage, forkChildren, messageUuid, images, onBranchSwitch, activeBranchId, loadingBranchId, isPending, isQueued, agentStatus, mainDivergentPreview, decision }: { content: string; decision?: DecisionAnswerMessage; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; avatarUrl?: string | null; onOpenComments?: (messageId: string) => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void; onForkFromMessage?: (messageUuid: string) => void; forkChildren?: ForkChild[]; messageUuid?: string; images?: ImageData[]; onBranchSwitch?: (messageUuid: string, convId: string | null) => void; activeBranchId?: string | null; loadingBranchId?: string | null; isPending?: boolean; isQueued?: boolean; agentStatus?: LiveAgentStatus; mainDivergentPreview?: string }) {
+  const relativeTime = useRelativeTime();
   const [isExpanded, setIsExpanded] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const [isTruncated, setIsTruncated] = useState(false);
@@ -496,7 +497,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
           title={`${formatFullTimestamp(timestamp)} (click to copy)`}
           onClick={(e) => { e.preventDefault(); setTimeout(() => { copyToClipboard(formatFullTimestamp(timestamp)).then(() => toast.success("Timestamp copied")); }); }}
         >
-          {formatRelativeTime(timestamp)}
+          {relativeTime(timestamp)}
         </a>
         {isBookmarked && (
           <svg data-cc-bookmarked className="w-3 h-3 text-amber-500 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
@@ -1131,6 +1132,7 @@ function AssistantBlockImpl({
   globalImageMap?: Record<string, ImageData[]>;
   globalFileMap?: Record<string, SentFileData[]>;
 }) {
+  const relativeTime = useRelativeTime();
   const CONTENT_MAX_HEIGHT = 800;
 
   // Condensed feed: this message's segment tools fold into one receipt row
@@ -1293,7 +1295,7 @@ function AssistantBlockImpl({
     : shouldShowHeader ? "-top-2" : "-top-7";
 
   return (
-    <div data-cc-message="assistant" id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${onlyToolCalls ? "mb-0.5" : condensed ? "mb-2.5" : "mb-6"} transition-[background-color,box-shadow,border-color] ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 rounded-lg p-2 -m-2 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined} onContextMenu={shareSelectionMode ? undefined : (e) => ctxMenu.open(e, undefined)} title={!shouldShowHeader ? formatRelativeTime(timestamp) : undefined}>
+    <div data-cc-message="assistant" id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${onlyToolCalls ? "mb-0.5" : condensed ? "mb-2.5" : "mb-6"} transition-[background-color,box-shadow,border-color] ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 rounded-lg p-2 -m-2 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined} onContextMenu={shareSelectionMode ? undefined : (e) => ctxMenu.open(e, undefined)} title={!shouldShowHeader ? relativeTime(timestamp) : undefined}>
       <ContextMenu state={ctxMenu}>
         {() => (
           <>
@@ -1399,7 +1401,7 @@ function AssistantBlockImpl({
             title={`${formatFullTimestamp(timestamp)} (click to copy)`}
             onClick={(e) => { e.preventDefault(); setTimeout(() => { copyToClipboard(formatFullTimestamp(timestamp)).then(() => toast.success("Timestamp copied")); }); }}
           >
-            {formatRelativeTime(timestamp)}
+            {relativeTime(timestamp)}
           </a>
           {isBookmarked && (
             <svg data-cc-bookmarked className="w-3 h-3 text-amber-500 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
