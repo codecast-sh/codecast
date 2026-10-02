@@ -25,7 +25,8 @@ import {
   type ReplicationHost,
   type ReplicationUpdate,
 } from "@platform/engine";
-import { useInboxStore, hasSyncRegistryEntry, syncLogScopeMetaKey } from "./inboxStore";
+import { useInboxStore, hasSyncRegistryEntry, syncLogScopeMetaKey, SESSIONS_PRESERVE_FIELDS } from "./inboxStore";
+import { INBOX_FACT_FIELDS } from "@codecast/shared/contracts";
 import { writePatchesToIDB } from "./idbCache";
 import { followerPersistencePatches } from "./followerPersistence";
 import { syncTransaction } from "./syncTransaction";
@@ -144,6 +145,14 @@ export function buildMutUpdates(patches: readonly any[], state: any): MutUpdate[
 }
 
 const isReplicated = (key: string) => REPLICATED_STORE_KEYS.includes(key);
+
+// A follower mounts no liveness overlay, so the host's replicated row is its
+// only writer of the overlay facts: they land verbatim, a null included. The
+// fact preserve list exists for base channels that ship null for facts they
+// do not own, and applied here it kept a fact the host had already cleared.
+const REPLICA_SESSIONS_OPTS = {
+  preserveFields: SESSIONS_PRESERVE_FIELDS.filter((f) => !(INBOX_FACT_FIELDS as readonly string[]).includes(f)),
+};
 
 /**
  * A synced follower's action tee (wire to `_setActionTee`): its own
@@ -294,19 +303,19 @@ function applyUpdatesToStoreInner(updates: MutUpdate[], opts?: { optimistic?: bo
         const current = useInboxStore.getState();
         // Every lock this window holds on the sibling's rows, which the merge
         // below would read as a value echo and retire.
-        const entries: Array<{ id: string; field: string; value: unknown; ts?: number }> = [];
+        const entries: Array<{ id: string; field: string; value: unknown; ts?: number; ack?: unknown }> = [];
         for (const row of u.upserts) {
           const prefix = `${u.key}:${String(row._id)}:`;
           for (const [k, entry] of Object.entries(current.pending)) {
             if (!k.startsWith(prefix) || (entry as any)?.type !== "field") continue;
-            entries.push({ id: String(row._id), field: k.slice(prefix.length), value: (entry as any).value, ts: (entry as any).ts });
+            entries.push({ id: String(row._id), field: k.slice(prefix.length), value: (entry as any).value, ts: (entry as any).ts, ack: (entry as any).ack });
           }
         }
         current.syncTable(u.key, u.upserts, { isDelta: true });
         if (entries.length) useInboxStore.getState().protectReplicatedWrite(u.key, entries);
       } else {
         state.releaseSettledFieldLocks(u.upserts.map((row: any) => String(row._id)));
-        state.syncTable(u.key, u.upserts, { isDelta: true });
+        state.syncTable(u.key, u.upserts, { isDelta: true, ...(u.key === "sessions" ? REPLICA_SESSIONS_OPTS : {}) });
       }
     }
     if (u.removes?.length) state._applyReplicatedRemovals(u.key, u.removes);

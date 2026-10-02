@@ -131,6 +131,7 @@ export type GenWorld = {
 
 export function genWorld(seed: number, count: number, epoch: number, me: string): GenWorld {
   const rng = makeRng(seed);
+  const askRng = makeRng(seed ^ 0x5eed);
   const world: GenWorld = { conversations: [], managed_sessions: [], session_decisions: [], session_owners: [] };
   for (let i = 0; i < count; i++) {
     const tag = `w${seed}c${i}`;
@@ -173,7 +174,12 @@ export function genWorld(seed: number, count: number, epoch: number, me: string)
       });
     }
     if (chance(rng, 0.05)) {
-      world.session_decisions.push({ _id: `sd_${tag}`, user_id: me, conversation_id: _id, status: "pending", created_at: epoch - GEN_MIN });
+      // Mostly blocking asks; some advisory (lift nothing, isStackedAsk), some
+      // advisory filed into a named stack (lift). Drawn from their own stream
+      // so the main stream, and every world a seed names, stays as it was.
+      const kind = askRng();
+      const ask = kind < 0.7 ? { blocking: true } : kind < 0.85 ? { blocking: false, default_option: 0 } : { blocking: false, default_option: 0, stack_id: convexIdFor(`stack${tag}`) };
+      world.session_decisions.push({ _id: `sd_${tag}`, user_id: me, conversation_id: _id, status: "pending", created_at: epoch - GEN_MIN, ...ask });
     }
   }
   return world;

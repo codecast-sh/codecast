@@ -1,6 +1,8 @@
 import { useCallback, useRef } from "react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useInboxStore, InboxSession } from "../store/inboxStore";
+import { useConvex } from "convex/react";
+import { useInboxStore, InboxSession, claimsViewer, isConvexId } from "../store/inboxStore";
+import { batchGet } from "./useSyncChangeFeed";
 import { useConvexSync } from "./useConvexSync";
 import { useIsSyncHost } from "./useSyncRole";
 import { useQueryNoThrow } from "./useQueryNoThrow";
@@ -12,17 +14,39 @@ import { useFeederError } from "./useSyncCollection";
 // setLiveInboxIds — a sync() action — so the set persists and the next cold boot
 // filters its first frame against the last-known authoritative set. A plain
 // function (no React deps; it reads/writes the store directly), applied with
-// the rows by applyInboxListPayload.
-export function applyLiveInboxIds(sessions: any[]) {
+// the rows by applyInboxListPayload. With a client, the rows that left the set
+// while claiming me are settled through byIds (settleDisownClaims).
+export function applyLiveInboxIds(sessions: any[], convex?: any) {
   const ids = sessions.map((x: any) => x._id.toString() as string);
-  // Before the change-guard: a disown reaches this client as ABSENCE from the
-  // payload, and the id set may already match (e.g. a reload after another tab
-  // recorded the new set) while a cached row still claims owned_by_me.
-  useInboxStore.getState().reconcileDisownedSessions(ids);
   const next = new Set<string>(ids);
-  const prev = useInboxStore.getState().liveInboxIds;
+  const state = useInboxStore.getState();
+  const prev = state.liveInboxIds;
   if (prev.size === next.size && ids.every((id) => prev.has(id))) return;
-  useInboxStore.getState().setLiveInboxIds(ids);
+  const left = leftClaimingViewer(state, prev, next);
+  state.setLiveInboxIds(ids);
+  if (convex && left.length) void settleDisownClaims(convex, left);
+}
+
+// The rows that left the live list while claiming me: a foreign run I own.
+// Leaving says only that the list stopped returning the row: I was removed as
+// an owner (a disown reaches the list as absence), or the row left its scan
+// while I still own it (a kill, the age window, the owner-window cap).
+export function leftClaimingViewer(state: { currentUser?: any; sessions: Record<string, any> }, prev: ReadonlySet<string>, next: ReadonlySet<string>): string[] {
+  const meId = state.currentUser?._id?.toString?.();
+  if (!meId) return [];
+  return [...prev].filter((id) => !next.has(id) && isConvexId(id) && !!state.sessions[id] && claimsViewer(state.sessions[id], meId));
+}
+
+// byIds settles which: it admits exactly the runner and the owner set, so a
+// returned row lands with the server's stamps (still mine), and an omitted id
+// is no longer mine and only its claim clears. Never a prune: the session may
+// still be on my team board through the team list.
+export async function settleDisownClaims(convex: any, ids: string[]): Promise<void> {
+  const rows = await batchGet(convex, "sessions", ids);
+  const store = useInboxStore.getState();
+  if (rows.length) store.syncTable("sessions", rows as unknown as InboxSession[], { isDelta: true } as any);
+  const present = new Set(rows.map((r: any) => String(r._id)));
+  store.clearDisownedClaims(ids.filter((id) => !present.has(id)));
 }
 
 /**
@@ -31,11 +55,11 @@ export function applyLiveInboxIds(sessions: any[]) {
  * simulator's host all apply through it. Returns the rows, or null for a
  * payload that holds none.
  */
-export function applyInboxListPayload(data: any): any[] | null {
+export function applyInboxListPayload(data: any, convex?: any): any[] | null {
   const sessions = data?.sessions ?? data;
   if (!Array.isArray(sessions)) return null;
   useInboxStore.getState().syncTable("sessions", sessions as unknown as InboxSession[]);
-  applyLiveInboxIds(sessions);
+  applyLiveInboxIds(sessions, convex);
   return sessions;
 }
 
@@ -75,13 +99,14 @@ export function useLiveInboxSessions(opts?: { onSync?: (sessions: any[]) => void
   const isSyncHost = useIsSyncHost();
   const { data: inboxSessions, error } = useQueryNoThrow(api.conversations.listInboxSessions, isSyncHost ? LIST_INBOX_SESSIONS_ARGS : "skip");
   useFeederError("conversations.listInboxSessions", error);
+  const convex = useConvex();
   const onSyncRef = useRef(opts?.onSync);
   onSyncRef.current = opts?.onSync;
 
   useConvexSync(inboxSessions, useCallback((data: any) => {
-    const sessions = applyInboxListPayload(data);
+    const sessions = applyInboxListPayload(data, convex);
     if (sessions) onSyncRef.current?.(sessions);
-  }, []), { coalesceMs: 300 });
+  }, [convex]), { coalesceMs: 300 });
 
   return { data: inboxSessions, error };
 }

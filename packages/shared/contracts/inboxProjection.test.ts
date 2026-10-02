@@ -20,6 +20,7 @@ import {
   isFoldExempt,
   isWorkingSetWindow,
   rollupParentIdOf,
+  isStackedAsk,
   rideLeadPlacements,
   inWorkingSet,
   inboxEpoch,
@@ -637,6 +638,26 @@ describe("placeProjectableRow — the park facts", () => {
     expect(placeProjectableRow(claim(11 * HOUR, { agent_status: "waiting", open_tasks: [{ id: "t1" }], open_tasks_at: EPOCH - 60_000 }), false, EPOCH).bucket).toBe("dormant");
   });
 
+  // A lead that ended its turn while its subagents (a background workflow's
+  // workers, a background Agent) still produce is parked on them: their result
+  // is its next turn. It used to read as working for the whole run (jx73a5s).
+  test("a settled lead with a producing subagent child is dormant, not working", () => {
+    const lead = (extra: Record<string, any>) => {
+      const facts = row("lead", {
+        message_count: 40, updated_at: EPOCH - HOUR / 2, last_heartbeat: EPOCH - 10_000,
+        agent_status_updated_at: EPOCH - HOUR / 2, producing_until: EPOCH + 60_000, ...extra,
+      });
+      return placeProjectableRow({ ...facts, ...deriveLiveAt(facts, EPOCH) }, false, EPOCH);
+    };
+    const tasks = { open_tasks: [{ id: "w1", kind: "workflow" }], open_tasks_at: EPOCH - 60_000 };
+    expect(lead({ agent_status: "waiting", ...tasks }).work_state).toBe("dormant");
+    expect(lead({ agent_status: "idle" }).work_state).toBe("dormant");
+    expect(lead({ agent_status: "idle", producing_until: EPOCH - 60_000 }).work_state).toBe("needs_input");
+    expect(lead({ agent_status: "working" }).work_state).toBe("working");
+    // A declared block still reaches the human while the workers run.
+    expect(lead({ agent_status: "idle", thread_state_status: "blocked" }).work_state).toBe("needs_input");
+  });
+
   test("the claim expiry is a shared deadline: the time flip lands on needs_input at updated_at + TTL", () => {
     const placedAt = EPOCH - HOUR;
     const r = row("d", { is_idle: true, agent_status: "dormant", updated_at: placedAt });
@@ -657,7 +678,7 @@ describe("field ownership constants", () => {
       "tmux_session", "permission_mode", "agent_started_at", "open_tasks", "open_tasks_at",
       "message_count", "updated_at", "last_turn_allows_park",
       "agent_status_updated_at", "agent_status_boundary", "turn_completed_at", "hibernated_at", "last_heartbeat", "last_role_is_user", "auq_open", "daemon_alive_until", "producing_until",
-      "activity", "context_tokens", "last_model_call_at",
+      "child_asking", "activity", "context_tokens", "last_model_call_at",
     ]);
     expect([...INBOX_PROJECTION_FIELDS]).toEqual([
       "bucket", "work_state", "asking", "below_fold", "bucket_stale_at", "stale_bucket",
@@ -693,6 +714,15 @@ describe("rollupParentIdOf — the one child → parent rule", () => {
     expect(rollupParentIdOf({ spawned_by_conversation_id: "lead", agent_team_name: "team", agent_name: "team-lead" })).toBeNull();
     expect(rollupParentIdOf({ spawned_by_conversation_id: "lead" })).toBeNull();
     expect(rollupParentIdOf({})).toBeNull();
+  });
+});
+
+describe("isStackedAsk — which pending decide lifts its session", () => {
+  test("a blocking ask lifts; an advisory one lifts only from a named stack; a resolved one never", () => {
+    expect(isStackedAsk({ status: "pending", blocking: true })).toBe(true);
+    expect(isStackedAsk({ status: "pending", blocking: false })).toBe(false);
+    expect(isStackedAsk({ status: "pending", blocking: false, stack_id: "ds1" })).toBe(true);
+    expect(isStackedAsk({ status: "answered", blocking: true })).toBe(false);
   });
 });
 

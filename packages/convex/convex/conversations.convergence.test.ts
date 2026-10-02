@@ -1,11 +1,16 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import {
+  collectInboxSessionsByIds,
+  collectInboxSessionsPaginated,
   computeInboxSessions,
   computeSessionsLiveness,
   _resetChildAuqProbeCacheForTests,
 } from "./conversations";
 import {
+  INBOX_FACT_FIELDS,
   INBOX_PROJECTION_VERSION,
+  INBOX_ROW_FIELDS,
+  INBOX_WINDOW_CAPS,
   digestProjection,
   inboxEpoch,
   projectInbox,
@@ -14,6 +19,7 @@ import {
 } from "@codecast/shared/contracts";
 import { GEN_DAY, GEN_HOUR, convexIdFor, genWorld, makeRng, type GenWorld } from "@codecast/shared/contracts/__fixtures__/inboxProjectionGen";
 import { makeFakeDb } from "./testDb";
+import schema from "./schema";
 
 // SERVER DETERMINISM over GENERATED worlds (sync-convergence C2/C4, the
 // "Validation plan"). The hand-built fixtures in conversations.projection and
@@ -212,5 +218,138 @@ describe("inboxForCLI folds where the overlay folds", () => {
       }
       expect(compared).toBeGreaterThan(0);
     }
+  });
+});
+
+// One inbox row, every feeder (ct-56011, ct-56053). The base list, byIds and
+// the completeness floor all write the client's never-prune `sessions` cache,
+// and the delta syncTable replaces the whole row: a viewer field one feeder
+// stamps and another omits flaps on every catch-up. The overlay-owned facts
+// are nulled by every base feeder and excluded here.
+describe("one row, every feeder", () => {
+  const THEM = "users_them";
+  const base = (tag: string, over: Record<string, any> = {}) => ({
+    _id: convexIdFor(tag), user_id: ME, status: "active", updated_at: EPOCH - GEN_HOUR, started_at: EPOCH - 2 * GEN_HOUR,
+    message_count: 4, last_message_role: "assistant", title: tag, ...over,
+  });
+  const own = base("own");
+  const ownOwned = base("ownowned", { owner_user_id: ME });
+  const foreignOwned = base("foreignowned", { user_id: THEM, owner_user_id: ME });
+  const seat = base("seat", { owner_user_id: ME, standing_role_id: "org_roles_1", org_role_id: "org_roles_1" });
+  const world = () => ({
+    users: [{ _id: ME, name: "Me", email: "me@example.com" }, { _id: THEM, name: "Them", email: "them@example.com" }],
+    messages: [],
+    managed_sessions: [],
+    session_decisions: [],
+    conversations: [own, ownOwned, foreignOwned, seat].map((c) => ({ ...c })),
+    session_owners: [
+      { _id: "so1", conversation_id: ownOwned._id, user_id: ME, added_by: ME, added_at: EPOCH - GEN_HOUR, seen_at: EPOCH - GEN_HOUR },
+      { _id: "so2", conversation_id: foreignOwned._id, user_id: ME, added_by: THEM, added_at: EPOCH - GEN_HOUR, note: "yours now" },
+      { _id: "so3", conversation_id: seat._id, user_id: ME, added_by: ME, added_at: EPOCH - GEN_HOUR, seen_at: EPOCH - GEN_HOUR },
+    ],
+  });
+  const overlayOwned = new Set<string>(INBOX_FACT_FIELDS);
+  const bodyOf = (row: any) => Object.fromEntries(Object.entries(JSON.parse(JSON.stringify(row))).filter(([k]) => !overlayOwned.has(k)));
+
+  test("list row == byIds row == floor row, viewer stamps included", async () => {
+    const list = await computeInboxSessions({ db: makeFakeDb(world()) }, ME as any, { show_all: true, includeLiveness: false, fastFieldsInOverlay: true });
+    const ids = [own, ownOwned, foreignOwned, seat].map((c) => c._id);
+    const byIds = await collectInboxSessionsByIds({ db: makeFakeDb(world()) }, ME as any, ids);
+    const floor = await collectInboxSessionsPaginated({ db: makeFakeDb(world()) }, ME as any, { paginationOpts: { numItems: 50, cursor: null } });
+    const rowIn = (rows: any[], id: string) => rows.find((r: any) => String(r._id) === id);
+    for (const id of ids) {
+      const l = rowIn(list.sessions, id);
+      const b = rowIn(byIds.sessions, id);
+      expect(l, id).toBeDefined();
+      expect(bodyOf(b), id).toEqual(bodyOf(l));
+      const f = rowIn(floor.page, id);
+      if (id !== foreignOwned._id) expect(bodyOf(f), id).toEqual(bodyOf(l));
+    }
+    const l = (id: string) => rowIn(list.sessions, id);
+    expect(l(own._id).owned_by_me).toBe(false);
+    expect(l(ownOwned._id).owned_by_me).toBe(true);
+    expect(l(foreignOwned._id)).toMatchObject({ owned_by_me: true, author_name: "Them", author_email: "them@example.com", owner_name: "Me" });
+    expect(l(foreignOwned._id).assigned_ping).toMatchObject({ by_name: "Them", note: "yours now" });
+    expect(l(seat._id)).toMatchObject({ owned_by_me: true, owner_name: "Me", owner_email: "me@example.com" });
+  });
+
+  // The list reads my owner rows from a window of the newest
+  // INBOX_WINDOW_CAPS.recent; byIds and the floor read one row by id. An old
+  // session whose owner row is past that window must read the same.
+  test("an owner row past the owner window: the list still reads it", async () => {
+    const extra = Array.from({ length: INBOX_WINDOW_CAPS.recent + 5 }, (_, i) => base(`assigned${i}`, { user_id: THEM, owner_user_id: ME }));
+    const w = world();
+    w.conversations.push(...extra.map((c) => ({ ...c })));
+    w.session_owners.push(...extra.map((c, i) => ({ _id: `sx${i}`, conversation_id: c._id, user_id: ME, added_by: THEM, added_at: EPOCH - i, seen_at: EPOCH })));
+    const db = () => makeFakeDb(w);
+    const list = await computeInboxSessions({ db: db() }, ME as any, { show_all: true, includeLiveness: false, fastFieldsInOverlay: true });
+    expect(list.truncated).toContain("owned");
+    const byIds = await collectInboxSessionsByIds({ db: db() }, ME as any, [ownOwned._id, seat._id]);
+    for (const id of [ownOwned._id, seat._id]) {
+      const l = list.sessions.find((r: any) => String(r._id) === id);
+      const b = byIds.sessions.find((r: any) => String(r._id) === id);
+      expect(l?.owned_by_me, id).toBe(true);
+      expect(bodyOf(b), id).toEqual(bodyOf(l));
+    }
+  });
+
+  // Sync-log cargo writes null for an unset column (web syncLogCargo), so
+  // every feeder spells an absent optional the same way; a key one omits and
+  // another nulls replaces the row on every push.
+  test("an absent optional is null, not a missing key, on every feeder", async () => {
+    const list = await computeInboxSessions({ db: makeFakeDb(world()) }, ME as any, { show_all: true, includeLiveness: false, fastFieldsInOverlay: true });
+    const byIds = await collectInboxSessionsByIds({ db: makeFakeDb(world()) }, ME as any, [own._id]);
+    const floor = await collectInboxSessionsPaginated({ db: makeFakeDb(world()) }, ME as any, { paginationOpts: { numItems: 50, cursor: null } });
+    for (const rows of [list.sessions, byIds.sessions, floor.page]) {
+      const r = rows.find((x: any) => String(x._id) === own._id);
+      for (const k of ["project_path", "git_root", "subtitle", "team_visibility", "inbox_deferred_at"]) {
+        expect(k in r && r[k] === null, k).toBe(true);
+      }
+      expect(Object.entries(r).filter(([, v]) => v === undefined).map(([k]) => k)).toEqual([]);
+    }
+  });
+});
+
+// The row shape (ct-56050). Sync-log cargo lands a raw conversation field on a
+// sessions row only if INBOX_ROW_FIELDS names it, so that list must be exactly
+// what the base feeders write: a field missing from it is dropped from cargo
+// (stale until the next push), and an extra one rides in on cargo and flaps.
+// Every conversation field is set, from the schema's own validator, so a new
+// column reaches this test without anyone listing it.
+describe("the row shape is INBOX_ROW_FIELDS plus the facts", () => {
+  function sample(f: any): any {
+    switch (f.kind) {
+      case "id": return `${f.tableName}_x`;
+      case "string": return "x";
+      case "float64": case "int64": return 1;
+      case "boolean": return true;
+      case "array": return [];
+      case "object": return {};
+      case "literal": return f.value;
+      case "union": return sample(f.members[0]);
+      default: return "x";
+    }
+  }
+  test("byIds, the floor and a subagent child row write exactly those keys", async () => {
+    const THEM = "users_them";
+    const every: Record<string, any> = {};
+    for (const [k, f] of Object.entries<any>((schema as any).tables.conversations.validator.fields)) every[k] = sample(f);
+    const live = { status: "active", is_workflow_sub: false, inbox_dismissed_at: undefined, inbox_stashed_at: undefined, inbox_killed_at: undefined, updated_at: EPOCH - GEN_HOUR, started_at: EPOCH - 2 * GEN_HOUR, message_count: 3 };
+    const parent = { ...every, ...live, _id: "conversations_p", user_id: ME, is_subagent: false, parent_conversation_id: undefined, parent_message_uuid: undefined };
+    const child = { ...every, ...live, _id: "conversations_c", user_id: ME, is_subagent: true, parent_conversation_id: "conversations_p" };
+    const foreign = { ...parent, _id: "conversations_f", user_id: THEM, owner_user_id: ME };
+    const db = makeFakeDb({
+      users: [{ _id: ME, name: "Me", email: "me@example.com" }, { _id: THEM, name: "Them", email: "them@example.com" }],
+      conversations: [parent, child, foreign], messages: [], managed_sessions: [], session_decisions: [],
+      session_owners: [{ _id: "so1", conversation_id: "conversations_f", user_id: ME, added_by: THEM, added_at: EPOCH }],
+    });
+    const byIds = await collectInboxSessionsByIds({ db }, ME as any, ["conversations_p", "conversations_f"]);
+    const floor = await collectInboxSessionsPaginated({ db }, ME as any, { paginationOpts: { numItems: 10, cursor: null } });
+    expect(floor.page.map((r: any) => String(r._id)).sort()).toEqual(["conversations_c", "conversations_p"]);
+    const written = new Set<string>();
+    for (const r of [...byIds.sessions, ...floor.page]) for (const k of Object.keys(r)) written.add(k);
+    const shape = new Set<string>([...INBOX_ROW_FIELDS, ...INBOX_FACT_FIELDS]);
+    expect([...written].filter((k) => !shape.has(k)).sort()).toEqual([]);
+    expect([...shape].filter((k) => !written.has(k)).sort()).toEqual([]);
   });
 });
