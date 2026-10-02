@@ -978,6 +978,12 @@ function createDesktopApp(userConfig, electron = require("electron")) {
     return out;
   };
   const withSeparator = (items) => (items.length ? [...items, { type: "separator" }] : []);
+  // An app's own entries, read at build time so `visible` can follow its
+  // state; `tray: true` puts an entry in the menu bar icon as well.
+  const appMenuItems = ({ tray = false } = {}) =>
+    cfg.menu.appItems
+      .filter((item) => (!tray || item.tray) && (typeof item.visible !== "function" || item.visible(api)))
+      .map((item) => (item.type === "separator" ? { type: "separator" } : { label: item.label, click: () => item.action(api) }));
 
   function createTray() {
     if (!cfg.assets.tray) return;
@@ -987,9 +993,15 @@ function createDesktopApp(userConfig, electron = require("electron")) {
     const icon = nativeImage.createFromPath(cfg.assets.tray);
     icon.setTemplateImage(true);
     tray = new Tray(icon);
-    const menu = Menu.buildFromTemplate([
+    tray.setContextMenu(buildTrayMenu());
+    tray.setToolTip(PRODUCT);
+  }
+
+  function buildTrayMenu() {
+    return Menu.buildFromTemplate([
       { label: `Show ${PRODUCT}`, click: () => { mainWindow?.show(); mainWindow?.focus(); } },
       { type: "separator" },
+      ...withSeparator(appMenuItems({ tray: true })),
       ...withSeparator(sessionMenuItems()),
       ...withSeparator(navMenuItems()),
       { label: "Check for Updates…", click: () => checkForDesktopUpdate({ manual: true }) },
@@ -997,8 +1009,13 @@ function createDesktopApp(userConfig, electron = require("electron")) {
       { type: "separator" },
       { label: `Quit ${PRODUCT}`, click: () => app.quit() },
     ]);
-    tray.setContextMenu(menu);
-    tray.setToolTip(PRODUCT);
+  }
+
+  // Rebuild the menus an app's entries appear in, after the state their
+  // `visible` reads has changed.
+  function refreshMenus() {
+    if (tray) tray.setContextMenu(buildTrayMenu());
+    buildAppMenu();
   }
 
   function buildAppMenu() {
@@ -1010,9 +1027,7 @@ function createDesktopApp(userConfig, electron = require("electron")) {
           { type: "separator" },
           { label: "Check for Updates…", click: () => checkForDesktopUpdate({ manual: true }) },
           { type: "separator" },
-          ...withSeparator(
-            cfg.menu.appItems.map((item) => (item.type === "separator" ? { type: "separator" } : { label: item.label, click: () => item.action(api) })),
-          ),
+          ...withSeparator(appMenuItems()),
           ...withSeparator(
             cfg.extraProtocols.filter((p) => p.menuLabel).map((p) => ({ label: p.menuLabel, click: () => claimDefaultClient(p.scheme) })),
           ),
@@ -1697,6 +1712,8 @@ function createDesktopApp(userConfig, electron = require("electron")) {
     // A window on the shell's preload, for an app's own pages (a setup
     // screen, a native panel). Loads a file or a URL; the bridge is there.
     openWindow,
+    // Rebuild the tray and app menus so `visible` on app items is read again.
+    refreshMenus,
   };
   return api;
 }
