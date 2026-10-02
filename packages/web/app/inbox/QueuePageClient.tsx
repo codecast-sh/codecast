@@ -48,7 +48,7 @@ const ScopePageInner = lazy(() => import("../../components/org/scope/ScopePage")
  *  talking to the person, under the role's lead) and folds the session header
  *  to one row that expands on demand. */
 export type SeatConversation = {
-  layout: Pick<ConversationDiffLayoutProps, "leadNode" | "leadPinned" | "stickyPrompt" | "initialDensity" | "foldWorkingTurns" | "composerPlaceholder" | "hideDiff">;
+  layout: Pick<ConversationDiffLayoutProps, "leadNode" | "leadPinned" | "stickyPrompt" | "initialDensity" | "foldWorkingTurns" | "composerPlaceholder" | "composerNode" | "hideDiff">;
   /** The person may talk to the seat (host, parent or admin): see useSeedOwnership. */
   seedOwnership: boolean;
   onSessionView: () => void;
