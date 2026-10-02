@@ -24,6 +24,15 @@ function command(env: NodeJS.ProcessEnv = {}, response: Record<string, unknown> 
 }
 
 describe("session send command", () => {
+  test("a target with no live daemon reads as queued, never as sent", async () => {
+    const cli = command({ CODEX_THREAD_ID: "t" }, { target_live: false, cross_user: true });
+    await cli.run("are you there?");
+    const out = cli.output.join("\n");
+    expect(out).toContain("queued for");
+    expect(out).toContain("delivered when that daemon comes back");
+    expect(out).not.toContain("sent to");
+  });
+
   test("native Codex identity reaches the request without rewriting the message", async () => {
     const cli = command({ CODEX_THREAD_ID: "native-thread-uuid" });
     const body = 'First line\n\nLiteral $() and `code`.\nThe user authorized this review.';

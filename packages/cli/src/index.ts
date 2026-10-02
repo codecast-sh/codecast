@@ -3,9 +3,8 @@ import { DEFAULT_WEB_URL } from "./config/readLocalConfig.js";
 import { registerSessionParkingCommands } from "./sessionParkingCommand.js";
 import { registerSyncVerbs } from "./cloud/syncCli.js";
 import { headForward, isSeatedAnchor } from "./anchorAlias.js";
-import { roleIdentity } from "@codecast/shared/contracts/orgIdentity";
 import { planProgressLabel } from "./planProgress.js";
-import { registerSessionSendCommand } from "./sessionSendCommand.js";
+import { registerSessionSendCommand, printSendResult } from "./sessionSendCommand.js";
 import { fleetCountText, type FleetCounts } from "./fleetCounts.js";
 import { Command } from "commander";
 import { randomUUID } from "node:crypto";
@@ -22,7 +21,7 @@ import { buildTaskStartBody, groupTasksByAssignee, startedLines } from "./taskCl
 import { ASSIGNEE_MEANS } from "@codecast/shared/contracts/orgAssignee";
 import { DEFAULT_LINE_CARDS_CAP } from "@codecast/shared/contracts/orgCapacity";
 import { chatSendOrigin, sessionIdFromEnv, workOriginStamp } from "./sessionIdentity.js";
-import { AUTONOMY_LABEL, autonomyOn, autonomySentence, autonomyWords, switchFromStageWord } from "@codecast/shared/contracts/roleAutonomy";
+import { AUTONOMY_LABEL, autonomyOn, autonomySentence, switchFromStageWord } from "@codecast/shared/contracts/roleAutonomy";
 import open from "open";
 import * as fs from "fs";
 import { selfExecInfo } from "./selfExec.js";
@@ -85,7 +84,7 @@ import {
   renderFencedPlanRecord,
   renderFencedPlanTasks,
 } from "@codecast/shared/tasks";
-import { describeDates, describeDatesFull, formatDateSmart, parseEndDate, parseRelativeDate, relTimeShort, wasEdited } from "@codecast/shared/time";
+import { describeDates, describeDatesFull, formatDateSmart, parseEndDate, parseRelativeDate, wasEdited } from "@codecast/shared/time";
 import { SESSION_QUERY_OPERATORS } from "@codecast/shared/search";
 import { describeShareSpan, formatDateRange, formatSessionCount, summarizeShareImpact, type PathShareSummary } from "@codecast/shared/team";
 import { cliFetch, cliFetchRead, cliSearchRequest } from "./cliHttp.js";
@@ -113,6 +112,7 @@ import { writeThreadStatePulse } from "./threadStateStamp.js";
 import { AuthServer } from "./authServer.js";
 import { startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons, UNVERIFIABLE_MARK } from "./colors.js";
+import { authorityLine, briefHandLine, briefTextLines, roleLine, routineLine } from "./briefLines.js";
 import { planReadiness, resolvedTaskIds, isUnblocked } from "./planReadiness.js";
 import { ensureTmux, tryInstallTmux, tmuxRun, hasTmux, listCodecastPanes, pickPaneForSession } from "./tmux.js";
 import { editHarnessJson, removeHarnessFile, withHarnessCause, writeHarnessFile } from "./harness.js";
@@ -13129,11 +13129,12 @@ anchor
       console.error(`${noAgentLine(scopeType)}`);
       process.exit(1);
     }
-    const fwd = headForward(anchorRow, "wake", { message, from_session: callingSession() });
+    const from_session = callingSession();
+    const fwd = headForward(anchorRow, "wake", { message, from_session });
     if (fwd?.route) {
       console.log(`${c.dim}${fwd.note}${c.reset}`);
       const result = await cliPost(fwd.route, fwd.body);
-      console.log(`${c.green}✓${c.reset} woke ${c.cyan}${anchorRow.name}${c.reset} ${c.dim}(${result?.short_id ?? ""})${c.reset}`);
+      printSendResult(result, console.log, { target: result?.short_id ?? "", label: `${c.cyan}${anchorRow.name}${c.reset} ${c.dim}(${result?.short_id ?? ""})${c.reset}`, fromSession: !!from_session });
       return;
     }
     const resp = await cliFetch(`${siteUrl}/cli/anchor/wake`, {
@@ -13491,8 +13492,7 @@ async function resolvePlanId(ref: string): Promise<string> {
 // The role as a person reads it (org-staffing.md S30): its given name, then
 // its title (with a chief's reach) beside the handle.
 function printRoleLine(r: any) {
-  const id = roleIdentity(r, { teamName: r.team_name ?? null });
-  console.log(`${c.bold}${id.name}${c.reset} ${c.dim}${id.subtitle} · @${r.handle} · ${r.short_id} · ${r.status} · ${autonomyWords(autonomyOn(r.trust))}${r.review_backend ? ` · review on ${r.review_backend}` : ""}${c.reset}`);
+  console.log(roleLine(r));
 }
 
 // `--tenure standing` or `--tenure program:<pl-N|project:ref|YYYY-MM-DD>[:review]`
@@ -13617,22 +13617,12 @@ roleGroup
     printRoleLine(brief.role);
     const u = brief.facts.usage;
     console.log(`  ${c.dim}${AUTONOMY_LABEL.toLowerCase()}: ${autonomyOn(brief.role.trust) ? "on" : "off"} (${autonomySentence(autonomyOn(brief.role.trust)).replace(/^It /, "it ").replace(/\.$/, "")})${c.reset}`);
-    const held = (brief.role.authority ?? []).filter((g: any) => !g.expires_at || g.expires_at > Date.now());
-    console.log(`  ${c.dim}authority outside codecast: ${held.length ? held.map((g: any) => `${g.kind} (${g.label}${g.expires_at ? `, until ${formatDateSmart(g.expires_at)}` : ""})`).join("; ") : "none granted"}${c.reset}`);
+    console.log(authorityLine(brief.role, Date.now()));
     console.log(`  ${c.dim}used today, of its limits: ${u.wakes} of ${u.caps.wakes_per_day} wakes · ${u.hands} of ${u.caps.hands_per_day} sessions started · ${u.tokens} of ${u.caps.tokens_per_day} tokens${u.uncounted_sessions ? ` · tokens not counted for ${u.uncounted_sessions} session${u.uncounted_sessions === 1 ? "" : "s"}` : ""}${c.reset}`);
-    console.log(`  ${c.dim}standing session: ${brief.role.standing_short_id ?? "none"}${routineLine(brief.role.routine)}${c.reset}`);
-    const { briefHandLine } = await import("./briefLines.js");
+    console.log(`  ${c.dim}standing session: ${brief.role.standing_short_id ?? "none"}${routineLine(brief.role.routine, Date.now())}${c.reset}`);
     for (const h of brief.facts.hands) console.log(briefHandLine(h));
   });
 
-// The role's routine (org-staffing.md S25): when it checks its area next.
-function routineLine(r: { short_id: string | null; status: string; run_at: number | null } | null | undefined): string {
-  if (!r) return " · no trigger yet";
-  if (r.status === "paused") return ` · check paused (${r.short_id ?? "trigger"})`;
-  if (!r.run_at) return "";
-  const ms = r.run_at - Date.now();
-  return ` · next check ${ms > 60_000 ? `in ${relTimeShort(Date.now() - ms)}` : "due now"} (${r.short_id ?? "trigger"})`;
-}
 
 roleGroup
   .command("wake")
@@ -13643,9 +13633,10 @@ roleGroup
   .option("--json", "Machine-readable output")
   .action(async (handle: string, message: string, options: any) => {
     const role_id = await resolveRoleId(handle, options.team);
-    const result = await cliPost("/cli/role/wake", { role_id, message, from_session: callingSession() });
+    const from_session = callingSession();
+    const result = await cliPost("/cli/role/wake", { role_id, message, from_session });
     if (options.json) { console.log(JSON.stringify(result, null, 2)); return; }
-    console.log(`${c.green}✓${c.reset} woke @${handle.replace(/^@/, "")} ${c.dim}(${result.short_id})${c.reset}`);
+    printSendResult(result, console.log, { target: result.short_id, label: `@${handle.replace(/^@/, "")} ${c.dim}(${result.short_id})${c.reset}`, fromSession: !!from_session });
   });
 
 for (const verb of ["pause", "resume", "retire", "restart"] as const) {
@@ -13817,39 +13808,7 @@ const briefCmd = program
     const brief = await cliPost("/cli/brief/get", { role_id, from_session: callingSession() });
     if (!brief) { console.error("Role not found"); process.exit(1); }
     if (options.json) { console.log(JSON.stringify(brief, null, 2)); return; }
-    const f = brief.facts;
-    printRoleLine(brief.role);
-    const { briefScopeLine, briefPlanLines } = await import("./briefLines.js");
-    console.log(`  ${c.dim}scope: ${briefScopeLine(f.scope, brief.role.handle)}${c.reset}`);
-    const held = (brief.role.authority ?? []).filter((g: any) => !g.expires_at || g.expires_at > Date.now());
-    console.log(`  ${c.dim}authority outside codecast: ${held.length ? held.map((g: any) => `${g.kind} (${g.label}${g.expires_at ? `, until ${formatDateSmart(g.expires_at)}` : ""})`).join("; ") : "none granted"}${c.reset}`);
-    console.log(`  ${c.dim}standing session: ${brief.role.standing_short_id ?? "none"}${routineLine(brief.role.routine)}${c.reset}`);
-    const st = Object.entries(f.tasks.by_status).filter(([, n]) => (n as number) > 0).map(([k, n]) => `${n} ${k}`).join(", ");
-    const pr = Object.entries(f.tasks.by_priority).filter(([, n]) => (n as number) > 0).map(([k, n]) => `${n} ${k}`).join(", ");
-    console.log(`  tasks: ${f.tasks.total} in scope, ${f.tasks.open} open${st ? ` · ${st}` : ""}${pr ? ` · priority ${pr}` : ""}`);
-    for (const line of briefPlanLines(f.plans)) console.log(line);
-    console.log(`  decisions: ${f.decisions.open} open, ${f.decisions.answered_today} answered today`);
-    // What moved since the role last read this (S25): the section its
-    // scheduled check acts on.
-    console.log(`  changed since ${formatDateSmart(f.changed_since)}:${f.changed.length ? "" : " nothing"}`);
-    for (const ch of f.changed) console.log(`    ${ch.kind} ${ch.short_id ?? ""} ${ch.title} → ${ch.status}`);
-    const u = f.usage;
-    console.log(`  today: ${u.wakes}/${u.caps.wakes_per_day} wakes · ${u.hands}/${u.caps.hands_per_day} sessions started · ${u.tokens}/${u.caps.tokens_per_day} tokens${u.uncounted_sessions ? ` ${c.dim}(tokens not counted for ${u.uncounted_sessions} session${u.uncounted_sessions === 1 ? "" : "s"})${c.reset}` : ""}`);
-    if (f.hands.length) {
-      console.log(`  sessions under it:`);
-      const { briefHandLine } = await import("./briefLines.js");
-      for (const h of f.hands) console.log(briefHandLine(h));
-    }
-    if (f.people?.length) {
-      console.log(`  people who report to it:`);
-      const { briefPeopleLines } = await import("./briefLines.js");
-      for (const line of briefPeopleLines(f.people, Date.now())) console.log(line);
-    }
-    const { briefCharterLines } = await import("./briefLines.js");
-    for (const line of briefCharterLines(String(brief.charter ?? ""))) console.log(line);
-    console.log("");
-    console.log(`  ${c.bold}## Brief${c.reset}`);
-    for (const line of String(brief.narrative || "(no narrative yet: cast brief edit -)").split("\n")) console.log(`  ${line}`);
+    for (const line of briefTextLines(brief, Date.now())) console.log(line);
   });
 
 briefCmd
@@ -16574,6 +16533,7 @@ work
   .command("start")
   .description("Start working on a task (set in_progress)")
   .argument("<short_id>", "Task short ID")
+  .option("--take", "Take the task from the session that owns it even while that session is still working")
   .option("--spawn", "Also hand the task to a fresh agent session (the server spawns it, so this works from any shell)")
   .option("--agent <type>", "Agent type for --spawn: claude (default) or codex")
   .option("--message <text>", stdinText("First message for the spawned session (default: the task's own brief)"))
@@ -16582,7 +16542,7 @@ work
     // the task to the session's role, so a wrong session hands it to the wrong
     // party. Same for done, handoff, verdict and drop below.
     const sessionId = ownSessionId(getRealCwd());
-    const result = await cliPost("/cli/work/update", buildTaskStartBody(shortId, sessionId));
+    const result = await cliPost("/cli/work/update", buildTaskStartBody(shortId, sessionId, { take: options.take }));
     console.log(`${c.green}ok${c.reset} Started ${c.cyan}${shortId}${c.reset}`);
     for (const line of startedLines(result)) console.log(`${c.dim}${line}${c.reset}`);
 

@@ -520,10 +520,9 @@ describe("remote not responding — feedback to the sending session", () => {
       .toContain("could not be delivered");
   });
 
-  test("target OFFLINE past the deadline: Alice's session gets a failure receipt and the message is cancelled", async () => {
+  test("target OFFLINE past the deadline: Alice is told it's queued, and the message is KEPT for when the daemon returns", async () => {
     const now = 1_000_000_000_000;
-    const { ctx, db, tables } = world({ bobLive: false, now });
-    // Send at t0, evaluate well past the deadline.
+    const { ctx, tables } = world({ bobLive: false, now });
     await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "urgent" });
     const msg = tables.pending_messages[0];
     msg.created_at = now - (CROSS_USER_NOTIFY_DEADLINE_MS + 60_000);
@@ -531,8 +530,8 @@ describe("remote not responding — feedback to the sending session", () => {
     const summary = await healAndNotifyStuckMessages(ctx as any, now);
     expect(summary.notified).toBe(1);
 
-    // Original cancelled (remote has no live daemon).
-    expect(msg.status).toBe("cancelled");
+    // Never dropped: an offline daemon delivers it when it comes back.
+    expect(msg.status).toBe("pending");
     expect(typeof msg.sender_notified_at).toBe("number");
 
     // A receipt was injected back into Alice's OWN session (owner == Alice, so her daemon delivers it).
@@ -540,10 +539,17 @@ describe("remote not responding — feedback to the sending session", () => {
       (m) => m.conversation_id === "convAlice" && m.owner_user_id === "uAlice"
     );
     expect(receipt).toBeTruthy();
-    expect(receipt!.content).toContain("could not be delivered");
+    expect(receipt!.content).toContain("stays queued");
+    expect(receipt!.content).toContain("no live daemon");
     expect(receipt!.content).toContain("jxbob01");
     // The receipt is a self-scoped message (from == owner) so it can never itself trigger a notify.
     expect(receipt!.from_conversation_id).toBeUndefined();
+
+    // Bob's daemon returns and the session settles: the cron's readiness gate is all that held it.
+    tables.managed_sessions.push({ _id: "msBobBack", conversation_id: "convBob", agent_status: "idle", last_heartbeat: now + 60_000 });
+    msg.status = "undeliverable";
+    expect((await healAndNotifyStuckMessages(ctx as any, now + 60_000)).revived).toBe(1);
+    expect(msg.status).toBe("pending");
   });
 
   test("target BUSY (alive but not idle) past the deadline: Alice is told it's delayed, message KEPT", async () => {
@@ -600,29 +606,29 @@ describe("planCrossUserNotify — pure decision", () => {
     owner_user_id: "uBob" as any,
   };
 
-  test("offline target → notify + giveUp", () => {
-    expect(planCrossUserNotify(base, false, now)).toEqual({ kind: "notify", giveUp: true });
+  test("offline target → notify, message kept", () => {
+    expect(planCrossUserNotify(base, "offline", now)).toEqual({ kind: "notify", reach: "offline" });
   });
-  test("busy (live) target → notify, no giveUp", () => {
-    expect(planCrossUserNotify(base, true, now)).toEqual({ kind: "notify", giveUp: false });
+  test("busy (live) target → notify", () => {
+    expect(planCrossUserNotify(base, "live", now)).toEqual({ kind: "notify", reach: "live" });
   });
   test("self-send (from == owner) → skip", () => {
-    expect(planCrossUserNotify({ ...base, owner_user_id: "uAlice" as any }, false, now).kind).toBe("skip");
+    expect(planCrossUserNotify({ ...base, owner_user_id: "uAlice" as any }, "offline", now).kind).toBe("skip");
   });
   test("no sender conversation → skip", () => {
-    expect(planCrossUserNotify({ ...base, from_conversation_id: undefined }, false, now).kind).toBe("skip");
+    expect(planCrossUserNotify({ ...base, from_conversation_id: undefined }, "offline", now).kind).toBe("skip");
   });
   test("already notified → skip", () => {
-    expect(planCrossUserNotify({ ...base, sender_notified_at: now - 1 } as any, false, now).kind).toBe("skip");
+    expect(planCrossUserNotify({ ...base, sender_notified_at: now - 1 } as any, "offline", now).kind).toBe("skip");
   });
   test("before deadline → skip", () => {
-    expect(planCrossUserNotify({ ...base, created_at: now - 1_000 }, false, now).kind).toBe("skip");
+    expect(planCrossUserNotify({ ...base, created_at: now - 1_000 }, "offline", now).kind).toBe("skip");
   });
   test("terminal (delivered) → skip", () => {
-    expect(planCrossUserNotify({ ...base, status: "delivered" }, false, now).kind).toBe("skip");
+    expect(planCrossUserNotify({ ...base, status: "delivered" }, "offline", now).kind).toBe("skip");
   });
   test("legacy row without owner_user_id → skip", () => {
-    expect(planCrossUserNotify({ ...base, owner_user_id: undefined }, false, now).kind).toBe("skip");
+    expect(planCrossUserNotify({ ...base, owner_user_id: undefined }, "offline", now).kind).toBe("skip");
   });
 });
 
