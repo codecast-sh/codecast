@@ -5,11 +5,13 @@ import { join } from 'node:path';
 
 import { bootstrapMessage } from '../../../../convex/convex/anchors';
 import type { CliReadMessage } from '../../adapters/convo';
+import { routeGates } from '../../adapters/replay';
 import { readFixture } from '../../adapters/resolver';
 import { runSnapshot } from '../../commands/snapshot';
 import { servedReadKey } from '../../served';
+import type { AgentResult } from '../../surface';
 import { servedDirFor } from '../roleWake/world';
-import impl, { captureAnchorBrief, openingOf, replyAfter, type AnchorBriefSnap } from './index';
+import impl, { captureAnchorBrief, openingOf, replyAfter, turnText, type AnchorBriefSnap } from './index';
 import { meta } from './meta';
 
 let home: string;
@@ -35,6 +37,29 @@ describe('the opening', () => {
 
   test('a real freeze replays the opening prod sent', () => {
     expect(openingOf({ captured_at: 'x', opening: { text: 'You are the lead.', at: 'y', line: 3 } })).toBe('You are the lead.');
+  });
+});
+
+describe('turns after the opening', () => {
+  test("a person's message goes as typed; a chat wake renders through prod's builder with prod's deadline", () => {
+    const pause = fixtureSnap('role-pause-own-triggers');
+    expect(turnText(pause.turns![0]!)).toStartWith('Pause yourself until Monday');
+    const thread = fixtureSnap('thread-pass-or-answer');
+    const wake = turnText(thread.turns![1]!);
+    expect(wake).toContain('Mara replied in a thread you follow.');
+    expect(wake).toContain('cast chat reply cm7ph162 --pass');
+    expect(wake).toContain('within 10 minutes');
+    expect(impl.describe(thread).map((m) => m.id)).toEqual(['opening', 'turn-2', 'turn-3', 'turn-4', 'turn-5', 'turn-6', 'turn-7']);
+  });
+
+  test("a chat wake's own placeholder may be filled; any other chat reply, and every reply in a turn with no wake, is still a write", () => {
+    const agent = (calls: string[]): AgentResult => ({ runSubdir: '/tmp/a', said: [], turns: [[]], calls, costUsd: 0, modelUsage: { [meta.model]: { outputTokens: 1 } }, isError: false, exitCode: 0, model: meta.model, realMs: 0 });
+    const writes = (snap: AnchorBriefSnap, line: string) => routeGates(meta, { calls: [], agents: [agent([line])] }, impl.allowedRefusals!(snap)).find((g) => g.id === 'no-unexpected-writes')!.pass;
+    const thread = fixtureSnap('thread-pass-or-answer');
+    expect(writes(thread, 'REFUSED chat reply cm7ph162 --pass')).toBe(true);
+    expect(writes(thread, 'REFUSED chat reply cm7other "hi"')).toBe(false);
+    expect(writes(thread, 'REFUSED chat send --channel ch7docs "hi"')).toBe(false);
+    expect(writes({ captured_at: 'x', facts: thread.facts }, 'REFUSED chat reply cm7ph162 --pass')).toBe(false);
   });
 });
 

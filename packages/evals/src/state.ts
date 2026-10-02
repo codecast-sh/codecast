@@ -7,8 +7,8 @@ import { homePaths, treeRoot } from './paths';
 import type { SurfaceMeta } from './surface';
 
 // The cadence state: per surface, the source hash its last real run saw, the
-// hash an agent surface was last flagged at, its crash streak and its last
-// cost per rep. Hashes come from git at HEAD and never from the disk, so a
+// hash an agent surface was last flagged at, its crash streak, and its last
+// cost and wall time per rep. Hashes come from git at HEAD and never from the disk, so a
 // half-saved edit never makes a surface stale.
 
 export interface SurfaceState {
@@ -18,6 +18,8 @@ export interface SurfaceState {
   lastRefusedHash?: string;
   crash?: { hash: string; count: number };
   lastCostPerRep?: number;
+  /** A rep's average wall time in the last real run, as the machine's load and that run's parallelism left it. */
+  lastSecondsPerRep?: number;
 }
 
 export type EvalsState = Record<string, SurfaceState>;
@@ -46,6 +48,21 @@ export function perRepUsd(meta: SurfaceMeta, state: EvalsState): number {
 /** What `check` estimates for one surface, and refuses on when it is over `--budget`. */
 export function checkCostUsd(meta: SurfaceMeta, freezes: number, state: EvalsState, reps = meta.reps.check): number {
   return reps * freezes * perRepUsd(meta, state);
+}
+
+/**
+ * About how long `check` takes with `parallel` reps in flight: each
+ * surface's reps at its last recorded seconds per rep, spread over the
+ * slots. Null until every surface has a real run on record.
+ */
+export function checkMinutes(work: Array<{ meta: SurfaceMeta; reps: number }>, state: EvalsState, parallel: number): number | null {
+  let seconds = 0;
+  for (const w of work) {
+    const per = state[w.meta.id]?.lastSecondsPerRep;
+    if (per == null) return null;
+    seconds += w.reps * per;
+  }
+  return seconds / Math.max(1, parallel) / 60;
 }
 
 /**

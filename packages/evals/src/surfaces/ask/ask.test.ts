@@ -6,7 +6,7 @@ import { ASK_SYSTEM_PROMPT, askTermsRequest } from '../../../../convex/convex/li
 import type { Fixture } from '../../adapters/resolver';
 import { REPO_ROOT } from '../../paths';
 import type { CallResult, ReplayCtx, ReplayResult, SurfaceRequest } from '../../surface';
-import ask, { parseAskCall, type AskSnap } from './index';
+import ask, { citationCheck, parseAskCall, type AskSnap } from './index';
 
 const DIR = join(REPO_ROOT, 'packages', 'evals', 'fixtures', 'ask');
 const fixtures = readdirSync(DIR)
@@ -87,6 +87,14 @@ describe('the ask replay', () => {
     expect(byId.parse!.pass).toBe(false);
     expect(byId['citations-real']!.pass).toBe(false);
     expect(byId['citations-real']!.evidence?.summary).toContain('msg 4000');
+  });
+
+  test('a range between two shown lines is real even where the budget left lines out; a range or line never shown is invented', () => {
+    // The 2026-10-02 shapes: "msg 131–164" over a session whose 138 and 142 were cut, and "msg 89–90" where 89 was marked not shown.
+    const shown = [...Array.from({ length: 34 }, (_, i) => 131 + i).filter((l) => l !== 138 && l !== 142), 90];
+    expect(citationCheck('- msg 131–164: the invite was dead', shown)).toEqual({ invented: [], unshownInRanges: 2 });
+    expect(citationCheck('- msg 89–90: 196 rows', shown)).toEqual({ invented: ['msg 89–90'], unshownInRanges: 0 });
+    expect(citationCheck('msg 131, 133 and 400', shown).invented).toEqual(['msg 400']);
   });
 
   test('the judge sees the question and a selection of the session', () => {

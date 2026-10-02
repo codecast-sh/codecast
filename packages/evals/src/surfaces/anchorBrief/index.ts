@@ -2,10 +2,11 @@ import type { ConvoMessage } from '@platform/evals';
 import { UsageError } from '@platform/evals/cli';
 
 import { bootstrapMessage } from '../../../../convex/convex/anchors';
+import { ANCHOR_REPLY_TIMEOUT_MS, buildAnchorWake } from '../../../../convex/convex/chat';
 import { splitLineRef, toConvoMessages, toRows, type CliReadMessage } from '../../adapters/convo';
-import { readFrozenVerbs } from '../../served';
 import type { Captured, CaptureCtx, SurfaceImpl } from '../../surface';
-import { claudeModel, describeTurn, findSnapshot, harnessNote, servedDirFor, type StandingWorld } from '../roleWake/world';
+import { standingGates, type StandingLabel } from '../roleWake/actions';
+import { claudeModel, describeTurn, findSnapshot, servedDirFor, withHarnessNote, type StandingWorld } from '../roleWake/world';
 import { meta } from './meta';
 
 // anchor-brief: the opening turn of a standing session, the message that
@@ -13,7 +14,10 @@ import { meta } from './meta';
 // opening prod sent (read through /cli/read) against reads captured now, so it
 // tests the agent and the model. A fixture renders bootstrapMessage over
 // synthetic facts (and through it roleOpeningMessage, when the facts name a
-// role), so it tests edits to the builders too.
+// role), so it tests edits to the builders too. A fixture may go on past the
+// opening: each of its turns is the next message the standing session gets,
+// sent into the same session (prompt-dry-run.ts --then), and the label's gates
+// grade those turns, not the opening.
 
 const HINT = '`./evals snapshot anchor-brief --session <id> --team <team> --role <handle> --name <name>`';
 
@@ -27,13 +31,31 @@ export interface AnchorBriefSnap extends StandingWorld {
   reply?: CliReadMessage[];
   /** A fixture: what bootstrapMessage is rendered over. */
   facts?: Parameters<typeof bootstrapMessage>[0];
+  /** A fixture: the messages the session gets after its opening, in order. */
+  turns?: FixtureTurn[];
 }
+
+/** A chat wake's facts; the reply deadline is prod's unless the fixture sets one. */
+type ChatWakeFacts = Omit<Parameters<typeof buildAnchorWake>[0], 'deadlineMinutes'> & { deadlineMinutes?: number };
+
+/** One later message: what a person typed into the session, or a chat wake rendered by prod's builder. */
+export type FixtureTurn = { text: string } | { chat: ChatWakeFacts };
 
 export function openingOf(snap: AnchorBriefSnap): string {
   if (snap.opening) return snap.opening.text;
   if (!snap.facts) throw new Error('anchor-brief snapshot carries neither an opening nor fixture facts');
   return bootstrapMessage(snap.facts);
 }
+
+export const turnText = (turn: FixtureTurn): string =>
+  'text' in turn ? turn.text : buildAnchorWake({ ...turn.chat, deadlineMinutes: turn.chat.deadlineMinutes ?? Math.round(ANCHOR_REPLY_TIMEOUT_MS / 60_000) });
+
+/** The run turn each chat wake's placeholder arrived in: the opening is turn 1, a fixture's first turn is turn 2. */
+const placeholderTurns = (snap: AnchorBriefSnap): Record<string, number> =>
+  Object.fromEntries((snap.turns ?? []).flatMap((t, i) => ('chat' in t ? [[String(t.chat.placeholderId), i + 2]] : [])));
+
+/** The turn a fixture's label grades from: its first turn after the opening, else the opening itself. */
+const gradedFrom = (snap: AnchorBriefSnap): number => (snap.turns?.length ? 2 : 1);
 
 /** The assistant's answer to the opening: every message until the next one a person typed. */
 export function replyAfter(messages: CliReadMessage[]): CliReadMessage[] {
@@ -73,14 +95,19 @@ const impl: SurfaceImpl = {
 
   async replay(snap: AnchorBriefSnap, ctx) {
     const serveDir = servedDirFor(snap, ctx, meta);
-    const a = await ctx.agent({ prompt: `${openingOf(snap)}\n${harnessNote(readFrozenVerbs(serveDir))}`, serveDir, model: ctx.model, maxTurns: 80 });
-    return { reply: a.said.join('\n\n') };
+    const then = (snap.turns ?? []).map(turnText);
+    const a = await ctx.agent({ prompt: withHarnessNote(openingOf(snap), snap), serveDir, model: ctx.model, maxTurns: 80, ...(then.length ? { then } : {}) });
+    return { reply: a.turns.slice(gradedFrom(snap) - 1).flat().join('\n\n') };
   },
 
-  // The route gates (frozen-reads, no-unexpected-writes) are this surface's gates: an opening turn reads and writes nothing.
-  gates: () => [],
+  // The route gates (frozen-reads, no-unexpected-writes) hold every turn; a fixture's label adds its scenario's gate over the turns after the opening.
+  gates: (snap: AnchorBriefSnap, out, label?: StandingLabel) => standingGates(out.agents, label, gradedFrom(snap), [], { placeholderTurns: placeholderTurns(snap) }),
 
-  describe: (snap: AnchorBriefSnap): ConvoMessage[] => describeTurn(openingOf(snap), snap.opening?.at ?? snap.captured_at, 'opening'),
+  describe: (snap: AnchorBriefSnap): ConvoMessage[] =>
+    [withHarnessNote(openingOf(snap), snap), ...(snap.turns ?? []).map(turnText)].map((text, i) => ({ ...describeTurn(text, snap.opening?.at ?? snap.captured_at, i ? `turn-${i + 1}` : 'opening')[0]!, n: i + 1 })),
+
+  // A chat wake tells the agent to fill its placeholder with `cast chat reply`; that write is the wake's, so it is allowed for the wake's own placeholder and nothing else.
+  allowedRefusals: (snap: AnchorBriefSnap) => Object.keys(placeholderTurns(snap)).map((ph) => `^chat reply ["']?${ph}\\b`),
 
   productionReply: (snap: AnchorBriefSnap) => (snap.reply?.length ? { messages: toConvoMessages(toRows(snap.reply)) } : null),
 };

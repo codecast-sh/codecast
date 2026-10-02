@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { addSpend, changedSince, checkCostUsd, dirtySurfaces, readState, sourceHashes, spentToday, staleness, suggestedBudget, writeState } from './state';
+import { addSpend, changedSince, checkCostUsd, checkMinutes, dirtySurfaces, readState, sourceHashes, spentToday, staleness, suggestedBudget, writeState } from './state';
 import type { SurfaceMeta } from './surface';
 
 const meta = (id: string, route: 'call' | 'agent', sources: string[]): SurfaceMeta => ({ id, title: id, route, model: 'm', sources, reps: { check: 5 }, maxUsdPerRep: 0.01 });
@@ -14,9 +14,18 @@ const git = (...args: string[]) => {
   if (r.exitCode !== 0) throw new Error(r.stderr.toString());
 };
 
+// A case that reads git spawns it 5 to 15 times. One spawn takes milliseconds
+// on an idle machine and up to a second at a load of 1000 (2026-10-02, when
+// these cases took 6 to 9s), so they get this long; the rest keep bun's 5s.
+const GIT_MS = 30_000;
+
 beforeEach(() => {
   repo = mkdtempSync(join(tmpdir(), 'evals-state-'));
   process.env.CODECAST_EVALS_HOME = join(repo, '.home');
+});
+
+/** The scratch checkout the git cases read: two sources in one commit. */
+function initRepo() {
   mkdirSync(join(repo, 'a'), { recursive: true });
   writeFileSync(join(repo, 'a', 'x.ts'), '1');
   writeFileSync(join(repo, 'b.ts'), '1');
@@ -24,12 +33,14 @@ beforeEach(() => {
   git('init', '-q');
   git('add', '-A');
   git('commit', '-qm', 'one');
-});
+}
 afterEach(() => {
   delete process.env.CODECAST_EVALS_HOME;
 });
 
 describe('source hashes at HEAD', () => {
+  beforeEach(initRepo, GIT_MS);
+
   test('move with a commit, not with the disk', () => {
     const m = [meta('one', 'call', ['a', 'b.ts']), meta('two', 'call', ['missing.ts'])];
     const first = sourceHashes(m, repo);
@@ -41,15 +52,17 @@ describe('source hashes at HEAD', () => {
     expect(second.get('one')).not.toBe(first.get('one'));
     expect(second.get('two')).toBe(first.get('two'));
     expect(dirtySurfaces(m, repo).size).toBe(0);
-  });
+  }, GIT_MS);
 
   test('an untracked file in a source dir makes it dirty', () => {
     writeFileSync(join(repo, 'a', 'new.ts'), '1');
     expect(dirtySurfaces([meta('one', 'call', ['a'])], repo)).toEqual(new Set(['one']));
-  });
+  }, GIT_MS);
 });
 
 describe('changed since a base (the line routes on this)', () => {
+  beforeEach(initRepo, GIT_MS);
+
   const names = (r: { changed: SurfaceMeta[] }) => r.changed.map((m) => m.id);
   const ms = () => [meta('a', 'call', ['a']), meta('b', 'call', ['b.ts']), meta('n', 'agent', ['later.ts'])];
 
@@ -60,7 +73,7 @@ describe('changed since a base (the line routes on this)', () => {
     const r = changedSince(ms(), 'base', repo);
     expect(names(r)).toEqual(['a']);
     expect(changedSince(ms(), 'HEAD', repo).changed).toEqual([]);
-  });
+  }, GIT_MS);
 
   test('a dirty or untracked source counts; a file landing where the base had none counts', () => {
     git('branch', 'base');
@@ -71,7 +84,7 @@ describe('changed since a base (the line routes on this)', () => {
     git('add', '-A');
     git('commit', '-qm', 'land them');
     expect(names(changedSince(ms(), 'base', repo))).toEqual(['b', 'n']);
-  });
+  }, GIT_MS);
 
   test('a base that moved on after the branch left it is not the branch\'s change', () => {
     git('branch', 'base');
@@ -85,11 +98,12 @@ describe('changed since a base (the line routes on this)', () => {
     const r = changedSince(ms(), 'base', repo);
     expect(names(r)).toEqual(['a']);
     expect(sourceHashes(ms(), repo, r.base).get('b')).not.toBe(sourceHashes(ms(), repo, 'base').get('b'));
-  });
+  }, GIT_MS);
 });
 
 describe('staleness', () => {
   test('call: stale until run on this hash; agent: also quiet once flagged; two crashes block', () => {
+    initRepo();
     const call = meta('c', 'call', ['b.ts']);
     const agent = meta('g', 'agent', ['b.ts']);
     const h = sourceHashes([call], repo).get('c')!;
@@ -105,7 +119,7 @@ describe('staleness', () => {
     writeFileSync(join(repo, 'b.ts'), '2');
     git('commit', '-qam', 'two');
     expect(staleness([call], { c: { lastRefusedHash: h } }, repo).stale.map((s) => s.id)).toEqual(['c']);
-  });
+  }, GIT_MS);
 
   test("the day's spend adds up within a UTC day and starts over on the next", () => {
     const path = join(repo, '.home', 'spend.json');
@@ -119,6 +133,7 @@ describe('staleness', () => {
   });
 
   test('a stale call surface with dirty sources waits; a dirty agent surface is still due', () => {
+    initRepo();
     const call = meta('c', 'call', ['b.ts']);
     const agent = meta('g', 'agent', ['b.ts']);
     writeFileSync(join(repo, 'b.ts'), '2');
@@ -128,7 +143,7 @@ describe('staleness', () => {
     expect(s.due.map((m) => m.id)).toEqual(['g']);
     git('commit', '-qam', 'land it');
     expect(staleness([call, agent], {}, repo).due.map((m) => m.id)).toEqual(['c', 'g']);
-  });
+  }, GIT_MS);
 
   test('state round-trips through EVALS_HOME', () => {
     writeState({ c: { lastRunHash: 'h', lastCostPerRep: 0.01 } });
@@ -141,6 +156,14 @@ describe('check cost and the budget status suggests', () => {
     const m = meta('c', 'call', []);
     expect(checkCostUsd(m, 12, {})).toBeCloseTo(5 * 12 * 0.01);
     expect(checkCostUsd(m, 12, { c: { lastCostPerRep: 0.05 } }, 3)).toBeCloseTo(3 * 12 * 0.05);
+  });
+
+  test('the time estimate spreads each surface\'s recorded seconds per rep over the slots, and waits for a record', () => {
+    const a = meta('a', 'call', []);
+    const b = meta('b', 'call', []);
+    const state = { a: { lastSecondsPerRep: 30 }, b: { lastSecondsPerRep: 90 } };
+    expect(checkMinutes([{ meta: a, reps: 60 }, { meta: b, reps: 20 }], state, 4)).toBeCloseTo((60 * 30 + 20 * 90) / 4 / 60);
+    expect(checkMinutes([{ meta: a, reps: 10 }, { meta: meta('new', 'call', []), reps: 1 }], state, 4)).toBeNull();
   });
 
   test('a suggested budget is never under the estimate check refuses on', () => {

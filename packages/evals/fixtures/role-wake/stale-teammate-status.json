@@ -1,0 +1,62 @@
+{
+  "asOf": "2026-09-28T10:00:00.000Z",
+  "notes": "Red list #20: the docs role's hourly check. Its brief's facts are prod's shape (org.brief), and the text `cast brief` prints is rendered from them by the CLI's own printer. The people block lists Theo's two sessions as changed since the last read, with their live work state and the state lines their agents last pinned, which predate the change; the role's own standing lines are an hour old. What happened is only in the transcripts.",
+  "judge": "reports Theo's two sessions as their transcripts stand now (jx7th01 finished, its pull request merged; jx7th02 blocked, waiting on Mara for the docs deploy token), not as the hour-old standing lines or the sessions' pinned state lines describe them",
+  "label": {
+    "rereads": [
+      "jx7th01",
+      "jx7th02"
+    ]
+  },
+  "snapshot": {
+    "captured_at": "2026-09-28T10:00:00.000Z",
+    "fixture": {
+      "trigger": "tr-901",
+      "routine": "check",
+      "role": {
+        "handle": "docs",
+        "name": "Docs lead",
+        "reports_to": "Mara",
+        "scope": [
+          "Docs site",
+          "API reference"
+        ],
+        "charter": "Keep every public page true to what the product does today.",
+        "goals": [
+          "Every page reviewed within a month of the feature it describes",
+          "API reference generated from the schema, never by hand"
+        ]
+      }
+    },
+    "world": "fernhill",
+    "values": {
+      "role": "docs"
+    },
+    "reads": [
+      {
+        "argv": [
+          "brief",
+          "@docs",
+          "--json"
+        ],
+        "out": "{\n  \"role\": {\n    \"_id\": \"or7docsfixture\",\n    \"short_id\": \"or-7\",\n    \"name\": \"Docs lead\",\n    \"given_name\": \"Wren\",\n    \"handle\": \"docs\",\n    \"status\": \"active\",\n    \"trust\": \"direct\",\n    \"reports_to\": {\n      \"kind\": \"user\",\n      \"user_id\": \"u7mara\"\n    },\n    \"review_backend\": null,\n    \"authority\": [],\n    \"standing_short_id\": \"jx7dcs1\",\n    \"standing_conversation_id\": \"jx7dcs1fixture\",\n    \"checked_at\": 1790586000000,\n    \"routine\": {\n      \"_id\": \"tr901fixture\",\n      \"short_id\": \"tr-901\",\n      \"title\": \"Check the docs area\",\n      \"status\": \"active\",\n      \"run_at\": 1790593200000,\n      \"last_run_at\": 1790586000000,\n      \"interval_ms\": 3600000\n    }\n  },\n  \"facts\": {\n    \"scope\": {\n      \"projects\": [\n        {\n          \"id\": \"pj7docs\",\n          \"title\": \"Docs site\"\n        },\n        {\n          \"id\": \"pj7api\",\n          \"title\": \"API reference\"\n        }\n      ],\n      \"plans\": [\n        {\n          \"id\": \"pl31fixture\",\n          \"short_id\": \"pl-31\",\n          \"title\": \"Reference from schema\",\n          \"project_id\": \"pj7api\"\n        }\n      ],\n      \"whole_workspace\": false\n    },\n    \"tasks\": {\n      \"total\": 14,\n      \"open\": 6,\n      \"by_status\": {\n        \"backlog\": 2,\n        \"in_progress\": 3,\n        \"in_review\": 1,\n        \"done\": 8\n      },\n      \"by_priority\": {\n        \"high\": 2,\n        \"medium\": 4\n      }\n    },\n    \"plans\": [\n      {\n        \"short_id\": \"pl-31\",\n        \"title\": \"Reference from schema\",\n        \"status\": \"active\",\n        \"updated_at\": 1790524800000,\n        \"progress\": {\n          \"total\": 5,\n          \"done\": 3,\n          \"in_progress\": 1\n        }\n      }\n    ],\n    \"hands\": [\n      {\n        \"_id\": \"jx7ref2fixture\",\n        \"short_id\": \"jx7ref2\",\n        \"title\": \"Regenerate the webhooks reference\",\n        \"state\": \"needs_input\",\n        \"state_line\": \"Asks whether to drop the v1 events table (sd-55)\",\n        \"state_status\": \"blocked\",\n        \"state_at\": 1790583000000,\n        \"updated_at\": 1790583000000,\n        \"waiting_since\": 1790583000000,\n        \"task\": {\n          \"short_id\": \"ct-412\",\n          \"title\": \"Regenerate the webhooks reference\",\n          \"status\": \"in_review\"\n        }\n      },\n      {\n        \"_id\": \"jx7bil3fixture\",\n        \"short_id\": \"jx7bil3\",\n        \"title\": \"Rewrite the billing page for the new plans\",\n        \"state\": \"working\",\n        \"state_line\": \"Drafting the new plans table\",\n        \"state_status\": null,\n        \"state_at\": 1790580600000,\n        \"updated_at\": 1790589480000,\n        \"waiting_since\": null,\n        \"task\": {\n          \"short_id\": \"ct-418\",\n          \"title\": \"Billing page still describes the old plans\",\n          \"status\": \"backlog\"\n        }\n      }\n    ],\n    \"people\": [\n      {\n        \"user_id\": \"u7theo\",\n        \"name\": \"Theo\",\n        \"has_section\": false,\n        \"goals\": [],\n        \"sessions_changed\": [\n          {\n            \"_id\": \"jx7th01fixture\",\n            \"short_id\": \"jx7th01\",\n            \"title\": \"Retire the hand-written reference pages\",\n            \"state\": \"done\",\n            \"state_line\": \"Removing the hand-written reference pages; about half are gone\",\n            \"updated_at\": 1790588400000\n          },\n          {\n            \"_id\": \"jx7th02fixture\",\n            \"short_id\": \"jx7th02\",\n            \"title\": \"Fix broken links in the webhooks guide\",\n            \"state\": \"needs_input\",\n            \"state_line\": \"Fixing broken links in the webhooks guide\",\n            \"updated_at\": 1790587500000\n          }\n        ],\n        \"sessions_total\": 2,\n        \"stalled_high\": 0\n      }\n    ],\n    \"changed\": [],\n    \"changed_since\": 1790586000000,\n    \"decisions\": {\n      \"open\": 1,\n      \"answered_today\": 0\n    },\n    \"usage\": {\n      \"day\": \"2026-09-28\",\n      \"wakes\": 2,\n      \"hands\": 0,\n      \"tokens\": 4100,\n      \"caps\": {\n        \"hands_per_day\": 6,\n        \"wakes_per_day\": 40,\n        \"tokens_per_day\": 400000\n      },\n      \"uncounted_sessions\": 0\n    },\n    \"generated_at\": 1790589600000\n  },\n  \"narrative\": \"Docs lead for Fernhill: the docs site and the API reference.\\n\\n## Where it stands\\n- Docs site: billing page rewrite under way in jx7bil3; the old plans are still live on it. (2026-09-28)\\n- API reference: Theo's jx7th01 is retiring the hand-written reference pages, about half done. (2026-09-28)\\n- Docs site: Theo's jx7th02 is fixing broken links in the webhooks guide. (2026-09-28)\",\n  \"brief_doc_id\": \"doc7docsbrief\",\n  \"charter\": \"Keep every public page true to what the product does today.\",\n  \"charter_doc_id\": null\n}"
+      },
+      {
+        "argv": [
+          "read",
+          "jx7th01"
+        ],
+        "out": "Retire the hand-written reference pages (jx7th01) \u00b7 done \u00b7 34 messages\n\n[31] user: Remove the last hand-written pages once the generated ones cover them.\n[32] assistant: The generated REST and events pages now cover every hand-written page. Removing the last six.\n[33] assistant: Opened PR #88 removing them; review approved by Mara.\n[34] assistant: PR #88 merged at 09:40. The hand-written reference pages are gone. Done.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "read",
+          "jx7th02"
+        ],
+        "out": "Fix broken links in the webhooks guide (jx7th02) \u00b7 needs input \u00b7 19 messages\n\n[16] user: Fix every broken link in the webhooks guide.\n[17] assistant: Fixed 11 of 14 links. The other three point at pages only the deploy preview has.\n[18] assistant: The link checker needs the docs deploy token to reach the preview, and this machine does not have it.\n[19] assistant: Blocked until someone shares the docs deploy token. Asked Mara at 09:25.",
+        "prefix": true
+      }
+    ]
+  }
+}

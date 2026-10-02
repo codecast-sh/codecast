@@ -5,6 +5,30 @@
 import { c } from "./colors.js";
 import { goalStateLine, type GoalProgress } from "@codecast/shared/contracts/roleGoals";
 import { isWholeWorkspaceRole } from "@codecast/shared/contracts/orgLead";
+import { roleIdentity } from "@codecast/shared/contracts/orgIdentity";
+import { autonomyOn, autonomyWords } from "@codecast/shared/contracts/roleAutonomy";
+import { formatDateSmart, relTimeShort } from "@codecast/shared/time";
+
+/** A role in one line, as every `cast role` and `cast brief` read heads it. */
+export function roleLine(r: any): string {
+  const id = roleIdentity(r, { teamName: r.team_name ?? null });
+  return `${c.bold}${id.name}${c.reset} ${c.dim}${id.subtitle} · @${r.handle} · ${r.short_id} · ${r.status} · ${autonomyWords(autonomyOn(r.trust))}${r.review_backend ? ` · review on ${r.review_backend}` : ""}${c.reset}`;
+}
+
+/** The role's routine (org-staffing.md S25): when it checks its area next. */
+export function routineLine(r: { short_id: string | null; status: string; run_at: number | null } | null | undefined, now: number): string {
+  if (!r) return " · no trigger yet";
+  if (r.status === "paused") return ` · check paused (${r.short_id ?? "trigger"})`;
+  if (!r.run_at) return "";
+  const ms = r.run_at - now;
+  return ` · next check ${ms > 60_000 ? `in ${relTimeShort(now - ms, now)}` : "due now"} (${r.short_id ?? "trigger"})`;
+}
+
+/** The grants a role holds outside codecast, the expired ones left out. */
+export function authorityLine(role: { authority?: Array<{ kind: string; label: string; expires_at?: number | null }> }, now: number): string {
+  const held = (role.authority ?? []).filter((g) => !g.expires_at || g.expires_at > now);
+  return `  ${c.dim}authority outside codecast: ${held.length ? held.map((g) => `${g.kind} (${g.label}${g.expires_at ? `, until ${formatDateSmart(g.expires_at, now)}` : ""})`).join("; ") : "none granted"}${c.reset}`;
+}
 
 export type BriefHandRow = {
   short_id: string;
@@ -81,4 +105,36 @@ export function briefPlanLines(plans: Array<{ short_id: string; title: string; s
   const lines = active.slice(0, PLANS_LISTED).map((p) => `  plan ${p.short_id} ${p.title}: ${p.progress.done}/${p.progress.total} done, ${p.progress.in_progress} in progress`);
   if (active.length > PLANS_LISTED) lines.push(`  ${c.dim}and ${active.length - PLANS_LISTED} more active plans${c.reset}`);
   return lines;
+}
+
+/**
+ * `cast brief` as it prints, from what /cli/brief/get answers (org.brief):
+ * the role, its live facts, the people who report to it, the charter and the
+ * narrative. The eval worlds render a synthetic brief's text from its --json
+ * through this, so a fixture reads what prod would print.
+ */
+export function briefTextLines(brief: any, now: number): string[] {
+  const f = brief.facts;
+  const u = f.usage;
+  const st = Object.entries(f.tasks.by_status ?? {}).filter(([, n]) => (n as number) > 0).map(([k, n]) => `${n} ${k}`).join(", ");
+  const pr = Object.entries(f.tasks.by_priority ?? {}).filter(([, n]) => (n as number) > 0).map(([k, n]) => `${n} ${k}`).join(", ");
+  return [
+    roleLine(brief.role),
+    `  ${c.dim}scope: ${briefScopeLine(f.scope, brief.role.handle)}${c.reset}`,
+    authorityLine(brief.role, now),
+    `  ${c.dim}standing session: ${brief.role.standing_short_id ?? "none"}${routineLine(brief.role.routine, now)}${c.reset}`,
+    `  tasks: ${f.tasks.total} in scope, ${f.tasks.open} open${st ? ` · ${st}` : ""}${pr ? ` · priority ${pr}` : ""}`,
+    ...briefPlanLines(f.plans),
+    `  decisions: ${f.decisions.open} open, ${f.decisions.answered_today} answered today`,
+    // What moved since the role last read this (S25): the section its scheduled check acts on.
+    `  changed since ${formatDateSmart(f.changed_since, now)}:${f.changed.length ? "" : " nothing"}`,
+    ...f.changed.map((ch: any) => `    ${ch.kind} ${ch.short_id ?? ""} ${ch.title} → ${ch.status}`),
+    `  today: ${u.wakes}/${u.caps.wakes_per_day} wakes · ${u.hands}/${u.caps.hands_per_day} sessions started · ${u.tokens}/${u.caps.tokens_per_day} tokens${u.uncounted_sessions ? ` ${c.dim}(tokens not counted for ${u.uncounted_sessions} session${u.uncounted_sessions === 1 ? "" : "s"})${c.reset}` : ""}`,
+    ...(f.hands.length ? [`  sessions under it:`, ...f.hands.map(briefHandLine)] : []),
+    ...(f.people?.length ? [`  people who report to it:`, ...briefPeopleLines(f.people, now)] : []),
+    ...briefCharterLines(String(brief.charter ?? "")),
+    "",
+    `  ${c.bold}## Brief${c.reset}`,
+    ...String(brief.narrative || "(no narrative yet: cast brief edit -)").split("\n").map((line) => `  ${line}`),
+  ];
 }

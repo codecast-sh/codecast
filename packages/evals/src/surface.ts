@@ -73,6 +73,8 @@ export interface CallResult {
   modelUsage: Record<string, { outputTokens?: number; inputTokens?: number; costUSD?: number }>;
   costUsd: number;
   isError: boolean;
+  /** Why the model never answered, when the prompt did not cause it (dryRun.ts harnessFailure). */
+  harnessFailure?: string;
   exitCode: number;
   /** The harness run dir for this call. */
   dir: string;
@@ -87,16 +89,21 @@ export interface AgentOptions {
   model: string;
   tools?: string[];
   maxTurns?: number;
-  then?: string;
+  /** Later turns, in order: each is sent into the same session once the previous one ends. */
+  then?: string[];
 }
 
 export interface AgentResult {
   runSubdir: string;
+  /** Every assistant message of the run, every turn, in order. */
   said: string[];
+  /** The same messages per turn: turns[0] answers the prompt, turns[n] the nth `then`. */
+  turns: string[][];
   calls: string[];
   costUsd: number;
   modelUsage: CallResult['modelUsage'];
   isError: boolean;
+  harnessFailure?: string;
   exitCode: number;
   model: string;
   realMs: number;
@@ -141,6 +148,8 @@ export interface SurfaceImpl {
   checks?(snap: any, out: ReplayResult, label?: any): CheckResult[];
   /** What the judge and the convo views show. */
   describe(snap: any): ConvoMessage[];
+  /** Agent route: REFUSED patterns this snapshot's own turns ask for, on top of meta.allowedRefusals (a wake's `cast chat reply <its placeholder>`). */
+  allowedRefusals?(snap: any): string[];
   productionReply?(snap: any): ProductionReply | null;
   /** Org only in Phase 1. `freeze` is the one `grade --freeze` names, or the one the dir's run.json records. */
   grade?(dir: string, label: any, freeze?: Freeze): Score;
