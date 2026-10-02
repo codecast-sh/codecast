@@ -216,6 +216,14 @@ elif [ "$EVENT" = "PostCompact" ]; then
   fi
 fi
 
+# Claude Code fires a subagent's hooks under the lead's session_id, marked by
+# agent_id. Its activity is not the lead's turn: a lead that ended its turn on
+# a background workflow is waiting, and its workers' tool calls must not flip
+# it back to working. A subagent's permission prompt still blocks on the human.
+if [ -n "\${HOOK_agent_id:-}" ] && { [ "$STATUS" = "working" ] || [ "$STATUS" = "compacting" ]; }; then
+  STATUS=""
+fi
+
 # A pending AskUserQuestion buffers its whole turn (the reasoning prose AND the
 # tool_use) out of the JSONL until it is answered, so the daemon cannot read the
 # real questions from the transcript. Drop the full tool_input in a per-session
