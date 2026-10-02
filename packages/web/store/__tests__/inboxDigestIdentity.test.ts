@@ -98,7 +98,7 @@ function fixture() {
     ],
     messages: [],
     session_decisions: [
-      { _id: "sd_1", user_id: ME, conversation_id: cid("decide"), status: "pending", created_at: EPOCH - MIN },
+      { _id: "sd_1", user_id: ME, conversation_id: cid("decide"), status: "pending", blocking: true, created_at: EPOCH - MIN },
     ],
   });
 }
@@ -271,7 +271,7 @@ describe("server projection == replica projection", () => {
       managed_sessions: [managed("mate", "permission_blocked"), managed("banner", "permission_blocked")],
       messages: [],
       session_decisions: [
-        { _id: "sd_w", user_id: ME, conversation_id: cid("worker"), status: "pending", created_at: EPOCH - MIN },
+        { _id: "sd_w", user_id: ME, conversation_id: cid("worker"), status: "pending", blocking: true, created_at: EPOCH - MIN },
       ],
     });
     const { overlay } = await feedServer(db);

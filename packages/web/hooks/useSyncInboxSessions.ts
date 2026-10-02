@@ -111,12 +111,27 @@ export function inboxCrawlWsKey(principalId: string | null | undefined): string 
 // return. A recut floor cannot carry what left the inbox scan while this
 // client was away (a killed row is out of it, a deleted row is gone), so
 // these are re-read by id through the authorized byIds path: returned rows
-// land with their hidden stamps, omitted ids are gone or foreign and prune.
+// land with their hidden stamps, omitted ids are gone or no longer this
+// principal's and prune. Only ids byIds could return are probed (byIdsCouldReturn).
 export function floorProbeIds(cached: Iterable<string>, returned: Iterable<string>): string[] {
   const seen = new Set(returned);
   const out: string[] = [];
   for (const id of cached) if (isConvexId(id) && !seen.has(id)) out.push(id);
   return out;
+}
+
+// Which cached rows the probe may stand behind: those byIds could return for
+// this principal. It mirrors collectInboxSessionsByIds' admission (the runner,
+// or a member of the session's owner set), so the probe never sends an id the
+// server is bound to omit. A teammate's row the team feeder merged into this
+// cache is outside both the floor and byIds; probing it would read its absence
+// as gone and prune it with a durable exclude. Those rows belong to the team
+// list and the team scope's log. A row with no user_id is unknown and probed.
+export function byIdsCouldReturn(
+  row: { user_id?: string | null; owned_by_me?: boolean },
+  principalId: string | null | undefined,
+): boolean {
+  return !row.user_id || row.user_id === principalId || !!row.owned_by_me;
 }
 
 // The personal liveness overlay into the store: FACT fields merge onto the
@@ -134,11 +149,18 @@ export function applyMineLivenessPayload(data: any): Record<string, any> | null 
 
 // The floor's gate inputs, read off one store state for one principal. The
 // hook subscribes to each field; the simulator reads them all at once.
-export type InboxFloorFlags = { wsKey: string; hydrated: boolean; floorStamped: boolean; logStamped: boolean };
+export type InboxFloorFlags = {
+  wsKey: string;
+  principalId: string | null | undefined;
+  hydrated: boolean;
+  floorStamped: boolean;
+  logStamped: boolean;
+};
 export function inboxFloorFlags(s: ReturnType<typeof useInboxStore.getState>, principalId: string | null | undefined): InboxFloorFlags {
   const wsKey = inboxCrawlWsKey(principalId);
   return {
     wsKey,
+    principalId,
     hydrated: s.clientStateInitialized,
     floorStamped: !!s.syncMeta[syncMetaKey("sessions", wsKey)]?.backfilledAt,
     logStamped: principalId != null && s.syncLogScopeStamps[`user:${principalId}`] !== undefined,
@@ -164,13 +186,15 @@ export function inboxFloorFlags(s: ReturnType<typeof useInboxStore.getState>, pr
  * must not stand in for account B's.
  */
 export function runInboxFloorStep(convex: Pick<ConvexReactClient, "query">, flags: InboxFloorFlags): void {
-  const { wsKey, hydrated, floorStamped, logStamped } = flags;
+  const { wsKey, principalId, hydrated, floorStamped, logStamped } = flags;
   if (!hydrated || wsKey === "skip" || floorStamped || !logStamped) return;
   // ONE stable lower bound for the whole floor: it becomes the paginated
   // index bound, and a wall-clock value recomputed per page would make each
   // page a different query (InvalidCursor).
   const floorSince = Date.now() - SESSIONS_FLOOR_WINDOW_MS;
-  const cached = Object.keys(useInboxStore.getState().sessions);
+  const cached = Object.entries(useInboxStore.getState().sessions)
+    .filter(([, row]) => byIdsCouldReturn(row, principalId))
+    .map(([id]) => id);
   runReconcileCrawl({
     namespace: "sessions",
     wsKey,
@@ -335,7 +359,7 @@ export function useSyncInboxSessions() {
     // serving the (possibly stalled) cache of the live listInboxSessions
     // subscription — otherwise the "recovery" just re-reads the staleness.
     const fresh: any = await queryWithSignal(convex, api.conversations.listInboxSessions, { ...LIST_INBOX_SESSIONS_ARGS, _probe: Date.now() }, signal);
-    if (signal.aborted || !applyInboxListPayload(fresh)) return;
+    if (signal.aborted || !applyInboxListPayload(fresh, convex)) return;
     warm();
     lastSyncRef.current = Date.now();
   }, [convex, syncTable, warm]), 15_000);
@@ -440,8 +464,8 @@ export function useSyncInboxSessions() {
   // eslint-disable-next-line no-restricted-syntax -- cleanup keyed to the principal; cancels an in-flight floor on wsKey change
   useWatchEffect(() => () => cancelReconcileCrawl("sessions"), [sessWsKey]);
   useWatchEffect(() => {
-    runInboxFloorStep(convex, { wsKey: sessWsKey, hydrated, floorStamped, logStamped });
-  }, [convex, sessWsKey, hydrated, floorStamped, logStamped]);
+    runInboxFloorStep(convex, { wsKey: sessWsKey, principalId, hydrated, floorStamped, logStamped });
+  }, [convex, sessWsKey, principalId, hydrated, floorStamped, logStamped]);
 
   // THE STUB SWEEP — local cruft only. An optimistic create that never landed
   // server-side exists in this cache alone; a stub the user typed into is a

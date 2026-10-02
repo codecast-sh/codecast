@@ -71,6 +71,15 @@ describe("planCargoApply — sessions adapter", () => {
     p = planCargoApply("sessions", { patch: { inbox_deferred_at: 150 } }, existing);
     expect(p.fields.is_deferred).toBe(true);
   });
+  // ct-56050: a raw column the base feeders never write rode in on cargo and
+  // the next list or byIds push removed it, so the row flapped.
+  test("only the inbox row's fields land; other raw columns are dropped, twins still derive", () => {
+    const p = planCargoApply("sessions", {
+      patch: { title: "t", title_gen_scheduled_at: 9, persistent: true, short_id: "jx7abcd", title_is_custom: true, pending_kill_generation: 1, settle_verdict: "done", settle_verdict_at: 150, inbox_deferred_at: 150 },
+      unset: ["last_message_role", "subtitle"],
+    }, { updated_at: 100 });
+    expect(p.fields).toEqual({ title: "t", subtitle: null, settle_verdict: "done", inbox_deferred_at: 150, is_deferred: true });
+  });
   test("a status that byIds would omit forces the refetch that prunes it", () => {
     expect(planCargoApply("sessions", { patch: { status: "deleted" } }, {}).refetch).toBe(true);
     expect(planCargoApply("sessions", { patch: { status: "active" } }, {}).refetch).toBe(false);

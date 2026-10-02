@@ -77,3 +77,33 @@ describe("applyUpdatesToStore", () => {
     expect((useInboxStore.getState() as any).docProjectPaths?.d1).toBe("/x");
   });
 });
+
+describe("replicated facts and locks", () => {
+  // A follower mounts no overlay: the host's row is its only fact writer, so
+  // a fact the host's overlay cleared must clear here too.
+  it("a follower takes the host's overlay facts verbatim, a null included", () => {
+    const id = "f".repeat(32);
+    applyUpdatesToStore([{ key: "sessions", upserts: [{ _id: id, session_id: `s-${id}`, updated_at: 1, daemon_alive_until: 500 }] }]);
+    applyUpdatesToStore([{ key: "sessions", upserts: [{ _id: id, session_id: `s-${id}`, updated_at: 1, daemon_alive_until: null }] }]);
+    expect((useInboxStore.getState().sessions as any)[id].daemon_alive_until).toBeNull();
+  });
+
+  // ct-56048: the bridge and the follower's replicated write both reach the
+  // host, in either order with the write's acknowledgement.
+  it("a replicated field write keeps a lock's acknowledgement, and plants none on a value already acknowledged and echoed", () => {
+    const id = "r".repeat(32);
+    const ack = [{ s: "user:me", p: 3 }];
+    useInboxStore.getState().syncTable("sessions", [{ _id: id, session_id: `s-${id}`, updated_at: 1 }], { isDelta: true });
+    useInboxStore.setState((s: any) => ({ pending: { ...s.pending, [`sessions:${id}:inbox_dismissed_at`]: { type: "field", value: 9, ts: 9, ack } } }));
+    useInboxStore.getState().applyReplicatedFields("sessions", { [id]: { inbox_dismissed_at: 9 } }, 10);
+    expect((useInboxStore.getState().pending as any)[`sessions:${id}:inbox_dismissed_at`]).toEqual({ type: "field", value: 9, ts: 10, ack });
+
+    useInboxStore.setState((s: any) => {
+      const { [`sessions:${id}:inbox_dismissed_at`]: _gone, ...pending } = s.pending;
+      return { pending };
+    });
+    useInboxStore.getState().applyReplicatedFields("sessions", { [id]: { inbox_dismissed_at: 9 } }, 11);
+    expect((useInboxStore.getState().pending as any)[`sessions:${id}:inbox_dismissed_at`]).toBeUndefined();
+    expect((useInboxStore.getState().sessions as any)[id].inbox_dismissed_at).toBe(9);
+  });
+});
