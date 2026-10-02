@@ -2,13 +2,33 @@
    ChangeCardView. Calm surfaces, one signature: the proof strip, where each
    check's wire fills from red to green. Themed only with --sol-* tokens. */
 
-.change-card { --cc-gap: 1.25rem; color: var(--sol-text-muted); font-size: 13px; }
+/* Two strengths of each status tone. A fill (dots, wires, borders, tints)
+   keeps the accent's own color; ink (any status text) mixes it toward
+   --sol-text until it clears 4.5:1 on the page. Solarized green reads olive,
+   so both pull it toward cyan first. Light themes need a deeper mix than dark
+   (yellow and olive on cream sit near 3:1), hence --cc-ink per theme. */
+:root { --cc-ink: 58%; }
+.dark { --cc-ink: 84%; }
+:root {
+  --cc-green-fill: color-mix(in srgb, var(--sol-green) 68%, var(--sol-cyan));
+  --cc-green: color-mix(in oklab, var(--cc-green-fill) 82%, var(--sol-text));
+  --cc-green-ink: color-mix(in oklab, var(--cc-green-fill) var(--cc-ink), var(--sol-text));
+  --cc-yellow-ink: color-mix(in oklab, var(--sol-yellow) var(--cc-ink), var(--sol-text));
+  --cc-red-ink: color-mix(in oklab, var(--sol-red) calc(var(--cc-ink) + 16%), var(--sol-text));
+  --cc-blue-ink: color-mix(in oklab, var(--sol-blue) calc(var(--cc-ink) + 12%), var(--sol-text));
+}
+.change-card, .change-card-answer {
+  --cc-gap: 1.25rem; color: var(--sol-text-muted); font-size: 13px;
+}
+.cc-text-green { color: var(--cc-green-ink); }
+.cc-text-yellow { color: var(--cc-yellow-ink); }
+.cc-text-red { color: var(--cc-red-ink); }
 .change-card.cc-inline { --cc-gap: 1rem; }
 
-.cc-tone-green { --cc-tone: var(--sol-green); }
-.cc-tone-yellow { --cc-tone: var(--sol-yellow); }
-.cc-tone-red { --cc-tone: var(--sol-red); }
-.cc-tone-blue { --cc-tone: var(--sol-blue); }
+.cc-tone-green { --cc-tone: var(--cc-green); --cc-tone-ink: var(--cc-green-ink); }
+.cc-tone-yellow { --cc-tone: var(--sol-yellow); --cc-tone-ink: var(--cc-yellow-ink); }
+.cc-tone-red { --cc-tone: var(--sol-red); --cc-tone-ink: var(--cc-red-ink); }
+.cc-tone-blue { --cc-tone: var(--sol-blue); --cc-tone-ink: var(--cc-blue-ink); }
 
 .cc-full, .cc-inline {
   border: 1px solid color-mix(in srgb, var(--sol-border) 80%, transparent);
@@ -20,15 +40,11 @@
   gap: var(--cc-gap);
 }
 .cc-inline { padding: 0.9rem 1rem 1rem; }
+@media (max-width: 480px) { .cc-full { padding: 0.9rem 0.8rem 1rem; } }
 
-.cc-kicker {
-  font-size: 10.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--sol-text-dim);
-  font-weight: 500;
-}
-.cc-kicker-row { display: flex; align-items: baseline; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.6rem; }
+.cc-label-row { display: flex; align-items: baseline; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.6rem; min-width: 0; }
+/* Every section and fact names itself the same way: sentence case, dim, no tracking. */
+.cc-label { font-size: 12px; color: var(--sol-text-dim); font-weight: 500; }
 .cc-chip {
   display: inline-flex; align-items: center; padding: 0 0.4rem; height: 1.25rem;
   border: 1px solid; border-radius: 4px; font-family: var(--font-mono, ui-monospace), monospace; font-size: 11px;
@@ -43,21 +59,35 @@
 .cc-source { padding: 0 0.4rem; border-radius: 999px; font-size: 11px; border: 1px solid color-mix(in srgb, var(--sol-border) 80%, transparent); }
 
 /* the decision: what changes leads, what was wrong supports it */
-.cc-sentences { display: flex; flex-direction: column; gap: 0.85rem; }
-.cc-change p { margin-top: 0.35rem; color: var(--sol-text); font-size: 19px; line-height: 1.4; font-weight: 500; letter-spacing: -0.005em; text-wrap: pretty; }
-.cc-inline .cc-change p { font-size: 16.5px; }
-.cc-wrong p { margin-top: 0.3rem; color: var(--sol-text-muted); font-size: 13.5px; line-height: 1.55; text-wrap: pretty; }
-.cc-goal { display: flex; gap: 0.5rem; padding-top: 0.6rem; border-top: 1px dashed color-mix(in srgb, var(--sol-border) 70%, transparent); font-size: 13px; }
+.cc-sentences { display: flex; flex-direction: column; gap: 0.6rem; }
+.cc-change { color: var(--sol-text); font-size: 19px; line-height: 1.4; font-weight: 500; letter-spacing: -0.005em; text-wrap: pretty; }
+.cc-inline .cc-change { font-size: 16.5px; }
+.cc-wrong { color: var(--sol-text-muted); font-size: 13.5px; line-height: 1.55; text-wrap: pretty; }
+.cc-leadin { color: var(--sol-text); font-weight: 500; }
+.cc-goal { gap: 0.35rem; cursor: default; }
+.cc-goal-ref { font-family: var(--font-mono, ui-monospace), monospace; font-size: 11px; opacity: 0; transition: opacity 150ms; }
+.cc-goal:hover .cc-goal-ref { opacity: 1; }
 
 /* the proof strip */
 .cc-proof-label { font-size: 12px; }
-.cc-proof-common { margin-left: auto; display: inline-flex; align-items: baseline; gap: 0.4rem; font-size: 11.5px; }
 .cc-proof { display: flex; flex-direction: column; gap: 0.15rem; }
-.cc-proof-row {
+/* A two column table: the track is the main and branch columns, labelled over
+   their dots; a row's own detail stacks under its name. */
+.cc-proof-head, .cc-proof-row {
   display: grid;
-  grid-template-columns: 4.25rem minmax(0, 1.3fr) minmax(0, 1fr);
+  grid-template-columns: 4.75rem minmax(0, 1fr);
   align-items: center;
-  gap: 0.75rem;
+  column-gap: 0.75rem;
+}
+.cc-proof-head { padding: 0 0.5rem; margin: 0 -0.5rem 0.1rem; }
+.cc-track-labels {
+  display: flex; justify-content: space-between;
+  font-family: var(--font-mono, ui-monospace), monospace; font-size: 10px; line-height: 1;
+}
+.cc-track-labels > :first-child { color: var(--cc-red-ink); }
+.cc-track-labels > :last-child { color: var(--cc-green-ink); }
+.cc-proof-row {
+  row-gap: 0.1rem;
   padding: 0.35rem 0.5rem;
   margin: 0 -0.5rem;
   border-radius: 6px;
@@ -67,11 +97,11 @@
 .cc-track { display: flex; align-items: center; gap: 0; }
 .cc-dot { width: 9px; height: 9px; border-radius: 999px; flex-shrink: 0; }
 .cc-dot-red { background: var(--sol-red); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sol-red) 16%, transparent); }
-.cc-dot-green { background: var(--sol-green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sol-green) 16%, transparent); }
+.cc-dot-green { background: var(--cc-green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sol-green) 22%, transparent); }
 .cc-wire { position: relative; flex: 1; height: 2px; margin: 0 5px; border-radius: 2px; background: color-mix(in srgb, var(--sol-red) 35%, transparent); overflow: hidden; }
 .cc-wire-fill {
   position: absolute; inset: 0;
-  background: linear-gradient(90deg, var(--sol-red), var(--sol-green));
+  background: linear-gradient(90deg, var(--sol-red), var(--cc-green));
   transform-origin: left center;
 }
 /* The one motion moment, the first time a card is seen (useFirstSight). */
@@ -80,50 +110,51 @@
   animation-delay: calc(120ms + var(--i, 0) * 70ms);
 }
 .is-red .cc-wire-fill { background: var(--sol-red); opacity: 0.5; }
-.is-broke .cc-wire-fill { background: linear-gradient(90deg, var(--sol-green), var(--sol-red)); }
+.is-broke .cc-wire-fill { background: linear-gradient(90deg, var(--cc-green), var(--sol-red)); }
 .cc-proof-name { color: var(--sol-text); font-size: 12.5px; line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
-.cc-proof-detail { display: flex; gap: 0.4rem; align-items: baseline; font-size: 12px; min-width: 0; }
+/* before → after on one line: the before gives way first, both clip with a tooltip. */
+.cc-proof-detail { grid-column: 2; display: flex; gap: 0.4rem; align-items: baseline; font-size: 12px; line-height: 1.4; min-width: 0; }
 .cc-proof-detail:empty { display: none; }
-.cc-proof-detail { flex-wrap: wrap; line-height: 1.4; }
-.cc-proof-detail > span { min-width: 0; overflow-wrap: anywhere; }
+.cc-proof-before, .cc-proof-after { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-proof-before { flex: 0 10000 auto; min-width: min(6rem, 30%); color: var(--cc-red-ink); }
+.cc-proof-after { flex: 0 1 auto; }
 .cc-arrow { color: var(--sol-text-dim); flex-shrink: 0; }
-@media (max-width: 640px) {
-  .cc-proof-row { grid-template-columns: 3.25rem minmax(0, 1fr); row-gap: 0.1rem; }
-  .cc-proof-detail { grid-column: 2; }
-}
-.cc-inline .cc-proof-row { grid-template-columns: 3.25rem minmax(0, 1fr); row-gap: 0.1rem; }
-.cc-inline .cc-proof-detail { grid-column: 2; }
 
-/* examples */
+/* examples: the input is a quiet quote that opens in full; Before and After
+   are two tiles of one height and equal weight; the note speaks for the pair. */
 .cc-example-input {
-  font-family: var(--font-mono, ui-monospace), monospace; font-size: 11.5px; color: var(--sol-text-dim);
-  white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
-  padding-left: 0.6rem; border-left: 2px solid color-mix(in srgb, var(--sol-border) 90%, transparent);
+  display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden;
+  width: 100%; text-align: left; white-space: pre-wrap; overflow-wrap: anywhere;
+  font-size: 12.5px; line-height: 1.5; font-style: italic; color: var(--sol-text-dim);
+  padding-left: 0.65rem; border-left: 2px solid color-mix(in srgb, var(--sol-border) 90%, transparent);
+  cursor: pointer; transition: color 140ms;
 }
-.cc-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-top: 0.4rem; }
+.cc-example-input::before { content: "\201C"; }
+.cc-example-input::after { content: "\201D"; }
+.cc-example-input:hover { color: var(--sol-text-muted); }
+.cc-example-input.is-open { -webkit-line-clamp: unset; display: block; color: var(--sol-text-muted); cursor: default; }
+.cc-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-top: 0.5rem; align-items: stretch; }
 .cc-inline .cc-pair { grid-template-columns: 1fr; }
 @media (max-width: 640px) { .cc-pair { grid-template-columns: 1fr; } }
-.cc-side { display: flex; flex-direction: column; gap: 0.2rem; padding: 0.5rem 0.65rem; border-radius: 8px; font-size: 13px; line-height: 1.45; border: 1px solid; }
-.cc-before { color: var(--sol-text-muted); border-color: color-mix(in srgb, var(--sol-red) 22%, transparent); background: color-mix(in srgb, var(--sol-red) 6%, transparent); }
-.cc-after {
-  color: var(--sol-text);
-  border-color: color-mix(in srgb, var(--sol-green) 40%, transparent);
-  border-left: 2px solid var(--sol-green);
-  background: color-mix(in srgb, var(--sol-green) 16%, transparent);
-}
-.cc-side-label { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 600; }
-.cc-before .cc-side-label { color: var(--sol-red); }
-.cc-after .cc-side-label { color: var(--sol-green); }
-.cc-example-note { margin-top: 0.25rem; padding-top: 0.35rem; border-top: 1px solid color-mix(in srgb, var(--sol-green) 22%, transparent); font-size: 12px; color: var(--sol-text-muted); }
+.cc-side { display: flex; flex-direction: column; gap: 0.25rem; padding: 0.55rem 0.7rem; border-radius: 8px; font-size: 13px; line-height: 1.45; border: 1px solid; color: var(--sol-text); }
+.cc-before { border-color: color-mix(in srgb, var(--sol-red) 30%, transparent); background: color-mix(in srgb, var(--sol-red) 6%, transparent); }
+.cc-after { border-color: color-mix(in srgb, var(--cc-green) 45%, transparent); background: color-mix(in srgb, var(--cc-green) 10%, transparent); }
+.cc-side-label { font-size: 11px; font-weight: 600; }
+.cc-before .cc-side-label { color: var(--cc-red-ink); }
+.cc-after .cc-side-label { color: var(--cc-green-ink); }
+.cc-example-note { margin-top: 0.4rem; font-size: 12.5px; line-height: 1.5; color: var(--sol-text-muted); text-wrap: pretty; }
 
-/* checks and facts */
-.cc-checks { display: flex; flex-direction: column; gap: 0.35rem; margin-top: 0.5rem; }
+/* facts, with the checks folded in as a count that opens */
+.cc-facts-block { padding-top: 0.9rem; border-top: 1px solid color-mix(in srgb, var(--sol-border) 70%, transparent); }
+.cc-checks { display: flex; flex-direction: column; gap: 0.35rem; margin-top: 0.75rem; animation: cc-rise 160ms ease-out both; }
+.cc-checks-toggle { display: inline-flex; align-items: center; gap: 0.35rem; border-radius: 4px; }
+.cc-checks-toggle:hover .lucide { color: var(--sol-text); }
 .cc-check { display: flex; align-items: baseline; gap: 0.5rem; font-size: 12.5px; line-height: 1.45; }
-.cc-check-mark { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 999px; border: 1px solid; flex-shrink: 0; transform: translateY(3px); }
-.cc-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.75rem 1.25rem; padding-top: 0.9rem; border-top: 1px solid color-mix(in srgb, var(--sol-border) 70%, transparent); }
+.cc-check-mark { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--cc-tone) 45%, transparent); color: var(--cc-tone-ink); flex-shrink: 0; transform: translateY(3px); }
+.cc-facts { display: grid; grid-template-columns: minmax(0, 0.7fr) minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1fr); gap: 0.75rem 1.25rem; }
 .cc-inline .cc-facts { grid-template-columns: 1fr 1fr; }
-@media (max-width: 640px) { .cc-facts { grid-template-columns: 1fr; } }
-.cc-fact dt { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--sol-text-dim); margin-bottom: 0.2rem; }
+@media (max-width: 640px) { .cc-facts { grid-template-columns: 1fr 1fr; } }
+.cc-fact dt { margin-bottom: 0.15rem; }
 .cc-fact dd { color: var(--sol-text); font-size: 13px; }
 .cc-pr { display: inline-flex; align-items: center; gap: 0.25rem; margin-left: 0.5rem; color: var(--sol-blue); font-size: 12px; }
 .cc-pr:hover { text-decoration: underline; }
@@ -134,39 +165,73 @@
   border: 1px solid color-mix(in srgb, var(--cc-tone) 30%, transparent);
   background: color-mix(in srgb, var(--cc-tone) 7%, transparent);
 }
-.cc-recommend-verdict { color: var(--cc-tone); font-weight: 600; white-space: nowrap; }
+.cc-recommend-verdict { color: var(--cc-tone-ink); font-weight: 600; white-space: nowrap; }
+/* A settled card's last word: what was decided, by whom, when. */
+.cc-outcome { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.35rem 0.6rem; font-size: 13px; line-height: 1.5; padding-top: 0.9rem; border-top: 1px solid color-mix(in srgb, var(--sol-border) 70%, transparent); }
+.cc-outcome-verdict { color: var(--cc-tone-ink); font-weight: 600; }
+.cc-outcome-pill { color: var(--cc-tone-ink); border: 1px solid color-mix(in srgb, var(--cc-tone) 45%, transparent); background: color-mix(in srgb, var(--cc-tone) 8%, transparent); }
 
 /* the queue's line */
 .cc-line { display: flex; flex-direction: column; gap: 0.35rem; }
 .cc-line-change { color: var(--sol-text-muted); font-size: 13px; line-height: 1.45; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cc-line-row { display: flex; align-items: center; flex-wrap: wrap; gap: 0.25rem 0.45rem; font-size: 11.5px; }
 .cc-sep { color: var(--sol-text-dim); opacity: 0.6; }
-.cc-pips { display: inline-flex; gap: 3px; margin-right: 0.15rem; }
-.cc-pip { width: 14px; height: 6px; border-radius: 3px; }
-.cc-pip-fixed { background: linear-gradient(90deg, var(--sol-red) 0 35%, var(--sol-green) 65% 100%); }
-.cc-pip-red { background: var(--sol-red); }
-.cc-line-verdict { margin-left: auto; padding: 0 0.45rem; border-radius: 999px; color: var(--cc-tone); border: 1px solid color-mix(in srgb, var(--cc-tone) 40%, transparent); white-space: nowrap; }
+/* A pip is the proof strip's wire in miniature: red dot, hairline, after dot.
+   The after dot is the larger and the line fades into it, so a row of them
+   reads as "went green", never as a red dashed bar. */
+.cc-pips { display: inline-flex; align-items: center; gap: 5px; margin-right: 0.2rem; }
+.cc-pip { position: relative; width: 17px; height: 7px; flex-shrink: 0; background: linear-gradient(90deg, color-mix(in srgb, var(--sol-red) 70%, transparent), var(--cc-green)) center / 100% 1px no-repeat; }
+.cc-pip::before, .cc-pip::after { content: ""; position: absolute; top: 50%; border-radius: 999px; transform: translateY(-50%); }
+.cc-pip::before { left: 0; width: 4px; height: 4px; background: var(--sol-red); }
+.cc-pip::after { right: 0; width: 7px; height: 7px; background: var(--cc-green); }
+.cc-pip-red { background-image: linear-gradient(90deg, color-mix(in srgb, var(--sol-red) 55%, transparent), color-mix(in srgb, var(--sol-red) 55%, transparent)); }
+.cc-pip-red::after { background: var(--sol-red); }
+.cc-line-verdict { margin-left: auto; padding: 0 0.45rem; border-radius: 999px; color: var(--cc-tone-ink); border: 1px solid color-mix(in srgb, var(--cc-tone) 40%, transparent); white-space: nowrap; }
 
-/* Ship / Revise / Drop */
+/* Ship / Revise / Drop. Each wears a faint hint of its tone at rest, so the
+   three never read as one grey row; the recommended one and an open Revise
+   are filled. The Revise note's border is Revise's yellow, tying the two. */
 .cc-verdicts { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; }
-/* Neutral until hovered; only the recommended answer wears its tone, so
-   Ship and Revise never blur into one olive-yellow row. */
 .cc-verdict {
   display: inline-flex; align-items: center; gap: 0.5rem;
   padding: 0.5rem 0.9rem; border-radius: 8px; font-size: 13.5px; color: var(--sol-text);
-  border: 1px solid color-mix(in srgb, var(--sol-border) 90%, transparent);
-  background: color-mix(in srgb, var(--sol-card) 60%, transparent);
+  border: 1px solid color-mix(in srgb, var(--cc-tone) 32%, var(--sol-border));
+  background: color-mix(in srgb, var(--cc-tone) 4%, color-mix(in srgb, var(--sol-card) 60%, transparent));
   transition: background-color 140ms, border-color 140ms, transform 140ms;
 }
 .cc-verdicts.is-compact .cc-verdict { padding: 0.3rem 0.65rem; font-size: 12px; border-radius: 6px; }
 .cc-verdict:hover { background: color-mix(in srgb, var(--cc-tone) 14%, transparent); border-color: color-mix(in srgb, var(--cc-tone) 60%, transparent); }
 .cc-verdict:active { transform: scale(0.98); }
-.cc-verdict.is-recommended { border-color: var(--cc-tone); background: color-mix(in srgb, var(--cc-tone) 18%, transparent); font-weight: 500; }
-.cc-verdict.is-open { border-color: var(--cc-tone); }
-.cc-verdict-tag { font-size: 10px; color: var(--cc-tone); font-weight: 500; }
+.cc-verdict.is-recommended, .cc-verdict.is-open { border-color: var(--cc-tone); background: color-mix(in srgb, var(--cc-tone) 16%, transparent); font-weight: 500; }
+.cc-verdict-tag { font-size: 11px; color: var(--cc-tone-ink); font-weight: 500; }
+.cc-dismiss { margin-left: auto; display: inline-flex; align-items: center; gap: 0.35rem; font-size: 11.5px; color: var(--sol-text-dim); padding: 0.25rem; border-radius: 6px; transition: color 140ms; }
+.cc-dismiss:hover { color: var(--cc-red-ink); }
+.cc-dismiss-icon { display: none; }
 .cc-why { margin-top: 0.55rem; font-size: 12.5px; line-height: 1.5; color: var(--sol-text-muted); text-wrap: pretty; }
-.cc-why-verdict { color: var(--cc-tone); font-weight: 600; }
+.cc-why-verdict { color: var(--cc-tone-ink); font-weight: 600; }
 .cc-note { margin-top: 0.6rem; animation: cc-rise 180ms ease-out both; }
+.cc-note-field {
+  width: 100%; border-radius: 6px; padding: 0.4rem 0.55rem; font-size: 14px; color: var(--sol-text);
+  background: color-mix(in srgb, var(--cc-tone) 5%, var(--sol-card)); border: 1px solid var(--cc-tone);
+  transition: border-color 140ms, box-shadow 140ms;
+}
+.cc-note-field::placeholder { color: var(--sol-text-dim); }
+.cc-note-field:focus { outline: none; border-color: var(--cc-tone); box-shadow: 0 0 0 3px color-mix(in srgb, var(--cc-tone) 16%, transparent); }
+.cc-note-field.is-error { border-color: var(--sol-red); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sol-red) 14%, transparent); }
+
+/* A touch screen has no keys to hint at. */
+@media (hover: none) and (pointer: coarse) {
+  .change-card-answer kbd { display: none; }
+}
+/* A phone: the three verdicts share one row and dismiss shrinks to its mark. */
+@media (max-width: 480px) {
+  .cc-verdicts { flex-wrap: nowrap; gap: 0.4rem; }
+  .cc-verdict { flex: 1 1 0; min-width: 0; justify-content: center; flex-wrap: wrap; row-gap: 0; padding-inline: 0.5rem; }
+  .cc-verdict-tag { flex-basis: 100%; text-align: center; font-size: 10.5px; }
+  .cc-dismiss { margin-left: 0; flex-shrink: 0; padding: 0.5rem 0.35rem; }
+  .cc-dismiss kbd, .cc-dismiss-label { display: none; }
+  .cc-dismiss-icon { display: inline-block; }
+}
 
 @keyframes cc-rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 @keyframes cc-fill { from { transform: scaleX(0); } to { transform: scaleX(1); } }
@@ -189,5 +254,5 @@
 @media (max-width: 640px) {
   /* A phone has no room to pin the bar; it leads the page and scrolls with it. */
   .cc-verdict-bar { position: static; backdrop-filter: none; }
-  .cc-change p { font-size: 17px; }
+  .cc-change { font-size: 17px; }
 }

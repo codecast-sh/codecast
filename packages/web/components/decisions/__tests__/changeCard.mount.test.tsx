@@ -26,7 +26,7 @@ const restoreGlobals = replaceGlobals({
 });
 const { createRoot } = await import("react-dom/client");
 const { MemoryRouter } = await import("react-router");
-const { ChangeCardView, exampleInputRest } = await import("../ChangeCardView");
+const { ChangeCardView, exampleInputAdds, cardOutcome } = await import("../ChangeCardView");
 const { DecisionAnswerControls } = await import("../DecisionAnswerControls");
 afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
 
@@ -58,18 +58,29 @@ test("the full card draws every section from the contract", async () => {
   expect(container.querySelectorAll(".cc-proof-row.is-fixed")).toHaveLength(4);
   // One pair by default; the rest are a click away.
   expect(container.querySelectorAll(".cc-example")).toHaveLength(1);
-  const more = Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Show 2 more")!;
+  const more = Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Show all 3 examples")!;
   await act(() => { more.click(); });
   expect(container.querySelectorAll(".cc-example")).toHaveLength(3);
-  // The header says the shared before and after once; only the row that differs keeps its detail.
-  expect(container.querySelector(".cc-proof-common")!.textContent).toContain("fails on origin/main");
+  // The track's columns are labelled over their dots, the shared before and after ride on them;
+  // only the row that differs keeps its detail.
+  const labels = container.querySelectorAll(".cc-track-labels > span");
+  expect(Array.from(labels).map((l) => l.textContent)).toEqual(["main", "branch"]);
+  expect(labels[0].getAttribute("title")).toContain("fails on origin/main");
   expect(Array.from(container.querySelectorAll(".cc-proof-detail")).filter((d) => d.textContent).length).toBe(1);
+  // The goal is one muted line in the cause header; every section and fact is named one way.
+  expect(container.querySelector(".cc-goal")!.textContent).toContain(`serves ${card.goal.name}`);
+  expect(Array.from(container.querySelectorAll(".cc-label")).map((k) => k.textContent)).toEqual(["Proof", "Examples", "Checks", "Diff", "Risk", "Cost"]);
+  // Passing checks fold into a count in the facts and open on a click.
+  expect(container.querySelector("[data-cc-checks]")!.textContent).toContain("3/3");
+  expect(container.querySelector(".cc-checks")).toBeNull();
+  await act(() => { (container.querySelector("[data-cc-checks]") as HTMLButtonElement).click(); });
+  expect(container.querySelectorAll(".cc-check")).toHaveLength(3);
   expect(text).toContain("PR #912");
   expect(text).toContain("Low risk");
   expect(text).toContain("$1.96");
   expect(text).toContain("Recommends Ship");
   await unmount();
-});
+}, 30_000); // the first mount pays for loading the store under a loaded machine
 
 test("an answerable surface says the recommendation once, on the control", async () => {
   const { container, unmount } = await mount(<><ChangeCardView card={card} recommend={false} /><DecisionAnswerControls decision={decision} onAnswer={() => {}} /></>);
@@ -79,16 +90,40 @@ test("an answerable surface says the recommendation once, on the control", async
   await unmount();
 });
 
-test("an example input drops what its Before already repeats", () => {
-  expect(exampleInputRest(card.examples[0].input, card.examples[0].before)).toBe("…on railway, it started after the bun upgrade");
-  expect(exampleInputRest("fix the bug", "Fix the bug")).toBe("");
-  expect(exampleInputRest("something else", "Before text")).toBe("something else");
+test("an example input shows only when it says more than its Before", () => {
+  expect(exampleInputAdds(card.examples[0].input, card.examples[0].before)).toBe(true);
+  expect(exampleInputAdds("fix the bug", "Fix the bug.")).toBe(false);
+});
+
+test("a settled card says what happened in place of the recommendation", async () => {
+  const answered = { ...decision, status: "answered", answer_index: 0, resolved_at: Date.now() - 47 * 60_000 };
+  const outcome = cardOutcome(answered, "Ashot", Date.now())!;
+  expect(outcome.pill).toBe("Shipped by Ashot · 47m ago");
+  expect(outcome.verdict).toBe("Shipped");
+  expect(outcome.tone).toBe("green");
+  const { container, unmount } = await mount(<ChangeCardView card={card} outcome={outcome.line} />);
+  expect(container.querySelector(".cc-recommend")).toBeNull();
+  expect(container.querySelector("[data-cc-outcome]")!.textContent).toContain("Shipped");
+  await unmount();
+  const revised = cardOutcome({ ...answered, answer_index: 1, answer_text: "Revise: keep the greeting" }, "Ashot", Date.now())!;
+  expect(revised.pill.startsWith("Sent back to revise by Ashot")).toBe(true);
+  expect(cardOutcome({ ...decision }, "Ashot", Date.now())).toBeNull();
+});
+
+test("a page that leads with the change draws the card without its head", async () => {
+  const { container, unmount } = await mount(<ChangeCardView card={card} change={false} />);
+  expect(container.querySelector(".cc-change")).toBeNull();
+  expect(container.querySelector(".cc-cause")).toBeNull();
+  expect(container.textContent).toContain(card.wrong);
+  await unmount();
 });
 
 test("the line is one dense proof summary", async () => {
   const { container, unmount } = await mount(<ChangeCardView card={card} density="line" />);
   expect(container.querySelectorAll(".cc-pip-fixed")).toHaveLength(4);
-  expect(container.textContent).toContain("3/3 checks");
+  // Proof and the card's own checks are named apart.
+  expect(container.textContent).toContain("proof 4/4");
+  expect(container.textContent).toContain("checks 3/3");
   expect(container.textContent).toContain("recommends Ship");
   expect(container.textContent).not.toContain("$1.96");
   await unmount();

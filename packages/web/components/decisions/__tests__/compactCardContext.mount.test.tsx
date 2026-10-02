@@ -80,6 +80,15 @@ test("the context renders inline, as stripped text while collapsed", async () =>
   unmount();
 });
 
+test("a context holding a canvas renders it while collapsed, never its raw HTML as text", async () => {
+  markdownRenders.length = 0;
+  const context_md = "```cast-canvas\n<div data-canvas-title=\"Options\"><b>A</b> vs <b>B</b></div>\n```\n\nWhy it matters.";
+  const { container, unmount } = await mount(<DecisionCompactCard decision={{ ...decision, context_md }} />);
+  expect(markdownRenders).toEqual([context_md]);
+  expect(container.querySelector("[data-decision-context] [data-md]")).not.toBeNull();
+  unmount();
+});
+
 test("the question is set in the document page's serif, and a blocking card is the call to action", async () => {
   const { container, unmount } = await mount(<DecisionCompactCard decision={decision} cta />);
   const card = container.querySelector("[data-decision-card]")!;

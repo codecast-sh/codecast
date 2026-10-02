@@ -20,7 +20,7 @@ import { DecisionOptionList } from "./DecisionOptionList";
 import { AskingSession, CategoryNote, HolderLine, PersonChip } from "./DecisionParties";
 import { GateRunChip } from "./DecisionCompactCard";
 import { OptionPages } from "./OptionPages";
-import { ChangeCardView, cardAnswerIndexes } from "./ChangeCardView";
+import { ChangeCardCause, ChangeCardView, cardAnswerIndexes, cardOutcome } from "./ChangeCardView";
 import { ShareControl } from "../ShareControl";
 import { chosenOptions, ladderRecommendation } from "../../lib/decisionLinks";
 import "./decisions.css";
@@ -102,6 +102,17 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
         ? <>answered by {detail.holder_role?.name ?? detail.ladder.find((h) => h.role_id === answeredBy.id)?.role?.name ?? "a role"} under a grant</>
         : <span className="inline-flex items-center gap-1.5">answered by <PersonChip userId={answeredBy.id} fallbackName={answeredPerson?.name ?? (answeredBy.id === meId ? "you" : "a person")} fallbackImage={answeredPerson?.avatar_url} /></span>;
 
+  // A settled change card says what happened: the verdict alone in the header
+  // pill, and who gave it and when as the card's last line.
+  const answererName = !answeredBy
+    ? "a person"
+    : answeredBy.kind === "policy"
+      ? "policy"
+      : answeredBy.kind === "role"
+        ? detail.holder_role?.name ?? detail.ladder.find((h) => h.role_id === answeredBy.id)?.role?.name ?? "a role"
+        : answeredPerson?.name ?? (answeredBy.id === meId ? "you" : "a person");
+  const outcome = decision.card ? cardOutcome(decision, answererName, now) : null;
+
   // Reopen is the people's (asked_users): gate on the detail's people set, not
   // on whether the 24 hour queue cache still holds the row.
   const isPerson = detail.asked_users.some((u) => u._id === meId);
@@ -111,6 +122,13 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
   // change and its proof, so for one these facts follow the card.
   const meta = (
     <dl className="mt-4 decision-meta text-[12px]">
+      {/* A card's page leads with the change, so the asker's own words move here. */}
+      {decision.card && decision.question.trim() !== decision.card.change.trim() && (
+        <>
+          <dt>question</dt>
+          <dd>{decision.question}</dd>
+        </>
+      )}
       <dt>asked by</dt>
       <dd><AskingSession decision={decision} /></dd>
       {proposalRefInContext(decision.context_md) && (
@@ -150,7 +168,7 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
 
   return (
     <div className="h-full overflow-y-auto decision-doc" data-main-scroll>
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-16">
         <Link href="/questions" className="inline-flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors no-underline">
           <ArrowLeft className="w-3 h-3" /> The queue
         </Link>
@@ -159,17 +177,23 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
         <header className="mt-4">
           <div className="flex items-center gap-2 flex-wrap text-[11px] text-sol-text-dim">
             <span className="font-mono px-1.5 py-0.5 rounded border border-sol-border/60">{decision.short_id ?? "decision"}</span>
-            <span className={`px-1.5 py-0.5 rounded border ${pending ? (decision.blocking ? "border-sol-yellow/40 text-sol-yellow" : "border-sol-blue/30 text-sol-blue") : "border-sol-border text-sol-text-dim"}`}>
-              {pending ? (decision.blocking ? "blocking · the session is parked" : "advisory · the agent proceeded") : decision.status}
-            </span>
+            {outcome ? (
+              <span className={`px-1.5 py-0.5 rounded cc-outcome-pill cc-tone-${outcome.tone}`} data-outcome-pill>{outcome.verdict}</span>
+            ) : (
+              <span className={`px-1.5 py-0.5 rounded border ${pending ? (decision.blocking ? "border-sol-yellow/40 text-sol-yellow" : "border-sol-blue/30 text-sol-blue") : "border-sol-border text-sol-text-dim"}`}>
+                {pending ? (decision.blocking ? "blocking · the session is parked" : "advisory · the agent proceeded") : decision.status}
+              </span>
+            )}
             <span>asked {formatTimeAgo(decision.created_at, now)}</span>
-            {decision.resolved_at && <span>· resolved {formatTimeAgo(decision.resolved_at, now)}</span>}
+            {decision.resolved_at && !outcome && <span>· resolved {formatTimeAgo(decision.resolved_at, now)}</span>}
             {/* A gate on the line (the-line.md L4): the run this question pauses. */}
             {decision.workflow_run_id && <GateRunChip runId={decision.workflow_run_id} nodeId={decision.gate_node_id} />}
             <ShareControl label="decision" path={`/decisions/${decision.short_id ?? decision._id}`} publicShare={{ kind: "decision", id: decision._id, token: (decision as any).share_token }} className="ml-auto" />
           </div>
-          <h1 className="mt-3 decision-question text-sol-text">{decision.question}</h1>
-          {!decision.card && meta}
+          {/* A change card leads with what changed, and its cause and goal under
+              it, so the first line says what and the second says why. */}
+          <h1 className="mt-3 decision-question text-sol-text">{decision.card?.change || decision.question}</h1>
+          {decision.card ? <ChangeCardCause card={decision.card} className="mt-3" /> : meta}
         </header>
 
         {/* Sticky, so it is a sibling of the page's sections, not inside the header. */}
@@ -183,7 +207,7 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
         {/* ── The change card (LE11), drawn natively; its page stays on the task ── */}
         {decision.card && (
           <section className="mt-6">
-            <ChangeCardView card={decision.card} density="full" recommend={!verdictBar} />
+            <ChangeCardView card={decision.card} density="full" change={false} recommend={!verdictBar} outcome={outcome?.line} />
             {meta}
           </section>
         )}
@@ -208,7 +232,8 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
         )}
 
         {/* ── Options ── */}
-        {!verdictBar && <section className="mt-8">
+        {/* A settled card's options collapse into its outcome line. */}
+        {!verdictBar && !outcome && <section className="mt-8">
           <h2 className="decision-kicker">{decision.card ? "Your call" : "Options"}{decision.kind && decision.kind !== "single" ? ` · ${decision.kind === "multi" ? "pick several" : decision.kind === "rank" ? "rank them" : "a form"}` : ""}</h2>
           {/* Option pages (L6) compare side by side above the list; a card's
               number answers on a single kind, where one option is the answer. */}
@@ -297,7 +322,7 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
         </section>
 
         {/* ── Answer ── */}
-        {(!pending || !answerInOptions) && <section className="mt-8 mb-16 decision-footer rounded-xl border border-sol-border/70 bg-sol-card/50 p-4 sm:p-5">
+        {(!pending || !answerInOptions) && (!outcome || canReopen || !!detail.grant_offer) && <section className="mt-8 decision-footer rounded-xl border border-sol-border/70 bg-sol-card/50 p-4 sm:p-5">
           {pending ? (
             answerable ? (
               <>
@@ -309,9 +334,13 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
             )
           ) : (
             <>
-              <h2 className="decision-kicker mb-2">{decision.status === "answered" ? "The answer" : decision.status === "dismissed" ? "Dismissed without an answer" : "Withdrawn by the agent"}</h2>
-              <DecisionRecordedAnswer decision={decision} />
-              {answeredByLine && <div className="mt-2 text-[12px] text-sol-text-dim">{answeredByLine}</div>}
+              {!outcome && (
+                <>
+                  <h2 className="decision-kicker mb-2">{decision.status === "answered" ? "The answer" : decision.status === "dismissed" ? "Dismissed without an answer" : "Withdrawn by the agent"}</h2>
+                  <DecisionRecordedAnswer decision={decision} />
+                  {answeredByLine && <div className="mt-2 text-[12px] text-sol-text-dim">{answeredByLine}</div>}
+                </>
+              )}
               {canReopen && (
                 <button onClick={onReopen} className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-sol-orange/40 text-[12px] text-sol-orange hover:bg-sol-orange hover:text-sol-bg transition-colors disabled:opacity-50">
                   <Undo2 className="w-3.5 h-3.5" />Disagree and reopen

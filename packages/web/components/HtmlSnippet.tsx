@@ -141,6 +141,12 @@ function ShadowCanvas({ html, className = "" }: { html: string; className?: stri
 // duplicating the conditional.
 export const CANVAS_FENCE = "cast-canvas";
 
+/** Whether a markdown body holds a canvas fence. A plain-text preview of such
+ *  a body shows the canvas's raw HTML, so previews render it instead. */
+export function hasCanvasFence(markdown: string): boolean {
+  return markdown.includes("```" + CANVAS_FENCE);
+}
+
 /** Returns a rendered canvas for a cast-canvas fence, else null (caller falls back to CodeBlock). */
 export function tryRenderCanvas(language: string | undefined, code: string): ReactNode {
   if (language === CANVAS_FENCE && code) return <HtmlSnippet code={code} />;

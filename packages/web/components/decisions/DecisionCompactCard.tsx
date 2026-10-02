@@ -20,6 +20,7 @@ import { OptionPages } from "./OptionPages";
 import { PublishedPageEmbed } from "../PublishedPageEmbed";
 import { ChangeCardView } from "./ChangeCardView";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
+import { hasCanvasFence } from "../HtmlSnippet";
 import { stripMarkdown } from "../../lib/notificationText";
 import "./decisions.css";
 
@@ -172,7 +173,9 @@ export function DecisionCompactCardView({
             and its option labels alone, so the context the asker wrote reads
             here, clipped to a few lines with the way to open it. Collapsed it
             renders as stripped text, not parsed markdown: a queue of ten
-            cards would otherwise parse ten bodies nobody has opened. */}
+            cards would otherwise parse ten bodies nobody has opened. A body
+            holding a canvas is the exception, since its stripped text is raw
+            HTML and the visual is what the reader came for. */}
         {/* A change card's own line says what the context would: the
             question, then the change, then the proof, once each. */}
         {decision.context_md && !decision.card && (
@@ -185,7 +188,7 @@ export function DecisionCompactCardView({
           >
             {(expanded) => (
               <div className="decision-card-body" data-decision-context>
-                {expanded
+                {expanded || hasCanvasFence(decision.context_md!)
                   ? <MarkdownRenderer content={decision.context_md!} />
                   : <p className="whitespace-pre-wrap">{stripMarkdown(decision.context_md!, { keepNewlines: true })}</p>}
               </div>
