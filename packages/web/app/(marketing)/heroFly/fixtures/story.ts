@@ -1,6 +1,6 @@
 /**
  * The film's one story, shared by every chapter: "retry failed webhooks" is
- * asked for, fanned out, approved, discussed, decided, tracked, automated,
+ * asked for, fanned out, answered from a phone, discussed, decided, tracked, automated,
  * talked over with the team, merged, published, and found again three weeks
  * later. The cast (people, sessions, objects) and the film-time cues of events
  * that one chapter causes and another shows live here, so chapters agree
@@ -69,13 +69,11 @@ export const CUES = {
   spawnB: 15.1,
   workerRowA: 15.7,
   workerRowB: 16.0,
-  /** 4 Approve: the API worker asks in its own pane while the camera holds on the pair; the phone tap approves it. */
-  permissionAsk: 20.0,
-  permissionApproved: 24.7,
-  /** The answered stack leaves the worker's transcript. */
-  permissionCleared: 25.0,
-  /** On the pull-back, the approval's arc from the phone lands on the worker. */
-  approvalDrawn: 27.6,
+  /** 4 Chat: the API worker ends its turn on a question in its own pane while the camera holds on the pair; Alex answers it in chat from the phone, and the worker picks the answer up. */
+  question: 20.0,
+  answered: 24.7,
+  /** On the pull-back, the answer's arc from the phone lands on the worker. */
+  answerDrawn: 27.6,
   /** 5 Talk: a message and its reply between the workers, then a fork. */
   messageSent: 31.1,
   replySent: 32.5,
@@ -100,16 +98,3 @@ export const CUES = {
   /** 13 Anywhere: the API worker's row (on the cloud host) is opened, after the camera lands. */
   remoteOpen: 83.4,
 } as const;
-
-/**
- * What other chapters add to the foot of the lead's transcript, and the
- * height each adds there (px at the desk's width, measured; negative when it
- * leaves). The transcript is anchored to the composer, so the conversation
- * chapter glides its feed by these and nothing jumps when they mount.
- */
-export const FEED_FOOT: { cue: number; h: number }[] = [
-  { cue: CUES.taskFiled, h: 150 }, // 7 Track: `cast task create`
-];
-
-/** The permission stack's height at the foot of the API worker's transcript (px, measured); its boot entries glide by it. */
-export const ASK_H = 48;

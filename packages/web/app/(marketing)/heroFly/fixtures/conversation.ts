@@ -16,8 +16,6 @@ export type Entry = {
   kind: "user" | "assistant";
   /** Film second it lands. */
   cue: number;
-  /** Height it adds to the transcript, px. */
-  h: number;
   /** Seconds before `now` its timestamp reads. */
   ago: number;
   text?: string;
@@ -57,41 +55,38 @@ export const UI_TASK = "Dashboard: a retry button and attempt history on each fa
 
 /** The lead's transcript, every entry it gains during the film, in order. */
 export const ENTRIES: Entry[] = [
-  { key: "prompt", kind: "user", cue: CUES.prompt, h: 117, ago: 50_000, text: PROMPT },
+  { key: "prompt", kind: "user", cue: CUES.prompt, ago: 50_000, text: PROMPT },
   {
-    key: "thinking", kind: "assistant", cue: DESK.thinking, h: 216, ago: 44_000, agent: SESSIONS.lead.agent, header: true,
+    key: "thinking", kind: "assistant", cue: DESK.thinking, ago: 44_000, agent: SESSIONS.lead.agent, header: true,
     thinking: "Failed deliveries are dropped today. A queue with exponential backoff keeps a flaky endpoint from losing events, and a cap stops a dead one from retrying forever.",
     text: "I'll put failed deliveries on a retry queue with exponential backoff, and send the ones that run out of attempts to a dead letter table.",
   },
   {
-    key: "edit", kind: "assistant", cue: DESK.edit, h: 277, ago: 38_000, agent: SESSIONS.lead.agent, live: true,
+    key: "edit", kind: "assistant", cue: DESK.edit, ago: 38_000, agent: SESSIONS.lead.agent, live: true,
     tool: tool("hero-tool-edit", "Edit", { file_path: "/u/src/billing/src/billing/retry.ts", old_string: RETRY_OLD, new_string: RETRY_NEW }),
     result: { tool_use_id: "hero-tool-edit", content: "The file src/billing/retry.ts has been updated." },
   },
   {
-    key: "bash", kind: "assistant", cue: DESK.bash, h: 28, ago: 30_000, agent: SESSIONS.lead.agent, pendingUntil: CUES.testsPass,
+    key: "bash", kind: "assistant", cue: DESK.bash, ago: 30_000, agent: SESSIONS.lead.agent, pendingUntil: CUES.testsPass,
     tool: tool("hero-tool-test", "Bash", { command: "bun test src/billing", description: "Run the billing tests" }),
     result: { tool_use_id: "hero-tool-test", content: "src/billing/retry.test.ts:\n✓ retries with exponential backoff\n✓ dead-letters after the last attempt\n\n 212 pass\n 0 fail\nRan 212 tests across 18 files. [3.41s]" },
   },
-  { key: "steer", kind: "user", cue: DESK.steerSent, h: 117, ago: 18_000, text: "keep the max at 5 attempts" },
+  { key: "steer", kind: "user", cue: DESK.steerSent, ago: 18_000, text: "keep the max at 5 attempts" },
   {
-    key: "ack", kind: "assistant", cue: DESK.ack, h: 96, ago: 12_000, agent: SESSIONS.lead.agent,
+    key: "ack", kind: "assistant", cue: DESK.ack, ago: 12_000, agent: SESSIONS.lead.agent,
     text: "212 tests pass. MAX_ATTEMPTS is 5 now. I'll split the rest between two workers: the retry endpoint and the dashboard.",
   },
   {
-    key: "spawnA", kind: "assistant", cue: CUES.spawnA, h: 73, ago: 8_000, agent: SESSIONS.lead.agent,
+    key: "spawnA", kind: "assistant", cue: CUES.spawnA, ago: 8_000, agent: SESSIONS.lead.agent,
     tool: tool("hero-tool-spawnA", "Bash", { command: `cast spawn --subagent --cloud --agent codex -- "${API_TASK}"` }),
     result: { tool_use_id: "hero-tool-spawnA", content: spawnOut(SESSIONS.api.shortId, API_TASK, `~/src/billing on ${OBJECTS.hosts.cloud}`) },
   },
   {
-    key: "spawnB", kind: "assistant", cue: CUES.spawnB, h: 73, ago: 7_000, agent: SESSIONS.lead.agent,
+    key: "spawnB", kind: "assistant", cue: CUES.spawnB, ago: 7_000, agent: SESSIONS.lead.agent,
     tool: tool("hero-tool-spawnB", "Bash", { command: `cast spawn --subagent --agent cursor -- "${UI_TASK}"` }),
     result: { tool_use_id: "hero-tool-spawnB", content: spawnOut(SESSIONS.ui.shortId, UI_TASK) },
   },
 ];
-
-/** How much taller the test run gets when its result arrives, px. */
-export const TESTS_DONE_H = 0;
 
 /** The session open in the pane before the lead takes the selection: the first inbox row. */
 export const PREV = {
@@ -103,17 +98,17 @@ export const PREV = {
   messages: 41,
   entries: [
     {
-      key: "prev-plan", kind: "assistant", cue: 0, h: 0, ago: 9 * MIN, agent: "codex", header: true,
+      key: "prev-plan", kind: "assistant", cue: 0, ago: 9 * MIN, agent: "codex", header: true,
       text: "I'll copy invoices in batches of 50,000 and checksum each batch against the old cluster before switching reads.",
     },
     {
-      key: "prev-tool", kind: "assistant", cue: 0, h: 0, ago: 6 * MIN, agent: "codex",
+      key: "prev-tool", kind: "assistant", cue: 0, ago: 6 * MIN, agent: "codex",
       tool: tool("hero-tool-prev", "Bash", { command: "bun run migrate:invoices --target local --batch 50000" }),
       result: { tool_use_id: "hero-tool-prev", content: "copied 1,204,331 invoices in 25 batches\nchecksums match" },
     },
-    { key: "prev-q", kind: "user", cue: 0, h: 0, ago: 3 * MIN, text: "run the migration against staging first" },
+    { key: "prev-q", kind: "user", cue: 0, ago: 3 * MIN, text: "run the migration against staging first" },
     {
-      key: "prev-a", kind: "assistant", cue: 0, h: 0, ago: 2 * MIN, agent: "codex", header: true,
+      key: "prev-a", kind: "assistant", cue: 0, ago: 2 * MIN, agent: "codex", header: true,
       text: "Staging is on Postgres 16. All 1.2M invoices copied and checksummed; the old cluster stays read-only until you say so.",
     },
   ] satisfies Entry[],

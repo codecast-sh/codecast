@@ -1,5 +1,5 @@
 /**
- * Chapter 4, Phone: beats, flyers and arcs, as pure data. Every id starts
+ * Chapter 4, Chat: beats, flyers and arcs, as pure data. Every id starts
  * with "phone." (see contract.ts).
  *
  * The API worker stops on a question at the foot of its pane. The question
@@ -9,13 +9,11 @@
  * back to the worker on the pull-back.
  *
  * The phone's screen is the app laid out at a phone's width (APP_W) and
- * scaled onto the model's screen. Heights below are the app's own px at that
- * width, measured in the browser; a wrong one only lengthens or shortens a
- * glide.
+ * scaled onto the model's screen. Each entry that lands in its feed opens its
+ * own measured room (FilmGrow in ./phone.tsx), so the feed above it rises.
  */
 
 import { CUES } from "../fixtures/story";
-import { glideOver } from "../fixtures/desk";
 import { regionPt, surfacePt } from "../world";
 import type { ChapterMotion } from "./contract";
 
@@ -33,12 +31,9 @@ const KEYBOARD_LIFT = KEYBOARD_H - HOME_H + 12;
 /** The keyboard's rise and fall (s): a little under iOS's half second, slow enough that it never covers more than a frame's worth of its height at once. */
 const KEYBOARD_DUR = 0.48;
 
-/** Measured heights (app px) of what lands in the phone's feed. */
-const H = { ask: 52, steer: 79, reply: 112, test: 24 };
-
 /** The question leaves the worker's pane as the camera sets off for the phone, and lands as the camera arrives. */
 const FLY_CUE = 21.2;
-const FLY_DUR = 0.85;
+const FLY_DUR = 1.05;
 
 /** The phone's moments, read by the views (state) and the beats below (motion). */
 export const PHONE_AT = {
@@ -55,7 +50,7 @@ export const PHONE_AT = {
   press: 24.42,
   sent: 24.52,
   /** The worker picks the answer up (the API worker's row turns green here too). */
-  working: CUES.permissionApproved,
+  working: CUES.answered,
   /** The keyboard goes down so the reply has the screen. */
   blur: 24.95,
   /** The reply's turn opens and streams in, word by word. */
@@ -69,7 +64,7 @@ export const PHONE_AT = {
 
 /** The desk's copy of the exchange lands in the worker's pane while the camera is on the phone. */
 export const DESK_AT = {
-  ask: CUES.permissionAsk,
+  ask: CUES.question,
   steer: PHONE_AT.sent + 0.1,
   reply: PHONE_AT.reply + 0.1,
 } as const;
@@ -87,16 +82,11 @@ export const motion: ChapterMotion = {
   beats: {
     // The dashboard worker steps back while the camera frames the API worker's question, and comes forward again for Talk.
     pairB: [
-      { id: "phone.veil", cue: CUES.permissionAsk - 0.2, dur: 0.5, preset: "fadeIn" },
-      { id: "phone.veil", cue: CUES.approvalDrawn, dur: 0.5, preset: "fadeOut" },
+      { id: "phone.veil", cue: CUES.question - 0.2, dur: 0.5, preset: "fadeIn" },
+      { id: "phone.veil", cue: CUES.answerDrawn, dur: 0.5, preset: "fadeOut" },
     ],
     pairA: [{ id: "phone.ask", cue: DESK_AT.ask, preset: "drop", z: 60, rx: -10, y: 14 }],
     phone: [
-      // The feed glides by each entry as it mounts, so nothing in it jumps.
-      ...glideOver("phone.feed", PHONE_AT.askRoom, H.ask, 0.55),
-      ...glideOver("phone.feed", PHONE_AT.sent, H.steer, 0.5),
-      ...glideOver("phone.feed", PHONE_AT.reply, H.reply, 0.6),
-      ...glideOver("phone.feed", PHONE_AT.test, H.test, 0.45),
       // The question is invisible while its room opens, then takes over from the flyer in place.
       { id: "phone.askBubble", cue: PHONE_AT.askLands, dur: 0.06, preset: "fadeIn" },
       // The keyboard rises with the field's focus and carries the feed and the composer up with it; it goes down again after the send.
@@ -118,6 +108,6 @@ export const motion: ChapterMotion = {
     { id: "phone.question", cue: FLY_CUE, dur: FLY_DUR, from: regionPt("pairA.transcript", 270, 270), to: onScreen(ASK_AT.x, ASK_AT.y, 1), arc: 320, rot: [[0, -6, 0], [0, -20, 4], [0, -12, -2]], scale: [1.12, 1], ease: "glide", fade: [0.12, 0] },
   ],
   arcs: [
-    { id: "phone.answered", cue: CUES.approvalDrawn - 0.5, dur: 0.5, hold: 1.0, from: onScreen(STEER_AT.x, STEER_AT.y), to: regionPt("pairA.header", 250, 22), color: "var(--sol-blue)", apex: 90 },
+    { id: "phone.answered", cue: CUES.answerDrawn - 0.5, dur: 0.5, hold: 1.0, from: onScreen(STEER_AT.x, STEER_AT.y), to: regionPt("pairA.header", 250, 22), color: "var(--sol-blue)", apex: 90 },
   ],
 };

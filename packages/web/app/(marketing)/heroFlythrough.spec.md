@@ -144,11 +144,13 @@ Times are film seconds; named cues are in `fixtures/story.ts`. "Light interactio
 
 The code is chapters/phone.motion.ts (`PHONE_AT`); the phone's screen is the codecast iOS app's session screen (components/PhoneSession.tsx, drawn from the same spec, @codecast/shared/render/mobileSessionStyle, as mobile/app/session/[id].tsx), dark, inside the iOS status bar and keyboard.
 
-- `permissionAsk` 20.0: the API worker stops on a question at the foot of its own pane ("Should a 410 Gone count as failed?"); the dashboard worker beside it steps back under a veil.
-- Flyer `phone.question` 21.2 to 22.05: the question leaves the pane as the camera sets off east, and lands in the phone's feed as the camera arrives; the phone rises into view as the workers dissolve behind it. The feed shows what the worker did before (Alex's task, its plan, two tool calls), and the composer's status turns to Needs Input.
+The pair sits dashboard worker west, API worker east and a step lower; the phone stands east of the API worker, far enough that a hold on it shows the phone alone. Every move in this chapter is a pan that carries windows off the side of the page.
+
+- `question` 20.0: the API worker ends its turn on a question at the foot of its own pane ("Should a 410 Gone count as failed?"); its status goes idle, as the app shows an agent waiting on a reply, and the dashboard worker beside it steps back under a veil.
+- Flyer `phone.question` 21.2 to 22.25: the question leaves the pane as the camera sets off east, and lands in the phone's feed as the camera arrives. The phone slides in from the east edge as the workers are carried off the west one. The feed shows what the worker did before (Alex's task, its plan, two tool calls); the composer shows no status while the worker waits.
 - 22.8: a tap focuses the field and the keyboard rises, carrying the feed and composer with it; Alex's answer types itself in and is sent (24.42).
-- 24.7: the status turns back to Working; the keyboard goes down and the worker's reply streams in word by word, then its `npm test` run and its result.
-- 27.0 to 29.3: the camera pulls back to the phone beside the API worker's pane (the dashboard worker stays out of the shot); arc `phone.answered` draws from Alex's message on the phone to the worker, whose pane shows the same exchange.
+- `answered` 24.7: the status turns to Working; the keyboard goes down and the worker's reply streams in word by word, then its `npm test` run and its result.
+- 27.0 to 29.3: the camera pulls back west to the phone beside the API worker's pane (the dashboard worker, west of it, stays out of the shot); arc `phone.answered` (`answerDrawn`) draws from Alex's message on the phone to the worker, whose pane shows the same exchange. The move to Talk pans on west, carrying the phone off the east side as the dashboard worker comes in from the west.
 - Light interaction: none beyond the real views' own.
 
 ### 5 Agents talk (28 to 34)

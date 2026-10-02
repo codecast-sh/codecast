@@ -22,7 +22,7 @@ I read the maps and checked a few facts in the code. I edited nothing.
 
 ## 0. Feature coverage plan
 
-The film grows from 7 chapters in 36s to 12 chapters in about 84s. It still tells one story from start to end: "retry failed webhooks" is asked for, fanned out, approved, discussed, decided, tracked, automated, discussed with the team, merged, published, and found again three weeks later.
+The film grows from 7 chapters in 36s to 12 chapters in about 84s. It still tells one story from start to end: "retry failed webhooks" is asked for, fanned out, answered from a phone, discussed, decided, tracked, automated, discussed with the team, merged, published, and found again three weeks later.
 
 The world stays a loop around the desk. Each chapter has one hold with at most two surfaces in view, a caption strip, and a chapter tick. Ticks seek to the hold's start.
 
@@ -47,7 +47,7 @@ The world stays a loop around the desk. Each chapter has one hold with at most t
 
 **Keeping it legible**
 
-- Every hand-off between surfaces is a causal flyer, as in the current spec: spawn block to row, permission chip to phone, envelope to a "Message from" card, TaskPill to the board, a merged PR chip that turns into the page's version chip.
+- Every hand-off between surfaces is a causal flyer, as in the current spec: spawn block to row, the worker's question to the phone, envelope to a "Message from" card, TaskPill to the board, a merged PR chip that turns into the page's version chip.
 - The "3 weeks later" label marks the jump before chapter 12.
 - Chapters 9 and 10 are new districts. Put them south-east and north-east so the camera loop stays a single orbit.
 - Keep one hold of at least 3s per chapter.
@@ -158,7 +158,7 @@ All ids look like `hero-*` (not Convex-shaped). All timestamps are `mountNow - o
   - `ToolCall {id, name, input: JSON}`, `ToolResult {tool_use_id, content, is_error?}`, `ImageData {media_type, preview_url}` (same-origin), per conversation/types.ts.
   - Blocks get **no `conversationId`**, no `isPending`, no `storage_id`, and no fork/share callbacks.
   - Header: `{title, status: "working"|..., agentType, model, startedAt, messageCount, viewers: FacePerson[]}`.
-- **Permission (chapter 4):** `{_id: "hero-p1", tool_name: "Bash", arguments_preview: "npm test --workspace packages/api", status: "pending", created_at}`, with no `conversation_id`. The phone card uses the same row and the shared RN style spec.
+- **Chat (chapter 4):** the worker's question, Alex's answer and its reply as `AssistantBlock` and `UserPrompt` rows in the worker's pane, and the same three messages in the phone's session screen (fixtures/phone.ts), drawn from the shared RN style spec.
 - **Multi-agent (chapter 5):**
   - `SessionMessageBlock {from: "jx7c4mq", name, body, timestamp}`, with no `pendingStatus`.
   - `HERO_ENTITIES` maps `jx7c4mq`, `ct-4182` and `pl-312` to entity rows shaped like the webGet returns.
@@ -258,7 +258,7 @@ Order: poster first, then by leak severity.
 
 - Change `:root {` to `:root, .hero-sandbox {` on the light token block in globals.css. There is one token list, no copy. Local variables then win over anything inherited.
 - Add `color-scheme: light` and a `--image-fade-bg`.
-- **Phone:** wrap it in `<div className="dark">`. `.dark` is a class selector, so every `--sol-*` switches locally. The 9 `dark:` utilities in the target files also resolve correctly under that ancestor.
+- **Phone:** wrap it in `<div className="dark">`. `.dark` is a class selector, so every `--sol-*` switches locally. The 9 `dark:` utilities in the target files also resolve correctly under that ancestor. The dark phone beside the light desk is a deliberate choice: the iOS app follows the system theme, so both are the app as it renders, and a dark screen in its bezel reads at once as a separate device on the cream page, where a light one would read as another pane of the desk.
 - **Page-scoped CSS the hero must import:** `components/editor/editor.css`, `components/pr/pr.css`, `components/repo/repo.css`, `chat.css`, `decisions.css`, `calls/faces.css`, `CommandPalette.css`, and `@xyflow/react` styles, which WorkflowGraphView already imports. Load them in the lazy chapter chunks so the poster stays light.
 - **Background mismatch:** the page paints `#fdf6e3` but `--sol-bg` is `#FBF5E2`. Set the stage backdrop to `var(--sol-bg)` or accept the difference.
 - **Accent classes** (text-sol-blue and similar) are hardcoded hex, which is correct for light.
@@ -274,7 +274,6 @@ All of these are local `useState` with `data-hero-live`, and none depend on real
 
 **Cheap and safe once the splits land:**
 
-- Approve or Deny on `PermissionStackView` and on the phone card.
 - Picking a decision option (`DecisionOptionList` / `DecisionAnswerControls` with keys=false).
 - Typing in the palette: cmdk plus the pure `paletteItemScore`. Do not autofocus, and only listen while the input is focused, so the page's keys are never taken.
 - Hover and select on session rows, and local pinning.

@@ -1,3 +1,4 @@
+import { createContext, useCallback, useContext } from "react";
 import { toast } from "sonner";
 import { copyToClipboard, shareOrigin } from "./utils";
 import { openForwardToChat } from "./forwardToChat";
@@ -122,8 +123,21 @@ export function renderAnsi(text: string): React.ReactNode {
   return parts.length > 0 ? parts : text;
 }
 
-export function formatRelativeTime(ts: number): string {
-  const now = Date.now();
+/**
+ * The instant relative times are measured from: the wall clock, unless a
+ * surface that renders a film of fixtures (the marketing hero) fixes it to the
+ * moment its fixtures are stamped against, so a frame's "2m ago" depends on
+ * its fixtures alone, never on how long the page has been open.
+ */
+export const RelativeTimeNow = createContext<number | null>(null);
+
+/** `formatRelativeTime` measured from the surface's instant (RelativeTimeNow), for a component's render. */
+export function useRelativeTime(): (ts: number) => string {
+  const now = useContext(RelativeTimeNow);
+  return useCallback((ts: number) => formatRelativeTime(ts, now ?? Date.now()), [now]);
+}
+
+export function formatRelativeTime(ts: number, now = Date.now()): string {
   const diff = now - ts;
   const seconds = Math.floor(diff / 1000);
   const minutes = Math.floor(seconds / 60);

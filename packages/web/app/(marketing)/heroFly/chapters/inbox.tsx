@@ -26,6 +26,7 @@ import { ChatNavSectionView, FeedNavRowView, QuestionsNavRowView, SidebarNavView
 import { AnchorAvatar } from "@/components/anchor/AnchorIdentity";
 import { agentName } from "@/hooks/useSyncAnchors";
 import { projectDotClass } from "@/lib/projectColors";
+import { useLabelColor } from "@/lib/labelColors";
 import { FilmGrow } from "../film";
 import { fly, useFilmTime } from "../filmClock";
 import { apiWorkerPhase, holdIndex, inboxRows, leadMessages, leadRow, workerRow, DESK, INBOX_SECTIONS, WORKER_HOST } from "../fixtures/desk";
@@ -65,13 +66,14 @@ export function DeskTopBar(_: PartProps) {
 
 /** The rail: the app's own three groups, with the counts the film moves (needs input, the decision in the queue). */
 export function DeskRail(_: PartProps) {
-  // The cursor e2e asks from the start; the API worker asks between the permission cues.
+  // The cursor e2e asks from the start; the API worker waits on its question until it is answered.
   const needsInput = useFilmTime((t) => (apiWorkerPhase(t) === "asking" ? 2 : 1));
   const [projectsOpen, setProjectsOpen] = useState(false);
+  const colorOf = useLabelColor();
   const projects: SectionRowSpec[] = PROJECTS.map((name) => ({
     id: `hero-p-${name}`,
     name,
-    icon: <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${projectDotClass({ title: name })}`} />,
+    icon: <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${projectDotClass({ title: name }, colorOf)}`} />,
     active: false,
     onSelect: noop,
   }));
@@ -121,7 +123,6 @@ function InboxListAt({ now }: PartProps) {
   const leadIn = useFilmTime((t) => t >= CUES.leadLands);
   // The open session's row is the selected one: the first row's (open in the pane as the film starts), then the lead's, then the cloud worker's.
   const selected = useFilmTime((t) => (t >= CUES.remoteOpen ? SESSIONS.api.id : t >= CUES.leadSelected ? SESSIONS.lead.id : PREV_ID));
-  const workers = useFilmTime((t) => (t >= CUES.workerRowB ? 2 : t >= CUES.workerRowA ? 1 : 0));
   const apiPhase = useFilmTime(apiWorkerPhase);
   const [picked, setPicked] = useState<string | null>(null);
   const [starred, setStarred] = useState<Record<string, boolean>>({});
@@ -169,9 +170,10 @@ function InboxListAt({ now }: PartProps) {
           return (
             <div key={sec.key}>
               <SectionHeader label={sec.label} count={sec.rows.length + (working && leadIn ? 1 : 0)} color={sec.color} sectionKey={sec.key} collapsed={false} />
-              {working && leadIn && <div {...fly("desk/inbox.row:lead")}>{card(leadRow(now, messages, steered), true)}</div>}
-              {working && workers >= 1 && <div {...fly("desk/inbox.row:api")}>{card(workerRow(now, "api", apiPhase), apiPhase !== "asking", { runHost: WORKER_HOST.api })}</div>}
-              {working && workers >= 2 && <div {...fly("desk/inbox.row:ui")}>{card(workerRow(now, "ui", "working"), true)}</div>}
+              {/* Each newcomer opens its own room (FilmGrow), so the rows under it glide down rather than jump. */}
+              {working && <FilmGrow at={CUES.leadLands} dur={0.6}><div {...fly("desk/inbox.row:lead")}>{card(leadRow(now, messages, steered), true)}</div></FilmGrow>}
+              {working && <FilmGrow at={CUES.workerRowA} dur={0.6}><div {...fly("desk/inbox.row:api")}>{card(workerRow(now, "api", apiPhase), apiPhase !== "asking", { runHost: WORKER_HOST.api })}</div></FilmGrow>}
+              {working && <FilmGrow at={CUES.workerRowB} dur={0.6}><div {...fly("desk/inbox.row:ui")}>{card(workerRow(now, "ui", "working"), true)}</div></FilmGrow>}
               {working ? <div {...fly("desk/inbox.rows")}>{sec.rows.map(row)}</div> : sec.rows.map(row)}
             </div>
           );

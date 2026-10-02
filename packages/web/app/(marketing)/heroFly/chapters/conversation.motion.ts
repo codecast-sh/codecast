@@ -1,26 +1,14 @@
 /**
  * Chapter 2, Steer: the pane cross-fades from the open session to the lead,
- * each transcript entry drops in as the feed lifts by its height, and the
- * send button presses as the steer goes out.
+ * each transcript entry drops in as it opens its own room (FilmGrow in
+ * ./conversation.tsx, so the feed above it rises), and the send button
+ * presses as the steer goes out.
  */
 
-import { DESK, glideOver } from "../fixtures/desk";
-import { ENTRIES, SARAH_VIEWING, TESTS_DONE_H } from "../fixtures/conversation";
-import { CUES, FEED_FOOT } from "../fixtures/story";
-import type { Beat } from "../world";
+import { DESK } from "../fixtures/desk";
+import { ENTRIES, SARAH_VIEWING } from "../fixtures/conversation";
+import { CUES } from "../fixtures/story";
 import type { ChapterMotion } from "./contract";
-
-// The feed is anchored to the composer, so each entry that lands lifts it by
-// the entry's height; the test run's result lifts it again when it arrives,
-// and what other chapters add under it (FEED_FOOT) lifts it the same way. The
-// first entry has nothing above it to make room for: it drops in where it
-// rests, while the previous session's transcript is still fading, so the pane
-// is never empty.
-const lifts: Beat[] = [
-  ...ENTRIES.slice(1).flatMap((e) => glideOver("conversation.feed", e.cue, e.h, 0.7)),
-  ...(TESTS_DONE_H > 0 ? glideOver("conversation.feed", CUES.testsPass, TESTS_DONE_H, 0.5) : []),
-  ...FEED_FOOT.flatMap((f) => glideOver("conversation.feed", f.cue, f.h, 0.6)),
-];
 
 /** The lead's turn runs from the prompt until both workers are spawned. */
 export const LEAD_TURN_ENDS = CUES.spawnB + 1.2;
@@ -33,7 +21,6 @@ export const motion: ChapterMotion = {
       // The previous session's transcript is gone in a quarter second, as the lead's prompt drops in (CUES.prompt), so the pane never sits empty.
       { id: "conversation.prev", cue: DESK.paneSwap, dur: 0.25, preset: "fadeOut" },
       { id: "conversation.feed", cue: DESK.paneSwap, dur: 0.45, preset: "fadeIn" },
-      ...lifts,
       ...ENTRIES.map((e) => ({ id: `conversation.entry:${e.key}`, cue: e.cue, preset: "drop" as const, z: 140, rx: -12, y: -10 })),
       { id: "conversation.send", cue: DESK.steerSent - 0.18, dur: 0.22, preset: "press" },
       { id: "conversation.working", cue: CUES.prompt, dur: 0.35, preset: "fadeIn" },

@@ -18,32 +18,51 @@ import "@/components/pr/pr.css";
 import { events, MERGED_STATUS, pullRequest, reviews } from "../fixtures/integrations";
 import { OBJECTS, SESSIONS } from "../fixtures/story";
 import { fly, useFilmTime } from "../filmClock";
-import { stageAt } from "./integrations.motion";
+import { FilmSwap } from "../film";
+import { STAGE_CUES, stageAt, stageOf } from "./integrations.motion";
 import type { PartProps } from "./contract";
 
 const noop = () => {};
 const SESSION_CHOICES = [SESSIONS.lead, SESSIONS.api, SESSIONS.ui].map((s) => ({ id: s.shortId, title: s.title }));
 
+/** The page's moments, each drawn once: a crossing renders two of them. */
+function usePages(now: number) {
+  return useMemo(
+    () =>
+      STAGE_CUES.concat(Infinity).map((_, step) => {
+        const stage = stageOf(step);
+        const pr = pullRequest(now, stage);
+        const prReviews = reviews(now, stage);
+        return { pr, prReviews, items: buildPrTimeline({ events: events(now, stage), reviews: prReviews, comments: [] }) };
+      }),
+    [now],
+  );
+}
+
 export function PullRequestPage({ now }: PartProps) {
   // One of a fixed set of moments, so the page renders only when something it shows changes.
   const stage = useFilmTime(stageAt);
+  const pages = usePages(now);
   const pr = pullRequest(now, stage);
-  const prReviews = reviews(now, stage);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const items = useMemo(() => buildPrTimeline({ events: events(now, stage), reviews: prReviews, comments: [] }), [now, stage]);
 
+  // The header and the timeline cross each change of state as a dissolve with their heights eased (FilmSwap), so a review landing, the checks going green and the merge never reflow the page in one frame.
   return (
     <div className="pr-page flex h-full flex-col overflow-hidden" style={{ ["--pr-accent" as string]: accentVar(PR_STATE_META[prStateKey(pr)].accent) }}>
       <div {...fly("pr/integrations.header")}>
-        <PRHeader
-          pr={pr}
-          repository={OBJECTS.pr.repository}
-          number={OBJECTS.pr.number}
-          openComments={0}
-          reviews={prReviews}
-          linkedSessionIds={pr.linked_session_ids}
-          sessionChoices={SESSION_CHOICES}
-          onSetShepherd={noop}
+        <FilmSwap
+          cues={STAGE_CUES}
+          render={(step) => (
+            <PRHeader
+              pr={pages[step].pr}
+              repository={OBJECTS.pr.repository}
+              number={OBJECTS.pr.number}
+              openComments={0}
+              reviews={pages[step].prReviews}
+              linkedSessionIds={pages[step].pr.linked_session_ids}
+              sessionChoices={SESSION_CHOICES}
+              onSetShepherd={noop}
+            />
+          )}
         />
       </div>
       <PRTabBar
@@ -59,7 +78,10 @@ export function PullRequestPage({ now }: PartProps) {
       />
       {/* The newest entry stays in view, as if the page followed the timeline down; the oldest row runs under the tab bar, as the page scrolled does. */}
       <div className="flex min-h-0 max-w-[1080px] flex-1 flex-col justify-end overflow-hidden" {...fly("pr/integrations.timeline")}>
-        <PRTimeline pr={pr} items={items} comments={[]} authed={false} onPostComment={noop} onResolve={noop} onNavigate={noop} />
+        <FilmSwap
+          cues={STAGE_CUES}
+          render={(step) => <PRTimeline pr={pages[step].pr} items={pages[step].items} comments={[]} authed={false} onPostComment={noop} onResolve={noop} onNavigate={noop} />}
+        />
       </div>
     </div>
   );

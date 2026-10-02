@@ -96,6 +96,8 @@ const FALLBACK_SCALE_CSS = [
   "@keyframes hf-cap{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}",
   "@keyframes hf-cap-fade{from{opacity:0}to{opacity:1}}",
   "@media (prefers-reduced-motion:reduce){.hf-cap{animation-name:hf-cap-fade!important}}",
+  // Reduced motion: the chapter bar's room and names change at once, without the eased slide.
+  "@media (prefers-reduced-motion:reduce){.hf-chaps li,.hf-chaps [data-name]{transition:none!important}}",
   // A region whose views arrive after the prerender (the poster's conversation pane) fades in rather than popping.
   "@keyframes hf-in{from{opacity:0}}.hf-in{animation:hf-in 300ms ease}",
   // A region's box lets clicks through to the regions under it; the views placed in it take them (heroFly/surfaces.tsx RegionSlot).
@@ -390,7 +392,7 @@ export function HeroFlythrough() {
     <figure role="group" aria-label="Codecast product tour" className="m-0" style={{ containerType: "inline-size" }}>
       <style>{FALLBACK_SCALE_CSS}</style>
       <p className="sr-only">{DESCRIPTION}</p>
-      <HeroSandbox fallback={<div className="w-full aspect-[1280/760] max-sm:aspect-[4/5]" />}>
+      <HeroSandbox now={now} fallback={<div className="w-full aspect-[1280/760] max-sm:aspect-[4/5]" />}>
       {/* No frame, no fade, no clip: the screens sit on the page itself (BLEED). */}
       <div ref={bleedRef} className="hf-bleed pointer-events-none relative" style={BLEED}>
       <div

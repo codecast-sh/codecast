@@ -26,7 +26,7 @@ Region rectangles are in `world.ts` (px from the surface's top-left; on the phon
 | 1 | `inbox` | Inbox | 0 to 7.4 | 2.5 to 6.9 desk | `desk.topbar` 0, `desk.sidebar` 0, `desk.list` 10 (grouped sections; the lead and its workers in Working) | leadLands, leadSelected |
 | 2 | `conversation` | Steer | 7.4 to 13.5 | 8.0 to 13.0 desk, in on the conversation | `desk.header` 0, `desk.transcript` 10, `desk.composer` 0 | prompt, testsPass |
 | 3 | `fanout` | Fan out | 13.5 to 19.8 | 14.1 to 16.5 desk; 18.3 to 21.0 pair, gliding onto the API worker as it asks | `desk.transcript` 20, `desk.list` 20 (worker rows), `pairA.header` 0, `pairB.header` 0, `pairA.transcript` 10, `pairB.transcript` 10 | spawnA, spawnB, workerRowA, workerRowB |
-| 4 | `phone` | Approve | 19.8 to 29.7 | the ask lands in the pair hold (20.0); 22.6 to 25.9 phone; 27.0 to 29.3 both | `pairA.transcript` 15 (permission stack), `pairB.scrim` 0, `phone.main` 0 (the app's Notifications tab, its header and tab bar from `@codecast/shared/render/mobileTabsStyle`) | permissionAsk, permissionApproved, permissionCleared, approvalDrawn |
+| 4 | `phone` | Chat | 19.8 to 29.7 | the question lands in the pair hold (20.0); 22.6 to 25.9 phone; 27.0 to 29.3 phone and the API worker | `pairA.transcript` 15 (the question, the answer and the reply), `pairB.scrim` 0, `phone.main` 0 (the app's session screen, components/PhoneSession.tsx, from `@codecast/shared/render/mobileSessionStyle`) | question, answered, answerDrawn |
 | 5 | `talk` | Talk | 29.7 to 36.6 | 31.0 to 35.7 pair | `pairA.transcript` 20, `pairB.transcript` 20, `pairB.header` 10 and `pairB.transcript` 30 (the fork's window, over the dashboard worker's) | messageSent, replySent, forked |
 | 6 | `decide` | Decide | 36.6 to 41.3 | 37.5 to 42.0 desk, on the card over the conversation, then the task filed under it | `desk.scrim` 0 (veil), `desk.side` 0 | decisionAsked, decisionAnswered |
 | 7 | `work` | Track | 41.3 to 48.6 | 43.4 to 47.8 board | `desk.transcript` 40 (files the task), `board.main` 0 | taskFiled, taskLands, taskClaimed |
@@ -37,7 +37,7 @@ Region rectangles are in `world.ts` (px from the surface's top-left; on the phon
 | 12 | `memory` | Memory | 74.8 to 82.3 | 75.8 to 78.0 palette; 79.3 to 81.3 blame | `palette.main` 0, `blame.main` 0 | threeWeeks |
 | 13 | `remote` | Anywhere | 82.3 to 88.8 | 83.0 to 86.0 desk | `desk.header` 10, `desk.transcript` 60 (the cloud worker's pane over the lead's) | remoteOpen |
 
-A chapter's parts stay mounted for the whole film. Surfaces are reused across chapters (the desk carries chapters 1 to 4, 6, 7 and 13), so a part shows its state for the current time: before its cue it renders nothing (or takes no height) and it enters with a beat; after its chapter it stays in its finished state. Other chapters' changes to what you render arrive as cues in `story.ts` (the API worker's row turns amber at `CUES.permissionAsk` and green at `CUES.permissionApproved`, which the fan-out chapter's row reads; the permission stack lifts the API worker's feed by `ASK_H`).
+A chapter's parts stay mounted for the whole film. Surfaces are reused across chapters (the desk carries chapters 1 to 4, 6, 7 and 13), so a part shows its state for the current time: before its cue it renders nothing (or takes no height) and it enters with a beat; after its chapter it stays in its finished state. Other chapters' changes to what you render arrive as cues in `story.ts` (the API worker waits on its question from `CUES.question` and works again from `CUES.answered`, which the inbox row and the fan-out chapter's header read; the question opens its own room at the foot of the worker's feed with `FilmGrow`).
 
 ## The part contract
 
@@ -56,7 +56,7 @@ export const chapter: HeroChapter = {
 ```
 
 - A part is `ComponentType<PartProps>`, `PartProps = { now: number }`. `now` is the wall clock taken once at mount; every fixture timestamp is `now - offset`, so relative labels read the same on every visit.
-- **Film time is not a prop.** Read it with `useFilmTime(select)` from `../filmClock`. `t` is film time. The desk's views are also rendered once more at the loop's seam, on a clock held at 0 (surfaces.tsx `SeamGhost`), and dissolved in over the live window, so a desk view must render its t=0 state from t alone. `select` must return a primitive or a stable reference; it runs every frame and your component re-renders only when the result changes. Derive discrete state (`t >= CUES.permissionAsk ? "needs_input" : "working"`, a typed prefix length, a checks count), never a per-frame float.
+- **Film time is not a prop.** Read it with `useFilmTime(select)` from `../filmClock`. `t` is film time. The desk's views are also rendered once more at the loop's seam, on a clock held at 0 (surfaces.tsx `SeamGhost`), and dissolved in over the live window, so a desk view must render its t=0 state from t alone. `select` must return a primitive or a stable reference; it runs every frame and your component re-renders only when the result changes. Derive discrete state (`t >= CUES.question ? "idle" : "working"`, a typed prefix length, a checks count), never a per-frame float.
 - **Continuous motion goes to the driver, not React.** Put `{...fly("<surface>/<id>")}` (from `../filmClock`) on an element and give it beats in your motion file; the driver writes its transform and opacity every frame without a render. Text typed character by character: a `TextBeat` plus `<FlyText id="<surface>/<id>" />` (from `../film`) for plain text, or `useFilmTime((t) => typed(text, t, cue, rate).length)` when a real input or view must render the value.
 - Parts render **real app views only**, fed through props or the sandbox seams. No hand-built copies of product UI and no copying a component's JSX: split the component into container and view (ARCHITECTURE.md section 3) and render the view.
 
@@ -64,7 +64,7 @@ export const chapter: HeroChapter = {
 
 Each hold names only what it is about (`sees`) and its viewing angles; `world.ts` works out where the camera sits so those windows are centred in the film box with the same margins in every shot (`timeline.test.ts` checks it to 3px). Windows that share a move sit about 200px apart on the band, so no frame of a move is near empty. `timeline.test.ts` holds every chapter to at least 3s of still camera and every transit to its own endpoints, and steps the whole film at 60fps failing on anything that changes faster than an eye can follow (`../filmQa.ts`).
 
-There is no card flip and no card back anywhere. A window appears as itself: it dissolves in while the camera sets off toward the first hold that sees it (`SHOW_AT` in `world.ts`). What it shows must be in place before then: put the chapter's resting state (its entrance drops) at `readyAt(surface)` (`world.ts`). Keep the story's events for the hold. A `scrim` region and the `Veil` component (`../film`) step a surface back while the camera frames something beside it. Anything a chapter mounts while its window is on screen must open its own room: wrap it in `FilmGrow` (`../film`, its height and opacity eased by film time) or pair it with a `glideOver` FLIP of exactly its height, so nothing above it jumps. Fades are never shorter than 0.3s (`timeline.ts` MIN_FADE). A session row in flight between surfaces is `LiftedRow` (`../film`): the inbox row it becomes, with the lifted shadow; give its flyer `swell: 0.06` so it rises off the text it crosses.
+There is no card flip and no card back anywhere. A window appears as itself: it dissolves in while the camera sets off toward the first hold that sees it (`SHOW_AT` in `world.ts`). What it shows must be in place before then: put the chapter's resting state (its entrance drops) at `readyAt(surface)` (`world.ts`). Keep the story's events for the hold. A `scrim` region and the `Veil` component (`../film`) step a surface back while the camera frames something beside it. Anything a chapter mounts while its window is on screen must open its own room: wrap it in `FilmGrow` (`../film`, its measured height and opacity eased by film time), so nothing above it jumps; a view that changes state inside a real component (a row's chip, a header's status, a list growing) crosses each cue with `FilmSwap`, which dissolves the new state over the old and eases the height. Never switch a view's layout in one frame at a cue, and never glide by a hand-measured height. Fades are never shorter than 0.3s (`timeline.ts` MIN_FADE). A session row in flight between surfaces is `LiftedRow` (`../film`): the inbox row it becomes, with the lifted shadow; give its flyer `swell: 0.06` so it rises off the text it crosses.
 
 ## The motion contract
 
@@ -74,7 +74,7 @@ export const motion: ChapterMotion = {
   beats: { desk: [{ id: "fanout.row:api", cue: CUES.workerRowA, preset: "drop", z: 120, rx: -12, y: -16 }] },
   texts: { pairA: [{ id: "talk.cmd", kind: "chars", text: 'cast send jx7f9np "..."', cue: 29.0, rate: 40 }] },
   flyers: [{ id: "fanout.spawnA", cue: 16.0, dur: 0.6, from: regionPt("desk.transcript", 320, 440), to: regionPt("desk.list", 170, 120), ... }],
-  arcs: [{ id: "phone.approved", ... }],
+  arcs: [{ id: "phone.answered", ... }],
 };
 ```
 
@@ -113,7 +113,7 @@ Inside the hero, Convex is a stub (queries load forever, writes resolve null), e
 Grouped so no two builders split the same app file:
 
 1. **Desk**: `inbox`, `conversation`, `fanout`, `remote`. Splits: SessionCardView and SectionHeader (GlobalSessionPanel), sidebar primitives and InboxNavRow (Sidebar), ConversationHeaderBar and AgentStatusPill (ConversationView), ComposerShell (MessageInput).
-2. **Agents**: `phone`, `talk`, `decide`. Splits: PermissionStackView (PermissionCard), the shared phone permission style spec (mobile PermissionCard), DecisionCompactCardView.
+2. **Agents**: `phone`, `talk`, `decide`. Splits: the shared phone session style spec (mobile session screen), DecisionCompactCardView.
 3. **Work**: `work`, `automation`, `integrations`. Splits: TaskRow, KanbanCard and ListRowShell, TriggerRowItem `actions`, WorkflowGraphView `chrome`, and the PR page exports.
 4. **People and memory**: `team`, `publish`, `memory`. Splits: RoomThread and NotificationBell exports, PageCard, palette styles and rows, SearchField and SearchResultRow (GlobalSearch; builder 1 uses SearchField once it lands).
 

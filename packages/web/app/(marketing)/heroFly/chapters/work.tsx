@@ -21,7 +21,7 @@ import type { TaskItem } from "@/store/inboxStore";
 import { FILE_RESULT, FILE_TOOL, filedHistory, filedSessions, filedTask, mergedEvent, planProgress, planTasks } from "../fixtures/work";
 import { WORK_AT } from "./work.motion";
 import { CUES, OBJECTS } from "../fixtures/story";
-import { FilmSwap } from "../film";
+import { FilmGrow, FilmSwap } from "../film";
 import { fly, useFilmTime } from "../filmClock";
 import type { PartProps } from "./contract";
 
@@ -29,15 +29,16 @@ const noop = () => {};
 const STATUS_CYCLE = ["open", "in_progress", "in_review", "done"];
 const PRIORITY_CYCLE: TaskPriority[] = ["urgent", "high", "medium", "low"];
 const next = <T,>(cycle: T[], v: T) => cycle[(cycle.indexOf(v) + 1) % cycle.length];
+const CLAIMED = [CUES.taskClaimed];
 
-/** The lead files the task: the real cast command block, with its task and plan cards. */
+/** The lead files the task: the real cast command block, with its task and plan cards, opening its own room at the foot of the transcript so the lead's feed rises over it. */
 export function TaskFiled() {
-  const filed = useFilmTime((t) => t >= CUES.taskFiled);
-  if (!filed) return null;
   return (
-    <div className="px-6 pb-2" {...fly("desk/work.files")}>
-      <CastCommandBlock tool={FILE_TOOL} result={FILE_RESULT} />
-    </div>
+    <FilmGrow at={CUES.taskFiled} dur={0.6}>
+      <div className="px-6 pb-2" {...fly("desk/work.files")}>
+        <CastCommandBlock tool={FILE_TOOL} result={FILE_RESULT} />
+      </div>
+    </FilmGrow>
   );
 }
 
@@ -85,9 +86,24 @@ export function TaskBoard({ now }: PartProps) {
       {group && <ListGroupHeader label={group.label} count={tasks.length} icon={group.icon} badge={group.badge} extra={group.extra} collapsed={false} />}
       {tasks.map((task) => (
         <div key={task._id} data-hero-live="" {...fly(`board/work.row:${task._id}`)}>
-          <ListRowShell state={stateOf(task)}>
-            <TaskRow task={task} state={stateOf(task)} onFilterLabel={noop} />
-          </ListRowShell>
+          {task._id === filed._id ? (
+            // The claim dissolves in over the landed row (its chip and assignee), rather than reflowing the row in one frame.
+            <FilmSwap
+              cues={CLAIMED}
+              render={(claimed) => {
+                const row = { ...filedTask(now, claimed ? "claimed" : "landed"), ...edits[filed._id] };
+                return (
+                  <ListRowShell state={stateOf(row)}>
+                    <TaskRow task={row} state={stateOf(row)} onFilterLabel={noop} />
+                  </ListRowShell>
+                );
+              }}
+            />
+          ) : (
+            <ListRowShell state={stateOf(task)}>
+              <TaskRow task={task} state={stateOf(task)} onFilterLabel={noop} />
+            </ListRowShell>
+          )}
         </div>
       ))}
       <div className="flex min-h-0 flex-1 gap-6 px-4 pt-4" {...fly("board/work.below")}>
@@ -97,7 +113,7 @@ export function TaskBoard({ now }: PartProps) {
           </div>
           <div {...fly("board/work.station")}>
             {/* The claim dissolves in over the landed state (FilmSwap), rather than switching in one frame. */}
-            <FilmSwap cues={[CUES.taskClaimed]} render={(claimed) => <StationStrip task={{ ...filedTask(now, claimed ? "claimed" : "landed"), ...edits["hero-t1"] } as TaskItem & { status_id?: string }} />} />
+            <FilmSwap cues={CLAIMED} render={(claimed) => <StationStrip task={{ ...filedTask(now, claimed ? "claimed" : "landed"), ...edits["hero-t1"] } as TaskItem & { status_id?: string }} />} />
           </div>
         </div>
         <div className="min-w-0 flex-1 overflow-hidden" {...fly("board/work.detail")}>

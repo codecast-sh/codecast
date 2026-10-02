@@ -17,6 +17,10 @@ export const AUTO_AT = {
   rearmed: CUES.triggerFires + 2.6,
 } as const;
 
+/** Every phase in order, and the cues between them: a FilmSwap draws each crossing from these. */
+export const PHASES: RunPhase[] = ["armed", "implement", "verify", "gate", "rearmed"];
+export const PHASE_CUES = [AUTO_AT.fires, AUTO_AT.verify, AUTO_AT.gate, AUTO_AT.rearmed];
+
 /** The run's phase at film time t. */
 export function phaseAt(t: number): RunPhase {
   if (t < AUTO_AT.fires) return "armed";

@@ -25,7 +25,8 @@ export const BOOT = {
 export const workerStatus = (which: "api" | "ui", t: number) => {
   const boot = BOOT[which];
   if (t < boot.prompt) return "starting";
-  if (which === "api" && t >= CUES.permissionAsk && t < CUES.permissionApproved) return "permission_blocked";
+  // Its turn ended on a question: idle, as the app shows an agent waiting on a reply, until the answer starts the next turn.
+  if (which === "api" && t >= CUES.question && t < CUES.answered) return "idle";
   return "working";
 };
 

@@ -311,16 +311,14 @@ describe("hero fly-through timeline", () => {
   });
 
   // A move carries windows: one leaving is taken off the side of the page by the pan, and fades only once it is nearly off the
-  // box; one arriving comes in from the side, whole. Nothing dissolves in place while most of it is on screen, except where a
-  // window stands in front of another and the two hand over in place (the phone and the workers it sits beside).
-  const IN_PLACE = new Set<SurfaceId>(["phone", "pairA", "pairB"]);
+  // box; one arriving comes in from the side, whole. Nothing dissolves in place while much of it is on screen: while a window
+  // fades, appearing or leaving, at most 30% of its width is inside the box.
   for (const mobile of [false, true]) {
     test(`moves carry windows rather than dissolve them on screen${mobile ? " (mobile)" : ""}`, () => {
       const { w } = mobile ? STAGE_SIZE.mobile : STAGE_SIZE.desktop;
       const bad: string[] = [];
       for (let i = 0; i + 1 < CAMERA.length; i++) {
         const [a, b] = [CAMERA[i], CAMERA[i + 1]];
-        if ([...a.sees, ...b.sees].every((id) => IN_PLACE.has(id))) continue;
         for (let t = a.t1; t < b.t0; t += 1 / 30) {
           const f = frame(t, mobile);
           const { pose } = cameraAt(t, mobile);
@@ -329,8 +327,7 @@ describe("hero fly-through timeline", () => {
             if (o <= 0.02 || o >= 0.98) continue;
             const xs = [[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([lx, ly]) => project(pose, localToWorld(sf.id, (lx * sf.w) / 2, (ly * sf.h) / 2), mobile)!.x);
             const inBox = Math.max(0, Math.min(w, Math.max(...xs)) - Math.max(0, Math.min(...xs))) / (Math.max(...xs) - Math.min(...xs));
-            // Half shown at most once a third of it is off the box, and only a trace while most of it is on.
-            if ((o < 0.5 && inBox > 0.34) || inBox > 0.6) bad.push(`${sf.id} at ${t.toFixed(2)}: opacity ${o.toFixed(2)} with ${(inBox * 100).toFixed(0)}% in the box`);
+            if (inBox > 0.3) bad.push(`${sf.id} at ${t.toFixed(2)}: opacity ${o.toFixed(2)} with ${(inBox * 100).toFixed(0)}% in the box`);
           }
         }
       }

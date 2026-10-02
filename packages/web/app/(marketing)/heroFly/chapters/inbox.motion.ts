@@ -1,10 +1,11 @@
 /**
  * Chapter 1, Inbox: the agent icons ripple down the column, the lead's row
- * drops in on top and the rows under it glide down to make room; the workers
- * (chapter 3's cues) land the same way under the lead.
+ * drops in on top and the rows under it glide down as it opens its room
+ * (FilmGrow in ./inbox.tsx); the workers (chapter 3's cues) land the same way
+ * under the lead.
  */
 
-import { DESK, glideOver, INBOX_ORDER, LIST_ROW_H } from "../fixtures/desk";
+import { DESK, INBOX_ORDER } from "../fixtures/desk";
 import { CUES } from "../fixtures/story";
 import type { ChapterMotion } from "./contract";
 
@@ -23,10 +24,6 @@ export const motion: ChapterMotion = {
       { id: "inbox.row:ui", cue: CUES.workerRowB + 0.45, dur: 0.45, preset: "pulse" as const, s: 0.04 },
       // 13 Anywhere: the API worker's row (the cloud host's) is opened.
       { id: "inbox.row:api", cue: CUES.remoteOpen - 0.15, dur: 0.4, preset: "pulse" as const, s: 0.03 },
-      // The rows under each newcomer glide down over its height as it mounts.
-      ...glideOver("inbox.rows", CUES.leadLands, -LIST_ROW_H.lead, 0.6),
-      ...glideOver("inbox.rows", CUES.workerRowA, -LIST_ROW_H.cloudWorker, 0.6),
-      ...glideOver("inbox.rows", CUES.workerRowB, -LIST_ROW_H.worker, 0.6),
     ],
   },
 };

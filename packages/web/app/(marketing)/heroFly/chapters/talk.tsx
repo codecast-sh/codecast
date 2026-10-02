@@ -17,7 +17,7 @@ import { WORKERS } from "../fixtures/fanout";
 import { FORK_ANSWER, FORK_CHILDREN, FORK_PROMPT, FORK_REPLAY, forkRow, MAIN_LINE, MESSAGE, REPLY, REPLY_RESULT, REPLY_SEND, SEND, SEND_RESULT } from "../fixtures/talk";
 import { PEOPLE, SESSIONS } from "../fixtures/story";
 import { fly, useFilmTime } from "../filmClock";
-import { FilmGrow, LiftedRow } from "../film";
+import { FilmGrow, FilmSwap, LiftedRow } from "../film";
 import { TALK_AT } from "./talk.motion";
 import type { PartProps } from "./contract";
 
@@ -29,10 +29,10 @@ const noop = () => {};
  */
 const NARROW_CARDS = "[&_[data-cc-session-msg]>div:first-child]:flex-wrap [&_[data-cc-session-msg]_.entity-ref]:whitespace-nowrap";
 const convLink = (id: string) => `/conversation/${id}`;
+const FORKED = [TALK_AT.forked];
 
 /** The API worker's side: its send, the reply that comes back, then your steer, which forks. */
 export function ApiSide({ now }: PartProps) {
-  const forked = useFilmTime((t) => t >= TALK_AT.forked);
   // Each entry opens its own room as it lands (FilmGrow), so the transcript above it rises rather than jumping.
   return (
     <div className={`px-3 pb-1 ${NARROW_CARDS}`}>
@@ -48,17 +48,23 @@ export function ApiSide({ now }: PartProps) {
       </FilmGrow>
       <FilmGrow at={TALK_AT.prompt}>
         <div {...fly("pairA/talk.prompt")} className="pt-1">
-          <UserPrompt
-            content={FORK_PROMPT}
-            timestamp={now - 5_000}
-            messageId="hero-m-fork"
-            messageUuid="hero-m-fork"
-            userName={PEOPLE.me.name}
-            avatarUrl={null}
-            forkChildren={forked ? FORK_CHILDREN : undefined}
-            onBranchSwitch={noop}
-            activeBranchId={null}
-            mainDivergentPreview={MAIN_LINE}
+          {/* The turn gains its branch strip as it forks: the forked turn dissolves in over the plain one as its height eases, so the transcript above rises. */}
+          <FilmSwap
+            cues={FORKED}
+            render={(step) => (
+              <UserPrompt
+                content={FORK_PROMPT}
+                timestamp={now - 5_000}
+                messageId="hero-m-fork"
+                messageUuid="hero-m-fork"
+                userName={PEOPLE.me.name}
+                avatarUrl={null}
+                forkChildren={step ? FORK_CHILDREN : undefined}
+                onBranchSwitch={noop}
+                activeBranchId={null}
+                mainDivergentPreview={MAIN_LINE}
+              />
+            )}
           />
         </div>
       </FilmGrow>

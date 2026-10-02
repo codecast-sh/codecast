@@ -11,6 +11,7 @@ import {
 } from "@codecast/shared/render/mobileSessionStyle";
 import { formatToolName, toolIcon, toolResultHint, toolSummary, type ToolCallLike, type ToolColorToken } from "@codecast/shared/render";
 import { ClaudeIcon, CursorIcon, GeminiIcon, GrokIcon, OpenAIIcon } from "./BrandIcons";
+import { formatModel } from "../lib/conversationProcessor";
 
 /**
  * The mobile app's session screen (packages/mobile/app/session/[id].tsx)
@@ -81,7 +82,7 @@ export function PhoneSessionMeta({ agentType, ago, live, model, branch, dot }: {
         </span>
         <span className="shrink-0 text-sol-text-muted" style={css(S.messageCountText)}>· {ago}</span>
         {live && (dot ?? <PhoneStatusDot color="#10b981" />)}
-        {model && <Chip color="var(--sol-cyan)" icon={<Cpu size={10} />}>{model}</Chip>}
+        {model && <Chip color="var(--sol-cyan)" icon={<Cpu size={10} />}>{formatModel(model)}</Chip>}
         {branch && <Chip color="var(--sol-green)" icon={<GitBranch size={10} />}>{branch}</Chip>}
       </div>
     </div>
@@ -125,7 +126,7 @@ export function PhoneMessage({ role, name, agentType, model, time, showHeader = 
             <span style={css({ ...S.agentDot, display: "block", background: agentTint(agentType) })} />
           )}
           <span className={user ? "text-sol-blue" : undefined} style={css({ ...S.bubbleRole, color: user ? undefined : "var(--sol-text-muted0)" })}>{label}</span>
-          {!user && model && <span className="text-sol-text-dim" style={css(S.modelBadge)}>{model}</span>}
+          {!user && model && <span className="text-sol-text-dim" style={css(S.modelBadge)}>{formatModel(model)}</span>}
           <span className="text-sol-text-dim" style={css(S.bubbleTime)}>{time}</span>
         </div>
       )}

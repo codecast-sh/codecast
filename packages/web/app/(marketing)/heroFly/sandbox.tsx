@@ -15,6 +15,11 @@
  *   location      a memory router of the hero's own at /inbox, so the views'
  *                 links and location reads never see or move the visitor's page
  *   team features all off, whatever the visitor's team turned on
+ *   relative time measured from `now`, the instant the fixtures are stamped
+ *                 against, so "2m ago" is the fixture's own offset however
+ *                 long the page has been open
+ *   label colours looked up, never claimed: a fixture's label names neither
+ *                 persist to localStorage nor shift the visitor's own colours
  *   navigation    link clicks cancelled, their handlers never run; clicks,
  *                 presses and keys stop here unless the target sits inside a
  *                 `data-hero-live` element (and is not in a link),
@@ -48,6 +53,8 @@ import { ThemeContext } from "@/components/ThemeProvider";
 import { PersonifyOverride } from "@/hooks/usePersonifyAll";
 import { EntityFixtureContext } from "@/lib/entityDisplay";
 import { HoverCardsOff } from "@/lib/hoverCardsOff";
+import { LabelColorsReadOnly } from "@/lib/labelColors";
+import { RelativeTimeNow } from "@/lib/conversationFormat";
 import { RevealInBandCtx } from "@/lib/revealHost";
 import { TeamFeatureOverride } from "@/lib/teamFeatures";
 import { TaskActiveSessionsOverride } from "@/components/tasks/taskActiveSession";
@@ -126,7 +133,7 @@ function HeroRouter({ children }: { children: ReactNode }) {
   );
 }
 
-export function HeroSandbox({ children, fallback = null, className }: { children: ReactNode; fallback?: ReactNode; className?: string }) {
+export function HeroSandbox({ children, fallback = null, className, now = null }: { children: ReactNode; fallback?: ReactNode; className?: string; now?: number | null }) {
   const rootRef = useRef<HTMLDivElement>(null);
   // Views mount and re-render as the film moves, so every element that arrives (or gets a tabindex back) leaves the tab order as it does.
   useWatchEffect(() => {
@@ -162,6 +169,8 @@ export function HeroSandbox({ children, fallback = null, className }: { children
             <EntityFixtureContext.Provider value={HERO_ENTITIES}>
               <RevealInBandCtx.Provider value={true}>
               <HoverCardsOff.Provider value={true}>
+              <LabelColorsReadOnly.Provider value={true}>
+              <RelativeTimeNow.Provider value={now}>
               <TaskActiveSessionsOverride.Provider value={NO_ACTIVE_SESSIONS}>
                 <HeroRouter>
                   <div
@@ -197,6 +206,8 @@ export function HeroSandbox({ children, fallback = null, className }: { children
                   </div>
                 </HeroRouter>
               </TaskActiveSessionsOverride.Provider>
+              </RelativeTimeNow.Provider>
+              </LabelColorsReadOnly.Provider>
               </HoverCardsOff.Provider>
               </RevealInBandCtx.Provider>
             </EntityFixtureContext.Provider>

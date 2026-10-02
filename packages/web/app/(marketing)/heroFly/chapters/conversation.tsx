@@ -6,8 +6,8 @@
  * Before the lead takes the selection the pane shows the session that was
  * open; it cross-fades to the lead at `leadSelected`. The transcript is
  * anchored to the composer: each entry (chapter 3's spawns included) mounts
- * at its cue and drops in, and the feed glides up by its height
- * (glideOver in ../fixtures/desk.ts).
+ * at its cue, opens its own measured room (FilmGrow) so the feed above it
+ * rises, and drops in.
  */
 
 import type { ReactNode } from "react";
@@ -18,6 +18,7 @@ import { ComposerSendButton, ComposerShell, ComposerTextarea, ComposerTextRow } 
 import { ViewerFaces } from "@/components/presence/ViewerFaces";
 import { typed } from "../timeline";
 import { fly, useFilmTime } from "../filmClock";
+import { FilmGrow } from "../film";
 import { DESK, leadMessages, STEER } from "../fixtures/desk";
 import { ENTRIES, PREV, VIEWER, workingLabel, type Entry } from "../fixtures/conversation";
 import { CUES, PEOPLE, SESSIONS } from "../fixtures/story";
@@ -51,7 +52,6 @@ function EntryView({ e, now, done }: { e: Entry; now: number; done: boolean }) {
 /** The header: the open session, then the lead with its status, model, age and who is looking. */
 export function LeadHeader({ now }: PartProps) {
   const messages = useFilmTime(leadMessages);
-  const status = useFilmTime((t) => (t >= DESK.thinking && t < DESK.edit ? "thinking" : "working"));
   return (
     <div className="relative h-full bg-sol-bg">
       <div {...fly("desk/conversation.prevHead")} className="absolute inset-0">
@@ -67,7 +67,8 @@ export function LeadHeader({ now }: PartProps) {
       <div {...fly("desk/conversation.head")} className="absolute inset-0 bg-sol-bg">
         <ConversationHeaderBar
           title={<ConversationHeaderTitle text={SESSIONS.lead.title} />}
-          status={<AgentStatusPill agentStatus={status} />}
+          // One status for the turn, the one the working line under the transcript shows: what it is doing goes in that line's label ("thinking", "editing retry.ts"), never a second status here.
+          status={<AgentStatusPill agentStatus="working" />}
           facts={<>
             <ConversationMetadata agentType={SESSIONS.lead.agent} model={VIEWER.model} />
             <ConversationAgeFacts startedAt={now - 20_000} messageCount={messages} />
@@ -82,7 +83,6 @@ export function LeadHeader({ now }: PartProps) {
 
 /** The transcript: the open session's tail, then every entry of the lead's. */
 export function LeadTranscript({ now }: PartProps) {
-  const landed = useFilmTime((t) => ENTRIES.filter((e) => t >= e.cue).length);
   const testsDone = useFilmTime((t) => t >= CUES.testsPass);
   const prevGone = useFilmTime((t) => t >= DESK.paneSwap + 0.6);
   return (
@@ -95,10 +95,12 @@ export function LeadTranscript({ now }: PartProps) {
         </div>
       )}
       <div {...fly("desk/conversation.feed")} className="pb-2">
-        {ENTRIES.slice(0, landed).map((e) => (
-          <div key={e.key} {...fly(`desk/conversation.entry:${e.key}`)} data-hero-live={e.live ? "" : undefined}>
-            <Row><EntryView e={e} now={now} done={testsDone} /></Row>
-          </div>
+        {ENTRIES.map((e) => (
+          <FilmGrow key={e.key} at={e.cue} dur={0.7}>
+            <div {...fly(`desk/conversation.entry:${e.key}`)} data-hero-live={e.live ? "" : undefined}>
+              <Row><EntryView e={e} now={now} done={testsDone} /></Row>
+            </div>
+          </FilmGrow>
         ))}
       </div>
     </div>
