@@ -79,9 +79,12 @@ export type OrgLogFields = {
   risks?: unknown;
   /** The projects kind: what each entry of the change created or folded. */
   projects?: Array<{ op: "create"; project_id: string; title: string } | { op: "merge"; from_id: string; into_id: string }>;
-  // An initiative: who drives it, and the projects that carry it (ids, in order).
+  // An initiative: who drives it, the projects that carry it (ids, in order),
+  // the top level goal it feeds and the numbers it is read against.
   owner?: OrgPartyRef | null;
   project_ids?: string[] | null;
+  parent_initiative_id?: string | null;
+  metrics?: Array<{ key: string; name: string; target: string }> | null;
   // A session.
   parent?: OrgSessionParent;
 };
@@ -364,11 +367,16 @@ export function orgLogRowChange(row: OrgLogRow): OrgChange | null {
       return added.length ? { kind: "initiative_projects", initiative: row.subject.short_id ?? row.subject.label, title: row.subject.label, projects: added.map((id) => nameOf(row, id, id)) } : null;
     }
     case "initiative_owner": return { kind: "initiative_owner", initiative: row.subject.short_id ?? row.subject.label, title: row.subject.label, owner: partyName(row, row.after.owner) ?? "" };
+    case "initiative_shape": return {
+      kind: "initiative_shape", initiative: row.subject.short_id ?? row.subject.label, title: row.subject.label,
+      ...("parent_initiative_id" in row.after ? { parent: row.after.parent_initiative_id ? nameOf(row, row.after.parent_initiative_id, row.after.parent_initiative_id) : null } : {}),
+      ...("metrics" in row.after ? { metrics: (row.after.metrics ?? []).map((m) => ({ name: m.name, target: m.target })) } : {}),
+    };
     default: return null;
   }
 }
 
-const EDIT_WORDS: Partial<Record<keyof OrgLogFields, string>> = { name: "name", handle: "handle", avatar: "face", charter: "charter", tenure: "tenure", review_backend: "reviewer", status: "status", owner: "owner", project_ids: "projects" };
+const EDIT_WORDS: Partial<Record<keyof OrgLogFields, string>> = { name: "name", handle: "handle", avatar: "face", charter: "charter", tenure: "tenure", review_backend: "reviewer", status: "status", owner: "owner", project_ids: "projects", parent_initiative_id: "parent goal", metrics: "metrics" };
 
 /** The sentence of a kind the proposal vocabulary does not have. */
 function logOnlySentence(row: OrgLogRow): string {
@@ -442,7 +450,7 @@ export const ORG_INVERSE_KIND: Record<OrgLogKind, OrgLogKind> = {
   move: "move", scope: "scope", budget: "budget", trust: "trust", role_edit: "role_edit",
   lead: "lead", session: "session",
   // The goals (I1, revised): a set goal is cancelled, never erased; the other two restore their fields.
-  initiative: "initiative_cancel", initiative_cancel: "initiative", initiative_projects: "initiative_projects", initiative_owner: "initiative_owner",
+  initiative: "initiative_cancel", initiative_cancel: "initiative", initiative_projects: "initiative_projects", initiative_owner: "initiative_owner", initiative_shape: "initiative_shape",
   file: "file", project_meta: "project_meta", plan_status: "plan_status", task_status: "task_status", project_status: "project_status",
   // Hiring from a template (org-hire.md): authority restores its list; a hire
   // and an upgrade are recorded, and their way back is the host step.

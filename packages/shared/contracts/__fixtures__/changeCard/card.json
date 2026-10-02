@@ -1,0 +1,122 @@
+{
+  "cause": {
+    "task": "ct-56301",
+    "title": "Session titles repeat the first message instead of naming the work",
+    "signals": 14,
+    "first_seen": 1790604000000,
+    "sources": [
+      "eval drift",
+      "judge finding",
+      "user report"
+    ]
+  },
+  "goal": {
+    "ref": "in-12.m2",
+    "name": "Inbox scan time under 20 seconds",
+    "why": "A title that repeats the opener makes every row in the inbox look the same, so people open sessions to find out what they are"
+  },
+  "wrong": "Session titles copy the first message, so the inbox fills with rows like \"hey can you look at\" and people open each one to learn what it is.",
+  "change": "The title prompt now names the work in a short imperative phrase, ignoring greetings and pasted errors.",
+  "proof": {
+    "before": [
+      {
+        "name": "titlePrompt.test.ts · greeting is never the title",
+        "ok": false,
+        "detail": "got \"Hey can you look at why…\""
+      },
+      {
+        "name": "title · opener is a greeting",
+        "ok": false,
+        "detail": "fails on origin/main"
+      },
+      {
+        "name": "title · pasted stack trace",
+        "ok": false,
+        "detail": "fails on origin/main"
+      },
+      {
+        "name": "title · long opener with a plan",
+        "ok": false,
+        "detail": "fails on origin/main"
+      }
+    ],
+    "after": [
+      {
+        "name": "titlePrompt.test.ts · greeting is never the title",
+        "ok": true,
+        "detail": "12 of 12 pass"
+      },
+      {
+        "name": "title · opener is a greeting",
+        "ok": true,
+        "detail": "passes on the branch"
+      },
+      {
+        "name": "title · pasted stack trace",
+        "ok": true,
+        "detail": "passes on the branch"
+      },
+      {
+        "name": "title · long opener with a plan",
+        "ok": true,
+        "detail": "passes on the branch"
+      }
+    ]
+  },
+  "examples": [
+    {
+      "input": "hey can you look at why the deploy keeps failing on railway, it started after the bun upgrade",
+      "before": "Hey can you look at why the deploy keeps failing",
+      "after": "Railway deploy fails after bun upgrade",
+      "note": "Names the problem and where it happens; drops the greeting."
+    },
+    {
+      "input": "TypeError: Cannot read properties of undefined (reading 'short_id')\n    at TaskRow (TaskRow.tsx:88)\nthis shows up when I open the board",
+      "before": "TypeError: Cannot read properties of undefined",
+      "after": "Task board crashes on a row without a short id",
+      "note": "Says what breaks for the person, not the exception text."
+    },
+    {
+      "input": "I want to move the decision queue to the store. First read how it loads today, then propose the smallest change.",
+      "before": "I want to move the decision queue to the store",
+      "after": "Move the decision queue into the store",
+      "note": "Imperative and short, the way the inbox reads."
+    }
+  ],
+  "checks": [
+    {
+      "name": "Verify",
+      "ok": true,
+      "detail": "cast check convex: 0 errors. bun test convex/lib/titlePrompt.test.ts: 12 pass."
+    },
+    {
+      "name": "Eval",
+      "ok": true,
+      "detail": "Session title: separated better (p 0.004)"
+    },
+    {
+      "name": "Review",
+      "ok": true,
+      "detail": "Diff matches the cause; rewrites the instruction at its own site, no filter added."
+    }
+  ],
+  "diff": {
+    "files": 2,
+    "added": 18,
+    "removed": 7,
+    "pr": "https://github.com/codecast-sh/codecast/pull/912"
+  },
+  "risk": {
+    "class": "low",
+    "reason": "One prompt, one surface, no schema or code path changes."
+  },
+  "recommend": {
+    "verdict": "ship",
+    "why": "All three proven misses now pass, nothing regressed, and the change is one prompt."
+  },
+  "cost": {
+    "tokens": 412000,
+    "usd": 1.96,
+    "minutes": 38
+  }
+}

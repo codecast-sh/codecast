@@ -1,0 +1,7 @@
+{
+  "wrong": "Session titles copy the first message, so the inbox fills with rows like \"hey can you look at\" and people open each one to learn what it is.",
+  "change": "The title prompt now names the work in a short imperative phrase, ignoring greetings and pasted errors.",
+  "recommend": { "verdict": "ship", "why": "All three proven misses now pass, nothing regressed, and the change is one prompt." },
+  "diff": { "files": 2, "added": 18, "removed": 7 },
+  "cost": { "tokens": 412000, "minutes": 38, "usd": 1.12 }
+}

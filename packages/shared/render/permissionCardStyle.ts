@@ -1,10 +1,9 @@
 /**
- * The mobile permission card's look, as plain values both renderers accept:
- * the React Native card feeds it to StyleSheet.create, and the web
- * PhonePermissionCard (the marketing hero's phone) spreads it into inline
- * styles. Keys are limited to ones React Native and React DOM share, so
- * padding is spelled per side and numbers are pixels on the web.
- * `fontFamily` names the RN face; the web card substitutes its own mono.
+ * The mobile permission card's look, as plain values: the React Native card
+ * (mobile/components/PermissionCard.tsx) feeds it to StyleSheet.create. Keys
+ * are limited to ones React Native and React DOM share, so padding is spelled
+ * per side and numbers are pixels, and a web renderer can spread it into
+ * inline styles. `fontFamily` names the RN face.
  */
 export const PERMISSION_CARD_STYLE = {
   container: {
