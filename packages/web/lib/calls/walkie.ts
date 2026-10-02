@@ -38,7 +38,8 @@ import { humanizeConvexError } from "@codecast/shared/contracts";
 import { useInboxStore } from "../../store/inboxStore";
 import { focusExistingHuddle, huddleInOtherWindow } from "./huddleWindow";
 import { CHAT_CHANNEL_STUB_PREFIX, dmOpenInFlight, newChatMessageClientId, resolveChannelStubId } from "../../store/chatSlice";
-import { bindWalkieUpgrade, getCallTiles, joinCall, leaveCall, mediaFailureReason, setCamera, setMuted } from "./callManager";
+import { bindWalkieUpgrade, getCallTiles, getRoom, joinCall, leaveCall, mediaFailureReason, setCamera, setMuted } from "./callManager";
+import { guestMediaOf, type GuestMedia } from "./callMedia";
 import {
   getDesktopWindowRole,
   isVoiceHost,
@@ -283,6 +284,7 @@ export function publishVoiceMirror(): void {
       camera: !!call?.camera,
       speaking: call?.speaking ?? [],
       cameras: cameraIdentities(),
+      guests: guestMedia(),
     },
   });
 }
@@ -394,7 +396,14 @@ function callState(): CallState {
  * else — where the local slice is idle for as long as the host holds the
  * microphone, and a key reading it would call every burst "dropped".
  */
-export function walkieCallState(): CallState & { micDenied: boolean; camera: boolean; speaking: string[]; cameras: string[] } {
+export function walkieCallState(): CallState & {
+  micDenied: boolean;
+  camera: boolean;
+  speaking: string[];
+  cameras: string[];
+  /** Null when the host is too old to say (draw guests as the server lists them). */
+  guests: GuestMedia[] | null;
+} {
   if (voiceHostElsewhere() && mirroredCall) {
     return {
       roomKey: mirroredCall.roomKey,
@@ -404,6 +413,7 @@ export function walkieCallState(): CallState & { micDenied: boolean; camera: boo
       camera: !!mirroredCall.camera,
       speaking: mirroredCall.speaking ?? EMPTY_SPEAKING,
       cameras: mirroredCall.cameras ?? EMPTY_SPEAKING,
+      guests: mirroredCall.guests ?? null,
     };
   }
   const call = useInboxStore.getState().call as any;
@@ -415,6 +425,7 @@ export function walkieCallState(): CallState & { micDenied: boolean; camera: boo
     camera: !!call?.camera,
     speaking: call?.speaking ?? EMPTY_SPEAKING,
     cameras: cameraIdentities(),
+    guests: guestMedia(),
   };
 }
 
@@ -426,6 +437,21 @@ function cameraIdentities(): string[] {
   const out: string[] = [];
   for (const t of getCallTiles()) if (t.kind === "camera" && !out.includes(t.identity)) out.push(t.identity);
   return out.length ? out : EMPTY_SPEAKING;
+}
+
+/** The room's guests in this window's media, read when the tiles say the
+ *  media moved (a participant, a mute). The same list until it changes, so a
+ *  signature or a memo built on it holds still between moves. */
+let guestMediaCache: { tiles: unknown; list: GuestMedia[] } = { tiles: null, list: [] };
+function guestMedia(): GuestMedia[] {
+  const tiles = getCallTiles();
+  if (guestMediaCache.tiles === tiles) return guestMediaCache.list;
+  const next = guestMediaOf(getRoom());
+  const same =
+    next.length === guestMediaCache.list.length &&
+    next.every((g, i) => g.identity === guestMediaCache.list[i].identity && g.muted === guestMediaCache.list[i].muted);
+  guestMediaCache = { tiles, list: same ? guestMediaCache.list : next };
+  return guestMediaCache.list;
 }
 
 function inRoom(roomKey: string): boolean {

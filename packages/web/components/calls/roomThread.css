@@ -727,12 +727,11 @@ button.rt-event-agent:hover {
   padding-left: 4px;
   padding-right: 4px;
 }
-.rt .ch-composer-foot {
+.rt-attach {
   position: absolute;
   left: 12px;
   bottom: 6px;
-  min-height: 0;
-  padding: 0;
+  display: flex;
 }
 .rt .ch-composer-attach {
   width: 24px;

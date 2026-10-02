@@ -4,6 +4,7 @@
 // the primary, so they never win the pick.
 
 import type { CcUsage } from "@codecast/convex/convex/ccAccountsShared";
+import { cloudAgentProviderOfConversation } from "@codecast/shared/contracts";
 import { profileIsCurrentLogin, profileIsFleetAccount } from "./machineAccountSwitch";
 
 export type AccountChipProfile = {
@@ -53,6 +54,17 @@ export function claudeChipLabel(
     return local || activeEmail;
   }
   return profiles[0]?.name ?? "claude";
+}
+
+/**
+ * The agent type whose plan meter a session draws on. A cloud session billed
+ * to an API key (the OpenAI Agents API) counts toward no plan's windows, so it
+ * names none and the chip keeps what it last showed; Codex Cloud runs on the
+ * ChatGPT plan, so it shows the Codex meter.
+ */
+export function planAgentType(row: { agent_type?: string | null; session_id?: string | null; model?: string | null } | undefined): string | null {
+  if (!row?.agent_type) return null;
+  return cloudAgentProviderOfConversation(row.agent_type, row.session_id, row.model)?.keyProvider ? null : row.agent_type;
 }
 
 export function accountChipProvider(opts: {

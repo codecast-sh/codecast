@@ -46,6 +46,7 @@ import { channelDisplayName, dmCounterpart, memberName } from "../lib/chatViews"
 import { memberAvatarUrl, memberDisplayName } from "../lib/liveEntities";
 import { useOrgRoles } from "../hooks/useOrgRoles";
 import { useRolesAndPeopleOptions } from "../hooks/useRolesAndPeopleOptions";
+import { isPerson } from "@codecast/shared/team/memberKind";
 
 const NO_MEMBERS: any[] = [];
 import { compactDuration, teammateWhereabouts, type TeammateWhereabouts } from "./presence/memberPresence";
@@ -70,6 +71,7 @@ import { AgentTypeIcon } from "./AgentTypeIcon";
 import { openForwardToChat } from "../lib/forwardToChat";
 import { settleComposerAttachments } from "../lib/draftImages";
 import type { ChatAttachment } from "../store/chatSlice";
+import { ComposerAttachButton } from "./chat/ComposerAttachButton";
 import "./chat/chat.css";
 import "./CommandPalette.css";
 import { PalettePickPreview } from "./PalettePickPreview";
@@ -100,6 +102,7 @@ import { copyToClipboard, shareOrigin } from "../lib/utils";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import {
   Circle,
+  Compass,
   CircleDot,
   CircleDotDashed,
   CheckCircle2,
@@ -152,7 +155,6 @@ import {
   PictureInPicture2,
   Users,
   Sparkles,
-  ImagePlus,
   LayoutDashboard,
   Plus,
   RefreshCw,
@@ -162,7 +164,7 @@ import {
   Laptop,
   Globe,
 } from "lucide-react";
-import { ChiefOfStaffFace } from "./anchor/AnchorIdentity";
+import { HeadOfPeopleFace } from "./anchor/AnchorIdentity";
 import { BROWSER_ROUTE, displayHost } from "../lib/browserPane";
 import { typedAddress } from "../lib/browserPaneLinks";
 import { openBeside, openBrowserPane } from "../lib/stage";
@@ -173,7 +175,7 @@ import { pickWhoRows, type PalettePickKind, type PalettePickTarget } from "../li
 const api = _api as any;
 import { SESSION_SNOOZE_CHOICES, sessionSnoozeUntil, type SessionSnoozeKey } from "@codecast/shared/contracts";
 
-type ActionMode = "device" | "snooze" | "rename" | "character" | "project" | "project_status" | "deadline" | "trigger_cancel" | "trigger_delete" | "status" | "priority" | "labels" | "assign" | "type" | "plan_status" | "agent_run" | "agent_switch" | "agent_fork" | "agent_handoff" | "bucket" | "model" | "view" | "parent" | "layout_save" | "layout_update" | "layout_rename" | "layout_delete";
+type ActionMode = "device" | "snooze" | "rename" | "character" | "project" | "project_status" | "deadline" | "trigger_cancel" | "trigger_delete" | "session_delete" | "status" | "priority" | "labels" | "assign" | "type" | "plan_status" | "agent_run" | "agent_switch" | "agent_fork" | "agent_handoff" | "bucket" | "model" | "view" | "parent" | "layout_save" | "layout_update" | "layout_rename" | "layout_delete";
 
 // Modes that act on the WORKSPACE rather than on selected rows: they open with
 // no target and show no entity header. Everything else needs something picked.
@@ -242,6 +244,7 @@ const NAV_PAGES: ReadonlyArray<{
   { label: "Search", path: "/search", icon: "search", keywords: "find query" },
   { label: "Settings", path: "/settings", icon: "settings", keywords: "preferences config profile general" },
   { label: "Workflows", path: "/routines", icon: "workflow", keywords: "orchestration runs graph dot gates routines", secondary: true },
+  { label: "Line", path: "/line", icon: "workflow", keywords: "the line signals causes build cards watch shipped factory throughput", secondary: true },
   { label: "Live Sessions", path: "/sessions", icon: "session", keywords: "running machines devices liveness", secondary: true },
   { label: "Notifications", path: "/notifications", icon: "bell", keywords: "alerts updates", secondary: true },
   { label: "Team Settings", path: "/settings/team", icon: "settings", keywords: "members invite workspace", secondary: true },
@@ -269,7 +272,7 @@ const GLOBAL_COMMANDS: ReadonlyArray<{
    *  wall as its whole view and needs no command to open one. */
   hidden?: () => boolean;
 }> = [
-  { action: "anchor.toggle", label: "Talk to the workspace's agent", icon: ChiefOfStaffFace, keywords: "agent assistant bot standing member ask personal team chief of staff", hidden: () => !workspaceHasFeatureNow("org") },
+  { action: "anchor.toggle", label: "Talk to the workspace's agent", icon: HeadOfPeopleFace, keywords: "agent assistant bot standing member ask personal team head of people", hidden: () => !workspaceHasFeatureNow("org") },
   { action: "people.wall", label: "The team — hold a face to talk", icon: Users, keywords: "people wall faces who is around hold to talk walkie everyone roster", hidden: isPeopleWindow },
   { action: "terminal.toggle", label: "Toggle terminal", icon: Terminal, keywords: "shell console panel tmux" },
   { action: "ui.zenToggle", label: "Toggle zen mode", icon: Focus, keywords: "focus minimal distraction free" },
@@ -290,6 +293,7 @@ const GLOBAL_COMMANDS: ReadonlyArray<{
   { action: "pane.prev", label: "Focus previous pane", icon: StageNextGlyph, keywords: "split pane focus cycle", hidden: () => !stageIsSplit() },
   { action: "sidebar.toggleComments", label: "Toggle comments rail", icon: MessageSquare, keywords: "discussion thread comments" },
   { action: "ui.toggleShortcutsHelp", label: "Keyboard shortcuts help", icon: Keyboard, keywords: "keys bindings hotkeys cheatsheet" },
+  { action: "ui.openTours", label: "Tours: learn a feature on the real page", icon: Compass, keywords: "tour guide walkthrough onboarding learn how does this work help org inbox" },
 ];
 
 function getShortPath(p: string): string {
@@ -589,6 +593,7 @@ export function ActionSubmenu({
       return search.trim() ? [{ key: search.trim(), label: mode === "rename" ? `Rename to “${search.trim()}”` : `Set target date to ${search.trim()}`, icon: Pencil }] : [];
     }
     if (mode === "trigger_cancel" || mode === "trigger_delete") return [{ key: "confirm", label: mode === "trigger_delete" ? "Confirm delete trigger" : "Confirm cancel trigger", icon: Trash2 }];
+    if (mode === "session_delete") return [{ key: "confirm", label: targets.length > 1 ? `Delete ${targets.length} sessions and their messages for good` : "Delete this session and its messages for good", icon: Trash2 }];
     if (mode === "project_status") return ["active", "planning", "paused", "done"].filter(key => key.includes(q)).map(key => ({ key, label: key[0].toUpperCase() + key.slice(1), active: target?.status === key, icon: CircleDot }));
     if (mode === "project") {
       const rows = workspaceProjects;
@@ -846,6 +851,13 @@ export function ActionSubmenu({
     if (!target) return;
     const count = targets.length;
     const store = useInboxStore.getState();
+    if (mode === "session_delete") {
+      for (const row of targets) store.deleteSession(row._id);
+      toast.success(count > 1 ? `Deleted ${count} sessions` : "Session deleted");
+      if (count > 1) useInboxSelection.getState().clear();
+      onClose();
+      return;
+    }
     if (mode === "rename" || mode === "deadline" || mode === "project" || mode === "project_status" || mode === "trigger_cancel" || mode === "trigger_delete") {
       if (mode === "trigger_delete") store.deleteTrigger(target._id);
       else if (mode === "trigger_cancel") store.triggerAction(target._id, "cancel");
@@ -1148,6 +1160,7 @@ export function ActionSubmenu({
     mode === "project" ? "Move to project…" :
     mode === "project_status" ? "Change project status…" :
     mode === "trigger_delete" ? "Delete trigger" :
+    mode === "session_delete" ? "Delete session: gone for you and your team, cannot be undone" :
     mode === "trigger_cancel" ? "Cancel trigger" :
     mode === "status" ? "Change status..." :
     mode === "priority" ? "Set priority..." :
@@ -1502,7 +1515,6 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   const [pickChosen, setPickChosen] = useState<{ target: PalettePickTarget; query: string } | null>(null);
   const pickConfirmRef = useRef<HTMLDivElement>(null);
   const pickDropRef = useRef<((files: File[]) => void) | null>(null);
-  const pickPickerRef = useRef<HTMLInputElement>(null);
   const closePalette = useInboxStore((s) => s.closePalette);
   const openCreateModal = useInboxStore((s) => s.openCreateModal);
 
@@ -1784,7 +1796,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     if (pickingChannels) {
       for (const m of members) {
         const mid = m?._id ? String(m._id) : "";
-        if (!mid || mid === viewerId || dmPartners.has(mid)) continue;
+        if (!mid || mid === viewerId || dmPartners.has(mid) || !isPerson(m)) continue;
         const label = memberName(m);
         if (!label) continue;
         const s = matchScore(label, q);
@@ -2096,7 +2108,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     if (!targets.length) return;
     const target = targets[0] as any;
 
-    if (["device", "snooze", "status", "priority", "labels", "assign", "type", "plan_status", "agent_run", "agent_switch", "agent_fork", "agent_handoff", "rename", "project", "project_status", "deadline", "trigger_cancel", "trigger_delete", "bucket", "model", "parent", "character"].includes(actionKey)) {
+    if (["device", "snooze", "status", "priority", "labels", "assign", "type", "plan_status", "agent_run", "agent_switch", "agent_fork", "agent_handoff", "rename", "project", "project_status", "deadline", "trigger_cancel", "trigger_delete", "session_delete", "bucket", "model", "parent", "character"].includes(actionKey)) {
       setActionSearch("");
       setEnteredViaRoot(true);
       setActionMode(actionKey as ActionMode);
@@ -2389,7 +2401,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
               setPickChosen(null);
             }}
           >
-            <Suspense fallback={<div className="h-10" />}>
+            <Suspense fallback={<div className="h-[76px]" />}>
               <PaletteMessageInput
                 key={PALETTE_PICK_DRAFT}
                 conversationId={PALETTE_PICK_DRAFT}
@@ -2403,31 +2415,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                   const attachments = await settleComposerAttachments(images);
                   sendPick(text, attachments);
                 }}
+                composerFoot={<ComposerAttachButton dropRef={pickDropRef} />}
               />
             </Suspense>
-            <div className="ch-composer-foot">
-              <button
-                type="button"
-                className="ch-composer-attach"
-                title="Attach an image"
-                aria-label="Attach an image"
-                onClick={() => pickPickerRef.current?.click()}
-              >
-                <ImagePlus className="w-3.5 h-3.5" />
-              </button>
-              <input
-                ref={pickPickerRef}
-                type="file"
-                accept="image/*"
-                multiple
-                className="hidden"
-                onChange={(e) => {
-                  const files = Array.from(e.target.files ?? []);
-                  if (files.length) pickDropRef.current?.(files);
-                  e.target.value = "";
-                }}
-              />
-            </div>
           </div>
         </div>
         <div className="px-3 py-3 flex items-center justify-between">
@@ -2826,6 +2816,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
               <PaletteSearchResultRow
                 key={`search-${result.conversationId}`}
                 result={result}
+                query={debouncedQuery}
                 onSelect={() => chooseSession(
                   {
                     _id: result.conversationId,
@@ -3080,6 +3071,17 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
             <FileText className="w-4 h-4 text-sol-text-dim flex-shrink-0" />
             <span className="truncate flex-1">Create Document</span>
           </CommandPrimitive.Item>
+          {chatOn && (
+            <CommandPrimitive.Item
+              key="create-channel"
+              value="Create channel new chat room"
+              onSelect={() => { closePalette(); openCreateModal('chat'); }}
+              className={itemClass}
+            >
+              <Hash className="w-4 h-4 text-sol-cyan flex-shrink-0" />
+              <span className="truncate flex-1">Create Channel</span>
+            </CommandPrimitive.Item>
+          )}
           {callsOn && (
             <CommandPrimitive.Item
               key="create-huddle"

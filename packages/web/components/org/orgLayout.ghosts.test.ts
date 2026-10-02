@@ -218,8 +218,8 @@ describe("ghostsFor", () => {
       expect(other.session.title).toBe("Offered session");
     }
     // An adopt naming a role the same proposal creates hangs under that stub.
-    const role = change({ kind: "role", name: "Chief of Staff", handle: "chief-of-staff" });
-    const adopt = change({ kind: "adopt", handle: "chief-of-staff", conversation: "jx7abcd" });
+    const role = change({ kind: "role", name: "Head of People", handle: "head-of-people" });
+    const adopt = change({ kind: "adopt", handle: "head-of-people", conversation: "jx7abcd" });
     const both = lay([role, adopt]);
     expect(both.edges.find((e) => e.target === sessionNodeId(adopt._id))?.source).toBe(roleNodeId(role._id));
   });

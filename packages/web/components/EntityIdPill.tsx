@@ -15,6 +15,7 @@ import {
   Folder,
   Flag,
   Network,
+  Phone,
   Signpost,
   Check,
   Zap,
@@ -31,6 +32,7 @@ import {
   parseEntityUrl,
   parsePublishedPageUrl,
   parseClaudeArtifactUrl,
+  parseLinkPreviewUrl,
   parseMessageRefUrl,
   isEntityId,
   entityMentionRegex,
@@ -38,6 +40,7 @@ import {
   CONTEXTUAL_PR_REF_PREFIX,
   parseContextualPrRef,
   parseRepoObjectId,
+  parseCallRef,
   repoObjectId,
   repoObjectGitHubUrl,
   type EntityType,
@@ -45,8 +48,8 @@ import {
 import { isOnThreadRoute, openSessionAtMessage } from "../lib/openSessionAtMessage";
 import { SharedMessageCard, SharedMessagePill } from "./SharedMessageCard";
 import { AuthorAvatar, DiffStat, DottedRow, TaskPeople, type DottedPart } from "./entityDisplay";
+import { taskPriorityBadge } from "../lib/taskPriority";
 import {
-  PRIORITY_CONFIG,
   STATUS_COLOR,
   STATUS_LABEL,
   TYPE_LABEL,
@@ -60,7 +63,8 @@ import { loopbackLinkUrl } from "../lib/browserPaneLinks";
 import { appPathOf } from "../lib/browserPane";
 import { isNonTabRoute } from "../src/compat/tabRouting";
 import { LoopbackUrlPill } from "./LoopbackUrlPill";
-import { EntityObjectCard } from "./EntityObjectCard";
+import { CallTurns, CardMetaLine, EntityObjectCard } from "./EntityObjectCard";
+import { CallMomentPicture } from "./calls/CallMomentFrame";
 import { DocEmbed } from "./DocEmbed";
 import { DatePill } from "./DatePill";
 import { FilePathLink } from "./FilePathLink";
@@ -68,7 +72,7 @@ import { FilePathContext, filePathMention, parseFilePathHref } from "../lib/file
 import { useKnownWorktrees } from "../hooks/useKnownWorktrees";
 import { worktreeRefOfCode } from "./worktree/worktreeModel";
 import { WorktreePill } from "./worktree/WorktreePill";
-import { ClaudeArtifactEmbed, ClaudeArtifactPill, PublishedPageEmbed, PublishedPagePill } from "./PublishedPageEmbed";
+import { ClaudeArtifactEmbed, ClaudeArtifactPill, LinkPreviewCard, PublishedPageEmbed, PublishedPagePill } from "./PublishedPageEmbed";
 import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
 import { REF_NTH_ATTR, REF_NAMED_ATTR, REF_SUFFIX_ATTR } from "../lib/remarkEntityIds";
 import { REF_CERTAIN_ATTR } from "../lib/remarkEntityCards";
@@ -100,7 +104,7 @@ function parseDateRef(text: string): { iso: string; label?: string } | null {
 
 function TaskHoverContent({ task }: { task: any }) {
   const { icon: StatusIcon, color: statusColor, label: statusLabel } = taskVisual(task.status);
-  const priority = PRIORITY_CONFIG[task.priority];
+  const priority = taskPriorityBadge(task.priority);
   const project = taskProject(task);
   const kind = task.task_type && task.task_type !== "task" ? task.task_type : null;
   const source = task.source && task.source !== "human" ? task.source : null;
@@ -686,6 +690,14 @@ function MessageDeepLink({
   );
 }
 
+function safeDecode(text: string): string {
+  try {
+    return decodeURIComponent(text);
+  } catch {
+    return "";
+  }
+}
+
 export function EntityAwareLink({ href, children, ...allProps }: any) {
   const { mention, rest: props } = takeMentionProps(allProps);
   // The conversation this link sits in, when there is one: its repository is
@@ -728,14 +740,20 @@ export function EntityAwareLink({ href, children, ...allProps }: any) {
       );
     }
     // A page URL alone on its own line, hoisted by remarkEntityIds into
-    // "embed:artifact:<slug>|<caption>" (a published codecast page) or
-    // "embed:claude:<id>|<caption>" (a Claude artifact) — the page renders
-    // inline as a card.
-    const pageEmbed = /^embed:(artifact|claude):([^|]+)(?:\|([\s\S]*))?$/.exec(embedText);
+    // "embed:artifact:<slug>|<caption>" (a published codecast page),
+    // "embed:claude:<id>|<caption>" (a Claude artifact) or
+    // "embed:link:<encoded url>|<caption>" (any other web page) — the page
+    // renders inline as a card.
+    const pageEmbed = /^embed:(artifact|claude|link):([^|]+)(?:\|([\s\S]*))?$/.exec(embedText);
     if (pageEmbed) {
       const [, kind, id, caption] = pageEmbed;
       if (kind === "artifact") return <PublishedPageEmbed slug={id} caption={caption} />;
-      return <ClaudeArtifactEmbed id={id} caption={caption} />;
+      if (kind === "link") {
+        const url = parseLinkPreviewUrl(safeDecode(id));
+        if (url) return <LinkPreviewCard url={url} caption={caption} />;
+      } else {
+        return <ClaudeArtifactEmbed id={id} caption={caption} />;
+      }
     }
   }
   if (href?.startsWith("entity://")) {
@@ -948,6 +966,37 @@ function DocHoverContent({ doc }: { doc: any }) {
   );
 }
 
+/** A call: its title and state, then the frame a moment reference names
+ *  (`cl-42@12:34`), the words a turns reference names, or the summary when
+ *  it names the whole call. */
+function CallHoverContent({ call, rawId }: { call: any; rawId: string }) {
+  const moment = parseCallRef(rawId)?.at_ms != null;
+  return (
+    <div className="space-y-2">
+      <div className="flex items-start gap-2">
+        <Phone className="w-3.5 h-3.5 flex-shrink-0 mt-0.5 text-sol-red" />
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-medium text-sol-text leading-snug">{call.title || call.short_id || "Call"}</div>
+          <CardMetaLine type="call" entity={call} />
+        </div>
+      </div>
+      {moment ? (
+        <div className="overflow-hidden rounded-md">
+          <CallMomentPicture rawId={rawId} entity={call} served />
+        </div>
+      ) : call.turns ? (
+        <div className="max-h-48 overflow-hidden pl-[22px]">
+          <CallTurns call={call} limit={3} />
+        </div>
+      ) : call.summary ? (
+        <p className="text-[11px] text-gray-400 line-clamp-3 leading-relaxed pl-[22px]">
+          {stripMarkdown(call.summary).slice(0, 300)}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function GenericHoverContent({ entity, type }: { entity: any; type: EntityType }) {
   const Icon = type === "doc" ? FileText : Folder;
   const summary = entity.description || entity.goal || entity.summary;
@@ -1018,7 +1067,8 @@ export function EntityIdPill({
   const resolution = useEntityResolution(rawRef, typeProp);
   const { rawId, type, entity, status, served } = resolution;
   const href = to ?? resolution.href;
-  const fullLabel = !entity && labelProp ? labelProp : resolution.label;
+  const label = !entity && labelProp ? labelProp : resolution.label;
+  const fullLabel = !entity && labelProp ? labelProp : resolution.fullLabel;
   const shortLabel = !entity && labelProp ? labelProp : resolution.shortLabel;
   // A reader needs the title once. A repeat mention in the same message — or
   // a mention of an object the surrounding chrome already named (the sender
@@ -1030,7 +1080,7 @@ export function EntityIdPill({
   const establishedByShortId = useIsEstablishedRef(entity?.short_id);
   const established = establishedByRaw || establishedByShortId;
   const compact = compactProp ?? (!mention?.named && ((mention?.nth ?? 1) > 1 || established));
-  const refLabel = compact ? shortLabel : fullLabel;
+  const refLabel = compact ? shortLabel : label;
   const isTask = type === "task";
   const isPlan = type === "plan";
   const isSession = type === "session";
@@ -1081,6 +1131,8 @@ export function EntityIdPill({
               ? Network
             : type === "decision"
               ? Signpost
+            : type === "call"
+              ? Phone
             : isPr
               ? GitPullRequest
               : isCommit
@@ -1106,6 +1158,8 @@ export function EntityIdPill({
             // A decision wears the queue's yellow.
             : type === "decision"
               ? "bg-sol-yellow/[0.08] text-sol-yellow hover:bg-sol-yellow/[0.16]"
+            : type === "call"
+              ? "bg-sol-red/[0.08] text-sol-red hover:bg-sol-red/[0.16]"
             : isPr
               ? "bg-sol-green/[0.08] text-sol-green hover:bg-sol-green/[0.16]"
               : isCommit
@@ -1251,6 +1305,7 @@ export function EntityIdPill({
             : type === "doc" ? <DocHoverContent doc={entity} />
             : type === "initiative" ? <InitiativeHoverContent initiative={entity} />
             : type === "decision" ? <DecisionHoverContent decision={entity} />
+            : type === "call" ? <CallHoverContent call={entity} rawId={rawId} />
             : isPr ? <PullRequestHoverContent pr={entity} />
             : isCommit ? <CommitHoverContent commit={entity} />
             : <GenericHoverContent entity={entity} type={type} />

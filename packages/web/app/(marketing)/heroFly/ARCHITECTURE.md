@@ -30,21 +30,20 @@ The world stays a loop around the desk. Each chapter has one hold with at most t
 
 | # | t (s) | Capability group | Scene / surface | Real components | Fixture content | Light interaction |
 |---|---|---|---|---|---|---|
-| 0 | 0–2.4 | (overview) | whole world | none | none | none |
 | 1 | 2.4–9 | Capture, Inbox and triage | `desk`: app window | `SessionCardView` (new), `SectionHeader` (new), `InboxViewMenu`, sidebar primitives (`RailHeading`, `SectionRow`, `NavCount`, `NavSection`, `InboxNavRow`), `TopbarButton`, `StatusDot`, `SearchField` (new), `AgentTypeIcon`, `SessionWorktreeChip`, `PrStatusChip` | 6 rows from 5 agents (claude_code, codex, cursor, gemini, pi): one working (green ping), one NEEDS INPUT, one DONE, one idle, one unread, one on a cloud host (worktree chip). Timestamps are offsets from mount. | Hover shows the real toolbar; click selects (cyan); pin toggles locally; InboxViewMenu popover opens. |
 | 2 | 9–15 | Conversation and steering | `desk` conversation pane | `ConversationHeaderBar` + `AgentStatusPill` (new), `ConversationMetadata` (canEditModel false, no id), `IdentityFace` (hover off), `ViewerFaces`, `UserPrompt`, `AssistantBlock` (ToolBlock Bash + Edit, `ThinkingBlock`), `InlineDiff` / `FileDiffView`, `WorkingStatusLine` (label written from the timeline), `ComposerShell` (new) | Prompt "retry failed webhooks with backoff", `bun test` output ("212 passed"), a small Edit diff | Composer typing driven by t; the Edit row can be expanded. |
 | 3 | 15–21 | Multi-agent: fan out | `desk`, then flyers to `pairA` and `pairB` | `CastCommandBlock` (`cast spawn --subagent -- "..."`), `TaskToolBlock`, `SessionCardView` subagent compact rows, `SessionConstellation` | 2 workers: "Webhook API half" and "Dashboard retry UI" | Constellation `pulseKey` follows t; hovering a row lights its node. |
-| 4 | 21–28 | Surfaces (mobile) and steering | `desk` then `phone` | `PermissionStackView` (new) on the desk; on the phone: `NotificationRow`, a web iOS banner, and `PhonePermissionCard` built from the shared RN style spec, under a `.dark` wrapper | `npm test --workspace packages/api`; banner title "codecast - Permission needed" (daemon.ts:19665) | **Approve** on the desk or phone: Approve, then "…", then gone. Nothing leaves the page. |
+| 4 | 20–29 | Chat from the phone | `pairA` then `phone` | On the worker's pane its question, then Alex's answer and its reply (`AssistantBlock`, `UserPrompt`); on the phone the codecast iOS app's session screen in its dark theme: header, agent strip, the feed (`PhoneMessage`, `PhoneToolCalls`), the composer with its Needs Input then Working status (`PhoneComposer`), all in components/PhoneSession.tsx and read from `@codecast/shared/render/mobileSessionStyle`, the spec mobile/app/session/[id].tsx reads too, inside the iOS status bar and keyboard. | "Should a 410 Gone count as failed?"; "Agreed. Log 410s, never retry."; `npm test --workspace packages/api` | None beyond the views' own. |
 | 5 | 28–34 | Multi-agent: talk and fork | `pairA` and `pairB` | `SessionMessageBlock`, `CastCommandBlock` (`cast send`), `EntityIdPill` via the fixture seam, `UserPrompt` with `forkChildren` | "API is on `/v2/hooks/retry`, schema in the doc" | Hovering the pill shows the real hover card with the fixture entity. |
 | 6 | 34–40 | Decisions (cast decide) | `desk` side card | `DecisionCompactCardView` (new), `DecisionOptionList`, `DecisionAnswerControls` (keys=false), `DecisionRecordedAnswer` | "Exponential or fixed backoff?" with 3 options and cost tags | Clicking an option records it as the answer. |
 | 7 | 40–47 | Work tracking | `board` | `TaskRow` + `KanbanCard` (moved), `ListRowShell` (new), `StationStrip`, `TaskStatusBadge`, `IssueLink`, `LabelChips`, `ActiveSessionBadge` (click cancelled), `PlanProgressBar`, `PlanGraphView` | The task is filed from chat, lands as a TaskPill, and is claimed by an agent; a plan with 3 waves | Clicking the status or priority cycles the fixture value (via ItemRowState); plan progress animates. |
-| 8 | 47–53 | Automation | new `auto` surface (NE, beside the pair) | `TriggerRowItem` with `actions` (new), `SchedFireBadge`, `SchedHealthDot`, `ScheduledTaskBlock` (no trigger= attribute, or via the seam), `WorkflowGraphView` (theme forced, `chrome={false}`), `WorkflowRunNodes` (nodes without a session), `RunGate` (legacy gate_prompt only), `ThreadStatePanel` (canClear false) | "Check CI every 4h"; workflow implement → verify → review gate | Pause/Resume flips locally; nodes light up in order with t. |
+| 8 | 47–53 | Automation | new `auto` surface (NE, beside the pair) | `TriggerRowItem` with `actions` (new), `SchedFireBadge`, `SchedHealthDot`, `ScheduledTaskBlock` (no trigger= attribute, or via the seam), `WorkflowGraphView` (theme forced, `chrome={false}`), `WorkflowRunNodes` (nodes without a session), `RunGate` (legacy gate_prompt only), `ThreadStatePanelView` (folded state passed in: a visitor's pref never reaches the hero) | "Check CI every 4h"; workflow implement → verify → review gate | Pause/Resume flips locally; nodes light up in order with t. |
 | 9 | 53–61 | Team | new `team` surface (SE) | `ChatMessageList` / `ChatMessage` (fixtures from the _chatx.tsx pattern), `TypingIndicator`, `FaceRow` fed a `deriveFaceRow(fixtureInput)` model with callsEnabled=false, `FaceCircle`, `TranscriptTurnList`, `PresenceFacepile`, `CursorArrow`, `OrgGraph` with `ORG_FIXTURE` (or `StaffingPane` with `orgStaffingFixture`), `FeedCard` (onNavigate given, no shareTeamId) | An agent replies in #eng; a huddle caption line; the org chart has one role card that outlives its sessions | Reactions toggle locally; the summary more/less toggle; a teammate's cursor glides with t. |
 | 10 | 61–68 | Integrations (GitHub, Linear) | new `pr` surface | `PRHeader` (actions={null}), `PRChecks`, `PRCommits`, `PrStatusChip`, `ExternalEventRow` (omitRefs), `IssueLink`, inside `.pr-page` + pr.css | PR #482, checks going from pending to green to merged | Check states flip with t. |
 | 11 | 68–74 | Tools: publish and canvas | `page` | `AssistantBlock` holding a ```cast-canvas fence (a `HtmlSnippet` cast-chart), `PageCard` (exported) around a sandboxed srcdoc iframe of `brandArtifactHtml` (generated at build time) | A retry-rate report and 2 viewer comments | The real comments panel inside the iframe (fetch stubbed, `data:` metaUrl). |
 | 12 | 74–81 | Capture and memory ("3 weeks later") | `palette`, then `blame` | cmdk `<Command filter={paletteItemScore}>`, `CommandPaletteList`, `PaletteSessionRow` / `PaletteSearchResultRow` (new, using shared `groupClass`/`itemClass`), `KeyCap`, `SearchResultRow` (new) with `highlightMatch`; `SessionBlameStrip` + `BlobView` (blameMode "session") + repo.css | A teammate types "webhook retry"; the blame ties `retry.ts:42` to the fork session | **Typing in the palette** filters fixtures through cmdk; hovering a blame chip lights its lines. |
-| 13 | 81–84 | Surfaces: remote, cloud, browser (folded into the overview) | desk inset | `MachineChips`, `TmuxAttachPill`, `BrowserTabPill` (no tab id) + `WatchAddress` over a static screenshot, `CastCommandBlock` for `cast computer` | "linux-host-1", "macbook" | none |
-| — | 81–84 | seam | overview | none | none | none |
+| 13 | 82–89 | Surfaces: remote, cloud, browser | desk: the cloud worker's row opened from the right rail | `ConversationHeaderBar` with `TmuxAttachPill`, `AssistantBlock`, `CastCommandBlock` (`cast browser open`, open on mount via `defaultExpanded`), the row's host chip in `SessionCardView` | "linux-host-1" | none |
+| — | 87.3–88.8 | seam | the desk, its content dissolving to t=0 (timeline.ts `SEAM_GHOST`) | none | none | none |
 
 **Keeping it legible**
 
@@ -54,7 +53,7 @@ The world stays a loop around the desk. Each chapter has one hold with at most t
 - Keep one hold of at least 3s per chapter.
 - Each chapter's world is its own lazy chunk (section 1), so the longer film costs nothing until the camera heads there.
 
-**Deliberately left out:** mail/whisk and iMessage (not codecast UI), `cast check`, capabilities (`CapabilityCard` fits the overview if wanted), vault graph, calls CallStage, and anything tied to BrowserStream or TerminalPanel.
+**Deliberately left out:** mail/whisk and iMessage (not codecast UI), `cast check`, capabilities, vault graph, calls CallStage, and anything tied to BrowserStream or TerminalPanel.
 
 ---
 
@@ -134,7 +133,7 @@ The world stays a loop around the desk. Each chapter has one hold with at most t
 - The landing page is prerendered with `renderToString` (src/prerender-entry.tsx:24, `import Landing`).
 - `useTrackedStore` has no `getServerSnapshot` (inboxStore.ts:12956), so any view that still reads the store throws under SSR.
 - Plan: the view modules for the **poster chapter (1, desk inbox plus the conversation prompt)** are kept free of the store module. A `bundleGraph`-style guard test walks `heroFly/poster.tsx` imports and fails if `store/inboxStore` is reached. The poster at `POSTER_T` is then the real product, prerendered.
-- Every other chapter is `React.lazy`, mounted client-side after the first paint and prefetched on idle. The camera takes over 6s to reach them.
+- Every other chapter is its own chunk. The conversation (the other half of the poster) is requested as soon as the hero's code loads, because it carries the app's whole transcript renderer (turnBlocks and the tool, system, cast and interactive blocks); the film fades in once it lands. The rest load on idle and mount one per idle callback, each once the film is within two chapters of it. Crawlers get the prerendered inbox; the sr-only description carries the story.
 - A one-line product-safe addition is also worthwhile: `getServerSnapshot: () => useInboxStore.getInitialState()` in `useTrackedStore`. It makes any accidental SSR reach render the initial state instead of throwing.
 - Importing the store under SSR is safe: `bootPersistence` is gated on `typeof window`. This still needs verifying with `scripts/prerender.mjs`.
 
@@ -161,8 +160,8 @@ All ids look like `hero-*` (not Convex-shaped). All timestamps are `mountNow - o
   - Header: `{title, status: "working"|..., agentType, model, startedAt, messageCount, viewers: FacePerson[]}`.
 - **Permission (chapter 4):** `{_id: "hero-p1", tool_name: "Bash", arguments_preview: "npm test --workspace packages/api", status: "pending", created_at}`, with no `conversation_id`. The phone card uses the same row and the shared RN style spec.
 - **Multi-agent (chapter 5):**
-  - `SessionMessageBlock {from: "jx7hero", name, body, timestamp}`, with no `pendingStatus`.
-  - `HERO_ENTITIES` maps `jx7hero`, `ct-hero1` and `pl-hero1` to entity rows shaped like the webGet returns.
+  - `SessionMessageBlock {from: "jx7c4mq", name, body, timestamp}`, with no `pendingStatus`.
+  - `HERO_ENTITIES` maps `jx7c4mq`, `ct-4182` and `pl-312` to entity rows shaped like the webGet returns.
   - `cancelNav` hides the jump button's effect.
 - **Decisions (chapter 6):** a `SessionDecisionItem` plain object with `kind: "single"`, `question`, `options: DecisionOption[]`, `context`, `session_title`, `project_path`. Omit `workflow_run_id`, `report_slug`, option page slugs, `task_id` and `stack_id`.
 - **Work (chapter 7):**
@@ -210,6 +209,7 @@ Order: poster first, then by leak severity.
 6. **`ComposerShell`** from MessageInput.tsx (~2620-2700 plus the meta line at 2177): `{value, onChange, placeholder, canSubmit, onSubmit, meta, actions}`. MessageInput keeps the drafts and send.
 7. **Sidebar primitives**
    - Move `RailHeading`, `SectionRow`, `NavCount` and `NavSection` (Sidebar.tsx:99-376) to `components/sidebar/navPrimitives.tsx`.
+   - The rail's three groups are `SidebarNavView` (`components/sidebar/SidebarNav.tsx`), with the rows that read live counts as views beside it (`ThreadsNavRowView`, `FeedNavRowView`, `QuestionsNavRowView`, `ChatNavSectionView`); Sidebar feeds it from the store, the hero from fixtures.
    - Extract `InboxNavRow({active, count})` from :1282-1306.
    - Extract `SearchField({value, expanded, onChange})` from GlobalSearch.tsx:255-330.
    - Extract `SearchResultRow` from GlobalSearch.tsx:395-455 and share it with app/search/page.tsx.
@@ -228,7 +228,7 @@ Order: poster first, then by leak severity.
     - Export `TriggerPill` and `SingleHeader` from TriggerContextPanel.
     - Export `HorizonRail`.
 12. **Workflow:** add an optional `chrome` prop (default true) that hides `Controls` and `MiniMap`. Theme comes through `ThemeContext`.
-13. **Mobile parity:** move the RN PermissionCard StyleSheet values (mobile/components/PermissionCard.tsx:113-190) into `@codecast/shared` as a style spec read by both the RN card and a web `PhonePermissionCard`.
+13. **Mobile parity:** the phone's session screen reads the same spec as the app's (`@codecast/shared/render/mobileSessionStyle`, read by mobile/app/session/[id].tsx and components/PhoneSession.tsx).
 14. **Smaller exports:** `PageCard` (PublishedPageEmbed.tsx:84), `NotificationList` from NotificationBell, and `RecapCard`, `PassageBlock` and `ChatLine` from RoomThread.
 
 **Verification for each split**
@@ -262,9 +262,8 @@ Order: poster first, then by leak severity.
 - **Page-scoped CSS the hero must import:** `components/editor/editor.css`, `components/pr/pr.css`, `components/repo/repo.css`, `chat.css`, `decisions.css`, `calls/faces.css`, `CommandPalette.css`, and `@xyflow/react` styles, which WorkflowGraphView already imports. Load them in the lazy chapter chunks so the poster stays light.
 - **Background mismatch:** the page paints `#fdf6e3` but `--sol-bg` is `#FBF5E2`. Set the stage backdrop to `var(--sol-bg)` or accept the difference.
 - **Accent classes** (text-sol-blue and similar) are hardcoded hex, which is correct for light.
-- **Portals** (Radix tooltips and popovers, the InboxViewMenu popover, EntityIdPill hover cards) render flat at `document.body`, outside the 3D plane.
-  - Use them only during face-on holds where the camera transform is close to identity: yaw under 8°, scale 0.95 to 1.1.
-  - Force-close them when the camera leaves the hold (for example with the `open` prop, or a `pointerleave` dispatched on chapter change).
+- **Portals** (Radix tooltips and popovers, the InboxViewMenu popover, EntityIdPill hover cards, the fork preview) render flat at `document.body`, outside the 3D plane, where they cover the page, do not follow the camera, and take the page's Escape and outside clicks.
+  - Hover never opens one: the sandbox provides `HoverCardsOff` (`lib/hoverCardsOff.ts`), which `useHoverCard`, the Radix `TooltipContent` and `BranchSelector`'s fork preview read. `sandbox.guard.test.tsx` points at every element at each hold and waits out the hover delays.
   - Portalled content sits outside `.hero-sandbox`, so it inherits `<html>`'s tokens. The theme lock is what keeps those correct.
 
 ---

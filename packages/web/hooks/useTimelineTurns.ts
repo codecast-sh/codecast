@@ -2,7 +2,7 @@ import { useMemo, useCallback } from "react";
 import { isCommandMessage, isHiddenSystemNotice, initialSubagentPromptId } from "../lib/conversationProcessor";
 import { isRecoveryContinueClientId } from "@codecast/shared/contracts";
 import { isModelSwitchStdout } from "@codecast/shared/contracts";
-import { isToolResultCarrier, foldNudgeRuns, nudgeLabel, type NudgeRow } from "../components/sessionMessage";
+import { isToolResultCarrier, stripInjectionNoise, foldNudgeRuns, nudgeLabel, type NudgeRow } from "../components/sessionMessage";
 import { sameMessageAuthor } from "../lib/messageAuthors";
 import { FOLD_KEPT_USER_KINDS, classifyUserMessage, isAlwaysVisibleToolCall, isHiddenStubMessage, parseCastCommand, stripSystemTags } from "../components/conversation/classify";
 import type { Message, ReceiptEntry, TimelineItem, UserMessageKind } from "../components/conversation/types";
@@ -53,7 +53,7 @@ export function useTimelineTurns({ messages, conversation, hasMoreAbove, timelin
       }
       const kind = classifyUserMessage(msg, conversation?.agent_type, immediatePrev, contextPrev);
       map.set(msg._id, msg._id === initialPromptId && kind.kind === "normal"
-        ? { kind: "session_message", from: conversation!.parent_conversation_id!.slice(0, 7), body: msg.content || "" }
+        ? { kind: "session_message", from: conversation!.parent_conversation_id!.slice(0, 7), body: stripInjectionNoise(msg.content || "") }
         : kind);
     }
     return map;

@@ -13,8 +13,8 @@ export const ORG_STAFFING_FIXTURE_PROPOSAL: OrgProposalRow = {
   _id: "fixture-proposal-7",
   short_id: "op-7",
   team_id: "fixture-team",
-  author: { kind: "role", id: "fixture-role-chief", name: "Chief of Staff", short_id: "or-9" },
-  thread: { conversation_id: "fixture-chief-conv", short_id: "jx7ch1f" },
+  author: { kind: "role", id: "fixture-role-head", name: "Head of People", short_id: "or-9" },
+  thread: { conversation_id: "fixture-head-conv", short_id: "jx7ch1f" },
   title: "Split growth, own the platform work, budget the reviews",
   summary_md: "Growth is past its in-flight limit and the platform project has no owner. Two hires, one move and one budget change remove both bottlenecks.",
   mode: "review",
@@ -78,16 +78,16 @@ export const ORG_STAFFING_FIXTURE_PROPOSAL: OrgProposalRow = {
   ],
 };
 
-/** The chief of staff's proposal after a conversation (S18): the author
+/** The head of people's proposal after a conversation (S18): the author
  *  removed one change on the person's word, amended another and added a
- *  third, and the thread bound to it is the chief's standing session. The
+ *  third, and the thread bound to it is the Head of People's standing session. The
  *  pane's revise rows and the strip pin on this. */
 export const ORG_STAFFING_FIXTURE_REVISED_PROPOSAL: OrgProposalRow = {
   _id: "fixture-proposal-9",
   short_id: "op-9",
   team_id: "fixture-team",
-  author: { kind: "role", id: "fixture-role-chief", name: "Chief of Staff", short_id: "or-9" },
-  thread: { conversation_id: "fixture-chief-conv", short_id: "jx7ch1f" },
+  author: { kind: "role", id: "fixture-role-head", name: "Head of People", short_id: "or-9" },
+  thread: { conversation_id: "fixture-head-conv", short_id: "jx7ch1f" },
   title: "Own the platform work, budget the reviews",
   summary_md: "The platform project has no owner and growth runs out of budget most afternoons. One hire and one budget change fix both.",
   mode: "review",
@@ -176,6 +176,9 @@ export const ORG_STAFFING_FIXTURE_SESSION_PROPOSAL: OrgProposalRow = {
   ],
 };
 
+/** A week by UTC day, oldest first and today last, the way org.health keys its series. */
+const week = (xs: number[]): Record<string, number> => Object.fromEntries(xs.map((n, i) => [new Date(T0 - (xs.length - 1 - i) * 86_400_000).toISOString().slice(0, 10), n]));
+
 export const ORG_STAFFING_FIXTURE_HEALTH: OrgHealth = {
   roles: [
     {
@@ -183,8 +186,8 @@ export const ORG_STAFFING_FIXTURE_HEALTH: OrgHealth = {
       load: { items_per_day: 9, decisions_per_day: 1.3, live_hands: 4, direct_reports: 0, open_stalls: 3, cap_hit_days: 4 },
       ledger: { open_tasks: 19, in_flight: 11, active_plans: 2 },
       counted: { rule: "scope", projects: 1, plans: 3, tasks: 31, complete: true, note: "1 projects and 3 plans in scope and every task filed under either: 31 tasks, read by index" },
-      spend: { wakes_today: 22, wakes_7d_avg: 27, wakes_cap: 40, tokens_today: 390_000, tokens_7d_avg: 372_000, tokens_cap: 400_000, cap_hits_7d: 4 },
-      flow: { decisions_7d: 9, median_recommend_min: 3, done_7d: 12, handoffs_7d: { done: 10, blocked: 1, needs_context: 1 }, review_stalls: 1, sends_7d: { to: [], from: [] } },
+      spend: { wakes_today: 22, wakes_7d_avg: 31, wakes_cap: 40, tokens_today: 390_000, tokens_7d_avg: 372_000, tokens_cap: 400_000, cap_hits_7d: 4, wakes_by_day: week([41, 40, 12, 18, 44, 40, 22]) },
+      flow: { decisions_7d: 9, median_recommend_min: 3, done_7d: 12, done_by_day: week([2, 3, 0, 1, 3, 2, 1]), decisions_by_day: week([1, 2, 1, 0, 2, 2, 1]), handoffs_7d: { done: 10, blocked: 1, needs_context: 1 }, review_stalls: 1, sends_7d: { to: [], from: [{ role_id: "fixture-role-head", n: 3 }] } },
       last_move_at: T0 - 86_400_000 * 12, idle_days: 0,
       flags: [
         { code: "overloaded", severity: "warn", detail: "@growth has more reaching it than one role can answer: 4 days at its daily limit this week" },
@@ -220,11 +223,11 @@ export const ORG_STAFFING_FIXTURE_HEALTH: OrgHealth = {
       },
     },
     {
-      role_id: "fixture-role-chief", short_id: "or-9", handle: "chief-of-staff",
+      role_id: "fixture-role-head", short_id: "or-9", handle: "head-of-people",
       load: { items_per_day: 2, decisions_per_day: 0.3, live_hands: 0, direct_reports: 0, open_stalls: 0, cap_hit_days: 0 },
       ledger: { open_tasks: 41, in_flight: 6, active_plans: 5 },
-      spend: { wakes_today: 3, wakes_7d_avg: 4, wakes_cap: 40, tokens_today: 90_000, tokens_7d_avg: 110_000, tokens_cap: 400_000, cap_hits_7d: 0 },
-      flow: { decisions_7d: 2, median_recommend_min: 4, done_7d: 9, handoffs_7d: { done: 3, blocked: 0, needs_context: 0 }, review_stalls: 0, sends_7d: { to: [], from: [] } },
+      spend: { wakes_today: 3, wakes_7d_avg: 4, wakes_cap: 40, tokens_today: 90_000, tokens_7d_avg: 110_000, tokens_cap: 400_000, cap_hits_7d: 0, wakes_by_day: week([4, 5, 3, 6, 4, 3, 3]) },
+      flow: { decisions_7d: 2, median_recommend_min: 4, done_7d: 9, done_by_day: week([1, 2, 1, 1, 2, 1, 1]), decisions_by_day: week([0, 1, 0, 0, 1, 0, 0]), handoffs_7d: { done: 3, blocked: 0, needs_context: 0 }, review_stalls: 0, sends_7d: { to: [{ role_id: GROWTH, n: 3 }], from: [] } },
       last_move_at: null, idle_days: 0,
       flags: [],
       area: {
@@ -239,7 +242,7 @@ export const ORG_STAFFING_FIXTURE_HEALTH: OrgHealth = {
         goals: [],
         checked_at: T0 - 26 * 3_600_000,
         check: { trigger_id: "fixture-trigger-company-review", short_id: "tr-12", title: "Company review", status: "scheduled", run_at: T0 + 5 * 86_400_000, last_run_at: T0 - 2 * 86_400_000, last_run_summary: "Proposed a Platform lead and a content split; three records closed.", interval_ms: 7 * 86_400_000 },
-        standing_conversation_id: "fixture-chief-conv",
+        standing_conversation_id: "fixture-head-conv",
         standing_short_id: "jx7ch1f",
       },
     },
@@ -310,7 +313,7 @@ export const ORG_STAFFING_FIXTURE_BIG_PROPOSAL: OrgProposalRow = (() => {
   push({ kind: "role", name: "Calls lead", handle: "calls", reports_to: "me", tenure: { kind: "standing" } }, "The calls stack outlives any plan.", []);
   push({ kind: "scope", handle: "product", add: ["Calls & Presence"] }, "Product should read the calls project too.");
   push({ kind: "routine", handle: "product", title: "Weekly in-flight sweep", prompt: "Sweep the in-flight tasks.", every: "7d" }, "In-flight tasks go stale between reviews.");
-  push({ kind: "adopt", handle: "chief-of-staff", conversation: "jx7fmm9" }, "This session becomes the chief of staff.");
+  push({ kind: "adopt", handle: "head-of-people", conversation: "jx7fmm9" }, "This session becomes the head of people.");
   return {
     _id: id,
     short_id: "op-6",

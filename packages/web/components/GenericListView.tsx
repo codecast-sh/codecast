@@ -1141,7 +1141,7 @@ export function GenericListView<T>({
           {syncScope && <SyncProgressBadge scope={syncScope} />}
           {/* Wide header: segmented pill row. Once too tight for one row (≤1210px,
               see .cq-tabs-compact in globals.css): a single compact dropdown. */}
-          <div className="cq-tabs-pills flex items-center gap-0.5 p-0.5 rounded-lg bg-sol-bg-alt/40 border border-sol-border/30 flex-wrap">
+          <div data-list-tabs className="cq-tabs-pills flex items-center gap-0.5 p-0.5 rounded-lg bg-sol-bg-alt/40 border border-sol-border/30 flex-wrap">
             {tabs.map((tab) => {
               const isActive = activeTabKey === tab.key;
               return (
@@ -1169,7 +1169,7 @@ export function GenericListView<T>({
             />
           </div>
         </div>
-        <div className="cq-header-toolbar flex flex-wrap items-center justify-end gap-1.5 ml-auto">
+        <div data-list-toolbar className="cq-header-toolbar flex flex-wrap items-center justify-end gap-1.5 ml-auto">
           {headerExtra}
           {selectedIds.size > 0 && (
             <span className="text-xs text-sol-cyan">{selectedIds.size} selected</span>

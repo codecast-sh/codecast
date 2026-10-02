@@ -16,10 +16,30 @@ import { useState } from "react";
 import { AlertTriangle, X } from "lucide-react";
 import { useDevices } from "./DeviceBadge";
 import { deviceSeesPath } from "../lib/machinePicker";
-import { classifyApiErrorBanner, SAFETY_BLOCK_HINT } from "@codecast/shared/contracts";
-import { useInboxStore } from "../store/inboxStore";
+import { classifyApiErrorBanner, cloudAgentProviderOfConversation, SAFETY_BLOCK_HINT } from "@codecast/shared/contracts";
+import { isInterruptControlMessage, useInboxStore } from "../store/inboxStore";
 
 const mib = (bytes: number) => `${Math.ceil(bytes / 1048576)} MiB`;
+
+/** An idle session left this long after the person spoke last looks stuck. */
+const ABANDONED_AFTER_MS = 5 * 60 * 1000;
+
+/**
+ * Whether an idle session looks stuck (the unresponsive banner): the person
+ * spoke last, not to interrupt, and nothing has moved since. Never a cloud
+ * agent's session: its turn runs on the provider's machines and writes
+ * nothing here until it ends, and a message waiting behind it is held, not lost.
+ */
+export function sessionLooksAbandoned(
+  conversation: { agent_type?: string; session_id?: string | null; model?: string | null; updated_at?: number; messages?: { role?: string; content?: string }[] } | null | undefined,
+  isIdle: boolean,
+  now = Date.now(),
+): boolean {
+  const last = conversation?.messages?.at(-1);
+  return isIdle && last?.role === "user" && !isInterruptControlMessage(last.content)
+    && now - (conversation?.updated_at || 0) > ABANDONED_AFTER_MS
+    && !cloudAgentProviderOfConversation(conversation?.agent_type, conversation?.session_id, conversation?.model);
+}
 
 /**
  * The transient resume-lifecycle banners (resuming, reconstituting, timed out,
@@ -60,7 +80,7 @@ export function SessionResumeBanner({
     return (
       <div className="shrink-0 flex items-center gap-2 px-4 py-1.5 bg-sol-bg-alt/90 border-b border-sol-border/50 text-sol-text-dim text-xs">
         <span className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/50" />
-        Session unresponsive — send a message or
+        Session unresponsive: send a message or
         <button onClick={onResume} className="px-1.5 py-0.5 rounded bg-sol-cyan/10 hover:bg-sol-cyan/20 border border-sol-cyan/30 text-sol-cyan transition-colors">
           Resume
         </button>

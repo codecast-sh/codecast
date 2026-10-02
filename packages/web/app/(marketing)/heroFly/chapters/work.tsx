@@ -21,8 +21,8 @@ import type { TaskItem } from "@/store/inboxStore";
 import { FILE_RESULT, FILE_TOOL, filedHistory, filedSessions, filedTask, mergedEvent, planProgress, planTasks } from "../fixtures/work";
 import { WORK_AT } from "./work.motion";
 import { CUES, OBJECTS } from "../fixtures/story";
+import { FilmSwap } from "../film";
 import { fly, useFilmTime } from "../filmClock";
-import { DeskRouter } from "./desk";
 import type { PartProps } from "./contract";
 
 const noop = () => {};
@@ -35,11 +35,9 @@ export function TaskFiled() {
   const filed = useFilmTime((t) => t >= CUES.taskFiled);
   if (!filed) return null;
   return (
-    <DeskRouter>
-      <div className="px-6 pb-2" {...fly("desk/work.files")}>
-        <CastCommandBlock tool={FILE_TOOL} result={FILE_RESULT} />
-      </div>
-    </DeskRouter>
+    <div className="px-6 pb-2" {...fly("desk/work.files")}>
+      <CastCommandBlock tool={FILE_TOOL} result={FILE_RESULT} />
+    </div>
   );
 }
 
@@ -47,7 +45,6 @@ export function TaskFiled() {
 export function TaskBoard({ now }: PartProps) {
   const stage = useFilmTime((t) => (t < CUES.taskClaimed ? "landed" : "claimed"));
   const advanced = useFilmTime((t) => t >= WORK_AT.planAdvances);
-  const merged = useFilmTime((t) => t >= CUES.merged);
   const before = useFilmTime((t) => t < CUES.taskFiled);
   // What a visitor's clicks changed, per task; forgotten when the film comes round again.
   const [edits, setEdits] = useState<Record<string, Partial<TaskItem>>>({});
@@ -84,44 +81,51 @@ export function TaskBoard({ now }: PartProps) {
   });
 
   return (
-    <DeskRouter>
-      <div className="flex h-full text-sol-text">
-        <div className="cq-container flex w-[640px] shrink-0 flex-col border-r border-sol-border/40">
-          {group && <ListGroupHeader label={group.label} count={tasks.length} icon={group.icon} badge={group.badge} extra={group.extra} collapsed={false} />}
-          {tasks.map((task) => (
-            <div key={task._id} data-hero-live="" {...fly(`board/work.row:${task._id}`)}>
-              <ListRowShell state={stateOf(task)}>
-                <TaskRow task={task} state={stateOf(task)} onFilterLabel={noop} />
-              </ListRowShell>
-            </div>
-          ))}
-          <div className="px-4 pt-4" {...fly("board/work.plan")}>
+    <div className="cq-container flex h-full flex-col text-sol-text">
+      {group && <ListGroupHeader label={group.label} count={tasks.length} icon={group.icon} badge={group.badge} extra={group.extra} collapsed={false} />}
+      {tasks.map((task) => (
+        <div key={task._id} data-hero-live="" {...fly(`board/work.row:${task._id}`)}>
+          <ListRowShell state={stateOf(task)}>
+            <TaskRow task={task} state={stateOf(task)} onFilterLabel={noop} />
+          </ListRowShell>
+        </div>
+      ))}
+      <div className="flex min-h-0 flex-1 gap-6 px-4 pt-4" {...fly("board/work.below")}>
+        <div className="w-[440px] shrink-0">
+          <div {...fly("board/work.plan")}>
             <PlanProgressBar progress={planProgress(tasks)} />
           </div>
-        </div>
-        <div className="min-w-0 flex-1 overflow-hidden px-4 pt-4" {...fly("board/work.detail")}>
           <div {...fly("board/work.station")}>
-            <StationStrip task={filed as TaskItem & { status_id?: string }} />
+            {/* The claim dissolves in over the landed state (FilmSwap), rather than switching in one frame. */}
+            <FilmSwap cues={[CUES.taskClaimed]} render={(claimed) => <StationStrip task={{ ...filedTask(now, claimed ? "claimed" : "landed"), ...edits["hero-t1"] } as TaskItem & { status_id?: string }} />} />
           </div>
-          <TaskTimeline
-            task={{ _id: filed._id, created_at: filed.created_at, creator: filed.creator, created_from_conversation: filed.created_from_conversation, history: filedHistory(now, stage) }}
-            sessions={filedSessions(now, stage)}
-            externalEvents={merged ? [mergedEvent(now)] : []}
-            openLinkedSession={noop}
+        </div>
+        <div className="min-w-0 flex-1 overflow-hidden" {...fly("board/work.detail")}>
+          <FilmSwap
+            cues={[CUES.taskClaimed, CUES.merged]}
+            render={(step) => {
+              const at = step >= 1 ? "claimed" : "landed";
+              return (
+                <TaskTimeline
+                  task={{ _id: filed._id, created_at: filed.created_at, creator: filed.creator, created_from_conversation: filed.created_from_conversation, history: filedHistory(now, at), external: filed.external && { provider: filed.external.provider as "linear" } }}
+                  sessions={filedSessions(now, at)}
+                  externalEvents={step >= 2 ? [mergedEvent(now)] : []}
+                  openLinkedSession={noop}
+                />
+              );
+            }}
           />
         </div>
       </div>
-    </DeskRouter>
+    </div>
   );
 }
 
 /** The task in flight from the transcript to the board: its real reference pill. */
 export function TaskFlyer() {
   return (
-    <DeskRouter>
-      <div className="-translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded-lg border border-sol-violet/30 bg-sol-bg px-2.5 py-1.5 text-[13px] shadow-xl">
-        <EntityIdPill shortId={OBJECTS.task.shortId} type="task" />
-      </div>
-    </DeskRouter>
+    <div className="-translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded-lg border border-sol-violet/30 bg-sol-bg px-2.5 py-1.5 text-[13px] shadow-xl">
+      <EntityIdPill shortId={OBJECTS.task.shortId} type="task" />
+    </div>
   );
 }

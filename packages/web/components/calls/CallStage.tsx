@@ -7,24 +7,22 @@ import {
   Circle,
   CircleUserRound,
   ExternalLink,
-  LayoutGrid,
+  Link2,
   Lock,
   MessageSquare,
-  MicOff,
   Minimize2,
   MonitorUp,
   Radio,
   Unlock,
-  User,
   Users,
   Video,
   VideoOff,
-  Wand2,
   X,
 } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import {
   getCallTiles,
+  getRoom,
   setCamera,
   setScreenShare,
   subscribeCallTiles,
@@ -34,8 +32,10 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { useRoomTranscribeOff } from "../../hooks/useRoomTranscribeOff";
 import { getScribeStatus, subscribeScribe } from "../../lib/calls/transcription";
 import { TranscribeControls } from "./TranscribePanel";
+import { RecordButton, RecordingNoticeBanner, StageRecordingBadge } from "./RoomRecording";
 import { AddPeopleButton } from "./AddPeople";
 import { RoomKnocks } from "./RoomDoor";
 import { HangUpButton, MicButton } from "./CallControls";
@@ -45,10 +45,13 @@ export { Avatar };
 import type { ThreadRow } from "./roomThreadModel";
 import { DeviceChips } from "./DeviceRows";
 import { faceTrackingNote } from "./useFaceCrop";
-import { firstName } from "./speakers";
-import { ScreenCursors } from "./ScreenCursors";
-import { useScreenCursorSender } from "../../hooks/useScreenCursorSender";
+import { PersonName } from "./GuestTag";
 import { FollowChip } from "./FollowInCall";
+import { AutoStage, GridStage, SpeakerStage } from "./StageViews";
+import { STAGE_CTL, STAGE_CTL_IDLE, STAGE_VIEWS, StageHostProvider, type StageHost, type StageView } from "./stageHost";
+import { GuestInvite, GuestRemoveButton } from "./GuestDoor";
+import { guestsSig, rosterWithGuests, withGuestMedia } from "../../lib/calls/roomGuests";
+import { walkieCallState } from "../../lib/calls/walkie";
 import { useOutgoingRings, useRoomDescription } from "../../hooks/useCallRoom";
 import { useRoomLock } from "../../hooks/useLiveRooms";
 import {
@@ -72,6 +75,7 @@ import { useAgentsInRoom } from "./useCallFeed";
 import { useRoomThreadUnread } from "../../hooks/useRoomThreadUnread";
 import { EdgeResizeHandle, useEdgeResize } from "../../hooks/useEdgeResize";
 import { UnreadCount } from "./UnreadCount";
+import { AgentReplyPeek } from "./AgentReplyPeek";
 import { takeCallThreadRequest } from "../../lib/calls/callStage";
 
 // The media notice, with the fix in reach: when the error is a device the OS
@@ -127,22 +131,16 @@ function CallErrorNotice({ error, fix }: { error: string; fix: AppPermissionKind
 //
 // The stage is an overlay, not a route: Esc (or collapse) drops back to the
 // ambient pill and the call continues beside the work.
-// The one outline the stage allows itself: a soft cyan ring with a faint
-// halo on whoever is speaking. Silent tiles have no border at all — the gap
-// between them is the frame.
-// Roster lookup for a tile: is this person muted right now?
-const isMuted = (roster: any[], identity: string) =>
-  !!roster.find((m) => String(m.user_id) === identity)?.muted;
+// What a member's stage adds to the shared views (StageViews): the room the
+// cursors ride on is the call manager's, following somebody opens their work
+// in the app, and a guest can be put out from beside their name.
+const MEMBER_STAGE_HOST: StageHost = {
+  getRoom,
+  FollowChip,
+  useFollowLeader: () => useInboxStore((s) => s.followLeaderId),
+  personActions: ({ identity, name, variant }) => <GuestRemoveButton identity={identity} name={name} variant={variant} />,
+};
 
-const SPEAKING_RING = "ring-2 ring-sol-cyan/80 shadow-[0_0_0_5px_rgba(42,161,152,0.16)]";
-
-type StageView = "auto" | "speaker" | "grid";
-
-const STAGE_VIEWS = [
-  { key: "auto", icon: Wand2, label: "auto", hint: "Auto: shares take the stage" },
-  { key: "speaker", icon: User, label: "speaker", hint: "Speaker: follow whoever is talking (click a tile to pin)" },
-  { key: "grid", icon: LayoutGrid, label: "grid", hint: "Grid: everyone equal" },
-] as const;
 
 /**
  * How each of the window's small sizes reads on the stage's chrome, on the
@@ -202,11 +200,27 @@ export function CallStage({
   const s = useTrackedStore([
     (st: any) => st.call,
     (st: any) => (st.call.roomKey ? st.callOccupancy[st.call.roomKey] : undefined),
+    // The room's guests by signature: liveRooms is rewritten whole on every
+    // push, and only who is in (and their names) paints here.
+    (st: any) => guestsSig(st.liveRooms?.find((r: any) => r.room_key === st.call.roomKey)?.guests),
   ]);
   const call = s.call;
-  const roster: any[] = (call.roomKey && s.callOccupancy[call.roomKey]) || [];
+  const seats: any[] = (call.roomKey && s.callOccupancy[call.roomKey]) || [];
+  const guestKey = guestsSig(s.liveRooms?.find((r: any) => r.room_key === call.roomKey)?.guests);
+  // Seats, then the guests let in on a link: a guest has no seat, and a guest
+  // with no camera was nobody on the stage without them (lib/calls/roomGuests).
+  const listed: any[] = useMemo(
+    () => rosterWithGuests(seats, s.liveRooms?.find((r: any) => r.room_key === call.roomKey)?.guests),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [seats, guestKey, call.roomKey],
+  );
   const myUserId = useInboxStore((st: any) => st.currentUser?._id?.toString?.() ?? null);
   const tiles = useSyncExternalStore(subscribeCallTiles, getCallTiles, () => []);
+  // ...as the media has them once connected: a guest who cannot be heard is
+  // not drawn as here, and a guest's microphone shows (roomGuests). The list
+  // is the voice host's (mirrored on desktop) and moves with the tiles.
+  const guestMedia = call.phase === "connected" ? walkieCallState().guests : null;
+  const roster: any[] = useMemo(() => withGuestMedia(listed, guestMedia), [listed, guestMedia]);
   const speaking = useMemo(() => new Set<string>(call.speaking), [call.speaking]);
 
   // The live transcript, if anyone is scribing: id (for the call-page link),
@@ -224,6 +238,9 @@ export function CallStage({
       }
     | null
     | undefined;
+  // The record outlives a switch to off (off is a gap in the huddle), so the
+  // words are flowing only while it is live and the room has not opted out.
+  const transcribing = !!live && !useRoomTranscribeOff(call.roomKey);
 
   const [view, setView] = useState<StageView>("auto");
   const [threadOpen, setThreadOpen] = useState(takeCallThreadRequest);
@@ -233,7 +250,7 @@ export function CallStage({
   // The thread's rows, read here so the header can count what arrived while
   // the rail was closed (lib/calls/roomThreadSeen: the same count the door to
   // the call in the app header wears when this stage is collapsed).
-  const { rows, unread } = useRoomThreadUnread(call.roomKey, threadOpen);
+  const { rows, unread, latest } = useRoomThreadUnread(call.roomKey, threadOpen);
   const toggleThread = () => {
     if (threadOpen && !prefersReducedMotion()) setRailClosing(true);
     setThreadOpen((o) => !o);
@@ -333,6 +350,9 @@ export function CallStage({
               {roster.length}
             </span>
           )}
+          {/* The room is being recorded: said where the room's name is, for
+              everyone in it, whoever pressed. */}
+          <StageRecordingBadge roomKey={call.roomKey} />
           {parsed?.kind === "session" && (
             <StageChromeButton
               onClick={() => {
@@ -374,6 +394,26 @@ export function CallStage({
             {lock.locked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}
             <span className="stage-word">{lock.locked ? "locked" : "open"}</span>
           </StageChromeButton>
+          {/* The door for somebody with no account: a link they open in a
+              browser. Beside the lock, because both decide who gets in. */}
+          {call.roomKey && call.phase === "connected" && (
+            <GuestInvite
+              roomKey={call.roomKey}
+              trigger={({ open, toggle }) => (
+                <StageChromeButton
+                  onClick={toggle}
+                  active={open}
+                  accent="yellow"
+                  title="Invite someone outside the team: a link they join from in a browser"
+                  aria-label="Invite someone outside the team"
+                  aria-expanded={open}
+                >
+                  <Link2 className="h-3.5 w-3.5" />
+                  <span className="stage-word">invite</span>
+                </StageChromeButton>
+              )}
+            />
+          )}
         </div>
         <div className="min-w-2 flex-1" />
 
@@ -386,6 +426,9 @@ export function CallStage({
             switch: the dot says the room is being transcribed whether or not
             the rail is open, and the switch itself lives in the thread. The
             count is what landed in the thread while it was closed. */}
+        {/* The thread button carries the peek: an agent's answer that
+            landed while the rail was closed hangs under it for a moment. */}
+        <span className="relative shrink-0">
         <StageChromeButton
           onClick={toggleThread}
           active={threadOpen}
@@ -395,14 +438,14 @@ export function CallStage({
             (!threadOpen && agentWorking ? ", an agent is working" : "")
           }
           title={
-            live
+            transcribing
               ? "Transcribing. Open the thread: the words, the chat, the agents in the room."
               : "Open the thread: chat with the room, add an agent, start transcribing."
           }
         >
           <span className="relative">
             <MessageSquare className="h-3.5 w-3.5" />
-            {live && <LivePulseDot className="absolute -right-1 -top-1 h-1.5 w-1.5" />}
+            {transcribing && <LivePulseDot className="absolute -right-1 -top-1 h-1.5 w-1.5" />}
           </span>
           <span className="stage-word-tight">thread</span>
           {!threadOpen && agentWorking && (
@@ -412,8 +455,10 @@ export function CallStage({
               <span />
             </span>
           )}
-          <UnreadCount count={unread} />
+          <UnreadCount count={unread} agent={!!latest?.agent} />
         </StageChromeButton>
+        <AgentReplyPeek row={latest} onOpen={() => !threadOpen && toggleThread()} />
+        </span>
 
         <HeaderRule />
 
@@ -463,16 +508,25 @@ export function CallStage({
       {/* Who is at the door, over the stage's top-right corner — visible
           without taking a lane from the people already in the room. */}
       {call.roomKey && call.phase === "connected" && (
-        <div className="pointer-events-none absolute right-3 top-12 z-10 w-64">
+        <div className="pointer-events-none absolute right-3 top-12 z-10 w-72 max-w-[calc(100%-24px)]">
           <div className="pointer-events-auto rounded-lg bg-sol-base03/80 backdrop-blur">
             <RoomKnocks roomKey={call.roomKey} />
           </div>
         </div>
       )}
+      {/* A recording somebody else started, said once, top left. In a window
+          of its own the stage is where the person looks; anywhere else the
+          app's toast says it (RoomRecording). */}
+      {panel && call.roomKey && call.phase === "connected" && (
+        <div className="pointer-events-none absolute left-3 top-12 z-10">
+          <RecordingNoticeBanner roomKey={call.roomKey} />
+        </div>
+      )}
 
       {/* The stage itself. */}
       <div className="flex min-h-0 flex-1 gap-2 px-3 pb-3 pt-3">
-        <div key={view} className="flex min-h-0 min-w-0 flex-1 animate-in fade-in duration-200">
+        <StageHostProvider value={MEMBER_STAGE_HOST}>
+        <div key={view} className="flex min-h-0 min-w-0 flex-1 animate-in fade-in duration-200 max-sm:flex-col">
           {view === "grid" ? (
             <GridStage roster={roster} cameras={cameras} screens={screens} speaking={speaking} />
           ) : view === "speaker" ? (
@@ -497,6 +551,7 @@ export function CallStage({
             />
           )}
         </div>
+        </StageHostProvider>
         {(threadOpen || railClosing) && call.roomKey && (
           <ThreadRail
             roomKey={call.roomKey}
@@ -523,7 +578,7 @@ export function CallStage({
           style={{ gridTemplateRows: threadOpen ? "0fr" : "1fr" }}
         >
           <div className="min-h-0 overflow-hidden">
-            <CaptionsLane live={live ?? null} />
+            <CaptionsLane live={transcribing ? live! : null} />
           </div>
         </div>
         {call.error && <CallErrorNotice error={call.error} fix={call.errorFix} />}
@@ -604,7 +659,7 @@ function StageChromeButton({
   ...rest
 }: {
   active?: boolean;
-  accent?: "green" | "cyan" | "violet";
+  accent?: "green" | "cyan" | "violet" | "yellow";
   className?: string;
   children: React.ReactNode;
 } & Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, "className" | "children">) {
@@ -615,7 +670,9 @@ function StageChromeButton({
         ? "bg-sol-cyan/10 text-sol-cyan"
         : accent === "violet"
           ? "bg-sol-violet/10 text-sol-violet"
-          : "bg-white/10 text-sol-text"
+          : accent === "yellow"
+            ? "bg-sol-yellow/10 text-sol-yellow"
+            : "bg-white/10 text-sol-text"
     : "text-sol-text-muted hover:bg-white/[0.06] hover:text-sol-text";
   return (
     <button className={`${CHROME_BTN} ${tone} ${className}`} {...rest}>
@@ -623,444 +680,6 @@ function StageChromeButton({
     </button>
   );
 }
-
-// ── Views ─────────────────────────────────────────────────────────────────
-
-// Auto: an active share owns the stage; else adaptive camera grid; else the
-// audio-only avatar stage.
-function AutoStage({
-  roster,
-  cameras,
-  screens,
-  speaking,
-  phase,
-  ringing = [],
-  settledLine,
-}: {
-  roster: any[];
-  cameras: ParticipantTile[];
-  screens: ParticipantTile[];
-  speaking: Set<string>;
-  phase: string;
-  ringing?: { user_id: string; user_name: string; user_image?: string }[];
-  settledLine?: string | null;
-}) {
-  const [heroKey, setHeroKey] = useState<string | null>(null);
-  const hero = (heroKey && screens.find((t) => t.key === heroKey)) || screens[0] || null;
-  if (hero) {
-    return (
-      <>
-        <div className="relative min-w-0 flex-1">
-          <StageVideo tile={hero} speaking={speaking.has(hero.identity)} contain />
-          {screens.length > 1 && (
-            <div className="absolute left-3 top-3 flex gap-1">
-              {screens.map((t) => (
-                <button
-                  key={t.key}
-                  onClick={() => setHeroKey(t.key)}
-                  className={`rounded-full px-2.5 py-0.5 font-mono text-[11px] backdrop-blur transition-colors ${
-                    t.key === hero.key
-                      ? "bg-sol-violet/30 text-white"
-                      : "bg-black/45 text-white/70 hover:text-white"
-                  }`}
-                >
-                  {t.isLocal ? "your screen" : `${firstName(t.name)}'s screen`}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-        {(cameras.length > 0 || roster.length > 0) && (
-          <div className="ml-2 flex w-[200px] shrink-0 flex-col gap-2 overflow-y-auto">
-            {cameras.map((t) => (
-              <StageVideo
-                key={t.key}
-                tile={t}
-                speaking={speaking.has(t.identity)}
-                muted={isMuted(roster, t.identity)}
-                small
-              />
-            ))}
-            <VoiceRows roster={roster} cameras={cameras} speaking={speaking} small />
-          </div>
-        )}
-      </>
-    );
-  }
-  if (cameras.length > 0) {
-    return (
-      <div className="flex min-w-0 flex-1 flex-col gap-2">
-        <div
-          className={`grid min-h-0 flex-1 gap-2 ${
-            cameras.length === 1
-              ? "grid-cols-1"
-              : cameras.length === 2
-                ? "grid-cols-2"
-                : "grid-cols-2 grid-rows-2"
-          }`}
-        >
-          {cameras.map((t) => (
-            <StageVideo
-              key={t.key}
-              tile={t}
-              speaking={speaking.has(t.identity)}
-              muted={isMuted(roster, t.identity)}
-            />
-          ))}
-        </div>
-        <VoiceRows roster={roster} cameras={cameras} speaking={speaking} />
-      </div>
-    );
-  }
-  return (
-    <AudioOnlyStage
-      roster={roster}
-      speaking={speaking}
-      phase={phase}
-      ringing={ringing}
-      settledLine={settledLine}
-    />
-  );
-}
-
-// Speaker: one face owns the stage — whoever spoke last, or whoever the
-// viewer pinned. Everything else (faces, shares, voices) files into a strip.
-function SpeakerStage({
-  roster,
-  cameras,
-  screens,
-  speaking,
-  focusId,
-  pinned,
-  onPin,
-}: {
-  roster: any[];
-  cameras: ParticipantTile[];
-  screens: ParticipantTile[];
-  speaking: Set<string>;
-  focusId: string | null;
-  pinned: string | null;
-  onPin: (id: string) => void;
-}) {
-  const focus =
-    (focusId && cameras.find((t) => t.identity === focusId)) ||
-    (focusId && screens.find((t) => t.identity === focusId)) ||
-    cameras[0] ||
-    null;
-  const focusMemberId = focus ? focus.identity : focusId;
-  const focusMember =
-    roster.find((m) => String(m.user_id) === focusMemberId) ?? roster[0];
-  const others = [...screens, ...cameras].filter((t) => t.key !== focus?.key);
-  const onCamera = new Set(cameras.map((c) => c.identity));
-
-  return (
-    <div className="flex min-h-0 min-w-0 flex-1 gap-2">
-      <div className="relative min-h-0 min-w-0 flex-1">
-        {focus ? (
-          <StageVideo
-            tile={focus}
-            speaking={speaking.has(focus.identity)}
-            muted={isMuted(roster, focus.identity)}
-            contain={focus.kind === "screen"}
-          />
-        ) : focusMember ? (
-          <div
-            className={`flex h-full w-full flex-col items-center justify-center gap-4 rounded-xl bg-white/[0.05] transition-shadow ${
-              speaking.has(String(focusMember.user_id)) ? SPEAKING_RING : ""
-            }`}
-          >
-            <Avatar m={focusMember} size={120} />
-            <span className="font-mono text-[15px] text-sol-text">
-              {firstName(focusMember.user_name)}
-            </span>
-          </div>
-        ) : (
-          <div className="flex h-full items-center justify-center font-mono text-[13px] text-sol-text-muted">
-            just you so far
-          </div>
-        )}
-        {pinned && (
-          <button
-            onClick={() => onPin(pinned)}
-            className="absolute left-3 top-3 rounded-full bg-black/45 px-2.5 py-0.5 font-mono text-[11px] text-sol-yellow backdrop-blur transition-colors hover:text-white"
-            title="Unpin: follow the active speaker again"
-          >
-            pinned · unpin
-          </button>
-        )}
-      </div>
-      <div className="flex w-[200px] shrink-0 flex-col gap-2 overflow-y-auto">
-        {others.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => onPin(t.identity)}
-            title="Pin this tile"
-            className="rounded-lg text-left transition-opacity hover:opacity-85"
-          >
-            <StageVideo
-              tile={t}
-              speaking={speaking.has(t.identity)}
-              muted={isMuted(roster, t.identity)}
-              small
-            />
-          </button>
-        ))}
-        {roster
-          .filter(
-            (m) =>
-              !onCamera.has(String(m.user_id)) &&
-              String(m.user_id) !== String(focusMember?.user_id ?? ""),
-          )
-          .map((m) => (
-            <button
-              key={m.user_id}
-              onClick={() => onPin(String(m.user_id))}
-              className={`flex items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/[0.06] ${
-                speaking.has(String(m.user_id)) ? "bg-sol-cyan/10" : ""
-              }`}
-              title="Pin this person"
-            >
-              <Avatar m={m} size={24} />
-              <span className="truncate font-mono text-[12px] text-sol-text">
-                {firstName(m.user_name)}
-              </span>
-              {m.muted && <MicOff className="h-3 w-3 shrink-0 text-sol-text-muted" />}
-            </button>
-          ))}
-      </div>
-    </div>
-  );
-}
-
-// Grid: everyone equal — cameras, shares, and voice-only faces in one lattice.
-function GridStage({
-  roster,
-  cameras,
-  screens,
-  speaking,
-}: {
-  roster: any[];
-  cameras: ParticipantTile[];
-  screens: ParticipantTile[];
-  speaking: Set<string>;
-}) {
-  const onCamera = new Set(cameras.map((c) => c.identity));
-  const voices = roster.filter((m) => !onCamera.has(String(m.user_id)));
-  const n = screens.length + cameras.length + voices.length;
-  const cols = n <= 1 ? 1 : n <= 4 ? 2 : n <= 9 ? 3 : 4;
-  return (
-    <div
-      className="grid min-h-0 min-w-0 flex-1 gap-2"
-      style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
-    >
-      {screens.map((t) => (
-        <StageVideo key={t.key} tile={t} speaking={speaking.has(t.identity)} contain />
-      ))}
-      {cameras.map((t) => (
-        <StageVideo
-          key={t.key}
-          tile={t}
-          speaking={speaking.has(t.identity)}
-          muted={isMuted(roster, t.identity)}
-        />
-      ))}
-      {voices.map((m) => (
-        <div
-          key={m.user_id}
-          className={`flex flex-col items-center justify-center gap-2.5 rounded-xl bg-white/[0.05] transition-shadow ${
-            speaking.has(String(m.user_id)) ? SPEAKING_RING : ""
-          }`}
-        >
-          <Avatar m={m} size={64} />
-          <div className="flex items-center gap-1.5">
-            <span className="font-mono text-[12.5px] text-sol-text">{firstName(m.user_name)}</span>
-            {m.muted && <MicOff className="h-3 w-3 text-sol-text-muted" />}
-          </div>
-        </div>
-      ))}
-      {n === 0 && (
-        <div className="flex items-center justify-center font-mono text-[13px] text-sol-text-muted">
-          just you so far
-        </div>
-      )}
-    </div>
-  );
-}
-
-// One video surface. `contain` letterboxes (screen shares must not crop);
-// cameras cover. The name chip is fixed black-on-white so it reads over any
-// video in any theme (the mini window renders these in the app's theme).
-export function StageVideo({
-  tile,
-  speaking,
-  muted,
-  small,
-  contain,
-}: {
-  tile: ParticipantTile;
-  speaking: boolean;
-  muted?: boolean;
-  small?: boolean;
-  contain?: boolean;
-}) {
-  const ref = useRef<HTMLVideoElement>(null);
-  const boxRef = useRef<HTMLDivElement>(null);
-  useWatchEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    tile.track.attach(el);
-    return () => {
-      tile.track.detach(el);
-    };
-  }, [tile.track]);
-  // Cursors ride only a letterboxed share: a cropped one has no honest
-  // mapping between the pointer and the share's pixels.
-  const cursorsOn = tile.kind === "screen" && !!contain;
-  const sender = useScreenCursorSender(tile, ref);
-  return (
-    <div
-      ref={boxRef}
-      data-sv-screen-tile={cursorsOn ? "cursors" : undefined}
-      onPointerMove={cursorsOn ? sender.onPointerMove : undefined}
-      onPointerLeave={cursorsOn ? sender.onPointerLeave : undefined}
-      className={`group relative overflow-hidden bg-black/60 transition-shadow duration-300 ${
-        speaking ? SPEAKING_RING : ""
-      } ${small ? "aspect-video w-full rounded-lg" : "h-full w-full rounded-xl"}`}
-    >
-      <video
-        ref={ref}
-        autoPlay
-        playsInline
-        muted={tile.isLocal}
-        className={`h-full w-full ${contain ? "object-contain" : "object-cover"} ${
-          tile.isLocal && tile.kind === "camera" ? "-scale-x-100" : ""
-        }`}
-      />
-      <span className="absolute bottom-2 left-2 flex items-center gap-1.5">
-        <span
-          className={`flex items-center gap-1.5 rounded-full bg-black/45 font-mono text-white/90 backdrop-blur ${
-            small ? "px-2 py-px text-[11px]" : "px-2.5 py-0.5 text-[12px]"
-          }`}
-        >
-          {tile.isLocal ? "you" : firstName(tile.name)}
-          {tile.kind === "screen" ? " · screen" : ""}
-          {muted && tile.kind === "camera" && <MicOff className="h-3 w-3 text-sol-red/90" />}
-        </span>
-        {/* Follow them in the app. A shared screen carries it at rest: that
-            is the moment it is for. A camera tile reveals it on hover. */}
-        {!small && <FollowChip identity={tile.identity} name={tile.name} variant="tile" always={tile.kind === "screen"} />}
-      </span>
-      {cursorsOn && <ScreenCursors tile={tile} boxRef={boxRef} videoRef={ref} />}
-    </div>
-  );
-}
-
-// Roster rows for people who are voice-only while others are on camera.
-function VoiceRows({
-  roster,
-  cameras,
-  speaking,
-  small,
-}: {
-  roster: any[];
-  cameras: ParticipantTile[];
-  speaking: Set<string>;
-  small?: boolean;
-}) {
-  const onCamera = new Set(cameras.map((c) => c.identity));
-  const voices = roster.filter((m) => !onCamera.has(String(m.user_id)));
-  const followLeaderId = useInboxStore((s) => s.followLeaderId);
-  if (voices.length === 0) return null;
-  return (
-    <div className={small ? "space-y-1" : "flex flex-wrap gap-2"}>
-      {voices.map((m) => (
-        <div
-          key={m.user_id}
-          className={`group flex items-center gap-2 rounded-lg px-2 py-1.5 transition-colors ${
-            speaking.has(String(m.user_id)) ? "bg-sol-cyan/10" : ""
-          }`}
-        >
-          <Avatar m={m} size={22} followed={followLeaderId === String(m.user_id)} />
-          <span className="truncate font-mono text-[12px] text-sol-text">
-            {firstName(m.user_name)}
-          </span>
-          {m.muted && <MicOff className="h-3 w-3 shrink-0 text-sol-text-muted" />}
-          <span className="ml-auto shrink-0">
-            <FollowChip identity={String(m.user_id)} name={m.user_name} variant="row" />
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// Nobody on camera: large avatars breathing on the stage, speaking ring live.
-function AudioOnlyStage({
-  roster,
-  speaking,
-  phase,
-  ringing = [],
-  settledLine,
-}: {
-  roster: any[];
-  speaking: Set<string>;
-  phase: string;
-  ringing?: { user_id: string; user_name: string; user_image?: string }[];
-  settledLine?: string | null;
-}) {
-  const inRoom = new Set(roster.map((m) => String(m.user_id)));
-  // People we are ringing take a seat before they answer: a breathing,
-  // translucent face with "ringing…" under it, so a group start reads as
-  // "these three are on their way" rather than "just you so far".
-  const ghosts = ringing.filter((r) => !inRoom.has(r.user_id));
-  return (
-    <div className="flex min-w-0 flex-1 flex-col items-center justify-center gap-6">
-      <div className="flex flex-wrap items-center justify-center gap-10">
-        {roster.length === 0 && ghosts.length === 0 && (
-          <span className="font-mono text-[13px] text-sol-text-muted">
-            {phase === "connecting" ? "connecting…" : phase === "ringing_out" ? "ringing…" : "just you so far"}
-          </span>
-        )}
-        {ghosts.map((r) => (
-          <div key={`ring:${r.user_id}`} className="flex flex-col items-center gap-3 opacity-60">
-            <div className="animate-pulse rounded-full ring-2 ring-sol-violet/40 ring-offset-4 ring-offset-sol-base03">
-              <Avatar m={r} size={88} />
-            </div>
-            <span className="font-mono text-[12.5px] text-sol-text-muted">
-              {firstName(r.user_name)} · ringing…
-            </span>
-          </div>
-        ))}
-        {roster.map((m) => (
-          <div key={m.user_id} className="flex flex-col items-center gap-3">
-            <div
-              className={`rounded-full transition-all duration-300 ${
-                speaking.has(String(m.user_id))
-                  ? "ring-2 ring-sol-cyan/80 ring-offset-4 ring-offset-sol-base03 shadow-[0_0_0_8px_rgba(42,161,152,0.14)]"
-                  : ""
-              }`}
-            >
-              <Avatar m={m} size={88} />
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="font-mono text-[13px] text-sol-text">
-                {firstName(m.user_name)}
-              </span>
-              {m.muted && <MicOff className="h-3 w-3 text-sol-text-muted" />}
-              {m.sharing && <MonitorUp className="h-3 w-3 text-sol-violet" />}
-            </div>
-          </div>
-        ))}
-      </div>
-      {settledLine && (
-        <span className="font-mono text-[12px] text-sol-text-muted">
-          {settledLine.toLowerCase()}
-        </span>
-      )}
-    </div>
-  );
-}
-
 
 // ── The rail: the room's one thread ──────────────────────────────────────
 
@@ -1180,8 +799,8 @@ function CaptionsLane({
                 i === arr.length - 1 ? "text-sol-text" : "text-sol-text-muted"
               }`}
             >
-              <span className="w-16 shrink-0 truncate text-right font-mono text-[11px] text-sol-cyan">
-                {firstName(c.speaker)}
+              <span className="flex w-20 shrink-0 items-center justify-end gap-1 font-mono text-[11px] text-sol-cyan">
+                <PersonName name={c.speaker} tagClassName="!px-0.5" />
               </span>
               <span className="min-w-0 truncate">{c.text}</span>
             </div>
@@ -1196,8 +815,6 @@ function CaptionsLane({
 // sits alone at the right. Round buttons on a borderless pill: state reads
 // by tint (cyan = camera on, violet = sharing, green = transcribing, red =
 // muted), never by outline.
-const STAGE_CTL = "rounded-full p-2 transition-colors";
-const STAGE_CTL_IDLE = "text-sol-text-muted hover:bg-white/10 hover:text-sol-text";
 function ControlBar({ call, live }: { call: any; live: { transcript_id: string; routes?: Array<{ kind: string; target: string }> } | null }) {
   const transcribing = !!live;
 
@@ -1224,6 +841,7 @@ function ControlBar({ call, live }: { call: any; live: { transcript_id: string; 
           />
         )}
         <TranscribeControls live={transcribing} />
+        {call.roomKey && call.phase === "connected" && <RecordButton roomKey={call.roomKey} />}
         <div className="mx-1.5 h-5 w-px bg-white/10" />
         <HangUpButton />
       </div>

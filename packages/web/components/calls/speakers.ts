@@ -1,5 +1,7 @@
 // Speaker presentation shared by the call stage and the calls page: one
 // stable accent per voice so a conversation reads the same everywhere.
+import { formatCallTime } from "@codecast/shared/entities";
+import { fmtDuration } from "../triggerCadence";
 
 export const SPEAKER_COLORS = [
   "text-sol-cyan",
@@ -21,6 +23,13 @@ export function firstName(name: string | undefined): string {
   return base.split(/\s+/)[0] || "teammate";
 }
 
+/** A speaker's first name for a line of plain text, where no badge can
+ *  follow: a guest keeps the mark the room put on their name
+ *  (callSpeakerName), so "Ada (guest): words" never reads as a teammate. */
+export function speakerShortName(name: string | undefined): string {
+  return /\(\s*guest\s*\)\s*$/i.test(name ?? "") ? `${firstName(name)} (guest)` : firstName(name);
+}
+
 /**
  * A duration on a transcript's own clock: how far into the call this is, or
  * how long a recording has been running.
@@ -30,9 +39,12 @@ export function firstName(name: string | undefined): string {
  * and a meeting recorder is exactly the surface that runs that long.
  */
 export function fmtClock(msFromStart: number): string {
-  const total = Math.max(0, Math.floor(msFromStart / 1000));
-  const s = String(total % 60).padStart(2, "0");
-  if (total < 3600) return `${Math.floor(total / 60)}:${s}`;
-  const m = String(Math.floor(total / 60) % 60).padStart(2, "0");
-  return `${Math.floor(total / 3600)}:${m}:${s}`;
+  // The same clock a moment reference is written in (`cl-42@12:34`), so the
+  // time beside a line is the time an agent quotes to point at its frame.
+  return formatCallTime(msFromStart);
+}
+
+/** How long a call ran, in the same form the thread's passages use. */
+export function fmtCallLength(startedAt: number, endedAt: number | null): string {
+  return endedAt ? fmtDuration(Math.max(1000, endedAt - startedAt)) : "live";
 }

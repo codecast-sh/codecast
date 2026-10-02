@@ -10,13 +10,11 @@ import { DetailSplitLayout } from "../../../components/DetailSplitLayout";
 import { AuthGuard } from "../../../components/AuthGuard";
 import { AppLoader } from "../../../components/AppLoader";
 import { DocListContent } from "../page";
-import { DOC_TYPES, DOC_TYPE_LABELS, docTypeLabel, type DocType } from "@codecast/shared/docs";
-import { shareOrigin, canonicalUrl } from "../../../lib/utils";
-import { useMutation } from "convex/react";
-import { api as _api } from "@codecast/convex/convex/_generated/api";
+import { DOC_TYPES, DOC_TYPE_LABELS, docTypeLabel } from "@codecast/shared/docs";
+import { docTypeStyle } from "../../../lib/docTypeStyle";
 import { DocumentDetailLayout } from "../../../components/DocumentDetailLayout";
 import { EntryTimeline, type TimelineEntry } from "../../../components/EntryTimeline";
-import { SharePopover } from "../../../components/SharePopover";
+import { ShareControl } from "../../../components/ShareControl";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { FeedCard } from "../../../components/ActivityFeed";
 import { WatchButton } from "../../../components/WatchButton";
@@ -30,34 +28,15 @@ import {
   CheckCircle2,
   XCircle,
   CircleDotDashed,
-  AlertTriangle,
-  ArrowUp,
-  ArrowDown,
-  Minus,
   Tag,
 } from "lucide-react";
+import { taskPriority } from "../../../lib/taskPriority";
 import Link from "next/link";
 import { toast } from "sonner";
 import { undoableArchiveDoc } from "../../../store/undoActions";
 import { DocDates } from "../../../components/DocDates";
 
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
-const api = _api as any;
-
-// Styling only; the type list and labels come from @codecast/shared/docs.
-// Typed by DocType so a type added there without a style here fails to compile.
-const DOC_TYPE_STYLE: Record<DocType, { color: string; bg: string }> = {
-  note: { color: "text-sol-text-muted", bg: "bg-sol-text-muted/10 border-sol-text-muted/30" },
-  plan: { color: "text-sol-blue", bg: "bg-sol-blue/10 border-sol-blue/30" },
-  design: { color: "text-sol-violet", bg: "bg-sol-violet/10 border-sol-violet/30" },
-  spec: { color: "text-sol-cyan", bg: "bg-sol-cyan/10 border-sol-cyan/30" },
-  investigation: { color: "text-sol-yellow", bg: "bg-sol-yellow/10 border-sol-yellow/30" },
-  handoff: { color: "text-sol-orange", bg: "bg-sol-orange/10 border-sol-orange/30" },
-  decision: { color: "text-sol-red", bg: "bg-sol-red/10 border-sol-red/30" },
-  charter: { color: "text-sol-magenta", bg: "bg-sol-magenta/10 border-sol-magenta/30" },
-  brief: { color: "text-sol-green", bg: "bg-sol-green/10 border-sol-green/30" },
-};
-const docTypeStyle = (docType: string) => DOC_TYPE_STYLE[docType as DocType] ?? DOC_TYPE_STYLE.note;
 
 const STATUS_CONFIG: Record<string, { icon: typeof Circle; label: string; color: string }> = {
   draft: { icon: CircleDotDashed, label: "Draft", color: "text-sol-text-dim" },
@@ -66,14 +45,6 @@ const STATUS_CONFIG: Record<string, { icon: typeof Circle; label: string; color:
   in_review: { icon: CircleDot, label: "In Review", color: "text-sol-violet" },
   done: { icon: CheckCircle2, label: "Done", color: "text-sol-green" },
   dropped: { icon: XCircle, label: "Dropped", color: "text-sol-text-dim" },
-};
-
-const PRIORITY_CONFIG: Record<string, { icon: typeof Minus; label: string; color: string }> = {
-  urgent: { icon: AlertTriangle, label: "Urgent", color: "text-sol-red" },
-  high: { icon: ArrowUp, label: "High", color: "text-sol-orange" },
-  medium: { icon: Minus, label: "Medium", color: "text-sol-text-muted" },
-  low: { icon: ArrowDown, label: "Low", color: "text-sol-text-dim" },
-  none: { icon: Minus, label: "None", color: "text-sol-text-dim" },
 };
 
 function DocTypeSelector({
@@ -172,8 +143,6 @@ function DocDetailContent() {
   const updateDoc = useInboxStore((s) => s.updateDoc);
   const pinDoc = useInboxStore((s) => s.pinDoc);
   const promoteToPlan = useInboxStore((s) => s.promoteDocToPlan);
-  const generateShareLink = useMutation(api.docs.generateShareLink);
-  const unshareLink = useMutation(api.docs.unshare);
 
   const handlePin = useCallback(async () => {
     if (!data) return;
@@ -250,6 +219,7 @@ function DocDetailContent() {
           placeholder="Start typing or insert using /"
           cliEditedAt={(doc as any).cli_edited_at}
           contentReady={!!detail}
+          drafting={{ overflow: true }}
           topBarLeft={
             <>
               <DocTypeSelector value={doc.doc_type} onChange={handleTypeChange} />
@@ -260,18 +230,7 @@ function DocDetailContent() {
           }
           topBarRight={
             <>
-              <SharePopover
-                hasTeam={false}
-                hasShareToken={!!(doc as any).share_token}
-                shareUrl={(doc as any).share_token ? `${shareOrigin()}/share/doc/${(doc as any).share_token}` : null}
-                pageUrl={canonicalUrl()}
-                forwardLabel="doc"
-                onRevokeShareLink={() => unshareLink({ id: doc._id as any })}
-                onGenerateShareLink={async () => {
-                  const result = await generateShareLink({ id: doc._id as any });
-                  return `${shareOrigin()}/share/doc/${result.share_token}`;
-                }}
-              />
+              <ShareControl label="doc" path={`/docs/${doc._id}`} publicShare={{ kind: "doc", id: doc._id, token: (doc as any).share_token }} />
               <button
                 onClick={handlePin}
                 className={`p-1.5 rounded-md transition-colors ${doc.pinned ? "text-sol-yellow" : "text-sol-text-dim hover:text-sol-yellow"}`}
@@ -379,7 +338,7 @@ function DocDetailContent() {
                   <div className="border border-sol-border/20 rounded-lg divide-y divide-sol-border/10 overflow-hidden">
                     {relatedTasks.map((task: any) => {
                       const status = STATUS_CONFIG[task.status] || STATUS_CONFIG.open;
-                      const priority = PRIORITY_CONFIG[task.priority] || PRIORITY_CONFIG.medium;
+                      const priority = taskPriority(task.priority);
                       const StatusIcon = status.icon;
                       const PriorityIcon = priority.icon;
                       return (

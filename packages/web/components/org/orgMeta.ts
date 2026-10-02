@@ -93,6 +93,7 @@ export const CHANGE_KIND_META: Record<OrgChange["kind"], { label: string; descri
   initiative: { label: "Goals to set", describe: "Sets a goal the company has not written down: its name, what reaching it looks like, the projects that carry it and who drives it." },
   initiative_projects: { label: "Projects added to a goal", describe: "Adds projects whose work serves a goal that exists and does not list them." },
   initiative_owner: { label: "Owners for a goal", describe: "Names who drives a goal that has no owner: a person or a role." },
+  initiative_shape: { label: "Goals placed and measured", describe: "Puts a goal under the goal it serves, or at the top, and sets the numbers that say it is reached." },
 };
 
 /** The kind's label, total: a kind this build does not know still reads as a
@@ -104,7 +105,7 @@ export function kindLabel(kind: string | undefined): string {
 /** The kind's one sentence, total, with the unknown kind named so the reader
  *  can quote it. */
 export function kindDescription(kind: string | undefined): string {
-  return CHANGE_KIND_META[kind as OrgChange["kind"]]?.describe ?? `This version of codecast does not know this kind of change${kind ? ` ("${kind}")` : ""}. Update codecast, or ask the chief of staff what it does.`;
+  return CHANGE_KIND_META[kind as OrgChange["kind"]]?.describe ?? `This version of codecast does not know this kind of change${kind ? ` ("${kind}")` : ""}. Update codecast, or ask the head of people what it does.`;
 }
 
 /** The one line a change reads as to a person (org-staffing.md S17). The
@@ -147,6 +148,7 @@ export function chipLine(change: OrgChange): string {
     case "initiative": return `+ ${change.title}`;
     case "initiative_projects": return refs(change.projects, "+ ");
     case "initiative_owner": return `owner ${change.owner.startsWith("@") ? at(change.owner) : change.owner}`;
+    case "initiative_shape": return [change.parent === undefined ? "" : change.parent ? `under ${change.parent}` : "top level", change.metrics === undefined ? "" : change.metrics.length ? change.metrics.map((m) => `${m.name} ${m.target}`).join(" \u00b7 ") : "no metric"].filter(Boolean).join(" \u00b7 ");
     default: return changeLine(change);
   }
 }
@@ -174,6 +176,7 @@ export const CHANGE_KIND_WORD: Record<OrgChange["kind"], string> = {
   initiative: "goal",
   initiative_projects: "projects",
   initiative_owner: "owner",
+  initiative_shape: "shape",
 };
 
 /** A ghost's colour (org-staffing.md S5): the page's violet, dashed, at 55%. */

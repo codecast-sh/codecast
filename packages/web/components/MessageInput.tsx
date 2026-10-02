@@ -11,10 +11,11 @@ import { uploadBlobToStorage } from "../lib/uploadBlob";
 import { textareaCaretRect } from "../lib/textareaCaret";
 import { classifyApiErrorBanner, ACTIVE_AGENT_STATUSES, type AgentStatus } from "@codecast/shared/contracts";
 import { useLimitRecovery } from "../hooks/useLimitRecovery";
-import { useNowWhen } from "../hooks/useCoarseNow";
+import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
 import { formatCountdown, HIBERNATED_COPY } from "@codecast/shared/contracts";
 import { parseLimitResetAt } from "../lib/limitReset";
 import { pendingImageUploads, persistDraftImages, restoreDraftImages, settleDraftImageUpload } from "../lib/draftImages";
+import { cancelPendingSend } from "../lib/cancelPendingSend";
 import { cancelDraftWrite, scheduleDraftWrite } from "../lib/pendingDraftWrites";
 import { isResentCopyOfSentMessage } from "../lib/staleDraft";
 import type { SkillItem } from "../lib/conversationProcessor";
@@ -22,10 +23,10 @@ import { KeyCap, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { toast } from "sonner";
 import { appendToDraft } from "../lib/quoteFormat";
 import { imagePlaceholderToken, insertImagePlaceholder, dropImagePlaceholder } from "../lib/imagePlaceholder";
-import { attachReviewToMessage } from "../lib/reviewActions";
+import { attachReviewToMessage, quotedImageStorageIds } from "../lib/reviewActions";
 import { enterReviewFromComposer } from "../lib/reviewNav";
 import { ReviewBar } from "./ReviewBar";
-import { ComposerSendButton, ComposerShell, ComposerTextarea, ComposerTextRow } from "./ComposerShell";
+import { ComposerFoot, ComposerSendButton, ComposerShell, ComposerTextarea, ComposerTextRow } from "./ComposerShell";
 import { composerColumn, FIELD_SIZING_SUPPORTED } from "./composerLayout";
 import { ComposerSuggestion, ComposerSuggestionHandle } from "./ComposerSuggestion";
 import { useMutation, useQuery, useConvex } from "convex/react";
@@ -49,7 +50,9 @@ import { inFlightPending, isAliveIdleStatus, pendingRowHoldReason, type LiveAgen
 import { expandEntityMentions } from "../lib/mentionExpansion";
 import { identityLine } from "../lib/sessionIdentity";
 import { personifyAllNow } from "../hooks/usePersonifyAll";
-import { ghostRestartContextFor, deriveRestartStage } from "../hooks/useSessionRestart";
+import { ghostRestartContextFor, deriveRestartStage, restartPhaseOf } from "../hooks/useSessionRestart";
+import { useConversationCommands } from "../hooks/useSessionCommands";
+import { latestRestartRow, requestSessionRestart } from "../lib/sessionCommands";
 import { useSwipeToDismiss } from "../hooks/useSwipeToDismiss";
 import { WorkingStatusLine } from "./conversation/sessionChrome";
 import { LiveCompactionCard } from "./conversation/CompactionProgressCard";
@@ -186,7 +189,7 @@ const ForkReplyInput = memo(function ForkReplyInput({ userName, userAvatar, onFo
   );
 });
 
-export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onForkSend, onSendEscape, onOpenNavigator, onPopulateInput, clearInputRef, permissionMode, permissionModePending, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchMapNode, threadStateNode, composerNode, bareComposer, inline, chatMentionMode, mentionTeamId, composerPlaceholder, workingSinceTs, workingPhrase, escapeOwnedRef }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: AgentStatus; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onForkSend?: (content: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; /** Filled with a function that empties the composer and deletes its draft: text, images and the stored row. */ clearInputRef?: React.MutableRefObject<(() => void) | null>; permissionMode?: string; permissionModePending?: boolean; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string, images?: Array<{ storageId?: string; previewUrl: string; mime: string; uploading: boolean }>) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; branchMapNode?: React.ReactNode; threadStateNode?: React.ReactNode; composerNode?: React.ReactNode; bareComposer?: boolean; /** The full session composer laid out inside another surface (a Threads card): full width, not pinned to the bottom, tighter. */ inline?: boolean; chatMentionMode?: boolean; mentionTeamId?: string; composerPlaceholder?: string; workingSinceTs?: number; workingPhrase?: string; escapeOwnedRef?: React.MutableRefObject<boolean> }) {
+export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onForkSend, onSendEscape, onOpenNavigator, onPopulateInput, clearInputRef, permissionMode, permissionModePending, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchMapNode, threadStateNode, composerNode, composerFoot, bareComposer, inline, chatMentionMode, mentionTeamId, composerPlaceholder, workingSinceTs, workingPhrase, escapeOwnedRef }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: AgentStatus; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onForkSend?: (content: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; /** Filled with a function that empties the composer and deletes its draft: text, images and the stored row. */ clearInputRef?: React.MutableRefObject<(() => void) | null>; permissionMode?: string; permissionModePending?: boolean; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string, images?: Array<{ storageId?: string; previewUrl: string; mime: string; uploading: boolean }>) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; branchMapNode?: React.ReactNode; threadStateNode?: React.ReactNode; composerNode?: React.ReactNode; /** The framed surface's toolbar (attach, voice, options). Renders as a row under the field, and send moves into it. */ composerFoot?: React.ReactNode; bareComposer?: boolean; /** The full session composer laid out inside another surface (a Threads card): full width, not pinned to the bottom, tighter. */ inline?: boolean; chatMentionMode?: boolean; mentionTeamId?: string; composerPlaceholder?: string; workingSinceTs?: number; workingPhrase?: string; escapeOwnedRef?: React.MutableRefObject<boolean> }) {
   const sacredKey = sessionId || conversationId;
   const sacredKeyRef = useRef(sacredKey);
   const convIdRef = useRef(conversationId);
@@ -293,7 +296,11 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const [isResuming, setIsResuming] = useState(false);
   // Distinct from isResuming: true only while a destructive kill+restart is in flight, so the
   // footer can say "Killing & restarting" instead of the gentler "Waiting for connection".
-  const [isRestarting, setIsRestarting] = useState(false);
+  // A restart of this conversation in flight, from its sessionCommands row
+  // (whoever asked: this footer, the header, the inbox row).
+  const restartRow = useInboxStore((s) => latestRestartRow(s.sessionCommands, conversationId));
+  const restartNow = useCoarseNow(restartRow && !restartRow.confirmed_at ? 1_000 : 60_000);
+  const isRestarting = restartPhaseOf(restartRow, restartNow).phase === "restarting";
   const hasPendingSend = useInboxStore((s) => convHasPendingSend(s.pendingMessages[conversationId]));
   const [showModeLabel, setShowModeLabel] = useState(false);
   const [modeTooltip, setModeTooltip] = useState(false);
@@ -307,7 +314,6 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const restartBoundIdRef = useRef(conversationId);
   if (restartBoundIdRef.current !== conversationId) {
     restartBoundIdRef.current = conversationId;
-    if (isRestarting) setIsRestarting(false);
     if (isResuming) setIsResuming(false);
     autoRestartTriggeredRef.current = false;
     autoResumeTriggeredRef.current = false;
@@ -315,14 +321,13 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const convCommand = useInboxStore((s) => s.convCommand);
   // Live kill→resume ladder while a recovery is in flight: the daemon stamps
   // each command row (executed_at + result/error), so the footer can show what
-  // is actually happening instead of an indefinite spinner. Skip-gated so the
-  // query costs nothing outside recovery.
-  const restartProgress = useQuery(
-    api.conversations.getRestartProgress,
-    (isRestarting || isResuming) && isConvexId(conversationId)
-      ? { conversation_id: conversationId }
-      : "skip",
-  ) as { command: string; created_at: number; executed_at: number | null; result: string | null; error: string | null }[] | null | undefined;
+  // is actually happening instead of an indefinite spinner. Fed only during
+  // recovery, so it costs nothing otherwise.
+  const recoveryRows = useConversationCommands(conversationId, isRestarting || isResuming);
+  const restartProgress = useMemo(
+    () => recoveryRows.filter((c) => c.command === "kill_session" || c.command === "resume_session"),
+    [recoveryRows],
+  );
   // Flips on when a restart request has sat unclaimed long enough that the
   // owning daemon is probably offline — the one failure the command rows can't
   // report themselves.
@@ -630,7 +635,6 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   useWatchEffect(() => {
     if (showStuckBanner && (isAgentActive || messageReachedSession)) {
       setShowStuckBanner(false);
-      setIsRestarting(false);
     }
   }, [showStuckBanner, isAgentActive, messageReachedSession]);
 
@@ -811,8 +815,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       (!opts?.auto && (isExistingMessageDead || messageStatus?.status === "failed" || messageStatus?.status === "undeliverable"));
     try {
       if (shouldRestart) {
-        setIsRestarting(true);
-        handleRestartResult(await convCommand(conversationId, "restartSession", ghostRestartContext()));
+        handleRestartResult(await requestSessionRestart(conversationId, ghostRestartContext()));
       } else {
         await convCommand(conversationId, "resumeSession");
       }
@@ -825,21 +828,18 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       // which targets the live twin / recreates the row before resuming.
       if (/conversation_deleted|Conversation not found/i.test(msg)) {
         try {
-          setIsRestarting(true);
-          handleRestartResult(await convCommand(conversationId, "restartSession", ghostRestartContext()));
+          handleRestartResult(await requestSessionRestart(conversationId, ghostRestartContext()));
           return;
         } catch (err2) {
           if (isParkedDispatchError(err2)) return;
           useInboxStore.getState().markServerDeleted(conversationId);
           toast.error("This conversation no longer exists on the server", { description: "It couldn't be restored automatically." });
           setIsResuming(false);
-          setIsRestarting(false);
           return;
         }
       }
       toast.error(msg || "Failed to resume session");
       setIsResuming(false);
-      setIsRestarting(false);
     }
   }, [conversationId, convCommand, isResuming, isExistingMessageDead, messageStatus?.status, ghostRestartContext, handleRestartResult, serverDeleted]);
 
@@ -855,12 +855,11 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         : null;
     if (!ref) return;
     try {
-      await useInboxStore.getState().cancelPendingMessage(conversationId, ref);
+      await cancelPendingSend(conversationId, ref, existingPending?.content ?? sentContentRef.current);
       setPendingMessageId(null);
       setSentAt(null);
       setShowStuckBanner(false);
       setIsResuming(false);
-      setIsRestarting(false);
       sentContentRef.current = null;
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to cancel message");
@@ -873,7 +872,6 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     // thinking, compacting, or waiting on input — so there's nothing to recover.
     if (isResuming && (isConversationLive || isThinking || isAgentActive || messageReachedSession)) {
       setIsResuming(false);
-      setIsRestarting(false);
       setShowStuckBanner(false);
       return;
     }
@@ -915,13 +913,11 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     if (isAgentActive || messageReachedSession) return;
     if (!conversationId || !isConvexId(conversationId)) return;
     autoRestartTriggeredRef.current = true;
-    setIsRestarting(true);
     toast("Message couldn't be delivered — restarting session…");
-    convCommand(conversationId, "restartSession", ghostRestartContext())
+    requestSessionRestart(conversationId, ghostRestartContext())
       .then((res) => { handleRestartResult(res); setIsResuming(true); })
       .catch((err) => {
         if (isParkedDispatchError(err)) return;
-        setIsRestarting(false);
         const msg = err instanceof Error ? err.message : String(err);
         if (/conversation_deleted/i.test(msg)) {
           useInboxStore.getState().markServerDeleted(conversationId);
@@ -930,7 +926,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
           toast.error(`Session restart failed: ${msg}`);
         }
       });
-  }, [messageStatus?.status, isAgentActive, messageReachedSession, conversationId, convCommand, ghostRestartContext, handleRestartResult]);
+  }, [messageStatus?.status, isAgentActive, messageReachedSession, conversationId, ghostRestartContext, handleRestartResult]);
 
   // The draft id with a debounced write in flight (lib/pendingDraftWrites).
   const draftPendingIdRef = useRef<string | null>(null);
@@ -1531,10 +1527,6 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       await onWorkflowLaunch(goal);
       return;
     }
-    // Auto-attach any pending review quotes/comments so a plain send carries them —
-    // no separate "add to message" step. They prepend the typed reply and the batch
-    // is cleared. (Gate/workflow above return early, so they're unaffected.)
-    message = attachReviewToMessage(conversationId, message);
     // Snapshot the composer's images. Ready ones already carry a storageId;
     // still-uploading ones are handed to the pending bubble (preview + spinner)
     // and finished in the background — either way the input unblocks instantly.
@@ -1549,12 +1541,22 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       row => row.storageId && !memoryImages.some(img => img.storageId === row.storageId)
     ) as typeof memoryImages;
     const submitImages = [...memoryImages, ...draftOnlyImages];
+    // Auto-attach any pending review quotes/comments so a plain send carries them —
+    // no separate "add to message" step. They prepend the typed reply and the batch
+    // is cleared. (Gate/workflow above return early, so they're unaffected.) Images
+    // quoted from the gallery ride along as attachments after the composer's own,
+    // and each quote names its picture by that attachment number. A fork from a
+    // selection sends text only, so its image quotes point by address instead.
+    const forkingFromSelection = !!(isSelectionActive && selectedMessageUuid && onForkFromMessage);
+    const quotedImageIds = forkingFromSelection ? [] : quotedImageStorageIds(conversationId);
+    message = attachReviewToMessage(conversationId, message, quotedImageIds.length ? submitImages.length + 1 : undefined);
+    const quotedImages: OptimisticImage[] = quotedImageIds.map(storage_id => ({ media_type: "image/png", storage_id }));
     const hasUploadingImages = submitImages.some(img => img.uploading);
     const canSend = message.trim() || submitImages.length > 0;
     if (!canSend) return;
 
     // If a message is selected, fork from it then send the new content
-    if (isSelectionActive && selectedMessageUuid && onForkFromMessage) {
+    if (forkingFromSelection) {
       sendingRef.current = true;
       cancelPendingDraft();
       isSelectionEditedRef.current = true;
@@ -1598,11 +1600,11 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     const trimmed = message.trim() || (submitImages.length > 0 ? "[image]" : "");
     // The optimistic bubble shows ready images via storage_id, and still-
     // uploading ones via their local preview + a spinner (dropped on resolve).
-    const optimisticImages: OptimisticImage[] = submitImages.map(img =>
+    const optimisticImages: OptimisticImage[] = [...submitImages.map((img): OptimisticImage =>
       img.storageId
         ? { media_type: img.file.type, storage_id: img.storageId as string }
         : { media_type: img.file.type, preview_url: img.previewUrl, uploading: true }
-    );
+    ), ...quotedImages];
     sendingRef.current = true;
     let clientId: string;
     try {
@@ -1684,9 +1686,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
             : (pendingImageUploads.get(img.previewUrl) ?? Promise.resolve<string | null>(null)),
         }));
         const settled = await Promise.all(tasks.map(t => t.promise.then(storageId => ({ ...t, storageId }))));
-        const resolvedImages: OptimisticImage[] = settled
+        const resolvedImages: OptimisticImage[] = [...settled
           .filter(t => t.storageId)
-          .map(t => ({ media_type: t.mediaType, storage_id: t.storageId as string }));
+          .map(t => ({ media_type: t.mediaType, storage_id: t.storageId as string })), ...quotedImages];
         // Every upload failed and there was no text — nothing real to send.
         // uploadImage already toasted each failure; just fail the bubble.
         if (resolvedImages.length === 0 && !message.trim()) {
@@ -1705,7 +1707,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         await finishSend(resolvedImages.map(i => i.storage_id as string));
       })();
     } else {
-      await finishSend(submitImages.map(img => img.storageId as string));
+      await finishSend([...submitImages.map(img => img.storageId as string), ...quotedImageIds]);
     }
   };
 
@@ -2152,6 +2154,67 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const quotesOnlySend = !hasContent && reviewCount > 0;
   const { colWidth, colClass } = composerColumn({ inline, expanded: isExpanded });
   const sendButton = <ComposerSendButton canSubmit={canSubmit} bare={bareComposer} quotesOnly={quotesOnlySend} />;
+  // Expand, stash, hand off and fork: beside the text, or in the surface's foot
+  // row next to send when it brings one.
+  const rowActions = (
+    <>
+      {composeMode ? (
+        <button
+          type="button"
+          onClick={toggleCompose}
+          className="w-7 h-7 rounded-full transition-colors flex items-center justify-center text-sol-text-dim hover:text-sol-text hover:bg-sol-bg/50"
+          title="Collapse editor (Cmd+Shift+E)"
+        >
+          <Minimize2 className="w-3.5 h-3.5" />
+        </button>
+      ) : isMultiline && (
+        <button
+          type="button"
+          onClick={toggleCompose}
+          className="w-7 h-7 rounded-full transition-colors flex items-center justify-center text-sol-text-dim/30 hover:text-sol-text-dim hover:bg-sol-bg/50"
+          title="Expand editor (Cmd+Shift+E)"
+        >
+          <Maximize2 className="w-3 h-3" />
+        </button>
+      )}
+      {onSendAndDismiss && canSubmit && !onGateSend && !onWorkflowLaunch && (
+        <ShortcutTooltip label="Send and stash" action="msg.sendDismiss" hint="the agent keeps running out of the inbox" side="top">
+          <button
+            type="button"
+            onClick={handleSendAndStash}
+            className="w-7 h-7 rounded-full transition-colors flex items-center justify-center text-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)] hover:text-sol-yellow hover:bg-sol-yellow/10"
+            aria-label="Send and stash"
+          >
+            <Archive className="w-3.5 h-3.5" />
+          </button>
+        </ShortcutTooltip>
+      )}
+      {canHandoff && (
+        <HandoffPicker owners={owners} conversationId={conversationId} note={composeMode && composeRef.current ? composeRef.current.getMarkdown() : message} open={handoffOpen} onOpenChange={openHandoff} onPick={handleHandoffPick}>
+          <ShortcutTooltip label="Hand off to a teammate" action="msg.handoff" hint="your message goes along as the note" side="top">
+          <button
+            type="button"
+            className={`w-7 h-7 rounded-full transition-colors flex items-center justify-center ${handoffOpen ? "text-sol-violet bg-sol-violet/15" : "text-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)] hover:text-sol-violet hover:bg-sol-violet/10"}`}
+            aria-label="Hand off to a teammate"
+            onClick={() => openHandoff(!handoffOpen)}
+          >
+            <ArrowRightLeft className="w-3.5 h-3.5" />
+          </button>
+          </ShortcutTooltip>
+        </HandoffPicker>
+      )}
+      {onForkSend && canSubmit && !onGateSend && !onWorkflowLaunch && (
+        <button
+          type="button"
+          onClick={handleForkSend}
+          className="w-7 h-7 rounded-full transition-colors flex items-center justify-center text-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)] hover:text-sol-cyan hover:bg-sol-cyan/10"
+          title={`Fork and send (${navigator.platform?.includes("Mac") ? "Cmd" : "Ctrl"}+Shift+Enter)`}
+        >
+          <Split className="w-3.5 h-3.5" />
+        </button>
+      )}
+    </>
+  );
 
   return (
     <ComposerShell
@@ -2163,6 +2226,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       composeMode={composeMode}
       selectionActive={isSelectionActive}
       onSubmit={handleFormSubmit}
+      foot={composerFoot && !composeMode ? <ComposerFoot start={composerFoot} end={<>{rowActions}{sendButton}</>} /> : undefined}
       before={<>
           {serverDeleted && !isRestarting && (
             <div className={`mx-auto mb-2 ${inline ? "" : "px-4"} ${colWidth} ${lightboxImageIndex !== null ? "hidden" : ""}`}>
@@ -2287,7 +2351,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     Connected
                   </span>
                 ) : agentStatus === "working" ? (
-                  <WorkingStatusLine startedAt={workingSinceTs} phrase={workingPhrase} conversationId={conversationId} />
+                  <WorkingStatusLine startedAt={workingSinceTs} phrase={workingPhrase} conversationId={conversationId} stopHint={!!onSendEscape && !message.trim() && queuedMessages.length === 0} />
                 ) : agentStatus === "idle" && queuedMessages.length > 0 ? (
                   <span className="flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-sol-cyan/50 animate-pulse" />
@@ -2306,7 +2370,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     Connecting...
                   </span>
                 ) : isConversationLive ? (
-                  <WorkingStatusLine startedAt={workingSinceTs} phrase={workingPhrase} conversationId={conversationId} />
+                  <WorkingStatusLine startedAt={workingSinceTs} phrase={workingPhrase} conversationId={conversationId} stopHint={!!onSendEscape && !message.trim() && queuedMessages.length === 0} />
                 ) : isSessionDisconnected ? (
                   isResuming ? (
                     <span className="flex items-center gap-1.5 text-sol-text-dim">
@@ -2581,50 +2645,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                       {navigator.platform?.includes("Mac") ? "Cmd" : "Ctrl"}+Enter send &middot; Esc collapse
                     </span>
                     <div ref={sendRef} className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={toggleCompose}
-                        className="w-7 h-7 rounded-full transition-colors flex items-center justify-center text-sol-text-dim hover:text-sol-text hover:bg-sol-bg/50"
-                        title="Collapse editor (Cmd+Shift+E)"
-                      >
-                        <Minimize2 className="w-3.5 h-3.5" />
-                      </button>
-                      {onSendAndDismiss && canSubmit && !onGateSend && !onWorkflowLaunch && (
-                        <ShortcutTooltip label="Send and stash" action="msg.sendDismiss" hint="the agent keeps running out of the inbox" side="top">
-                          <button
-                            type="button"
-                            onClick={handleSendAndStash}
-                            className="w-7 h-7 rounded-full transition-colors flex items-center justify-center text-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)] hover:text-sol-yellow hover:bg-sol-yellow/10"
-                            aria-label="Send and stash"
-                          >
-                            <Archive className="w-3.5 h-3.5" />
-                          </button>
-                        </ShortcutTooltip>
-                      )}
-                      {canHandoff && (
-                        <HandoffPicker owners={owners} conversationId={conversationId} note={composeMode && composeRef.current ? composeRef.current.getMarkdown() : message} open={handoffOpen} onOpenChange={openHandoff} onPick={handleHandoffPick}>
-                          <ShortcutTooltip label="Hand off to a teammate" action="msg.handoff" hint="your message goes along as the note" side="top">
-                          <button
-                            type="button"
-                            className={`w-7 h-7 rounded-full transition-colors flex items-center justify-center ${handoffOpen ? "text-sol-violet bg-sol-violet/15" : "text-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)] hover:text-sol-violet hover:bg-sol-violet/10"}`}
-                            aria-label="Hand off to a teammate"
-                            onClick={() => openHandoff(!handoffOpen)}
-                          >
-                            <ArrowRightLeft className="w-3.5 h-3.5" />
-                          </button>
-                          </ShortcutTooltip>
-                        </HandoffPicker>
-                      )}
-                      {onForkSend && canSubmit && !onGateSend && !onWorkflowLaunch && (
-                        <button
-                          type="button"
-                          onClick={handleForkSend}
-                          className="w-7 h-7 rounded-full transition-colors flex items-center justify-center text-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)] hover:text-sol-cyan hover:bg-sol-cyan/10"
-                          title={`Fork and send (${navigator.platform?.includes("Mac") ? "Cmd" : "Ctrl"}+Shift+Enter)`}
-                        >
-                          <Split className="w-3.5 h-3.5" />
-                        </button>
-                      )}
+                      {rowActions}
                       {sendButton}
                     </div>
                   </div>
@@ -2634,55 +2655,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                   rowRef={controlsRowRef}
                   sendRef={sendRef}
                   tucked={controlsTucked}
-                  send={sendButton}
-                  actions={<>
-                    {isMultiline && (
-                      <button
-                        type="button"
-                        onClick={toggleCompose}
-                        className="w-7 h-7 mb-0.5 rounded-full transition-colors flex items-center justify-center text-sol-text-dim/30 hover:text-sol-text-dim hover:bg-sol-bg/50"
-                        title="Expand editor (Cmd+Shift+E)"
-                      >
-                        <Maximize2 className="w-3 h-3" />
-                      </button>
-                    )}
-                    {onSendAndDismiss && canSubmit && !onGateSend && !onWorkflowLaunch && (
-                      <ShortcutTooltip label="Send and stash" action="msg.sendDismiss" hint="the agent keeps running out of the inbox" side="top">
-                        <button
-                          type="button"
-                          onClick={handleSendAndStash}
-                          className="w-7 h-7 mb-0.5 rounded-full transition-colors flex items-center justify-center text-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)] hover:text-sol-yellow hover:bg-sol-yellow/10"
-                          aria-label="Send and stash"
-                        >
-                          <Archive className="w-3.5 h-3.5" />
-                        </button>
-                      </ShortcutTooltip>
-                    )}
-                    {canHandoff && (
-                      <HandoffPicker owners={owners} conversationId={conversationId} note={composeMode && composeRef.current ? composeRef.current.getMarkdown() : message} open={handoffOpen} onOpenChange={openHandoff} onPick={handleHandoffPick}>
-                        <ShortcutTooltip label="Hand off to a teammate" action="msg.handoff" hint="your message goes along as the note" side="top">
-                        <button
-                          type="button"
-                          className={`w-7 h-7 mb-0.5 rounded-full transition-colors flex items-center justify-center ${handoffOpen ? "text-sol-violet bg-sol-violet/15" : "text-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)] hover:text-sol-violet hover:bg-sol-violet/10"}`}
-                          aria-label="Hand off to a teammate"
-                          onClick={() => openHandoff(!handoffOpen)}
-                        >
-                          <ArrowRightLeft className="w-3.5 h-3.5" />
-                        </button>
-                        </ShortcutTooltip>
-                      </HandoffPicker>
-                    )}
-                    {onForkSend && canSubmit && !onGateSend && !onWorkflowLaunch && (
-                      <button
-                        type="button"
-                        onClick={handleForkSend}
-                        className="w-7 h-7 mb-0.5 rounded-full transition-colors flex items-center justify-center text-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)] hover:text-sol-cyan hover:bg-sol-cyan/10"
-                        title={`Fork and send (${navigator.platform?.includes("Mac") ? "Cmd" : "Ctrl"}+Shift+Enter)`}
-                      >
-                        <Split className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                  </>}
+                  send={composerFoot ? undefined : sendButton}
+                  actions={composerFoot ? undefined : rowActions}
                 >
                   <ComposerTextarea
                     ref={textareaRef}

@@ -1,4 +1,4 @@
-import { mediaFailureReason, participantImage, type ParticipantTile } from "./callMedia";
+import { mediaFailureReason, participantTiles, type ParticipantTile } from "./callMedia";
 export { mediaFailureReason, listDevices, grantDeviceNames, type ParticipantTile } from "./callMedia";
 // The media plane's one owner. Exactly one LiveKit Room lives here (module
 // singleton, never in React state, never in the store); components render
@@ -13,7 +13,6 @@ export { mediaFailureReason, listDevices, grantDeviceNames, type ParticipantTile
 import {
   ConnectionState,
   DisconnectReason,
-  LocalParticipant,
   Participant,
   RemoteParticipant,
   RemoteTrack,
@@ -30,7 +29,7 @@ import { memberDisplayName } from "../liveEntities";
 import { RING_STUB, RING_STUB_MS, isRingStub, ringStubId, type RingStub } from "./ringStubs";
 import { startScribe, stopScribe } from "./transcription";
 import { readJoinPrefs, rememberCamera, rememberDevice, rememberMic } from "./joinPrefs";
-import { huddleRoomOptions, SCREEN_SHARE_CAPTURE, SCREEN_SHARE_ENCODING } from "./livekitMedia";
+import { huddleRoomOptions, SCREEN_SHARE_CAPTURE, SCREEN_SHARE_PUBLISH } from "./livekitMedia";
 import { bindPrewarmAudio, bindPrewarmConvex, takePrewarmedRoom, warmRoomPublishesMic } from "./roomPrewarm";
 import { CALL_HEARTBEAT_MS, humanizeConvexError, localTranscribeLanguages } from "@codecast/shared/contracts";
 import {
@@ -149,31 +148,7 @@ if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
 let tilesOverride: ParticipantTile[] | null = null;
 
 function rebuildTiles() {
-  const next: ParticipantTile[] = [];
-  if (room) {
-    const all: Participant[] = [room.localParticipant, ...room.remoteParticipants.values()];
-    for (const p of all) {
-      const isLocal = p instanceof LocalParticipant;
-      const base = {
-        identity: p.identity,
-        name: p.name || p.identity,
-        image: participantImage(p),
-        isLocal,
-      };
-      for (const [source, kind] of [
-        [Track.Source.Camera, "camera"],
-        [Track.Source.ScreenShare, "screen"],
-      ] as const) {
-        const pub = p.getTrackPublication(source);
-        // A remote track only renders once subscribed; a local one as soon
-        // as it exists. Muted camera tracks stay listed (they render as a
-        // frozen/black frame the tile can label) — a mute is not a removal.
-        const track = pub && (isLocal || pub.isSubscribed) ? pub.track : null;
-        if (!track) continue;
-        next.push({ ...base, kind, track, key: `${p.identity}:${kind}:${pub!.trackSid || track.sid || "local"}` });
-      }
-    }
-  }
+  const next: ParticipantTile[] = room ? participantTiles(room) : [];
   tilesSnapshot = tilesOverride ?? next;
   for (const cb of tileSubscribers) cb();
 }
@@ -1014,15 +989,11 @@ export async function setScreenShare(on: boolean, sourceId?: string): Promise<vo
       }
       // audio:false — a huddle shares the screen, not system audio (which
       // Chrome only offers for tabs anyway and doubles the mic path).
-      // Capture/encoding for a share of UI: see livekitMedia.ts. Encoding is
-      // passed here as well as on the Room so a huddle that joined before
-      // those defaults existed still publishes a sharp share.
+      // Capture/encoding for a share of UI: see livekitMedia.ts.
       const pub = await room.localParticipant.setScreenShareEnabled(
         on,
         on ? SCREEN_SHARE_CAPTURE : { audio: false },
-        on
-          ? { screenShareEncoding: SCREEN_SHARE_ENCODING, degradationPreference: "maintain-resolution" }
-          : undefined,
+        on ? SCREEN_SHARE_PUBLISH : undefined,
       );
       const live = on ? !!pub?.track : false;
       setCall({ sharing: live });
@@ -1347,36 +1318,26 @@ export function autoScribe(roomKey: string): void {
 }
 
 /** The manual Transcribe toggle (and "feed an agent", which needs words):
- *  reopens the room's opt-out, then scribes. */
+ *  reopens the room's opt-out, then scribes. The reopen must reach the server
+ *  first (transcripts.start refuses a room still opted out), so a room that
+ *  was off waits on it; the switch has already painted from the store. */
 export async function startTranscribing(
   roomKey: string,
   routes: Array<{ kind: "session" | "doc" | "slack"; target: string; mode: "live" | "after" }> = [],
 ): Promise<boolean> {
   if (!convex || !room) return false;
-  await convex.mutation(api.calls.setRoomTranscribeOff, { room_key: roomKey, off: false }).catch(() => {});
+  const store = useInboxStore.getState();
+  if (store.callRooms[roomKey]?.transcribe_off) await store.setRoomTranscribeOff(roomKey, false);
   return await startScribe({ convex, room, roomKey, routes });
 }
 
-/** "Stop transcribing", for the whole huddle: the room opts out first, so no
- *  seated client's auto-scribe restarts it, then this run ends — which posts
- *  the digest of what was said so far. */
+/** "Stop transcribing", for the whole huddle: the room opts out (painted now,
+ *  written by the dispatch rail), so no seated client's auto-scribe restarts
+ *  it, then this run stops sending words. The huddle's record carries on;
+ *  switching back on resumes it. */
 export async function stopTranscribing(roomKey: string): Promise<void> {
-  if (convex) {
-    await convex.mutation(api.calls.setRoomTranscribeOff, { room_key: roomKey, off: true }).catch(() => {});
-  }
+  void useInboxStore.getState().setRoomTranscribeOff(roomKey, true);
   await stopScribe();
-}
-
-export async function setRoomLock(roomKey: string, locked: boolean): Promise<void> {
-  if (!convex) return;
-  const store = useInboxStore.getState();
-  store.noteLockPending(roomKey, locked);
-  try {
-    await convex.mutation(api.calls.setRoomLocked, { room_key: roomKey, locked });
-  } catch (err: any) {
-    store.revertLockPending(roomKey, !locked);
-    toast.error(humanizeConvexError(err, "Could not change the lock"));
-  }
 }
 
 // Knock at a locked room. The row paints "knocked" immediately; when someone

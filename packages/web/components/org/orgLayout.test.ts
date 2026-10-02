@@ -108,7 +108,7 @@ describe("orgLayout", () => {
   it("a seat's bot user is never drawn as a person", () => {
     const tree = {
       ...ORG_FIXTURE,
-      people: [...ORG_FIXTURE.people, { ...ORG_FIXTURE.people[1], user_id: "fixture-bot", name: "Chief of Staff", is_me: false, sessions: [], total: 0 }],
+      people: [...ORG_FIXTURE.people, { ...ORG_FIXTURE.people[1], user_id: "fixture-bot", name: "Head of People", is_me: false, sessions: [], total: 0 }],
     };
     const { nodes } = layoutOrgTree(tree, none);
     expect(nodes.some((n) => n.kind === "person" && n.person.user_id === "fixture-bot")).toBe(false);

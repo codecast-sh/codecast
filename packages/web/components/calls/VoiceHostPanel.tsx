@@ -10,6 +10,7 @@ import { useCallsAvailable } from "../../lib/teamFeatures";
 import { CallStage } from "./CallStage";
 import { FloatingFaceRow } from "../faces/FaceRow";
 import { CallChatChip } from "./CallChatChip";
+import { CallCardRecordingMark } from "./RoomRecording";
 import { useFrameRelay } from "./useFrameRelay";
 import { EngagementCard } from "../faces/EngagementCard";
 import { PeoplePanel } from "../people/PeoplePanel";
@@ -332,7 +333,18 @@ export function VoiceHostPanel({ urlRoom, params }: { urlRoom: string | null; pa
           }}
         >
           {row.card.kind !== "none" && (
-            <EngagementCard card={row.card} density="float" accessory={inCall && <CallChatChip onOpen={expand} />} />
+            <EngagementCard
+              card={row.card}
+              density="float"
+              accessory={
+                inCall && (
+                  <>
+                    <CallCardRecordingMark />
+                    <CallChatChip onOpen={expand} />
+                  </>
+                )
+              }
+            />
           )}
         </FloatingFaceRow>
       </div>

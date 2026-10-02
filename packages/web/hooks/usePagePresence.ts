@@ -35,7 +35,8 @@ export function useTabVisible(): boolean {
   return tab ? (tab.isVisible ?? tab.isActive) : true;
 }
 
-function useWindowPresent(): boolean {
+/** Is this window on screen and focused: a person is looking at it. */
+export function useWindowPresent(): boolean {
   return useSyncExternalStore(subscribePresence, readPresence, () => false);
 }
 

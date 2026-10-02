@@ -14,7 +14,7 @@ import {
   type TranscriptSegment as TurnSegment,
   type Turn,
 } from "./transcriptTurnModel";
-import { firstName } from "./speakers";
+import { speakerShortName } from "./speakers";
 
 /** A silence at least this long between two segments starts a new passage. */
 export const PASSAGE_SILENCE_MS = 20_000;
@@ -55,7 +55,14 @@ export type Passage = {
   preview: string;
 };
 
-export type RoomEventKind = "agent_joined" | "agent_left" | "transcribe_on" | "transcribe_off";
+export type RoomEventKind =
+  | "agent_joined"
+  | "agent_left"
+  | "transcribe_on"
+  | "transcribe_off"
+  | "record_on"
+  | "record_off"
+  | "record_deleted";
 
 export type AgentRef = {
   conversation_id: string;
@@ -81,6 +88,15 @@ export type ThreadRow = {
   mine: boolean;
   agent: AgentRef | null;
   event?: string | null;
+  /** Why a recording ended (record_off): "pressed", "huddle_ended",
+   *  "limit" or "failed"; a failure's plain words ride in `text`. */
+  event_reason?: string | null;
+  /** The guest who pressed Stop, when a guest did: the row is owned by the
+   *  presser then, and `user_name` already carries this name. */
+  event_guest_name?: string | null;
+  /** The huddle the line was said in (callChat.insertRoomRow); absent while
+   *  it is still sending, or for a line typed with no huddle running. */
+  transcript_id?: string | null;
 };
 
 export type ChatRow = ThreadRow & { event?: null | undefined };
@@ -205,7 +221,7 @@ function previewOf(turns: Turn[], single: boolean): string {
   for (const t of turns) {
     const words = t.segments.map((s) => s.text.trim()).filter(Boolean).join(" ");
     if (!words) continue;
-    const piece = single ? words : `${firstName(t.speaker_name)}: ${words}`;
+    const piece = single ? words : `${speakerShortName(t.speaker_name)}: ${words}`;
     out = out ? `${out} · ${piece}` : piece;
     if (out.length > PASSAGE_PREVIEW_CHARS) break;
   }

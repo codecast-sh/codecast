@@ -37,6 +37,10 @@ async function verify() {
   mock.module("../RetireRoleConfirm", () => ({ RetireRoleConfirm: () => null }));
   mock.module("../../anchor/SlackConnect", () => ({ SlackConnect: () => null }));
   mock.module("../../ui/select-box", () => ({ SelectBox: ({ children, ...rest }: any) => React.createElement("select", rest, children) }));
+  // The merge switch, the handoff banner and the split (RoleHandoffSections)
+  // call their mutations through convex/react; no client stands here.
+  const realConvexReact = { ...(await import("convex/react")) };
+  mock.module("convex/react", () => ({ ...realConvexReact, useMutation: () => async () => ({}), useQuery: () => undefined }));
 
   const { createRoot } = await import("react-dom/client");
   const { ScopeSettings } = await import("./ScopeSettings");
@@ -52,8 +56,8 @@ async function verify() {
     });
   };
 
-  const growth = tree.roles.find((r) => r.handle !== "chief-of-staff" && r.status === "active")!;
-  const root_ = tree.roles.find((r) => r.handle === "chief-of-staff");
+  const growth = tree.roles.find((r) => r.handle !== "head-of-people" && r.status === "active")!;
+  const root_ = tree.roles.find((r) => r.handle === "head-of-people");
 
   // ── a hired role: the switch is on, and one click turns it off through the stored field ──
   await render({ ...growth, trust: "direct" } as OrgRole);
@@ -100,6 +104,7 @@ async function verify() {
   assert.ok(q<HTMLButtonElement>("[data-autonomy-switch]")!.disabled);
 
   await act(async () => { root.unmount(); });
+  mock.module("convex/react", () => realConvexReact);
 }
 
 test("the settings tab: one switch, limits behind a disclosure, no operating words (S23)", verify, 60_000);

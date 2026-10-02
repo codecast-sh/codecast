@@ -72,7 +72,8 @@ export function cleanStickyContent(content: string): string {
     .replace(/<scheduled-task[^>]*>[\s\S]*?<\/scheduled-task>/g, "")
     .replace(/\[Image[:\s][^\]]*\]/gi, "")
     .replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "")
-    .replace(/<[^>]+>/g, "")
+    // Any other wrapper tag goes; an HTML comment the person typed is their text, shown as the message body shows it.
+    .replace(/<(?!!--)[^>]+>/g, "")
     .trim();
 }
 
