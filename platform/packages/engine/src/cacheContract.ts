@@ -33,11 +33,12 @@ export function expireExcludeTombstones(
     // value shape can never echo), or they would keep overriding every server
     // push forever.
     if (entry?.type === "field" && isUnprotectedField) {
+      // table:id:field, where the id may itself carry colons.
       const first = key.indexOf(":");
-      const second = key.indexOf(":", first + 1);
+      const last = key.lastIndexOf(":");
       if (
-        first !== -1 && second !== -1 &&
-        isUnprotectedField(key.slice(0, first), key.slice(second + 1))
+        first !== -1 && last > first &&
+        isUnprotectedField(key.slice(0, first), key.slice(last + 1))
       ) continue;
     }
     cleaned[key] = entry;
