@@ -148,11 +148,11 @@ export function leadRow(now: number, messages: number, steered: boolean): InboxS
   });
 }
 
-/** The worker's state on its row: booting, then (for the API worker) asking and approved. */
-export type WorkerPhase = "working" | "asking" | "approved";
+/** The worker's state on its row: booting, then (for the API worker) waiting on its question, and carrying on with the answer. */
+export type WorkerPhase = "working" | "asking" | "answered";
 
 export const apiWorkerPhase = (t: number): WorkerPhase =>
-  t >= CUES.permissionApproved ? "approved" : t >= CUES.permissionAsk ? "asking" : "working";
+  t >= CUES.answered ? "answered" : t >= CUES.question ? "asking" : "working";
 
 /** The worktree the API worker runs in on the cloud host: its row and its header both name it, beside the host's cloud mark. */
 export const CLOUD_WORKTREE = { name: "cloud-4f2a91", branch: "codecast/cloud-4f2a91" };
@@ -166,17 +166,17 @@ export function workerRow(now: number, which: "api" | "ui", phase: WorkerPhase):
   return row(now, {
     _id: s.id, title: s.title, agent_type: s.agent, ago: 0,
     project_path: "/u/src/billing", git_root: "/u/src/billing",
-    message_count: which === "api" ? (phase === "approved" ? 14 : 9) : 6,
+    message_count: which === "api" ? (phase === "answered" ? 14 : 9) : 6,
     is_subagent: true,
     parent_conversation_id: SESSIONS.lead.id,
     started_at: now - 15_000,
     ...(which === "api" ? { worktree_name: CLOUD_WORKTREE.name, worktree_branch: CLOUD_WORKTREE.branch } : {}),
     ...(asking
       ? {
-          thread_state: "Needs approval: npm test --workspace packages/api",
+          thread_state: "Asked: should a 410 Gone count as failed?",
           thread_state_status: "blocked", thread_state_at: now, thread_state_msg_count: 9,
         }
-      : phase === "approved"
+      : phase === "answered"
         ? {
             thread_state: "212 passed\nStatus: retry endpoint is green",
             thread_state_status: "working", thread_state_at: now, thread_state_msg_count: 14,
@@ -194,16 +194,14 @@ export const holdIndex = (t: number) => {
   return i;
 };
 
-/** The measured heights of the rows that land in the inbox (px); the cloud worker's carries its worktree chip under the title. */
-export const LIST_ROW_H = { lead: 70, worker: 23, cloudWorker: 38 };
-
 /**
  * Glide a stack by `h` px when an entry of that height mounts into it at
  * `cue` (React mounts it then, so the stack's resting layout never depends on
  * `h`). Two pushes: one holds the stack `h` away and eases it home from the
  * cue, the other cancels it exactly until the cue. So the stack sits still
  * before the cue, appears where it was at the cue, and settles into its new
- * place; a wrong `h` only shortens or lengthens the glide.
+ * place. `h` must be the entry's real height: a wrong one makes the stack jump
+ * by the difference at the cue. Prefer FilmGrow (../film), which measures it.
  */
 export function glideOver(id: string, cue: number, h: number, dur = 0.65): Beat[] {
   return [

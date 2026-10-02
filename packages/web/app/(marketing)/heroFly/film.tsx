@@ -59,10 +59,13 @@ export function Veil({ id }: { id: string }) {
  * callback, so a node that appears after its owner mounted is measured too,
  * before that frame paints.
  */
-function useLayoutHeight(): [number, (n: HTMLElement | null) => (() => void) | undefined] {
-  const [h, setH] = useState(0);
+function useLayoutHeight(): [number | null, (n: HTMLElement | null) => (() => void) | undefined] {
+  const [h, setH] = useState<number | null>(null);
   const ref = useCallback((n: HTMLElement | null) => {
-    if (!n) return undefined;
+    if (!n) {
+      setH(null);
+      return undefined;
+    }
     setH(n.offsetHeight);
     const ro = new ResizeObserver(() => setH(n.offsetHeight));
     ro.observe(n);
@@ -90,9 +93,10 @@ export function FilmGrow({ at, until = Infinity, dur = 0.5, children }: { at: nu
   });
   const [h, measure] = useLayoutHeight();
   if (k < 0) return null;
+  // flow-root keeps the children's margins inside the measured box, so the height it opens to is the height it rests at.
   return (
-    <div style={k >= 1 ? undefined : { height: h * k, overflow: "clip", opacity: k }}>
-      <div ref={measure}>{children}</div>
+    <div style={k >= 1 ? undefined : { height: (h ?? 0) * k, overflow: "clip", opacity: k }}>
+      <div ref={measure} className="flow-root">{children}</div>
     </div>
   );
 }
@@ -106,9 +110,11 @@ export function FilmGrow({ at, until = Infinity, dur = 0.5, children }: { at: nu
  * from the old state's to the new one's over the same crossing, so what sits
  * below moves with it. `render(step)` draws the view after `step` cues have
  * passed. The settled state always renders in the same slot, so the view in
- * it is updated across a cue, never remounted.
+ * it is updated across a cue, never remounted. `ground` is the opaque colour
+ * the new state is drawn on (the page's by default): it must match what is
+ * behind the view, or the crossing shows as a box.
  */
-export function FilmSwap({ cues, dur = 0.4, className, render }: { cues: readonly number[]; dur?: number; className?: string; render: (step: number) => ReactNode }) {
+export function FilmSwap({ cues, dur = 0.4, className, ground = "bg-sol-bg", render }: { cues: readonly number[]; dur?: number; className?: string; ground?: string; render: (step: number) => ReactNode }) {
   // step + k while crossing (k in (0, 1), quantised), a whole step at rest.
   const v = useFilmTime((t) => {
     const step = cues.filter((c) => t >= c).length;
@@ -121,10 +127,10 @@ export function FilmSwap({ cues, dur = 0.4, className, render }: { cues: readonl
   const [hBase, measureBase] = useLayoutHeight();
   const [hNext, measureNext] = useLayoutHeight();
   return (
-    <div className={`grid ${className ?? ""}`} style={k > 0 && hBase && hNext ? { height: hBase + (hNext - hBase) * k, overflow: "clip" } : undefined}>
+    <div className={`grid ${className ?? ""}`} style={k > 0 && hBase !== null && hNext !== null ? { height: hBase + (hNext - hBase) * k, overflow: "clip" } : undefined}>
       <div ref={measureBase} className="col-start-1 row-start-1 self-start">{render(base)}</div>
       {k > 0 && (
-        <div ref={measureNext} className="col-start-1 row-start-1 self-start bg-sol-bg" style={{ opacity: k }} aria-hidden>
+        <div ref={measureNext} className={`col-start-1 row-start-1 self-start ${ground}`} style={{ opacity: k }} aria-hidden>
           {render(base + 1)}
         </div>
       )}

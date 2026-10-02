@@ -5,9 +5,8 @@
  * worker's prompt and first tool call drop in.
  */
 
-import { glideOver } from "../fixtures/desk";
 import { BOOT } from "../fixtures/fanout";
-import { ASK_H, CUES } from "../fixtures/story";
+import { CUES } from "../fixtures/story";
 import { regionPt } from "../world";
 import type { ChapterMotion } from "./contract";
 
@@ -25,11 +24,8 @@ export const motion: ChapterMotion = {
       land("fanout.prompt:api", BOOT.api.prompt),
       land("fanout.seed:api", BOOT.api.seed),
       land("fanout.tool:api", BOOT.api.tool),
-      // The worker's transcript is anchored to its composer: the permission stack (chapter 4) lifts it, and lets it down when answered.
-      ...glideOver("fanout.feed:api", CUES.permissionAsk, ASK_H, 0.6),
-      ...glideOver("fanout.feed:api", CUES.permissionCleared, -ASK_H, 0.5),
-      // The approval's arc from the phone lands on the worker's status, back to Working.
-      { id: "fanout.status:api", cue: CUES.approvalDrawn, dur: 0.5, preset: "pulse", s: 0.18 },
+      // The answer's arc from the phone lands on the worker's status, back to Working.
+      { id: "fanout.status:api", cue: CUES.answerDrawn, dur: 0.5, preset: "pulse", s: 0.18 },
     ],
     pairB: [land("fanout.prompt:ui", BOOT.ui.prompt), land("fanout.seed:ui", BOOT.ui.seed), land("fanout.tool:ui", BOOT.ui.tool)],
   },

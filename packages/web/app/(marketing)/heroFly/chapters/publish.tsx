@@ -13,7 +13,8 @@ import { useState } from "react";
 import { AssistantBlock } from "@/components/conversation/blocks/turnBlocks";
 import { PageCard, PageFavicon, PublishedPageActions } from "@/components/PublishedPageEmbed";
 import type { PartProps } from "./contract";
-import { fly, useFilmTime } from "../filmClock";
+import { fly } from "../filmClock";
+import { FilmSwap } from "../film";
 import { PAGE, PUBLISH, REPLY } from "../fixtures/publish";
 import { SESSIONS } from "../fixtures/story";
 
@@ -22,17 +23,24 @@ const TOOL_ID = "hero-tool-publish";
 const TOOL_CALLS = [{ id: TOOL_ID, name: "Bash", input: JSON.stringify({ command: REPLY.command, description: "Publish the report as a page" }) }];
 const TOOL_RESULTS = [{ tool_use_id: TOOL_ID, content: REPLY.output }];
 
+const RAN = [PUBLISH.command];
+
+/** The lead's reply; its `cast publish` call dissolves in under the text as it runs, rather than appearing in one frame. */
 function Reply({ now }: { now: number }) {
-  const ran = useFilmTime((t) => t >= PUBLISH.command);
   return (
     <div className="mx-auto w-[680px] pt-8" {...fly("page/publish.reply")}>
-      <AssistantBlock
-        content={REPLY.content}
-        timestamp={now - REPLY.ago}
-        messageId="hero-msg-publish"
-        agentType={SESSIONS.lead.agent}
-        toolCalls={ran ? TOOL_CALLS : undefined}
-        toolResults={ran ? TOOL_RESULTS : undefined}
+      <FilmSwap
+        cues={RAN}
+        render={(ran) => (
+          <AssistantBlock
+            content={REPLY.content}
+            timestamp={now - REPLY.ago}
+            messageId="hero-msg-publish"
+            agentType={SESSIONS.lead.agent}
+            toolCalls={ran ? TOOL_CALLS : undefined}
+            toolResults={ran ? TOOL_RESULTS : undefined}
+          />
+        )}
       />
     </div>
   );

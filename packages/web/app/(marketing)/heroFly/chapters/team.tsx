@@ -7,7 +7,7 @@
  * have landed.
  */
 
-import { useMemo, useState, type SyntheticEvent } from "react";
+import { Fragment, useMemo, useState, type SyntheticEvent } from "react";
 import { ChatChannelRail } from "@/components/chat/ChatChannelRail";
 import { ChatMessage } from "@/components/chat/ChatMessage";
 import type { ChatChannelView, ChatMessageView, ChatReaction } from "@/components/chat/chatTypes";
@@ -24,6 +24,7 @@ import { fly } from "../filmClock";
 import { CHANNELS, CHAT_PEOPLE, FEED, HUDDLE, MESSAGES, REACTIONS, TEAM } from "../fixtures/team";
 import { PEOPLE, SESSIONS } from "../fixtures/story";
 import { useFilmTime } from "../filmClock";
+import { FilmGrow, FilmSwap } from "../film";
 
 const noop = () => {};
 const KNOWN = new Set([PEOPLE.me.handle, PEOPLE.sarah.handle, PEOPLE.maya.handle]);
@@ -36,6 +37,9 @@ const ROOM = { label: `#${CHANNELS[0].name} huddle`, locked: false, redacted: fa
 /** How far the channel has got: one step per cue passed. */
 const CHAT_CUES = [TEAM.ask, TEAM.thinking, TEAM.reply, TEAM.reactA, TEAM.reactB, TEAM.typing, TEAM.followUp];
 const stepAt = (cues: readonly number[]) => (t: number) => cues.filter((c) => t >= c).length;
+const chatStep = stepAt(CHAT_CUES);
+/** The channel's step for the agent's reply after `s` of its own changes (answered, then each reaction): its line is drawn from these, not from the channel's step, so lines landing under it never redraw it. */
+const replyStep = (answered: number, s: number) => chatStep([answered, TEAM.reactA, TEAM.reactB][s - 1] ?? answered - 1e-3);
 
 /** Only a reaction pill reaches its handler; the rest of a line (links, pills, the author) stays inert. */
 function onlyReactions(e: SyntheticEvent) {
@@ -62,7 +66,7 @@ function ChannelLine({ m, now, step, grouped }: { m: (typeof MESSAGES)[number]; 
     reactions,
   };
   return (
-    <div data-hero-live="" onClickCapture={onlyReactions} className="[&_.ch-tools]:hidden" {...fly(`team/team.msg:${m.id}`)}>
+    <div data-hero-live="" onClickCapture={onlyReactions} className="[&_.ch-tools]:hidden">
       <ChatMessage
         message={view}
         grouped={grouped}
@@ -77,16 +81,23 @@ function ChannelLine({ m, now, step, grouped }: { m: (typeof MESSAGES)[number]; 
 }
 
 function Channel({ now }: { now: number }) {
-  const step = useFilmTime(stepAt(CHAT_CUES));
+  const step = useFilmTime(chatStep);
   const landed = MESSAGES.filter((m) => !("cue" in m) || step >= CHAT_CUES.indexOf(m.cue) + 1);
   const typing = step >= CHAT_CUES.indexOf(TEAM.typing) + 1 && step < CHAT_CUES.indexOf(TEAM.followUp) + 1;
   return (
     <div className="ch-main">
       {/* The channel reads from its foot: its oldest line runs under the top edge, as a scrolled channel does. */}
       <div className="flex min-h-0 flex-1 flex-col justify-end overflow-hidden pb-1">
-        {landed.map((m, i) => (
-          <ChannelLine key={m.id} m={m} now={now} step={step} grouped={i > 0 && landed[i - 1].who === m.who} />
-        ))}
+        {landed.map((m, i) => {
+          const grouped = i > 0 && landed[i - 1].who === m.who;
+          // The agent's reply fills in where it thought, and its reactions land under it: each state dissolves over the last as the line's height eases.
+          const line = "answered" in m
+            ? <FilmSwap cues={[m.answered, TEAM.reactA, TEAM.reactB]} render={(s) => <ChannelLine m={m} now={now} step={replyStep(m.answered, s)} grouped={grouped} />} />
+            : <ChannelLine m={m} now={now} step={step} grouped={grouped} />;
+          const flown = <div {...fly(`team/team.msg:${m.id}`)}>{line}</div>;
+          // A line that arrives opens its own room, so the lines above it ease up rather than jump.
+          return "cue" in m ? <FilmGrow key={m.id} at={m.cue}>{flown}</FilmGrow> : <Fragment key={m.id}>{flown}</Fragment>;
+        })}
       </div>
       <div className="flex h-7 shrink-0 items-center px-4">{typing && <TypingIndicator members={MAYA_MEMBER} />}</div>
     </div>
@@ -94,17 +105,21 @@ function Channel({ now }: { now: number }) {
 }
 
 const HUDDLE_CUES = [...TEAM.turns];
+const saidAt = stepAt(HUDDLE_CUES);
+/** The huddle column's own ground (bg-sol-bg-alt/30 over the page), opaque, for what dissolves in over its thread. */
+const HUDDLE_GROUND = "bg-[color-mix(in_srgb,var(--sol-bg-alt)_30%,var(--sol-bg))]";
 
 function Huddle({ now }: { now: number }) {
-  const said = useFilmTime(stepAt(HUDDLE_CUES));
+  const said = useFilmTime(saidAt);
   const start = now - HUDDLE.startedAgo;
-  const passage = useMemo(() => {
-    const segments = HUDDLE.segments.slice(0, Math.max(1, said)).map((s, i) => {
+  // The passage after each caption, built once: the thread draws whichever its crossing needs.
+  const passages = useMemo(() => HUDDLE.segments.map((_, n) => {
+    const segments = HUDDLE.segments.slice(0, n + 1).map((s, i) => {
       const who = PEOPLE[s.who];
       return { seq: i, speaker_id: who.id, speaker_name: who.name, text: s.text, t0: s.t0, t1: s.t0 + 5000, at: start + s.t0 };
     });
     return buildPassages(segments)[0];
-  }, [said, start]);
+  }, []), [start]);
   const speaking = said > 0 ? PEOPLE[HUDDLE.segments[said - 1].who].id : null;
   const joined: EventRow = {
     _id: "hero-ev-1",
@@ -134,9 +149,12 @@ function Huddle({ now }: { now: number }) {
       <div {...fly("team/team.thread")} className="flex min-h-0 flex-1 flex-col justify-end overflow-clip pb-3">
         <RecapCard summary="Reviewing the retry change." items={[]} live />
         <EventLine row={joined} me={null} ownRoomId={null} ended={false} explain fresh={false} dayOf={start} onOpen={noop} />
-        {said > 0 && (
-          <PassageBlock passage={passage} idPrefix="hero-huddle" open live fresh={false} recording={false} dayOf={start} onToggle={noop} />
-        )}
+        {/* Each caption dissolves in under the last as the thread's height eases, so the lines above rise rather than jump. */}
+        <FilmSwap
+          cues={HUDDLE_CUES}
+          ground={HUDDLE_GROUND}
+          render={(n) => n > 0 && <PassageBlock passage={passages[n - 1]} idPrefix="hero-huddle" open live fresh={false} recording={false} dayOf={start} onToggle={noop} />}
+        />
       </div>
     </div>
   );

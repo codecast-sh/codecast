@@ -17,7 +17,8 @@ import type { TaskRow } from "@/components/triggerTasks";
 import { GRAPH_CROP, nodeStatuses, pinnedState, triggerRows, triggerRuns, WORKFLOW, workflowRun, type RunPhase, type TriggerEdits } from "../fixtures/automation";
 import { SESSIONS } from "../fixtures/story";
 import { fly, useFilmTime } from "../filmClock";
-import { AUTO_AT, phaseAt } from "./automation.motion";
+import { AUTO_AT, PHASE_CUES, PHASES, phaseAt } from "./automation.motion";
+import { FilmSwap } from "../film";
 import type { PartProps } from "./contract";
 
 const noop = () => {};
@@ -54,15 +55,39 @@ export function AutomationSurface({ now }: PartProps) {
   const step = `${phase}:${fireIn}`;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const wall = useMemo(() => Date.now(), [step]);
-  const rows = triggerRows(now, wall, phase, fireIn, edits);
-  const runs = triggerRuns(now, wall, phase);
   const run = workflowRun(now, phase);
   const statuses = useMemo(() => nodeStatuses(phase), [phase]);
 
   const act: TriggerVerbAction = (id, verb) => setEdits((e) => ({ ...e, [id]: { ...e[id], status: VERB_STATUS[verb] } }));
 
-  const pinned = pinnedState(phase);
-  const gate = phase === "gate" || phase === "rearmed";
+  // The rows, the pinned state and the run panel each cross a change of phase as a dissolve with their height eased (FilmSwap), so a run landing in the trigger's history or a step turning green never reflows them in one frame. The countdown still ticks inside the settled rows.
+  const rowsAt = (step: number) => triggerRows(now, wall, PHASES[step], fireIn, edits);
+  const trigger = (i: number) => (step: number) => {
+    const p = PHASES[step];
+    const row = rowsAt(step)[i];
+    const runs = triggerRuns(now, wall, p);
+    return <TriggerRowItem key={i === 0 ? `${step}:${fireIn}@${wall}` : undefined} row={row} variant="page" isNext={i === 0 && p === "armed"} onOpen={noop} actions={act} history={{ runs: runs[row.task._id] ?? [], open: noop }} />;
+  };
+  const pinnedView = (step: number) => {
+    const p = PHASES[step];
+    const pinned = pinnedState(p);
+    const gate = p === "gate" || p === "rearmed";
+    return (
+      <ThreadStatePanelView
+        key={gate ? "gate" : "run"}
+        conversationId={SESSIONS.lead.id}
+        threadState={pinned.text}
+        threadStateAt={wall - 4_000}
+        threadStateMsgCount={pinned.messages}
+        threadStateStatus={pinned.status}
+        messageCount={pinned.messages}
+        now={wall}
+        collapsed={false}
+        prStatus={null}
+        onToggle={noop}
+      />
+    );
+  };
 
   return (
     <div className="flex h-full flex-col text-sol-text">
@@ -75,29 +100,17 @@ export function AutomationSurface({ now }: PartProps) {
       {/* The trigger that starts the run and the lead's pinned state beside the run it started. */}
       <div className="grid min-h-0 flex-1 grid-cols-[1fr_420px] items-start gap-4 px-5 pt-3">
         <div className="min-w-0">
-          {rows.map((row, i) => (
+          {rowsAt(PHASES.indexOf(phase)).map((row, i) => (
             <div key={row.task._id} data-hero-live="" {...fly(`auto/automation.row:${i}`)}>
-              <TriggerRowItem key={i === 0 ? `${step}@${wall}` : undefined} row={row} variant="page" isNext={i === 0 && phase === "armed"} onOpen={noop} actions={act} history={{ runs: runs[row.task._id] ?? [], open: noop }} />
+              <FilmSwap cues={PHASE_CUES} render={trigger(i)} />
             </div>
           ))}
           <div className="-mx-2 mt-1" {...fly("auto/automation.state")}>
-            <ThreadStatePanelView
-              key={gate ? "gate" : "run"}
-              conversationId={SESSIONS.lead.id}
-              threadState={pinned.text}
-              threadStateAt={wall - 4_000}
-              threadStateMsgCount={pinned.messages}
-              threadStateStatus={pinned.status}
-              messageCount={pinned.messages}
-              now={wall}
-              collapsed={false}
-              prStatus={null}
-              onToggle={noop}
-            />
+            <FilmSwap cues={PHASE_CUES} render={pinnedView} />
           </div>
         </div>
         <div className="min-w-0 overflow-hidden rounded-lg border border-sol-border/40" {...fly("auto/automation.run")}>
-          <WorkflowRunPanel run={run} workflow={WORKFLOW} defaultExpanded />
+          <FilmSwap cues={PHASE_CUES} render={(step) => <WorkflowRunPanel run={workflowRun(now, PHASES[step])} workflow={WORKFLOW} defaultExpanded />} />
         </div>
       </div>
     </div>

@@ -53,7 +53,7 @@ export const motion: ChapterMotion = {
   flyers: [
     { id: "talk.envelope", cue: CUES.messageSent, dur: 0.7, from: localToWorld("pairA", -60, 40, 4), to: localToWorld("pairB", -80, 0, 4), arc: 220, rot: [[0, -8, 0], [0, -8, 8], [0, -8, 0]], ease: "glide", fade: [0.1, 0.12] },
     // The fork lifts off your steer at the foot of the worker's pane and lands on the second window's header.
-    { id: "talk.fork", cue: CUES.forked + 0.1, dur: 0.6, from: localToWorld("pairA", 40, 120, 4), to: localToWorld("pairB", -40, -148, 4), arc: 200, rot: [[0, -6, 0], [0, -10, 4], [0, -10, 0]], scale: [0.9, 1], swell: 0.06, ease: "glide", fade: [0.12, 0.2] },
+    { id: "talk.fork", cue: CUES.forked + 0.1, dur: 0.72, from: localToWorld("pairA", 40, 120, 4), to: localToWorld("pairB", -40, -148, 4), arc: 200, rot: [[0, -6, 0], [0, -10, 4], [0, -10, 0]], scale: [0.9, 1], swell: 0.06, ease: "glide", fade: [0.12, 0.2] },
     { id: "talk.envelopeBack", cue: CUES.replySent - 0.2, dur: 0.7, from: localToWorld("pairB", -40, 70, 4), to: localToWorld("pairA", -60, 92, 4), arc: 140, rot: [[0, -8, 0], [0, -8, -8], [0, -8, 0]], ease: "glide", fade: [0.1, 0.14] },
   ],
 };

@@ -83,7 +83,15 @@ describe("FilmGrow", () => {
       // Eased over 30 frames: no frame takes more than a fifth of the room.
       expect(h - seen[i - 1], `frame ${i}: ${seen[i - 1]} -> ${h}`).toBeLessThanOrEqual(full / 5);
     });
-  });
+  }, 30_000);
+
+  test("measures a box that holds its children's margins, so the height it opens to is the height it rests at", async () => {
+    // jsdom lays nothing out, so this pins the structure: a block child's margin collapses through a plain div and escapes offsetHeight, then reappears the frame the clip lifts.
+    const film = await mount(<FilmGrow at={0} dur={0.5}><p data-h={40} style={{ margin: "12px 0" }}>entry</p></FilmGrow>, 0.2);
+    const measured = film.host.querySelector("[data-h]")!.parentElement!;
+    expect(measured.className).toContain("flow-root");
+    await film.unmount();
+  }, 30_000);
 });
 
 describe("FilmSwap", () => {
@@ -107,5 +115,5 @@ describe("FilmSwap", () => {
       expect(h, `frame ${i}`).toBeGreaterThanOrEqual(seen[i - 1]);
       expect(h - seen[i - 1], `frame ${i}: ${seen[i - 1]} -> ${h}`).toBeLessThanOrEqual((to - from) / 5);
     });
-  });
+  }, 30_000);
 });

@@ -28,6 +28,10 @@ const STAGES: { from: number; stage: PrStage }[] = [
   { from: CUES.merged, stage: { approved: true, checksPassed: CHECK_COUNT, ready: true, merged: true } },
 ];
 
+/** The cues at which the page changes, and the stage after `step` of them: a FilmSwap draws each crossing from these. */
+export const STAGE_CUES = STAGES.slice(1).map((x) => x.from);
+export const stageOf = (step: number): PrStage => STAGES[step].stage;
+
 export function stageAt(t: number): PrStage {
   let s = STAGES[0].stage;
   for (const x of STAGES) if (t >= x.from) s = x.stage;

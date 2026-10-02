@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Chapter 4, Phone: the API worker's question at the foot of its own pane,
+ * Chapter 4, Chat: the API worker's question at the foot of its own pane,
  * and on the phone the codecast app's session screen, where Alex answers it:
  * the question arrives, the field takes focus, the answer is typed and sent,
  * and the worker turns back to Working and streams its reply. The screen is
@@ -17,7 +17,7 @@ import { MOBILE_COMPOSER_PLACEHOLDER, MOBILE_COMPOSER_STATUS, MOBILE_PULSE, MOBI
 import { ASK, EARLIER, ME, PHONE_SESSION, REPLY, STEER, TEST_CALL, TEST_RESULT } from "../fixtures/phone";
 import { MIN } from "../fixtures/story";
 import { fly, useFilmTime } from "../filmClock";
-import { Veil } from "../film";
+import { FilmGrow, Veil } from "../film";
 import { typed } from "../timeline";
 import { APP_K, APP_W, DESK_AT, HOME_H, KEYBOARD_H, PHONE_AT, STATUS_H } from "./phone.motion";
 import type { PartProps } from "./contract";
@@ -26,19 +26,25 @@ const SF = "-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif";
 
 /* ── The desk: the exchange in the worker's own pane ─────────────────── */
 
-const deskStage = (t: number) => (t < DESK_AT.ask ? 0 : t < DESK_AT.steer ? 1 : t < DESK_AT.reply ? 2 : 3);
-
-/** The foot of the API worker's transcript: its question, then (while the camera is on the phone) the answer from the phone and its reply. */
+/**
+ * The foot of the API worker's transcript: its question, then (while the
+ * camera is on the phone) the answer from the phone and its reply. Each opens
+ * its own room as it lands (FilmGrow), so the transcript above it rises.
+ */
 export function WorkerExchange({ now }: PartProps) {
-  const stage = useFilmTime(deskStage);
-  if (stage === 0) return null;
   return (
     <div className="px-3 pb-1">
-      <div {...fly("pairA/phone.ask")}>
-        <AssistantBlock content={ASK} timestamp={now - 1_000} messageId="hero-m-api-ask" agentType={PHONE_SESSION.agent} showHeader={false} />
-      </div>
-      {stage >= 2 && <UserPrompt content={STEER} timestamp={now} messageId="hero-m-api-steer" userName={ME} avatarUrl={null} />}
-      {stage >= 3 && <AssistantBlock content={REPLY} timestamp={now} messageId="hero-m-api-reply" agentType={PHONE_SESSION.agent} />}
+      <FilmGrow at={DESK_AT.ask} dur={0.6}>
+        <div {...fly("pairA/phone.ask")}>
+          <AssistantBlock content={ASK} timestamp={now - 1_000} messageId="hero-m-api-ask" agentType={PHONE_SESSION.agent} showHeader={false} />
+        </div>
+      </FilmGrow>
+      <FilmGrow at={DESK_AT.steer}>
+        <UserPrompt content={STEER} timestamp={now} messageId="hero-m-api-steer" userName={ME} avatarUrl={null} />
+      </FilmGrow>
+      <FilmGrow at={DESK_AT.reply}>
+        <AssistantBlock content={REPLY} timestamp={now} messageId="hero-m-api-reply" agentType={PHONE_SESSION.agent} />
+      </FilmGrow>
     </div>
   );
 }
@@ -122,10 +128,8 @@ function PulseDot({ color, pulse }: { color: string; pulse: { leg: number; low: 
   return <PhoneStatusDot color={color} opacity={opacity} />;
 }
 
-/** What the composer says about the agent, from film time: working, then waiting on the question, then working on the answer. */
-const filmStatus = (t: number) => (t >= PHONE_AT.askLands && t < PHONE_AT.working ? "permission_blocked" : "working");
-
-const feedStage = (t: number) => (t < PHONE_AT.askRoom ? 0 : t < PHONE_AT.sent ? 1 : t < PHONE_AT.reply ? 2 : t < PHONE_AT.test ? 3 : 4);
+/** What the composer says about the agent, from film time: working, then nothing while its turn has ended on the question (idle, as the app shows it), then working on the answer. */
+const filmStatus = (t: number) => (t >= PHONE_AT.askLands && t < PHONE_AT.working ? undefined : "working");
 
 /** The reply, streamed: the words so far, with the rest held invisibly so the bubble keeps the height it lands with. */
 function StreamedReply() {
@@ -138,9 +142,8 @@ function StreamedReply() {
   );
 }
 
-/** The worker's session in the app: what it did before the question, then the exchange as film time reaches it. */
+/** The worker's session in the app: what it did before the question, then the exchange as film time reaches it, each entry opening its own room (FilmGrow) so the feed above rises. */
 function Feed({ now }: { now: number }) {
-  const stage = useFilmTime(feedStage);
   const tested = useFilmTime((t) => t >= PHONE_AT.testDone);
   const agentType = PHONE_SESSION.agent;
   return (
@@ -152,21 +155,21 @@ function Feed({ now }: { now: number }) {
         <PhoneMessageText>{EARLIER.plan}</PhoneMessageText>
       </PhoneMessage>
       <PhoneToolCalls only calls={EARLIER.calls.map(({ call, result }) => ({ call, result }))} />
-      {stage >= 1 && (
+      <FilmGrow at={PHONE_AT.askRoom} dur={0.55}>
         <div {...fly("phone/phone.askBubble")} data-phone="ask">
           <PhoneMessage role="assistant" agentType={agentType} time="just now" showHeader={false}>
             <PhoneMessageText>{ASK}</PhoneMessageText>
           </PhoneMessage>
         </div>
-      )}
-      {stage >= 2 && (
+      </FilmGrow>
+      <FilmGrow at={PHONE_AT.sent}>
         <div {...fly("phone/phone.steer")} data-phone="steer">
           <PhoneMessage role="user" name={ME} agentType={agentType} time="just now">
             <PhoneMessageText>{STEER}</PhoneMessageText>
           </PhoneMessage>
         </div>
-      )}
-      {stage >= 3 && (
+      </FilmGrow>
+      <FilmGrow at={PHONE_AT.reply} dur={0.6}>
         <div {...fly("phone/phone.reply")} data-phone="reply">
           <PhoneMessage role="assistant" agentType={agentType} model={PHONE_SESSION.model} time="just now">
             <PhoneMessageText>
@@ -174,12 +177,12 @@ function Feed({ now }: { now: number }) {
             </PhoneMessageText>
           </PhoneMessage>
         </div>
-      )}
-      {stage >= 4 && (
+      </FilmGrow>
+      <FilmGrow at={PHONE_AT.test} dur={0.45}>
         <div {...fly("phone/phone.test")} data-phone="test">
           <PhoneToolCalls only calls={[{ call: TEST_CALL, result: tested ? TEST_RESULT : undefined }]} />
         </div>
-      )}
+      </FilmGrow>
     </div>
   );
 }
@@ -189,14 +192,14 @@ function Composer() {
   const status = useFilmTime(filmStatus);
   const focused = useFilmTime((t) => t >= PHONE_AT.focus && t < PHONE_AT.blur);
   const len = useFilmTime((t) => (t >= PHONE_AT.type && t < PHONE_AT.sent ? typed(STEER, t, PHONE_AT.type, PHONE_AT.rate).length : 0));
-  const meta = MOBILE_COMPOSER_STATUS[status];
+  const meta = status ? MOBILE_COMPOSER_STATUS[status] : undefined;
   return (
     <div className="relative">
       <PhoneComposer
         value={STEER.slice(0, len)}
         placeholder={MOBILE_COMPOSER_PLACEHOLDER.active}
         status={status}
-        statusDot={<PulseDot color={meta.color} pulse={MOBILE_PULSE.status} />}
+        statusDot={meta && <PulseDot color={meta.color} pulse={MOBILE_PULSE.status} />}
         caret={focused}
         bottom={HOME_H}
         send={(button) => (

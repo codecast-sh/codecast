@@ -77,6 +77,14 @@ export type Surface = {
 
 const whole = (w: number, h: number): Record<string, Region> => ({ main: { x: 0, y: 0, w, h } });
 
+/** The API worker's centre, and how far it sits below the band (the dashboard worker as far above it). */
+const PAIR_A_X = 1630;
+const PAIR_DY = 70;
+/** The phone's centre: its own half width (at its zoom) and half the frame's width east of the API worker's edge, so a hold on it leaves the worker just off the page. */
+const PHONE_X = PAIR_A_X + 270 + 640;
+/** A little above the API worker's centre: a full-height phone level with the lowered worker would hang past the box's foot while the pair is framed, and arrive late. */
+const PHONE_Y = 20;
+
 /** The film box's inner margin each hold's subject keeps from its edges (stage px). */
 export const FRAME_MARGIN = { desktop: { x: 80, y: 36 }, mobile: { x: 24, y: 56 } } as const;
 
@@ -148,18 +156,21 @@ export const SURFACES: Surface[] = [
       side: { x: 420, y: 104, w: 380, h: 500 },
     },
   },
-  // The workers side by side, one window each, the way two panes sit on a wide screen; no taller than a booting worker's transcript fills.
+  // The workers side by side, one window each, the way two panes sit on a wide screen, the second a step lower so the pair fills the
+  // box's height: the dashboard worker west, the API worker east, nearest the phone it is answered from. No taller than a booting
+  // worker's transcript fills.
   {
-    id: "pairA", w: 540, h: 340, pos: [1050, -20, -60], rot: [0, -3, 0], radius: 12,
+    id: "pairA", w: 540, h: 340, pos: [PAIR_A_X, PAIR_DY, -60], rot: [0, -5, 0], radius: 12,
     regions: { header: { x: 0, y: 0, w: 540, h: 44 }, transcript: { x: 0, y: 44, w: 540, h: 296, anchor: "bottom" } },
   },
   {
-    id: "pairB", w: 540, h: 340, pos: [1630, 20, -60], rot: [0, -5, 0], radius: 12,
+    id: "pairB", w: 540, h: 340, pos: [PAIR_A_X - 580, -PAIR_DY, -60], rot: [0, -3, 0], radius: 12,
     regions: { header: { x: 0, y: 0, w: 540, h: 44 }, transcript: { x: 0, y: 44, w: 540, h: 296, anchor: "bottom" }, scrim: { x: 0, y: 0, w: 540, h: 340 } },
   },
-  // Held up in front of the second worker, the way a phone sits beside a laptop.
+  // East of the API worker, level with it, far enough that a hold on the phone shows the phone alone: every move to and from it is a
+  // pan that carries the workers off the side of the page as it slides in, never a window dissolving over another.
   {
-    id: "phone", w: 300, h: 620, pos: [1810, 70, 200], rot: [0, -12, -2], radius: 44, frame: "phone", fadeOut: 0.6, fadeIn: 0.7, rise: 40, zoom: FILL.h / 620,
+    id: "phone", w: 300, h: 620, pos: [PHONE_X, PHONE_Y, -60], rot: [0, -12, -2], radius: 44, frame: "phone", zoom: FILL.h / 620,
     // The whole screen, the status bar's band beside the notch included: the app's header runs under it, as on iOS.
     regions: { main: { x: 0, y: -24, w: 276, h: 596 } },
   },
@@ -218,12 +229,6 @@ export type Hold = {
   /** Applied to the transit that ARRIVES at this hold: extra pull-back (negative dist) and roll at mid-move. */
   crest?: number;
   crestRoll?: number;
-  /**
-   * The move that arrives here hands over in place: the windows it leaves go
-   * first, then the ones it reaches come, rather than both overlapping where
-   * one stands in front of the other (the phone in front of the dashboard).
-   */
-  handoff?: boolean;
   /** Drift across the hold: a slow push toward the subject and a slight turn (DRIFT). */
   drift?: boolean;
 };
@@ -249,14 +254,14 @@ const HOLDS: Hold[] = [
   { t0: 8.0, t1: 13.0, pose: P(0, 0, 0, 2, -1.5, 0, 0), sees: ["desk"], drift: true },
   // 3 Fan out: the lead's window, then the two workers it spawned, side by side.
   { t0: 14.1, t1: 16.5, pose: P(0, 0, 0, 2, 2, 0, 0), sees: ["desk"], drift: true },
-  { t0: 18.3, t1: 21.0, pose: P(1340, 0, -60, 0, 4, 0, 0), sees: ["pairA", "pairB"], crest: -300, drift: true },
-  // 4 The phone, then a pull-back to see it beside the worker it steers (the dashboard worker stays out of this shot; it returns for Talk).
-  { t0: 22.6, t1: 25.9, pose: P(1810, 70, 200, 0, 12, 2, 0), sees: ["phone"], crest: -300, crestRoll: 2, drift: true },
-  { t0: 27.0, t1: 29.3, pose: P(1440, 30, 40, 0, 4, 0, 0), sees: ["phone", "pairA"] },
-  // 5 Agents talk.
-  { t0: 31.0, t1: 35.7, pose: P(1340, 10, -60, 0, 4, 0, 0), sees: ["pairA", "pairB"], handoff: true, drift: true },
+  { t0: 18.3, t1: 21.0, pose: P(PAIR_A_X - 290, 0, -60, 0, 4, 0, 0), sees: ["pairA", "pairB"], crest: -300, drift: true },
+  // 4 East past the API worker to the phone, then a pull-back to see it beside the worker it answers (the dashboard worker, west of it, stays out of this shot; it returns for Talk).
+  { t0: 22.6, t1: 25.9, pose: P(PHONE_X, PHONE_Y, -60, 0, 12, 2, 0), sees: ["phone"], crest: -120, crestRoll: 1.5, drift: true },
+  { t0: 27.0, t1: 29.3, pose: P((PAIR_A_X + PHONE_X) / 2, PAIR_DY, -60, 0, 6, 0, 0), sees: ["phone", "pairA"] },
+  // 5 Agents talk: west again, the phone carried off the east side as the dashboard worker comes in from the west.
+  { t0: 31.0, t1: 35.7, pose: P(PAIR_A_X - 290, 0, -60, 0, 4, 0, 0), sees: ["pairA", "pairB"], drift: true },
   // 6 Decide: the card over the veiled conversation, face-on.
-  { t0: 37.5, t1: 41.8, pose: P(0, 0, 0, 2, -3, 0, 0), sees: ["desk"], crest: -400, crestRoll: 1.5, drift: true },
+  { t0: 37.5, t1: 41.8, pose: P(0, 0, 0, 2, -3, 0, 0), sees: ["desk"], crest: -500, crestRoll: 1.5, drift: true },
   // 7 Track: west along the band to the board.
   { t0: 43.5, t1: 47.8, pose: P(SX.board, 5, -60, -7, 0, 0, 0), sees: ["board"], crest: -400, crestRoll: -2, drift: true },
   // 8 Automate.

@@ -261,23 +261,12 @@ function transitOpacity(id: SurfaceId, t: number): number {
     const [a, b] = [h.sees.includes(id), next.sees.includes(id)];
     if (a && b) return 1;
     const { fadeIn = FADE_IN, fadeOut = FADE_OUT } = SURFACE_BY_ID[id];
-    // A handoff in place: what the move leaves goes over its first part, and only then does what it reaches arrive.
-    if (next.handoff) {
-      const mid = h.t1 + (next.t0 - h.t1) * HANDOFF_AT;
-      if (a) return glide(clamp((mid - t) / fadeOut));
-      if (b) return glide(clamp((t - mid + HANDOFF_OVERLAP) / fadeIn));
-      return 0;
-    }
     if (a) return glide(clamp((next.t0 - t) / fadeOut));
     if (b) return glide(clamp((t - h.t1) / fadeIn));
     return 0;
   }
   return 0;
 }
-
-/** Where in a handoff move the leaving windows are gone; the arriving ones start to come HANDOFF_OVERLAP s before, as the last of them goes. */
-const HANDOFF_AT = 0.45;
-const HANDOFF_OVERLAP = 0.3;
 
 /** How far a surface with `rise` has to go: 1 out of view, 0 in place, following its own fade. */
 const riseOf = (id: SurfaceId, t: number) => (SURFACE_BY_ID[id].rise ? 1 - transitOpacity(id, t) : 0);
