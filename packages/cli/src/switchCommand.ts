@@ -7,6 +7,7 @@
 import { randomUUID } from "node:crypto";
 import type { Command } from "commander";
 import {
+  AGENT_CLIENTS,
   InvalidExecutionAgentTypeError,
   parseExecutionAgentClientId,
   toConvexAgentType,
@@ -15,6 +16,8 @@ import {
 import { c, fmt } from "./colors.js";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { commandGroup } from "./commandGroups.js";
+
+const AGENT_NAMES = Object.keys(AGENT_CLIENTS).join(", ");
 
 /** Accept "claude", "claude_code", "Codex", etc. */
 export function parseSwitchAgentArg(raw: string): ConvexAgentType {
@@ -25,7 +28,7 @@ export function parseSwitchAgentArg(raw: string): ConvexAgentType {
   } catch (err) {
     if (err instanceof InvalidExecutionAgentTypeError) {
       throw new Error(
-        `Unknown agent "${raw}". Use claude, codex, cursor, gemini, opencode, pi, or grok.`,
+        `Unknown agent "${raw}". Use one of: ${AGENT_NAMES}.`,
       );
     }
     throw err;
@@ -36,7 +39,7 @@ export function registerSwitchCommand(program: Command, deps: PublishDeps): void
   program
     .command("switch")
     .description(commandGroup("switch").description)
-    .option("--agent <name>", "Agent to continue as (claude, codex, cursor, gemini, opencode, pi, grok)")
+    .option("--agent <name>", `Agent to continue as (${AGENT_NAMES})`)
     .option("--model <name>", "Model option key (opus, sonnet, gpt-5.4, …)")
     .option("--effort <level>", "Effort level (low, medium, high, max, …)")
     .option("-s, --session <id>", "Session to switch (default: the current one)")

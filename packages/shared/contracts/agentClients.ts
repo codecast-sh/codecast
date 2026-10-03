@@ -431,6 +431,9 @@ export interface AgentClientDescriptor {
   convexId: ConvexAgentType;
   /** Picker display name ("Claude", "OpenCode", "pi"). */
   displayName: string;
+  /** False keeps a supported client out of the pickers until a user pins it
+   *  (users.pinned_agents). Absent means pinned by default. */
+  pinnedByDefault?: boolean;
   /** Exact fenced transports that are valid for this agent family. */
   executionTransports: readonly AgentExecutionTransport[];
   /** Executable launched to start a fresh session. */
@@ -725,30 +728,6 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
       mcpConfig: { user: "~/.cursor/mcp.json", project: ".cursor/mcp.json", shape: "json_mcpservers" },
       hooksConfig: { path: "~/.cursor/hooks.json", shape: "unverified" },
     },
-  },
-  gemini: {
-    id: "gemini",
-    displayName: "Gemini",
-    convexId: "gemini",
-    executionTransports: ["tmux"],
-    binary: "gemini",
-    launchArgs: [],
-    printMode: { kind: "flag", token: "-p", promptAsValue: true },
-    // gemini resumes the most-recent session and ignores the id (daemon fact).
-    resumeCmd: () => `gemini --resume latest`,
-    transcriptRoots: ["~/.gemini/tmp"],
-    watcherKind: "jsonl-dir",
-    // Fresh-launch site (daemon.ts:11989) gemini branch, verbatim: />\s*$|gemini/i
-    // (ASCII `>` at line end, or the word "gemini"). The shared readiness path
-    // (/[❯›]/) matches NEITHER of these, so gemini launch-readiness detection
-    // depends entirely on which site ct-39077 wires — this is the one the
-    // per-client code actually uses at launch.
-    promptReadyPattern: />\s*$|gemini/i,
-    tmuxPrefix: "gm",
-    // reconstitute: the daemon has always rebuilt a missing gemini session through
-    // the claude JSONL writer + `gemini --resume latest` (a sanctioned oddity, not
-    // a fork mechanism — `fork` stays absent).
-    capabilities: { panePromptMonitoring: false, reconstitute: true },
   },
   opencode: {
     id: "opencode",
@@ -1056,6 +1035,33 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
       // forkCmd (no native fork), liveEvents (no event bus researched).
     },
   },
+  gemini: {
+    // Unpinned and last: Google retired Gemini CLI for consumer accounts on
+    // 2026-06-18 in favor of Antigravity CLI (`agy`). Kept for existing sessions.
+    id: "gemini",
+    displayName: "Gemini",
+    convexId: "gemini",
+    pinnedByDefault: false,
+    executionTransports: ["tmux"],
+    binary: "gemini",
+    launchArgs: [],
+    printMode: { kind: "flag", token: "-p", promptAsValue: true },
+    // gemini resumes the most-recent session and ignores the id (daemon fact).
+    resumeCmd: () => `gemini --resume latest`,
+    transcriptRoots: ["~/.gemini/tmp"],
+    watcherKind: "jsonl-dir",
+    // Fresh-launch site (daemon.ts:11989) gemini branch, verbatim: />\s*$|gemini/i
+    // (ASCII `>` at line end, or the word "gemini"). The shared readiness path
+    // (/[❯›]/) matches NEITHER of these, so gemini launch-readiness detection
+    // depends entirely on which site ct-39077 wires — this is the one the
+    // per-client code actually uses at launch.
+    promptReadyPattern: />\s*$|gemini/i,
+    tmuxPrefix: "gm",
+    // reconstitute: the daemon has always rebuilt a missing gemini session through
+    // the claude JSONL writer + `gemini --resume latest` (a sanctioned oddity, not
+    // a fork mechanism — `fork` stays absent).
+    capabilities: { panePromptMonitoring: false, reconstitute: true },
+  },
 };
 
 // ── Model helpers ─────────────────────────────────────────────────────────────
@@ -1091,6 +1097,21 @@ export const AGENT_LAUNCH_OPTIONS: AgentLaunchOption[] = Object.values(AGENT_CLI
   convexType: d.convexId,
   label: d.displayName,
 }));
+
+/** The agents a user has pinned: their own list (users.pinned_agents) once
+ *  they have set one, else every client pinned by default. Unknown ids drop. */
+export function pinnedAgentIds(pins: readonly string[] | null | undefined): AgentClientId[] {
+  if (pins) return (Object.keys(AGENT_CLIENTS) as AgentClientId[]).filter((id) => pins.includes(id));
+  return (Object.values(AGENT_CLIENTS) as AgentClientDescriptor[]).filter((d) => d.pinnedByDefault !== false).map((d) => d.id);
+}
+
+/** The agent row a picker shows: the pinned agents, plus `keep` (the agent a
+ *  session already runs) so an unpinned one still names itself. Registry order. */
+export function pinnedLaunchOptions(pins: readonly string[] | null | undefined, keep?: AgentClientId | null): AgentLaunchOption[] {
+  const shown = new Set<AgentClientId>(pinnedAgentIds(pins));
+  if (keep) shown.add(keep);
+  return AGENT_LAUNCH_OPTIONS.filter((o) => shown.has(o.id));
+}
 
 /** The launch-time model/effort rail for a blank session: effort gains the
  *  "default" stop (= omit the flag, the agent's saved default wins). One
