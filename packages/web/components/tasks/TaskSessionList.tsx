@@ -233,9 +233,12 @@ export function TaskSessionList({
   sessions,
   originId,
   onOpen,
+  heading = "Sessions",
 }: {
   sessions: TaskLinkedSession[];
   originId?: string | null;
+  /** "Other sessions" under a task whose owner heads the page. */
+  heading?: string;
   onOpen: (conv: TaskLinkedSession) => void;
 }) {
   const now = useCoarseNow(30_000);
@@ -257,7 +260,7 @@ export function TaskSessionList({
   return (
     <div className="mb-6">
       <div className="flex items-center gap-2 mb-1.5">
-        <div className="text-xs font-medium text-sol-text-dim">Sessions</div>
+        <div className="text-xs font-medium text-sol-text-dim">{heading}</div>
         <span className="text-[11px] font-mono text-sol-text-muted">{rows.length}</span>
         {liveCount > 0 && (
           <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-sol-green/15 text-sol-green text-[10px]">

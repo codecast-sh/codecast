@@ -201,10 +201,17 @@ export default function GuestMeetPage() {
   // to the front, and for an admitted guest out of the media only while
   // REJOIN_HOLD_MS lasts. The beat reads the media state through a ref so a
   // reconnect does not restart the clock.
+  // The hold counts from whichever came last: leaving the media, or being let
+  // in. A guest who waited at the door for minutes was "out of the media" the
+  // whole time, and timing the hold from page load stopped their beat the
+  // instant they were admitted, so a guest still answering the permission
+  // prompt, or one press away from walking in, lapsed out of a call they had
+  // just been let into.
+  const admitted = view === "admitted";
   const media = useRef({ inMedia, outSince: Date.now() });
   useWatchEffect(() => {
     media.current = { inMedia, outSince: inMedia ? 0 : Date.now() };
-  }, [inMedia]);
+  }, [inMedia, admitted]);
   const beatingAs = creds && atDoorOrIn && !leftByMe ? view : null;
   useWatchEffect(() => {
     if (!creds || !beatingAs) return;

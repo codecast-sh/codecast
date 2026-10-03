@@ -1,6 +1,7 @@
 import { isDraft, original } from "mutative";
 import { applyShapeLocks, applySyncRecord, applySyncTable } from "./syncProtocol";
 import { defaultIsServerId } from "./middleware";
+import { rekeyUndoIds } from "./undoStack";
 import type { MergeSpec, PendingEntry, PlatformConfig, SyncOpts } from "./types";
 
 /**
@@ -213,6 +214,8 @@ export function createSyncEngine(config: PlatformConfig): SyncEngine {
           // drafts, child pointers) before the row itself moves.
           rekeyExtra?.(draft, oldId, match._id);
           rekeyPending(mutPending(), oldId, match._id, field);
+          // Live undo entries name the stub too; follow it to the real id.
+          rekeyUndoIds(oldId, match._id);
           // The server sent a row matching the stub's alt key — that IS the
           // acknowledgement the stub's `include` lock was waiting for. Clear
           // it; in delta mode applySyncTable never would (absence != deletion),

@@ -27,7 +27,7 @@ export function StoryRow({ story }: { story: Story }) {
         <div>
           <Accordion.Trigger className="flex w-full min-w-0 items-baseline gap-2 text-left outline-none">
             <KindGlyph kind={story.kind} />
-            <span className="chg-ui min-w-0 flex-1 truncate text-[14px] font-medium leading-[1.4] text-sol-text/90">
+            <span className="chg-ui line-clamp-2 min-w-0 flex-1 text-[14px] font-medium leading-[1.4] text-sol-text/90">
               <FadeText text={story.headline} />
             </span>
             {waiting && <span className="shrink-0 font-mono text-[10px] text-sol-text/45">waiting</span>}

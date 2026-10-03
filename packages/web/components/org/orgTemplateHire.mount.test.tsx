@@ -72,10 +72,12 @@ async function verifyHireFlow() {
   assert.equal(copied.length, 1);
   assert.match(copied[0], /--project 'project-1'.*--team 'fixture-team'/);
   assert.equal(created.length, 0);
-  // The gallery (H3): one card per template, the hire offered only where the workspace can take it.
+  // The gallery (H3): the built-in Head of People and Executive Assistant lead
+  // (org-staffing.md S6, S30: the fixture org has neither), then one card per
+  // template, the hire offered only where the workspace can take it.
   assert.equal(document.querySelector("[data-hire-stage]")!.getAttribute("data-hire-stage"), "gallery");
   const cards = [...document.querySelectorAll<HTMLElement>("[data-template-card]")].map((el) => [el.dataset.templateCard, el.dataset.hireable]);
-  assert.deepEqual(cards, [["eng-lead", "true"], ["growth", "true"], ["draft", "false"]]);
+  assert.deepEqual(cards, [["head-of-people", "true"], ["executive-assistant", "true"], ["eng-lead", "true"], ["growth", "true"], ["draft", "false"]]);
   assert.ok(document.querySelector('[data-template-card="eng-lead"] [data-template-card-leads]'), "the default lead is badged");
   assert.equal(document.querySelector('[data-template-card="growth"] [data-template-card-leads]'), null);
   assert.match(document.querySelector<HTMLElement>('[data-template-card="growth"]')!.textContent!, /under the lead/);

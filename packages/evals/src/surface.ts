@@ -115,6 +115,7 @@ export interface AgentResult {
   /** The agent's own loop: top-level assistant messages per model, read from the stream (dryRun.ts loopTurnsOf). Empty for a dry run. */
   loopTurns?: Record<string, number>;
   isError: boolean;
+  /** Why the run says nothing about the prompt: the model never answered, or the agent's cast reached the real CLI outside its world (dryRun.ts readAgentRun). */
   harnessFailure?: string;
   exitCode: number;
   model: string;

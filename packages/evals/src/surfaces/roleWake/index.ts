@@ -70,8 +70,11 @@ export function frameOf(snap: RoleWakeSnap): string {
   return triggerRunFrame(task, { role: f.role, waiting: f.waiting ?? null, stashed: Boolean(f.stashed) });
 }
 
+/** A fixture woken by another session's message: the turn under test is the reply, not the brief. */
+const isMessageTurn = (snap: RoleWakeSnap): boolean => snap.fixture?.routine === 'message';
+
 /** What the agent gets, and what the judge reads it got: the frame, then the harness note. */
-const briefingOf = (snap: RoleWakeSnap): string => withHarnessNote(frameOf(snap), snap, [BRIEF_NOTE]);
+const briefingOf = (snap: RoleWakeSnap): string => withHarnessNote(frameOf(snap), snap, isMessageTurn(snap) ? [] : [BRIEF_NOTE]);
 
 const briefOf = (out: { parsed?: unknown }): string | null => ((out.parsed as { brief?: string | null } | undefined)?.brief ?? null);
 
@@ -150,6 +153,8 @@ const impl: SurfaceImpl = {
 
   gates(snap: RoleWakeSnap, out, label?: StandingLabel) {
     const brief = briefOf(out);
+    // A message wake is held to its reply (the label's gates); its brief is its own business that turn.
+    if (isMessageTurn(snap)) return standingGates(out.agents, label, 1, brief === null ? [] : [brief]);
     const scope = parseScheduledTask(frameOf(snap))?.role?.scope ?? [];
     const lines = parseStandingSection(brief);
     const now = Date.parse(snap.captured_at);

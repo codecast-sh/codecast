@@ -15,6 +15,7 @@ import { rolesInBoundary } from "./lib/orgAccess";
 import { sessionWork } from "./lib/orgOwnership";
 import { ownsWork } from "@codecast/shared/contracts/orgLead";
 import { roleSubject, withOrgChange } from "./lib/orgChangeLog";
+import { isHandBriefing } from "./spawn";
 import { seatTitlePatch } from "./anchors";
 import { findRoleRoutineInAnyStatus, isLiveTrigger, liveRoutinesOf } from "./lib/orgRoutine";
 import { applyCancel, applyReactivate } from "./agentTasks";
@@ -970,10 +971,20 @@ export const seatExecutiveAssistant = internalMutation({
 //   npx convex run migrations:releaseFolderHeldSessions '{"dryRun":true,"team":"<team id>","role":"calling"}'
 //
 // Dry by default. `team` (an id) and `role` (a handle) narrow it; `limit`
-// caps the sessions moved in one run (the rest wait for the next).
+// caps the sessions moved in one run (the rest wait for the next). A killed
+// session is skipped: it is a retired row nobody reads, and moving it would
+// only write log rows. A hand from before the stamp is known by its run
+// (`workflow_run_id`, a line run), its parent chain, or its first message (the
+// hand briefing). `release_live` counts released sessions whose status is
+// active (the row is not completed or killed) and whose pinned state is not
+// done; dormant and idle work count as live.
 export const releaseFolderHeldSessions = internalMutation({
   args: { dryRun: v.optional(v.boolean()), team: v.optional(v.string()), role: v.optional(v.string()), limit: v.optional(v.number()) },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args) => releaseFolderHeld(ctx, args),
+});
+
+export async function releaseFolderHeld(ctx: { db: any; scheduler?: any }, args: { dryRun?: boolean; team?: string; role?: string; limit?: number }) {
+  {
     const dryRun = args.dryRun ?? true;
     const limit = args.limit ?? 200;
     let roles = (await ctx.db.query("org_roles").collect()).filter((r: any) => r.status !== "retired");
@@ -987,29 +998,36 @@ export const releaseFolderHeldSessions = internalMutation({
       const key = r.team_id ? `team:${r.team_id}` : `user:${r.scope_user_id}`;
       byBoundary.set(key, [...(byBoundary.get(key) ?? []), r]);
     }
-    const rows: Array<{ role: string; session: string; title: string; state: string; verdict: "release" | "keep"; reason: string; return_to?: string }> = [];
+    const rows: Array<{ role: string; session: string; title: string; state: string; work: string; updated_at: number; verdict: "release" | "keep" | "skip"; reason: string; return_to?: string }> = [];
     let released = 0;
     let stamped = 0;
     for (const role of roles as any[]) {
       const boundaryRoles = await rolesInBoundary(ctx, role);
-      const standing = await standingConversationOf(ctx, role);
       const held: any[] = await ctx.db.query("conversations").withIndex("by_org_role", (q: any) => q.eq("org_role_id", role._id)).collect();
       const toRelease: any[] = [];
       for (const c of held) {
         if (c.standing_role_id || c.anchor_id) continue;
         const shortId = c.short_id ?? String(c._id).slice(0, 7);
-        const state = c.inbox_killed_at ? "killed" : c.status === "done" ? "done" : c.status ?? "active";
+        const state = c.inbox_killed_at ? "killed" : c.status ?? "active";
+        const base = { role: role.handle, session: shortId, title: (c.title ?? "").trim(), state, work: c.thread_state_status ?? "-", updated_at: c.updated_at ?? 0 };
+        if (c.inbox_killed_at) { rows.push({ ...base, verdict: "skip", reason: "killed: a retired row nobody reads" }); continue; }
         const keep = async (reason: string, hold: "bound" | "filed") => {
-          rows.push({ role: role.handle, session: shortId, title: (c.title ?? "").trim(), state, verdict: "keep", reason });
+          rows.push({ ...base, verdict: "keep", reason });
           if (!dryRun && c.org_role_hold !== hold) { await ctx.db.patch(c._id, { org_role_hold: hold }); stamped++; }
         };
         if (ownsWork(role, await sessionWork(ctx, c), boundaryRoles)) { await keep("bound to work in its area", "bound"); continue; }
         if (c.org_role_hold === "filed") { await keep("filed by a person or role", "filed"); continue; }
-        // Started by the role's line: a hand, or a hand's own child.
-        let cur = c; let viaLine = false;
-        for (let depth = 0; cur?.parent_conversation_id && depth < 8; depth++) {
+        // Started by the role's line: a line run, a hand whose parent chain
+        // reaches the role's standing session, or a hand briefed as one.
+        let viaLine = !!c.workflow_run_id;
+        let cur = c;
+        for (let depth = 0; !viaLine && cur?.parent_conversation_id && depth < 8; depth++) {
           cur = await ctx.db.get(cur.parent_conversation_id);
-          if (cur && standing && String(cur._id) === String(standing._id)) { viaLine = true; break; }
+          if (cur && String(cur.standing_role_id ?? "") === String(role._id)) viaLine = true;
+        }
+        if (!viaLine) {
+          const first: any = await ctx.db.query("messages").withIndex("by_conversation_timestamp", (q: any) => q.eq("conversation_id", c._id)).order("asc").first();
+          viaLine = isHandBriefing(first?.content);
         }
         if (viaLine) { await keep("started by the role's own line", "filed"); continue; }
         // The org log: a person's or role's own filing is a batch of kind
@@ -1019,7 +1037,7 @@ export const releaseFolderHeldSessions = internalMutation({
         const kinds = batch ? Object.keys(batch.kinds ?? {}) : [];
         if (batch && kinds.every((k) => k === "session")) { await keep(`filed by a person or role (${batch.door})`, "filed"); continue; }
         const returnTo = String(c.owner_user_id ?? c.user_id);
-        rows.push({ role: role.handle, session: shortId, title: (c.title ?? "").trim(), state, verdict: "release", reason: batch ? `taken over by the folder rule (${kinds.join("+")} batch)` : `no record (folder ${c.project_path ?? "unknown"})`, return_to: returnTo });
+        rows.push({ ...base, verdict: "release", reason: batch ? `taken over by the folder rule (${kinds.join("+")} batch)` : `no record (folder ${c.project_path ?? "unknown"})`, return_to: returnTo });
         toRelease.push(c);
       }
       if (dryRun || !toRelease.length) continue;
@@ -1033,7 +1051,12 @@ export const releaseFolderHeldSessions = internalMutation({
         }
       });
     }
-    const counts = { release: rows.filter((r) => r.verdict === "release").length, keep: rows.filter((r) => r.verdict === "keep").length, release_live: rows.filter((r) => r.verdict === "release" && r.state !== "done" && r.state !== "killed").length };
+    const counts = {
+      release: rows.filter((r) => r.verdict === "release").length,
+      release_live: rows.filter((r) => r.verdict === "release" && r.state === "active" && r.work !== "done").length,
+      keep: rows.filter((r) => r.verdict === "keep").length,
+      skipped: rows.filter((r) => r.verdict === "skip").length,
+    };
     return { dryRun, roles: roles.length, ...counts, released, stamped, rows };
-  },
-});
+  }
+}

@@ -1,77 +1,660 @@
-export type UndoEntry = {
-  label: string;
-  undo: () => void;
-  redo: () => void;
-  ts: number;
-};
+// The window's undo stack and its history.
+//
+// Entries come from two places. The middleware records a "generic" entry for
+// every action with an undo spec (see undo.ts): its closures replay the old
+// cell values through the action pipeline and re-invoke the action on redo.
+// App code may still push a hand-written "manual" entry with pushUndo. Both
+// keep the closure contract: undo() and redo() do the work, and may return
+// an UndoOutcome saying whether they could.
+//
+// Everything here is in memory and per window. The history is a ring of the
+// last entries in any state (done, undone, conflict, refused, dropped,
+// external); the stacks hold only what a keypress can still reach.
+import type { CellChange, UndoEntry, UndoOutcome } from "./types";
+
+export type { UndoEntry, UndoOutcome };
 
 // How the stack tells the user what happened. The engine ships no toast of its
 // own: an app installs its notifier once at boot.
 export type UndoNotifier = {
   notify: (message: string) => void;
-  /** Show `label` with an inline "Undo" affordance wired to performUndo. */
-  notifyWithUndo?: (label: string, undo: () => void) => void;
+  /** Show `label` with an inline "Undo" affordance wired to undoEntry(entryId). */
+  notifyWithUndo?: (label: string, entryId: string) => void;
+  /**
+   * A successful undo or redo walk: `steps` entries in one press or one
+   * timeline click, `entry` the last one reached. When present it replaces
+   * the default "Undid: <label>" notice; conflicts still go through notify.
+   */
+  onHistoryStep?: (kind: "undo" | "redo", steps: number, entry: UndoEntry) => void;
 };
 
-const MAX_STACK = 30;
-const UNDO_EXPIRY_MS = 5 * 60_000;
+export type UndoHistoryItem = Omit<UndoEntry, "undo" | "redo" | "children"> & {
+  children?: UndoHistoryItem[];
+};
+export type UndoHistorySnapshot = {
+  version: number;
+  /** Newest first. */
+  items: readonly UndoHistoryItem[];
+  /** The entry the next undo would take back, or null. */
+  head: string | null;
+};
+
+export const DEFAULT_UNDO_KEYBOARD_WINDOW_MS = 5 * 60_000;
+export const DEFAULT_UNDO_STACK_LIMIT = 100;
+export const DEFAULT_UNDO_HISTORY_LIMIT = 200;
+export const UNDO_COALESCE_WINDOW_MS = 2_000;
+
+let keyboardWindowMs = DEFAULT_UNDO_KEYBOARD_WINDOW_MS;
+let stackLimit = DEFAULT_UNDO_STACK_LIMIT;
+let historyLimit = DEFAULT_UNDO_HISTORY_LIMIT;
 
 let undoStack: UndoEntry[] = [];
 let redoStack: UndoEntry[] = [];
+// Oldest first; the snapshot reverses it.
+let history: UndoEntry[] = [];
 let notifier: UndoNotifier = { notify: () => {} };
+
+let version = 0;
+let snapshot: UndoHistorySnapshot | null = null;
+const listeners = new Set<() => void>();
+
+let suppressDepth = 0;
+let refreshTarget: UndoEntry | null = null;
+let groupDepth = 0;
+let groupChildren: UndoEntry[] | null = null;
+let groupToast = false;
+let idCounter = 0;
+
+/** Tune the limits; the middleware calls it with PlatformConfig.undo. */
+export function configureUndoStack(opts: {
+  keyboardWindowMs?: number;
+  stackLimit?: number;
+  historyLimit?: number;
+}): void {
+  if (opts.keyboardWindowMs !== undefined) keyboardWindowMs = opts.keyboardWindowMs;
+  if (opts.stackLimit !== undefined) stackLimit = opts.stackLimit;
+  if (opts.historyLimit !== undefined) historyLimit = opts.historyLimit;
+}
+
+export function getUndoKeyboardWindowMs(): number {
+  return keyboardWindowMs;
+}
 
 export function setUndoNotifier(next: UndoNotifier): void {
   notifier = next;
 }
 
-export function pushUndo(entry: Omit<UndoEntry, "ts">) {
-  undoStack.push({ ...entry, ts: Date.now() });
-  if (undoStack.length > MAX_STACK) undoStack.shift();
+export function newUndoEntryId(): string {
+  idCounter += 1;
+  return `u${Date.now().toString(36)}-${idCounter.toString(36)}`;
+}
+
+function changed(): void {
+  version += 1;
+  snapshot = null;
+  for (const listener of [...listeners]) {
+    try {
+      listener();
+    } catch (error) {
+      console.error("[undo] history listener failed", error);
+    }
+  }
+}
+
+function addToHistory(entry: UndoEntry): void {
+  history.push(entry);
+  if (history.length > historyLimit) history.splice(0, history.length - historyLimit);
+}
+
+function remove(stack: UndoEntry[], entry: UndoEntry): boolean {
+  const at = stack.indexOf(entry);
+  if (at === -1) return false;
+  stack.splice(at, 1);
+  return true;
+}
+
+function pushEntry(entry: UndoEntry): void {
+  for (const dropped of redoStack) {
+    dropped.status = "dropped";
+    dropped.droppedBy = entry.id;
+  }
   redoStack = [];
-}
-
-function pruneExpired(stack: UndoEntry[]): UndoEntry[] {
-  const cutoff = Date.now() - UNDO_EXPIRY_MS;
-  return stack.filter((e) => e.ts > cutoff);
-}
-
-export function performUndo(): boolean {
-  undoStack = pruneExpired(undoStack);
-  const entry = undoStack.pop();
-  if (!entry) return false;
-  entry.undo();
-  redoStack.push(entry);
-  notifier.notify(`Undid: ${entry.label}`);
-  return true;
-}
-
-export function performRedo(): boolean {
-  redoStack = pruneExpired(redoStack);
-  const entry = redoStack.pop();
-  if (!entry) return false;
-  entry.redo();
+  entry.status = "done";
   undoStack.push(entry);
-  notifier.notify(`Redid: ${entry.label}`);
+  if (undoStack.length > stackLimit) undoStack.splice(0, undoStack.length - stackLimit);
+  addToHistory(entry);
+  changed();
+}
+
+// ---------------------------------------------------------------------------
+// Capture context: replays, withoutUndo, redo refresh, groups
+// ---------------------------------------------------------------------------
+
+/** Run `fn` with capture off: nothing it does is recorded. */
+export function withoutUndo<T>(fn: () => T): T {
+  suppressDepth += 1;
+  try {
+    return fn();
+  } finally {
+    suppressDepth -= 1;
+  }
+}
+
+export function isUndoSuppressed(): boolean {
+  return suppressDepth > 0;
+}
+
+/** The entry a redo is refreshing, so its capture rewrites that entry instead of pushing. */
+export function undoRefreshTarget(): UndoEntry | null {
+  return refreshTarget;
+}
+
+export function withUndoRefresh<T>(entry: UndoEntry, fn: () => T): T {
+  const prior = refreshTarget;
+  refreshTarget = entry;
+  try {
+    return fn();
+  } finally {
+    refreshTarget = prior;
+  }
+}
+
+/**
+ * Fold every capture inside `fn` into one entry. Synchronous only: the group
+ * closes when `fn` returns. A nested group flattens into the outer one, whose
+ * label wins. The label may be a function of the captured entries, resolved
+ * when the group closes, so it can count them.
+ */
+export function undoGroup<T>(label: string | ((entries: UndoEntry[]) => string), fn: () => T): T {
+  if (groupDepth > 0) {
+    groupDepth += 1;
+    try {
+      return fn();
+    } finally {
+      groupDepth -= 1;
+    }
+  }
+  groupDepth = 1;
+  groupChildren = [];
+  groupToast = false;
+  try {
+    return fn();
+  } finally {
+    const children = groupChildren;
+    const toast = groupToast;
+    groupDepth = 0;
+    groupChildren = null;
+    groupToast = false;
+    if (children.length > 0) {
+      const group = makeGroupEntry(typeof label === "function" ? label(children) : label, children);
+      pushEntry(group);
+      if (toast) announceRecorded(group);
+    }
+  }
+}
+
+function makeGroupEntry(label: string, children: UndoEntry[]): UndoEntry {
+  const objects: Array<{ store: string; id: string }> = [];
+  const seen = new Set<string>();
+  for (const child of children) {
+    for (const o of child.objects ?? []) {
+      const k = `${o.store}\u0000${o.id}`;
+      if (!seen.has(k)) {
+        seen.add(k);
+        objects.push(o);
+      }
+    }
+  }
+  const group: UndoEntry = {
+    id: newUndoEntryId(),
+    label,
+    ts: Date.now(),
+    status: "done",
+    mode: children.every((c) => c.mode === "generic") ? "generic" : "manual",
+    children,
+    objects,
+    undo: () => {
+      // Children undo newest first, each under its own guard: a child sees
+      // the state its later siblings' undos leave, which is the state it
+      // produced. Rows that conflict are skipped, as in a single entry.
+      let applied = 0;
+      let skipped = 0;
+      let any = false;
+      const skippedRows: Array<{ store: string; id: string }> = [];
+      for (const child of [...children].reverse()) {
+        if (child.status !== "done") continue;
+        const outcome = runClosure(child.undo);
+        if (outcome.ok) {
+          any = true;
+          applied += outcome.applied;
+          skipped += outcome.skipped;
+          child.status = "undone";
+          child.undoneAt = Date.now();
+          skippedRows.push(...(child.skipped ?? []));
+        } else {
+          child.status = "conflict";
+          skipped += 1;
+          skippedRows.push(...(child.objects ?? []));
+        }
+      }
+      group.skipped = skippedRows;
+      return any ? { ok: true, applied, skipped } : { ok: false, reason: "conflict" };
+    },
+    redo: () => {
+      let applied = 0;
+      let skipped = 0;
+      let any = false;
+      for (const child of children) {
+        if (child.status !== "undone") continue;
+        const outcome = runClosure(child.redo);
+        if (outcome.ok) {
+          any = true;
+          applied += outcome.applied;
+          child.status = "done";
+          child.undoneAt = undefined;
+        } else {
+          child.status = "conflict";
+          skipped += 1;
+        }
+      }
+      return any ? { ok: true, applied, skipped } : { ok: false, reason: "conflict" };
+    },
+  };
+  return group;
+}
+
+function runClosure(fn: () => UndoOutcome | void): UndoOutcome {
+  try {
+    const outcome = fn();
+    return outcome ?? { ok: true, applied: 0, skipped: 0 };
+  } catch (error) {
+    console.error("[undo] entry failed", error);
+    return { ok: false, reason: "gone" };
+  }
+}
+
+function cellKey(c: CellChange): string {
+  return `${c.store}\u0000${c.id}\u0000${c.field ?? "\u0001"}`;
+}
+
+// Merge a rapid repeat of the top entry's action over the same cells into it:
+// first before, last after, last args.
+function tryCoalesce(entry: UndoEntry): boolean {
+  const top = undoStack[undoStack.length - 1];
+  if (!top || top.mode !== "generic" || top.children || top.action !== entry.action) return false;
+  if (history[history.length - 1] !== top || redoStack.length > 0) return false;
+  if (entry.ts - top.ts > UNDO_COALESCE_WINDOW_MS) return false;
+  const prior = top.changes ?? [];
+  const next = entry.changes ?? [];
+  if (prior.length !== next.length) return false;
+  const byKey = new Map(next.map((c) => [cellKey(c), c]));
+  if (!prior.every((c) => byKey.has(cellKey(c)))) return false;
+  top.changes = prior.map((c) => {
+    const later = byKey.get(cellKey(c))!;
+    return { ...c, after: later.after, hadAfter: later.hadAfter };
+  });
+  top.args = entry.args;
+  top.label = entry.label;
+  top.ts = entry.ts;
+  top.planted = { ...(top.planted ?? {}), ...(entry.planted ?? {}) };
+  top.outboxIds = [...(top.outboxIds ?? []), ...(entry.outboxIds ?? [])];
+  changed();
   return true;
 }
 
-export function showUndoToast(label: string) {
-  if (notifier.notifyWithUndo) notifier.notifyWithUndo(label, () => performUndo());
+function announceRecorded(entry: UndoEntry): void {
+  if (notifier.notifyWithUndo) notifier.notifyWithUndo(entry.label, entry.id);
+  else notifier.notify(entry.label);
+}
+
+/**
+ * Record a captured entry: into the open group, merged into the top entry
+ * (coalesce), or onto the stack. External entries are history only.
+ */
+export function recordUndoEntry(entry: UndoEntry, opts?: { toast?: boolean; coalesce?: boolean }): void {
+  if (entry.status === "external") {
+    addToHistory(entry);
+    changed();
+    return;
+  }
+  if (groupChildren) {
+    groupChildren.push(entry);
+    if (opts?.toast) groupToast = true;
+    return;
+  }
+  if (opts?.coalesce && tryCoalesce(entry)) return;
+  pushEntry(entry);
+  if (opts?.toast) announceRecorded(entry);
+}
+
+/** A hand-written entry (mode "manual"). Returns its id. */
+export function pushUndo(entry: Omit<UndoEntry, "id" | "ts" | "status" | "mode">): string {
+  const full: UndoEntry = { ...entry, id: newUndoEntryId(), ts: Date.now(), status: "done", mode: "manual" };
+  if (groupChildren) {
+    groupChildren.push(full);
+    return full.id;
+  }
+  pushEntry(full);
+  return full.id;
+}
+
+// ---------------------------------------------------------------------------
+// Stepping
+// ---------------------------------------------------------------------------
+
+function expired(entry: UndoEntry, now: number): boolean {
+  return now - entry.ts > keyboardWindowMs;
+}
+
+function redoExpired(entry: UndoEntry, now: number): boolean {
+  return now - (entry.undoneAt ?? entry.ts) > keyboardWindowMs;
+}
+
+// A manual entry is blind (a closure over a snapshot), so it never outlives
+// the keyboard window anywhere. Generic entries stay reachable from the
+// timeline, guarded.
+function pruneExpiredManual(now: number): void {
+  const before = undoStack.length + redoStack.length;
+  undoStack = undoStack.filter((e) => e.mode !== "manual" || !expired(e, now));
+  redoStack = redoStack.filter((e) => e.mode !== "manual" || !redoExpired(e, now));
+  if (undoStack.length + redoStack.length !== before) changed();
+}
+
+type StepResult = { ok: true; entry: UndoEntry } | { ok: false; entry: UndoEntry };
+
+function stepUndo(entry: UndoEntry): StepResult {
+  const outcome = runClosure(entry.undo);
+  remove(undoStack, entry);
+  if (!outcome.ok) {
+    entry.status = "conflict";
+    changed();
+    return { ok: false, entry };
+  }
+  entry.status = "undone";
+  entry.undoneAt = Date.now();
+  redoStack.push(entry);
+  changed();
+  return { ok: true, entry };
+}
+
+function stepRedo(entry: UndoEntry): StepResult {
+  const outcome = runClosure(entry.redo);
+  remove(redoStack, entry);
+  if (!outcome.ok) {
+    entry.status = "conflict";
+    changed();
+    return { ok: false, entry };
+  }
+  entry.status = "done";
+  entry.undoneAt = undefined;
+  undoStack.push(entry);
+  changed();
+  return { ok: true, entry };
+}
+
+function announceStep(kind: "undo" | "redo", steps: number, entry: UndoEntry): void {
+  if (steps === 0) return;
+  if (notifier.onHistoryStep) {
+    notifier.onHistoryStep(kind, steps, entry);
+    return;
+  }
+  const verb = kind === "undo" ? "Undid" : "Redid";
+  const partial = kind === "undo" && entry.skipped?.length
+    ? ` (${entry.skipped.length} changed since, left as they are)`
+    : "";
+  notifier.notify(steps > 1 ? `${verb} ${steps} changes` : `${verb}: ${entry.label}${partial}`);
+}
+
+function announceConflict(kind: "undo" | "redo", entry: UndoEntry): void {
+  notifier.notify(`Can't ${kind} ${entry.label}: changed since`);
+}
+
+/** Keyboard undo: the top entry, if it is inside the keyboard window. */
+export function performUndo(): boolean {
+  const now = Date.now();
+  pruneExpiredManual(now);
+  const entry = undoStack[undoStack.length - 1];
+  if (!entry || expired(entry, now)) return false;
+  if (entry.confirm) {
+    notifier.notify(`Undo ${entry.label} from its toast or the history`);
+    return true;
+  }
+  const step = stepUndo(entry);
+  if (step.ok) announceStep("undo", 1, entry);
+  else announceConflict("undo", entry);
+  return true;
+}
+
+/** Keyboard redo: the top undone entry, if it was undone inside the keyboard window. */
+export function performRedo(): boolean {
+  const now = Date.now();
+  pruneExpiredManual(now);
+  const entry = redoStack[redoStack.length - 1];
+  if (!entry || redoExpired(entry, now)) return false;
+  const step = stepRedo(entry);
+  if (step.ok) announceStep("redo", 1, entry);
+  else announceConflict("redo", entry);
+  return true;
+}
+
+/**
+ * Undo one named entry (a toast's own). On top, it is a normal undo; below
+ * the top it is a selective undo of that entry alone, under the same guard.
+ * A manual entry can only be undone from the top.
+ */
+export function undoEntry(id: string): boolean {
+  const now = Date.now();
+  pruneExpiredManual(now);
+  const at = undoStack.findIndex((e) => e.id === id);
+  if (at === -1) return false;
+  const entry = undoStack[at]!;
+  if (expired(entry, now)) return false;
+  if (entry.mode === "manual" && at !== undoStack.length - 1) {
+    notifier.notify(`Can't undo ${entry.label}: newer changes came after it`);
+    return false;
+  }
+  const step = stepUndo(entry);
+  if (step.ok) announceStep("undo", 1, entry);
+  else announceConflict("undo", entry);
+  return step.ok;
+}
+
+/**
+ * Undo from the top down to and including `id`, one step at a time,
+ * stopping at the first conflict. One notification for the whole walk.
+ * Explicit, so a generic entry past the keyboard window is still reachable.
+ */
+export function undoTo(id: string): number {
+  const now = Date.now();
+  pruneExpiredManual(now);
+  if (!undoStack.some((e) => e.id === id)) return 0;
+  let steps = 0;
+  let last: UndoEntry | null = null;
+  while (undoStack.length > 0) {
+    const entry = undoStack[undoStack.length - 1]!;
+    const step = stepUndo(entry);
+    if (!step.ok) {
+      if (last) announceStep("undo", steps, last);
+      announceConflict("undo", entry);
+      return steps;
+    }
+    steps += 1;
+    last = entry;
+    if (entry.id === id) break;
+  }
+  if (last) announceStep("undo", steps, last);
+  return steps;
+}
+
+/** Redo from the top of the redo stack up to and including `id`. */
+export function redoTo(id: string): number {
+  const now = Date.now();
+  pruneExpiredManual(now);
+  if (!redoStack.some((e) => e.id === id)) return 0;
+  let steps = 0;
+  let last: UndoEntry | null = null;
+  while (redoStack.length > 0) {
+    const entry = redoStack[redoStack.length - 1]!;
+    const step = stepRedo(entry);
+    if (!step.ok) {
+      if (last) announceStep("redo", steps, last);
+      announceConflict("redo", entry);
+      return steps;
+    }
+    steps += 1;
+    last = entry;
+    if (entry.id === id) break;
+  }
+  if (last) announceStep("redo", steps, last);
+  return steps;
+}
+
+/** Show `label` with an Undo affordance for the newest entry (a hand-written gesture's toast). */
+export function showUndoToast(label: string): void {
+  const top = undoStack[undoStack.length - 1];
+  if (top && notifier.notifyWithUndo) notifier.notifyWithUndo(label, top.id);
   else notifier.notify(label);
 }
 
 export function canUndo(): boolean {
-  undoStack = pruneExpired(undoStack);
-  return undoStack.length > 0;
+  const now = Date.now();
+  pruneExpiredManual(now);
+  const top = undoStack[undoStack.length - 1];
+  return !!top && !expired(top, now);
 }
 
 export function canRedo(): boolean {
-  redoStack = pruneExpired(redoStack);
-  return redoStack.length > 0;
+  const now = Date.now();
+  pruneExpiredManual(now);
+  const top = redoStack[redoStack.length - 1];
+  return !!top && !redoExpired(top, now);
+}
+
+// ---------------------------------------------------------------------------
+// History
+// ---------------------------------------------------------------------------
+
+function toItem(entry: UndoEntry): UndoHistoryItem {
+  const { undo: _u, redo: _r, children, ...rest } = entry;
+  return children ? { ...rest, children: children.map(toItem) } : { ...rest };
+}
+
+/** The history, newest first. The same reference until something changes. */
+export function getUndoHistory(): UndoHistorySnapshot {
+  if (!snapshot) {
+    snapshot = {
+      version,
+      items: history.slice().reverse().map(toItem),
+      head: undoStack[undoStack.length - 1]?.id ?? null,
+    };
+  }
+  return snapshot;
+}
+
+export function subscribeUndoHistory(fn: () => void): () => void {
+  listeners.add(fn);
+  return () => {
+    listeners.delete(fn);
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Refusal and rekey (called by the middleware and the sync engine)
+// ---------------------------------------------------------------------------
+
+function* allEntries(): Generator<{ entry: UndoEntry; parent: UndoEntry | null }> {
+  const seen = new Set<UndoEntry>();
+  for (const list of [history, undoStack, redoStack]) {
+    for (const entry of list) {
+      if (seen.has(entry)) continue;
+      seen.add(entry);
+      yield { entry, parent: null };
+      for (const child of entry.children ?? []) yield { entry: child, parent: entry };
+    }
+  }
+}
+
+/**
+ * The server refused the dispatch with this outbox id for good. A forward
+ * capture (or a redo) that named it is marked refused and leaves both stacks.
+ * An undo's own refused dispatch puts its entry back on the undo stack: its
+ * locks roll back through the middleware's refusal path.
+ */
+export function markUndoOutboxRefused(outboxId: string): void {
+  let touched = false;
+  for (const { entry, parent } of allEntries()) {
+    if (entry.outboxIds?.includes(outboxId)) {
+      touched = true;
+      entry.status = "refused";
+      if (parent) {
+        parent.children = parent.children!.filter((c) => c !== entry);
+        if (parent.children.length === 0) {
+          parent.status = "refused";
+          remove(undoStack, parent);
+          remove(redoStack, parent);
+        }
+      } else {
+        remove(undoStack, entry);
+        remove(redoStack, entry);
+      }
+    } else if (entry.replayOutboxIds?.includes(outboxId)) {
+      const owner = parent ?? entry;
+      if (remove(redoStack, owner)) {
+        touched = true;
+        owner.status = "done";
+        owner.undoneAt = undefined;
+        if (parent) entry.status = "done";
+        undoStack.push(owner);
+      }
+    }
+  }
+  if (touched) changed();
+}
+
+const rekeyPendingKey = (key: string, oldId: string, newId: string): string => {
+  const parts = key.split(":");
+  return parts.map((p) => (p === oldId ? newId : p)).join(":");
+};
+
+/** A stub row was superseded by its server row: follow it in live entries. */
+export function rekeyUndoIds(oldId: string, newId: string): void {
+  if (oldId === newId) return;
+  let touched = false;
+  for (const { entry } of allEntries()) {
+    if (entry.changes?.some((c) => c.id === oldId)) {
+      entry.changes = entry.changes.map((c) => (c.id === oldId ? { ...c, id: newId } : c));
+      touched = true;
+    }
+    for (const list of ["objects", "skipped"] as const) {
+      const objs = entry[list];
+      if (objs?.some((o) => o.id === oldId)) {
+        entry[list] = objs.map((o) => (o.id === oldId ? { ...o, id: newId } : o));
+        touched = true;
+      }
+    }
+    if (entry.planted && Object.keys(entry.planted).some((k) => k.split(":").includes(oldId))) {
+      entry.planted = Object.fromEntries(
+        Object.entries(entry.planted).map(([k, v]) => [rekeyPendingKey(k, oldId, newId), v]),
+      );
+      touched = true;
+    }
+    if (entry.args?.includes(oldId)) {
+      entry.args = entry.args.map((a) => (a === oldId ? newId : a));
+      touched = true;
+    }
+  }
+  if (touched) changed();
 }
 
 /** Test hook: the stacks live at module scope and would leak across tests. */
 export function _resetUndoStacks(): void {
   undoStack = [];
   redoStack = [];
+  history = [];
+  suppressDepth = 0;
+  refreshTarget = null;
+  groupDepth = 0;
+  groupChildren = null;
+  groupToast = false;
+  changed();
 }

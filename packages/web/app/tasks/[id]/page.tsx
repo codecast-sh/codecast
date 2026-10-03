@@ -1073,6 +1073,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
           <TaskSessionList
             sessions={ownerSession ? linkedConversations.filter((c: any) => c._id !== ownerSession._id) : linkedConversations}
             originId={data.created_from_conversation}
+            heading={ownerSession ? "Other sessions" : "Sessions"}
             onOpen={openLinkedSession}
           />
 

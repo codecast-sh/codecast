@@ -27,7 +27,7 @@ export const StoryCtx = createContext<StoryContext>({ focused: null, waiting: ne
 export const useStoryCtx = () => useContext(StoryCtx);
 
 /** A wall-clock time, "15:27" in the reader's locale. */
-export const clockOf = (t: number) => new Date(t).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+export const clockOf = (t: number) => new Date(t).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
 
 /** A tooltip in the page's quiet register. */
 export function Tip({ text, children, side = "top" }: { text: ReactNode; children: ReactNode; side?: "top" | "bottom" | "left" | "right" }) {

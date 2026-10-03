@@ -25,8 +25,8 @@ import { pickSurfaces } from './stale';
 // bare `check` runs the call surfaces only: agent surfaces run by name or
 // with --route agent. Every rep of every freeze goes through one pool of
 // --parallel slots, so a wide check finishes in a fraction of its serial time.
-// A --batch that already holds reps resumes it: only the reps it lacks run,
-// and the verdict covers the whole set.
+// A --batch that already holds reps resumes it: only the reps it lacks or
+// that crashed run, and the verdict covers the whole set.
 
 /** The exit code of a check that stopped short: a budget stop, or a requested surface with no rep scored. */
 export const EXIT_INCOMPLETE = 3;
@@ -92,6 +92,24 @@ export const majority = (runs: RunSummary[]): Map<string, boolean> => {
 };
 
 /**
+ * One rep per batch, freeze and seed, from runs listed newest first
+ * (surfaceRuns): a seed a resume ran again after a crash counts once, as its
+ * newest rep.
+ */
+export function onePerSeed<R extends SurfaceRun>(runs: R[]): R[] {
+  const seen = new Set<string>();
+  return runs.filter((r) => {
+    const key = `${r.batch}\x1f${r.freezeId}\x1f${r.seed}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/** A batch's reps as a set: every rep that ran (a stop folder did not), one per freeze and seed. */
+export const batchSet = (history: SurfaceRun[], batch: string): SurfaceRun[] => onePerSeed(history.filter((r) => r.batch === batch && r.status !== 'unscored'));
+
+/**
  * The run set a check is weighed against: for each freeze, the reps of the
  * newest other batch that ran it. A later run of one freeze then never hides
  * the other freezes' sets.
@@ -100,22 +118,26 @@ export function previousRunSet(history: SurfaceRun[], batch: string): SurfaceRun
   const real = history.filter((r) => r.batch && r.batch !== batch && r.status !== 'dry' && r.status !== 'unscored');
   const newest = new Map<string, string>();
   for (const r of real) if ((newest.get(r.freezeId ?? '') ?? '') < r.batch!) newest.set(r.freezeId ?? '', r.batch!);
-  return real.filter((r) => newest.get(r.freezeId ?? '') === r.batch);
+  return onePerSeed(real.filter((r) => newest.get(r.freezeId ?? '') === r.batch));
 }
 
 /**
  * Pass rate, mean, range and flips of a run set against the previous one on
  * the same surface, and how many of its reps read the live workspace. The
  * comparison covers only the freezes both sets ran, so a one-freeze run is
- * never weighed against a whole surface.
+ * never weighed against a whole surface. A crash graded nothing (the model
+ * never answered, or the agent left its world), so it is counted apart and
+ * weighed as neither a pass nor a 0, on either side.
  */
-function verdictLines(meta: SurfaceMeta, current: SurfaceRun[], previousSet: RunSummary[]): { lines: string[]; regression: boolean } {
-  if (current.length && current.every((r) => r.status === 'dry')) {
-    return { lines: [`${fmt.bold(meta.id)}  dry: ${current.length} rep(s) ran through the wiring on canned output; nothing is graded or compared`], regression: false };
+function verdictLines(meta: SurfaceMeta, batch: string, set: SurfaceRun[], previousSet: RunSummary[]): { lines: string[]; regression: boolean } {
+  if (set.length && set.every((r) => r.status === 'dry')) {
+    return { lines: [`${fmt.bold(meta.id)}  dry: ${set.length} rep(s) ran through the wiring on canned output; nothing is graded or compared`], regression: false };
   }
+  const crashes = set.filter((r) => r.status === 'crash').length;
+  const current = set.filter((r) => r.status !== 'crash');
   const ranNow = new Set(current.map((r) => r.freezeId));
   const ranBefore = new Set(previousSet.map((r) => r.freezeId));
-  const previous = previousSet.filter((r) => ranNow.has(r.freezeId));
+  const previous = previousSet.filter((r) => ranNow.has(r.freezeId) && r.status !== 'crash');
   const compared = current.filter((r) => ranBefore.has(r.freezeId)).map(scoreOrZero);
   const scores = current.map(scoreOrZero);
   const passed = current.filter((r) => r.status === 'pass').length;
@@ -126,7 +148,6 @@ function verdictLines(meta: SurfaceMeta, current: SurfaceRun[], previousSet: Run
   const flips = [...now].filter(([k, v]) => before.has(k) && before.get(k) !== v).length;
   const models = [...new Set(current.map((r) => r.model ?? meta.model))].join(',');
   const gatesFailed = [...new Set(current.flatMap((r) => r.gatesFailed))];
-  const crashes = current.filter((r) => r.status === 'crash').length;
   const lines = [
     `${fmt.bold(meta.id)}  pass ${passed}/${current.length} (${Math.round((100 * passed) / Math.max(1, current.length))}%)  mean ${mean.toFixed(2)}  ${scores.length ? `${Math.min(...scores).toFixed(2)}-${Math.max(...scores).toFixed(2)}` : '-'}  flips ${previous.length ? flips : '-'}  ${formatCost(cost)}  ${models}`,
     `  ${previous.length ? `${separationLine(compared, previous.map(scoreOrZero))}${compared.length < scores.length ? ` (over the ${ranBefore.size} freeze(s) the previous set ran)` : ''}` : 'no previous run set to compare with'}`,
@@ -135,7 +156,7 @@ function verdictLines(meta: SurfaceMeta, current: SurfaceRun[], previousSet: Run
   // A live read answers from today's workspace, not the frozen moment: such a rep is not reproducible, and its verdict may rest on what the record holds now.
   const live = current.filter((r) => r.liveReads > 0);
   if (live.length) lines.push(`  ${fmt.warning('live reads')}: ${live.length}/${current.length} reps read the live workspace (${live.reduce((t, r) => t + r.liveReads, 0)} reads; ./evals runs show <run> lists them)`);
-  if (crashes) lines.push(`  ${fmt.error(`${crashes} crashed`)}: ./evals runs list --scenario ${meta.id}- --status crash`);
+  if (crashes) lines.push(`  ${fmt.error(`${crashes} crashed`)}, left out of the numbers above: ./evals runs list --scenario ${meta.id}- --status crash; ./evals check ${meta.id} --batch ${batch} with the same --reps and --freeze runs them again`);
   const regression = previous.length > 0 && separate(compared, previous.map(scoreOrZero)).kind === 'worse';
   return { lines, regression };
 }
@@ -203,9 +224,9 @@ export async function runCheck(ids: string[], flags: CheckFlags, sources: EvalSo
   }
 
   const batch = flags.batch ?? new Date().toISOString();
-  // A named batch that already holds reps is resumed: a rep it scored is not run again.
+  // A named batch that already holds reps is resumed: a rep it scored is not run again, and a seed whose newest rep crashed is.
   const done = new Set<string>();
-  if (flags.batch) for (const p of plans) for (const r of await surfaceRuns(p.meta.id)) if (r.batch === batch && r.status !== 'unscored') done.add(`${r.freezeId}:${r.seed}`);
+  if (flags.batch) for (const p of plans) for (const r of batchSet(await surfaceRuns(p.meta.id), batch)) if (r.status !== 'crash') done.add(`${r.freezeId}:${r.seed}`);
   const jobs: Job[] = plans.flatMap((plan) => plan.freezes.flatMap((freeze) => Array.from({ length: repCount(plan.reps) }, (_, i) => ({ plan, freeze, rep: i + 1 })).filter((j) => !done.has(`${freeze.id}:${j.rep}`))));
   if (done.size) console.log(`resuming batch ${batch}: ${done.size} rep(s) already scored there are not run again`);
   // Each rep is estimated on the model its freeze replays on, from that model's own history.
@@ -249,12 +270,12 @@ export async function runCheck(ids: string[], flags: CheckFlags, sources: EvalSo
     if (!flags.dry) addSpend(outcome.costUsd);
     // The set is the whole batch on these freezes: on a resume, the reps it already held count with the ones run now.
     const history = (await surfaceRuns(plan.meta.id)).filter((r) => plan.freezes.some((f) => f.id === r.freezeId));
-    const scored = history.filter((r) => r.batch === batch && r.status !== 'unscored');
+    const scored = batchSet(history, batch);
     // A surface the stop cut off before its first rep never ran: it is named below, not graded.
     if (budgetHit && !scored.length) continue;
     if (!scored.length) unrun.push(plan.meta.id);
     // The previous run set: each freeze's newest other batch of real reps; a dry rep is wiring, never a baseline.
-    const v = verdictLines(plan.meta, scored, previousRunSet(history, batch));
+    const v = verdictLines(plan.meta, batch, scored, previousRunSet(history, batch));
     report.push(...v.lines);
     const impl = await loadSurface(plan.meta.id);
     if (impl.summarize) {

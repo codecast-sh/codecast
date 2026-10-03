@@ -71,12 +71,24 @@ inbox; see AGENTS.md "Prompt dry runs"). `--model` is always passed.
   history (evals-home.md, "Agent replay fidelity"). A fixture may go on past
   the opening: each later message (text a person typed, or a chat wake
   rendered by prod's `buildAnchorWake`) is one `--then` turn resumed into the
-  same session, and `calls.log` marks where each turn starts.
+  same session, and `calls.log` marks where each turn starts. Every `cast`
+  the agent runs reaches the guard, whatever path it took: the guard is first
+  on PATH for every Bash command, and a `cast` built from this tree that starts
+  with the run's empty state directory (an absolute path, a login shell) hands
+  the call to the guard (`src/main.ts`).
 - A judge run that fails (an exit other than 0, `is_error`, no output) makes
   the rep a crash, never a score of 0. So does a call or agent run the model
   never answered for a reason the prompt did not cause: no `out.json`, or an
   API error other than 400 and 413 (a revoked login, a rate limit, an
-  overloaded server; `harnessFailure` in `adapters/dryRun.ts`). A `--dry` rep is status `dry`: no view
+  overloaded server; `harnessFailure` in `adapters/dryRun.ts`). So does an
+  agent run whose `cast` reached the real CLI anyway (a binary built before
+  the redirect, such as `~/.codecast/bin/cast`): the stream holds the real
+  CLI's signed-out answer on a line of its own, and `calls.log` holds nothing
+  for that call, so `frozen-reads` alone cannot see it. A crash is counted
+  apart from the pass rate and the mean, and `check --batch <id>` with the same
+  `--reps` and `--freeze` runs each crashed seed again; a set counts a seed
+  once, as its newest rep. `./evals rescore` turns a stored rep into the crash
+  it would be graded as today. A `--dry` rep is status `dry`: no view
   counts it as a pass or a fail and no `check` compares against it.
 
 Pins live in `packages/evals/src/models.ts`. Call surfaces use prod's own

@@ -304,6 +304,8 @@ function harnessWorld(stream: object[]) {
     'printf "%s\\n" "${CLAUDE_CODE_MAX_OUTPUT_TOKENS:-unset}" "${CLAUDE_CODE_DISABLE_THINKING:-unset}" "${CLAUDE_CODE_OAUTH_TOKEN:-unset}" > "$FAKE_CLAUDE_REC/env"',
     // What a Bash command sees first on PATH after the user's profile shadowed it, once CLAUDE_ENV_FILE is sourced.
     '( PATH="/profile/bin:$PATH"; . "$CLAUDE_ENV_FILE"; printf "%s" "${PATH%%:*}" ) > "$FAKE_CLAUDE_REC/path-first"',
+    // A command the agent runs, when the test gives one, with what it printed.
+    '[ -z "${FAKE_CLAUDE_BASH:-}" ] || eval "$FAKE_CLAUDE_BASH" > "$FAKE_CLAUDE_REC/bash" 2>&1',
     'cat "$FAKE_CLAUDE_STREAM"',
     "",
   ].join("\n"), 0o755);
@@ -312,14 +314,15 @@ function harnessWorld(stream: object[]) {
   write(path.join(state, "cc-token-fake.env"), "CLAUDE_CODE_OAUTH_TOKEN='fake-token'\n");
   write(path.join(dir, "prompt.md"), "Reply with the word ok.");
   write(path.join(dir, "system.md"), "Answer briefly.");
-  const run = (...args: string[]) => {
+  const run = (...args: string[]) => runWith({}, ...args);
+  const runWith = (extra: Record<string, string>, ...args: string[]) => {
     const r = Bun.spawnSync(["bun", HARNESS, ...args], {
-      env: { PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: dir, CODECAST_DIR: state, FAKE_CLAUDE_REC: rec, FAKE_CLAUDE_STREAM: path.join(dir, "stream.jsonl") },
+      env: { PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: dir, CODECAST_DIR: state, FAKE_CLAUDE_REC: rec, FAKE_CLAUDE_STREAM: path.join(dir, "stream.jsonl"), ...extra },
     });
     return { code: r.exitCode, err: r.stderr.toString() };
   };
   const recorded = (name: string) => (fs.existsSync(path.join(rec, name)) ? fs.readFileSync(path.join(rec, name), "utf8") : null);
-  return { dir, run, recorded, runDir: path.join(dir, "run"), prompt: path.join(dir, "prompt.md"), system: path.join(dir, "system.md") };
+  return { dir, run, runWith, recorded, runDir: path.join(dir, "run"), prompt: path.join(dir, "prompt.md"), system: path.join(dir, "system.md") };
 }
 
 const reply = (text: string, stop: string, outputTokens: number) => [
@@ -406,6 +409,15 @@ describe("prompt-dry-run.ts", () => {
     // The guard stays first on every Bash command even when the profile puts the real cast ahead of it.
     expect(h.recorded("path-first")).toBe(path.join(path.dirname(HARNESS), "prompt-dry-run-bin"));
   }, 30_000);
+
+  test("a cast the agent reaches around the guard, by an absolute path with no guard on PATH, still answers from the guard", () => {
+    const h = harnessWorld([{ type: "result", result: "Done.", is_error: false, num_turns: 1, total_cost_usd: 0.01 }]);
+    const main = path.join(import.meta.dir, "..", "src", "main.ts");
+    const bash = `PATH=/usr/bin:/bin '${process.execPath}' '${main}' task create Something`;
+    expect(h.runWith({ FAKE_CLAUDE_BASH: bash }, "--run", h.runDir, "--prompt", h.prompt, "--model", "m", "--account", "fake").code).toBe(0);
+    expect(h.recorded("bash")).toContain("dry run: 'cast task create Something' would write, and is refused");
+    expect(fs.readFileSync(path.join(h.runDir, "calls.log"), "utf8")).toBe("task create Something\nREFUSED task create Something\n");
+  }, 60_000);
 
   test("each --then is one more turn resumed into the same session, in order, with a turn line in calls.log", () => {
     const h = harnessWorld([

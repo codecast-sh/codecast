@@ -173,3 +173,48 @@ describe("createKeydownHandler", () => {
     expect(fired).toEqual(["terminalToggle"]);
   });
 });
+
+// Holding a noRepeat chord fires once: the first keydown dispatches, every
+// auto-repeat is swallowed so the browser does nothing with it either.
+describe("noRepeat", () => {
+  type UndoAction = "undo" | "next";
+  const defs: ShortcutDef<UndoAction>[] = [
+    { key: "ctrl+z", action: "undo", noRepeat: true, description: "Undo" },
+    { key: "ctrl+j", action: "next", skipInputCheck: true, description: "Next" },
+  ];
+  const cat = createShortcutCatalog(defs, { isMac: false });
+
+  test("a repeated keydown is prevented and never reaches the handler", () => {
+    const d = new ShortcutDispatcher<UndoAction>();
+    let calls = 0;
+    d.register("undo", () => { calls++; return true; });
+    const handler = createKeydownHandler(cat, d);
+    handler(makeEvent({ key: "z", ctrlKey: true }));
+    expect(calls).toBe(1);
+    const held = makeEvent({ key: "z", ctrlKey: true, repeat: true });
+    handler(held);
+    handler(makeEvent({ key: "z", ctrlKey: true, repeat: true }));
+    expect(calls).toBe(1);
+    expect(held.prevented).toBe(true);
+    expect(held.stopped).toBe(false);
+  });
+
+  test("other bindings still repeat", () => {
+    const d = new ShortcutDispatcher<UndoAction>();
+    let calls = 0;
+    d.register("next", () => { calls++; return true; });
+    const handler = createKeydownHandler(cat, d);
+    handler(makeEvent({ key: "j", ctrlKey: true }));
+    handler(makeEvent({ key: "j", ctrlKey: true, repeat: true }));
+    expect(calls).toBe(2);
+  });
+
+  test("a repeat inside a text field is left to the field", () => {
+    const d = new ShortcutDispatcher<UndoAction>();
+    d.register("undo", () => true);
+    const handler = createKeydownHandler(cat, d);
+    const e = makeEvent({ key: "z", ctrlKey: true, repeat: true, target: { tagName: "TEXTAREA", closest: () => null } });
+    handler(e);
+    expect(e.prevented).toBe(false);
+  });
+});

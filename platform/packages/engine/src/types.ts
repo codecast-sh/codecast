@@ -216,6 +216,107 @@ export type ViewGuard = {
 };
 
 // ---------------------------------------------------------------------------
+// Undo
+// ---------------------------------------------------------------------------
+
+/** One action to run as part of an undo: its name, its args, and whether its draft runs. */
+export type Invocation = { action: string; args: unknown[]; runDraft?: boolean }; // runDraft default true
+
+/**
+ * One store cell an action changed, with the values on either side. `field`
+ * undefined is a whole row (a collection or list row added or removed) or a
+ * scalar's whole value; `id` is "" for a singleton or a scalar.
+ */
+export type CellChange = {
+  store: string;
+  id: string;
+  field?: string;
+  before: unknown;
+  after: unknown;
+  hadBefore: boolean;
+  hadAfter: boolean;
+  kind: "protected" | "mirror" | "view";
+  // How the cell is addressed in the store, and where a removed list row sat.
+  shape?: "collection" | "list" | "singleton" | "scalar";
+  index?: number;
+};
+
+export type UndoCtx = {
+  action: string;
+  args: unknown[];
+  before: any; // whole states, read-only
+  after: any;
+  result: unknown;
+  changes: readonly CellChange[];
+};
+
+export type UndoSpec = {
+  /** null = do not record this call. */
+  label: (ctx: UndoCtx) => string | null;
+  /** Overrides the store-derived server half. */
+  inverse?: (ctx: UndoCtx) => Invocation[] | null;
+  ignoreFields?: readonly string[];
+  /** Restore view fields if the view has not moved since. */
+  restoreView?: boolean;
+  /** Show the "<label> · Undo" toast on record. */
+  toast?: boolean;
+  coalesce?: boolean;
+  /** A display-only history item (org); never on the stack. */
+  external?: string;
+  /** Blind keyboard undo skips it with a notice; the toast and the timeline may undo it. */
+  confirm?: boolean;
+};
+
+export type UndoWriter = {
+  fields?: (id: string, fields: Record<string, unknown>, row: any, state: any) => Invocation[];
+  restoreRow?: (id: string, row: any, state: any) => Invocation[];
+  removeRow?: (id: string, row: any, state: any) => Invocation[];
+};
+
+export type UndoOutcome =
+  | { ok: true; applied: number; skipped: number }
+  | { ok: false; reason: "conflict" | "gone" | "expired" };
+
+export type UndoEntry = {
+  id: string;
+  label: string;
+  ts: number;
+  status: "done" | "undone" | "conflict" | "refused" | "dropped" | "external";
+  undo: () => UndoOutcome | void;
+  redo: () => UndoOutcome | void;
+  action?: string;
+  args?: unknown[];
+  changes?: CellChange[];
+  planted?: Record<string, unknown>;
+  children?: UndoEntry[];
+  outboxIds?: string[];
+  objects?: Array<{ store: string; id: string }>;
+  skipped?: Array<{ store: string; id: string }>;
+  external?: string;
+  droppedBy?: string;
+  undoneAt?: number;
+  mode: "generic" | "manual";
+  /** From the spec: blind keyboard undo skips this entry with a notice. */
+  confirm?: boolean;
+  /** Outbox ids of this entry's own undo dispatches (a refused one puts the entry back). */
+  replayOutboxIds?: string[];
+};
+
+export type UndoConfig = {
+  specs: Record<string, UndoSpec>;
+  replayAction: string; // codecast: "applyUndoPatches"
+  writers?: Record<string, UndoWriter>; // store keys off the patch rail
+  stampFields?: ReadonlySet<string>; // "updated_at": restamped Date.now(), never compared
+  ignoreKeys?: ReadonlySet<string>; // never captured (clientState, tabs, pagination, ...)
+  beforeReplay?: (entry: UndoEntry, dir: "undo" | "redo") => void;
+  afterReplay?: (entry: UndoEntry, dir: "undo" | "redo", applied: readonly CellChange[]) => void;
+  restoreView?: (draft: any, field: string, value: unknown) => void;
+  keyboardWindowMs?: number; // default 300_000
+  stackLimit?: number; // default 100
+  historyLimit?: number; // default 200
+};
+
+// ---------------------------------------------------------------------------
 // Detail tables
 // ---------------------------------------------------------------------------
 
@@ -276,6 +377,10 @@ export type PlatformConfig = {
   // Age past which an exclude tombstone is dropped at hydration. Include/field
   // entries are local-first writes awaiting acknowledgement: never expired.
   excludeTombstoneTtlMs?: number;
+  // Generic undo: any action with a spec records the cells it changed, and
+  // undo writes the old values back through the same action pipeline. Absent
+  // = nothing is captured.
+  undo?: UndoConfig;
 };
 
 // ---------------------------------------------------------------------------
