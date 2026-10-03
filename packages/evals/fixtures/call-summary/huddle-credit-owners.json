@@ -1,7 +1,6 @@
 {
   "asOf": "2026-01-15T18:10:00.000Z",
   "notes": "Red list #18: a three person huddle where one commitment changes hands, one is asked of a person not on the call, and two ideas are dropped.",
-  "judge": "the action items are exactly four, with these owners: Lucia writes the migration script (Ravi handed it to her), Ravi writes the rollback runbook, Lucia checks the new terms with Priya, Dana sends the customer email on Thursday; nothing for the status page copy, the feature flag, or Priya",
   "label": {
     "owners": [
       "Dana",

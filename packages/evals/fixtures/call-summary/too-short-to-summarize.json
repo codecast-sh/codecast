@@ -1,7 +1,6 @@
 {
  "asOf": "2026-01-14T17:01:00.000Z",
  "notes": "synthetic call under 40 words: prod skips the model call, so the replay is an empty pass graded by gates only",
- "judge": null,
  "snapshot": {
   "kind": "huddle",
   "started_at": 1768410000000,

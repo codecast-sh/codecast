@@ -6,6 +6,8 @@ import type { Doc } from "./_generated/dataModel";
 import { isRefusalProse } from "./idleSummary";
 import { isToolResultCarrier, parseWorkflowHarnessFrame } from "@codecast/shared/contracts";
 import { callModel, CHEAP_MODEL, type SurfaceRequest } from "./lib/anthropic";
+import { earlierTitlesAfter } from "./searchCore";
+import { redactSecrets } from "./redact";
 
 // Floor between generateTitle schedulings for one conversation. The
 // no-subtitle fallback fires on every sync batch of an untitled conversation;
@@ -57,11 +59,16 @@ export const setTitleAndSubtitle = internalMutation({
   handler: async (ctx, args) => {
     const conv = await ctx.db.get(args.conversation_id);
     if (!conv) return;
-    const patch: { title?: string; subtitle?: string; short_title?: string } = {};
+    const patch: { title?: string; subtitle?: string; short_title?: string; earlier_titles?: string[] } = {};
     if (args.subtitle !== undefined) patch.subtitle = args.subtitle;
     if (!conv.title_is_custom) {
       patch.title = args.title;
       if (args.short_title !== undefined) patch.short_title = args.short_title;
+      // The title being replaced stays findable (searchCore.searchFieldsOf).
+      // Only a title a previous pass generated: a daemon placeholder is the
+      // opening prompt cut short, which first_prompt already holds.
+      const earlier = conv.subtitle !== undefined ? earlierTitlesAfter(conv, args.title) : undefined;
+      if (earlier) patch.earlier_titles = earlier;
     }
     if (Object.keys(patch).length === 0) return;
     await ctx.db.patch(args.conversation_id, patch);
@@ -304,6 +311,40 @@ export const sweepUntitled = internalMutation({
   },
 });
 
+// One-shot backfill of conversations.first_prompt for sessions that began
+// before the message writers stamped it. Walks _creationTime from `cursor` and
+// reschedules itself until it reaches the newest row, a small batch at a time:
+// each stamp is a write to a conversation doc, which every open inbox reads.
+//   packages/convex/run.sh titleGeneration:sweepFirstPrompts '{"cursor": <start_ms>}'
+export const sweepFirstPrompts = internalMutation({
+  args: { cursor: v.number(), batch: v.optional(v.number()), stamped: v.optional(v.number()) },
+  handler: async (ctx, args): Promise<{ stamped: number; scanned: number; cursor: number; done: boolean }> => {
+    const batch = args.batch ?? 25;
+    const rows = await ctx.db
+      .query("conversations")
+      .withIndex("by_creation_time", (q) => q.gt("_creationTime", args.cursor))
+      .take(batch);
+    let stamped = args.stamped ?? 0;
+    for (const c of rows) {
+      if (c.first_prompt || (c.message_count ?? 0) === 0) continue;
+      const opening = firstPromptOf(await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", c._id))
+        .order("asc")
+        .take(12));
+      if (!opening) continue;
+      await ctx.db.patch(c._id, { first_prompt: redactSecrets(opening) });
+      stamped++;
+    }
+    const done = rows.length < batch;
+    const cursor = rows.length ? rows[rows.length - 1]._creationTime : args.cursor;
+    if (!done) {
+      await ctx.scheduler.runAfter(250, internal.titleGeneration.sweepFirstPrompts, { cursor, batch, stamped });
+    }
+    return { stamped, scanned: rows.length, cursor, done };
+  },
+});
+
 // Spine sampling: the session's timespan is split into equal time buckets and
 // each contributes up to a few human prompts. Most user-role rows in agentic
 // sessions are tool-result carriers, so an end-anchored fetch would miss the
@@ -328,6 +369,25 @@ export function isLowSignalPrompt(content: string): boolean {
     t.startsWith("[Codecast import]") ||
     /^\[image\]$/i.test(t.trim())
   );
+}
+
+// The opening of the first prompt a session was given, for search
+// (conversations.first_prompt): what the session was when it began, which its
+// title stops saying once the work moves on. A workflow subagent's first
+// prompt is its computed task, without the harness's frame line. `rows` are
+// oldest first. Stamped once by the message writers, while the session is
+// young enough that the batch at hand holds its opening.
+const FIRST_PROMPT_CHARS = 400;
+export const FIRST_PROMPT_STAMP_WINDOW = 50;
+export function firstPromptOf(
+  rows: ReadonlyArray<{ role: string; content?: string | null; tool_results?: readonly unknown[] | null }>,
+): string | undefined {
+  for (const m of rows) {
+    if (m.role !== "user" || !m.content || isToolResultCarrier(m) || isLowSignalPrompt(m.content)) continue;
+    const text = (parseWorkflowHarnessFrame(m.content.trimStart())?.body ?? m.content).replace(/\s+/g, " ").trim();
+    if (text) return text.slice(0, FIRST_PROMPT_CHARS);
+  }
+  return undefined;
 }
 
 // The fields of a message row the title selector reads. A database row fits,

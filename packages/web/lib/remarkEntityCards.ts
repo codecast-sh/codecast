@@ -9,6 +9,12 @@ export type EntityCardsOptions = {
    *  keeps a lone task id the inline pill it always was; team chat, where a
    *  bare reference is someone sharing the object, promotes them all. */
   types?: readonly EntityType[];
+  /** Promote only a reference standing alone on its line (or a list of
+   *  them); one inside a sentence stays the inline pill. A transcript writes
+   *  `cl-42@12:34` alone on its line to show the frame and mid-sentence to
+   *  cite it, and a picture splitting the sentence in two would read neither
+   *  way. Team chat leaves it off: there a bare reference is a share. */
+  aloneOnly?: boolean;
 };
 
 /** Payloads that never become cards: date pills, doc transclusions, and a
@@ -168,14 +174,16 @@ function paragraphBlocks(node: any, types?: readonly EntityType[]): any[] | null
   return blocks;
 }
 
-function walk(node: any, types?: readonly EntityType[]) {
+function walk(node: any, types?: readonly EntityType[], aloneOnly?: boolean) {
   if (!Array.isArray(node?.children)) return;
   node.children = node.children.flatMap((child: any) => {
     const list = listLinks(child, types);
     if (list) return [toCardRow(list)];
-    const blocks = paragraphBlocks(child, types);
+    const alone = aloneOnly ? paragraphLinks(child, types) : null;
+    if (alone) return [toCardRow(alone)];
+    const blocks = aloneOnly ? null : paragraphBlocks(child, types);
     if (blocks) return blocks;
-    walk(child, types);
+    walk(child, types, aloneOnly);
     return [child];
   });
 }
@@ -184,6 +192,6 @@ export function remarkEntityCards(options?: EntityCardsOptions) {
   const types = options?.types;
   return (tree: any) => {
     normalizeEntityLinks(tree);
-    walk(tree, types);
+    walk(tree, types, options?.aloneOnly);
   };
 }

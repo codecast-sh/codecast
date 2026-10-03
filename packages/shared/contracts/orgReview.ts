@@ -16,8 +16,8 @@ export const ORG_REVIEW_FOCUSES = {
     label: "Plan the goal tree",
     running: "Planning the goal tree",
     prompt: [
-      "This run is about the goal tree, not the chart. Read the initiatives against the work that is actually happening and propose the tree as it should stand: the goals the company is pursuing, which goal each one serves, and the metric that says whether each is on track, with a current value where the records give one.",
-      "Leave roles and reporting lines as they are unless a goal has no owner. Bring the tree as small proposals, a few goals at a time, and ask what the records cannot settle.",
+      "This run is about the goal tree, not the chart. Read what people said the company is pursuing, and the initiatives against the work that is actually happening, and propose the tree as it should stand: the goals the company is pursuing, which goal each one serves, who answers for it, the projects that carry it, and the metric that says whether each is on track, with a current value where the records give one.",
+      "Bring the whole tree in this run, because a person can judge a tree only when they see all of it: the top level goal and every goal under it, each in its place, in as few small proposals as carry it. Leave roles, reporting lines and the records' statuses as they are unless a goal has no owner, and ask what people's own words cannot settle.",
     ].join("\n\n"),
   },
 } as const;

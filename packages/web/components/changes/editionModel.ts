@@ -19,7 +19,8 @@ export type SectionItem = { kind: "story"; story: StoryRow } | { kind: "stamp"; 
 
 export type Section = { area: string; items: SectionItem[]; count: number; dimmed: boolean };
 
-export type AreaTouch = { area: string; touches: number; commits: number };
+/** One area's ink bar: its file touches, the commits that made them, and the stories filed under it. */
+export type AreaTouch = { area: string; touches: number; commits: number; stories: number };
 
 export type EditionModel = {
   /** The day's stories under the branch toggle, before filters. */
@@ -44,7 +45,29 @@ export type EditionModel = {
   areas: AreaTouch[];
   /** "Showing 3 of 9 stories (cli)" while a filter is on. */
   filterLine: string | null;
+  /** The lead's headline says what the edition headline just said, so the lead card opens with its dek instead. */
+  leadEchoesHeadline: boolean;
 };
+
+const wordsOf = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}\s]+/gu, " ").split(/\s+/).filter(Boolean);
+
+/** How much of a lead headline must be in the edition headline for it to read as a repeat. */
+export const ECHO_SHARE = 0.7;
+
+/**
+ * Whether a lead story's headline repeats the edition's: its words open the
+ * edition headline, or at least `ECHO_SHARE` of them occur in it. Case and
+ * punctuation are ignored. A headline under three words is never an echo:
+ * too little to compare.
+ */
+export function echoesHeadline(leadHeadline: string, editionHeadline: string): boolean {
+  const lead = wordsOf(leadHeadline);
+  const edition = wordsOf(editionHeadline);
+  if (lead.length < 3 || !edition.length) return false;
+  if (lead.every((w, i) => edition[i] === w)) return true;
+  const said = new Set(edition);
+  return lead.filter((w) => said.has(w)).length / lead.length >= ECHO_SHARE;
+}
 
 const PROSE_STATUSES = new Set(["written", "final"]);
 const BRIEF_KINDS = new Set(["docs", "test"]);
@@ -89,14 +112,14 @@ export function waitingKeys(day: readonly StoryRow[], live: readonly LiveRow[]):
 }
 
 /** Whether a story matches the dimming filters: areas and a live tile's surface. */
-function inFocus(s: StoryRow, url: ChangesUrl): boolean {
+export function inFocus(s: StoryRow, url: ChangesUrl): boolean {
   if (url.areas.length && !url.areas.includes(s.area)) return false;
   if (url.surface && !surfaceCoversArea(url.surface, s.area)) return false;
   return true;
 }
 
 /** Whether a story survives the hiding filters: person, risk, waiting, text. */
-function survives(s: StoryRow, url: ChangesUrl, waiting: Set<string>): boolean {
+export function survives(s: StoryRow, url: ChangesUrl, waiting: Set<string>): boolean {
   if (url.person && !s.author_names.includes(url.person) && !s.actor_user_ids.some((id) => String(id) === url.person)) return false;
   if (url.risk && s.risks.length === 0) return false;
   if (url.waiting && !waiting.has(s.story_key)) return false;
@@ -128,21 +151,62 @@ function withStamps(area: string, rows: readonly StoryRow[], releases: readonly 
   return items;
 }
 
-/** File touches and commits per area for the day: the ink bars of "Areas today". */
+/**
+ * File touches and commits per area for the day: the ink bars of "Areas
+ * today". A story counts its touches per area, not per commit, so a commit is
+ * credited to an area only as far as the touches prove it: a one-commit
+ * story's commit made every one of its touches, and a longer story put at
+ * most one commit behind each touch. Never more than the distinct commits of
+ * the stories that touched the area.
+ */
 export function areaTouches(day: readonly StoryRow[]): AreaTouch[] {
   const touches = new Map<string, number>();
-  const commits = new Map<string, Set<string>>();
+  const exact = new Map<string, Set<string>>();
+  const atMost = new Map<string, number>();
+  const all = new Map<string, Set<string>>();
+  const stories = new Map<string, number>();
+  const setOf = (m: Map<string, Set<string>>, area: string) => {
+    let set = m.get(area);
+    if (!set) m.set(area, (set = new Set()));
+    return set;
+  };
   for (const s of day) {
+    stories.set(s.area, (stories.get(s.area) ?? 0) + 1);
     for (const [area, n] of Object.entries(s.area_counts)) {
       touches.set(area, (touches.get(area) ?? 0) + n);
-      const set = commits.get(area) ?? new Set<string>();
-      for (const sha of s.commit_shas) set.add(sha);
-      commits.set(area, set);
+      for (const sha of s.commit_shas) setOf(all, area).add(sha);
+      if (s.commit_shas.length === 1) setOf(exact, area).add(s.commit_shas[0]);
+      else atMost.set(area, (atMost.get(area) ?? 0) + Math.min(n, s.commit_shas.length));
     }
   }
   return [...touches.entries()]
-    .map(([area, n]) => ({ area, touches: n, commits: commits.get(area)?.size ?? 0 }))
+    .map(([area, n]) => ({
+      area,
+      touches: n,
+      commits: Math.min(all.get(area)!.size, (exact.get(area)?.size ?? 0) + (atMost.get(area) ?? 0)),
+      stories: stories.get(area) ?? 0,
+    }))
     .sort((a, b) => b.touches - a.touches || a.area.localeCompare(b.area));
+}
+
+/**
+ * The areas the filter offers: the areas the shown stories are filed under,
+ * in the order of the touch bars, then by story count. An area that only
+ * holds files inside other stories (a workflow edited in a web change) is no
+ * chip, since choosing it would match nothing.
+ */
+export function filterAreas(stories: readonly StoryRow[], touches: readonly AreaTouch[]): string[] {
+  const count = new Map<string, number>();
+  for (const s of stories) count.set(s.area, (count.get(s.area) ?? 0) + 1);
+  const rank = new Map(touches.map((a, i) => [a.area, i]));
+  return [...count.keys()].sort((a, b) =>
+    (rank.get(a) ?? Infinity) - (rank.get(b) ?? Infinity) || count.get(b)! - count.get(a)! || a.localeCompare(b));
+}
+
+/** "Showing 3 of 9 stories (cli)" while a filter is on, else null. The day and the week say it the same way. */
+export function showingLine(url: ChangesUrl, matching: number, total: number, personName: (id: string) => string = (id) => id): string | null {
+  if (!hasFilters(url)) return null;
+  return `Showing ${matching} of ${total} ${total === 1 ? "story" : "stories"} (${filterLabel(url, personName)})`;
 }
 
 function filterLabel(url: ChangesUrl, personName: (id: string) => string): string {
@@ -238,9 +302,9 @@ export function buildEdition(input: {
     standfirst: prose && edition!.narrative.trim() ? edition!.narrative.trim() : null,
     releases,
     areas: areaTouches(day),
-    filterLine: hasFilters(url)
-      ? `Showing ${matching} of ${day.length} ${day.length === 1 ? "story" : "stories"} (${filterLabel(url, input.personName ?? ((id) => id))})`
-      : null,
+    filterLine: showingLine(url, matching, day.length, input.personName),
+    // Only prose can repeat a story; the counts headline never does.
+    leadEchoesHeadline: prose && !!leadShown && echoesHeadline(leadShown.headline, edition!.headline!),
   };
 }
 
@@ -260,6 +324,18 @@ export function dayVolumes(stories: readonly StoryRow[], editions: readonly Edit
     out[d] = seen || ed ? shas.size : null;
   }
   return out;
+}
+
+/**
+ * Whether a day or week with no stories in the store still waits for them
+ * (the skeleton) rather than saying "Nothing landed". The claim waits for the
+ * stories feed to answer, unless every one of the view's days has a cached
+ * edition that already says nothing landed. Editions reach the store before
+ * their stories, so an edition that counts stories never stands in for them.
+ */
+export function awaitsStories(storyCount: number, ready: boolean, editions: ReadonlyArray<EditionRow | undefined>): boolean {
+  if (storyCount > 0 || ready) return false;
+  return !(editions.length > 0 && editions.every((e) => e?.stats?.stories === 0));
 }
 
 /** Where `j`/`k` lands from `current`, wrapping at neither end. */

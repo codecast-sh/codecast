@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isUserMessageNoise, stripMessageTags } from "./userSend";
+import { isUserMessageNoise, stripMessageTags, typedWords } from "./userSend";
 
 // The profile feed's Typed view and the Sends counter both run on this
 // classifier — anything machinery injects as a user-role turn must read as
@@ -39,5 +39,32 @@ describe("isUserMessageNoise", () => {
 
   test("stripMessageTags still leaves human text intact", () => {
     expect(stripMessageTags("<system-reminder>noise</system-reminder>\nship it")).toBe("ship it");
+  });
+});
+
+// The Typed and Words chart metrics count what a person wrote as their own
+// ask. A night of the usage-limit loop queueing "continue" into ten parked
+// sessions read as 2,118 typed messages in one day (2026-09-15).
+describe("typedWords", () => {
+  test("counts the words of a real prompt", () => {
+    expect(typedWords("fix the login bug")).toBe(4);
+    expect(typedWords("  can you take\nthe auth   half?  ")).toBe(6);
+  });
+
+  test("a bare nudge is not a send, typed or queued by a machine", () => {
+    for (const nudge of ["continue", "Continue.", "ok", "yes", "keep going"]) expect(typedWords(nudge)).toBeNull();
+  });
+
+  test("client commands, spawned briefings and machine turns are not sends", () => {
+    expect(typedWords("<command-name>/model</command-name><command-args>opus</command-args>")).toBeNull();
+    expect(typedWords("[Codecast Task: Sweep]\nTask ID: tr-1\nMode: spawn\n\ncheck the queue")).toBeNull();
+    expect(typedWords('<session-message from="jx7c6zk">\ntake the auth half\n</session-message>')).toBeNull();
+    expect(typedWords("")).toBeNull();
+    expect(typedWords(undefined)).toBeNull();
+  });
+
+  test("pasted blocks are sent but not typed", () => {
+    expect(typedWords('look at this <pasted_content id="a1">one two three four five</pasted_content id="a1"> please')).toBe(4);
+    expect(typedWords('<pasted_content id="a1">one two three</pasted_content id="a1">')).toBe(0);
   });
 });

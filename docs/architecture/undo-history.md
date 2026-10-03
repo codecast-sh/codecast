@@ -90,6 +90,7 @@ undo?: {
   replayAction: string;                        // codecast: "applyUndoPatches"
   writers?: Record<string, UndoWriter>;        // store keys off the patch rail
   stampFields?: ReadonlySet<string>;           // "updated_at": restamped Date.now(), never compared
+  serverAssignedFields?: ReadonlySet<string>;  // "created_at": the echo of an add carries the server's own value
   ignoreKeys?: ReadonlySet<string>;            // never captured (clientState, tabs, pagination, ...)
   beforeReplay?: (entry: UndoEntry, dir: "undo" | "redo") => void;
   afterReplay?: (entry: UndoEntry, dir: "undo" | "redo", applied: readonly CellChange[]) => void;
@@ -174,7 +175,13 @@ export type UndoOutcome = { ok: true; applied: number; skipped: number } | { ok:
 **Snapshot shape**
 
 ```ts
-type UndoHistorySnapshot = { version: number; items: readonly UndoHistoryItem[]; head: string | null };
+type UndoHistorySnapshot = {
+  version: number;
+  items: readonly UndoHistoryItem[];
+  head: string | null;
+  undoOrder: readonly string[]; // undo stack ids, top first (the order undos take them)
+  redoOrder: readonly string[]; // redo stack ids, top first
+};
 type UndoHistoryItem = Omit<UndoEntry, "undo" | "redo">;   // newest first
 ```
 
@@ -189,10 +196,10 @@ The notifier gains `onHistoryStep?(kind: "undo" | "redo", steps: number, entry)`
 
 ### 3.5 Undo replay
 
-1. **Guard.** Run the rule from section 2 over the protected cells, grouped by row. `stampFields` are never compared. A row that is gone counts as a conflict, unless the cell is a row add, which counts as already undone. If no row applies, mark the entry `conflict`, notify "Can't undo <label>: changed since", remove it from the stack, and stop. The next keypress continues with the older entries.
+1. **Guard.** Run the rule from section 2 over the protected cells, grouped by row. `stampFields` are never compared. On a field in `PlatformConfig.optionalClearFields`, null and absent are the same value, as they are to the lock layer's echo check: the server's echo of a clear leaves the field out. A row that is gone counts as a conflict, unless the cell is a row add, which counts as already undone. A row add whose row is still there is taken back only while every field the forward wrote still holds its value (stamps, `_` system fields and `serverAssignedFields` aside, so a bookmark's echo with the server's own `created_at` stays undoable); otherwise it is a conflict. A mirror cell that holds neither its after nor its before value is left alone and recorded as a mirror conflict; a mirror-only entry whose cells all conflict is a conflict. Inside a group, a child whose rows all already hold their before values counts as undone, not as changed since. If no row applies, mark the entry `conflict`, notify "Can't undo <label>: changed since", remove it from the stack, and stop. The next keypress continues with the older entries.
 2. **Prepare.** Call `beforeReplay(entry, "undo")`. Codecast uses it to call `declareViewNav("undo")`.
 3. **Plan the passes.**
-   - If the spec has `inverse`, use its invocations. The first one carries the overlay for every applicable cell.
+   - If the spec has `inverse`, use its invocations. The first one carries the overlay for every applicable cell. After a partial guard, or when a mirror cell changed since, the inverse is asked again with the skipped rows' cells and the conflicting mirror cells taken out of `ctx.changes`, so an inverse must derive its invocations from the changed cells. Otherwise it would send a teammate's later change back to its prior value on the server while the local row keeps the teammate's value. If an invocation still names a skipped row, the undo is refused as a conflict: sending it would overwrite that row's later change on the server.
    - Otherwise, the cells on keys with a writer are grouped per row into that writer's invocations, each carrying its row's overlay. All other cells (patch rail and mirror) go into one `replayAction` pass with args `[]`.
 4. **Run each pass** through `runAction(inv.action, flagsOf(target), recipe, inv.args, { replay })`. The recipe does three things in order:
    1. deletes the forward's `planted` pending entries that still match exactly (same type, value and ts), which fixes B1 and B2;
@@ -204,16 +211,19 @@ The notifier gains `onHistoryStep?(kind: "undo" | "redo", steps: number, entry)`
 
 ### 3.6 Redo
 
-1. Check that every applied protected cell equals `before`. If one does not, the outcome is a conflict.
+1. Check that every captured cell (protected and mirror, applied or found already undone; stamps and view cells aside) still holds its before value, judging a cell the undo wrote by the value it wrote. Where a spec's `spell` turned an added row into field cells (the row is kept, as the server keeps it), those field cells stand in for the captured row cell. Re-invoking the action writes all of them, so one that does not is a conflict. After a partial undo only the applied protected cells are checked, and step 5 applies.
 2. Call `beforeReplay(entry, "redo")`.
 3. Call the wrapped original action with the original args, inside a capture that **refreshes this entry's** `changes`, `planted` and `outboxIds` instead of pushing a new entry.
 4. For a group, redo the children in order.
+5. After a partial undo (`skipped` is non-empty), step 3 would write the forward value over the rows the undo left. Instead the cells the undo applied get their `after` values back through the same guard, passes and `runAction` replay as an undo, with no planted deletion. An entry whose server half is a spec `inverse` has no such mirror, so its redo is refused as a conflict. A refused redo replay returns the entry to the redo stack.
 
 ### 3.7 Refusal, stubs, async
 
 - **Refusal.** Every capture stores its outbox id. When `releaseRefusedLocks` or `applyReceiptRejection` rolls an action back, the engine marks the entry that names that outbox id `refused` and removes it from both stacks. If an undo's own dispatch is refused, its locks roll back through the same path, and the entry returns to the undo stack.
-- **Stub ids.** Wherever `rekeyExtra` and `rekeyPending` run (`syncEngine.ts` ~214), the engine also rewrites `id` in live entries' cells and objects.
+- **Stub ids.** Wherever `rekeyExtra` and `rekeyPending` run (`syncEngine.ts` ~214), the engine also rewrites `id` in live entries' cells and objects, and any field value that names the stub. Codecast's own syncTable and `resolveSessionId` rekey through `rekeyId`, which calls `rekeyUndoIds`.
+- **Thin conversation rows** (`store/undo/thinConversation.ts`). A session never opened in this window has no `conversations` row, and an action that writes one (`toggleFavorite`, `patchConversation`, `switchProject`, `setPrivacy`, `setTeamVisibility`) creates a thin `{_id}` row to carry the write. The capture sees a whole-row add. No undoable action mints a conversation, so that row always stands for a server row: `UNDO_SPECS` (`store/undo/policy.ts`) wraps every spec's `spell` with `keepConversationRows`, which turns the add into one cell per field the action wrote and keeps the row. Deleting the row would plant a `conversations:<id>` exclude that nothing retires, so the conversation's meta could never sync in again, and it would discard meta that loaded between the gesture and its undo. The thin row says nothing about what a field held before; the inbox row does. `sessions` and `conversations` are two copies of one server row and the undo's patch merges their cells into one field, so each field cell takes the prior value of the `sessions` cell for the same row and field (unfavorite a favorited row, undo, and the server gets `is_favorite: true`, not a clear). A field the inbox row did not change is dropped. A field cell with no prior value on a row that already exists (a stub an earlier write left) takes the inbox row's prior value the same way. `toggleFavorite` adds its own `spell`: a row can be a favorite by the favorites list alone, so an `is_favorite` cell that went to false from nothing is restored to true. **A gesture whose prior values nothing knows is not recorded:** the same wrapper returns a null label when a conversations cell has no prior value, the row was never delivered by the server (no `_creationTime`), and there is no inbox row for it. That is the `/sessions` page acting on a row this window holds in neither store; an undo there could only send a clear, so taking back an unpin would unpin again. Test: `undoThinConversation.test.ts`. The inverses of `switchProject`, `setPrivacy` and `setTeamVisibility` set the field back on the server instead of clearing it, so on a row whose meta is loaded without the field, a lock for an absent value would never meet its echo and would strip the field from the meta when it syncs. Their `spell` (`spellThinConversation`, `policies/work.ts`) uses the same `sessions` prior and drops the cell where the inbox row did not change. Test: `undoWorkInverses.test.ts`.
 - **Offline.** Outbox rows replay in `ts` order (`nextOutboxTimestamp`), so a forward write and its undo arrive in causal order.
+- **Outbox ownership** (`outboxOwner.ts`). The outbox is one IndexedDB table per origin, and every window drains all of it (at boot, on `online`, on becoming visible, every 30 s). A window's guards against re-sending (in flight, already acknowledged) live in its own memory. So a sibling window could re-send rows another window had already delivered but not yet deleted. Under a slow IndexedDB (a read of the table took over 60 s during verification), that re-send landed after the undo and put the forward value back on the server: a task's status and assignee were undone at 8:36:55 and re-applied at 8:37:07. Each row now carries its window's `owner` id. Each window holds a Web Lock named for that id for its lifetime, and a drain skips rows whose owner is another window still holding its lock. A closed, reloaded or crashed window releases the lock, so its rows replay as before. Without Web Locks (React Native, tests) nothing changes. One gap remains, in section 14: a reloaded window's rows that were delivered but not yet deleted still replay once.
 
 ## 4. Codecast binding
 
@@ -223,10 +233,11 @@ The notifier gains `onHistoryStep?(kind: "undo" | "redo", steps: number, entry)`
 - `replayAction: "applyUndoPatches"`.
 - `writers = UNDO_WRITERS` (`store/undo/writers.ts`).
 - `stampFields: {"updated_at"}`.
+- `serverAssignedFields: {"created_at"}`.
 - `ignoreKeys`: `pending`, `syncMeta`, `clientState`, `tabs`, `activeTabId`, `pagination`, `drafts`, `recentVisits`, `collapsedSections`, liveness and feed keys. The binding package writes the full list from `REPLICATION_CLASSIFICATION` "local" keys plus server-fed projections.
 - `beforeReplay: () => declareViewNav("undo")`.
 - `restoreView: (draft, field, value)`, which calls `recordCurrentConversationPointer` and `syncActiveInboxTabPath` for `currentSessionId`.
-- `afterReplay`: for each applied `sessions`/`conversations` cell whose field is in `BRIDGED_FIELDS`, send one `broadcastGesture({kind: "fields", id, fields, ts}, bridgeUserId(state))` per id with one `ts`. This replaces the hand bridge calls in `undoActions.ts`. It sends exact values, never a pin toggle.
+- `afterReplay`: for each applied `sessions`/`conversations` cell whose field is in `BRIDGED_FIELDS`, send one `broadcastGesture({kind: "fields", id, fields, ts}, bridgeUserId(state))` per id with one `ts`. This replaces the hand bridge calls in `undoActions.ts`. It sends exact values, never a pin toggle. Whole rows the undo put back (a stash or kill that forgot a teammate's row or a stub) go first as one `{kind: "unforget", rows}`: a sibling lifts the excludes its forget planted (unless a newer one stands), puts the row back and holds it under an include lock. The sync host does the same for a follower's mut that re-adds a whole row (`MutUpdate.readds`), since its delta merge skips excluded ids.
 
 **Policy files**, one owner each:
 
@@ -246,10 +257,12 @@ The notifier gains `onHistoryStep?(kind: "undo" | "redo", steps: number, entry)`
 
 **Toasts** (`store/undoStack.ts`):
 
-- `notifyWithUndo(label, entryId)` wires the Undo button to `undoEntry(entryId)`.
-- Undo and redo announcements reuse one sonner id (`"undo-status"`), so chained undos update one toast.
-- When the timeline tier is `hidden` and history has more than one item, the "Undid" toast carries a quiet `History` action that opens the timeline.
-- While the timeline is open, the notifier stays silent.
+- `notifyWithUndo(label, entryId)` wires the Undo button to `undoEntry(entryId)`. Each recorded toast has its own id (`undo-<entryId>`). Once its entry leaves the undo stack, by any route (the toast, the keyboard, the timeline's multi-step "Back to here", a conflict), a `subscribeUndoHistory` listener dismisses it, so no Undo button outlives its entry.
+- Undo and redo announcements reuse one sonner id (`"undo-status"`), so chained undos update one toast in place. sonner merges an update into the toast it replaces, so every announcement passes `action` explicitly, `undefined` included. Otherwise a "Redid" would keep the "History" button of the "Undid" before it.
+- Copy: "Undid: <label>"; a partial step reads "Undid: <label> (2 of 3; 1 changed since)", counting the protected rows (`objects`) and the rows left (`skipped`); a redo after a partial undo says the same. A conflict comes from the engine: "Can't undo <label>: changed since".
+- When the timeline tier is `hidden` and the history holds more than the step just announced, the "Undid" toast carries a quiet `History` action that opens the timeline. A redo never offers it. `UNDO_HISTORY_TIER` lives in `lib/undoTimelineOpen.ts` (re-exported from `lib/undoHistory.ts`), so the notifier can read it without pulling the row model into the store's imports.
+- While the timeline is open, the notifier stays silent. Opening the card also dismisses the status toast already showing: the held peek opens 350 ms after the first ⌘Z, whose toast would otherwise sit on top of the card in the same corner.
+- Dismissal is never gated on `toast.getToasts()`. A plain `toast()` never clears its id from sonner's dismissed set, so after its first dismissal the reused status id drops out of that list for good, even while it is on screen.
 
 ## 5. Coverage
 
@@ -263,20 +276,21 @@ The notifier gains `onHistoryStep?(kind: "undo" | "redo", steps: number, entry)`
 
 | Action (inboxStore.ts unless named) | Route | Notes and label |
 |---|---|---|
-| `deferSession`, `setSessionRest`, `pinSession`, `snoozeSession`, `wakeSnoozedSession`, `renameSession`, `setSessionCharacter(s)`, `patchConversation`, `toggleFavorite`, `updateSessionProject`, `setConversationModel/Agent/AgentDefinition` | patch | The cleared snooze, `title_is_custom` and the `favorites` mirror are captured automatically. "Deferred “{title}”", "Filed “{title}” as Done", "Pinned/Unpinned “{title}”", "Renamed “{old}” to “{new}”" |
-| `stashSession`, `killSession`, `killSessions` | inverse: one `{action: "restoreSession", args: [id], runDraft: false}` per hidden id. The first carries the overlay. | Owners land through the patches; non-owners land through the `inbox_hides` unhide (B6). `restoreView: true`, `toast: true`. Kill label: "Killed “{title}” (agent stays stopped on undo)". Verify that `unhideConversationForViewer` is a no-op for owners. |
+| `deferSession`, `setSessionRest`, `pinSession`, `snoozeSession`, `wakeSnoozedSession`, `renameSession`, `setSessionCharacter(s)`, `patchConversation`, `toggleFavorite` | patch | The cleared snooze, `title_is_custom` and the `favorites` mirror are captured automatically. "Deferred “{title}”", "Filed “{title}” as Done", "Pinned/Unpinned “{title}”", "Renamed “{old}” to “{new}”" |
+| `stashSession`, `killSession`, `killSessions` | inverse: one `{action: "restoreSession", args: [id], runDraft: false}` per hidden id, read from `ctx.changes` (not the args) so a partial undo sends none for a skipped row. The first carries the overlay. A kill adds `patchConversation(id, {inbox_killed_at: null})` for each row it retired that was not killed before: the server's kill stamps that marker, the kill's draft never wrote it, and `shouldShowInInbox` hides the row on it alone, so without the local clear an undo after the echo shows nothing until the server's un-kill returns. | Owners land through the patches; non-owners land through the `inbox_hides` unhide (B6). `restoreView: true`, `toast: true`. Kill label: "Killed “{title}” (agent stays stopped on undo)". Verify that `unhideConversationForViewer` is a no-op for owners. |
 | `restoreSession` | patch | "Restored “{title}”" |
+| `updateSessionProject`, `setConversationModel/Agent/AgentDefinition` | never | The switch is applied to the live agent or its daemon (a `/model` message, `switchSessionAgent`, `reconfigureSession`), and `agent_type` is not editable on the patch rail, so a field restore would leave the row disagreeing with the running session. A command inverse that re-runs the real switch is a follow-up. |
 | `updateBucket` | patch | `inbox_buckets` rail |
-| `assignSessionToBucket` | writer (`bucketAssignments` → `assignSessionToBucket(conv, prevBucket \| null)`) | "Labeled “{title}” {bucket}" |
+| `assignSessionToBucket` | writer (`bucketAssignments` → `assignSessionToBucket(conv, prevBucket \| null)`) | "Labeled “{title}” {bucket}". The server never deletes an assignment row (an unfile keeps it with `bucket_id` unset and the next filing reuses it), so the undo of a filing that created the row keeps the row and clears `bucket_id`: the spec's `spell` turns the row-add cell into a `bucket_id` cell. Removing the row would exclude the server row's id, and this delta collection would skip every later push of it. |
 | `switchProject` | inverse: `switchProject(id, prevPath)` | |
-| `setPrivacy`, `setTeamVisibility` | inverse with the prior value | Immutable on the patch rail. Undo that widens access is offered only from the toast or the timeline, never from blind ⌘Z (spec flag `confirm: true`, which `performUndo` skips with a notice). |
+| `setPrivacy`, `setTeamVisibility` | inverse with the prior value | Immutable on the patch rail. Undo that widens access is offered only from the toast or the timeline, never from blind ⌘Z (spec flag `confirm`, a function asked when the entry is recorded: it is true only when the prior audience is wider than the new one or cannot be ordered against it, so taking back an accidental share is an ordinary ⌘Z; `performUndo` stops at a confirm entry with a notice and undoes nothing, so an older change is never taken back in its place). Not recorded when the prior audience cannot be restored: the prior `is_private` is unknown on both store copies, or the row was shared with no `team_id`. Returning to "shared" runs the server's `buildShareUpdate`, which assigns a team to a conversation that has none, and no verb takes a team away. |
 | `toggleBookmark` | inverse: the same toggle | The guard ensures membership is still `after`. |
-| `updateTask`, `updateTaskStatus` | writer: `updateTask(short_id, wire)` | Wire: `parent_id` → `parent` (short id or `""`); a cleared `assignee`, `project_id`, `status_id`, `execution_status` or `parent` → `""`; drop `updated_at`, `closed_at` and `attempt_count`. A cascade close yields one invocation per child. The undo cannot recall assignment notifications. |
-| `updatePlan`, `updateProject`, `updateInitiative`, `set/add/removeInitiativeProject` | writer | Already in server shape (`writeAsServerShape`). |
+| `updateTask`, `updateTaskStatus` | writer: `updateTask(short_id, wire)`; `updateTask`, `updatePlan` and `updateProject` coalesce, and `description` is never captured (DocEditor owns its text undo, as for the doc body) | Wire: `parent_id` → `parent` (short id or `""`); a cleared `assignee`, `project_id`, `status_id`, `execution_status` or `parent` → `""`; drop `updated_at`, `closed_at` and `attempt_count`. A cascade close yields one invocation per child. The undo cannot recall assignment notifications. |
+| `updatePlan`, `updateProject`, `updateInitiative`, `set/add/removeInitiativeProject` | writer | Already in server shape (`writeAsServerShape`). An initiative gesture that widens its owner role's scope (naming a role owner, or adding a project under one) is not recorded: the server widens the scope in the same transaction and logs it in the org record, and no initiative verb takes it back. With the org tree loaded, the `orgTree`/`orgIntents` cells the draft paints say whether the scope grew; without it, any such write is taken to have grown it. |
 | `updateDoc` | writer: `updateDoc(id, {title, doc_type, labels})` | `ignoreFields: ["content", "overflow"]`. The label is null when nothing else changed, because the editor owns text undo. |
-| `pinDoc`, `moveDoc` | writer: `pinDoc(id, pinned)`, `moveDoc(id, parent_id, sort_order)` | The docs writer splits by field group. |
+| `pinDoc`, `moveDoc` | writer: `pinDoc(id, pinned)`, `moveDoc(id, parent_id, sort_order)` | The docs writer splits by field group. Every doc spec records only when a `docs` cell changed: a doc held only in `docDetails` (opened by link before the list lands, or from another workspace) has no writer row, so its undo would restore the detail copy and send the server nothing. |
 | `archiveDoc` | writer `restoreRow` → `restoreArchivedDoc(id)` (draft no-op); the overlay re-adds `docs` and `docDetails` | `toast: true`. Fixes B1. |
-| `updateSavedView` | writer → `updateSavedView(id, f)` | |
+| `updateSavedView` | inverse: `updateSavedView(id, priorFields)` (`savedViews` is a mirror, not local-first) | Not recorded when a changed field had no prior value: `savedViews.webUpdate` cannot unset a field. |
 | `resolveCommentThread`, `editComment` | inverse with the prior value | |
 | `reorderStack`, `setStackPolicy` | inverse with the prior order or policy | |
 | `triggerAction` pause/resume, `setTriggerInterval` | inverse with the opposite verb or prior interval | Run now, cancel and reactivate: never. |
@@ -319,7 +333,7 @@ The session coverage package adds an `afterReplay` extension point: `store/undo/
 - **Text fields keep native undo.** Inputs, textareas and contenteditable editors (TipTap, CodeMirror) do their own undo. App undo fires only when focus is not editable. There is no fall-through into app undo when a field's own history is empty.
 - **Modals.** An open modal (`hasOpenModal`) blocks app undo, as today. The timeline card must not set `aria-modal`, so stepping with ⌘Z works while it is open.
 - **`noRepeat`** (new in `@platform/keys`): a repeated keydown for such a def is swallowed (`preventDefault`, no handler call). Holding ⌘Z is one undo (B7).
-- **Electron.** The Edit menu has `{ role: "undo" }` (`packages/electron/main.js` ~2693). Verify in the desktop app which fires first. If the menu role swallows ⌘Z outside fields, replace the role items with click handlers that run `webContents.undo()` / `redo()` when the focused element is editable and otherwise send the renderer an IPC that calls `performUndo()` / `performRedo()`.
+- **Electron** (`packages/electron/editUndo.js`). Verified in a from-source desktop instance (Electron 44.3, its own profile), with real key events delivered through the app's event queue and a keydown probe in the page. With the stock `{ role: "undo" }` item, ⌘Z never reached the page's keydown when focus was outside a text field, while ⌘J (no menu item) did. So app undo was unreachable by keyboard in the desktop app. The Edit menu's Undo and Redo are now plain items with the same accelerators (`CmdOrCtrl+Z`, `Shift+CmdOrCtrl+Z`), and they behave differently: the page now sees ⌘Z first, and the item's click runs only when the page leaves the key unhandled. A ⌘Z the app handles is consumed there. One the page leaves (focus in a field, or nothing to undo) reaches the click, which probes the focused element. In a field (input, textarea, contenteditable, iframe) it calls `webContents.undo()` / `redo()`, and one press took back exactly one typing step. Anywhere else it sends `app-edit-command`, which the preload exposes as `onAppEditCommand` and `useUndoWalk` runs as a step (blocked while a modal is open). A page that is not one of ours (a browser pane) always gets the native command. Holding ⌘Z repeats the key equivalent, so `before-input-event` (emitted before menu shortcuts) records whether the last ⌘Z/⌘Y keydown was an auto-repeat, and a repeat sends no second app undo. A press that undoes nothing does not count as a step, so a declined key that comes back through the menu never counts twice.
 - **Palette.** Undo and Redo use the `Undo2` and `Redo2` icons, not `RefreshCw`.
 
 ## 8. Timeline UI
@@ -388,7 +402,7 @@ The footer legend uses KeyCaps. The list is cmdk, like `RecentsPanel`, with no s
 1. **Palette row** "Undo history" (`ui.undoHistory`, keywords "undo redo history timeline changes revert"). Found by search, not by browsing.
 2. **The chord** ⌘⌥Z / Ctrl+Alt+Z, listed automatically in the `?` panel's Global section.
 3. **The "Undid" toast.** Its quiet `History` action appears only after an undo, when there is more history to show.
-4. **The held-modifier peek.** After ⌘Z, keep the modifier held for 350 ms and the card peeks open, narrating each further undo (Z) or redo (Shift+Z). H pins it interactive. Releasing fades it after 600 ms, unless the pointer is over it, which pins it. Any other key closes it and passes through. The logic is a pure reducer, `lib/undoWalk.ts`, fed by `hooks/useUndoWalk.ts`, which takes ownership of the `ui.undo` / `ui.redo` handlers from `shortcuts/actions.ts`.
+4. **The held-modifier peek.** After ⌘Z, keep the modifier held for 350 ms and the card peeks open, narrating each further undo (Z) or redo (Shift+Z). A second step inside the 350 ms opens it at once. H pins it interactive. Releasing fades it after 600 ms, unless the pointer is over it, or reaches it during the fade; either pins it. Any other key closes it and passes through. The logic is a pure reducer, `lib/undoWalk.ts` (`walk`, plus `walkView` for what the card shows and `walkTimer` for the one timer a state runs), fed by `hooks/useUndoWalk.ts`. The hook owns the `ui.undo` / `ui.redo` handlers and is mounted from `useGlobalShortcutActions`. Each press commits first, and only a press that took something back reaches the walk. The modifier is Meta on mac and Control elsewhere, tracked with window key listeners the way `useRecentSwitcher` tracks Control; a window blur counts as a release. The walk drives only a card it opened itself: a card opened from the palette, the chord or a toast is left as it is. In a browser on mac, ⌘H belongs to the OS (it hides the app), so H pins when pressed during the fade; off mac, Ctrl+H works while held. The walk's keys go through the shortcut dispatcher, which runs in the capture phase and stops every key it handles: H is the `undoWalk.pin` binding, live only in the `undoWalk` context the hook holds while the card peeks or fades and listed above `conv.toggleThinking`, and a key another shortcut handles ends the walk through `subscribeShortcutUsed` (`shortcuts/ShortcutProvider.tsx`), since it never reaches a window listener. A press counts as a step only when the top of the other stack changed, so a conflict or a confirm notice neither arms the peek nor counts toward the milestone.
 5. **A milestone tip**, `m-undo-history`, fired by `checkMilestone` on the second undo within 10 s. It honours tips-off. `showMilestoneTip` gains a `<MenuKeyCaps action={tip.shortcutAction} />` description, so no key name is written as plain text.
 
 **When the tier flips to `visible`,** add an `Undo2` header button beside `RecentlyViewedMenu` (shown only while something can be undone, with `ShortcutTooltip`), and an Interface toggle `undo_history_peek` for the held peek.
@@ -481,6 +495,20 @@ Run on the dev server at http://localhost:3200 with `cast browser`. Use this ses
 8. **Timeline.** Open it from the palette and with the chord. Hold ⌘ after ⌘Z to see the peek. Use "Back to here". Take screenshots in light and dark, and check the `?preview=1` fixture.
 9. **Desktop.** Repeat step 7 and one app undo in the Electron app to settle the Edit menu question.
 
+**Results (2026-10-03, ct-56508 WP5).** Run with a raw-CDP driver over the `cast browser` bridge. Both tabs were background tabs, so each script enabled `Emulation.setFocusEmulationEnabled` (a background tab reloaded behind other windows has no focused frame, and key events to it are dropped) and allowed for throttled timers.
+
+| # | Scenario | Result |
+|---|---|---|
+| 1 | Stash in A; B drops the row; real ⌘Z in A; both restore; reload A | Pass. The fields came back identical, the original `inbox_pinned_at` included, and stayed after reload. |
+| 2 | Snooze, defer, ⌘Z the defer, wait 40 s | Pass. The snooze held in A and B. A second ⌘Z took the snooze back and restored the pin. |
+| 3 | `fileSessionsAsRest` over three sessions | Pass. One toast, one timeline entry ("Filed 3 sessions as Done", folded), and one ⌘Z restored all three to their exact prior rest fields. |
+| 4 | Task status and assignee, two ⌘Z, reload | First run failed: the server re-applied the forward values 11 s later through a sibling window's outbox drain. Fixed with outbox ownership (section 3.7); the rerun held for over 75 s and after reload. A cleared assignee comes back as `""`, the server's own unassigned value (`tasks.ts` writes `resolve(...) \|\| args.assignee`). |
+| 5 | Archive a doc, toast Undo, wait, reload | Pass (B1). The exclude was replaced by an include lock, and the doc survived the push, the reload and a server read. |
+| 6 | Rename in A, rename in B, ⌘Z in A | Pass. "Can't undo Renamed ct-…: changed since", and B's title stayed. |
+| 7 | ⌘Z in the composer; held ⌘Z outside fields | Pass. Text undo took back one typing step and left the app entry alone; the app did not handle the key. One keydown plus four auto-repeats made exactly one app undo. |
+| 8 | Palette row, chord, held peek, toast History, Back to here, light and dark, `?preview=1` | Pass after two fixes: the status toast covered the peek card, and the "now" label was clipped when the head was the newest row (the list gained `pt-2`). |
+| 9 | Desktop Edit menu | The role swallowed ⌘Z; replaced, see section 7. |
+
 Close the tabs you opened when done.
 
 ## 13. Work packages
@@ -493,6 +521,9 @@ Close the tabs you opened when done.
 
 ## 14. Follow-ups (out of scope for this version)
 
+- **Server dedupe for replayed outbox rows.** Outbox ownership stops a live window's rows being re-sent by a sibling. It cannot cover a window that reloads while its delivered rows are still waiting to be deleted: the reload releases the lock, and the next drain replays them once. During verification, rows from 8:42 replayed at 8:51 when the dev server reloaded every window. They replayed in order, so the end state held, but a replay can interleave with a later write. Deduping legacy actions by outbox id on the server (receipt actions already are) closes this.
+
+- **The forward write of a thin row never reaches the server.** `groupPatchesByTable` (engine `middleware.ts`) skips a whole-row add (collection path of length 2), so a gesture that creates a thin `conversations` row with no inbox row behind it (`/sessions` Unpin, Stash, Restore through `patchConversation`, `app/sessions/page.tsx` and `ConversationList.tsx`; `toggleFavorite` on such a row) changes the store and sends nothing. It predates undo, and such a gesture is not recorded (section 5, thin conversation rows), so undo no longer writes on its behalf. The fix belongs to the engine middleware (dispatch the fields of a whole-row add to a server id) or to the page (feed its rows into the store before acting on them).
 - **Compare-and-set** on `applyUndoPatches` (`[patches, expect]`), to close the last-writer-wins window for a remote change that has not yet reached this client. It needs a `deploy.sh` run before the web push.
 - **Server verbs** that would make more things undoable: `addToStack` (for `removeFromStack`), soft deletes for comments and saved views, and create-undo through delete by `client_key`.
 - **Org batch ids** returned by the org side effects, so org entries could undo in place through `undoOrgChange`.

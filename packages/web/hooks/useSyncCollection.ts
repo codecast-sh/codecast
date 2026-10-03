@@ -75,6 +75,12 @@ export type SyncCollectionOpts<T = any> = {
    *  function reads them off each payload, for a feed whose answer says how
    *  far it is complete (the scope a prune may trust). */
   syncOpts?: SyncOpts | ((data: T) => SyncOpts | undefined);
+  /** Each answer is the complete set of the rows this matches: a cached
+   *  matching row it lacks is dropped with no tombstone, so the server can
+   *  send it again later. The drop reaches disk only for rows keyed by a
+   *  client id (idbCollectionDiff.durableDeletes); a Convex-keyed scope needs
+   *  pruneAbsentScope. */
+  dropAbsent?: (row: any) => boolean;
   /** Batch a hot subscription's pushes into one trailing apply. */
   coalesceMs?: number;
   /** Circuit-break a subscription that never resolves (see useQueryNoThrow). */
@@ -98,10 +104,23 @@ export type SyncCollectionResult = {
  * and hand them to syncTable. Nothing is synced when there are no rows (the
  * query is loading, or the server refused the caller with `null`).
  */
-export function applyCollectionFeed(key: string, data: any, select?: (data: any) => any, syncOpts?: SyncCollectionOpts["syncOpts"]): void {
+export function applyCollectionFeed(
+  key: string,
+  data: any,
+  select?: (data: any) => any,
+  syncOpts?: SyncCollectionOpts["syncOpts"],
+  dropAbsent?: SyncCollectionOpts["dropAbsent"],
+): void {
   const rows = select ? select(data) : data;
   if (rows === undefined || rows === null) return;
-  useInboxStore.getState().syncTable(key, rows, typeof syncOpts === "function" ? syncOpts(data) : syncOpts);
+  const store = useInboxStore.getState();
+  if (dropAbsent) {
+    const sent = new Set((rows as any[]).map((r) => String(r._id)));
+    const cached = ((store as any)[key] ?? {}) as Record<string, any>;
+    const gone = Object.keys(cached).filter((id) => !sent.has(id) && dropAbsent(cached[id]));
+    if (gone.length) store.dropRows(key, gone);
+  }
+  store.syncTable(key, rows, typeof syncOpts === "function" ? syncOpts(data) : syncOpts);
 }
 
 export function useSyncCollection<Query extends FunctionReference<"query">>(
@@ -119,11 +138,12 @@ export function useSyncCollection<Query extends FunctionReference<"query">>(
   useFeederError(getFunctionName(query), error);
   const select = opts?.select;
   const syncOpts = opts?.syncOpts;
+  const dropAbsent = opts?.dropAbsent;
   useConvexSync(
     data,
     useCallback(
-      (payload: any) => applyCollectionFeed(key, payload, select, syncOpts),
-      [key, select, syncOpts],
+      (payload: any) => applyCollectionFeed(key, payload, select, syncOpts, dropAbsent),
+      [key, select, syncOpts, dropAbsent],
     ),
     opts?.coalesceMs ? { coalesceMs: opts.coalesceMs } : undefined,
   );

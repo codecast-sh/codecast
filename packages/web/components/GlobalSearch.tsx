@@ -1,3 +1,4 @@
+import { TopbarButton } from "./TopbarButton";
 import { useState, useRef, useCallback, useLayoutEffect, useMemo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useEventListener } from "../hooks/useEventListener";
@@ -12,6 +13,7 @@ import { useInboxStore, type InboxSession } from "../store/inboxStore";
 import { ContextMenu, useContextMenu } from "./ui/context-menu";
 import { SessionMenuItems } from "./menus/ObjectContextMenus";
 import { highlightMatch, getSnippet, parseSearchTerms } from "../lib/searchHighlight";
+import { searchedTermsText } from "@codecast/shared/search";
 import { useInstantSessionRows, mergeSearchRows } from "../lib/instantSessionSearch";
 import { SessionQuerySuggestList } from "./SessionQuerySuggestList";
 import { useSessionQueryAutocomplete } from "../hooks/useSessionQuerySuggestions";
@@ -197,7 +199,7 @@ export function GlobalSearch() {
         if (query.trim().length < 2) return;
         if (!e.shiftKey && results[selectedIndex]) {
           router.push(
-            `/conversation/${results[selectedIndex].conversationId}?highlight=${encodeURIComponent(query)}`
+            `/conversation/${results[selectedIndex].conversationId}?highlight=${encodeURIComponent(searchedTermsText(query))}`
           );
           setIsOpen(false);
           setIconOpen(false);
@@ -215,7 +217,7 @@ export function GlobalSearch() {
   );
 
   const handleResultClick = (conversationId: string) => {
-    const url = `/conversation/${conversationId}?highlight=${encodeURIComponent(query)}`;
+    const url = `/conversation/${conversationId}?highlight=${encodeURIComponent(searchedTermsText(query))}`;
     router.push(url);
     setIsOpen(false);
     setIconOpen(false);
@@ -249,19 +251,17 @@ export function GlobalSearch() {
           clicking it expands the field as a fixed overlay centered over the
           header (.tb-search-overlay in globals.css). */}
       {compact && !isExpanded && (
-        <button
-          type="button"
+        <TopbarButton
           onClick={() => {
             setIconOpen(true);
             setIsOpen(true);
             setTimeout(() => inputRef.current?.focus(), 0);
           }}
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-sol-border bg-sol-bg-alt text-sol-text-dim transition-colors hover:border-sol-text-dim/40 hover:bg-sol-bg-highlight hover:text-sol-text"
           aria-label="Search sessions"
           title="Search sessions"
         >
-          <SearchGlyph className="w-4 h-4" />
-        </button>
+          <SearchGlyph />
+        </TopbarButton>
       )}
       <SearchField
         value={query}

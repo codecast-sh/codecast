@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useQueries, type RequestForQueries } from "convex/react";
 import { getFunctionName } from "convex/server";
 import type { FunctionArgs, FunctionReference, FunctionReturnType } from "convex/server";
@@ -32,18 +32,10 @@ export const queryCircuitOpenError = new Error(
 // render (so the client forgets the terminal result) and re-adds it, and it
 // re-arms the breaker. A surface that shows the error can offer it as its
 // "try again".
-//
-// keepPrevious (opt-in) bridges an argument change that is a refresh, not a
-// different question: a windowed query (presigned URLs signed per window) asks
-// again with new args four times an hour, and plain useQuery answers
-// `undefined` for the round trip, which unmounts whatever renders the answer
-// (a video playing stops). While the new answer loads, the last one is
-// returned for as long as the keepPrevious key is the one it was given under;
-// a different key (another call) loads from nothing as usual.
 export function useQueryNoThrow<Query extends FunctionReference<"query">>(
   query: Query,
   args: FunctionArgs<Query> | "skip",
-  opts?: { breakAfterMs?: number; keepPrevious?: string },
+  opts?: { breakAfterMs?: number },
 ): { data: FunctionReturnType<Query> | undefined; error: Error | undefined; retry: () => void } {
   const skip = args === "skip";
   const queryName = getFunctionName(query);
@@ -83,12 +75,7 @@ export function useQueryNoThrow<Query extends FunctionReference<"query">>(
     return () => clearTimeout(timer);
   }, [key, loading, breakAfterMs]);
 
-  const keep = opts?.keepPrevious;
-  const kept = useRef<{ key: string; data: FunctionReturnType<Query> } | null>(null);
-  if (keep !== undefined && value !== undefined && !(value instanceof Error)) kept.current = { key: keep, data: value };
-
   if (broken) return { data: undefined, error: queryCircuitOpenError, retry };
   if (value instanceof Error) return { data: undefined, error: value, retry };
-  if (loading && keep !== undefined && kept.current?.key === keep) return { data: kept.current.data, error: undefined, retry };
   return { data: value, error: undefined, retry };
 }

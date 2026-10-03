@@ -27,6 +27,8 @@ mock.module("convex/react", () => ({
   ...convexReact,
   useConvexAuth: () => ({ isAuthenticated: authenticated, isLoading: false }),
   useQuery: (_q: unknown, args: unknown) => (args === "skip" ? undefined : teamsAnswer),
+  // useQueryNoThrow's transport (useSyncTeams subscribes through it).
+  useQueries: (queries: Record<string, unknown>) => Object.fromEntries(Object.keys(queries).map((k) => [k, teamsAnswer])),
   useMutation: () => async () => {},
 }));
 const realSwitch = await import("../useSwitchWorkspace");

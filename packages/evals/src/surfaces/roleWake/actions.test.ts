@@ -36,6 +36,14 @@ describe('the label gates', () => {
     expect(verdict([agent([['```\ncast trigger pause tr-901\ncast trigger pause tr-902\n```\n`cast trigger pause` has no resume date.']])], { pause })[0]?.[1]).toBe(true);
   });
 
+  test('savesMemory: the opening turn writing a memory file or CLAUDE.md passes; only saying so, or saving in a later turn, fails', () => {
+    const wrote = (files: string[][]): AgentResult => ({ ...agent(files.map(() => ['Fern here, online.'])), wrote: files });
+    expect(verdict([wrote([['/r/.claude/projects/p/memory/fern-role.md']])], { savesMemory: true })[0]).toEqual(['memory-save', true, 'wrote memory/fern-role.md']);
+    expect(verdict([wrote([['/r/CLAUDE.md']])], { savesMemory: true })[0]?.[1]).toBe(true);
+    expect(verdict([agent([['Saved my role to memory. Fern here, online.']])], { savesMemory: true })[0]).toEqual(['memory-save', false, 'the opening turn wrote no memory file or CLAUDE.md']);
+    expect(verdict([wrote([['/tmp/scratch.md'], ['/r/memory/fern.md']])], { savesMemory: true })[0]?.[1]).toBe(false);
+  });
+
   test('dmOnly: a direct message to the named person passes; a channel post or no message fails', () => {
     expect(verdict([agent([['`cast anchor say --dm mara "Theo needs Thursday afternoons off"`']])], { dmOnly: ['mara'] })[0]?.[1]).toBe(true);
     expect(verdict([agent([['`cast anchor say --dm @mara "x"` and `cast anchor say --chat general "x"`']])], { dmOnly: ['mara'] })[0]?.[1]).toBe(false);
@@ -61,6 +69,8 @@ describe('the label gates', () => {
     expect(verdict([read], { rereads })[0]?.[1]).toBe(true);
     const stale = agent([['jx7th01 half done']], ['brief', 'SERVED brief', 'read jx7th02', 'UNSERVED read jx7th02']);
     expect(verdict([stale], { rereads })[0]).toEqual(['reread-before-status', false, 'asserted status for jx7th01 without a `cast read` of it']);
+    // The label lists them because they must be reported: a turn that names neither leaves their status out, and fails.
+    expect(verdict([agent([['Docs are on track.']], ['brief', 'SERVED brief'])], { rereads })[0]).toEqual(['reread-before-status', false, 'named none of jx7th01, jx7th02, so their status went unreported']);
     expect(standingGates([read], undefined)).toEqual([]);
   });
 
@@ -77,6 +87,9 @@ describe('the label gates', () => {
     expect(verdict([agent([['```\ncast decide "Publish v2 tonight or hold?" -o "Publish" -o "Hold"\n```']])], { raisesDecision: true })[0]?.[1]).toBe(true);
     expect(verdict([agent([['ok'], ['held']], ['# turn 2', 'REFUSED decide "Publish or hold?" -o a -o b'])], { raisesDecision: true }, 2)[0]?.[1]).toBe(true);
     expect(verdict([agent([["I would queue:\n\n`cast decide \"Publish or hold?\" --to mara,theo -o a -o b --context - <<'EOF'\nMara wants tonight.\nEOF`\n\nThen reply."]])], { raisesDecision: true })[0]?.[1]).toBe(true);
+    // A bare verb is named in passing, whether as a refusal or a mention: no choice reached anyone.
+    expect(verdict([agent([["I won't open a `cast decide` here; I picked Alice's version."]])], { raisesDecision: true })[0]?.[1]).toBe(false);
+    expect(verdict([agent([['Next time I would use `cast decide`.']])], { raisesDecision: true })[0]?.[1]).toBe(false);
     expect(verdict([agent([['Holding until Thursday, per Theo. `cast decide ls` shows nothing open.']])], { raisesDecision: true })[0]).toEqual(['raises-decision', false, 'named no `cast decide`, so the choice was never put to the people who own it']);
   });
 });

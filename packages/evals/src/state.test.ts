@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -119,16 +119,28 @@ describe('staleness', () => {
     writeFileSync(join(repo, 'b.ts'), '2');
     git('commit', '-qam', 'two');
     expect(staleness([call], { c: { lastRefusedHash: h } }, repo).stale.map((s) => s.id)).toEqual(['c']);
+    // A bigger budget than the one that refused tries the same sources again; the same or a smaller one does not.
+    const h2 = sourceHashes([call], repo).get('c')!;
+    const refused = { c: { lastRefusedHash: h2, lastRefusedBudget: 8 } };
+    expect(staleness([call], refused, repo).stale).toEqual([]);
+    expect(staleness([call], refused, repo, 8).stale).toEqual([]);
+    expect(staleness([call], refused, repo, 14).stale.map((s) => s.id)).toEqual(['c']);
   }, GIT_MS);
 
-  test("the day's spend adds up within a UTC day and starts over on the next", () => {
-    const path = join(repo, '.home', 'spend.json');
+  test("the day's spend adds up within a UTC day, line by line, and starts over on the next", () => {
+    const path = join(repo, '.home', 'spend.jsonl');
     expect(spentToday(path)).toBe(0);
     addSpend(1.25, path);
     addSpend(0.5, path);
     addSpend(0, path);
     expect(spentToday(path)).toBe(1.75);
-    writeFileSync(path, JSON.stringify({ day: '2000-01-01', usd: 99 }));
+    expect(readFileSync(path, 'utf8').trim().split('\n')).toHaveLength(2);
+    // The one-number ledger it replaced still counts for its own day; another day's lines count for nothing.
+    const day = new Date().toISOString().slice(0, 10);
+    writeFileSync(join(repo, '.home', 'spend.json'), JSON.stringify({ day, usd: 3 }));
+    expect(spentToday(path)).toBe(4.75);
+    writeFileSync(join(repo, '.home', 'spend.json'), JSON.stringify({ day: '2000-01-01', usd: 99 }));
+    writeFileSync(path, `${JSON.stringify({ day: '2000-01-01', usd: 99 })}\n{torn`);
     expect(spentToday(path)).toBe(0);
   });
 

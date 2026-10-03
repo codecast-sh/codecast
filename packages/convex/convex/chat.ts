@@ -43,7 +43,7 @@ import {
 import { HUDDLE_DIGEST_CLIENT_ID_PREFIX, parseRoomKey } from "@codecast/shared/contracts";
 import { RateLimitError, checkRateLimit } from "./rateLimit";
 import { matchHandle, resolveChatMentions, teamRoster } from "./lib/mentionResolve";
-import { dayBucket, hourBucket, takeQuota } from "./lib/chatQuota";
+import { agentPosterKey, dayBucket, hourBucket, reserveQuotas, takeQuota, takeQuotas } from "./lib/chatQuota";
 import { chatAttachmentValidator } from "./lib/chatAttachment";
 import { displayName } from "./lib/displayNames";
 import { purgeUserTeam, touchThread } from "./threadReads";
@@ -3850,8 +3850,8 @@ async function collectChatExcerpt(
 //  3. Rate-limited per sender, and it DEGRADES: a skipped relay costs an
 //     answer, a thrown one would cost the message. A mention reply (a session
 //     answering the session that named it) also spends the hourly mention
-//     caps and folds past them, so two sessions cannot wake each other
-//     without end.
+//     caps, charged to the replying session, and folds past them, so two
+//     sessions cannot wake each other without end.
 //  4. Idempotent on the message id, like the wake — a retried send never
 //     injects the same line twice.
 async function maybeRelayToOriginSession(
@@ -3902,22 +3902,31 @@ async function maybeRelayToOriginSession(
   if (!mentionReply && !(await canSendProductMessage(ctx, opts.senderId, conversation))) return no("no_access");
 
   const key = chatRelayClientId(opts.message._id);
+  const shortId = (conversation as any).short_id ?? conversation._id.toString().slice(0, 7);
+  // A mention reply is an agent waking an agent, so it spends the same hourly
+  // caps a mention does (C2). The sender cap is the replying SESSION's, not
+  // its person's: the person's own budget already paid for the mentions that
+  // asked, and an answer charged to it again would fold the replies of a
+  // session that named several of its owner's sessions at once. Over a cap
+  // the reply folds: the row is stamped and nothing is enqueued, so the asker
+  // finds the answer only by reading the thread. The folded line still names
+  // its conversation, so the mention rail does not charge a second time for
+  // the same line. The caps are reserved before the per-minute limit and
+  // spent after it, so neither refusal costs the other's credit.
+  const wakeCaps = mentionReply
+    ? await reserveQuotas(ctx, hourBucket(), mentionWakeQuotas(agentPosterKey(opts.senderId, opts.message.origin_session_id), String(conversation._id)))
+    : null;
+  if (mentionReply && !wakeCaps) {
+    if (!opts.message.mention_folded) await patchChat(ctx, opts.message._id, { mention_folded: true });
+    return { delivered: false, skipped: "folded", session_short_id: shortId, conversation_id: conversation._id.toString() };
+  }
   try {
     await chatRateLimit(ctx, opts.senderId, "chat.session_relay", ANCHOR_WAKE_LIMIT);
   } catch (error) {
     if (error instanceof ConvexError) return no("rate_limited");
     throw error;
   }
-  const shortId = (conversation as any).short_id ?? conversation._id.toString().slice(0, 7);
-  // A mention reply is an agent waking an agent, so it spends the same hourly
-  // caps a mention does (C2). Over them it folds like a mention: the row is
-  // stamped and the asker reads the answer on its next wake. The folded line
-  // still names its conversation, so the mention rail does not charge the
-  // sender a second time for the same line.
-  if (mentionReply && !(await takeMentionWakeCaps(ctx, opts.senderId, String(conversation._id)))) {
-    if (!opts.message.mention_folded) await patchChat(ctx, opts.message._id, { mention_folded: true });
-    return { delivered: false, skipped: "folded", session_short_id: shortId, conversation_id: conversation._id.toString() };
-  }
+  await wakeCaps?.();
 
   const nonce = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
   const { entries, channelEntries } = await collectChatExcerpt(ctx, {
@@ -4218,14 +4227,6 @@ async function wakeAnchorTurn(
 
 // ── Agent noise rules (docs/architecture/agent-channels.md C2/C3) ────────────
 
-// Who a machine's line is counted against: a bot by its user id, a session-typed
-// line by the session behind it. The session id is the caller's own stamp (an
-// honest downgrade, like `origin`): narrowing the count to a session is a
-// convenience for a fleet of sessions under one human, not a boundary.
-function agentPosterKey(userId: Id<"users">, originSessionId?: string): string {
-  return originSessionId ? `${userId}:${originSessionId}` : String(userId);
-}
-
 // Refuse the line when this poster is over its daily cap in this channel.
 // Counted before the insert; the mutation rolls back as a whole on a throw, so
 // a refused line does not spend the count it was refused for.
@@ -4257,23 +4258,18 @@ async function enforceAgentPostQuota(
 
 type MentionWakeResult = { roles: number; sessions: number; folded: number; skipped: string[] };
 
-// The hourly wake caps (C2): one more wake from `senderId` and one more into
-// `targetKey`, or false when either is spent and the wake must fold. Checked
-// per target so one folded target does not fold the rest, and taken LAST by
-// every caller, after each check that can skip the target for free: a wake
-// that cannot happen must not spend the sender's hourly credit. The mention
-// rail and the mention-reply relay both spend through here, so an agent
+// The hourly wake caps (C2): one more wake from `senderKey` and one more into
+// `targetKey`, both or neither; over either the wake folds. Checked per target
+// so one folded target does not fold the rest, and spent only after each check
+// that can skip the target: a wake that cannot happen must not spend hourly
+// credit. The mention rail (sender: the person) and the mention-reply relay
+// (sender: the replying session) both count against these keys, so an agent
 // answering an agent costs what a fresh mention costs.
-async function takeMentionWakeCaps(
-  ctx: MutationCtx,
-  senderId: Id<"users">,
-  targetKey: string,
-  hour = hourBucket(),
-): Promise<boolean> {
-  const sender = await takeQuota(ctx, `mention_from:${senderId}`, hour, MENTION_WAKES_PER_SENDER_HOUR);
-  if (!sender.ok) return false;
-  const target = await takeQuota(ctx, `mention_to:${targetKey}`, hour, MENTION_WAKES_PER_TARGET_HOUR);
-  return target.ok;
+function mentionWakeQuotas(senderKey: string, targetKey: string): { key: string; limit: number }[] {
+  return [
+    { key: `mention_from:${senderKey}`, limit: MENTION_WAKES_PER_SENDER_HOUR },
+    { key: `mention_to:${targetKey}`, limit: MENTION_WAKES_PER_TARGET_HOUR },
+  ];
 }
 
 // Wake the roles and sessions a line named. This is the ONE exception to "an
@@ -4317,7 +4313,8 @@ export async function wakeMentionedParties(
     ? await ctx.db.get(ctx.db.normalizeId("conversations", selfSession) ?? (selfSession as Id<"conversations">))
     : null;
 
-  const underCaps = (targetKey: string) => takeMentionWakeCaps(ctx, opts.senderId, targetKey, hour);
+  const underCaps = async (targetKey: string) =>
+    (await takeQuotas(ctx, hour, mentionWakeQuotas(String(opts.senderId), targetKey))).ok;
   const quoted = (lead: string, tail: string[]) => buildChatWake({
     channelName: opts.channel.name,
     channelKind: opts.channel.kind,

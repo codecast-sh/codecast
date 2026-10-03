@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { syncKnockToasts, type KnockAnswers } from "./knockToasts";
+import { guestsStillWaiting, syncGuestWaitingToasts, syncKnockToasts, type KnockAnswers } from "./knockToasts";
 
 function fakeToaster() {
   const shown: Array<{ message: string; data: any }> = [];
@@ -96,4 +96,67 @@ test("only the window that tells the person toasts, and a new knock is also a sy
   // The same knock shown again (the stage closed on it) is not a second banner.
   syncKnockToasts({ roomKey: ROOM, current: [guest], fresh: [guest], shown: ids, stageOpen: false, answers: answers().a, leader: true, notify, toast: t });
   expect(told).toHaveLength(1);
+});
+
+// ── A guest at a door nobody is behind ───────────────────────────────────────
+
+const waiting = (id: string, over: Record<string, unknown> = {}) => ({
+  guest_id: id,
+  name: "Ada",
+  room_key: ROOM,
+  title: "#design" as string | null,
+  knocked_at: 10,
+  present_until: 1_000,
+  ...over,
+});
+
+test("a guest waiting where nobody is gets a toast with Join, a banner, and is reported as told, once", () => {
+  const { t, shown, dismissed } = fakeToaster();
+  const joined: string[] = [];
+  const told: string[][] = [];
+  const banners: string[] = [];
+  const run = (list: any[], ids: Set<string>) =>
+    syncGuestWaitingToasts({
+      waiting: list,
+      shown: ids,
+      join: (room) => joined.push(room),
+      told: (g) => told.push(g),
+      notify: (title) => banners.push(title),
+      toast: t,
+    });
+  let ids = run([waiting("g1")], new Set());
+  expect(shown).toHaveLength(1);
+  expect(shown[0].message).toBe("Ada (guest) is waiting to join #design");
+  expect(shown[0].data.duration).toBe(Infinity);
+  shown[0].data.action.onClick();
+  expect(joined).toEqual([ROOM]);
+  expect(told).toEqual([["g1"]]);
+  expect(banners).toEqual(["Ada (guest) is waiting to join #design"]);
+  // The same guest on the next push (their beat) is not told about twice.
+  ids = run([waiting("g1", { present_until: 2_000 })], ids);
+  expect(shown).toHaveLength(1);
+  expect(told).toHaveLength(1);
+  // She gave up, or was let in: the toast goes with her.
+  ids = run([], ids);
+  expect(dismissed).toEqual(["guest-waiting:g1"]);
+  expect(ids.size).toBe(0);
+});
+
+test("a meeting with no name is still a sentence, and a window that is not the one that tells stays quiet", () => {
+  const { t, shown, dismissed } = fakeToaster();
+  const told: string[][] = [];
+  const base = { join: () => {}, told: (g: string[]) => told.push(g), toast: t };
+  syncGuestWaitingToasts({ ...base, waiting: [waiting("g1", { title: null })], shown: new Set() });
+  expect(shown[0].message).toBe("Ada (guest) is waiting to join your call");
+  const ids = syncGuestWaitingToasts({ ...base, waiting: [waiting("g2")], shown: new Set(["guest-waiting:g9"]), leader: false });
+  expect(ids.size).toBe(0);
+  expect(dismissed).toEqual(["guest-waiting:g9"]);
+  // Nothing shown here, so nothing is claimed to have been told.
+  expect(told).toEqual([["g1"]]);
+});
+
+test("a guest whose page closed, or whose room I am sitting in, is not waiting for me", () => {
+  const list = [waiting("g1"), waiting("g2", { present_until: 400 }), waiting("g3", { room_key: "people:u1,u9" })];
+  expect(guestsStillWaiting(list, 500, null).map((g) => g.guest_id)).toEqual(["g1", "g3"]);
+  expect(guestsStillWaiting(list, 500, ROOM).map((g) => g.guest_id)).toEqual(["g3"]);
 });

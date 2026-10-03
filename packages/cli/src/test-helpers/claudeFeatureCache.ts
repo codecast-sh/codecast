@@ -22,3 +22,10 @@ export function machineClaudeFeatureCache(): Record<string, unknown> {
   const answered = Object.fromEntries(ANSWERED_PROMPTS.filter((k) => machine[k] !== undefined).map((k) => [k, machine[k]]));
   return { cachedGrowthBookFeatures: machine.cachedGrowthBookFeatures ?? {}, cachedGrowthBookFeaturesAt: Date.now(), ...answered };
 }
+
+// Whether this machine's cached flags turn on the <pasted_content> paste
+// wrapper, so a scratch pane seeded from them wraps a paste the same way.
+export function machinePasteWrapperOn(): boolean {
+  const features = machineClaudeFeatureCache().cachedGrowthBookFeatures as Record<string, unknown>;
+  return features.tengu_virtual_pancake === true;
+}

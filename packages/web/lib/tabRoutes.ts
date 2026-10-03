@@ -62,7 +62,7 @@ const NON_TAB_EXACT = new Set([
 // readable, no shell. The tab shell intercepting one would rewrite that
 // window's URL and paint a blank pane. "/repo" is a different route and stays
 // tab-routable — the rule below matches "/r" and "/r/…" only.
-const NON_TAB_PREFIXES = ["/settings", "/auth", "/join", "/share", "/blog", "/documentation", "/compare", "/a", "/r", "/slack/connect"];
+const NON_TAB_PREFIXES = ["/settings", "/auth", "/join", "/share", "/meet", "/blog", "/documentation", "/compare", "/a", "/r", "/slack/connect"];
 
 export function isNonTabRoute(path: string): boolean {
   const clean = path.split("?")[0].split("#")[0];

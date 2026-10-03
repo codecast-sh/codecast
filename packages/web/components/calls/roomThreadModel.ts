@@ -62,7 +62,9 @@ export type RoomEventKind =
   | "transcribe_off"
   | "record_on"
   | "record_off"
-  | "record_deleted";
+  | "record_deleted"
+  | "guest_admitted"
+  | "guest_removed";
 
 export type AgentRef = {
   conversation_id: string;

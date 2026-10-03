@@ -114,10 +114,19 @@ export const list = query({
   },
 });
 
-export type RoomEvent = "agent_joined" | "agent_left" | "transcribe_on" | "transcribe_off" | "record_on" | "record_off" | "record_deleted";
+export type RoomEvent =
+  | "agent_joined"
+  | "agent_left"
+  | "transcribe_on"
+  | "transcribe_off"
+  | "record_on"
+  | "record_off"
+  | "record_deleted"
+  | "guest_admitted"
+  | "guest_removed";
 
 /** Something the room saw, as a row in its thread: an agent came or went,
- *  transcription went on or off. `user_id` is who did it. A recording has no
+ *  transcription went on or off, somebody let a guest in or put one out. `user_id` is who did it. A recording has no
  *  room and no thread (callChat.list refuses a rec key), so nothing is
  *  written for one. Returns the row id, or null when nothing was written. */
 export async function postEvent(

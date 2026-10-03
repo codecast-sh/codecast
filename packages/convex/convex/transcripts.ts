@@ -38,6 +38,7 @@ import {
   isRoomTranscribeOff,
   isSeat,
   liveMembers,
+  readRoomState,
 } from "./callRooms";
 import { isTeamMember } from "./privacy";
 import { teamHasFeature } from "./teamFeatures";
@@ -68,6 +69,7 @@ import {
   ownRoomChunkHeader,
   parseRoomKey,
   sessionRoomConversationId,
+  shareIncludesVideo,
   unionTranscribeLanguages,
 } from "@codecast/shared/contracts";
 import { characterOf } from "@codecast/shared/contracts/sessionCharacter";
@@ -77,7 +79,7 @@ import { nextShortId } from "./counters";
 import { enqueuePush } from "./pushRouter";
 import { agentIdentity, claimRoomRows, liveTranscriptFor, postEvent } from "./callChat";
 import { stopRoomRecording } from "./lib/callRecordingRuns";
-import { endGuestAdmissions, noteGuestAttendance } from "./lib/callGuestAdmission";
+import { callGuestsOnRecord, endGuestAdmissions, noteGuestAttendance } from "./lib/callGuestAdmission";
 import { scheduleFaceJoin, scheduleFaceLeave } from "./tavusPal";
 import { CHEAP_MODEL, postMessages, replyText, type SurfaceRequest } from "./lib/anthropic";
 
@@ -933,14 +935,19 @@ export async function endTranscript(
  *  record carries on. */
 export const HUDDLE_GRACE_MS = 3 * 60_000;
 
-/** When a live huddle went quiet: the stamp the last leave left, else the
- *  last lease any seat refreshed (a tab that died never leaves). SEATS ONLY:
- *  a prewarm row is somebody holding a connection open after the huddle
- *  died, and dating the end from it would inflate the call by up to ninety
- *  seconds. */
-function quietSince(t: Doc<"transcripts"> | null, rows: Array<{ last_seen: number; prewarm?: boolean }>): number | null {
+/** When a live huddle went quiet: the stamp the last leave left on the
+ *  record, else the latest of the room's own emptied stamp (the last leave,
+ *  with or without a record: call_room_state.emptied_at) and the last lease
+ *  any seat refreshed (a tab that died never leaves). SEATS ONLY: a prewarm
+ *  row is somebody holding a connection open after the huddle died, and
+ *  dating the end from it would inflate the call by up to ninety seconds. */
+function quietSince(
+  t: Doc<"transcripts"> | null,
+  rows: Array<{ last_seen: number; prewarm?: boolean }>,
+  emptiedAt?: number,
+): number | null {
   if (t?.idle_since) return t.idle_since;
-  const lastSeen = rows.filter(isSeat).reduce((m, r) => Math.max(m, r.last_seen), 0);
+  const lastSeen = rows.filter(isSeat).reduce((m, r) => Math.max(m, r.last_seen), emptiedAt ?? 0);
   return lastSeen || null;
 }
 
@@ -948,16 +955,23 @@ function quietSince(t: Doc<"transcripts"> | null, rows: Array<{ last_seen: numbe
  *  this the same huddle", for the people coming back (resumeOrEndHuddle) and
  *  for the guests they let in (huddleAlive), so the two can never disagree.
  *  With a live record, a record nobody dated yet counts as just gone quiet.
- *  Without one (transcription off) the seats' own last beats date it, which
- *  a lapse leaves behind and a deliberate leave does not: the room's last
- *  person pressing Leave ends a huddle nobody is recording at once. */
+ *  Without one (transcription off, or nobody scribing yet) the room's own
+ *  stamps date it: when the last person left, or when the last seat lapsed.
+ *  Both cases get the same grace, so a teammate who reloads the tab comes
+ *  back to the same huddle whether or not anything was transcribing it. */
 function withinHuddleGrace(
   t: Doc<"transcripts"> | null,
   rows: Array<{ last_seen: number; prewarm?: boolean }>,
   now: number,
+  emptiedAt?: number,
 ): boolean {
-  const quiet = t ? (quietSince(t, rows) ?? now) : quietSince(null, rows);
+  const quiet = t ? (quietSince(t, rows, emptiedAt) ?? now) : quietSince(null, rows, emptiedAt);
   return quiet !== null && now - quiet < HUDDLE_GRACE_MS;
+}
+
+/** When the room's last leave emptied it, from the room's state row. */
+async function roomEmptiedAt(ctx: any, roomKey: string): Promise<number | undefined> {
+  return (await readRoomState(ctx, roomKey))?.emptied_at;
 }
 
 /** Is a huddle running in this room right now? Somebody from the team is
@@ -970,7 +984,7 @@ export async function huddleAlive(ctx: any, roomKey: string, now: number): Promi
     .withIndex("by_room", (q: any) => q.eq("room_key", roomKey))
     .collect();
   if (liveMembers(rows, now).length > 0) return true;
-  return withinHuddleGrace(await liveTranscriptFor(ctx, roomKey), rows, now);
+  return withinHuddleGrace(await liveTranscriptFor(ctx, roomKey), rows, now, await roomEmptiedAt(ctx, roomKey));
 }
 
 /** The last person left the room: its live huddle waits out the grace, and
@@ -996,7 +1010,7 @@ export async function resumeOrEndHuddle(
   rows: Array<{ last_seen: number; prewarm?: boolean }>,
 ): Promise<boolean> {
   const t = await liveTranscriptFor(ctx, roomKey);
-  if (withinHuddleGrace(t, rows, now)) {
+  if (withinHuddleGrace(t, rows, now, await roomEmptiedAt(ctx, roomKey))) {
     if (t?.idle_since) await ctx.db.patch(t._id, { idle_since: undefined });
     return true;
   }
@@ -1783,6 +1797,11 @@ async function getCallCore(
       added_by: r.added_by ? String(r.added_by) : String(t.started_by),
     })),
     sessions: await linkedSessions(ctx, userId, t._id),
+    // The people from outside the team who were let in, each already marked
+    // "(guest)" in the name, with `spoke` matched by identity against
+    // `participants` (who the scribe heard), so a page lists the listeners
+    // from here without matching names.
+    guests: await callGuestsOnRecord(ctx, t),
     segments: segs.map((s: Doc<"transcript_segments">) => ({
       seq: s.seq,
       speaker_id: s.speaker_id,
@@ -2053,7 +2072,14 @@ export const cliGetCall = query({
     const auth = await verifyApiToken(ctx, args.api_token, false);
     if (!auth) throw new Error("Unauthorized");
     const t = await resolveCallRef(ctx, auth.userId, args.transcript_id);
-    return t ? getCallCore(ctx, auth.userId, t._id) : null;
+    const call = t ? await getCallCore(ctx, auth.userId, t._id) : null;
+    if (!call) return null;
+    // The share token is the whole secret of the public page, and what the
+    // CLI prints lands in a session transcript that can be read more widely
+    // than the call. An agent learns whether the call is shared, never how
+    // to open it; the page's share control is where a person copies a link.
+    const { share_token, ...rest } = call;
+    return { ...rest, shared: !!share_token, video_shared: shareIncludesVideo(t!) };
   },
 });
 

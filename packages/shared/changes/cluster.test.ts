@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { commit, MIN, T0 } from "./__fixtures__/commit";
 import { littlebirdDay } from "./__fixtures__/littlebird";
 import days from "./__fixtures__/codecastDays.json";
-import { buildLayerZero, type LayerZeroInput } from "./cluster";
+import { buildLayerZero, SPREAD_AREAS, type LayerZeroInput } from "./cluster";
 import type { ChangeCommit, LayerZeroStory, VisibleConversation } from "./types";
 
 const REPO = "codecast-sh/codecast";
@@ -160,6 +160,20 @@ describe("rules (a) to (c) in isolation", () => {
     expect(r.stories[0].task_ids).toEqual(["ct1"]);
   });
 
+  test("a session crossing SPREAD_AREAS mid-day trades its anchored story for rule (b) stories that still name it", () => {
+    const areas = ["web", "cli", "convex", "mobile"];
+    const cs = areas.map((a, i) => commit({ sha: `w${i}`, subject: `feat(${a}): step ${i}`, conversation_id: "s9", timestamp: T0 + i * 20 * MIN, paths: { [`packages/${a}/x.ts`]: 10 } }));
+    const visible = [{ conversation_id: "s9" }];
+    const morning = build({ commits: cs.slice(0, SPREAD_AREAS - 1), visible });
+    expect(morning.stories).toHaveLength(1);
+    expect(morning.stories[0].anchor).toBe("s9");
+    const evening = build({ commits: cs, visible });
+    expect(evening.stories.map((s) => s.anchor)).not.toContain("s9");
+    expect(evening.stories.map((s) => s.story_key)).not.toContain(morning.stories[0].story_key);
+    expect(evening.stories).toHaveLength(areas.length);
+    for (const s of evening.stories) expect(s.conversation_ids).toEqual(["s9"]);
+  });
+
   test("rule (b) breaks on a 3 hour gap and on scope; a branch groups whole", () => {
     const cs = [
       commit({ sha: "m1", subject: "fix(cli): a", timestamp: T0, paths: { "packages/cli/a.ts": 1 } }),
@@ -177,6 +191,32 @@ describe("rules (a) to (c) in isolation", () => {
     expect(branch.area).toBe("web");
     expect(branch.release).toBeNull();
     expect(holding(r.stories, "m4")[0].scope).toBe("auth");
+  });
+
+  test("a linked commit opens its own story between unlinked neighbours, and their risk stays theirs", () => {
+    const bare = (i: number, over: Partial<ChangeCommit> = {}) =>
+      commit({ sha: `e${i}`, subject: `evals: round ${i}`, timestamp: T0 + i * 10 * MIN, paths: { "packages/evals/src/run.ts": 400 }, ...over });
+    const linked = commit({
+      sha: "cad1",
+      subject: "Hold the outreach cadence at three touches (ct-50897) (#3816)",
+      timestamp: T0 + 25 * MIN,
+      task_ids: ["ct-50897"],
+      paths: { "packages/evals/src/cadence.ts": 24 },
+    });
+    const cs = [bare(0), bare(1), bare(2, { schema_paths: ["packages/evals/migrations/0042_contact_effort.sql"] }), linked, bare(3), bare(4)];
+    const r = build({ commits: cs });
+    expect(r.stories.map((s) => s.commit_shas.join(",")).sort()).toEqual(["cad1", "e0,e1,e2,e3,e4"]);
+    const own = holding(r.stories, "cad1")[0];
+    expect(own.insertions).toBe(24);
+    expect(own.task_ids).toEqual(["ct-50897"]);
+    expect(own.risks).toEqual([]);
+    expect(holding(r.stories, "e0")[0].risks.map((x) => x.code)).toContain("schema");
+    // The unlinked cluster keeps the key it had before the linked commit existed.
+    const before = build({ commits: cs.filter((c) => c !== linked) });
+    expect(holding(r.stories, "e0")[0].story_key).toBe(holding(before.stories, "e0")[0].story_key);
+    // A squash merge with no stored link is told from the subject.
+    const bySubject = build({ commits: cs.map((c) => (c === linked ? { ...c, task_ids: undefined, subject: "Hold the outreach cadence at three touches (#3816)" } : c)) });
+    expect(holding(bySubject.stories, "cad1")[0].commit_shas).toEqual(["cad1"]);
   });
 
   test("PRs join by commit or by visible session", () => {

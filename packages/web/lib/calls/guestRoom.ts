@@ -9,6 +9,7 @@ import {
   createLocalAudioTrack,
   createLocalTracks,
   createLocalVideoTrack,
+  isBrowserSupported,
   type Participant,
   type RemoteTrack,
 } from "livekit-client";
@@ -97,6 +98,31 @@ export function canShareScreen(): boolean {
   return !/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
 }
 
+/** Can this browser hold a call at all? Guests open links from mail and chat
+ *  apps, whose built-in browsers often have no WebRTC or no way to open a
+ *  device; there the lobby would only offer a knock that ends in a failed
+ *  join, so the page says to open the link in a real browser instead. A
+ *  browser that HAS both and refuses the devices is a different thing: that
+ *  guest can still join and listen. */
+export function canJoinCalls(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return isBrowserSupported() && typeof navigator.mediaDevices?.getUserMedia === "function";
+}
+
+/** Has the browser already been allowed this device? null where it will not
+ *  say (Safari and Firefox do not answer for camera or microphone in every
+ *  version): then nothing is known, and nothing is asked on a guess. */
+async function deviceGranted(kind: "camera" | "microphone"): Promise<boolean | null> {
+  try {
+    const status = await navigator.permissions.query({ name: kind as PermissionName });
+    return status.state === "granted";
+  } catch {
+    return null;
+  }
+}
+
+const isDenial = (err: any) => err?.name === "NotAllowedError" || err?.name === "SecurityError";
+
 // ── The lobby ────────────────────────────────────────────────────────────────
 
 export type PreviewSnapshot = {
@@ -105,25 +131,45 @@ export type PreviewSnapshot = {
   /** Why a device is not on, in words with the fix (mediaFailureReason). */
   cameraError: string | null;
   micError: string | null;
+  /** The error is the browser (or the guest) saying no, not a device that is
+   *  missing or busy: only then is "allow it in the address bar" the fix. */
+  cameraDenied: boolean;
+  micDenied: boolean;
   /** Asking the browser right now (the permission prompt may be up). */
   asking: boolean;
   devices: DeviceLists;
   choice: DeviceChoice;
 };
 
+/** How the preview opens a device. LiveKit's own, and a seam: the order of
+ *  two answers to one permission prompt is the whole of the bug the queue
+ *  below exists for, and only a test holding the answers can replay it. */
+const OPENERS = { both: createLocalTracks, camera: createLocalVideoTrack, mic: createLocalAudioTrack };
+
 export class GuestPreview extends Emitter<PreviewSnapshot> {
   private meter: MicMeter | null = null;
   private handedOff = false;
   private disposed = false;
+  // Every request for a device, one after another. Two requests in flight at
+  // once (the page's opening prompt, and a press on a switch while it is up)
+  // both resolve when the prompt is allowed, and the second track would
+  // replace the first in the snapshot with nothing left holding the first: a
+  // camera light that stays on through the call and after Leave.
+  private queue: Promise<void> = Promise.resolve();
   // A headset plugged in while they choose shows up in the pickers at once.
   private stopWatching = onDeviceChange(() => void this.refreshDevices());
 
-  constructor(choice: DeviceChoice) {
+  constructor(
+    choice: DeviceChoice,
+    private openers: typeof OPENERS = OPENERS,
+  ) {
     super({
       video: null,
       audio: null,
       cameraError: null,
       micError: null,
+      cameraDenied: false,
+      micDenied: false,
       asking: false,
       devices: NO_DEVICES,
       choice,
@@ -139,28 +185,62 @@ export class GuestPreview extends Emitter<PreviewSnapshot> {
   }
 
   /** Open what the guest asked for: both in one request first, which is one
-   *  permission prompt rather than two; then whatever is still closed on its
-   *  own, so a refused camera leaves the microphone working and the page can
-   *  say which one is the problem. */
-  async start(want: { mic: boolean; camera: boolean }): Promise<void> {
+   *  permission prompt rather than two. When that fails for a device that is
+   *  missing or busy, whatever is still closed is asked for on its own, so a
+   *  machine with no camera still gets its microphone and the page can say
+   *  which one is the problem. When it fails because the answer was no, the
+   *  answer stands: asking for each again would put two more prompts in front
+   *  of somebody who just pressed Don't Allow (Safari and Firefox ask on every
+   *  request). Only a device the browser says is already allowed is opened. */
+  start(want: { mic: boolean; camera: boolean }): Promise<void> {
+    return this.enqueue(() => this.open(want));
+  }
+
+  private enqueue(run: () => Promise<void>): Promise<void> {
+    const next = this.queue.then(run, run);
+    this.queue = next.catch(() => {});
+    return next;
+  }
+
+  /** Resolves once the devices asked for are open or refused: a Join pressed
+   *  while the browser's prompt is up waits for the answer, so the guest
+   *  walks in with the camera and microphone they just allowed rather than
+   *  with none (the tracks a prompt grants after the hand-off are stopped). */
+  settled(): Promise<void> {
+    return this.queue;
+  }
+
+  private async open(want: { mic: boolean; camera: boolean }): Promise<void> {
     this.set({ asking: true });
+    let single = want;
     if (want.mic && want.camera && !this.snap.audio && !this.snap.video) {
       try {
-        const tracks = await createLocalTracks({ audio: micConstraints(this.snap.choice.micId), video: this.videoOptions() });
+        const tracks = await this.openers.both({ audio: micConstraints(this.snap.choice.micId), video: this.videoOptions() });
         if (this.disposed || this.handedOff) {
           for (const t of tracks) t.stop();
           return;
         }
         const audio = tracks.find((t): t is LocalAudioTrack => t.kind === Track.Kind.Audio) ?? null;
         const video = tracks.find((t): t is LocalVideoTrack => t.kind === Track.Kind.Video) ?? null;
-        this.set({ audio, video, micError: null, cameraError: null });
+        this.set({ audio, video, micError: null, cameraError: null, micDenied: false, cameraDenied: false });
         this.startMeter();
-      } catch {
-        // One of the two was refused or missing; the single requests below
-        // find out which.
+      } catch (err) {
+        if (isDenial(err)) {
+          const [mic, camera] = await Promise.all([deviceGranted("microphone"), deviceGranted("camera")]);
+          single = { mic: mic === true, camera: camera === true };
+          if (!this.disposed) {
+            this.set({
+              ...(single.mic ? {} : { micError: await mediaFailureReason("microphone", err), micDenied: true }),
+              ...(single.camera ? {} : { cameraError: await mediaFailureReason("camera", err), cameraDenied: true }),
+            });
+          }
+        }
+        // Otherwise one of the two is missing or busy; the single requests
+        // below find out which.
       }
     }
-    await Promise.all([want.mic ? this.openMic() : null, want.camera ? this.openCamera() : null]);
+    if (single.mic) await this.openMic();
+    if (single.camera) await this.openCamera();
     if (this.disposed) return;
     this.set({ asking: false });
     await this.refreshDevices();
@@ -168,21 +248,23 @@ export class GuestPreview extends Emitter<PreviewSnapshot> {
 
   async setCamera(on: boolean): Promise<void> {
     if (!on) {
-      this.snap.video?.stop();
-      this.set({ video: null, cameraError: null });
-      return;
+      return this.enqueue(async () => {
+        this.snap.video?.stop();
+        this.set({ video: null, cameraError: null, cameraDenied: false });
+      });
     }
-    await this.openCamera();
+    await this.enqueue(() => this.openCamera());
   }
 
   async setMic(on: boolean): Promise<void> {
     if (!on) {
-      this.stopMeter();
-      this.snap.audio?.stop();
-      this.set({ audio: null, micError: null });
-      return;
+      return this.enqueue(async () => {
+        this.stopMeter();
+        this.snap.audio?.stop();
+        this.set({ audio: null, micError: null, micDenied: false });
+      });
     }
-    await this.openMic();
+    await this.enqueue(() => this.openMic());
   }
 
   /** Switch a device in place: the preview keeps playing and the choice is
@@ -227,12 +309,15 @@ export class GuestPreview extends Emitter<PreviewSnapshot> {
   private async openCamera(): Promise<void> {
     if (this.snap.video) return;
     try {
-      const video = await createLocalVideoTrack(this.videoOptions());
-      // Gone to the call, or gone: a camera that opened late must not stay lit.
-      if (this.disposed || this.handedOff) return void video.stop();
-      this.set({ video, cameraError: null });
+      const video = await this.openers.camera(this.videoOptions());
+      // Gone to the call, or gone: a camera that opened late must not stay
+      // lit. Nor one the snapshot already has: only the snapshot's track is
+      // ever stopped, so a second one would be nobody's to turn off.
+      if (this.disposed || this.handedOff || this.snap.video) return void video.stop();
+      this.set({ video, cameraError: null, cameraDenied: false });
     } catch (err) {
-      this.set({ video: null, cameraError: await mediaFailureReason("camera", err) });
+      if (this.disposed) return;
+      this.set({ video: null, cameraError: await mediaFailureReason("camera", err), cameraDenied: isDenial(err) });
     }
   }
 
@@ -246,12 +331,13 @@ export class GuestPreview extends Emitter<PreviewSnapshot> {
   private async openMic(): Promise<void> {
     if (this.snap.audio) return;
     try {
-      const audio = await createLocalAudioTrack(micConstraints(this.snap.choice.micId));
-      if (this.disposed || this.handedOff) return void audio.stop();
-      this.set({ audio, micError: null });
+      const audio = await this.openers.mic(micConstraints(this.snap.choice.micId));
+      if (this.disposed || this.handedOff || this.snap.audio) return void audio.stop();
+      this.set({ audio, micError: null, micDenied: false });
       this.startMeter();
     } catch (err) {
-      this.set({ audio: null, micError: await mediaFailureReason("microphone", err) });
+      if (this.disposed) return;
+      this.set({ audio: null, micError: await mediaFailureReason("microphone", err), micDenied: isDenial(err) });
     }
   }
 
@@ -308,14 +394,22 @@ export type CallSnapshot = {
   choice: DeviceChoice;
 };
 
+export type HandedTracks = { video: LocalVideoTrack | null; audio: LocalAudioTrack | null };
+const NO_TRACKS: HandedTracks = { video: null, audio: null };
+
 export class GuestCall extends Emitter<CallSnapshot> {
   readonly room: Room;
   private audioHost: HTMLDivElement;
   private audioEls = new Map<string, HTMLMediaElement>();
   private left = false;
+  // The lobby's tracks, this call's to publish and this call's to turn off.
+  // Held here from the moment they are handed over, so every way out (a
+  // Leave pressed while the token is still being fetched, a join that fails,
+  // a removal mid-join) stops them in the one place that ends a call.
+  private handed: HandedTracks;
   private stopWatching = onDeviceChange(() => void this.refreshDevices());
 
-  constructor(choice: DeviceChoice, wants: { mic: boolean; camera: boolean }) {
+  constructor(choice: DeviceChoice, wants: { mic: boolean; camera: boolean }, tracks: HandedTracks = NO_TRACKS) {
     super({
       phase: "connecting",
       ended: null,
@@ -331,6 +425,7 @@ export class GuestCall extends Emitter<CallSnapshot> {
       error: null,
       choice,
     });
+    this.handed = tracks;
     this.room = new Room(
       huddleRoomOptions({ micDeviceId: choice.micId, cameraDeviceId: choice.cameraId, speakerDeviceId: choice.speakerId }),
     );
@@ -344,14 +439,20 @@ export class GuestCall extends Emitter<CallSnapshot> {
   getRoom = (): Room | null => this.room;
 
   /** Join with a minted token, publishing what the lobby handed over. A
-   *  device that fails here fails alone: the guest is in, and told. */
-  async connect(
-    creds: { url: string; token: string },
-    tracks: { video: LocalVideoTrack | null; audio: LocalAudioTrack | null },
-  ): Promise<void> {
+   *  device that fails here fails alone: the guest is in, and told. A call
+   *  left before or while it connects never stays in the room: leave() has
+   *  already run its disconnect against a room that was not connected yet,
+   *  so the one that just connected is hung up here. */
+  async connect(creds: { url: string; token: string }): Promise<void> {
+    if (this.left) return;
     bindCallCursors(this.room);
     await this.room.connect(creds.url, creds.token);
-    if (this.left) return;
+    if (this.left) {
+      await this.room.disconnect().catch(() => {});
+      this.teardownAudio();
+      return;
+    }
+    const tracks = this.handed;
     const lp = this.room.localParticipant;
     try {
       if (tracks.audio) await lp.publishTrack(tracks.audio, { source: Track.Source.Microphone });
@@ -367,6 +468,18 @@ export class GuestCall extends Emitter<CallSnapshot> {
     }
     this.refresh();
     void this.refreshDevices();
+  }
+
+  /** Join again after the connection dropped, in place of the call that
+   *  lost it: no lobby in between (the stage stays up under its
+   *  "Reconnecting" line), so nothing is handed over and the devices open the
+   *  way the guest last left them (`wants`), never back on by themselves. */
+  async reconnectWith(creds: { url: string; token: string }): Promise<void> {
+    await this.connect(creds);
+    if (this.left) return;
+    const { mic, camera } = this.snap.wants;
+    if (mic) await this.setMic(true);
+    if (camera) await this.setCamera(true);
   }
 
   async refreshDevices(): Promise<void> {
@@ -433,6 +546,10 @@ export class GuestCall extends Emitter<CallSnapshot> {
   async leave(): Promise<void> {
     this.left = true;
     this.stopWatching();
+    // Published or not: a track the room never took is not stopped by its
+    // disconnect, and stopping one twice is nothing.
+    this.handed.video?.stop();
+    this.handed.audio?.stop();
     await this.room.disconnect().catch(() => {});
     this.teardownAudio();
   }
@@ -535,7 +652,11 @@ export class GuestCall extends Emitter<CallSnapshot> {
   }
 
   private teardownAudio() {
-    for (const el of this.audioEls.values()) el.remove();
+    for (const el of this.audioEls.values()) {
+      // Silent at once: an element taken out of the page keeps playing.
+      el.pause();
+      el.remove();
+    }
     this.audioEls.clear();
     this.audioHost.remove();
   }

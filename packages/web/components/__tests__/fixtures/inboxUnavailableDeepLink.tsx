@@ -12,7 +12,10 @@ for (const key of ["window", "document", "navigator", "HTMLElement", "Element", 
 let fetched: unknown = undefined;
 const messageSubscriptions = new Set<string>();
 const target = id;
-mock.module("../../../hooks/useMissingSessionRow", () => ({ useMissingSessionRow: (id: string | null) => id ? fetched : undefined }));
+mock.module("../../../hooks/useMissingSessionRow", () => ({
+  useMissingSessionRow: (id: string | null) => id ? fetched : undefined,
+  useMissingSessionLookup: (id: string | null) => ({ row: id ? fetched : undefined, failed: false }),
+}));
 const navigation = await import("next/navigation");
 mock.module("next/navigation", () => ({ ...navigation, useSearchParams: () => new URLSearchParams(target ? { s: target } : {}) }));
 const shortcuts = await import("../../../shortcuts");
@@ -33,7 +36,7 @@ mock.module("../../ActivityFeed", () => ({ ActivityFeed: () => <div data-home />
 for (const name of ["SharePopover", "PlanContextPanel", "WorkflowContextPanel", "TriggerContextPanel", "EmptyState"]) {
   mock.module(`../../${name}`, () => ({ [name]: () => null }));
 }
-mock.module("../../SessionErrorBanner", () => ({ SessionErrorBanner: () => null, SessionResumeBanner: () => null }));
+mock.module("../../SessionErrorBanner", () => ({ SessionErrorBanner: () => null, SessionResumeBanner: () => null, sessionLooksAbandoned: () => false }));
 
 const { act } = await import("react");
 const { createRoot } = await import("react-dom/client");

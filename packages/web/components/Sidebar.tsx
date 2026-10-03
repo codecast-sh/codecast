@@ -9,7 +9,7 @@ import { lazy, Suspense, useState, useMemo, useCallback, useRef, memo } from "re
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { AvatarImg } from "../lib/avatarCache";
-import { useQuery, useConvex } from "convex/react";
+import { useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { cleanTitle } from "../lib/conversationProcessor";
@@ -652,7 +652,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const nativeApp = nativeAppOffer();
   const offerNativeApp = nativeApp !== null && !(nativeApp === "mac" && hasUsedDesktop);
 
-  const favoritesQuery = useQuery(api.conversations.listFavorites);
+  const favoritesQuery = useQueryNoThrow(api.conversations.listFavorites, {}).data;
   // Read bookmarks straight from the store (synced globally in useSyncInboxSessions)
   // so an optimistic add/remove shows here instantly, with no round-trip.
   const bookmarks = useInboxStore((s) => s.bookmarks);

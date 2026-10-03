@@ -50,6 +50,14 @@ export function openingOf(snap: AnchorBriefSnap): string {
 export const turnText = (turn: FixtureTurn): string =>
   'text' in turn ? turn.text : buildAnchorWake({ ...turn.chat, deadlineMinutes: turn.chat.deadlineMinutes ?? Math.round(ANCHOR_REPLY_TIMEOUT_MS / 60_000) });
 
+/** The session's messages as a moment: `first` with the harness note, then each fixture turn. */
+const momentOf = (snap: AnchorBriefSnap, first: string): ConvoMessage[] =>
+  [withHarnessNote(first, snap), ...(snap.turns ?? []).map(turnText)].map((text, i) => ({ ...describeTurn(text, snap.opening?.at ?? snap.captured_at, i ? `turn-${i + 1}` : 'opening')[0]!, n: i + 1 }));
+
+/** Who a fixture's agent is, said plainly; its judge reads this where the opening would be. */
+const agentLine = (facts: NonNullable<AnchorBriefSnap['facts']>): string =>
+  `(The agent's opening instructions are the prompt under test and are not shown. The agent is ${facts.name}, the ${facts.scopeType === 'team' ? 'team' : 'personal'} workspace's standing agent for ${facts.scopeLabel}${facts.role ? `, seated as the role @${facts.role.handle}` : ''}.)`;
+
 /** The run turn each chat wake's placeholder arrived in: the opening is turn 1, a fixture's first turn is turn 2. */
 const placeholderTurns = (snap: AnchorBriefSnap): Record<string, number> =>
   Object.fromEntries((snap.turns ?? []).flatMap((t, i) => ('chat' in t ? [[String(t.chat.placeholderId), i + 2]] : [])));
@@ -103,8 +111,10 @@ const impl: SurfaceImpl = {
   // The route gates (frozen-reads, no-unexpected-writes) hold every turn; a fixture's label adds its scenario's gate over the turns after the opening.
   gates: (snap: AnchorBriefSnap, out, label?: StandingLabel) => standingGates(out.agents, label, gradedFrom(snap), [], { placeholderTurns: placeholderTurns(snap) }),
 
-  describe: (snap: AnchorBriefSnap): ConvoMessage[] =>
-    [withHarnessNote(openingOf(snap), snap), ...(snap.turns ?? []).map(turnText)].map((text, i) => ({ ...describeTurn(text, snap.opening?.at ?? snap.captured_at, i ? `turn-${i + 1}` : 'opening')[0]!, n: i + 1 })),
+  describe: (snap: AnchorBriefSnap): ConvoMessage[] => momentOf(snap, openingOf(snap)),
+
+  // A fixture's opening is rendered by the builder under test, so its judge reads who the agent is in its place; a real freeze's opening is the text prod sent, the same in every arm.
+  judgeMoment: (snap: AnchorBriefSnap): ConvoMessage[] => momentOf(snap, snap.opening || !snap.facts ? openingOf(snap) : agentLine(snap.facts)),
 
   // A chat wake tells the agent to fill its placeholder with `cast chat reply`; that write is the wake's, so it is allowed for the wake's own placeholder and nothing else.
   allowedRefusals: (snap: AnchorBriefSnap) => Object.keys(placeholderTurns(snap)).map((ph) => `^chat reply ["']?${ph}\\b`),

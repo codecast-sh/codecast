@@ -24,6 +24,7 @@ import { promisify } from "node:util";
 import type { MirrorStamp } from "./apply.js";
 import { projectPathMappings, type ProjectRegistration } from "./projectRefresh.js";
 import { remapContextPaths } from "./transform.js";
+import { indexLineFiles } from "@codecast/shared/memory";
 
 const execFileAsync = promisify(execFile);
 const sha256 = (b: Buffer | string) => createHash("sha256").update(b).digest("hex");
@@ -63,11 +64,6 @@ export function sshMemoryReader(host: RemoteHost): HostMemoryReader {
   };
 }
 
-/** The memory files a MEMORY.md line links to. */
-function linkedFiles(line: string): string[] {
-  return [...line.matchAll(/\]\(([^)\s]+\.md)\)/g)].map((m) => m[1]!);
-}
-
 /**
  * MEMORY.md from both sides. The host's copy is the laptop's index as it was
  * at the last push plus whatever its sessions added, so a line-by-line union
@@ -77,11 +73,11 @@ function linkedFiles(line: string): string[] {
  * cloud session wrote.
  */
 export function mergeMemoryIndex(laptop: string, host: string, present: (file: string) => boolean = () => true): string {
-  const linked = new Set(laptop.split("\n").flatMap(linkedFiles));
+  const linked = new Set(laptop.split("\n").flatMap(indexLineFiles));
   const have = new Set(laptop.split("\n").map((l) => l.trimEnd()));
   const added = host.split("\n").map((l) => l.trimEnd()).filter((l) => {
     if (!l || have.has(l)) return false;
-    const files = linkedFiles(l);
+    const files = indexLineFiles(l);
     return files.length > 0 && files.every((f) => !linked.has(f) && present(f));
   });
   if (!added.length) return laptop;

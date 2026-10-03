@@ -120,3 +120,4 @@ export * from "./unattended";
 export * from "./handoffPrompt";
 export * from "./browserExtension";
 export type { AskResult } from "./sessionAsk";
+export * from "./systemResources";

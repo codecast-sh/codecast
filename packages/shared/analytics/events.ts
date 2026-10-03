@@ -37,6 +37,8 @@ export const CODECAST_EVENTS = defineCatalog({
   // The landing page tour film: a start, and each jump to a chapter.
   landing_tour_started: { chapter: COUNT },
   landing_tour_chapter: { chapter: COUNT, from: { type: "string", values: ["chapter_list", "section_link"] } },
+  // A click on a "Request early access" mail link, by what was asked for.
+  early_access_requested: { what: { type: "string", values: ["team", "org"] }, location: LOCATION },
 
   // Install and activation funnel (web server, personless).
   install_script_downloaded: { script: { type: "string", values: ["sh", "ps1"] } },

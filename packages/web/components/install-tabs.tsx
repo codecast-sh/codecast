@@ -8,7 +8,10 @@ const INSTALL_COMMANDS = {
   windows: 'powershell -c "irm codecast.sh/install.ps1 | iex"',
 };
 
-export function InstallTabs({ location = "unknown", showAlternatives = true }: { location?: string; showAlternatives?: boolean }) {
+/** `compact` is the slim strip the landing hero sets above its film: smaller tabs, body and copy button. */
+export function InstallTabs({ location = "unknown", showAlternatives = true, compact = false }: { location?: string; showAlternatives?: boolean; compact?: boolean }) {
+  const tab = compact ? "px-3 sm:px-4 py-1.5 text-xs" : "px-3 sm:px-5 py-2.5 text-sm";
+  const icon = compact ? "w-4 h-4" : "w-5 h-5";
   const [platform, setPlatform] = useState<InstallOs>(detectInstallOs);
   const [copied, setCopied] = useState(false);
 
@@ -24,7 +27,7 @@ export function InstallTabs({ location = "unknown", showAlternatives = true }: {
       <div className="flex items-center" style={{ backgroundColor: '#eee8d5' }}>
         <button
           onClick={() => setPlatform("unix")}
-          className="px-3 sm:px-5 py-2.5 text-sm font-medium whitespace-nowrap transition-all"
+          className={`${tab} font-medium whitespace-nowrap transition-all`}
           style={platform === "unix"
             ? { backgroundColor: '#002b36', color: '#fdf6e3' }
             : { color: '#657b83' }
@@ -34,7 +37,7 @@ export function InstallTabs({ location = "unknown", showAlternatives = true }: {
         </button>
         <button
           onClick={() => setPlatform("windows")}
-          className="px-3 sm:px-5 py-2.5 text-sm font-medium whitespace-nowrap transition-all"
+          className={`${tab} font-medium whitespace-nowrap transition-all`}
           style={platform === "windows"
             ? { backgroundColor: '#002b36', color: '#fdf6e3' }
             : { color: '#657b83' }
@@ -47,13 +50,13 @@ export function InstallTabs({ location = "unknown", showAlternatives = true }: {
           target="_blank"
           rel="noopener noreferrer"
           onClick={() => track("install_script_viewed", { location, platform })}
-          className="ml-auto px-3 sm:px-5 py-2.5 text-sm font-medium whitespace-nowrap transition-colors hover:text-[#002b36]"
+          className={`ml-auto ${tab} font-medium whitespace-nowrap transition-colors hover:text-[#002b36]`}
           style={{ color: '#93a1a1' }}
         >
           View <span className="hidden sm:inline">install </span>script
         </a>
       </div>
-      <div className="p-4 flex items-center justify-between gap-4" style={{ backgroundColor: '#002b36' }}>
+      <div className={`${compact ? "px-4 py-2" : "p-4"} flex items-center justify-between gap-4`} style={{ backgroundColor: '#002b36' }}>
         <code className="text-sm font-mono" style={{ color: '#eee8d5' }}>
           {platform === "unix" ? (
             INSTALL_COMMANDS.unix
@@ -66,7 +69,7 @@ export function InstallTabs({ location = "unknown", showAlternatives = true }: {
         </code>
         <button
           onClick={handleCopy}
-          className="group p-2 rounded-lg shrink-0 transition-all duration-200 hover:-translate-y-px hover:brightness-110 active:translate-y-0 active:brightness-95"
+          className={`group ${compact ? "p-1.5 rounded-md" : "p-2 rounded-lg"} shrink-0 transition-all duration-200 hover:-translate-y-px hover:brightness-110 active:translate-y-0 active:brightness-95`}
           style={copied
             ? { backgroundColor: '#859900', color: '#fdf6e3', boxShadow: '0 2px 12px rgba(133,153,0,0.45)' }
             : { background: 'linear-gradient(135deg, #e86c5d 0%, #cb4b16 100%)', color: '#fdf6e3', boxShadow: '0 2px 12px rgba(203,75,22,0.4)' }
@@ -74,11 +77,11 @@ export function InstallTabs({ location = "unknown", showAlternatives = true }: {
           title="Copy to clipboard"
         >
           {copied ? (
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg className={icon} fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
             </svg>
           ) : (
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+            <svg className={icon} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
               <rect x="9" y="9" width="11" height="11" rx="2" className="transition-transform duration-200 group-hover:translate-x-[1.5px] group-hover:translate-y-[1.5px]" />
               <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" className="transition-transform duration-200 group-hover:-translate-x-[1.5px] group-hover:-translate-y-[1.5px]" />
             </svg>

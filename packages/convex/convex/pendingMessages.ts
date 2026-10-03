@@ -391,6 +391,7 @@ export async function enqueuePendingMessage(
       ownerUserId: conversation.user_id,
       content: fields.content,
       clientId: fields.client_id,
+      human: fields.human,
       createdAt: Date.now(),
       held: true,
     });
@@ -420,6 +421,7 @@ export async function enqueuePendingMessage(
     imageStorageIds: fields.image_storage_ids,
     clientId: fields.client_id,
     origin: fields.origin,
+    human: fields.human,
     createdAt: Date.now(),
     delivery: fenced ?? undefined,
   });

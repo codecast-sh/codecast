@@ -180,6 +180,16 @@ export function validateChangeCard(input: unknown): ChangeCardValidation {
     if (rec.verdict === "ship" && failing.length) err("recommend.verdict", `ship over failing checks (${failing.join(", ")}); recommend revise or drop`);
     // A red proof check still red, or a check the change broke, is a failing
     // check too: Ship needs the proof green (LE8).
+    // A count the reason gives for the proof ("all three proven misses") must
+    // be the proof's own count, or the card says two numbers for one thing.
+    // A proof with nothing red is refused under proof already.
+    const proofRed = parsedProof ? parsedProof.before.filter((x) => !x.ok).length : 0;
+    if (proofRed && typeof rec.why === "string") {
+      const red = proofRed;
+      for (const n of proofCountsIn(rec.why)) {
+        if (n !== red) err("recommend.why", `says ${n} proven ${n === 1 ? "miss" : "misses"}, but the proof shows ${red}`);
+      }
+    }
     if (rec.verdict === "ship" && parsedProof) {
       const p = proofSummary(parsedProof);
       // A red check with no after at all is already named under proof.after.
@@ -201,6 +211,24 @@ export function validateChangeCard(input: unknown): ChangeCardValidation {
 
 // ── helpers the renderers share ──────────────────────────────────────────────
 
+const COUNT_WORDS: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, both: 2 };
+
+/**
+ * The counts a sentence gives for the proof: "all three proven misses", "2 red
+ * checks", "both misses". Only words that name the proof count: "failing
+ * checks" and bare "checks" are left alone, because the card's own checks
+ * (verify, eval, review) fail too and a reason may count those.
+ */
+export function proofCountsIn(text: string): number[] {
+  const out: number[] = [];
+  const re = /\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|both)\s+(?:proven\s+)?(?:miss(?:es)?|red checks?|proof checks?)\b/gi;
+  for (const m of text.matchAll(re)) {
+    const w = m[1]!.toLowerCase();
+    out.push(/^\d+$/.test(w) ? Number(w) : COUNT_WORDS[w]!);
+  }
+  return out;
+}
+
 export interface ProofSummary {
   /** Checks red before the change. */
   red: number;
@@ -210,9 +238,9 @@ export interface ProofSummary {
   stillRed: string[];
   /** Green before (or new) and red after: what the change broke. */
   broke: string[];
-  /** "3 of 3 checks went red to green", or the honest version of it. */
+  /** "4 proven misses, all fixed", or the honest version of it. */
   label: string;
-  /** The same in a dense line: "proof 3/3", "proof 1/2, 1 broke". */
+  /** The same in a dense line: "4/4 misses fixed", "1/2 misses fixed, 1 broke". */
   short: string;
 }
 
@@ -222,11 +250,13 @@ export function proofSummary(proof: ChangeCard["proof"]): ProofSummary {
   const fixed = redBefore.filter((n) => after.get(n) === true).length;
   const stillRed = redBefore.filter((n) => after.get(n) !== true);
   const broke = proof.after.filter((x) => !x.ok && !redBefore.includes(x.name)).map((x) => x.name);
-  const noun = (n: number) => (n === 1 ? "check" : "checks");
+  // "Misses", never "checks": the card's own checks (Verify, Eval, Review)
+  // are a separate count, and one word for two things reads as a contradiction.
+  const misses = (n: number) => `${n} proven ${n === 1 ? "miss" : "misses"}`;
   let label: string;
-  if (!redBefore.length) label = proof.after.length ? `${proof.after.length} ${noun(proof.after.length)}, none shown red first` : "No proof recorded";
-  else label = `${fixed} of ${redBefore.length} ${noun(redBefore.length)} went red to green`;
-  let short = redBefore.length ? `proof ${fixed}/${redBefore.length}` : "no proof";
+  if (!redBefore.length) label = proof.after.length ? `${proof.after.length} ${proof.after.length === 1 ? "check" : "checks"}, none shown failing first` : "No proof recorded";
+  else label = `${misses(redBefore.length)}, ${fixed === redBefore.length ? (fixed === 1 ? "fixed" : "all fixed") : `${fixed} fixed`}`;
+  let short = redBefore.length ? `${fixed}/${redBefore.length} misses fixed` : "no proof";
   if (broke.length) { label += `, ${broke.length} broke`; short += `, ${broke.length} broke`; }
   return { red: redBefore.length, fixed, stillRed, broke, label, short };
 }

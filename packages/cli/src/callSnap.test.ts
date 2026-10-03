@@ -18,11 +18,16 @@ import {
   outputPaths,
   parseSceneScores,
   parseSnapTarget,
+  parseSnapTime,
   pickSceneMoments,
+  probeTimes,
   sceneArgs,
-  lastFrameArgs,
-  lastShownMs,
-  TAIL_READ_MS,
+  probeArgs,
+  shownTimes,
+  ffmpegRunner,
+  findFfmpeg,
+  LOOKBACK_STEPS_MS,
+  DROP_BLANK_FRAMES,
   serveSources,
   SignedSources,
   snapCall,
@@ -239,6 +244,17 @@ describe("ffmpeg arguments", () => {
     expect(frameArgs("https://live.jpeg", null, "/o/f.jpg")).toContain("-q:v");
   });
 
+  test("a frame found by a wide probe is grabbed from where that probe read, picked by trim", () => {
+    // cl-107's screen file decodes the frame shown at 8.65 s ahead of the
+    // 5.93 s keyframe, so a seek straight to 8.653 never sees it.
+    const args = frameArgs("x", 8_653, "/o/f.png", 0);
+    expect(args[args.indexOf("-ss") + 1]).toBe("0.000");
+    expect(args[args.indexOf("-vf") + 1]).toBe("trim=start=8.653,showinfo");
+    const direct = frameArgs("x", 8_653, "/o/f.png");
+    expect(direct[direct.indexOf("-ss") + 1]).toBe("8.653");
+    expect(direct[direct.indexOf("-vf") + 1]).toBe("showinfo");
+  });
+
   test("a scene pass: keyframes only, on the file's clock measured from its start", () => {
     const args = sceneArgs("https://bucket/s.mp4", 30_000, 90_000);
     expect(args.indexOf("-skip_frame")).toBeLessThan(args.indexOf("-i"));
@@ -248,6 +264,23 @@ describe("ffmpeg arguments", () => {
     expect(args).toContain("-start_at_zero");
     expect(args[args.indexOf("-ss") + 1]).toBe("30.000");
     expect(args[args.indexOf("-t") + 1]).toBe("90.000");
+  });
+
+  test("LiveKit's black filler is never a picture: probes and scene passes drop it before anything reads a frame", () => {
+    // cl-117: a stalled share was written as solid black between its real
+    // frames, and a probe that counted those landed the snap on black.
+    expect(DROP_BLANK_FRAMES).toContain("signalstats");
+    expect(DROP_BLANK_FRAMES).toContain("metadata=mode=select:key=lavfi.signalstats.YMAX");
+    const probe = probeArgs("x", 11_000, 2_000);
+    const pv = probe[probe.indexOf("-vf") + 1];
+    // One tap sees every frame (what a <video> shows), the last only pictures.
+    expect(pv.indexOf("showinfo")).toBeLessThan(pv.indexOf(DROP_BLANK_FRAMES));
+    expect(pv.indexOf(DROP_BLANK_FRAMES)).toBeLessThan(pv.lastIndexOf("showinfo"));
+    const scene = sceneArgs("x", 0, 10_000);
+    const sv = scene[scene.indexOf("-vf") + 1];
+    // Dropped before scoring, so a stall is no change rather than two cuts.
+    expect(sv.indexOf(DROP_BLANK_FRAMES)).toBeLessThan(sv.indexOf("select='gt(scene,0)'"));
+    expect(sv).toContain("metadata=print:key=lavfi.scene_score");
   });
 
   test("failures read as what happened", () => {
@@ -294,15 +327,24 @@ function harness(recs: SnapRecordings | null, sceneLog: string | ((args: string[
   const calls: string[][] = [];
   const ffmpeg: FfmpegRunner = async (args) => {
     calls.push(args);
-    if (args.includes("-copyts")) {
+    if (args.includes("-skip_frame")) {
       const r = typeof sceneLog === "function" ? sceneLog(args) : { code: 0, stderr: sceneLog };
       return { stdout: "", ...r };
+    }
+    // A probe: by default a dense file, with a frame exactly at the moment
+    // (trim's end is the moment plus 1 ms).
+    const trim = args.find((a) => a.startsWith("trim=end="));
+    if (trim) {
+      const end = Number(/trim=end=([\d.]+)/.exec(trim)![1]);
+      return { code: 0, stdout: "", stderr: `[Parsed_showinfo_1] n:0 pts:1 pts_time:${(end - 0.001).toFixed(3)}` };
     }
     fs.writeFileSync(args[args.length - 1], "png");
     return { code: 0, stdout: "", stderr: "" };
   };
   const posts: Array<[string, any]> = [];
   const progress: string[] = [];
+  /** The runs that wrote a frame (a probe writes nothing). */
+  const grabs = () => calls.filter((a) => a.includes("-frames:v"));
   const deps = {
     post: async (route: string, body: any) => {
       posts.push([route, body]);
@@ -324,7 +366,7 @@ function harness(recs: SnapRecordings | null, sceneLog: string | ((args: string[
     }),
     progress: (line: string) => progress.push(line),
   };
-  return { dir, calls, posts, progress, deps, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
+  return { dir, calls, grabs, posts, progress, deps, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }
 
 async function refusal(p: Promise<unknown>): Promise<SnapError> {
@@ -348,8 +390,14 @@ describe("snapCall", () => {
     expect(f.path).toBe(path.join(h.dir, "cl-42_2m11s_screen.png"));
     expect(f.line).toMatchObject({ ref: "cl-42:2", speaker: "Ana", during: true });
     expect(f.call_url).toBe("https://codecast.sh/calls/k57call?t=131");
+    // The probe looks back from the moment; the grab reads from where the
+    // probe did and picks the frame it found (a millisecond early, onto that
+    // frame and not the next).
     expect(h.calls[0]).toContain("https://r2/s1.mp4");
-    expect(h.calls[0][h.calls[0].indexOf("-ss") + 1]).toBe("11.000");
+    expect(h.calls[0][h.calls[0].indexOf("-ss") + 1]).toBe("9.000");
+    const grab = h.grabs()[0];
+    expect(grab[grab.indexOf("-ss") + 1]).toBe("9.000");
+    expect(grab[grab.indexOf("-vf") + 1]).toBe("trim=start=10.999,showinfo");
     expect((fs.statSync(f.path).mode & 0o777).toString(8)).toBe("600");
     h.cleanup();
   });
@@ -368,6 +416,22 @@ describe("snapCall", () => {
     h.cleanup();
   });
 
+  test("--composite where only a share's file reaches: the share, and a note that it is not the room", async () => {
+    // The share's file began 10s before the room's.
+    const h = harness(recordings({}, [
+      { _id: "c1", run_id: "r1", kind: "composite", status: "ready", started_at: T + s(130), duration_ms: min(3), url: "https://r2/c1.mp4", live_frame_url: null },
+      { _id: "s1", run_id: "r1", kind: "screen", status: "ready", started_at: T + s(120), duration_ms: s(100), participant_identity: "u_ana", participant_name: "Ana", url: "https://r2/s1.mp4", live_frame_url: null },
+    ]));
+    const early = await snapCall("cl-42@2:05", { composite: true }, h.deps);
+    expect(early.frames[0]).toMatchObject({ kind: "screen", shows: "Ana's screen" });
+    expect(early.notes).toEqual(["The room was not being recorded at 2:05, so that frame is the shared screen instead."]);
+    // Once the room's file has begun, the room it is, and nothing to say.
+    const later = await snapCall("cl-42@2:15", { composite: true }, h.deps);
+    expect(later.frames[0].kind).toBe("composite");
+    expect(later.notes).toEqual([]);
+    h.cleanup();
+  });
+
   test("a range over a share: frames where the screen changed, bounded by --max", async () => {
     // The share file's own clock: changes at 20s and 55s into it, a flicker at 30s.
     const log = [
@@ -382,7 +446,7 @@ describe("snapCall", () => {
     // then the changes at 140s and 175s.
     expect(res.frames.map((f) => f.at_ms)).toEqual([s(131), s(140), s(175)]);
     expect(res.frames.every((f) => f.kind === "screen")).toBe(true);
-    const scene = h.calls.find((a) => a.includes("-copyts"))!;
+    const scene = h.calls.find((a) => a.includes("-skip_frame"))!;
     expect(scene[scene.indexOf("-ss") + 1]).toBe("11.000");
     const two = await snapCall("cl-42:2-4", { max: 2 }, h.deps);
     expect(two.frames.map((f) => f.at_ms)).toEqual([s(131), s(140)]);
@@ -405,7 +469,7 @@ describe("snapCall", () => {
     const res = await snapCall("cl-42:1-2", { max: 3 }, h.deps);
     expect(res.range).toBe("even");
     expect(res.frames.map((f) => f.at_ms)).toEqual([s(61), s(99), s(136)]);
-    expect(h.calls.some((a) => a.includes("-copyts"))).toBe(false);
+    expect(h.calls.some((a) => a.includes("-skip_frame"))).toBe(false);
     // --screen asks for a share, and there is none to give.
     const strict = await refusal(snapCall("cl-42:1-2", { screen: true }, h.deps));
     expect(strict.code).toBe("no_screen");
@@ -442,7 +506,8 @@ describe("snapCall", () => {
     expect(h.calls[0]).toContain("https://r2/c1.jpeg");
     const strict = await refusal(snapCall("cl-42", { screen: true }, h.deps));
     expect(strict.code).toBe("not_live");
-    expect(strict.message).toBe("A shared screen in cl-42 is being recorded, and its own picture can be read once the recording is saved. For the call as it is now, with the share in it, drop --screen.");
+    expect(strict.message).toBe("A shared screen in cl-42 is being recorded, and its own picture can be read once the recording is saved. For the call as it is now, with the share in it, drop --screen: cast call snap cl-42");
+    expect(strict.details.try).toEqual(["cast call snap cl-42"]);
     h.cleanup();
   });
 
@@ -499,41 +564,35 @@ describe("snapCall", () => {
     missing.cleanup();
   });
 
-  test("a grab past a file's last frame retries a second earlier; a broken read says why", async () => {
-    const h = harness(recordings());
-    let n = 0;
-    const flaky: FfmpegRunner = async (args) => {
-      n++;
-      if (n === 2) fs.writeFileSync(args[args.length - 1], "png");
-      return { code: 0, stdout: "", stderr: "" };
-    };
-    const res = await snapCall("cl-42:2", {}, { ...h.deps, ffmpeg: flaky });
-    expect(res.frames[0].path).toBeTruthy();
-    expect(n).toBe(2);
-    const broken: FfmpegRunner = async () => ({ code: 1, stdout: "", stderr: "Server returned 403 Forbidden" });
-    const err = await refusal(snapCall("cl-42:2", {}, { ...h.deps, ffmpeg: broken }));
-    expect(err.code).toBe("ffmpeg_failed");
-    expect(err.message).toContain("403");
-    h.cleanup();
-  });
-
-  test("a moment past a file's last written picture takes that picture and says from when", async () => {
-    // LiveKit's duration is how long the egress ran; a share that stopped
-    // changing wrote nothing after its last change (cl-107, 2026-10-02: a
-    // 25.5 s run held 14.7 s of picture). Line 2's frame is 11 s into the
-    // share's file; the file's last frame is at 6.5 s.
+  test("a quiet screen: the probe looks further back until it finds the picture on screen; a broken read says why", async () => {
+    // Line 2's frame is 11 s into Ana's file. Her screen last changed 6.5 s
+    // in: nothing in the 2 s before the moment, so the probe widens.
     const h = harness(recordings());
     const seen: string[][] = [];
     const sparse: FfmpegRunner = async (args) => {
       seen.push(args);
-      if (!args.includes("-sseof")) return { code: 0, stdout: "", stderr: "" };
-      fs.writeFileSync(args[args.length - 1], "png");
-      return { code: 0, stdout: "", stderr: "[Parsed_showinfo_0] n:0 pts:5 pts_time:5.000\n[Parsed_showinfo_0] n:1 pts:6 pts_time:6.500\n" };
+      if (args.includes("-frames:v")) {
+        fs.writeFileSync(args[args.length - 1], "png");
+        return { code: 0, stdout: "", stderr: "[Parsed_showinfo_0] n:0 pts:6 pts_time:6.500" };
+      }
+      const from = Number(args[args.indexOf("-ss") + 1]);
+      return { code: 0, stdout: "", stderr: from <= 6.5 ? "[Parsed_showinfo_1] n:0 pts:5 pts_time:5.000\n[Parsed_showinfo_1] n:1 pts:6 pts_time:6.500" : "" };
     };
     const res = await snapCall("cl-42:2", {}, { ...h.deps, ffmpeg: sparse });
-    expect(seen).toHaveLength(3);
-    expect(res.frames[0]).toMatchObject({ at_ms: s(131), offset_ms: 6500 });
-    expect(res.notes).toContain("No new picture of Ana's screen was written after 2:06, so the frame for 2:11 is the last one, from 2:06.");
+    expect(seen.map((a) => a[a.indexOf("-ss") + 1])).toEqual([
+      ((11_000 - LOOKBACK_STEPS_MS[0]) / 1000).toFixed(3),
+      ((11_000 - LOOKBACK_STEPS_MS[1]) / 1000 > 0 ? (11_000 - LOOKBACK_STEPS_MS[1]) / 1000 : 0).toFixed(3),
+      "0.000",
+    ]);
+    expect(seen[2][seen[2].indexOf("-vf") + 1]).toBe("trim=start=6.499,showinfo");
+    // The picture from 6.5 s, never the next one after 11 s.
+    expect(res.frames[0]).toMatchObject({ at_ms: s(131), offset_ms: 6500, citation_matches: true });
+    expect(res.notes).toContain("No new picture of Ana's screen was written after 2:06, so the frame for 2:11 is the one on screen since then.");
+
+    const broken: FfmpegRunner = async () => ({ code: 1, stdout: "", stderr: "Server returned 403 Forbidden" });
+    const err = await refusal(snapCall("cl-42:2", {}, { ...h.deps, ffmpeg: broken }));
+    expect(err.code).toBe("ffmpeg_failed");
+    expect(err.message).toContain("403");
     h.cleanup();
   });
 
@@ -546,23 +605,45 @@ describe("snapCall", () => {
     h.cleanup();
   });
 
-  test("last picture: a tail read on the file's own clock, the last logged time wins", () => {
-    const args = lastFrameArgs("https://bucket/s.mp4", "/o/f.png");
-    expect(args.indexOf("-sseof")).toBeLessThan(args.indexOf("-i"));
-    expect(args[args.indexOf("-sseof") + 1]).toBe(`-${(TAIL_READ_MS / 1000).toFixed(3)}`);
+  test("a probe: decodes from the lookback up to and including the moment, on the file's clock from its start", () => {
+    const args = probeArgs("https://bucket/s.mp4", 11_000, 2_000);
+    expect(args.indexOf("-ss")).toBeLessThan(args.indexOf("-i"));
+    expect(args[args.indexOf("-ss") + 1]).toBe("9.000");
     expect(args).toContain("-copyts");
-    expect(args.slice(-2)).toEqual(["-y", "/o/f.png"]);
-    expect(lastShownMs("pts_time:14.328\nx pts_time:14.461333 y")).toBe(14461);
-    expect(lastShownMs("no frames")).toBeNull();
+    expect(args).toContain("-start_at_zero");
+    expect(args[args.indexOf("-vf") + 1]).toBe(`trim=end=11.001,scale=320:-2,showinfo,${DROP_BLANK_FRAMES},showinfo`);
+    expect(args.slice(-3)).toEqual(["-f", "null", "-"]);
+    // A lookback past the file's start reads from its start.
+    expect(probeArgs("x", 1_000, 2_000)[probeArgs("x", 1_000, 2_000).indexOf("-ss") + 1]).toBe("0.000");
+    // A frame grab carries the same clock, so the time it logs is comparable.
+    const grab = frameArgs("x", 6_499, "/o/f.png");
+    expect(grab).toContain("-copyts");
+    expect(grab).toContain("-start_at_zero");
+    expect(shownTimes("pts_time:14.328\nx pts_time:14.461333 y")).toEqual([14_328, 14_461]);
+    expect(shownTimes("no frames")).toEqual([]);
   });
 
   test("the moment as a second word, the way an agent types it after `cast call cl-42 15:25`", async () => {
     const h = harness(recordings());
     expect((await snapCall("cl-42", {}, h.deps, "2")).frames[0].ref).toBe("cl-42@2:11");
     expect((await snapCall("cl-42", {}, h.deps, "@2:11")).frames[0]).toMatchObject({ ref: "cl-42@2:11", kind: "screen" });
-    const pair = await snapCall("cl-42", { max: 2 }, h.deps, "2:04");
-    expect(pair.target).toBe("cl-42:2-4");
-    expect(pair.notes.join(" ")).toContain("For the time 2:04, write cl-42@2:04");
+    h.cleanup();
+  });
+
+  test("a colon pair could be lines or a time, so it is refused with both spellings rather than guessed", async () => {
+    const h = harness(recordings());
+    for (const [target, extra] of [["cl-42", "2:04"], ["cl-42:2:04", undefined]] as const) {
+      const err = await refusal(snapCall(target, {}, h.deps, extra));
+      expect(err.code).toBe("ambiguous_moment");
+      expect(err.message).toContain("could be lines 2-4 or the time 2:04: write cl-42:2-4 for the lines, or cl-42@2:04 for the time.");
+      expect(err.details.try).toEqual(["cast call snap cl-42:2-4", "cast call snap cl-42@2:04"]);
+    }
+    // Lines the call does not have: still the time hint, never "no line".
+    const far = await refusal(snapCall("cl-42:12:34", {}, h.deps));
+    expect(far.code).toBe("ambiguous_moment");
+    expect(far.details.try).toContain("cast call snap cl-42@12:34");
+    // Nothing read from the server or the recording before refusing.
+    expect(h.calls).toHaveLength(0);
     h.cleanup();
   });
 
@@ -573,6 +654,13 @@ describe("snapCall", () => {
     const res = await snapCall("cl-42:1", {}, h.deps);
     expect(res.frames[0]).toMatchObject({ at_ms: s(62), ref: "cl-42@1:02", offset_ms: 600 });
     expect(res.notes.join(" ")).toContain("Line 1 began at 1:00, before it was being recorded; this frame is from 1:02, 2s into it.");
+    // Recording stopped partway through the line: that is the reason given,
+    // not a late start.
+    const stopped = harness(recordings({}, [{ ...recordings().recordings[0], duration_ms: s(10.8) }]));
+    const cut = await snapCall("cl-42:1", {}, stopped.deps);
+    expect(cut.frames[0]).toMatchObject({ at_ms: s(60) });
+    expect(cut.notes).toContain("Recording stopped at 1:00, during line 1; this frame is from 1:00.");
+    stopped.cleanup();
     // A line wholly before the press still refuses, with the stretches that were.
     const early = harness(recordings({}, [{ ...recordings().recordings[0], started_at: T + s(65) }]));
     expect((await refusal(snapCall("cl-42:1", {}, early.deps))).code).toBe("outside");
@@ -594,6 +682,26 @@ describe("snapCall", () => {
     h.cleanup();
   });
 
+  test("lines that began before Record was pressed spend no frames on the stretch nothing filmed", async () => {
+    // Record pressed at 1:50, line 1 said at 1:00: the room file runs from
+    // 1:50, Ana's screen from 2:00. Every frame lands inside a file, and the
+    // unfilmed start is said once rather than as missed frames.
+    const [room, screen] = recordings().recordings;
+    const h = harness(recordings({}, [{ ...room, started_at: T + s(110) }, screen]), ["frame:1 pts:1 pts_time:20", "lavfi.scene_score=0.7"].join("\n"));
+    const res = await snapCall("cl-42:1-4", { max: 4 }, h.deps);
+    expect(res.frames.every((f) => f.at_ms >= s(110))).toBe(true);
+    expect(res.frames.map((f) => f.kind)).toContain("composite");
+    expect(res.frames.map((f) => f.kind)).toContain("screen");
+    expect(res.notes).toEqual(["Nothing was recorded 1:01-1:50, so the frames come from the rest of these lines."]);
+    // With no screen at all, the room's frames spread over its own stretch.
+    const roomOnly = harness(recordings({}, [{ ...room, started_at: T + s(110) }]));
+    const even = await snapCall("cl-42:1-4", { max: 3 }, roomOnly.deps);
+    expect(even.frames.map((f) => f.at)).toEqual(["1:50", "2:37", "3:24"]);
+    expect(even.notes).toEqual(["Nothing was recorded 1:01-1:50, so the frames come from the rest of these lines."]);
+    h.cleanup();
+    roomOnly.cleanup();
+  });
+
   test("a scan that fails or would read too much is sampled evenly instead, and says so", async () => {
     const failing = harness(recordings(), () => ({ code: 1, stderr: "Server returned 403 Forbidden" }));
     const res = await snapCall("cl-42:2-4", { max: 3 }, failing.deps);
@@ -605,7 +713,7 @@ describe("snapCall", () => {
     const base = recordings();
     const huge = harness(recordings({}, [base.recordings[0], { ...base.recordings[1], size_bytes: 40e9 }]));
     const big = await snapCall("cl-42:2-4", { max: 3 }, huge.deps);
-    expect(huge.calls.some((a) => a.includes("-copyts"))).toBe(false);
+    expect(huge.calls.some((a) => a.includes("-skip_frame"))).toBe(false);
     expect(big.notes.join(" ")).toContain("too long to scan for changes");
     huge.cleanup();
   });
@@ -665,6 +773,7 @@ describe("snapCall", () => {
     const badUpload = { ...h.deps, upload: async () => { throw new Error("quota"); } };
     const res = await snapCall("cl-42:2", { share: true }, badUpload);
     expect(res.frames[0].image).toBeUndefined();
+    expect(res.frames[0].image_error).toBe("quota");
     expect(res.notes.join(" ")).toContain("Could not upload cl-42_2m11s_screen.png: quota");
     h.cleanup();
   });
@@ -674,6 +783,81 @@ describe("snapCall", () => {
     expect((await snapCall("cl-42:2", { max: 3 }, h.deps)).notes.join(" ")).toContain("--max counts frames across a line range");
     const typo = await refusal(snapCall("cl-42:1:02:03", {}, h.deps));
     expect(typo.message).toContain("For a time, write cl-42@1:02:03");
+    h.cleanup();
+  });
+
+  test("refusals carry their recovery as data, from the same values as the sentence", async () => {
+    const h = harness(recordings());
+    const outside = await refusal(snapCall("cl-42@8:00", {}, h.deps));
+    expect(outside.details.nearest).toBe("cl-42@5:49");
+    expect(outside.details.try).toEqual(["cast call snap cl-42@5:49"]);
+    expect(outside.details.recorded?.map((r) => [r.kind, r.shows, r.from, r.to])).toEqual([
+      ["composite", "the room", "0:50", "5:50"],
+      ["screen", "Ana's screen", "2:00", "3:40"],
+    ]);
+    const strict = await refusal(snapCall("cl-42@1:00", { screen: true }, h.deps));
+    // Every command the sentence names is in `try`: the nearest share, and
+    // the same moment without --screen, since the room was filmed then.
+    expect(strict.details).toMatchObject({ nearest: "cl-42@2:00", try: ["cast call snap cl-42@2:00 --screen", "cast call snap cl-42@1:00"] });
+    h.cleanup();
+  });
+
+  test("now, just after Stop: the recording is saving, not missing", async () => {
+    const saving = recordings({ call_ended_at: null, server_now: T + min(4) }, [
+      { _id: "c1", run_id: "r1", kind: "composite", status: "stopping", started_at: T + s(50), duration_ms: min(3), url: null, live_frame_url: null },
+    ]);
+    const h = harness(saving);
+    const err = await refusal(snapCall("cl-42", {}, h.deps));
+    expect(err.code).toBe("not_live");
+    expect(err.message).toContain("cl-42's recording was just stopped and is saving; its moments can be snapped in a minute.");
+    expect(err.details.recorded).toHaveLength(1);
+    h.cleanup();
+  });
+
+  test("--screen across a share that ends mid-second keeps every frame on the share", async () => {
+    // Ana's screen runs 1:40 to 3:20.5; a change 100.3 s into it would round
+    // to 3:21, past her file's end, so it lands on 3:20 instead.
+    const [room, screen] = recordings().recordings;
+    const h = harness(recordings({}, [room, { ...screen, started_at: T + s(100), duration_ms: s(100.5) }]), ["frame:1 pts:1 pts_time:100.3", "lavfi.scene_score=0.7"].join("\n"));
+    const res = await snapCall("cl-42:2-4", { screen: true }, h.deps);
+    expect(res.frames.map((f) => [f.at, f.kind])).toEqual([["2:11", "screen"], ["3:20", "screen"]]);
+    h.cleanup();
+  });
+
+  test("two shares at once: a change is grabbed from the file it was seen in", async () => {
+    // Ana shares from 2:00, Bo from 2:10; the rule alone would pick Bo's
+    // (the newer) for any moment both cover. Only Ana's screen changed.
+    const [room, ana] = recordings().recordings;
+    const bo = { ...ana, _id: "s2", started_at: T + s(130), participant_identity: "u_bo", participant_name: "Bo", url: "https://r2/s2.mp4" };
+    const h = harness(recordings({}, [room, ana, bo]), (args) => ({
+      code: 0,
+      stderr: args.includes("https://r2/s1.mp4") ? ["frame:1 pts:1 pts_time:40", "lavfi.scene_score=0.9"].join("\n") : "",
+    }));
+    const res = await snapCall("cl-42:2-4", {}, h.deps);
+    const change = res.frames.find((f) => f.at === "2:40")!;
+    expect(change).toMatchObject({ kind: "screen", shows: "Ana's screen", recording_id: "s1" });
+    h.cleanup();
+  });
+
+  test("the footer promises the cited picture only when it is this one, and never suggests a public upload", async () => {
+    const h = harness(recordings());
+    const screen = await snapCall("cl-42:2", {}, h.deps);
+    expect(screen.frames[0]).toMatchObject({ citation_matches: true, citation_shows: "Ana's screen" });
+    const text = formatSnapResult(screen);
+    expect(text).toContain("on its own line in a message it renders as this picture for anyone who can read the call");
+    expect(text).not.toContain("--share");
+    const room = await snapCall("cl-42:2", { composite: true }, h.deps);
+    expect(room.frames[0]).toMatchObject({ kind: "composite", citation_matches: false, citation_shows: "Ana's screen" });
+    expect(formatSnapResult(room)).toContain("renders as Ana's screen at that moment, not the view shown here,");
+    h.cleanup();
+  });
+
+  test("a public share link is refused with where to find the call's own reference", async () => {
+    const h = harness(recordings());
+    const err = await refusal(snapCall("https://codecast.sh/share/call/abc123", {}, h.deps));
+    expect(err.code).toBe("bad_target");
+    expect(err.message).toContain("is a public share link");
+    expect(err.details.try).toEqual(["cast calls"]);
     h.cleanup();
   });
 });
@@ -729,5 +913,336 @@ describe("signed links", () => {
       await proxy.close();
       upstream.close();
     }
+  });
+});
+
+// A real ffmpeg on a file like a screen share's: frames at 0 to 1.93 s, then
+// none until 10 s. A plain seek to 5 s would return the frame at 10 s, from
+// the future; the snap must return the one on screen at 5 s.
+const realFfmpeg = findFfmpeg();
+describe.skipIf(!realFfmpeg)("against a real ffmpeg", () => {
+  test("a moment in a gap is the last picture before it, the one a <video> shows there", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "snap-gap-"));
+    const file = path.join(dir, "gap.mp4");
+    const run = ffmpegRunner(realFfmpeg!);
+    const made = await run(
+      ["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=15:duration=12",
+        "-vf", "select='lt(t,2)+gte(t,10)'", "-fps_mode", "passthrough", "-g", "15", "-c:v", "libx264", "-pix_fmt", "yuv420p", file],
+      { timeoutMs: 60_000 },
+    );
+    expect(made.code).toBe(0);
+    const [room, screen] = recordings().recordings;
+    const recs = recordings({}, [room, { ...screen, duration_ms: s(12), url: file }]);
+    const h = harness(recs);
+    try {
+      // Ana's file begins 2:00 into the call: 2:05 is 5 s in, inside the gap.
+      const gap = await snapCall("cl-42@2:05", {}, { ...h.deps, ffmpeg: run });
+      expect(gap.frames[0].kind).toBe("screen");
+      expect(gap.frames[0].offset_ms).toBe(1933);
+      expect(fs.statSync(gap.frames[0].path).size).toBeGreaterThan(0);
+      expect(gap.notes.join(" ")).toContain("No new picture of Ana's screen was written after 2:01");
+      // 10 s in, where the screen came back: the frame written at that moment.
+      const after = await snapCall("cl-42@2:10", {}, { ...h.deps, ffmpeg: run });
+      expect(after.frames[0].offset_ms).toBe(10_000);
+    } finally {
+      h.cleanup();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  test("a stalled share: black filler is told from the picture, and the citation is not promised", async () => {
+    // A picture for 2 s, then 4 s of solid black at the same frame rate, the
+    // way LiveKit fills a paused share.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "snap-stall-"));
+    const file = path.join(dir, "stall.mp4");
+    const run = ffmpegRunner(realFfmpeg!);
+    const made = await run(
+      ["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=15:duration=6",
+        "-vf", "drawbox=enable='gte(t,2)':x=0:y=0:w=iw:h=ih:color=black:t=fill", "-g", "15", "-c:v", "libx264", "-pix_fmt", "yuv420p", file],
+      { timeoutMs: 60_000 },
+    );
+    expect(made.code).toBe(0);
+    const [room, screen] = recordings().recordings;
+    const h = harness(recordings({}, [room, { ...screen, duration_ms: s(6), url: file }]));
+    try {
+      const res = await snapCall("cl-42@2:04", {}, { ...h.deps, ffmpeg: run });
+      expect(res.frames[0].offset_ms).toBeLessThan(2000);
+      expect(res.frames[0].citation_matches).toBe(false);
+      expect(res.frames[0].notes[0]).toContain("was stalled at 2:04");
+      // Before the stall, the picture at the moment, promised.
+      const fine = await snapCall("cl-42@2:01", {}, { ...h.deps, ffmpeg: run });
+      expect(fine.frames[0]).toMatchObject({ offset_ms: 1000, citation_matches: true, notes: [] });
+    } finally {
+      h.cleanup();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }, 120_000);
+});
+
+describe("the spellings an agent arrives with", () => {
+  test("bare seconds and the unit form the CLI prints read as times; the prose grammar stays strict", () => {
+    expect(parseSnapTime("754")).toBe(s(754));
+    expect(parseSnapTime("0")).toBe(0);
+    expect(parseSnapTime("12m34s")).toBe(s(754));
+    expect(parseSnapTime("4m05s")).toBe(s(245));
+    expect(parseSnapTime("1h02m03s")).toBe(s(3723));
+    expect(parseSnapTime("12m")).toBe(s(720));
+    expect(parseSnapTime("1h")).toBe(min(60));
+    expect(parseSnapTime("12:34")).toBe(s(754));
+    for (const bad of ["", "soon", "12m75s", "1h75m", "s", "12.5"]) expect(parseSnapTime(bad)).toBeNull();
+    const at = (ms: number) => ({ call: "cl-107", moment: { kind: "time" as const, atMs: ms } });
+    expect(parseSnapTarget("cl-107@754")).toEqual(at(s(754)));
+    expect(parseSnapTarget("cl-107@4m05s")).toEqual(at(s(245)));
+    expect(parseSnapTarget("cl-107", "4m05s")).toEqual(at(s(245)));
+    expect(parseSnapTarget("cl-107@0")).toEqual(at(0));
+    // A bare number as a second word is still a line, as `cast call cl-42 15` reads it.
+    expect(parseSnapTarget("cl-107", "15")).toEqual({ call: "cl-107", moment: { kind: "line", from: 15, to: 15 } });
+  });
+
+  test("a link's t is read in any time spelling, and one that is no time is refused, never taken for now", async () => {
+    const id = "k57abcdefghijklmnopqrstuvwxyz012";
+    expect(parseSnapTarget(`https://codecast.sh/calls/${id}?t=12:34`)).toEqual({ call: id, moment: { kind: "time", atMs: s(754) } });
+    expect(parseSnapTarget(`https://codecast.sh/calls/${id}#t=754`)).toEqual({ call: id, moment: { kind: "time", atMs: s(754) } });
+    expect(parseSnapTarget(`https://codecast.sh/calls/${id}?t=soon`)).toBeNull();
+    const h = harness(recordings());
+    const err = await refusal(snapCall("https://codecast.sh/calls/cl-42?t=soon", {}, h.deps));
+    expect(err.code).toBe("bad_target");
+    expect(err.message).toContain(`"soon" in that link is not a time into a call`);
+    h.cleanup();
+  });
+});
+
+describe("refusals name only commands they carry", () => {
+  /** Every `cast ...` command a sentence names, up to the punctuation that
+   *  ends it. */
+  const named = (message: string) =>
+    [...message.matchAll(/cast calls?(?: (?:snap|--[a-z]+|cl-\d+(?:[@:]\d+(?:[:-]\d+)*)?|\d+))*/g)].map((m) => m[0]);
+
+  test("each refusal's try holds every command its sentence offers", async () => {
+    const base = recordings();
+    const [room, screen] = base.recordings;
+    const live = recordings({ call_ended_at: null, server_now: T + min(3) }, [
+      { _id: "c1", run_id: "r1", kind: "composite", status: "recording", started_at: T + s(50), url: null, live_frame_url: "https://r2/c1.jpeg" },
+      { _id: "s1", run_id: "r1", kind: "screen", status: "recording", started_at: T + s(120), participant_name: "Ana", url: null, live_frame_url: null },
+    ]);
+    const starting = recordings({ call_ended_at: null, server_now: T + min(3) }, [
+      { _id: "c1", run_id: "r1", kind: "composite", status: "starting", started_at: null, url: null, live_frame_url: null },
+    ]);
+    const endedSaving = recordings({}, [{ ...room, status: "stopping", url: null }]);
+    const lateRoom = recordings({}, [{ ...room, started_at: T + s(100) }, screen]);
+    const cases: Array<[SnapRecordings | null, string, Record<string, unknown>]> = [
+      [base, "cl-42@1:00", { screen: true }],
+      [recordings({}, [room]), "cl-42:1-2", { screen: true }],
+      [recordings({}, [room]), "cl-42@1:00", { screen: true }],
+      [base, "cl-42@8:00", {}],
+      [base, "cl-42", {}],
+      [base, "cl-42:9", {}],
+      [recordings({}, []), "cl-42:2", {}],
+      [live, "cl-42", { screen: true }],
+      [live, "cl-42@1:30", {}],
+      [starting, "cl-42", {}],
+      [endedSaving, "cl-42", {}],
+      [lateRoom, "cl-42:1", {}],
+      [lateRoom, "cl-42:1", { screen: true }],
+      [base, "cl-42:2:04", {}],
+      [base, "cl-42:1:02:03", {}],
+      [base, "https://codecast.sh/share/call/abc", {}],
+      [null, "cl-42:2", {}],
+    ];
+    for (const [recs, target, opts] of cases) {
+      const h = harness(recs);
+      const err = await refusal(snapCall(target, opts, h.deps).then(() => {
+        throw new Error(`${target} ${JSON.stringify(opts)} was not refused`);
+      }));
+      for (const cmd of named(err.message)) {
+        expect({ target, code: err.code, cmd, try: err.details.try ?? [] }).toMatchObject({ try: expect.arrayContaining([cmd]) });
+      }
+      h.cleanup();
+    }
+  });
+
+  test("a line outside the recording is refused in the line's own terms, with its words as the way back", async () => {
+    const [room, screen] = recordings().recordings;
+    const h = harness(recordings({}, [{ ...room, started_at: T + s(100) }, screen]));
+    const err = await refusal(snapCall("cl-42:1", {}, h.deps));
+    expect(err.code).toBe("outside");
+    expect(err.message).toStartWith("Line 1 was said at 1:01, before cl-42 was being recorded. Recorded: 1:40-6:40 the room, 2:00-3:40 Ana's screen. Nearest: cast call snap cl-42@1:40.");
+    expect(err.message).toContain("That is not line 1: other words are being said there. Its own words: cast call cl-42 1");
+    expect(err.details.try).toEqual(["cast call snap cl-42@1:40", "cast call cl-42 1"]);
+    const after = harness(recordings({}, [{ ...room, duration_ms: s(5) }]));
+    expect((await refusal(snapCall("cl-42:2", {}, after.deps))).message).toStartWith("Line 2 was said at 2:11, after cl-42's recording had stopped.");
+    after.cleanup();
+    h.cleanup();
+  });
+
+  test("a short id typed without its prefix is offered back as the same snap on cl-N", async () => {
+    const h = harness(recordings());
+    const lookup = async () => {
+      throw Object.assign(new Error(`No recent call matches "42"; did you mean cl-42? \`cast calls\` lists them`), { code: "not_found", try: ["cast call cl-42", "cast calls"] });
+    };
+    const err = await refusal(snapCall("42@2:11", {}, { ...h.deps, resolveCallId: lookup }));
+    expect(err.code).toBe("not_found");
+    expect(err.details.try).toEqual(["cast call snap cl-42@2:11", "cast calls"]);
+    h.cleanup();
+  });
+
+  test("now on an ended call still saving: the same command again, and when", async () => {
+    const [room] = recordings().recordings;
+    const h = harness(recordings({}, [{ ...room, status: "stopping", url: null }]));
+    const err = await refusal(snapCall("cl-42", { composite: true }, h.deps));
+    expect(err.code).toBe("not_ready");
+    expect(err.details).toMatchObject({ try: ["cast call snap cl-42 --composite"], retry_after_s: 60 });
+    h.cleanup();
+  });
+});
+
+describe("frames as data", () => {
+  test("each frame says what it was asked to be, when its picture is from, and its own notes", async () => {
+    const h = harness(recordings({}, [
+      { _id: "c1", run_id: "r1", kind: "composite", status: "ready", started_at: T + s(130), duration_ms: min(3), url: "https://r2/c1.mp4", live_frame_url: null },
+      { _id: "s1", run_id: "r1", kind: "screen", status: "ready", started_at: T + s(120), duration_ms: s(100), participant_identity: "u_ana", participant_name: "Ana", url: "https://r2/s1.mp4", live_frame_url: null },
+    ]));
+    const res = await snapCall("cl-42@2:05", { composite: true }, h.deps);
+    expect(res.frames[0]).toMatchObject({ kind: "screen", requested_kind: "composite", shown_at: "2:05", shown_at_ms: s(125) });
+    expect(res.frames[0].notes).toEqual(["The room was not being recorded at 2:05, so this frame is the shared screen instead."]);
+    const plain = await snapCall("cl-42@2:15", {}, h.deps);
+    expect(plain.frames[0]).toMatchObject({ requested_kind: null, notes: [] });
+    h.cleanup();
+  });
+
+  test("--composite while the room's video is still saving says so, not that the room was unfilmed", async () => {
+    const h = harness(recordings({ call_ended_at: null, server_now: T + min(5) }, [
+      { _id: "c1", run_id: "r1", kind: "composite", status: "recording", started_at: T + s(50), url: null, live_frame_url: "https://r2/c1.jpeg" },
+      { _id: "s1", run_id: "r1", kind: "screen", status: "ready", started_at: T + s(120), duration_ms: s(100), participant_name: "Ana", url: "https://r2/s1.mp4", live_frame_url: null },
+    ]));
+    const res = await snapCall("cl-42@2:11", { composite: true }, h.deps);
+    expect(res.frames[0].kind).toBe("screen");
+    expect(res.notes).toEqual(["The room's video for 2:11 is still saving (it uploads when Record is stopped), so that frame is the shared screen for now."]);
+    h.cleanup();
+  });
+
+  test("moments that land on one unchanged picture are one file and one note", async () => {
+    // A scan that failed: evenly spaced moments, and the screen never changed
+    // after 5 s into Ana's file.
+    const h = harness(recordings(), () => ({ code: 1, stderr: "boom" }));
+    const held: FfmpegRunner = async (args) => {
+      if (args.includes("-skip_frame")) return { code: 1, stdout: "", stderr: "boom" };
+      if (args.includes("-frames:v")) {
+        fs.writeFileSync(args[args.length - 1], "png");
+        return { code: 0, stdout: "", stderr: "[Parsed_showinfo_1] n:0 pts:5 pts_time:5.000" };
+      }
+      return { code: 0, stdout: "", stderr: "[Parsed_showinfo_5] n:0 pts:5 pts_time:5.000" };
+    };
+    const res = await snapCall("cl-42:2-4", { max: 4 }, { ...h.deps, ffmpeg: held });
+    expect(res.frames).toHaveLength(1);
+    expect(fs.readdirSync(h.dir)).toHaveLength(1);
+    expect(res.notes.filter((n) => n.includes("No new picture"))).toEqual([]);
+    expect(res.notes.join(" ")).toMatch(/Ana's screen did not change from 2:05 to \d:\d\d, so one frame stands for 4 of the moments across these lines\./);
+    h.cleanup();
+  });
+
+  test("a change in a range's last partial second is grabbed at the change, and its citation is not promised", async () => {
+    // Line 2 runs 130 s to 136 s, line 3 ends at 172 s: the range ends at
+    // 172 s. A change 52.3 s into Ana's file (172.3 s) is past it; one at
+    // 51.6 s (171.6 s) is inside the last partial second.
+    const lines = recordings();
+    const h = harness(lines, ["frame:1 pts:1 pts_time:51.6", "lavfi.scene_score=0.7"].join("\n"));
+    const res = await snapCall("cl-42:2-3", {}, h.deps);
+    const last = res.frames[res.frames.length - 1];
+    expect(last.at_ms).toBe(171_600);
+    expect(last.citation_matches).toBe(false);
+    expect(last.notes.join(" ")).toContain("The screen changed just after 2:51");
+    expect(formatSnapResult(res)).toContain("2:51, which may render as another picture");
+    h.cleanup();
+  });
+
+  test("a range footer names the frames whose citation renders as something else", async () => {
+    const h = harness(recordings(), ["frame:1 pts:1 pts_time:20", "lavfi.scene_score=0.7"].join("\n"));
+    const res = await snapCall("cl-42:2-4", { composite: true, max: 3 }, h.deps);
+    const text = formatSnapResult(res);
+    for (const f of res.frames) expect(text).toContain(f.ref);
+    expect(text).toContain("Cite any frame by its reference");
+    expect(text).toMatch(/except .*which render as Ana's screen/);
+    h.cleanup();
+  });
+
+  test("a stalled share: the last real picture, and a citation that is not promised to match", async () => {
+    const h = harness(recordings());
+    const stalled: FfmpegRunner = async (args) => {
+      if (args.includes("-frames:v")) {
+        fs.writeFileSync(args[args.length - 1], "png");
+        return { code: 0, stdout: "", stderr: "[Parsed_showinfo_1] n:0 pts:9 pts_time:9.200" };
+      }
+      // Black filler at 10.9 s (seen by the first tap only), the real picture at 9.2 s.
+      return { code: 0, stdout: "", stderr: "[Parsed_showinfo_2] n:0 pts:9 pts_time:9.200\n[Parsed_showinfo_5] n:0 pts:9 pts_time:9.200\n[Parsed_showinfo_2] n:1 pts:10 pts_time:10.900" };
+    };
+    const res = await snapCall("cl-42:2", {}, { ...h.deps, ffmpeg: stalled });
+    expect(res.frames[0]).toMatchObject({ offset_ms: 9200, citation_matches: false, shown_at: "2:09" });
+    expect(res.frames[0].notes[0]).toBe("Ana's screen was stalled at 2:11 and the recording holds black there, so this frame is its last real picture, from 2:09, and cl-42@2:11 in a message may render black.");
+    expect(probeTimes("[Parsed_showinfo_2] pts_time:1\n[Parsed_showinfo_5] pts_time:1")).toEqual({ real: [1000], all: [1000] });
+    h.cleanup();
+  });
+});
+
+describe("a read cut short", () => {
+  test("ffmpeg exiting 0 with nothing written is run once more", async () => {
+    const h = harness(recordings());
+    let grabs = 0;
+    const flaky: FfmpegRunner = async (args) => {
+      if (args.includes("-frames:v")) {
+        if (++grabs > 1) fs.writeFileSync(args[args.length - 1], "png");
+        return { code: 0, stdout: "", stderr: "" };
+      }
+      return { code: 0, stdout: "", stderr: "[Parsed_showinfo_5] pts_time:10.999" };
+    };
+    const res = await snapCall("cl-42:2", {}, { ...h.deps, ffmpeg: flaky });
+    expect(grabs).toBe(2);
+    expect(fs.existsSync(res.frames[0].path)).toBe(true);
+
+    const cut: FfmpegRunner = async (args) =>
+      args.includes("-frames:v")
+        ? { code: 0, stdout: "", stderr: "[http @ 0x1] Stream ends prematurely at 1024, should be 9999 http://127.0.0.1:5/x" }
+        : { code: 0, stdout: "", stderr: "[Parsed_showinfo_5] pts_time:10.999" };
+    const err = await refusal(snapCall("cl-42:2", {}, { ...h.deps, ffmpeg: cut }));
+    expect(err.code).toBe("ffmpeg_failed");
+    expect(err.message).toBe("The read of the recording was cut short before the frame at 2:11 was written (ffmpeg: Stream ends prematurely at 1024, should be 9999 <recording>). The frame is there; run the command again.");
+    h.cleanup();
+  });
+
+  test("network options ride HTTP sources only", () => {
+    expect(frameArgs("http://127.0.0.1:1/x", 1000, "/o/f.png")).toContain("-reconnect");
+    expect(probeArgs("http://127.0.0.1:1/x", 1000, 2000)).toContain("-reconnect");
+    expect(sceneArgs("http://127.0.0.1:1/x", 0, 1000)).toContain("-reconnect");
+    expect(frameArgs("/tmp/x.mp4", 1000, "/o/f.png")).not.toContain("-reconnect");
+  });
+
+  test("a failed re-sign is the reason given, not ffmpeg's 502", async () => {
+    const h = harness(recordings());
+    let signed = 0;
+    // The proxy is faked, so the run signs again the way the proxy would on
+    // a 403, and that second signing is refused.
+    let resign: Promise<unknown> = Promise.resolve();
+    const deps = {
+      ...h.deps,
+      post: async (route: string, body: any) => {
+        if (route === "/cli/calls/recordings" && ++signed > 1) throw new Error("Not logged in");
+        return h.deps.post(route, body);
+      },
+      serveSources: async (sources: SignedSources) => ({
+        urlFor: (id: string, live: boolean) => {
+          resign = sources.url(id, live, true).catch(() => {});
+          return "http://127.0.0.1:1/x";
+        },
+        close: async () => {},
+      }),
+      ffmpeg: (async () => {
+        await resign;
+        return { code: 1, stdout: "", stderr: "Server returned 5XX Server Error reply" };
+      }) as FfmpegRunner,
+    };
+    const err = await refusal(snapCall("cl-42:2", {}, deps));
+    expect(err.code).toBe("server");
+    expect(err.message).toBe("Could not sign the recording link again: Not logged in");
+    h.cleanup();
   });
 });

@@ -1,7 +1,6 @@
 {
  "asOf": "2026-01-15T14:06:40.000Z",
  "notes": "synthetic session: a retry cap set to 5, later raised to 8 by the user; asks whether 5 was kept",
- "judge": "says the cap did not stay at 5: the user raised it to 8 (with a 60 s ceiling per wait) after it was first set to 5, cites the lines where each happened, and leads with that direct answer",
  "snapshot": {
   "question": "Did we keep the retry cap at 5?",
   "title": "Cap sync worker retries",

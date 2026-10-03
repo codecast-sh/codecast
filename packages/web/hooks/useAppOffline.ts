@@ -1,9 +1,9 @@
-import { useCallback, useState, useSyncExternalStore } from "react";
-import { useConvex } from "convex/react";
+import { useState } from "react";
 import { WEBSOCKET_HANDSHAKE_TIMEOUT_MS } from "@codecast/shared/network";
 
 import { useMountEffect } from "./useMountEffect";
 import { useWatchEffect } from "./useWatchEffect";
+import { useWsConnected } from "./useWsConnected";
 // Outlast the recovering socket's handshake, plus the close-and-retry after
 // a stalled CONNECTING. navigator.onLine flips false for a moment on every
 // network change, so it is a hint, not a verdict — same grace.
@@ -61,17 +61,7 @@ export function connectionChipCopy({ offline, online }: AppOffline): ConnectionC
  * because nothing can sync).
  */
 export function useAppOffline(): AppOffline {
-  // Subscribe to ONLY the websocket-connected boolean, not the whole connection
-  // state: `useConvexConnectionState()` re-emits on every in-flight request
-  // (each keystroke's draft mutation, every query of a session switch), which
-  // re-rendered every consumer of this hook — three always-mounted banners/chips
-  // — on essentially all network activity. The boolean snapshot lets
-  // useSyncExternalStore bail unless connectivity actually flips.
-  const convex = useConvex();
-  const wsConnected = useSyncExternalStore(
-    useCallback((cb: () => void) => convex.subscribeToConnectionState(cb), [convex]),
-    () => convex.connectionState().isWebSocketConnected,
-  );
+  const wsConnected = useWsConnected();
   const wsDown = !wsConnected;
 
   const [osOnline, setOsOnline] = useState(() => navigator.onLine);

@@ -1,14 +1,13 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState, type RefObject } from "react";
 import { ArrowDown, ArrowUp, Check, Square, CheckSquare } from "lucide-react";
 import type { SessionDecisionItem, DecisionAnswerInput } from "../../store/inboxStore";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { DecisionOptionList, TypeAnswerButton } from "./DecisionOptionList";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { hasOpenModal } from "../../shortcuts";
 import { chosenOptions } from "../../lib/decisionLinks";
-import { ChangeCardAnswer, cardAnswerIndexes } from "./ChangeCardView";
+import { ChangeCardAnswer, answerKeyAllowed, cardAnswerIndexes } from "./ChangeCardView";
 
 // The answer footer, per kind (docs/architecture/decisions-as-documents.md
 // D1 / D4): single = one option (digits 1 to 9, or a typed answer); multi =
@@ -18,14 +17,15 @@ import { ChangeCardAnswer, cardAnswerIndexes } from "./ChangeCardView";
 // Answering is the caller's: this component only builds the DecisionAnswerInput
 // (store answerDecision takes it and delivers the message). `keys` claims the
 // digit keys on window in capture phase, the same way SessionDecisionCard
-// does, so exactly one surface on screen should pass it.
+// does, so exactly one surface on screen should pass it; `keyScope` narrows
+// that to while focus is inside the given element (a card in a transcript).
 //
 // A decision about a change card (LE11) answers Ship, Revise or Drop through
 // the card's own controls (ChangeCardAnswer), whatever surface renders it.
 type AnswerControlsProps = Parameters<typeof GenericAnswerControls>[0];
 export function DecisionAnswerControls(props: AnswerControlsProps) {
   const indexes = cardAnswerIndexes(props.decision);
-  if (indexes) return <ChangeCardAnswer decision={props.decision} indexes={indexes} onAnswer={props.onAnswer} onDismiss={props.onDismiss} keys={props.keys} size={props.size} />;
+  if (indexes) return <ChangeCardAnswer decision={props.decision} indexes={indexes} onAnswer={props.onAnswer} onDismiss={props.onDismiss} keys={props.keys} keyScope={props.keyScope} size={props.size} />;
   return <GenericAnswerControls {...props} />;
 }
 
@@ -34,6 +34,7 @@ function GenericAnswerControls({
   onAnswer,
   onDismiss,
   keys = false,
+  keyScope,
   size = "full",
   recommendation,
 }: {
@@ -41,21 +42,37 @@ function GenericAnswerControls({
   onAnswer: (input: DecisionAnswerInput) => void;
   onDismiss?: () => void;
   keys?: boolean;
+  keyScope?: RefObject<HTMLElement | null>;
   size?: "full" | "compact";
   /** The option a role on the ladder recommended (the latest hop with one). */
   recommendation?: number;
 }) {
   const kind = decision.kind ?? "single";
-  const [otherOpen, setOtherOpen] = useState(false);
-  const [otherText, setOtherText] = useState("");
+  // Everything the reader has chosen so far lives in the decision's draft,
+  // not here: this component unmounts whenever its card folds or its page
+  // changes, and a choice must never fold away with it.
+  const [draft, patchDraft] = useDecisionDraft<AnswerDraft>(decision._id);
+  const optionCount = decision.options.length;
+  const otherOpen = !!draft.otherOpen;
+  const otherText = draft.otherText ?? "";
+  const setOtherOpen = useCallback((open: boolean) => patchDraft({ otherOpen: open }), [patchDraft]);
   const otherRef = useRef<HTMLTextAreaElement>(null);
-  const [picked, setPicked] = useState<number[]>([]);
-  const [order, setOrder] = useState<number[]>(() => decision.options.map((_, i) => i));
-  const [values, setValues] = useState<Record<string, any>>(() => {
-    const init: Record<string, any> = {};
-    for (const f of decision.form?.fields ?? []) init[f.key] = f.type === "bool" ? false : f.type === "select" ? (f.options?.[0] ?? "") : "";
-    return init;
-  });
+  // An edited decision (cast decide edit) can drop options under a draft.
+  const picked = useMemo(() => (draft.picked ?? []).filter((n) => n < optionCount), [draft.picked, optionCount]);
+  const order = useMemo(
+    () => (draft.order?.length === optionCount ? draft.order : decision.options.map((_, i) => i)),
+    [draft.order, optionCount, decision.options],
+  );
+  const values = useMemo(() => {
+    const out: Record<string, any> = {};
+    for (const f of decision.form?.fields ?? []) out[f.key] = draft.values?.[f.key] ?? (f.type === "bool" ? false : f.type === "select" ? (f.options?.[0] ?? "") : "");
+    return out;
+  }, [decision.form, draft.values]);
+  const setValue = useCallback((key: string, fn: (v: any) => any) => patchDraft((cur) => ({ values: { ...cur.values, [key]: fn(cur.values?.[key] ?? values[key]) } })), [patchDraft, values]);
+  const togglePick = useCallback((n: number) => patchDraft((cur) => {
+    const p = cur.picked ?? [];
+    return { picked: p.includes(n) ? p.filter((x) => x !== n) : [...p, n] };
+  }), [patchDraft]);
   const [error, setError] = useState<string | null>(null);
 
   const answerSingle = useCallback((index: number) => onAnswer({ index }), [onAnswer]);
@@ -84,14 +101,12 @@ function GenericAnswerControls({
   }, [kind, picked, order, values, decision.form, onAnswer]);
 
   const move = useCallback((from: number, dir: -1 | 1) => {
-    setOrder((o) => {
-      const to = from + dir;
-      if (to < 0 || to >= o.length) return o;
-      const next = [...o];
-      [next[from], next[to]] = [next[to], next[from]];
-      return next;
-    });
-  }, []);
+    const to = from + dir;
+    if (to < 0 || to >= order.length) return;
+    const next = [...order];
+    [next[from], next[to]] = [next[to], next[from]];
+    patchDraft({ order: next });
+  }, [order, patchDraft]);
 
   // Digits answer a single; on a multi they toggle; Enter submits a multi,
   // rank or form; t opens the typed answer; x dismisses. Capture phase, so
@@ -102,7 +117,7 @@ function GenericAnswerControls({
   useWatchEffect(() => {
     if (!keys) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey || hasOpenModal()) return;
+      if (!answerKeyAllowed(e, keyScope)) return;
       const target = e.target as HTMLElement | null;
       const editing = !!target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable || target.tagName === "SELECT");
       if (editing) {
@@ -119,7 +134,7 @@ function GenericAnswerControls({
         if (n >= decision.options.length) return;
         e.preventDefault(); e.stopImmediatePropagation();
         if (kind === "single") answerSingle(n);
-        else if (kind === "multi") setPicked((p) => (p.includes(n) ? p.filter((x) => x !== n) : [...p, n]));
+        else if (kind === "multi") togglePick(n);
         return;
       }
       if (e.key === "Enter" && kind !== "single") { e.preventDefault(); e.stopImmediatePropagation(); submit(); return; }
@@ -132,7 +147,7 @@ function GenericAnswerControls({
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [keys, kind, decision.options.length, answerSingle, answerText, submit, onDismiss]);
+  }, [keys, keyScope, kind, decision.options.length, answerSingle, answerText, submit, onDismiss]);
 
   const compact = size === "compact";
   const submitBtn = (

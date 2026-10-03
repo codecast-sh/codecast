@@ -3,8 +3,7 @@ import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { editionRequest, skipHeadline, storyPromptInput, storyRequest } from '../../../convex/convex/changesProse';
-import { CHEAP_MODEL, STRONG_MODEL } from '../../../convex/convex/lib/anthropic';
+import { editionRequest, PROSE_MODEL, skipHeadline, storyPromptInput, storyRequest } from '../../../convex/convex/changesProse';
 import { loadSurface, surfaceMeta } from '../registry';
 import type { CallResult, ReplayResult, SurfaceImpl, SurfaceRequest } from '../surface';
 import { captureFromFile, idsIn } from './changesCommon';
@@ -58,7 +57,7 @@ describe('registration', () => {
   test('both surfaces are call surfaces on the prod model and load', async () => {
     for (const id of ['changes-story', 'changes-edition']) {
       expect(surfaceMeta(id)?.route).toBe('call');
-      expect(surfaceMeta(id)?.model).toBe(CHEAP_MODEL);
+      expect(surfaceMeta(id)?.model).toBe(PROSE_MODEL);
       expect(typeof (await loadSurface(id)).replay).toBe('function');
     }
   });
@@ -166,8 +165,10 @@ describe('changes-story gates', () => {
 
   test('a skip path story is refused rather than replayed', async () => {
     const c = storyCase('commit-only-no-why');
-    const one = { ...c.snapshot, story: { ...c.snapshot.story, commit_shas: [c.snapshot.commits[1].sha], area_counts: { web: 2 } }, commits: [{ ...c.snapshot.commits[1], subject: 'feat(web): sort every invoice list by due date by default, oldest first' }] };
-    await expect(replayWith(story, one, storyReply())).rejects.toThrow('skip path');
+    const withSubject = (subject: string) => ({ ...c.snapshot, story: { ...c.snapshot.story, commit_shas: [c.snapshot.commits[1].sha], area_counts: { web: 2 } }, commits: [{ ...c.snapshot.commits[1], subject }] });
+    await expect(replayWith(story, withSubject('feat(web): sort every invoice list by due date by default with the oldest first'), storyReply())).rejects.toThrow('skip path');
+    // A subject that lists several changes is a batch summary, so prod calls the model for it.
+    await expect(replayWith(story, withSubject('feat(web): sort every invoice list by due date, oldest first, and keep the filter'), storyReply())).resolves.toBeDefined();
   });
 });
 
@@ -175,11 +176,10 @@ describe('changes-edition', () => {
   const day = editionCase('release-day');
   const flood = editionCase('branch-flood');
 
-  test("each fixture posts prod's request, and a big day goes to the strong model", () => {
+  test("each fixture posts prod's request on prod's prose model, whatever the day's size", () => {
     for (const c of editions) expect(editionSurfaceRequest(c.snapshot)).toEqual(editionRequest(c.snapshot.input));
-    expect(editionSurfaceRequest(day.snapshot).model).toBe(CHEAP_MODEL);
-    expect(flood.snapshot.input.stories.length).toBeGreaterThan(40);
-    expect(editionSurfaceRequest(flood.snapshot).model).toBe(STRONG_MODEL);
+    expect(editionSurfaceRequest(day.snapshot).model).toBe(PROSE_MODEL);
+    expect(editionSurfaceRequest(flood.snapshot).model).toBe(PROSE_MODEL);
   });
 
   test('a good reply passes every gate and the lead check', async () => {

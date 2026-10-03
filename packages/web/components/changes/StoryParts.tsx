@@ -10,7 +10,8 @@ import { memberAvatarUrl, memberDisplayName } from "../../lib/liveEntities";
 import { AuthorAvatar } from "../entityDisplay";
 import { EntityIdPill, TextWithMentions } from "../EntityIdPill";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
-import { areaColor, KIND_COLOR, RISK_HATCH } from "./areaColor";
+import { areaColor, areaLabel, KIND_COLOR, RISK_HATCH } from "./areaColor";
+import { useAreaColors } from "./storyContext";
 
 /** A wall-clock time, "15:27" in the reader's locale. */
 export const clockOf = (t: number) => new Date(t).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
@@ -28,12 +29,18 @@ export function Tip({ text, children, side = "top" }: { text: ReactNode; childre
   );
 }
 
+/** The 6px square in an area's color on this page. */
+export function AreaDot({ area }: { area: string }) {
+  const colors = useAreaColors();
+  return <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-[1px]" style={{ background: areaColor(area, colors) }} />;
+}
+
 /** A 6px square in the area color, then the area name. */
 export function AreaTag({ area, className = "" }: { area: string; className?: string }) {
   return (
     <span className={`inline-flex items-center gap-1.5 font-mono text-[11px] text-sol-text/60 ${className}`}>
-      <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-[1px]" style={{ background: areaColor(area) }} />
-      {area}
+      <AreaDot area={area} />
+      {areaLabel(area)}
     </span>
   );
 }
@@ -63,25 +70,33 @@ export function riskText(story: Pick<StoryRow, "risks" | "risk_lines">): string 
     .join("\n");
 }
 
-/** The story's left edge: the area rail, or the risk hatch in its place. */
-export function StoryEdge({ story, width = 2 }: { story: Pick<StoryRow, "area" | "risks" | "risk_lines">; width?: number }) {
-  const risky = story.risks.length > 0;
-  const edge = (
-    <span
-      aria-hidden={!risky}
-      className="absolute inset-y-0 left-0 rounded-l-[inherit]"
-      style={risky ? { width: 3, background: RISK_HATCH } : { width, background: areaColor(story.area) }}
-    />
-  );
-  return risky ? <Tip text={<span className="whitespace-pre-line">{riskText(story)}</span>} side="left">{edge}</Tip> : edge;
+/** The story's risks for a screen reader, inside the control that names the story. */
+export function RiskSrText({ story }: { story: Pick<StoryRow, "risks" | "risk_lines"> }) {
+  if (!story.risks.length) return null;
+  return <span className="sr-only">Risk: {riskText(story)}</span>;
 }
 
-/** The one line under a dek that names a risk in words (spec 4.4). */
-export function riskLine(story: Pick<StoryRow, "risks" | "risk_lines">): string | null {
-  if (!story.risks.length) return null;
-  const worded = story.risks.map((r) => story.risk_lines?.[r.code]).filter(Boolean);
-  if (worded.length) return worded.join(" ");
-  return `Flagged: ${story.risks.map((r) => r.code).join(", ")}`;
+/** The story's left edge: the area rail, or the risk hatch in its place. */
+export function StoryEdge({ story, width = 2 }: { story: Pick<StoryRow, "area" | "risks" | "risk_lines">; width?: number }) {
+  const colors = useAreaColors();
+  if (!story.risks.length) {
+    return <span aria-hidden className="absolute inset-y-0 left-0 rounded-l-[inherit]" style={{ width, background: areaColor(story.area, colors) }} />;
+  }
+  // The hatch is 3px; the tooltip answers on a 10px strip over it.
+  return (
+    <Tip text={<span className="whitespace-pre-line">{riskText(story)}</span>} side="left">
+      <span aria-label="Risk" className="absolute inset-y-0 left-0 z-[1] w-2.5 cursor-help rounded-l-[inherit]">
+        <span aria-hidden className="absolute inset-y-0 left-0 rounded-l-[inherit]" style={{ width: 3, background: RISK_HATCH }} />
+      </span>
+    </Tip>
+  );
+}
+
+/** The lines under a dek that name a story's risks in words, one per worded risk (spec 4.4). Empty when it has none. */
+export function riskLines(story: Pick<StoryRow, "risks" | "risk_lines">): string[] {
+  if (!story.risks.length) return [];
+  const worded = story.risks.map((r) => story.risk_lines?.[r.code]).filter((l): l is string => !!l);
+  return worded.length ? worded : [`Flagged: ${story.risks.map((r) => r.code).join(", ")}`];
 }
 
 /** "shipped in cli 1.1.163" when a release of the story's surface followed it. */
@@ -111,8 +126,19 @@ export function FadeText({ text, className = "" }: { text: string; className?: s
 
 const WHY: Record<string, string> = { commit: "from commit message", pr: "from PR", none: "not stated" };
 
+type WhyFacts = Pick<StoryRow, "why_source" | "conversation_ids" | "pr_ids" | "prose_status">;
+
+/**
+ * Whether a story has a "why" line to show. "not stated" accuses a session or
+ * PR that existed and gave no reason; a story with neither had nowhere to
+ * state one, so it says nothing.
+ */
+export const hasProvenance = (story: WhyFacts) =>
+  story.why_source !== "none" || story.conversation_ids.length > 0 || story.pr_ids.length > 0;
+
 /** Where the story's "why" came from: the page's trust mechanism (spec 4.4). */
-export function Provenance({ story, className = "" }: { story: Pick<StoryRow, "why_source" | "conversation_ids" | "prose_status">; className?: string }) {
+export function Provenance({ story, className = "" }: { story: WhyFacts; className?: string }) {
+  if (!hasProvenance(story)) return null;
   const src = story.why_source;
   const session = story.conversation_ids[0];
   let body: ReactNode;
@@ -164,10 +190,10 @@ export function People({ story, size = 16, max = 4 }: { story: Pick<StoryRow, "a
 }
 
 /** The sessions behind a story, as pills. */
-export function SessionPills({ story, max = 3 }: { story: Pick<StoryRow, "conversation_ids">; max?: number }) {
+export function SessionPills({ story, max = 3, className = "" }: { story: { conversation_ids: readonly string[] }; max?: number; className?: string }) {
   if (!story.conversation_ids.length) return null;
   return (
-    <span className="inline-flex flex-wrap items-center gap-1">
+    <span className={`inline-flex flex-wrap items-center gap-1 font-mono text-[11px] text-sol-text/55 ${className}`}>
       {story.conversation_ids.slice(0, max).map((id) => (
         <EntityIdPill key={String(id)} type="session" id={String(id)} compact />
       ))}

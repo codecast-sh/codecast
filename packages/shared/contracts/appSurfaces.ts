@@ -64,6 +64,7 @@ export const APP_SURFACES: AppSurface[] = [
   dash("team/charts", "team charts"),
   dash("admin/daemon-logs", "daemon logs"),
   dash("config", "config page"),
+  dash("memory", "Claude Code memories on this machine: link map, MEMORY.md load budget, editor"),
   dash("repo", "repositories you can browse: history, source and every commit"),
   standalone("explore", "explore"),
   standalone("timeline", "timeline"),

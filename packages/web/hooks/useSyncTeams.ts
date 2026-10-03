@@ -1,8 +1,8 @@
 import { useCallback } from "react";
-import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
+import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useSwitchWorkspace } from "./useSwitchWorkspace";
 import { useIsSyncHost } from "./useSyncRole";
 import { useServerAuthState } from "./useServerAuthSettled";
@@ -27,7 +27,7 @@ export function useSyncTeams(): any[] | undefined {
   // would read as "no teams": held until the server confirms the caller, and
   // blind while it has lost them (useServerAuthSettled).
   const { settled, identityLost } = useServerAuthState();
-  const liveQuery = useQuery(api.teams.getUserTeams, isSyncHost && settled ? {} : "skip");
+  const liveQuery = useQueryNoThrow(api.teams.getUserTeams, isSyncHost && settled ? {} : "skip").data;
   const teamsQuery = identityLost ? undefined : liveQuery;
   useConvexSync(
     teamsQuery,

@@ -107,6 +107,7 @@ export function pathLabel(path: string): string {
     "/tasks": "Tasks",
     "/docs": "Docs",
     "/files": "Files",
+    "/memory": "Memory",
     "/vault": "Files", // pre-rename alias — old saved tabs keep this path
     "/pages": "Pages",
     "/artifacts": "Pages", // pre-rename alias — old saved tabs keep this path
@@ -116,6 +117,7 @@ export function pathLabel(path: string): string {
     "/inbox": "Inbox",
     "/feed": "Feed",
     "/crosstalk": "Crosstalk",
+    "/line": "The line",
     "/org": "Org",
     "/initiatives": "Initiatives",
     "/chat": "Chat",

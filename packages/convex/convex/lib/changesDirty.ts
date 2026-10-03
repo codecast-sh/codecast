@@ -17,7 +17,7 @@
 import type { Scheduler } from "convex/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import { internal } from "../_generated/api";
-import { sliceDek, statsHeadline } from "@codecast/shared/changes";
+import { isoWeekOf, sliceDek, statsHeadline } from "@codecast/shared/changes";
 import { teamHasFeature } from "./teamFeatureGuard";
 import { addDays, dayBounds, localDate, teamTimezone } from "./teamDay";
 import { isHarnessScratch, normalizeRepository } from "./gitRefs";
@@ -197,29 +197,37 @@ export async function markInsightDirty(
 
 const plural = (n: number, one: string) => `${n} ${n === 1 ? one : `${one}s`}`;
 
-/** The edition's headline and standfirst go back to the stats line until prose runs again. */
-async function resetEdition(ctx: { db: any }, story: Doc<"change_stories">): Promise<void> {
-  const edition: Doc<"digests"> | null = await ctx.db
-    .query("digests")
-    .withIndex("by_team_repo_scope_date", (q: any) =>
-      q.eq("team_id", story.team_id).eq("repository", story.repository).eq("scope", "day").eq("date", story.date))
-    .first();
-  if (!edition || (edition.status !== "written" && edition.status !== "final")) return;
-  await ctx.db.patch(edition._id, {
-    headline: statsHeadline(edition.stats ?? { commits: 0, stories: 0, releases: 0 }),
-    narrative: "",
-    status: "facts",
-    inputs_hash: undefined,
-  });
+/**
+ * The day and week editions holding the story go back to their stats line
+ * until prose runs again. The week also drops its editor's pick of stories,
+ * which was made reading the withdrawn text; the heaviest five lead until the
+ * week is rebuilt (changesWeek.ts).
+ */
+async function resetEditions(ctx: { db: any }, story: Doc<"change_stories">): Promise<void> {
+  for (const [scope, date] of [["day", story.date], ["week", isoWeekOf(story.date)]] as const) {
+    const edition: Doc<"digests"> | null = await ctx.db
+      .query("digests")
+      .withIndex("by_team_repo_scope_date", (q: any) =>
+        q.eq("team_id", story.team_id).eq("repository", story.repository).eq("scope", scope).eq("date", date))
+      .first();
+    if (!edition || (edition.status !== "written" && edition.status !== "final")) continue;
+    await ctx.db.patch(edition._id, {
+      headline: statsHeadline(edition.stats ?? { commits: 0, stories: 0, releases: 0 }),
+      narrative: "",
+      status: "facts",
+      inputs_hash: undefined,
+      top_story_keys: undefined,
+    });
+  }
 }
 
 /**
  * Story inputs whose session the team may no longer read, or now reads at
  * `summary` where the story was built at `full`, are withdrawn in this
  * transaction: the input row goes (or narrows), the story drops the session,
- * and its prose and its edition's prose fall back to facts. The text written
- * from the session is gone before any rebuild runs; layer 0 restores the
- * subject-based text when it does. Returns the stories it reset.
+ * and its prose and its day and week editions' prose fall back to facts. The
+ * text written from the session is gone before any rebuild runs; layer 0
+ * restores the subject-based text when it does. Returns the stories it reset.
  */
 export async function withdrawNarrowedInputs(ctx: DirtyCtx, rows: Doc<"change_story_inputs">[]): Promise<Id<"change_stories">[]> {
   const byTeam = new Map<string, Doc<"change_story_inputs">[]>();
@@ -246,8 +254,13 @@ export async function withdrawNarrowedInputs(ctx: DirtyCtx, rows: Doc<"change_st
       .withIndex("by_story", (q: any) => q.eq("story_id", story._id))
       .collect();
     const keep = new Set(left.map((r) => String(r.conversation_id)));
+    const gone = new Set(story.conversation_ids.map(String).filter((c) => !keep.has(c)));
     await ctx.db.patch(story._id, {
       conversation_ids: story.conversation_ids.filter((c) => keep.has(String(c))),
+      // A risk read from a withdrawn session (blocked) names it as evidence.
+      risks: story.risks
+        .map((r) => ({ ...r, evidence: r.evidence.filter((e) => !gone.has(e)) }))
+        .filter((r) => r.evidence.length > 0),
       actor_user_ids: [...new Map(left.map((r) => [String(r.owner_id), r.owner_id])).values()],
       prose_status: "pending",
       body: undefined,
@@ -259,7 +272,7 @@ export async function withdrawNarrowedInputs(ctx: DirtyCtx, rows: Doc<"change_st
         ? { headline: `${plural(story.commit_shas.length, "commit")} in ${story.area}`, dek: sliceDek(story.area_counts) }
         : {}),
     });
-    await resetEdition(ctx, story);
+    await resetEditions(ctx, story);
     reset.push(story._id);
   }
   return reset;
@@ -290,6 +303,17 @@ export async function invalidateForConversation(
   for (const c of commits) {
     if (!isHarnessScratch({ branch: c.branch })) await markChangesDirty(ctx, c.team_id, c.repository, c.timestamp);
   }
+}
+
+/**
+ * A conversation row was deleted (changeLog.ts sees every delete). The gate no
+ * longer finds it, so every story it fed loses it in the same transaction. The
+ * interceptor has no scheduler, so the reset days rebuild from the reconcile's
+ * stranded sweep.
+ */
+export async function withdrawDeletedConversation(ctx: DirtyCtx, conversationId: Id<"conversations">): Promise<void> {
+  const rows = await inputsOfConversation(ctx, conversationId);
+  if (rows.length) await withdrawAndMark(ctx, rows);
 }
 
 /** Withdraw what `rows` may no longer give, and rebuild the reset stories' days soon. */
@@ -324,9 +348,12 @@ export async function withdrawMember(ctx: DirtyCtx, ownerId: Id<"users">, teamId
  */
 export async function invalidateForMember(ctx: DirtyCtx, ownerId: Id<"users">, teamId: Id<"teams">): Promise<void> {
   await withdrawMember(ctx, ownerId, teamId);
-
   const zone = await changesZone(ctx, teamId);
-  if (!zone) return;
+  if (zone) await markRecentEditions(ctx, teamId, zone);
+}
+
+/** Mark the days of the last two weeks that hold a team day edition. */
+async function markRecentEditions(ctx: DirtyCtx, teamId: Id<"teams">, zone: string): Promise<void> {
   const from = addDays(localDate(Date.now(), zone), -(BACKFILL_DAYS - 1));
   const editions: Doc<"digests">[] = await ctx.db
     .query("digests")
@@ -334,6 +361,36 @@ export async function invalidateForMember(ctx: DirtyCtx, ownerId: Id<"users">, t
     .take(500);
   for (const e of editions) {
     if (e.repository && !e.user_id) await markDayDirty(ctx, { team_id: teamId, repository: e.repository, date: e.date });
+  }
+}
+
+/**
+ * The zone each Changes team a person administers cuts its day in, read fresh
+ * (changesZone memoizes per transaction, and this is read on both sides of a
+ * write). A non-admin's profile zone never decides a team's day.
+ */
+export async function adminChangesZones(ctx: DirtyCtx, userId: Id<"users">): Promise<Map<Id<"teams">, string>> {
+  const zones = new Map<Id<"teams">, string>();
+  const memberships = await ctx.db.query("team_memberships").withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).collect();
+  for (const m of memberships) {
+    if (m.role !== "admin" || !(await teamHasFeature(ctx, m.team_id, "changes"))) continue;
+    zones.set(m.team_id, await teamTimezone(ctx, m.team_id));
+  }
+  return zones;
+}
+
+/**
+ * A profile timezone changed (users.updateProfile, users.adoptTimezone). Each
+ * team whose day it moved is recut: the days that held editions are rebuilt,
+ * so commits that moved out of them leave, and the backfill finds the days
+ * they moved into.
+ */
+export async function recutChangesDays(ctx: DirtyCtx, before: Map<Id<"teams">, string>): Promise<void> {
+  for (const [teamId, zone] of before) {
+    const now = await teamTimezone(ctx, teamId);
+    if (now === zone) continue;
+    await markRecentEditions(ctx, teamId, now);
+    if (ctx.scheduler) await ctx.scheduler.runAfter(0, internal.changesSchedule.backfill, { team_id: teamId });
   }
 }
 

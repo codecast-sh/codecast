@@ -77,7 +77,7 @@ export type { MachineDevice, PresenceRow } from "./presencePolicy";
 //
 // `user` is the recipient doc, already in hand at both call sites — passing it
 // avoids a second get() just to read the opt-in flag.
-async function readPresence(
+export async function readPresence(
   ctx: any,
   user: { _id: any; machine_wide_presence?: boolean },
   now: number,

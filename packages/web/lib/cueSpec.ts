@@ -111,6 +111,17 @@ export const WALKIE_SQUELCH: CueSpec = {
   noise: [{ start: 0, dur: 0.09, gain: 0.6, band: 1800, q: 0.8 }],
 };
 
+/** Someone joined the room you are in, or you connected: a soft rising
+ *  triad, C5, E5, G5. Also what a guest hears when the room lets them in. */
+export const CALL_JOIN: CueSpec = {
+  master: 0.05,
+  tones: [
+    { freq: 523.25, start: 0, dur: 0.15, gain: 0.4, type: "sine" },
+    { freq: 659.25, start: 0.08, dur: 0.18, gain: 0.35, type: "sine" },
+    { freq: 783.99, start: 0.16, dur: 0.25, gain: 0.3, type: "sine" },
+  ],
+};
+
 /** Someone stepped into your burst: it is a call now. Rising E5, B5, E6. */
 export const WALKIE_JOINED: CueSpec = {
   master: 0.1,

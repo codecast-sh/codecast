@@ -15,7 +15,7 @@ When structure or magnitude carries the meaning (comparisons, flows, timelines, 
 cast image shot.png            # or a URL; prints a stable https URL + ready markdown (--alt "30-day overview" sets the caption)
 ```
 
-That URL renders everywhere: `![alt](url)` in a reply or message, `<img src="url">` in a canvas. The alt text is the caption, so write a real one. Images in one paragraph sit side by side, so `![before](u1) ![after](u2)` reads as a comparison. Never link local paths (`/tmp/…`, `/var/folders/…`); the human's browser cannot read them. `data:` URIs work in a canvas but bloat the message.
+That URL renders everywhere: `![alt](url)` in a reply or message, `<img src="url">` in a canvas. The alt text is the caption, so write a real one. An image shows small and folds past a short height, which suits most screenshots; when its detail is the point, add a title: `![alt](url "wide")` spans the column and shows the whole image, `"small"` makes a thumbnail. Images in one paragraph sit side by side, so `![before](u1) ![after](u2)` reads as a comparison. Never link local paths (`/tmp/…`, `/var/folders/…`); the human's browser cannot read them. `data:` URIs work in a canvas but bloat the message.
 
 Declarative interactivity:
 

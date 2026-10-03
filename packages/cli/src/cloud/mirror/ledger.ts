@@ -11,6 +11,7 @@
  */
 
 import * as fs from "node:fs";
+import { mapLimit } from "@codecast/shared/async";
 
 export type MirrorLedger = Map<string, string>;
 
@@ -35,18 +36,11 @@ async function lstatOrNull(abs: string): Promise<fs.Stats | null> {
   });
 }
 
+// Every path through fn, STAT_CONCURRENCY at a time; a false from fn stops the
+// pool and makes the whole walk false.
 async function eachPath<T>(paths: Iterable<T>, fn: (item: T) => Promise<boolean | void>): Promise<boolean> {
-  const queue = [...paths];
-  let index = 0;
-  let halted = false;
-  const worker = async () => {
-    while (!halted && index < queue.length) {
-      const item = queue[index++]!;
-      if (await fn(item) === false) halted = true;
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(STAT_CONCURRENCY, queue.length) }, worker));
-  return !halted;
+  const results = await mapLimit([...paths], STAT_CONCURRENCY, fn, { until: (r) => r === false });
+  return !results.includes(false);
 }
 
 /** The current signature of every path. */

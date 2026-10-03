@@ -27,7 +27,9 @@ import {
   type CallRecordingStatus,
   type CallRecordingStopReason,
 } from "@codecast/shared/contracts";
-import { recordingFieldsFromEgress, type LivekitEgress, type LivekitParticipant, screenShareTracks } from "./livekitServer";
+import { livekitConfigFromEnv, recordingFieldsFromEgress, type LivekitEgress, type LivekitParticipant, screenShareTracks } from "./livekitServer";
+import { callRecordingsBucketFromEnv } from "./r2";
+import { displayName } from "./displayNames";
 import { postEvent } from "../callChat";
 
 type RecordingRow = Doc<"call_recordings">;
@@ -293,6 +295,46 @@ export async function liveRoomRun(ctx: any, roomKey: string): Promise<RecordingR
  *  late joiners included, are always told. */
 export async function isRoomRecording(ctx: any, roomKey: string): Promise<boolean> {
   return (await liveRoomRun(ctx, roomKey)) !== null;
+}
+
+/** Recording needs two things this deployment may lack: LiveKit's server
+ *  credentials and the private bucket. Said before a press does anything. */
+export function recordingConfigured(): boolean {
+  return livekitConfigFromEnv() !== null && callRecordingsBucketFromEnv() !== null;
+}
+
+export async function teammateName(ctx: any, userId: Id<"users"> | string): Promise<string> {
+  const id = ctx.db.normalizeId("users", String(userId));
+  return displayName(id ? await ctx.db.get(id) : null);
+}
+
+/** What the room's teammates are told about recording right now, or null
+ *  when it is not recording. Nothing in it moves with the clock: it changes
+ *  when a run starts, when LiveKit's first frame lands (started_at, once),
+ *  and when it stops, so a room full of subscribers is re-pushed three times
+ *  a run. An elapsed counter is the client's arithmetic on started_at. This
+ *  names a teammate as the team does; a guest is told through callGuests'
+ *  own notice, which carries no names and no ids. Here, beside the runs,
+ *  because the live room list carries it (calls.getLiveRooms): the room's
+ *  recording has one feed on the client, and one home in its store. */
+export async function roomRecordingState(ctx: any, roomKey: string) {
+  // A run being stopped is no longer recording the room, and LiveKit is
+  // still finishing its file: a client may say "saving".
+  const run =
+    (await liveRoomRun(ctx, roomKey)) ??
+    (await activeRoomRecordings(ctx, roomKey)).find((r) => r.kind === "composite" && r.status === "stopping");
+  if (!run) return null;
+  const call: Doc<"transcripts"> | null = await ctx.db.get(run.transcript_id);
+  return {
+    status: run.status as "starting" | "recording" | "stopping",
+    run_id: run._id,
+    transcript_id: run.transcript_id,
+    call_short_id: call?.short_id ?? null,
+    started_by: { id: String(run.started_by), name: await teammateName(ctx, run.started_by) },
+    requested_at: run.requested_at,
+    // The file's time 0: when the room began to be filmed, not the press.
+    started_at: run.started_at ?? null,
+  };
 }
 
 /**

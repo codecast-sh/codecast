@@ -5,14 +5,13 @@
  * ../fixtures/phone.ts.
  */
 
-import { PairVeil, PhoneScreen, QuestionFlyer, WorkerExchange } from "./phone";
+import { PhoneScreen, QuestionFlyer, WorkerExchange } from "./phone";
 import type { HeroChapter } from "./contract";
 
 export const chapter: HeroChapter = {
   id: "phone",
   parts: [
     { key: "exchange", region: "pairA.transcript", order: 15, Component: WorkerExchange },
-    { key: "veil", region: "pairB.scrim", order: 0, Component: PairVeil },
     { key: "phone", region: "phone.main", order: 0, Component: PhoneScreen },
   ],
   flyers: {

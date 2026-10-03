@@ -1,5 +1,6 @@
 import { useCallback, useRef } from "react";
-import { useConvex, useQuery } from "convex/react";
+import { useQueryNoThrow } from "./useQueryNoThrow";
+import { useConvex } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore, InboxSession, isConvexId } from "../store/inboxStore";
@@ -78,11 +79,11 @@ export function useSyncTeamInboxSessions() {
   const active = scope === "team" && (!activeTeamId || isConvexId(String(activeTeamId)));
   const teamArgs = active ? teamInboxArgs(activeTeamId) : "skip";
 
-  const teamSessions = useQuery(api.conversations.listTeamInboxSessions, teamArgs as any);
-  const teamLiveness = useQuery(
+  const teamSessions = useQueryNoThrow(api.conversations.listTeamInboxSessions, teamArgs as any).data;
+  const teamLiveness = useQueryNoThrow(
     api.conversations.teamSessionsLiveness,
     active ? { activeTeamId: activeTeamId as Id<"teams"> | undefined } : "skip",
-  );
+  ).data;
 
   const lastSyncRef = useRef(Date.now());
   const lastLivenessRef = useRef(Date.now());

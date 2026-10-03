@@ -18,6 +18,7 @@ import {
   type SessionBlameSummary,
 } from "../../lib/repoView";
 import { relTimeShort } from "../../lib/utils";
+import { StampTime } from "../StampTime";
 
 const firstName = (name: string | undefined) => name?.trim().split(/\s+/)[0] ?? "";
 
@@ -88,7 +89,7 @@ function SessionLabel({ session, range }: { session: BlameSession; range: Sessio
         </span>
       )}
       {range.newest_at ? (
-        <span className="ml-auto shrink-0 tabular-nums text-sol-text-dim">{relTimeShort(range.newest_at)}</span>
+        <span className="ml-auto shrink-0 tabular-nums text-sol-text-dim"><StampTime ts={range.newest_at} format={relTimeShort} /></span>
       ) : null}
     </SessionAnchor>
   );
@@ -100,7 +101,7 @@ function UnattributedLabel({ range }: { range: SessionBlameRange }) {
     <span className="flex items-center gap-1.5 min-w-0 text-sol-text-dim">
       <GitCommitHorizontal className="w-3 h-3 shrink-0 opacity-60" />
       <span className="truncate">{git?.author_login || git?.author_name || "no session"}</span>
-      {git?.committed_at ? <span className="ml-auto shrink-0 tabular-nums">{relTimeShort(git.committed_at)}</span> : null}
+      {git?.committed_at ? <span className="ml-auto shrink-0 tabular-nums"><StampTime ts={git.committed_at} format={relTimeShort} /></span> : null}
     </span>
   );
 }
