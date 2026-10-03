@@ -16,13 +16,17 @@ export const COMPANY_REVIEW_EVERY_MS = 7 * 24 * 60 * 60 * 1000;
 export const COMPANY_REVIEW_PROMPT = "Company review. Run `cast org review` and do the review it describes, here in your own thread: open the conversation with the person you report to, each proposal's short id alone on its line, and carry it on from there.";
 
 // A role wakes on a schedule through one ordinary recurring trigger on its
-// standing session: daily for a role, the weekly company review for the Head of People.// of staff. The prompt is short and stays at principle level: the role knows
-// who it is from its first turn, and `cast brief` is its memory.
+// standing session: daily for a role, the weekly company review for the Head
+// of People. The prompt is short and stays at principle level: the role knows
+// who it is from its first turn, and `cast brief` is its memory. The brief
+// only names what moved, so the check reads the moved work before it writes
+// a line about it (red list #20, ct-55713).
 
 export const ROLE_CHECK_EVERY_MS = 24 * 60 * 60 * 1000;
 export const ROLE_CHECK_PROMPT = [
   `Check your area. Run \`cast brief\`: it points to what moved since you last looked, which of your sessions wait on a person, and how the people who report to you are doing against their goals.`,
   `The brief names what moved, not where it stands: your own lines and a session's pinned state were written before the move. Read each session that moved (\`cast read <id>\`) and write your lines from what it says now.`,
+  `The brief lists the initiatives you own with their health as last said, and when. When what you read differs from that health, or it is older than a week, post the read (\`cast initiative update <in-N> --health on_track|at_risk|off_track "<what changed>"\`), so nobody plans against a stale word.`,
   `Act on what is yours to act on. Put in front of the person what needs them, with your recommendation; the rest belongs in your brief. When nothing needs doing, say so in one line and end the turn.`,
 ].join("\n");
 

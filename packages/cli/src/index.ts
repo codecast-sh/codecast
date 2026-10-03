@@ -92,6 +92,7 @@ import type { OrgTarget } from "./orgTarget.js";
 import { registerOrgInitCommands } from "./orgInit.js";
 import { registerOrgTemplateCommands } from "./orgTemplate.js";
 import { registerOrgRoleOpsCommands } from "./orgRoleOps.js";
+import { registerRouteCommand } from "./routeCommand.js";
 import {
   loadWorkspaceRoster,
   resolveWorkspaceForRead,
@@ -112,7 +113,7 @@ import { writeThreadStatePulse } from "./threadStateStamp.js";
 import { AuthServer } from "./authServer.js";
 import { startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons, UNVERIFIABLE_MARK } from "./colors.js";
-import { authorityLine, briefHandLine, briefTextLines, roleLine, routineLine } from "./briefLines.js";
+import { authorityLine, briefHandLine, briefInitiativeLines, briefTextLines, roleLine, routineLine, standingSessionLine } from "./briefLines.js";
 import { planReadiness, resolvedTaskIds, isUnblocked } from "./planReadiness.js";
 import { ensureTmux, tryInstallTmux, tmuxRun, hasTmux, listCodecastPanes, pickPaneForSession } from "./tmux.js";
 import { editHarnessJson, removeHarnessFile, withHarnessCause, writeHarnessFile } from "./harness.js";
@@ -13627,7 +13628,8 @@ roleGroup
     console.log(`  ${c.dim}${AUTONOMY_LABEL.toLowerCase()}: ${autonomyOn(brief.role.trust) ? "on" : "off"} (${autonomySentence(autonomyOn(brief.role.trust)).replace(/^It /, "it ").replace(/\.$/, "")})${c.reset}`);
     console.log(authorityLine(brief.role, Date.now()));
     console.log(`  ${c.dim}used today, of its limits: ${u.wakes} of ${u.caps.wakes_per_day} wakes · ${u.hands} of ${u.caps.hands_per_day} sessions started · ${u.tokens} of ${u.caps.tokens_per_day} tokens${u.uncounted_sessions ? ` · tokens not counted for ${u.uncounted_sessions} session${u.uncounted_sessions === 1 ? "" : "s"}` : ""}${c.reset}`);
-    console.log(`  ${c.dim}standing session: ${brief.role.standing_short_id ?? "none"}${routineLine(brief.role.routine, Date.now())}${c.reset}`);
+    console.log(standingSessionLine(brief.role, brief.facts.standing, Date.now()));
+    for (const line of briefInitiativeLines(brief.facts.initiatives ?? [], Date.now())) console.log(line);
     for (const h of brief.facts.hands) console.log(briefHandLine(h));
   });
 
@@ -14052,6 +14054,7 @@ const orgDeps = { cliPost, readWorkspace, workspaceArgs, workspaceLabel, webUrl:
 registerOrgInitCommands(program, orgDeps);
 registerOrgTemplateCommands(program, orgDeps);
 registerOrgRoleOpsCommands(program, { ...orgDeps, resolveRoleId });
+registerRouteCommand(program, orgDeps);
 
 // ── Team chat ────────────────────────────────────────────────────────────────
 // Channels, flat threads and the anchor answering in one. `cast chat reply` is
@@ -17168,7 +17171,8 @@ projectCmd
   .option("--description <text>", stdinText("New description"))
   .option("--status <status>", "New status: planning, active, paused, done")
   .option("--labels <labels>", "Comma-separated labels (replaces existing)")
-  .option("--deadline <date>", "Target date (YYYY-MM-DD; 'none' clears) — drives the burndown deadline");
+  .option("--deadline <date>", "Target date (YYYY-MM-DD; 'none' clears) — drives the burndown deadline")
+  .option("--path <dir>", "The project's folder, where its work lives ('none' clears it); it holds no session, so changing it moves nothing");
 charterOptions(projectCmd.commands.find((x: any) => x.name() === "update"), true)
   .action(async (ref: string, options: any) => {
     const body: Record<string, any> = { id: await resolveProjectId(ref), ...charterBody(options) };
@@ -17177,8 +17181,9 @@ charterOptions(projectCmd.commands.find((x: any) => x.name() === "update"), true
     if (options.status) body.status = options.status;
     if (options.labels) body.labels = options.labels.split(",").map((s: string) => s.trim());
     if (options.deadline) body.target_date = parseDeadlineDate(options.deadline);
+    if (options.path !== undefined) body.project_path = NONE(options.path) ? null : path.resolve(options.path);
     if (Object.keys(body).length === 1) {
-      console.error("Nothing to update — pass --title, --description, --status, --labels, --deadline, or a charter flag (--goal, --metric, --priority, --owner, --non-goal, --risk, --budget-tokens)");
+      console.error("Nothing to update — pass --title, --description, --status, --labels, --deadline, --path, or a charter flag (--goal, --metric, --priority, --owner, --non-goal, --risk, --budget-tokens)");
       process.exit(1);
     }
     await cliPost("/cli/projects/update", body);
