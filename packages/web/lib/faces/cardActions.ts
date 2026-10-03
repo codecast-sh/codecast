@@ -36,12 +36,7 @@ export const ENGINE_CARD_ACTIONS: CardActions = {
     void setMuted(true, { remember: false });
     shutWalkieDoor();
   },
-  // END: the walkie's own End while it holds the room (no linger after a hang
-  // up); an ordinary leave for a huddle.
-  end: (c) => {
-    if (getWalkieStatus().liveRoom?.key === c.roomKey) void endWalkie();
-    else void leaveCall(c.roomKey);
-  },
+  end: (c) => hangUp(c.roomKey),
   mute: (c) => void setMuted(!c.muted),
   camera: (c) => void setCamera(!c.cameraOn),
   answer: (c) => {
@@ -52,11 +47,22 @@ export const ENGINE_CARD_ACTIONS: CardActions = {
     const inv = inviteIn(c);
     if (inv) void declineInvite(String(inv._id));
   },
+  // CANCEL from inside the room is a hang up: the caller is seated alone, and
+  // the leave settles every ring out of it (calls.leaveRoom). A ring out of a
+  // room this window is not in withdraws just that invite.
   cancel: (c) => {
+    if (c.hangUp) return hangUp(c.roomKey);
     const inv = inviteOut(c);
     if (inv) void cancelOutgoing(String(inv._id));
   },
 };
+
+/** END: the walkie's own End while it holds the room (no linger after a hang
+ *  up); an ordinary leave for a huddle. */
+function hangUp(roomKey: string): void {
+  if (getWalkieStatus().liveRoom?.key === roomKey) void endWalkie();
+  else void leaveCall(roomKey);
+}
 
 function inviteIn(c: RingIn): { _id: unknown } | undefined {
   const rows: any[] = useInboxStore.getState().myCalls?.incoming ?? [];

@@ -18,7 +18,7 @@ import { voiceHostView } from "../../lib/calls/voiceHostView";
 import { soundCallRing } from "../../lib/sounds";
 import { CALL_RING_PERIOD_MS } from "@codecast/shared/contracts";
 import { acceptInvite, getCallTiles, subscribeCallTiles, takeOverCall } from "../../lib/calls/callManager";
-import { publishVoiceMirror, runVoiceCommand, walkieHoldsRoom } from "../../lib/calls/walkie";
+import { onHostExpand, publishVoiceMirror, runVoiceCommand, walkieHoldsRoom } from "../../lib/calls/walkie";
 import { callWindowReport } from "../../lib/calls/callHandoff";
 import { getScribeStatus, subscribeScribe } from "../../lib/calls/transcription";
 import {
@@ -265,6 +265,7 @@ export function VoiceHostPanel({ urlRoom, params }: { urlRoom: string | null; pa
     });
     // The elsewhere pill, in any window: the explicit expand.
     onCallPanelShow(expand);
+    onHostExpand(expand);
     // Listeners first, then the declaration: from here rooms are commands.
     declareVoiceHost();
   });

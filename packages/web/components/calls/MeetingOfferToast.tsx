@@ -1,35 +1,44 @@
-import { RECORD_OFFER_COPY } from "../../lib/calls/recordOfferCopy";
 "use client";
 
-// The cards the desktop's meeting detector puts on screen. What SHOWS them —
-// and what decides whether to show anything at all — is lib/calls/meetingOffers.
+// The record-this-meeting offer, as one face shared by both places it appears:
+// the desktop shell's /meeting-offer corner window and, for shells that predate
+// that window, an in-app toast (lib/calls/meetingOffers decides which).
 //
-// The offer is a question, not an announcement, so it never times out and never
-// answers itself: only Record, Not now, or Never for this app clears it. The
-// shell has already decided WHETHER to ask (the off / ask / auto setting, and
-// the per-app never list); everything here is what the person sees and what
-// their answer does.
+// It starts as a one-line capsule and expands on a click of its body. Left
+// alone it goes away on its own: a hairline drains under it for OFFER_LINGER_MS
+// (paused while the pointer rests on it) and the capsule fades out. Any answer
+// or interaction (expanding, starting, an error to read) stops the drain, so a
+// card somebody is engaging with never leaves under them.
 //
 // NOTHING STARTS WITHOUT AN ANSWER. In ask mode the microphone is opened by the
 // Record button and by nothing else, which is the same rule the /calls button
-// follows. Auto mode is the person having answered in advance, in the setting,
-// once — and the note says so out loud when it fires.
+// follows. Auto mode is the person having answered in advance, in the setting.
 import { useState } from "react";
-import { toast } from "sonner";
-import { Mic, Ban } from "lucide-react";
+import { Ban, Mic, X } from "lucide-react";
 import { getRecorderStatus, startRecording } from "../../lib/calls/recorder";
 import { getMeetingDetect, setMeetingDetect, type MeetingOffer } from "../../lib/desktopMeetings";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import "./recorder.css";
 
-export function MeetingOfferCard({
-  toastId,
+export const OFFER_LINGER_MS = 15_000;
+
+export function MeetingOfferFace({
   offer,
+  onClose,
+  onStarted,
+  autoStart = false,
 }: {
-  toastId: string | number;
   offer: MeetingOffer;
+  onClose: () => void;
+  /** The recording is running; the host decides what replaces the offer. */
+  onStarted?: () => void;
+  autoStart?: boolean;
 }) {
-  const [starting, setStarting] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [leaving, setLeaving] = useState(false);
+  const touched = expanded || starting || !!error;
 
   const record = async () => {
     setStarting(true);
@@ -37,75 +46,117 @@ export function MeetingOfferCard({
     const id = await startRecording();
     setStarting(false);
     if (id) {
-      toast.dismiss(toastId);
+      onStarted?.();
       return;
     }
-    // startRecording puts the honest reason on its status — a refused
-    // microphone, a recognizer that would not start. The card keeps its place
-    // and says it, because the answer to most of them is to try again.
+    // startRecording puts the honest reason on its status: a refused
+    // microphone, a recognizer that would not start. Expand so the sentence
+    // has room, and stay up: the answer to most of them is to try again.
     setError(getRecorderStatus().error ?? "Could not start the recording.");
+    setExpanded(true);
   };
 
-  // Read the list before adding to it: the shell owns it, and another window
-  // may have answered "never" for something else since this card was drawn.
+  // Read the never list before adding to it: the shell owns it, and another
+  // window may have answered "never" for something else since this appeared.
   const never = async () => {
-    toast.dismiss(toastId);
+    onClose();
     const current = await getMeetingDetect();
     const list = current?.never ?? [];
     if (!list.includes(offer.app)) await setMeetingDetect({ never: [...list, offer.app] });
   };
 
+  useWatchEffect(() => {
+    if (autoStart) void record();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const shell = {
+    role: "status",
+    onAnimationEnd: (e: React.AnimationEvent) => {
+      if (e.animationName === "rec-win-out") onClose();
+    },
+  } as const;
+  const leave = leaving ? " rec-win-leaving" : "";
+  const drain = !touched && !leaving && (
+    <span
+      className="rec-drain"
+      aria-hidden="true"
+      style={{ animationDuration: `${OFFER_LINGER_MS}ms` }}
+      onAnimationEnd={(e) => {
+        e.stopPropagation();
+        setLeaving(true);
+      }}
+    />
+  );
+
+  if (!expanded) {
+    return (
+      <div {...shell} className={`rec-win${leave}`}>
+        <button type="button" className="rec-win-expand" title="More choices" onClick={() => setExpanded(true)}>
+          <span className="rec-win-mark" aria-hidden="true">
+            <Mic className="h-2.5 w-2.5" />
+          </span>
+          <span className="rec-win-name">{offer.name}</span>
+          <span className="rec-win-dim">meeting?</span>
+        </button>
+        <button type="button" className="rec-win-go" onClick={record} disabled={starting}>
+          {starting ? "Mic…" : "Record"}
+        </button>
+        <button type="button" className="rec-win-ghost" title="Not now" aria-label="Not now" onClick={onClose}>
+          <X className="h-3 w-3" />
+        </button>
+        {drain}
+      </div>
+    );
+  }
+
   return (
-    <div className="rec-offer">
-      <span className="rec-offer-glyph" aria-hidden="true">
-        <Mic className="w-3.5 h-3.5" />
-      </span>
-      <div className="rec-offer-body">
-        <div className="rec-offer-title">{offer.name} looks like a meeting</div>
-        <p className="rec-offer-copy">{RECORD_OFFER_COPY}</p>
-        {error && <p className="rec-offer-error">{error}</p>}
-        <div className="rec-offer-actions">
-          <button type="button" className="rec-offer-go" onClick={record} disabled={starting}>
-            {starting ? "Waiting for the microphone" : error ? "Try again" : "Record"}
-          </button>
-          <button type="button" className="rec-offer-action" onClick={() => toast.dismiss(toastId)}>
-            Not now
-          </button>
-          <button type="button" className="rec-offer-action" onClick={never}>
-            <Ban className="w-3 h-3" />
-            Never for {offer.name}
-          </button>
-        </div>
+    <div {...shell} className={`rec-win rec-win-card${leave}`}>
+      <button type="button" className="rec-win-expand" title="Shrink" onClick={() => setExpanded(false)}>
+        <span className="rec-win-mark" aria-hidden="true">
+          <Mic className="h-2.5 w-2.5" />
+        </span>
+        <span className="rec-win-name">Record {offer.name}?</span>
+      </button>
+      <p className="rec-win-copy">
+        Transcribed live from your mic, summarized when you stop. Only you see it.
+      </p>
+      {error && <p className="rec-win-error">{error}</p>}
+      <div className="rec-win-actions">
+        <button type="button" className="rec-win-go" onClick={record} disabled={starting}>
+          {starting ? "Waiting for the mic…" : error ? "Try again" : "Record"}
+        </button>
+        <button type="button" className="rec-win-quiet" onClick={onClose}>
+          Not now
+        </button>
+        <button type="button" className="rec-win-quiet" onClick={never}>
+          <Ban className="h-3 w-3" />
+          Never for {offer.name}
+        </button>
       </div>
     </div>
   );
 }
 
-/** Auto mode's quiet note: the recording is already running, so this reports
- *  rather than asks. The pill carries the stop. */
+/** Auto mode's note: the recording is already running, so this reports rather
+ *  than asks. The pill carries the stop. */
 export function MeetingRecordingNote({ offer }: { offer: MeetingOffer }) {
   return (
-    <div className="rec-offer rec-offer-quiet">
-      <span className="rec-offer-dot" aria-hidden="true" />
-      <div className="rec-offer-body">
-        <div className="rec-offer-title">Recording {offer.name}</div>
-        <p className="rec-offer-copy">
-          Started on its own because you asked for that. Stop it any time from the recording pill.
-        </p>
-      </div>
+    <div className="rec-win" role="status">
+      <span className="rec-pill-dot" aria-hidden="true" />
+      <span className="rec-win-name">Recording {offer.name}</span>
+      <span className="rec-win-dim pr-1">stop it from the pill</span>
     </div>
   );
 }
 
-/** When a start fails — a refused microphone is the common one — the engine's
+/** When a start fails (a refused microphone is the common one), the engine's
  *  own sentence is what the person reads. */
 export function MeetingRecordFailed({ offer, message }: { offer: MeetingOffer; message: string }) {
   return (
-    <div className="rec-offer rec-offer-failed">
-      <div className="rec-offer-body">
-        <div className="rec-offer-title">{offer.name} was not recorded</div>
-        <p className="rec-offer-copy">{message}</p>
-      </div>
+    <div className="rec-win rec-win-card" role="status">
+      <span className="rec-win-name">{offer.name} was not recorded</span>
+      <p className="rec-win-error">{message}</p>
     </div>
   );
 }

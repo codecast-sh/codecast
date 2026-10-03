@@ -1596,6 +1596,14 @@ export function refreshWalkie(): void {
   applyReport();
 }
 
+/** Host: what opening the stage does, set by the host's page. Reached by a
+ *  command rather than the shell's show, which only raises a room the host
+ *  has reported as a huddle and so missed a walkie that became a call. */
+let hostExpand: (() => void) | null = null;
+export function onHostExpand(fn: (() => void) | null): void {
+  hostExpand = fn;
+}
+
 /**
  * Host: carry out a gesture another window sent. The names are this module's
  * and callManager's own exports, so a remote and the host run the same code
@@ -1604,6 +1612,9 @@ export function refreshWalkie(): void {
 export async function runVoiceCommand(cmd: string, args: unknown[]): Promise<void> {
   const a = args as any[];
   switch (cmd) {
+    case "expandCall":
+      hostExpand?.();
+      return;
     case "startBurst":
       return startBurstHere(String(a[0]), String(a[1]), a[2] ? String(a[2]) : undefined);
     case "endBurst":

@@ -152,176 +152,117 @@
   background: color-mix(in srgb, var(--sol-text) 8%, transparent);
 }
 
-/* The meeting offer card.
+/* ── the meeting offer and recording faces ─────────────────────────────────
  *
- * Same red family as the pill, one step quieter: the pill announces a state,
- * this asks a question. It is a toast, so sonner owns where it sits; what it
- * owns is being readable in one glance and having three answers of obviously
- * different weight — Record leads, the two refusals sit back.
- */
+ * Shared by the desktop's /meeting-offer corner window and the in-app toast.
+ * A system notification, not an app card: it floats over the desktop (often
+ * over the meeting itself), so it is a small quiet capsule by default, one
+ * line and the one action that matters. Clicking the body expands it; every
+ * face owns its width because the window is reshaped around the content.
+ *
+ * Dark glass in every theme (both hosts wrap it in `dark`): over arbitrary
+ * desktops a translucent app surface reads as a smudge. Nothing is solid
+ * red; the mark and Record's tint carry the colour at a whisper. */
 
-.rec-offer {
-  display: flex;
-  gap: 10px;
-  width: 340px;
-  padding: 11px 12px;
-  border-radius: 12px;
-  border: 1px solid color-mix(in srgb, var(--sol-red) 40%, transparent);
-  background: color-mix(in srgb, var(--sol-bg-alt) 97%, transparent);
-  box-shadow: 0 10px 30px rgb(0 0 0 / 0.3);
-  backdrop-filter: blur(6px);
-}
-
-.rec-offer-glyph {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--sol-red) 16%, transparent);
-  color: var(--sol-red);
-}
-
-.rec-offer-body {
-  min-width: 0;
-  flex: 1;
-}
-
-.rec-offer-title {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--sol-text);
-}
-
-.rec-offer-copy {
-  margin-top: 3px;
-  font-size: 11.5px;
-  line-height: 1.4;
-  color: var(--sol-text-muted);
-}
-
-.rec-offer-error {
-  margin-top: 6px;
-  font-size: 11.5px;
-  line-height: 1.4;
-  color: var(--sol-red);
-}
-
-.rec-offer-actions {
+.rec-win {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-top: 9px;
-  flex-wrap: wrap;
-}
-
-.rec-offer-go {
-  padding: 5px 11px;
-  border-radius: 8px;
-  border: 1px solid color-mix(in srgb, var(--sol-red) 50%, transparent);
-  background: color-mix(in srgb, var(--sol-red) 18%, transparent);
-  color: var(--sol-red);
-  font-size: 11.5px;
-  font-weight: 600;
-  transition: background 120ms;
-}
-
-.rec-offer-go:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--sol-red) 30%, transparent);
-}
-
-.rec-offer-go:disabled {
-  opacity: 0.6;
-}
-
-.rec-offer-action {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 5px 9px;
-  border-radius: 8px;
-  border: 1px solid var(--sol-border);
-  color: var(--sol-text-dim);
-  font-size: 11.5px;
-  transition: color 120ms, border-color 120ms;
-}
-
-.rec-offer-action:hover {
-  color: var(--sol-text);
-  border-color: var(--sol-text-dim);
-}
-
-/* Auto mode's note: it reports, so it carries the breathing dot instead of a
-   question's weight. */
-.rec-offer-quiet {
-  align-items: center;
-  border-color: color-mix(in srgb, var(--sol-red) 28%, transparent);
-}
-
-.rec-offer-dot {
-  flex-shrink: 0;
-  width: 9px;
-  height: 9px;
+  gap: 7px;
+  width: max-content;
+  padding: 3px 4px 3px 6px;
   border-radius: 999px;
-  background: var(--sol-red);
-  animation: rec-breathe 1.8s ease-in-out infinite;
+  border: 1px solid rgb(255 255 255 / 0.08);
+  background: color-mix(in srgb, var(--sol-bg-alt) 55%, black);
+  box-shadow: 0 2px 10px rgb(0 0 0 / 0.3);
+  backdrop-filter: blur(12px);
+  user-select: none;
+  animation: rec-win-in 180ms ease-out;
+}
+
+.rec-win-leaving {
+  animation: rec-win-out 260ms ease-in forwards;
+  pointer-events: none;
+}
+
+@keyframes rec-win-in {
+  from { opacity: 0; transform: translateY(-3px); }
+}
+
+@keyframes rec-win-out {
+  to { opacity: 0; transform: translateY(-3px); }
+}
+
+/* The countdown to going away on its own: a hairline that drains under the
+   capsule and holds still while the pointer rests on it. Its animationend is
+   the timer, so the hairline and the dismissal can never disagree. */
+.rec-drain {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 0;
+  height: 1px;
+  background: rgb(255 255 255 / 0.16);
+  transform-origin: left;
+  animation-name: rec-drain;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+.rec-win:hover .rec-drain {
+  animation-play-state: paused;
+}
+
+@keyframes rec-drain {
+  to { transform: scaleX(0); }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .rec-offer-dot { animation: none; }
-}
-
-.rec-offer-failed {
-  border-color: color-mix(in srgb, var(--sol-orange) 45%, transparent);
-}
-
-/* ── the /meeting-offer window's faces ─────────────────────────────────────
- *
- * A system notification, not an app card: it floats over the desktop (often
- * over the meeting itself), so it is a TINY capsule by default — one short
- * line, the one action that matters, and nothing boxed. Clicking the body
- * expands it; every face owns its width because the window is reshaped
- * around the content.
- *
- * Denser glass than the in-app toast on purpose: over arbitrary desktops a
- * translucent app surface reads as a smudge, so the capsule leans dark and
- * lets the red dot and the Record fill be the only loud pixels. The page
- * root carries the `dark` class, so these tokens never invert to the light
- * palette over someone's desktop. */
-
-.rec-win {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: max-content;
-  padding: 5px 6px 5px 10px;
-  border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--sol-red) 22%, rgb(255 255 255 / 0.07));
-  background: color-mix(in srgb, var(--sol-bg-alt) 62%, black);
-  box-shadow: 0 4px 18px rgb(0 0 0 / 0.45);
-  backdrop-filter: blur(12px);
-  user-select: none;
+  .rec-win, .rec-win-leaving { animation-duration: 1ms; }
+  .rec-drain { opacity: 0; }
 }
 
 /* The expanded shapes keep the same glass, squarer. */
 .rec-win-card {
-  border-radius: 14px;
-  align-items: flex-start;
-  padding: 11px 12px;
-  width: 332px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  border-radius: 12px;
+  padding: 8px 10px 9px;
+  width: 304px;
+}
+
+.rec-win-copy {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--sol-text-muted);
+}
+
+.rec-win-error {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--sol-red);
+}
+
+.rec-win-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  margin-top: 8px;
 }
 
 /* The expanded recording: the capsule's header row with a detail line under
    it, barely wider than the capsule itself. The clickable region flexes so
    the meter drifts right and the ghosts get breathing room. */
 .rec-win-col {
-  border-radius: 14px;
+  border-radius: 12px;
   flex-direction: column;
   align-items: stretch;
-  padding: 8px 10px;
-  width: 300px;
+  padding: 6px 8px 8px 10px;
+  width: 268px;
 }
 
 .rec-win-col .rec-win-expand {
@@ -340,7 +281,7 @@
 }
 
 .rec-win-name {
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 500;
   color: var(--sol-text);
   white-space: nowrap;
@@ -356,31 +297,29 @@
 .rec-win-expand {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
   cursor: pointer;
 }
 
-/* Record: the one filled control anywhere in this window. A small red
-   capsule with dark text — the macOS record idiom — instead of the boxed
-   outline buttons the toast uses. */
+/* Record: the leading answer, set apart by a red tint rather than a fill so
+   the capsule stays quiet over somebody's meeting. */
 .rec-win-go {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   flex-shrink: 0;
-  padding: 4px 11px;
+  padding: 2px 9px;
   border-radius: 999px;
-  background: var(--sol-red);
-  color: color-mix(in srgb, var(--sol-bg-alt) 30%, black);
+  background: color-mix(in srgb, var(--sol-red) 16%, transparent);
+  color: color-mix(in srgb, var(--sol-red) 80%, white);
   font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.01em;
+  font-weight: 600;
   transition: background 120ms, transform 80ms;
 }
 
 .rec-win-go:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--sol-red) 84%, white);
+  background: color-mix(in srgb, var(--sol-red) 28%, transparent);
 }
 
 .rec-win-go:active:not(:disabled) {
@@ -397,8 +336,8 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   border-radius: 999px;
   color: var(--sol-text-dim);
   transition: color 120ms, background 120ms;
@@ -428,7 +367,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 9px;
+  padding: 2px 7px;
   border-radius: 999px;
   color: var(--sol-text-dim);
   font-size: 11px;
@@ -441,19 +380,18 @@
   background: rgb(255 255 255 / 0.07);
 }
 
-/* The tiny mic mark: a breathing red dot wearing the glyph's meaning — one
-   loud pixel, not a badge in a circle. */
+/* The tiny mic mark: the glyph alone in a faint red disc. */
 .rec-win-mark {
   position: relative;
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--sol-red) 18%, transparent);
-  color: var(--sol-red);
+  background: color-mix(in srgb, var(--sol-red) 12%, transparent);
+  color: color-mix(in srgb, var(--sol-red) 85%, white);
 }
 
 .rec-win-clock {
@@ -473,4 +411,32 @@
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+/* The recording page's microphone line: which mic, and a meter that says it
+   is hearing. Same bars as the pill, wider, so a silent mic is obvious. */
+.rec-mic {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px 2px 7px;
+  border-radius: 7px;
+  border: 1px solid color-mix(in srgb, var(--sol-red) 30%, transparent);
+  color: var(--sol-text-muted);
+  min-width: 0;
+}
+
+.rec-mic-select {
+  min-width: 0;
+  max-width: 220px;
+  background: transparent;
+  color: var(--sol-text);
+  font-size: 11.5px;
+  outline: none;
+  cursor: pointer;
+  text-overflow: ellipsis;
+}
+
+.rec-mic-level {
+  height: 14px;
 }
