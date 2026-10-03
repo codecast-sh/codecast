@@ -15,7 +15,9 @@ async function verifyTemplateSections() {
   }
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   const { mock } = await import("bun:test");
-  const marked: any[] = []; const activated: string[] = []; const binds: any[] = [];
+  const marked: any[] = []; const activated: string[] = []; const binds: any[] = []; const proposed: any[] = [];
+  const learningSet: boolean[] = []; let learningOn = false;
+  const lessonRows = [{ id: "l-1", status: "released", released_in: "2.1.0", body: "The search-console step should say which account owns the property." }, { id: "l-2", status: "open", body: "The weekly review should open with the numbers." }];
   const now = Date.now();
   const instance = {
     _id: "inst-1", instance_key: "key-1", instance: "acme-growth", template_id: "growth", version: "2.0.0", digest: "6e0c187bacdef8543bba951bbad6cca098545a45be99ef6e47bc3e9b302e5e01", phase: "ready", host: { machine: "mbp", dir: "/src/acme" },
@@ -32,7 +34,7 @@ async function verifyTemplateSections() {
     ],
     scoreboard: [{ key: "primary_events_7d", label: "Primary events", value: "7", observed_at: now - 3_600_000, source: "ct-1" }, { key: "cost", label: "Cost per event" }],
     secrets: [{ key: "accounts.ads", label: "Google Ads credentials", bound: false }, { key: "accounts.publora", label: "Publora key", bound: true }],
-    template: { name: "CMO", latest_stable: "2.1.0" }, update_available: "2.1.0",
+    template: { name: "CMO", latest_stable: "2.1.0", changelog: "## 2.1.0\nThe search-console guide names the owning account." }, update_available: "2.1.0", update_digest: "f".repeat(64),
     // The host step from the web (H3): the machine that runs the role, and how the last request went.
     bind_host: { device: { device_id: "dev-mbp", label: "MacBook", online: true, can_receive_secrets: true, pubkey: "PUB" }, dir: "/src/acme", reason: null },
     host_step: { state: "idle" },
@@ -41,8 +43,10 @@ async function verifyTemplateSections() {
   mock.module("../../hooks/useTemplateHire", () => ({
     useTemplateInstance: () => ({ instance: shown, ready: true }),
     useTemplateCatalog: () => ({ templates: [], ready: true }),
-    useTemplateActions: () => ({ propose: async () => ({}), markSetup: async (key: string, id: string, status: string) => { marked.push([key, id, status]); }, activate: async (id: string) => { activated.push(id); }, requestBind: async (key: string, secrets: any[]) => { binds.push([key, secrets]); return { command_id: "cmd-1", device: { device_id: "dev-mbp", label: "MacBook" }, already_pending: false }; } }),
+    useTemplateActions: () => ({ propose: async (spec: any) => { proposed.push(spec); return { short_id: "op-4" }; }, setLearning: async (_team: string | undefined, enabled: boolean) => { learningSet.push(enabled); learningOn = enabled; }, markSetup: async (key: string, id: string, status: string) => { marked.push([key, id, status]); }, activate: async (id: string) => { activated.push(id); }, requestBind: async (key: string, secrets: any[]) => { binds.push([key, secrets]); return { command_id: "cmd-1", device: { device_id: "dev-mbp", label: "MacBook" }, already_pending: false }; } }),
     // Sealing is the browser's Web Crypto in the app; here the shape is what matters: never the value.
+    useTemplateLearning: () => ({ learning: { enabled: learningOn, can_change: true, changed_by: null }, ready: true }),
+    useInstanceLessons: () => ({ lessons: lessonRows, ready: true }),
     sealSecret: async (pubkey: string, key: string, value: string) => ({ key, payload: { provider: key, epk: `epk:${pubkey}`, iv: "iv", ct: `sealed:${value.length}` } }),
   }));
   const React = await import("react");
@@ -53,12 +57,31 @@ async function verifyTemplateSections() {
   const { createRoot } = await import("react-dom/client");
   const { TemplateSections } = await import("./TemplateSections");
   const root = createRoot(document.getElementById("root")!);
-  await act(async () => root.render(<TemplateSections roleId="role-1" canEdit />));
+  await act(async () => root.render(<TemplateSections roleId="role-1" canEdit teamId="team-1" />));
   const text = document.body.textContent!;
   assert.match(text, /Waiting on you: Verify the domain \(unlocks seo-weekly\)/);
   assert.match(text, /Allowed outside codecast: write \(Ship pages\)/);
   assert.doesNotMatch(text, /Expired/);
   assert.match(text, /Update available: 2\.1\.0/);
+  // The learning switch (H12) says in one sentence what leaves and what comes back; off until a person turns it on.
+  assert.match(text, /Let Codecast learn from this workspace's template roles/);
+  assert.match(text, /never transcripts, quotes, names, customer data or code/);
+  const learning = () => document.querySelector<HTMLInputElement>('[data-template-learning] input[role="switch"]')!;
+  assert.equal(learning().checked, false);
+  assert.equal(document.querySelector("[data-template-learning]")!.getAttribute("data-template-learning"), "false");
+  await act(async () => learning().click());
+  assert.deepEqual(learningSet, [true]);
+  // The lessons that left this workspace, with where each stands.
+  assert.equal(document.querySelectorAll("[data-template-lesson]").length, 2);
+  assert.match(text, /released in 2\.1\.0The search-console step should say which account owns the property\./);
+  // Update: one proposal the person decides, pinning the stable release; the host step performs it after.
+  await act(async () => document.querySelector<HTMLButtonElement>("[data-template-update-propose]")!.click());
+  assert.equal(proposed.length, 1);
+  assert.deepEqual(proposed[0].changes, [{ kind: "upgrade", instance: "acme-growth", template: "growth", to: "2.1.0", digest: "f".repeat(64) }]);
+  assert.equal(proposed[0].team_id, "team-1");
+  assert.match(proposed[0].summary_md, /names the owning account/);
+  assert.match(document.body.textContent!, /proposed: op-4/);
+  assert.equal(document.querySelector("[data-template-update-propose]"), null);
   assert.match(text, /Google Ads credentials: missing/);
   assert.match(text, /Publora key: set/);
   assert.match(text, /Primary events7/);
@@ -111,7 +134,7 @@ async function verifyTemplateSections() {
   assert.doesNotMatch(JSON.stringify(binds), /never-copied/);
   await act(async () => root.unmount());
   // Awaiting its host: one button, the machine named, progress and failure read from the record.
-  const rerender = async (patch: any) => { shown = { ...instance, ...patch }; await act(async () => root2.render(<TemplateSections key={JSON.stringify(patch)} roleId="role-1" canEdit />)); return document.body.textContent!; };
+  const rerender = async (patch: any) => { shown = { ...instance, ...patch }; await act(async () => root2.render(<TemplateSections key={JSON.stringify(patch)} roleId="role-1" canEdit teamId="team-1" />)); return document.body.textContent!; };
   const root2 = createRoot(document.getElementById("root")!);
   // Skipped: the record's ask is the next open step, and the page follows it, opening that step's guide instead.
   let body = await rerender({ setup: [{ ...instance.setup[0]!, status: "skipped" }, instance.setup[1]!, { id: "publora", title: "Connect Publora", who: "human", status: "open", unlocks: ["social"], how: "org/setup/publora.md", guide: "Open Publora and connect the accounts." }], ask: { id: "publora", title: "Connect Publora", unlocks: ["social"] } });
@@ -124,6 +147,12 @@ async function verifyTemplateSections() {
   assert.equal(buttons("Reopen").length, 1);
   body = await rerender({ setup: instance.setup.map((s) => ({ ...s, status: s.who === "human" ? "skipped" : "done" })), ask: undefined });
   assert.match(body, /Nothing is left open\. A skipped step can be reopened\./);
+  // An accepted update: the same button runs the host step, moving the instance to the release.
+  body = await rerender({ pending_upgrade: { to: "2.1.0", digest: "f".repeat(64) }, secrets: [] });
+  assert.match(body, /Update available: 2\.1\.0 \(accepted; its machine moves it on the next host step\)/);
+  assert.equal(document.querySelector("[data-template-update-propose]"), null);
+  assert.equal(run().textContent, "Move to 2.1.0 on MacBook");
+  assert.match(document.querySelector('[data-host-purpose="update"] details')!.textContent!, /cast org template bind acme-growth --to 2\.1\.0/);
   body = await rerender({ phase: "awaiting_host", secrets: [{ key: "accounts.ads", label: "Google Ads credentials", bound: false }] });
   assert.match(body, /Its machine still has to install the template/);
   assert.equal(run().textContent, "Set up on MacBook");

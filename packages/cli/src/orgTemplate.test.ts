@@ -7,7 +7,7 @@ import { Command } from "commander";
 import { applyProposalChanges, extractOrgProposal } from "@codecast/shared/contracts/orgProposal";
 import { registerOrgTemplateCommands } from "./orgTemplate";
 import { atomicJson, canonicalDirectory, readArtifact, substitute, validateTemplate, type OrgTemplate } from "./orgTemplateArtifact";
-import { bindTemplate, catalogTemplates, evidenceTemplate, installTemplate, lessonTemplate, publishTemplate, publishTemplates, reportTemplate, setupTemplate, quoteTemplateArg, readReceipt, receiptPath, reconcileTemplate, templateInstructions, templateStatus, upgradeTemplate, type TemplateOptions } from "./orgTemplateRun";
+import { bindTemplate, catalogTemplates, evidenceTemplate, installTemplate, learnPass, lessonTemplate, listLessons, publishTemplate, publishTemplates, reportTemplate, setLessonStatus, setupTemplate, templateLearning, quoteTemplateArg, readReceipt, receiptPath, reconcileTemplate, templateInstructions, templateStatus, upgradeTemplate, type TemplateOptions } from "./orgTemplateRun";
 import type { OrgInitDeps } from "./orgInit";
 
 const dirs: string[] = [];
@@ -38,6 +38,9 @@ class Server {
   work: any[] = [];
   instances: any[] = [];
   lessons: any[] = [];
+  learning = false;
+  /** What each call of the learning pass answers, in order (H12). */
+  passes: any[] = [];
   /** Published releases by digest, with the snapshot blob publish uploaded (H1). */
   releases: Record<string, { manifest: any; storage_url: string | null }> = {};
   blobs: Record<string, Uint8Array> = {};
@@ -120,8 +123,8 @@ class Server {
       case "/cli/tasks/update": Object.assign(this.triggers.find((t) => t._id === body.task_id), body); return { success: true };
       case "/cli/org/template/instance": {
         const row = this.instances.find((r) => r.instance_key === body.instance_key) ?? this.instances.find((r) => r.instance === body.instance && r.project_id === body.project_id && r.phase === "awaiting_host");
-        if (row) { Object.assign(row, body); return row; }
-        const created = { ...body, _id: `inst-${this.instances.length + 1}` }; this.instances.push(created); return created;
+        if (row) { Object.assign(row, structuredClone(body)); return row; }
+        const created = { ...structuredClone(body), _id: `inst-${this.instances.length + 1}` }; this.instances.push(created); return created;
       }
       // The role page's marks live on the row (`setup_marks`); a test sets them as a person on the page would.
       case "/cli/org/template/instance-status": {
@@ -134,6 +137,12 @@ class Server {
         this.recordCalls.push({ endpoint, body }); return { ok: true };
       }
       case "/cli/org/template/lesson": { const row = { ...body, _id: `lesson-${this.lessons.length + 1}`, status: "open" }; this.lessons.push(row); return { id: row._id, status: "open" }; }
+      case "/cli/org/template/lessons": return body.instance_key ? this.lessons.filter((l) => l.instance_key === body.instance_key) : this.lessons.filter((l) => l.template_id === body.template_id);
+      case "/cli/org/template/lesson-status": { const row = this.lessons.find((l) => l._id === body.lesson_id); if (!row) throw new Error("Lesson not found"); Object.assign(row, { status: body.status, released_in: body.released_in }); return row; }
+      case "/cli/org/template/learning": return { workspace: `team:${body.team_id}`, enabled: this.learning, can_change: true };
+      case "/cli/org/template/learning/set": { if (body.from_session) throw new Error("a person's choice"); this.learning = body.enabled; return { workspace: `team:${body.team_id}`, enabled: this.learning, can_change: true }; }
+      case "/cli/org/template/learn/pass": { const part = this.passes.shift() ?? { template_id: body.template_id, read: 0, failed: 0, filed: [], refused: {}, remaining: 0 }; return part; }
+      case "/cli/org/template/get": return { template_id: body.template_id, releases: Object.entries(this.releases).map(([digest, r]) => ({ version: r.manifest.version, digest, status: "canary" })) };
       case "/cli/images/upload-url": return "https://upload.test/snapshot";
       case "/cli/org/template/publish": {
         this.releases[body.digest] = { manifest: body.manifest, storage_url: body.storage_id ? `https://blob.test/${body.storage_id}` : null };
@@ -640,7 +649,8 @@ describe("instance record, readiness and the loader", () => {
 test("registers lazy org template commands and UI install flags", () => {
   const program = new Command(); program.command("org"); registerOrgTemplateCommands(program, new Server(tmp()).deps);
   const template = program.commands[0].commands[0]; expect(template.name()).toBe("template");
-  expect(template.commands.map((c) => c.name())).toEqual(["inspect", "install", "status", "reconcile", "bind", "evidence", "report", "setup", "lesson", "publish", "catalog", "activate", "upgrade", "instructions"]);
+  expect(template.commands.map((c) => c.name())).toEqual(["inspect", "install", "status", "reconcile", "bind", "evidence", "report", "setup", "lesson", "lessons", "lesson-status", "learning", "learn", "publish", "catalog", "activate", "upgrade", "instructions"]);
+  expect(template.commands.find((c) => c.name() === "learn")!.commands.map((c) => c.name())).toEqual(["pass", "status", "due", "rollout"]);
   expect(template.commands.find((c) => c.name() === "install")!.options.map((o) => o.long)).toEqual(expect.arrayContaining(["--instance", "--project", "--dir", "--team", "--personal", "--adopt"]));
 });
 
@@ -718,6 +728,57 @@ describe("the host step for a hire accepted on the web (org-hire.md H1, H3)", ()
     const status = await templateStatus(server.deps, "acme-growth", options);
     expect(status.routines.weekly.status).toBe("paused");
     expect(await templateInstructions(server.deps, "acme-growth", "charter", options)).toContain("Own Product only");
+  });
+  test("bind moves the instance to an accepted upgrade from the record, or to --to, through the journalled upgrade; nothing waiting binds in place", async () => {
+    const source = folder(hired());
+    const server = new Server(tmp());
+    const options: TemplateOptions = { dir: server.dir, project: "project-1", team: "team-1" };
+    const first: any = await publishTemplate(server.deps, source, { team: "team-1", status: "stable" });
+    server.roles.push({ _id: "role-1", short_id: "or-1", handle: "acme-cmo", name: "CMO", scope: { project_ids: ["project-1"], plan_ids: [] }, trust: "understand", status: "active" });
+    server.instances.push({ _id: "inst-1", instance_key: "pending:project-1:acme-growth", instance: "acme-growth", template_id: "growth", version: "2.0.0", digest: first.digest, project_id: "project-1", role_id: "role-1", phase: "awaiting_host", update_policy: "canary", config: { "product.slug": "acme" }, workspace: "team:team-1" });
+    const bound = await bindTemplate(server.deps, "acme-growth", options);
+    expect(bound.template.version).toBe("2.0.0");
+    // The publisher's next release: a prompt changed, a version bumped, published and rolled out to this canary instance (pending_upgrade on the row).
+    fs.writeFileSync(path.join(source, "org/ads.md"), "Run ads with the new budget rule for {{instance}}.");
+    const m = JSON.parse(fs.readFileSync(path.join(source, "org-template.json"), "utf8")); m.version = "2.0.1"; fs.writeFileSync(path.join(source, "org-template.json"), JSON.stringify(m));
+    const second: any = await publishTemplate(server.deps, source, { team: "team-1", status: "canary" });
+    expect(second.digest).not.toBe(first.digest);
+    server.instances[0].pending_upgrade = { to: "2.0.1", digest: second.digest };
+    const moved = await bindTemplate(server.deps, "acme-growth", options);
+    expect(moved.template).toMatchObject({ version: "2.0.1", hash: second.digest });
+    expect(moved.phase).toBe("ready");
+    expect(readArtifact(moved.template.root).files.get("org/ads.md")!.toString("utf8")).toContain("new budget rule");
+    // The journal of the upgrade is the same one a folder upgrade leaves.
+    expect(fs.existsSync(receiptPath(server.dir, "acme-growth") + `.before-${first.digest}.json`)).toBe(true);
+    expect(server.instances[0]).toMatchObject({ version: "2.0.1", digest: second.digest });
+    // Nothing waiting: a rerun binds in place.
+    delete server.instances[0].pending_upgrade;
+    expect((await bindTemplate(server.deps, "acme-growth", options)).template.version).toBe("2.0.1");
+    // --to by hand: an unpublished version is refused by name; the first release rolls back.
+    await expect(bindTemplate(server.deps, "acme-growth", { ...options, to: "9.9.9" })).rejects.toThrow(/9\.9\.9 is not a published release \(published: 2\.0\.0, 2\.0\.1\)/);
+    expect((await bindTemplate(server.deps, "acme-growth", { ...options, to: "2.0.0" })).template.hash).toBe(first.digest);
+    await expect(bindTemplate(server.deps, "nothing", { ...options, to: "2.0.0" })).rejects.toThrow(/No instance nothing/);
+  });
+  test("lessons are listed for an instance or a template, judged by the publisher; the opt-in is read and set; the pass asks again while instances remain", async () => {
+    const f = await ready();
+    await bindTemplate(f.server.deps, "product", f.options);
+    await lessonTemplate(f.server.deps, "product", "The weekly review should open with last week's numbers, not the plan.", { ...f.options, evidence: "ledger=ct-1" });
+    expect(await listLessons(f.server.deps, "product", { ...f.options, instance: true })).toHaveLength(1);
+    expect(await listLessons(f.server.deps, "growth", { ...f.options, status: "accepted" })).toEqual([]);
+    expect(await setLessonStatus(f.server.deps, ["lesson-1"], { accept: true })).toEqual([{ id: "lesson-1", status: "accepted", released_in: undefined }]);
+    expect(await setLessonStatus(f.server.deps, ["lesson-1"], { releasedIn: "1.2.1" })).toEqual([{ id: "lesson-1", status: "released", released_in: "1.2.1" }]);
+    await expect(setLessonStatus(f.server.deps, ["lesson-1"], {})).rejects.toThrow(/exactly one/);
+    // The switch is a person's: the session this test runs inside must not reach the server as the caller.
+    const env = { CLAUDE_CODE_SESSION_ID: process.env.CLAUDE_CODE_SESSION_ID, CODECAST_SESSION_ID: process.env.CODECAST_SESSION_ID, CODECAST_MANAGED_SESSION: process.env.CODECAST_MANAGED_SESSION };
+    for (const key of Object.keys(env)) delete process.env[key];
+    try {
+      expect(await templateLearning(f.server.deps, undefined, f.options)).toMatchObject({ enabled: false });
+      expect(await templateLearning(f.server.deps, "on", { team: "team-1" })).toMatchObject({ enabled: true });
+      await expect(templateLearning(f.server.deps, "off", { team: "team-1", session: "session-1" })).rejects.toThrow(/a person's choice/);
+    } finally { for (const [key, value] of Object.entries(env)) if (value !== undefined) process.env[key] = value; }
+    f.server.passes = [{ template_id: "growth", read: 2, failed: 0, filed: [{ id: "l-1" }], refused: { name: 1 }, remaining: 1 }, { template_id: "growth", read: 1, failed: 1, filed: [], refused: { url: 1 }, remaining: 1 }];
+    expect(await learnPass(f.server.deps, "growth")).toEqual({ template_id: "growth", read: 3, failed: 1, filed: [{ id: "l-1" }], refused: { name: 1, url: 1 }, remaining: 1 });
+    expect(f.server.calls.filter((c) => c.endpoint === "/cli/org/template/learn/pass")).toHaveLength(2);
   });
   test("several folders publish in one run; a broken one is reported beside the rest", async () => {
     const server = new Server(tmp());

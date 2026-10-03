@@ -146,6 +146,20 @@ describe("registerOrgInitCommands", () => {
       expect(team!.description).toContain("personal");
     }
   });
+
+  // The Executive Assistant was the Chief of Staff for a day (org-staffing.md
+  // S30): the old verb still runs the same command and stays out of the help.
+  test("assistant hires the Executive Assistant; chief is its hidden alias", () => {
+    const program = new Command();
+    program.command("org");
+    registerOrgInitCommands(program, deps());
+    const org = program.commands.find((c) => c.name() === "org")!;
+    const [assistant, chief] = ["assistant", "chief"].map((n) => org.commands.find((c) => c.name() === n)!);
+    expect(assistant.description()).toContain("Executive Assistant");
+    expect(chief.options.map((o) => o.long)).toEqual(assistant.options.map((o) => o.long));
+    expect(org.helpInformation()).toContain("assistant");
+    expect(org.helpInformation()).not.toContain("chief");
+  });
 });
 
 // propose: the spec is validated before anything is posted; a good one posts

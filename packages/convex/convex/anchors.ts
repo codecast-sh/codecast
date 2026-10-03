@@ -8,7 +8,7 @@ import { fromConvexAgentType, workspaceFeatureEnabled } from "@codecast/shared/c
 import { killConversation } from "./conversations";
 import { enqueuePendingMessage, formatSessionMessage, getAuthenticatedUserId } from "./pendingMessages";
 import { isHeadOfPeopleRole, roleGrants } from "./lib/orgAccess";
-import { chiefOpeningFor } from "./lib/orgChief";
+import { assistantOpeningFor } from "./lib/orgAssistant";
 import { standingReportsToFields } from "./lib/standingSeat";
 import { stampSeatOwners } from "./sessionOwners";
 import { roleStartsOnItsOwn } from "./lib/orgCaps";
@@ -98,13 +98,13 @@ export async function visibleAnchorsForUser(
 // The first turn a role's standing session reads (org-roles-standing.md T1):
 // who it is and whom it reports to, what it looks after, how it wakes, that its
 // sessions stay out of the person's inbox, and that its brief is its memory.
-// The Head of People's (shared/contracts/headOfPeoplePrompt.ts) and the Chief
-// of Staff's (chiefOfStaffPrompt.ts, org-staffing.md S30) are their own texts,
-// in the same shape.
+// The Head of People's (shared/contracts/headOfPeoplePrompt.ts) and the
+// Executive Assistant's (executiveAssistantPrompt.ts, org-staffing.md S30) are
+// their own texts, in the same shape.
 export type RoleBootstrap = {
   handle: string;
-  /** Set on a Chief of Staff: the opening is already built from its reach. */
-  chiefOpening?: string;
+  /** Set on an Executive Assistant: the opening is already built from its reach. */
+  assistantOpening?: string;
   scopeNames: string[];
   parentName: string;
   /** The parent role's handle, when the role reports to a role. */
@@ -123,7 +123,7 @@ function roleOpeningMessage(name: string, workspace: string, role: RoleBootstrap
     : "Read `cast brief` now, post a one-line hello, then stand by.";
   // The Head of People's first review follows at once and is its first message, so it
   // posts no hello of its own.
-  if (role.chiefOpening) return `${role.chiefOpening}\n\n${close}`;
+  if (role.assistantOpening) return `${role.assistantOpening}\n\n${close}`;
   if (isHeadOfPeopleRole(role)) return `${headOfPeopleOpening({ workspace, person: role.parentName })}\n\nRead \`cast brief\` now.`;
   const starts = role.startsOnItsOwn
     ? "You start work on your own: new work goes to a session you start under you, and you say which one."
@@ -164,8 +164,8 @@ export async function roleBootstrapOf(ctx: { db: any }, role: any): Promise<Role
   }
   const user = role.reports_to?.user_id ? await ctx.db.get(role.reports_to.user_id) : null;
   const parentName = user?.name || user?.email?.split("@")[0] || "a person";
-  const chiefOpening = role.chief ? await chiefOpeningFor(ctx, role, parentName) : undefined;
-  return { handle: role.handle, scopeNames, parentName, startsOnItsOwn: roleStartsOnItsOwn(role), ...(chiefOpening ? { chiefOpening } : {}) };
+  const assistantOpening = role.assistant ? await assistantOpeningFor(ctx, role, parentName) : undefined;
+  return { handle: role.handle, scopeNames, parentName, startsOnItsOwn: roleStartsOnItsOwn(role), ...(assistantOpening ? { assistantOpening } : {}) };
 }
 
 // The first turn that brings the workspace's own standing agent "online" when
@@ -235,6 +235,11 @@ export function bootstrapMessage(opts: {
     `## Judgment`,
     `- Decline rather than half-do: if a request exceeds what is safe or cannot be finished`,
     `  properly, say so and escalate to a person — never ship a truncated or guessed result.`,
+    `- When the people you serve want different things, or a request turns on a call that is`,
+    `  theirs to make, the choice is theirs: don't pick a side or quietly settle on one. Put it`,
+    `  to the people who own it as a \`cast decide\` card (\`--to\` each of them) naming every`,
+    `  option and what it costs, and tell them where you were asked that you are waiting on`,
+    `  their answer.`,
     `- Be concise and additive. Don't repeat yourself across channels.`,
     persona ? `\n## Your persona\nAdopt the **${persona}** persona/skill if it is available in this project.` : ``,
     ``,
@@ -259,7 +264,7 @@ export async function findExistingAnchor(
   const plain = live.find((a: any) => !a.org_role_id);
   if (plain) return plain;
   // The workspace's standing agent (org-staffing.md S12, S30): the boundary's
-  // own Chief of Staff when one stands (a team's chief, or the global one in
+  // own Executive Assistant when one stands (a team's assistant, or the global one in
   // a personal boundary), else the Head of People. Its row carries the role
   // pointer and still answers as the workspace anchor, so Slack, chat and
   // `cast anchor say` keep working as aliases of whichever stands.
@@ -267,19 +272,19 @@ export async function findExistingAnchor(
   for (const a of live) {
     const role = a.org_role_id ? await ctx.db.get(a.org_role_id) : null;
     if (!role || role.status === "retired") continue;
-    if (isWorkspaceAgentRole(role, a.team_id)) { if (role.chief) return a; if (!head) head = a; }
+    if (isWorkspaceAgentRole(role, a.team_id)) { if (role.assistant) return a; if (!head) head = a; }
   }
   return head;
 }
 
-/** The workspace agent rule as a predicate over a seat's role: a chief for
+/** The workspace agent rule as a predicate over a seat's role: an assistant for
  *  this boundary, or the Head of People (listAnchors' `is_root`). */
 export function isWorkspaceAgentRole(role: any, teamId: unknown): boolean {
   if (!role || role.status === "retired") return false;
-  // A chief speaks for the boundary its row lives in: the global one for the
-  // person's own workspace, a team's chief for that team. A person's own
-  // chief for a team lives in their boundary and is nobody's workspace agent.
-  if (role.chief) return role.chief.reach === "global" ? !teamId && role.scope_type === "user" : role.scope_type === "team" && String(role.chief.team_id) === String(teamId ?? "");
+  // An assistant speaks for the boundary its row lives in: the global one for the
+  // person's own workspace, a team's assistant for that team. A person's own
+  // assistant for a team lives in their boundary and is nobody's workspace agent.
+  if (role.assistant) return role.assistant.reach === "global" ? !teamId && role.scope_type === "user" : role.scope_type === "team" && String(role.assistant.team_id) === String(teamId ?? "");
   return isHeadOfPeopleRole(role);
 }
 
@@ -664,10 +669,14 @@ export const rebriefAnchor = mutation({
 // under earlier instructions works from the ones that ship now. Once per role
 // and per `key`: a repeat with the same key sends nothing new while the first
 // is still waiting. `npx convex run anchors:rebriefRoles '{"dry_run":true}'`.
-export async function performRebriefRoles(ctx: any, args: { dry_run?: boolean; key?: string }): Promise<{ dry_run: boolean; sent: Array<{ role: string; handle: string; conversation: string | null }>; skipped: number }> {
+export async function performRebriefRoles(ctx: any, args: { dry_run?: boolean; key?: string; only?: string[] }): Promise<{ dry_run: boolean; sent: Array<{ role: string; handle: string; conversation: string | null }>; skipped: number }> {
   const sent: Array<{ role: string; handle: string; conversation: string | null }> = [];
   let skipped = 0;
+  // A re-brief is idempotent per key, so a later wording change needs a new key;
+  // `only` (short ids) keeps it to the roles whose instructions changed.
+  const only = args.only?.length ? new Set(args.only) : null;
   for (const role of await ctx.db.query("org_roles").collect()) {
+    if (only && !only.has(role.short_id) && !only.has(String(role._id))) continue;
     const anchor = role.status !== "retired" && role.anchor_id ? await ctx.db.get(role.anchor_id) : null;
     const conversation = anchor && anchor.status !== "decommissioned" && anchor.conversation_id ? await ctx.db.get(anchor.conversation_id) : null;
     if (!conversation) { skipped++; continue; }
@@ -678,7 +687,7 @@ export async function performRebriefRoles(ctx: any, args: { dry_run?: boolean; k
 }
 
 export const rebriefRoles = internalMutation({
-  args: { dry_run: v.optional(v.boolean()), key: v.optional(v.string()) },
+  args: { dry_run: v.optional(v.boolean()), key: v.optional(v.string()), only: v.optional(v.array(v.string())) },
   handler: async (ctx, args) => performRebriefRoles(ctx, args),
 });
 
@@ -751,10 +760,10 @@ export const listAnchors = query({
         // Set once the anchor is a role's seat (the head of people, S12).
         org_role_id: a.org_role_id ?? null,
         role: role && role.status !== "retired"
-          ? { _id: role._id, short_id: role.short_id, name: role.name, handle: role.handle, avatar: role.avatar ?? null, status: role.status, given_name: role.given_name ?? null, chief: role.chief ?? null, scope_type: role.scope_type }
+          ? { _id: role._id, short_id: role.short_id, name: role.name, handle: role.handle, avatar: role.avatar ?? null, status: role.status, given_name: role.given_name ?? null, assistant: role.assistant ?? null, scope_type: role.scope_type }
           : null,
         // The workspace's root (org-staffing.md S22, S30): the seat of its
-        // Chief of Staff when one stands, else of its Head of People. Every
+        // Executive Assistant when one stands, else of its Head of People. Every
         // other role's standing session is a row here too, so a picker that
         // takes the first row of a workspace lands on whichever lead is oldest.
         is_root: isWorkspaceAgentRole(role, a.team_id),

@@ -734,9 +734,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       ...(input.seat ? { seat: input.seat } : {}),
     });
   },
-  // The Chief of Staff (org-staffing.md S30): the person's right hand.
-  hireChiefOfStaff: async (ctx, _userId, [input]: [any]) => {
-    return await ctx.runMutation!((api as any).orgRoles.hireChief, {
+  // The Executive Assistant (org-staffing.md S30): the person's right hand.
+  hireExecutiveAssistant: async (ctx, _userId, [input]: [any]) => {
+    return await ctx.runMutation!((api as any).orgRoles.hireAssistant, {
       reach: input.reach,
       ...(input.personal ? { personal: true } : {}),
       ...(input.given_name ? { given_name: input.given_name } : {}),
@@ -2235,6 +2235,11 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // paints currentUser.default_models).
   setDefaultModel: async (ctx, _userId, [agent, model]: [string, string | null]) => {
     return await ctx.runMutation!(api.users.updateDefaultModel, { agent, model: model ?? null });
+  },
+  // The agents the viewer's pickers show (store setPinnedAgents paints
+  // currentUser.pinned_agents).
+  setPinnedAgents: async (ctx, _userId, [agents]: [string[]]) => {
+    return await ctx.runMutation!(api.users.setPinnedAgents, { agents });
   },
   // The viewer's own settings on the users row (store actions paint
   // currentUser first).
