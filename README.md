@@ -5,7 +5,7 @@
 <h1 align="center">codecast</h1>
 
 <p align="center">
-  <strong>Your team and its agents, in one workspace.</strong><br/>
+  <strong>Run your team and its agents in one workspace.</strong><br/>
   Raise your AI army. Stay in command.
 </p>
 

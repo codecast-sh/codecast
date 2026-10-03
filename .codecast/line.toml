@@ -1,0 +1,43 @@
+# .codecast/line.toml: codecast's line profile (docs/architecture/line-profile.md
+# LP2). Tracked (see .gitignore), so every worktree inherits it; the shipped
+# line template reads these values and names no path of its own.
+# `cast line profile` prints the resolved profile.
+
+[line]
+project = "Codecast: Product"        # default project for signals filed here
+principles = ["docs/principles.md"]  # codecast's own set is the shared set (LP5)
+prompting = "docs/prompting.md"
+size_budget = 400                    # changed lines before a run returns to plan
+watch_days = 7
+
+# Run from the run's worktree; $vars expand in the command's own shell.
+# scripts/line.ts is codecast's side of the contract (LP4), through ./evals.
+[line.commands]
+check = "cast ws check"
+prove = "bun scripts/line.ts prove --dir $run_dir"
+eval  = "bun scripts/line.ts eval --base $default_branch --dir $run_dir"
+
+[line.caps]
+cards = 5                            # open cards per person, across their lines
+
+# What this repo listens to (LP3). Each finder lives where its data lives.
+[[line.finders]]
+id = "eval-drift"
+source = "evals"
+kind = ["regression", "prompt_miss"]
+fingerprint = "evals:<surface>:<gate, freeze or separated-worse>"
+runs = "./evals check --signal (packages/evals/src/signals.ts), on the eval cadence"
+
+[[line.finders]]
+id = "insight-blockers"
+source = "insight"
+kind = "bug"
+fingerprint = "insight:<session>:<blocker hash>"
+runs = "convex signals.ingestInsightBlockers, scheduled from sessionInsights when an insight names a blocker"
+
+[[line.finders]]
+id = "lessons"
+source = "lesson"
+kind = "cohesion"
+fingerprint = "lesson:<task>:<note hash> (a card's Revise or Drop note), lesson:<rule slug> (cast-lessons)"
+runs = "convex lineLearn on a card answered Revise or Drop; the cast-lessons skill, weekly"

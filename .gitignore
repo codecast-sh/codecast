@@ -46,6 +46,7 @@ test-results/
 .codecast/*
 !.codecast/workspace.toml
 !.codecast/check.toml
+!.codecast/line.toml
 
 # Daemon files
 daemon.pid
