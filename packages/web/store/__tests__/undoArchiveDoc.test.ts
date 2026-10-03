@@ -54,6 +54,26 @@ describe("undo of a doc archive", () => {
     expect(Object.entries(s().pending).filter(([k, e]: [string, any]) => k.startsWith(`docs:${DOC}`) && e.type === "exclude")).toEqual([]);
   });
 
+  // The server keeps an archived doc, with archived_at set, and the sync log
+  // delivers it that way once the archive's exclude retires. The undo still
+  // takes the archive back: it restores the row and tells the server.
+  it("undoes the archive after the archived row has synced back", () => {
+    s().archiveDoc(DOC);
+    const pending = { ...s().pending };
+    delete pending[`docs:${DOC}`];
+    useInboxStore.setState({ pending } as any);
+    s().syncTable("docs", [{ ...row, archived_at: 1_791_076_611_120, updated_at: 7 }], { isDelta: true });
+    expect(s().docs[DOC]).toMatchObject({ archived_at: 1_791_076_611_120 });
+    calls = [];
+
+    expect(performUndo()).toBe(true);
+    expect(getUndoHistory().items[0]!.status).toBe("undone");
+    expect(s().docs[DOC]).toMatchObject({ _id: DOC, title: "Launch notes", pinned: true });
+    expect(s().docs[DOC].archived_at).toBeUndefined();
+    expect(s().docDetails[DOC]).toMatchObject({ content: "# Launch\n\nbody" });
+    expect(calls).toContainEqual(["restoreArchivedDoc", [DOC]]);
+  });
+
   // A doc opened by link before the list lands, or from another workspace, is
   // held only in docDetails. The docs writer has no row to speak for, so an
   // undo would restore the detail copy and tell the server nothing.

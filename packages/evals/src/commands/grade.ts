@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
 import type { Command } from 'commander';
@@ -10,10 +10,10 @@ import { renderOpts } from '@platform/cli-kit/render';
 import { readAgentRun, readCallRun } from '../adapters/dryRun';
 import { codecastFreezeStore } from '../adapters/freezes';
 import { criteriaCheck, judgeMomentOf, rejudgeStored, storedReply } from '../adapters/judge';
-import { routeGates, scoreOf } from '../adapters/replay';
+import { routeGates, scoreOf, stampGuard } from '../adapters/replay';
 import { hasSnapshot, loadSnapshot } from '../adapters/resolver';
 import { surfaceRuns } from '../adapters/runs';
-import { scoreVersionName, type RunJson } from '../layout';
+import { harnessExit, scoreVersionName, thenFiles, unitDirs, type RunJson } from '../layout';
 import { homePaths } from '../paths';
 import { loadSurface, surfaceMeta, surfaces } from '../registry';
 import { addSpend } from '../state';
@@ -51,19 +51,14 @@ export function registerGrade(program: Command): void {
 }
 
 const readJson = (path: string): any => (existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : null);
-const exitOf = (dir: string): number => Number((existsSync(join(dir, 'exit.txt')) ? readFileSync(join(dir, 'exit.txt'), 'utf8') : '1').trim() || 1);
-const numbered = (dir: string, prefix: string): string[] =>
-  readdirSync(dir)
-    .filter((n) => new RegExp(`^${prefix}\\d+$`).test(n))
-    .sort((a, b) => Number(a.slice(prefix.length)) - Number(b.slice(prefix.length)));
 
 /** A rep's harness runs read back from its folder, as the replay held them: callN/run and agentN/agent. */
 export function harnessRunsOf(runDir: string, model: string): { calls: CallResult[]; agents: AgentResult[] } {
-  const calls = numbered(runDir, 'call').map((n) => readCallRun(readJson(join(runDir, n, 'request.json')), join(runDir, n, 'run'), exitOf(join(runDir, n, 'run')), 0));
-  const agents = numbered(runDir, 'agent').map((n) => {
+  const calls = unitDirs(runDir, 'call').map((n) => readCallRun(readJson(join(runDir, n, 'request.json')), join(runDir, n, 'run'), harnessExit(join(runDir, n, 'run')), 0));
+  const agents = unitDirs(runDir, 'agent').map((n) => {
     const sub = join(runDir, n, 'agent');
-    const turns = 1 + readdirSync(join(runDir, n)).filter((f) => /^then\d+\.md$/.test(f)).length;
-    return readAgentRun(sub, String(readJson(join(sub, 'args.json'))?.model ?? model), turns, exitOf(sub), 0);
+    const turns = 1 + thenFiles(join(runDir, n)).length;
+    return readAgentRun(sub, String(readJson(join(sub, 'args.json'))?.model ?? model), turns, harnessExit(sub), 0);
   });
   return { calls, agents };
 }
@@ -118,6 +113,7 @@ export async function rescoreRun(runDir: string, opts: { rejudge?: boolean } = {
   const judge = judged ?? (stored.judgeModel ? { costUsd: stored.judgeCostUsd ?? 0, model: stored.judgeModel } : null);
   const after = scoreOf(gates, checks, judge);
   const text = JSON.stringify({ ...after, scenario: stored.scenario, title: stored.title, seed: stored.seed }, null, 2);
+  stampGuard(runDir, meta);
   writeFileSync(join(runDir, 'score.json'), text);
   // Every rescore and rejudge is kept as its own version, so no middle one is lost to the next.
   writeFileSync(join(runDir, scoreVersionName(after.scoredAt)), text);

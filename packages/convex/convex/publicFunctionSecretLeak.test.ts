@@ -16,6 +16,10 @@ import { getUserByGithubId } from "./teams";
 import * as commits from "./commits";
 import { getCommitsForTimeline, getCommitBySha } from "./commits";
 import { analyzeMessageRoles } from "./migrations";
+import { listConnections } from "./appConnections";
+import { cliConnectToken } from "./integrations";
+import * as tokenConnectors from "./tokenConnectors";
+import * as appConnector from "./sources/app";
 
 // Every field on `users` that must never cross a public boundary.
 const SECRET_FIELDS = [
@@ -148,5 +152,74 @@ describe("commits are not world-readable or world-destroyable", () => {
 describe("migration helpers are not public", () => {
   test("analyzeMessageRoles is internal, so it is not callable from the client API", () => {
     expect((analyzeMessageRoles as any).isPublic).toBeFalsy();
+  });
+});
+
+// Token connections (external-data.md X1, X11): the pasted token, its
+// ciphertext and the non-secret config never cross a public boundary. The
+// only public entry, connectWithToken (and cliConnectToken over it), answers
+// with an id and a label; everything that reads a credential is internal.
+describe("token connections never return their secret", () => {
+  const TOKEN_ENC = "v1.TOKEN_CIPHERTEXT_IV.TOKEN_CIPHERTEXT_BODY";
+  const tokenRow = {
+    _id: "ai_sentry",
+    provider: "sentry",
+    team_id: "team_1",
+    connected_by: VICTIM,
+    access_token_enc: TOKEN_ENC,
+    config: { org: "acme-private-org", host: "https://sentry.io" },
+    account_label: "Acme",
+    granted_scopes: [],
+    created_at: 1,
+    updated_at: 1,
+  };
+
+  test("listConnections reports a token connection without its ciphertext or config", async () => {
+    const t = tables({
+      teams: [{ _id: "team_1", name: "Acme" }],
+      team_memberships: [{ _id: "tm_1", user_id: VICTIM, team_id: "team_1", role: "member", joined_at: 1 }],
+      slack_installations: [],
+      github_app_installations: [],
+      app_installations: [tokenRow],
+      api_tokens: [],
+    });
+    t.users[0].team_id = "team_1";
+    const r = await (listConnections as any)._handler(ctx(VICTIM, t), {});
+    const sentry = r.apps.find((a: any) => a.id === "sentry" && a.scope === "team");
+    expect(sentry.status).toBe("connected");
+    expect(sentry.detail).toBe("Acme");
+    const serialized = JSON.stringify(r);
+    for (const leaked of ["access_token_enc", "TOKEN_CIPHERTEXT", "acme-private-org", "config"]) {
+      expect(`listConnections contains ${leaked}: ${serialized.includes(leaked)}`).toBe(`listConnections contains ${leaked}: false`);
+    }
+  });
+
+  test("cliConnectToken answers with an id and a label, never the token", async () => {
+    const c = {
+      runAction: async () => ({ ok: true, id: "ai_sentry", label: "Acme" }),
+    } as any;
+    const r = await (cliConnectToken as any)._handler(c, {
+      api_token: "t",
+      provider: "sentry",
+      token: "sntrys_PASTED_SECRET",
+      config: { org: "acme" },
+    });
+    expect(r).toEqual({ ok: true, id: "ai_sentry", label: "Acme" });
+    expect(JSON.stringify(r)).not.toContain("sntrys_PASTED_SECRET");
+  });
+
+  test("every function that reads or writes a token credential is internal", () => {
+    for (const name of ["getTokenCredential", "tokenConnectionRow", "tokenConnectionFor", "storeTokenConnection"] as const) {
+      expect(`${name} public: ${!!(tokenConnectors[name] as any).isPublic}`).toBe(`${name} public: false`);
+    }
+    expect((tokenConnectors.connectWithToken as any).isPublic).toBe(true);
+  });
+
+  test("the app connector's credential-adjacent functions are internal", () => {
+    // callContext and sourceForPoll hand back a connection id that
+    // readTokenCredential turns into a secret; recordCall writes the audit.
+    for (const name of ["callContext", "sourceForPoll", "recordCall", "storeManifest", "recordWatchPolls", "pollSource", "refreshSourceManifest"] as const) {
+      expect(`${name} public: ${!!(appConnector[name] as any).isPublic}`).toBe(`${name} public: false`);
+    }
   });
 });

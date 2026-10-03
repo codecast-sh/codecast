@@ -90,8 +90,9 @@ export type ThreadRow = {
   mine: boolean;
   agent: AgentRef | null;
   event?: string | null;
-  /** Why a recording ended (record_off): "pressed", "huddle_ended",
-   *  "limit" or "failed"; a failure's plain words ride in `text`. */
+  /** Why a recording ended (record_off), a CallRecordingStopReason:
+   *  "pressed", "huddle_ended", "room_empty", "limit", "ended" or "failed";
+   *  a failure's plain words ride in `text`. */
   event_reason?: string | null;
   /** The guest who pressed Stop, when a guest did: the row is owned by the
    *  presser then, and `user_name` already carries this name. */

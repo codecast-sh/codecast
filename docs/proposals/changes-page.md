@@ -4,6 +4,17 @@ Status: proposal, ready to build. Route: `/changes`. Feature flag: `teams.featur
 
 This spec starts from the "editorial" design (a fixed day edition built from stories). It adds the live strip, the deploy markers and the computed risk flags from "ship-log", and the scheduler, stable story keys and later the Why box from "zoom". It also fixes every flaw the three reviews found. Those fixes are listed in section 13 so a reviewer can check them one by one.
 
+## 0. Page shape
+
+The page is one timeline, newest day first, that loads older weeks as the reader scrolls. There are no per-day pages and no Day/Week switch.
+
+- Each day is a date, one short sentence about the day (the edition headline), a quiet meta line (changes, releases), and its stories one line each: a short headline and a one-line dek. Housekeeping folds under "N small changes".
+- A story opens in place: its body, where its why came from, its worded risks, its people, then its commits, sessions and (folded) files.
+- A finished week's notes sit where the timeline enters that week; the week in progress has none, and notes that restate a day are dropped.
+- The header holds the rest, tucked: the repository, one line of what is live, an "in progress" disclosure (In the works), and one filter button (areas, people, risks, all branches, text).
+
+Prose is written to be scanned: story headlines aim under 60 characters and deks under 80, and the day sentence under 80. Sections 3 to 6 below describe the earlier per-day edition; where they differ from this section, this section holds.
+
 ## 1. Intent
 
 A team ships code faster than anyone can read it. On codecast a day is 8 to 45 commits, the average commit touches 23 files, and 12% of commits are version bumps. On Littlebird a day is about 760 commits across dozens of branches. The commit is the wrong unit for reading: it is either release noise or a batch with no single intent.

@@ -93,13 +93,17 @@ export function registerOrgRoleOpsCommands(program: Command, deps: RoleOpsDeps):
     .requiredOption("--branch <name>", "The branch the implementer pushed")
     .option("--into <branch>", "The default branch (default: origin HEAD, else main)")
     .option("--cwd <path>", "The repository checkout (default: the current directory)")
+    .option("--task <ct-N>", "The run's task: a merge left to a person is said there as a blocker")
     .option("--json", "Machine-readable output")
     .action(async (options: any) => {
       const { runMergeStep, defaultExec } = await import("./lineMerge.js");
       const cwd = options.cwd || process.cwd();
       const head = defaultExec("git", ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], cwd);
       const into = options.into || (head.status === 0 ? head.stdout.trim().replace(/^origin\//, "") : "main");
-      const result = await runMergeStep({ cwd, run_id: options.run, branch: options.branch, into, post: deps.cliPost, log: (l) => { if (!options.json) console.log(l); } });
+      // Throwing, never exiting: a server that refuses or cannot be read is a
+      // merge left to a person (exit 0), not a failed station.
+      const post = (path: string, body: Record<string, unknown>) => deps.cliPost(path, body, { throwOnError: true });
+      const result = await runMergeStep({ cwd, run_id: options.run, branch: options.branch, into, task: options.task || undefined, post, log: (l) => { if (!options.json) console.log(l); } });
       if (options.json) console.log(JSON.stringify(result, null, 2));
     });
 

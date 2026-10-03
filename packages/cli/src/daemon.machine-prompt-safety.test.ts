@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { isMachineDeliveredMessage } from "../../shared/contracts/machineMessages";
 import { AGENT_CLIENTS } from "../../shared/contracts/agentClients";
 import { authorizesTeardown } from "../../shared/contracts/liveness";
-import { isClaudeAutoContinueLine, isRecoveryContinueClientId } from "../../shared/contracts/apiErrorBanner";
+import { isClaudeAutoContinueLine, isRecoveryContinueClientId, isUsageLimitDialog } from "../../shared/contracts/apiErrorBanner";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission";
 import { LaunchPromptCarriedError, transcriptHasUserPrompt } from "./launchPrompt";
 import { clearPromptHolds, holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, setPendingRedrive } from "./pendingPromptHold";
@@ -153,7 +153,7 @@ function fixture(transport = "tmux", cached = true) {
     // this fixture's machine has no fleet store, so no pane is restarted.
     isRecoveryContinueClientId, fleetStoreReady: () => false,
     // Nor is any of its sessions a claude.ai cloud session: the watcher is off.
-    claudeCloudRef: null, isClaudeAutoContinueLine,
+    claudeCloudRef: null, isClaudeAutoContinueLine, isUsageLimitDialog,
     _execFileAsync: async (binary: string, args: string[]) => {
       expect(binary).toBe("osascript");
       expect(args[0]).toBe("-e");
@@ -217,6 +217,7 @@ function fixture(transport = "tmux", cached = true) {
   if (!fixtureFactory) {
     const names = [
       "parsePollMessage", "pollDeclineText", "pollMenuSteps", "extractTmuxLiveRegion", "newestPaintedFrame", "isCodexTrustDialog", "isCodexUpdateDialog", "isClaudeBypassWarning",
+      "spendLimitDialogBanner", "usageLimitMenuBanner", "limitDialogOnPane",
       "classifyTmuxLiveState", "livenessFromTmuxState", "isResumeCwdPicker", "turnStartedAtFor", "paneTextAfterLastMatch",
       "assertPromptAbsent", "inputGuard", "captureTmuxLiveState", "ensureTmuxReady", "withTmuxLock", "drainTmuxComposer", "tmuxComposerText", "tmuxComposerDraft",
       "tmuxWatchablePrefix", "tmuxComposerPayloadMatcher", "tmuxComposerHoldsPayload", "composerShowsOnlyPayloadTail", "matchAtFullWindowSize", "awaitTmuxComposerPayload", "normalizePromptText",

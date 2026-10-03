@@ -89,7 +89,8 @@ const byPriorityThenId = (a: { priority?: string; short_id: string }, b: { prior
 
 const HEALTH_WORD: Record<InitiativeHealth, string | null> = { none: null, on_track: "on track", at_risk: "at risk", off_track: "off track" };
 const DESCRIPTION_CHARS = 280;
-const PRINCIPLES_CHARS = 2400;
+// Room for the shared set and one project's own as ids and titles (about 50).
+const PRINCIPLES_CHARS = 3000;
 const LIST_ITEMS = 5;
 
 const oneLine = (text: string) => text.replace(/\s+/g, " ").trim();
@@ -100,8 +101,10 @@ const list = (items?: string[]) => (items ?? []).map(oneLine).filter(Boolean).sl
 export type RenderGoalsBriefOptions = {
   /** Drop descriptions: the shape a prompt reads. */
   brief?: boolean;
-  /** docs/principles.md as read from the repository, when present. */
+  /** The principles a project reads: the shared set, then the project's own files. */
   principles?: string | null;
+  /** Where the full text lives, named by a compacted section (default docs/principles.md). */
+  principlesFrom?: string[];
   now?: number;
 };
 
@@ -159,18 +162,18 @@ export function renderGoalsBrief(data: GoalsBrief, opts: RenderGoalsBriefOptions
   if (principles) {
     // The file's own top heading is replaced by the section's.
     const body = principles.replace(/^#\s+[^\n]*\n+/, "").trim();
-    out.push("", "## Principles", "", body.length <= PRINCIPLES_CHARS ? body : compactPrinciples(body, PRINCIPLES_CHARS));
+    out.push("", "## Principles", "", body.length <= PRINCIPLES_CHARS ? body : compactPrinciples(body, PRINCIPLES_CHARS, opts.principlesFrom));
   }
   return `${out.join("\n")}\n`;
 }
 
 /**
- * docs/principles.md too long for the brief, as its ids and titles only: one
+ * Principles too long for the brief, as their ids and titles only: one
  * line per area (`## Area`), each principle as its `### <id> <title>` heading.
  * Whole principles drop from the end when even that is over the cap, never
  * one cut mid-line. A file without principle headings is clipped as text.
  */
-export function compactPrinciples(body: string, max: number): string {
+export function compactPrinciples(body: string, max: number, from: string[] = ["docs/principles.md"]): string {
   const areas: Array<{ name: string; items: string[] }> = [];
   for (const line of body.split("\n")) {
     const area = line.match(/^##\s+(.+)/);
@@ -184,7 +187,7 @@ export function compactPrinciples(body: string, max: number): string {
   const total = areas.reduce((n, a) => n + a.items.length, 0);
   if (!total) return clip(body, max);
   const footer = (left: number) =>
-    `Full text: docs/principles.md${left ? ` (${left} more)` : ""}.`;
+    `Full text: ${from.join(", ")}${left ? ` (${left} more)` : ""}.`;
   const render = (keep: number) => {
     const lines: string[] = [];
     let n = 0;
@@ -238,6 +241,16 @@ export function briefGoalRefs(brief: GoalsBrief): Set<string> {
   for (const i of brief.initiatives) for (const r of metricReadings(i)) refs.add(metricGoalRef(i.short_id, r.key));
   for (const p of brief.projects) refs.add(p.short_id);
   return refs;
+}
+
+/** What a goal_ref names, for a person reading it on a card: a project's title and charter goal, or an initiative and its metric. Null for none or a ref the brief does not offer. */
+export function goalRefLabel(brief: GoalsBrief, ref: string): { name: string; why: string } | null {
+  const project = brief.projects.find((p) => p.short_id === ref);
+  if (project) return { name: project.title, why: oneLine(project.goal ?? "") };
+  for (const i of brief.initiatives) {
+    for (const m of i.metrics) if (metricGoalRef(i.short_id, m.key) === ref) return { name: `${i.title}: ${m.name}`, why: `target ${m.target}` };
+  }
+  return null;
 }
 
 export type GroundCauseInput = {

@@ -120,6 +120,9 @@
   grid-template-columns: minmax(0, 1fr);
   row-gap: 1.5rem;
 }
+/* A change card's sheet is one column, its answer bar above the card, at
+   the decision page's measure. */
+.decision-sheet[data-card="true"] .decision-sheet-col { max-width: 60rem; }
 @container (min-width: 64rem) {
   .decision-sheet-col { max-width: 84rem; }
   .decision-sheet-grid[data-split="true"] {

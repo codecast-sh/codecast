@@ -87,15 +87,8 @@ export interface NetOptions {
   afterDeliver?: (d: Delivery) => Promise<void> | void;
 }
 
-/** The --order replay line: channels separated by spaces (channel names hold no whitespace). */
-export function formatOrder(channels: readonly Channel[]): string {
-  return channels.join(" ");
-}
-
-/** Reads a --order / SIM_ORDER value; accepts spaces or commas between channels. */
-export function parseOrder(s: string): Channel[] {
-  return s.split(/[\s,]+/).filter(Boolean);
-}
+// The --order word format lives in the dependency-free replay leaf, which the eval tool's api child loads too.
+export { formatOrder, parseOrder } from "./replay";
 
 function rankLine(counts: Map<string, number>): string {
   const top = [...counts].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)).slice(0, TOP_PRODUCERS);

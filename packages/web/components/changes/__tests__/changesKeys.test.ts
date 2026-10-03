@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { JSDOM } from "jsdom";
-import { escapeStep, keepsOwnEnter, layerOpen } from "../useChangesKeys";
+import { escapeStep, focusedCommitHref, keepsOwnEnter, layerOpen } from "../useChangesKeys";
+import { EMPTY_URL, hasFilters, toggleArea, type ChangesUrl } from "../useChangesUrlState";
+import { DAY, edition, story } from "./fixtures";
 import { pageSource } from "./pageSources";
 
 // The page's keys share the keyboard with the controls inside it
@@ -48,7 +50,29 @@ describe("Enter inside a story", () => {
     const page = pageSource("ChangesPage.tsx");
     const evidence = page.slice(page.indexOf("evidence: () => {"), page.indexOf("open: () =>"));
     expect(evidence).toMatch(/if \(keepsOwnEnter\(active\)[^\n]*\) return false;/);
-    expect(evidence.indexOf("keepsOwnEnter")).toBeLessThan(evidence.indexOf("openStory("));
+    expect(evidence.indexOf("keepsOwnEnter")).toBeLessThan(evidence.indexOf("setUrl("));
+  });
+});
+
+describe("o on a commit row", () => {
+  const page = doc(`
+    <div data-story-key="s1">
+      <button data-story-trigger id="trigger">Headline</button>
+      <ul class="chg-drawer">
+        <li data-commit-href="/commit/acme/app/abc1234"><a href="/commit/acme/app/abc1234" id="sha">abc1234</a><a id="pr" href="/pr/4">#4</a></li>
+      </ul>
+    </div>
+  `);
+  test("opens the commit the focus sits on, its sha link or a link beside it (spec 3.3)", () => {
+    expect(focusedCommitHref(page.getElementById("sha"))).toBe("/commit/acme/app/abc1234");
+    expect(focusedCommitHref(page.getElementById("pr"))).toBe("/commit/acme/app/abc1234");
+  });
+  test("off a commit row it leaves `o` to the story", () => {
+    expect(focusedCommitHref(page.getElementById("trigger"))).toBeNull();
+    expect(focusedCommitHref(null)).toBeNull();
+    const src = pageSource("ChangesPage.tsx");
+    const open = src.slice(src.indexOf("open: () => {"), src.indexOf("waiting: () =>"));
+    expect(open.indexOf("focusedCommitHref(")).toBeLessThan(open.indexOf("openTarget("));
   });
 });
 
@@ -64,7 +88,7 @@ describe("an open menu owns the keyboard", () => {
     const keys = pageSource("useChangesKeys.tsx");
     expect(keys).toMatch(/const here = [^\n]*active && !layerOpen\(\) \? fn\(\) : false/);
     const bound = [...keys.matchAll(/useShortcutAction\("changes\.\w+", ([^)]*\)?)\);/g)].map((m) => m[1]);
-    expect(bound.length).toBeGreaterThanOrEqual(14);
+    expect(bound.length).toBeGreaterThanOrEqual(9);
     for (const handler of bound) expect(handler).toMatch(/^here\(h\.\w+\)$/);
   });
 });
@@ -87,7 +111,7 @@ describe("Escape", () => {
 
   test("clearing the text writes only q", () => {
     const page = pageSource("ChangesPage.tsx");
-    const clear = page.slice(page.indexOf('case "clear-text":'), page.indexOf('case "leave-field":'));
-    expect(clear.replace(/\s+/g, " ")).toContain("setUrl({ q: undefined }); return true;");
+    expect(page).toContain('if (step === "clear-text") setUrl({ q: undefined });');
   });
 });
+

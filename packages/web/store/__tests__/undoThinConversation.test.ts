@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { useInboxStore } from "../inboxStore";
 import { _resetUndoStacks, getUndoHistory } from "@platform/engine";
 import { performUndo, performRedo } from "../undoStack";
+import { withClearedInboxStamps } from "../syncProtocol";
 
 // An inbox row that was never opened in this window has no conversations
 // meta. toggleFavorite and patchConversation create a thin `{_id}` row there
@@ -163,6 +164,40 @@ describe("undo of a gesture on a row whose conversation meta is not loaded", () 
     expectMetaLoads();
   });
 
+  // The /sessions restore writes all three hide stamps, usually changing only
+  // one. A stash made elsewhere after the undo must survive the redo: the
+  // re-invoke would write inbox_stashed_at: null again, locally and on the wire.
+  test("redo of a restore keeps a stash made elsewhere since the undo", async () => {
+    const HIDES = { inbox_dismissed_at: null, inbox_stashed_at: null, inbox_killed_at: null };
+    useInboxStore.setState({
+      sessions: { [ID]: { _id: ID, title: "Twinless", updated_at: 1, ...HIDES, inbox_dismissed_at: 10 } } as any,
+    });
+    state().syncRecord("conversations", ID, { ...META, ...HIDES, inbox_dismissed_at: 10 });
+    const sent: Array<{ action: string; args: any; patches: any }> = [];
+    const owner = {};
+    state()._setDispatch(async (action: string, args: any, patches: any) => {
+      sent.push({ action, args, patches });
+      return null;
+    }, { owner });
+    try {
+      state().patchConversation(ID, { inbox_dismissed_at: null, inbox_stashed_at: null, inbox_killed_at: null });
+      expect(performUndo()).toBe(true);
+      await new Promise((r) => setTimeout(r, 5));
+      expect(conv().inbox_dismissed_at).toBe(10);
+      state().syncRecord("conversations", ID, { ...META, ...HIDES, inbox_dismissed_at: 10, inbox_stashed_at: 99 });
+      expect(conv().inbox_stashed_at).toBe(99);
+      const from = sent.length;
+      expect(performRedo()).toBe(true);
+      await new Promise((r) => setTimeout(r, 5));
+      expect(conv().inbox_dismissed_at ?? null).toBe(null);
+      expect(conv().inbox_stashed_at).toBe(99);
+      const wire = JSON.stringify(sent.slice(from));
+      expect(wire).not.toContain("inbox_stashed_at");
+    } finally {
+      state()._clearDispatch(owner);
+    }
+  });
+
   test("the undo's server half clears the field", () => {
     const sent = captureUndoPatches();
     try {
@@ -216,5 +251,56 @@ describe("undo of a gesture on a row whose conversation meta is not loaded", () 
     expect(performRedo()).toBe(true);
     expect(conv().is_favorite).toBe(true);
     expect(state().sessions[ID].is_favorite).toBe(true);
+  });
+});
+
+// Each session lives twice in the store, and the conversations copy can hold a
+// hide stamp the server already cleared (a restore elsewhere merges field by
+// field, and the server leaves a cleared stamp out). A snooze writes the clear
+// on both copies; only the stale copy changes. The undo must not send that
+// stale stamp back: on the server it re-kills the session.
+describe("undo of a gesture whose conversations copy held a stale stamp", () => {
+  const SID = "jx7stalecopy00000000000000000000";
+  const STALE = 1791071693350;
+  beforeEach(() => {
+    _resetUndoStacks();
+    useInboxStore.setState({
+      pending: {},
+      sessions: { [SID]: { _id: SID, title: "Live", updated_at: 1, inbox_dismissed_at: null } } as any,
+      conversations: { [SID]: { _id: SID, _creationTime: 1, title: "Live", inbox_dismissed_at: STALE } } as any,
+    });
+  });
+
+  test("snooze then undo sends no inbox_dismissed_at and keeps the copies clear", () => {
+    const sent = captureUndoPatches();
+    try {
+      state().snoozeSession(SID, Date.now() + 3_600_000);
+      expect(performUndo()).toBe(true);
+      expect(sent.patches.length).toBeGreaterThan(0);
+      expect(JSON.stringify(sent.patches)).not.toContain("inbox_dismissed_at");
+      expect(state().sessions[SID].inbox_dismissed_at ?? null).toBe(null);
+      expect(state().conversations[SID].inbox_dismissed_at ?? null).toBe(null);
+      expect(state().sessions[SID].inbox_snoozed_until ?? null).toBe(null);
+    } finally {
+      sent.stop();
+    }
+  });
+
+  // The undo left the dropped stale cell at its cleared value on purpose, so
+  // the redo must judge it by that value, not by the stale stamp.
+  test("snooze, undo, redo snoozes the row again", () => {
+    const until = Date.now() + 3_600_000;
+    state().snoozeSession(SID, until);
+    expect(performUndo()).toBe(true);
+    expect(performRedo()).toBe(true);
+    expect(getUndoHistory().items[0]?.status).toBe("done");
+    expect(state().sessions[SID].inbox_snoozed_until).toBe(until);
+    expect(state().conversations[SID].inbox_dismissed_at ?? null).toBe(null);
+  });
+
+  test("the meta feeder reads a stamp the server left out as cleared", () => {
+    state().syncRecord("conversations", SID, withClearedInboxStamps({ _id: SID, _creationTime: 1, title: "Live" }));
+    expect(state().conversations[SID].inbox_dismissed_at).toBe(null);
+    expect(state().conversations[SID].title).toBe("Live");
   });
 });

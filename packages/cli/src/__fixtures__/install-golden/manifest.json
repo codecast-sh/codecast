@@ -43,13 +43,13 @@
     "stdout": "* Tasks & Plans — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
     "otherFiles": {
-      ".claude/hooks/task-pulse.sh": "0996d7ad6f5dcbee"
+      ".claude/hooks/task-pulse.sh": "689c09bc0e8a5330"
     }
   },
   "triggers": {
     "config": {
       "task_enabled": true,
-      "task_version": "8"
+      "task_version": "9"
     },
     "stdout": "* Triggers — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
@@ -90,7 +90,7 @@
     "stdout": "* Thread State — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
     "otherFiles": {
-      ".claude/hooks/thread-state.sh": "701cd264cbd17f2c",
+      ".claude/hooks/thread-state.sh": "acca3e044b0cc1c4",
       ".claude/settings.json": "6d57b0e7e2769331"
     }
   },
@@ -106,7 +106,7 @@
   "calls": {
     "config": {
       "calls_enabled": true,
-      "calls_version": "5"
+      "calls_version": "6"
     },
     "stdout": "* Calls — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
@@ -189,10 +189,10 @@
       ".claude/skills/cast-from-call/SKILL.md": "5da5a05929cb06a2",
       ".claude/skills/cast-handoff/SKILL.md": "88b146158c6bff9b",
       ".claude/skills/cast-learn/SKILL.md": "abad9d0bbef66b20",
-      ".claude/skills/cast-lessons/SKILL.md": "0a7b06647136ecc4",
+      ".claude/skills/cast-lessons/SKILL.md": "dee8b38b3d559b76",
       ".claude/skills/cast-loop/SKILL.md": "45281d9e9adc4bd3",
       ".claude/skills/cast-morning/SKILL.md": "90faab6e129bae46",
-      ".claude/skills/cast-org/SKILL.md": "30c2cb07cba52845",
+      ".claude/skills/cast-org/SKILL.md": "ee83aa3a7cd486cb",
       ".claude/skills/cast-pass/SKILL.md": "a2f0deecd382bf8d",
       ".claude/skills/cast-pickup/SKILL.md": "2d52de61a84e9eda",
       ".claude/skills/cast-plan/SKILL.md": "a830b8850214b8aa",

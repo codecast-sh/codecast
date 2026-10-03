@@ -41,25 +41,10 @@ export interface StackRow {
   updated_at: number;
 }
 
-// "24h", "90m", "2d", "30s" → milliseconds. The one duration grammar the
-// stack policy accepts on the command line.
-export function parseDuration(raw: string): number {
-  const m = raw.trim().match(/^(\d+(?:\.\d+)?)\s*(ms|s|m|h|d)$/i);
-  if (!m) throw new Error(`"${raw}" is not a duration (use 30m, 24h, 2d)`);
-  const n = parseFloat(m[1]);
-  const unit = m[2].toLowerCase();
-  const ms = unit === "ms" ? 1 : unit === "s" ? 1000 : unit === "m" ? 60_000 : unit === "h" ? 3_600_000 : 86_400_000;
-  const out = Math.round(n * ms);
-  if (out <= 0) throw new Error("A policy duration must be positive");
-  return out;
-}
-
-export function formatDuration(ms: number): string {
-  if (ms % 86_400_000 === 0) return `${ms / 86_400_000}d`;
-  if (ms % 3_600_000 === 0) return `${ms / 3_600_000}h`;
-  if (ms % 60_000 === 0) return `${ms / 60_000}m`;
-  return `${Math.round(ms / 1000)}s`;
-}
+// The one duration grammar lives in shared/time, so the stack policy, grants
+// and app connector watches read "24h" the same way.
+import { parseDuration, formatDuration } from "@codecast/shared/time";
+export { parseDuration, formatDuration };
 
 // `--policy auto-default:24h` on create, and any future `name:value` pair.
 export function parsePolicyArg(raw: string): { auto_default_after_ms?: number } {

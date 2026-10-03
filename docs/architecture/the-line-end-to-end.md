@@ -105,7 +105,8 @@ A cause that receives a signal while in `watch` (LE12) reopens.
 `cast goals --brief` renders the workspace's goals as one compact document:
 active initiatives with their metrics (target, latest scoreboard value, when),
 each project's charter (goal, success metrics, non-goals, priority), and the
-standing product principles (`docs/principles.md` when present). The ground
+standing principles (the shared set that ships with the CLI, then the files
+the project's line profile names, LP5). The ground
 node reads that and the cause with its signals, and writes four fields:
 
 - `goal_ref`: the initiative metric or project goal the cause threatens, or

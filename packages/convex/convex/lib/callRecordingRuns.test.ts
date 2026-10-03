@@ -1,9 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import { locateCallMoment } from "@codecast/shared/contracts";
 import {
+  egressMovesRow,
   egressPatch,
+  emptyRoomStopDue,
+  isMinutesSpentText,
   MAX_SCREEN_FILES_PER_RUN,
+  RECORDING_EMPTY_ROOM_STOP_MS,
+  RECORDING_LEFT_ROOM_HOLD_MS,
+  RECORDING_MINUTES_SPENT_MESSAGE,
+  SCREEN_RETRY_GAP_MS,
+  screenStartRetryable,
+  START_RETRY_LIMIT,
   mayDeleteRun,
+  mayShareVideo,
+  sharedVideoRuns,
   nextPollDelayMs,
   huddleKeepers,
   peopleInRoom,
@@ -58,10 +69,40 @@ describe("screen files", () => {
     expect(screenSharesToRecord([ana], full)).toEqual([]);
   });
 
+  test("a screen file refused for a passing reason is asked again, on the same row, a few times at most", () => {
+    const now = 1_000_000;
+    const failed = {
+      kind: "screen",
+      track_sid: "TR_scr",
+      status: "failed" as const,
+      started_at: undefined,
+      stop_reason: "failed" as const,
+      error: "LiveKit has no recording capacity free right now. Try again in a minute.",
+      updated_at: now - SCREEN_RETRY_GAP_MS,
+    };
+    expect(screenStartRetryable(failed, now)).toBe(true);
+    expect(screenSharesToRecord([ana], [failed], now).map((s) => s.trackSid)).toEqual(["TR_scr"]);
+    // Not before its gap, not for spent minutes, not once it wrote frames,
+    // not after a stop, and not past the limit.
+    expect(screenStartRetryable({ ...failed, updated_at: now - 1_000 }, now)).toBe(false);
+    expect(screenStartRetryable({ ...failed, error: RECORDING_MINUTES_SPENT_MESSAGE }, now)).toBe(false);
+    expect(screenStartRetryable({ ...failed, started_at: now - 60_000 }, now)).toBe(false);
+    expect(screenStartRetryable({ ...failed, stop_reason: "pressed" as const }, now)).toBe(false);
+    expect(screenStartRetryable({ ...failed, start_attempts: START_RETRY_LIMIT }, now)).toBe(false);
+    expect(screenSharesToRecord([ana], [{ ...failed, start_attempts: START_RETRY_LIMIT }], now)).toEqual([]);
+    // A retry never takes a new share's place at the cap, nor counts twice.
+    const full = Array.from({ length: MAX_SCREEN_FILES_PER_RUN - 1 }, (_, i) => ({ kind: "screen", track_sid: `TR_${i}` }));
+    expect(screenSharesToRecord([ana, guest], [...full, failed], now).map((s) => s.trackSid)).toEqual(["TR_scr"]);
+  });
+
   test("a screen is encoded at its own size, even, capped at 4K, a keyframe a second", () => {
-    expect(screenEncoding({ width: 2880, height: 1800 })).toEqual({ width: 2880, height: 1800, framerate: 15, key_frame_interval: 1 });
-    expect(screenEncoding({ width: 1281, height: 721 })).toEqual({ width: 1282, height: 722, framerate: 15, key_frame_interval: 1 });
-    expect(screenEncoding({ width: 5120, height: 2880 })).toEqual({ width: 3840, height: 2160, framerate: 15, key_frame_interval: 1 });
+    expect(screenEncoding({ width: 2880, height: 1800 })).toEqual({ width: 2880, height: 1800, framerate: 15, key_frame_interval: 1, video_bitrate: 7800 });
+    expect(screenEncoding({ width: 1281, height: 721 })).toEqual({ width: 1282, height: 722, framerate: 15, key_frame_interval: 1, video_bitrate: 4500 });
+    expect(screenEncoding({ width: 5120, height: 2880 })).toEqual({ width: 3840, height: 2160, framerate: 15, key_frame_interval: 1, video_bitrate: 12000 });
+    // The bitrate follows the pixels: 1080p sits on LiveKit's default, a
+    // Retina share gets about 0.1 bit per pixel per frame, 4K the ceiling.
+    expect(screenEncoding({ width: 1920, height: 1080 })!.video_bitrate).toBe(4500);
+    expect(screenEncoding({ width: 2560, height: 1440 })!.video_bitrate).toBe(5500);
     // Size unknown: LiveKit's preset decides.
     expect(screenEncoding({})).toBeNull();
   });
@@ -95,6 +136,21 @@ describe("runs", () => {
   });
 });
 
+describe("an empty room", () => {
+  test("a dead tab stops the recording after the empty span; a deliberate leave holds it longer", () => {
+    const t0 = 10_000_000;
+    expect(emptyRoomStopDue(t0, t0 + RECORDING_EMPTY_ROOM_STOP_MS - 1)).toBe(false);
+    expect(emptyRoomStopDue(t0, t0 + RECORDING_EMPTY_ROOM_STOP_MS)).toBe(true);
+    // The last teammate left on purpose at t0 (a reload, as often as not):
+    // the count starts RECORDING_LEFT_ROOM_HOLD_MS later.
+    const due = t0 + RECORDING_LEFT_ROOM_HOLD_MS + RECORDING_EMPTY_ROOM_STOP_MS;
+    expect(emptyRoomStopDue(t0, due - 1, t0)).toBe(false);
+    expect(emptyRoomStopDue(t0, due, t0)).toBe(true);
+    // Found empty well after the leave: the later clock counts.
+    expect(emptyRoomStopDue(t0 + 200_000, t0 + 200_000 + RECORDING_EMPTY_ROOM_STOP_MS, t0)).toBe(true);
+  });
+});
+
 describe("LiveKit's view onto a row", () => {
   const base = { kind: "composite" as const, status: "starting" as const, r2_key: "calls/t1/1-composite.mp4" };
   const egress = (raw: any): LivekitEgress => parseEgressInfo({ egress_id: "EG_1", room_name: "dm:a:b", ...raw });
@@ -105,11 +161,19 @@ describe("LiveKit's view onto a row", () => {
     expect(live).toEqual({ drop: false, patch: { status: "recording", started_at: 6_000 } });
   });
 
+  test("a run that simply keeps recording moves nothing, so a look spends no mutation on it", () => {
+    const active = egress({ status: "EGRESS_ACTIVE", started_at: NS(1_000), file_results: [{ filename: base.r2_key, started_at: NS(6_000) }] });
+    expect(egressMovesRow({ ...base, status: "recording", started_at: 6_000 }, active)).toBe(false);
+    expect(egressMovesRow(base, active)).toBe(true);
+    // A stop LiveKit has not acted on yet is no change either.
+    expect(egressMovesRow({ ...base, status: "stopping", stop_reason: "pressed", started_at: 6_000 }, active)).toBe(false);
+  });
+
   test("finished: length, size and end land, and an unpressed end says why", () => {
     const done = egress({ status: "EGRESS_COMPLETE", file_results: [{ filename: base.r2_key, started_at: NS(6_000), ended_at: NS(30_000), duration: NS(24_400), size: "4096" }] });
     expect(egressPatch({ ...base, status: "recording", started_at: 6_000 }, done)).toEqual({
       drop: false,
-      patch: { status: "ready", ended_at: 30_000, duration_ms: 24_400, size_bytes: 4096, stop_reason: "huddle_ended" },
+      patch: { status: "ready", ended_at: 30_000, duration_ms: 24_400, size_bytes: 4096, stop_reason: "ended" },
     });
     // A screen file ending on its own is its share ending.
     expect((egressPatch({ ...base, kind: "screen", status: "recording", started_at: 6_000 }, done) as any).patch.stop_reason).toBe("share_ended");
@@ -150,15 +214,29 @@ describe("LiveKit's view onto a row", () => {
     const uploadFailed = egress({ status: "EGRESS_FAILED", error: "upload failed", file_results: [{ filename: base.r2_key, started_at: NS(6_000), ended_at: NS(3_606_000) }] });
     const kept = egressPatch({ ...base, status: "stopping", stop_reason: "pressed", started_at: 6_000 }, uploadFailed) as any;
     expect(kept.drop).toBe(false);
-    expect(kept.patch).toMatchObject({ status: "failed", error: "LiveKit: upload failed" });
+    expect(kept.patch).toMatchObject({ status: "failed", error: "The video could not be saved to storage." });
     // Even with no look ever catching it recording, an end after its start
     // means frames were written.
     expect((egressPatch({ ...base, status: "stopping", stop_reason: "pressed" }, uploadFailed) as any).drop).toBe(false);
   });
 
-  test("LiveKit's errors are passed on, labelled", () => {
-    expect(plainEgressError("track not found")).toBe("LiveKit: track not found");
+  test("LiveKit's errors are said in plain words, never quoted", () => {
     expect(plainEgressError(undefined)).toBe("LiveKit stopped the recording without saying why.");
+    expect(plainEgressError("track not found")).toBe("LiveKit stopped the recording unexpectedly.");
+    expect(plainEgressError("egress minutes exceeded")).toBe(RECORDING_MINUTES_SPENT_MESSAGE);
+    expect(plainEgressError("project quota reached")).toBe(RECORDING_MINUTES_SPENT_MESSAGE);
+    expect(plainEgressError("max duration limit reached")).toBe("The recording stopped at LiveKit's time limit.");
+    const s3 =
+      "failed to upload: AccessDenied: Access Denied status code: 403, request id: 7f2a, host id: https://0123abcd.r2.cloudflarestorage.com/codecast-call-recordings/calls/k57x/1700-composite.mp4";
+    expect(plainEgressError(s3)).toBe("The video could not be saved to storage.");
+    expect(plainEgressError("PutObject: RequestTimeout")).toBe("The video could not be saved to storage.");
+    // Whatever LiveKit says, a reader never sees the bucket or a URL.
+    for (const raw of [s3, "https://lk.example/twirp failed", "track not found", "upload to s3 failed"]) {
+      expect(plainEgressError(raw)).not.toContain("cloudflarestorage");
+      expect(plainEgressError(raw)).not.toContain("https://");
+    }
+    expect(isMinutesSpentText("egress minutes exceeded")).toBe(true);
+    expect(isMinutesSpentText("no egress workers available")).toBe(false);
   });
 });
 
@@ -190,5 +268,30 @@ describe("alignment against recorded rows", () => {
   test("a moment in a file still being written is not ready; one in no file is outside", () => {
     expect(locateCallMoment({ callStartedAt, atMs: 610_000, recordings: rows, now: callStartedAt + 700_000 })).toMatchObject({ ok: false, reason: "not_ready" });
     expect(locateCallMoment({ callStartedAt, atMs: 300_000, recordings: rows, now: callStartedAt + 700_000 })).toMatchObject({ ok: false, reason: "outside" });
+  });
+});
+
+describe("the video on a public link", () => {
+  test("publishing takes the presser of every room video it shows, or an admin", () => {
+    const runs = [{ started_by: "ana" }, { started_by: "ana" }];
+    expect(mayShareVideo("ana", runs, false)).toBe(true);
+    expect(mayShareVideo("ben", runs, false)).toBe(false);
+    expect(mayShareVideo("ben", runs, true)).toBe(true);
+    // Somebody else pressed one of them: that one is not Ana's to publish.
+    expect(mayShareVideo("ana", [...runs, { started_by: "ben" }], false)).toBe(false);
+  });
+
+  test("the link shows the finished room videos pressed for before the choice, and counts the later ones", () => {
+    const row = (requested_at: number, extra: Record<string, unknown> = {}) => ({ kind: "composite", status: "ready", started_at: requested_at + 500, requested_at, ...extra });
+    const rows = [row(100), row(200), row(300), row(150, { kind: "screen" }), row(120, { status: "failed" }), row(250, { status: "recording", started_at: null })];
+    const at = (through: number | null) => {
+      const { shared, later } = sharedVideoRuns(rows, through);
+      return [shared.map((r) => r.requested_at), later.map((r) => r.requested_at)];
+    };
+    expect(at(250)).toEqual([[100, 200], [300]]);
+    // A press in the very millisecond of the choice was not part of it.
+    expect(at(200)).toEqual([[100], [200, 300]]);
+    // A link shared before the cutoff existed keeps showing every room video.
+    expect(at(null)).toEqual([[100, 200, 300], []]);
   });
 });

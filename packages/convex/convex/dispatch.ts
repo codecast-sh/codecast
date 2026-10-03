@@ -17,6 +17,7 @@ import { isTeamVisibilityLevel } from "./teamVisibility";
 import { resumeConversationSession } from "./daemonCommandUtils";
 import { resolveAssigneeToUserId, recalcPlanProgress, subscribeUser, resolveWorkerParentConversation, resolveTaskGitContext } from "./tasks";
 import { api, internal } from "./_generated/api";
+import { sentryStatusFor } from "./sources/sentry";
 import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey, fromConvexAgentType, type ConvexAgentType,
   checkoutInUseMessage,
   normalizeCloudWorkspace,
@@ -196,6 +197,11 @@ function charterWire(fields: Record<string, any>): Record<string, any> {
 
 function isServerId(value: unknown): value is string {
   return typeof value === "string" && SERVER_ID_RE.test(value);
+}
+
+/** The id when it names a row of `table`; null for a stub key or another table's id. */
+function opsRowId(ctx: HandlerCtx, table: string, id: unknown): string | null {
+  return typeof id === "string" && ctx.db.normalizeId(table, id) ? id : null;
 }
 
 type HandlerCtx = { db: any; storage?: any; runMutation?: any; runQuery?: any };
@@ -1587,6 +1593,62 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     await (ctx as any).runMutation(api.issueSync.removeSource, { id });
   },
 
+  // The Ops page (external-data.md X10, web store/opsSlice.ts). Each gesture
+  // lands through the public function `cast sources|events|app` calls, which
+  // owns the access check; nothing is re-derived here. A gesture on a stub
+  // row (a source whose create is in flight) names no server row: dropped.
+  setOpsGroupStatus: async (ctx, userId, [id, status]: [string, string]) => {
+    const groupId = opsRowId(ctx, "event_groups", id);
+    if (!groupId) return null;
+    await (ctx as any).runMutation(api.ingest.setGroupStatus, { group: id, status });
+    // A group mirrored from Sentry follows Sentry's status on the next poll,
+    // so the gesture is also made there, as the person, on their grant: the
+    // same route `cast events` takes (sources/sentry.ts setEventGroupStatus).
+    const group = await ctx.db.get(groupId as Id<"event_groups">);
+    const sentryStatus = group ? sentryStatusFor(group, status as any) : null;
+    if (sentryStatus) await (ctx as any).scheduler.runAfter(0, internal.sources.sentry.setIssueStatusFor, { user_id: userId as Id<"users">, group: id, status: sentryStatus });
+    return null;
+  },
+  setOpsSourceStatus: async (ctx, _userId, [id, status]: [string, "active" | "paused"]) => {
+    if (!opsRowId(ctx, "event_sources", id)) return null;
+    await (ctx as any).runMutation(api.ingest.updateSource, { source: id, status });
+    return null;
+  },
+  removeOpsSource: async (ctx, _userId, [id]: [string]) => {
+    if (!opsRowId(ctx, "event_sources", id)) return null;
+    await (ctx as any).runMutation(api.ingest.removeSource, { source: id });
+    return null;
+  },
+  grantOpsAction: async (ctx, _userId, [sourceId, action]: [string, string]) => {
+    if (!opsRowId(ctx, "event_sources", sourceId)) return null;
+    await (ctx as any).runMutation(api.sources.app.grant, { source: sourceId, action });
+    return null;
+  },
+  revokeOpsAction: async (ctx, _userId, [sourceId, action]: [string, string]) => {
+    if (!opsRowId(ctx, "event_sources", sourceId)) return null;
+    await (ctx as any).runMutation(api.sources.app.revoke, { source: sourceId, action });
+    return null;
+  },
+  // The two writes whose answer is shown once: the ingest key leaves the
+  // backend only here, and only to the person who asked.
+  createOpsSource: async (ctx, _userId, [input]: [{ name: string; provider: "sdk" | "http" | "sentry" | "posthog" | "app"; workspace: "personal" | "team"; team_id?: string; config?: { projects?: string[] }; base_url?: string }]) => {
+    const projects = Array.isArray(input.config?.projects) ? input.config.projects.filter((p) => typeof p === "string") : undefined;
+    const res = await (ctx as any).runMutation(api.ingest.createSource, {
+      name: input.name,
+      provider: input.provider,
+      workspace: input.workspace,
+      team_id: input.workspace === "team" && input.team_id && opsRowId(ctx, "teams", input.team_id) ? input.team_id : undefined,
+      ...(projects?.length ? { config: { projects } } : {}),
+      ...(input.provider === "app" && typeof input.base_url === "string" && input.base_url.trim() ? { base_url: input.base_url.trim() } : {}),
+    });
+    return { source_id: res.source._id, short_id: res.source.short_id, name: res.source.name, workspace: res.source.workspace, ingest_key: res.ingest_key ?? null };
+  },
+  rotateOpsSourceKey: async (ctx, _userId, [id]: [string]) => {
+    if (!opsRowId(ctx, "event_sources", id)) return null;
+    const res = await (ctx as any).runMutation(api.ingest.rotateKey, { source: id });
+    return { ingest_key: res.ingest_key, key_prefix: res.source.key_prefix ?? null };
+  },
+
   // Saved views. Creates carry a client_key so a retry returns the same row
   // rather than a second copy of the view (savedViews.webCreate is idempotent
   // on that key), and the optimistic stub supersedes onto it.
@@ -1671,6 +1733,13 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // the status above.
   updateMyProfile: async (ctx, userId, [patch]: [Record<string, string>]) => {
     await (ctx as any).runMutation(api.users.updateProfile, patch);
+  },
+
+  // The canonical workspace pointer (store setActiveTeamPointer, through
+  // useSwitchWorkspace). The client already re-scoped; this is the
+  // authoritative write, membership-checked by the mutation.
+  setActiveTeamPointer: async (ctx, userId, [teamId]: [string | null]) => {
+    await (ctx as any).runMutation(api.teams.setActiveTeam, { team_id: teamId ?? undefined });
   },
 
   // The walkie door, from settings (store setWalkiePref). Same shape as the

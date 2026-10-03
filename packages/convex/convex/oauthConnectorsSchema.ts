@@ -67,6 +67,10 @@ export const oauthConnectorTables = {
     last_webhook_at: v.optional(v.number()),
     last_sync_at: v.optional(v.number()),
     last_error: v.optional(v.string()),
+    /** Non-secret settings a token connector needs beside its secret: a
+     *  Sentry org slug, a PostHog host, an app's base url (external-data.md
+     *  X1). Secrets stay in access_token_enc. */
+    config: v.optional(v.record(v.string(), v.string())),
     created_at: v.number(),
     updated_at: v.number(),
   })

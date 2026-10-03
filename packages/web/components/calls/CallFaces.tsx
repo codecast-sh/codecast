@@ -37,6 +37,9 @@ import {
   type SpeakerPick,
 } from "../../lib/calls/faceCrop";
 import { FaceCircle, FacesChrome } from "./FaceCircle";
+import { RecordingMark } from "./RecordingMark";
+import { useStageRoster } from "../../hooks/useStageRoster";
+import { useRoomRecordingMark } from "../../hooks/useRoomRecording";
 import { useFloatingCircles } from "./useFloatingCircles";
 import "./faces.css";
 
@@ -96,21 +99,25 @@ export function CallFaces({
   // re-render a window full of video for a fact it does not draw.
   const s = useTrackedStore([
     (st: any) => st.call.roomKey,
+    (st: any) => st.call.phase,
     (st: any) => st.call.muted,
     (st: any) => st.call.speaking,
-    (st: any) => (st.call.roomKey ? st.callOccupancy[st.call.roomKey] : undefined),
     (st: any) => st.currentUser?._id,
   ]);
   const call = s.call;
-  const occupancy: any[] | undefined = call.roomKey ? s.callOccupancy[call.roomKey] : undefined;
   const tiles = useSyncExternalStore(subscribeCallTiles, getCallTiles, emptyTiles);
   const cameras = useMemo(() => tiles.filter((t) => t.kind === "camera"), [tiles]);
   const selfId = s.currentUser?._id ? String(s.currentUser._id) : null;
+  // The stage's roster, guests folded in (useStageRoster): a guest has no
+  // seat, so the seats alone left a guest with their camera off out of the
+  // circles while the room could hear them.
+  const { roster } = useStageRoster(call.roomKey, call.phase === "connected");
+  const { status: recording, live: recordingRun } = useRoomRecordingMark(call.roomKey);
 
   const faces = useMemo(
-    () => facesToShow(facePeople(occupancy ?? [], cameras, selfId), mode)
+    () => facesToShow(facePeople(roster, cameras, selfId), mode)
       .map((p) => p.isLocal ? { ...p, muted: call.muted } : p),
-    [occupancy, cameras, selfId, mode, call.muted],
+    [roster, cameras, selfId, mode, call.muted],
   );
   const cameraOf = useCallback(
     (id: string) => cameras.find((t) => t.identity === id),
@@ -178,6 +185,11 @@ export function CallFaces({
           <div className="face" data-face-hit style={{ width: diameter, height: diameter }} onPointerDown={startDrag} onPointerUp={endDrag} onPointerCancel={endDrag}>
             <span className="face-waiting">joining</span>
           </div>
+        )}
+        {recording && (
+          <span className="faces-rec">
+            <RecordingMark size="dot" status={recording} shared={!!recordingRun?.video_shared} />
+          </span>
         )}
         {faces.map((person) => (
           <FaceCircle

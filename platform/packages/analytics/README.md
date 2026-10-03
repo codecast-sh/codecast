@@ -22,6 +22,12 @@ Three more subpaths: `@platform/analytics` (the shared config types and
 deduplication/listeners), and `@platform/analytics/web-vitals` (Core Web Vitals
 forwarded to PostHog as `web_vital` events; needs the `web-vitals` peer).
 
+Three codecast subpaths, none with peers: `@platform/analytics/codecast`
+(the sink for codecast's ingest door, and the codecast.json reader),
+`@platform/analytics/codecast-verify` (checks that a request to an app
+connector came from codecast) and `@platform/analytics/replay` (the semantic
+replay recorder). All are described under "Codecast" below.
+
 All peers are optional and pinned to codecast's versions: `posthog-js`
 ^1.363.3, `posthog-react-native` ^4.37.6, `@sentry/react` ^10.45.0,
 `@sentry/react-native` ^8.5.0, `web-vitals` ^5.1.0.
@@ -51,6 +57,14 @@ Sentry tracing at 1.0 in dev and 0.2 in prod and adds
 (`enableSessionReplay`, default on). It requires its SDKs lazily and
 degrades to no-ops when the native module is absent, so an OTA update can
 never crash a binary built before the SDKs were added.
+
+An app whose links are credentials (share links, guest links, invite codes)
+passes `scrubUrl`, a rewrite of any string holding a URL or path
+(`"/share/doc/k3y"` to `"/share/doc/:token"`). The web entry runs it on every
+URL that leaves the page: PostHog's `before_send` (page, referrer, element
+hrefs, the person's first URL), Sentry's `beforeSend` and `beforeBreadcrumb`,
+the codecast sink's error url, and the replay recorder's nav and network
+entries (`src/scrub.ts`).
 
 ## Calls made before init
 
@@ -144,7 +158,97 @@ Then `identifyUser(user.id)` after sign in, `resetUser()` on sign out, and
 (worker, API route) that needs funnel events uses
 `createServerAnalytics` with its own `source` label.
 
+## Codecast
+
+Codecast (codecast docs/architecture/external-data.md X2, X5) takes in a
+product's errors, warning logs, job failures, checks, counted events, deploys
+and session replays, and joins them to the release and the session that wrote
+the code.
+
+**codecast.json.** An app commits its codecast configuration instead of
+setting env vars. `cast sources add` writes it; nothing in it is secret (the
+ingest key only writes into one source, like a Sentry DSN):
+
+```json
+{
+  "ingestKey": "cc_ing_...",
+  "sources": { "union": { "id": "src-6", "workspace": "team:<id>" } }
+}
+```
+
+`endpoint` is present only when it is not codecast prod. `parseCodecastJson`
+checks one and refuses unknown keys, so a misplaced secret is not carried in
+quietly.
+
+**The sink.** `createCodecastSink({ config?, ingestKey?, endpoint?, release?,
+environment?, flushMs?, maxBatch? })` batches items to
+`POST <endpoint>/<ingestKey>`. `config` is the parsed codecast.json; an
+explicit `ingestKey` or `endpoint` wins over it, and the endpoint defaults to
+`DEFAULT_CODECAST_INGEST_ENDPOINT`, codecast prod. Nothing is read from env. It
+gzips where `CompressionStream` exists, retries 429 and 5xx with jittered
+backoff (honoring `Retry-After`), splits on 413, drops a batch refused with
+400, and stops for good on 401. In a browser it flushes by `sendBeacon` on
+`pagehide`; on a server it is plain `fetch` with unref'd timers. Methods:
+`captureError`, `log` (warn and above), `jobFailed`, `check`, `event`,
+`deploy`, `replay`, `setUser`, `flush`. The key is write-only and safe to ship
+in a bundle.
+
+```ts
+// a server or worker
+import codecastJson from "./codecast.json";
+const codecast = createCodecastSink({ config: codecastJson, release: GIT_SHA });
+codecast.jobFailed("send-digest", err, { attempt: 3 });
+codecast.check("db-reachable", ok);
+```
+
+**Web.** `initAnalytics({ ..., codecastConfig?, codecastIngestKey?, codecastEndpoint?, release? })`
+creates the sink (the key from `codecastIngestKey`, else `codecastConfig`, the codecast.json) (off in development, like Sentry). `captureError` reaches
+Sentry and codecast together, with Sentry's ignore rules applied to both.
+Uncaught errors and rejections share ONE listener pair in `./errors`: when the
+app wires `setupErrorToasts`, its captureError reports to both backends; when
+it does not, the runtime registers a codecast-only capture
+(`setupErrorCapture`) on the same pair, since Sentry has its own handler.
+`getCodecastSink()` returns the sink for the recorder.
+
+**Verifying codecast's calls.** Codecast signs every request it makes to an
+app connector (the manifest, readers, actions, watch polls) with Ed25519 and
+publishes its public keys at `<codecast origin>/.well-known/codecast-keys.json`.
+`createCodecastVerifier({ config: codecastJson })` fetches that key set
+(cached an hour, refetched at most once a minute when a request names a kid it
+has not seen), and `verify(request)` (a Fetch Request) or `verifyParts({
+method, pathAndQuery, body, header })` (any server) checks the signature, a
+5 minute timestamp window, that the nonce was not seen before (an in-memory
+memory per process), and that `Codecast-Source` and `Codecast-Workspace` name
+a source the codecast.json lists. So an app needs no shared secret. The scheme
+is codecast `packages/shared/contracts/codecastSignature.ts`; codecast tests
+this copy against its committed vectors.
+
+```ts
+import codecastJson from "./codecast.json";
+import { createCodecastVerifier } from "@platform/analytics/codecast-verify";
+
+const verifier = createCodecastVerifier({ config: codecastJson });
+// before every /codecast/* route
+const result = await verifier.verify(request);
+if (!result.ok) return new Response(result.error, { status: 401 });
+```
+
+**The recorder.** `startReplay({ sink, sampleRate = 0, redactUrl? })` keeps
+the last 60 s of semantic events (nav, click, input length, submit, Enter /
+Escape / Tab, coarse scroll, console warn and error, failed or slow requests,
+errors, a visible text outline, app marks via `recorder.mark`). Every error
+the sink captures uploads the buffer and keeps the recording, chunked every
+10 s; a sampled session is kept from the start. Chunks are gzipped JSON PUT to
+a URL from `POST <endpoint>/<key>/replay-sign` (body `{ replay_id, chunk,
+bytes }`, answer `{ upload_url }` or `{ exists: true }`), followed by a
+`replay` manifest item. It never reads an input value, skips `[data-private]`,
+blanks query values, and costs one capture listener per event type plus
+patches on history, console, fetch and XHR: no MutationObserver, nothing per
+frame. The event types match codecast `packages/shared/contracts/replay.ts`
+and codecast typechecks the two against each other.
+
 ## Tests
 
-`bun test` — no network; `fetch`, PostHog and Sentry are mocked. `npx tsc
+`bun test` — no network; `fetch`, PostHog and Sentry are mocked, and the
+recorder runs against a happy-dom window (the one dev dependency). `npx tsc
 --noEmit` type checks src and tests, including the export subpaths.

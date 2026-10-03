@@ -564,20 +564,30 @@ ruler work about $6, on top of the $85.00 for the first ablation.
 
 Runs vary, so one sample proves nothing. Call surfaces run 5 reps per freeze,
 agent surfaces 3 as a smoke test and 8 for any comparison. `check` compares
-each surface's per-rep scores with its previous run set by an exact one-sided
-Mann-Whitney U. Past a few dozen reps a side (a cadence batch against its
-pooled nights) the exact count takes minutes, so the same null is sampled
-instead, 20,000 seeded draws from the same pooled ranks (`PERMUTATIONS` in
-`stats.ts`); the normal approximation is no substitute, because eval scores
-tie heavily and it reads one failed rep among two hundred passes as a fall.
+each surface's per-rep scores with its previous run set by a one-sided
+Mann-Whitney U, its null counted over the smaller sample's rank sum. The count
+is exact at ordinary ablation sizes; past `EXACT_MAX_STEPS` the same null is
+sampled instead, 20,000 seeded draws from the same pooled ranks
+(`PERMUTATIONS` in `stats.ts`); the normal approximation is no substitute,
+because eval scores tie heavily and it reads one failed rep among two hundred
+passes as a fall.
 
 - `separated: better` or `separated: worse` at p <= 0.05
 - `not separated: medians X vs Y, ranges a-b vs c-d` otherwise
 - `too few samples to separate (need 5+ per side)` below 5 reps a side
 
+A cadence batch (the nightly) is weighed night by night per freeze instead
+(`separateNights`): each freeze counts once a night, as its mean score, so a
+change in which freezes ran or how many reps each had is never read as drift,
+and the night, not the rep, is the unit. One freeze alone cannot separate
+against fewer than 19 earlier nights, so it prints `too few nights and freezes
+to separate`, and a fall on one freeze shows as that freeze failing.
+
 Never claim a prompt change helped without `separated: better`. A single gate
 failure in any sample fails the variant, whatever the mean. `check` exits 1 on
-any gate failure or a separated regression.
+any gate failure or a separated regression; a `worse` separation is a
+regression only when it holds across every surface the check weighed (Holm's
+step-down at 0.05), so a wide check is not a lottery of false alarms.
 
 ## Cadence, budget and publishing
 
@@ -610,7 +620,7 @@ HEAD with git, never the disk, so a half-saved edit never fires a run. It exits
   ceiling; the nightly and a check by hand are held by their own `--budget`.
 
 `check --budget <usd>` estimates the spend first and, run by hand, refuses when
-the estimate is over (under `--stale` it fits the surfaces instead, above), then stops mid-run (`endedBecause: budget`) when the spend reaches it.
+the estimate is over (under `--stale` it fits the surfaces instead, above), then stops mid-run (`endedBecause: budget`) before a rep whose likely cost would take the spend past it.
 With no `--budget` it stops at the estimate and half again. `--max-minutes <n>`
 starts no rep after that long. A check that stopped short, or a requested
 surface that scored no rep, exits 3; a surface cut short stays stale. A bare
@@ -619,15 +629,19 @@ or with `--route agent`. The previous run set a verdict compares with is the
 newest other batch of real reps, cut to the freezes both sets ran. A
 `--cadence <name>` check stamps every rep with that standing run's name
 (`cadence` in `run.json`), and its set is weighed instead against the
-cadence's own last `--baseline-batches` (default 7) batches pooled, per freeze
-on the same model and judge ruler (`pooledRuns` in `commands/verdict.ts`).
-Only reps stamped with the cadence join that pool, so no other run's notes can
-move it, and one unlucky rep among a week of nights moves nothing.
+cadence's own last `--baseline-batches` (default 7) batches, per freeze on
+the same model and judge ruler (`pooledRuns` in `commands/verdict.ts`), night
+by night (above). Only reps stamped with the cadence join that baseline, so no
+other run's notes can move it, and one unlucky night moves nothing. A bisect's
+probes (`--cadence bisect`) ran another commit, so they are never a baseline.
+A named `--batch` is held by one check at a time, so a retried firing never
+runs the same reps twice.
 
 `--parallel <n>` (default 4) runs that many reps at once from one pool over
 every freeze and surface. The reps share one ledger, so a rep starts only while
-the spend, the estimated cost of the reps still running and its own estimate
-fit the budget; the first stop halts the rest. Next to its cost, `check`
+the spend, the reservations of the reps still running and its own fit the
+budget, each reserved at the costliest rep its surface and model has seen
+(reps in flight finish whatever they cost); the first stop halts the rest. Next to its cost, `check`
 prints how long a real run takes (each surface's recorded seconds per rep,
 divided over the slots), under `--dry` too, so a dry check sizes a real one.
 Size a budget to the all-stale case: every call surface declares

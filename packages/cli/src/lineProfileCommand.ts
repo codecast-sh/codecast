@@ -3,14 +3,15 @@
 // station's verdict built from the reps a project's eval command wrote.
 //
 //   cast line profile [--json] [--publish]
+//   cast line profile --starter --project <name> [--team <name>] [--write]
 //   cast line eval-result --reps <reps.json> --out <eval-result.json> [--json]
 import fs from "node:fs";
 import path from "node:path";
 import type { Command } from "commander";
 import type { EvalRepsFile } from "@codecast/shared/contracts/evalResult";
-import { buildEvalResult, evalResultLines, repsFileProblem } from "../../evals/src/evalResult.js";
+import { buildEvalResult, evalResultLines, repsFileProblem, unscoredSurfaces } from "../../evals/src/evalResult.js";
 import { fmt } from "./colors.js";
-import { formatLineProfile, LineProfileError, loadLineProfile, type LineFinder, type ResolvedLineProfile } from "./lineProfile.js";
+import { findLineProfile, formatLineProfile, LINE_PROFILE_REL_PATH, LineProfileError, loadLineProfile, starterLineProfile, type LineFinder, type ResolvedLineProfile } from "./lineProfile.js";
 import { apiPost, type PublishDeps } from "./castApi.js";
 
 function fail(message: string, code = 2): never {
@@ -35,7 +36,10 @@ export function runEvalResult(repsPath: string, outPath: string): { code: number
   const result = buildEvalResult(raw as EvalRepsFile);
   fs.mkdirSync(path.dirname(path.resolve(outPath)), { recursive: true });
   fs.writeFileSync(outPath, `${JSON.stringify(result, null, 2)}\n`);
-  return { code: result.ok ? 0 : 1, lines: evalResultLines(result), result };
+  // 2: the eval could not judge the change (a side with no scored rep), so the
+  // line stops instead of sending the builder back over missing evidence.
+  const unscored = unscoredSurfaces(raw as EvalRepsFile);
+  return { code: result.ok ? 0 : unscored.length ? 2 : 1, lines: evalResultLines(result), result };
 }
 
 export type PublishGroup = { project: string; default: boolean; finders: Array<Omit<LineFinder, "project">> };
@@ -71,7 +75,24 @@ export function registerLineProfileCommands(line: Command, deps: PublishDeps): v
     .description("The line profile for this directory (.codecast/line.toml merged with the defaults), each value with where it came from")
     .option("--json", "Machine-readable output")
     .option("--publish", "Declare this profile's finders on the projects they file into, so /line shows each one and says when it goes silent")
-    .action(async (options: { json?: boolean; publish?: boolean }) => {
+    .option("--starter", "Print a starter .codecast/line.toml for a repository that has none: the defaults written out, the project filled in")
+    .option("--project <name>", "With --starter: the project its signals and line belong to")
+    .option("--team <name>", "With --starter: the workspace for writes from this repo")
+    .option("--write", "With --starter: write it at the repository root; refused when a profile already exists")
+    .action(async (options: { json?: boolean; publish?: boolean; starter?: boolean; project?: string; team?: string; write?: boolean }) => {
+      if (options.starter) {
+        if (!options.project?.trim()) fail("--starter needs --project <name>: the project this repository's line serves");
+        const text = starterLineProfile({ project: options.project.trim(), team: options.team?.trim() || null });
+        if (!options.write) { process.stdout.write(text); return; }
+        const { file, root } = findLineProfile(process.env.CODECAST_CWD || process.cwd());
+        if (file) fail(`${file} already exists; edit it rather than replacing it`);
+        if (!root) fail("not inside a repository: run from the checkout whose line this is");
+        const target = path.join(root, LINE_PROFILE_REL_PATH);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, text, { flag: "wx" });
+        console.log(`wrote ${target}`);
+        return;
+      }
       let resolved: ResolvedLineProfile;
       try {
         resolved = loadLineProfile();
@@ -98,7 +119,7 @@ export function registerLineProfileCommands(line: Command, deps: PublishDeps): v
 
   line
     .command("eval-result")
-    .description("Build eval-result.json (what the change card reads) from the reps.json a project's eval command wrote; exits 0 when the eval station passes")
+    .description("Build eval-result.json (what the change card reads) from the reps.json a project's eval command wrote; exits 0 when the eval station passes, 1 when the change fails it, 2 when a surface has no scored rep on a side")
     .requiredOption("--reps <file>", "reps.json: per surface, per freeze, per side, the reps (line-profile.md LP4)")
     .requiredOption("--out <file>", "Where to write eval-result.json")
     .option("--json", "Print the result instead of the report")

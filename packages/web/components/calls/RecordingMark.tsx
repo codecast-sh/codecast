@@ -28,11 +28,17 @@ export type RecordingMarkStatus = "starting" | "recording" | "stopping";
 
 /** The words for a mark's tooltip and screen readers: what is happening, who
  *  started it, and that anyone in the room may end it. */
-export function recordingMarkTitle(status: RecordingMarkStatus, by?: string | null): string {
+export function recordingMarkTitle(status: RecordingMarkStatus, by?: string | null, shared = false): string {
   if (status === "stopping") return "Recording stopped. Saving the video";
   const who = by ? ` ${by} started it.` : "";
-  return `This call is being recorded.${who} Anyone in the call can stop it`;
+  const where = shared ? ` ${RECORDING_SHARED_WORDS}` : "";
+  return `This call is being recorded.${who}${where} Anyone in the call can stop it`;
 }
+
+/** What the room is told when the run's video will be on the call's public
+ *  link (callRecordings: a link whose video was chosen before this press):
+ *  faces and screens, guests' included, then reach anyone with the link. */
+export const RECORDING_SHARED_WORDS = "The video is shared by the call's public link.";
 
 const SAVING_DOT = "h-[7px] w-[7px] shrink-0 rounded-full bg-sol-text-dim";
 
@@ -40,10 +46,13 @@ export function RecordingMark({
   status = "recording",
   startedAt,
   by,
+  shared = false,
   size = "regular",
   className = "",
 }: {
   status?: RecordingMarkStatus;
+  /** The run's video will be on the call's public link: said in the tooltip. */
+  shared?: boolean;
   /** Wall ms the room began to be filmed; the clock runs from it. Absent: no clock. */
   startedAt?: number | null;
   /** Whoever pressed Record, for the tooltip. */
@@ -56,7 +65,7 @@ export function RecordingMark({
   size?: "regular" | "pill" | "dot";
   className?: string;
 }) {
-  const title = recordingMarkTitle(status, by);
+  const title = recordingMarkTitle(status, by, shared);
   const saving = status === "stopping";
   const dot = <span className={saving ? SAVING_DOT : "rec-pill-dot rec-pill-dot--sm"} aria-hidden="true" />;
   if (size === "dot") {

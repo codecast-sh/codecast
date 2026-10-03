@@ -14,6 +14,7 @@ import {
   redoTo,
   setUndoNotifier,
   showUndoToast,
+  undoRowCount,
   subscribeUndoHistory,
   undoEntry,
   undoTo,
@@ -192,6 +193,26 @@ describe("keyboard window", () => {
     expect(value).toEqual([]);
   });
 
+  it("a redone entry is reachable by the next blind undo, however old its record", () => {
+    const realNow = Date.now;
+    const t0 = realNow();
+    try {
+      const entry = generic("old");
+      Date.now = () => t0 + 4 * 60_000;
+      expect(performUndo()).toBe(true);
+      Date.now = () => t0 + 6 * 60_000;
+      expect(performRedo()).toBe(true);
+      expect(value).toEqual(["old"]);
+      expect(canUndo()).toBe(true);
+      expect(performUndo()).toBe(true);
+      expect(value).toEqual([]);
+      // The history still shows when the change was first made.
+      expect(getUndoHistory().items.find((i) => i.id === entry.id)!.ts).toBe(t0);
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
   it("an expired manual entry is gone everywhere", () => {
     configureUndoStack({ keyboardWindowMs: 50 });
     let undone = false;
@@ -283,6 +304,17 @@ describe("confirm", () => {
     expect(getUndoHistory().head).toBe(e.id);
   });
 
+  it("an onConfirmStop notifier hears the stop instead of notify", () => {
+    const stops: Array<[string, string]> = [];
+    setUndoNotifier({ notify: (m) => notices.push(m), onConfirmStop: (entry, message) => stops.push([entry.id, message]) });
+    const e = generic("Made public");
+    e.confirm = true;
+    expect(performUndo()).toBe(true);
+    expect(stops).toEqual([[e.id, "Undo Made public from its toast or the history"]]);
+    expect(notices).toEqual([]);
+    expect(value).toEqual(["Made public"]);
+  });
+
   it("once the confirm entry is undone from its toast, blind undo reaches the next one", () => {
     generic("Old");
     const e = generic("Made public");
@@ -313,5 +345,12 @@ describe("_resetUndoStacks", () => {
     expect(getUndoHistory().head).toBeNull();
     expect(canUndo()).toBe(false);
     expect(canRedo()).toBe(false);
+  });
+});
+
+describe("undoRowCount", () => {
+  it("counts a row held by two stores once", () => {
+    const objects = ["a", "b"].flatMap((id) => [{ store: "sessions", id }, { store: "conversations", id }]);
+    expect([undoRowCount(objects), undoRowCount([{ store: "conversations", id: "b" }]), undoRowCount(undefined)]).toEqual([2, 1, 0]);
   });
 });

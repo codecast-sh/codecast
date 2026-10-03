@@ -39,6 +39,7 @@
 // worse than a list, because a list at least admits it is unsorted.
 import { BLOCKED_BANNER_KINDS, isStackedAsk } from "@codecast/shared/contracts";
 import { nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
+import { OWNS_KEYS_SELECTOR } from "../shortcuts/keyOwnership";
 import type { DecisionKind, DecisionOption, InboxSession, SessionDecisionItem } from "../store/inboxStore";
 
 export type QueueItemSource = "decide" | "ask" | "permission";
@@ -125,11 +126,27 @@ export type QueueKeyAction =
   | { kind: "restore-question" }
   | { kind: "exit-queue" };
 
+/**
+ * Focus sits in a region that owns its plain keys (the undo timeline, the
+ * branch map, an active review) and that region is not the card itself. The
+ * dispatcher skips such focus through KEY_OWNERSHIP; the card's own capture
+ * listener runs before it, so it asks the same question here.
+ */
+export function keysOwnedElsewhere(
+  target: { closest?: (selector: string) => unknown } | null,
+  cardRoot: { contains: (node: any) => boolean } | null,
+): boolean {
+  const owner = target?.closest?.(OWNS_KEYS_SELECTOR);
+  return !!owner && !cardRoot?.contains(target);
+}
+
 export function routeQueueKey(
   e: { key: string; shiftKey: boolean; metaKey: boolean; ctrlKey: boolean; altKey: boolean },
   ctx: {
     /** An aria-modal layer (new-session compose, settings) sits above the queue. */
     modalOpen: boolean;
+    /** Focus is in another region that owns its keys (keysOwnedElsewhere). */
+    ownedElsewhere: boolean;
     /** Focus is in an input/textarea/contenteditable. */
     editing: boolean;
     /** …specifically the card's own free-text "Other" box. */
@@ -144,6 +161,9 @@ export function routeQueueKey(
   // skip, or swallow anything (a capture listener eating the compose dialog's
   // Enter is exactly how "enter stopped working" presents).
   if (ctx.modalOpen) return null;
+  // A focused region that owns its keys (the undo timeline's arrows, O and
+  // Esc) takes them before the queue, as it does before the dispatcher.
+  if (ctx.ownedElsewhere) return null;
   if (ctx.editing) {
     // Only the card's own box is the queue's to claim. Typing in any other
     // input — search, a composer in the thread behind — belongs to that surface.

@@ -12,7 +12,10 @@
     "./web-runtime": "./src/webRuntime.ts",
     "./web-vitals": "./src/webVitals.ts",
     "./native": "./src/native.ts",
-    "./server": "./src/server.ts"
+    "./server": "./src/server.ts",
+    "./codecast": "./src/codecast.ts",
+    "./codecast-verify": "./src/codecastVerify.ts",
+    "./replay": "./src/replay.ts"
   },
   "files": [
     "src"
@@ -29,18 +32,29 @@
     "web-vitals": "^5.1.0"
   },
   "peerDependenciesMeta": {
-    "@sentry/react": { "optional": true },
-    "@sentry/react-native": { "optional": true },
-    "posthog-js": { "optional": true },
-    "posthog-react-native": { "optional": true },
-    "web-vitals": { "optional": true }
+    "@sentry/react": {
+      "optional": true
+    },
+    "@sentry/react-native": {
+      "optional": true
+    },
+    "posthog-js": {
+      "optional": true
+    },
+    "posthog-react-native": {
+      "optional": true
+    },
+    "web-vitals": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@sentry/react": "^10.45.0",
     "@sentry/react-native": "^8.5.0",
+    "happy-dom": "20.11.1",
     "posthog-js": "^1.363.3",
     "posthog-react-native": "^4.37.6",
-    "web-vitals": "^5.1.0",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "web-vitals": "^5.1.0"
   }
 }

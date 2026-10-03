@@ -5,7 +5,7 @@
 // scheduler. `now` is a parameter so a frame can be rebuilt at a captured
 // moment.
 import { SAFE_MODE_MANDATE } from "./agentLaunch.js";
-import { triggerLifecycleInstructions, runResultThreadOf } from "@codecast/shared/contracts";
+import { pendingEventsBlock, triggerLifecycleInstructions, runResultThreadOf } from "@codecast/shared/contracts";
 
 export function buildTriggerFrame(task: any, now: number): string {
   const parts: string[] = [];
@@ -24,6 +24,13 @@ export function buildTriggerFrame(task: any, now: number): string {
   parts.push(`Mode: ${task.mode || "apply"}`);
   parts.push("");
   parts.push(task.prompt);
+
+  // What fired an event trigger since its last run, quoted as data.
+  const fired = pendingEventsBlock(task.pending_events);
+  if (fired) {
+    parts.push("");
+    parts.push(fired);
+  }
 
   if (task.context_summary || task.last_run_summary) {
     parts.push("");

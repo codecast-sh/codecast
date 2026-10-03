@@ -353,6 +353,9 @@ describe("a prewarm takes nothing from anybody", () => {
     expect(prewarm.prewarmAllowed("", { call: {}, callOccupancy: {} })).toBe(false);
     expect(prewarm.prewarmAllowed(ROOM, { call: { phase: "connecting" }, callOccupancy: {} })).toBe(false);
     expect(prewarm.prewarmAllowed(ROOM, { call: { roomKey: ROOM }, callOccupancy: {} })).toBe(false);
+    // A room being recorded is walked into through its notice, never warmed.
+    expect(prewarm.prewarmAllowed(ROOM, { call: {}, callOccupancy: {}, callRooms: { [ROOM]: { recording: true } } })).toBe(false);
+    expect(prewarm.prewarmAllowed(ROOM, { call: {}, callOccupancy: {}, callRooms: { [ROOM]: { recording: false } } })).toBe(true);
   });
 });
 
@@ -364,6 +367,15 @@ describe("bounded: one room, and not for long", () => {
     // A bar of six faces must never become six SFU connections.
     expect(FakeRoom.made[0].disconnects).toBe(1);
     expect(FakeRoom.made[1].disconnects).toBe(0);
+  });
+
+  test("a held room that starts recording is let go at once", async () => {
+    await warmUp(ROOM);
+    expect(prewarm.prewarmedRoomKey()).toBe(ROOM);
+    useInboxStore.setState({ callRooms: { ...((useInboxStore.getState() as any).callRooms ?? {}), [ROOM]: { recording: true } } } as any);
+    expect(prewarm.prewarmedRoomKey()).toBeNull();
+    expect(FakeRoom.made[0].disconnects).toBe(1);
+    useInboxStore.setState({ callRooms: { ...((useInboxStore.getState() as any).callRooms ?? {}), [ROOM]: { recording: false } } } as any);
   });
 
   test("re-asking for the room already held costs no second connection", async () => {

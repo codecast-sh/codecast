@@ -12,6 +12,7 @@ import {
 import { CODECAST_EVENTS, type CodecastEventName, type CodecastEventProps } from "@codecast/shared/analytics";
 import { CHUNK_LOAD_ERROR_PATTERNS } from "./chunkReloadGuard";
 import { DOC_REWRITTEN_ERROR } from "@codecast/shared/docs";
+import codecastJson from "../codecast.json";
 
 type AnalyticsRuntime = typeof import("@platform/analytics/web-runtime");
 
@@ -33,6 +34,28 @@ function withAnalytics(call: (analytics: AnalyticsRuntime) => void) {
 const META_ENV = (import.meta as any).env ?? {};
 
 export type AnalyticsPlatform = "desktop" | "web" | "mobile";
+
+// Codecast's addresses that ARE credentials: a share link (/share/<token> and
+// /share/<kind>/<token>), a guest's meeting link (/meet/<token>), a team
+// invite (/join/<code>) and an unlisted published page (/a/<slug>). Whoever
+// holds one can open the shared call, knock on the meeting or join the team,
+// so none may reach PostHog, Sentry or the error sink as written. A full load
+// of a share or guest page boots standalone with no analytics at all
+// (src/shareBoot.tsx); these arrive from inside the app: a member following
+// their own link, the referrer of the page after it, a navigation crumb.
+//
+// Matched only as the first segment of a path (after the host, at the start,
+// or after a quote in an autocaptured element chain), so a repository file
+// under a folder named "a" keeps its name. `share/[a-z]+` before bare `share`
+// is the same shape isStandaloneSharePath reads, so a kind added later is
+// covered without a list to keep in step; a conversation token that starts
+// with letters backtracks to the bare form.
+const SECRET_PATH = /(^|[\s"'=(]|\/\/[^/\s"'?#]+)\/(share\/[a-z]+|share|meet|join|a)\/[^/?#\s"']+/g;
+
+/** Rewrite every secret path in a string to its shape: "/meet/k3y" to "/meet/:token". */
+export function scrubSecretPaths(text: string): string {
+  return text.replace(SECRET_PATH, "$1/$2/:token");
+}
 
 // The platform every event is stamped with. Exported so other telemetry
 // (the inbox digest compare) stamps the same value; the native twin answers
@@ -70,11 +93,37 @@ export function initAnalytics(): Promise<void> {
       // chunk preloads, a full user disk, an IndexedDB connection closing
       // mid-transaction) on top of these.
       extraIgnoreErrors: IGNORED_ERROR_PATTERNS,
+      // Codecast reports its own errors to codecast (docs/architecture/
+      // external-data.md X2), alongside Sentry, through the same listeners and
+      // dedupe. The key is the committed packages/web/codecast.json's (which
+      // `cast sources add` writes; it is write-only, so safe in the bundle),
+      // and VITE_CODECAST_INGEST_KEY overrides it. Off with neither, and in
+      // development like Sentry. The release is the build sha boot.tsx
+      // publishes on window, so an error group knows which deploy it came from.
+      codecastIngestKey: META_ENV.VITE_CODECAST_INGEST_KEY || undefined,
+      codecastConfig: codecastJson,
+      release: (globalThis as { __CODECAST_BUILD?: { sha?: string } }).__CODECAST_BUILD?.sha,
+      // Codecast's links that are keys, named by their shape wherever a URL
+      // leaves the page (pageviews, referrers, error reports, replays).
+      scrubUrl: scrubSecretPaths,
     });
     runtime = analytics;
+    startReplayOnError(analytics);
     for (const call of queuedCalls.splice(0)) call(analytics);
   });
   return initPromise;
+}
+
+// The replay recorder rides the codecast sink: with no sink (no key, or
+// development) it never loads. Sample 0 means a recording uploads only when
+// an error is reported, carrying the minute before it. Its own chunk, loaded
+// after init, so the boot path pays nothing for it.
+function startReplayOnError(analytics: AnalyticsRuntime) {
+  const sink = analytics.getCodecastSink();
+  if (!sink || typeof window === "undefined") return;
+  void import("@platform/analytics/replay")
+    .then(({ startReplay }) => startReplay({ sink, sampleRate: 0 }))
+    .catch(() => {});
 }
 
 export function identifyUser(userId: string, traits?: Record<string, unknown>) {

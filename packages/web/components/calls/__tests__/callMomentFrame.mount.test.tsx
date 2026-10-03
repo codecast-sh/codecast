@@ -116,3 +116,37 @@ test("a moment still being filmed says it is recording now, not saving", () => {
   expect(document.body.textContent).toContain("Recording now");
   React.act(() => root.unmount());
 });
+
+test("a frame scrolled far past gives its player back and keeps its place; the call is asked once", () => {
+  // Two observers per card: the latched one that starts the subscription
+  // (200px) and the one that holds the player (1500px). The fake reports the
+  // reader's distance by margin, the way a real IntersectionObserver would.
+  const observers: { margin: string; cb: (e: any[]) => void }[] = [];
+  (globalThis as any).IntersectionObserver = class {
+    constructor(cb: (e: any[]) => void, opts: { rootMargin: string }) {
+      observers.push({ margin: opts.rootMargin, cb });
+    }
+    observe() {}
+    disconnect() {}
+  };
+  const reader = (within: (margin: string) => boolean) =>
+    React.act(() => observers.forEach((o) => o.cb([{ isIntersecting: within(o.margin) }])));
+  try {
+    recs = { call_started_at: T, recordings: [ready()] };
+    const root = render("cl-42@1:10");
+    expect(document.querySelector("video")).toBeNull();
+    reader(() => true);
+    expect(document.querySelector("video")).not.toBeNull();
+    // Far past both margins: the player is let go, the box stays (no jump).
+    reader(() => false);
+    expect(document.querySelector("video")).toBeNull();
+    expect(document.querySelector(".aspect-video")).not.toBeNull();
+    expect(document.body.textContent).toContain("1:10");
+    // Back within range: the frame mounts again from the latched answer.
+    reader((m) => m === "1500px");
+    expect(document.querySelector("video")!.getAttribute("src")).toBe("https://bucket.example/calls/r1.mp4?sig=1#t=10.00");
+    React.act(() => root.unmount());
+  } finally {
+    delete (globalThis as any).IntersectionObserver;
+  }
+});

@@ -65,6 +65,7 @@ describe("the fixture world", () => {
     "GET /epoch": { query: { surface: "settle", n: "2" } },
     "GET /attribution": { query: { surface: "settle", good: batches[batches.length - 6], b: "", bad: batches[batches.length - 1] } },
     "GET /commit/:sha": { params: { sha: settle[0].gitHead!.slice(0, 9) } },
+    "GET /patch/:sha": { params: { sha: settle.find((r) => r.treePatch)!.treePatch! } },
     "GET /changes": { query: { since: "0" } },
     "POST /bisect/plan": { body: { surface: "settle", good: batches[batches.length - 6], bad: batches[batches.length - 1] } },
     "POST /bisect": { body: { surface: "settle", good: batches[0], bad: batches[1] } },
@@ -134,7 +135,10 @@ describe("the store", () => {
   it("turns each area-wide failure into its connection state, and leaves a missing id to its page", () => {
     expect(classifyEvalsFailure(new EvalsRequestError(502, { error: "exit 1", reason: "child-crashed", stderr: ["boom"] }))).toMatchObject({ connection: "child-crashed", stderr: ["boom"] });
     expect(classifyEvalsFailure(new EvalsRequestError(503, { error: "x", reason: "checkout-not-toplevel" }))).toMatchObject({ connection: "no-checkout" });
-    expect(classifyEvalsFailure(new EvalsRequestError(503, { error: "x", reason: "no-bun" }))?.unreachableDetail).toMatch(/bun/);
+    expect(classifyEvalsFailure(new EvalsRequestError(503, { error: "", reason: "no-bun" }))?.unreachableDetail).toMatch(/bun/);
+    expect(
+      classifyEvalsFailure(new EvalsRequestError(503, { error: "/tmp/rv last ran ./evals, and its eval tool predates the api command", reason: "checkout-no-entry" }))?.unreachableDetail,
+    ).toBe("/tmp/rv last ran ./evals, and its eval tool predates the api command.");
     expect(classifyEvalsFailure(new EvalsRequestError(404, { error: "not found" }))).toMatchObject({ connection: "no-daemon", unreachableReason: "old-daemon" });
     expect(classifyEvalsFailure(new EvalsRequestError(403, { error: "forbidden" }))).toMatchObject({ unreachableReason: "refused" });
     expect(classifyEvalsFailure(new EvalsRequestError(404, { error: "no run", reason: "not-found" }))).toBeNull();

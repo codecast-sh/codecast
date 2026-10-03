@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { Clock, DoorClosed, Hand, LogOut, MonitorX, PhoneOff, Unlink, UserX, WifiOff } from "lucide-react";
 import { copyToClipboard } from "../../../lib/utils";
-import { GUEST_LINK_REFUSAL_PARTS, type CallGuestView, type GuestLinkRefusal } from "@codecast/shared/contracts";
+import { GUEST_LINK_REFUSAL_PARTS, guestLinkRefusal, type CallGuestView, type GuestLinkRefusal } from "@codecast/shared/contracts";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 
 // Every way a guest's visit can stop short of the call or end after it, in
@@ -23,6 +23,17 @@ const REFUSAL_TITLE: Record<GuestLinkRefusal, string> = {
 function refusalBody(reason: GuestLinkRefusal): string {
   const { what, next } = GUEST_LINK_REFUSAL_PARTS[reason];
   return reason === "inviter_gone" ? `${what} ${next}` : next;
+}
+
+/** A described link as the guest should see it at `now`: once its expiry
+ *  has passed it reads as the server would answer a fresh load of it, so the
+ *  lobby a guest left open gives way to the same Expired screen. */
+export function linkAsOf<L extends { ok: true; expires_at: number } | { ok: false; reason: GuestLinkRefusal }>(
+  link: L | undefined,
+  now: number,
+): L | { ok: false; reason: GuestLinkRefusal } | undefined {
+  const lapsed = link?.ok ? guestLinkRefusal(link, now) : null;
+  return lapsed ? { ok: false, reason: lapsed } : link;
 }
 
 export type Outcome =

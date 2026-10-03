@@ -70,9 +70,10 @@ describe("tasks: one row, every channel", () => {
     test(`${scope.workspace} floor, crawl and byIds write each row the same way`, async () => {
       const { list, crawl, refetch, ids } = await channels(scope);
       expect(ids.length).toBeGreaterThan(0);
+      expect(Object.keys(crawl).sort()).toEqual([...ids].sort());
       for (const id of ids) {
         expect(refetch[id]).toEqual(list[id]);
-        if (crawl[id]) expect(crawl[id]).toEqual(list[id]);
+        expect(crawl[id]).toEqual(list[id]);
       }
     });
   }

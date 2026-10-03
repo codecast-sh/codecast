@@ -6,7 +6,8 @@
 // channel or its session live in the store, so this stays a pure function of
 // (key, state) and re-derives at render (lib/liveEntities' rule — a renamed
 // teammate renames the huddle everywhere at once).
-import { parseRoomKey } from "@codecast/shared/contracts";
+import { callDisplayTitle, isGuestParticipant, parseRoomKey } from "@codecast/shared/contracts";
+import { meetingTitle } from "./roomGuests";
 import { channelDisplayName } from "../chatViews";
 
 type Store = {
@@ -133,4 +134,40 @@ export function describeRoom(
 export function describeRoomLive(roomKey: string | null, s: Store): RoomDescription {
   const live = roomKey ? (s.liveRooms ?? []).find((r) => r.room_key === roomKey) : undefined;
   return describeRoom(roomKey, s, { redacted: live?.redacted, serverTitle: live?.title });
+}
+
+/** What a call is called in the history and on its page (callDisplayTitle),
+ *  with the place read from the store by describeRoom: the same people, the
+ *  same channel and the same session title the dock would show for the room.
+ *  describeRoom's own fallbacks ("Huddle", "Session huddle") are not names,
+ *  so only a place it actually found is handed on.
+ *
+ *  A call held with an outside guest and no other name is named after the
+ *  guest, by the function that names it on the guest's own page
+ *  (roomGuests.meetingTitle): a column of "Untitled huddle" told the host
+ *  nothing about which one was the meeting with Pat. The guest is read from
+ *  the voices first (the list row has only those), then from the call's
+ *  guest record (its page), so both agree whenever the guest spoke. */
+export function callTitle(
+  call: {
+    title?: string | null;
+    room_key: string;
+    participants?: Array<{ id: string; name: string }>;
+    guests?: Array<{ name: string }>;
+  },
+  s: Store,
+  opts?: { untitled?: string },
+): string {
+  if (call.title?.trim()) return call.title.trim();
+  const parsed = parseRoomKey(call.room_key);
+  const d = describeRoom(call.room_key, s);
+  const guest =
+    call.participants?.find((p) => isGuestParticipant(p.id, p.name))?.name ?? call.guests?.[0]?.name ?? null;
+  return callDisplayTitle(call, {
+    peerName: d.otherIds.length ? d.label : null,
+    sessionTitle: parsed?.kind === "session" && d.anchorTitle ? d.label : null,
+    channelName: parsed?.kind === "channel" && d.anchorTitle ? d.label.replace(/^#/, "") : null,
+    untitled: opts?.untitled ?? (guest ? meetingTitle(null, { name: guest }) : undefined),
+    viewerId: s.currentUser?._id ? String(s.currentUser._id) : null,
+  });
 }

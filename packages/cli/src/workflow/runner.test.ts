@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { parseWorkflowSource, parseWorkflowFile, validateWorkflow } from "./parser.js";
-import { runWorkflow, graphToPushPayload, parseGateEdgeLabel, gatePayload, type RunOptions } from "./runner.js";
+import { runWorkflow, graphToPushPayload, parseGateEdgeLabel, gatePayload, handTimeoutMs, stationTitle, type RunOptions } from "./runner.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -488,6 +488,26 @@ describe("workflow/runner (gate payload)", () => {
     fs.rmSync(tmpDir, { recursive: true });
   });
 
+  test("a hand runs as long as its node's timeout, else the run's, else 30 minutes", () => {
+    expect(handTimeoutMs({ timeout: 5400 }, { agentTimeout: 60_000 })).toBe(5_400_000);
+    expect(handTimeoutMs({}, { agentTimeout: 60_000 })).toBe(60_000);
+    expect(handTimeoutMs({}, {})).toBe(1_800_000);
+  });
+
+  test("a failing dry run on a bound task never moves or comments on the task", async () => {
+    const g = parseWorkflowSource(`digraph g {
+      start [shape=Mdiamond]
+      prove [label="Prove"]
+      exit  [shape=Msquare]
+      start -> prove
+      prove -> exit [condition="prove.json.reproduced = true"]
+    }`);
+    const outcome = await runWorkflow(g, { dryRun: true, cwd: tmpDir, taskId: "ct-1", planId: "pl-1", apiToken: "tok", convexSiteUrl: "https://convex.test" });
+    expect(outcome).toBe("failed");
+    // Reading the task and the plan is fine; nothing may write to either.
+    expect(calls.map((c) => c.route).filter((r) => !r.endsWith("/get"))).toEqual([]);
+  });
+
   test("an edge label parses into key, label and description", () => {
     expect(parseGateEdgeLabel("[A] Approve :: ships now")).toEqual({ key: "A", label: "[A] Approve", description: "ships now" });
     expect(parseGateEdgeLabel("[R] Revise")).toEqual({ key: "R", label: "[R] Revise" });
@@ -719,6 +739,82 @@ describe("workflow/runner (LE14: json vars, graph hash, plan ready_tasks)", () =
     const dispatched = calls.filter(c => c.route === "/cli/workflow-runs/progress" && c.body.node_id === "dispatch" && c.body.node_status === "running");
     expect(dispatched.length).toBe(2);
   }, 20000);
+});
+
+// ── Stations as the run's workers ────────────────────────────────────────────
+
+describe("workflow/runner (stations nest under the run, gates complete)", () => {
+  let tmpDir: string;
+  let cap: ReturnType<typeof captureConsole>;
+  let origFetch: typeof fetch;
+  let calls: Array<{ route: string; body: any }>;
+  let pinned: { state: string; status: string };
+  let workState: string;
+
+  beforeEach(() => {
+    tmpDir = makeTmpDir();
+    cap = captureConsole();
+    origFetch = globalThis.fetch;
+    calls = [];
+    pinned = { state: "Grounded ct-9", status: "done" };
+    workState = "needs_input";
+    globalThis.fetch = (async (url: any, init: any) => {
+      const route = String(url).replace(/^https?:\/\/[^/]+/, "");
+      const body = JSON.parse(init?.body || "{}");
+      calls.push({ route, body });
+      const reply = (v: unknown) => new Response(JSON.stringify(v), { status: 200 });
+      if (route === "/cli/spawn") return reply({ conversation_id: "conv_hand", short_id: "jx7hand" });
+      if (route === "/cli/inbox") return reply({ sessions: [{ id: "conv_hand", work_state: workState, is_live: false }] });
+      if (route === "/cli/sessions/state/get") return reply(pinned);
+      if (route === "/cli/workflow-runs/poll-gate") return reply({ status: "running", gate_response: "S" });
+      return reply({ ok: true });
+    }) as typeof fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = origFetch;
+    cap.restore();
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  const graph = () => parseWorkflowSource(`digraph line {
+    start [shape=Mdiamond]
+    ground [label="Ground", backend=session, agent=claude, prompt="ground it"]
+    decide [label="Decide", shape=hexagon]
+    ship [shape=parallelogram, script="true"]
+    exit [shape=Msquare]
+    start -> ground -> decide
+    decide -> ship [label="[S] Ship"]
+    ship -> exit
+  }`);
+  const run = () => runWorkflow(graph(), { cwd: tmpDir, runId: "run-1", runSession: "conv_run", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1 } as RunOptions);
+
+  test("a station spawns nested under the run's session, named for its node and task", async () => {
+    expect(await run()).toBe("completed");
+    const spawn = calls.find(c => c.route === "/cli/spawn")!;
+    expect(spawn.body.parent_session).toBe("conv_run");
+    expect(spawn.body.title).toBe("Ground");
+    expect(stationTitle({ id: "prove", label: "Prove" }, { task_id: "ct-9" })).toBe("Prove · ct-9");
+    expect(stationTitle({ id: "prove", label: "" }, {})).toBe("prove");
+  }, 30000);
+
+  test("a station that declared done is retired, so a later settle cannot file it under needs input", async () => {
+    await run();
+    expect(calls.filter(c => c.route === "/cli/sessions/kill").map(c => c.body.session)).toEqual(["conv_hand"]);
+  }, 30000);
+
+  test("a station that ended on a question is left standing for the person", async () => {
+    pinned = { state: "Which base should prove run on?", status: "working" };
+    await run();
+    expect(calls.some(c => c.route === "/cli/sessions/kill")).toBe(false);
+  }, 30000);
+
+  test("a gate answered with its key reports the node completed, not failed", async () => {
+    await run();
+    const decide = calls.filter(c => c.route === "/cli/workflow-runs/progress" && c.body.node_id === "decide" && c.body.node_status !== "running");
+    expect(decide.map(c => c.body.node_status)).toEqual(["completed"]);
+    expect(decide[0].body.outcome).toBe("s");
+  }, 30000);
 });
 
 // ── A gate's change card (LE11) ──────────────────────────────────────────────
