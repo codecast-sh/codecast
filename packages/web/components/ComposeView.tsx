@@ -15,6 +15,10 @@ import { broadcastComposeOptimistic } from "../lib/composeBridge";
 import { AGENT_LAUNCH_OPTIONS } from "@codecast/shared/contracts";
 import { composeDraftContent, findKeptComposeDraft, type ComposeInstance } from "../store/composeSlice";
 import { flushDraftWrite } from "../lib/pendingDraftWrites";
+import { awaitUpload } from "../lib/pendingUploads";
+import { ComposeRolePicker } from "./ComposeRolePicker";
+import type { RoleRecipient } from "../lib/roleRecipients";
+import type { OptimisticImage } from "../store/inboxStore";
 import { Minus, Maximize2, ChevronUp, X } from "lucide-react";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -99,6 +103,13 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
   // footer's Clear is how a draft is dropped. The in-app popup asks instead.
   const standalone = !onClose;
   const [restored, setRestored] = useState(false);
+  // Who the request goes to (ComposeRolePicker): null starts a fresh session;
+  // a role sends it into that role's standing session instead. On the role
+  // path the stub is never materialized: the gate clears its draft, so the
+  // unmount abandon prunes it like any un-sent blank.
+  const [recipient, setRecipient] = useState<RoleRecipient | null>(null);
+  const recipientRef = useRef(recipient);
+  useWatchEffect(() => { recipientRef.current = recipient; }, [recipient]);
 
   // One session per popup instance (PaletteRoot remounts via key): in the
   // palette window an empty open resumes the last kept draft, else a fresh
@@ -258,6 +269,29 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
     rootRef.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
   }, []);
 
+  // The role path of a send. MessageInput's gate hands over the text and the
+  // images once it has emptied the composer; the message goes into the role's
+  // standing conversation exactly as the role page's Talk composer sends one
+  // (the same pending message `orgRoles.wake` enqueues), so the role learns
+  // who wrote and answers there with the session it started. The bubble
+  // paints at once with the previews; the send waits only for uploads still
+  // in flight. The standing id is re-read from the live tree, so a seat
+  // provisioned while the composer was open counts.
+  const wakeRole = useCallback(async (text: string, images?: Array<{ storageId?: string; previewUrl: string; mime: string; uploading: boolean }>) => {
+    const r = recipientRef.current;
+    if (!r) return;
+    const store = useInboxStore.getState();
+    const standingId = store.orgTree?.roles.find((x) => x._id === r.role._id)?.standing?.conversation_id ?? r.standingId;
+    if (!standingId) { toast.error(`${r.name} has no standing session yet`); return; }
+    const attached = images ?? [];
+    const optimistic: OptimisticImage[] = attached.map((img) => img.storageId
+      ? { media_type: img.mime, storage_id: img.storageId }
+      : { media_type: img.mime, preview_url: img.previewUrl, uploading: true });
+    const clientId = store.addOptimisticMessage(standingId, text, optimistic);
+    const ids = (await Promise.all(attached.map((img) => img.storageId ?? awaitUpload(img.previewUrl)))).filter((id): id is string => !!id);
+    useInboxStore.getState().sendMessage(standingId, text, ids.length ? ids : undefined, clientId);
+  }, []);
+
   // Expanding a dock, restoring a collapsed one, or minimizing the modal all
   // leave the composer as the thing being used: put the caret back in it.
   useWatchEffect(() => { if (!collapsed) refocusComposer(); }, [docked, collapsed, refocusComposer]);
@@ -375,6 +409,35 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
   // the popup is already gone.
   const handleSubmit = useCallback((navigate: boolean) => {
     if (!sessionId) return;
+    const r = recipientRef.current;
+    if (r) {
+      // Sent to a role (wakeRole already queued it). The blank stub stays
+      // un-sent and is pruned on unmount. "Send & open" lands on the role's
+      // page, where its standing session answers with the session it started;
+      // plain Enter leaves the person where they were and names the role.
+      const href = `/org/${r.role.short_id}`;
+      const said = `Sent to ${r.name} · ${r.title}`;
+      if (onClose) {
+        onClose();
+        if (navigate) router.push(href);
+        else toast.success(said, { action: { label: "Open", onClick: () => router.push(href) } });
+        return;
+      }
+      if (isElectron()) {
+        const submit = bridge("composeSubmit");
+        if (!navigate) {
+          if (submit) submit({ navigate: false });
+          else bridge("paletteHide")?.();
+          return;
+        }
+        bridge("paletteHide")?.();
+        bridge("paletteNavigate")?.(href);
+        return;
+      }
+      if (navigate) router.push(href);
+      else toast.success(said);
+      return;
+    }
     // First send → mark sent (so close-cleanup never prunes this row) and fire the
     // deferred server create. This runs a tick before MessageInput's own send
     // awaits awaitConvexId(sessionId), so the in-flight create is already tracked
@@ -492,12 +555,24 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
           </div>
         </div>
       )}
-      {instance && <ComposeChrome instance={instance} stubId={sessionId} onRequestClose={requestClose} />}
+      {instance && <ComposeChrome instance={instance} stubId={sessionId} recipientName={recipient?.name} onRequestClose={requestClose} />}
       {/* Collapsed keeps everything mounted (draft, pickers, uploads) and only
           stops painting it. */}
       <div className={collapsed ? "hidden" : "contents"}>
       <div className={`flex flex-col px-4 ${docked ? "shrink-0 pt-3" : "flex-1 min-h-0 pt-6"}`}>
-        {conversation && <NewSessionView conversation={conversation} />}
+        {conversation && (
+          <div className={`w-full shrink-0 ${docked ? "mb-2" : "mb-3 pr-16"}`}>
+            <ComposeRolePicker picked={recipient} onPick={setRecipient} onDone={refocusComposer} />
+          </div>
+        )}
+        {conversation && !recipient && <NewSessionView conversation={conversation} />}
+        {conversation && recipient && (
+          <div className={`flex-1 min-h-0 flex items-center justify-center text-center text-sol-text-dim ${docked ? "text-[11px] pb-2" : "text-xs px-8"}`}>
+            <p className="max-w-md">
+              <span className="text-sol-text">{recipient.name}</span> takes it from here: the standing session picks the project and the agent, starts the work, and says which session it started.
+            </p>
+          </div>
+        )}
       </div>
       {conversation && (
         <MessageInput
@@ -508,6 +583,8 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
           skills={skills}
           agentType={skillCtx.agentType}
           onDropFiles={dropFilesRef}
+          onGateSend={recipient ? wakeRole : undefined}
+          composerPlaceholder={recipient ? `Ask ${recipient.name} for anything…` : undefined}
           onSubmitWithIntent={handleSubmit}
           onDidSend={(info) => { if (navIntentRef.current) broadcastComposeOptimistic(info); }}
           escapeOwnedRef={escapeOwnedRef}
@@ -524,7 +601,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
       )}
       <div className="px-3 py-2 border-t border-sol-border/60 flex items-center justify-between text-[10px] text-sol-text-dim bg-sol-bg-alt/40 shrink-0">
         <span className="flex items-center gap-3">
-          <span className="flex items-center gap-1.5"><FooterKeys combo="enter" /> send</span>
+          <span className="flex items-center gap-1.5"><FooterKeys combo="enter" /> {recipient ? `send to ${recipient.name}` : "send"}</span>
           <span className="flex items-center gap-1.5"><FooterKeys combo="meta+enter" /> send &amp; open</span>
         </span>
         <span className="flex items-center gap-3">
@@ -544,7 +621,7 @@ const chromeButton = "p-1 rounded text-sol-text-dim/70 hover:text-sol-text hover
 // title bar naming the target project and, once collapsed, the draft it holds;
 // clicking the bar collapses or restores it. Subscribes to the two strings it
 // shows, so typing re-renders this bar and not the composer around it.
-function ComposeChrome({ instance, stubId, onRequestClose }: { instance: ComposeInstance; stubId: string | null; onRequestClose: () => void }) {
+function ComposeChrome({ instance, stubId, recipientName, onRequestClose }: { instance: ComposeInstance; stubId: string | null; recipientName?: string; onRequestClose: () => void }) {
   const projectName = useInboxStore((s) => {
     const row = stubId ? s.sessions[stubId] : undefined;
     return (row?.project_path || row?.git_root)?.split("/").filter(Boolean).pop();
@@ -567,7 +644,7 @@ function ComposeChrome({ instance, stubId, onRequestClose }: { instance: Compose
     >
       <span className="h-1.5 w-1.5 rounded-full bg-sol-cyan shrink-0" />
       <span className="flex-1 min-w-0 truncate text-xs text-sol-text-muted">
-        <span className="font-medium text-sol-text">{projectName || "New session"}</span>
+        <span className="font-medium text-sol-text">{recipientName ? `To ${recipientName}` : projectName || "New session"}</span>
         {snippet && <span className="text-sol-text-dim"> · {snippet}</span>}
       </span>
       <div className="flex items-center gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>

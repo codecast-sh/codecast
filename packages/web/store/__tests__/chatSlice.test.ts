@@ -12,6 +12,7 @@ import {
 } from "../inboxStore";
 import { chatReactionSyncOpts } from "../../lib/ingestChatPage";
 import { _resetChatRailMemo, type ChatMessageRow } from "../chatSlice";
+import { pendingImageUploads } from "../../lib/pendingUploads";
 
 type DispatchCall = { action: string; args: any[]; result?: unknown };
 
@@ -113,6 +114,84 @@ describe("chat store slice", () => {
       expect(rows[0]._id).toBe(realId);
       expect(chatSendState(rows[0])).toBe("sent");
       expect(useInboxStore.getState().chatMessages[clientId]).toBeUndefined();
+    });
+
+    describe("with an image still uploading", () => {
+      const preview = "blob:test/upload-1";
+      let finish: (storageId: string | null) => void;
+
+      beforeEach(() => {
+        pendingImageUploads.set(preview, new Promise((resolve) => { finish = resolve; }));
+      });
+      afterEach(() => pendingImageUploads.clear());
+
+      const settle = async (storageId: string | null) => {
+        finish(storageId);
+        await new Promise((r) => setTimeout(r, 0));
+      };
+
+      it("paints the message with the preview at once and dispatches only after the upload", async () => {
+        const clientId = useInboxStore.getState().sendChatMessage(CHANNEL, "", {
+          attachments: [{ storage_id: "", mime: "image/png", preview_url: preview }],
+        });
+
+        const rows = messagesIn(CHANNEL);
+        expect(rows).toHaveLength(1);
+        expect(rows[0].attachments).toEqual([{ storage_id: "", mime: "image/png", preview_url: preview }]);
+        expect(chatSendState(rows[0])).toBe("pending");
+        expect(calls).toHaveLength(0);
+
+        await settle("storage-abc");
+
+        expect(calls).toHaveLength(1);
+        expect(calls[0].action).toBe("dispatchChatSend");
+        expect(calls[0].args[2]).toBe(clientId);
+        // The journal carries the stored image, never the blob.
+        expect(calls[0].args[3].attachments).toEqual([{ storage_id: "storage-abc", mime: "image/png" }]);
+        expect(useInboxStore.getState().chatMessages[clientId].attachments).toEqual([{ storage_id: "storage-abc", mime: "image/png" }]);
+        expect(pendingImageUploads.has(preview)).toBe(false);
+      });
+
+      it("an edit while uploading is what gets sent", async () => {
+        const clientId = useInboxStore.getState().sendChatMessage(CHANNEL, "first", {
+          attachments: [{ storage_id: "", mime: "image/png", preview_url: preview }],
+        });
+        useInboxStore.getState().editChatMessage(clientId, "second");
+        expect(calls).toHaveLength(0);
+
+        await settle("storage-abc");
+        expect(calls).toHaveLength(1);
+        expect(calls[0].args[1]).toBe("second");
+      });
+
+      it("a failed upload with nothing typed takes the message back", async () => {
+        const clientId = useInboxStore.getState().sendChatMessage(CHANNEL, "", {
+          attachments: [{ storage_id: "", mime: "image/png", preview_url: preview }],
+        });
+        await settle(null);
+        expect(calls).toHaveLength(0);
+        expect(useInboxStore.getState().chatMessages[clientId]).toBeUndefined();
+      });
+
+      it("a failed upload with text sends the text", async () => {
+        useInboxStore.getState().sendChatMessage(CHANNEL, "look", {
+          attachments: [{ storage_id: "", mime: "image/png", preview_url: preview }],
+        });
+        await settle(null);
+        expect(calls).toHaveLength(1);
+        expect(calls[0].args[1]).toBe("look");
+        expect(calls[0].args[3].attachments).toBeUndefined();
+      });
+
+      it("a message discarded while uploading never leaves", async () => {
+        const clientId = useInboxStore.getState().sendChatMessage(CHANNEL, "x", {
+          attachments: [{ storage_id: "", mime: "image/png", preview_url: preview }],
+        });
+        useInboxStore.getState().deleteChatMessage(clientId);
+        await settle("storage-abc");
+        expect(calls).toHaveLength(0);
+        expect(useInboxStore.getState().chatMessages[clientId]).toBeUndefined();
+      });
     });
 
     it("another channel's page never prunes this one (delta overlay)", () => {
@@ -528,7 +607,7 @@ describe("chat store slice", () => {
         { _id: serverId("m1"), channel_id: CHANNEL, user_id: THEM, content: "read", created_at: 50, updated_at: 50 },
         { _id: serverId("m2"), channel_id: CHANNEL, user_id: THEM, content: "new", created_at: 150, updated_at: 150 },
         { _id: serverId("m3"), channel_id: CHANNEL, user_id: THEM, content: "hey", created_at: 160, updated_at: 160, mentions: [ME] },
-        { _id: serverId("m4"), channel_id: CHANNEL, user_id: ME, content: "mine", created_at: 170, updated_at: 170 },
+        { _id: serverId("m4"), channel_id: CHANNEL, user_id: ME, content: "mine", created_at: 140, updated_at: 140 },
       ]);
 
       _resetChatRailMemo();
@@ -539,6 +618,28 @@ describe("chat store slice", () => {
       expect(rail[0].unreadCount).toBe(2);
       expect(rail[0].mentionCount).toBe(1);
       expect(rail[1].unreadCount).toBe(0);
+    });
+
+    it("clears what the viewer answered even when the synced read mark lags", () => {
+      useInboxStore.getState().syncTable("chatChannels", [
+        { _id: CHANNEL, name: "dm", created_at: 1, updated_at: 1 },
+      ]);
+      // The read row still sits before the teammate's lines (another device
+      // sent the reply, or the rail push has not landed yet).
+      useInboxStore.getState().syncTable("chatReads", [{
+        _id: serverId("read1"), channel_id: CHANNEL, user_id: ME,
+        last_read_at: 100, notify_level: "all", updated_at: 100,
+      }]);
+      useInboxStore.getState().syncTable("chatMessages", [
+        { _id: serverId("m1"), channel_id: CHANNEL, user_id: THEM, content: "a", created_at: 150, updated_at: 150 },
+        { _id: serverId("m2"), channel_id: CHANNEL, user_id: THEM, content: "b", created_at: 160, updated_at: 160 },
+        { _id: serverId("m3"), channel_id: CHANNEL, user_id: ME, content: "answer", created_at: 170, updated_at: 170 },
+        { _id: serverId("m4"), channel_id: CHANNEL, user_id: THEM, content: "after", created_at: 180, updated_at: 180 },
+      ]);
+
+      _resetChatRailMemo();
+      const rail = selectChatRail(chatState(), ME);
+      expect(rail[0].unreadCount).toBe(1);
     });
 
     it("falls back to the server's count for a channel whose messages are not loaded", () => {

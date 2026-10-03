@@ -229,6 +229,24 @@ describe("tallyUnread", () => {
     expect(t).toEqual({ unread: 2, mentions: 1 });
   });
 
+  it("treats the viewer's own newest line as read, even when the read mark lags", () => {
+    const t = tallyUnread(
+      [m(NOW - 10 * MIN, "u2"), m(NOW - 9 * MIN, "u2"), m(NOW - 5 * MIN, "me"), m(NOW - MIN, "u2")],
+      NOW - 60 * MIN,
+      "me",
+    );
+    expect(t).toEqual({ unread: 1, mentions: 0 });
+  });
+
+  it("does not let an agent posting under the viewer's id read for them", () => {
+    const t = tallyUnread(
+      [m(NOW - 10 * MIN, "u2"), m(NOW - 5 * MIN, "me", { agent: true })],
+      NOW - 60 * MIN,
+      "me",
+    );
+    expect(t).toEqual({ unread: 1, mentions: 0 });
+  });
+
   it("ignores tombstones, so deleting a message clears its badge", () => {
     const t = tallyUnread([m(NOW - MIN, "u2", { deletedAt: NOW })], NOW - 5 * MIN, "me");
     expect(t).toEqual({ unread: 0, mentions: 0 });
