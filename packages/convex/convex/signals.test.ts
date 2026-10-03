@@ -178,6 +178,81 @@ describe("signals.ingest", () => {
   });
 });
 
+describe("signals in a project (line-profile.md LP1)", () => {
+  const stub = judgeStub();
+  beforeEach(() => stub.install());
+  afterEach(() => stub.restore());
+
+  async function withProjects() {
+    const base = await setup();
+    const project = (title: string, short_id: string, workspace = `user:${base.userId}`) =>
+      base.t.run(async (ctx) => await ctx.db.insert("projects", { user_id: base.userId, workspace, title, short_id, status: "active", created_at: T0, updated_at: T0 } as any));
+    const quality = await project("Agent Quality", "pj-1");
+    const infra = await project("Infrastructure", "pj-2");
+    const foreign = await project("Elsewhere", "pj-9", "team:someone-else");
+    return { ...base, quality, infra, foreign };
+  }
+
+  test("a new cause is filed under the project the ref names, and the signal carries it", async () => {
+    const { add, task, t, quality } = await withProjects();
+    const out = await add({ fingerprint: "union:cluster:c1", title: "Agent repeats itself", project: "Agent Quality" });
+    expect((await task(out.task_id)).project_id).toBe(quality);
+    expect((await t.run(async (ctx) => await ctx.db.get(out.signal_id)))?.project_id).toBe(quality);
+    const byShort = await add({ fingerprint: "union:cluster:c2", title: "Agent forgets the venue", project: "pj-1" });
+    expect((await task(byShort.task_id)).project_id).toBe(quality);
+  });
+
+  test("fingerprint attach stays inside the project: the same key in two projects is two causes", async () => {
+    const { add } = await withProjects();
+    const a = await add({ fingerprint: "shared-key", title: "Timeout on send", project: "Agent Quality" });
+    const b = await add({ fingerprint: "shared-key", title: "Timeout on send", project: "Infrastructure" });
+    expect(b.attach).toBe("new");
+    expect(b.task_id).not.toBe(a.task_id);
+    const again = await add({ fingerprint: "shared-key", title: "Timeout on send", project: "Infrastructure" });
+    expect(again).toMatchObject({ attach: "fingerprint", task_id: b.task_id });
+  });
+
+  test("without a project, attach is workspace wide and the signal takes its cause's project", async () => {
+    const { add, t, quality } = await withProjects();
+    const a = await add({ fingerprint: "k1", title: "Reply drafts in the wrong tone", project: "Agent Quality" });
+    const b = await add({ fingerprint: "k1", title: "Reply drafts in the wrong tone" });
+    expect(b).toMatchObject({ attach: "fingerprint", task_id: a.task_id });
+    expect((await t.run(async (ctx) => await ctx.db.get(b.signal_id)))?.project_id).toBe(quality);
+  });
+
+  test("the judge only sees causes of the same project", async () => {
+    const { add } = await withProjects();
+    await add({ fingerprint: "e1", title: "Checkout throws on empty cart", subject: "web/checkout", project: "Infrastructure" });
+    stub.state.calls.length = 0;
+    const out = await add({ fingerprint: "e2", title: "Empty cart checkout crash", subject: "web/checkout", project: "Agent Quality" });
+    expect(stub.state.calls).toHaveLength(0);
+    expect(out.attach).toBe("new");
+    await add({ fingerprint: "e3", title: "Empty cart checkout crash in Safari", subject: "web/checkout", project: "Agent Quality" });
+    expect(stub.state.calls).toHaveLength(1);
+    expect(stub.state.calls[0].messages[0].content).not.toContain("Checkout throws on empty cart");
+  });
+
+  test("a ref outside the write workspace, or ambiguous, is refused", async () => {
+    const { add, t, userId } = await withProjects();
+    await expect(add({ fingerprint: "x", title: "x", project: "Elsewhere" })).rejects.toThrow(/No project matching .*Elsewhere/);
+    await t.run(async (ctx) => { await ctx.db.insert("projects", { user_id: userId, workspace: `user:${userId}`, title: "Infrastructure v2", short_id: "pj-3", status: "active", created_at: T0, updated_at: T0 } as any); });
+    await expect(add({ fingerprint: "x", title: "x", project: "Infra" })).rejects.toThrow(/ambiguous/);
+    // An exact title still wins over the longer one that contains it.
+    expect((await add({ fingerprint: "y", title: "y", project: "Infrastructure" })).attach).toBe("new");
+  });
+
+  test("ls --project reads only that project's signals", async () => {
+    const { add, t } = await withProjects();
+    await add({ fingerprint: "a", title: "One", project: "Agent Quality" });
+    await add({ fingerprint: "b", title: "Two", project: "Infrastructure" });
+    await add({ fingerprint: "c", title: "Three" });
+    const quality = await t.query(api.signals.listForCli, { api_token: TOKEN, workspace: "personal", project: "Agent Quality" });
+    expect(quality.signals.map((s: any) => s.title)).toEqual(["One"]);
+    const all = await t.query(api.signals.listForCli, { api_token: TOKEN, workspace: "personal" });
+    expect(all.signals).toHaveLength(3);
+  });
+});
+
 describe("the judge's request and reply", () => {
   const candidates: CauseCandidate[] = [
     { task_id: "t1" as any, short_id: "ct-1", title: "Checkout throws", subjects: ["web/checkout"], signal_count: 3 },

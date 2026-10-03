@@ -1,3 +1,4 @@
+import type { ResourceOffloadIntent } from "@codecast/shared/contracts/resourceOffloadIntent";
 /**
  * Bulk session migration: move MANY sessions between a local machine and a
  * cloud host in one gesture, in either direction, while they may be mid-turn.
@@ -305,9 +306,12 @@ export async function performCreateBatch(
   userId: Id<"users">,
   args: {
     conversation_ids?: string[];
+    batch_id?: string;
+    resource_offload?: ResourceOffloadIntent;
     selector?: MigrationSelector;
     to_device_id: string;
     wait_for_idle_ms?: number;
+    interrupt_on_timeout?: boolean;
     concurrency?: number;
     /** Plan only: report rows and skips, write nothing. */
     dry_run?: boolean;
@@ -360,14 +364,16 @@ export async function performCreateBatch(
   const waitForIdle = Math.min(MAX_WAIT_FOR_IDLE_MS, Math.max(0, Math.round(args.wait_for_idle_ms ?? DEFAULT_WAIT_FOR_IDLE_MS)));
   const concurrency = Math.min(MAX_CONCURRENCY, Math.max(1, Math.round(args.concurrency ?? DEFAULT_CONCURRENCY)));
   const executors = [...new Set(plan.rows.map((r) => r.executor_device_id))];
-  const batchId = newBatchId();
+  const batchId = args.batch_id ?? newBatchId();
   await ctx.db.insert("migration_batches", {
     user_id: userId,
     batch_id: batchId,
+    ...(args.resource_offload ? { resource_offload: args.resource_offload } : {}),
     to_device_id: args.to_device_id,
     created_at: now,
     updated_at: now,
     wait_for_idle_ms: waitForIdle,
+    ...(args.interrupt_on_timeout === undefined ? {} : { interrupt_on_timeout: args.interrupt_on_timeout }),
     concurrency,
     executor_device_ids: executors,
   });
@@ -421,6 +427,7 @@ export const createBatch = mutation({
     selector: v.optional(selectorValidator),
     to_device_id: v.string(),
     wait_for_idle_ms: v.optional(v.number()),
+    interrupt_on_timeout: v.optional(v.boolean()),
     concurrency: v.optional(v.number()),
     dry_run: v.optional(v.boolean()),
   },
@@ -469,11 +476,12 @@ export async function performCancelBatch(ctx: { db: any }, userId: Id<"users">, 
 }
 
 export const cancelBatch = mutation({
-  args: { api_token: v.optional(v.string()), batch_id: v.string() },
+  args: { api_token: v.optional(v.string()), batch_id: v.string(), requested_at: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Authentication required");
-    return performCancelBatch(ctx, userId, args.batch_id);
+    if (args.requested_at !== undefined && (!Number.isFinite(args.requested_at) || args.requested_at <= 0 || args.requested_at > Date.now() + 30_000)) throw new Error("Invalid cancellation time");
+    return performCancelBatch(ctx, userId, args.batch_id, args.requested_at);
   },
 });
 
@@ -485,6 +493,7 @@ export const cancelBatch = mutation({
 export async function performRetryFailed(ctx: { db: any }, userId: Id<"users">, batchId: string, now = Date.now()): Promise<{ requeued: number; command_ids: string[] }> {
   const batch = await loadBatch(ctx, userId, batchId);
   if (!batch) throw new Error("no such batch");
+  if (batch.resource_offload) throw new Error("Review resource offload again before retrying this batch");
   const executors = new Set<string>();
   let requeued = 0;
   for (const row of await batchRowsOf(ctx, batchId)) {
@@ -540,6 +549,7 @@ export const runnerBatch = query({
       to_device_id: batch.to_device_id,
       cancelled_at: batch.cancelled_at ?? null,
       wait_for_idle_ms: batch.wait_for_idle_ms,
+      interrupt_on_timeout: batch.interrupt_on_timeout ?? true,
       concurrency: batch.concurrency,
       rows: rows.map((r: any) => ({
         migration_id: r._id,
@@ -758,6 +768,9 @@ export async function performEnqueueQuiesce(
 ): Promise<{ command_id: string | null; target_device_id: string | null }> {
   const row = await ctx.db.get(args.migration_id);
   if (!row || row.user_id.toString() !== userId.toString()) throw new Error("no such migration");
+  const batch = await loadBatch(ctx, userId, row.batch_id);
+  if (args.mode === "force" && batch?.interrupt_on_timeout === false) throw new Error("This move must not interrupt a running turn");
+  if (batch?.interrupt_on_timeout === false && batch.cancelled_at) throw new Error("This offload was cancelled before the session stopped");
   const conv = await ctx.db.get(row.conversation_id);
   if (!conv) throw new Error("the session no longer exists");
   // An unowned row moving to the cloud can only be running on the executor
@@ -886,6 +899,15 @@ export const confirmSession = mutation({
     if (!row || row.user_id.toString() !== userId.toString()) throw new Error("no such migration");
     if (TERMINAL_STATUSES.has(row.status)) return { ok: false, status: row.status };
     const now = Date.now();
+    const batch = await loadBatch(ctx, userId, row.batch_id);
+    if (args.ok && batch?.interrupt_on_timeout === false) {
+      const resume = row.resume_command_id ? await ctx.db.get(row.resume_command_id) : null;
+      if (!resume?.executed_at || resume.error) {
+        args.ok = false;
+        args.error = "The session moved, but destination continuation was not confirmed. Open it on the destination before retrying.";
+        args.stage = undefined;
+      }
+    }
     await ctx.db.patch(row._id, {
       status: args.ok ? ("done" as const) : ("failed" as const),
       stage: args.stage ?? (args.ok ? "running on the destination" : undefined),
@@ -989,11 +1011,13 @@ export const listBatches = query({
       const summary = summarizeBatch(rows, b.cancelled_at);
       out.push({
         batch_id: b.batch_id,
+        ...(b.resource_offload ? { resource_offload: b.resource_offload } : {}),
         to_device_id: b.to_device_id,
         created_at: b.created_at,
         updated_at: Math.max(b.updated_at, ...rows.map((r: any) => r.updated_at ?? 0)),
         cancelled_at: b.cancelled_at ?? null,
         wait_for_idle_ms: b.wait_for_idle_ms,
+        interrupt_on_timeout: b.interrupt_on_timeout ?? true,
         concurrency: b.concurrency,
         executor_device_ids: b.executor_device_ids,
         ...summary,

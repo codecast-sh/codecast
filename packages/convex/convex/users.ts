@@ -15,6 +15,8 @@ import { DEVICE_ONLINE_MS } from "./deviceRouting";
 import { reissueStrandedCloudSpawns } from "./cloudPlacement";
 import { fromConvexAgentType, AGENT_CLIENTS, findModelOption, CLOUD_SESSION_SOURCES, cloudSessionSyncSettings } from "@codecast/shared/contracts";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { adminChangesZones, recutChangesDays } from "./lib/changesDirty";
+import { normalizeTimezone } from "./lib/teamDay";
 import { startedBefore } from "./pathStats";
 import { verifyApiToken } from "./apiTokens";
 import { hasRecentPendingDaemonCommand, resumeConversationSession } from "./daemonCommandUtils";
@@ -179,8 +181,24 @@ export const updateProfile = mutation({
     if (args.walkie_snoozed_until !== undefined) {
       updateData.walkie_snoozed_until = args.walkie_snoozed_until;
     }
+    const zones = args.timezone !== undefined ? await adminChangesZones(ctx, userId) : null;
     await ctx.db.patch(userId, updateData);
+    if (zones) await recutChangesDays(ctx, zones);
     return userId;
+  },
+});
+
+/** The device's timezone for a profile that has none (store adoptTimezone). A zone the person chose is never replaced. */
+export const adoptTimezone = mutation({
+  args: { timezone: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    const user = await ctx.db.get(userId);
+    if (!user || user.timezone || normalizeTimezone(args.timezone) !== args.timezone) return;
+    const zones = await adminChangesZones(ctx, userId);
+    await ctx.db.patch(userId, { timezone: args.timezone });
+    await recutChangesDays(ctx, zones);
   },
 });
 
@@ -1467,8 +1485,8 @@ const RESERVED_USERNAMES = new Set([
   "about", "features", "documentation", "privacy", "security", "support", "terms",
   "login", "signup", "signin", "logout", "forgot-password", "reset-password", "auth",
   "join", "inbox", "feed", "search", "notifications", "conversation", "docs", "plans",
-  "tasks", "projects", "workflows", "routines", "schedules", "sessions", "team",
-  "admin", "config", "dashboard", "explore", "timeline", "windows", "orchestration",
+  "tasks", "projects", "workflows", "routines", "schedules", "sessions", "resources", "team",
+  "admin", "config", "memory", "dashboard", "explore", "timeline", "windows", "orchestration",
   "roadmap", "cli", "share", "commit", "pr", "review", "palette", "people", "call-panel", "settings",
   "pricing", "blog", "a",
   // Product nouns / safety

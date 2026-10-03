@@ -24,6 +24,7 @@ import {
   authorizeRoomMembership,
   clearRoomState,
   expireRoomGrants,
+  isSeat,
   liveMembers,
   readRoomState,
   upsertRoomState,
@@ -36,7 +37,7 @@ import { channelMemberIds, isRestricted } from "./chatAccess";
 import { bucketTs } from "./presenceState";
 import { teamFeatureOffMessage, teamHasFeature } from "./teamFeatures";
 import { huddleAlive, idleLiveTranscriptsForRoom, resumeOrEndHuddle } from "./transcripts";
-import { isRoomRecording, noteRecordedPeople, nudgeRecordingForShare, stopRoomRecording } from "./lib/callRecordingRuns";
+import { noteRecordedPeople, nudgeRecordingForShare, recordingConfigured, roomRecordingState, stopRoomRecording } from "./lib/callRecordingRuns";
 import { liveTranscriptFor, postEvent } from "./callChat";
 import { admittedGuests, guestKnocks, projectGuest } from "./callGuests";
 import { endGuestAdmissions } from "./lib/callGuestAdmission";
@@ -558,34 +559,43 @@ export const leaveRoom = mutation({
       .query("call_members")
       .withIndex("by_user", (q) => q.eq("user_id", userId))
       .collect();
-    const left = new Set<string>();
+    const left = new Map<string, Doc<"call_members"> | null>();
     for (const m of mine) {
       if (!args.room_key || m.room_key === args.room_key) {
         await ctx.db.delete(m._id);
-        left.add(m.room_key);
+        // The seat this person sat in, if they sat (a prewarm row held the
+        // media open for nobody, and leaving it empties no huddle).
+        left.set(m.room_key, isSeat(m) ? m : (left.get(m.room_key) ?? null));
       }
     }
-    for (const roomKey of left) await markHangup(ctx, userId, roomKey, now);
+    for (const roomKey of left.keys()) await markHangup(ctx, userId, roomKey, now);
     await settleOutboundRings(ctx, userId, args.room_key, now);
     // The last one out starts the huddle's grace: its record ends at this
-    // moment unless somebody is back within HUDDLE_GRACE_MS.
-    for (const roomKey of left) {
+    // moment unless somebody is back within HUDDLE_GRACE_MS, and the room
+    // itself is stamped with the moment it emptied, so the grace holds with
+    // nothing transcribing too (transcripts.withinHuddleGrace). A leave is
+    // often not a departure at all: the web leaves on beforeunload, so a
+    // reload is a leave and a join a second apart, and it must come back to
+    // the same huddle, its guests still in and its recording still running.
+    for (const [roomKey, seat] of left) {
       const seated = await ctx.db
         .query("call_members")
         .withIndex("by_room", (q) => q.eq("room_key", roomKey))
         .collect();
       if (liveMembers(seated, now).length === 0) {
         await idleLiveTranscriptsForRoom(ctx, roomKey, now);
-        // A recording does not wait out the grace: nobody is left to film,
-        // and a person back inside it presses Record again if they want it.
-        // Guests still inside do not hold it open: a guest alone never keeps
-        // a huddle going (transcripts.huddleAlive), the same rule the
-        // recording loop applies to LiveKit's room (huddleKeepers).
-        await stopRoomRecording(ctx, roomKey, { reason: "huddle_ended" });
-        // Guests wait out the same grace the record does (a teammate back
-        // inside it finds them still there). A huddle with no grace (nothing
-        // transcribing it) is over now, and so are their admissions.
-        if (!(await huddleAlive(ctx, roomKey, now))) await endGuestAdmissions(ctx, roomKey);
+        if (seat) await upsertRoomState(ctx, roomKey, seat, { emptied_at: now }, now);
+        // Inside the grace nothing else ends here. The recording stops on
+        // its own once LiveKit's room has held no teammate for
+        // RECORDING_EMPTY_ROOM_STOP_MS (guests never keep it going:
+        // huddleKeepers), or with the record (transcripts.endTranscript);
+        // guests' admissions end with the huddle (transcripts.endIdleTranscript,
+        // or the minute sweep). Only a huddle already past its grace (the
+        // last person here was a prewarm, nobody sat) ends now.
+        if (!(await huddleAlive(ctx, roomKey, now))) {
+          await stopRoomRecording(ctx, roomKey, { reason: "huddle_ended" });
+          await endGuestAdmissions(ctx, roomKey);
+        }
       }
     }
   },
@@ -1085,7 +1095,7 @@ export const getRoomKnocks = query({
     const now = Date.now();
     if (!(await liveSeat(ctx, userId, args.room_key, now))) return [];
     // Whether THIS viewer may answer the door: the rule admitting a teammate
-    // (a ring, `invite`) and admitting a guest (callGuests.requireDoorkeeper)
+    // (a ring, `invite`) and admitting a guest (callGuests.guestForDoorkeeper)
     // both take. Somebody seated in a channel's room through an accepted ring
     // sees who is waiting and cannot let them in, so the door shows them no
     // buttons that would only fail. Moves only with a membership.
@@ -1119,7 +1129,7 @@ export const getRoomKnocks = query({
     );
     // Guests knock here too, in the same list, so a door shows everybody
     // waiting at it in one place (callGuests.guestKnocks has their shape).
-    const guests = args.guests ? await guestKnocks(ctx, args.room_key, now, canAnswer) : [];
+    const guests = args.guests ? await guestKnocks(ctx, args.room_key, now, { canAnswer, userId }) : [];
     return [...waiting, ...guests].sort((a, b) => String(a.from_user).localeCompare(String(b.from_user)));
   },
 });
@@ -1198,6 +1208,7 @@ export const getLiveRooms = query({
       // the room and on every seat, so a reader holding one row of either
       // shape has the answer without a second lookup.
       const seat = await roomSeatClass(ctx, roomKey, live);
+      const recordingRun = await roomRecordingState(ctx, roomKey);
       out.push({
         room_key: roomKey,
         team_id: live[0].team_id,
@@ -1209,7 +1220,19 @@ export const getLiveRooms = query({
         // Somebody pressed Record and it has not been stopped: what everyone
         // who can see the room, inside it or about to walk in, is told.
         // Byte-stable: it flips on a press and a stop, never with the clock.
-        recording: await isRoomRecording(ctx, roomKey),
+        recording: !!recordingRun && recordingRun.status !== "stopping",
+        // The run behind the flag, for whoever may be in the room: who
+        // pressed, when the room began to be filmed (the clock), and
+        // "stopping" while LiveKit finishes the file, which the flag alone
+        // cannot say. The same facts getRoomRecording answers, carried here
+        // so the room's recording has one feed and one home on the client.
+        // Withheld, like the room's title, from a viewer who can only see
+        // that the room exists. Byte-stable the same way: it moves on a
+        // press, LiveKit's first frame, a stop and the file landing.
+        recording_run: canJoin ? recordingRun : null,
+        // Whether a press could work at all on this server, so a client
+        // leaves the button out rather than offer one that fails.
+        recording_configured: recordingConfigured(),
         can_join: canJoin,
         redacted,
         title,

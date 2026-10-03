@@ -1623,7 +1623,21 @@ export const linkRunConversation = mutation({
 export const cancelTask = cliTaskAction(applyCancel);
 export const pauseTask = cliTaskAction(applyPause);
 export const resumeTask = cliTaskAction(applyResume);
-export const runTaskNow = cliTaskAction(applyRunNow);
+// Run now from the CLI, optionally with a review focus: the same act as the
+// web's webRunNow, so `cast trigger run --focus goal_tree` and the Head of
+// People's "Plan the goal tree" button fire one trigger the same way.
+export const runTaskNow = mutation({
+  args: { api_token: v.string(), task_id: v.id("agent_tasks"), focus: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+    if (args.focus !== undefined && !isOrgReviewFocusKey(args.focus)) throw new Error(`Unknown review focus: ${args.focus}`);
+    const task = await getManageableTask(ctx, args.task_id, auth.userId);
+    if (!task) return false;
+    const focus = args.focus as OrgReviewFocusKey | undefined;
+    return logVerb(ctx, task, { userId: auth.userId, source: "cli" }, (c, t) => applyRunNow(c, t, focus));
+  },
+});
 
 // --- Web (session-auth) surface, used by the /schedules page ---
 

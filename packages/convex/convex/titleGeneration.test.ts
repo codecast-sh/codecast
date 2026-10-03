@@ -11,7 +11,7 @@ import {
   maybeScheduleTitleGeneration,
   sampleEvenly,
   shouldGenerateTitle, cleanShortTitle, buildShortTitlePrompt,
-  pickSpineRows, selectTitleInput, shortTitleRequest, titleRequest } from "./titleGeneration";
+  pickSpineRows, selectTitleInput, shortTitleRequest, titleRequest, firstPromptOf } from "./titleGeneration";
 import { isRefusalProse } from "./idleSummary";
 
 describe("extractTitleJson", () => {
@@ -437,5 +437,58 @@ describe("title request from rows", () => {
   test("shortTitleRequest is the name-only pass on the cheap model", () => {
     const req = shortTitleRequest({ kind: "plan", title: "Unify the AI's context around the broker", context: "One render path for every channel." });
     expect(goldenBody(req)).toBe(loadGolden("short-title").find((g) => g.case === "plan")!.body);
+  });
+});
+
+describe("firstPromptOf", () => {
+  test("the first thing a person wrote, past tool results and harness noise", () => {
+    expect(firstPromptOf([
+      { role: "user", content: "tool output", tool_results: [{}] },
+      { role: "user", content: "[Request interrupted by user]" },
+      { role: "assistant", content: "hello" },
+      { role: "user", content: "  build a k pop\n music video  " },
+      { role: "user", content: "later prompt" },
+    ])).toBe("build a k pop music video");
+  });
+
+  test("a workflow subagent opens with its computed task, without the frame line", () => {
+    expect(firstPromptOf([
+      { role: "user", content: "[Workflow harness — user request] The harness relays...\n  lets go with twosaidyes.com" },
+      { role: "user", content: "[Workflow harness — computed task] The task text below...\n  You are the creative director\n  making the final call" },
+    ])).toBe("You are the creative director making the final call");
+  });
+
+  test("bounded, and absent when nobody wrote anything", () => {
+    expect(firstPromptOf([{ role: "user", content: "x".repeat(900) }])!.length).toBe(400);
+    expect(firstPromptOf([{ role: "assistant", content: "hi" }])).toBeUndefined();
+  });
+});
+
+describe("a replaced title stays findable", () => {
+  test("setTitleAndSubtitle keeps the generated title it replaces, and the sweep stamps the opening prompt", async () => {
+    const t = convexTest(schema, titleModules);
+    const conversation_id = await t.run(async (ctx) => {
+      const user_id = await ctx.db.insert("users", { name: "Fixture" } as any);
+      const id = await ctx.db.insert("conversations", {
+        user_id, agent_type: "claude_code", session_id: "s-drift", started_at: 1, updated_at: 1,
+        is_private: true, status: "active", message_count: 2, title: "build e2e a music vid",
+      } as any);
+      await ctx.db.insert("messages", { conversation_id: id, role: "user", content: "build e2e a music video with a k pop song", timestamp: 1 } as any);
+      await ctx.db.insert("messages", { conversation_id: id, role: "assistant", content: "on it", timestamp: 2 } as any);
+      return id;
+    });
+    const set = (title: string) => t.mutation(internal.titleGeneration.setTitleAndSubtitle, { conversation_id, title, subtitle: `about ${title}` });
+    const read = () => t.run((ctx) => ctx.db.get(conversation_id)) as Promise<any>;
+
+    // The daemon's placeholder is the prompt cut short: not a title worth keeping.
+    await set("Union K-pop music video");
+    expect((await read()).earlier_titles).toBeUndefined();
+    await set("Warmintro landing site");
+    await set("Warmintro landing site");
+    expect((await read()).earlier_titles).toEqual(["Union K-pop music video"]);
+
+    const swept = await t.mutation(internal.titleGeneration.sweepFirstPrompts, { cursor: 0 });
+    expect(swept).toMatchObject({ stamped: 1, done: true });
+    expect((await read()).first_prompt).toBe("build e2e a music video with a k pop song");
   });
 });

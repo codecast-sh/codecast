@@ -95,3 +95,66 @@ describe("all-workspace access", () => {
     expect(rows.map((r: any) => r._id).sort()).toEqual(["own-row", "team-row"]);
   });
 });
+
+// A large team's `cast task ls` hit the 64 MB query cap: the scoped read pulled
+// every keyed row in again through the legacy index only to skip it, and the
+// task list pulled every finished task in only to drop it. Both now stay in
+// the database; these record which rows each index read handed to JS.
+describe("scoped reads leave skipped rows in the database", () => {
+  function spyReads(db: any) {
+    const reads: Record<string, string[]> = {};
+    const spy = (q: any, table: string, index: string): any => new Proxy(q, {
+      get: (target, key) => {
+        if (key === "withIndex") return (name: string, fn: any) => spy(target.withIndex(name, fn), table, name);
+        if (key === "filter" || key === "order") return (arg: any) => spy(target[key](arg), table, index);
+        if (key === "collect" && table === "tasks") return async () => {
+          const rows = await target.collect();
+          (reads[index] ??= []).push(...rows.map((r: any) => r._id));
+          return rows;
+        };
+        const value = target[key];
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const query = db.query.bind(db);
+    db.query = (table: string) => spy(query(table), table, "none");
+    db._tables.teams = [{ _id: TEAM, name: "Team" }];
+    return reads;
+  }
+
+  test("the legacy team index reads unkeyed rows only", async () => {
+    const { createDataContext } = await import("./data");
+    const db = workspaceDb("tasks");
+    db._tables.tasks.push({ _id: "legacy-team", user_id: OTHER, team_id: TEAM, title: "Old", status: "open", created_at: 1, updated_at: 1 });
+    const reads = spyReads(db);
+    const dc = await createDataContext({ db } as any, { userId: VIEWER as any, workspace: "team", team_id: TEAM as any });
+    const rows = await dc.query("tasks").collect();
+    expect(rows.map((r: any) => r._id).sort()).toEqual(["legacy-team", "team-row"]);
+    expect(reads.by_team_id.sort()).toEqual(["legacy-private", "legacy-team"]);
+  });
+
+  test("cast task ls leaves finished tasks in the database", async () => {
+    const { list } = await import("./tasks");
+    const { hashToken } = await import("./apiTokens");
+    const db = workspaceDb("tasks");
+    db._tables.api_tokens = [{ _id: "token", user_id: VIEWER, token_hash: await hashToken("fixture-token") }];
+    for (const t of db._tables.tasks) t.status = "open";
+    db._tables.tasks.push(
+      { _id: "done-row", user_id: OTHER, team_id: TEAM, workspace: `team:${TEAM}`, title: "Shipped", status: "done", created_at: 1, updated_at: 1 },
+      { _id: "dropped-row", user_id: OTHER, team_id: TEAM, workspace: `team:${TEAM}`, title: "Dropped", status: "dropped", created_at: 1, updated_at: 1 },
+    );
+    const reads = spyReads(db);
+    const rows = await (list as any)._handler({ db, auth: browserAuth }, { api_token: "fixture-token", workspace: "team", team_id: TEAM });
+    expect(rows.map((r: any) => r._id)).toEqual(["team-row"]);
+    expect(reads.by_workspace).toEqual(["team-row"]);
+
+    const all = await (list as any)._handler({ db, auth: browserAuth }, { api_token: "fixture-token", workspace: "team", team_id: TEAM, include_done: true });
+    expect(all.map((r: any) => r._id).sort()).toEqual(["done-row", "dropped-row", "team-row"]);
+
+    // A status category reads the workspace like every other listing: the
+    // team's done work, never the caller's own rows from another workspace.
+    db._tables.tasks.push({ _id: "own-done", user_id: VIEWER, workspace: `user:${VIEWER}`, title: "Mine", status: "done", created_at: 1, updated_at: 1 });
+    const done = await (list as any)._handler({ db, auth: browserAuth }, { api_token: "fixture-token", workspace: "team", team_id: TEAM, status: "done" });
+    expect(done.map((r: any) => r._id)).toEqual(["done-row"]);
+  });
+});

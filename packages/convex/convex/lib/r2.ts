@@ -152,6 +152,17 @@ export function callRecordingRunPrefixOfKey(key: string): string | null {
   return m ? m[0] : null;
 }
 
+/** The manifest LiveKit writes beside every file an egress uploads: a JSON
+ *  of the room, its participants and the file, named by the egress, in the
+ *  file's own folder (`calls/<call>/EG_x.json`). It sits outside the run
+ *  prefix, so a run's delete names it explicitly; null for a key outside the
+ *  layout or a row LiveKit never gave an id. */
+export function callRecordingManifestKey(fileKey: string, egressId: string | null | undefined): string | null {
+  if (!egressId || !/^EG_[A-Za-z0-9]+$/.test(egressId)) return null;
+  const m = fileKey.match(/^calls\/[^/]+\//);
+  return m ? `${m[0]}${egressId}.json` : null;
+}
+
 /** Where a call recording's file goes in the recordings bucket: under its
  *  call, named by the press that started its run so a call's files list in
  *  run order and a run's files sit together. Both kinds are MP4: a screen is

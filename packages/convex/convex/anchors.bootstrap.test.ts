@@ -55,3 +55,23 @@ describe("a role's opening message", () => {
     expect(isBootstrapPrompt(m)).toBe(true);
   });
 });
+
+// A workspace agent's opening says who can read its own conversation, from
+// the conversation's real visibility: a personal agent in a directory shared
+// with a team is not told its conversation is private.
+describe("a workspace agent's opening", () => {
+  const facts = { name: "Fern", scopeLabel: "the Fernhill workspace", ownerName: "Theo", teamName: "Fernhill" };
+  test("a team agent is told the whole team reads this conversation", () => {
+    const m = bootstrapMessage({ ...facts, scopeType: "team" });
+    expect(m).toContain("standing agent for Fernhill: every member of that team can reach you and read this conversation");
+    expect(m).not.toContain(" — every member");
+  });
+  test("a personal agent is told it is private only when its conversation is", () => {
+    const own = bootstrapMessage({ ...facts, scopeType: "user" });
+    expect(own).toContain("standing agent for Theo: private to them");
+    const shared = bootstrapMessage({ ...facts, scopeType: "user", sharedWithTeam: "Fernhill" });
+    expect(shared).not.toContain("private to them");
+    expect(shared).toContain("this conversation is shared with Fernhill, and every member of that team can read it");
+    expect(isBootstrapPrompt(shared)).toBe(true);
+  });
+});

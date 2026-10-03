@@ -13,7 +13,7 @@
 // no hit, and one mutation commits. The mutation re-reads the fingerprint, so
 // two finders racing on one fingerprint still land on one cause.
 import { v } from "convex/values";
-import { action, internalAction, internalMutation, internalQuery, query } from "./functions";
+import { action, internalAction, internalMutation, internalQuery, mutation, query } from "./functions";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
@@ -27,11 +27,11 @@ import { insertTaskComment } from "./tasks";
 import { DEDUP_SIMILARITY_THRESHOLD, titleSimilarity } from "./taskMining";
 import { callModel, parseJsonBlock, CHEAP_MODEL, type SurfaceRequest } from "./lib/anthropic";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
-import { insightSignalFingerprint } from "@codecast/shared/contracts/signalFingerprint";
+import { insightSignalFingerprint, SIGNAL_KINDS, type SignalKind } from "@codecast/shared/contracts/signalFingerprint";
 import { teamVisibleConvTeam } from "./privacy";
+import { resolveWorkspaceProject } from "./lib/projectRef";
 
-export const SIGNAL_KINDS = ["bug", "regression", "prompt_miss", "ux", "cohesion", "request"] as const;
-export type SignalKind = (typeof SIGNAL_KINDS)[number];
+export { SIGNAL_KINDS, type SignalKind };
 export type SignalAttach = "fingerprint" | "judge" | "new" | "person";
 
 const kindValidator = v.union(...SIGNAL_KINDS.map((k) => v.literal(k)));
@@ -62,12 +62,15 @@ const signalArgs = {
 
 // Where the signal is filed: the workspace the caller named, else the calling
 // session's team when it is team visible, else the directory rule. The same
-// rule a task create follows (createWorkContext).
+// rule a task create follows (createWorkContext). `project` (an id, short id
+// or title substring) names the project inside that workspace (line-profile.md
+// LP1): a new cause is filed under it, and attach looks only inside it.
 const scopeArgs = {
   workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
   team_id: v.optional(v.id("teams")),
   project_path: v.optional(v.string()),
   conversation_id: v.optional(v.string()),
+  project: v.optional(v.string()),
 };
 
 type SignalInput = {
@@ -122,6 +125,8 @@ export function normalizeSignal(input: SignalInput): SignalInput {
 
 const inWatch = (task: Doc<"tasks">, now: number) => typeof task.watch_until === "number" && task.watch_until > now;
 const isOpenCause = (task: Doc<"tasks">) => !isTerminalTaskStatus(task.status);
+/** With a project, only that project's causes are candidates; without one, the whole workspace's. */
+const inProject = (task: Doc<"tasks">, projectId: Id<"projects"> | null) => !projectId || task.project_id === projectId;
 
 async function authed(ctx: any, apiToken: string): Promise<Id<"users">> {
   const auth = await verifyApiToken(ctx, apiToken);
@@ -130,11 +135,12 @@ async function authed(ctx: any, apiToken: string): Promise<Id<"users">> {
 }
 
 /**
- * The cause that already holds this fingerprint in the workspace: an open one,
- * or one still in watch (which the commit reopens). The newest signal wins
- * when a fingerprint has reached more than one cause.
+ * The cause that already holds this fingerprint in the workspace (in the
+ * project, when one is given): an open one, or one still in watch (which the
+ * commit reopens). The newest signal wins when a fingerprint has reached more
+ * than one cause.
  */
-export async function fingerprintCause(ctx: any, workspace: string, fingerprint: string, now: number): Promise<Doc<"tasks"> | null> {
+export async function fingerprintCause(ctx: any, workspace: string, fingerprint: string, now: number, projectId: Id<"projects"> | null = null): Promise<Doc<"tasks"> | null> {
   const rows = await ctx.db
     .query("signals")
     .withIndex("by_workspace_fingerprint", (q: any) => q.eq("workspace", workspace).eq("fingerprint", fingerprint))
@@ -146,21 +152,22 @@ export async function fingerprintCause(ctx: any, workspace: string, fingerprint:
     if (seen.has(key)) continue;
     seen.add(key);
     const task = await ctx.db.get(row.task_id);
-    if (task && task.workspace === workspace && (isOpenCause(task) || inWatch(task, now))) return task;
+    if (task && task.workspace === workspace && inProject(task, projectId) && (isOpenCause(task) || inWatch(task, now))) return task;
   }
   return null;
 }
 
 /**
  * The open causes closest to this signal by text (title and subject), at most
- * five, best first. Causes are read through the workspace's recent signals,
- * so the search never scans the task table. A cause with no word in common is
- * no candidate: with none left, the judge is not asked.
+ * five, best first. Causes are read through the recent signals of the project
+ * when one is given, else of the workspace, so the search never scans the
+ * task table. A cause with no word in common is no candidate: with none left,
+ * the judge is not asked.
  */
-export async function nearestCauses(ctx: any, workspace: string, signal: Pick<SignalInput, "title" | "subject">): Promise<CauseCandidate[]> {
-  const recent = await ctx.db
-    .query("signals")
-    .withIndex("by_workspace_created", (q: any) => q.eq("workspace", workspace))
+export async function nearestCauses(ctx: any, workspace: string, signal: Pick<SignalInput, "title" | "subject">, projectId: Id<"projects"> | null = null): Promise<CauseCandidate[]> {
+  const recent = await (projectId
+    ? ctx.db.query("signals").withIndex("by_project_created", (q: any) => q.eq("project_id", projectId))
+    : ctx.db.query("signals").withIndex("by_workspace_created", (q: any) => q.eq("workspace", workspace)))
     .order("desc")
     .take(CANDIDATE_WINDOW);
   const subjectsOf = new Map<string, Set<string>>();
@@ -174,7 +181,7 @@ export async function nearestCauses(ctx: any, workspace: string, signal: Pick<Si
   const scored: Array<{ score: number; candidate: CauseCandidate }> = [];
   for (const [key, subjects] of subjectsOf) {
     const task: Doc<"tasks"> | null = await ctx.db.get(key as Id<"tasks">);
-    if (!task || task.workspace !== workspace || !isOpenCause(task)) continue;
+    if (!task || task.workspace !== workspace || !inProject(task, projectId) || !isOpenCause(task)) continue;
     const haystack = [task.title, ...subjects].join(" ");
     const score = titleSimilarity(needle, haystack);
     if (score <= 0) continue;
@@ -256,10 +263,11 @@ export const attachInputs = internalQuery({
   handler: async (ctx, args) => {
     const userId = await filerOf(ctx, args);
     const { db } = await createWorkContext(ctx, { userId, ...scopeOf(args) });
+    const projectId = (await resolveWorkspaceProject(ctx, db.workspaceKey, args.project))?._id ?? null;
     const signal = normalizeSignal(args.signal);
-    const hit = await fingerprintCause(ctx, db.workspaceKey, signal.fingerprint, Date.now());
+    const hit = await fingerprintCause(ctx, db.workspaceKey, signal.fingerprint, Date.now(), projectId);
     if (hit) return { fingerprint_hit: true, candidates: [] as CauseCandidate[] };
-    return { fingerprint_hit: false, candidates: await nearestCauses(ctx, db.workspaceKey, signal) };
+    return { fingerprint_hit: false, candidates: await nearestCauses(ctx, db.workspaceKey, signal, projectId) };
   },
 });
 
@@ -273,7 +281,8 @@ export const commit = internalMutation({
   handler: async (ctx, args) => {
     const userId = await filerOf(ctx, args);
     const { db } = await createWorkContext(ctx, { userId, ...scopeOf(args) });
-    return await commitSignal(ctx, db, userId, normalizeSignal(args.signal), args.judged_task_id ?? null, Date.now());
+    const projectId = (await resolveWorkspaceProject(ctx, db.workspaceKey, args.project))?._id ?? null;
+    return await commitSignal(ctx, db, userId, normalizeSignal(args.signal), args.judged_task_id ?? null, Date.now(), projectId);
   },
 });
 
@@ -283,19 +292,23 @@ function scopeOf(args: { workspace?: "personal" | "team"; team_id?: Id<"teams">;
 
 type WorkDb = Awaited<ReturnType<typeof createDataContext>>;
 
-/** The attach decision and the writes, in one transaction. */
-export async function commitSignal(ctx: any, db: WorkDb, userId: Id<"users">, signal: SignalInput, judged: Id<"tasks"> | null, now: number) {
+/**
+ * The attach decision and the writes, in one transaction. With a project, the
+ * cause is found or opened inside it; the signal carries the project it was
+ * filed into, else its cause's.
+ */
+export async function commitSignal(ctx: any, db: WorkDb, userId: Id<"users">, signal: SignalInput, judged: Id<"tasks"> | null, now: number, projectId: Id<"projects"> | null = null) {
   const workspace = db.workspaceKey;
   const observedAt = signal.observed_at ?? now;
   let attach: SignalAttach;
-  let task: Doc<"tasks"> | null = await fingerprintCause(ctx, workspace, signal.fingerprint, now);
+  let task: Doc<"tasks"> | null = await fingerprintCause(ctx, workspace, signal.fingerprint, now, projectId);
   if (task) {
     attach = "fingerprint";
   } else {
     const named: Doc<"tasks"> | null = judged ? await ctx.db.get(judged) : null;
     // The judge chose from open causes a moment ago; one closed or moved since
     // is no longer a place to attach.
-    if (named && named.workspace === workspace && isOpenCause(named)) {
+    if (named && named.workspace === workspace && inProject(named, projectId) && isOpenCause(named)) {
       task = named;
       attach = "judge";
     } else {
@@ -339,6 +352,7 @@ export async function commitSignal(ctx: any, db: WorkDb, userId: Id<"users">, si
       blocks: [],
       source: "signal",
       triage_status: "suggested",
+      ...(projectId ? { project_id: projectId } : {}),
       attempt_count: 0,
       retry_count: 0,
       max_retries: 3,
@@ -362,6 +376,7 @@ export async function commitSignal(ctx: any, db: WorkDb, userId: Id<"users">, si
     observed_at: observedAt,
     created_at: now,
     task_id: taskId,
+    project_id: projectId ?? task?.project_id,
     attach,
     reopened: reopened || undefined,
   });
@@ -454,7 +469,7 @@ type IngestResult = {
   reopened: boolean;
   signal_count: number;
 };
-type Scope = { workspace?: "personal" | "team"; team_id?: Id<"teams">; project_path?: string; conversation_id?: string };
+type Scope = { workspace?: "personal" | "team"; team_id?: Id<"teams">; project_path?: string; conversation_id?: string; project?: string };
 
 /** The three steps of LE4 (read, judge, commit), for every caller of the door. */
 async function runIngest(ctx: any, filer: Filer, fields: SignalInput, scope: Scope): Promise<IngestResult> {
@@ -475,8 +490,8 @@ async function runIngest(ctx: any, filer: Filer, fields: SignalInput, scope: Sco
 export const ingest = action({
   args: { api_token: v.string(), ...signalArgs, ...scopeArgs },
   handler: async (ctx, args): Promise<IngestResult> => {
-    const { api_token, workspace, team_id, project_path, conversation_id, ...fields } = args;
-    return await runIngest(ctx, { api_token }, fields, { workspace, team_id, project_path, conversation_id });
+    const { api_token, workspace, team_id, project_path, conversation_id, project, ...fields } = args;
+    return await runIngest(ctx, { api_token }, fields, { workspace, team_id, project_path, conversation_id, project });
   },
 });
 
@@ -484,8 +499,8 @@ export const ingest = action({
 export const ingestAs = internalAction({
   args: { user_id: v.id("users"), ...signalArgs, ...scopeArgs },
   handler: async (ctx, args): Promise<IngestResult> => {
-    const { user_id, workspace, team_id, project_path, conversation_id, ...fields } = args;
-    return await runIngest(ctx, { user_id }, fields, { workspace, team_id, project_path, conversation_id });
+    const { user_id, workspace, team_id, project_path, conversation_id, project, ...fields } = args;
+    return await runIngest(ctx, { user_id }, fields, { workspace, team_id, project_path, conversation_id, project });
   },
 });
 
@@ -583,13 +598,14 @@ function signalView(row: Doc<"signals">, task: Doc<"tasks"> | null) {
     attach: row.attach,
     reopened: row.reopened ?? false,
     task_id: row.task_id,
+    project_id: row.project_id,
     task_short_id: task?.short_id,
     task_title: task?.title,
     task_status: task?.status,
   };
 }
 
-/** `cast signal ls`: one cause's signals, or the workspace's newest. */
+/** `cast signal ls`: one cause's signals, or the newest of the workspace or of one project in it. */
 export const listForCli = query({
   args: {
     api_token: v.string(),
@@ -609,9 +625,10 @@ export const listForCli = query({
       rows = await ctx.db.query("signals").withIndex("by_task", (q) => q.eq("task_id", task._id)).order("desc").collect();
     } else {
       const { db } = await createWorkContext(ctx, { userId, ...scopeOf(args) });
-      rows = await ctx.db
-        .query("signals")
-        .withIndex("by_workspace_created", (q) => q.eq("workspace", db.workspaceKey))
+      const project = await resolveWorkspaceProject(ctx, db.workspaceKey, args.project);
+      rows = await (project
+        ? ctx.db.query("signals").withIndex("by_project_created", (q) => q.eq("project_id", project._id))
+        : ctx.db.query("signals").withIndex("by_workspace_created", (q) => q.eq("workspace", db.workspaceKey)))
         .order("desc")
         .take(source ? CANDIDATE_WINDOW : limit);
     }
@@ -687,8 +704,56 @@ export const webList = query({
       observed_at: row.observed_at,
       created_at: row.created_at,
       task_id: row.task_id,
+      project_id: row.project_id,
       attach: row.attach,
       reopened: row.reopened ?? false,
     }));
+  },
+});
+
+const finderKey = (f: { id: string; source: string; kind: "any" | string[]; fingerprint: string; runs?: string }) =>
+  [f.id, f.source, Array.isArray(f.kind) ? f.kind.join(",") : f.kind, f.fingerprint, f.runs ?? ""].join("\u0001");
+
+const finderArg = v.object({
+  id: v.string(),
+  source: v.string(),
+  kind: v.union(v.literal("any"), v.array(v.string())),
+  fingerprint: v.string(),
+  runs: v.optional(v.string()),
+});
+
+/**
+ * `cast line profile --publish` (line-profile.md LP3): a repo's declared
+ * finders onto the projects they file into, so /line can show each with its
+ * last signal and say when it is silent. One group per project the profile
+ * names; each ref resolves inside the write workspace by the rule every
+ * --project flag uses. A project whose declarations did not change is not
+ * written, so a publish on every run costs nothing.
+ */
+export const publishProfile = mutation({
+  args: {
+    api_token: v.string(),
+    ...scopeArgs,
+    root: v.optional(v.string()),
+    groups: v.array(v.object({ project: v.string(), default: v.boolean(), finders: v.array(finderArg) })),
+  },
+  handler: async (ctx, args) => {
+    const userId = await authed(ctx, args.api_token);
+    const { db } = await createWorkContext(ctx, { userId, ...scopeOf(args) });
+    const out: Array<{ project: string; short_id?: string; title: string; finders: number; changed: boolean }> = [];
+    for (const group of args.groups) {
+      const project = await resolveWorkspaceProject(ctx, db.workspaceKey, group.project);
+      if (!project) continue;
+      // Absent fields stay absent: Convex refuses undefined inside an object.
+      const finders = group.finders.map(({ runs, ...f }) => ({ ...f, source: f.source.trim().toLowerCase(), ...(runs ? { runs } : {}) }));
+      const prev = project.line_profile;
+      const same = !!prev && prev.root === args.root && !!prev.default === group.default
+        && prev.finders.map(finderKey).join("\n") === finders.map(finderKey).join("\n");
+      if (!same) {
+        await ctx.db.patch(project._id, { line_profile: { finders, ...(args.root ? { root: args.root } : {}), default: group.default, changed_at: Date.now() } });
+      }
+      out.push({ project: String(project._id), short_id: project.short_id, title: project.title, finders: finders.length, changed: !same });
+    }
+    return { projects: out };
   },
 });

@@ -3592,6 +3592,7 @@ http.route({
       const result = await ctx.runMutation(api.agentTasks.runTaskNow, {
         api_token: body.api_token,
         task_id: body.task_id,
+        ...(typeof body.focus === "string" ? { focus: body.focus } : {}),
       });
       return new Response(JSON.stringify({ success: result }), {
         status: 200,
@@ -4355,6 +4356,10 @@ cliRoute("/cli/signal/ls", async (ctx, body) => {
 });
 cliRoute("/cli/signal/show", async (ctx, body) => {
   return await ctx.runQuery(api.signals.showForCli, body);
+});
+// A repo's declared finders onto its projects (line-profile.md LP3).
+cliRoute("/cli/line/profile/publish", async (ctx, body) => {
+  return await ctx.runMutation(api.signals.publishProfile, body);
 });
 // The goals brief the ground node reads (the-line-end-to-end.md LE5).
 cliRoute("/cli/goals/brief", async (ctx, body) => {

@@ -46,4 +46,15 @@ describe("goals.brief", () => {
     expect(out.projects.map((p: any) => p.short_id).sort()).toEqual(["pj-a", "pj-b"]);
     expect(out.projects.find((p: any) => p.short_id === "pj-a")).toMatchObject({ goal: "Day one agent run", priority: "p1", owner_role: "@growth" });
   });
+
+  test("one project (LP1): its charter and the initiatives that carry it, nothing else", async () => {
+    const out = await (brief as any)._handler(await makeCtx(), { api_token: TOKEN, workspace: "personal", project: "Carried" });
+    expect(out.project_title).toBe("Carried");
+    expect(out.projects.map((p: any) => p.short_id)).toEqual(["pj-b"]);
+    expect(out.initiatives.map((i: any) => i.short_id)).toEqual(["in-1"]);
+    const side = await (brief as any)._handler(await makeCtx(), { api_token: TOKEN, workspace: "personal", project: "pj-c" });
+    expect(side.projects.map((p: any) => p.short_id)).toEqual(["pj-c"]);
+    expect(side.initiatives).toEqual([]);
+    await expect((brief as any)._handler(await makeCtx(), { api_token: TOKEN, workspace: "personal", project: "Theirs" })).rejects.toThrow(/No project matching/);
+  });
 });

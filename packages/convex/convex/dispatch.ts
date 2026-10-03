@@ -21,6 +21,8 @@ import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey, fromConvexAgentType
   checkoutInUseMessage,
   normalizeCloudWorkspace,
   posixRepoBasename,
+  recordingPressStale,
+  recordingPressStaleWords,
 } from "@codecast/shared/contracts";
 import { applyHideTransition } from "./cleanup";
 import { stampBrowserPaneOfferHandled, writeShareLink } from "./conversations";
@@ -44,6 +46,7 @@ import {
   canFileConversation,
 } from "./buckets";
 import { advanceLocalViewRevision, runLocalCommand } from "./localFirstCommands";
+import { deleteRecordingRun } from "./callRecordings";
 import { isSessionOwner } from "./sessionOwners";
 import { hideConversationForViewer, unhideConversationForViewer } from "./inboxHides";
 import { patchCommentWithRevision } from "./commentViewWrites";
@@ -1635,6 +1638,21 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     await (ctx as any).runMutation(api.conversationLinks.webUnlinkConversation, { id });
   },
 
+  // The client already removed the permission card (store resolvePermission).
+  resolvePermission: async (ctx, _userId, [permissionId, status]: [string, "approved" | "denied"]) => {
+    return await (ctx as any).runMutation(api.permissions.updatePermissionStatus, {
+      permission_id: permissionId as Id<"pending_permissions">,
+      status,
+    });
+  },
+  // The client already shows the run as running (store respondToGate).
+  respondToGate: async (ctx, _userId, [runId, response]: [string, string]) => {
+    await (ctx as any).runMutation(api.workflow_runs.respondToGate, {
+      id: runId as Id<"workflow_runs">,
+      response,
+    });
+  },
+
   toggleBookmark: async (ctx, userId, [conversationId, messageId]: [string, string]) => {
     return await (ctx as any).runMutation(api.bookmarks.toggleBookmark, {
       conversation_id: conversationId,
@@ -1649,11 +1667,22 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     await (ctx as any).runMutation(api.users.updateProfile, { status });
   },
 
+  // Profile fields from settings (store updateMyProfile), the same shape as
+  // the status above.
+  updateMyProfile: async (ctx, userId, [patch]: [Record<string, string>]) => {
+    await (ctx as any).runMutation(api.users.updateProfile, patch);
+  },
+
   // The walkie door, from settings (store setWalkiePref). Same shape as the
   // status above: the client already closed or opened its own door, this is the
   // authoritative write.
   setWalkiePref: async (ctx, userId, [pref]: ["team" | "off"]) => {
     await (ctx as any).runMutation(api.users.updateProfile, { walkie_pref: pref });
+  },
+
+  // A device's timezone for a profile that has none (store adoptTimezone).
+  adoptTimezone: async (ctx, userId, [timezone]: [string]) => {
+    await (ctx as any).runMutation(api.users.adoptTimezone, { timezone });
   },
 
   // Cloud session sync (Claude Code, Cursor Cloud), from the sync settings
@@ -2263,10 +2292,60 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     return await ctx.runMutation!(api.calls.setRoomTranscribeOff, { room_key: roomKey, off: !!off });
   },
   // Record and Stop (store setRoomRecording paints the callRooms mark first).
-  setRoomRecording: async (ctx, _userId, [roomKey, on]: [string, boolean]) => {
+  // A press is a moment, and this write rides a durable outbox: one that
+  // arrives long after it was made (parked through an outage, replayed when
+  // the tab reloads) is refused, so a room is never filmed, or a run ended,
+  // by a press nobody is still making (shared recordingPressStale). Thrown,
+  // so the client reads it as final and drops the row.
+  setRoomRecording: async (ctx, _userId, [roomKey, on, pressedAt]: [string, boolean, number | undefined]) => {
+    if (recordingPressStale(pressedAt, Date.now())) throw new Error(recordingPressStaleWords(!!on));
     return on
       ? await ctx.runMutation!(api.callRecordings.startRecording, { room_key: roomKey })
       : await ctx.runMutation!(api.callRecordings.stopRecording, { room_key: roomKey });
+  },
+  // The room's answers to a guest (store admitGuestKnock / denyGuestKnock
+  // drop the knock from roomKnocks, removeCallGuest drops the guest from the
+  // live room, all on the draft first). Each is the public mutation the
+  // door's rules live in (callGuests.ts), so a refusal (the guest changed
+  // their name, the link closed) comes back as this dispatch's failure and
+  // the row returns.
+  admitGuestKnock: async (ctx, _userId, [guestId, name]: [string, string]) => {
+    return await ctx.runMutation!(api.callGuests.admitGuest, { guest_id: guestId, name });
+  },
+  denyGuestKnock: async (ctx, _userId, [guestId, revokeLink]: [string, boolean | undefined]) => {
+    return await ctx.runMutation!(api.callGuests.denyGuest, { guest_id: guestId, ...(revokeLink ? { revoke_link: true } : {}) });
+  },
+  removeCallGuest: async (ctx, _userId, [, guestId, revokeLink]: [string, string, boolean | undefined]) => {
+    return await ctx.runMutation!(api.callGuests.removeGuest, { guest_id: guestId, ...(revokeLink ? { revoke_link: true } : {}) });
+  },
+  // A call's video, from the call page (store deleteCallRecording drops the
+  // run's rows first; setCallShareVideo moves the share switch first).
+  //
+  // The delete is receipt-backed: a refusal is the command's recorded
+  // outcome, so the client rolls the run back from its own receipt handler
+  // even when the refusal arrives on a replay after a reload, and a retry
+  // whose first answer was lost reads the stored receipt instead of running
+  // again. A run already gone (deleted from another window, or a call this
+  // caller can no longer read) is acknowledged: the rows the client dropped
+  // are gone either way, and putting them back would show dead files.
+  deleteCallRecording: async (ctx, userId, [recordingId]: [string], result) => {
+    if (!hasReceiptCommandId(result)) {
+      return await ctx.runMutation!(api.callRecordings.deleteRecording, { recording_id: recordingId });
+    }
+    return await runLocalCommand(ctx as any, {
+      principalId: userId,
+      commandId: receiptCommandId("deleteCallRecording", result),
+      commandName: "callRecordings.delete/v1",
+      arguments: { recordingId },
+    }, async () => {
+      const out = await deleteRecordingRun(ctx, userId, recordingId);
+      if (out.ok) return { status: "acknowledged", result: { deleted: out.deleted }, coverageViews: [] };
+      if (out.code === "NOT_FOUND") return { status: "acknowledged", result: { deleted: 0 }, coverageViews: [] };
+      return { status: "rejected", code: out.code, message: out.message };
+    });
+  },
+  setCallShareVideo: async (ctx, _userId, [transcriptId, include]: [string, boolean]) => {
+    return await ctx.runMutation!(api.callRecordings.setCallShareVideo, { call: transcriptId, include: !!include });
   },
   setChatSlackMember: async (
     ctx,
@@ -2377,6 +2456,12 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // The store's convCommand action routes every kill/restart/repair/reconfigure/
   // rewind/fork/sendKeys/sendEscape/resume here. Every target takes
   // conversation_id as its first arg; per-command extras ride extraArgs.
+  startResourceOffload: async (ctx, _userId, [args], result) => {
+    return ctx.runMutation!(api.resourceOffload.start, { ...args, batch_ids: result.batch_ids });
+  },
+  cancelResourceOffload: async (ctx, _userId, [batch_id], result) => {
+    return ctx.runMutation!(api.sessionMigrations.cancelBatch, { batch_id, requested_at: result.requested_at });
+  },
   hibernateSession: async (ctx, _userId, [requestId, convId, sessionId, ownerDeviceId]: [string, string, string, string]) => {
     return await ctx.runMutation!((api as any).sessionCommands.hibernate, {
       request_id: requestId, conversation_id: convId as Id<"conversations">,

@@ -1,8 +1,17 @@
 import { v } from "convex/values";
 import { internalMutation } from "./functions";
-import { recordUserSend } from "./lib/userSend";
+import { recordSendFor } from "./lib/userSend";
 
 export const record = internalMutation({
-  args: { user_id: v.id("users"), team_id: v.optional(v.id("teams")), timestamp: v.number() },
-  handler: (ctx, args): Promise<void> => recordUserSend(ctx, { user_id: args.user_id, team_id: args.team_id }, args.timestamp),
+  args: {
+    conversation_id: v.id("conversations"),
+    user_id: v.id("users"),
+    words: v.number(),
+    by_person: v.boolean(),
+    timestamp: v.number(),
+  },
+  handler: async (ctx, { conversation_id, by_person, timestamp, ...send }): Promise<void> => {
+    const conversation = await ctx.db.get(conversation_id);
+    if (conversation) await recordSendFor(ctx, conversation, send, by_person, timestamp);
+  },
 });

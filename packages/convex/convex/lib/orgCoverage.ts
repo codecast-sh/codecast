@@ -26,7 +26,7 @@ export type CoverageProject = { _id: unknown; short_id?: string | null; title: s
 export type CoveragePlan = { _id: unknown; short_id: string; title: string; status: string; project_id?: unknown };
 /** The fields the board rule reads, beside the two links; a raw task row satisfies it. */
 export type CoverageTask = Parameters<typeof isOnProjectBoard>[0] & { status?: string | null; project_id?: unknown; plan_id?: unknown };
-export type CoverageInitiative = Pick<InitiativeRow, "_id" | "short_id" | "title" | "status" | "owner" | "health" | "health_at" | "target_date" | "project_ids" | "parent_initiative_id" | "metrics" | "scoreboard">;
+export type CoverageInitiative = Pick<InitiativeRow, "_id" | "short_id" | "title" | "status" | "owner" | "health" | "health_at" | "target_date" | "project_ids" | "parent_initiative_id" | "metrics" | "scoreboard" | "description">;
 
 export type CoverageInputs = {
   projects: CoverageProject[];
@@ -50,6 +50,8 @@ export type ProjectCoverage = LeadFacts & { id: string; short_id?: string; title
 export type InitiativeCoverage = {
   short_id: string;
   title: string;
+  /** The goal in its author's words: what it is for, and any number they named. */
+  description?: string;
   status: InitiativeRow["status"];
   health: InitiativeRow["health"];
   health_at?: number;
@@ -89,6 +91,7 @@ export type OrgCoverage = {
 const INITIATIVE_OPEN: ReadonlySet<string> = new Set(["active", "planned", "proposed"]);
 const bump = (m: Map<string, number>, k: string) => m.set(k, (m.get(k) ?? 0) + 1);
 
+const INITIATIVE_DESCRIPTION_CHARS = 1500;
 export function computeCoverage(input: CoverageInputs): OrgCoverage {
   const openByProject = new Map<string, number>();
   const openByPlan = new Map<string, number>();
@@ -148,6 +151,7 @@ export function computeCoverage(input: CoverageInputs): OrgCoverage {
     return {
       short_id: i.short_id,
       title: i.title,
+      description: i.description?.trim() ? i.description.trim().slice(0, INITIATIVE_DESCRIPTION_CHARS) : undefined,
       status: i.status,
       health: i.health,
       health_at: i.health_at,

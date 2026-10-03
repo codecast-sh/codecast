@@ -1,3 +1,4 @@
+import { resourceOffloadIntent } from "./resourceOffloadSchema";
 import { defineSchema, defineTable } from "convex/server";
 import { authTables } from "@convex-dev/auth/server";
 import { v } from "convex/values";
@@ -16,6 +17,7 @@ import { googleOAuthTables } from "./googleOAuthSchema";
 import { oauthConnectorTables } from "./oauthConnectorsSchema";
 import { issueSyncTables, taskExternalValidator, taskCommentExternalValidator } from "./issueSyncSchema";
 import { agentTables } from "./agentSchema";
+import { machineResourceTables } from "./machineResourcesSchema";
 
 // Derived from the single source of truth in @codecast/shared/contracts so the
 // schema, validators, the CLI daemon, and the browser store can never drift.
@@ -83,6 +85,7 @@ export default defineSchema({
   // own module so the capability functions and their tests share one source;
   // spread here because a deploy only ships what this file names.
   ...capabilityTables,
+  ...machineResourceTables,
   ...googleOAuthTables,
   ...oauthConnectorTables,
   ...authTables,
@@ -692,6 +695,16 @@ export default defineSchema({
     // re-scheduling rate (see titleGeneration.maybeScheduleTitleGeneration).
     title_gen_scheduled_at: v.optional(v.number()),
     title_is_custom: v.optional(v.boolean()),
+    // What the session was when it began and what it has been called since,
+    // for search: a long session drifts ("K-pop music video" becomes "Warmintro
+    // landing site") and the person looking for it remembers the start.
+    // first_prompt is the opening of the first prompt a person or a brief
+    // wrote (messages.ts stamps it once, firstPromptOf picks it);
+    // earlier_titles are the titles a generated title replaced
+    // (searchCore.earlierTitlesAfter, bounded). Neither is indexed: the message
+    // index finds the session, these decide how it ranks and what the row shows.
+    first_prompt: v.optional(v.string()),
+    earlier_titles: v.optional(v.array(v.string())),
     // What the title was before a role's seat renamed the thread after the
     // role (org-staffing.md S16); unseating with the session kept restores it.
     seat_previous: v.optional(v.object({ title: v.optional(v.string()), title_is_custom: v.optional(v.boolean()) })),
@@ -1195,6 +1208,7 @@ export default defineSchema({
   // under it are the unit of progress the web narrates and the runner
   // advances; a batch's status is derived from its rows, never stored.
   migration_batches: defineTable({
+    resource_offload: v.optional(resourceOffloadIntent),
     user_id: v.id("users"),
     // Short public id (mg-xxxxxxxx): what the daemon command, the CLI and the
     // web all name the batch by.
@@ -1207,6 +1221,7 @@ export default defineSchema({
     // How long the runner waits for a mid-turn session to go idle before it
     // interrupts the turn and moves anyway. 0 = interrupt immediately.
     wait_for_idle_ms: v.number(),
+    interrupt_on_timeout: v.optional(v.boolean()),
     // Sessions transferred in parallel per executor (SSH transfers).
     concurrency: v.number(),
     // The local daemons that run this batch, one command each.
@@ -2531,6 +2546,10 @@ export default defineSchema({
     // injection: a machine wake must not override the user's stash (stash =
     // "keep working out of my sight"), so enqueue skips the stash-clear.
     origin: v.optional(v.literal("scheduler")),
+    // A person wrote this (enqueuePendingMessage.human). Kept on the row so
+    // the echo can tell a person's message from one a program queued in
+    // their name (a spawn brief, an account-switch "continue").
+    human: v.optional(v.boolean()),
     status: v.union(
       v.literal("pending"),
       v.literal("injected"),
@@ -3669,7 +3688,7 @@ export default defineSchema({
     // long-lived account accumulates far more events than any window shows.
     .index("by_actor_timestamp", ["actor_user_id", "timestamp"]),
 
-  // Per-day human-send counters ("Sends" chart metric). One row per
+  // Per-day human-send counters (the "Typed" and "Words" chart metrics). One row per
   // (user, team, UTC day); `hours` holds 24 UTC-hour buckets. Written at
   // message-insert time by messages.ts via lib/userSend.recordUserSend — a
   // send is a user-role message a person actually typed (noise-classified),
@@ -3680,6 +3699,9 @@ export default defineSchema({
     day_start: v.number(),
     total: v.number(),
     hours: v.array(v.number()),
+    // Words typed, in total and per UTC hour.
+    words: v.optional(v.number()),
+    word_hours: v.optional(v.array(v.number())),
     updated_at: v.number(),
   })
     .index("by_user_day", ["user_id", "day_start"])
@@ -3859,6 +3881,12 @@ export default defineSchema({
     // When the team's daily prose cap first left a story or the edition of
     // this day unwritten. Independent of status: a written edition can be capped.
     capped_at: v.optional(v.number()),
+    // Week editions (scope "week", date an ISO week `2026-W40`, changesWeek.ts):
+    // the week's biggest stories by key, lead first, and its area totals.
+    top_story_keys: v.optional(v.array(v.string())),
+    area_totals: v.optional(v.array(v.object({ area: v.string(), stories: v.number(), files: v.number() }))),
+    // The week build scheduled by a day edition finalizing, while it waits.
+    scheduled_id: v.optional(v.id("_scheduled_functions")),
   })
     .index("by_user_scope_date", ["user_id", "scope", "date"])
     .index("by_team_scope_date", ["team_id", "scope", "date"])
@@ -3909,6 +3937,9 @@ export default defineSchema({
       v.literal("failed"),
       v.literal("skipped"),
     ),
+    // Prose calls that failed since the inputs last moved; a failed story is
+    // retried until this reaches PROSE_ATTEMPTS (changes.ts).
+    prose_attempts: v.optional(v.number()),
     inputs_hash: v.string(),
     generated_at: v.optional(v.number()),
     model: v.optional(v.string()),
@@ -4817,6 +4848,23 @@ export default defineSchema({
     // with an end); a bounded project is what a program role ends with
     // (org-staffing.md S10).
     horizon: v.optional(v.union(v.literal("ongoing"), v.literal("bounded"))),
+    // The finders a repo's line profile declares for this project
+    // (line-profile.md LP3), published by `cast line profile --publish`. The
+    // repo holds the truth; this copy is what /line reads to name each
+    // finder and say when one is silent. root: the checkout that published;
+    // default: this is that profile's `[line] project`.
+    line_profile: v.optional(v.object({
+      finders: v.array(v.object({
+        id: v.string(),
+        source: v.string(),
+        kind: v.union(v.literal("any"), v.array(v.string())),
+        fingerprint: v.string(),
+        runs: v.optional(v.string()),
+      })),
+      root: v.optional(v.string()),
+      default: v.optional(v.boolean()),
+      changed_at: v.number(),
+    })),
 
     created_at: v.number(),
     updated_at: v.number(),
@@ -5419,6 +5467,9 @@ export default defineSchema({
     .index("by_workspace", ["workspace"])
     // LE6: the open causes in a whole workspace role's boundary.
     .index("by_workspace_source_status", ["workspace", "source", "status"])
+    // LE5: the open causes no one has grounded yet (readiness unset), which
+    // lineGround.sweep grounds before admission can rank them.
+    .index("by_source_status_readiness", ["source", "status", "readiness"])
     .index("by_created_from_conversation", ["created_from_conversation"])
     .index("by_user_insight", ["user_id", "created_from_insight"])
     .index("by_workflow_run", ["workflow_run_id"])
@@ -5459,11 +5510,14 @@ export default defineSchema({
     observed_at: v.number(),
     created_at: v.number(),
     task_id: v.id("tasks"),
+    // The project the signal was filed into, or its cause's (line-profile.md LP1).
+    project_id: v.optional(v.id("projects")),
     attach: v.union(v.literal("fingerprint"), v.literal("judge"), v.literal("new"), v.literal("person")),
     // Set when this signal reopened a cause in watch (LE12).
     reopened: v.optional(v.boolean()),
   })
     .index("by_workspace_fingerprint", ["workspace", "fingerprint"])
+    .index("by_project_created", ["project_id", "created_at"])
     .index("by_task", ["task_id", "created_at"])
     .index("by_workspace_created", ["workspace", "created_at"])
     .index("by_short_id", ["short_id"]),
@@ -6094,6 +6148,13 @@ export default defineSchema({
     // shows for a beat after somebody switched transcription back on by hand
     // predates their run and must not end it (autoScribe).
     transcribe_off_at: v.optional(v.number()),
+    // When the last seat left this huddle's room (calls.leaveRoom). The
+    // huddle's grace dates from it when no live record carries an idle stamp
+    // of its own (transcription off, or nobody scribing yet), so a teammate
+    // who reloads the tab comes back to the same huddle, with its grants and
+    // its guests, whether or not anything was transcribing it
+    // (transcripts.withinHuddleGrace). Dies with the row like the rest.
+    emptied_at: v.optional(v.number()),
     updated_at: v.number(),
   }).index("by_room", ["room_key"]),
 
@@ -6136,9 +6197,20 @@ export default defineSchema({
     expires_at: v.number(),
     revoked_at: v.optional(v.number()),
     revoked_by: v.optional(v.id("users")),
+    // How many people from this link the room has turned away or put out,
+    // counted as it happens rather than by reading every row the link ever
+    // made: past one, the door offers to turn the link off.
+    turned_away: v.optional(v.number()),
+    // When the creator was last pushed about somebody waiting at an empty
+    // room on this link. Per link, not per guest: a leaked link mints new
+    // guests at will, and must not page its creator once for each.
+    creator_told_at: v.optional(v.number()),
   })
     .index("by_token", ["token"])
-    .index("by_room", ["room_key"]),
+    .index("by_room", ["room_key"])
+    // The creator's latest push across all their links, in one read
+    // (callGuests.tellCreatorIfAlone).
+    .index("by_creator_told", ["created_by", "creator_told_at"]),
 
   // One outside person at one huddle's door, and then in its room. A guest
   // has no users row, so their knock and their seat cannot be call_knocks or
@@ -6177,12 +6249,32 @@ export default defineSchema({
     // Why a `left` row left: they walked out, or the huddle they were let
     // into ended (an admission is for one huddle). CallGuestLeftReason.
     left_reason: v.optional(callGuestLeftReasonValidator),
-    // When the link's creator was last told this guest was waiting at an
-    // empty room (one push per arrival, not one per beat).
+    // When the link's creator was last told somebody was waiting on this
+    // link at an empty room, stamped on each guest that push covered, so
+    // their page says "we let them know" only when somebody was.
     creator_told_at: v.optional(v.number()),
+    // When this row stopped letting the guest in (left, removed, denied).
+    // The minute sweep keeps checking the media room of a running huddle for
+    // a while after (by_settled), since LiveKit refreshes a connected
+    // client's token by itself and only a roster check puts it out.
+    settled_at: v.optional(v.number()),
+    // What the guest's last beat computed for their page ("closed:quiet",
+    // "admitted"), written only when it moves. getGuestState answers from the
+    // clock too (a link's expiry, a huddle's grace), and a query re-runs only
+    // when a row it read changes: this is that change.
+    beat_view: v.optional(v.string()),
+    // When this admission was last seen in the media room: a beat from a page
+    // connected to it, or the roster check finding the identity in LiveKit.
+    // Cleared on each admission, so a place let go with none is "not_joined"
+    // rather than "lapsed" (the guest never came in, nothing dropped).
+    media_seen_at: v.optional(v.number()),
   })
-    .index("by_room_status", ["room_key", "status"])
-    .index("by_status", ["status"])
+    // Every read of a room's door or roster is bounded by the lease
+    // (last_seen), so rows from closed pages cost nothing to the reads that
+    // run on every beat, however many a leaked link has made.
+    .index("by_room_status_seen", ["room_key", "status", "last_seen"])
+    .index("by_status_seen", ["status", "last_seen"])
+    .index("by_settled", ["settled_at"])
     .index("by_link", ["link_id"]),
 
   // Which calls a guest was in: one row per guest per call record, written
@@ -6456,9 +6548,11 @@ export default defineSchema({
     source_message_id: v.optional(v.id("messages")),
     // Set when this row is something the room SAW rather than something
     // somebody said: "agent_joined" | "agent_left" | "transcribe_on" |
-    // "transcribe_off" | "record_on" | "record_off" | "record_deleted".
-    // `user_id` is who did it (the person who added or removed the agent, or
-    // pressed the transcription or recording switch); an agent event
+    // "transcribe_off" | "record_on" | "record_off" | "record_deleted" |
+    // "guest_admitted" | "guest_removed".
+    // `user_id` is who did it (the person who added or removed the agent,
+    // pressed the transcription or recording switch, or let a guest in or
+    // put one out, the guest named by event_guest_name); an agent event
     // also carries `agent_conversation_id`. `text` is empty, except a
     // recording that failed, which carries the failure in plain words.
     // Written only by callChat.postEvent; never relayed to the fed sessions.
@@ -6470,7 +6564,8 @@ export default defineSchema({
     event_reason: v.optional(v.string()),
     // A guest did it (pressed Stop): the name the room knew them by. The row
     // is owned by the run's presser, since a line needs a user, and is shown
-    // as the guest's.
+    // as the guest's. On guest_admitted / guest_removed it is the guest the
+    // doorkeeper (user_id) let in or put out.
     event_guest_name: v.optional(v.string()),
     // The huddle this line was said in: the room's live transcript when it
     // was written (callChat.insertRoomRow), or the one a line typed before
@@ -7229,7 +7324,8 @@ export default defineSchema({
   // how many lines a role or session posted in a channel today, how many thread
   // roots it started, how many mention wakes a sender caused or a target took
   // this hour. `key` names what is counted ("post:<channel>:<poster>",
-  // "root:<channel>:<poster>", "mention_from:<user>", "mention_to:<target>")
+  // "root:<channel>:<poster>", "mention_from:<user>", "mention_from:<user>:<session>"
+  // for a mention reply charged to the replying session, "mention_to:<target>")
   // and `bucket` is the window it counts in (a UTC day "2026-09-12" or hour
   // "2026-09-12T14"). One row per (key, bucket); old buckets are simply never
   // read again. Separate from `rate_limits`, whose window is one minute.

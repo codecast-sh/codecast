@@ -63,9 +63,9 @@ async function seed() {
     await member(bea, b);
     await member(cid, off);
 
-    const conv = (owner: Id<"users">, team: Id<"teams">, shortId: string) => ctx.db.insert("conversations", {
+    const conv = (owner: Id<"users">, team: Id<"teams">, shortId: string, over: Record<string, unknown> = { git_remote_url: "git@github.com:acme/app.git" }) => ctx.db.insert("conversations", {
       user_id: owner, team_id: team, agent_type: "claude_code", session_id: `s-${shortId}`, short_id: shortId, title: `session ${shortId}`,
-      started_at: NOW - 6 * HOUR, updated_at: NOW - HOUR, message_count: 3, is_private: false, status: "active", project_path: "/repo",
+      started_at: NOW - 6 * HOUR, updated_at: NOW - HOUR, message_count: 3, is_private: false, status: "active", project_path: "/repo", ...over,
     } as any);
     const insight = (conversation: Id<"conversations">, team: Id<"teams">, actor: Id<"users">, headline: string, outcome: string) =>
       ctx.db.insert("session_insights", {
@@ -82,6 +82,17 @@ async function seed() {
     await insight(landed, a, ana, "Line pages", "progress");
     await insight(hidden, a, ben, `Blocked on ${SECRET}`, "blocked");
     await insight(bravo, b, bea, "Bravo's own blocker", "blocked");
+    // Repositories: a session in another repository, one with no remote whose
+    // checkout the owner publishes as acme/app, and one nobody can place.
+    const elsewhere = await conv(ana, a, "jx7else", { git_remote_url: "https://github.com/acme/other" });
+    const cloned = await conv(ana, a, "jx7clon", { project_path: "/work/app-clone" });
+    const unplaced = await conv(ana, a, "jx7nowh", { project_path: "/tmp/scratch" });
+    await insight(elsewhere, a, ana, "Other repo is stuck", "blocked");
+    await insight(cloned, a, ana, "Clone without a remote is stuck", "blocked");
+    await insight(unplaced, a, ana, "Nobody knows where this ran", "blocked");
+    await ctx.db.insert("repo_sources", {
+      user_id: ana, team_id: a, repository: REPO, root: "/work/app-clone", enabled: true, last_synced_at: NOW, created_at: NOW, updated_at: NOW,
+    } as any);
 
     // Stories: today's main and branch work in A, yesterday's, and B's.
     const s1 = await ctx.db.insert("change_stories", storyRow(a, TODAY, "a-web", { commit_shas: ["s1", "s2"], area: "convex", area_counts: { convex: 3 } }));
@@ -211,7 +222,14 @@ describe("a member of team A", () => {
     const s = await seed();
     const rows = (await s.as(s.ids.ana).query(api.changesQueries.inTheWorks, { team_id: s.ids.a, repository: REPO }))!;
     const of = (kind: string) => rows.filter((r) => r.kind === kind) as any[];
-    expect(of("stuck").map((r) => [r.conversation_id, r.headline])).toEqual([[s.ids.stuck, "Fixture replay fails on rewritten jsonl"]]);
+    expect(of("stuck").map((r) => r.headline).sort()).toEqual(["Clone without a remote is stuck", "Fixture replay fails on rewritten jsonl"]);
+    expect(of("stuck").every((r) => r.repository === REPO)).toBe(true);
+    expect(JSON.stringify(rows)).not.toContain("Other repo");
+    expect(JSON.stringify(rows)).not.toContain("Nobody knows");
+    // The team-wide read keeps every repository's sessions, and names none.
+    const wide = (await s.as(s.ids.ana).query(api.changesQueries.inTheWorks, { team_id: s.ids.a }))!;
+    expect(wide.filter((r) => r.kind === "stuck").map((r: any) => r.headline)).toContain("Other repo is stuck");
+    expect(wide.some((r: any) => r.kind === "stuck" && "repository" in r)).toBe(false);
     // "Line pages" has a story on main, so it has landed and is not building. Zoom
     // landed only in team B's story, which says nothing about team A.
     expect(of("building").map((r) => [r.conversation_id, r.headline])).toEqual([[s.ids.building, "Zoom support for image pills"]]);

@@ -4,6 +4,7 @@ import {
   callRecordingLiveFramePrefix,
   callRecordingRunPrefix,
   callRecordingRunPrefixOfKey,
+  callRecordingManifestKey,
   callRecordingsBucketFromEnv,
   FRESH_URL_SECONDS,
   liveFrameKey,
@@ -125,5 +126,14 @@ describe("fresh URLs and listing", () => {
   test("a refused list throws: a delete by prefix must know it saw everything", async () => {
     globalThis.fetch = (async () => new Response("denied", { status: 403 })) as any;
     await expect(r2ListKeys(bucket, "calls/t1/1-")).rejects.toThrow(/403/);
+  });
+});
+
+describe("callRecordingManifestKey", () => {
+  test("names LiveKit's manifest in the file's folder, and nothing for an unknown shape", () => {
+    expect(callRecordingManifestKey("calls/t1/1727000000000-composite.mp4", "EG_abc123")).toBe("calls/t1/EG_abc123.json");
+    expect(callRecordingManifestKey("calls/t1/1727000000000-composite.mp4", null)).toBeNull();
+    expect(callRecordingManifestKey("calls/t1/1727000000000-composite.mp4", "../x")).toBeNull();
+    expect(callRecordingManifestKey("elsewhere/f.mp4", "EG_abc")).toBeNull();
   });
 });

@@ -268,7 +268,8 @@ function wrapMarks(text: string, marks?: any[]): string {
       case "italic": case "em": out = `*${out}*`; break;
       case "strike": out = `~~${out}~~`; break;
       case "code": out = `\`${out}\``; break;
-      case "link": out = `[${out}](${mark.attrs?.href || ""})`; break;
+      // A bare URL stays bare, the same rule serializeEntityRef follows.
+      case "link": if (out !== mark.attrs?.href) out = `[${out}](${mark.attrs?.href || ""})`; break;
     }
   }
   return out;

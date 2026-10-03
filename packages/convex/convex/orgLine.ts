@@ -10,7 +10,8 @@ import { createRunCore } from "./workflow_runs";
 import { lineSlugOf } from "./orgRoles";
 import { allRolesInBoundary, resolveRoleRef, userCanAccessRole } from "./lib/orgAccess";
 import { taskWork } from "./lib/orgOwnership";
-import { ownsWork } from "@codecast/shared/contracts/orgLead";
+import { ownsWork, projectLeadOf } from "@codecast/shared/contracts/orgLead";
+import { chainHeadOf } from "@codecast/shared/contracts/orgAssignee";
 import { NO_GOAL, type GoalPriority } from "@codecast/shared/contracts/goalsBrief";
 import { CARD_GATE_NODE_ID } from "@codecast/shared/contracts/changeCard";
 import { priority as linePriority, type Severity } from "./lib/linePriority";
@@ -63,13 +64,25 @@ export async function rankedCandidates(ctx: Ctx, role: any): Promise<RankedCandi
     if (task.status !== "open" || task.workflow_run_id) continue;
     const assigned = assignees.has(task.assignee);
     if (!assigned && !(isReadyCause(task) && !task.assignee)) continue;
-    if (!ownsWork(role, await taskWork(ctx, task), roles)) continue;
+    if (!(await lineOwns(ctx, role, task, roles))) continue;
     if (await isBlocked(ctx, task)) continue;
     out.push({ task, priority: linePriority(await goalPriorityOf(ctx, task, goals), severityOf(task), task.cause?.signal_count ?? 1) });
   }
   const age = (t: any) => t.created_at ?? t._creationTime ?? 0;
   out.sort((a, b) => b.priority - a.priority || age(a.task) - age(b.task));
   return out;
+}
+
+// Who works a task on the line: the one owner by the ownership rule (S26).
+// A cause the signal door filed under a project and no plan goes to that
+// project's lead (line-profile.md LP1), which settles a project two roles list
+// by its owner_role_id instead of leaving the cause to nobody.
+async function lineOwns(ctx: Ctx, role: any, task: any, roles: any[]): Promise<boolean> {
+  if (task.source === "signal" && task.project_id && !task.plan_id) {
+    const lead = projectLeadOf(await ctx.db.get(task.project_id), roles);
+    if (lead.kind === "lead") return String(lead.role._id) === String(role._id);
+  }
+  return ownsWork(role, await taskWork(ctx, task), roles);
 }
 
 // LE5: a cause reaches the line once ground marked it ready and named the
@@ -171,12 +184,53 @@ function cardAnswered(run: any): boolean {
   return (run.node_statuses ?? []).some((n: any) => n.node_id === LINE_CARD_GATE_NODE && n.status === "completed");
 }
 
+// LP6: the person who answers a role's cards is the person at the top of its
+// reporting chain; a chain that ends without one falls back to its host.
+export function answererOf(role: any, boundaryRoles: any[]): string {
+  return chainHeadOf(role._id, boundaryRoles) ?? String(role.host_user_id);
+}
+
+// Every role whose cards `person` answers, across every boundary they are in:
+// their own and each team they belong to.
+export async function rolesAnsweredBy(ctx: Ctx, person: string): Promise<any[]> {
+  const boundaries: Array<{ team_id?: any; scope_user_id?: any }> = [{ scope_user_id: person }];
+  const memberships: any[] = await ctx.db.query("team_memberships").withIndex("by_user_id", (q: any) => q.eq("user_id", person)).collect();
+  for (const m of memberships) boundaries.push({ team_id: m.team_id });
+  const out: any[] = [];
+  for (const b of boundaries) {
+    const roles = await allRolesInBoundary(ctx, b);
+    for (const r of roles) if (answererOf(r, roles) === person) out.push(r);
+  }
+  return out;
+}
+
+export type CardLoad = { person: string; open: number; cap: number };
+
+// LP6: a person's open cards across every line they answer for, against one
+// cap: the smallest caps.cards among their roles whose line is on, so nine
+// roles never mean forty-five open cards. A retired or paused role's open
+// runs still hold their cards.
+export async function personCardLoad(ctx: Ctx, person: string): Promise<CardLoad> {
+  const roles = await rolesAnsweredBy(ctx, person);
+  let open = 0;
+  for (const r of roles) open += await openLineCards(ctx, r);
+  const live = roles.filter((r) => r.status === "active" && roleStartsOnItsOwn(r));
+  const cap = live.length ? Math.min(...live.map(cardsCapOf)) : cardsCapOf({});
+  return { person, open, cap };
+}
+
+/** The card load of the person a role's cards go to. */
+export async function cardLoadFor(ctx: Ctx, role: any): Promise<CardLoad> {
+  return personCardLoad(ctx, answererOf(role, await allRolesInBoundary(ctx, role)));
+}
+
 export type AdmissionWait = "off" | "hands" | "cards";
 
 // LE6: why the line may not admit its next cause now, or null when it may.
-export function admissionWait(role: any, openCards: number, now: number): AdmissionWait | null {
+// `openCards` and `cardsCap` are the answering person's (LP6).
+export function admissionWait(role: any, openCards: number, now: number, cardsCap: number = cardsCapOf(role)): AdmissionWait | null {
   if (!roleMayStartHands(role, now)) return countersFor(role, now).hands < capsFor(role).hands_per_day ? "off" : "hands";
-  if (openCards >= cardsCapOf(role)) return "cards";
+  if (openCards >= cardsCap) return "cards";
   return null;
 }
 
@@ -246,27 +300,32 @@ export type SweepResult = {
 
 // L9 and LE6: every two minutes. Paused roles and roles whose switch is off
 // never start anything. A role admits its candidates highest priority first
-// while its open cards are under caps.cards and its hands under
+// while the open cards of the person who answers them (LP6, across all their
+// lines) are under that person's cap and the role's hands under
 // caps.hands_per_day; a role at either cap is reported and waits for a card
 // to be answered or for tomorrow.
 export async function sweepCore(ctx: Ctx, now = Date.now()): Promise<SweepResult> {
   const result: SweepResult = { started: [], skipped_capped: [], skipped_cards: [] };
   const roles: any[] = await ctx.db.query("org_roles").collect();
+  // One load per person, shared by every role they answer for in this pass.
+  const loads = new Map<string, CardLoad>();
   for (const seed of roles) {
     if (seed.status !== "active" || !roleStartsOnItsOwn(seed)) continue;
     let role = seed;
     const candidates = await lineCandidates(ctx, role);
     if (!candidates.length) continue;
-    let cards = await openLineCards(ctx, role);
+    const person = answererOf(role, await allRolesInBoundary(ctx, role));
+    const load = loads.get(person) ?? await personCardLoad(ctx, person);
+    loads.set(person, load);
     for (const task of candidates) {
       if (result.started.length >= MAX_STARTS_PER_SWEEP) return result;
-      const wait = admissionWait(role, cards, now);
+      const wait = admissionWait(role, load.open, now, load.cap);
       if (wait === "cards") { result.skipped_cards.push(String(role._id)); break; }
       if (wait) { result.skipped_capped.push(String(role._id)); break; }
       const runId = await startLineRun(ctx, role, task, now);
       result.started.push({ role_id: String(role._id), task_id: String(task._id), run_id: String(runId) });
       // The new run holds a card slot until its card is answered.
-      cards++;
+      load.open++;
       // recordHandStart patched the counters; read the row back before the
       // next cap check.
       role = await ctx.db.get(role._id);
@@ -289,12 +348,11 @@ export type LineQueue = { role_id: string; open_cards: number; cards_cap: number
 // hand, so an item waits behind whichever runs out before its turn.
 export async function lineQueueFor(ctx: Ctx, role: any, now = Date.now()): Promise<LineQueue> {
   const ranked = await rankedCandidates(ctx, role);
-  const cards = await openLineCards(ctx, role);
-  const wait = admissionWait(role, cards, now);
+  const { open: cards, cap: cardsCap } = await cardLoadFor(ctx, role);
+  const wait = admissionWait(role, cards, now, cardsCap);
   const waiting = wait ? admissionWaitWords(wait, cards) : null;
   const hands = countersFor(role, now).hands;
   const handsCap = capsFor(role).hands_per_day;
-  const cardsCap = cardsCapOf(role);
   // The sweep checks hands before cards, so when both run out at once the
   // hands cap is the reason.
   const handSlots = handsCap - hands;
