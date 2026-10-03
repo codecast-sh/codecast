@@ -93,6 +93,10 @@ export function createKeydownHandler<A extends string>(
       if (modalOpen && !def.worksInModal) continue;
       if (def.when && !dispatcher.hasContext(def.when)) continue;
       if (inInput && !inputGuardBypass(def, target)) continue;
+      if (def.noRepeat && e.repeat) {
+        e.preventDefault();
+        return;
+      }
 
       if (dispatcher.dispatch(def.action)) {
         e.preventDefault();

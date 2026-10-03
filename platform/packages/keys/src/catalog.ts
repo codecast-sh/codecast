@@ -20,6 +20,10 @@ export interface ShortcutDef<A extends string = string> {
   // that closes the modal itself). Everything else stands down while a modal
   // is up; see hasOpenModal.
   worksInModal?: boolean;
+  // A held key fires once: an auto-repeated keydown is swallowed
+  // (preventDefault, no handler). For actions where a repeat would run away,
+  // like undo, which would otherwise empty the stack at key-repeat speed.
+  noRepeat?: boolean;
   description: string;
 }
 

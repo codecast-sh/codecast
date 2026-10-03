@@ -1,6 +1,9 @@
 import { create as mutativeCreate, type Patch } from "mutative";
 import { deriveRegistryMaps, type RegistryMaps } from "./registry";
 import { sameShape } from "./syncProtocol";
+import { createUndoController, enumerateTouchedCells, type UndoController } from "./undo";
+export { enumerateTouchedCells, type TouchedCell, type TouchedCellShape, type CellShapeKind } from "./undo";
+import { markUndoOutboxRefused } from "./undoStack";
 import type {
   ActionFieldLock,
   DispatchFn,
@@ -144,6 +147,33 @@ function isReceiptAsyncAction(fn: any): boolean {
 
 function isSync(fn: any): boolean {
   return typeof fn === "function" && fn[SYNC_FLAG] === true;
+}
+
+/** How a creator entry runs through the middleware. */
+export type ActionFlags = { act: boolean; asyncAct: boolean; receipt: boolean; syn: boolean };
+
+export function flagsOf(fn: any): ActionFlags {
+  return { act: isAction(fn), asyncAct: isAsyncAction(fn), receipt: isReceiptAsyncAction(fn), syn: isSync(fn) };
+}
+
+/**
+ * What kind of creator a function is: the raw creator or the wrapped store
+ * function (the wrapper carries the same flags). Lets a guard enumerate a
+ * store's actions.
+ */
+export function actionKind(fn: unknown): "action" | "asyncAction" | "receipt" | "sync" | null {
+  if (typeof fn !== "function") return null;
+  if (isReceiptAsyncAction(fn)) return "receipt";
+  if (isAsyncAction(fn)) return "asyncAction";
+  if (isAction(fn)) return "action";
+  if (isSync(fn)) return "sync";
+  return null;
+}
+
+function copyActionFlags(from: any, to: any): void {
+  for (const flag of [ACTION_FLAG, ASYNC_ACTION_FLAG, RECEIPT_ASYNC_ACTION_FLAG, SYNC_FLAG]) {
+    if (from[flag] === true) to[flag] = true;
+  }
 }
 
 const SINGLETON_KEY = "_";
@@ -595,6 +625,13 @@ function withLockedRow(slice: any, recordId: string, row: any, rowKey = "_id"): 
 /**
  * Scan mutative patches from an action() and auto-generate pending entries
  * for synced collections. Returns null if no pending changes needed.
+ *
+ * A local-first list or singleton is compared before and after the action
+ * (a splice, an unshift or a `list[i] = {...}` patches positions, not rows).
+ * Locks use the collection key shape: a list row is named by its identity
+ * field (rowKeyOf, default `_id`), a row the action added is an include, one
+ * it removed an exclude, and each top-level field it changed a field lock. A
+ * singleton is the empty id: store::field.
  */
 export function generateAutoPending(
   patches: Patch[],
@@ -629,100 +666,61 @@ export function generateAutoPending(
     }
   }
 
-  for (const patch of patches) {
-    const path = patch.path as (string | number)[];
-    if (path.length < 2) continue;
-
-    const storeKey = String(path[0]);
-    if (storeKey === "pending" || !isProtectedSyncCollection(storeKey)) continue;
-
-    // Lists and singletons are diffed whole, once, below.
-    const kind = shape?.kindOf(storeKey) ?? "collection";
-    if (kind !== "collection") continue;
-
-    const recordId = String(path[1]);
-
-    if (patch.op === "remove" && path.length === 2) {
-      // Record deleted from collection → exclude from server sync
+  // Only exact depth-3 field writes lock a collection field, never deeper: a
+  // deeper patch's value is a LEAF of the field (one pushed array element, one
+  // nested key), and recording it under the field's pending key would
+  // re-assert that leaf AS the whole field on every server push — an array
+  // field then degrades into a bare element object, permanently (the
+  // mismatched shape never echoes, so the lock never retires). Assigning the
+  // whole field is the protection gesture; a deep mutation is an
+  // optimistic-only write the server's next authoritative payload reconciles.
+  // A cleared field (remove op) protects as undefined, which matches the
+  // server echo once the null tombstone lands.
+  const cells = enumerateTouchedCells(
+    patches,
+    {
+      kindOf: (key) => (shape ? shape.kindOf(key) : "collection"),
+      rowKeyOf: shape?.rowKeyOf,
+      include: isProtectedSyncCollection,
+    },
+    shape?.prevState,
+    shape?.nextState,
+  );
+  for (const cell of cells) {
+    if (!cell.lockable) continue;
+    if (cell.field === undefined) {
+      // A row added (include, kept until the server acknowledges it) or
+      // removed (exclude, blocks the server from re-adding it).
+      if (cell.op === "set") continue;
       if (!result) result = { ...currentPending };
-      result[`${storeKey}:${recordId}`] = { type: "exclude", ts: now };
-    } else if (patch.op === "add" && path.length === 2) {
-      // Record added to collection → include (keep until server acknowledges)
-      if (!result) result = { ...currentPending };
-      result[`${storeKey}:${recordId}`] = { type: "include", ts: now };
-    } else if ((patch.op === "replace" || patch.op === "add" || patch.op === "remove") && path.length === 3) {
-      // Field modified (or cleared — remove op) on a collection record →
-      // protect field value; a cleared field protects as undefined, which
-      // matches the server echo once the null tombstone lands.
-      //
-      // Exactly depth 3, never deeper: a deeper patch's value is a LEAF of the
-      // field (one pushed array element, one nested key), and recording it
-      // under the field's pending key would re-assert that leaf AS the whole
-      // field on every server push — an array field then degrades into a bare
-      // element object, permanently (the mismatched shape never echoes, so the
-      // lock never retires). Assigning the whole field is the protection
-      // gesture; a deep mutation is an optimistic-only write the server's next
-      // authoritative payload reconciles.
-      const field = String(path[2]);
-      if (isUnprotectedField?.(storeKey, field)) continue;
-      if (!result) result = { ...currentPending };
-      result[`${storeKey}:${recordId}:${field}`] = {
-        type: "field",
-        value: patch.value,
-        ts: now,
-        ...(hideAcks.has(`${storeKey}:${recordId}`) ? { hideAck: hideAcks.get(`${storeKey}:${recordId}`)! } : {}),
-      };
+      result[`${cell.store}:${cell.id}`] = { type: cell.op === "add" ? "include" : "exclude", ts: now };
+      continue;
     }
+    if (isUnprotectedField?.(cell.store, cell.field)) continue;
+    if (!result) result = { ...currentPending };
+    const ack = cell.shape === "collection" ? hideAcks.get(`${cell.store}:${cell.id}`) : undefined;
+    result[`${cell.store}:${cell.id}:${cell.field}`] = {
+      type: "field",
+      value: cell.lockValue,
+      ts: now,
+      ...(ack !== undefined ? { hideAck: ack } : {}),
+    };
   }
-
-  // A local-first list or singleton: compare the slice before and after the
-  // action rather than reading patch paths (a splice, an unshift or a
-  // `list[i] = {...}` patches positions, not rows). Locks use the collection
-  // key shape. A list row is named by its identity field (rowKeyOf, default
-  // `_id`): a row the action added is an include carrying the row, one it
-  // removed an exclude, and each top-level field it changed a field lock. A
-  // singleton is the empty id: store::field.
-  if (shape) {
-    const touched = new Set<string>();
-    for (const patch of patches) touched.add(String((patch.path as (string | number)[])[0]));
-    for (const storeKey of touched) {
-      if (storeKey === "pending" || !isProtectedSyncCollection(storeKey)) continue;
-      const kind = shape.kindOf(storeKey);
-      if (kind !== "list" && kind !== "singleton") continue;
-      const lock = (key: string, entry: Record<string, any>) => {
-        if (!result) result = { ...currentPending };
-        result[key] = { ...entry, ts: now };
-      };
-      const lockFields = (id: string, before: any, after: any) => {
-        for (const field of new Set([...Object.keys(before ?? {}), ...Object.keys(after ?? {})])) {
-          if (before?.[field] === after?.[field] || isUnprotectedField?.(storeKey, field)) continue;
-          lock(`${storeKey}:${id}:${field}`, { type: "field", value: after?.[field] });
-        }
-      };
-      const prev = shape.prevState[storeKey];
-      const next = shape.nextState[storeKey];
-      if (kind === "singleton") {
-        if (prev && next && typeof prev === "object" && typeof next === "object" && prev !== next) lockFields("", prev, next);
-        continue;
-      }
-      if (!Array.isArray(prev) || !Array.isArray(next) || prev === next) continue;
-      const rowKey = shape.rowKeyOf?.(storeKey) ?? "_id";
-      const byId = (rows: any[]) => new Map(rows.filter((r) => typeof r?.[rowKey] === "string").map((r) => [r[rowKey] as string, r]));
-      const before = byId(prev);
-      const after = byId(next);
-      for (const [id, row] of after) {
-        const old = before.get(id);
-        if (!old) lock(`${storeKey}:${id}`, { type: "include" });
-        else if (old !== row) lockFields(id, old, row);
-      }
-      for (const id of before.keys()) {
-        if (!after.has(id)) lock(`${storeKey}:${id}`, { type: "exclude" });
-      }
-    }
-  }
-
   return result;
 }
+
+/** What one committed action call looked like, for the undo capture. */
+export type ActionCommit = {
+  state: any;
+  finalState: any;
+  patches: Patch[];
+  outboxId: string;
+  returnValue: unknown;
+};
+
+type RunActionOpts = {
+  onCommitted?: (commit: ActionCommit) => void;
+};
 
 export type MiddlewareOptions = {
   retryDelays?: number[];
@@ -843,7 +841,9 @@ export function mutativeMiddleware(
 
     // A plain action the server refused for good: undo its field locks (and
     // the row values they painted) unless a later write owns the field now.
-    const releaseRefusedLocks = (actionName: string, locks: ActionFieldLock[]) => {
+    const releaseRefusedLocks = (actionName: string, locks: ActionFieldLock[], outboxId?: string) => {
+      // The undo history names its entries by the dispatch that carried them.
+      if (outboxId) markUndoOutboxRefused(outboxId);
       if (locks.length === 0) return;
       const state = get();
       const released = releaseActionFieldLocks(state, locks);
@@ -879,7 +879,9 @@ export function mutativeMiddleware(
     const applyReceiptRejection = async (
       actionName: string,
       localResult: unknown,
+      outboxId?: string,
     ): Promise<boolean> => {
+      if (outboxId) markUndoOutboxRefused(outboxId);
       const handler = get()?._handleReceiptRejection;
       if (typeof handler !== "function") {
         console.error(
@@ -1141,7 +1143,7 @@ export function mutativeMiddleware(
               } catch (error) {
                 capturedError?.(entry.action, error, entry.args);
                 if (!(error instanceof CommandReceiptRejectedError)) throw error;
-                if (!(await applyReceiptRejection(entry.action, entry.result.localResult))) {
+                if (!(await applyReceiptRejection(entry.action, entry.result.localResult, entry.id))) {
                   throw new Error(
                     `Rejected "${entry.action}" receipt could not be reconciled locally`,
                   );
@@ -1156,7 +1158,7 @@ export function mutativeMiddleware(
               } catch (error) {
                 capturedError?.(entry.action, error, entry.args);
                 if (!(error instanceof CommandReceiptRejectedError)) throw error;
-                if (!(await applyReceiptRejection(entry.action, entry.result))) {
+                if (!(await applyReceiptRejection(entry.action, entry.result, entry.id))) {
                   throw new Error(
                     `Rejected "${entry.action}" receipt could not be reconciled locally`,
                   );
@@ -1192,7 +1194,7 @@ export function mutativeMiddleware(
             // Legacy non-receipt actions still treat a permanent refusal as
             // delivery. Re-driving those forever can only repeat the refusal.
             if (isPermanentDispatchError(e)) {
-              releaseRefusedLocks(entry.action, entry.locks ?? []);
+              releaseRefusedLocks(entry.action, entry.locks ?? [], entry.id);
               rejectReceiptWaiter(entry.id, e);
               await capturedRemove?.(entry.id);
               continue;
@@ -1231,24 +1233,268 @@ export function mutativeMiddleware(
       }
     }
 
-    // Wrapping one creator entry. Split out of the build loop so a re-evaluated
-    // creator can be rebuilt against THIS closure — see _hotReplaceConfig.
-    const wrapAction = (key: string, val: any): any => {
-      const isAct = isAction(val);
-      const isAsyncAct = isAsyncAction(val);
-      const isReceiptAsyncAct = isReceiptAsyncAction(val);
-      const isSyn = isSync(val);
+    // The outbox half of an action: group its patches, park the durable row
+    // and fire the dispatch. Returns what the action call returns.
+    const enqueueDispatch = (
+      key: string,
+      flags: ActionFlags,
+      actionArgs: any[],
+      patches: Patch[],
+      finalState: any,
+      returnValue: any,
+      fieldLocks: ActionFieldLock[],
+      outboxId: string,
+    ): any => {
+      const isAsyncAct = flags.asyncAct;
+      const isReceiptAsyncAct = flags.receipt;
+      const grouped =
+        patches.length > 0 ? groupPatchesByTable(patches, finalState, groupCtx) : undefined;
+      const usesReceiptEnvelope = isReceiptAsyncAct;
+      const returnsPromise = isAsyncAct;
+      const dispatchResult: unknown = usesReceiptEnvelope
+        ? {
+            receiptActionVersion: 1,
+            commandId: outboxId,
+            ...(returnValue !== undefined ? { localResult: returnValue } : {}),
+          } satisfies ReceiptActionEnvelope
+        : returnValue;
+      // Persist the outbound dispatch *before* firing so it survives a
+      // reload mid-flight. Removed only on server acknowledgment; failed
+      // dispatches stay queued and re-fire on next hydrate via drainOutbox.
+      // Enqueued even when dispatchFn isn't wired yet — drainOutbox picks
+      // them up the moment _setDispatch runs.
+      const coalesceKey = outboxCoalesceKeyFor(key, actionArgs, coalesceKeys);
+      const entry = {
+        id: outboxId,
+        action: key,
+        args: actionArgs,
+        patches: grouped,
+        result: dispatchResult,
+        operationSchemaVersion: CURRENT_OUTBOX_OPERATION_SCHEMA_VERSION,
+        // The outbox replays by this index. Strict monotonicity preserves
+        // causal call order even when several dependent actions (create →
+        // delete, fork → send) are queued in the same millisecond.
+        ts: nextOutboxTimestamp(),
+        ...(coalesceKey ? { coalesceKey } : {}),
+        ...(fieldLocks.length > 0 ? { locks: fieldLocks } : {}),
+      };
+      const capturedDispatch = dispatchBinding;
+      const capturedError = dispatchErrorFn;
+      const receiptWaiter = usesReceiptEnvelope ? receiptWaiterFor(outboxId) : null;
+      let enqueueCompleted = false;
+      // Parked unconditionally — a rewire window (boot, HMR, account
+      // switch) can clear the binding while the page stays interactive,
+      // and an un-parked action fired in that window would vanish with
+      // zero trace.
+      const enqueued = outboxEnqueueFn
+        ? enqueueOutbox(outboxEnqueueFn, entry).then(() => {
+            enqueueCompleted = true;
+          })
+        : null;
+      // Mark handled: consumers below attach their own handlers, but none
+      // may exist yet when a storage failure rejects this promise.
+      enqueued?.catch(() => {});
+      if (capturedDispatch) {
+        const dispatchNow = () => dispatchWithRetry(
+          capturedDispatch.fn,
+          key,
+          actionArgs,
+          grouped,
+          dispatchResult,
+          capturedError,
+          retryDelays,
+          () => assertDispatchCurrent(capturedDispatch),
+        );
+        // Dispatch fires IMMEDIATELY — the durable enqueue runs in
+        // parallel. The outbox is a crash-recovery journal, not a gate:
+        // slow or wedged storage degrades durability (surfaced by the
+        // enqueue watchdog) but must never delay or strand delivery. The
+        // ack-vs-commit race is settled by retireOutboxEntry, which waits
+        // for the enqueue before deleting the row; a crash in that window
+        // merely replays a command the server dedups (client id for
+        // content writes, commandId for receipt actions, LWW for patches).
+        inFlightOutboxIds.add(outboxId);
+        const dispatched = dispatchNow().finally(() => inFlightOutboxIds.delete(outboxId));
+        const enqueueDurable = () =>
+          enqueued ? enqueued.then(() => true, () => false) : Promise.resolve(false);
+        if (usesReceiptEnvelope && receiptWaiter) {
+          void dispatched.then(async (response) => {
+            assertDispatchCurrent(capturedDispatch);
+            let completed = false;
+            try {
+              const value = unwrapReceiptActionResponse(
+                dispatchResult as ReceiptActionEnvelope,
+                response,
+              );
+              const continuationComplete = applyReceiptAcknowledgement(
+                key,
+                dispatchResult as ReceiptActionEnvelope,
+                value,
+              );
+              if (!continuationComplete) return;
+              resolveReceiptWaiter(outboxId, value);
+              completed = true;
+            } catch (error) {
+              capturedError?.(key, error, actionArgs);
+              if (error instanceof CommandReceiptRejectedError) {
+                const reconciled = await applyReceiptRejection(
+                  key,
+                  (dispatchResult as ReceiptActionEnvelope).localResult,
+                  outboxId,
+                );
+                if (reconciled) {
+                  completed = true;
+                  rejectReceiptWaiter(outboxId, error);
+                }
+              } else if (!(await enqueueDurable())) {
+                // Without a committed outbox row there is no future replay
+                // that can resolve an ambiguous response.
+                rejectReceiptWaiter(outboxId, error);
+              }
+            }
+            // Acknowledgement (including its allowlisted continuation) or
+            // a durable rejection is complete. A malformed response or an
+            // unavailable continuation runtime is ambiguous, so retain the
+            // deduplicated command for a later replay.
+            if (completed) {
+              await retireOutboxEntry(outboxId, enqueued);
+              void drainOutbox(false);
+            }
+          }, async (error) => {
+            let current = true;
+            try {
+              assertDispatchCurrent(capturedDispatch);
+            } catch {
+              current = false;
+            }
+            // With a durable row, ALL thrown receipt errors are ambiguous.
+            // Only a validated rejected receipt is terminal; the durable
+            // command row owns version-skew, auth-transition, and
+            // transport recovery too.
+            if (await enqueueDurable()) {
+              if (!current && dispatchBinding) void drainOutbox(false);
+              return;
+            }
+            // Durability itself failed (or no outbox was installed). The
+            // command cannot honestly remain pending.
+            rejectReceiptWaiter(outboxId, error);
+          }).catch((error) => {
+            if (error instanceof StaleDispatchBindingError) {
+              if (enqueueCompleted) {
+                if (dispatchBinding) void drainOutbox(false);
+              } else {
+                rejectReceiptWaiter(outboxId, error);
+              }
+              return;
+            }
+            // A removal/storage error after acknowledgement leaves the
+            // receipt row replayable. The waiter may already be resolved;
+            // never reinterpret this as a domain rejection.
+            capturedError?.(key, error, actionArgs);
+          });
+          return receiptWaiter.promise;
+        }
+        const promise = dispatched.then(async (r) => {
+          assertDispatchCurrent(capturedDispatch);
+          await retireOutboxEntry(outboxId, enqueued);
+          void drainOutbox(false);
+          return r;
+        }, async (e) => {
+          if (e instanceof StaleDispatchBindingError) throw e;
+          assertDispatchCurrent(capturedDispatch);
+          // Permanent rejection: the server answered and said no — remove
+          // the parked copy so the drain loops don't re-litigate it forever,
+          // and lift the locks it planted so the refused value stops
+          // standing over the server's.
+          if (isPermanentDispatchError(e)) {
+            releaseRefusedLocks(key, fieldLocks, outboxId);
+            await retireOutboxEntry(outboxId, enqueued);
+            void drainOutbox(false);
+          }
+          throw e;
+        });
+        if (returnsPromise) return promise;
+        promise.catch(() => {});
+      } else {
+        // No live binding (boot, HMR rewire, account-switch window): the
+        // entry is only "parked" after its enqueue promise fulfills.
+        // `_setDispatch` can race that commit, so every successful enqueue
+        // also rechecks for a newly-installed binding.
+        console.warn(`[sync] dispatch not wired; ${enqueued ? `enqueueing "${key}" for later delivery` : `"${key}" was dropped (no outbox)`}`);
+        // An asyncAction promises its caller the server result. Returning
+        // the raw returnValue here (historically undefined) made callers'
+        // `.then(...)` throw synchronously — a create flow lost its error
+        // handler that way and could vanish with no toast and no discard.
+        // Reject honestly instead: the caller's catch runs now; a parked
+        // entry still delivers via drainOutbox.
+        if (returnsPromise) {
+          if (usesReceiptEnvelope && receiptWaiter && enqueued) {
+            void enqueued.then(
+              () => {
+                // Wiring can race the IndexedDB commit: its boot drain may
+                // have loaded an empty outbox a moment before this row
+                // became visible. Recheck immediately once durability is
+                // confirmed so the caller does not wait for a heartbeat.
+                if (dispatchBinding) void drainOutbox(false);
+              },
+              (error) => {
+                rejectReceiptWaiter(outboxId, error);
+              },
+            );
+            return receiptWaiter.promise;
+          }
+          if (usesReceiptEnvelope) {
+            rejectReceiptWaiter(
+              outboxId,
+              new DispatchNotWiredError(key, false),
+            );
+            return receiptWaiter?.promise;
+          }
+          if (enqueued) {
+            return enqueued.then(() => {
+              if (dispatchBinding) void drainOutbox(false);
+              throw new DispatchNotWiredError(key, true);
+            });
+          }
+          return Promise.reject(new DispatchNotWiredError(key, false));
+        }
+        if (enqueued) {
+          void enqueued.then(
+            () => {
+              if (dispatchBinding) void drainOutbox(false);
+            },
+            (error) => {
+              capturedError?.(key, error, actionArgs);
+              if (!capturedError) {
+                console.error(`[local-first] failed to park "${key}"`, error);
+              }
+            },
+          );
+        }
+      }
+      return returnValue;
+    };
 
-      if (!isAct && !isAsyncAct && !isSyn) return val;
-
-      return (...args: any[]) => {
-        const actionArgs = normalizeZeroArgumentEventCall(val as Function, args);
+    // One action call, end to end: run the recipe on a draft, plant pending
+    // locks, police the view, commit, persist, tee, and hand the outbox half
+    // to enqueueDispatch. Every write path shares it: a wrapped creator, and
+    // an undo replay, which supplies its own recipe under a target's name.
+    const runAction = (
+      key: string,
+      flags: ActionFlags,
+      recipe: (draft: any) => unknown,
+      actionArgs: any[],
+      opts?: RunActionOpts,
+    ): any => {
+      const isAct = flags.act;
+      const isAsyncAct = flags.asyncAct;
+      {
         const state = get();
         let returnValue: any;
         const [nextState, patches] = mutativeCreate(
           state,
           (draft: any) => {
-            returnValue = (val as Function).apply(draft, actionArgs);
+            returnValue = recipe(draft);
           },
           { enablePatches: { pathAsArray: true } }
         );
@@ -1310,236 +1556,61 @@ export function mutativeMiddleware(
         }
 
         if (isAct || isAsyncAct) {
-          const grouped =
-            patches.length > 0 ? groupPatchesByTable(patches, finalState, groupCtx) : undefined;
           const outboxId = newOutboxId();
-          const usesReceiptEnvelope = isReceiptAsyncAct;
-          const returnsPromise = isAsyncAct;
-          const dispatchResult: unknown = usesReceiptEnvelope
-            ? {
-                receiptActionVersion: 1,
-                commandId: outboxId,
-                ...(returnValue !== undefined ? { localResult: returnValue } : {}),
-              } satisfies ReceiptActionEnvelope
-            : returnValue;
-          // Persist the outbound dispatch *before* firing so it survives a
-          // reload mid-flight. Removed only on server acknowledgment; failed
-          // dispatches stay queued and re-fire on next hydrate via drainOutbox.
-          // Enqueued even when dispatchFn isn't wired yet — drainOutbox picks
-          // them up the moment _setDispatch runs.
-          const coalesceKey = outboxCoalesceKeyFor(key, actionArgs, coalesceKeys);
-          const entry = {
-            id: outboxId,
-            action: key,
-            args: actionArgs,
-            patches: grouped,
-            result: dispatchResult,
-            operationSchemaVersion: CURRENT_OUTBOX_OPERATION_SCHEMA_VERSION,
-            // The outbox replays by this index. Strict monotonicity preserves
-            // causal call order even when several dependent actions (create →
-            // delete, fork → send) are queued in the same millisecond.
-            ts: nextOutboxTimestamp(),
-            ...(coalesceKey ? { coalesceKey } : {}),
-            ...(fieldLocks.length > 0 ? { locks: fieldLocks } : {}),
-          };
-          const capturedDispatch = dispatchBinding;
-          const capturedError = dispatchErrorFn;
-          const receiptWaiter = usesReceiptEnvelope ? receiptWaiterFor(outboxId) : null;
-          let enqueueCompleted = false;
-          // Parked unconditionally — a rewire window (boot, HMR, account
-          // switch) can clear the binding while the page stays interactive,
-          // and an un-parked action fired in that window would vanish with
-          // zero trace.
-          const enqueued = outboxEnqueueFn
-            ? enqueueOutbox(outboxEnqueueFn, entry).then(() => {
-                enqueueCompleted = true;
-              })
-            : null;
-          // Mark handled: consumers below attach their own handlers, but none
-          // may exist yet when a storage failure rejects this promise.
-          enqueued?.catch(() => {});
-          if (capturedDispatch) {
-            const dispatchNow = () => dispatchWithRetry(
-              capturedDispatch.fn,
-              key,
-              actionArgs,
-              grouped,
-              dispatchResult,
-              capturedError,
-              retryDelays,
-              () => assertDispatchCurrent(capturedDispatch),
-            );
-            // Dispatch fires IMMEDIATELY — the durable enqueue runs in
-            // parallel. The outbox is a crash-recovery journal, not a gate:
-            // slow or wedged storage degrades durability (surfaced by the
-            // enqueue watchdog) but must never delay or strand delivery. The
-            // ack-vs-commit race is settled by retireOutboxEntry, which waits
-            // for the enqueue before deleting the row; a crash in that window
-            // merely replays a command the server dedups (client id for
-            // content writes, commandId for receipt actions, LWW for patches).
-            inFlightOutboxIds.add(outboxId);
-            const dispatched = dispatchNow().finally(() => inFlightOutboxIds.delete(outboxId));
-            const enqueueDurable = () =>
-              enqueued ? enqueued.then(() => true, () => false) : Promise.resolve(false);
-            if (usesReceiptEnvelope && receiptWaiter) {
-              void dispatched.then(async (response) => {
-                assertDispatchCurrent(capturedDispatch);
-                let completed = false;
-                try {
-                  const value = unwrapReceiptActionResponse(
-                    dispatchResult as ReceiptActionEnvelope,
-                    response,
-                  );
-                  const continuationComplete = applyReceiptAcknowledgement(
-                    key,
-                    dispatchResult as ReceiptActionEnvelope,
-                    value,
-                  );
-                  if (!continuationComplete) return;
-                  resolveReceiptWaiter(outboxId, value);
-                  completed = true;
-                } catch (error) {
-                  capturedError?.(key, error, actionArgs);
-                  if (error instanceof CommandReceiptRejectedError) {
-                    const reconciled = await applyReceiptRejection(
-                      key,
-                      (dispatchResult as ReceiptActionEnvelope).localResult,
-                    );
-                    if (reconciled) {
-                      completed = true;
-                      rejectReceiptWaiter(outboxId, error);
-                    }
-                  } else if (!(await enqueueDurable())) {
-                    // Without a committed outbox row there is no future replay
-                    // that can resolve an ambiguous response.
-                    rejectReceiptWaiter(outboxId, error);
-                  }
-                }
-                // Acknowledgement (including its allowlisted continuation) or
-                // a durable rejection is complete. A malformed response or an
-                // unavailable continuation runtime is ambiguous, so retain the
-                // deduplicated command for a later replay.
-                if (completed) {
-                  await retireOutboxEntry(outboxId, enqueued);
-                  void drainOutbox(false);
-                }
-              }, async (error) => {
-                let current = true;
-                try {
-                  assertDispatchCurrent(capturedDispatch);
-                } catch {
-                  current = false;
-                }
-                // With a durable row, ALL thrown receipt errors are ambiguous.
-                // Only a validated rejected receipt is terminal; the durable
-                // command row owns version-skew, auth-transition, and
-                // transport recovery too.
-                if (await enqueueDurable()) {
-                  if (!current && dispatchBinding) void drainOutbox(false);
-                  return;
-                }
-                // Durability itself failed (or no outbox was installed). The
-                // command cannot honestly remain pending.
-                rejectReceiptWaiter(outboxId, error);
-              }).catch((error) => {
-                if (error instanceof StaleDispatchBindingError) {
-                  if (enqueueCompleted) {
-                    if (dispatchBinding) void drainOutbox(false);
-                  } else {
-                    rejectReceiptWaiter(outboxId, error);
-                  }
-                  return;
-                }
-                // A removal/storage error after acknowledgement leaves the
-                // receipt row replayable. The waiter may already be resolved;
-                // never reinterpret this as a domain rejection.
-                capturedError?.(key, error, actionArgs);
-              });
-              return receiptWaiter.promise;
-            }
-            const promise = dispatched.then(async (r) => {
-              assertDispatchCurrent(capturedDispatch);
-              await retireOutboxEntry(outboxId, enqueued);
-              void drainOutbox(false);
-              return r;
-            }, async (e) => {
-              if (e instanceof StaleDispatchBindingError) throw e;
-              assertDispatchCurrent(capturedDispatch);
-              // Permanent rejection: the server answered and said no — remove
-              // the parked copy so the drain loops don't re-litigate it forever,
-              // and lift the locks it planted so the refused value stops
-              // standing over the server's.
-              if (isPermanentDispatchError(e)) {
-                releaseRefusedLocks(key, fieldLocks);
-                await retireOutboxEntry(outboxId, enqueued);
-                void drainOutbox(false);
-              }
-              throw e;
-            });
-            if (returnsPromise) return promise;
-            promise.catch(() => {});
-          } else {
-            // No live binding (boot, HMR rewire, account-switch window): the
-            // entry is only "parked" after its enqueue promise fulfills.
-            // `_setDispatch` can race that commit, so every successful enqueue
-            // also rechecks for a newly-installed binding.
-            console.warn(`[sync] dispatch not wired; ${enqueued ? `enqueueing "${key}" for later delivery` : `"${key}" was dropped (no outbox)`}`);
-            // An asyncAction promises its caller the server result. Returning
-            // the raw returnValue here (historically undefined) made callers'
-            // `.then(...)` throw synchronously — a create flow lost its error
-            // handler that way and could vanish with no toast and no discard.
-            // Reject honestly instead: the caller's catch runs now; a parked
-            // entry still delivers via drainOutbox.
-            if (returnsPromise) {
-              if (usesReceiptEnvelope && receiptWaiter && enqueued) {
-                void enqueued.then(
-                  () => {
-                    // Wiring can race the IndexedDB commit: its boot drain may
-                    // have loaded an empty outbox a moment before this row
-                    // became visible. Recheck immediately once durability is
-                    // confirmed so the caller does not wait for a heartbeat.
-                    if (dispatchBinding) void drainOutbox(false);
-                  },
-                  (error) => {
-                    rejectReceiptWaiter(outboxId, error);
-                  },
-                );
-                return receiptWaiter.promise;
-              }
-              if (usesReceiptEnvelope) {
-                rejectReceiptWaiter(
-                  outboxId,
-                  new DispatchNotWiredError(key, false),
-                );
-                return receiptWaiter?.promise;
-              }
-              if (enqueued) {
-                return enqueued.then(() => {
-                  if (dispatchBinding) void drainOutbox(false);
-                  throw new DispatchNotWiredError(key, true);
-                });
-              }
-              return Promise.reject(new DispatchNotWiredError(key, false));
-            }
-            if (enqueued) {
-              void enqueued.then(
-                () => {
-                  if (dispatchBinding) void drainOutbox(false);
-                },
-                (error) => {
-                  capturedError?.(key, error, actionArgs);
-                  if (!capturedError) {
-                    console.error(`[local-first] failed to park "${key}"`, error);
-                  }
-                },
-              );
-            }
-          }
+          opts?.onCommitted?.({ state, finalState, patches, outboxId, returnValue });
+          return enqueueDispatch(key, flags, actionArgs, patches, finalState, returnValue, fieldLocks, outboxId);
         }
-
         return returnValue;
-      };
+      }
     };
+
+    // Raw creators by name, so a replay can run a target action's draft.
+    const rawCreators: Record<string, any> = {};
+
+    // Wrapping one creator entry. Split out of the build loop so a re-evaluated
+    // creator can be rebuilt against THIS closure — see _hotReplaceConfig. The
+    // wrapper carries its creator's flags (see actionKind).
+    const wrapAction = (key: string, val: any): any => {
+      const flags = flagsOf(val);
+      if (!flags.act && !flags.asyncAct && !flags.syn) return val;
+      rawCreators[key] = val;
+      const wrappedFn = (...args: any[]) => {
+        const actionArgs = normalizeZeroArgumentEventCall(val as Function, args);
+        const undo = undoController;
+        const onCommitted = undo?.wants(key, flags)
+          ? (commit: ActionCommit) => undo.capture(key, actionArgs, commit)
+          : undefined;
+        return runAction(
+          key,
+          flags,
+          (draft) => (val as Function).apply(draft, actionArgs),
+          actionArgs,
+          onCommitted ? { onCommitted } : undefined,
+        );
+      };
+      copyActionFlags(val, wrappedFn);
+      return wrappedFn;
+    };
+
+    // Generic undo (PlatformConfig.undo): capture for actions with a spec,
+    // replay through runAction. Absent config = nothing is captured.
+    const undoController: UndoController | null = platformConfig.undo
+      ? createUndoController({
+          config: platformConfig.undo,
+          get,
+          runAction,
+          rawCreator: (name) => rawCreators[name],
+          flagsOf,
+          shape: {
+            declaredKind: (key) => maps.syncKindOf?.(key) ?? platformConfig.syncRegistry?.[key]?.kind,
+            rowKeyOf: syncRowKeyOf,
+            isProtected: maps.isProtectedSyncCollection,
+            isUnprotectedField: maps.isUnprotectedField,
+            viewFields: new Set(viewGuard?.fields ?? []),
+            ignoreKeys: platformConfig.undo.ignoreKeys,
+          },
+        })
+      : null;
 
     const buildWrapped = (cfg: any): Record<string, any> => {
       const out: Record<string, any> = {};

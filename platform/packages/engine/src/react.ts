@@ -1,4 +1,5 @@
 import { useEffect, useRef, useSyncExternalStore } from "react";
+import { getUndoHistory, subscribeUndoHistory, type UndoHistorySnapshot } from "./undoStack";
 
 export type TrackedStoreSource<S> = {
   getState: () => S;
@@ -110,4 +111,9 @@ export function useCoarseNow(intervalMs: number): number {
     () => c.now,
     () => c.now,
   );
+}
+
+/** The window's undo history, newest first; re-renders when it changes. */
+export function useUndoHistory(): UndoHistorySnapshot {
+  return useSyncExternalStore(subscribeUndoHistory, getUndoHistory, getUndoHistory);
 }

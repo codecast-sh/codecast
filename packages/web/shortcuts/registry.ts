@@ -52,6 +52,7 @@ export type ShortcutAction =
   | 'ui.openSettings'
   | 'ui.undo'
   | 'ui.redo'
+  | 'ui.undoHistory'
   | 'inbox.toggleFlatView'
   | 'inbox.toggleTriageBar'
   | 'nav.inbox'
@@ -257,8 +258,15 @@ export const SHORTCUTS: ShortcutDef[] = [
   // as ',' or '<' depending on browser/layout — register both spellings.
   { key: 'ctrl+shift+,', mac: 'meta+,', action: 'ui.openSettings', skipInputCheck: true, worksInModal: true, description: 'Open settings' },
   { key: 'ctrl+shift+<', mac: 'meta+,', action: 'ui.openSettings', skipInputCheck: true, worksInModal: true, description: 'Open settings' },
-  { key: 'ctrl+z', action: 'ui.undo', skipInputCheck: true, description: 'Undo' },
-  { key: 'ctrl+shift+z', action: 'ui.redo', skipInputCheck: true, description: 'Redo' },
+  // App undo fires only when focus is outside an editable field, so inputs,
+  // the composer and the doc editor keep their own text undo. noRepeat: a held
+  // chord is one undo, not the whole stack at key-repeat speed. The second
+  // ui.undo row keeps ⌃Z working on mac (off mac it is the same chord).
+  { key: 'ctrl+z', mac: 'meta+z', action: 'ui.undo', noRepeat: true, description: 'Undo' },
+  { key: 'ctrl+z', mac: 'ctrl+z', action: 'ui.undo', noRepeat: true, description: 'Undo' },
+  { key: 'ctrl+shift+z', mac: 'meta+shift+z', action: 'ui.redo', noRepeat: true, description: 'Redo' },
+  { key: 'ctrl+y', action: 'ui.redo', noRepeat: true, description: 'Redo' },
+  { key: 'ctrl+alt+z', mac: 'meta+alt+z', action: 'ui.undoHistory', description: 'Undo history' },
 
   { key: 'meta+shift+alt+1', action: 'nav.inbox', skipInputCheck: true, description: 'Go to inbox' },
 

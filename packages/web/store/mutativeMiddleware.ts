@@ -25,14 +25,20 @@ import {
   type ReceiptContinuations,
   type ViewGuard,
   type ViewGuardChange,
+  type UndoConfig,
 } from "@platform/engine";
 import { noteFreshDoc } from "../lib/docSyncCache";
 import { routerNavigate } from "../lib/tabRoutes";
 import type { Patch } from "mutative";
 import {
   CLIENT_SYNC_REGISTRY,
+  REPLICATION_CLASSIFICATION,
 } from "./clientSyncRegistry";
-import { consumeViewNav, noteViewNavApplied, recordNavEvent } from "./viewNav";
+import { consumeViewNav, declareViewNav, noteViewNavApplied, recordNavEvent } from "./viewNav";
+import { broadcastGesture, BRIDGED_FIELDS, type BridgedField } from "./gestureBridge";
+import { UNDO_SPECS } from "./undo/policy";
+import { UNDO_WRITERS } from "./undo/writers";
+import { runUndoRevert } from "./undo/onRevert";
 
 export {
   action,
@@ -339,6 +345,88 @@ const VIEW_GUARD: ViewGuard = {
   audit: auditViewWrites,
 };
 
+// ---------------------------------------------------------------------------
+// Undo — the engine records every action with a spec (store/undo/policy.ts)
+// and replays the prior values through the same pipeline. What it needs from
+// the store itself (moving the conversation pointer, the bridge's user id)
+// the store hands over once it exists, through bindUndoStore: importing the
+// store here would be an evaluation-time cycle.
+// ---------------------------------------------------------------------------
+
+type UndoStoreBinding = {
+  /** Re-point the conversation pointer and the inbox tab at a restored view. */
+  restoreView: (draft: any, field: string, value: unknown) => void;
+  /** The signed-in user the gesture bridge stamps on its messages. */
+  bridgeUserId: () => string | null;
+};
+
+let undoStoreBinding: UndoStoreBinding | null = null;
+
+export function bindUndoStore(binding: UndoStoreBinding): void {
+  undoStoreBinding = binding;
+}
+
+// Never captured: this window's own state, sync bookkeeping, and server-fed
+// projections no gesture writes. Everything else an undoable action touches
+// is a cell (local-first keys are conflict-checked; the rest are mirrors).
+export const UNDO_IGNORE_KEYS: ReadonlySet<string> = new Set([
+  ...Object.entries(REPLICATION_CLASSIFICATION)
+    .filter(([, scope]) => scope === "local")
+    .map(([key]) => key),
+  "pending",
+  "syncMeta",
+  "clientState",
+  "currentUser",
+  "pagination",
+  "messages",
+  "sessionsProjection",
+  "liveRooms",
+  "liveInboxIdList",
+  "teamInboxIdSnapshot",
+  "sessionMetricsAggregate",
+  "pendingPermissions",
+  "pendingMessageStatus",
+  "messageFeed",
+  "machineRoster",
+  "_lastViewedAt",
+  "_seenUpToAt",
+  "_seenMessageCount",
+]);
+
+const BRIDGED_FIELD_SET: ReadonlySet<string> = new Set(BRIDGED_FIELDS);
+
+const UNDO_CONFIG: UndoConfig = {
+  specs: UNDO_SPECS,
+  replayAction: "applyUndoPatches",
+  writers: UNDO_WRITERS,
+  stampFields: new Set(["updated_at"]),
+  ignoreKeys: UNDO_IGNORE_KEYS,
+  beforeReplay: () => declareViewNav("undo"),
+  restoreView: (draft, field, value) => undoStoreBinding?.restoreView(draft, field, value),
+  afterReplay: (entry, dir, applied) => {
+    if (dir !== "undo") return;
+    // Tell sibling windows the exact restored values of the bridged fields,
+    // one message per row under one timestamp. A redo re-runs the original
+    // action, which announces its own gesture.
+    const byId = new Map<string, Partial<Record<BridgedField, number | boolean | null>>>();
+    for (const cell of applied) {
+      if ((cell.store !== "sessions" && cell.store !== "conversations") || !cell.field) continue;
+      if (!BRIDGED_FIELD_SET.has(cell.field)) continue;
+      const value = cell.before === undefined ? null : cell.before;
+      if (value !== null && typeof value !== "number" && typeof value !== "boolean") continue;
+      const fields = byId.get(cell.id) ?? {};
+      fields[cell.field as BridgedField] = value;
+      byId.set(cell.id, fields);
+    }
+    if (byId.size > 0) {
+      const ts = Date.now();
+      const userId = undoStoreBinding?.bridgeUserId() ?? null;
+      for (const [id, fields] of byId) broadcastGesture({ kind: "fields", id, fields, ts }, userId);
+    }
+    runUndoRevert(entry, applied);
+  },
+};
+
 // The middleware reads only `registry` and the hook fields from this config.
 // dbName/dbVersion/syncRegistry belong to the persistence and sync stages of
 // the engine, which codecast still wires through its own idbCache/inboxStore —
@@ -355,6 +443,7 @@ const CODECAST_PLATFORM_CONFIG: PlatformConfig = {
   transformReplayPatches: stripStalePointerFromReplay,
   viewGuard: VIEW_GUARD,
   receiptContinuations: RECEIPT_CONTINUATIONS,
+  undo: UNDO_CONFIG,
   storageWatchdogHint:
     'check for IndexedDB errors or a Dexie "blocked" warning above; a slow write alone does not identify the cause',
 };

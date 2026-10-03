@@ -15,6 +15,7 @@ import {
   DispatchNotWiredError,
   isParkedDispatchError,
   sync,
+  bindUndoStore,
   type DurableCreateContinuation,
 } from "./mutativeMiddleware";
 import { adoptWorkspaceSnapshot, createWorkspace, serializeWorkspace, hydrateWorkspace, autoAllowed as wsAutoAllowedPure, isSessionRailOpen, isCommentRailOpen, SESSION_LIST_PANE, TERMINAL_PANE, type PersistedWorkspace, showPane, hidePane, togglePane, setPresentation as wsSetPresentationPure, setSize as wsSetSizePure, type WorkspaceState, type SlotId, type Pane, type Presentation } from "./workspace";
@@ -13059,6 +13060,18 @@ function upsertAgentLibraryRow(draft: any, key: "agentDefinitions" | "agentChain
 }
 
 export const useInboxStore = survivingInboxStore ?? createInboxStore();
+
+// An undo that restores the viewed conversation moves the pointer and the
+// inbox tab with it, as every navigation commit does.
+bindUndoStore({
+  restoreView: (draft, field, value) => {
+    if (field !== "currentSessionId") return;
+    const id = typeof value === "string" ? value : null;
+    recordCurrentConversationPointer(draft, id ?? undefined);
+    syncActiveInboxTabPath(draft, id);
+  },
+  bridgeUserId: () => bridgeUserId(useInboxStore.getState()),
+});
 
 if (survivingInboxStore) {
   (survivingInboxStore.getState() as any)._hotReplaceConfig?.(inboxStoreConfig);

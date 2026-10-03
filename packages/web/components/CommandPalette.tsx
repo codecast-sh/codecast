@@ -169,6 +169,9 @@ import {
   Cloud,
   Laptop,
   Globe,
+  Undo2,
+  Redo2,
+  History,
 } from "lucide-react";
 import { HeadOfPeopleFace } from "./anchor/AnchorIdentity";
 import { BROWSER_ROUTE, displayHost } from "../lib/browserPane";
@@ -301,8 +304,9 @@ const GLOBAL_COMMANDS: ReadonlyArray<{
   { action: "pane.next", label: "Focus next pane", icon: StageNextGlyph, keywords: "split pane focus cycle", hidden: () => !stageIsSplit() },
   { action: "inbox.toggleFlatView", label: "Cycle inbox view", icon: Rows3, keywords: "grouped time label flat layout" },
   { action: "inbox.toggleTriageBar", label: () => (isTriageBarCompact(useInboxStore.getState().clientState.ui) ? "Show triage bar" : "Hide triage bar"), icon: PanelBottom, keywords: "triage bar defer stash kill verbs footer show hide" },
-  { action: "ui.undo", label: "Undo", icon: RefreshCw, keywords: "restore revert last action" },
-  { action: "ui.redo", label: "Redo", icon: RefreshCw, keywords: "repeat undone action" },
+  { action: "ui.undo", label: "Undo", icon: Undo2, keywords: "restore revert last action" },
+  { action: "ui.redo", label: "Redo", icon: Redo2, keywords: "repeat undone action" },
+  { action: "ui.undoHistory", label: "Undo history", icon: History, keywords: "undo redo history timeline changes take back revert recent actions" },
   { action: "tab.new", label: "New tab", icon: Plus, keywords: "tab create" },
   { action: "tab.close", label: "Close tab", icon: Square, keywords: "tab dismiss" },
   { action: "tab.next", label: "Next tab", icon: ArrowDown, keywords: "tab switch navigate" },

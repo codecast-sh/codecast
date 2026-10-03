@@ -1,0 +1,768 @@
+// Generic undo: capture what an action changed, write it back on undo.
+//
+// The middleware calls the controller for every action that has an undo spec.
+// Capture reads the two immutable states the action already produced and
+// records each touched store cell with its value on either side. Undo writes
+// the before values back through the middleware's own runAction, under the
+// name of a real action (the app's replay action, a per-collection writer's
+// action, or a spec's inverse), so the replay gets pending locks, the view
+// guard, IndexedDB write-through, the follower tee, the outbox and refusal
+// rollback exactly as any action does. Redo re-invokes the original action
+// with its original args.
+import type { Patch } from "mutative";
+import { sameShape } from "./syncProtocol";
+import type {
+  CellChange,
+  Invocation,
+  PendingEntry,
+  UndoConfig,
+  UndoCtx,
+  UndoEntry,
+  UndoOutcome,
+  UndoSpec,
+} from "./types";
+import {
+  configureUndoStack,
+  isUndoSuppressed,
+  newUndoEntryId,
+  recordUndoEntry,
+  undoRefreshTarget,
+  withoutUndo,
+  withUndoRefresh,
+} from "./undoStack";
+
+export type CellShapeKind = "collection" | "list" | "singleton" | "scalar";
+
+/**
+ * One store cell an action touched. `id` is "" for a singleton or a scalar;
+ * `field` is absent for a whole row (a collection or list row added or
+ * removed, or replaced as a non-object) and for a scalar's whole value.
+ */
+export type TouchedCell = {
+  store: string;
+  id: string;
+  field?: string;
+  shape: CellShapeKind;
+  op: "add" | "remove" | "set";
+  // Whether a pending lock may be planted for the cell: a direct row add or
+  // remove, an exact depth-3 field write, or a list/singleton diff. A deeper
+  // write or a whole-row replace is a touch, never a lock (see
+  // generateAutoPending for why a leaf value must not lock its field).
+  lockable: boolean;
+  // The value a lock asserts: the last direct patch's value for a collection
+  // field, the after value for a list or singleton field.
+  lockValue?: unknown;
+  // Where a removed list row sat.
+  index?: number;
+};
+
+export type TouchedCellShape = {
+  kindOf: (key: string) => CellShapeKind;
+  rowKeyOf?: (key: string) => string;
+  // Store keys to enumerate; everything else is skipped. `pending` never is.
+  include?: (key: string) => boolean;
+};
+
+const isPlainObject = (v: unknown): v is Record<string, any> =>
+  !!v && typeof v === "object" && !Array.isArray(v);
+
+/**
+ * The cells an action touched, from its patches and, where given, the states
+ * before and after it. Collections are read from patch paths (a field write
+ * is truncated to depth 3, a depth-2 add or remove is a row); lists diff by
+ * row identity and singletons by field, because a splice or an unshift
+ * patches positions, not rows. A whole-row replace or a whole-key write is
+ * expanded by diffing the two values. Pending locks (generateAutoPending)
+ * and the undo capture both read this, so they cannot disagree about what an
+ * action touched.
+ */
+export function enumerateTouchedCells(
+  patches: Patch[],
+  shape: TouchedCellShape,
+  prev?: Record<string, any>,
+  next?: Record<string, any>,
+): TouchedCell[] {
+  const cells = new Map<string, TouchedCell>();
+  const put = (cell: TouchedCell) => {
+    const key = `${cell.store}\u0000${cell.id}\u0000${cell.field ?? "\u0001"}`;
+    const prior = cells.get(key);
+    if (!prior) {
+      cells.set(key, cell);
+      return;
+    }
+    // A later lockable write owns the lock value; a later non-lockable touch
+    // never demotes an earlier direct write.
+    if (cell.lockable) cells.set(key, cell);
+    else if (!prior.lockable) cells.set(key, { ...prior, op: cell.op });
+  };
+  const include = (key: string) => key !== "pending" && (shape.include ? shape.include(key) : true);
+  const whole: string[] = [];
+  const wholeSeen = new Set<string>();
+  const rowReplaces: Array<[string, string]> = [];
+  const keyWhole = (key: string) => {
+    if (!wholeSeen.has(key)) {
+      wholeSeen.add(key);
+      whole.push(key);
+    }
+  };
+
+  const diffRow = (store: string, id: string, before: any, after: any, lockable: boolean, rowShape: CellShapeKind) => {
+    if (isPlainObject(before) && isPlainObject(after)) {
+      for (const field of new Set([...Object.keys(before), ...Object.keys(after)])) {
+        if (before[field] === after[field]) continue;
+        put({ store, id, field, shape: rowShape, op: "set", lockable, ...(lockable ? { lockValue: after[field] } : {}) });
+      }
+    } else if (before !== after) {
+      put({ store, id, shape: rowShape, op: "set", lockable: false });
+    }
+  };
+
+  for (const patch of patches) {
+    const path = patch.path as (string | number)[];
+    if (path.length < 1) continue;
+    const store = String(path[0]);
+    if (!include(store)) continue;
+    if (shape.kindOf(store) !== "collection" || path.length === 1) {
+      keyWhole(store);
+      continue;
+    }
+    const id = String(path[1]);
+    if (path.length === 2) {
+      if (patch.op === "add") put({ store, id, shape: "collection", op: "add", lockable: true });
+      else if (patch.op === "remove") put({ store, id, shape: "collection", op: "remove", lockable: true });
+      else rowReplaces.push([store, id]);
+      continue;
+    }
+    const field = String(path[2]);
+    if (path.length === 3 && (patch.op === "replace" || patch.op === "add" || patch.op === "remove")) {
+      put({ store, id, field, shape: "collection", op: "set", lockable: true, lockValue: patch.value });
+    } else {
+      put({ store, id, field, shape: "collection", op: "set", lockable: false });
+    }
+  }
+
+  if (prev && next) {
+    for (const [store, id] of rowReplaces) {
+      const before = prev[store]?.[id];
+      const after = next[store]?.[id];
+      if (before === undefined && after !== undefined) put({ store, id, shape: "collection", op: "add", lockable: false });
+      else if (before !== undefined && after === undefined) put({ store, id, shape: "collection", op: "remove", lockable: false });
+      else diffRow(store, id, before, after, false, "collection");
+    }
+    for (const store of whole) {
+      const kind = shape.kindOf(store);
+      const before = prev[store];
+      const after = next[store];
+      if (before === after) continue;
+      if (kind === "singleton") {
+        if (isPlainObject(before) && isPlainObject(after)) diffRow(store, "", before, after, true, "singleton");
+        else put({ store, id: "", shape: "scalar", op: "set", lockable: false });
+        continue;
+      }
+      if (kind === "list") {
+        if (!Array.isArray(before) || !Array.isArray(after)) {
+          put({ store, id: "", shape: "scalar", op: "set", lockable: false });
+          continue;
+        }
+        const rowKey = shape.rowKeyOf?.(store) ?? "_id";
+        const index = new Map<string, number>();
+        before.forEach((r: any, i: number) => {
+          if (typeof r?.[rowKey] === "string") index.set(r[rowKey], i);
+        });
+        const after_ = new Map<string, any>();
+        for (const r of after) if (typeof r?.[rowKey] === "string") after_.set(r[rowKey], r);
+        for (const [id, row] of after_) {
+          const at = index.get(id);
+          if (at === undefined) put({ store, id, shape: "list", op: "add", lockable: true });
+          else if (before[at] !== row) diffRow(store, id, before[at], row, true, "list");
+        }
+        for (const [id, at] of index) {
+          if (!after_.has(id)) put({ store, id, shape: "list", op: "remove", lockable: true, index: at });
+        }
+        continue;
+      }
+      if (kind === "collection" && isPlainObject(before) && isPlainObject(after)) {
+        for (const id of new Set([...Object.keys(before), ...Object.keys(after)])) {
+          const b = before[id];
+          const a = after[id];
+          if (b === a) continue;
+          if (b === undefined) put({ store, id, shape: "collection", op: "add", lockable: false });
+          else if (a === undefined) put({ store, id, shape: "collection", op: "remove", lockable: false });
+          else diffRow(store, id, b, a, false, "collection");
+        }
+        continue;
+      }
+      put({ store, id: "", shape: "scalar", op: "set", lockable: false });
+    }
+  }
+  return [...cells.values()];
+}
+
+// ---------------------------------------------------------------------------
+// Capture
+// ---------------------------------------------------------------------------
+
+export type CaptureShape = {
+  /** The key's declared sync kind, if the registry names one. */
+  declaredKind: (key: string) => CellShapeKind | undefined;
+  rowKeyOf: (key: string) => string;
+  isProtected: (key: string) => boolean;
+  isUnprotectedField: (key: string, field: string) => boolean;
+  viewFields: ReadonlySet<string>;
+  ignoreKeys?: ReadonlySet<string>;
+};
+
+type CellAddress = { store: string; id: string; field?: string; shape?: CellShapeKind };
+
+/** Read one cell from a state: whether it exists, and its value. */
+export function readCell(
+  state: Record<string, any>,
+  cell: CellAddress,
+  rowKeyOf: (key: string) => string,
+): { has: boolean; value: unknown; rowGone: boolean } {
+  const slice = state?.[cell.store];
+  switch (cell.shape ?? "collection") {
+    case "scalar":
+      return { has: slice !== undefined, value: slice, rowGone: false };
+    case "singleton": {
+      const has = isPlainObject(slice) && cell.field !== undefined && cell.field in slice;
+      return { has, value: has ? slice[cell.field!] : undefined, rowGone: !isPlainObject(slice) };
+    }
+    case "list": {
+      const rowKey = rowKeyOf(cell.store);
+      const row = Array.isArray(slice) ? slice.find((r: any) => r?.[rowKey] === cell.id) : undefined;
+      if (cell.field === undefined) return { has: row !== undefined, value: row, rowGone: row === undefined };
+      const has = isPlainObject(row) && cell.field in row;
+      return { has, value: has ? row[cell.field] : undefined, rowGone: row === undefined };
+    }
+    default: {
+      const row = isPlainObject(slice) && Object.prototype.hasOwnProperty.call(slice, cell.id) ? slice[cell.id] : undefined;
+      if (cell.field === undefined) return { has: row !== undefined, value: row, rowGone: row === undefined };
+      const has = isPlainObject(row) && cell.field in row;
+      return { has, value: has ? row[cell.field] : undefined, rowGone: row === undefined };
+    }
+  }
+}
+
+/**
+ * The cells an action changed, classified for undo: `protected` (a
+ * local-first key and a protected field: conflict-checked), `view` (a view
+ * guard field), `mirror` (anything else: restored only while it still holds
+ * the after value). `pending`, ignored keys and the spec's ignored fields
+ * are never captured.
+ */
+export function captureCells(
+  patches: Patch[],
+  prev: Record<string, any>,
+  next: Record<string, any>,
+  shape: CaptureShape,
+  spec?: Pick<UndoSpec, "ignoreFields">,
+): CellChange[] {
+  const ignoreFields = new Set(spec?.ignoreFields ?? []);
+  const kindOf = (key: string): CellShapeKind => {
+    const declared = shape.declaredKind(key);
+    if (declared) return declared;
+    if (shape.isProtected(key)) return "collection";
+    const value = prev[key] !== undefined ? prev[key] : next[key];
+    if (Array.isArray(value)) {
+      // An undeclared array is a list only when every row names itself;
+      // otherwise it is restored as one value.
+      const rowKey = shape.rowKeyOf(key);
+      const keyed = (rows: unknown) => !Array.isArray(rows) || rows.every((r: any) => typeof r?.[rowKey] === "string");
+      return keyed(prev[key]) && keyed(next[key]) ? "list" : "scalar";
+    }
+    if (isPlainObject(value)) return "collection";
+    return "scalar";
+  };
+  const touched = enumerateTouchedCells(
+    patches,
+    {
+      kindOf,
+      rowKeyOf: shape.rowKeyOf,
+      include: (key) => !shape.ignoreKeys?.has(key),
+    },
+    prev,
+    next,
+  );
+  const out: CellChange[] = [];
+  for (const cell of touched) {
+    if (cell.field !== undefined && ignoreFields.has(cell.field)) continue;
+    const before = readCell(prev, cell, shape.rowKeyOf);
+    const after = readCell(next, cell, shape.rowKeyOf);
+    if (before.has === after.has && sameShape(before.value, after.value)) continue;
+    const kind: CellChange["kind"] = shape.viewFields.has(cell.store)
+      ? "view"
+      : shape.isProtected(cell.store) && (cell.field === undefined || !shape.isUnprotectedField(cell.store, cell.field))
+        ? "protected"
+        : "mirror";
+    out.push({
+      store: cell.store,
+      id: cell.id,
+      ...(cell.field !== undefined ? { field: cell.field } : {}),
+      before: before.value,
+      after: after.value,
+      hadBefore: before.has,
+      hadAfter: after.has,
+      kind,
+      shape: cell.shape,
+      ...(cell.index !== undefined ? { index: cell.index } : {}),
+    });
+  }
+  return out;
+}
+
+/** The pending entries an action added or replaced, including ones its draft wrote by hand. */
+export function plantedEntries(
+  prevPending: Record<string, PendingEntry> | undefined,
+  nextPending: Record<string, PendingEntry> | undefined,
+): Record<string, PendingEntry> {
+  const out: Record<string, PendingEntry> = {};
+  if (!nextPending || nextPending === prevPending) return out;
+  for (const [key, entry] of Object.entries(nextPending)) {
+    if (entry && prevPending?.[key] !== entry) out[key] = entry;
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Guard
+// ---------------------------------------------------------------------------
+
+const rowKeyOfCell = (c: { store: string; id: string }) => `${c.store}\u0000${c.id}`;
+
+type Verdict = "apply" | "already" | "conflict";
+
+function verdictForUndo(cell: CellChange, state: Record<string, any>, rowKeyOf: (key: string) => string): Verdict {
+  const cur = readCell(state, cell, rowKeyOf);
+  if (cell.field === undefined && cell.shape !== "scalar") {
+    if (!cell.hadBefore && cell.hadAfter) return cur.has ? "apply" : "already"; // forward added the row
+    if (cell.hadBefore && !cell.hadAfter) return cur.has ? "already" : "apply"; // forward removed it
+  } else if (cur.rowGone && cell.shape !== "scalar") {
+    return "conflict";
+  }
+  if (cur.has === cell.hadAfter && sameShape(cur.value, cell.after)) return "apply";
+  if (cur.has === cell.hadBefore && sameShape(cur.value, cell.before)) return "already";
+  // Absent and undefined read the same to the user.
+  if (sameShape(cur.value, cell.after)) return "apply";
+  if (sameShape(cur.value, cell.before)) return "already";
+  return "conflict";
+}
+
+function holdsBefore(cell: CellChange, state: Record<string, any>, rowKeyOf: (key: string) => string): boolean {
+  const cur = readCell(state, cell, rowKeyOf);
+  if (cell.field === undefined && cell.shape !== "scalar") {
+    if (!cell.hadBefore && cell.hadAfter) return !cur.has;
+    if (cell.hadBefore && !cell.hadAfter) return cur.has;
+  }
+  return sameShape(cur.value, cell.before);
+}
+
+export type UndoGuardResult = {
+  apply: CellChange[];
+  skippedRows: Array<{ store: string; id: string }>;
+};
+
+/**
+ * Which cells an undo may write now. Per row, all or nothing: every
+ * protected cell must still hold its after value (or already hold its before
+ * value); one that holds anything else skips the whole row. Stamp fields are
+ * never compared and ride along with their row. Mirror cells are restored
+ * only while they still hold the after value; view cells only when the spec
+ * asks and the view has not moved.
+ */
+export function guardUndo(
+  changes: readonly CellChange[],
+  state: Record<string, any>,
+  opts: { rowKeyOf: (key: string) => string; stampFields?: ReadonlySet<string>; restoreView?: boolean },
+): UndoGuardResult {
+  const isStamp = (c: CellChange) => c.field !== undefined && !!opts.stampFields?.has(c.field);
+  const rows = new Map<string, CellChange[]>();
+  for (const cell of changes) {
+    if (cell.kind !== "protected") continue;
+    const k = rowKeyOfCell(cell);
+    const list = rows.get(k) ?? [];
+    list.push(cell);
+    rows.set(k, list);
+  }
+  const apply: CellChange[] = [];
+  const skippedRows: Array<{ store: string; id: string }> = [];
+  const appliedRows = new Set<string>();
+  for (const [k, cells] of rows) {
+    const compared = cells.filter((c) => !isStamp(c));
+    const verdicts = compared.map((c) => verdictForUndo(c, state, opts.rowKeyOf));
+    if (verdicts.includes("conflict")) {
+      skippedRows.push({ store: cells[0]!.store, id: cells[0]!.id });
+      continue;
+    }
+    const writes = compared.filter((_, i) => verdicts[i] === "apply");
+    if (writes.length === 0) continue;
+    apply.push(...writes);
+    appliedRows.add(k);
+  }
+  for (const cell of changes) {
+    if (cell.kind === "protected") {
+      if (isStamp(cell) && appliedRows.has(rowKeyOfCell(cell))) apply.push(cell);
+      continue;
+    }
+    if (cell.kind === "view" && !opts.restoreView) continue;
+    if (isStamp(cell)) continue;
+    if (verdictForUndo(cell, state, opts.rowKeyOf) === "apply") apply.push(cell);
+  }
+  return { apply, skippedRows };
+}
+
+// ---------------------------------------------------------------------------
+// Write-back
+// ---------------------------------------------------------------------------
+
+function restamp(row: unknown, stampFields: ReadonlySet<string> | undefined, now: number): unknown {
+  if (!stampFields || !isPlainObject(row)) return row;
+  let out: Record<string, any> | null = null;
+  for (const f of stampFields) {
+    if (f in row) {
+      out ??= { ...row };
+      out[f] = now;
+    }
+  }
+  return out ?? row;
+}
+
+/** Write each cell's before value into a draft. */
+export function writeBeforeValues(
+  draft: any,
+  cells: readonly CellChange[],
+  opts: {
+    rowKeyOf: (key: string) => string;
+    stampFields?: ReadonlySet<string>;
+    restoreView?: (draft: any, field: string, value: unknown) => void;
+    now?: number;
+  },
+): void {
+  const now = opts.now ?? Date.now();
+  for (const cell of cells) {
+    const stamp = cell.field !== undefined && !!opts.stampFields?.has(cell.field);
+    const value = stamp ? now : cell.before;
+    switch (cell.shape ?? "collection") {
+      case "scalar":
+        if (cell.hadBefore) draft[cell.store] = cell.before;
+        else delete draft[cell.store];
+        break;
+      case "singleton": {
+        if (!isPlainObject(draft[cell.store])) {
+          if (!cell.hadBefore) break;
+          draft[cell.store] = {};
+        }
+        if (cell.field === undefined) break;
+        if (cell.hadBefore || stamp) draft[cell.store][cell.field] = value;
+        else delete draft[cell.store][cell.field];
+        break;
+      }
+      case "list": {
+        const list = draft[cell.store];
+        if (!Array.isArray(list)) break;
+        const rowKey = opts.rowKeyOf(cell.store);
+        const at = list.findIndex((r: any) => r?.[rowKey] === cell.id);
+        if (cell.field === undefined) {
+          if (!cell.hadBefore) {
+            if (at !== -1) list.splice(at, 1);
+          } else if (at === -1) {
+            list.splice(Math.min(cell.index ?? list.length, list.length), 0, restamp(cell.before, opts.stampFields, now));
+          }
+          break;
+        }
+        if (at === -1) break;
+        if (cell.hadBefore || stamp) list[at][cell.field] = value;
+        else delete list[at][cell.field];
+        break;
+      }
+      default: {
+        if (cell.field === undefined) {
+          if (!isPlainObject(draft[cell.store])) {
+            if (!cell.hadBefore) break;
+            draft[cell.store] = {};
+          }
+          if (cell.hadBefore) draft[cell.store][cell.id] = restamp(cell.before, opts.stampFields, now);
+          else delete draft[cell.store][cell.id];
+          break;
+        }
+        const row = draft[cell.store]?.[cell.id];
+        if (!row || typeof row !== "object") break;
+        if (cell.hadBefore || stamp) row[cell.field] = value;
+        else delete row[cell.field];
+      }
+    }
+    if (cell.kind === "view") opts.restoreView?.(draft, cell.store, cell.before);
+  }
+}
+
+/** Delete the forward's planted pending entries that still match exactly, except on skipped rows. */
+export function deletePlanted(
+  draft: any,
+  planted: Record<string, unknown> | undefined,
+  skippedRows: ReadonlyArray<{ store: string; id: string }>,
+): void {
+  if (!planted || !draft.pending) return;
+  const skipped = skippedRows.map((r) => `${r.store}:${r.id}`);
+  for (const [key, raw] of Object.entries(planted)) {
+    const entry = raw as PendingEntry;
+    const cur = draft.pending[key] as PendingEntry | undefined;
+    if (!cur || cur.type !== entry.type || (cur.ts ?? 0) !== (entry.ts ?? 0) || !sameShape(cur.value, entry.value)) continue;
+    if (skipped.some((p) => key === p || key.startsWith(`${p}:`))) continue;
+    delete draft.pending[key];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Pass planning
+// ---------------------------------------------------------------------------
+
+export type ReplayPass = { inv: Invocation; cells: CellChange[] };
+
+/**
+ * How an undo reaches the server. A spec's inverse wins, its first
+ * invocation carrying every cell. Otherwise each row on a key with a writer
+ * becomes that writer's invocations (the first carries the row's cells), and
+ * everything else rides one replay-action pass with no args, first, so view
+ * cells land in the pass the view-nav declaration covers.
+ */
+export function planReplayPasses(
+  cells: readonly CellChange[],
+  state: Record<string, any>,
+  config: Pick<UndoConfig, "writers" | "replayAction">,
+  inverse: Invocation[] | null | undefined,
+  rowKeyOf: (key: string) => string,
+): ReplayPass[] {
+  if (inverse && inverse.length > 0) {
+    return inverse.map((inv, i) => ({ inv, cells: i === 0 ? [...cells] : [] }));
+  }
+  const rest: CellChange[] = [];
+  const writerPasses: ReplayPass[] = [];
+  const byRow = new Map<string, CellChange[]>();
+  for (const cell of cells) {
+    const writer = config.writers?.[cell.store];
+    if (!writer || cell.kind === "view") {
+      rest.push(cell);
+      continue;
+    }
+    const k = rowKeyOfCell(cell);
+    const list = byRow.get(k) ?? [];
+    list.push(cell);
+    byRow.set(k, list);
+  }
+  for (const rowCells of byRow.values()) {
+    const { store, id } = rowCells[0]!;
+    const writer = config.writers![store]!;
+    const current = readCell(state, { store, id, shape: rowCells[0]!.shape }, rowKeyOf).value;
+    const rowCell = rowCells.find((c) => c.field === undefined);
+    let invs: Invocation[] = [];
+    if (rowCell && rowCell.hadBefore && !rowCell.hadAfter && writer.restoreRow) {
+      invs = writer.restoreRow(id, rowCell.before, state);
+    } else if (rowCell && !rowCell.hadBefore && rowCell.hadAfter && writer.removeRow) {
+      invs = writer.removeRow(id, current, state);
+    } else if (writer.fields) {
+      const fields: Record<string, unknown> = {};
+      for (const c of rowCells) if (c.field !== undefined) fields[c.field] = c.before;
+      invs = writer.fields(id, fields, current, state);
+    }
+    if (invs.length === 0) {
+      rest.push(...rowCells);
+      continue;
+    }
+    invs.forEach((inv, i) => writerPasses.push({ inv, cells: i === 0 ? rowCells : [] }));
+  }
+  const passes: ReplayPass[] = [];
+  if (rest.length > 0 || writerPasses.length === 0) {
+    passes.push({ inv: { action: config.replayAction, args: [] }, cells: rest });
+  }
+  return [...passes, ...writerPasses];
+}
+
+// ---------------------------------------------------------------------------
+// Controller (one per store)
+// ---------------------------------------------------------------------------
+
+type Flags = { act: boolean; asyncAct: boolean; receipt: boolean; syn: boolean };
+
+export type UndoControllerDeps = {
+  config: UndoConfig;
+  get: () => any;
+  runAction: (
+    key: string,
+    flags: Flags,
+    recipe: (draft: any) => unknown,
+    args: any[],
+    opts?: { onCommitted?: (commit: { outboxId: string }) => void },
+  ) => any;
+  rawCreator: (name: string) => any;
+  flagsOf: (fn: any) => Flags;
+  shape: CaptureShape;
+};
+
+type Internal = { inverse: Invocation[] | null; applied: CellChange[] };
+
+export type UndoController = {
+  /** Whether a call of `key` should be captured right now. */
+  wants: (key: string, flags: Flags) => boolean;
+  capture: (
+    key: string,
+    args: unknown[],
+    commit: { state: any; finalState: any; patches: Patch[]; outboxId: string; returnValue: unknown },
+  ) => void;
+};
+
+const swallow = (value: unknown) => {
+  if (value && typeof (value as Promise<unknown>).then === "function") {
+    (value as Promise<unknown>).then(undefined, () => {});
+  }
+};
+
+export function createUndoController(deps: UndoControllerDeps): UndoController {
+  const { config, get, shape } = deps;
+  const rowKeyOf = shape.rowKeyOf;
+  const internals = new WeakMap<UndoEntry, Internal>();
+  configureUndoStack({
+    keyboardWindowMs: config.keyboardWindowMs,
+    stackLimit: config.stackLimit,
+    historyLimit: config.historyLimit,
+  });
+
+  const objectsOf = (changes: readonly CellChange[]) => {
+    const seen = new Set<string>();
+    const out: Array<{ store: string; id: string }> = [];
+    for (const c of changes) {
+      if (c.kind !== "protected") continue;
+      const k = rowKeyOfCell(c);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push({ store: c.store, id: c.id });
+    }
+    return out;
+  };
+
+  const isStamp = (c: CellChange) => c.field !== undefined && !!config.stampFields?.has(c.field);
+
+  const runPass = (entry: UndoEntry, pass: ReplayPass, first: boolean, skippedRows: Array<{ store: string; id: string }>) => {
+    const target = deps.rawCreator(pass.inv.action);
+    const flags: Flags = target ? deps.flagsOf(target) : { act: true, asyncAct: false, receipt: false, syn: false };
+    const recipe = (draft: any) => {
+      if (first) deletePlanted(draft, entry.planted, skippedRows);
+      let result: unknown;
+      if (pass.inv.runDraft !== false && typeof target === "function") result = target.apply(draft, pass.inv.args);
+      writeBeforeValues(draft, pass.cells, { rowKeyOf, stampFields: config.stampFields, restoreView: config.restoreView });
+      return result;
+    };
+    const result = withoutUndo(() =>
+      deps.runAction(pass.inv.action, flags, recipe, pass.inv.args as any[], {
+        onCommitted: ({ outboxId }) => {
+          entry.replayOutboxIds = [...(entry.replayOutboxIds ?? []), outboxId];
+        },
+      }),
+    );
+    swallow(result);
+  };
+
+  const undoGeneric = (entry: UndoEntry): UndoOutcome => {
+    const state = get();
+    const spec = entry.action ? config.specs[entry.action] : undefined;
+    const { apply, skippedRows } = guardUndo(entry.changes ?? [], state, {
+      rowKeyOf,
+      stampFields: config.stampFields,
+      restoreView: spec?.restoreView,
+    });
+    entry.skipped = skippedRows;
+    if (apply.length === 0) return { ok: false, reason: "conflict" };
+    config.beforeReplay?.(entry, "undo");
+    const passes = planReplayPasses(apply, state, config, internals.get(entry)?.inverse, rowKeyOf);
+    entry.replayOutboxIds = [];
+    passes.forEach((pass, i) => runPass(entry, pass, i === 0, skippedRows));
+    const internal = internals.get(entry);
+    if (internal) internal.applied = apply;
+    config.afterReplay?.(entry, "undo", apply);
+    return { ok: true, applied: apply.filter((c) => !isStamp(c)).length, skipped: skippedRows.length };
+  };
+
+  const redoGeneric = (entry: UndoEntry): UndoOutcome => {
+    const state = get();
+    const applied = internals.get(entry)?.applied ?? [];
+    for (const cell of applied) {
+      if (cell.kind !== "protected" || isStamp(cell)) continue;
+      if (!holdsBefore(cell, state, rowKeyOf)) return { ok: false, reason: "conflict" };
+    }
+    const fn = entry.action ? state?.[entry.action] : undefined;
+    if (typeof fn !== "function") return { ok: false, reason: "gone" };
+    config.beforeReplay?.(entry, "redo");
+    withUndoRefresh(entry, () => swallow(fn(...(entry.args ?? []))));
+    config.afterReplay?.(entry, "redo", entry.changes ?? []);
+    return { ok: true, applied: (entry.changes ?? []).filter((c) => !isStamp(c)).length, skipped: 0 };
+  };
+
+  return {
+    wants(key, flags) {
+      return (flags.act || flags.asyncAct) && !!config.specs[key] && !isUndoSuppressed();
+    },
+    capture(key, args, commit) {
+      const spec = config.specs[key];
+      if (!spec) return;
+      const changes = captureCells(commit.patches, commit.state, commit.finalState, shape, spec);
+      const meaningful = changes.some((c) => !isStamp(c));
+      const ctx: UndoCtx = {
+        action: key,
+        args,
+        before: commit.state,
+        after: commit.finalState,
+        result: commit.returnValue,
+        changes,
+      };
+      const planted = plantedEntries(commit.state?.pending, commit.finalState?.pending);
+
+      const refresh = undoRefreshTarget();
+      if (refresh && refresh.action === key) {
+        if (!meaningful) return;
+        refresh.changes = changes;
+        refresh.planted = planted;
+        refresh.outboxIds = [commit.outboxId];
+        refresh.objects = objectsOf(changes);
+        internals.set(refresh, { inverse: spec.inverse?.(ctx) ?? null, applied: [] });
+        return;
+      }
+
+      if (!meaningful && !spec.external) return;
+      const label = spec.label(ctx);
+      if (label == null) return;
+      const id = newUndoEntryId();
+      if (spec.external) {
+        recordUndoEntry({
+          id,
+          label,
+          ts: Date.now(),
+          status: "external",
+          external: spec.external,
+          action: key,
+          args,
+          mode: "generic",
+          undo: () => ({ ok: false, reason: "gone" }),
+          redo: () => ({ ok: false, reason: "gone" }),
+        });
+        return;
+      }
+      const entry: UndoEntry = {
+        id,
+        label,
+        ts: Date.now(),
+        status: "done",
+        mode: "generic",
+        action: key,
+        args,
+        changes,
+        planted,
+        outboxIds: [commit.outboxId],
+        objects: objectsOf(changes),
+        ...(spec.confirm ? { confirm: true } : {}),
+        undo: () => undoGeneric(entry),
+        redo: () => redoGeneric(entry),
+      };
+      internals.set(entry, { inverse: spec.inverse?.(ctx) ?? null, applied: [] });
+      recordUndoEntry(entry, { toast: spec.toast, coalesce: spec.coalesce });
+    },
+  };
+}

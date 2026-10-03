@@ -15,6 +15,7 @@ import { focusComposer } from "../lib/composerControl";
 import { isPeopleWindow } from "../lib/desktop";
 import { useShortcutAction } from "./ShortcutProvider";
 import { performUndo, performRedo } from "../store/undoStack";
+import * as undoTimeline from "../lib/undoTimelineOpen";
 import { useTriageActions } from "../components/triage/useTriageActions";
 import { toggleTriageBarCompact } from "../components/triage/graduation";
 import { checkMilestone } from "../tips/useTips";
@@ -303,6 +304,11 @@ export function useGlobalShortcutActions() {
 
   useShortcutAction('ui.redo', useCallback(() => {
     return performRedo() || false;
+  }, []));
+
+  useShortcutAction('ui.undoHistory', useCallback(() => {
+    undoTimeline.toggle('interactive');
+    return true;
   }, []));
 
 }

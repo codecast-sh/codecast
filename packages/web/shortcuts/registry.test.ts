@@ -252,3 +252,53 @@ describe("the recents search chord", () => {
     }
   });
 });
+
+// App undo: ⌘Z on mac (⌃Z kept as a second binding), Ctrl+Z elsewhere. It
+// must never fire inside a text field, which keeps its own undo, and a held
+// chord is one undo, not the whole stack at key-repeat speed.
+describe("the undo chords", () => {
+  const keyEvent = (over: Partial<KeyboardEvent>) =>
+    ({ key: "z", code: "KeyZ", ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...over }) as KeyboardEvent;
+  const resolve = (isMac: boolean, e: KeyboardEvent) => {
+    const catalog = createShortcutCatalog(SHORTCUTS, { isMac });
+    return catalog.shortcuts.find((d) => catalog.matchShortcut(e, d))?.action;
+  };
+  const UNDO_ACTIONS: ShortcutAction[] = ["ui.undo", "ui.redo", "ui.undoHistory"];
+
+  test("meta+z is undo on mac, and ctrl+z still is", () => {
+    expect(resolve(true, keyEvent({ metaKey: true }))).toBe("ui.undo");
+    expect(resolve(true, keyEvent({ ctrlKey: true }))).toBe("ui.undo");
+    expect(resolve(true, keyEvent({ metaKey: true, shiftKey: true }))).toBe("ui.redo");
+    expect(resolve(true, keyEvent({ metaKey: true, altKey: true }))).toBe("ui.undoHistory");
+  });
+
+  test("ctrl+z, ctrl+shift+z and ctrl+y off mac", () => {
+    expect(resolve(false, keyEvent({ ctrlKey: true }))).toBe("ui.undo");
+    expect(resolve(false, keyEvent({ ctrlKey: true, shiftKey: true }))).toBe("ui.redo");
+    expect(resolve(false, keyEvent({ key: "y", code: "KeyY", ctrlKey: true }))).toBe("ui.redo");
+    expect(resolve(false, keyEvent({ ctrlKey: true, altKey: true }))).toBe("ui.undoHistory");
+  });
+
+  test("none of them bypasses the input guard", () => {
+    for (const def of SHORTCUTS.filter((d) => UNDO_ACTIONS.includes(d.action))) {
+      expect(def.skipInputCheck).toBeUndefined();
+      expect(inputGuardBypass(def, { tagName: "TEXTAREA", value: "" })).toBe(false);
+    }
+  });
+
+  test("undo and redo never repeat while held", () => {
+    const defs = SHORTCUTS.filter((d) => d.action === "ui.undo" || d.action === "ui.redo");
+    expect(defs.length).toBe(4);
+    for (const def of defs) expect(def.noRepeat).toBe(true);
+  });
+
+  test("the chords collide with no other action", () => {
+    for (const isMac of [true, false]) {
+      const collides = createShortcutCatalog(SHORTCUTS, { isMac })
+        .conflicts()
+        .filter((c) => c.defs.some((d) => UNDO_ACTIONS.includes(d.action)))
+        .filter((c) => new Set(c.defs.map((d) => d.action)).size > 1);
+      expect(collides).toEqual([]);
+    }
+  });
+});
