@@ -70,6 +70,21 @@ describe("cast goals", () => {
     expect(JSON.parse(out).principles).toBe("# Principles\n\nOne fact, one home.\n");
   });
 
+  test("--project asks for one project's brief; without it the profile's [line] project, and its principles join docs/principles.md", async () => {
+    await run("--project", "pj-3");
+    expect(calls[0].body.project).toBe("pj-3");
+    calls.length = 0;
+    fs.mkdirSync(path.join(repo, ".codecast"));
+    fs.mkdirSync(path.join(repo, "outreach"));
+    fs.writeFileSync(path.join(repo, ".codecast", "line.toml"), `[line]\nproject = "Agent Quality"\nprinciples = ["outreach/principles.md"]\n`);
+    fs.writeFileSync(path.join(repo, "docs", "principles.md"), "# Principles\n\nShared one.\n");
+    fs.writeFileSync(path.join(repo, "outreach", "principles.md"), "UN-1 Project one.\n");
+    out = "";
+    await run("--json");
+    expect(calls[0].body.project).toBe("Agent Quality");
+    expect(JSON.parse(out).principles).toBe("# Principles\n\nShared one.\n\nUN-1 Project one.\n");
+  });
+
   test("no repository, no principles", () => {
     expect(readPrinciples(null)).toBeNull();
     expect(readPrinciples(repo)).toBeNull();

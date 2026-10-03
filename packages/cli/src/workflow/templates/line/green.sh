@@ -2,8 +2,8 @@
 # passes now. Writes proof.json, red then green, for the change card, and
 # fails the station while the reproduction still fails.
 cd "$(cast ws path $worktree)" || exit 1
-dir=$red.json.dir
-clean() { tail -c 400 "$1" 2>/dev/null | tr -d '\000-\037\\"'; }
+dir=$run_dir
+clean() { tail -c 300 "$1" 2>/dev/null | tr -d '\000-\037\\"'; }
 name="$(head -n 1 "$dir/repro.name" 2>/dev/null | tr -d '\000-\037\\"')"
 [ -n "$name" ] || name="Reproduction"
 bash "$dir/repro.sh" > "$dir/green.log" 2>&1

@@ -2,12 +2,19 @@
 // verb posts. The transport is faked at globalThis.fetch, never the module, so
 // the real command shapes the request.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { formatSignalList, signalAddBody, type SignalRow } from "./signalCommand.js";
 
 describe("signalAddBody", () => {
-  test("the four typed fields are required and named when missing", () => {
-    expect(() => signalAddBody({ source: "sentry", kind: "bug" })).toThrow("--fingerprint, --title");
-    expect(() => signalAddBody({})).toThrow("--source, --kind, --fingerprint, --title");
+  test("source, kind and title are required and named when missing", () => {
+    expect(() => signalAddBody({ source: "sentry", kind: "bug" })).toThrow("needs --title");
+    expect(() => signalAddBody({})).toThrow("--source, --kind, --title");
+  });
+
+  test("a hand-filed signal without a fingerprint keys on its source and title", () => {
+    expect(signalAddBody({ source: "person", kind: "bug", title: "Checkout  Throws!" }).fingerprint).toBe("person:checkout-throws");
   });
 
   test("an unknown kind is refused with the list", () => {
@@ -96,7 +103,7 @@ describe("cast signal on the wire", () => {
   test("add without the required flags posts nothing", async () => {
     await expect(run("add", "--source", "person")).rejects.toThrow(/exit 1/);
     expect(calls).toHaveLength(0);
-    expect(logs.join("\n")).toContain("--kind, --fingerprint, --title");
+    expect(logs.join("\n")).toContain("--kind, --title");
   });
 
   test("ls --task reads one cause's signals; ls --source reads the workspace", async () => {
@@ -105,6 +112,44 @@ describe("cast signal on the wire", () => {
     await run("ls", "--source", "evals", "--json");
     expect(calls[0]).toEqual({ path: "/cli/signal/ls", body: { task: "ct-7" } });
     expect(calls[1]).toEqual({ path: "/cli/signal/ls", body: { source: "evals", project_path: "/repo", conversation_id: "s1" } });
+  });
+
+  test("add --project sends the ref for the server to resolve in the write workspace; ls --project reads one project", async () => {
+    answer = (path) => (path === "/cli/signal/ls" ? { signals: [] } : { short_id: "sg-3", task_short_id: "ct-8", attach: "new", signal_count: 1 });
+    // The argv Union's finder door sends (outreach/backend/src/lib/line/signal.ts signalAddArgv), less the stdin detail.
+    await run("add", "--source", "agentwatch", "--kind", "prompt_miss", "--fingerprint", "union:cluster:c1", "--title", "Agent repeats itself", "--url", "https://u.test/c1", "--subject", "outreach.reply", "--goal-hint", "reply_rate", "--project", "Agent Quality", "--json");
+    await run("ls", "--project", "Agent Quality");
+    expect(calls[0].body).toMatchObject({ source: "agentwatch", fingerprint: "union:cluster:c1", project: "Agent Quality", project_path: "/repo" });
+    expect(calls[1]).toEqual({ path: "/cli/signal/ls", body: { project: "Agent Quality", project_path: "/repo", conversation_id: "s1" } });
+  });
+
+  test("without --project, add takes the repo profile's [line] project and team; ls stays workspace wide", async () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "signal-profile-"));
+    fs.mkdirSync(path.join(repo, ".git"));
+    fs.mkdirSync(path.join(repo, ".codecast"));
+    fs.writeFileSync(path.join(repo, ".codecast", "line.toml"), `[line]\nteam = "Union"\nproject = "Agent Quality"\n`);
+    process.env.CODECAST_CWD = repo;
+    answer = (path) => (path === "/cli/teams" ? { teams: [{ _id: "team1", name: "Union" }], user_id: "u1" } : path === "/cli/signal/ls" ? { signals: [] } : { short_id: "sg-4", task_short_id: "ct-9", attach: "fingerprint", signal_count: 2 });
+    await run("add", "--source", "person", "--kind", "bug", "--title", "Checkout breaks");
+    await run("ls");
+    const add = calls.find((c) => c.path === "/cli/signal/add")!;
+    expect(add.body).toMatchObject({ project: "Agent Quality", workspace: "team", team_id: "team1" });
+    const ls = calls.find((c) => c.path === "/cli/signal/ls")!;
+    expect(ls.body.project).toBeUndefined();
+    expect(ls.body).toMatchObject({ workspace: "team", team_id: "team1" });
+    fs.rmSync(repo, { recursive: true, force: true });
+  });
+
+  test("a malformed profile stops the write with the profile's own error", async () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "signal-profile-"));
+    fs.mkdirSync(path.join(repo, ".git"));
+    fs.mkdirSync(path.join(repo, ".codecast"));
+    fs.writeFileSync(path.join(repo, ".codecast", "line.toml"), `[line]\nprojet = "Agent Quality"\n`);
+    process.env.CODECAST_CWD = repo;
+    await expect(run("add", "--source", "person", "--kind", "bug", "--title", "x")).rejects.toThrow(/exit 1/);
+    expect(calls).toHaveLength(0);
+    expect(logs.join("\n")).toContain('[line] has unknown key "projet"');
+    fs.rmSync(repo, { recursive: true, force: true });
   });
 
   test("show posts the ref", async () => {

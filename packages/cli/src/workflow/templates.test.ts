@@ -12,13 +12,35 @@ import { spawnSync } from "child_process";
 import { proofSummary } from "@codecast/shared/contracts/changeCard";
 import { conditionError, evalCondition, extractJsonOutput } from "./condition";
 import { graphHash, parseWorkflowFile, parseWorkflowSource, validateWorkflow } from "./parser";
-import { expandScriptVars, gatePayload, parseGateEdgeLabel, runWorkflow } from "./runner";
+import { expandPromptVars, expandScriptVars, gatePayload, lineRunDir, parseGateEdgeLabel, runWorkflow } from "./runner";
+import { lineCommandEnv, lineProfileVars, parseLineProfileText, resolveLineProfile } from "../lineProfile";
 import { BUILTIN_WORKFLOW_TEMPLATES, LINE_TEMPLATE_FILES, inlineTemplateFiles, resolveWorkflowSource } from "./templates";
 import type { WorkflowGraph } from "./types";
 
 const TEMPLATE_DIR = path.join(import.meta.dir, "templates");
 const AGENT_NODES = ["ground", "plan", "analyze", "prove", "implement", "review", "card_write"];
 const from = (graph: WorkflowGraph, id: string) => graph.edges.filter((e) => e.from === id).map((e) => `${e.to}:${e.condition ?? ""}`);
+
+// Union's profile as it is committed in its repo (line-profile.md LP2), and a
+// repo with none: the template must run on both.
+const UNION_PROFILE = `
+[line]
+team = "Union"
+project = "Agent Quality"
+principles = ["outreach/docs/line/principles.md"]
+prompting = "outreach/docs/line/prompting.md"
+size_budget = 400
+watch_days = 7
+
+[line.commands]
+check = "bun outreach/backend/scripts/line.ts check --base $default_branch"
+prove = "bun outreach/backend/scripts/line.ts prove --task $task_id --dir $run_dir"
+eval  = "bun outreach/backend/scripts/line.ts eval --base $default_branch --dir $run_dir --out $run_dir/reps.json"
+ship  = "bun outreach/backend/scripts/line.ts ship --task $task_id --branch $branch --run $run_id --dir $run_dir --into $default_branch"
+`;
+const profileVars = (toml: string) => lineProfileVars(resolveLineProfile(parseLineProfileText(toml).values).profile);
+const UNION_VARS = profileVars(UNION_PROFILE);
+const EMPTY_VARS = profileVars("");
 
 describe("line.cast template", () => {
   const graph = parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.line);
@@ -35,8 +57,8 @@ describe("line.cast template", () => {
     expect(validateWorkflow(graph)).toEqual([]);
     expect([...graph.nodes.keys()]).toEqual([
       "start", "exit", "ground", "park", "plan", "plan_gate", "analyze", "prove", "red", "dissolve",
-      "implement", "verify", "green", "eval_scope", "eval", "review", "card_draft", "card_write", "card",
-      "decide", "reopen", "drop", "merge", "watch",
+      "implement", "verify", "green", "eval", "review", "card_draft", "card_write", "card",
+      "decide", "reopen", "drop", "ship", "merge", "watch",
     ]);
     // The merge step (the-line.md L12) is a script node that reports to the
     // server about this run; it exits 0 whether it merged or left it.
@@ -44,7 +66,7 @@ describe("line.cast template", () => {
     expect(graph.nodes.get("merge")?.script).toBe("cast line merge --run $run_id --branch $branch --into $default_branch --cwd $project_path");
     expect(graph.nodes.get("merge")?.timeout).toBe(600);
     expect(graph.nodes.get("verify")?.type).toBe("command");
-    expect(graph.nodes.get("verify")?.script).toContain("cast ws check");
+    expect(graph.nodes.get("verify")?.script).toContain("bash -c $line.commands.check");
     expect(graph.nodes.get("card_write")?.type).toBe("prompt");
   });
 
@@ -105,6 +127,7 @@ describe("line.cast template", () => {
       "task_id", "task_title", "task_description", "acceptance_criteria", "task_status", "execution_status",
       "review_verdict", "review_note", "handoff", "goal_ref", "category", "risk", "readiness", "readiness_note",
       "assignee", "project_path", "default_branch", "run_id", "run_date", "worktree", "branch", "human_message", "goal", "outcome",
+      "run_dir", ...Object.keys(EMPTY_VARS),
     ]);
     const nodeVar = /^(\w+)\.(output|outcome|json(\.\w+)*)$/;
     const texts = [graph.stack!, ...[...graph.nodes.values()].flatMap((n) => [n.prompt, n.script, n.doc, n.card])].filter(Boolean) as string[];
@@ -155,8 +178,8 @@ describe("line.cast template", () => {
       expect(gate.category).toBeTruthy();
     }
     expect(options("plan_gate").map((o) => `${o.key}:${o.to}`)).toEqual(["A:analyze", "R:plan", "D:drop"]);
-    expect(options("decide").map((o) => `${o.key}:${o.to}`)).toEqual(["S:merge", "R:reopen", "D:drop"]);
-    expect(graph.nodes.get("decide")?.card).toBe("$red.json.dir/card.json");
+    expect(options("decide").map((o) => `${o.key}:${o.to}`)).toEqual(["S:ship", "R:reopen", "D:drop"]);
+    expect(graph.nodes.get("decide")?.card).toBe("$run_dir/card.json");
     expect(from(graph, "reopen")).toEqual(["implement:"]);
     expect(from(graph, "drop")).toEqual(["exit:"]);
   });
@@ -165,7 +188,7 @@ describe("line.cast template", () => {
     const payload = gatePayload(graph.nodes.get("decide")!, graph, {
       assignee: "Infra lead", run_date: "2026-10-02", task_title: "Titles copy the opener",
       "card_write.json": JSON.stringify({ wrong: "W.", change: "C.", recommend: "ship", why: "Y." }),
-      "red.json": JSON.stringify({ dir: "/nonexistent/cast-line" }),
+      run_dir: "/nonexistent/cast-line",
     });
     expect(payload.stack).toBe("Line · Infra lead · 2026-10-02");
     expect(payload.prompt).toBe("Ship this change? Titles copy the opener");
@@ -200,16 +223,12 @@ describe("line.cast template", () => {
     expect(fired("red", {})).toEqual(["prove"]);
   });
 
-  test("after verify: code proves green, a prompt or a touched surface runs evals, the rest goes to review", () => {
+  test("after verify: code proves green, then every change meets the eval station, which owns its scope", () => {
     expect(fired("verify", { outcome: "success", category: "code" })).toEqual(["green"]);
-    expect(fired("verify", { outcome: "success", category: "prompt" })).toEqual(["eval_scope"]);
+    expect(fired("verify", { outcome: "success", category: "prompt" })).toEqual(["eval"]);
     expect(fired("verify", { outcome: "failure", category: "code" })).toEqual(["implement"]);
     expect(fired("green", { outcome: "failure" })).toEqual(["implement"]);
-    const scope = (surfaces: string, extra: Record<string, string> = {}) => ({ outcome: "success", category: "code", "eval_scope.json": JSON.stringify({ surfaces }), ...extra });
-    expect(fired("eval_scope", scope(""))).toEqual(["review"]);
-    expect(fired("eval_scope", scope("title"))).toEqual(["eval"]);
-    expect(fired("eval_scope", scope("", { category: "prompt" }))).toEqual(["eval"]);
-    expect(fired("eval_scope", { outcome: "failure", category: "code" })).toEqual(["eval"]);
+    expect(fired("green", { outcome: "success" })).toEqual(["eval"]);
     expect(fired("eval", { outcome: "failure" })).toEqual(["implement"]);
     expect(fired("eval", { outcome: "success" })).toEqual(["review"]);
   });
@@ -223,7 +242,77 @@ describe("line.cast template", () => {
     expect(from(graph, "card")).toEqual(["decide:outcome = success", "card_write:outcome = failure"]);
     expect(from(graph, "merge")).toEqual(["watch:"]);
     expect(from(graph, "watch")).toEqual(["exit:"]);
-    expect(graph.nodes.get("watch")?.script).toBe("cast task update $task_id --watch-days 7");
+    expect(graph.nodes.get("watch")?.script).toBe("cast task update $task_id --watch-days $line.watch_days");
+  });
+
+  test("ship: a project's ship command lands it and the run watches; without one the merge step lands it; a refused ship ends the run", () => {
+    expect(fired("ship", { outcome: "success", ...EMPTY_VARS })).toEqual(["merge"]);
+    expect(fired("ship", { outcome: "success", ...UNION_VARS })).toEqual(["watch"]);
+    expect(fired("ship", { outcome: "failure", ...UNION_VARS })).toEqual(["exit"]);
+    expect(fired("ship", { outcome: "failure", ...EMPTY_VARS })).toEqual(["exit"]);
+  });
+
+  test("the template names no path or tool of one project: everything per project comes from the profile", () => {
+    const sources = [fs.readFileSync(path.join(TEMPLATE_DIR, "line.cast"), "utf-8"), ...Object.values(LINE_TEMPLATE_FILES)]
+      .map((t) => t.replace(/^\s*(\/\/|#).*$/gm, ""));
+    for (const text of sources) {
+      expect(text).not.toContain("./evals");
+      expect(text).not.toContain("docs/principles.md");
+      expect(text).not.toContain("docs/prompting.md");
+      expect(text).not.toContain("cast ws check");
+      expect(text).not.toMatch(/\b400\b/);
+      expect(text).not.toMatch(/watch-days \d|for a week/);
+    }
+  });
+
+  // Every prompt, script, doc and card with the run's context laid over a profile.
+  const rendered = (vars: Record<string, string>) => {
+    const ctx: Record<string, string> = { task_id: "ct-1", task_title: "T", worktree: "line-ct-1", branch: "codecast/line-ct-1", default_branch: "main", run_id: "run_1", run_dir: "/r/cast-line/line-ct-1", category: "prompt", ...vars };
+    const nodes = [...graph.nodes.values()];
+    return {
+      prompts: nodes.flatMap((n) => [n.prompt, n.doc, n.card]).filter(Boolean).map((t) => expandPromptVars(t!, graph, ctx)),
+      scripts: Object.fromEntries(nodes.filter((n) => n.script).map((n) => [n.id, expandScriptVars(n.script!, ctx)])),
+    };
+  };
+
+  test("renders with Union's profile: its commands, principles, prompting, budget and watch days, and no $line left", () => {
+    const { prompts, scripts } = rendered(UNION_VARS);
+    for (const t of [...prompts, ...Object.values(scripts)]) expect(t).not.toMatch(/\$line\./);
+    expect(scripts.verify).toContain("bash -c 'bun outreach/backend/scripts/line.ts check --base $default_branch'");
+    expect(scripts.red).toContain("cmd='bun outreach/backend/scripts/line.ts prove --task $task_id --dir $run_dir'");
+    expect(scripts.eval).toContain("cmd='bun outreach/backend/scripts/line.ts eval --base $default_branch --dir $run_dir --out $run_dir/reps.json'");
+    expect(scripts.eval).toContain("cast line eval-result --reps \"$dir/reps.json\" --out \"$dir/eval-result.json\"");
+    expect(scripts.ship).toContain("--run $run_id --dir $run_dir --into $default_branch'");
+    expect(scripts.watch).toBe("cast task update 'ct-1' --watch-days '7'");
+    const all = prompts.join("\n");
+    expect(all).toContain("outreach/docs/line/principles.md");
+    expect(all).toContain("outreach/docs/line/prompting.md");
+    expect(all).toContain("about 400 changed lines");
+  });
+
+  test("renders with an empty profile: the defaults, and stations that pass with a note", () => {
+    const { prompts, scripts } = rendered(EMPTY_VARS);
+    for (const t of [...prompts, ...Object.values(scripts)]) expect(t).not.toMatch(/\$line\./);
+    expect(scripts.verify).toContain("bash -c 'cast ws check'");
+    expect(scripts.red).toContain("cmd=''");
+    expect(scripts.eval).toContain("cmd=''");
+    expect(scripts.ship).toContain("cmd=''");
+    const all = prompts.join("\n");
+    expect(all).toContain("principles, each with a stable id: none");
+    expect(all).toContain("github.com/codecast-sh/codecast/blob/main/docs/prompting.md");
+  });
+
+  test("the runner's run dir sits in the repo's git directory, shared by every worktree, and is stable per task", () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "line-rundir-"));
+    try {
+      spawnSync("git", ["init", "-q", repo]);
+      const gitDir = fs.realpathSync(path.join(repo, ".git"));
+      expect(fs.realpathSync(path.dirname(path.dirname(lineRunDir(repo, "line-ct-1"))))).toBe(gitDir);
+      expect(lineRunDir(repo, "line-ct-1")).toEndWith("/cast-line/line-ct-1");
+      expect(lineRunDir(path.join(os.tmpdir(), "no-such-repo-dir"), "x")).toBe(path.join(os.tmpdir(), "cast-line", "x"));
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
   });
 
   test("the review hand sees only branch, title and criteria", () => {
@@ -272,14 +361,17 @@ describe("line.cast station scripts", () => {
   });
   afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
+  const runDir = () => path.join(tmp, "run-files");
+  // As the runner runs a station: the profile's values in the context, the
+  // script expanded, and the run values a profile command names in its env.
   const run = (id: string, context: Record<string, string>) => {
-    const r = spawnSync("bash", ["-c", expandScriptVars(graph.nodes.get(id)!.script!, { worktree: "line-ct-1", task_id: "ct-1", default_branch: "main", ...context })], { cwd: tmp, env, encoding: "utf-8" });
+    const ctx = { worktree: "line-ct-1", task_id: "ct-1", default_branch: "main", run_dir: runDir(), ...EMPTY_VARS, ...context };
+    const r = spawnSync("bash", ["-c", expandScriptVars(graph.nodes.get(id)!.script!, ctx)], { cwd: tmp, env: { ...env, ...lineCommandEnv(ctx) }, encoding: "utf-8" });
     return { code: r.status, out: r.stdout, json: extractJsonOutput(r.stdout) as any };
   };
   const calls = () => (fs.existsSync(log) ? fs.readFileSync(log, "utf-8").split("---\n").filter(Boolean).map((c) => c.trimEnd().split("\n")) : []);
-  const runDir = () => path.join(spawnSync("git", ["-C", repo, "rev-parse", "--absolute-git-dir"], { encoding: "utf-8" }).stdout.trim(), "cast-line");
 
-  test("red: no reproduction, a passing one, and a failing one; a prompt's miss is its freezes", () => {
+  test("red: no reproduction, a passing one, and a failing one", () => {
     const none = run("red", { category: "code" });
     expect(none.code).toBe(0);
     expect(none.json).toEqual({ red: false, dir: runDir(), why: "no repro.sh" });
@@ -288,9 +380,21 @@ describe("line.cast station scripts", () => {
     fs.writeFileSync(path.join(runDir(), "repro.sh"), "echo 'expected 2, got 3'; exit 1\n");
     expect(run("red", { category: "code" }).json).toEqual({ red: true, dir: runDir(), why: "repro.sh fails" });
     expect(fs.readFileSync(path.join(runDir(), "red.log"), "utf-8")).toBe("expected 2, got 3\n");
-    expect(run("red", { category: "prompt" }).json.red).toBe(false);
+    expect(calls()).toEqual([]);
+  });
+
+  test("red for a prompt: the project's prove command shows the miss, run with the run's values; without one it passes with a note", () => {
+    const prove = { category: "prompt", "line.commands.prove": 'test -s "$run_dir/freezes.txt" || { echo "no freezes for $task_id"; exit 1; }' };
+    const missing = run("red", prove);
+    expect(missing.code).toBe(0);
+    expect(missing.json.red).toBe(false);
+    expect(missing.json.why).toBe("the prove command did not show the miss: no freezes for ct-1");
     fs.writeFileSync(path.join(runDir(), "freezes.txt"), "fz-1\n");
-    expect(run("red", { category: "prompt" }).json.red).toBe(true);
+    expect(run("red", prove).json).toEqual({ red: true, dir: runDir(), why: "the prove command shows the miss" });
+    expect(calls()).toEqual([]);
+    const none = run("red", { category: "prompt" });
+    expect(none.json).toEqual({ red: true, dir: runDir(), why: "no prove command; passed with a note" });
+    expect(calls()).toEqual([["task", "comment", "ct-1", "This project's line profile names no prove command, so the prove station passed without showing the miss.", "-t", "progress"]]);
   });
 
   test("green: writes proof.json red then green for the card, and fails while the reproduction still fails", () => {
@@ -299,7 +403,7 @@ describe("line.cast station scripts", () => {
     fs.writeFileSync(path.join(dir, "red.log"), 'expected "2", got 3\n');
     fs.writeFileSync(path.join(dir, "repro.name"), "sum adds two numbers\n");
     fs.writeFileSync(path.join(dir, "repro.sh"), "echo still broken; exit 1\n");
-    const ctx = { "red.json": JSON.stringify({ red: true, dir }) };
+    const ctx = {};
     expect(run("green", ctx).code).toBe(1);
     expect(proofSummary(JSON.parse(fs.readFileSync(path.join(dir, "proof.json"), "utf-8"))).stillRed).toEqual(["sum adds two numbers"]);
     fs.writeFileSync(path.join(dir, "repro.sh"), "echo ok; exit 0\n");
@@ -309,24 +413,44 @@ describe("line.cast station scripts", () => {
       before: [{ name: "sum adds two numbers", ok: false, detail: "expected 2, got 3" }],
       after: [{ name: "sum adds two numbers", ok: true, detail: "ok" }],
     });
-    expect(proofSummary(proof).label).toBe("1 of 1 check went red to green");
+    expect(proofSummary(proof)).toMatchObject({ red: 1, fixed: 1, stillRed: [], broke: [] });
   });
 
-  test("eval_scope names no surface in a repo without ./evals, and the touched ones when there is one", () => {
-    expect(run("eval_scope", {}).json).toEqual({ surfaces: "" });
-    fs.writeFileSync(path.join(repo, "evals"), '#!/bin/sh\n[ "$1 $2 $3 $4" = "stale --base main --list" ] && printf "title\\nsettle\\n"\n', { mode: 0o755 });
-    expect(run("eval_scope", {}).json).toEqual({ surfaces: "title settle" });
-    fs.writeFileSync(path.join(repo, "evals"), "#!/bin/sh\nexit 3\n", { mode: 0o755 });
-    expect(run("eval_scope", {}).code).toBe(1);
+  test("eval runs the project's eval command in the worktree, then cast line eval-result over the reps it wrote", () => {
+    const dir = runDir();
+    // A failing exit with reps written still goes to the verdict: the eval command does no statistics (LP4).
+    const evalCmd = { "line.commands.eval": 'pwd > "$run_dir/where"; echo "{}" > "$run_dir/reps.json"; exit 1' };
+    expect(run("eval", evalCmd).code).toBe(0);
+    expect(fs.realpathSync(fs.readFileSync(path.join(dir, "where"), "utf-8").trim())).toBe(fs.realpathSync(repo));
+    expect(calls()).toEqual([["line", "eval-result", "--reps", `${dir}/reps.json`, "--out", `${dir}/eval-result.json`]]);
   });
 
-  test("eval passes the miss freezes to ./evals line and writes the result into the run's files", () => {
+  test("eval fails when the command wrote no reps, never reading a stale file, and passes with a note when the project has none", () => {
     const dir = runDir();
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, "freezes.txt"), "fz-1\n\nfz-2\n");
-    fs.writeFileSync(path.join(repo, "evals"), `#!/bin/sh\nprintf '%s\\n' "$@" > "${tmp}/evals.args"\n`, { mode: 0o755 });
-    expect(run("eval", { "red.json": JSON.stringify({ dir }) }).code).toBe(0);
-    expect(fs.readFileSync(path.join(tmp, "evals.args"), "utf-8").trim().split("\n")).toEqual(["line", "--base", "main", "--out", `${dir}/eval-result.json`, "--freeze", "fz-1", "--freeze", "fz-2"]);
+    fs.writeFileSync(path.join(dir, "reps.json"), "{}\n");
+    const crashed = run("eval", { "line.commands.eval": "echo boom; exit 2" });
+    expect(crashed.code).toBe(1);
+    expect(crashed.out).toContain(`the eval command exited 2 and wrote no ${dir}/reps.json`);
+    expect(calls()).toEqual([]);
+    expect(run("eval", {}).code).toBe(0);
+    expect(calls()).toEqual([["task", "comment", "ct-1", "This project's line profile names no eval command, so the eval station passed without evals.", "-t", "progress"]]);
+  });
+
+  test("ship runs the project's ship command and puts the one line it prints on the task; without one the merge step lands it", () => {
+    const none = run("ship", {});
+    expect(none.code).toBe(0);
+    expect(none.out).toContain("no ship command");
+    expect(calls()).toEqual([]);
+    const ok = run("ship", { branch: "codecast/line-ct-1", run_id: "run_1", "line.commands.ship": 'echo "squashing" >&2; echo; echo "merged $branch for $task_id ($run_id); deploy pending"' });
+    expect(ok.code).toBe(0);
+    expect(ok.out).toContain("squashing");
+    const refused = run("ship", { "line.commands.ship": 'echo "not merged: no green eval gate"; exit 1' });
+    expect(refused.code).toBe(1);
+    expect(calls()).toEqual([
+      ["task", "comment", "ct-1", "Shipped: merged codecast/line-ct-1 for ct-1 (run_1); deploy pending", "-t", "progress"],
+      ["task", "comment", "ct-1", "Not shipped: not merged: no green eval gate", "-t", "blocker"],
+    ]);
   });
 
   test("park, drop, reopen, dissolve, watch and the card nodes call cast with the run's values", () => {
@@ -338,8 +462,8 @@ describe("line.cast station scripts", () => {
     run("dissolve", {});
     run("watch", {});
     const dir = "/run/cast-line";
-    expect(run("card_draft", { "red.json": JSON.stringify({ dir }) }).code).toBe(0);
-    run("card", { "red.json": JSON.stringify({ dir }), "card_write.json": JSON.stringify({ wrong: "Titles copy the greeting.", change: "Titles name the work.", recommend: "ship", why: "All checks are green." }) });
+    expect(run("card_draft", { run_dir: dir }).code).toBe(0);
+    run("card", { run_dir: dir, "card_write.json": JSON.stringify({ wrong: "Titles copy the greeting.", change: "Titles name the work.", recommend: "ship", why: "All checks are green." }) });
     expect(calls()).toEqual([
       ["task", "comment", "ct-1", "Parked at ground: readiness needs_context, goal in-3:activation. which account?", "-t", "blocker"],
       ["task", "comment", "ct-1", "Parked at ground: readiness ready, goal none. ", "-t", "progress"],
@@ -364,10 +488,9 @@ const offlineLine = (dir: string) => {
   const stub = (id: string, script: string) => { graph.nodes.get(id)!.script = script; };
   stub("red", `echo '{"red": true, "dir": "${dir}"}'`);
   stub("green", "true");
-  stub("eval_scope", `echo '{"surfaces": ""}'`);
   stub("eval", "true");
   stub("card_draft", `echo '{"card": {"wrong": ""}}'`);
-  for (const id of ["card", "merge", "watch", "park", "dissolve", "reopen", "drop"]) stub(id, "true");
+  for (const id of ["card", "ship", "merge", "watch", "park", "dissolve", "reopen", "drop"]) stub(id, "true");
   graph.nodes.get("verify")!.script = "true";
   return graph;
 };
@@ -467,7 +590,8 @@ describe("line.cast offline run through the session path", () => {
       expect(hand.worktree_name).toBe("line-ct-7");
       expect(typeof hand.device).toBe("string");
     }
-    expect(s[3].prompt).toContain(`${tmpDir}/repro.sh`);
+    // $run_dir is set by the runner before the first node, the same for every station.
+    expect(s[3].prompt).toContain(`${lineRunDir(tmpDir, "line-ct-7")}/repro.sh`);
     // The review station is the task's reviewer, never the running role's
     // hand: review_for_task instead of spawner_session (the-line.md L3).
     expect(s[4].review_for_task).toBe("ct-7");
@@ -482,9 +606,37 @@ describe("line.cast offline run through the session path", () => {
     expect(gate).toMatchObject({ node_id: "decide", prompt: "Ship this change? Add the thing", category: "review" });
     expect(gate.stack).toMatch(/^Line · infra-lead · \d{4}-\d{2}-\d{2}$/);
     expect(gate.doc_md).toBe("What is wrong: W.\n\nWhat this changes: C.\n\nRecommends ship: Y.");
-    expect(gate.choices.map((c: any) => [c.key, c.target])).toEqual([["S", "merge"], ["R", "reopen"], ["D", "drop"]]);
+    expect(gate.choices.map((c: any) => [c.key, c.target])).toEqual([["S", "ship"], ["R", "reopen"], ["D", "drop"]]);
     const ran = calls.filter((c) => c.route === "/cli/workflow-runs/progress" && c.body.node_status === "completed").map((c) => c.body.node_id);
-    expect(ran.slice(-3)).toEqual(["merge", "watch", "exit"]);
+    expect(ran.slice(-4)).toEqual(["ship", "merge", "watch", "exit"]);
+  }, 30000);
+
+  test("the runner loads the repo's profile once: a project with a ship command ships and watches without the merge step", async () => {
+    spawnSync("git", ["init", "-q", tmpDir]);
+    fs.mkdirSync(path.join(tmpDir, ".codecast"));
+    fs.writeFileSync(path.join(tmpDir, ".codecast", "line.toml"), UNION_PROFILE);
+    gateAnswers = ["S"];
+    const outcome = await runWorkflow(offlineLine(tmpDir), opts({ runId: "run_1" }));
+    expect(outcome).toBe("completed");
+    const s = spawns();
+    expect(s.find((x) => x.station === "implement")!.prompt).toContain("outreach/docs/line/principles.md");
+    const ran = calls.filter((c) => c.route === "/cli/workflow-runs/progress" && c.body.node_status === "completed").map((c) => c.body.node_id);
+    expect(ran.slice(-3)).toEqual(["ship", "watch", "exit"]);
+    expect(ran).not.toContain("merge");
+  }, 30000);
+
+  test("a malformed profile stops the run before any hand starts", async () => {
+    spawnSync("git", ["init", "-q", tmpDir]);
+    fs.mkdirSync(path.join(tmpDir, ".codecast"));
+    fs.writeFileSync(path.join(tmpDir, ".codecast", "line.toml"), "[line]\nsize_budjet = 400\n");
+    const origErr = console.error;
+    console.error = () => {};
+    try {
+      expect(await runWorkflow(offlineLine(tmpDir), opts())).toBe("invalid");
+    } finally {
+      console.error = origErr;
+    }
+    expect(spawns()).toEqual([]);
   }, 30000);
 
   test("a Revise note reaches the builder once, and no later hand sees it", async () => {

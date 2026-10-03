@@ -16,7 +16,8 @@ import { buildHomeMirror, mirrorHomeToHost, resetBuildCache, runMirrorTick, type
 // sends the wide set. Receiver N+1 is apply.ts as it is. Receiver N is the
 // same apply with the capability gone and the old prune: a project file the
 // bundle stopped carrying is deleted when its bytes are still the mirror's,
-// and reported as a conflict otherwise.
+// and reported as a conflict otherwise. Its --verify read reports no
+// capabilities, whatever stamp a newer receiver left on disk.
 
 type Receiver = "N" | "N+1";
 type Laptop = "N" | "N+1";
@@ -76,7 +77,12 @@ function harness(w: ReturnType<typeof world>) {
     writeLocalStamps: (next) => { stamps = next; },
     // Laptop N has no narrow rule: it carries the wide set whatever the host says.
     build: (opts) => buildHomeMirror({ ...opts, ...(state.laptop === "N" ? { narrowProjects: false } : {}), home: w.local, deviceId: "d", gitEnv: { GIT_CONFIG_GLOBAL: path.join(w.local, ".gitconfig"), GIT_CONFIG_NOSYSTEM: "1" } }),
-    readStamp: async () => verifyMirrorStamp(w.remote),
+    readStamp: async () => {
+      const stamp = verifyMirrorStamp(w.remote);
+      if (!stamp || state.receiver === "N+1") return stamp;
+      const { capabilities: _, ...older } = stamp;
+      return older;
+    },
     push: async (_host, bytes) => {
       const parsed = await parseMirrorBundle(bytes);
       carried.push({ laptop: state.laptop, receiver: state.receiver, paths: parsed.files.map((f) => f.path).filter((p) => p.startsWith(projectPrefix)).sort() });
@@ -120,7 +126,7 @@ function harness(w: ReturnType<typeof world>) {
     expect(deleted).toEqual([]);
     expect(lines(git(w.targetRoot, "ls-files", "--deleted"))).toEqual([]);
   };
-  return { state, carried, push, inStep, noTrackedLost, keepsTracked: () => !!stamps[`${w.host.user}@${w.host.address}`]?.keeps_tracked };
+  return { state, carried, deleted, push, inStep, noTrackedLost, keepsTracked: () => !!stamps[`${w.host.user}@${w.host.address}`]?.keeps_tracked };
 }
 
 test("laptop N+1 and host N: the laptop keeps the wide set, nothing tracked is deleted, and the two converge", async () => {
@@ -154,16 +160,17 @@ test("host upgraded N to N+1 under laptop N+1: the laptop narrows only after the
   const w = world();
   const h = harness(w);
   await h.push();
+  expect(h.keepsTracked()).toBe(false);
   h.state.receiver = "N+1";
   write(w.sourceRoot, "AGENTS.md", "project rules, revised\n");
   await h.push();
-  // The upgrade is learned from this push's reply, so this push was still wide.
-  expect(h.carried[1]!.paths).toEqual(h.carried[0]!.paths);
+  // The upgrade is learned from the --verify read just before this push, so this push is already narrow.
+  expect(h.carried[1]!.paths).not.toContain("work/app/docs/guide.md");
+  expect(h.carried[1]!.paths).toContain("work/app/AGENTS.md");
   expect(h.keepsTracked()).toBe(true);
   write(w.sourceRoot, "AGENTS.md", "project rules, third revision\n");
   await h.push();
-  expect(h.carried[2]!.paths).not.toContain("work/app/docs/guide.md");
-  expect(h.carried[2]!.paths).toContain("work/app/AGENTS.md");
+  expect(h.carried[2]!.paths).toEqual(h.carried[1]!.paths);
   h.noTrackedLost();
   // Released, not deleted: the laptop's edit stays on the host until the folder sync or a commit moves it.
   expect(read(w.targetRoot, "docs/guide.md")).toBe("guide, edited on the laptop\n");
@@ -177,22 +184,44 @@ test("host upgraded N to N+1 under laptop N+1: the laptop narrows only after the
   await h.inStep();
 }, 60_000);
 
-// Expected failure, filed as ct-56327 under ct-55689 (pl-810). The laptop
-// records keeps_tracked per user@address and keeps it forever (saveHostStamp),
-// and the host stamp it reads before building carries no receiver capability.
-// A host that runs receiver N again after the laptop learned keeps-tracked
-// (cast reinstalled from an older release, a VM rolled back, an instance
-// replaced at the same address) gets the narrow bundle while its stamp still
-// owns the tracked files the wide push wrote, and receiver N deletes them.
-test.failing("host back on N after the laptop learned keeps-tracked: the laptop must not narrow for it", async () => {
+// ct-56327 (under ct-55689, pl-810). A host that runs receiver N again after
+// the laptop learned keeps-tracked (cast reinstalled from an older release, a
+// VM rolled back, an instance replaced at the same address) still holds the
+// stamp the wide push wrote, which owns tracked files. The laptop decides the
+// bundle from the --verify read the installed receiver answers, not from what
+// an earlier receiver said, so it sends the wide set and receiver N deletes
+// nothing.
+test("host back on N after the laptop learned keeps-tracked: the laptop sends the wide set, nothing tracked is deleted, and the two converge", async () => {
   const w = world();
   const h = harness(w);
   h.state.receiver = "N+1";
   await h.push();
   expect(h.keepsTracked()).toBe(true);
+  write(w.sourceRoot, "AGENTS.md", "project rules, revised\n");
+  await h.push();
+  expect(h.carried[1]!.paths).not.toContain("work/app/docs/guide.md");
+  h.state.receiver = "N";
+  write(w.sourceRoot, "AGENTS.md", "project rules, third revision\n");
+  await h.push();
+  expect(h.carried[2]!.paths).toContain("work/app/docs/guide.md");
+  expect(h.carried[2]!.paths).toContain("work/app/README.md");
+  expect(h.keepsTracked()).toBe(false);
+  h.noTrackedLost();
+  expect(read(w.targetRoot, "README.md")).toBe("readme\n");
+  await h.inStep();
+}, 60_000);
+
+test("host back on N straight after a wide push: the laptop's last answer says keeps-tracked, the fresh read does not, and the wide set goes", async () => {
+  const w = world();
+  const h = harness(w);
+  h.state.receiver = "N+1";
+  await h.push();
+  expect(h.keepsTracked()).toBe(true);
+  expect(h.carried[0]!.paths).toContain("work/app/docs/guide.md");
   h.state.receiver = "N";
   write(w.sourceRoot, "AGENTS.md", "project rules, revised\n");
   await h.push();
+  expect(h.carried[1]!.paths).toContain("work/app/docs/guide.md");
   h.noTrackedLost();
   await h.inStep();
 }, 60_000);

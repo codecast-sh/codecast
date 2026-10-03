@@ -13,8 +13,16 @@
 // Routing reads the task as it is after every node: the ground fields
 // (goal_ref, category, risk, readiness), $handoff and $review_verdict, plus a
 // node's JSON output under $<node>.json.<path>. prove and implement share one
-// worktree and branch ($worktree, $branch: line-<task id>); red records the
-// run's files directory as $red.json.dir for every later station.
+// worktree and branch ($worktree, $branch: line-<task id>); $run_dir is the
+// run's files (proof, reps, the card), set by the runner before the first node.
+//
+// What differs per project is the repo's line profile (.codecast/line.toml,
+// docs/architecture/line-profile.md), loaded once per run: its commands
+// ($line.commands.check|prove|eval|ship), principles, prompting standard,
+// size budget and watch days. This file names no repository path and no tool
+// of any one project. A command the profile leaves out makes its station pass
+// with a note on the task saying the project has none; without a ship command
+// the merge step lands the change.
 //
 // Stations, in order:
 //   ground      ties the cause to a goal and rates it; anything not ready, or
@@ -24,19 +32,21 @@
 //   prove, red  the miss shown failing first; one that does not reproduce
 //               dissolves the cause with its evidence (LE8)
 //   implement, verify, green
-//               the change, the repo's checks, the reproduction now passing
-//   eval_scope, eval
-//               evals on both sides, when the cause is a prompt or the branch
-//               touches an eval surface
+//               the change, the project's check command, the reproduction
+//               now passing
+//   eval        the project's eval command (it picks what the branch owes),
+//               then `cast line eval-result` for the verdict (LP4)
 //   review      the independent reviewer (L3, LE9)
 //   card_draft, card_write, card
 //               the change card: assembled by code, three fields by a model,
 //               validated and published (LE10)
 //   decide      Ship, Revise or Drop on the card (LE11)
-//   merge       `cast line merge` (L12): lands the branch when the role may
-//               merge, else says in one line why it is left to a person; it
-//               never fails the run
-//   watch       the cause watched for a week after ship (LE12)
+//   ship        the project's ship command, when it has one: it lands the
+//               change its own way and says in one line what is true now
+//   merge       `cast line merge` (L12), when the project has no ship
+//               command: lands the branch when the role may merge, else says
+//               in one line why it is left to a person; it never fails the run
+//   watch       the cause watched for the profile's watch days after ship (LE12)
 digraph line {
   graph [goal="$task_title", stack="Line · $assignee · $run_date"]
   rankdir=LR
@@ -67,39 +77,39 @@ digraph line {
 
   verify [label="Verify", shape=parallelogram,
     timeout=1800,
-    script="cd \"$(cast ws path $worktree)\" && cast ws check"]
+    script="cd \"$(cast ws path $worktree)\" && bash -c $line.commands.check"]
 
   green [label="Green", shape=parallelogram, timeout=1800, script="@line/green.sh"]
-
-  eval_scope [label="Eval scope", shape=parallelogram, timeout=300, script="@line/eval_scope.sh"]
 
   eval [label="Eval", shape=parallelogram, timeout=3600, script="@line/eval.sh"]
 
   review [label="Review", backend=session, agent=claude, reviewer=true, prompt="@line/review.md"]
 
   card_draft [label="Card draft", shape=parallelogram, timeout=300,
-    script="cd \"$(cast ws path $worktree)\" || exit 1; cast card build --task $task_id --dir $red.json.dir --base $default_branch --json; exit 0"]
+    script="cd \"$(cast ws path $worktree)\" || exit 1; cast card build --task $task_id --dir $run_dir --base $default_branch --json; exit 0"]
 
   card_write [label="Card words", shape=tab, backend=session, agent=claude, max_visits=2, prompt="@line/card_write.md"]
 
   card [label="Card", shape=parallelogram, timeout=300,
-    script="cd \"$(cast ws path $worktree)\" && cast card build --task $task_id --dir $red.json.dir --base $default_branch --publish --wrong $card_write.json.wrong --change $card_write.json.change --recommend $card_write.json.recommend --why $card_write.json.why"]
+    script="cd \"$(cast ws path $worktree)\" && cast card build --task $task_id --dir $run_dir --base $default_branch --publish --wrong $card_write.json.wrong --change $card_write.json.change --recommend $card_write.json.recommend --why $card_write.json.why"]
 
   decide [label="Decide", shape=hexagon, category=review,
     prompt="Ship this change? $task_title",
     doc="What is wrong: $card_write.json.wrong\n\nWhat this changes: $card_write.json.change\n\nRecommends $card_write.json.recommend: $card_write.json.why",
-    card="$red.json.dir/card.json"]
+    card="$run_dir/card.json"]
 
   reopen [label="Reopen", shape=parallelogram, script="cast task update $task_id -s in_progress"]
 
   drop [label="Drop", shape=parallelogram,
     script="note=$human_message; cast task drop $task_id -m \"Dropped at the gate.${note:+ $note}\""]
 
+  ship [label="Ship", shape=parallelogram, timeout=3600, script="@line/ship.sh"]
+
   merge [label="Merge", shape=parallelogram,
     timeout=600,
     script="cast line merge --run $run_id --branch $branch --into $default_branch --cwd $project_path"]
 
-  watch [label="Watch", shape=parallelogram, script="cast task update $task_id --watch-days 7"]
+  watch [label="Watch", shape=parallelogram, script="cast task update $task_id --watch-days $line.watch_days"]
 
   start -> ground
   ground -> park    [condition="readiness != ready or goal_ref = none or not goal_ref"]
@@ -121,12 +131,10 @@ digraph line {
 
   implement -> verify    [condition="handoff = done"]
   verify -> green        [condition="outcome = success and category != prompt"]
-  verify -> eval_scope   [condition="outcome = success and category = prompt"]
+  verify -> eval         [condition="outcome = success and category = prompt"]
   verify -> implement    [condition="outcome = failure", label="checks failed"]
-  green -> eval_scope    [condition="outcome = success"]
+  green -> eval          [condition="outcome = success"]
   green -> implement     [condition="outcome = failure", label="still red"]
-  eval_scope -> eval     [condition="outcome = failure or category = prompt or eval_scope.json.surfaces"]
-  eval_scope -> review   [condition="outcome = success and category != prompt and not eval_scope.json.surfaces"]
   eval -> review         [condition="outcome = success"]
   eval -> implement      [condition="outcome = failure", label="eval failed"]
 
@@ -139,12 +147,15 @@ digraph line {
   card -> decide     [condition="outcome = success"]
   card -> card_write [condition="outcome = failure", label="card refused"]
 
-  decide -> merge  [label="[S] Ship :: Merge the branch, then watch the cause for a week"]
+  decide -> ship   [label="[S] Ship :: Land the change, then watch the cause"]
   decide -> reopen [label="[R] Revise :: Your note goes back to the builder"]
   decide -> drop   [label="[D] Drop :: Close the cause with your reason"]
   reopen -> implement
   drop -> exit
 
+  ship -> merge  [condition="outcome = success and not line.commands.ship"]
+  ship -> watch  [condition="outcome = success and line.commands.ship"]
+  ship -> exit   [condition="outcome = failure", label="not shipped"]
   merge -> watch
   watch -> exit
 }

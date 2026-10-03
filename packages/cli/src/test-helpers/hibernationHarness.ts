@@ -58,7 +58,7 @@ export function createHibernationHarness() {
     "resumeSessionCache", "lastSentAgentStatus", "lastResumeAt", "lastHeartbeatLogged", "subagentActivityByParent",
     "sessionProcessCache", "resumeInFlight", "resumeInFlightStarted", "lastWorkingStatusSent", "turnStartedAt",
     "lastAgentStatusSentAt", "turnCompletedAtBySession",
-    "pendingOpenTaskReports", "lastOpenTasksSentAt", "lastOpenTasksSentJson", "tmuxTargetLocks",
+    "pendingOpenTaskReports", "lastOpenTasksSentJson", "tmuxTargetLocks",
     "hibernationInFlight", "hibernationEvidenceJobs", "hibernationRefusedAt", "expectedHibernationExits", "pendingHibernationStamps", "hibernationStampCleared", "lastTargetRefusal",
   ].map((name) => `const ${name} = new Map();`).join("\n");
   const sets = ["managedHeartbeatSessions", "hibernatedSessions", "restartingSessionIds"]

@@ -1,27 +1,38 @@
 // `cast goals`: the workspace's goals as one document the ground node reads
 // (docs/architecture/the-line-end-to-end.md LE5), and the ground fields
 // `cast task update` writes back. The rows come from /cli/goals/brief
-// (convex/goals.ts); the rendering is shared/contracts/goalsBrief.
+// (convex/goals.ts); the rendering is shared/contracts/goalsBrief. With a
+// project (--project, else the repo profile's `[line] project`) the brief is
+// that project's charter and the initiatives that carry it (line-profile.md
+// LP1). Principles are docs/principles.md plus the profile's own files (LP5).
 //
-//   cast goals [--brief] [--json] [--team <name|id|personal>]
+//   cast goals [--brief] [--json] [--project <ref>] [--team <name|id|personal>]
 import fs from "node:fs";
 import path from "node:path";
 import type { Command } from "commander";
 import { renderGoalsBrief, type GoalsBrief } from "@codecast/shared/contracts/goalsBrief";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { commandGroup } from "./commandGroups.js";
-import { scopeFor } from "./signalCommand.js";
+import { lineDefaults, scopeFor } from "./signalCommand.js";
+import { loadLineProfile } from "./lineProfile.js";
 
 export const PRINCIPLES_PATH = "docs/principles.md";
 
-/** docs/principles.md at the repository root, or null when the repo has none. */
-export function readPrinciples(root: string | null): string | null {
+/**
+ * docs/principles.md at the repository root and each of the profile's
+ * principles files (paths relative to the root), the ones that exist, in that
+ * order; null when none does.
+ */
+export function readPrinciples(root: string | null, paths: string[] = []): string | null {
   if (!root) return null;
-  try {
-    return fs.readFileSync(path.join(root, PRINCIPLES_PATH), "utf8");
-  } catch {
-    return null;
-  }
+  const texts = [...new Set([PRINCIPLES_PATH, ...paths])].flatMap((rel) => {
+    try {
+      return [fs.readFileSync(path.join(root, rel), "utf8")];
+    } catch {
+      return [];
+    }
+  });
+  return texts.length ? texts.join("\n") : null;
 }
 
 export function registerGoalsCommand(program: Command, deps: PublishDeps): void {
@@ -30,13 +41,15 @@ export function registerGoalsCommand(program: Command, deps: PublishDeps): void 
     .description(commandGroup("goals").description)
     .option("--brief", "The compact shape a prompt reads: no descriptions")
     .option("--json", "The raw rows and the principles text")
-    .option("--team <name|id|personal>", "Workspace to read (default: the session's team, else the directory's mapping)")
-    .action(async (options: { brief?: boolean; json?: boolean; team?: string }) => {
+    .option("--project <ref>", "One project's charter and the initiatives carrying it: id, short id or title (default: the repo profile's [line] project, else the whole workspace)")
+    .option("--team <name|id|personal>", "Workspace to read (default: the repo profile's [line] team, else the session's team, else the directory's mapping)")
+    .action(async (options: { brief?: boolean; json?: boolean; project?: string; team?: string }) => {
       const cwd = process.env.CODECAST_CWD || process.cwd();
-      const scope = await scopeFor(deps, options.team, false);
+      const scope = await scopeFor(deps, options.team, false, options.project || lineDefaults().project);
       const data: GoalsBrief = await apiPost(deps, "/cli/goals/brief", scope, { read: true });
       const { repoRootOf } = await import("./reviewCommand.js");
-      const principles = readPrinciples(repoRootOf(cwd));
+      const root = repoRootOf(cwd);
+      const principles = readPrinciples(root, root ? loadLineProfile(cwd).profile.principles : []);
       if (options.json) {
         console.log(JSON.stringify({ ...data, principles }, null, 2));
         return;

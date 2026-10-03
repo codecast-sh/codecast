@@ -52,10 +52,11 @@ describe("evalCondition: every condition the shipped workflows use", () => {
     ["outcome = success and category != prompt", { outcome: "success", category: "prompt" }, false],
     ["outcome = success and category = prompt", { outcome: "success", category: "prompt" }, true],
     ["outcome = success and category = prompt", { outcome: "failure", category: "prompt" }, false],
-    ["outcome = failure or category = prompt or eval_scope.json.surfaces", { outcome: "success", category: "code", "eval_scope.json": '{"surfaces":"title"}' }, true],
-    ["outcome = failure or category = prompt or eval_scope.json.surfaces", { outcome: "success", category: "code", "eval_scope.json": '{"surfaces":""}' }, false],
-    ["outcome = success and category != prompt and not eval_scope.json.surfaces", { outcome: "success", category: "code", "eval_scope.json": '{"surfaces":""}' }, true],
-    ["outcome = success and category != prompt and not eval_scope.json.surfaces", { outcome: "success", category: "code", "eval_scope.json": '{"surfaces":"title"}' }, false],
+    // A profile command is a direct context key; absent from the profile it is empty.
+    ["outcome = success and not line.commands.ship", { outcome: "success", "line.commands.ship": "" }, true],
+    ["outcome = success and not line.commands.ship", { outcome: "success", "line.commands.ship": "bun ship.ts" }, false],
+    ["outcome = success and line.commands.ship", { outcome: "success", "line.commands.ship": "bun ship.ts" }, true],
+    ["outcome = success and line.commands.ship", { outcome: "success", "line.commands.ship": "" }, false],
   ];
   for (const [cond, ctx, want] of cases) {
     test(`${cond} with ${JSON.stringify(ctx)} -> ${want}`, () => {

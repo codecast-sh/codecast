@@ -50,6 +50,7 @@ export function validTmuxRead(args: string[]): boolean {
 }
 const psShapes = new Set([
   JSON.stringify(["aux"]), JSON.stringify(["-axo", "pid=,ppid="]), JSON.stringify(["-axo", "pid=,ppid=,args="]),
+  JSON.stringify(["-eo", "pid=,ppid=,pcpu=,rss=,etime=,comm="]),
   JSON.stringify(["-eo", "pid=,ppid=,pcpu=,rss=,etime="]), JSON.stringify(["-axww", "-o", "pid=,ppid=,uid=,command="]),
 ]);
 // An env entry the frame can carry: the kernel's rule, not C's. A key is any

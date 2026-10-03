@@ -34,11 +34,18 @@
 # to the real CLI, its output kept under live-reads/), HELP (the CLI's help text), UNKNOWN (a command the CLI does
 # not have, answered here and run nowhere), REFUSED (a write). The eval gates
 # read these marks.
+#
+# With DRY_RUN_CLASSIFY set, the guard only says what it would make of the
+# argv: it prints `read` or `write`, logs nothing and runs nothing. The eval
+# gates ask it this way, so a REFUSED line in an old calls.log is judged by
+# today's read list and a read once refused by mistake regrades on rescore.
 set -u
 LOG="${RUN_DIR:-$PWD}/calls.log"
 ARGV="$*"
-printf '%s\n' "$ARGV" >> "$LOG"
+CLASSIFY="${DRY_RUN_CLASSIFY:-}"
+[ -n "$CLASSIFY" ] || printf '%s\n' "$ARGV" >> "$LOG"
 SERVE="${DRY_RUN_SERVE_DIR:-}"
+[ -z "$CLASSIFY" ] || SERVE=""
 mark() { printf '%s %s\n' "$1" "$ARGV" >> "$LOG"; }
 
 serve_file() {
@@ -87,26 +94,36 @@ fi
 # subcommand after the parent's flags (`cast brief --team T edit -`), so a
 # write word is looked for anywhere, not only second.
 has_arg() { local w="$1" a; shift; for a in "$@"; do [ "$a" = "$w" ] && return 0; done; return 1; }
+# has_flag <flag> <argv...>: the flag appears bare or as --flag=value, the two
+# spellings Commander accepts, and any longer flag it begins (--resolve-all).
+has_flag() { local f="$1" a; shift; for a in "$@"; do [[ "$a" == "$f"* ]] && return 0; done; return 1; }
 is_read() {
   case "${1:-}" in
     task|project|plan|doc|initiative|trigger|anchor|role|org)
       case "${2:-}" in show|ls|context|wakes|grep|status|search|inputs|health|log|history|"") return 0 ;; esac
+      # `plan replay` prints a plan's history; no other group has the verb.
+      [ "${1:-}" = plan ] && [ "${2:-}" = replay ] && return 0
       [ "${1:-}" = org ] && [ "${2:-}" = review ] && ! has_arg --spawn "$@" ;;
     # `brief edit` writes a role's narrative and pins its standing session's state.
     brief) ! has_arg edit "$@" ;;
     # `call hold` changes a live huddle's delivery; `call snap` uploads frames.
     call) ! has_arg hold "$@" && ! has_arg snap "$@" ;;
-    read|link|search|feed|sessions|diff|summary|calls) return 0 ;;
+    read|link|search|feed|sessions|diff|summary|calls|goals) return 0 ;;
+    # A published page's reads; comments --resolve, set, rollback and rm write.
+    publish) case "${2:-}" in ls|versions|viewers|links) return 0 ;; comments) ! has_flag --resolve "$@" ;; *) return 1 ;; esac ;;
     # A pull request's reads; comment, review, resolve, merge and close write.
     pr) case "${2:-}" in ls|show|events|threads) return 0 ;; *) return 1 ;; esac ;;
     # Team chat's reads; marking read is its own verb (/cli/chat/mark-read).
     chat) case "${2:-}" in read|thread|channels|ls|search) return 0 ;; *) return 1 ;; esac ;;
     # Only show and ls: a bare `cast decide "<question>"` posts a decision.
     decide) case "${2:-}" in show|ls) return 0 ;; *) return 1 ;; esac ;;
+    # A decision stack's reads; create, add, remove, reorder, policy and delegate write.
+    stack) case "${2:-}" in show|ls|list) return 0 ;; *) return 1 ;; esac ;;
     state) [ "${2:-}" = show ] ;;
     *) return 1 ;;
   esac
 }
+if [ -n "$CLASSIFY" ]; then if is_read "$@"; then echo read; else echo write; fi; exit 0; fi
 frozen() {
   [ -n "$SERVE" ] && [ -f "$SERVE/frozen" ] || return 1
   grep -qxF -- '*' "$SERVE/frozen" || grep -qxF -- "${1:-}" "$SERVE/frozen" || grep -qxF -- "${1:-} ${2:-}" "$SERVE/frozen"

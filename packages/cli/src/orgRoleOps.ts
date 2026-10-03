@@ -5,10 +5,14 @@
 import type { Command } from "commander";
 import type { OrgInitDeps } from "./orgInit.js";
 import { readStdinBody } from "./sendBody.js";
+import { registerLineProfileCommands } from "./lineProfileCommand.js";
+import type { PublishDeps } from "./castApi.js";
 
 export interface RoleOpsDeps extends OrgInitDeps {
   /** @handle, or-N or a raw id to a role id, exiting with a message when it is a person. */
   resolveRoleId: (ref: string, team?: string) => Promise<string>;
+  /** The signal door's deps: `cast line profile --publish` scopes its write the way `cast signal add` does. */
+  publishDeps: PublishDeps;
 }
 
 /** `--into 'handle|Name|ref,ref'`: the handle, the display name and the
@@ -98,4 +102,7 @@ export function registerOrgRoleOpsCommands(program: Command, deps: RoleOpsDeps):
       const result = await runMergeStep({ cwd, run_id: options.run, branch: options.branch, into, post: deps.cliPost, log: (l) => { if (!options.json) console.log(l); } });
       if (options.json) console.log(JSON.stringify(result, null, 2));
     });
+
+  // The repo's line profile and the eval station's builder (line-profile.md LP2, LP4).
+  registerLineProfileCommands(line, deps.publishDeps);
 }

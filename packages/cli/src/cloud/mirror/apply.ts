@@ -50,6 +50,14 @@ export interface MirrorStamp {
   mcp_overrides_hash?: string;
   /** The project roots the last bundle named: a root a later bundle leaves out is released, never pruned. */
   project_roots?: string[];
+  /**
+   * What the receiver that answered a --verify read can do (see
+   * ApplyResult.capabilities). Reported by the binary installed on the host at
+   * read time, never stored in mirror.json: a host reinstalled with an older
+   * cast keeps the newer receiver's stamp on disk, and only the running
+   * binary can say what it will do with the next bundle.
+   */
+  capabilities?: string[];
 }
 
 export type RefusedReason = "other_user" | "unprovisioned" | "other_device" | "other_home";
@@ -515,7 +523,7 @@ export function verifyMirrorStamp(home: string): MirrorStamp | null {
       complete = false;
     }
   }
-  return { ...stamp, hash: complete ? stamp.hash : "", complete };
+  return { ...stamp, hash: complete ? stamp.hash : "", complete, capabilities: [...MIRROR_RECEIVER_CAPABILITIES] };
 }
 
 /** After a prune: drop directories the removal emptied, up to (not including) the managed root. */

@@ -8,7 +8,9 @@ import { readCardFile } from "../cardFile.js";
 import { spawnSync } from "../proc.js";
 import { applyUnattended } from "../unattended.js";
 import { deviceId } from "../remote/device.js";
+import { LineProfileError, lineCommandEnv, lineProfileVars, loadLineProfile } from "../lineProfile.js";
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 import * as readline from "readline";
 import { c } from "../colors.js";
@@ -95,6 +97,9 @@ async function executeCommand(
   try {
     const result = spawnSync("bash", ["-c", script], {
       cwd,
+      // A project's line command (line-profile.md LP2) names run values
+      // ($run_dir, $task_id, ...) that its own shell expands.
+      env: { ...process.env, ...lineCommandEnv(context) },
       stdio: ["pipe", "pipe", "pipe"],
       encoding: "utf-8",
       // A repo's check command (the line's verify station) outruns the old
@@ -365,8 +370,7 @@ async function executeSessionNode(
   if (node.isolated) {
     // Deterministic: a second visit re-attaches to the same worktree and
     // branch, so the last round's work is what gets fixed, not redone.
-    const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-    worktreeName = `${slug(graph.name)}-${slug(context["task_id"] || `${node.id}-${Date.now().toString(36)}`)}`;
+    worktreeName = runSlug(graph, context, node.id);
     context["worktree"] = worktreeName;
     context["branch"] = `codecast/${worktreeName}`;
   }
@@ -879,6 +883,29 @@ async function loadPlanContext(options: RunOptions, context: Record<string, stri
 }
 
 // The repo's default branch, for prompts that diff a hand's branch against it.
+// One name per graph and task: the isolated hand's worktree (and branch) and
+// the run's files directory share it, so a second visit or a later run on the
+// same task finds the same worktree and the same files.
+const slugPart = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+function runSlug(graph: WorkflowGraph, context: Record<string, string>, fallback: string): string {
+  return `${slugPart(graph.name)}-${slugPart(context["task_id"] || `${fallback}-${Date.now().toString(36)}`)}`;
+}
+
+/**
+ * `$run_dir` (line-profile.md LP4): the run's files (proof, reps, the card),
+ * inside the repository's own git directory so nothing there is ever
+ * committed, and known from the first node, so every station and every
+ * project command names the same place. Outside a repository it lives under
+ * the temp directory.
+ */
+export function lineRunDir(cwd: string, slug: string): string {
+  try {
+    const r = spawnSync("git", ["-C", cwd, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
+    if (r.status === 0 && r.stdout.trim()) return path.join(r.stdout.trim(), "cast-line", slug);
+  } catch {}
+  return path.join(os.tmpdir(), "cast-line", slug);
+}
+
 function detectDefaultBranch(cwd: string): string {
   try {
     const r = spawnSync("git", ["-C", cwd, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
@@ -1062,6 +1089,18 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
     initialContext["plan_id"] = options.planId;
     await loadPlanContext(options, initialContext);
   }
+
+  // The repo's line profile, read once per run (line-profile.md LP2): every
+  // value as $line.<key>, so a shipped template names no path or tool of its
+  // own. A malformed profile stops the run rather than standing in defaults.
+  try {
+    Object.assign(initialContext, lineProfileVars(loadLineProfile(cwd).profile));
+  } catch (err) {
+    if (!(err instanceof LineProfileError)) throw err;
+    console.error(`${c.red}✗ ${err.message}${c.reset}`);
+    return "invalid";
+  }
+  initialContext["run_dir"] = lineRunDir(cwd, runSlug(graph, initialContext, "run"));
 
   // Expand $variables in the graph goal
   if (graph.goal) {

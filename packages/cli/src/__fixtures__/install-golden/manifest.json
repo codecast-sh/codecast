@@ -67,7 +67,7 @@
   "visual": {
     "config": {
       "visual_enabled": true,
-      "visual_version": "6"
+      "visual_version": "7"
     },
     "stdout": "* Visual Canvas — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
@@ -106,7 +106,7 @@
   "calls": {
     "config": {
       "calls_enabled": true,
-      "calls_version": "4"
+      "calls_version": "5"
     },
     "stdout": "* Calls — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,

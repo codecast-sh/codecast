@@ -1,13 +1,18 @@
-# The eval station (LE8): every surface the branch touches, replayed on the
-# base and on the branch. The miss freezes prove named must fail on the base
-# and pass on the branch; eval-result.json lands in the run's files for the
-# card.
+# The eval station (LE8, line-profile.md LP4): the project's eval command
+# writes $run_dir/reps.json (it picks the surfaces the branch owes and runs
+# them on the base and on the branch); `cast line eval-result` turns the reps
+# into eval-result.json for the card, and its exit code is the station's.
 cd "$(cast ws path $worktree)" || exit 1
-dir=$red.json.dir
-set --
-if [ -s "$dir/freezes.txt" ]; then
-  while read -r freeze; do
-    [ -n "$freeze" ] && set -- "$@" --freeze "$freeze"
-  done < "$dir/freezes.txt"
+dir=$run_dir
+cmd=$line.commands.eval
+if [ -z "$cmd" ]; then
+  cast task comment $task_id "This project's line profile names no eval command, so the eval station passed without evals." -t progress
+  echo "no eval command: passed with a note"
+  exit 0
 fi
-./evals line --base $default_branch --out "$dir/eval-result.json" "$@"
+mkdir -p "$dir"
+rm -f "$dir/reps.json"
+bash -c "$cmd"
+code=$?
+[ -s "$dir/reps.json" ] || { echo "the eval command exited $code and wrote no $dir/reps.json"; exit 1; }
+cast line eval-result --reps "$dir/reps.json" --out "$dir/eval-result.json"
