@@ -1,0 +1,25 @@
+{
+  "name": "@platform/update-prompt",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "bin": {
+    "platform-release-prompt": "src/cli.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./build": "./src/build.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.2"
+  }
+}

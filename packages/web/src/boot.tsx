@@ -6,7 +6,7 @@ import { initGoogleAds } from "../lib/googleAds";
 import { armChunkReloadGuardReset, installStaleChunkReload } from "../lib/chunkReloadGuard";
 import { installIdleAnimationPause, isDesktop } from "../lib/desktop";
 import { hasStoredAuthToken } from "../lib/localAuth";
-import { createReloadWhenHidden } from "../lib/reloadWhenHidden";
+import { serviceWorkerHooks } from "@platform/update-prompt";
 import { App } from "./App";
 import "../store/inboxStore";
 import { stashSlackReturn } from "../lib/slackReturn";
@@ -105,30 +105,18 @@ idle(() => {
       registerSW({
         immediate: true,
         // Browsers only look for a new sw.js on navigation (or every 24h),
-        // and the desktop window stays open for days without navigating — a
-        // stale shell would pin users to old bundles across deploys. Poll so
-        // the new worker (skipWaiting+clientsClaim) takes over unprompted;
-        // any stale lazy-chunk fetch after the swap is healed by the chunk
-        // reload guard in ErrorBoundary. Fifteen minutes: a deploy reaches a
-        // window that never navigates within a quarter hour plus its next
-        // hide, instead of an hour plus.
-        onRegisteredSW(_url, reg) {
-          if (!reg) return;
-          setInterval(() => { reg.update().catch(() => {}); }, 15 * 60 * 1000);
-        },
-        // Without this, autoUpdate hard-reloads every open window the moment
-        // the new worker activates — visibly blinking whichever window the
-        // user is looking at (and resetting the palette popup mid-compose).
-        // Defer each window's reload until it is hidden; see the helper.
-        // A window that stays visible also gets lib/updatePrompt's card, but
-        // only for a release that asked for it or an update a day old.
-        onNeedReload: (() => {
-          const reloadWhenHidden = createReloadWhenHidden();
-          return () => {
-            reloadWhenHidden();
-            void import("../lib/updatePrompt").then((m) => m.noteUpdateWaiting()).catch(() => {});
-          };
-        })(),
+        // and the desktop window stays open for days without navigating, so
+        // the hooks poll for a new worker (skipWaiting+clientsClaim) every
+        // fifteen minutes; any stale lazy-chunk fetch after the swap is healed
+        // by the chunk reload guard in ErrorBoundary. They also replace
+        // autoUpdate's hard reload of every open window (which blinked
+        // whichever one the user was looking at, and reset the palette popup
+        // mid-compose) with a reload when the window is next hidden. A window
+        // that stays visible also gets lib/updatePrompt's card, but only for a
+        // release that asked for it or an update a day old.
+        ...serviceWorkerHooks(() => {
+          void import("../lib/updatePrompt").then((m) => m.noteUpdateWaiting()).catch(() => {});
+        }),
       })
     )
     .catch(() => {});

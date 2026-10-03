@@ -39,6 +39,7 @@
     "@platform/engine": "file:../../platform/packages/engine",
     "@platform/flags": "file:../../platform/packages/flags",
     "@platform/keys": "file:../../platform/packages/keys",
+    "@platform/update-prompt": "file:../../platform/packages/update-prompt",
     "@radix-ui/react-accordion": "^1.2.12",
     "@radix-ui/react-avatar": "^1.1.11",
     "@radix-ui/react-dialog": "^1.1.15",
