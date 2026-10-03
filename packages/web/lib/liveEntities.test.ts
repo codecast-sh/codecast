@@ -1,5 +1,5 @@
-import { describe, expect, it } from "bun:test";
-import { isForeignSession, findEntityInStore, derivePeople, feedActorId } from "./liveEntities";
+import { describe, expect, it, test } from "bun:test";
+import { isForeignSession, findEntityInStore, derivePeople, feedActorId, sessionOwnsTask, taskOwnerOf } from "./liveEntities";
 
 // Regression for "dismiss doesn't stick on a session assigned to me": the
 // resolver ignored the owner signals, so hideSessionInDraft treated an
@@ -160,5 +160,20 @@ describe("derivePeople", () => {
     expect(feedActorId(rows[0])).toBe(BOT);
     expect(feedActorId(rows[1])).toBe(HOST);
     expect(feedActorId({ user_id: "" })).toBeUndefined();
+  });
+});
+
+describe("a task's one owning session", () => {
+  const linked = [{ _id: "a", is_owner: true }, { _id: "b" }];
+
+  test("the live session row decides: its active_task names the task", () => {
+    const sessions = { a: { active_task: { _id: "other" } }, b: { active_task: { _id: "t1" } } };
+    expect(taskOwnerOf(linked, sessions, "t1")?._id).toBe("b");
+    expect(sessionOwnsTask(linked[0], sessions.a, "t1")).toBe(false);
+  });
+
+  test("the snapshot flag stands in only for a session the store does not hold", () => {
+    expect(taskOwnerOf(linked, {}, "t1")?._id).toBe("a");
+    expect(taskOwnerOf([{ _id: "b" }], {}, "t1")).toBeNull();
   });
 });
