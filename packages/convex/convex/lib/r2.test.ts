@@ -9,13 +9,14 @@ import {
   FRESH_URL_SECONDS,
   liveFrameKey,
   mediaBucketFromEnv,
+  PRIVATE_OBJECT_GET_PARAMS,
   r2FreshGetUrl,
   r2ListKeys,
   r2Presign,
   r2StableGetUrl,
   stableSigningWindow,
-  STABLE_URL_WINDOW_MS,
 } from "./r2";
+import { CALL_RECORDING_URL_WINDOW_MS as W } from "@codecast/shared/contracts";
 
 const bucket = { endpoint: "https://acct.r2.cloudflarestorage.com", accessKeyId: "k", secretAccessKey: "s", bucket: "codecast-call-recordings" };
 const ENV = ["R2_ENDPOINT", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET", "MEDIA_PUBLIC_BASE", "CALL_REC_R2_BUCKET", "CALL_REC_R2_ACCESS_KEY_ID", "CALL_REC_R2_SECRET_ACCESS_KEY"];
@@ -51,19 +52,33 @@ describe("presigned URLs", () => {
 
   test("a read URL is the same bytes all through its window, and new in the next", async () => {
     const t0 = Date.parse("2026-10-02T10:00:00Z");
-    const a = await r2StableGetUrl(bucket, "calls/t1/c1.mp4", t0 + 1_000);
-    const b = await r2StableGetUrl(bucket, "calls/t1/c1.mp4", t0 + STABLE_URL_WINDOW_MS - 1);
-    const c = await r2StableGetUrl(bucket, "calls/t1/c1.mp4", t0 + STABLE_URL_WINDOW_MS);
+    const a = await r2StableGetUrl(bucket, "calls/t1/c1.mp4", t0 + 1_000, W);
+    const b = await r2StableGetUrl(bucket, "calls/t1/c1.mp4", t0 + W - 1, W);
+    const c = await r2StableGetUrl(bucket, "calls/t1/c1.mp4", t0 + W, W);
     expect(a).toEqual(b);
     expect(c.url).not.toBe(a.url);
   });
 
+  test("a recording's read URL tells the browser not to keep it, signed in, and stable in its window", async () => {
+    const t0 = Date.parse("2026-10-02T10:00:00Z");
+    const a = await r2StableGetUrl(bucket, "calls/t1/c1.mp4", t0 + 1_000, W, PRIVATE_OBJECT_GET_PARAMS);
+    const b = await r2StableGetUrl(bucket, "calls/t1/c1.mp4", t0 + W - 1, W, PRIVATE_OBJECT_GET_PARAMS);
+    expect(a).toEqual(b);
+    const u = new URL(a.url);
+    expect(u.searchParams.get("response-cache-control")).toBe("private, no-store");
+    // Part of the signature: the same URL without it is a different signature.
+    const plain = new URL((await r2StableGetUrl(bucket, "calls/t1/c1.mp4", t0 + 1_000, W)).url);
+    expect(u.searchParams.get("X-Amz-Signature")).not.toBe(plain.searchParams.get("X-Amz-Signature"));
+    const fresh = new URL((await r2FreshGetUrl(bucket, "calls/t1/c1.mp4", t0, PRIVATE_OBJECT_GET_PARAMS)).url);
+    expect(fresh.searchParams.get("response-cache-control")).toBe("private, no-store");
+  });
+
   test("a URL handed out at the end of its window still lives a full window", () => {
-    const now = 10 * STABLE_URL_WINDOW_MS - 1;
-    const w = stableSigningWindow(now);
-    expect(w.signedAt.getTime()).toBe(9 * STABLE_URL_WINDOW_MS);
-    expect(w.expiresAt - now).toBeGreaterThanOrEqual(STABLE_URL_WINDOW_MS);
-    expect(w.expiresSeconds * 1000).toBe(2 * STABLE_URL_WINDOW_MS);
+    const now = 10 * W - 1;
+    const w = stableSigningWindow(now, W);
+    expect(w.signedAt.getTime()).toBe(9 * W);
+    expect(w.expiresAt - now).toBeGreaterThanOrEqual(W);
+    expect(w.expiresSeconds * 1000).toBe(2 * W);
   });
 });
 

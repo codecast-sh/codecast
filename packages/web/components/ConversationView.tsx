@@ -87,7 +87,7 @@ import { dropScrapedProseTwins } from "../lib/proseTwins";
 import { MessagePromptPreview } from "./MessagePromptPreview";
 import { ImageGalleryProvider, GalleryMessageScope, type GalleryImage } from "./ImageGallery";
 import { PlanBadge } from "./PlanTaskHoverCard";
-import { WorkUnitBar } from "./work/WorkUnitBar";
+import { TaskContextPanel } from "./work/TaskContextPanel";
 import { ContextRail } from "./ContextRail";
 import { EntityIdPill } from "./EntityIdPill";
 import { ThreadStatePanel } from "./ThreadStatePanel";
@@ -4321,11 +4321,12 @@ const ConversationViewInner = (
           </ErrorBoundary>
         )}
         {/* What this session belongs to, on one row: the task it owns (the
-            same bar the task page draws, so the two read as one unit of work),
-            then the trigger, plan and workflow strips in subHeaderContent. */}
+            task page carries this session the same way, so each face holds
+            the other), then the trigger, plan and workflow strips in
+            subHeaderContent. */}
         <ContextRail>
           {conversation && !guest && (conversation as any).active_task && (
-            <WorkUnitBar face="session" task={(conversation as any).active_task} session={conversation as any} />
+            <TaskContextPanel task={(conversation as any).active_task} sessionId={conversation._id.toString()} />
           )}
           {subHeaderContent}
         </ContextRail>
@@ -4421,6 +4422,7 @@ const ConversationViewInner = (
                   images={stickyImages}
                   messageId={activeStickyMsg.id && activeStickyMsg.id !== '__fallback__' ? activeStickyMsg.id : undefined}
                   variant="sticky"
+                  compactQuotes={!stickyExpanded}
                   textRef={stickyTextRef}
                   textClassName={`text-sm text-sol-text whitespace-pre-wrap ${stickyExpanded ? "max-h-[50vh] overflow-y-auto cursor-auto select-text" : "line-clamp-3"}`}
                   onTextClick={stickyExpanded ? (e) => e.stopPropagation() : undefined}

@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { mock } from "bun:test";
-import { getFunctionName } from "convex/server";
 
 process.exitCode = 1;
 const starts = [];
@@ -15,7 +14,13 @@ mock.module("react-native", () => ({
 mock.module("expo-router", () => ({ useRouter: () => ({ push: (route) => routes.push(route) }) }));
 mock.module("expo-haptics", () => ({ ImpactFeedbackStyle: { Medium: "medium" }, impactAsync: async () => {} }));
 mock.module("@expo/vector-icons", () => ({ Ionicons: "icon" }));
-mock.module("convex/react", () => ({ useQuery: (query) => getFunctionName(query) === "calls:getCallConfig" ? { enabled: true, teams: ["team"] } : { "channel:design": occupied ? [{}] : [] } }));
+// The button reads call config and live rooms off the store the sync bridge feeds.
+mock.module("@codecast/web/store/inboxStore", () => ({
+  useInboxStore: (select) => select({
+    callConfig: { enabled: true, teams: ["team"] },
+    liveRooms: occupied ? [{ room_key: "channel:design", members: [{}] }] : [],
+  }),
+}));
 mock.module("@/components/Themed", () => ({ Text: "span" }));
 mock.module("@/constants/Theme", () => ({ Theme: {}, useTheme: () => ({}), themedStyles: (fn) => fn({}) }));
 mock.module("@/lib/calls/callManager", () => ({ startHuddle: async (opts) => { starts.push(opts); }, joinCall: async (room) => { joins.push(room); } }));

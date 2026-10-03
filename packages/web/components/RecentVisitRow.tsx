@@ -1,5 +1,6 @@
 import { useMemo, type ReactNode } from "react";
-import { MessageSquare, Tag, Folder, FileText, ListTodo, Map as MapIcon, Search, Inbox, LayoutGrid, Hash, Lock, Rss, Globe, Workflow, Zap, FolderKanban, Flag, Newspaper } from "lucide-react";
+import { MessageSquare, Tag, Folder, FileText, ListTodo, Map as MapIcon, Search, Inbox, LayoutGrid, Hash, Lock, Rss, Globe, Workflow, Zap, FolderKanban, Flag, Newspaper, Radar } from "lucide-react";
+import { isOpsPath } from "./ops/opsPaths";
 import { useInboxStore } from "../store/inboxStore";
 import { visitTimeAgo, type ResolvedVisit } from "../lib/recentVisits";
 import { getLabelColor } from "../lib/labelColors";
@@ -31,6 +32,7 @@ export function PageIcon({ path, className }: { path: string; className: string 
   if (path.startsWith("/projects")) return <FolderKanban className={className} />;
   if (path.startsWith("/workflows") || path.startsWith("/routines") || path === "/line") return <Workflow className={className} />;
   if (path.startsWith("/triggers") || path.startsWith("/schedules")) return <Zap className={className} />;
+  if (isOpsPath(path)) return <Radar className={className} />;
   return <LayoutGrid className={className} />;
 }
 

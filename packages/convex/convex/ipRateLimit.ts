@@ -29,6 +29,24 @@ export async function bumpWindow(
   max: number,
   windowMs: number,
 ): Promise<{ ok: boolean; retry_after_ms?: number }> {
+  const { granted, retry_after_ms } = await takeFromWindow(db, key, max, windowMs, 1);
+  return granted ? { ok: true } : { ok: false, retry_after_ms };
+}
+
+/**
+ * Up to `n` units from the key's window in one write: how many it granted
+ * (0 to n). For a mutation that spends many units of one budget at once (the
+ * new groups a batch opens), where bumping one at a time would rewrite the
+ * counter row once per unit.
+ */
+export async function takeFromWindow(
+  db: any,
+  key: string,
+  max: number,
+  windowMs: number,
+  n: number,
+): Promise<{ granted: number; retry_after_ms?: number }> {
+  if (n <= 0) return { granted: 0 };
   const now = Date.now();
   const existing = await db
     .query("ip_rate_limits")
@@ -37,19 +55,33 @@ export async function bumpWindow(
 
   // New key, or the previous window fully elapsed → start a fresh window.
   if (!existing || now - existing.window_start >= windowMs) {
+    const granted = Math.min(n, max);
     if (existing) {
-      await db.patch(existing._id, { count: 1, window_start: now });
+      await db.patch(existing._id, { count: granted, window_start: now });
     } else {
-      await db.insert("ip_rate_limits", { key, count: 1, window_start: now });
+      await db.insert("ip_rate_limits", { key, count: granted, window_start: now });
     }
-    return { ok: true };
+    return granted < n ? { granted, retry_after_ms: windowMs } : { granted };
   }
 
-  if (existing.count >= max) {
-    return { ok: false, retry_after_ms: windowMs - (now - existing.window_start) };
-  }
-  await db.patch(existing._id, { count: existing.count + 1 });
-  return { ok: true };
+  const granted = Math.max(0, Math.min(n, max - existing.count));
+  if (granted) await db.patch(existing._id, { count: existing.count + granted });
+  return granted < n ? { granted, retry_after_ms: windowMs - (now - existing.window_start) } : { granted };
+}
+
+/**
+ * Whether the key's window is spent, without spending from it: the wait until
+ * it has room, or null while it does. For a read that must refuse a caller
+ * before doing the work the window counts (a query cannot write the counter).
+ */
+export async function windowSpent(db: any, key: string, max: number, windowMs: number): Promise<number | null> {
+  const now = Date.now();
+  const existing = await db
+    .query("ip_rate_limits")
+    .withIndex("by_key", (q: any) => q.eq("key", key))
+    .first();
+  if (!existing || now - existing.window_start >= windowMs || existing.count < max) return null;
+  return windowMs - (now - existing.window_start);
 }
 
 export const bump = internalMutation({

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   CALL_FRAME_PREFER,
   coveredSpans,
+  describeSpans,
   isRecordingActive,
   playableFiles,
   recordingSubject,
@@ -98,7 +99,7 @@ describe("locateCallMoment", () => {
     expect(miss).toEqual({
       ok: false,
       reason: "not_ready",
-      covered: [{ id: "c", fromMs: min(1), toMs: min(3), kind: "composite", pending: true, participant_name: null }],
+      covered: [{ id: "c", fromMs: min(1), toMs: min(3), kind: "composite", pending: true, participant_identity: null, participant_name: null }],
     });
     // After `now` the live file does not reach yet: that is outside, not pending.
     expect(locateCallMoment({ callStartedAt: T, atMs: min(4), recordings: live, now: T + min(3) })).toMatchObject({ reason: "outside" });
@@ -178,6 +179,18 @@ describe("a frame of a moment", () => {
     expect(recordingSubject({ kind: "screen", participant_name: " " })).toBe("a shared screen");
   });
 
+  test("a guest's screen is marked by identity, never by the name they typed", () => {
+    // The stored name carries the room's mark (guestDisplayName).
+    const riley = { kind: "screen" as const, participant_identity: "guest:g1", participant_name: "Riley Harness (guest)" };
+    expect(recordingSubject(riley, "label")).toBe("Riley's screen");
+    expect(recordingSubject(riley)).toBe("Riley Harness's screen (guest)");
+    // A guest who typed a teammate's name still reads as a guest.
+    const posing = { kind: "screen" as const, participant_identity: "guest:g2", participant_name: "Ashot (guest)" };
+    expect(recordingSubject(posing)).toBe("Ashot's screen (guest)");
+    expect(recordingSubject({ kind: "screen", participant_identity: "guest:g3", participant_name: null })).toBe("a guest's shared screen");
+    expect(recordingSubject({ kind: "screen", participant_identity: "guest:g3", participant_name: null }, "label")).toBe("Screen");
+  });
+
   test("covered spans: in call time, the room first, pending marked, failed left out", () => {
     const rows = [
       ...runs,
@@ -192,6 +205,10 @@ describe("a frame of a moment", () => {
       ["c2", min(10), min(12), false],
       ["s2", min(10) + 500, min(12), false],
     ]);
+    // A span keeps whose screen it is, so its words can mark a guest's.
+    const s2 = spans.find((x) => x.id === "s2")!;
+    expect(s2.participant_identity).toBe("guest:g1");
+    expect(describeSpans([s2])).toBe("10:00-12:00 Ben's screen (guest)");
   });
 });
 

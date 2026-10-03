@@ -91,6 +91,15 @@ describe("sim window slots", () => {
     WALK_TIMEOUT,
   );
 
+  // createWindowStore routes a store's creation draws onto its own stream;
+  // a store built any other way while a realm runs draws from whatever stream is current.
+  test("only realm.ts builds a store directly; every sim window goes through createWindowStore", () => {
+    const direct = simRoots(SIM)
+      .filter((f) => relative(SIM, f) !== "realm.ts" && /\b__createInboxStoreForTests\s*\(/.test(readFileSync(f, "utf8")))
+      .map((f) => relative(WEB, f));
+    expect(direct, "build sim window stores with createWindowStore(name) from sim/realm.ts").toEqual([]);
+  });
+
   test("the extractor sees the shapes it is meant to", () => {
     const src = [
       "let a = 0;",

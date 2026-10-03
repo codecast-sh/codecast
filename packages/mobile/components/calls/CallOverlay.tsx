@@ -6,6 +6,7 @@ import * as Haptics from "expo-haptics";
 import { Ionicons } from "@expo/vector-icons";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
+import { useInboxStore } from "@codecast/web/store/inboxStore";
 import { Text } from "@/components/Themed";
 import { Theme, SolarizedLight, TAB_BAR_HEIGHT, themedStyles, useTheme } from "@/constants/Theme";
 import { CALL_PUSH_TYPE_RING } from "@codecast/shared/contracts";
@@ -162,8 +163,7 @@ export function CallOverlay() {
   // Manual "busy" is the closed door — same rule as web's useCallRing and the
   // server's ring push: the banner still shows (a silent, dismissable card),
   // but no sound and no haptic.
-  const me = useQuery(api.users.getCurrentUser, isAuthenticated ? {} : "skip");
-  const quiet = (me as any)?.status === "busy";
+  const quiet = useInboxStore((s) => (s.currentUser as any)?.status === "busy");
   // A call that owns the audio session silences the ring (see ringtone.ts).
   const callOwnsAudio = call.phase === "connecting" || call.phase === "connected";
 

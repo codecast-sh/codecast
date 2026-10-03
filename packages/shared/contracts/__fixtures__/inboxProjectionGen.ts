@@ -2,29 +2,18 @@
 // (docs/architecture/sync-convergence.md, "Validation plan"). One seeded
 // generator feeds three suites: the shared module's property tests, the
 // convex overlay determinism tests, and the web two-replica simulation. Pure
-// data, no runtime imports — the fixtures must load in the Convex runtime,
+// data, importing only pure modules: the fixtures must load in the Convex runtime,
 // bun and the browser bundle alike.
 
+import { makeRng, type Rng } from "../../random";
 import type { ProjectableInboxRow } from "../inboxProjection";
+
+// Every property run is replayable from its seed.
+export { makeRng, type Rng };
 
 export const GEN_MIN = 60_000;
 export const GEN_HOUR = 60 * GEN_MIN;
 export const GEN_DAY = 24 * GEN_HOUR;
-
-// mulberry32: a tiny deterministic PRNG so every property run is replayable
-// from its seed.
-export function makeRng(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-export type Rng = () => number;
 
 export function pick<T>(rng: Rng, items: readonly T[]): T {
   return items[Math.floor(rng() * items.length)];

@@ -223,6 +223,16 @@ folded; Evidence (L6) grouped by station with page thumbnails; the run panel,
 whose gates render the decision card, never their own buttons. The task list
 shows a station or run chip.
 
+Run session. The run's primary session is its log, and it draws the run once:
+its stations with their state, duration and session, live from the run row,
+never one transcript row per node event. Each station's session is the run's
+worker, nested under that session and named for its node and task ("Prove ·
+ct-42"); it stays out of the inbox's top level. A station that declared done
+is retired once the run takes its answer. One that ended on a question stays
+up, and the run's failure path names it in the task's blocker comment, which
+is what reaches a person. A merge the line could not make is a blocker on the
+task too, naming the branch still to land.
+
 Decision page. Gate decisions show a run chip (workflow, node) and the node's
 inputs in the body; option pages render side by side (L6). The transcript
 card and the stepper carry `kind`, `form`, `body_md`, `cost`, `risk`,

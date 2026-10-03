@@ -47,6 +47,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../../store/inboxStore";
 import { huddleRoomOptions } from "./livekitMedia";
 import { readJoinPrefs } from "./joinPrefs";
+import { roomRecordingOn } from "./roomRecordingFields";
 
 type ConvexHandle = {
   mutation: (fn: any, args: any) => Promise<any>;
@@ -116,8 +117,17 @@ let idleTimer: ReturnType<typeof setTimeout> | null = null;
 // takes the audio out of a live conversation.
 let gen = 0;
 
+let unwatchRecording: (() => void) | null = null;
+
 export function bindPrewarmConvex(client: ConvexHandle) {
   convex = client;
+  // A room that starts recording while it is held warm is let go at once: a
+  // warm connection is a participant the room's video can draw, and this
+  // person never saw the notice everyone in a recorded room is shown.
+  unwatchRecording?.();
+  unwatchRecording = useInboxStore.subscribe((s: any) => {
+    if (warm && roomRecordingOn(s, warm.roomKey)) releasePrewarm();
+  });
 }
 
 function clearIdleTimer() {
@@ -161,6 +171,10 @@ export function prewarmAllowed(roomKey: string, state: any): boolean {
   // join sound for a person who never arrived.
   const seated = state.callOccupancy?.[roomKey];
   if (Array.isArray(seated) && seated.length > 0) return false;
+  // A room being recorded is never warmed: the connection is a participant
+  // its video may show, and recording is something everyone in the room is
+  // told about. Walking in, through the notice, is the way in.
+  if (roomRecordingOn(state, roomKey)) return false;
   return true;
 }
 

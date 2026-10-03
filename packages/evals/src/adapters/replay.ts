@@ -1,14 +1,15 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type { CheckResult, ConvoMessage, Freeze, GateResult, Replayer, ReplayOptions, RunSummary, Score } from '@platform/evals';
 import { summarizeRunFolder } from '@platform/evals/fs';
 
 import { runFolderName, writeRunFolder, type RunJson } from '../layout';
-import { GUARD_CAST, homePaths } from '../paths';
+import { GUARD_CAST, GUARD_STAMP, homePaths } from '../paths';
 import { diskSources, freezeSha, pinHead, type DiskSources } from '../provenance';
+import { loggedArgv } from '../served';
 import { loadSurface, surfaceMeta } from '../registry';
 import { addSpend, dirtySurfaces, gitHead, sourceHashes } from '../state';
 import { gate, type AgentResult, type CallResult, type ReplayCtx, type ReplayResult, type SurfaceMeta } from '../surface';
@@ -94,11 +95,44 @@ export function routeGates(meta: SurfaceMeta, result: Pick<ReplayResult, 'calls'
  * Whether today's guard takes a logged argv for a read. A REFUSED line records
  * the guard's verdict when the run happened, so a read it refused by mistake
  * (one its read list lacked then) regrades here on rescore instead of failing
- * no-unexpected-writes forever. The log keeps the argv space joined, which
- * keeps the command words and flags the read list looks at.
+ * no-unexpected-writes forever. Which guard graded a rep is part of its ruler
+ * (stampGuard), so a rep graded on an older read list is never weighed as if
+ * on today's.
  */
-const guardCallsRead = (argv: string): boolean =>
-  spawnSync('bash', [GUARD_CAST, ...argv.split(' ').filter(Boolean)], { env: { PATH: process.env.PATH ?? '/usr/bin:/bin', DRY_RUN_CLASSIFY: '1' }, encoding: 'utf8' }).stdout?.trim() === 'read';
+function guardCallsRead(line: string): boolean {
+  const r = spawnSync('bash', [GUARD_CAST, ...(loggedArgv(line) ?? line.split(' ').filter(Boolean))], { env: { PATH: process.env.PATH ?? '/usr/bin:/bin', DRY_RUN_CLASSIFY: '1' }, encoding: 'utf8' });
+  const verdict = r.stdout?.trim();
+  // A guard that never answered (a fork refused under load) has classified nothing: grading on as if it said "write" would zero a rep for no write.
+  if (verdict !== 'read' && verdict !== 'write') throw new Error(`the guard could not classify \`cast ${line}\`: ${r.error?.message ?? (r.stderr?.trim() || `exit ${r.status}`)}`);
+  return verdict === 'read';
+}
+
+const classifiers = new Map<string, string>();
+
+/**
+ * A hash of what the guard decides a write with: its read list (is_read and
+ * the helpers it calls), comments and blank lines left out, so only a change
+ * to what it classifies moves it. The whole file when those markers move.
+ */
+export function guardClassifierSha(path = GUARD_CAST): string {
+  const key = `${path}\x1f${statSync(path).mtimeMs}`;
+  const hit = classifiers.get(key);
+  if (hit) return hit;
+  const text = readFileSync(path, 'utf8');
+  const [from, to] = [text.search(/^has_arg\(\)/m), text.search(/^if \[ -n "\$CLASSIFY" \]/m)];
+  const body = from >= 0 && to > from ? text.slice(from, to) : text;
+  const lines = body.split('\n').filter((l) => l.trim() && !l.trim().startsWith('#'));
+  const sha = createHash('sha256').update(lines.join('\n')).digest('hex').slice(0, 12);
+  classifiers.set(key, sha);
+  return sha;
+}
+
+/** Records which guard graded an agent rep's refusals (GUARD_STAMP); its ruler reads it (runIndex.ts rulerAt). A call rep is graded by no guard. */
+export function stampGuard(dir: string, meta: Pick<SurfaceMeta, 'route'>): void {
+  if (meta.route !== 'agent') return;
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, GUARD_STAMP), `${guardClassifierSha()}\n`);
+}
 
 /** The pass rule: every gate held, no check under its floor, and the score at PASS_AT or over. */
 export const passesAt = (score: number, gatesFailed: number, missedFloors: number): boolean => gatesFailed === 0 && missedFloors === 0 && score >= PASS_AT;
@@ -120,8 +154,9 @@ export function scoreOf(gates: GateResult[], checks: CheckResult[], judge?: { co
   return { pass: passesAt(score, gatesPass ? 0 : 1, missedFloors.length), score, passMark: PASS_AT, gates, checks, missedFloors, judgeCostUsd: judge?.costUsd ?? null, judgeModel: judge?.model ?? null, scoredAt: new Date().toISOString() };
 }
 
-/** One hash over every prompt under test the rep sent (system and user per call, then each agent briefing and its follow-up turns); a grader's prompt is not one. */
-const promptShaOf = (calls: CallResult[], prompts: string[]): string | null => {
+/** One hash over every prompt under test the rep sent (system and user per call, then each agent briefing and its follow-up turns); a grader's prompt is not one. A surface that names its prompt (AgentOptions.promptSha) is taken at its word. */
+const promptShaOf = (calls: CallResult[], prompts: string[], named: string | null = null): string | null => {
+  if (named) return named;
   const parts = [...calls.filter((c) => !c.grader).map((c) => `${c.request.system ?? ''}\x1e${c.request.prompt}`), ...prompts];
   return parts.length ? createHash('sha256').update(parts.join('\x1d')).digest('hex') : null;
 };
@@ -142,7 +177,9 @@ export const sentFields = (calls: CallResult[], agents: AgentResult[]): Pick<Run
  * What every rep of one check shares: the spend so far, each lane's reps
  * still running (so parallel reps cannot all start under a budget they would
  * cross together), and why the check stopped, once it has. A lane is one
- * surface on one model.
+ * surface on one model. A rep in flight finishes whatever it costs, so the
+ * budget holds only as well as each running rep's reservation: the lane's
+ * costliest rep, not its average.
  */
 export interface RepLedger {
   usd: number;
@@ -156,19 +193,22 @@ export type StopCause = 'budget' | 'time' | 'stop-file';
 export interface LaneLedger {
   /** The estimate the check started with (state.ts perRepUsd). */
   est: number;
+  /** The costliest rep the lane has seen: the last real run's (state.ts perRepPeakUsd), raised by every rep this check finishes. */
+  peak?: number;
   running: number;
   done: number;
   doneUsd: number;
 }
 
 /**
- * What one more rep on a lane is expected to cost: the starting estimate, or
- * the average of the reps this check already finished there when that is
- * more. A history from another freeze mix can sit far under a lane's real
- * cost, and reps in flight finish past any stop, so the reservation follows
- * what the check is measuring.
+ * What one more rep on a lane may cost: the most of the starting estimate,
+ * the average of the reps this check already finished there, and the
+ * costliest rep the lane has seen. A history from another freeze mix can sit
+ * far under a lane's real cost, and reps in flight finish past any stop, so
+ * the reservation follows the dearest rep rather than the average: an opus
+ * org-review rep runs from $3 to $18.
  */
-export const laneRepUsd = (l: LaneLedger): number => Math.max(l.est, l.done ? l.doneUsd / l.done : 0);
+export const laneRepUsd = (l: LaneLedger): number => Math.max(l.est, l.done ? l.doneUsd / l.done : 0, l.peak ?? 0);
 
 /** What the reps still running are expected to add to the spend. */
 export const reservedUsd = (ledger: RepLedger): number => Object.values(ledger.lanes ?? {}).reduce((t, l) => t + l.running * laneRepUsd(l), 0);
@@ -184,6 +224,8 @@ export interface ReplayRunOptions extends ReplayOptions {
   spent?: RepLedger;
   /** The expected cost of one rep on this freeze's surface and model, for the budget stop (raised by what the check's finished reps cost; laneRepUsd). */
   estPerRep?: number;
+  /** The costliest recent rep on this surface and model (state.ts perRepPeakUsd): what a rep in flight is reserved at. */
+  peakPerRep?: number;
   /** Epoch ms after which no rep starts: a check bounds its own wall time, so a session that started it in the background cannot leave it running. */
   deadline?: number | null;
   /** No rep starts once this file exists: how a bisect, or anyone, cancels a running check between reps. */
@@ -286,13 +328,14 @@ export async function replayRep(p: PreparedFreeze, rep: number, reps: number, o:
   const startedAt = Date.now();
   const dir = join(root, runFolderName(meta.id, f.id, rep, startedAt));
   const base = { dir, freeze: f, scenario, rep, startedAt };
-  const lane = ((spent.lanes ??= {})[`${meta.id} ${model}`] ??= { est: o.estPerRep ?? 0, running: 0, done: 0, doneUsd: 0 });
-  const overBudget = o.budgetUsd != null && spent.usd + reservedUsd(spent) + laneRepUsd(lane) > o.budgetUsd;
+  const lane = ((spent.lanes ??= {})[`${meta.id} ${model}`] ??= { est: o.estPerRep ?? 0, peak: o.peakPerRep ?? 0, running: 0, done: 0, doneUsd: 0 });
+  const [reserved, next] = [reservedUsd(spent), laneRepUsd(lane)];
+  const overBudget = o.budgetUsd != null && spent.usd + reserved + next > o.budgetUsd;
   const overTime = o.deadline != null && startedAt >= o.deadline;
   const stopFile = Boolean(o.stopFile && existsSync(o.stopFile));
   if (overBudget || overTime || stopFile) {
     spent.stoppedBy = stopFile ? 'stop-file' : overTime ? 'time' : 'budget';
-    const why = stopFile ? `the stop file ${o.stopFile} exists` : overTime ? `the time limit (${new Date(o.deadline!).toISOString()}) has passed` : `the $${o.budgetUsd} budget is spent`;
+    const why = stopFile ? `the stop file ${o.stopFile} exists` : overTime ? `the time limit (${new Date(o.deadline!).toISOString()}) has passed` : `the $${o.budgetUsd} budget has no room for it: $${spent.usd.toFixed(2)} spent, $${reserved.toFixed(2)} held for reps running, $${next.toFixed(2)} for this one (the costliest rep its lane has seen)`;
     const error = stopFile ? `stopped by ${o.stopFile} after $${spent.usd.toFixed(4)}` : overTime ? `time limit reached after $${spent.usd.toFixed(4)}` : `budget $${o.budgetUsd} reached after $${spent.usd.toFixed(4)}`;
     writeRunFolder({ ...base, endedBecause: 'budget', error, run: { ...run, ...sentFields([], []), promptSha: null, judgeModel: null } });
     o.onLine?.(`stopped before ${scenario} rep ${rep}: ${why}`);
@@ -309,6 +352,7 @@ export async function replayRep(p: PreparedFreeze, rep: number, reps: number, o:
       const calls: CallResult[] = [];
       const agents: AgentResult[] = [];
       const prompts: string[] = [];
+      let named: string | null = null;
       const ctx: ReplayCtx = {
         dry: Boolean(o.dry),
         model,
@@ -324,6 +368,7 @@ export async function replayRep(p: PreparedFreeze, rep: number, reps: number, o:
         },
         async agent(opts) {
           prompts.push(opts.prompt, ...(opts.then ?? []));
+          named = opts.promptSha ?? named;
           const a = await runAgent({ ...opts, serveDir: opts.serveDir ?? loaded.dir }, join(dir, `agent${agents.length + 1}`), { dry: Boolean(o.dry) });
           agents.push(a);
           assertAnswered(a, `agent${agents.length}`);
@@ -346,11 +391,13 @@ export async function replayRep(p: PreparedFreeze, rep: number, reps: number, o:
           checks.push(criteriaCheck(f, v));
         }
         const score = scoreOf(gates, checks, judged);
-        writeRunFolder({ ...base, endedBecause: 'done', result, score, run: { ...run, ...sentFields(calls, agents), promptSha: out.promptSha ?? promptShaOf(calls, prompts), judgeModel: judged?.model ?? null } });
+        // Before the folder lands, so the index never reads the rep without its ruler.
+        stampGuard(dir, meta);
+        writeRunFolder({ ...base, endedBecause: 'done', result, score, run: { ...run, ...sentFields(calls, agents), promptSha: promptShaOf(calls, prompts, named), judgeModel: judged?.model ?? null } });
       } catch (e) {
         crashed = true;
         const error = e instanceof Error ? (e.stack ?? e.message) : String(e);
-        writeRunFolder({ ...base, endedBecause: 'failed', error, result: { reply: '', calls, agents }, run: { ...run, ...sentFields(calls, agents), promptSha: promptShaOf(calls, prompts), judgeModel: null } });
+        writeRunFolder({ ...base, endedBecause: 'failed', error, result: { reply: '', calls, agents }, run: { ...run, ...sentFields(calls, agents), promptSha: promptShaOf(calls, prompts, named), judgeModel: null } });
         o.onLine?.(`${scenario} rep ${rep} crashed: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
@@ -364,6 +411,7 @@ export async function replayRep(p: PreparedFreeze, rep: number, reps: number, o:
     if (!o.dry) addSpend(summary.costUsd);
     lane.done++;
     lane.doneUsd += summary.costUsd;
+    lane.peak = Math.max(lane.peak ?? 0, summary.costUsd);
   }
   return { summary, crashed, stopped: false };
 }

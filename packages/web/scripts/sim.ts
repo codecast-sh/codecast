@@ -22,7 +22,7 @@ import { basename, join, resolve } from "node:path";
 import type { SimFailureResult, SimInvariant, SimMarker, SimMinimal, SimResult, SimScenario, SimShrinkProgress } from "@codecast/shared/contracts/evalsApi";
 import { levenshtein } from "@codecast/shared/contracts/levenshtein";
 import { closeSession, openSession, pruneSessions, sessionsDir, storeTreePatch, treeState } from "../store/__tests__/sim/history";
-import { formatOrder, parseOrder } from "../store/__tests__/sim/net";
+import { formatOrder, parseOrder, replayCommands } from "../store/__tests__/sim/replay";
 import { SHRINK_MAX_ATTEMPTS, SHRINK_MAX_MS, shrinkOrder, splitOrderLine } from "../store/__tests__/sim/shrink";
 
 const WEB_ROOT = join(import.meta.dir, "..");
@@ -46,7 +46,8 @@ Each run is recorded as a session under ${sessionsDir().replace(process.env.HOME
   --red                run only the red (expected-failing) scenarios                   SIM_RED=1
   --keep               write a pass's artifacts into the session too                   SIM_KEEP=1
   --out dir            write run artifacts under dir instead, on a pass too            SIM_OUT
-  --order "<channels>" replay one delivery order, as a report's --order line prints it SIM_ORDER
+  --order="<channels>" replay one delivery order, as a report's --order line prints it SIM_ORDER
+                       (one word: bun run drops an empty "", so an empty order is --order=)
   --shrink <dir>       shrink a failure's recorded order (dir: its artifact folder) to the
                        fewest deliveries that fail the same way; writes minimal.json there
   --list               print the scenario catalog (name, red markers, known, modes) and exit
@@ -79,7 +80,7 @@ function parseArgs(argv: string[]): Parsed {
     const next = () => {
       if (inline !== undefined) return inline;
       const v = argv[i + 1];
-      if (v === undefined || v.startsWith("--")) fail(`${flag} needs a value`);
+      if (v === undefined || v.startsWith("--")) fail(`${flag} needs a value${flag === "--order" ? ' (bun run drops an empty "", so write an empty order as --order=)' : ""}`);
       i++;
       return v;
     };
@@ -323,9 +324,7 @@ async function shrink(dirArg: string): Promise<number> {
     writeJsonAtomic(join(dir, "minimal.json"), minimal);
     const minimalOrder = lineOf(r.kept);
     writeJsonAtomic(join(dir, "result.json"), { ...failure, minimalOrder });
-    // The report's own replay lines, plus the minimal one. report.ts loads the
-    // convex denylist, so it is imported only here, never on --list.
-    const { replayCommands } = await import("../store/__tests__/sim/report");
+    // The report's own replay lines, plus the minimal one.
     console.log(
       [
         `${channels.length} recorded, ${r.kept.length} needed${r.oneMinimal ? " (1-minimal)" : " (a cap stopped the search; not 1-minimal)"}; ${r.attempts} attempts in ${Math.round(r.ms / 1000)}s`,

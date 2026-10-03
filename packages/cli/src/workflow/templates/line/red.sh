@@ -15,10 +15,20 @@ if [ $category = prompt ]; then
     answer true "no prove command; passed with a note"
     exit 0
   fi
+  # The miss is shown on the base. A rerun reattaches this cause's branch with
+  # the last round's commits on it, so the run's own worktree goes to the
+  # merge base for the check and comes back to the branch after.
+  home="$(git rev-parse --abbrev-ref HEAD)"
+  base="$(git merge-base HEAD $default_branch 2>/dev/null)"
+  if [ -n "$base" ] && [ "$(git rev-parse HEAD)" != "$base" ]; then
+    [ -z "$(git status --porcelain --untracked-files=no)" ] || { answer false "the worktree has uncommitted changes, so it cannot go to the base to show the miss"; exit 0; }
+    trap 'git checkout -q "$home"' EXIT
+    git checkout -q --detach "$base" || { answer false "could not check out the base $base"; exit 0; }
+  fi
   if bash -c "$cmd" > "$dir/prove.log" 2>&1; then
-    answer true "the prove command shows the miss"
+    answer true "the prove command shows the miss on the base"
   else
-    answer false "the prove command did not show the miss: $(clean "$dir/prove.log")"
+    answer false "the prove command did not show the miss on the base: $(clean "$dir/prove.log")"
   fi
   exit 0
 fi

@@ -14,7 +14,8 @@
  */
 
 import { isPrivateHost } from "../contracts/browserPaneOffer";
-import { callAnchorHref, callMomentHref, parseCallMomentParam } from "../contracts/callLinks";
+import { callAnchorHref, callFrameHref, parseCallMomentParam } from "../contracts/callLinks";
+import { formatCallTime } from "../contracts/callRecordings";
 
 export type EntityType = "task" | "plan" | "session" | "doc" | "project" | "initiative" | "proposal" | "trigger" | "decision" | "pr" | "commit" | "call";
 
@@ -144,7 +145,9 @@ export function entityRoute(type: string, id: string): string | null {
   if (norm === "pr" || norm === "commit") return repoObjectRoute(id);
   if (norm === "call") {
     const ref = parseCallRef(id);
-    if (ref?.at_ms != null) return callMomentHref(ref.call, ref.at_ms);
+    // A moment opens on the picture its citation renders (the shared screen
+    // when one covers it), not on the player's usual room view.
+    if (ref?.at_ms != null) return callFrameHref(ref.call, ref.at_ms);
     if (ref) return callAnchorHref(ref.call, ref.turns && { kind: "turns", ...ref.turns });
   }
   if (QUERY_ONLY.has(norm)) return `${ENTITY_ROUTE[norm]}?${QUERY_PARAM[norm]}=${encodeURIComponent(id)}`;
@@ -508,16 +511,9 @@ export function parseCallTime(text: string | null | undefined): number | null {
   return s.split(":").reduce((acc, part) => acc * 60 + Number(part), 0) * 1000;
 }
 
-/** The player clock for a time into a call: `0:07`, `12:34`, `1:02:03`.
- *  Whole seconds, rounded down, so the label never names a later second
- *  than the frame shows. */
-export function formatCallTime(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000));
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const sec = String(total % 60).padStart(2, "0");
-  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
-}
+/** The player clock for a time into a call (contracts/callRecordings holds
+ *  it, beside the spans it names). */
+export { formatCallTime };
 
 /** A call reference split into the call (short or full id) and its turns or
  *  moment. A bare full id is not a call reference (it could be any table's). */
@@ -547,6 +543,16 @@ export function callRefId(
   if (atMs != null) return `${call}@${formatCallTime(atMs)}`;
   if (!turns) return call;
   return `${call}:${turns.from_seq}${turns.to_seq !== turns.from_seq ? `-${turns.to_seq}` : ""}`;
+}
+
+/** What a call reference adds to the call's name in a pill: the time on the
+ *  player for a moment (` @12:34`), the transcript lines for a stretch
+ *  (` #15–25`), nothing for the whole call. Web and mobile pills both read
+ *  it, so a moment is labeled alike on both. */
+export function callRefLabelSuffix(ref: { turns?: { from_seq: number; to_seq: number } | null; at_ms?: number | null } | null | undefined): string {
+  if (ref?.at_ms != null) return ` @${formatCallTime(ref.at_ms)}`;
+  const t = ref?.turns;
+  return t ? ` #${t.from_seq}${t.to_seq !== t.from_seq ? `–${t.to_seq}` : ""}` : "";
 }
 
 /**

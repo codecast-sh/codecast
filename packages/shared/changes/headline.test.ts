@@ -76,10 +76,29 @@ describe("fitProse", () => {
     expect(out.length).toBeLessThanOrEqual(120);
   });
 
-  test("a boundary that would keep too little is not used; text with none falls back to clip", () => {
+  test("a boundary that would keep too little is not used, and no cut ever ends in an ellipsis", () => {
     const early = `Fix, ${"x".repeat(200)}`;
-    expect(fitProse(early, 90, 120)).toBe(clip(early, 90));
-    expect(fitProse("y".repeat(200), 90, 120).endsWith("…")).toBe(true);
+    expect(fitProse(early, 90, 120)).toBe(`Fix, ${"x".repeat(115)}`);
+    expect(fitProse("y".repeat(200), 90, 120)).toBe("y".repeat(120));
+  });
+
+  // Two story headlines the page stored as "...stop asking for…" and "...and call…".
+  test("an early clause break still ends the line whole", () => {
+    const booked = "Booked call cards now say what kind of call it is, and feedback DMs stop asking for a rating after every single call the team books";
+    expect(booked.length).toBeGreaterThan(120);
+    expect(fitProse(booked, HEADLINE_MAX, 120)).toBe("Booked call cards now say what kind of call it is");
+  });
+
+  test("with no clause break the cut drops dangling words and adds no ellipsis", () => {
+    const docs = "Docs now describe a per-person reputation score built from counterpart reads and call transcripts that weigh recent feedback heavier than older";
+    const cut = fitProse(docs.replace(" and ", " plus "), HEADLINE_MAX, 120);
+    expect(cut).toBe("Docs now describe a per-person reputation score built from counterpart reads plus call transcripts that weigh recent");
+    const dangling = fitProse("Docs now describe a per-person reputation score built from counterpart reads plus call transcripts, notes and the", 90, 100);
+    expect(dangling).toBe("Docs now describe a per-person reputation score built from counterpart reads plus call transcripts");
+    for (const out of [cut, dangling]) {
+      expect(out).not.toContain("…");
+      expect(out).not.toMatch(/\b(and|or|for|to|of|with|the|a)$/);
+    }
   });
 
   test("whitespace folds the way clip folds it", () => {

@@ -19,11 +19,17 @@
 //   History action once there is more history than the step it announces.
 // - While the timeline card is open it narrates the steps, so the notifier
 //   stays silent, and opening it takes down the status toast already showing.
+//   A ⌘Z that stops at an entry whose undo widens access is the one notice
+//   the card cannot narrate by moving its head, so it flashes that row.
 import { toast } from "sonner";
-import { getUndoHistory, setUndoNotifier, subscribeUndoHistory, undoEntry, type UndoEntry, type UndoNotifier } from "@platform/engine";
+import { getUndoHistory, setUndoNotifier, subscribeUndoHistory, undoEntry, undoRowCount, type UndoEntry, type UndoNotifier } from "@platform/engine";
 import * as undoTimeline from "../lib/undoTimelineOpen";
+import { countdownToast } from "../lib/persistentToast";
+import { splitLabelNote } from "./undo/labels";
 
 export const UNDO_STATUS_TOAST_ID = "undo-status";
+/** The toast class that wears its action as a ghost button (components/ui/sonner.css). */
+export const UNDO_QUIET_ACTION_CLASS = "cc-toast-quiet-action";
 
 /** The id of the toast announcing a recorded entry. */
 export function undoEntryToastId(entryId: string): string {
@@ -33,9 +39,9 @@ export function undoEntryToastId(entryId: string): string {
 export function undoStepMessage(kind: "undo" | "redo", steps: number, entry: Pick<UndoEntry, "label" | "skipped" | "objects">): string {
   const verb = kind === "undo" ? "Undid" : "Redid";
   if (steps > 1) return `${verb} ${steps} changes`;
-  const left = entry.skipped?.length ?? 0;
+  const left = undoRowCount(entry.skipped);
   if (left === 0) return `${verb}: ${entry.label}`;
-  const total = Math.max(entry.objects?.length ?? 0, left);
+  const total = Math.max(undoRowCount(entry.objects), left);
   return `${verb}: ${entry.label} (${total - left} of ${total}; ${left} changed since)`;
 }
 
@@ -80,28 +86,40 @@ undoTimeline.subscribe(() => {
 export const CODECAST_UNDO_NOTIFIER: UndoNotifier = {
   notify: (message) => {
     if (undoTimeline.isOpen()) return;
-    toast(message, { id: UNDO_STATUS_TOAST_ID, action: undefined });
+    toast(message, { id: UNDO_STATUS_TOAST_ID, description: undefined, action: undefined });
   },
   notifyWithUndo: (label, entryId) => {
     if (undoTimeline.isOpen()) return;
     liveEntryToasts.add(entryId);
     const forget = () => { liveEntryToasts.delete(entryId); };
-    toast(label, {
+    const [title, description] = splitLabelNote(label);
+    toast(title, {
       id: undoEntryToastId(entryId),
+      description,
       action: { label: "Undo", onClick: () => undoEntry(entryId) },
-      duration: 5000,
+      ...countdownToast(5000),
       onAutoClose: forget,
       onDismiss: forget,
     });
+  },
+  onConfirmStop: (entry, message) => {
+    if (undoTimeline.isOpen()) undoTimeline.flashRow(entry.id);
+    else toast(message, { id: UNDO_STATUS_TOAST_ID, description: undefined, action: undefined });
   },
   onHistoryStep: (kind, steps, entry) => {
     if (undoTimeline.isOpen()) return;
     const more = kind === "undo"
       && undoTimeline.UNDO_HISTORY_TIER === "hidden"
       && getUndoHistory().items.length > steps;
-    toast(undoStepMessage(kind, steps, entry), {
+    // The status toast is one id updated in place, so the note is always
+    // passed, undefined included, or the last one's would stay under it.
+    const [title, description] = splitLabelNote(undoStepMessage(kind, steps, entry));
+    toast(title, {
       id: UNDO_STATUS_TOAST_ID,
+      description,
       action: more ? { label: "History", onClick: () => undoTimeline.open("interactive") } : undefined,
+      // Quiet: a way into the history, not the toast's answer (sonner.css).
+      className: more ? UNDO_QUIET_ACTION_CLASS : undefined,
     });
   },
 };
@@ -122,6 +140,7 @@ export {
   getUndoHistory,
   subscribeUndoHistory,
   getUndoKeyboardWindowMs,
+  undoKeyboardSince,
   useUndoHistory,
   type UndoEntry,
   type UndoOutcome,

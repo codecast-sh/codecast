@@ -4,7 +4,9 @@ import {
   describeDatesFull,
   formatDateSmart,
   formatRelative,
+  formatDuration,
   formatShortDate,
+  parseDuration,
   relTimeShort,
   wasEdited,
 } from "./index";
@@ -74,5 +76,28 @@ describe("a target day is a calendar day everywhere", () => {
     const { targetDayStamp } = await import("./index");
     expect(targetDayStamp("2026-02-30")).toBeNull();
     expect(targetDayStamp("31/12/2026")).toBeNull();
+  });
+});
+
+describe("parseDuration", () => {
+  test("reads short, decimal and long unit spellings alike", () => {
+    expect(parseDuration("30m")).toBe(30 * 60_000);
+    expect(parseDuration("1.5h")).toBe(90 * 60_000);
+    expect(parseDuration("500ms")).toBe(500);
+    expect(parseDuration("30min")).toBe(30 * 60_000);
+    expect(parseDuration("2hours")).toBe(2 * 3_600_000);
+    expect(parseDuration("1 day")).toBe(86_400_000);
+    expect(parseDuration("90sec")).toBe(90_000);
+  });
+
+  test("refuses what is not a duration, naming the input", () => {
+    expect(() => parseDuration("soon")).toThrow(/"soon"/);
+    expect(() => parseDuration("2026-10-01")).toThrow();
+    expect(() => parseDuration("0m")).toThrow(/positive/);
+  });
+
+  test("formatDuration prints the largest whole unit", () => {
+    expect(formatDuration(7_200_000)).toBe("2h");
+    expect(formatDuration(30_000)).toBe("30s");
   });
 });

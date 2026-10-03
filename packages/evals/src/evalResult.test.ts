@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 
 import type { EvalRep, EvalRepsFile, EvalRepsFreeze } from '@codecast/shared/contracts/evalResult';
 
-import { buildEvalResult, evalResultLines, majorityOf, provenVerdicts, repsFileProblem } from './evalResult';
+import { buildEvalResult, evalResultLines, majorityOf, provenVerdicts, repsFileProblem, unscoredSurfaces } from './evalResult';
 
 // reps.json to eval-result.json (line-profile.md LP4): the one builder every
 // project's eval station goes through, `./evals line` included.
@@ -95,6 +95,20 @@ describe('the pieces', () => {
     ]);
     expect(proven).toEqual([{ freeze: 'aaaaaaaa1', basePasses: false, passes: true }, { freeze: 'cccccccc3', basePasses: null, passes: false }]);
     expect(reasons).toEqual(['proven freeze cccccccc still fails']);
+  });
+
+  test('a proven freeze whose branch reps all crashed was not scored, which is not the same as still failing', () => {
+    const crashed = reps(3, false, { error: 'API error 429: weekly limit' });
+    const { reasons } = provenVerdicts([freeze('eeeeeeee5', reps(3, false), crashed, { proven: true })]);
+    expect(reasons).toEqual(['proven freeze eeeeeeee was not scored on the branch']);
+  });
+
+  test('unscoredSurfaces names a surface with a side that scored nothing, and only that', () => {
+    const crashed = reps(3, false, { error: 'API error 429: weekly limit' });
+    expect(unscoredSurfaces(file([freeze('f1', reps(3, true), crashed)]))).toEqual(['reply']);
+    expect(unscoredSurfaces(file([freeze('f1', crashed, reps(3, true))]))).toEqual(['reply']);
+    expect(unscoredSurfaces(file([freeze('f1', reps(3, true), [...crashed, rep(false)])]))).toEqual([]);
+    expect(unscoredSurfaces(file([], { surfaces: [{ surface: 'digest', title: 'Digest', freezes: [], skipped: 'no freeze' }] }))).toEqual([]);
   });
 
   test('repsFileProblem names what is missing', () => {

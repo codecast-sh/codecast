@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { AudioLines, Camera, Mic, Volume2 } from "lucide-react";
 import { guestNoticeLines, type GuestNotice } from "@codecast/shared/contracts";
 import type { DeviceChoice } from "../../../lib/calls/guestRoom";
+import { LogoMark } from "../../../components/Logo";
 
 // The pieces every screen of the guest's page is built from: the shell, the
 // notice about transcription and recording, and the device pickers. One
@@ -14,7 +15,7 @@ export function MeetShell({ children, bar }: { children: ReactNode; bar?: ReactN
     <main className="meet dark flex min-h-dvh flex-col">
       <header className="flex h-14 shrink-0 items-center gap-3 px-4 sm:px-6">
         <a className="meet-mark" href="https://codecast.sh" target="_blank" rel="noreferrer">
-          <i aria-hidden />
+          <LogoMark size={16} monochrome />
           codecast
         </a>
         {bar}
@@ -117,32 +118,38 @@ const DEVICE_META = {
  *  browser lists devices with no names, so they read "Microphone 1". While
  *  the permission prompt is up (`asking`) the browser lists nothing yet, and
  *  "No microphone found" beside "Allow your camera and microphone" would be
- *  two answers at once, so an empty list says it is waiting instead. */
+ *  two answers at once, so an empty list says it is waiting instead.
+ *  `compact` is for a row of pickers under the lobby's preview: on a phone
+ *  each shrinks to its icon (the platform's sheet still names every device
+ *  when tapped). A list of its own, like the call's devices popover, keeps
+ *  the names, so the guest can see which microphone is in use. */
 export function DeviceSelect({
   kind,
   devices,
   choice,
   onChoose,
   asking = false,
+  compact = false,
 }: {
   kind: "mic" | "camera" | "speaker";
   devices: MediaDeviceInfo[];
   choice: DeviceChoice;
   onChoose: (kind: "mic" | "camera" | "speaker", id: string) => void;
   asking?: boolean;
+  compact?: boolean;
 }) {
   const meta = DEVICE_META[kind];
   const Icon = meta.icon;
   const value = (kind === "mic" ? choice.micId : kind === "camera" ? choice.cameraId : choice.speakerId) ?? devices[0]?.deviceId ?? "";
   return (
-    <label className="relative flex min-w-0 flex-1 items-center gap-2 text-sol-text-muted">
+    <label className={`relative flex min-w-0 flex-1 items-center gap-2 text-sol-text-muted ${compact ? "max-sm:flex-none" : ""}`}>
       <Icon className="pointer-events-none absolute left-2.5 h-3.5 w-3.5" aria-hidden />
       <select
         aria-label={meta.label}
         value={value}
         disabled={devices.length === 0}
         onChange={(e) => onChoose(kind, e.target.value)}
-        className="meet-select w-full min-w-0 truncate rounded-lg py-1.5 pl-8 font-mono text-[11.5px] text-sol-text-secondary outline-none ring-1 ring-white/[0.08] transition-colors hover:ring-white/15 focus-visible:ring-sol-cyan/60 disabled:opacity-50"
+        className={`meet-select w-full min-w-0 truncate rounded-lg ${compact ? "max-sm:w-[60px] max-sm:text-transparent" : ""} py-1.5 pl-8 font-mono text-[11.5px] text-sol-text-secondary outline-none ring-1 ring-white/[0.08] transition-colors hover:ring-white/15 focus-visible:ring-sol-cyan/60 disabled:opacity-50`}
       >
         {devices.length === 0 ? (
           <option value="">{asking ? "Waiting for permission" : meta.empty}</option>

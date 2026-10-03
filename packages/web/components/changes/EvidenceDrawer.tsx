@@ -7,6 +7,7 @@
 // a headline only when the team may read the session, turns only when its
 // owner shares it in full. Both feeders mount only while the drawer is open.
 import Link from "next/link";
+import { ChevronRight } from "lucide-react";
 import { useMemo, useState } from "react";
 import { areaOf, isGeneratedPath, pathInArea } from "@codecast/shared/changes";
 import {
@@ -20,8 +21,9 @@ import {
 import { DiffStat, MetaDot } from "../entityDisplay";
 import { EntityIdPill } from "../EntityIdPill";
 import { CommitLinks } from "../repo/CommitLinks";
-import { AreaTag, Tip, clockOf } from "./StoryParts";
+import { AreaTag, People, Provenance, ReleaseTag, RiskLine, Tip, clockOf } from "./StoryParts";
 import { areaColor } from "./areaColor";
+import { plural } from "./format";
 import { useAreaColors } from "./storyContext";
 import { KeyHint } from "./useChangesKeys";
 
@@ -76,12 +78,12 @@ function AreaFiles({ area, paths }: { area: string; paths: readonly FileLines[] 
       {(all ? paths : paths.slice(0, MAX_FILES)).map((f) => (
         <div key={f.path} className="flex min-w-0 items-baseline gap-3">
           <span className="min-w-0 flex-1 truncate" title={f.path}>{f.path}</span>
-          <span className="shrink-0 tabular-nums text-sol-text/45">{f.lines.toLocaleString()}</span>
+          {f.lines > 0 && <span className="shrink-0 tabular-nums text-sol-text/45">{f.lines.toLocaleString()}</span>}
         </div>
       ))}
       {more > 0 && (
         <button type="button" onClick={() => setAll((a) => !a)} className="text-sol-text/45 transition-colors hover:text-sol-text">
-          {all ? "fewer files" : `+${more} more ${more === 1 ? "file" : "files"}`}
+          {all ? "fewer files" : `+${plural(more, "more file")}`}
         </button>
       )}
     </div>
@@ -121,7 +123,7 @@ export function InsightTurns({ turns }: { turns: readonly Turn[] }) {
         </li>
       ))}
       {more > 0 && (
-        <li className="font-mono text-[10px] text-sol-text/40">{more} more {more === 1 ? "turn" : "turns"} in the session</li>
+        <li className="font-mono text-[10px] text-sol-text/40">{plural(more, "more turn")} in the session</li>
       )}
     </ol>
   );
@@ -150,8 +152,15 @@ export function EvidenceDrawer({ story }: { story: StoryRow }) {
   const missing = story.commit_shas.length - commits.length;
 
   return (
-    <div className="mt-3 space-y-3 border-t border-dashed border-sol-border/40 pt-3">
-      <section>
+    <div className="mt-2 space-y-3 pb-1">
+      {story.body && <p className="chg-ui text-[13px] leading-[1.6] text-sol-text/80 [overflow-wrap:anywhere]">{story.body}</p>}
+      <RiskLine story={story} full />
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <People story={story} />
+        <Provenance story={story} />
+        <ReleaseTag story={story} />
+      </div>
+      <section className="border-t border-dashed border-sol-border/40 pt-3">
         <h4 className="mb-1.5 text-[12px] font-semibold text-sol-text/80">
           Commits <span className="font-mono text-[10px] font-normal text-sol-text/45">{story.commit_shas.length}</span>
         </h4>
@@ -159,7 +168,7 @@ export function EvidenceDrawer({ story }: { story: StoryRow }) {
           {commits.map((c) => {
             const [subject, ...rest] = String(c.message ?? "").split("\n");
             return (
-              <li key={c.sha} className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 font-mono text-[11px]">
+              <li key={c.sha} data-commit-href={commitPath(story.repository, c.sha)} className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 font-mono text-[11px]">
                 <Link href={commitPath(story.repository, c.sha)} className="shrink-0 text-sol-text/70 underline-offset-2 hover:text-sol-text hover:underline">
                   {c.sha.slice(0, 7)}
                 </Link>
@@ -181,7 +190,7 @@ export function EvidenceDrawer({ story }: { story: StoryRow }) {
           {missing > 0 && (
             <li className="font-mono text-[10px] text-sol-text/45">
               {feed.ready || feed.refused
-                ? `${missing} ${missing === 1 ? "commit is" : "commits are"} not readable here`
+                ? `${plural(missing, "commit is", "commits are")} not readable here`
                 : commits.length ? `${missing} more loading` : "Loading commits"}
             </li>
           )}
@@ -202,7 +211,7 @@ export function EvidenceDrawer({ story }: { story: StoryRow }) {
               ))}
               {story.private_session_count > 0 && (
                 <span className="font-mono text-[10px] text-sol-text/45">
-                  {story.private_session_count} {story.private_session_count === 1 ? "session is" : "sessions are"} not shared with the team
+                  {plural(story.private_session_count, "session is", "sessions are")} not shared with the team
                 </span>
               )}
             </div>
@@ -211,9 +220,12 @@ export function EvidenceDrawer({ story }: { story: StoryRow }) {
       )}
 
       {areas.length > 0 && (
-        <section>
-          <h4 className="mb-1.5 text-[12px] font-semibold text-sol-text/80">Files</h4>
-          <div className="space-y-1.5">
+        <details className="group">
+          <summary className="flex cursor-pointer list-none items-center gap-1.5 text-[12px] font-semibold text-sol-text/80 hover:text-sol-text">
+            <ChevronRight className="h-3 w-3 transition-transform group-open:rotate-90" />
+            Files <span className="font-mono text-[10px] font-normal text-sol-text/45">{areas.reduce((n, a) => n + a.touches, 0)}</span>
+          </summary>
+          <div className="mt-1.5 space-y-1.5">
             {areas.map((a) => (
               <div key={a.area} className="min-w-0">
                 <div className="flex items-center gap-2">
@@ -224,7 +236,7 @@ export function EvidenceDrawer({ story }: { story: StoryRow }) {
               </div>
             ))}
           </div>
-        </section>
+        </details>
       )}
 
       <p className="flex items-center gap-1.5 font-mono text-[10px] text-sol-text/45">

@@ -19,6 +19,7 @@
 
 import type { SimClient } from "@codecast/convex/convex/simBackend.testing";
 import { pairDeliveryAcks, type AgentStatus } from "@codecast/shared/contracts";
+import { performRedo, performUndo } from "../../undoStack";
 import type { RealmWindow } from "./realm";
 import { daemonDeviceFor, sessionIdFor, type SimWorld } from "./world";
 
@@ -45,6 +46,9 @@ export interface HumanActor {
   kill(session: string): number;
   stash(session: string): number;
   restore(session: string): number;
+  /** ⌘Z and ⌘⇧Z in this window: the newest gesture on the undo stack, as the keyboard steps it. */
+  undo(): number;
+  redo(): number;
   pin(session: string): number;
   revive(session: string, text?: string): number;
   send(session: string, text: string): number;
@@ -142,6 +146,8 @@ export function makeActors(world: ActorWorld): Actors {
       kill: (session) => act("kill", session, (s) => s.killSession(world.idOf(session))),
       stash: (session) => act("stash", session, (s) => s.stashSession(world.idOf(session))),
       restore: (session) => act("restore", session, (s) => s.restoreSession(world.idOf(session))),
+      undo: () => act("undo", "", () => performUndo()),
+      redo: () => act("redo", "", () => performRedo()),
       pin: (session) => act("pin", session, (s) => s.pinSession(world.idOf(session))),
       // The context-park revive: the turn goes out, and the row is stamped
       // revive-in-flight so it leaves the blocked set at once.

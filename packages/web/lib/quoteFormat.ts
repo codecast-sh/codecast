@@ -46,6 +46,25 @@ export function toBlockquote(text: string): string {
     .join("\n");
 }
 
+// The inverse of toBlockquote for a plain-text body: split it into runs of
+// quoted lines (markers stripped) and the text between them, so surfaces that
+// show a message as plain text can still draw its quotes as quotes.
+export type QuoteRun = { quote: boolean; text: string };
+const QUOTE_LINE = /^ {0,3}> ?(.*)$/;
+export function splitQuoteRuns(text: string): QuoteRun[] {
+  const runs: QuoteRun[] = [];
+  for (const line of (text || "").replace(/\r\n?/g, "\n").split("\n")) {
+    const m = QUOTE_LINE.exec(line);
+    const quote = !!m;
+    const last = runs[runs.length - 1];
+    if (last && last.quote === quote) last.text += `\n${m ? m[1] : line}`;
+    else runs.push({ quote, text: m ? m[1] : line });
+  }
+  return runs
+    .map((r) => ({ quote: r.quote, text: r.text.replace(/^\s*\n|\n\s*$/g, "") }))
+    .filter((r) => r.text.trim());
+}
+
 // One quote + optional reply body.
 export function formatQuotedReply(quote: string, body?: string): string {
   const bq = toBlockquote(quote);

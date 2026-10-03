@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { compactPrinciples, groundUpdateBody, renderGoalsBrief, type GoalsBrief } from "./goalsBrief";
+import { compactPrinciples, goalRefLabel, groundUpdateBody, renderGoalsBrief, type GoalsBrief } from "./goalsBrief";
 
 const NOW = Date.UTC(2026, 9, 2, 12);
 const DAY = 86_400_000;
@@ -63,7 +63,7 @@ Teams that try it keep using it.
 
   test("principles over the cap render as ids and titles, whole principles only", () => {
     const area = (name: string, n: number) =>
-      `## ${name}\n\n` + Array.from({ length: n }, (_, i) => `### PR-${name.toLowerCase()}-${i + 1} Title ${i + 1}\n\n${"Body text. ".repeat(40)}\n\nWhy: because.\n`).join("\n");
+      `## ${name}\n\n` + Array.from({ length: n }, (_, i) => `### PR-${name.toLowerCase()}-${i + 1} Title ${i + 1}\n\n${"Body text. ".repeat(60)}\n\nWhy: because.\n`).join("\n");
     const file = `# Principles\n\nIntro.\n\n${area("Code", 3)}\n${area("Design", 2)}`;
     const out = renderGoalsBrief(brief, { now: NOW, brief: true, principles: file });
     expect(out).toContain("## Principles\n\n- Code: PR-code-1 Title 1; PR-code-2 Title 2; PR-code-3 Title 3\n- Design: PR-design-1 Title 1; PR-design-2 Title 2\n\nFull text: docs/principles.md.\n");
@@ -73,6 +73,13 @@ Teams that try it keep using it.
   test("a compact form still over the cap drops whole principles and counts them", () => {
     const body = "## Code\n\n### PR-code-1 First\n\n### PR-code-2 Second\n\n### PR-code-3 Third";
     expect(compactPrinciples(body, 70)).toBe("- Code: PR-code-1 First\n\nFull text: docs/principles.md (2 more).");
+  });
+
+  test("a compact form names every file the principles came from", () => {
+    const body = "## Code\n\n### PR-code-1 First\n\n## Store\n\n### CC-store-1 Second";
+    expect(compactPrinciples(body, 200, ["https://x/principles.md", "docs/line/principles.md"])).toBe(
+      "- Code: PR-code-1 First\n- Store: CC-store-1 Second\n\nFull text: https://x/principles.md, docs/line/principles.md.",
+    );
   });
 
   test("an empty workspace says so in one line", () => {
@@ -105,5 +112,14 @@ describe("groundUpdateBody", () => {
   test("a bad value names the flag and its choices", () => {
     expect(() => groundUpdateBody({ risk: "high" })).toThrow('--risk must be one of low, review, plan (or "" to clear)');
     expect(() => groundUpdateBody({ category: "docs" })).toThrow("--category must be one of code, prompt, ux, infra, data");
+  });
+});
+
+describe("goalRefLabel", () => {
+  test("names a project ref by its title and charter goal, a metric ref by its initiative and metric, and nothing else", () => {
+    expect(goalRefLabel(brief, "pj-b")).toEqual({ name: "Onboarding", why: "A new team runs an agent on day one" });
+    expect(goalRefLabel(brief, "in-12:week4_retention")).toEqual({ name: "Retention: Week 4 retention", why: "target 40%" });
+    expect(goalRefLabel(brief, "none")).toBeNull();
+    expect(goalRefLabel(brief, "pj-zz")).toBeNull();
   });
 });

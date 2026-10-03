@@ -80,7 +80,21 @@ export function mergeBranch(args: { cwd: string; branch: string; into: string; p
 /** The whole step, from the allowance to the record. `post` is the CLI's
  *  authenticated call. */
 export async function runMergeStep(
-  args: { cwd: string; run_id: string; branch: string; into: string; post: (path: string, body: Record<string, unknown>) => Promise<any>; exec?: Exec; log?: (line: string) => void },
+  args: { cwd: string; run_id: string; branch: string; into: string; task?: string; post: (path: string, body: Record<string, unknown>) => Promise<any>; exec?: Exec; log?: (line: string) => void },
+): Promise<{ outcome: MergeOutcome; check: MergeCheck | null; recorded: any | null }> {
+  const out = await mergeStep(args);
+  // The person said Ship and the change is not on the default branch: the
+  // task says so as a blocker, where they look, with what is left to land.
+  const task = args.task ?? out.check?.task?.short_id;
+  if (out.outcome.kind === "left" && task) {
+    const text = `Merge left to a person: ${out.outcome.reason}. ${args.branch} is not on ${args.into}; land it by hand.`;
+    try { await args.post("/cli/work/comment", { short_id: task, comment_type: "blocker", text }); } catch {}
+  }
+  return out;
+}
+
+async function mergeStep(
+  args: Parameters<typeof runMergeStep>[0],
 ): Promise<{ outcome: MergeOutcome; check: MergeCheck | null; recorded: any | null }> {
   const log = args.log ?? (() => {});
   let check: MergeCheck | null = null;

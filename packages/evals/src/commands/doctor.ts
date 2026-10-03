@@ -11,7 +11,6 @@ import { readLocalCredential } from '../../../cli/src/ccKeychain';
 import { apiConfig } from '../adapters/convo';
 import { codecastFreezeStore } from '../adapters/freezes';
 import { hasSnapshot, loadLabel, loadSnapshot } from '../adapters/resolver';
-import { CHEAP_MODEL, STRONG_MODEL } from '../../../convex/convex/lib/anthropic';
 import { CALL_MODEL, PROSE_MODEL } from '../models';
 import { DRY_RUN_SCRIPT, homePaths, LABELS_REMOTE, REPO_ROOT } from '../paths';
 import { surfaces } from '../registry';
@@ -23,6 +22,9 @@ import { snippetInstalled } from '../snippet';
 // private when it does not exist yet; founder decision sd-319).
 
 const git = (cwd: string, args: string[]) => spawnSync('git', args, { cwd, encoding: 'utf8' });
+
+/** The call surfaces that replay the Changes page's prose, which prod asks on PROSE_MODEL. */
+const PROSE_SURFACES = new Set(['changes-story', 'changes-edition']);
 
 function labelsCheck(): ReturnType<DoctorCheck['run']> {
   const dir = homePaths().labels;
@@ -95,12 +97,12 @@ export const CHECKS: DoctorCheck[] = [
   {
     name: 'model pins',
     run: () => {
-      // Every call surface pins a model prod calls with (the cheap one, or the strong one the Changes prose asks; changes.test.ts holds each to its builder).
-      const prod = new Set([CHEAP_MODEL, STRONG_MODEL]);
+      // Each call surface pins the model its prod call uses: the Changes prose asks PROSE_MODEL (changes.test.ts holds the two to their builders), every other call CALL_MODEL. Both pins come from prod's own homes (models.ts).
       const calls = surfaces().filter((s) => s.route === 'call');
-      const off = calls.filter((s) => !prod.has(s.model));
-      const by = [...prod].map((m) => `${m} (${calls.filter((s) => s.model === m).length})`).join(', ');
-      return CALL_MODEL === CHEAP_MODEL && PROSE_MODEL === STRONG_MODEL && !off.length ? { ok: true, detail: `call surfaces pin the models prod calls: ${by}` } : { ok: false, detail: `off the prod models: ${off.map((s) => `${s.id}=${s.model}`).join(', ') || 'models.ts pins'}` };
+      const want = (id: string) => (PROSE_SURFACES.has(id) ? PROSE_MODEL : CALL_MODEL);
+      const off = calls.filter((s) => s.model !== want(s.id));
+      const by = [CALL_MODEL, PROSE_MODEL].map((m) => `${m} (${calls.filter((s) => s.model === m).length})`).join(', ');
+      return !off.length ? { ok: true, detail: `call surfaces pin the models prod calls: ${by}` } : { ok: false, detail: `off their prod model: ${off.map((s) => `${s.id}=${s.model}, prod calls ${want(s.id)}`).join('; ')}` };
     },
   },
   { name: 'agent snippet', run: () => (snippetInstalled() === 'current' ? { ok: true, detail: 'AGENTS.md carries the current reference' } : { ok: false, warn: true, detail: `AGENTS.md section ${snippetInstalled()}`, fix: './evals snippet install' }) },

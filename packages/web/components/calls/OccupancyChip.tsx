@@ -206,23 +206,26 @@ export function HuddleButton({
 
 const NO_NAMES: string[] = [];
 
-// A guest link into this room, from the header, before anybody is in it: a
-// guest is usually sent the link ahead of the meeting, and the stage (which
-// has its own invite) only exists once a huddle runs. Shown only to somebody
-// who may make one (GuestInvite asks), in the header's own chip idiom.
-// When a guest is already at this room's door on the viewer's link and
-// nobody is in the room (useGuestsWaiting), the chip says so: it is the one
-// thing in this header that knows about guests, and the huddle button beside
-// it is how they get let in.
-export function GuestInviteChip({ roomKey, compact = false, className = "" }: { roomKey: string; compact?: boolean; className?: string }) {
+// The huddle button with a guest link tucked behind it. A guest is usually
+// sent the link ahead of the meeting, and the stage (which has its own
+// invite) only exists once a huddle runs, so the header offers one; but it is
+// a rare gesture, so it stays folded behind the huddle button and slides out
+// on hover or keyboard focus. It stays out while its panel is open, and when
+// a guest is already at this room's door on the viewer's link with nobody in
+// the room (useGuestsWaiting): the huddle button beside it is how they get
+// let in. Shown only to somebody who may make a link (GuestInvite asks).
+export function HuddleWithGuest({ className = "", ...huddle }: Parameters<typeof HuddleButton>[0]) {
   const enabled = useCallsAvailable();
   if (!enabled) return null;
   return (
-    <GuestInvite
-      roomKey={roomKey}
-      align="end"
-      trigger={(p) => <GuestChipButton {...p} roomKey={roomKey} compact={compact} className={className} />}
-    />
+    <span className={`group/huddle inline-flex items-center ${className}`}>
+      <HuddleButton {...huddle} />
+      <GuestInvite
+        roomKey={huddle.roomKey}
+        align="end"
+        trigger={(p) => <GuestChipButton {...p} roomKey={huddle.roomKey} compact={!!huddle.compact} />}
+      />
+    </span>
   );
 }
 
@@ -233,20 +236,29 @@ function GuestChipButton({
   open,
   toggle,
   compact,
-  className,
 }: {
   roomKey: string;
   open: boolean;
   toggle: () => void;
   compact: boolean;
-  className: string;
 }) {
   const waiting = useGuestsWaiting().find((r) => r.roomKey === roomKey)?.names ?? NO_NAMES;
   const waitingLine =
     waiting.length > 0
       ? `${guestDisplayName(waiting[0])}${waiting.length > 1 ? ` and ${waiting.length - 1} more` : ""} ${waiting.length > 1 ? "are" : "is"} waiting to join. Start the huddle to let them in`
       : null;
+  const out = open || !!waitingLine;
   return (
+    // Collapsed to nothing beside the huddle button until its group is
+    // hovered or focused (HuddleWithGuest); the grid column eases the width.
+    <span
+      className={`grid transition-[grid-template-columns,opacity] duration-150 ease-out motion-reduce:transition-none ${
+        out
+          ? "grid-cols-[1fr] opacity-100"
+          : "grid-cols-[0fr] opacity-0 group-hover/huddle:grid-cols-[1fr] group-hover/huddle:opacity-100 group-focus-within/huddle:grid-cols-[1fr] group-focus-within/huddle:opacity-100"
+      }`}
+    >
+    <span className="flex min-w-0 overflow-hidden py-0.5 pl-1">
     <button
       type="button"
       onClick={(e) => {
@@ -256,7 +268,7 @@ function GuestChipButton({
       aria-expanded={open}
       className={`relative flex items-center gap-1 rounded-full border transition-colors hover:border-sol-yellow/40 hover:text-sol-yellow ${
         open || waitingLine ? "!border-sol-yellow/40 text-sol-yellow" : "text-sol-text-dim"
-      } ${compact ? "border-sol-border/40 px-1.5 py-1 text-[10px] font-medium" : "border-sol-border px-2 py-0.5 text-xs"} ${className}`}
+      } ${compact ? "border-sol-border/40 px-1.5 py-1 text-[10px] font-medium" : "border-sol-border px-2 py-0.5 text-xs"}`}
       title={waitingLine ?? "Invite someone outside the team: a link they join from in a browser"}
       aria-label={waitingLine ? `${waitingLine}. Guest link` : "Invite someone outside the team"}
     >
@@ -266,6 +278,8 @@ function GuestChipButton({
         <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 animate-pulse rounded-full bg-sol-yellow motion-reduce:animate-none" aria-hidden />
       )}
     </button>
+    </span>
+    </span>
   );
 }
 
@@ -274,13 +288,10 @@ function GuestChipButton({
 // (transcripts.start seeds the route), so the tooltip says so.
 export function SessionHuddleButton({ conversationId }: { conversationId: string }) {
   return (
-    <>
-      <HuddleButton
-        roomKey={sessionRoomKey(conversationId)}
-        hint="Talk to this session — what you say reaches the agent as you speak"
-        compact
-      />
-      <GuestInviteChip roomKey={sessionRoomKey(conversationId)} compact />
-    </>
+    <HuddleWithGuest
+      roomKey={sessionRoomKey(conversationId)}
+      hint="Talk to this session — what you say reaches the agent as you speak"
+      compact
+    />
   );
 }

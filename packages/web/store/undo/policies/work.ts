@@ -16,7 +16,7 @@
 // clear, a prior state the inverse verb does not produce); each such case says
 // why at its site.
 import type { CellChange, Invocation, UndoCtx, UndoSpec } from "@platform/engine";
-import { DEFAULT_TASK_STATUS_NAMES } from "@codecast/shared/tasks";
+import { DEFAULT_TASK_STATUS_NAMES, teamTaskStatuses } from "@codecast/shared/tasks";
 import { assigneeLabelOf, resolveAssigneeInfo } from "../../../lib/liveEntities";
 import type { UndoPolicy } from "../policy";
 import { counted, quoted, sessionTitle } from "../labels";
@@ -41,8 +41,12 @@ const viaWriter = (label: (ctx: UndoCtx) => string | null, extra?: Partial<UndoS
 
 // ── Tasks ────────────────────────────────────────────────────────────────────
 
-const statusName = (status: unknown) =>
-  DEFAULT_TASK_STATUS_NAMES[status as keyof typeof DEFAULT_TASK_STATUS_NAMES] ?? String(status);
+/** The team status a write picks (status_id), else its category's built-in name. */
+function statusName(state: any, task: any, fields: Record<string, unknown>): string {
+  const team = ((state?.teams ?? []) as any[]).find((t) => task?.team_id && String(t?._id) === String(task.team_id));
+  const picked = fields.status_id ? teamTaskStatuses(team?.task_statuses).find((st) => st.id === fields.status_id) : undefined;
+  return picked?.name ?? DEFAULT_TASK_STATUS_NAMES[fields.status as keyof typeof DEFAULT_TASK_STATUS_NAMES] ?? String(fields.status);
+}
 
 function assigneeName(state: any, assignee: string): string {
   const info = resolveAssigneeInfo(assignee, null, state?.teamMembers, state?.currentUser, state?.orgTree?.roles);
@@ -51,10 +55,11 @@ function assigneeName(state: any, assignee: string): string {
 
 /** "Moved ct-123 to Done", "Assigned ct-123 to Sam", and "and N subtasks" for a cascade. */
 function taskLabel(ctx: UndoCtx, shortId: string, fields: Record<string, unknown>): string {
-  const own = new Set(Object.values(ctx.before?.tasks ?? {}).filter((t: any) => t?.short_id === shortId).map((t: any) => String(t._id)));
+  const ownRows = Object.values(ctx.before?.tasks ?? {}).filter((t: any) => t?.short_id === shortId) as any[];
+  const own = new Set(ownRows.map((t) => String(t._id)));
   const subtasks = rowIds(cellsOf(ctx, "tasks")).filter((id) => !own.has(id)).length;
   const who = subtasks > 0 ? `${shortId} and ${counted(subtasks, "subtask")}` : shortId;
-  if (fields.status !== undefined) return `Moved ${who} to ${statusName(fields.status)}`;
+  if (fields.status !== undefined) return `Moved ${who} to ${statusName(ctx.after, ownRows[0], fields)}`;
   if (fields.duplicate_of !== undefined) {
     return fields.duplicate_of ? `Marked ${shortId} as a duplicate of ${fields.duplicate_of}` : `Unmarked ${shortId} as a duplicate`;
   }

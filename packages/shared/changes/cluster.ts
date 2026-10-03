@@ -22,6 +22,8 @@ import type { ChangeCommit, ChangePr, LayerZeroStory, ReleaseBurst, ShipEvent, V
 
 /** A commit touching this many areas is a batch and splits by area. */
 export const BATCH_AREAS = 3;
+/** An area of a batch commit is a slice of its own only with this share of the commit's file touches. */
+export const SLICE_SHARE = 0.15;
 /** A session whose commits land in this many areas is committing a tree, not pursuing one intent. */
 export const SPREAD_AREAS = 4;
 /** Commits further apart than this start a new cluster under rule (b). */
@@ -84,17 +86,29 @@ function toUnits(c: ChangeCommit, defaultBranch: string): Unit[] {
   const conv = parseConventional(c.subject);
   const scope = conv?.scope ?? null;
   const type = conv?.type ?? null;
-  const areas = Object.keys(c.areas);
-  if (areas.length >= BATCH_AREAS && onDefaultBranch(c, defaultBranch)) {
-    return areas.map((a) => ({
-      commit: c,
-      slice: a,
-      area: a,
-      scope: scope && scopeNamesArea(scope, a) ? null : scope,
-      type,
-      lines: lineCount(c.areas[a]),
-      touches: { [a]: c.areas[a] },
-    }));
+  if (Object.keys(c.areas).length >= BATCH_AREAS && onDefaultBranch(c, defaultBranch)) {
+    // Only an area with a real share of the commit is a slice of its own; the
+    // thin ones ride with its largest slice, so a stray file never becomes a
+    // second story told from the same commit message.
+    const total = Object.values(c.areas).reduce((n, t) => n + t.touches, 0);
+    const ranked = rankAreas(c.areas);
+    const slices = ranked.filter((a) => c.areas[a].touches >= total * SLICE_SHARE);
+    if (slices.length >= 2) {
+      const thin = ranked.filter((a) => !slices.includes(a));
+      return slices.map((a, i) => {
+        const touches: Record<string, AreaTouch> = { [a]: c.areas[a] };
+        if (i === 0) for (const t of thin) touches[t] = c.areas[t];
+        return {
+          commit: c,
+          slice: a,
+          area: a,
+          scope: scope && scopeNamesArea(scope, a) ? null : scope,
+          type,
+          lines: Object.values(touches).reduce((n, t) => n + lineCount(t), 0),
+          touches,
+        };
+      });
+    }
   }
   const area = commitArea(c.areas, scope);
   return [{

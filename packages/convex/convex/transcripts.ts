@@ -1667,7 +1667,10 @@ export async function canReadCall(
   // The people in it: whoever spoke, and whoever a recording of it showed
   // (recorded_people: seated while it was filmed, the presser included,
   // even when they came in on an invite grant, never spoke, or transcription
-  // was off). Still only while they are on the team with calls on.
+  // was off). Still only while they are on the team with calls on. The scope
+  // is the whole call, not the stretch they sat in: anyone filmed in any part
+  // of it may read all of it, every run and the full transcript, the way a
+  // speaker always could.
   if (
     (t.participants ?? []).some((p) => String(p.id) === String(userId)) ||
     (t.recorded_people ?? []).some((id) => String(id) === String(userId))
@@ -1705,6 +1708,12 @@ function shapeCallRow(t: Doc<"transcripts">) {
     started_by: String(t.started_by),
     team_id: String(t.team_id),
     rec_shared: t.rec_shared ?? false,
+    // Whether Record was ever pressed on this call (a run seats the people it
+    // shows): the history marks the calls that have video, and a surface
+    // that cannot play it yet (the phone) says where it plays rather than
+    // offering only the words. Off the row, so neither the list nor the
+    // detail re-runs for the recording reconciler's writes.
+    filmed: (t.recorded_people?.length ?? 0) > 0,
   };
 }
 
@@ -2050,19 +2059,66 @@ export const cliListCalls = query({
     // snap` can show. Here and not in listCallsCore: the web list is a live
     // subscription, and reading every call's recordings there would re-run
     // it for each write the recording reconciler makes.
-    return Promise.all(rows.map(async (r) => ({ ...r, video: await callVideoState(ctx, r._id) })));
+    // The place too, so an untitled call reads "Huddle in <session>" rather
+    // than its room key. Same reason it is here: the web list names rooms
+    // from its own store and never pays for these reads.
+    return Promise.all(
+      rows.map(async (r) => ({
+        ...r,
+        ...(await callVideoState(ctx, r._id)),
+        place: await callPlaceNames(ctx, auth.userId, r.room_key),
+      })),
+    );
   },
 });
 
+/** The names an untitled call is called by (callDisplayTitle), read with the
+ *  viewer's own rights: a session's title only when they may open the
+ *  session, which is the rule calls.getLiveRooms holds for a room's label. A
+ *  channel's name and a people room's members are the room itself, which
+ *  canReadCall already let them read. */
+async function callPlaceNames(
+  ctx: any,
+  userId: Id<"users">,
+  roomKey: string,
+): Promise<{ session_title: string | null; peer_name: string | null; channel_name: string | null }> {
+  const place = { session_title: null as string | null, peer_name: null as string | null, channel_name: null as string | null };
+  const parsed = parseRoomKey(roomKey);
+  // A key's ids are shape-checked only; a stale or foreign one names nothing.
+  const get = (table: string, id: string) => {
+    const norm = ctx.db.normalizeId(table, id);
+    return norm ? ctx.db.get(norm) : null;
+  };
+  if (parsed?.kind === "session") {
+    const conv = await get("conversations", parsed.conversationId);
+    if (conv?.title && (await canAccessConversation(ctx, userId, conv))) place.session_title = conv.title;
+  } else if (parsed?.kind === "channel") {
+    const channel = await get("chat_channels", parsed.channelId);
+    if (channel?.name) place.channel_name = channel.name;
+  } else if (parsed?.kind === "dm") {
+    const names: string[] = [];
+    for (const id of parsed.users) {
+      if (id === String(userId)) continue;
+      const u = await get("users", id);
+      const name = u?.name?.trim() || u?.email;
+      if (name) names.push(name);
+    }
+    if (names.length) place.peer_name = names.join(", ");
+  }
+  return place;
+}
+
 /** A call's video as one word: "recording" while a run is being filmed or
- *  saved, "ready" when some of it plays, null when there is none. */
-async function callVideoState(ctx: any, transcriptId: Id<"transcripts">): Promise<"recording" | "ready" | null> {
+ *  saved, "ready" when some of it plays, null when there is none. And
+ *  whether a shared screen has its own full-resolution file that plays
+ *  (`video_screen`), the picture an agent reading a call wants most. */
+async function callVideoState(ctx: any, transcriptId: Id<"transcripts">): Promise<{ video: "recording" | "ready" | null; video_screen: boolean }> {
   const files: Doc<"call_recordings">[] = await ctx.db
     .query("call_recordings")
     .withIndex("by_transcript", (q: any) => q.eq("transcript_id", transcriptId))
     .collect();
-  if (files.some((f) => isRecordingActive(f.status))) return "recording";
-  return files.some((f) => f.status === "ready") ? "ready" : null;
+  const video = files.some((f) => isRecordingActive(f.status)) ? "recording" : files.some((f) => f.status === "ready") ? "ready" : null;
+  return { video, video_screen: files.some((f) => f.kind === "screen" && f.status === "ready") };
 }
 
 export const cliGetCall = query({
@@ -2079,7 +2135,12 @@ export const cliGetCall = query({
     // than the call. An agent learns whether the call is shared, never how
     // to open it; the page's share control is where a person copies a link.
     const { share_token, ...rest } = call;
-    return { ...rest, shared: !!share_token, video_shared: shareIncludesVideo(t!) };
+    return {
+      ...rest,
+      shared: !!share_token,
+      video_shared: shareIncludesVideo(t!),
+      place: await callPlaceNames(ctx, auth.userId, t!.room_key),
+    };
   },
 });
 

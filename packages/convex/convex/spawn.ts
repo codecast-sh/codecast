@@ -108,6 +108,9 @@ export async function spawnSessionCore(
     agentType?: "claude_code" | "codex" | "cursor" | "gemini" | "opencode" | "pi" | "grok" | "muse";
     projectPath?: string;
     gitRoot?: string;
+    // A name the caller already knows (a line station: "Prove · ct-42"). Kept
+    // as given: neither the titler nor the daemon's announced title replaces it.
+    title?: string;
     model?: string;
     effort?: string;
     ccAccount?: string;
@@ -164,6 +167,7 @@ export async function spawnSessionCore(
     session_id: sessionId,
     project_path: opts.projectPath,
     git_root: opts.gitRoot,
+    ...(opts.title ? { title: opts.title, title_is_custom: true, skip_title_generation: true } : {}),
     started_at: now,
     updated_at: now,
     message_count: 0,
@@ -329,6 +333,7 @@ export const createSessionFromCli = mutation({
     // session is stamped review_of_task_id, never org_role_id, and counts
     // against the caps of the role doing the task's work.
     review_for_task: v.optional(v.string()),
+    title: v.optional(v.string()),
     // `cast handoff --to` / handoff.start: any ref to a session the caller
     // runs or owns. The new session continues it: born with
     // handed_off_from_conversation_id and the source's task/plan binding, and
@@ -390,6 +395,7 @@ export const createSessionFromCli = mutation({
       agentType: asDef.agentType ?? args.agent_type,
       projectPath: args.project_path,
       gitRoot: args.git_root,
+      title: args.title,
       model: asDef.model,
       effort: asDef.effort,
       ccAccount: args.cc_account,

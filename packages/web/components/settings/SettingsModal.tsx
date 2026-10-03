@@ -83,7 +83,7 @@ const GROUPS: { label: string; sections: SectionDef[] }[] = [
     sections: [
       { id: "team", label: "Team", icon: Users, desc: "Members, identity and the features your team runs", keywords: "members invite roles icon org statuses" },
       { id: "sync", label: "Sync & Privacy", icon: RefreshCw, desc: "Which projects sync, and who can see them", keywords: "projects sharing visibility private workspace directories" },
-      { id: "integrations", label: "Integrations", icon: Plug, desc: "Chrome extension, Slack, GitHub, Linear, Google and Notion", keywords: "chrome browser extension web store pair slack github linear google gmail notion connect oauth install repositories issues sync apps" },
+      { id: "integrations", label: "Integrations", icon: Plug, desc: "Chrome extension, Slack, GitHub, Linear, Google, Notion, and the product sources Ops reads", keywords: "chrome browser extension web store pair slack github linear google gmail notion connect oauth install repositories issues sync apps sentry posthog sdk ingest key product sources ops" },
     ],
   },
   {

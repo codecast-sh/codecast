@@ -30,7 +30,7 @@ import { SentFileBlock, type SentFileData } from "../../tools/SentFileBlock";
 import { useImageGallery, useGalleryMessageId } from "../../ImageGallery";
 import { EntityIdPill, TextWithMentions } from "../../EntityIdPill";
 import { entityRemarkPlugins } from "../../../lib/remarkEntityIds";
-import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS, USER_MD_REMARK } from "../../messageMarkdown";
+import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS, USER_MD_COMPONENTS, USER_MD_REMARK } from "../../messageMarkdown";
 import { browserTabOf, type BrowserTabRef } from "../../castCommand";
 import { useInboxStore, isConvexId, pendingRowSendArgs, type ForkChild } from "../../../store/inboxStore";
 import { useMessageBookmark } from "../../../hooks/useMessageBookmark";
@@ -687,7 +687,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
               <ReactMarkdown
                 remarkPlugins={USER_MD_REMARK}
                 rehypePlugins={MESSAGE_MD_REHYPE}
-                components={MESSAGE_MD_COMPONENTS}
+                components={USER_MD_COMPONENTS}
               >
                 {content}
               </ReactMarkdown>

@@ -1,20 +1,19 @@
 "use client";
 
-import { useCallback, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
+import { useCallback, useRef, useState, type ReactNode } from "react";
 import { Check, Copy, Link2, RefreshCw, Unlink, UserMinus, X } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { GUEST_LINK_TTL_MS, guestIdFromIdentity, isGuestIdentity } from "@codecast/shared/contracts";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useGuestLinks } from "../../hooks/useGuestLinks";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { useMountEffect } from "../../hooks/useMountEffect";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { copyToClipboard, copyToClipboardWhenReady } from "../../lib/utils";
 import { guestLinkUrl, removeGuest } from "../../lib/calls/guestDoorActions";
 import { useGuestDoor } from "../../hooks/useGuestDoor";
 import { GUEST_LINK_TTL_CHOICES, guestLinkExpiry, meetingTitle } from "../../lib/calls/roomGuests";
 import { firstName } from "./speakers";
+import { Popover, PopoverAnchor, PopoverContent } from "../ui/popover";
 
 // THE ROOM'S SIDE OF A GUEST (callGuests.ts has the rules).
 //
@@ -104,7 +103,15 @@ export function GuestRemoveButton({
   // Revealed by hover where there is one. A touch screen has none, and a
   // button that never appears there would leave the face card as the only
   // way to put a guest out, so on those it shows at rest.
-  const reveal = always ? "" : " opacity-0 group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100";
+  // A row also gives up its width at rest: the stage's side column is 200px,
+  // and a button that is only transparent still took 64 of them, leaving a
+  // guest's name, the one thing the room needs to read, as "P…". It stays in
+  // the tab order and opens on focus as on hover.
+  const reveal = always
+    ? ""
+    : tile
+      ? " opacity-0 group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
+      : " max-w-0 overflow-hidden whitespace-nowrap !px-0 opacity-0 group-hover:max-w-32 group-hover:!px-1.5 group-hover:opacity-100 focus-visible:max-w-32 focus-visible:!px-1.5 focus-visible:opacity-100 [@media(hover:none)]:max-w-32 [@media(hover:none)]:!px-1.5 [@media(hover:none)]:opacity-100";
   const tone = tile ? " bg-black/45 text-white/80 hover:bg-sol-red/70 hover:text-white" : " text-sol-text-muted hover:bg-sol-red/15 hover:text-sol-red";
   return (
     <button
@@ -127,9 +134,12 @@ export function GuestRemoveButton({
 
 /**
  * The guest link button and its panel. The trigger is the caller's (each
- * surface draws its own chrome); the panel is portaled to the body so a
- * clipped header (the stage's left group clips, on purpose) cannot cut it,
- * and it wears the theme of wherever the trigger sits.
+ * surface draws its own chrome) and toggles `open` itself, so the popover
+ * only anchors to it. The panel is portaled to the body so a clipped header
+ * (the stage's left group clips, on purpose) cannot cut it; Radix flips it
+ * above the trigger when below would run off the screen, holds it inside
+ * the viewport, follows a scroll, and dismisses on Escape or a press
+ * outside. It wears the theme of wherever the trigger sits.
  */
 export function GuestInvite({
   roomKey,
@@ -143,70 +153,59 @@ export function GuestInvite({
 }) {
   const [open, setOpen] = useState(false);
   const anchorRef = useRef<HTMLSpanElement>(null);
+  // A press elsewhere already put focus where the person meant it; only a
+  // close from inside (Escape, the close button) hands focus back.
+  const pressedOutside = useRef(false);
   const close = useCallback(() => setOpen(false), []);
   // Offered only to somebody who may make a link here (the same feed the
   // panel lists from answers null for anybody else).
   const { canInvite } = useGuestLinks(roomKey);
   if (!canInvite) return null;
+  const dark = open && !!anchorRef.current?.closest(".dark");
   return (
-    <span ref={anchorRef} className="relative inline-flex shrink-0">
-      {trigger({ open, toggle: () => setOpen((o) => !o) })}
-      {open && anchorRef.current && (
-        <GuestInvitePanel roomKey={roomKey} anchor={anchorRef.current} align={align} onClose={close} />
-      )}
-    </span>
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverAnchor asChild>
+        <span ref={anchorRef} className="relative inline-flex shrink-0">
+          {trigger({ open, toggle: () => setOpen((o) => !o) })}
+        </span>
+      </PopoverAnchor>
+      <PopoverContent
+        align={align === "end" ? "end" : "start"}
+        sideOffset={6}
+        collisionPadding={8}
+        hideWhenDetached
+        aria-label="Invite someone outside the team"
+        tabIndex={-1}
+        className={`${dark ? "dark " : ""}z-[260] w-[min(340px,calc(100vw-16px))] rounded-xl border-0 bg-sol-bg-alt p-3 text-sol-text shadow-2xl ring-1 ring-black/10 duration-150 dark:ring-white/[0.08] motion-reduce:animate-none`}
+        // Focus lands on the panel itself as it opens, so Esc closes it
+        // rather than the stage behind it, with no ring on its first button.
+        onOpenAutoFocus={(e) => {
+          pressedOutside.current = false;
+          e.preventDefault();
+          (e.currentTarget as HTMLElement | null)?.focus?.();
+        }}
+        onCloseAutoFocus={(e) => {
+          e.preventDefault();
+          if (!pressedOutside.current) anchorRef.current?.querySelector<HTMLElement>("button, [tabindex]")?.focus();
+        }}
+        // Radix closes on Escape; the stage behind must not hear it too.
+        onKeyDown={(e) => {
+          if (e.key === "Escape") e.stopPropagation();
+        }}
+        // A press on the trigger is the toggle's job, not a dismissal:
+        // otherwise the outside press closes and the toggle reopens.
+        onInteractOutside={(e) => {
+          if (anchorRef.current?.contains(e.target as Node)) e.preventDefault();
+          else pressedOutside.current = true;
+        }}
+      >
+        <GuestInvitePanel roomKey={roomKey} onClose={close} />
+      </PopoverContent>
+    </Popover>
   );
 }
 
-const PANEL_W = 340;
-const GAP = 6;
-const EDGE = 8;
-
-/** The panel's width: its own, or the screen's less a margin on a phone,
- *  where 340 would run off the right edge with its buttons clipped. */
-const panelWidth = () => Math.min(PANEL_W, window.innerWidth - 2 * EDGE);
-
-/** Where the panel stands: under the trigger, or above it when below would
- *  run off the screen, held inside the viewport either way. Measured after
- *  layout (the panel's own height decides the flip) and again whenever the
- *  window resizes. `place` is returned for the caller to follow a scroll. */
-function usePanelPlacement(anchor: HTMLElement, panel: React.RefObject<HTMLDivElement | null>, align: "start" | "end") {
-  const [pos, setPos] = useState<{ left: number; top: number; width: number; above: boolean } | null>(null);
-  const place = useCallback(() => {
-    const rect = anchor.getBoundingClientRect();
-    const h = panel.current?.offsetHeight ?? 0;
-    const width = panelWidth();
-    const left = Math.max(EDGE, Math.min(window.innerWidth - width - EDGE, align === "end" ? rect.right - width : rect.left));
-    const below = rect.bottom + GAP;
-    const above = below + h > window.innerHeight - EDGE && rect.top - GAP - h >= EDGE;
-    const top = above ? rect.top - GAP - h : below;
-    // The layout effect below measures after every render, so a placement
-    // that has not moved must not set state: a fresh object each time is a
-    // render each time, and React gives up on the loop ("Maximum update
-    // depth exceeded"), taking the whole call window down with it.
-    setPos((p) => (p && p.left === left && p.top === top && p.width === width && p.above === above ? p : { left, top, width, above }));
-  }, [anchor, panel, align]);
-  useLayoutEffect(() => {
-    place();
-  });
-  useWatchEffect(() => {
-    window.addEventListener("resize", place);
-    return () => window.removeEventListener("resize", place);
-  }, [place]);
-  return { pos, place };
-}
-
-function GuestInvitePanel({
-  roomKey,
-  anchor,
-  align,
-  onClose,
-}: {
-  roomKey: string;
-  anchor: HTMLElement;
-  align: "start" | "end";
-  onClose: () => void;
-}) {
+function GuestInvitePanel({ roomKey, onClose }: { roomKey: string; onClose: () => void }) {
   const door = useGuestDoor();
   const now = useCoarseNow(30_000);
   const { links, ready } = useGuestLinks(roomKey);
@@ -219,39 +218,7 @@ function GuestInvitePanel({
   const [busy, setBusy] = useState<null | "create" | "fresh" | string>(null);
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const { pos, place } = usePanelPlacement(anchor, rootRef, align);
-  const dark = !!anchor.closest(".dark");
-
-  useWatchEffect(() => {
-    const onDown = (e: PointerEvent) => {
-      const t = e.target as Node;
-      if (!rootRef.current?.contains(t) && !anchor.contains(t)) onClose();
-    };
-    // A scroll that moves the trigger moves the panel with it, and closes it
-    // only once the trigger has left the screen. Never on any scroll at all:
-    // in a live call the thread and the transcript scroll by themselves as
-    // lines arrive, and that shut the panel under a hand reaching for copy.
-    const onScroll = (e: Event) => {
-      const t = e.target as Node;
-      if (rootRef.current?.contains(t) || !t.contains(anchor)) return;
-      const r = anchor.getBoundingClientRect();
-      if (r.bottom < 0 || r.top > window.innerHeight || r.right < 0 || r.left > window.innerWidth) onClose();
-      else place();
-    };
-    document.addEventListener("pointerdown", onDown, true);
-    document.addEventListener("scroll", onScroll, true);
-    return () => {
-      document.removeEventListener("pointerdown", onDown, true);
-      document.removeEventListener("scroll", onScroll, true);
-    };
-  }, [anchor, onClose, place]);
-  // Focus lands in the panel once, as it opens, so Esc closes it rather than
-  // the stage behind it.
-  useMountEffect(() => {
-    rootRef.current?.focus();
-  });
 
   const copied_ = () => {
     setCopyFailed(false);
@@ -295,22 +262,8 @@ function GuestInvitePanel({
   const preview = useQueryNoThrow(api.callGuests.guestLinkPreview, { room_key: roomKey }).data;
   const seenAs = preview ? meetingTitle(preview.title, { name: preview.inviter }) : null;
 
-  return createPortal(
-    <div
-      ref={rootRef}
-      tabIndex={-1}
-      role="dialog"
-      aria-label="Invite someone outside the team"
-      onKeyDown={(e) => {
-        if (e.key !== "Escape") return;
-        e.stopPropagation();
-        onClose();
-      }}
-      style={{ left: pos?.left ?? -9999, top: pos?.top ?? 0, width: pos?.width ?? PANEL_W, visibility: pos ? "visible" : "hidden" }}
-      className={`${dark ? "dark " : ""}fixed z-[260] rounded-xl bg-sol-bg-alt p-3 text-sol-text shadow-2xl outline-none ring-1 ring-black/10 animate-in fade-in duration-150 dark:ring-white/[0.08] motion-reduce:animate-none ${
-        pos?.above ? "slide-in-from-bottom-1" : "slide-in-from-top-1"
-      }`}
-    >
+  return (
+    <>
       <div className="flex items-start gap-2">
         <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-sol-yellow/15 text-sol-yellow">
           <Link2 className="h-3.5 w-3.5" />
@@ -383,9 +336,13 @@ function GuestInvitePanel({
             </>
           )}
           {/* How long the next link stays open: always in sight, because a
-              replacement is a new choice, not the old link's. */}
+              replacement is a new choice, not the old link's. The row reads
+              as one sentence with its verb at the end ("new link lasts 1 day,
+              replace link"): a duration alone changes nothing until the
+              action on its right is pressed, and the label says so by naming
+              the link it is for, not the one already out. */}
           <div className={`flex items-center gap-1 px-0.5 ${mine ? "mt-3 border-t border-sol-border/50 pt-2.5" : "mb-2"}`}>
-            <span className="mr-1 font-mono text-[10.5px] text-sol-text-muted">{mine ? "new link, open for" : "open for"}</span>
+            <span className="mr-1 font-mono text-[10.5px] text-sol-text-muted">{mine ? "new link lasts" : "link lasts"}</span>
             {GUEST_LINK_TTL_CHOICES.map((c) => (
               <button
                 key={c.ms}
@@ -408,7 +365,7 @@ function GuestInvitePanel({
                 title={`Replace your link with a new one, open for ${ttlLabel}. The old one stops working`}
               >
                 <RefreshCw className={`h-3 w-3 ${busy === "fresh" ? "animate-spin" : ""}`} />
-                replace
+                {busy === "fresh" ? "replacing…" : "replace link"}
               </button>
             )}
           </div>
@@ -455,7 +412,6 @@ function GuestInvitePanel({
           ))}
         </div>
       )}
-    </div>,
-    document.body,
+    </>
   );
 }

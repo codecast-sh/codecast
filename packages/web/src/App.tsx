@@ -134,6 +134,7 @@ const AdminDaemonLogs = lazy(() => import("@/app/admin/daemon-logs/page"));
 const ConfigPage = lazy(() => import("@/app/config/page"));
 const Memory = lazy(() => import("@/app/memory/page"));
 const Evals = lazy(() => import("@/app/evals/page"));
+const Ops = lazy(() => import("@/app/ops/page"));
 const Sessions = lazy(() => import("@/app/sessions/page"));
 const Resources = lazy(() => import("@/app/resources/page"));
 const Windows = lazy(() => import("@/app/windows/page"));
@@ -165,6 +166,8 @@ const SettingsDesktop = lazy(() => import("@/app/settings/desktop/page"));
 const SettingsApps = lazy(() => import("@/app/settings/apps/page"));
 // Registers the issue feed kinds with ExternalEventRow before any feed paints.
 import "@/lib/issueEventStyles";
+// And a product's transitions (external-data.md X10).
+import "@/lib/opsEventStyles";
 
 function E({ name, children }: { name: string; children: ReactNode }) {
   return <ErrorBoundary name={name} level="panel">{children}</ErrorBoundary>;
@@ -291,6 +294,9 @@ export function App() {
               {/* One area: app/evals/page.tsx reads its sub-paths (components/evals/evalsPaths.ts). */}
               <Route path="evals" element={<E name="Evals"><Evals /></E>} />
               <Route path="evals/*" element={<E name="Evals"><Evals /></E>} />
+              {/* One area: app/ops/page.tsx reads its sub-paths (components/ops/opsPaths.ts). */}
+              <Route path="ops" element={<E name="Ops"><Ops /></E>} />
+              <Route path="ops/*" element={<E name="Ops"><Ops /></E>} />
             </Route>
 
             {/* Standalone shell pages — kept outside the shared shell because they

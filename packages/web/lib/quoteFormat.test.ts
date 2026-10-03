@@ -1,5 +1,6 @@
 import { test, expect, describe } from "bun:test";
 import {
+  splitQuoteRuns,
   toBlockquote,
   formatQuotedReply,
   formatPendingComments,
@@ -92,5 +93,20 @@ describe("sortPendingComments", () => {
     ];
     const sorted = sortPendingComments(input).map((c) => c.id);
     expect(sorted).toEqual(["b-block0", "b-block1", "a-block1", "a-block2"]);
+  });
+});
+
+describe("splitQuoteRuns", () => {
+  test("round-trips toBlockquote and keeps the replies between quotes", () => {
+    const body = `${formatQuotedReply("1. first point\n\nmore of it", "yes")}\n\n${formatQuotedReply("2. second", "no")}`;
+    expect(splitQuoteRuns(body)).toEqual([
+      { quote: true, text: "1. first point\n\nmore of it" },
+      { quote: false, text: "yes" },
+      { quote: true, text: "2. second" },
+      { quote: false, text: "no" },
+    ]);
+  });
+  test("text without quotes is one plain run", () => {
+    expect(splitQuoteRuns("a > b\nc")).toEqual([{ quote: false, text: "a > b\nc" }]);
   });
 });

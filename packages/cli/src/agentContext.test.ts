@@ -22,14 +22,10 @@ import * as path from "node:path";
 import { COMMAND_GROUPS, activateGroup, registerGroupStubs, type GroupDeps } from "./commandGroups.js";
 import { DESTRUCTIVE_COMMANDS } from "./destructiveCommands.js";
 import { buildAgentContext, formatAgentContextSummary, type AgentContext } from "./agentContext.js";
+import { PINNED_ENV, liveAgentContext } from "./test-helpers/agentContextLive.js";
 
-// `cast browser` registers one of two verb sets depending on whether the
-// agent-browser engine is installed on the machine (useEngine in browser/cli.ts),
-// so a subcommand comparison is only meaningful with that choice pinned. Its own
-// escape hatch pins it, on both sides of the comparison, and which of the two
-// surfaces they agree on does not matter here — the drift between them is
-// browser/surface.test.ts's job.
-const PINNED_ENV = { CAST_BROWSER_LEGACY: "1" };
+// Pinned on both sides of the comparison (see PINNED_ENV); the drift between
+// the two browser surfaces is browser/surface.test.ts's job.
 Object.assign(process.env, PINNED_ENV);
 
 const deps: GroupDeps = {
@@ -38,39 +34,7 @@ const deps: GroupDeps = {
   resolveProjectId: async () => "p",
 };
 
-/** The dump the shipped CLI produces, with nothing of this machine in it: an
- *  empty HOME and its own CODECAST_DIR, so no config, credential or daemon of
- *  the developer running the test can reach the run. */
-function liveContext(): AgentContext {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "cast-agent-context-"));
-  fs.mkdirSync(path.join(home, ".codecast"), { recursive: true });
-  try {
-    const result = spawnSync(process.execPath, [path.join(import.meta.dir, "main.ts"), "agent-context", "--json"], {
-      env: {
-        ...process.env,
-        ...PINNED_ENV,
-        HOME: home,
-        CODECAST_DIR: path.join(home, ".codecast"),
-        NO_COLOR: "1",
-        CODECAST_NO_AUTO_UPDATE: "1",
-      },
-      encoding: "utf-8",
-      maxBuffer: 64 * 1024 * 1024,
-      // Generous, because this run loads every command group and a busy machine
-      // transpiles the whole CLI first. It bounds a hang, not the normal run.
-      timeout: 300_000,
-    });
-    if (result.status !== 0) {
-      throw new Error(`cast agent-context --json exited ${result.status}: ${result.stderr || result.stdout}`);
-    }
-    if (result.stderr) throw new Error(`cast agent-context --json wrote to stderr: ${result.stderr}`);
-    return JSON.parse(result.stdout) as AgentContext;
-  } finally {
-    fs.rmSync(home, { recursive: true, force: true });
-  }
-}
-
-const context = liveContext();
+const context = liveAgentContext();
 const byPath = new Map(context.commands.map((cmd) => [cmd.command, cmd]));
 
 describe("the live command surface", () => {

@@ -21,7 +21,7 @@ const AudioSession = livekit?.AudioSession ?? null;
 export { callsNativeAvailable };
 import { api } from "@codecast/convex/convex/_generated/api";
 import { convex } from "../convex";
-import { CALL_HEARTBEAT_MS, humanizeConvexError, localTranscribeLanguages } from "@codecast/shared/contracts";
+import { CALL_HEARTBEAT_MS, humanizeConvexError, isRoomMachineryKind, localTranscribeLanguages } from "@codecast/shared/contracts";
 
 export type CallPhase = "idle" | "connecting" | "connected" | "error";
 
@@ -106,7 +106,9 @@ function rebuildParticipants() {
     emit({ participants: [] });
     return;
   }
-  const all: Participant[] = [room.localParticipant, ...room.remoteParticipants.values()];
+  // The room's machinery (a recording's egress, the agent-face worker) is
+  // in the media room too, and is nobody to draw.
+  const all: Participant[] = [room.localParticipant, ...room.remoteParticipants.values()].filter((p) => !isRoomMachineryKind(p.kind));
   emit({
     participants: all.map((p) => {
       const mic = p.getTrackPublication(Track.Source.Microphone);

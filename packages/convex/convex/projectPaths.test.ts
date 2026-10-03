@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { normalizeProjectPath, pathWithinLocalRoots, pickInheritedGitMeta } from "./projectPaths";
+import { normalizeProjectPath, pathWithinLocalRoots, pickInheritedGitMeta, projectContainingPath } from "./projectPaths";
 
 describe("normalizeProjectPath", () => {
   // Regression: a session whose cwd fell back to $HOME (e.g. a remote/resume
@@ -100,5 +100,22 @@ describe("pickInheritedGitMeta", () => {
     expect(
       pickInheritedGitMeta([{ git_root: "/x", updated_at: 1 }, { git_remote_url: null, git_root: "/y" }]),
     ).toEqual({ git_remote_url: null, git_root: null });
+  });
+});
+
+describe("projectContainingPath", () => {
+  const p = (title: string, project_path?: string, isDefault?: boolean) => ({ title, project_path, ...(isDefault ? { line_profile: { default: true } } : {}) });
+
+  test("the deepest path holding the directory wins; a sibling prefix does not hold it", () => {
+    const rows = [p("Repo", "/src/repo"), p("Web", "/src/repo/packages/web/"), p("Other", "/src/repo-two"), p("None")];
+    expect(projectContainingPath(rows, "/src/repo/packages/web/app")?.title).toBe("Web");
+    expect(projectContainingPath(rows, "/src/repo")?.title).toBe("Repo");
+    expect(projectContainingPath(rows, "/src/repo-twofold")).toBeNull();
+    expect(projectContainingPath(rows, undefined)).toBeNull();
+  });
+
+  test("projects sharing the path are told apart by the profile default, else none", () => {
+    expect(projectContainingPath([p("Product", "/src/cc", true), p("Sync", "/src/cc")], "/src/cc/x")?.title).toBe("Product");
+    expect(projectContainingPath([p("Product", "/src/cc"), p("Sync", "/src/cc")], "/src/cc/x")).toBeNull();
   });
 });

@@ -28,6 +28,7 @@ import {
   performReparentRole,
   performRetireRole,
   performSetCaps,
+  performSetLine,
   performSetRoleScope,
   planProjectsOf,
   resolveScopeRef,
@@ -1235,7 +1236,10 @@ export async function applyRole(ctx: Ctx, userId: Id<"users">, boundary: Boundar
   // changes nothing about how it works).
   const reports_to = p.seat && !p.reports_to?.trim() ? await seatOwnerOf(ctx, p.seat.existing) : await resolveReportsTo(ctx, userId, boundary, p.reports_to);
   const role = await performCreateRole(ctx, userId, { name: p.name, handle, team_id: boundary.team_id, scope, reports_to, charter, tenure: p.tenure, avatar: p.avatar, host_user_id: p.seat ? await seatRunnerOf(ctx, p.seat.existing) : undefined });
-  if (p.caps) await performSetCaps(ctx, userId, { role_id: String(role._id), hands: p.caps.hands_per_day, wakes: p.caps.wakes_per_day, tokens: p.caps.tokens_per_day, human_decision: opts.human_decision });
+  if (p.caps) await performSetCaps(ctx, userId, { role_id: String(role._id), hands: p.caps.hands_per_day, wakes: p.caps.wakes_per_day, tokens: p.caps.tokens_per_day, cards: p.caps.cards, human_decision: opts.human_decision });
+  // The line it runs (line-profile.md LP7): a template that owns a project's
+  // line names its workflow, and the person's answer to this proposal sets it.
+  if (p.line) await performSetLine(ctx, userId, { role_id: String(role._id), slug: p.line, human_decision: opts.human_decision });
   // A role that names its session (org-roles-run-work.md R2) is seated on it
   // in this same apply, whatever `provision` says: the session IS the role, so
   // a role row without it would be a name for nothing. A session that cannot

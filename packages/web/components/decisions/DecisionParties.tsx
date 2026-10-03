@@ -10,6 +10,7 @@ import { SessionGlyph } from "../identity";
 import { identityRowOf } from "../../lib/sessionIdentity";
 import { categoryMeaning } from "../../lib/decisionCategory";
 import { askingSessionDeps } from "./askingSessionDeps";
+import { askingSessionName } from "../../lib/decisionLinks";
 
 // Who is in a decision: the session that asked, the person who holds it, and
 // what its category means. One rendering for the queue card and the document
@@ -42,34 +43,44 @@ export function AskingSessionView({
   decision,
   session,
   onJumpToAsk,
+  omitRef,
+  label,
   className = "",
 }: {
   decision: AskingDecision;
   session?: AskingSessionRow;
   onJumpToAsk: () => void;
+  /** An id the card already shows in its own chip (a change card's task),
+   *  dropped from the name so the header never says it twice. */
+  omitRef?: string;
+  /** Plain words in place of the session's face, live dot, title and
+   *  project (a change card names the line, not its build session); the
+   *  title stays on hover and the click still jumps to the ask. */
+  label?: string;
   className?: string;
 }) {
-  const title = session?.title || decision.session_title;
+  const fullTitle = session?.title || decision.session_title;
+  const title = askingSessionName(fullTitle, omitRef);
   const project = session?.project_path || decision.project_path;
   const live = session?.status === "running" || session?.status === "working";
   return (
     <span className={`inline-flex items-center gap-1.5 min-w-0 ${className}`} data-asking-session={decision.conversation_id}>
       {/* Who is asking (session-characters.md S3), then whether it is live. */}
-      <SessionGlyph row={session ? identityRowOf(session as any) : null} size={14} className="shrink-0" />
-      <span className={`w-1.5 h-1.5 shrink-0 rounded-full ${live ? "bg-sol-green" : "bg-sol-text-dim"}`} />
+      {!label && <SessionGlyph row={session ? identityRowOf(session as any) : null} size={14} className="shrink-0" />}
+      {!label && <span className={`w-1.5 h-1.5 shrink-0 rounded-full ${live ? "bg-sol-green" : "bg-sol-text-dim"}`} title={live ? "The asking session is running" : "The asking session is idle"} aria-label={live ? "running" : "idle"} />}
       <Link
         href={`/conversation/${decision.conversation_id}`}
         className="truncate text-sol-text-muted hover:text-sol-blue transition-colors"
-        title={title ? `${title} — go to the ask in the conversation` : "Go to the ask in the conversation"}
+        title={fullTitle ? `${fullTitle}: go to the ask in the conversation` : "Go to the ask in the conversation"}
         onClick={(e) => {
           if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
           e.preventDefault();
           void onJumpToAsk();
         }}
       >
-        {title || "a session with no name yet"}
+        {label || title || "a session with no name yet"}
       </Link>
-      {project && <span className="truncate text-sol-text-dim">{getProjectName(project)}</span>}
+      {project && !label && <span className="truncate text-sol-text-dim">{getProjectName(project)}</span>}
     </span>
   );
 }

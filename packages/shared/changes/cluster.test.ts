@@ -136,18 +136,17 @@ describe("rules (a) to (c) in isolation", () => {
     const cli = commit({ sha: "cli1", subject: "fix(cli): x", timestamp: batch.timestamp - 60 * MIN, paths: { "packages/cli/src/a.ts": 10 } });
     const convex = commit({ sha: "cvx1", subject: "feat(convex): y", timestamp: batch.timestamp + 30 * MIN, conversation_id: "jx7s", paths: { "packages/convex/convex/y.ts": 10 } });
     const r = build({ commits: [batch, cli, convex], visible: [{ conversation_id: "jx7s" }] });
-    expect(holding(r.stories, "9dddac2af")).toHaveLength(3);
+    // cli (44%) and convex (34%) are slices; the thin areas (docs, shared, animation-plans) ride with cli.
+    expect(holding(r.stories, "9dddac2af")).toHaveLength(2);
     const cliStory = holding(r.stories, "cli1")[0];
     expect(cliStory.commit_shas).toEqual(["cli1", "9dddac2af"]);
     expect(cliStory.whole_shas).toEqual(["cli1"]);
-    expect(Object.keys(cliStory.area_counts)).toEqual(["cli"]);
+    expect(Object.keys(cliStory.area_counts).sort()).toEqual(["animation-plans", "cli", "docs", "shared"]);
     const cvx = holding(r.stories, "cvx1")[0];
     expect(cvx.anchor).toBe("jx7s");
     // The batch commit's convex slice carries its schema path; the cli slice does not.
     expect(cvx.risks.map((x) => x.code)).toEqual(["schema"]);
-    expect(cliStory.risks).toEqual([]);
-    const rest = r.stories.find((s) => s.commit_shas.includes("9dddac2af") && !s.whole_shas.length && s !== cliStory && s !== cvx)!;
-    expect(Object.keys(rest.area_counts).sort()).toEqual(["animation-plans", "docs", "shared"]);
+    expect(cliStory.risks.map((x) => x.code)).not.toContain("schema");
   });
 
   test("sessions sharing a task merge; the earlier session anchors", () => {
@@ -172,6 +171,23 @@ describe("rules (a) to (c) in isolation", () => {
     expect(evening.stories.map((s) => s.story_key)).not.toContain(morning.stories[0].story_key);
     expect(evening.stories).toHaveLength(areas.length);
     for (const s of evening.stories) expect(s.conversation_ids).toEqual(["s9"]);
+  });
+
+  test("a batch commit's thin areas ride with its largest slice and never stand as a story of their own", () => {
+    // 40 backend files, 10 landing files, 1 docs file: docs is under SLICE_SHARE.
+    const paths: Record<string, number> = {};
+    for (let i = 0; i < 40; i++) paths[`packages/backend/f${i}.ts`] = 1;
+    for (let i = 0; i < 10; i++) paths[`packages/landing/p${i}.tsx`] = 1;
+    paths["packages/docs/a.md"] = 1;
+    const big = commit({ sha: "big", subject: "feat: effort dial", paths, timestamp: T0 });
+    const landing = commit({ sha: "land", subject: "fix: join page", timestamp: T0 + 30 * MIN, paths: { "packages/landing/j.tsx": 5 } });
+    const r = build({ commits: [big, landing], visible: [] });
+    for (const s of r.stories.filter((x) => x.commit_shas.includes("big"))) expect(Object.keys(s.area_counts)).not.toEqual(["docs"]);
+    expect(r.stories.find((s) => s.area === "backend")!.area_counts.docs).toBeDefined();
+    // A commit with one substantial area is not split at all.
+    const lopsided: Record<string, number> = { "packages/landing/x.tsx": 1, "packages/docs/a.md": 1 };
+    for (let i = 0; i < 40; i++) lopsided[`packages/backend/g${i}.ts`] = 1;
+    expect(build({ commits: [commit({ sha: "one", subject: "feat: x", paths: lopsided })], visible: [] }).stories).toHaveLength(1);
   });
 
   test("rule (b) breaks on a 3 hour gap and on scope; a branch groups whole", () => {

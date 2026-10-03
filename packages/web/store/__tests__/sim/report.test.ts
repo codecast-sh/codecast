@@ -94,7 +94,7 @@ describe("formatFailure", () => {
           #15  +3500ms  conn:B       res docs:update docs#1  by net
         replay:
           bun run sim visibilityFlip --seed 7 --trace docs#1
-          bun run sim visibilityFlip --seed 7 --order "conn:A conn:A live:B:docs sched conn:A repl:A>A1 repl:A>A1 repl:A>A1 timer:A conn:B conn:B live:B:docs conn:A conn:B conn:B"
+          bun run sim visibilityFlip --seed 7 --order="conn:A conn:A live:B:docs sched conn:A repl:A>A1 repl:A>A1 repl:A>A1 timer:A conn:B conn:B live:B:docs conn:A conn:B conn:B"
         artifacts: /sim-out/visibilityFlip-interleave-7"
     `);
   });
@@ -116,8 +116,8 @@ describe("formatFailure", () => {
     const lines = formatFailure(forced(), "/out").split("\n").map((l) => l.trim());
     expect(lines).toContain("bun run sim visibilityFlip --seed 7 --trace docs#1");
     const orderLine = lines.find((l) => l.includes("--order"))!;
-    expect(orderLine.startsWith("bun run sim visibilityFlip --seed 7 --order ")).toBe(true);
-    expect(parseOrder(orderLine.match(/--order "([^"]*)"/)![1])).toEqual(CHANNELS);
+    expect(orderLine.startsWith("bun run sim visibilityFlip --seed 7 --order=")).toBe(true);
+    expect(parseOrder(orderLine.match(/--order="([^"]*)"/)![1])).toEqual(CHANNELS);
   });
 
   test("a failure a red marker names says it was expected", () => {
@@ -232,12 +232,27 @@ describe("run history fields", () => {
     const order = ["scripted", "actor:ada", "conn:A"];
     expect(replayCommands("visibilityFlip", 7, order, "ada/s")).toEqual([
       "bun run sim visibilityFlip --seed 7 --trace ada/s",
-      'bun run sim visibilityFlip --seed 7 --order "scripted actor:ada conn:A"',
+      'bun run sim visibilityFlip --seed 7 --order="scripted actor:ada conn:A"',
     ]);
     expect(replayCommands("visibilityFlip", 7, order, null, ["scripted", "conn:A"])).toEqual([
       "bun run sim visibilityFlip --seed 7 --trace",
-      'bun run sim visibilityFlip --seed 7 --order "scripted actor:ada conn:A"',
-      'bun run sim visibilityFlip --seed 7 --order "scripted conn:A"',
+      'bun run sim visibilityFlip --seed 7 --order="scripted actor:ada conn:A"',
+      'bun run sim visibilityFlip --seed 7 --order="scripted conn:A"',
     ]);
+  });
+
+  // bun run drops an empty argument, so `--order ""` reached sim.ts as a bare
+  // flag and exited 2. The printed line must survive the real `bun run sim`,
+  // empty order included (a failure before any delivery, or a shrink to nothing).
+  test("an empty order line replays through bun run", () => {
+    const [, full, minimal] = replayCommands("visibilityFlip", 7, [], null, []);
+    expect(full).toBe('bun run sim visibilityFlip --seed 7 --order=""');
+    expect(minimal).toBe(full);
+    // --list parses every flag and then only reads the catalog, so this runs the
+    // printed argv through the real script without running a scenario.
+    const r = Bun.spawnSync(["sh", "-c", `${full} --list --json`], { cwd: join(import.meta.dir, "../../.."), stderr: "pipe", stdout: "pipe" });
+    expect(r.stderr.toString()).not.toContain("needs a value");
+    expect(r.exitCode).toBe(0);
+    expect(Array.isArray(JSON.parse(r.stdout.toString()))).toBe(true);
   });
 });
