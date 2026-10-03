@@ -20,6 +20,8 @@ import { capsFor, countersFor } from "./lib/orgCaps";
 import { findRoleRoutine } from "./lib/orgRoutine";
 import { extractPlanTitleForWeb } from "./docs";
 import { computeReportingPeople, type BriefPerson } from "./orgGoals";
+import { roleServedInitiatives } from "./lib/roleInitiatives";
+import { metricLine } from "@codecast/shared/contracts/initiative";
 
 // The org page's read side (docs/architecture/org-roles.md S3, S4): one query
 // returns the workspace's reporting tree — people, roles, anchors, and every
@@ -560,15 +562,15 @@ export async function resolveScope(
   return { userId, role, teamId, scope, projects, plans: Array.from(planById.values()), tasks: Array.from(taskById.values()) };
 }
 
-// F1's session rule over the org scan: bound to a task or plan in scope, on a
-// scope project's path, or filed under the role.
+// F1's session rule over the org scan (org-staffing.md S35): bound to a task
+// or plan in scope, or filed under the role. A scope project's folder puts
+// nothing in scope: folders decide nothing.
 export type OrgScan = Awaited<ReturnType<typeof collectOrgSessions>>;
 export async function sessionsInScope(ctx: Ctx, resolved: ResolvedScope, now: number, scanIn?: OrgScan): Promise<Array<{ session: OrgSession; raw: any }>> {
   if (isScopeless(resolved.scope) && !resolved.role) return [];
   const scan = scanIn ?? await collectOrgSessions(ctx, resolved.userId, resolved.teamId, now);
   const taskIds = new Set(resolved.tasks.map((t) => t._id.toString()));
   const planIds = new Set(resolved.plans.map((p) => p._id.toString()));
-  const paths = new Set(resolved.projects.map((p) => p.project_path).filter(Boolean));
   const roleId = resolved.role?._id?.toString();
   const out: Array<{ session: OrgSession; raw: any }> = [];
   for (const entry of scan.sessions.values()) {
@@ -577,8 +579,7 @@ export async function sessionsInScope(ctx: Ctx, resolved: ResolvedScope, now: nu
       (roleId && c.org_role_id?.toString() === roleId) ||
       (c.active_task_id && taskIds.has(c.active_task_id.toString())) ||
       (c.active_plan_id && planIds.has(c.active_plan_id.toString())) ||
-      (c.plan_ids ?? []).some((id: any) => planIds.has(id.toString())) ||
-      (c.project_path && paths.has(c.project_path));
+      (c.plan_ids ?? []).some((id: any) => planIds.has(id.toString()));
     if (inScope) out.push(entry);
   }
   return out;
@@ -1070,11 +1071,24 @@ export type BriefHand = {
   task: { short_id: string; title: string; status: string; execution_status?: string; review_verdict?: string; review_note?: string } | null;
 };
 export type BriefChange = { kind: "task" | "plan"; short_id?: string; title: string; status: string; updated_at: number };
+// An initiative the role serves (initiatives-projects-role-page.md I4), with
+// its health as last said and when: a lead's daily check refreshes the ones
+// it owns (org-staffing.md S25), so a read that is older than its check is a
+// read to post again.
+export type BriefInitiative = { short_id: string; title: string; status: string; health: string; health_at: number | null; owned: boolean; metrics: string[]; chain: string[] };
+// The standing session as the org card reads it: its work state and its pinned
+// line, so a reader of another role's brief (the Head of People, S29) sees
+// where the role itself stands without a second read.
+export type BriefStanding = { short_id: string | null; state: WorkState | null } & StandingState;
 export type BriefFacts = {
   scope: { projects: ScopeProject[]; plans: { id: string; short_id: string; title: string; project_id?: string }[]; whole_workspace: boolean };
   tasks: { total: number; open: number; by_status: Record<string, number>; by_priority: Record<string, number> };
   plans: ScopeSummary["plans"];
   hands: BriefHand[];
+  // The initiatives the role owns or its projects carry, owned first.
+  initiatives: BriefInitiative[];
+  // The role's own standing session, or null before provision.
+  standing: BriefStanding | null;
   // The people who report to the role (org-roles-run-work.md R6): their goals
   // from the brief read against the live rows, and their sessions that changed
   // since the last frame. Empty when nobody reports to it.
@@ -1165,6 +1179,14 @@ export async function computeBriefFacts(ctx: Ctx, viewerId: Id<"users">, role: a
   const anchor = role.anchor_id ? await ctx.db.get(role.anchor_id) : null;
   const standing = anchor?.conversation_id ? await ctx.db.get(anchor.conversation_id) : null;
   const uncounted = [standing, ...hands.map((h) => scan.sessions.get(h._id.toString())?.raw)].filter((c) => c && c.agent_type !== "claude_code").length;
+  // What the area serves (I4): the initiatives it owns and the ones its
+  // projects carry, each with its health as last said and when.
+  const initiatives: BriefInitiative[] = (await roleServedInitiatives(ctx, role)).map((i) => ({
+    short_id: i.short_id, title: i.title, status: i.status, health: i.health, health_at: i.health_at, owned: i.owned,
+    metrics: i.metrics.map((m) => metricLine(m, now)), chain: i.chain.map((c) => c.title),
+  }));
+  const standingEntry = standing ? scan.sessions.get(String(standing._id))?.session : undefined;
+  const standingFacts: BriefStanding | null = standing ? { short_id: standing.short_id ?? null, state: standingEntry?.state ?? null, ...stateOf(standing) } : null;
 
   // The people who report to the role, read with the same grants and the same
   // scan as the hands; "changed" is since the role last read its brief.
@@ -1180,6 +1202,8 @@ export async function computeBriefFacts(ctx: Ctx, viewerId: Id<"users">, role: a
     tasks: summary.tasks,
     plans: summary.plans,
     hands,
+    initiatives,
+    standing: standingFacts,
     people,
     changed,
     changed_since: since,

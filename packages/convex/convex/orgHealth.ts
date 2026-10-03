@@ -7,7 +7,7 @@ import { scopedFetch } from "./data";
 import { collectOrgSessions, computeScopeFeed, requireWorkspaceCaller, resolveScope, sessionsInScope, stateOf, waitingSinceOf, type OrgScan, type ResolvedScope } from "./org";
 import { findRoleRoutineInAnyStatus } from "./lib/orgRoutine";
 import { parseStandingSection } from "@codecast/shared/contracts/briefStanding";
-import { areaSignalsOf, areaStatusLine, areaStatusOf, newestStandingFirst, type AreaGoal, type AreaInitiative, type AreaInput, type AreaStandingLine, type AreaWaitingSession, type RoleArea } from "@codecast/shared/contracts/orgAreas";
+import { areaSignalsOf, areaStatusLine, areaStatusOf, emptyReached, handRouteOf, newestStandingFirst, type AreaGoal, type AreaInitiative, type AreaInput, type AreaReached, type AreaSession, type AreaStandingLine, type AreaWaitingSession, type RoleArea } from "@codecast/shared/contracts/orgAreas";
 import { readWorkspaceInitiatives, servedInitiatives } from "./lib/roleInitiatives";
 import { planProjectsOf } from "./orgRoles";
 import { capsFor, countersFor, utcDay } from "./lib/orgCaps";
@@ -51,6 +51,10 @@ export const HEALTH_CAPS = {
 /** How much of an area one row carries: the oldest waiting sessions, the
  *  newest standing lines, the first projects. The rest is on the role's page. */
 export const AREA_WAITING_MAX = 8;
+
+/** Sessions under a role listed with their route, at most. */
+export const AREA_SESSIONS_MAX = 40;
+
 export const AREA_STANDING_MAX = 6;
 export const AREA_GOALS_MAX = 6;
 
@@ -552,6 +556,17 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
     // The load: what reached the seat this week and asked for its attention.
     const caps = capsFor(role);
     const hands = scan.byParent.get(`role:${rid}`) ?? [];
+    // How each session under the role reached it (org-staffing.md S29): the
+    // overload alert and the area row say which route dominates.
+    const reached: AreaReached = emptyReached();
+    const sessionsReached: AreaSession[] = [];
+    for (const h of hands) {
+      const raw = scan.sessions.get(String(h._id))?.raw;
+      if (!raw) continue;
+      const route = handRouteOf(raw);
+      reached[route]++;
+      if (sessionsReached.length < AREA_SESSIONS_MAX) sessionsReached.push({ id: String(h._id), short_id: raw.short_id ?? String(h._id).slice(0, 7), title: String(raw.title ?? "").slice(0, 80), state: h.state, route });
+    }
     // A session of the role that has waited on a person past the window
     // (org-roles-run-work.md R1, org-staffing.md S28): it is out of the
     // person's inbox, so nobody sees the wait but the role, which should have
@@ -663,6 +678,7 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
       blocked_sessions: stuckHands,
       overloaded: isOverloaded(load),
       overloaded_by: overloadDetails(load).map(([, , phrase]) => phrase),
+      reached,
       idle_days: activity.idle_days,
       age_days: activity.age_days,
       idle: activity.idle,
@@ -678,6 +694,8 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
       waiting,
       goals,
       initiatives,
+      reached,
+      sessions: sessionsReached,
       checked_at: role.checked_at ?? null,
       check: routine ? { trigger_id: String(routine._id), short_id: routine.short_id ?? null, title: routine.title, status: routine.status, run_at: routine.run_at ?? null, last_run_at: routine.last_run_at ?? null, last_run_summary: routine.last_run_summary ?? null, interval_ms: routine.interval_ms ?? null } : null,
       standing_conversation_id: standingConvId,

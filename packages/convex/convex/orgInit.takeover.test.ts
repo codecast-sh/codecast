@@ -25,6 +25,9 @@ const conv = (n: number, over: Record<string, any> = {}) => ({
   agent_type: "claude_code",
   title: `Growth work ${n}`,
   project_path: "/repo/growth",
+  // Bound to the plan of the project on its path (org-staffing.md S35): the
+  // folder decides nothing, the binding is what the rule reads.
+  active_plan_id: over.project_path === "/repo/billing" ? "plans_billing" : "plans_growth",
   message_count: 3,
   last_message_role: "assistant",
   updated_at: NOW - 60_000,
@@ -48,7 +51,10 @@ function fixtures() {
       { _id: P, user_id: ME, team_id: TEAM, workspace: WS, short_id: "pr-1", title: "Growth", status: "active", project_path: "/repo/growth", created_at: 1, updated_at: NOW },
       { _id: "projects_q", user_id: ME, team_id: TEAM, workspace: WS, short_id: "pr-2", title: "Billing", status: "active", project_path: "/repo/billing", created_at: 1, updated_at: NOW },
     ],
-    plans: [],
+    plans: [
+      { _id: "plans_growth", user_id: ME, team_id: TEAM, workspace: WS, short_id: "pl-1", title: "Growth plan", status: "active", project_id: P, created_at: 1, updated_at: NOW },
+      { _id: "plans_billing", user_id: ME, team_id: TEAM, workspace: WS, short_id: "pl-2", title: "Billing plan", status: "active", project_id: "projects_q", created_at: 1, updated_at: NOW },
+    ],
     tasks: [],
     docs: [],
     conversations: [
@@ -342,7 +348,8 @@ describe("a Head of People plus one lead: ownership by specificity", () => {
     expect(db._tables.tasks.find((t: any) => t._id === "tasks_billing").assignee).toBe(String(head._id));
     expect((await lineCandidates(ctx, await db.get(growth._id))).map((t: any) => t._id)).toEqual(["tasks_growth"]);
     // The lead's task and sessions fall back to the Head of People, not to the person it reports to.
-    await performRetireRole(ctx, ME as any, { role_id: growth._id });
+    // (`handoff: "skip"`: the knowledge handoff of S32 would otherwise defer the retire; this test is about the fallback.)
+    await performRetireRole(ctx, ME as any, { role_id: growth._id, handoff: "skip" });
     expect(projectLeadOf(project(P), roles())).toMatchObject({ kind: "lead", role: { _id: head._id }, by: "workspace" });
     expect(db._tables.tasks.find((t: any) => t._id === "tasks_growth").assignee).toBe(String(head._id));
     expect(roleOf(db, 1)).toBe(head._id);

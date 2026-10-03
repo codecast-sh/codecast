@@ -23,6 +23,9 @@ const conv = (n: number, over: Record<string, any> = {}) => ({
   agent_type: "claude_code",
   title: `Growth work ${n}`,
   project_path: "/repo/growth",
+  // Bound to the plan of the project on its path (org-staffing.md S35): the
+  // folder decides nothing, the binding is what the rule reads.
+  active_plan_id: over.project_path === "/repo/billing" ? "plans_billing" : "plans_growth",
   message_count: 3,
   last_message_role: "assistant",
   updated_at: NOW - 60_000,
@@ -46,7 +49,10 @@ function fixtures(conversations: any[]) {
       { _id: P, user_id: ME, team_id: TEAM, workspace: WS, short_id: "pr-1", title: "Growth", status: "active", project_path: "/repo/growth", created_at: 1, updated_at: NOW },
       { _id: "projects_q", user_id: ME, team_id: TEAM, workspace: WS, short_id: "pr-2", title: "Billing", status: "active", project_path: "/repo/billing", created_at: 1, updated_at: NOW },
     ],
-    plans: [],
+    plans: [
+      { _id: "plans_growth", user_id: ME, team_id: TEAM, workspace: WS, short_id: "pl-1", title: "Growth plan", status: "active", project_id: P, created_at: 1, updated_at: NOW },
+      { _id: "plans_billing", user_id: ME, team_id: TEAM, workspace: WS, short_id: "pl-2", title: "Billing plan", status: "active", project_id: "projects_q", created_at: 1, updated_at: NOW },
+    ],
     tasks: [],
     docs: [],
     conversations,

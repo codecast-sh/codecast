@@ -1045,6 +1045,12 @@ export default defineSchema({
     // session files under its primary owner in the org tree. Owners are
     // untouched by it — the role sits between the session and the person.
     org_role_id: v.optional(v.id("org_roles")),
+    // Why the role holds it (org-staffing.md S35): `bound`, the rule moved it
+    // for the task or plan it is bound to, so a binding may move it again;
+    // `filed`, a person or role put it there, so only a person or role moves
+    // it. Absent on rows from before the stamp: read as filed, and
+    // `migrations:releaseFolderHeldSessions` sorts them by the org log.
+    org_role_hold: v.optional(v.union(v.literal("bound"), v.literal("filed"))),
     // RETIRED (org-staffing.md S28): the escalation stamp `cast escalate` wrote.
     // Nothing reads or writes it. It stays in the schema only until
     // `migrations:clearEscalationStamps` has run in prod (rows still carry it,
