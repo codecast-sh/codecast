@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import { mannWhitney, separate, separationLine } from './stats';
+import { EXACT_MAX_STEPS, mannWhitney, separate, separationLine } from './stats';
 
 describe('exact Mann-Whitney', () => {
   test('5 vs 5, every value greater: p = 1/252', () => {
@@ -54,4 +54,30 @@ describe('exact Mann-Whitney', () => {
     expect(separationLine([1, 1, 1], [0, 0, 0])).toBe('too few samples to separate (need 5+ per side)');
     expect(separationLine([1, 0, 1, 0, 1], [0, 1, 0, 1, 1])).toMatch(/^not separated: medians 1\.00 vs 1\.00, ranges 0\.00-1\.00 vs 0\.00-1\.00$/);
   });
+});
+
+describe('Mann-Whitney past the exact count', () => {
+  test('the sampled tails agree with the exact count, ties and all', () => {
+    // 24 against 168 is past the exact count; 23 passes and one 0 against 168 passes is its worst tie case, exactly 24/192 for the fall.
+    const tonight = [...Array.from({ length: 23 }, () => 1), 0];
+    const pool = Array.from({ length: 168 }, () => 1);
+    expect(192 * 24 * (192 * 193)).toBeGreaterThan(EXACT_MAX_STEPS);
+    expect(Math.abs(mannWhitney(tonight, pool).pLess - 24 / 192)).toBeLessThan(0.005);
+    expect(mannWhitney(tonight, pool).pGreater).toBeCloseTo(1, 3);
+    // Two 0s, both tonight: the fall's exact tail is C(24,2)/C(192,2), past the exact count all the same.
+    const two = mannWhitney([...Array.from({ length: 22 }, () => 1), 0, 0], pool);
+    expect(Math.abs(two.pLess - 276 / 18336)).toBeLessThan(0.005);
+    // Seeded: the same samples give the same p every time.
+    expect(mannWhitney(tonight, pool)).toEqual(mannWhitney(tonight, pool));
+  }, 60_000);
+
+  test('against a pooled baseline of hundreds of reps, one failed rep in 24 against 168 passes is no drift', () => {
+    const pool = Array.from({ length: 168 }, () => 1);
+    const tonight = [...Array.from({ length: 23 }, () => 1), 0];
+    expect(separate(tonight, pool).kind).toBe('not-separated');
+    // A real fall still separates.
+    expect(separate([...Array.from({ length: 16 }, () => 1), ...Array.from({ length: 8 }, () => 0)], pool).kind).toBe('worse');
+    // A rise is reported as better, never as a regression.
+    expect(separate(Array.from({ length: 24 }, () => 1), [...Array.from({ length: 120 }, () => 1), ...Array.from({ length: 48 }, () => 0)]).kind).toBe('better');
+  }, 60_000);
 });

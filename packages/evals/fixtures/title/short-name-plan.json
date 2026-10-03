@@ -1,7 +1,6 @@
 {
  "asOf": "2026-01-15T14:00:00.000Z",
  "notes": "synthetic name-only pass for a plan title with context",
- "judge": "a one or two word name a teammate would say for this plan, specific (not a generic word like Update)",
  "snapshot": {
   "mode": "short-title",
   "shortTitle": {

@@ -1,5 +1,6 @@
+import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 // Where the evals read code from, and where they keep data. Code lives in the
 // checkout this file sits in. Data lives in two homes: the synthetic freezes
@@ -39,13 +40,32 @@ export function homePaths(root = evalsHome()) {
     site: join(root, 'html', 'site'),
     scratch: join(root, 'scratch'),
     state: join(root, 'state.json'),
-    spend: join(root, 'spend.json'),
+    spend: join(root, 'spend.jsonl'),
+    /** Every recorded run head: where it sits in git and its main-line twin (provenance.ts). */
+    heads: join(root, 'heads.json'),
+    /** `{root, at}`: the checkout that last ran ./evals, which the daemon's evals bridge execs. */
+    checkout: join(root, 'checkout.json'),
+    /** `<sha256>.patch`: a dirty rep's edits over its sources, so it can be replayed on its gitHead (provenance.ts diskSources). */
+    trees: join(root, 'trees'),
   };
+}
+
+/** Local refs that keep every run head alive through a rebase and `git gc`. Outside refs/heads and refs/tags, so no push carries them. */
+export const PIN_REF_PREFIX = 'refs/evals/heads/';
+
+/** Write JSON through a temp file and a rename, so a reader never sees half a file. */
+export function writeJsonAtomic(path: string, value: unknown): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`);
+  renameSync(tmp, path);
 }
 
 /** The harness every model call goes through (pl-810). */
 export const DRY_RUN_SCRIPT = join(REPO_ROOT, 'packages', 'cli', 'scripts', 'prompt-dry-run.ts');
 export const DRY_RUN_SCRIPT_REL = 'packages/cli/scripts/prompt-dry-run.ts';
+/** The guard `cast` a dry run puts first on PATH; its read list is the one answer to whether a call writes. */
+export const GUARD_CAST = join(REPO_ROOT, 'packages', 'cli', 'scripts', 'prompt-dry-run-bin', 'cast');
 
 /** The real instruction file; CLAUDE.md is a symlink to it. */
 export const AGENTS_MD = join(REPO_ROOT, 'AGENTS.md');

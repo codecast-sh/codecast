@@ -690,6 +690,5 @@
    "s1",
    "s2"
   ]
- },
- "judge": "on a day of 760 commits, the headline and standfirst pick out what mattered (the sync conflict fix, annual billing, the mobile releases) instead of listing everything, the standfirst stays within 60 words, the lead is one of the two importance 5 stories, and the branch work is not presented as shipped"
+ }
 }

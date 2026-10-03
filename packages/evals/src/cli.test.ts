@@ -1,63 +1,21 @@
 import { describe, expect, setDefaultTimeout, test } from 'bun:test';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { writeFixtureRun } from '@platform/evals/fixture';
 
 import { auditPublicTree } from './adapters/freezes';
-import { REPO_ROOT } from './paths';
 import { EVALS_SNIPPET, REPO_NOTES } from './snippet';
 import { sourceHashes, writeState } from './state';
 import { echoMeta } from './testSurface';
+import { freezeIdOf, runDirs, world, type World } from './testWorld';
 
-// The CLI end to end, as a subprocess, with no auth, no network and no model:
-// a scratch git repo stands in for the checkout (its packages/evals holds the
-// echo fixtures and freezes) and a scratch EVALS_HOME holds everything else.
+// The CLI end to end, as a subprocess, with no auth, no network and no model,
+// in a scratch world (testWorld.ts).
 
 // Each test spawns the CLI a few times; on a loaded machine one spawn can take seconds.
 setDefaultTimeout(120_000);
 
-const INDEX = join(REPO_ROOT, 'packages', 'evals', 'src', 'index.ts');
-
-interface World {
-  repo: string;
-  home: string;
-  pkg: string;
-  run(...args: string[]): { code: number; out: string; err: string };
-  git(...args: string[]): void;
-}
-
-function world(): World {
-  const repo = mkdtempSync(join(tmpdir(), 'evals-cli-repo-'));
-  const home = mkdtempSync(join(tmpdir(), 'evals-cli-home-'));
-  const pkg = join(repo, 'packages', 'evals');
-  mkdirSync(join(pkg, 'freezes'), { recursive: true });
-  mkdirSync(join(pkg, 'fixtures', 'echo'), { recursive: true });
-  mkdirSync(join(pkg, 'src'), { recursive: true });
-  cpSync(join(REPO_ROOT, 'packages', 'evals', 'src', 'testSurface.ts'), join(pkg, 'src', 'testSurface.ts'));
-  writeFileSync(join(pkg, 'fixtures', 'echo', 'a.json'), JSON.stringify({ asOf: '2026-01-01T00:00:00.000Z', snapshot: { text: 'say this back' }, judge: 'the reply repeats the prompt' }, null, 2));
-  writeFileSync(join(pkg, 'fixtures', 'echo', 'boom.json'), JSON.stringify({ asOf: '2026-01-01T00:00:00.000Z', snapshot: { text: 'never sent', crash: true } }, null, 2));
-  const git = (...args: string[]) => {
-    const r = Bun.spawnSync(['git', '-c', 'user.email=t@example.com', '-c', 'user.name=t', ...args], { cwd: repo });
-    if (r.exitCode !== 0) throw new Error(r.stderr.toString());
-  };
-  git('init', '-q');
-  git('add', '-A');
-  git('commit', '-qm', 'scratch');
-  const env = { ...process.env, CODECAST_EVALS_HOME: home, CODECAST_EVALS_REPO_ROOT: repo, CODECAST_EVALS_TEST: '1', CODECAST_DIR: mkdtempSync(join(tmpdir(), 'evals-cli-nocast-')), NO_COLOR: '1', FORCE_COLOR: '0' };
-  const run = (...args: string[]) => {
-    const r = Bun.spawnSync(['bun', INDEX, ...args], { env, cwd: repo });
-    return { code: r.exitCode, out: r.stdout.toString(), err: r.stderr.toString() };
-  };
-  return { repo, home, pkg, run, git };
-}
-
-const freezeIdOf = (out: string): string => {
-  const f = JSON.parse(out) as { id: string };
-  return f.id;
-};
-const runDirs = (w: World) => (existsSync(join(w.home, 'runs')) ? readdirSync(join(w.home, 'runs')) : []);
 const withHash = (w: World, patch: Record<string, unknown> = {}) => {
   process.env.CODECAST_EVALS_HOME = w.home;
   try {
@@ -120,7 +78,7 @@ describe('./evals', () => {
 
   test('a bad argument to the stale precheck is one line and exit 2, never the 1 that means nothing changed', () => {
     const w = world();
-    for (const [arg, says] of [['--bogus', 'stale has no option --bogus'], ['bogus', 'no surface bogus']]) {
+    for (const [arg, says] of [['--bogus', 'stale has no option --bogus'], ['bogus', 'no surface bogus'], ['--budget=abc', '--budget takes a positive number, not "abc"']]) {
       const r = w.run('stale', arg!);
       expect(r.code).toBe(2);
       expect(r.err.trim().split('\n')).toEqual([expect.stringContaining(says!)]);
@@ -151,9 +109,12 @@ describe('./evals', () => {
     expect(r.out).toContain('dry: 3 rep(s) ran through the wiring');
     expect(runDirs(w)).toHaveLength(3);
     // A dry rep is never a pass or a fail: no view counts it, and no check takes it for a baseline.
-    const listed = JSON.parse(w.run('runs', 'list', '--since', '1d', '--json').out) as Array<{ freezeId: string; status: string; model: string; startedAt: string; createdAt: string }>;
+    const listed = JSON.parse(w.run('runs', 'list', '--since', '1d', '--json').out) as Array<{ freezeId: string; status: string; model: string; startedAt: string; createdAt: string; batch: string | null }>;
     expect(listed).toHaveLength(3);
     expect(listed.every((x) => x.freezeId === id && x.status === 'dry' && x.model === echoMeta.model)).toBe(true);
+    // Each listed rep names its check, so two checks on one day with the same notes stay apart.
+    expect(new Set(listed.map((x) => x.batch)).size).toBe(1);
+    expect(listed[0]!.batch).toBeTruthy();
     // A replay runs now on a moment frozen on 2026-01-01: it starts, and lists, when it ran.
     expect(listed.every((x) => x.startedAt === x.createdAt)).toBe(true);
     const results = JSON.parse(w.run('freeze', 'results', id.slice(0, 8), '--json').out) as { replays: Array<{ verdict: { gates: Array<{ id: string; pass: boolean }> } }> };
@@ -197,6 +158,28 @@ describe('./evals', () => {
     expect(r.code).toBe(1);
     expect(r.out).toContain('refused: the estimate');
     expect(runDirs(w)).toEqual([]);
+  });
+
+  test('check --stale refuses a surface over the budget on its own, and the precheck stays quiet about it at that budget', () => {
+    const w = world();
+    w.run('freeze', 'create', 'echo@fixture:a');
+    const r = w.run('check', 'echo', '--stale', '--budget', '0.0001');
+    expect(r.code).toBe(1);
+    expect(r.out).toMatch(/refused: echo \(\$[\d.]+\) alone over the --budget/);
+    expect(r.out).toContain('not retried until their sources change');
+    expect(runDirs(w)).toEqual([]);
+    expect(w.run('stale', 'echo', '--budget', '0.0001').code).toBe(1);
+    expect(w.run('stale', 'echo', '--budget', '5').code).toBe(0);
+  });
+
+  test('check --cadence stamps every rep with the standing run it belongs to', () => {
+    const w = world();
+    const id = freezeIdOf(w.run('freeze', 'create', 'echo@fixture:a', '--json').out);
+    expect(w.run('check', 'echo', '--dry', '--reps', '1', '--freeze', id.slice(0, 8), '--cadence', 'nightly').code).toBe(0);
+    const [dir] = runDirs(w);
+    expect(JSON.parse(readFileSync(join(w.home, 'runs', dir!, 'run.json'), 'utf8')).cadence).toBe('nightly');
+    const runs = JSON.parse(w.run('runs', 'list', '--json').out) as Array<{ cadence?: string | null }>;
+    expect(runs.map((r) => r.cadence)).toEqual(['nightly']);
   });
 
   test('stale: exit 0 when a source moved at HEAD since the last run, 1 when not', () => {

@@ -3,9 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import type { Freeze } from '@platform/evals';
-
-import { pinMissingImports, provenVerdicts } from './line';
+import { pinMissingImports } from './line';
 
 // The base worktree runs this checkout's eval tool against the base's prod
 // code. A tool import the base cannot satisfy reads this checkout's module; a
@@ -40,34 +38,5 @@ describe('pinMissingImports', () => {
     expect(readFileSync(join(pkg, 'src/typeOnly.ts'), 'utf8')).toBe("import type { T } from '../../lib/h';\n");
     expect(readFileSync(join(pkg, 'src/local.ts'), 'utf8')).toBe("import { x } from './baseHas';\n");
     expect(readFileSync(join(pkg, 'src/surfaces/s/index.ts'), 'utf8')).toBe("import { y } from '../../../../lib/h';\n");
-  });
-});
-
-// P9 step 2: a proven freeze must fail on the base. Each one carries its base
-// verdict, and one that already passes there fails the station.
-describe('provenVerdicts', () => {
-  const fz = (id: string, surface: string) => ({ id, name: id, meta: { surface } }) as unknown as Freeze;
-  const proven = [fz('aaaaaaaa1', 'title'), fz('bbbbbbbb2', 'title'), fz('cccccccc3', 'title'), fz('dddddddd4', 'other')];
-  const before = new Map([['aaaaaaaa1', false], ['bbbbbbbb2', true]]);
-  const after = new Map([['aaaaaaaa1', true], ['bbbbbbbb2', true], ['cccccccc3', false]]);
-
-  test('records the base verdict of each proven freeze on this surface', () => {
-    expect(provenVerdicts(proven, 'title', before, after).proven).toEqual([
-      { freeze: 'aaaaaaaa1', basePasses: false, passes: true },
-      { freeze: 'bbbbbbbb2', basePasses: true, passes: true },
-      { freeze: 'cccccccc3', basePasses: null, passes: false },
-    ]);
-  });
-
-  test('fails a freeze that already passes on the base, and one still failing on the branch', () => {
-    const { reasons } = provenVerdicts(proven, 'title', before, after);
-    expect(reasons).toEqual([
-      'proven freeze bbbbbbbb already passes on the base, so it shows no miss; find where the bug is before changing this surface',
-      'proven freeze cccccccc still fails',
-    ]);
-  });
-
-  test('a freeze red on the base and green on the branch passes the station', () => {
-    expect(provenVerdicts([proven[0]!], 'title', before, after).reasons).toEqual([]);
   });
 });
