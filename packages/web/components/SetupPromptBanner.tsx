@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "convex/react";
+import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { api } from "@codecast/convex/convex/_generated/api";
 import Link from "next/link";
 import { useCurrentUser } from "../hooks/useCurrentUser";
@@ -15,10 +15,10 @@ export function SetupPromptBanner() {
   const [mounted, setMounted] = useState(false);
 
   const { user } = useCurrentUser();
-  const conversationsResult = useQuery(
+  const conversationsResult = useQueryNoThrow(
     api.conversations.listConversations,
     user?._id ? { filter: "my", limit: 1 } : "skip"
-  );
+  ).data;
 
   useMountEffect(() => { setMounted(true); });
 

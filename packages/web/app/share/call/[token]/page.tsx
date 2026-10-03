@@ -20,7 +20,7 @@ import { fmtCallLength } from "../../../../components/calls/speakers";
 import { Bullets, Callout, Pill, Prose, Section, ShareHead, SharedObjectPage } from "../../SharedObjectPage";
 import { useWatchEffect } from "../../../../hooks/useWatchEffect";
 import { CallVideoPlayer, type CallVideoHandle } from "../../../../components/calls/CallVideoPlayer";
-import { noVideoWords, turnIndexAt, type CallVideoFile } from "../../../../lib/calls/callVideo";
+import { turnIndexAt, type CallVideoFile } from "../../../../lib/calls/callVideo";
 import { useMediaMoment } from "../../../../hooks/useMediaMoment";
 
 type SharedCall = NonNullable<FunctionReturnType<typeof api.publicShare.getSharedCall>>;
@@ -92,8 +92,8 @@ function SharedCallBody({
   const media = useMediaMoment(turns);
   const mediaAt = media.at;
   const hasMedia = files.length > 0 || !!call.recording_url;
-  // A line clicked where no video shows says so where the video is (this
-  // page has no toasts), until the next seek.
+  // A line clicked where no video shows says so where the video is (the
+  // player's own line, as on the call page), until the next seek.
   const [missed, setMissed] = useState<number | null>(null);
   const seekTo = (ms: number) => {
     if (files.length > 0) return setMissed(playerRef.current?.seek(ms) === false ? ms : null);
@@ -133,9 +133,10 @@ function SharedCallBody({
         title={call.title || (call.recording ? "Untitled recording" : "Untitled huddle")}
         at={call.started_at}
         meta={
-          !call.recording && call.participants.length > 0 ? (
-            <span>with {call.participants.map((p) => p.name).join(", ")}</span>
-          ) : null
+          // The voices on the record, a guest among them already marked
+          // "(guest)" in the name. A guest who only listened is not named on
+          // a page anybody with the link can open.
+          !call.recording && call.participants.length > 0 ? <span>with {call.participants.map((p) => p.name).join(", ")}</span> : null
         }
       />
       {call.summary && (
@@ -164,12 +165,8 @@ function SharedCallBody({
             callStartedAt={call.started_at}
             handleRef={playerRef}
             onTime={media.onTime}
+            missedMs={missed}
           />
-          {missed !== null && (
-            <p style={{ marginTop: 8 }} className="text-[12px] text-sol-text-muted">
-              {noVideoWords(missed).title}. {noVideoWords(missed).detail}
-            </p>
-          )}
         </div>
       )}
       {call.recording_url && files.length === 0 && (
@@ -195,7 +192,7 @@ function SharedCallBody({
               compact={call.recording}
               isSelected={inAnchor}
               activeIndex={activeIndex}
-              onTurnClick={hasMedia ? (i) => seekTo(turns[i]?.t0 ?? 0) : undefined}
+              onTurnClick={hasMedia ? (_i, _e, atMs) => seekTo(atMs) : undefined}
             />
           </div>
         </Section>

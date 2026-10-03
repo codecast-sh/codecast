@@ -4,6 +4,7 @@ import React, { memo, useLayoutEffect, useRef, useState } from "react";
 import { Pin, ChevronDown, X } from "lucide-react";
 import { toast } from "sonner";
 import { useInboxStore } from "../store/inboxStore";
+import { withoutUndo } from "../store/undoStack";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { PrStatusChip } from "./PrStatusChip";
 import { threadStateView, THREAD_STATE_STATUS_META, type ThreadStateView } from "../lib/threadState";
@@ -65,17 +66,19 @@ export const ThreadStatePanel = memo(function ThreadStatePanel({
       thread_state_msg_count: threadStateMsgCount ?? null,
       thread_state_status: threadStateStatus ?? null,
     };
-    useInboxStore.getState().patchConversation(conversationId, {
+    // Stays on its own toast (its description names the cleared headline), so
+    // it stays off the window's undo history: two undos of one clear would diverge.
+    withoutUndo(() => useInboxStore.getState().patchConversation(conversationId, {
       thread_state: null,
       thread_state_at: null,
       thread_state_msg_count: null,
       thread_state_status: null,
-    });
+    }));
     toast("Pinned state cleared", {
       description: headline,
       action: {
         label: "Undo",
-        onClick: () => useInboxStore.getState().patchConversation(conversationId, previous),
+        onClick: () => withoutUndo(() => useInboxStore.getState().patchConversation(conversationId, previous)),
       },
     });
   };

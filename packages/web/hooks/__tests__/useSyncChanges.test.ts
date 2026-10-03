@@ -13,7 +13,7 @@ import {
 } from "../../store/clientSyncRegistry";
 import { useInboxStore } from "../../store/inboxStore";
 import { applyCollectionFeed } from "../useSyncCollection";
-import { changesWindow, selectStories, storySyncOpts } from "../useSyncChanges";
+import { changesWindow, selectStories, storySessionsScope, storySyncOpts } from "../useSyncChanges";
 
 const TEAM = "team_a";
 const OTHER = "team_b";
@@ -157,5 +157,41 @@ describe("live strip feed", () => {
     // A snapshot leaves no tombstone, so the surface comes back when it ships again.
     useInboxStore.getState().syncTable("changeLive", [tile("cli"), tile("desktop")]);
     expect(Object.keys(useInboxStore.getState().changeLive as Record<string, any>)).toHaveLength(2);
+  });
+});
+
+describe("story sessions feed", () => {
+  const row = (storyId: string, conv: string, extra: Record<string, unknown> = {}) => ({
+    _id: `${storyId}|${conv}`, team_id: TEAM, story_id: storyId, conversation_id: conv, headline: conv, summary: null, turns: [], ...extra,
+  });
+  const rows = () => useInboxStore.getState().changeStorySessions as Record<string, any>;
+
+  it("is registered as a shared delta feed", () => {
+    expect(COLLECTION_STORE_KEYS).toContain("changeStorySessions");
+    expect(HYDRATION_DEFERRED_KEYS).toContain("changeStorySessions");
+    expect(REPLICATION_CLASSIFICATION.changeStorySessions).toBe("shared");
+    expect(REGISTRY_SYNC_OPTS.changeStorySessions?.isDelta).toBe(true);
+    expect(REGISTERED_FEEDS["changesQueries.storySessions"]).toBe("changeStorySessions");
+  });
+
+  it("two open drawers keep each other's rows; a story's answer replaces its own rows without a tombstone", () => {
+    useInboxStore.setState({ changeStorySessions: {}, pending: {} } as any);
+    const feed = (storyId: string, data: any[]) =>
+      applyCollectionFeed("changeStorySessions", data, undefined, undefined, storySessionsScope(storyId));
+    const turns = [{ ask: "fix it", did: ["fixed it"] }];
+    feed("s1", [row("s1", "c1", { turns }), row("s1", "c2")]);
+    feed("s2", [row("s2", "c3")]);
+    expect(Object.keys(rows()).sort()).toEqual(["s1|c1", "s1|c2", "s2|c3"]);
+
+    // c2 went private and c1 narrowed to summary: c2's headline leaves the cache, c1 loses its turns.
+    feed("s1", [row("s1", "c1", { turns: [] })]);
+    expect(rows()["s1|c1"].turns).toEqual([]);
+    expect(rows()["s1|c2"]).toBeUndefined();
+    expect(rows()["s2|c3"]).toBeDefined();
+    expect(Object.keys(pending())).toHaveLength(0);
+
+    // Shared again, it comes back.
+    feed("s1", [row("s1", "c1"), row("s1", "c2")]);
+    expect(rows()["s1|c2"]).toBeDefined();
   });
 });

@@ -92,7 +92,7 @@ export function inboxRows(now: number): { session: InboxSession; isLive: boolean
     {
       isLive: false,
       session: row(now, {
-        _id: "hero-s-stripe", title: "Upgrade Stripe SDK to v14", agent_type: "gemini", ago: 25 * MIN,
+        _id: "hero-s-stripe", title: "Upgrade Stripe SDK to v14", agent_type: "claude_code", ago: 25 * MIN,
         project_path: "/u/src/billing", git_root: "/u/src/billing", message_count: 87,
         thread_state: "Stripe SDK on v14, 38 call sites migrated\nStatus: tests green, PR open for review",
         thread_state_status: "done", thread_state_at: now - 25 * MIN, thread_state_msg_count: 87,
@@ -178,7 +178,7 @@ export function workerRow(now: number, which: "api" | "ui", phase: WorkerPhase):
         }
       : phase === "answered"
         ? {
-            thread_state: "212 passed\nStatus: retry endpoint is green",
+            thread_state: "214 passed\nStatus: retry endpoint is green",
             thread_state_status: "working", thread_state_at: now, thread_state_msg_count: 14,
           }
         : {}),

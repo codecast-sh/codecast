@@ -1,3 +1,4 @@
+import { MUSE_MARK_PATH } from "@codecast/shared/render/mobileSessionStyle";
 import { CodexIcon, GrokIcon } from "./BrandIcons";
 
 export function AgentTypeIcon({ agentType, className = "w-3 h-3" }: { agentType: string; className?: string }) {
@@ -38,9 +39,9 @@ export function AgentTypeIcon({ agentType, className = "w-3 h-3" }: { agentType:
     return <GrokIcon className={`${className} text-sol-text`} />;
   } else if (agentType === "muse") {
     return (
-      <span className={`${className} inline-flex items-center justify-center shrink-0 font-semibold text-emerald-400 leading-none`}>
-        M
-      </span>
+      <svg className={`${className} text-blue-500`} viewBox="0 0 24 24" fill="currentColor" fillRule="evenodd">
+        <path d={MUSE_MARK_PATH} />
+      </svg>
     );
   }
   return null;

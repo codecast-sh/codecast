@@ -1,5 +1,6 @@
 import { useSettingsData } from "../../../hooks/useSyncSettings";
 import { useInboxStore } from "../../../store/inboxStore";
+import { withoutUndo } from "../../../store/undoStack";
 import { useCurrentUser } from "../../../hooks/useCurrentUser";
 import { useConvex, useMutation } from "convex/react";
 import { fetchLocalSessions, fetchPathsExist, type LocalFolder } from "../../../lib/fsBrowse";
@@ -337,8 +338,11 @@ export default function SyncPage() {
     const team = teams.find((t) => t._id === teamId);
     try {
       // Kept sessions lock private in the same mutation, before its backfill
-      // is queued; the store action makes the feed agree at once.
-      for (const id of keepPrivate) setPrivacy(String(id), true);
+      // is queued; the store action makes the feed agree at once. The rule's
+      // own toast undoes the whole share, so these record no entries.
+      withoutUndo(() => {
+        for (const id of keepPrivate) setPrivacy(String(id), true);
+      });
       await writeRule(row, { teamId, shareSince: since }, keepPrivate);
       toast.success(`${rowName(row)} now shares with ${team?.name ?? "the team"}`, {
         description:

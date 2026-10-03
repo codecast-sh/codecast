@@ -16,6 +16,7 @@
  */
 import { createContext, useContext } from "react";
 import { useInboxStore } from "../store/inboxStore";
+import { activeTeamIdOf } from "./activeTeam";
 import { TEAM_FEATURES, workspaceFeatureEnabled, type TeamFeatureKey } from "@codecast/shared/contracts";
 import { anyHolderHasFeature, defineFeatures, holderHasFeature } from "@platform/flags";
 
@@ -38,7 +39,7 @@ export const TeamFeatureOverride = createContext<Partial<Record<TeamFeatureKey, 
  *  boolean, so a teams-list refresh that changes nothing re-renders nobody. */
 export function useTeamFeature(key: TeamFeatureKey): boolean {
   const override = useContext(TeamFeatureOverride);
-  const live = useInboxStore((s) => !override && teamHasFeature(s.teams, s.clientState.ui?.active_team_id, key));
+  const live = useInboxStore((s) => !override && teamHasFeature(s.teams, activeTeamIdOf(s), key));
   return override ? !!override[key] : live;
 }
 
@@ -55,7 +56,7 @@ export function useAnyTeamFeature(key: TeamFeatureKey): boolean {
  *  another team must still reach you (see useCallSync). */
 export function useCallsAvailable(): boolean {
   return useInboxStore((s) =>
-    !!s.callConfig?.enabled && teamHasFeature(s.teams, s.clientState.ui?.active_team_id, "calls"));
+    !!s.callConfig?.enabled && teamHasFeature(s.teams, activeTeamIdOf(s), "calls"));
 }
 
 /** Is `key` on in the ACTIVE workspace, personal included: a team reads its

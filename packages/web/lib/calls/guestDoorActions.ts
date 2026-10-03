@@ -1,13 +1,20 @@
 import type { useConvex } from "convex/react";
 import { toast } from "sonner";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { humanizeConvexError } from "@codecast/shared/contracts";
+import { guestIdentity, humanizeConvexError } from "@codecast/shared/contracts";
+import { useInboxStore } from "../../store/inboxStore";
+import { isRefusedDispatchError } from "../../store/mutativeMiddleware";
 import { sharePageUrl } from "../utils";
 
-// The room's gestures on a guest (components/calls/GuestDoor draws them):
-// each one mutation, each with its own words when it fails. None paints
-// before the server answers (GuestDoor says why), so a failure is a toast and
-// the caller's own in-flight state, never a rollback.
+// The room's gestures on a guest (components/calls/GuestDoor draws them).
+//
+// Answering one (admit, deny, remove) is a store action: it paints in the
+// frame it is pressed, on every surface of the window (the door, the knock's
+// toast, the faces), and rides a dispatch to callGuests' mutation. A refusal
+// puts the row back and is said here, in words about the guest.
+//
+// A link is the one gesture that cannot paint first: its token is minted by
+// the server, and the panel shows it in flight ("Making a link…").
 
 export type Convex = ReturnType<typeof useConvex>;
 
@@ -20,19 +27,42 @@ async function attempt<T>(fallback: string, run: () => Promise<T>): Promise<T | 
   }
 }
 
-/** The room's answers to a guest, each with its own failure words. */
+/** Say why an answer was refused. Only a refusal: an answer that is merely
+ *  delayed (parked for the next dispatch binding, a transient failure the
+ *  outbox drives again) is still on its way. */
+function refused(fallback: string, undo?: () => void) {
+  return (err: unknown) => {
+    if (!isRefusedDispatchError(err)) return;
+    undo?.();
+    toast.error(humanizeConvexError(err, fallback));
+  };
+}
+
+/** Let a guest in, under the name the door showed whoever pressed. */
+export function admitGuest(guestId: string, name: string): void {
+  void useInboxStore.getState().admitGuestKnock(guestId, name).catch(refused("Could not let them in"));
+}
+
+/** Turn a guest away at the door, optionally closing the link they came on. */
+export function denyGuest(guestId: string, opts?: { revokeLink?: boolean }): void {
+  void useInboxStore.getState().denyGuestKnock(guestId, !!opts?.revokeLink).catch(refused("Could not turn them away"));
+}
+
+/** Put a guest out of the call, optionally closing the link they came on. */
+export function removeGuest(roomKey: string, guestId: string, opts?: { revokeLink?: boolean }): void {
+  const st = useInboxStore.getState();
+  const identity = guestIdentity(guestId);
+  const was = (st.liveRooms ?? []).find((r: any) => r?.room_key === roomKey)?.guests?.find((g: any) => g.identity === identity);
+  const snapshot = was ? JSON.parse(JSON.stringify(was)) : null;
+  void st
+    .removeCallGuest(roomKey, guestId, !!opts?.revokeLink)
+    .catch(refused("Could not remove them", snapshot ? () => useInboxStore.getState().restoreCallGuest(roomKey, snapshot) : undefined));
+}
+
+/** The room's link gestures, bound to a client: each one mutation, each with
+ *  its own failure words. */
 export function guestDoorActions(convex: Convex) {
   return {
-    admit: (guestId: string, name: string) =>
-      attempt("Could not let them in", () => convex.mutation(api.callGuests.admitGuest, { guest_id: guestId, name })),
-    deny: (guestId: string, opts?: { revokeLink?: boolean }) =>
-      attempt("Could not turn them away", () =>
-        convex.mutation(api.callGuests.denyGuest, { guest_id: guestId, ...(opts?.revokeLink ? { revoke_link: true } : {}) }),
-      ),
-    remove: (guestId: string, opts?: { revokeLink?: boolean }) =>
-      attempt("Could not remove them", () =>
-        convex.mutation(api.callGuests.removeGuest, { guest_id: guestId, ...(opts?.revokeLink ? { revoke_link: true } : {}) }),
-      ),
     createLink: (roomKey: string, opts?: { ttlMs?: number; fresh?: boolean }) =>
       attempt("Could not make a guest link", () =>
         convex.mutation(api.callGuests.createGuestLink, {

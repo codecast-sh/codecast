@@ -21,6 +21,7 @@ import { relTimeShort } from "../../lib/utils";
 import { commitPageHref } from "../../lib/repoView";
 import { useRepoFamily } from "./useRepoFamily";
 import { SessionBlameCell } from "./SessionBlame";
+import { StampTime } from "../StampTime";
 
 export function BlobView({
   repository,
@@ -115,7 +116,7 @@ export function BlobView({
                         </Link>
                         <span className="truncate">{range.author_login || range.author_name}</span>
                         {range.committed_at ? (
-                          <span className="ml-auto shrink-0">{relTimeShort(range.committed_at)}</span>
+                          <span className="ml-auto shrink-0"><StampTime ts={range.committed_at} format={relTimeShort} /></span>
                         ) : null}
                       </span>
                     )}

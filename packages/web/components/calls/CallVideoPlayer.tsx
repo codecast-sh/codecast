@@ -1,11 +1,12 @@
 import { useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
-import { AlertTriangle, Loader2, MonitorUp, Trash2, Users } from "lucide-react";
+import { AlertTriangle, Loader2, MonitorUp, RotateCw, Trash2, Users, Volume2, VolumeX } from "lucide-react";
 import { recordingFailureWords, recordingSubject } from "@codecast/shared/contracts";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useStableMediaSrcs } from "../../hooks/useStableMediaSrcs";
 import {
   callMsOf,
   fileSecondsAt,
+  noVideoWords,
   playableFiles,
   screenChips,
   videoAt,
@@ -13,6 +14,7 @@ import {
   type CallVideoNotice,
 } from "../../lib/calls/callVideo";
 import { RecordingMark } from "./RecordingMark";
+import { KeyCap } from "../KeyboardShortcutsHelp";
 import { fmtClock } from "./speakers";
 
 // A call's video on its page, kept in step with the transcript the way the
@@ -41,9 +43,37 @@ import { fmtClock } from "./speakers";
 // moves only when the element refuses it (useStableMediaSrcs), resuming at the
 // same moment.
 //
+// SOUND. A screen file has no audio track, and a browser draws no volume
+// control on a video without one, while the room's file that carries the
+// voices is playing unseen with its controls off. So the toolbar has its own
+// mute and volume while a screen is shown, and they act on the room's file.
+//
+// ONE SHAPE. The picture's box is 16:9 (capped by the viewport) whatever the
+// file's own shape, and the page's placeholder is the same box
+// (CallVideoPlaceholder): the transcript under it never moves when the
+// metadata lands or the view switches to a screen of another shape.
+//
 // ONE CALL, SEVERAL RECORDINGS. Record pressed twice makes two runs with a gap
 // between. Playing to the end of one carries on into the next, the way the
 // transcript does.
+
+/** The picture's box: one shape for the player and for whatever holds its
+ *  place before it mounts. */
+const CALL_VIDEO_BOX = "relative aspect-video max-h-[46vh] w-full overflow-hidden bg-black";
+const CALL_VIDEO_FRAME = "dark overflow-hidden rounded-lg bg-black ring-1 ring-sol-border/30";
+const CALL_VIDEO_BAR = "flex min-h-[34px] flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-white/[0.06] bg-sol-base03 px-2.5 py-1.5 font-mono text-[11px] text-sol-text-muted";
+
+/** The player's place, held before there is anything to play (the thread
+ *  says the call was filmed and the recordings have not answered yet), so the
+ *  words under it do not jump when the video lands. */
+export function CallVideoPlaceholder() {
+  return (
+    <div className={`${CALL_VIDEO_FRAME} animate-pulse motion-reduce:animate-none`} aria-hidden="true">
+      <div className={CALL_VIDEO_BOX} />
+      <div className={CALL_VIDEO_BAR} />
+    </div>
+  );
+}
 
 export type CallVideoHandle = {
   /** Show the call at `callMs`. False when no video covers that moment. */
@@ -56,6 +86,8 @@ export function CallVideoPlayer({
   handleRef,
   onTime,
   actions,
+  missedMs = null,
+  refreshing = false,
   className = "",
 }: {
   files: readonly CallVideoFile[];
@@ -65,6 +97,12 @@ export function CallVideoPlayer({
   onTime?: (callMs: number, playing: boolean) => void;
   /** The host's own controls on the toolbar (copy a moment, delete). */
   actions?: (at: { callMs: number; file: CallVideoFile }) => ReactNode;
+  /** A moment the page asked for that no video shows (a line clicked, a
+   *  `?t=` link): said under the picture until the next seek that lands. */
+  missedMs?: number | null;
+  /** The files' URLs are being signed again (the page slept past them): a
+   *  refused element is waiting for the next ones, not dead. */
+  refreshing?: boolean;
   className?: string;
 }) {
   const playable = useMemo(() => playableFiles(files), [files]);
@@ -165,6 +203,9 @@ export function CallVideoPlayer({
       if (main && mainEl.current && playing) void mainEl.current.play().catch(() => {});
       return;
     }
+    // Already the view: nothing to switch, and nothing to leave waiting for
+    // an element that will not load again.
+    if (file.id === screenId) return;
     const into = fileSecondsAt(file, callStartedAt, callMs);
     const playing = !!driver() && !driver()!.el.paused;
     pending.current.set(file.id, { seconds: into ?? 0, play: playing });
@@ -183,12 +224,6 @@ export function CallVideoPlayer({
     pending.current.delete(file.id);
     const el = e.currentTarget;
     el.currentTime = p.seconds;
-    // A screen joins with the room's sound settings, so its controls move
-    // the voices it is shown over.
-    if (file.kind === "screen" && mainEl.current && el === screenEl.current) {
-      el.volume = mainEl.current.volume;
-      el.muted = mainEl.current.muted;
-    }
     if (p.play) void el.play().catch(() => {});
     report();
   };
@@ -200,9 +235,32 @@ export function CallVideoPlayer({
   /** The element refused its URL (expired, or the window rolled): carry on
    *  from the same moment on whatever URL comes next. */
   const onError = (file: CallVideoFile) => (e: React.SyntheticEvent<HTMLVideoElement>) => {
-    const seconds = fileSecondsAt(file, callStartedAt, lastSeen.current.callMs) ?? e.currentTarget.currentTime ?? 0;
-    pending.current.set(file.id, { seconds, play: lastSeen.current.playing });
+    // A seek still waiting for this file (a `?t=` landing, a line pressed
+    // before the element loaded) is where the person asked to be: keep it
+    // over where the element last was, which on a fresh element is 0. Only
+    // an element that never loaded can have one (onLoaded takes it).
+    pending.current.set(file.id, pending.current.get(file.id) ?? resumePoint(file, e.currentTarget));
     media.refused(file.id);
+  };
+  /** Where a file's element should come back to: the moment last seen. */
+  const resumePoint = (file: CallVideoFile, el?: HTMLVideoElement | null) => ({
+    seconds: fileSecondsAt(file, callStartedAt, lastSeen.current.callMs) ?? el?.currentTime ?? 0,
+    play: lastSeen.current.playing,
+  });
+  const retry = (file: CallVideoFile) => {
+    pending.current.set(file.id, { ...resumePoint(file), play: false });
+    media.retry(file.id);
+  };
+
+  // The room's sound, as the toolbar's own controls show and set it while a
+  // screen is the view (see SOUND above).
+  const [sound, setSound] = useState({ volume: 1, muted: false });
+  const onMainVolume = (e: React.SyntheticEvent<HTMLVideoElement>) => setSound({ volume: e.currentTarget.volume, muted: e.currentTarget.muted });
+  const setMainSound = (next: { volume?: number; muted?: boolean }) => {
+    const el = mainEl.current;
+    if (!el) return;
+    if (next.volume !== undefined) el.volume = next.volume;
+    if (next.muted !== undefined) el.muted = next.muted;
   };
 
   const isDriver = (el: HTMLVideoElement) => driver()?.el === el;
@@ -216,12 +274,6 @@ export function CallVideoPlayer({
     onPause: (e: React.SyntheticEvent<HTMLVideoElement>) => isDriver(e.currentTarget) && (report(), follow()),
     onSeeked: (e: React.SyntheticEvent<HTMLVideoElement>) => isDriver(e.currentTarget) && (report(), follow()),
     onRateChange: (e: React.SyntheticEvent<HTMLVideoElement>) => isDriver(e.currentTarget) && follow(),
-    onVolumeChange: (e: React.SyntheticEvent<HTMLVideoElement>) => {
-      const f = follower();
-      if (!f || !isDriver(e.currentTarget)) return;
-      f.el.volume = e.currentTarget.volume;
-      f.el.muted = e.currentTarget.muted;
-    },
   };
 
   // A screen that ends while the room goes on hands the view back to the
@@ -265,10 +317,10 @@ export function CallVideoPlayer({
     // Always dark, like the stage: video wants a dark room, and the `dark`
     // class makes every sol token inside (the toolbar's words) read on it
     // whatever theme the page is in.
-    <div className={`dark overflow-hidden rounded-lg bg-black ring-1 ring-sol-border/30 ${className}`}>
-      <div className="relative flex max-h-[46vh] min-h-[180px] items-center justify-center">
+    <div className={`${CALL_VIDEO_FRAME} ${className}`}>
+      <div className={CALL_VIDEO_BOX}>
         <video
-          key={`${main.id}:${srcOf(main)}`}
+          key={media.keyOf(main)}
           ref={mainEl}
           src={srcOf(main)}
           controls={!screen}
@@ -276,34 +328,67 @@ export function CallVideoPlayer({
           preload="metadata"
           aria-hidden={screen ? true : undefined}
           tabIndex={screen ? -1 : undefined}
-          className={screen ? "pointer-events-none absolute inset-0 h-full w-full opacity-0" : "max-h-[46vh] w-full bg-black object-contain"}
-          onLoadedMetadata={onLoadedFile(main)}
+          className={`absolute inset-0 h-full w-full object-contain ${screen ? "pointer-events-none opacity-0" : ""}`}
+          onLoadedMetadata={(e) => {
+            onMainVolume(e);
+            onLoadedFile(main)(e);
+          }}
+          onVolumeChange={onMainVolume}
           onError={onError(main)}
           onEnded={onMainEnded}
           {...driverHandlers}
         />
-        {dead && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/80 px-6 text-center text-[12px] text-sol-text-muted">
-            The video could not be loaded. Reload the page to try again.
-          </div>
-        )}
         {screen && (
           <video
-            key={`${screen.id}:${srcOf(screen)}`}
+            key={media.keyOf(screen)}
             ref={screenEl}
             src={srcOf(screen)}
             controls
+            muted
             playsInline
             preload="metadata"
-            className="max-h-[46vh] w-full bg-black object-contain"
+            className="absolute inset-0 h-full w-full object-contain"
             onLoadedMetadata={onLoadedFile(screen)}
             onError={onError(screen)}
             onEnded={onScreenEnded}
             {...driverHandlers}
           />
         )}
+        {dead && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2.5 bg-black/85 px-6 text-center text-[12px] text-sol-text-muted" role="status">
+            {refreshing ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin text-sol-text-dim motion-reduce:animate-none" />
+                Refreshing the video
+              </>
+            ) : (
+              <>
+                The video could not be loaded.
+                <button
+                  type="button"
+                  onClick={() => retry(shown)}
+                  className="flex items-center gap-1.5 rounded-md bg-white/[0.08] px-2.5 py-1 font-mono text-[11px] text-sol-text transition-colors hover:bg-white/[0.14]"
+                >
+                  <RotateCw className="h-3 w-3" /> Try again
+                </button>
+              </>
+            )}
+          </div>
+        )}
       </div>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-white/[0.06] bg-sol-base03 px-2.5 py-1.5 font-mono text-[11px] text-sol-text-muted">
+      {/* What the picture cannot say for itself: the moment asked for has no
+          video, or the room's own file is gone and this is all there is. */}
+      {(missedMs !== null || main.kind === "screen") && (
+        <div className="space-y-0.5 border-t border-white/[0.06] bg-sol-base03 px-2.5 py-1.5 text-[11.5px] leading-snug text-sol-text-muted" role="status">
+          {missedMs !== null && (
+            <p>
+              {noVideoWords(missedMs).title}. {noVideoWords(missedMs).detail}
+            </p>
+          )}
+          {main.kind === "screen" && <p>The room's video was lost. This is {recordingSubject(main)}, without sound.</p>}
+        </div>
+      )}
+      <div className={CALL_VIDEO_BAR}>
         <span className="tabular-nums text-sol-text-secondary" title="Where in the call this is, in the transcript's clock">
           {fmtClock(callMs)}
         </span>
@@ -358,6 +443,39 @@ export function CallVideoPlayer({
             })}
           </span>
         )}
+        {screen && (
+          // The slider rises above the button on hover or focus rather than
+          // sitting in the bar: the bar holds one line at the page's usual
+          // width, and a control that only the screen view has must not
+          // wrap it there and move the transcript down when the view
+          // switches.
+          <span className="group/vol relative flex items-center" role="group" aria-label="The room's sound">
+            <button
+              type="button"
+              onClick={() => setMainSound({ muted: !sound.muted })}
+              aria-pressed={sound.muted}
+              aria-label={sound.muted ? "Unmute the room" : "Mute the room"}
+              title={sound.muted ? "Unmute: the room's voices, under this screen" : "Mute the room's voices"}
+              className="rounded p-0.5 transition-colors hover:bg-white/[0.06] hover:text-sol-text"
+            >
+              {sound.muted || sound.volume === 0 ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
+            </button>
+            <span className="absolute bottom-full left-1/2 z-10 hidden -translate-x-1/2 pb-1.5 group-focus-within/vol:block group-hover/vol:block">
+              <span className="flex rounded-md bg-sol-base03 px-2.5 py-2 shadow-lg ring-1 ring-white/[0.08]">
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={sound.muted ? 0 : sound.volume}
+                  onChange={(e) => setMainSound({ volume: Number(e.currentTarget.value), muted: Number(e.currentTarget.value) === 0 })}
+                  aria-label="The room's volume"
+                  className="h-1 w-20 cursor-pointer accent-sol-violet"
+                />
+              </span>
+            </span>
+          </span>
+        )}
         <span className="flex-1" />
         {actions?.({ callMs, file: shown })}
       </div>
@@ -399,14 +517,20 @@ function ViewChip({
  * itself: the room is being filmed right now, a run is saving (an MP4 is
  * uploaded whole when it ends, so there is nothing to play until then), or a
  * run failed and nothing of it will play, with LiveKit's reason in plain
- * words. `onDelete` offers to clear a failed run away.
+ * words. `onDelete` offers to clear a failed run away. A failure is an alarm
+ * only while the call is live, when the room can still press Record again;
+ * once the call is over (`quiet`) it is a fact about an old call, said the
+ * way a deleted recording is, so nobody opening it next week is shown a
+ * warning they can do nothing about.
  */
 export function CallVideoNoticeLine({
   notice,
   onDelete,
+  quiet = false,
 }: {
   notice: CallVideoNotice;
   onDelete?: () => void;
+  quiet?: boolean;
 }) {
   if (notice.kind === "live") {
     return (
@@ -424,33 +548,46 @@ export function CallVideoNoticeLine({
       </div>
     );
   }
+  const clear = onDelete && notice.run.canDelete && (
+    <button
+      type="button"
+      onClick={onDelete}
+      className="shrink-0 rounded px-1.5 font-mono text-[11px] not-italic text-sol-text-muted transition-colors hover:bg-sol-text-muted/10 hover:text-sol-text"
+      title="Remove this failed recording from the call"
+    >
+      Clear
+    </button>
+  );
+  if (quiet) {
+    return (
+      <p className="flex items-start gap-2 text-[12px] italic text-sol-text-dim">
+        <span className="min-w-0">{recordingFailureWords(notice.run.error)}</span>
+        {clear}
+      </p>
+    );
+  }
   return (
     <div className="flex items-start gap-2.5 rounded-lg bg-sol-orange/[0.07] px-3 py-2 text-[12px] text-sol-text-secondary ring-1 ring-inset ring-sol-orange/20">
       <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-sol-orange" />
       <span className="min-w-0 flex-1">
         {recordingFailureWords(notice.run.error)}
       </span>
-      {onDelete && notice.run.canDelete && (
-        <button
-          type="button"
-          onClick={onDelete}
-          className="shrink-0 rounded px-1.5 font-mono text-[11px] text-sol-text-muted transition-colors hover:bg-white/[0.06] hover:text-sol-text"
-        >
-          Clear
-        </button>
-      )}
+      {clear}
     </div>
   );
 }
 
 /** Delete a recording, asked twice: the first press says what it does, the
  *  second does it. Everyone loses it, so it says "for everyone". The question
- *  goes away on Esc from anywhere in it, a press outside, or focus leaving. */
+ *  goes away on Esc from anywhere in it, a press outside, or focus leaving.
+ *  Focus lands on the question, not on Delete (as RecordConfirm does for
+ *  Record): a stray Enter after the first press must not destroy the film. */
 export function DeleteRecordingButton({ onConfirm }: { onConfirm: () => void }) {
   const [asking, setAsking] = useState(false);
   const rootRef = useRef<HTMLSpanElement>(null);
   useWatchEffect(() => {
     if (!asking) return;
+    rootRef.current?.focus();
     const onDown = (e: PointerEvent) => {
       if (!rootRef.current?.contains(e.target as Node)) setAsking(false);
     };
@@ -472,7 +609,8 @@ export function DeleteRecordingButton({ onConfirm }: { onConfirm: () => void }) 
   return (
     <span
       ref={rootRef}
-      className="flex items-center gap-1 animate-in fade-in duration-150"
+      tabIndex={-1}
+      className="flex items-center gap-1 outline-none animate-in fade-in duration-150"
       role="group"
       aria-label="Delete this recording?"
       onKeyDown={(e) => {
@@ -487,7 +625,6 @@ export function DeleteRecordingButton({ onConfirm }: { onConfirm: () => void }) 
       <span className="text-sol-text-secondary">Delete for everyone?</span>
       <button
         type="button"
-        autoFocus
         onClick={() => {
           setAsking(false);
           onConfirm();
@@ -499,9 +636,9 @@ export function DeleteRecordingButton({ onConfirm }: { onConfirm: () => void }) 
       <button
         type="button"
         onClick={() => setAsking(false)}
-        className="rounded px-1.5 py-0.5 transition-colors hover:bg-white/[0.06] hover:text-sol-text"
+        className="flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors hover:bg-white/[0.06] hover:text-sol-text"
       >
-        Keep
+        Keep <KeyCap size="xs">Esc</KeyCap>
       </button>
     </span>
   );

@@ -8,7 +8,7 @@ import { useShareZoom } from "../../hooks/useShareZoom";
 import { ScreenCursors } from "./ScreenCursors";
 import { Avatar } from "./Avatar";
 import { firstName } from "./speakers";
-import { GuestTag, PersonName } from "./GuestTag";
+import { ParticipantTag, PersonName } from "./GuestTag";
 import { isMuted, noFollowLeader, SPEAKING_RING, useStageHost } from "./stageHost";
 
 // THE STAGE'S PICTURE, apart from the app.
@@ -45,6 +45,10 @@ function SideActions({ identity, name }: { identity: string; name: string }) {
 
 // ── Views ─────────────────────────────────────────────────────────────────
 
+/** Somebody on their way into the call: a teammate being rung, or a guest
+ *  who was let in and has not connected yet (`note` says which wait it is). */
+export type StageGhost = { user_id: string; user_name: string; user_image?: string; note?: string };
+
 // Auto: an active share owns the stage; else adaptive camera grid; else the
 // audio-only avatar stage.
 export function AutoStage({
@@ -61,7 +65,7 @@ export function AutoStage({
   screens: ParticipantTile[];
   speaking: Set<string>;
   phase: string;
-  ringing?: { user_id: string; user_name: string; user_image?: string }[];
+  ringing?: StageGhost[];
   settledLine?: string | null;
 }) {
   const [heroKey, setHeroKey] = useState<string | null>(null);
@@ -88,7 +92,7 @@ export function AutoStage({
                   ) : (
                     <span className="flex items-center gap-1">
                       {`${firstName(t.name)}'s screen`}
-                      {callParticipantKind(t.identity) === "guest" && <GuestTag />}
+                      <ParticipantTag identity={t.identity} />
                     </span>
                   )}
                 </button>
@@ -490,13 +494,14 @@ export function AudioOnlyStage({
   roster: any[];
   speaking: Set<string>;
   phase: string;
-  ringing?: { user_id: string; user_name: string; user_image?: string }[];
+  ringing?: StageGhost[];
   settledLine?: string | null;
 }) {
   const inRoom = new Set(roster.map((m) => String(m.user_id)));
   // People we are ringing take a seat before they answer: a breathing,
   // translucent face with "ringing…" under it, so a group start reads as
-  // "these three are on their way" rather than "just you so far".
+  // "these three are on their way" rather than "just you so far". A guest
+  // who was let in and is still on the way in sits the same way.
   const ghosts = ringing.filter((r) => !inRoom.has(r.user_id));
   return (
     <div className="flex min-w-0 flex-1 flex-col items-center justify-center gap-6">
@@ -511,8 +516,10 @@ export function AudioOnlyStage({
             <div className="animate-pulse rounded-full ring-2 ring-sol-violet/40 ring-offset-4 ring-offset-sol-base03">
               <Avatar m={r} size={88} />
             </div>
-            <span className="font-mono text-[12.5px] text-sol-text-muted">
-              {firstName(r.user_name)} · ringing…
+            <span className="flex items-center gap-1.5 font-mono text-[12.5px] text-sol-text-muted">
+              {firstName(r.user_name)}
+              <ParticipantTag identity={r.user_id} />
+              <span>· {r.note ?? "ringing…"}</span>
             </span>
           </div>
         ))}

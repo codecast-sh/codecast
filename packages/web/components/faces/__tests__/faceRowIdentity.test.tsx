@@ -30,8 +30,7 @@ const ptt: PushToTalk = {
   release: () => {},
 };
 mock.module("../../../hooks/useWalkie", () => ({ ...realWalkieHooks, usePushToTalk: () => ptt }));
-const realChatHooks = await import("../../../hooks/useChatSync");
-mock.module("../../../hooks/useChatSync", () => ({ ...realChatHooks, useOpenDm: () => () => {} }));
+mock.module("../../../hooks/useOpenDm", () => ({ useOpenDm: () => () => {} }));
 
 // ── a browser that can animate ──────────────────────────────────────────────
 

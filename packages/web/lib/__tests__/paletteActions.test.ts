@@ -201,6 +201,17 @@ describe("palette item ranking", () => {
     expect(name).toBeGreaterThan(compose);
   });
 
+  test("a command named by the query outranks session and entity hits", () => {
+    const q = "undo history";
+    const command = paletteItemScore("Undo history undo redo history timeline changes take back revert recent actions", q);
+    expect(command).toBeGreaterThan(paletteItemScore("__search__ Undo history timeline|||c1", q));
+    expect(command).toBeGreaterThan(paletteItemScore("__entity__ Undo history timeline|||t1", q));
+    expect(command).toBeGreaterThan(paletteItemScore("__recent__ Undo history work|||r1", q));
+    expect(command).toBeLessThan(paletteItemScore("__filter__v file:src/a.ts", q));
+    // A keyword hit alone is an ordinary match.
+    expect(paletteItemScore("Undo history undo redo history timeline", "timeline")).toBe(1);
+  });
+
   test("keyword rows still hide when they do not match", () => {
     expect(paletteItemScore("Files vault new note create markdown", "emdash")).toBe(0);
     expect(paletteItemScore("Files vault new note create markdown", "note")).toBe(1);

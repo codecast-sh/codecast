@@ -1602,11 +1602,13 @@ describe("preserveFields — base sync must not clobber the liveness overlay", (
 });
 
 describe("preserveFields — task list deltas must not strip cached detail joins", () => {
-  // webGetTaskDetail is the only channel carrying comments/history/
+  // webGetTaskDetail is the only channel carrying history/
   // linked_conversations/related_docs/source_insight. The list channels push
   // the same row without them on every delta; if that stripped the cached
   // joins, every re-open of a task would reload its activity, origin chip and
-  // Sessions list async instead of painting from the store.
+  // Sessions list async instead of painting from the store. Comments ride
+  // every channel, and stay preserved for a row that lacks them (an older
+  // server's list, the create stub's rekey).
   const id = "task0000000000000000000000000077";
   const listRow = { _id: id, short_id: "ct-77", title: "t", status: "open", priority: "high", created_at: 1, updated_at: 1, creator: { name: "a" }, plan: null };
   const detailRow = {

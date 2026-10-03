@@ -218,6 +218,15 @@ describe("client sync registry", () => {
       expect(Object.keys(useInboxStore.getState().plans).sort()).toEqual(["a", "b"]);
     });
 
+    it("a republished line profile replaces the project row even though no scalar moved", () => {
+      // signals.publishProfile patches line_profile alone; an object field is
+      // skipped by identity reuse unless it is deep, so /line kept stale finders.
+      const profile = (sources: string[]) => ({ default: true, changed_at: 1, finders: sources.map((source) => ({ source })) });
+      useInboxStore.setState({ projects: { p: { _id: "p", title: "P", line_profile: profile(["ci"]) } } } as any);
+      useInboxStore.getState().syncTable("projects", [{ _id: "p", title: "P", line_profile: profile(["ci", "sentry"]) }]);
+      expect((useInboxStore.getState() as any).projects.p.line_profile.finders.map((f: any) => f.source)).toEqual(["ci", "sentry"]);
+    });
+
     it("saved views persist as a snapshot, so a pinned view resolves on an offline boot", () => {
       // The sidebar's pinned rows render from client UI state and then look
       // the view up in this collection on click; unpersisted, that click was

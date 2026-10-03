@@ -8,9 +8,12 @@ import { parseOrder } from "./net";
 import {
   SimFailure,
   artifactDir,
+  eventsJsonl,
   fieldDiff,
   formatFailure,
+  replayCommands,
   reportFailure,
+  writeArtifacts,
   type DeliveryRecord,
   type FailureContext,
 } from "./report";
@@ -168,13 +171,13 @@ describe("reportFailure", () => {
     const err = spyOn(console, "error").mockImplementation(() => {});
     try {
       const ctx = forced();
+      const dir = artifactDir("visibilityFlip", "interleave", 7, root);
       let thrown: unknown;
       try {
-        reportFailure(ctx, { events: ring, world: { users: ["ada", "bo"] }, final: { ok: false } }, root);
+        reportFailure(ctx, { events: ring, world: { users: ["ada", "bo"] }, final: { ok: false } }, dir);
       } catch (e) {
         thrown = e;
       }
-      const dir = artifactDir("visibilityFlip", "interleave", 7, root);
       expect(thrown).toBeInstanceOf(SimFailure);
       expect((thrown as SimFailure).message).toBe(formatFailure(ctx, dir));
       expect(err).toHaveBeenCalledWith((thrown as SimFailure).message);
@@ -195,5 +198,46 @@ describe("reportFailure", () => {
       err.mockRestore();
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("run history fields", () => {
+  test("step rows sit between the deliveries at their place, and result.json carries the run's meta", () => {
+    const root = mkdtempSync(join(tmpdir(), "sim-report-"));
+    try {
+      const dir = artifactDir("visibilityFlip", "interleave", 7, root, true);
+      expect(dir).toBe(join(root, "visibilityFlip-interleave-7-known"));
+      const steps = [
+        { at: 0, seq: 0, verb: "settle", actor: "world", label: "settle #1" },
+        { at: 2, seq: 3, verb: "kill", actor: "B", label: "kill ada/s" },
+        { at: 15, seq: 0, verb: "expect", actor: "world", label: "expect window B hides ada/s" },
+      ];
+      const meta = { gitHead: "a".repeat(40), dirty: true, startedAt: "2026-10-03T22:00:00.000Z", realMs: 812 };
+      writeArtifacts(dir, { scenario: "visibilityFlip", passed: true }, { events: ring, steps, world: {}, final: {}, meta });
+      const rows = readFileSync(join(dir, "events.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+      expect(rows).toHaveLength(ring.length + steps.length);
+      expect(rows[0]).toEqual({ kind: "step", seq: 0, verb: "settle", actor: "world", label: "settle #1" });
+      expect(rows[3]).toEqual({ kind: "step", seq: 3, verb: "kill", actor: "B", label: "kill ada/s" });
+      expect(rows[1].kind).toBeUndefined();
+      expect(rows.at(-1).label).toBe("expect window B hides ada/s");
+      // With no steps the file is what it was before step markers existed.
+      expect(eventsJsonl(ring, [])).toBe(eventsJsonl(ring));
+      expect(JSON.parse(readFileSync(join(dir, "result.json"), "utf8"))).toEqual({ scenario: "visibilityFlip", passed: true, ...meta });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("replay lines gain the minimal order once a shrink has run", () => {
+    const order = ["scripted", "actor:ada", "conn:A"];
+    expect(replayCommands("visibilityFlip", 7, order, "ada/s")).toEqual([
+      "bun run sim visibilityFlip --seed 7 --trace ada/s",
+      'bun run sim visibilityFlip --seed 7 --order "scripted actor:ada conn:A"',
+    ]);
+    expect(replayCommands("visibilityFlip", 7, order, null, ["scripted", "conn:A"])).toEqual([
+      "bun run sim visibilityFlip --seed 7 --trace",
+      'bun run sim visibilityFlip --seed 7 --order "scripted actor:ada conn:A"',
+      'bun run sim visibilityFlip --seed 7 --order "scripted conn:A"',
+    ]);
   });
 });

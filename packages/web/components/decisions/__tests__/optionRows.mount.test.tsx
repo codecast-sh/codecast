@@ -63,7 +63,7 @@ test("each row carries its label and its meaning once, and the row answers", asy
   await act(() => { (rows[1] as HTMLElement).click(); });
   expect(picked).toEqual([1]);
   unmount();
-});
+}, 30_000); // the first mount pays for loading the store under a loaded machine
 
 test("without a pick handler the rows are plain and the number is a badge", async () => {
   const { container, unmount } = await mount(<DecisionOptionList options={options} />);
@@ -97,3 +97,26 @@ test("the queue card and the document page have no option list of their own", ()
   expect(doc).toContain("<DecisionOptionList");
   expect(doc).not.toMatch(/decision\.options\.map\(\(o, i\)/);
 });
+
+test("ticks on a multi survive the controls unmounting (a folded card) and clear on answer", async () => {
+  const { useInboxStore } = await import("../../../store/inboxStore");
+  const decision: any = { _id: "d-fold", conversation_id: "c1", question: "Which?", options, kind: "multi", status: "pending", blocking: true };
+  useInboxStore.setState((s: any) => ({ sessionDecisions: { ...s.sessionDecisions, [decision._id]: decision } }));
+  const answers: any[] = [];
+  const onAnswer = (a: any) => { answers.push(a); useInboxStore.getState().answerDecision(decision._id, a); };
+  const ticked = (c: HTMLElement) => Array.from(c.querySelectorAll("[data-option]")).map((r) => !!r.querySelector(".text-sol-green"));
+
+  const first = await mount(<DecisionAnswerControls decision={decision} onAnswer={onAnswer} />);
+  const rows = first.container.querySelectorAll("[data-option]");
+  await act(() => { (rows[0] as HTMLElement).click(); (rows[2] as HTMLElement).click(); });
+  expect(ticked(first.container)).toEqual([true, false, true]);
+  first.unmount();
+
+  const second = await mount(<DecisionAnswerControls decision={decision} onAnswer={onAnswer} />);
+  expect(ticked(second.container)).toEqual([true, false, true]);
+  const send = Array.from(second.container.querySelectorAll("button")).find((b) => b.textContent?.includes("Send this answer"))!;
+  await act(() => { send.click(); });
+  expect(answers).toEqual([{ json: [0, 2] }]);
+  expect(useInboxStore.getState().drafts["decision:d-fold"]).toBeUndefined();
+  second.unmount();
+}, 30_000);

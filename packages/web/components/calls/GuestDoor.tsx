@@ -2,16 +2,17 @@
 
 import { useCallback, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Check, Copy, Link2, RefreshCw, UserMinus, X } from "lucide-react";
+import { Check, Copy, Link2, RefreshCw, Unlink, UserMinus, X } from "lucide-react";
+import { api } from "@codecast/convex/convex/_generated/api";
 import { GUEST_LINK_TTL_MS, guestIdFromIdentity, isGuestIdentity } from "@codecast/shared/contracts";
+import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useGuestLinks } from "../../hooks/useGuestLinks";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { copyToClipboard, copyToClipboardWhenReady } from "../../lib/utils";
-import { guestLinkUrl } from "../../lib/calls/guestDoorActions";
+import { guestLinkUrl, removeGuest } from "../../lib/calls/guestDoorActions";
 import { useGuestDoor } from "../../hooks/useGuestDoor";
-import { useInboxStore } from "../../store/inboxStore";
 import { GUEST_LINK_TTL_CHOICES, guestLinkExpiry, meetingTitle } from "../../lib/calls/roomGuests";
 import { firstName } from "./speakers";
 
@@ -24,40 +25,43 @@ import { firstName } from "./speakers";
 //   the remove   beside a guest's name on the stage, and on their face's
 //                card in the header: put them out
 //
-// None of these can paint before the server answers, and none pretends to:
-// a link's token is minted by the server, and letting a stranger in or
-// putting them out is a decision the room should see land, not assume. So a
-// gesture shows itself in flight ("removing…") and the store's own feeds
-// (liveRooms, roomKnocks) carry the result everywhere else.
+// Answering a guest (admit, deny, remove) is a store action and paints in the
+// frame it is pressed, everywhere at once (lib/calls/guestDoorActions); a
+// refusal puts the row back and says why. A link cannot paint first: its
+// token is minted by the server, so the panel shows it in flight.
 
 // ── Remove ───────────────────────────────────────────────────────────────────
 
 /** Put a guest out, beside their name. Two presses, the second within a few
  *  seconds: removing somebody from a meeting they are talking in is not a
- *  thing to do by brushing a button. Renders nothing for anyone not a guest. */
+ *  thing to do by brushing a button. The second press offers a choice: out,
+ *  or out with the link they came in on turned off, because a guest put out
+ *  can open the same link in a private window and knock again as somebody
+ *  new. Renders nothing for anyone not a guest, or a viewer who could not. */
 export function GuestRemoveButton({
+  roomKey,
   identity,
   name,
   variant,
   always = false,
 }: {
+  /** The room the guest is in, which is the room the caller is drawing. */
+  roomKey: string;
   identity: string;
   name: string;
   variant: "tile" | "row";
   /** Shown at rest, not only when the row is hovered (a card's own button). */
   always?: boolean;
 }) {
-  const door = useGuestDoor();
   // Putting a guest out takes the standing that letting one in does; a
   // button that would only answer "you can't" is not offered.
-  const roomKey = useInboxStore((st) => (st.call as any)?.roomKey ?? null);
   const { canInvite } = useGuestLinks(roomKey);
-  const [phase, setPhase] = useState<"idle" | "confirm" | "busy">("idle");
+  const [confirm, setConfirm] = useState(false);
   useWatchEffect(() => {
-    if (phase !== "confirm") return;
-    const t = setTimeout(() => setPhase("idle"), 4000);
+    if (!confirm) return;
+    const t = setTimeout(() => setConfirm(false), 5000);
     return () => clearTimeout(t);
-  }, [phase]);
+  }, [confirm]);
   const guestId = guestIdFromIdentity(identity);
   if (!guestId || !isGuestIdentity(identity) || !canInvite) return null;
   const who = firstName(name);
@@ -65,30 +69,56 @@ export function GuestRemoveButton({
   const base = tile
     ? "inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-mono text-[11px] backdrop-blur transition-all"
     : "inline-flex items-center gap-1 rounded-full px-1.5 py-px font-mono text-[10px] transition-all";
-  const reveal = phase === "idle" && !always ? " opacity-0 group-hover:opacity-100 focus-visible:opacity-100" : "";
-  const tone =
-    phase === "idle"
-      ? tile
-        ? " bg-black/45 text-white/80 hover:bg-sol-red/70 hover:text-white"
-        : " text-sol-text-muted hover:bg-sol-red/15 hover:text-sol-red"
-      : " bg-sol-red/80 text-white hover:bg-sol-red";
+  const out = (revokeLink: boolean) => (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setConfirm(false);
+    removeGuest(roomKey, guestId, { revokeLink });
+  };
+  if (confirm) {
+    const armed = `${base} bg-sol-red/80 text-white hover:bg-sol-red`;
+    return (
+      <span className="inline-flex items-center gap-1">
+        <button
+          type="button"
+          onClick={out(false)}
+          className={armed}
+          title={`Press to remove ${who} from the call`}
+          aria-label={`Confirm: remove ${who} from the call`}
+        >
+          <UserMinus className="h-3 w-3" />
+          remove {who}?
+        </button>
+        <button
+          type="button"
+          onClick={out(true)}
+          className={`${base} ${tile ? "bg-black/55 text-white/85" : "text-sol-text-muted"} hover:bg-sol-red/80 hover:text-white`}
+          title={`Remove ${who} and turn off the link they came in on, so nobody new can use it. Guests already in stay`}
+          aria-label={`Remove ${who} and turn off their link`}
+        >
+          <Unlink className="h-3 w-3" />
+          and link
+        </button>
+      </span>
+    );
+  }
+  // Revealed by hover where there is one. A touch screen has none, and a
+  // button that never appears there would leave the face card as the only
+  // way to put a guest out, so on those it shows at rest.
+  const reveal = always ? "" : " opacity-0 group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100";
+  const tone = tile ? " bg-black/45 text-white/80 hover:bg-sol-red/70 hover:text-white" : " text-sol-text-muted hover:bg-sol-red/15 hover:text-sol-red";
   return (
     <button
       type="button"
-      disabled={phase === "busy"}
       onClick={(e) => {
         e.stopPropagation();
-        if (phase === "idle") return setPhase("confirm");
-        if (phase !== "confirm") return;
-        setPhase("busy");
-        void door.remove(guestId).finally(() => setPhase("idle"));
+        setConfirm(true);
       }}
       className={`${base}${tone}${reveal}`}
-      title={phase === "confirm" ? `Press again to remove ${who} from the call` : `Remove ${who} from the call`}
-      aria-label={phase === "confirm" ? `Confirm: remove ${who} from the call` : `Remove ${who} from the call`}
+      title={`Remove ${who} from the call`}
+      aria-label={`Remove ${who} from the call`}
     >
       <UserMinus className="h-3 w-3" />
-      {phase === "busy" ? "removing…" : phase === "confirm" ? `remove ${who}?` : "remove"}
+      remove
     </button>
   );
 }
@@ -130,25 +160,31 @@ export function GuestInvite({
 
 const PANEL_W = 340;
 const GAP = 6;
+const EDGE = 8;
+
+/** The panel's width: its own, or the screen's less a margin on a phone,
+ *  where 340 would run off the right edge with its buttons clipped. */
+const panelWidth = () => Math.min(PANEL_W, window.innerWidth - 2 * EDGE);
 
 /** Where the panel stands: under the trigger, or above it when below would
  *  run off the screen, held inside the viewport either way. Measured after
  *  layout (the panel's own height decides the flip) and again whenever the
- *  window resizes. */
+ *  window resizes. `place` is returned for the caller to follow a scroll. */
 function usePanelPlacement(anchor: HTMLElement, panel: React.RefObject<HTMLDivElement | null>, align: "start" | "end") {
-  const [pos, setPos] = useState<{ left: number; top: number; above: boolean } | null>(null);
+  const [pos, setPos] = useState<{ left: number; top: number; width: number; above: boolean } | null>(null);
   const place = useCallback(() => {
     const rect = anchor.getBoundingClientRect();
     const h = panel.current?.offsetHeight ?? 0;
-    const left = Math.max(8, Math.min(window.innerWidth - PANEL_W - 8, align === "end" ? rect.right - PANEL_W : rect.left));
+    const width = panelWidth();
+    const left = Math.max(EDGE, Math.min(window.innerWidth - width - EDGE, align === "end" ? rect.right - width : rect.left));
     const below = rect.bottom + GAP;
-    const above = below + h > window.innerHeight - 8 && rect.top - GAP - h >= 8;
+    const above = below + h > window.innerHeight - EDGE && rect.top - GAP - h >= EDGE;
     const top = above ? rect.top - GAP - h : below;
     // The layout effect below measures after every render, so a placement
     // that has not moved must not set state: a fresh object each time is a
     // render each time, and React gives up on the loop ("Maximum update
     // depth exceeded"), taking the whole call window down with it.
-    setPos((p) => (p && p.left === left && p.top === top && p.above === above ? p : { left, top, above }));
+    setPos((p) => (p && p.left === left && p.top === top && p.width === width && p.above === above ? p : { left, top, width, above }));
   }, [anchor, panel, align]);
   useLayoutEffect(() => {
     place();
@@ -157,7 +193,7 @@ function usePanelPlacement(anchor: HTMLElement, panel: React.RefObject<HTMLDivEl
     window.addEventListener("resize", place);
     return () => window.removeEventListener("resize", place);
   }, [place]);
-  return pos;
+  return { pos, place };
 }
 
 function GuestInvitePanel({
@@ -185,7 +221,7 @@ function GuestInvitePanel({
   const [copyFailed, setCopyFailed] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const pos = usePanelPlacement(anchor, rootRef, align);
+  const { pos, place } = usePanelPlacement(anchor, rootRef, align);
   const dark = !!anchor.closest(".dark");
 
   useWatchEffect(() => {
@@ -193,10 +229,16 @@ function GuestInvitePanel({
       const t = e.target as Node;
       if (!rootRef.current?.contains(t) && !anchor.contains(t)) onClose();
     };
-    // A scroll that moves the trigger leaves the panel pointing at nothing;
-    // one inside the panel is the panel's own.
+    // A scroll that moves the trigger moves the panel with it, and closes it
+    // only once the trigger has left the screen. Never on any scroll at all:
+    // in a live call the thread and the transcript scroll by themselves as
+    // lines arrive, and that shut the panel under a hand reaching for copy.
     const onScroll = (e: Event) => {
-      if (!rootRef.current?.contains(e.target as Node)) onClose();
+      const t = e.target as Node;
+      if (rootRef.current?.contains(t) || !t.contains(anchor)) return;
+      const r = anchor.getBoundingClientRect();
+      if (r.bottom < 0 || r.top > window.innerHeight || r.right < 0 || r.left > window.innerWidth) onClose();
+      else place();
     };
     document.addEventListener("pointerdown", onDown, true);
     document.addEventListener("scroll", onScroll, true);
@@ -204,7 +246,7 @@ function GuestInvitePanel({
       document.removeEventListener("pointerdown", onDown, true);
       document.removeEventListener("scroll", onScroll, true);
     };
-  }, [anchor, onClose]);
+  }, [anchor, onClose, place]);
   // Focus lands in the panel once, as it opens, so Esc closes it rather than
   // the stage behind it.
   useMountEffect(() => {
@@ -245,8 +287,13 @@ function GuestInvitePanel({
     setBusy(null);
   };
   const ttlLabel = GUEST_LINK_TTL_CHOICES.find((c) => c.ms === ttl)?.label ?? "7 days";
-  // What travels with the link: the guest's page and every unfurl of it.
-  const seenAs = meetingTitle(links[0]?.title ?? null, { name: (mine ?? links[0])?.created_by_public ?? null });
+  // What travels with the viewer's link: the guest's page and every unfurl
+  // of it. The server says it (callGuests.guestLinkPreview), from the same
+  // two functions the guest's page uses, before any link exists, because
+  // that is when the person decides what to send: a private channel's name
+  // stays inside, and the meeting is then named after whoever invites.
+  const preview = useQueryNoThrow(api.callGuests.guestLinkPreview, { room_key: roomKey }).data;
+  const seenAs = preview ? meetingTitle(preview.title, { name: preview.inviter }) : null;
 
   return createPortal(
     <div
@@ -259,7 +306,7 @@ function GuestInvitePanel({
         e.stopPropagation();
         onClose();
       }}
-      style={{ left: pos?.left ?? -9999, top: pos?.top ?? 0, width: PANEL_W, visibility: pos ? "visible" : "hidden" }}
+      style={{ left: pos?.left ?? -9999, top: pos?.top ?? 0, width: pos?.width ?? PANEL_W, visibility: pos ? "visible" : "hidden" }}
       className={`${dark ? "dark " : ""}fixed z-[260] rounded-xl bg-sol-bg-alt p-3 text-sol-text shadow-2xl outline-none ring-1 ring-black/10 animate-in fade-in duration-150 dark:ring-white/[0.08] motion-reduce:animate-none ${
         pos?.above ? "slide-in-from-bottom-1" : "slide-in-from-top-1"
       }`}
@@ -271,7 +318,7 @@ function GuestInvitePanel({
         <div className="min-w-0 flex-1">
           <div className="text-[13px] font-medium leading-snug">Invite someone outside the team</div>
           <p className="mt-0.5 text-[11.5px] leading-snug text-sol-text-muted">
-            They join from the link in a browser, no account. Someone in the call lets them in, and they are told first if the call is transcribed or recorded.
+            They join from the link in a browser, no account. Someone in the call lets them in, and they are told first if the call is transcribed or recorded. Guests see and hear the call, not its chat.
           </p>
         </div>
         <button
@@ -379,9 +426,11 @@ function GuestInvitePanel({
           {!mine && copyFailed && (
             <p className="mt-1.5 px-0.5 font-mono text-[10.5px] text-sol-orange">The link was made but not copied. Press copy above.</p>
           )}
-          <p className="mt-2 px-0.5 text-[11px] leading-snug text-sol-text-dim">
-            Guests see this call as <span className="text-sol-text-muted">{seenAs}</span>.
-          </p>
+          {seenAs && (
+            <p className="mt-2 px-0.5 text-[11px] leading-snug text-sol-text-dim">
+              Guests see this call as <span className="text-sol-text-muted">{seenAs}</span>.
+            </p>
+          )}
         </div>
       )}
 

@@ -9,7 +9,7 @@
  * matches it.
  */
 
-import { memo, startTransition, Suspense, useState, type CSSProperties, type ComponentType, type ReactNode } from "react";
+import { memo, startTransition, Suspense, useContext, useState, type CSSProperties, type ComponentType, type ReactNode } from "react";
 import { useWatchEffect } from "@/hooks/useWatchEffect";
 import { EntityFixtureContext } from "@/lib/entityDisplay";
 import { PhoneFrame } from "../productMocks";
@@ -17,9 +17,9 @@ import type { ChapterPart, HeroChapter, PartProps } from "./chapters/contract";
 import { createFilmClock, FilmClockContext, fly, useFilmTime } from "./filmClock";
 import { entityStage, ENTITY_STAGES } from "./fixtures";
 import { ARCS, FLYERS } from "./motion";
-import { SEAM_GHOST } from "./timeline";
+import { isLive, SEAM_GHOST } from "./timeline";
 import { HeroPartBoundary } from "./sandbox";
-import { LABEL_3W, SCENES, SURFACES, type ArcPath, type Region, type RegionKey, type Surface } from "./world";
+import { LABEL_3W, SCENES, SURFACES, type ArcPath, type Region, type RegionKey, type Surface, type SurfaceId } from "./world";
 
 const px = (n: number) => `${Math.round(n * 1000) / 1000}px`;
 
@@ -53,13 +53,17 @@ function NearChapter({ chapter, children }: { chapter: string; children: ReactNo
 }
 
 function RegionSlot({ k, region, parts, now }: { k: RegionKey; region: Region; parts: Placed[]; now: number }) {
-  // A region that was empty in the prerender (the poster's conversation pane) fades in when its views arrive.
+  // A region that was empty in the prerender (the poster's conversation pane) fades in when its views arrive, if its window is on
+  // screen then: a page-load event, on the page's clock. Views that arrive while their window is away simply wait there.
+  const clock = useContext(FilmClockContext);
   const [emptyAtFirst] = useState(parts.length === 0);
+  const [arrivedInView, setArrivedInView] = useState<boolean | null>(null);
+  if (emptyAtFirst && parts.length > 0 && arrivedInView === null) setArrivedInView(isLive(k.split(".")[0] as SurfaceId, clock.get(), clock.view.mobile, clock.view.side));
   const bottom = region.anchor === "bottom";
   return (
     <div
       data-region={k}
-      className={emptyAtFirst && parts.length > 0 ? "hf-in" : undefined}
+      className={arrivedInView ? "hf-in" : undefined}
       style={{
         position: "absolute",
         left: region.x,
@@ -100,14 +104,26 @@ const WINDOW_BORDER = "1px solid color-mix(in srgb, var(--sol-text) 10%, transpa
 /** The clock the seam's copy runs on: the film's first instant, held. */
 const OPENING_CLOCK = createFilmClock(0);
 
+/** The box a window's seam cover clears: the union of its pane regions (timeline.ts SEAM_GHOST.pane). */
+function paneBox(s: Surface): CSSProperties {
+  const rs = SEAM_GHOST.pane.map((k) => s.regions[k]).filter(Boolean);
+  const [x0, y0] = [Math.min(...rs.map((r) => r.x)), Math.min(...rs.map((r) => r.y))];
+  const [x1, y1] = [Math.max(...rs.map((r) => r.x + r.w)), Math.max(...rs.map((r) => r.y + r.h))];
+  return { position: "absolute", left: x0, top: y0, width: x1 - x0, height: y1 - y0, pointerEvents: "none" };
+}
+
 /**
- * The seam's copy of an opening window (timeline.ts SEAM_GHOST): the same
- * regions and views, on a clock held at 0, laid over the live window's
- * content inside its face (so the face's corners clip it) and
- * dissolved in by the driver as the film ends, so the last frame is the
- * first. Its elements carry `data-fly` like the live ones; the driver keeps
- * them apart by the `data-fly-ghost` box and writes them frame(0). Mounted in
- * a transition a few seconds before it shows, unmounted once the film wraps.
+ * The seam's copy of an opening window (timeline.ts SEAM_GHOST): first a
+ * cover in the page's cream clears the live conversation pane, as the app
+ * does when it opens another session; then the same regions and views, on a
+ * clock held at 0, fade in over the live window's content inside its face (so
+ * the face's corners clip it), so the last frame is the first. The copy has
+ * no ground of its own: outside the pane the live window already shows what
+ * it shows, and inside it the copy lands on the cleared cover, so no frame
+ * shows two versions of anything. Its elements carry `data-fly` like the live
+ * ones; the driver keeps them apart by the `data-fly-ghost` box and writes
+ * them frame(0). Mounted in a transition a few seconds before it shows,
+ * unmounted once the film wraps.
  */
 function SeamGhost({ s, parts, now }: { s: Surface; parts: Placed[]; now: number }) {
   const near = useFilmTime((t) => t >= SEAM_GHOST.mount);
@@ -116,19 +132,18 @@ function SeamGhost({ s, parts, now }: { s: Surface; parts: Placed[]; now: number
     if (near !== on) startTransition(() => setOn(near));
   }, [near, on]);
   return (
-    <div
-      {...fly(`ghost:${s.id}`, { position: "absolute", inset: 0, pointerEvents: "none" })}
-      aria-hidden
-      className="bg-sol-bg text-sol-text"
-    >
-      {on && (
-        <div data-fly-ghost className="absolute inset-0">
-          <FilmClockContext.Provider value={OPENING_CLOCK}>
-            <FilmEntities>{regionsOf(s, parts, now)}</FilmEntities>
-          </FilmClockContext.Provider>
-        </div>
-      )}
-    </div>
+    <>
+      <div {...fly(`cover:${s.id}`, paneBox(s))} aria-hidden className="bg-sol-bg" />
+      <div {...fly(`ghost:${s.id}`, { position: "absolute", inset: 0, pointerEvents: "none" })} aria-hidden className="text-sol-text">
+        {on && (
+          <div data-fly-ghost className="absolute inset-0">
+            <FilmClockContext.Provider value={OPENING_CLOCK}>
+              <FilmEntities>{regionsOf(s, parts, now)}</FilmEntities>
+            </FilmClockContext.Provider>
+          </div>
+        )}
+      </div>
+    </>
   );
 }
 
@@ -163,7 +178,7 @@ function SurfaceMount({ s, parts, now }: { s: Surface; parts: Placed[]; now: num
         {s.frame === "phone" ? (
           <div {...fly(`face:${s.id}`, face)}>
             {/* Regions on the phone are measured from the screen's top-left, under the notch. */}
-            <PhoneFrame className="h-full !shadow-none" screenClassName="dark relative h-full">
+            <PhoneFrame className="h-full !shadow-none" screenClassName="relative h-full">
               <div className="relative bg-sol-bg text-sol-text" style={{ height: s.h - 48 }}>{regions}</div>
             </PhoneFrame>
           </div>

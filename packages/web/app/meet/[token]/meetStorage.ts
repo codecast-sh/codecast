@@ -62,6 +62,19 @@ export function clearCreds(token: string, s: Storage | null = store()): void {
   } catch {}
 }
 
+/** Hear another tab of this link take or drop its place: two tabs opened
+ *  before either knocked are one person, and the tab that knocks second must
+ *  knock as the guest the first one made, not as a second stranger at the
+ *  door (the browser fires `storage` only in the tabs that did not write). */
+export function watchCreds(token: string, fn: () => void): () => void {
+  if (typeof window === "undefined") return () => {};
+  const onStorage = (e: StorageEvent) => {
+    if (e.key === null || e.key === CREDS_PREFIX + token) fn();
+  };
+  window.addEventListener("storage", onStorage);
+  return () => window.removeEventListener("storage", onStorage);
+}
+
 export function readName(s: Storage | null = store()): string {
   try {
     return normalizeGuestName(s?.getItem(NAME_KEY)) ?? "";

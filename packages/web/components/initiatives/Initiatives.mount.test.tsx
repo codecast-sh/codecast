@@ -76,7 +76,8 @@ async function verifyInitiatives() {
   // The org log's answer to "where did this goal come from" (I1, revised).
   mock.module("../../hooks/useQueryNoThrow", () => ({ useQueryNoThrow: () => ({ data: env.origin, error: undefined, retry: () => {} }) }));
   mock.module("../../hooks/useOrgRoles", () => ({ useOrgRoles: () => ({ roles: env.tree.roles, workspace: env.tree.workspace, roleBotUserIds: new Set<string>() }) }));
-  mock.module("../../hooks/useTeamRoster", () => ({ useTeamRosterIdentity: () => [{ _id: "fixture-user-me", name: "Ashot" }, { _id: "fixture-user-sam", name: "Sam" }] }));
+  const realRoster = await import("../../hooks/useTeamRoster");
+  mock.module("../../hooks/useTeamRoster", () => ({ ...realRoster, useTeamRosterIdentity: () => [{ _id: "fixture-user-me", name: "Ashot" }, { _id: "fixture-user-sam", name: "Sam" }] }));
   mock.module("../../hooks/useRoleScope", () => ({ useRoleScope: () => ({ model: null, role: null }), useScopeRows: () => ({ projects: collections.projects, plans: collections.plans, tasks: collections.tasks, roles: env.tree.roles }) }));
   mock.module("next/navigation", () => ({
     useRouter: () => ({ replace: (u: string) => calls.push(`replace:${u}`), push: (u: string) => calls.push(`push:${u}`) }),

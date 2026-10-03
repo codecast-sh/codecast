@@ -3,23 +3,25 @@
 # devices, survives a reload, and a restore made on the other device reaches
 # every window — with no reconcile crawl in the client (ct-47927).
 #
-# Rig: one Chrome (the shared agent browser), two origins on the same vite
-# dev server = two "devices" with separate IndexedDB (A = localhost, B =
-# 127.0.0.1), two tabs on A (host + follower) and one on B, all signed in as
-# the App Review demo account with minted token pairs. Drive with the CLI's
-# `tab <ref>` + `eval --stdin`; every probe reads the dev store handle.
+# Rig: one Chrome (the shared agent browser), two origins on the smoke
+# stack's vite (scripts/rig/stack.mjs, port 3297, the local dev deployment) =
+# two "devices" with separate IndexedDB (A = localhost, B = 127.0.0.1), two
+# tabs on A (host + follower) and one on B, all signed in as the smoke world's
+# Jordan with minted token pairs. Drive with the CLI's `tab <ref>` + `eval
+# --stdin`; every probe reads the dev store handle. RIG_DEPLOYMENT=prod points
+# the e2e scripts at the App Review Jordan on prod instead (e2e/target.ts).
 #
 # Setup (once per run), from packages/web:
-#   1. mint a token pair per origin for the demo account (App Review "Jordan Lee"):
-#      (cd ../convex && env -u CONVEX_DEPLOYMENT npx convex run auth:store \
-#        '{"args":{"type":"signIn","userId":"<users _id>","generateTokens":true}}' > /tmp/e2e-tokens.json)
-#      and again into /tmp/e2e-tokens-b.json for the second origin
+#   1. `bun scripts/rig/stack.mjs up`, then mint a token pair per origin:
+#      `bun run e2e/tokens.ts > /tmp/e2e-tokens.json`, and again into
+#      /tmp/e2e-tokens-b.json for the second origin
 #   2. `bun run e2e/seed.ts 3` prints three conversation ids (each with two messages)
-#   3. start vite on a free port (`./node_modules/.bin/vite --port 3201 --strictPort`),
-#      open <origin>/robots.txt in a tab per origin, set localStorage
-#      `__convexAuthJWT_httpsconvexcodecastsh` + `__convexAuthRefreshToken_httpsconvexcodecastsh`
-#      from the pair, then open <origin>/inbox; open a second tab on origin A
-#      (it becomes the follower: `window.__syncReplication()` reports synced)
+#   3. open <origin>/robots.txt on http://localhost:3297 and http://127.0.0.1:3297,
+#      set localStorage `__convexAuthJWT_<suffix>` + `__convexAuthRefreshToken_<suffix>`
+#      from the pair (<suffix> is the file's convexUrl with every character that
+#      is not a letter or digit removed), then open <origin>/inbox; open a second
+#      tab on origin A (it becomes the follower: `window.__syncReplication()`
+#      reports synced)
 #   4. run this script; `bun run e2e/cleanup.ts` deletes the seeded rows afterwards
 #
 #   usage: kill-from-follower.sh <A-host tab> <A-follower tab> <B-host tab> <conversation id>

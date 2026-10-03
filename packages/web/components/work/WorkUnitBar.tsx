@@ -4,6 +4,7 @@
 // is the durable statement (what, why, done when), the session is the live
 // work. This bar sits at the top of BOTH faces and draws the same thing on
 // each, with the face you are on lit, so the two pages read as one object.
+// It is the first item on the context rail (components/ContextRail).
 // Switching faces re-points the pane you are in; Split puts the other face
 // beside it.
 
@@ -19,13 +20,14 @@ import { identityLine, identityRowOf } from "../../lib/sessionIdentity";
 import { sessionLiveAt } from "../../lib/liveness";
 import { compactAge, threadStateView } from "../../lib/threadState";
 import { cleanTitle } from "../../lib/conversationProcessor";
-import { canOpenBeside, openBeside, sessionPanePath } from "../../lib/stage";
+import { openBeside, sessionPanePath, stageClose, stageFocus, stageHasRoom } from "../../lib/stage";
 import { useTabContext } from "../../lib/tabParams";
-import { InsideWorkUnit, setSessionStacked, taskFacePath, useSessionStacked, useSwitchFace, type WorkFace } from "../../lib/workUnit";
+import { InsideWorkUnit, setSessionStacked, taskFacePath, useLeafShowing, useSessionStacked, useSwitchFace, type WorkFace } from "../../lib/workUnit";
 import { HeightGrip, savedGripHeight } from "../HeightGrip";
 import { SessionPane } from "../stage/SessionPane";
 import { RoutePane } from "../RoutePane";
 import { ErrorBoundary } from "../ErrorBoundary";
+import { RailDetail } from "../ContextRail";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useInboxStore } from "../../store/inboxStore";
 import { usePersonifyAll } from "../../hooks/usePersonifyAll";
@@ -81,11 +83,10 @@ function WorkUnitBarInner({ face, task, session }: { face: WorkFace; task: WorkU
   const frameRef = useRef<HTMLDivElement>(null);
   const switchFace = useSwitchFace();
   const personifyAll = usePersonifyAll();
-  // The store row is the live truth for the session (and the task's status);
-  // the props are what the page already had in hand.
-  // The re-render signature: identity, declared state, the task's status
-  // and its subtask tally. Heartbeats are left out on purpose (they tick about
-  // once a second); liveness is re-read on the coarse clock instead.
+  // The store rows are the live truth; the props are what the page already
+  // had in hand. The re-render signature covers identity, declared state, the
+  // task's status and its subtask tally. Heartbeats are left out on purpose
+  // (they tick about once a second); liveness is re-read on the coarse clock.
   const sig = useInboxStore((s) => `${liveSig(s.sessions[session._id])}|${(s.tasks as any)[task._id]?.status ?? ""}|${subtaskTally(task._id, s.tasks)}`);
   const st = useInboxStore.getState();
   const liveRow: any = { ...session, ...(st.sessions[session._id] ?? {}) };
@@ -104,6 +105,11 @@ function WorkUnitBarInner({ face, task, session }: { face: WorkFace; task: WorkU
   const taskPath = taskFacePath(task);
   const sessionPath = sessionPanePath(session._id);
   const otherPath = face === "task" ? sessionPath : taskPath;
+  // The other face already open in a pane beside this one: its tab focuses
+  // that pane, and Both (pressed) closes it.
+  const otherLeaf = useLeafShowing(otherPath);
+  const together = stacked || otherLeaf !== null;
+  const goOther = () => { if (otherLeaf) stageFocus(otherLeaf); else switchFace(otherPath); };
 
   const stateView = threadStateView(liveRow, liveRow.message_count ?? 0, now);
   const pinned = stateView?.text ?? null;
@@ -168,12 +174,12 @@ function WorkUnitBarInner({ face, task, session }: { face: WorkFace; task: WorkU
   );
 
   const bar = (
-    <div data-work-unit className="flex items-center gap-2 h-8 px-3 border-b border-sol-border/30 bg-sol-bg-alt/50 flex-shrink-0">
+    <div data-work-unit data-cc-rail-item="task" className="flex items-center gap-1.5 flex-[1_1_auto] min-w-[18rem]">
       <div role="tablist" aria-label="Task and session" className="flex items-stretch h-6 min-w-0 flex-1 rounded-md border border-sol-border/40 overflow-hidden text-[11px]">
         <button
           role="tab"
           aria-selected={face === "task"}
-          onClick={() => face !== "task" && switchFace(taskPath)}
+          onClick={() => face !== "task" && goOther()}
           className={segment(face === "task")}
           title={face === "task" ? "This task" : `Open the task: ${task.short_id ?? ""} ${task.title}`}
         >
@@ -183,7 +189,7 @@ function WorkUnitBarInner({ face, task, session }: { face: WorkFace; task: WorkU
         <button
           role="tab"
           aria-selected={face === "session"}
-          onClick={() => face !== "session" && switchFace(sessionPath)}
+          onClick={() => face !== "session" && goOther()}
           className={segment(face === "session")}
           title={face === "session" ? "The session doing this task" : `Open the session doing this task: ${line.name ? `${line.name} · ` : ""}${sessionTitle}`}
         >
@@ -200,20 +206,21 @@ function WorkUnitBarInner({ face, task, session }: { face: WorkFace; task: WorkU
           Move to review
         </button>
       )}
-      <ShortcutTooltip label={stacked ? "Show this face alone" : "Show the task and the session together"}>
+      <ShortcutTooltip label={together ? "Show this face alone" : "Show the task and the session together"}>
         <button
           type="button"
           onClick={() => {
             if (stacked) { setStacked(false); return; }
-            if (canOpenBeside() && openBeside(otherPath)) return;
+            if (otherLeaf) { stageClose(otherLeaf); return; }
+            if (stageHasRoom() && openBeside(otherPath)) return;
             setStacked(true);
           }}
-          aria-pressed={stacked}
+          aria-pressed={together}
           className={`flex items-center gap-1 h-6 px-2 rounded-md border text-[11px] transition-colors flex-shrink-0 ${
-            stacked ? "border-sol-cyan/50 text-sol-cyan bg-sol-cyan/10" : "border-sol-border/40 text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/40"
+            together ? "border-sol-cyan/50 text-sol-cyan bg-sol-cyan/10" : "border-sol-border/40 text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/40"
           }`}
         >
-          {canOpenBeside() && !stacked ? <Columns2 className="w-3.5 h-3.5" /> : <Rows2 className="w-3.5 h-3.5" />}
+          {otherLeaf || (stageHasRoom() && !stacked) ? <Columns2 className="w-3.5 h-3.5" /> : <Rows2 className="w-3.5 h-3.5" />}
           <span>Both</span>
         </button>
       </ShortcutTooltip>
@@ -224,6 +231,7 @@ function WorkUnitBarInner({ face, task, session }: { face: WorkFace; task: WorkU
   return (
     <>
       {bar}
+      <RailDetail>
       <InsideWorkUnit.Provider value={true}>
         <div
           ref={frameRef}
@@ -241,6 +249,7 @@ function WorkUnitBarInner({ face, task, session }: { face: WorkFace; task: WorkU
         </div>
         <HeightGrip target={frameRef} storageKey={BOTH_HEIGHT_KEY} min={BOTH_MIN} />
       </InsideWorkUnit.Provider>
+      </RailDetail>
     </>
   );
 }

@@ -76,16 +76,42 @@ export function fieldDiff(table: string, server: Row | null, replica: Row | null
 const SHELL_SAFE = /^[\w:/.@%+=,-][\w:/.@%+=,#-]*$/;
 const shellWord = (s: string) => (SHELL_SAFE.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
 
-export function replayLines(ctx: Pick<FailureContext, "scenario" | "seed" | "order" | "row" | "labels">): [trace: string, order: string] {
-  const base = `bun run sim ${shellWord(ctx.scenario)} --seed ${ctx.seed}`;
-  const trace = ctx.row ? ` --trace ${shellWord(ctx.labels.label(ctx.row.id))}` : " --trace";
-  return [base + trace, `${base} --order "${formatOrder(ctx.order)}"`];
+/**
+ * The lines that replay a failure: the trace, the full recorded order, and,
+ * once a shrink has run, the minimal order (scripts/sim.ts --shrink).
+ */
+export function replayLines(ctx: Pick<FailureContext, "scenario" | "seed" | "order" | "row" | "labels">, minimal?: readonly Channel[]): string[] {
+  return replayCommands(ctx.scenario, ctx.seed, ctx.order, ctx.row ? ctx.labels.label(ctx.row.id) : null, minimal);
 }
 
-// Where a run's artifacts go: $SIM_OUT, else a fixed folder under the temp dir
-// (failures always write; passes only when SIM_OUT is set, which the DSL decides).
-export function artifactDir(scenario: string, mode: SimMode, seed: number, root = process.env.SIM_OUT || join(tmpdir(), "codecast-sim")): string {
-  return join(root, `${scenario}-${mode}-${seed}`);
+/**
+ * replayLines from plain facts, as result.json holds them (the trace label is the row's).
+ * The order rides in the flag's own word (`--order="..."`): `bun run` drops an
+ * empty argument, so `--order ""` reaches sim.ts as a bare flag and an empty
+ * order (a failure before any delivery, or a shrink to nothing) would not replay.
+ */
+export function replayCommands(scenario: string, seed: number, order: readonly Channel[], traceLabel: string | null, minimal?: readonly Channel[]): string[] {
+  const base = `bun run sim ${shellWord(scenario)} --seed ${seed}`;
+  const orderLine = (o: readonly Channel[]) => `${base} --order="${formatOrder(o)}"`;
+  const lines = [`${base} --trace${traceLabel ? ` ${shellWord(traceLabel)}` : ""}`, orderLine(order)];
+  return minimal ? [...lines, orderLine(minimal)] : lines;
+}
+
+type Env = Record<string, string | undefined>;
+
+// Where artifacts go: $SIM_OUT, else the run's session folder (SIM_SESSION,
+// set by scripts/sim.ts), else a fixed folder under the temp dir. Failures
+// always write; passes only with SIM_OUT or SIM_KEEP, which the DSL decides.
+export function artifactRoot(env: Env = process.env): string {
+  return env.SIM_OUT || env.SIM_SESSION || join(tmpdir(), "codecast-sim");
+}
+
+/**
+ * One run's artifact folder. The known check (a scenario's first run again,
+ * with nothing left out) gets its own, so it never overwrites that run's.
+ */
+export function artifactDir(scenario: string, mode: SimMode, seed: number, root = artifactRoot(), known = false): string {
+  return join(root, `${scenario}-${mode}-${seed}${known ? "-known" : ""}`);
 }
 
 function renderValue(v: unknown, labels: SimLabels): string {
@@ -142,20 +168,61 @@ export function formatFailure(ctx: FailureContext, artifacts: string): string {
   return lines.join("\n");
 }
 
+/**
+ * A step marker in events.jsonl: a DSL verb, written where its actor delivery
+ * ran (seq is that delivery's), or a settle or point check, written where it
+ * began (seq 0: it enqueues nothing). `at` is the number of deliveries before
+ * it; it places the row and is not written.
+ */
+export interface StepRecord {
+  at: number;
+  seq: number;
+  verb: string;
+  actor: string;
+  label: string;
+}
+
+/** What result.json carries about the run itself (SimResult's common fields). */
+export interface RunMeta {
+  gitHead?: string | null;
+  dirty?: boolean;
+  startedAt: string;
+  realMs: number;
+}
+
 export interface RunArtifacts {
   /** Every delivery of the run, in order; one JSON line each. */
   events: readonly DeliveryRecord[];
+  /** Step markers, written between the deliveries at their `at`. */
+  steps?: readonly StepRecord[];
   world: unknown;
   final: unknown;
+  meta?: RunMeta;
 }
 
-export const eventsJsonl = (events: readonly DeliveryRecord[]): string =>
-  events.map((d) => canonical({ seq: d.seq, channel: d.channel, due: d.due, label: d.label, producer: d.producer })).join("\n") + (events.length ? "\n" : "");
+// Delivery rows carry no kind (rows written before step markers existed read
+// the same); step rows carry kind "step".
+export function eventsJsonl(events: readonly DeliveryRecord[], steps: readonly StepRecord[] = []): string {
+  const lines: string[] = [];
+  let s = 0;
+  const stepsUpTo = (at: number) => {
+    for (; s < steps.length && steps[s].at <= at; s++) {
+      const { seq, verb, actor, label } = steps[s];
+      lines.push(canonical({ kind: "step", seq, verb, actor, label }));
+    }
+  };
+  events.forEach((d, i) => {
+    stepsUpTo(i);
+    lines.push(canonical({ seq: d.seq, channel: d.channel, due: d.due, label: d.label, producer: d.producer }));
+  });
+  stepsUpTo(Infinity);
+  return lines.join("\n") + (lines.length ? "\n" : "");
+}
 
-export function writeArtifacts(dir: string, result: unknown, run: RunArtifacts): void {
+export function writeArtifacts(dir: string, result: object, run: RunArtifacts): void {
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "result.json"), JSON.stringify(result, null, 1));
-  writeFileSync(join(dir, "events.jsonl"), eventsJsonl(run.events));
+  writeFileSync(join(dir, "result.json"), JSON.stringify({ ...result, ...run.meta }, null, 1));
+  writeFileSync(join(dir, "events.jsonl"), eventsJsonl(run.events, run.steps));
   writeFileSync(join(dir, "world.json"), JSON.stringify(run.world, null, 1));
   writeFileSync(join(dir, "final.json"), JSON.stringify(run.final, null, 1));
 }
@@ -167,9 +234,8 @@ export class SimFailure extends Error {
   }
 }
 
-// Writes the artifacts, prints the block and throws it.
-export function reportFailure(ctx: FailureContext, run: RunArtifacts, root?: string): never {
-  const dir = artifactDir(ctx.scenario, ctx.mode, ctx.seed, root);
+// Writes the artifacts to `dir`, prints the block and throws it.
+export function reportFailure(ctx: FailureContext, run: RunArtifacts, dir = artifactDir(ctx.scenario, ctx.mode, ctx.seed)): never {
   const text = formatFailure(ctx, dir);
   const { labels, ring, order, ...facts } = ctx;
   const diff = (ctx.row ? fieldDiff(ctx.row.table, ctx.row.server, ctx.row.replica) : [])

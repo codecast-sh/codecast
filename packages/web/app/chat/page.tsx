@@ -73,13 +73,13 @@ import {
   useChatMembers,
   useChatRail,
   useCommunityChannelsSync,
-  useOpenDm,
   useEnsureChatMessage,
   useChatMessageRow,
   useSupersededChannelId,
   useThreadMessages,
   useThreadSync,
 } from "../../hooks/useChatSync";
+import { useOpenDm } from "../../hooks/useOpenDm";
 import { useTalkShortcut } from "../../hooks/useWalkie";
 import { usePagePresence, useTabActive } from "../../hooks/usePagePresence";
 import { prewarmRoom } from "../../lib/calls/roomPrewarm";
@@ -89,7 +89,7 @@ import { ChatThreadPanel } from "../../components/chat/ChatThreadPanel";
 import { ChatComposer } from "../../components/chat/ChatComposer";
 import { ChannelContextMenu } from "../../components/chat/ChannelMenu";
 import { ChannelListeners } from "../../components/chat/ChannelListeners";
-import { useSyncOrgTree } from "../../hooks/useSyncOrgTree";
+import { useSyncOrgTreeFeeder } from "../../hooks/useSyncOrgTree";
 import { mentionWakeLine } from "../../lib/chatMentionWakes";
 import { useChannelMenu } from "../../hooks/useChannelMenu";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
@@ -178,7 +178,7 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
   // from): the header's "listening: N roles" and the composer's @role rows
   // read it. A per-view feeder like the org page's own, so a follower window
   // keeps it fresh too.
-  useSyncOrgTree();
+  useSyncOrgTreeFeeder();
 
   // ── Is the reader actually here? ──────────────────────────────────────────
   const tabActive = useTabActive();

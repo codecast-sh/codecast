@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useQuery } from "convex/react";
+import { useQueryNoThrow } from "./useQueryNoThrow";
 import { api } from "@codecast/convex/convex/_generated/api";
 import {
   useInboxStore,
@@ -471,17 +471,19 @@ export function useForkTree(conversation: ForkConversationLike, open: boolean) {
       : (typeof conversation?.forked_from === "string" && isConvexId(conversation.forked_from)
           ? conversation.forked_from
           : conversation?.forked_from?.toString());
-  const serverRes = useQuery(
+  const serverRes = useQueryNoThrow(
     api.conversations.getConversationTree,
     open && queryId && isConvexId(queryId) ? { conversation_id: queryId as any } : "skip",
-  );
+  ).data;
   const serverTree =
     serverRes && !("error" in serverRes) ? ((serverRes as any).tree as ServerTreeNode) : null;
 
   // Dev diagnostic: if the map opened but the server tree didn't resolve, the
   // family falls back to cached branches only — which reads as "missing
   // branches". Surface why (error vs skipped) so it's debuggable from console.
-  const isDev = import.meta.env.DEV;
+  // NODE_ENV, not import.meta: the phone bundles this file and Hermes cannot
+  // parse import.meta.
+  const isDev = process.env.NODE_ENV !== "production";
   if (isDev && open) {
     if (serverRes && "error" in (serverRes as any)) {
       // eslint-disable-next-line no-console

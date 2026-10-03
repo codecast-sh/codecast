@@ -10,6 +10,7 @@ import type { UndoSpec } from "@platform/engine";
 import { NEVER_UNDO_POLICY } from "./policies/never";
 import { SESSIONS_UNDO_POLICY } from "./policies/sessions";
 import { WORK_UNDO_POLICY } from "./policies/work";
+import { keepConversationRows, priorUnknown } from "./thinConversation";
 
 export type UndoPolicyEntry = { spec: UndoSpec } | { never: string };
 export type UndoPolicy = Record<string, UndoPolicyEntry>;
@@ -23,6 +24,18 @@ export const UNDO_POLICY_FILES: Record<"never" | "sessions" | "work", UndoPolicy
 
 export const UNDO_POLICY: UndoPolicy = Object.assign({}, ...Object.values(UNDO_POLICY_FILES));
 
+// Every spec gets the thin-conversation rule (./thinConversation.ts): a
+// gesture on a row with no loaded meta keeps the row on undo and restores its
+// fields from the inbox row, and one with no inbox row either is not recorded.
+const keepingConversationRows = (spec: UndoSpec): UndoSpec => {
+  const own = spec.spell;
+  return {
+    ...spec,
+    label: (ctx) => (priorUnknown(ctx) ? null : spec.label(ctx)),
+    spell: own ? (cells, ctx) => own(keepConversationRows(cells), ctx) : (cells) => keepConversationRows(cells),
+  };
+};
+
 export const UNDO_SPECS: Record<string, UndoSpec> = Object.fromEntries(
-  Object.entries(UNDO_POLICY).flatMap(([name, entry]) => ("spec" in entry ? [[name, entry.spec]] : [])),
+  Object.entries(UNDO_POLICY).flatMap(([name, entry]) => ("spec" in entry ? [[name, keepingConversationRows(entry.spec)]] : [])),
 );

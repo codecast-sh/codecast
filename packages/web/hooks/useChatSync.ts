@@ -19,7 +19,6 @@
 import { useCallback, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useIsSyncHost } from "./useSyncRole";
 import { useConvex } from "convex/react";
-import { useRouter } from "next/navigation";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import {
   useInboxStore,
@@ -45,8 +44,8 @@ import { useConvexSync } from "./useConvexSync";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useTeamFeature } from "../lib/teamFeatures";
 import { isChatRailLive, markChatRailLive, subscribeChatRailLive } from "../lib/chatLive";
-import { navigateFromHere } from "../lib/desktop";
 import { isConvexId } from "../lib/entityLinks";
+import { activeTeamIdOf } from "../lib/activeTeam";
 import {
   buildHandleSets,
   foldReactions,
@@ -187,7 +186,7 @@ function railSig(rail: ChatRailRow[]): string {
  * all need it whether or not chat is open.
  */
 export function useChatChannelsSync(): { error?: Error } {
-  const teamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as string | undefined;
+  const teamId = useInboxStore(activeTeamIdOf);
   const syncTable = useInboxStore((s) => s.syncTable);
   // Chat is a per-team opt-in. Off = no subscription AND an empty rail, so the
   // unread badge, the title count and the arrival toasts — which all read the
@@ -455,7 +454,14 @@ export function useChannelMessagesSync(channelId: string | undefined): ChannelFe
 
 /** A thread's root and replies, live. Threads are short by construction (the
  *  server's page is 200), so this has no backwards paging of its own. */
-export function useThreadSync(rootId: string | undefined): { loading: boolean; error?: Error; unavailable: boolean } {
+export function useThreadSync(rootId: string | undefined): {
+  loading: boolean;
+  error?: Error;
+  unavailable: boolean;
+  /** The server's word on whether a plain reply here reaches the anchor, and
+   *  its name (getThread.anchor). Enrichment: undefined until the page lands. */
+  anchor?: { armed: boolean; name?: string };
+} {
   const convex = useConvex();
   const live = rootId && isConvexId(rootId);
   const { data: result, error } = useQueryNoThrow(api.chat.getThread, live ? { root_id: rootId } : "skip");
@@ -473,7 +479,12 @@ export function useThreadSync(rootId: string | undefined): { loading: boolean; e
 
   // Same flag as a channel feed's: the server will not show this viewer the
   // room the thread lives in, so a composer here could only post a refusal.
-  return { loading: !!live && result === undefined && !error, error, unavailable: !!result?.unavailable };
+  return {
+    loading: !!live && result === undefined && !error,
+    error,
+    unavailable: !!result?.unavailable,
+    anchor: result?.anchor ?? undefined,
+  };
 }
 
 // ── Readers ─────────────────────────────────────────────────────────────────
@@ -544,31 +555,6 @@ function anchorBotsSig(anchors: Record<string, any> | undefined): string {
   return out;
 }
 
-/** Open (or create) the DM with these teammates and go there. Local-first:
- *  openDmChannel answers in the same tick — an existing room's real id or a
- *  stub the server row supersedes — so the navigation never waits. One hook
- *  for the modal, the rail's suggestions and the sidebar's, so "how a DM
- *  opens" is decided in exactly one place. */
-export function useOpenDm(): (memberIds: string[]) => void {
-  const openChat = useOpenChatPath();
-  return useCallback(
-    (memberIds: string[]) => {
-      const channelId = useInboxStore.getState().openDmChannel(memberIds);
-      openChat(`/chat/${channelId}`);
-    },
-    [openChat],
-  );
-}
-
-/** Go to a chat path from wherever the gesture happened. From a satellite
- *  window (the voice window's strip, the people window) the path goes to the
- *  main window and the satellite stays as it was; anywhere else this window
- *  moves. One hook, so the DM opener and the strip's Chat button agree. */
-export function useOpenChatPath(): (path: string) => void {
-  const router = useRouter();
-  return useCallback((path: string) => navigateFromHere(path, (p) => router.push(p)), [router]);
-}
-
 /** The channel rail, already sorted and counted. */
 export function useChatRail(scope: ChatRailScope = "team"): ChatRailChannel[] {
   // Once a server payload has landed, a room missing from the rail is gone.
@@ -580,12 +566,12 @@ export function useChatRail(scope: ChatRailScope = "team"): ChatRailChannel[] {
     (s: any) => railMessagesSig(s.chatMessages),
     (s: any) => slackLinksSig(s.chatSlackLinks),
     (s: any) => s.currentUser?._id,
-    (s: any) => s.clientState?.ui?.active_team_id,
+    activeTeamIdOf,
   ]);
-  // The canonical workspace source (useWorkspaceArgs reads the same field).
-  // No currentUser fallback: undefined MEANS the personal workspace, and
+  // The active workspace as this platform scopes it (lib/activeTeam).
+  // No currentUser.team_id fallback: undefined MEANS the personal workspace, and
   // falling back to a team would resurrect team rooms the user left.
-  const teamId = s.clientState?.ui?.active_team_id;
+  const teamId = activeTeamIdOf(s);
   return selectChatRail(s as any, String(s.currentUser?._id ?? ""), teamId ? String(teamId) : undefined, scope, railLive);
 }
 

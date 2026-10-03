@@ -40,10 +40,11 @@ import { buildPassages, flatTurns, type ThreadRow } from "../../components/calls
 import { turnsAnchor } from "../../components/calls/transcriptTurnModel";
 import { copyCallLink } from "../../lib/calls/callLinks";
 import { copyText } from "../../lib/copyText";
-import { callVideoNotice, callVideoRuns, noVideoWords, playableFiles, shownMomentNear, turnIndexAt, type CallVideoRun } from "../../lib/calls/callVideo";
-import { toVideoFile, useCallRecordings } from "../../hooks/useRoomRecording";
+import { callVideoNotice, callVideoRuns, playableFiles, shownMomentNear, turnIndexAt, type CallVideoRun } from "../../lib/calls/callVideo";
+import { deleteRecordingRun, toVideoFile, useCallRecordings, useRoomRecordingOn } from "../../hooks/useRoomRecording";
 import {
   CallVideoNoticeLine,
+  CallVideoPlaceholder,
   CallVideoPlayer,
   DeleteRecordingButton,
   type CallVideoHandle,
@@ -68,6 +69,7 @@ import {
 import {
   ArrowDownToLine,
   Check,
+  Copy,
   Link2,
   Lock,
   Phone,
@@ -275,39 +277,30 @@ function CallDetail({ id }: { id: string }) {
 
   const audioRef = useRef<HTMLAudioElement>(null);
 
-  // The huddle's video (convex callRecordings). A recording ("rec:") has its
-  // own audio and never a video, so it is not asked. A run deleted here
-  // leaves the page at once (goneRuns) and comes back if the server refuses.
-  //
-  // goneRuns, and ShareVideoSwitch's pending switch, are the two writes on
-  // this page that keep their own optimistic state rather than riding the
-  // store. The recordings are not a synced collection yet (they are read per
-  // call, with URLs signed per window, by the page, the share popover and
-  // every frame embed); moving them into the store with dispatched delete
-  // and share-video actions is ct-56308, and these two go with it.
-  const callRecs = useCallRecordings(recording || !call ? null : id);
-  const [goneRuns, setGoneRuns] = useState<ReadonlySet<string>>(() => new Set());
-  const videoFiles = useMemo(
-    () => (callRecs?.recordings ?? []).filter((r) => !goneRuns.has(r.run_id)).map(toVideoFile),
-    [callRecs, goneRuns],
-  );
+  // The huddle's video (convex callRecordings, read through the store). A
+  // recording ("rec:") has its own audio and never a video, so it is not
+  // asked. A run deleted here leaves the page in the same frame (store
+  // deleteCallRecording) and comes back, with the reason, if the server
+  // refuses. Asked by the call's full id, the name every other surface asks
+  // under (the share switch, a frame embed), though the page may have been
+  // opened as `cl-42`: one question, so one subscription between them.
+  const callRecs = useCallRecordings(recording || !call ? null : String(call._id));
+  // The room is being filmed right now: the store's flag, the one the rail's
+  // row for the same room reads, so the header says it in the same frame.
+  const roomRecording = useRoomRecordingOn(call?.room_key);
+  const videoFiles = useMemo(() => (callRecs?.recordings ?? []).map(toVideoFile), [callRecs]);
   const hasVideo = useMemo(() => playableFiles(videoFiles).length > 0, [videoFiles]);
   const videoRuns = useMemo(() => callVideoRuns(videoFiles), [videoFiles]);
   const videoNotice = callVideoNotice(videoRuns);
   const playerRef = useRef<CallVideoHandle | null>(null);
-  const deleteRecording = useMutation(api.callRecordings.deleteRecording);
+  // A moment asked for (a line clicked, a `?t=` link) that no video shows:
+  // said under the picture until the next seek that lands, so the picture
+  // and the lit line never disagree without a word.
+  const [missed, setMissed] = useState<number | null>(null);
+  const seekVideo = (ms: number, opts?: { play?: boolean }) => setMissed(playerRef.current?.seek(ms, opts) === false ? ms : null);
   const removeRun = (run: CallVideoRun) => {
     const anyId = run.composite?.id ?? run.screens[0]?.id;
-    if (!anyId) return;
-    setGoneRuns((g) => new Set(g).add(run.id));
-    void deleteRecording({ recording_id: anyId }).catch((err) => {
-      setGoneRuns((g) => {
-        const next = new Set(g);
-        next.delete(run.id);
-        return next;
-      });
-      toast.error(humanizeConvexError(err));
-    });
+    if (anyId) deleteRecordingRun(anyId);
   };
   // Media the transcript follows: the audio of a recording, the video of a
   // recorded huddle. Either makes a click on a line a seek.
@@ -349,6 +342,7 @@ function CallDetail({ id }: { id: string }) {
   useWatchEffect(() => {
     clearSelection();
     setMediaAt(null);
+    setMissed(null);
     setFollowing(true);
   }, [id]);
 
@@ -388,7 +382,7 @@ function CallDetail({ id }: { id: string }) {
     const key = `${id}@${momentMs}`;
     if (landedMoment.current !== key) {
       landedMoment.current = key;
-      if (hasVideo) playerRef.current?.seek(momentMs, { play: false });
+      if (hasVideo) seekVideo(momentMs, { play: false });
       else if (audioRef.current) audioRef.current.currentTime = momentMs / 1000;
       setMediaAt({ ms: momentMs, playing: false });
     }
@@ -449,6 +443,16 @@ function CallDetail({ id }: { id: string }) {
   }
 
   const inThisRoom = myCall.roomKey === call.room_key && myCall.phase === "connected";
+  // The people row lists who was heard (participants, the voices the
+  // scribe transcribed). Outsiders are the one group the room let in on
+  // purpose, so the ones not heard are listed too, apart, as guests: the
+  // record's attendance, matched to the speakers by identity on the server
+  // (callGuestsOnRecord's `spoke`), so two guests who typed one name stay
+  // two and a guest who renamed is listed once. "Did not speak" is only said
+  // when the whole call was transcribed and is over: otherwise silence on
+  // the record is not silence in the room.
+  const silentGuests: Array<{ name: string; joined_at: number }> = (call.guests ?? []).filter((g: { spoke?: boolean }) => !g.spoke);
+  const heardAll = !live && (segments?.length ?? 0) > 0 && !(rows ?? []).some((r) => r.event === "transcribe_off" && (!r.transcript_id || r.transcript_id === String(call._id)));
 
   const buildExcerpt = (which: "selection" | "all"): TranscriptExcerpt => {
     const chosen =
@@ -476,13 +480,7 @@ function CallDetail({ id }: { id: string }) {
 
   const isSelected = (i: number) => selLo !== null && i >= selLo && i <= (selHi as number);
   const seekTo = (ms: number) => {
-    if (hasVideo) {
-      if (!playerRef.current?.seek(ms)) {
-        const words = noVideoWords(ms);
-        toast(words.title, { description: words.detail });
-      }
-      return;
-    }
+    if (hasVideo) return seekVideo(ms);
     const el = audioRef.current;
     if (!el) return;
     el.currentTime = Math.max(0, ms / 1000);
@@ -505,10 +503,10 @@ function CallDetail({ id }: { id: string }) {
     };
   };
 
-  const onTurnClick = (i: number, e: React.MouseEvent) => {
+  const onTurnClick = (i: number, e: React.MouseEvent, atMs: number) => {
     if (seekable && !e.shiftKey) {
       setFollowing(true);
-      seekTo(turns[i]?.t0 ?? 0);
+      seekTo(atMs);
       return;
     }
     if (anchor === null) return setAnchor(i);
@@ -523,7 +521,10 @@ function CallDetail({ id }: { id: string }) {
   const activeIndex = seekable && mediaAt ? turnIndexAt(turns, mediaAt.ms, !mediaAt.playing) : null;
   const callRef = callRecs?.short_id ?? call.short_id ?? String(call._id);
   const ofThisCall = (r: ThreadRow) => !r.transcript_id || r.transcript_id === String(call._id);
-  const recordingDeleted = !hasVideo && !videoNotice && (rows ?? []).some((r) => r.event === "record_deleted" && ofThisCall(r));
+  // Deleted: this window's own delete says so in the same frame (the store's
+  // mark), and the thread's line says so for everyone else.
+  const recordingDeleted =
+    !hasVideo && !videoNotice && (!!callRecs?.deleted_here_at || (rows ?? []).some((r) => r.event === "record_deleted" && ofThisCall(r)));
   // The thread says this call was filmed before the recordings have answered:
   // hold the player's place, so the words do not jump down when it lands.
   const videoExpected = !recording && callRecs === undefined && (rows ?? []).some((r) => r.event === "record_on" && ofThisCall(r));
@@ -549,9 +550,7 @@ function CallDetail({ id }: { id: string }) {
           {/* A huddle being filmed says so in the same words a recording
               does, beside LIVE: the label is the room's, for whoever opens
               the page. */}
-          {live && !recording && videoNotice?.kind === "live" && (
-            <RecordingMark size="dot" className="text-[11px]" />
-          )}
+          {live && !recording && roomRecording && <RecordingMark size="pill" />}
         </div>
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[12px] text-sol-text-dim">
           <span>{fmtWhen(call.started_at)}</span>
@@ -567,6 +566,21 @@ function CallDetail({ id }: { id: string }) {
                 >
                   {firstName(p.name)}
                   {isGuestParticipant(p.id, p.name) && <GuestTag />}
+                </span>
+              ))}
+            </span>
+          )}
+          {silentGuests.length > 0 && (
+            <span className="flex flex-wrap items-center gap-1.5">
+              {(call.participants || []).length > 0 && <span className="text-sol-text-dim" aria-hidden>·</span>}
+              {silentGuests.map((g) => (
+                <span
+                  key={`${g.name}:${g.joined_at}`}
+                  title={`${firstName(g.name)} joined from a guest link${heardAll ? " and did not speak" : ""}`}
+                  className="flex items-center gap-1 rounded-md bg-sol-bg-alt/40 px-1.5 py-0.5 font-mono text-[11px] text-sol-text-dim"
+                >
+                  {firstName(g.name)}
+                  <GuestTag />
                 </span>
               ))}
             </span>
@@ -633,29 +647,38 @@ function CallDetail({ id }: { id: string }) {
           deleted. */}
       {!recording && (hasVideo || videoNotice || recordingDeleted) && callRecs && (
         <div className="shrink-0 space-y-2 px-6 pt-4">
-          {videoNotice && <CallVideoNoticeLine notice={videoNotice} onDelete={() => removeRun(videoNotice.run)} />}
+          {videoNotice && <CallVideoNoticeLine notice={videoNotice} quiet={!live} onDelete={() => removeRun(videoNotice.run)} />}
           {hasVideo && (
             <CallVideoPlayer
               files={videoFiles}
               callStartedAt={callRecs.call_started_at}
               handleRef={playerRef}
               onTime={media.onTime}
+              missedMs={missed}
+              refreshing={!!callRecs.refreshing}
               actions={({ callMs, file }) => {
                 const run = videoRuns.find((r) => r.id === (file.run_id ?? file.id));
+                const moment = callRefId(callRef, null, callMs);
+                // Two things to copy, each named by what lands on the
+                // clipboard: the reference (which a message draws as this
+                // frame, and which teaches its own syntax) and a link. The
+                // copy icon says the verb; the words stay short so the bar
+                // keeps one line with the screen view's sound control.
+                const copy = "flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors hover:bg-white/[0.06] hover:text-sol-text";
                 return (
                   <>
                     <button
                       type="button"
-                      onClick={() => void copyText(callRefId(callRef, null, callMs), "Moment copied")}
-                      className="rounded px-1.5 py-0.5 transition-colors hover:bg-white/[0.06] hover:text-sol-text"
-                      title={`Copy ${callRefId(callRef, null, callMs)}. In a message it shows the call at this moment`}
+                      onClick={() => void copyText(moment, "Moment copied")}
+                      className={copy}
+                      title="Copy this moment as a reference. Pasted in a message, it shows the call at this frame"
                     >
-                      Copy moment
+                      <Copy className="h-3 w-3" /> <span className="tabular-nums text-sol-text-secondary">{moment}</span>
                     </button>
                     <button
                       type="button"
                       onClick={() => copyCallLink(String(call._id), null, callMs)}
-                      className="flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors hover:bg-white/[0.06] hover:text-sol-text"
+                      className={copy}
                       title="Copy a link that opens the call at this moment"
                     >
                       <Link2 className="h-3 w-3" /> Link
@@ -671,7 +694,7 @@ function CallDetail({ id }: { id: string }) {
       )}
       {videoExpected && (
         <div className="shrink-0 px-6 pt-4">
-          <div className="flex h-[min(46vh,320px)] min-h-[180px] animate-pulse items-center justify-center rounded-lg bg-black/80 ring-1 ring-sol-border/30 motion-reduce:animate-none" />
+          <CallVideoPlaceholder />
         </div>
       )}
 
@@ -894,9 +917,8 @@ export default function CallsPage() {
   // only under its own team's feature gate, a recording under its creator's
   // ownership). Gating the query on the active team made someone's private
   // recordings vanish when they switched teams.
-  const calls = useQueryNoThrow(api.transcripts.webListCalls, { limit: 100 }).data as
-    | any[]
-    | undefined;
+  const { data: callsData, error: callsError, retry: retryCalls } = useQueryNoThrow(api.transcripts.webListCalls, { limit: 100 });
+  const calls = callsData as any[] | undefined;
   const { liveCalls, pastCalls, transcribedRoomKeys } = useMemo(() => {
     const rows = calls ?? [];
     const live = rows.filter(isCallLive);
@@ -933,7 +955,14 @@ export default function CallsPage() {
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto">
               {callsOn && <LiveNowSection transcribedRoomKeys={transcribedRoomKeys} />}
-              {calls === undefined ? (
+              {calls === undefined && callsError ? (
+                <div className="p-4 text-[12px] leading-relaxed text-sol-text-dim">
+                  Your calls could not be loaded.{" "}
+                  <button type="button" onClick={retryCalls} className="text-sol-cyan hover:underline">
+                    Try again
+                  </button>
+                </div>
+              ) : calls === undefined ? (
                 <div className="p-4 text-[12px] text-sol-text-dim">Loading…</div>
               ) : calls.length === 0 ? (
                 <div className="p-4 text-[12px] leading-relaxed text-sol-text-dim">

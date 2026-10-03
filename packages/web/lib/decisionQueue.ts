@@ -324,6 +324,16 @@ export function decisionQueueItems(
  */
 export type QuestionResolutions = Record<string, { at: number; message_count: number }>;
 
+/**
+ * The store `drafts` key holding a decision's answer in progress (ticks, an
+ * order, form values, a typed answer). Every surface that answers the
+ * decision reads it, so folding the card, leaving the page or reloading
+ * never loses a choice; answerDecision clears it.
+ */
+export function decisionDraftKey(decisionId: string): string {
+  return `decision:${decisionId}`;
+}
+
 export function questionResolvedLocally(
   s: Pick<InboxSession, "_id" | "message_count">,
   resolutions: QuestionResolutions | undefined,

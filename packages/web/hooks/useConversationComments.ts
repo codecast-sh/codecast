@@ -1,12 +1,9 @@
 import { useCallback, useMemo } from "react";
-import { useQuery } from "convex/react";
 import { useShallow } from "zustand/react/shallow";
-import { api } from "@codecast/convex/convex/_generated/api";
-import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { isConvexId } from "../lib/entityLinks";
 import { useInboxStore } from "../store/inboxStore";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
-import { useConvexSync } from "./useConvexSync";
+import { useConversationCommentRows } from "./useConversationCommentsSync";
 import { groupComments, isThreadResolved, threadKeyFor, type Comment, type CommentThread } from "../lib/commentThread";
 import { toast } from "sonner";
 
@@ -15,21 +12,7 @@ import { toast } from "sonner";
 // ConversationView); every reader pulls straight from the store (instant), and
 // writes are store actions that paint optimistically and reconcile on the echo.
 
-// Mount once per open conversation: pipe the live thread into the store.
-export function useConversationCommentsSync(conversationId: string | undefined): void {
-  const canQuery = !!conversationId && isConvexId(conversationId);
-  const syncTable = useInboxStore((s) => s.syncTable);
-
-  const raw = useQuery(
-    api.comments.getConversationCommentSummary,
-    canQuery
-      ? { conversation_id: conversationId as Id<"conversations"> }
-      : "skip",
-  );
-  useConvexSync(raw, useCallback((data: any) => {
-    syncTable("comments", data ?? []);
-  }, [syncTable]));
-}
+export { useConversationCommentsSync } from "./useConversationCommentsSync";
 
 export type CommentActions = {
   addComment: (input: { content: string; messageId?: string; parentCommentId?: string; filePath?: string; lineNumber?: number }) => Promise<void>;
@@ -98,11 +81,7 @@ export type ConversationComments = CommentActions & {
 
 // Read the whole conversation's threads from the store (used by the global dock).
 export function useConversationComments(conversationId: string | undefined): ConversationComments {
-  const mine = useInboxStore(
-    useShallow((s) =>
-      (Object.values(s.comments) as Comment[]).filter((c) => c.conversation_id === conversationId),
-    ),
-  );
+  const mine = useConversationCommentRows(conversationId);
   const grouped = useMemo(() => groupComments(mine), [mine]);
   const countByMessageId = useMemo(() => {
     const m = new Map<string, number>();

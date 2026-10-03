@@ -2,7 +2,6 @@
 import { useState, useRef, useCallback } from "react";
 import { ArrowUp, Sparkles } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
-import { isParkedDispatchError } from "../store/mutativeMiddleware";
 import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
 import { resolveContextRow, resolveContextProjectPath } from "../lib/contextProjectPath";
 import { soundNewSession } from "../lib/sounds";
@@ -170,19 +169,7 @@ export function ContextChatInput({
     // stub→convex rekey.
     openLinkedSession({ _id: sid });
 
-    // Resolve through the shared tracked-create/by_session_id lifecycle, then
-    // issue the durable send with the SAME client id as the optimistic bubble.
-    // If the create remains parked past the resolver window, leave the message
-    // pending: the stranded-stub sweep re-creates and re-sends it idempotently.
-    void store.awaitConvexId(sid)
-      .then((convexId) => {
-        store.sendMessage(convexId, fullMessage, undefined, clientId);
-      })
-      .catch((error) => {
-        if (isParkedDispatchError(error)) return;
-        store.markOptimisticAsFailed(sid, clientId);
-        console.error("Failed to create context session", error);
-      });
+    store.sendMessageWhenReady(sid, fullMessage, undefined, clientId);
   }, [message, contextType, contextTitle, getContextBody, agentKey, linkedObjectId, projectPathProp, conversationId, openLinkedSession]);
 
   const handleKeyDown = useCallback(

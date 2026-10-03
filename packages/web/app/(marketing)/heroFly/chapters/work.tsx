@@ -30,6 +30,8 @@ const STATUS_CYCLE = ["open", "in_progress", "in_review", "done"];
 const PRIORITY_CYCLE: TaskPriority[] = ["urgent", "high", "medium", "low"];
 const next = <T,>(cycle: T[], v: T) => cycle[(cycle.indexOf(v) + 1) % cycle.length];
 const CLAIMED = [CUES.taskClaimed];
+const ADVANCED = [WORK_AT.planAdvances];
+const PLAN_STEPS = [CUES.taskClaimed, WORK_AT.planAdvances];
 
 /** The lead files the task: the real cast command block, with its task and plan cards, opening its own room at the foot of the transcript so the lead's feed rises over it. */
 export function TaskFiled() {
@@ -100,16 +102,32 @@ export function TaskBoard({ now }: PartProps) {
               }}
             />
           ) : (
-            <ListRowShell state={stateOf(task)}>
-              <TaskRow task={task} state={stateOf(task)} onFilterLabel={noop} />
-            </ListRowShell>
+            // The plan's other rows change as its second task ships: the new state dissolves in over the old.
+            <FilmSwap
+              cues={ADVANCED}
+              render={(step) => {
+                const row = { ...planTasks(now, step === 1).find((t) => t._id === task._id)!, ...edits[task._id] };
+                return (
+                  <ListRowShell state={stateOf(row)}>
+                    <TaskRow task={row} state={stateOf(row)} onFilterLabel={noop} />
+                  </ListRowShell>
+                );
+              }}
+            />
           )}
         </div>
       ))}
       <div className="flex min-h-0 flex-1 gap-6 px-4 pt-4" {...fly("board/work.below")}>
         <div className="w-[440px] shrink-0">
           <div {...fly("board/work.plan")}>
-            <PlanProgressBar progress={planProgress(tasks)} />
+            {/* Its counts and bar change as the task is claimed and as the plan advances: each new state dissolves in over the last. */}
+            <FilmSwap
+              cues={PLAN_STEPS}
+              render={(step) => {
+                const at = [{ ...filedTask(now, step >= 1 ? "claimed" : "landed"), ...edits["hero-t1"] }, ...planTasks(now, step >= 2).map((t) => ({ ...t, ...edits[t._id] }))];
+                return <PlanProgressBar progress={planProgress(at)} />;
+              }}
+            />
           </div>
           <div {...fly("board/work.station")}>
             {/* The claim dissolves in over the landed state (FilmSwap), rather than switching in one frame. */}

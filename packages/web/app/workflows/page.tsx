@@ -16,7 +16,7 @@ import { GitBranch, Clock, ChevronRight, X, Terminal, Bot, User, Zap, GitFork, M
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { useSyncRuns, useWorkspaceRuns, type LineRun } from "../../hooks/useSyncRuns";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
-import { useTrackedStore } from "../../store/inboxStore";
+import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { DecisionCompactCard } from "../../components/decisions/DecisionCompactCard";
 import { useSyncDecisionDetail } from "../../hooks/useSyncDecisionDetail";
 import { RunGate } from "../../components/WorkflowContextPanel";
@@ -251,9 +251,8 @@ function formatDuration(startMs: number, endMs?: number): string {
 }
 
 function ActiveRunPanel({ run, workflow, onClose }: { run: WorkflowRun; workflow: Workflow; onClose: () => void }) {
-  const respondToGate = useMutation(api.workflow_runs.respondToGate);
+  const respondToGate = useInboxStore((s) => s.respondToGate);
   const cancelRun = useMutation(api.workflow_runs.cancel);
-  const [responding, setResponding] = useState(false);
   // The gate's decision row (the-line.md L4, L10): the queue feed holds it
   // when the viewer was asked; for anyone else the per view detail feed
   // brings it, so the panel renders the decision card and never its own
@@ -264,11 +263,8 @@ function ActiveRunPanel({ run, workflow, onClose }: { run: WorkflowRun; workflow
   const st = STATUS_STYLES[run.status] || STATUS_STYLES.pending;
   const StatusIcon = st.icon;
 
-  const handleChoice = async (key: string) => {
-    setResponding(true);
-    await respondToGate({ id: run._id as any, response: key });
-    setResponding(false);
-  };
+  // Local-first (store respondToGate): the run flips to running on the press.
+  const handleChoice = (key: string) => respondToGate(run._id, key);
 
   const orderedNodes = workflow.nodes.filter(n => n.type !== "start" && n.type !== "exit");
 
@@ -330,7 +326,6 @@ function ActiveRunPanel({ run, workflow, onClose }: { run: WorkflowRun; workflow
             <button
               key={choice.key}
               onClick={() => handleChoice(choice.key)}
-              disabled={responding}
               className="shrink-0 px-1.5 py-0.5 text-[10px] font-mono font-medium text-sol-magenta border border-sol-magenta/30 rounded hover:bg-sol-magenta/10 transition-colors disabled:opacity-40"
             >
               [{choice.key}] {choice.label.replace(/^\[.\]\s*/, "")}

@@ -6,7 +6,8 @@ import { KeyCap } from "../KeyboardShortcutsHelp";
 import { ChatModalLegend } from "./ChatModalLegend";
 import { useInboxStore } from "../../store/inboxStore";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
-import { useChatRail, useOpenDm } from "../../hooks/useChatSync";
+import { useChatRail } from "../../hooks/useChatSync";
+import { useOpenDm } from "../../hooks/useOpenDm";
 import { matchScore } from "../../hooks/useMentionQuery";
 import {
   memberPresenceVisual,

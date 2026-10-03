@@ -188,6 +188,10 @@ export function paletteActionForKey(event: KeyboardEvent, actions: PaletteAction
 }
 
 const PALETTE_MATCH = 1;
+// A row whose text starts with the query, which for a command is its label:
+// typing a command's name ranks it above session and entity hits, which all
+// score a flat PALETTE_MATCH, so Enter runs the command the person named.
+const PALETTE_LABEL_HIT = 1.5;
 const PALETTE_COMPOSE = 0.1;
 // Session filter completions: a value for a typed operator (`file:` → paths)
 // leads, since the operator alone searches nothing; an operator name for a
@@ -214,5 +218,8 @@ export function paletteItemScore(value: string, search: string): number {
   ) return PALETTE_MATCH;
   const idx = value.indexOf("|||");
   const searchable = idx >= 0 ? value.slice(0, idx) : value;
-  return searchable.toLowerCase().includes(search.toLowerCase()) ? PALETTE_MATCH : 0;
+  const hay = searchable.toLowerCase();
+  const needle = search.trim().toLowerCase();
+  if (needle && hay.startsWith(needle)) return PALETTE_LABEL_HIT;
+  return hay.includes(search.toLowerCase()) ? PALETTE_MATCH : 0;
 }

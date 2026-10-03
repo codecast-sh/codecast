@@ -134,11 +134,13 @@ function parseTabContentPatterns(src: string): { tab: string }[] {
       .map((s) => s.trim().replace(/^["']|["']$/g, ""))
       .filter(Boolean);
     // Unescape `\/` → `/`, then replace each capture group `([^/]+)` (or `([^/]*)`) with the
-    // next param name as `:name`, in order.
+    // next param name as `:name`, in order. A trailing `(.+)` is a splat: the
+    // rest of the path, whatever its depth, which the manifest spells `*`.
     let i = 0;
     const staticPath = rawBody
       .replace(/\\\//g, "/")
-      .replace(/\(\[\^\/\]\+\)|\(\[\^\/\]\*\)/g, () => `:${paramNames[i++] ?? "param"}`);
+      .replace(/\(\[\^\/\]\+\)|\(\[\^\/\]\*\)/g, () => `:${paramNames[i++] ?? "param"}`)
+      .replace(/\(\.\+\)$/, "*");
     out.push({ tab: staticPath });
   }
   return out;
@@ -423,19 +425,23 @@ describe("(e) every param-free signed-in route is a cast app surface", () => {
     expect(missing).toEqual([]);
   });
 
+  // A surface is served by its own route, or by a splat route above it
+  // (`evals/*` serves `evals/sim`): one area that reads its own sub-paths.
+  const servingRoute = (name: string) =>
+    ROUTES.find((r) => r.path === name) ??
+    ROUTES.find((r) => r.path.endsWith("/*") && name.startsWith(r.path.slice(0, -1)) && name.length > r.path.length - 1);
+
   it("no listed surface is a route the router no longer serves", () => {
-    const routePaths = new Set(ROUTES.map((r) => r.path));
-    const stale = APP_SURFACES.map((s) => s.name).filter((n) => !routePaths.has(n));
+    const stale = APP_SURFACES.map((s) => s.name).filter((n) => !servingRoute(n));
     expect(stale).toEqual([]);
   });
 
   it("surface kinds match the manifest layout", () => {
-    const byPath = new Map(ROUTES.map((r) => [r.path, r.layout]));
     const wrong = APP_SURFACES.filter((s) => {
-      const layout = byPath.get(s.name);
+      const layout = servingRoute(s.name)?.layout;
       const expected = layout === "dashboardShell" ? "dashboard" : layout;
       return expected !== s.kind;
-    }).map((s) => `${s.name}: ${s.kind} vs ${byPath.get(s.name)}`);
+    }).map((s) => `${s.name}: ${s.kind} vs ${servingRoute(s.name)?.layout}`);
     expect(wrong).toEqual([]);
   });
 });

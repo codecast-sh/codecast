@@ -1203,11 +1203,10 @@ function DynamicRunCard({ runId, name }: { runId?: string; name?: string }) {
   );
 }
 
-export function WorkflowEventBlock({ content, workflowRun, onGateChoice, gateResponding }: {
+export function WorkflowEventBlock({ content, workflowRun, onGateChoice }: {
   content: string;
   workflowRun?: { _id: string; status: string; gate_response?: string | null } | null;
   onGateChoice?: (key: string) => void;
-  gateResponding?: boolean;
 }) {
   let event: Record<string, any> = {};
   try { event = JSON.parse(content); } catch { return null; }
@@ -1300,7 +1299,6 @@ export function WorkflowEventBlock({ content, workflowRun, onGateChoice, gateRes
                 <button
                   key={choice.key}
                   onClick={() => onGateChoice?.(choice.key)}
-                  disabled={gateResponding}
                   className="px-2 py-0.5 text-xs font-medium text-sol-text border border-sol-border/30 rounded hover:bg-sol-bg-highlight hover:border-sol-magenta/40 transition-colors disabled:opacity-40"
                 >
                   <span className="font-mono text-sol-magenta mr-1">[{choice.key}]</span>

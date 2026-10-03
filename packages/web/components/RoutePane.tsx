@@ -46,6 +46,7 @@ const WorkflowRun = lazyPage("@/app/workflows/runs/[id]/page", () => import("@/a
 const Triggers = lazyPage("@/app/triggers/page", () => import("@/app/triggers/page"));
 const TriggerDetail = lazyPage("@/app/triggers/[id]/page", () => import("@/app/triggers/[id]/page"));
 const Sessions = lazyPage("@/app/sessions/page", () => import("@/app/sessions/page"));
+const Resources = lazyPage("@/app/resources/page", () => import("@/app/resources/page"));
 const Anchor = lazyPage("@/app/anchor/page", () => import("@/app/anchor/page"));
 const Team = lazyPage("@/app/team/page", () => import("@/app/team/page"));
 const TeamActivity = lazyPage("@/app/team/activity/page", () => import("@/app/team/activity/page"));
@@ -54,6 +55,8 @@ const TeamMember = lazyPage("@/app/team/[username]/page", () => import("@/app/te
 const Search = lazyPage("@/app/search/page", () => import("@/app/search/page"));
 const Windows = lazyPage("@/app/windows/page", () => import("@/app/windows/page"));
 const ConfigPage = lazyPage("@/app/config/page", () => import("@/app/config/page"));
+const Memory = lazyPage("@/app/memory/page", () => import("@/app/memory/page"));
+const Evals = lazyPage("@/app/evals/page", () => import("@/app/evals/page"));
 const Vault = lazyPage("@/app/vault/page", () => import("@/app/vault/page"));
 const Artifacts = lazyPage("@/app/artifacts/page", () => import("@/app/artifacts/page"));
 const Notifications = lazyPage("@/app/notifications/page", () => import("@/app/notifications/page"));
@@ -159,6 +162,7 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/triggers$/, paramNames: [], component: Triggers },
   { pattern: /^\/schedules$/, paramNames: [], component: Triggers },
   { pattern: /^\/sessions$/, paramNames: [], component: Sessions },
+  { pattern: /^\/resources$/, paramNames: [], component: Resources },
   { pattern: /^\/anchor$/, paramNames: [], component: Anchor },
   { pattern: /^\/team$/, paramNames: [], component: Team },
   { pattern: /^\/repo$/, paramNames: [], component: RepoIndex },
@@ -169,6 +173,11 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/artifacts$/, paramNames: [], component: Artifacts }, // pre-rename alias for /pages
   { pattern: /^\/windows$/, paramNames: [], component: Windows },
   { pattern: /^\/config$/, paramNames: [], component: ConfigPage },
+  { pattern: /^\/memory$/, paramNames: [], component: Memory },
+  // One component for the area and every view under it, so moving between
+  // Evals views reconciles instead of remounting the shell.
+  { pattern: /^\/evals$/, paramNames: [], component: Evals },
+  { pattern: /^\/evals\/(.+)$/, paramNames: ["rest"], component: Evals },
   { pattern: /^\/notifications$/, paramNames: [], component: Notifications },
   { pattern: /^\/questions$/, paramNames: [], component: Questions },
   { pattern: /^\/line$/, paramNames: [], component: Line },

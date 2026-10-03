@@ -166,7 +166,7 @@ describe("Trigger strip pieces", () => {
       </MemoryRouter>,
     );
     expect(head).toContain("Nightly dependency audit");
-    expect(head).toContain("next");
+    expect(head).toContain("in 40m");
   });
 });
 

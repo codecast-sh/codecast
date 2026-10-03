@@ -1,6 +1,7 @@
 "use client";
 
 import { autonomyOn } from "@codecast/shared/contracts/roleAutonomy";
+import { advisoryAnswerOpen } from "@codecast/shared/contracts";
 import { useCallback, useState } from "react";
 import Link from "next/link";
 import { useMutation } from "convex/react";
@@ -74,7 +75,10 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
   // A change card's Ship / Revise / Drop sits in a bar pinned under the
   // question, beside its proof line, so the call is above the fold; the
   // options section below then has nothing left to say.
-  const verdictBar = answerInOptions && !!cardAnswerIndexes(decision);
+  // An advisory card's answer stays open (advisoryAnswerOpen): the agent went
+  // ahead on its default, so the bar stays up under the outcome to change course.
+  const changeCourse = answerable && advisoryAnswerOpen(decision);
+  const verdictBar = (answerInOptions || changeCourse) && !!cardAnswerIndexes(decision);
   const chosen = new Set<number>(chosenOptions(decision));
 
   const onAnswer = useCallback((input: DecisionAnswerInput) => answerDecision(decision._id, input), [answerDecision, decision._id]);
@@ -166,6 +170,24 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
     </dl>
   );
 
+  const body = (detail.doc?.content || decision.context_md || (decision.report_slug && !decision.card)) ? (
+    <>
+      {detail.doc?.content && (
+        <div className="decision-body text-sol-text-muted"><MarkdownRenderer content={detail.doc.content} /></div>
+      )}
+      {!detail.doc?.content && decision.context_md && (
+        <div className="decision-body text-sol-text-muted border-l-2 border-sol-border pl-4"><MarkdownRenderer content={decision.context_md} /></div>
+      )}
+      {detail.doc?.content && decision.context_md && (
+        <details className="mt-3 text-sm text-sol-text-dim">
+          <summary className="cursor-pointer hover:text-sol-text">The short context</summary>
+          <div className="mt-2 border-l-2 border-sol-border pl-4"><MarkdownRenderer content={decision.context_md} /></div>
+        </details>
+      )}
+      {decision.report_slug && !decision.card && <div className="mt-4"><PublishedPageEmbed slug={decision.report_slug} /></div>}
+    </>
+  ) : null;
+
   return (
     <div className="h-full overflow-y-auto decision-doc" data-main-scroll>
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-16">
@@ -200,36 +222,22 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
         {verdictBar && decision.card && (
           <div className="cc-verdict-bar" data-verdict-bar>
             <ChangeCardView card={decision.card} density="line" recommend={false} change={false} />
-            <DecisionAnswerControls decision={decision} onAnswer={onAnswer} onDismiss={onDismiss} keys recommendation={rec} />
+            <DecisionAnswerControls decision={decision} onAnswer={onAnswer} onDismiss={pending ? onDismiss : undefined} keys recommendation={rec} record={outcome?.pill} />
           </div>
         )}
 
         {/* ── The change card (LE11), drawn natively; its page stays on the task ── */}
+        {/* The agent's own context reads right under the card, before the facts. */}
         {decision.card && (
           <section className="mt-6">
             <ChangeCardView card={decision.card} density="full" change={false} recommend={!verdictBar} outcome={outcome?.line} />
+            {body && <div className="mt-6">{body}</div>}
             {meta}
           </section>
         )}
 
         {/* ── Body ── */}
-        {(detail.doc?.content || decision.context_md || (decision.report_slug && !decision.card)) && (
-          <section className="mt-8">
-            {detail.doc?.content && (
-              <div className="decision-body text-sol-text-muted"><MarkdownRenderer content={detail.doc.content} /></div>
-            )}
-            {!detail.doc?.content && decision.context_md && (
-              <div className="decision-body text-sol-text-muted border-l-2 border-sol-border pl-4"><MarkdownRenderer content={decision.context_md} /></div>
-            )}
-            {detail.doc?.content && decision.context_md && (
-              <details className="mt-3 text-sm text-sol-text-dim">
-                <summary className="cursor-pointer hover:text-sol-text">The short context</summary>
-                <div className="mt-2 border-l-2 border-sol-border pl-4"><MarkdownRenderer content={decision.context_md} /></div>
-              </details>
-            )}
-            {decision.report_slug && !decision.card && <div className="mt-4"><PublishedPageEmbed slug={decision.report_slug} /></div>}
-          </section>
-        )}
+        {!decision.card && body && <section className="mt-8">{body}</section>}
 
         {/* ── Options ── */}
         {/* A settled card's options collapse into its outcome line. */}

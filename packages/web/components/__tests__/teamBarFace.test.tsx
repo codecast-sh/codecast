@@ -39,10 +39,8 @@ const ptt: PushToTalk = {
 };
 mock.module("../../hooks/useWalkie", () => ({ ...realWalkieHooks, usePushToTalk: () => ptt }));
 
-const realChatHooks = await import("../../hooks/useChatSync");
 let openedDms: string[][] = [];
-mock.module("../../hooks/useChatSync", () => ({
-  ...realChatHooks,
+mock.module("../../hooks/useOpenDm", () => ({
   useOpenDm: () => (ids: string[]) => openedDms.push(ids),
 }));
 

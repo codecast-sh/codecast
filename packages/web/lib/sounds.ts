@@ -2,7 +2,9 @@ import { useInboxStore, type ClientUI } from "../store/inboxStore";
 import { isNotificationLeader, isVoiceHost } from "./desktop";
 import { agentAlertsSuppressed, deliverAlert, reportAlertError } from "./notificationDelivery";
 import type { CueSpec } from "./cueSpec";
+import { scheduleCue } from "./cuePlay";
 import {
+  CALL_JOIN,
   DORMANT_SETTLE,
   KILL_DOOR,
   STASH_AWAY,
@@ -107,79 +109,10 @@ function play(
   playCue({ master: masterGain, tones: notes.map((n) => ({ ...n, gain: n.gain ?? 1 })) });
 }
 
-/** Build and start the graph a CueSpec describes.
- *
- *  `lib/cueRender.ts` renders the same spec numerically, node for node and
- *  envelope for envelope. That is the only reason anyone can say what these
- *  cues sound like: nobody working on them is allowed to play them out loud,
- *  so every level in this file was set by measuring a render, and the
- *  measurement is only worth anything while the two stay the same graph. Keep
- *  them in step — filter after the envelope for tones, before it for noise. */
-function scheduleEnvelope(gain: AudioParam, t0: number, n: { start: number; dur: number; gain: number }, attack: number) {
-  gain.setValueAtTime(attack > 0 ? 0 : n.gain, t0 + n.start);
-  if (attack > 0) gain.linearRampToValueAtTime(n.gain, t0 + n.start + attack);
-  gain.exponentialRampToValueAtTime(0.001, t0 + n.start + n.dur);
-}
-
-function scheduleGlide(freq: AudioParam, t0: number, n: { start: number; dur: number; sweepTo?: number }, from: number) {
-  freq.setValueAtTime(from, t0 + n.start);
-  if (n.sweepTo !== undefined) freq.exponentialRampToValueAtTime(n.sweepTo, t0 + n.start + n.dur);
-}
-
 function playCue(spec: CueSpec) {
   if (!isSupported()) return;
   try {
-    const ac = getCtx();
-    const t0 = ac.currentTime;
-    const master = ac.createGain();
-    master.gain.value = spec.master * volumeFactor();
-    master.connect(ac.destination);
-
-    for (const n of spec.tones ?? []) {
-      const osc = ac.createOscillator();
-      osc.type = n.type ?? "sine";
-      scheduleGlide(osc.frequency, t0, n, n.freq);
-
-      const env = ac.createGain();
-      scheduleEnvelope(env.gain, t0, n, n.attack ?? 0.02);
-
-      osc.connect(env);
-      let tail: AudioNode = env;
-      if (n.lowpass !== undefined) {
-        const lp = ac.createBiquadFilter();
-        lp.type = "lowpass";
-        lp.frequency.value = n.lowpass;
-        lp.Q.value = n.lowpassQ ?? 0;
-        env.connect(lp);
-        tail = lp;
-      }
-      tail.connect(master);
-      osc.start(t0 + n.start);
-      osc.stop(t0 + n.start + n.dur);
-    }
-
-    for (const n of spec.noise ?? []) {
-      const frames = Math.floor(ac.sampleRate * n.dur);
-      const buf = ac.createBuffer(1, frames, ac.sampleRate);
-      const data = buf.getChannelData(0);
-      for (let i = 0; i < frames; i++) data[i] = Math.random() * 2 - 1;
-      const src = ac.createBufferSource();
-      src.buffer = buf;
-
-      const band = ac.createBiquadFilter();
-      band.type = "bandpass";
-      scheduleGlide(band.frequency, t0, n, n.band);
-      band.Q.value = n.q ?? 1;
-
-      const env = ac.createGain();
-      scheduleEnvelope(env.gain, t0, n, n.attack ?? 0);
-
-      src.connect(band);
-      band.connect(env);
-      env.connect(master);
-      src.start(t0 + n.start);
-      src.stop(t0 + n.start + n.dur);
-    }
+    scheduleCue(getCtx(), spec, volumeFactor());
   } catch {}
 }
 
@@ -387,11 +320,7 @@ export function soundMeetingDetected() {
 // Someone joined the room you're in (or you connected): a soft rising triad.
 export function soundCallJoin() {
   if (!isEnabled("calls")) return;
-  play([
-    { freq: 523.25, start: 0, dur: 0.15, gain: 0.4, type: "sine" },
-    { freq: 659.25, start: 0.08, dur: 0.18, gain: 0.35, type: "sine" },
-    { freq: 783.99, start: 0.16, dur: 0.25, gain: 0.3, type: "sine" },
-  ], 0.05);
+  playCue(CALL_JOIN);
 }
 
 // A participant left / the call ended: the join triad, descending.
@@ -402,6 +331,37 @@ export function soundCallLeave() {
     { freq: 659.25, start: 0.08, dur: 0.18, gain: 0.3, type: "sine" },
     { freq: 523.25, start: 0.16, dur: 0.25, gain: 0.25, type: "sine" },
   ], 0.045);
+}
+
+// The room you are in began to be recorded, or stopped: the two beeps a
+// recorder makes, level and unmistakable for the join triad (which rises) or
+// a knock (which is wood), then one lower beep when it ends. Everyone in the
+// room hears it whichever window has focus, the person who pressed included:
+// being filmed is the one call event nobody should have to be looking at the
+// app to learn. Keyed by the run, so the windows that all watch the room
+// sound it once between them.
+export function soundRecordingOn(runId: string) {
+  if (!isEnabled("calls") || !isSupported() || !isAnnouncer()) return;
+  announce(
+    "calls",
+    `sound:record-on:${runId}`,
+    () =>
+      play([
+        { freq: 880, start: 0, dur: 0.12, gain: 0.4, type: "sine" },
+        { freq: 880, start: 0.2, dur: 0.12, gain: 0.4, type: "sine" },
+      ], 0.05),
+    { ttl: 60_000, preferDesktop: false },
+  );
+}
+
+export function soundRecordingOff(runId: string) {
+  if (!isEnabled("calls") || !isSupported() || !isAnnouncer()) return;
+  announce(
+    "calls",
+    `sound:record-off:${runId}`,
+    () => play([{ freq: 587.33, start: 0, dur: 0.22, gain: 0.4, type: "sine" }], 0.05),
+    { ttl: 60_000, preferDesktop: false },
+  );
 }
 
 // ── the walkie cues ───────────────────────────────────────────────────────

@@ -21,7 +21,7 @@ import { ORG_STATE_META } from "./org/orgMeta";
 import { StatusDot } from "./StatusDot";
 import type { WorkState } from "@codecast/shared/contracts";
 import { useConversationMessages } from "../hooks/useConversationMessages";
-import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, sessionsWithPendingSend, freshReviveRequestIds, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipProjectFilters, passesFilterTerms, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, resolveFavorite, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, sessionsWithPendingSend, freshReviveRequestIds, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipProjectFilters, passesFilterTerms, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { sessionsWakeSig, resolveShowOld, sectionHeaderCount, classifySession, inboxNestParentOf, NEW_SESSION_HOLD_MS } from "../store/inboxStore";
 import { useFlipAnimation } from "../hooks/useFlipAnimation";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
@@ -59,7 +59,7 @@ import { ConversationSharePopover } from "./ConversationSharePopover";
 import { PlanContextPanel } from "./PlanContextPanel";
 import { WorkflowContextPanel } from "./WorkflowContextPanel";
 import { toast } from "sonner";
-import { animatedHideSession, fileSessionsAsRest } from "../store/undoActions";
+import { animatedHideSessions, fileSessionsAsRest } from "../store/undoActions";
 
 import { soundKill } from "../lib/sounds";
 import { latestSessionCommand, requestAccountSwitchCommand, requestSessionRestart, switchPending } from "../lib/sessionCommands";
@@ -2231,18 +2231,11 @@ function SessionListPanelImpl({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the signature IS the dep (see the tracked-store note above)
     [sessionUnreadWakeSig(s)],
   );
-  // Favorited conversation ids, derived once from the authoritative favorites list so
-  // a card checks its star with an O(1) Set lookup instead of a per-heartbeat scan.
-  const favoriteIds = useMemo(
-    () => new Set((s.favorites as { _id: string }[]).map((f) => f._id)),
-    [s.favorites],
-  );
-  // The star reads the rule toggleFavorite flips (resolveFavorite), resolved to a
-  // scalar so each card memoizes on it.
-  const cardIsFavorite = useCallback(
-    (sess: InboxSession) => resolveFavorite([sess], () => favoriteIds.has(sess._id)),
-    [favoriteIds],
-  );
+  // The star reads the rule toggleFavorite flips, against the live store rather
+  // than the placed row: placement memoizes on sessionsWakeSig, which leaves
+  // is_favorite out, so a placed row still carries the flag from before the toggle.
+  // Resolved to a scalar so each card memoizes on it.
+  const cardIsFavorite = (sess: InboxSession) => isFavoriteInStore(s, sess._id);
   const { bucketCounts, projectCounts, projectPathByName } = useMemo(
     () => computeChipCounts(activeSessions, bucketByConv),
     [activeSessions, bucketByConv],
@@ -2734,7 +2727,7 @@ function SessionListPanelImpl({
   // Dropping a card on a status section files it there: the user's rest
   // verdict, undoable like the menu gesture. One stable handler per verdict.
   const dropSessionOnRest = useMemo(() => Object.fromEntries(
-    USER_RESTS.map((rest) => [rest, (ids: string[]) => fileSessionsAsRest(ids, rest)]),
+    USER_RESTS.map((rest) => [rest, (ids: string[]) => { void fileSessionsAsRest(ids, rest); }]),
   ) as Record<UserRest, (ids: string[]) => void>, []);
 
   // Section drop targets: whole group is droppable.
@@ -2821,10 +2814,11 @@ function SessionListPanelImpl({
   // scheduler-origin injection preserves the stash), so nothing is canceled —
   // but SAY so when one is armed, since that asymmetry (stash keeps the loop,
   // dismiss/kill cancels it) is invisible unless the product states it.
-  const handleAnimatedStash = useCallback((id: string) => {
-    animatedHideSession(id, "stash");
-    const armed = schedulePartitionRef.current.armedInjectByConv.get(id);
-    if (armed?.length) {
+  // A selection stashes as one gesture: one undo, one notice.
+  const handleAnimatedStashMany = useCallback((ids: string[]) => {
+    void animatedHideSessions(ids, "stash");
+    const armed = ids.flatMap((id) => schedulePartitionRef.current.armedInjectByConv.get(id) ?? []);
+    if (armed.length) {
       toast(
         armed.length === 1
           ? `Stashed — schedule "${armed[0].title}" stays armed`
@@ -2833,6 +2827,7 @@ function SessionListPanelImpl({
       );
     }
   }, []);
+  const handleAnimatedStash = useCallback((id: string) => handleAnimatedStashMany([id]), [handleAnimatedStashMany]);
   // Killing a session cancels the schedules that inject into it (server side,
   // on the hide transition) and restoring it re-arms them — the shared notice
   // hook surfaces both side effects; the same hook backs the palette and the
@@ -3374,8 +3369,8 @@ function SessionListPanelImpl({
       {selectedSessions.length > 0 && (
         <InboxSelectionBar
           sessions={selectedSessions}
-          onStash={handleAnimatedStash}
-          onKill={handleAnimatedDismiss}
+          onStash={handleAnimatedStashMany}
+          onKill={killManyWithNotice}
           onClear={clearSelection}
         />
       )}
@@ -3847,8 +3842,8 @@ function SessionListPanelImpl({
         {({ session, isForeign, sessions }) => sessions.length > 1 ? (
           <BulkSessionMenuItems
             sessions={sessions}
-            onStash={handleAnimatedStash}
-            onKill={handleAnimatedDismiss}
+            onStash={handleAnimatedStashMany}
+            onKill={killManyWithNotice}
             onClear={clearSelection}
           />
         ) : (

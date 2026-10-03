@@ -1,0 +1,338 @@
+/* The Evals area: a lab bench built on the app's own system
+   (docs/architecture/evals-ui.md section 6). Colour only through var(--sol-*);
+   the Tailwind sol accent classes are hardcoded hex and are not used here.
+   Light, .dark and .minimal-style all resolve through the tokens. */
+
+.ev-area {
+  --ev-rule: color-mix(in srgb, var(--sol-border) 45%, transparent);
+  --ev-grid: color-mix(in srgb, var(--sol-border) 35%, transparent);
+  --ev-hatch: color-mix(in srgb, var(--sol-yellow) 18%, transparent);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  color: var(--sol-text);
+  background: var(--sol-bg);
+  font-family: var(--font-ui);
+}
+
+/* Fixed colour meanings. Glyphs and marks draw in currentColor. */
+.ev-pass { color: var(--sol-cyan); }
+.ev-fail { color: var(--sol-magenta); }
+.ev-gate { color: var(--sol-red); }
+.ev-live { color: var(--sol-red); }
+.ev-refused { color: var(--sol-orange); }
+.ev-unserved { color: var(--sol-yellow); }
+.ev-ruler { color: var(--sol-violet); }
+.ev-quiet { color: var(--sol-text-dim); }
+.ev-model-0 { color: var(--sol-blue); }
+.ev-model-1 { color: var(--sol-green); }
+.ev-model-2 { color: var(--sol-violet); }
+
+/* ── Local nav ──────────────────────────────────────────────────────────── */
+
+.ev-nav {
+  display: flex;
+  align-items: stretch;
+  gap: 20px;
+  height: 46px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--ev-rule);
+  background: var(--sol-bg);
+  flex-shrink: 0;
+}
+.ev-mark {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--sol-text);
+  white-space: nowrap;
+}
+.ev-mark-flask { width: 18px; height: 18px; }
+.ev-tabs { display: flex; align-items: stretch; gap: 2px; }
+.ev-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  font-size: 12.5px;
+  color: var(--sol-text-dim);
+  border: 0;
+  background: none;
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: inset 0 -2px 0 transparent;
+  transition: color 120ms ease, box-shadow 160ms ease;
+}
+.ev-tab:hover { color: var(--sol-text); }
+.ev-tab[aria-current="page"] {
+  color: var(--sol-text);
+  box-shadow: inset 0 -2px 0 var(--sol-cyan);
+}
+.ev-tab-count {
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--sol-text-dim);
+}
+.ev-nav-spacer { flex: 1; }
+
+.ev-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  align-self: center;
+  width: min(320px, 34vw);
+}
+.ev-search input {
+  width: 100%;
+  height: 28px;
+  padding: 0 34px 0 28px;
+  font: 12px var(--font-mono);
+  color: var(--sol-text);
+  background: var(--sol-card);
+  border: 1px solid var(--ev-rule);
+  border-radius: 6px;
+  outline: none;
+  font-variant-ligatures: none;
+}
+.ev-search input:focus { border-color: var(--sol-cyan); }
+.ev-search input::placeholder { color: var(--sol-text-dim); }
+.ev-search-icon { position: absolute; left: 9px; width: 13px; height: 13px; color: var(--sol-text-dim); pointer-events: none; }
+.ev-search-key { position: absolute; right: 6px; pointer-events: none; }
+.ev-search-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  padding: 4px;
+  background: var(--sol-card);
+  border: 1px solid var(--ev-rule);
+  border-radius: 8px;
+  box-shadow: 0 8px 28px color-mix(in srgb, var(--sol-text) 14%, transparent);
+}
+.ev-search-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  font-size: 12px;
+  text-align: left;
+  color: var(--sol-text);
+  background: none;
+  border: 0;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.ev-search-item[aria-selected="true"] { background: var(--sol-bg-highlight); }
+.ev-search-kind { width: 52px; flex-shrink: 0; font-size: 10.5px; color: var(--sol-text-dim); }
+.ev-search-empty { padding: 8px; font-size: 12px; color: var(--sol-text-dim); }
+
+.ev-status { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--sol-text-dim); white-space: nowrap; }
+
+/* ── Body ───────────────────────────────────────────────────────────────── */
+
+.ev-body { flex: 1; min-height: 0; overflow: auto; position: relative; }
+.ev-page { padding: 20px 24px 40px; }
+
+/* The bench paper: an 8px grid, only under charts and lanes. */
+.ev-bench {
+  background-color: var(--sol-bg);
+  background-image:
+    linear-gradient(to right, var(--ev-grid) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--ev-grid) 1px, transparent 1px);
+  background-size: 8px 8px;
+  background-position: -1px -1px;
+}
+.ev-card {
+  background: var(--sol-card);
+  border: 1px solid var(--ev-rule);
+  border-radius: 8px;
+}
+.ev-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--sol-text);
+}
+.ev-num {
+  font-size: 32px;
+  line-height: 1;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+.ev-mono { font-family: var(--font-mono); font-variant-ligatures: none; }
+.ev-tabular { font-variant-numeric: tabular-nums; }
+
+/* The judge's voice: mono italic, muted, a violet rule. */
+.ev-judge {
+  font-family: var(--font-mono);
+  font-style: italic;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--sol-text-muted);
+  border-left: 2px solid var(--sol-violet);
+  padding: 2px 0 2px 10px;
+  white-space: pre-wrap;
+}
+
+/* ── Chips ──────────────────────────────────────────────────────────────── */
+
+.ev-chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.ev-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-variant-ligatures: none;
+  color: var(--sol-text-muted);
+  background: var(--sol-bg-alt);
+  border: 1px solid var(--ev-rule);
+  border-radius: 4px;
+  white-space: nowrap;
+}
+a.ev-chip, button.ev-chip { cursor: pointer; }
+a.ev-chip:hover, button.ev-chip:hover { color: var(--sol-text); border-color: var(--sol-border); }
+.ev-chip svg { width: 11px; height: 11px; }
+.ev-chip--dirty {
+  color: var(--sol-text);
+  background-image: repeating-linear-gradient(135deg, var(--ev-hatch) 0 3px, transparent 3px 6px);
+  border-color: color-mix(in srgb, var(--sol-yellow) 45%, transparent);
+}
+.ev-chip--live {
+  color: var(--sol-red);
+  background: color-mix(in srgb, var(--sol-red) 10%, transparent);
+  border-color: color-mix(in srgb, var(--sol-red) 40%, transparent);
+}
+.ev-chip--offbranch { border-style: dashed; }
+.ev-chip--private { color: var(--sol-text); }
+
+/* ── Score bar ──────────────────────────────────────────────────────────── */
+
+.ev-scorebar { display: inline-flex; align-items: center; gap: 8px; }
+.ev-scorebar-track {
+  position: relative;
+  height: 6px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--sol-text) 9%, transparent);
+  overflow: visible;
+}
+.ev-scorebar-fill { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: currentColor; }
+.ev-scorebar-mark { position: absolute; top: -3px; bottom: -3px; width: 1px; background: var(--sol-text); opacity: 0.55; }
+.ev-scorebar-floor { position: absolute; top: -2px; bottom: -2px; width: 1px; background: var(--sol-magenta); opacity: 0.7; }
+.ev-scorebar-value { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--sol-text); min-width: 2.6em; }
+
+/* ── Reply card ─────────────────────────────────────────────────────────── */
+
+.ev-reply { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+.ev-reply-head { display: flex; align-items: center; gap: 10px; }
+.ev-reply-text {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--sol-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ev-reply-gates { display: flex; flex-wrap: wrap; gap: 4px; }
+
+/* ── Copy command ───────────────────────────────────────────────────────── */
+
+.ev-copy {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  border: 1px solid var(--ev-rule);
+  border-radius: 6px;
+  background: var(--sol-bg-inset);
+  overflow: hidden;
+}
+.ev-copy code {
+  padding: 5px 10px;
+  font: 11.5px var(--font-mono);
+  color: var(--sol-text);
+  overflow-x: auto;
+  white-space: nowrap;
+  font-variant-ligatures: none;
+}
+.ev-copy button {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 9px;
+  font-size: 11px;
+  color: var(--sol-text-dim);
+  background: none;
+  border: 0;
+  border-left: 1px solid var(--ev-rule);
+  cursor: pointer;
+}
+.ev-copy button:hover { color: var(--sol-text); background: var(--sol-bg-highlight); }
+
+/* ── Index progress (first build) ───────────────────────────────────────── */
+
+.ev-index {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 20px;
+  font-size: 12px;
+  color: var(--sol-text-muted);
+  border-bottom: 1px solid var(--ev-rule);
+}
+.ev-index-track { flex: 1; max-width: 360px; height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--sol-text) 8%, transparent); overflow: hidden; }
+.ev-index-fill { height: 100%; background: var(--sol-cyan); transition: width 300ms ease-out; }
+
+/* ── Charts ─────────────────────────────────────────────────────────────── */
+
+.ev-strip { display: block; overflow: visible; }
+.ev-strip-mark { stroke: var(--sol-text); stroke-width: 0.75; stroke-dasharray: 2 3; opacity: 0.45; }
+.ev-strip-median { fill: none; stroke: var(--sol-text); stroke-width: 1.5; stroke-linejoin: round; }
+.ev-strip-cursor { stroke: var(--sol-text); stroke-width: 1; opacity: 0.35; }
+.ev-strip-notch { stroke: var(--sol-text-dim); stroke-width: 1.25; }
+.ev-strip-hit { fill: transparent; cursor: crosshair; }
+
+.ev-well { display: block; overflow: visible; }
+.ev-well-ink { fill: var(--sol-text); }
+.ev-well-ring { fill: none; stroke: currentColor; stroke-width: 1.25; }
+.ev-well-empty { fill: none; stroke: var(--sol-border); stroke-width: 0.75; stroke-dasharray: 1.5 1.5; }
+button.ev-well-button { padding: 0; border: 0; background: none; cursor: pointer; border-radius: 50%; }
+button.ev-well-button:focus-visible { outline: 2px solid var(--sol-cyan); outline-offset: 1px; }
+
+/* ── Motion: one orchestrated moment per view, stopped under reduced motion ─ */
+
+@keyframes ev-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+@keyframes ev-pop { from { transform: scale(0.6); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+@keyframes ev-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes ev-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+.ev-draw {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+  animation: ev-draw 400ms ease-out both;
+  animation-delay: var(--ev-delay, 0ms);
+}
+.ev-pop {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: ev-pop 120ms ease-out both;
+  animation-delay: var(--ev-delay, 0ms);
+}
+.ev-settle { animation: ev-fade-in 260ms ease-out both; animation-delay: var(--ev-delay, 0ms); }
+.ev-pulse { animation: ev-pulse 1.6s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ev-area *, .ev-area *::before, .ev-area *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

@@ -15,7 +15,7 @@ const MENTION_RE = entityMentionRegex();
 // `#3263`, `PR 3263`, `pull request #12`: a pull request named by number
 // alone. Runs after ENTITY_ID_RE so `owner/repo#12` is already a link and
 // never reaches it. The words in front stay prose; the number becomes a
-// `pr:#N|<as written>` payload that EntityAwareLink completes from the
+// `pr:#N|<as written>` payload (`pr:?#N|…` for a lone `#N`) that EntityAwareLink completes from the
 // conversation's repository, or prints back verbatim where there is none.
 const CONTEXTUAL_PR_RE = contextualPrRefRegex();
 // Obsidian-style transclusion: ![[doc:<convex id>]]. Only docs are embeddable —
@@ -225,8 +225,9 @@ function referenceKey(node: any): string | null {
       // Dates and message refs are not objects a reader needs introduced once.
       if (ref.startsWith("date:") || ref.startsWith("msg:")) return null;
       // A payload may carry the text as written after `|`; the object is the
-      // part before it, so "PR 3263" and "#3263" count as one reference.
-      return ref.split("|")[0];
+      // part before it, so "PR 3263" and "#3263" count as one reference (the
+      // bare marker on a lone `#N` is not part of the identity).
+      return ref.split("|")[0].replace(/^pr:\?/, "pr:");
     }
     const parsed = parseEntityUrl(node.url);
     if (parsed) return parsed.id.toLowerCase();
@@ -350,8 +351,8 @@ export function remarkEntityIds() {
               ? { type: "text" as const, value: token.text }
               : {
                   type: "link" as const,
-                  url: `entity://${contextualPrRefPayload(token.number, token.label)}`,
-                  children: [{ type: "text" as const, value: contextualPrRefPayload(token.number, token.label) }],
+                  url: `entity://${contextualPrRefPayload(token.number, token.label, token.bare)}`,
+                  children: [{ type: "text" as const, value: contextualPrRefPayload(token.number, token.label, token.bare) }],
                 },
           );
         },

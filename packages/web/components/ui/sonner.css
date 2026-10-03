@@ -112,11 +112,12 @@
 }
 
 /* The two answers: the action leads in the app's cyan, the cancel sits back.
-   They take a row of their own under the words. The card is 356px wide, so a
-   button beside the sentence leaves it a column a few words across; the
+   A pair takes a row of its own under the words. The card is 356px wide, so
+   two buttons beside the sentence leave it a column a few words across; the
    content's basis fills the first row (the card less the chip and its gap),
    which is what sends the buttons to the second. The first one lines up with
-   the text, past the chip when there is one. */
+   the text, past the chip when there is one. A single action stays on the
+   words' row (below). */
 .cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-button] {
   flex: none;
   height: 26px;
@@ -136,25 +137,61 @@
 .cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"]:has([data-icon]) [data-content] + [data-button] {
   margin-left: 33px;
 }
+/* A toast with one answer (Undo, Open, Join) is a snackbar: the words and the
+   button share one row, the button at the right edge, centred on however many
+   lines the words take. On a row of its own the button made a one line
+   sentence into a tall card that was mostly empty. Two answers still take the
+   row under the words, since side by side they would leave the sentence a
+   column a few words across. The close control moves to the row's centre,
+   past the button, in the space the card already keeps for it. */
+.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"]:has([data-action]):not(:has([data-cancel])) {
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 11px;
+  padding-right: 36px;
+}
+.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"]:has([data-action]):not(:has([data-cancel])) [data-icon] {
+  margin: 0;
+}
+.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"]:has([data-action]):not(:has([data-cancel])) [data-content] {
+  flex: 1 1 auto;
+  padding-right: 0;
+}
+.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"]:has([data-action]):not(:has([data-cancel])) [data-content] + [data-button] {
+  margin-left: 0;
+}
+.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"]:has([data-action]):not(:has([data-cancel])) [data-close-button] {
+  top: 50%;
+  transform: translateY(-50%);
+}
+
 .cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-button]:focus-visible {
   outline: none;
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--sol-cyan) 55%, transparent);
 }
+/* The action is the one thing on the card to press, so it is filled: a faint
+   tint read as a disabled chip on the dark card. */
 .cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-action] {
-  color: var(--sol-cyan);
-  background: color-mix(in srgb, var(--sol-cyan) 14%, transparent);
-  border-color: color-mix(in srgb, var(--sol-cyan) 32%, transparent);
+  color: var(--sol-bg);
+  background: var(--sol-cyan);
+  border-color: var(--sol-cyan);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--sol-text) 8%, transparent) inset;
 }
 .cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-action]:hover {
-  background: color-mix(in srgb, var(--sol-cyan) 24%, transparent);
-  border-color: color-mix(in srgb, var(--sol-cyan) 48%, transparent);
+  background: color-mix(in srgb, var(--sol-cyan) 86%, var(--sol-text));
+  border-color: color-mix(in srgb, var(--sol-cyan) 86%, var(--sol-text));
 }
-.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-cancel] {
+.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-action]:active {
+  transform: translateY(0.5px);
+}
+/* [data-button] twice over: sonner's dark theme rule for the cancel has the
+   same weight as this one and loads after it, which painted a grey fill. */
+.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-cancel][data-button] {
   color: var(--sol-text-muted);
   background: transparent;
   border-color: color-mix(in srgb, var(--sol-border) 50%, transparent);
 }
-.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-cancel]:hover {
+.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-cancel][data-button]:hover {
   color: var(--sol-text);
   background: color-mix(in srgb, var(--sol-text) 6%, transparent);
   border-color: color-mix(in srgb, var(--sol-border) 80%, transparent);

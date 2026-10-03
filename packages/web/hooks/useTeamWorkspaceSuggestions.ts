@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useQuery } from "convex/react";
+import { useQueryNoThrow } from "./useQueryNoThrow";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import type { TeamVisibility } from "../lib/team/visibilityLevels";
@@ -68,15 +68,15 @@ export function isScratchWorkspace(path: string): boolean {
  * the loading state.
  */
 export function useTeamWorkspaceSuggestions(teamId: Id<"teams"> | null) {
-  const suggestions = useQuery(
+  const suggestions = useQueryNoThrow(
     api.users.getSuggestedTeamProjects,
     teamId ? { team_id: teamId } : "skip",
-  ) as TeamSuggestionsResult | null | undefined;
+  ).data as TeamSuggestionsResult | null | undefined;
 
-  const allProjects = useQuery(
+  const allProjects = useQueryNoThrow(
     api.users.getRecentProjectsWithGitInfo,
     teamId ? { limit: 100 } : "skip",
-  ) as UserWorkspace[] | undefined;
+  ).data as UserWorkspace[] | undefined;
 
   const suggestedPaths = useMemo(
     () => new Set(suggestions?.suggestions.map((s) => s.path) ?? []),

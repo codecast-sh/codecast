@@ -47,6 +47,7 @@ import { action, asyncAction, sync } from "./mutativeMiddleware";
 import { awaitUpload, deliverableAttachments, hasPendingUploads, releaseUpload } from "../lib/pendingUploads";
 import type { PendingEntry } from "./syncProtocol";
 import { isConvexId } from "../lib/entityLinks";
+import { activeTeamIdOf } from "../lib/activeTeam";
 import { tallyUnread } from "../lib/chatTimeline";
 import { foldReactions } from "../lib/chatViews";
 import type { ChatChannelView, ChatReaction } from "../components/chat/chatTypes";
@@ -1259,8 +1260,7 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
     // wants that, and one default beats the same read in three surfaces.
     openDmChannel: (memberIds: string[], teamIdArg?: string) => {
       const state = get();
-      const uiTeam = (state as any).clientState?.ui?.active_team_id;
-      const teamId = teamIdArg ?? (uiTeam ? String(uiTeam) : undefined);
+      const teamId = teamIdArg ?? activeTeamIdOf(state);
       const viewer = (state as any).currentUser?._id ?? "";
       const dmKey = dmKeyFor(teamId ?? "", [viewer, ...memberIds]);
       // The room may already be here — same tick, real id, no server wait.
@@ -1485,6 +1485,8 @@ export type ChatRailChannel = ChatChannelView & {
   joined: boolean;
   lastReadAt?: number;
   lastMessagePreview?: string;
+  /** The newest message was an agent's (the phone marks its preview). */
+  lastMessageFromAgent?: boolean;
   /** When the other person in a DM last spoke; undefined when they never have
    *  (or this is not a DM). A surface that keys presence to inbound activity
    *  reads this, never sortAt. */
@@ -1672,6 +1674,7 @@ export function selectChatRail(
       joined: !!read || !!rail?.joined,
       lastReadAt: read?.last_read_at,
       lastMessagePreview: rail?.last_message?.preview,
+      lastMessageFromAgent: rail?.last_message?.author_kind === "agent",
       lastInboundAt: rail?.last_inbound?.created_at,
       unreadCapped: loaded && loaded.length > 0 && reachesTip ? false : rail?.unread_capped,
       // The rail row and the channel row arrive in the same listChannels

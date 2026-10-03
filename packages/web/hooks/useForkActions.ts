@@ -1,12 +1,13 @@
 import { useCallback, type RefObject } from "react";
 import { agentSupportsFork } from "@codecast/shared/contracts";
 import { toast } from "sonner";
-import { useInboxStore, convBucketMap, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage } from "../store/inboxStore";
+import { useInboxStore, type ForkChild, type InboxSession, type OptimisticImage } from "../store/inboxStore";
 import { DispatchNotWiredError } from "../store/mutativeMiddleware";
+import { beginLocalFork, newForkSessionId, seedForkSessionRow, type LocalFork } from "../store/beginLocalFork";
 import { canAnchorForkChips } from "../components/conversation/classify";
 import type { ConversationData } from "../components/conversation/types";
 
-export function useForkActions({ injectSession, conversation, addOptimisticFork, currentUser, hasMoreAbove, convCommand, timelineRef, populateInputRef, addOptimisticMsg, sendInlineMessage }: {
+export function useForkActions({ conversation, currentUser, hasMoreAbove, convCommand, timelineRef, populateInputRef, addOptimisticMsg, sendInlineMessage }: {
   injectSession: (session: InboxSession) => void;
   conversation: ConversationData | null | undefined;
   addOptimisticFork: (fork: ForkChild) => void;
@@ -20,7 +21,6 @@ export function useForkActions({ injectSession, conversation, addOptimisticFork,
 }) {
   // Fork UI state (panels). Forks themselves are first-class conversations
   // (we navigate to them); no overlay state to keep in sync.
-  const forkSetMessages = useInboxStore((s) => s.setMessages);
   const resolveForkSessionId = useInboxStore((s) => s.resolveForkSessionId);
 
   // Switch to a freshly created fork instantly from local state. injectSession seeds
@@ -32,134 +32,16 @@ export function useForkActions({ injectSession, conversation, addOptimisticFork,
   // redirect to /inbox), reloading the conversation. QueuePageClient syncs the URL via
   // history.replaceState. Server-derived fields (title prefix, exact message_count) are
   // approximate here and get corrected by the meta subscription within a tick.
-  const seedForkSession = useCallback((convId: string, fields: Partial<InboxSession>) => {
-    injectSession({
-      _id: convId,
-      session_id: convId,
-      title: conversation?.title,
-      updated_at: Date.now(),
-      project_path: conversation?.project_path ?? undefined,
-      git_root: conversation?.git_root ?? undefined,
-      agent_type: conversation?.agent_type || "claude_code",
-      message_count: 0,
-      is_idle: true,
-      has_pending: false,
-      ...fields,
-    });
-  }, [conversation?.title, conversation?.project_path, conversation?.git_root, conversation?.agent_type, injectSession]);
+  const seedForkSession = useCallback(
+    (convId: string, fields: Partial<InboxSession>) => seedForkSessionRow(conversation, convId, fields),
+    [conversation],
+  );
 
-  // Local-first fork: seed the stub conversation WITH the parent's loaded
-  // message window sliced at the fork point and navigate to it synchronously —
-  // the fork renders fully populated in the same frame as the click. The
-  // server mutation, message copy, and daemon tmux spawn all happen behind it;
-  // the only visible artifact is the session status line above the input
-  // ("Starting session…" → "Ready"). resolveForkSessionId rekeys stub → real id
-  // when the mutation lands, and useConversationMessages freezes the server
-  // message sync while fork_status === "copying" so the half-copied server
-  // window can never clobber the seeded one.
-  const doFork = useCallback(async (messageUuid: string): Promise<{ forkSessionId: string; conversationId: string; ready: Promise<string> } | null> => {
-    if (!conversation?._id) return null;
-    // Honest degradation: a client with no fork mechanism (cursor/gemini/pi) would
-    // copy the transcript server-side but leave the live agent context-less. The UI
-    // hides the fork controls for these; this guards any programmatic path too.
-    if (!agentSupportsFork(conversation.agent_type)) return null;
-    const parentId = conversation._id.toString();
-    // Must be a valid UUID so the daemon can resume without ID remapping
-    const forkSessionId = (typeof crypto !== 'undefined' && crypto.randomUUID)
-      ? crypto.randomUUID()
-      : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
-          const r = Math.random() * 16 | 0;
-          return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
-        });
-    const now = Date.now();
-    const forkTitle = conversation.title ? `Fork: ${conversation.title}` : "Fork";
-    // Parent's server rows up to and including the fork point. Optimistic/queued
-    // rows are excluded — they aren't in the messages table yet, so the server
-    // copy won't include them either.
-    const parentMsgs = (conversation.messages || []).filter((m: any) => !m._isOptimistic && !m._isQueued);
-    const forkIdx = parentMsgs.findIndex((m: any) => m.message_uuid === messageUuid);
-    const seededMsgs = forkIdx >= 0 ? parentMsgs.slice(0, forkIdx + 1) : parentMsgs;
-    // Count as the user saw it on the parent: messages above the loaded window
-    // plus the seeded slice. Keeps the "N older messages" indicator stable.
-    const seededCount = (conversation.loaded_start_index ?? 0) + seededMsgs.length;
-    // A fresh fork owns nothing yet: everything it holds is inherited, so the
-    // stub declares its whole count as copied history. Without that the chip
-    // reads the parent's prefix as "N messages in this branch since the fork".
-    addOptimisticFork({
-      _id: forkSessionId,
-      user_id: currentUser?._id?.toString(),
-      title: forkTitle,
-      started_at: now,
-      username: conversation.user?.name || conversation.user?.email?.split("@")[0],
-      parent_message_uuid: messageUuid,
-      message_count: seededCount,
-      fork_copied: seededCount,
-      agent_type: conversation.agent_type,
-      origin_id: parentId,
-      optimistic: true,
-    });
-    // conversations[stub] carries the fork metadata (storeMeta merge prefers it
-    // over the session row); fork_status "copying" arms the message-sync freeze
-    // from the first frame, before the server confirms it.
-    useInboxStore.getState().syncRecord("conversations", forkSessionId, {
-      _id: forkSessionId,
-      session_id: forkSessionId,
-      user_id: currentUser?._id?.toString() ?? "",
-      title: forkTitle,
-      agent_type: conversation.agent_type,
-      project_path: conversation.project_path ?? undefined,
-      git_root: conversation.git_root ?? undefined,
-      started_at: now,
-      updated_at: now,
-      status: "active",
-      message_count: seededCount,
-      forked_from: parentId,
-      parent_message_uuid: messageUuid,
-      fork_status: "copying",
-    });
-    forkSetMessages(forkSessionId, seededMsgs, { hasMoreAbove: !!hasMoreAbove || (conversation.loaded_start_index ?? 0) > 0, initialized: true });
-    // Seeds sessions[stub] and navigates in one action — instant switch.
-    seedForkSession(forkSessionId, {
-      session_id: forkSessionId,
-      title: forkTitle,
-      started_at: now,
-      message_count: seededCount,
-      fork_copied: seededCount,
-      forked_from: parentId,
-      parent_message_uuid: messageUuid,
-    } as any);
-    // Local-first label inheritance: mirror the server's inheritLabelAssignment
-    // so the fork lands in its parent's label group on the first frame instead
-    // of jumping there when the server's inherited row syncs. The dispatch
-    // no-ops server-side on the stub id; rekeyId carries the local row to the
-    // real id, where the server row supersedes it via altKey.
-    const forkStore = useInboxStore.getState();
-    const parentBucketId = convBucketMap(forkStore.bucketAssignments)[parentId];
-    const parentBucket = parentBucketId ? (forkStore.buckets as Record<string, BucketItem>)[parentBucketId] : undefined;
-    if (parentBucket && !parentBucket.archived_at) {
-      forkStore.assignSessionToBucket(forkSessionId, parentBucket._id);
-    }
-    const ready = convCommand(parentId, "forkFromMessage", {
-      message_uuid: messageUuid,
-      session_id: forkSessionId,
-    }).then((result) => {
-      resolveForkSessionId(forkSessionId, result.conversation_id);
-      return result.conversation_id as string;
-    });
-    // Same contract as beginOptimisticSession: a message sent against the stub
-    // resolves through awaitConvexId → pendingSessionCreates and waits here.
-    useInboxStore.getState().trackSessionCreate(forkSessionId, ready);
-    ready.catch((err) => {
-      // Parked-unwired is "pending", not "failed": the outbox delivers the fork
-      // create on the next drain (must-deliver) and the server row rekeys the
-      // stub via altKey sync. Discarding here would tell the user the fork
-      // failed while an agent for it spawns minutes later.
-      if (err instanceof DispatchNotWiredError && err.parked) return;
-      useInboxStore.getState().discardForkStub(forkSessionId, parentId);
-      toast.error(err instanceof Error ? err.message : "Failed to fork");
-    });
-    return { forkSessionId, conversationId: forkSessionId, ready };
-  }, [conversation?._id, conversation?.title, conversation?.messages, conversation?.loaded_start_index, conversation?.project_path, conversation?.git_root, conversation?.agent_type, hasMoreAbove, convCommand, forkSetMessages, addOptimisticFork, resolveForkSessionId, seedForkSession, currentUser?._id, conversation?.user]);
+  // Local-first fork (store/beginLocalFork.ts): the fork renders fully
+  // populated in the same frame as the click.
+  const doFork = useCallback(async (messageUuid: string): Promise<LocalFork | null> => (
+    beginLocalFork(conversation, messageUuid, { currentUser, hasMoreAbove, onError: (message) => toast.error(message) })
+  ), [conversation, currentUser, hasMoreAbove]);
 
   const handleForkFromMessage = useCallback(async (messageUuid: string) => {
     const tl = timelineRef.current;
@@ -195,12 +77,7 @@ export function useForkActions({ injectSession, conversation, addOptimisticFork,
     if (branchId === conversation?._id?.toString()) return doFork(messageUuid);
     const store = useInboxStore.getState();
     const src = store.sessions[branchId];
-    const forkSessionId = (typeof crypto !== "undefined" && crypto.randomUUID)
-      ? crypto.randomUUID()
-      : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-          const r = (Math.random() * 16) | 0;
-          return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
-        });
+    const forkSessionId = newForkSessionId();
     const now = Date.now();
     const forkTitle = src?.title ? `Fork: ${src.title}` : "Fork";
     store.syncRecord("conversations", forkSessionId, {

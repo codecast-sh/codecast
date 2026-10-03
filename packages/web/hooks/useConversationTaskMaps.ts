@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useQuery } from "convex/react";
+import { useQueryNoThrow } from "./useQueryNoThrow";
 import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
 import { isConvexId } from "../store/inboxStore";
 import type { TaskRecord } from "../components/conversation/types";
@@ -39,10 +39,10 @@ export function useConversationTaskMaps({ conversation, deferredQueriesEnabled }
     return idMap;
   }, [conversation?.messages]);
 
-  const conversationTasks = useQuery(
+  const conversationTasks = useQueryNoThrow(
     api.tasks.webListByConversation,
     deferredQueriesEnabled && conversation?._id && isConvexId(conversation._id) ? { conversationId: conversation._id } : "skip"
-  );
+  ).data;
 
   const taskRecordMap = useMemo(() => {
     const byTitle: Record<string, TaskRecord> = {};

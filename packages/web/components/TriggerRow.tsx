@@ -198,9 +198,10 @@ export const TriggerRowItem = memo(function TriggerRowItem({
   const runAgain = () => { triggerAction(taskId, "reactivate"); confirm(() => toast.success("Re-armed — runs within ~30s")); };
   const pause = () => triggerAction(taskId, "pause");
   const resume = () => triggerAction(taskId, "resume");
+  // Cancel is never undoable, so its toast just says it happened.
   const cancel = () => {
     triggerAction(taskId, "cancel");
-    confirm(() => toast("Trigger canceled", { description: taskDisplayTitle(task), action: { label: "Undo", onClick: () => triggerAction(taskId, "reactivate") } }));
+    confirm(() => toast("Trigger canceled", { description: taskDisplayTitle(task) }));
   };
   const paused = task.status === "paused";
   const terminal = task.status === "completed" || task.status === "failed";

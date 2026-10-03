@@ -14,9 +14,17 @@ describe("the voice window's float", () => {
   test("hands the row its chrome: a way to move, open the call and put it away", () => {
     const float = src.slice(src.indexOf("<FloatingFaceRow"), src.indexOf("</FloatingFaceRow>"));
     expect(float).toContain("chrome={{");
-    for (const key of ["inCall", "onExpand: expand", "onClose: closeFloat", "closeWord", "closeTitle"]) {
+    for (const key of ["onExpand: openCall", "onClose: closeFloat", "closeWord", "closeTitle"]) {
       expect(float, key).toContain(key);
     }
+    // Open follows the row's call, not this window's slice: a call another
+    // window holds draws a live card here with this window's slice idle
+    // (2026-10-03, Open missing beside a live huddle). Held nowhere on this
+    // machine, it raises the window that has it or comes here.
+    expect(src).toContain("const rowCall = callRoomOf(row)");
+    const open = src.slice(src.indexOf("const openCall"), src.indexOf("const ringIn"));
+    expect(open).toContain("showCallPanel()");
+    expect(open).toContain("takeOverCall(");
     // Close puts a popped out row back; Hide dismisses an engagement's float
     // until the next one, and the view reads that flag.
     expect(src).toContain("floating.setFloating(false)");

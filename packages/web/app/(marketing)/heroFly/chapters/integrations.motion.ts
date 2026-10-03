@@ -23,7 +23,8 @@ export const PR_AT = {
 const STAGES: { from: number; stage: PrStage }[] = [
   { from: -Infinity, stage: { approved: false, checksPassed: 0, ready: false, merged: false } },
   { from: PR_AT.approved, stage: { approved: true, checksPassed: 0, ready: false, merged: false } },
-  ...PR_AT.checks.map((from, i) => ({ from, stage: { approved: true, checksPassed: i + 1, ready: false, merged: false } })),
+  // The last check going green and the page turning ready are one stage: two cues at the same moment would give FilmSwap no time to cross, and the page would change in one frame.
+  ...PR_AT.checks.slice(0, -1).map((from, i) => ({ from, stage: { approved: true, checksPassed: i + 1, ready: false, merged: false } })),
   { from: PR_AT.ready, stage: { approved: true, checksPassed: CHECK_COUNT, ready: true, merged: false } },
   { from: CUES.merged, stage: { approved: true, checksPassed: CHECK_COUNT, ready: true, merged: true } },
 ];

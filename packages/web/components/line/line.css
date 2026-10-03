@@ -2,7 +2,7 @@
    Color has one meaning each: --line-belt is motion (the belt, live dots,
    running lamps); yellow asks, orange starves or ages, red fails. Stations
    themselves stay neutral so trouble is what the eye finds first. */
-.line-floor { --line-belt: var(--sol-blue); }
+.line-floor { --line-belt: var(--sol-blue); container: line-floor / inline-size; }
 
 .line-floor {
   background-color: var(--sol-bg);
@@ -19,12 +19,32 @@
   font-family: var(--font-mono), monospace;
   font-variant-numeric: tabular-nums;
   font-weight: 600;
-  letter-spacing: -0.04em;
+  letter-spacing: 0;
   line-height: 1;
 }
 .line-num[data-zero="true"] { opacity: 0.45; font-weight: 400; }
 
-.line-headline { font-weight: 500; letter-spacing: -0.01em; text-wrap: balance; }
+/* The display face, for the few things read from across the room: the
+   headline, the start title and the big counts. Mono stays for ids, commands
+   and the numbers inside rows. */
+.line-display, .line-headline, .line-start-title, .line-display-num {
+  font-family: var(--font-serif), serif;
+  font-optical-sizing: auto;
+  letter-spacing: 0;
+}
+.line-display-num { font-weight: 500; font-variant-numeric: lining-nums tabular-nums; }
+.line-display-num[data-zero="true"] { font-weight: 400; opacity: 0.4; }
+
+/* The display level: the one sentence that says how the line is doing. */
+.line-headline {
+  font-size: clamp(24px, 3.2cqi, 34px);
+  line-height: 1.12;
+  font-weight: 450;
+  text-wrap: balance;
+  max-width: 30ch;
+}
+.line-subtitle { display: none; }
+@container line-floor (min-width: 700px) { .line-subtitle { display: inline; } }
 
 /* The flow: one grid row, stations and rails as tracks sized from the
    container. A live station runs the full height; an empty one is a tile. */
@@ -40,24 +60,81 @@
   /* No room on a 16px rail: the station's header line carries the count. */
   .line-rail-chip { display: none; }
 }
+@container (max-width: 1000px) {
+  .line-track { grid-template-columns: var(--line-cols-compact); }
+}
+/* Compact: an idle station keeps its sentence; its command moves to the
+   tooltip and the c key, which copies it. */
+@container (max-width: 1000px) {
+  .line-empty [data-line-cmd] { display: none; }
+  .line-empty > p { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 9; overflow: hidden; }
+}
+@container (max-width: 840px) {
+  .line-track { grid-template-columns: var(--line-cols-slim); }
+}
 @media (max-width: 639px) {
   .line-track { grid-template-columns: var(--line-cols-narrow); }
 }
 .line-track > .line-col { align-self: stretch; }
 
-/* Throughput: one ruled strip, cells divided by hairlines. */
+/* Throughput: two lead numbers, then the flow counts as a quieter set. */
 .line-meter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
   border: 1px solid color-mix(in srgb, var(--sol-border) 55%, transparent);
   background: color-mix(in srgb, var(--sol-card) 82%, transparent);
   backdrop-filter: blur(2px);
+  overflow: hidden;
 }
-.line-meter-cell { box-shadow: -1px 0 0 color-mix(in srgb, var(--sol-border) 35%, transparent); }
-@media (max-width: 1023px) {
-  .line-meter-cell:nth-child(n + 5) { border-top: 1px solid color-mix(in srgb, var(--sol-border) 35%, transparent); }
+.line-meter-lead { display: flex; gap: 32px; padding: 14px 20px; flex: 0 0 auto; }
+.line-meter-flow {
+  flex: 1 1 420px;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px 16px;
+  align-content: center;
+  padding: 12px 20px;
+  box-shadow: -1px 0 0 color-mix(in srgb, var(--sol-border) 35%, transparent);
+  background: color-mix(in srgb, var(--sol-bg-alt) 35%, transparent);
+}
+/* Too narrow for five across: the flow counts take their own band as a
+   fixed three by two grid, so no count is ever left alone on a row. */
+@container line-floor (max-width: 900px) {
+  .line-meter-lead { flex: 1 1 100%; gap: 24px; padding: 12px 16px; }
+  .line-meter-flow {
+    flex: 1 1 100%;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-rows: repeat(2, auto);
+    padding: 10px 16px;
+    box-shadow: 0 -1px 0 color-mix(in srgb, var(--sol-border) 35%, transparent);
+  }
 }
 
-/* A station. --stage is its neutral accent: rows, bars and the focus ring. */
+/* All clear, said quietly: green held back toward the text color. */
+.line-tone-clear { color: color-mix(in srgb, var(--sol-green) 72%, var(--sol-text)); }
+
+/* The headline's links: a station named in the sentence. */
+.line-headline-link {
+  font: inherit;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+  text-decoration-color: color-mix(in srgb, currentColor 35%, transparent);
+  transition: text-decoration-color 120ms ease;
+}
+.line-headline-link:hover, .line-headline-link:focus-visible { text-decoration-color: currentColor; outline: none; }
+
+/* Footer hints: under 760px only the keys stay; each says itself in a tooltip. */
+@container line-floor (max-width: 760px) {
+  .line-hint-text { display: none; }
+}
+
+/* A station. --stage is its neutral accent: rows, bars and the focus ring.
+   Each station is its own container, so its header picks the name that fits
+   and an empty one folds to a labelled slot when its track is 40px. */
 .line-col {
+  container: line-col / inline-size;
   --stage: var(--sol-text-muted);
   background: color-mix(in srgb, var(--sol-card) 88%, transparent);
   border: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent);
@@ -88,15 +165,46 @@
 }
 .line-col[data-state="starved"]::before { background: color-mix(in srgb, var(--sol-orange) 55%, transparent); }
 .line-col[data-state="failing"]::before { background: var(--sol-red); }
+/* Focus is the belt color, so the arrow keys visibly move something. */
 .line-col[data-focused="true"] {
-  border-color: color-mix(in srgb, var(--sol-text) 40%, transparent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--sol-text) 9%, transparent), 0 18px 40px -26px color-mix(in srgb, var(--sol-text) 50%, transparent);
+  border-color: color-mix(in srgb, var(--line-belt) 70%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--line-belt) 22%, transparent), 0 18px 40px -26px color-mix(in srgb, var(--line-belt) 60%, transparent);
 }
 .line-col[data-empty="true"] {
   background: color-mix(in srgb, var(--sol-card) 62%, transparent);
   box-shadow: none;
 }
-.line-col[data-empty="true"][data-focused="true"] { box-shadow: 0 0 0 3px color-mix(in srgb, var(--sol-text) 8%, transparent); }
+.line-col[data-empty="true"][data-focused="true"] { box-shadow: 0 0 0 3px color-mix(in srgb, var(--line-belt) 20%, transparent); }
+.line-name-short, .line-col-slim { display: none; }
+@container line-col (max-width: 128px) {
+  .line-name-full { display: none; }
+  .line-name-short { display: inline; }
+}
+@container line-col (max-width: 64px) {
+  .line-col-head, .line-col-body, .line-col-why { display: none; }
+  .line-col-slim {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 0 12px;
+    height: 100%;
+    cursor: default;
+  }
+  .line-col-slim-name { writing-mode: vertical-rl; white-space: nowrap; letter-spacing: 0.02em; }
+}
+/* A narrow column drops its secondary words before anything truncates:
+   the week total first, then the state words (the lamp and its tooltip stay). */
+@container line-col (max-width: 280px) { .line-count-of { display: none; } }
+@container line-col (max-width: 220px) { .line-state-text { display: none; } }
+.line-count-of { color: color-mix(in srgb, var(--sol-text-dim) 80%, transparent); }
+.line-row-quiet { opacity: 0.6; }
+.line-row-quiet:hover, .line-row-quiet[data-focused="true"] { opacity: 1; }
+.line-col-why {
+  border-top: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  border-radius: 0 0 10px 10px;
+}
 
 /* An empty station's body: a faint dashed bay running the full height, so
    the line reads as a factory waiting for work. */
@@ -104,7 +212,7 @@
   border: 1px dashed color-mix(in srgb, var(--sol-border) 70%, transparent);
   background: repeating-linear-gradient(135deg, transparent 0 9px, color-mix(in srgb, var(--sol-border) 12%, transparent) 9px 10px);
 }
-.line-col[data-focused="true"] .line-empty { border-color: color-mix(in srgb, var(--sol-text-muted) 55%, transparent); }
+.line-col[data-focused="true"] .line-empty { border-color: color-mix(in srgb, var(--line-belt) 55%, transparent); }
 
 @keyframes line-rise {
   from { opacity: 0; transform: translateY(10px); }
@@ -171,7 +279,7 @@
   background: linear-gradient(90deg, var(--sol-yellow) 0 35%, transparent 35% 65%, var(--sol-yellow) 65%);
   border-radius: 1px;
 }
-.line-lamp[data-kind="starved"] { border: 1.5px solid color-mix(in srgb, var(--sol-orange) 75%, transparent); }
+.line-lamp[data-kind="starved"] { background: var(--sol-orange); }
 .line-lamp[data-kind="ask"] { background: var(--sol-yellow); }
 .line-lamp[data-kind="ask"]::after {
   content: "";
@@ -181,8 +289,8 @@
   border: 1px solid var(--sol-yellow);
   animation: line-ping 1.6s cubic-bezier(0, 0, 0.2, 1) infinite;
 }
-.line-lamp[data-kind="idle"] { border: 1.5px solid color-mix(in srgb, var(--sol-text-dim) 70%, transparent); }
-.line-lamp[data-kind="clear"] { background: color-mix(in srgb, var(--sol-text-dim) 45%, transparent); }
+.line-lamp[data-kind="idle"] { background: color-mix(in srgb, var(--sol-text-dim) 70%, transparent); width: 6px; height: 6px; margin: 1px; }
+.line-lamp[data-kind="clear"] { background: color-mix(in srgb, var(--sol-green) 55%, transparent); width: 6px; height: 6px; margin: 1px; }
 .line-lamp[data-kind="failing"] { background: var(--sol-red); animation: line-blink 1.2s steps(2, jump-none) infinite; }
 @keyframes line-ping {
   0% { transform: scale(0.6); opacity: 0.9; }
@@ -197,9 +305,12 @@
 }
 .line-row:hover { background: color-mix(in srgb, var(--sol-text) 4%, transparent); }
 .line-row[data-focused="true"] {
-  background: color-mix(in srgb, var(--sol-text) 7%, transparent);
-  border-color: color-mix(in srgb, var(--sol-text) 28%, transparent);
+  background: color-mix(in srgb, var(--line-belt) 9%, transparent);
+  border-color: color-mix(in srgb, var(--line-belt) 30%, transparent);
+  box-shadow: inset 3px 0 0 var(--line-belt);
 }
+.line-card { transition: box-shadow 120ms ease; }
+.line-card[data-focused="true"] { box-shadow: 0 0 0 2px var(--line-belt), -6px 0 0 -3px var(--line-belt); }
 
 .line-live-dot { background: var(--line-belt); animation: line-pulse 1.8s ease-in-out infinite; }
 @keyframes line-pulse { 50% { opacity: 0.4; } }
@@ -216,49 +327,61 @@
   background: color-mix(in srgb, var(--sol-bg-alt) 80%, transparent);
   border: 1px dashed color-mix(in srgb, var(--sol-border) 60%, transparent);
 }
+.line-cmd-chunk { display: inline-block; max-width: 100%; vertical-align: top; }
 .line-cmd-primary {
   border-style: solid;
   border-color: color-mix(in srgb, var(--line-belt) 45%, transparent);
   background: color-mix(in srgb, var(--sol-bg) 70%, transparent);
   box-shadow: inset 3px 0 0 var(--line-belt);
 }
-.line-cmd-primary code { padding: 10px 40px 10px 14px; line-height: 20px; }
-.line-cmd-primary button { top: 8px; right: 8px; width: 24px; height: 24px; }
+.line-cmd-primary code { padding: 10px 10px 10px 14px; line-height: 20px; }
+.line-cmd-primary .line-cmd-copy { width: 24px; height: 20px; margin-left: 12px; }
 
-/* Before anything flows: the stations as one strip, then the first command.
-   The belt runs under the strip's top edge so it still reads as a line. */
-.line-band {
+/* Before anything flows: the six stations in one row joined by a moving
+   belt, so the factory's shape is what teaches. A narrow floor scrolls the
+   row sideways rather than wrapping it, so the belt never breaks. */
+.line-onboard { container: line-onboard / inline-size; }
+.line-ghost-scroll { overflow-x: auto; overflow-y: hidden; margin: 0 -4px; padding: 4px; scroll-snap-type: x proximity; }
+.line-ghost {
   position: relative;
-  border: 1px solid color-mix(in srgb, var(--sol-border) 55%, transparent);
-  background: color-mix(in srgb, var(--sol-card) 85%, transparent);
+  display: grid;
+  grid-template-columns: repeat(6, minmax(156px, 1fr));
+  gap: 14px;
+  min-width: calc(6 * 156px + 5 * 14px);
 }
-.line-band::before {
+.line-ghost::before {
   content: "";
   position: absolute;
-  inset: 0 0 auto 0;
+  left: 8px;
+  right: 8px;
+  top: 25px;
   height: 3px;
+  margin-top: -1.5px;
   background-image: repeating-linear-gradient(90deg, color-mix(in srgb, var(--line-belt) 55%, transparent) 0 6px, transparent 6px 9px);
   background-size: 18px 3px;
   animation: line-belt 1800ms linear infinite;
-  opacity: 0.7;
+  opacity: 0.6;
 }
-.line-band-cell {
-  box-shadow: -1px 0 0 color-mix(in srgb, var(--sol-border) 35%, transparent), 0 -1px 0 color-mix(in srgb, var(--sol-border) 35%, transparent);
-  transition: background-color 140ms ease;
+.line-ghost-col {
+  display: flex;
+  flex-direction: column;
+  padding: 13px 12px 14px;
+  border: 1px dashed color-mix(in srgb, var(--sol-border) 70%, transparent);
+  background: color-mix(in srgb, var(--sol-card) 55%, transparent);
+  transition: border-color 140ms ease, box-shadow 140ms ease, background-color 140ms ease;
   animation: line-rise 520ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
-  animation-delay: calc(var(--i, 0) * 50ms);
+  animation-delay: calc(200ms + var(--i, 0) * 60ms);
   cursor: default;
+  scroll-snap-align: start;
 }
-.line-band-cell:hover { background: color-mix(in srgb, var(--sol-text) 3%, transparent); }
-.line-band-cell[data-focused="true"] { background: color-mix(in srgb, var(--sol-text) 7%, transparent); }
-.line-band-cell[data-focused="true"]::after {
-  content: "";
-  position: absolute;
-  inset: auto 12px 0 12px;
-  height: 2px;
-  border-radius: 2px;
-  background: var(--sol-text-muted);
+.line-ghost-col:hover { background: color-mix(in srgb, var(--sol-card) 80%, transparent); }
+.line-ghost-col[data-focused="true"] {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--line-belt) 70%, transparent);
+  background: color-mix(in srgb, var(--sol-card) 90%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--line-belt) 20%, transparent);
 }
+.line-start-title { font-size: clamp(26px, 4.4cqi, 36px); line-height: 1.08; font-weight: 450; }
 .line-start {
   border: 1px solid color-mix(in srgb, var(--sol-border) 55%, transparent);
   background:
@@ -284,6 +407,25 @@
 /* The awaiting column hosts the decision cards; tighten their padding. */
 .line-col .decision-card { background: var(--sol-card); }
 
+/* Light theme: dots and shadows mixed from text or border at dark-theme
+   strength read as gray smudges on a pale floor, so they drop. */
+html:not(.dark) .line-floor {
+  background-image:
+    radial-gradient(color-mix(in srgb, var(--sol-border) 16%, transparent) 1px, transparent 1.2px),
+    linear-gradient(180deg, color-mix(in srgb, var(--sol-bg-alt) 55%, transparent), transparent 220px);
+}
+html:not(.dark) .line-col {
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--sol-border) 14%, transparent), 0 12px 28px -24px color-mix(in srgb, var(--sol-text) 16%, transparent);
+}
+html:not(.dark) .line-col[data-empty="true"] { box-shadow: none; }
+html:not(.dark) .line-col[data-focused="true"] {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--line-belt) 16%, transparent), 0 14px 32px -26px color-mix(in srgb, var(--line-belt) 35%, transparent);
+}
+html:not(.dark) .line-col[data-state="ask"][data-focused="true"] {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--sol-yellow) 18%, transparent), 0 14px 32px -26px color-mix(in srgb, var(--sol-yellow) 35%, transparent);
+}
+html:not(.dark) .line-rail[data-live="true"] { box-shadow: none; }
+
 @media (prefers-reduced-motion: reduce) {
-  .line-col, .line-band::before, .line-band-cell, .line-start, .line-rail[data-live="true"], .line-lamp::after, .line-lamp[data-kind="failing"], .line-live-dot { animation: none !important; }
+  .line-col, .line-ghost::before, .line-ghost-col, .line-start, .line-rail[data-live="true"], .line-lamp::after, .line-lamp[data-kind="failing"], .line-live-dot { animation: none !important; }
 }

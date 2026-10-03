@@ -40,6 +40,8 @@ const FULL_WIDTH_PATTERNS: RegExp[] = [
   /^\/plans(\/|$)/,
   /^\/docs(\/|$)/,
   /^\/capabilities$/,
+  // The resource monitor: strip, table and review drawer, each its own scroll.
+  /^\/resources$/,
   /^\/crosstalk$/,
   // A browser pane is all content: its own 32px address strip, then the page.
   /^\/browser$/,
@@ -60,6 +62,10 @@ const FULL_WIDTH_PATTERNS: RegExp[] = [
   /^\/admin\//,
   // Agent config: file list + editor, owns its canvas the way /sessions does.
   /^\/config(\/|$)/,
+  // Memory: project rail + map/index + editor, owns its canvas.
+  /^\/memory(\/|$)/,
+  // Evals: its own nav, wall and charts edge to edge, each view its own scroll.
+  /^\/evals(\/|$)/,
 ];
 
 function routePath(pathname: string): string {

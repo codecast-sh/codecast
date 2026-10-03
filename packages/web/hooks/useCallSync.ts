@@ -1,12 +1,14 @@
 import { useCallback, useMemo, useSyncExternalStore } from "react";
-import { useConvex, useConvexAuth } from "convex/react";
+import { useConvex } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, useTrackedStore } from "../store/inboxStore";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useConvexSync } from "./useConvexSync";
+import { useCallBaseFeeds } from "./useCallBaseFeeds";
 import { admitKnock, autoScribe, bindConvex, isDeliberateRoom } from "../lib/calls/callManager";
-import { syncKnockToasts, type KnockAnswers } from "../lib/calls/knockToasts";
-import { guestDoorActions } from "../lib/calls/guestDoorActions";
+import { guestsStillWaiting, syncGuestWaitingToasts, syncKnockToasts, type KnockAnswers } from "../lib/calls/knockToasts";
+import { joinCall } from "../lib/calls/actions";
+import { admitGuest, denyGuest } from "../lib/calls/guestDoorActions";
 import { getCallStageOpen, useCallStageOpen } from "../lib/calls/callStage";
 import { getScribeStatus, setScribeFeedTargets, stopScribe, subscribeScribe } from "../lib/calls/transcription";
 import { decideAutoScribe } from "../lib/calls/autoScribe";
@@ -24,25 +26,17 @@ import { useWatchEffect } from "./useWatchEffect";
 //   callOccupancy  live rosters for the rooms currently on screen
 //   liveRooms      every huddle running in my teams (open rooms + lock state)
 //   roomKnocks     who is waiting at the door of the room I'm seated in
+//   guestsWaiting  guests on my links, at the door of a room nobody is in
 // All of these queries ENRICH surfaces that render fine without them, so they go
 // through useQueryNoThrow — a deploy gap must never ErrorBoundary the shell.
 export function useCallSync(): void {
   const convex = useConvex();
-  const { isAuthenticated } = useConvexAuth();
   useWatchEffect(() => {
     bindConvex(convex);
   }, [convex]);
 
-  const { data: config } = useQueryNoThrow(api.calls.getCallConfig, isAuthenticated ? {} : "skip");
-  useConvexSync(config, useCallback((d: any) => {
-    useInboxStore.getState().syncTable("callConfig", d);
-  }, []));
-
-  const enabled = !!config?.enabled;
-  const { data: myCalls } = useQueryNoThrow(api.calls.getMyCalls, enabled ? {} : "skip");
-  useConvexSync(myCalls, useCallback((d: any) => {
-    useInboxStore.getState().syncTable("myCalls", d);
-  }, []));
+  // Config, my calls and the live rooms: the platform-neutral feeds.
+  const { enabled } = useCallBaseFeeds();
 
   // Occupancy for what's on screen: every teammate's current room (the strip
   // hue + hover card) plus the visible session's room (header chip). Channel
@@ -90,28 +84,6 @@ export function useCallSync(): void {
   );
   useConvexSync(occupancy, useCallback((d: any) => {
     useInboxStore.getState().syncTable("callOccupancy", d);
-  }, []));
-
-  // Every huddle running anywhere in my teams — occupancy above answers "who
-  // is in THESE rooms", this answers "which rooms exist at all", which is what
-  // makes an open room findable (sidebar Live now, /calls Happening now) and
-  // carries the lock state the dock renders. Ephemeral like the rest of the
-  // call slice: never persisted, re-derived on every load.
-  const { data: liveRooms } = useQueryNoThrow(api.calls.getLiveRooms, enabled ? {} : "skip");
-  // One feed, two homes: the room flags a person flips go to `callRooms`
-  // (localFirst, so an in-flight toggle survives a stale push) and the roster
-  // to `liveRooms`.
-  useConvexSync(liveRooms, useCallback((d: any) => {
-    if (!Array.isArray(d)) return;
-    const store = useInboxStore.getState();
-    store.syncTable("callRooms", d.map((r: any) => ({
-      _id: r.room_key,
-      locked: !!r.locked,
-      transcribe_off: !!r.transcribe_off,
-      transcribe_off_at: r.transcribe_off_at ?? null,
-      recording: !!r.recording,
-    })));
-    store.syncTable("liveRooms", d.map(({ locked: _l, transcribe_off: _t, transcribe_off_at: _a, recording: _r, ...room }: any) => room));
   }, []));
 
   // Who is waiting at MY door. Readable only from inside the room, so it is
@@ -185,19 +157,56 @@ export function useCallSync(): void {
     const fresh = (d as any[]).filter((k) => !heardKnocks.has(key(k)));
     heardKnocks = new Set((d as any[]).map(key));
     for (const knock of fresh) soundRoomKnock(`${seatedRoomKey}:${key(knock)}`);
+    // The door's one home first: a knock answered here is held off the list
+    // (localFirst) until the server agrees, and the toasts read that list,
+    // so an answered knock's toast is not put back by a stale push.
+    useInboxStore.getState().syncTable("roomKnocks", d);
     // And something to press when the stage (where the door is) is closed.
     knockToastIds = syncKnockToasts({
       roomKey: seatedRoomKey ?? "",
-      current: d as any[],
+      current: useInboxStore.getState().roomKnocks ?? [],
       fresh,
       shown: knockToastIds,
       stageOpen: getCallStageOpen(),
-      answers: knockAnswers(convex),
+      answers: KNOCK_ANSWERS,
       leader: isNotificationLeader(),
       notify: notifyKnock,
     });
-    useInboxStore.getState().syncTable("roomKnocks", d);
-  }, [seatedRoomKey, convex]));
+  }, [seatedRoomKey]));
+  // Guests waiting on my links at a room NOBODY is in: no door shows them,
+  // so they are a toast with Join on it, a system banner for a window that
+  // is behind others, and a row in Live now (useGuestsWaiting). Telling the
+  // person is what lets the guest's page say "we let them know" (`told`).
+  const { data: guestsWaiting } = useQueryNoThrow(api.callGuests.listGuestsWaiting, enabled ? {} : "skip");
+  const tellWaiting = useCallback(() => {
+    waitingToastIds = syncGuestWaitingToasts({
+      waiting: guestsStillWaiting(useInboxStore.getState().guestsWaiting ?? [], Date.now(), seatedRoomKey),
+      shown: waitingToastIds,
+      join: (roomKey) => void joinCall(roomKey, { intent: "deliberate" }),
+      told: (guest_ids) => {
+        soundRoomKnock(`guest-waiting:${guest_ids.join(",")}`);
+        void convex.mutation(api.callGuests.noteGuestsWaitingShown, { guest_ids }).catch(() => {});
+      },
+      leader: isNotificationLeader(),
+      notify: notifyKnock,
+    });
+  }, [convex, seatedRoomKey]);
+  useConvexSync(guestsWaiting, useCallback((d: any) => {
+    if (!Array.isArray(d)) return;
+    useInboxStore.getState().syncTable("guestsWaiting", d);
+    tellWaiting();
+  }, [tellWaiting]));
+  // A guest who closes the page stops beating, and nothing pushes that: the
+  // lease running out is a clock, so while anybody is listed the toasts are
+  // checked against it. Sitting down in their room clears them the same way.
+  const anyWaiting = useInboxStore((st: any) => (st.guestsWaiting?.length ?? 0) > 0);
+  useWatchEffect(() => {
+    tellWaiting();
+    if (!anyWaiting) return;
+    const t = setInterval(tellWaiting, 10_000);
+    return () => clearInterval(t);
+  }, [anyWaiting, tellWaiting]);
+
   // Opening the stage puts the door on screen: its toasts step aside. Closing
   // it on a knock nobody answered brings the toast back, since the door went
   // with the stage (no second system banner: that one already went up).
@@ -205,7 +214,7 @@ export function useCallSync(): void {
   useWatchEffect(() => {
     if (stageOpen) {
       if (knockToastIds.size === 0) return;
-      knockToastIds = syncKnockToasts({ roomKey: "", current: [], fresh: [], shown: knockToastIds, stageOpen, answers: knockAnswers(convex) });
+      knockToastIds = syncKnockToasts({ roomKey: "", current: [], fresh: [], shown: knockToastIds, stageOpen, answers: KNOCK_ANSWERS });
       return;
     }
     if (!seatedRoomKey) return;
@@ -217,7 +226,7 @@ export function useCallSync(): void {
       fresh: current,
       shown: knockToastIds,
       stageOpen,
-      answers: knockAnswers(convex),
+      answers: KNOCK_ANSWERS,
       leader: isNotificationLeader(),
     });
   }, [stageOpen]);
@@ -229,6 +238,8 @@ const NO_KNOCKS: any[] = [];
 let heardKnocks = new Set<string>();
 // The knock toasts up right now (lib/calls/knockToasts).
 let knockToastIds = new Set<string>();
+// And the toasts for guests waiting where nobody is.
+let waitingToastIds = new Set<string>();
 
 /** A knock as a system banner, for the person whose window is behind others.
  *  notifyNative decides whether they are already looking, and collapses the
@@ -237,13 +248,12 @@ function notifyKnock(title: string, body: string, key: string): void {
   void notifyNative(title, body, { key, kind: "call" });
 }
 
-function knockAnswers(convex: Parameters<typeof guestDoorActions>[0]): KnockAnswers {
-  const door = guestDoorActions(convex);
-  return {
-    admitPerson: (roomKey, userId) => void admitKnock(roomKey, userId),
-    admitGuest: (guestId, name) => void door.admit(guestId, name),
-    denyGuest: (guestId) => void door.deny(guestId),
-  };
-}
+// A toast's answers are the door's own: the same store actions, so a knock
+// answered from a toast leaves the door in every surface at once.
+const KNOCK_ANSWERS: KnockAnswers = {
+  admitPerson: (roomKey, userId) => void admitKnock(roomKey, userId),
+  admitGuest: (guestId, name) => admitGuest(guestId, name),
+  denyGuest: (guestId) => denyGuest(guestId),
+};
 
 export { channelRoomKey, sessionRoomKey };

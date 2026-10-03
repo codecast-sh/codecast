@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from "react";
-import { useQuery } from "convex/react";
+import { useQueryNoThrow } from "./useQueryNoThrow";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { MentionItem } from "../lib/mentionItem";
 import { memberHandle } from "@codecast/shared/chat";
@@ -81,7 +81,7 @@ export function useMentionServerSearch(
   // echoes; a stub is not an Id<"teams">. Skip rather than fall back to
   // personal, which would leak personal items into a team surface.
   const stubTeam = !!opts?.teamId && !isConvexId(String(opts.teamId));
-  const results = useQuery(
+  const results = useQueryNoThrow(
     api.docs.mentionSearch,
     wantNow && settled && !stubTeam
       ? {
@@ -93,7 +93,7 @@ export function useMentionServerSearch(
           ...(opts?.types ? { types: opts.types } : {}),
         }
       : "skip",
-  ) as MentionItem[] | undefined;
+  ).data as MentionItem[] | undefined;
   // Convex full-text search ORs the terms and prefix-matches the last one, so
   // a phrase like "jasonbenn lets do" returns every title with a "do…" word.
   // Hold server rows to the same every-word rule the local cache uses, so a

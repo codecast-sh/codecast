@@ -7,9 +7,8 @@ import { useParams } from "next/navigation";
 import { RunGate } from "../../../../components/WorkflowContextPanel";
 import { WorkflowRunNodes } from "../../../../components/WorkflowRunNodes";
 import { formatRunDuration, runNodeCounts, runNodeRows } from "../../../../lib/workflowRun";
-import { useMutation } from "convex/react";
 import { useWorkflow, useWorkflowRun } from "../../../../hooks/useSyncWorkflows";
-import { api as _api } from "@codecast/convex/convex/_generated/api";
+import { useInboxStore } from "../../../../store/inboxStore";
 import { AuthGuard } from "../../../../components/AuthGuard";
 import { AppLoader } from "../../../../components/AppLoader";
 import { DashboardLayout } from "../../../../components/DashboardLayout";
@@ -18,8 +17,6 @@ import {
   Timer, AlertCircle, ChevronLeft, User,
 } from "lucide-react";
 import { useTitlebarHead } from "../../../../hooks/useTitlebarHead";
-
-const api = _api as any;
 
 interface WorkflowRun {
   _id: string;
@@ -63,15 +60,13 @@ function RunDetailContent({ runId }: { runId: string }) {
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const workflow = useWorkflow(run?.workflow_id) as Workflow | null | undefined;
 
-  const respondToGate = useMutation(api.workflow_runs.respondToGate);
+  const respondToGate = useInboxStore((s) => s.respondToGate);
   const [gateText, setGateText] = useState("");
-  const [responding, setResponding] = useState(false);
 
-  const handleGateResponse = async (text: string) => {
+  // Local-first (store respondToGate): the run flips to running on the press.
+  const handleGateResponse = (text: string) => {
     if (!text.trim()) return;
-    setResponding(true);
-    await respondToGate({ id: runId as any, response: text.trim() });
-    setResponding(false);
+    respondToGate(runId, text.trim());
     setGateText("");
   };
 
@@ -153,7 +148,6 @@ function RunDetailContent({ runId }: { runId: string }) {
                     <button
                       key={choice.key}
                       onClick={() => handleGateResponse(choice.key)}
-                      disabled={responding}
                       className="px-3 py-1.5 text-xs font-medium text-sol-text border border-sol-border/30 rounded-lg hover:bg-sol-bg-highlight hover:border-sol-magenta/40 transition-colors disabled:opacity-50"
                     >
                       <span className="font-mono text-sol-magenta mr-1">[{choice.key}]</span>
@@ -169,12 +163,11 @@ function RunDetailContent({ runId }: { runId: string }) {
                   onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); handleGateResponse(gateText); } }}
                   placeholder="Type your response… (⌘↵ to send)"
                   rows={3}
-                  disabled={responding}
                   className="flex-1 px-3 py-2 text-sm bg-sol-bg border border-sol-border/40 rounded-lg text-sol-text placeholder-sol-text-dim/50 focus:outline-none focus:border-sol-magenta/50 resize-none disabled:opacity-50"
                 />
                 <button
                   onClick={() => handleGateResponse(gateText)}
-                  disabled={responding || !gateText.trim()}
+                  disabled={!gateText.trim()}
                   className="px-3 py-2 text-xs font-medium text-sol-magenta border border-sol-magenta/30 rounded-lg hover:bg-sol-magenta/10 transition-colors disabled:opacity-40 whitespace-nowrap"
                 >
                   Send

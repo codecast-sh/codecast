@@ -13,6 +13,11 @@
 //
 // A cause sits in exactly one of causes, in build, awaiting, watching or
 // closed: a live run moves it to build, a pending decision on it to awaiting.
+//
+// A line belongs to a project (line-profile.md LP1): scopeLine narrows the
+// rows to one project before buildLineFlow, and lineRollup counts every
+// project's line for the "all projects" view. A project's declared finders
+// (LP3, published onto the project row) join Sense, so a silent one shows.
 import { priority as linePriority, type Severity } from "@codecast/convex/convex/lib/linePriority";
 import { NO_GOAL } from "@codecast/shared/contracts/goalsBrief";
 import { DEFAULT_LINE_CARDS_CAP } from "@codecast/shared/contracts/orgCapacity";
@@ -34,6 +39,7 @@ export type LineSignal = {
   observed_at: number;
   created_at: number;
   task_id: string;
+  project_id?: string | null;
   attach?: string;
   reopened?: boolean;
 };
@@ -56,6 +62,7 @@ export type LineCauseTask = {
   readiness_note?: string | null;
   watch_until?: number | null;
   resolved_at?: number | null;
+  project_id?: string | null;
 };
 
 export type LineFlowRun = LineRun & {
@@ -84,6 +91,15 @@ export type LineDecision = {
 
 export type GoalRow = { short_id?: string; title: string; priority?: "p0" | "p1" | "p2" | "p3" };
 
+/** A finder a project's line profile declares (LP3). */
+export type LineFinderDecl = { id: string; source: string; kind: "any" | string[]; runs?: string };
+/** A project row as the line reads it: its goal fields and its published profile. */
+export type LineProject = GoalRow & {
+  _id: string;
+  project_path?: string;
+  line_profile?: { finders: LineFinderDecl[]; root?: string; default?: boolean; changed_at: number } | null;
+};
+
 /** idle: nothing has reached the station yet, or nothing waits for it, which
  *  is not trouble. starved: Sense when signals used to arrive and stopped, or
  *  In build while causes wait and nothing builds. clear: a downstream station
@@ -99,8 +115,15 @@ export type SenseSource = {
   week: number;
   /** Signals per hour over the last 24 hours, oldest first. */
   spark: number[];
-  newest: LineSignal;
+  /** The newest signal in the window; null for a declared finder with none. */
+  newest: LineSignal | null;
   kinds: string[];
+  /** The declaration, when the profile names this source (LP3). */
+  finder?: LineFinderDecl;
+  /** Declared, and no signal in the last 24 hours. newest says since when. */
+  silent: boolean;
+  /** Filed signals although the profile, which declares finders, does not name it. */
+  undeclared: boolean;
 };
 
 export type CauseRow = { task: LineCauseTask; score: number; signals: number; goal: GoalChip };
@@ -262,6 +285,8 @@ export function buildLineFlow<D extends LineDecision>(input: {
   projects: GoalRow[];
   now: number;
   cardsCap?: number;
+  /** The selected project's declared finders: each is a Sense row, silent or not. */
+  finders?: LineFinderDecl[];
 }): LineFlow<D> {
   const { now } = input;
   const cardsCap = input.cardsCap ?? DEFAULT_LINE_CARDS_CAP;
@@ -271,6 +296,8 @@ export function buildLineFlow<D extends LineDecision>(input: {
   const dayAgo = now - DAY;
 
   // ── sense ──
+  const finders = input.finders ?? [];
+  const finderBySource = new Map(finders.map((f) => [f.source.toLowerCase(), f]));
   const bySource = new Map<string, LineSignal[]>();
   for (const s of input.signals) {
     const list = bySource.get(s.source) ?? [];
@@ -290,15 +317,26 @@ export function buildLineFlow<D extends LineDecision>(input: {
         spark[Math.min(23, Math.floor((s.created_at - dayAgo) / HOUR))]++;
       }
     }
-    if (week === 0) continue;
-    sources.push({ source, day, week, spark, newest: sorted[0], kinds: [...new Set(sorted.map((s) => s.kind))] });
+    if (week === 0 && !finderBySource.has(source)) continue;
+    sources.push({ source, day, week, spark, newest: sorted[0], kinds: [...new Set(sorted.map((s) => s.kind))], finder: finderBySource.get(source), silent: false, undeclared: false });
   }
-  sources.sort((a, b) => b.day - a.day || b.week - a.week || b.newest.created_at - a.newest.created_at);
+  // A declared finder is a row even with nothing in the window: its silence is the news.
+  const seen = new Set(sources.map((s) => s.source));
+  for (const f of finders) {
+    if (!seen.has(f.source)) sources.push({ source: f.source, day: 0, week: 0, spark: new Array(24).fill(0), newest: null, kinds: f.kind === "any" ? [] : f.kind, finder: f, silent: false, undeclared: false });
+  }
+  for (const s of sources) {
+    s.silent = !!s.finder && s.day === 0;
+    s.undeclared = finders.length > 0 && !s.finder;
+  }
+  const newestAt = (s: SenseSource) => s.newest?.created_at ?? 0;
+  sources.sort((a, b) => b.day - a.day || b.week - a.week || newestAt(b) - newestAt(a) || a.source.localeCompare(b.source));
   const daySignals = input.signals.filter((s) => s.created_at >= dayAgo);
   const lastSignal = input.signals.reduce<number | null>((m, s) => (m === null || s.created_at > m ? s.created_at : m), null);
   const started = input.signals.length > 0 || causes.length > 0;
+  const silent = sources.filter((s) => s.silent).length;
   const senseState: StageState = daySignals.length > 0
-    ? { kind: "running", since: lastSignal, why: "signals arriving" }
+    ? { kind: "running", since: lastSignal, why: silent ? `signals arriving, ${silent} of ${finders.length} finders silent` : "signals arriving" }
     : started
       ? { kind: "starved", since: lastSignal, why: "no signal in 24h" }
       : { kind: "idle", why: "waiting for the first signal" };
@@ -441,7 +479,8 @@ export function ageShort(ms: number): string {
   return h < 24 ? `${h}h` : `${Math.floor(h / 24)}d`;
 }
 
-export type HeadlinePart = { text: string; tone: "ask" | "warn" | "fail" | "live" | "calm" };
+/** station names the column a part points at, so the page can link it. */
+export type HeadlinePart = { text: string; tone: "ask" | "warn" | "fail" | "live" | "calm" | "clear"; station?: "causes" | "build" | "awaiting" | "watching" };
 
 /** One sentence from the flow's state, what needs the founder first: cards
  *  waiting on them, then what is building and what stalled or failed, then
@@ -451,10 +490,10 @@ export function lineHeadline(flow: LineFlow, now: number): HeadlinePart[] {
   const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
   const { awaiting, build, causes, watching } = flow;
   if (awaiting.count > 0) {
-    parts.push({ text: `${plural(awaiting.count, "card waits", "cards wait")} on you${awaiting.oldestAt ? `, oldest ${ageShort(now - awaiting.oldestAt)}` : ""}`, tone: "ask" });
+    parts.push({ text: `${plural(awaiting.count, "card waits", "cards wait")} on you${awaiting.oldestAt ? `, oldest ${ageShort(now - awaiting.oldestAt)}` : ""}`, tone: "ask", station: "awaiting" });
   }
   const fresh = build.items.filter((b) => !b.stalled).length;
-  if (fresh > 0) parts.push({ text: `${fresh} building`, tone: "live" });
+  if (fresh > 0) parts.push({ text: `${fresh} building`, tone: "live", station: "build" });
   const stalled = build.items.filter((b) => b.stalled);
   if (stalled.length > 0) {
     const silent = Math.max(...stalled.map((b) => now - (b.run.updated_at ?? b.run.created_at)));
@@ -462,10 +501,10 @@ export function lineHeadline(flow: LineFlow, now: number): HeadlinePart[] {
   }
   if (build.state.kind === "failing") parts.push({ text: `last run failed${build.state.since ? ` ${ageShort(now - build.state.since)} ago` : ""}`, tone: "fail" });
   if (causes.state.kind === "paused") parts.push({ text: `admission paused, ${causes.state.why}`, tone: "warn" });
-  else if (causes.items.length > 0) parts.push({ text: `${plural(causes.items.length, "cause", "causes")} ready to admit`, tone: "calm" });
-  if (watching.count > 0) parts.push({ text: `${watching.count} in watch`, tone: "calm" });
+  else if (causes.items.length > 0) parts.push({ text: `${plural(causes.items.length, "cause", "causes")} ready to admit`, tone: "live", station: "causes" });
+  if (watching.count > 0) parts.push({ text: `${watching.count} in watch`, tone: "calm", station: "watching" });
   if (!flow.started && parts.length === 0) return [{ text: "Nothing has reached the line yet", tone: "calm" }];
-  if (awaiting.count === 0) parts.push({ text: parts.length ? "nothing waiting on you" : "The line is quiet: nothing building, nothing waiting on you", tone: "calm" });
+  if (awaiting.count === 0) parts.push({ text: parts.length ? "nothing waiting on you" : "The line is quiet: nothing building, nothing waiting on you", tone: "clear" });
   return parts;
 }
 
@@ -496,4 +535,107 @@ export function groupBuild(items: BuildRow[]): BuildBlock[] {
   let order = 0;
   for (const block of blocks) for (const r of block.rows) r.order = order++;
   return blocks;
+}
+
+// ── One project's line (line-profile.md LP1) ──
+
+/** A line's key: a project id, NO_PROJECT for work filed under none, or ALL_PROJECTS. */
+export const NO_PROJECT = "none";
+export const ALL_PROJECTS = "all";
+
+type LineRows<D extends LineDecision> = Pick<Parameters<typeof buildLineFlow<D>>[0], "signals" | "tasks" | "runs" | "decisions">;
+
+/** The project a row belongs to: its own, else its cause's (a signal filed before signals carried one). */
+const projectKey = (id: string | null | undefined) => id || NO_PROJECT;
+
+/**
+ * The rows of one project's line: its causes (and its other tasks, whose runs
+ * count apart), the signals filed into it, the runs and cards on its tasks.
+ */
+export function scopeLine<D extends LineDecision, R extends LineRows<D>>(rows: R, key: string): R {
+  if (key === ALL_PROJECTS) return rows;
+  const taskKey = new Map(rows.tasks.map((t) => [t._id, projectKey(t.project_id)]));
+  const mine = (taskId: string | null | undefined) => !!taskId && taskKey.get(taskId) === key;
+  return {
+    ...rows,
+    tasks: rows.tasks.filter((t) => projectKey(t.project_id) === key),
+    signals: rows.signals.filter((s) => (s.project_id ? s.project_id === key : mine(s.task_id) || (key === NO_PROJECT && !taskKey.has(s.task_id)))),
+    runs: rows.runs.filter((r) => mine(r.task_id)),
+    decisions: rows.decisions.filter((d) => mine(d.task_id)),
+  };
+}
+
+/** One row of the "all projects" roll-up: counts only. */
+export type RollupRow = {
+  key: string;
+  title: string;
+  short_id?: string;
+  signalsDay: number;
+  causes: number;
+  build: number;
+  awaiting: number;
+  watching: number;
+  closed: number;
+  finders: number;
+  silent: number;
+};
+
+/**
+ * Every line with anything on it, counted the way its own page counts:
+ * projects holding a cause or a signal in the window, projects whose profile
+ * declares finders, and the work filed under no project. Most open causes first.
+ */
+export function lineRollup<D extends LineDecision>(rows: LineRows<D>, projects: LineProject[], now: number, cardsCap?: number): RollupRow[] {
+  const keys = new Set<string>();
+  for (const t of rows.tasks) if (isCause(t)) keys.add(projectKey(t.project_id));
+  const causeKey = new Map(rows.tasks.map((t) => [t._id, projectKey(t.project_id)]));
+  for (const s of rows.signals) keys.add(s.project_id || causeKey.get(s.task_id) || NO_PROJECT);
+  for (const p of projects) if (p.line_profile) keys.add(p._id);
+  const byId = new Map(projects.map((p) => [p._id, p]));
+  const out: RollupRow[] = [];
+  for (const key of keys) {
+    const project = byId.get(key);
+    // A project the viewer cannot see (another workspace's) is not a line here.
+    if (key !== NO_PROJECT && !project) continue;
+    const f = buildLineFlow({ ...scopeLine(rows, key), initiatives: [], projects: [], now, cardsCap, finders: project?.line_profile?.finders });
+    out.push({
+      key,
+      title: project?.title ?? "No project",
+      short_id: project?.short_id,
+      signalsDay: f.sense.count,
+      causes: f.causes.count,
+      build: f.build.count,
+      awaiting: f.awaiting.count,
+      watching: f.watching.count,
+      closed: f.closed.count,
+      finders: project?.line_profile?.finders.length ?? 0,
+      silent: f.sense.items.filter((s) => s.silent).length,
+    });
+  }
+  return out.sort((a, b) => Number(a.key === NO_PROJECT) - Number(b.key === NO_PROJECT) || b.causes - a.causes || b.awaiting - a.awaiting || b.signalsDay - a.signalsDay || a.title.localeCompare(b.title));
+}
+
+/** Is `dir` the checkout `root`, or inside it? */
+const within = (dir: string, root: string) => {
+  const r = root.replace(/\/+$/, "");
+  return dir === r || dir.startsWith(`${r}/`);
+};
+
+/**
+ * The line /line opens on: the project of the repo the viewer is in (the one
+ * its profile names as default, else the project whose path holds it), else
+ * the line with the most open causes, else the roll-up.
+ */
+export function defaultLineKey(rollup: RollupRow[], projects: LineProject[], repoPath: string | null | undefined): string {
+  const lines = new Set(rollup.map((r) => r.key));
+  if (repoPath) {
+    const byProfile = projects.find((p) => p.line_profile?.default && p.line_profile.root && within(repoPath, p.line_profile.root));
+    if (byProfile) return byProfile._id;
+    const byPath = projects
+      .filter((p) => p.project_path && within(repoPath, p.project_path) && lines.has(p._id))
+      .sort((a, b) => b.project_path!.length - a.project_path!.length)[0];
+    if (byPath) return byPath._id;
+  }
+  const busiest = rollup.find((r) => r.key !== NO_PROJECT && r.causes > 0) ?? rollup.find((r) => r.causes > 0);
+  return busiest?.key ?? rollup[0]?.key ?? ALL_PROJECTS;
 }

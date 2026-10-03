@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import Link from "next/link";
 import { Check, ChevronRight, GitPullRequest, X } from "lucide-react";
 import {
@@ -16,6 +16,7 @@ import {
 } from "@codecast/shared/contracts/changeCard";
 import type { DecisionAnswerInput, SessionDecisionItem } from "../../store/inboxStore";
 import { KeyCap } from "../KeyboardShortcutsHelp";
+import { useDecisionDraft } from "../../hooks/useDecisionDraft";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { hasOpenModal } from "../../shortcuts";
 import { formatTimeAgo } from "../../lib/messageNavigator";
@@ -89,30 +90,49 @@ export function ChangeCardCause({ card, className = "" }: { card: ChangeCard; cl
 
 const VERDICT_DONE: Record<ChangeVerdict, string> = { ship: "Shipped", revise: "Sent back to revise", drop: "Dropped" };
 
+/** " · 5h ago", " · just now", or " · Sep 3": when a decision settled, as a tail. */
+const whenTail = (at: number | undefined, now: number) => {
+  const ago = at ? formatTimeAgo(at, now) : "";
+  return !ago ? "" : ago === "now" ? " · just now" : /^\d+[mhd]$/.test(ago) ? ` · ${ago} ago` : ` · ${ago}`;
+};
+
 /**
- * What a settled card decision came to: the verdict in its tone, who gave it
- * and when, plus the Revise note. Null while pending or when the answer is not
- * one of Ship, Revise and Drop.
+ * What a settled card decision came to, so the card's last word matches what
+ * happened: the verdict in its tone, who gave it and when, plus the Revise
+ * note; or, muted, that it was withdrawn or dismissed with no verdict. Null
+ * while pending or when an answer is not one of Ship, Revise and Drop.
  */
-export function cardOutcome(decision: Pick<SessionDecisionItem, "status" | "options" | "answer_index" | "answer_text" | "resolved_at">, by: string, now: number) {
+export function cardOutcome(decision: Pick<SessionDecisionItem, "status" | "options" | "answer_index" | "answer_text" | "resolved_at" | "answered_by">, by: string, now: number) {
+  const when = whenTail(decision.resolved_at, now);
+  if (decision.status === "withdrawn" || decision.status === "dismissed") {
+    const head = decision.status === "withdrawn" ? "Withdrawn" : "Dismissed";
+    const tail = decision.status === "withdrawn" ? `by the agent${when}` : decision.answered_by ? `by ${by}${when}` : when.replace(/^ · /, "");
+    return { tone: "dim", verdict: head, pill: `${head} ${tail}`.trim(), line: outcomeLine("dim", head, tail) };
+  }
   if (decision.status !== "answered" || decision.answer_index === undefined) return null;
   const verdict = verdictOfOption(decision.options[decision.answer_index]?.label);
   if (!verdict) return null;
-  const ago = decision.resolved_at ? formatTimeAgo(decision.resolved_at, now) : "";
-  const when = !ago ? "" : ago === "now" ? " · just now" : /^\d+[mhd]$/.test(ago) ? ` · ${ago} ago` : ` · ${ago}`;
   const note = decision.answer_text?.replace(/^revise:\s*/i, "").trim();
+  // A default a policy applied is the agent's own course, never a person's answer.
+  const wentAhead = decision.answered_by?.kind === "policy";
+  const head = wentAhead ? `The agent went ahead with ${verdictLabel(verdict)}` : VERDICT_DONE[verdict];
+  const tail = wentAhead ? `no one answered${when}` : `by ${by}${when}`;
   return {
     tone: VERDICT_TONE[verdict],
-    verdict: VERDICT_DONE[verdict],
-    pill: `${VERDICT_DONE[verdict]} by ${by}${when}`,
-    line: (
-      <div className={`cc-outcome cc-tone-${VERDICT_TONE[verdict]}`} data-cc-outcome>
-        <span className="cc-outcome-verdict">{VERDICT_DONE[verdict]}</span>
-        <span className="text-sol-text-dim">by {by}{when}</span>
-        {note && <span className="basis-full text-sol-text-muted">{note}</span>}
-      </div>
-    ),
+    verdict: wentAhead ? `Went ahead with ${verdictLabel(verdict)}` : VERDICT_DONE[verdict],
+    pill: `${head} ${tail}`,
+    line: outcomeLine(VERDICT_TONE[verdict], head, tail, note),
   };
+}
+
+function outcomeLine(tone: string, head: string, tail: string, note?: string) {
+  return (
+    <div className={`cc-outcome cc-tone-${tone}`} data-cc-outcome>
+      <span className="cc-outcome-verdict">{head}</span>
+      {tail && <span className="text-sol-text-dim">{tail}</span>}
+      {note && <span className="basis-full text-sol-text-muted">{note}</span>}
+    </div>
+  );
 }
 
 // The wire fill is the card's one motion moment, and it plays the first time
@@ -130,17 +150,26 @@ function useFirstSight(key: string) {
 
 /**
  * One mark per red check, a tiny copy of the proof strip's wire: a red dot, a
- * hairline, and its after (green once fixed, red while it still fails).
+ * hairline, and its after (green once fixed, red while it still fails). Past
+ * three, one mark stands for them all (red if any still fails); the count
+ * beside it says how many.
  */
 function ProofPips({ card }: { card: ChangeCard }) {
   const after = new Map(card.proof.after.map((c) => [c.name, c.ok]));
   const red = card.proof.before.filter((c) => !c.ok);
+  const marks = red.length > 3 ? [red.every((c) => after.get(c.name))] : red.map((c) => !!after.get(c.name));
+  if (!marks.length) return null;
   return (
     <span className="cc-pips" aria-hidden>
-      {red.map((c, i) => (
-        <span key={i} className={`cc-pip ${after.get(c.name) ? "cc-pip-fixed" : "cc-pip-red"}`} />
-      ))}
+      {marks.map((fixed, i) => <span key={i} className={`cc-pip ${fixed ? "cc-pip-fixed" : "cc-pip-red"}`} />)}
     </span>
+  );
+}
+
+/** Diff counts in neutral ink: red and green on the card mean pass and fail, never removed and added. */
+function DiffCounts({ diff }: { diff: ChangeCard["diff"] }) {
+  return (
+    <span className="cc-nowrap cc-diff"><span className="cc-diff-glyph">+</span>{diff.added} <span className="cc-diff-glyph">−</span>{diff.removed}</span>
   );
 }
 
@@ -173,14 +202,17 @@ function ProofStrip({ card }: { card: ChangeCard }) {
         <div className="text-[12px] text-sol-text-dim">Nothing was shown failing before the change.</div>
       ) : (
         <ol className="cc-proof">
-          {/* Column labels sit over the dots they name; the detail most rows
-              share rides on them as a tooltip instead of a caption. */}
-          <li className="cc-proof-head" aria-hidden>
-            <span className="cc-track-labels">
-              <span title={commonBefore || undefined}>main</span>
-              <span title={commonAfter || undefined}>branch</span>
-            </span>
-          </li>
+          {/* The detail most rows share reads once, over the names; the red
+              and green dots under it say which side is before and after. */}
+          {(commonBefore || commonAfter) && (
+            <li className="cc-proof-head">
+              <span className="cc-proof-caption">
+                {commonBefore && <span className="cc-text-red">{commonBefore}</span>}
+                {commonBefore && commonAfter && <span className="cc-arrow" aria-hidden>→</span>}
+                {commonAfter && <span className="cc-text-green">{commonAfter}</span>}
+              </span>
+            </li>
+          )}
           {red.map((b, i) => {
             const a = after.get(b.name);
             const fixed = a?.ok === true;
@@ -241,17 +273,18 @@ function CheckRow({ check }: { check: CardCheck }) {
 
 const squash = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
-/** Whether an example's input says anything its Before does not; one that only repeats it is dropped. */
+/** Whether an example's input says anything its Before does not: one whose Before is the input's opening (or any run of it) only repeats it, so it is dropped. */
 export function exampleInputAdds(input: string, before: string): boolean {
   const i = squash(input);
-  return !!i && i !== squash(before);
+  const b = squash(before);
+  return !!i && !(b && i.includes(b));
 }
 
-/** One before and after pair: the input as a quiet quote that opens in full, two tiles of one height, the note under both. */
-function ExamplePair({ ex }: { ex: ChangeCard["examples"][number] }) {
+/** One before and after pair: the input as a quiet quote that opens in full, two tiles of one height, the note under both. The Evals pages show eval flips with it too. */
+export function ExamplePair({ ex, extra = false }: { ex: ChangeCard["examples"][number]; extra?: boolean }) {
   const [open, setOpen] = useState(false);
   return (
-    <div className="cc-example">
+    <div className={`cc-example ${extra ? "cc-example-extra" : ""}`}>
       {exampleInputAdds(ex.input, ex.before) && (
         <button type="button" className={`cc-example-input ${open ? "is-open" : ""}`} onClick={() => setOpen((o) => !o)} aria-expanded={open} title={open ? undefined : "Show the full input"}>
           {ex.input}
@@ -269,7 +302,10 @@ function ExamplePair({ ex }: { ex: ChangeCard["examples"][number] }) {
 function ChangeCardFull({ card, inline, head, recommend, outcome, animate }: { card: ChangeCard; inline: boolean; head: boolean; recommend: boolean; outcome?: ReactNode; animate: boolean }) {
   const [allExamples, setAllExamples] = useState(false);
   const [checksOpen, setChecksOpen] = useState(false);
-  const examples = allExamples ? card.examples : card.examples.slice(0, 1);
+  // Two pairs show on a wide card, one on a phone or in the transcript sheet
+  // (CSS hides the second there, .cc-example-extra); the rest wait behind a toggle.
+  const examples = allExamples ? card.examples : card.examples.slice(0, 2);
+  const hidden = card.examples.length - examples.length;
   const tone = VERDICT_TONE[card.recommend.verdict] ?? "blue";
   const checksPassed = card.checks.filter((c) => c.ok).length;
   // A failing check is news, so it shows without asking; passing ones wait behind the count.
@@ -291,11 +327,14 @@ function ChangeCardFull({ card, inline, head, recommend, outcome, animate }: { c
         <section className="cc-section">
           <div className="cc-label-row"><h3 className="cc-label">Examples</h3><span className="text-[12px] text-sol-text-dim">before and after</span></div>
           <div className="space-y-4">
-            {examples.map((ex, i) => <ExamplePair key={i} ex={ex} />)}
+            {examples.map((ex, i) => <ExamplePair key={i} ex={ex} extra={!allExamples && i === 1} />)}
           </div>
-          {card.examples.length > examples.length && (
-            <button onClick={() => setAllExamples(true)} className="mt-3 text-[12px] text-sol-blue hover:underline">
-              Show all {card.examples.length} examples
+          {card.examples.length > 1 && !allExamples && (
+            <button type="button" onClick={() => setAllExamples(true)} className={`cc-more ${hidden ? "" : "is-narrow-only"}`} data-cc-more>
+              {/* The narrow count includes the second pair, which CSS hides there. */}
+              <span className="cc-more-wide">and {hidden} more</span>
+              <span className="cc-more-narrow">and {hidden + 1} more</span>
+              <ChevronRight className="w-3 h-3" />
             </button>
           )}
         </section>
@@ -308,8 +347,9 @@ function ChangeCardFull({ card, inline, head, recommend, outcome, animate }: { c
               <dt className="cc-label">Checks</dt>
               <dd>
                 <button type="button" className="cc-checks-toggle" onClick={() => setChecksOpen((o) => !o)} aria-expanded={showChecks} data-cc-checks>
-                  <span className={checksPassed === card.checks.length ? "cc-text-green" : "cc-text-red"}>{checksPassed}/{card.checks.length}</span>
-                  <span className="text-sol-text-dim">pass</span>
+                  {checksPassed === card.checks.length
+                    ? <span><span className="text-sol-text-dim">all</span> <span className="cc-text-green">{checksPassed} pass</span></span>
+                    : <span className="cc-text-red">{card.checks.length - checksPassed} of {card.checks.length} fail</span>}
                   <ChevronRight className={`w-3 h-3 text-sol-text-dim transition-transform ${showChecks ? "rotate-90" : ""}`} />
                 </button>
               </dd>
@@ -318,20 +358,23 @@ function ChangeCardFull({ card, inline, head, recommend, outcome, animate }: { c
           <div className="cc-fact">
             <dt className="cc-label">Diff</dt>
             <dd>
-              <span className="cc-text-green">+{card.diff.added}</span> <span className="cc-text-red">−{card.diff.removed}</span>
-              <span className="text-sol-text-dim"> in {card.diff.files} file{card.diff.files === 1 ? "" : "s"}</span>
+              <DiffCounts diff={card.diff} />
+              <span className="text-sol-text-dim cc-nowrap"> in {card.diff.files} file{card.diff.files === 1 ? "" : "s"}</span>
               {card.diff.pr && (
                 <a href={card.diff.pr} target="_blank" rel="noreferrer" className="cc-pr"><GitPullRequest className="w-3 h-3" />{prLabel(card.diff.pr)}</a>
               )}
             </dd>
           </div>
-          <div className="cc-fact">
+          <div className="cc-fact cc-fact-risk">
             <dt className="cc-label">Risk</dt>
-            <dd><span className={`cc-text-${RISK_TONE[card.risk.class]}`}>{riskLabel(card.risk)}</span><div className="text-sol-text-dim text-[12px]">{card.risk.reason}</div></dd>
+            <dd><span className={`cc-text-${RISK_TONE[card.risk.class]}`}>{riskLabel(card.risk)}</span><div className="cc-fact-sub">{card.risk.reason}</div></dd>
           </div>
           <div className="cc-fact">
             <dt className="cc-label">Cost</dt>
-            <dd>${card.cost.usd.toFixed(2)}<span className="text-sol-text-dim"> · {tokensLabel(card.cost.tokens)} tokens · {card.cost.minutes} min</span></dd>
+            <dd>
+              <span className="cc-nowrap">${card.cost.usd.toFixed(2)}</span>
+              <div className="cc-fact-sub"><span className="cc-nowrap">{tokensLabel(card.cost.tokens)} tokens</span><span className="cc-nowrap cc-sep-before">{card.cost.minutes} min</span></div>
+            </dd>
           </div>
         </dl>
         {showChecks && card.checks.length > 0 && <ul className="cc-checks">{card.checks.map((c) => <CheckRow key={c.name} check={c} />)}</ul>}
@@ -357,14 +400,11 @@ function ChangeCardLine({ card, recommend, change }: { card: ChangeCard; recomme
     <div className="change-card cc-line" data-change-card={card.cause.task}>
       {change && card.change && <div className="cc-line-change" title={card.change}>{card.change}</div>}
       <div className="cc-line-row">
-        <ProofPips card={card} />
-        <span className={summary.stillRed.length || summary.broke.length ? "cc-text-red" : "text-sol-text"} title={summary.label}>{summary.short}</span>
-        <span className="cc-sep">·</span>
-        <span className={checksOk ? "text-sol-text-muted" : "cc-text-red"}>{checksLabel(card.checks)}</span>
-        <span className="cc-sep">·</span>
-        <span><span className="cc-text-green">+{card.diff.added}</span> <span className="cc-text-red">−{card.diff.removed}</span></span>
-        <span className="cc-sep">·</span>
-        <span className={`cc-text-${RISK_TONE[card.risk.class]}`}>{riskLabel(card.risk)}</span>
+        {/* Each item after the first carries its own separator (cc-sep-before),
+            so a wrapped line never starts with one. */}
+        <span className="cc-nowrap inline-flex items-center"><ProofPips card={card} /><span className={summary.stillRed.length || summary.broke.length ? "cc-text-red" : "text-sol-text"} title={summary.label}>{summary.short}</span></span>
+        <span className={`cc-nowrap cc-sep-before ${checksOk ? "text-sol-text-muted" : "cc-text-red"}`}>{checksLabel(card.checks)}</span>
+        <span className={`cc-nowrap cc-sep-before cc-text-${RISK_TONE[card.risk.class]}`}>{riskLabel(card.risk)}</span>
         {recommend && <span className={`cc-line-verdict cc-tone-${tone}`}>recommends {verdictLabel(card.recommend.verdict)}</span>}
       </div>
     </div>
@@ -380,9 +420,27 @@ export function cardAnswerIndexes(decision: Pick<SessionDecisionItem, "card" | "
 }
 
 /**
+ * Whether a window key may reach answer controls: no modifier, no modal, and,
+ * when the surface scoped its keys, focus inside that surface. A card that
+ * shares a window with a transcript answers only while it is the thing in
+ * focus, so a digit typed anywhere else never answers it.
+ */
+export function answerKeyAllowed(e: KeyboardEvent, scope?: RefObject<HTMLElement | null>): boolean {
+  if (e.metaKey || e.ctrlKey || e.altKey || hasOpenModal()) return false;
+  // Shift and a digit belongs to the page (the line jumps stations with it),
+  // even on a layout where that chord still reports a bare digit.
+  if (e.shiftKey && /^(Digit|Numpad)\d$/.test(e.code)) return false;
+  if (!scope) return true;
+  const root = scope.current;
+  return !!root && root.contains(document.activeElement);
+}
+
+/**
  * Keyboard first: the option's digit answers Ship and Drop at once; Revise
  * opens a note, and return sends it. The note travels with the Revise answer,
- * so a gate routes on Revise and hands the note to build.
+ * so a gate routes on Revise and hands the note to build. An advisory card
+ * says the agent already went ahead with its default and stays answerable
+ * after an answer is on record, so a person can still change course.
  */
 export function ChangeCardAnswer({
   decision,
@@ -390,27 +448,40 @@ export function ChangeCardAnswer({
   onAnswer,
   onDismiss,
   keys = false,
+  keyScope,
   size = "full",
+  record,
 }: {
   decision: SessionDecisionItem;
   indexes: Record<ChangeVerdict, number>;
+  /** The answer on record, said in full (cardOutcome's pill), so the bar names who chose it and when. */
+  record?: string;
   onAnswer: (input: DecisionAnswerInput) => void;
   onDismiss?: () => void;
   keys?: boolean;
+  /** Keys live only while focus is inside this element (answerKeyAllowed). */
+  keyScope?: RefObject<HTMLElement | null>;
   size?: "full" | "compact";
 }) {
-  const [noteOpen, setNoteOpen] = useState(false);
-  const [note, setNote] = useState("");
+  // The note and whether it is open live in the decision's draft, so a fold
+  // or a page change never loses a half-written Revise.
+  const [draft, patchDraft] = useDecisionDraft<{ note: string; noteOpen: boolean }>(decision._id);
+  const noteOpen = !!draft.noteOpen;
+  const note = draft.note ?? "";
+  const setNoteOpen = useCallback((open: boolean) => patchDraft({ noteOpen: open }), [patchDraft]);
+  const setNote = useCallback((text: string) => patchDraft({ note: text }), [patchDraft]);
   const [error, setError] = useState(false);
   const noteRef = useRef<HTMLTextAreaElement>(null);
   const recommended = decision.card?.recommend.verdict;
   const why = decision.card?.recommend.why;
-  // An advisory gate's agent went on with its default; that answer is named once, on its button.
-  const proceeding = !decision.blocking && decision.default_option !== undefined
-    ? (Object.keys(indexes) as ChangeVerdict[]).find((v) => indexes[v] === decision.default_option)
-    : undefined;
+  const verdictAt = (i: number | undefined) => (i === undefined ? undefined : (Object.keys(indexes) as ChangeVerdict[]).find((v) => indexes[v] === i));
+  // An advisory ask's agent went on with its default before anyone answered.
+  const pending = decision.status === "pending";
+  const wentAhead = pending && !decision.blocking ? verdictAt(decision.default_option) : undefined;
+  // An answer on record that a new pick replaces (advisoryAnswerOpen).
+  const current = pending ? undefined : verdictAt(decision.answer_index);
 
-  const openNote = useCallback(() => { setNoteOpen(true); setTimeout(() => noteRef.current?.focus(), 0); }, []);
+  const openNote = useCallback(() => { setNoteOpen(true); setTimeout(() => noteRef.current?.focus(), 0); }, [setNoteOpen]);
   const sendRevise = useCallback(() => {
     const t = note.trim();
     if (!t) { setError(true); noteRef.current?.focus(); return; }
@@ -424,7 +495,7 @@ export function ChangeCardAnswer({
   useWatchEffect(() => {
     if (!keys) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey || hasOpenModal()) return;
+      if (!answerKeyAllowed(e, keyScope)) return;
       const target = e.target as HTMLElement | null;
       if (target === noteRef.current) {
         if (e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); setNoteOpen(false); setError(false); }
@@ -434,31 +505,35 @@ export function ChangeCardAnswer({
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable || target.tagName === "SELECT")) return;
       const n = Number(e.key) - 1;
       const verdict = (Object.keys(indexes) as ChangeVerdict[]).find((v) => indexes[v] === n);
-      if (verdict) { e.preventDefault(); e.stopImmediatePropagation(); pick(verdict); return; }
+      if (verdict && verdict !== current) { e.preventDefault(); e.stopImmediatePropagation(); pick(verdict); return; }
       if ((e.key === "x" || e.key === "X") && onDismiss) { e.preventDefault(); e.stopImmediatePropagation(); onDismiss(); }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [keys, indexes, pick, sendRevise, onDismiss]);
+  }, [keys, keyScope, indexes, current, pick, sendRevise, onDismiss, setNoteOpen]);
 
   const compact = size === "compact";
   const order: ChangeVerdict[] = (["ship", "revise", "drop"] as ChangeVerdict[]).sort((a, b) => indexes[a] - indexes[b]);
   return (
     <div className="change-card-answer" data-card-answer>
+      {(wentAhead || current) && (
+        <p className="cc-course" data-cc-course>
+          {wentAhead ? <>The agent went ahead with <span className={`cc-text-${VERDICT_TONE[wentAhead]}`}>{verdictLabel(wentAhead)}</span>. Pick another to change course.</> : <>{record ? `${record}. ` : ""}Pick another to change course.</>}
+        </p>
+      )}
       <div className={`cc-verdicts ${compact ? "is-compact" : ""}`}>
         {order.map((v) => (
           <button
             key={v}
             onClick={() => pick(v)}
+            disabled={current === v}
             data-verdict={v}
-            className={`cc-verdict cc-tone-${VERDICT_TONE[v]} ${recommended === v ? "is-recommended" : ""} ${v === "revise" && noteOpen ? "is-open" : ""}`}
+            className={`cc-verdict cc-tone-${VERDICT_TONE[v]} ${recommended === v && !current ? "is-recommended" : ""} ${current === v ? "is-current" : ""} ${v === "revise" && noteOpen ? "is-open" : ""}`}
             title={decision.options[indexes[v]]?.description}
           >
-            {keys && indexes[v] < 9 && <KeyCap size="xs">{String(indexes[v] + 1)}</KeyCap>}
+            {keys && indexes[v] < 9 && current !== v && <KeyCap size="xs">{String(indexes[v] + 1)}</KeyCap>}
             <span>{verdictLabel(v)}</span>
-            {(recommended === v || proceeding === v) && (
-              <span className="cc-verdict-tag">{[recommended === v && "recommended", proceeding === v && "proceeding"].filter(Boolean).join(", ")}</span>
-            )}
+            {current === v ? <span className="cc-verdict-tag">on record</span> : recommended === v && !current && <span className="cc-verdict-tag">recommended</span>}
           </button>
         ))}
         {onDismiss && (
@@ -467,7 +542,7 @@ export function ChangeCardAnswer({
           </button>
         )}
       </div>
-      {recommended && why && !noteOpen && size !== "compact" && (
+      {recommended && why && !noteOpen && !current && size !== "compact" && (
         <p className={`cc-why cc-tone-${VERDICT_TONE[recommended]}`}><span className="cc-why-verdict">Why {verdictLabel(recommended)}:</span> {why}</p>
       )}
       {noteOpen && (
