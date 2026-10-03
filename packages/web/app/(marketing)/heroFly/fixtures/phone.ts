@@ -11,33 +11,35 @@
  */
 
 import type { EntityFixture } from "@/lib/entityDisplay";
-import type { ToolCall, ToolResult } from "@/components/conversation/types";
 import { WORKERS } from "./fanout";
-import { PEOPLE, SESSIONS } from "./story";
+import { OBJECTS, PEOPLE, SESSIONS } from "./story";
 
 export const entities: Record<string, EntityFixture> = {};
 
 /** The worker's question: the reason the session needs input. */
-export const ASK = "Should a 410 Gone count as failed? I'd retry 5xx and timeouts only.";
+export const ASK = "Should a 410 Gone count as failed? I'd retry 5xx, 429 and timeouts only.";
 
 /** Alex's answer from the phone, short enough to stay on one line of the app's composer. */
 export const STEER = "Agreed. Log 410s, never retry.";
 
-/** The worker's reply as it carries on, streamed word by word. */
-export const REPLY = "Got it: 5xx and timeouts retry with backoff, a 410 is logged once and dropped. Running the tests.";
+/** The worker's reply as it carries on, streamed word by word: two lines on the phone, so the question it answers stays whole above it with the keyboard up. */
+export const REPLY = "Got it: 410s logged once, never retried. Running the tests.";
 
-/** The run the reply starts. */
-export const TEST_CALL: ToolCall = { id: "hero-tool-api-test", name: "Bash", input: JSON.stringify({ command: "npm test --workspace packages/api" }) };
-export const TEST_RESULT: ToolResult = { tool_use_id: TEST_CALL.id, content: "Tests  214 passed (214)\nTime   4.12s" };
 
 /** The person on the phone, as the app's transcript names them. */
 export const ME = PEOPLE.me.name;
 
-/** The worker's session as the phone's header and strip show it. No branch: at a phone's width its chip would run off the strip's edge (the app's strip scrolls sideways and clips it there). */
+/**
+ * The worker's session as the phone's header and strip show it: Alex's own
+ * session (so the model chip opens the switcher), running on the cloud host,
+ * spawned by the lead (Parent). The app's strip scrolls sideways, so the
+ * chips past the screen's edge are clipped there.
+ */
 export const PHONE_SESSION = {
   title: SESSIONS.api.title,
   agent: SESSIONS.api.agent,
   model: WORKERS.api.model,
+  assignment: { device: { name: OBJECTS.hosts.cloud, remote: true, online: true }, owner: PEOPLE.me.name },
 } as const;
 
 /** What the worker had done before the question, oldest first: the task the lead handed it (the spawn's prompt, which the app shows as Alex's own message, since the lead runs as Alex), its plan, and its first two calls (fixtures/fanout.ts). */

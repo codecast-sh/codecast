@@ -7,9 +7,7 @@ import { overlayConversationId } from "../../store/workspace";
 import {
   animatedHideSession,
   type HideSessionOpts,
-  undoableDeferSession,
   animatedSetSessionRest,
-  undoablePinSession,
 } from "../../store/undoActions";
 import { useTriggerKillNotice } from "../../hooks/useTriggerKillNotice";
 import { checkMilestone } from "../../tips/useTips";
@@ -65,7 +63,7 @@ export function useTriageActions(isOnInboxPage: boolean) {
     const ordered = store.visualOrder();
     const idx = ordered.findIndex((s) => s._id === id);
     const next = ordered[idx + 1] ?? ordered.find((s) => s._id !== id);
-    if (verb === "defer") undoableDeferSession(id);
+    if (verb === "defer") store.deferSession(id);
     else animatedSetSessionRest(id, verb);
     if (!closeOverlayIfCurrent(id) && next) {
       if (isOnInboxPage) store.setCurrentSession(next._id);
@@ -77,7 +75,7 @@ export function useTriageActions(isOnInboxPage: boolean) {
   const pin = useCallback((id: string) => {
     const session = useInboxStore.getState().sessions[id];
     if (session && !session.is_pinned) checkMilestone("m-first-pin");
-    undoablePinSession(id);
+    useInboxStore.getState().pinSession(id);
   }, []);
 
   const label = useCallback((id: string) => {

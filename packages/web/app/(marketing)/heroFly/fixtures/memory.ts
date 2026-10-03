@@ -14,16 +14,16 @@ import type { SessionBlameRange } from "@/lib/repoView";
 import { readyAt } from "../world";
 import { DAY, HOUR, OBJECTS, PEOPLE, SESSIONS } from "./story";
 
-/** Film-time cues inside the chapter (palette hold 75.8 to 77.9, blame 79.6 to 81.3). */
+/** Film-time cues inside the chapter (palette hold 75.8 to 77.9, blame 79.6 to 81.0). */
 export const MEMORY = {
   /** The palette is open on its recent sessions before its surface turns face-up. */
   palette: readyAt("palette"),
   query: "webhook retry",
   typeAt: 76.0,
   typeRate: 13,
-  /** While the camera faces the palette, a row may be selected (see PaletteSearch). */
+  /** While the palette is on screen, a row may be selected (see PaletteSearch): from as it arrives (cmdk has already picked its first row) until the blame's hold, by which time the palette has left, so the highlight never switches off in view. */
   selectFrom: 75.6,
-  selectTo: 78.2,
+  selectTo: 79.6,
   /** The file is open before its surface turns face-up. */
   blame: readyAt("blame"),
   focus: 79.9,
@@ -57,7 +57,7 @@ export const FILE = {
   path: OBJECTS.blame.file,
   line: OBJECTS.blame.line,
   /** The first line in view: the camera reads the lines around 42. */
-  top: 33,
+  top: 27,
   content: [
     'import { ledger } from "./ledger";',
     'import { deadLetter, enqueue, toFailure } from "./queue";',

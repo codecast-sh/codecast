@@ -3,14 +3,14 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { batchSet, previousRunSet } from '../commands/check';
+import { batchSet, pooledRuns, previousRuns, previousRunSet } from '../commands/verdict';
 import { rescoreRun } from '../commands/grade';
 import { runSnapshot } from '../commands/snapshot';
 import type { SurfaceRun } from './runs';
 import { surfaceMeta } from '../registry';
 import { servedReadKey } from '../served';
 import type { AgentResult, CallResult } from '../surface';
-import { assertAnswered, harnessFailure, loopTurnsOf, outsideWorldCommands, readAgentRun } from './dryRun';
+import { assertAnswered, filesWrittenOf, harnessFailure, loopTurnsOf, outsideWorldCommands, readAgentRun } from './dryRun';
 import { dominantModel, routeGates, scoreOf } from './replay';
 
 const call = (over: Partial<CallResult> = {}): CallResult => ({
@@ -120,6 +120,13 @@ describe('a run that left its world', () => {
     result('t4', 'SERVED'),
   ].map((e) => JSON.stringify(e)).join('\n');
 
+  test('the files a turn wrote: write tools and shell redirects, never a read', () => {
+    const tool = (name: string, input: Record<string, string>) => JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: name, name, input }] } });
+    const turn = [tool('Write', { file_path: '/r/.claude/projects/p/memory/fern-role.md', content: 'x' }), tool('Read', { file_path: '/r/memory/MEMORY.md' }), tool('Edit', { file_path: '/r/CLAUDE.md' }), tool('Bash', { command: 'echo hi >> notes/today.md && cat a | tee -a log.txt' })].join('\n');
+    expect(filesWrittenOf(turn)).toEqual(['/r/.claude/projects/p/memory/fern-role.md', '/r/CLAUDE.md', 'notes/today.md', 'log.txt']);
+    expect(filesWrittenOf(stream)).toEqual(['/tmp/i.json']);
+  });
+
   test("names each command the real CLI answered signed out, and not a file that quotes the words", () => {
     expect(outsideWorldCommands(stream)).toEqual(['cast org inputs --team "Union" --json > /tmp/i.json; echo $?', '~/.codecast/bin/cast read jx7 2>&1 | head']);
     expect(outsideWorldCommands(JSON.stringify(use('a', 'cast brief')) + '\n' + JSON.stringify(result('a', 'Brief: steady')))).toEqual([]);
@@ -198,7 +205,7 @@ describe('rescore', () => {
 });
 
 describe('the previous run set', () => {
-  const run = (freezeId: string, batch: string, status = 'pass'): SurfaceRun => ({ id: `${freezeId}-${batch}`, scenario: 's', title: 't', seed: 1, startedAt: batch, createdAt: batch, status: status as SurfaceRun['status'], score: 1, gatesFailed: [], missedFloors: [], sends: 0, costUsd: 0, realMs: 0, virtualMs: 0, freezeId, batch, liveReads: 0 });
+  const run = (freezeId: string, batch: string, status = 'pass'): SurfaceRun => ({ id: `${freezeId}-${batch}`, scenario: 's', title: 't', seed: 1, startedAt: batch, createdAt: batch, status: status as SurfaceRun['status'], score: 1, gatesFailed: [], missedFloors: [], sends: 0, costUsd: 0, realMs: 0, virtualMs: 0, freezeId, batch, cadence: null, liveReads: 0 });
 
   test("is each freeze's newest other batch, so a later run of one freeze hides no other freeze's set", () => {
     const history = [run('a', 'b1'), run('b', 'b1'), run('a', 'b2'), run('a', 'b3', 'dry'), run('b', 'b2', 'unscored'), run('a', 'now')];
@@ -210,5 +217,39 @@ describe('the previous run set', () => {
     const history = [{ ...run('a', 'b1'), id: 'rerun' }, { ...run('a', 'b1', 'crash'), id: 'crash' }, { ...run('a', 'b1', 'unscored'), id: 'stop', seed: 2 }];
     expect(batchSet(history, 'b1').map((r) => r.id)).toEqual(['rerun']);
     expect(previousRunSet(history, 'now').map((r) => r.id)).toEqual(['rerun']);
+  });
+
+  test('a batch whose reps on a freeze all crashed graded nothing there, so the comparison falls back to the newest batch that did', () => {
+    // The 2026-10-02 opus union-base8 shape: every rep of the newest batch a crash after rescore, an older batch scored.
+    const history = [{ ...run('a', 'b2', 'crash'), id: 'c1' }, { ...run('a', 'b2', 'crash'), id: 'c2', seed: 2 }, run('a', 'b1'), run('b', 'b2')];
+    expect(previousRunSet(history, 'now').map((r) => r.id).sort()).toEqual(['a-b1', 'b-b2']);
+  });
+
+  test('a batch on another model is passed over and named, so a fallback never weighs the model as the prompt', () => {
+    // The union-base8 shape of 2026-10-03: the opus baseline's newest other batch on that freeze ran on sonnet.
+    const history = [{ ...run('a', 'now'), model: 'opus' }, { ...run('a', 'b2'), model: 'sonnet' }, { ...run('a', 'b1'), model: 'opus' }];
+    const prev = previousRuns(history, 'now', () => null);
+    expect(prev.set.map((r) => r.id)).toEqual(['a-b1']);
+    expect(prev.skipped).toEqual([{ batch: 'b2', freezeId: 'a', why: 'model' }]);
+  });
+
+  test('a batch judged on another ruler is passed over until it is rejudged onto the current one', () => {
+    const history = [run('a', 'now'), run('a', 'b2'), run('a', 'b1'), run('b', 'now'), run('b', 'b2')];
+    const ruler = (r: SurfaceRun) => (r.batch === 'b2' && r.freezeId === 'a' ? 'old' : 'new');
+    const prev = previousRuns(history, 'now', ruler);
+    expect(prev.set.map((r) => r.id).sort()).toEqual(['a-b1', 'b-b2']);
+    expect(prev.skipped).toEqual([{ batch: 'b2', freezeId: 'a', why: 'judge' }]);
+    // Once b2 is rejudged its ruler matches, and it is the baseline again.
+    expect(previousRunSet(history, 'now', () => 'new').map((r) => r.id).sort()).toEqual(['a-b2', 'b-b2']);
+  });
+
+  test("a cadence batch pools its own cadence's newest n batches per freeze, and no other run joins", () => {
+    const nightly = (freezeId: string, batch: string, status = 'pass') => ({ ...run(freezeId, batch, status), cadence: 'nightly' });
+    // Newest first. 'ablation' carries no cadence (its notes may say anything), n4 crashed on a, b skipped n2.
+    const history = [nightly('a', 'now'), nightly('b', 'now'), run('a', 'ablation'), { ...nightly('a', 'n4', 'crash') }, nightly('a', 'n3'), nightly('b', 'n3'), nightly('a', 'n2'), nightly('a', 'n1'), nightly('b', 'n1'), nightly('a', 'n0')];
+    const pooled = pooledRuns(history, 'now', 'nightly', 3, () => null);
+    expect(pooled.set.map((r) => r.id).sort()).toEqual(['a-n1', 'a-n2', 'a-n3', 'b-n1', 'b-n3']);
+    expect(pooled.batches).toEqual(['n1', 'n2', 'n3']);
+    expect(pooledRuns(history, 'now', 'weekly', 3, () => null).set).toEqual([]);
   });
 });

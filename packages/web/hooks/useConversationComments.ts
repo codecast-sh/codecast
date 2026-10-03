@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from "react";
-import { useQuery } from "convex/react";
+import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -20,12 +20,12 @@ export function useConversationCommentsSync(conversationId: string | undefined):
   const canQuery = !!conversationId && isConvexId(conversationId);
   const syncTable = useInboxStore((s) => s.syncTable);
 
-  const raw = useQuery(
+  const raw = useQueryNoThrow(
     api.comments.getConversationCommentSummary,
     canQuery
       ? { conversation_id: conversationId as Id<"conversations"> }
       : "skip",
-  );
+  ).data;
   useConvexSync(raw, useCallback((data: any) => {
     syncTable("comments", data ?? []);
   }, [syncTable]));

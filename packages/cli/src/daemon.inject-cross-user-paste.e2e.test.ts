@@ -12,9 +12,9 @@
 //   deliver  injectViaTmux with the row's delivery identity and a receipt
 //            journal, retried on the same identity the way the delivery loop
 //            retries AGENT_STDIN_NOT_READY / INJECT_UNVERIFIED.
-//   ack      every user turn the real client wrote to its transcript goes
-//            through findEchoedPendingMessage + markPendingDelivered, the
-//            content-matched ack inside addMessages.
+//   ack      every user turn the real client wrote to its transcript is
+//            redacted and acked the way addMessages acks it: pendingRowsForEcho,
+//            findEchoedPendingMessage, then settleEchoedPending.
 // `yes` processes load every core for the whole delivery. The client talks to
 // a fake model endpoint (no model call is made): "idle" ends every turn at
 // once, "busy" holds a turn open so the paste lands mid-turn and Claude queues
@@ -22,8 +22,9 @@
 // machine's own sessions use. The pane starts with the machine's cached remote
 // flags, so the paste is wrapped in <pasted_content> as on a real client.
 //
-// Self-skips without tmux or a claude binary, like the other real-client
-// suites (daemon.inject-double-paste.test.ts).
+// It loads every core for minutes, so it runs only when asked for
+// (CODECAST_PASTE_E2E=1), and it also skips without tmux or a claude binary,
+// like the other real-client suites (daemon.inject-double-paste.test.ts).
 import { killIsolatedTmuxServer } from "./test-helpers/isolatedTmuxServer.js";
 import { afterAll, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
@@ -33,6 +34,7 @@ import { join } from "node:path";
 import { injectViaTmux, setSyncServiceForTests } from "./daemon.js";
 import { TmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
 import { cpuLoad } from "./test-helpers/cpuLoad.js";
+import { machinePasteWrapperOn } from "./test-helpers/claudeFeatureCache.js";
 import { loadScaledMs } from "./test-helpers/machineLoad.js";
 import {
   hasBinary,
@@ -46,13 +48,14 @@ import type { SyncService } from "./syncService.js";
 import { makeFakeDb } from "../../convex/convex/testDb";
 import {
   claimPendingMessageForDaemon,
-  markPendingDelivered,
   performSessionSend,
   updatePendingMessageStatusForDaemon,
 } from "../../convex/convex/pendingMessages";
-import { findEchoedPendingMessage } from "../../convex/convex/messages";
+import { findEchoedPendingMessage, pendingRowsForEcho, settleEchoedPending } from "../../convex/convex/messages";
+import { redactSecrets } from "../../convex/convex/redact";
 
-const CAN_RUN = hasBinary("tmux") && hasBinary("claude");
+const CAN_RUN = process.env.CODECAST_PASTE_E2E === "1" && hasBinary("tmux") && hasBinary("claude");
+const WRAPPED = machinePasteWrapperOn();
 const TEST_TIMEOUT_MS = loadScaledMs(300_000, 3);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -89,14 +92,13 @@ function teammateNotes(marker: string): string {
   return lines.join("\n");
 }
 
-// The content-matched ack in addMessages, one transcript turn at a time:
-// match, mark delivered, tie the row to its echo.
-async function ackEcho(ctx: any, db: any, content: string, echoId: string): Promise<string | null> {
-  const rows: any[] = db._tables.pending_messages.filter((r: any) => r.conversation_id === "convAda");
-  const row = findEchoedPendingMessage(rows, content, Date.now());
+// The content-matched ack in addMessages, one transcript turn at a time, on
+// the same redacted text and through the same steps.
+async function ackEcho(ctx: any, content: string, echoId: string): Promise<string | null> {
+  const rows = await pendingRowsForEcho(ctx, "convAda" as any);
+  const row = findEchoedPendingMessage(rows, redactSecrets(content), Date.now());
   if (!row) return null;
-  await markPendingDelivered(ctx, row);
-  await ctx.db.patch(row._id, { echo_message_id: echoId });
+  await settleEchoedPending(ctx, row, echoId as any);
   return row._id;
 }
 
@@ -176,12 +178,16 @@ describe.skipIf(!CAN_RUN)("a teammate's long paste into a live claude pane under
 
       const turns = pane.userMessages();
       let acks = 0;
-      for (const [i, turn] of turns.entries()) if (await ackEcho(ctx, db, turn, `echo-${i}`) === row._id) acks++;
+      for (const [i, turn] of turns.entries()) if (await ackEcho(ctx, turn, `echo-${i}`) === row._id) acks++;
       const receipt = journal.get(row._id);
       const wrappers = (withMarker()[0]?.match(/<pasted_content/g) ?? []).length;
       console.log(`[xuser-paste] mode=${mode} renderer=${renderer} attempts=${errors.length + 1} errors=${JSON.stringify(errors)} chips=${JSON.stringify([...chips])} turns=${turns.length} withMarker=${withMarker().length} wrappers=${wrappers} acks=${acks} receipt=${receipt?.phase}`);
 
       expect(withMarker()).toHaveLength(1);
+      // One wrapper when this machine's flags turn it on (a split paste shows
+      // as more than one in the turn, a lost wrapper as none), none otherwise.
+      if (!WRAPPED) console.log("[xuser-paste] this machine's cached flags leave the paste wrapper off; expecting no <pasted_content>");
+      expect(wrappers).toBe(WRAPPED ? 1 : 0);
       expect(acks).toBe(1);
       expect((await db.get(row._id)).status).toBe("delivered");
       expect(receipt?.phase).toBe("verified");
@@ -196,7 +202,9 @@ describe.skipIf(!CAN_RUN)("a teammate's long paste into a live claude pane under
       watching = false;
       await watcher;
       expect(withMarker()).toHaveLength(1);
-      expect(chips.size).toBeLessThanOrEqual(1);
+      // A paste over 2KB always shows a chip; exactly one means it neither
+      // split nor went unseen.
+      expect(chips.size).toBe(1);
     } finally {
       watching = false;
       load.off();

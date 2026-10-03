@@ -11,7 +11,7 @@
 // cursor only advances within a session.
 
 import { useCallback, useMemo, useRef, useState } from "react";
-import { useQuery } from "convex/react";
+import { useQueryNoThrow } from "./useQueryNoThrow";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
@@ -35,10 +35,10 @@ export function useSyncCapabilityStateWithArgs(wsArgs: WorkspaceArgs) {
     lastSeen.current = undefined;
   }
 
-  const result = useQuery(
+  const result = useQueryNoThrow(
     api.capabilityState.webList,
     wsArgs === "skip" ? "skip" : { ...(cursor !== undefined ? { since: cursor } : {}) },
-  );
+  ).data;
 
   const data = useMemo(() => {
     if (result === undefined) return undefined;
@@ -109,10 +109,10 @@ export function useSyncCapabilityBindingsWithArgs(wsArgs: WorkspaceArgs) {
     lastSeen.current = undefined;
   }
 
-  const result = useQuery(
+  const result = useQueryNoThrow(
     api.capabilityBindings.webListBindings,
     wsArgs === "skip" ? "skip" : { ...(cursor !== undefined ? { since: cursor } : {}) },
-  );
+  ).data;
   const data = useMemo(() => (result === undefined ? undefined : { items: result.items ?? [] }), [result]);
 
   useConvexSync(

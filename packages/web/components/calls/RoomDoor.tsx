@@ -8,7 +8,12 @@ import { admitKnock } from "../../lib/calls/callManager";
 import { useRoomLock } from "../../hooks/useLiveRooms";
 import { firstName } from "./speakers";
 import { GuestTag } from "./GuestTag";
-import { useGuestDoor } from "../../hooks/useGuestDoor";
+import { admitGuest, denyGuest } from "../../lib/calls/guestDoorActions";
+
+/** Whose link brought a guest, as the door says it. */
+function linkOf(k: RoomKnock): string {
+  return k.link_mine ? "your link" : `${firstName(k.link_by)}'s link`;
+}
 
 // The door of the room you are IN: the lock that turns an open room private,
 // and the people knocking to be let into it. Both live in the dock and the
@@ -43,8 +48,11 @@ export function RoomLockButton({ roomKey }: { roomKey: string }) {
  *  not a queue. Admit rings a teammate in: the accepted ring is their grant,
  *  so the room stays locked to everyone else. A guest (a stranger on a link)
  *  is let in with callGuests.admitGuest instead, under the name the door is
- *  showing, and may be turned away; a guest's knock wears the guest mark, and
- *  a link that keeps bringing people the room turned away offers to close. */
+ *  showing, and may be turned away; a guest's knock wears the guest mark and
+ *  says whose link brought them, and a link that keeps bringing people the
+ *  room turned away offers to close. A guest's answer is a store action
+ *  (lib/calls/guestDoorActions): the knock leaves this list, the toast and
+ *  every other window's door in the frame it is pressed. */
 export function RoomKnocks({ roomKey }: { roomKey: string }) {
   const s = useTrackedStore([
     // created_at is part of the signature, not decoration: a re-knock PATCHES
@@ -55,26 +63,18 @@ export function RoomKnocks({ roomKey }: { roomKey: string }) {
     // knock, and Admit must carry the name the door shows.
     (st: any) =>
       (st.roomKnocks ?? [])
-        .map((k: RoomKnock) => `${k.from_user}:${k.created_at}:${k.from_name}:${k.can_answer === false ? 0 : 1}:${k.link_turned_away ?? 0}`)
+        .map((k: RoomKnock) => `${k.from_user}:${k.created_at}:${k.from_name}:${k.can_answer === false ? 0 : 1}:${k.link_turned_away ?? 0}:${k.link_by ?? ""}`)
         .join("|"),
   ]);
   const knocks: RoomKnock[] = s.roomKnocks ?? [];
-  const door = useGuestDoor();
-  // An answered knocker's row stays in the query until their knock expires or
-  // they walk in, so remember WHEN we answered them and hide the row until a
-  // newer knock outranks it — an impatient second click must not ring someone
-  // twice, and a genuine second knock must still be visible. A guest's answer
-  // that failed (the link closed, they changed their name) brings the row
-  // back, so the room sees them again rather than a door gone quiet.
-  const [answered, setAnswered] = useState<Record<string, number>>({});
-  const answer = (k: RoomKnock) => setAnswered((prev) => ({ ...prev, [String(k.from_user)]: k.created_at }));
-  const unanswer = (k: RoomKnock) =>
-    setAnswered((prev) => {
-      const { [String(k.from_user)]: _gone, ...rest } = prev;
-      return rest;
-    });
-
-  const waiting = knocks.filter((k) => (answered[String(k.from_user)] ?? 0) < k.created_at);
+  // A teammate's knock is answered with a ring (callManager.admitKnock), and
+  // their row stays in the query until the knock expires or they walk in, so
+  // remember WHEN we rang them and hide the row until a newer knock outranks
+  // it: an impatient second click must not ring someone twice, and a genuine
+  // second knock must still be visible. A guest's answer needs none of this:
+  // it leaves the store's list itself.
+  const [rang, setRang] = useState<Record<string, number>>({});
+  const waiting = knocks.filter((k) => k.kind === "guest" || (rang[String(k.from_user)] ?? 0) < k.created_at);
 
   // Somebody arriving at the door is a moment, and it was a silent one: this
   // appeared as a coloured row and nothing else, so a person hosting a locked
@@ -113,17 +113,23 @@ export function RoomKnocks({ roomKey }: { roomKey: string }) {
                 />
               </span>
               <span className="flex min-w-0 flex-1 items-center gap-1.5 text-[11px] text-sol-text-muted">
-                <span className="min-w-0 truncate" title={guest ? `${k.from_name}, a guest from outside the team` : undefined}>
+                <span
+                  className="min-w-0 truncate"
+                  title={guest ? `${k.from_name}, a guest from outside the team${k.link_by ? `, on ${linkOf(k)}` : ""}` : undefined}
+                >
                   {name} {canAnswer ? "wants to join" : "is waiting"}
                 </span>
                 {guest && <GuestTag />}
+                {/* Whose link: with several out, an expected guest and a
+                    link that got away look the same otherwise. It gives up
+                    its width first: on a narrow door (the stage's corner)
+                    who is asking matters more than whose link they hold,
+                    which the name's title still carries. */}
+                {guest && k.link_by && <span className="min-w-0 shrink-[999] truncate text-sol-text-dim">· via {linkOf(k)}</span>}
               </span>
               {canAnswer && guest && (
                 <button
-                  onClick={() => {
-                    answer(k);
-                    void door.deny(k.guest_id!).then((r) => r === null && unanswer(k));
-                  }}
+                  onClick={() => denyGuest(k.guest_id!)}
                   className="shrink-0 rounded px-1.5 py-0.5 text-[11px] text-sol-text-muted transition-colors hover:bg-sol-bg-highlight hover:text-sol-text"
                   aria-label={`Turn ${name} away`}
                   title="Not now. They can ask again in a minute"
@@ -134,9 +140,9 @@ export function RoomKnocks({ roomKey }: { roomKey: string }) {
               {canAnswer && (
                 <button
                   onClick={() => {
-                    answer(k);
-                    if (guest) void door.admit(k.guest_id!, k.from_name).then((r) => r === null && unanswer(k));
-                    else void admitKnock(roomKey, String(k.from_user));
+                    if (guest) return admitGuest(k.guest_id!, k.from_name);
+                    setRang((prev) => ({ ...prev, [String(k.from_user)]: k.created_at }));
+                    void admitKnock(roomKey, String(k.from_user));
                   }}
                   className={`shrink-0 rounded px-2 py-0.5 text-[11px] font-medium transition-colors ${
                     guest
@@ -157,10 +163,7 @@ export function RoomKnocks({ roomKey }: { roomKey: string }) {
                   {k.link_turned_away} turned away from this link already
                 </span>
                 <button
-                  onClick={() => {
-                    answer(k);
-                    void door.deny(k.guest_id!, { revokeLink: true }).then((r) => r === null && unanswer(k));
-                  }}
+                  onClick={() => denyGuest(k.guest_id!, { revokeLink: true })}
                   className="shrink-0 rounded px-1.5 py-0.5 transition-colors hover:bg-sol-red/10 hover:text-sol-red"
                   title="Turn them away and turn the link off, so nobody new can use it"
                 >

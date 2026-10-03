@@ -23,7 +23,7 @@ export const TeamSwitcherButton = forwardRef<
   ButtonHTMLAttributes<HTMLButtonElement> & { team?: { icon?: string; icon_color?: string } | null; label: string }
 >(function TeamSwitcherButton({ team, label, ...props }, ref) {
   return (
-    <button ref={ref} {...props} className="flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-sol-base02/50 transition-colors text-sm">
+    <button ref={ref} {...props} className="flex h-7 items-center gap-1.5 pl-1 pr-1.5 rounded-md text-sm transition-colors hover:bg-sol-bg-alt data-[state=open]:bg-sol-bg-alt">
       {team ? (
         <TeamCrest icon={team.icon} color={team.icon_color} size="sm" className="w-5 h-5 rounded" />
       ) : (

@@ -11,8 +11,11 @@ import {
   undoGroup,
   withoutUndo,
   rekeyUndoIds,
+  redoTo,
+  undoEntry,
+  undoTo,
 } from "./undoStack";
-import type { OutboxEntry, PlatformConfig, UndoConfig, UndoEntry } from "./types";
+import type { CellChange, OutboxEntry, PlatformConfig, UndoConfig, UndoEntry } from "./types";
 
 // The generic undo, end to end through the middleware: an action with a spec
 // records the cells it changed, undo replays the before values through the
@@ -28,6 +31,12 @@ const REGISTRY: PlatformConfig["registry"] = {
     localFirst: true,
     dispatchTable: { table: "item_rows", kind: "collection" },
     unprotectedFields: ["comments"],
+  },
+  // A second copy of the same server rows (codecast's sessions and conversations).
+  twins: {
+    persistence: { kind: "collection", key: "twins" },
+    localFirst: true,
+    dispatchTable: { table: "item_rows", kind: "collection" },
   },
   // Off the patch rail: undo reaches the server through a writer.
   docs: { persistence: { kind: "collection", key: "docs" }, localFirst: true },
@@ -59,14 +68,36 @@ function undoConfig(calls: Calls, over: Partial<UndoConfig> = {}): UndoConfig {
     restoreView: (_draft, field, value) => calls.restoreView.push([field, value]),
     specs: {
       rename: { label: (ctx) => `Renamed to ${ctx.args[1]}` },
+      // Confirms only the direction that needs it, asked when recorded.
+      retitle: { label: (ctx) => `Retitled to ${ctx.args[1]}`, confirm: (ctx) => ctx.args[1] === "secret" },
       renameBoth: { label: label("Both") },
       setTwo: { label: label("Set two") },
       defer: { label: label("Deferred") },
+      deferTwin: { label: label("Deferred twin") },
       addItem: { label: label("Added") },
       drop: { label: label("Dropped") },
       toggleMark: { label: label("Marked") },
       setStatus: { label: label("Status") },
       toggleFav: { label: label("Favorite") },
+      favBoth: { label: label("Favorited two") },
+      // One restore per row the changes name, so a partial undo narrows it.
+      stashBoth: {
+        label: label("Stashed two"),
+        inverse: (ctx) =>
+          [...new Set(ctx.changes.filter((c) => c.store === "items").map((c) => c.id))].map((id) => ({
+            action: "restore",
+            args: [id],
+            runDraft: false,
+          })),
+      },
+      // The same gesture with its ids read from the args: it cannot narrow.
+      stashPair: {
+        label: label("Stashed pair"),
+        inverse: (ctx) => [
+          { action: "restore", args: [ctx.args[0]], runDraft: false },
+          { action: "restore", args: [ctx.args[1]], runDraft: false },
+        ],
+      },
       note: { label: label("Note") },
       setComments: { label: label("Comments") },
       open: { label: label("Opened"), restoreView: true },
@@ -91,7 +122,7 @@ function undoConfig(calls: Calls, over: Partial<UndoConfig> = {}): UndoConfig {
   };
 }
 
-function makeStore(opts: { undo?: UndoConfig | null; viewDeclared?: () => boolean } = {}) {
+function makeStore(opts: { undo?: UndoConfig | null; viewDeclared?: () => boolean; extra?: Record<string, any>; optionalClearFields?: ReadonlySet<string> } = {}) {
   const calls: Calls = { beforeReplay: [], afterReplay: [], restoreView: [] };
   const config: PlatformConfig = {
     dbName: "test",
@@ -103,6 +134,7 @@ function makeStore(opts: { undo?: UndoConfig | null; viewDeclared?: () => boolea
       audit: (changes) => (opts.viewDeclared?.() ?? true ? [] : changes.map((c) => c.field)),
     },
     ...(opts.undo === null ? {} : { undo: opts.undo ?? undoConfig(calls) }),
+    ...(opts.optionalClearFields ? { optionalClearFields: opts.optionalClearFields } : {}),
   };
   let state: any;
   const set = (next: any) => { state = next; };
@@ -112,6 +144,7 @@ function makeStore(opts: { undo?: UndoConfig | null; viewDeclared?: () => boolea
   const wrapped = mutativeMiddleware(
     () => ({
       items: {} as Record<string, any>,
+      twins: {} as Record<string, any>,
       docs: {} as Record<string, any>,
       notes: {} as Record<string, any>,
       favorites: [] as any[],
@@ -128,6 +161,9 @@ function makeStore(opts: { undo?: UndoConfig | null; viewDeclared?: () => boolea
       seed: action(function (this: any, id: string, row: any) {
         this.items[id] = { _id: id, ...row };
       }),
+      retitle: action(function (this: any, id: string, title: string) {
+        this.items[id].title = title;
+      }),
       rename: action(function (this: any, id: string, title: string) {
         this.items[id].title = title;
         this.items[id].updated_at = now();
@@ -139,6 +175,10 @@ function makeStore(opts: { undo?: UndoConfig | null; viewDeclared?: () => boolea
       defer: action(function (this: any, id: string) {
         this.items[id].deferred_at = 5;
         this.items[id].snoozed_until = null;
+      }),
+      deferTwin: action(function (this: any, id: string) {
+        this.items[id].deferred_at = 5;
+        this.twins[id].deferred_at = 5;
       }),
       addItem: action(function (this: any, id: string) {
         this.items[id] = { _id: id, title: "new" };
@@ -159,6 +199,20 @@ function makeStore(opts: { undo?: UndoConfig | null; viewDeclared?: () => boolea
         this.items[id].is_favorite = on;
         if (on) this.favorites.push({ _id: id });
         else this.favorites = this.favorites.filter((f: any) => f._id !== id);
+      }),
+      favBoth: action(function (this: any, a: string, b: string) {
+        for (const id of [a, b]) {
+          this.items[id].is_favorite = true;
+          this.favorites.push({ _id: id });
+        }
+      }),
+      stashBoth: action(function (this: any, a: string, b: string) {
+        this.items[a].hidden_at = 7;
+        this.items[b].hidden_at = 7;
+      }),
+      stashPair: action(function (this: any, a: string, b: string) {
+        this.items[a].hidden_at = 7;
+        this.items[b].hidden_at = 7;
       }),
       note: action(function (this: any, id: string, text: string) {
         this.notes[id] = text;
@@ -214,6 +268,7 @@ function makeStore(opts: { undo?: UndoConfig | null; viewDeclared?: () => boolea
         this.items[id].title = "planted";
         this.pending[`notes:${id}`] = { type: "exclude", ts: 42 };
       }),
+      ...(opts.extra ?? {}),
     }),
     config,
     { retryDelays: [], storageWatchdogMs: 50_000 },
@@ -291,6 +346,20 @@ describe("capture", () => {
     expect(top().objects).toEqual([{ store: "items", id: A }]);
     expect(top().outboxIds).toHaveLength(1);
     expect(top().mode).toBe("generic");
+  });
+
+  it("asks a function confirm once at record time, so one spec confirms only one direction", () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "old" });
+    h.wrapped.retitle(A, "secret");
+    expect(top().confirm).toBe(true);
+    performUndo();
+    expect(h.state.items[A].title).toBe("secret");
+    expect(notices).toHaveLength(1);
+    h.wrapped.retitle(A, "plain");
+    expect(top().confirm).toBeUndefined();
+    performUndo();
+    expect(h.state.items[A].title).toBe("secret");
   });
 
   it("records a row add and a row remove as whole-row cells", () => {
@@ -492,6 +561,46 @@ describe("replay mechanics", () => {
     expect(lastDispatch(h, "applyUndoPatches")).toBeUndefined();
   });
 
+  it("a writer's clears spell an unset before value the way the server stores the clear", () => {
+    const calls: Calls = { beforeReplay: [], afterReplay: [], restoreView: [] };
+    const base = undoConfig(calls);
+    const h = makeStore({
+      undo: undoConfig(calls, {
+        writers: { docs: { ...base.writers!.docs!, clears: { labels: [] } } },
+      }),
+    });
+    h.setState({ docs: { [A]: { _id: A, title: "Doc" } } });
+    h.wrapped.editDoc(A, { labels: ["y"] });
+    performUndo();
+    // The row holds the server's spelling of the clear, the writer sends it,
+    // and the lock asserts it, so the echo of the clear retires the lock.
+    expect(h.state.docs[A].labels).toEqual([]);
+    expect(lastDispatch(h, "saveDoc")!.args).toEqual([A, { labels: [] }]);
+    expect(h.state.pending[`docs:${A}:labels`]).toMatchObject({ type: "field", value: [] });
+    // Redo finds the row where the undo left it.
+    expect(performRedo()).toBe(true);
+    expect(h.state.docs[A].labels).toEqual(["y"]);
+  });
+
+  it("a spec's spell writes a restored value the way its inverse's server half stores it", () => {
+    const calls: Calls = { beforeReplay: [], afterReplay: [], restoreView: [] };
+    const base = undoConfig(calls);
+    // The server's restore stamps hidden_at null on a row that never had it.
+    const spell = (cells: CellChange[]) =>
+      cells.map((c) => (c.field === "hidden_at" && !c.hadBefore ? { ...c, before: null, hadBefore: true } : c));
+    const h = makeStore({ undo: undoConfig(calls, { specs: { ...base.specs, stash: { ...base.specs.stash!, spell } } }) });
+    h.wrapped.seed(A, { title: "t" });
+    h.wrapped.stash(A);
+    performUndo();
+    expect(h.state.items[A].hidden_at).toBeNull();
+    expect(h.state.pending[`items:${A}:hidden_at`]).toMatchObject({ type: "field", value: null });
+    // The echo of the server's spelling retires the lock.
+    const engine = createSyncEngine({ dbName: "t", dbVersion: 1, registry: REGISTRY, syncRegistry: { items: { isDelta: true } } });
+    const draft: any = { items: { ...h.state.items }, pending: { ...h.state.pending } };
+    engine.syncTable(draft, "items", [{ _id: A, title: "t", hidden_at: null }]);
+    expect(Object.keys(draft.pending).filter((k) => k.startsWith(`items:${A}:`))).toEqual([]);
+  });
+
   it("a removed row comes back through the writer's restoreRow, and its exclude goes", () => {
     const h = makeStore();
     h.setState({ docs: { [A]: { _id: A, title: "Doc", updated_at: 1 } } });
@@ -636,6 +745,100 @@ describe("conflicts and partial undo", () => {
     expect(h.state.items[A].title).toBe("a");
   });
 
+  it("an entry whose every row conflicts is a conflict even when a mirror could be restored", () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "t" });
+    h.wrapped.toggleFav(A);
+    h.setState({ items: { [A]: { ...h.state.items[A], is_favorite: "remote" } } });
+    const id = top().id;
+    performUndo();
+    expect(h.state.items[A].is_favorite).toBe("remote");
+    expect(h.state.favorites).toEqual([{ _id: A }]);
+    expect(items().find((i) => i.id === id)!.status).toBe("conflict");
+    expect(notices).toEqual(["Can't undo Favorite: changed since"]);
+  });
+
+  it("a partial undo leaves the mirror cells of the rows it skipped", () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "a" });
+    h.wrapped.seed(B, { title: "b" });
+    h.wrapped.favBoth(A, B);
+    h.setState({ items: { ...h.state.items, [B]: { ...h.state.items[B], is_favorite: "remote" } } });
+    performUndo();
+    expect(h.state.items[A].is_favorite).toBeUndefined();
+    expect(h.state.favorites).toEqual([{ _id: B }]);
+  });
+
+  it("a partial undo of an inverse entry dispatches nothing for the skipped row", () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "a" });
+    h.wrapped.seed(B, { title: "b" });
+    h.wrapped.stashBoth(A, B);
+    h.setState({ items: { ...h.state.items, [B]: { ...h.state.items[B], hidden_at: 99 } } });
+    const before = h.dispatched.length;
+    performUndo();
+    const sent = h.dispatched.slice(before);
+    expect(sent.map((d) => [d.action, d.args])).toEqual([["restore", [A]]]);
+    expect(sent[0]!.patches).toEqual({ item_rows: { [A]: { hidden_at: null } } });
+    expect(h.state.items[A].hidden_at).toBeUndefined();
+    expect(h.state.items[B].hidden_at).toBe(99);
+    expect(notices).toEqual(["Undid: Stashed two (1 changed since, left as they are)"]);
+  });
+
+  it("two stores on one server row are judged as one row", () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "a" });
+    h.setState({ twins: { [A]: { _id: A, title: "a" } } });
+    h.wrapped.deferTwin(A);
+    // A later change reaches only one copy.
+    h.setState({ items: { [A]: { ...h.state.items[A], deferred_at: 9 } } });
+    const before = h.dispatched.length;
+    const pendingBefore = { ...h.state.pending };
+    performUndo();
+    expect(h.dispatched.length).toBe(before);
+    expect(h.state.items[A].deferred_at).toBe(9);
+    expect(h.state.twins[A].deferred_at).toBe(5);
+    expect(h.state.pending).toEqual(pendingBefore);
+    expect(notices).toEqual(["Can't undo Deferred twin: changed since"]);
+  });
+
+  it("a partial undo leaves both copies of the skipped row and counts it once", () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "a" });
+    h.wrapped.seed(B, { title: "b" });
+    h.setState({ twins: { [A]: { _id: A }, [B]: { _id: B } } });
+    undoGroup("Deferred two", () => {
+      h.wrapped.deferTwin(A);
+      h.wrapped.deferTwin(B);
+    });
+    h.setState({ twins: { ...h.state.twins, [B]: { ...h.state.twins[B], deferred_at: 9 } } });
+    const before = h.dispatched.length;
+    performUndo();
+    expect(h.state.items[A].deferred_at).toBeUndefined();
+    expect(h.state.twins[A].deferred_at).toBeUndefined();
+    expect(h.state.items[B].deferred_at).toBe(5);
+    expect(h.state.twins[B].deferred_at).toBe(9);
+    const sent = h.dispatched.slice(before).map((d) => JSON.stringify(d.patches));
+    expect(sent.some((p) => p.includes(B))).toBe(false);
+    expect(notices).toEqual(["Undid: Deferred two (1 changed since, left as they are)"]);
+  });
+
+  it("an inverse that still names a skipped row refuses the undo whole", () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "a" });
+    h.wrapped.seed(B, { title: "b" });
+    h.wrapped.stashPair(A, B);
+    h.setState({ items: { ...h.state.items, [B]: { ...h.state.items[B], hidden_at: 99 } } });
+    const id = top().id;
+    const before = h.dispatched.length;
+    performUndo();
+    expect(h.dispatched.slice(before)).toEqual([]);
+    expect(h.state.items[A].hidden_at).toBe(7);
+    expect(h.state.items[B].hidden_at).toBe(99);
+    expect(items().find((i) => i.id === id)!.status).toBe("conflict");
+    expect(notices).toEqual(["Can't undo Stashed pair: changed since"]);
+  });
+
   it("a gone row is a conflict, a re-added row counts as already undone", () => {
     const h = makeStore();
     h.wrapped.seed(A, { title: "a" });
@@ -686,6 +889,42 @@ describe("redo and groups", () => {
     performRedo();
     expect(h.state.items[A].title).toBe("someone");
     expect(notices.at(-1)).toBe("Can't redo Renamed to x: changed since");
+  });
+
+  it("redo after a partial undo restores only the rows the undo applied", () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "a" });
+    h.wrapped.seed(B, { title: "b" });
+    h.wrapped.renameBoth(A, B, "both");
+    h.setState({ items: { ...h.state.items, [B]: { ...h.state.items[B], title: "someone" } } });
+    performUndo();
+    const renames = h.dispatched.filter((d) => d.action === "renameBoth").length;
+    expect(performRedo()).toBe(true);
+    expect(h.state.items[A].title).toBe("both");
+    expect(h.state.items[B].title).toBe("someone");
+    // The applied cells went back on the undo's route; the action never re-ran.
+    expect(h.dispatched.filter((d) => d.action === "renameBoth")).toHaveLength(renames);
+    expect(lastDispatch(h, "applyUndoPatches")!.patches).toBeTruthy();
+    expect(h.state.pending[`items:${A}:title`]).toMatchObject({ value: "both" });
+    expect(notices.at(-1)).toBe("Redid: Both (1 changed since, left as they are)");
+    // And it undoes again, partially, as before.
+    performUndo();
+    expect(h.state.items[A].title).toBe("a");
+    expect(h.state.items[B].title).toBe("someone");
+  });
+
+  it("redo after a partial undo of an inverse spec is refused", () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "a" });
+    h.wrapped.seed(B, { title: "b" });
+    h.wrapped.stashBoth(A, B);
+    h.setState({ items: { ...h.state.items, [B]: { ...h.state.items[B], hidden_at: 99 } } });
+    performUndo();
+    expect(h.state.items[A].hidden_at).toBeUndefined();
+    performRedo();
+    expect(h.state.items[A].hidden_at).toBeUndefined();
+    expect(h.state.items[B].hidden_at).toBe(99);
+    expect(notices.at(-1)).toBe("Can't redo Stashed two: changed since");
   });
 
   it("undoGroup folds captures into one entry, undone in reverse and redone forward", () => {
@@ -765,6 +1004,63 @@ describe("refusal and rekey", () => {
     expect(h.state.items[A].title).toBe("x");
   });
 
+  it("an undo refused once per pass returns to the undo stack and stays there", async () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "a" });
+    h.wrapped.seed(B, { title: "b" });
+    h.wrapped.stashBoth(A, B);
+    const id = top().id;
+    await waitFor(() => h.outbox.size === 0);
+    h.respond(async (a) => {
+      if (a === "restore") throw new Error("Uncaught Error: no");
+      return {};
+    });
+    const before = h.dispatched.length;
+    performUndo();
+    await waitFor(() => h.dispatched.slice(before).filter((d) => d.action === "restore").length === 2 && h.outbox.size === 0);
+    await waitFor(() => getUndoHistory().head === id);
+    expect(items().find((i) => i.id === id)!.status).toBe("done");
+    expect(h.state.items[A].hidden_at).toBe(7);
+    expect(h.state.items[B].hidden_at).toBe(7);
+  });
+
+  it("a refused partial redo dispatch rolls back and the entry returns to the redo stack", async () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "a" });
+    h.wrapped.seed(B, { title: "b" });
+    h.wrapped.renameBoth(A, B, "both");
+    h.setState({ items: { ...h.state.items, [B]: { ...h.state.items[B], title: "someone" } } });
+    const id = top().id;
+    performUndo();
+    await waitFor(() => h.outbox.size === 0);
+    h.respond(async (a) => {
+      if (a === "applyUndoPatches") throw new Error("Uncaught Error: no");
+      return {};
+    });
+    performRedo();
+    expect(h.state.items[A].title).toBe("both");
+    await waitFor(() => items().find((i) => i.id === id)!.status === "undone");
+    expect(h.state.items[A].title).toBe("a");
+    expect(getUndoHistory().head).not.toBe(id);
+  });
+
+  it("a rekeyed removal comes back under the server id, and a rekeyed inverse names it", () => {
+    const h = makeStore();
+    h.wrapped.seed("stub_1", { title: "a" });
+    h.wrapped.drop("stub_1");
+    rekeyUndoIds("stub_1", A);
+    performUndo();
+    expect(h.state.items).toEqual({ [A]: { _id: A, title: "a" } });
+
+    h.wrapped.seed("stub_2", { title: "b" });
+    h.wrapped.stash("stub_2");
+    h.setState({ items: { ...h.state.items, [B]: { ...h.state.items["stub_2"], _id: B } } });
+    rekeyUndoIds("stub_2", B);
+    performUndo();
+    expect(lastDispatch(h, "restore")!.args).toEqual([B]);
+    expect(h.state.items[B].hidden_at).toBeUndefined();
+  });
+
   it("a stub rekey rewrites ids in live entries", () => {
     const h = makeStore();
     h.wrapped.addItem("stub-1");
@@ -787,5 +1083,414 @@ describe("refusal and rekey", () => {
     expect(Object.keys(renamed.planted!)).toContain(`items:${A}:title`);
     // Idempotent for an id nobody names.
     rekeyUndoIds("nobody", B);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regressions from the adversarial review (validation round 1, engine lens)
+// ---------------------------------------------------------------------------
+
+function withSpecs(extra: UndoConfig["specs"]): UndoConfig {
+  const calls: Calls = { beforeReplay: [], afterReplay: [], restoreView: [] };
+  const base = undoConfig(calls);
+  return undoConfig(calls, { specs: { ...base.specs, ...extra } });
+}
+
+const OPTIONAL = new Set(["pinned_at"]);
+const echoEngine = () =>
+  createSyncEngine({ dbName: "t", dbVersion: 1, registry: REGISTRY, syncRegistry: { items: { isDelta: true } }, optionalClearFields: OPTIONAL });
+
+function echo(h: ReturnType<typeof makeStore>, rows: any[]) {
+  const draft: any = { items: { ...h.state.items }, pending: { ...h.state.pending } };
+  echoEngine().syncTable(draft, "items", rows);
+  h.setState({ items: draft.items, pending: draft.pending });
+}
+
+describe("ADV optional-clear fields", () => {
+  it("ADV1 undo of an unpin survives the server echo that omits the cleared field", () => {
+    const h = makeStore({
+      optionalClearFields: OPTIONAL,
+      extra: { unpin: action(function (this: any, id: string) { this.items[id].pinned_at = null; }) },
+      undo: withSpecs({ unpin: { label: () => "Unpinned" } }),
+    });
+    h.wrapped.seed(A, { title: "t", pinned_at: 5 });
+    h.wrapped.unpin(A);
+    echo(h, [{ _id: A, title: "t" }]);
+    // The sync layer counts the omitted field as the echo of the null: lock retired.
+    expect(h.state.pending[`items:${A}:pinned_at`]).toBeUndefined();
+    expect("pinned_at" in h.state.items[A]).toBe(false);
+    performUndo();
+    expect(notices).toEqual(["Undid: Unpinned"]);
+    expect(h.state.items[A].pinned_at).toBe(5);
+  });
+
+  it("ADV2 redo of a pin survives the echo of the undo's null", () => {
+    const h = makeStore({
+      optionalClearFields: OPTIONAL,
+      extra: { pinIt: action(function (this: any, id: string) { this.items[id].pinned_at = 5; }) },
+      undo: withSpecs({ pinIt: { label: () => "Pinned" } }),
+    });
+    h.wrapped.seed(A, { title: "t", pinned_at: null });
+    h.wrapped.pinIt(A);
+    performUndo();
+    expect(h.state.items[A].pinned_at).toBeNull();
+    echo(h, [{ _id: A, title: "t" }]);
+    expect(h.state.pending[`items:${A}:pinned_at`]).toBeUndefined();
+    performRedo();
+    expect(notices.at(-1)).toBe("Redid: Pinned");
+    expect(h.state.items[A].pinned_at).toBe(5);
+  });
+});
+
+describe("ADV groups and refusal", () => {
+  it("ADV3 a group whose every child's undo is refused can be undone again in full", async () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "a" });
+    h.wrapped.seed(B, { title: "b" });
+    undoGroup("Renamed two", () => {
+      h.wrapped.rename(A, "a2");
+      h.wrapped.rename(B, "b2");
+    });
+    const id = top().id;
+    await waitFor(() => h.outbox.size === 0);
+    h.respond(async (a) => {
+      if (a === "applyUndoPatches") throw new Error("Uncaught Error: no");
+      return {};
+    });
+    const before = h.dispatched.length;
+    performUndo();
+    await waitFor(() => h.dispatched.slice(before).filter((d) => d.action === "applyUndoPatches").length === 2 && h.outbox.size === 0);
+    await waitFor(() => getUndoHistory().head === id);
+    await sleep(20);
+    expect(h.state.items[A].title).toBe("a2");
+    expect(h.state.items[B].title).toBe("b2");
+    const childStatuses = items().find((i) => i.id === id)!.children!.map((c) => c.status);
+    h.respond(async () => ({}));
+    performUndo();
+    expect({ childStatuses, A: h.state.items[A].title, B: h.state.items[B].title }).toEqual({
+      childStatuses: ["done", "done"],
+      A: "a",
+      B: "b",
+    });
+  });
+
+  it("ADV4 a toggle twice inside one group undoes and redoes cleanly", () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "t" });
+    undoGroup("Toggled twice", () => {
+      h.wrapped.toggleFav(A);
+      h.wrapped.toggleFav(A);
+    });
+    performUndo();
+    expect(h.state.items[A].is_favorite).toBeUndefined();
+    expect(h.state.favorites).toEqual([]);
+    performRedo();
+    expect(h.state.items[A].is_favorite).toBe(false);
+    expect(h.state.favorites).toEqual([]);
+  });
+});
+
+describe("ADV row adds", () => {
+  it("ADV5 undo of a row add whose row changed since is a conflict, not a delete", () => {
+    const h = makeStore();
+    h.wrapped.addItem(A);
+    // A later change reaches the row (a push, another window).
+    h.setState({ items: { [A]: { _id: A, title: "someone" } } });
+    performUndo();
+    expect(h.state.items[A]).toEqual({ _id: A, title: "someone" });
+    expect(notices).toEqual(["Can't undo Added: changed since"]);
+  });
+
+  it("ADV6 selective undo of an older add does not delete a row a newer entry edited", () => {
+    const h = makeStore();
+    h.wrapped.addItem(A);
+    const addId = top().id;
+    h.wrapped.rename(A, "mine");
+    undoEntry(addId);
+    expect(h.state.items[A]?.title).toBe("mine");
+  });
+});
+
+describe("ADV stub rekey", () => {
+  it("ADV7 a field whose value named a stub follows the rekey", () => {
+    const h = makeStore({
+      extra: { setRef: action(function (this: any, id: string, ref: string) { this.items[id].ref = ref; }) },
+      undo: withSpecs({ setRef: { label: () => "Linked" } }),
+    });
+    h.wrapped.seed(A, { title: "t", ref: "old" });
+    h.wrapped.setRef(A, "stub_9");
+    // The app's rekeyExtra moves child pointers to the server id; the undo stack follows.
+    h.setState({ items: { [A]: { ...h.state.items[A], ref: B } } });
+    rekeyUndoIds("stub_9", B);
+    performUndo();
+    expect(notices).toEqual(["Undid: Linked"]);
+    expect(h.state.items[A].ref).toBe("old");
+  });
+});
+
+describe("ADV coalesce", () => {
+  it("ADV8 a coalesced run that ends where it began leaves no entry", () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "a", priority: "low" });
+    h.wrapped.cycle(A, "mid");
+    h.wrapped.cycle(A, "low");
+    const cycles = items().filter((i) => i.action === "cycle" && i.status === "done");
+    expect(cycles).toHaveLength(0);
+  });
+});
+
+describe("ADV sanity (expected to pass)", () => {
+  it("a stale push between undo and redo does not break redo", () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "t" });
+    h.wrapped.rename(A, "x");
+    performUndo();
+    const engine = createSyncEngine({ dbName: "t", dbVersion: 1, registry: REGISTRY, syncRegistry: { items: { isDelta: true } } });
+    const draft: any = { items: { ...h.state.items }, pending: { ...h.state.pending } };
+    engine.syncTable(draft, "items", [{ _id: A, title: "x", updated_at: 50 }]);
+    h.setState({ items: draft.items, pending: draft.pending });
+    expect(h.state.items[A].title).toBe("t");
+    expect(performRedo()).toBe(true);
+    expect(h.state.items[A].title).toBe("x");
+  });
+
+  it("drop, undo, redo, undo round trips a row and its exclude", () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "a" });
+    h.wrapped.drop(A);
+    performUndo();
+    expect(h.state.items[A]).toMatchObject({ title: "a" });
+    performRedo();
+    expect(h.state.items[A]).toBeUndefined();
+    expect(h.state.pending[`items:${A}`]).toMatchObject({ type: "exclude" });
+    performUndo();
+    expect(h.state.items[A]).toMatchObject({ title: "a" });
+  });
+
+  it("async and receipt entries undo through the replay and redo re-invokes", async () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "t" });
+    await h.wrapped.pokeAsync(A);
+    performUndo();
+    expect(h.state.items[A].title).toBe("t");
+    performRedo();
+    expect(h.state.items[A].title).toBe("async");
+    expect(h.dispatched.filter((d) => d.action === "pokeAsync")).toHaveLength(2);
+  });
+
+  it("undoTo and redoTo across a group with a conflicting child", () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "a" });
+    h.wrapped.seed(B, { title: "b" });
+    h.wrapped.rename(A, "a1");
+    const first = top().id;
+    undoGroup("two", () => {
+      h.wrapped.rename(A, "a2");
+      h.wrapped.rename(B, "b2");
+    });
+    h.setState({ items: { ...h.state.items, [B]: { ...h.state.items[B], title: "other" } } });
+    expect(undoTo(first)).toBe(2);
+    expect(h.state.items[A].title).toBe("a");
+    expect(h.state.items[B].title).toBe("other");
+    expect(redoTo(getUndoHistory().redoOrder.at(-1)!)).toBe(2);
+    expect(h.state.items[A].title).toBe("a2");
+  });
+
+  it("snapshot is stable across no-op refusals and rekeys", () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "t" });
+    h.wrapped.rename(A, "x");
+    const s = getUndoHistory();
+    rekeyUndoIds("nobody", B);
+    expect(getUndoHistory()).toBe(s);
+  });
+});
+
+describe("ADV group child already undone", () => {
+  it("ADV9 a group child whose row is already back at before is not counted as changed since", () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "a" });
+    h.wrapped.seed(B, { title: "b" });
+    undoGroup("Renamed two", () => {
+      h.wrapped.rename(A, "a2");
+      h.wrapped.rename(B, "b2");
+    });
+    const id = top().id;
+    // Someone else put B back to exactly what it was.
+    h.setState({ items: { ...h.state.items, [B]: { ...h.state.items[B], title: "b" } } });
+    performUndo();
+    const entry = items().find((i) => i.id === id)!;
+    expect({ notice: notices.at(-1), childStatuses: entry.children!.map((c) => c.status) }).toEqual({
+      notice: "Undid: Renamed two",
+      childStatuses: ["undone", "undone"],
+    });
+  });
+
+  it("ADV9b the same state in a single entry is nothing to do, not a skip", () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "a" });
+    h.wrapped.seed(B, { title: "b" });
+    h.wrapped.renameBoth(A, B, "both");
+    h.setState({ items: { ...h.state.items, [B]: { ...h.state.items[B], title: "b" } } });
+    performUndo();
+    expect(notices.at(-1)).toBe("Undid: Both");
+  });
+});
+
+describe("coalesce and stamps", () => {
+  it("calls whose stamp did not move (one millisecond) still merge", () => {
+    const h = makeStore({
+      extra: {
+        stampCycle: action(function (this: any, id: string, priority: string, at: number) {
+          this.items[id].priority = priority;
+          this.items[id].updated_at = at;
+        }),
+      },
+      undo: withSpecs({ stampCycle: { label: (ctx) => `Priority ${ctx.args[1]}`, coalesce: true } }),
+    });
+    h.wrapped.seed(A, { title: "a", priority: "low", updated_at: 1 });
+    h.wrapped.stampCycle(A, "mid", 10);
+    h.wrapped.stampCycle(A, "high", 10);
+    h.wrapped.stampCycle(A, "top", 10);
+    const cycles = items().filter((i) => i.action === "stampCycle");
+    expect(cycles.map((i) => i.label)).toEqual(["Priority top"]);
+    performUndo();
+    expect(h.state.items[A].priority).toBe("low");
+  });
+});
+
+// A store that is not local-first (codecast chatChannels, savedViews): its
+// cells are mirrors, and its server half is an inverse that sends the prior
+// fields of the cells it is handed.
+const chanExtra = {
+  chans: {} as Record<string, any>,
+  editChan: action(function (this: any, id: string, fields: Record<string, unknown>) {
+    Object.assign(this.chans[id], fields);
+  }),
+};
+const chanSpecs = () =>
+  withSpecs({
+    editChan: {
+      label: () => "Edited channel",
+      inverse: (ctx) => {
+        const ids = [...new Set(ctx.changes.filter((c) => c.store === "chans").map((c) => c.id))];
+        return ids.map((id) => {
+          const fields: Record<string, unknown> = {};
+          for (const c of ctx.changes) if (c.store === "chans" && c.id === id && c.field) fields[c.field] = c.before;
+          return { action: "editChan", args: [id, fields], runDraft: false };
+        });
+      },
+    },
+  });
+
+describe("mirror cells changed since", () => {
+  it("an inverse is narrowed to the mirror cells the undo restores", () => {
+    const h = makeStore({ extra: chanExtra, undo: chanSpecs() });
+    h.setState({ chans: { [A]: { _id: A, name: "general", topic: "old" } } });
+    h.wrapped.editChan(A, { name: "renamed", topic: "new" });
+    h.setState({ chans: { [A]: { ...h.state.chans[A], name: "teammate" } } });
+    const before = h.dispatched.length;
+    performUndo();
+    const sent = h.dispatched.slice(before).filter((d) => d.action === "editChan").map((d) => d.args);
+    expect({ local: h.state.chans[A], sent }).toEqual({
+      local: { _id: A, name: "teammate", topic: "old" },
+      sent: [[A, { topic: "old" }]],
+    });
+  });
+
+  it("a mirror-only entry whose every cell changed since is a conflict, and sends nothing", () => {
+    const h = makeStore({ extra: chanExtra, undo: chanSpecs() });
+    h.setState({ chans: { [A]: { _id: A, name: "general" } } });
+    h.wrapped.editChan(A, { name: "renamed" });
+    h.setState({ chans: { [A]: { ...h.state.chans[A], name: "teammate" } } });
+    const before = h.dispatched.length;
+    performUndo();
+    expect(h.dispatched.slice(before).filter((d) => d.action === "editChan")).toEqual([]);
+    expect(notices.at(-1)).toBe("Can't undo Edited channel: changed since");
+    expect(h.state.chans[A].name).toBe("teammate");
+  });
+});
+
+describe("redo checks every captured cell", () => {
+  it("a mirror-only entry is not redone over a change made since the undo", () => {
+    const h = makeStore({ extra: chanExtra, undo: chanSpecs() });
+    h.setState({ chans: { [A]: { _id: A, name: "general" } } });
+    h.wrapped.editChan(A, { name: "renamed" });
+    performUndo();
+    expect(h.state.chans[A].name).toBe("general");
+    h.setState({ chans: { [A]: { ...h.state.chans[A], name: "teammate" } } });
+    performRedo();
+    expect(h.state.chans[A].name).toBe("teammate");
+    expect(notices.at(-1)).toContain("changed since");
+  });
+
+  it("a row that was already back at before when undone is not redone over a later change", () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "a" });
+    h.wrapped.seed(B, { title: "b" });
+    h.wrapped.renameBoth(A, B, "both");
+    h.setState({ items: { ...h.state.items, [B]: { ...h.state.items[B], title: "b" } } });
+    performUndo();
+    expect(h.state.items[A].title).toBe("a");
+    h.setState({ items: { ...h.state.items, [B]: { ...h.state.items[B], title: "b3" } } });
+    performRedo();
+    expect([h.state.items[A].title, h.state.items[B].title]).toEqual(["a", "b3"]);
+  });
+
+  it("a group child whose undo found it already undone is not redone over a later change", () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "a" });
+    h.wrapped.seed(B, { title: "b" });
+    undoGroup("Renamed two", () => {
+      h.wrapped.rename(A, "a2");
+      h.wrapped.rename(B, "b2");
+    });
+    h.setState({ items: { ...h.state.items, [B]: { ...h.state.items[B], title: "b" } } });
+    performUndo();
+    h.setState({ items: { ...h.state.items, [B]: { ...h.state.items[B], title: "b3" } } });
+    performRedo();
+    expect([h.state.items[A].title, h.state.items[B].title]).toEqual(["a2", "b3"]);
+  });
+
+  it("a clean redo still re-invokes the action", () => {
+    const h = makeStore({ extra: chanExtra, undo: chanSpecs() });
+    h.setState({ chans: { [A]: { _id: A, name: "general" } } });
+    h.wrapped.editChan(A, { name: "renamed" });
+    performUndo();
+    performRedo();
+    expect(h.state.chans[A].name).toBe("renamed");
+  });
+});
+
+describe("row adds and server-assigned fields", () => {
+  it("the echo of an add with the server's own created_at can still be undone", () => {
+    const calls: Calls = { beforeReplay: [], afterReplay: [], restoreView: [] };
+    const extra = {
+      addStamped: action(function (this: any, id: string) {
+        this.items[id] = { _id: id, title: "new", created_at: 1000 };
+      }),
+    };
+    const h = makeStore({
+      extra,
+      undo: undoConfig(calls, { serverAssignedFields: new Set(["created_at"]), specs: { addStamped: { label: () => "Added" } } }),
+    });
+    h.wrapped.addStamped(A);
+    h.setState({ items: { ...h.state.items, [A]: { _id: A, title: "new", created_at: 1037 } } });
+    performUndo();
+    expect(h.state.items[A]).toBeUndefined();
+  });
+
+  it("without the field declared, the same echo reads as changed since", () => {
+    const calls: Calls = { beforeReplay: [], afterReplay: [], restoreView: [] };
+    const extra = {
+      addStamped: action(function (this: any, id: string) {
+        this.items[id] = { _id: id, title: "new", created_at: 1000 };
+      }),
+    };
+    const h = makeStore({ extra, undo: undoConfig(calls, { specs: { addStamped: { label: () => "Added" } } }) });
+    h.wrapped.addStamped(A);
+    h.setState({ items: { ...h.state.items, [A]: { _id: A, title: "new", created_at: 1037 } } });
+    performUndo();
+    expect(h.state.items[A]).toBeDefined();
   });
 });

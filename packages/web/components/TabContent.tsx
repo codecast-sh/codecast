@@ -5,7 +5,7 @@ import { useMountEffect } from "../hooks/useMountEffect";
 import { useInboxStore, useTrackedStore, type AppTab } from "../store/inboxStore";
 import { isPrewarmTab, clearPrewarmTab } from "../lib/openIntent";
 import { tabSessionId } from "../lib/tabTitle";
-import { conversationTabPath, tabNeedsUrlRestore } from "../lib/pathLabel";
+import { conversationTabPath, pathLabel, tabNeedsUrlRestore } from "../lib/pathLabel";
 import { SessionPrewarm } from "./SessionPrewarm";
 import { stageRenderLayout } from "../lib/stage";
 import { useNarrowStage } from "../hooks/useNarrowStage";
@@ -144,8 +144,10 @@ function TabStage({ tabs, storeActiveTabId }: { tabs: AppTab[]; storeActiveTabId
     const store = useInboxStore.getState();
     if (!store.activeTabId) return;
     const active = store.tabs.find((t: AppTab) => t.id === store.activeTabId);
+    // The title comes along: the stored one named the old path, so a tab
+    // entered at /line would otherwise keep reading "Inbox".
     if (active && active.path !== url) {
-      store.updateTab(store.activeTabId, { path: url });
+      store.updateTab(store.activeTabId, { path: url, title: pathLabel(url) });
     }
   });
   // Every location this instance saw counts as entered, so a later remount at

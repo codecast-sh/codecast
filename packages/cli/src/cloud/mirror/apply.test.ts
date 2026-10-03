@@ -6,7 +6,7 @@ import * as path from "node:path";
 import { REFERENCES_SNIPPET, SNIPPET_CATALOG } from "@codecast/shared/contracts";
 import { findOwnedSections } from "@platform/snippets";
 import {
-  GITCONFIG_BLOCK_END, GITCONFIG_BLOCK_START, MIRROR_LOCK_REL, MIRROR_STAMP_REL, applyMirrorBundle, applyStagingBundle,
+  GITCONFIG_BLOCK_END, GITCONFIG_BLOCK_START, MIRROR_LOCK_REL, MIRROR_RECEIVER_CAPABILITIES, MIRROR_STAMP_REL, applyMirrorBundle, applyStagingBundle,
   adoptFeatureSwitches, composeInstructionFile, featureSwitches, mergeClaudeSettings, mergeCodexHooks, mergeCodexToml, mergeGitconfig, readStamp, stripGitconfigBlock, verifyMirrorStamp, withMirrorLock,
 } from "./apply";
 import { buildMirrorBundle, parseMirrorBundle, sha256, type BundleInput } from "./bundle";
@@ -847,6 +847,15 @@ test("chunked verification covers a binary final chunk and mode drift on an unch
   expect(verifyMirrorStamp(home)?.complete).toBe(false);
   expect((await apply(built)).applied).toEqual([file.path]);
   expect(verifyMirrorStamp(home)?.complete).toBe(true);
+});
+
+// ct-56327: the receiver installed now answers what it can do; a stamp a newer
+// receiver left on disk must not speak for an older one.
+test("a --verify read reports this receiver's capabilities, and the stamp on disk never stores them", async () => {
+  expect((await apply(await bundleOf([{ path: ".claude/AGENTS.md", kind: "agents-md", mode: "0600", bytes: Buffer.from("rules\n") }]))).errors).toEqual([]);
+  expect(verifyMirrorStamp(home)?.capabilities).toEqual([...MIRROR_RECEIVER_CAPABILITIES]);
+  expect(readStamp(home)?.capabilities).toBeUndefined();
+  expect(fs.readFileSync(path.join(home, MIRROR_STAMP_REL), "utf8")).not.toContain("capabilities");
 });
 
 test("pruning one harness keeps stale-pin removals already reconciled for the other harness", async () => {

@@ -7,10 +7,10 @@ import { summarizeRunFolder } from '@platform/evals/fs';
 import { runFolderName, writeRunFolder, type RunJson } from '../layout';
 import { homePaths } from '../paths';
 import { loadSurface, surfaceMeta } from '../registry';
-import { dirtySurfaces, gitHead, sourceHashes } from '../state';
+import { addSpend, dirtySurfaces, gitHead, sourceHashes } from '../state';
 import { gate, type AgentResult, type CallResult, type ReplayCtx, type ReplayResult, type SurfaceMeta } from '../surface';
 import { assertAnswered, runAgent, runCall } from './dryRun';
-import { judgeReply, PASS_AT } from './judge';
+import { criteriaCheck, judgeMomentOf, judgeReply, PASS_AT } from './judge';
 import { loadLabel, loadSnapshot, SnapshotMismatch, type LoadedSnapshot } from './resolver';
 
 // Replays a freeze N times. Each rep loads the snapshot (checking its hash),
@@ -160,6 +160,8 @@ export const reservedUsd = (ledger: RepLedger): number => Object.values(ledger.l
 export interface ReplayRunOptions extends ReplayOptions {
   /** The `check` invocation this belongs to; a fresh one when unset. */
   batch?: string;
+  /** The standing run it belongs to (check --cadence), stamped on every rep. */
+  cadence?: string | null;
   /** Stop before a rep that would take the spend past this. */
   budgetUsd?: number | null;
   /** Shared across every freeze and rep of one check. */
@@ -229,6 +231,7 @@ export async function prepareFreeze(f: Freeze, o: ReplayRunOptions, facts?: Tree
     dry: Boolean(o.dry),
     temperatureReplay: 'cli-default',
     batch: o.batch ?? new Date().toISOString(),
+    cadence: o.cadence ?? null,
     title: f.name,
   };
   let loaded: LoadedSnapshot | null = null;
@@ -306,17 +309,12 @@ export async function replayRep(p: PreparedFreeze, rep: number, reps: number, o:
         const checks = [...(impl.checks?.(loaded.snap, result, label) ?? [])];
         let judged: { costUsd: number; model: string } | null = null;
         if (f.judge) {
-          let transcript: ConvoMessage[] = [];
-          try {
-            transcript = impl.describe(loaded.snap).filter((m) => Date.parse(m.at) <= Date.parse(f.asOf));
-          } catch {
-            transcript = [];
-          }
+          const transcript = judgeMomentOf(impl, loaded.snap, f.asOf);
           const texts = agents.length ? agents.flatMap((a) => a.said) : [result.reply];
           const reply = texts.map((text, i): ConvoMessage => ({ n: i + 1, id: `reply-${i + 1}`, at: f.asOf, channel: 'session', isGroup: false, direction: 'out', from: 'assistant', text }));
           const v = await judgeReply(f, transcript, reply, { dir: join(dir, 'judge'), dry: Boolean(o.dry) });
           judged = { costUsd: v.costUsd, model: v.model };
-          checks.push({ id: 'criteria', ask: f.judge, weight: 1, score: v.score, reasoning: v.reasoning ?? null, must: f.tags.includes('must') ? PASS_AT : null });
+          checks.push(criteriaCheck(f, v));
         }
         const score = scoreOf(gates, checks, judged);
         writeRunFolder({ ...base, endedBecause: 'done', result, score, run: { ...run, ...sentFields(calls, agents), promptSha: out.promptSha ?? promptShaOf(calls, prompts), judgeModel: judged?.model ?? null } });
@@ -333,6 +331,8 @@ export async function replayRep(p: PreparedFreeze, rep: number, reps: number, o:
   const summary = summarizeRunFolder(root, dir.slice(root.length + 1));
   if (summary) {
     spent.usd += summary.costUsd;
+    // The day's ledger hears of each rep as it finishes, so a long or killed check never hides what it spent.
+    if (!o.dry) addSpend(summary.costUsd);
     lane.done++;
     lane.doneUsd += summary.costUsd;
   }

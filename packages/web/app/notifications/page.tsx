@@ -1,5 +1,5 @@
-import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
+import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { useRouter } from "next/navigation";
@@ -27,7 +27,7 @@ type FilterTab = "all" | "unread" | "sessions" | "social" | "tasks";
 export default function NotificationsPage() {
   const router = useRouter();
   // Local-first: sync the server list into the store, read + mutate the store.
-  const notifsList = useQuery(api.notifications.list);
+  const notifsList = useQueryNoThrow(api.notifications.list, {}).data;
   useConvexSync(notifsList, useCallback((d: any) => useInboxStore.getState().syncTable("notifications", d), []));
   const notificationsMap = useInboxStore((s) => s.notifications);
   const notifications = useMemo(

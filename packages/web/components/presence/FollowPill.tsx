@@ -31,10 +31,10 @@ export function FollowPill() {
     return (
       <span
         data-sv-follow-pill="following"
-        className="inline-flex items-center gap-1.5 rounded-full border border-sol-cyan/40 bg-sol-cyan/10 pl-1 pr-1 py-0.5 text-[11px] text-sol-text"
+        className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-sol-cyan/40 bg-sol-cyan/10 pl-1 pr-1 text-[11px] text-sol-text"
         role="status"
       >
-        <CommentAvatar name={name} image={memberAvatarUrl(leader)} size={16} />
+        <CommentAvatar name={name} image={memberAvatarUrl(leader)} size={20} />
         <span className="truncate max-w-[220px]">
           {st.followBlocked ? `${first} is somewhere you can't open` : `Following ${first}`}
         </span>
@@ -43,7 +43,7 @@ export function FollowPill() {
           onClick={() => st.setFollowLeader(null)}
           title={`Stop following ${first}`}
           aria-label={`Stop following ${first}`}
-          className="grid h-4 w-4 place-items-center rounded-full text-sol-text-muted hover:bg-sol-cyan/20 hover:text-sol-text"
+          className="grid h-5 w-5 place-items-center rounded-full text-sol-text-muted hover:bg-sol-cyan/20 hover:text-sol-text"
         >
           <X className="h-3 w-3" />
         </button>
@@ -55,13 +55,13 @@ export function FollowPill() {
   return (
     <span
       data-sv-follow-pill="followed"
-      className="inline-flex items-center gap-1.5 rounded-full border border-sol-border bg-sol-bg-alt/60 pl-1 pr-2 py-0.5 text-[11px] text-sol-text-muted"
+      className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-sol-border/70 bg-sol-bg-alt/40 pl-1 pr-2.5 text-[11px] text-sol-text-muted"
       role="status"
       title={followers.map((f) => f.name).join(", ")}
     >
       <span className="cc-viewers" style={{ ["--cc-viewers-overlap" as string]: "5px" }}>
         {followers.slice(0, 3).map((f) => (
-          <CommentAvatar key={f.user_id} name={f.name} image={f.image} size={16} />
+          <CommentAvatar key={f.user_id} name={f.name} image={f.image} size={20} />
         ))}
       </span>
       <span className="truncate max-w-[280px]">{followersLabel(followers)}</span>

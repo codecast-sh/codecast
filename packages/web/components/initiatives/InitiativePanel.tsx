@@ -10,6 +10,8 @@ import Link from "next/link";
 import { ChevronDown, FolderKanban, Pencil, Plus, X } from "lucide-react";
 import { INITIATIVE_HEALTH_LABEL, INITIATIVE_METRICS_MAX, INITIATIVE_UPDATE_HEALTHS, initiativeChain, metricKeyOf, metricReadings, type InitiativeRow, type InitiativeUpdateHealth, type InitiativeUpdateRow } from "@codecast/shared/contracts/initiative";
 import { useInboxStore, type ProjectItem } from "../../store/inboxStore";
+import { undoAsOne } from "../../store/undoActions";
+import { quoted } from "../../store/undo/labels";
 import { useInitiativeProjects } from "../../hooks/useInitiativeProjects";
 import { useInitiativeUpdates } from "../../hooks/useInitiatives";
 import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
@@ -193,8 +195,11 @@ function Projects({ initiative, now }: { initiative: InitiativeRow; now: number 
     const before = new Set(initiative.project_ids);
     const after = new Set(next ? next.split(",") : []);
     const store = useInboxStore.getState();
-    for (const id of after) if (!before.has(id)) store.addInitiativeProject(initiative._id, id);
-    for (const id of before) if (!after.has(id)) store.removeInitiativeProject(initiative._id, id);
+    // One pick is one undo, however many projects it adds and removes.
+    undoAsOne(`Changed the projects of ${quoted(initiative.title, "initiative")}`, () => {
+      for (const id of after) if (!before.has(id)) store.addInitiativeProject(initiative._id, id);
+      for (const id of before) if (!after.has(id)) store.removeInitiativeProject(initiative._id, id);
+    });
   };
   const hidden = initiative.project_ids.length - cards.length;
   return (

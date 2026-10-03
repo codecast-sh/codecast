@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { useQuery } from "convex/react";
+import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useBootstrapCollection } from "./useBootstrapCollection";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
@@ -49,7 +49,7 @@ export function ingestPlanDetail(d: any): void {
  */
 export function useSyncMentionPlans() {
   const syncMentionIndex = useInboxStore((s) => s.syncMentionIndex);
-  const result = useQuery(api.plans.webMentionList, { workspace: "all" } as any);
+  const result = useQueryNoThrow(api.plans.webMentionList, { workspace: "all" } as any).data;
 
   useConvexSync(result, useCallback((data: any) => {
     syncMentionIndex("plans", data?.items ?? []);

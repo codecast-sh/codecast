@@ -3,29 +3,32 @@
 // Codecast's binding of the @platform/keys provider. The dispatch mechanics —
 // capture-phase listener, decline semantics, input/modal guards — live in the
 // package; this file supplies what is codecast's: the catalog, the tips
-// milestone callback, and the surfaces with special keyboard ownership.
+// milestone callback, and the surfaces with special keyboard ownership
+// (keyOwnership.ts).
 
 import { createShortcutRuntime } from "./runtime";
 import { shortcutCatalog } from "./registry";
+import { KEY_OWNERSHIP } from "./keyOwnership";
 import { onShortcutUsed } from "../tips/useTips";
 import { useTabActive } from "../hooks/usePagePresence";
 import type { ShortcutAction } from "./registry";
 
+const usedListeners = new Set<(action: ShortcutAction) => void>();
+
+/** Hear every action a key dispatched, after its handler ran. A handled key
+ *  stops at the capture-phase dispatcher, so a window keydown listener never
+ *  sees it; this is how such a listener learns the key was pressed. */
+export function subscribeShortcutUsed(fn: (action: ShortcutAction) => void): () => void {
+  usedListeners.add(fn);
+  return () => { usedListeners.delete(fn); };
+}
+
 const runtime = createShortcutRuntime(shortcutCatalog, {
-  // Some regions own their own single-letter keys and must not leak them to the
-  // global conversation shortcuts (h/t/d/r, and critically y/n which approve or
-  // deny a live permission prompt). A region opts in either with the inline
-  // review marker (data-review-region="active") or the generic data-owns-keys
-  // (e.g. the branch map). Treating a focus inside such a region like an input
-  // makes the dispatcher skip those shortcuts; the region's own keydown handler
-  // still receives the key.
-  inputLikeSelector: '[data-review-region="active"], [data-owns-keys]',
-  // The integrated terminal owns the keyboard harder than any input: a shell
-  // lives on Ctrl chords (Ctrl+C/L/P/R/K...), and the capture-phase window
-  // listener runs BEFORE xterm — so any match would silently eat the key from
-  // the shell. Only the panel toggle may act; everything else falls through.
-  keyboardOwners: [{ selector: "[data-terminal-panel]", allow: ["terminal.toggle"] }],
-  onShortcutUsed,
+  ...KEY_OWNERSHIP,
+  onShortcutUsed: (action: ShortcutAction) => {
+    onShortcutUsed(action);
+    for (const fn of [...usedListeners]) fn(action);
+  },
 }, import.meta.hot?.data.shortcutRuntime);
 
 if (import.meta.hot) import.meta.hot.data.shortcutRuntime = runtime;

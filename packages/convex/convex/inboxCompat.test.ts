@@ -109,12 +109,12 @@ describe("un-flagged listInboxSessions payload — golden shape", () => {
     const row = sessions.find((s: any) => s._id === "conversations_a");
     expect(Object.keys(row).sort()).toEqual([
       "_id", "acting_user_id", "active_plan", "active_task", "activity", "agent_name", "agent_started_at",
-      "agent_status", "agent_status_boundary", "agent_status_updated_at", "agent_task_id", "agent_team_name", "agent_type",
+      "agent_status", "agent_status_boundary", "agent_status_raw", "agent_status_updated_at", "agent_task_id", "agent_team_name", "agent_type",
       "anchor_id", "armed_trigger_kind", "auq_open", "author_avatar", "author_name",
       "awaiting_input", "browser_pane_offer", "cc_account", "character_avatar", "character_name", "cloud_context_too_large", "cloud_placement", "cloud_seed", "cloud_workspace", "context_tokens", "daemon_alive_until", "effort", "forked_from", "git_branch", "git_remote_url", "git_root",
       "handed_off_from_conversation_id", "handed_off_from_details", "handed_off_to_conversation_id", "handed_off_to_details",
       "has_pending", "hibernated_at", "icon", "icon_color", "idle_summary", "image_preview_url",
-      "implementation_session", "inbox_dismissed_at", "inbox_killed_at",
+      "implementation_session", "inbox_deferred_at", "inbox_dismissed_at", "inbox_killed_at",
       "inbox_pinned_at", "inbox_rest", "inbox_rest_at", "inbox_snoozed_until", "inbox_stash_hidden", "inbox_stashed_at", "is_anchor", "is_connected",
       "is_deferred", "is_favorite", "is_idle", "is_pinned", "is_private",
       "is_subagent", "is_unresponsive", "is_workflow_primary", "is_workflow_sub", "last_comment_at",
@@ -124,7 +124,7 @@ describe("un-flagged listInboxSessions payload — golden shape", () => {
       "owner_user_id", "parent_conversation_id", "parent_message_uuid", "pending_api_error",
       "pending_api_error_at", "pending_api_error_kind", "permission_mode", "pr_status", "producing_until",
       "project_path", "role", "session_error", "session_id", "settle_verdict", "spawned_by_conversation_id",
-      "standing_role_id", "started_at", "status", "subtitle", "team_id", "thread_state", "thread_state_at",
+      "standing_role_id", "started_at", "status", "subtitle", "team_id", "team_visibility", "thread_state", "thread_state_at",
       "thread_state_msg_count", "thread_state_status", "title", "tmux_session",
       "transcript_revision", "turn_completed_at", "updated_at", "user_id", "user_rest", "workflow_run_activity",
       "workflow_run_agents_done", "workflow_run_agents_total", "workflow_run_id",

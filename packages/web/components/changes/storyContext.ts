@@ -16,3 +16,14 @@ export type StoryContext = {
 export const StoryCtx = createContext<StoryContext>({ focused: null, waiting: new Set(), dimmed: new Set(), pick: () => {} });
 
 export const useStoryCtx = () => useContext(StoryCtx);
+
+/**
+ * What every story element carries, on the day and in the week: its key for
+ * j/k, whether it holds the page's cursor, and focus that moves the cursor,
+ * so Tab and j drive one highlight. The story's own control wears
+ * `data-story-trigger`, which j focuses.
+ */
+export function useStoryAttrs(key: string) {
+  const ctx = useStoryCtx();
+  return { "data-story-key": key, "data-focused": ctx.focused === key, onFocusCapture: () => ctx.pick(key) };
+}

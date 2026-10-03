@@ -15,13 +15,17 @@ export const WORK_AT = {
 
 /** The board's list row height (ListRowShell around a TaskRow): the rows below the new one push down by exactly this. */
 export const ROW_H = 41;
+/** How long before the new task lands its room starts to open (s): open, the last row included, before the card arrives. */
+const ROOM_LEAD = 0.55;
 
 /** The plan's other rows, top to bottom, then everything under them: each pushes down a row as the new task lands. */
 const BELOW = ["work.row:hero-t2", "work.row:hero-t3", "work.row:hero-t4", "work.row:hero-t5", "work.row:hero-t6", "work.below"];
 
 const board: Beat[] = [
-  { id: "work.row:hero-t1", cue: CUES.taskLands, preset: "drop", z: 160, rx: -14, y: -18 },
-  ...BELOW.map((id, i): Beat => ({ id, cue: CUES.taskLands + 0.04 + i * 0.025, dur: 0.6, preset: "push", y: -ROW_H })),
+  // The row takes over from the card flying in as it arrives (the flyer lands at taskLands - 0.1, fading as the row fades up).
+  { id: "work.row:hero-t1", cue: CUES.taskLands - 0.12, preset: "drop", z: 160, rx: -14, y: -18 },
+  // The rows below open the new task's room first, while the card is still in flight, and have it open before the card arrives: neither the card nor the dropped row ever draws over the row under it.
+  ...BELOW.map((id, i): Beat => ({ id, cue: CUES.taskLands - ROOM_LEAD + i * 0.02, dur: 0.36, preset: "push", y: -ROW_H })),
   // The new task's stations and activity arrive once it has landed.
   { id: "work.station", cue: CUES.taskLands + 0.3, preset: "drop", z: 80, rx: -8, y: -10 },
   { id: "work.detail", cue: CUES.taskLands + 0.38, preset: "drop", z: 80, rx: -8, y: -10 },

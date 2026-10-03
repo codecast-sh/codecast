@@ -1,4 +1,4 @@
-import { afterAll, expect, mock, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
 import { act } from "react";
 import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../../../test-helpers/globals";
@@ -7,13 +7,9 @@ import { closeDomWindow } from "../../../test-helpers/domGlobals";
 // The door with a guest at it: marked as a guest beside a teammate's knock,
 // answered with Admit or Deny, and offering to close a link that keeps
 // bringing people the room turned away. Somebody who may not answer the door
-// sees who is waiting and no buttons that would only fail.
+// sees who is waiting and no buttons that would only fail. Answering a guest
+// takes the knock off the door in the same frame (the store's action).
 
-const realDoor = await import("../../../hooks/useGuestDoor");
-mock.module("../../../hooks/useGuestDoor", () => ({
-  ...realDoor,
-  useGuestDoor: () => ({ admit: async () => null, deny: async () => null, remove: async () => null }),
-}));
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { pretendToBeVisual: true });
 const restoreGlobals = replaceGlobals({
   window: dom.window,
@@ -31,7 +27,6 @@ const { useInboxStore } = await import("../../../store/inboxStore");
 const { RoomKnocks } = await import("../RoomDoor");
 
 afterAll(() => {
-  mock.module("../../../hooks/useGuestDoor", () => realDoor);
   closeDomWindow(dom);
   restoreGlobals();
 });
@@ -81,4 +76,22 @@ test("somebody who may not answer sees who is waiting, and nothing to press", as
   const html = await door([{ ...guest, can_answer: false }]);
   expect(text(html)).toContain("Ada Lovelace is waiting");
   expect(html).not.toContain("<button");
+});
+
+test("a guest's knock says whose link brought them", async () => {
+  expect(text(await door([{ ...guest, link_by: "Sam Rivera", link_mine: false }]))).toContain("Ada Lovelace wants to join guest · via Sam's link");
+  expect(text(await door([{ ...guest, link_by: "Sam Rivera", link_mine: true }]))).toContain("· via your link");
+});
+
+test("admitting a guest takes the knock off the door at once", async () => {
+  useInboxStore.setState({ roomKnocks: [teammate, guest] } as any);
+  const host = dom.window.document.body.appendChild(dom.window.document.createElement("div"));
+  const root = createRoot(host);
+  await act(async () => root.render(<RoomKnocks roomKey={ROOM} />));
+  const admit = host.querySelector('[aria-label="Admit Ada Lovelace"]') as HTMLButtonElement;
+  await act(async () => admit.click());
+  expect((useInboxStore.getState() as any).roomKnocks.map((k: any) => k.from_user)).toEqual(["u-bo"]);
+  expect(text(host.innerHTML)).not.toContain("Ada");
+  await act(async () => root.unmount());
+  host.remove();
 });

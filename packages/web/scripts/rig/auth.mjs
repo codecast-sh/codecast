@@ -1,51 +1,44 @@
-// The two identities and how a headless page becomes one of them.
-//
-// The fixtures are the Apple App Review demo accounts in the team "Codecast
-// Review", the one team with calls on: Riley Chen and Jordan Lee. A reviewer
-// signs into these, so a run leaves no message and no changed preference
-// behind (endWalkie and leaveCall on every exit; the flows send no text).
+// How a headless page becomes a signed in person on a deployment.
 //
 // Tokens are minted server side with the auth library's own `auth:store`
-// (type signIn, generateTokens), through the self hosted deployment, and put
-// in localStorage under the keys @convex-dev/auth reads, named for the CONVEX
-// origin (https://convex.codecast.sh becomes httpsconvexcodecastsh), never
-// the web origin. The page has to be ON the app origin before the keys are
-// set, so the rig opens a page first, sets them, then opens the app.
-import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
+// (type signIn, generateTokens) through an admin client on the deployment
+// (stack.mjs), and put in localStorage under the keys @convex-dev/auth reads,
+// named for the CONVEX origin (https://convex.codecast.sh becomes
+// httpsconvexcodecastsh), never the web origin. The page has to be ON the app
+// origin before the keys are set, so the rig opens a page first, sets them,
+// then opens the app.
+//
+// Which deployment is the caller's choice, and stack.mjs decides which ones
+// exist: the smoke suite signs its seeded test identities into the local
+// deployment; the face row rig signs the App Review demo accounts below into
+// prod, and only under RIG_DEPLOYMENT=prod.
+import { adminClient, prodDeployment } from "./stack.mjs";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-export const CONVEX_DIR = resolve(HERE, "../../../convex");
-export const CONVEX_URL = process.env.CONVEX_SELF_HOSTED_URL || "https://convex.codecast.sh";
-export const APP_URL = process.env.RIG_APP_URL || "http://localhost:3200";
-
+// The face row rig's fixtures: the Apple App Review demo accounts in the team
+// "Codecast Review" on prod, the one team with calls on. A reviewer signs into
+// these, so a run leaves no message and no changed preference behind
+// (endWalkie and leaveCall on every exit; the flows send no text).
 export const IDENTITIES = {
   riley: { id: "kd777ypck8b0bzxzgs8cq9rqg9894p29", name: "Riley Chen", port: 9611 },
   jordan: { id: "kd764edpkn8344ffz3fpgen8418cvdt7", name: "Jordan Lee", port: 9612 },
 };
 
+/** The deployment the face row rig runs on (calls need prod's LiveKit). */
+export const faceRigDeployment = () => prodDeployment("The face row rig");
+
 function storageSuffix(url) {
   return url.replace(/[^a-zA-Z0-9]/g, "");
 }
 
-/** Mint a signed in session for a user id: { token, refreshToken }. */
-export function mintTokens(userId) {
-  const env = { ...process.env };
-  delete env.CONVEX_DEPLOYMENT;
-  env.CONVEX_SELF_HOSTED_URL = CONVEX_URL;
-  const out = execFileSync(
-    "npx",
-    ["convex", "run", "auth:store", JSON.stringify({ args: { type: "signIn", userId, generateTokens: true } })],
-    { cwd: CONVEX_DIR, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-  );
-  const json = JSON.parse(out.slice(out.indexOf("{")));
-  if (!json?.tokens?.token) throw new Error(`auth:store answered without tokens: ${out.slice(0, 200)}`);
-  return json.tokens;
+/** Mint a signed in session for a user id on a deployment: { token, refreshToken }. */
+export async function mintTokens(dep, userId) {
+  const out = await adminClient(dep).mutation("auth:store", { args: { type: "signIn", userId, generateTokens: true } });
+  if (!out?.tokens?.token) throw new Error(`auth:store answered without tokens: ${JSON.stringify(out).slice(0, 200)}`);
+  return out.tokens;
 }
 
 /** The statement that installs a minted session in the page's localStorage. */
-export function installTokensJs(tokens, convexUrl = CONVEX_URL) {
+export function installTokensJs(tokens, convexUrl) {
   const s = storageSuffix(convexUrl);
   return `(() => {
     localStorage.setItem(${JSON.stringify(`__convexAuthJWT_${s}`)}, ${JSON.stringify(tokens.token)});
@@ -57,10 +50,10 @@ export function installTokensJs(tokens, convexUrl = CONVEX_URL) {
   })()`;
 }
 
-/** Sign a page in as `who` and land it on the app. */
-export async function signIn(page, who) {
-  const tokens = mintTokens(IDENTITIES[who].id);
-  await page.navigate(`${APP_URL}/login`);
-  await page.evaluate(installTokensJs(tokens));
-  await page.navigate(`${APP_URL}/inbox`);
+/** Sign a page in as a user on a deployment and land it on `path`. */
+export async function signIn(page, dep, userId, path = "/inbox") {
+  const tokens = await mintTokens(dep, userId);
+  await page.navigate(`${dep.appUrl}/login`);
+  await page.evaluate(installTokensJs(tokens, dep.convexUrl));
+  await page.navigate(`${dep.appUrl}${path}`);
 }

@@ -42,7 +42,7 @@ export function triggerRows(now: number, wall: number, phase: RunPhase, fireIn: 
     run_count: phase === "rearmed" ? 12 : 11,
     created_at: now - 9 * 24 * HOUR,
     last_run_at: phase === "rearmed" ? wall - 2_000 : now - 4 * HOUR,
-    last_run_summary: phase === "rearmed" ? `${OBJECTS.task.shortId} passed verify, waits on review` : "CI green on main: 212 tests passed",
+    last_run_summary: phase === "rearmed" ? `${OBJECTS.task.shortId} passed verify, waits on review` : "CI green on main: 214 tests passed",
     originating_conversation_id: SESSIONS.lead.id,
     originating_conversation_title: SESSIONS.lead.title,
     project_path: SESSIONS.lead.project,
@@ -170,7 +170,7 @@ export function workflowRun(now: number, phase: RunPhase) {
             node_id: "verify",
             label: "Verify",
             status: done(1) ? "completed" : "running",
-            ...(done(1) ? { started_at: now - 50_000, completed_at: now - 8_000, result_preview: "bun test: 212 passed" } : { activity: "bun test" }),
+            ...(done(1) ? { started_at: now - 50_000, completed_at: now - 8_000, result_preview: "bun test: 214 passed" } : { activity: "bun test" }),
           }]
         : []),
     ],

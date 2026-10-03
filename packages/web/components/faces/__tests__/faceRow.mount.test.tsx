@@ -423,7 +423,7 @@ describe("two densities, one row", () => {
     const row = rowOf([me(), entry(ANN, "Ann", { state: "live-with-me", tier: "linked" })], [link(ANN, "call")]);
     let closed = 0;
     let opened = 0;
-    const chrome = { inCall: true, onExpand: () => opened++, onClose: () => closed++, closeWord: "Hide", closeTitle: "Hide the faces" };
+    const chrome = { onExpand: () => opened++, onClose: () => closed++, closeWord: "Hide", closeTitle: "Hide the faces" };
     // jsdom has no pointer capture; the grip's own calls are no-ops here.
     const proto = dom.window.HTMLElement.prototype as any;
     proto.setPointerCapture ??= () => {};
@@ -460,14 +460,84 @@ describe("two densities, one row", () => {
     await h.click(h.q('[data-chrome-btn="close"]')!);
     expect(closed).toBe(1);
     // No call: nothing to open, the grip and the way out stay.
-    await h.draw(<FloatingFaceRow row={rowOf([entry(ANN, "Ann")])} viewerId={ME} bridge={bridge} chrome={{ ...chrome, inCall: false, closeWord: "Close" }} />);
+    await h.draw(<FloatingFaceRow row={rowOf([entry(ANN, "Ann")])} viewerId={ME} bridge={bridge} chrome={{ ...chrome, closeWord: "Close" }} />);
+    // The release armed the chrome's hide; the pointer is still in.
+    await act(async () => {
+      dom.window.document.dispatchEvent(new dom.window.MouseEvent("mousemove", { bubbles: true, clientX: 0, clientY: 0 }));
+    });
     expect(h.all(".face-row-chrome .faces-btn-word").map((w) => w.textContent)).toEqual(["Move", "Close"]);
+  });
+
+  test("a live card from a call another window holds still offers Open", async () => {
+    // The voice window's own call slice is idle while another window (or
+    // the walkie, or a seat the server lists) holds the call, and the row
+    // still draws the live card. Open read that idle slice, so the float
+    // showed a huddle with no way to open it (2026-10-03). It reads the row.
+    expect((useInboxStore.getState() as any).call?.phase ?? "idle").toBe("idle");
+    const huddle: FaceCard = { kind: "live", roomKey: "dm:u-ann:u-me", title: "Huddle", end: true, mute: true, muted: false, camera: true, cameraOn: false, words: null, hearing: null };
+    const row = rowOf([me({ state: "live-with-me" as FaceState }), entry(ANN, "Ann", { state: "live-with-me", tier: "linked" })], [link(ANN, "call")], huddle);
+    let opened = 0;
+    const chrome = { onExpand: () => opened++, onClose() {}, closeWord: "Hide", closeTitle: "Hide" };
+    const h = await mount(<FloatingFaceRow row={row} viewerId={ME} bridge={{ setInteractive() {}, setContentSize() {}, setDragging() {} }} chrome={chrome} />);
+    await act(async () => {
+      dom.window.document.dispatchEvent(new dom.window.MouseEvent("mousemove", { bubbles: true, clientX: 0, clientY: 0 }));
+    });
+    expect(h.all(".face-row-chrome .faces-btn-word").map((w) => w.textContent)).toContain("Open");
+    await h.click(h.q('[data-chrome-btn="open"]')!);
+    expect(opened).toBe(1);
+  });
+
+  test("a face dragged to move the float does not pin its card on release", async () => {
+    // A face is a handle as well as a button: the click its release fires
+    // after the window moved is swallowed, and a still press is a click.
+    const drags: boolean[] = [];
+    const proto = dom.window.HTMLElement.prototype as any;
+    proto.setPointerCapture ??= () => {};
+    proto.releasePointerCapture ??= () => {};
+    proto.hasPointerCapture ??= () => false;
+    const Pointer = (dom.window as any).PointerEvent ?? dom.window.MouseEvent;
+    const h = await mount(
+      <FloatingFaceRow row={rowOf([entry(ANN, "Ann"), entry(BO, "Bo")])} viewerId={ME} bridge={{ setInteractive() {}, setContentSize() {}, setDragging: (on: boolean) => drags.push(on) }} />,
+    );
+    const face = h.q(`.face-seat[data-face-id="${ANN}"] .face`)!;
+    const press = async (moveBy: number) => {
+      await act(async () => {
+        face.dispatchEvent(new Pointer("pointerdown", { bubbles: true, button: 0, pointerId: 1, screenX: 100, screenY: 100 }));
+        dom.window.document.dispatchEvent(new Pointer("pointermove", { bubbles: true, pointerId: 1, screenX: 100 + moveBy, screenY: 100 }));
+        face.dispatchEvent(new Pointer("pointerup", { bubbles: true, button: 0, pointerId: 1, screenX: 100 + moveBy, screenY: 100 }));
+        face.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }));
+      });
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 5));
+      });
+    };
+    await press(60);
+    expect(drags).toEqual([true, false]);
+    expect(h.q("[data-member-card]")).toBeNull();
+    await press(0);
+    expect(h.q("[data-member-card]")?.textContent ?? "").toContain("Ann");
+  });
+
+  test("on a call the float draws the rest of the team at half size", async () => {
+    // Pointed at, the others fade in beside the call: as a roster, not a
+    // second row of portraits the size of the people on the call.
+    useInboxStore.getState().updateClientUI({ float_face_size: 128 } as any);
+    try {
+      const row = rowOf([me({ state: "live-with-me" as FaceState }), entry(ANN, "Ann", { state: "live-with-me", tier: "linked" }), entry(BO, "Bo")], [link(ANN, "call")]);
+      const h = await mount(<FloatingFaceRow row={row} viewerId={ME} bridge={{ setInteractive() {}, setContentSize() {}, setDragging() {} }} />);
+      const seat = (id: string) => h.q(`.face-seat[data-face-id="${id}"]`) as HTMLElement;
+      expect(seat(BO).style.getPropertyValue("--face")).toBe("64px");
+      expect(seat(ANN).style.getPropertyValue("--face")).toBe("");
+      expect((h.q(".face-row") as HTMLElement).style.getPropertyValue("--face")).toBe("128px");
+    } finally {
+      useInboxStore.getState().updateClientUI({ float_face_size: undefined } as any);
+    }
   });
 
   test("the float's faces come in the row's size and the call circles' two bigger ones, remembered per device", async () => {
     const sizes: { width: number; height: number }[] = [];
     const bridge = { setInteractive() {}, setContentSize: (s: { width: number; height: number }) => sizes.push(s), setDragging() {} };
-    const chrome = { inCall: false, onClose() {}, closeWord: "Dock", closeTitle: "Dock", docks: true };
+    const chrome = { onClose() {}, closeWord: "Dock", closeTitle: "Dock", docks: true };
     const ui = () => (useInboxStore.getState() as any).clientState?.ui ?? {};
     useInboxStore.getState().updateClientUI({ float_face_size: undefined } as any);
     const row = rowOf([entry(ANN, "Ann"), entry(BO, "Bo")]);
@@ -503,7 +573,7 @@ describe("two densities, one row", () => {
     // (and with it every face) holds still through the hover.
     const sizes: { width: number; height: number; pinY?: number }[] = [];
     const bridge = { setInteractive() {}, setContentSize: (sz: any) => sizes.push(sz), setDragging() {} };
-    const chrome = { inCall: false, onClose() {}, closeWord: "Dock", closeTitle: "Dock", docks: true };
+    const chrome = { onClose() {}, closeWord: "Dock", closeTitle: "Dock", docks: true };
     const proto = dom.window.HTMLElement.prototype as any;
     const realRect = proto.getBoundingClientRect;
     // Ann's circle at x 8..72, Bo's at 82..146; the row's box around both.

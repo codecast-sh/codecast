@@ -10110,7 +10110,8 @@ program
     "  cast calls                   # Recent calls across your teams\n" +
     "  cast calls -n 50             # More history\n" +
     "  cast call <id>               # One call: summary + action items\n" +
-    "  cast call <id> --transcript  # Full attributed transcript"
+    "  cast call <id> --transcript  # Full attributed transcript\n" +
+    "  cast call snap cl-42:15      # A frame of a recorded call's video, as a PNG"
   )
   .option("-n, --limit <n>", "How many calls to list", "20")
   .option("--json", "Machine-readable output")
@@ -10146,19 +10147,20 @@ program
 program
   .command("call")
   .description(
-    "Show one call: title, participants, summary, action items — and the\n" +
-    "full speaker-attributed transcript with --transcript. Each transcript line\n" +
-    "is labeled with the reference that cites it, so a message can name the exact words:\n" +
+    "Show one call: title, participants, summary, action items, frames of its\n" +
+    "video (cast call snap), and the full speaker-attributed transcript with\n" +
+    "--transcript. Each transcript line is labeled with the reference that cites\n" +
+    "it, so a message can name the exact words:\n" +
     "  cl-42           # in a message: the call, as a live pill (a card alone on its line)\n" +
     "  cl-42:15-25     # in a message: lines 15 to 25, embedded alone on a line\n" +
     "  cast call cl-42 15:25   # print just those lines\n" +
+    "  cast call cl-42@12:34   # the lines being said at 12m34s\n" +
     "and a link can too:\n" +
     "  https://codecast.sh/calls/<id>?turns=<from>-<to>   # those lines, selected\n" +
     "  https://codecast.sh/calls/<id>?part=summary        # the summary\n" +
     "  https://codecast.sh/calls/<id>?part=action-<n>     # action item n (from 1)\n\n" +
     "cast call hold <duration>|off   # from a session a live huddle feeds: hold\n" +
     "                                # the room's words for a stretch of work\n\n" +
-    "  cast call cl-42@12:34   # the lines being said at 12m34s\n" +
     "A recorded call has video, and snap pulls a frame of it as a PNG you can open:\n" +
     "  cast call snap cl-42:15         # the moment line 15 was said (or: snap cl-42 15)\n" +
     "  cast call snap cl-42@12:34      # 12m34s into the call\n" +
@@ -10168,7 +10170,9 @@ program
     "recorded, else the room (--composite for the room regardless). Each frame prints with\n" +
     "the line being said and its citation: cl-42@12:34 alone on a line in a message renders\n" +
     "as that same picture for anyone who can read the call. --json gives each frame's path,\n" +
-    "kind (screen or composite) and what it shows. `cast call <id>` says what was recorded.\n" +
+    "kind (screen or composite) and what it shows; a refusal gives its code and, where one\n" +
+    "exists, a `try` list of commands that will work. `cast call <id>` says what was recorded.\n" +
+    "--share uploads frames as public images, only for readers outside codecast.\n" +
     "A call still recording has only its live picture until Record is stopped. Needs ffmpeg."
   )
   .argument("<id>", "Call short id (cl-42), id or unique prefix from `cast calls`; or the verb `hold` or `snap`")
@@ -10180,13 +10184,14 @@ program
   .option("--composite", "With `snap`: the room view (faces and the share as everyone saw it)")
   .option("-o, --out <path>", "With `snap`: a .png/.jpg file, or a directory (default: a private scratch directory)")
   .option("--max <n>", "With `snap` on a line range: at most this many frames (default 8, up to 50)")
-  .option("--share", "With `snap`: upload each frame as an image anyone with its link can open, for readers outside the team (cite cl-42@12:34 for the team)")
+  .option("--share", "With `snap`: upload each frame as a public image anyone with its link can open; only for readers outside codecast (cite cl-42@12:34 for everyone else)")
   .action(async (ref: string, duration: string | undefined, options: any, command: { args: string[] }) => {
     if (ref === "snap") {
       const { runCallSnap } = await import("./callSnap.js");
       const { uploadOne } = await import("./imageCommand.js");
       const deps = { getCliEndpoint, detectCurrentSessionId };
-      // `snap cl-42 15` and `snap cl-42 12:34`: the moment as its own word.
+      // `snap cl-42 15`: the moment as its own word. A colon pair there
+      // (`snap cl-42 12:34`) is refused as ambiguous, lines or a time.
       const extra = command.args.slice(2).join(" ") || undefined;
       await runCallSnap(
         duration,
@@ -10200,6 +10205,14 @@ program
         extra,
       );
       return;
+    }
+    // The video options mean nothing to the words: say where they go
+    // rather than print words as if they had been honored.
+    const snapOnly = (["screen", "composite", "out", "max", "share"] as const).find((k) => options[k] !== undefined);
+    if (snapOnly) {
+      const flag = snapOnly === "out" ? "-o" : `--${snapOnly}`;
+      console.error(`${flag} works with \`cast call snap\`: cast call snap ${ref === "hold" ? "cl-42@12:34" : ref} ${flag}${snapOnly === "out" ? " <path>" : snapOnly === "max" ? " <n>" : ""}`);
+      process.exit(1);
     }
     if (ref === "hold") {
       // The agent asks its huddle for time. The words keep flowing into the
@@ -10335,6 +10348,10 @@ program
     console.log(`${c.dim}${callUrl()}${c.reset}`);
     const who = (call.participants || []).map((p: any) => p.name).join(", ");
     if (who) console.log(`${c.dim}speakers:${c.reset} ${who}`);
+    // People from outside the team who were let in, spoken or not (each name
+    // already carries its "(guest)" mark).
+    const guests = (call.guests || []).map((g: any) => g.name).join(", ");
+    if (guests) console.log(`${c.dim}guests:${c.reset} ${guests}`);
     if (video.length) {
       const first = nearestRecordedMs(video, video[0].fromMs);
       const hint = first !== null ? ` ${c.dim}(a frame: cast call snap ${callRefId(handle, null, first)} or ${handle}:<line>)${c.reset}` : "";

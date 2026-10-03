@@ -44,7 +44,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { internalAction, internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { CALL_RECORDING_URL_WINDOW_MS, guestIdentity, isGuestPresent, isRecordingActive } from "@codecast/shared/contracts";
+import { CALL_RECORDING_URL_WINDOW_MS, callSpeakerName, guestIdFromIdentity, guestIdentity, isGuestPresent, isRecordingActive } from "@codecast/shared/contracts";
 import { verifyApiToken } from "./apiTokens";
 import { authorizeRoom, liveMembers, liveSeat } from "./callRooms";
 import { liveTranscriptFor, postEvent } from "./callChat";
@@ -264,18 +264,58 @@ export async function roomRecordingState(ctx: any, roomKey: string) {
   };
 }
 
+/** Who a LiveKit identity is, as the room knew them: a guest by the name the
+ *  room let in (marked as a guest), anyone else by their teammate name. */
+async function identityName(ctx: any, roomKey: string, identity: string): Promise<string> {
+  const guestId = guestIdFromIdentity(identity);
+  if (!guestId) return await teammateName(ctx, identity);
+  const id = ctx.db.normalizeId("call_guests", guestId);
+  const guest = id ? await ctx.db.get(id) : null;
+  return callSpeakerName(identity, guest && guest.room_key === roomKey ? guest.name : null);
+}
+
+/** How the room's last run ended: the composite most recently pressed for
+ *  among those no longer filming (being finished, finished, or failed), with
+ *  what a notice needs to say it truthfully. A run that failed or never began
+ *  left no video, and one somebody stopped is said with their name. No clock
+ *  here (a query reading the time would not re-run as it passes): a client
+ *  matches it to the run it saw end. */
+export async function roomRecordingEnd(ctx: any, roomKey: string) {
+  let last: RecordingRow | null = null;
+  for (const status of ["stopping", "ready", "failed"] as const) {
+    const rows: RecordingRow[] = await ctx.db
+      .query("call_recordings")
+      .withIndex("by_room_status", (q: any) => q.eq("room_key", roomKey).eq("status", status))
+      .order("desc")
+      .take(8);
+    for (const r of rows) if (r.kind === "composite" && (!last || r.requested_at > last.requested_at)) last = r;
+  }
+  if (!last) return null;
+  return {
+    run_id: String(last._id),
+    status: last.status as "stopping" | "ready" | "failed",
+    stop_reason: last.stop_reason ?? null,
+    error: last.error ?? null,
+    stopped_by: last.stopped_by ? { id: last.stopped_by, name: await identityName(ctx, roomKey, last.stopped_by) } : null,
+  };
+}
+
 /** The room's recording state for anyone who may be in the room (the open
  *  door and an invite grant included: whoever can hear the room is told it is
  *  recorded). `configured` says whether a press could work at all, so a
- *  client can leave the button out rather than offer one that fails. Why a
- *  run ended (a failure, the limit) is a record_off line in the thread. */
+ *  client can leave the button out rather than offer one that fails. `ended`
+ *  is how the last run ended, for the notice that tells the room. */
 export const getRoomRecording = query({
   args: { room_key: v.string() },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return null;
     if (!(await authorizeRoom(ctx, userId, args.room_key)).ok) return null;
-    return { configured: recordingConfigured(), live: await roomRecordingState(ctx, args.room_key) };
+    return {
+      configured: recordingConfigured(),
+      live: await roomRecordingState(ctx, args.room_key),
+      ended: await roomRecordingEnd(ctx, args.room_key),
+    };
   },
 });
 
@@ -483,24 +523,39 @@ export const deleteRecording = mutation({
   handler: async (ctx, args): Promise<{ deleted: number }> => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
-    const id = ctx.db.normalizeId("call_recordings", args.recording_id);
-    const row = id ? await ctx.db.get(id) : null;
-    const call = row ? await ctx.db.get(row.transcript_id) : null;
-    // One error for "no row" and "not yours to read", so a probe learns nothing.
-    if (!row || !call || !(await canReadCall(ctx, userId, call))) throw new Error("Recording not found");
-    const runRows = (await callRows(ctx, call._id)).filter((r) => runIdOf(r) === runIdOf(row));
-    const verdict = mayDeleteRun(String(userId), runRows, await isTeamAdmin(ctx, userId, call.team_id));
-    if (!verdict.ok) {
-      throw new Error(verdict.reason === "still_recording" ? "Stop the recording before deleting it" : "Only whoever started this recording, or a team admin, can delete it");
-    }
-    for (const r of runRows) await ctx.db.delete(r._id);
-    const loop = await recordingLoop(ctx, runIdOf(row) as Id<"call_recordings">);
-    if (loop) await ctx.db.delete(loop._id);
-    await scheduleObjectDelete(ctx, runRows, { wholeRun: true });
-    await postEvent(ctx, { room_key: call.room_key, team_id: call.team_id, user_id: userId, event: "record_deleted", transcript_id: call._id });
-    return { deleted: runRows.length };
+    const out = await deleteRecordingRun(ctx, userId, args.recording_id);
+    if (!out.ok) throw new Error(out.message);
+    return { deleted: out.deleted };
   },
 });
+
+export type DeleteRecordingOutcome =
+  | { ok: true; deleted: number }
+  | { ok: false; code: "NOT_FOUND" | "STILL_RECORDING" | "FORBIDDEN"; message: string };
+
+/** deleteRecording's work, its refusals answered rather than thrown, so the
+ *  store's receipt-backed delete (dispatch deleteCallRecording) can record a
+ *  refusal as the command's outcome and roll the run back on the client. */
+export async function deleteRecordingRun(ctx: any, userId: Id<"users">, recordingId: string): Promise<DeleteRecordingOutcome> {
+  const id = ctx.db.normalizeId("call_recordings", recordingId);
+  const row = id ? await ctx.db.get(id) : null;
+  const call = row ? await ctx.db.get(row.transcript_id) : null;
+  // One error for "no row" and "not yours to read", so a probe learns nothing.
+  if (!row || !call || !(await canReadCall(ctx, userId, call))) return { ok: false, code: "NOT_FOUND", message: "Recording not found" };
+  const runRows = (await callRows(ctx, call._id)).filter((r) => runIdOf(r) === runIdOf(row));
+  const verdict = mayDeleteRun(String(userId), runRows, await isTeamAdmin(ctx, userId, call.team_id));
+  if (!verdict.ok) {
+    return verdict.reason === "still_recording"
+      ? { ok: false, code: "STILL_RECORDING", message: "Stop the recording before deleting it" }
+      : { ok: false, code: "FORBIDDEN", message: "Only whoever started this recording, or a team admin, can delete it" };
+  }
+  for (const r of runRows) await ctx.db.delete(r._id);
+  const loop = await recordingLoop(ctx, runIdOf(row) as Id<"call_recordings">);
+  if (loop) await ctx.db.delete(loop._id);
+  await scheduleObjectDelete(ctx, runRows, { wholeRun: true });
+  await postEvent(ctx, { room_key: call.room_key, team_id: call.team_id, user_id: userId, event: "record_deleted", transcript_id: call._id });
+  return { ok: true, deleted: runRows.length };
+}
 
 /** Queue the bucket cleanup for rows that are gone: each row's file and live
  *  frame, and (`wholeRun`) everything under the run's prefix, so an object

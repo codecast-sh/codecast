@@ -103,6 +103,8 @@ is_read() {
     chat) case "${2:-}" in read|thread|channels|ls|search) return 0 ;; *) return 1 ;; esac ;;
     # Only show and ls: a bare `cast decide "<question>"` posts a decision.
     decide) case "${2:-}" in show|ls) return 0 ;; *) return 1 ;; esac ;;
+    # A decision stack's reads; create, add, remove, reorder, policy and delegate write.
+    stack) case "${2:-}" in show|ls|list) return 0 ;; *) return 1 ;; esac ;;
     state) [ "${2:-}" = show ] ;;
     *) return 1 ;;
   esac

@@ -18,9 +18,9 @@ import { ComposerSendButton, ComposerShell, ComposerTextarea, ComposerTextRow } 
 import { ViewerFaces } from "@/components/presence/ViewerFaces";
 import { typed } from "../timeline";
 import { fly, useFilmTime } from "../filmClock";
-import { FilmGrow } from "../film";
+import { FilmGrow, FilmSwap } from "../film";
 import { DESK, leadMessages, STEER } from "../fixtures/desk";
-import { ENTRIES, PREV, VIEWER, workingLabel, type Entry } from "../fixtures/conversation";
+import { ENTRIES, PREV, VIEWER, WORKING_CUES, WORKING_LABELS, type Entry } from "../fixtures/conversation";
 import { CUES, PEOPLE, SESSIONS } from "../fixtures/story";
 import { LEAD_TURN_ENDS } from "./conversation.motion";
 import type { PartProps } from "./contract";
@@ -81,9 +81,10 @@ export function LeadHeader({ now }: PartProps) {
   );
 }
 
+const TESTS_PASS = [CUES.testsPass];
+
 /** The transcript: the open session's tail, then every entry of the lead's. */
 export function LeadTranscript({ now }: PartProps) {
-  const testsDone = useFilmTime((t) => t >= CUES.testsPass);
   const prevGone = useFilmTime((t) => t >= DESK.paneSwap + 0.6);
   return (
     <div className="relative shrink-0 bg-sol-bg">
@@ -98,7 +99,8 @@ export function LeadTranscript({ now }: PartProps) {
         {ENTRIES.map((e) => (
           <FilmGrow key={e.key} at={e.cue} dur={0.7}>
             <div {...fly(`desk/conversation.entry:${e.key}`)} data-hero-live={e.live ? "" : undefined}>
-              <Row><EntryView e={e} now={now} done={testsDone} /></Row>
+              {/* A finished call gains its result's line count as the tests pass: dissolved in over the running one, never in one frame. */}
+              <FilmSwap cues={TESTS_PASS} render={(step) => <Row><EntryView e={e} now={now} done={step > 0} /></Row>} />
             </div>
           </FilmGrow>
         ))}
@@ -112,7 +114,6 @@ export function LeadComposer(_: PartProps) {
   const len = useFilmTime((t) => (t >= DESK.steerType && t < DESK.steerSent ? typed(STEER, t, DESK.steerType, DESK.steerRate).length : 0));
   // The film runs the turn about three times faster than life; the clock reads the turn's time. The turn ends once both workers are spawned.
   const working = useFilmTime((t) => (t >= CUES.prompt && t < LEAD_TURN_ENDS + 0.5 ? Math.floor((t - CUES.prompt) * 3) : 0));
-  const label = useFilmTime(workingLabel);
   const draft = STEER.slice(0, len);
   const start = 1_000_000;
   return (
@@ -120,7 +121,9 @@ export function LeadComposer(_: PartProps) {
       <ComposerShell
         inline={false}
         // The working line keeps its room for the whole film and fades with the turn (conversation.motion.ts), so the composer never jumps.
-        meta={<span {...fly("desk/conversation.working")} className="inline-flex"><WorkingStatusLineView startedAt={start} now={start + working * 1000} label={label} /></span>}
+        // Each new label fades out the old and in the new (FilmSwap through), so what it is doing never changes in one frame.
+        // The app shows the clock and label only after 10s of work; the film's first state holds them back, so they arrive with the first crossing rather than in one frame.
+        meta={<span {...fly("desk/conversation.working")} className="inline-flex"><FilmSwap cues={WORKING_CUES} ground="" through render={(step) => <WorkingStatusLineView startedAt={start} now={step === 0 ? start : start + working * 1000} label={WORKING_LABELS[step]} />} /></span>}
       >
         <ComposerTextRow send={<span {...fly("desk/conversation.send")} className="inline-flex"><ComposerSendButton canSubmit={draft.length > 0} /></span>}>
           <ComposerTextarea value={draft} readOnly placeholder="Send a message..." tabIndex={-1} />

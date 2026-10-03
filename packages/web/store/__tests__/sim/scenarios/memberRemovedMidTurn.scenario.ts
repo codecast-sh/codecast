@@ -7,26 +7,18 @@
 // acme row it held. The catalog checks the rest at every settle: no unreadable
 // task (INV-workspace-rows), no acme cursor left (INV-cursors), no surviving
 // lock or outbox entry, and the anchor list (INV-roles).
-//
-// Known: INV-fixpoint fails on the task t, whose first byIds adds the comments
-// the task list never carries (ct-56354), so the runs leave it out.
 
 import { api } from "@codecast/convex/convex/_generated/api";
 import { scenario } from "../dsl";
 
-scenario({ name: "memberRemovedMidTurn", known: { "INV-fixpoint": "ct-56354" } }, async (w) => {
+scenario({ name: "memberRemovedMidTurn" }, async (w) => {
   w.team("acme", { features: { org: true } });
   w.user("ada", ["acme"]).user("bo", ["acme"]);
   const s = w.session("ada", "s");
   w.session("bo", "s", { agentStatus: "working" });
   const t = w.task("t", { owner: "ada", session: s });
   w.role("acme", "rev");
-  // bo's team list answers after his first inbox floor. The other order trips
-  // ct-56045 (the floor probe prunes team rows), which viewerHideVsOwner guards.
-  const teamPush = "live:bo-host:team";
-  w.net.lag(teamPush);
   const b = await w.device("bo", { scope: { team: "acme" } });
-  w.net.release(teamPush);
   await b.host.bootstrap("tasks", api.tasks.webList, { team_id: w.idOf("acme"), workspace: "team", include_derived: true }, { select: (r: any) => r?.items ?? r });
   await b.host.feed("anchors", api.anchors.listAnchors, () => ({}));
   await w.expect(b.host).shows(s);

@@ -1,7 +1,6 @@
 {
  "asOf": "2026-01-14T17:09:00.000Z",
  "notes": "synthetic three person huddle that decides a rollout and names three owners",
- "judge": "the summary says the team decided to ship per-sender rate limits behind a flag on Thursday with the reseller at 200; the action items are exactly the three commitments (Iris emails the reseller, Theo adds a 429 dashboard panel, Mara reviews the branch) with those owners, and nothing invented",
  "snapshot": {
   "kind": "huddle",
   "started_at": 1768410000000,

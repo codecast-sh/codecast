@@ -2,7 +2,7 @@ import { withInboxView } from "../../lib/inboxViewHistory";
 import { useState, useCallback, useRef, memo, useMemo, useDeferredValue, lazy, Suspense, type ReactNode } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useEventListener } from "../../hooks/useEventListener";
-import { useMissingSessionRow } from "../../hooks/useMissingSessionRow";
+import { useMissingSessionLookup } from "../../hooks/useMissingSessionRow";
 import { SessionPrewarm } from "../../components/SessionPrewarm";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTabActive } from "../../hooks/usePagePresence";
@@ -376,7 +376,7 @@ export function QueuePageClient() {
   // The row for a target the queue does not hold, fetched for injection. An
   // unavailable target stays subscribed: a session that syncs late, or is
   // shared with the viewer afterwards, opens on its own.
-  const missingRow = useMissingSessionRow(pendingInjectId ?? unavailableId);
+  const { row: missingRow, failed: missingRowFailed } = useMissingSessionLookup(pendingInjectId ?? unavailableId);
 
   // Select session from URL param -- only when the param actually changes
   const paramSessionId = searchParams.get("s") || null;
@@ -771,6 +771,7 @@ export function QueuePageClient() {
         <ConversationPlaceholder id={pendingInjectId} />
       ) : unavailableId ? (
         <ConversationUnavailable
+          failed={missingRowFailed}
           actionLabel="Back to inbox"
           onAction={() => { setUnavailableId(null); handleBack(); }}
         />

@@ -374,7 +374,7 @@ function BatchCard({ b, devices, now, expandedDefault }: { b: Batch; devices: Ma
 
 export default function MigratePanel() {
   const { devices, byId, locals, remotes, loaded } = useDevices();
-  const { data: candidatesRaw } = useQueryNoThrow(api.sessionMigrations.candidates, {}) as { data: MigrationCandidate[] | null | undefined };
+  const { data: candidatesRaw, error: candidatesError, retry: retryCandidates } = useQueryNoThrow(api.sessionMigrations.candidates, {}) as { data: MigrationCandidate[] | null | undefined; error: Error | undefined; retry: () => void };
   const { data: batchesRaw } = useQueryNoThrow(api.sessionMigrations.listBatches, {}) as { data: Batch[] | null | undefined };
   const createBatch = useMutation(api.sessionMigrations.createBatch);
 
@@ -558,7 +558,12 @@ export default function MigratePanel() {
             movable only
           </label>
         </div>
-        {candidatesRaw === undefined ? (
+        {candidatesRaw === undefined && candidatesError ? (
+          <div className="px-4 py-6 text-center text-xs text-sol-text-muted sm:px-5">
+            Your sessions could not be loaded.{" "}
+            <button type="button" onClick={retryCandidates} className="text-sol-cyan hover:underline">Try again</button>
+          </div>
+        ) : candidatesRaw === undefined ? (
           <div className="px-4 py-6 text-center text-xs text-sol-text-muted sm:px-5">Loading sessions…</div>
         ) : rows.length === 0 ? (
           <div className="px-4 py-6 text-center text-xs text-sol-text-muted sm:px-5">

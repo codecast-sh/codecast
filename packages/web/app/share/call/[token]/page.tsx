@@ -133,9 +133,10 @@ function SharedCallBody({
         title={call.title || (call.recording ? "Untitled recording" : "Untitled huddle")}
         at={call.started_at}
         meta={
-          !call.recording && call.participants.length > 0 ? (
-            <span>with {call.participants.map((p) => p.name).join(", ")}</span>
-          ) : null
+          // The voices on the record, a guest among them already marked
+          // "(guest)" in the name. A guest who only listened is not named on
+          // a page anybody with the link can open.
+          !call.recording && call.participants.length > 0 ? <span>with {call.participants.map((p) => p.name).join(", ")}</span> : null
         }
       />
       {call.summary && (

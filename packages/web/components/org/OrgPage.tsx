@@ -3,7 +3,7 @@
 // reparenting. Paints from the `orgTree` store singleton (fed here by
 // useSyncOrgTree); every edit is a store action that moves the card in the
 // same tick and rides dispatch to the orgRoles mutation.
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -214,8 +214,10 @@ export function OrgPageInner() {
   // `?compose=<text>` (a charter empty state links here) opens the pane and
   // seeds the head of people's composer with the text.
   const composeText = composeParam(searchParams.toString());
-  const [panelMode, setPanelModeState] = useState<OrgPanelMode>(proposalShortId ? "staffing" : "node");
-  const [staffingOpen, setStaffingOpen] = useState(!!proposalShortId);
+  // `?panel=history` (the undo timeline's "Open in org record") opens on the History tab.
+  const historyLink = !proposalShortId && new URLSearchParams(searchParams.toString()).get("panel") === "history";
+  const [panelMode, setPanelModeState] = useState<OrgPanelMode>(proposalShortId ? "staffing" : historyLink ? "history" : "node");
+  const [staffingOpen, setStaffingOpen] = useState(!!proposalShortId || historyLink);
   // `?view=health` is the health page (HealthBoard): the chart in its health
   // mode, each role's week on its card, and the head of people's conversation
   // in its own column. A proposal link wins: the page is the proposal while one is open.
@@ -297,6 +299,15 @@ export function OrgPageInner() {
     const qs = params.toString();
     router.replace(qs ? `/org?${qs}` : "/org");
   }, [searchParams, router]);
+  // A history link that arrives while the page is already mounted (the undo
+  // timeline's "Open in org record" from /org) opens the tab too; the param
+  // then leaves the URL so the next click is a change again.
+  useEffect(() => {
+    if (!historyLink) return;
+    setPanelModeState("history");
+    setStaffingOpen(true);
+    replaceParams((params) => params.delete("panel"));
+  }, [historyLink]); // eslint-disable-line react-hooks/exhaustive-deps -- fires on the link's arrival only
   const setProposalParam = useCallback((shortId: string | null) => replaceParams((params) => {
     if (shortId) { params.set("proposal", shortId); params.delete("view"); } else params.delete("proposal");
   }), [replaceParams]);

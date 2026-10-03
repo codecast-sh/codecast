@@ -157,7 +157,7 @@ export default function LandingPage() {
     <main className="min-h-screen w-full overflow-x-hidden" style={{ backgroundColor: '#fdf6e3' }}>
       <MarketingNav active="/" />
 
-      {/* Hero: the headline and the ways in, then the film, then the rest of the pitch. */}
+      {/* Hero: the headline, the pitch and the install strip, then the film, then the ways in. */}
       <section className="mx-auto px-6 pt-6 pb-6">
         <div className="text-center max-w-3xl mx-auto">
           <h1 className="text-4xl sm:text-5xl lg:text-[56px] font-bold leading-[1.1] tracking-tight mb-5 font-mono lg:-mx-24" style={{ color: '#002b36' }}>
@@ -165,49 +165,46 @@ export default function LandingPage() {
             <span className="block mt-3 font-normal text-lg sm:text-[22px]" style={{ color: '#657b83' }}>Raise your AI army. Stay in command.</span>
           </h1>
 
-          <div className="flex flex-wrap gap-3 justify-center items-center mb-6">
-            <Link href="/signup">
-              <Button variant="outline" className="bg-transparent text-sm px-5 h-10 font-medium border-[#93a1a1] text-[#586e75] hover:bg-[#cb4b16] hover:border-[#cb4b16] hover:text-[#fdf6e3] transition-colors">
-                Get started free
-              </Button>
-            </Link>
-            <Link href="/download">
-              <Button variant="outline" className="bg-transparent text-sm px-5 h-10 font-medium gap-2 border-[#93a1a1] text-[#586e75] hover:bg-[#cb4b16] hover:border-[#cb4b16] hover:text-[#fdf6e3] transition-colors">
-                <AppleIcon className="w-4 h-4" />
-                Download for Mac
-              </Button>
-            </Link>
-            <Link href="#tour">
-              <Button variant="outline" className="bg-transparent text-sm px-5 h-10 font-medium gap-2 border-[#93a1a1] text-[#586e75] hover:bg-[#cb4b16] hover:border-[#cb4b16] hover:text-[#fdf6e3] transition-colors">
-                <svg className="w-3 h-3" viewBox="0 0 10 10" fill="currentColor" aria-hidden><path d="M2 1.2v7.6a.6.6 0 0 0 .9.5l6.1-3.8a.6.6 0 0 0 0-1L2.9.7a.6.6 0 0 0-.9.5z" /></svg>
-                Watch the tour
-              </Button>
-            </Link>
+          <p className="text-[15px] leading-relaxed mb-4 max-w-2xl mx-auto" style={{ color: '#657b83' }}>
+            Chat, calls, tasks, docs, pull requests and decisions, with <span className="whitespace-nowrap"><Highlight color="amber">Claude Code</Highlight>,</span> <span className="whitespace-nowrap"><Highlight color="green">Codex</Highlight>,</span> <span className="whitespace-nowrap"><Highlight color="blue">Cursor</Highlight>,</span> <span className="whitespace-nowrap"><Highlight color="rose">Gemini</Highlight>,</span> <Highlight color="violet">OpenCode</Highlight> and <Highlight color="cyan">pi</Highlight> as teammates in every one. Everything links back to the session that did it.
+          </p>
+          <div className="max-w-xl mx-auto mb-5">
+            <div className="relative">
+              <div className="absolute -inset-2 bg-gradient-to-r from-[#b58900]/25 via-[#cb4b16]/25 to-[#dc322f]/25 rounded-2xl blur-lg opacity-60"></div>
+              <div className="relative">
+                <InstallTabs location="landing_hero" showAlternatives={false} compact />
+              </div>
+            </div>
+            <p className="mt-2 text-xs" style={{ color: '#93a1a1' }}>One command. Your agents join as they are.</p>
           </div>
         </div>
-        {/* The first screen goes to the film: its width follows the viewport's height (about 230px of headline and 56px of buttons above, 90px of scrubber and caption below), between 640px and 1240px, and a phone gets the full width. */}
-        <div className="relative mx-auto" style={{ width: "min(100%, clamp(640px, min(100vw - 96px, (100svh - 402px) * 1280 / 760), 1240px))" }}>
+        {/* The first screen goes to the film: its width follows the viewport's height (about 230px of headline, 64px of pitch and 112px of install strip above, 90px of scrubber and caption below; the buttons follow the film), between 640px and 1240px, and a phone gets the full width. */}
+        <div className="relative mx-auto" style={{ width: "min(100%, clamp(640px, min(100vw - 96px, (100svh - 522px) * 1280 / 760), 1240px))" }}>
           <HeroFlythrough />
+        </div>
+        <div className="flex flex-wrap gap-3 justify-center items-center mt-8">
+          <Link href="/signup">
+            <Button className="text-[15px] px-6 h-11 font-semibold text-[#fdf6e3] border-0 transition-all hover:-translate-y-px hover:brightness-110" style={{ background: 'linear-gradient(135deg, #e86c5d 0%, #cb4b16 100%)', boxShadow: '0 6px 20px -6px rgba(203,75,22,0.55)' }}>
+              Get started free
+            </Button>
+          </Link>
+          <Link href="/download">
+            <Button className="text-[15px] px-6 h-11 font-semibold gap-2 text-[#fdf6e3] border-0 transition-all hover:-translate-y-px hover:brightness-125" style={{ backgroundColor: '#002b36', boxShadow: '0 6px 20px -8px rgba(0,43,54,0.6)' }}>
+              <AppleIcon className="w-4 h-4" />
+              Download for Mac
+            </Button>
+          </Link>
+          <Link href="#tour">
+            <Button variant="outline" className="bg-transparent text-[15px] px-6 h-11 font-semibold gap-2 border-[#93a1a1] text-[#586e75] hover:bg-[#eee8d5] hover:text-[#002b36] transition-colors">
+              <svg className="w-3 h-3" viewBox="0 0 10 10" fill="currentColor" aria-hidden><path d="M2 1.2v7.6a.6.6 0 0 0 .9.5l6.1-3.8a.6.6 0 0 0 0-1L2.9.7a.6.6 0 0 0-.9.5z" /></svg>
+              Watch the tour
+            </Button>
+          </Link>
         </div>
       </section>
 
       <section className="max-w-6xl mx-auto px-6 pt-6 pb-20">
         <div className="text-center max-w-3xl mx-auto">
-          <p className="text-lg leading-loose mb-6" style={{ color: '#657b83' }}>
-            Chat, calls, tasks, docs, pull requests and decisions, with <span className="whitespace-nowrap"><Highlight color="amber">Claude Code</Highlight>,</span> <span className="whitespace-nowrap"><Highlight color="green">Codex</Highlight>,</span> <span className="whitespace-nowrap"><Highlight color="blue">Cursor</Highlight>,</span> <span className="whitespace-nowrap"><Highlight color="rose">Gemini</Highlight>,</span> <Highlight color="violet">OpenCode</Highlight> and <Highlight color="cyan">pi</Highlight> as teammates in every one. Everything links back to the session that did it.
-          </p>
-          <div className="max-w-2xl mx-auto mb-6">
-            <div className="relative">
-              <div className="absolute -inset-3 bg-gradient-to-r from-[#b58900]/25 via-[#cb4b16]/25 to-[#dc322f]/25 rounded-2xl blur-lg opacity-70"></div>
-              <div className="relative">
-                <InstallTabs location="landing_hero" showAlternatives={false} />
-              </div>
-            </div>
-            <p className="mt-4 text-sm" style={{ color: '#93a1a1' }}>
-              One command installs the CLI. The agents you already run join the workspace as they are.
-            </p>
-          </div>
-
           <p className="text-lg mb-8 font-mono min-h-[28px]" style={{ color: '#586e75' }}>
             Imagine <TypingEffect />
           </p>

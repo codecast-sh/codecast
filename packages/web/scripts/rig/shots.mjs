@@ -17,9 +17,9 @@
 // frame (state-<name>-bar-focus.png). Nothing opens a window and nothing
 // makes a sound.
 import { mkdirSync } from "node:fs";
-import { killChrome, launchChrome } from "./chrome.mjs";
-import { connect, connectTarget, newTarget, sleep } from "./cdp.mjs";
-import { APP_URL, signIn } from "./auth.mjs";
+import { killChrome, launchSignedIn } from "./chrome.mjs";
+import { connectTarget, newTarget, sleep } from "./cdp.mjs";
+import { faceRigDeployment, IDENTITIES } from "./auth.mjs";
 import { PAGE_LIB } from "./page.mjs";
 import { BAR } from "./legs.mjs";
 import { FAKE_BRIDGE, STATES_LIB } from "./states.mjs";
@@ -96,14 +96,19 @@ const watch = (page, tag) => {
   });
 };
 
-const child = await launchChrome({ port: PORT, profile: `${DIR}/prof-shots`, fresh: true });
+const DEP = faceRigDeployment();
+let child;
 const shots = [];
 try {
-  const bar = await connect(PORT, /about:blank|localhost/);
-  await bar.send("Emulation.setFocusEmulationEnabled", { enabled: true });
-  await applyMedia(bar);
-  watch(bar, "bar");
-  await signIn(bar, WHO);
+  const up = await launchSignedIn({
+    port: PORT, profile: `${DIR}/prof-shots`, dep: DEP, userId: IDENTITIES[WHO].id,
+    prepare: async (page) => {
+      await applyMedia(page);
+      watch(page, "bar");
+    },
+  });
+  child = up.child;
+  const bar = up.page;
   await bar.evaluate(PAGE_LIB);
   await bar.evaluate(`__rig.waitFor("!s.missing && s.entries.length > 0", 240000)`);
   const t = await newTarget(PORT);
@@ -112,7 +117,7 @@ try {
   await applyMedia(float);
   watch(float, "float");
   await float.addInitScript(FAKE_BRIDGE);
-  await float.navigate(`${APP_URL}/call-panel`);
+  await float.navigate(`${DEP.appUrl}/call-panel`);
   // The recipes read the roster and fake the engine: both pages have to
   // hold the roster and have the row module up first.
   const roster = `(async () => { for (let i = 0; i < 2400; i++) { const st = window.__inboxStore?.getState(); if (st?.currentUser?._id && (st.teamMembers ?? []).length > 1 && window.__faceRow) return st.teamMembers.length; await new Promise((r) => setTimeout(r, 100)); } throw new Error("no roster"); })()`;

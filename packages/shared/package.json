@@ -66,6 +66,8 @@
     "./team/folderLists": "./team/folderLists.ts",
     "./team/memberKind": "./team/memberKind.ts",
     "./vault": "./vault/index.ts",
+    "./vault/frontmatter": "./vault/frontmatter.ts",
+    "./memory": "./memory/index.ts",
     "./chat": "./chat/index.ts",
     "./chat/dm": "./chat/dm.ts",
     "./comments": "./comments/index.ts",

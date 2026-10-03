@@ -1,5 +1,5 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import { commandLeavesCheckout, gitToolOutcome, madeInTranscript, transcriptGitOutcomes } from "./gitToolOutcome";
+import { commandLeavesCheckout, gitToolOutcome, knownPullRequestIds, madeInTranscript, transcriptGitOutcomes } from "./gitToolOutcome";
 
 describe("gitToolOutcome", () => {
   test("a git commit and the summary line it printed", () => {
@@ -91,4 +91,11 @@ test("a reused call reads string replacements, mutable objects and repeated ids"
   expect([...read().prRefs]).toEqual(["o/r#29"]);
   const replacement = { ...call, input: '{"command":"git status"}' };
   expect(transcriptGitOutcomes([{ tool_calls: [replacement], tool_results: [result] }]).prRefs.size).toBe(0);
+});
+
+test("a conversation knows the pull requests linked to it, made by it, and named outright in it", () => {
+  const messages = [{ content: "Opened PR 7. Rank went from #10 to #2." }, { content: "see https://github.com/O/R/pull/9" }];
+  const ids = knownPullRequestIds("O/R", messages, [{ repository: "o/r", number: 3 }, { repository: "x/y", number: 4 }], new Set(["o/r#5"]));
+  expect([...ids].sort()).toEqual(["o/r#3", "o/r#5", "o/r#7", "o/r#9", "x/y#4"]);
+  expect([...knownPullRequestIds(null, messages, [], new Set())]).toEqual([]);
 });

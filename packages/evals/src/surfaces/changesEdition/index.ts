@@ -15,8 +15,7 @@ import { captureFromFile, describePrompt, emDashGate, fileRefForm, leakGate, sen
 // A team day's edition replayed from what prod's edition pass reads
 // (docs/proposals/changes-page.md 7.5): the EditionPromptInput that
 // loadEditionInput builds from the day's stories and facts. prod's
-// editionRequest builds the request (and picks its model by story count), and
-// parseEditionReply reads the reply.
+// editionRequest builds the request, and parseEditionReply reads the reply.
 
 export interface ChangesEditionSnap extends LeakWorld {
   input: EditionPromptInput;

@@ -33,6 +33,8 @@ export function GuestLobby({
   recording,
   accepted,
   creatorTold,
+  doorFull,
+  heldUntil,
   signedIn,
   name,
   onName,
@@ -56,6 +58,12 @@ export function GuestLobby({
   accepted: GuestNotice | null;
   /** The link's creator was sent word of this knock (the room was empty). */
   creatorTold: boolean;
+  /** Their place at the door lapsed (the page slept) and every waiting place
+   *  is taken now; the page's beat asks again until one frees. */
+  doorFull: boolean;
+  /** Let in, and the lobby is holding their place while they read a notice
+   *  that changed or answer the browser's prompt: until when. */
+  heldUntil: number | null;
   /** This browser holds a codecast sign-in: probably a teammate testing
    *  their own link, who should join as themselves. */
   signedIn: boolean;
@@ -127,6 +135,7 @@ export function GuestLobby({
               live={live}
               inviterName={creatorTold ? inviterName : null}
               since={waitingSince}
+              doorFull={doorFull}
               onCancel={onCancel}
               busy={busy}
             />
@@ -152,15 +161,18 @@ export function GuestLobby({
               </label>
             )}
             <CallNotice transcribed={transcribed} recording={recording} since={mode === "rejoin" ? accepted : null} />
+            {/* Joining while the browser's prompt is up would walk in with
+                no camera and no microphone, so the press waits for it. */}
             <button
               type={mode === "ask" ? "submit" : "button"}
               onClick={mode === "rejoin" ? onJoin : undefined}
-              disabled={busy || (mode === "ask" && !name.trim())}
+              disabled={busy || (mode === "ask" && !name.trim()) || (mode === "rejoin" && p.asking)}
               className="flex items-center justify-center gap-2 rounded-xl bg-sol-cyan px-4 py-3 text-[14px] font-semibold text-sol-base03 shadow-[0_8px_24px_-10px_rgba(42,161,152,0.7)] transition-[transform,background-color,opacity] hover:bg-[#33b3a9] active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-45 disabled:shadow-none"
             >
               {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-              {mode === "rejoin" ? "Join the call" : busy ? "Asking…" : "Ask to join"}
+              {mode === "rejoin" ? (p.asking ? "Waiting for your camera and microphone…" : "Join the call") : busy ? "Asking…" : "Ask to join"}
             </button>
+            {mode === "rejoin" && heldUntil && <HeldFor until={heldUntil} />}
             {error ? (
               <p role="alert" className="text-[12px] leading-snug text-sol-orange">
                 {error}
@@ -174,19 +186,34 @@ export function GuestLobby({
                   : `You'll join as a guest: nothing to install, no account. ${live ? "Someone in the call lets you in." : "Someone can let you in once the call starts."}`}
               </p>
             )}
+            {/* This page boots without the app's sign-in (it is a stranger's
+                door), so it cannot open the room itself: it says where the
+                room is instead. */}
             {signedIn && (
               <p className="rounded-lg bg-white/[0.035] px-3 py-2 text-[11.5px] leading-snug text-sol-text-muted ring-1 ring-white/[0.06]">
-                You're signed in to codecast in this browser. On the team?{" "}
+                You're signed in to codecast in this browser. On the team? Join as yourself, not as a guest:{" "}
                 <a href="/inbox" className="text-sol-cyan underline-offset-2 hover:underline">
-                  Join from the app as yourself
-                </a>
-                , not as a guest.
+                  open codecast
+                </a>{" "}
+                and join from Live now in the sidebar.
               </p>
             )}
           </form>
         )}
       </section>
     </div>
+  );
+}
+
+/** The lobby holds an admitted guest's place while they read or answer the
+ *  browser; this says for how long, so taking their time is a choice. */
+function HeldFor({ until }: { until: number }) {
+  const now = useCoarseNow(15_000);
+  const mins = Math.max(1, Math.ceil((until - now) / 60_000));
+  return (
+    <p className="-mt-1.5 text-center font-mono text-[11px] text-sol-text-dim">
+      your place is held for {mins} min
+    </p>
   );
 }
 
@@ -208,6 +235,7 @@ function WaitingCard({
   live,
   inviterName,
   since,
+  doorFull,
   onCancel,
   busy,
 }: {
@@ -216,6 +244,7 @@ function WaitingCard({
   /** Whoever was actually sent word of this knock, or null. */
   inviterName: string | null;
   since: number | null;
+  doorFull: boolean;
   onCancel: () => void;
   busy: boolean;
 }) {
@@ -225,16 +254,19 @@ function WaitingCard({
   return (
     <div className="flex flex-col gap-4 rounded-2xl bg-white/[0.035] p-5 ring-1 ring-white/[0.07]">
       <div className="flex items-center gap-4">
+        {/* No ring while the door is full: nobody inside can see them yet. */}
         <span className="meet-knock flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-sol-base02 font-mono text-[16px] text-sol-text">
-          <span className="meet-knock-ring" aria-hidden />
+          {!doorFull && <span className="meet-knock-ring" aria-hidden />}
           {(name || "?").charAt(0).toUpperCase()}
         </span>
         <div className="min-w-0">
           <div className="text-[14px] font-medium text-sol-text">
-            {live ? "The room knows you're here" : "Waiting for the call to start"}
+            {doorFull ? "Lots of people are waiting" : live ? "The room knows you're here" : "Waiting for the call to start"}
           </div>
           <div className="mt-0.5 text-[12px] leading-snug text-sol-text-muted">
-            {live
+            {doorFull
+              ? "Every place at the door is taken right now. Keep this page open: you'll be back in line as soon as one frees up."
+              : live
               ? "Someone in the call will let you in."
               : inviterName
                 ? `We let ${inviterName} know you're here. Someone can let you in once the call starts.`
@@ -243,7 +275,7 @@ function WaitingCard({
         </div>
       </div>
       <div className="flex items-center justify-between gap-3 border-t border-white/[0.06] pt-3 font-mono text-[11px] text-sol-text-dim">
-        <span>{mins < 1 ? "waiting less than a minute" : `waiting ${mins} min`}</span>
+        <span>{doorFull ? "waiting for a place at the door" : mins < 1 ? "waiting less than a minute" : `waiting ${mins} min`}</span>
         <button
           type="button"
           onClick={onCancel}

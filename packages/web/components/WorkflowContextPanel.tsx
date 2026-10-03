@@ -10,10 +10,8 @@ import { compactAge } from "../lib/threadState";
 import { runNodeCounts, runNodeRows } from "../lib/workflowRun";
 import { WorkflowRunNodes } from "./WorkflowRunNodes";
 import { LivePulseDot } from "./SessionActivityLine";
+import { RailChip, RailDetail } from "./ContextRail";
 import {
-  ChevronDown,
-  ChevronRight,
-  ExternalLink,
   GitBranch,
   Pause,
 } from "lucide-react";
@@ -58,62 +56,34 @@ export function WorkflowRunPanel({ run, workflow, defaultExpanded = false }: { r
   const runHref = `/workflows/runs/${run._id}`;
 
   return (
-    <div data-cc-context-panel className="border-b border-sol-border/30 bg-sol-bg-alt/20">
-      <div className="flex items-center gap-1 pr-2">
-        <button
-          type="button"
-          aria-expanded={expanded}
-          onClick={() => setExpanded(!expanded)}
-          className="min-w-0 flex-1 flex items-center gap-2 px-4 py-2 text-xs hover:bg-sol-bg-alt/40 transition-colors"
-        >
-          <GitBranch className="w-3.5 h-3.5 text-sol-violet flex-shrink-0" />
-          <span className="font-medium text-sol-violet truncate">{name}</span>
-          <span className={`text-[10px] font-medium ${statusColor} flex-shrink-0`}>
-            {run.status === "paused" ? (
-              <span className="flex items-center gap-1"><Pause className="w-2.5 h-2.5" /> gate</span>
-            ) : run.status}
-          </span>
-          {current && (
-            <span className="min-w-0 truncate text-[10px] text-sol-text-muted" title={`At step ${current.label}`}>
-              · {current.label}
-            </span>
-          )}
-          <div className="flex items-center gap-1.5 ml-auto flex-shrink-0">
-            {counts.running > 0 && (
-              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-sol-green/15 text-sol-green text-[10px]">
-                <LivePulseDot className="w-1.5 h-1.5" />
-                {counts.running} live
-              </span>
-            )}
-            {counts.failed > 0 && (
-              <span className="px-1.5 py-0.5 rounded-full bg-sol-red/10 text-sol-red text-[10px]">{counts.failed} failed</span>
-            )}
-            <div className="w-12 h-1.5 rounded-full bg-sol-bg-highlight overflow-hidden">
-              <div
-                className="h-full rounded-full bg-sol-violet transition-all"
-                style={{ width: counts.total > 0 ? `${(counts.done / counts.total) * 100}%` : "0%" }}
-              />
-            </div>
-            <span className="text-sol-text-dim tabular-nums">{counts.done}/{counts.total}</span>
-            {counts.sessions > 0 && (
-              <span className="text-sol-text-dim/70 tabular-nums">{counts.sessions} session{counts.sessions === 1 ? "" : "s"}</span>
-            )}
-            {age && <span className="text-sol-text-dim/70 tabular-nums">{age}</span>}
-            {expanded ? <ChevronDown className="w-3 h-3 text-sol-text-dim" /> : <ChevronRight className="w-3 h-3 text-sol-text-dim" />}
-          </div>
-        </button>
-        <Link
-          href={runHref}
-          className="p-1 rounded text-sol-text-dim hover:text-sol-violet hover:bg-sol-bg-alt transition-colors flex-shrink-0"
-          title="Open the run"
-          aria-label="Open the run"
-        >
-          <ExternalLink className="w-3 h-3" />
-        </Link>
-      </div>
+    <div data-cc-context-panel className="contents">
+      <RailChip data-cc-rail-item="workflow" open={expanded} onToggle={() => setExpanded(!expanded)} title={`${name} · ${run.status}${current ? ` · at ${current.label}` : ""}`}>
+        <GitBranch className="w-3.5 h-3.5 text-sol-violet flex-shrink-0" />
+        <span className="flex-shrink-0 font-medium text-sol-violet">{name}</span>
+        {current && <span className="min-w-0 truncate text-sol-text-dim">{current.label}</span>}
+        {run.status === "paused" ? (
+          <span className={`flex items-center gap-1 flex-shrink-0 ${statusColor}`}><Pause className="w-2.5 h-2.5" /> gate</span>
+        ) : counts.running > 0 ? (
+          <span className="flex items-center gap-1 flex-shrink-0 text-sol-green tabular-nums"><LivePulseDot className="w-1.5 h-1.5" />{counts.running}</span>
+        ) : (
+          <span className={`flex-shrink-0 ${statusColor}`}>{run.status}</span>
+        )}
+        {counts.failed > 0 && <span className="flex-shrink-0 text-sol-red tabular-nums">{counts.failed} failed</span>}
+        <span className="text-sol-text-dim tabular-nums flex-shrink-0">{counts.done}/{counts.total}</span>
+      </RailChip>
 
       {expanded && (
-        <div className="px-3 pb-3 space-y-2">
+        <RailDetail data-cc-context-panel="">
+        <div className="px-3 py-2 space-y-2">
+          <div className="mx-1 flex items-center gap-2 text-xs">
+            <span className="font-medium text-sol-text">{name}</span>
+            <span className={statusColor}>{run.status}</span>
+            {current && <span className="min-w-0 truncate text-sol-text-muted">at {current.label}</span>}
+            <span className="ml-auto flex items-center gap-2 flex-shrink-0 text-sol-text-dim tabular-nums">
+              {counts.sessions > 0 && <span>{counts.sessions} session{counts.sessions === 1 ? "" : "s"}</span>}
+              {age && <span>{age}</span>}
+            </span>
+          </div>
           {run.fail_reason && (
             <p className="mx-1 text-[11px] text-sol-red bg-sol-red/10 rounded px-2 py-1 border border-sol-red/20">
               {run.fail_reason}
@@ -131,6 +101,7 @@ export function WorkflowRunPanel({ run, workflow, defaultExpanded = false }: { r
             Open the run
           </Link>
         </div>
+        </RailDetail>
       )}
     </div>
   );

@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { CloudOff, Copy, DoorOpen, Loader2, Mic, MicOff, MonitorUp, PhoneOff, Settings2, UserX, Video, VideoOff, Volume2, WifiOff, X } from "lucide-react";
+import { AudioLines, CloudOff, Copy, DoorOpen, Loader2, Mic, MicOff, MonitorUp, PhoneOff, Settings2, UserX, Video, VideoOff, Volume2, WifiOff, X } from "lucide-react";
 import { canPickSpeaker, canShareScreen, type GuestCall } from "../../../lib/calls/guestRoom";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { AutoStage, GridStage, SpeakerStage } from "../../../components/calls/StageViews";
@@ -13,14 +13,15 @@ import {
 } from "../../../components/calls/stageHost";
 import { DeviceSelect, NoticePills } from "./MeetChrome";
 import { RecordingMark } from "../../../components/calls/RecordingMark";
-import { guestNoticeLines, humanizeConvexError } from "@codecast/shared/contracts";
+import { guestNoticeLines, humanizeConvexError, type GuestNotice } from "@codecast/shared/contracts";
 
 // The call, for a guest: the member's stage (StageViews: the same tiles, the
 // same views, the same speaking ring and guest marks), with the chrome a
 // guest needs and nothing a guest cannot use. No thread, no agents, no
 // transcript: a guest learns what anyone in a call learns, from the media.
 // What they ARE told, always, is whether the call is recorded and transcribed,
-// in the bar for as long as it is true, and in a line the moment it starts.
+// in the bar for as long as it is true, and in words the moment either starts.
+// So is who in it is not a person: an agent's face is marked as an agent.
 
 export function GuestInCall({
   call,
@@ -28,7 +29,8 @@ export function GuestInCall({
   myName,
   transcribed,
   recording,
-  recordingAccepted,
+  accepted,
+  reconnecting,
   serverTrouble,
   onLeave,
   onReconnect,
@@ -39,10 +41,13 @@ export function GuestInCall({
   myName: string;
   transcribed: boolean;
   recording: boolean;
-  /** Whether the notice the guest joined under already said "recorded". A
-   *  recording they did not agree to when they asked is said in words on
-   *  the way in, not left to a mark in the corner. */
-  recordingAccepted: boolean;
+  /** The notice the guest joined under. What the room keeps beyond it (a
+   *  recording or a transcript that started since, or one running that this
+   *  notice did not say) is said in words on the way in, not left to a mark
+   *  in the corner. */
+  accepted: GuestNotice | null;
+  /** The page is making a new connection in place of a dropped one. */
+  reconnecting: boolean;
   /** The page lost touch with codecast's server (the media may be fine). */
   serverTrouble: boolean;
   onLeave: () => void;
@@ -64,34 +69,39 @@ export function GuestInCall({
 
   // The stage reads the room's people as roster rows (StageViews). Mine is
   // the name I typed, and everyone else's is the name the room gave them.
+  // `kind` rides along: the bar counts people and agents apart, and the
+  // stage marks an agent's face (PersonName) the way it marks a guest's.
   const roster = useMemo(
     () =>
       c.people.map((p) => ({
         user_id: p.identity,
         user_name: p.isLocal ? myName : p.name,
         user_image: p.image,
+        kind: p.kind,
         muted: p.muted,
         sharing: p.sharing,
       })),
     [c.people, myName],
   );
+  const agents = roster.filter((r) => r.kind === "agent").length;
+  const people = roster.length - agents;
   const speaking = useMemo(() => new Set(c.speaking), [c.speaking]);
   const screens = c.tiles.filter((t) => t.kind === "screen");
   const cameras = c.tiles.filter((t) => t.kind === "camera");
 
-  // A recording that starts while they are inside is said in words once,
-  // not only by a pill appearing in the corner; so is one already running
-  // that the notice they joined under did not mention.
-  const [recordNote, setRecordNote] = useState(() => recording && !recordingAccepted);
-  const wasRecording = useRef(recording);
+  // What the guest has been told in words: the notice they joined under,
+  // then each line they dismissed. Whatever the room keeps beyond it is said
+  // once, in a line of its own, not only by a mark appearing in the corner:
+  // a recording that starts while they are inside, a transcript switched on,
+  // or either already running when the notice they joined under said less.
+  // A thing that stops is forgotten, so starting it again is said again.
+  const [told, setTold] = useState<GuestNotice>(() => accepted ?? { recording: false, transcribed: false });
   useWatchEffect(() => {
-    if (recording && !wasRecording.current) setRecordNote(true);
-    if (!recording) {
-      setRecordNote(false);
-      setAskStop(false);
-    }
-    wasRecording.current = recording;
-  }, [recording]);
+    setTold((t) => (t.recording && !recording) || (t.transcribed && !transcribed) ? { recording: t.recording && recording, transcribed: t.transcribed && transcribed } : t);
+    if (!recording) setAskStop(false);
+  }, [recording, transcribed]);
+  const fresh = guestNoticeLines({ recording: recording && !told.recording, transcribed: transcribed && !told.transcribed }, "short");
+  const dismiss = (key: "rec" | "words") => setTold((t) => (key === "rec" ? { ...t, recording: true } : { ...t, transcribed: true }));
   // Stop is for everyone, so it is asked once more, from the mark in the bar
   // or from the line that said it started.
   const [askStop, setAskStop] = useState(false);
@@ -120,15 +130,21 @@ export function GuestInCall({
   const resting = c.phase === "disconnected";
 
   return (
-    <div className="meet dark fixed inset-0 flex flex-col !bg-none bg-sol-base03 text-sol-text">
+    // Inside the notch and the rounded corners on a phone (index.html sets
+    // viewport-fit=cover): the bottom bar keeps its own inset.
+    <div className="meet dark fixed inset-0 flex flex-col !bg-none bg-sol-base03 pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)] pt-[env(safe-area-inset-top)] text-sol-text">
       {/* The bar: where this is, who is in it, and what is being kept. */}
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-white/[0.06] px-3 sm:px-4">
         <span className="meet-mark max-sm:hidden" aria-hidden>
           <i />
         </span>
         <span className="min-w-0 truncate font-mono text-[12.5px] text-sol-text-secondary">{title}</span>
-        <span className="shrink-0 rounded-full bg-white/[0.06] px-1.5 py-px font-mono text-[10.5px] text-sol-text-muted" title="People in the call">
-          {roster.length}
+        <span
+          className="shrink-0 rounded-full bg-white/[0.06] px-1.5 py-px font-mono text-[10.5px] text-sol-text-muted"
+          title={agents ? `${people} ${people === 1 ? "person" : "people"} and ${agents} AI ${agents === 1 ? "agent" : "agents"} in the call` : "People in the call"}
+        >
+          {people}
+          {agents > 0 && <span className="text-sol-violet"> · {agents} {agents === 1 ? "agent" : "agents"}</span>}
         </span>
         <div className="min-w-2 flex-1" />
         {recording && <GuestRecordingControl asking={askStop} onAsk={setAskStop} onStop={onStopRecording} />}
@@ -153,12 +169,12 @@ export function GuestInCall({
         </div>
       </div>
 
-      {c.phase === "reconnecting" && (
+      {(c.phase === "reconnecting" || reconnecting) && (
         <Banner tone="yellow" icon={<Loader2 className="h-3.5 w-3.5 animate-spin" />}>
           Reconnecting… your connection dropped for a moment.
         </Banner>
       )}
-      {out && (
+      {out && !reconnecting && (
         <Banner tone={out.tone} icon={out.icon} actions={out.action ? [out.action] : undefined}>
           {out.text}
         </Banner>
@@ -173,21 +189,37 @@ export function GuestInCall({
           Your browser is holding the call's sound until you click.
         </Banner>
       )}
-      {recordNote && recording && (
-        // Wraps rather than truncates: this is the notice a guest's consent
-        // rests on, and it says what they can do about it right where it is.
-        <Banner
-          tone="red"
-          wrap
-          icon={<span className="h-2 w-2 rounded-full bg-sol-red" />}
-          actions={[
-            ...(c.camera ? [{ label: "Turn camera off", onClick: () => void call.setCamera(false) }] : []),
-            { label: "Stop recording", onClick: () => setAskStop(true) },
-          ]}
-          onDismiss={() => setRecordNote(false)}
-        >
-          {guestNoticeLines({ recording: true, transcribed: false }, "short")[0].text}
-        </Banner>
+      {/* Wraps rather than truncates: this is the notice a guest's consent
+          rests on, and each line says what they can do about it right where
+          it is (guestNoticeLines has the words, red for recording, cyan for
+          the transcript, as everywhere they are said). */}
+      {fresh.map((line) =>
+        line.key === "rec" ? (
+          <Banner
+            key={line.key}
+            tone="red"
+            wrap
+            icon={<span className="h-2 w-2 rounded-full bg-sol-red" />}
+            actions={[
+              ...(c.camera ? [{ label: "Turn camera off", onClick: () => void call.setCamera(false) }] : []),
+              { label: "Stop recording", onClick: () => setAskStop(true) },
+            ]}
+            onDismiss={() => dismiss("rec")}
+          >
+            {line.text}
+          </Banner>
+        ) : (
+          <Banner
+            key={line.key}
+            tone="cyan"
+            wrap
+            icon={<AudioLines className="h-3.5 w-3.5" />}
+            actions={c.mic ? [{ label: "Mute", onClick: () => void call.setMic(false) }] : undefined}
+            onDismiss={() => dismiss("words")}
+          >
+            {line.text}
+          </Banner>
+        ),
       )}
       {c.error && (
         <Banner tone="orange" onDismiss={() => call.dismissError()}>
@@ -201,7 +233,7 @@ export function GuestInCall({
             {c.phase === "connecting" && c.people.length <= 1 ? (
               <div className="flex flex-1 flex-col items-center justify-center gap-3 font-mono text-[12.5px] text-sol-text-muted">
                 <Loader2 className="h-5 w-5 animate-spin" />
-                joining…
+                {reconnecting ? "reconnecting…" : "joining…"}
               </div>
             ) : view === "grid" ? (
               <GridStage roster={roster} cameras={cameras} screens={screens} speaking={speaking} />
