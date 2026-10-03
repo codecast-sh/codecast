@@ -26,7 +26,7 @@ import { runHref, decisionHref } from "../../lib/decisionLinks";
 import { cn } from "../../lib/utils";
 import { copyText } from "../../lib/copyText";
 import {
-  buildLineFlow, groupBuild, isLineCard, lineHeadline, lineRollup, scopeLine, ALL_PROJECTS, DAY,
+  ageShort, buildLineFlow, groupBuild, isLineCard, lineHeadline, lineRollup, scopeLine, ALL_PROJECTS, DAY,
   type LineProject, type BuildBlock, type HeadlinePart, type CauseRow, type ClosedRow, type Column, type GoalRow, type LineCauseTask, type LineFlowRun, type SenseSource, type StageState, type WatchRow,
 } from "../../lib/lineFlow";
 import { KeyCap } from "../KeyboardShortcutsHelp";
@@ -34,6 +34,10 @@ import { LineProjectSwitcher, LineRollup, lineKeys, useLineProject } from "./Lin
 import { DecisionCompactCard } from "../decisions/DecisionCompactCard";
 import { cardAnswerIndexes } from "../decisions/ChangeCardView";
 import "./line.css";
+
+/** formatElapsed without its zero units: "2d", "2d 5h", "40m", never "2d 0h". */
+const ago = (from: number | null | undefined, now: number) => (from == null ? null : (formatElapsed(from, now) ?? "").replace(/ 0[hm]$/, ""));
+const compactElapsed = (ms: number) => ago(0, ms) ?? "";
 
 const RUNS_FEED = { limit: 200 };
 
@@ -50,7 +54,7 @@ const STATIONS: Station[] = [
   { key: "sense", name: "Sense", short: "Sense", sub: "last 24h", what: "Finders write signals here: Sentry, PostHog, evals, lessons, or a person.", cmd: "cast signal add" },
   { key: "causes", name: "Causes", short: "Causes", what: "A signal opens a cause, or joins the open one that shares its fingerprint.", cmd: "cast signal ls" },
   { key: "build", name: "In build", short: "Build", what: "The sweep starts the top cause while you hold fewer than five open cards.", cmd: "cast workflow run line --task ct-N" },
-  { key: "awaiting", name: "Awaiting you", short: "You", wide: true, what: "Each run ends in one change card with its proof. Cards wait here for your answer.", cmd: "cast workflow runs" },
+  { key: "awaiting", name: "Awaiting you", short: "Yours", wide: true, what: "Each run ends in one change card with its proof. Cards wait here for your answer.", cmd: "cast workflow runs" },
   { key: "watching", name: "Watching", short: "Watch", what: "A shipped cause is watched. A repeat of its signal reopens it; a quiet watch resolves it.", cmd: "cast task update ct-N --watch-days 7" },
   { key: "closed", name: "Closed", short: "Closed", sub: "last 7d", what: "Causes shipped, dissolved or resolved in the last seven days.", cmd: "cast task ls -s done" },
 ];
@@ -62,15 +66,14 @@ const taskHref = (t: { short_id?: string; _id: string }) => `/tasks/${t.short_id
 
 // Columns size from the flow's own width (a container query), so the inbox
 // panel opening narrows the line the way a smaller window does. An empty
-// station is a slimmer tile so the live ones get the width, and its command
-// wraps at flag boundaries. The tight set takes over under 1360px and the
-// compact one under 1000px, where an idle station still reads its name,
-// count and what feeds it. Only under 840px does an empty station fold to a
-// 40px labelled slot (lamp, count, name) so the stations holding work keep
-// their width. Below sm the stations snap one per screen and scroll sideways.
-const ROOMY = { rail: "24px", empty: "minmax(148px, 0.6fr)", wide: "minmax(256px, 1.4fr)", live: "minmax(180px, 1fr)" };
-const TIGHT = { rail: "12px", empty: "minmax(136px, 0.55fr)", wide: "minmax(216px, 1.4fr)", live: "minmax(156px, 1fr)" };
-const COMPACT = { rail: "8px", empty: "minmax(112px, 0.5fr)", wide: "minmax(208px, 1.3fr)", live: "minmax(168px, 1fr)" };
+// station is a narrow tile at every width (its name, lamp, count and what
+// feeds it), so the eye goes to the stations holding work. The tight set
+// takes over under 1360px and the compact one under 1000px. Under 840px an
+// empty station folds to a 40px labelled slot (lamp, count, name). Below sm
+// the stations snap one per screen and scroll sideways.
+const ROOMY = { rail: "24px", empty: "minmax(132px, 0.42fr)", wide: "minmax(256px, 1.4fr)", live: "minmax(180px, 1fr)" };
+const TIGHT = { rail: "12px", empty: "minmax(124px, 0.4fr)", wide: "minmax(216px, 1.4fr)", live: "minmax(156px, 1fr)" };
+const COMPACT = { rail: "8px", empty: "minmax(108px, 0.4fr)", wide: "minmax(208px, 1.3fr)", live: "minmax(168px, 1fr)" };
 const SLIM = { rail: "10px", empty: "40px", wide: "minmax(232px, 1.4fr)", live: "minmax(168px, 1fr)" };
 const NARROW = { rail: "18px", empty: "68vw", wide: "86vw", live: "86vw" };
 const template = (set: typeof ROOMY, emptyOf: (s: Station) => boolean) =>
@@ -111,16 +114,25 @@ export function LinePage() {
   const taskById = useMemo(() => new Map(tasks.map((t) => [t._id, t])), [tasks]);
   const buildBlocks = useMemo(() => groupBuild(flow.build.items), [flow.build.items]);
   const [parkedOpen, setParkedOpen] = useState(false);
+  // Sources quiet for 24 hours fold under their own line, the way parked
+  // causes do, while any source is live; with none live they all show.
+  const [quietOpen, setQuietOpen] = useState(false);
+  const sense = useMemo(() => {
+    const live = flow.sense.items.filter((s) => s.day > 0);
+    const quiet = live.length ? flow.sense.items.filter((s) => s.day === 0) : [];
+    return { live: live.length ? live : flow.sense.items, quiet, silent: quiet.filter((s) => s.silent).length };
+  }, [flow.sense.items]);
+  const senseRows = useMemo(() => [...sense.live, ...(quietOpen ? sense.quiet : [])], [sense, quietOpen]);
 
   // Keyboard: one cursor over the whole flow, in render order.
   const hrefs: Record<StationKey, string[]> = useMemo(() => ({
-    sense: flow.sense.items.map((s) => { const t = s.newest ? taskById.get(s.newest.task_id) : undefined; return t ? taskHref(t) : line.href; }),
+    sense: senseRows.map((s) => { const t = s.newest ? taskById.get(s.newest.task_id) : undefined; return t ? taskHref(t) : line.href; }),
     causes: [...flow.causes.items, ...(parkedOpen ? flow.causes.parked : [])].map((r) => taskHref(r.task)),
     build: buildBlocks.flatMap((g) => g.rows).map((b) => runHref(b.run._id)),
     awaiting: flow.awaiting.items.map((d) => decisionHref(d)),
     watching: flow.watching.items.map((w) => taskHref(w.task)),
     closed: flow.closed.items.map((c) => taskHref(c.task)),
-  }), [flow, buildBlocks, taskById, parkedOpen, line.href]);
+  }), [flow, senseRows, buildBlocks, taskById, parkedOpen, line.href]);
 
   const columns: Record<StationKey, Column<unknown>> = flow as unknown as Record<StationKey, Column<unknown>>;
   // Sense counts today's signals but lists the week's sources.
@@ -254,7 +266,7 @@ export function LinePage() {
         <div className="line-track h-full px-4 sm:px-5 pb-4" style={grid}>
           {STATIONS.map((s, i) => (
             <Fragment key={s.key}>
-              {i > 0 && <Rail live={!empty(s.key)} moved={flow.moved[s.key as keyof typeof flow.moved] ?? 0} into={s.name} />}
+              {i > 0 && <Rail live={!empty(s.key)} />}
               <StationColumn
                 station={s}
                 index={i}
@@ -267,21 +279,29 @@ export function LinePage() {
                 onFocus={() => setFocus({ col: i, row: 0 })}
                 note={s.key === "causes" && ungrounded ? <>None of these serve a goal yet. <code className="text-sol-text-muted">cast task update ct-N --goal-ref in-N:key</code></> : undefined}
               >
-                {empty(s.key) && <Empty station={s} focused={col === i} after={s.key === "build" && <OtherRuns n={flow.build.otherRuns} />} />}
+                {empty(s.key) && <Empty station={s} focused={col === i} what={s.key === "closed" && flow.throughput.shippedInWatch > 0 ? closedInWatch(flow.throughput.shippedInWatch) : undefined} after={s.key === "build" ? <OtherRuns n={flow.build.otherRuns} /> : s.key === "closed" && flow.watching.count > 0 && flow.throughput.shippedInWatch > 0 ? <button type="button" onClick={(e) => { e.stopPropagation(); showStation(STATIONS.findIndex((x) => x.key === "watching")); }} className="self-start text-[11px] text-sol-text-muted underline underline-offset-2 decoration-sol-border hover:text-sol-text" data-line-see-watching>see Watching</button> : undefined} />}
 
-                {s.key === "sense" && !empty("sense") && ( flow.sense.items.map((src, r) => <SenseRow key={src.source} src={src} now={now} focused={at("sense", r)} index={r} href={hrefs.sense[r]} />))}
+                {s.key === "sense" && !empty("sense") && (<>
+                  {sense.live.map((src, r) => <SenseRow key={src.source} src={src} now={now} focused={at("sense", r)} index={r} href={hrefs.sense[r]} />)}
+                  {sense.quiet.length > 0 && (
+                    <div className="pt-2">
+                      <Fold open={quietOpen} onToggle={() => setQuietOpen((v) => !v)} label="quiet today" count={sense.quiet.length} warn={sense.silent ? `${sense.silent} silent` : undefined} />
+                      {quietOpen && sense.quiet.map((src, r) => {
+                        const idx = sense.live.length + r;
+                        return <SenseRow key={src.source} src={src} now={now} focused={at("sense", idx)} index={idx} href={hrefs.sense[idx]} />;
+                      })}
+                    </div>
+                  )}
+                </>)}
 
                 {s.key === "causes" && !empty("causes") && (<>
-                      {flow.causes.items.map((c, r) => <CauseRowView key={c.task._id} row={c} rank={r + 1} max={flow.causes.items[0]?.score ?? 1} focused={at("causes", r)} index={r} />)}
+                      {flow.causes.items.map((c, r) => <CauseRowView key={c.task._id} row={c} rank={r + 1} focused={at("causes", r)} index={r} />)}
                       {flow.causes.parked.length > 0 && (
                         <div className="pt-2">
-                          <button onClick={() => setParkedOpen((v) => !v)} className="w-full flex items-center gap-1.5 text-[11px] text-sol-text-dim hover:text-sol-text px-1 py-1">
-                            {parkedOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-                            parked, no goal <span className="ml-auto">{flow.causes.parked.length}</span>
-                          </button>
+                          <Fold open={parkedOpen} onToggle={() => setParkedOpen((v) => !v)} label="parked, no goal" count={flow.causes.parked.length} />
                           {parkedOpen && flow.causes.parked.map((c, r) => {
                             const idx = flow.causes.items.length + r;
-                            return <CauseRowView key={c.task._id} row={c} max={flow.causes.items[0]?.score ?? c.score} focused={at("causes", idx)} index={idx} muted />;
+                            return <CauseRowView key={c.task._id} row={c} focused={at("causes", idx)} index={idx} muted />;
                           })}
                         </div>
                       )}
@@ -344,14 +364,19 @@ function Hint({ label, className, children }: { label: string; className?: strin
 
 // ── Headline and throughput ──
 
+// Color only what needs the founder: cards waiting, a stall, a failure.
+// An all-clear part is plain text.
 const TONE: Record<HeadlinePart["tone"], string> = {
   ask: "text-sol-yellow",
   warn: "text-sol-orange",
   fail: "text-sol-red",
-  live: "text-sol-text",
-  calm: "text-sol-text",
-  clear: "line-tone-clear",
+  live: "",
+  calm: "",
+  clear: "",
 };
+
+/** The sentence's counts in bold, so the numbers are what the eye lands on. */
+const boldNumbers = (text: string) => text.split(/(\d+)/).map((t, i) => (i % 2 ? <b key={i} className="font-semibold">{t}</b> : t));
 
 /** The five-second read. A part that names a station links to it: the
  *  cursor moves there and the flow scrolls it into view. */
@@ -366,8 +391,8 @@ function Headline({ parts, onStation }: { parts: HeadlinePart[]; onStation: (key
         return (
           <Fragment key={i}>
             {station
-              ? <a href={`#line-${station}`} onClick={(e) => { e.preventDefault(); onStation(station); }} className={cn("line-headline-link", TONE[p.tone])} data-line-headline-link={station}>{text}</a>
-              : <span className={TONE[p.tone]}>{text}</span>}
+              ? <a href={`#line-${station}`} onClick={(e) => { e.preventDefault(); onStation(station); }} className={cn("line-headline-link", TONE[p.tone])} data-line-headline-link={station}>{boldNumbers(text)}</a>
+              : <span className={TONE[p.tone] || undefined}>{boldNumbers(text)}</span>}
             {sep}
           </Fragment>
         );
@@ -381,20 +406,24 @@ function Headline({ parts, onStation }: { parts: HeadlinePart[]; onStation: (key
  *  few pixels of nothing, and the number alone says it better. */
 const sparkable = (days: number[]) => days.filter((d) => d > 0).length >= 3;
 
-/** A metric with nothing to measure yet: a dim dash, so it never reads as a value. */
-function NoValue({ className }: { className?: string }) {
-  return <span className={cn("line-num text-sol-text-dim opacity-50", className)} aria-label="no data yet">–</span>;
+/** A metric with nothing to measure yet says when it will have one, so it
+ *  teaches the way an empty station does and never reads as a value. */
+function NoValue({ until, className }: { until: string; className?: string }) {
+  return <span className={cn("line-novalue text-sol-text-dim", className)} data-line-novalue>{until}</span>;
 }
 
 function Throughput({ t }: { t: ReturnType<typeof buildLineFlow>["throughput"] }) {
+  // On a phone the strip is one line that opens on tap.
+  const [open, setOpen] = useState(false);
   const moved = t.signalsIn + t.opened + t.dissolved + t.shipped + t.reopened > 0;
   if (!moved) {
     return <p className="text-[11px] text-sol-text-dim" data-line-throughput="quiet">No signals this week. Throughput appears once the line moves.</p>;
   }
   // The two numbers a founder reads first lead; the flow counts sit quieter.
-  const lead: Array<{ label: string; value: string | number | null; tip: string; spark?: number[] }> = [
-    { label: "shipped this week", value: t.shipped, spark: t.daily.shipped, tip: "Causes shipped in the last 7 days, per day" },
-    { label: "median signal to ship", value: t.medianToShip === null ? null : formatElapsed(0, t.medianToShip), tip: "From a cause's first signal to its ship, median over this week's ships" },
+  const inWatch = t.shippedInWatch > 0 ? (t.shippedInWatch === t.shipped ? "now in watch" : `${t.shippedInWatch} in watch`) : null;
+  const lead: Array<{ label: string; value: string | number | null; tip: string; spark?: number[]; note?: string | null }> = [
+    { label: "shipped this week", value: t.shipped, spark: t.daily.shipped, note: inWatch, tip: `Causes shipped in the last 7 days, per day.${t.shippedInWatch ? ` ${t.shippedInWatch} still in Watching; a ship moves to Closed when its watch ends quiet.` : ""}` },
+    { label: "median signal to ship", value: t.medianToShip === null ? null : compactElapsed(t.medianToShip), tip: "From a cause's first signal to its ship, median over this week's ships" },
   ];
   const flowCells: Array<{ label: string; value: number; tone?: string; spark: number[] }> = [
     { label: "signals in", value: t.signalsIn, spark: t.daily.signalsIn },
@@ -402,18 +431,24 @@ function Throughput({ t }: { t: ReturnType<typeof buildLineFlow>["throughput"] }
     { label: "dissolved", value: t.dissolved, spark: t.daily.dissolved },
     { label: "reopened", value: t.reopened, tone: t.reopened ? "text-sol-red" : undefined, spark: t.daily.reopened },
   ];
+  const summary = [`${t.shipped} shipped${inWatch ? `, ${inWatch}` : ""}`, t.medianToShip !== null && `${compactElapsed(t.medianToShip)} median`, `${t.signalsIn} in`].filter(Boolean).join(" · ");
   return (
-    <div className="line-meter rounded-xl" data-line-throughput>
+    <>
+    <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="line-meter-summary rounded-lg px-3 py-2 text-[12px] text-sol-text-muted items-center gap-1.5 text-left" data-line-throughput-summary>
+      <span className="line-num font-normal truncate min-w-0">{summary}</span>
+      <ChevronDown className={cn("ml-auto w-3.5 h-3.5 shrink-0 transition-transform", open && "rotate-180")} />
+    </button>
+    <div className="line-meter rounded-xl" data-open={open ? "true" : undefined} data-line-throughput>
       <div className="line-meter-lead">
         {lead.map((c) => (
           <div key={c.label} className="line-meter-big min-w-0" title={c.tip}>
             <div className="flex items-end gap-2.5 h-[30px]">
               {c.value === null
-                ? <NoValue className="text-[32px]" />
-                : <span className="line-num line-display-num text-[32px] text-sol-text" data-zero={c.value === 0 ? "true" : undefined}>{c.value}</span>}
+                ? <NoValue until="after first ship" className="text-[12px] pb-1" />
+                : <span className="line-display-num line-meter-num text-sol-text" data-zero={c.value === 0 ? "true" : undefined}>{c.value}</span>}
               {c.spark && sparkable(c.spark) && <Spark values={c.spark} bar={4} height={20} className="mb-0.5" label={`${c.label}, per day`} />}
             </div>
-            <div className="mt-1.5 text-[11px] text-sol-text-muted whitespace-nowrap">{c.label}</div>
+            <div className="mt-1.5 text-[11px] text-sol-text-muted whitespace-nowrap">{c.label}{c.note && <span className="text-sol-text-dim">, {c.note}</span>}</div>
           </div>
         ))}
       </div>
@@ -430,20 +465,21 @@ function Throughput({ t }: { t: ReturnType<typeof buildLineFlow>["throughput"] }
         <div className="min-w-0" title="Cost per shipped change, in run tokens. Runs record tokens, not dollars.">
           <div className="flex items-baseline gap-1">
             {t.tokensPerShip === null
-              ? <NoValue className="text-[15px]" />
+              ? <NoValue until="after first ship" className="text-[11px] leading-[15px]" />
               : <><span className="line-num text-[15px] text-sol-text-muted">{formatTokens(Math.round(t.tokensPerShip))}</span><span className="text-[11px] text-sol-text-dim">tokens</span></>}
           </div>
           <div className="mt-1 text-[11px] text-sol-text-dim truncate">cost per ship</div>
         </div>
       </div>
     </div>
+    </>
   );
 }
 
 // ── A station ──
 
 function stateWords(state: StageState, now: number): string {
-  const since = state.since ? formatElapsed(state.since, now) : null;
+  const since = state.since ? ago(state.since, now) : null;
   if (state.kind === "idle") return state.why;
   if (state.kind === "ask") return `${state.why}${since ? `, oldest ${since}` : ""}`;
   if (state.kind === "paused") return `paused${since ? ` ${since}` : ""}: ${state.why}`;
@@ -455,10 +491,12 @@ function stateWords(state: StageState, now: number): string {
 
 /** The short tag beside the lamp; the why lives in its tooltip, and for a
  *  stage in trouble in one line at the foot of the column. */
-function stateTag(state: StageState, now: number): string {
-  const since = state.since ? ` ${formatElapsed(state.since, now)}` : "";
+function stateTag(state: StageState, oldestAt: number | null, now: number): string {
+  const since = state.since ? ` ${ageShort(now - state.since)}` : "";
   if (state.kind === "ask") return `waiting${since}`;
   if (state.kind === "paused" || state.kind === "starved" || state.kind === "failing") return `${state.kind}${since}`;
+  // Running is the ordinary case: the header spends its words on the oldest age.
+  if (state.kind === "running" && oldestAt) return `oldest ${ageShort(now - oldestAt)}`;
   return state.kind;
 }
 const TROUBLE = new Set<StageState["kind"]>(["paused", "starved", "failing"]);
@@ -473,8 +511,13 @@ const STATE_TONE: Record<StageState["kind"], string> = {
   running: "text-sol-text-muted",
 };
 
-/** What a station's count measures, said beside it. */
-const COUNT_UNIT: Partial<Record<StationKey, string>> = { sense: "in 24h", closed: "this week" };
+/** What a station's count measures and what entered it this week, said
+ *  beside the count: "today · 5 this week", "+3 this wk". */
+function countWords(key: StationKey, count: number, moved: number, week?: number): ReactNode {
+  if (key === "sense") return <>today{week !== undefined && week !== count && <span className="line-count-of"> · {week} this week</span>}</>;
+  if (key === "closed") return "this week";
+  return moved > 0 ? <span title={`${moved} entered this week`}>+{moved} this wk</span> : null;
+}
 
 function StationColumn({ station, index, column, empty, moved, week, focused, now, onFocus, note, children }: {
   station: Station;
@@ -483,7 +526,7 @@ function StationColumn({ station, index, column, empty, moved, week, focused, no
   index: number;
   column: Column<unknown>;
   empty: boolean;
-  /** What entered this week; the rail chip says it too where there is room. */
+  /** What entered this week, said beside the count. */
   moved: number;
   /** Sense only: the week's signals, said dimly beside the 24h count. */
   week?: number;
@@ -494,10 +537,8 @@ function StationColumn({ station, index, column, empty, moved, week, focused, no
 }) {
   const state = column.state;
   const words = stateWords(state, now);
-  const countTip = [
-    moved > 0 ? `${moved} entered this week` : null,
-    column.oldestAt ? `oldest ${formatElapsed(column.oldestAt, now)}` : null,
-  ].filter(Boolean).join(", ");
+  const countTip = column.oldestAt ? `oldest ${ago(column.oldestAt, now)}` : "";
+  const unit = empty ? null : countWords(station.key, column.count, moved, week);
   return (
     <section
       data-line-col={index}
@@ -512,28 +553,24 @@ function StationColumn({ station, index, column, empty, moved, week, focused, no
       {/* Folded: an empty station in a tight flow is a slot that still says
           what it is, how it stands, and how much it holds. */}
       <div className="line-col-slim" title={`${station.name}, ${words}. ${station.what}`} aria-label={`${station.name}, ${column.count}`}>
-        <span className="line-num line-display-num text-[17px]" data-zero="true">{column.count}</span>
+        <span className="line-display-num text-[19px]" data-zero="true">{column.count}</span>
         <span className="line-lamp" data-kind={state.kind} />
         <span className="line-col-slim-name text-[11px] text-sol-text-muted">{station.name}</span>
       </div>
       <div className="line-col-head shrink-0 px-3 pt-3 pb-3 border-b border-sol-border/25">
-        <div className="flex items-center h-[24px] min-w-0">
+        <div className="flex items-center gap-2 h-[24px] min-w-0">
           <h2 className="text-[13px] font-medium text-sol-text whitespace-nowrap">
             <span className="line-name-full">{station.name}</span>
             <span className="line-name-short">{station.short}</span>
           </h2>
-        </div>
-        <div className="mt-2 flex items-end gap-2 min-w-0">
-          <span className={cn("line-num line-display-num line-col-count text-[34px]", state.kind === "ask" ? "text-sol-yellow" : "text-sol-text")} data-zero={column.count === 0 ? "true" : undefined} title={countTip || undefined}>{column.count}</span>
-          {COUNT_UNIT[station.key] && !empty && (
-            <span className="pb-[3px] text-[11px] text-sol-text-dim whitespace-nowrap min-w-0 truncate">
-              {COUNT_UNIT[station.key]}{week !== undefined && week !== column.count && <span className="line-count-of" title={`${week} signals this week`}> of {week} wk</span>}
-            </span>
-          )}
-          <span className={cn("ml-auto pb-[3px] flex items-center gap-1.5 text-[11px] whitespace-nowrap min-w-0", STATE_TONE[state.kind])} data-line-state title={words}>
+          <span className={cn("line-state ml-auto flex items-center gap-1.5 text-[11px] whitespace-nowrap min-w-0", STATE_TONE[state.kind])} data-kind={state.kind} data-line-state title={words}>
             <span className="line-lamp" data-kind={state.kind} />
-            <span className="line-state-text truncate">{stateTag(state, now)}</span>
+            <span className="line-state-text truncate">{stateTag(state, column.oldestAt, now)}</span>
           </span>
+        </div>
+        <div className="mt-2.5 flex items-baseline gap-2 min-w-0">
+          <span className={cn("line-display-num line-col-count", state.kind === "ask" ? "text-sol-yellow" : "text-sol-text")} data-zero={column.count === 0 ? "true" : undefined} title={countTip || undefined}>{column.count}</span>
+          {unit && <span className="line-unit text-[11px] whitespace-nowrap min-w-0 truncate" data-line-unit>{unit}</span>}
         </div>
         {note && <div className="mt-2 text-[11px] text-sol-text-dim leading-snug" data-line-note>{note}</div>}
       </div>
@@ -547,20 +584,23 @@ function StationColumn({ station, index, column, empty, moved, week, focused, no
   );
 }
 
-function Rail({ live, moved, into }: { live: boolean; moved: number; into: string }) {
+function Rail({ live }: { live: boolean }) {
   return (
     <div className="line-rail-slot relative" aria-hidden>
       <div className="line-rail" data-live={live ? "true" : undefined} />
-      {moved > 0 && <span className="line-rail-chip" title={`${moved} entered ${into} this week`}>{moved}</span>}
     </div>
   );
 }
 
+/** Closed is empty while this week's ships still sit in their watch: it says
+ *  where they are, so the strip's shipped count never reads as a bug. */
+const closedInWatch = (n: number) => `${n === 1 ? "This week's ship is" : `This week's ${n} ships are`} in Watching. ${n === 1 ? "It lands" : "They land"} here when the watch ends quiet.`;
+
 /** An empty station: what feeds it and the command that does. */
-function Empty({ station, focused, after }: { station: Station; focused: boolean; after?: ReactNode }) {
+function Empty({ station, focused, what, after }: { station: Station; focused: boolean; what?: string; after?: ReactNode }) {
   return (
-    <div className="line-empty rounded-lg flex flex-col gap-2.5 p-2.5" data-line-empty title={`${station.what} ${station.cmd}`}>
-      <p className="text-[11px] text-sol-text-muted leading-relaxed">{station.what}</p>
+    <div className="line-empty rounded-lg flex flex-col gap-2.5 p-2.5" data-line-empty title={`${what ?? station.what} ${station.cmd}`}>
+      <p className="text-[11px] text-sol-text-muted leading-relaxed">{what ?? station.what}</p>
       <Cmd cmd={station.cmd} shown={focused} />
       {after}
     </div>
@@ -617,7 +657,10 @@ function Cmd({ cmd, shown, primary }: { cmd: string; shown?: boolean; primary?: 
  *  stations in one row, each saying what will feed it. */
 function Onboarding({ focusedCol, onFocus }: { focusedCol: number; onFocus: (i: number) => void }) {
   return (
-    <div className="line-onboard flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 pb-5 flex flex-col gap-5" data-line-onboarding>
+    <div className="line-onboard flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 pb-5 flex flex-col" data-line-onboarding>
+      {/* The start card and the stations sit together in the middle of the
+          floor, so the page reads as composed, not as a top-left fragment. */}
+      <div className="my-auto flex flex-col gap-5 py-4">
       <div className="line-start shrink-0 max-w-[760px] rounded-xl p-5 sm:p-6">
         <div className="line-start-title text-sol-text">File the first signal.</div>
         <p className="mt-2 text-[13px] text-sol-text-muted leading-relaxed max-w-[60ch]">
@@ -645,6 +688,7 @@ function Onboarding({ focusedCol, onFocus }: { focusedCol: number; onFocus: (i: 
         ))}
       </ol>
       </div>
+      </div>
     </div>
   );
 }
@@ -655,6 +699,17 @@ function OtherRuns({ n }: { n: number }) {
     <Link href="/routines" className="mt-1 block px-2.5 py-1.5 text-[11px] text-sol-text-dim hover:text-sol-text-muted" data-line-other-runs>
       {n} other run{n === 1 ? "" : "s"}, not from the line
     </Link>
+  );
+}
+
+/** A folded group inside a station: parked causes, quiet sources. */
+function Fold({ open, onToggle, label, count, warn }: { open: boolean; onToggle: () => void; label: string; count: number; warn?: string }) {
+  return (
+    <button type="button" onClick={onToggle} aria-expanded={open} className="w-full flex items-center gap-1.5 text-[11px] text-sol-text-dim hover:text-sol-text px-1 py-1 whitespace-nowrap min-w-0" data-line-fold>
+      {open ? <ChevronDown className="w-3 h-3 shrink-0" /> : <ChevronRight className="w-3 h-3 shrink-0" />}
+      <span className="truncate min-w-0">{label}{warn && <span className="text-sol-orange"> · {warn}</span>}</span>
+      <span className="ml-auto tabular-nums shrink-0">{count}</span>
+    </button>
   );
 }
 
@@ -669,7 +724,7 @@ function RowLink({ href, focused, index, children, className }: { href: string; 
 // ── Rows ──
 
 /** Bars oldest first; the last few, when non-zero, read bright. */
-function Spark({ values, bar = 4, height = 20, label = "signals per hour, last 24 hours", className }: { values: number[]; bar?: number; height?: number; label?: string; className?: string }) {
+function Spark({ values, bar = 4, height = 20, label = "signals per day, last 7 days", className }: { values: number[]; bar?: number; height?: number; label?: string; className?: string }) {
   const max = Math.max(1, ...values);
   const gap = 1;
   const hot = Math.max(1, Math.round(values.length / 8));
@@ -684,32 +739,31 @@ function Spark({ values, bar = 4, height = 20, label = "signals per hour, last 2
 }
 
 /** A source of signals: a finder the project's profile declares (LP3), or
- *  one that filed without being declared. A declared finder with nothing in
- *  24 hours says since when it is silent; with nothing in the window, that
- *  it has not filed in two weeks. */
+ *  one that filed without being declared. The row is the source and its
+ *  count; the kinds it files sit in the tooltip. A quiet source (nothing in
+ *  24 hours) says its week instead of a zero, and a declared finder's silence
+ *  is said in full, on two lines if it needs them. */
 function SenseRow({ src, now, focused, index, href }: { src: SenseSource; now: number; focused: boolean; index: number; href: string }) {
   const f = src.finder;
-  const tip = f ? [`finder ${f.id}`, f.kind === "any" ? "any kind" : f.kind.join(", "), f.runs].filter(Boolean).join(" · ") : src.undeclared ? "Files signals here but the project's line profile does not declare it" : undefined;
+  const kinds = src.kinds.length ? src.kinds.join(", ") : f?.kind === "any" ? "any kind" : null;
+  const tip = [src.undeclared ? "files here, not declared in the line profile" : f ? `finder ${f.id}` : null, kinds, f?.runs].filter(Boolean).join(" · ") || undefined;
+  const quiet = src.day === 0;
   return (
-    <RowLink href={href} focused={focused} index={index} className={src.day === 0 ? "line-row-quiet" : undefined}>
-      <div className="flex items-center gap-2 min-w-0" title={tip}>
-        <span className="text-[13px] text-sol-text whitespace-nowrap shrink-0">{src.source}</span>
-        {src.undeclared
-          ? <span className="text-[11px] text-sol-text-dim italic truncate min-w-0">undeclared</span>
-          : <span className="text-[11px] text-sol-text-dim truncate min-w-0">{src.kinds.join(" · ")}</span>}
+    <RowLink href={href} focused={focused} index={index} className={quiet ? "line-row-quiet" : undefined}>
+      <div className="flex items-baseline gap-2 min-w-0" title={tip}>
+        <span className="text-[13px] text-sol-text truncate min-w-0">{src.source}</span>
         <span className="ml-auto shrink-0 text-[11px] text-sol-text-dim tabular-nums whitespace-nowrap" title={`${src.day} in the last 24 hours, ${src.week} this week`}>
-          <span className={cn("text-[13px]", src.day > 0 ? "text-sol-text" : "text-sol-text-dim")}>{src.day}</span> today<span className="line-count-of"> · {src.week} wk</span>
+          {quiet
+            ? (src.week > 0 ? `${src.week} this week` : null)
+            : <><span className="text-[13px] font-semibold text-sol-text">{src.day}</span> today{src.week !== src.day && <span className="line-count-of">, {src.week} wk</span>}</>}
         </span>
       </div>
-      <div className="mt-1.5"><Spark values={src.spark} /></div>
+      {sparkable(src.spark) && <div className="mt-1.5"><Spark values={src.spark} bar={6} height={14} label="signals per day, last 7 days" /></div>}
       {src.newest
-        ? (
-          <div className="mt-1 text-[11px] text-sol-text-dim truncate" title={src.newest.title}>
-            {src.silent && <span className="text-sol-orange" data-line-silent>silent {formatElapsed(src.newest.created_at, now)} · </span>}
-            {src.newest.title}{!src.silent && <> · {formatElapsed(src.newest.created_at, now)}</>}
-          </div>
-        )
-        : <div className="mt-1 text-[11px] text-sol-orange truncate" data-line-silent title={f?.runs}>no signal in 14 days{f?.runs ? ` · ${f.runs}` : ""}</div>}
+        ? src.silent
+          ? <div className="mt-1 text-[11px] text-sol-orange leading-snug line-clamp-2" data-line-silent title={src.newest.title}>silent {ago(src.newest.created_at, now)}, last: {src.newest.title}</div>
+          : <div className="mt-1 text-[11px] text-sol-text-dim truncate" title={src.newest.title}>{src.undeclared && <i>undeclared · </i>}{src.newest.title} · {ago(src.newest.created_at, now)}</div>
+        : <div className="mt-1 text-[11px] text-sol-orange leading-snug line-clamp-2" data-line-silent title={f?.runs}>no signal in 14 days{f?.runs ? `. Runs ${f.runs}` : ""}</div>}
     </RowLink>
   );
 }
@@ -722,25 +776,24 @@ const GOAL_TONE: Partial<Record<CauseRow["goal"]["kind"], string>> = {
   unknown: "border-sol-border text-sol-text-dim",
 };
 
-function CauseRowView({ row, rank, max, focused, index, muted }: { row: CauseRow; rank?: number; max: number; focused: boolean; index: number; muted?: boolean }) {
+function CauseRowView({ row, rank, focused, index, muted }: { row: CauseRow; rank?: number; focused: boolean; index: number; muted?: boolean }) {
   const t = row.task;
   // The row is a scan line: rank, title, signal count and goal. The rest of
   // the triage sits on hover and on the task page.
   const tip = [t.short_id, t.category, t.risk && t.risk !== "low" ? `${t.risk} risk` : null, `priority ${row.score.toFixed(1)}`].filter(Boolean).join(" · ");
   const unready = t.readiness && t.readiness !== "ready";
   return (
-    <RowLink href={taskHref(t)} focused={focused} index={index} className={muted ? "opacity-70" : undefined}>
+    <RowLink href={taskHref(t)} focused={focused} index={index} className={cn(muted && "opacity-70")}>
+      {/* Rank carries priority: the top cause reads largest and brightest,
+          the score sits in the tooltip. */}
       <div className="flex items-start gap-2" title={tip}>
-        {rank !== undefined && <span className="line-num text-[13px] text-sol-text-dim w-4 shrink-0 pt-px">{rank}</span>}
+        {rank !== undefined && <span className="line-rank w-4 shrink-0" data-rank={Math.min(rank, 4)} aria-label={`rank ${rank}, priority ${row.score.toFixed(1)}`}>{rank}</span>}
         <span className="text-[13px] text-sol-text leading-snug line-clamp-2 flex-1 min-w-0">{t.title}</span>
       </div>
       <div className={cn("mt-1.5 flex items-center gap-1.5 text-[11px] min-w-0", rank !== undefined && "pl-6")}>
         <span className="text-sol-text tabular-nums shrink-0" title="signals attached">×{row.signals}</span>
         {GOAL_TONE[row.goal.kind] && <span className={cn("px-1.5 py-px rounded border min-w-0 truncate", GOAL_TONE[row.goal.kind])} title={row.goal.ref}>{row.goal.label}</span>}
         {unready && <span className="ml-auto shrink-0 text-sol-yellow" title={t.readiness_note ?? undefined}>{t.readiness!.replace("_", " ")}</span>}
-      </div>
-      <div className={cn("line-bar mt-2 h-[3px] rounded-full overflow-hidden", rank !== undefined && "ml-6")}>
-        <span className="block h-full rounded-full" style={{ width: `${Math.max(4, Math.min(100, (row.score / (max || 1)) * 100))}%` }} />
       </div>
     </RowLink>
   );
@@ -770,7 +823,7 @@ function BuildRowView({ row, now, focused, index }: { row: BuildBlock["rows"][nu
       <div className="flex items-start gap-2">
         <span className={cn("mt-1 w-1.5 h-1.5 rounded-full shrink-0", row.stalled ? "border border-sol-text-dim" : r.status === "paused" ? "bg-sol-yellow" : "line-live-dot")} />
         <span className="text-[13px] text-sol-text leading-snug line-clamp-2 flex-1 min-w-0" title={row.name}>{row.name}</span>
-        <span className={cn("text-[11px] tabular-nums shrink-0", old ? "text-sol-orange" : "text-sol-text-dim")} title={old ? "at this step over a day" : undefined}>{formatElapsed(row.since, now)}</span>
+        <span className={cn("text-[11px] tabular-nums shrink-0", old ? "text-sol-orange" : "text-sol-text-dim")} title={old ? "at this step over a day" : undefined}>{ago(row.since, now)}</span>
       </div>
       <div className="mt-1 pl-3.5 flex items-center gap-1.5 text-[11px] text-sol-text-dim min-w-0">
         {row.chip && <span className="shrink-0 max-w-[60%] truncate px-1.5 rounded border border-sol-border/60 text-sol-text-muted">{row.chip}</span>}
@@ -790,8 +843,8 @@ function WatchRowView({ row, focused, index }: { row: WatchRow; focused: boolean
         <span className="text-[13px] text-sol-text leading-snug line-clamp-2 flex-1 min-w-0">{row.task.title}</span>
         <span className="text-[11px] text-sol-text tabular-nums shrink-0">{row.daysLeft}d left</span>
       </div>
-      <div className="line-bar mt-1.5 h-[3px] rounded-full overflow-hidden">
-        <span className="block h-full rounded-full" style={{ width: `${Math.max(4, Math.min(100, (row.daysLeft / span) * 100))}%` }} />
+      <div className="line-countdown mt-1.5" title={`${row.daysLeft} of ${span} watch days left`}>
+        <span style={{ "--left": `${Math.max(4, Math.min(100, (row.daysLeft / span) * 100))}%` } as CSSProperties} />
       </div>
       <div className="mt-1 flex gap-2 text-[11px] text-sol-text-dim">
         <span>×{row.task.cause?.signal_count ?? 0} before ship</span>
@@ -816,7 +869,7 @@ function ClosedRowView({ row, now, focused, index }: { row: ClosedRow; now: numb
         <span className={cn("text-[13px] leading-snug line-clamp-2 flex-1 min-w-0", row.outcome === "dissolved" ? "text-sol-text-muted" : "text-sol-text")}>{row.task.title}</span>
       </div>
       <div className="mt-1 pl-5 flex gap-2 text-[11px] text-sol-text-dim min-w-0">
-        <span className="truncate"><span className={o.tone}>{row.outcome}</span> · {formatElapsed(row.at, now)} ago</span>
+        <span className="truncate"><span className={o.tone}>{row.outcome}</span> · {ago(row.at, now)} ago</span>
         <span className="ml-auto shrink-0 font-mono">{row.task.short_id}</span>
       </div>
     </RowLink>

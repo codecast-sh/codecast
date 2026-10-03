@@ -1,9 +1,9 @@
 // When a running window asks its person to reload.
 //
 // Every deploy is applied silently: the service worker's onNeedReload reloads
-// the window the next time it is hidden (createReloadWhenHidden). A window
-// that never hides (a desktop main window on its own screen) would otherwise
-// run the old bundle for days, so two cases also raise a card:
+// the window the next time it is hidden or left untouched for a few minutes
+// (createReloadWhenAway). A window that is always in use stays on the old
+// bundle, so two cases also raise a card:
 //
 //  - release: the deploy bumped release-prompt.json's generation past this
 //    bundle's (bumpReleasePrompt). Later dismisses that generation for good,

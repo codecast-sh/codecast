@@ -56,7 +56,6 @@ import type {
   RunRowStatus,
   SeparationResult,
   SimCatalogResponse,
-  SimEvent,
   SimGridCell,
   SimInvariant,
   SimRunResponse,
@@ -67,6 +66,9 @@ import type {
   SurfaceResponse,
   VerdictFlip,
 } from "@codecast/shared/contracts/evalsApi";
+import { makeRng } from "@codecast/shared/random";
+import { simFixtureRun } from "./sim";
+import { fixtureBisect, type FixtureBisectKind } from "./bisect";
 
 /** A route the world has no answer for (an unknown id): the transport turns it into a 404. */
 export class EvalsFixtureMiss extends Error {}
@@ -79,17 +81,6 @@ const OPUS_MODEL = "claude-opus-5-5";
 const JUDGE_MODEL = "claude-sonnet-5-5";
 
 // ── Deterministic helpers ───────────────────────────────────────────────────
-
-function prng(seed: number) {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 /** A stable hex string of `len` characters from any text. */
 export function fixtureHex(text: string, len = 40): string {
@@ -228,11 +219,12 @@ interface FixtureState {
   commits: CommitRef[];
   bisects: BisectState[];
   stepsByBisect: Map<string, BisectStep[]>;
+  tailByBisect: Map<string, string[]>;
   sim: { catalog: SimCatalogResponse; sessions: SimSessionSummary[]; runs: Map<string, SimRunResponse> };
 }
 
 function build(now: number, seed: number): FixtureState {
-  const rand = prng(seed);
+  const rand = makeRng(seed);
   const commits: CommitRef[] = SUBJECTS.map((subject, i) => {
     const at = now - (29 - i * 1.5) * DAY - 3 * 3_600_000;
     const sha = fixtureHex(`commit:${i}:${subject}`);
@@ -364,6 +356,7 @@ function build(now: number, seed: number): FixtureState {
     commits,
     bisects: [],
     stepsByBisect: new Map(),
+    tailByBisect: new Map(),
     sim: buildSim(now),
   };
   buildBisects(state);
@@ -814,59 +807,41 @@ function bisectPlan(st: FixtureState, req: BisectPlanRequest): BisectPlan {
   };
 }
 
+/** The newest pair of batches on one surface whose attribution narrows to `minCommits` or more commits (flipped freezes preferred). */
+function narrowedPair(st: FixtureState, surface: string, minCommits: number): { good: Batch; bad: Batch } | null {
+  const graded = gradedBatches(st, surface);
+  let fallback: { good: Batch; bad: Batch } | null = null;
+  for (let bi = graded.length - 1; bi >= Math.max(1, graded.length - 3); bi--) {
+    for (let gap = 2; gap <= 6 && bi - gap >= 0; gap++) {
+      const good = graded[bi - gap];
+      const bad = graded[bi];
+      if (!sameFooting(good, bad)) continue;
+      const a = attribution(st, surface, good.name, bad.name);
+      if (a.answer.kind !== "source" || a.answer.confidence !== "narrowed" || a.answer.candidates.filter((c) => c.kind === "commit").length < minCommits) continue;
+      if (a.flipped.length) return { good, bad };
+      fallback ??= { good, bad };
+    }
+  }
+  return fallback;
+}
+
+/** The bisects the pages show: settle running and finished, a stalled agent run, an unsure range and drift (__fixtures__/bisect.ts plays each out). */
 function buildBisects(st: FixtureState) {
-  const settle = gradedBatches(st, "settle");
-  const lastEpoch = Math.max(...settle.map((b) => b.epoch));
-  const lastEpochStart = settle.findIndex((b) => b.epoch === lastEpoch);
-  const good = settle[lastEpochStart - 1];
-  const bad = settle[settle.length - 1];
-  if (!good || !bad) return;
-  const plan = bisectPlan(st, { surface: "settle", good: good.name, bad: bad.name });
-  const mk = (id: string, status: BisectState["status"], ageMin: number, probesDone: number): BisectState => {
-    const startedAt = st.now - ageMin * 60_000;
-    const probes: BisectProbe[] = [];
-    const reps = (sha: string, passing: boolean, n: number) =>
-      plan.freezes.flatMap((f) => Array.from({ length: n }, (_, i) => ({ freezeId: f.id, runId: null, passed: f.role === "control" ? true : passing, score: f.role === "control" ? 0.84 : passing ? 0.81 - i * 0.02 : 0.42 + i * 0.03 })));
-    probes.push({ sha: good.gitHead, kind: "control-good", renderClass: null, batch: `${id}~${good.gitHead.slice(0, 8)}`, recorded: false, reps: reps(good.gitHead, true, 3), verdict: "good", skipReason: null, costUsd: 0.09 });
-    probes.push({ sha: bad.gitHead, kind: "control-bad", renderClass: null, batch: `${id}~${bad.gitHead.slice(0, 8)}`, recorded: false, reps: reps(bad.gitHead, false, 3), verdict: "bad", skipReason: null, costUsd: 0.09 });
-    plan.candidates.slice(0, probesDone).forEach((c, i) => {
-      const sha = c.kind === "commit" ? c.commit.sha : c.base;
-      const bad = i === 0;
-      probes.push({ sha, kind: "probe", renderClass: i + 1, batch: `${id}~${sha.slice(0, 8)}`, recorded: false, reps: reps(sha, !bad, status === "probing" && i === probesDone - 1 ? 1 : 3), verdict: status === "probing" && i === probesDone - 1 ? "pending" : bad ? "bad" : "good", skipReason: null, costUsd: 0.08 });
-    });
-    const culprit = plan.candidates.find((c) => c.kind === "commit");
-    const done = status === "done";
-    return {
-      id,
-      surface: "settle",
-      seq: probes.length * 4,
-      status,
-      tier: 2,
-      range: { good: good.gitHead, bad: bad.gitHead },
-      candidates: plan.candidates,
-      classes: plan.classes,
-      probes,
-      spentUsd: round(sum(probes.map((p) => p.costUsd)), 2),
-      budgetUsd: plan.budgetUsd,
-      startedAt: iso(startedAt),
-      updatedAt: iso(st.now - (done ? ageMin - 40 : 1) * 60_000),
-      finishedAt: done ? iso(startedAt + 40 * 60_000) : null,
-      tmux: done ? null : `evals-bisect-${id}`,
-      answer: done && culprit?.kind === "commit" ? { kind: "culprit", commit: culprit.commit, separation: { kind: "worse", p: 0.004 }, tier: 2 } : null,
-      plan,
-    };
-  };
-  const finished = mk("b-settle-0927", "done", 60 * 26, 2);
-  const running = mk("b-settle-1003", "probing", 18, 2);
-  st.bisects = [running, finished];
-  for (const b of st.bisects) {
-    const steps: BisectStep[] = [
-      { seq: 1, at: b.startedAt, kind: "plan", sha: null, text: b.plan.summary },
-      { seq: 2, at: b.startedAt, kind: "render", sha: null, text: `Tier 1 dry render: ${b.candidates.length} candidates in ${b.classes?.length ?? 0} render classes.` },
-      ...b.probes.map((p, i) => ({ seq: 3 + i, at: iso(Date.parse(b.startedAt) + (i + 1) * 4 * 60_000), kind: (p.kind.startsWith("control") ? "control" : "probe") as BisectStep["kind"], sha: p.sha, text: `${p.kind} at ${p.sha.slice(0, 8)}: ${p.verdict}` })),
-    ];
-    if (b.answer) steps.push({ seq: steps.length + 1, at: b.finishedAt ?? b.updatedAt, kind: "answer", sha: b.answer.kind === "culprit" ? b.answer.commit.sha : null, text: "Culprit confirmed: separated worse at p 0.004." });
-    st.stepsByBisect.set(b.id, steps);
+  const cases: Array<{ id: string; surface: string; kind: FixtureBisectKind; ageMin: number }> = [
+    { id: "b-settle-1003", surface: "settle", kind: "running", ageMin: 18 },
+    { id: "b-anchor-brief-1003", surface: "anchor-brief", kind: "stalled", ageMin: 50 },
+    { id: "b-settle-0927", surface: "settle", kind: "culprit", ageMin: 60 * 26 },
+    { id: "b-call-summary-0929", surface: "call-summary", kind: "range", ageMin: 60 * 24 * 4 },
+    { id: "b-handoff-0930", surface: "handoff", kind: "drift", ageMin: 60 * 24 * 3 },
+  ];
+  for (const c of cases) {
+    const pair = narrowedPair(st, c.surface, 3);
+    if (!pair) continue;
+    const plan = bisectPlan(st, { surface: c.surface, good: pair.good.name, bad: pair.bad.name });
+    const b = fixtureBisect(c.kind, plan, { id: c.id, now: st.now, ageMin: c.ageMin });
+    st.bisects.push(b.state);
+    st.stepsByBisect.set(c.id, b.steps);
+    st.tailByBisect.set(c.id, b.logTail);
   }
 }
 
@@ -906,8 +881,10 @@ const SIM_INVARIANTS: Array<[string, string]> = [
   ["INV-fixpoint", "re-running every mounted feeder, one catch-up and a byIds pass over every held id changes nothing"],
 ];
 
+const failureInvariant = (r: SimRunResponse) => (r.result.passed === true ? "" : r.result.invariant.id);
+
 function buildSim(now: number): FixtureState["sim"] {
-  const rand = prng(7);
+  const rand = makeRng(7);
   const invariants: SimInvariant[] = SIM_INVARIANTS.map(([id, meaning]) => ({ id, meaning, keys: [] }));
   const head = fixtureHex("commit:19:suggest: voice from recent sends");
   const sessions: SimSessionSummary[] = [];
@@ -933,62 +910,12 @@ function buildSim(now: number): FixtureState["sim"] {
   }
   sessions.push({ id: "codecast-sim-legacy-1", argv: [], gitHead: null, dirty: false, treePatch: null, startedAt: iso(now - 12 * DAY), finishedAt: null, exit: null, unsessioned: true, runs: 1, failed: 1, scenarios: 1 });
 
+  // Every failing run is the same story (__fixtures__/sim.ts); the newest one has been shrunk.
   const failing = allRows.filter((r) => !r.row.passed);
   failing.forEach(({ session, row }, k) => {
-    const events: SimEvent[] = [];
-    const lanes = ["conn:laptop.host", "live:laptop.host:inbox", "repl:laptop.host>laptop.follower", "conn:phone.host", "live:phone.host:inbox", "bridge:laptop:daemon", "timer:settle", "sched", "actor:ashot"];
-    const steps = [
-      { verb: "send", actor: "ashot", label: "Ashot sends a turn" },
-      { verb: "removeMember", actor: "samvit", label: "Samvit removes Ashot from the team" },
-      { verb: "settle", actor: "world", label: "the world settles" },
-    ];
-    let seq = 0;
-    steps.forEach((step, si) => {
-      events.push({ kind: "step", seq: seq++, verb: step.verb, actor: step.actor, label: step.label });
-      for (let i = 0; i < 8; i++) {
-        const channel = lanes[(si * 3 + i * 2) % lanes.length];
-        events.push({ kind: "delivery", seq: seq++, channel, due: 0, label: channel.startsWith("repl") ? "slice" : channel.startsWith("live") ? "listInboxSessions" : "tick", producer: channel.split(":")[0] });
-      }
-    });
-    const order = events.filter((e) => e.kind !== "step").map((e) => (e as { channel: string }).channel);
-    const failAt = events.length - 3;
-    const minimal = k === failing.length - 1 ? { order: [order[1], order[5], order[9], order[14]], removed: order.map((_, i) => i).filter((i) => ![1, 5, 9, 14].includes(i)), attempts: 61, ms: 48_000, oneMinimal: true } : null;
-    const runId = row.dir as string;
-    runs.set(`${session}/${runId}`, {
-      session: sessions.find((s) => s.id === session)!,
-      run: row,
-      result: {
-        scenario: row.scenario,
-        mode: row.mode,
-        seed: row.seed,
-        gitHead: head,
-        dirty: true,
-        startedAt: iso(now - DAY),
-        realMs: row.ms,
-        step: "the world settles",
-        delivery: failAt,
-        invariant: { id: "INV-team-inbox", meaning: SIM_INVARIANTS[2][1] },
-        message: "laptop.follower still lists the session after the removal",
-        window: { name: "laptop.follower", principal: "ashot", scope: "team:t1" },
-        row: { table: "sessions", id: "s-41", label: "Ashot's session", diff: [{ field: "team_id", server: "null", replica: "t1" }, { field: "workspace", server: "user:ashot", replica: "team:t1" }] },
-        order: order.join(","),
-        labels: { "s-41": "Ashot's session", t1: "the team" },
-        replay: [`bun run sim memberRemovedMidTurn --mode interleave --seed ${row.seed} --trace s-41`],
-        text: "INV-team-inbox failed at delivery " + failAt,
-        ...(minimal ? { minimalOrder: minimal.order.join(",") } : {}),
-      },
-      events,
-      world: { scenario: row.scenario, mode: row.mode, seed: row.seed, labels: { "s-41": "Ashot's session" }, devices: [{ name: "laptop", windows: [{ name: "laptop.host", role: "host", closed: false }, { name: "laptop.follower", role: "follower", closed: false }] }, { name: "phone", windows: [{ name: "phone.host", role: "host", closed: true }] }] },
-      final: { deliveries: order.length, writesSpent: 14, producers: { conn: 8, live: 6, repl: 5, bridge: 2, timer: 2, sched: 1 }, calls: [{ seq: 3, name: "teams:removeMember", kind: "mutation", ok: true }, { seq: 9, name: "messages:send", kind: "mutation", ok: false, error: "Forbidden: not a member" }], actors: [{ actor: "ashot", verb: "send", ok: false, error: "Forbidden: not a member" }], windowErrors: {} },
-      minimal,
-      shrinking: null,
-      invariant: invariants[2],
-      replay: {
-        trace: `bun run sim memberRemovedMidTurn --mode interleave --seed ${row.seed} --trace s-41`,
-        order: `bun run sim memberRemovedMidTurn --mode order --order "${order.join(",")}"`,
-        minimal: minimal ? `bun run sim memberRemovedMidTurn --mode order --order "${minimal.order.join(",")}"` : null,
-      },
-    });
+    const run = simFixtureRun({ session: sessions.find((s) => s.id === session)!, run: row, gitHead: head, shrunk: k === failing.length - 1 });
+    row.deliveries = run.run.deliveries;
+    runs.set(`${session}/${row.dir}`, run);
   });
 
   const grid: SimGridCell[] = [];
@@ -1004,6 +931,7 @@ function buildSim(now: number): FixtureState["sim"] {
         bySession.set(r.session, s);
       }
       const failLast = [...mine].reverse().find((r) => !r.row.passed && r.session === last?.session);
+      const newest = [...mine].reverse().find((r) => !r.row.passed && r.row.dir);
       grid.push({
         scenario,
         mode,
@@ -1011,6 +939,7 @@ function buildSim(now: number): FixtureState["sim"] {
         history: [...bySession].map(([session, s]) => ({ session, ...s })),
         gitHead: last ? head : null,
         lastRunAt: last ? iso(last.at) : null,
+        newestFailure: newest ? { session: newest.session, run: newest.row.dir!, seed: newest.row.seed, invariant: failureInvariant(runs.get(`${newest.session}/${newest.row.dir}`)!), at: iso(newest.at) } : null,
       });
     }
   }
@@ -1030,7 +959,7 @@ function buildSim(now: number): FixtureState["sim"] {
       { key: "chatRail", reason: "a client fold over chat rows, derived at read time" },
     ],
     grid,
-    caught: Object.fromEntries(SIM_INVARIANTS.map(([id]) => [id, id === "INV-team-inbox" ? failing.length : id === "INV-sweep" ? 2 : 0])),
+    caught: Object.fromEntries(SIM_INVARIANTS.map(([id]) => [id, id === "INV-followers" ? failing.length : id === "INV-sweep" ? 2 : 0])),
   };
   return { catalog, sessions: sessions.reverse(), runs };
 }
@@ -1091,7 +1020,8 @@ function overview(st: FixtureState, cadence: string): OverviewResponse {
     moved: moved.sort((a, b) => b.at.localeCompare(a.at)).slice(0, 12),
     spendByDay: [...spend].sort(([a], [b]) => a.localeCompare(b)).map(([day, s]) => ({ day, usd: round(s.usd, 2), judgeUsd: round(s.judgeUsd, 2) })),
     bisects: st.bisects.map(bisectSummary),
-    sim: st.sim.sessions[0] ?? null,
+    // The newest session by when it began: the list puts the read-only legacy folder first.
+    sim: [...st.sim.sessions].sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0] ?? null,
   };
 }
 
@@ -1278,7 +1208,8 @@ export function evalsFixtureWorld(opts: { now?: number; seed?: number } = {}): E
         if (!state) throw new EvalsFixtureMiss(`no bisect ${p.id}`);
         const since = Number(q.since) || 0;
         const steps = (st.stepsByBisect.get(p.id) ?? []).filter((s) => s.seq > since);
-        const resp: BisectResponse = { state, steps, cursor: Math.max(since, ...steps.map((s) => s.seq)), logTail: ["probe 2/2: rep 1 of 3 landed", "waiting on claude -p (41s)"], stalled: false };
+        const stalled = !state.finishedAt && now - Date.parse(state.updatedAt) > 5 * 60_000;
+        const resp: BisectResponse = { state, steps, cursor: Math.max(since, ...steps.map((s) => s.seq)), logTail: st.tailByBisect.get(p.id) ?? [], stalled };
         return resp;
       }
       case "POST /bisect/:id/stop":

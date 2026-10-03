@@ -12,7 +12,15 @@
 // The thin row says nothing about what a field held before. The inbox row
 // does: `sessions` and `conversations` are two copies of one server row, the
 // action writes both, and the sessions cell carries the real prior value.
-import type { CellChange, UndoCtx } from "@platform/engine";
+//
+// The inbox row is also the truth when the meta is loaded. Its conversations
+// copy can lag: the server leaves a cleared stamp out of the meta and the
+// merge keeps the old value, so a draft that writes the clear on both copies
+// changes only the stale one. The prior value is the inbox row's then too,
+// and where the inbox row already showed the written value there is nothing
+// to take back: sending the stale stamp would re-hide (or re-kill) the row.
+import { sameShape, type CellChange, type UndoCtx } from "@platform/engine";
+import { OPTIONAL_INBOX_TIMESTAMPS } from "../syncProtocol";
 
 const isThinAdd = (c: CellChange) => c.store === "conversations" && c.field === undefined && !c.hadBefore && c.hadAfter;
 
@@ -29,17 +37,33 @@ export const withSessionsPrior = (cells: readonly CellChange[], c: CellChange): 
   return twin && { ...c, before: twin.before, hadBefore: twin.hadBefore };
 };
 
+// Whether the inbox row held `value` in `field` before the gesture. An optional
+// stamp's clear is spelled either way (null or left out), as in the sync merge.
+const inboxRowHeld = (row: Record<string, unknown>, field: string, value: unknown): boolean =>
+  OPTIONAL_INBOX_TIMESTAMPS.has(field) && row[field] == null
+    ? value == null
+    : Object.prototype.hasOwnProperty.call(row, field) && sameShape(row[field], value);
+
 /**
  * Turns each thin-row add into one cell per field it wrote, restored from the
  * inbox row; a field the inbox row did not change is dropped, so nothing is
  * written or locked for it. A row kept by an earlier undo is still thin, so a
  * field cell with no prior value takes the inbox row's too, where it has one.
+ * Where the inbox row stood behind the gesture, every conversations field cell
+ * takes its prior value, and one whose value the inbox row already showed is
+ * dropped (the conversations copy was stale).
  */
-export const keepConversationRows = (cells: CellChange[]): CellChange[] =>
+export const keepConversationRows = (cells: CellChange[], ctx?: Pick<UndoCtx, "before">): CellChange[] =>
   cells.flatMap((c) => {
-    if (c.store !== "conversations" || c.hadBefore) return [c];
-    if (c.field !== undefined) return [withSessionsPrior(cells, c) ?? c];
-    if (!isThinAdd(c)) return [c];
+    if (c.store !== "conversations") return [c];
+    const inboxRow = ctx?.before?.sessions?.[c.id] as Record<string, unknown> | undefined;
+    if (c.field !== undefined) {
+      if (!inboxRow) return [c.hadBefore ? c : (withSessionsPrior(cells, c) ?? c)];
+      const twin = withSessionsPrior(cells, c);
+      if (twin) return [twin];
+      return inboxRowHeld(inboxRow, c.field, c.after) ? [] : [c];
+    }
+    if (c.hadBefore || !isThinAdd(c)) return [c];
     const added = c.after as Record<string, unknown>;
     const fields = Object.keys(added).filter((field) => field !== "_id");
     return fields.flatMap((field) => withSessionsPrior(cells, { ...c, field, before: undefined, after: added[field] }) ?? []);

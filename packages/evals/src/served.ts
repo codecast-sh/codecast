@@ -15,6 +15,35 @@ export function servedReadKey(argv: string[]): string {
 }
 
 /**
+ * A calls.log argv split back into its arguments. The guard's logged_argv
+ * single-quotes any argument that is not a plain word ('it'\''s for a quote
+ * inside), so a line splits into exactly the argv it logged; null when a quote
+ * never closes. A line from before the guard quoted kept its argv space
+ * joined, so a quoted phrase there reads as separate words.
+ */
+export function loggedArgv(line: string): string[] | null {
+  const out: string[] = [];
+  let cur = '';
+  let word = false;
+  let quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i]!;
+    if (quoted) {
+      if (c === "'") quoted = false;
+      else cur += c;
+    } else if (c === "'") [quoted, word] = [true, true];
+    else if (c === '\\' && i + 1 < line.length) [cur, word] = [cur + line[++i], true];
+    else if (c === ' ') {
+      if (word) out.push(cur);
+      [cur, word] = ['', false];
+    } else [cur, word] = [cur + c, true];
+  }
+  if (quoted) return null;
+  if (word) out.push(cur);
+  return out;
+}
+
+/**
  * Files one read in a served dir where the guard looks for it: reads/<key>.out,
  * and its exit code beside it. `prefix` adds a reads/<key>.prefix marker, so
  * the guard answers any longer argv that starts with this one and has no

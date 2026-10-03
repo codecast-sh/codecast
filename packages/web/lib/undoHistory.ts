@@ -243,6 +243,11 @@ function detailOf(row: Omit<UndoTimelineRow, "detail">, item: UndoHistoryItem, n
     case "dropped":
       return "set aside by a later change";
     case "done": {
+      // The keyboard stops at it (its undo widens access): say where it goes back from.
+      if (item.confirm) {
+        const where = row.visits[0] ? visitDetailParts(row.visits[0], teams).join(" · ") : "";
+        return `${where ? `${where} · ` : ""}its undo widens access: take it back from here`;
+      }
       if (row.secondsLeft !== null) return `can undo for ${row.secondsLeft}s more`;
       if (row.expired && item.mode === "manual") return "too old to take back";
       const where = row.visits[0] ? visitDetailParts(row.visits[0], teams).join(" · ") : "";

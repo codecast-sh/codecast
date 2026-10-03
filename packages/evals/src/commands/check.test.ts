@@ -1,6 +1,6 @@
 import { describe, expect, setDefaultTimeout, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -10,7 +10,7 @@ import { sourceHashes } from '../state';
 import type { SurfaceMeta } from '../surface';
 import { echoMeta } from '../testSurface';
 import { freezeIdOf, runDirs, world, type World } from '../testWorld';
-import { BISECT_CADENCE, EXIT_INCOMPLETE, fitBudget } from './check';
+import { batchLock, BISECT_CADENCE, EXIT_INCOMPLETE, fitBudget } from './check';
 
 // Each scratch-repo test spawns the CLI a few times; on a loaded machine one spawn can take seconds.
 setDefaultTimeout(120_000);
@@ -129,6 +129,23 @@ describe('what a rep ran, on a scratch repo', () => {
     const stopped = runDirs(w).filter((d) => JSON.parse(readFileSync(join(w.home, 'runs', d, 'run.json'), 'utf8')).batch === 'stopped');
     expect(stopped).toHaveLength(1);
     expect(JSON.parse(readFileSync(join(w.home, 'runs', stopped[0]!, 'result.json'), 'utf8')).endedBecause).toBe('budget');
+  });
+
+  test('a named batch another live check holds is refused, and a dead holder\'s lock is reclaimed', () => {
+    const w = world();
+    commitFreeze(w);
+    mkdirSync(join(w.home, 'locks'), { recursive: true });
+    const lockAt = join(w.home, 'locks', batchLock('held').name!);
+    writeFileSync(lockAt, JSON.stringify({ pid: process.pid, acquired_at: new Date().toISOString() }));
+    const refused = w.run('check', 'echo', '--dry', '--reps', '1', '--batch', 'held');
+    expect(refused.code).toBe(EXIT_INCOMPLETE);
+    expect(refused.out).toContain(`refused: batch held is being run by pid ${process.pid}`);
+    expect(runDirs(w)).toHaveLength(0);
+    // The holder died without releasing: the next check takes the batch over and lets it go when done.
+    writeFileSync(lockAt, JSON.stringify({ pid: Bun.spawnSync(['true']).pid, acquired_at: new Date().toISOString() }));
+    expect(w.run('check', 'echo', '--dry', '--reps', '1', '--batch', 'held').code).toBe(0);
+    expect(runDirs(w)).toHaveLength(1);
+    expect(existsSync(lockAt)).toBe(false);
   });
 
   test("--cadence bisect stamps its probes and leaves the cadence state alone", () => {

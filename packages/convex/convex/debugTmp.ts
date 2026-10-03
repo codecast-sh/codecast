@@ -9,7 +9,6 @@ import { BUCKETS_VIEW_CONTRACT_ID, BUCKETS_VIEW_KEY } from "./buckets";
 import { advanceLocalViewRevision } from "./localFirstCommands";
 import { performWebActiveSessions } from "./tasks";
 import { filterUserMessages } from "./userMessagesFilter";
-import { isProgramLaunched, typedWords } from "./lib/userSend";
 
 // TEMPORARY: insert a switch_account daemon command scoped to ONE conversation
 // — exercises the daemon's swap+kill+continue handler end-to-end without
@@ -1110,29 +1109,3 @@ export const teamBoardProbe = internalQuery({
   },
 });
 
-// The largest typed sends one user made on one UTC day, to audit the Words metric.
-export const topTypedSends = internalQuery({
-  args: { user_id: v.id("users"), day_start: v.number() },
-  handler: async (ctx, args) => {
-    const end = args.day_start + 86_400_000;
-    const out: any[] = [];
-    const convs = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_updated", (q: any) => q.eq("user_id", args.user_id).gte("updated_at", args.day_start))
-      .take(400);
-    for (const c of convs) {
-      if (c.parent_conversation_id || c._creationTime > end) continue;
-      const msgs = await ctx.db
-        .query("messages")
-        .withIndex("by_conversation_role_timestamp", (q: any) =>
-          q.eq("conversation_id", c._id).eq("role", "user").gte("timestamp", args.day_start).lt("timestamp", end))
-        .take(200);
-      for (const m of msgs) {
-        if (m.tool_results?.length) continue;
-        const w = typedWords(m.content);
-        if (w && w > 300) out.push({ w, conv: c.short_id, launched: isProgramLaunched(c), from: !!m.from_user_id, title: c.title?.slice(0, 50), head: m.content?.slice(0, 120) });
-      }
-    }
-    return out.sort((a, b) => b.w - a.w).slice(0, 20);
-  },
-});

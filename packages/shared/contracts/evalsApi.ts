@@ -721,6 +721,13 @@ export interface SimGridCell {
   history: Array<{ session: string; seeds: number; failed: number }>;
   gitHead: string | null;
   lastRunAt: string | null;
+  /**
+   * The newest run of this cell that failed and left an artifact folder, with
+   * the invariant it broke (its result.json): what a click on the cell opens,
+   * even when the latest session passed, and what the invariant filter reads.
+   * Optional: absent when the history holds no failing run with artifacts.
+   */
+  newestFailure?: { session: string; run: string; seed: number; invariant: string; at: string } | null;
 }
 
 // ── Endpoints (section 3.4) ─────────────────────────────────────────────────

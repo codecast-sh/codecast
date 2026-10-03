@@ -46,6 +46,22 @@ export interface ScoreStripProps {
 const PAD_TOP = 4;
 const AXIS = 7;
 
+/** A footing change on a time axis: a diamond where the model moved, a dashed violet slash where the judge's ruler moved. */
+export function FootingGlyph({ marker, x, y, scale = 1 }: { marker: FootingMarker; x: number; y: number; scale?: number }) {
+  const d = 3.2 * scale;
+  return marker.kind === "model" ? (
+    <g className="ev-quiet" data-ev-footing="model">
+      <title>{`Model moved from ${marker.from ?? "none"} to ${marker.to ?? "none"}`}</title>
+      <path d={`M${x},${y - d} L${x + d},${y} L${x},${y + d} L${x - d},${y} Z`} style={{ fill: "var(--sol-bg)" }} stroke="currentColor" strokeWidth={1.1} />
+    </g>
+  ) : (
+    <g className="ev-ruler" data-ev-footing="judge">
+      <title>{`Judge ruler moved from ${marker.from ?? "none"} to ${marker.to ?? "none"}`}</title>
+      <line x1={x - 0.8125 * d} x2={x + 0.8125 * d} y1={y + d} y2={y - d} stroke="currentColor" strokeWidth={1.4} strokeDasharray="1.6 1" />
+    </g>
+  );
+}
+
 export function ScoreStrip({ strip, dots = [], epochs = [], footing = [], from, to, width, height = 44, cursor = null, onCursor, onPick, pinned = null, tip, delayMs = 0, label }: ScoreStripProps) {
   const [pointer, setPointer] = useState<{ x: number; y: number } | null>(null);
   const w = Math.max(width, 40);
@@ -106,21 +122,9 @@ export function ScoreStrip({ strip, dots = [], epochs = [], footing = [], from, 
               </g>
             ) : null;
           })}
-        {footing.map((m, i) => {
-          const fx = x(Date.parse(m.batchAt));
-          const cy = height - 3.5;
-          return m.kind === "model" ? (
-            <g key={i} className="ev-quiet" data-ev-footing="model">
-              <title>{`Model moved from ${m.from ?? "none"} to ${m.to ?? "none"}`}</title>
-              <path d={`M${fx},${cy - 3.2} L${fx + 3.2},${cy} L${fx},${cy + 3.2} L${fx - 3.2},${cy} Z`} style={{ fill: "var(--sol-bg)" }} stroke="currentColor" strokeWidth={1.1} />
-            </g>
-          ) : (
-            <g key={i} className="ev-ruler" data-ev-footing="judge">
-              <title>{`Judge ruler moved from ${m.from ?? "none"} to ${m.to ?? "none"}`}</title>
-              <line x1={fx - 2.6} x2={fx + 2.6} y1={cy + 3.2} y2={cy - 3.2} stroke="currentColor" strokeWidth={1.4} strokeDasharray="1.6 1" />
-            </g>
-          );
-        })}
+        {footing.map((m, i) => (
+          <FootingGlyph key={i} marker={m} x={x(Date.parse(m.batchAt))} y={height - 3.5} />
+        ))}
         {cursorX !== null && cursorX >= 0 && cursorX <= w && <line x1={cursorX} x2={cursorX} y1={0} y2={plotBottom} className="ev-strip-cursor" />}
         {hot && <circle cx={x(at(hot))} cy={y(hot.median as number)} r={2.6} style={{ fill: "var(--sol-bg)", stroke: "var(--sol-text)" }} strokeWidth={1.25} />}
         <rect x={0} y={0} width={w} height={height} className="ev-strip-hit" onMouseMove={move} onMouseLeave={leave} onClick={click} />

@@ -4,6 +4,7 @@ import {
   MILESTONE_WINDOW_MS,
   PEEK_DELAY_MS,
   WALK_IDLE,
+  fieldOwnsStep,
   walk,
   walkTimer,
   walkView,
@@ -122,5 +123,32 @@ describe("held-modifier undo walk", () => {
     // Too far apart, or a redo: no milestone.
     expect(walk(first, undo(T0 + MILESTONE_WINDOW_MS + 1)).milestone).toBe(false);
     expect(walk(first, redo(T0 + 100)).milestone).toBe(false);
+  });
+});
+
+// ⌘Z from an empty field reaches app undo only when the field has no newer
+// history of its own: a triage chord from the empty composer is taken back,
+// a draft the user just cleared comes back in the field.
+describe("fieldOwnsStep", () => {
+  const history = {
+    items: [{ id: "b", ts: 200, undoneAt: 500 }, { id: "a", ts: 100 }],
+    undoOrder: ["a"],
+    redoOrder: ["b"],
+  };
+  test("a field never edited hands the press to the app", () => {
+    expect(fieldOwnsStep("undo", undefined, history)).toBe(false);
+  });
+  test("a field edited before the entry was recorded hands the press to the app", () => {
+    expect(fieldOwnsStep("undo", 50, history)).toBe(false);
+  });
+  test("a field edited after the entry keeps the press", () => {
+    expect(fieldOwnsStep("undo", 150, history)).toBe(true);
+  });
+  test("redo compares with when the entry was taken back", () => {
+    expect(fieldOwnsStep("redo", 300, history)).toBe(false);
+    expect(fieldOwnsStep("redo", 600, history)).toBe(true);
+  });
+  test("an edited field keeps the press when the app has nothing to step", () => {
+    expect(fieldOwnsStep("undo", 1, { items: [], undoOrder: [], redoOrder: [] })).toBe(true);
   });
 });

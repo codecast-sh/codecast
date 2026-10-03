@@ -66,7 +66,8 @@ export function UndoTimeline({ mode }: { mode: undoTimeline.UndoTimelineMode }) 
   const acts = useCardActs();
   const onUndoTo = useCallback((id: string) => { undoTo(id); }, []);
   const onRedoTo = useCallback((id: string) => { redoTo(id); }, []);
-  return <UndoTimelineView model={model} mode={mode} onUndoTo={onUndoTo} onRedoTo={onRedoTo} {...acts} />;
+  const flash = useSyncExternalStore(undoTimeline.subscribeFlash, undoTimeline.getFlash, undoTimeline.getFlash);
+  return <UndoTimelineView model={model} mode={mode} onUndoTo={onUndoTo} onRedoTo={onRedoTo} flash={flash} {...acts} />;
 }
 
 /**

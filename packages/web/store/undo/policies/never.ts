@@ -163,6 +163,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   updateChatSlackLink: SETTINGS,
   persistClientTips: SETTINGS,
   updateClientUI: SETTINGS,
+  setActiveTeamPointer: never("navigation: switching workspace moves the view, it changes no work"),
 
   // Machine and agent control
   convCommand: MACHINE,

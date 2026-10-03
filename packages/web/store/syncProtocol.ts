@@ -35,6 +35,17 @@ export const OPTIONAL_INBOX_TIMESTAMPS: ReadonlySet<string> = new Set([
   "inbox_killed_at",
 ]);
 
+/**
+ * A whole conversation doc from the server, with each inbox stamp it left out
+ * spelled as a clear. syncRecord merges field by field, so a stamp cleared on
+ * the server (a restore on another device) would otherwise keep its old value
+ * in the meta while the inbox row shows it clear.
+ */
+export function withClearedInboxStamps<T extends Record<string, unknown>>(doc: T): T {
+  const missing = [...OPTIONAL_INBOX_TIMESTAMPS].filter((f) => !(f in doc));
+  return missing.length ? { ...doc, ...Object.fromEntries(missing.map((f) => [f, null])) } : doc;
+}
+
 export function applySyncTable<T extends { _id: string }>(
   tableName: string,
   incoming: T[],

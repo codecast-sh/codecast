@@ -145,6 +145,16 @@ describe("UndoTimelineView", () => {
     assert.match(q("[data-undo-header-keys]")!.textContent!, /Esc\s*close/);
   });
 
+  it("a ⌘Z that stops at a confirm row marks and selects that row, once per stop", async () => {
+    const confirmModel = { ...model, rows: model.rows.map((r) => (r.id === "fx-old" ? { ...r, item: { ...r.item, confirm: true } } : r)) };
+    // A stop from before the card mounted is not replayed.
+    await mount(<UndoTimelineView model={confirmModel} mode="interactive" {...handlers} flash={{ id: "fx-old", n: 1 }} />);
+    assert.equal(q("[data-undo-flash]"), null);
+    await act(async () => root.render(<UndoTimelineView model={confirmModel} mode="interactive" {...handlers} flash={{ id: "fx-old", n: 2 }} />));
+    assert.equal(q("[data-undo-flash]")?.getAttribute("data-undo-row"), "fx-old");
+    assert.equal(selected(), "fx-old");
+  });
+
   it("the row's button carries the walk and its count", async () => {
     await mount(<UndoTimelineView model={model} mode="interactive" {...handlers} />);
     const back = q<HTMLButtonElement>('[data-undo-row="fx-old"] [data-undo-act="back"]')!;

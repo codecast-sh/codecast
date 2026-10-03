@@ -10,6 +10,7 @@ import {
   proofCountsIn,
   proofSummary,
   riskLabel,
+  SUITE_GATE_CHECK,
   validateChangeCard,
   type CardAssemblyInput,
   type ChangeCard,
@@ -40,6 +41,13 @@ function golden(file: string, actual: string) {
 }
 
 const sample = () => assembleChangeCard(sampleAssemblyInput());
+/** The sample with two suite gate scenarios failing, recommended for revision as a failing check requires. */
+function gateSample(): ChangeCard {
+  const input = sampleAssemblyInput();
+  input.evalResult = { ...input.evalResult!, ok: false, gatesFailed: ["handoff-keeps-owner", "dup-merge-keeps-newest"] };
+  input.recommend = { verdict: "revise", why: "Two suite scenarios fail on the branch, so the change needs another pass." };
+  return assembleChangeCard(input);
+}
 const clone = (c: ChangeCard): any => JSON.parse(JSON.stringify(c));
 const errorsOf = (c: unknown) => {
   const v = validateChangeCard(c);
@@ -53,6 +61,10 @@ describe("change card golden", () => {
 
   it("renders the sample card", () => {
     golden("card.html", renderChangeCardHtml(sample()));
+  });
+
+  it("renders a card whose suite gates failed, the failing scenarios in its checks", () => {
+    golden("card-gates.html", renderChangeCardHtml(gateSample()));
   });
 
   it("the sample card is valid", () => {
@@ -72,6 +84,20 @@ describe("assembleChangeCard", () => {
     expect(card.cost.usd).toBe(1.96);
     expect(card.checks.map((c) => [c.name, c.ok])).toEqual([["Verify", true], ["Eval", true], ["Review", true]]);
     expect(card.diff.pr).toBe("https://github.com/codecast-sh/codecast/pull/912");
+  });
+
+  it("a failed suite gate is its own red check naming the scenarios, and the Eval check answers for the replays alone", () => {
+    const card = gateSample();
+    expect(card.checks.map((c) => [c.name, c.ok])).toEqual([["Verify", true], ["Eval", true], [SUITE_GATE_CHECK, false], ["Review", true]]);
+    expect(card.checks[2]!.detail).toBe("2 scenarios failed: handoff-keeps-owner, dup-merge-keeps-newest");
+    expect(errorsOf(card)).toEqual([]);
+    const ship = clone(card);
+    ship.recommend.verdict = "ship";
+    expect(errorsOf(ship)).toEqual([`recommend.verdict: ship over failing checks (${SUITE_GATE_CHECK}); recommend revise or drop`]);
+  });
+
+  it("no suite gate check when no gate failed", () => {
+    expect(sample().checks.some((c) => c.name === SUITE_GATE_CHECK)).toBe(false);
   });
 
   it("lists broken flips after fixed ones and caps examples at three", () => {

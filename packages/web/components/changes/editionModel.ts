@@ -7,7 +7,7 @@
 // Filters never rewrite prose. Area and surface filters dim what they miss so
 // the shape of the day stays visible; person, risk, waiting and text filters
 // hide what they miss. Dimmed and hidden stories leave the reading order.
-import { personKey, statsHeadline, surfaceCoversArea, waitingStories, type ShipEvent } from "@codecast/shared/changes";
+import { bareName, personKey, statsHeadline, surfaceCoversArea, waitingStories, type ShipEvent } from "@codecast/shared/changes";
 import type { EditionRow, LiveRow, StoryRow } from "../../hooks/useSyncChanges";
 import type { RosterIdentity } from "../../hooks/useTeamRoster";
 import { memberDisplayName } from "../../lib/liveEntities";
@@ -36,8 +36,6 @@ export type EditionModel = {
   day: StoryRow[];
   /** Everyone behind `day`, by name. */
   people: Person[];
-  /** Commits on main as the stories count them now, to tell notes written from fewer. */
-  mainCommits: number;
   lead: StoryRow | null;
   sections: Section[];
   brief: StoryRow[];
@@ -129,7 +127,7 @@ export function peopleOf(stories: readonly Pick<StoryRow, "actor_user_ids" | "au
       const key = personKey(author);
       if (!key) continue;
       const m = byName.get(key);
-      const p = at(key, m ? memberDisplayName(m) : author.trim());
+      const p = at(key, m ? memberDisplayName(m) : bareName(author));
       if (m) addId(p, String(m._id));
       if (!p.authorNames.includes(author)) p.authorNames.push(author);
     }
@@ -307,9 +305,10 @@ export function buildEdition(input: {
   const day = storiesOfDay(input.stories, date, url.branches);
   const byKey = new Map(day.map((s) => [s.story_key, s]));
   const releases: Ship[] = edition?.releases ?? [];
-  const stats = dayStats(day, edition, releases, url.branches);
   const waiting = waitingKeys(day, live);
   const people = peopleOf(day, input.roster);
+  // The header counts the people the avatars and the person chips show, so the three never disagree.
+  const stats = { ...dayStats(day, edition, releases, url.branches), people: people.length };
   const person = url.person ? personFor(url.person, people) : null;
 
   // Lead: the edition's pick, else the heaviest story on the default branch.
@@ -368,7 +367,6 @@ export function buildEdition(input: {
   return {
     day,
     people,
-    mainCommits: dayStats(storiesOfDay(input.stories, date, "main"), undefined, releases).commits,
     lead: leadShown,
     sections,
     brief,

@@ -57,31 +57,44 @@ export function ChangeCardView({ card, density = "full", recommend = true, chang
   return <ChangeCardFull card={card} inline={density === "inline"} head={change} recommend={recommend} outcome={outcome} animate={animate} />;
 }
 
-/** Why the change exists: its task and cause, the signals behind it, and the goal it serves. */
+/** "evals, judges and users" */
+const listLabel = (xs: string[]) => (xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
+
+/**
+ * Why the change exists, in two quiet lines: its task and cause, then the
+ * signals behind it (and where they came from), how old it is, and the goal
+ * it serves, so the page goes from its title to the evidence in one glance.
+ */
 export function ChangeCardCause({ card, className = "" }: { card: ChangeCard; className?: string }) {
   const now = useCoarseNow(60_000);
   const hasGoal = card.goal.ref && card.goal.ref !== "none";
-  const meta = [
-    card.cause.signals > 0 ? `${card.cause.signals} signal${card.cause.signals === 1 ? "" : "s"}` : "",
-    card.cause.first_seen ? `first seen ${formatTimeAgo(card.cause.first_seen, now)}` : "",
-  ].filter(Boolean);
+  const sources = card.cause.sources.length ? `from ${listLabel(card.cause.sources)}` : "";
+  const signals = card.cause.signals > 0 ? `${card.cause.signals} signal${card.cause.signals === 1 ? "" : "s"}` : "";
+  const meta: { key: string; node: ReactNode; className?: string; title?: string }[] = [];
+  if (signals || sources) meta.push({ key: "signals", node: [signals, sources].filter(Boolean).join(" ") });
+  if (card.cause.first_seen) meta.push({ key: "seen", className: "cc-nowrap", node: `first seen ${formatTimeAgo(card.cause.first_seen, now)}` });
+  // The goal it serves; its ref shows on hover.
+  if (hasGoal) meta.push({
+    key: "goal",
+    className: "cc-goal",
+    title: card.goal.why || undefined,
+    node: <>serves <span className="text-sol-text-muted">{card.goal.name || card.goal.ref}</span>{card.goal.name && <span className="cc-goal-ref">{card.goal.ref}</span>}</>,
+  });
   return (
     <div className={`cc-cause ${className}`}>
       <div className="cc-cause-row">
         <Link href={`/tasks/${card.cause.task}`} className="cc-chip text-sol-violet border-sol-violet/30 hover:bg-sol-violet/10">{card.cause.task}</Link>
         <span className="cc-cause-title">{card.cause.title}</span>
       </div>
-      {(meta.length > 0 || card.cause.sources.length > 0) && (
-        <div className="cc-cause-row">
-          {meta.map((m, i) => <span key={m} className="cc-cause-meta">{i > 0 && <span className="cc-sep" aria-hidden>·</span>}{m}</span>)}
-          {card.cause.sources.map((src) => <span key={src} className="cc-source">{src}</span>)}
-        </div>
-      )}
-      {/* The goal it serves, one muted line; its ref shows on hover. */}
-      {hasGoal && (
-        <div className="cc-cause-row cc-goal" title={card.goal.why || undefined}>
-          serves <span className="text-sol-text-muted">{card.goal.name || card.goal.ref}</span>
-          {card.goal.name && <span className="cc-goal-ref">{card.goal.ref}</span>}
+      {/* Every fact carries its separator and the row clips the one that
+          opens a line, so a wrapped line never starts with a dot. */}
+      {meta.length > 0 && (
+        <div className="cc-cause-facts">
+          <div className="cc-cause-row">
+            {meta.map((m) => (
+              <span key={m.key} className={`cc-cause-meta ${m.className ?? ""}`} title={m.title}><span className="cc-sep" aria-hidden>·</span>{m.node}</span>
+            ))}
+          </div>
         </div>
       )}
     </div>
@@ -173,7 +186,7 @@ function DiffCounts({ diff }: { diff: ChangeCard["diff"] }) {
   );
 }
 
-/** The detail most rows share, when at least two share it; rows that say just that show no detail of their own. */
+/** The detail most rows share, when at least two share it; rows that say just that show it dimmed, so every row keeps one rhythm. */
 function sharedDetail(details: string[]): string {
   const counts = new Map<string, number>();
   for (const d of details) if (d) counts.set(d, (counts.get(d) ?? 0) + 1);
@@ -183,42 +196,61 @@ function sharedDetail(details: string[]): string {
   return best;
 }
 
+/**
+ * Check names read "<group> · <case>" ("titlePrompt.test.ts · greeting is
+ * never the title"). A group every row shares reads once, beside the
+ * headline; otherwise each row keeps its group as a short dim prefix, a test
+ * file without its ".test.ts".
+ */
+export function proofNames(names: string[]): { group: string; split: (name: string) => { group: string; leaf: string } } {
+  const split = (name: string) => {
+    const at = name.indexOf(" · ");
+    if (at < 0) return { group: "", leaf: name };
+    return { group: name.slice(0, at).replace(/\.(test|spec)\.[cm]?[jt]sx?$/, ""), leaf: name.slice(at + 3) };
+  };
+  const groups = new Set(names.map((n) => split(n).group));
+  const group = names.length > 1 && groups.size === 1 ? [...groups][0] : "";
+  return { group, split };
+}
+
+function ProofName({ name, names }: { name: string; names: ReturnType<typeof proofNames> }) {
+  const { group, leaf } = names.split(name);
+  return (
+    <span className="cc-proof-name" title={name}>
+      {group && group !== names.group && <span className="cc-proof-prefix">{group}</span>}
+      {leaf}
+    </span>
+  );
+}
+
 function ProofStrip({ card }: { card: ChangeCard }) {
   const summary = proofSummary(card.proof);
   const after = new Map(card.proof.after.map((c) => [c.name, c]));
   const red = card.proof.before.filter((c) => !c.ok);
   const broke = card.proof.after.filter((c) => summary.broke.includes(c.name));
   // The before and after most checks share ("fails on origin/main", "passes
-  // on the branch") read once, in the header; a row speaks only where it differs.
+  // on the branch") still read on every row, dimmed, so the rows keep one
+  // rhythm and the row that differs stands out by its ink.
   const commonBefore = sharedDetail(red.map((b) => b.detail));
   const commonAfter = sharedDetail(red.map((b) => after.get(b.name)?.detail ?? ""));
+  const names = proofNames([...red.map((b) => b.name), ...broke.map((a) => a.name)]);
   return (
     <section className="cc-section" data-cc-proof>
       <div className="cc-label-row">
         <h3 className="cc-label">Proof</h3>
         <span className={`cc-proof-label ${summary.stillRed.length || summary.broke.length ? "cc-text-red" : summary.red ? "cc-text-green" : "text-sol-text-dim"}`}>{summary.label}</span>
+        {names.group && <span className="cc-proof-group">{names.group}</span>}
       </div>
       {red.length === 0 && !broke.length ? (
         <div className="text-[12px] text-sol-text-dim">Nothing was shown failing before the change.</div>
       ) : (
         <ol className="cc-proof">
-          {/* The detail most rows share reads once, over the names; the red
-              and green dots under it say which side is before and after. */}
-          {(commonBefore || commonAfter) && (
-            <li className="cc-proof-head">
-              <span className="cc-proof-caption">
-                {commonBefore && <span className="cc-text-red">{commonBefore}</span>}
-                {commonBefore && commonAfter && <span className="cc-arrow" aria-hidden>→</span>}
-                {commonAfter && <span className="cc-text-green">{commonAfter}</span>}
-              </span>
-            </li>
-          )}
           {red.map((b, i) => {
             const a = after.get(b.name);
             const fixed = a?.ok === true;
             const beforeText = b.detail || "failed";
             const afterText = a?.detail || (a ? (fixed ? "passes" : "still fails") : "no after recorded");
-            // A row that says exactly what the header says shows only its name.
+            // A row that says what most rows say reads dimmed.
             const shared = fixed && !!commonBefore && !!commonAfter && b.detail === commonBefore && a?.detail === commonAfter;
             return (
               <li key={b.name} className={`cc-proof-row ${fixed ? "is-fixed" : "is-red"}`} style={{ ["--i" as any]: i }}>
@@ -227,15 +259,11 @@ function ProofStrip({ card }: { card: ChangeCard }) {
                   <span className="cc-wire"><span className="cc-wire-fill" /></span>
                   <span className={`cc-dot ${fixed ? "cc-dot-green" : "cc-dot-red"}`} />
                 </span>
-                <span className="cc-proof-name">{b.name}</span>
-                <span className="cc-proof-detail">
-                  {!shared && (
-                    <>
-                      <span className="cc-proof-before" title={beforeText}>{beforeText}</span>
-                      <span className="cc-arrow" aria-hidden>→</span>
-                      <span className={`cc-proof-after ${fixed ? "cc-text-green" : "cc-text-red"}`} title={afterText}>{afterText}</span>
-                    </>
-                  )}
+                <ProofName name={b.name} names={names} />
+                <span className={`cc-proof-detail ${shared ? "is-shared" : ""}`}>
+                  <span className="cc-proof-before" title={beforeText}>{beforeText}</span>
+                  <span className="cc-arrow" aria-hidden>→</span>
+                  <span className={`cc-proof-after ${fixed ? "cc-text-green" : "cc-text-red"}`} title={afterText}>{afterText}</span>
                 </span>
               </li>
             );
@@ -247,7 +275,7 @@ function ProofStrip({ card }: { card: ChangeCard }) {
                 <span className="cc-wire"><span className="cc-wire-fill" /></span>
                 <span className="cc-dot cc-dot-red" />
               </span>
-              <span className="cc-proof-name">{a.name}</span>
+              <ProofName name={a.name} names={names} />
               <span className="cc-proof-detail"><span className="cc-proof-after cc-text-red" title={a.detail || undefined}>broke: {a.detail || "fails after the change"}</span></span>
             </li>
           ))}
@@ -315,10 +343,11 @@ function ChangeCardFull({ card, inline, head, recommend, outcome, animate }: { c
       {/* Cause: why this run exists, one quiet line above the decision. */}
       {head && <header><ChangeCardCause card={card} /></header>}
 
-      {/* The decision itself: the change speaks for itself, what was wrong supports it. */}
+      {/* The decision itself: the change speaks for itself, what was wrong
+          supports it in muted ink, and the proof follows at once. */}
       <div className="cc-sentences">
         {head && <p className="cc-change">{card.change}</p>}
-        <p className="cc-wrong"><span className="cc-leadin">What was wrong:</span> {card.wrong}</p>
+        <p className="cc-wrong">{card.wrong}</p>
       </div>
 
       <ProofStrip card={card} />
@@ -346,11 +375,12 @@ function ChangeCardFull({ card, inline, head, recommend, outcome, animate }: { c
             <div className="cc-fact">
               <dt className="cc-label">Checks</dt>
               <dd>
-                <button type="button" className="cc-checks-toggle" onClick={() => setChecksOpen((o) => !o)} aria-expanded={showChecks} data-cc-checks>
+                {/* A disclosure: the caret leads and turns as the list opens. */}
+                <button type="button" className={`cc-checks-toggle ${showChecks ? "is-open" : ""}`} onClick={() => setChecksOpen((o) => !o)} aria-expanded={showChecks} data-cc-checks>
+                  <ChevronRight className="cc-caret w-3 h-3" aria-hidden />
                   {checksPassed === card.checks.length
-                    ? <span><span className="text-sol-text-dim">all</span> <span className="cc-text-green">{checksPassed} pass</span></span>
+                    ? <span>{checksPassed} of {card.checks.length} pass</span>
                     : <span className="cc-text-red">{card.checks.length - checksPassed} of {card.checks.length} fail</span>}
-                  <ChevronRight className={`w-3 h-3 text-sol-text-dim transition-transform ${showChecks ? "rotate-90" : ""}`} />
                 </button>
               </dd>
             </div>
@@ -359,15 +389,22 @@ function ChangeCardFull({ card, inline, head, recommend, outcome, animate }: { c
             <dt className="cc-label">Diff</dt>
             <dd>
               <DiffCounts diff={card.diff} />
-              <span className="text-sol-text-dim cc-nowrap"> in {card.diff.files} file{card.diff.files === 1 ? "" : "s"}</span>
-              {card.diff.pr && (
-                <a href={card.diff.pr} target="_blank" rel="noreferrer" className="cc-pr"><GitPullRequest className="w-3 h-3" />{prLabel(card.diff.pr)}</a>
-              )}
+              <div className="cc-fact-sub">
+                <span className="cc-nowrap">{card.diff.files} file{card.diff.files === 1 ? "" : "s"}</span>
+                {card.diff.pr && (
+                  <a href={card.diff.pr} target="_blank" rel="noreferrer" className="cc-pr cc-sep-before"><GitPullRequest className="w-3 h-3" />{prLabel(card.diff.pr)}</a>
+                )}
+              </div>
             </dd>
           </div>
           <div className="cc-fact cc-fact-risk">
             <dt className="cc-label">Risk</dt>
-            <dd><span className={`cc-text-${RISK_TONE[card.risk.class]}`}>{riskLabel(card.risk)}</span><div className="cc-fact-sub">{card.risk.reason}</div></dd>
+            {/* The class reads in the proof line and its dot; a risk past low is
+                news, so it also says so in words. */}
+            <dd className="cc-risk" title={riskLabel(card.risk)}>
+              <span className={`cc-risk-dot cc-tone-${RISK_TONE[card.risk.class]}`} aria-label={riskLabel(card.risk)} />
+              <span>{card.risk.class !== "low" && <span className={`cc-text-${RISK_TONE[card.risk.class]}`}>{riskLabel(card.risk)}. </span>}{card.risk.reason}</span>
+            </dd>
           </div>
           <div className="cc-fact">
             <dt className="cc-label">Cost</dt>
@@ -382,7 +419,7 @@ function ChangeCardFull({ card, inline, head, recommend, outcome, animate }: { c
 
       {outcome ?? (recommend && (
         <div className={`cc-recommend cc-tone-${tone}`}>
-          <span className="cc-recommend-verdict">Recommends {verdictLabel(card.recommend.verdict)}</span>
+          <span className="cc-recommend-verdict">Why {verdictLabel(card.recommend.verdict)}</span>
           <span className="text-sol-text-muted">{card.recommend.why}</span>
         </div>
       ))}
@@ -398,7 +435,7 @@ function ChangeCardLine({ card, recommend, change }: { card: ChangeCard; recomme
   const tone = VERDICT_TONE[card.recommend.verdict] ?? "blue";
   return (
     <div className="change-card cc-line" data-change-card={card.cause.task}>
-      {change && card.change && <div className="cc-line-change" title={card.change}>{card.change}</div>}
+      {change && card.change && <span className="cc-line-change" title={card.change}>{card.change}</span>}
       <div className="cc-line-row">
         {/* Each item after the first carries its own separator (cc-sep-before),
             so a wrapped line never starts with one. */}
@@ -412,6 +449,11 @@ function ChangeCardLine({ card, recommend, change }: { card: ChangeCard; recomme
 }
 
 // ── Ship / Revise / Drop ─────────────────────────────────────────────────────
+
+function VerdictTags({ tags }: { tags: (string | false)[] }) {
+  const on = tags.filter(Boolean) as string[];
+  return on.length ? <span className="cc-verdict-tag">{on.join(" · ")}</span> : null;
+}
 
 /** The card's answer controls, or null when the decision's options are not Ship, Revise and Drop. */
 export function cardAnswerIndexes(decision: Pick<SessionDecisionItem, "card" | "kind" | "options">) {
@@ -461,7 +503,8 @@ export function ChangeCardAnswer({
   keys?: boolean;
   /** Keys live only while focus is inside this element (answerKeyAllowed). */
   keyScope?: RefObject<HTMLElement | null>;
-  size?: "full" | "compact";
+  /** "line" is the queue's row: three small chips, no sentences around them. */
+  size?: "full" | "compact" | "line";
 }) {
   // The note and whether it is open live in the decision's draft, so a fold
   // or a page change never loses a half-written Revise.
@@ -512,39 +555,39 @@ export function ChangeCardAnswer({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [keys, keyScope, indexes, current, pick, sendRevise, onDismiss, setNoteOpen]);
 
-  const compact = size === "compact";
+  const compact = size !== "full";
+  const line = size === "line";
   const order: ChangeVerdict[] = (["ship", "revise", "drop"] as ChangeVerdict[]).sort((a, b) => indexes[a] - indexes[b]);
   return (
-    <div className="change-card-answer" data-card-answer>
-      {(wentAhead || current) && (
+    <div className={`change-card-answer ${line ? "is-line" : ""}`} data-card-answer>
+      {(wentAhead || current) && !line && (
         <p className="cc-course" data-cc-course>
-          {wentAhead ? <>The agent went ahead with <span className={`cc-text-${VERDICT_TONE[wentAhead]}`}>{verdictLabel(wentAhead)}</span>. Pick another to change course.</> : <>{record ? `${record}. ` : ""}Pick another to change course.</>}
+          {wentAhead ? <>The agent went ahead with <span className="cc-course-verdict">{verdictLabel(wentAhead)}</span>. Pick another to change course.</> : <>{record ? `${record}. ` : ""}Pick another to change course.</>}
         </p>
       )}
-      <div className={`cc-verdicts ${compact ? "is-compact" : ""}`}>
+      <div className={`cc-verdicts ${compact ? "is-compact" : ""} ${line ? "is-line" : ""}`}>
         {order.map((v) => (
           <button
             key={v}
             onClick={() => pick(v)}
             disabled={current === v}
             data-verdict={v}
-            className={`cc-verdict cc-tone-${VERDICT_TONE[v]} ${recommended === v && !current ? "is-recommended" : ""} ${current === v ? "is-current" : ""} ${v === "revise" && noteOpen ? "is-open" : ""}`}
-            title={decision.options[indexes[v]]?.description}
+            className={`cc-verdict cc-tone-${VERDICT_TONE[v]} ${recommended === v && !current ? "is-recommended" : ""} ${current === v ? "is-current" : ""} ${wentAhead === v ? "is-taken" : ""} ${v === "revise" && noteOpen ? "is-open" : ""}`}
+            title={wentAhead === v ? `The agent went ahead with ${verdictLabel(v)}` : decision.options[indexes[v]]?.description}
           >
             {keys && indexes[v] < 9 && current !== v && <KeyCap size="xs">{String(indexes[v] + 1)}</KeyCap>}
             <span>{verdictLabel(v)}</span>
-            {current === v ? <span className="cc-verdict-tag">on record</span> : recommended === v && !current && <span className="cc-verdict-tag">recommended</span>}
+            {!line && <VerdictTags tags={[current === v && "on record", recommended === v && !current && "recommended", wentAhead === v && "taken"]} />}
           </button>
         ))}
-        {onDismiss && (
+        {onDismiss && !line && (
           <button onClick={onDismiss} className="cc-dismiss" title="Dismiss without answering" aria-label="Dismiss without answering">
             {keys ? <KeyCap size="xs">x</KeyCap> : null}<X className="cc-dismiss-icon w-3.5 h-3.5" /><span className="cc-dismiss-label">dismiss</span>
           </button>
         )}
       </div>
-      {recommended && why && !noteOpen && !current && size !== "compact" && (
-        <p className={`cc-why cc-tone-${VERDICT_TONE[recommended]}`}><span className="cc-why-verdict">Why {verdictLabel(recommended)}:</span> {why}</p>
-      )}
+      {/* Why, in one muted sentence: the button already says which. */}
+      {recommended && why && !noteOpen && !current && !compact && <p className="cc-why">{why}</p>}
       {noteOpen && (
         <div className="cc-note cc-tone-yellow">
           <textarea

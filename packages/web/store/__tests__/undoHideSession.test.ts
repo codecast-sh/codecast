@@ -128,12 +128,10 @@ describe("undoing a kill lands each row where it was, on the server too", () => 
     expect(session().inbox_stashed_at).toBe(STASHED_AT);
   });
 
-  test("the undo dispatches restoreSession per row, carrying the restored stamps", async () => {
+  test("the undo dispatches restoreSession per row, carrying the restored stamps", () => {
     useInboxStore.getState().killSession(ID);
     sent = [];
     performUndo();
-    // The undo's send follows the kill's, which is still on the wire.
-    await Bun.sleep(5);
 
     const restores = sent.filter((s) => s.action === "restoreSession");
     expect(restores.map((s) => s.args[0]).sort()).toEqual([ID, CHILD].sort());
@@ -143,7 +141,7 @@ describe("undoing a kill lands each row where it was, on the server too", () => 
     expect(patched[CHILD]).toMatchObject({ inbox_dismissed_at: null });
   });
 
-  test("a teammate's row the kill forgot comes back, and the server hears restoreSession", async () => {
+  test("a teammate's row the kill forgot comes back, and the server hears restoreSession", () => {
     useInboxStore.setState({
       sessions: { [ID]: row() },
       conversations: { [ID]: { _id: ID, is_own: false } },
@@ -153,7 +151,6 @@ describe("undoing a kill lands each row where it was, on the server too", () => 
     sent = [];
 
     expect(performUndo()).toBe(true);
-    await Bun.sleep(5);
     expect(session()?._id).toBe(ID);
     expect(Object.keys(useInboxStore.getState().pending).filter((k) => k.includes(ID) && (useInboxStore.getState().pending as any)[k].type === "exclude")).toEqual([]);
     expect(sent.filter((s) => s.action === "restoreSession").map((s) => s.args[0])).toEqual([ID]);

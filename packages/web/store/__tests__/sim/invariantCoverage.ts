@@ -41,6 +41,8 @@ export const NOT_COMPARED: Readonly<Record<string, string>> = {
   recentVisits: "local history, no server truth",
   recentProjects: "local history, no server truth",
   recentProjectsByDevice: "local history, no server truth",
+  callList: "fed by the recordings list page (useSyncCalls), a view the sim does not open",
+  callDetails: "fed by a recording's own page (useSyncCalls), a view the sim does not open",
   collapsedSections: "local UI state, no server truth",
   sidebarNavExpanded: "local UI state, no server truth",
   feedConversations: "the activity feed page, which the sim does not open",

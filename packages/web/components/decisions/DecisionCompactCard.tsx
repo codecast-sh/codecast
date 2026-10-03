@@ -18,7 +18,7 @@ import { AskingSessionView, type AskingSessionRow } from "./DecisionParties";
 import { askingSessionDeps } from "./askingSessionDeps";
 import { OptionPages } from "./OptionPages";
 import { PublishedPageEmbed } from "../PublishedPageEmbed";
-import { ChangeCardView } from "./ChangeCardView";
+import { ChangeCardView, cardAnswerIndexes } from "./ChangeCardView";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { hasCanvasFence } from "../HtmlSnippet";
 import { stripMarkdown } from "../../lib/notificationText";
@@ -120,6 +120,8 @@ export function DecisionCompactCardView({
   // The answer controls carry the card's recommendation, so the proof line
   // does not say it again beside them.
   const answersHere = pending && kind === "single";
+  // A card's Ship / Revise / Drop ride its one row as chips.
+  const chipsInRow = answersHere && !!cardAnswerIndexes(decision);
   // A change card leads with the change, the way its page does; the asker's
   // own question moves into the meta row.
   const cardQuestion = decision.card && decision.question.trim() !== decision.card.change.trim() ? decision.question : null;
@@ -173,9 +175,21 @@ export function DecisionCompactCardView({
             {decision.short_id ?? "open"}<ArrowUpRight className="w-3 h-3" />
           </Link>
         </div>
-        <Link href={decisionHref(decision)} className="decision-question block mt-2 text-sol-text hover:text-sol-blue transition-colors">
-          {decision.card?.change || decision.question}
-        </Link>
+        {decision.card ? (
+          // A change card (LE11) is one row here, so the queue scans: the
+          // change, its proof, checks and risk, then Ship / Revise / Drop as
+          // chips. The whole card is on the document page and in the sheet.
+          <div className="mt-2 flex items-center flex-wrap gap-x-3 gap-y-1.5 min-w-0" data-card-row>
+            <Link href={decisionHref(decision)} className="grow basis-[18rem] min-w-0 rounded-md -mx-1.5 px-1.5 py-0.5 hover:bg-sol-bg-alt/60 transition-colors">
+              <ChangeCardView card={decision.card} density="line" recommend={!answersHere && pending} />
+            </Link>
+            {chipsInRow && <DecisionAnswerControls decision={decision} onAnswer={onAnswer} onDismiss={onDismiss} keys={keys} size="line" recommendation={rec} />}
+          </div>
+        ) : (
+          <Link href={decisionHref(decision)} className="decision-question block mt-2 text-sol-text hover:text-sol-blue transition-colors">
+            {decision.question}
+          </Link>
+        )}
         {/* The reasoning, inline. A decision cannot be made from its title
             and its option labels alone, so the context the asker wrote reads
             here, clipped to a few lines with the way to open it. Collapsed it
@@ -205,13 +219,6 @@ export function DecisionCompactCardView({
         {/* An attached report is the evidence the question rests on, so it
             renders here rather than living one click away on the document
             page. Clipped like the context: a page is taller than a card. */}
-        {/* A change card (LE11) reads as one dense line of proof here; the
-            whole card is on the document page and in the transcript sheet. */}
-        {decision.card && (
-          <Link href={decisionHref(decision)} className="block mt-1.5 rounded-md px-2.5 py-1.5 -mx-2.5 hover:bg-sol-bg-alt/60 transition-colors">
-            <ChangeCardView card={decision.card} density="line" change={false} recommend={!answersHere && decision.status === "pending"} />
-          </Link>
-        )}
         {decision.report_slug && !decision.card && (
           <div className="mt-1" data-decision-report={decision.report_slug}>
             <PublishedPageEmbed slug={decision.report_slug} height={240} />
@@ -224,7 +231,7 @@ export function DecisionCompactCardView({
           <div className="mt-2 text-[12px] text-sol-cyan">a lead recommends: {decision.options[rec]?.label}</div>
         )}
       </div>
-      {pending && (
+      {pending && !chipsInRow && (
         <div className="px-4 pb-3">
           {kind === "single" ? (
             <DecisionAnswerControls decision={decision} onAnswer={onAnswer} onDismiss={onDismiss} keys={keys} size="compact" recommendation={rec} />

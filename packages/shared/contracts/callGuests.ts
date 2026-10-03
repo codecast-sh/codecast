@@ -54,6 +54,21 @@ export function callParticipantKind(identity: string): CallParticipantKind {
   return "person";
 }
 
+// LiveKit's own participant kinds (protocol ParticipantInfo.Kind), the two
+// that are the room's machinery rather than anybody in it: a recording's
+// egress, and the agent worker that dispatches agent faces (codecast-face).
+// Both join the media room, publish nothing, and have only an id for a name.
+// An agent's face is a STANDARD participant (callParticipantKind "agent").
+const LIVEKIT_KIND_EGRESS = 2;
+const LIVEKIT_KIND_AGENT = 4;
+
+/** Is a media participant of this LiveKit kind the room's machinery? Every
+ *  surface that lists the room from the media rather than from seats (a
+ *  guest's page, the phone) leaves these out, by this one test. */
+export function isRoomMachineryKind(kind: number | undefined): boolean {
+  return kind === LIVEKIT_KIND_EGRESS || kind === LIVEKIT_KIND_AGENT;
+}
+
 // The name a guest typed is the only name they have, and it is shown to the
 // room, written into transcripts and spoken to agents. So it is cleaned once,
 // here: control characters and runs of whitespace go, it is capped, and an

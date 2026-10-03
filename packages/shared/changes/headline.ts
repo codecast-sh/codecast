@@ -19,20 +19,37 @@ export function clip(text: string, max: number): string {
 /** Where a sentence can stop and still be a whole thought. */
 const CLAUSE_BREAKS = [", ", "; ", " and ", " while ", " with "];
 
+/** Words a cut line must not end on: they promise more ("stop asking for"). */
+const DANGLING = new Set(["and", "or", "but", "for", "to", "of", "with", "the", "a", "an", "in", "on", "at", "by", "from"]);
+
+/** Drop trailing punctuation and dangling function words, until the line ends on a word that carries meaning. */
+function endWhole(text: string): string {
+  let t = text;
+  for (;;) {
+    const next = t.replace(/[\s,;:.\-]+$/, "").replace(/\s+(\S+)$/, (m, w: string) => (DANGLING.has(w.toLowerCase()) ? "" : m));
+    if (next === t) return t;
+    t = next;
+  }
+}
+
 /**
- * Model prose held to a length without an ellipsis. Text within `hard` chars
- * stays whole, since a headline a little over its target reads better than a
- * cut one. Past `hard` it is cut back to the last clause boundary that keeps
- * at least 60% of `max`, and ends there as a complete clause; a cut
- * mid-clause can invert the meaning ("stops emailing people never..."). Only
- * text with no boundary at all falls back to `clip`.
+ * Model prose held to a length, never with an ellipsis. Text within `hard`
+ * chars stays whole, since a headline a little over its target reads better
+ * than a cut one. Past `hard` it is cut back to its last clause boundary that
+ * keeps at least 40% of `max`, and ends there as a complete clause; a cut
+ * mid-clause can invert the meaning ("stops emailing people never...").
+ * Text with no such boundary is cut at its last word within `hard`, and
+ * loses any dangling "and", "for" or "the", so it still ends on a word that
+ * says something.
  */
 export function fitProse(text: string, max: number, hard: number): string {
   const t = text.replace(/\s+/g, " ").trim();
   if (t.length <= hard) return t;
   const head = t.slice(0, hard + 1);
   const at = Math.max(...CLAUSE_BREAKS.map((b) => head.lastIndexOf(b)));
-  return at >= max * 0.6 ? t.slice(0, at).replace(/[\s,;:]+$/, "") : clip(t, max);
+  if (at >= max * 0.4) return endWhole(t.slice(0, at));
+  const space = head.lastIndexOf(" ");
+  return endWhole(space >= max * 0.4 ? head.slice(0, space) : t.slice(0, hard));
 }
 
 /** Sentences of prose. A sentence ends at a terminator followed by space, so file names and versions stay whole. */

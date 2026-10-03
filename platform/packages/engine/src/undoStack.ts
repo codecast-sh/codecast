@@ -27,6 +27,12 @@ export type UndoNotifier = {
    * the default "Undid: <label>" notice; conflicts still go through notify.
    */
   onHistoryStep?: (kind: "undo" | "redo", steps: number, entry: UndoEntry) => void;
+  /**
+   * A keyboard undo stopped at a `confirm` entry and took nothing back. When
+   * present it replaces notify(message), so an app can point at the entry
+   * (an open history can mark its row) instead of only printing the notice.
+   */
+  onConfirmStop?: (entry: UndoEntry, message: string) => void;
 };
 
 export type UndoHistoryItem = Omit<UndoEntry, "undo" | "redo" | "children"> & {
@@ -536,7 +542,9 @@ export function performUndo(): boolean {
   const top = undoStack[undoStack.length - 1];
   if (!top || expired(top, now)) return false;
   if (top.confirm) {
-    notifier.notify(`Undo ${top.label} from its toast or the history`);
+    const message = `Undo ${top.label} from its toast or the history`;
+    if (notifier.onConfirmStop) notifier.onConfirmStop(top, message);
+    else notifier.notify(message);
     return true;
   }
   const step = stepUndo(top);
@@ -856,6 +864,17 @@ export function rekeyUndoIds(oldId: string, newId: string): void {
         entry.args = args;
         touched = true;
       }
+    }
+    // The run a coalesced entry keeps beside it rebuilds the entry on a
+    // refusal and merges the next call; it must name the row the entry names.
+    const run = coalescedRuns.get(entry);
+    if (run) {
+      run.origin = rekeyCells(run.origin, oldId, newId);
+      run.calls = run.calls.map((c) => {
+        const changes = rekeyCells(c.changes, oldId, newId);
+        const args = c.args ? rekeyIds(c.args, oldId, newId) : c.args;
+        return changes === c.changes && args === c.args ? c : { ...c, changes, args };
+      });
     }
   }
   if (touched) changed();

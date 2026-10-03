@@ -17,6 +17,7 @@ import {
   receiptAsyncAction,
   DispatchNotWiredError,
   isParkedDispatchError,
+  isRefusedDispatchError,
   sync,
   bindUndoStore,
   type DurableCreateContinuation,
@@ -5283,6 +5284,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   respondToGate: (runId: string, response: string) => void;
   setMyStatus: (status: "available" | "busy" | "away") => void;
   updateMyProfile: (patch: MyProfilePatch) => void;
+  setActiveTeamPointer: (teamId: string | null) => void;
   setWalkiePref: (pref: "team" | "off") => void;
   adoptTimezone: (timezone: string) => void;
   setCloudSessionSync: (source: CloudSessionSource, enabled: boolean) => void;
@@ -9705,6 +9707,14 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // round trip would leave the door in its old state for a beat after somebody
   // deliberately shut it. currentUser is localFirst, so the pref holds over
   // presence pushes until the server echoes it.
+  // The canonical workspace pointer (users.active_team_id), written in the
+  // draft so whatever reads it off currentUser agrees in this tick;
+  // currentUser is localFirst, so it holds until the server echoes.
+  // useSwitchWorkspace pairs it with the mirror the UI scopes by.
+  setActiveTeamPointer: action(function (this: Draft, teamId: string | null) {
+    if (this.currentUser) (this.currentUser as any).active_team_id = teamId ?? undefined;
+  }),
+
   setWalkiePref: action(function (this: Draft, pref: "team" | "off") {
     if (this.currentUser) (this.currentUser as any).walkie_pref = pref;
   }),
@@ -9827,9 +9837,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   // A real id sends now. A stub waits for its create (awaitConvexId heals a
   // stranded one), because the server cannot address a stub id. A create that
-  // is parked in the outbox leaves the bubble pending: the stranded-stub sweep
-  // re-creates and re-sends it under the same client id. Any other failure
-  // fails the bubble so the user can retry.
+  // is still on its way (parked, or fenced by a binding rewire) leaves the
+  // bubble pending: the stranded-stub sweep re-creates and re-sends it under
+  // the same client id. Only a refused create fails the bubble.
   sendMessageWhenReady: (convId: string, content: string, imageIds?: string[], clientId?: string) => {
     if (isConvexId(convId)) {
       get().sendMessage(convId, content, imageIds, clientId);
@@ -9838,7 +9848,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     void get().awaitConvexId(convId).then(
       (realId: string) => get().sendMessage(realId, content, imageIds, clientId),
       (error: unknown) => {
-        if (isParkedDispatchError(error)) return;
+        if (!isRefusedDispatchError(error)) return;
         if (clientId) get().markOptimisticAsFailed(convId, clientId);
         console.error("[store] send into an uncreated session failed", error);
       },

@@ -356,6 +356,15 @@ crons.interval(
 // "start the line for scoped tasks".
 
 crons.interval(
+  // A new cause names its goal, category, risk and readiness before the line
+  // can rank and admit it (the-line-end-to-end.md LE5).
+  "ground new causes",
+  { minutes: 2 },
+  (internal as any).lineGround.sweep,
+  {}
+);
+
+crons.interval(
   // A person who reports to a role hears once a day at most that a high
   // priority goal of theirs has stalled (org-roles-run-work.md R6).
   "tell people about stalled goals",

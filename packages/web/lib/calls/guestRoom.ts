@@ -13,7 +13,7 @@ import {
   type Participant,
   type RemoteTrack,
 } from "livekit-client";
-import { callParticipantKind, type CallParticipantKind } from "@codecast/shared/contracts";
+import { callParticipantKind, isRoomMachineryKind, type CallParticipantKind } from "@codecast/shared/contracts";
 import { huddleRoomOptions, micConstraints, SCREEN_SHARE_CAPTURE, SCREEN_SHARE_PUBLISH } from "./livekitMedia";
 import { listDevices, mediaFailureReason, participantFlags, participantImage, participantTiles, type ParticipantTile } from "./callMedia";
 import { bindCallCursors } from "./callCursors";
@@ -632,7 +632,7 @@ export class GuestCall extends Emitter<CallSnapshot> {
     const r = this.room;
     const all: Participant[] = [r.localParticipant, ...r.remoteParticipants.values()];
     const people: GuestPerson[] = all
-      .filter((p) => !!p.identity)
+      .filter((p) => !!p.identity && !isRoomMachineryKind(p.kind))
       .map((p) => ({
         identity: p.identity,
         name: p.name || p.identity,

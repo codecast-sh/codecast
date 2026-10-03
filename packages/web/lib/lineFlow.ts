@@ -2,7 +2,7 @@
 // factory as one flow, derived from store rows. Pure: no store, no React, so a
 // test feeds rows and reads columns.
 //
-//   sense      signals by source, a 24h sparkline each           (signals)
+//   sense      signals by source, a 7 day sparkline each          (signals)
 //   causes     open causes ranked by computed priority (LE5)      (tasks with `cause`)
 //   in build   live runs on a cause, by their current node      (workflowRuns)
 //              (other live runs only count, as "not from the line")
@@ -113,7 +113,7 @@ export type SenseSource = {
   source: string;
   day: number;
   week: number;
-  /** Signals per hour over the last 24 hours, oldest first. */
+  /** Signals per day over the last seven days, oldest first. */
   spark: number[];
   /** The newest signal in the window; null for a declared finder with none. */
   newest: LineSignal | null;
@@ -152,6 +152,9 @@ export type Throughput = {
   opened: number;
   dissolved: number;
   shipped: number;
+  /** Of this week's ships, how many still sit in Watching: Closed lists a
+   *  shipped cause only once its watch ends, so the page says where they are. */
+  shippedInWatch: number;
   reopened: number;
   /** Median ms from a shipped cause's first signal to its close; null with none shipped. */
   medianToShip: number | null;
@@ -307,15 +310,12 @@ export function buildLineFlow<D extends LineDecision>(input: {
   const sources: SenseSource[] = [];
   for (const [source, list] of bySource) {
     const sorted = [...list].sort((a, b) => b.created_at - a.created_at);
-    const spark = new Array(24).fill(0);
+    const spark = perDay(sorted.map((s) => s.created_at), now);
     let day = 0;
     let week = 0;
     for (const s of sorted) {
       if (s.created_at >= weekAgo) week++;
-      if (s.created_at >= dayAgo) {
-        day++;
-        spark[Math.min(23, Math.floor((s.created_at - dayAgo) / HOUR))]++;
-      }
+      if (s.created_at >= dayAgo) day++;
     }
     if (week === 0 && !finderBySource.has(source)) continue;
     sources.push({ source, day, week, spark, newest: sorted[0], kinds: [...new Set(sorted.map((s) => s.kind))], finder: finderBySource.get(source), silent: false, undeclared: false });
@@ -323,7 +323,7 @@ export function buildLineFlow<D extends LineDecision>(input: {
   // A declared finder is a row even with nothing in the window: its silence is the news.
   const seen = new Set(sources.map((s) => s.source));
   for (const f of finders) {
-    if (!seen.has(f.source)) sources.push({ source: f.source, day: 0, week: 0, spark: new Array(24).fill(0), newest: null, kinds: f.kind === "any" ? [] : f.kind, finder: f, silent: false, undeclared: false });
+    if (!seen.has(f.source)) sources.push({ source: f.source, day: 0, week: 0, spark: new Array(7).fill(0), newest: null, kinds: f.kind === "any" ? [] : f.kind, finder: f, silent: false, undeclared: false });
   }
   for (const s of sources) {
     s.silent = !!s.finder && s.day === 0;
@@ -440,6 +440,7 @@ export function buildLineFlow<D extends LineDecision>(input: {
     opened: causes.filter((t) => t.created_at >= weekAgo).length,
     dissolved: causes.filter((t) => t.status === "dropped" && (t.closed_at ?? 0) >= weekAgo).length,
     shipped: shippedThisWeek.length,
+    shippedInWatch: shippedThisWeek.filter((t) => inWatch(t, now)).length,
     reopened: input.signals.filter((s) => s.reopened && s.created_at >= weekAgo).length,
     medianToShip: median(shippedThisWeek.filter((t) => t.cause?.first_seen).map((t) => (t.closed_at ?? 0) - t.cause!.first_seen)),
     tokensPerShip: shippedThisWeek.length && tokens ? tokens / shippedThisWeek.length : null,

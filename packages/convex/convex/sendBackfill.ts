@@ -13,8 +13,8 @@ import { approxMessageBytes } from "./userMessagesFilter";
 // One step walks conversations newest first, so the recent days fill in
 // first, and reads each one's user-role messages since `after`. Tool-result
 // turns are user-role too and can be large, so a step stops at a byte budget
-// and schedules the next from where it stopped. `run` names one rebuild, so a
-// step left over from an earlier one cannot join this one.
+// and schedules the next from where it stopped. `run` labels the rebuild in
+// the logs; start a new one only after the last step of the previous one.
 const STEP_BYTES = 4_000_000;
 const STEP_CONVERSATIONS = 150;
 const WIPE_ROWS = 2000;

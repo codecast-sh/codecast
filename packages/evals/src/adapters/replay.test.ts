@@ -13,7 +13,10 @@ import type { AgentResult, CallResult, SurfaceImpl } from '../surface';
 import { echoImpl, echoMeta } from '../testSurface';
 import type { Freeze } from '@platform/evals';
 import { assertAnswered, filesWrittenOf, harnessFailure, loopTurnsOf, outsideWorldCommands, readAgentRun } from './dryRun';
-import { dominantModel, replayRep, routeGates, scoreOf, type PreparedFreeze, type RepLedger } from './replay';
+import { rulerAt } from '../history/runIndex';
+import { GUARD_STAMP } from '../paths';
+import { loggedArgv } from '../served';
+import { dominantModel, guardClassifierSha, replayRep, routeGates, scoreOf, type PreparedFreeze, type RepLedger } from './replay';
 
 const call = (over: Partial<CallResult> = {}): CallResult => ({
   request: { model: 'pin', prompt: 'p', max_tokens: 100 },
@@ -85,6 +88,16 @@ describe('route gates', () => {
     expect(writes('REFUSED publish ls --json').pass).toBe(true);
     expect(writes('REFUSED plan replay pl-461').pass).toBe(true);
     expect(writes('REFUSED publish comments pg --resolve c1').evidence.summary).toBe('refused: cast publish comments pg --resolve c1');
+    // The guard logs a quoted argument quoted, so a write whose question begins with a read verb is still the write it was.
+    expect(writes("REFUSED decide 'show which plan ships' -o a").pass).toBe(false);
+    expect(writes("REFUSED chat 'read the thread first' --channel c1").pass).toBe(false);
+    expect(writes('REFUSED stack show sd-55').pass).toBe(true);
+  });
+
+  test('a logged argv splits back into exactly the arguments the guard logged', () => {
+    expect(loggedArgv(`decide 'show which plan ships' -o 'it'\\''s' '' 'a"b'`)).toEqual(['decide', 'show which plan ships', '-o', "it's", '', 'a"b']);
+    expect(loggedArgv('task show ct-1 --json')).toEqual(['task', 'show', 'ct-1', '--json']);
+    expect(loggedArgv("say 'never closed")).toBeNull();
   });
 
   test('score: any failed gate zeroes it; a missed floor fails it', () => {
@@ -193,6 +206,8 @@ describe('rescore', () => {
     const stored = { pass: false, score: 0, passMark: 0.7, gates: [gate('model-as-pinned', false), gate('ok', true), gate('frozen-reads', true), gate('no-unexpected-writes', false), gate('no-wrong-close', true)], checks: [{ id: 'records', weight: 1, score: 0.8 }], missedFloors: [], judgeCostUsd: null, judgeModel: null, scoredAt: 'x', scenario: 'org-review-0bc4cd18', title: 't', seed: 1 };
     writeFileSync(join(dir, 'score.json'), JSON.stringify(stored));
     const r = (await rescoreRun(dir))!;
+    // A rescore regrades refusals with today's guard, and says so in the rep's ruler.
+    expect(readFileSync(join(dir, GUARD_STAMP), 'utf8').trim()).toBe(guardClassifierSha());
     expect(r.after!.gates.map((g) => `${g.id}:${g.pass}`)).toEqual(['model-as-pinned:true', 'ok:true', 'frozen-reads:true', 'no-unexpected-writes:true', 'no-wrong-close:true']);
     expect(r.after!.score).toBeCloseTo(0.8);
     expect(r.after!.pass).toBe(true);
@@ -309,6 +324,44 @@ describe('what a rep records', () => {
     expect((await shaFor(['second turn', 'a changed third turn'])).sha).not.toBe(two.sha);
     expect((await shaFor(['second turn', 'third turn'])).sha).toBe(two.sha);
     expect((await shaFor([])).sha).not.toBe(two.sha);
+  });
+
+  test('a rep that dies mid-run records the prompt its surface named, and an agent rep is stamped with the guard that graded it', async () => {
+    const named = 'a'.repeat(64);
+    const dies: SurfaceImpl = {
+      ...echoImpl,
+      async replay(_snap, ctx) {
+        await ctx.agent({ prompt: `the briefing for ${ctx.runDir}`, model: ctx.model, promptSha: named });
+        throw new Error('the agent left its world');
+      },
+      gates: () => [],
+    };
+    const root = mkdtempSync(join(tmpdir(), 'evals-named-'));
+    const r = await replayRep(prepared(root, dies, 'agent'), 1, 1, { reps: 1, model: null, dry: true });
+    expect(r.crashed).toBe(true);
+    expect(runJsonOf(root).promptSha).toBe(named);
+    // A graded agent rep carries the guard in its ruler; a call rep does not.
+    const graded = mkdtempSync(join(tmpdir(), 'evals-guard-'));
+    const agentImpl: SurfaceImpl = { ...echoImpl, async replay(_snap, ctx) { await ctx.agent({ prompt: 'p', model: ctx.model }); return { reply: '' }; }, gates: () => [] };
+    await replayRep(prepared(graded, agentImpl, 'agent'), 1, 1, { reps: 1, model: null, dry: true });
+    const dir = join(graded, readdirSync(graded)[0]!);
+    expect(readFileSync(join(dir, GUARD_STAMP), 'utf8').trim()).toBe(guardClassifierSha());
+    expect(rulerAt(dir)).toBe(`guard:${guardClassifierSha()}`);
+    const call = mkdtempSync(join(tmpdir(), 'evals-noguard-'));
+    await replayRep(prepared(call, echoImpl), 1, 1, { reps: 1, model: null, dry: true });
+    expect(existsSync(join(call, readdirSync(call)[0]!, GUARD_STAMP))).toBe(false);
+  });
+
+  test("the guard's ruler moves with what it classifies, not with its comments", () => {
+    const dir = mkdtempSync(join(tmpdir(), 'evals-guardsha-'));
+    const guard = readFileSync(join(import.meta.dir, '..', '..', '..', 'cli', 'scripts', 'prompt-dry-run-bin', 'cast'), 'utf8');
+    const variant = (name: string, text: string) => {
+      writeFileSync(join(dir, name), text);
+      return guardClassifierSha(join(dir, name));
+    };
+    const base = variant('base', guard);
+    expect(variant('commented', guard.replace('is_read() {', '# a note\nis_read() {'))).toBe(base);
+    expect(variant('wider', guard.replace('state) [ "${2:-}" = show ] ;;', 'state) return 0 ;;'))).not.toBe(base);
   });
 
   test('a stop file stops the check between reps, like a budget stop', async () => {

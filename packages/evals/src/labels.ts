@@ -38,7 +38,10 @@ export function assertLabelsPushable(dir: string, visibility: () => string | nul
  * Commits `paths` (relative to the labels repo `dir`) and pushes the commit to
  * the private remote. `write` runs after the push guard, so nothing lands in a
  * repo that cannot push. Nothing new under the paths commits nothing; a commit
- * an earlier push left behind still goes out. Every label write ends here.
+ * an earlier push left behind still goes out. Another clone (a cloud host, a
+ * hand commit) may have pushed since this one last synced, so when the remote
+ * is ahead its commits are fetched and this clone's replayed on top first:
+ * the push is always a fast-forward. Every label write ends here.
  */
 export function commitLabels(dir: string, paths: string[], message: string, o: { write?: () => void; visibility?: () => string | null } = {}): void {
   if (!existsSync(join(dir, '.git'))) throw new Error(`${dir} is not a git repo; run ./evals doctor --init first`);
@@ -51,6 +54,17 @@ export function commitLabels(dir: string, paths: string[], message: string, o: {
   };
   git('add', '-A', '--', ...paths);
   if (git('diff', '--cached', '--name-only', '--', ...paths).trim()) git('commit', '-qm', message, '--', ...paths);
+  // The branch's tip where the push goes; a remote that has no such branch yet has nothing to replay onto.
+  const branch = git('rev-parse', '--abbrev-ref', 'HEAD').trim();
+  const fetched = spawnSync('git', ['fetch', '-q', git('remote', 'get-url', '--push', 'origin').trim(), `refs/heads/${branch}`], { cwd: dir, encoding: 'utf8' });
+  if (fetched.status !== 0 && !/couldn't find remote ref/i.test(fetched.stderr)) throw new Error(`git fetch origin ${branch}: ${fetched.stderr.trim()}`);
+  if (fetched.status === 0 && spawnSync('git', ['merge-base', '--is-ancestor', 'FETCH_HEAD', 'HEAD'], { cwd: dir }).status !== 0) {
+    const r = spawnSync('git', ['rebase', '-q', 'FETCH_HEAD'], { cwd: dir, encoding: 'utf8' });
+    if (r.status !== 0) {
+      spawnSync('git', ['rebase', '--abort'], { cwd: dir });
+      throw new Error(`origin/${branch} has commits this clone lacks, and this clone's commits do not replay onto them (${(r.stderr || r.stdout).trim()}); the label is committed here, not pushed: git -C ${dir} pull --rebase origin ${branch}, settle it, then git -C ${dir} push`);
+    }
+  }
   git('push', '-q', '-u', 'origin', 'HEAD');
 }
 
