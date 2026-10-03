@@ -671,7 +671,7 @@ async function performRetireRoleCore(ctx: any, userId: Id<"users">, args: Retire
   // An open decision follows its session (S28): the retired role leaves the
   // route, and the card goes to the people who now answer for the session.
   for (const conv of filed) {
-    await ctx.db.patch(conv._id, { org_role_id: undefined });
+    await ctx.db.patch(conv._id, { org_role_id: undefined, org_role_hold: undefined });
     await reroutePendingDecisionsForConversation(ctx, conv._id, now);
   }
   // Child roles re-home to the retired role's own parent, the way its sessions
@@ -1748,7 +1748,7 @@ async function performPauseRoleCore(ctx: any, userId: Id<"users">, args: { role_
 // thread already draws, so nobody reads a raw tag or a role id.
 export async function interruptHands(ctx: any, role: any, userId: Id<"users">, tag: string, text: string): Promise<number> {
   let interrupted = 0;
-  const content = formatSessionMessage("unknown", text, personName(await ctx.db.get(userId)));
+  const content = formatSessionMessage("unknown", text, { name: personName(await ctx.db.get(userId)) });
   for (const hand of await handsOf(ctx, role)) {
     const managed = await ctx.db.query("managed_sessions").withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", hand._id)).first();
     if (!managed || !ACTIVE_AGENT_STATUSES.has(managed.agent_status ?? "")) continue;

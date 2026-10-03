@@ -7,8 +7,8 @@
 // Switching faces re-points the pane you are in; Split puts the other face
 // beside it.
 
-import { useRouter } from "next/navigation";
-import { Columns2 } from "lucide-react";
+import { useContext, useRef, useState } from "react";
+import { Columns2, Rows2 } from "lucide-react";
 import { IdentityFace } from "../identity/IdentityFace";
 import { LivenessDot } from "../LivenessDot";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
@@ -19,13 +19,16 @@ import { identityLine, identityRowOf } from "../../lib/sessionIdentity";
 import { sessionLiveAt } from "../../lib/liveness";
 import { compactAge, threadStateView } from "../../lib/threadState";
 import { cleanTitle } from "../../lib/conversationProcessor";
-import { openBeside, sessionPanePath, stageNavigateLeaf } from "../../lib/stage";
+import { canOpenBeside, openBeside, sessionPanePath } from "../../lib/stage";
 import { useTabContext } from "../../lib/tabParams";
+import { InsideWorkUnit, taskFacePath, useSwitchFace, type WorkFace } from "../../lib/workUnit";
+import { HeightGrip, savedGripHeight } from "../HeightGrip";
+import { SessionPane } from "../stage/SessionPane";
+import { RoutePane } from "../RoutePane";
+import { ErrorBoundary } from "../ErrorBoundary";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useInboxStore } from "../../store/inboxStore";
 import { usePersonifyAll } from "../../hooks/usePersonifyAll";
-
-export type WorkFace = "task" | "session";
 
 export interface WorkUnitTask {
   _id: string;
@@ -42,27 +45,29 @@ export interface WorkUnitSession {
   [k: string]: unknown;
 }
 
-export function taskFacePath(task: Pick<WorkUnitTask, "_id" | "short_id">): string {
-  return `/tasks/${task.short_id || task._id}`;
-}
-
-/** Re-point the pane this face renders in; a plain tab navigates. */
-export function useSwitchFace(): (path: string) => void {
-  const router = useRouter();
-  const ctx = useTabContext();
-  return (path: string) => {
-    if (ctx?.leafId) stageNavigateLeaf(ctx.leafId, path, "replace");
-    else router.push(path);
-  };
-}
-
 function liveSig(row: any): string {
   if (!row) return "";
   return [row.title, row.is_idle, row.updated_at, row.message_count, row.character_name, row.character_avatar, row.last_heartbeat, row.producing_until].join("\u0001");
 }
 
-export function WorkUnitBar({ face, task, session }: { face: WorkFace; task: WorkUnitTask; session: WorkUnitSession }) {
+export type { WorkFace } from "../../lib/workUnit";
+
+const BOTH_HEIGHT_KEY = "work-unit-both-height";
+const BOTH_MIN = 160;
+
+export function WorkUnitBar(props: { face: WorkFace; task: WorkUnitTask; session: WorkUnitSession }) {
+  // The other face stacked inside this one already sits under a bar.
+  if (useContext(InsideWorkUnit)) return null;
+  return <WorkUnitBarInner {...props} />;
+}
+
+function WorkUnitBarInner({ face, task, session }: { face: WorkFace; task: WorkUnitTask; session: WorkUnitSession }) {
   const now = useCoarseNow(30_000);
+  const tab = useTabContext();
+  // Both faces at once: beside this pane when the stage has room, else
+  // stacked under the bar at a height the reader drags.
+  const [stacked, setStacked] = useState(false);
+  const frameRef = useRef<HTMLDivElement>(null);
   const switchFace = useSwitchFace();
   const personifyAll = usePersonifyAll();
   // The store row is the live truth for the session (and the task's status);
@@ -141,7 +146,7 @@ export function WorkUnitBar({ face, task, session }: { face: WorkFace; task: Wor
     </>
   );
 
-  return (
+  const bar = (
     <div data-work-unit className="flex items-center gap-2 h-8 px-3 border-b border-sol-border/30 bg-sol-bg-alt/50 flex-shrink-0">
       <div role="tablist" aria-label="Task and session" className="flex items-stretch h-6 min-w-0 flex-1 rounded-md border border-sol-border/40 overflow-hidden text-[11px]">
         <button
@@ -164,17 +169,47 @@ export function WorkUnitBar({ face, task, session }: { face: WorkFace; task: Wor
           {sessionSegment}
         </button>
       </div>
-      <ShortcutTooltip label={face === "task" ? "Open the session beside" : "Open the task beside"}>
+      <ShortcutTooltip label={stacked ? "Show this face alone" : "Show the task and the session together"}>
         <button
           type="button"
-          onClick={() => { if (!openBeside(otherPath)) switchFace(otherPath); }}
-          className="flex items-center gap-1 h-6 px-2 rounded-md border border-sol-border/40 text-[11px] text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/40 transition-colors flex-shrink-0"
-          aria-label="Split"
+          onClick={() => {
+            if (stacked) { setStacked(false); return; }
+            if (canOpenBeside() && openBeside(otherPath)) return;
+            setStacked(true);
+          }}
+          aria-pressed={stacked}
+          className={`flex items-center gap-1 h-6 px-2 rounded-md border text-[11px] transition-colors flex-shrink-0 ${
+            stacked ? "border-sol-cyan/50 text-sol-cyan bg-sol-cyan/10" : "border-sol-border/40 text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/40"
+          }`}
         >
-          <Columns2 className="w-3.5 h-3.5" />
-          <span>Split</span>
+          {canOpenBeside() && !stacked ? <Columns2 className="w-3.5 h-3.5" /> : <Rows2 className="w-3.5 h-3.5" />}
+          <span>Both</span>
         </button>
       </ShortcutTooltip>
     </div>
+  );
+
+  if (!stacked) return bar;
+  return (
+    <>
+      {bar}
+      <InsideWorkUnit.Provider value={true}>
+        <div
+          ref={frameRef}
+          data-work-unit-stack
+          className="relative flex flex-col min-h-0 overflow-hidden border-b border-sol-cyan/25 bg-sol-bg flex-shrink-0"
+          style={{ height: savedGripHeight(BOTH_HEIGHT_KEY, BOTH_MIN) ?? 380 }}
+        >
+          <ErrorBoundary name="WorkUnitStack" level="panel">
+            {face === "task" ? (
+              <SessionPane sessionId={session._id} />
+            ) : (
+              <RoutePane tabId={tab?.tabId ?? "work-unit"} path={taskPath} isActive={false} isVisible={tab?.isVisible ?? true} />
+            )}
+          </ErrorBoundary>
+        </div>
+        <HeightGrip target={frameRef} storageKey={BOTH_HEIGHT_KEY} min={BOTH_MIN} />
+      </InsideWorkUnit.Provider>
+    </>
   );
 }

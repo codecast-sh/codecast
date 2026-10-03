@@ -3,6 +3,43 @@
 // offer the hire, a routine's title before any answer exists, and its cadence
 // in words.
 import type { OrgTemplate } from "@codecast/shared/contracts/orgTemplateManifest";
+import { EXECUTIVE_ASSISTANT_HANDLE, EXECUTIVE_ASSISTANT_NAME, HEAD_OF_PEOPLE_HANDLE, HEAD_OF_PEOPLE_NAME, isHeadOfPeopleRole } from "@codecast/shared/contracts/orgLead";
+
+/** A role codecast itself offers at the top of the gallery (org-staffing.md
+ *  S6, S30): hired through its own path, never a template, and offered only
+ *  while none stands. */
+export type BuiltinHire = {
+  id: "head-of-people" | "executive-assistant";
+  name: string;
+  handle: string;
+  description: string;
+  /** What it does, as the card's chips. */
+  does: string[];
+};
+
+export const HEAD_OF_PEOPLE_HIRE: BuiltinHire = {
+  id: "head-of-people",
+  name: HEAD_OF_PEOPLE_NAME,
+  handle: HEAD_OF_PEOPLE_HANDLE,
+  description: "Keeps the structure true to how the work runs: who owns which area, who reports to whom, where each session belongs. Reviews the company weekly and proposes; a person decides.",
+  does: ["Reviews the org weekly", "Proposes, never applies", "Looks after what no lead owns"],
+};
+
+export const EXECUTIVE_ASSISTANT_HIRE: BuiltinHire = {
+  id: "executive-assistant",
+  name: EXECUTIVE_ASSISTANT_NAME,
+  handle: EXECUTIVE_ASSISTANT_HANDLE,
+  description: "Your right hand: answers anything you ask about any part of the work, routes a request in a lead's area to that lead, and brings you decisions with a recommendation. Starts no work and reorganizes nothing.",
+  does: ["Answers you about any area", "Routes requests to the lead", "Keeps your goals in view"],
+};
+
+/** The built-in hires this workspace can still make: each hidden once one
+ *  stands. The Head of People is a role of this workspace; the Executive
+ *  Assistant is the person's, read from the seats they can see. */
+export function builtinHires(roles: ReadonlyArray<{ handle?: string; status?: string }>, standing: { assistant: boolean }): BuiltinHire[] {
+  const head = roles.some((r) => r.status !== "retired" && isHeadOfPeopleRole(r));
+  return [...(head ? [] : [HEAD_OF_PEOPLE_HIRE]), ...(standing.assistant ? [] : [EXECUTIVE_ASSISTANT_HIRE])];
+}
 
 export type CatalogTemplate = {
   template_id: string;

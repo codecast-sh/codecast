@@ -27,7 +27,7 @@ import { askNames, askOfChange, asksProgress, proposalAsks, type AskView } from 
 import { SectionLabel } from "./OrgScopePanel";
 import { rolePausedSentence, SEVERITY_META } from "./orgMeta";
 import type { QueueItem } from "../../lib/decisionQueue";
-import type { AreaCheck } from "@codecast/shared/contracts/orgAreas";
+import { reachedBreakdown, reachedTotal, type AreaCheck } from "@codecast/shared/contracts/orgAreas";
 import { QuietLines, StatusPill } from "./ghostChrome";
 export { StatusPill };
 import type { OrgRole, OrgTree } from "./orgTypes";
@@ -754,6 +754,11 @@ export function AreaDetail({ row, now, onOpenSession, onSelectNode, onTrigger, o
   return (
     <div className="px-2.5 pb-2.5 pt-1 flex flex-col gap-2.5 org-pop-in" data-area-detail={row.role.handle}>
       {a && row.status !== "on_track" && <p className="text-[12px] leading-snug" style={{ color: row.color }} data-area-status-line>{a.status_line}</p>}
+      {a?.reached && reachedTotal(a.reached) > 0 && (
+        <p className="text-[11px] leading-snug" style={{ color: "var(--sol-text-dim)" }} data-area-reached={reachedTotal(a.reached)}>
+          {reachedTotal(a.reached)} session{reachedTotal(a.reached) === 1 ? "" : "s"} under it: {reachedBreakdown(a.reached)}.
+        </p>
+      )}
 
       <div data-area-goals>
         <div className={DETAIL_LABEL} style={{ color: "var(--sol-text-dim)" }}>Goals</div>

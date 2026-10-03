@@ -4108,6 +4108,9 @@ cliRoute("/cli/chains/upsert", async (ctx, body) => ctx.runMutation((api as any)
 cliRoute("/cli/chains/remove", async (ctx, body) => ctx.runMutation((api as any).agentDefinitions.removeChain, body));
 
 cliRoute("/cli/org/reset", async (ctx, body) => ctx.runMutation(api.orgRoles.reset, body));
+// Where a request lands (org-staffing.md S35): `cast route`, and the one door
+// for scripts and systems outside codecast to hand codecast a request.
+cliRoute("/cli/route", async (ctx, body) => ctx.runAction(api.orgRoute.route, body));
 cliRoute("/cli/org/tree", async (ctx, body) => {
   return await ctx.runQuery(api.org.tree, body);
 });

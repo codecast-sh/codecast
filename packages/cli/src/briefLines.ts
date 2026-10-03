@@ -24,6 +24,29 @@ export function routineLine(r: { short_id: string | null; status: string; run_at
   return ` · next check ${ms > 60_000 ? `in ${relTimeShort(now - ms, now)}` : "due now"} (${r.short_id ?? "trigger"})`;
 }
 
+/** The role's standing session as the org card reads it: id, work state, pinned
+ *  status and line, and when it checks next. A reader of another role's brief
+ *  (the Head of People over a lead, org-staffing.md S29) sees where the role
+ *  itself stands without a second read of the session. */
+export function standingSessionLine(role: { standing_short_id?: string | null; routine?: { short_id: string | null; status: string; run_at: number | null } | null }, standing: { state?: string | null; state_status?: string | null; state_line?: string | null } | null | undefined, now: number): string {
+  const word = (standing?.state_status ?? standing?.state ?? "").replace("_", " ");
+  const state = standing ? `${word ? ` · ${word}` : ""}${standing.state_line ? ` · ${standing.state_line}` : ""}` : "";
+  return `  ${c.dim}standing session: ${role.standing_short_id ?? "none"}${state}${routineLine(role.routine, now)}${c.reset}`;
+}
+
+/** The initiatives the role serves, as `cast brief` prints them: the ones it
+ *  owns first (its daily check refreshes their health), each with its health
+ *  as last said and when, then its numbers against their targets. */
+export type BriefInitiativeRow = { short_id: string; title: string; health: string; health_at: number | null; owned: boolean; metrics: string[]; chain: string[] };
+export function briefInitiativeLines(rows: BriefInitiativeRow[], now: number): string[] {
+  if (!rows.length) return [];
+  const health = (r: BriefInitiativeRow) => r.health === "none" || !r.health ? "no update yet" : `${r.health.replace("_", " ")}, said ${r.health_at ? formatDateSmart(r.health_at, now) : "at no date"}`;
+  return [
+    `  initiatives it serves:`,
+    ...rows.map((r) => `    ${c.dim}${r.short_id}${c.reset} ${r.title} ${c.dim}· ${r.owned ? "owns it" : "its project carries it"} · ${health(r)}${r.chain.length ? ` · under ${r.chain.join(", under ")}` : ""}${r.metrics.length ? ` · ${r.metrics.join("; ")}` : ""}${c.reset}`),
+  ];
+}
+
 /** The grants a role holds outside codecast, the expired ones left out. */
 export function authorityLine(role: { authority?: Array<{ kind: string; label: string; expires_at?: number | null }> }, now: number): string {
   const held = (role.authority ?? []).filter((g) => !g.expires_at || g.expires_at > now);
@@ -122,9 +145,10 @@ export function briefTextLines(brief: any, now: number): string[] {
     roleLine(brief.role),
     `  ${c.dim}scope: ${briefScopeLine(f.scope, brief.role.handle)}${c.reset}`,
     authorityLine(brief.role, now),
-    `  ${c.dim}standing session: ${brief.role.standing_short_id ?? "none"}${routineLine(brief.role.routine, now)}${c.reset}`,
+    standingSessionLine(brief.role, f.standing, now),
     `  tasks: ${f.tasks.total} in scope, ${f.tasks.open} open${st ? ` · ${st}` : ""}${pr ? ` · priority ${pr}` : ""}`,
     ...briefPlanLines(f.plans),
+    ...briefInitiativeLines(f.initiatives ?? [], now),
     `  decisions: ${f.decisions.open} open, ${f.decisions.answered_today} answered today`,
     // What moved since the role last read this (S25): the section its scheduled check acts on.
     `  changed since ${formatDateSmart(f.changed_since, now)}:${f.changed.length ? "" : " nothing"}`,

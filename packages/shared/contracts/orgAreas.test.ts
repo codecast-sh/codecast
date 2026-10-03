@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { AREA_STATUSES, AREA_STATUS_WORDS, areaChangeLine, areaSignalsOf, areaStatusLine, areaStatusOf, newestStandingFirst, type AreaInput } from "./orgAreas";
+import { AREA_STATUSES, AREA_STATUS_WORDS, areaChangeLine, areaSignalsOf, areaStatusLine, areaStatusOf, handRouteOf, newestStandingFirst, reachedBreakdown, reachedSentence, type AreaInput } from "./orgAreas";
 
 // An area as a person reads it (docs/architecture/org-staffing.md S29): the
 // status word the signals add up to, most pressing first; the sentence it
@@ -86,5 +86,41 @@ describe("the watch's change line", () => {
   test("newest dated line first; undated lines keep their order after", () => {
     const lines = [{ written_at: null, k: "a" }, { written_at: 5, k: "b" }, { written_at: 9, k: "c" }, { written_at: null, k: "d" }];
     expect(newestStandingFirst(lines).map((l) => l.k)).toEqual(["c", "b", "a", "d"]);
+  });
+});
+
+// An overload names its cause (org-staffing.md S29): how the sessions under
+// the role reached it, and which route dominates, in the alert's own sentence.
+describe("how the sessions reached the role", () => {
+  test("the route reads the row's hold stamp and binding; a row with neither came by the retired folder rule", () => {
+    expect(handRouteOf({ org_role_hold: "filed", active_task_id: "t" })).toBe("filed");
+    expect(handRouteOf({ org_role_hold: "bound", active_task_id: "t" })).toBe("task");
+    expect(handRouteOf({ org_role_hold: "bound", active_plan_id: "p" })).toBe("plan");
+    expect(handRouteOf({ plan_ids: ["p"] })).toBe("plan");
+    expect(handRouteOf({ active_task_id: "t" })).toBe("task");
+    expect(handRouteOf({ org_role_hold: "bound" })).toBe("folder");
+    expect(handRouteOf({})).toBe("folder");
+  });
+
+  test("the breakdown lists every route with a count, busiest first", () => {
+    expect(reachedBreakdown({ task: 8, plan: 0, filed: 2, folder: 1 })).toBe("8 through a task, 2 filed by a person or role, 1 by the folder rule");
+    expect(reachedBreakdown({ task: 0, plan: 0, filed: 0, folder: 0 })).toBe("");
+  });
+
+  test("the sentence says which route most sessions took, and the rest", () => {
+    expect(reachedSentence({ task: 0, plan: 0, filed: 0, folder: 0 })).toBe("");
+    expect(reachedSentence({ task: 0, plan: 0, filed: 0, folder: 11 })).toBe("All 11 of its sessions reached it by the folder rule.");
+    expect(reachedSentence({ task: 1, plan: 0, filed: 0, folder: 0 })).toBe("Its one session reached it through a task.");
+    expect(reachedSentence({ task: 8, plan: 0, filed: 2, folder: 1 })).toBe("Most of its 11 sessions reached it through a task (8); the rest 2 filed by a person or role, 1 by the folder rule.");
+    expect(reachedSentence({ task: 4, plan: 3, filed: 2, folder: 2 })).toBe("Of its 11 sessions, 4 reached it through a task; the rest 3 through a plan, 2 filed by a person or role, 2 by the folder rule.");
+  });
+
+  test("the overload status line and signal carry the cause", () => {
+    const over = on({ overloaded: true, overloaded_by: ["11 sessions at once", "15 threads stuck", "3 days at its daily limit this week"], reached: { task: 2, plan: 0, filed: 0, folder: 9 } });
+    expect(areaStatusLine(over, "overloaded")).toBe("Overloaded: 11 sessions at once, 15 threads stuck, 3 days at its daily limit this week. Most of its 11 sessions reached it by the folder rule (9); the rest 2 through a task.");
+    expect(areaSignalsOf(over).find((s) => s.code === "overloaded")!.text).toBe("More reaches it than one role can answer: 11 sessions at once, 15 threads stuck, 3 days at its daily limit this week. Most of its 11 sessions reached it by the folder rule (9); the rest 2 through a task.");
+    // A row from before the field, or with nothing under it, reads as before.
+    expect(areaStatusLine(on({ overloaded: true, overloaded_by: ["9 decisions a day"] }), "overloaded")).toBe("Overloaded: 9 decisions a day.");
+    expect(areaStatusLine(on({ overloaded: true, overloaded_by: ["9 decisions a day"], reached: { task: 0, plan: 0, filed: 0, folder: 0 } }), "overloaded")).toBe("Overloaded: 9 decisions a day.");
   });
 });

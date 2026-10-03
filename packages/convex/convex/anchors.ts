@@ -338,7 +338,7 @@ export async function announceSeating(ctx: any, conversationId: Id<"conversation
   const host = await ctx.db.get(hostUserId);
   const conversation = await ctx.db.get(conversationId);
   await enqueuePendingMessage(ctx, conversation, hostUserId, {
-    content: formatSessionMessage("unknown", announce, host?.name || host?.github_username || host?.email?.split("@")[0] || undefined),
+    content: formatSessionMessage("unknown", announce, { name: host?.name || host?.github_username || host?.email?.split("@")[0] || undefined }),
     client_id: `seat:${conversationId}:${Date.now()}`,
   });
 }

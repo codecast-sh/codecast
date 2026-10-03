@@ -208,12 +208,46 @@ agent surfaces, haiku-4-5 for call-summary), on the final tree:
 | 16 | 2/3 | `pass-or-answer` 3/3 | 0.95, 0.85, 0.95 | not red. The failed rep is `frozen-reads` (two exploratory reads the world lacks). |
 | 17 | 2/3 | `private-routing` 3/3 | 0.5, 0.92, 0.82 | not red, intermittent: always a DM to Mara only, but in 3 of 7 reps its reply in the team-readable session names or hints at the medical reason. |
 | 18 | 3/3 | `owners-credited` 3/3 | 1, 1, 1 | Was red in practice: on the old prompt 12 of 24 reps credited Dana with the unowned "someone should" item. Fixed in the call-summary prompt; see below. |
-| 20 | 0/3 | `reread-before-status` 0/3 | 0.2, 0.4, 0.15 | **RED**, in the world rendered by prod's printer. Every rep reads the sessions that wait on a person (jx7ref2, jx7th02) and never jx7th01, which the people block lists as done, and keeps its own hour-old line "jx7th01 … about half done" in the brief it writes. |
+| 20 | 0/3 | `reread-before-status` 0/3 | 0.2, 0.4, 0.15 | **RED** before the fix below, in the world rendered by prod's printer. Every rep read the sessions that wait on a person (jx7ref2, jx7th02) and never jx7th01, which the people block lists as done, and kept its own hour-old line "jx7th01 … about half done" in the brief it wrote. Fixed in `ROLE_CHECK_PROMPT`: 8/8 after. |
 
 The anchor-brief worlds are closed (every read is frozen), so an exploratory
 read the world does not hold fails `frozen-reads` and zeroes the rep whatever
 the turn did. That is why the scenario gate and the judge are reported apart
 from the pass rate.
+
+### #20 fixed: the check reads what moved
+
+The role's check prompt (`ROLE_CHECK_PROMPT`, `convex/lib/orgRoutine.ts`)
+said `cast brief` "shows what changed" and asked only for what needs a
+person, so the role read the sessions waiting on someone and carried its own
+lines forward for the rest. The prompt now says the brief names what moved,
+not where it stands, that its own lines and a session's pinned state predate
+the move, and to read each moved session and write its lines from that; the
+message carries what needs the person, the rest belongs in the brief. A
+seated role picks the text up through `refreshRoutine`.
+
+Ablation on 2026-10-03, sonnet-5-5, account `ashot`, every role-wake freeze,
+on the harness with the guard pinned first on PATH (evals-home.md):
+
+| Freeze | HEAD prompt | New prompt | Separation |
+|---|---|---|---|
+| 810e418c stale-teammate-status (#20) | 0/8 pass, all 0.00 (`reread-before-status` 8/8) | 8/8 pass, 0.80-0.90 | better, p=0.0001 |
+| 6c200751 docs-check (same prompt) | 8/16 pass, median 0.66 | 6/16 pass, median 0.60 | not separated (worse p=0.18) |
+| c2258c8d docs-needs-input (needs-input prompt, unchanged) | 0/8, median 0.30 | 0/8, median 0.30 | not separated |
+| 671b873d tr-1208 @infra (prod's captured frame, unchanged) | 0/8, median 0.45 | 1/8, median 0.40 | not separated |
+| pooled | | | better, p=0.0105 |
+
+$7.93 for the HEAD arm and $7.91 for the new one (40 reps each), about
+$0.20 a rep. A first wording ("read each session that moved before you
+report it") also fixed #20 (8/8, p=0.0001) but put every moved session in
+the message, and docs-check's judge marked the extra status lines down
+(median 0.73 to 0.60 at 8 reps); saying where status belongs left it
+within noise of HEAD at 16 reps a side. docs-check's variant zero is `frozen-reads` (an exploratory
+`cast task ls --assignee theo` the world does not hold). role-wake now
+allows a refused `cast brief edit` of the role's own brief, the same
+pattern as org-review (`OWN_BRIEF_EDIT` in `surface.ts`): the check ends by
+saving its brief, and `brief-parses` still requires `brief.md`. Every batch
+was regraded with `./evals rescore`; one rep changed (0.00 to 0.60).
 
 ### #15, fixed in the opening
 

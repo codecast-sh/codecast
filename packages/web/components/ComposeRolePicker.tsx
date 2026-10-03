@@ -180,11 +180,6 @@ export function ComposeRolePicker({ picked, onPick, onDone }: {
           aria-autocomplete="list"
           className="flex-1 min-w-0 bg-transparent outline-none border-0 p-0 text-sm text-sol-text placeholder:text-sol-text-dim/60"
         />
-        <span className="hidden sm:inline-flex items-center gap-2 text-[10px] text-sol-text-dim/70 shrink-0">
-          <Hint keys={["↑", "↓"]} label="move" />
-          <Hint keys={["↵"]} label="pick" />
-          <Hint keys={["Esc"]} label="back" />
-        </span>
       </div>
       <ul id="compose-role-list" role="listbox" className="max-h-56 overflow-y-auto py-1">
         {shown.length === 0 && <li className="px-2.5 py-2 text-sol-text-dim">No role matches &ldquo;{query}&rdquo;</li>}
@@ -216,6 +211,12 @@ export function ComposeRolePicker({ picked, onPick, onDone }: {
           );
         })}
       </ul>
+      <div className="flex items-center gap-3 px-2.5 py-1.5 border-t border-sol-border/40 text-[10px] text-sol-text-dim/70">
+        <Hint keys={["↑", "↓"]} label="move" />
+        <Hint keys={["↵"]} label="pick" />
+        <Hint keys={["Esc"]} label="back" />
+        {picked && <Hint keys={["⌫"]} label="fresh session" />}
+      </div>
     </div>
   );
 }
@@ -227,7 +228,7 @@ function RoleLine({ r }: { r: RoleRecipient }) {
       <span className="font-medium text-sol-text shrink-0">{r.name}</span>
       <span className="text-sol-text-muted truncate">{r.title}</span>
       {r.area && <span className="text-sol-text-dim truncate min-w-0 shrink-[2]">· {r.area}</span>}
-      <span className="ml-auto pl-2 text-sol-text-dim/60 font-mono shrink-0">@{r.handle}</span>
+      <span className="ml-auto pl-2 text-sol-text-dim/60 font-mono truncate shrink-[3] min-w-[6ch]">@{r.handle}</span>
     </span>
   );
 }

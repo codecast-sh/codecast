@@ -16,8 +16,11 @@ export const COMPANY_REVIEW_EVERY_MS = 7 * 24 * 60 * 60 * 1000;
 export const COMPANY_REVIEW_PROMPT = "Company review. Run `cast org review` and do the review it describes, here in your own thread: open the conversation with the person you report to, each proposal's short id alone on its line, and carry it on from there.";
 
 // A role wakes on a schedule through one ordinary recurring trigger on its
-// standing session: daily for a role, the weekly company review for the Head of People.// of staff. The prompt is short and stays at principle level: the role knows
-// who it is from its first turn, and `cast brief` is its memory.
+// standing session: daily for a role, the weekly company review for the Head
+// of People. The prompt is short and stays at principle level: the role knows
+// who it is from its first turn, and `cast brief` is its memory. The brief
+// only names what moved, so the check reads the moved work before it writes
+// a line about it (red list #20, ct-55713).
 
 export const ROLE_CHECK_EVERY_MS = 24 * 60 * 60 * 1000;
 export const ROLE_CHECK_PROMPT = [

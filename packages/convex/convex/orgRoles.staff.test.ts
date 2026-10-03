@@ -646,6 +646,23 @@ describe("project and plan charters", () => {
     expect(charterLine("- project Ops", facts.scope.projects.find((p) => p.id === "p2"))).toBeNull();
   });
 
+  test("the brief carries the initiatives the role serves with their health as last said, and its own standing state", async () => {
+    const { ctx, tables } = world({
+      projects: [project],
+      initiatives: [
+        { _id: "in_owned", user_id: ME, team_id: TEAM, workspace: `team:${TEAM}`, short_id: "in-4", title: "Win the private network", project_ids: [], owner: { kind: "role", role_id: "r1" }, status: "active", health: "at_risk", health_at: NOW - 11 * 86_400_000, created_at: 1, updated_at: 1 },
+        { _id: "in_carried", user_id: ME, team_id: TEAM, workspace: `team:${TEAM}`, short_id: "in-9", title: "Grow", project_ids: ["p1"], status: "active", health: "none", created_at: 1, updated_at: 1 },
+        { _id: "in_other", user_id: ME, team_id: TEAM, workspace: `team:${TEAM}`, short_id: "in-2", title: "Elsewhere", project_ids: ["p-none"], status: "active", health: "on_track", created_at: 1, updated_at: 1 },
+      ],
+    });
+    tables.org_roles.push({ _id: "r1", short_id: "or-1", scope_type: "team", team_id: TEAM, host_user_id: ME, handle: "growth", name: "Growth lead", status: "active", scope: { project_ids: ["p1"], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, anchor_id: "a1", created_by: ME, created_at: 1, updated_at: 1 });
+    tables.anchors.push({ _id: "a1", name: "Growth lead", scope_type: "team", team_id: TEAM, host_user_id: ME, bot_user_id: ME, org_role_id: "r1", conversation_id: "mine", status: "active" });
+    await ctx.db.patch("mine" as any, { standing_role_id: "r1", anchor_id: "a1", thread_state: "Waiting on the pricing decision", thread_state_status: "blocked", thread_state_at: NOW });
+    const facts = await computeBriefFacts(ctx, ME as any, tables.org_roles.find((r) => r._id === "r1"), NOW);
+    expect(facts.initiatives.map((i) => [i.short_id, i.owned, i.health, i.health_at])).toEqual([["in-4", true, "at_risk", NOW - 11 * 86_400_000], ["in-9", false, "none", null]]);
+    expect(facts.standing).toMatchObject({ short_id: "jxmine1", state: "working", state_status: "blocked", state_line: "Waiting on the pricing decision" });
+  });
+
   test("the hand briefing names the task's project goal", () => {
     const withGoal = handBriefing({ name: "Head of Growth", handle: "growth" }, "Ship the signup form", "ct-7", { title: "Growth", goal: "Double weekly signups", priority: "p1" });
     expect(withGoal).toContain("Project Growth [p1] · goal: Double weekly signups. Your work serves that goal");

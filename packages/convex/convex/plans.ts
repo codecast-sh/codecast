@@ -5,6 +5,7 @@ import { resolveActor } from "./lib/actor";
 import { mutation, query, internalMutation } from "./functions";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
+import { internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createDataContext, scopeByProject, scopedFetch, explicitWorkspace } from "./data";
 import { nextShortId } from "./counters";
@@ -654,6 +655,8 @@ export const bindSession = mutation({
     // the pointer only while the old plan still points back at this
     // conversation, so once the old plan moved on, nothing could ever flip it.
     await ctx.db.patch(conv._id, { plan_ids: planIds, active_plan_id: plan._id });
+    // The binding may file the session under the lead that owns the plan (S35).
+    await ctx.scheduler.runAfter(0, internal.sessionOwnership.reconcileHold, { conversation_id: conv._id });
 
     return { success: true };
   },
@@ -730,6 +733,7 @@ export const unbindSession = mutation({
       );
       if (conv) {
         await ctx.db.patch(conv._id, { active_plan_id: undefined });
+        await ctx.scheduler.runAfter(0, internal.sessionOwnership.reconcileHold, { conversation_id: conv._id });
       }
     }
 

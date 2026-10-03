@@ -12,6 +12,8 @@ export type ServedInitiative = {
   title: string;
   status: InitiativeRow["status"];
   health: InitiativeRow["health"];
+  /** When the health was last said (the latest update), or null before one. */
+  health_at: number | null;
   /** The role owns it, as against carrying one of its projects. */
   owned: boolean;
   metrics: MetricReading[];
@@ -34,7 +36,7 @@ export function servedInitiatives(rows: InitiativeRow[], area: { role_id?: strin
     .filter((x) => x.owned || x.carries)
     .sort((a, b) => Number(b.owned) - Number(a.owned) || rank(a.r.status) - rank(b.r.status) || a.r.short_id.localeCompare(b.r.short_id, undefined, { numeric: true }))
     .slice(0, max)
-    .map(({ r, owned }) => ({ _id: String(r._id), short_id: r.short_id, title: r.title, status: r.status, health: r.health, owned, metrics: metricReadings(r), chain: initiativeChain(r, (id) => byId.get(id)) }));
+    .map(({ r, owned }) => ({ _id: String(r._id), short_id: r.short_id, title: r.title, status: r.status, health: r.health, health_at: r.health_at ?? null, owned, metrics: metricReadings(r), chain: initiativeChain(r, (id) => byId.get(id)) }));
 }
 
 /** The workspace's initiatives, one bounded read by access key. */

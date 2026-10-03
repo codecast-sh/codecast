@@ -481,7 +481,7 @@ async function countHand(ctx: { db: any }, role: any): Promise<void> {
 
 export async function recordHandStart(ctx: { db: any }, role: any, conversationId: Id<"conversations">): Promise<void> {
   await countHand(ctx, role);
-  await ctx.db.patch(conversationId, { org_role_id: role._id });
+  await ctx.db.patch(conversationId, { org_role_id: role._id, org_role_hold: "filed" });
 }
 
 // The briefing a hand starts with (org-roles-standing.md T4, the-line.md L2):

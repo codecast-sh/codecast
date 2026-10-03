@@ -5,7 +5,8 @@
 // work can be read and steered without leaving the task. The full transcript
 // is the session face, one click away in the WorkUnitBar above.
 
-import { useMemo } from "react";
+import { useContext, useMemo } from "react";
+import { InsideWorkUnit } from "../../lib/workUnit";
 import { Pin } from "lucide-react";
 import { MessageInput } from "../MessageInput";
 import { cleanUserMessage } from "../sessionMessage";
@@ -45,7 +46,13 @@ function tailSig(msgs: Turn[] | undefined): string {
   return last ? `${msgs!.length}:${last._id ?? ""}:${(last.content ?? "").length}` : "";
 }
 
-export function TaskWorkPanel({ session }: { session: WorkUnitSession & { recent_messages?: Turn[] } }) {
+export function TaskWorkPanel(props: { session: WorkUnitSession & { recent_messages?: Turn[] } }) {
+  // Stacked under the session's own transcript, the panel would repeat it.
+  if (useContext(InsideWorkUnit)) return null;
+  return <TaskWorkPanelInner {...props} />;
+}
+
+function TaskWorkPanelInner({ session }: { session: WorkUnitSession & { recent_messages?: Turn[] } }) {
   const now = useCoarseNow(30_000);
   const personifyAll = usePersonifyAll();
   const sig = useInboxStore((s) => {

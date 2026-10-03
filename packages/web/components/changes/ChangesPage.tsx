@@ -336,10 +336,13 @@ export function ChangesPage() {
   );
 
   // ── States ──────────────────────────────────────────────────────────────
-  const cold = !feed.ready && allStories.length === 0 && editions.length === 0;
+  // A skeleton only while the viewed day has nothing cached and its feed has
+  // not answered: a cached day paints at once, and "Nothing landed" waits for
+  // the server to say so.
+  const cold = !feed.ready && model.day.length === 0 && !edition;
   const nothingKnown = feed.ready && repos.length === 0 && editions.length === 0 && live.length === 0 && !url.repo;
 
-  if (feed.refused) {
+  if (feed.refused && !(window as any).__chgPreview) {
     return <EmptyState title="Changes is not turned on for this team yet." description="A team admin can turn it on in the team's settings." />;
   }
   if (nothingKnown) {

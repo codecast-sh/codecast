@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { parseScheduledTask, triggerRunFrame, type RoleCard, type WaitingSession } from '@codecast/shared/contracts';
+import { formatSessionMessage, parseScheduledTask, triggerRunFrame, type RoleCard, type WaitingSession } from '@codecast/shared/contracts';
 import { parseStandingSection, standingLineStale } from '@codecast/shared/contracts/briefStanding';
 import { UsageError } from '@platform/evals/cli';
 
@@ -32,12 +32,20 @@ const BRIEF_NOTE = 'Where you would save your brief with `cast brief edit -`, wr
 
 const HINT = '`./evals snapshot role-wake --trigger tr-N --team <team> --role <handle> --name <name>`, then freeze it within the hour';
 
-/** A fixture's frame, from facts: the routine (or needs-input event) the tree's orgRoutine defines for this role. */
+/**
+ * A fixture's frame, from facts: the routine (or needs-input event) the tree's
+ * orgRoutine defines for this role, or a plain message another session sent
+ * it with `cast send` (org-staffing.md S25: a role wakes through triggers and
+ * messages, nothing else). A message carries no role card; the role knows who
+ * it is from its brief.
+ */
 export interface RoleWakeFixture {
   trigger: string;
-  routine: 'check' | 'needs-input';
+  routine: 'check' | 'needs-input' | 'message';
   role: RoleCard;
   waiting?: WaitingSession;
+  /** A `message` routine: who wrote (a session short id) and what. */
+  message?: { from: string; name?: string; body: string };
   stashed?: boolean;
 }
 
@@ -53,6 +61,10 @@ export function frameOf(snap: RoleWakeSnap): string {
   if (snap.frame) return snap.frame;
   const f = snap.fixture;
   if (!f) throw new Error('role-wake snapshot carries neither a frame nor fixture facts');
+  if (f.routine === 'message') {
+    if (!f.message) throw new Error('a message fixture names who wrote and what (fixture.message)');
+    return formatSessionMessage(f.message.from, f.message.body, { name: f.message.name });
+  }
   const spec = f.routine === 'needs-input' ? ROLE_NEEDS_INPUT_SPEC : { ...roleRoutineFor(f.role), event: undefined };
   const task = { _id: `fixture-${f.trigger}`, short_id: f.trigger, title: spec.title, prompt: spec.prompt, role_id: `fixture-${f.role.handle}`, ...(spec.event ? { event_filter: { event_type: spec.event } } : {}) };
   return triggerRunFrame(task, { role: f.role, waiting: f.waiting ?? null, stashed: Boolean(f.stashed) });

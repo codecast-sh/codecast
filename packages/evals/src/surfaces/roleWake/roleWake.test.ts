@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { parseScheduledTask, triggerRunFrame } from '@codecast/shared/contracts';
+import { formatSessionMessage, parseScheduledTask, triggerRunFrame } from '@codecast/shared/contracts';
 import { stripAnsi } from '@platform/cli-kit/render';
 
 import { ROLE_CHECK_PROMPT } from '../../../../convex/convex/lib/orgRoutine';
@@ -43,6 +43,16 @@ describe('the frame', () => {
     const parsed = parseScheduledTask(frameOf(fixtureSnap('docs-needs-input')));
     expect(parsed?.event).toBe('session_needs_input');
     expect(parsed?.waiting).toMatchObject({ short_id: 'jx7ref2', decision: 'sd-55' });
+  });
+
+  test("a message fixture renders the session message the sender's `cast send` delivers, with no role card", () => {
+    const snap = fixtureSnap('docs-session-message');
+    const frame = frameOf(snap);
+    expect(frame).toBe(formatSessionMessage('jx7bil3', snap.fixture!.message!.body));
+    expect(frame.startsWith('<session-message from="jx7bil3">\n')).toBe(true);
+    expect(parseScheduledTask(frame)).toBeNull();
+    // Its label holds the turn to the reply: a `cast send` to the session that wrote.
+    expect(readFixture('role-wake', 'docs-session-message').label).toEqual({ replies: ['jx7bil3'] });
   });
 
   test('a real freeze replays the frame prod built, untouched', () => {
@@ -209,7 +219,7 @@ describe('served reads', () => {
   });
 
   test('every fixture reads the shared world, and none carries a copy of it', () => {
-    for (const kase of ['docs-check', 'docs-needs-input']) {
+    for (const kase of ['docs-check', 'docs-needs-input', 'docs-session-message']) {
       const snap = fixtureSnap(kase);
       expect(snap.world).toBe('fernhill');
       expect(snap.reads ?? []).toEqual([]);
@@ -224,5 +234,17 @@ describe('the harness note', () => {
     const real = harnessNote(meta.frozenVerbs!);
     expect(real).toContain('Reads under `cast brief`, `cast org` and `cast sessions` answer from a record');
     expect(real).toContain('other reads are live');
+  });
+});
+
+describe('allowed writes', () => {
+  test('a check may save its own brief and declare its state, as its frame asks; any other write still fails', () => {
+    const agent = (calls: string[]): AgentResult => ({ runSubdir: '/tmp/a', said: [], turns: [[]], calls, costUsd: 0, modelUsage: { [meta.model]: { outputTokens: 1 } }, isError: false, exitCode: 0, model: meta.model, realMs: 0 });
+    const writes = (line: string) => routeGates(meta, { calls: [], agents: [agent([line])] }).find((g) => g.id === 'no-unexpected-writes')!.pass;
+    expect(writes('REFUSED brief edit -')).toBe(true);
+    expect(writes('REFUSED state "checking the docs area"')).toBe(true);
+    expect(writes('REFUSED brief edit --for @growth -')).toBe(false);
+    expect(writes('REFUSED decide answer sd-55 1')).toBe(false);
+    expect(writes('REFUSED task update ct-418 -s in_progress')).toBe(false);
   });
 });

@@ -4,11 +4,12 @@ import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { isMac, hasOpenModal, altChordDirection } from "../../shortcuts";
 import { useConvexSync } from "../../hooks/useConvexSync";
+import { usePinnedLaunchOptions } from "../../hooks/usePinnedAgents";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useRecentProjectsFeed } from "../../hooks/useRecentProjectsFeed";
 import { useShallow } from "zustand/react/shallow";
 import { createPortal } from "react-dom";
-import { AGENT_LAUNCH_OPTIONS, cloudAgentLaunch, cloudAgentLaunchKey, cloudAgentProviderForLaunch, cloudAgentProvidersFor, modelOptionKey, type CloudAgentLaunch, type CloudAgentProviderSpec, type ConvexAgentType } from "@codecast/shared/contracts";
+import { fromConvexAgentType, cloudAgentLaunch, cloudAgentLaunchKey, cloudAgentProviderForLaunch, cloudAgentProvidersFor, modelOptionKey, type CloudAgentLaunch, type CloudAgentProviderSpec, type ConvexAgentType } from "@codecast/shared/contracts";
 import { useLiveSessionMeta } from "../../hooks/useLiveSessionMeta";
 import { commitModelChange } from "../../lib/modelSwitchWeb";
 import { useCloudAgentStatus } from "../cloudAgents/machine";
@@ -887,9 +888,6 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
   );
 }
 
-// Registry-derived (shared with the mobile sheet): adding a client descriptor
-// is all it takes to appear here. This surface keys by the convex spelling.
-const AGENT_OPTIONS = AGENT_LAUNCH_OPTIONS.map((a) => ({ type: a.convexType, label: a.label }));
 
 function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedWorkflowId, onSelectWorkflow, workflows, handleRef }: {
   conversation: ConversationData;
@@ -910,6 +908,10 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
     return { _id: sess._id, agent_type: sess.agent_type };
   }));
   const currentAgent = storeSession?.agent_type || conversation.agent_type || "claude_code";
+  // The viewer's pinned agents (shared with the mobile sheet), plus the one
+  // this session already runs. This surface keys by the convex spelling.
+  const pinned = usePinnedLaunchOptions(fromConvexAgentType(currentAgent));
+  const AGENT_OPTIONS = useMemo(() => pinned.map((a) => ({ type: a.convexType, label: a.label })), [pinned]);
 
   const handleAgentSwitch = useCallback(async (agentType: ConvexAgentType) => {
     if (agentType === currentAgent) return;
@@ -949,7 +951,7 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
     setHi(Math.max(0, AGENT_OPTIONS.findIndex((a) => a.type === currentAgent)));
     setPicking(true);
     return true;
-  }, [currentAgent]);
+  }, [currentAgent, AGENT_OPTIONS]);
 
   const moveAgentPicker = useCallback((delta: -1 | 1) => {
     if (!picking) prevFocusRef.current = document.activeElement as HTMLElement | null;
@@ -960,7 +962,7 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
     });
     setPicking(true);
     return true;
-  }, [currentAgent, picking]);
+  }, [currentAgent, picking, AGENT_OPTIONS]);
 
   // Post-commit focus — same race as the project picker's (see note there).
   useWatchEffect(() => {
@@ -995,7 +997,7 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
       e.stopPropagation();
       exitAgentPicker();
     }
-  }, [hi, handleAgentSwitch, exitAgentPicker, showWorkflow, onToggleWorkflow]);
+  }, [hi, handleAgentSwitch, exitAgentPicker, showWorkflow, onToggleWorkflow, AGENT_OPTIONS]);
 
   // Hand the imperative surface up to NewSessionView's ⌥-chord router.
   useWatchEffect(() => {

@@ -2,6 +2,8 @@ import { describe, expect, it } from "bun:test";
 import {
   AGENT_CLIENTS,
   AGENT_LAUNCH_OPTIONS,
+  pinnedAgentIds,
+  pinnedLaunchOptions,
   launchRailOptions,
   agentSupportsExecutionTransport,
   agentSupportsFork,
@@ -474,5 +476,24 @@ describe("fork and switch capability helpers", () => {
     expect(canSessionBecomeAgent("claude_code", 12)).toBe(true);
     expect(canSessionBecomeAgent("muse", 0)).toBe(true);
     expect(canSessionBecomeAgent("muse", 12)).toBe(false);
+  });
+});
+
+describe("pinned agents", () => {
+  it("defaults to every client not marked unpinned, with gemini left out", () => {
+    const ids = pinnedAgentIds(undefined);
+    expect(ids).not.toContain("gemini");
+    expect(ids).toContain("claude");
+    expect(ids).toEqual((Object.keys(AGENT_CLIENTS) as Array<keyof typeof AGENT_CLIENTS>).filter((id) => AGENT_CLIENTS[id].pinnedByDefault !== false));
+  });
+
+  it("a user's list wins, in registry order, dropping unknown ids", () => {
+    expect(pinnedAgentIds(["gemini", "nope", "claude"])).toEqual(["claude", "gemini"]);
+    expect(pinnedAgentIds([])).toEqual([]);
+  });
+
+  it("a picker keeps the agent a session already runs", () => {
+    expect(pinnedLaunchOptions(["claude"], "gemini").map((o) => o.id)).toEqual(["claude", "gemini"]);
+    expect(pinnedLaunchOptions(undefined, null).map((o) => o.id)).toEqual(pinnedAgentIds(undefined));
   });
 });

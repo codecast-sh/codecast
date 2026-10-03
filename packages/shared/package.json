@@ -39,6 +39,7 @@
     "./contracts/orgTemplateState": "./contracts/orgTemplateState.ts",
     "./contracts/orgTemplateLearning": "./contracts/orgTemplateLearning.ts",
     "./contracts/orgLead": "./contracts/orgLead.ts",
+    "./contracts/orgRoute": "./contracts/orgRoute.ts",
     "./contracts/initiative": "./contracts/initiative.ts",
     "./contracts/orgAssignee": "./contracts/orgAssignee.ts",
     "./contracts/cloudAgents": "./contracts/cloudAgents.ts",

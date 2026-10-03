@@ -1067,6 +1067,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
 
     await ctx.db.patch(conversationId, { short_id: conversationId.toString().slice(0, 7) });
     await retainSessionCreator(ctx, conversationId, userId, runnerUserId);
+    // A session born bound to a task or plan a lead owns is the lead's (S35).
+    if (linkedTask || workerPlanId) await (ctx as any).scheduler?.runAfter(0, internal.sessionOwnership.reconcileHold, { conversation_id: conversationId });
 
     // Context-launched sessions keep their source relation in the SAME
     // transaction as creation. A parked asyncAction has no later Promise result

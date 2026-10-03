@@ -7,6 +7,7 @@ import { formatShortcutParts, getShortcutsForAction, useShortcuts } from "../sho
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useLiveSessionMeta } from "../hooks/useLiveSessionMeta";
+import { usePinnedAgentIds } from "../hooks/usePinnedAgents";
 import { useInboxStore, type InboxSession } from "../store/inboxStore";
 import { formatModel } from "../lib/conversationProcessor";
 import { modelOptionKey, modelFitsAgent, effortGlyph, canControlModel } from "../lib/modelSwitch";
@@ -283,7 +284,8 @@ export function SessionControlPanel({
   // A cloud session is named by its provider, and its launch by what it asked for ("2 attempts").
   const agentLabel = cloud?.label ?? formatAgentType(agentType);
   const modelText = model ? modelLabel(agentType, model) : "";
-  const options = moveAgentOptions(agentType, messageCount);
+  const pinnedAgents = usePinnedAgentIds();
+  const options = moveAgentOptions(agentType, messageCount, pinnedAgents);
   const verbs = sessionMoveVerbs(agentType, sessionId, model);
   // One of a cloud agent's attempts (a best-of-N launch, or a branch of one): switched in the branch map.
   const attempts = (model ? cloudAgentLaunch(agentType, model)?.attempts ?? 0 : 0) > 1 || isCloudAgentBranch(agentType, sessionId);

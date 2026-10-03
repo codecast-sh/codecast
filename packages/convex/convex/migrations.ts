@@ -10,7 +10,11 @@ import { listSessionOwnerIds, stampSeatOwners } from "./sessionOwners";
 import { EXECUTIVE_ASSISTANT_NAME, HEAD_OF_PEOPLE_HANDLE, HEAD_OF_PEOPLE_NAME, LEGACY_HEAD_OF_PEOPLE_HANDLE, LEGACY_HEAD_OF_PEOPLE_NAME, isHeadOfPeopleRole } from "@codecast/shared/contracts/orgLead";
 import { defaultAssistantHandle, executiveAssistantCharter, ensureRoleRoutine, headOfPeopleCharter, roleRoutineOf, standingConversationOf } from "./orgRoles";
 import { isScopeless } from "./lib/orgScope";
-import { personName } from "./sessionOwnership";
+import { performReparentSession, personName } from "./sessionOwnership";
+import { rolesInBoundary } from "./lib/orgAccess";
+import { sessionWork } from "./lib/orgOwnership";
+import { ownsWork } from "@codecast/shared/contracts/orgLead";
+import { roleSubject, withOrgChange } from "./lib/orgChangeLog";
 import { seatTitlePatch } from "./anchors";
 import { findRoleRoutineInAnyStatus, isLiveTrigger, liveRoutinesOf } from "./lib/orgRoutine";
 import { applyCancel, applyReactivate } from "./agentTasks";
@@ -952,4 +956,81 @@ export async function performSeatExecutiveAssistant(
 export const seatExecutiveAssistant = internalMutation({
   args: { dryRun: v.optional(v.boolean()), only: v.array(v.string()), reverse: v.optional(v.boolean()) },
   handler: async (ctx, args) => performSeatExecutiveAssistant(ctx, args),
+});
+
+// Hand back what a lead holds only through the folder rule (org-staffing.md
+// S35). A role holds a session for two reasons: bound to work the role owns,
+// or filed there by a person or role. Before S35 a lead also took every
+// session in its projects' folders; those are released here, to whoever
+// started them, through the one reparent core, one org change batch per role
+// so History and `cast org undo <batch>` take it back. Everything the role
+// keeps is stamped with why (`org_role_hold`), so health and the binding rule
+// read it from now on.
+//
+//   npx convex run migrations:releaseFolderHeldSessions '{"dryRun":true,"team":"<team id>","role":"calling"}'
+//
+// Dry by default. `team` (an id) and `role` (a handle) narrow it; `limit`
+// caps the sessions moved in one run (the rest wait for the next).
+export const releaseFolderHeldSessions = internalMutation({
+  args: { dryRun: v.optional(v.boolean()), team: v.optional(v.string()), role: v.optional(v.string()), limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const dryRun = args.dryRun ?? true;
+    const limit = args.limit ?? 200;
+    let roles = (await ctx.db.query("org_roles").collect()).filter((r: any) => r.status !== "retired");
+    if (args.team) roles = roles.filter((r: any) => String(r.team_id ?? "") === args.team);
+    if (args.role) roles = roles.filter((r: any) => r.handle === args.role.replace(/^@/, "").toLowerCase());
+    const byBoundary = new Map<string, any[]>();
+    for (const r of roles) {
+      const key = r.team_id ? `team:${r.team_id}` : `user:${r.scope_user_id}`;
+      byBoundary.set(key, [...(byBoundary.get(key) ?? []), r]);
+    }
+    const rows: Array<{ role: string; session: string; title: string; state: string; verdict: "release" | "keep"; reason: string; return_to?: string }> = [];
+    let released = 0;
+    let stamped = 0;
+    for (const role of roles as any[]) {
+      const boundaryRoles = await rolesInBoundary(ctx, role);
+      const standing = await standingConversationOf(ctx, role);
+      const held: any[] = await ctx.db.query("conversations").withIndex("by_org_role", (q: any) => q.eq("org_role_id", role._id)).collect();
+      const toRelease: any[] = [];
+      for (const c of held) {
+        if (c.standing_role_id || c.anchor_id) continue;
+        const shortId = c.short_id ?? String(c._id).slice(0, 7);
+        const state = c.inbox_killed_at ? "killed" : c.status === "done" ? "done" : c.status ?? "active";
+        const keep = async (reason: string, hold: "bound" | "filed") => {
+          rows.push({ role: role.handle, session: shortId, title: (c.title ?? "").trim(), state, verdict: "keep", reason });
+          if (!dryRun && c.org_role_hold !== hold) { await ctx.db.patch(c._id, { org_role_hold: hold }); stamped++; }
+        };
+        if (ownsWork(role, await sessionWork(ctx, c), boundaryRoles)) { await keep("bound to work in its area", "bound"); continue; }
+        if (c.org_role_hold === "filed") { await keep("filed by a person or role", "filed"); continue; }
+        // Started by the role's line: a hand, or a hand's own child.
+        let cur = c; let viaLine = false;
+        for (let depth = 0; cur?.parent_conversation_id && depth < 8; depth++) {
+          cur = await ctx.db.get(cur.parent_conversation_id);
+          if (cur && standing && String(cur._id) === String(standing._id)) { viaLine = true; break; }
+        }
+        if (viaLine) { await keep("started by the role's own line", "filed"); continue; }
+        // The org log: a person's or role's own filing is a batch of kind
+        // session; a takeover folds into a scope, role or hire batch.
+        const last: any = await ctx.db.query("org_changes").withIndex("by_subject", (q: any) => q.eq("subject.id", String(c._id))).order("desc").first();
+        const batch: any = last?.batch ? await ctx.db.get(last.batch) : null;
+        const kinds = batch ? Object.keys(batch.kinds ?? {}) : [];
+        if (batch && kinds.every((k) => k === "session")) { await keep(`filed by a person or role (${batch.door})`, "filed"); continue; }
+        const returnTo = String(c.owner_user_id ?? c.user_id);
+        rows.push({ role: role.handle, session: shortId, title: (c.title ?? "").trim(), state, verdict: "release", reason: batch ? `taken over by the folder rule (${kinds.join("+")} batch)` : `no record (folder ${c.project_path ?? "unknown"})`, return_to: returnTo });
+        toRelease.push(c);
+      }
+      if (dryRun || !toRelease.length) continue;
+      const slice = toRelease.slice(0, Math.max(0, limit - released));
+      if (!slice.length) continue;
+      await withOrgChange(ctx, role.host_user_id, { kind: "scope", subject: roleSubject(role), door: "cli", gesture: "command" }, async () => {
+        for (const c of slice) {
+          const starter = c.owner_user_id ?? c.user_id;
+          await performReparentSession(ctx, starter, { session_id: String(c._id), target: { kind: "user", user_id: starter, mode: "add" }, note: `Folders decide nothing now: this session was under @${role.handle} only because of the folder it runs in.` });
+          released++;
+        }
+      });
+    }
+    const counts = { release: rows.filter((r) => r.verdict === "release").length, keep: rows.filter((r) => r.verdict === "keep").length, release_live: rows.filter((r) => r.verdict === "release" && r.state !== "done" && r.state !== "killed").length };
+    return { dryRun, roles: roles.length, ...counts, released, stamped, rows };
+  },
 });
