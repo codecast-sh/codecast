@@ -68,7 +68,6 @@ export const addCommit = mutation({
       pr_number: args.pr_number,
       files: args.files,
     });
-    await markCommitDirty(ctx, commitId);
 
     if (args.conversation_id) {
       const conversation = await ctx.db.get(args.conversation_id);
@@ -134,6 +133,7 @@ export const linkCommitToSession = mutation({
     await ctx.db.patch(commit._id, {
       conversation_id: args.conversation_id,
     });
+    await markCommitDirty(ctx, commit._id);
 
     return commit._id;
   },

@@ -33,7 +33,7 @@ function checks(now: number, passed: number): PrCheck[] {
 }
 
 /** Short enough that the page shows the description whole above the timeline, from its first line. */
-const BODY = `Failed deliveries retry with exponential backoff, at most 5 attempts, then dead-letter. Queue and backoff in \`${OBJECTS.blame.file}\`; 212 tests pass.`;
+const BODY = `Failed deliveries retry with exponential backoff, at most 5 attempts, then dead-letter. Queue and backoff in \`${OBJECTS.blame.file}\`; 214 tests pass.`;
 
 /** The pull request row as the page reads it. */
 export function pullRequest(now: number, s: PrStage) {

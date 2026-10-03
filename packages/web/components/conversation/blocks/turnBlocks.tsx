@@ -19,7 +19,8 @@ import { toast } from "sonner";
 import { MessageIdentityProvider } from "../../InlineDiff";
 import { MessageReview } from "../../MessageReview";
 import { isBackgroundBashToolCall } from "../../monitorRows";
-import { useQuery, useAction } from "convex/react";
+import { useAction } from "convex/react";
+import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
 import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { copyToClipboard } from "../../../lib/utils";
@@ -718,7 +719,7 @@ function useNarrativeLevel(
 ) {
   const query = level === "story" ? api.storyMode.getStory : api.storyMode.getSummary;
   const genAction = level === "story" ? api.storyMode.generateStory : api.storyMode.generateSummary;
-  const data = useQuery(query, conversationId ? { conversation_id: conversationId } : "skip");
+  const data = useQueryNoThrow(query, conversationId ? { conversation_id: conversationId } : "skip").data;
   const generate = useAction(genAction);
   const [generating, setGenerating] = useState(false);
   const firedRef = useRef<string | null>(null);

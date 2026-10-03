@@ -335,11 +335,12 @@ export function recordingKeptWords(roomKey?: string | null): string {
 }
 
 /** A failed run's reason as a sentence a person reads. The server's own
- *  reasons ("The recording ...", "Stopped before ...") already are one;
- *  LiveKit's raw errors get the plain prefix. */
+ *  reasons (convex callRecordings: "Recording is not set up ...", "Stopped
+ *  before ...", "LiveKit lost track ...") already are one; LiveKit's raw
+ *  errors get the plain prefix. */
 export function recordingFailureWords(error: string | null | undefined): string {
   const e = (error ?? "").trim();
   if (!e) return "The recording failed.";
-  if (/^(the recording|stopped before)/i.test(e)) return e;
+  if (/^(the recording|recording is|stopped before|livekit (lost|accepted))/i.test(e)) return e;
   return `The recording failed. ${e}`;
 }

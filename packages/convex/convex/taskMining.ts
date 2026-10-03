@@ -330,9 +330,13 @@ export const mineTasksFromInsights = internalMutation({
         tasksCreated++;
       }
 
-      // 2. Blockers are not mined here: the insight generator files each new
-      // one as a signal (signals.ingestInsightBlockers), the one door causes
-      // open through (the-line-end-to-end.md LE3).
+      // 2. Blockers are not mined here, by design: the insight generator files
+      // each new one as a signal (signals.ingestInsightBlockers), the one door
+      // causes open through (the-line-end-to-end.md LE3). The bulk routes
+      // (webMineAll, the 6-hourly backfillAllTeams) re-read the same insights
+      // every pass, and a signal whose fingerprint hits a closed cause reopens
+      // it, so filing from here would reopen fixed bugs four times a day.
+      // Insights from before the door are not backfilled as signals.
 
       // next_action as a follow-up task (dedup against existing)
       if (insight.next_action && insight.next_action !== insight.goal) {

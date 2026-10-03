@@ -1,6 +1,8 @@
 // Rebase twins (spec 7.1 step 2): a rebased commit keeps its author, author
 // time and subject but gets a new sha, and both copies can reach the commits
-// table. Collapse them to one, keeping the copy on the default branch.
+// table. Collapse them to one, keeping the copy on the default branch. A
+// change committed again a little later (an amend, a reset and recommit) has
+// a new time as well, so it is told by its content instead.
 import type { ChangeCommit } from "./types";
 
 /** The repo's default branch: the one recorded on the repo, else `main` or `master` when seen, else `main`. */
@@ -21,6 +23,19 @@ export function twinKey(c: Pick<ChangeCommit, "author_email" | "timestamp" | "su
   return `${c.author_email.toLowerCase()}\u0000${c.timestamp}\u0000${c.subject.trim()}`;
 }
 
+/** Recommitted copies of one change land within this long of each other. */
+export const CONTENT_TWIN_MS = 30 * 60 * 1000;
+
+/**
+ * The same change by content: author, subject, size and where it touched. Null
+ * for a commit that changed no lines, which has nothing to compare.
+ */
+export function contentKey(c: Pick<ChangeCommit, "author_email" | "subject" | "insertions" | "deletions" | "areas">): string | null {
+  if (c.insertions + c.deletions === 0) return null;
+  const areas = Object.entries(c.areas).map(([a, t]) => `${a}:${t.touches}`).sort().join(",");
+  return `${c.author_email.toLowerCase()}\u0000${c.subject.trim()}\u0000${c.insertions}\u0000${c.deletions}\u0000${areas}`;
+}
+
 export type DedupeResult<C> = {
   commits: C[];
   /** Kept sha to the shas collapsed into it. */
@@ -28,35 +43,48 @@ export type DedupeResult<C> = {
 };
 
 /**
- * Keep one commit per (author email, timestamp, subject). The copy that
- * landed on the default branch with an explicit branch wins, then any copy
- * read as default, then the newest row. Order of the input is kept.
+ * Keep one commit per (author email, timestamp, subject), then one per
+ * content key among copies within `CONTENT_TWIN_MS` of the kept one. The copy
+ * that landed on the default branch with an explicit branch wins, then any
+ * copy read as default, then the newest row. Order of the input is kept.
  */
 export function dedupeCommits<C extends ChangeCommit>(commits: readonly C[], defaultBranch: string): DedupeResult<C> {
   const rank = (c: C) => (c.branch === defaultBranch ? 2 : onDefaultBranch(c, defaultBranch) ? 1 : 0);
-  const best = new Map<string, C>();
-  for (const c of commits) {
-    const k = twinKey(c);
-    const prev = best.get(k);
-    if (!prev) {
-      best.set(k, c);
-      continue;
-    }
+  const better = (c: C, prev: C) => {
     const d = rank(c) - rank(prev);
-    if (d > 0 || (d === 0 && (c.created_at ?? c.timestamp) > (prev.created_at ?? prev.timestamp))) best.set(k, c);
-  }
-  const kept = new Set([...best.values()].map((c) => c.sha));
+    return d > 0 || (d === 0 && (c.created_at ?? c.timestamp) > (prev.created_at ?? prev.timestamp));
+  };
   const twins: Record<string, string[]> = {};
-  const out: C[] = [];
-  for (const c of commits) {
-    if (kept.has(c.sha)) {
-      out.push(c);
-      kept.delete(c.sha);
-      continue;
+  /** One pass: commits sharing a key within `within` ms of the group's keeper collapse onto the better copy. */
+  const collapse = (input: readonly C[], key: (c: C) => string | null, within: number): C[] => {
+    const groups = new Map<string, { keeper: C; members: C[] }[]>();
+    const dropped = new Set<C>();
+    for (const c of input) {
+      const k = key(c);
+      if (k === null) continue;
+      const list = groups.get(k) ?? [];
+      groups.set(k, list);
+      const g = list.find((x) => Math.abs(c.timestamp - x.keeper.timestamp) <= within);
+      if (!g) {
+        list.push({ keeper: c, members: [c] });
+        continue;
+      }
+      g.members.push(c);
+      if (better(c, g.keeper)) g.keeper = c;
     }
-    if (best.get(twinKey(c))?.sha === c.sha) continue;
-    const keeper = best.get(twinKey(c))!;
-    (twins[keeper.sha] ??= []).push(c.sha);
-  }
-  return { commits: out, twins };
+    for (const list of groups.values()) {
+      for (const g of list) {
+        for (const m of g.members) {
+          if (m === g.keeper) continue;
+          dropped.add(m);
+          // A dropped copy hands the twins it had already collected to its keeper.
+          (twins[g.keeper.sha] ??= []).push(m.sha, ...(twins[m.sha] ?? []));
+          delete twins[m.sha];
+        }
+      }
+    }
+    return input.filter((c) => !dropped.has(c));
+  };
+  const exact = collapse(commits, twinKey, 0);
+  return { commits: collapse(exact, contentKey, CONTENT_TWIN_MS), twins };
 }

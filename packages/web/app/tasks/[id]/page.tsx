@@ -43,6 +43,7 @@ import { useOrgRoles } from "../../../hooks/useOrgRoles";
 import { useSyncOrgTreeFeeder } from "../../../hooks/useSyncOrgTree";
 import { TaskSessionList } from "../../../components/tasks/TaskSessionList";
 import { WorkUnitBar } from "../../../components/work/WorkUnitBar";
+import { ContextRail } from "../../../components/ContextRail";
 import { TaskWorkEmpty, TaskWorkPanel } from "../../../components/work/TaskWorkPanel";
 import { WatchButton } from "../../../components/WatchButton";
 import { Badge } from "../../../components/ui/badge";
@@ -749,7 +750,9 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
         {/* Task and its owning session, one unit: the same bar the session
             page draws (components/work/WorkUnitBar). */}
         {ownerSession && !isInline && (
-          <WorkUnitBar face="task" task={{ _id: data._id, short_id: data.short_id, title: data.title, status: data.status }} session={ownerSession} />
+          <ContextRail>
+            <WorkUnitBar face="task" task={{ _id: data._id, short_id: data.short_id, title: data.title, status: data.status }} session={ownerSession} />
+          </ContextRail>
         )}
         <div className="flex-1 overflow-y-auto">
         <div className="flex flex-col min-h-full">

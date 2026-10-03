@@ -19,9 +19,15 @@ import { useAuth } from "@/lib/auth";
 // door with the two answers. A guest is always named with "(guest)" (a
 // phone has no room for the web's badge), and Admit sends the name this card
 // showed, so somebody who renamed themselves since is asked about again
-// rather than let in unseen (admitGuest's `name`). A person who may not
+// rather than let in unseen (admitGuest's `name`). The card says whose link
+// brought them, and a link the room already turned somebody away from offers
+// to close with the answer, as the web's door does. A person who may not
 // answer the door (getRoomKnocks' can_answer) sees who is waiting and no
 // buttons. Teammates' knocks stay with the web's door, as before.
+//
+// Inside, a guest's face is pressable (useGuestRemover): somebody hosting
+// from a phone can put out a guest who should not be there, and close the
+// link they came in on.
 
 type GuestKnock = {
   from_user: string;
@@ -30,7 +36,41 @@ type GuestKnock = {
   kind?: "guest" | "person";
   guest_id?: string;
   can_answer?: boolean;
+  link_turned_away?: number;
+  link_by?: string;
+  link_mine?: boolean;
 };
+
+/** Whose link brought a guest, as the door says it. */
+function linkOf(k: GuestKnock): string | null {
+  if (!k.link_by) return null;
+  return k.link_mine ? "your link" : `${k.link_by.split(/\s+/)[0]}'s link`;
+}
+
+/** Put a guest out from a phone: the press on their face asks first, and
+ *  offers to close the link they came in on (somebody put out can open it
+ *  again in a private window and knock as somebody new). Null for a viewer
+ *  who could not (the same answer the web's remove button reads: whether
+ *  the room's link list answers them at all). */
+export function useGuestRemover(roomKey: string | null): ((guestId: string, name: string) => void) | null {
+  const { isAuthenticated } = useAuth();
+  const links = useQuery(api.callGuests.listGuestLinks, isAuthenticated && roomKey ? { room_key: roomKey } : "skip");
+  const remove = useMutation(api.callGuests.removeGuest);
+  if (!roomKey || !links) return null;
+  return (guestId, name) => {
+    const out = (revokeLink: boolean) => {
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      void remove({ guest_id: guestId, ...(revokeLink ? { revoke_link: true } : {}) }).catch((err: unknown) =>
+        Alert.alert("Couldn't remove them", humanizeConvexError(err, "Something went wrong")),
+      );
+    };
+    Alert.alert(`Remove ${name} (guest)?`, "They leave the call at once. Turning off their link also stops anyone new from using it.", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Remove", style: "destructive", onPress: () => out(false) },
+      { text: "Remove and turn off link", style: "destructive", onPress: () => out(true) },
+    ]);
+  };
+}
 
 export function GuestDoor({ roomKey }: { roomKey: string | null }) {
   const { isAuthenticated } = useAuth();
@@ -56,10 +96,13 @@ export function GuestDoor({ roomKey }: { roomKey: string | null }) {
 
   if (guests.length === 0) return null;
 
-  const answer = (k: GuestKnock, how: "admit" | "deny") => {
+  const answer = (k: GuestKnock, how: "admit" | "deny" | "deny_link") => {
     setBusy(k.guest_id!);
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    const run = how === "admit" ? admit({ guest_id: k.guest_id!, name: k.from_name }) : deny({ guest_id: k.guest_id! });
+    const run =
+      how === "admit"
+        ? admit({ guest_id: k.guest_id!, name: k.from_name })
+        : deny({ guest_id: k.guest_id!, ...(how === "deny_link" ? { revoke_link: true } : {}) });
     void run
       .catch((err: unknown) =>
         Alert.alert(how === "admit" ? "Couldn't let them in" : "Couldn't turn them away", humanizeConvexError(err, "Something went wrong")),
@@ -79,8 +122,23 @@ export function GuestDoor({ roomKey }: { roomKey: string | null }) {
                 {k.from_name} <Text style={styles.guest}>(guest)</Text>
               </Text>
               <Text style={styles.text}>
-                {canAnswer ? "Wants to join from a guest link" : "Waiting at the door. Someone in the call can let them in"}
+                {canAnswer
+                  ? `Wants to join from ${linkOf(k) ?? "a guest link"}`
+                  : "Waiting at the door. Someone in the call can let them in"}
               </Text>
+              {canAnswer && (k.link_turned_away ?? 0) >= 1 && (
+                <Pressable
+                  disabled={pending}
+                  onPress={() => answer(k, "deny_link")}
+                  hitSlop={6}
+                  style={({ pressed }) => [styles.linkBtn, (pressed || pending) && styles.pressed]}
+                  accessibilityLabel={`Turn ${k.from_name} away and turn the link off`}
+                >
+                  <Text style={styles.linkBtnText}>
+                    {k.link_turned_away} turned away from this link already · Deny and turn off link
+                  </Text>
+                </Pressable>
+              )}
             </View>
             {canAnswer && (
               <View style={styles.actions}>
@@ -133,5 +191,7 @@ const styles = StyleSheet.create({
   btnPrimary: { backgroundColor: Theme.yellow },
   btnText: { fontSize: 12, color: Theme.bgAlt },
   btnPrimaryText: { fontSize: 12, color: "#002b36" },
+  linkBtn: { marginTop: 4, alignSelf: "flex-start" },
+  linkBtnText: { fontSize: 11, color: Theme.red },
   pressed: { opacity: 0.6 },
 });

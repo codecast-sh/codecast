@@ -5,9 +5,13 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { formatSignalList, signalAddBody, type SignalRow } from "./signalCommand.js";
 
 describe("signalAddBody", () => {
-  test("the four typed fields are required and named when missing", () => {
-    expect(() => signalAddBody({ source: "sentry", kind: "bug" })).toThrow("--fingerprint, --title");
-    expect(() => signalAddBody({})).toThrow("--source, --kind, --fingerprint, --title");
+  test("source, kind and title are required and named when missing", () => {
+    expect(() => signalAddBody({ source: "sentry", kind: "bug" })).toThrow("needs --title");
+    expect(() => signalAddBody({})).toThrow("--source, --kind, --title");
+  });
+
+  test("a hand-filed signal without a fingerprint keys on its source and title", () => {
+    expect(signalAddBody({ source: "person", kind: "bug", title: "Checkout  Throws!" }).fingerprint).toBe("person:checkout-throws");
   });
 
   test("an unknown kind is refused with the list", () => {
@@ -96,7 +100,7 @@ describe("cast signal on the wire", () => {
   test("add without the required flags posts nothing", async () => {
     await expect(run("add", "--source", "person")).rejects.toThrow(/exit 1/);
     expect(calls).toHaveLength(0);
-    expect(logs.join("\n")).toContain("--kind, --fingerprint, --title");
+    expect(logs.join("\n")).toContain("--kind, --title");
   });
 
   test("ls --task reads one cause's signals; ls --source reads the workspace", async () => {

@@ -52,7 +52,7 @@ World px; x right, y down, z toward the viewer; `pos` is the surface centre. The
 | id | surface | size | pos | rot (x, y, z) | regions (px from top-left) |
 |---|---|---|---|---|---|
 | `desk` | the desktop app window | 1180x680 | (0, 0, 0) | 0, 0, 0 | `sidebar` 0,0 200x680; `list` 200,0 340x680; `header` 540,0 640x48; `transcript` 540,48 640x512 (bottom-anchored); `composer` 540,560 640x120; `side` 800,64 360x460 (overlay); `inset` 700,430 460x230 (overlay) |
-| `phone` | iPhone, mobile app in its dark theme | 300x620, radius 44, bezel | (860, 30, 180) | 0, -16, -2 | `main` 276x572 (the screen under the notch) |
+| `phone` | iPhone, mobile app in its light theme (its default) | 300x620, radius 44, bezel | (860, 30, 180) | 0, -16, -2 | `main` 276x572 (the screen under the notch) |
 | `pairA` | worker session, Webhook API half | 540x320 | (1500, -250, -100) | 0, -8, 0 | `header` 540x44; `transcript` 0,44 540x276 (bottom) |
 | `pairB` | worker session, Dashboard retry UI | 540x320 | (1560, 140, -20) | 0, -8, 0 | same as pairA |
 | `board` | tasks and plan | 1000x520 | (80, 900, -20) | 24, 0, 0 (tilted back like paper) | `main` |

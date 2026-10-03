@@ -1,17 +1,30 @@
 // Stable keys for stories and the hash that decides when prose is stale
 // (docs/proposals/changes-page.md 7.2). Convex's default runtime has no node
-// crypto, so both ride the FNV-1a the inbox digest already uses, run as two
-// chained lanes for a 64-bit value.
+// crypto, so both ride two 32-bit lanes for a 64-bit value: the FNV-1a the
+// inbox digest already uses, and a multiply-xorshift lane beside it.
 import { fnv1a32Update, FNV1A32_OFFSET } from "../contracts/inboxProjection";
+
+/**
+ * FNV-1a's multiply only carries upward, so its low bits are fixed by the
+ * low bits of the input (bit 0 is a parity of the characters). This lane folds
+ * high bits back down after every character, so a pair that collides in FNV
+ * has no structural reason to collide here too.
+ */
+function shiftLane(s: string): number {
+  let h = 0x9e3779b9;
+  for (let i = 0; i < s.length; i++) {
+    h = Math.imul(h ^ s.charCodeAt(i), 0x5bd1e995);
+    h ^= h >>> 15;
+  }
+  return h >>> 0;
+}
 
 /** 16 hex chars over the parts, joined with a separator no id contains. */
 export function hash64(parts: readonly string[]): string {
   const s = parts.join("\u001f");
   const a = fnv1a32Update(FNV1A32_OFFSET, s);
-  // The second lane continues from the first, so two strings that collide in
-  // lane A still diverge here unless they also collide from a different start.
-  const b = fnv1a32Update(a ^ 0x9e3779b9, s);
-  return (a >>> 0).toString(16).padStart(8, "0") + (b >>> 0).toString(16).padStart(8, "0");
+  const b = shiftLane(s);
+  return a.toString(16).padStart(8, "0") + b.toString(16).padStart(8, "0");
 }
 
 /**

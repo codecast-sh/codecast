@@ -16,7 +16,8 @@ import { surfaces } from '../registry';
 import { changedSince, dirtySurfaces, gitHead, mergeBase } from '../state';
 import { median, separate } from '../stats';
 import type { SurfaceMeta } from '../surface';
-import { majority, positiveNumber, runCheck, scoreOrZero } from './check';
+import { runCheck } from './check';
+import { majority, positiveNumber, scoreOrZero } from './verdict';
 import { pickSurfaces } from './stale';
 
 // `./evals line`: the line's eval station (design LE8). It names the surfaces

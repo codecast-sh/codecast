@@ -1,9 +1,10 @@
 import { test, expect, describe, mock } from "bun:test";
 
 import { closeDomWindow } from "../test-helpers/domGlobals";
-// DocEmbed resolves docs through convex/react's useQuery; tests run without a
-// Convex connection, so the hook is replaced before the component graph loads.
-// Any non-skip doc query resolves to FAKE_DOC.
+// DocEmbed resolves docs through useQueryNoThrow, whose transport is
+// convex/react's useQueries; tests run without a Convex connection, so the
+// hook is replaced before the component graph loads. Any doc query resolves to
+// the current doc (FAKE_DOC unless a test swaps it).
 const FAKE_DOC_ID = "s97cj9d9n7vrjs2jaan05q4tyx8avxjs";
 const FAKE_DOC = {
   _id: FAKE_DOC_ID,
@@ -20,13 +21,17 @@ const FAKE_DOC = {
 // the override leaks to any file sharing this test process, so a module-shaped
 // mock keeps those files working too.
 const convexReact = await import("convex/react");
+const { getFunctionName } = await import("convex/server");
+let currentDoc: unknown = FAKE_DOC;
 mock.module("convex/react", () => ({
   ...convexReact,
-  useQuery: (_fn: unknown, args: unknown) => (args === "skip" ? undefined : FAKE_DOC),
-  // useQueryNoThrow's transport. No subscription resolves here, which is the
-  // honest answer for resolveIdType without a backend: the pill falls back to
-  // its plain-text rendering, exactly as it does when the query is in flight.
-  useQueries: () => ({}),
+  useQuery: (_fn: unknown, args: unknown) => (args === "skip" ? undefined : currentDoc),
+  // useQueryNoThrow's transport. Only the doc lookup answers; nothing else
+  // resolves here, which is the honest answer for resolveIdType without a
+  // backend: the pill falls back to its plain-text rendering, exactly as it
+  // does when the query is in flight.
+  useQueries: (queries: Record<string, { query: any }>) =>
+    Object.fromEntries(Object.entries(queries).filter(([, q]) => getFunctionName(q.query) === "docs:webGet").map(([k]) => [k, currentDoc])),
   // A link preview card asks the server to read its page; nothing to read here.
   useMutation: () => async () => {},
 }));
@@ -170,15 +175,13 @@ describe("doc transclusion (![[doc:…]])", () => {
     // FAKE_DOC embeds itself: every doc query returns FAKE_DOC, so without the
     // depth cap this recurses forever and the test never completes.
     const selfRef = { ...FAKE_DOC, content: `self:\n\n![[doc:${FAKE_DOC_ID}]]` };
-    mock.module("convex/react", () => ({
-      useQuery: (_fn: unknown, args: unknown) => (args === "skip" ? undefined : selfRef),
-    }));
-    const html = render(`![[doc:${FAKE_DOC_ID}]]`);
-    expect(html).toContain("self:");
-    // Restore the default mock for any later tests.
-    mock.module("convex/react", () => ({
-      useQuery: (_fn: unknown, args: unknown) => (args === "skip" ? undefined : FAKE_DOC),
-    }));
+    currentDoc = selfRef;
+    try {
+      const html = render(`![[doc:${FAKE_DOC_ID}]]`);
+      expect(html).toContain("self:");
+    } finally {
+      currentDoc = FAKE_DOC;
+    }
   });
 
   test("plain doc: references still render as pills (no regression)", () => {

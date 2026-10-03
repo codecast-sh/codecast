@@ -32,6 +32,9 @@ export type FloatingBridge = {
   setDragging: (on: boolean) => void;
 };
 
+/** How far the cursor travels before a press on a face is a drag, not a click. */
+const DRAG_SLOP_PX = 4;
+
 export function useFloatingCircles(opts: {
   /** How big the window has to be, given whether the pointer is in it. Read
    *  through a ref, so only `shapeSig` and the hover decide when to re-ask. */
@@ -197,9 +200,19 @@ export function useFloatingCircles(opts: {
   );
 
   // ── Dragging a circle moves the window ──────────────────────────────────
+  //
+  // A face is both a button and a handle. A press that moved the window was a
+  // drag, and the click its release fires must not also pin the face's card:
+  // the window lands with a card hanging off it that nobody asked for. Moved
+  // means the cursor travelled on screen; the window follows it, so the
+  // client coordinates barely change and screen ones are the only measure.
+  const dragFrom = useRef<{ x: number; y: number } | null>(null);
+  const dragMoved = useRef(false);
   const startDrag = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0) return;
     dragging.current = true;
+    dragFrom.current = { x: e.screenX, y: e.screenY };
+    dragMoved.current = false;
     if (hideTimer.current) clearTimeout(hideTimer.current);
     hideTimer.current = null;
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -215,6 +228,11 @@ export function useFloatingCircles(opts: {
     if (!dragging.current) return;
     dragging.current = false;
     bridge.setDragging(false);
+    // The release's click comes in the same input task; a release that
+    // produced none must not leave the next real click swallowed.
+    setTimeout(() => {
+      dragMoved.current = false;
+    }, 0);
     if (pendingSize.current) {
       pendingSize.current = false;
       bridge.setContentSize(sizeForRef.current(true));
@@ -230,6 +248,24 @@ export function useFloatingCircles(opts: {
       finishDrag();
     },
     [finishDrag],
+  );
+  useEventListener("pointermove", (e: PointerEvent) => {
+    const from = dragFrom.current;
+    if (!dragging.current || !from || dragMoved.current) return;
+    if (Math.hypot(e.screenX - from.x, e.screenY - from.y) > DRAG_SLOP_PX) dragMoved.current = true;
+  }, document);
+  // Capture phase, ahead of the face's own handler: the click after a drag
+  // never reaches it.
+  useEventListener(
+    "click",
+    (e: Event) => {
+      if (!dragMoved.current) return;
+      dragMoved.current = false;
+      e.stopPropagation();
+      e.preventDefault();
+    },
+    document,
+    { capture: true },
   );
   useEventListener("pointerup", finishDrag, document);
   useEventListener("pointercancel", finishDrag, document);

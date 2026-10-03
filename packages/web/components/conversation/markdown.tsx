@@ -44,7 +44,17 @@ export const ReactMarkdown = memo(function ReactMarkdown(props: ReactMarkdownPro
     base.push([rehypeSearchHighlight, { terms }]);
     return base;
   }, [query, userPlugins]);
-  return <ReactMarkdownBase {...props} rehypePlugins={plugins} />;
+  // RevealHost: any object reference in the body (pill or card) can open its
+  // full page inline, as a full-bleed band under its block. It renders a
+  // fragment, so the blocks stay direct children of their container. Every
+  // body drawn through this wrapper hosts one, a card's (a trigger prompt, a
+  // message from another session) as much as a message's. Keyed by the body,
+  // so the band survives the virtualizer recycling the row.
+  return (
+    <RevealHost persistKey={typeof props.children === "string" ? props.children : undefined}>
+      <ReactMarkdownBase {...props} rehypePlugins={plugins} />
+    </RevealHost>
+  );
 });
 
 // Cross-mount markdown render cache. React.memo only helps while a component
@@ -133,18 +143,14 @@ export const MessageMarkdown = memo(function MessageMarkdown({ content, userText
   if (userText && !query && content.length > USER_PLAIN_TEXT_THRESHOLD) {
     return <div className="whitespace-pre-wrap break-words">{content}</div>;
   }
-  // RevealHost: any object reference in the body (pill or card) can open its
-  // full page inline, as a full-bleed band after the body's blocks. It renders
-  // a fragment, so the blocks stay direct children of the message content.
   if (query) {
     return (
-      <RevealHost persistKey={content}>
-        <ReactMarkdown remarkPlugins={userText ? USER_MD_REMARK : ASSISTANT_MD_REMARK} rehypePlugins={MESSAGE_MD_REHYPE} components={MESSAGE_MD_COMPONENTS}>
-          {content}
-        </ReactMarkdown>
-      </RevealHost>
+      <ReactMarkdown remarkPlugins={userText ? USER_MD_REMARK : ASSISTANT_MD_REMARK} rehypePlugins={MESSAGE_MD_REHYPE} components={MESSAGE_MD_COMPONENTS}>
+        {content}
+      </ReactMarkdown>
     );
   }
+  // The cached render bypasses the wrapper, so it mounts the host itself.
   return <RevealHost persistKey={content}>{renderMessageMarkdownCached(content, userText)}</RevealHost>;
 });
 

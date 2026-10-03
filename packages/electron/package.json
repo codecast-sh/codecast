@@ -45,6 +45,7 @@
       "browserPanes.js",
       "shareCursors.js",
       "spellMenu.js",
+      "editUndo.js",
       "shortcutSettings.js",
       "updaterNet.js",
       "preload.js",

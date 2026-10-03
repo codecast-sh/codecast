@@ -109,8 +109,8 @@ export function BulkSessionMenuItems({
   onClear,
 }: {
   sessions: InboxSession[];
-  onStash?: (id: string) => void;
-  onKill?: (id: string) => void;
+  onStash?: (ids: string[]) => void;
+  onKill?: (ids: string[]) => void;
   onClear?: () => void;
 }) {
   const n = sessions.length;
@@ -142,12 +142,12 @@ export function BulkSessionMenuItems({
       </CtxItem>
       <CtxSeparator />
       {onStash && (
-        <CtxItem icon={Archive} onSelect={() => { for (const s of sessions) onStash(s._id); onClear?.(); }}>
+        <CtxItem icon={Archive} onSelect={() => { onStash(sessions.map((s) => s._id)); onClear?.(); }}>
           Stash {n} sessions
         </CtxItem>
       )}
       {onKill && (
-        <CtxItem danger icon={Square} onSelect={() => { for (const s of sessions) onKill(s._id); onClear?.(); }}>
+        <CtxItem danger icon={Square} onSelect={() => { onKill(sessions.map((s) => s._id)); onClear?.(); }}>
           Kill {n} sessions
         </CtxItem>
       )}
@@ -177,8 +177,8 @@ export function InboxSelectionBar({
   onClear,
 }: {
   sessions: any[];
-  onStash?: (id: string) => void;
-  onKill?: (id: string) => void;
+  onStash?: (ids: string[]) => void;
+  onKill?: (ids: string[]) => void;
   onClear: () => void;
 }) {
   const n = sessions.length;
@@ -207,12 +207,12 @@ export function InboxSelectionBar({
           </DropdownMenuContent>
         </DropdownMenu>
         {onStash && (
-          <button type="button" className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-sol-text hover:bg-sol-bg-highlight" onClick={() => { for (const s of sessions) onStash(s._id); onClear(); }}>
+          <button type="button" className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-sol-text hover:bg-sol-bg-highlight" onClick={() => { onStash(sessions.map((s) => s._id)); onClear(); }}>
             <Archive className="h-3 w-3" /> Stash
           </button>
         )}
         {onKill && (
-          <button type="button" className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-sol-red hover:bg-sol-bg-highlight" onClick={() => { for (const s of sessions) onKill(s._id); onClear(); }}>
+          <button type="button" className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-sol-red hover:bg-sol-bg-highlight" onClick={() => { onKill(sessions.map((s) => s._id)); onClear(); }}>
             <Square className="h-3 w-3" /> Kill
           </button>
         )}

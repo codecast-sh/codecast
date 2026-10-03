@@ -13,7 +13,7 @@ import * as Haptics from "expo-haptics";
 import { Ionicons } from "@expo/vector-icons";
 import { useMutation, useQuery } from "convex/react";
 import { livekit } from "@/lib/calls/livekitNative";
-import { humanizeConvexError, isGuestParticipant } from "@codecast/shared/contracts";
+import { guestIdFromIdentity, humanizeConvexError, isGuestParticipant } from "@codecast/shared/contracts";
 
 // VideoTrack from the guarded native module: on a binary without the LiveKit
 // natives it is null and the stage renders avatars only (joinCall refuses to
@@ -40,7 +40,7 @@ import { RingBanner, useIncomingRing, type RingRow } from "@/components/calls/Ca
 import { LivePulse } from "@/components/calls/LiveRooms";
 import { acceptInvite, declineInvite } from "@/lib/calls/callManager";
 import { stopRinging } from "@/lib/calls/ringtone";
-import { GuestDoor } from "@/components/calls/GuestDoor";
+import { GuestDoor, useGuestRemover } from "@/components/calls/GuestDoor";
 import { useAuth } from "@/lib/auth";
 
 // The call stage, phone-shaped. The same design intents as the web stage,
@@ -118,6 +118,14 @@ export default function CallScreen() {
   const voices = call.participants.filter(
     (p) => !cameraRefs.some((c) => c.identity === p.identity),
   );
+
+  // A guest's face, pressed by somebody who may put them out, asks whether
+  // to (useGuestRemover); anyone else's face is not a button.
+  const removeGuest = useGuestRemover(call.roomKey);
+  const removeGuestOf = (identity: string) => {
+    const guestId = guestIdFromIdentity(identity);
+    return guestId && removeGuest ? (name: string) => removeGuest(guestId, name) : null;
+  };
 
   // A failed join is not a call: no controls, no captions — the reason, a
   // retry, and a way out. (The pill says "huddle failed" for the same phase.)
@@ -240,7 +248,13 @@ export default function CallScreen() {
             )}
             <View style={styles.avatarRow}>
               {call.participants.map((p) => (
-                <View key={p.identity} style={styles.avatarCol}>
+                <Pressable
+                  key={p.identity}
+                  style={styles.avatarCol}
+                  disabled={!removeGuestOf(p.identity)}
+                  onPress={() => removeGuestOf(p.identity)?.(firstName(p.name ?? ""))}
+                  accessibilityLabel={removeGuestOf(p.identity) ? `${participantName(p.identity, p.name)}: remove from the call` : undefined}
+                >
                   <View
                     style={[styles.bigAvatar, speaking.has(p.identity) && styles.speakingRing]}
                   >
@@ -258,7 +272,7 @@ export default function CallScreen() {
                       <Ionicons name="mic-off" size={11} color={Theme.textDim} />
                     )}
                   </View>
-                </View>
+                </Pressable>
               ))}
             </View>
           </View>
@@ -268,13 +282,15 @@ export default function CallScreen() {
         {(screenRef || cameraRefs.length > 0) && voices.length > 0 && (
           <View style={styles.voiceRow}>
             {voices.map((p) => (
-              <View
+              <Pressable
                 key={p.identity}
+                disabled={!removeGuestOf(p.identity)}
+                onPress={() => removeGuestOf(p.identity)?.(firstName(p.name ?? ""))}
                 style={[styles.voiceChip, speaking.has(p.identity) && styles.speakingBorder]}
               >
                 <Text style={styles.voiceChipText}>{p.isLocal ? "you" : participantName(p.identity, p.name)}</Text>
                 {p.micMuted && <Ionicons name="mic-off" size={10} color={Theme.textDim} />}
-              </View>
+              </Pressable>
             ))}
           </View>
         )}

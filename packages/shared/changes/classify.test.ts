@@ -4,6 +4,7 @@ import {
   commitArea,
   isRestamp,
   isRevert,
+  narrowAreas,
   parseConventional,
   parseRelease,
   splitMessage,
@@ -33,7 +34,7 @@ describe("summarizeFiles", () => {
       { filename: "packages/web/a.tsx", additions: 100, deletions: 20 },
       { filename: "packages/web/b.tsx", additions: 1, deletions: 0 },
     ]);
-    expect(s.areas).toEqual({ convex: { touches: 1, insertions: 4, deletions: 1 }, web: { touches: 2, insertions: 101, deletions: 20 } });
+    expect(s.areas).toEqual({ convex: { touches: 1, insertions: 4, deletions: 1, generated: 0 }, web: { touches: 2, insertions: 101, deletions: 20, generated: 0 } });
     expect(s.top_paths[0]).toBe("packages/web/a.tsx");
     expect(s.schema_paths).toEqual(["packages/convex/convex/schema.ts"]);
   });
@@ -96,3 +97,33 @@ describe("splitMessage", () => {
     expect(splitMessage("docs: y").body).toBe("");
   });
 });
+
+describe("narrowAreas", () => {
+  const touch = (n: number) => ({ touches: n, insertions: n, deletions: 0 });
+  const c = (areas: Record<string, number>, subareas: Record<string, number>) => ({
+    areas: Object.fromEntries(Object.entries(areas).map(([k, n]) => [k, touch(n)])),
+    subareas: Object.fromEntries(Object.entries(subareas).map(([k, n]) => [k, touch(n)])),
+  });
+  test("summarizeFiles records the folder under each area", () => {
+    const s = summarizeFiles([
+      { filename: "outreach/backend/src/a.ts", additions: 1, deletions: 0 },
+      { filename: "outreach/web/b.tsx", additions: 1, deletions: 0 },
+      { filename: "outreach/README.md", additions: 1, deletions: 0 },
+      { filename: "packages/web/c.ts", additions: 1, deletions: 0 },
+    ]);
+    expect(Object.keys(s.areas).sort()).toEqual(["outreach", "web"]);
+    expect(Object.keys(s.subareas).sort()).toEqual(["outreach", "outreach/backend", "outreach/web", "web"]);
+  });
+  test("a day held by one area reads by the folders under it; other areas and files at its root stay", () => {
+    const out = narrowAreas([c({ outreach: 9, github: 1 }, { "outreach/backend": 6, "outreach/web": 2, outreach: 1, github: 1 })]);
+    expect(Object.keys(out[0].areas).sort()).toEqual(["backend", "github", "outreach", "web"]);
+    expect(out[0].areas.backend.touches).toBe(6);
+  });
+  test("a day spread over areas, or one area with a single folder, is left as is", () => {
+    const spread = [c({ web: 5, cli: 5 }, { "web/a": 5, "cli/b": 5 })];
+    expect(narrowAreas(spread)).toEqual(spread);
+    const single = [c({ outreach: 10 }, { "outreach/backend": 10 })];
+    expect(narrowAreas(single)).toEqual(single);
+  });
+});
+

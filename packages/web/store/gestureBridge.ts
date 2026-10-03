@@ -88,6 +88,11 @@ export type GestureMessage =
   // server still has (killed, marked completed), so a receiver that also
   // dropped conversations[id] would blind itself to a live conversation.
   | { kind: "forget"; ids: string[]; scope?: "session-row" | "all"; ts: number }
+  // The way back from a forget: an undo put these rows back whole. A sibling
+  // that applied the forget holds excludes for them, which drop every later
+  // push of the row, so the message carries the rows themselves: the receiver
+  // lifts the excludes the forget planted and puts the rows back.
+  | { kind: "unforget"; rows: Array<{ id: string; sessions?: Record<string, unknown>; conversations?: Record<string, unknown> }>; ts: number }
   // A dispatch acknowledgement (sync-log-migration D8): the log positions the
   // sender's write landed at, keyed by the table-grouped patches it sent.
   // Sibling windows hold mirrored locks for the same write — planted by a
@@ -202,6 +207,9 @@ function isGestureMessage(data: unknown): data is Envelope {
     return Array.isArray(e.ids);
   }
   if (e.kind === "restore") return Array.isArray(e.ids);
+  if (e.kind === "unforget") {
+    return Array.isArray(e.rows) && e.rows.every((r) => r && typeof r === "object" && typeof r.id === "string");
+  }
   if (e.kind === "follow") return e.leaderId === null || typeof e.leaderId === "string";
   if (e.kind === "ack") {
     return !!e.patches && typeof e.patches === "object" && typeof e.sentAt === "number" &&

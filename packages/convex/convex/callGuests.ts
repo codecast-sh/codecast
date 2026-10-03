@@ -27,7 +27,13 @@
 //                                       where the huddle ends: calls.leaveRoom,
 //                                       the record's end, the next joinRoom,
 //                                       the guest's own beat, the minute sweep)
-//   the page goes quiet   -> left      (left_reason "lapsed", by the sweep)
+//   the page goes quiet   -> left      (left_reason "lapsed", by the sweep,
+//                                       once the media server no longer
+//                                       lists them; "not_joined" for a place
+//                                       nobody ever came into)
+//   requestJoin, soon     -> admitted  (a place let go that way, within
+//                                       GUEST_RESUME_MS of the same huddle,
+//                                       comes back without a knock)
 //
 // THE MEDIA SERVER IS MADE TO AGREE, never trusted to. Every one of those
 // endings goes through lib/callGuestAdmission, which writes the row and runs
@@ -41,20 +47,27 @@
 // expires or is revoked mid-meeting stops new knocks and closes the door on
 // people still waiting at it, and leaves the people already inside alone.
 // A link also lives on its creator's standing (linkUsable): a teammate who
-// leaves the team, or loses the room, takes their links with them.
+// leaves the team, or loses the room, takes their links with them, and a link
+// made from a seat in somebody else's huddle lives only as long as that
+// huddle (the seat was the whole of the creator's standing).
 // Removing someone is its own act (removeGuest), because revoking a link to
 // stop it spreading should not hang up on the client you are talking to.
 //
-// Presence is the seat lease (isGuestPresent, CALL_MEMBER_STALE_MS): the
-// guest's page beats while it is open, and an admitted guest the media server
-// still lists counts as seen too (noteGuestsInMedia), since a phone stops a
-// background page's timers long before it drops the call. A knock from a closed page drops off
-// the door within one window; an admitted guest whose page blinked stays
-// admitted and simply reconnects, since presence decides what the room shows
-// and the admission decides what the server allows. A page quiet for longer
-// than a blink (GUEST_ADMISSION_LAPSE_MS) ends the admission: an unseen
+// Presence is a lease (isGuestPresent): the guest's page beats while it is
+// open, and an admitted guest the media server still lists counts as seen too
+// (noteGuestsInMedia), since a phone stops a background page's timers long
+// before it drops the call. A knock from a closed page drops off the door
+// within a seat's window and is settled "lapsed" by the minute sweep; an
+// admitted guest whose page blinked stays admitted and listed, since the
+// admission's window is longer than a background tab's beat. A page quiet for
+// longer than that (GUEST_ADMISSION_LAPSE_MS) ends the admission: an unseen
 // guest is not left holding the media open.
-import { v } from "convex/values";
+//
+// A link anybody can hold is bounded everywhere it could cost the room: new
+// guests per minute, places at the door (per room and per link, checked by
+// one rule, doorHasRoom, on every way back to it), pushes to its creator (per
+// link), and the reads behind the door (by lease, never by history).
+import { ConvexError, v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import {
   action,
@@ -74,46 +87,55 @@ import {
   parseRoomKey,
   readRoomState,
 } from "./callRooms";
-import { liveTranscriptFor } from "./callChat";
+import { liveTranscriptFor, postEvent } from "./callChat";
+import { isRestricted } from "./chatAccess";
 import { huddleAlive } from "./transcripts";
 import { isTeamMember } from "./privacy";
 import { teamHasFeature } from "./teamFeatures";
 import { bucketTs } from "./presenceState";
 import { enqueuePush } from "./pushRouter";
 import { signLivekitJwt } from "./lib/livekitJwt";
-import { listParticipants, livekitConfigFromEnv, removeParticipant } from "./lib/livekitServer";
+import { listParticipants, livekitConfigFromEnv, putOutOfRoom } from "./lib/livekitServer";
 import { sha256Hex } from "./lib/hash";
 import { newSlug } from "./lib/slug";
 import { isRoomRecording } from "./lib/callRecordingRuns";
 import { personImage, publicPersonLabel, teammateLabel } from "./lib/personLabel";
 import {
   GUEST_ROSTER_TAIL_MS,
+  GUEST_SETTLED_WATCH_MS,
   checkGuestRoster,
   endGuestAdmissions,
   noteGuestAttendance,
+  roomGuestRows,
   settleGuest,
+  settleGuests,
 } from "./lib/callGuestAdmission";
 import {
   CALL_GUEST_WAITING_PUSH_TYPE,
   GUEST_ADMISSION_LAPSE_MS,
+  GUEST_CREATOR_NOTICE_ANY_LINK_MS,
   GUEST_CREATOR_NOTICE_MS,
   GUEST_DENY_COOLDOWN_MS,
+  GUEST_JOIN_REFUSAL_TEXT,
   GUEST_KNOCKS_PER_LINK_PER_MINUTE,
   GUEST_LINK_REFUSAL_TEXT,
   GUEST_LINK_MAX_TTL_MS,
   GUEST_LINK_MIN_TTL_MS,
   GUEST_LINK_TTL_MS,
   GUEST_REKNOCK_MIN_MS,
+  GUEST_RESUME_MS,
   GUEST_TOKEN_TTL_S,
   MAX_ROOM_GUESTS,
   MAX_WAITING_GUESTS,
   MAX_WAITING_PER_LINK,
+  guestDisplayName,
   guestIdentity,
   guestJoinPath,
   isGuestIdentity,
   isGuestPresent,
   normalizeGuestName,
   type CallGuestView,
+  type GuestJoinRefusal,
   type GuestLinkRefusal,
 } from "@codecast/shared/contracts";
 
@@ -124,16 +146,6 @@ const GUEST_SECRET_LENGTH = 32;
 
 // ── Pure rules (exported for tests) ───────────────────────────────────────
 
-/** Has this link neither expired nor been turned off? */
-export function linkOpen(link: Pick<Doc<"call_guest_links">, "revoked_at" | "expires_at">, now: number): boolean {
-  return !link.revoked_at && now < link.expires_at;
-}
-
-/** Every reason a link turns a guest away. The first three are the link's
- *  own; `unavailable` is the team (calls switched off), `inviter_gone` is the
- *  person whose standing the link lived on (linkUsable). */
-export type LinkRefusal = GuestLinkRefusal;
-
 /** Why a link refuses, by its own fields alone, or null. */
 export function linkRefusal(
   link: Pick<Doc<"call_guest_links">, "revoked_at" | "expires_at"> | null,
@@ -143,6 +155,11 @@ export function linkRefusal(
   if (link.revoked_at) return "revoked";
   if (now >= link.expires_at) return "expired";
   return null;
+}
+
+/** Has this link neither expired nor been turned off? */
+export function linkOpen(link: Pick<Doc<"call_guest_links">, "revoked_at" | "expires_at">, now: number): boolean {
+  return linkRefusal(link, now) === null;
 }
 
 /** The ttl a creator asked for, held inside the allowed range. */
@@ -169,6 +186,51 @@ export function guestView(
       return row.status;
   }
 }
+
+/** A guest whose place in a running huddle was let go without anybody
+ *  deciding it (their page went quiet, or they never came in from the lobby)
+ *  and who may walk back in without knocking (GUEST_RESUME_MS). Only a place
+ *  somebody granted (decided_by: a knock abandoned at the door never was),
+ *  and only into the huddle it was granted for: somebody seated now was
+ *  already seated when the place went. A huddle that ended and started again
+ *  has only newer seats, so a guest from that meeting knocks on this one
+ *  like anyone (and so does one whose whole room changed seats meanwhile,
+ *  which is the safe way to be wrong). */
+async function guestResumable(ctx: any, guest: Doc<"call_guests">, now: number): Promise<boolean> {
+  if (guest.status !== "left" || (guest.left_reason !== "lapsed" && guest.left_reason !== "not_joined")) return false;
+  const since = guest.settled_at;
+  if (!guest.decided_by || !since || now - since >= GUEST_RESUME_MS) return false;
+  const seats: Doc<"call_members">[] = await ctx.db
+    .query("call_members")
+    .withIndex("by_room", (q: any) => q.eq("room_key", guest.room_key))
+    .collect();
+  return liveMembers(seats, now).some((m) => m.joined_at <= since);
+}
+
+/** Why an admitted guest's place is let go when nobody decided it: a page
+ *  that was in the media and went quiet "lapsed"; one that never came in
+ *  (held at the lobby, a permission prompt left open) "not_joined". */
+function quietReason(guest: Pick<Doc<"call_guests">, "media_seen_at">): "lapsed" | "not_joined" {
+  return guest.media_seen_at ? "lapsed" : "not_joined";
+}
+
+/** May one more guest from this link take a place at the door? The room's
+ *  places and this link's share of them, so a link that got out cannot keep
+ *  out the guests arriving on another. One rule for every way onto the door:
+ *  a first knock, a knock from a row that was elsewhere, and a page coming
+ *  back after a lapse (guestHeartbeat). `guestId` is the row asking, which
+ *  never counts against itself. */
+export function doorHasRoom(
+  waiting: ReadonlyArray<{ guest: Pick<Doc<"call_guests">, "_id">; link: Pick<Doc<"call_guest_links">, "_id"> }>,
+  linkId: Id<"call_guest_links">,
+  guestId?: Id<"call_guests">,
+): boolean {
+  const others = waiting.filter((w) => String(w.guest._id) !== String(guestId));
+  if (others.length >= MAX_WAITING_GUESTS) return false;
+  return others.filter((w) => String(w.link._id) === String(linkId)).length < MAX_WAITING_PER_LINK;
+}
+
+const DOOR_FULL_TEXT = "Too many people are waiting to join. Try again in a minute.";
 
 /** Whether `secret` is the one this row was minted with. Shape checked first
  *  so a junk argument never reaches the hash. */
@@ -202,11 +264,17 @@ export async function guestBySecret(
 /** Does the person who made this link still stand where they stood when they
  *  made it? A link is their vouching for strangers, so it is only as good as
  *  they are: one of the room's own people must still be one (a channel they
- *  left, a session gone private), and a teammate who made it from a seat in
- *  somebody's huddle must still be on the team. The same walls every grant
- *  in callRooms dies at. */
-async function creatorStillVouches(ctx: any, link: Doc<"call_guest_links">): Promise<boolean> {
-  if (link.created_via === "seat") return await isTeamMember(ctx, link.created_by, link.team_id);
+ *  left, a session gone private). A teammate who made it from a SEAT in
+ *  somebody's people or session huddle stood there only while that huddle
+ *  ran, the way an accepted ring is a grant for one huddle
+ *  (callRooms.expireRoomGrants, which also turns such links off when the
+ *  room's next huddle starts): the link works while the huddle runs and they
+ *  are still on the team, and answers "inviter_gone" from then on, so a room
+ *  they were let into once does not keep a door for strangers. */
+async function creatorStillVouches(ctx: any, link: Doc<"call_guest_links">, now: number): Promise<boolean> {
+  if (link.created_via === "seat") {
+    return (await isTeamMember(ctx, link.created_by, link.team_id)) && (await huddleAlive(ctx, link.room_key, now));
+  }
   return (await authorizeRoomNoGrant(ctx, link.created_by, link.room_key)).ok;
 }
 
@@ -218,29 +286,19 @@ export async function linkUsable(
   ctx: any,
   link: Doc<"call_guest_links"> | null,
   now: number,
-): Promise<LinkRefusal | null> {
+): Promise<GuestLinkRefusal | null> {
   const own = linkRefusal(link, now);
   if (own || !link) return own ?? "not_found";
   if (!(await teamHasFeature(ctx, link.team_id, "calls"))) return "unavailable";
-  if (!(await creatorStillVouches(ctx, link))) return "inviter_gone";
+  if (!(await creatorStillVouches(ctx, link, now))) return "inviter_gone";
   return null;
 }
 
-/** A room's guests in one status, sorted by id so a subscription that
- *  carries them stays byte-stable between beats. */
-async function guestRows(ctx: any, roomKey: string, status: "waiting" | "admitted"): Promise<Doc<"call_guests">[]> {
-  const rows: Doc<"call_guests">[] = await ctx.db
-    .query("call_guests")
-    .withIndex("by_room_status", (q: any) => q.eq("room_key", roomKey).eq("status", status))
-    .collect();
-  return rows.sort((a, b) => String(a._id).localeCompare(String(b._id)));
-}
-
-/** The guests inside the room right now, each present by its lease. What the
- *  room lists; the cap on guests counts admissions instead (guestRows), so a
- *  guest whose page went quiet still holds their place until they are out. */
+/** The guests inside the room right now, present by the admission's window
+ *  (isGuestPresent): what the room lists, and what the cap on guests counts.
+ *  A guest past that window is one the sweep is putting out. */
 export async function admittedGuests(ctx: any, roomKey: string, now: number): Promise<Doc<"call_guests">[]> {
-  return (await guestRows(ctx, roomKey, "admitted")).filter((g) => isGuestPresent(g, now));
+  return (await roomGuestRows(ctx, roomKey, "admitted", now)).filter((g) => isGuestPresent(g, now));
 }
 
 /** The guests at the door right now: present by their lease, on a link that
@@ -252,7 +310,7 @@ async function waitingGuests(
 ): Promise<Array<{ guest: Doc<"call_guests">; link: Doc<"call_guest_links"> }>> {
   const links = new Map<string, Doc<"call_guest_links"> | null>();
   const out: Array<{ guest: Doc<"call_guests">; link: Doc<"call_guest_links"> }> = [];
-  for (const guest of await guestRows(ctx, roomKey, "waiting")) {
+  for (const guest of await roomGuestRows(ctx, roomKey, "waiting", now)) {
     if (!isGuestPresent(guest, now)) continue;
     const key = String(guest.link_id);
     if (!links.has(key)) {
@@ -272,20 +330,19 @@ async function waitingGuests(
  *  ring and no team to be rung into. `created_at` is their latest knock for
  *  the same reason a teammate's is (RoomDoor's re-knock signature), and moves
  *  when they change the name they are asking under. `link_turned_away`
- *  counts the people already denied or removed from the same link: past one,
- *  the door offers to turn the link off rather than keep answering it. */
-export async function guestKnocks(ctx: any, roomKey: string, now: number, canAnswer: boolean) {
-  const turnedAway = new Map<string, number>();
+ *  counts the times the room already denied or removed somebody from the
+ *  same link (the link's own counter): past one, the door offers to turn the
+ *  link off rather than keep answering it. `link_by` names whose link
+ *  brought them (`link_mine` when it is the viewer's own): whoever answers is
+ *  deciding whether a stranger hears the meeting, and with several links
+ *  open, "via Sam's link" is how an expected guest is told from a leaked
+ *  link. A teammate's name as teammates see it; it moves only with the link. */
+export async function guestKnocks(ctx: any, roomKey: string, now: number, viewer: { canAnswer: boolean; userId: Id<"users"> }) {
+  const creators = new Map<string, string>();
   const out = [];
   for (const { guest, link } of await waitingGuests(ctx, roomKey, now)) {
-    const key = String(link._id);
-    if (!turnedAway.has(key)) {
-      const onLink: Doc<"call_guests">[] = await ctx.db
-        .query("call_guests")
-        .withIndex("by_link", (q: any) => q.eq("link_id", link._id))
-        .collect();
-      turnedAway.set(key, onLink.filter((g) => g.status === "denied" || g.status === "removed").length);
-    }
+    const by = String(link.created_by);
+    if (!creators.has(by)) creators.set(by, teammateLabel(await ctx.db.get(link.created_by)));
     out.push({
       from_user: guestIdentity(String(guest._id)),
       from_name: guest.name,
@@ -293,9 +350,11 @@ export async function guestKnocks(ctx: any, roomKey: string, now: number, canAns
       created_at: guest.knocked_at,
       kind: "guest" as const,
       guest_id: String(guest._id),
-      link_id: key,
-      link_turned_away: turnedAway.get(key)!,
-      can_answer: canAnswer,
+      link_id: String(link._id),
+      link_turned_away: link.turned_away ?? 0,
+      link_by: creators.get(by)!,
+      link_mine: by === String(viewer.userId),
+      can_answer: viewer.canAnswer,
     });
   }
   return out;
@@ -324,23 +383,25 @@ async function roomNotice(ctx: any, roomKey: string): Promise<{ transcribed: boo
 }
 
 /** The name the guest's page gives the meeting, which also travels in every
- *  unfurl of the link (bot-meta caches it). A channel reads as its name,
- *  which the team chose to show as a place to meet. A session's title is
- *  the agent work's own label ("fix the auth race in prod"), written for the
- *  team and never for a stranger, so a session room is named the way a
- *  people room is: after whoever invited them (the page's meetingTitle). */
+ *  unfurl of the link (bot-meta caches it). A channel the whole team can see
+ *  reads as its name, which the team chose to show as a place to meet. A
+ *  private channel's name is a fact about who is in it ("#layoffs-q4"), and
+ *  a session's title is the agent work's own label ("fix the auth race in
+ *  prod"), both written for the team and never for a stranger, so those
+ *  rooms are named the way a people room is: after whoever invited them
+ *  (the page's meetingTitle). */
 export async function linkTitle(ctx: any, link: Pick<Doc<"call_guest_links">, "room_key">): Promise<string | null> {
   const parsed = parseRoomKey(link.room_key);
   if (parsed?.kind === "channel") {
-    const channel = await ctx.db.get(parsed.channelId as Id<"chat_channels">);
-    return channel?.name ? `#${channel.name}` : null;
+    const channel: Doc<"chat_channels"> | null = await ctx.db.get(parsed.channelId as Id<"chat_channels">);
+    return channel?.name && !isRestricted(channel) ? `#${channel.name}` : null;
   }
   return null;
 }
 
 /** Who sent the link, as somebody outside the team may see them: a name,
  *  never an address (the link travels; personLabel says why). */
-async function inviterOf(ctx: any, link: Doc<"call_guest_links">) {
+async function inviterOf(ctx: any, link: Pick<Doc<"call_guest_links">, "created_by">) {
   const u = await ctx.db.get(link.created_by);
   return { name: publicPersonLabel(u), image: personImage(u) };
 }
@@ -353,13 +414,9 @@ async function linkByToken(ctx: any, token: string): Promise<Doc<"call_guest_lin
     .unique();
 }
 
-/** What the guest's page says for each refusal (shared with the page, which
- *  shows the same words for a link it describes). */
-const LINK_REFUSAL_TEXT = GUEST_LINK_REFUSAL_TEXT;
-
 /** The same refusals as the room hears them, when somebody tries to let in a
  *  guest whose link stopped working while they waited. */
-const LINK_REFUSAL_FOR_ROOM: Record<LinkRefusal, string> = {
+const LINK_REFUSAL_FOR_ROOM: Record<GuestLinkRefusal, string> = {
   not_found: "That guest's link no longer exists",
   revoked: "That guest's link was turned off",
   expired: "That guest's link expired",
@@ -375,23 +432,27 @@ async function requireUser(ctx: any): Promise<Id<"users">> {
   return userId;
 }
 
-/** The caller is inside the guest's room right now, with the authority to
- *  widen it. Seated is what answering a door takes (the person knocking asks
- *  the meeting, not the room's owner); the inviter rule on top keeps a
- *  channel room's own wall, as it does for ringing a teammate in. The door
- *  learns the same answer up front (getRoomKnocks' `can_answer`). */
-async function requireDoorkeeper(ctx: any, userId: Id<"users">, roomKey: string, now: number) {
-  const seat = await liveSeat(ctx, userId, roomKey, now);
-  if (!seat) throw new Error("Only someone in the huddle can do that");
-  const auth = await authorizeRoomInviter(ctx, userId, roomKey);
-  if (!auth.ok) throw new Error(`Cannot answer the door: ${auth.reason}`);
-  return seat;
-}
+const NOT_A_DOORKEEPER = "Only someone in the huddle can do that";
 
-async function guestForRoom(ctx: any, guestId: string): Promise<Doc<"call_guests">> {
-  const row = await guestRow(ctx, guestId);
-  if (!row) throw new Error("Guest not found");
-  return row;
+/** The guest this caller may answer for: the caller is inside the guest's
+ *  room right now, with the authority to widen it. Seated is what answering a
+ *  door takes (the person knocking asks the meeting, not the room's owner);
+ *  the inviter rule on top keeps a channel room's own wall, as it does for
+ *  ringing a teammate in. The door learns the same answer up front
+ *  (getRoomKnocks' `can_answer`). A guest id that names nothing answers the
+ *  same as a guest in a room the caller is not in, so the room's mutations
+ *  are no way to learn which guest ids exist. */
+async function guestForDoorkeeper(
+  ctx: any,
+  userId: Id<"users">,
+  guestId: string,
+  now: number,
+): Promise<Doc<"call_guests">> {
+  const guest = await guestRow(ctx, guestId);
+  if (!guest || !(await liveSeat(ctx, userId, guest.room_key, now))) throw new Error(NOT_A_DOORKEEPER);
+  const auth = await authorizeRoomInviter(ctx, userId, guest.room_key);
+  if (!auth.ok) throw new Error(`Cannot answer the door: ${auth.reason}`);
+  return guest;
 }
 
 /** Turn a link off, once. */
@@ -461,36 +522,53 @@ export const listGuestLinks = query({
         .withIndex("by_room", (q) => q.eq("room_key", args.room_key))
         .collect()
     ).filter((l) => linkOpen(l, now));
-    // What the guest's page and the link's unfurl call the meeting (null:
-    // named after whoever invited them), so the panel can say what travels
-    // with the link before anybody sends it.
-    const title = await linkTitle(ctx, { room_key: args.room_key });
+    // Counts of the guests present now, from the room's own lease-bounded
+    // reads (never every row a link ever made), tallied per link.
+    const tally = new Map<string, { waiting: number; admitted: number }>();
+    const count = (linkId: Id<"call_guest_links">, k: "waiting" | "admitted") => {
+      const t = tally.get(String(linkId)) ?? { waiting: 0, admitted: 0 };
+      t[k]++;
+      tally.set(String(linkId), t);
+    };
+    for (const g of await roomGuestRows(ctx, args.room_key, "waiting", now)) if (isGuestPresent(g, now)) count(g.link_id, "waiting");
+    for (const g of await admittedGuests(ctx, args.room_key, now)) count(g.link_id, "admitted");
     const out = [];
     for (const l of links.sort((a, b) => b.created_at - a.created_at)) {
-      const guests = (
-        await ctx.db
-          .query("call_guests")
-          .withIndex("by_link", (q) => q.eq("link_id", l._id))
-          .collect()
-      ).filter((g) => isGuestPresent(g, now));
+      const creator = await ctx.db.get(l.created_by);
       out.push({
         link_id: l._id,
         token: l.token,
         path: guestJoinPath(l.token),
         created_by: String(l.created_by),
-        created_by_name: teammateLabel(await ctx.db.get(l.created_by)),
-        // The creator as the guest sees them, for the panel's "guests will
-        // see" line (a link of someone else's names them, not the viewer).
-        created_by_public: publicPersonLabel(await ctx.db.get(l.created_by)),
-        title,
+        created_by_name: teammateLabel(creator),
         mine: String(l.created_by) === String(userId),
         created_at: l.created_at,
         expires_at: l.expires_at,
-        waiting: guests.filter((g) => g.status === "waiting").length,
-        admitted: guests.filter((g) => g.status === "admitted").length,
+        waiting: tally.get(String(l._id))?.waiting ?? 0,
+        admitted: tally.get(String(l._id))?.admitted ?? 0,
       });
     }
     return out;
+  },
+});
+
+/** How a guest will see this call on a link the viewer makes: the meeting's
+ *  name and who invited them, from the same two functions the guest's page
+ *  and the link's unfurl use (linkTitle, inviterOf), so the invite panel
+ *  never says one thing while the link carries another (a private channel's
+ *  name stays inside, and a viewer with no name is "A teammate"). Answered
+ *  before any link exists, which is when it matters: the person is about to
+ *  decide what to send. Null for anyone who could not make a link here. */
+export const guestLinkPreview = query({
+  args: { room_key: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    if (!(await authorizeRoomInviter(ctx, userId, args.room_key)).ok) return null;
+    return {
+      title: await linkTitle(ctx, { room_key: args.room_key }),
+      inviter: (await inviterOf(ctx, { created_by: userId })).name,
+    };
   },
 });
 
@@ -520,8 +598,7 @@ export const admitGuest = mutation({
   handler: async (ctx, args) => {
     const userId = await requireUser(ctx);
     const now = Date.now();
-    const guest = await guestForRoom(ctx, args.guest_id);
-    await requireDoorkeeper(ctx, userId, guest.room_key, now);
+    const guest = await guestForDoorkeeper(ctx, userId, args.guest_id, now);
     if (guest.status === "admitted") return { status: "admitted" as const };
     if (guest.status !== "waiting" || !isGuestPresent(guest, now)) {
       throw new Error(`${guest.name} is no longer at the door`);
@@ -533,13 +610,14 @@ export const admitGuest = mutation({
     if (refusal) throw new Error(LINK_REFUSAL_FOR_ROOM[refusal]);
     // Admissions, not presence: a guest whose page went quiet still holds a
     // place until the sweep puts them out, so the cap cannot be slipped by
-    // letting pages lapse.
-    if ((await guestRows(ctx, guest.room_key, "admitted")).length >= MAX_ROOM_GUESTS) {
+    // letting pages lapse. The cap itself is what bounds this read.
+    if ((await roomGuestRows(ctx, guest.room_key, "admitted", now, { all: true })).length >= MAX_ROOM_GUESTS) {
       throw new Error(`A huddle holds at most ${MAX_ROOM_GUESTS} guests at once`);
     }
-    await ctx.db.patch(guest._id, { status: "admitted", decided_by: userId, decided_at: now });
+    await ctx.db.patch(guest._id, { status: "admitted", decided_by: userId, decided_at: now, media_seen_at: undefined });
     const live = await liveTranscriptFor(ctx, guest.room_key);
     if (live) await noteGuestAttendance(ctx, guest, live._id, now);
+    await tellRoom(ctx, guest, userId, "guest_admitted");
     return { status: "admitted" as const };
   },
 });
@@ -552,11 +630,11 @@ export const denyGuest = mutation({
   handler: async (ctx, args) => {
     const userId = await requireUser(ctx);
     const now = Date.now();
-    const guest = await guestForRoom(ctx, args.guest_id);
-    await requireDoorkeeper(ctx, userId, guest.room_key, now);
+    const guest = await guestForDoorkeeper(ctx, userId, args.guest_id, now);
     if (args.revoke_link) await revokeLinkOf(ctx, guest, userId, now);
     if (guest.status !== "waiting") return { status: guest.status };
-    await ctx.db.patch(guest._id, { status: "denied", decided_by: userId, decided_at: now });
+    await settleGuest(ctx, guest, { status: "denied", decided_by: userId, decided_at: now });
+    await countTurnedAway(ctx, guest);
     return { status: "denied" as const };
   },
 });
@@ -571,19 +649,41 @@ export const removeGuest = mutation({
   handler: async (ctx, args) => {
     const userId = await requireUser(ctx);
     const now = Date.now();
-    const guest = await guestForRoom(ctx, args.guest_id);
-    await requireDoorkeeper(ctx, userId, guest.room_key, now);
+    const guest = await guestForDoorkeeper(ctx, userId, args.guest_id, now);
     if (args.revoke_link) await revokeLinkOf(ctx, guest, userId, now);
     // Already removed: that removal's roster check is still running its tail.
     if (guest.status === "removed") return { status: "removed" as const };
     await settleGuest(ctx, guest, { status: "removed", decided_by: userId, decided_at: now });
+    await countTurnedAway(ctx, guest);
+    await tellRoom(ctx, guest, userId, "guest_removed");
     return { status: "removed" as const };
   },
 });
 
+/** A line in the room's thread for letting a stranger in or putting one out.
+ *  The door is a moment only the people looking at it see; the thread is
+ *  what everyone else reads later, and who opened the room to an outsider is
+ *  a fact the room should keep. Turning a knock away is not written: nobody
+ *  came in, and a denied stranger is no news to the meeting. */
+async function tellRoom(
+  ctx: any,
+  guest: Doc<"call_guests">,
+  userId: Id<"users">,
+  event: "guest_admitted" | "guest_removed",
+): Promise<void> {
+  await postEvent(ctx, { room_key: guest.room_key, team_id: guest.team_id, user_id: userId, event, guest_name: guest.name });
+}
+
 async function revokeLinkOf(ctx: any, guest: Doc<"call_guests">, userId: Id<"users">, now: number): Promise<void> {
   const link: Doc<"call_guest_links"> | null = await ctx.db.get(guest.link_id);
   if (link) await revokeLink(ctx, link, userId, now);
+}
+
+/** One more person the room turned away or put out from this guest's link
+ *  (guestKnocks' `link_turned_away`). */
+async function countTurnedAway(ctx: any, guest: Doc<"call_guests">): Promise<void> {
+  const link: Doc<"call_guest_links"> | null = await ctx.db.get(guest.link_id);
+  if (link) await ctx.db.patch(link._id, { turned_away: (link.turned_away ?? 0) + 1 });
 }
 
 // ── The guest's side (no account) ──────────────────────────────────────────
@@ -609,18 +709,32 @@ export const describeGuestLink = query({
   },
 });
 
+/** How a guest is named on somebody's lock screen. Marked as a guest, like
+ *  everywhere the room reads names, and never a link or an address: the
+ *  name is whatever a stranger typed, and a push is no place to carry one. */
+export function guestPushName(name: string): string {
+  // normalizeGuestName already took the colon out of "https://", so the
+  // scheme is matched as a word.
+  return /(\bhttps?\b|www\.|@|\b[\w-]+\.[a-z]{2,}\b)/i.test(name) ? "A guest" : guestDisplayName(name);
+}
+
 /** Tell the link's creator that somebody is at the door of a room nobody is
  *  in. A guest is usually sent the link ahead of the meeting, so the common
  *  case is a guest arriving first, at a door nobody can see; inside a running
- *  huddle the door itself shows them. Once per arrival, and not again for
- *  GUEST_CREATOR_NOTICE_MS. Returns the stamp to store, or undefined. */
+ *  huddle the door itself shows them. At most one push per link per
+ *  GUEST_CREATOR_NOTICE_MS, however many people arrive on it (a link anybody
+ *  can hold must not become a way to page its creator), naming everybody
+ *  waiting on it when there is more than one, and at most one per
+ *  GUEST_CREATOR_NOTICE_ANY_LINK_MS across every link that person made, so
+ *  several links getting out do not multiply it. Returns the stamp to store on
+ *  the guest's row, the push that covers them (sent now or within the
+ *  window), or undefined when nobody was told. */
 async function tellCreatorIfAlone(
   ctx: any,
   link: Doc<"call_guest_links">,
-  guest: { name: string; creator_told_at?: number },
+  guest: { _id?: Id<"call_guests">; name: string },
   now: number,
 ): Promise<number | undefined> {
-  if (guest.creator_told_at && now - guest.creator_told_at < GUEST_CREATOR_NOTICE_MS) return undefined;
   const seats: Doc<"call_members">[] = await ctx.db
     .query("call_members")
     .withIndex("by_room", (q: any) => q.eq("room_key", link.room_key))
@@ -631,14 +745,28 @@ async function tellCreatorIfAlone(
   // stamp is what the guest's page reads as "we let them know": no phone, no
   // stamp, and the page says only that someone can let them in.
   if (!creator?.push_token || !creator.notifications_enabled) return undefined;
+  if (link.creator_told_at && now - link.creator_told_at < GUEST_CREATOR_NOTICE_MS) return link.creator_told_at;
+  // A push about another room's door does not cover this guest, so nobody is
+  // claimed to have been told: their page says only that someone can let
+  // them in, and the next arrival past the window sends word.
+  const since = now - GUEST_CREATOR_NOTICE_ANY_LINK_MS;
+  const toldLately: Doc<"call_guest_links">[] = await ctx.db
+    .query("call_guest_links")
+    .withIndex("by_creator_told", (q: any) => q.eq("created_by", link.created_by).gt("creator_told_at", since))
+    .collect();
+  if (toldLately.some((l) => (l.creator_told_at ?? 0) > since)) return undefined;
+  const others = (await waitingGuests(ctx, link.room_key, now)).filter(
+    (w) => String(w.link._id) === String(link._id) && String(w.guest._id) !== String(guest._id),
+  );
   const title = await linkTitle(ctx, link);
   await enqueuePush(ctx, {
     user: creator,
     type: CALL_GUEST_WAITING_PUSH_TYPE,
-    title: `${guest.name} is waiting to join`,
+    title: others.length > 0 ? `${others.length + 1} guests are waiting to join` : `${guestPushName(guest.name)} is waiting to join`,
     body: `They opened your guest link${title ? ` to ${title}` : ""}. Join the huddle to let them in.`,
     data: { type: CALL_GUEST_WAITING_PUSH_TYPE, room_key: link.room_key },
   });
+  await ctx.db.patch(link._id, { creator_told_at: now });
   return now;
 }
 
@@ -661,7 +789,7 @@ export const requestJoin = mutation({
     const now = Date.now();
     const link = await linkByToken(ctx, args.token);
     const refusal = await linkUsable(ctx, link, now);
-    if (refusal || !link) throw new Error(LINK_REFUSAL_TEXT[refusal ?? "not_found"]);
+    if (refusal || !link) throw new Error(GUEST_LINK_REFUSAL_TEXT[refusal ?? "not_found"]);
     const name = normalizeGuestName(args.name);
     if (!name) throw new Error("Type the name the room should see");
 
@@ -671,10 +799,6 @@ export const requestJoin = mutation({
     // an old guest id, and this knock starts fresh on the link it came in by.
     const mine = prior && String(prior.link_id) === String(link._id) ? prior : null;
     const waiting = await waitingGuests(ctx, link.room_key, now);
-    // The waiting places: the room's, and this link's share of them, so a
-    // link that got out cannot keep out the guests arriving on another.
-    const roomFull = waiting.length >= MAX_WAITING_GUESTS;
-    const linkFull = waiting.filter((w) => String(w.link._id) === String(link._id)).length >= MAX_WAITING_PER_LINK;
 
     if (mine) {
       if (mine.status === "removed") throw new Error("You were removed from this call");
@@ -682,13 +806,21 @@ export const requestJoin = mutation({
         await ctx.db.patch(mine._id, { last_seen: now });
         return { guest_id: String(mine._id), secret: null, status: "admitted" as const };
       }
+      // Back from a blink the room never decided on (a phone that slept, a
+      // lobby left open too long): the same place again, no knock, while the
+      // huddle they were let into runs and it holds a place for them.
+      if (await guestResumable(ctx, mine, now)) {
+        if ((await roomGuestRows(ctx, mine.room_key, "admitted", now, { all: true })).length >= MAX_ROOM_GUESTS) {
+          throw new Error(`The call is full: ${MAX_ROOM_GUESTS} guests are already in it. Try again in a minute.`);
+        }
+        await ctx.db.patch(mine._id, { status: "admitted", last_seen: now, left_reason: undefined, media_seen_at: undefined });
+        return { guest_id: String(mine._id), secret: null, status: "admitted" as const };
+      }
       if (mine.status === "denied" && now - (mine.decided_at ?? 0) < GUEST_DENY_COOLDOWN_MS) {
         throw new Error("The room said not now. You can ask again in a minute.");
       }
       const atDoor = waiting.some((w) => String(w.guest._id) === String(mine._id));
-      if (!atDoor && (roomFull || linkFull)) {
-        throw new Error("Too many people are waiting to join. Try again in a minute.");
-      }
+      if (!atDoor && !doorHasRoom(waiting, link._id, mine._id)) throw new Error(DOOR_FULL_TEXT);
       // A knock the room is already showing is refreshed at most every few
       // seconds: the door's signature is this stamp, and a page that knocks
       // on a loop must not make it flicker. A new name is a new knock, so
@@ -713,7 +845,12 @@ export const requestJoin = mutation({
     }
 
     // A new person at the door: the link's rate and the waiting places both
-    // bound how many a leaked link can produce.
+    // bound how many a leaked link can produce. A denial or removal is of
+    // the ROW, by design: somebody turned away who starts over without their
+    // secret (a private window) comes back as a new row, under the rate and
+    // the caps like anybody new, and the door shows the room how many it has
+    // already turned away from this link, next to the one control that does
+    // stop a link that got out (deny or remove with revoke_link).
     const recent = await ctx.db
       .query("call_guests")
       .withIndex("by_link", (q) => q.eq("link_id", link._id))
@@ -725,9 +862,7 @@ export const requestJoin = mutation({
     ) {
       throw new Error("Too many people are joining from this link right now. Try again in a minute.");
     }
-    if (roomFull || linkFull) {
-      throw new Error("Too many people are waiting to join. Try again in a minute.");
-    }
+    if (!doorHasRoom(waiting, link._id)) throw new Error(DOOR_FULL_TEXT);
     const secret = newSlug(GUEST_SECRET_LENGTH);
     const told = await tellCreatorIfAlone(ctx, link, { name }, now);
     const guestId = await ctx.db.insert("call_guests", {
@@ -749,11 +884,21 @@ export const requestJoin = mutation({
 
 /** The guest page's beat, every CALL_HEARTBEAT_MS while it is open, at the
  *  door and inside. Keeps the lease, puts a returning page back at the door
- *  (a knock whose lease lapsed is refreshed as a new knock), puts the guest
- *  on the attendance of the huddle's record once there is one, and settles
- *  an admission whose huddle has ended. Returns what the page should show. */
+ *  (a knock whose lease lapsed is refreshed as a new knock) when the door has
+ *  a place for it, puts the guest on the attendance of the huddle's record
+ *  once there is one, and settles an admission whose huddle has ended.
+ *  Returns what the page should show; `door_full` says a page that came back
+ *  found every waiting place taken and is not at the door until one frees.
+ *
+ *  It also keeps getGuestState honest. That query answers from the clock as
+ *  well as the rows (a link's expiry, the end of a huddle's grace), and
+ *  Convex re-runs a query only when a row it read changes, so each beat
+ *  stamps what it computed (beat_view) whenever it moved: the subscription
+ *  then follows within a beat even when nothing else was written. */
 export const guestHeartbeat = mutation({
-  args: { guest_id: v.string(), secret: v.string() },
+  // `in_media`: this page is connected to the call's media right now, which
+  // tells a place let go with nobody in it ("not_joined") from a dropped one.
+  args: { guest_id: v.string(), secret: v.string(), in_media: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const guest = await guestBySecret(ctx, args.guest_id, args.secret);
     if (!guest) return null;
@@ -766,7 +911,7 @@ export const guestHeartbeat = mutation({
         await settleGuest(ctx, guest, { status: "left", left_reason: "huddle_ended" });
         return { view: "ended" as const };
       }
-      await ctx.db.patch(guest._id, { last_seen: now });
+      await ctx.db.patch(guest._id, { last_seen: now, ...(args.in_media ? { media_seen_at: now } : {}), ...beatView(guest, "admitted") });
       const live = await liveTranscriptFor(ctx, guest.room_key);
       if (live) await noteGuestAttendance(ctx, guest, live._id, now);
       return { view: "admitted" as const };
@@ -774,25 +919,44 @@ export const guestHeartbeat = mutation({
     if (guest.status === "waiting") {
       const link = await ctx.db.get(guest.link_id);
       const closed = !!(await linkUsable(ctx, link, now));
-      if (!closed && link) {
-        // Back after a real absence is a new knock (the door sounds again).
-        // A beat that merely ran late (a background tab's timers are slowed
-        // to about one a minute) keeps the knock it had: the door's signature
-        // is knocked_at, and moving it would ring the room every minute for
-        // the same person standing in the same place.
-        const back = now - guest.last_seen >= GUEST_ADMISSION_LAPSE_MS;
-        const told = back ? await tellCreatorIfAlone(ctx, link, guest, now) : undefined;
-        await ctx.db.patch(guest._id, {
-          last_seen: now,
-          ...(back ? { knocked_at: now } : {}),
-          ...(told ? { creator_told_at: told } : {}),
-        });
+      const view = guestView(guest, { huddleRunning: false, linkClosed: closed });
+      const stamp = beatView(guest, `${view}:${(await huddleAlive(ctx, guest.room_key, now)) ? "live" : "quiet"}`);
+      if (closed || !link) {
+        if (stamp.beat_view) await ctx.db.patch(guest._id, stamp);
+        return { view };
       }
-      return { view: guestView(guest, { huddleRunning: false, linkClosed: closed }) };
+      // A page that is not at the door right now (its lease lapsed) takes a
+      // place there again only if the door has one, by the same rule as a
+      // knock: otherwise a script could let rows lapse and beat them all
+      // back at once, past every cap.
+      if (!isGuestPresent(guest, now) && !doorHasRoom(await waitingGuests(ctx, guest.room_key, now), link._id, guest._id)) {
+        if (stamp.beat_view) await ctx.db.patch(guest._id, stamp);
+        return { view, door_full: true as const };
+      }
+      // Back after a real absence is a new knock (the door sounds again).
+      // A beat that merely ran late (a background tab's timers are slowed
+      // to about one a minute) keeps the knock it had: the door's signature
+      // is knocked_at, and moving it would ring the room every minute for
+      // the same person standing in the same place.
+      const back = now - guest.last_seen >= GUEST_ADMISSION_LAPSE_MS;
+      const told = back ? await tellCreatorIfAlone(ctx, link, guest, now) : undefined;
+      await ctx.db.patch(guest._id, {
+        last_seen: now,
+        ...stamp,
+        ...(back ? { knocked_at: now } : {}),
+        ...(told ? { creator_told_at: told } : {}),
+      });
+      return { view };
     }
     return { view: guestView(guest, { huddleRunning: false, linkClosed: false }) };
   },
 });
+
+/** The patch that records what a beat computed, or nothing when it is what
+ *  the row already says (a beat writes it only when it moves). */
+function beatView(guest: Pick<Doc<"call_guests">, "beat_view">, sig: string): { beat_view?: string } {
+  return guest.beat_view === sig ? {} : { beat_view: sig };
+}
 
 /** Everything the guest's page renders after knocking, reactive: where they
  *  stand, the meeting's name, whether anybody is there, and the notice, which
@@ -830,8 +994,11 @@ export const getGuestState = query({
       // A guest who left, was turned away or whose huddle ended may knock
       // again on a link that still works; their page offers it only then.
       link_open: !linkClosed,
+      // Let go without anybody deciding it, and may walk straight back in
+      // (guestResumable): the page rejoins rather than knocking.
+      resumable: await guestResumable(ctx, guest, now),
     };
-    const inTheRoom = view === "waiting" || view === "admitted" || ((view === "left" || view === "ended") && !linkClosed);
+    const inTheRoom = view === "waiting" || view === "admitted" || base.resumable || ((view === "left" || view === "ended") && !linkClosed);
     if (!inTheRoom || !link) return { ...base, room: null };
     return {
       ...base,
@@ -853,10 +1020,8 @@ export const leaveCall = mutation({
   handler: async (ctx, args) => {
     const guest = await guestBySecret(ctx, args.guest_id, args.secret);
     if (!guest) return null;
-    if (guest.status === "admitted") {
+    if (guest.status === "admitted" || guest.status === "waiting") {
       await settleGuest(ctx, guest, { status: "left", left_reason: "self" });
-    } else if (guest.status === "waiting") {
-      await ctx.db.patch(guest._id, { status: "left", left_reason: "self" });
     }
     return { view: "left" as const };
   },
@@ -864,25 +1029,18 @@ export const leaveCall = mutation({
 
 // ── Media ──────────────────────────────────────────────────────────────────
 
-/** Who the media token is for, or why not. A query so the hash, the status
- *  and the huddle are read at one instant. */
+/** Who the media token is for, or why not (a GuestJoinRefusal the page acts
+ *  on). A query so the hash, the status and the huddle are read at one
+ *  instant. */
 export const authForGuestToken = internalQuery({
   args: { guest_id: v.string(), secret: v.string() },
   handler: async (ctx, args) => {
+    const refuse = (reason: GuestJoinRefusal) => ({ ok: false as const, reason });
     const guest = await guestBySecret(ctx, args.guest_id, args.secret);
-    if (!guest) return { ok: false as const, reason: "Not a guest of this call" };
-    if (guest.status !== "admitted") {
-      return {
-        ok: false as const,
-        reason: guest.status === "removed" ? "You were removed from this call" : "You have not been let in",
-      };
-    }
-    if (!(await huddleAlive(ctx, guest.room_key, Date.now()))) {
-      return { ok: false as const, reason: "This call has ended" };
-    }
-    if (!(await teamHasFeature(ctx, guest.team_id, "calls"))) {
-      return { ok: false as const, reason: LINK_REFUSAL_TEXT.unavailable };
-    }
+    if (!guest) return refuse("not_a_guest");
+    if (guest.status !== "admitted") return refuse(guest.status === "removed" ? "removed" : "not_admitted");
+    if (!(await huddleAlive(ctx, guest.room_key, Date.now()))) return refuse("ended");
+    if (!(await teamHasFeature(ctx, guest.team_id, "calls"))) return refuse("unavailable");
     return { ok: true as const, room_key: guest.room_key, identity: guestIdentity(String(guest._id)), name: guest.name };
   },
 });
@@ -901,21 +1059,26 @@ export const authForGuestToken = internalQuery({
  *  canUpdateOwnMetadata is off, so the name the room admitted is the name
  *  every face, transcript line and recording carries. The identity prefix
  *  (guest:) is set here and nowhere else, which is what lets every surface
- *  tell a guest from a teammate or an agent (callParticipantKind); a surface
- *  that shows a participant's name must ask it first, since the name itself
- *  is whatever the guest typed. */
+ *  tell a guest from a teammate or an agent (callParticipantKind). The
+ *  media server's NAME is marked too (guestDisplayName: "Ada (guest)"),
+ *  because some readers see only the name: the recording's tile labels, the
+ *  file a screen share is saved under, any LiveKit tooling. A guest typing a
+ *  teammate's name cannot pass for them in the artifact that outlives the
+ *  call. Surfaces with a badge of their own show the first name beside it
+ *  (firstName drops the mark), and normalizeGuestName strips it, so it never
+ *  doubles. The page gets the plain name back for its own "you". */
 export const mintGuestToken = action({
   args: { guest_id: v.string(), secret: v.string() },
   handler: async (ctx, args): Promise<{ url: string; token: string; identity: string; name: string }> => {
     const cfg = livekitConfigFromEnv();
     if (!cfg) throw new Error("Calling is not configured");
     const auth = await ctx.runQuery(internal.callGuests.authForGuestToken, args);
-    if (!auth.ok) throw new Error(auth.reason);
+    if (!auth.ok) throw new ConvexError({ code: auth.reason, message: GUEST_JOIN_REFUSAL_TEXT[auth.reason] });
     const token = await signLivekitJwt({
       apiKey: cfg.apiKey,
       apiSecret: cfg.apiSecret,
       identity: auth.identity,
-      name: auth.name,
+      name: guestDisplayName(auth.name),
       room: auth.room_key,
       metadata: JSON.stringify({ guest: true }),
       ttlSeconds: GUEST_TOKEN_TTL_S,
@@ -932,21 +1095,35 @@ export const mintGuestToken = action({
 });
 
 /** The guest identities the room allows in its media right now: admitted, in
- *  a huddle that is still running. Everyone else with a guest identity is
- *  somebody the rows have already put out. */
+ *  a huddle that is still running, of a team that still has calls on (a team
+ *  switching calls off puts its guests out, not only stops new tokens).
+ *  Everyone else with a guest identity is somebody the rows have already put
+ *  out. */
 export const allowedGuestIdentities = internalQuery({
   args: { room_key: v.string() },
   handler: async (ctx, args): Promise<string[]> => {
-    if (!(await huddleAlive(ctx, args.room_key, Date.now()))) return [];
-    return (await guestRows(ctx, args.room_key, "admitted")).map((g) => guestIdentity(String(g._id)));
+    const now = Date.now();
+    if (!(await huddleAlive(ctx, args.room_key, now))) return [];
+    const teams = new Map<string, boolean>();
+    const out: string[] = [];
+    for (const g of await roomGuestRows(ctx, args.room_key, "admitted", now, { all: true })) {
+      const key = String(g.team_id);
+      if (!teams.has(key)) teams.set(key, await teamHasFeature(ctx, g.team_id, "calls"));
+      if (teams.get(key)) out.push(guestIdentity(String(g._id)));
+    }
+    return out;
   },
 });
 
-/** Make the media room agree with the rows: list who LiveKit has in it, and
- *  remove every guest identity the rows do not allow. Then look again down
- *  the tail (lib/callGuestAdmission says why one eject is not enough). A
- *  LiveKit that does not answer is tried again on the next step; the minute
- *  sweep covers a tail that ran out while it was down. */
+/** Make the media room agree with the rows: list who LiveKit has in it, then
+ *  ask the rows who is allowed, and put out every guest identity they do not
+ *  allow (rights first, then the connection: livekitServer.putOutOfRoom).
+ *  Listing FIRST: a guest admitted and connected between the two reads is in
+ *  the listing and, read second, in the allowed set too, so the check never
+ *  ejects somebody the room just let in. Then look again down the tail
+ *  (lib/callGuestAdmission says why one eject is not enough). A LiveKit that
+ *  does not answer is tried again on the next step; the minute sweep covers
+ *  a tail that ran out while it was down. */
 export const enforceGuestRoster = internalAction({
   args: { room_key: v.string(), tail: v.number() },
   handler: async (ctx, args) => {
@@ -954,19 +1131,21 @@ export const enforceGuestRoster = internalAction({
     if (!cfg) return { removed: 0 };
     let removed = 0;
     try {
-      const allowed = new Set(await ctx.runQuery(internal.callGuests.allowedGuestIdentities, { room_key: args.room_key }));
-      const inMedia: string[] = [];
-      for (const p of await listParticipants(cfg, args.room_key)) {
-        if (!isGuestIdentity(p.identity)) continue;
-        if (allowed.has(p.identity)) {
-          inMedia.push(p.identity);
-          continue;
+      const guests = (await listParticipants(cfg, args.room_key)).filter((p) => isGuestIdentity(p.identity));
+      if (guests.length > 0) {
+        const allowed = new Set(await ctx.runQuery(internal.callGuests.allowedGuestIdentities, { room_key: args.room_key }));
+        const inMedia: string[] = [];
+        for (const p of guests) {
+          if (allowed.has(p.identity)) {
+            inMedia.push(p.identity);
+            continue;
+          }
+          await putOutOfRoom(cfg, args.room_key, p.identity);
+          removed++;
         }
-        await removeParticipant(cfg, args.room_key, p.identity);
-        removed++;
-      }
-      if (inMedia.length > 0) {
-        await ctx.runMutation(internal.callGuests.noteGuestsInMedia, { room_key: args.room_key, identities: inMedia });
+        if (inMedia.length > 0) {
+          await ctx.runMutation(internal.callGuests.noteGuestsInMedia, { room_key: args.room_key, identities: inMedia });
+        }
       }
     } catch (err) {
       console.warn(`[callGuests] roster check failed for ${args.room_key}:`, err);
@@ -992,27 +1171,87 @@ export const noteGuestsInMedia = internalMutation({
     const now = Date.now();
     const listed = new Set(args.identities);
     let touched = 0;
-    for (const g of await guestRows(ctx, args.room_key, "admitted")) {
+    for (const g of await roomGuestRows(ctx, args.room_key, "admitted", now, { all: true })) {
       if (!listed.has(guestIdentity(String(g._id)))) continue;
-      await ctx.db.patch(g._id, { last_seen: Math.max(g.last_seen, now) });
+      await ctx.db.patch(g._id, { last_seen: Math.max(g.last_seen, now), media_seen_at: now });
       touched++;
     }
     return { touched };
   },
 });
 
-/** Every minute, every room with a guest admitted: end the admissions of a
- *  huddle that is over (nobody may be left to notice: the last teammate's
- *  tab died, a script stopped beating), put out a guest whose page has been
- *  quiet past GUEST_ADMISSION_LAPSE_MS, and check the media room. The one
- *  path that needs nobody's cooperation, guest's or teammate's. */
+/** Admitted guests whose pages went quiet past the lapse window, checked
+ *  against the media server before their places are let go: one LiveKit
+ *  still lists is alive (a phone in a pocket keeps its call while its page
+ *  sleeps) and is kept, as the roster check would. A media server that does
+ *  not answer cannot vouch for anyone, so the quiet are let go as before. */
+export const lapseQuietGuests = internalAction({
+  args: { room_key: v.string(), guest_ids: v.array(v.string()) },
+  handler: async (ctx, args): Promise<{ kept: number; lapsed: number }> => {
+    const cfg = livekitConfigFromEnv();
+    let inMedia: string[] = [];
+    if (cfg) {
+      try {
+        inMedia = (await listParticipants(cfg, args.room_key)).map((p) => p.identity).filter(isGuestIdentity);
+      } catch (err) {
+        console.warn(`[callGuests] could not list ${args.room_key} before letting quiet guests go:`, err);
+      }
+    }
+    return await ctx.runMutation(internal.callGuests.settleQuietGuests, { ...args, in_media: inMedia });
+  },
+});
+
+/** The second half of lapseQuietGuests: each guest read again (a beat may
+ *  have landed meanwhile), kept when the media server listed them, let go
+ *  ("lapsed", or "not_joined" for a place nobody ever came into) when not. */
+export const settleQuietGuests = internalMutation({
+  args: { room_key: v.string(), guest_ids: v.array(v.string()), in_media: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const listed = new Set(args.in_media);
+    const out: Record<"lapsed" | "not_joined", Doc<"call_guests">[]> = { lapsed: [], not_joined: [] };
+    let kept = 0;
+    for (const id of args.guest_ids) {
+      const g = await guestRow(ctx, id);
+      if (!g || g.room_key !== args.room_key || g.status !== "admitted" || now - g.last_seen < GUEST_ADMISSION_LAPSE_MS) continue;
+      if (listed.has(guestIdentity(String(g._id)))) {
+        await ctx.db.patch(g._id, { last_seen: now, media_seen_at: now });
+        kept++;
+        continue;
+      }
+      out[quietReason(g)].push(g);
+    }
+    for (const reason of ["lapsed", "not_joined"] as const) {
+      await settleGuests(ctx, args.room_key, out[reason], { status: "left", left_reason: reason });
+    }
+    return { kept, lapsed: out.lapsed.length + out.not_joined.length };
+  },
+});
+
+/** A knock whose page has been gone this long is abandoned, not waiting: the
+ *  sweep settles it ("lapsed"), and the guest's page, if it ever comes back,
+ *  knocks again. Long past the door's own lease (which already hides it) so
+ *  a page that was only in the background comes back to the door by its
+ *  beat; short enough that rows from closed pages do not pile up. */
+export const GUEST_WAITING_ABANDONED_MS = 15 * 60_000;
+
+/** Every minute, needing nobody's cooperation, guest's or teammate's:
+ *   - every room with a guest admitted: end the admissions of a huddle that
+ *     is over (nobody may be left to notice: the last teammate's tab died, a
+ *     script stopped beating), put out a guest whose page has been quiet
+ *     past GUEST_ADMISSION_LAPSE_MS, and check the media room;
+ *   - every running huddle whose room put a guest out within
+ *     GUEST_SETTLED_WATCH_MS: check the media room, for the client that
+ *     reconnected on a token LiveKit refreshed after the roster tail ended;
+ *   - every knock abandoned past GUEST_WAITING_ABANDONED_MS: settled, so a
+ *     leaked link's lapsed rows do not pile up. */
 export const sweepGuestRooms = internalMutation({
   args: {},
   handler: async (ctx) => {
     const now = Date.now();
     const admitted = await ctx.db
       .query("call_guests")
-      .withIndex("by_status", (q) => q.eq("status", "admitted"))
+      .withIndex("by_status_seen", (q) => q.eq("status", "admitted"))
       .collect();
     const rooms = new Map<string, Doc<"call_guests">[]>();
     for (const g of admitted) rooms.set(g.room_key, [...(rooms.get(g.room_key) ?? []), g]);
@@ -1023,11 +1262,40 @@ export const sweepGuestRooms = internalMutation({
         ended += await endGuestAdmissions(ctx, roomKey);
         continue;
       }
-      const gone = guests.filter((g) => now - g.last_seen >= GUEST_ADMISSION_LAPSE_MS);
-      for (const g of gone) await ctx.db.patch(g._id, { status: "left", left_reason: "lapsed" });
-      lapsed += gone.length;
-      await checkGuestRoster(ctx, roomKey, { once: gone.length === 0 });
+      // A quiet page is not yet a guest gone: a phone suspends a background
+      // tab's timers long before it drops the call. The media server is asked
+      // first (lapseQuietGuests), and only a guest it does not hold is let go.
+      const quiet = guests.filter((g) => now - g.last_seen >= GUEST_ADMISSION_LAPSE_MS);
+      if (quiet.length > 0) {
+        await ctx.scheduler.runAfter(0, internal.callGuests.lapseQuietGuests, {
+          room_key: roomKey,
+          guest_ids: quiet.map((g) => String(g._id)),
+        });
+      } else {
+        await checkGuestRoster(ctx, roomKey, { once: true });
+      }
+      lapsed += quiet.length;
     }
-    return { rooms: rooms.size, ended, lapsed };
+
+    const settled = await ctx.db
+      .query("call_guests")
+      .withIndex("by_settled", (q) => q.gt("settled_at", now - GUEST_SETTLED_WATCH_MS))
+      .take(1000);
+    const watched = new Set<string>();
+    for (const g of settled) {
+      if (rooms.has(g.room_key) || watched.has(g.room_key)) continue;
+      watched.add(g.room_key);
+      if (await huddleAlive(ctx, g.room_key, now)) await checkGuestRoster(ctx, g.room_key, { once: true });
+    }
+
+    const abandoned = await ctx.db
+      .query("call_guests")
+      .withIndex("by_status_seen", (q) => q.eq("status", "waiting").lt("last_seen", now - GUEST_WAITING_ABANDONED_MS))
+      .take(500);
+    const byRoom = new Map<string, Doc<"call_guests">[]>();
+    for (const g of abandoned) byRoom.set(g.room_key, [...(byRoom.get(g.room_key) ?? []), g]);
+    for (const [roomKey, rows] of byRoom) await settleGuests(ctx, roomKey, rows, { status: "left", left_reason: "lapsed" });
+
+    return { rooms: rooms.size, ended, lapsed, watched: watched.size, abandoned: abandoned.length };
   },
 });

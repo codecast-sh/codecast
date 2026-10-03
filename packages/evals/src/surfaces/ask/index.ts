@@ -14,7 +14,7 @@ import {
   toAskLine,
   type AskMessage,
 } from '../../../../convex/convex/lib/sessionAsk';
-import { citationSpans, spanLines } from '../../../../convex/convex/lib/sessionAskCitations';
+import { citationSpans, spanLines, type CitationSpan } from '../../../../convex/convex/lib/sessionAskCitations';
 import { readConversation, toRows, type MessageRow } from '../../adapters/convo';
 import { readSessionMoment, SESSION_LINE_FORMS } from '../../adapters/moment';
 import { gate, type SurfaceImpl } from '../../surface';
@@ -53,19 +53,25 @@ export interface AskParsed {
   unshownInRanges: number;
 }
 
+/** The share of a cited range's lines that may have gone unshown: past it, the range claims support from text the model never saw. */
+export const MAX_UNSHOWN_SHARE = 0.25;
+
 /**
  * A citation is real when every line it names on its own was shown: a single
  * message, or both ends of a range. A range between two shown lines may pass
- * over lines the budget left out (the prompt marks them "not shown"); those
- * are counted, not called invented.
+ * over a few lines the budget left out (the prompt marks them "not shown");
+ * those are counted, not called invented, up to MAX_UNSHOWN_SHARE of the
+ * range. A range across the unread stretch of a long session (`msg 900–-40`)
+ * spans lines the model never read, so it is invented whatever its ends.
  */
 export function citationCheck(answer: string, shownLines: number[]): Pick<AskParsed, 'invented' | 'unshownInRanges'> {
   const shown = new Set(shownLines);
   const spans = citationSpans(answer);
-  const real = spans.filter((s) => shown.has(s.from) && shown.has(s.to));
+  const unshown = (s: CitationSpan) => spanLines(s).filter((l) => !shown.has(l)).length;
+  const real = spans.filter((s) => s.to >= s.from && shown.has(s.from) && shown.has(s.to) && unshown(s) <= MAX_UNSHOWN_SHARE * spanLines(s).length);
   return {
     invented: spans.filter((s) => !real.includes(s)).map((s) => `msg ${s.from}${s.to === s.from ? '' : `–${s.to}`}`),
-    unshownInRanges: real.reduce((n, s) => n + spanLines(s).filter((l) => !shown.has(l)).length, 0),
+    unshownInRanges: real.reduce((n, s) => n + unshown(s), 0),
   };
 }
 

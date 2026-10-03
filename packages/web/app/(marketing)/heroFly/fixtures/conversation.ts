@@ -123,12 +123,9 @@ export const VIEWER = {
 export const SARAH_VIEWING = DESK.bash + 0.4;
 
 /** What the working line says the lead is doing. */
-export const workingLabel = (t: number) =>
-  t >= CUES.spawnA ? "spawning workers"
-    : t >= DESK.steerSent ? "reading your message"
-      : t >= CUES.testsPass ? "tests passed"
-        : t >= DESK.bash ? "running bun test"
-          : t >= DESK.edit ? "editing retry.ts"
-            : "thinking";
+/** The working line's label after each cue: thinking until the first, then each in turn. */
+export const WORKING_CUES = [DESK.edit, DESK.bash, CUES.testsPass, DESK.steerSent, CUES.spawnA] as const;
+export const WORKING_LABELS = ["thinking", "editing retry.ts", "running bun test", "tests passed", "reading your message", "spawning workers"] as const;
+export const workingLabel = (t: number) => WORKING_LABELS[WORKING_CUES.filter((c) => t >= c).length];
 
 export const entities: Record<string, EntityFixture> = {};

@@ -156,11 +156,12 @@ describe("entityRemarkPlugins repository objects", () => {
 });
 
 describe("entityRemarkPlugins contextual pull request references", () => {
-  // The number becomes the link and carries `pr:#N|<as written>`; the words in
-  // front of it stay prose, so "PR 3263" is still read as "PR " then the link.
+  // The number becomes the link and carries `pr:#N|<as written>` (`pr:?#N|…`
+  // for a lone `#N`); the words in front of it stay prose, so "PR 3263" is
+  // still read as "PR " then the link.
   test("#N and PR N become pr: payload links, words kept as text", () => {
     const html = render("merged #3263 and PR 3247 today");
-    expect(html).toContain(">pr:#3263|#3263</a>");
+    expect(html).toContain(">pr:?#3263|#3263</a>");
     expect(html).toContain("PR <a");
     expect(html).toContain(">pr:#3247|3247</a>");
   });
@@ -168,12 +169,12 @@ describe("entityRemarkPlugins contextual pull request references", () => {
   test("a full owner/repo#N reference is not doubled by the contextual scan", () => {
     const html = render("merged codecast-sh/codecast#482");
     expect(html).toContain(">codecast-sh/codecast#482</a>");
-    expect(html).not.toContain("pr:#482");
+    expect(html).not.toContain("#482|");
   });
 
   test("a hash in a URL fragment or inline code stays text", () => {
     const html = render("see https://example.com/page#12 and `#12` and page.html#12");
-    expect(html).not.toContain("pr:#12");
+    expect(html).not.toContain("#12|");
   });
 
   test("a heading is not a reference", () => {

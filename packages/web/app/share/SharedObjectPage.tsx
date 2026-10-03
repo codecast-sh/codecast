@@ -5,7 +5,6 @@
 // page, the bar, the reading column and its footer. A share page only says
 // what its object looks like, in these pieces, so every kind reads alike.
 import { useState, type CSSProperties, type ReactNode } from "react";
-import { useQuery } from "convex/react";
 import type { FunctionReference } from "convex/server";
 import { useParams } from "react-router";
 import { Check, Link2, Unlink } from "lucide-react";
@@ -15,6 +14,7 @@ import { AppLoader } from "../../components/AppLoader";
 import { MarkdownRenderer } from "../../components/tools/MarkdownRenderer";
 import { AvatarImg } from "../../lib/avatarCache";
 import { readSharePreload } from "@/lib/sharePreload";
+import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import "./share.css";
 
 // Solarized accents, the same in light and dark.
@@ -51,14 +51,21 @@ function CopyPageLink() {
   );
 }
 
-function Dead({ noun }: { noun: string }) {
+/** The link answers nothing. `onRetry` marks the other case: the server never
+ *  answered, so nothing is known about the link and the page says only that. */
+function Dead({ noun, onRetry }: { noun: string; onRetry?: () => void }) {
   return (
     <main className="share-page">
       <div className="share-dead">
         <div>
           <Unlink size={36} style={{ color: "var(--ink-dim)" }} />
-          <h1>This link is closed</h1>
-          <p>The {noun} was made private, or the link never pointed anywhere.</p>
+          <h1>{onRetry ? `This ${noun} could not be loaded` : "This link is closed"}</h1>
+          <p>
+            {onRetry
+              ? "The server didn't answer. "
+              : `The ${noun} was made private, or the link never pointed anywhere.`}
+            {onRetry && <button type="button" onClick={onRetry}>Try again</button>}
+          </p>
         </div>
       </div>
     </main>
@@ -82,9 +89,12 @@ export function SharedObjectPage<T>({
   children: (data: T) => ReactNode;
 }) {
   const token = useParams().token as string;
-  const live = useQuery(query, { share_token: token }) as T | null | undefined;
+  // The preloaded payload paints when the live read fails, so a server error
+  // costs the page its freshness, not its content.
+  const { data: live, error, retry } = useQueryNoThrow(query, { share_token: token }) as { data: T | null | undefined; error: Error | undefined; retry: () => void };
   const data = live !== undefined ? live : readSharePreload<T>(kind, token);
 
+  if (data === undefined && error) return <Dead noun={noun} onRetry={retry} />;
   if (data === undefined) return <AppLoader className="min-h-0 h-screen bg-sol-bg" />;
   if (data === null) return <Dead noun={noun} />;
 

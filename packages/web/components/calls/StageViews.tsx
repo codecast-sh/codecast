@@ -8,7 +8,7 @@ import { useShareZoom } from "../../hooks/useShareZoom";
 import { ScreenCursors } from "./ScreenCursors";
 import { Avatar } from "./Avatar";
 import { firstName } from "./speakers";
-import { GuestTag, PersonName } from "./GuestTag";
+import { ParticipantTag, PersonName } from "./GuestTag";
 import { isMuted, noFollowLeader, SPEAKING_RING, useStageHost } from "./stageHost";
 
 // THE STAGE'S PICTURE, apart from the app.
@@ -88,7 +88,7 @@ export function AutoStage({
                   ) : (
                     <span className="flex items-center gap-1">
                       {`${firstName(t.name)}'s screen`}
-                      {callParticipantKind(t.identity) === "guest" && <GuestTag />}
+                      <ParticipantTag identity={t.identity} />
                     </span>
                   )}
                 </button>

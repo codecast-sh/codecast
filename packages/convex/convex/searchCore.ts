@@ -1,68 +1,31 @@
 // Pure text-search logic shared by the message search surfaces (web searchMessages,
 // CLI searchForCLI, CLI feedForCLI). No ctx/db access — unit-testable with bun:test.
 //
-// Matching model: a query parses into quoted phrases (exact, always required) and
-// words. Stop-words are dropped from words — they add no retrieval signal but each
-// one costs a full search-index fetch and tightens the all-terms filter (the
-// 7-word natural-language query that matches nothing). Matching is lowercase
-// substring containment over a conversation's fetched messages.
+// What a query means and how a text answers it live in @codecast/shared/search
+// (terms.ts), shared with the CLI and the web marks. This file applies that
+// model to a pool of messages: which conversations qualify, and in what order.
 
-export type ParsedTerms = { phrases: string[]; words: string[]; all: string[] };
+import {
+  parseQueryTerms,
+  contentMatchesSearch,
+  contentMatchesAnyTerm,
+  emptyEvidence,
+  addEvidence,
+  coverageOf,
+  relevanceOf,
+  snippetAround,
+  type ParsedTerms,
+  type Evidence,
+} from "@codecast/shared/search";
 
-// Function words common in natural-language task descriptions. Deliberately
-// moderate: only words that are near-certain noise for retrieval.
-const SEARCH_STOPWORDS = new Set([
-  "a", "an", "the", "to", "of", "in", "on", "for", "and", "or", "with",
-  "from", "into", "at", "by", "as", "is", "are", "was", "were", "be",
-  "been", "it", "its", "this", "that", "these", "those", "my", "our",
-  "your", "their", "we", "i", "you", "they", "do", "does", "did", "can",
-  "could", "should", "would", "will", "may", "might", "must", "not", "no",
-  "so", "if", "then", "than", "when", "where", "which", "who", "how",
-  "what", "why", "about", "up", "out", "also", "just", "via",
-]);
-
-export function parseSearchTerms(query: string): ParsedTerms {
-  const phrases: string[] = [];
-  const rawWords: string[] = [];
-  const regex = /"([^"]+)"|(\S+)/g;
-  let match;
-  while ((match = regex.exec(query)) !== null) {
-    if (match[1]) {
-      phrases.push(match[1].toLowerCase());
-    } else if (match[2]) {
-      rawWords.push(match[2].toLowerCase());
-    }
-  }
-  const deduped = [...new Set(rawWords)];
-  const meaningful = deduped.filter((w) => w.length >= 2 && !SEARCH_STOPWORDS.has(w));
-  // A query made entirely of stop-words ("how to do it") still has to search
-  // for something — keep the originals in that case.
-  const words = meaningful.length > 0 ? meaningful : deduped;
-  return { phrases, words, all: [...phrases, ...words] };
-}
-
-export function contentMatchesSearch(content: string, terms: { phrases: string[]; words: string[] }): boolean {
-  const lowerContent = content.toLowerCase();
-  for (const phrase of terms.phrases) {
-    if (!lowerContent.includes(phrase)) return false;
-  }
-  for (const word of terms.words) {
-    if (!lowerContent.includes(word)) return false;
-  }
-  return true;
-}
-
-export function contentMatchesAnyTerm(content: string, terms: ParsedTerms): boolean {
-  const lowerContent = content.toLowerCase();
-  return terms.all.some((t) => lowerContent.includes(t));
-}
+export { contentMatchesSearch, contentMatchesAnyTerm, type ParsedTerms, type Evidence };
+export const parseSearchTerms = parseQueryTerms;
 
 export function conversationMatchesAllTerms(
   messages: Array<{ content?: string | null }>,
   terms: { phrases: string[]; words: string[] }
 ): boolean {
-  const allContent = messages.map((m) => (m.content || "").toLowerCase()).join(" ");
-  return contentMatchesSearch(allContent, terms);
+  return contentMatchesSearch(messages.map((m) => m.content || "").join(" "), terms);
 }
 
 // Pool messages grouped by conversation, keeping each message that holds any
@@ -85,90 +48,108 @@ export function groupMessagesByConversation<M extends { content?: string | null;
   return groups;
 }
 
-export type RankedConversation<M> = { convId: string; messages: M[]; coverage: number };
+export type RankedConversation<M> = {
+  convId: string;
+  messages: M[];
+  coverage: number;
+  /** What the messages say about the query, for callers that add the
+   *  session's title and summaries before ranking (relevanceWithFields). */
+  evidence: Evidence;
+  /** One score per message, parallel to `messages`: which rows show the query best. */
+  scores: number[];
+};
 
-// Replaces the strict all-terms AND for CLI search surfaces. Quoted phrases stay
+type RankableMessage = { content?: string | null; role?: string; tool_results_count?: number };
+
+// A user row that carries tool results is the harness talking, not the person.
+const isOwnText = (m: RankableMessage) => m.role === "user" && !m.tool_results_count;
+
+// Which conversations qualify, best coverage first. Quoted phrases stay
 // required. Short word queries (≤2) keep exact AND semantics; longer queries
 // degrade to best-effort: a conversation qualifies when at least half the words
-// match, ranked full-coverage first. Sort is stable, so within a coverage tier
-// the caller's relevance order is preserved.
-export function rankConversationsByCoverage<M extends { content?: string | null }>(
+// match. Sort is stable, so within a coverage tier the caller's pool order is
+// preserved (it decides who survives a candidate slice, see
+// fetchMessageSearchPool); the order a person sees comes from relevance, once
+// the caller has the conversation's own fields to add.
+export function rankConversationsByCoverage<M extends RankableMessage>(
   groups: Map<string, M[]>,
   terms: ParsedTerms
 ): Array<RankedConversation<M>> {
   const ranked: Array<RankedConversation<M>> = [];
   for (const [convId, messages] of groups) {
-    const joined = messages.map((m) => (m.content || "").toLowerCase()).join(" ");
-    if (terms.phrases.some((p) => !joined.includes(p))) continue;
-    const total = terms.words.length;
-    if (total === 0) {
-      ranked.push({ convId, messages, coverage: 1 });
-      continue;
-    }
-    const matched = terms.words.filter((w) => joined.includes(w)).length;
-    const required = total <= 2 ? total : Math.ceil(total / 2);
-    if (matched < required) continue;
-    ranked.push({ convId, messages, coverage: matched / total });
+    const evidence = emptyEvidence(terms);
+    const scores = messages.map((m) => addEvidence(evidence, m.content, terms, { own: isOwnText(m), message: true })?.score ?? 0);
+    const coverage = coverageOf(evidence, terms);
+    if (coverage === null) continue;
+    ranked.push({ convId, messages, coverage, evidence, scores });
   }
   return ranked.sort((a, b) => b.coverage - a.coverage);
 }
 
-export function calculateProximityScore(
-  messages: Array<{ content?: string | null; _id: { toString(): string } }>,
-  terms: { all: string[] }
+/** Relevance of a ranked conversation once its own fields (title, summaries,
+ *  opening prompt, earlier titles) count as text the person wrote. */
+export function relevanceWithFields(
+  ranked: { evidence: Evidence },
+  fields: Array<string | null | undefined>,
+  terms: ParsedTerms,
 ): number {
-  if (terms.all.length <= 1) return 0;
+  const evidence: Evidence = {
+    ...ranked.evidence,
+    best: [...ranked.evidence.best],
+    own: [...ranked.evidence.own],
+    pairs: [...ranked.evidence.pairs],
+    phrases: [...ranked.evidence.phrases],
+  };
+  for (const field of fields) addEvidence(evidence, field, terms, { own: true });
+  return relevanceOf(evidence, terms);
+}
 
-  const termPositions: Map<string, number[]> = new Map();
-  for (const term of terms.all) {
-    termPositions.set(term, []);
-  }
+/** The messages that show the query best, best first; ties keep pool order. */
+export function bestMessages<M>(ranked: { messages: M[]; scores: number[] }, limit: number): M[] {
+  return ranked.messages
+    .map((m, i) => ({ m, score: ranked.scores[i] ?? 0, i }))
+    .sort((a, b) => b.score - a.score || a.i - b.i)
+    .slice(0, limit)
+    .map((x) => x.m);
+}
 
-  for (let msgIdx = 0; msgIdx < messages.length; msgIdx++) {
-    const content = (messages[msgIdx].content || "").toLowerCase();
-    for (const term of terms.all) {
-      if (content.includes(term)) {
-        termPositions.get(term)!.push(msgIdx);
-      }
-    }
-  }
+// Everything a session says about itself outside its messages. first_prompt
+// and earlier_titles are what it was when it began and what it was called
+// since: a long session drifts, and the person looking for it remembers the
+// start as often as the end.
+type SearchableConversation = {
+  title?: string | null;
+  subtitle?: string | null;
+  idle_summary?: string | null;
+  first_prompt?: string | null;
+  earlier_titles?: string[] | null;
+};
 
-  // Check if all terms appear in same message (best case)
-  for (let i = 0; i < messages.length; i++) {
-    const content = (messages[i].content || "").toLowerCase();
-    if (terms.all.every((t) => content.includes(t))) {
-      return 0; // Best score - all terms in one message
-    }
-  }
+export function searchFieldsOf(conv: SearchableConversation): string[] {
+  return [conv.title, conv.subtitle, conv.idle_summary, conv.first_prompt, ...(conv.earlier_titles ?? [])]
+    .filter((f): f is string => !!f);
+}
 
-  // Calculate minimum span across messages
-  let minSpan = Infinity;
-  const firstTermPositions = termPositions.get(terms.all[0]) || [];
+/** The session's beginnings that answer the query, for a result row to show
+ *  beside a title that has since moved on. Absent when neither matches. */
+export function originMatch(
+  conv: SearchableConversation,
+  terms: ParsedTerms,
+): { started_as?: string; earlier_titles?: string[] } | undefined {
+  const started = conv.first_prompt && contentMatchesAnyTerm(conv.first_prompt, terms)
+    ? snippetAround(conv.first_prompt, terms, 200)
+    : undefined;
+  const earlier = (conv.earlier_titles ?? []).filter((t) => t !== conv.title && contentMatchesAnyTerm(t, terms));
+  if (!started && earlier.length === 0) return undefined;
+  return { ...(started ? { started_as: started } : {}), ...(earlier.length ? { earlier_titles: earlier } : {}) };
+}
 
-  for (const startPos of firstTermPositions) {
-    let maxEnd = startPos;
-    let valid = true;
-
-    for (const term of terms.all.slice(1)) {
-      const positions = termPositions.get(term) || [];
-      if (positions.length === 0) {
-        valid = false;
-        break;
-      }
-      // Find closest position to current range
-      let closest = positions[0];
-      for (const pos of positions) {
-        if (Math.abs(pos - startPos) < Math.abs(closest - startPos)) {
-          closest = pos;
-        }
-      }
-      maxEnd = Math.max(maxEnd, closest);
-    }
-
-    if (valid) {
-      minSpan = Math.min(minSpan, maxEnd - startPos + 1);
-    }
-  }
-
-  return minSpan === Infinity ? 1000 : minSpan;
+const EARLIER_TITLES_KEPT = 6;
+/** A session's earlier titles once `next` replaces its current one: distinct,
+ *  oldest dropped first. undefined when the title is not changing. */
+export function earlierTitlesAfter(conv: { title?: string | null; earlier_titles?: string[] | null }, next: string): string[] | undefined {
+  const current = conv.title?.trim();
+  if (!current || current === next.trim()) return undefined;
+  const kept = (conv.earlier_titles ?? []).filter((t) => t !== current && t !== next.trim());
+  return [...kept, current].slice(-EARLIER_TITLES_KEPT);
 }

@@ -8,6 +8,7 @@ import { useAction, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import {
   CALL_HEARTBEAT_MS,
+  guestJoinRefusalOf,
   humanizeConvexError,
   type CallGuestView,
   type GuestLinkRefusal,
@@ -66,9 +67,14 @@ import "../meet.css";
  * timers slow to a minute and a late beat would read as a second knock. An
  * admitted guest who is NOT in the media (the one-press rejoin after a
  * reload, a dropped connection) beats only for REJOIN_HOLD_MS, so the room
- * never lists somebody who cannot hear it. Closing the tab hangs up the
- * media at once (LiveKit disconnects on page leave); it does not mark them
- * left, so a reload is a blink and not a second knock.
+ * never lists somebody who cannot hear it; one the lobby is holding on
+ * purpose (a notice that changed, a permission prompt) is reading something
+ * they were shown to read, and keeps their place for CONSENT_HOLD_MS, with
+ * the deadline on screen. Closing the tab hangs up the media at once
+ * (LiveKit disconnects on page leave); it does not mark them left, so a
+ * reload is a blink and not a second knock. A place the server let go
+ * without anybody deciding it (a phone asleep in a pocket) comes back
+ * without a knock for a while (GUEST_RESUME_MS): the page walks back in.
  *
  * Consent is the notice the guest asked under (`accepted`). They walk in on
  * their own only while the room keeps no more than they agreed to: a
@@ -96,6 +102,8 @@ type GuestState = {
   knocked_at: number | null;
   creator_told: boolean;
   link_open: boolean;
+  /** Let go without anybody deciding it, and may walk straight back in. */
+  resumable: boolean;
   room: null | {
     title: string | null;
     inviter: { name: string | null; image?: string | null };
@@ -106,6 +114,10 @@ type GuestState = {
 };
 
 const noSubscribe = () => () => {};
+const onVisibility = (fn: () => void) => {
+  document.addEventListener("visibilitychange", fn);
+  return () => document.removeEventListener("visibilitychange", fn);
+};
 const noSnapshot = () => null;
 
 /** How long an admitted guest who is out of the media keeps their place in
@@ -113,6 +125,16 @@ const noSnapshot = () => null;
  *  enough that the room does not show a face that hears nothing. The server
  *  lets the admission lapse a little after (GUEST_ADMISSION_LAPSE_MS). */
 const REJOIN_HOLD_MS = 60_000;
+
+/** How long the lobby holds an admitted guest's place while it waits on
+ *  them for a reason it gave them (a notice that changed while they waited,
+ *  the browser's permission prompt): reading what they are agreeing to
+ *  should not cost them the place. Shown on the lobby as a deadline. */
+const CONSENT_HOLD_MS = 5 * 60_000;
+
+/** A dropped connection is tried again on its own, this far apart, before
+ *  the page asks for a press. */
+const RECONNECT_BACKOFF_MS = [1_000, 3_000, 8_000];
 
 /** Has the guest touched this page (a click, a key)? Without it the browser
  *  holds the call's sound. Older browsers without the API answer yes and let
@@ -169,6 +191,13 @@ export default function GuestMeetPage() {
   const [enteredUnseen, setEnteredUnseen] = useState(false);
   // A fresh preview after a failed join (its tracks went to the call).
   const [previewEpoch, setPreviewEpoch] = useState(0);
+  // The last beat found every waiting place at the door taken: this page is
+  // not at the door until one frees, and each beat asks again (doorHasRoom).
+  const [doorFull, setDoorFull] = useState(false);
+  // A reconnect the page is running in place (the stage stays up under its
+  // "Reconnecting" line), and how many tries it has made since the drop.
+  const [reopening, setReopening] = useState(false);
+  const [reopenTries, setReopenTries] = useState(0);
   // The two things the page needs from the media, read as strings so the
   // page does not re-render for every speaking ring (GuestInCall reads the rest).
   const phase = useSyncExternalStore(call ? call.subscribe : noSubscribe, () => call?.getSnapshot().phase ?? null, noSnapshot);
@@ -208,23 +237,31 @@ export default function GuestMeetPage() {
   // prompt, or one press away from walking in, lapsed out of a call they had
   // just been let into.
   const admitted = view === "admitted";
-  const media = useRef({ inMedia, outSince: Date.now() });
+  const [outSince, setOutSince] = useState(() => Date.now());
   useWatchEffect(() => {
-    media.current = { inMedia, outSince: inMedia ? 0 : Date.now() };
+    setOutSince(inMedia ? 0 : Date.now());
   }, [inMedia, admitted]);
+  // What the beat reads, refreshed every render below once the hold is known.
+  const media = useRef({ inMedia, outSince, holdMs: REJOIN_HOLD_MS });
   const beatingAs = creds && atDoorOrIn && !leftByMe ? view : null;
   useWatchEffect(() => {
     if (!creds || !beatingAs) return;
+    // A beat answered after this effect ended (the guest was let in while it
+    // was in flight) speaks for a view the page has left.
+    let live = true;
     const beat = () => {
       const m = media.current;
-      if (beatingAs === "admitted" && !m.inMedia && Date.now() - m.outSince > REJOIN_HOLD_MS) return;
-      void heartbeat(creds).catch(() => {});
+      if (beatingAs === "admitted" && !m.inMedia && Date.now() - m.outSince > m.holdMs) return;
+      void heartbeat({ ...creds, ...(beatingAs === "admitted" && m.inMedia ? { in_media: true } : {}) })
+        .then((r) => live && setDoorFull(beatingAs === "waiting" && !!r && "door_full" in r && !!r.door_full))
+        .catch(() => {});
     };
     beat();
     const stop = steadyInterval(beat, CALL_HEARTBEAT_MS);
     const onVisible = () => document.visibilityState === "visible" && beat();
     document.addEventListener("visibilitychange", onVisible);
     return () => {
+      live = false;
       stop();
       document.removeEventListener("visibilitychange", onVisible);
     };
@@ -232,6 +269,7 @@ export default function GuestMeetPage() {
 
   useWatchEffect(() => {
     if (view === "waiting" || view === "admitted") setBackToLobby(false);
+    if (view !== "waiting") setDoorFull(false);
     if (view !== "admitted") {
       setLeftByMe(false);
       leftRef.current = false;
@@ -266,6 +304,13 @@ export default function GuestMeetPage() {
     () => preview?.getSnapshot().asking ?? false,
     () => false,
   );
+
+  // Which hold the lobby is under (see the header). The deadline counts from
+  // the same moment the beat does, so what the lobby says is what happens.
+  const pageVisible = useSyncExternalStore(onVisibility, () => document.visibilityState === "visible", () => true);
+  const consentHold = admitted && lobbyShown && pageVisible && (widened || previewAsking);
+  media.current = { inMedia, outSince, holdMs: consentHold ? CONSENT_HOLD_MS : REJOIN_HOLD_MS };
+  const heldUntil = consentHold && !inMedia ? outSince + CONSENT_HOLD_MS : null;
 
   // One record of the guest's devices: what they pick and switch on or off,
   // in the lobby or inside the call, is what the next preview opens (a
@@ -312,6 +357,36 @@ export default function GuestMeetPage() {
     }
   };
 
+  // Back into a place let go without anybody deciding it (state.resumable):
+  // the same request a knock is, which the server answers "admitted" with no
+  // knock. The notice they agreed to this visit stands; one that widened
+  // since holds them at the lobby as it would after any reload.
+  const resuming = useRef(false);
+  const resume = async () => {
+    if (!creds || !state || resuming.current) return;
+    resuming.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      await requestJoin({ token, name: state.name, accept_notice: true, ...creds });
+    } catch (err) {
+      setError(humanizeConvexError(err, "Could not rejoin the call"));
+    } finally {
+      resuming.current = false;
+      setBusy(false);
+    }
+  };
+  // A guest whose connection dropped (not one who never came in) walks back
+  // in by themselves as soon as they are looking at the page again.
+  const autoResume = !!state?.resumable && state.left_reason === "lapsed" && pageVisible && pageWasTouched();
+  const autoResumed = useRef(false);
+  useWatchEffect(() => {
+    if (!autoResume || autoResumed.current) return;
+    autoResumed.current = true;
+    void resume();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoResume]);
+
   const stopAsking = async () => {
     if (!creds) return;
     setBusy(true);
@@ -330,6 +405,8 @@ export default function GuestMeetPage() {
     if (pressed) setAccepted(notice);
     setEntering(true);
     setError(null);
+    // The browser's prompt still up: join with what it grants, not without.
+    await preview.settled();
     const tracks = preview.handOff();
     const choice = preview.getSnapshot().choice;
     const next = new GuestCall(choice, { mic: prefs.mic, camera: prefs.camera });
@@ -345,6 +422,10 @@ export default function GuestMeetPage() {
       // Left while it was still connecting: that is the leaving, not an error.
       if (leftRef.current) return;
       setPreviewEpoch((n) => n + 1);
+      // Removed, or the call ended: the server's view moves the page to that
+      // ending a moment later, which says it better than a line under Join.
+      const refused = guestJoinRefusalOf(err);
+      if (refused === "removed" || refused === "ended") return;
       setError(humanizeConvexError(err, "Could not join the call"));
     } finally {
       setEntering(false);
@@ -397,24 +478,49 @@ export default function GuestMeetPage() {
     }
   };
 
+  // A dropped connection is a new connection, made in place: a new call from
+  // the old one's devices and wants, swapped under the stage, which stays up
+  // with its "Reconnecting" line rather than flashing back to the lobby.
   const reconnect = async () => {
-    const c = call;
-    // The lobby opens a fresh preview with the devices as the guest last
-    // left them, and the admitted effect walks back in with a new token: a
-    // dropped connection is a new connection.
-    autoEntered.current = false;
-    setCall(null);
-    await c?.leave();
+    const old = call;
+    if (!creds || !old || reopening) return;
+    setReopening(true);
+    const was = old.getSnapshot();
+    const next = new GuestCall(was.choice, was.wants);
+    try {
+      const minted = await mintToken(creds);
+      await old.leave();
+      if (leftRef.current) return void next.leave();
+      setCall(next);
+      await next.reconnectWith(minted);
+      setReopenTries(0);
+    } catch (err) {
+      await next.leave();
+      setCall((cur) => (cur === next ? old : cur));
+      setReopenTries((n) => n + 1);
+      const refused = guestJoinRefusalOf(err);
+      if (refused && refused !== "removed" && refused !== "ended") setError(humanizeConvexError(err));
+    } finally {
+      setReopening(false);
+    }
   };
 
-  // A connection lost to the network comes back with the network, once.
+  // A connection lost to the network comes back on its own: at once with
+  // the network, and otherwise a few times with a growing gap while the page
+  // is in front (a signal server restart or a Wi-Fi to cellular handoff
+  // never takes the browser offline). After that it is the guest's press.
   useWatchEffect(() => {
-    if (ended !== "lost") return;
+    if (ended !== "lost" || reopening) return;
     const onOnline = () => void reconnect();
     window.addEventListener("online", onOnline, { once: true });
-    return () => window.removeEventListener("online", onOnline);
+    const wait = RECONNECT_BACKOFF_MS[reopenTries];
+    const timer = wait !== undefined && pageVisible ? setTimeout(() => void reconnect(), wait) : null;
+    return () => {
+      window.removeEventListener("online", onOnline);
+      if (timer) clearTimeout(timer);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ended]);
+  }, [ended, reopening, reopenTries, pageVisible]);
 
   // The tab says where the guest is: a tab among twenty others is how most of
   // them will come back to it.
@@ -440,7 +546,8 @@ export default function GuestMeetPage() {
         myName={state?.name ?? name}
         transcribed={transcribed}
         recording={recording}
-        recordingAccepted={accepted?.recording ?? false}
+        accepted={accepted}
+        reconnecting={reopening}
         serverTrouble={!!serverError}
         onLeave={() => void leave()}
         onReconnect={() => void reconnect()}
@@ -467,6 +574,8 @@ export default function GuestMeetPage() {
     setError(null);
     setBackToLobby(true);
   };
+  // A place the server let go without anybody deciding it walks back in.
+  const onOutcome = state?.resumable ? () => void resume() : askAgain;
   let outcome: Outcome | null = null;
   if (leftByMe && view === "admitted") {
     outcome = { kind: "view", view: "left", leftReason: "self", retryAt: null, canAskAgain: link.ok };
@@ -478,13 +587,14 @@ export default function GuestMeetPage() {
       leftReason: state.left_reason,
       retryAt: state.retry_at,
       canAskAgain: state.link_open && link.ok,
+      resumable: state.resumable,
       reason: !link.ok ? link.reason : undefined,
     };
   }
   if (outcome) {
     return (
       <MeetShell>
-        <GuestOutcome outcome={outcome} onAskAgain={askAgain} busy={busy} error={error} />
+        <GuestOutcome outcome={outcome} onAskAgain={onOutcome} busy={busy} error={error} />
       </MeetShell>
     );
   }
@@ -503,6 +613,8 @@ export default function GuestMeetPage() {
         recording={recording}
         accepted={accepted}
         creatorTold={!!state?.creator_told}
+        doorFull={doorFull}
+        heldUntil={heldUntil}
         signedIn={mode === "ask" && hasStoredAuthToken()}
         name={name}
         onName={setName}

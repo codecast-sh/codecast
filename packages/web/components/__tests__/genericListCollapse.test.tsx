@@ -42,7 +42,7 @@ afterEach(async () => {
 });
 afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
 
-async function mount(listGroups: ListGroup<Task>[] | null, flatItems: Task[] = tasks) {
+async function mount(listGroups: ListGroup<Task>[] | null, flatItems: Task[] = tasks, onCreate: () => void = () => {}) {
   root = createRoot(host);
   await act(() => root.render(
     <MemoryRouter initialEntries={["/tasks"]}>
@@ -58,7 +58,7 @@ async function mount(listGroups: ListGroup<Task>[] | null, flatItems: Task[] = t
         getItemRoute={(item) => `/tasks/${item.id}`}
         getSearchText={(item) => item.title}
         emptyMessage="No tasks found"
-        onCreate={() => {}}
+        onCreate={onCreate}
       />
     </MemoryRouter>,
   ));
@@ -119,4 +119,22 @@ test("a search with no matches shows No results even when groups were collapsed"
   });
   expect(host.textContent).toContain("No results");
   expect(button("Create one")).toBeUndefined();
+});
+
+// A focused region that owns its keys (the undo timeline card) sits over the
+// list: its keys must not also act on the list behind it.
+test("a key pressed inside a region that owns its keys never reaches the list", async () => {
+  let created = 0;
+  await mount(groups, tasks, () => { created += 1; });
+  const card = document.createElement("div");
+  card.setAttribute("data-owns-keys", "");
+  const inner = document.createElement("button");
+  card.append(inner);
+  document.body.append(card);
+  const press = (el: Element) => act(() => { el.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "c", bubbles: true })); });
+  await press(inner);
+  expect(created).toBe(0);
+  await press(document.body);
+  expect(created).toBe(1);
+  card.remove();
 });

@@ -10,7 +10,7 @@ import { CUES } from "../fixtures/story";
 import { regionPt } from "../world";
 import type { ChapterMotion } from "./contract";
 
-// A short drop: the pair windows are 540px wide, and a full-height one spills past their edges.
+// A short drop: the pair windows are narrower than the desk, and a full-height one spills past their edges.
 const land = (id: string, cue: number) => ({ id, cue, preset: "drop" as const, z: 60, rx: -8, y: -10 });
 
 // The spawn blocks sit at the foot of the lead's transcript; the worker rows

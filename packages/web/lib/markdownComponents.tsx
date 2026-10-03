@@ -4,7 +4,7 @@ import { MermaidDiagram } from "../components/MermaidDiagram";
 import { tryRenderCanvas } from "../components/HtmlSnippet";
 import { tryRenderCastDiff } from "../components/InlineDiff";
 import { EntityAwareCode, EntityAwareLink } from "../components/EntityIdPill";
-import { CollapsibleImage, ImageRowParagraph } from "../components/tools/MarkdownImages";
+import { MarkdownImg, ImageRowParagraph } from "../components/tools/MarkdownImages";
 
 function extractTextFromHast(node: any): string {
   if (!node) return '';
@@ -96,7 +96,7 @@ export const MD_COMPONENTS: Components = {
           td: ({ children }) => (
             <td className="border border-sol-border/50 px-2 py-1">{children}</td>
           ),
-          img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
+          img: MarkdownImg,
           p: ImageRowParagraph,
 };
 

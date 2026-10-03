@@ -12,7 +12,7 @@ import rehypeHighlight from "rehype-highlight";
 import remarkBreaks from "remark-breaks";
 import { entityRemarkPlugins } from "../lib/remarkEntityIds";
 import { remarkEntityCards, type EntityCardsOptions } from "../lib/remarkEntityCards";
-import { CollapsibleImage, ImageRowParagraph } from "./tools/MarkdownImages";
+import { MarkdownImg, ImageRowParagraph } from "./tools/MarkdownImages";
 import { EntityAwareCode, EntityAwareLink } from "./EntityIdPill";
 import { CodeBlock } from "./CodeBlock";
 import { tryRenderCastDiff } from "./InlineDiff";
@@ -50,7 +50,7 @@ export const MESSAGE_MD_REHYPE = [rehypeHighlight];
 export const MESSAGE_MD_COMPONENTS = {
   code: EntityAwareCode,
   a: EntityAwareLink,
-  img: ({ src, alt }: { src?: string | Blob; alt?: string }) => <CollapsibleImage src={src} alt={alt} />,
+  img: MarkdownImg,
   p: ImageRowParagraph,
   pre: ({ node, children, ...props }: any) => renderMarkdownPre(node, children, props),
 };
@@ -83,6 +83,7 @@ export const USER_MD_REMARK = [...entityRemarkPlugins, remarkBreaks, remarkUserH
 // alone on its line is the call's card, `cl-42:15-25` the words said in those
 // turns, embedded. Only those types are promoted here, so a lone task id in a
 // transcript keeps the inline pill it always had; team chat (ChatMessage)
-// promotes every shared reference to a card.
-const ASSISTANT_CARDS: EntityCardsOptions = { types: ["proposal", "call"] };
+// promotes every shared reference to a card. Alone on its line only: the same
+// reference mid-sentence is a citation and keeps its pill.
+const ASSISTANT_CARDS: EntityCardsOptions = { types: ["proposal", "call"], aloneOnly: true };
 export const ASSISTANT_MD_REMARK = [...entityRemarkPlugins, [remarkEntityCards, ASSISTANT_CARDS] as [typeof remarkEntityCards, EntityCardsOptions]];

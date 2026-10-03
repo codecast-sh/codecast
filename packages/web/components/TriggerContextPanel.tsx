@@ -2,7 +2,6 @@
 
 import { copyToClipboard } from "../lib/utils";
 import { useMemo, useState, type ReactNode } from "react";
-import { useRouter } from "next/navigation";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import Link from "next/link";
@@ -41,6 +40,7 @@ import { useCoarseNow } from "../hooks/useCoarseNow";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useTriggers } from "../hooks/useSyncTriggers";
 import { TriggerPromptView } from "./TriggerPromptView";
+import { RailChip, RailDetail, railChipClass } from "./ContextRail";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { LivePulseDot } from "./SessionActivityLine";
@@ -55,9 +55,9 @@ const api = _api as any;
 // any spawned run of it (agent_task_id / run uuid), and the conversation that
 // receives its summaries (target).
 //
-// One live trigger: the strip IS that trigger. Several: the strip is the set —
-// a pill per trigger in roster order, which drills into one trigger's detail
-// and back. A trigger row clicked in the inbox arrives focused on that trigger
+// One live trigger: a chip on the context rail (components/ContextRail) IS
+// that trigger. Several: a count chip and a pill per trigger in roster order,
+// each drilling into one trigger's detail and back. A trigger row clicked in the inbox arrives focused on that trigger
 // (triggerStripRequest); a card click arrives on the whole set.
 //
 // Data: the same store-fed roster the sidebar rows and /triggers use, plus the
@@ -164,8 +164,14 @@ export function TriggerContextPanel({
     setExpanded(true);
   };
 
+  // The run history rides the detail, except on a run's own page, where
+  // browsing the runs is the point of the strip and shouldn't cost a click.
+  // Hidden when the only run is the one being viewed.
+  const showRuns = !!focused && !!runs && (runs.length > 1 || (runs.length === 1 && runs[0]._id !== conversationId))
+    && (expanded || isRunOf(focused, conversationId, sessionId, agentTaskId));
+
   return (
-    <div data-cc-context-panel className="border-b border-sol-border/30 bg-sol-bg-alt/20">
+    <div data-cc-context-panel className="contents">
       {multi ? (
         <SetHeader
           live={live}
@@ -192,44 +198,39 @@ export function TriggerContextPanel({
         />
       )}
 
-      {/* Run history of the focused trigger: a connected dot rail — the next
-          fire (when armed), a "now" tick, then every past run newest first.
-          Outside the expander: browsing runs is the point of the strip on a
-          run's page and shouldn't cost a click. Hidden when the only run is
-          the one being viewed (a one-node rail says nothing the inline turn
-          doesn't). */}
-      {focused && runs && (runs.length > 1 || (runs.length === 1 && runs[0]._id !== conversationId)) && (
-        <div data-cc-context-rail className="contents">
-          <TriggerRunRail
-            runs={runs}
-            now={now}
-            conversationId={conversationId}
-            nextRunAt={focused.status === "scheduled" ? focused.run_at : undefined}
-            className="px-4 pb-1.5 -mt-0.5"
-          />
-        </div>
-      )}
-
-      {expanded && (
-        focused ? (
-          // Keyed by trigger: every per-trigger transient (an armed "Confirm
-          // cancel", an open prompt) dies when the focus moves, however it
-          // moves, so a swap can never cancel the wrong trigger.
-          <TriggerDetail
-            key={focused._id}
-            task={focused}
-            isLoop={focusedIsLoop}
-            now={now}
-            runs={runs}
-            conversationId={conversationId}
-            sessionId={sessionId}
-            agentTaskId={agentTaskId}
-            setSize={multi ? live.length : 1}
-            onShowAll={() => focus(null)}
-          />
-        ) : (
-          <SetList live={live} loopRow={loopRow} now={now} conversationId={conversationId} onFocus={(t) => focus(t._id)} />
-        )
+      {(showRuns || expanded) && (
+        <RailDetail data-cc-context-panel="">
+          {showRuns && (
+            <TriggerRunRail
+              runs={runs!}
+              now={now}
+              conversationId={conversationId}
+              nextRunAt={focused!.status === "scheduled" ? focused!.run_at : undefined}
+              className="px-4 pt-1.5 pb-1"
+            />
+          )}
+          {expanded && (
+            focused ? (
+              // Keyed by trigger: every per-trigger transient (an armed "Confirm
+              // cancel", an open prompt) dies when the focus moves, however it
+              // moves, so a swap can never cancel the wrong trigger.
+              <TriggerDetail
+                key={focused._id}
+                task={focused}
+                isLoop={focusedIsLoop}
+                now={now}
+                runs={runs}
+                conversationId={conversationId}
+                sessionId={sessionId}
+                agentTaskId={agentTaskId}
+                setSize={multi ? live.length : 1}
+                onShowAll={() => focus(null)}
+              />
+            ) : (
+              <SetList live={live} loopRow={loopRow} now={now} conversationId={conversationId} onFocus={(t) => focus(t._id)} />
+            )
+          )}
+        </RailDetail>
       )}
     </div>
   );
@@ -269,13 +270,15 @@ function ProvenanceChip({ id, title }: { id: string; title?: string }) {
   );
 }
 
-function StatusWord({ task, now }: { task: TaskRow; now: number }) {
+// compact: the chip's word, the countdown without "next" and no age.
+function StatusWord({ task, now, compact = false }: { task: TaskRow; now: number; compact?: boolean }) {
   switch (task.status) {
     case "scheduled": {
       if (task.run_at === undefined) return <span className="text-sol-orange">armed</span>;
       // taskStateLabel keeps the wording in lockstep with the inbox rows —
       // including the "due 12m" stuck-signal once a fire sits unclaimed.
       const label = taskStateLabel(task, now);
+      if (compact) return <span className="text-sol-orange tabular-nums">{label}</span>;
       return <span className="text-sol-orange tabular-nums">{task.run_at > now ? `next ${label}` : label}</span>;
     }
     case "running":
@@ -293,7 +296,7 @@ function StatusWord({ task, now }: { task: TaskRow; now: number }) {
       return (
         <span className="text-sol-text-dim">
           done
-          {task.last_run_at ? ` · ran ${fmtDuration(Math.max(0, now - task.last_run_at))} ago` : ""}
+          {!compact && task.last_run_at ? ` · ran ${fmtDuration(Math.max(0, now - task.last_run_at))} ago` : ""}
         </span>
       );
   }
@@ -305,8 +308,10 @@ const Tag = ({ children }: { children: ReactNode }) => (
   </span>
 );
 
-// -- One trigger: the strip is that trigger --
+// -- One trigger: the chip is that trigger --
 
+// What it is and when it next fires; the cadence, where it came from and the
+// verbs are in the detail the chip opens.
 export function SingleHeader({
   task,
   isLoop,
@@ -326,57 +331,25 @@ export function SingleHeader({
   agentTaskId?: string | null;
   onToggle: () => void;
 }) {
-  const router = useRouter();
   const isRun = isRunOf(task, conversationId, sessionId, agentTaskId);
-  const provenance = triggerProvenance(task, conversationId);
-  const triggerHref = isLoop ? null : `/triggers/${task.short_id ?? task._id}`;
+  const title = taskDisplayTitle(task);
   return (
-    <button
-      onClick={onToggle}
-      className="w-full flex items-center gap-2 px-4 py-2 text-xs hover:bg-sol-bg-alt/40 transition-colors"
-    >
+    <RailChip data-cc-rail-item="trigger" open={expanded} onToggle={onToggle} title={`${title} · ${isLoop ? "self-paced loop" : describeTaskCadence(task)}`}>
       <Clock className="w-3.5 h-3.5 text-sol-orange flex-shrink-0" />
-      <ShortcutTooltip label={triggerHref ? "Open the trigger's page" : taskDisplayTitle(task)}>
-        <span
-          role={triggerHref ? "link" : undefined}
-          onClick={
-            triggerHref
-              ? (e) => {
-                  e.stopPropagation();
-                  router.push(triggerHref);
-                }
-              : undefined
-          }
-          className={`font-medium text-sol-orange truncate ${triggerHref ? "hover:underline underline-offset-2" : ""}`}
-        >
-          {taskDisplayTitle(task)}
-        </span>
-      </ShortcutTooltip>
+      <span className="min-w-0 truncate font-medium text-sol-orange">{title}</span>
       {/* Health at a glance while collapsed: only bad outcomes earn a dot. */}
       <SchedHealthDot accent={schedAccent(task) === "running" ? "normal" : schedAccent(task)} task={task} />
-      <span className="text-sol-text-dim flex-shrink-0">{isLoop ? "self-paced loop" : describeTaskCadence(task)}</span>
       {isRun && <Tag>run</Tag>}
-      {isLoop && (
-        <ShortcutTooltip label="The agent paces itself with scheduled wakeups (ScheduleWakeup)">
-          <Tag>loop</Tag>
-        </ShortcutTooltip>
-      )}
-      {/* Provenance: visible without expanding, since on a run's page "where
-          did this come from" is the first question. The title truncates
-          first; the way home never does. */}
-      {provenance.id && <ProvenanceChip id={provenance.id} title={provenance.title} />}
-      <div className="flex items-center gap-1.5 ml-auto flex-shrink-0">
-        <StatusWord task={task} now={now} />
-        {expanded ? <ChevronDown className="w-3 h-3 text-sol-text-dim" /> : <ChevronRight className="w-3 h-3 text-sol-text-dim" />}
-      </div>
-    </button>
+      {isLoop && <Tag>loop</Tag>}
+      <span className="flex-shrink-0"><StatusWord task={task} now={now} compact /></span>
+    </RailChip>
   );
 }
 
-// -- Several triggers: the strip is the set --
+// -- Several triggers: a count chip, then a pill per trigger --
 
-// The collapsed row: a count that opens the whole set, then one pill per
-// trigger in roster order (soonest fire first). A pill focuses its trigger; the
+// A count that opens the whole set, then one pill per trigger in roster order
+// (soonest fire first), all on the rail's row. A pill focuses its trigger; the
 // focused pill toggles the detail. The focused trigger always keeps its pill,
 // even past the fold.
 export function SetHeader({
@@ -401,25 +374,17 @@ export function SetHeader({
   const attention = live.filter((t) => schedAccent(t) === "attention").length;
   const showingAll = expanded && !focused;
   return (
-    <div
-      role="button"
-      tabIndex={-1}
-      onClick={onToggle}
-      className="w-full flex items-center gap-2 px-4 py-1.5 text-xs cursor-pointer hover:bg-sol-bg-alt/40 transition-colors"
-    >
+    <>
       <ShortcutTooltip label="Show every trigger on this session">
         <button
-          onClick={(e) => {
-            e.stopPropagation();
-            if (showingAll) onToggle();
-            else onShowAll();
-          }}
-          className={`flex items-center gap-1.5 flex-shrink-0 rounded px-1 -mx-1 py-0.5 font-medium transition-colors ${
-            showingAll ? "text-sol-orange bg-sol-orange/10" : "text-sol-orange hover:bg-sol-orange/10"
-          }`}
+          type="button"
+          data-cc-rail-item="triggers"
+          aria-expanded={showingAll}
+          onClick={() => (showingAll ? onToggle() : onShowAll())}
+          className={`${railChipClass(showingAll)} !flex-none !min-w-0`}
         >
-          <Clock className="w-3.5 h-3.5" />
-          <span className="tabular-nums">{live.length} triggers</span>
+          <Clock className="w-3.5 h-3.5 text-sol-orange" />
+          <span className="tabular-nums font-medium text-sol-orange">{live.length}</span>
           {attention > 0 && (
             <ShortcutTooltip label={`${attention} need${attention === 1 ? "s" : ""} attention`}>
               <span className="w-1.5 h-1.5 rounded-full bg-sol-red" />
@@ -427,33 +392,19 @@ export function SetHeader({
           )}
         </button>
       </ShortcutTooltip>
-      <div className="flex-1 min-w-0 flex items-center gap-1 overflow-hidden">
-        {shown.map((t) => (
-          <TriggerPill key={t._id} task={t} now={now} active={focused?._id === t._id} onClick={() => onPill(t)} />
-        ))}
-        {folded > 0 && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onShowAll();
-            }}
-            className="flex-shrink-0 px-1.5 py-0.5 rounded-md text-[11px] tabular-nums text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt/60 transition-colors"
-          >
-            +{folded}
-          </button>
-        )}
-      </div>
-      <button
-        aria-label={expanded ? "Collapse" : "Expand"}
-        onClick={(e) => {
-          e.stopPropagation();
-          onToggle();
-        }}
-        className="flex-shrink-0 p-0.5 rounded text-sol-text-dim hover:text-sol-text"
-      >
-        {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-      </button>
-    </div>
+      {shown.map((t) => (
+        <TriggerPill key={t._id} task={t} now={now} active={focused?._id === t._id && expanded} onClick={() => onPill(t)} />
+      ))}
+      {folded > 0 && (
+        <button
+          type="button"
+          onClick={onShowAll}
+          className="flex-shrink-0 h-6 px-1.5 rounded-md text-[11px] tabular-nums text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt/60 transition-colors"
+        >
+          +{folded}
+        </button>
+      )}
+    </>
   );
 }
 
@@ -470,14 +421,14 @@ export function TriggerPill({ task, now, active, onClick }: { task: TaskRow; now
           e.stopPropagation();
           onClick();
         }}
-        className={`group flex-1 basis-0 min-w-[5.5rem] max-w-max inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md border text-[11px] transition-colors ${
+        className={`group min-w-[5.5rem] max-w-[14rem] flex-[0_1_auto] h-6 whitespace-nowrap inline-flex items-center gap-1.5 px-2 rounded-md border text-[11px] transition-colors ${
           active
             ? "border-sol-orange/50 bg-sol-orange/10 text-sol-orange"
             : "border-sol-border/40 bg-sol-bg/40 text-sol-text-muted hover:border-sol-orange/40 hover:text-sol-text"
         } ${accent === "paused" ? "opacity-70" : ""}`}
       >
         <SchedHealthDot accent={accent} task={task} />
-        <span className="truncate">{title}</span>
+        <span className="min-w-0 truncate">{title}</span>
         <span
           className={`flex-shrink-0 tabular-nums ${
             alert ? "text-sol-red" : active ? "text-sol-orange/80" : "text-sol-text-dim"
@@ -506,7 +457,7 @@ function SetList({
   onFocus: (t: TaskRow) => void;
 }) {
   return (
-    <div className="px-2 pb-2 text-xs animate-in fade-in slide-in-from-top-1 duration-150">
+    <div className="px-2 py-1.5 text-xs animate-in fade-in slide-in-from-top-1 duration-150">
       <div className="space-y-px">
         {live.map((t) => {
           const isLoop = t === loopRow;
@@ -592,7 +543,7 @@ function TriggerDetail({
   sessionId?: string | null;
   agentTaskId?: string | null;
   // How many live triggers the strip holds; above one, the detail carries the
-  // way back to the set and the provenance the set header has no room for.
+  // way back to the set.
   setSize: number;
   onShowAll: () => void;
 }) {
@@ -646,19 +597,17 @@ function TriggerDetail({
 
   return (
     <div className="px-4 pb-3 space-y-2.5 text-xs animate-in fade-in slide-in-from-top-1 duration-150">
-      {/* In a set, the pill only carries a short name: the detail opens on the
-          full one, with the trigger's own status and where it came from. */}
-      {inSet && (
-        <div className="flex items-center gap-2 pt-1 min-w-0">
-          <span className="font-medium text-[12px] text-sol-text truncate">{taskDisplayTitle(primary)}</span>
-          {isRun && <Tag>run</Tag>}
-          {isLoop && <Tag>loop</Tag>}
-          {provenance.id && <ProvenanceChip id={provenance.id} title={provenance.title} />}
-          <span className="ml-auto flex-shrink-0">
-            <StatusWord task={primary} now={now} />
-          </span>
-        </div>
-      )}
+      {/* The chip only carries a short name: the detail opens on the full
+          one, with the trigger's own status and where it came from. */}
+      <div className="flex items-center gap-2 pt-2 min-w-0">
+        <span className="font-medium text-[12px] text-sol-text truncate">{taskDisplayTitle(primary)}</span>
+        {isRun && <Tag>run</Tag>}
+        {isLoop && <Tag>loop</Tag>}
+        {provenance.id && <ProvenanceChip id={provenance.id} title={provenance.title} />}
+        <span className="ml-auto flex-shrink-0">
+          <StatusWord task={primary} now={now} />
+        </span>
+      </div>
 
       {/* What this trigger does, in plain words (the Haiku-distilled
           display_summary). The raw prompt is the contract, not the briefing —

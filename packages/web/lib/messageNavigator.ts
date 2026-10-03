@@ -5,17 +5,18 @@
 // session title lookup is injected because each platform has its own store.
 
 import { isTurnInterruptionNotice } from "@codecast/shared/contracts";
-import { isCommandMessage, isStrippedCommand, parseBashInput, parseBashOutput, cleanContent, isSystemMessage } from "./conversationProcessor";
+import { isCommandMessage, cleanContent } from "./conversationProcessor";
+import { isStickyEligible, stickyPromptContent } from "./stickyPrompt";
 import {
   parseMachineDeliveredMessage,
-  cleanUserMessage,
   isBareNudge,
-  isSpawnedTaskPrompt,
   type MachineDeliveredKind,
 } from "../components/sessionMessage";
 import { NAV_ROW_SNIPPET_CHARS, stripContextTags, filterUserMessages, type FilterableMessage } from "@codecast/convex/convex/userMessagesFilter";
 import type { PromptImage } from "./messagePreview";
 import { formatShortDate } from "./utils";
+
+export { isStickyEligible, stickyPromptContent };
 
 // Row kinds hidden behind the "other" chip: machine-delivered messages plus
 // bare "continue" nudges the human typed — navigation noise either way.
@@ -249,14 +250,17 @@ export type NavigatorTick<R> = { row: R; active: boolean };
 
 // Sample up to `max` evenly spaced rows for the minimap. Below the cap every
 // row gets a tick; above it the ticks map onto the row list by rounding, so
-// the first and last rows always have one.
+// the first and last rows always have one. The active row lights the tick
+// nearest it, so a row between two sampled ones still shows where you are.
 export function sampleTicks<R>(rows: R[], max: number, activeIndex: number = -1): NavigatorTick<R>[] {
   const total = rows.length;
   const displayCount = Math.min(total, max);
+  const scale = total <= max ? 1 : (displayCount - 1) / (total - 1);
+  const activeTick = activeIndex < 0 ? -1 : Math.round(activeIndex * scale);
   const ticks: NavigatorTick<R>[] = [];
   for (let i = 0; i < displayCount; i++) {
     const mappedIndex = total <= max ? i : Math.round((i / (displayCount - 1)) * (total - 1));
-    ticks.push({ row: rows[mappedIndex], active: mappedIndex === activeIndex });
+    ticks.push({ row: rows[mappedIndex], active: i === activeTick });
   }
   return ticks;
 }
@@ -276,39 +280,6 @@ export type StickySourceMessage = {
   timestamp: number;
   from_user_id?: string;
 };
-
-// A slash command ("/model opus") and `!` bash mode are the human talking to
-// their client, not to the agent. Both are stored as tag soup
-// ("<command-name>/model</command-name>…<command-args>opus</command-args>"),
-// so a surface that only strips tags paints "/model model opus" as if it were
-// a prompt. The thread already renders them as command blocks.
-function isClientCommand(raw: string): boolean {
-  return isCommandMessage(raw)
-    || isStrippedCommand(raw.trim()) !== null
-    || parseBashInput(raw) !== null
-    || parseBashOutput(raw) !== null;
-}
-
-// The text a sticky prompt header may show for a user message, or null when
-// the message is not the human's own ask: anything machinery delivered (a
-// trigger run, a cast send, a teammate broadcast), a spawned run's opening
-// briefing, a bare nudge, or a command aimed at the client. Every sticky
-// source (timeline, cached user list, last-message fallback) must agree, so
-// they all go through here.
-export function stickyPromptContent(raw: string | null | undefined): string | null {
-  if (!raw || isSpawnedTaskPrompt(raw) || isClientCommand(raw)) return null;
-  const display = cleanUserMessage(raw);
-  return display && !isBareNudge(display) ? display : null;
-}
-
-// A user message the sticky prompt may show: the human's own ask (not machine
-// delivered, not a spawned briefing, not a bare nudge, not a client command),
-// with visible text that is not a system message.
-export function isStickyEligible(content: string): boolean {
-  if (stickyPromptContent(content) === null) return false;
-  const display = cleanContent(content);
-  return display.length > 0 && !isSystemMessage(display);
-}
 
 // The latest prompt that is NOT in the loaded window and sits between the
 // prompt the window resolved (afterTs) and the top visible row (beforeTs).

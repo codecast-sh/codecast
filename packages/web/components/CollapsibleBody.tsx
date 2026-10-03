@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { useHostsReveal } from "../lib/revealHost";
 
 // A body that renders clipped to a short height with a fade at the cut, plus a
 // toggle to open it. Machine-delivered blocks (trigger prompts, messages from
@@ -136,12 +137,16 @@ export function CollapsibleBody({
     return () => ro.disconnect();
   }, [collapsedHeight]);
 
-  const clipped = overflows && !expanded;
+  // A reference in the body opened its full page here: the band is far taller
+  // than the clip and pulls out to the full width, so the body stands open
+  // around it and clips again once the band closes.
+  const hostsReveal = useHostsReveal(innerRef, "[data-collapsible-body]");
+  const clipped = overflows && !expanded && !hostsReveal;
 
   return (
     <div className={className} onFocusCapture={openOnFocus && !expanded ? () => setExpanded(true) : undefined}>
       <div style={clipped ? { maxHeight: collapsedHeight, overflow: "hidden", ...clipFade() } : undefined}>
-        <div ref={innerRef}>{typeof children === "function" ? children(expanded) : children}</div>
+        <div ref={innerRef} data-collapsible-body="">{typeof children === "function" ? children(expanded) : children}</div>
       </div>
       {overflows && (
         <button

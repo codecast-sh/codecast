@@ -13,7 +13,8 @@
 // for the other side's row to show it, and records every state a face read
 // in between. Nothing opens a window and nothing makes a sound.
 //
-// Needs: the dev server up, `CONVEX_SELF_HOSTED_ADMIN_KEY` in the
+// Needs: RIG_DEPLOYMENT=prod (the App Review accounts live on prod; see
+// stack.mjs), the dev server up, `CONVEX_SELF_HOSTED_ADMIN_KEY` in the
 // environment (auth:store mints the sessions), Google Chrome in
 // /Applications (or RIG_CHROME).
 import { mkdirSync, writeFileSync } from "node:fs";

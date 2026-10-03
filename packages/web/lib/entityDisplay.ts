@@ -1,5 +1,4 @@
 import { createContext, useContext, useMemo } from "react";
-import { useQuery } from "convex/react";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useRepoObject } from "../hooks/useRepoObject";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -201,16 +200,16 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   const isRepoObject = type === "pr" || type === "commit";
 
   const queryArgs = live && type ? entityQueryArgs(type, rawId) : null;
-  const task = useQuery(api.tasks.webGet, isTask && queryArgs ? queryArgs : "skip");
-  const plan = useQuery(api.plans.webGet, isPlan && queryArgs ? queryArgs : "skip");
-  const session = useQuery(api.conversations.webGet, isSession && queryArgs ? queryArgs : "skip");
+  const task = useQueryNoThrow(api.tasks.webGet, isTask && queryArgs ? queryArgs : "skip").data;
+  const plan = useQueryNoThrow(api.plans.webGet, isPlan && queryArgs ? queryArgs : "skip").data;
+  const session = useQueryNoThrow(api.conversations.webGet, isSession && queryArgs ? queryArgs : "skip").data;
   // No-throw: agentTasks.webGet is newer than some deployed clients, and a
   // conversation must not crash on a trigger reference just because the backend
   // hasn't caught up — the reference degrades to its short id, then fills in.
   const { data: trigger } = useQueryNoThrow(api.agentTasks.webGet, isTrigger && queryArgs ? queryArgs : "skip");
   // docs/projects are only ever addressed by a full Convex id.
-  const doc = useQuery(api.docs.webGet, type === "doc" && looksConvex ? { id: rawId } : "skip");
-  const project = useQuery(api.projects.webGet, type === "project" && looksConvex ? { id: rawId } : "skip");
+  const doc = useQueryNoThrow(api.docs.webGet, type === "doc" && looksConvex ? { id: rawId } : "skip").data;
+  const project = useQueryNoThrow(api.projects.webGet, type === "project" && looksConvex ? { id: rawId } : "skip").data;
   // An initiative is named by `in-N` or a Convex id; the store's snapshot
   // usually seeds it below, and this keeps the label live. No-throw for the
   // same client and deploy skew reason as triggers.

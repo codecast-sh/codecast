@@ -14,7 +14,7 @@ import { overlayConversationId } from "../store/workspace";
 import { focusComposer } from "../lib/composerControl";
 import { isPeopleWindow } from "../lib/desktop";
 import { useShortcutAction } from "./ShortcutProvider";
-import { performUndo, performRedo } from "../store/undoStack";
+import { useUndoWalk } from "../hooks/useUndoWalk";
 import * as undoTimeline from "../lib/undoTimelineOpen";
 import { useTriageActions } from "../components/triage/useTriageActions";
 import { toggleTriageBarCompact } from "../components/triage/graduation";
@@ -298,13 +298,8 @@ export function useGlobalShortcutActions() {
   useShortcutAction('workbench.8', useCallback(() => switchWorkbench(7), [switchWorkbench]));
   useShortcutAction('workbench.9', useCallback(() => switchWorkbench(8), [switchWorkbench]));
 
-  useShortcutAction('ui.undo', useCallback(() => {
-    return performUndo() || false;
-  }, []));
-
-  useShortcutAction('ui.redo', useCallback(() => {
-    return performRedo() || false;
-  }, []));
+  // ui.undo and ui.redo, plus the held-modifier peek of the timeline.
+  useUndoWalk();
 
   useShortcutAction('ui.undoHistory', useCallback(() => {
     undoTimeline.toggle('interactive');

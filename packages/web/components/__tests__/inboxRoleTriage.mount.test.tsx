@@ -14,6 +14,8 @@
 //              sessions stay rows under it with no gesture of their own
 //   quiet      a role that is quietly dormant files in Dormant, however many
 //              of its sessions wait on it
+//   star       a card's favorite star flips in the same commit as the toggle,
+//              though placement memoizes on a signature without is_favorite
 import { replaceGlobals } from "../../test-helpers/globals";
 import { afterAll, beforeEach, expect, mock, test } from "bun:test";
 import { JSDOM } from "jsdom";
@@ -248,5 +250,18 @@ test("a blocked sub-lead is a sub row under its parent lead, which is the card i
   expect(sub.querySelector("[data-role-gesture]")).toBeNull();
   expect(cardOf(m.host, STANDING)!.compareDocumentPosition(sub) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(cardOf(m.host, STANDING)!.querySelector("[data-role-sessions]")!.textContent).toBe("2 sessions");
+  await m.unmount();
+});
+
+test("a card's star flips in the same commit as the toggle, both ways", async () => {
+  seed([row(MINE, { title: "My own session", is_favorite: false })]);
+  useInboxStore.setState({ favorites: [] } as any);
+  const m = await mountInbox();
+  const star = () => cardOf(m.host, MINE)!.querySelector("[aria-label=Favorite],[aria-label=Unfavorite]")!.getAttribute("aria-label");
+  expect(star()).toBe("Favorite");
+  await act(async () => useInboxStore.getState().toggleFavorite(MINE));
+  expect(star()).toBe("Unfavorite");
+  await act(async () => useInboxStore.getState().toggleFavorite(MINE));
+  expect(star()).toBe("Favorite");
   await m.unmount();
 });

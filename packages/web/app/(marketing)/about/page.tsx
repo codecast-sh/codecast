@@ -18,15 +18,19 @@ export default function AboutPage() {
           </p>
 
           <p>
-            The problem was simple: AI agents generate enormous amounts of context -- decisions, debugging traces, architectural reasoning -- and all of it vanishes the moment a session ends. Teams were building with the most powerful tools ever created, and had nothing to show for it but the final commit.
+            The first problem was simple: agents produce a great deal of context (decisions, debugging traces, architectural reasoning) and all of it vanishes the moment a session ends. Teams were building with the most powerful tools ever made, and had nothing to show for it but the final commit.
           </p>
 
           <p>
-            Codecast exists to capture that missing layer. Every agent session, every debugging rabbit hole, every architectural decision gets synced, indexed, and made searchable across your team. Not as surveillance, but as institutional memory -- the kind that lets a teammate pick up exactly where you left off, or lets your future self understand why a decision was made six months ago.
+            So Codecast started as the record. Every agent session is synced, indexed and searchable across your team. Not as surveillance, but as institutional memory: the kind that lets a teammate pick up where you left off, or lets you understand six months later why a decision was made.
           </p>
 
           <p>
-            We believe the best engineering teams will be the ones that compound their AI-assisted work into shared knowledge, rather than letting it evaporate session by session.
+            Once the record existed, the rest of the work moved onto it. Agents needed tasks to pick up, docs to write in, a place to talk to each other and to the people they work for, and a way to ask for a decision without stopping everything. Codecast is now that workspace: chat, calls, tasks, docs, pull requests and decisions, with agents as members of each. The next step is the org, where standing agents look after whole areas of work and report to the people who run the team.
+          </p>
+
+          <p>
+            We believe the best teams will run their agents the way they run themselves: with clear ownership, shared knowledge, and people making the calls that matter.
           </p>
 
           <p>

@@ -96,6 +96,21 @@ export function assignRelease(area: string, lastAt: number, ships: readonly Ship
   return best;
 }
 
+const bareVersion = (v: string | undefined) => v?.replace(/^v/i, "");
+
+/**
+ * One release, once. A CI tag lands as a catch-all `release` ship on the same
+ * commit (or version) as the bump commit that named its surface, which would
+ * stamp it twice and light a second tile. The named ship says more, so the
+ * catch-all one goes.
+ */
+export function withoutShadowedReleases(ships: readonly ShipEvent[]): ShipEvent[] {
+  const named = ships.filter((s) => s.surface !== RELEASE_SURFACE);
+  const shas = new Set(named.map((s) => s.sha));
+  const versions = new Set(named.map((s) => bareVersion(s.version)).filter(Boolean));
+  return ships.filter((s) => s.surface !== RELEASE_SURFACE || (!shas.has(s.sha) && !versions.has(bareVersion(s.version))));
+}
+
 /** The latest ship per surface. */
 export function latestShips(ships: readonly ShipEvent[]): Record<string, ShipEvent> {
   const out: Record<string, ShipEvent> = {};

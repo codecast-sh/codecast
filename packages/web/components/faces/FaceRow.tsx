@@ -1,4 +1,4 @@
-import { type FaceDensity, type FloatBandSide, FACE_ROW_METRICS, flipKeyframes, CARD_OPEN_MS, CARD_CLOSE_MS, FLOAT_FACE_SIZES, floatBandPlacement, floatBandSideFor, floatFaceSizeOf, floatingRowSize, stepFloatFaceSize } from "../../lib/faces/layout";
+import { type FaceDensity, type FloatBandSide, FACE_ROW_METRICS, flipKeyframes, CARD_OPEN_MS, CARD_CLOSE_MS, FLOAT_FACE_SIZES, floatBandPlacement, floatBandSideFor, floatFaceSizeOf, floatingRowSize, floatOffCallFace, faceMarkScale, stepFloatFaceSize } from "../../lib/faces/layout";
 // THE FACE ROW: presence, walkie, ringing and calls as the same faces in
 // different states (pl-756 F2).
 //
@@ -21,7 +21,7 @@ import { type FaceDensity, type FloatBandSide, FACE_ROW_METRICS, flipKeyframes, 
 // the two by transform, with the timing the surface morph already uses.
 // Reduced motion is no animation, not a fast one.
 //
-// TWO DENSITIES, ONE ROW: `bar` (the header, 32px) and `float` (the floating
+// TWO DENSITIES, ONE ROW: `bar` (the header, 28px) and `float` (the floating
 // window, 64, 96 or 128px as the person sized it, no chrome, click through
 // except faces and cards). The float
 // machinery (useFloatingCircles) sizes the window and lifts click through;
@@ -158,6 +158,7 @@ function FaceSeat({
   registerKey,
   stacked,
   folded = false,
+  offCall = false,
   stackDepth = 0,
   onExpand,
   onPointerDown,
@@ -185,6 +186,9 @@ function FaceSeat({
   /** Folded away behind the float's others circle: the seat keeps its room,
    *  so the window never changes size, but draws nothing and takes no click. */
   folded?: boolean;
+  /** The float's face off the call: drawn at `diameter`, smaller than the
+   *  row's own, so it sizes its own seat rather than reading the row's. */
+  offCall?: boolean;
   /** Its place in the stack, from the front: the first face sits on top. */
   stackDepth?: number;
   onExpand: () => void;
@@ -236,9 +240,10 @@ function FaceSeat({
       data-folded={folded ? "1" : undefined}
       aria-hidden={folded || undefined}
       style={
-        stackDepth >= 0
-          ? ({ "--stack-i": stackDepth, zIndex: stacked ? 10 - Math.min(stackDepth, 9) : undefined } as React.CSSProperties)
-          : undefined
+        {
+          ...(stackDepth >= 0 ? { "--stack-i": stackDepth, zIndex: stacked ? 10 - Math.min(stackDepth, 9) : undefined } : {}),
+          ...(offCall ? { "--face": `${diameter}px`, "--mark-k": faceMarkScale(diameter) } : {}),
+        } as React.CSSProperties
       }
       {...(stacked ? {} : key.warmProps)}
       onMouseEnter={() => onHover(stacked ? null : entry.id)}
@@ -602,7 +607,7 @@ export function FaceRow({
       data-band={density === "float" ? bandSide : undefined}
       style={
         {
-          ...(faceSize ? { "--face": `${faceSize}px`, "--mark-k": Math.sqrt(faceSize / FACE_ROW_METRICS.float.face).toFixed(3) } : {}),
+          ...(faceSize ? { "--face": `${faceSize}px`, "--mark-k": faceMarkScale(faceSize) } : {}),
           ...(stackable ? { "--stack-i-last": outsiders - 1 } : {}),
         } as React.CSSProperties
       }
@@ -632,7 +637,8 @@ export function FaceRow({
             onToggle={toggle}
             onPress={clearTimers}
             registerKey={registerKey}
-            diameter={diameter}
+            diameter={folds && !onTheCall(entry) ? floatOffCallFace(diameter) : diameter}
+            offCall={folds && !onTheCall(entry)}
             stacked={stacked && !onTheCall(entry)}
             folded={folded && !onTheCall(entry)}
             stackDepth={i - callIds.length}
@@ -732,8 +738,9 @@ export function FaceRow({
           }}
           onMouseLeave={() => hover(null)}
         >
-          {openId && openGuest && (
+          {openId && openGuest && row.room && (
             <GuestFaceCard
+              roomKey={row.room}
               identity={openGuest.id}
               name={openGuest.name}
               joinedAgo={openGuest.joinedAgo}
@@ -908,7 +915,7 @@ export function FloatingFaceRow({
                 <Plus className="h-3.5 w-3.5" />
               </button>
             </div>
-            {chrome.inCall && chrome.onExpand && (
+            {callRoomOf(row) && chrome.onExpand && (
               <button type="button" className="faces-btn" data-chrome-btn="open" onClick={chrome.onExpand} title="Open the call window">
                 <Maximize2 className="h-4 w-4" />
                 <span className="faces-btn-word">Open</span>
@@ -931,7 +938,9 @@ export function FloatingFaceRow({
  *  its close is "Dock", back into the header. One that came out on its own
  *  for a ring or a call hides instead, until the next. */
 export type FloatChrome = {
-  inCall: boolean;
+  /** Open: the call full size, wherever it is held. Offered whenever the
+   *  row shows a call, read off the row itself, so a live card drawn from a
+   *  call another window holds still has its way in. */
   onExpand?: () => void;
   onClose: () => void;
   closeWord: string;

@@ -6,7 +6,7 @@ import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useConvexSync } from "./useConvexSync";
 import { admitKnock, autoScribe, bindConvex, isDeliberateRoom } from "../lib/calls/callManager";
 import { syncKnockToasts, type KnockAnswers } from "../lib/calls/knockToasts";
-import { guestDoorActions } from "../lib/calls/guestDoorActions";
+import { admitGuest, denyGuest } from "../lib/calls/guestDoorActions";
 import { getCallStageOpen, useCallStageOpen } from "../lib/calls/callStage";
 import { getScribeStatus, setScribeFeedTargets, stopScribe, subscribeScribe } from "../lib/calls/transcription";
 import { decideAutoScribe } from "../lib/calls/autoScribe";
@@ -185,19 +185,22 @@ export function useCallSync(): void {
     const fresh = (d as any[]).filter((k) => !heardKnocks.has(key(k)));
     heardKnocks = new Set((d as any[]).map(key));
     for (const knock of fresh) soundRoomKnock(`${seatedRoomKey}:${key(knock)}`);
+    // The door's one home first: a knock answered here is held off the list
+    // (localFirst) until the server agrees, and the toasts read that list,
+    // so an answered knock's toast is not put back by a stale push.
+    useInboxStore.getState().syncTable("roomKnocks", d);
     // And something to press when the stage (where the door is) is closed.
     knockToastIds = syncKnockToasts({
       roomKey: seatedRoomKey ?? "",
-      current: d as any[],
+      current: useInboxStore.getState().roomKnocks ?? [],
       fresh,
       shown: knockToastIds,
       stageOpen: getCallStageOpen(),
-      answers: knockAnswers(convex),
+      answers: KNOCK_ANSWERS,
       leader: isNotificationLeader(),
       notify: notifyKnock,
     });
-    useInboxStore.getState().syncTable("roomKnocks", d);
-  }, [seatedRoomKey, convex]));
+  }, [seatedRoomKey]));
   // Opening the stage puts the door on screen: its toasts step aside. Closing
   // it on a knock nobody answered brings the toast back, since the door went
   // with the stage (no second system banner: that one already went up).
@@ -205,7 +208,7 @@ export function useCallSync(): void {
   useWatchEffect(() => {
     if (stageOpen) {
       if (knockToastIds.size === 0) return;
-      knockToastIds = syncKnockToasts({ roomKey: "", current: [], fresh: [], shown: knockToastIds, stageOpen, answers: knockAnswers(convex) });
+      knockToastIds = syncKnockToasts({ roomKey: "", current: [], fresh: [], shown: knockToastIds, stageOpen, answers: KNOCK_ANSWERS });
       return;
     }
     if (!seatedRoomKey) return;
@@ -217,7 +220,7 @@ export function useCallSync(): void {
       fresh: current,
       shown: knockToastIds,
       stageOpen,
-      answers: knockAnswers(convex),
+      answers: KNOCK_ANSWERS,
       leader: isNotificationLeader(),
     });
   }, [stageOpen]);
@@ -237,13 +240,12 @@ function notifyKnock(title: string, body: string, key: string): void {
   void notifyNative(title, body, { key, kind: "call" });
 }
 
-function knockAnswers(convex: Parameters<typeof guestDoorActions>[0]): KnockAnswers {
-  const door = guestDoorActions(convex);
-  return {
-    admitPerson: (roomKey, userId) => void admitKnock(roomKey, userId),
-    admitGuest: (guestId, name) => void door.admit(guestId, name),
-    denyGuest: (guestId) => void door.deny(guestId),
-  };
-}
+// A toast's answers are the door's own: the same store actions, so a knock
+// answered from a toast leaves the door in every surface at once.
+const KNOCK_ANSWERS: KnockAnswers = {
+  admitPerson: (roomKey, userId) => void admitKnock(roomKey, userId),
+  admitGuest: (guestId, name) => admitGuest(guestId, name),
+  denyGuest: (guestId) => denyGuest(guestId),
+};
 
 export { channelRoomKey, sessionRoomKey };

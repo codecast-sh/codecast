@@ -1,7 +1,6 @@
 {
  "asOf": "2026-01-15T14:30:05.000Z",
  "notes": "synthetic session: per-sender webhook rate limiting, cut at line 20",
- "judge": "names the per-sender rate limiting of the billing webhook as the goal (not the flaky test detour), specific enough to find it later; the subtitle reflects the configurable limits and passing tests",
  "snapshot": {
   "mode": "title",
   "spine": [

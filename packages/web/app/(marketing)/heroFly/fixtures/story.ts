@@ -79,11 +79,11 @@ export const CUES = {
   replySent: 32.5,
   forked: 33.6,
   /** 6 Decide. */
-  decisionAsked: 37.8,
+  decisionAsked: 38.0,
   decisionAnswered: 39.9,
   /** 7 Work: the lead files a task, it lands on the board, an agent claims it. */
   taskFiled: 41.3,
-  taskLands: 43.5,
+  taskLands: 43.65,
   taskClaimed: 44.8,
   /** 8 Automation: the trigger counts down as the camera flies in and fires just after it lands, so the hold opens on the run it starts, not the one before. */
   triggerFires: 49.8,
@@ -96,5 +96,5 @@ export const CUES = {
   /** 12 Memory: the cut to three weeks later. */
   threeWeeks: 74.3,
   /** 13 Anywhere: the API worker's row (on the cloud host) is opened, after the camera lands. */
-  remoteOpen: 83.4,
+  remoteOpen: 83.55,
 } as const;

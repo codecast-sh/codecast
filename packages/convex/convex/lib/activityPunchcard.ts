@@ -20,12 +20,13 @@ export type ActivityInterval = { start: number; end: number; hours: number; msgs
 export function bucketPunchcardRows(intervals: ActivityInterval[], tzOffsetMinutes: number, sendDays?: SendDayRow[]) {
   const HOUR = 3600000;
   const tzShift = tzOffsetMinutes * 60000;
-  const rows: Record<string, { hours: number[]; msgs: number[]; sends: number[]; sessions: number[]; day_sessions: number }> = {};
+  const rows: Record<string, { hours: number[]; msgs: number[]; sends: number[]; words: number[]; sessions: number[]; day_sessions: number }> = {};
   const rowFor = (date: string) =>
     (rows[date] ||= {
       hours: new Array(24).fill(0),
       msgs: new Array(24).fill(0),
       sends: new Array(24).fill(0),
+      words: new Array(24).fill(0),
       sessions: new Array(24).fill(0),
       day_sessions: 0,
     });
@@ -68,7 +69,9 @@ export function bucketPunchcardRows(intervals: ActivityInterval[], tzOffsetMinut
       if (!n) continue;
       const local = day.day_start + h * HOUR + HOUR / 2 - tzShift;
       const d = new Date(Math.floor(local / HOUR) * HOUR);
-      rowFor(d.toISOString().split("T")[0]).sends[d.getUTCHours()] += n;
+      const row = rowFor(d.toISOString().split("T")[0]);
+      row.sends[d.getUTCHours()] += n;
+      row.words[d.getUTCHours()] += day.word_hours[h] || 0;
     }
   }
 
@@ -78,6 +81,7 @@ export function bucketPunchcardRows(intervals: ActivityInterval[], tzOffsetMinut
       hours: r.hours.map((h) => Math.round(h * 100) / 100),
       msgs: r.msgs.map((m) => Math.round(m)),
       sends: r.sends,
+      words: r.words,
       sessions: r.sessions,
       day_sessions: r.day_sessions,
     }))

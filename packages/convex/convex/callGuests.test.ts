@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import {
   CALL_MEMBER_STALE_MS,
+  GUEST_CREATOR_NOTICE_ANY_LINK_MS,
   GUEST_DENY_COOLDOWN_MS,
   GUEST_KNOCKS_PER_LINK_PER_MINUTE,
   GUEST_LINK_MAX_TTL_MS,
@@ -10,6 +11,9 @@ import {
   GUEST_LINK_TTL_MS,
   MAX_WAITING_GUESTS,
   MAX_WAITING_PER_LINK,
+  GUEST_RESUME_MS,
+  GUEST_JOIN_REFUSAL_TEXT,
+  guestIdentity,
 } from "@codecast/shared/contracts";
 import {
   admitGuest,
@@ -23,19 +27,23 @@ import {
   noteGuestsInMedia,
   getGuestState,
   guestHeartbeat,
+  guestLinkPreview,
   guestView,
   leaveCall,
   linkRefusal,
   listGuestLinks,
+  mintGuestToken,
+  guestPushName,
   removeGuest,
   requestJoin,
   revokeGuestLink,
+  settleQuietGuests,
   sweepGuestRooms,
 } from "./callGuests";
-import { authForToken, getLiveRooms, getRoomKnocks, leaveRoom } from "./calls";
+import { authForToken, getLiveRooms, getRoomKnocks, joinRoom, leaveRoom } from "./calls";
 import { appendSegments } from "./transcripts";
 import { expireRoomGrants } from "./callRooms";
-import { GUEST_ROSTER_TAIL_MS } from "./lib/callGuestAdmission";
+import { GUEST_ROSTER_TAIL_MS, callGuestsOnRecord } from "./lib/callGuestAdmission";
 
 const ROOM = "dm:u1:u2";
 const run = (fn: any) => fn._handler ?? fn.handler;
@@ -171,8 +179,28 @@ describe("links", () => {
     // Even the conversation's owner: a session's title is the team's label for agent work.
     const own = await run(createGuestLink)(w.as("u2"), { room_key: room });
     expect((await run(describeGuestLink)(w.as(null), { token: own.token })).title).toBeNull();
-    const listed = await run(listGuestLinks)(w.as("u2"), { room_key: room });
-    expect(listed[0]).toMatchObject({ title: null, created_by_public: expect.any(String) });
+    // The invite panel says the same before any link exists.
+    expect(await run(guestLinkPreview)(w.as("u2"), { room_key: room })).toEqual({ title: null, inviter: "Lee" });
+  });
+
+  test("the invite panel's preview keeps a private channel's name inside, and is for inviters only", async () => {
+    const seat = (id: string, room: string) => ({ _id: id, room_key: room, team_id: "t1", user_id: "u1", user_name: "Sam", joined_at: 0, last_seen: Date.now(), muted: false, camera: false, sharing: false });
+    const w = world({
+      teams: [{ _id: "t1", name: "T", features: { calls: true, chat: true } }],
+      chat_channels: [
+        { _id: "ch1", team_id: "t1", name: "design", kind: "public" },
+        { _id: "ch2", team_id: "t1", name: "layoffs-q4", kind: "private" },
+      ],
+      chat_channel_members: [
+        { _id: "chm0", channel_id: "ch1", user_id: "u1" },
+        { _id: "chm1", channel_id: "ch2", user_id: "u1" },
+      ],
+      call_members: [seat("cm1", "channel:ch1"), seat("cm2", "channel:ch2")],
+    });
+    expect(await run(guestLinkPreview)(w.as("u1"), { room_key: "channel:ch1" })).toEqual({ title: "#design", inviter: "Sam Rivera" });
+    expect(await run(guestLinkPreview)(w.as("u1"), { room_key: "channel:ch2" })).toEqual({ title: null, inviter: "Sam Rivera" });
+    expect(await run(guestLinkPreview)(w.as(null), { room_key: "channel:ch2" })).toBeNull();
+    expect(await run(guestLinkPreview)(w.as("u9"), { room_key: ROOM })).toBeNull();
   });
 
   test("the notice follows the room: transcription off and a recording running", async () => {
@@ -222,6 +250,10 @@ describe("knocking", () => {
         guest_id,
         link_id: row.link_id,
         link_turned_away: 0,
+        // Whose link brought them: the doorkeeper tells an expected guest
+        // from a link that got out.
+        link_by: "Sam Rivera",
+        link_mine: true,
         can_answer: true,
       },
     ]);
@@ -315,7 +347,7 @@ describe("a guest secret opens one row and nothing else", () => {
     expect((await run(authForGuestToken)(w.as(null), { guest_id: ada.guest_id, secret: bob.secret })).ok).toBe(false);
     // Its own row reads, and what it reads is about this meeting only.
     const mine = await state(w.as(null), { guest_id: ada.guest_id, secret: ada.secret });
-    expect(Object.keys(mine).sort()).toEqual(["creator_told", "knocked_at", "left_reason", "link_open", "name", "retry_at", "room", "view"]);
+    expect(Object.keys(mine).sort()).toEqual(["creator_told", "knocked_at", "left_reason", "link_open", "name", "resumable", "retry_at", "room", "view"]);
     expect(Object.keys(mine.room).sort()).toEqual(["inviter", "live", "recording", "title", "transcribed"]);
     expect(mine.view).toBe("waiting");
   });
@@ -374,7 +406,7 @@ describe("answering the door", () => {
     expect(w.scheduled).toContainEqual({ room_key: ROOM, tail: 0 });
     expect(await run(authForGuestToken)(w.as(null), { guest_id: ada.guest_id, secret: ada.secret })).toEqual({
       ok: false,
-      reason: "You were removed from this call",
+      reason: "removed",
     });
     await expect(
       run(requestJoin)(w.as(null), { token: ada.link.token, name: "Ada", accept_notice: true, guest_id: ada.guest_id, secret: ada.secret }),
@@ -419,7 +451,7 @@ describe("an admission is for one huddle", () => {
     expect(w.scheduled).toContainEqual({ room_key: ROOM, tail: 0 });
     expect(await run(authForGuestToken)(w.as(null), { guest_id: ada.guest_id, secret: ada.secret })).toEqual({
       ok: false,
-      reason: "You have not been let in",
+      reason: "not_admitted",
     });
   });
 
@@ -508,16 +540,36 @@ describe("a link closes on everybody waiting at it, however it closes", () => {
     expect((await run(getGuestState)(w.as(null), { guest_id: ada.guest_id, secret: ada.secret })).view).toBe("closed");
   });
 
-  test("a link made from a seat lives on team membership, not on the seat", async () => {
+  test("a link made from a seat lives as long as that huddle, and the next huddle turns it off", async () => {
     const room = "session:c1";
     const w = world({
       conversations: [{ _id: "c1", user_id: "u2", team_id: "t1", title: "Secret plans", is_private: true }],
-      call_members: [{ _id: "cm1", room_key: room, team_id: "t1", user_id: "u1", user_name: "Sam", joined_at: 0, last_seen: Date.now(), muted: false, camera: false, sharing: false }],
+      call_members: [
+        { _id: "cm1", room_key: room, team_id: "t1", user_id: "u1", user_name: "Sam", joined_at: 0, last_seen: Date.now(), muted: false, camera: false, sharing: false },
+        { _id: "cm2", room_key: room, team_id: "t1", user_id: "u2", user_name: "Lee", joined_at: 0, last_seen: Date.now(), muted: false, camera: false, sharing: false },
+      ],
     });
     const link = await run(createGuestLink)(w.as("u1"), { room_key: room });
     expect(w.db._tables.call_guest_links[0].created_via).toBe("seat");
-    w.db._tables.call_members.length = 0; // they leave the huddle; the link still works
+    // The creator steps out; the huddle they made it in still runs.
+    w.db._tables.call_members.splice(0, 1);
     expect((await run(describeGuestLink)(w.as(null), { token: link.token })).ok).toBe(true);
+    // The huddle is over: the private session's room keeps no door for strangers.
+    w.db._tables.call_members.length = 0;
+    expect(await run(describeGuestLink)(w.as(null), { token: link.token })).toEqual({ ok: false, reason: "inviter_gone" });
+    await expect(run(requestJoin)(w.as(null), { token: link.token, name: "Ada", accept_notice: true })).rejects.toThrow(/can no longer invite/);
+    // And the room's next huddle starts without it for good.
+    await expireRoomGrants(w.as("u2"), room);
+    expect(w.db._tables.call_guest_links[0].revoked_at).toBeNumber();
+  });
+
+  test("a seat link still dies with its creator's team membership mid-huddle", async () => {
+    const room = "session:c1";
+    const w = world({
+      conversations: [{ _id: "c1", user_id: "u2", team_id: "t1", title: "x", is_private: true }],
+      call_members: [{ _id: "cm1", room_key: room, team_id: "t1", user_id: "u1", user_name: "Sam", joined_at: 0, last_seen: Date.now(), muted: false, camera: false, sharing: false }],
+    });
+    const link = await run(createGuestLink)(w.as("u1"), { room_key: room });
     w.db._tables.team_memberships.splice(0, 1);
     expect(await run(describeGuestLink)(w.as(null), { token: link.token })).toEqual({ ok: false, reason: "inviter_gone" });
   });
@@ -555,6 +607,7 @@ describe("what a guest is told about the room", () => {
       knocked_at: null,
       creator_told: false,
       link_open: true,
+      resumable: false,
       room: null,
     });
   });
@@ -619,9 +672,73 @@ describe("the door sees who is really asking", () => {
     w.db._tables.call_guests[0].last_seen = 0; // page closed, came back later
     await run(guestHeartbeat)(w.as(null), { guest_id: ada.guest_id, secret: ada.secret });
     expect(w.db._tables.push_outbox).toHaveLength(1);
-    expect(w.db._tables.push_outbox[0]).toMatchObject({ user_id: "u1", type: "call_guest_waiting", title: "Ada is waiting to join" });
+    expect(w.db._tables.push_outbox[0]).toMatchObject({ user_id: "u1", type: "call_guest_waiting", title: "Ada (guest) is waiting to join" });
     // And the guest's page may say so.
     expect((await run(getGuestState)(w.as(null), { guest_id: ada.guest_id, secret: ada.secret })).creator_told).toBe(true);
+  });
+
+  test("a leaked link cannot page its creator: one push per link per window, however many arrive", async () => {
+    const w = world();
+    const link = await run(createGuestLink)(w.as("u1"), { room_key: ROOM });
+    w.db._tables.users[0].push_token = "tok";
+    w.db._tables.users[0].notifications_enabled = true;
+    w.db._tables.push_outbox = [];
+    w.db._tables.presence = [];
+    w.db._tables.call_members.length = 0;
+    const guests = [];
+    for (let i = 0; i < 3; i++) {
+      const g = await run(requestJoin)(w.as(null), { token: link.token, name: `G${i}`, accept_notice: true });
+      guests.push(g);
+      // Walk away to free the place, then come back as somebody new.
+      await run(leaveCall)(w.as(null), { guest_id: g.guest_id, secret: g.secret });
+    }
+    expect(w.db._tables.push_outbox).toHaveLength(1);
+    // Every arrival the push covered may say "we let them know".
+    for (const g of guests) {
+      const row = w.db._tables.call_guests.find((r: any) => r._id === g.guest_id);
+      expect(row.creator_told_at).toBe(w.db._tables.call_guest_links[0].creator_told_at);
+    }
+    // Past the window, one push names everybody waiting on the link.
+    w.db._tables.call_guest_links[0].creator_told_at = Date.now() - 11 * 60_000;
+    await run(requestJoin)(w.as(null), { token: link.token, name: "Bo", accept_notice: true });
+    await run(requestJoin)(w.as(null), { token: link.token, name: "Cy", accept_notice: true });
+    expect(w.db._tables.push_outbox).toHaveLength(2);
+    expect(w.db._tables.push_outbox[1].title).toBe("Bo (guest) is waiting to join");
+    w.db._tables.call_guest_links[0].creator_told_at = Date.now() - 11 * 60_000;
+    await run(requestJoin)(w.as(null), { token: link.token, name: "Di", accept_notice: true });
+    expect(w.db._tables.push_outbox[2].title).toBe("3 guests are waiting to join");
+  });
+
+  test("several leaked links of one creator do not multiply the pushes", async () => {
+    const OTHER = "dm:u1:u3";
+    const w = world();
+    w.db._tables.users.push({ _id: "u3", name: "Kit" });
+    w.db._tables.team_memberships.push({ _id: "tm3", user_id: "u3", team_id: "t1" });
+    w.db._tables.users[0].push_token = "tok";
+    w.db._tables.users[0].notifications_enabled = true;
+    w.db._tables.push_outbox = [];
+    w.db._tables.presence = [];
+    const one = await run(createGuestLink)(w.as("u1"), { room_key: ROOM });
+    w.db._tables.call_members[0].room_key = OTHER;
+    const two = await run(createGuestLink)(w.as("u1"), { room_key: OTHER });
+    w.db._tables.call_members.length = 0;
+    await run(requestJoin)(w.as(null), { token: one.token, name: "Ada", accept_notice: true });
+    const bo = await run(requestJoin)(w.as(null), { token: two.token, name: "Bo", accept_notice: true });
+    expect(w.db._tables.push_outbox).toHaveLength(1);
+    // The push was about another door, so Bo's page does not claim word was sent.
+    expect((await run(getGuestState)(w.as(null), { guest_id: bo.guest_id, secret: bo.secret })).creator_told).toBe(false);
+    // Past the cross-link window the other room's next arrival is news again.
+    w.db._tables.call_guest_links[0].creator_told_at = Date.now() - GUEST_CREATOR_NOTICE_ANY_LINK_MS - 1;
+    await run(requestJoin)(w.as(null), { token: two.token, name: "Cy", accept_notice: true });
+    expect(w.db._tables.push_outbox).toHaveLength(2);
+  });
+
+  test("a name that is a link or an address never reaches a lock screen", () => {
+    expect(guestPushName("Ada")).toBe("Ada (guest)");
+    for (const n of ["evil.example/login", "www.x.io", "pay at bank.com now", "ada@corp.example", "https //x"]) {
+      expect(guestPushName(n)).toBe("A guest");
+    }
+    expect(guestPushName("Dr. Ada")).toBe("Dr. Ada (guest)");
   });
 
   test("a creator with no phone to tell is not claimed to have been told", async () => {
@@ -709,26 +826,42 @@ describe("the media room is made to agree", () => {
     await run(admitGuest)(w.as("u1"), { guest_id: bob.guest_id });
     const rows = () => Object.fromEntries(w.db._tables.call_guests.map((g: any) => [g._id, g]));
     rows()[bob.guest_id].last_seen = Date.now() - GUEST_ADMISSION_LAPSE_MS - 1;
+    rows()[bob.guest_id].media_seen_at = Date.now() - GUEST_ADMISSION_LAPSE_MS - 1;
     w.scheduled.length = 0;
-    expect(await run(sweepGuestRooms)(w.as(null), {})).toEqual({ rooms: 1, ended: 0, lapsed: 1 });
+    expect(await run(sweepGuestRooms)(w.as(null), {})).toMatchObject({ rooms: 1, ended: 0, lapsed: 1 });
+    // The media server is asked before anybody is let go.
+    expect(w.scheduled).toEqual([{ room_key: ROOM, guest_ids: [bob.guest_id] }]);
+    expect(rows()[bob.guest_id].status).toBe("admitted");
+    w.scheduled.length = 0;
+    expect(await run(settleQuietGuests)(w.as(null), { room_key: ROOM, guest_ids: [bob.guest_id], in_media: [] })).toEqual({ kept: 0, lapsed: 1 });
     expect(rows()[bob.guest_id]).toMatchObject({ status: "left", left_reason: "lapsed" });
     expect(rows()[ada.guest_id].status).toBe("admitted");
     expect(w.scheduled).toEqual([{ room_key: ROOM, tail: 0 }]);
     // A quiet room with nobody seated, no record and no grace: over.
     w.db._tables.call_members.length = 0;
-    expect(await run(sweepGuestRooms)(w.as(null), {})).toEqual({ rooms: 1, ended: 1, lapsed: 0 });
+    expect(await run(sweepGuestRooms)(w.as(null), {})).toMatchObject({ rooms: 1, ended: 1, lapsed: 0 });
     expect(rows()[ada.guest_id]).toMatchObject({ status: "left", left_reason: "huddle_ended" });
-    // Nothing admitted anywhere: the sweep is one empty read.
-    expect(await run(sweepGuestRooms)(w.as(null), {})).toEqual({ rooms: 0, ended: 0, lapsed: 0 });
+    // Nothing admitted anywhere and no huddle running: nothing to check.
+    expect(await run(sweepGuestRooms)(w.as(null), {})).toEqual({ rooms: 0, ended: 0, lapsed: 0, watched: 1, abandoned: 0 });
   });
 
-  test("the last teammate leaving a room nothing transcribes ends the guests' admissions there and then", async () => {
+  test("a teammate reloading the tab in a room nothing transcribes keeps the guests in, and the grace still ends it", async () => {
     const w = world();
     const ada = await linkAndKnock(w);
     await run(admitGuest)(w.as("u1"), { guest_id: ada.guest_id });
+    // beforeunload leaves; the reloaded page joins a second later.
     await run(leaveRoom)(w.as("u1"), { room_key: ROOM });
+    expect(w.db._tables.call_guests[0].status).toBe("admitted");
+    expect(w.db._tables.call_room_state[0].emptied_at).toBeNumber();
+    expect(await run(guestHeartbeat)(w.as(null), { guest_id: ada.guest_id, secret: ada.secret })).toEqual({ view: "admitted" });
+    await run(joinRoom)(w.as("u1"), { room_key: ROOM });
+    expect(w.db._tables.call_guests[0].status).toBe("admitted");
+    expect((await run(authForGuestToken)(w.as(null), { guest_id: ada.guest_id, secret: ada.secret })).ok).toBe(true);
+    // A real departure: past the grace the huddle is over, and the sweep says so.
+    await run(leaveRoom)(w.as("u1"), { room_key: ROOM });
+    w.db._tables.call_room_state[0].emptied_at = Date.now() - 4 * 60_000;
+    await run(sweepGuestRooms)(w.as(null), {});
     expect(w.db._tables.call_guests[0]).toMatchObject({ status: "left", left_reason: "huddle_ended" });
-    expect(w.scheduled).toContainEqual({ room_key: ROOM, tail: 0 });
   });
 });
 
@@ -764,5 +897,370 @@ describe("a guest's calls", () => {
     await run(requestJoin)(w.as(null), { token: ada.link.token, name: "Ada L", accept_notice: true, guest_id: ada.guest_id, secret: ada.secret });
     await run(admitGuest)(w.as("u1"), { guest_id: ada.guest_id });
     expect(w.db._tables.call_guest_attendance.map((r: any) => [r.transcript_id, r.name])).toEqual([["tr1", "Ada"], ["tr2", "Ada L"]]);
+  });
+});
+
+// A fake LiveKit for the roster check: who is listed, and every call in order.
+function fakeLivekit(listed: () => string[]) {
+  const env = { ...process.env };
+  const realFetch = globalThis.fetch;
+  const calls: string[] = [];
+  process.env.LIVEKIT_URL = "wss://lk.test";
+  process.env.LIVEKIT_API_KEY = "k";
+  process.env.LIVEKIT_API_SECRET = "s".repeat(32);
+  globalThis.fetch = (async (url: string, init: any) => {
+    const body = JSON.parse(init.body);
+    const method = url.split("/").at(-1)!;
+    if (method === "ListParticipants") {
+      calls.push("list");
+      return new Response(JSON.stringify({ participants: listed().map((identity) => ({ identity, name: identity })) }));
+    }
+    calls.push(`${method}:${body.identity}${body.permission ? `:${JSON.stringify(body.permission)}` : ""}`);
+    return new Response("{}");
+  }) as any;
+  return { calls, restore: () => { globalThis.fetch = realFetch; process.env = env; } };
+}
+
+function rosterCtx(w: ReturnType<typeof world>, calls: string[]) {
+  return {
+    runQuery: (_fn: any, args: any) => {
+      calls.push("allowed");
+      return run(allowedGuestIdentities)(w.as(null), args);
+    },
+    runMutation: (_fn: any, args: any) => run(noteGuestsInMedia)(w.as(null), args),
+    scheduler: { runAfter: async () => {} },
+  };
+}
+
+describe("a guest put out stays out, past every tail", () => {
+  test("the roster check lists first, then strips a put-out guest's rights before dropping them", async () => {
+    const w = world();
+    const ada = await linkAndKnock(w, "Ada");
+    await run(admitGuest)(w.as("u1"), { guest_id: ada.guest_id });
+    await run(removeGuest)(w.as("u1"), { guest_id: ada.guest_id });
+    const lk = fakeLivekit(() => [`guest:${ada.guest_id}`]);
+    try {
+      expect(await run(enforceGuestRoster)(rosterCtx(w, lk.calls), { room_key: ROOM, tail: GUEST_ROSTER_TAIL_MS.length })).toEqual({ removed: 1 });
+      expect(lk.calls).toEqual([
+        "list",
+        "allowed",
+        `UpdateParticipant:guest:${ada.guest_id}:${JSON.stringify({ can_subscribe: false, can_publish: false, can_publish_data: false, can_update_metadata: false })}`,
+        `RemoveParticipant:guest:${ada.guest_id}`,
+      ]);
+    } finally {
+      lk.restore();
+    }
+  });
+
+  test("a guest from an earlier huddle still connected after the tail is put out when the next huddle starts", async () => {
+    const w = world();
+    const ada = await linkAndKnock(w, "Ada");
+    await run(admitGuest)(w.as("u1"), { guest_id: ada.guest_id });
+    await run(removeGuest)(w.as("u1"), { guest_id: ada.guest_id });
+    // The tail has long run out; nobody is admitted; LiveKit still lists them.
+    w.scheduled.length = 0;
+    await expireRoomGrants(w.as("u1"), ROOM);
+    expect(w.scheduled).toEqual([{ room_key: ROOM, tail: 0 }]);
+    const lk = fakeLivekit(() => [`guest:${ada.guest_id}`, "u1"]);
+    try {
+      expect(await run(enforceGuestRoster)(rosterCtx(w, lk.calls), { room_key: ROOM, tail: GUEST_ROSTER_TAIL_MS.length })).toEqual({ removed: 1 });
+    } finally {
+      lk.restore();
+    }
+    // A room nobody ever made a guest link for costs LiveKit nothing.
+    const other = world();
+    await expireRoomGrants(other.as("u1"), ROOM);
+    expect(other.scheduled).toEqual([]);
+  });
+
+  test("the minute sweep keeps looking at a running huddle whose room put a guest out within the hour", async () => {
+    const w = world();
+    const ada = await linkAndKnock(w, "Ada");
+    await run(admitGuest)(w.as("u1"), { guest_id: ada.guest_id });
+    await run(removeGuest)(w.as("u1"), { guest_id: ada.guest_id });
+    expect(w.db._tables.call_guests[0].settled_at).toBeNumber();
+    w.scheduled.length = 0;
+    expect(await run(sweepGuestRooms)(w.as(null), {})).toMatchObject({ rooms: 0, watched: 1 });
+    expect(w.scheduled).toEqual([{ room_key: ROOM, tail: GUEST_ROSTER_TAIL_MS.length }]);
+    // An hour on, the room is no longer watched.
+    w.db._tables.call_guests[0].settled_at = Date.now() - 61 * 60_000;
+    w.scheduled.length = 0;
+    expect(await run(sweepGuestRooms)(w.as(null), {})).toMatchObject({ watched: 0 });
+    expect(w.scheduled).toEqual([]);
+  });
+
+  test("a team switching calls off puts its guests out, not only stops new tokens", async () => {
+    const w = world();
+    const ada = await linkAndKnock(w, "Ada");
+    await run(admitGuest)(w.as("u1"), { guest_id: ada.guest_id });
+    expect(await run(allowedGuestIdentities)(w.as(null), { room_key: ROOM })).toEqual([`guest:${ada.guest_id}`]);
+    w.db._tables.teams[0].features = { calls: false };
+    expect(await run(allowedGuestIdentities)(w.as(null), { room_key: ROOM })).toEqual([]);
+  });
+
+  test("the media server sees a marked name, and the guest's page gets theirs back plain", async () => {
+    const w = world();
+    const ada = await linkAndKnock(w, "Sam Rivera");
+    await run(admitGuest)(w.as("u1"), { guest_id: ada.guest_id });
+    const env = { ...process.env };
+    process.env.LIVEKIT_URL = "wss://lk.test";
+    process.env.LIVEKIT_API_KEY = "k";
+    process.env.LIVEKIT_API_SECRET = "s".repeat(32);
+    try {
+      const actx = { runQuery: (_fn: any, args: any) => run(authForGuestToken)(w.as(null), args) };
+      const minted = await run(mintGuestToken)(actx, { guest_id: ada.guest_id, secret: ada.secret });
+      expect(minted.name).toBe("Sam Rivera");
+      const claims = JSON.parse(Buffer.from(minted.token.split(".")[1], "base64url").toString());
+      expect(claims.name).toBe("Sam Rivera (guest)");
+    } finally {
+      process.env = env;
+    }
+  });
+});
+
+describe("a leaked link cannot wear down the door", () => {
+  test("hundreds of abandoned knocks cost the door nothing, and the sweep settles them", async () => {
+    const w = world();
+    const link = await run(createGuestLink)(w.as("u1"), { room_key: ROOM });
+    const linkRow = w.db._tables.call_guest_links[0];
+    const old = Date.now() - 20 * 60_000;
+    for (let i = 0; i < 300; i++) {
+      w.db._tables.call_guests.push({ _id: `call_guests_old${i}`, link_id: linkRow._id, room_key: ROOM, team_id: "t1", name: `Bot${i}`, secret_hash: "x", status: "waiting", created_at: old, knocked_at: old, last_seen: old });
+    }
+    const live = await run(requestJoin)(w.as(null), { token: link.token, name: "Ada", accept_notice: true });
+    const knocks = await run(getRoomKnocks)(w.as("u1"), { room_key: ROOM, guests: true });
+    expect(knocks.map((k: any) => k.guest_id)).toEqual([live.guest_id]);
+    const res = await run(sweepGuestRooms)(w.as(null), {});
+    expect(res.abandoned).toBe(300);
+    expect(w.db._tables.call_guests.filter((g: any) => g.status === "waiting").map((g: any) => g._id)).toEqual([live.guest_id]);
+    expect(w.db._tables.call_guests.find((g: any) => g._id === "call_guests_old0")).toMatchObject({ status: "left", left_reason: "lapsed" });
+  });
+
+  test("pages beating back after a lapse take no more places at the door than a knock could", async () => {
+    const w = world();
+    const link = await run(createGuestLink)(w.as("u1"), { room_key: ROOM });
+    const guests = [];
+    for (let i = 0; i < 2 * MAX_WAITING_PER_LINK; i++) {
+      // Each knock's page goes quiet at once, so the next one finds a place.
+      guests.push(await run(requestJoin)(w.as(null), { token: link.token, name: `Bot${i}`, accept_notice: true }));
+      w.db._tables.call_guests.at(-1).last_seen = Date.now() - GUEST_ADMISSION_LAPSE_MS - 1;
+      w.db._tables.call_guests.at(-1).created_at = Date.now() - 120_000;
+    }
+    const answers = [];
+    for (const g of guests) answers.push(await run(guestHeartbeat)(w.as(null), { guest_id: g.guest_id, secret: g.secret }));
+    const knocks = await run(getRoomKnocks)(w.as("u1"), { room_key: ROOM, guests: true });
+    expect(knocks).toHaveLength(MAX_WAITING_PER_LINK);
+    expect(answers.filter((a: any) => a.door_full)).toHaveLength(MAX_WAITING_PER_LINK);
+    expect(answers.every((a: any) => a.view === "waiting")).toBe(true);
+  });
+});
+
+describe("the room's mutations and reads", () => {
+  test("a guest id that names nothing answers the same as a guest elsewhere", async () => {
+    const w = world();
+    const ada = await linkAndKnock(w);
+    for (const fn of [admitGuest, denyGuest, removeGuest]) {
+      await expect(run(fn)(w.as("u9"), { guest_id: ada.guest_id })).rejects.toThrow("Only someone in the huddle can do that");
+      await expect(run(fn)(w.as("u9"), { guest_id: "call_guests_nope" })).rejects.toThrow("Only someone in the huddle can do that");
+    }
+  });
+
+  test("a private channel's name never travels with a link", async () => {
+    const pub = "channel:ch1";
+    const priv = "channel:ch2";
+    const seat = (id: string, room: string) => ({ _id: id, room_key: room, team_id: "t1", user_id: "u1", user_name: "Sam", joined_at: 0, last_seen: Date.now(), muted: false, camera: false, sharing: false });
+    const w = world({
+      chat_channels: [
+        { _id: "ch1", team_id: "t1", name: "design", kind: "public" },
+        { _id: "ch2", team_id: "t1", name: "layoffs-q4", kind: "private" },
+      ],
+      chat_channel_members: [{ _id: "chm1", channel_id: "ch2", user_id: "u1" }],
+      call_members: [seat("cm1", pub), seat("cm2", priv)],
+    });
+    const { linkTitle } = await import("./callGuests");
+    expect(await linkTitle(w.as(null), { room_key: pub })).toBe("#design");
+    expect(await linkTitle(w.as(null), { room_key: priv })).toBeNull();
+  });
+
+  test("a guest whose phone holds the page in the background stays in the room's list between beats", async () => {
+    const w = world();
+    const ada = await linkAndKnock(w);
+    await run(admitGuest)(w.as("u1"), { guest_id: ada.guest_id });
+    w.db._tables.call_guests[0].last_seen = Date.now() - CALL_MEMBER_STALE_MS - 15_000;
+    expect((await run(getLiveRooms)(w.as("u1"), {}))[0].guests).toHaveLength(1);
+    expect((await run(listGuestLinks)(w.as("u1"), { room_key: ROOM }))[0]).toMatchObject({ admitted: 1, waiting: 0 });
+  });
+
+  test("a beat that computes a new view for the page writes it once, so the page's subscription follows", async () => {
+    const w = world();
+    const ada = await linkAndKnock(w);
+    await run(guestHeartbeat)(w.as(null), { guest_id: ada.guest_id, secret: ada.secret });
+    expect(w.db._tables.call_guests[0].beat_view).toBe("waiting:live");
+    w.db._tables.call_guest_links[0].expires_at = Date.now() - 1;
+    expect(await run(guestHeartbeat)(w.as(null), { guest_id: ada.guest_id, secret: ada.secret })).toEqual({ view: "closed" });
+    expect(w.db._tables.call_guests[0].beat_view).toBe("closed:live");
+    const writes = w.db._tables.call_guests[0];
+    const before = JSON.stringify(writes);
+    await run(guestHeartbeat)(w.as(null), { guest_id: ada.guest_id, secret: ada.secret });
+    expect(JSON.stringify(w.db._tables.call_guests[0])).toBe(before);
+  });
+
+  test("the call record lists its guests, spoken or not, marked as guests", async () => {
+    const w = world({
+      transcripts: [{ _id: "tr1", room_key: ROOM, team_id: "t1", started_by: "u1", status: "live", started_at: Date.now() - 60_000, routes: [], last_seq: 0 }],
+    });
+    const bo = await linkAndKnock(w, "Bo");
+    await run(admitGuest)(w.as("u1"), { guest_id: bo.guest_id });
+    const ada = await linkAndKnock(w, "Ada");
+    w.db._tables.call_guests.find((g: any) => g._id === ada.guest_id).last_seen = Date.now();
+    await run(admitGuest)(w.as("u1"), { guest_id: ada.guest_id });
+    w.db._tables.call_guest_attendance[1].joined_at += 1;
+    expect(await callGuestsOnRecord(w.as(null), { _id: "tr1", participants: [] } as any)).toEqual([
+      { name: "Bo (guest)", joined_at: expect.any(Number), spoke: false },
+      { name: "Ada (guest)", joined_at: expect.any(Number), spoke: false },
+    ]);
+  });
+
+  test("who spoke is matched by identity: two guests with one name stay two, a renamed guest stays one", async () => {
+    const w = world({
+      transcripts: [{ _id: "tr1", room_key: ROOM, team_id: "t1", started_by: "u1", status: "live", started_at: Date.now() - 60_000, routes: [], last_seq: 0 }],
+    });
+    const first = await linkAndKnock(w, "Ada");
+    await run(admitGuest)(w.as("u1"), { guest_id: first.guest_id });
+    const second = await linkAndKnock(w, "Ada");
+    w.db._tables.call_guests.find((g: any) => g._id === second.guest_id).last_seen = Date.now();
+    await run(admitGuest)(w.as("u1"), { guest_id: second.guest_id });
+    w.db._tables.call_guest_attendance[1].joined_at += 1;
+    // The first Ada spoke under a corrected name; the transcript carries the
+    // name the row has now, the attendance the one she came in under.
+    const record = {
+      _id: "tr1",
+      participants: [{ id: guestIdentity(first.guest_id), name: "Ada Lovelace (guest)" }],
+    } as any;
+    expect(await callGuestsOnRecord(w.as(null), record)).toEqual([
+      { name: "Ada (guest)", joined_at: expect.any(Number), spoke: true },
+      { name: "Ada (guest)", joined_at: expect.any(Number), spoke: false },
+    ]);
+  });
+});
+
+describe("a quiet page is asked about before it is let go", () => {
+  function quiet(w: ReturnType<typeof world>, id: string, opts: { media?: boolean } = {}) {
+    const row = w.db._tables.call_guests.find((g: any) => g._id === id);
+    row.last_seen = Date.now() - GUEST_ADMISSION_LAPSE_MS - 1;
+    if (opts.media) row.media_seen_at = Date.now() - GUEST_ADMISSION_LAPSE_MS - 1;
+    return row;
+  }
+
+  test("a guest the media server still lists is kept; one it does not is let go", async () => {
+    const w = world();
+    const ada = await linkAndKnock(w, "Ada");
+    await run(admitGuest)(w.as("u1"), { guest_id: ada.guest_id });
+    const row = quiet(w, ada.guest_id, { media: true });
+    expect(
+      await run(settleQuietGuests)(w.as(null), { room_key: ROOM, guest_ids: [ada.guest_id], in_media: [guestIdentity(ada.guest_id)] }),
+    ).toEqual({ kept: 1, lapsed: 0 });
+    expect(row.status).toBe("admitted");
+    expect(Date.now() - row.last_seen).toBeLessThan(1000);
+    // A beat that landed between the sweep and the answer keeps them too.
+    expect(await run(settleQuietGuests)(w.as(null), { room_key: ROOM, guest_ids: [ada.guest_id], in_media: [] })).toEqual({ kept: 0, lapsed: 0 });
+    expect(row.status).toBe("admitted");
+  });
+
+  test("a place nobody came into ends as not_joined, one that dropped as lapsed", async () => {
+    const w = world();
+    const ada = await linkAndKnock(w, "Ada");
+    await run(admitGuest)(w.as("u1"), { guest_id: ada.guest_id });
+    const bob = await linkAndKnock(w, "Bob");
+    await run(admitGuest)(w.as("u1"), { guest_id: bob.guest_id });
+    // Bob's page beat from inside the media; Ada never left the lobby.
+    await run(guestHeartbeat)(w.as(null), { guest_id: bob.guest_id, secret: bob.secret, in_media: true });
+    quiet(w, ada.guest_id);
+    quiet(w, bob.guest_id);
+    await run(settleQuietGuests)(w.as(null), { room_key: ROOM, guest_ids: [ada.guest_id, bob.guest_id], in_media: [] });
+    const rows = Object.fromEntries(w.db._tables.call_guests.map((g: any) => [g._id, g]));
+    expect(rows[ada.guest_id]).toMatchObject({ status: "left", left_reason: "not_joined" });
+    expect(rows[bob.guest_id]).toMatchObject({ status: "left", left_reason: "lapsed" });
+  });
+
+  test("a guest let go that way walks back in without a knock, inside the window and the same huddle", async () => {
+    const w = world();
+    const ada = await linkAndKnock(w, "Ada");
+    await run(admitGuest)(w.as("u1"), { guest_id: ada.guest_id });
+    quiet(w, ada.guest_id, { media: true });
+    await run(settleQuietGuests)(w.as(null), { room_key: ROOM, guest_ids: [ada.guest_id], in_media: [] });
+    const st = await run(getGuestState)(w.as(null), { guest_id: ada.guest_id, secret: ada.secret });
+    expect(st).toMatchObject({ view: "left", left_reason: "lapsed", resumable: true });
+    const back = await run(requestJoin)(w.as(null), { token: ada.link.token, name: "Ada", accept_notice: true, guest_id: ada.guest_id, secret: ada.secret });
+    expect(back.status).toBe("admitted");
+    expect(await run(getRoomKnocks)(w.as("u1"), { room_key: ROOM, guests: true })).toEqual([]);
+    expect((await run(authForGuestToken)(w.as(null), { guest_id: ada.guest_id, secret: ada.secret })).ok).toBe(true);
+  });
+
+  test("past the window, or once the huddle ends, a let-go guest knocks like anyone", async () => {
+    const w = world();
+    const ada = await linkAndKnock(w, "Ada");
+    await run(admitGuest)(w.as("u1"), { guest_id: ada.guest_id });
+    const row = quiet(w, ada.guest_id, { media: true });
+    await run(settleQuietGuests)(w.as(null), { room_key: ROOM, guest_ids: [ada.guest_id], in_media: [] });
+    row.settled_at = Date.now() - GUEST_RESUME_MS - 1;
+    expect((await run(getGuestState)(w.as(null), { guest_id: ada.guest_id, secret: ada.secret })).resumable).toBe(false);
+    row.settled_at = Date.now() - 1;
+    expect((await run(getGuestState)(w.as(null), { guest_id: ada.guest_id, secret: ada.secret })).resumable).toBe(true);
+    // The huddle ended and a new one started: every seat is newer than the
+    // moment the place went.
+    w.db._tables.call_members[0].joined_at = Date.now();
+    const st = await run(getGuestState)(w.as(null), { guest_id: ada.guest_id, secret: ada.secret });
+    expect(st).toMatchObject({ view: "left", resumable: false });
+    const again = await run(requestJoin)(w.as(null), { token: ada.link.token, name: "Ada", accept_notice: true, guest_id: ada.guest_id, secret: ada.secret });
+    expect(again.status).toBe("waiting");
+  });
+
+  test("a knock abandoned at the door never resumes into the call", async () => {
+    const w = world();
+    const ada = await linkAndKnock(w, "Ada");
+    const row = w.db._tables.call_guests[0];
+    row.last_seen = 0;
+    await run(sweepGuestRooms)(w.as(null), {});
+    expect(row).toMatchObject({ status: "left", left_reason: "lapsed" });
+    expect((await run(getGuestState)(w.as(null), { guest_id: ada.guest_id, secret: ada.secret })).resumable).toBe(false);
+  });
+});
+
+describe("the room's thread keeps who let a stranger in or out", () => {
+  test("admit and remove each write one line naming the doorkeeper and the guest", async () => {
+    const w = world();
+    const ada = await linkAndKnock(w, "Ada");
+    await run(admitGuest)(w.as("u1"), { guest_id: ada.guest_id });
+    await run(admitGuest)(w.as("u1"), { guest_id: ada.guest_id });
+    await run(removeGuest)(w.as("u1"), { guest_id: ada.guest_id });
+    const lines = (w.db._tables.call_chat_messages ?? []).map((r: any) => [r.event, String(r.user_id), r.event_guest_name, r.room_key]);
+    expect(lines).toEqual([
+      ["guest_admitted", "u1", "Ada", ROOM],
+      ["guest_removed", "u1", "Ada", ROOM],
+    ]);
+  });
+
+  test("turning a knock away writes nothing", async () => {
+    const w = world();
+    const ada = await linkAndKnock(w, "Ada");
+    await run(denyGuest)(w.as("u1"), { guest_id: ada.guest_id });
+    expect(w.db._tables.call_chat_messages ?? []).toEqual([]);
+  });
+});
+
+describe("a join the server refuses says why in words the page can act on", () => {
+  test("mintGuestToken throws a coded ConvexError", async () => {
+    const env = { ...process.env };
+    process.env.LIVEKIT_URL = "wss://lk.test";
+    process.env.LIVEKIT_API_KEY = "k";
+    process.env.LIVEKIT_API_SECRET = "s".repeat(32);
+    try {
+      const ctx = { runQuery: async () => ({ ok: false, reason: "removed" }) };
+      const err: any = await run(mintGuestToken)(ctx, { guest_id: "x", secret: "y" }).catch((e: any) => e);
+      expect(err.data).toEqual({ code: "removed", message: GUEST_JOIN_REFUSAL_TEXT.removed });
+    } finally {
+      process.env = env;
+    }
   });
 });

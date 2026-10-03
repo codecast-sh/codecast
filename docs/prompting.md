@@ -4,7 +4,9 @@ Every prompt this product ships, and every prompt a node on the line runs,
 follows this standard. A change to a prompt is a change to behavior, and it
 ships the way a code change does: proven broken, rewritten, proven fixed
 (the-line-end-to-end.md LE8). Sections are numbered P1 onward so a review can
-cite them.
+cite them. The prompting principles in docs/principles.md (PR-prompt-1 to
+PR-prompt-4) are the source of the rules here; this file is how they apply to
+a prompt.
 
 ## P1. A prompt states intent, not a script
 
@@ -18,6 +20,10 @@ that site what the instruction protects.
   case the rule did not name.
 - Do not script phrasing or put words in the model's mouth. Describe the
   quality of the output instead (short, plain, cites the line it read).
+- Write the smallest self-contained set of principles that produces the
+  behavior: the intent, why it matters, and its exceptions. Forms, rigid
+  structure and spelled-out mechanics of tools the reader already knows
+  bury the intent; a conversational reader also needs room to converse.
 
 ## P2. One prompt, one decision
 
@@ -32,6 +38,8 @@ Examples anchor. Use one only when the behavior cannot be conveyed by a
 principle, keep it far from the likely inputs, and prefer a contrast (this,
 not that) over a single model answer. Never paste a production failure into a
 prompt as an example of what not to do: fix the instruction that produced it.
+A lesson an eval taught enters the prompt as the general principle behind it,
+not as the case that taught it.
 
 ## P4. Write it clean
 
@@ -91,11 +99,48 @@ UI string will drift; render both from the same source.
 5. **Show the difference.** The card carries at most three before/after pairs:
    the input, the old reply, the new reply, and the judge's note.
 
+The freezes and judges are the bar, not the obstacle: a red eval goes green
+by changing the prompt, never by loosening a judge or dropping a freeze.
+Before calling one model worse than another at a job, tune the prompt for
+that model and read both models' outputs side by side; a prompt written for
+one model measures the prompt, not the other model.
+
 Claims of improvement need `separated: better` (an exact one sided
 Mann-Whitney at p ≤ 0.05 with five or more reps a side). "Looks better on two
 draws" is not evidence.
 
-## P10. Review checklist
+## P10. Context the reader can reason over
+
+What a node or an agent reads is part of its prompt, and it is judged the
+same way: does the reader get what its decision needs, in a form it can
+reason over?
+
+- Long history goes in as a faithful condensation built from the full
+  sources, with stable ids and a tool to open any original. A crude
+  truncation or a hand-cut window hides exactly the detail that mattered.
+- Facts carry their dates, and the reader knows the current time and how
+  long it has been since the last activity, so it can judge freshness.
+- Every source that bears on the decision is in (chat, calls, linked work,
+  images); everything else stays out (P7).
+- A continuing session already holds its role and standing instructions. A
+  wake carries what changed, not the role again. Guidance that applies only
+  in a situation arrives in tool output at the moment it applies, not in the
+  standing prompt.
+
+## P11. Correct toward balance
+
+A prompt change that fixes a tendency often swings to the opposite failure.
+The target is the balanced behavior, not the reverse of the miss.
+
+- Understand why the current prompt produces the tendency before changing
+  it, and make the smallest change that fixes it.
+- Judge it on varied scenarios and personas, including ones where the old
+  behavior was right, with enough samples to tell the variants apart (P9).
+- When outputs keep missing round after round, simplify the prompt rather
+  than add to it. Accumulated rules contradict each other and the model
+  follows the loudest one.
+
+## P12. Review checklist
 
 A reviewer of a prompt change answers each, pass or fail with one line:
 
@@ -105,4 +150,9 @@ A reviewer of a prompt change answers each, pass or fail with one line:
 4. Are new examples justified and non-anchoring (P3)?
 5. Does it read clean, with no history (P4)?
 6. Is shared text rendered from its one home (P8)?
-7. Is there red, then green, on the same freezes, with guards (P9)?
+7. Is there red, then green, on the same freezes, with guards, and no
+   loosened judge (P9)?
+8. Does the reader get what its decision needs, condensed and dated, with
+   nothing resent on a wake (P10)?
+9. Does the change aim at the balanced behavior, smallest change first, and
+   not the opposite failure (P11)?

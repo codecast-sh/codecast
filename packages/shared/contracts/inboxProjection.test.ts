@@ -677,7 +677,7 @@ describe("field ownership constants", () => {
       "agent_status", "is_idle", "is_unresponsive", "awaiting_input", "is_connected",
       "tmux_session", "permission_mode", "agent_started_at", "open_tasks", "open_tasks_at",
       "message_count", "updated_at", "last_turn_allows_park",
-      "agent_status_updated_at", "agent_status_boundary", "turn_completed_at", "hibernated_at", "last_heartbeat", "last_role_is_user", "auq_open", "daemon_alive_until", "producing_until",
+      "agent_status_updated_at", "agent_status_raw", "agent_status_boundary", "turn_completed_at", "hibernated_at", "last_heartbeat", "last_role_is_user", "auq_open", "daemon_alive_until", "producing_until",
       "child_asking", "activity", "context_tokens", "last_model_call_at",
     ]);
     expect([...INBOX_PROJECTION_FIELDS]).toEqual([
@@ -846,6 +846,30 @@ describe("deriveLiveAt: one idle rule at any instant", () => {
         expect(twice).toEqual(once);
       }
     }
+  });
+
+  // A replica derives at its own clock from a payload the overlay shipped
+  // earlier: the shipped status is already coerced, so it rides beside the
+  // daemon's raw status. A working row whose trust decayed to idle while its
+  // heartbeat lived is stopped once the heartbeat lapses (ct-56054).
+  test("a payload shipped at one instant derives every later instant exactly as the raw facts do", () => {
+    const shipped = (r: LiveFactsRow, t: number): LiveFactsRow => {
+      const d = live(r, t);
+      return { ...r, agent_status: d.agent_status, awaiting_input: d.awaiting_input, agent_status_raw: r.agent_status ?? null };
+    };
+    for (let i = 0; i < 150; i++) {
+      const r = facts();
+      for (const t1 of [T0 - 2 * MIN, T0, T0 + 50 * S]) {
+        const payload = shipped(r, t1);
+        for (const t2 of [t1, t1 + 50 * S, t1 + 2 * MIN, t1 + 2 * H]) expect(live(payload, t2)).toEqual(live(r, t2));
+      }
+    }
+    const decayed: LiveFactsRow = {
+      status: "completed", updated_at: T0 - 14 * 24 * H, message_count: 14, agent_status: "working",
+      agent_status_updated_at: T0 - 25 * MIN, last_heartbeat: T0 - 17 * S, daemon_alive_until: T0 + 103 * S,
+    };
+    expect(live(decayed, T0 + 35 * S).agent_status).toBe("idle");
+    expect(live(shipped(decayed, T0 + 35 * S), T0 + 120 * S).agent_status).toBe("stopped");
   });
 
   test("for fixed facts, is_idle never returns to false as time passes; an ask and a daemon never come back", () => {

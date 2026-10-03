@@ -6,12 +6,18 @@
 /** What a story is about, in the vocabulary the prose call also answers in. */
 export type ChangeKind = "feature" | "fix" | "perf" | "infra" | "docs" | "test" | "release" | "revert";
 
-/** One area's share of a commit: files touched and lines changed. */
-export type AreaTouch = { touches: number; insertions: number; deletions: number };
+/**
+ * One area's share of a commit: files touched and lines changed, and how many
+ * of those lines sit in generated files (isGeneratedPath). Commits projected
+ * before `generated` existed read as all source.
+ */
+export type AreaTouch = { touches: number; insertions: number; deletions: number; generated?: number };
 
 /** A commit's files collapsed to what layer 0 reads (spec 7.1 step 1). */
 export type FileSummary = {
   areas: Record<string, AreaTouch>;
+  /** The same touches one folder deeper, keyed `area/sub` (narrowAreas). */
+  subareas: Record<string, AreaTouch>;
   /** The 8 paths with the most changed lines, largest first. */
   top_paths: string[];
   /** Every path the schema risk names, so a 600-file commit cannot hide one past the top 8. */
@@ -32,13 +38,44 @@ export const ROOT_AREA = "root";
  * reads as `github`.
  */
 export function areaOf(path: string): string {
+  return areaParts(path).area;
+}
+
+/** Whether a path lands in an area as a day names it: the area itself, or the folder under it once narrowAreas split it. */
+export function pathInArea(path: string, area: string): boolean {
+  const p = areaParts(path);
+  return p.area === area || p.sub === area;
+}
+
+/** The area and, when the path goes deeper, the folder under it: `outreach/backend/x.ts` is `outreach` then `backend`. */
+function areaParts(path: string): { area: string; sub: string | null } {
   const parts = path.replace(/^\.?\/+/, "").split("/").filter(Boolean);
-  if (parts.length <= 1) return ROOT_AREA;
-  const head = CONTAINER_DIRS.has(parts[0]) && parts.length > 2 ? parts[1] : parts[0];
-  return head.replace(/^\.+/, "") || ROOT_AREA;
+  if (parts.length <= 1) return { area: ROOT_AREA, sub: null };
+  const contained = CONTAINER_DIRS.has(parts[0]) && parts.length > 2;
+  const rest = parts.slice(contained ? 2 : 1);
+  return { area: (contained ? parts[1] : parts[0]).replace(/^\.+/, "") || ROOT_AREA, sub: rest.length > 1 ? rest[0] : null };
 }
 
 const SCHEMA_PATH = /(^|\/)schema\.ts$|(^|\/)migrations\/|\.sql$|(^|\/)prisma\//;
+
+/**
+ * Files no one wrote by hand: lockfiles, drizzle snapshots, generated code,
+ * test fixtures and snapshots, fonts and images. Their lines are real diff
+ * but not work to review, so size judgments (the bulk risk, the order of a
+ * story's files) read past them.
+ */
+const GENERATED_PATH = new RegExp([
+  /(^|\/)(bun\.lockb?|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|Gemfile\.lock|poetry\.lock|uv\.lock|composer\.lock|Podfile\.lock|go\.sum|flake\.lock)$/.source,
+  /(^|\/)meta\/[^/]*_snapshot\.json$/.source,
+  /(^|\/)(_generated|__generated__|__fixtures__|__snapshots__)\//.source,
+  /\.snap$/.source,
+  /\.(woff2?|ttf|otf|eot)$/.source,
+  /\.(png|jpe?g|gif|webp|avif|ico|icns|bmp|tiff?|svg)$/.source,
+].join("|"), "i");
+
+export function isGeneratedPath(path: string): boolean {
+  return GENERATED_PATH.test(path);
+}
 
 export function isSchemaPath(path: string): boolean {
   return SCHEMA_PATH.test(path);
@@ -49,18 +86,60 @@ export const TOP_PATHS = 8;
 /** Collapse a commit's file list to areas, top paths and schema paths. */
 export function summarizeFiles(files: readonly CommitFile[]): FileSummary {
   const areas: Record<string, AreaTouch> = {};
-  for (const f of files) {
-    const a = (areas[areaOf(f.filename)] ??= { touches: 0, insertions: 0, deletions: 0 });
+  const subareas: Record<string, AreaTouch> = {};
+  const add = (bag: Record<string, AreaTouch>, key: string, f: CommitFile) => {
+    const a = (bag[key] ??= { touches: 0, insertions: 0, deletions: 0, generated: 0 });
     a.touches += 1;
     a.insertions += f.additions;
     a.deletions += f.deletions;
+    if (isGeneratedPath(f.filename)) a.generated! += f.additions + f.deletions;
+  };
+  for (const f of files) {
+    const { area, sub } = areaParts(f.filename);
+    add(areas, area, f);
+    add(subareas, sub ? `${area}/${sub}` : area, f);
   }
   const top_paths = [...files]
     .sort((x, y) => y.additions + y.deletions - (x.additions + x.deletions) || x.filename.localeCompare(y.filename))
     .slice(0, TOP_PATHS)
     .map((f) => f.filename);
   const schema_paths = files.map((f) => f.filename).filter(isSchemaPath);
-  return { areas, top_paths, schema_paths };
+  return { areas, subareas, top_paths, schema_paths };
+}
+
+/** One area holding this share of a day's file touches is split into the folders under it. */
+export const NARROW_SHARE = 0.8;
+
+/**
+ * A repository whose work all sits under one folder (`outreach/backend`,
+ * `outreach/web`) would put every story of the day in one section. When one
+ * area holds most of the day's touches, its touches are relabelled by the
+ * folder under it, so the day reads as backend, web, mobile. Commits without
+ * subareas (rows projected before they existed) keep their areas.
+ */
+export function narrowAreas<C extends { areas: Record<string, AreaTouch>; subareas?: Record<string, AreaTouch> }>(commits: readonly C[]): C[] {
+  const totals: Record<string, number> = {};
+  let all = 0;
+  for (const c of commits) for (const [a, t] of Object.entries(c.areas)) { totals[a] = (totals[a] ?? 0) + t.touches; all += t.touches; }
+  const [top] = Object.entries(totals).sort((x, y) => y[1] - x[1]);
+  if (!top || top[1] < all * NARROW_SHARE) return [...commits];
+  const subs = new Set(commits.flatMap((c) => Object.keys(c.subareas ?? {}).filter((k) => k.startsWith(`${top[0]}/`))));
+  if (subs.size < 2) return [...commits];
+  return commits.map((c) => {
+    if (!c.subareas || !c.areas[top[0]]) return c;
+    const areas: Record<string, AreaTouch> = {};
+    for (const [a, t] of Object.entries(c.areas)) if (a !== top[0]) areas[a] = t;
+    for (const [k, t] of Object.entries(c.subareas)) {
+      if (k !== top[0] && !k.startsWith(`${top[0]}/`)) continue;
+      const label = k === top[0] ? top[0] : k.slice(top[0].length + 1);
+      const into = (areas[label] ??= { touches: 0, insertions: 0, deletions: 0, generated: 0 });
+      into.touches += t.touches;
+      into.insertions += t.insertions;
+      into.deletions += t.deletions;
+      into.generated! += t.generated ?? 0;
+    }
+    return { ...c, areas };
+  });
 }
 
 /** Areas ranked by files touched, then lines, then name, so ties never flip. */

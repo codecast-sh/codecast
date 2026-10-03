@@ -106,7 +106,7 @@
   "calls": {
     "config": {
       "calls_enabled": true,
-      "calls_version": "4"
+      "calls_version": "5"
     },
     "stdout": "* Calls — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,

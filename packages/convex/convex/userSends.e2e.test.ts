@@ -34,7 +34,7 @@ test("deferred counting preserves sender and team attribution and excludes machi
   expect(await scheduleUserSend(ctx, conversation, { role: "user", content: '<session-message from="jx12345">hello</session-message>' }, 1)).toBe(false);
   expect(await scheduleUserSend(ctx, conversation, { role: "user", content: "Backend B (ct-51438) review fixes: all five of mine fixed." }, 1)).toBe(false);
   expect(await scheduleUserSend(ctx, conversation, { role: "user", content: "hello", from_user_id: "users_sender" as any }, 1)).toBe(true);
-  expect(scheduled).toEqual([{ user_id: "users_sender", team_id: "teams_active", timestamp: 1 }]);
+  expect(scheduled).toEqual([{ user_id: "users_sender", team_id: "teams_active", words: 1, timestamp: 1 }]);
   await (record as any)._handler({ db }, scheduled[0]);
   expect(db._tables.user_send_daily[0]).toMatchObject({ user_id: "users_sender", team_id: "teams_active", total: 1 });
 });

@@ -11,7 +11,7 @@ import { AgentStatusPill, ConversationHeaderBar, ConversationHeaderTitle } from 
 import { ConversationMetadata } from "@/components/conversation/sessionChrome";
 import { AssistantBlock, UserPrompt } from "@/components/conversation/blocks/turnBlocks";
 import { fly, useFilmTime } from "../filmClock";
-import { FilmGrow, LiftedRow } from "../film";
+import { FilmDip, FilmGrow, LiftedRow } from "../film";
 import { workerRow } from "../fixtures/desk";
 import { BOOT, WORKERS, WORKER_SESSIONS, workerStatus } from "../fixtures/fanout";
 import { CUES, PEOPLE, SESSIONS } from "../fixtures/story";
@@ -28,7 +28,18 @@ function WorkerHeader({ which }: { which: Which }) {
     <div className="h-full bg-sol-bg">
       {status && <ConversationHeaderBar
         title={<ConversationHeaderTitle text={s.title} />}
-        status={<span {...fly(`${surfaceOf[which]}/fanout.status:${which}`)} className="inline-flex origin-left"><AgentStatusPill agentStatus={status} /></span>}
+        status={
+          <span {...fly(`${surfaceOf[which]}/fanout.status:${which}`)} className="inline-flex origin-left">
+            {/* The API worker's turn ends on its question (idle shows no pill): the pill clears and returns on the answer with a fade, never in one frame. */}
+            {which === "api" ? (
+              <FilmDip out={CUES.question} back={CUES.answered}>
+                <AgentStatusPill agentStatus={status === "idle" ? "working" : status} />
+              </FilmDip>
+            ) : (
+              <AgentStatusPill agentStatus={status} />
+            )}
+          </span>
+        }
         facts={<ConversationMetadata agentType={s.agent} model={WORKERS[which].model} />}
       />}
     </div>
@@ -58,6 +69,7 @@ function WorkerBoot({ which, now }: { which: Which; now: number }) {
       </div>
       {step >= 2 && (
         <div {...fly(`${surface}/fanout.seed:${which}`)}>
+          <AssistantBlock content={w.look} toolCalls={w.looks} toolResults={w.lookResults} timestamp={now - 3_500} messageId={`hero-m-look-${which}`} agentType={agentType} />
           <WorkerPlan which={which} now={now} />
           <AssistantBlock toolCalls={[w.seed]} toolResults={[w.seedResult]} timestamp={now - 3_000} messageId={`hero-m-seed-${which}`} agentType={agentType} showHeader={false} />
         </div>

@@ -34,7 +34,7 @@ import { isHarnessScratch, normalizeRepository } from "./lib/gitRefs";
 import { canonicalCommandArguments } from "./localFirstCommands";
 
 /** Bumped by the story prompt (changesProse.ts) so every story's inputs_hash moves and prose regenerates. */
-export const STORY_PROMPT_VERSION = "story-1";
+export const STORY_PROMPT_VERSION = "story-2";
 
 /** Commits per page (spec 7.1 step 1). A commit someone opened on /commit carries its patches (up to
  *  1 MiB a row), so a page also stops at a byte budget well under the 16 MiB read cap. */
@@ -93,6 +93,7 @@ export function projectCommit(c: Doc<"commits">): ChangeCommit {
     insertions: c.insertions,
     deletions: c.deletions,
     areas: files.areas,
+    subareas: files.subareas,
     top_paths: files.top_paths,
     schema_paths: files.schema_paths,
   };
@@ -206,7 +207,7 @@ export const readEventsPage = internalQuery({
 
 // ── Writes ───────────────────────────────────────────────────────────────
 
-const releaseArg = v.object({ surface: v.string(), version: v.optional(v.string()), sha: v.string(), at: v.number() });
+export const releaseArg = v.object({ surface: v.string(), version: v.optional(v.string()), sha: v.string(), at: v.number() });
 
 const storyArg = v.object({
   story_key: v.string(),
@@ -242,6 +243,13 @@ const releaseOf = (s: ShipEvent): typeof releaseArg.type => ({ surface: s.surfac
 
 /** The fields prose owns. Cleared when a story loses a session or a session narrows, so text drawn from it cannot outlive its access. */
 const PROSE_CLEARED = { body: undefined, why_source: undefined, risk_lines: undefined } as const;
+
+/** A story whose prose call failed this many times keeps layer 0's text until its inputs move. */
+export const PROSE_ATTEMPTS = 3;
+
+/** A failed story with attempts left: the next rebuild of its day writes it again. */
+export const retriesProse = (s: Pick<Doc<"change_stories">, "prose_status" | "prose_attempts">) =>
+  s.prose_status === "failed" && (s.prose_attempts ?? 1) < PROSE_ATTEMPTS;
 
 const sameValue = (a: unknown, b: unknown) => canonicalCommandArguments({ x: a }) === canonicalCommandArguments({ x: b });
 
@@ -304,10 +312,11 @@ async function writeStory(ctx: { db: any }, teamId: Id<"teams">, repository: str
   const narrowed = existing.conversation_ids.some((id) => !kept.has(String(id))) || inputsNarrowed(rows, inputs);
   const inputsMoved = existing.inputs_hash !== s.inputs_hash;
   const patch: Record<string, unknown> = { ...facts };
-  if (narrowed) Object.assign(patch, text, PROSE_CLEARED, { prose_status: "pending" });
+  if (narrowed) Object.assign(patch, text, PROSE_CLEARED, { prose_status: "pending", prose_attempts: undefined });
   else {
     if (!hasProse(existing)) Object.assign(patch, text);
-    if (inputsMoved) patch.prose_status = "pending";
+    if (inputsMoved) Object.assign(patch, { prose_status: "pending", prose_attempts: undefined });
+    else if (retriesProse(existing)) patch.prose_status = "pending";
   }
   const diff = Object.fromEntries(Object.entries(patch).filter(([k, val]) => !sameValue((existing as any)[k], val)));
   if (Object.keys(diff).length) await ctx.db.patch(existing._id, diff);
@@ -478,7 +487,8 @@ export function editionStats(
     commits: onMain.length,
     stories: stories.filter((s) => s.on_default_branch).length,
     releases,
-    people: new Set(onMain.map((c) => c.author_email.toLowerCase() || c.author_name)).size,
+    // By name, the identity the page's person chips and avatars use: one person under two emails is one person.
+    people: new Set(onMain.map((c) => (c.author_name.trim() || c.author_email).toLowerCase())).size,
     sessions,
     private_sessions: convs.size - sessions,
   };

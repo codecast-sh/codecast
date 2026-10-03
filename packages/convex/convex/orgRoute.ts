@@ -28,7 +28,23 @@ const TITLE_MAX = 120;
 /** The roster the router reads: every live role that can own work, as lib/orgRouter wants it. */
 export async function routerRoster(ctx: { db: any }, boundary: Boundary, roles: any[]): Promise<RouterRoster> {
   const team = boundary.team_id ? await ctx.db.get(boundary.team_id) : null;
-  const out: RouterRoster = { workspace: team?.name ?? "personal workspace", roles: [] };
+  const out: RouterRoster = { workspace: team?.name ?? "personal workspace", roles: [], unled: [] };
+  // The areas no live role names (S26: the whole workspace role's), so the
+  // router sees an unled area as such instead of matching a charter to it.
+  const namedProjects = new Set(roles.flatMap((r) => (r.scope?.project_ids ?? []).map(String)));
+  const namedPlans = new Set(roles.flatMap((r) => (r.scope?.plan_ids ?? []).map(String)));
+  const projects: any[] = boundary.team_id
+    ? await ctx.db.query("projects").withIndex("by_team_id", (q: any) => q.eq("team_id", boundary.team_id)).collect()
+    : (await ctx.db.query("projects").withIndex("by_user_id", (q: any) => q.eq("user_id", boundary.scope_user_id)).collect()).filter((p: any) => !p.team_id);
+  for (const p of projects) {
+    if (p.status === "done" || p.status === "archived") continue;
+    if (!namedProjects.has(String(p._id))) out.unled!.push({ kind: "project", title: p.title, goal: p.goal ?? undefined });
+    const plans: any[] = await ctx.db.query("plans").withIndex("by_project_id", (q: any) => q.eq("project_id", p._id)).collect();
+    for (const pl of plans) {
+      if (pl.status !== "active" || namedPlans.has(String(pl._id)) || namedProjects.has(String(p._id))) continue;
+      out.unled!.push({ kind: "plan", title: pl.title, goal: pl.goal ?? undefined });
+    }
+  }
   for (const role of roles) {
     if (role.assistant) continue;
     const areas: RouterRoster["roles"][number]["areas"] = [];
