@@ -174,10 +174,22 @@ esac
 
 PACKAGES=$(list_packages)
 
+# A file that differs only in mode is drift only when its executable bit
+# differs, the one mode bit git records. bun installs a package's bin target as
+# a hardlink to the mirror file and marks it 777, so every install rewrites the
+# mirror's mode (update-prompt's src/cli.ts) without changing anything git sees.
+mode_only_same_exec() {
+  [[ "$1" =~ ^\.f\.*p\.*$ ]] || return 1
+  [[ -x "$SRC/$2/$3" ]] && a=1 || a=0
+  [[ -x "$ROOT/platform/packages/$2/$3" ]] && b=1 || b=0
+  [[ $a == "$b" ]]
+}
+
 if [[ "$MODE" == "--check" ]]; then
   drift=0
   for p in $PACKAGES; do
-    out=$("${RSYNC[@]}" -n -i "$SRC/$p/" "$ROOT/platform/packages/$p/" | grep -v '^\.d' || true)
+    out=$("${RSYNC[@]}" -n -i "$SRC/$p/" "$ROOT/platform/packages/$p/" | grep -v '^\.d' \
+      | while read -r flags path; do mode_only_same_exec "$flags" "$p" "$path" || echo "$flags $path"; done || true)
     if [[ -n "$out" ]]; then echo "platform/packages/$p differs from $SRC/$p:"; echo "$out" | sed 's/^/  /'; drift=1; fi
   done
   [[ $drift -eq 0 ]] && echo "vendored platform packages match $SRC"
@@ -195,12 +207,13 @@ write_manifest
 
 # bun materializes file: deps as COPIES under node_modules/.bun, and keeps
 # serving the copy after the mirror changes; vite then pre-bundles the old copy
-# into packages/web/node_modules/.vite and serves that. Purge the copies and
-# reinstall, then purge the vite cache. The cache goes last: a running dev
-# server (plugins/depsCacheGuard.ts) restarts itself when the cache disappears,
-# and it must rebuild against a finished node_modules, not one bun is still
-# writing.
+# into its optimizer cache and serves that. Purge the copies and reinstall,
+# then purge every web optimizer cache: .vite (the dev server) and .vite-smoke
+# (the smoke suite's second dev server, scripts/rig/vite.smoke.config.mjs). The
+# caches go last: a running dev server (plugins/depsCacheGuard.ts) restarts
+# itself when its cache disappears, and it must rebuild against a finished
+# node_modules, not one bun is still writing.
 rm -rf "$ROOT"/node_modules/.bun/@platform+*
 (cd "$ROOT" && bun install --silent)
-rm -rf "$ROOT"/packages/web/node_modules/.vite
-echo "re-materialized the @platform copies and cleared the vite cache"
+rm -rf "$ROOT"/packages/web/node_modules/.vite "$ROOT"/packages/web/node_modules/.vite-smoke
+echo "re-materialized the @platform copies and cleared the vite caches"

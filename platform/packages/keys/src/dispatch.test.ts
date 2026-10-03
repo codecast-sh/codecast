@@ -1,6 +1,6 @@
 import { test, expect, describe } from "bun:test";
 import { createShortcutCatalog, type ShortcutDef } from "./catalog";
-import { ShortcutDispatcher, createKeydownHandler } from "./dispatch";
+import { ShortcutDispatcher, createKeydownHandler, shortcutAllowedAt } from "./dispatch";
 
 // The non-React dispatch core: handler decline semantics and the keydown
 // resolution loop's guards (modal, context, input, key-owning surfaces).
@@ -216,5 +216,37 @@ describe("noRepeat", () => {
     const e = makeEvent({ key: "z", ctrlKey: true, repeat: true, target: { tagName: "TEXTAREA", closest: () => null } });
     handler(e);
     expect(e.prevented).toBe(false);
+  });
+});
+
+// A press that arrives outside the keydown loop (the desktop Edit menu handing
+// ⌘Z back to the page) asks the same guard, so it declines exactly where the
+// loop would.
+describe("shortcutAllowedAt", () => {
+  const OWN = {
+    inputLikeSelector: "[data-owns-keys]",
+    keyboardOwners: [{ selector: "[data-terminal]", allow: ["terminalToggle" as Action] }],
+  };
+  const def = (a: Action) => DEFS.find(d => d.action === a)!;
+  const inside = (sel: string) => ({ closest: (s: string) => (s === sel ? {} : null) }) as unknown as Element;
+
+  test("plain focus allows the binding", () => {
+    expect(shortcutAllowedAt(null, def("listDown"), OWN, false)).toBe(true);
+    expect(shortcutAllowedAt(inside("[data-other]"), def("listDown"), OWN, false)).toBe(true);
+  });
+
+  test("an input-like region declines a binding without a bypass", () => {
+    expect(shortcutAllowedAt(inside("[data-owns-keys]"), def("listDown"), OWN, false)).toBe(false);
+    expect(shortcutAllowedAt(inside("[data-owns-keys]"), def("next"), OWN, false)).toBe(true);
+  });
+
+  test("a keyboard owner lets through only its allowed actions", () => {
+    expect(shortcutAllowedAt(inside("[data-terminal]"), def("next"), OWN, false)).toBe(false);
+    expect(shortcutAllowedAt(inside("[data-terminal]"), def("terminalToggle"), OWN, false)).toBe(true);
+  });
+
+  test("an open modal declines all but worksInModal bindings", () => {
+    expect(shortcutAllowedAt(null, def("next"), OWN, true)).toBe(false);
+    expect(shortcutAllowedAt(null, def("zoom"), OWN, true)).toBe(true);
   });
 });

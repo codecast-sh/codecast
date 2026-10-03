@@ -35,7 +35,9 @@ export {
 export {
   ShortcutDispatcher,
   createKeydownHandler,
+  shortcutAllowedAt,
   type ShortcutHandler,
+  type KeyOwnership,
   type KeydownOptions,
 } from "./dispatch";
 

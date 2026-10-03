@@ -4,6 +4,7 @@ import { sameShape } from "./syncProtocol";
 import { createUndoController, enumerateTouchedCells, type UndoController } from "./undo";
 export { enumerateTouchedCells, type TouchedCell, type TouchedCellShape, type CellShapeKind } from "./undo";
 import { markUndoOutboxRefused } from "./undoStack";
+import { claimOutboxOwner, defaultLockManager, liveOutboxOwners, newOutboxOwnerId, ownedByAnotherLiveWindow, type LockManagerLike } from "./outboxOwner";
 import type {
   ActionFieldLock,
   DispatchFn,
@@ -63,8 +64,19 @@ export class DispatchNotWiredError extends Error {
   }
 }
 
-export function isParkedDispatchError(error: unknown): error is DispatchNotWiredError {
-  return error instanceof DispatchNotWiredError && error.parked;
+// A dispatch held back because an earlier write it must follow is parked in
+// the outbox after a failed send. It stays parked too, and the next drain
+// delivers both in their causal (ts) order. Pending, not failed.
+export class DispatchHeldError extends Error {
+  readonly parked = true;
+  constructor(action: string) {
+    super(`"${action}" held behind an earlier parked write; it delivers on the next drain`);
+    this.name = "DispatchHeldError";
+  }
+}
+
+export function isParkedDispatchError(error: unknown): error is DispatchNotWiredError | DispatchHeldError {
+  return (error instanceof DispatchNotWiredError && error.parked) || error instanceof DispatchHeldError;
 }
 
 function isBrowserEventLike(value: unknown): boolean {
@@ -540,10 +552,20 @@ export function collectActionFieldLocks(
       const rowKey = rowKeyOf(storeKey);
       const row = lockedRow(slice, recordId, rowKey);
       locks.push({ ...base, recordId, field, value: entry.value, prior: row?.[field], hadPrior: !!row && field in row, rowKey });
-    } else if (Array.isArray(slice) && (entry.type === "include" || entry.type === "exclude")) {
-      // A list row added or removed. (A collection's include/exclude rides
-      // the server's next push as before.)
+    } else if (entry.type === "include" || entry.type === "exclude") {
       const recordId = key.slice(first + 1);
+      if (!Array.isArray(slice)) {
+        // A collection row added or removed. A refusal takes the row back
+        // out (or puts it back): on a delta collection the server's next
+        // push never would, and the lock would keep a phantom row alive.
+        const prior = slice && typeof slice === "object" ? slice[recordId] : undefined;
+        locks.push({
+          ...base, recordId, field: "", value: entry.value,
+          prior, hadPrior: prior !== undefined, membership: entry.type,
+        });
+        continue;
+      }
+      // A list row added or removed.
       const rowKey = rowKeyOf(storeKey);
       const index = slice.findIndex((r: any) => r?.[rowKey] === recordId);
       locks.push({
@@ -586,7 +608,19 @@ export function releaseActionFieldLocks(
     const slice = lock.storeKey in slices ? slices[lock.storeKey] : state[lock.storeKey];
     const rowKey = lock.rowKey ?? "_id";
     if (lock.membership) {
-      if (!Array.isArray(slice)) continue;
+      if (!Array.isArray(slice)) {
+        if (!slice || typeof slice !== "object") continue;
+        const present = slice[lock.recordId] !== undefined;
+        if (lock.membership === "include" && present && !lock.hadPrior) {
+          const { [lock.recordId]: _gone, ...rest } = slice;
+          slices[lock.storeKey] = rest;
+          rows.push({ storeKey: lock.storeKey, recordId: lock.recordId, row: undefined });
+        } else if (lock.membership === "exclude" && !present && lock.hadPrior) {
+          slices[lock.storeKey] = { ...slice, [lock.recordId]: lock.prior };
+          rows.push({ storeKey: lock.storeKey, recordId: lock.recordId, row: lock.prior });
+        }
+        continue;
+      }
       const at = slice.findIndex((r: any) => r?.[rowKey] === lock.recordId);
       if (lock.membership === "include" && at !== -1) {
         slices[lock.storeKey] = slice.filter((_: any, i: number) => i !== at);
@@ -720,6 +754,12 @@ export type ActionCommit = {
 
 type RunActionOpts = {
   onCommitted?: (commit: ActionCommit) => void;
+  /**
+   * Outbox ids this call's dispatch must not overtake (an undo after the
+   * write it reverses). The send waits for those still on the wire; if one
+   * failed and sits parked, this one parks behind it for the drain.
+   */
+  after?: readonly string[];
 };
 
 export type MiddlewareOptions = {
@@ -731,6 +771,9 @@ export type MiddlewareOptions = {
   storageWatchdogRecheckMs?: number;
   // Reuse maps already derived from the same registry.
   registryMaps?: RegistryMaps;
+  // Test seam for the outbox owner locks (outboxOwner.ts); production uses
+  // navigator.locks. null = no lock manager: every row is drainable.
+  lockManager?: LockManagerLike | null;
 };
 
 export function mutativeMiddleware(
@@ -768,6 +811,11 @@ export function mutativeMiddleware(
   const outboxFailureDisposition = makeOutboxFailureDisposition(isMustDeliverEntry);
 
   return (set: any, get: any, api: any) => {
+    // This window's outbox rows carry its owner id; a drain leaves rows another
+    // live window owns to that window (outboxOwner.ts).
+    const lockManager = opts?.lockManager !== undefined ? opts.lockManager : defaultLockManager();
+    const outboxOwner = newOutboxOwnerId();
+    claimOutboxOwner(outboxOwner, lockManager);
     let dispatchBinding: DispatchBinding | null = null;
     let dispatchEpoch = 0;
     let lastOutboxTs = 0;
@@ -795,6 +843,20 @@ export function mutativeMiddleware(
     // replays a settled receipt; a running one runs again, which for a chat
     // message means two agent turns. Skip these until the send resolves.
     const inFlightOutboxIds = new Set<string>();
+    // How each live send settled, for the dispatches ordered after it
+    // (RunActionOpts.after): delivered, refused for good, or parked in the
+    // outbox after a transient failure. A parked id leaves the set when the
+    // row is retired.
+    const liveSends = new Map<string, Promise<"ok" | "refused" | "parked">>();
+    const parkedOutboxIds = new Set<string>();
+    // Whether every send in `after` is behind us and none is parked. Null
+    // when nothing named is pending, so the send goes out at once.
+    const settledInOrder = (after: readonly string[] | undefined): Promise<boolean> | null => {
+      if (!after?.some((id) => liveSends.has(id) || parkedOutboxIds.has(id))) return null;
+      return Promise.all(after.map((id) => liveSends.get(id))).then(
+        () => !after.some((id) => parkedOutboxIds.has(id)),
+      );
+    };
     // coalesceKey → newest enqueued row for that key (by entry ts — enqueue
     // COMPLETIONS can invert order under slow storage). A newer row retires
     // the older one; an older row that completes late retires itself.
@@ -805,6 +867,7 @@ export function mutativeMiddleware(
       enqueued: Promise<unknown> | null,
     ) => {
       retiredOutboxIds.add(id);
+      parkedOutboxIds.delete(id);
       try {
         // Wait for the row to exist (or for its write to have failed) before
         // deleting it, so the delete can't lose the race with its own commit.
@@ -853,7 +916,11 @@ export function mutativeMiddleware(
       // A collection persists row by row; a list or singleton as one value.
       for (const { storeKey, recordId, row } of released.rows) {
         if (recordId !== "" && !Array.isArray(released.slices[storeKey])) {
-          patches.push({ op: "replace", path: [storeKey, recordId], value: row });
+          patches.push(
+            row === undefined
+              ? { op: "remove", path: [storeKey, recordId] }
+              : { op: "replace", path: [storeKey, recordId], value: row },
+          );
         }
       }
       for (const [storeKey, slice] of Object.entries(released.slices)) {
@@ -1074,7 +1141,11 @@ export function mutativeMiddleware(
       draining = true;
       try {
         const drainGeneration = outboxGeneration;
-        const loaded = await capturedLoad();
+        const live = await liveOutboxOwners(lockManager);
+        // Rows a sibling window owns and is still alive to deliver are not
+        // this drain's: re-sending one it already delivered would land after
+        // that window's later writes and revert them on the server.
+        const loaded = (await capturedLoad()).filter((entry) => !ownedByAnotherLiveWindow(entry, outboxOwner, live));
         assertDispatchCurrent(captured);
         // Coalesce across reloads: rows written by a previous page load can
         // hold several generations of the same key. Keep the newest per key,
@@ -1085,6 +1156,9 @@ export function mutativeMiddleware(
           const cur = newestByKey.get(entry.coalesceKey);
           if (!cur || entry.ts > cur.ts) newestByKey.set(entry.coalesceKey, entry);
         }
+        // Rows this pass did not deliver: in flight elsewhere, or failed
+        // here. A row ordered after one of them waits for a later pass.
+        const undelivered = new Set<string>();
         const entries = loaded.filter((entry) => {
           // A row whose command already settled (ack raced the enqueue commit)
           // must not re-dispatch; finish its deferred removal instead.
@@ -1092,7 +1166,10 @@ export function mutativeMiddleware(
             void retireOutboxEntry(entry.id, null);
             return false;
           }
-          if (inFlightOutboxIds.has(entry.id)) return false;
+          if (inFlightOutboxIds.has(entry.id)) {
+            undelivered.add(entry.id);
+            return false;
+          }
           if (entry.coalesceKey && newestByKey.get(entry.coalesceKey)?.id !== entry.id) {
             void retireOutboxEntry(entry.id, null);
             return false;
@@ -1117,6 +1194,10 @@ export function mutativeMiddleware(
         // a failure there leaves the entry exactly as-is, so routine reconnect
         // churn can't burn through a write's boot budget.
         for (const entry of entries) {
+          if (entry.after?.some((id) => undelivered.has(id))) {
+            undelivered.add(entry.id);
+            continue;
+          }
           try {
             assertSupportedOutboxOperationSchema(entry);
             const response = await dispatchWithRetry(
@@ -1171,6 +1252,9 @@ export function mutativeMiddleware(
           } catch (e) {
             if (e instanceof StaleDispatchBindingError) return;
             assertDispatchCurrent(captured);
+            // Refused for good is delivered as far as order goes: nothing
+            // will replay it, so nothing need wait for it.
+            if (!isPermanentDispatchError(e) || isReceiptActionEnvelope(entry.result)) undelivered.add(entry.id);
             if (e instanceof UnsupportedOutboxOperationSchemaError) {
               capturedError?.(entry.action, e, entry.args);
               // Explicit migration is required. Keep the row intact and do not
@@ -1215,6 +1299,11 @@ export function mutativeMiddleware(
         // begin enqueueing while this drain is in flight.
         const remaining = await capturedLoad();
         assertDispatchCurrent(captured);
+        // A parked row this drain delivered (or dropped) holds nothing back now.
+        if (parkedOutboxIds.size > 0) {
+          const still = new Set(remaining.map((entry) => entry.id));
+          for (const id of parkedOutboxIds) if (!still.has(id)) parkedOutboxIds.delete(id);
+        }
         bootOutboxDrained = remaining.length === 0 &&
           pendingOutboxEnqueues === 0 &&
           drainGeneration === outboxGeneration;
@@ -1244,6 +1333,7 @@ export function mutativeMiddleware(
       returnValue: any,
       fieldLocks: ActionFieldLock[],
       outboxId: string,
+      after?: readonly string[],
     ): any => {
       const isAsyncAct = flags.asyncAct;
       const isReceiptAsyncAct = flags.receipt;
@@ -1275,8 +1365,10 @@ export function mutativeMiddleware(
         // causal call order even when several dependent actions (create →
         // delete, fork → send) are queued in the same millisecond.
         ts: nextOutboxTimestamp(),
+        owner: outboxOwner,
         ...(coalesceKey ? { coalesceKey } : {}),
         ...(fieldLocks.length > 0 ? { locks: fieldLocks } : {}),
+        ...(after?.length ? { after: [...after] } : {}),
       };
       const capturedDispatch = dispatchBinding;
       const capturedError = dispatchErrorFn;
@@ -1295,7 +1387,7 @@ export function mutativeMiddleware(
       // may exist yet when a storage failure rejects this promise.
       enqueued?.catch(() => {});
       if (capturedDispatch) {
-        const dispatchNow = () => dispatchWithRetry(
+        const send = () => dispatchWithRetry(
           capturedDispatch.fn,
           key,
           actionArgs,
@@ -1305,6 +1397,18 @@ export function mutativeMiddleware(
           retryDelays,
           () => assertDispatchCurrent(capturedDispatch),
         );
+        // Live sends are not ordered by themselves: a write retrying after a
+        // transient error can land after a later call's send. A call that
+        // names what it must follow waits for it, and parks behind it when
+        // it is parked, so the drain delivers both in ts order.
+        const dispatchNow = () => {
+          const waiting = settledInOrder(after);
+          if (!waiting) return send();
+          return waiting.then((inOrder) => {
+            if (!inOrder) throw new DispatchHeldError(key);
+            return send();
+          });
+        };
         // Dispatch fires IMMEDIATELY — the durable enqueue runs in
         // parallel. The outbox is a crash-recovery journal, not a gate:
         // slow or wedged storage degrades durability (surfaced by the
@@ -1315,6 +1419,24 @@ export function mutativeMiddleware(
         // content writes, commandId for receipt actions, LWW for patches).
         inFlightOutboxIds.add(outboxId);
         const dispatched = dispatchNow().finally(() => inFlightOutboxIds.delete(outboxId));
+        const settled = dispatched.then(
+          () => "ok" as const,
+          (e) => {
+            if (isPermanentDispatchError(e)) return "refused" as const;
+            // Without an outbox row nothing will replay it, so nothing waits on it.
+            if (!enqueued) return "ok" as const;
+            parkedOutboxIds.add(outboxId);
+            // Held behind a parked write: the drain sends both, in order.
+            if (e instanceof DispatchHeldError) {
+              void enqueued.then(() => {
+                if (dispatchBinding) void drainOutbox(false);
+              }, () => {});
+            }
+            return "parked" as const;
+          },
+        );
+        liveSends.set(outboxId, settled);
+        void settled.then(() => liveSends.delete(outboxId));
         const enqueueDurable = () =>
           enqueued ? enqueued.then(() => true, () => false) : Promise.resolve(false);
         if (usesReceiptEnvelope && receiptWaiter) {
@@ -1557,8 +1679,17 @@ export function mutativeMiddleware(
 
         if (isAct || isAsyncAct) {
           const outboxId = newOutboxId();
-          opts?.onCommitted?.({ state, finalState, patches, outboxId, returnValue });
-          return enqueueDispatch(key, flags, actionArgs, patches, finalState, returnValue, fieldLocks, outboxId);
+          const result = enqueueDispatch(key, flags, actionArgs, patches, finalState, returnValue, fieldLocks, outboxId, opts?.after);
+          // After the dispatch is on its way, and never able to stop it: the
+          // undo capture runs app code (a spec's label, inverse, confirm,
+          // spell), and a bug there must cost the history its entry, never
+          // the committed write its delivery.
+          try {
+            opts?.onCommitted?.({ state, finalState, patches, outboxId, returnValue });
+          } catch (error) {
+            console.error(`[undo] capture failed (action=${key}); nothing recorded`, error);
+          }
+          return result;
         }
         return returnValue;
       }
@@ -1580,12 +1711,13 @@ export function mutativeMiddleware(
         const onCommitted = undo?.wants(key, flags)
           ? (commit: ActionCommit) => undo.capture(key, actionArgs, commit)
           : undefined;
+        const after = undo?.orderAfter();
         return runAction(
           key,
           flags,
           (draft) => (val as Function).apply(draft, actionArgs),
           actionArgs,
-          onCommitted ? { onCommitted } : undefined,
+          onCommitted || after ? { onCommitted, after } : undefined,
         );
       };
       copyActionFlags(val, wrappedFn);
@@ -1604,10 +1736,12 @@ export function mutativeMiddleware(
           shape: {
             declaredKind: (key) => maps.syncKindOf?.(key) ?? platformConfig.syncRegistry?.[key]?.kind,
             rowKeyOf: syncRowKeyOf,
+            rowGroupOf: (key) => maps.dispatchTableMap[key]?.table ?? key,
             isProtected: maps.isProtectedSyncCollection,
             isUnprotectedField: maps.isUnprotectedField,
             viewFields: new Set(viewGuard?.fields ?? []),
             ignoreKeys: platformConfig.undo.ignoreKeys,
+            optionalClearFields: platformConfig.optionalClearFields,
           },
         })
       : null;

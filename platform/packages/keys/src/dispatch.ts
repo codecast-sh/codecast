@@ -3,7 +3,7 @@
 // into at most one action dispatch. The React provider (provider.tsx) is a
 // thin binding over this, so the behavior is testable without rendering.
 
-import { ShortcutCatalog, hasOpenModal, isEditableTarget, inputGuardBypass } from './catalog';
+import { ShortcutCatalog, type ShortcutDef, hasOpenModal, isEditableTarget, inputGuardBypass } from './catalog';
 
 export type ShortcutHandler = () => boolean | void;
 
@@ -64,12 +64,34 @@ export interface KeydownOptions<A extends string> {
   onShortcutUsed?: (action: A) => void;
 }
 
-function isInputTarget(e: KeyboardEvent, inputLikeSelector?: string): boolean {
-  const el = e.target as HTMLElement;
+function isInputTarget(el: HTMLElement | null, inputLikeSelector?: string): boolean {
   if (!el) return false;
   if (isEditableTarget(el)) return true;
   if (inputLikeSelector && typeof el.closest === 'function' && el.closest(inputLikeSelector)) return true;
   return false;
+}
+
+export type KeyOwnership<A extends string> = Pick<KeydownOptions<A>, 'inputLikeSelector' | 'keyboardOwners'>;
+
+// Whether a binding may act with focus at `target`, apart from the key itself
+// and its `when` context: a key-owning surface lets through only its allowed
+// actions, an open modal only worksInModal bindings, and an input (or an
+// input-like region) only bindings that skip the input check. The keydown loop
+// asks this per matching def, and a press that arrives outside it (a desktop
+// Edit menu handing ⌘Z back to the page) asks the same question, so the two
+// paths cannot disagree.
+export function shortcutAllowedAt<A extends string>(
+  target: Element | null,
+  def: ShortcutDef<A>,
+  opts: KeyOwnership<A> = {},
+  modalOpen: boolean = hasOpenModal(),
+): boolean {
+  const el = target as HTMLElement | null;
+  const owner = opts.keyboardOwners?.find(o => el?.closest?.(o.selector));
+  if (owner && !owner.allow.includes(def.action)) return false;
+  if (modalOpen && !def.worksInModal) return false;
+  if (isInputTarget(el, opts.inputLikeSelector) && !inputGuardBypass(def, el)) return false;
+  return true;
 }
 
 // The resolution loop: first matching def wins. An open modal dialog owns the
@@ -82,17 +104,13 @@ export function createKeydownHandler<A extends string>(
   opts: KeydownOptions<A> = {},
 ): (e: KeyboardEvent) => void {
   return (e: KeyboardEvent) => {
-    const inInput = isInputTarget(e, opts.inputLikeSelector);
     const modalOpen = hasOpenModal();
     const target = e.target as HTMLElement | null;
-    const owner = opts.keyboardOwners?.find(o => target?.closest?.(o.selector));
 
     for (const def of catalog.shortcuts) {
-      if (owner && !owner.allow.includes(def.action)) continue;
       if (!catalog.matchShortcut(e, def)) continue;
-      if (modalOpen && !def.worksInModal) continue;
       if (def.when && !dispatcher.hasContext(def.when)) continue;
-      if (inInput && !inputGuardBypass(def, target)) continue;
+      if (!shortcutAllowedAt(target, def, opts, modalOpen)) continue;
       if (def.noRepeat && e.repeat) {
         e.preventDefault();
         return;

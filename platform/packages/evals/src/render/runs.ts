@@ -249,16 +249,39 @@ export function renderRunDiff(a: RunDetail, b: RunDetail, o: RenderOpts & { cli?
   const right = col(b);
   const n = Math.max(left.length, right.length);
   for (let i = 0; i < n; i++) lines.push(`${padEnd(left[i] ?? '', half)} ${p.dim('│')} ${right[i] ?? ''}`);
-  const flips: string[] = [];
+  const word = (pass: boolean) => (pass ? 'held' : 'failed');
+  const flips = diffRuns(a, b).map((d) => (d.kind === 'gate' ? `${d.id}: ${word(d.before)} → ${word(d.after)}` : `${d.id}: ${d.before.toFixed(2)} → ${d.after.toFixed(2)}`));
+  lines.push('', p.dim('what moved'), ...(flips.length ? flips.map((f) => `  ${f}`) : [p.dim(`  nothing by ${CHECK_MOVE} or a gate`)]));
+  return lines.join('\n');
+}
+
+/** How far a check's score must move between two runs to count as a move. */
+export const CHECK_MOVE = 0.2;
+
+/** One thing that moved between two runs: a gate that flipped, or a check that moved by CHECK_MOVE or more. */
+export type RunDiffEntry =
+  | { kind: 'gate'; id: string; before: boolean; after: boolean }
+  | { kind: 'check'; id: string; before: number; after: number };
+
+/** The part of a run diffRuns reads; a RunDetail fits, and so does a bare `{ verdict: score.json }`. */
+export interface DiffableRun {
+  verdict?: { gates?: ReadonlyArray<{ id: string; pass: boolean }>; checks?: ReadonlyArray<{ id: string; score: number }> } | null;
+}
+
+/** What moved from run a to run b, in b's order: gates first, then checks. Ids on only one side are not moves. */
+export function diffRuns(a: DiffableRun, b: DiffableRun): RunDiffEntry[] {
+  const out: RunDiffEntry[] = [];
   const ga = new Map((a.verdict?.gates ?? []).map((g) => [g.id, g.pass]));
-  for (const g of b.verdict?.gates ?? []) if (ga.has(g.id) && ga.get(g.id) !== g.pass) flips.push(`${g.id}: ${ga.get(g.id) ? 'held' : 'failed'} → ${g.pass ? 'held' : 'failed'}`);
+  for (const g of b.verdict?.gates ?? []) {
+    const before = ga.get(g.id);
+    if (before !== undefined && before !== g.pass) out.push({ kind: 'gate', id: g.id, before, after: g.pass });
+  }
   const ca = new Map((a.verdict?.checks ?? []).map((c) => [c.id, c.score]));
   for (const c of b.verdict?.checks ?? []) {
-    const prev = ca.get(c.id);
-    if (prev !== undefined && Math.abs(prev - c.score) >= 0.2) flips.push(`${c.id}: ${prev.toFixed(2)} → ${c.score.toFixed(2)}`);
+    const before = ca.get(c.id);
+    if (before !== undefined && Math.abs(before - c.score) >= CHECK_MOVE) out.push({ kind: 'check', id: c.id, before, after: c.score });
   }
-  lines.push('', p.dim('what moved'), ...(flips.length ? flips.map((f) => `  ${f}`) : [p.dim('  nothing by 0.2 or a gate')]));
-  return lines.join('\n');
+  return out;
 }
 
 /** One scenario over time: a pass strip and the rows behind it. */
