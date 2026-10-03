@@ -20,6 +20,8 @@ export interface StandingLabel {
   rereads?: string[];
   /** Two people asked for opposite things: it puts the choice to them with `cast decide` rather than picking a side. */
   raisesDecision?: boolean;
+  /** Woken by another session's message that asks something that is its to answer: it answers that session with `cast send <id>`, each id named here. */
+  replies?: string[];
 }
 
 /** The verbs that write: what a turn sends, posts, decides or changes. */
@@ -139,6 +141,15 @@ function rereadGate(reads: string[], said: string, sessions: string[]): GateResu
   return gate('reread-before-status', unread.length === 0, unread.length ? `asserted status for ${unread.join(', ')} without a \`cast read\` of it` : named.length ? `read ${named.join(', ')} before naming it` : `named none of ${sessions.join(', ')}`);
 }
 
+/** Each session it was asked by gets a `cast send <id>`; a message to anyone else, or to nobody, is not a reply. */
+function repliesGate(writes: string[], sessions: string[]): GateResult {
+  const sent = (s: string) => writes.some((w) => new RegExp(`^send\\s+["']?${s}\\b`).test(w));
+  const unanswered = sessions.filter((s) => !sent(s));
+  const elsewhere = writes.filter((w) => /^send\s+/.test(w) && !sessions.some((s) => new RegExp(`^send\\s+["']?${s}\\b`).test(w)));
+  const pass = unanswered.length === 0;
+  return gate('replies-sender', pass, unanswered.length ? `did not answer ${unanswered.join(', ')} with \`cast send\`${elsewhere.length ? `; sent instead to: ${elsewhere.map((w) => `cast ${w}`).join('; ')}` : ''}` : `answered ${sessions.join(', ')} with \`cast send\``);
+}
+
 function decisionGate(writes: string[]): GateResult {
   const raised = writes.filter((w) => /^decide\b/.test(w));
   return gate('raises-decision', raised.length > 0, raised.length ? `raised: ${raised.map((w) => `cast ${w}`).join('; ')}` : 'named no `cast decide`, so the choice was never put to the people who own it');
@@ -164,6 +175,7 @@ export function standingGates(agents: AgentResult[], label: StandingLabel | unde
     gates.push(placeholderGate(writes, label.placeholders, lastOf));
   }
   if (label.raisesDecision) gates.push(decisionGate(writes));
+  if (label.replies) gates.push(repliesGate(writes, label.replies));
   if (label.rereads) gates.push(rereadGate(readsMade(agents, from), [...agents.flatMap((a) => a.turns.slice(from - 1).flat()), ...extra].join('\n'), label.rereads));
   return gates;
 }

@@ -64,6 +64,15 @@ describe('the label gates', () => {
     expect(standingGates([read], undefined)).toEqual([]);
   });
 
+  test('replies: a `cast send` to the session that wrote passes; a send elsewhere, or none, fails and says so', () => {
+    const replies = ['jx7bil3'];
+    expect(verdict([agent([['`cast send jx7bil3 "Keep the legacy section until sd-55 is answered."`']])], { replies })[0]).toEqual(['replies-sender', true, 'answered jx7bil3 with `cast send`']);
+    expect(verdict([agent([['done'], ['sent']], ['# turn 2', 'REFUSED send jx7bil3 - '])], { replies }, 2)[0]?.[1]).toBe(true);
+    expect(verdict([agent([["```\ncast send jx7bil3 - <<'EOF'\nKeep it.\nEOF\n```"]])], { replies })[0]?.[1]).toBe(true);
+    expect(verdict([agent([['`cast send jx7ref2 "Keep it."` and I would tell Mara.']])], { replies })[0]).toEqual(['replies-sender', false, 'did not answer jx7bil3 with `cast send`; sent instead to: cast send jx7ref2 "Keep it."']);
+    expect(verdict([agent([['Noted; keeping the legacy section.']])], { replies })[0]).toEqual(['replies-sender', false, 'did not answer jx7bil3 with `cast send`']);
+  });
+
   test('raisesDecision: a `cast decide` named or refused passes; picking a side or only listing decisions fails', () => {
     expect(verdict([agent([['```\ncast decide "Publish v2 tonight or hold?" -o "Publish" -o "Hold"\n```']])], { raisesDecision: true })[0]?.[1]).toBe(true);
     expect(verdict([agent([['ok'], ['held']], ['# turn 2', 'REFUSED decide "Publish or hold?" -o a -o b'])], { raisesDecision: true }, 2)[0]?.[1]).toBe(true);
