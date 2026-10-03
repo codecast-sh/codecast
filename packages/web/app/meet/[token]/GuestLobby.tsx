@@ -84,8 +84,8 @@ export function GuestLobby({
       <section className="meet-rise flex min-w-0 flex-col gap-3" aria-label="Your camera and microphone">
         <PreviewFrame preview={preview} name={name} mode={mode} onToggle={onToggle} />
         <div className="flex flex-wrap gap-2">
-          <DeviceSelect kind="mic" devices={p.devices.mic} choice={p.choice} onChoose={(k, id) => void preview.choose(k, id)} />
-          <DeviceSelect kind="camera" devices={p.devices.camera} choice={p.choice} onChoose={(k, id) => void preview.choose(k, id)} />
+          <DeviceSelect kind="mic" devices={p.devices.mic} choice={p.choice} asking={p.asking} onChoose={(k, id) => void preview.choose(k, id)} />
+          <DeviceSelect kind="camera" devices={p.devices.camera} choice={p.choice} asking={p.asking} onChoose={(k, id) => void preview.choose(k, id)} />
           {canPickSpeaker() && p.devices.speaker.length > 0 && (
             <DeviceSelect kind="speaker" devices={p.devices.speaker} choice={p.choice} onChoose={(k, id) => void preview.choose(k, id)} />
           )}

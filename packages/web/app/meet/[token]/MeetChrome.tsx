@@ -114,17 +114,22 @@ const DEVICE_META = {
 
 /** One device picker: the platform's own select (a phone's sheet is the
  *  right control there), dressed to sit in the page. Without permission the
- *  browser lists devices with no names, so they read "Microphone 1". */
+ *  browser lists devices with no names, so they read "Microphone 1". While
+ *  the permission prompt is up (`asking`) the browser lists nothing yet, and
+ *  "No microphone found" beside "Allow your camera and microphone" would be
+ *  two answers at once, so an empty list says it is waiting instead. */
 export function DeviceSelect({
   kind,
   devices,
   choice,
   onChoose,
+  asking = false,
 }: {
   kind: "mic" | "camera" | "speaker";
   devices: MediaDeviceInfo[];
   choice: DeviceChoice;
   onChoose: (kind: "mic" | "camera" | "speaker", id: string) => void;
+  asking?: boolean;
 }) {
   const meta = DEVICE_META[kind];
   const Icon = meta.icon;
@@ -140,7 +145,7 @@ export function DeviceSelect({
         className="meet-select w-full min-w-0 truncate rounded-lg py-1.5 pl-8 font-mono text-[11.5px] text-sol-text-secondary outline-none ring-1 ring-white/[0.08] transition-colors hover:ring-white/15 focus-visible:ring-sol-cyan/60 disabled:opacity-50"
       >
         {devices.length === 0 ? (
-          <option value="">{meta.empty}</option>
+          <option value="">{asking ? "Waiting for permission" : meta.empty}</option>
         ) : (
           devices.map((d, i) => (
             <option key={d.deviceId || i} value={d.deviceId}>
