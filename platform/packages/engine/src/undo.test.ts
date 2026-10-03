@@ -67,6 +67,14 @@ function undoConfig(calls: Calls, over: Partial<UndoConfig> = {}): UndoConfig {
       toggleMark: { label: label("Marked") },
       setStatus: { label: label("Status") },
       toggleFav: { label: label("Favorite") },
+      favBoth: { label: label("Favorited two") },
+      stashBoth: {
+        label: label("Stashed two"),
+        inverse: (ctx) => [
+          { action: "restore", args: [ctx.args[0]], runDraft: false },
+          { action: "restore", args: [ctx.args[1]], runDraft: false },
+        ],
+      },
       note: { label: label("Note") },
       setComments: { label: label("Comments") },
       open: { label: label("Opened"), restoreView: true },
@@ -159,6 +167,16 @@ function makeStore(opts: { undo?: UndoConfig | null; viewDeclared?: () => boolea
         this.items[id].is_favorite = on;
         if (on) this.favorites.push({ _id: id });
         else this.favorites = this.favorites.filter((f: any) => f._id !== id);
+      }),
+      favBoth: action(function (this: any, a: string, b: string) {
+        for (const id of [a, b]) {
+          this.items[id].is_favorite = true;
+          this.favorites.push({ _id: id });
+        }
+      }),
+      stashBoth: action(function (this: any, a: string, b: string) {
+        this.items[a].hidden_at = 7;
+        this.items[b].hidden_at = 7;
       }),
       note: action(function (this: any, id: string, text: string) {
         this.notes[id] = text;
@@ -636,6 +654,30 @@ describe("conflicts and partial undo", () => {
     expect(h.state.items[A].title).toBe("a");
   });
 
+  it("an entry whose every row conflicts is a conflict even when a mirror could be restored", () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "t" });
+    h.wrapped.toggleFav(A);
+    h.setState({ items: { [A]: { ...h.state.items[A], is_favorite: "remote" } } });
+    const id = top().id;
+    performUndo();
+    expect(h.state.items[A].is_favorite).toBe("remote");
+    expect(h.state.favorites).toEqual([{ _id: A }]);
+    expect(items().find((i) => i.id === id)!.status).toBe("conflict");
+    expect(notices).toEqual(["Can't undo Favorite: changed since"]);
+  });
+
+  it("a partial undo leaves the mirror cells of the rows it skipped", () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "a" });
+    h.wrapped.seed(B, { title: "b" });
+    h.wrapped.favBoth(A, B);
+    h.setState({ items: { ...h.state.items, [B]: { ...h.state.items[B], is_favorite: "remote" } } });
+    performUndo();
+    expect(h.state.items[A].is_favorite).toBeUndefined();
+    expect(h.state.favorites).toEqual([{ _id: B }]);
+  });
+
   it("a gone row is a conflict, a re-added row counts as already undone", () => {
     const h = makeStore();
     h.wrapped.seed(A, { title: "a" });
@@ -686,6 +728,42 @@ describe("redo and groups", () => {
     performRedo();
     expect(h.state.items[A].title).toBe("someone");
     expect(notices.at(-1)).toBe("Can't redo Renamed to x: changed since");
+  });
+
+  it("redo after a partial undo restores only the rows the undo applied", () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "a" });
+    h.wrapped.seed(B, { title: "b" });
+    h.wrapped.renameBoth(A, B, "both");
+    h.setState({ items: { ...h.state.items, [B]: { ...h.state.items[B], title: "someone" } } });
+    performUndo();
+    const renames = h.dispatched.filter((d) => d.action === "renameBoth").length;
+    expect(performRedo()).toBe(true);
+    expect(h.state.items[A].title).toBe("both");
+    expect(h.state.items[B].title).toBe("someone");
+    // The applied cells went back on the undo's route; the action never re-ran.
+    expect(h.dispatched.filter((d) => d.action === "renameBoth")).toHaveLength(renames);
+    expect(lastDispatch(h, "applyUndoPatches")!.patches).toBeTruthy();
+    expect(h.state.pending[`items:${A}:title`]).toMatchObject({ value: "both" });
+    expect(notices.at(-1)).toBe("Redid: Both (1 changed since, left as they are)");
+    // And it undoes again, partially, as before.
+    performUndo();
+    expect(h.state.items[A].title).toBe("a");
+    expect(h.state.items[B].title).toBe("someone");
+  });
+
+  it("redo after a partial undo of an inverse spec is refused", () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "a" });
+    h.wrapped.seed(B, { title: "b" });
+    h.wrapped.stashBoth(A, B);
+    h.setState({ items: { ...h.state.items, [B]: { ...h.state.items[B], hidden_at: 99 } } });
+    performUndo();
+    expect(h.state.items[A].hidden_at).toBeUndefined();
+    performRedo();
+    expect(h.state.items[A].hidden_at).toBeUndefined();
+    expect(h.state.items[B].hidden_at).toBe(99);
+    expect(notices.at(-1)).toBe("Can't redo Stashed two: changed since");
   });
 
   it("undoGroup folds captures into one entry, undone in reverse and redone forward", () => {
@@ -763,6 +841,43 @@ describe("refusal and rekey", () => {
     await waitFor(() => getUndoHistory().head === id);
     expect(items().find((i) => i.id === id)!.status).toBe("done");
     expect(h.state.items[A].title).toBe("x");
+  });
+
+  it("a refused partial redo dispatch rolls back and the entry returns to the redo stack", async () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "a" });
+    h.wrapped.seed(B, { title: "b" });
+    h.wrapped.renameBoth(A, B, "both");
+    h.setState({ items: { ...h.state.items, [B]: { ...h.state.items[B], title: "someone" } } });
+    const id = top().id;
+    performUndo();
+    await waitFor(() => h.outbox.size === 0);
+    h.respond(async (a) => {
+      if (a === "applyUndoPatches") throw new Error("Uncaught Error: no");
+      return {};
+    });
+    performRedo();
+    expect(h.state.items[A].title).toBe("both");
+    await waitFor(() => items().find((i) => i.id === id)!.status === "undone");
+    expect(h.state.items[A].title).toBe("a");
+    expect(getUndoHistory().head).not.toBe(id);
+  });
+
+  it("a rekeyed removal comes back under the server id, and a rekeyed inverse names it", () => {
+    const h = makeStore();
+    h.wrapped.seed("stub_1", { title: "a" });
+    h.wrapped.drop("stub_1");
+    rekeyUndoIds("stub_1", A);
+    performUndo();
+    expect(h.state.items).toEqual({ [A]: { _id: A, title: "a" } });
+
+    h.wrapped.seed("stub_2", { title: "b" });
+    h.wrapped.stash("stub_2");
+    h.setState({ items: { ...h.state.items, [B]: { ...h.state.items["stub_2"], _id: B } } });
+    rekeyUndoIds("stub_2", B);
+    performUndo();
+    expect(lastDispatch(h, "restore")!.args).toEqual([B]);
+    expect(h.state.items[B].hidden_at).toBeUndefined();
   });
 
   it("a stub rekey rewrites ids in live entries", () => {

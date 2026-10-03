@@ -208,6 +208,7 @@ The notifier gains `onHistoryStep?(kind: "undo" | "redo", steps: number, entry)`
 2. Call `beforeReplay(entry, "redo")`.
 3. Call the wrapped original action with the original args, inside a capture that **refreshes this entry's** `changes`, `planted` and `outboxIds` instead of pushing a new entry.
 4. For a group, redo the children in order.
+5. After a partial undo (`skipped` is non-empty), step 3 would write the forward value over the rows the undo left. Instead the cells the undo applied get their `after` values back through the same guard, passes and `runAction` replay as an undo, with no planted deletion. An entry whose server half is a spec `inverse` has no such mirror, so its redo is refused as a conflict. A refused redo replay returns the entry to the redo stack.
 
 ### 3.7 Refusal, stubs, async
 

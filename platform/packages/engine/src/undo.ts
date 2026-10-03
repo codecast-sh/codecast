@@ -8,7 +8,8 @@
 // action, or a spec's inverse), so the replay gets pending locks, the view
 // guard, IndexedDB write-through, the follower tee, the outbox and refusal
 // rollback exactly as any action does. Redo re-invokes the original action
-// with its original args.
+// with its original args, unless the undo was partial: then it writes the
+// applied cells' after values back the same way.
 import type { Patch } from "mutative";
 import { sameShape } from "./syncProtocol";
 import type {
@@ -25,7 +26,10 @@ import {
   configureUndoStack,
   isUndoSuppressed,
   newUndoEntryId,
+  onUndoRekey,
   recordUndoEntry,
+  rekeyCells,
+  rekeyIds,
   undoRefreshTarget,
   withoutUndo,
   withUndoRefresh,
@@ -399,13 +403,16 @@ export function guardUndo(
     apply.push(...writes);
     appliedRows.add(k);
   }
+  // A mirror or view cell naming a skipped row's id belongs to that row (the
+  // favorites entry of a row whose is_favorite moved): it stays too.
+  const skippedIds = new Set(skippedRows.map((r) => r.id).filter((id) => id !== ""));
   for (const cell of changes) {
     if (cell.kind === "protected") {
       if (isStamp(cell) && appliedRows.has(rowKeyOfCell(cell))) apply.push(cell);
       continue;
     }
     if (cell.kind === "view" && !opts.restoreView) continue;
-    if (isStamp(cell)) continue;
+    if (isStamp(cell) || skippedIds.has(cell.id)) continue;
     if (verdictForUndo(cell, state, opts.rowKeyOf) === "apply") apply.push(cell);
   }
   return { apply, skippedRows };
@@ -577,6 +584,15 @@ export function planReplayPasses(
   return [...passes, ...writerPasses];
 }
 
+/** A cell seen from the other side: its after value becomes the one to write back. */
+const flipCell = (c: CellChange): CellChange => ({
+  ...c,
+  before: c.after,
+  after: c.before,
+  hadBefore: c.hadAfter,
+  hadAfter: c.hadBefore,
+});
+
 // ---------------------------------------------------------------------------
 // Controller (one per store)
 // ---------------------------------------------------------------------------
@@ -625,6 +641,17 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
     stackLimit: config.stackLimit,
     historyLimit: config.historyLimit,
   });
+  // The inverse invocations and the applied cells live here, not on the
+  // entry, so a stub rekey reaches them through the stack's hook.
+  onUndoRekey((entry, oldId, newId) => {
+    const internal = internals.get(entry);
+    if (!internal) return false;
+    const inverse = internal.inverse?.map((inv) => ({ ...inv, args: rekeyIds(inv.args, oldId, newId) })) ?? null;
+    const applied = rekeyCells(internal.applied, oldId, newId);
+    const touched = applied !== internal.applied || inverse?.some((inv, i) => inv.args !== internal.inverse![i]!.args) === true;
+    if (touched) internals.set(entry, { inverse, applied });
+    return touched;
+  });
 
   const objectsOf = (changes: readonly CellChange[]) => {
     const seen = new Set<string>();
@@ -670,7 +697,10 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
       restoreView: spec?.restoreView,
     });
     entry.skipped = skippedRows;
-    if (apply.length === 0) return { ok: false, reason: "conflict" };
+    // No row applies when every protected row conflicted, even if a mirror
+    // could still be restored: a mirror alone is not the user's change.
+    const rowApplied = apply.some((c) => c.kind === "protected" && !isStamp(c));
+    if (apply.length === 0 || (skippedRows.length > 0 && !rowApplied)) return { ok: false, reason: "conflict" };
     config.beforeReplay?.(entry, "undo");
     const passes = planReplayPasses(apply, state, config, internals.get(entry)?.inverse, rowKeyOf);
     entry.replayOutboxIds = [];
@@ -681,6 +711,28 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
     return { ok: true, applied: apply.filter((c) => !isStamp(c)).length, skipped: skippedRows.length };
   };
 
+  // Redo after a partial undo. Re-invoking the action would write its
+  // forward value over the rows the undo left, which hold someone's later
+  // change. Instead the cells the undo applied get their after values back,
+  // the mirror of the undo's replay, on the same server route. An inverse
+  // spec's server half has no such mirror, so its redo is refused.
+  const redoPartial = (entry: UndoEntry, state: any, applied: readonly CellChange[]): UndoOutcome => {
+    if (internals.get(entry)?.inverse?.length) return { ok: false, reason: "conflict" };
+    const spec = entry.action ? config.specs[entry.action] : undefined;
+    const { apply } = guardUndo(applied.map(flipCell), state, {
+      rowKeyOf,
+      stampFields: config.stampFields,
+      restoreView: spec?.restoreView,
+    });
+    if (!apply.some((c) => !isStamp(c))) return { ok: false, reason: "conflict" };
+    config.beforeReplay?.(entry, "redo");
+    const passes = planReplayPasses(apply, state, config, null, rowKeyOf);
+    entry.replayOutboxIds = [];
+    passes.forEach((pass) => runPass(entry, pass, false, []));
+    config.afterReplay?.(entry, "redo", apply);
+    return { ok: true, applied: apply.filter((c) => !isStamp(c)).length, skipped: entry.skipped?.length ?? 0 };
+  };
+
   const redoGeneric = (entry: UndoEntry): UndoOutcome => {
     const state = get();
     const applied = internals.get(entry)?.applied ?? [];
@@ -688,9 +740,13 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
       if (cell.kind !== "protected" || isStamp(cell)) continue;
       if (!holdsBefore(cell, state, rowKeyOf)) return { ok: false, reason: "conflict" };
     }
+    if (entry.skipped?.length) return redoPartial(entry, state, applied);
     const fn = entry.action ? state?.[entry.action] : undefined;
     if (typeof fn !== "function") return { ok: false, reason: "gone" };
     config.beforeReplay?.(entry, "redo");
+    // The undo's replay is settled business now: a late refusal of it must
+    // not move a redone entry.
+    entry.replayOutboxIds = undefined;
     withUndoRefresh(entry, () => swallow(fn(...(entry.args ?? []))));
     config.afterReplay?.(entry, "redo", entry.changes ?? []);
     return { ok: true, applied: (entry.changes ?? []).filter((c) => !isStamp(c)).length, skipped: 0 };

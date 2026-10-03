@@ -399,7 +399,8 @@ function announceStep(kind: "undo" | "redo", steps: number, entry: UndoEntry): v
     return;
   }
   const verb = kind === "undo" ? "Undid" : "Redid";
-  const partial = kind === "undo" && entry.skipped?.length
+  // A redo after a partial undo leaves the same rows, so it says so too.
+  const partial = entry.skipped?.length
     ? ` (${entry.skipped.length} changed since, left as they are)`
     : "";
   notifier.notify(steps > 1 ? `${verb} ${steps} changes` : `${verb}: ${entry.label}${partial}`);
@@ -409,16 +410,23 @@ function announceConflict(kind: "undo" | "redo", entry: UndoEntry): void {
   notifier.notify(`Can't ${kind} ${entry.label}: changed since`);
 }
 
-/** Keyboard undo: the top entry, if it is inside the keyboard window. */
+/**
+ * Keyboard undo: the top entry, if it is inside the keyboard window. A
+ * `confirm` entry is never taken back blind: the press names it, steps past
+ * it and undoes the next entry below under the guard, as a toast's selective
+ * undo would. A manual entry cannot be undone out of order, so the walk stops
+ * at one.
+ */
 export function performUndo(): boolean {
   const now = Date.now();
   pruneExpiredManual(now);
-  const entry = undoStack[undoStack.length - 1];
-  if (!entry || expired(entry, now)) return false;
-  if (entry.confirm) {
-    notifier.notify(`Undo ${entry.label} from its toast or the history`);
-    return true;
-  }
+  const top = undoStack[undoStack.length - 1];
+  if (!top || expired(top, now)) return false;
+  let at = undoStack.length - 1;
+  while (at >= 0 && undoStack[at]!.confirm) at -= 1;
+  if (at !== undoStack.length - 1) notifier.notify(`Undo ${top.label} from its toast or the history`);
+  const entry = undoStack[at];
+  if (!entry || expired(entry, now) || (entry.mode === "manual" && entry !== top)) return true;
   const step = stepUndo(entry);
   if (step.ok) announceStep("undo", 1, entry);
   else announceConflict("undo", entry);
@@ -598,6 +606,8 @@ export function markUndoOutboxRefused(outboxId: string): void {
         remove(redoStack, entry);
       }
     } else if (entry.replayOutboxIds?.includes(outboxId)) {
+      // The last replay's direction is the stack its owner sits on: an
+      // undo's goes back to the undo stack, a partial redo's to the redo stack.
       const owner = parent ?? entry;
       if (remove(redoStack, owner)) {
         touched = true;
@@ -605,6 +615,12 @@ export function markUndoOutboxRefused(outboxId: string): void {
         owner.undoneAt = undefined;
         if (parent) entry.status = "done";
         undoStack.push(owner);
+      } else if (remove(undoStack, owner)) {
+        touched = true;
+        owner.status = "undone";
+        owner.undoneAt = Date.now();
+        if (parent) entry.status = "undone";
+        redoStack.push(owner);
       }
     }
   }
@@ -616,15 +632,63 @@ const rekeyPendingKey = (key: string, oldId: string, newId: string): string => {
   return parts.map((p) => (p === oldId ? newId : p)).join(":");
 };
 
+/** `value` with every string equal to `oldId` replaced, at any depth; the same reference when none is. */
+export function rekeyIds<T>(value: T, oldId: string, newId: string): T {
+  if (value === oldId) return newId as T;
+  if (Array.isArray(value)) {
+    const next = value.map((v) => rekeyIds(v, oldId, newId));
+    return (next.some((v, i) => v !== value[i]) ? next : value) as T;
+  }
+  if (value && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) {
+    let out: Record<string, unknown> | null = null;
+    for (const [k, v] of Object.entries(value)) {
+      const next = rekeyIds(v, oldId, newId);
+      if (next !== v) (out ??= { ...(value as Record<string, unknown>) })[k] = next;
+    }
+    return (out ?? value) as T;
+  }
+  return value;
+}
+
+// A whole row moves to its server id the way syncEngine moves it: only its
+// `_id` changes, the rest (its client_id among them) stays.
+const rekeyRow = (row: unknown, oldId: string, newId: string): unknown =>
+  row && typeof row === "object" && (row as { _id?: unknown })._id === oldId ? { ...row, _id: newId } : row;
+
+/** Cells naming `oldId`, moved to `newId`; the same array when none does. */
+export function rekeyCells(cells: CellChange[], oldId: string, newId: string): CellChange[] {
+  if (!cells.some((c) => c.id === oldId)) return cells;
+  return cells.map((c) => {
+    if (c.id !== oldId) return c;
+    if (c.field !== undefined) return { ...c, id: newId };
+    return { ...c, id: newId, before: rekeyRow(c.before, oldId, newId), after: rekeyRow(c.after, oldId, newId) };
+  });
+}
+
+// State an owner keeps outside the entry (the controller's inverse and
+// applied cells) follows a rekey through these. A hook returns whether it
+// changed anything.
+const rekeyHooks = new Set<(entry: UndoEntry, oldId: string, newId: string) => boolean>();
+export function onUndoRekey(hook: (entry: UndoEntry, oldId: string, newId: string) => boolean): () => void {
+  rekeyHooks.add(hook);
+  return () => {
+    rekeyHooks.delete(hook);
+  };
+}
+
 /** A stub row was superseded by its server row: follow it in live entries. */
 export function rekeyUndoIds(oldId: string, newId: string): void {
   if (oldId === newId) return;
   let touched = false;
   for (const { entry } of allEntries()) {
-    if (entry.changes?.some((c) => c.id === oldId)) {
-      entry.changes = entry.changes.map((c) => (c.id === oldId ? { ...c, id: newId } : c));
-      touched = true;
+    if (entry.changes) {
+      const changes = rekeyCells(entry.changes, oldId, newId);
+      if (changes !== entry.changes) {
+        entry.changes = changes;
+        touched = true;
+      }
     }
+    for (const hook of rekeyHooks) if (hook(entry, oldId, newId)) touched = true;
     for (const list of ["objects", "skipped"] as const) {
       const objs = entry[list];
       if (objs?.some((o) => o.id === oldId)) {
@@ -638,9 +702,12 @@ export function rekeyUndoIds(oldId: string, newId: string): void {
       );
       touched = true;
     }
-    if (entry.args?.includes(oldId)) {
-      entry.args = entry.args.map((a) => (a === oldId ? newId : a));
-      touched = true;
+    if (entry.args) {
+      const args = rekeyIds(entry.args, oldId, newId);
+      if (args !== entry.args) {
+        entry.args = args;
+        touched = true;
+      }
     }
   }
   if (touched) changed();

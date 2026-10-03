@@ -242,6 +242,29 @@ describe("confirm", () => {
     expect(undoEntry(e.id)).toBe(true);
     expect(value).toEqual([]);
   });
+
+  it("blind undo steps past a confirm entry to the ones below it", () => {
+    generic("Older");
+    generic("Old");
+    const e = generic("Made public");
+    e.confirm = true;
+    expect(performUndo()).toBe(true);
+    expect(value).toEqual(["Older", "Made public"]);
+    expect(performUndo()).toBe(true);
+    expect(value).toEqual(["Made public"]);
+    expect(notices.filter((n) => n.startsWith("Undo Made public"))).toHaveLength(2);
+    expect(getUndoHistory().head).toBe(e.id);
+  });
+
+  it("a manual entry below a confirm entry is not undone out of order", () => {
+    let n = 1;
+    pushUndo({ label: "inc", undo: () => { n--; }, redo: () => { n++; } });
+    const e = generic("Made public");
+    e.confirm = true;
+    expect(performUndo()).toBe(true);
+    expect(n).toBe(1);
+    expect(notices).toEqual(["Undo Made public from its toast or the history"]);
+  });
 });
 
 describe("_resetUndoStacks", () => {

@@ -62,6 +62,8 @@ export function rosterFromTree(tree: any): { roster: RouterRoster; roles: Array<
 
 export const routeRequestFor = (snap: RouteSnap) => routerRequest(snap.roster, snap.request);
 
+const DESCRIBE_CLOCK = Date.parse('2026-01-01T00:01:00.000Z');
+
 const impl: SurfaceImpl = {
   refForms: REF_FORMS,
 
@@ -120,7 +122,9 @@ const impl: SurfaceImpl = {
   },
 
   describe(snap: RouteSnap): ConvoMessage[] {
-    const now = Date.now();
+    // The judge keeps transcript lines at or before the freeze's asOf, so the
+    // roster and request carry a clock before any capture (a snapshot has none).
+    const now = DESCRIBE_CLOCK;
     return toConvoMessages([
       { role: 'user', content: rosterText(snap.roster), line: 1, timestamp: now - 60_000 },
       { role: 'user', content: `The request${snap.task ? ` (${snap.task.short_id})` : ''}:\n\n${snap.request}${snap.expected ? `\n\n(expected by the rule: @${snap.expected.handle}, by its ${snap.expected.by})` : ''}`, line: 2, timestamp: now },
