@@ -93,7 +93,10 @@ All messages carry `{hostId, seq}`. Followers track `lastSeq`; a gap or a new
   mut, in either order with its acknowledgement, so both paths keep the
   acknowledgement a lock already carries, and a field write that finds the
   value already landed with no lock on it (acknowledged and echoed) plants
-  none. So the origin window and its host both hold protection for
+  none. A field write older than the host's own lock on that field (the mut
+  waited in the channel while the host wrote the field again) is dropped:
+  it would put back the value the newer write replaced, under a lock the
+  server, holding the newer write, never echoes. So the origin window and its host both hold protection for
   the write, and a stale feed push on the host cannot revert it before the
   server echo. A whole-row overlay of a follower's copy would put the host's
   fresher fields back a step (the follower's copy is a replication hop
