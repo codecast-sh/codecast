@@ -671,7 +671,7 @@ async function performRetireRoleCore(ctx: any, userId: Id<"users">, args: Retire
   // An open decision follows its session (S28): the retired role leaves the
   // route, and the card goes to the people who now answer for the session.
   for (const conv of filed) {
-    await ctx.db.patch(conv._id, { org_role_id: undefined });
+    await ctx.db.patch(conv._id, { org_role_id: undefined, org_role_hold: undefined });
     await reroutePendingDecisionsForConversation(ctx, conv._id, now);
   }
   // Child roles re-home to the retired role's own parent, the way its sessions

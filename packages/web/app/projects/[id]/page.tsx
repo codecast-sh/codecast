@@ -48,6 +48,7 @@ import {
   CalendarClock,
   History,
   Megaphone,
+  FolderOpen,
 } from "lucide-react";
 import { taskPriority } from "../../../lib/taskPriority";
 import { DocDates } from "../../../components/DocDates";
@@ -57,6 +58,7 @@ import { useProjectLead } from "../../../hooks/useProjectLead";
 import { ProjectInitiatives } from "../../../components/initiatives/ProjectInitiatives";
 import { CharterBlock } from "../../../components/charter/CharterBlock";
 import { charterOf, type CharterPatch } from "../../../components/charter/charterMeta";
+import { InlineEdit } from "../../../components/org/OrgScopePanel";
 
 const api = _api as any;
 
@@ -413,6 +415,22 @@ function ProjectDetailContent() {
           )}
           {!editingTitle && <ProjectLeadChip projectId={project._id} editable />}
           <ShareControl label="project" path={`/projects/${project._id}`} publicShare={{ kind: "project", id: project._id, token: ((storeProjects as any)[project._id] ?? project).share_token }} className="ml-auto" />
+        </div>
+
+        {/* The project's folder (org-staffing.md S35): where its work lives.
+            It names the team of a new session there and groups evidence for
+            the review; it holds no session, so editing it moves nothing. */}
+        <div className="ml-5 mt-2 flex items-center gap-1.5 text-[11px] text-sol-text-dim" title="The folder this project's work lives in. It holds no session: a lead takes a session only for the task or plan it is bound to, or when someone files it there.">
+          <FolderOpen className="w-3 h-3 shrink-0" />
+          <span className="shrink-0">Folder</span>
+          <InlineEdit
+            value={project.project_path ?? ""}
+            placeholder="none"
+            canEdit
+            ariaLabel="Project folder"
+            className="font-mono text-[11px] text-sol-text-dim w-auto min-w-[8rem] max-w-full truncate"
+            onSave={(v) => { const next = v.trim(); if (next !== (project.project_path ?? "")) updateProject(projectId, { project_path: next || null }); }}
+          />
         </div>
 
         <RepositoryLinks projectId={project._id} />

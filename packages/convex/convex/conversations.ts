@@ -87,7 +87,7 @@ import {
   matchDirectoryMapping,
 } from "./privacy";
 import { effectiveMembershipVisibility } from "./teamVisibility";
-import { patchConversationVisibility } from "./lib/access";
+import { canAccessConversation, patchConversationVisibility } from "./lib/access";
 import { batchScanConversations, paginateTeamFeed } from "./feedPagination";
 import { mergeUserMessageFeed, type FeedCandidate } from "./messageFeed";
 import { assignConversationToBucketForUser, resolveLabelConvIds, matchBucketByName } from "./buckets";
@@ -11888,13 +11888,14 @@ export const getThreadState = query({
       : await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const conv = await findConversationByAnyRefWhere(ctx, args.session, (c) =>
-      c.user_id?.toString() === userId.toString() ||
-      c.owner_user_id?.toString() === userId.toString()
-    );
-    if (!conv) {
+    // Read access is the conversation's own (canAccessConversation): a
+    // session you run or own, or a teammate's team-visible one. A Head of
+    // People reads the standing session of a lead that reports to someone
+    // else this way (org-staffing.md S29); the write above stays run-or-own.
+    const conv = await resolveConversationRefRanked(ctx, args.session, userId, (c) => canAccessConversation(ctx, userId, c as any));
+    if (!conv || !(await canAccessConversation(ctx, userId, conv as any))) {
       throw new Error(
-        `No session found for "${args.session}" (you can only read state on sessions you run or own)`
+        `No session found for "${args.session}" (you can only read state on sessions you run, own or can see in your team)`
       );
     }
     return {

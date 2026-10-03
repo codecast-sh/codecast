@@ -18,12 +18,13 @@ import {
   sessionsWakeSig, pendingSendWakeSig, sessionUnreadMap, sessionUnreadWakeSig, sectionHeaderCount,
 } from '@codecast/web/store/inboxStore';
 import {
-  AGENT_LAUNCH_OPTIONS, AGENT_MODEL_CONFIG, featuredModelOptions, launchRailOptions, toConvexAgentType,
+  AGENT_MODEL_CONFIG, featuredModelOptions, launchRailOptions, toConvexAgentType,
   type AgentClientId, type DeviceModelInventory,
 } from '@codecast/shared/contracts';
 import { defaultMachineId } from '@codecast/web/lib/machinePicker';
 import { ModelEffortSheet } from '@/components/ModelEffortSheet';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
+import { usePinnedLaunchOptions } from '@codecast/web/hooks/usePinnedAgents';
 import { partitionTriggerInbox, type TaskRow } from '@codecast/web/components/triggerTasks';
 import { labelHexColor } from '@/lib/labelColors';
 import { type Device, deviceColor, deviceDisplayName } from '@/components/DevicesSection';
@@ -180,6 +181,7 @@ function CollapsibleSection({ label, summary, open, onToggle, disabled, children
 function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: boolean; onClose: () => void; onSessionCreated: (conversationId: string) => void }) {
   const Theme = useTheme();
   const [agentId, setAgentId] = useState<AgentClientId>("claude");
+  const agentOptions = usePinnedLaunchOptions(agentId);
   const [projectPath, setProjectPath] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -481,11 +483,10 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
 
         <ScrollView style={modalStyles.body} contentContainerStyle={modalStyles.bodyContent} keyboardShouldPersistTaps="handled">
           <RNText style={modalStyles.label}>Agent</RNText>
-          {/* Registry-derived (AGENT_LAUNCH_OPTIONS): adding a client descriptor
-              is all it takes to appear here. A 3-up grid of tiles — the mark
+          {/* The viewer's pinned agents (users.pinned_agents, registry order). A 3-up grid of tiles — the mark
               above the name, tinted with the client's accent when active. */}
           <RNView style={modalStyles.agentGrid}>
-            {AGENT_LAUNCH_OPTIONS.map((a) => {
+            {agentOptions.map((a) => {
               const active = agentId === a.id;
               const accent = agentAccents[a.id];
               return (

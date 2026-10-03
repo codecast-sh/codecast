@@ -17168,7 +17168,8 @@ projectCmd
   .option("--description <text>", stdinText("New description"))
   .option("--status <status>", "New status: planning, active, paused, done")
   .option("--labels <labels>", "Comma-separated labels (replaces existing)")
-  .option("--deadline <date>", "Target date (YYYY-MM-DD; 'none' clears) — drives the burndown deadline");
+  .option("--deadline <date>", "Target date (YYYY-MM-DD; 'none' clears) — drives the burndown deadline")
+  .option("--path <dir>", "The project's folder, where its work lives ('none' clears it); it holds no session, so changing it moves nothing");
 charterOptions(projectCmd.commands.find((x: any) => x.name() === "update"), true)
   .action(async (ref: string, options: any) => {
     const body: Record<string, any> = { id: await resolveProjectId(ref), ...charterBody(options) };
@@ -17177,8 +17178,9 @@ charterOptions(projectCmd.commands.find((x: any) => x.name() === "update"), true
     if (options.status) body.status = options.status;
     if (options.labels) body.labels = options.labels.split(",").map((s: string) => s.trim());
     if (options.deadline) body.target_date = parseDeadlineDate(options.deadline);
+    if (options.path !== undefined) body.project_path = NONE(options.path) ? null : path.resolve(options.path);
     if (Object.keys(body).length === 1) {
-      console.error("Nothing to update — pass --title, --description, --status, --labels, --deadline, or a charter flag (--goal, --metric, --priority, --owner, --non-goal, --risk, --budget-tokens)");
+      console.error("Nothing to update — pass --title, --description, --status, --labels, --deadline, --path, or a charter flag (--goal, --metric, --priority, --owner, --non-goal, --risk, --budget-tokens)");
       process.exit(1);
     }
     await cliPost("/cli/projects/update", body);

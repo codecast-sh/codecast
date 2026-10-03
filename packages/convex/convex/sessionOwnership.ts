@@ -17,6 +17,7 @@ import { notifySessionAssigned, notifySessionOwnershipChanged } from "./sessionA
 import { enqueuePendingMessage, formatSessionMessage } from "./pendingMessages";
 import { routeUpWaitingSession } from "./agentTasks";
 import { requireRole, userCanAdminRole } from "./lib/orgAccess";
+import { holdChangeFor, type HoldChange } from "./lib/orgOwnership";
 import { resolveActor } from "./lib/actor";
 import { wakeCost, wakeFieldsOf } from "./wakeCost";
 import { reroutePendingDecisionsForConversation } from "./sessionDecisions";
@@ -252,7 +253,11 @@ export type ReparentSessionTarget =
   // wants. `add` re-homes under the added person; `set` under the first
   // listed; `remove` leaves the reporting line to whoever remains.
   | { kind: "user"; user_id?: Id<"users">; owners?: string[]; mode?: "set" | "add" | "remove" }
-  | { kind: "role"; role_id: string };
+  // `hold` says why the role holds it (org-staffing.md S35): `bound`, the
+  // rule moved it for the work it is bound to, so a binding may move it
+  // again; `filed` (default), a person or role put it there, so only a
+  // person or role moves it.
+  | { kind: "role"; role_id: string; hold?: "bound" | "filed" };
 
 export type ReportsTo =
   | { kind: "user"; user_id: Id<"users">; name: string }
@@ -484,7 +489,7 @@ async function reparentSessionCore(
     // A person is now the parent: the role pointer comes off (S11). A remove
     // is not a re-homing, so a session filed under a role stays there.
     if (mode !== "remove" && desired.length > 0 && roleId) {
-      await ctx.db.patch(conversation._id, { org_role_id: undefined });
+      await ctx.db.patch(conversation._id, { org_role_id: undefined, org_role_hold: undefined });
       roleId = undefined;
     }
     owners = mode === "set" ? desired.map(toOwnerInfo) : await listOwnerInfos(ctx, conversation._id);
@@ -495,7 +500,7 @@ async function reparentSessionCore(
     if (targetRole.team_id && (conversation.team_id?.toString() ?? null) !== targetRole.team_id.toString()) {
       throw new Error("That session is not in the role's team");
     }
-    await ctx.db.patch(conversation._id, { org_role_id: targetRole._id });
+    await ctx.db.patch(conversation._id, { org_role_id: targetRole._id, org_role_hold: args.target.hold ?? "filed" });
     roleId = targetRole._id;
     owners = await listOwnerInfos(ctx, conversation._id);
   }
@@ -614,7 +619,7 @@ export async function roleDropForVisibility(
   if (!row?.org_role_id) return null;
   const role = await ctx.db.get(row.org_role_id);
   if (!role || await roleMayHoldSession(ctx, role, { ...row, ...after })) return null;
-  const patch: Record<string, undefined> = { org_role_id: undefined };
+  const patch: Record<string, undefined> = { org_role_id: undefined, org_role_hold: undefined };
   const tell = async () => {
     const line = `This session is no longer visible to the team, so it left @${role.handle}.`;
     const moveKey = `left:${role._id}`;
@@ -694,7 +699,7 @@ async function rehomeSessions(
     if (opts.dry) continue;
     const moved = await performReparentSession(ctx, authUserId, {
       session_id: c._id.toString(),
-      target: { kind: "role", role_id: role._id.toString() },
+      target: { kind: "role", role_id: role._id.toString(), hold: opts.by_rule ? "bound" : "filed" },
       note: opts.note,
       from_session: opts.from_session,
     }, { batch: batch!, row: c });
@@ -1122,3 +1127,36 @@ export const runBackfillSessionOwners = internalAction({
     return { pages, scanned, migrated };
   },
 });
+
+// ── The hold a binding gives or takes (org-staffing.md S35) ─────────────────
+//
+// Scheduled (never awaited) by every site that changes what a session is
+// bound to: a task start, a task closed, a plan bound or unbound, a session
+// created on a task. lib/orgOwnership holdChangeFor reads the rule; this
+// applies it through the one reparent core, so the session and the role are
+// told as a takeover tells them, the org log has the row, and the hold is
+// stamped `bound` so a later binding may move it again. A release re-homes
+// the session under whoever started it (`add` keeps its other owners).
+const BOUND_NOTE = "It looks after the work this session is bound to. It reads what you need first and decides what reaches a person.";
+
+export async function applyHoldChange(ctx: { db: any; scheduler?: any }, conversationId: Id<"conversations">): Promise<{ change: HoldChange["kind"]; role?: string }> {
+  const c = await ctx.db.get(conversationId);
+  const change = await holdChangeFor(ctx, c);
+  if (change.kind === "keep") return { change: "keep" };
+  const actor = c.owner_user_id ?? c.user_id;
+  if (change.kind === "release") {
+    await performReparentSession(ctx, actor, { session_id: String(c._id), target: { kind: "user", user_id: actor, mode: "add" }, note: `Its work is no longer in @${change.from.handle ?? "the role"}'s area.` });
+    return { change: "release", role: change.from.handle };
+  }
+  await performReparentSession(ctx, actor, { session_id: String(c._id), target: { kind: "role", role_id: String(change.role._id), hold: "bound" }, note: BOUND_NOTE });
+  return { change: change.kind, role: change.role.handle };
+}
+
+export const reconcileHold = internalMutation({
+  args: { conversation_id: v.id("conversations") },
+  handler: async (ctx, args) => applyHoldChange(ctx, args.conversation_id),
+});
+
+/** Queue the hold check for a session whose binding just changed. */
+export const scheduleHoldCheck = (ctx: { scheduler?: any }, conversationId: any) =>
+  ctx.scheduler?.runAfter(0, internal.sessionOwnership.reconcileHold, { conversation_id: conversationId });

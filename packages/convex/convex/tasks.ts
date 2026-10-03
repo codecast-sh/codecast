@@ -1009,6 +1009,7 @@ async function cascadeClose(ctx: any, ids: Id<"tasks">[], newStatus: string, use
       const conv: any = await ctx.db.get(convId);
       if (conv && conv.active_task_id && String(conv.active_task_id) === String(id)) {
         await ctx.db.patch(convId, { active_task_id: undefined });
+        await ctx.scheduler.runAfter(0, internal.sessionOwnership.reconcileHold, { conversation_id: convId });
       }
     }
     await ctx.db.insert("task_history", {
@@ -2120,6 +2121,8 @@ export const update = mutation({
       // session bound to another task rebinds rather than silently staying.
       if (explicitStart) {
         releasedOwners = (await claimTaskOwnership(ctx, conv, task, { take: args.take === true, now })).released;
+        // The binding may file the session under the lead that owns the work (S35).
+        await ctx.scheduler.runAfter(0, internal.sessionOwnership.reconcileHold, { conversation_id: conv._id });
         if (task.plan_id && !conv.active_plan_id) {
           const relatedPlan = await ctx.db.get(task.plan_id);
           if (
@@ -2134,6 +2137,8 @@ export const update = mutation({
       // Clear active_task_id when task is closed
       if ((nextStatus === "done" || nextStatus === "dropped") && conv.active_task_id === task._id) {
         await ctx.db.patch(conv._id, { active_task_id: undefined });
+        // The binding ended: a session held only for it returns to its starter (S35).
+        await ctx.scheduler.runAfter(0, internal.sessionOwnership.reconcileHold, { conversation_id: conv._id });
       }
     }
 
@@ -3764,6 +3769,7 @@ export async function spawnSessionForTask(
   // The launcher chose this session to do the work: it becomes the task's one
   // owner, and any earlier bound session lets go.
   await claimTaskOwnership(ctx, await ctx.db.get(conversationId), task, { take: true, now });
+  await ctx.scheduler.runAfter(0, internal.sessionOwnership.reconcileHold, { conversation_id: conversationId });
 
   // NB: intentionally do NOT reassign the task to "agent" — the launcher stays
   // the owner. The active run is already conveyed by the task status and the

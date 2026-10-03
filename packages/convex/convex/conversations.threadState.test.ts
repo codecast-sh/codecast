@@ -179,6 +179,22 @@ describe("getThreadState", () => {
     expect(res.at).toBeNull();
   });
 
+  test("a teammate reads a team-visible session's state; a session nobody shared stays closed to them", async () => {
+    const TEAM = "teams_1" as any;
+    const MATE = "users_mate" as any;
+    const tables = tablesWith({ team_id: TEAM, is_private: false, thread_state: "Rotating the prod key", thread_state_status: "blocked" });
+    tables.team_memberships = [
+      { _id: "tm1", user_id: RUNNER, team_id: TEAM, role: "admin", joined_at: 1 },
+      { _id: "tm2", user_id: MATE, team_id: TEAM, role: "member", joined_at: 1 },
+    ];
+    tables.teams = [{ _id: TEAM, name: "Acme" }];
+    const res = await (getThreadState as any)._handler(ctxAs(makeFakeDb(tables), MATE), { session: "abc1234" });
+    expect(res.state).toBe("Rotating the prod key");
+    expect(res.status).toBe("blocked");
+    const closed = { ...tables, conversations: [{ ...tables.conversations[0], is_private: true }] };
+    await expect((getThreadState as any)._handler(ctxAs(makeFakeDb(closed), MATE), { session: "abc1234" })).rejects.toThrow(/can see in your team/);
+  });
+
   test("a stranger cannot read it", async () => {
     const db = makeFakeDb(tablesWith({ thread_state: "secret" }));
     await expect(

@@ -14,6 +14,7 @@ import {
 } from "@codecast/shared/contracts/orgProposal";
 import { formatRelative } from "@codecast/shared/time";
 import { metricLine } from "@codecast/shared/contracts/initiative";
+import { reachedBreakdown, reachedTotal } from "@codecast/shared/contracts/orgAreas";
 import { formatDuration, parseDuration } from "./stackCommand.js";
 import { HEAD_OF_PEOPLE_HANDLE, isHeadOfPeopleRole, ORG_INIT_LABEL, type OrgInitDeps, type OrgInitMode, type OrgInitSummary } from "./orgInit.js";
 
@@ -462,6 +463,7 @@ export async function health(deps: OrgInitDeps, options: any): Promise<void> {
     const nextCheck = check.status === "paused" ? "check paused" : check.run_at ? `next check ${formatRelative(check.run_at, now)}` : check.status ? `check ${check.status}` : "no check";
     console.log(`  ${fmt.accent(`@${r.handle}`)}${r.short_id ? ` ${fmt.muted(r.short_id)}` : ""} ${fmt.highlight(String(a.status ?? "").replace(/_/g, " "))} ${fmt.muted(`· ${checked} · ${nextCheck}`)}`);
     if (a.status_line && a.status !== "on_track") console.log(`    ${a.status_line}`);
+    if (a.reached && reachedTotal(a.reached) > 0) console.log(`    ${fmt.muted("reached")} ${reachedBreakdown(a.reached)}`);
     if (a.standing) console.log(`    ${fmt.muted("says")}  ${a.standing.project}: ${a.standing.text}${a.standing.written_on ? fmt.muted(` (${a.standing.written_on})`) : ""}`);
     for (const w of a.waiting ?? []) console.log(`    ${fmt.muted("waits")} ${w.short_id} ${w.title}${w.state ? fmt.muted(` · ${w.state}`) : ""} ${fmt.muted(`· ${w.why} ${formatRelative(w.since, now)}`)}`);
     for (const sg of a.signals ?? []) console.log(`    ${(SEVERITY_TAG[sg.severity] ?? fmt.muted)(String(sg.severity).padEnd(7))} ${sg.text}`);

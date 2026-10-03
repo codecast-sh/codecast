@@ -7,6 +7,7 @@ import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
 import { resolveContextRow, resolveContextProjectPath } from "../lib/contextProjectPath";
 import { soundNewSession } from "../lib/sounds";
 import { AgentTypeIcon } from "./AgentTypeIcon";
+import { usePinnedAgentIds } from "../hooks/usePinnedAgents";
 import { AGENT_LAUNCH_OPTIONS, fromConvexAgentType, type AgentClientId } from "@codecast/shared/contracts";
 
 type AgentKey = AgentClientId;
@@ -62,6 +63,7 @@ export function ContextChatInput({
   // Registry chokepoint, never a hand-rolled ternary: a client missing from a
   // ternary silently collapses to the fallback branch.
   const agentKey: AgentKey = selectedAgent || fromConvexAgentType(currentAgent);
+  const pinnedAgents = usePinnedAgentIds();
   const isExpanded = isFocused || message.length > 0;
 
   const resetHeight = useCallback(() => {
@@ -222,7 +224,7 @@ export function ContextChatInput({
       <div className="mx-auto px-2 sm:px-4 conv-col">
         <div className="mx-auto px-4 mb-1 flex justify-between items-center conv-col">
           <div className="flex items-center gap-1">
-            {AGENT_TYPES.map((agent) => (
+            {AGENT_TYPES.filter((agent) => pinnedAgents.includes(agent.key) || agent.key === agentKey).map((agent) => (
               <button
                 key={agent.key}
                 type="button"

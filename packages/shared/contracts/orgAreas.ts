@@ -73,6 +73,60 @@ export type AreaInitiative = {
   chain: InitiativeLink[];
 };
 
+// ── How a session reached a role ─────────────────────────────────────────────
+// A role holds a session for two reasons (org-staffing.md S35): it is bound to
+// a task or a plan the role owns, or a person or role filed it there (the
+// chart, the owner menu, the role's own spawn). The route splits bound by the
+// binding, task or plan. A row under a role that is not filed and has no
+// binding was put there by the folder rule S35 retired, and reads so until the
+// migration hands it back. An overload that names which route dominates points
+// at its cause: a lead holding every session in a folder is a filing problem,
+// not a seat problem.
+
+export const AREA_ROUTES = ["task", "plan", "filed", "folder"] as const;
+export type AreaRoute = (typeof AREA_ROUTES)[number];
+
+/** The route in words, completing "reached it ...". */
+export const AREA_ROUTE_WORDS: Record<AreaRoute, string> = {
+  task: "through a task",
+  plan: "through a plan",
+  filed: "filed by a person or role",
+  folder: "by the folder rule",
+};
+
+export type AreaReached = Record<AreaRoute, number>;
+
+/** The route a session under a role took, from the row's own facts: its hold stamp and its binding. */
+export function handRouteOf(raw: { org_role_hold?: "bound" | "filed" | null; active_task_id?: unknown; active_plan_id?: unknown; plan_ids?: readonly unknown[] | null }): AreaRoute {
+  if (raw.org_role_hold === "filed") return "filed";
+  if (raw.active_task_id) return "task";
+  if (raw.active_plan_id || (raw.plan_ids?.length ?? 0) > 0) return "plan";
+  // Held as bound with no binding left, or a row from before the stamp: the
+  // retired folder rule put it there (migrations:releaseFolderHeldSessions).
+  return "folder";
+}
+
+export type AreaSession = { id: string; short_id: string; title: string; state: string; route: AreaRoute };
+
+export const emptyReached = (): AreaReached => ({ task: 0, plan: 0, filed: 0, folder: 0 });
+
+export const reachedTotal = (r: AreaReached): number => AREA_ROUTES.reduce((n, k) => n + (r[k] ?? 0), 0);
+
+/** Every route with a count, busiest first: "8 through a task, 2 filed by a person or role, 1 by the folder rule". */
+export function reachedBreakdown(r: AreaReached): string {
+  return AREA_ROUTES.filter((k) => (r[k] ?? 0) > 0).sort((a, b) => r[b] - r[a]).map((k) => `${r[k]} ${AREA_ROUTE_WORDS[k]}`).join(", ");
+}
+
+/** The sentence an alert carries: which route most of the sessions took, and the rest. Empty when nothing sits under the role. */
+export function reachedSentence(r: AreaReached): string {
+  const total = reachedTotal(r);
+  if (total === 0) return "";
+  const [top, ...rest] = AREA_ROUTES.filter((k) => (r[k] ?? 0) > 0).sort((a, b) => r[b] - r[a]);
+  if (rest.length === 0) return `${total === 1 ? "Its one session" : `All ${total} of its sessions`} reached it ${AREA_ROUTE_WORDS[top]}.`;
+  const lead = r[top] * 2 >= total ? `Most of its ${total} sessions reached it ${AREA_ROUTE_WORDS[top]} (${r[top]})` : `Of its ${total} sessions, ${r[top]} reached it ${AREA_ROUTE_WORDS[top]}`;
+  return `${lead}; the rest ${rest.map((k) => `${r[k]} ${AREA_ROUTE_WORDS[k]}`).join(", ")}.`;
+}
+
 /** A role's dated line from its brief (briefStanding.StandingLine, minus the raw). */
 export type AreaStandingLine = { project: string; text: string; written_on: string | null; written_at: number | null };
 
@@ -102,6 +156,10 @@ export type RoleArea = {
   goals: AreaGoal[];
   /** What the area feeds, owned goals first; absent on rows from before the field. */
   initiatives?: AreaInitiative[];
+  /** How the sessions under the role reached it, counted by route; absent on rows from before the field. */
+  reached?: AreaReached;
+  /** Each session under the role with the route that put it there, capped; absent on rows from before the field. */
+  sessions?: AreaSession[];
   /** When the role last read its brief from its own session. */
   checked_at: number | null;
   check: AreaCheck | null;
@@ -129,6 +187,8 @@ export type AreaInput = {
   overloaded: boolean;
   /** The phrases behind `overloaded`, plain: "6 decisions a day". */
   overloaded_by: string[];
+  /** How the sessions under the role reached it, so an overload names its cause. */
+  reached?: AreaReached;
   /** Days since anything moved in the area; null when nothing ever did. */
   idle_days: number | null;
   age_days: number;
@@ -162,7 +222,11 @@ export function areaStatusLine(a: AreaInput, status: AreaStatus): string {
       if (a.blocked_sessions > 0) parts.push(`${n(a.blocked_sessions, "task")} blocked`);
       return `Stuck: ${parts.join(", ")}.`;
     }
-    case "overloaded": return a.overloaded_by.length ? `Overloaded: ${a.overloaded_by.join(", ")}.` : "Overloaded: more reaches it than one role can answer.";
+    case "overloaded": {
+      const by = a.overloaded_by.length ? `Overloaded: ${a.overloaded_by.join(", ")}.` : "Overloaded: more reaches it than one role can answer.";
+      const why = a.reached ? reachedSentence(a.reached) : "";
+      return why ? `${by} ${why}` : by;
+    }
     case "quiet": return a.idle_days === null ? `Quiet: nothing has moved since it started ${n(a.age_days, "day")} ago.` : `Quiet: nothing has moved for ${n(a.idle_days, "day")}.`;
     case "on_track": return "On track.";
   }
@@ -179,7 +243,10 @@ export function areaSignalsOf(a: AreaInput): AreaSignal[] {
   else if (a.waiting_total > 0) out.push({ code: "waiting_sessions", severity: "info", text: `${n(a.waiting_total, "session")} under it ${a.waiting_total === 1 ? "is" : "are"} waiting on someone.` });
   if (a.review_stalls > 0) out.push({ code: "review_stall", severity: "warn", text: `${n(a.review_stalls, "task")} ${a.review_stalls === 1 ? "has" : "have"} sat in review for more than a day with nobody owning the verdict.` });
   if (a.blocked_sessions > 0) out.push({ code: "blocked_sessions", severity: "warn", text: `${n(a.blocked_sessions, "task")} still open whose session reported blocked or missing context.` });
-  if (a.overloaded) out.push({ code: "overloaded", severity: "warn", text: `More reaches it than one role can answer: ${a.overloaded_by.join(", ")}.` });
+  if (a.overloaded) {
+    const why = a.reached ? reachedSentence(a.reached) : "";
+    out.push({ code: "overloaded", severity: "warn", text: `More reaches it than one role can answer: ${a.overloaded_by.join(", ")}.${why ? ` ${why}` : ""}` });
+  }
   if (a.program_ended) out.push({ code: "program_ended", severity: "warn", text: `The work it was hired for ended: ${a.program_ended.ended}. Its tenure says ${a.program_ended.then === "retire" ? "retire it" : "review it"}.` });
   if (a.idle && !a.standing_waits_on_person) out.push({ code: "idle", severity: "info", text: a.idle_days === null ? `Nothing has moved in its area since it started ${n(a.age_days, "day")} ago.` : `Nothing has moved in its area for ${n(a.idle_days, "day")}.` });
   return out.slice(0, 3);

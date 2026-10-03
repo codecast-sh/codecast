@@ -130,6 +130,10 @@ export const update = mutation({
     labels: v.optional(v.array(v.string())),
     // Ongoing or bounded (org-staffing.md S10); "none" from the CLI clears it.
     horizon: v.optional(v.union(v.literal("ongoing"), v.literal("bounded"), v.null())),
+    // The project's folder (org-staffing.md S35): where the work lives. It
+    // names the team of a new session there and groups evidence for the
+    // review; it holds no session, so changing it moves nothing. null clears.
+    project_path: v.optional(v.union(v.string(), v.null())),
     // The charter (org-staffing.md S7); `--owner @handle` resolves inside the
     // project's own workspace. Access is the project's, unchanged.
     ...projectCharterArgs,
@@ -148,6 +152,7 @@ export const update = mutation({
     if (args.target_date !== undefined) updates.target_date = args.target_date ?? undefined;
     if (args.labels) updates.labels = args.labels;
     if (args.horizon !== undefined) updates.horizon = args.horizon ?? undefined;
+    if (args.project_path !== undefined) updates.project_path = args.project_path?.trim() || undefined;
 
     await ctx.db.patch(args.id, updates);
     return { success: true };
@@ -341,6 +346,8 @@ export const webUpdate = mutation({
     target_date: v.optional(v.union(v.number(), v.null())),
     labels: v.optional(v.array(v.string())),
     horizon: v.optional(v.union(v.literal("ongoing"), v.literal("bounded"), v.null())),
+    // The folder (S35): editable on the page; null clears it.
+    project_path: v.optional(v.union(v.string(), v.null())),
     ...projectCharterArgs,
   },
   handler: async (ctx, args) => {

@@ -560,15 +560,15 @@ export async function resolveScope(
   return { userId, role, teamId, scope, projects, plans: Array.from(planById.values()), tasks: Array.from(taskById.values()) };
 }
 
-// F1's session rule over the org scan: bound to a task or plan in scope, on a
-// scope project's path, or filed under the role.
+// F1's session rule over the org scan (org-staffing.md S35): bound to a task
+// or plan in scope, or filed under the role. A scope project's folder puts
+// nothing in scope: folders decide nothing.
 export type OrgScan = Awaited<ReturnType<typeof collectOrgSessions>>;
 export async function sessionsInScope(ctx: Ctx, resolved: ResolvedScope, now: number, scanIn?: OrgScan): Promise<Array<{ session: OrgSession; raw: any }>> {
   if (isScopeless(resolved.scope) && !resolved.role) return [];
   const scan = scanIn ?? await collectOrgSessions(ctx, resolved.userId, resolved.teamId, now);
   const taskIds = new Set(resolved.tasks.map((t) => t._id.toString()));
   const planIds = new Set(resolved.plans.map((p) => p._id.toString()));
-  const paths = new Set(resolved.projects.map((p) => p.project_path).filter(Boolean));
   const roleId = resolved.role?._id?.toString();
   const out: Array<{ session: OrgSession; raw: any }> = [];
   for (const entry of scan.sessions.values()) {
@@ -577,8 +577,7 @@ export async function sessionsInScope(ctx: Ctx, resolved: ResolvedScope, now: nu
       (roleId && c.org_role_id?.toString() === roleId) ||
       (c.active_task_id && taskIds.has(c.active_task_id.toString())) ||
       (c.active_plan_id && planIds.has(c.active_plan_id.toString())) ||
-      (c.plan_ids ?? []).some((id: any) => planIds.has(id.toString())) ||
-      (c.project_path && paths.has(c.project_path));
+      (c.plan_ids ?? []).some((id: any) => planIds.has(id.toString()));
     if (inScope) out.push(entry);
   }
   return out;

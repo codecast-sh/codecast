@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { HEALTH_CAPS, computeOrgHealth, roleActivity } from "./orgHealth";
 import { collectOrgSessions } from "./org";
+import { reachedSentence } from "@codecast/shared/contracts/orgAreas";
 
 // org.health (docs/architecture/org-staffing.md S3): the flow signals per
 // role, per person and for the company, read from the same scan org.tree uses
@@ -96,7 +97,13 @@ function fixtures(extra: Record<string, any[]> = {}) {
       conv(S_GROWTH, { standing_role_id: GROWTH, anchor_id: "anchors_growth", persistent: true }),
       conv(S_BILLING, { standing_role_id: BILLING, anchor_id: "anchors_billing", persistent: true, project_path: "/repo/elsewhere" }),
       // Seven hands under growth, pinned dormant, one of them settled done.
-      ...Array.from({ length: 7 }, (_, i) => conv(`conversations_hand${i}`, { org_role_id: GROWTH, thread_state: "Working the landing page", thread_state_status: i === 6 ? "done" : "dormant", thread_state_at: NOW - H })),
+      // How each reached the seat (S29, S35): three bound through a task, one
+      // bound through a plan, one filed by a person, two from before the hold
+      // stamp with no binding (the folder rule put them there).
+      ...Array.from({ length: 7 }, (_, i) => conv(`conversations_hand${i}`, {
+        org_role_id: GROWTH, thread_state: "Working the landing page", thread_state_status: i === 6 ? "done" : "dormant", thread_state_at: NOW - H,
+        ...(i < 3 ? { org_role_hold: "bound", active_task_id: `ct-p${i}` } : i === 3 ? { org_role_hold: "bound", active_plan_id: "plans_launch" } : i === 4 ? { org_role_hold: "filed", active_task_id: "ct-orphan" } : {}),
+      })),
     ],
     // Three decisions on growth's ladder: recommended at 4, 12 and 20 minutes (median 12); one carries a pass-up note from before S28.
     session_decisions: [
@@ -144,6 +151,20 @@ describe("org.health", () => {
     const growth = r.roles.find((x) => x.handle === "growth")!;
     expect(growth.breaches).toBe(1);
     expect(growth.flags.find((f) => f.code === "overloaded")!.detail).toContain("the same at 1 earlier review in a row");
+  });
+
+  test("the area names how each session reached the role, and the overload says which route dominates (S29)", async () => {
+    const r = await computeOrgHealth(ctxOf(fixtures()), ME as any, TEAM, NOW);
+    const growth = r.roles.find((x) => x.handle === "growth")!;
+    expect(growth.area.reached).toEqual({ task: 3, plan: 1, filed: 1, folder: 2 });
+    expect(Object.fromEntries(growth.area.sessions!.map((s) => [s.short_id, s.route]))).toEqual({
+      s_hand0: "task", s_hand1: "task", s_hand2: "task", s_hand3: "plan", s_hand4: "filed", s_hand5: "folder", s_hand6: "folder",
+    });
+    // Stuck outranks overloaded here, so the route sentence rides the overload signal only when it is among the three (orgAreas.test pins the sentence).
+    expect(reachedSentence(growth.area.reached!)).toBe("Of its 7 sessions, 3 reached it through a task; the rest 2 by the folder rule, 1 through a plan, 1 filed by a person or role.");
+    const billing = r.roles.find((x) => x.handle === "billing")!;
+    expect(billing.area.reached).toEqual({ task: 0, plan: 0, filed: 0, folder: 0 });
+    expect(billing.area.sessions).toEqual([]);
   });
 
   test("the area carries the role's own latest line, the sessions waiting under it and its check (S29)", async () => {

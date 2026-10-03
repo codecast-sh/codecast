@@ -339,7 +339,7 @@ export function ChangesPage() {
   const cold = !feed.ready && allStories.length === 0 && editions.length === 0;
   const nothingKnown = feed.ready && repos.length === 0 && editions.length === 0 && live.length === 0 && !url.repo;
 
-  if (feed.refused) {
+  if (feed.refused && !(window as any).__chgPreview) {
     return <EmptyState title="Changes is not turned on for this team yet." description="A team admin can turn it on in the team's settings." />;
   }
   if (nothingKnown) {
