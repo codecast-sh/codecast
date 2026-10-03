@@ -116,7 +116,17 @@ describe("room recording local-first", () => {
       };
       const fields = roomRecordingFields(room);
       expect(fields).toMatchObject({ recording: false, recording_status: "stopping", recording_by_name: "Ann", recording_configured: true });
-      expect(roomRecordingLive(fields)).toEqual({ status: "stopping", run_id: "run1", started_by: { id: "u1", name: "Ann" }, requested_at: 10, started_at: 20 });
+      expect(roomRecordingLive(fields)).toEqual({
+        status: "stopping",
+        run_id: "run1",
+        started_by: { id: "u1", name: "Ann" },
+        requested_at: 10,
+        started_at: 20,
+        stop_requested_at: null,
+        video_shared: false,
+      });
+      // Why a press cannot work right now rides the row beside whether it could.
+      expect(roomRecordingFields({ ...room, recording_unavailable: "Out of minutes" }).recording_unavailable).toBe("Out of minutes");
       // Nothing runs: said, not left unknown.
       expect(roomRecordingLive(roomRecordingFields({ recording: false, recording_run: null }))).toBeNull();
       // A server that does not send the run: unknown, so the flag decides.

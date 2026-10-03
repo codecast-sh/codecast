@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 
 import type { Command } from 'commander';
 import type { EvalSources, Freeze, RunSummary } from '@platform/evals';
@@ -12,6 +12,7 @@ import { describeFreeze, hasSnapshot } from '../adapters/resolver';
 import { repPassed } from '../adapters/replay';
 import { codecastRunSource, surfaceRuns } from '../adapters/runs';
 import { homePaths, REPO_ROOT, treeRoot } from '../paths';
+import { REPLAY_INPUTS } from '../provenance';
 import { surfaces } from '../registry';
 import { changedSince, dirtySurfaces, gitHead, mergeBase } from '../state';
 import { buildEvalResult, evalResultLines } from '../evalResult';
@@ -66,33 +67,57 @@ const tsFile = (p: string): string | undefined => [`${p}.ts`, p, join(p, 'index.
 
 /**
  * In the base worktree, a tool file (anything under src but src/surfaces)
- * keeps the base's prod module when the base exports every value it takes
- * from it, and otherwise reads this checkout's copy, so a helper the tool
- * gained since the base cannot crash the base run. Surface adapters are never
- * touched: the prod code they reach is what the base run measures. Returns
- * the imports it pointed back here.
+ * keeps the base's prod module, or the base's surface module, when the base
+ * exports every value it takes from it, and otherwise reads this checkout's
+ * copy, so a helper the tool gained since the base cannot crash the base run
+ * (today's `label` command reads orgReview's grade module, which older
+ * commits lack parts of; today's index reads `@codecast/shared/contracts/
+ * evalsApi`, which they lack whole). A package import is followed the way bun
+ * resolves it in the tree, so it needs the tree's node_modules in place
+ * (borrowNodeModules): an installed package is this checkout's install either
+ * way and stays, a workspace package is the commit's copy and is held to the
+ * same rule as a relative helper. Surface adapters are never touched: the
+ * prod code they reach is what the base run measures. Returns the imports it
+ * pointed back here.
  */
 export function pinMissingImports(pkg: string, wt: string, own: string): string[] {
   const scanner = new Bun.Transpiler({ loader: 'ts' });
-  const src = join(pkg, 'src');
+  // Real paths throughout: bun resolves a package import to one, and the tree's node_modules links lead out of the tree.
+  const tree = realpathSync(wt);
+  const here = realpathSync(own);
+  const tool = join(tree, relative(wt, pkg));
+  const src = join(tool, 'src');
+  const surfaces = join(src, 'surfaces');
+  const inside = (dir: string, p: string) => !relative(dir, p).startsWith('..');
+  // The file an import leads to from a folder: a relative one by path, a package one as bun resolves it there.
+  const lead = (spec: string, dir: string): string | undefined => {
+    if (spec.startsWith('.')) return tsFile(resolve(dir, spec));
+    try {
+      return Bun.resolveSync(spec, dir);
+    } catch {
+      return undefined;
+    }
+  };
   const walk = (dir: string): string[] =>
     readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
       const p = join(dir, e.name);
-      if (e.isDirectory()) return p === join(src, 'surfaces') ? [] : walk(p);
+      if (e.isDirectory()) return p === surfaces ? [] : walk(p);
       return e.name.endsWith('.ts') ? [p] : [];
     });
   const pinned: string[] = [];
   for (const file of walk(src)) {
     const text = readFileSync(file, 'utf8');
-    const next = text.replace(/(import|export)\s*\{([^}]*)\}\s*from\s*'(\.[^']*)'/g, (whole, _kw: string, names: string, spec: string) => {
-      const at = resolve(dirname(file), spec);
-      if (!relative(pkg, at).startsWith('..')) return whole;
+    const next = text.replace(/(import|export)\s*\{([^}]*)\}\s*from\s*'([^']+)'/g, (whole, _kw: string, names: string, spec: string) => {
       const values = names.split(',').map((n) => n.trim()).filter((n) => n && !n.startsWith('type ')).map((n) => n.split(/\s+as\s+/)[0]!);
-      const target = tsFile(at);
+      // Bun drops an import of types alone, so it never loads.
+      if (!values.length) return whole;
+      const target = lead(spec, dirname(file));
+      // Tool files read each other as they are, and an installed package is this checkout's; a surface module or a workspace package is the commit's, so a tool import of it can come up short.
+      if (target && (!inside(tree, target) || (inside(tool, target) && !inside(surfaces, target)))) return whole;
       if (target && values.every((v) => scanner.scan(readFileSync(target, 'utf8')).exports.includes(v))) return whole;
-      const ours = tsFile(join(own, relative(wt, at)));
+      const ours = lead(spec, join(here, relative(tree, dirname(file))));
       if (!ours) return whole;
-      pinned.push(`${relative(pkg, file)}: ${relative(own, ours)}`);
+      pinned.push(`${relative(tool, file)}: ${relative(here, ours)}`);
       return whole.replace(`'${spec}'`, `'${ours}'`);
     });
     if (next !== text) writeFileSync(file, next);
@@ -100,46 +125,104 @@ export function pinMissingImports(pkg: string, wt: string, own: string): string[
   return pinned;
 }
 
-/**
- * The base side: a detached worktree at the merge base, and the root its
- * `check` runs from. The eval tool and the freezes are this tree's on both
- * sides, so the two runs grade alike and see the same moments; a surface
- * adapter the base already had stays the base's, since it is part of what the
- * change moves. node_modules are borrowed. When a test points the tree at a
- * scratch repo, the tool runs from this checkout against it, as every other
- * command does there.
- */
-function prepareBaseTree(sha: string): { wt: string; tool: string } {
-  mkdirSync(homePaths().scratch, { recursive: true });
-  const wt = mkdtempSync(join(homePaths().scratch, 'line-base-'));
-  git(treeRoot(), ['worktree', 'add', '--detach', '-f', wt, sha]);
-  const pkg = join(wt, 'packages', 'evals');
-  for (const part of ['freezes', 'fixtures']) {
-    const from = join(treeRoot(), 'packages', 'evals', part);
-    if (existsSync(from)) cpSync(from, join(pkg, part), { recursive: true, force: true });
-  }
-  if (resolve(treeRoot()) !== resolve(REPO_ROOT)) return { wt, tool: REPO_ROOT };
-  const own = join(REPO_ROOT, 'packages', 'evals');
-  for (const part of ['src', 'package.json', 'tsconfig.json']) if (existsSync(join(own, part))) cpSync(join(own, part), join(pkg, part), { recursive: true, force: true });
-  if (git(wt, ['ls-tree', sha, '--', 'packages/evals/src/surfaces']).trim()) git(wt, ['checkout', sha, '--', 'packages/evals/src/surfaces']);
-  const pinned = pinMissingImports(pkg, wt, REPO_ROOT);
-  if (pinned.length) console.log(fmt.muted(`the base lacks helpers the eval tool uses; read from this checkout: ${pinned.join(', ')}`));
-  const borrow = (rel: string) => {
-    const from = join(REPO_ROOT, rel, 'node_modules');
-    const to = join(wt, rel, 'node_modules');
-    if (existsSync(from) && existsSync(join(wt, rel)) && !existsSync(to)) symlinkSync(from, to);
-  };
-  borrow('.');
-  for (const dir of ['packages', 'platform/packages']) if (existsSync(join(REPO_ROOT, dir))) for (const name of readdirSync(join(REPO_ROOT, dir))) borrow(join(dir, name));
-  return { wt, tool: wt };
+/** A tree prepareTreeAt made: the worktree, and the root its `check` runs from. */
+export interface TreeAt {
+  wt: string;
+  /** The root `check` runs from: the worktree, or this checkout when a test points the tree at a scratch repo. */
+  tool: string;
 }
 
 /**
- * Which surfaces the base can load at all, before its `check` runs: an adapter
- * that needs a prod seam the base lacks would otherwise take every surface in
- * the batch down with it. Returns the load error per surface that failed.
+ * A detached worktree at `sha` under EVALS_HOME/scratch, and the root its
+ * `check` runs from: the line's base side and every bisect probe. The eval
+ * tool and the freezes are this tree's, so every tree grades alike and sees
+ * the same moments; a surface adapter the commit already had stays the
+ * commit's, since it is part of what the change moves. node_modules are
+ * borrowed. With `patch`, a dirty rep's edits are applied on top (git apply,
+ * the replayed moments left out: they are this tree's). When a test points
+ * the tree at a scratch repo, the tool runs from this checkout against it,
+ * as every other command does there.
  */
-function baseLoadErrors(wt: string, tool: string, ids: string[]): Map<string, string> {
+export function prepareTreeAt(sha: string, o: { patch?: string; prefix?: string } = {}): TreeAt {
+  mkdirSync(homePaths().scratch, { recursive: true });
+  const wt = mkdtempSync(join(homePaths().scratch, o.prefix ?? 'line-base-'));
+  try {
+    git(treeRoot(), ['worktree', 'add', '--detach', '-f', wt, sha]);
+    const pkg = join(wt, 'packages', 'evals');
+    for (const part of ['freezes', 'fixtures']) {
+      const from = join(treeRoot(), 'packages', 'evals', part);
+      if (existsSync(from)) cpSync(from, join(pkg, part), { recursive: true, force: true });
+    }
+    const applyPatch = () => {
+      if (o.patch) git(wt, ['apply', '--whitespace=nowarn', ...REPLAY_INPUTS.map((p) => `--exclude=${p}/*`), o.patch]);
+    };
+    if (resolve(treeRoot()) !== resolve(REPO_ROOT)) {
+      applyPatch();
+      return { wt, tool: REPO_ROOT };
+    }
+    const own = join(REPO_ROOT, 'packages', 'evals');
+    for (const part of ['src', 'package.json', 'tsconfig.json']) if (existsSync(join(own, part))) cpSync(join(own, part), join(pkg, part), { recursive: true, force: true });
+    if (git(wt, ['ls-tree', sha, '--', 'packages/evals/src/surfaces']).trim()) git(wt, ['checkout', sha, '--', 'packages/evals/src/surfaces']);
+    // The patch lands on the commit's own surfaces and prod code, which is what it was taken against.
+    applyPatch();
+    // Borrowed first: the pin follows package imports through the tree's node_modules.
+    borrowNodeModules(REPO_ROOT, wt);
+    const pinned = pinMissingImports(pkg, wt, REPO_ROOT);
+    if (pinned.length) console.log(fmt.muted(`${sha.slice(0, 9)} lacks helpers the eval tool uses; read from this checkout: ${pinned.join(', ')}`));
+    return { wt, tool: wt };
+  } catch (e) {
+    dropBaseTree(wt);
+    throw e;
+  }
+}
+
+/**
+ * Give a worktree this checkout's installed packages without reading this
+ * checkout's own code. Each package's node_modules (the root's, packages/*,
+ * platform/packages/*) becomes a real folder of links to this checkout's
+ * entries, except a workspace link (`@codecast/convex`, `@platform/evals`: an
+ * entry that resolves inside this checkout but outside any node_modules),
+ * which points at the same package inside the worktree when the commit has
+ * it. Linking the whole folder would hand every import of `@codecast/*` the
+ * checkout's working copy, so a tree at an old commit would run today's
+ * convex and shared code, other sessions' unsaved edits included.
+ */
+export function borrowNodeModules(root: string, wt: string): void {
+  const realRoot = realpathSync(root);
+  const own = (entry: string): string => {
+    try {
+      const real = realpathSync(entry);
+      const rel = relative(realRoot, real);
+      if (rel.startsWith('..') || rel.split(sep).includes('node_modules')) return entry;
+      return existsSync(join(wt, rel)) ? join(wt, rel) : entry;
+    } catch {
+      return entry;
+    }
+  };
+  const borrow = (rel: string) => {
+    const from = join(root, rel, 'node_modules');
+    const to = join(wt, rel, 'node_modules');
+    if (!existsSync(from) || !existsSync(join(wt, rel)) || existsSync(to)) return;
+    mkdirSync(to);
+    for (const name of readdirSync(from)) {
+      if (!name.startsWith('@')) {
+        symlinkSync(own(join(from, name)), join(to, name));
+        continue;
+      }
+      mkdirSync(join(to, name));
+      for (const sub of readdirSync(join(from, name))) symlinkSync(own(join(from, name, sub)), join(to, name, sub));
+    }
+  };
+  borrow('.');
+  for (const dir of ['packages', 'platform/packages']) if (existsSync(join(root, dir))) for (const name of readdirSync(join(root, dir))) borrow(join(dir, name));
+}
+
+/**
+ * Which surfaces a tree can load at all, before its `check` runs: an adapter
+ * that needs a prod seam the commit lacks would otherwise take every surface
+ * in the batch down with it. Returns the load error per surface that failed.
+ */
+export function baseLoadErrors(wt: string, tool: string, ids: string[]): Map<string, string> {
   const registry = join(tool, 'packages', 'evals', 'src', 'registry.ts');
   const script = `const { loadSurface } = await import(${JSON.stringify(registry)}); const out = {}; for (const id of process.env.LINE_IDS.split(',')) { try { await loadSurface(id); } catch (e) { out[id] = String(e?.message ?? e).split('\\n')[0]; } } console.log(JSON.stringify(out));`;
   const r = spawnSync('bun', ['-e', script], { cwd: wt, encoding: 'utf8', env: { ...process.env, CODECAST_EVALS_REPO_ROOT: wt, LINE_IDS: ids.join(',') } });
@@ -152,7 +235,8 @@ function baseLoadErrors(wt: string, tool: string, ids: string[]): Map<string, st
   }
 }
 
-function dropBaseTree(wt: string): void {
+/** Remove a tree prepareTreeAt made, and its worktree entry. */
+export function dropBaseTree(wt: string): void {
   try {
     git(treeRoot(), ['worktree', 'remove', '--force', wt]);
   } catch {
@@ -161,18 +245,36 @@ function dropBaseTree(wt: string): void {
   }
 }
 
-const checkArgs = (ids: string[], batch: string, flags: LineFlags): string[] => [
+/** What a `check` run in a prepared tree is told. It never moves the cadence state: the tree is not the checkout. */
+export interface TreeCheck {
+  reps?: number;
+  model?: string;
+  budget?: number;
+  dry?: boolean;
+  notes: string;
+  freeze?: string[];
+  cadence?: string;
+  stopFile?: string;
+  maxMinutes?: number;
+}
+
+/** The `check` argv for a prepared tree (after the tool's index.ts). */
+export const checkArgs = (ids: string[], batch: string, o: TreeCheck): string[] => [
   'check',
   ...ids,
   '--batch',
   batch,
   '--no-state',
-  ...(flags.reps != null ? ['--reps', String(flags.reps)] : []),
-  ...(flags.model ? ['--model', flags.model] : []),
-  ...(flags.budget != null ? ['--budget', String(flags.budget)] : []),
-  ...(flags.dry ? ['--dry'] : []),
+  ...(o.freeze ?? []).flatMap((f) => ['--freeze', f]),
+  ...(o.reps != null ? ['--reps', String(o.reps)] : []),
+  ...(o.model ? ['--model', o.model] : []),
+  ...(o.budget != null ? ['--budget', String(o.budget)] : []),
+  ...(o.dry ? ['--dry'] : []),
+  ...(o.cadence ? ['--cadence', o.cadence] : []),
+  ...(o.stopFile ? ['--stop-file', o.stopFile] : []),
+  ...(o.maxMinutes != null ? ['--max-minutes', String(o.maxMinutes)] : []),
   '--notes',
-  'line base run',
+  o.notes,
 ];
 
 const clip = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
@@ -267,13 +369,13 @@ export async function runLine(flags: LineFlags, sources: EvalSources): Promise<n
   const baseFailure = new Map<string, string>();
   if (ids.length) {
     console.log(fmt.bold(`base ${flags.base} (${sha.slice(0, 9)}): ${ids.join(', ')}`));
-    const { wt, tool } = prepareBaseTree(sha);
+    const { wt, tool } = prepareTreeAt(sha);
     try {
       for (const [id, err] of baseLoadErrors(wt, tool, ids)) baseFailure.set(id, `the base cannot load the ${id} adapter: ${err}`);
       for (const why of baseFailure.values()) console.log(fmt.warning(why));
       const ready = ids.filter((id) => !baseFailure.has(id));
       if (ready.length) {
-        const r = spawnSync('bun', [join(tool, 'packages', 'evals', 'src', 'index.ts'), ...checkArgs(ready, batches.base, flags)], { cwd: wt, stdio: 'inherit', env: { ...process.env, CODECAST_EVALS_REPO_ROOT: wt } });
+        const r = spawnSync('bun', [join(tool, 'packages', 'evals', 'src', 'index.ts'), ...checkArgs(ready, batches.base, { reps: flags.reps, model: flags.model, budget: flags.budget, dry: flags.dry, notes: 'line base run' })], { cwd: wt, stdio: 'inherit', env: { ...process.env, CODECAST_EVALS_REPO_ROOT: wt } });
         if (r.status !== 0) {
           const exit = r.status ?? r.signal ?? r.error?.message;
           const scored = new Map(await Promise.all(ready.map(async (id) => [id, (await surfaceRuns(id)).filter((x) => x.batch === batches.base && x.status !== 'unscored').length] as const)));

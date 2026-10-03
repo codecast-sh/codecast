@@ -38,6 +38,9 @@ export function gateNote(text: string | undefined, key: string | undefined, labe
   return note;
 }
 
+/** How a lesson is typed at the door: the countermeasure a card's answer proposes. */
+export const LESSON_SIGNAL = { source: "lesson", kind: "cohesion" } as const;
+
 /** The lesson's fingerprint: one per task and note, so a repeated answer files nothing new. */
 export function lessonFingerprint(taskShortId: string, note: string): string {
   const normal = note.toLowerCase().replace(/\s+/g, " ").trim();
@@ -83,11 +86,13 @@ export async function learnFromCardGate(ctx: any, row: Doc<"session_decisions">,
     ? { workspace: "team" as const, team_id: ws.teamId }
     : { workspace: "personal" as const };
   const filer = ws?.type === "personal" ? ws.userId : userId;
+  // And in its cause's project (line-profile.md LP1), so the lesson reaches
+  // the line that answered the card.
   await ctx.scheduler.runAfter(0, internal.signals.ingestAs, {
     user_id: filer,
     ...scope,
-    source: "lesson",
-    kind: "cohesion",
+    ...(task.project_id ? { project: String(task.project_id) } : {}),
+    ...LESSON_SIGNAL,
     fingerprint: lessonFingerprint(task.short_id, note),
     title: `Prevent what ${chosen} on ${task.short_id} caught: ${firstLine(note, 160)}`,
     detail_md: `${note}\n\nFrom the card on ${task.short_id} (${task.title}), answered ${chosen}.`,

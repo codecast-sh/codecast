@@ -1,37 +1,20 @@
-import { useCallback, useMemo } from "react";
-import { useMutation } from "convex/react";
-import { api } from "@codecast/convex/convex/_generated/api";
-import type { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { useInboxStore, isConvexId } from "@codecast/web/store/inboxStore";
+import { useMemo } from "react";
+import { useInboxStore } from "@codecast/web/store/inboxStore";
 
-type WorkspaceArgs =
-  | { team_id: Id<"teams">; workspace: "team" }
-  | { workspace: "personal" }
-  | "skip";
+// One workspace pointer on every platform: the store's clientState.ui mirror,
+// read by web's useWorkspaceArgs and written (with the canonical
+// users.active_team_id) by web's useSwitchWorkspace. Both are persisted, so a
+// feeder subscribes on the first frame and a switch re-scopes in the same tick.
+export { useWorkspaceArgs } from "@codecast/web/hooks/useWorkspaceArgs";
+export { useSwitchWorkspace as useSwitchActiveTeam } from "@codecast/web/hooks/useSwitchWorkspace";
 
-// The active workspace, read from the store's persisted user record so every
-// feeder subscribes on the first frame from cache instead of waiting for
-// getCurrentUser to answer. Canonical pointer only: users.active_team_id.
-// Unset MEANS the personal workspace; a user not yet known skips.
-function useActiveTeamId(): { known: boolean; teamId: Id<"teams"> | undefined } {
-  const known = useInboxStore((s) => !!s.currentUser?._id);
-  const teamId = useInboxStore((s) => (s.currentUser as any)?.active_team_id) as Id<"teams"> | undefined;
-  return { known, teamId };
-}
-
-export function useWorkspaceArgs(): WorkspaceArgs {
-  const { known, teamId } = useActiveTeamId();
-  return useMemo<WorkspaceArgs>(() => {
-    if (!known) return "skip";
-    // A stub id (a team created this tick) is not an Id<"teams"> yet.
-    if (teamId && !isConvexId(String(teamId))) return "skip";
-    if (teamId) return { team_id: teamId, workspace: "team" };
-    return { workspace: "personal" };
-  }, [known, teamId]);
+/** The active team id from the mirror; unset is the personal workspace. */
+export function useActiveTeamId(): string | undefined {
+  return useInboxStore((s) => s.clientState.ui?.active_team_id ?? undefined) as string | undefined;
 }
 
 export function useActiveTeam() {
-  const { teamId } = useActiveTeamId();
+  const teamId = useActiveTeamId();
   const teams = useInboxStore((s) => s.teams) as any[];
   const validTeams = useMemo(() => (teams ?? []).filter(Boolean), [teams]);
   const activeTeam = useMemo(
@@ -39,15 +22,4 @@ export function useActiveTeam() {
     [validTeams, teamId],
   );
   return { teamId, activeTeam, validTeams };
-}
-
-/** Switch the canonical workspace pointer. The optimistic update rewrites the
- *  getCurrentUser answer in this tick; the inbox feeder carries it into
- *  store.currentUser, so every surface re-scopes before the round trip. */
-export function useSwitchActiveTeam(): (teamId: Id<"teams"> | null) => void {
-  const save = useMutation(api.teams.setActiveTeam).withOptimisticUpdate((local, args) => {
-    const user = local.getQuery(api.users.getCurrentUser, {});
-    if (user) local.setQuery(api.users.getCurrentUser, {}, { ...user, active_team_id: args.team_id } as any);
-  });
-  return useCallback((teamId) => { void save({ team_id: teamId ?? undefined }); }, [save]);
 }

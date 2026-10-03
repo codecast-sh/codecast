@@ -23,7 +23,7 @@ export const RAIL = { feedUnread: 3, chatUnread: 1 } as const;
 /** The rail on the inbox: no other section is the page. */
 export const RAIL_ACTIVE: SidebarNavActive = {
   initiatives: false, projects: false, tasks: false, docs: false, code: false, files: false, pages: false,
-  sessions: false, workflows: false, line: false, triggers: false, org: false, rootAgent: false, windows: false,
+  sessions: false, workflows: false, line: false, triggers: false, ops: false, org: false, rootAgent: false, windows: false,
 };
 
 export const entities: Record<string, EntityFixture> = {};

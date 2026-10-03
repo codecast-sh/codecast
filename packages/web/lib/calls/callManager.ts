@@ -1,4 +1,4 @@
-import { mediaFailureReason, participantTiles, type ParticipantTile } from "./callMedia";
+import { isMediaDenial, mediaFailureReason, participantTiles, type ParticipantTile } from "./callMedia";
 export { mediaFailureReason, listDevices, grantDeviceNames, type ParticipantTile } from "./callMedia";
 // The media plane's one owner. Exactly one LiveKit Room lives here (module
 // singleton, never in React state, never in the store); components render
@@ -751,7 +751,7 @@ async function joinCallHere(roomKey: string, opts?: JoinOpts): Promise<void> {
     }
     teardownMedia();
     const message =
-      err?.name === "NotAllowedError"
+      isMediaDenial(err)
         ? "Microphone permission denied"
         : humanizeConvexError(err, "Could not join the huddle");
     setCall({ phase: "error", error: message });

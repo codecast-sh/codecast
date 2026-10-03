@@ -33,7 +33,8 @@ import {
   type ChangeCommit,
   type ChangeKind,
 } from "@codecast/shared/changes";
-import { STRONG_MODEL, callModel, modelCost, parseJsonBlock, type SurfaceRequest } from "./lib/anthropic";
+import { callModel, modelCost, parseJsonBlock, type SurfaceRequest } from "./lib/anthropic";
+import { PROSE_MODEL } from "./lib/changesProseModel";
 import { teamVisibleInputs, type ChangesInputMode } from "./lib/changesAccess";
 import { changesZone, markDayDirty } from "./lib/changesDirty";
 import { teamDayBounds } from "./lib/teamDay";
@@ -48,13 +49,7 @@ export const SETTLE_MS = 20 * 60_000;
 export const EDITION_INTERVAL_MS = 60 * 60_000;
 /** What one team day's prose may spend, stories and editions together (spec 7.8). */
 export const DAILY_CAP_USD = 2;
-/**
- * Stories and editions both ask the strong model. On the evals Haiku kept
- * supplying motives no input stated (14 of 20 story replays passed against
- * Sonnet's 20 of 20), and the page is only worth reading if every reason on it
- * is sourced. A day costs cents either way, under DAILY_CAP_USD.
- */
-export const PROSE_MODEL = STRONG_MODEL;
+export { PROSE_MODEL };
 /** Story calls in flight at once. */
 const STORY_PARALLEL = 8;
 
@@ -370,7 +365,7 @@ export function parseStoryReply(text: string, input: Pick<StoryPromptInput, "ses
     : {};
   return {
     headline,
-    dek: clip(str(r.dek), DEK_MAX),
+    dek: fitProse(str(r.dek), DEK_MAX, DEK_MAX + HEADLINE_SLACK),
     ...(body ? { body } : {}),
     kind,
     importance,

@@ -126,3 +126,57 @@ describe("which events a repository narrows", () => {
     }
   });
 });
+
+import { INGEST_TRIGGER_EVENTS, isIngestTriggerEvent } from "./triggerEvents";
+
+describe("the derived ingestion vocabulary", () => {
+  test("every ingestion name is a derived shorthand with a label", () => {
+    for (const name of INGEST_TRIGGER_EVENTS) {
+      expect(TRIGGER_EVENT_SHORTHANDS[name]).toEqual({ event_type: name });
+      expect(TRIGGER_EVENT_LABELS[name]).toBeDefined();
+      expect(triggerEventShorthand({ event_type: name })).toBe(name);
+    }
+  });
+
+  test("isIngestTriggerEvent knows its own and nothing else", () => {
+    expect(isIngestTriggerEvent("error_new")).toBe(true);
+    expect(isIngestTriggerEvent("deploy")).toBe(true);
+    expect(isIngestTriggerEvent("pr_merged")).toBe(false);
+    expect(isIngestTriggerEvent(undefined)).toBe(false);
+    for (const name of INGEST_TRIGGER_EVENTS) expect(isPrTriggerEvent(name)).toBe(false);
+  });
+});
+
+import { describeEventScope, eventFilterForSave } from "./triggerEvents";
+
+describe("a trigger's scope, said and saved", () => {
+  test("a source event names its source, a pull request event its repository", () => {
+    expect(describeEventScope({ event_type: "error_new", source: "web" })).toBe("on error_new from source web");
+    expect(describeEventScope({ event_type: "check_failed" })).toBe("on check_failed from every source you can see");
+    expect(describeEventScope({ event_type: "pr_opened", repository: "a/b", pr_number: 4 })).toBe("on pr_opened in a/b#4");
+    expect(describeEventScope({ event_type: "pr_opened" })).toBe("on pr_opened in every repository you can see");
+  });
+
+  test("saving keeps the narrowings that still apply to the chosen event", () => {
+    expect(eventFilterForSave("error_new", { event_type: "error_new", source: "web" })).toEqual({ event_type: "error_new", source: "web" });
+    expect(eventFilterForSave("job_failed", { event_type: "error_new", source: "web" })).toEqual({ event_type: "job_failed", source: "web" });
+    expect(eventFilterForSave("pr_opened", { event_type: "pr_merged", repository: "a/b", pr_number: 2 })).toEqual({ event_type: "pr_opened", repository: "a/b", pr_number: 2 });
+  });
+
+  test("a narrowing that does not apply to the new event is dropped, and an unknown event saves nothing", () => {
+    expect(eventFilterForSave("pr_opened", { event_type: "error_new", source: "web" })).toEqual({ event_type: "pr_opened" });
+    expect(eventFilterForSave("error_new", { event_type: "pr_opened", repository: "a/b" })).toEqual({ event_type: "error_new" });
+    expect(eventFilterForSave("error_new", undefined)).toEqual({ event_type: "error_new" });
+    expect(eventFilterForSave("nope", undefined)).toBeUndefined();
+  });
+
+  test("--repo on a push or issue event survives a save, and --pr stays with pull request events", () => {
+    const push = eventFilterForSave("push", { event_type: "push", repository: "owner/x" });
+    expect(push?.repository).toBe("owner/x");
+    const issue = eventFilterForSave("issue_opened", { event_type: "issues", repository: "owner/x" });
+    expect(issue?.repository).toBe("owner/x");
+    const fromPr = eventFilterForSave("push", { event_type: "pull_request", repository: "owner/x", pr_number: 4 });
+    expect(fromPr?.repository).toBe("owner/x");
+    expect(fromPr?.pr_number).toBeUndefined();
+  });
+});

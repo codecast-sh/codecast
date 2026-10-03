@@ -15,7 +15,7 @@ export type ChangesUrl = {
   /** Week mode, `2026-W40`. */
   w?: string;
   areas: string[];
-  /** A commit author's name or a session owner's user id. */
+  /** A person's key (personKey: a lowercased name), or a session owner's user id from an older link. */
   person?: string;
   branches: "main" | "all";
   risk: boolean;
@@ -78,6 +78,11 @@ export function changesHref(s: ChangesUrl): string {
 /** Whether any filter narrows the stories (repo, day and branches are the view, not filters). */
 export function hasFilters(s: ChangesUrl): boolean {
   return s.areas.length > 0 || !!s.person || s.risk || s.waiting || !!s.surface || !!s.q;
+}
+
+/** The view with an area added to the area filter, or taken out of it. */
+export function toggleArea(s: ChangesUrl, area: string): ChangesUrl {
+  return { ...s, areas: s.areas.includes(area) ? s.areas.filter((a) => a !== area) : [...s.areas, area] };
 }
 
 export function clearFilters(s: ChangesUrl): ChangesUrl {

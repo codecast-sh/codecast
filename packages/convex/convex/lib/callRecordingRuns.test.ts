@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { locateCallMoment } from "@codecast/shared/contracts";
 import {
+  egressMovesRow,
   egressPatch,
   MAX_SCREEN_FILES_PER_RUN,
   mayDeleteRun,
+  mayShareVideo,
+  sharedVideoRuns,
   nextPollDelayMs,
   huddleKeepers,
   peopleInRoom,
@@ -59,9 +62,13 @@ describe("screen files", () => {
   });
 
   test("a screen is encoded at its own size, even, capped at 4K, a keyframe a second", () => {
-    expect(screenEncoding({ width: 2880, height: 1800 })).toEqual({ width: 2880, height: 1800, framerate: 15, key_frame_interval: 1 });
-    expect(screenEncoding({ width: 1281, height: 721 })).toEqual({ width: 1282, height: 722, framerate: 15, key_frame_interval: 1 });
-    expect(screenEncoding({ width: 5120, height: 2880 })).toEqual({ width: 3840, height: 2160, framerate: 15, key_frame_interval: 1 });
+    expect(screenEncoding({ width: 2880, height: 1800 })).toEqual({ width: 2880, height: 1800, framerate: 15, key_frame_interval: 1, video_bitrate: 7800 });
+    expect(screenEncoding({ width: 1281, height: 721 })).toEqual({ width: 1282, height: 722, framerate: 15, key_frame_interval: 1, video_bitrate: 4500 });
+    expect(screenEncoding({ width: 5120, height: 2880 })).toEqual({ width: 3840, height: 2160, framerate: 15, key_frame_interval: 1, video_bitrate: 12000 });
+    // The bitrate follows the pixels: 1080p sits on LiveKit's default, a
+    // Retina share gets about 0.1 bit per pixel per frame, 4K the ceiling.
+    expect(screenEncoding({ width: 1920, height: 1080 })!.video_bitrate).toBe(4500);
+    expect(screenEncoding({ width: 2560, height: 1440 })!.video_bitrate).toBe(5500);
     // Size unknown: LiveKit's preset decides.
     expect(screenEncoding({})).toBeNull();
   });
@@ -105,11 +112,19 @@ describe("LiveKit's view onto a row", () => {
     expect(live).toEqual({ drop: false, patch: { status: "recording", started_at: 6_000 } });
   });
 
+  test("a run that simply keeps recording moves nothing, so a look spends no mutation on it", () => {
+    const active = egress({ status: "EGRESS_ACTIVE", started_at: NS(1_000), file_results: [{ filename: base.r2_key, started_at: NS(6_000) }] });
+    expect(egressMovesRow({ ...base, status: "recording", started_at: 6_000 }, active)).toBe(false);
+    expect(egressMovesRow(base, active)).toBe(true);
+    // A stop LiveKit has not acted on yet is no change either.
+    expect(egressMovesRow({ ...base, status: "stopping", stop_reason: "pressed", started_at: 6_000 }, active)).toBe(false);
+  });
+
   test("finished: length, size and end land, and an unpressed end says why", () => {
     const done = egress({ status: "EGRESS_COMPLETE", file_results: [{ filename: base.r2_key, started_at: NS(6_000), ended_at: NS(30_000), duration: NS(24_400), size: "4096" }] });
     expect(egressPatch({ ...base, status: "recording", started_at: 6_000 }, done)).toEqual({
       drop: false,
-      patch: { status: "ready", ended_at: 30_000, duration_ms: 24_400, size_bytes: 4096, stop_reason: "huddle_ended" },
+      patch: { status: "ready", ended_at: 30_000, duration_ms: 24_400, size_bytes: 4096, stop_reason: "ended" },
     });
     // A screen file ending on its own is its share ending.
     expect((egressPatch({ ...base, kind: "screen", status: "recording", started_at: 6_000 }, done) as any).patch.stop_reason).toBe("share_ended");
@@ -190,5 +205,30 @@ describe("alignment against recorded rows", () => {
   test("a moment in a file still being written is not ready; one in no file is outside", () => {
     expect(locateCallMoment({ callStartedAt, atMs: 610_000, recordings: rows, now: callStartedAt + 700_000 })).toMatchObject({ ok: false, reason: "not_ready" });
     expect(locateCallMoment({ callStartedAt, atMs: 300_000, recordings: rows, now: callStartedAt + 700_000 })).toMatchObject({ ok: false, reason: "outside" });
+  });
+});
+
+describe("the video on a public link", () => {
+  test("publishing takes the presser of every room video it shows, or an admin", () => {
+    const runs = [{ started_by: "ana" }, { started_by: "ana" }];
+    expect(mayShareVideo("ana", runs, false)).toBe(true);
+    expect(mayShareVideo("ben", runs, false)).toBe(false);
+    expect(mayShareVideo("ben", runs, true)).toBe(true);
+    // Somebody else pressed one of them: that one is not Ana's to publish.
+    expect(mayShareVideo("ana", [...runs, { started_by: "ben" }], false)).toBe(false);
+  });
+
+  test("the link shows the finished room videos pressed for before the choice, and counts the later ones", () => {
+    const row = (requested_at: number, extra: Record<string, unknown> = {}) => ({ kind: "composite", status: "ready", started_at: requested_at + 500, requested_at, ...extra });
+    const rows = [row(100), row(200), row(300), row(150, { kind: "screen" }), row(120, { status: "failed" }), row(250, { status: "recording", started_at: null })];
+    const at = (through: number | null) => {
+      const { shared, later } = sharedVideoRuns(rows, through);
+      return [shared.map((r) => r.requested_at), later.map((r) => r.requested_at)];
+    };
+    expect(at(250)).toEqual([[100, 200], [300]]);
+    // A press in the very millisecond of the choice was not part of it.
+    expect(at(200)).toEqual([[100], [200, 300]]);
+    // A link shared before the cutoff existed keeps showing every room video.
+    expect(at(null)).toEqual([[100, 200, 300], []]);
   });
 });

@@ -382,10 +382,13 @@ describe("bookmarks, saved views, comments", () => {
     expect(getUndoHistory().items).toHaveLength(0);
   });
 
-  it("editComment sends the prior content", () => {
+  it("editComment sends the prior content", async () => {
     const C1 = "1".repeat(32);
     useInboxStore.setState({ comments: { [C1]: { _id: C1, conversation_id: CONV, content: "first", user_id: ME, created_at: 1 } } } as any);
     const sent = undoOf(() => void s().editComment(C1, "second"));
+    // editComment is a receipt action: its undo waits for the edit's own
+    // send to settle, since a failed receipt replays from the outbox.
+    await Bun.sleep(20);
     expect(sent.map(([a, args]) => [a, args.slice(0, 2)])).toEqual([["editComment", [C1, "first"]]]);
     expect(s().comments[C1].content).toBe("first");
   });

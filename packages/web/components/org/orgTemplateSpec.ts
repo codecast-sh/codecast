@@ -1,7 +1,7 @@
 // The hire form's output (org-hire.md H3): one proposal spec, one ask, from a
 // template's manifest and a person's answers. Pure, so it is tested without a
 // DOM and the dialog only renders what it returns.
-import { inputTokens, substitute, type OrgTemplate, type TemplateInput } from "@codecast/shared/contracts/orgTemplateManifest";
+import { inputTokens, substitute, templateRoleFields, type OrgTemplate, type TemplateInput } from "@codecast/shared/contracts/orgTemplateManifest";
 import type { OrgAuthorityGrant, OrgChange } from "@codecast/shared/contracts/orgProposal";
 
 export type HireDraft = {
@@ -113,8 +113,7 @@ export function buildHireSpec(d: HireDraft): HireSpec {
   if (!d.seatHandle) {
     changes.push({
       kind: "role", name: sub(m.role.name), handle, scope: { projects: [ref], plans: [] }, reports_to: d.reportsTo,
-      ...(m.role.avatar ? { avatar: m.role.avatar } : {}),
-      ...(m.role.tenure ? { tenure: m.role.tenure.kind === "standing" ? { kind: "standing" as const } : { kind: "program" as const, ends: { project: ref }, then: m.role.tenure.then } } : {}),
+      ...templateRoleFields(m.role, ref),
       charter: `Hired from the template ${m.id} ${m.version}. Its charter, triggers and skills come from that version of the template.`,
       evidence: [`Template ${m.id}@${m.version} sha256:${d.template.latest.digest.slice(0, 12)}`, `Project ${d.project.title}`],
     } as OrgChange);

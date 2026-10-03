@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { JSDOM } from "jsdom";
-import { escapeStep, keepsOwnEnter, layerOpen } from "../useChangesKeys";
+import { buildEdition, dropHiddenStory } from "../editionModel";
+import { escapeStep, focusedCommitHref, keepsOwnEnter, layerOpen } from "../useChangesKeys";
+import { EMPTY_URL, hasFilters, toggleArea, type ChangesUrl } from "../useChangesUrlState";
+import { DAY, edition, story } from "./fixtures";
 import { pageSource } from "./pageSources";
 
 // The page's keys share the keyboard with the controls inside it
@@ -52,6 +55,28 @@ describe("Enter inside a story", () => {
   });
 });
 
+describe("o on a commit row", () => {
+  const page = doc(`
+    <div data-story-key="s1">
+      <button data-story-trigger id="trigger">Headline</button>
+      <ul class="chg-drawer">
+        <li data-commit-href="/commit/acme/app/abc1234"><a href="/commit/acme/app/abc1234" id="sha">abc1234</a><a id="pr" href="/pr/4">#4</a></li>
+      </ul>
+    </div>
+  `);
+  test("opens the commit the focus sits on, its sha link or a link beside it (spec 3.3)", () => {
+    expect(focusedCommitHref(page.getElementById("sha"))).toBe("/commit/acme/app/abc1234");
+    expect(focusedCommitHref(page.getElementById("pr"))).toBe("/commit/acme/app/abc1234");
+  });
+  test("off a commit row it leaves `o` to the story", () => {
+    expect(focusedCommitHref(page.getElementById("trigger"))).toBeNull();
+    expect(focusedCommitHref(null)).toBeNull();
+    const src = pageSource("ChangesPage.tsx");
+    const open = src.slice(src.indexOf("open: () => {"), src.indexOf("waiting: () =>"));
+    expect(open.indexOf("focusedCommitHref(")).toBeLessThan(open.indexOf("openTarget("));
+  });
+});
+
 describe("an open menu owns the keyboard", () => {
   test("a handler declines while a menu or a listbox is open, and answers once it closes", () => {
     expect(layerOpen(doc(`<div role="menu" data-state="open"></div>`))).toBe(true);
@@ -89,5 +114,50 @@ describe("Escape", () => {
     const page = pageSource("ChangesPage.tsx");
     const clear = page.slice(page.indexOf('case "clear-text":'), page.indexOf('case "leave-field":'));
     expect(clear.replace(/\s+/g, " ")).toContain("setUrl({ q: undefined }); return true;");
+  });
+});
+
+describe("a filter that hides the open story", () => {
+  const risky = story("risky", { risks: [{ code: "schema", evidence: [] }], importance: 4 });
+  const plain = story("plain", { area: "cli", area_counts: { cli: 1 } });
+  const branch = story("branch", { on_default_branch: false, branch: "feat/x", area: "cli", area_counts: { cli: 1 } });
+  const input = { stories: [risky, plain, branch], date: DAY, edition: edition(), live: [] };
+  const open = (story: string): ChangesUrl => ({ ...EMPTY_URL, story });
+  /** What one Escape does on the page after a write, as ChangesPage asks it. */
+  const escapeAfter = (url: ChangesUrl) => {
+    const m = buildEdition({ ...input, url: { ...url, story: undefined } });
+    const shown = !!url.story && m.day.some((s) => s.story_key === url.story) && !m.hidden.has(url.story);
+    return escapeStep({ inFilterField: false, q: url.q, story: shown ? url.story : undefined, filtered: hasFilters(url), filterOpen: false });
+  };
+
+  test("r closes a story without risks, so the URL never names it and the next Escape clears the filters", () => {
+    const next = dropHiddenStory({ ...open("plain"), risk: true }, input);
+    expect(next.story).toBeUndefined();
+    expect(next.risk).toBe(true);
+    expect(escapeAfter(next)).toBe("clear-filters");
+  });
+
+  test("a story the filter keeps stays open, and Escape closes it first", () => {
+    const next = dropHiddenStory({ ...open("risky"), risk: true }, input);
+    expect(next.story).toBe("risky");
+    expect(escapeAfter(next)).toBe("close-story");
+  });
+
+  test("an area filter that folds the story's section closes it; one that dims the lead keeps its drawer", () => {
+    expect(dropHiddenStory(toggleArea(open("plain"), "web"), input).story).toBeUndefined();
+    expect(dropHiddenStory(toggleArea(open("risky"), "cli"), input).story).toBe("risky");
+  });
+
+  test("main only closes a branch story; a story the day does not hold yet is left for its landing", () => {
+    expect(dropHiddenStory({ ...open("branch"), branches: "all" }, input).story).toBe("branch");
+    expect(dropHiddenStory({ ...open("branch"), branches: "main" }, input).story).toBeUndefined();
+    expect(dropHiddenStory({ ...open("unknown"), risk: true }, input).story).toBe("unknown");
+  });
+
+  test("every filter key and the header write through the one helper", () => {
+    const page = pageSource("ChangesPage.tsx");
+    for (const key of ["risks: () => withFilter(", "branches: () => withFilter(", "withFilter((s) => ({ ...s, waiting:", "setUrl={withFilter}"]) {
+      expect({ key, routed: page.includes(key) }).toEqual({ key, routed: true });
+    }
   });
 });

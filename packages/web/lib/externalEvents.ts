@@ -32,8 +32,15 @@ import {
   UserCheck,
 } from "lucide-react";
 import { repoBlobHref } from "./repoView";
+import { opsHref } from "../components/ops/opsPaths";
+import { SOURCE_PROVIDERS, type SourceProvider } from "@codecast/shared/contracts/ingest";
 
-export type ExternalEventSource = "github" | "linear" | "codecast" | "git";
+export type ExternalEventSource = "github" | "linear" | "codecast" | "git" | IngestSourceProvider;
+
+// A product's own feeds (external-data.md X1): their transitions ride the same
+// timeline, named by the provider of the source that saw them.
+type IngestSourceProvider = SourceProvider;
+const INGEST_SOURCES: ReadonlySet<string> = new Set<string>(SOURCE_PROVIDERS);
 
 /** Accent names map to the app's solarized tokens (see accentVar). */
 export type ExternalEventAccent =
@@ -261,6 +268,11 @@ export type ExternalEventRecord = {
   plan_ids?: string[];
   project_ids?: string[];
   meta?: Record<string, string | number | undefined>;
+  // An ingestion transition (external-data.md X3): the group it moved and
+  // the source that saw it.
+  source_id?: string;
+  group_id?: string;
+  data?: { group_short_id?: string; source_name?: string; release?: string; environment?: string; count?: number; level?: string };
   dedupe_key?: string;
   created_at?: number;
 };
@@ -298,17 +310,18 @@ export function externalEventRowToExternalEvent(row: ExternalEventRecord): Exter
   }
   return {
     id: row._id,
-    source: row.source === "linear" ? "linear" : row.source === "codecast" ? "codecast" : row.source === "git" ? "git" : "github",
+    source: row.source === "linear" ? "linear" : row.source === "codecast" ? "codecast" : row.source === "git" ? "git" : row.source && INGEST_SOURCES.has(row.source) ? (row.source as SourceProvider) : "github",
     kind: row.kind ?? "commit",
     title: row.title ?? "",
     summary: row.summary,
-    url: row.url,
+    // A transition with no vendor link opens its group on the Ops page.
+    url: row.url ?? (row.data?.group_short_id ? opsHref.issue(row.data.group_short_id) : undefined),
     actor: row.actor_login || row.actor_avatar_url || row.actor_user_id
       ? { login: row.actor_login, avatar_url: row.actor_avatar_url, user_id: row.actor_user_id }
       : undefined,
     at: row.created_at ?? 0,
     refs,
-    meta: { ...meta, repository, branch: row.branch, issue_title: row.issue?.title },
+    meta: { ...meta, repository, branch: row.branch, issue_title: row.issue?.title, source_name: row.data?.source_name, release: row.data?.release, group_short_id: row.data?.group_short_id },
   };
 }
 

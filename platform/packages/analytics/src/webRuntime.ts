@@ -13,12 +13,16 @@ import {
   type ResolvedAnalyticsConfig,
 } from "./index";
 import { createTrackGate, resolveOptOut, type TrackGate } from "./catalog";
+import { createCodecastSink, type CodecastSink } from "./codecast";
+import { setupErrorCapture } from "./errors";
+import { scrubPosthogEvent, scrubSentryBreadcrumb, scrubSentryEvent } from "./scrub";
 
 let config: ResolvedAnalyticsConfig | null = null;
 let initialized = false;
 let optedOut = false;
 let gate: TrackGate | null = null;
 const preInit = createPreInitBuffer();
+let codecast: CodecastSink | null = null;
 
 /**
  * The browser's Do Not Track signal. A browser has no env, so this is the whole
@@ -132,6 +136,7 @@ export function initAnalytics(input: AnalyticsConfig) {
   });
 
   const isDev = config.environment === "development";
+  const scrub = config.scrubUrl;
 
   if (config.sentryDsn) {
     initSentry({
@@ -151,12 +156,30 @@ export function initAnalytics(input: AnalyticsConfig) {
         } catch {
           // Never lose an event to a bug in the filter.
         }
-        return event;
+        return scrub ? scrubSentryEvent(event, scrub) : event;
       },
+      // A navigation crumb names the page left and the page reached, so a
+      // link that is a key would ride every later error report as a crumb.
+      ...(scrub ? { beforeBreadcrumb: (crumb) => scrubSentryBreadcrumb(crumb, scrub) } : {}),
       initialScope: {
         tags: { platform: config.platform, ...(config.appName ? { app: config.appName } : {}) },
       },
     });
+  }
+
+  // Codecast follows Sentry's rules: off in development, the same unactionable
+  // list. It has no global handler of its own, so it asks errors.ts for the one
+  // listener pair; an app that wires setupErrorToasts owns that pair instead,
+  // and its captureError (this module's) reaches codecast below.
+  if (config.codecastIngestKey && !isDev) {
+    codecast = createCodecastSink({
+      ingestKey: config.codecastIngestKey,
+      endpoint: config.codecastEndpoint,
+      release: config.release,
+      environment: config.environment,
+      scrubUrl: scrub,
+    });
+    setupErrorCapture(reportToCodecast);
   }
 
   // An opted-out browser never loads PostHog at all: no init, no persistence
@@ -172,6 +195,10 @@ export function initAnalytics(input: AnalyticsConfig) {
       __extensionClasses: AnalyticsExtensions,
       disable_session_recording: true,
       capture_dead_clicks: false,
+      // Pageviews, pageleaves and autocapture all stamp the page's URL, its
+      // referrer and the person's first URL; an app whose links are keys
+      // rewrites them here, the one door every capture leaves through.
+      ...(scrub ? { before_send: (event) => scrubPosthogEvent(event, scrub) } : {}),
     });
     posthog.register(superProperties(config));
   }
@@ -185,6 +212,11 @@ export function identifyUser(userId: string, traits?: Record<string, unknown>) {
     return;
   }
   if (config?.sentryDsn) setSentryUser({ id: userId, ...traits });
+  codecast?.setUser({
+    id: userId,
+    ...(typeof traits?.email === "string" ? { email: traits.email } : {}),
+    ...(typeof traits?.name === "string" ? { name: traits.name } : {}),
+  });
   if (config?.posthogKey && !optedOut) posthog.identify(userId, traits);
 }
 
@@ -194,6 +226,7 @@ export function resetUser() {
     return;
   }
   if (config?.sentryDsn) setSentryUser(null);
+  codecast?.setUser(null);
   if (config?.posthogKey && !optedOut) posthog.reset();
 }
 
@@ -212,6 +245,28 @@ export function track(event: string, properties?: Record<string, unknown>) {
 
 export function captureError(error: Error, context?: Record<string, unknown>) {
   if (config?.sentryDsn) captureSentryException(error, { extra: context });
+  reportToCodecast(error, context);
+}
+
+/**
+ * Whether an error is noise no engineer can act on: the same rule Sentry
+ * applies through ignoreErrors and beforeSend, for a backend without them.
+ */
+export function isUnactionableError(message: string, extra: (string | RegExp)[] = []): boolean {
+  const patterns = [...UNACTIONABLE_ERROR_PATTERNS, ...extra];
+  if (patterns.some((p) => (typeof p === "string" ? message.includes(p) : p.test(message)))) return true;
+  return isTranslatedDomError(message);
+}
+
+function reportToCodecast(error: Error, context?: Record<string, unknown>) {
+  if (!codecast) return;
+  if (isUnactionableError(error?.message ?? String(error), config?.extraIgnoreErrors)) return;
+  codecast.captureError(error, context ? { context } : undefined);
+}
+
+/** The codecast sink initAnalytics created, or null when no ingest key was given (or in development). */
+export function getCodecastSink(): CodecastSink | null {
+  return codecast;
 }
 
 export function _resetRuntimeForTests() {
@@ -219,6 +274,8 @@ export function _resetRuntimeForTests() {
   initialized = false;
   optedOut = false;
   gate = null;
+  codecast?.close();
+  codecast = null;
   preInit.clear();
 }
 

@@ -7,10 +7,12 @@
 // Filters never rewrite prose. Area and surface filters dim what they miss so
 // the shape of the day stays visible; person, risk, waiting and text filters
 // hide what they miss. Dimmed and hidden stories leave the reading order.
-import { personKey, statsHeadline, surfaceCoversArea, waitingStories, type ShipEvent } from "@codecast/shared/changes";
+import { bareName, personKey, statsHeadline, surfaceCoversArea, waitingStories, type ShipEvent } from "@codecast/shared/changes";
 import type { EditionRow, LiveRow, StoryRow } from "../../hooks/useSyncChanges";
 import type { RosterIdentity } from "../../hooks/useTeamRoster";
+import { addDays } from "@codecast/convex/convex/lib/teamDay";
 import { memberDisplayName } from "../../lib/liveEntities";
+import { plural } from "./format";
 import { hasFilters, type ChangesUrl } from "./useChangesUrlState";
 
 export type Ship = Pick<ShipEvent, "surface" | "version" | "sha" | "at">;
@@ -36,8 +38,6 @@ export type EditionModel = {
   day: StoryRow[];
   /** Everyone behind `day`, by name. */
   people: Person[];
-  /** Commits on main as the stories count them now, to tell notes written from fewer. */
-  mainCommits: number;
   lead: StoryRow | null;
   sections: Section[];
   brief: StoryRow[];
@@ -45,6 +45,8 @@ export type EditionModel = {
   order: string[];
   /** Stories drawn dimmed by an area or surface filter. */
   dimmed: Set<string>;
+  /** Stories of `day` the page does not show: missed by a hiding filter, or in a section an area filter folds to its header. */
+  hidden: Set<string>;
   /** Stories waiting behind the latest ship of their surface. */
   waiting: Set<string>;
   /** Stories matching every filter. */
@@ -82,7 +84,14 @@ export function echoesHeadline(leadHeadline: string, editionHeadline: string): b
   return lead.filter((w) => said.has(w)).length / lead.length >= ECHO_SHARE;
 }
 
-const PROSE_STATUSES = new Set(["written", "final"]);
+/** Edition statuses whose headline and narrative are written prose, not the stats line. */
+export const PROSE_STATUSES = new Set(["written", "final"]);
+
+/** Whether an edition (day or week) has written prose to show. */
+export const hasProse = (e: Pick<EditionRow, "headline" | "status"> | undefined) => !!e?.headline && PROSE_STATUSES.has(e.status ?? "");
+
+/** An edition's headline as the page prints it: its prose, else the counts line. */
+export const editionHeadline = (e: EditionRow | undefined, stats: Parameters<typeof statsHeadline>[0]) => (hasProse(e) ? e!.headline! : statsHeadline(stats));
 const BRIEF_KINDS = new Set(["docs", "test"]);
 
 const lines = (s: Pick<StoryRow, "insertions" | "deletions">) => s.insertions + s.deletions;
@@ -129,7 +138,7 @@ export function peopleOf(stories: readonly Pick<StoryRow, "actor_user_ids" | "au
       const key = personKey(author);
       if (!key) continue;
       const m = byName.get(key);
-      const p = at(key, m ? memberDisplayName(m) : author.trim());
+      const p = at(key, m ? memberDisplayName(m) : bareName(author));
       if (m) addId(p, String(m._id));
       if (!p.authorNames.includes(author)) p.authorNames.push(author);
     }
@@ -197,6 +206,46 @@ export function survives(s: StoryRow, url: ChangesUrl, waiting: Set<string>, per
     if (!hay.includes(q)) return false;
   }
   return true;
+}
+
+/**
+ * Whether notes can still arrive for a day: it is today or yesterday (the
+ * days the scheduler still writes), and its edition is neither capped by the
+ * spending limit nor failed. The header's "notes updating" and every pending
+ * story's bar read this one answer (StoryContext.proseLive), so a day whose
+ * notes will never come never shimmers.
+ */
+export function notesCanArrive(date: string, today: string, edition: Pick<EditionRow, "capped_at" | "status"> | undefined): boolean {
+  return date >= addDays(today, -1) && !edition?.capped_at && edition?.status !== "failed";
+}
+
+const FULL_SHA = /\b[0-9a-f]{40}\b/gi;
+const basename = (item: string) => item.split("/").pop() || item;
+
+/**
+ * Every risk on a story as text, one per line (or `sep`). A risk the prose
+ * worded is its line alone: the line already says what the evidence shows.
+ * One it did not is its code with its evidence, full commit hashes cut to
+ * seven characters, and an item left out when its file name is already in
+ * the text (two paths to one schema.ts). At most four items, then "...".
+ */
+export function riskText(story: Pick<StoryRow, "risks" | "risk_lines">, sep = "\n"): string {
+  return story.risks
+    .map((r) => {
+      const line = story.risk_lines?.[r.code]?.trim();
+      if (line) return line;
+      let text = r.code;
+      const kept: string[] = [];
+      for (const raw of r.evidence) {
+        const item = raw.replace(FULL_SHA, (sha) => sha.slice(0, 7));
+        if (text.includes(basename(item))) continue;
+        kept.push(item);
+        text += ` ${item}`;
+      }
+      if (!kept.length) return r.code;
+      return `${r.code} (${kept.slice(0, 4).join(", ")}${kept.length > 4 ? ", ..." : ""})`;
+    })
+    .join(sep);
 }
 
 /** Release stamps in a section: a ship of a surface covering the area, placed after the last row that landed before it. */
@@ -274,7 +323,7 @@ export function filterAreas(stories: readonly StoryRow[], touches: readonly Area
 /** "Showing 3 of 9 stories (cli)" while a filter is on, else null. The day and the week say it the same way. */
 export function showingLine(url: ChangesUrl, matching: number, total: number, personName: (id: string) => string = (id) => id): string | null {
   if (!hasFilters(url)) return null;
-  return `Showing ${matching} of ${total} ${total === 1 ? "story" : "stories"} (${filterLabel(url, personName)})`;
+  return `Showing ${matching} of ${plural(total, "story", "stories")} (${filterLabel(url, personName)})`;
 }
 
 /** The name a `person=` value shows under: the person it names on screen, else the page's fallback. */
@@ -292,7 +341,7 @@ function filterLabel(url: ChangesUrl, personName: (id: string) => string): strin
   return parts.join(", ");
 }
 
-export function buildEdition(input: {
+export type EditionInput = {
   stories: readonly StoryRow[];
   date: string;
   edition: EditionRow | undefined;
@@ -302,14 +351,17 @@ export function buildEdition(input: {
   roster?: readonly RosterIdentity[];
   /** A name for a `person=` value no story names. */
   personName?: (id: string) => string;
-}): EditionModel {
+};
+
+export function buildEdition(input: EditionInput): EditionModel {
   const { date, edition, live, url } = input;
   const day = storiesOfDay(input.stories, date, url.branches);
   const byKey = new Map(day.map((s) => [s.story_key, s]));
   const releases: Ship[] = edition?.releases ?? [];
-  const stats = dayStats(day, edition, releases, url.branches);
   const waiting = waitingKeys(day, live);
   const people = peopleOf(day, input.roster);
+  // The header counts the people the avatars and the person chips show, so the three never disagree.
+  const stats = { ...dayStats(day, edition, releases, url.branches), people: people.length };
   const person = url.person ? personFor(url.person, people) : null;
 
   // Lead: the edition's pick, else the heaviest story on the default branch.
@@ -354,6 +406,12 @@ export function buildEdition(input: {
     return { area, items: withStamps(area, rows, releases), count: rows.length, dimmed: rows.every((s) => dimmed.has(s.story_key)) };
   });
 
+  // A section every row of which an area filter misses folds to its header while other stories match (SectionBlock).
+  const offPage = new Set(hidden);
+  if (matching > 0) {
+    for (const sec of sections) if (sec.dimmed) for (const i of sec.items) if (i.kind === "story") offPage.add(i.story.story_key);
+  }
+
   const brief = ranked.filter((s) => briefKeys.has(s.story_key) && visible(s)).sort(byLanding);
   const leadShown = lead && visible(lead) ? lead : null;
 
@@ -364,20 +422,20 @@ export function buildEdition(input: {
     ...brief.filter(walkable).map((s) => s.story_key),
   ];
 
-  const prose = !!edition?.headline && PROSE_STATUSES.has(edition.status ?? "");
+  const prose = hasProse(edition);
   return {
     day,
     people,
-    mainCommits: dayStats(storiesOfDay(input.stories, date, "main"), undefined, releases).commits,
     lead: leadShown,
     sections,
     brief,
     order,
     dimmed,
+    hidden: offPage,
     waiting,
     matching,
     stats,
-    headline: prose ? edition!.headline! : statsHeadline(stats),
+    headline: editionHeadline(edition, stats),
     prose,
     standfirst: prose && edition!.narrative.trim() ? edition!.narrative.trim() : null,
     releases,
@@ -386,6 +444,19 @@ export function buildEdition(input: {
     // Only prose can repeat a story; the counts headline never does.
     leadEchoesHeadline: prose && !!leadShown && echoesHeadline(leadShown.headline, edition!.headline!),
   };
+}
+
+/**
+ * The view `next` with its open story closed when that view would not show
+ * it (a filter or the branch toggle hides it), so the URL and a copied link
+ * never name a story the page cannot show. A story the day does not hold at
+ * all (a pasted link still loading) is left alone.
+ */
+export function dropHiddenStory(next: ChangesUrl, input: Omit<EditionInput, "url">): ChangesUrl {
+  const key = next.story;
+  if (!key || !input.stories.some((s) => s.story_key === key && s.date === input.date)) return next;
+  const m = buildEdition({ ...input, url: { ...next, story: undefined } });
+  return m.day.some((s) => s.story_key === key) && !m.hidden.has(key) ? next : { ...next, story: undefined };
 }
 
 /** Commits per day for the date strip's ink: the edition's count, else the stories'. */

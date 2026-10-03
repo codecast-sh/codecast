@@ -17,6 +17,7 @@ import {
   receiptAsyncAction,
   DispatchNotWiredError,
   isParkedDispatchError,
+  isRefusedDispatchError,
   sync,
   bindUndoStore,
   type DurableCreateContinuation,
@@ -251,6 +252,7 @@ import { sessionFocusKind, type SessionFocusKind } from "../lib/inboxRouting";
 import {
   createChatSlice,
   CHAT_SYNC_REGISTRY,
+  liftExcludesForIncoming,
   selectChannelReadMarker,
   type ChatSliceState,
 } from "./chatSlice";
@@ -258,6 +260,7 @@ import { createOrgSlice, ORG_SYNC_REGISTRY, projectLeadScopeOutcome, pushRoleFie
 import { writeAsServerShape } from "./serverShape";
 import { replaceContents } from "./simSlot";
 import { createInitiativeSlice, type InitiativeSliceActions } from "./initiativeSlice";
+import { createOpsSlice, type OpsSliceActions } from "./opsSlice";
 import { createComposeSlice, type ComposeInstance, type ComposeSliceState } from "./composeSlice";
 // Re-exported so chat surfaces import their selectors from the store, like every
 // other view does, instead of reaching into the slice file.
@@ -4936,7 +4939,7 @@ export type RoomKnock = {
 // RegisteredCollectionSlots: every collection in CLIENT_SYNC_REGISTRY gets a
 // typed `Record<string, any>` slot here by registration alone; the explicit
 // fields below narrow the ones with a real row type.
-interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSliceActions, ComposeSliceState, Omit<RegisteredCollectionSlots, keyof ChatSliceState | keyof OrgSliceState> {
+interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSliceActions, OpsSliceActions, ComposeSliceState, Omit<RegisteredCollectionSlots, keyof ChatSliceState | keyof OrgSliceState> {
   sessions: Record<string, InboxSession>;
   pending: Record<string, PendingEntry>;
   currentSessionId: string | null;
@@ -5283,6 +5286,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   respondToGate: (runId: string, response: string) => void;
   setMyStatus: (status: "available" | "busy" | "away") => void;
   updateMyProfile: (patch: MyProfilePatch) => void;
+  setActiveTeamPointer: (teamId: string | null) => void;
   setWalkiePref: (pref: "team" | "off") => void;
   adoptTimezone: (timezone: string) => void;
   setCloudSessionSync: (source: CloudSessionSource, enabled: boolean) => void;
@@ -6785,6 +6789,10 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   // localFirst (clientSyncRegistry): a field an action set (status, walkie
   // pref, cloud sync switches) holds over pushes until the server echoes it.
   currentUser: { ...REGISTRY_SYNC_OPTS.currentUser, normalize: quantizePresence },
+  // The calls list prunes the window each answer covers (useCallList), which
+  // leaves a tombstone; a call the server lists again (a recording shared
+  // back, a team rejoined) lifts it, the same rule as a chat room.
+  callList: { ...REGISTRY_SYNC_OPTS.callList, transform: liftExcludesForIncoming("callList") },
   // Server-authoritative call state: wholesale replace (no local edits to
   // protect — the optimistic layer for calls is the ephemeral `call` slice,
   // not these rows). Timestamps are bucketed server-side (calls.ts), so
@@ -7519,6 +7527,18 @@ function hideSessionInDraft(
       if (mode === "stash" || conv.inbox_stash_hidden) { conv.inbox_stash_hidden = stashHiddenValue; wrote.inbox_stash_hidden = stashHiddenValue; }
       if (wasPinned) { conv.inbox_pinned_at = null; wrote.inbox_pinned_at = null; }
     }
+    // A kill has the server stamp inbox_killed_at again, so a lock still
+    // holding a clear of it (an undone kill's, until its acknowledgement
+    // retires it) now asserts the opposite of this write. It goes here: on a
+    // follower the acknowledgement retires locks only after the page that
+    // carries the new stamp has landed, and the lock would have held it off.
+    if (mode === "kill") {
+      for (const coll of ["sessions", "conversations"]) {
+        const key = `${coll}:${sid}:inbox_killed_at`;
+        const lock = draft.pending[key];
+        if (lock?.type === "field" && lock.value == null) delete draft.pending[key];
+      }
+    }
     writes[sid] = wrote;
   }
   advanceSelection(draft, newSessionId);
@@ -7926,13 +7946,19 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
     // planted (a newer one, from a hide this window saw after the undo,
     // stands), put the row back, and hold it under the include lock the
     // acting window holds, until the server lists it.
+    // The forget excluded the conversations twin even when the acting window
+    // held no conversations row to send back, so a sessions row lifts that
+    // exclude too (as clearFeedExcludes does), and the meta feeder refills it.
     for (const entry of msg.rows) {
       for (const coll of ["sessions", "conversations"] as const) {
         const row = entry[coll];
-        if (!row) continue;
         const key = `${coll}:${entry.id}`;
         const lock = draft.pending[key];
         if (lock?.type === "exclude" && (lock.ts ?? 0) > msg.ts) continue;
+        if (!row) {
+          if (coll === "conversations" && entry.sessions && lock?.type === "exclude") delete draft.pending[key];
+          continue;
+        }
         if (!draft[coll][entry.id]) draft[coll][entry.id] = row;
         draft.pending[key] = { type: "include", ts: msg.ts };
       }
@@ -8014,7 +8040,7 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
     acceptTransition(msg.id, guardFields, {
       shared: Object.fromEntries(fields.filter(([key]) => key !== "is_pinned")),
       sessions: Object.fromEntries(fields.filter(([key]) => key === "is_pinned")),
-    });
+    }, { exact: msg.exact === true });
     return;
   }
 
@@ -8214,6 +8240,13 @@ const inboxStoreConfig = (set: any, get: any) => ({
         const prev = this.pending[k] as any;
         const locked = prev?.type === "field";
         if (locked && fieldLockTs(this, k) > ts) continue;
+        // Only the server's kill transition writes inbox_killed_at, so the stamp
+        // a row holds is the newest kill: a sibling's clear made before it (an
+        // undone kill's mut, late behind a redo) is stale, and its lock would
+        // wait for a null echo that kill never sends. A tie is dropped too:
+        // skipping a mirror plants nothing, so the server's own row heals it,
+        // where a stale clear held under a lock never would.
+        if (field === "inbox_killed_at" && value == null && typeof row[field] === "number" && row[field] >= ts) continue;
         if (!locked && value !== undefined && sameLockValue(row[field], value)) continue;
         if (value === undefined) delete row[field];
         else row[field] = value;
@@ -9705,6 +9738,14 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // round trip would leave the door in its old state for a beat after somebody
   // deliberately shut it. currentUser is localFirst, so the pref holds over
   // presence pushes until the server echoes it.
+  // The canonical workspace pointer (users.active_team_id), written in the
+  // draft so whatever reads it off currentUser agrees in this tick;
+  // currentUser is localFirst, so it holds until the server echoes.
+  // useSwitchWorkspace pairs it with the mirror the UI scopes by.
+  setActiveTeamPointer: action(function (this: Draft, teamId: string | null) {
+    if (this.currentUser) (this.currentUser as any).active_team_id = teamId ?? undefined;
+  }),
+
   setWalkiePref: action(function (this: Draft, pref: "team" | "off") {
     if (this.currentUser) (this.currentUser as any).walkie_pref = pref;
   }),
@@ -9827,9 +9868,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   // A real id sends now. A stub waits for its create (awaitConvexId heals a
   // stranded one), because the server cannot address a stub id. A create that
-  // is parked in the outbox leaves the bubble pending: the stranded-stub sweep
-  // re-creates and re-sends it under the same client id. Any other failure
-  // fails the bubble so the user can retry.
+  // is still on its way (parked, or fenced by a binding rewire) leaves the
+  // bubble pending: the stranded-stub sweep re-creates and re-sends it under
+  // the same client id. Only a refused create fails the bubble.
   sendMessageWhenReady: (convId: string, content: string, imageIds?: string[], clientId?: string) => {
     if (isConvexId(convId)) {
       get().sendMessage(convId, content, imageIds, clientId);
@@ -9838,7 +9879,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     void get().awaitConvexId(convId).then(
       (realId: string) => get().sendMessage(realId, content, imageIds, clientId),
       (error: unknown) => {
-        if (isParkedDispatchError(error)) return;
+        if (!isRefusedDispatchError(error)) return;
         if (clientId) get().markOptimisticAsFailed(convId, clientId);
         console.error("[store] send into an uncreated session failed", error);
       },
@@ -13285,6 +13326,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // Initiative writes (store/initiativeSlice.ts); the collections themselves
   // are registry slots.
   ...createInitiativeSlice(),
+
+  // Ops writes (store/opsSlice.ts): group triage, sources, app grants.
+  ...createOpsSlice(),
 
 });
 

@@ -66,6 +66,7 @@ import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import { useMountEffect } from "./useMountEffect";
 import { useWatchEffect } from "./useWatchEffect";
+import { prefersReducedMotion } from "../lib/reducedMotion";
 
 // ── Height cache ────────────────────────────────────────────────────────────
 
@@ -103,12 +104,9 @@ export function clearBottomAnchoredHeightCache(prefix?: string) {
 const cssZoomOf = (el: Element): number =>
   (el as HTMLElement & { currentCSSZoom?: number }).currentCSSZoom || 1;
 
-/** True when the viewer asked the system for less animation. Read live rather
- *  than cached at module load, because the setting can change mid session. */
-export function prefersReducedMotion(): boolean {
-  return typeof window !== "undefined"
-    && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-}
+// The rule lives in lib (reducedMotion), so a surface outside the app's
+// lists can ask it without this module's virtualizer.
+export { prefersReducedMotion };
 
 // ── Options ─────────────────────────────────────────────────────────────────
 

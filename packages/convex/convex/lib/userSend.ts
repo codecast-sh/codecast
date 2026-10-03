@@ -1,6 +1,6 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import { internal } from "../_generated/api";
-import { isMachineDeliveredMessage, stripMentionContext } from "@codecast/shared/contracts";
+import { isMachineDeliveredMessage, isTestArtifactPath, stripMentionContext } from "@codecast/shared/contracts";
 import { isStickyEligible, stickyPromptContent } from "../../../web/lib/stickyPrompt";
 import { commandExpansionName } from "../../../web/lib/conversationProcessor";
 
@@ -94,9 +94,10 @@ export function queuedBy(pending: { human?: boolean } | null | undefined): SendM
 }
 
 // A session a program started: a subagent, a spawned worker, a workflow or
-// trigger run, a headless `claude -p`. Its opening prompt and whatever lands
-// in its terminal were written by the launcher, so only a message a person
-// queued into it is theirs.
+// trigger run, a headless `claude -p`, or a codecast test run that reached a
+// real account before the CLI refused them. Its opening prompt and whatever
+// lands in its terminal were written by the launcher, so only a message a
+// person queued into it is theirs.
 export function isProgramLaunched(conversation: Doc<"conversations">): boolean {
   return !!(
     conversation.parent_conversation_id ||
@@ -104,7 +105,8 @@ export function isProgramLaunched(conversation: Doc<"conversations">): boolean {
     conversation.spawned_by_conversation_id ||
     conversation.workflow_run_id ||
     conversation.agent_task_id ||
-    conversation.cli_flags?.includes("--print")
+    conversation.cli_flags?.includes("--print") ||
+    isTestArtifactPath(conversation.project_path ?? "")
   );
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseShortstat, runCost } from "./cardCommand.js";
+import { parseShortstat, runCost, taskWorkspaceScope } from "./cardCommand.js";
 
 describe("cast card build inputs", () => {
   test("parses git diff --shortstat in every plural form", () => {
@@ -15,5 +15,12 @@ describe("cast card build inputs", () => {
       { created_at: 60_000, updated_at: 9 * 60_000 },
       { updated_at: 5 },
     ])).toEqual({ tokens: 1000, minutes: 38 });
+  });
+});
+
+describe("taskWorkspaceScope", () => {
+  test("reads the goal from the task's own workspace, not the shell's", () => {
+    expect(taskWorkspaceScope({ workspace: "team:abc", project_id: "p1" })).toEqual({ workspace: "team", team_id: "abc", project: "p1" });
+    expect(taskWorkspaceScope({ workspace: "user:u1" })).toEqual({ workspace: "personal" });
   });
 });

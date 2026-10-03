@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { EVALS_SHA_RE, type Attribution, type AttributionAnswer, type AttributionClass, type Candidate, type CommitRef, type Endpoint, type Footing, type RecordedProbe, type RunRow, type VerdictFlip } from '@codecast/shared/contracts/evalsApi';
+import { EVALS_SHA_RE, narrowByRecords, sourceConfidence, type Attribution, type AttributionAnswer, type AttributionClass, type Candidate, type CommitRef, type Endpoint, type Footing, type RecordedProbe, type RunRow, type VerdictFlip } from '@codecast/shared/contracts/evalsApi';
 
 import { batchStarts, batchVerdict, footingChange, footingOf, majority, scoreOrZero, verdictFlips } from '../commands/verdict';
 import { DRY_RUN_SCRIPT_REL, publicFreezesDir, treeRoot } from '../paths';
@@ -227,7 +227,7 @@ function sourceAnswer(input: AttributionInput, git: AttributionGit, heads: Heads
   const touching = input.allCommits ? all : g === b ? [] : git.path(g, b, input.paths ?? declaredPaths(input.surface, [g, b], git));
   const patch: Candidate | null = bad.end.dirty && bad.end.treePatch ? { kind: 'patch', base: bad.end.sha, treePatch: bad.end.treePatch, renderClass: null } : null;
   const epochs = epochsOf(input.rows, input.surface, input.reader ?? folderPromptReader()).filter((e) => e.firstBatchAt > (good.end.at ?? '') && e.firstBatchAt <= (bad.end.at ?? '￿'));
-  const base = { kind: 'source' as const, epochs, noDeclaredSourceMoved: !input.allCommits && !touching.length && !patch };
+  const base = { kind: 'source' as const, epochs, noDeclaredSourceMoved: !input.allCommits && !touching.length && !patch, rangeCommits: all.length };
   const commits = (from: number, to: number): Candidate[] => touching.filter((c) => { const i = all.findIndex((x) => x.sha === c.sha); return i > from && i <= to; }).map((commit) => ({ kind: 'commit', commit, renderClass: null }));
   if (reasons.length) return { ...base, confidence: 'unattributable', candidates: [...commits(-1, all.length - 1), ...(patch ? [patch] : [])], narrowedBy: [], reason: reasons.join('; ') };
   // Every recorded batch whose head lies inside the range, on the bad side's footing, that ran a focus freeze and can be replayed.
@@ -242,12 +242,9 @@ function sourceAnswer(input: AttributionInput, git: AttributionGit, heads: Heads
     if (ran.some((r) => footingChange(footingOf(r), footingOf(bad.set.find((x) => x.freezeId === r.freezeId) ?? r)))) continue;
     narrowedBy.push({ batch, sha: s.end.sha, verdict: classify(s.set, good.set, focus, mode), reps: ran.length, at: i, clean: !s.end.dirty });
   }
-  // A clean bad batch moves the bad bound to its head. A batch on edits that reads bad may owe it to those edits, which land later, so only its good reading moves a bound.
-  const bads = narrowedBy.filter((p) => p.verdict === 'bad' && p.clean).map((p) => p.at);
-  const badAt = bads.length ? Math.min(...bads) : all.length - 1;
-  const goodAt = Math.max(-1, ...narrowedBy.filter((p) => p.verdict === 'good' && p.at < badAt + (bads.length ? 0 : 1)).map((p) => p.at));
-  const candidates = [...commits(goodAt, badAt), ...(patch && !bads.length ? [patch] : [])];
-  return { ...base, confidence: candidates.length === 1 ? 'pinned' : 'narrowed', candidates, narrowedBy: narrowedBy.map(({ at: _, clean: __, ...p }) => p), reason: null };
+  const { goodAt, badAt, keepPatch } = narrowByRecords(all.length, narrowedBy);
+  const candidates = [...commits(goodAt, badAt), ...(patch && keepPatch ? [patch] : [])];
+  return { ...base, confidence: sourceConfidence(candidates.length), candidates, narrowedBy: narrowedBy.map(({ at: _, clean: __, ...p }) => p), reason: null };
 }
 
 /**
@@ -355,11 +352,12 @@ export function attribute(input: AttributionInput): Attribution {
   const separation = separate(bs.map(scoreOrZero), gs.map(scoreOrZero));
   check('noise', !answer, `${answer ? 'not the answer' : 'nothing else differs'}: ${separation.kind === 'too-few' ? 'too few reps to separate' : `${separation.kind}, p=${separation.p.toFixed(4)}`}`, () => ({ kind: 'noise', separation }));
 
-  // The rendered prompt change, whatever the answer: the good side's newest rep against the bad side's first, per focus freeze.
+  // The rendered prompt, whatever the answer: the good side's newest rep against the bad side's first, per focus freeze.
+  // Unchanged files stay in, so a page can say the prompts held still rather than that nothing was there to compare.
   const promptDiffs = focus.flatMap((f) => {
     const g = gs.filter((r) => r.freezeId === f).sort((x, y) => (x.stamp < y.stamp ? 1 : -1))[0];
     const b = bs.filter((r) => r.freezeId === f).sort((x, y) => (x.stamp < y.stamp ? -1 : 1))[0];
-    return g && b ? promptPairs(reader, f, g.id, b.id) : [];
+    return g && b ? promptPairs(reader, f, g.id, b.id, false) : [];
   });
   return { surface: input.surface, good: good.end, bad: bad.end, mode, flipped, checklist, answer: answer!, promptDiffs, examples: [] };
 }

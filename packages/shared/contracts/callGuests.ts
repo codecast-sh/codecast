@@ -54,6 +54,21 @@ export function callParticipantKind(identity: string): CallParticipantKind {
   return "person";
 }
 
+// LiveKit's own participant kinds (protocol ParticipantInfo.Kind), the two
+// that are the room's machinery rather than anybody in it: a recording's
+// egress, and the agent worker that dispatches agent faces (codecast-face).
+// Both join the media room, publish nothing, and have only an id for a name.
+// An agent's face is a STANDARD participant (callParticipantKind "agent").
+const LIVEKIT_KIND_EGRESS = 2;
+const LIVEKIT_KIND_AGENT = 4;
+
+/** Is a media participant of this LiveKit kind the room's machinery? Every
+ *  surface that lists the room from the media rather than from seats (a
+ *  guest's page, the phone) leaves these out, by this one test. */
+export function isRoomMachineryKind(kind: number | undefined): boolean {
+  return kind === LIVEKIT_KIND_EGRESS || kind === LIVEKIT_KIND_AGENT;
+}
+
 // The name a guest typed is the only name they have, and it is shown to the
 // room, written into transcripts and spoken to agents. So it is cleaned once,
 // here: control characters and runs of whitespace go, it is capped, and an
@@ -257,8 +272,11 @@ export function guestJoinRefusalOf(err: unknown): GuestJoinRefusal | null {
   return typeof code === "string" && code in GUEST_JOIN_REFUSAL_TEXT ? (code as GuestJoinRefusal) : null;
 }
 
-/** What is kept of a call, as a guest is told it. */
-export type GuestNotice = { recording: boolean; transcribed: boolean };
+/** What is kept of a call, as a guest is told it. `video_public`: the
+ *  recording running will be on the call's public link (convex
+ *  callRecordings: a link whose video was chosen before this press), so their
+ *  face reaches anyone holding that link, not only the team. */
+export type GuestNotice = { recording: boolean; transcribed: boolean; video_public?: boolean };
 
 /**
  * The words a guest's consent rests on: whether what they say is written down
@@ -278,8 +296,13 @@ export function guestNoticeLines(
   if (n.recording) {
     out.push({
       key: "rec",
-      text:
-        form === "long"
+      text: n.video_public
+        ? form === "long"
+          ? "This call is being recorded, video and screen shares included, and the video is shared by the call's public link: anyone with that link can watch it. Anyone in the call can stop it."
+          : form === "short"
+            ? "This call is being recorded, and the video is shared by public link. Anyone in it can stop it."
+            : "recording, public"
+        : form === "long"
           ? `This call is being recorded, video and screen shares included. ${recordingKeptWords()} Anyone in the call can stop it.`
           : form === "short"
             ? "This call is being recorded, video and screen shares included. Anyone in it can stop it."

@@ -1,20 +1,17 @@
 // The page's signature mark (spec 4.5): where a release lands between two
 // stories of its surface, a perforated line through a centred mono pill. Its
 // hover card lists the stories the release carried.
-import type { StoryRow } from "../../hooks/useSyncChanges";
 import { HoverCard } from "../ui/HoverCard";
 import { RELEASE_COLOR } from "./areaColor";
 import { clockOf } from "./StoryParts";
 import type { Ship } from "./editionModel";
+import { useCarried } from "./storyContext";
 
 export const shipLabel = (s: Pick<Ship, "surface" | "version" | "sha">) => `${s.surface} ${s.version ?? s.sha.slice(0, 7)}`;
 
-/** The stories a ship carried: their release names it. */
-export function carriedBy(ship: Pick<Ship, "surface" | "sha">, stories: readonly StoryRow[]): StoryRow[] {
-  return stories.filter((s) => s.release && s.release.surface === ship.surface && s.release.sha === ship.sha);
-}
-
-export function ShipCard({ ship, carried }: { ship: Ship; carried: readonly StoryRow[] }) {
+/** A release, and the stories it carried (their release names it), read from the page only while the card is open. */
+export function ShipCard({ ship }: { ship: Ship }) {
+  const carried = useCarried(ship);
   return (
     <div className="space-y-1.5 p-3">
       <p className="font-mono text-[11px] text-sol-text">
@@ -34,19 +31,22 @@ export function ShipCard({ ship, carried }: { ship: Ship; carried: readonly Stor
   );
 }
 
-export function ReleaseStamp({ ship, stories }: { ship: Ship; stories: readonly StoryRow[] }) {
+/** The pill is a button, so the keyboard reaches the card that lists what the release carried. */
+export function ReleaseStamp({ ship }: { ship: Ship }) {
   return (
-    <div className="flex items-center gap-2 py-1.5" role="separator" aria-label={`${shipLabel(ship)} shipped at ${clockOf(ship.at)}`}>
-      <span className="chg-perf" />
-      <HoverCard card={<ShipCard ship={ship} carried={carriedBy(ship, stories)} />} align="center" className="w-72">
-        <span
-          className="rounded-full border px-2 py-[1px] font-mono text-[10px] tabular-nums text-sol-text/75"
+    <div className="flex items-center gap-2 py-1.5">
+      <span aria-hidden className="chg-perf" />
+      <HoverCard card={<ShipCard ship={ship} />} align="center" className="w-72" focusable>
+        <button
+          type="button"
+          aria-label={`${shipLabel(ship)} shipped at ${clockOf(ship.at)}`}
+          className="cursor-default rounded-full border px-2 py-[1px] font-mono text-[10px] tabular-nums text-sol-text/75"
           style={{ borderColor: RELEASE_COLOR }}
         >
           {shipLabel(ship)}, {clockOf(ship.at)}
-        </span>
+        </button>
       </HoverCard>
-      <span className="chg-perf" />
+      <span aria-hidden className="chg-perf" />
     </div>
   );
 }

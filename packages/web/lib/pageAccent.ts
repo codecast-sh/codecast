@@ -1,3 +1,5 @@
+import { isOpsPath } from "../components/ops/opsPaths";
+
 /** The colour a page's references wear (EntityIdPill), as a CSS value — what
  *  a surface that frames the page (the inline reveal) tints its edge with. */
 export function pageAccent(path: string): string {
@@ -8,5 +10,6 @@ export function pageAccent(path: string): string {
   if (path.startsWith("/triggers") || path.startsWith("/schedules")) return "var(--sol-orange)";
   if (path.startsWith("/initiatives")) return "var(--sol-magenta)";
   if (path.startsWith("/projects")) return "var(--sol-text-muted)";
+  if (isOpsPath(path)) return "var(--sol-red)";
   return "var(--sol-cyan)";
 }

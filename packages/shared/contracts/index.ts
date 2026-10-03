@@ -122,3 +122,4 @@ export * from "./browserExtension";
 export type { AskResult } from "./sessionAsk";
 export * from "./systemResources";
 export * from "./resourceOffloadPolicy";
+export * from "./testArtifacts";

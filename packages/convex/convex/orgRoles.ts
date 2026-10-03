@@ -4,7 +4,7 @@ import { internal } from "./_generated/api";
 import { applyPause, applyResume, applyRunNow, applyTaskUpdate, cancelTasksOriginatingFrom, ensureRoleEventTriggers, insertTask } from "./agentTasks";
 import { HEAD_OF_PEOPLE_JOB } from "@codecast/shared/contracts/headOfPeoplePrompt";
 import { defaultAvatarFor, isAvatarKey } from "@codecast/shared/contracts/orgAvatars";
-import { ORG_AUTHORITY_KINDS, authorityWords, orgTenureError, type OrgAuthorityGrant } from "@codecast/shared/contracts/orgProposal";
+import { DEFAULT_LINE_SLUG, LINE_SLUG_RE, ORG_AUTHORITY_KINDS, authorityWords, orgTenureError, type OrgAuthorityGrant } from "@codecast/shared/contracts/orgProposal";
 import { intervalMs } from "@codecast/shared/contracts/orgTemplateManifest";
 import { EXECUTIVE_ASSISTANT_HANDLE, EXECUTIVE_ASSISTANT_NAME, leadScopeChange, type AssistantReach } from "@codecast/shared/contracts/orgLead";
 import { EXECUTIVE_ASSISTANT_JOB } from "@codecast/shared/contracts/executiveAssistantPrompt";
@@ -988,8 +988,7 @@ export const setProjectLead = mutation({
 // ── Line (the-line.md L2) ────────────────────────────────────────────────────
 // A scope owns one workflow; absent means the shipped "line" template. The
 // sweep that starts it lives in orgLine.ts.
-export const DEFAULT_LINE_SLUG = "line";
-export const LINE_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+export { DEFAULT_LINE_SLUG, LINE_SLUG_RE };
 
 export function lineSlugOf(role: { line_workflow_slug?: string | null }): string {
   return role.line_workflow_slug || DEFAULT_LINE_SLUG;

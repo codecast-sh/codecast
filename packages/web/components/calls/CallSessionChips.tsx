@@ -4,6 +4,12 @@
 // excerpt), the way from the call to its agents. The newest few ride the
 // header as chips; the full list, with every excerpt each was sent, lives in
 // a menu so a call that reached many sessions keeps a one-line header.
+//
+// A session the room's thread already shows (an agent the call feeds live,
+// with its chip in the thread's head) is not shown again as a chip here: one
+// session, one chip on the page. The menu still lists every session, with
+// what each was sent. The chips that do show are led by "sent to", so a
+// session never reads as one of the people in the call beside it.
 
 import { useRouter } from "next/navigation";
 import { ChevronDown } from "lucide-react";
@@ -26,14 +32,25 @@ const SHOWN = 3;
 
 const openSession = (id: string) => useInboxStore.getState().openSidePanel(id);
 
-export function CallSessionChips({ callId, sessions }: { callId: string; sessions: any[] }) {
+export function CallSessionChips({
+  callId,
+  sessions,
+  inThread,
+}: {
+  callId: string;
+  sessions: any[];
+  /** Sessions the thread's head already shows as chips. */
+  inThread?: ReadonlySet<string>;
+}) {
   const router = useRouter();
   if (sessions.length === 0) return null;
-  const shown = sessions.slice(0, SHOWN);
-  const hidden = sessions.length - shown.length;
+  const own = sessions.filter((s) => !inThread?.has(String(s.conversation_id)));
+  const shown = own.slice(0, SHOWN);
+  const hidden = own.length - shown.length;
   const anyExcerpts = sessions.some((s) => s.excerpts.length > 0);
   return (
     <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+      {shown.length > 0 && <span className="text-[11px] text-sol-text-dim">sent to</span>}
       {shown.map((s) => (
         <FeedChip
           key={s.conversation_id}
@@ -52,7 +69,7 @@ export function CallSessionChips({ callId, sessions }: { callId: string; session
               className="flex items-center gap-0.5 rounded-full bg-sol-bg-highlight px-2 py-0.5 font-mono text-[10.5px] leading-4 text-sol-text-muted hover:text-sol-text"
               title={`Every session this call reached (${sessions.length})`}
             >
-              {hidden > 0 ? `+${hidden}` : "excerpts"}
+              {hidden > 0 ? `+${hidden}` : shown.length > 0 ? "excerpts" : "sent to"}
               <ChevronDown className="h-2.5 w-2.5" />
             </button>
           </DropdownMenuTrigger>

@@ -8,7 +8,8 @@ import { installIdleAnimationPause, isDesktop } from "../lib/desktop";
 import { hasStoredAuthToken } from "../lib/localAuth";
 import { serviceWorkerHooks } from "@platform/update-prompt";
 import { App } from "./App";
-import "../store/inboxStore";
+import { useInboxStore } from "../store/inboxStore";
+import { inHuddle } from "../lib/calls/huddlePresence";
 // Registers the session row entrance an undo of a hide plays (undo/onRevert).
 import "../store/undoActions";
 import { stashSlackReturn } from "../lib/slackReturn";
@@ -113,12 +114,13 @@ idle(() => {
         // by the chunk reload guard in ErrorBoundary. They also replace
         // autoUpdate's hard reload of every open window (which blinked
         // whichever one the user was looking at, and reset the palette popup
-        // mid-compose) with a reload when the window is next hidden. A window
-        // that stays visible also gets lib/updatePrompt's card, but only for a
+        // mid-compose) with a reload when the window is next hidden or has
+        // gone a few minutes untouched, never during a call. A window that is
+        // always in use also gets lib/updatePrompt's card, but only for a
         // release that asked for it or an update a day old.
         ...serviceWorkerHooks(() => {
           void import("../lib/updatePrompt").then((m) => m.noteUpdateWaiting()).catch(() => {});
-        }),
+        }, { busy: () => inHuddle(useInboxStore.getState()) }),
       })
     )
     .catch(() => {});

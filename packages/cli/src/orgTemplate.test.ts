@@ -52,6 +52,8 @@ class Server {
   /** An older backend ignores `status: "paused"` on create and returns a live row. */
   honorsPausedCreate = true;
   standingPath?: string;
+  /** An apply path that ignores the proposal's line (line-profile.md LP7). */
+  dropsLine = false;
   constructor(readonly dir: string) { this.project = { _id: "project-1", short_id: "pr-1", title: "Product", project_path: dir, workspace: "team:team-1" }; }
   deps: OrgInitDeps = {
     readWorkspace: async (team) => ({ kind: "team", teamId: team || "unrelated-active-team" }),
@@ -99,7 +101,8 @@ class Server {
         const base = extractOrgProposal(decision.context_md)!;
         const proposal: any = decision.answer_index === 1 ? applyProposalChanges(base, decision.answer_text).proposal : base;
         if (this.roles.some((r) => r.handle === proposal.handle)) return { status: "error", error: "Role handle exists" };
-        const role = { _id: "role-1", short_id: "or-1", handle: proposal.handle, name: proposal.name, scope: { project_ids: [this.project._id], plan_ids: [] }, charter: proposal.charter, caps: proposal.caps, trust: "understand", status: "active" };
+        // As applyRole: the proposal's caps (cards included) and its line, unless a test plays an older backend that drops the line.
+        const role = { _id: "role-1", short_id: "or-1", handle: proposal.handle, name: proposal.name, scope: { project_ids: [this.project._id], plan_ids: [] }, charter: proposal.charter, caps: proposal.caps, ...(proposal.line && !this.dropsLine ? { line_workflow_slug: proposal.line } : {}), trust: "understand", status: "active" };
         this.roles.push(role); decision.applied_at = Date.now(); decision.applied_note = `created @${role.handle} (${role.short_id})`;
         return { status: "applied", role: { id: role._id, short_id: role.short_id }, note: decision.applied_note };
       }
@@ -163,9 +166,9 @@ class Server {
   approve(index = 0, by = "user") { Object.assign(this.decisions[0], { status: "answered", answer_index: index, answered_by: { kind: by } }); }
   writes() { return this.calls.filter((c) => /\/(create|decide|apply-decision|provision|pause|update)$/.test(c.endpoint)); }
 }
-function fixture() {
+function fixture(m = manifest()) {
   const dir = tmp();
-  const root = folder();
+  const root = folder(m);
   const server = new Server(dir);
   const options: TemplateOptions = { dir, project: "project-1", team: "team-1", session: "session-1" };
   const install = () => installTemplate(server.deps, root, "product", options);
@@ -334,6 +337,41 @@ describe("proposal and lifecycle fake API", () => {
     const status = await templateStatus(f.server.deps, "product", f.options);
     expect(status.routines.weekly.gated).toBe(true); expect(status.routines.weekly.activation.commands).toEqual([]);
     expect(f.server.triggers[0].precheck).toBe("test -f ready.txt");
+  });
+});
+
+// A template that owns a project's line (line-profile.md LP7): the person
+// approves the line and the cards cap in the proposal, and reconcile checks
+// the role it created runs exactly those.
+describe("a role that owns a line", () => {
+  const lineManifest = (): OrgTemplate => { const m = manifest(); m.schemaVersion = 2; m.role.line = "line"; m.role.caps = { ...m.role.caps, cards: 4 }; return m; };
+  test("install proposes the line and cards cap; reconcile sets them on the role", async () => {
+    const f = fixture(lineManifest()); await f.install();
+    expect(readReceipt(f.dir, "product").proposal).toMatchObject({ line: "line", caps: { cards: 4 } });
+    expect(extractOrgProposal(f.server.decisions[0].context_md)).toMatchObject({ line: "line", caps: { cards: 4 } });
+    f.server.approve(); const receipt = await f.reconcile();
+    expect(receipt.phase).toBe("ready");
+    expect(f.server.roles[0]).toMatchObject({ line_workflow_slug: "line", caps: { hands_per_day: 4, cards: 4 } });
+  });
+  test("a person's changed cap is what reconcile holds the role to", async () => {
+    const f = fixture(lineManifest()); await f.install();
+    f.server.approve(1); f.server.decisions[0].answer_text = '{"caps":{"cards":2}}';
+    expect((await f.reconcile()).phase).toBe("ready");
+    expect(f.server.roles[0].caps.cards).toBe(2);
+  });
+  test("a role created without the approved line stops before provisioning", async () => {
+    const f = fixture(lineManifest()); await f.install(); f.server.dropsLine = true; f.server.approve();
+    await expect(f.reconcile()).rejects.toThrow("approved line line");
+    expect(f.server.calls.some((c) => c.endpoint === "/cli/role/provision")).toBe(false);
+  });
+  test("a template without a line proposes none", async () => {
+    const f = fixture(); await f.install();
+    expect("line" in readReceipt(f.dir, "product").proposal).toBe(false);
+  });
+  test("an upgrade cannot change the line", async () => {
+    const f = fixture(lineManifest()); await f.install(); f.server.approve(); await f.reconcile();
+    const m = lineManifest(); m.version = "1.3.0"; m.role.line = "feature";
+    await expect(upgradeTemplate(f.server.deps, "product", folder(m), { ...f.options, apply: true })).rejects.toThrow("the line it runs");
   });
 });
 

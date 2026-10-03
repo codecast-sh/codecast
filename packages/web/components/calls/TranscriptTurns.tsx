@@ -21,6 +21,21 @@ function clickedLineMs(t: Turn, target: EventTarget | null): number {
   return line?.t0 ?? t.t0;
 }
 
+/** A list's lines, with media to follow: each line holds a 2px rail on its
+ *  left (drawn into its own margin, so the words do not move), lit for the
+ *  line being said, a dim REC red over the stretches that were filmed, and
+ *  clear elsewhere. The other lines of the turn being said step back a
+ *  shade, so the eye lands on the one line. */
+function lineClass(s: { seq: number; t0: number }, followed: boolean, inActive: boolean, activeSeq: number | null | undefined, filmed?: ReadonlyArray<{ fromMs: number; toMs: number }>): string {
+  const base = "text-[13px] leading-relaxed";
+  if (!followed) return `${base} text-sol-text`;
+  const rail =
+    activeSeq === s.seq
+      ? "border-sol-cyan text-sol-text"
+      : `${filmed?.some((f) => s.t0 >= f.fromMs && s.t0 < f.toMs) ? "border-sol-red/25" : "border-transparent"} ${inActive ? "text-sol-text-secondary" : "text-sol-text"}`;
+  return `${base} -ml-2 border-l-2 pl-1.5 transition-colors ${rail}`;
+}
+
 // The turn list itself. Selection is the calls page's concern: pass isSelected
 // and onTurnClick to get the clickable variant; leave them off for a read-only
 // transcript (the digest rows).
@@ -30,6 +45,8 @@ export function TranscriptTurnList({
   onTurnClick,
   compact,
   activeIndex,
+  activeSeq,
+  filmed,
   callId,
 }: {
   turns: Turn[];
@@ -40,12 +57,19 @@ export function TranscriptTurnList({
   onTurnClick?: (index: number, e: React.MouseEvent, atMs: number) => void;
   /** Time plus words, no speaker name. A recording has one microphone. */
   compact?: boolean;
-  /** The line the audio is currently in, if any. */
+  /** The turn the media is in, if any. */
   activeIndex?: number | null;
+  /** The line inside it being said (lineSeqAt): lit on its own rail. Given
+   *  (even null) only where media plays, which is what turns the rails on. */
+  activeSeq?: number | null;
+  /** The stretches of the call that were filmed (videoStretches): their
+   *  lines carry a dim red rail. */
+  filmed?: ReadonlyArray<{ fromMs: number; toMs: number }>;
   /** The call these turns belong to: each turn offers a link to itself. */
   callId?: string;
 }) {
   const selectable = !!onTurnClick;
+  const followed = activeSeq !== undefined;
   const link = (t: Turn) => {
     const anchor = callId ? turnsAnchor([t]) : null;
     return anchor ? (
@@ -97,7 +121,7 @@ export function TranscriptTurnList({
               </span>
               <div className="min-w-0 flex-1">
                 {t.segments.map((s) => (
-                  <p key={s.seq} data-seq={s.seq} className="text-[13px] leading-relaxed text-sol-text">
+                  <p key={s.seq} data-seq={s.seq} className={lineClass(s, followed, active, activeSeq, filmed)}>
                     {s.text}
                   </p>
                 ))}
@@ -113,7 +137,7 @@ export function TranscriptTurnList({
                 {link(t)}
               </div>
               {t.segments.map((s) => (
-                <p key={s.seq} data-seq={s.seq} className="text-[13px] leading-relaxed text-sol-text">
+                <p key={s.seq} data-seq={s.seq} className={lineClass(s, followed, active, activeSeq, filmed)}>
                   {s.text}
                 </p>
               ))}

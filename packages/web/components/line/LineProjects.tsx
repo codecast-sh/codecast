@@ -3,11 +3,12 @@
 // in the line page's header, the URL that holds the choice, and the "all
 // projects" roll-up, which only counts. Every number comes from lib/lineFlow
 // (lineRollup builds each project's flow the way its own page does).
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useInboxStore } from "../../store/inboxStore";
 import { ALL_PROJECTS, NO_PROJECT, defaultLineKey, type LineProject, type RollupRow } from "../../lib/lineFlow";
 import { cn } from "../../lib/utils";
+import { centerInRow, edgeAttrs, useScrollEdges } from "./useScrollEdges";
 
 /** The URL names a line by its project's short id (or id), "none" or "all". */
 const paramOf = (key: string, projects: LineProject[]) =>
@@ -44,10 +45,21 @@ export const lineKeys = (rollup: RollupRow[]) => [ALL_PROJECTS, ...rollup.map((r
 /** Pills, one per line, each with its open causes; a card waiting on the
  *  viewer or a silent finder marks the pill so another line's trouble shows. */
 export function LineProjectSwitcher({ rollup, selected, onSelect }: { rollup: RollupRow[]; selected: string; onSelect: (key: string) => void }) {
+  // The pills scroll sideways on a narrow floor, and the hidden edge fades
+  // the way the flow's does.
+  const row = useRef<HTMLElement>(null);
+  const edges = useScrollEdges(row, rollup.length > 0);
+  // The selected pill sits at the row's center on mount and on every pick,
+  // whole and clear of both faded edges.
+  useEffect(() => {
+    const nav = row.current;
+    const pill = nav?.querySelector<HTMLElement>("[data-active=true]");
+    if (nav && pill) centerInRow(nav, pill);
+  }, [selected, rollup.length]);
   if (rollup.length === 0) return null;
   const total = rollup.reduce((n, r) => n + r.causes, 0);
   return (
-    <nav className="flex items-center gap-1 overflow-x-auto -mx-1 px-1 pb-0.5" aria-label="Projects" data-line-projects>
+    <nav ref={row} className="line-edge-fade line-scroll-quiet flex items-center gap-1 overflow-x-auto -mx-4 px-4 sm:-mx-6 sm:px-6 pb-0.5" aria-label="Projects" data-line-projects {...edgeAttrs(edges)}>
       <Pill active={selected === ALL_PROJECTS} onClick={() => onSelect(ALL_PROJECTS)} label="All projects" count={total} />
       {rollup.map((r) => (
         <Pill
@@ -57,16 +69,19 @@ export function LineProjectSwitcher({ rollup, selected, onSelect }: { rollup: Ro
           label={r.title}
           muted={r.key === NO_PROJECT}
           count={r.causes}
-          ask={r.awaiting > 0}
+          awaiting={r.awaiting}
           silent={r.silent}
-          tip={[r.short_id, `${r.causes} open cause${r.causes === 1 ? "" : "s"}`, r.awaiting ? `${r.awaiting} awaiting you` : null, r.finders ? `${r.finders} finder${r.finders === 1 ? "" : "s"}${r.silent ? `, ${r.silent} silent 24h` : ""}` : null].filter(Boolean).join(" · ")}
+          tip={[r.short_id, `${r.causes} open cause${r.causes === 1 ? "" : "s"}`, r.awaiting ? `${r.awaiting} card${r.awaiting === 1 ? "" : "s"} waiting on you` : null, r.finders ? `${r.finders} finder${r.finders === 1 ? "" : "s"}${r.silent ? `, ${r.silent} silent 24h` : ""}` : null].filter(Boolean).join(" · ")}
         />
       ))}
     </nav>
   );
 }
 
-function Pill({ active, onClick, label, count, ask, silent, muted, tip }: { active: boolean; onClick: () => void; label: string; count: number; ask?: boolean; silent?: number; muted?: boolean; tip?: string }) {
+/** A pill is the line's name and one number: the cards waiting on the viewer
+ *  in the ask color, else its open causes, quiet. A silent finder adds a dot
+ *  in the warning ink. The tooltip spells out every figure. */
+function Pill({ active, onClick, label, count, awaiting = 0, silent, muted, tip }: { active: boolean; onClick: () => void; label: string; count: number; awaiting?: number; silent?: number; muted?: boolean; tip?: string }) {
   return (
     <button
       type="button"
@@ -76,10 +91,11 @@ function Pill({ active, onClick, label, count, ask, silent, muted, tip }: { acti
       data-line-project-pill
       className={cn("line-tab shrink-0 rounded-full pl-2.5 pr-2 py-1 text-[11px] whitespace-nowrap flex items-center gap-1.5", muted && !active && "italic")}
     >
-      {ask && <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow" aria-label="cards waiting on you" />}
       <span>{label}</span>
-      <span className="tabular-nums" data-zero={count === 0 ? "true" : undefined}>{count}</span>
-      {!!silent && <span className="text-sol-orange tabular-nums" aria-label={`${silent} silent finders`}>{silent} quiet</span>}
+      {awaiting > 0
+        ? <span className="text-sol-yellow tabular-nums font-semibold" aria-label={`${awaiting} cards waiting on you, ${count} open causes`} data-line-pill-awaiting>{awaiting}</span>
+        : <span className="tabular-nums" data-zero={count === 0 ? "true" : undefined} aria-label={`${count} open causes`}>{count}</span>}
+      {!!silent && <span className="line-silent-dot" role="img" aria-label={`${silent} silent finder${silent === 1 ? "" : "s"}`} data-line-pill-silent />}
     </button>
   );
 }
@@ -99,8 +115,11 @@ export function LineRollup({ rollup, onSelect }: { rollup: RollupRow[]; onSelect
   const findersTotal = sum("finders");
   const silentTotal = sum("silent");
   return (
-    <div className="flex-1 min-h-0 overflow-auto px-4 sm:px-6 pb-5" data-line-rollup>
-      <table className="w-full max-w-[1100px] border-separate border-spacing-0 text-[13px]">
+    <div className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 pb-5" data-line-rollup>
+      {/* A narrow screen scrolls the table sideways; the scroller's edge shadow
+          says more columns sit past the edge (line.css). */}
+      <div className="line-rollup-scroll overflow-x-auto max-w-[1100px]">
+      <table className="w-full min-w-[640px] border-separate border-spacing-0 text-[13px]">
         <thead>
           <tr className="text-[11px] text-sol-text-dim">
             <th className="text-left font-normal py-2 pr-4 border-b border-sol-border/40">Project</th>
@@ -112,14 +131,14 @@ export function LineRollup({ rollup, onSelect }: { rollup: RollupRow[]; onSelect
           {rollup.map((r) => (
             <tr key={r.key} onClick={() => onSelect(r.key)} className="line-row cursor-pointer" data-line-rollup-row={r.key}>
               <td className="py-2.5 pr-4 border-b border-sol-border/20">
-                <span className={cn("text-sol-text", r.key === NO_PROJECT && "italic text-sol-text-muted")}>{r.title}</span>
-                {r.short_id && <span className="ml-2 font-mono text-[11px] text-sol-text-dim">{r.short_id}</span>}
+                <div className={cn("text-sol-text", r.key === NO_PROJECT && "italic text-sol-text-muted")}>{r.title}</div>
+                {r.short_id && <div className="mt-0.5 font-mono text-[11px] text-sol-text-dim whitespace-nowrap">{r.short_id}</div>}
               </td>
               {COLS.map((c) => <Cell key={c.key} value={r[c.key] as number} ask={c.key === "awaiting"} />)}
               <td className="py-2.5 pl-3 border-b border-sol-border/20 text-right tabular-nums whitespace-nowrap text-[11px]">
                 {r.finders === 0
                   ? <span className="text-sol-text-dim opacity-60" title="No finders declared: cast line profile --publish in the project's repo">none declared</span>
-                  : <><span className="text-sol-text-muted">{r.finders}</span>{r.silent > 0 && <span className="text-sol-orange">, {r.silent} quiet</span>}</>}
+                  : <><span className="text-sol-text-muted">{r.finders}</span>{r.silent > 0 && <span className="text-sol-orange">, {r.silent} silent</span>}</>}
               </td>
             </tr>
           ))}
@@ -128,10 +147,11 @@ export function LineRollup({ rollup, onSelect }: { rollup: RollupRow[]; onSelect
           <tr className="text-sol-text-muted">
             <td className="pt-2.5 pr-4 text-[11px] text-sol-text-dim">{rollup.length} line{rollup.length === 1 ? "" : "s"}</td>
             {COLS.map((c) => <Cell key={c.key} value={sum(c.key)} ask={c.key === "awaiting"} foot />)}
-            <td className="pt-2.5 pl-3 text-right tabular-nums text-[11px] text-sol-text-dim">{findersTotal}{silentTotal > 0 && <span className="text-sol-orange">, {silentTotal} quiet</span>}</td>
+            <td className="pt-2.5 pl-3 text-right tabular-nums text-[11px] text-sol-text-dim">{findersTotal}{silentTotal > 0 && <span className="text-sol-orange">, {silentTotal} silent</span>}</td>
           </tr>
         </tfoot>
       </table>
+      </div>
     </div>
   );
 }

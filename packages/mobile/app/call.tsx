@@ -12,6 +12,9 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 import { Ionicons } from "@expo/vector-icons";
 import { useMutation, useQuery } from "convex/react";
+import { useInboxStore } from "@codecast/web/store/inboxStore";
+import { roomRecordingOn, type RoomRecordingFields } from "@codecast/web/lib/calls/roomRecordingFields";
+import { useRoomTranscribeOff } from "@codecast/web/hooks/useRoomTranscribeOff";
 import { livekit } from "@/lib/calls/livekitNative";
 import { guestIdFromIdentity, humanizeConvexError, isGuestParticipant } from "@codecast/shared/contracts";
 
@@ -41,7 +44,6 @@ import { LivePulse } from "@/components/calls/LiveRooms";
 import { acceptInvite, declineInvite } from "@/lib/calls/callManager";
 import { stopRinging } from "@/lib/calls/ringtone";
 import { GuestDoor, GuestInviteRow, useGuestRemover } from "@/components/calls/GuestDoor";
-import { useAuth } from "@/lib/auth";
 
 // The call stage, phone-shaped. The same design intents as the web stage,
 // re-derived for a hand-held portrait screen:
@@ -71,9 +73,10 @@ export default function CallScreen() {
   const ring = useIncomingRing();
   // The caller's side of a ring: who we're ringing into THIS room, and whether
   // they declined (the server keeps declines visible for 30s).
-  const { isAuthenticated } = useAuth();
-  const myCalls = useQuery(api.calls.getMyCalls, isAuthenticated ? {} : "skip");
-  const outgoingHere = (myCalls?.outgoing ?? []).filter((o: any) => o.room_key === call.roomKey);
+  // Off the store (the sync bridge feeds calls.getMyCalls), so the strip is
+  // right on the stage's first frame.
+  const outgoing = useInboxStore((s) => s.myCalls.outgoing) as any[];
+  const outgoingHere = outgoing.filter((o: any) => o.room_key === call.roomKey);
   const ringingNames = outgoingHere.filter((o: any) => o.status === "ringing").map((o: any) => firstName(o.to_name));
   const declinedNames = outgoingHere.filter((o: any) => o.status === "declined").map((o: any) => firstName(o.to_name));
   const onJoinRing = (r: RingRow) => {
@@ -172,7 +175,8 @@ export default function CallScreen() {
       <View style={styles.header}>
         <View style={styles.headerLead}>
           <Text style={styles.headerTitle}>huddle</Text>
-          <RecordingBadge roomKey={call.roomKey} />
+          <RecordingBadge roomKey={call.roomKey} canStart={call.phase === "connected"} />
+          <TranscribingChip roomKey={call.roomKey} />
         </View>
         <Pressable
           hitSlop={12}
@@ -357,14 +361,44 @@ export default function CallScreen() {
 
 // The room is being recorded (convex callRecordings, filmed on LiveKit's
 // servers): the same red REC every other call surface wears, read off the
-// live rooms list the tab bar already subscribes to, so the phone costs no
-// extra query and works against a server that predates recording (the flag
-// is simply absent). Recording starts from a desktop or web stage; anyone in
-// the call may stop it, so a tap on the mark offers exactly that.
+// room's callRooms row (the store's one home for it, fed with the live rooms
+// by the sync bridge), so it costs no query of its own and works against a
+// server that predates recording (the flag is simply absent). Anyone in the
+// call may start it or stop it, so the mark's place offers exactly that.
 function useRoomRecordingFlag(roomKey: string | null): boolean {
-  const { isAuthenticated } = useAuth();
-  const rooms = useQuery(api.calls.getLiveRooms, isAuthenticated && roomKey ? {} : "skip");
-  return !!roomKey && (rooms ?? []).some((r: any) => r.room_key === roomKey && r.recording);
+  return useInboxStore((s) => roomRecordingOn(s as any, roomKey));
+}
+
+/** Whether a press could start a recording here: the server is set up for
+ *  it and LiveKit is not refusing right now (the row's own fields, absent on
+ *  a server that predates recording, which then offers no button). */
+function useRecordingPressable(roomKey: string | null): boolean {
+  return useInboxStore((s) => {
+    const row = roomKey ? ((s.callRooms as any)[roomKey] as RoomRecordingFields | undefined) : undefined;
+    return row?.recording_configured === true && !row.recording_unavailable;
+  });
+}
+
+/** Start recording for everyone, asked first: the room is filmed and every
+ *  person in it is told, so it is never one stray tap. The mark turns red
+ *  when the server's row says the run began, the same moment every other
+ *  surface turns. */
+function useConfirmStartRecording(roomKey: string | null): () => void {
+  const start = useMutation(api.callRecordings.startRecording);
+  return () =>
+    Alert.alert("Record this call?", "Video and shared screens are kept with the call. Everyone in it is told, and anyone can stop it.", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Record",
+        onPress: () => {
+          if (!roomKey) return;
+          void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          void start({ room_key: roomKey }).catch((err: unknown) =>
+            Alert.alert("Couldn't start recording", humanizeConvexError(err, "Something went wrong")),
+          );
+        },
+      },
+    ]);
 }
 
 /** Stop for everyone, asked once more first: one tap must not end the room's
@@ -388,10 +422,26 @@ function useConfirmStopRecording(roomKey: string | null): () => void {
     ]);
 }
 
-function RecordingBadge({ roomKey }: { roomKey: string | null }) {
+function RecordingBadge({ roomKey, canStart }: { roomKey: string | null; canStart: boolean }) {
   const recording = useRoomRecordingFlag(roomKey);
+  const pressable = useRecordingPressable(roomKey);
   const confirmStop = useConfirmStopRecording(roomKey);
-  if (!recording) return null;
+  const confirmStart = useConfirmStartRecording(roomKey);
+  if (!recording) {
+    if (!canStart || !pressable) return null;
+    return (
+      <Pressable
+        onPress={confirmStart}
+        hitSlop={8}
+        style={({ pressed }) => [styles.recordBtn, pressed && styles.pressed]}
+        accessibilityRole="button"
+        accessibilityLabel="Record this call for everyone"
+      >
+        <View style={styles.recordDot} />
+        <Text style={styles.recordText}>record</Text>
+      </Pressable>
+    );
+  }
   return (
     <Pressable
       onPress={confirmStop}
@@ -403,6 +453,22 @@ function RecordingBadge({ roomKey }: { roomKey: string | null }) {
       <LivePulse color={Theme.red} size={6} />
       <Text style={styles.recText}>REC</Text>
     </Pressable>
+  );
+}
+
+// The room's words are being transcribed: a live record and the room not
+// switched off, the rule the web stage's thread dot follows (green there,
+// green here). The same getLive question Captions asks, so one subscription
+// answers both. Quiet: a fact about the room, not a control.
+function TranscribingChip({ roomKey }: { roomKey: string | null }) {
+  const live = useQuery(api.transcripts.getLive, roomKey ? { room_key: roomKey, tail: 3 } : "skip");
+  const off = useRoomTranscribeOff(roomKey);
+  if (!live || off) return null;
+  return (
+    <View style={styles.transcribingChip} accessibilityLabel="This call is being transcribed">
+      <LivePulse color={Theme.green} size={5} />
+      <Text style={styles.transcribingText}>transcribing</Text>
+    </View>
   );
 }
 
@@ -427,6 +493,13 @@ function noteToldRecording(roomKey: string): void {
 function RecordingNotice({ roomKey }: { roomKey: string | null }) {
   const recording = useRoomRecordingFlag(roomKey);
   const confirmStop = useConfirmStopRecording(roomKey);
+  // Whoever pressed Record confirmed it themselves and is not told again,
+  // the rule every surface keeps (web owesRecordingNotice).
+  const pressedByMe = useInboxStore((s) => {
+    const me = (s as any).currentUser?._id?.toString?.() ?? null;
+    const by = roomKey ? ((s.callRooms as any)[roomKey] as RoomRecordingFields | undefined)?.recording_by_id : null;
+    return !!me && by === me;
+  });
   const [shown, setShown] = useState<string | null>(null);
   useEffect(() => {
     if (!roomKey) return;
@@ -437,9 +510,10 @@ function RecordingNotice({ roomKey }: { roomKey: string | null }) {
     }
     if (toldRecording.has(roomKey)) return;
     noteToldRecording(roomKey);
+    if (pressedByMe) return;
     setShown(roomKey);
     void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-  }, [roomKey, recording]);
+  }, [roomKey, recording, pressedByMe]);
   if (!recording || shown !== roomKey) return null;
   return (
     <View style={styles.recNotice} accessibilityRole="alert">
@@ -579,6 +653,20 @@ const styles = StyleSheet.create({
     borderColor: "rgba(220,50,47,0.35)",
   },
   recText: { fontSize: 10.5, fontWeight: "600", letterSpacing: 0.6, color: Theme.red },
+  recordBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: "rgba(253,246,227,0.18)",
+  },
+  recordDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: Theme.red, opacity: 0.85 },
+  recordText: { fontSize: 11, color: Theme.bgAlt, opacity: 0.75 },
+  transcribingChip: { flexDirection: "row", alignItems: "center", gap: 3 },
+  transcribingText: { fontSize: 11, color: Theme.green },
   recNotice: {
     flexDirection: "row",
     alignItems: "flex-start",

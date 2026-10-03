@@ -3,6 +3,8 @@
 // (publish) and the web (the hire form) all read one definition. File handling
 // for a release folder stays in packages/cli/src/orgTemplateArtifact.ts.
 
+import { LINE_SLUG_RE } from "./orgProposal";
+
 /** POSIX or Windows absolute, without node:path, so this module runs anywhere. */
 const isAbsolutePath = (value: string) => value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value);
 // Manifest v2 (docs/architecture/org-hire.md H2): everything v1 says plus what
@@ -25,7 +27,9 @@ export type OrgTemplate = {
   version: string;
   name: string;
   description: string;
-  role: { name: string; handle: string; charter: string; caps: { hands_per_day: number; wakes_per_day: number; tokens_per_day: number }; avatar?: string; tenure?: TemplateTenure };
+  // `line` and `caps.cards` (line-profile.md LP7) are for a role that owns a
+  // project's line: the workflow its tasks run on and its admission cap.
+  role: { name: string; handle: string; charter: string; caps: { hands_per_day: number; wakes_per_day: number; tokens_per_day: number; cards?: number }; avatar?: string; tenure?: TemplateTenure; line?: string };
   routines: TemplateRoutine[];
   inputs?: TemplateInput[];
   authority?: TemplateAuthority[];
@@ -140,11 +144,13 @@ export function validateTemplate(value: unknown): OrgTemplate {
 
   for (const key of ["id", "version", "name", "description"]) string(row[key], key);
   if (!templateSlug(row.id as string) || !/^\d+\.\d+\.\d+$/.test(row.version as string)) throw new Error("Invalid template id or version");
-  const role = object(row.role, ["name", "handle", "charter", "caps"], "Role", v2 ? ["avatar", "tenure"] : []);
+  const role = object(row.role, ["name", "handle", "charter", "caps"], "Role", v2 ? ["avatar", "tenure", "line"] : []);
   for (const key of ["name", "handle", "charter"]) string(role[key], `role.${key}`, inputs);
   templatePath(role.charter as string);
-  const caps = object(role.caps, ["hands_per_day", "wakes_per_day", "tokens_per_day"], "Caps");
+  const caps = object(role.caps, ["hands_per_day", "wakes_per_day", "tokens_per_day"], "Caps", v2 ? ["cards"] : []);
   for (const cap of Object.values(caps)) if (!Number.isSafeInteger(cap) || (cap as number) < 0) throw new Error("Caps must be nonnegative safe integers");
+  if ("cards" in caps && (caps.cards as number) < 1) throw new Error("caps.cards must be at least 1: a line with no card slot admits nothing");
+  if ("line" in role && (typeof role.line !== "string" || !LINE_SLUG_RE.test(role.line))) throw new Error("role.line must be a workflow slug, like line or feature");
   if ("avatar" in role && (typeof role.avatar !== "string" || !templateSlug(role.avatar))) throw new Error("role.avatar must be an avatar key");
   if ("tenure" in role) {
     const tenure = object(role.tenure, ["kind"], "Tenure", ["then"]);
@@ -257,6 +263,19 @@ export function validateTemplate(value: unknown): OrgTemplate {
     if (isAbsolutePath(file) || file.includes("\\") || file.split("/").some((p) => !p || p === "." || p === "..")) throw new Error(`Unsafe instance file: ${file}`);
   }
   return value as OrgTemplate;
+}
+/**
+ * What a template's role brings to its hire proposal beyond name, handle and
+ * scope: avatar, tenure (a program ends with the instance project), caps, and
+ * the line it runs. One reading for the folder install and the web hire.
+ */
+export function templateRoleFields(role: OrgTemplate["role"], projectRef: string): { avatar?: string; tenure?: { kind: "standing" } | { kind: "program"; ends: { project: string }; then: "retire" | "review" }; caps: OrgTemplate["role"]["caps"]; line?: string } {
+  return {
+    ...(role.avatar ? { avatar: role.avatar } : {}),
+    ...(role.tenure ? { tenure: role.tenure.kind === "standing" ? { kind: "standing" as const } : { kind: "program" as const, ends: { project: projectRef }, then: role.tenure.then } } : {}),
+    caps: role.caps,
+    ...(role.line ? { line: role.line } : {}),
+  };
 }
 /** Every file a manifest names inside the release: charter, routine prompts, setup how-tos. */
 export function manifestFiles(manifest: OrgTemplate): string[] {

@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { parseWorkflowSource, parseWorkflowFile, validateWorkflow } from "./parser.js";
-import { runWorkflow, graphToPushPayload, parseGateEdgeLabel, gatePayload, type RunOptions } from "./runner.js";
+import { runWorkflow, graphToPushPayload, parseGateEdgeLabel, gatePayload, handTimeoutMs, type RunOptions } from "./runner.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -486,6 +486,26 @@ describe("workflow/runner (gate payload)", () => {
     globalThis.fetch = origFetch;
     cap.restore();
     fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  test("a hand runs as long as its node's timeout, else the run's, else 30 minutes", () => {
+    expect(handTimeoutMs({ timeout: 5400 }, { agentTimeout: 60_000 })).toBe(5_400_000);
+    expect(handTimeoutMs({}, { agentTimeout: 60_000 })).toBe(60_000);
+    expect(handTimeoutMs({}, {})).toBe(1_800_000);
+  });
+
+  test("a failing dry run on a bound task never moves or comments on the task", async () => {
+    const g = parseWorkflowSource(`digraph g {
+      start [shape=Mdiamond]
+      prove [label="Prove"]
+      exit  [shape=Msquare]
+      start -> prove
+      prove -> exit [condition="prove.json.reproduced = true"]
+    }`);
+    const outcome = await runWorkflow(g, { dryRun: true, cwd: tmpDir, taskId: "ct-1", planId: "pl-1", apiToken: "tok", convexSiteUrl: "https://convex.test" });
+    expect(outcome).toBe("failed");
+    // Reading the task and the plan is fine; nothing may write to either.
+    expect(calls.map((c) => c.route).filter((r) => !r.endsWith("/get"))).toEqual([]);
   });
 
   test("an edge label parses into key, label and description", () => {

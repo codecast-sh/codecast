@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { closeDomWindow } from "../../test-helpers/domGlobals";
 import { Track } from "livekit-client";
-import { GuestCall, GuestPreview } from "./guestRoom";
+import { GuestCall, GuestPreview, guestMediaEnding } from "./guestRoom";
 
 // A call parks its audio elements in the page, so it needs a document.
 let dom: any;
@@ -151,4 +151,26 @@ test("a call left while it is connecting hangs up the connection it just made", 
   expect(disconnects).toBe(2);
   expect(published).toBe(0);
   expect(video.stopped).toBeGreaterThan(0);
+});
+
+// The guest's people row lists the room from the media, so LiveKit's own
+// participants (a recording's egress, the agent-face worker) must not show up
+// there under their raw ids. The shared rule numbers LiveKit's kinds; this
+// pins those numbers to the client library's enum.
+test("the room's machinery is told apart by livekit-client's own kinds", async () => {
+  const { ParticipantKind } = await import("livekit-client");
+  const { isRoomMachineryKind } = await import("@codecast/shared/contracts");
+  expect(isRoomMachineryKind(ParticipantKind.EGRESS)).toBe(true);
+  expect(isRoomMachineryKind(ParticipantKind.AGENT)).toBe(true);
+  expect(isRoomMachineryKind(ParticipantKind.STANDARD)).toBe(false);
+  expect(isRoomMachineryKind(ParticipantKind.SIP)).toBe(false);
+});
+
+test("a room LiveKit closed while the server still has the guest admitted is a dropped connection, not the end", () => {
+  expect(guestMediaEnding("room_closed", "admitted")).toBe("lost");
+  // The server agrees it is over, or has moved on: the media's word stands.
+  expect(guestMediaEnding("room_closed", "ended")).toBe("room_closed");
+  expect(guestMediaEnding("room_closed", null)).toBe("room_closed");
+  // Every other reason is the media's own and is never rewritten.
+  for (const r of ["removed", "lost", "elsewhere", null] as const) expect(guestMediaEnding(r, "admitted")).toBe(r);
 });

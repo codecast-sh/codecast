@@ -4,6 +4,7 @@ import { GuestOutcome, type Outcome } from "./GuestOutcome";
 import { GuestLobby, deviceTrouble, type LobbyMode } from "./GuestLobby";
 import { CallNotice } from "./MeetChrome";
 import { GuestInCall } from "./GuestInCall";
+import { devicePermissionHint } from "../../../lib/calls/guestRoom";
 
 // The guest's screens, drawn from their props alone: what each one says and
 // offers. The media and the server are not here; the page's own state machine
@@ -181,7 +182,7 @@ describe("the lobby and the door", () => {
     expect(text(lobby("waiting", { live: false, creatorTold: true }))).toContain("We let Sam know you're here");
     expect(text(lobby("waiting", { live: false }))).not.toContain("Sam know");
     expect(text(lobby("waiting", { live: false }))).toContain("Someone can let you in once the call starts");
-    expect(text(lobby("waiting"))).toContain("Stop asking");
+    expect(text(lobby("waiting"))).toContain("stop asking");
   });
 
   test("a page that came back to a full door says so and keeps trying", () => {
@@ -213,9 +214,27 @@ describe("the lobby and the door", () => {
     expect(lobby("ask")).toContain("bg-sol-red/85");
   });
 
+  test("a blocked device is fixed where this browser keeps it, not where desktop Chrome does", () => {
+    const iphone = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1";
+    expect(devicePermissionHint(iphone, false)).toContain("Tap aA in the address bar, then Website Settings");
+    // iPadOS says it is a Mac; the touch screen gives it away.
+    expect(devicePermissionHint("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Version/18.0 Safari/605.1.15", true)).toContain("Tap aA");
+    expect(devicePermissionHint(iphone.replace("Version/18.0", "CriOS/130.0"), false)).toContain("Open Settings on this device");
+    expect(devicePermissionHint("Mozilla/5.0 (Linux; Android 14; Pixel 8) Chrome/130.0 Mobile Safari/537.36", false)).toContain("Tap the icon left of the address, then Permissions");
+    expect(devicePermissionHint("Mozilla/5.0 (Windows NT 10.0) Chrome/130", false)).toBe("Allow them from the icon in the address bar.");
+    const blocked = deviceTrouble(
+      { micError: "Microphone permission denied", cameraError: "Camera permission denied", micDenied: true, cameraDenied: true },
+      devicePermissionHint(iphone, false),
+    );
+    expect(blocked).toContain("Website Settings");
+    expect(blocked).not.toContain("icon in the address bar");
+  });
+
   test("device trouble names the real problem, and a guest with no microphone is told they can listen", () => {
     const both = { micError: "Microphone permission denied", cameraError: "Camera permission denied" };
-    expect(deviceTrouble({ ...both, micDenied: true, cameraDenied: true })).toContain("Allow them from the icon in the address bar");
+    expect(deviceTrouble({ ...both, micDenied: true, cameraDenied: true }, devicePermissionHint("Mozilla/5.0 (Macintosh) Chrome/130", false))).toBe(
+      "Your browser is blocking the camera and microphone. Allow them from the icon in the address bar. Then try again. You can still join and listen.",
+    );
     const none = deviceTrouble({ micError: "No microphone found", cameraError: "No camera found", micDenied: false, cameraDenied: false });
     expect(none).toBe("No microphone found. No camera found. You can still join and listen.");
     expect(none).not.toContain("address bar");
@@ -311,6 +330,12 @@ describe("inside the call", () => {
     expect(inCall(fakeCall({ phase: "disconnected", ended: "removed" }))).toContain("You were removed from the call.");
     expect(inCall(fakeCall({ phase: "disconnected", ended: "room_closed" }))).toContain("The call has ended.");
     expect(inCall(fakeCall({ phase: "disconnected", ended: "elsewhere" }))).toContain("You joined this call from another tab or window. Use this tab");
+  });
+
+  test("the page's reading of the ending overrules the media's: a closed room the server still admits into is a lost line", () => {
+    const t = inCall(fakeCall({ phase: "disconnected", ended: "room_closed" }), { ended: "lost" });
+    expect(t).toContain("You lost the connection to the call.");
+    expect(t).not.toContain("The call has ended.");
   });
 
   test("losing touch with the server is a line, not the end of the call", () => {

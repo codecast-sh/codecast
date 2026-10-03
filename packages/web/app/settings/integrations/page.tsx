@@ -35,6 +35,7 @@ import { useCurrentUser } from "../../../hooks/useCurrentUser";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { SettingsCallout, SettingsPanel, SettingsSection } from "../../../components/settings/ui";
 import { IntegrationCard } from "../../../components/integrations/IntegrationCard";
+import { SourcesSection } from "../../../components/ops/SourcesSection";
 import { BrowserExtensionSetup } from "../../../components/settings/BrowserExtensionSetup";
 import { TeamSwitcher } from "../../../components/TeamSwitcher";
 import { useInboxStore } from "../../../store/inboxStore";
@@ -174,6 +175,8 @@ export default function IntegrationsPage() {
           />
         ))}
       </SettingsSection>
+
+      <SourcesSection />
     </SettingsPanel>
   );
 }

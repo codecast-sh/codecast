@@ -51,6 +51,24 @@ export interface AnalyticsConfig {
    * window listeners it wired itself.
    */
   extraIgnoreErrors?: (string | RegExp)[];
+  /**
+   * Codecast ingest key (cc_ing_..., write-only, safe in a bundle). Present:
+   * captured errors, uncaught errors and rejections also go to codecast
+   * through the sink in ./codecast, alongside Sentry. Like Sentry it stays
+   * off in development.
+   */
+  codecastIngestKey?: string;
+  /** Codecast ingest door base. Defaults to codecast prod (DEFAULT_CODECAST_INGEST_ENDPOINT). */
+  codecastEndpoint?: string;
+  /** The build these errors came from, stamped on every codecast batch so a group knows its release. */
+  release?: string;
+  /**
+   * Rewrites the secret parts of any string holding a URL or path ("/share/doc/k3y"
+   * to "/share/doc/:token"), for an app whose links are credentials. Every URL
+   * that leaves the page runs it: PostHog events and person properties, Sentry
+   * events and breadcrumbs, codecast error reports and replays (./scrub).
+   */
+  scrubUrl?: (text: string) => string;
 }
 
 export const DEFAULT_POSTHOG_HOST = "https://us.i.posthog.com";
@@ -87,11 +105,14 @@ export function resolveConfig(config: AnalyticsConfig): ResolvedAnalyticsConfig 
   ) {
     throw new AnalyticsConfigError("sessionEventCap must be a non-negative integer");
   }
+  if (config.codecastIngestKey !== undefined && typeof config.codecastIngestKey !== "string") {
+    throw new AnalyticsConfigError("codecastIngestKey must be a string");
+  }
   const host = config.posthogHost || DEFAULT_POSTHOG_HOST;
   if (!/^https?:\/\//.test(host)) {
     throw new AnalyticsConfigError(`posthogHost must be an http(s) URL, got ${JSON.stringify(host)}`);
   }
-  return { ...config, posthogHost: host.replace(/\/+$/, ""), posthogKey: config.posthogKey || undefined, sentryDsn: config.sentryDsn || undefined };
+  return { ...config, posthogHost: host.replace(/\/+$/, ""), posthogKey: config.posthogKey || undefined, sentryDsn: config.sentryDsn || undefined, codecastIngestKey: config.codecastIngestKey || undefined };
 }
 
 /**

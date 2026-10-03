@@ -13,7 +13,7 @@ import * as os from "os";
 import * as path from "path";
 import type { AddressInfo } from "net";
 import { agentSpawnPath } from "../agentSpawnPath.js";
-import { EVALS_ENTRY, EVALS_SCRIPT_HEADER, createEvalsBridge, evalsHomeDir, type EvalsBridge, type EvalsBridgeDeps } from "./evalsBridge.js";
+import { EVALS_API_COMMAND, EVALS_ENTRY, EVALS_SCRIPT_HEADER, createEvalsBridge, evalsHomeDir, type EvalsBridge, type EvalsBridgeDeps } from "./evalsBridge.js";
 import { handleEvalsHttp } from "./evalsServer.js";
 
 // Every test spawns git and bun children; at a load average in the hundreds a
@@ -53,10 +53,11 @@ const rigs: { bridge: EvalsBridge; server: http.Server }[] = [];
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "pipe" });
 
-/** A scratch checkout. `header: false` writes a foreign `evals` script, `entry: false` leaves out the child's entry. */
-function makeCheckout(name: string, opts: { header?: boolean; entry?: boolean; gitInit?: boolean } = {}): string {
+/** A scratch checkout. `header: false` writes a foreign `evals` script, `entry: false` leaves out the child's entry, `api: false` its api command. */
+function makeCheckout(name: string, opts: { header?: boolean; entry?: boolean; api?: boolean; gitInit?: boolean } = {}): string {
   const root = path.join(tmp, name);
-  fs.mkdirSync(path.join(root, path.dirname(EVALS_ENTRY)), { recursive: true });
+  fs.mkdirSync(path.join(root, path.dirname(EVALS_API_COMMAND)), { recursive: true });
+  if (opts.api !== false) fs.writeFileSync(path.join(root, EVALS_API_COMMAND), "");
   const header = opts.header === false ? ["#!/bin/sh", "# some other tool", "exec true"] : [...EVALS_SCRIPT_HEADER];
   fs.writeFileSync(path.join(root, "evals"), `${header.join("\n")}\nroot="$(cd "$(dirname "$0")" && pwd)"\n`);
   if (opts.entry !== false) fs.writeFileSync(path.join(root, EVALS_ENTRY), FAKE_CHILD);
@@ -215,6 +216,10 @@ describe("checkout validation, before any exec", () => {
     await refused(makeHome("entry", makeCheckout("noentry", { entry: false })), "checkout-no-entry");
   });
 
+  test("a checkout whose eval tool predates the api command", async () => {
+    await refused(makeHome("noapi", makeCheckout("noapi", { api: false })), "checkout-no-entry");
+  });
+
   test("no bun on PATH", async () => {
     const { api } = await use(makeHome("nobun", goodRoot), { command: () => ({ cmd: "codecast-test-no-such-bun", args: [] }) });
     const res = await api("/evals/health");
@@ -323,6 +328,55 @@ describe("a checkout.json that moves under a running child", () => {
     expect(new Set(bodies.map((b) => b.pid)).size).toBe(1);
     expect(execs()).toHaveLength(2);
     expect(await waitFor(() => !alive(first.pid))).toBe(true);
+  });
+
+  test("a pointer to a checkout that cannot serve keeps the running child", async () => {
+    const home = makeHome("stale-live", goodRoot);
+    const { api, execs } = await use(home);
+    const first = await (await api("/evals/health")).json();
+    pointAt(home, makeCheckout("old-live", { api: false }));
+    const next = await api("/evals/health");
+    expect(next.status).toBe(200);
+    expect((await next.json()).pid).toBe(first.pid);
+    expect(execs()).toHaveLength(1);
+  });
+
+  test("polls against such a pointer check it once inside the memo window, and say so once", async () => {
+    const home = makeHome("stale-memo", goodRoot);
+    let envs = 0;
+    const logs: string[] = [];
+    // Every git spawn and child spawn reads deps.env once, so its count is the spawn count.
+    const env = { ...process.env, PATH: agentSpawnPath(path.dirname(process.execPath)), FAKE_MARKER: path.join(tmp, "execs-memo.log") };
+    const { api } = await use(home, {
+      log: (m) => logs.push(m),
+      env: () => {
+        envs++;
+        return env;
+      },
+    });
+    const first = await (await api("/evals/health")).json();
+    const afterStart = envs;
+    pointAt(home, makeCheckout("old-memo", { api: false }));
+    for (let i = 0; i < 3; i++) {
+      const res = await api("/evals/health");
+      expect(res.status).toBe(200);
+      expect((await res.json()).pid).toBe(first.pid);
+    }
+    expect(envs - afterStart).toBe(1);
+    expect(logs.filter((m) => m.includes("predates the api command"))).toHaveLength(1);
+  });
+
+  test("with no child running, such a pointer falls back to the last checkout that served", async () => {
+    const home = makeHome("stale-idle", goodRoot);
+    const { bridge, api, execs } = await use(home);
+    const first = await (await api("/evals/health")).json();
+    bridge.stop();
+    expect(await waitFor(() => !alive(first.pid))).toBe(true);
+    pointAt(home, makeCheckout("old-idle", { api: false }));
+    const next = await api("/evals/health");
+    expect(next.status).toBe(200);
+    expect((await next.json()).cwd).toBe(goodRoot);
+    expect(execs()).toHaveLength(2);
   });
 
   test("a child that ends while the pointer is read is replaced, not dereferenced", async () => {

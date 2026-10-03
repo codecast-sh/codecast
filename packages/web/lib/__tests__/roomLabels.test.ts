@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { describeRoom, describeRoomLive } from "../calls/roomLabels";
+import { callTitle, describeRoom, describeRoomLive } from "../calls/roomLabels";
 import { chatViewRoomKey } from "../chatViews";
 
 // One room, one name, everywhere: the dock pill, the stage header, the ring
@@ -134,5 +134,23 @@ describe("describeRoom", () => {
     expect(describeRoom("session:nope", store as any, { serverTitle: "Ship it" }).label).toBe("Ship it");
     expect(describeRoom("channel:ch1", store as any, { serverTitle: "stale" }).label).toBe("#design");
     expect(describeRoom("session:conv1", store as any, { serverTitle: "stale" }).label).toBe("Fix the auth race");
+  });
+});
+
+describe("callTitle", () => {
+  test("an untitled call is named by the room the dock would name, never its key", () => {
+    expect(callTitle({ room_key: "dm:ann:me" }, store as any)).toBe("Call with Ann Lee");
+    expect(callTitle({ room_key: "channel:ch1" }, store as any)).toBe("Huddle in #design");
+    expect(callTitle({ room_key: "channel:dm1" }, store as any)).toBe("Call with Ann, Bo");
+    expect(callTitle({ room_key: "session:sess1" }, store as any)).toBe("Huddle in Fix the auth race");
+  });
+  test("a title wins; a place the store does not know falls back to a plain word", () => {
+    expect(callTitle({ title: "Launch review", room_key: "dm:ann:me" }, store as any)).toBe("Launch review");
+    expect(callTitle({ room_key: "session:unknown" }, store as any)).toBe("Untitled huddle");
+    expect(callTitle({ room_key: "channel:nope" }, store as any)).toBe("Untitled huddle");
+    expect(callTitle({ room_key: "rec:1fad0bfc-aaaa" }, store as any)).toBe("Untitled recording");
+    expect(callTitle({ room_key: "session:unknown" }, store as any, { untitled: "Typed huddle, nothing said" })).toBe(
+      "Typed huddle, nothing said",
+    );
   });
 });

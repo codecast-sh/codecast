@@ -5,6 +5,7 @@
 
 import {
   proofSummary,
+  honestChecks,
   riskLabel,
   verdictLabel,
   type CardCheck,
@@ -20,6 +21,10 @@ const day = (ms: number) => {
   const d = new Date(ms);
   return `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`;
 };
+
+// A metric ref (in-2:dollars_per_intro) or a short id helps a reader find the
+// goal; a raw document id beside the goal's own name does not.
+const readableRef = (goal: { ref: string; name?: string }) => !goal.name || goal.ref.includes(":") || goal.ref.length < 20;
 
 export function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
@@ -214,9 +219,9 @@ export function renderChangeCardHtml(card: ChangeCard): string {
   const goal =
     card.goal.ref === "none"
       ? `<p class="goal">Serves no named goal.</p>`
-      : `<p class="goal">Serves <b>${esc(card.goal.name)}</b><code>${esc(card.goal.ref)}</code></p>${card.goal.why ? `<p class="why">${esc(card.goal.why)}</p>` : ""}`;
+      : `<p class="goal">Serves <b>${esc(card.goal.name || card.goal.ref)}</b>${readableRef(card.goal) ? `<code>${esc(card.goal.ref)}</code>` : ""}</p>${card.goal.why ? `<p class="why">${esc(card.goal.why)}</p>` : ""}`;
   const proofBlock = card.proof.before.length || card.proof.after.length
-    ? `<section class="block"><h2>Proof <span class="count">${esc(proof.label)}</span></h2><div class="beads" aria-hidden="true">${beads(card)}</div><ul class="proof">${proofRows(card)}</ul></section>`
+    ? `<section class="block"><h2>Proof <span class="count">${esc(proof.evidence)}</span></h2><div class="beads" aria-hidden="true">${beads(card)}</div><ul class="proof">${proofRows(card)}</ul></section>`
     : `<section class="block"><h2>Proof <span class="count">none recorded</span></h2></section>`;
   const { tokens, usd, minutes } = card.cost;
 
@@ -243,7 +248,7 @@ export function renderChangeCardHtml(card: ChangeCard): string {
 </div>
 ${proofBlock}
 ${examples(card)}
-${checksList(card.checks)}
+${checksList(honestChecks(card.checks))}
 <div class="panels">
   ${diffPanel(card)}
   <div class="panel"><h3>Risk</h3><div class="big mid">${esc(riskLabel(card.risk))}</div><div class="sub">${esc(card.risk.reason)}</div></div>
