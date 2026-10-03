@@ -258,6 +258,18 @@ describe('./evals', () => {
     expect(JSON.parse(w.run('runs', 'list', '--json').out).map((x: { status: string }) => x.status)).toEqual(['crash', 'crash']);
   });
 
+  test('a resumed batch runs a crashed seed again, and the set counts that seed once', () => {
+    const w = world();
+    const boom = freezeIdOf(w.run('freeze', 'create', 'echo@fixture:boom', '--json').out);
+    const first = w.run('check', 'echo', '--dry', '--reps', '1', '--freeze', boom.slice(0, 8), '--batch', 'b1');
+    expect(first.out).toContain('1 crashed, left out of the numbers above');
+    const again = w.run('check', 'echo', '--dry', '--reps', '1', '--freeze', boom.slice(0, 8), '--batch', 'b1');
+    expect(again.out).not.toContain('already scored');
+    expect(again.out).toContain('1 reps over 1 surface(s)');
+    expect(again.out).toContain('1 crashed');
+    expect(runDirs(w)).toHaveLength(2);
+  });
+
   test('line --dry: base and branch runs, eval-result.json, exit by the station rule', () => {
     const w = world();
     w.git('branch', 'base');

@@ -36,11 +36,14 @@
 //     handed to the child as CLAUDE_CODE_OAUTH_TOKEN in its environment only:
 //     no file ever carries it. The directory is removed when the run ends.
 //  2. CODECAST_DIR points at an empty directory, so a real `cast` the agent
-//     finds is "Not authenticated" and cannot post, send or pin anything.
+//     finds cannot post, send or pin anything: one built from this tree hands
+//     the call to the guard (3), any other answers "Not authenticated", and
+//     the eval reads such a run as one that left its world (evals dryRun.ts).
 //  3. `cast` on PATH is the guard beside this script (prompt-dry-run-bin/cast,
 //     or the directory given as --guard), put first on PATH again before
 //     every Bash command through CLAUDE_ENV_FILE, since the user's profile
-//     would otherwise shadow it: reads pass through with the real
+//     would otherwise shadow it, and the target of a `cast` the agent reaches
+//     some other way (src/main.ts sends it there): reads pass through with the real
 //     state directory restored, writes are refused and logged, and
 //     `--serve <dir>` answers reads from files there (the legacy org files,
 //     and any argv captured under reads/ by its key), refusing a read that
@@ -162,6 +165,11 @@ env.PATH = `${guardDir}:${env.PATH ?? ""}`;
 const envFile = path.join(configDir, "dry-run-env.sh");
 fs.writeFileSync(envFile, `export PATH='${guardDir.replace(/'/g, `'\\''`)}':"$PATH"\n`);
 env.CLAUDE_ENV_FILE = envFile;
+// A `cast` reached around the guard anyway, by an absolute path or a login
+// shell, finds the empty state directory and hands the call to the guard
+// (src/main.ts), so no call leaves the served world whatever PATH it took.
+env.DRY_RUN_GUARD = path.join(guardDir, "cast");
+env.DRY_RUN_EMPTY_CODECAST_DIR = noCast;
 if (maxOutputTokens) env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = maxOutputTokens;
 // A prod call has no thinking, no CLAUDE.md and no memory. What claude still
 // adds on a subscription login is fixed: an SDK identity line in the system

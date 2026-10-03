@@ -1,0 +1,26 @@
+{
+  "name": "route bounce-rate",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:bounce-rate"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "route:bounce-rate",
+    "title": "route bounce-rate"
+  },
+  "asOf": "2026-10-02T12:00:00.000Z",
+  "trigger": {
+    "type": "route"
+  },
+  "meta": {
+    "surface": "route",
+    "visibility": "public",
+    "snapshot": "fixtures/route/bounce-rate.json"
+  },
+  "judge": "names the role whose charter or area covers the request, cites that charter or area in its reason, and is sure only when one role plainly covers it",
+  "notes": null,
+  "tags": [],
+  "id": "d7dc3d8d-e256-40d8-a2fc-d19024d1ec1e",
+  "createdAt": "2026-10-03T02:29:07.751Z"
+}

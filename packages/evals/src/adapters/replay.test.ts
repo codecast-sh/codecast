@@ -1,16 +1,16 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { previousRunSet } from '../commands/check';
+import { batchSet, previousRunSet } from '../commands/check';
 import { rescoreRun } from '../commands/grade';
 import { runSnapshot } from '../commands/snapshot';
 import type { SurfaceRun } from './runs';
 import { surfaceMeta } from '../registry';
 import { servedReadKey } from '../served';
 import type { AgentResult, CallResult } from '../surface';
-import { assertAnswered, harnessFailure, loopTurnsOf } from './dryRun';
+import { assertAnswered, harnessFailure, loopTurnsOf, outsideWorldCommands, readAgentRun } from './dryRun';
 import { dominantModel, routeGates, scoreOf } from './replay';
 
 const call = (over: Partial<CallResult> = {}): CallResult => ({
@@ -100,8 +100,38 @@ describe('a run the model never answered', () => {
   });
 
   test('the rep crashes instead of failing model-as-pinned, ok and the surface gates', () => {
-    expect(() => assertAnswered(call({ harnessFailure: harnessFailure(revoked, 1), dir: '/tmp/x/run' }), 'call1')).toThrow('call1 never reached the model: API error 401');
+    expect(() => assertAnswered(call({ harnessFailure: harnessFailure(revoked, 1), dir: '/tmp/x/run' }), 'call1')).toThrow('call1 cannot grade the prompt: API error 401');
     expect(() => assertAnswered(call(), 'call1')).not.toThrow();
+  });
+});
+
+describe('a run that left its world', () => {
+  const use = (id: string, command: string) => ({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name: 'Bash', input: { command } }] } });
+  const result = (id: string, content: unknown) => ({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, content }] } });
+  // What the 2026-10-02 opus reps' streams held: the real CLI's answer to a cast the guard never saw, and a file that only quotes the words.
+  const stream = [
+    use('t1', 'cast org inputs --team "Union" --json > /tmp/i.json; echo $?'),
+    result('t1', 'Not authenticated. Run: cast auth\n1'),
+    use('t2', 'cat convex/lib/auth.ts'),
+    result('t2', '    if (!userId) throw new Error("Not authenticated");'),
+    use('t3', '~/.codecast/bin/cast read jx7 2>&1 | head'),
+    result('t3', [{ type: 'text', text: "Error: Not authenticated. Run 'cast auth' first." }]),
+    use('t4', 'cast org health --json'),
+    result('t4', 'SERVED'),
+  ].map((e) => JSON.stringify(e)).join('\n');
+
+  test("names each command the real CLI answered signed out, and not a file that quotes the words", () => {
+    expect(outsideWorldCommands(stream)).toEqual(['cast org inputs --team "Union" --json > /tmp/i.json; echo $?', '~/.codecast/bin/cast read jx7 2>&1 | head']);
+    expect(outsideWorldCommands(JSON.stringify(use('a', 'cast brief')) + '\n' + JSON.stringify(result('a', 'Brief: steady')))).toEqual([]);
+  });
+
+  test('the agent run is a harness failure, so the rep is a crash and never a graded 0', () => {
+    const sub = mkdtempSync(join(tmpdir(), 'evals-outside-'));
+    writeFileSync(join(sub, 'out.json'), JSON.stringify({ is_error: false, terminal_reason: 'completed', total_cost_usd: 7, modelUsage: {} }));
+    writeFileSync(join(sub, 'stream.jsonl'), stream);
+    const a = readAgentRun(sub, 'pin', 1, 0, 0);
+    expect(a.harnessFailure).toBe(`the agent's cast reached the real CLI outside the served world 2 time(s), first on: cast org inputs --team "Union" --json > /tmp/i.json; echo $?`);
+    expect(() => assertAnswered(a, 'agent1')).toThrow('agent1 cannot grade the prompt: the agent');
   });
 });
 
@@ -146,14 +176,24 @@ describe('rescore', () => {
     const stored = { pass: false, score: 0, passMark: 0.7, gates: [gate('model-as-pinned', false), gate('ok', true), gate('frozen-reads', true), gate('no-unexpected-writes', false), gate('no-wrong-close', true)], checks: [{ id: 'records', weight: 1, score: 0.8 }], missedFloors: [], judgeCostUsd: null, judgeModel: null, scoredAt: 'x', scenario: 'org-review-0bc4cd18', title: 't', seed: 1 };
     writeFileSync(join(dir, 'score.json'), JSON.stringify(stored));
     const r = (await rescoreRun(dir))!;
-    expect(r.after.gates.map((g) => `${g.id}:${g.pass}`)).toEqual(['model-as-pinned:true', 'ok:true', 'frozen-reads:true', 'no-unexpected-writes:true', 'no-wrong-close:true']);
-    expect(r.after.score).toBeCloseTo(0.8);
-    expect(r.after.pass).toBe(true);
-    expect(JSON.parse(readFileSync(join(dir, 'score.json'), 'utf8'))).toMatchObject({ score: r.after.score, seed: 1, scenario: 'org-review-0bc4cd18' });
+    expect(r.after!.gates.map((g) => `${g.id}:${g.pass}`)).toEqual(['model-as-pinned:true', 'ok:true', 'frozen-reads:true', 'no-unexpected-writes:true', 'no-wrong-close:true']);
+    expect(r.after!.score).toBeCloseTo(0.8);
+    expect(r.after!.pass).toBe(true);
+    expect(JSON.parse(readFileSync(join(dir, 'score.json'), 'utf8'))).toMatchObject({ score: r.after!.score, seed: 1, scenario: 'org-review-0bc4cd18' });
     expect(JSON.parse(readFileSync(join(dir, 'score.before-rescore.json'), 'utf8')).score).toBe(0);
     // Another role's brief stays a refused write on a rescore too.
     writeFileSync(join(sub, 'calls.log'), 'REFUSED brief edit --for @docs -\n');
-    expect((await rescoreRun(dir))!.after.gates.find((g) => g.id === 'no-unexpected-writes')!.pass).toBe(false);
+    expect((await rescoreRun(dir))!.after!.gates.find((g) => g.id === 'no-unexpected-writes')!.pass).toBe(false);
+    // A rep whose cast reached the real CLI becomes the crash a fresh run records, its score kept aside.
+    writeFileSync(join(dir, 'result.json'), JSON.stringify({ endedBecause: 'done', stopReason: null }));
+    writeFileSync(join(sub, 'stream.jsonl'), [{ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'u', input: { command: 'cast brief' } }] } }, { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'u', content: 'Not authenticated. Run: cast auth' }] } }].map((e) => JSON.stringify(e)).join('\n'));
+    const crashed = (await rescoreRun(dir))!;
+    expect(crashed.after).toBeNull();
+    expect(crashed.crash).toContain('agent1 cannot grade the prompt: the agent\'s cast reached the real CLI outside the served world 1 time(s), first on: cast brief');
+    expect(existsSync(join(dir, 'score.json'))).toBe(false);
+    expect(JSON.parse(readFileSync(join(dir, 'result.json'), 'utf8'))).toMatchObject({ endedBecause: 'failed', stopReason: crashed.crash });
+    expect(JSON.parse(readFileSync(join(dir, 'score.before-rescore.json'), 'utf8')).score).toBe(0);
+    expect(await rescoreRun(dir)).toBeNull();
   });
 });
 
@@ -163,5 +203,12 @@ describe('the previous run set', () => {
   test("is each freeze's newest other batch, so a later run of one freeze hides no other freeze's set", () => {
     const history = [run('a', 'b1'), run('b', 'b1'), run('a', 'b2'), run('a', 'b3', 'dry'), run('b', 'b2', 'unscored'), run('a', 'now')];
     expect(previousRunSet(history, 'now').map((r) => r.id).sort()).toEqual(['a-b2', 'b-b1']);
+  });
+
+  test('a seed run again after a crash counts once, as its newest rep, in a set and in the previous set', () => {
+    // Newest first, as surfaceRuns lists them: b1's seed 1 crashed, then a resume ran it again.
+    const history = [{ ...run('a', 'b1'), id: 'rerun' }, { ...run('a', 'b1', 'crash'), id: 'crash' }, { ...run('a', 'b1', 'unscored'), id: 'stop', seed: 2 }];
+    expect(batchSet(history, 'b1').map((r) => r.id)).toEqual(['rerun']);
+    expect(previousRunSet(history, 'now').map((r) => r.id)).toEqual(['rerun']);
   });
 });

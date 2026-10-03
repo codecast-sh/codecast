@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
 import type { Command } from 'commander';
@@ -19,7 +19,8 @@ import type { AgentResult, CallResult } from '../surface';
 // `./evals grade <surface> <dir>`: grade an output dir that already exists
 // (an old org round) with the surface's own grader, without replaying.
 // `./evals rescore`: grade a replay rep's route gates again from the files its
-// harness runs wrote, so a gate fixed after a run reaches the stored score.
+// harness runs wrote, so a gate fixed after a run reaches the stored score,
+// and a rep found to have run outside its world becomes a crash.
 
 export function registerGrade(program: Command): void {
   program
@@ -67,22 +68,36 @@ const ROUTE_GATES = new Set(['model-as-pinned', 'ok', 'prod-budget', 'frozen-rea
  * Grade one rep's route gates again and rewrite its score.json. The
  * surface's own gates, its checks and the judge's verdict are kept as they
  * were scored; only what routeGates reads from the harness files is redone.
- * The first score is kept beside it as score.before-rescore.json.
+ * A rep whose harness runs now read as a harness failure (dryRun.ts: the
+ * model never answered, or the agent's cast reached the real CLI) becomes
+ * the crash a fresh run would have recorded: no score.json, its result ended
+ * `failed`, so `check --batch` runs it again. The first score is kept beside
+ * it as score.before-rescore.json.
  */
-export async function rescoreRun(runDir: string): Promise<{ before: Score; after: Score } | null> {
+export async function rescoreRun(runDir: string): Promise<{ before: Score; after: Score | null; crash?: string } | null> {
   const stored = readJson(join(runDir, 'score.json')) as (Score & Record<string, unknown>) | null;
   const run = readJson(join(runDir, 'run.json')) as RunJson | null;
   if (!stored || !run || run.dry) return null;
   const meta = surfaces().find((m) => basename(runDir).startsWith(`${m.id}-`));
   if (!meta) throw new Error(`${basename(runDir)} names no known surface`);
   const impl = await loadSurface(meta.id);
-  const freeze = impl.allowedRefusals ? await codecastFreezeStore().get(run.freezeId) : null;
-  const allowedHere = freeze && impl.allowedRefusals ? impl.allowedRefusals(loadSnapshot(freeze).snap) : [];
-  const fresh = routeGates(meta, harnessRunsOf(runDir, run.model), allowedHere);
-  const gates = [...fresh, ...stored.gates.filter((g) => !ROUTE_GATES.has(g.id))];
-  const after = scoreOf(gates, stored.checks, stored.judgeModel ? { costUsd: stored.judgeCostUsd ?? 0, model: stored.judgeModel } : null);
+  const harnessRuns = harnessRunsOf(runDir, run.model);
   const keep = join(runDir, 'score.before-rescore.json');
   if (!existsSync(keep)) copyFileSync(join(runDir, 'score.json'), keep);
+  const failed = [...harnessRuns.calls.map((c, i) => [`call${i + 1}`, c] as const), ...harnessRuns.agents.map((a, i) => [`agent${i + 1}`, a] as const)].find(([, r]) => r.harnessFailure);
+  if (failed) {
+    const crash = `${failed[0]} cannot grade the prompt: ${failed[1].harnessFailure}`;
+    const result = readJson(join(runDir, 'result.json')) ?? {};
+    writeFileSync(join(runDir, 'result.json'), JSON.stringify({ ...result, endedBecause: 'failed', stopReason: crash }, null, 2));
+    writeFileSync(join(runDir, 'run.log'), `${crash}\n${existsSync(join(runDir, 'run.log')) ? readFileSync(join(runDir, 'run.log'), 'utf8') : ''}`);
+    rmSync(join(runDir, 'score.json'));
+    return { before: stored, after: null, crash };
+  }
+  const freeze = impl.allowedRefusals ? await codecastFreezeStore().get(run.freezeId) : null;
+  const allowedHere = freeze && impl.allowedRefusals ? impl.allowedRefusals(loadSnapshot(freeze).snap) : [];
+  const fresh = routeGates(meta, harnessRuns, allowedHere);
+  const gates = [...fresh, ...stored.gates.filter((g) => !ROUTE_GATES.has(g.id))];
+  const after = scoreOf(gates, stored.checks, stored.judgeModel ? { costUsd: stored.judgeCostUsd ?? 0, model: stored.judgeModel } : null);
   writeFileSync(join(runDir, 'score.json'), JSON.stringify({ ...after, scenario: stored.scenario, title: stored.title, seed: stored.seed }, null, 2));
   return { before: stored, after };
 }
@@ -109,8 +124,9 @@ export function registerRescore(program: Command): void {
           continue;
         }
         const failed = (s: Score) => s.gates.filter((g) => !g.pass).map((g) => g.id).join(',') || 'none';
-        if (r.before.score !== r.after.score || r.before.pass !== r.after.pass) changed++;
-        console.log(`${name}  ${r.before.score.toFixed(3)} -> ${r.after.score.toFixed(3)}  ${r.after.pass ? 'pass' : 'fail'}  gates failed: ${failed(r.before)} -> ${failed(r.after)}`);
+        if (!r.after || r.before.score !== r.after.score || r.before.pass !== r.after.pass) changed++;
+        if (!r.after) console.log(`${name}  ${r.before.score.toFixed(3)} -> crash  ${r.crash}`);
+        else console.log(`${name}  ${r.before.score.toFixed(3)} -> ${r.after.score.toFixed(3)}  ${r.after.pass ? 'pass' : 'fail'}  gates failed: ${failed(r.before)} -> ${failed(r.after)}`);
       }
       console.log(`${names.length} rep(s) graded again, ${changed} changed`);
     });

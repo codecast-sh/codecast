@@ -36,6 +36,7 @@ it stale; `index.ts` captures, replays and gates it.
 | suggest | call | the composer's next-message suggestions |
 | changes-story | call | one Changes story from its commits, gated sessions and PRs |
 | changes-edition | call | a Changes day's edition from its stories (the strong model past 40 stories) |
+| route | call | the semantic router: which role an unplaced request belongs to (org-staffing.md S35) |
 | org-review | agent | the org analyzer over a served workspace |
 | role-wake | agent | a role's trigger frame over its served reads |
 | anchor-brief | agent | a standing session's opening, and for a fixture the turns after it |
@@ -71,12 +72,24 @@ inbox; see AGENTS.md "Prompt dry runs"). `--model` is always passed.
   history (evals-home.md, "Agent replay fidelity"). A fixture may go on past
   the opening: each later message (text a person typed, or a chat wake
   rendered by prod's `buildAnchorWake`) is one `--then` turn resumed into the
-  same session, and `calls.log` marks where each turn starts.
+  same session, and `calls.log` marks where each turn starts. Every `cast`
+  the agent runs reaches the guard, whatever path it took: the guard is first
+  on PATH for every Bash command, and a `cast` built from this tree that starts
+  with the run's empty state directory (an absolute path, a login shell) hands
+  the call to the guard (`src/main.ts`).
 - A judge run that fails (an exit other than 0, `is_error`, no output) makes
   the rep a crash, never a score of 0. So does a call or agent run the model
   never answered for a reason the prompt did not cause: no `out.json`, or an
   API error other than 400 and 413 (a revoked login, a rate limit, an
-  overloaded server; `harnessFailure` in `adapters/dryRun.ts`). A `--dry` rep is status `dry`: no view
+  overloaded server; `harnessFailure` in `adapters/dryRun.ts`). So does an
+  agent run whose `cast` reached the real CLI anyway (a binary built before
+  the redirect, such as `~/.codecast/bin/cast`): the stream holds the real
+  CLI's signed-out answer on a line of its own, and `calls.log` holds nothing
+  for that call, so `frozen-reads` alone cannot see it. A crash is counted
+  apart from the pass rate and the mean, and `check --batch <id>` with the same
+  `--reps` and `--freeze` runs each crashed seed again; a set counts a seed
+  once, as its newest rep. `./evals rescore` turns a stored rep into the crash
+  it would be graded as today. A `--dry` rep is status `dry`: no view
   counts it as a pass or a fail and no `check` compares against it.
 
 Pins live in `packages/evals/src/models.ts`. Call surfaces use prod's own
@@ -99,6 +112,7 @@ lists every surface's ref forms.
 | `<callId>` | call-summary | the call's end |
 | `tr-N` | role-wake | a trigger whose reads were captured within the hour by `./evals snapshot role-wake --trigger tr-N --team T --role <handle> --name n` |
 | `<session>[:<line>]` | anchor-brief | a standing session's opening, its reads captured by `./evals snapshot anchor-brief` |
+| `<team>:<ct-N>` | route | a task filed in a project or plan: its title and description are the request, the org tree as `cast org ls --team <team> --json` prints it is the roster, and the rule's owner for the task's anchor (`ownerOf`, which the router never sees) is the expected answer |
 | `<snapshotName>` | org-review | a served workspace under `EVALS_HOME/snapshots/org-review/`, such as `union-base8` |
 | `file:<path>` | changes-story, changes-edition | a real story or edition input, from a fixture-shaped file (`{asOf, snapshot}`) kept outside the repo: no access-checked read returns a story's gated inputs. The snapshot must carry `people` (everyone on the team) and, for a story, `withheld` (what the team gate kept out, `[]` when nothing); the no-leak gate reads both, so a file without them is refused |
 

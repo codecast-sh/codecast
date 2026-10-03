@@ -52,9 +52,9 @@ export function harnessFailure(out: any, exitCode: number): string | undefined {
   return `API error ${out.api_error_status ?? 'with no status'}: ${String(out.result ?? '').slice(0, 200)}`;
 }
 
-/** A run the model never answered says nothing about the prompt: the rep is a crash, not a 0 on every gate. */
+/** A run the model never answered, or one that left its world, says nothing about the prompt: the rep is a crash, not a 0 on every gate. */
 export function assertAnswered(r: CallResult | AgentResult, label: string): void {
-  if (r.harnessFailure) throw new Error(`${label} never reached the model: ${r.harnessFailure}; see ${'runSubdir' in r ? r.runSubdir : r.dir}`);
+  if (r.harnessFailure) throw new Error(`${label} cannot grade the prompt: ${r.harnessFailure}; see ${'runSubdir' in r ? r.runSubdir : r.dir}`);
 }
 
 /** One single-call run: the request's prompt (and system) as files, the harness's --call mode, out.json read back. */
@@ -148,6 +148,44 @@ export function loopTurnsOf(streamText: string): Record<string, number> {
   return turns;
 }
 
+/**
+ * The real CLI's answer with no sign-in: what any `cast` the guard did not
+ * answer prints, because the harness gives the agent an empty state
+ * directory. Matched as a whole line, so a file or transcript that merely
+ * quotes the words is not a hit.
+ */
+const REAL_CLI_SIGNED_OUT = /^(?:Error: )?Not authenticated\. Run:? '?cast auth'?(?: first\.)?$/;
+
+/**
+ * The commands of a run whose `cast` reached the real CLI rather than the
+ * guard, read from the stream: each tool result with the real CLI's signed-out
+ * answer on a line of its own, named by the command that produced it. Such a
+ * run read none of its world there and did something prod never would next,
+ * so it says nothing about the prompt. calls.log cannot show it: the real CLI
+ * writes nothing there.
+ */
+export function outsideWorldCommands(streamText: string): string[] {
+  const commands = new Map<string, string>();
+  const hits: string[] = [];
+  for (const line of streamText.split('\n')) {
+    if (!line.includes('"tool_use"') && !line.includes('Not authenticated')) continue;
+    let e: any;
+    try {
+      e = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const content = Array.isArray(e?.message?.content) ? e.message.content : [];
+    for (const c of content) {
+      if (c?.type === 'tool_use') commands.set(String(c.id), String(c.input?.command ?? JSON.stringify(c.input ?? {})));
+      if (c?.type !== 'tool_result') continue;
+      const text = typeof c.content === 'string' ? c.content : Array.isArray(c.content) ? c.content.map((x: any) => (typeof x?.text === 'string' ? x.text : '')).join('\n') : '';
+      if (text.split('\n').some((l: string) => REAL_CLI_SIGNED_OUT.test(l.replace(/\x1b\[[0-9;]*m/g, '').trim()))) hits.push(commands.get(String(c.tool_use_id)) ?? 'a command the stream does not name');
+    }
+  }
+  return hits;
+}
+
 /** What a finished agent run of `turnCount` turns wrote, read back: a fresh run and `rescore` read it the same way. */
 export function readAgentRun(runSubdir: string, model: string, turnCount: number, exitCode: number, realMs: number): AgentResult {
   // Turn 1 writes out.json, said.json and stream.jsonl, turn N outN.json, saidN.json and streamN.jsonl.
@@ -155,6 +193,8 @@ export function readAgentRun(runSubdir: string, model: string, turnCount: number
   const outs = names.map((n) => readJson(join(runSubdir, `out${n}.json`)));
   const turns = names.map((n) => ((readJson(join(runSubdir, `said${n}.json`)) ?? []) as string[]).map((s) => s.trim()).filter(Boolean));
   const last = outs.at(-1);
+  const stream = names.map((n) => readText(join(runSubdir, `stream${n}.jsonl`))).join('\n');
+  const outside = outsideWorldCommands(stream);
   return {
     runSubdir,
     said: turns.flat(),
@@ -162,10 +202,13 @@ export function readAgentRun(runSubdir: string, model: string, turnCount: number
     calls: readText(join(runSubdir, 'calls.log')).split('\n').filter(Boolean),
     costUsd: outs.reduce((sum, o) => sum + Number(o?.total_cost_usd ?? 0), 0),
     modelUsage: mergeUsage(outs.map(usageOf)),
-    loopTurns: loopTurnsOf(names.map((n) => readText(join(runSubdir, `stream${n}.jsonl`))).join('\n')),
+    loopTurns: loopTurnsOf(stream),
     isError: Boolean(last?.is_error) || exitCode !== 0 || !last,
-    // A later turn missing its out.json may only follow an earlier turn's own failure.
-    harnessFailure: outs.map((o, i) => (o || i === 0 ? harnessFailure(o, exitCode) : undefined)).find(Boolean),
+    // A later turn missing its out.json may only follow an earlier turn's own failure. A run whose
+    // agent reached the real CLI answered, but outside the world it is graded in.
+    harnessFailure:
+      outs.map((o, i) => (o || i === 0 ? harnessFailure(o, exitCode) : undefined)).find(Boolean) ??
+      (outside.length ? `the agent's cast reached the real CLI outside the served world ${outside.length} time(s), first on: ${outside[0]!.slice(0, 200)}` : undefined),
     exitCode,
     model,
     realMs,

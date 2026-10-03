@@ -1,6 +1,6 @@
 {
   "asOf": "2026-09-28T11:00:00.000Z",
-  "notes": "A lead woken by another session's message (org-staffing.md S25: a role wakes through triggers and messages, nothing else). jx7bil3, the session rewriting the billing page under the docs role, asks a question that is the lead's to answer, and says it cannot open its pull request until it hears back. The turn under test is the reply: the lead answers that session with `cast send jx7bil3`, not Mara, not its own thread, not silence. Catches the regression where a lead reads a session's message, writes its brief, and never answers.",
+  "notes": "A lead woken by another session's message (org-staffing.md S25: a role wakes through triggers and messages, nothing else). jx7bil3, the session rewriting the billing page under the docs role, asks a question that is the lead's to answer, and says it cannot open its pull request until it hears back. The turn under test is the reply: the lead answers that session with `cast send jx7bil3`, not Mara, not its own thread, not silence. Catches the regression where a lead reads a session's message, writes its brief, and never answers. Its own reads answer what a lead looks up before answering, whatever words it searches with (a one-word prefix serves every `cast search`): the record names ct-418 and jx7bil3 and nothing decided; the world holds the rest.",
   "judge": "answers jx7bil3 with `cast send`, in its own words, choosing one of the two options and saying why in a sentence; it does not raise the question to Mara and does not end the turn without the reply",
   "label": {
     "replies": [
@@ -34,6 +34,47 @@
     "world": "fernhill",
     "values": {
       "role": "docs"
-    }
+    },
+    "reads": [
+      {
+        "argv": [
+          "search"
+        ],
+        "out": "ct-418 Billing page still describes the old plans \u00b7 backlog \u00b7 docs\n  The billing page lists the Starter and Team plans, retired on 2026-09-15. jx7bil3 is rewriting it.\njx7bil3 Rewrite the billing page for the new plans \u00b7 working\n  [21] Drafted the new plans table; checking the annual discount against the pricing service.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "doc",
+          "search"
+        ],
+        "out": "No docs match.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "doc",
+          "ls"
+        ],
+        "out": "No docs.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "decisions",
+          "list"
+        ],
+        "out": "No decisions recorded.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "project",
+          "ls"
+        ],
+        "out": "pj-7docs  Docs site\npj-7api   API reference",
+        "prefix": true
+      }
+    ]
   }
 }

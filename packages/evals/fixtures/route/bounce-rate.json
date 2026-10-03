@@ -1,0 +1,17 @@
+{
+  "asOf": "2026-10-02T12:00:00.000Z",
+  "notes": "a deliverability request in a workspace with a cold email lead, a calling lead and a head of people: the router should name cold email and cite its charter",
+  "label": { "expected": "cold-email" },
+  "snapshot": {
+    "request": "The bounce rate on the three new sender domains doubled overnight; find out whether it is the warm-up pace or the list and stop the bleed before Monday's send.",
+    "roster": {
+      "workspace": "Acme",
+      "roles": [
+        { "handle": "head-of-people", "name": "Head of People", "areas": [], "standing": [], "holding": [], "whole_workspace": true },
+        { "handle": "cold-email", "name": "Cold Email lead", "charter": "Raises the interest reply rate on cold email through one clean test at a time, and watches domain health so sending capacity is not lost.", "areas": [{ "kind": "plan", "title": "Cold email deliverability recovery" }], "standing": ["Cold email deliverability recovery: 12 of 60 domains warmed (2026-09-30)"], "holding": ["task: Rotate the bounced domains"] },
+        { "handle": "calling", "name": "Calling lead", "charter": "Keeps the calling work moving: caller performance, the call tools, and the proposals from idea to deployed.", "areas": [{ "kind": "project", "title": "Callers & Call Management" }], "standing": [], "holding": [] }
+      ]
+    },
+    "expected": { "handle": "cold-email", "by": "plan" }
+  }
+}

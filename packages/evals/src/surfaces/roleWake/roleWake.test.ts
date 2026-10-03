@@ -53,6 +53,13 @@ describe('the frame', () => {
     expect(parseScheduledTask(frame)).toBeNull();
     // Its label holds the turn to the reply: a `cast send` to the session that wrote.
     expect(readFixture('role-wake', 'docs-session-message').label).toEqual({ replies: ['jx7bil3'] });
+    // The turn is graded on the reply, not the brief: no brief gates, and the harness note asks for no brief.md.
+    expect(impl.gates(snap, { reply: '', parsed: { brief: null }, calls: [], agents: [] }, { replies: ['jx7bil3'] }).map((g) => g.id)).toEqual(['replies-sender']);
+    expect(impl.describe(snap)[0]!.text).not.toContain('brief.md');
+    expect(impl.describe(fixtureSnap('docs-check'))[0]!.text).toContain('brief.md');
+    // It reads the shared world plus the reads a lead makes before answering.
+    expect(snap.world).toBe('fernhill');
+    expect(snap.reads!.map((r) => r.argv[0])).toContain('search');
   });
 
   test('a real freeze replays the frame prod built, untouched', () => {
@@ -219,7 +226,7 @@ describe('served reads', () => {
   });
 
   test('every fixture reads the shared world, and none carries a copy of it', () => {
-    for (const kase of ['docs-check', 'docs-needs-input', 'docs-session-message']) {
+    for (const kase of ['docs-check', 'docs-needs-input']) {
       const snap = fixtureSnap(kase);
       expect(snap.world).toBe('fernhill');
       expect(snap.reads ?? []).toEqual([]);
