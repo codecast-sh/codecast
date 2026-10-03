@@ -110,7 +110,8 @@ export type RouterDecision =
 export function routerDecision(reply: RouterReply | null): RouterDecision {
   if (!reply || !reply.handle) return { kind: "ask", choices: reply?.alternatives ?? [], confidence: 0, reason: reply?.reason || "the router could not read the request" };
   const runnerUp = reply.alternatives[0]?.confidence ?? 0;
-  if (reply.confidence >= ROUTER_CONFIDENT && reply.confidence - runnerUp >= ROUTER_MARGIN) {
+  // 1e-9: 0.9 - 0.6 is 0.30000000000000004 in floating point, which is the margin.
+  if (reply.confidence >= ROUTER_CONFIDENT - 1e-9 && reply.confidence - runnerUp >= ROUTER_MARGIN - 1e-9) {
     return { kind: "file", handle: reply.handle, confidence: reply.confidence, reason: reply.reason };
   }
   return { kind: "ask", choices: [{ handle: reply.handle, confidence: reply.confidence, reason: reply.reason }, ...reply.alternatives], confidence: reply.confidence, reason: reply.reason };
