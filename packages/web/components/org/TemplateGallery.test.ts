@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { cadenceWords, cannotHireReason, displayTitle, type CatalogTemplate } from "./templateCatalog";
+import { builtinHires, cadenceWords, cannotHireReason, displayTitle, EXECUTIVE_ASSISTANT_HIRE, HEAD_OF_PEOPLE_HIRE, type CatalogTemplate } from "./templateCatalog";
 
 // The gallery's honesty rules (org-hire.md H3): a card offers the hire only
 // when this workspace can take it, and says why not otherwise.
@@ -29,5 +29,19 @@ describe("template gallery", () => {
     expect(cadenceWords("1h")).toBe("every hour");
     expect(cadenceWords("30m")).toBe("every 30 minutes");
     expect(cadenceWords("weird")).toBe("every weird");
+  });
+});
+
+// The roles codecast itself offers at the top of the gallery (org-staffing.md
+// S6, S30): each until one stands, and never once it does.
+describe("built-in hires", () => {
+  test("both offered in an empty org; each hidden once it stands; a retired one counts as gone", () => {
+    expect(builtinHires([], { assistant: false })).toEqual([HEAD_OF_PEOPLE_HIRE, EXECUTIVE_ASSISTANT_HIRE]);
+    expect(builtinHires([{ handle: "growth", status: "active" }], { assistant: false })).toEqual([HEAD_OF_PEOPLE_HIRE, EXECUTIVE_ASSISTANT_HIRE]);
+    expect(builtinHires([{ handle: "head-of-people", status: "active" }], { assistant: false })).toEqual([EXECUTIVE_ASSISTANT_HIRE]);
+    // The old handle still names the Head of People.
+    expect(builtinHires([{ handle: "chief-of-staff", status: "active" }], { assistant: false })).toEqual([EXECUTIVE_ASSISTANT_HIRE]);
+    expect(builtinHires([{ handle: "head-of-people", status: "retired" }], { assistant: true })).toEqual([HEAD_OF_PEOPLE_HIRE]);
+    expect(builtinHires([{ handle: "head-of-people", status: "active" }], { assistant: true })).toEqual([]);
   });
 });

@@ -1,9 +1,15 @@
-import { useMemo, useState } from "react";
+import { lazy, Suspense, useMemo, useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { captureException } from "@sentry/react";
 import { ArrowLeft, Copy } from "lucide-react";
 import { TemplateGallery } from "./TemplateGallery";
-import { cannotHireReason, type CatalogTemplate } from "./templateCatalog";
+import { builtinHires, cannotHireReason, EXECUTIVE_ASSISTANT_HIRE, HEAD_OF_PEOPLE_HIRE, type BuiltinHire, type CatalogTemplate } from "./templateCatalog";
+// The seat cards live with the conversation surface; loaded on pick, as the
+// header panel loads them, so the hire dialog's graph never reaches the chat.
+const HireHeadOfPeopleCard = lazy(() => import("../anchor/AnchorConversation").then((m) => ({ default: m.HireHeadOfPeopleCard })));
+const HireAssistantCard = lazy(() => import("../anchor/AnchorConversation").then((m) => ({ default: m.HireAssistantCard })));
+import { useAnchors } from "../../hooks/useSyncAnchors";
+import { globalAssistantOf } from "../../lib/headerPins";
 import { copyToClipboard } from "../../lib/utils";
 import { inWorkspace } from "../../lib/workspaceScope";
 import { SelectBox } from "../ui/select-box";
@@ -36,6 +42,12 @@ export function OrgTemplateHire({ projects, workspace, roles = [], initialProjec
   const { propose } = useTemplateActions();
   const available = projects.filter((p) => p.workspace && inWorkspace(p, `${workspace.kind}:${workspace.id}`));
   const [templateId, setTemplateId] = useState("");
+  // The roles codecast itself offers (org-staffing.md S6, S30), each hidden
+  // once one stands: the Head of People is a role of this workspace; the
+  // Executive Assistant is the person's, read from the seats they can see.
+  const anchors = useAnchors();
+  const builtins = useMemo(() => builtinHires(roles, { assistant: !!globalAssistantOf(anchors) }), [roles, anchors]);
+  const [builtin, setBuiltin] = useState<BuiltinHire["id"] | "">("");
   const [projectId, setProjectId] = useState(initialProjectId);
   const [instance, setInstance] = useState("");
   const [instanceTouched, setInstanceTouched] = useState(false);
@@ -49,7 +61,7 @@ export function OrgTemplateHire({ projects, workspace, roles = [], initialProjec
   const [error, setError] = useState<string | null>(null);
 
   const template = templates.find((t) => t.template_id === templateId) ?? null;
-  useWatchEffect(() => { onStage?.(template || posted ? "form" : "gallery"); }, [template, posted, onStage]);
+  useWatchEffect(() => { onStage?.(template || posted || builtin ? "form" : "gallery"); }, [template, posted, builtin, onStage]);
   const project = available.find((p) => p._id === projectId) ?? null;
   // The project's lead (R4, W9 I2): a live role whose scope names the project.
   const lead = useMemo(() => project ? roles.find((r) => r.status !== "retired" && ((r.scope as any)?.project_ids ?? []).some((id: string) => id === project._id)) ?? null : null, [roles, project]);
@@ -87,12 +99,33 @@ export function OrgTemplateHire({ projects, workspace, roles = [], initialProjec
     );
   }
 
+  // A built-in hire (S6, S30): the existing card for that seat, through its
+  // own path (the staff mutation, hireExecutiveAssistant), inside the dialog.
+  if (builtin) {
+    const hire = builtin === "head-of-people" ? HEAD_OF_PEOPLE_HIRE : EXECUTIVE_ASSISTANT_HIRE;
+    return (
+      <div className="flex flex-col gap-3" data-builtin-hire-stage={builtin}>
+        <div className="flex items-center gap-3 rounded-lg border border-sol-border/50 px-3 py-2.5" style={{ background: "linear-gradient(160deg, color-mix(in srgb, var(--sol-cyan) 8%, var(--sol-card)) 0%, var(--sol-card) 60%)" }}>
+          <RoleAvatar avatar={avatarOf({ handle: hire.handle })} size={36} className="shrink-0 rounded-full" />
+          <div className="min-w-0 flex-1">
+            <p className="text-[13.5px] font-semibold text-sol-text" style={{ fontFamily: "var(--font-serif)" }}>{hire.name} <span className="text-[10.5px] font-normal text-sol-text-dim" style={{ fontFamily: "var(--font-mono)" }}>@{hire.handle}</span></p>
+            <p className="truncate text-[11.5px] text-sol-text-muted">{hire.description}</p>
+          </div>
+          <button type="button" onClick={() => setBuiltin("")} className="inline-flex shrink-0 items-center gap-1 text-[11.5px] text-sol-text-muted underline-offset-2 hover:underline" data-template-back><ArrowLeft className="h-3 w-3" /> All templates</button>
+        </div>
+        <Suspense fallback={<div className="h-[260px] rounded-xl border border-sol-border/40 bg-sol-bg-alt/60 animate-pulse" aria-busy="true" />}>
+          {builtin === "head-of-people" ? <HireHeadOfPeopleCard compact onHired={onClose} /> : <HireAssistantCard compact onHired={onClose} />}
+        </Suspense>
+      </div>
+    );
+  }
+
   // The gallery (H3): every template this workspace may hire, one card each;
   // a card offers the hire only when the workspace can take it.
   if (!template) {
     return (
       <div className="flex flex-col gap-3" data-template-gallery-stage>
-        <TemplateGallery templates={templates} ready={ready} projectCount={available.length} error={catalogError} onPick={(id) => { const t = templates.find((x) => x.template_id === id); if (t && !cannotHireReason(t, available.length)) { setTemplateId(id); setConfig({}); } }} />
+        <TemplateGallery templates={templates} ready={ready} projectCount={available.length} error={catalogError} builtins={builtins} onPickBuiltin={setBuiltin} onPick={(id) => { const t = templates.find((x) => x.template_id === id); if (t && !cannotHireReason(t, available.length)) { setTemplateId(id); setConfig({}); } }} />
         <FolderPath projects={available} workspace={workspace} initialProjectId={projectId} projectPath={projectPath} />
       </div>
     );
