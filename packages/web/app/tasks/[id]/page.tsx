@@ -9,7 +9,7 @@ import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useTabActive } from "../../../hooks/usePagePresence";
 import { useParams, useRouter } from "next/navigation";
 import { useInboxStore, TaskDetail, TaskItem, resolveAssigneeInfo } from "../../../store/inboxStore";
-import { resolveTaskLinkedConversations, resolveTaskRelatedDocs, taskLinkedConversationIds } from "../../../lib/liveEntities";
+import { resolveTaskLinkedConversations, resolveTaskRelatedDocs, taskLinkedConversationIds, taskOwnerOf } from "../../../lib/liveEntities";
 import { useWorkspaceCollection } from "../../../hooks/useWorkspaceCollection";
 import { useSyncTasks, useSyncTaskDetail } from "../../../hooks/useSyncTasks";
 import { useSyncTaskExternalEvents, useExternalEvents, externalEventsOldestFirst } from "../../../hooks/useSyncExternalEvents";
@@ -42,6 +42,8 @@ import { AssigneeFace } from "../../../components/identity/AssigneeFace";
 import { useOrgRoles } from "../../../hooks/useOrgRoles";
 import { useSyncOrgTreeFeeder } from "../../../hooks/useSyncOrgTree";
 import { TaskSessionList } from "../../../components/tasks/TaskSessionList";
+import { WorkUnitBar } from "../../../components/work/WorkUnitBar";
+import { TaskWorkPanel } from "../../../components/work/TaskWorkPanel";
 import { WatchButton } from "../../../components/WatchButton";
 import { Badge } from "../../../components/ui/badge";
 import { getLabelColor } from "../../../lib/labelColors";
@@ -540,7 +542,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
   const linkedIds = useMemo(() => taskLinkedConversationIds(data), [data?.created_from_conversation, (data as any)?.conversation_ids]);
   const linkedSig = useInboxStore((s) => linkedIds.map((cid) => {
     const r = s.sessions[cid];
-    if (r) return `${cid}:${r.title}:${r.is_idle}:${r.updated_at}:${r.message_count}`;
+    if (r) return `${cid}:${r.title}:${r.is_idle}:${r.updated_at}:${r.message_count}:${r.active_task?._id ?? ""}`;
     return s.taskOriginBadges[cid] ? `${cid}:badge` : "";
   }).join("|"));
   // eslint-disable-next-line react-hooks/exhaustive-deps -- linkedSig stands in for the churny sessions ref
@@ -549,6 +551,10 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
     return resolveTaskLinkedConversations(data, s.sessions, s.taskOriginBadges);
   }, [data?.linked_conversations, linkedIds, linkedSig]);
   const originSession = linkedConversations.find((c: any) => c._id === data?.created_from_conversation);
+  // The task's one owning session (convex lib/taskOwner.ts), read off the
+  // live session rows: it heads the page as the other face of this task.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- linkedSig stands in for the churny sessions ref
+  const ownerSession = useMemo(() => taskOwnerOf(linkedConversations, useInboxStore.getState().sessions, (data as any)?._id), [linkedConversations, (data as any)?._id, linkedSig]);
   // External events for this task are their own synced collection: mount the task
   // feeder and read the store, never the query. The route id may be the short
   // id, so match on both it and the convex id.
@@ -739,6 +745,11 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
           <div className="absolute inset-0 z-50 flex items-center justify-center bg-sol-bg/80 border-2 border-dashed border-sol-cyan rounded-xl pointer-events-none">
             <p className="text-sol-cyan text-sm font-medium">Drop images to attach</p>
           </div>
+        )}
+        {/* Task and its owning session, one unit: the same bar the session
+            page draws (components/work/WorkUnitBar). */}
+        {ownerSession && !isInline && (
+          <WorkUnitBar face="task" task={{ _id: data._id, short_id: data.short_id, title: data.title, status: data.status }} session={ownerSession} />
         )}
         <div className="flex-1 overflow-y-auto">
         <div className="flex flex-col min-h-full">
@@ -1034,6 +1045,9 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
             </MaybeFolded>
           </div>
 
+          {/* The session doing this task: its state, last turns and composer */}
+          {ownerSession && <TaskWorkPanel session={ownerSession} />}
+
           {!blockedOnDecision && <TaskDecisions taskId={data._id} />}
 
           {/* The run (L10): its gate renders the decision card */}
@@ -1053,9 +1067,8 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
           <SubtasksSection task={data} requestClose={requestClose} onNavigate={(tid) => router.push(`/tasks/${tid}`)} />
 
           <TaskSessionList
-            sessions={linkedConversations}
+            sessions={ownerSession ? linkedConversations.filter((c: any) => c._id !== ownerSession._id) : linkedConversations}
             originId={data.created_from_conversation}
-            taskId={(data as any)._id}
             onOpen={openLinkedSession}
           />
 

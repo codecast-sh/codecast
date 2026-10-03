@@ -46,25 +46,7 @@ export type TaskLinkedSession = {
   producing_until?: number | null;
   daemon_alive_until?: number | null;
   agent_status_updated_at?: number | null;
-  /** Server snapshot: this session is the task's one owner (lib/taskOwner.ts). */
-  is_owner?: boolean;
-  active_task?: { _id: string } | null;
-  recent_messages?: Array<{ role: string; content: string }>;
 };
-
-/** Does this session own the task? The binding lives on the session
- *  (active_task), so a store row decides; the detail snapshot's flag stands
- *  in only for a session the store does not hold. */
-function ownsTask(snapshot: TaskLinkedSession, live: any | undefined, taskId: string | null | undefined): boolean {
-  if (!taskId) return !!snapshot.is_owner;
-  return live ? live.active_task?._id === taskId : !!snapshot.is_owner;
-}
-
-/** The owner's latest words, for the task page to show what it is doing. */
-function latestAgentLine(conv: TaskLinkedSession): string | null {
-  const msg = [...(conv.recent_messages ?? [])].reverse().find((m) => m.role === "assistant" && m.content.trim());
-  return msg ? msg.content.trim().replace(/\s+/g, " ") : null;
-}
 
 function rowIsLive(conv: TaskLinkedSession, now: number): boolean {
   // Heartbeat facts come from the store; the detail snapshot only has is_active.
@@ -80,7 +62,6 @@ function liveRowSig(row: any | undefined): string {
     row.title, row.subtitle, row.headline, row.is_idle, row.updated_at, row.message_count,
     row.agent_type, row.agent_status, row.git_branch, row.git_root, row.project_path,
     row.thread_state, row.thread_state_status, row.thread_state_at, row.last_user_message,
-    row.active_task?._id,
   ].join("\u0001");
 }
 
@@ -251,13 +232,10 @@ export function TaskSessionRow({
 export function TaskSessionList({
   sessions,
   originId,
-  taskId,
   onOpen,
 }: {
   sessions: TaskLinkedSession[];
   originId?: string | null;
-  /** The task's convex id: its owning session is marked and listed first. */
-  taskId?: string | null;
   onOpen: (conv: TaskLinkedSession) => void;
 }) {
   const now = useCoarseNow(30_000);
@@ -267,13 +245,11 @@ export function TaskSessionList({
     // twice; one row per id keeps React keys unique.
     const seen = new Set<string>();
     const unique = sessions.filter((c) => (seen.has(String(c._id)) ? false : (seen.add(String(c._id)), true)));
-    const store = useInboxStore.getState().sessions;
-    const overlaid = unique.map((c) => ({ ...overlayLive(c, store[c._id]), is_owner: ownsTask(c, store[c._id], taskId) }));
-    const sorted = sortTaskLinkedConversations(overlaid, originId);
-    return [...sorted.filter((c) => c.is_owner), ...sorted.filter((c) => !c.is_owner)];
+    const overlaid = unique.map((c) => overlayLive(c, useInboxStore.getState().sessions[c._id]));
+    return sortTaskLinkedConversations(overlaid, originId);
     // liveSig stands in for the churny sessions ref
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessions, originId, taskId, liveSig]);
+  }, [sessions, originId, liveSig]);
   const liveCount = rows.filter((c) => rowIsLive(c, now)).length;
 
   if (rows.length === 0) return null;
@@ -291,34 +267,15 @@ export function TaskSessionList({
         )}
       </div>
       <div className="space-y-0.5 -mx-1">
-        {rows.map((conv) => {
-          const latest = conv.is_owner ? latestAgentLine(conv) : null;
-          return (
-            <div key={conv._id}>
-              <TaskSessionRow
-                snapshot={conv}
-                origin={!!originId && conv._id === originId}
-                onOpen={onOpen}
-                now={now}
-                tone={conv.is_owner ? "current" : undefined}
-                prominent={conv.is_owner}
-                badge={conv.is_owner ? (
-                  <span
-                    className="flex-shrink-0 text-[9px] font-medium px-1 py-px rounded bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/25"
-                    title="The one session bound to this task. Another session starting it must coordinate or take it over."
-                  >
-                    owner
-                  </span>
-                ) : undefined}
-              />
-              {latest && (
-                <p className="ml-9 mr-2 mb-1.5 pl-2 border-l border-sol-cyan/30 text-[11px] leading-snug text-sol-text-muted line-clamp-2">
-                  {latest}
-                </p>
-              )}
-            </div>
-          );
-        })}
+        {rows.map((conv) => (
+          <TaskSessionRow
+            key={conv._id}
+            snapshot={conv}
+            origin={!!originId && conv._id === originId}
+            onOpen={onOpen}
+            now={now}
+          />
+        ))}
       </div>
     </div>
   );
