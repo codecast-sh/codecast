@@ -4,6 +4,8 @@ import {
   MILESTONE_WINDOW_MS,
   PEEK_DELAY_MS,
   WALK_IDLE,
+  createFieldUndoGuard,
+  fieldOwnsStep,
   walk,
   walkTimer,
   walkView,
@@ -122,5 +124,109 @@ describe("held-modifier undo walk", () => {
     // Too far apart, or a redo: no milestone.
     expect(walk(first, undo(T0 + MILESTONE_WINDOW_MS + 1)).milestone).toBe(false);
     expect(walk(first, redo(T0 + 100)).milestone).toBe(false);
+  });
+});
+
+// ⌘Z from an empty field reaches app undo only when the field has no newer
+// history of its own: a triage chord from the empty composer is taken back,
+// a draft the user just cleared comes back in the field.
+describe("fieldOwnsStep", () => {
+  const history = {
+    items: [{ id: "b", ts: 200, undoneAt: 500 }, { id: "a", ts: 100 }],
+    undoOrder: ["a"],
+    redoOrder: ["b"],
+  };
+  test("a field never edited hands the press to the app", () => {
+    expect(fieldOwnsStep("undo", undefined, history)).toBe(false);
+  });
+  test("a field edited before the entry was recorded hands the press to the app", () => {
+    expect(fieldOwnsStep("undo", 50, history)).toBe(false);
+  });
+  test("a field edited after the entry keeps the press", () => {
+    expect(fieldOwnsStep("undo", 150, history)).toBe(true);
+  });
+  test("redo compares with when the entry was taken back", () => {
+    expect(fieldOwnsStep("redo", 300, history)).toBe(false);
+    expect(fieldOwnsStep("redo", 600, history)).toBe(true);
+  });
+  test("an edited field keeps the press when the app has nothing to step", () => {
+    expect(fieldOwnsStep("undo", 1, { items: [], undoOrder: [], redoOrder: [] })).toBe(true);
+  });
+});
+
+// A press the field declined goes to the browser. When the browser had
+// nothing left to take back in that field, the press reaches the app instead.
+describe("createFieldUndoGuard", () => {
+  const history = { items: [{ id: "a", ts: 100 }], undoOrder: ["a"], redoOrder: [] as string[] };
+  const setup = () => {
+    let now = 0;
+    const deferred: Array<() => void> = [];
+    const guard = createFieldUndoGuard({ now: () => now, defer: (fn) => deferred.push(fn) });
+    const flush = () => deferred.splice(0).forEach((fn) => fn());
+    return { guard, flush, at: (t: number) => (now = t) };
+  };
+  const field = {};
+
+  test("edit after the entry, undo the edits back to empty, then ⌘Z reaches the app", () => {
+    const { guard, flush, at } = setup();
+    let appSteps = 0;
+    const app = () => { appSteps += 1; };
+    at(150);
+    guard.edited(field); // typed "h"
+    guard.edited(field); // typed "hm"
+    // Each native undo produces an input in the field: the field keeps the press.
+    for (let i = 0; i < 2; i++) {
+      expect(guard.declines("undo", field, history, app)).toBe(true);
+      guard.edited(field);
+      flush();
+    }
+    expect(appSteps).toBe(0);
+    // The field's history is spent: the browser does nothing, so the app steps.
+    expect(guard.declines("undo", field, history, app)).toBe(true);
+    flush();
+    expect(appSteps).toBe(1);
+    // And from then on the press goes straight to the app.
+    expect(guard.declines("undo", field, history, app)).toBe(false);
+  });
+
+  test("one press reaching the guard twice falls back once", () => {
+    const { guard, flush, at } = setup();
+    let appSteps = 0;
+    at(150);
+    guard.edited(field);
+    expect(guard.declines("undo", field, history, () => { appSteps += 1; })).toBe(true);
+    expect(guard.declines("undo", field, history, () => { appSteps += 1; })).toBe(true);
+    flush();
+    expect(appSteps).toBe(1);
+  });
+
+  test("a browser that says it has nothing left hands the press to the app at once", () => {
+    const { guard, flush, at } = setup();
+    let appSteps = 0;
+    const app = () => { appSteps += 1; };
+    at(150);
+    guard.edited(field);
+    expect(guard.declines("undo", field, history, app, true)).toBe(true);
+    flush();
+    expect(appSteps).toBe(0);
+    expect(guard.declines("undo", field, history, app, false)).toBe(false);
+    // The field is spent: no later press defers to it, whatever the browser says.
+    expect(guard.declines("undo", field, history, app, true)).toBe(false);
+    flush();
+    expect(appSteps).toBe(0);
+  });
+
+  test("a field never edited after the entry never declines", () => {
+    const { guard, at } = setup();
+    at(50);
+    guard.edited(field);
+    expect(guard.declines("undo", field, history, () => {})).toBe(false);
+  });
+
+  test("a press after an entry redone later than the edit reaches the app", () => {
+    const { guard, at } = setup();
+    at(150);
+    guard.edited(field);
+    expect(guard.declines("undo", field, { ...history, items: [{ id: "a", ts: 100, redoneAt: 200 }] }, () => {})).toBe(false);
   });
 });

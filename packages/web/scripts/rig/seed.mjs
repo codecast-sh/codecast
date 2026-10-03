@@ -7,8 +7,9 @@
 //
 // The world (people, team, features) is idempotent and stays between runs.
 // The fixtures a leg reads (one session with two messages, one chat channel)
-// are made fresh each run and the previous run's are removed, so every run's
-// screens start from the same state and the baselines compare like with like.
+// are made fresh each run and the previous run's are removed, and each
+// person's open tabs are closed, so every run's screens start from the same
+// state and the baselines compare like with like.
 import { adminClient } from "./stack.mjs";
 
 export const SMOKE_PEOPLE = {
@@ -66,6 +67,17 @@ export async function seedWorld(dep) {
 export async function seedRun(dep, world) {
   requireLocal(dep);
   const riley = adminClient(dep, world.riley);
+  // The open tabs live on the server (client_state), and a fresh browser
+  // adopts them: the previous run's last page and its session's tab would
+  // come back, the tab strip in every shot would depend on whether that
+  // run's last tab write landed, and a tab on the deleted session would
+  // bring its title back as a row. Close them all, as closing every tab
+  // does (the same patch rail), before the session goes.
+  for (const id of [world.riley, world.jordan]) {
+    await adminClient(dep, id).mutation("dispatch:dispatch", {
+      action: "closeTab", args: [], patches: { client_state: { [id]: { tabs: null, activeTabId: null, current_conversation_id: null } } },
+    });
+  }
   // deleteByProjectHash removes one session 50 messages a call.
   for (let convId, i = 0; i < 50; i++) {
     const r = await riley.mutation("conversations:deleteByProjectHash", { project_hash: SMOKE_PROJECT_HASH, ...(convId ? { conv_id: convId } : {}) });

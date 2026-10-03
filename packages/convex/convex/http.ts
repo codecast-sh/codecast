@@ -13,7 +13,12 @@ import { readConversationRange } from "./conversations";
 import { SHARED_CALL_VIDEO_PATHS, signForCli } from "./callRecordings";
 import { callRecordingsBucketFromEnv, r2FreshGetUrl } from "./lib/r2";
 import { ipRateLimited } from "./lib/httpRateLimit";
+import { CLI_ERROR_STATUS } from "./lib/cliErrorStatus";
+import { INGEST_PREFIXES, ingestPreflight, ingestServe } from "./ingestHttp";
+import { REPLAY_CHUNK_PATH, REPLAY_SIGN_PREFIXES, replayChunk, replayChunkPreflight, replaySign } from "./replaysHttp";
+import { signReplayChunks } from "./replays";
 import { timingSafeEqualHex } from "./lib/hmac";
+import { sentryWebhook, setEventGroupStatus } from "./sources/sentry";
 import {
   serve as repoPublicServe,
   preflight as repoPublicPreflight,
@@ -326,6 +331,11 @@ http.route({
     });
   }),
 });
+
+// Sentry issue and alert hooks (external-data.md X2, X7): verified, deduped by
+// Request-ID and scheduled in sources/sentry.ts, so a test drives the real
+// handler.
+http.route({ path: "/api/webhooks/sentry", method: "POST", handler: sentryWebhook });
 
 // Linear webhooks (issue sync, docs/architecture/issue-sync.md S6). Same shape
 // as the GitHub App route above: verify the raw body, refuse anything we cannot
@@ -3831,17 +3841,6 @@ http.route({
 });
 
 
-// The HTTP status for each structured failure code a mutation can raise (see
-// chat.ts `chatFail`). Anything unmapped is a 500, which is what an unstructured
-// throw already was.
-const CLI_ERROR_STATUS: Record<string, number> = {
-  UNAUTHENTICATED: 401,
-  FORBIDDEN: 403,
-  NOT_FOUND: 404,
-  INVALID: 400,
-  CONFLICT: 409,
-  RATE_LIMITED: 429,
-};
 
 function cliRoute(
   path: string,
@@ -4381,6 +4380,16 @@ cliRoute("/cli/calls/recordings", async (ctx, body) => {
   const res = await ctx.runQuery(internal.callRecordings.cliCallRecordings, { api_token: body.api_token, call: body.call });
   return res ? await signForCli(res) : null;
 });
+// `cast call snap --share`: tie a frame just uploaded as a public image to
+// the recording file it came from, so deleting the recording deletes it.
+// body: { recording_id, storage_id }.
+cliRoute("/cli/calls/frame-share", async (ctx, body) => {
+  return await ctx.runMutation(internal.callRecordings.cliNoteFrameShare, {
+    api_token: body.api_token,
+    recording_id: String(body.recording_id ?? ""),
+    storage_id: String(body.storage_id ?? ""),
+  });
+});
 // `cast call hold <duration>|off`: a fed agent asks its huddle for time.
 cliRoute("/cli/calls/hold", async (ctx, body) => {
   return await ctx.runMutation(api.transcripts.cliHoldCall, body);
@@ -4449,6 +4458,9 @@ cliRoute("/cli/integrations/list", async (ctx, body) => {
 });
 cliRoute("/cli/integrations/connect-url", async (ctx, body) => {
   return await ctx.runAction(api.integrations.cliConnectUrl, body);
+});
+cliRoute("/cli/integrations/connect-token", async (ctx, body) => {
+  return await ctx.runAction(api.integrations.cliConnectToken, body);
 });
 cliRoute("/cli/integrations/disconnect", async (ctx, body) => {
   return await ctx.runAction(api.integrations.cliDisconnect, body);
@@ -4939,6 +4951,46 @@ cliRoute("/cli/terminal/input", async (ctx, body) => ctx.runMutation(api.termina
 cliRoute("/cli/images/upload-url", async (ctx, body) => ctx.runMutation(api.images.generateUploadUrl, body));
 cliRoute("/cli/images/url", async (ctx, body) => ({ url: await ctx.runQuery(api.images.getImageUrl, body) }));
 
+// `cast replay ls|show|repro` (external-data.md X5). Show carries chunk URLs
+// signed at request time, never keys, the way /cli/calls/recordings does.
+cliRoute("/cli/replays/list", async (ctx, body) => ({ replays: await ctx.runQuery(api.replays.list, body) }));
+cliRoute("/cli/replays/get", async (ctx, body) => signReplayChunks(await ctx.runQuery(internal.replays.cliGet, body)));
+cliRoute("/cli/replays/recordings", async (ctx, body) => ctx.runAction(api.sources.posthog.listRecordings, body));
+cliRoute("/cli/replays/import", async (ctx, body) => ctx.runAction(api.sources.posthog.importRecording, body));
+// A replay row that mirrors a vendor recording (a Sentry replay linked to an
+// issue, a listed PostHog one), imported the first time it is read.
+cliRoute("/cli/replays/import-linked", async (ctx, body) => ctx.runAction(api.sources.vendorReplay.importLinked, body));
+
+// `cast sources`, `cast events`, `cast metrics` and `cast connector`
+// (external-data.md X10): thin doors onto the functions the web reads, each of
+// which authenticates the api_token and holds rows to the workspace key itself.
+cliRoute("/cli/sources/list", async (ctx, body) => ctx.runQuery(api.ingest.listSources, body));
+cliRoute("/cli/sources/get", async (ctx, body) => ctx.runQuery(api.ingest.getSource, body));
+cliRoute("/cli/sources/create", async (ctx, body) => ctx.runMutation(api.ingest.createSource, body));
+cliRoute("/cli/sources/update", async (ctx, body) => ctx.runMutation(api.ingest.updateSource, body));
+cliRoute("/cli/sources/rotate-key", async (ctx, body) => ctx.runMutation(api.ingest.rotateKey, body));
+cliRoute("/cli/sources/remove", async (ctx, body) => ctx.runMutation(api.ingest.removeSource, body));
+cliRoute("/cli/events/list", async (ctx, body) => ctx.runQuery(api.ingest.listEvents, body));
+cliRoute("/cli/events/groups", async (ctx, body) => ctx.runQuery(api.ingest.listGroups, body));
+cliRoute("/cli/events/group", async (ctx, body) => ctx.runQuery(api.ingest.getGroup, body));
+cliRoute("/cli/events/issue", async (ctx, body) => ctx.runAction(api.sources.sentry.issueDetail, body));
+// A group mirrored from Sentry is resolved or ignored in Sentry, and the
+// mirror follows what Sentry answers; any other group changes here.
+cliRoute("/cli/events/set-status", async (ctx, body) => setEventGroupStatus(ctx, body));
+cliRoute("/cli/metrics/list", async (ctx, body) => ctx.runQuery(api.metrics.listWatches, body));
+cliRoute("/cli/metrics/get", async (ctx, body) => ctx.runQuery(api.metrics.getWatch, body));
+cliRoute("/cli/metrics/create", async (ctx, body) => ctx.runMutation(api.metrics.createWatch, body));
+cliRoute("/cli/metrics/update", async (ctx, body) => ctx.runMutation(api.metrics.updateWatch, body));
+cliRoute("/cli/metrics/remove", async (ctx, body) => ctx.runMutation(api.metrics.removeWatch, body));
+cliRoute("/cli/metrics/query", async (ctx, body) => ctx.runAction(api.sources.posthog.query, body));
+cliRoute("/cli/connector/capabilities", async (ctx, body) => ctx.runQuery(api.sources.app.capabilities, body));
+cliRoute("/cli/connector/read", async (ctx, body) => ctx.runAction(api.sources.app.read, body));
+cliRoute("/cli/connector/do", async (ctx, body) => ctx.runAction(api.sources.app.doAction, body));
+cliRoute("/cli/connector/refresh", async (ctx, body) => ctx.runAction(api.sources.app.refresh, body));
+cliRoute("/cli/connector/calls", async (ctx, body) => ctx.runQuery(api.sources.app.listCalls, body));
+// No grant or revoke door: grants are a person's, made in the browser
+// (sources/app.ts grant refuses an api token), never from an agent's CLI.
+
 cliRoute("/cli/artifacts/list", async (ctx, body) => ctx.runQuery(api.artifacts.listFromCLI, body));
 cliRoute("/cli/artifacts/delete", async (ctx, body) => ctx.runMutation(api.artifacts.deleteFromCLI, body));
 // Evidence (docs/architecture/the-line.md L6): `cast task handoff --page`
@@ -4995,6 +5047,25 @@ for (const prefix of repoPublicPrefixes) {
   http.route({ pathPrefix: prefix, method: "GET", handler: repoPublicServe });
   http.route({ pathPrefix: prefix, method: "OPTIONS", handler: repoPublicPreflight });
 }
+
+// The ingest door (external-data.md X2), on both prefixes for the same reason
+// as the public repo routes above. The handler is ingestHttp.ts.
+for (const prefix of INGEST_PREFIXES) {
+  http.route({ pathPrefix: prefix, method: "POST", handler: ingestServe });
+  http.route({ pathPrefix: prefix, method: "OPTIONS", handler: ingestPreflight });
+}
+
+// Replay chunk uploads (external-data.md X5): the SDK signs one PUT per chunk
+// at <prefix><key>. A longer prefix than the door's, so the router sends it
+// here and everything else under /cli/ingest/ to the door. Preflight is the
+// door's, so the SDK sees one CORS answer. Handlers are replaysHttp.ts.
+for (const prefix of REPLAY_SIGN_PREFIXES) {
+  http.route({ pathPrefix: prefix, method: "POST", handler: replaySign });
+  http.route({ pathPrefix: prefix, method: "OPTIONS", handler: ingestPreflight });
+}
+// One chunk of a replay the reader may see: a 302 to a URL signed now.
+http.route({ path: REPLAY_CHUNK_PATH, method: "GET", handler: replayChunk });
+http.route({ path: REPLAY_CHUNK_PATH, method: "OPTIONS", handler: replayChunkPreflight });
 
 // One-click unsubscribe for the notification digest (emails/digest.ts). Lives
 // under /cli/ because Caddy forwards only that prefix to HTTP actions. GET

@@ -184,7 +184,7 @@ function unb64(s: string): Uint8Array<ArrayBuffer> {
   return out;
 }
 
-async function refreshTokenAesKey(secret: string): Promise<CryptoKey> {
+async function refreshTokenAesKey(secret: string, info: string): Promise<CryptoKey> {
   const raw = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), "HKDF", false, [
     "deriveKey",
   ]);
@@ -193,7 +193,7 @@ async function refreshTokenAesKey(secret: string): Promise<CryptoKey> {
       name: "HKDF",
       hash: PROVIDER_KEY_HKDF_HASH,
       salt: new Uint8Array(0),
-      info: new TextEncoder().encode(REFRESH_TOKEN_HKDF_INFO),
+      info: new TextEncoder().encode(info),
     },
     raw,
     { name: PROVIDER_KEY_AES_ALGO, length: PROVIDER_KEY_AES_KEY_BITS },
@@ -202,20 +202,32 @@ async function refreshTokenAesKey(secret: string): Promise<CryptoKey> {
   );
 }
 
-export async function encryptRefreshToken(plaintext: string, secret: string): Promise<string> {
+/** `info` domain-separates the derived key: the OAuth connectors keep the
+ *  default, token connectors (tokenConnectors.ts) pass their own, so a
+ *  ciphertext from one family never decrypts under the other's key even when
+ *  the secrets match. */
+export async function encryptRefreshToken(
+  plaintext: string,
+  secret: string,
+  info: string = REFRESH_TOKEN_HKDF_INFO,
+): Promise<string> {
   const iv = crypto.getRandomValues(new Uint8Array(PROVIDER_KEY_GCM_IV_BYTES));
-  const key = await refreshTokenAesKey(secret);
+  const key = await refreshTokenAesKey(secret, info);
   const ct = new Uint8Array(
     await crypto.subtle.encrypt({ name: PROVIDER_KEY_AES_ALGO, iv }, key, new TextEncoder().encode(plaintext)),
   );
   return `${REFRESH_TOKEN_ENC_VERSION}.${b64(iv)}.${b64(ct)}`;
 }
 
-export async function decryptRefreshToken(enc: string, secret: string): Promise<string | null> {
+export async function decryptRefreshToken(
+  enc: string,
+  secret: string,
+  info: string = REFRESH_TOKEN_HKDF_INFO,
+): Promise<string | null> {
   const [version, ivB64, ctB64] = enc.split(".");
   if (version !== REFRESH_TOKEN_ENC_VERSION || !ivB64 || !ctB64) return null;
   try {
-    const key = await refreshTokenAesKey(secret);
+    const key = await refreshTokenAesKey(secret, info);
     const pt = await crypto.subtle.decrypt(
       { name: PROVIDER_KEY_AES_ALGO, iv: unb64(ivB64) },
       key,

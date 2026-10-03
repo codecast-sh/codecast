@@ -11,17 +11,12 @@ import { KeyCap } from "../KeyboardShortcutsHelp";
 type Handler = () => boolean;
 
 export type ChangesKeyHandlers = {
-  prevDay: Handler;
-  nextDay: Handler;
   today: Handler;
   next: Handler;
   prev: Handler;
   evidence: Handler;
   open: Handler;
-  waiting: Handler;
   risks: Handler;
-  branches: Handler;
-  mode: Handler;
   filter: Handler;
   copyLink: Handler;
   escape: Handler;
@@ -43,6 +38,11 @@ export function keepsOwnEnter(active: Element | null): boolean {
   return !!ctl && !ctl.matches("[data-story-trigger]") && !ctl.matches("button[data-story-key]");
 }
 
+/** The commit page the focused control belongs to, when focus is in a commit row of an evidence drawer (`o` opens it, spec 3.3). */
+export function focusedCommitHref(active: Element | null): string | null {
+  return active?.closest<HTMLElement>("[data-commit-href]")?.dataset.commitHref ?? null;
+}
+
 export type EscapeStep = "clear-text" | "leave-field" | "close-story" | "clear-filters" | "close-filter" | null;
 
 /**
@@ -62,17 +62,12 @@ export function useChangesKeys(active: boolean, h: ChangesKeyHandlers): void {
   useShortcutContext("changes", active);
   // One gate for every key: the page must be the active pane, with no menu open over it.
   const here = useCallback((fn: Handler) => () => (active && !layerOpen() ? fn() : false), [active]);
-  useShortcutAction("changes.prevDay", here(h.prevDay));
-  useShortcutAction("changes.nextDay", here(h.nextDay));
   useShortcutAction("changes.today", here(h.today));
   useShortcutAction("changes.next", here(h.next));
   useShortcutAction("changes.prev", here(h.prev));
   useShortcutAction("changes.evidence", here(h.evidence));
   useShortcutAction("changes.open", here(h.open));
-  useShortcutAction("changes.waiting", here(h.waiting));
   useShortcutAction("changes.risks", here(h.risks));
-  useShortcutAction("changes.branches", here(h.branches));
-  useShortcutAction("changes.mode", here(h.mode));
   useShortcutAction("changes.filter", here(h.filter));
   useShortcutAction("changes.copyLink", here(h.copyLink));
   useShortcutAction("changes.escape", here(h.escape));

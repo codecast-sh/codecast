@@ -13,7 +13,7 @@ import {
 } from "../../store/clientSyncRegistry";
 import { useInboxStore } from "../../store/inboxStore";
 import { applyCollectionFeed } from "../useSyncCollection";
-import { changesWindow, selectStories, storySessionsScope, storySyncOpts } from "../useSyncChanges";
+import { changesWindow, liveScope, selectStories, storySessionsScope, storySyncOpts, worksScope } from "../useSyncChanges";
 
 const TEAM = "team_a";
 const OTHER = "team_b";
@@ -47,11 +47,11 @@ describe("registration", () => {
     expect(REGISTERED_FEEDS["changesQueries.storyEvidence"]).toBe("commits");
   });
 
-  it("windows are deltas, the now-shaped feeds are snapshots", () => {
+  it("every Changes feed is a delta: windows by day, the live strip and In the works by repository", () => {
     expect(REGISTRY_SYNC_OPTS.changeStories?.isDelta).toBe(true);
     expect(REGISTRY_SYNC_OPTS.changeEditions?.isDelta).toBe(true);
-    expect(REGISTRY_SYNC_OPTS.changeLive?.isDelta).toBeFalsy();
-    expect(REGISTRY_SYNC_OPTS.changeWorks?.isDelta).toBeFalsy();
+    expect(REGISTRY_SYNC_OPTS.changeLive?.isDelta).toBe(true);
+    expect(REGISTRY_SYNC_OPTS.changeWorks?.isDelta).toBe(true);
   });
 });
 
@@ -148,15 +148,38 @@ describe("edition feed", () => {
 });
 
 describe("live strip feed", () => {
-  it("is a snapshot: a surface missing from the answer leaves", () => {
+  it("a surface missing from its repository's answer leaves; another repository's surfaces stay cached", () => {
     useInboxStore.setState({ changeLive: {}, pending: {} } as any);
-    const tile = (surface: string) => ({ _id: `${TEAM}|${REPO}|${surface}`, team_id: TEAM, repository: REPO, surface, sha: "abc", at: 1, kind: "release", waiting: 0, waiting_exact: true });
-    useInboxStore.getState().syncTable("changeLive", [tile("cli"), tile("desktop")]);
-    useInboxStore.getState().syncTable("changeLive", [tile("cli")]);
-    expect(Object.keys(useInboxStore.getState().changeLive as Record<string, any>)).toEqual([`${TEAM}|${REPO}|cli`]);
-    // A snapshot leaves no tombstone, so the surface comes back when it ships again.
-    useInboxStore.getState().syncTable("changeLive", [tile("cli"), tile("desktop")]);
-    expect(Object.keys(useInboxStore.getState().changeLive as Record<string, any>)).toHaveLength(2);
+    const tile = (surface: string, repository = REPO) => ({ _id: `${TEAM}|${repository}|${surface}`, team_id: TEAM, repository, surface, sha: "abc", at: 1, kind: "release", waiting: 0, waiting_exact: true });
+    const feed = (repository: string, rows: any[]) => applyCollectionFeed("changeLive", rows, undefined, undefined, liveScope({ teamId: TEAM, repository }));
+    feed(REPO, [tile("cli"), tile("desktop")]);
+    feed("acme/web", [tile("web", "acme/web")]);
+    feed(REPO, [tile("cli")]);
+    expect(Object.keys(useInboxStore.getState().changeLive as Record<string, any>).sort()).toEqual([`${TEAM}|acme/web|web`, `${TEAM}|${REPO}|cli`]);
+    // The drop leaves no tombstone, so the surface comes back when it ships again.
+    feed(REPO, [tile("cli"), tile("desktop")]);
+    expect(Object.keys(useInboxStore.getState().changeLive as Record<string, any>)).toHaveLength(3);
+  });
+});
+
+describe("in the works feed", () => {
+  const stuck = (conv: string, repository?: string) => ({ _id: `stuck:${conv}`, team_id: TEAM, kind: "stuck", conversation_id: conv, headline: conv, outcome_type: "blocked", at: 1, ...(repository ? { repository } : {}) });
+  const review = (n: number, repository: string) => ({ _id: `review:pr${n}`, team_id: TEAM, kind: "review", pr_id: `pr${n}`, repository, number: n, title: `PR ${n}`, url: "", draft: false, checks_state: null, review_decision: null, head_ref: null, author_github_username: "a", updated_at: 1 });
+  const feed = (repository: string | undefined, rows: any[]) =>
+    applyCollectionFeed("changeWorks", rows, undefined, undefined, worksScope({ teamId: TEAM, repository }));
+  const ids = () => Object.keys(useInboxStore.getState().changeWorks as Record<string, any>).sort();
+
+  it("a repository's answer replaces only its own rows, so returning to another repository paints from cache", () => {
+    useInboxStore.setState({ changeWorks: {}, pending: {} } as any);
+    feed(REPO, [stuck("a", REPO), review(1, REPO)]);
+    feed("acme/web", [stuck("w", "acme/web"), review(2, "acme/web")]);
+    expect(ids()).toEqual(["review:pr1", "review:pr2", "stuck:a", "stuck:w"]);
+    // The first repository's stuck session moved on: only its row leaves.
+    feed(REPO, [review(1, REPO)]);
+    expect(ids()).toEqual(["review:pr1", "review:pr2", "stuck:w"]);
+    // It is stuck again later: no tombstone keeps it out.
+    feed(REPO, [stuck("a", REPO), review(1, REPO)]);
+    expect(ids()).toContain("stuck:a");
   });
 });
 

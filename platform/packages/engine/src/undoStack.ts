@@ -27,6 +27,12 @@ export type UndoNotifier = {
    * the default "Undid: <label>" notice; conflicts still go through notify.
    */
   onHistoryStep?: (kind: "undo" | "redo", steps: number, entry: UndoEntry) => void;
+  /**
+   * A keyboard undo stopped at a `confirm` entry and took nothing back. When
+   * present it replaces notify(message), so an app can point at the entry
+   * (an open history can mark its row) instead of only printing the notice.
+   */
+  onConfirmStop?: (entry: UndoEntry, message: string) => void;
 };
 
 export type UndoHistoryItem = Omit<UndoEntry, "undo" | "redo" | "children"> & {
@@ -102,6 +108,15 @@ export function objectsOf(changes: readonly CellChange[]): Array<{ store: string
   return out;
 }
 
+/**
+ * How many server rows a list of objects names. Two stores on one table hold
+ * copies of one row under the row's id (`objects` lists each copy, `skipped`
+ * each row once), so every count of rows reads ids, never list lengths.
+ */
+export function undoRowCount(objects: ReadonlyArray<{ store: string; id: string }> | undefined): number {
+  return new Set((objects ?? []).map((o) => o.id)).size;
+}
+
 export function getUndoKeyboardWindowMs(): number {
   return keyboardWindowMs;
 }
@@ -148,6 +163,25 @@ function remove(stack: UndoEntry[], entry: UndoEntry): boolean {
   return true;
 }
 
+/**
+ * Put an entry back on a stack at the place its history order gives it: the
+ * undo stack holds the newest on top, the redo stack the oldest. Refusals of
+ * a walk's replays arrive in walk order, so pushing each on top would invert
+ * the stack.
+ */
+function restoreToStack(which: "undo" | "redo", entry: UndoEntry): void {
+  const stack = which === "undo" ? undoStack : redoStack;
+  const rank = history.indexOf(entry);
+  const newerOnTop = which === "undo";
+  let at = stack.length;
+  while (at > 0) {
+    const below = history.indexOf(stack[at - 1]!);
+    if (newerOnTop ? below < rank : below > rank) break;
+    at -= 1;
+  }
+  stack.splice(at, 0, entry);
+}
+
 function pushEntry(entry: UndoEntry): void {
   for (const dropped of redoStack) {
     dropped.status = "dropped";
@@ -182,6 +216,22 @@ export function isUndoSuppressed(): boolean {
 /** The entry a redo is refreshing, so its capture rewrites that entry instead of pushing. */
 export function undoRefreshTarget(): UndoEntry | null {
   return refreshTarget;
+}
+
+/**
+ * The undone entries a redo of `entry` comes before, nearest first: its later
+ * siblings in its group, then the redo stack above its owner. Each of them
+ * recorded the state `entry` left as its own before state.
+ */
+export function undoneAfter(entry: UndoEntry): UndoEntry[] {
+  const owner = redoStack.find((e) => e === entry || e.children?.includes(entry));
+  if (!owner) return [];
+  const out = owner === entry ? [] : owner.children!.slice(owner.children!.indexOf(entry) + 1);
+  for (let i = redoStack.indexOf(owner) - 1; i >= 0; i -= 1) {
+    const later = redoStack[i]!;
+    out.push(...(later.children ?? [later]));
+  }
+  return out;
 }
 
 export function withUndoRefresh<T>(entry: UndoEntry, fn: () => T): T {
@@ -456,8 +506,17 @@ export function pushUndo(entry: Omit<UndoEntry, "id" | "ts" | "status" | "mode">
 // Stepping
 // ---------------------------------------------------------------------------
 
+/**
+ * When a done entry's keyboard window opened: its record, or the redo that
+ * last put it back, since a redo is a fresh gesture and the entry it put
+ * back is as reachable as one just recorded.
+ */
+export function undoKeyboardSince(entry: { ts: number; redoneAt?: number }): number {
+  return Math.max(entry.ts, entry.redoneAt ?? 0);
+}
+
 function expired(entry: UndoEntry, now: number): boolean {
-  return now - entry.ts > keyboardWindowMs;
+  return now - undoKeyboardSince(entry) > keyboardWindowMs;
 }
 
 function redoExpired(entry: UndoEntry, now: number): boolean {
@@ -501,6 +560,7 @@ function stepRedo(entry: UndoEntry): StepResult {
   }
   entry.status = "done";
   entry.undoneAt = undefined;
+  entry.redoneAt = Date.now();
   undoStack.push(entry);
   changed();
   return { ok: true, entry };
@@ -536,7 +596,9 @@ export function performUndo(): boolean {
   const top = undoStack[undoStack.length - 1];
   if (!top || expired(top, now)) return false;
   if (top.confirm) {
-    notifier.notify(`Undo ${top.label} from its toast or the history`);
+    const message = `Undo ${top.label} from its toast or the history`;
+    if (notifier.onConfirmStop) notifier.onConfirmStop(top, message);
+    else notifier.notify(message);
     return true;
   }
   const step = stepUndo(top);
@@ -737,7 +799,7 @@ export function markUndoOutboxRefused(outboxId: string): void {
           touched = true;
           owner.status = "done";
           owner.undoneAt = undefined;
-          undoStack.push(owner);
+          restoreToStack("undo", owner);
         }
         if (parent && entry.status !== "done" && undoStack.includes(owner)) {
           touched = true;
@@ -749,7 +811,7 @@ export function markUndoOutboxRefused(outboxId: string): void {
           touched = true;
           owner.status = "undone";
           owner.undoneAt = Date.now();
-          redoStack.push(owner);
+          restoreToStack("redo", owner);
         }
         if (parent && entry.status !== "undone" && redoStack.includes(owner)) {
           touched = true;
@@ -856,6 +918,17 @@ export function rekeyUndoIds(oldId: string, newId: string): void {
         entry.args = args;
         touched = true;
       }
+    }
+    // The run a coalesced entry keeps beside it rebuilds the entry on a
+    // refusal and merges the next call; it must name the row the entry names.
+    const run = coalescedRuns.get(entry);
+    if (run) {
+      run.origin = rekeyCells(run.origin, oldId, newId);
+      run.calls = run.calls.map((c) => {
+        const changes = rekeyCells(c.changes, oldId, newId);
+        const args = c.args ? rekeyIds(c.args, oldId, newId) : c.args;
+        return changes === c.changes && args === c.args ? c : { ...c, changes, args };
+      });
     }
   }
   if (touched) changed();

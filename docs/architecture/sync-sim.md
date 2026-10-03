@@ -21,7 +21,7 @@ From `packages/web`:
 | `bun run sim visibilityFlip --seed 174182 --trace bo-host` | stream every delivery whose channel, label or producer names `bo-host` |
 | `bun run sim --red` | only the scenarios with a red marker or a known invariant |
 | `bun run sim visibilityFlip --out /tmp/sim-out` | write the run artifacts on a pass too |
-| `bun run sim visibilityFlip --seed 174182 --order "<channels>"` | replay one delivery order, pasted from a report |
+| `bun run sim visibilityFlip --seed 174182 --order="<channels>"` | replay one delivery order, pasted from a report |
 | `bun run sim --help` | every flag |
 
 The runner (`scripts/sim.ts`) only turns flags into environment variables and spawns `bun test store/__tests__/sim/ --isolate`, or with a filter `bun test store/__tests__/sim/sim.test.ts --isolate`. The variables are the source of truth, so `SIM_SCENARIO=visibilityFlip bun test store/__tests__/sim/sim.test.ts --isolate` does the same thing:
@@ -200,7 +200,7 @@ sim failure: visibilityFlip [scripted seed 174182] at step "expect window bo-hos
     ...
   replay:
     bun run sim visibilityFlip --seed 174182 --trace ada/g1
-    bun run sim visibilityFlip --seed 174182 --order "scripted conn:ada-host conn:ada-host ..."
+    bun run sim visibilityFlip --seed 174182 --order="scripted conn:ada-host conn:ada-host ..."
   artifacts: $TMPDIR/codecast-sim/visibilityFlip-scripted-174182
 ```
 

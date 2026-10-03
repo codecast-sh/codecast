@@ -50,6 +50,12 @@ export function participantTiles(room: Room): ParticipantTile[] {
   return out;
 }
 
+/** Did the browser refuse the device, as opposed to not having one? A
+ *  SecurityError (an insecure origin, a permissions policy) is a refusal too:
+ *  the device exists and nothing on this page can open it. */
+export const isMediaDenial = (err: any): boolean =>
+  err?.name === "NotAllowedError" || err?.name === "SecurityError";
+
 // Why did capture fail? livekit resolves null (no throw) when getUserMedia
 // yields nothing, and the OS permission state tells the cases apart: a
 // denial (System Settings on the desktop, a site setting in a browser)
@@ -64,7 +70,7 @@ export async function mediaFailureReason(kind: "camera" | "microphone", err?: an
   await refreshOsPermissions().catch(() => {});
   const hint = permissionHint(kind, peekOsPermissions()[kind]);
   if (hint) return hint;
-  return err?.name === "NotAllowedError" ? `${label} permission denied` : `${label} unavailable`;
+  return isMediaDenial(err) ? `${label} permission denied` : `${label} unavailable`;
 }
 
 /**

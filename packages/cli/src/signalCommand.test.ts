@@ -140,6 +140,22 @@ describe("cast signal on the wire", () => {
     fs.rmSync(repo, { recursive: true, force: true });
   });
 
+  test("--team naming another workspace drops the profile's project; naming the profile's team keeps it", async () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "signal-profile-"));
+    fs.mkdirSync(path.join(repo, ".git"));
+    fs.mkdirSync(path.join(repo, ".codecast"));
+    fs.writeFileSync(path.join(repo, ".codecast", "line.toml"), `[line]\nteam = "Union"\nproject = "Agent Quality"\n`);
+    process.env.CODECAST_CWD = repo;
+    answer = (path) => (path === "/cli/teams" ? { teams: [{ _id: "team1", name: "Union" }], user_id: "u1" } : { short_id: "sg-5", task_short_id: "ct-9", attach: "new", signal_count: 1 });
+    await run("add", "--source", "person", "--kind", "bug", "--title", "x", "--team", "personal");
+    await run("add", "--source", "person", "--kind", "bug", "--title", "y", "--team", "union");
+    const adds = calls.filter((c) => c.path === "/cli/signal/add");
+    expect(adds[0].body.project).toBeUndefined();
+    expect(adds[0].body).toMatchObject({ workspace: "personal" });
+    expect(adds[1].body).toMatchObject({ project: "Agent Quality", team_id: "team1" });
+    fs.rmSync(repo, { recursive: true, force: true });
+  });
+
   test("a malformed profile stops the write with the profile's own error", async () => {
     const repo = fs.mkdtempSync(path.join(os.tmpdir(), "signal-profile-"));
     fs.mkdirSync(path.join(repo, ".git"));

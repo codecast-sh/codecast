@@ -75,8 +75,10 @@ export type GestureMessage =
   // through it, writing whichever subset of these four fields it wants. Copying
   // the exact field/value pairs is the only shape that mirrors it without
   // guessing, and it keeps the receiver's planted locks equal to the values the
-  // sender dispatched.
-  | { kind: "fields"; id: string; fields: Partial<Record<BridgedField, number | boolean | null>>; ts: number }
+  // sender dispatched. `exact` (an undo's replay) says the map is every
+  // bridged field the sender dispatched: the receiver locks only those, with
+  // no barrier locks on coupled fields that no acknowledgement would cover.
+  | { kind: "fields"; id: string; fields: Partial<Record<BridgedField, number | boolean | null>>; exact?: boolean; ts: number }
   // Rows the sender DELETED outright rather than flagged: local-only stubs,
   // injected teammate rows, and server-verified ghosts. A sibling holding one
   // in memory would re-put it, so it has to drop it too.
@@ -194,6 +196,7 @@ function isGestureMessage(data: unknown): data is Envelope {
   }
   if (e.kind === "fields") {
     if (typeof e.id !== "string") return false;
+    if (e.exact !== undefined && typeof e.exact !== "boolean") return false;
     return isBridgedFieldMap(e.fields);
   }
   if (e.kind === "hide") {

@@ -591,6 +591,20 @@ describe("cast org apply", () => {
     expect((await performApplyDecision(ctxOf(db), ME as any, "sd-90", { provision: false })).status).toBe("skipped");
   });
 
+  // A role that owns a project's line (line-profile.md LP7): the person's
+  // answer sets the workflow it runs and its cards cap, logged as a line change.
+  test("a role proposal's line and cards cap land on the created role", async () => {
+    const db = fixtures({
+      session_decisions: [proposalDecision("sd_l", "sd-20", { kind: "role", name: "Line lead", handle: "codecast-line", scope: { projects: ["pr-1"] }, caps: { hands_per_day: 6, cards: 3 }, line: "feature" }, { status: "answered", answer_index: 0 })],
+    });
+    const applied = await performApplyDecision(ctxOf(db), ME as any, "sd-20", { provision: false });
+    expect(applied).toMatchObject({ status: "applied", role: { handle: "codecast-line" } });
+    const role = await db.query("org_roles").withIndex("by_short_id", (q: any) => q.eq("short_id", applied.role!.short_id)).first();
+    expect(role).toMatchObject({ line_workflow_slug: "feature", caps: { hands_per_day: 6, cards: 3 } });
+    const history = await db.query("org_role_history").collect();
+    expect(history.some((h: any) => h.field === "line_workflow_slug" && h.new_value === "feature")).toBe(true);
+  });
+
   test("creates the accepted roles with scope, parent and charter, folds change text in, skips the rest, and is idempotent", async () => {
     const db = fixtures({
       session_decisions: [

@@ -61,6 +61,8 @@ export interface Footing {
 
 /** A sha the api accepts. The child also checks `git rev-parse --verify <sha>^{commit}`. */
 export const EVALS_SHA_RE = /^[0-9a-f]{7,40}$/;
+/** A tree patch's name: the sha256 of its text, as EVALS_HOME/trees/<sha>.patch keeps it (always in full). */
+export const EVALS_PATCH_SHA_RE = /^[0-9a-f]{64}$/;
 
 /** The separation rule's answer (packages/evals/src/stats.ts `separate`). */
 export type SeparationResult = { kind: "better" | "worse" | "not-separated"; p: number } | { kind: "too-few" };
@@ -372,12 +374,15 @@ export type AttributionAnswer =
   | { kind: "live-reads"; reps: number; reads: number }
   | {
       kind: "source";
-      confidence: "pinned" | "narrowed" | "unattributable";
+      /** `empty`: no candidate is left in the range (no declared source moved, or the recorded batches bracket a step that touches none). */
+      confidence: SourceConfidence;
       candidates: Candidate[];
       narrowedBy: RecordedProbe[];
       epochs: Epoch[];
       /** No declared source moved in the range: only --all-commits searches it. */
       noDeclaredSourceMoved: boolean;
+      /** Every commit between the two ends, whatever it touches: what --all-commits would search. */
+      rangeCommits: number;
       /** Why it is unattributable: an endpoint was dirty, has no patch, and Tier 1 mapped nothing. */
       reason: string | null;
     }
@@ -393,9 +398,45 @@ export interface Attribution {
   /** Each class in ATTRIBUTION_CLASSES order, with whether it differs and the plain words for it. */
   checklist: Array<{ class: AttributionClass; differs: boolean; detail: string }>;
   answer: AttributionAnswer;
-  /** The rendered prompt change, shown whatever the confidence. */
+  /** Every rendered prompt file of each focus freeze at both ends, changed or not, shown whatever the confidence. */
   promptDiffs: PromptFilePair[];
   examples: EvalFlip[];
+}
+
+/**
+ * Whether a replay search has anything to do: a source answer with candidates
+ * the records did not pin. An unattributable answer with candidates counts,
+ * because a bisect's start renders each candidate and can map an end that ran
+ * on unreplayable edits onto the commit it rendered like. The engine and the
+ * launcher page both ask this, so the page offers a plan exactly when the
+ * engine would run one.
+ */
+export function attributionSearchable(a: Pick<Attribution, "answer">): boolean {
+  if (a.answer.kind !== "source" || a.answer.confidence === "pinned") return false;
+  if (a.answer.confidence === "unattributable") return a.answer.candidates.length > 0;
+  return a.answer.candidates.length > 1;
+}
+
+export type SourceConfidence = "pinned" | "narrowed" | "empty" | "unattributable";
+
+/** How many candidates the records left, in one word: none, one, or several. */
+export const sourceConfidence = (candidates: number): Exclude<SourceConfidence, "unattributable"> => (candidates === 0 ? "empty" : candidates === 1 ? "pinned" : "narrowed");
+
+/**
+ * Section 5, Tier 0 step 4: narrowing a range by the recorded batches inside
+ * it, for free. `at` is a batch's commit's index in the range (oldest first),
+ * `rangeLength` the number of commits in it. A clean bad batch moves the bad
+ * bound to its commit. A batch on edits that reads bad may owe it to those
+ * edits, which land as later commits, so only a good reading moves a bound
+ * for it. The bad end's patch candidate stays only while no clean recorded
+ * batch reads bad. Candidates are the commits with an index in
+ * (goodAt, badAt]. attribution.ts and the fixture world both narrow here.
+ */
+export function narrowByRecords(rangeLength: number, probes: ReadonlyArray<{ at: number; verdict: ProbeVerdict; clean: boolean }>): { goodAt: number; badAt: number; keepPatch: boolean } {
+  const bads = probes.filter((p) => p.verdict === "bad" && p.clean).map((p) => p.at);
+  const badAt = bads.length ? Math.min(...bads) : rangeLength - 1;
+  const goodAt = Math.max(-1, ...probes.filter((p) => p.verdict === "good" && p.at < badAt + (bads.length ? 0 : 1)).map((p) => p.at));
+  return { goodAt, badAt, keepPatch: !bads.length };
 }
 
 // ── Bisect (section 5) ──────────────────────────────────────────────────────
@@ -542,6 +583,8 @@ export interface BisectSummary {
   spentUsd: number;
   budgetUsd: number;
   startedAt: string;
+  /** state.json's last write: a live bisect quiet for five minutes reads "stalled?". */
+  updatedAt: string;
   finishedAt: string | null;
 }
 
@@ -610,6 +653,8 @@ export interface SimSessionSummary extends SimSession {
   runs: number;
   failed: number;
   scenarios: number;
+  /** Its failing rows of runs.jsonl, in run order: each opens as /evals/sim/<session>/<dir> when it left an artifact folder. */
+  failing: Array<Pick<SimRunRow, "scenario" | "mode" | "seed" | "dir">>;
 }
 
 /** A row of events.jsonl: a delivery (rows written before step markers carry no kind) or a step marker from dsl.ts. */
@@ -721,6 +766,14 @@ export interface SimGridCell {
   history: Array<{ session: string; seeds: number; failed: number }>;
   gitHead: string | null;
   lastRunAt: string | null;
+  /**
+   * The newest run of this cell that failed and left an artifact folder, with
+   * the invariant it broke (its result.json): what a click on the cell opens,
+   * even when the latest session passed, and what the invariant filter reads.
+   * null when the history holds no failing run with artifacts. The api child's
+   * `simGrid` fills it.
+   */
+  newestFailure: { session: string; run: string; seed: number; invariant: string; at: string } | null;
 }
 
 // ── Endpoints (section 3.4) ─────────────────────────────────────────────────
@@ -831,6 +884,12 @@ export interface SurfaceResponse {
   ledger: LedgerRow[];
   /** Commits that touched the declared sources inside the window. */
   commits: CommitRef[];
+  /**
+   * The newest graded batch in the window weighed the way the wall weighs it
+   * (against batches that began before it), so the page can say what brought
+   * the investigator here. Null when the window holds no graded batch.
+   */
+  latest: BatchVerdict | null;
 }
 
 /** A conversation message as a surface's describe() renders the moment (@platform/evals ConvoMessage). */
@@ -1125,6 +1184,8 @@ export interface AttributionQuery {
   surface: string;
   good: string;
   bad: string;
+  /** Search every commit in the range, not only those touching declared sources (--all-commits). */
+  allCommits?: boolean;
 }
 
 export interface CommitQuery {
@@ -1143,6 +1204,15 @@ export interface CommitResponse {
   diff: string;
 }
 
+/** One kept tree patch: the uncommitted edits a dirty rep ran on top of its gitHead. */
+export interface PatchResponse {
+  sha: string;
+  files: Array<{ path: string; additions: number; deletions: number }>;
+  /** The patch text (`git diff --binary`), cut at 2 MiB so a huge patch cannot stall the page. */
+  diff: string;
+  truncated: boolean;
+}
+
 export interface ChangesQuery {
   since: number;
 }
@@ -1156,6 +1226,8 @@ export interface ChangesResponse {
 
 export interface BisectListResponse {
   bisects: BisectSummary[];
+  /** The bisect holding the one-bisect lock (bisects/running.json, its process alive), else null: a start waits for it. */
+  running: string | null;
 }
 
 export interface BisectQuery {
@@ -1197,7 +1269,13 @@ export interface SimRunResponse {
   shrinking: SimShrinkProgress | null;
   invariant: SimInvariant | null;
   /** The copyable lines: trace, full order, and the minimal order once shrunk. */
-  replay: { trace: string; order: string; minimal: string | null };
+  replay: {
+    trace: string;
+    order: string;
+    minimal: string | null;
+    /** `./evals bisect start --sim <artifact folder>`: the free sim bisect that names the commit that broke the run. Null for a passing run. */
+    bisect: string | null;
+  };
 }
 
 export interface SimShrinkRequest {
@@ -1238,6 +1316,7 @@ export interface EvalsRoutes {
   "GET /epoch": { params: None; query: EpochQuery; body: never; response: EpochResponse };
   "GET /attribution": { params: None; query: AttributionQuery; body: never; response: Attribution };
   "GET /commit/:sha": { params: { sha: string }; query: CommitQuery; body: never; response: CommitResponse };
+  "GET /patch/:sha": { params: { sha: string }; query: None; body: never; response: PatchResponse };
   "GET /changes": { params: None; query: ChangesQuery; body: never; response: ChangesResponse };
   "POST /bisect/plan": { params: None; query: None; body: BisectPlanRequest; response: BisectPlan };
   "POST /bisect": { params: None; query: None; body: BisectStartRequest; response: BisectStartResponse };
@@ -1267,6 +1346,7 @@ export const EVALS_ROUTE_KEYS = [
   "GET /epoch",
   "GET /attribution",
   "GET /commit/:sha",
+  "GET /patch/:sha",
   "GET /changes",
   "POST /bisect/plan",
   "POST /bisect",

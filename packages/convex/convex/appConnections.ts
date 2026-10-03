@@ -16,7 +16,8 @@
 // Slack in slack.ts (getInstallUrl / completeSlackInstall writing
 // `slack_installations`), GitHub in githubApp.ts (the App install webhook
 // writing `github_app_installations`), Linear and Notion in oauthConnectors.ts,
-// Gmail in googleOAuth.ts — and each revoke path is named by id in the answer
+// Sentry, PostHog and the app connector in tokenConnectors.ts, Gmail in
+// googleOAuth.ts — and each revoke path is named by id in the answer
 // rather than duplicated here.
 
 import { v } from "convex/values";
@@ -27,6 +28,7 @@ import { activeTeamMembershipFor } from "./lib/access";
 import {
   APP_DESCRIPTORS,
   APP_IDS,
+  isAppInstallationApp,
   type AppConnectionScope,
   type AppConnectionStatus,
   type AppConnectionsResult,
@@ -69,7 +71,9 @@ type Connected = Extract<AppConnectionStatus, { status: "connected" }>;
 async function connectedAt(ctx: { db: any }, id: AppId, lens: Lens): Promise<Connected | null> {
   const { userId, scope, teamId } = lens;
 
-  if (id === "linear" || id === "notion") {
+  // Every app whose connection is an `app_installations` row, OAuth or
+  // pasted token: one read, keyed by provider (APP_INSTALLATION_APPS).
+  if (isAppInstallationApp(id)) {
     const row =
       scope === "team"
         ? await ctx.db

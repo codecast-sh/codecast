@@ -8,7 +8,9 @@ import { browserPathLabel, isBrowserRoutePath } from "./browserPane";
 import { isConvexId } from "@codecast/shared/entities";
 import { conversationIdFromPath, directConversationId, shareTokenInPath } from "./desktopHandoff";
 import { changesDayLabel } from "./changesDay";
+import { weekMonday } from "@codecast/shared/changes";
 import { evalsTabLabel } from "../components/evals/evalsPaths";
+import { isOpsPath, opsTabLabel } from "../components/ops/opsPaths";
 
 const REPO_SECTION_LABEL: Record<string, string> = {
   commits: "Commits",
@@ -55,11 +57,17 @@ export function pathLabel(path: string): string {
       if (op && /^op-\d+$/i.test(op)) return `Proposal ${op.toLowerCase()}`;
     } catch {}
   }
-  // A Changes tab names the edition it shows ("Changes, Fri 2 Oct"); with no
-  // day in the query it is today's, and the bare name says so.
+  // A Changes tab names the edition it shows: a week by its Monday ("Changes,
+  // week of Mon 28 Sep"), which outranks the day a week URL keeps for the
+  // return to day mode, else a day ("Changes, Fri 2 Oct"). With neither in
+  // the query it is today's, and the bare name says so.
   if (clean === "/changes") {
     try {
-      const day = changesDayLabel(new URLSearchParams(path.split("#")[0].split("?")[1] ?? "").get("d"));
+      const q = new URLSearchParams(path.split("#")[0].split("?")[1] ?? "");
+      const w = q.get("w");
+      const monday = w ? weekMonday(w) : null;
+      if (monday) return `Changes, week of ${changesDayLabel(monday)}`;
+      const day = changesDayLabel(q.get("d"));
       if (day) return `Changes, ${day}`;
     } catch {}
     return "Changes";
@@ -95,6 +103,7 @@ export function pathLabel(path: string): string {
     return inPath || REPO_SECTION_LABEL[section] || clean.split("/")[3] || "Repository";
   }
   if (clean === "/evals" || clean.startsWith("/evals/")) return evalsTabLabel(path);
+  if (isOpsPath(clean)) return opsTabLabel(path);
   if (clean.startsWith("/commit/")) {
     const sha = clean.split("/")[4] ?? "";
     return sha ? sha.slice(0, 7) : "Commit";

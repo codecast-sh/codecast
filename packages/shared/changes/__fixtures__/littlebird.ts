@@ -1,17 +1,12 @@
 // A Littlebird-shaped day for scale tests: deterministic, so the cluster
 // timing test and the Convex read-size tests see the same rows.
+import { makeRng } from "../../random";
 import type { ChangeCommit } from "../types";
 import { commit, MIN, T0 } from "./commit";
 
 /** A Littlebird-shaped day: 760 commits, 45 branches, sparse sessions, a few batch commits and twins. */
 export function littlebirdDay(): ChangeCommit[] {
-  let seed = 7;
-  const rnd = () => {
-    seed = (seed + 0x6d2b79f5) | 0;
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
+  const rnd = makeRng(7);
   const pick = <T,>(xs: readonly T[]) => xs[Math.floor(rnd() * xs.length)];
   const dirs = ["backend/api", "backend/worker", "backend/db", "backend/auth", "apps/web", "apps/mobile", "apps/admin", "packages/ui", "packages/sdk", "infra"];
   const types = ["feat", "fix", "chore", "refactor", "test", "docs", "perf"];

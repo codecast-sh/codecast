@@ -1,4 +1,4 @@
-import { FolderGit2, Map as MapIcon, Clock, Waypoints, Cpu, Link as LinkIcon, ListTodo, Newspaper } from "lucide-react";
+import { FolderGit2, Map as MapIcon, Clock, Waypoints, Cpu, Link as LinkIcon, ListTodo, Newspaper, Radar } from "lucide-react";
 import type { ReactNode } from "react";
 import { Command as CommandPrimitive } from "cmdk";
 import { SessionGlyph, SessionIdentityLine } from "./identity";
@@ -67,6 +67,8 @@ export function NavIcon({ type, className }: { type: string; className?: string 
       return <LinkIcon className={c} />;
     case "newspaper":
       return <Newspaper className={c} />;
+    case "radar":
+      return <Radar className={c} />;
     default:
       return <svg className={c} fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" strokeWidth={1.5} /></svg>;
   }

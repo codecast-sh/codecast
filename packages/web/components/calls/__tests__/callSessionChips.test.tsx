@@ -78,3 +78,12 @@ test("an excerpt makes the menu reachable even when every session fits", async (
   );
   expect([...c.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Agent 1", "excerpts"]);
 });
+
+test("a session the thread's head already shows is not a chip again, and the rest read as where the call was sent", async () => {
+  useInboxStore.setState({ sessions: {} } as any);
+  const c = await render(<CallSessionChips callId="t1" sessions={[session(1), session(2)]} inThread={new Set([session(1).conversation_id])} />);
+  expect([...c.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Agent 2"]);
+  expect(c.textContent).toContain("sent to");
+  const none = await render(<CallSessionChips callId="t1" sessions={[session(1)]} inThread={new Set([session(1).conversation_id])} />);
+  expect(none.querySelectorAll("button")).toHaveLength(0);
+});

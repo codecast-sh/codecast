@@ -129,17 +129,20 @@ export function QuietButton({
   busy,
   title,
   className,
+  type = "button",
 }: {
   children: React.ReactNode;
-  onClick: () => void;
+  /** Optional only for a form's submit button, which the form's onSubmit drives. */
+  onClick?: () => void;
   disabled?: boolean;
   busy?: boolean;
   title?: string;
   className?: string;
+  type?: "button" | "submit";
 }) {
   return (
     <button
-      type="button"
+      type={type}
       onClick={onClick}
       disabled={disabled || busy}
       title={title}

@@ -28,6 +28,7 @@ import {
   newUndoEntryId,
   objectsOf,
   onUndoRekey,
+  undoneAfter,
   recordUndoEntry,
   rekeyCells,
   rekeyIds,
@@ -353,7 +354,17 @@ type GuardOpts = {
   stampFields?: ReadonlySet<string>;
   optionalClearFields?: ReadonlySet<string>;
   serverAssignedFields?: ReadonlySet<string>;
+  tombstone?: UndoConfig["tombstone"];
 };
+
+// A cell as the guard sees it: a row the server keeps as a tombstone (an
+// archived doc the sync log still delivers) is a row that is gone.
+function readLive(state: Record<string, any>, cell: CellChange, opts: GuardOpts) {
+  const cur = readCell(state, cell, opts.rowKeyOf);
+  if (!opts.tombstone || cur.rowGone || cell.shape === "scalar" || cell.shape === "singleton") return cur;
+  const row = cell.field === undefined ? cur.value : readCell(state, { ...cell, field: undefined }, opts.rowKeyOf).value;
+  return opts.tombstone(cell.store, row) ? { has: false, value: undefined, rowGone: true } : cur;
+}
 
 // Whether a cell's current value is `target`. On an optional-clear field a
 // null and a missing field are the same clear: the server's echo of a null
@@ -389,11 +400,15 @@ function rowStillAsAdded(cur: unknown, added: unknown, opts: GuardOpts): boolean
 }
 
 function verdictForUndo(cell: CellChange, state: Record<string, any>, opts: GuardOpts): Verdict {
-  const cur = readCell(state, cell, opts.rowKeyOf);
+  const cur = readLive(state, cell, opts);
   if (cell.field === undefined && cell.shape !== "scalar") {
     // Forward added the row: take it back only while it is the row it added.
+    // A mirror holds copies the server's push rebuilds in its own shape (a
+    // favorites row with a few fields where the forward copied the whole
+    // row), so there the row's presence is the fact the forward wrote.
     if (!cell.hadBefore && cell.hadAfter) {
       if (!cur.has) return "already";
+      if (cell.kind === "mirror") return "apply";
       return rowStillAsAdded(cur.value, cell.after, opts) ? "apply" : "conflict";
     }
     if (cell.hadBefore && !cell.hadAfter) return cur.has ? "already" : "apply"; // forward removed it
@@ -409,10 +424,14 @@ function verdictForUndo(cell: CellChange, state: Record<string, any>, opts: Guar
 }
 
 function holdsBefore(cell: CellChange, state: Record<string, any>, opts: GuardOpts): boolean {
-  const cur = readCell(state, cell, opts.rowKeyOf);
+  const cur = readLive(state, cell, opts);
   if (cell.field === undefined && cell.shape !== "scalar") {
     if (!cell.hadBefore && cell.hadAfter) return !cur.has;
     if (cell.hadBefore && !cell.hadAfter) return cur.has;
+  } else if (cur.rowGone && cell.shape !== "scalar") {
+    // The row was deleted since the undo: an absent field on a gone row is
+    // not the before value, and re-running the action would recreate it.
+    return false;
   }
   return holds(cell, cur, cell.before, cell.hadBefore, opts) || sameShape(cur.value, cell.before);
 }
@@ -741,6 +760,11 @@ export type UndoControllerDeps = {
 type Internal = {
   inverse: Invocation[] | null;
   applied: CellChange[];
+  /**
+   * Cells the guard cleared for the undo that its spec's spell left out. They
+   * still hold their after value, and a redo judges them by it.
+   */
+  left: CellChange[];
   frame: Pick<UndoCtx, "before" | "after" | "result">;
 };
 
@@ -775,27 +799,102 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
   // The inverse invocations and the applied cells live here, not on the
   // entry, so a stub rekey reaches them through the stack's hook.
   onUndoRekey((entry, oldId, newId) => {
+    const sends = lastSend.get(`#${oldId}`);
+    if (sends) {
+      lastSend.delete(`#${oldId}`);
+      lastSend.set(`#${newId}`, new Map([...sends, ...(lastSend.get(`#${newId}`) ?? [])]));
+    }
     const internal = internals.get(entry);
     if (!internal) return false;
     const inverse = internal.inverse?.map((inv) => ({ ...inv, args: rekeyIds(inv.args, oldId, newId) })) ?? null;
     const applied = rekeyCells(internal.applied, oldId, newId);
-    const touched = applied !== internal.applied || inverse?.some((inv, i) => inv.args !== internal.inverse![i]!.args) === true;
-    if (touched) internals.set(entry, { ...internal, inverse, applied });
+    const left = rekeyCells(internal.left, oldId, newId);
+    const touched = applied !== internal.applied || left !== internal.left || inverse?.some((inv, i) => inv.args !== internal.inverse![i]!.args) === true;
+    if (touched) internals.set(entry, { ...internal, inverse, applied, left });
     return touched;
   });
 
   const isStamp = (c: CellChange) => c.field !== undefined && !!config.stampFields?.has(c.field);
+  const cellKey = (c: CellChange) => `${rowKeyOfCell(c)}\u0000${c.field ?? "\u0001"}`;
   const guardOpts = {
     rowKeyOf,
     rowGroupOf: shape.rowGroupOf,
     stampFields: config.stampFields,
     optionalClearFields: shape.optionalClearFields,
     serverAssignedFields: config.serverAssignedFields,
+    tombstone: config.tombstone,
+  };
+
+  // The sends of the last step that wrote each cell: a forward, or every
+  // pass of an undo replay or a redo. A step of a walk reverses what those
+  // sends wrote, so it goes out after all of them; sends wait for the sends
+  // they follow, so the newest step per cell is enough. A step's passes are
+  // noted together because a pass may carry none of the cells it writes (an
+  // inverse) and any of them can be the one still retrying. Keyed by row id
+  // (two stores can hold copies of one row) and field, "\u0001" for the
+  // whole row; a row with no id is keyed by store.
+  const lastSend = new Map<string, Map<string, readonly string[]>>();
+  const SEND_ROWS_LIMIT = 1000;
+  const scopeOf = (c: { store: string; id: string }) => (c.id !== "" ? `#${c.id}` : `@${c.store}`);
+  const WHOLE = "\u0001";
+  const noteSends = (cells: readonly CellChange[], outboxIds: readonly string[]) => {
+    for (const c of cells) {
+      if (isStamp(c)) continue;
+      const scope = scopeOf(c);
+      const fields = lastSend.get(scope) ?? new Map<string, readonly string[]>();
+      lastSend.delete(scope);
+      fields.set(c.field ?? WHOLE, outboxIds);
+      lastSend.set(scope, fields);
+    }
+    while (lastSend.size > SEND_ROWS_LIMIT) lastSend.delete(lastSend.keys().next().value!);
+  };
+  const sendsBefore = (cells: readonly CellChange[], own: readonly string[]): string[] => {
+    const out = new Set(own);
+    for (const c of cells) {
+      if (isStamp(c)) continue;
+      const fields = lastSend.get(scopeOf(c));
+      if (!fields) continue;
+      const named = c.field === undefined ? [...fields.values()] : [fields.get(c.field), fields.get(WHOLE)];
+      for (const ids of named) for (const id of ids ?? []) out.add(id);
+    }
+    return [...out];
+  };
+
+  // A redo re-invokes its action, which may write a value the first run did
+  // not (a fresh Date.now() stamp). The next undone entry recorded the first
+  // run's value as its before, so its redo would read the fresh one as a
+  // change made since. Each cell the redo moved is rebased onto the new value
+  // in the nearest undone entry that touches it.
+  const rebaseUndoneAfter = (entry: UndoEntry, was: readonly CellChange[], now: readonly CellChange[]) => {
+    const nowByKey = new Map(now.map((c) => [cellKey(c), c] as const));
+    const moved = new Map<string, { from: CellChange; to: CellChange }>();
+    for (const from of was) {
+      const to = nowByKey.get(cellKey(from));
+      if (!to || (to.hadAfter === from.hadAfter && sameShape(to.after, from.after))) continue;
+      moved.set(cellKey(from), { from, to });
+    }
+    for (const later of moved.size > 0 ? undoneAfter(entry) : []) {
+      const reached = new Set<string>();
+      const rebase = (cells: CellChange[]) =>
+        cells.map((c) => {
+          const m = moved.get(cellKey(c));
+          if (!m) return c;
+          reached.add(cellKey(c));
+          if (c.hadBefore !== m.from.hadAfter || !sameShape(c.before, m.from.after)) return c;
+          return { ...c, before: m.to.after, hadBefore: m.to.hadAfter };
+        });
+      if (later.changes) later.changes = rebase(later.changes);
+      const internal = internals.get(later);
+      if (internal) internals.set(later, { ...internal, applied: rebase(internal.applied) });
+      for (const k of reached) moved.delete(k);
+      if (moved.size === 0) break;
+    }
   };
 
   const internalOf = (spec: UndoSpec, ctx: UndoCtx): Internal => ({
     inverse: spec.inverse?.(ctx) ?? null,
     applied: [],
+    left: [],
     frame: { before: ctx.before, after: ctx.after, result: ctx.result },
   });
 
@@ -808,6 +907,7 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
     first: boolean,
     skippedRows: Array<{ store: string; id: string }>,
     after: readonly string[],
+    writes: readonly CellChange[],
   ) => {
     const target = deps.rawCreator(pass.inv.action);
     const flags: Flags = target ? deps.flagsOf(target) : { act: true, asyncAct: false, receipt: false, syn: false };
@@ -822,8 +922,10 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
       deps.runAction(pass.inv.action, flags, recipe, pass.inv.args as any[], {
         onCommitted: ({ outboxId }) => {
           entry.replayOutboxIds = [...(entry.replayOutboxIds ?? []), outboxId];
+          // The step's sends so far: the last pass notes all of them.
+          noteSends(writes, entry.replayOutboxIds);
         },
-        // A reversal never overtakes the write it reverses.
+        // A reversal never overtakes a write it reverses.
         after,
       }),
     );
@@ -846,7 +948,10 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
     const rowApplied = apply.some((c) => c.kind === "protected" && !isStamp(c));
     if (apply.length === 0 && skippedRows.length === 0 && mirrorConflicts.length === 0) {
       // Every row already holds its before value: nothing to take back.
-      if (internal) internal.applied = [];
+      if (internal) {
+        internal.applied = [];
+        internal.left = [];
+      }
       return { ok: false, reason: "already" };
     }
     if (apply.length === 0 || (skippedRows.length > 0 && !rowApplied)) return { ok: false, reason: "conflict" };
@@ -870,11 +975,15 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
     }
     config.beforeReplay?.(entry, "undo");
     const passes = planReplayPasses(apply, state, config, inverse, rowKeyOf);
-    const after = [...(entry.outboxIds ?? []), ...(entry.replayOutboxIds ?? [])];
+    const after = sendsBefore(apply, [...(entry.outboxIds ?? []), ...(entry.replayOutboxIds ?? [])]);
     entry.replayOutboxIds = [];
     entry.replayDir = "undo";
-    passes.forEach((pass, i) => runPass(entry, pass, i === 0, held, after));
-    if (internal) internal.applied = apply;
+    passes.forEach((pass, i) => runPass(entry, pass, i === 0, held, after, apply));
+    if (internal) {
+      internal.applied = apply;
+      const kept = new Set(apply.map(cellKey));
+      internal.left = cleared.filter((c) => !isStamp(c) && !kept.has(cellKey(c)));
+    }
     config.afterReplay?.(entry, "undo", apply);
     return { ok: true, applied: apply.filter((c) => !isStamp(c)).length, skipped: skippedRows.length };
   };
@@ -891,10 +1000,10 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
     if (!apply.some((c) => !isStamp(c))) return { ok: false, reason: "conflict" };
     config.beforeReplay?.(entry, "redo");
     const passes = planReplayPasses(apply, state, config, null, rowKeyOf);
-    const after = [...(entry.outboxIds ?? []), ...(entry.replayOutboxIds ?? [])];
+    const after = sendsBefore(apply, [...(entry.outboxIds ?? []), ...(entry.replayOutboxIds ?? [])]);
     entry.replayOutboxIds = [];
     entry.replayDir = "redo";
-    passes.forEach((pass) => runPass(entry, pass, false, [], after));
+    passes.forEach((pass) => runPass(entry, pass, false, [], after, apply));
     config.afterReplay?.(entry, "redo", apply);
     return { ok: true, applied: apply.filter((c) => !isStamp(c)).length, skipped: entry.skipped?.length ?? 0 };
   };
@@ -914,17 +1023,21 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
     // before value. So every captured cell must still hold its before value,
     // or the redo would overwrite a change someone made since the undo. A
     // cell the undo wrote is judged by the value it wrote (a writer's
-    // spelled clear), the rest by their captured before value.
+    // spelled clear), a cell its spell left out by the after value it was
+    // left at, and the rest by their captured before value.
     // A spell may turn a row the forward added into field cells (the row is
     // kept, as the server keeps it): those stand in for the captured row cell.
-    const cellKey = (c: CellChange) => `${rowKeyOfCell(c)}\u0000${c.field ?? "\u0001"}`;
-    const wrote = new Map(applied.map((c) => [cellKey(c), c]));
+    const wrote = new Set(applied.map(cellKey));
+    const judgedBy = new Map<string, CellChange>([
+      ...(internals.get(entry)?.left ?? []).map((c) => [cellKey(c), flipCell(c)] as const),
+      ...applied.map((c) => [cellKey(c), c] as const),
+    ]);
     const capturedKeys = new Set((entry.changes ?? []).map(cellKey));
     const respelled = applied.filter((c) => !capturedKeys.has(cellKey(c)));
     const respelledRows = new Set(respelled.map(rowKeyOfCell));
     const stoodIn = (c: CellChange) => c.field === undefined && !wrote.has(cellKey(c)) && respelledRows.has(rowKeyOfCell(c));
     for (const captured of [...(entry.changes ?? []).filter((c) => !stoodIn(c)), ...respelled]) {
-      const cell = wrote.get(cellKey(captured)) ?? captured;
+      const cell = judgedBy.get(cellKey(captured)) ?? captured;
       if (cell.kind === "view" || isStamp(cell)) continue;
       if (!holdsBefore(cell, state, guardOpts)) return { ok: false, reason: "conflict" };
     }
@@ -933,7 +1046,7 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
     config.beforeReplay?.(entry, "redo");
     // The undo's replay is settled business now: a late refusal of it must
     // not move a redone entry.
-    const after = entry.replayOutboxIds ?? [];
+    const after = sendsBefore(entry.changes ?? [], entry.replayOutboxIds ?? []);
     entry.replayOutboxIds = undefined;
     entry.replayDir = undefined;
     const priorAfter = redoAfter;
@@ -975,9 +1088,11 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
         // Everything that runs app code first, so a throwing spec leaves the
         // entry as it was rather than half refreshed.
         const internal = internalOf(spec, ctx);
+        rebaseUndoneAfter(refresh, refresh.changes ?? [], changes);
         refresh.changes = changes;
         refresh.planted = planted;
         refresh.outboxIds = [commit.outboxId];
+        noteSends(changes, [commit.outboxId]);
         refresh.objects = objectsOf(changes);
         internals.set(refresh, internal);
         return;
@@ -1019,6 +1134,7 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
         redo: () => redoGeneric(entry),
       };
       internals.set(entry, internalOf(spec, ctx));
+      noteSends(changes, [commit.outboxId]);
       recordUndoEntry(entry, { toast: spec.toast, coalesce: spec.coalesce });
     },
   };

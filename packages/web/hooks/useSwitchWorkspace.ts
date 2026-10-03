@@ -12,22 +12,21 @@
 // through here now, and lib/__tests__/activeTeamPointer.guard.test.ts fails if
 // a new one writes `active_team_id` through updateClientUI directly.
 import { useCallback } from "react";
-import { useMutation } from "convex/react";
-import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
 export function useSwitchWorkspace(): (teamId: Id<"teams"> | string | null) => Promise<void> {
-  const saveActiveTeam = useMutation(api.teams.setActiveTeam);
+  const saveActiveTeam = useInboxStore((s) => s.setActiveTeamPointer);
   const updateClientUI = useInboxStore((s) => s.updateClientUI);
 
   return useCallback(
     async (teamId) => {
       const id = (teamId || undefined) as Id<"teams"> | undefined;
-      // Mirror first: the UI re-scopes in this tick (local-first is the law).
+      // Both halves in this tick (local-first is the law): the mirror web
+      // reads, and the canonical pointer the phone and the CLI read, which the
+      // store's dispatch carries to the server.
       updateClientUI({ active_team_id: id });
-      // Then the canonical pointer, so every other client agrees.
-      await saveActiveTeam({ team_id: id });
+      saveActiveTeam(id ?? null);
     },
     [saveActiveTeam, updateClientUI],
   );

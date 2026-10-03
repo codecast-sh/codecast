@@ -305,6 +305,62 @@ Subcommands:
     load: () => import("./shipCommand.js").then((m) => m.registerShipCommand),
   },
   {
+    token: "sources",
+    description: `Sources: the feeds of errors, jobs, checks and metrics from a running product
+
+  cast sources ls
+  cast sources add sdk|http <name>        Prints its ingest key once
+  cast sources add sentry <name> --org <slug> [--projects a,b]
+  cast sources add posthog <name> [--project-id <id>]
+  cast sources add app <name>             The product's connector (cast connector)
+  cast sources show|pause|resume|rm|test <source>
+  cast sources key rotate <source>
+
+Sentry, PostHog and app sources read through the workspace's connection, which
+holds the host, base url and secret: cast integrations connect <provider>`,
+    load: () => import("./sourcesCommand.js").then((m) => m.registerSourcesCommand),
+  },
+  {
+    token: "events",
+    description: `Events: what a running product reported, grouped, with the transitions that wake triggers
+
+  cast events ls [--source s] [--since 2h] [-w]     Transitions: new, regressed, spike, check failed...
+  cast events groups [--status open] [--kind error]
+  cast events show eg-N
+  cast events resolve eg-N [--in <release>]
+  cast events ignore eg-N`,
+    load: () => import("./eventsCommand.js").then((m) => m.registerEventsCommand),
+  },
+  {
+    token: "replay",
+    description: `Replays: what a person did before something broke, as text and as a repro
+
+  cast replay ls [--source s] [--group eg-N]
+  cast replay show rp-N
+  cast replay repro rp-N [--base-url https://app] [--out file]`,
+    load: () => import("./replayCommand.js").then((m) => m.registerReplayCommand),
+  },
+  {
+    token: "metrics",
+    description: `Metrics: watched numbers that alert when they cross a line, and HogQL passthrough
+
+  cast metrics ls
+  cast metrics add <name> --source s --hogql "<q>" --above <n> [--every 1h]
+  cast metrics show|rm mw-N
+  cast metrics query "<hogql>" --source s`,
+    load: () => import("./metricsCommand.js").then((m) => m.registerMetricsCommand),
+  },
+  {
+    token: "connector",
+    description: `App connector: read and act through the readers and actions your product declares
+
+  cast connector ls | readers|actions|calls|refresh <source>
+  cast connector read <source> <reader> [--arg k=v] [--args -]
+  cast connector do <source> <action> [--arg k=v] [--yes] [--idempotency-key k]
+  cast connector grant|revoke <source> <action>   (a person grants in the browser; this prints where)`,
+    load: () => import("./connectorCommand.js").then((m) => m.registerConnectorCommand),
+  },
+  {
     token: "switch",
     hasOptions: true,
     description: `Change the agent or model on this session without forking

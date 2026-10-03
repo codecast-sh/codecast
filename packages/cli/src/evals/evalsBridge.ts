@@ -38,9 +38,15 @@ export const EVALS_SCRIPT_HEADER = [
 /** The child's entry, relative to the checkout root. */
 export const EVALS_ENTRY = path.join("packages", "evals", "src", "index.ts");
 
+/** The `api` command the child runs. A checkout at a commit from before it
+ *  (a review or agent worktree that ran ./evals) has the entry but answers
+ *  `api --stdio` with its help and exit 1, so it is refused up front. */
+export const EVALS_API_COMMAND = path.join("packages", "evals", "src", "commands", "api.ts");
+
 const IDLE_MS = 10 * 60_000;
 const REQUEST_TIMEOUT_MS = 120_000;
 const CRASH_BACKOFF_MS = 5_000;
+const REFUSAL_MEMO_MS = 30_000;
 const STDERR_LINES = 40;
 const KILL_GRACE_MS = 5_000;
 
@@ -59,6 +65,8 @@ export interface EvalsBridgeDeps {
   requestTimeoutMs: number;
   /** After a crash, requests inside this window get the crash back instead of a fresh exec. */
   crashBackoffMs: number;
+  /** While a fallback serves, a refused pointer is not checked again (git spawn included) inside this window. */
+  refusalMemoMs: number;
   log: (msg: string) => void;
 }
 
@@ -78,10 +86,12 @@ const defaultDeps: EvalsBridgeDeps = {
   idleMs: IDLE_MS,
   requestTimeoutMs: REQUEST_TIMEOUT_MS,
   crashBackoffMs: CRASH_BACKOFF_MS,
+  refusalMemoMs: REFUSAL_MEMO_MS,
   log: () => {},
 };
 
-export type CheckoutCheck = { ok: true; root: string } | { ok: false; reason: EvalsUnavailableReason; error: string };
+export type CheckoutRefusal = { ok: false; reason: EvalsUnavailableReason; error: string };
+export type CheckoutCheck = { ok: true; root: string } | CheckoutRefusal;
 
 const refuse = (reason: EvalsUnavailableReason, error: string): CheckoutCheck => ({ ok: false, reason, error });
 
@@ -100,11 +110,12 @@ async function pointedRoot(deps: EvalsBridgeDeps): Promise<string | null> {
 /**
  * Prove the pointer names a codecast checkout this user owns: the realpath is
  * a directory owned by our uid, its `evals` script starts with the known
- * header, git calls it the top level, and the child's entry exists. Runs
+ * header, git calls it the top level, and the child's entry and api command
+ * exist. Runs
  * before any exec; git is the only thing it spawns, never checkout code.
  */
-export async function validateEvalsCheckout(deps: EvalsBridgeDeps = defaultDeps): Promise<CheckoutCheck> {
-  const named = await pointedRoot(deps);
+export async function validateEvalsCheckout(deps: EvalsBridgeDeps = defaultDeps, named?: string | null): Promise<CheckoutCheck> {
+  if (named === undefined) named = await pointedRoot(deps);
   if (!named) return refuse("no-checkout", "no codecast checkout has run ./evals on this machine");
   let root: string;
   try {
@@ -129,6 +140,10 @@ export async function validateEvalsCheckout(deps: EvalsBridgeDeps = defaultDeps)
 
   const entry = await fsp.stat(path.join(root, EVALS_ENTRY)).catch(() => null);
   if (!entry?.isFile()) return refuse("checkout-no-entry", `${root} has no ${EVALS_ENTRY}`);
+  const api = await fsp.stat(path.join(root, EVALS_API_COMMAND)).catch(() => null);
+  if (!api?.isFile()) {
+    return refuse("checkout-no-entry", `${root} last ran ./evals, and its eval tool predates the api command (no ${EVALS_API_COMMAND}); run ./evals from a current checkout`);
+  }
   return { ok: true, root };
 }
 
@@ -173,6 +188,13 @@ export function createEvalsBridge(overrides: Partial<EvalsBridgeDeps> = {}): Eva
   const deps: EvalsBridgeDeps = { ...defaultDeps, ...overrides };
   let child: Child | null = null;
   let lastCrash: { at: number; root: string; reply: EvalsReply } | null = null;
+  /** The newest root that passed validation. Every checkout that runs ./evals
+   *  takes the pointer, a review or agent worktree at an old commit included,
+   *  so a pointer that cannot serve falls back to it rather than closing the area. */
+  let lastGood: string | null = null;
+  /** The pointer's last refusal while a fallback served, so polls against an
+   *  old worktree's pointer do not spawn git for it on every request. */
+  let refused: { named: string | null; check: CheckoutRefusal; at: number } | null = null;
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
   let nextId = 1;
 
@@ -284,15 +306,32 @@ export function createEvalsBridge(overrides: Partial<EvalsBridgeDeps> = {}): Eva
    */
   async function resolveChild(): Promise<Child | EvalsReply> {
     const c = child;
+    // A cheap read: the pointer moves when ./evals runs from another checkout.
+    const named = await pointedRoot(deps);
     if (live(c)) {
-      // A cheap read: the pointer moves when ./evals runs from another checkout.
-      const named = await pointedRoot(deps);
       const real = named ? await fsp.realpath(named).catch(() => null) : null;
       if (live(c) && real === c.root) return c;
-      if (live(c)) end(c, `checkout moved to ${named ?? "nothing"}`);
     }
-    const check = await validateEvalsCheckout(deps);
+    const fallback = live(c) ? c.root : lastGood;
+    const memo = fallback && refused && refused.named === named && Date.now() - refused.at < deps.refusalMemoMs ? refused.check : null;
+    let check: CheckoutCheck = memo ?? (await validateEvalsCheckout(deps, named));
+    if (!check.ok) {
+      if (fallback && fallback !== named) {
+        if (!memo) {
+          if (refused?.check.error !== check.error) deps.log(`[EVALS] ${check.error}; serving ${fallback}`);
+          refused = { named, check, at: Date.now() };
+        }
+        if (live(c)) return c;
+        const prior = await validateEvalsCheckout(deps, fallback);
+        if (prior.ok) check = prior;
+      }
+    }
     if (!check.ok) return errorReply(503, { error: check.error, reason: check.reason });
+    lastGood = check.root;
+    if (live(c)) {
+      if (c.root === check.root) return c;
+      end(c, `checkout moved to ${check.root}`);
+    }
     if (lastCrash && lastCrash.root === check.root && Date.now() - lastCrash.at < deps.crashBackoffMs) return lastCrash.reply;
     const started = spawnChild(check.root);
     if (!("status" in started)) child = started;

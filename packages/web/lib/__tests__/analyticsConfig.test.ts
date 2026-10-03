@@ -12,6 +12,7 @@ process.env.VITE_POSTHOG_KEY = "phc_test_key";
 process.env.VITE_POSTHOG_HOST = "https://ph.test";
 process.env.VITE_SENTRY_DSN = "https://dsn@sentry.test/1";
 delete process.env.DEV;
+delete process.env.VITE_CODECAST_INGEST_KEY;
 
 type Calls = Record<string, unknown[][]>;
 const phCalls: Calls = {};
@@ -81,6 +82,45 @@ describe("codecast's analytics configuration reaches the package", () => {
     expect(sentryOptions.environment).toBe("production");
     expect(sentryOptions.enabled).toBe(true);
     expect(sentryOptions.initialScope.tags).toEqual({ platform: "web", app: "codecast" });
+  });
+
+  test("a link that is a key never reaches PostHog or Sentry as written", async () => {
+    await analytics.initAnalytics();
+    const [, options] = last(phCalls, "init") as [string, Record<string, any>];
+    const sent = options.before_send({
+      event: "$pageview",
+      properties: { $current_url: "https://codecast.sh/share/call/k3y?t=90", $referrer: "https://codecast.sh/meet/g0lden" },
+    });
+    expect(JSON.stringify(sent)).not.toMatch(/k3y|g0lden/);
+    expect(sent.properties.$current_url).toBe("https://codecast.sh/share/call/:token?t=90");
+
+    const [sentryOptions] = last(sentryCalls, "init") as [Record<string, any>];
+    const event = sentryOptions.beforeSend({ request: { url: "https://codecast.sh/join/inv1te" }, exception: { values: [] } });
+    expect(event.request.url).toBe("https://codecast.sh/join/:token");
+    const crumb = sentryOptions.beforeBreadcrumb({ category: "navigation", data: { from: "/inbox", to: "/share/k3y" } });
+    expect(crumb.data).toEqual({ from: "/inbox", to: "/share/:token" });
+  });
+
+  test("scrubSecretPaths names every secret path by its shape and leaves the rest alone", () => {
+    const cases: Array<[string, string]> = [
+      ["/share/doc/abc123", "/share/doc/:token"],
+      ["/share/abc123def", "/share/:token"],
+      ["/share/abcdef", "/share/:token"],
+      ["https://codecast.sh/meet/g0lden?x=1#y", "https://codecast.sh/meet/:token?x=1#y"],
+      ["https://codecast.sh/a/pub-slug", "https://codecast.sh/a/:token"],
+      ['a:href="/join/inv1te"nth-child="2"', 'a:href="/join/:token"nth-child="2"'],
+      ["/share/call/:token", "/share/call/:token"],
+      ["/repo/acme/web/blob/main/a/b.ts", "/repo/acme/web/blob/main/a/b.ts"],
+      ["/calls/cl-42?t=90", "/calls/cl-42?t=90"],
+      ["/documentation/guides/calls", "/documentation/guides/calls"],
+    ];
+    for (const [input, out] of cases) expect(analytics.scrubSecretPaths(input)).toBe(out);
+  });
+
+  test("codecast reporting stays off when VITE_CODECAST_INGEST_KEY is unset", async () => {
+    await analytics.initAnalytics();
+    const runtime = await import("@platform/analytics/web-runtime");
+    expect(runtime.getCodecastSink()).toBeNull();
   });
 
   test("identify uses the id the caller passes — the Convex users._id", async () => {
@@ -153,5 +193,68 @@ describe("error toasts read the cause chain", () => {
 
     handlers.error({ error: cause, message: cause.message, preventDefault: () => {} });
     expect(toasts.length).toBe(1);
+  });
+});
+
+// With VITE_CODECAST_INGEST_KEY set, codecast reports its own errors to
+// codecast through @platform/analytics, alongside Sentry, through the same
+// window listeners and dedupe (docs/architecture/external-data.md X2). Last in
+// the file: it resets the runtime and loads a fresh copy of lib/analytics so
+// that copy's memoized init reads the key.
+describe("codecast reports its own errors to codecast when the key is set", () => {
+  const KEY = "cc_ing_testtesttesttesttesttesttesttest";
+  let keyed: typeof analytics;
+  let runtime: typeof import("@platform/analytics/web-runtime");
+  const realFetch = globalThis.fetch;
+
+  beforeEach(async () => {
+    process.env.VITE_CODECAST_INGEST_KEY = KEY;
+    // Nothing here may reach the real ingest door.
+    globalThis.fetch = (async () => new Response("{}", { status: 202 })) as unknown as typeof fetch;
+    runtime = await import("@platform/analytics/web-runtime");
+    if (!keyed) {
+      runtime._resetRuntimeForTests();
+      (await import("@platform/analytics/errors"))._resetErrorDeduperForTests();
+      keyed = await import("../analytics?codecast" as string);
+    }
+    await keyed.initAnalytics();
+    for (const k of Object.keys(sentryCalls)) delete sentryCalls[k];
+    toasts.length = 0;
+  });
+
+  afterEach(() => {
+    delete process.env.VITE_CODECAST_INGEST_KEY;
+    globalThis.fetch = realFetch;
+    delete (globalThis as any).window;
+  });
+
+  test("the sink is created from VITE_CODECAST_INGEST_KEY", () => {
+    expect(runtime.getCodecastSink()?.ingestKey).toBe(KEY);
+  });
+
+  test("an uncaught error reports once to Sentry and once to codecast, by its cause", () => {
+    const heard: string[] = [];
+    runtime.getCodecastSink()!.onError((item) => heard.push(item.message));
+    const handlers: Record<string, (e: unknown) => void> = {};
+    (globalThis as any).window = {
+      addEventListener: (type: string, fn: (e: unknown) => void) => {
+        handlers[type] = fn;
+      },
+    };
+    keyed.setupErrorToasts();
+    const cause = new TypeError("codecast sink cause");
+    const wrapper = new Error("Minified React error #520", { cause });
+    handlers.error({ error: wrapper, message: wrapper.message, preventDefault: () => {} });
+    handlers.error({ error: wrapper, message: wrapper.message, preventDefault: () => {} });
+    expect(heard).toEqual([cause.message]);
+    expect(count(sentryCalls, "captureException")).toBe(1);
+    expect(toasts.length).toBe(1);
+  });
+
+  test("known-benign errors stay out of codecast too", () => {
+    const heard: unknown[] = [];
+    runtime.getCodecastSink()!.onError((item) => heard.push(item));
+    keyed.captureError(new Error("Dispatch binding changed while work was in flight"));
+    expect(heard.length).toBe(0);
   });
 });

@@ -7,7 +7,7 @@ import { type GuardCounts, GUARD_STATUSES, type GuardStatus, type RunRow, runRow
 import { parseRunId, summarizeRunFolder } from '@platform/evals/fs';
 
 import { judgeRuler } from '../adapters/judge';
-import { evalsHome, homePaths, publicFreezesDir } from '../paths';
+import { evalsHome, GUARD_STAMP, homePaths, publicFreezesDir } from '../paths';
 import { type HeadsFile, readHeads } from '../provenance';
 
 // EVALS_HOME/index/runs.jsonl: one RunRow per run folder (evals-ui.md 3.2).
@@ -67,21 +67,28 @@ const folderKeyAsync = async (dir: string): Promise<string> =>
 
 const rulers = new Map<string, { mtimeMs: number; ruler: string | null }>();
 
-/**
- * The ruler the rep in `dir` was judged on (judgeRuler over judge/prompt.md),
- * cached on the prompt's mtime. A rejudge replaces the prompt, so it moves
- * the rep to the new ruler with nothing else to keep in step. Null for a rep
- * no judge graded.
- */
-export function rulerAt(dir: string): string | null {
-  const path = join(dir, 'judge', 'prompt.md');
+/** One file's reading, cached on its mtime; null when the file is absent. */
+function readCached(path: string, read: (text: string) => string | null): string | null {
   const mtimeMs = mtime(path);
   if (mtimeMs < 0) return null;
   const hit = rulers.get(path);
   if (hit?.mtimeMs === mtimeMs) return hit.ruler;
-  const ruler = judgeRuler(readFileSync(path, 'utf8'));
+  const ruler = read(readFileSync(path, 'utf8'));
   rulers.set(path, { mtimeMs, ruler });
   return ruler;
+}
+
+/**
+ * The ruler the rep in `dir` was graded on: the judge's (judgeRuler over
+ * judge/prompt.md), and for an agent rep the guard classifier that graded its
+ * refusals (GUARD_STAMP), as `<judge> guard:<sha>`. A rejudge replaces the
+ * prompt and a rescore restamps the guard, so either moves the rep to today's
+ * ruler with nothing else to keep in step. Null for a rep graded by neither.
+ */
+export function rulerAt(dir: string): string | null {
+  const judge = readCached(join(dir, 'judge', 'prompt.md'), judgeRuler);
+  const guard = readCached(join(dir, GUARD_STAMP), (t) => t.trim() || null);
+  return [judge, guard && `guard:${guard}`].filter(Boolean).join(' ') || null;
 }
 
 /** The freeze ids each home holds, by file name only: no freeze file is read. */

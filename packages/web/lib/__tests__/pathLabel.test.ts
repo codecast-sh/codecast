@@ -50,6 +50,13 @@ describe("pathLabel — query strings never leak into labels", () => {
     expect(pathLabel("/changes?d=2026-02-31")).toBe("Changes");
     expect(pathLabel("/changes?d=yesterday")).toBe("Changes");
   });
+
+  it("titles a Changes week by its Monday, over the day a week URL keeps", () => {
+    expect(pathLabel("/changes?w=2026-W40")).toBe("Changes, week of Mon 28 Sep");
+    expect(pathLabel("/changes?d=2026-10-02&w=2026-W40")).toBe("Changes, week of Mon 28 Sep");
+    expect(pathLabel("/changes?d=2026-10-02&w=2026-W99")).toBe("Changes, Fri 2 Oct");
+    expect(pathLabel("/changes?w=")).toBe("Changes");
+  });
 });
 
 describe("conversationTabPath", () => {

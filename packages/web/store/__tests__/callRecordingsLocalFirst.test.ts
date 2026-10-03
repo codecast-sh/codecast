@@ -144,6 +144,22 @@ describe("call recordings local-first", () => {
     expect(shared()).toBe(false);
   });
 
+  it("a null answer (access lost, or the call gone) takes the call's files and facts out at once, and only that call's", async () => {
+    const { forgetCallRecordings } = await import("../../hooks/useRoomRecording");
+    const OTHER = "k17other";
+    useInboxStore.getState().syncTable("callRecordings", [{ ...row("z1", "r9", "composite"), transcript_id: OTHER }], { isDelta: true });
+    useInboxStore.getState().syncTable("callRecordingCalls", [{ ...facts(false), _id: OTHER }], { isDelta: true });
+    forgetCallRecordings(CALL);
+    // No signed URL of this call is left for a player or a frame to keep using.
+    expect(ids()).toEqual(["z1"]);
+    expect(st().callRecordingCalls[CALL]).toBeUndefined();
+    expect(st().callRecordingCalls[OTHER]).toBeDefined();
+    // Forgetting a call the store never held changes nothing.
+    const before = st().callRecordings;
+    forgetCallRecordings("k17never");
+    expect(st().callRecordings).toBe(before);
+  });
+
   it("rows past their URL window are held back on a first mount, kept under a player already on screen", async () => {
     const { lapsedRowsVerdict } = await import("../../hooks/useRoomRecording");
     // A fresh mount onto old rows: the page holds the player's place.

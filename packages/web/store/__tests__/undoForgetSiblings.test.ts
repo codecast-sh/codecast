@@ -26,11 +26,11 @@ const row = () => ({ _id: TEAM, session_id: "s", updated_at: 1, agent_type: "cla
 const s = () => useInboxStore.getState() as any;
 const excludes = () => Object.entries(s().pending).filter(([k, v]: any) => k.includes(TEAM) && v.type === "exclude").map(([k]) => k);
 
-function seed() {
+function seed(opts: { meta?: boolean } = {}) {
   declareViewNav("gesture");
   useInboxStore.setState({
     sessions: { [TEAM]: row() },
-    conversations: { [TEAM]: { _id: TEAM, is_own: false } },
+    conversations: opts.meta === false ? {} : { [TEAM]: { _id: TEAM, is_own: false } },
     messages: {}, pendingMessages: {}, pagination: {}, pendingSessionCreates: {}, pending: {},
     currentSessionId: null, viewingDismissedId: null, currentUser: { _id: ME }, clientState: {},
   } as any);
@@ -88,4 +88,43 @@ test("the host lifts its forget's excludes for the follower's undo mut", () => {
   applyUpdatesToStore(undoMut, { optimistic: true });
   expect(s().sessions[TEAM]?._id).toBe(TEAM);
   expect(excludes().filter((k) => k.startsWith("sessions:"))).toEqual([]);
+});
+
+// The common case: a teammate session this window never opened holds no
+// conversations row, so the undo puts back only the sessions row. The
+// sibling's forget still planted the conversations exclude, and nothing else
+// would ever lift it: the conversation's meta could never sync in again.
+test("without a conversations row, the sibling's conversations exclude lifts and the meta lands", () => {
+  seed({ meta: false });
+  s().stashSession(TEAM);
+  const forward = posted.slice();
+  performUndo();
+  const undo = posted.slice(forward.length);
+  seed({ meta: false });
+  for (const m of forward) s().applyGestureBridge(m);
+  expect(excludes().sort()).toEqual([`conversations:${TEAM}`, `sessions:${TEAM}`]);
+  for (const m of undo) s().applyGestureBridge(m);
+  expect(s().sessions[TEAM]?._id).toBe(TEAM);
+  expect(excludes()).toEqual([]);
+  s().syncRecord("conversations", TEAM, { _id: TEAM, is_own: false, title: "meta" });
+  expect(s().conversations[TEAM]?.title).toBe("meta");
+});
+
+test("without a conversations row, the host lifts the conversations exclude for the follower's undo mut", () => {
+  seed({ meta: false });
+  let teed: any[] = [];
+  s()._setActionTee((_n: string, patches: any[], state: any) => { teed.push(...buildMutUpdates(patches, state)); });
+  s().stashSession(TEAM);
+  const forward = posted.slice();
+  teed = [];
+  performUndo();
+  const undoMut = teed;
+  s()._setActionTee(null);
+  seed({ meta: false });
+  for (const m of forward) s().applyGestureBridge(m);
+  applyUpdatesToStore(undoMut, { optimistic: true });
+  expect(s().sessions[TEAM]?._id).toBe(TEAM);
+  expect(excludes()).toEqual([]);
+  s().syncRecord("conversations", TEAM, { _id: TEAM, is_own: false, title: "meta" });
+  expect(s().conversations[TEAM]?.title).toBe("meta");
 });

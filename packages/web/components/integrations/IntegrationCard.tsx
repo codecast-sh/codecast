@@ -8,6 +8,7 @@
 // colour and a monospace ledger line, never from a nested box. Both themes are
 // tokens only.
 
+import { useState } from "react";
 import type { AppConnectionScope, AppConnectionStatus, AppDescriptor } from "@codecast/shared/contracts";
 import { APP_LOOK, ISSUE_SYNC_APPS, useAppConnection } from "../../lib/integrations";
 import type { GithubInstallUser } from "../../lib/githubAppInstall";
@@ -17,6 +18,7 @@ import { ConfirmButton, LedgerLine, QuietButton, StatusDot, type DotTone } from 
 import { GithubInstallDetail } from "./GithubInstallDetail";
 import { IssueSyncSources } from "./IssueSyncSources";
 import { SlackMirrorsSummary } from "./SlackMirrorsSummary";
+import { TokenConnectForm } from "./TokenConnectForm";
 
 /**
  * Health as the connector stamps it (issue-sync.md S1.5). Absent health is
@@ -56,7 +58,12 @@ export function IntegrationCard({
   showSources?: boolean;
 }) {
   const { icon: Icon, accent } = APP_LOOK[descriptor.id];
-  const { connect, disconnect, busy, error } = useAppConnection(descriptor, connection, scope);
+  const { connect, connectToken, disconnect, busy, error } = useAppConnection(descriptor, connection, scope);
+  // A token app connects through an inline form instead of a popup; the
+  // Connect button opens it, and so does Replace token once connected.
+  const tokenPaste = descriptor.connectKind === "token-paste";
+  const [tokenFormOpen, setTokenFormOpen] = useState(false);
+  const openOrConnect = tokenPaste ? () => setTokenFormOpen(true) : connect;
 
   const connected = connection?.status === "connected" ? connection : null;
   const comingSoon = descriptor.connectKind === "coming-soon" || connection?.status === "coming_soon";
@@ -155,10 +162,13 @@ export function IntegrationCard({
                 Install on another account or organization
               </QuietButton>
             )}
+            {tokenPaste && !tokenFormOpen && (
+              <QuietButton onClick={openOrConnect}>Replace token</QuietButton>
+            )}
           </>
-        ) : (
+        ) : tokenFormOpen ? null : (
           <QuietButton
-            onClick={connect}
+            onClick={openOrConnect}
             busy={busy}
             // When the state query failed this app may already be connected;
             // offering Connect would overclaim.
@@ -169,6 +179,19 @@ export function IntegrationCard({
           </QuietButton>
         )}
       </div>
+
+      {tokenPaste && tokenFormOpen && (
+        <TokenConnectForm
+          descriptor={descriptor}
+          busy={busy}
+          onSubmit={async (token, config) => {
+            const stored = await connectToken(token, config);
+            if (stored) setTokenFormOpen(false);
+            return stored;
+          }}
+          onCancel={() => setTokenFormOpen(false)}
+        />
+      )}
 
       {descriptor.id === "github" && !comingSoon && (
         <>

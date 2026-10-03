@@ -52,9 +52,12 @@ export function isRecordingActive(status: CallRecordingStatus): boolean {
 }
 
 // Why a file stopped. "pressed" is somebody in the room (a guest included);
-// "huddle_ended" is the room emptying; "share_ended" ends a screen file when
-// its share stops while the run goes on; "limit" is LiveKit's own ceiling.
-export const CALL_RECORDING_STOP_REASONS = ["pressed", "huddle_ended", "share_ended", "limit", "failed"] as const;
+// "huddle_ended" is the call's record ending (the huddle is over);
+// "room_empty" is the media room left with no teammate in it while the seat
+// leases agree (guests may still be there); "share_ended" ends a screen file
+// when its share stops while the run goes on; "limit" is a ceiling (ours or
+// LiveKit's); "ended" is LiveKit finishing a file without saying why.
+export const CALL_RECORDING_STOP_REASONS = ["pressed", "huddle_ended", "room_empty", "share_ended", "limit", "ended", "failed"] as const;
 export type CallRecordingStopReason = (typeof CALL_RECORDING_STOP_REASONS)[number];
 
 /** The fields of a recording row that alignment reads. Ids are strings so the
@@ -120,7 +123,9 @@ export type CallMomentPrefer = "composite" | "screen";
  * share's own file. `cast call snap`, the frame a `cl-42@12:34` citation
  * renders as, and its hover picture all take this, so the picture an agent
  * saw is the one its readers see. The call page's player is the exception on
- * purpose: it plays the room, which is the file with everyone's sound.
+ * purpose: it plays the room, which is the file with everyone's sound, except
+ * when a citation's link opens it (`view=screen`, callLinks.CallView): then it
+ * shows the screen the citation showed, with the room's sound under it.
  */
 export const CALL_FRAME_PREFER: CallMomentPrefer = "screen";
 
@@ -185,6 +190,50 @@ export function coveredSpans<R extends CallRecordingSpan>(recordings: readonly R
     });
   }
   return out.sort((a, b) => a.fromMs - b.fromMs || (a.kind === b.kind ? 0 : a.kind === "composite" ? -1 : 1) || a.toMs - b.toMs);
+}
+
+/** The player clock for a time into a call: `0:07`, `12:34`, `1:02:03`.
+ *  Whole seconds, rounded down, so the label never names a later second
+ *  than the frame shows. Here beside the spans it names (entities re-exports
+ *  it with the `cl-42@12:34` grammar it formats for). */
+export function formatCallTime(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const sec = String(total % 60).padStart(2, "0");
+  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
+}
+
+/** The whole second at or after `ms`, or before it when that would pass
+ *  `limit`: a moment a citation (`cl-42@m:ss`, whole seconds) can name
+ *  exactly. */
+export function wholeSecond(ms: number, limit = Infinity): number {
+  const up = Math.ceil(ms / 1000) * 1000;
+  return up <= limit ? up : Math.floor(ms / 1000) * 1000;
+}
+
+/** The recorded spans as one line: `0:00-4:10 the room, 1:02-3:30 Ana's
+ *  screen`. What `cast call` prints and what the call page's header says. */
+export function describeSpans(spans: readonly CallCoveredSpan[]): string {
+  return spans
+    .map((s) => `${formatCallTime(s.fromMs)}-${formatCallTime(s.toMs)} ${recordingSubject(s)}${s.pending ? " (still saving)" : ""}`)
+    .join(", ");
+}
+
+/** The recorded moment nearest `atMs`, for a "try this instead" hint (the
+ *  CLI's refusal, the call page's "the video starts at"): the moment itself
+ *  when covered, else the closest edge of a finished span (a whole second
+ *  inside it, since an end is exclusive), so the hint is a reference that
+ *  will itself succeed. */
+export function nearestRecordedMs(spans: readonly CallCoveredSpan[], atMs: number): number | null {
+  let best: number | null = null;
+  for (const s of spans) {
+    if (s.pending) continue;
+    const at = wholeSecond(Math.min(Math.max(atMs, s.fromMs), s.toMs - 1), s.toMs - 1);
+    if (at < s.fromMs) continue;
+    if (best === null || Math.abs(at - atMs) < Math.abs(best - atMs)) best = at;
+  }
+  return best;
 }
 
 export type CallMomentHit<R extends CallRecordingSpan> = {
@@ -332,6 +381,14 @@ export function callRecordingUrlWindow(now: number = Date.now()): number {
 // not have every press refused.
 export const RECORDING_PRESS_FRESH_MS = 30_000;
 
+/** A press within this long of the room's last stop is refused: LiveKit is
+ *  still finishing that file, and Record toggled as fast as a hand can press
+ *  it would start a billed egress per press. Counted from when the stop was
+ *  asked for, never from LiveKit's upload (which can take minutes), and the
+ *  same rule on both ends: the server refuses inside it (convex
+ *  callRecordings.startRecording) and the Record button waits it out. */
+export const RECORDING_RESTART_COOLDOWN_MS = 5_000;
+
 /** Is a press made at `pressedAt` too old to act on at `now`? A press with no
  *  stamp (a client older than the rule) is taken as made now. */
 export function recordingPressStale(pressedAt: unknown, now: number): boolean {
@@ -369,6 +426,27 @@ export function recordingAudience(roomKey?: string | null): string {
  *  video on it (shareIncludesVideo: off on every link until turned on). */
 export function recordingKeptWords(roomKey?: string | null): string {
   return `The video stays with the call, where ${recordingAudience(roomKey)} can watch it, and anyone with the call's public link if someone shares the video on it.`;
+}
+
+/** How a run that stopped by itself is said, by its reason, for the room's
+ *  thread and the notice: null for the reasons said otherwise (a press names
+ *  who pressed, a failure gives its words). Each says only what is true: the
+ *  huddle ending, the media room left without a teammate (guests may still
+ *  be in it), a ceiling, or LiveKit closing the file without a reason. */
+export function recordingStoppedItselfWords(reason: string | null | undefined): string | null {
+  switch (reason) {
+    case "huddle_ended":
+      return "Recording stopped when the huddle ended";
+    case "room_empty":
+      return "Recording stopped: no teammate was left in the call";
+    case "limit":
+      return "Recording stopped at its time limit";
+    case "ended":
+    case "share_ended":
+      return "Recording stopped";
+    default:
+      return null;
+  }
 }
 
 /** A failed run's reason as a sentence a person reads. The server's own

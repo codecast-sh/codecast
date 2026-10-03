@@ -75,6 +75,16 @@ export class DispatchHeldError extends Error {
   }
 }
 
+// A failed send that a later send ordered after it (an undo of it) already
+// overtook on the wire. Retrying would land it after its own reversal, so it
+// stops: the reversal leaves the server where it was before this write.
+export class DispatchOvertakenError extends Error {
+  constructor(action: string, readonly cause: unknown) {
+    super(`"${action}" failed after a later write that reverses it was sent; not retried`);
+    this.name = "DispatchOvertakenError";
+  }
+}
+
 export function isParkedDispatchError(error: unknown): error is DispatchNotWiredError | DispatchHeldError {
   return (error instanceof DispatchNotWiredError && error.parked) || error instanceof DispatchHeldError;
 }
@@ -494,6 +504,8 @@ async function dispatchWithRetry(
   onError?: (action: string, error: unknown, args?: unknown) => void,
   retryDelays: number[] = RETRY_DELAYS,
   assertCurrent: () => void = () => {},
+  // Asked after a transient failure, before the retry: false stops here.
+  keepRetrying?: () => boolean,
 ): Promise<any> {
   const safeArgs = sanitizeForTransport(args);
   const safeGrouped = grouped !== undefined ? sanitizeForTransport(grouped) : undefined;
@@ -516,6 +528,7 @@ async function dispatchWithRetry(
         onError?.(action, e, args);
         throw e;
       }
+      if (keepRetrying && !keepRetrying()) throw new DispatchOvertakenError(action, e);
       await new Promise(r => setTimeout(r, retryDelays[attempt]));
       assertCurrent();
     }
@@ -589,6 +602,7 @@ export function collectActionFieldLocks(
 export function releaseActionFieldLocks(
   state: Record<string, any>,
   locks: ActionFieldLock[],
+  refusedLock?: (key: string, entry: PendingEntry) => ActionFieldLock | undefined,
 ): {
   pending: Record<string, PendingEntry>;
   slices: Record<string, any>;
@@ -603,7 +617,17 @@ export function releaseActionFieldLocks(
     if (!entry || (entry.ts ?? 0) !== lock.ts) continue;
     if (lock.membership ? entry.type !== lock.membership : entry.type !== "field" || !sameValue(entry.value, lock.value)) continue;
     if (!pending) pending = { ...current };
-    if (lock.priorLock) pending[lock.key] = lock.priorLock;
+    // The lock this one displaced may belong to a send the server already
+    // refused (two writes of one cell in flight, refused in send order). Its
+    // value never reached the server, so step back past it to what it
+    // displaced in turn.
+    let { prior, hadPrior, priorLock, index } = lock;
+    let refused: ActionFieldLock | undefined;
+    while (priorLock && (refused = refusedLock?.(lock.key, priorLock))) {
+      ({ prior, hadPrior, priorLock } = refused);
+      index = refused.index ?? index;
+    }
+    if (priorLock) pending[lock.key] = priorLock;
     else delete pending[lock.key];
     const slice = lock.storeKey in slices ? slices[lock.storeKey] : state[lock.storeKey];
     const rowKey = lock.rowKey ?? "_id";
@@ -611,22 +635,22 @@ export function releaseActionFieldLocks(
       if (!Array.isArray(slice)) {
         if (!slice || typeof slice !== "object") continue;
         const present = slice[lock.recordId] !== undefined;
-        if (lock.membership === "include" && present && !lock.hadPrior) {
+        if (lock.membership === "include" && present && !hadPrior) {
           const { [lock.recordId]: _gone, ...rest } = slice;
           slices[lock.storeKey] = rest;
           rows.push({ storeKey: lock.storeKey, recordId: lock.recordId, row: undefined });
-        } else if (lock.membership === "exclude" && !present && lock.hadPrior) {
-          slices[lock.storeKey] = { ...slice, [lock.recordId]: lock.prior };
-          rows.push({ storeKey: lock.storeKey, recordId: lock.recordId, row: lock.prior });
+        } else if (lock.membership === "exclude" && !present && hadPrior) {
+          slices[lock.storeKey] = { ...slice, [lock.recordId]: prior };
+          rows.push({ storeKey: lock.storeKey, recordId: lock.recordId, row: prior });
         }
         continue;
       }
       const at = slice.findIndex((r: any) => r?.[rowKey] === lock.recordId);
       if (lock.membership === "include" && at !== -1) {
         slices[lock.storeKey] = slice.filter((_: any, i: number) => i !== at);
-      } else if (lock.membership === "exclude" && at === -1 && lock.hadPrior) {
+      } else if (lock.membership === "exclude" && at === -1 && hadPrior) {
         const out = [...slice];
-        out.splice(Math.min(lock.index ?? out.length, out.length), 0, lock.prior);
+        out.splice(Math.min(index ?? out.length, out.length), 0, prior);
         slices[lock.storeKey] = out;
       }
       continue;
@@ -634,7 +658,7 @@ export function releaseActionFieldLocks(
     const baseRow = lockedRow(slice, lock.recordId, rowKey);
     if (!baseRow || !sameValue(baseRow[lock.field], lock.value)) continue;
     const row = { ...baseRow };
-    if (lock.hadPrior) row[lock.field] = lock.prior;
+    if (hadPrior) row[lock.field] = prior;
     else delete row[lock.field];
     slices[lock.storeKey] = withLockedRow(slice, lock.recordId, row, rowKey);
     rows.push({ storeKey: lock.storeKey, recordId: lock.recordId, row });
@@ -847,15 +871,35 @@ export function mutativeMiddleware(
     // (RunActionOpts.after): delivered, refused for good, or parked in the
     // outbox after a transient failure. A parked id leaves the set when the
     // row is retired.
-    const liveSends = new Map<string, Promise<"ok" | "refused" | "parked">>();
+    type LiveSend = {
+      settled: Promise<"ok" | "refused" | "parked">;
+      /** Failed once and waiting to retry: a later send could overtake it. */
+      retrying: boolean;
+      /** Not sent yet: held behind the sends it follows. */
+      waiting: boolean;
+      /** A send ordered after it went out while this one was on its first attempt. */
+      overtaken: boolean;
+      receipt: boolean;
+    };
+    const liveSends = new Map<string, LiveSend>();
     const parkedOutboxIds = new Set<string>();
-    // Whether every send in `after` is behind us and none is parked. Null
-    // when nothing named is pending, so the send goes out at once.
+    // How a send ordered after `after` goes out. Sends leave in call order,
+    // so one still on its first attempt cannot be overtaken: the follower
+    // goes at once and marks it overtaken, so a failure of it is not retried
+    // after the follower landed. One already retrying (or a receipt, whose
+    // ambiguous failures replay) is waited for. One parked in the outbox
+    // holds the follower there too (false), so the drain keeps ts order.
+    // Null: send now.
     const settledInOrder = (after: readonly string[] | undefined): Promise<boolean> | null => {
-      if (!after?.some((id) => liveSends.has(id) || parkedOutboxIds.has(id))) return null;
-      return Promise.all(after.map((id) => liveSends.get(id))).then(
-        () => !after.some((id) => parkedOutboxIds.has(id)),
-      );
+      if (!after?.length) return null;
+      const live = after.map((id) => liveSends.get(id)).filter((s): s is LiveSend => !!s);
+      const parked = () => after.some((id) => parkedOutboxIds.has(id));
+      if (live.some((s) => s.retrying || s.waiting || s.receipt)) {
+        return Promise.all(live.map((s) => s.settled)).then(() => !parked());
+      }
+      if (parked()) return Promise.resolve(false);
+      for (const s of live) s.overtaken = true;
+      return null;
     };
     // coalesceKey → newest enqueued row for that key (by entry ts — enqueue
     // COMPLETIONS can invert order under slow storage). A newer row retires
@@ -904,12 +948,30 @@ export function mutativeMiddleware(
 
     // A plain action the server refused for good: undo its field locks (and
     // the row values they painted) unless a later write owns the field now.
+    // Every lock a refused send planted, so a later refusal of a newer write
+    // to the same cell does not bring one back (releaseActionFieldLocks).
+    // Two writes of one cell can share a millisecond, so a slot holds a list.
+    // Bounded: only the newest few matter, since a refusal follows its send.
+    const refusedLocks = new Map<string, ActionFieldLock[]>();
+    const refusedLockId = (key: string, ts: number | undefined) => `${key}\u0000${ts ?? 0}`;
+    const refusedLockFor = (key: string, entry: PendingEntry): ActionFieldLock | undefined =>
+      refusedLocks.get(refusedLockId(key, entry.ts))?.find((lock) =>
+        lock.membership ? entry.type === lock.membership : entry.type === "field" && sameValue(entry.value, lock.value),
+      );
     const releaseRefusedLocks = (actionName: string, locks: ActionFieldLock[], outboxId?: string) => {
       // The undo history names its entries by the dispatch that carried them.
       if (outboxId) markUndoOutboxRefused(outboxId);
       if (locks.length === 0) return;
+      for (const lock of locks) {
+        const id = refusedLockId(lock.key, lock.ts);
+        refusedLocks.set(id, [...(refusedLocks.get(id) ?? []), lock]);
+      }
+      for (const id of refusedLocks.keys()) {
+        if (refusedLocks.size <= 256) break;
+        refusedLocks.delete(id);
+      }
       const state = get();
-      const released = releaseActionFieldLocks(state, locks);
+      const released = releaseActionFieldLocks(state, locks, refusedLockFor);
       if (!released) return;
       const next: Record<string, any> = { pending: released.pending, ...released.slices };
       const patches: Patch[] = [{ op: "replace", path: ["pending"], value: released.pending }];
@@ -1396,15 +1458,25 @@ export function mutativeMiddleware(
           capturedError,
           retryDelays,
           () => assertDispatchCurrent(capturedDispatch),
+          () => {
+            const live = liveSends.get(outboxId);
+            if (live?.overtaken) return false;
+            if (live) live.retrying = true;
+            return true;
+          },
         );
         // Live sends are not ordered by themselves: a write retrying after a
         // transient error can land after a later call's send. A call that
         // names what it must follow waits for it, and parks behind it when
         // it is parked, so the drain delivers both in ts order.
+        // A send held this way is itself waited for by the sends that
+        // follow it, so the order holds down a chain of followers.
+        const waiting = settledInOrder(after);
         const dispatchNow = () => {
-          const waiting = settledInOrder(after);
           if (!waiting) return send();
           return waiting.then((inOrder) => {
+            const live = liveSends.get(outboxId);
+            if (live) live.waiting = false;
             if (!inOrder) throw new DispatchHeldError(key);
             return send();
           });
@@ -1423,6 +1495,7 @@ export function mutativeMiddleware(
           () => "ok" as const,
           (e) => {
             if (isPermanentDispatchError(e)) return "refused" as const;
+            if (e instanceof DispatchOvertakenError) return "ok" as const;
             // Without an outbox row nothing will replay it, so nothing waits on it.
             if (!enqueued) return "ok" as const;
             parkedOutboxIds.add(outboxId);
@@ -1435,7 +1508,7 @@ export function mutativeMiddleware(
             return "parked" as const;
           },
         );
-        liveSends.set(outboxId, settled);
+        liveSends.set(outboxId, { settled, retrying: false, waiting: !!waiting, overtaken: false, receipt: usesReceiptEnvelope });
         void settled.then(() => liveSends.delete(outboxId));
         const enqueueDurable = () =>
           enqueued ? enqueued.then(() => true, () => false) : Promise.resolve(false);
@@ -1530,6 +1603,12 @@ export function mutativeMiddleware(
           // standing over the server's.
           if (isPermanentDispatchError(e)) {
             releaseRefusedLocks(key, fieldLocks, outboxId);
+            await retireOutboxEntry(outboxId, enqueued);
+            void drainOutbox(false);
+          }
+          // Its reversal is already on the server: a replay of this row would
+          // land after it and undo the undo, so the row goes.
+          if (e instanceof DispatchOvertakenError) {
             await retireOutboxEntry(outboxId, enqueued);
             void drainOutbox(false);
           }

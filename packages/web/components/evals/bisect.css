@@ -1,0 +1,275 @@
+/* The bisect pages (docs/architecture/evals-ui.md 4.5): the free answer as a
+   fixed-order checklist, the priced plan, and the commit ruler whose brackets
+   close in as wells fill. Colour only through var(--sol-*): cyan is good and
+   fixed, magenta is bad and broke, and every state also has a shape. */
+
+.evb-page { padding: 20px 24px 48px; display: flex; flex-direction: column; gap: 18px; }
+.evb-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.evb-head h1 { font-size: 15px; font-weight: 600; color: var(--sol-text); margin: 0; }
+.evb-head .evb-sub { font-size: 12px; color: var(--sol-text-dim); }
+.evb-link { color: var(--sol-text-muted); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--sol-text-dim) 40%, transparent); text-underline-offset: 2px; }
+.evb-link:hover { color: var(--sol-text); }
+.evb-section { display: flex; flex-direction: column; gap: 10px; }
+.evb-note { font-size: 12px; line-height: 1.55; color: var(--sol-text-muted); }
+.evb-quiet { color: var(--sol-text-dim); }
+.evb-grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 18px; align-items: start; }
+.evb-grid > aside { position: sticky; top: 12px; }
+/* The live page: the rail beside the ruler, and right under it in one column. */
+.evb-live-grid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; grid-template-areas: "ruler rail" "rest rail"; gap: 18px; align-items: start; }
+.evb-area-ruler { grid-area: ruler; }
+.evb-area-rail { grid-area: rail; position: sticky; top: 12px; }
+.evb-area-rest { grid-area: rest; }
+@container evals (max-width: 980px) {
+  .evb-grid { grid-template-columns: minmax(0, 1fr); }
+  .evb-grid > aside { position: static; }
+  .evb-live-grid { grid-template-columns: minmax(0, 1fr); grid-template-areas: "ruler" "rail" "rest"; }
+  .evb-area-rail { position: static; }
+}
+
+/* ── Buttons ─────────────────────────────────────────────────────────────── */
+
+.evb-btn {
+  display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 12px;
+  font-size: 12.5px; font-weight: 500; color: var(--sol-text);
+  background: var(--sol-card); border: 1px solid var(--ev-rule); border-radius: 6px; cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.evb-btn:hover:not(:disabled) { border-color: var(--sol-border); background: var(--sol-bg-highlight); }
+.evb-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.evb-btn--go { color: var(--sol-bg); background: var(--sol-text); border-color: var(--sol-text); }
+.evb-btn--go:hover:not(:disabled) { background: color-mix(in srgb, var(--sol-text) 86%, var(--sol-cyan)); border-color: transparent; }
+.evb-btn--go kbd { color: var(--sol-bg) !important; background: transparent !important; border-color: color-mix(in srgb, var(--sol-bg) 45%, transparent) !important; box-shadow: none !important; }
+.evb-btn--stop { color: var(--sol-magenta); border-color: color-mix(in srgb, var(--sol-magenta) 40%, transparent); }
+
+/* ── Endpoints ───────────────────────────────────────────────────────────── */
+
+.evb-ends { display: grid; grid-template-columns: 170px minmax(0, 1fr) 54px minmax(0, 1fr) auto; gap: 10px; align-items: stretch; padding: 12px; }
+@container evals (max-width: 900px) { .evb-ends { grid-template-columns: 1fr; } .evb-ends-arrow { display: none; } }
+.evb-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.evb-field > label { font-size: 11px; color: var(--sol-text-dim); }
+.evb-input {
+  height: 30px; padding: 0 9px; width: 100%;
+  font: 12px var(--font-mono); font-variant-ligatures: none; color: var(--sol-text);
+  background: var(--sol-bg); border: 1px solid var(--ev-rule); border-radius: 6px; outline: none;
+}
+.evb-input:focus { border-color: var(--sol-cyan); }
+select.evb-input { font-family: var(--font-ui); }
+.evb-end { position: relative; padding-left: 12px; }
+.evb-end::before { content: ""; position: absolute; left: 0; top: 2px; bottom: 2px; width: 3px; border-radius: 2px; }
+.evb-end--good::before { background: var(--sol-cyan); }
+.evb-end--bad::before { background: var(--sol-magenta); }
+.evb-ends-arrow { display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 11px; color: var(--sol-text-dim); gap: 2px; }
+.evb-ends-arrow svg { width: 40px; height: 10px; }
+.evb-ends-go { display: flex; align-items: flex-end; }
+
+/* ── The checklist ───────────────────────────────────────────────────────── */
+
+.evb-checklist { list-style: none; margin: 0; padding: 4px 0; position: relative; }
+.evb-check { display: grid; grid-template-columns: 28px 92px minmax(0, 1fr); gap: 10px; align-items: baseline; padding: 9px 14px 9px 12px; position: relative; }
+.evb-check + .evb-check { border-top: 1px solid var(--ev-rule); }
+.evb-check-lamp { position: relative; top: 2px; display: flex; justify-content: center; }
+.evb-check-name { font-size: 12.5px; font-weight: 600; color: var(--sol-text); }
+.evb-check-detail { font-size: 12.5px; line-height: 1.5; color: var(--sol-text-muted); }
+.evb-check-n { font-size: 10.5px; color: var(--sol-text-dim); font-variant-numeric: tabular-nums; margin-right: 6px; }
+.evb-check[data-state="same"] .evb-check-name { color: var(--sol-text-muted); font-weight: 500; }
+.evb-check[data-state="after"] { opacity: 0.45; }
+.evb-check[data-state="answer"] { background: color-mix(in srgb, var(--sol-text) 5%, transparent); }
+.evb-check[data-state="answer"]::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--sol-text); }
+.evb-check[data-state="answer"] .evb-check-detail { color: var(--sol-text); }
+.evb-check-also { margin-left: 6px; }
+
+/* ── The answer ──────────────────────────────────────────────────────────── */
+
+.evb-answer { padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
+.evb-answer-line { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+.evb-answer-num { font-size: 32px; line-height: 1; font-weight: 500; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; color: var(--sol-text); }
+.evb-answer-say { font-size: 14px; line-height: 1.45; color: var(--sol-text); max-width: 70ch; }
+.evb-arrow { display: inline-flex; align-items: center; gap: 6px; }
+
+/* Confidence as three cells, the reached one inked. */
+.evb-confidence { display: inline-grid; grid-template-columns: repeat(3, auto); border: 1px solid var(--ev-rule); border-radius: 6px; overflow: hidden; font-size: 11.5px; }
+.evb-confidence > span { padding: 4px 10px; color: var(--sol-text-dim); }
+.evb-confidence > span + span { border-left: 1px solid var(--ev-rule); }
+.evb-confidence > span[data-on] { color: var(--sol-bg); background: var(--sol-text); font-weight: 600; }
+.evb-confidence > span[data-on="unattributable"] { background: var(--sol-magenta); }
+
+.evb-reason { font-size: 12.5px; line-height: 1.5; color: var(--sol-text); padding: 8px 12px; border-radius: 6px; border: 1px dashed color-mix(in srgb, var(--sol-magenta) 45%, transparent); background: color-mix(in srgb, var(--sol-magenta) 6%, transparent); }
+/* An empty source answer: no candidate left, and the one way to widen it. */
+.evb-empty { display: flex; flex-direction: column; gap: 12px; }
+.evb-widen { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 12.5px; line-height: 1.5; color: var(--sol-text-muted); padding: 9px 12px; border-radius: 6px; border: 1px solid var(--ev-rule); background: color-mix(in srgb, var(--sol-blue) 5%, transparent); }
+.evb-widen > span:first-child { flex: 1 1 32ch; }
+/* Bisects already over this range: one row each, the culprit in the failure colour. */
+.evb-prior { padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+.evb-prior h2 { display: flex; align-items: center; gap: 7px; margin: 0 0 4px; font-size: 13px; font-weight: 600; color: var(--sol-text); }
+.evb-prior-row { display: grid; grid-template-columns: minmax(0, 15ch) minmax(0, 18ch) minmax(0, 1fr) auto; gap: 12px; align-items: baseline; padding: 6px 8px; margin: 0 -8px; border-radius: 5px; font-size: 12px; color: var(--sol-text); text-decoration: none; }
+.evb-prior-row:hover { background: var(--sol-bg-highlight); }
+.evb-prior-row > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.evb-prior-word { font-weight: 500; }
+.evb-prior-word--culprit { color: var(--sol-magenta); }
+.evb-prior-ends, .evb-prior-when { color: var(--sol-text-dim); }
+.evb-prior-row[data-evb-live] .evb-prior-word::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--sol-blue); vertical-align: 1px; }
+@container evals (max-width: 720px) { .evb-prior-row { grid-template-columns: minmax(0, 1fr) auto; } .evb-prior-ends { display: none; } }
+/* The one-bisect lock, named above Start. */
+.evb-lock { display: flex; gap: 9px; align-items: flex-start; font-size: 12px; line-height: 1.5; color: var(--sol-text); padding: 9px 10px; border-radius: 6px; border: 1px dashed color-mix(in srgb, var(--sol-blue) 55%, transparent); background: color-mix(in srgb, var(--sol-blue) 6%, transparent); }
+.evb-lock-dot { flex: none; width: 7px; height: 7px; margin-top: 5px; border-radius: 50%; background: var(--sol-blue); }
+
+/* ── Candidate rows ──────────────────────────────────────────────────────── */
+
+.evb-cands { display: flex; flex-direction: column; }
+.evb-cand { display: grid; grid-template-columns: 88px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 7px 0; font-size: 12.5px; }
+.evb-cand-wrap + .evb-cand-wrap { border-top: 1px solid var(--ev-rule); }
+.evb-cand[role="button"] { cursor: pointer; border-radius: 4px; }
+.evb-cand[role="button"]:hover { background: color-mix(in srgb, var(--sol-text) 4%, transparent); }
+.evb-cand[role="button"]:focus-visible { outline: 2px solid var(--sol-cyan); outline-offset: 1px; }
+.evb-cand-sha { font: 12px var(--font-mono); font-variant-ligatures: none; color: var(--sol-text); display: inline-flex; align-items: center; gap: 3px; }
+.evb-cand-chev { width: 12px; height: 12px; color: var(--sol-text-dim); transition: transform 120ms ease; flex-shrink: 0; }
+.evb-cand-body { padding: 4px 0 12px; }
+.evb-cand-subject { color: var(--sol-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.evb-cand-meta { font-size: 11px; color: var(--sol-text-dim); }
+.evb-cand-side { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.evb-cand--patch .evb-cand-sha { padding: 1px 5px 1px 0; border-radius: 3px; background-image: repeating-linear-gradient(135deg, var(--ev-hatch) 0 3px, transparent 3px 6px); }
+
+/* ── Plan panel ──────────────────────────────────────────────────────────── */
+
+.evb-plan { padding: 14px 16px; display: flex; flex-direction: column; gap: 14px; }
+.evb-plan h2, .evb-rail h2, .evb-section h2 { font-size: 13px; font-weight: 600; margin: 0; display: flex; align-items: center; gap: 8px; color: var(--sol-text); }
+.evb-plan-row { display: flex; flex-direction: column; gap: 6px; }
+.evb-plan-row > .evb-label { font-size: 11px; color: var(--sol-text-dim); }
+.evb-freeze { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 3px 0; cursor: pointer; }
+.evb-freeze input { accent-color: var(--sol-text); }
+.evb-freeze-role { font-size: 10.5px; color: var(--sol-text-dim); margin-left: auto; }
+.evb-freeze-role[data-role="flipped"] { color: var(--sol-magenta); }
+.evb-cost { font-size: 13px; line-height: 1.5; color: var(--sol-text); padding: 10px 12px; border-radius: 6px; background: var(--sol-bg-alt); border: 1px solid var(--ev-rule); }
+.evb-cost-figs { display: grid; grid-template-columns: repeat(4, auto); gap: 2px 14px; margin-top: 8px; font-size: 11px; color: var(--sol-text-dim); }
+.evb-cost-figs b { display: block; font-size: 15px; font-weight: 500; color: var(--sol-text); font-variant-numeric: tabular-nums; }
+.evb-over { font-size: 12px; color: var(--sol-magenta); }
+.evb-confirm { display: flex; gap: 8px; align-items: flex-start; font-size: 12px; line-height: 1.45; color: var(--sol-text); padding: 9px 10px; border-radius: 6px; border: 1px solid color-mix(in srgb, var(--sol-orange) 45%, transparent); background: color-mix(in srgb, var(--sol-orange) 7%, transparent); cursor: pointer; }
+.evb-confirm input { margin-top: 2px; accent-color: var(--sol-orange); }
+.evb-classes { display: flex; flex-wrap: wrap; gap: 4px; }
+.evb-pending { font-size: 12px; color: var(--sol-text-dim); display: flex; align-items: center; gap: 8px; }
+.evb-nums { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+/* ── The ruler ───────────────────────────────────────────────────────────── */
+
+.evb-ruler-wrap { border: 1px solid var(--ev-rule); border-radius: 8px; overflow-x: auto; overflow-y: hidden; }
+.evb-ruler { position: relative; padding: 30px 16px 18px; min-width: max-content; }
+.evb-ruler-row { display: flex; gap: var(--evb-gap); align-items: flex-start; position: relative; }
+.evb-col { width: var(--evb-w); flex-shrink: 0; display: flex; flex-direction: column; gap: 8px; transition: opacity 300ms ease, filter 300ms ease; }
+.evb-col--control { width: var(--evb-cw); }
+.evb-col[data-outside] { opacity: 0.36; filter: saturate(0.4); }
+
+.evb-tile {
+  position: relative; height: 92px; padding: 8px 9px 7px; border-radius: 7px;
+  background: var(--sol-card); border: 1px solid var(--ev-rule);
+  display: flex; flex-direction: column; gap: 3px;
+  transition: transform 400ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 400ms ease, border-color 200ms ease;
+}
+.evb-tile-sha { font: 11.5px var(--font-mono); font-variant-ligatures: none; color: var(--sol-text); display: flex; align-items: center; gap: 5px; }
+.evb-tile-subject { font-size: 11.5px; line-height: 1.3; color: var(--sol-text-muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.evb-tile-foot { margin-top: auto; display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; font-size: 10.5px; color: var(--sol-text-dim); }
+.evb-tile-foot > * { flex-shrink: 0; }
+/* The session pill takes what the tags leave and ellipsizes its own label, never cut mid-word. */
+.evb-tile-foot > .evb-tile-session { flex: 0 1 auto; min-width: 2.2em; display: flex; overflow: hidden; }
+.evb-tile-session * { min-width: 0; max-width: 100%; }
+.evb-tile-session .entity-ref > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.evb-tile[data-verdict="good"] { border-color: color-mix(in srgb, var(--sol-cyan) 55%, transparent); }
+.evb-tile[data-verdict="bad"] { border-color: color-mix(in srgb, var(--sol-magenta) 55%, transparent); }
+.evb-tile[data-verdict="pending"] { border-style: dashed; border-color: var(--sol-text-dim); }
+.evb-tile[data-verdict="skip"] { border-style: dotted; }
+.evb-tile--patch { background-image: repeating-linear-gradient(135deg, var(--ev-hatch) 0 4px, transparent 4px 9px); }
+.evb-tile--control { height: 92px; justify-content: center; align-items: center; text-align: center; background: transparent; border-style: dashed; font-size: 11px; color: var(--sol-text-muted); }
+.evb-tile--culprit {
+  transform: translateY(-6px);
+  border-color: var(--sol-magenta);
+  box-shadow: 0 10px 24px -8px color-mix(in srgb, var(--sol-magenta) 45%, transparent), 0 0 0 1px var(--sol-magenta);
+}
+.evb-tag { font-size: 10px; padding: 0 5px; height: 15px; display: inline-flex; align-items: center; border-radius: 3px; border: 1px solid var(--ev-rule); color: var(--sol-text-dim); white-space: nowrap; }
+.evb-tag--culprit { color: var(--sol-bg); background: var(--sol-magenta); border-color: var(--sol-magenta); }
+.evb-tile-verdict { position: absolute; top: 7px; right: 7px; }
+
+/* Render classes: a bracket under tiles that render alike. */
+.evb-spans { height: 18px; }
+.evb-col-spacer { height: 14px; flex-shrink: 0; }
+.evb-span { position: absolute; top: 3px; height: 8px; border: 1px solid var(--sol-text-dim); border-top: 0; border-radius: 0 0 3px 3px; }
+.evb-span-label { position: absolute; top: 9px; left: 50%; transform: translateX(-50%); font-size: 10px; color: var(--sol-text-dim); white-space: nowrap; background: var(--sol-bg); padding: 0 4px; }
+.evb-span[data-skip] { border-style: dotted; }
+
+/* The good and bad brackets slide in as probes resolve. */
+.evb-bracket {
+  position: absolute; top: -8px; height: 108px; width: 9px; pointer-events: none;
+  border: 2.5px solid currentColor; transition: transform 400ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.evb-bracket--good { color: var(--sol-cyan); border-right: 0; border-radius: 3px 0 0 3px; }
+.evb-bracket--bad { color: var(--sol-magenta); border-left: 0; border-radius: 0 3px 3px 0; }
+.evb-bracket-label { position: absolute; top: -19px; font-size: 10.5px; font-weight: 600; white-space: nowrap; }
+.evb-bracket--good .evb-bracket-label { left: -2px; }
+.evb-bracket--bad .evb-bracket-label { right: -2px; }
+
+/* Wells: one per rep per freeze, popping in as reps land. */
+.evb-wells { display: flex; flex-direction: column; gap: 3px; padding: 6px 7px; border-radius: 6px; background: color-mix(in srgb, var(--sol-card) 80%, transparent); border: 1px solid var(--ev-rule); }
+.evb-wells-label { font-size: 9.5px; color: var(--sol-text-dim); margin-bottom: 1px; display: flex; flex-direction: column; gap: 0; line-height: 1.35; }
+.evb-wells-tally { white-space: nowrap; }
+.evb-wells-row { display: flex; gap: 2px; align-items: center; }
+.evb-wells-role { width: 8px; flex: none; font: 8.5px var(--font-mono); color: var(--sol-text-dim); text-align: left; }
+.evb-wells-row[data-role="control"] > :not(.evb-wells-role) { opacity: 0.62; }
+
+/* ── The rail ────────────────────────────────────────────────────────────── */
+
+.evb-rail { padding: 14px 16px; display: flex; flex-direction: column; gap: 14px; }
+.evb-spend { display: flex; flex-direction: column; gap: 6px; }
+.evb-spend-figs { display: flex; align-items: baseline; gap: 6px; }
+.evb-spend-track { height: 6px; border-radius: 3px; background: color-mix(in srgb, var(--sol-text) 9%, transparent); overflow: hidden; }
+.evb-spend-fill { height: 100%; background: var(--sol-text); border-radius: 3px; transition: width 400ms ease-out; }
+.evb-facts { display: grid; grid-template-columns: auto 1fr; gap: 5px 12px; font-size: 12px; }
+.evb-facts dt { color: var(--sol-text-dim); }
+.evb-facts dd { margin: 0; color: var(--sol-text); font-variant-numeric: tabular-nums; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.evb-stall {
+  display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--sol-text);
+  padding: 7px 10px; border-radius: 6px; border: 1px dashed color-mix(in srgb, var(--sol-yellow) 70%, transparent);
+  background: color-mix(in srgb, var(--sol-yellow) 12%, transparent);
+}
+.evb-log { font: 11px/1.55 var(--font-mono); font-variant-ligatures: none; color: var(--sol-text-muted); background: var(--sol-bg-inset, var(--sol-bg-alt)); border: 1px solid var(--ev-rule); border-radius: 6px; padding: 8px 10px; white-space: pre-wrap; word-break: break-word; max-height: 160px; overflow: auto; }
+.evb-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.evb-step { display: grid; grid-template-columns: 64px 64px minmax(0, 1fr); gap: 10px; padding: 5px 0; font-size: 12px; align-items: baseline; }
+.evb-step + .evb-step { border-top: 1px solid var(--ev-rule); }
+.evb-step-at { font-size: 11px; color: var(--sol-text-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.evb-step-kind { font-size: 11px; color: var(--sol-text-dim); }
+.evb-step[data-kind="answer"] .evb-step-kind, .evb-step[data-kind="answer"] .evb-step-text { color: var(--sol-text); font-weight: 600; }
+.evb-step[data-kind="error"] .evb-step-kind { color: var(--sol-red); }
+
+/* ── The result ──────────────────────────────────────────────────────────── */
+
+.evb-result { padding: 16px 18px; display: flex; flex-direction: column; gap: 16px; }
+.evb-result-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.evb-drift {
+  display: flex; gap: 12px; align-items: flex-start; padding: 14px 16px; border-radius: 8px;
+  border: 1px solid var(--sol-violet); background: color-mix(in srgb, var(--sol-violet) 8%, transparent);
+}
+.evb-drift strong { font-size: 14px; font-weight: 600; color: var(--sol-text); display: block; margin-bottom: 4px; }
+.evb-examples { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 10px; }
+.evb-examples .cc-example { background: var(--sol-card); border: 1px solid var(--ev-rule); border-radius: 8px; padding: 10px 12px; }
+.evb-example-name { font-size: 11.5px; color: var(--sol-text-dim); margin-bottom: 4px; display: flex; gap: 6px; align-items: center; }
+
+/* ── Commit panel ────────────────────────────────────────────────────────── */
+
+.evb-commit { overflow: hidden; }
+.evb-commit-head { padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; border-bottom: 1px solid var(--ev-rule); }
+.evb-commit-subject { font-size: 14px; font-weight: 600; color: var(--sol-text); line-height: 1.35; }
+.evb-commit-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 11.5px; color: var(--sol-text-dim); }
+.evb-commit-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--ev-rule); }
+.evb-files { display: flex; flex-wrap: wrap; gap: 4px 12px; font: 11.5px var(--font-mono); font-variant-ligatures: none; padding: 8px 14px; border-bottom: 1px solid var(--ev-rule); }
+.evb-file-add { color: var(--sol-cyan); }
+.evb-file-del { color: var(--sol-magenta); }
+.evb-commit-file { border-bottom: 1px solid var(--ev-rule); }
+.evb-commit-file-name { font: 11.5px var(--font-mono); font-variant-ligatures: none; padding: 6px 14px; color: var(--sol-text-muted); background: var(--sol-bg-alt); }
+
+/* ── List ────────────────────────────────────────────────────────────────── */
+
+.evb-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.evb-table th { text-align: left; font-size: 11px; font-weight: 500; color: var(--sol-text-dim); padding: 8px 10px; border-bottom: 1px solid var(--ev-rule); white-space: nowrap; }
+.evb-table td { padding: 9px 10px; border-bottom: 1px solid var(--ev-rule); vertical-align: middle; white-space: nowrap; }
+.evb-table tbody tr { cursor: pointer; transition: background 120ms ease; }
+.evb-table tbody tr:hover { background: var(--sol-bg-highlight); }
+.evb-table td.evb-num { font-variant-numeric: tabular-nums; text-align: right; }
+.evb-live { display: inline-flex; align-items: center; gap: 6px; }
+.evb-live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--sol-text); }

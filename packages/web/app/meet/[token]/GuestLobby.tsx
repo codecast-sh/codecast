@@ -4,7 +4,7 @@ import { GUEST_NAME_MAX, type GuestNotice } from "@codecast/shared/contracts";
 import { AvatarImg } from "../../../lib/avatarCache";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
-import { canPickSpeaker, type GuestPreview, type PreviewSnapshot } from "../../../lib/calls/guestRoom";
+import { canPickSpeaker, devicePermissionHint, type GuestPreview, type PreviewSnapshot } from "../../../lib/calls/guestRoom";
 import { STAGE_CTL } from "../../../components/calls/stageHost";
 import { firstName } from "../../../components/calls/speakers";
 import { CallNotice, DeviceSelect } from "./MeetChrome";
@@ -13,6 +13,9 @@ import { CallNotice, DeviceSelect } from "./MeetChrome";
 // stays theirs to fix their hair in or switch off while they wait), what they
 // are joining on the right. The right side is the only thing that changes
 // between asking and waiting, so being let in is a small step, not a jump.
+// On a phone the column reads what, then you, then the press: somebody who
+// opened a stranger's link learns whose meeting it is before they see their
+// own camera (or a warning about it).
 
 export type LobbyMode =
   /** Not knocked yet: name, notice, Ask to join. */
@@ -93,47 +96,57 @@ export function GuestLobby({
   };
 
   return (
-    <div className="mx-auto grid w-full max-w-[1080px] flex-1 items-center gap-6 px-4 pb-10 pt-2 sm:px-6 lg:grid-cols-[minmax(0,1.3fr)_minmax(320px,1fr)] lg:gap-12">
+    // One grid, three items placed by area: on a wide screen the picture
+    // spans both rows on the left and the heading sits over the form on the
+    // right (the two meet at the middle of the picture); below that they
+    // stack in source order, heading first.
+    <div className="mx-auto grid w-full max-w-[1080px] flex-1 content-start gap-6 px-4 pb-10 pt-2 max-lg:pt-0 sm:px-6 lg:grid-cols-[minmax(0,1.3fr)_minmax(320px,1fr)] lg:content-center lg:gap-x-12 lg:gap-y-5 lg:[grid-template-areas:'preview_head'_'preview_form']">
+      {/* What they are joining. */}
+      <div className="meet-rise flex min-w-0 flex-col gap-2 lg:self-end lg:[grid-area:head]">
+        <span className="text-[12px] text-sol-text-muted">
+          {mode === "waiting" ? "Asking to join" : mode === "rejoin" ? "You've been let in to" : "You're invited to"}
+        </span>
+        <h1 className="meet-title text-balance text-[30px] leading-[1.12] text-sol-text sm:text-[36px]">{title}</h1>
+        {inviter?.name && (
+          <div className="flex items-center gap-2 text-[12px] text-sol-text-secondary">
+            <span className="inline-block h-5 w-5 shrink-0 overflow-hidden rounded-full">
+              <AvatarImg
+                src={inviter.image ?? undefined}
+                alt=""
+                className="h-full w-full object-cover"
+                fallback={
+                  <span className="flex h-full w-full items-center justify-center bg-sol-base02 text-[10px] text-sol-text-muted">
+                    {inviter.name.charAt(0).toUpperCase()}
+                  </span>
+                }
+              />
+            </span>
+            {/* The name gives way before the verb: cut short, the line
+                still says why the guest is here. */}
+            <span className="flex min-w-0">
+              <span className="truncate">{inviter.name}</span>
+              <span className="shrink-0">&nbsp;invited you</span>
+            </span>
+            <span className="text-sol-text-dim">·</span>
+            <LiveLine live={live} />
+          </div>
+        )}
+      </div>
+
       {/* Their own picture, and the devices behind it. */}
-      <section className="meet-rise flex min-w-0 flex-col gap-3" aria-label="Your camera and microphone">
+      <section className="meet-rise flex min-w-0 flex-col gap-3 lg:self-center lg:[grid-area:preview]" aria-label="Your camera and microphone">
         <PreviewFrame preview={preview} name={name} mode={mode} onToggle={onToggle} />
         <div className="flex flex-wrap gap-2">
-          <DeviceSelect kind="mic" devices={p.devices.mic} choice={p.choice} asking={p.asking} onChoose={(k, id) => void preview.choose(k, id)} />
-          <DeviceSelect kind="camera" devices={p.devices.camera} choice={p.choice} asking={p.asking} onChoose={(k, id) => void preview.choose(k, id)} />
+          <DeviceSelect compact kind="mic" devices={p.devices.mic} choice={p.choice} asking={p.asking} onChoose={(k, id) => void preview.choose(k, id)} />
+          <DeviceSelect compact kind="camera" devices={p.devices.camera} choice={p.choice} asking={p.asking} onChoose={(k, id) => void preview.choose(k, id)} />
           {canPickSpeaker() && p.devices.speaker.length > 0 && (
-            <DeviceSelect kind="speaker" devices={p.devices.speaker} choice={p.choice} onChoose={(k, id) => void preview.choose(k, id)} />
+            <DeviceSelect compact kind="speaker" devices={p.devices.speaker} choice={p.choice} onChoose={(k, id) => void preview.choose(k, id)} />
           )}
         </div>
       </section>
 
-      {/* What they are joining, and the one thing to do about it. */}
-      <section className="meet-rise flex min-w-0 flex-col gap-5" aria-live="polite">
-        <div className="flex flex-col gap-2">
-          <span className="text-[12px] text-sol-text-muted">
-            {mode === "waiting" ? "Asking to join" : mode === "rejoin" ? "You've been let in to" : "You're invited to"}
-          </span>
-          <h1 className="meet-title text-balance text-[30px] leading-[1.12] text-sol-text sm:text-[36px]">{title}</h1>
-          {inviter?.name && (
-            <div className="flex items-center gap-2 text-[12px] text-sol-text-secondary">
-              <span className="inline-block h-5 w-5 shrink-0 overflow-hidden rounded-full">
-                <AvatarImg
-                  src={inviter.image ?? undefined}
-                  alt=""
-                  className="h-full w-full object-cover"
-                  fallback={
-                    <span className="flex h-full w-full items-center justify-center bg-sol-base02 text-[10px] text-sol-text-muted">
-                      {inviter.name.charAt(0).toUpperCase()}
-                    </span>
-                  }
-                />
-              </span>
-              <span className="min-w-0 truncate">{inviter.name} invited you</span>
-              <span className="text-sol-text-dim">·</span>
-              <LiveLine live={live} />
-            </div>
-          )}
-        </div>
-
+      {/* The one thing to do about it. */}
+      <section className="meet-rise flex min-w-0 flex-col gap-5 lg:self-start lg:[grid-area:form]" aria-live="polite">
         {mode === "waiting" ? (
           <div className="flex flex-col gap-3">
             <WaitingCard
@@ -173,26 +186,30 @@ export function GuestLobby({
             )}
             <CallNotice transcribed={transcribed} recording={recording} since={mode === "rejoin" ? accepted : null} />
             {/* Joining while the browser's prompt is up would walk in with
-                no camera and no microphone, so the press waits for it. */}
-            <button
-              type={mode === "ask" ? "submit" : "button"}
-              onClick={mode === "rejoin" ? onJoin : undefined}
-              disabled={busy || (mode === "ask" && !name.trim()) || (mode === "rejoin" && p.asking)}
-              className="flex items-center justify-center gap-2 rounded-xl bg-sol-cyan px-4 py-3 text-[14px] font-semibold text-sol-base03 shadow-[0_8px_24px_-10px_rgba(42,161,152,0.7)] transition-[transform,background-color,opacity] hover:bg-[#33b3a9] active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-45 disabled:shadow-none"
-            >
-              {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-              {mode === "rejoin"
-                ? p.asking
-                  ? "Waiting for your camera and microphone…"
-                  : widened
-                    ? recording
-                      ? "Join, recorded"
-                      : "Join, transcribed"
-                    : "Join the call"
-                : busy
-                  ? "Asking…"
-                  : "Ask to join"}
-            </button>
+                no camera and no microphone, so the press waits for it. On a
+                phone the press stays in reach at the bottom of the screen,
+                over a fade into the page, while the rest scrolls under it. */}
+            <div className="max-sm:sticky max-sm:bottom-0 max-sm:z-10 max-sm:-mx-4 max-sm:-mt-4 max-sm:bg-gradient-to-t max-sm:from-[#002b36] max-sm:from-60% max-sm:to-transparent max-sm:px-4 max-sm:pb-[max(12px,env(safe-area-inset-bottom))] max-sm:pt-4">
+              <button
+                type={mode === "ask" ? "submit" : "button"}
+                onClick={mode === "rejoin" ? onJoin : undefined}
+                disabled={busy || (mode === "ask" && !name.trim()) || (mode === "rejoin" && p.asking)}
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-sol-cyan px-4 py-3 text-[14px] font-semibold text-sol-base03 shadow-[0_8px_24px_-10px_rgba(42,161,152,0.7)] transition-[transform,background-color,opacity] hover:bg-[#33b3a9] active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-45 disabled:shadow-none"
+              >
+                {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+                {mode === "rejoin"
+                  ? p.asking
+                    ? "Waiting for your camera and microphone…"
+                    : widened
+                      ? recording
+                        ? "Join, recorded"
+                        : "Join, transcribed"
+                      : "Join the call"
+                  : busy
+                    ? "Asking…"
+                    : "Ask to join"}
+              </button>
+            </div>
             {/* Being let in is not having agreed: a guest who does not want
                 what the call keeps now walks out here, and the room is told
                 they left rather than left holding a place for them. */}
@@ -323,7 +340,7 @@ function WaitingCard({
           disabled={busy}
           className="rounded-md px-2 py-1 text-sol-text-muted transition-colors hover:bg-white/[0.06] hover:text-sol-text disabled:opacity-50"
         >
-          Stop asking
+          stop asking
         </button>
       </div>
     </div>
@@ -369,34 +386,76 @@ function PreviewFrame({
   const ctl = (on: boolean) =>
     p.asking ? "bg-white/10 text-white/50" : on ? "bg-white/15 text-white hover:bg-white/25" : "bg-sol-red/85 text-white hover:bg-sol-red";
   const initial = (name.trim() || "?").charAt(0).toUpperCase();
+  // The device notice sits over the picture where there is room, and under
+  // it on a phone: four lines over a narrow preview ran its last one, the
+  // "you can still join" that matters, under the switches. A phone's picture
+  // is held to a third of the screen, so the name field and the notice still
+  // fit above the sticky press on a short one.
   return (
-    <div className="relative aspect-video w-full overflow-hidden rounded-2xl bg-black/50 shadow-[0_30px_80px_-30px_rgba(0,0,0,0.8)] ring-1 ring-white/[0.08]">
-      {p.video ? (
-        <video ref={videoRef} autoPlay playsInline muted className="h-full w-full -scale-x-100 object-cover" />
-      ) : (
-        <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center">
-          {p.asking ? (
-            <>
-              <Loader2 className="h-6 w-6 animate-spin text-sol-text-dim" />
-              <span className="text-[12px] text-sol-text-muted">Allow your camera and microphone in the browser's prompt</span>
-            </>
-          ) : (
-            <>
-              <span className="flex h-20 w-20 items-center justify-center rounded-full bg-sol-base02 font-mono text-[30px] text-sol-text-secondary">
-                {initial}
-              </span>
-              <span className="text-[12px] text-sol-text-muted">{p.cameraError ? "No camera" : "Your camera is off"}</span>
-            </>
-          )}
+    <div className="relative">
+      <div className="relative aspect-video w-full overflow-hidden rounded-2xl max-sm:max-h-[30dvh] bg-black/50 shadow-[0_30px_80px_-30px_rgba(0,0,0,0.8)] ring-1 ring-white/[0.08]">
+        {p.video ? (
+          <video ref={videoRef} autoPlay playsInline muted className="h-full w-full -scale-x-100 object-cover" />
+        ) : (
+          // pb-14 keeps the initial and its words clear of the switch strip
+          // along the bottom (44px buttons on 12px of padding).
+          <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 pb-14 text-center max-sm:gap-2">
+            {p.asking ? (
+              <>
+                <Loader2 className="h-6 w-6 animate-spin text-sol-text-dim" />
+                <span className="text-[12px] text-sol-text-muted">Allow your camera and microphone in the browser's prompt</span>
+              </>
+            ) : (
+              <>
+                <span className="flex h-20 w-20 items-center justify-center rounded-full bg-sol-base02 font-mono text-[30px] text-sol-text-secondary max-sm:h-14 max-sm:w-14 max-sm:text-[22px]">
+                  {initial}
+                </span>
+                <span className="text-[12px] text-sol-text-muted">{p.cameraError ? "No camera" : "Your camera is off"}</span>
+              </>
+            )}
+          </div>
+        )}
+        {mode !== "waiting" && name.trim() && p.video && !refused && (
+          <span className="absolute left-3 top-3 rounded-full bg-black/45 px-2.5 py-0.5 font-mono text-[12px] text-white/90 backdrop-blur">
+            {name.trim()}
+          </span>
+        )}
+        <div className="absolute inset-x-0 bottom-0 flex items-center justify-center gap-3 bg-gradient-to-t from-black/55 to-transparent pb-3 pt-10">
+          <button
+            ref={micRef}
+            type="button"
+            disabled={p.asking}
+            onClick={() => {
+              const on = !p.audio;
+              onToggle("mic", on);
+              void preview.setMic(on);
+            }}
+            className={`${STAGE_CTL} meet-level p-3 backdrop-blur disabled:cursor-default ${ctl(!!p.audio)}`}
+            title={p.asking ? "Waiting for the browser's prompt" : p.audio ? "Turn your microphone off" : "Turn your microphone on"}
+            aria-label={p.audio ? "Turn your microphone off" : "Turn your microphone on"}
+            aria-pressed={!p.audio}
+          >
+            {p.audio || p.asking ? <Mic className="h-5 w-5" /> : <MicOff className="h-5 w-5" />}
+          </button>
+          <button
+            type="button"
+            disabled={p.asking}
+            onClick={() => {
+              const on = !p.video;
+              onToggle("camera", on);
+              void preview.setCamera(on);
+            }}
+            className={`${STAGE_CTL} p-3 backdrop-blur disabled:cursor-default ${ctl(!!p.video)}`}
+            title={p.asking ? "Waiting for the browser's prompt" : p.video ? "Turn your camera off" : "Turn your camera on"}
+            aria-label={p.video ? "Turn your camera off" : "Turn your camera on"}
+            aria-pressed={!p.video}
+          >
+            {p.video || p.asking ? <Video className="h-5 w-5" /> : <VideoOff className="h-5 w-5" />}
+          </button>
         </div>
-      )}
-      {mode !== "waiting" && name.trim() && p.video && !refused && (
-        <span className="absolute left-3 top-3 rounded-full bg-black/45 px-2.5 py-0.5 font-mono text-[12px] text-white/90 backdrop-blur">
-          {name.trim()}
-        </span>
-      )}
+      </div>
       {refused && !p.asking && (
-        <div className="absolute inset-x-3 top-3 flex items-center gap-2 rounded-lg bg-black/60 px-3 py-2 text-[11.5px] leading-snug text-sol-orange backdrop-blur">
+        <div className="absolute inset-x-3 top-3 flex items-center gap-2 rounded-lg bg-black/60 px-3 py-2 max-sm:static max-sm:mt-2 max-sm:bg-sol-orange/10 max-sm:ring-1 max-sm:ring-sol-orange/20 text-[11.5px] leading-snug text-sol-orange backdrop-blur">
           <span className="min-w-0 flex-1">
             {deviceTrouble(p)}
           </span>
@@ -410,52 +469,23 @@ function PreviewFrame({
           </button>
         </div>
       )}
-      <div className="absolute inset-x-0 bottom-0 flex items-center justify-center gap-3 bg-gradient-to-t from-black/55 to-transparent pb-3 pt-10">
-        <button
-          ref={micRef}
-          type="button"
-          disabled={p.asking}
-          onClick={() => {
-            const on = !p.audio;
-            onToggle("mic", on);
-            void preview.setMic(on);
-          }}
-          className={`${STAGE_CTL} meet-level p-3 backdrop-blur disabled:cursor-default ${ctl(!!p.audio)}`}
-          title={p.asking ? "Waiting for the browser's prompt" : p.audio ? "Turn your microphone off" : "Turn your microphone on"}
-          aria-label={p.audio ? "Turn your microphone off" : "Turn your microphone on"}
-          aria-pressed={!p.audio}
-        >
-          {p.audio || p.asking ? <Mic className="h-5 w-5" /> : <MicOff className="h-5 w-5" />}
-        </button>
-        <button
-          type="button"
-          disabled={p.asking}
-          onClick={() => {
-            const on = !p.video;
-            onToggle("camera", on);
-            void preview.setCamera(on);
-          }}
-          className={`${STAGE_CTL} p-3 backdrop-blur disabled:cursor-default ${ctl(!!p.video)}`}
-          title={p.asking ? "Waiting for the browser's prompt" : p.video ? "Turn your camera off" : "Turn your camera on"}
-          aria-label={p.video ? "Turn your camera off" : "Turn your camera on"}
-          aria-pressed={!p.video}
-        >
-          {p.video || p.asking ? <Video className="h-5 w-5" /> : <VideoOff className="h-5 w-5" />}
-        </button>
-      </div>
     </div>
   );
 }
 
-/** What is wrong with the guest's devices, and what it costs them. "Allow
- *  them in the address bar" is said only when the browser (or the guest) said
- *  no to both: a desk with no camera plugged in has no permission to fix, and
- *  is told what is actually missing. Without a microphone they can still
- *  listen, and that is always said. */
-export function deviceTrouble(p: Pick<PreviewSnapshot, "micError" | "cameraError" | "micDenied" | "cameraDenied">): string {
+/** What is wrong with the guest's devices, and what it costs them. Where to
+ *  allow them is said only when the browser (or the guest) said no to both: a
+ *  desk with no camera plugged in has no permission to fix, and is told what
+ *  is actually missing. The where is this browser's own control
+ *  (devicePermissionHint), never one the guest cannot find. Without a
+ *  microphone they can still listen, and that is always said. */
+export function deviceTrouble(
+  p: Pick<PreviewSnapshot, "micError" | "cameraError" | "micDenied" | "cameraDenied">,
+  where: string = devicePermissionHint(),
+): string {
   if (p.micError && p.cameraError) {
     return p.micDenied && p.cameraDenied
-      ? "Your browser is blocking the camera and microphone. Allow them from the icon in the address bar, then try again. You can still join and listen."
+      ? `Your browser is blocking the camera and microphone. ${where} Then try again. You can still join and listen.`
       : `${sentence(p.micError)} ${sentence(p.cameraError)} You can still join and listen.`;
   }
   if (p.micError) return `${sentence(p.micError)} You can still join and listen.`;
