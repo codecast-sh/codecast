@@ -45,7 +45,7 @@ import { InTheWorks } from "./InTheWorks";
 import { LeadStory } from "./LeadStory";
 import { LiveStrip, type LiveTile } from "./LiveStrip";
 import { SectionBlock } from "./SectionBlock";
-import { StoryCtx, type StoryContext } from "./StoryParts";
+import { StoryCtx, type StoryContext } from "./storyContext";
 import { useChangesKeys } from "./useChangesKeys";
 import { changesHref, clearFilters, hasFilters, isoWeekOf, useChangesUrlState, weekDaysOf, weekMonday } from "./useChangesUrlState";
 

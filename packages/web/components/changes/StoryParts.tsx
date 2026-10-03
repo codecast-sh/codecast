@@ -2,7 +2,7 @@
 // In brief and the drawer, so a story reads the same wherever it sits: its area
 // tag, kind glyph, risk texture, the release that carried it, the people and
 // sessions behind it, and the line that says where its "why" came from.
-import { createContext, useContext, useRef, type ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import { ChevronUp, CircleDashed, CornerUpLeft, Zap } from "lucide-react";
 import type { StoryRow } from "../../hooks/useSyncChanges";
 import { useTeamRosterIdentity } from "../../hooks/useTeamRoster";
@@ -12,22 +12,8 @@ import { EntityIdPill, TextWithMentions } from "../EntityIdPill";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { areaColor, KIND_COLOR, RISK_HATCH } from "./areaColor";
 
-/** What every story on the page needs from the page: which story has the
- *  keyboard, which wait behind a ship, and how to pick one. */
-export type StoryContext = {
-  focused: string | null;
-  waiting: ReadonlySet<string>;
-  dimmed: ReadonlySet<string>;
-  /** Give a story the focus (a click on it). */
-  pick: (storyKey: string) => void;
-};
-
-export const StoryCtx = createContext<StoryContext>({ focused: null, waiting: new Set(), dimmed: new Set(), pick: () => {} });
-
-export const useStoryCtx = () => useContext(StoryCtx);
-
 /** A wall-clock time, "15:27" in the reader's locale. */
-export const clockOf = (t: number) => new Date(t).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+export const clockOf = (t: number) => new Date(t).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
 
 /** A tooltip in the page's quiet register. */
 export function Tip({ text, children, side = "top" }: { text: ReactNode; children: ReactNode; side?: "top" | "bottom" | "left" | "right" }) {

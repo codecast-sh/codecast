@@ -6,7 +6,8 @@ import * as Accordion from "@radix-ui/react-accordion";
 import type { StoryRow } from "../../hooks/useSyncChanges";
 import { DiffStat, MetaDot } from "../entityDisplay";
 import { EvidenceDrawer } from "./EvidenceDrawer";
-import { AreaTag, FadeText, People, Provenance, ReleaseTag, SessionPills, StoryEdge, riskLine, useStoryCtx } from "./StoryParts";
+import { AreaTag, FadeText, People, Provenance, ReleaseTag, SessionPills, StoryEdge, riskLine } from "./StoryParts";
+import { useStoryCtx } from "./storyContext";
 import { KeyHint } from "./useChangesKeys";
 
 export function LeadStory({ story, open }: { story: StoryRow; open: boolean }) {

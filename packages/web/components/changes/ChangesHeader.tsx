@@ -12,7 +12,7 @@ import { Pill } from "../feed/ExternalEventRow";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { areaColor, areaFill, ink } from "./areaColor";
 import type { EditionStats } from "./editionModel";
-import { Tip } from "./StoryParts";
+import { Tip, clockOf } from "./StoryParts";
 import { KeyHint } from "./useChangesKeys";
 import { hasFilters, type ChangesUrl, type SetChangesUrl } from "./useChangesUrlState";
 
@@ -219,7 +219,7 @@ export function ChangesHeader(props: {
           <h1 className="chg-ui text-[20px] font-semibold text-sol-text">Changes</h1>
           {props.summarizing && (
             <Tip text={props.summarizing.stale && props.summarizing.since
-              ? `Notes are queued to be rewritten (since ${new Date(props.summarizing.since).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })})`
+              ? `Notes are queued to be rewritten (since ${clockOf(props.summarizing.since)})`
               : "Summarizing: notes for this edition are being written"}>
               <span aria-label="Summarizing" className="h-1.5 w-1.5 rounded-full" style={{ background: ink(props.summarizing.stale ? 55 : 30) }} />
             </Tip>

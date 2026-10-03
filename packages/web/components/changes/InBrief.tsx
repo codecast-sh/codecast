@@ -4,7 +4,8 @@
 import * as Accordion from "@radix-ui/react-accordion";
 import type { StoryRow } from "../../hooks/useSyncChanges";
 import { EvidenceDrawer } from "./EvidenceDrawer";
-import { AreaTag, FadeText, useStoryCtx } from "./StoryParts";
+import { AreaTag, FadeText } from "./StoryParts";
+import { useStoryCtx } from "./storyContext";
 
 export function InBrief({ stories }: { stories: readonly StoryRow[] }) {
   const ctx = useStoryCtx();
