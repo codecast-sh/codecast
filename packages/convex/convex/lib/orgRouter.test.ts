@@ -13,6 +13,7 @@ const roster: RouterRoster = {
     { handle: "calling", name: "Calling lead", charter: "Keeps Cameron's calling work moving.", areas: [{ kind: "project", title: "Callers & Call Management" }], standing: [], holding: [] },
     { handle: "release", name: "Release lead", charter: "Walks the merge train.", areas: [], standing: [], holding: [] },
   ],
+  unled: [{ kind: "project", title: "Matching Engine & Funnel", goal: "more introductions" }],
 };
 
 describe("routerRequest", () => {
@@ -26,6 +27,10 @@ describe("routerRequest", () => {
     expect(req.prompt).toContain("looks after the whole workspace");
     expect(req.prompt.endsWith("The request:\n\nThe bounce rate on the new domains doubled overnight")).toBe(true);
     expect(rosterText(roster)).toContain("Areas: none (a standing role");
+    // The areas no role names are the Head of People's by the rule, and the router is told so.
+    expect(req.prompt).toContain('## Areas no role names (the whole workspace role\'s, @head-of-people)\nproject "Matching Engine & Funnel" (goal: more introductions)');
+    expect(req.system).toContain("a charter that merely sounds close to the request is not ownership");
+    expect(rosterText({ ...roster, unled: [] })).toContain("none: every area has a role");
   });
 });
 

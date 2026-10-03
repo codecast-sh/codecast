@@ -27,6 +27,10 @@ export type RouterRoster = {
   /** The workspace's name, so the model knows whose company this is. */
   workspace: string;
   roles: RouterRole[];
+  /** Projects and plans no live role names: the whole workspace role's by the
+   *  rule (S26). Listed so the router can see that a request falls in an unled
+   *  area instead of handing it to the lead whose charter sounds closest. */
+  unled?: Array<{ kind: "project" | "plan"; title: string; goal?: string }>;
 };
 
 export type RouterReply = {
@@ -44,11 +48,11 @@ export const ROUTER_MARGIN = 0.3;
 const CHARTER_CHARS = 600;
 const LINES_PER_ROLE = 6;
 
-export const ROUTER_SYSTEM = `You place one incoming request with the role in a company of agents whose charter and current work it belongs to.
+export const ROUTER_SYSTEM = `You place one incoming request with the role that owns the work, in a company of agents.
 
-Read every role: its charter says what it is for, its areas say which projects and plans it looks after, "where it stands" says what it is doing now, and "holding" says what it has in hand. Name the one role the request belongs to. Say why in one sentence that cites the charter, an area or a line of current work, in the roster's own words. Say how sure you are as a number from 0 to 1: high only when one role's charter or area plainly covers the request and no other role's does; lower when two roles could each claim it, or when the request is vague.
+Ownership is a rule, not a resemblance. Work belongs to the role whose area holds it: an area is a project or a plan the role names. An area that no role names belongs to the role marked as looking after the whole workspace, which owns everything unclaimed and may propose a lead for it. A role's charter says what it is for and helps you tell which area a request falls in, and "where it stands" and "holding" say what it is doing now; none of them outranks the area that holds the work, and a charter that merely sounds close to the request is not ownership.
 
-A request that no role's charter or area covers belongs to the role marked as looking after the whole workspace, when there is one, with a low confidence; when there is none, name no role. Never invent a handle: use only handles from the roster.
+Read every role and the list of areas no role names, then name the one role the request belongs to. Say why in one sentence that names the area that holds the work, or the charter or line of current work that places it there, in the roster's own words. Say how sure you are as a number from 0 to 1: high only when the request plainly falls in one role's area, or plainly in an area no role names, and nothing else could hold it; low when two roles' areas could each hold it, when the request names no area and only a charter resembles it, or when the request is vague. Never invent a handle: use only handles from the roster; name no role only when the roster has no role that looks after the whole workspace and no area holds the request.
 
 Answer with JSON only, in this shape:
 {"handle": "<handle or null>", "confidence": <0..1>, "reason": "<one sentence>", "alternatives": [{"handle": "<handle>", "confidence": <0..1>, "reason": "<one sentence>"}]}
@@ -69,6 +73,11 @@ export function rosterText(roster: RouterRoster): string {
     if (r.standing.length) lines.push(`Where it stands: ${r.standing.slice(0, LINES_PER_ROLE).map((l) => clip(l, 200)).join(" | ")}`);
     if (r.holding.length) lines.push(`Holding: ${r.holding.slice(0, LINES_PER_ROLE).map((l) => clip(l, 120)).join(" | ")}`);
     lines.push("");
+  }
+  if (roster.unled) {
+    const whole = roster.roles.find((r) => r.whole_workspace);
+    lines.push(`## Areas no role names${whole ? ` (the whole workspace role's, @${whole.handle})` : ""}`);
+    lines.push(roster.unled.length ? roster.unled.map((a) => `${a.kind} "${a.title}"${a.goal ? ` (goal: ${clip(a.goal, 160)})` : ""}`).join("; ") : "none: every area has a role");
   }
   return lines.join("\n").trim();
 }

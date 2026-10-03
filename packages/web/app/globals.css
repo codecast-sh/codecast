@@ -1099,6 +1099,22 @@ html[data-idle] *::after {
   background: var(--beacon);
   animation: ccBeaconDot 2s ease-in-out infinite;
 }
+/* The message rail's "you are here" tick: brighter, longer, and breathing a
+   soft glow so it reads at a glance among the dim ticks. */
+.cc-rail-here {
+  width: 1.5rem;
+  height: 3px;
+  background: var(--sol-text);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--sol-text) 55%, transparent);
+  animation: ccRailHere 2.4s ease-in-out infinite;
+}
+@keyframes ccRailHere {
+  0%, 100% { opacity: 0.85; box-shadow: 0 0 3px color-mix(in srgb, var(--sol-text) 35%, transparent); }
+  50% { opacity: 1; box-shadow: 0 0 8px color-mix(in srgb, var(--sol-text) 65%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cc-rail-here { animation: none; }
+}
 @keyframes ccBeaconDot {
   0%, 100% { opacity: 0.35; }
   50% { opacity: 1; }
@@ -6458,7 +6474,8 @@ mark.search-hit[data-search-active] {
   .chg-grid { grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: 32px; }
   .chg-span-12 { grid-column: 1 / -1; }
   .chg-span-8 { grid-column: 1 / span 8; }
-  .chg-works { grid-column: 9 / span 4; grid-row: 2 / span 2; }
+  /* Beside the main column, one cell, so no other region's presence moves it. */
+  .chg-works { grid-column: 9 / span 4; grid-row: 2; }
   .chg-sections { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .chg-standfirst { max-width: calc(8 / 12 * 100%); }
 }

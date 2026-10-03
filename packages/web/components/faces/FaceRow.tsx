@@ -1,4 +1,4 @@
-import { type FaceDensity, type FloatBandSide, FACE_ROW_METRICS, flipKeyframes, CARD_OPEN_MS, CARD_CLOSE_MS, FLOAT_FACE_SIZES, floatBandPlacement, floatBandSideFor, floatFaceSizeOf, floatingRowSize, stepFloatFaceSize } from "../../lib/faces/layout";
+import { type FaceDensity, type FloatBandSide, FACE_ROW_METRICS, flipKeyframes, CARD_OPEN_MS, CARD_CLOSE_MS, FLOAT_FACE_SIZES, floatBandPlacement, floatBandSideFor, floatFaceSizeOf, floatingRowSize, floatOffCallFace, faceMarkScale, stepFloatFaceSize } from "../../lib/faces/layout";
 // THE FACE ROW: presence, walkie, ringing and calls as the same faces in
 // different states (pl-756 F2).
 //
@@ -158,6 +158,7 @@ function FaceSeat({
   registerKey,
   stacked,
   folded = false,
+  offCall = false,
   stackDepth = 0,
   onExpand,
   onPointerDown,
@@ -185,6 +186,9 @@ function FaceSeat({
   /** Folded away behind the float's others circle: the seat keeps its room,
    *  so the window never changes size, but draws nothing and takes no click. */
   folded?: boolean;
+  /** The float's face off the call: drawn at `diameter`, smaller than the
+   *  row's own, so it sizes its own seat rather than reading the row's. */
+  offCall?: boolean;
   /** Its place in the stack, from the front: the first face sits on top. */
   stackDepth?: number;
   onExpand: () => void;
@@ -236,9 +240,10 @@ function FaceSeat({
       data-folded={folded ? "1" : undefined}
       aria-hidden={folded || undefined}
       style={
-        stackDepth >= 0
-          ? ({ "--stack-i": stackDepth, zIndex: stacked ? 10 - Math.min(stackDepth, 9) : undefined } as React.CSSProperties)
-          : undefined
+        {
+          ...(stackDepth >= 0 ? { "--stack-i": stackDepth, zIndex: stacked ? 10 - Math.min(stackDepth, 9) : undefined } : {}),
+          ...(offCall ? { "--face": `${diameter}px`, "--mark-k": faceMarkScale(diameter) } : {}),
+        } as React.CSSProperties
       }
       {...(stacked ? {} : key.warmProps)}
       onMouseEnter={() => onHover(stacked ? null : entry.id)}
@@ -602,7 +607,7 @@ export function FaceRow({
       data-band={density === "float" ? bandSide : undefined}
       style={
         {
-          ...(faceSize ? { "--face": `${faceSize}px`, "--mark-k": Math.sqrt(faceSize / FACE_ROW_METRICS.float.face).toFixed(3) } : {}),
+          ...(faceSize ? { "--face": `${faceSize}px`, "--mark-k": faceMarkScale(faceSize) } : {}),
           ...(stackable ? { "--stack-i-last": outsiders - 1 } : {}),
         } as React.CSSProperties
       }
@@ -632,7 +637,8 @@ export function FaceRow({
             onToggle={toggle}
             onPress={clearTimers}
             registerKey={registerKey}
-            diameter={diameter}
+            diameter={folds && !onTheCall(entry) ? floatOffCallFace(diameter) : diameter}
+            offCall={folds && !onTheCall(entry)}
             stacked={stacked && !onTheCall(entry)}
             folded={folded && !onTheCall(entry)}
             stackDepth={i - callIds.length}

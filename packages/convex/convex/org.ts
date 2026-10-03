@@ -100,15 +100,8 @@ export async function collectOrgSessions(
 
   // Roles and anchors of this workspace. A member sees every team role; a
   // personal workspace holds only the caller's.
-  const [roles, anchors, teamFilter] = await Promise.all([
-    (teamId
-      ? ctx.db.query("org_roles").withIndex("by_team", (q: any) => q.eq("team_id", teamId)).collect()
-      : ctx.db.query("org_roles").withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", userId)).collect()
-    ).then((rows: any[]) => rows.filter((r) => r.status !== "retired")),
-    (teamId
-      ? ctx.db.query("anchors").withIndex("by_team", (q: any) => q.eq("team_id", teamId)).collect()
-      : ctx.db.query("anchors").withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", userId)).collect()
-    ).then((rows: any[]) => rows.filter((a) => a.status !== "decommissioned")),
+  const [{ roles, anchors }, teamFilter] = await Promise.all([
+    readOrgSeats(ctx, userId, teamId),
     teamId ? createTeamFeedFilter(ctx as any, teamId) : Promise.resolve(null),
   ]);
   const memberships: any[] = teamFilter ? teamFilter.memberships : [];
@@ -231,6 +224,89 @@ async function presenceOf(ctx: Ctx, user: any, now: number): Promise<"online" | 
   return state === "active" || state === "idle" ? "online" : state;
 }
 
+// The workspace's live roles and seats. A member sees every team role; a
+// personal workspace holds only the caller's. Rows a person edits, never rows
+// an agent writes, so a query that reads only these re-runs only when the org
+// changes (`roles` below).
+async function readOrgSeats(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined): Promise<{ roles: any[]; anchors: any[] }> {
+  const [roles, anchors] = await Promise.all([
+    (teamId
+      ? ctx.db.query("org_roles").withIndex("by_team", (q: any) => q.eq("team_id", teamId)).collect()
+      : ctx.db.query("org_roles").withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", userId)).collect()
+    ).then((rows: any[]) => rows.filter((r) => r.status !== "retired")),
+    (teamId
+      ? ctx.db.query("anchors").withIndex("by_team", (q: any) => q.eq("team_id", teamId)).collect()
+      : ctx.db.query("anchors").withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", userId)).collect()
+    ).then((rows: any[]) => rows.filter((a) => a.status !== "decommissioned")),
+  ]);
+  return { roles, anchors };
+}
+
+// One anchor as the org payloads carry it. `live` is the standing session's
+// state, which only the full tree reads; without it the row is identity alone.
+function orgAnchorRow(a: any, live?: { session?: OrgSession; raw?: any }) {
+  return {
+    anchor_id: a._id,
+    name: a.name,
+    bot_user_id: a.bot_user_id,
+    host_user_id: a.host_user_id,
+    scope_type: a.scope_type,
+    team_id: a.team_id ?? undefined,
+    scope_user_id: a.scope_user_id ?? undefined,
+    // A role's standing agent (org-roles-standing.md T1) names its role so
+    // the page can nest it; absent on the workspace anchor.
+    org_role_id: a.org_role_id ?? undefined,
+    conversation_id: a.conversation_id ?? undefined,
+    status: a.status,
+    ...(live ? {
+      short_id: live.session?.short_id ?? live.raw?.short_id ?? undefined,
+      state: live.session?.state,
+      ...stateOf(live.raw),
+    } : {}),
+  };
+}
+
+// One role as the org payloads carry it: the row, its face, its scope's names,
+// and its standing agent (found by the anchor naming the role or by the role
+// naming the anchor). `mine` is the sessions filed under it, which only the
+// full tree reads.
+async function orgRoleRow(ctx: Ctx, role: any, anchors: ReturnType<typeof orgAnchorRow>[], mine?: OrgSession[]) {
+  // The last match wins, as a Map built over the anchors would have it.
+  const lastOf = (hit: (a: ReturnType<typeof orgAnchorRow>) => boolean) => {
+    for (let i = anchors.length - 1; i >= 0; i--) if (hit(anchors[i])) return anchors[i];
+    return undefined;
+  };
+  const standing = lastOf((a) => !!a.org_role_id && String(a.org_role_id) === String(role._id))
+    ?? (role.anchor_id ? lastOf((a) => String(a.anchor_id) === String(role.anchor_id)) : undefined);
+  const [projects, plans] = await Promise.all([
+    Promise.all(role.scope.project_ids.map((id: any) => ctx.db.get(id))),
+    Promise.all(role.scope.plan_ids.map((id: any) => ctx.db.get(id))),
+  ]);
+  const live = standing as (typeof standing & { short_id?: string; state?: any; state_line?: any; state_status?: any; state_at?: any }) | undefined;
+  return {
+    ...role,
+    // The face (org-staffing.md S13): the chosen key, else the handle's
+    // default, so every node draws one. Tenure (S10) rides through `...role`.
+    avatar: avatarOf(role),
+    ...(mine ? { counts: tallyOf(mine), sessions: mine.slice(0, ORG_TOP_N), total: mine.length } : {}),
+    standing: live
+      ? (mine
+        ? { conversation_id: live.conversation_id, short_id: live.short_id, state: live.state, state_line: live.state_line, state_status: live.state_status, state_at: live.state_at }
+        : { conversation_id: live.conversation_id })
+      : null,
+    scope_names: {
+      projects: projects.filter(Boolean).map((p: any) => ({ id: p._id, title: p.title, short_id: p.short_id ?? undefined })),
+      plans: plans.filter(Boolean).map((p: any) => ({ id: p._id, title: p.title, short_id: p.short_id })),
+    },
+  };
+}
+
+function orgWorkspaceOf(userId: Id<"users">, teamId: Id<"teams"> | undefined, team: any, caller: any) {
+  return teamId
+    ? { kind: "team" as const, id: teamId.toString(), name: team?.name ?? "" }
+    : { kind: "user" as const, id: userId.toString(), name: caller?.name ?? "" };
+}
+
 export async function computeOrgTree(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined, now: number) {
   const scan = await collectOrgSessions(ctx, userId, teamId, now);
   const team = teamId ? await ctx.db.get(teamId) : null;
@@ -265,59 +341,13 @@ export async function computeOrgTree(ctx: Ctx, userId: Id<"users">, teamId: Id<"
     const session = scan.anchorSessions.get(a._id.toString());
     const convId = a.conversation_id ? String(a.conversation_id) : null;
     const raw = convId ? scan.sessions.get(convId)?.raw ?? await ctx.db.get(a.conversation_id) : null;
-    return {
-      anchor_id: a._id,
-      name: a.name,
-      bot_user_id: a.bot_user_id,
-      host_user_id: a.host_user_id,
-      scope_type: a.scope_type,
-      team_id: a.team_id ?? undefined,
-      scope_user_id: a.scope_user_id ?? undefined,
-      // A role's standing agent (org-roles-standing.md T1) names its role so
-      // the page can nest it; absent on the workspace anchor.
-      org_role_id: a.org_role_id ?? undefined,
-      conversation_id: a.conversation_id ?? undefined,
-      short_id: session?.short_id ?? raw?.short_id ?? undefined,
-      state: session?.state,
-      status: a.status,
-      ...stateOf(raw),
-    };
+    return orgAnchorRow(a, { session, raw });
   }));
-  const anchorByRole = new Map(anchors.filter((a) => a.org_role_id).map((a) => [String(a.org_role_id), a]));
-  const anchorById = new Map(anchors.map((a) => [String(a.anchor_id), a]));
-
-  const roles = await Promise.all(scan.roles.map(async (role: any) => {
-    const mine = scan.byParent.get(`role:${role._id.toString()}`) ?? [];
-    // The role's standing agent (org-roles-standing.md T1), found by the
-    // anchor naming the role or by the role naming the anchor.
-    const standing = anchorByRole.get(String(role._id)) ?? (role.anchor_id ? anchorById.get(String(role.anchor_id)) : undefined);
-    const [projects, plans] = await Promise.all([
-      Promise.all(role.scope.project_ids.map((id: any) => ctx.db.get(id))),
-      Promise.all(role.scope.plan_ids.map((id: any) => ctx.db.get(id))),
-    ]);
-    return {
-      ...role,
-      // The face (org-staffing.md S13): the chosen key, else the handle's
-      // default, so every node draws one. Tenure (S10) rides through `...role`.
-      avatar: avatarOf(role),
-      counts: tallyOf(mine),
-      sessions: mine.slice(0, ORG_TOP_N),
-      total: mine.length,
-      standing: standing
-        ? { conversation_id: standing.conversation_id, short_id: standing.short_id, state: standing.state, state_line: standing.state_line, state_status: standing.state_status, state_at: standing.state_at }
-        : null,
-      scope_names: {
-        projects: projects.filter(Boolean).map((p: any) => ({ id: p._id, title: p.title, short_id: p.short_id ?? undefined })),
-        plans: plans.filter(Boolean).map((p: any) => ({ id: p._id, title: p.title, short_id: p.short_id })),
-      },
-    };
-  }));
-
+  const roles = await Promise.all(scan.roles.map((role: any) =>
+    orgRoleRow(ctx, role, anchors, scan.byParent.get(`role:${role._id.toString()}`) ?? [])));
 
   return {
-    workspace: teamId
-      ? { kind: "team" as const, id: teamId.toString(), name: team?.name ?? "" }
-      : { kind: "user" as const, id: userId.toString(), name: caller?.name ?? "" },
+    workspace: orgWorkspaceOf(userId, teamId, team, caller),
     people: people.filter(Boolean),
     roles,
     anchors,
@@ -345,6 +375,43 @@ export const tree = query({
     return computeOrgTree(ctx, userId, args.team_id, Date.now());
   },
 });
+
+// The org tree without anything a session touches: roles, seats, the
+// workspace. `tree` scans up to ORG_ROW_CAP sessions on every run and so
+// re-runs on every write to any of them, which is the right cost for the
+// surfaces that draw those sessions and the wrong one for the many that only
+// name a role (the inbox, a conversation's owners badge, the task board, the
+// compose role picker). Those mounted the tree's feeder and paid the scan:
+// 15.8% of all backend CPU on 2026-10-03, 5,295 documents a run (ct-53363).
+// This reads only org_roles, anchors and the scope's project and plan titles,
+// so it re-runs when the org changes. It feeds the SAME orgTree slot as
+// `tree`; `roles_only` tells the client's merge (ORG_SYNC_REGISTRY) to keep
+// the session fields (people, counts, sessions, an anchor's live state) from
+// the last full tree rather than blank them.
+export const roles = query({
+  args: { api_token: v.optional(v.string()), team_id: v.optional(v.id("teams")) },
+  handler: async (ctx, args) => {
+    const userId = await requireWorkspaceCaller(ctx, args.api_token, args.team_id);
+    if (!userId) return null;
+    return computeOrgRoles(ctx, userId, args.team_id, Date.now());
+  },
+});
+
+export async function computeOrgRoles(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined, now: number) {
+  const [{ roles, anchors }, team, caller] = await Promise.all([
+    readOrgSeats(ctx, userId, teamId),
+    teamId ? ctx.db.get(teamId) : Promise.resolve(null),
+    ctx.db.get(userId),
+  ]);
+  const anchorRows = anchors.map((a: any) => orgAnchorRow(a));
+  return {
+    workspace: orgWorkspaceOf(userId, teamId, team, caller),
+    roles: await Promise.all(roles.map((role: any) => orgRoleRow(ctx, role, anchorRows))),
+    anchors: anchorRows,
+    roles_only: true as const,
+    generated_at: now,
+  };
+}
 
 export const sessionsUnder = query({
   args: {

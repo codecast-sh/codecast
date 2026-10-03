@@ -32,6 +32,19 @@ export function stepFloatFaceSize(size: FloatFaceSize, dir: 1 | -1): FloatFaceSi
   return FLOAT_FACE_SIZES[Math.max(0, Math.min(FLOAT_FACE_SIZES.length - 1, i))];
 }
 
+/** The float's faces off the call: half the call's, so the people you are
+ *  talking to stay the row's subject and the rest of the team reads as a
+ *  roster beside them, never a second wall of portraits. */
+export function floatOffCallFace(face: number): number {
+  return Math.max(28, Math.round(face / 2));
+}
+
+/** How much a face's marks (presence, mute, agent tag) scale at `face` px:
+ *  by the square root, so a big circle's badge grows less than the circle. */
+export function faceMarkScale(face: number): string {
+  return Math.sqrt(face / FACE_ROW_METRICS.float.face).toFixed(3);
+}
+
 /** The linked pair pulls together: a bridge eats this share of the gap on
  *  each side (faceRow.css `.face-link` margin). */
 export const LINK_PULL = 0.35;

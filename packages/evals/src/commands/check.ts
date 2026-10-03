@@ -142,7 +142,8 @@ function verdictLines(meta: SurfaceMeta, batch: string, set: SurfaceRun[], previ
   const scores = current.map(scoreOrZero);
   const passed = current.filter((r) => r.status === 'pass').length;
   const mean = scores.reduce((s, x) => s + x, 0) / Math.max(1, scores.length);
-  const cost = current.reduce((s, r) => s + r.costUsd, 0);
+  // What the set spent, its crashes included.
+  const cost = set.reduce((s, r) => s + r.costUsd, 0);
   const now = majority(current);
   const before = majority(previous);
   const flips = [...now].filter(([k, v]) => before.has(k) && before.get(k) !== v).length;
@@ -159,6 +160,23 @@ function verdictLines(meta: SurfaceMeta, batch: string, set: SurfaceRun[], previ
   if (crashes) lines.push(`  ${fmt.error(`${crashes} crashed`)}, left out of the numbers above: ./evals runs list --scenario ${meta.id}- --status crash; ./evals check ${meta.id} --batch ${batch} with the same --reps and --freeze runs them again`);
   const regression = previous.length > 0 && separate(compared, previous.map(scoreOrZero)).kind === 'worse';
   return { lines, regression };
+}
+
+/**
+ * A surface's run set `batch` as `check` reports it: the verdict against its
+ * previous set, then the surface's own summary lines over the reps it scored.
+ * `history` is the surface's runs, newest first; `check` and `publish` both
+ * print from here.
+ */
+export async function setVerdict(meta: SurfaceMeta, batch: string, history: SurfaceRun[]): Promise<{ lines: string[]; regression: boolean; scored: SurfaceRun[] }> {
+  const scored = batchSet(history, batch);
+  const v = verdictLines(meta, batch, scored, previousRunSet(history, batch));
+  const impl = await loadSurface(meta.id);
+  if (impl.summarize) {
+    const details = await Promise.all(scored.map((r) => codecastRunSource().get(r.id)));
+    v.lines.push(...impl.summarize(details.flatMap((d) => (d?.verdict ? [d.verdict] : []))).map((l) => `  ${l}`));
+  }
+  return { ...v, scored };
 }
 
 export async function runCheck(ids: string[], flags: CheckFlags, sources: EvalSources): Promise<number> {
@@ -270,18 +288,13 @@ export async function runCheck(ids: string[], flags: CheckFlags, sources: EvalSo
     if (!flags.dry) addSpend(outcome.costUsd);
     // The set is the whole batch on these freezes: on a resume, the reps it already held count with the ones run now.
     const history = (await surfaceRuns(plan.meta.id)).filter((r) => plan.freezes.some((f) => f.id === r.freezeId));
-    const scored = batchSet(history, batch);
+    // The previous run set: each freeze's newest other batch of real reps; a dry rep is wiring, never a baseline.
+    const v = await setVerdict(plan.meta, batch, history);
+    const scored = v.scored;
     // A surface the stop cut off before its first rep never ran: it is named below, not graded.
     if (budgetHit && !scored.length) continue;
     if (!scored.length) unrun.push(plan.meta.id);
-    // The previous run set: each freeze's newest other batch of real reps; a dry rep is wiring, never a baseline.
-    const v = verdictLines(plan.meta, batch, scored, previousRunSet(history, batch));
     report.push(...v.lines);
-    const impl = await loadSurface(plan.meta.id);
-    if (impl.summarize) {
-      const details = await Promise.all(scored.map((r) => codecastRunSource().get(r.id)));
-      report.push(...impl.summarize(details.flatMap((d) => (d?.verdict ? [d.verdict] : []))).map((l) => `  ${l}`));
-    }
     // A dry rep's gates grade canned output, so only a crash fails a dry check.
     if (v.regression || crashes || scored.some((r) => r.status !== 'dry' && r.gatesFailed.length)) failed = true;
     verdicts.push({

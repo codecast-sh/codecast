@@ -5,10 +5,11 @@
 import { useCallback, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { addDays } from "@codecast/convex/convex/lib/teamDay";
+import { parseDay } from "../../lib/changesDay";
 
 export type ChangesUrl = {
   repo?: string;
-  /** The viewed day, YYYY-MM-DD. Absent means today. */
+  /** The viewed day, YYYY-MM-DD. Absent means today. Kept in week mode, as the day a return to day mode lands on. */
   d?: string;
   /** Week mode, `2026-W40`. */
   w?: string;
@@ -26,7 +27,6 @@ export type ChangesUrl = {
   story?: string;
 };
 
-const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const WEEK = /^(\d{4})-W(\d{2})$/;
 
 export const EMPTY_URL: ChangesUrl = { areas: [], branches: "main", risk: false, waiting: false };
@@ -41,8 +41,8 @@ export function parseChangesUrl(params: URLSearchParams): ChangesUrl {
   const w = text(params.get("w"));
   return {
     repo: text(params.get("repo")),
-    d: d && DAY.test(d) ? d : undefined,
-    w: w && WEEK.test(w) ? w : undefined,
+    d: d && parseDay(d) ? d : undefined,
+    w: w && weekMonday(w) ? w : undefined,
     areas: [...new Set((params.get("area") ?? "").split(",").map((a) => a.trim()).filter(Boolean))].sort(),
     person: text(params.get("person")),
     branches: params.get("branches") === "all" ? "all" : "main",
@@ -58,8 +58,8 @@ export function parseChangesUrl(params: URLSearchParams): ChangesUrl {
 export function serializeChangesUrl(s: ChangesUrl): string {
   const p = new URLSearchParams();
   if (s.repo) p.set("repo", s.repo);
+  if (s.d) p.set("d", s.d);
   if (s.w) p.set("w", s.w);
-  else if (s.d) p.set("d", s.d);
   if (s.areas.length) p.set("area", [...s.areas].sort().join(","));
   if (s.person) p.set("person", s.person);
   if (s.branches === "all") p.set("branches", "all");
@@ -100,13 +100,14 @@ export function isoWeekOf(ymd: string): string {
   return `${d.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
 }
 
-/** The Monday of an ISO week, YYYY-MM-DD, or null when the week is malformed. */
+/** The Monday of an ISO week, YYYY-MM-DD, or null when the week is malformed or its year has no such week. */
 export function weekMonday(week: string): string | null {
   const m = WEEK.exec(week);
   if (!m) return null;
   const jan4 = new Date(Date.UTC(Number(m[1]), 0, 4));
-  const monday = addDays(jan4.toISOString().slice(0, 10), -((jan4.getUTCDay() || 7) - 1));
-  return addDays(monday, (Number(m[2]) - 1) * 7);
+  const monday = addDays(addDays(jan4.toISOString().slice(0, 10), -((jan4.getUTCDay() || 7) - 1)), (Number(m[2]) - 1) * 7);
+  // W00, or W53 of a 52 week year, rolls into a neighbouring year's week.
+  return isoWeekOf(monday) === week ? monday : null;
 }
 
 /** The seven days Monday to Sunday of the week a day falls in. */

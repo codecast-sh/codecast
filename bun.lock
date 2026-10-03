@@ -20,7 +20,7 @@
     },
     "packages/cli": {
       "name": "@codecast/cli",
-      "version": "1.1.163",
+      "version": "1.1.166",
       "bin": {
         "codecast": "./dist/main.js",
         "cast": "./dist/main.js",
@@ -219,6 +219,7 @@
         "@platform/engine": "file:../../platform/packages/engine",
         "@platform/flags": "file:../../platform/packages/flags",
         "@platform/keys": "file:../../platform/packages/keys",
+        "@platform/update-prompt": "file:../../platform/packages/update-prompt",
         "@radix-ui/react-accordion": "^1.2.12",
         "@radix-ui/react-avatar": "^1.1.11",
         "@radix-ui/react-dialog": "^1.1.15",
@@ -4325,6 +4326,8 @@
     "@codecast/web/@platform/flags": ["@platform/flags@file:platform/packages/flags", { "devDependencies": { "@types/node": "^22.0.0", "typescript": "^5.7.2" }, "peerDependencies": { "posthog-js": ">=1.0.0", "posthog-react-native": ">=3.0.0", "react": ">=18.0.0" }, "optionalPeers": ["posthog-js", "posthog-react-native", "react"], "bin": { "platform-flags": "src/cli.ts" } }],
 
     "@codecast/web/@platform/keys": ["@platform/keys@file:platform/packages/keys", { "devDependencies": { "@types/react": "^19.0.0", "typescript": "^5.7.2" }, "peerDependencies": { "react": "^19.0.0" } }],
+
+    "@codecast/web/@platform/update-prompt": ["@platform/update-prompt@file:platform/packages/update-prompt", { "devDependencies": { "@types/node": "^22.0.0", "typescript": "^5.7.2" }, "bin": { "platform-release-prompt": "src/cli.ts" } }],
 
     "@codecast/web/@tanstack/react-virtual": ["@tanstack/react-virtual@3.14.2", "", { "dependencies": { "@tanstack/virtual-core": "3.17.0" }, "peerDependencies": { "react": "^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0", "react-dom": "^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0" } }, "sha512-IpWnmCLvuymRfeeLNVXIzNEYBFLpd3drVIS91sqV78VTZFyldlChkOocZRCPp1B+Wnk09bcLNme8WaMU/9/9bQ=="],
 

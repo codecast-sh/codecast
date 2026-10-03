@@ -376,9 +376,10 @@
   height: 55%;
 }
 /* The float's others (FaceRow): everyone off the call folds behind one small
-   quiet circle after the strip. A folded seat keeps its full room, so the
-   window measured from the row is the same size open or folded and never
-   moves; it only fades, a beat after its neighbour, and takes no click. */
+   quiet circle after the strip, at half the call's size (floatOffCallFace).
+   A folded seat keeps its room, so the window measured from the row is the
+   same size open or folded and never moves; it only fades, a beat after its
+   neighbour, and takes no click. */
 .face-row[data-density="float"] .face-seat[data-folded] {
   opacity: 0;
   pointer-events: none;

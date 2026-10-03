@@ -14,6 +14,9 @@ describe("ISO weeks", () => {
     expect(weekMonday("2026-W40")).toBe("2026-09-28");
     expect(weekMonday("2025-W01")).toBe("2024-12-30");
     expect(weekMonday("nope")).toBeNull();
+    expect(weekMonday("2026-W53")).toBe("2026-12-28");
+    expect(weekMonday("2025-W53")).toBeNull();
+    expect(weekMonday("2026-W00")).toBeNull();
     expect(weekDaysOf("2026-10-02")).toEqual(["2026-09-28", "2026-09-29", "2026-09-30", "2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04"]);
   });
 });
@@ -28,6 +31,15 @@ describe("the view in the URL", () => {
 
   test("defaults stay out of the URL and junk is dropped", () => {
     expect(changesHref(parseChangesUrl(new URLSearchParams("d=2026-13&branches=main&risk=0&area=")))).toBe("/changes");
+    expect(parseChangesUrl(new URLSearchParams("d=2026-02-31")).d).toBeUndefined();
+    expect(parseChangesUrl(new URLSearchParams("d=2026-13-45")).d).toBeUndefined();
+    expect(parseChangesUrl(new URLSearchParams("w=2026-W60")).w).toBeUndefined();
+  });
+
+  test("week mode keeps the day it was entered from", () => {
+    const url = parseChangesUrl(new URLSearchParams("d=2026-10-01&w=2026-W40"));
+    expect(url).toMatchObject({ d: "2026-10-01", w: "2026-W40" });
+    expect(changesHref(url)).toBe("/changes?d=2026-10-01&w=2026-W40");
   });
 
   test("filters are the narrowing parts, and clearing keeps the view", () => {

@@ -249,14 +249,17 @@ export type NavigatorTick<R> = { row: R; active: boolean };
 
 // Sample up to `max` evenly spaced rows for the minimap. Below the cap every
 // row gets a tick; above it the ticks map onto the row list by rounding, so
-// the first and last rows always have one.
+// the first and last rows always have one. The active row lights the tick
+// nearest it, so a row between two sampled ones still shows where you are.
 export function sampleTicks<R>(rows: R[], max: number, activeIndex: number = -1): NavigatorTick<R>[] {
   const total = rows.length;
   const displayCount = Math.min(total, max);
+  const scale = total <= max ? 1 : (displayCount - 1) / (total - 1);
+  const activeTick = activeIndex < 0 ? -1 : Math.round(activeIndex * scale);
   const ticks: NavigatorTick<R>[] = [];
   for (let i = 0; i < displayCount; i++) {
     const mappedIndex = total <= max ? i : Math.round((i / (displayCount - 1)) * (total - 1));
-    ticks.push({ row: rows[mappedIndex], active: mappedIndex === activeIndex });
+    ticks.push({ row: rows[mappedIndex], active: i === activeTick });
   }
   return ticks;
 }

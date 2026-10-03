@@ -11,7 +11,9 @@
 //
 // Editions are upserted per day and never deleted, so their feed only adds:
 // an answer that lacks one (a team-wide read stops at a row cap) removes
-// nothing from the cache.
+// nothing from the cache. One more editions feed reads every repository's last
+// 14 days up to today, so the repository list and the default repository do
+// not depend on which day is on screen.
 //
 // Readers subscribe to signatures of the fields the page renders. Story rows
 // change only when a rebuild writes them, so the lists stay still between
@@ -39,6 +41,14 @@ export type DateWindow = { from_date: string; to_date: string };
 /** The fed window around a YYYY-MM-DD day. */
 export function changesWindow(date: string): DateWindow {
   return { from_date: addDays(date, -CHANGES_WINDOW_RADIUS), to_date: addDays(date, CHANGES_WINDOW_RADIUS) };
+}
+
+/** Days back from today whose editions name the team's active repositories (spec 4.1). */
+export const CHANGES_REPO_DAYS = 14;
+
+/** The last CHANGES_REPO_DAYS days ending today, whatever day is on screen. */
+export function recentWindow(today: string): DateWindow {
+  return { from_date: addDays(today, -(CHANGES_REPO_DAYS - 1)), to_date: today };
 }
 
 /** The repository as the server stores it, so store rows compare equal. */
@@ -80,6 +90,9 @@ export type ChangesView = {
   repository?: string;
   /** The viewed day, YYYY-MM-DD in the team's day. */
   date: string | undefined;
+  /** The team's today. With it, every repository's editions of the last
+   *  CHANGES_REPO_DAYS feed the repository list, whichever day is viewed. */
+  today?: string;
 };
 
 export type ChangesFeedState = {
@@ -88,6 +101,10 @@ export type ChangesFeedState = {
   ready: boolean;
   /** The server refused the caller: not a member, signed out, or Changes is off for the team. */
   refused: boolean;
+  /** The team-wide recent editions have answered (never, without `today`). */
+  recentReady: boolean;
+  /** The live strip has answered (never, without a repository). */
+  liveReady: boolean;
   error?: Error;
 };
 
@@ -99,6 +116,7 @@ export function useSyncChanges(view: ChangesView): ChangesFeedState {
   const teamId = view.teamId && isConvexId(view.teamId) ? view.teamId : undefined;
   const repository = canonical(view.repository);
   const date = view.date;
+  const today = view.today;
 
   const feeds = useMemo(() => {
     if (!teamId || !date) return null;
@@ -116,21 +134,25 @@ export function useSyncChanges(view: ChangesView): ChangesFeedState {
         opts: { select: selectStories, syncOpts: storySyncOpts(scope, around, date) },
       },
       editions: { team_id: teamId, ...repoArg, scope: "day", ...around },
+      recent: today ? { team_id: teamId, scope: "day", ...recentWindow(today) } : "skip",
       live: repository ? { team_id: teamId, repository } : "skip",
       works: { team_id: teamId, ...repoArg },
     } as const;
-  }, [teamId, repository, date]);
+  }, [teamId, repository, date, today]);
 
   const day = useSyncCollection("changeStories", api.changesQueries.listStories, feeds?.day.args ?? "skip", feeds?.day.opts);
   const around = useSyncCollection("changeStories", api.changesQueries.listStories, feeds?.around.args ?? "skip", feeds?.around.opts);
   const editions = useSyncCollection("changeEditions", api.changesQueries.listEditions, feeds?.editions ?? "skip");
+  const recent = useSyncCollection("changeEditions", api.changesQueries.listEditions, feeds?.recent ?? "skip");
   const live = useSyncCollection("changeLive", api.changesQueries.liveStatus, feeds?.live ?? "skip");
   const works = useSyncCollection("changeWorks", api.changesQueries.inTheWorks, feeds?.works ?? "skip");
 
   return {
     ready: day.ready && editions.ready,
     refused: day.refused || editions.refused,
-    error: day.error ?? editions.error ?? around.error ?? live.error ?? works.error,
+    recentReady: recent.ready,
+    liveReady: live.ready,
+    error: day.error ?? editions.error ?? around.error ?? recent.error ?? live.error ?? works.error,
   };
 }
 

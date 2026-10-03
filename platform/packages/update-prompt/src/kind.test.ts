@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { STALE_PROMPT_AFTER_MS, updatePromptKind } from "./updatePrompt";
+import { STALE_PROMPT_AFTER_MS, updatePromptKind } from "./kind";
 
 const base = {
   bakedGeneration: 3,
