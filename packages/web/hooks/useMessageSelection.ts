@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import { useForkNavigationStore } from "../store/forkNavigationStore";
-import { useShortcutAction } from "../shortcuts";
+import { usePaneShortcutAction } from "../shortcuts";
 import { useInboxStore } from "../store/inboxStore";
 
 type TimelineItem = {
@@ -64,7 +64,7 @@ export function useMessageSelection({
     }
   }, [timeline, virtualizer, setSelectedIndex, onSelectMessage]);
 
-  useShortcutAction('msg.clearSelection', useCallback((): boolean | void => {
+  usePaneShortcutAction('msg.clearSelection', useCallback((): boolean | void => {
     // Escape priority: an open inline-comment editor handles its own Esc (cancel),
     // so defer to it; otherwise leave inline-review mode before clearing a message
     // selection. The global dispatcher runs before any in-region handler, so this
@@ -80,7 +80,7 @@ export function useMessageSelection({
     selectAndNotify(null);
   }, [enabled, selectedIndex, selectAndNotify]));
 
-  useShortcutAction('msg.next', useCallback((): boolean | void => {
+  usePaneShortcutAction('msg.next', useCallback((): boolean | void => {
     if (!enabled || isInputFocused()) return false;
     const indices = getUserMessageIndices();
     if (indices.length === 0) return false;
@@ -100,7 +100,7 @@ export function useMessageSelection({
     selectAndNotify(next);
   }, [enabled, selectedIndex, getUserMessageIndices, selectAndNotify]));
 
-  useShortcutAction('msg.prev', useCallback((): boolean | void => {
+  usePaneShortcutAction('msg.prev', useCallback((): boolean | void => {
     if (!enabled || isInputFocused()) return false;
     const indices = getUserMessageIndices();
     if (indices.length === 0) return false;
@@ -120,7 +120,7 @@ export function useMessageSelection({
     selectAndNotify(next);
   }, [enabled, selectedIndex, getUserMessageIndices, selectAndNotify]));
 
-  useShortcutAction('msg.fork', useCallback((): boolean | void => {
+  usePaneShortcutAction('msg.fork', useCallback((): boolean | void => {
     if (!enabled || selectedIndex === null) return false;
     const item = timeline[selectedIndex];
     if (item?.type === "message" && item.data.message_uuid && onForkFromMessage) {

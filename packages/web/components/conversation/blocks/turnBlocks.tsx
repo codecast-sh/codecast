@@ -6,6 +6,7 @@ import { LogoIcon } from "../../Logo";
 import { useRouter } from "next/navigation";
 import { useRef, useState, useMemo, useCallback, memo, useContext } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
+import { useOverflows } from "../../../hooks/useOverflows";
 import { createPortal } from "react-dom";
 import { AvatarImg } from "../../../lib/avatarCache";
 import { BrowserTabPill } from "../../browser/BrowserTabPill";
@@ -33,7 +34,7 @@ import { browserTabOf, type BrowserTabRef } from "../../castCommand";
 import { useInboxStore, isConvexId, pendingRowSendArgs, type ForkChild } from "../../../store/inboxStore";
 import { useMessageBookmark } from "../../../hooks/useMessageBookmark";
 import { BranchSelector } from "../../BranchSelector";
-import { FileText, ListChecks, Target, Maximize2, ChevronDown, ChevronRight, ChevronUp, Split, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Share2, Forward, X } from "lucide-react";
+import { FileText, ListChecks, Target, Maximize2, ChevronDown, ChevronRight, ChevronUp, Split, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Forward, SquareDashedMousePointer, X } from "lucide-react";
 import { useTeamFeature } from "../../../lib/teamFeatures";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "../../ui/context-menu";
 import { pendingBannerState, pendingRetryClientId, pendingCancelRef, pendingMessageCanRetry, pendingMessageReachedSession, pendingMessageHoldReason, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "../../../lib/pendingBanner";
@@ -145,13 +146,17 @@ function CancelPendingButton({ onClick, disabled }: { onClick: () => void; disab
   );
 }
 
+// One look for every hover action on a message: a raised strip of plain icon buttons.
+const TOOLBAR_SHELL = "flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5";
+const TOOLBAR_BTN_BASE = "p-1.5 rounded hover:bg-sol-bg-alt";
+const TOOLBAR_BTN = `${TOOLBAR_BTN_BASE} text-sol-text-dim hover:text-sol-text-secondary`;
+
 function UserPromptImpl({ content, timestamp, messageId, conversationId, collapsed, userName, avatarUrl, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection, onForkFromMessage, forkChildren, messageUuid, images, onBranchSwitch, activeBranchId, loadingBranchId, isPending, isQueued, agentStatus, mainDivergentPreview, decision }: { content: string; decision?: DecisionAnswerMessage; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; avatarUrl?: string | null; onOpenComments?: (messageId: string) => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void; onForkFromMessage?: (messageUuid: string) => void; forkChildren?: ForkChild[]; messageUuid?: string; images?: ImageData[]; onBranchSwitch?: (messageUuid: string, convId: string | null) => void; activeBranchId?: string | null; loadingBranchId?: string | null; isPending?: boolean; isQueued?: boolean; agentStatus?: LiveAgentStatus; mainDivergentPreview?: string }) {
   const relativeTime = useRelativeTime();
   const [isExpanded, setIsExpanded] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const [isTruncated, setIsTruncated] = useState(false);
   const [contentExpanded, setContentExpanded] = useState(false);
-  const [isOverflowing, setIsOverflowing] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const rawContent = stripPastedContent(content)
     .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
@@ -172,11 +177,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
     }
   }, [effectivelyCollapsed, content]);
 
-  useWatchEffect(() => {
-    if (!effectivelyCollapsed && contentRef.current && !contentExpanded) {
-      setIsOverflowing(contentRef.current.scrollHeight > USER_CONTENT_MAX_HEIGHT);
-    }
-  }, [content, effectivelyCollapsed, contentExpanded]);
+  const isOverflowing = useOverflows(contentRef, USER_CONTENT_MAX_HEIGHT, [content, effectivelyCollapsed]);
 
   useWatchEffect(() => {
     if (!fullscreen) return;
@@ -409,7 +410,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
               <CtxItem icon={Split} onSelect={() => onForkFromMessage(messageUuid)}>Fork from here</CtxItem>
             )}
             {onStartShareSelection && (
-              <CtxItem icon={Share2} onSelect={() => onStartShareSelection(messageId)}>Share messages…</CtxItem>
+              <CtxItem icon={SquareDashedMousePointer} onSelect={() => onStartShareSelection(messageId)}>Share messages…</CtxItem>
             )}
             {isPending && (
               <>
@@ -424,11 +425,11 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
           </>
         )}
       </ContextMenu>
-      <div data-cc-user-message-toolbar className={`absolute -top-2 right-0 transition-opacity duration-150 flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto"}`}>
+      <div data-cc-user-message-toolbar className={`absolute -top-2 right-0 transition-opacity duration-150 ${TOOLBAR_SHELL} ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto"}`}>
         {onStartShareSelection && (
           <button
             onClick={() => onStartShareSelection(messageId)}
-            className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
+            className={TOOLBAR_BTN}
             title="Share message"
             aria-label="Share message"
           >
@@ -439,7 +440,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
         )}
         <button
           onClick={handleCopyLink}
-          className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
+          className={TOOLBAR_BTN}
           title="Copy link to message"
           aria-label="Copy link to message"
         >
@@ -450,7 +451,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
         {chatOn && (
           <button
             onClick={handleForwardToChat}
-            className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
+            className={TOOLBAR_BTN}
             title="Send to chat"
             aria-label="Send to chat"
           >
@@ -459,7 +460,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
         )}
         <button
           onClick={handleToggleBookmark}
-          className={`p-1.5 rounded hover:bg-sol-bg-alt ${isBookmarked ? "text-amber-400" : "text-sol-text-dim hover:text-sol-text-secondary"}`}
+          className={`${TOOLBAR_BTN_BASE} ${isBookmarked ? "text-amber-400" : "text-sol-text-dim hover:text-sol-text-secondary"}`}
           title={isBookmarked ? "Remove bookmark" : "Bookmark message"}
           aria-label={isBookmarked ? "Remove bookmark" : "Bookmark message"}
         >
@@ -470,7 +471,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
         {onForkFromMessage && messageUuid && (
           <button
             onClick={() => onForkFromMessage(messageUuid)}
-            className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
+            className={TOOLBAR_BTN}
             title="Fork from this message"
             aria-label="Fork from this message"
           >
@@ -479,7 +480,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
         )}
         <button
           onClick={handleCopy}
-          className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
+          className={TOOLBAR_BTN}
           title="Copy message"
           aria-label="Copy message"
         >
@@ -990,9 +991,14 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
 
 export const CompactCollapsedTurn = memo(function CompactCollapsedTurn({ content, onExpand }: { content: string; onExpand: () => void }) {
   const body = stripSystemTags(content || "").trim();
+  const clipRef = useRef<HTMLDivElement>(null);
+  // The fade only covers a reply the tail actually clips; a short one would
+  // sit entirely under it, so it shows in full below the button instead.
+  const clipped = useOverflows(clipRef, COMPACT_TAIL_HEIGHT, [body]);
   return (
-    <div className="relative group/ct pl-8">
+    <div className={`relative group/ct pl-8 ${clipped ? "" : "pt-7"}`}>
       <div
+        ref={clipRef}
         className="relative overflow-hidden flex flex-col justify-end"
         style={{ maxHeight: COMPACT_TAIL_HEIGHT }}
       >
@@ -1000,7 +1006,7 @@ export const CompactCollapsedTurn = memo(function CompactCollapsedTurn({ content
           <MessageMarkdown content={body} />
         </div>
       </div>
-      <div className="absolute -top-px left-0 right-0 h-24 pointer-events-none bg-gradient-to-b from-[var(--sol-bg)] via-[var(--sol-bg)] to-transparent" />
+      {clipped && <div className="absolute -top-px left-0 right-0 h-24 pointer-events-none bg-gradient-to-b from-[var(--sol-bg)] via-[var(--sol-bg)] to-transparent" />}
       <button
         onClick={onExpand}
         className="not-prose absolute top-1 left-8 inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full border border-sol-border/70 bg-sol-bg-alt text-[11px] font-medium text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/50 shadow-sm transition-colors"
@@ -1141,9 +1147,9 @@ function AssistantBlockImpl({
   // the chip, inside this row. Compact-expanded turns arrive as density "full".
   const condensed = density === "condensed";
   const [contentExpanded, setContentExpanded] = useState(true);
-  const [isOverflowing, setIsOverflowing] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
+  const isOverflowing = useOverflows(contentRef, CONTENT_MAX_HEIGHT, [content]);
 
   const safeContent = content ? safeString(content) : content;
   const strippedContent = safeContent ? stripSystemTags(safeContent) : safeContent;
@@ -1236,17 +1242,6 @@ function AssistantBlockImpl({
     )
   );
 
-  useWatchEffect(() => {
-    if (!contentRef.current) return;
-    const el = contentRef.current;
-    const check = () => {
-      setIsOverflowing(el.scrollHeight > CONTENT_MAX_HEIGHT);
-    };
-    check();
-    const obs = new ResizeObserver(check);
-    obs.observe(el);
-    return () => obs.disconnect();
-  }, [content]);
 
   useWatchEffect(() => {
     if (!fullscreen) return;
@@ -1310,7 +1305,7 @@ function AssistantBlockImpl({
               <CtxItem icon={Split} onSelect={() => onForkFromMessage(messageUuid)}>Fork from here</CtxItem>
             )}
             {onStartShareSelection && (
-              <CtxItem icon={Share2} onSelect={() => onStartShareSelection(messageId)}>Share messages…</CtxItem>
+              <CtxItem icon={SquareDashedMousePointer} onSelect={() => onStartShareSelection(messageId)}>Share messages…</CtxItem>
             )}
             {onCollapseTurn && (
               <CtxItem icon={ChevronUp} onSelect={onCollapseTurn}>Collapse turn</CtxItem>
@@ -1330,13 +1325,13 @@ function AssistantBlockImpl({
         </button>
       )}
       {(hasContent || visibleThinking || hasToolCalls) && (
-        <div data-cc-assistant-message-toolbar className={`absolute ${toolbarTop} right-0 transition-opacity duration-150 flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto"}`}>
+        <div data-cc-assistant-message-toolbar className={`absolute ${toolbarTop} right-0 transition-opacity duration-150 ${TOOLBAR_SHELL} ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto"}`}>
           {/* Respond actions (quote into your reply) live on each block's left
               gutter — see MessageReview. This corner is META only: a plain row
               of icon buttons, distinct icons + tooltips so link vs share read clearly. */}
           <button
             onClick={handleCopy}
-            className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
+            className={TOOLBAR_BTN}
             title="Copy message"
             aria-label="Copy message"
           >
@@ -1346,7 +1341,7 @@ function AssistantBlockImpl({
           </button>
           <button
             onClick={handleCopyLink}
-            className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
+            className={TOOLBAR_BTN}
             title="Copy link to this message"
             aria-label="Copy link to this message"
           >
@@ -1357,7 +1352,7 @@ function AssistantBlockImpl({
           {chatOn && (
             <button
               onClick={handleForwardToChat}
-              className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
+              className={TOOLBAR_BTN}
               title="Send to chat"
               aria-label="Send to chat"
             >
@@ -1367,7 +1362,7 @@ function AssistantBlockImpl({
           {onStartShareSelection && (
             <button
               onClick={() => onStartShareSelection(messageId)}
-              className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
+              className={TOOLBAR_BTN}
               title="Share selected messages…"
               aria-label="Share selected messages"
             >
@@ -1378,7 +1373,7 @@ function AssistantBlockImpl({
           )}
           <button
             onClick={handleToggleBookmark}
-            className={`p-1.5 rounded hover:bg-sol-bg-alt ${isBookmarked ? "text-amber-400" : "text-sol-text-dim hover:text-sol-text-secondary"}`}
+            className={`${TOOLBAR_BTN_BASE} ${isBookmarked ? "text-amber-400" : "text-sol-text-dim hover:text-sol-text-secondary"}`}
             title={isBookmarked ? "Remove bookmark" : "Bookmark message"}
             aria-label={isBookmarked ? "Remove bookmark" : "Bookmark message"}
           >
@@ -1530,11 +1525,11 @@ function AssistantBlockImpl({
         <button
           data-cc-message-action
           onClick={() => onForkFromMessage(messageUuid)}
-          className="absolute right-2 -bottom-3 z-10 inline-flex select-none items-center p-1 rounded-md border border-sol-border bg-sol-card text-sol-text-secondary shadow-md opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto hover:text-sol-cyan hover:border-sol-cyan/60 transition-[opacity,color,border-color] duration-150"
+          className={`absolute right-2 -bottom-3 ${TOOLBAR_SHELL} select-none opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-opacity duration-150`}
           title="Fork the conversation from this message"
           aria-label="Fork from this message"
         >
-          <Split className="w-3.5 h-3.5" />
+          <span className={TOOLBAR_BTN}><Split className="w-4 h-4" /></span>
         </button>
       )}
 
