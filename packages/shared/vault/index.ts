@@ -9,6 +9,7 @@
 //
 // PURE isomorphic data — no Node or DOM APIs.
 export * from "./parseNote";
+export * from "./frontmatter";
 export * from "./vaultIndex";
 export * from "./linkRewrite";
 export * from "./searchQuery";

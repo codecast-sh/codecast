@@ -6,6 +6,7 @@ export * from "./cluster";
 export * from "./dedupe";
 export * from "./headline";
 export * from "./keys";
+export * from "./people";
 export * from "./risks";
 export * from "./surfaces";
 export type {
@@ -18,3 +19,4 @@ export type {
   ShipEvent,
   VisibleConversation,
 } from "./types";
+export * from "./week";

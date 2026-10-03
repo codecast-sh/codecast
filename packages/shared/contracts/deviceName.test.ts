@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { deviceDisplayName, deviceKindLabel, isCloudAssignedHostname, isRemoteHost } from "./deviceName";
+import { compareMachineChips, deviceDisplayName, deviceKindLabel, isCloudAssignedHostname, isRemoteHost } from "./deviceName";
 
 describe("deviceDisplayName", () => {
   it("shows a laptop by its hostname without the OS prefix and .local", () => {
@@ -60,5 +60,19 @@ describe("deviceKindLabel", () => {
     expect(deviceKindLabel({ label: "", platform: "darwin" })).toBe("Mac");
     expect(deviceKindLabel({ label: "", platform: "win32" })).toBe("Windows");
     expect(deviceKindLabel({ label: "", platform: "linux", is_remote: true })).toBe("Remote");
+  });
+});
+
+describe("compareMachineChips", () => {
+  it("puts the machines you sit at before cloud-named hosts that never set is_remote", () => {
+    const devices = [
+      { label: "Linux - htch-runtime", platform: "linux", is_remote: false },
+      { label: "Linux - grok-bot-vm-23079abc", platform: "linux", is_remote: false },
+      { label: "macOS - MacBook-Pro.local", platform: "darwin", is_remote: false },
+      { label: "Linux - ip-10-0-0-1", platform: "linux", is_remote: true },
+    ];
+    expect([...devices].sort(compareMachineChips).map(deviceDisplayName)).toEqual([
+      "MacBook-Pro", "Cloud Linux", "grok-bot-vm-23079abc", "htch-runtime",
+    ]);
   });
 });

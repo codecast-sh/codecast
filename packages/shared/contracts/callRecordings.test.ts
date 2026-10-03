@@ -249,5 +249,24 @@ describe("recording words", () => {
     expect(recordingFailureWords("Stopped before the room's video began.")).toBe("Stopped before the room's video began.");
     expect(recordingFailureWords("The recording hit its limit.")).toBe("The recording hit its limit.");
     expect(recordingFailureWords("egress timed out")).toBe("The recording failed. egress timed out");
+    expect(recordingFailureWords("LiveKit lost track of this recording before it finished.")).toBe("LiveKit lost track of this recording before it finished.");
+    expect(recordingFailureWords("Recording is not set up on this server.")).toBe("Recording is not set up on this server.");
+  });
+});
+
+describe("a press is a moment", () => {
+  const now = 1_700_000_000_000;
+  test("a press just made is acted on, one delivered late is not", async () => {
+    const { recordingPressStale, RECORDING_PRESS_FRESH_MS } = await import("./callRecordings");
+    expect(recordingPressStale(now - 2_000, now)).toBe(false);
+    expect(recordingPressStale(now - RECORDING_PRESS_FRESH_MS, now)).toBe(false);
+    expect(recordingPressStale(now - RECORDING_PRESS_FRESH_MS - 1, now)).toBe(true);
+    // An outbox row replayed at the next boot, hours on.
+    expect(recordingPressStale(now - 3 * 60 * 60 * 1000, now)).toBe(true);
+  });
+  test("a client clock ahead of the server, or no stamp at all, is not refused", async () => {
+    const { recordingPressStale } = await import("./callRecordings");
+    expect(recordingPressStale(now + 5_000, now)).toBe(false);
+    expect(recordingPressStale(undefined, now)).toBe(false);
   });
 });

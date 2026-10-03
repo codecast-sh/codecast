@@ -7,6 +7,15 @@ describe("keys", () => {
     expect(hash64(["ab", "c"])).not.toBe(hash64(["a", "bc"]));
   });
 
+  test("hash64 lanes are independent: no collisions in either half over many near-identical anchors", () => {
+    const n = 50_000;
+    const keys = Array.from({ length: n }, (_, i) => hash64(["story", "t1", "codecast-sh/codecast", "2026-10-02", `main|cli||${i.toString(16).padStart(9, "0")}`]));
+    expect(new Set(keys).size).toBe(n);
+    // Bit 0 of FNV-1a is a parity of the input; the second lane must not echo it.
+    const agree = keys.filter((k) => (parseInt(k.slice(0, 8), 16) & 1) === (parseInt(k.slice(8), 16) & 1)).length;
+    expect(Math.abs(agree / n - 0.5)).toBeLessThan(0.02);
+  });
+
   test("story keys depend on team, repo, date and anchor only", () => {
     const k = storyKey("t1", "codecast-sh/codecast", "2026-10-02", "jx7abcd");
     expect(k).toBe(storyKey("t1", "codecast-sh/codecast", "2026-10-02", "jx7abcd"));

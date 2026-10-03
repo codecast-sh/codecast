@@ -82,9 +82,6 @@ export const PERMISSION_CARD_STYLE = {
     fontSize: 14,
     fontWeight: "600",
   },
-  buttonDisabled: {
-    opacity: 0.5,
-  },
 } as const;
 
 /** The card's copy, shared so the two renderers cannot drift. */
@@ -92,6 +89,5 @@ export const PERMISSION_CARD_COPY = {
   title: "Permission Required",
   approve: "Approve",
   deny: "Deny",
-  processing: "...",
   argsMaxLines: 3,
 } as const;

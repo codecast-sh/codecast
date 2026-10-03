@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { groundUpdateBody, renderGoalsBrief, type GoalsBrief } from "./goalsBrief";
+import { compactPrinciples, groundUpdateBody, renderGoalsBrief, type GoalsBrief } from "./goalsBrief";
 
 const NOW = Date.UTC(2026, 9, 2, 12);
 const DAY = 86_400_000;
@@ -61,8 +61,28 @@ Teams that try it keep using it.
     expect(out.endsWith("## Principles\n\nLocal first.\n")).toBe(true);
   });
 
+  test("principles over the cap render as ids and titles, whole principles only", () => {
+    const area = (name: string, n: number) =>
+      `## ${name}\n\n` + Array.from({ length: n }, (_, i) => `### PR-${name.toLowerCase()}-${i + 1} Title ${i + 1}\n\n${"Body text. ".repeat(40)}\n\nWhy: because.\n`).join("\n");
+    const file = `# Principles\n\nIntro.\n\n${area("Code", 3)}\n${area("Design", 2)}`;
+    const out = renderGoalsBrief(brief, { now: NOW, brief: true, principles: file });
+    expect(out).toContain("## Principles\n\n- Code: PR-code-1 Title 1; PR-code-2 Title 2; PR-code-3 Title 3\n- Design: PR-design-1 Title 1; PR-design-2 Title 2\n\nFull text: docs/principles.md.\n");
+    expect(out).not.toContain("Body text");
+  });
+
+  test("a compact form still over the cap drops whole principles and counts them", () => {
+    const body = "## Code\n\n### PR-code-1 First\n\n### PR-code-2 Second\n\n### PR-code-3 Third";
+    expect(compactPrinciples(body, 70)).toBe("- Code: PR-code-1 First\n\nFull text: docs/principles.md (2 more).");
+  });
+
   test("an empty workspace says so in one line", () => {
     expect(renderGoalsBrief({ workspace: "user:u", initiatives: [], projects: [] })).toBe("# Goals\n\nNo active initiatives and no project charters in this workspace.\n");
+  });
+
+  test("one project's brief names the project before the workspace", () => {
+    const out = renderGoalsBrief({ workspace: "team:t", workspace_name: "Union", project_title: "Agent Quality", initiatives: [], projects: [] });
+    expect(out).toStartWith("# Goals of Agent Quality (Union)\n");
+    expect(out).toContain("This project has no charter and no active initiative carries it.");
   });
 
   test("the order is stable whatever order the rows arrive in", () => {

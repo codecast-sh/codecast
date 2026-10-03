@@ -73,3 +73,12 @@ export function deviceDisplayName(d: DeviceNameSource | undefined | null): strin
   const stripped = host.replace(/\.local$/i, "").replace(/\.([a-z0-9-]+\.)*(compute\.)?internal$/i, "");
   return stripped || d.label;
 }
+
+/**
+ * Machine chip order for every picker: the machines you sit at first, then
+ * remotes (flagged or cloud-named), each group by display name. Never by
+ * last_seen, which heartbeats would reshuffle under the user's thumb.
+ */
+export function compareMachineChips(a: DeviceNameSource, b: DeviceNameSource): number {
+  return Number(isRemoteHost(a)) - Number(isRemoteHost(b)) || deviceDisplayName(a).localeCompare(deviceDisplayName(b));
+}

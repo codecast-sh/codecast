@@ -22,6 +22,8 @@ export type ChangeCommit = {
   insertions: number;
   deletions: number;
   areas: Record<string, AreaTouch>;
+  /** The same touches one folder deeper, keyed `area/sub` (classify.narrowAreas). */
+  subareas?: Record<string, AreaTouch>;
   top_paths?: string[];
   schema_paths?: string[];
 };

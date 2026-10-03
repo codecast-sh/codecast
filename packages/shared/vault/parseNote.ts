@@ -46,6 +46,19 @@ export interface NoteLink {
   raw: string;
 }
 
+/** A markdown link to a local file, `[text](path/to/note.md)`. Kept apart from
+ *  `links`: the vault's backlinks and rename rewriting speak `[[wiki]]` syntax
+ *  only, while Claude Code memory indexes link this way. URLs and same-page
+ *  `#anchors` are not local files and are skipped. */
+export interface NoteMarkdownLink {
+  /** The destination as written, percent-decoded, without its `#fragment`. */
+  target: string;
+  text: string;
+  line: number;
+  col: number;
+  raw: string;
+}
+
 export interface NoteBlock {
   id: string;
   line: number;
@@ -87,6 +100,7 @@ export interface ParsedNote {
   inlineTags: { tag: string; line: number }[];
   headings: NoteHeading[];
   links: NoteLink[];
+  markdownLinks: NoteMarkdownLink[];
   blocks: NoteBlock[];
   tasks: NoteTask[];
   chunks: NoteChunk[];
@@ -330,6 +344,8 @@ function isEscaped(line: string, idx: number): boolean {
 }
 
 const WIKI_LINK_RE = /(!?)\[\[([^[\]\n]+)\]\]/g;
+/** `[text](dest)` or `[text](<dest with spaces>)`, with an optional "title". */
+const MARKDOWN_LINK_RE = /(?<!!)\[([^[\]\n]*)\]\((?:<([^>\n]+)>|([^)\s]+))(?:\s+"[^"\n]*")?\)/g;
 // A tag must start at a line start or after whitespace / an opening bracket —
 // `a#b` and `https://x/#frag` are not tags. Charset is unicode letters, digits,
 // `_`, `-`, `/` (Obsidian's rule).
@@ -427,6 +443,7 @@ export function parseNote(content: string): ParsedNote {
 
   const headings: NoteHeading[] = [];
   const links: NoteLink[] = [];
+  const markdownLinks: NoteMarkdownLink[] = [];
   const blocks: NoteBlock[] = [];
   const tasks: NoteTask[] = [];
   const inlineTags: { tag: string; line: number }[] = [];
@@ -490,7 +507,7 @@ export function parseNote(content: string): ParsedNote {
       headingPath.length = Math.max(0, level - 1);
       headingPath[level - 1] = text;
       chunkHeadings = headingPath.filter(Boolean).slice();
-      scanInline(line, lineNo, links, inlineTags);
+      scanInline(line, lineNo, links, inlineTags, markdownLinks);
       const prose = toPlainText(line);
       if (prose) {
         proseLines.push(prose);
@@ -504,7 +521,7 @@ export function parseNote(content: string): ParsedNote {
       continue;
     }
 
-    scanInline(line, lineNo, links, inlineTags);
+    scanInline(line, lineNo, links, inlineTags, markdownLinks);
 
     const task = TASK_LINE_RE.exec(line);
     if (task) {
@@ -554,6 +571,7 @@ export function parseNote(content: string): ParsedNote {
     inlineTags,
     headings,
     links,
+    markdownLinks,
     blocks,
     tasks,
     chunks,
@@ -568,7 +586,21 @@ function scanInline(
   lineNo: number,
   links: NoteLink[],
   inlineTags: { tag: string; line: number }[],
+  markdownLinks: NoteMarkdownLink[],
 ): void {
+  if (line.includes("](")) {
+    MARKDOWN_LINK_RE.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = MARKDOWN_LINK_RE.exec(line))) {
+      const dest = m[2] ?? m[3];
+      if (/^[a-z][a-z0-9+.-]*:/i.test(dest) || dest.startsWith("#") || isEscaped(line, m.index)) continue;
+      let target = dest.split("#")[0];
+      try {
+        target = decodeURI(target);
+      } catch {}
+      if (target) markdownLinks.push({ target, text: m[1], line: lineNo, col: m.index, raw: m[0] });
+    }
+  }
   if (line.includes("[[")) {
     WIKI_LINK_RE.lastIndex = 0;
     let m: RegExpExecArray | null;

@@ -61,7 +61,77 @@ export interface EvalResult {
   dry: boolean;
   reps: number;
   surfaces: EvalSurfaceResult[];
+  /** Suite gates the project's eval ran beside the replays (reps.json gates_failed) that failed. */
+  gatesFailed?: string[];
   /** True only when every proven freeze passes, no gate fails and nothing separates worse; a skipped surface does not count. */
   ok: boolean;
   costUsd: number;
+}
+
+// ── reps.json (line-profile.md LP4) ──
+// What a project's eval command writes: per surface, per freeze, per side
+// (base, branch), the reps as they scored, and the suite gates that failed.
+// It does no statistics; `cast line eval-result` turns it into the EvalResult
+// above with the one separation rule (packages/evals/src/stats.ts), and
+// codecast's own `./evals line` writes it and calls the same builder.
+
+/** One rep. A rep with `error` crashed: it is no verdict either way and counts as a crash. */
+export interface EvalRep {
+  passed: boolean;
+  /** 0..1. Null when the rep has only a verdict: it then scores 1 when passed, else 0. */
+  score: number | null;
+  reply: string;
+  judge_note: string;
+  cost_usd: number;
+  error?: string;
+  /** Gate ids this rep failed, when the eval grades gates per rep. */
+  gates_failed?: string[];
+}
+
+/** One side's replay of one freeze. */
+export interface EvalRepsSide {
+  /** The run set the reps were recorded under. */
+  batch: string;
+  /** The tree the reps ran on. */
+  sha: string;
+  reps: EvalRep[];
+  /** The moment's input as the replay saw it, bounded. */
+  input?: string;
+}
+
+export interface EvalRepsFreeze {
+  freeze: string;
+  name: string;
+  kind: "miss" | "guard";
+  /** A miss prove showed failing on the base: it must fail there and pass on the branch. */
+  proven: boolean;
+  /** The moment the surface answered (its last input), bounded. */
+  input: string;
+  base: EvalRepsSide | null;
+  branch: EvalRepsSide | null;
+}
+
+export interface EvalRepsSurface {
+  surface: string;
+  title: string;
+  route?: string | null;
+  freezes: EvalRepsFreeze[];
+  /** Set when nothing replayed for the surface, with why. */
+  skipped?: string;
+  /** Why the base side has no reps, when the eval knows (the base could not load the surface, crashed). */
+  base_failure?: string;
+}
+
+export interface EvalRepsFile {
+  version: 1;
+  base: { ref: string; sha: string };
+  head: { sha: string; dirty: boolean };
+  created_at: string;
+  dry: boolean;
+  reps: number;
+  surfaces: EvalRepsSurface[];
+  gates_failed: string[];
+  /** The suite gate run, when one ran; its note is shown with a failure. */
+  gate?: { select?: string; run_id?: string | null; exit?: number | null; failed?: string[]; note?: string } | null;
+  cost_usd: number;
 }
