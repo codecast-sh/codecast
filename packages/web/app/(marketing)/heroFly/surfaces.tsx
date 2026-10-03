@@ -9,7 +9,7 @@
  * matches it.
  */
 
-import { memo, startTransition, Suspense, useState, type CSSProperties, type ComponentType, type ReactNode } from "react";
+import { memo, startTransition, Suspense, useContext, useState, type CSSProperties, type ComponentType, type ReactNode } from "react";
 import { useWatchEffect } from "@/hooks/useWatchEffect";
 import { EntityFixtureContext } from "@/lib/entityDisplay";
 import { PhoneFrame } from "../productMocks";
@@ -17,9 +17,9 @@ import type { ChapterPart, HeroChapter, PartProps } from "./chapters/contract";
 import { createFilmClock, FilmClockContext, fly, useFilmTime } from "./filmClock";
 import { entityStage, ENTITY_STAGES } from "./fixtures";
 import { ARCS, FLYERS } from "./motion";
-import { SEAM_GHOST } from "./timeline";
+import { isLive, SEAM_GHOST } from "./timeline";
 import { HeroPartBoundary } from "./sandbox";
-import { LABEL_3W, SCENES, SURFACES, type ArcPath, type Region, type RegionKey, type Surface } from "./world";
+import { LABEL_3W, SCENES, SURFACES, type ArcPath, type Region, type RegionKey, type Surface, type SurfaceId } from "./world";
 
 const px = (n: number) => `${Math.round(n * 1000) / 1000}px`;
 
@@ -53,13 +53,17 @@ function NearChapter({ chapter, children }: { chapter: string; children: ReactNo
 }
 
 function RegionSlot({ k, region, parts, now }: { k: RegionKey; region: Region; parts: Placed[]; now: number }) {
-  // A region that was empty in the prerender (the poster's conversation pane) fades in when its views arrive.
+  // A region that was empty in the prerender (the poster's conversation pane) fades in when its views arrive, if its window is on
+  // screen then: a page-load event, on the page's clock. Views that arrive while their window is away simply wait there.
+  const clock = useContext(FilmClockContext);
   const [emptyAtFirst] = useState(parts.length === 0);
+  const [arrivedInView, setArrivedInView] = useState<boolean | null>(null);
+  if (emptyAtFirst && parts.length > 0 && arrivedInView === null) setArrivedInView(isLive(k.split(".")[0] as SurfaceId, clock.get()));
   const bottom = region.anchor === "bottom";
   return (
     <div
       data-region={k}
-      className={emptyAtFirst && parts.length > 0 ? "hf-in" : undefined}
+      className={arrivedInView ? "hf-in" : undefined}
       style={{
         position: "absolute",
         left: region.x,

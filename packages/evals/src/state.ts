@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 import { homePaths, treeRoot } from './paths';
 import type { SurfaceMeta } from './surface';
@@ -14,8 +14,10 @@ import type { SurfaceMeta } from './surface';
 export interface SurfaceState {
   lastRunHash?: string;
   lastNotifiedHash?: string;
-  /** The hash an unattended `check --stale` refused on its budget: named once per source change, then left for a run by hand. */
+  /** The hash an unattended `check --stale` refused on its budget: named once per source change, then left for a run by hand or a bigger budget. */
   lastRefusedHash?: string;
+  /** The `--budget` that refused `lastRefusedHash`: a later firing with more than this tries the same sources again. */
+  lastRefusedBudget?: number;
   crash?: { hash: string; count: number };
   /**
    * Per model: a rep's average cost and wall time in the last real run on it,
@@ -104,23 +106,43 @@ interface DailySpend {
 
 const today = (): string => new Date().toISOString().slice(0, 10);
 
-/** Real spend recorded today (UTC) across every check. */
-export function spentToday(path = homePaths().spend): number {
-  if (!existsSync(path)) return 0;
+/** The one-number ledger spend.jsonl replaced; what it holds for its own day still counts toward that day. */
+const legacySpend = (path: string): number => {
+  const old = join(dirname(path), 'spend.json');
+  if (!existsSync(old)) return 0;
   try {
-    const s = JSON.parse(readFileSync(path, 'utf8')) as DailySpend;
+    const s = JSON.parse(readFileSync(old, 'utf8')) as DailySpend;
     return s.day === today() ? s.usd : 0;
   } catch {
     return 0;
   }
+};
+
+/** Real spend recorded today (UTC) across every check: the sum of today's lines in the ledger. */
+export function spentToday(path = homePaths().spend): number {
+  let usd = legacySpend(path);
+  if (!existsSync(path)) return usd;
+  for (const line of readFileSync(path, 'utf8').split('\n')) {
+    try {
+      const s = JSON.parse(line) as DailySpend;
+      if (s.day === today() && s.usd > 0) usd += s.usd;
+    } catch {
+      // A blank or torn line adds nothing.
+    }
+  }
+  return usd;
 }
 
+/**
+ * Records one rep's real spend the moment it finishes, as a line of its own:
+ * a check killed partway has still recorded what it spent, the daily ceiling
+ * sees a long check's spend while it runs, and concurrent checks cannot lose
+ * each other's lines (a short O_APPEND write lands whole).
+ */
 export function addSpend(usd: number, path = homePaths().spend): void {
   if (!(usd > 0)) return;
   mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.${process.pid}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify({ day: today(), usd: spentToday(path) + usd } satisfies DailySpend)}\n`);
-  renameSync(tmp, path);
+  appendFileSync(path, `${JSON.stringify({ day: today(), usd } satisfies DailySpend)}\n`);
 }
 
 export function patchSurfaceState(id: string, patch: (s: SurfaceState) => SurfaceState): void {
@@ -179,11 +201,13 @@ export interface Staleness {
 /**
  * A call surface is stale when its hash moved since its last run; an agent
  * surface when it moved since its last run and since it was last flagged. A
- * surface that crashed twice on this hash is blocked, not stale. A stale call
- * surface with dirty sources waits: replaying it would grade a tree HEAD
- * does not hold, and counting it would fire the trigger on nothing.
+ * call surface refused on its budget at this hash is not stale again, unless
+ * `budget` is more than the one that refused it. A surface that crashed twice
+ * on this hash is blocked, not stale. A stale call surface with dirty sources
+ * waits: replaying it would grade a tree HEAD does not hold, and counting it
+ * would fire the trigger on nothing.
  */
-export function staleness(metas: SurfaceMeta[], state = readState(), root = treeRoot()): Staleness {
+export function staleness(metas: SurfaceMeta[], state = readState(), root = treeRoot(), budget?: number): Staleness {
   const hashes = sourceHashes(metas, root);
   const stale: SurfaceMeta[] = [];
   const blocked: SurfaceMeta[] = [];
@@ -194,7 +218,8 @@ export function staleness(metas: SurfaceMeta[], state = readState(), root = tree
       blocked.push(m);
       continue;
     }
-    const seen = m.route === 'call' ? [s.lastRunHash, s.lastRefusedHash] : [s.lastRunHash, s.lastNotifiedHash];
+    const refusedStands = budget == null || s.lastRefusedBudget == null || budget <= s.lastRefusedBudget;
+    const seen = m.route === 'call' ? [s.lastRunHash, refusedStands ? s.lastRefusedHash : undefined] : [s.lastRunHash, s.lastNotifiedHash];
     if (!seen.includes(h)) stale.push(m);
   }
   const dirty = dirtySurfaces(stale.filter((m) => m.route === 'call'), root);

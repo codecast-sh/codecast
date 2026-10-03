@@ -11,7 +11,7 @@
 import type { EntityFixture } from "@/lib/entityDisplay";
 import { HOUR, MIN, OBJECTS, PEOPLE, SESSIONS } from "./story";
 
-/** Film-time cues inside the chapter (the camera holds 55.4 to 60.8). */
+/** Film-time cues inside the chapter (the camera holds 55.4 to 60.5). */
 export const TEAM = {
   ask: 55.5,
   thinking: 56.0,

@@ -742,9 +742,9 @@ export function MessageNavButton({
           return (
             <span
               key={i}
-              className={`block rounded-full transition-all duration-150 ${
+              className={`block rounded-full transition-all duration-200 ease-out ${
                 isActive
-                  ? "bg-sol-text w-4 h-[2.5px]"
+                  ? "cc-rail-here"
                   : hasComment
                   ? "bg-sol-cyan w-3.5 h-[2px] opacity-70"
                   : isMachine

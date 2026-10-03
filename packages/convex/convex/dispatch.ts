@@ -44,6 +44,7 @@ import {
   canFileConversation,
 } from "./buckets";
 import { advanceLocalViewRevision, runLocalCommand } from "./localFirstCommands";
+import { deleteRecordingRun } from "./callRecordings";
 import { isSessionOwner } from "./sessionOwners";
 import { hideConversationForViewer, unhideConversationForViewer } from "./inboxHides";
 import { patchCommentWithRevision } from "./commentViewWrites";
@@ -2267,6 +2268,35 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     return on
       ? await ctx.runMutation!(api.callRecordings.startRecording, { room_key: roomKey })
       : await ctx.runMutation!(api.callRecordings.stopRecording, { room_key: roomKey });
+  },
+  // A call's video, from the call page (store deleteCallRecording drops the
+  // run's rows first; setCallShareVideo moves the share switch first).
+  //
+  // The delete is receipt-backed: a refusal is the command's recorded
+  // outcome, so the client rolls the run back from its own receipt handler
+  // even when the refusal arrives on a replay after a reload, and a retry
+  // whose first answer was lost reads the stored receipt instead of running
+  // again. A run already gone (deleted from another window, or a call this
+  // caller can no longer read) is acknowledged: the rows the client dropped
+  // are gone either way, and putting them back would show dead files.
+  deleteCallRecording: async (ctx, userId, [recordingId]: [string], result) => {
+    if (!hasReceiptCommandId(result)) {
+      return await ctx.runMutation!(api.callRecordings.deleteRecording, { recording_id: recordingId });
+    }
+    return await runLocalCommand(ctx as any, {
+      principalId: userId,
+      commandId: receiptCommandId("deleteCallRecording", result),
+      commandName: "callRecordings.delete/v1",
+      arguments: { recordingId },
+    }, async () => {
+      const out = await deleteRecordingRun(ctx, userId, recordingId);
+      if (out.ok) return { status: "acknowledged", result: { deleted: out.deleted }, coverageViews: [] };
+      if (out.code === "NOT_FOUND") return { status: "acknowledged", result: { deleted: 0 }, coverageViews: [] };
+      return { status: "rejected", code: out.code, message: out.message };
+    });
+  },
+  setCallShareVideo: async (ctx, _userId, [transcriptId, include]: [string, boolean]) => {
+    return await ctx.runMutation!(api.callRecordings.setCallShareVideo, { call: transcriptId, include: !!include });
   },
   setChatSlackMember: async (
     ctx,

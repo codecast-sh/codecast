@@ -12,10 +12,9 @@ import schema from "./schema";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { ChangeCommit } from "@codecast/shared/changes";
-import { CHEAP_MODEL, STRONG_MODEL, modelCost } from "./lib/anthropic";
+import { STRONG_MODEL, modelCost } from "./lib/anthropic";
 import { dayBounds, localDate } from "./lib/teamDay";
 import {
-  CHEAP_EDITION_STORIES,
   DAILY_CAP_USD,
   EDITION_INTERVAL_MS,
   SETTLE_MS,
@@ -23,6 +22,7 @@ import {
   parseEditionReply,
   parseStoryReply,
   settlesAt,
+  sentences,
   skipHeadline,
   storyPromptInput,
   storyRequest,
@@ -102,10 +102,10 @@ describe("storyPromptInput", () => {
 });
 
 describe("storyRequest", () => {
-  test("is a Haiku request at 400 tokens offering only the why sources the story has", () => {
+  test("is a strong-model request at 400 tokens offering only the why sources the story has", () => {
     const bare = storyRequest(storyPromptInput(facts(), [commitOf("c1", "fix(cli): retry", { cli: [1, 5, 1] })], [], []));
-    expect(bare).toMatchObject({ model: CHEAP_MODEL, max_tokens: 400 });
-    // callModel pins the cheap model's temperature; the request names none.
+    expect(bare).toMatchObject({ model: STRONG_MODEL, max_tokens: 400 });
+    // The strong model refuses any temperature; the request names none.
     expect("temperature" in bare).toBe(false);
     expect(bare.prompt).toContain(`"commit", "none"`);
     expect(bare.prompt).not.toContain(`"session"`);
@@ -161,7 +161,10 @@ describe("skip and settle", () => {
     expect(skipHeadline(row, [commitOf("c1", "fix(cli): retry uploads", { cli: [1, 5, 1] })])).toBeNull();
     expect(skipHeadline(row, [commitOf("c1", "chore(cli): " + "tidy ".repeat(15), { cli: [1, 5, 1] })])).toBeNull();
     // A slice of a batch commit: its subject speaks for every area.
-    expect(skipHeadline(row, [commitOf("c1", long, { cli: [1, 5, 1], web: [1, 5, 1], convex: [1, 5, 1] })])).toBeNull();
+    expect(skipHeadline(row, [commitOf("c1", long, { cli: [1, 5, 1], web: [1, 5, 1], convex: [1, 5, 1] })])).toBeNull();    // A list of changes, or one too long to fit unclipped, goes to the model.
+    expect(skipHeadline(row, [commitOf("c1", "feat(cli): palette search results, PR review popover, composer pill radius", { cli: [1, 5, 1] })])).toBeNull();
+    expect(skipHeadline(row, [commitOf("c1", "fix(cli): record a mirror's synced set when a pass has nothing to send; version skew test", { cli: [1, 5, 1] })])).toBeNull();
+    expect(skipHeadline(row, [commitOf("c1", "fix(cli): " + "uploads retry patiently ".repeat(5), { cli: [1, 5, 1] })])).toBeNull();
   });
 
   test("a story settles 20 minutes after its last commit, or when its day ends", () => {
@@ -176,12 +179,12 @@ describe("edition request and reply", () => {
   });
   const input = (n: number): EditionPromptInput => ({ date: "2026-09-01", stats: null, releases: [], stories: Array.from({ length: n }, (_, i) => story(i + 1)), branches: [], blocked: [] });
 
-  test("Haiku up to 40 stories, Sonnet above, neither naming a temperature", () => {
-    const small = editionRequest(input(CHEAP_EDITION_STORIES));
-    expect(small.model).toBe(CHEAP_MODEL);
-    const big = editionRequest(input(CHEAP_EDITION_STORIES + 1));
-    expect(big.model).toBe(STRONG_MODEL);
-    expect("temperature" in small || "temperature" in big).toBe(false);
+  test("editions of any size ask the strong model and name no temperature", () => {
+    for (const n of [1, 80]) {
+      const req = editionRequest(input(n));
+      expect(req.model).toBe(STRONG_MODEL);
+      expect("temperature" in req).toBe(false);
+    }
   });
 
   test("maps refs back to story keys, keeps known areas in order and completes them", () => {
@@ -208,6 +211,7 @@ const modules = {
   "./changes.ts": () => import("./changes"),
   "./changesSchedule.ts": () => import("./changesSchedule"),
   "./changesProse.ts": () => import("./changesProse"),
+  "./changesWeek.ts": () => import("./changesWeek"),
 };
 
 const REPO = "acme/app";
@@ -320,7 +324,7 @@ async function setup() {
   return { t, ids, commit, day, rebuild, stories, byShas, digest, rebuildJobs };
 }
 
-const storyCost = modelCost(CHEAP_MODEL, USAGE);
+const storyCost = modelCost(STRONG_MODEL, USAGE);
 
 describe("runProse through rebuildDay", () => {
   test("writes story prose and the final edition, with tokens and cost on each row", async () => {
@@ -336,7 +340,7 @@ describe("runProse through rebuildDay", () => {
       kind: "feature",
       importance: 4,
       prose_status: "written",
-      model: CHEAP_MODEL,
+      model: STRONG_MODEL,
       input_tokens: USAGE.input_tokens,
       output_tokens: USAGE.output_tokens,
     });
@@ -362,7 +366,7 @@ describe("runProse through rebuildDay", () => {
 
     // The private session's notes never left: only its commit text did.
     expect(sent.some((c) => c.prompt.includes(`Worked on ${SECRET}`) || c.prompt.includes(`do ${SECRET}`))).toBe(false);
-    expect(sent.every((c) => c.model === CHEAP_MODEL && c.temperature === 0)).toBe(true);
+    expect(sent.every((c) => c.model === STRONG_MODEL && c.temperature === undefined)).toBe(true);
 
     // The day has ended, so the edition is final.
     const edition = (await s.digest())!;
@@ -371,7 +375,7 @@ describe("runProse through rebuildDay", () => {
       narrative: "A web day.",
       lead_story_key: web.story_key,
       status: "final",
-      model: CHEAP_MODEL,
+      model: STRONG_MODEL,
     });
     expect(edition.section_order!.slice(0, 2)).toEqual(["web", "docs"]);
     expect(edition.cost_usd).toBeCloseTo(storyCost, 10);
@@ -500,7 +504,7 @@ describe("runProse through rebuildDay", () => {
     const web = await s.byShas("a1");
     await s.t.run(async (ctx) => ctx.db.patch(s.ids.vis, { is_private: true }));
 
-    const usage = { model: CHEAP_MODEL, input_tokens: 10, output_tokens: 5, cost_usd: 0.25 };
+    const usage = { model: STRONG_MODEL, input_tokens: 10, output_tokens: 5, cost_usd: 0.25 };
     const write = (inputs_hash: string) => s.t.mutation(internal.changesProse.writeStoryProse, {
       story_id: web._id,
       inputs_hash,
@@ -540,3 +544,13 @@ describe("runProse through rebuildDay", () => {
     expect((await s.digest())!.status).toBe("facts");
   });
 });
+
+describe("sentences", () => {
+  test("a dot inside a file name or version does not end a sentence or drop the text before it", () => {
+    const body = "Each workspace now stores a timezone (migration 0042_workspace_timezone.sql). It shipped in cli 1.1.163. The schedule reads it. A fourth sentence.";
+    expect(sentences(body, 3)).toBe("Each workspace now stores a timezone (migration 0042_workspace_timezone.sql). It shipped in cli 1.1.163. The schedule reads it.");
+    expect(sentences("One. Two! Three? Four.", 2)).toBe("One. Two!");
+    expect(sentences("No terminator at all", 3)).toBe("No terminator at all");
+  });
+});
+

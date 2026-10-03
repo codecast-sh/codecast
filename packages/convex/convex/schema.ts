@@ -3859,6 +3859,12 @@ export default defineSchema({
     // When the team's daily prose cap first left a story or the edition of
     // this day unwritten. Independent of status: a written edition can be capped.
     capped_at: v.optional(v.number()),
+    // Week editions (scope "week", date an ISO week `2026-W40`, changesWeek.ts):
+    // the week's biggest stories by key, lead first, and its area totals.
+    top_story_keys: v.optional(v.array(v.string())),
+    area_totals: v.optional(v.array(v.object({ area: v.string(), stories: v.number(), files: v.number() }))),
+    // The week build scheduled by a day edition finalizing, while it waits.
+    scheduled_id: v.optional(v.id("_scheduled_functions")),
   })
     .index("by_user_scope_date", ["user_id", "scope", "date"])
     .index("by_team_scope_date", ["team_id", "scope", "date"])
@@ -6094,6 +6100,13 @@ export default defineSchema({
     // shows for a beat after somebody switched transcription back on by hand
     // predates their run and must not end it (autoScribe).
     transcribe_off_at: v.optional(v.number()),
+    // When the last seat left this huddle's room (calls.leaveRoom). The
+    // huddle's grace dates from it when no live record carries an idle stamp
+    // of its own (transcription off, or nobody scribing yet), so a teammate
+    // who reloads the tab comes back to the same huddle, with its grants and
+    // its guests, whether or not anything was transcribing it
+    // (transcripts.withinHuddleGrace). Dies with the row like the rest.
+    emptied_at: v.optional(v.number()),
     updated_at: v.number(),
   }).index("by_room", ["room_key"]),
 
@@ -6136,6 +6149,14 @@ export default defineSchema({
     expires_at: v.number(),
     revoked_at: v.optional(v.number()),
     revoked_by: v.optional(v.id("users")),
+    // How many people from this link the room has turned away or put out,
+    // counted as it happens rather than by reading every row the link ever
+    // made: past one, the door offers to turn the link off.
+    turned_away: v.optional(v.number()),
+    // When the creator was last pushed about somebody waiting at an empty
+    // room on this link. Per link, not per guest: a leaked link mints new
+    // guests at will, and must not page its creator once for each.
+    creator_told_at: v.optional(v.number()),
   })
     .index("by_token", ["token"])
     .index("by_room", ["room_key"]),
@@ -6177,12 +6198,27 @@ export default defineSchema({
     // Why a `left` row left: they walked out, or the huddle they were let
     // into ended (an admission is for one huddle). CallGuestLeftReason.
     left_reason: v.optional(callGuestLeftReasonValidator),
-    // When the link's creator was last told this guest was waiting at an
-    // empty room (one push per arrival, not one per beat).
+    // When the link's creator was last told somebody was waiting on this
+    // link at an empty room, stamped on each guest that push covered, so
+    // their page says "we let them know" only when somebody was.
     creator_told_at: v.optional(v.number()),
+    // When this row stopped letting the guest in (left, removed, denied).
+    // The minute sweep keeps checking the media room of a running huddle for
+    // a while after (by_settled), since LiveKit refreshes a connected
+    // client's token by itself and only a roster check puts it out.
+    settled_at: v.optional(v.number()),
+    // What the guest's last beat computed for their page ("closed:quiet",
+    // "admitted"), written only when it moves. getGuestState answers from the
+    // clock too (a link's expiry, a huddle's grace), and a query re-runs only
+    // when a row it read changes: this is that change.
+    beat_view: v.optional(v.string()),
   })
-    .index("by_room_status", ["room_key", "status"])
-    .index("by_status", ["status"])
+    // Every read of a room's door or roster is bounded by the lease
+    // (last_seen), so rows from closed pages cost nothing to the reads that
+    // run on every beat, however many a leaked link has made.
+    .index("by_room_status_seen", ["room_key", "status", "last_seen"])
+    .index("by_status_seen", ["status", "last_seen"])
+    .index("by_settled", ["settled_at"])
     .index("by_link", ["link_id"]),
 
   // Which calls a guest was in: one row per guest per call record, written

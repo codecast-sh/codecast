@@ -7,6 +7,7 @@ import {
   cardVerdictIndexes,
   assembleChangeCard,
   countSentences,
+  proofCountsIn,
   proofSummary,
   riskLabel,
   validateChangeCard,
@@ -184,13 +185,25 @@ describe("helpers", () => {
   });
 
   it("summarizes the proof honestly", () => {
-    expect(proofSummary(sample().proof).label).toBe("4 of 4 checks went red to green");
+    expect(proofSummary(sample().proof).label).toBe("4 proven misses, all fixed");
+    expect(proofSummary(sample().proof).short).toBe("4/4 misses fixed");
     const p = {
       before: [{ name: "a", ok: false, detail: "" }, { name: "b", ok: false, detail: "" }],
       after: [{ name: "a", ok: true, detail: "" }, { name: "b", ok: false, detail: "" }, { name: "c", ok: false, detail: "" }],
     };
-    expect(proofSummary(p)).toEqual({ red: 2, fixed: 1, stillRed: ["b"], broke: ["c"], label: "1 of 2 checks went red to green, 1 broke", short: "proof 1/2, 1 broke" });
+    expect(proofSummary(p)).toEqual({ red: 2, fixed: 1, stillRed: ["b"], broke: ["c"], label: "2 proven misses, 1 fixed, 1 broke", short: "1/2 misses fixed, 1 broke" });
     expect(proofSummary({ before: [], after: [] }).label).toBe("No proof recorded");
+  });
+
+  it("refuses a reason whose proof count is not the proof's", () => {
+    expect(proofCountsIn("All three proven misses now pass, and 2 red checks.")).toEqual([3, 2]);
+    expect(proofCountsIn("Both misses pass now.")).toEqual([2]);
+    expect(proofCountsIn("Three checks pass.")).toEqual([]);
+    const c = clone(sample());
+    c.recommend.why = "All three proven misses now pass, nothing regressed.";
+    const v = validateChangeCard(c);
+    expect(v.ok).toBe(false);
+    if (!v.ok) expect(v.errors).toContain("recommend.why: says 3 proven misses, but the proof shows 4");
   });
 
   it("renders a neutral label for a card with no recommendation yet", () => {

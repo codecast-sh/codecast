@@ -11,12 +11,13 @@
  */
 
 import type { ReactNode } from "react";
+import { Globe, Mic } from "lucide-react";
 import { AssistantBlock, UserPrompt } from "@/components/conversation/blocks/turnBlocks";
 import { PhoneComposer, PhoneMessage, PhoneMessageText, PhoneSessionHeader, PhoneSessionMeta, PhoneStatusDot, PhoneToolCalls } from "@/components/PhoneSession";
 import { MOBILE_COMPOSER_PLACEHOLDER, MOBILE_COMPOSER_STATUS, MOBILE_PULSE, MOBILE_SESSION_STYLE, mobileRelativeTime } from "@codecast/shared/render/mobileSessionStyle";
 import { ASK, EARLIER, ME, PHONE_SESSION, REPLY, STEER, TEST_CALL, TEST_RESULT } from "../fixtures/phone";
 import { fly, useFilmTime } from "../filmClock";
-import { FilmGrow, Veil } from "../film";
+import { FilmDip, FilmGrow } from "../film";
 import { typed } from "../timeline";
 import { APP_K, APP_W, DESK_AT, HOME_H, KEYBOARD_H, PHONE_AT, STATUS_H } from "./phone.motion";
 import type { PartProps } from "./contract";
@@ -46,11 +47,6 @@ export function WorkerExchange({ now }: PartProps) {
       </FilmGrow>
     </div>
   );
-}
-
-/** The dashboard worker steps back while the camera frames the API worker's question. */
-export function PairVeil() {
-  return <Veil id="pairB/phone.veil" />;
 }
 
 /* ── The phone: iOS around the app ───────────────────────────────────── */
@@ -85,14 +81,36 @@ function StatusBar({ now }: { now: number }) {
 
 const ROWS = ["qwertyuiop", "asdfghjkl", "zxcvbnm"];
 
-/** The iOS keyboard in dark mode: QuickType's three suggestions, the letter rows, and the 123, space and return row over the globe and mic. */
+/** QuickType's next-word guesses after each word of the answer (the words before them, lower-cased). */
+const NEXT: Record<string, [string, string, string]> = {
+  "": ["Agreed", "I", "Thanks"],
+  "agreed.": ["Log", "I", "Thanks"],
+  log: ["the", "410s", "it"],
+  "410s,": ["never", "but", "and"],
+  never: ["retry", "mind", "again"],
+  "retry.": ["Thanks", "I", "The"],
+};
+
+/** What QuickType offers as the answer is typed: the next word between words, and inside one the word as typed (in quotes) with the word it is becoming. */
+function quickType(typedSoFar: string): [string, string, string] {
+  const words = typedSoFar.split(" ");
+  const partial = words[words.length - 1];
+  if (!partial) return NEXT[(words[words.length - 2] ?? "").toLowerCase()] ?? NEXT[""];
+  const whole = STEER.split(" ")[words.length - 1] ?? partial;
+  const bare = whole.replace(/[.,]$/, "");
+  return [`\u201c${partial}\u201d`, bare, NEXT[(words[words.length - 2] ?? "").toLowerCase()]?.[1] ?? "I"];
+}
+
+/** The iOS keyboard in dark mode: QuickType's three suggestions (following the typing), the letter rows, the 123, space and return row, and the globe and mic under it. */
 function Keyboard() {
   const key = "flex items-center justify-center rounded-[5px] shadow-[0_1px_0_rgba(0,0,0,0.35)]";
+  const len = useFilmTime((t) => (t >= PHONE_AT.type && t < PHONE_AT.sent ? typed(STEER, t, PHONE_AT.type, PHONE_AT.rate).length : t >= PHONE_AT.sent ? -1 : 0));
+  const words = len < 0 ? NEXT[""] : quickType(STEER.slice(0, len));
   return (
     <div {...fly("phone/phone.keyboard", { height: KEYBOARD_H, fontFamily: SF })} className="absolute inset-x-0 bottom-0 z-20 flex flex-col bg-[#2c2c2e]/95 px-[3px] text-white">
       <div className="flex h-[42px] shrink-0 items-center text-[15px] text-white/90">
-        {["Agreed", "I", "Thanks"].map((w, i) => (
-          <span key={w} className={`flex flex-1 justify-center ${i ? "border-l border-white/15" : ""}`}>{w}</span>
+        {words.map((w, i) => (
+          <span key={i} className={`flex flex-1 justify-center truncate ${i ? "border-l border-white/15" : ""}`}>{w}</span>
         ))}
       </div>
       <div className="flex flex-col gap-[10px] pt-[4px]">
@@ -111,12 +129,17 @@ function Keyboard() {
           <span className={`${key} h-[40px] w-[86px] bg-[#5a5a5e] text-[15px]`}>return</span>
         </div>
       </div>
+      {/* The globe and the mic, in the inset under the keys on a Face ID iPhone. */}
+      <div className="flex flex-1 items-center justify-between px-[22px] pb-[6px] text-[#d1d1d6]">
+        <Globe size={23} strokeWidth={1.6} />
+        <Mic size={23} strokeWidth={1.6} />
+      </div>
     </div>
   );
 }
 
 /** One of the app's breathing dots; its phase is film time, quantised so only the dot re-renders, about twenty times a cycle. */
-function PulseDot({ color, pulse }: { color: string; pulse: { leg: number; low: number } }) {
+function PulseDot({ color, pulse, glow }: { color: string; pulse: { leg: number; low: number }; glow?: boolean }) {
   const opacity = useFilmTime((t) => {
     const leg = pulse.leg / 1000;
     const u = (t % (2 * leg)) / leg;
@@ -124,11 +147,9 @@ function PulseDot({ color, pulse }: { color: string; pulse: { leg: number; low: 
     const k = u < 1 ? e(u) : 1 - e(u - 1);
     return Math.round((1 - (1 - pulse.low) * k) * 20) / 20;
   });
-  return <PhoneStatusDot color={color} opacity={opacity} />;
+  return <PhoneStatusDot color={color} opacity={opacity} glow={glow} />;
 }
 
-/** What the composer says about the agent, from film time: working, then nothing while its turn has ended on the question (idle, as the app shows it), then working on the answer. */
-const filmStatus = (t: number) => (t >= PHONE_AT.askLands && t < PHONE_AT.working ? undefined : "working");
 
 /** The reply, streamed: the words so far, with the rest held invisibly so the bubble keeps the height it lands with. */
 function StreamedReply() {
@@ -189,10 +210,11 @@ function Feed({ now }: { now: number }) {
 
 /** The composer: empty, then the field focused, the answer typed in, and sent. */
 function Composer() {
-  const status = useFilmTime(filmStatus);
-  const focused = useFilmTime((t) => t >= PHONE_AT.focus && t < PHONE_AT.blur);
+  // Working, then nothing while its turn has ended on the question (idle, as the app shows it), then working on the answer: the status clears and returns with a fade, held in its place.
+  const status = "working";
+  const focused = useFilmTime((t) => t >= PHONE_AT.focus);
   const len = useFilmTime((t) => (t >= PHONE_AT.type && t < PHONE_AT.sent ? typed(STEER, t, PHONE_AT.type, PHONE_AT.rate).length : 0));
-  const meta = status ? MOBILE_COMPOSER_STATUS[status] : undefined;
+  const meta = MOBILE_COMPOSER_STATUS[status];
   return (
     <div className="relative">
       <PhoneComposer
@@ -200,6 +222,7 @@ function Composer() {
         placeholder={MOBILE_COMPOSER_PLACEHOLDER.active}
         status={status}
         statusDot={meta && <PulseDot color={meta.color} pulse={MOBILE_PULSE.status} />}
+        statusWrap={(n) => <FilmDip out={PHONE_AT.askLands} back={PHONE_AT.working}>{n}</FilmDip>}
         caret={focused}
         bottom={HOME_H}
         send={(button) => (
@@ -222,13 +245,17 @@ export function PhoneScreen({ now }: PartProps) {
       <div className="relative flex origin-top-left flex-col" style={{ width: APP_W, height: `calc(100% / ${APP_K})`, transform: `scale(${APP_K})` }}>
         <StatusBar now={now} />
         <div className="relative z-10 shrink-0">
-          <PhoneSessionHeader title={PHONE_SESSION.title} top={STATUS_H} />
+          {/* The team has huddles (chapter 9), and the session has messages: the header carries both buttons, as the app's does. */}
+          <PhoneSessionHeader title={PHONE_SESSION.title} top={STATUS_H} huddle messageList />
           <PhoneSessionMeta
             agentType={PHONE_SESSION.agent}
             ago="just now"
             live
-            dot={<PulseDot color="#10b981" pulse={MOBILE_PULSE.live} />}
+            dot={<PulseDot color="#10b981" pulse={MOBILE_PULSE.live} glow />}
             model={PHONE_SESSION.model}
+            modelEditable
+            assignment={PHONE_SESSION.assignment}
+            parent
           />
         </div>
         <div className="relative min-h-0 flex-1">

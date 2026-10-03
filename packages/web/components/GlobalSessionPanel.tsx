@@ -59,7 +59,7 @@ import { ConversationSharePopover } from "./ConversationSharePopover";
 import { PlanContextPanel } from "./PlanContextPanel";
 import { WorkflowContextPanel } from "./WorkflowContextPanel";
 import { toast } from "sonner";
-import { animatedHideSession, fileSessionsAsRest } from "../store/undoActions";
+import { animatedHideSessions, fileSessionsAsRest } from "../store/undoActions";
 
 import { soundKill } from "../lib/sounds";
 import { latestSessionCommand, requestAccountSwitchCommand, requestSessionRestart, switchPending } from "../lib/sessionCommands";
@@ -2734,7 +2734,7 @@ function SessionListPanelImpl({
   // Dropping a card on a status section files it there: the user's rest
   // verdict, undoable like the menu gesture. One stable handler per verdict.
   const dropSessionOnRest = useMemo(() => Object.fromEntries(
-    USER_RESTS.map((rest) => [rest, (ids: string[]) => fileSessionsAsRest(ids, rest)]),
+    USER_RESTS.map((rest) => [rest, (ids: string[]) => { void fileSessionsAsRest(ids, rest); }]),
   ) as Record<UserRest, (ids: string[]) => void>, []);
 
   // Section drop targets: whole group is droppable.
@@ -2821,10 +2821,11 @@ function SessionListPanelImpl({
   // scheduler-origin injection preserves the stash), so nothing is canceled —
   // but SAY so when one is armed, since that asymmetry (stash keeps the loop,
   // dismiss/kill cancels it) is invisible unless the product states it.
-  const handleAnimatedStash = useCallback((id: string) => {
-    animatedHideSession(id, "stash");
-    const armed = schedulePartitionRef.current.armedInjectByConv.get(id);
-    if (armed?.length) {
+  // A selection stashes as one gesture: one undo, one notice.
+  const handleAnimatedStashMany = useCallback((ids: string[]) => {
+    void animatedHideSessions(ids, "stash");
+    const armed = ids.flatMap((id) => schedulePartitionRef.current.armedInjectByConv.get(id) ?? []);
+    if (armed.length) {
       toast(
         armed.length === 1
           ? `Stashed — schedule "${armed[0].title}" stays armed`
@@ -2833,6 +2834,7 @@ function SessionListPanelImpl({
       );
     }
   }, []);
+  const handleAnimatedStash = useCallback((id: string) => handleAnimatedStashMany([id]), [handleAnimatedStashMany]);
   // Killing a session cancels the schedules that inject into it (server side,
   // on the hide transition) and restoring it re-arms them — the shared notice
   // hook surfaces both side effects; the same hook backs the palette and the
@@ -3374,8 +3376,8 @@ function SessionListPanelImpl({
       {selectedSessions.length > 0 && (
         <InboxSelectionBar
           sessions={selectedSessions}
-          onStash={handleAnimatedStash}
-          onKill={handleAnimatedDismiss}
+          onStash={handleAnimatedStashMany}
+          onKill={killManyWithNotice}
           onClear={clearSelection}
         />
       )}
@@ -3847,8 +3849,8 @@ function SessionListPanelImpl({
         {({ session, isForeign, sessions }) => sessions.length > 1 ? (
           <BulkSessionMenuItems
             sessions={sessions}
-            onStash={handleAnimatedStash}
-            onKill={handleAnimatedDismiss}
+            onStash={handleAnimatedStashMany}
+            onKill={killManyWithNotice}
             onClear={clearSelection}
           />
         ) : (

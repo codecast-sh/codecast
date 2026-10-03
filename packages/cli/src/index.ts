@@ -10335,6 +10335,10 @@ program
     console.log(`${c.dim}${callUrl()}${c.reset}`);
     const who = (call.participants || []).map((p: any) => p.name).join(", ");
     if (who) console.log(`${c.dim}speakers:${c.reset} ${who}`);
+    // People from outside the team who were let in, spoken or not (each name
+    // already carries its "(guest)" mark).
+    const guests = (call.guests || []).map((g: any) => g.name).join(", ");
+    if (guests) console.log(`${c.dim}guests:${c.reset} ${guests}`);
     if (video.length) {
       const first = nearestRecordedMs(video, video[0].fromMs);
       const hint = first !== null ? ` ${c.dim}(a frame: cast call snap ${callRefId(handle, null, first)} or ${handle}:<line>)${c.reset}` : "";

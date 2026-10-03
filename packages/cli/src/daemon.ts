@@ -4,6 +4,7 @@ import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeli
 import { pendingMessageFinished, prepareTmuxDelivery, receiptSettled, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
 import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLOUD_SESSION_SOURCES, cloudSessionSyncOn, classifyApiErrorBanner, isCloudAgentActionName, confineToOwningDevice, findModelOption, fromConvexAgentType, modelOptionKey, isClaudeAutoContinueLine, isCodexSafetyError, isRecoveryContinueClientId, isMachineDeliveredMessage, isUsageLimitDialog, isValidPaneTarget, isMachineSetting, MACHINE_SETTINGS, machineSettingValues, snippetBySlug, verdictFromProbe, worktreeOfPath } from "@codecast/shared/contracts";
 import { pairDeliveryAcks } from "@codecast/shared/contracts";
+import { mapLimit } from "@codecast/shared/async";
 import { holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, setPendingRedrive } from "./pendingPromptHold.js";
 import { typedPollAnswer } from "./typedPollAnswer.js";
 import { codexTurnErrorMessage } from "./codexTurnError.js";
@@ -310,6 +311,7 @@ import { attachWatchServer } from "./browser/watchServer.js";
 import { handleBrowserFocusHttp } from "./browser/focusHttp.js";
 import { handleNotificationHttp } from "./notificationDelivery.js";
 import { handleFsBrowseHttp } from "./fs/browseHttp.js";
+import { handleMemoryHttp } from "./memory/memoryServer.js";
 import { startFocusSentinel } from "./browser/focusSentinel.js";
 import { attachVaultServer, handleVaultHttp, vaultWatchHub, type VaultServerOptions } from "./vault/vaultServer.js";
 import { VaultMirror, httpMirrorTransport } from "./vault/vaultMirror.js";
@@ -2453,6 +2455,7 @@ function startHookServer(): http.Server {
     if (handleBrowserFocusHttp(req, res, terminalServerOptions())) return;
     if (handleNotificationHttp(req, res, terminalServerOptions())) return;
     if (handleFsBrowseHttp(req, res, terminalServerOptions())) return;
+    if (handleMemoryHttp(req, res, terminalServerOptions())) return;
 
     res.writeHead(404);
     res.end();
@@ -20118,19 +20121,15 @@ function ensureHeartbeatFlushLoop(): void {
 // One item's failure is logged and the pool moves on: a fleet pass must not
 // stop at its first bad session.
 export async function runBounded<T>(items: T[], concurrency: number, fn: (item: T) => Promise<void>, label = "bounded worker"): Promise<void> {
-  let idx = 0;
   const describe = (item: T): string => (typeof item === "string" ? item : JSON.stringify(item)?.slice(0, 200) ?? String(item));
-  const worker = async () => {
-    while (idx < items.length) {
-      const item = items[idx++];
-      try {
-        await fn(item);
-      } catch (err) {
-        log(`${label} failed for ${describe(item)}: ${err instanceof Error ? err.message : String(err)}`);
-      }
+  // One failed item is logged and the rest still run.
+  await mapLimit(items, concurrency, async (item) => {
+    try {
+      await fn(item);
+    } catch (err) {
+      log(`${label} failed for ${describe(item)}: ${err instanceof Error ? err.message : String(err)}`);
     }
-  };
-  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+  });
 }
 
 // Deterministically place a session in one of `mod` buckets — used to spread the

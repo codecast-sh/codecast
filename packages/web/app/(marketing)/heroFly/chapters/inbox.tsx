@@ -11,7 +11,7 @@
  * may read the app's store (inbox.poster.test.tsx).
  */
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { PanelLeft, Plus } from "lucide-react";
 import { NotificationBellButton } from "@/components/NotificationBell";
 import { ViewerFaces } from "@/components/presence/ViewerFaces";
@@ -29,6 +29,7 @@ import { projectDotClass } from "@/lib/projectColors";
 import { useLabelColor } from "@/lib/labelColors";
 import { FilmGrow } from "../film";
 import { fly, useFilmTime } from "../filmClock";
+import { clamp, fade } from "../timeline";
 import { apiWorkerPhase, holdIndex, inboxRows, leadMessages, leadRow, workerRow, DESK, INBOX_SECTIONS, WORKER_HOST } from "../fixtures/desk";
 import { CUES, PEOPLE, SESSIONS } from "../fixtures/story";
 import { RAIL, RAIL_ACTIVE, TEAM_CHIP, TEAMMATES } from "../fixtures/inbox";
@@ -117,22 +118,61 @@ export function InboxList({ now }: PartProps) {
   return <InboxListAt key={hold} now={now} />;
 }
 
+/** The open session as the film moves: the first row's (open in the pane as the film starts), then the lead's, then the cloud worker's. */
+const SELECTIONS = [
+  { at: -Infinity, id: PREV_ID },
+  { at: CUES.leadSelected, id: SESSIONS.lead.id },
+  { at: CUES.remoteOpen, id: SESSIONS.api.id },
+] as const;
+const SELECT_DUR = 0.3;
+
+/** How selected a row is at t: the selection passes from one row to the next over SELECT_DUR, one fading out as the other fades in. */
+function selectedness(id: string, t: number): number {
+  let w = 0;
+  SELECTIONS.forEach((s, i) => {
+    const k = s.at === -Infinity ? 1 : fade(clamp((t - s.at) / SELECT_DUR));
+    if (s.id === id) w += k;
+    const prev = SELECTIONS[i - 1];
+    if (prev?.id === id) w -= k;
+  });
+  return clamp(w);
+}
+
+/** A row the film selects and lets go of: its own selected state fading in over its resting one, so the treatment passes between rows without a jump. */
+function FilmSelected({ id, render }: { id: string; render: (active: boolean) => ReactNode }) {
+  const w = useFilmTime((t) => Math.round(selectedness(id, t) * 30) / 30);
+  return (
+    <div className="relative">
+      {render(w >= 1)}
+      {w > 0 && w < 1 && (
+        <div aria-hidden className="pointer-events-none absolute inset-0" style={{ opacity: w }}>
+          {render(true)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function InboxListAt({ now }: PartProps) {
   const messages = useFilmTime(leadMessages);
   const steered = useFilmTime((t) => t >= DESK.steerSent);
   const leadIn = useFilmTime((t) => t >= CUES.leadLands);
-  // The open session's row is the selected one: the first row's (open in the pane as the film starts), then the lead's, then the cloud worker's.
-  const selected = useFilmTime((t) => (t >= CUES.remoteOpen ? SESSIONS.api.id : t >= CUES.leadSelected ? SESSIONS.lead.id : PREV_ID));
   const apiPhase = useFilmTime(apiWorkerPhase);
   const [picked, setPicked] = useState<string | null>(null);
   const [starred, setStarred] = useState<Record<string, boolean>>({});
   const rows = inboxRows(now);
-  const active = picked ?? selected;
 
-  const card = (session: ReturnType<typeof leadRow>, live: boolean, extra?: { isUnread?: boolean; runHost?: (typeof rows)[number]["runHost"] }) => (
+  // Until a visitor picks a row, the film's selection moves between rows (FilmSelected); a pick is the app's own, at once.
+  const card = (session: ReturnType<typeof leadRow>, live: boolean, extra?: { isUnread?: boolean; runHost?: (typeof rows)[number]["runHost"] }) =>
+    picked === null && SELECTIONS.some((s) => s.id === session._id) ? (
+      <FilmSelected id={session._id} render={(active) => cardView(session, live, active, extra)} />
+    ) : (
+      cardView(session, live, picked === session._id, extra)
+    );
+  const cardView = (session: ReturnType<typeof leadRow>, live: boolean, active: boolean, extra?: { isUnread?: boolean; runHost?: (typeof rows)[number]["runHost"] }) => (
     <SessionCardView
       session={session}
-      isActive={active === session._id}
+      isActive={active}
       isFavorite={!!starred[session._id]}
       sessionLabel={null}
       now={now}

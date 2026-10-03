@@ -174,7 +174,13 @@ export type UndoOutcome = { ok: true; applied: number; skipped: number } | { ok:
 **Snapshot shape**
 
 ```ts
-type UndoHistorySnapshot = { version: number; items: readonly UndoHistoryItem[]; head: string | null };
+type UndoHistorySnapshot = {
+  version: number;
+  items: readonly UndoHistoryItem[];
+  head: string | null;
+  undoOrder: readonly string[]; // undo stack ids, top first (the order undos take them)
+  redoOrder: readonly string[]; // redo stack ids, top first
+};
 type UndoHistoryItem = Omit<UndoEntry, "undo" | "redo">;   // newest first
 ```
 
@@ -192,7 +198,7 @@ The notifier gains `onHistoryStep?(kind: "undo" | "redo", steps: number, entry)`
 1. **Guard.** Run the rule from section 2 over the protected cells, grouped by row. `stampFields` are never compared. A row that is gone counts as a conflict, unless the cell is a row add, which counts as already undone. If no row applies, mark the entry `conflict`, notify "Can't undo <label>: changed since", remove it from the stack, and stop. The next keypress continues with the older entries.
 2. **Prepare.** Call `beforeReplay(entry, "undo")`. Codecast uses it to call `declareViewNav("undo")`.
 3. **Plan the passes.**
-   - If the spec has `inverse`, use its invocations. The first one carries the overlay for every applicable cell.
+   - If the spec has `inverse`, use its invocations. The first one carries the overlay for every applicable cell. After a partial guard the inverse is asked again with the skipped rows' cells taken out of `ctx.changes`, so an inverse must derive its invocations from the changed rows. If an invocation still names a skipped row, the undo is refused as a conflict: sending it would overwrite that row's later change on the server.
    - Otherwise, the cells on keys with a writer are grouped per row into that writer's invocations, each carrying its row's overlay. All other cells (patch rail and mirror) go into one `replayAction` pass with args `[]`.
 4. **Run each pass** through `runAction(inv.action, flagsOf(target), recipe, inv.args, { replay })`. The recipe does three things in order:
    1. deletes the forward's `planted` pending entries that still match exactly (same type, value and ts), which fixes B1 and B2;
@@ -208,6 +214,7 @@ The notifier gains `onHistoryStep?(kind: "undo" | "redo", steps: number, entry)`
 2. Call `beforeReplay(entry, "redo")`.
 3. Call the wrapped original action with the original args, inside a capture that **refreshes this entry's** `changes`, `planted` and `outboxIds` instead of pushing a new entry.
 4. For a group, redo the children in order.
+5. After a partial undo (`skipped` is non-empty), step 3 would write the forward value over the rows the undo left. Instead the cells the undo applied get their `after` values back through the same guard, passes and `runAction` replay as an undo, with no planted deletion. An entry whose server half is a spec `inverse` has no such mirror, so its redo is refused as a conflict. A refused redo replay returns the entry to the redo stack.
 
 ### 3.7 Refusal, stubs, async
 
@@ -263,13 +270,14 @@ The notifier gains `onHistoryStep?(kind: "undo" | "redo", steps: number, entry)`
 
 | Action (inboxStore.ts unless named) | Route | Notes and label |
 |---|---|---|
-| `deferSession`, `setSessionRest`, `pinSession`, `snoozeSession`, `wakeSnoozedSession`, `renameSession`, `setSessionCharacter(s)`, `patchConversation`, `toggleFavorite`, `updateSessionProject`, `setConversationModel/Agent/AgentDefinition` | patch | The cleared snooze, `title_is_custom` and the `favorites` mirror are captured automatically. "Deferred “{title}”", "Filed “{title}” as Done", "Pinned/Unpinned “{title}”", "Renamed “{old}” to “{new}”" |
-| `stashSession`, `killSession`, `killSessions` | inverse: one `{action: "restoreSession", args: [id], runDraft: false}` per hidden id. The first carries the overlay. | Owners land through the patches; non-owners land through the `inbox_hides` unhide (B6). `restoreView: true`, `toast: true`. Kill label: "Killed “{title}” (agent stays stopped on undo)". Verify that `unhideConversationForViewer` is a no-op for owners. |
+| `deferSession`, `setSessionRest`, `pinSession`, `snoozeSession`, `wakeSnoozedSession`, `renameSession`, `setSessionCharacter(s)`, `patchConversation`, `toggleFavorite` | patch | The cleared snooze, `title_is_custom` and the `favorites` mirror are captured automatically. "Deferred “{title}”", "Filed “{title}” as Done", "Pinned/Unpinned “{title}”", "Renamed “{old}” to “{new}”" |
+| `stashSession`, `killSession`, `killSessions` | inverse: one `{action: "restoreSession", args: [id], runDraft: false}` per hidden id, read from `ctx.changes` (not the args) so a partial undo sends none for a skipped row. The first carries the overlay. A kill adds `patchConversation(id, {inbox_killed_at: null})` for each row it retired that was not killed before: the server's kill stamps that marker, the kill's draft never wrote it, and `shouldShowInInbox` hides the row on it alone, so without the local clear an undo after the echo shows nothing until the server's un-kill returns. | Owners land through the patches; non-owners land through the `inbox_hides` unhide (B6). `restoreView: true`, `toast: true`. Kill label: "Killed “{title}” (agent stays stopped on undo)". Verify that `unhideConversationForViewer` is a no-op for owners. |
 | `restoreSession` | patch | "Restored “{title}”" |
+| `updateSessionProject`, `setConversationModel/Agent/AgentDefinition` | never | The switch is applied to the live agent or its daemon (a `/model` message, `switchSessionAgent`, `reconfigureSession`), and `agent_type` is not editable on the patch rail, so a field restore would leave the row disagreeing with the running session. A command inverse that re-runs the real switch is a follow-up. |
 | `updateBucket` | patch | `inbox_buckets` rail |
 | `assignSessionToBucket` | writer (`bucketAssignments` → `assignSessionToBucket(conv, prevBucket \| null)`) | "Labeled “{title}” {bucket}" |
 | `switchProject` | inverse: `switchProject(id, prevPath)` | |
-| `setPrivacy`, `setTeamVisibility` | inverse with the prior value | Immutable on the patch rail. Undo that widens access is offered only from the toast or the timeline, never from blind ⌘Z (spec flag `confirm: true`, which `performUndo` skips with a notice). |
+| `setPrivacy`, `setTeamVisibility` | inverse with the prior value | Immutable on the patch rail. Undo that widens access is offered only from the toast or the timeline, never from blind ⌘Z (spec flag `confirm`, a function asked when the entry is recorded: it is true only when the prior audience is wider than the new one or cannot be ordered against it, so taking back an accidental share is an ordinary ⌘Z; `performUndo` stops at a confirm entry with a notice and undoes nothing, so an older change is never taken back in its place). |
 | `toggleBookmark` | inverse: the same toggle | The guard ensures membership is still `after`. |
 | `updateTask`, `updateTaskStatus` | writer: `updateTask(short_id, wire)` | Wire: `parent_id` → `parent` (short id or `""`); a cleared `assignee`, `project_id`, `status_id`, `execution_status` or `parent` → `""`; drop `updated_at`, `closed_at` and `attempt_count`. A cascade close yields one invocation per child. The undo cannot recall assignment notifications. |
 | `updatePlan`, `updateProject`, `updateInitiative`, `set/add/removeInitiativeProject` | writer | Already in server shape (`writeAsServerShape`). |

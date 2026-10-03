@@ -47,14 +47,18 @@ export function useSessionStacked(sessionId: string): boolean {
   return useSyncExternalStore(subscribeStack, () => stackedSessions.has(sessionId), () => false);
 }
 
+/** The stage leaf of the active tab showing `path`, or null. */
+export function useLeafShowing(path: string): string | null {
+  return useInboxStore((s) => {
+    const tab = s.tabs.find((t) => t.id === s.activeTabId);
+    return tab?.layout ? leavesOf(tab.layout).find((l) => l.path === path)?.id ?? null : null;
+  });
+}
+
 /** Is the session's own page on screen in this tab: stacked under a bar, or
  *  a pane of the stage. */
 export function useSessionOnScreen(sessionId: string): boolean {
   const stacked = useSessionStacked(sessionId);
-  const path = sessionPanePath(sessionId);
-  const inPane = useInboxStore((s) => {
-    const tab = s.tabs.find((t) => t.id === s.activeTabId);
-    return !!tab?.layout && leavesOf(tab.layout).some((l) => l.path === path);
-  });
-  return stacked || inPane;
+  const leaf = useLeafShowing(sessionPanePath(sessionId));
+  return stacked || leaf !== null;
 }

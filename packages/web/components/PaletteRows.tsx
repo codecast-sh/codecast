@@ -12,6 +12,7 @@ import { ShortId } from "./ShortId";
 import { formatDateSmart } from "@codecast/shared/time";
 import { parseSessionQuery } from "@codecast/shared/search";
 import { highlightMatch, getSnippet } from "../lib/searchHighlight";
+import { StampTime } from "./StampTime";
 
 // Presentational rows of the Cmd+K palette. CommandPalette owns the data and
 // the select handlers; these draw a row from plain props, so the marketing
@@ -144,7 +145,7 @@ export function PaletteSessionRow({ conv, bucket, onSelect }: {
       {isTeam && conv.authorName && (
         <span className="text-[10px] text-sol-text-dim flex-shrink-0">· {conv.authorName}</span>
       )}
-      <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{formatDateSmart(conv.updated_at)}</span>
+      <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0"><StampTime ts={conv.updated_at} format={formatDateSmart} /></span>
     </CommandPrimitive.Item>
   );
 }
@@ -204,7 +205,7 @@ export function PaletteSearchResultRow({ result, query = "", onSelect }: {
           // An operator-only query (file:, pr:, ...) matches the session, not a message.
           : "filter"}
       </span>
-      <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{formatDateSmart(result.updatedAt)}</span>
+      <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0"><StampTime ts={result.updatedAt} format={formatDateSmart} /></span>
     </CommandPrimitive.Item>
   );
 }
@@ -242,7 +243,7 @@ export function PaletteTaskRow({ task, status, onSelect }: {
       <span className="truncate flex-1">{task.title || "Untitled"}</span>
       {status && <span className={`text-[10px] flex-shrink-0 ${status.color}`}>{status.label}</span>}
       <ShortId id={task.short_id} className="text-[10px] text-sol-text-dim tabular-nums" />
-      <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{formatDateSmart(task.updated_at)}</span>
+      <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0"><StampTime ts={task.updated_at} format={formatDateSmart} /></span>
     </CommandPrimitive.Item>
   );
 }

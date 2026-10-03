@@ -711,6 +711,26 @@ export function isStackedAsk(d: StackedAskRow): boolean {
   return d.status === "pending" && (!!d.blocking || !!d.stack_id);
 }
 
+// Whether an answered advisory ask still takes a person's answer. The agent
+// went ahead on its default the moment it asked, so an answer on record (its
+// default applied by a stack policy, or a person's earlier pick) is a course
+// it is already on, and a person may still change it: the new answer reaches
+// the agent as one more message. A blocking ask, a gate on a run (its run
+// already routed on the answer) and a role's answer under a grant (reopened
+// through its own path) stay settled. ONE rule for the dispatch guard, the
+// server's settle hook and the web store, so no rail accepts what another
+// refuses.
+export interface AdvisoryAnswerRow {
+  status: string;
+  blocking?: boolean;
+  workflow_run_id?: unknown;
+  answered_by?: { kind: string } | null;
+}
+
+export function advisoryAnswerOpen(d: AdvisoryAnswerRow): boolean {
+  return d.status === "answered" && d.blocking === false && !d.workflow_run_id && d.answered_by?.kind !== "role";
+}
+
 // ── Riding the lead ─────────────────────────────────────────────────────────
 //
 // A member whose state rolls up to another member (rollupParentIdOf: an

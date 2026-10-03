@@ -14,7 +14,7 @@ import type { SessionBlameRange } from "@/lib/repoView";
 import { readyAt } from "../world";
 import { DAY, HOUR, OBJECTS, PEOPLE, SESSIONS } from "./story";
 
-/** Film-time cues inside the chapter (palette hold 75.8 to 77.9, blame 79.6 to 81.3). */
+/** Film-time cues inside the chapter (palette hold 75.8 to 77.9, blame 79.6 to 81.1). */
 export const MEMORY = {
   /** The palette is open on its recent sessions before its surface turns face-up. */
   palette: readyAt("palette"),
@@ -57,7 +57,7 @@ export const FILE = {
   path: OBJECTS.blame.file,
   line: OBJECTS.blame.line,
   /** The first line in view: the camera reads the lines around 42. */
-  top: 33,
+  top: 27,
   content: [
     'import { ledger } from "./ledger";',
     'import { deadLetter, enqueue, toFailure } from "./queue";',

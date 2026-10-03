@@ -21,12 +21,7 @@ scenario({ name: "memberRemovedMidTurn", known: { "INV-fixpoint": "ct-56354" } }
   w.session("bo", "s", { agentStatus: "working" });
   const t = w.task("t", { owner: "ada", session: s });
   w.role("acme", "rev");
-  // bo's team list answers after his first inbox floor. The other order trips
-  // ct-56045 (the floor probe prunes team rows), which viewerHideVsOwner guards.
-  const teamPush = "live:bo-host:team";
-  w.net.lag(teamPush);
   const b = await w.device("bo", { scope: { team: "acme" } });
-  w.net.release(teamPush);
   await b.host.bootstrap("tasks", api.tasks.webList, { team_id: w.idOf("acme"), workspace: "team", include_derived: true }, { select: (r: any) => r?.items ?? r });
   await b.host.feed("anchors", api.anchors.listAnchors, () => ({}));
   await w.expect(b.host).shows(s);

@@ -1604,6 +1604,7 @@ export function mutativeMiddleware(
           shape: {
             declaredKind: (key) => maps.syncKindOf?.(key) ?? platformConfig.syncRegistry?.[key]?.kind,
             rowKeyOf: syncRowKeyOf,
+            rowGroupOf: (key) => maps.dispatchTableMap[key]?.table ?? key,
             isProtected: maps.isProtectedSyncCollection,
             isUnprotectedField: maps.isUnprotectedField,
             viewFields: new Set(viewGuard?.fields ?? []),

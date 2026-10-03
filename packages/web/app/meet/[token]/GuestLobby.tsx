@@ -33,6 +33,7 @@ export function GuestLobby({
   recording,
   accepted,
   creatorTold,
+  doorFull,
   signedIn,
   name,
   onName,
@@ -56,6 +57,9 @@ export function GuestLobby({
   accepted: GuestNotice | null;
   /** The link's creator was sent word of this knock (the room was empty). */
   creatorTold: boolean;
+  /** Their place at the door lapsed (the page slept) and every waiting place
+   *  is taken now; the page's beat asks again until one frees. */
+  doorFull: boolean;
   /** This browser holds a codecast sign-in: probably a teammate testing
    *  their own link, who should join as themselves. */
   signedIn: boolean;
@@ -127,6 +131,7 @@ export function GuestLobby({
               live={live}
               inviterName={creatorTold ? inviterName : null}
               since={waitingSince}
+              doorFull={doorFull}
               onCancel={onCancel}
               busy={busy}
             />
@@ -208,6 +213,7 @@ function WaitingCard({
   live,
   inviterName,
   since,
+  doorFull,
   onCancel,
   busy,
 }: {
@@ -216,6 +222,7 @@ function WaitingCard({
   /** Whoever was actually sent word of this knock, or null. */
   inviterName: string | null;
   since: number | null;
+  doorFull: boolean;
   onCancel: () => void;
   busy: boolean;
 }) {
@@ -231,10 +238,12 @@ function WaitingCard({
         </span>
         <div className="min-w-0">
           <div className="text-[14px] font-medium text-sol-text">
-            {live ? "The room knows you're here" : "Waiting for the call to start"}
+            {doorFull ? "Lots of people are waiting" : live ? "The room knows you're here" : "Waiting for the call to start"}
           </div>
           <div className="mt-0.5 text-[12px] leading-snug text-sol-text-muted">
-            {live
+            {doorFull
+              ? "Every place at the door is taken right now. Keep this page open: you'll be back in line as soon as one frees up."
+              : live
               ? "Someone in the call will let you in."
               : inviterName
                 ? `We let ${inviterName} know you're here. Someone can let you in once the call starts.`

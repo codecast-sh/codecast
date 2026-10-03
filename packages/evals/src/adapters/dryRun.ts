@@ -1,6 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { stripAnsi } from '@platform/cli-kit/render';
+
 import { DRY_RUN_SCRIPT } from '../paths';
 import type { AgentOptions, AgentResult, CallResult, SurfaceRequest } from '../surface';
 
@@ -180,7 +182,7 @@ export function outsideWorldCommands(streamText: string): string[] {
       if (c?.type === 'tool_use') commands.set(String(c.id), String(c.input?.command ?? JSON.stringify(c.input ?? {})));
       if (c?.type !== 'tool_result') continue;
       const text = typeof c.content === 'string' ? c.content : Array.isArray(c.content) ? c.content.map((x: any) => (typeof x?.text === 'string' ? x.text : '')).join('\n') : '';
-      if (text.split('\n').some((l: string) => REAL_CLI_SIGNED_OUT.test(l.replace(/\x1b\[[0-9;]*m/g, '').trim()))) hits.push(commands.get(String(c.tool_use_id)) ?? 'a command the stream does not name');
+      if (text.split('\n').some((l: string) => REAL_CLI_SIGNED_OUT.test(stripAnsi(l).trim()))) hits.push(commands.get(String(c.tool_use_id)) ?? 'a command the stream does not name');
     }
   }
   return hits;

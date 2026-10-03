@@ -1356,6 +1356,12 @@ function ensureCallWindow(roomKey, opts) {
     // No taskbar entry: in its small shapes it has no title bar to recover it
     // from, and the elsewhere pill in the app is what brings it back.
     skipTaskbar: true,
+    // The float sits over another app's work, so a press on it is usually
+    // the first this window has had since that app took the front. macOS
+    // spends a first press on an inactive window activating it and never
+    // delivers it: a face held to drag the row did nothing, and only the
+    // next press (the grip, by then) moved it.
+    acceptFirstMouse: true,
     webPreferences: {
       ...preloadPrefs(),
       zoomFactor: zoom,

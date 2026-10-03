@@ -120,7 +120,7 @@ describe('./evals', () => {
 
   test('a bad argument to the stale precheck is one line and exit 2, never the 1 that means nothing changed', () => {
     const w = world();
-    for (const [arg, says] of [['--bogus', 'stale has no option --bogus'], ['bogus', 'no surface bogus']]) {
+    for (const [arg, says] of [['--bogus', 'stale has no option --bogus'], ['bogus', 'no surface bogus'], ['--budget=abc', '--budget takes a positive number, not "abc"']]) {
       const r = w.run('stale', arg!);
       expect(r.code).toBe(2);
       expect(r.err.trim().split('\n')).toEqual([expect.stringContaining(says!)]);
@@ -151,9 +151,12 @@ describe('./evals', () => {
     expect(r.out).toContain('dry: 3 rep(s) ran through the wiring');
     expect(runDirs(w)).toHaveLength(3);
     // A dry rep is never a pass or a fail: no view counts it, and no check takes it for a baseline.
-    const listed = JSON.parse(w.run('runs', 'list', '--since', '1d', '--json').out) as Array<{ freezeId: string; status: string; model: string; startedAt: string; createdAt: string }>;
+    const listed = JSON.parse(w.run('runs', 'list', '--since', '1d', '--json').out) as Array<{ freezeId: string; status: string; model: string; startedAt: string; createdAt: string; batch: string | null }>;
     expect(listed).toHaveLength(3);
     expect(listed.every((x) => x.freezeId === id && x.status === 'dry' && x.model === echoMeta.model)).toBe(true);
+    // Each listed rep names its check, so two checks on one day with the same notes stay apart.
+    expect(new Set(listed.map((x) => x.batch)).size).toBe(1);
+    expect(listed[0]!.batch).toBeTruthy();
     // A replay runs now on a moment frozen on 2026-01-01: it starts, and lists, when it ran.
     expect(listed.every((x) => x.startedAt === x.createdAt)).toBe(true);
     const results = JSON.parse(w.run('freeze', 'results', id.slice(0, 8), '--json').out) as { replays: Array<{ verdict: { gates: Array<{ id: string; pass: boolean }> } }> };

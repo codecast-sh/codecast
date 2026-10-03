@@ -594,6 +594,26 @@ describe("snapCall", () => {
     h.cleanup();
   });
 
+  test("lines that began before Record was pressed spend no frames on the stretch nothing filmed", async () => {
+    // Record pressed at 1:50, line 1 said at 1:00: the room file runs from
+    // 1:50, Ana's screen from 2:00. Every frame lands inside a file, and the
+    // unfilmed start is said once rather than as missed frames.
+    const [room, screen] = recordings().recordings;
+    const h = harness(recordings({}, [{ ...room, started_at: T + s(110) }, screen]), ["frame:1 pts:1 pts_time:20", "lavfi.scene_score=0.7"].join("\n"));
+    const res = await snapCall("cl-42:1-4", { max: 4 }, h.deps);
+    expect(res.frames.every((f) => f.at_ms >= s(110))).toBe(true);
+    expect(res.frames.map((f) => f.kind)).toContain("composite");
+    expect(res.frames.map((f) => f.kind)).toContain("screen");
+    expect(res.notes).toEqual(["Nothing was recorded 1:01-1:50, so the frames come from the rest of these lines."]);
+    // With no screen at all, the room's frames spread over its own stretch.
+    const roomOnly = harness(recordings({}, [{ ...room, started_at: T + s(110) }]));
+    const even = await snapCall("cl-42:1-4", { max: 3 }, roomOnly.deps);
+    expect(even.frames.map((f) => f.at)).toEqual(["1:50", "2:37", "3:24"]);
+    expect(even.notes).toEqual(["Nothing was recorded 1:01-1:50, so the frames come from the rest of these lines."]);
+    h.cleanup();
+    roomOnly.cleanup();
+  });
+
   test("a scan that fails or would read too much is sampled evenly instead, and says so", async () => {
     const failing = harness(recordings(), () => ({ code: 1, stderr: "Server returned 403 Forbidden" }));
     const res = await snapCall("cl-42:2-4", { max: 3 }, failing.deps);

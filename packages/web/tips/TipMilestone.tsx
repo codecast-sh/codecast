@@ -1,9 +1,13 @@
 import { toast } from 'sonner';
 import type { TipDef } from './registry';
+import { MenuKeyCaps } from '../components/KeyboardShortcutsHelp';
 
+// A tip that teaches a chord shows it as KeyCaps under the line, so no key
+// name is ever written into the copy as plain text.
 export function showMilestoneTip(tip: TipDef) {
   toast(tip.content, {
     duration: 4000,
+    ...(tip.shortcutAction ? { description: <MenuKeyCaps action={tip.shortcutAction} className="mt-1 flex items-center gap-[2px]" /> } : {}),
     className: 'tip-milestone',
     style: {
       background: 'var(--sol-bg-alt)',

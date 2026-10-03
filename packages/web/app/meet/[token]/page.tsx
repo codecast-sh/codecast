@@ -169,6 +169,9 @@ export default function GuestMeetPage() {
   const [enteredUnseen, setEnteredUnseen] = useState(false);
   // A fresh preview after a failed join (its tracks went to the call).
   const [previewEpoch, setPreviewEpoch] = useState(0);
+  // The last beat found every waiting place at the door taken: this page is
+  // not at the door until one frees, and each beat asks again (doorHasRoom).
+  const [doorFull, setDoorFull] = useState(false);
   // The two things the page needs from the media, read as strings so the
   // page does not re-render for every speaking ring (GuestInCall reads the rest).
   const phase = useSyncExternalStore(call ? call.subscribe : noSubscribe, () => call?.getSnapshot().phase ?? null, noSnapshot);
@@ -218,7 +221,9 @@ export default function GuestMeetPage() {
     const beat = () => {
       const m = media.current;
       if (beatingAs === "admitted" && !m.inMedia && Date.now() - m.outSince > REJOIN_HOLD_MS) return;
-      void heartbeat(creds).catch(() => {});
+      void heartbeat(creds)
+        .then((r) => setDoorFull(beatingAs === "waiting" && !!r && "door_full" in r && !!r.door_full))
+        .catch(() => {});
     };
     beat();
     const stop = steadyInterval(beat, CALL_HEARTBEAT_MS);
@@ -232,6 +237,7 @@ export default function GuestMeetPage() {
 
   useWatchEffect(() => {
     if (view === "waiting" || view === "admitted") setBackToLobby(false);
+    if (view !== "waiting") setDoorFull(false);
     if (view !== "admitted") {
       setLeftByMe(false);
       leftRef.current = false;
@@ -503,6 +509,7 @@ export default function GuestMeetPage() {
         recording={recording}
         accepted={accepted}
         creatorTold={!!state?.creator_told}
+        doorFull={doorFull}
         signedIn={mode === "ask" && hasStoredAuthToken()}
         name={name}
         onName={setName}

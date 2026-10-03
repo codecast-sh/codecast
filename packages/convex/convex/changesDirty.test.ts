@@ -28,6 +28,7 @@ const modules = {
   "./changes.ts": () => import("./changes"),
   "./changesSchedule.ts": () => import("./changesSchedule"),
   "./changesProse.ts": () => import("./changesProse"),
+  "./changesWeek.ts": () => import("./changesWeek"),
   "./githubWebhooks.ts": () => import("./githubWebhooks"),
   "./sessionInsights.ts": () => import("./sessionInsights"),
   "./teamFeatures.ts": () => import("./teamFeatures"),
@@ -432,7 +433,7 @@ describe("reconcile and backfill", () => {
       await ctx.db.insert("change_dirty", { team_id: s.ids.team, repository: "acme/old", date: "2026-01-01", since: Date.now() - 3_600_000 });
     });
     const result = await s.t.action(internal.changesSchedule.reconcile, {});
-    expect(result).toEqual({ teams: 1, marked: 1, rescheduled: 1 });
+    expect(result).toEqual({ teams: 1, marked: 1, weeks: 0, rescheduled: 1 });
     const rows = await s.dirty();
     expect(rows.map((r) => r.date).sort()).toEqual(["2026-01-01", today()]);
     expect(rows.every((r) => r.scheduled_id)).toBe(true);

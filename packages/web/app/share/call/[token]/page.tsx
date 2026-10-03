@@ -70,6 +70,7 @@ function SharedCallBody({
   const inAnchor = (i: number) =>
     anchor?.kind === "turns" && turns[i]?.segments.some((sg) => sg.seq >= anchor.from_seq && sg.seq <= anchor.to_seq);
   const firstAnchored = turns.findIndex((_, i) => inAnchor(i));
+  const people = [...new Set([...call.participants.map((p) => p.name), ...(call.guests ?? []).map((g) => g.name)])];
 
   // The media the words follow: the room's video when the link includes it,
   // else a recording's audio. Each shared video is a finished room recording
@@ -133,9 +134,10 @@ function SharedCallBody({
         title={call.title || (call.recording ? "Untitled recording" : "Untitled huddle")}
         at={call.started_at}
         meta={
-          !call.recording && call.participants.length > 0 ? (
-            <span>with {call.participants.map((p) => p.name).join(", ")}</span>
-          ) : null
+          // Speakers, then any guest who came in on a link and only listened
+          // (the record's attendance). Both carry the room's marked name
+          // ("Ada (guest)"), so a guest who spoke is named once.
+          !call.recording && people.length > 0 ? <span>with {people.join(", ")}</span> : null
         }
       />
       {call.summary && (

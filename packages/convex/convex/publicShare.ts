@@ -23,6 +23,7 @@ import { canViewTask } from "./agentTasks";
 import { canReadRun } from "./workflow_runs";
 import { isRecRoomKey } from "@codecast/shared/contracts";
 import { publicName } from "./lib/displayNames";
+import { callGuestsOnRecord } from "./lib/callGuestAdmission";
 
 export const SHARE_TOKEN_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -162,6 +163,9 @@ export const getSharedCall = query({
       started_at: t.started_at,
       ended_at: t.ended_at ?? null,
       participants: (t.participants ?? []).map((p) => ({ id: keyOf(p.id), name: p.name })),
+      // Outsiders let into the call, by name only and marked as guests, the
+      // same as the speakers above are shown by name.
+      guests: (await callGuestsOnRecord(ctx, t._id)).map((g) => ({ name: g.name })),
       summary: t.summary ?? null,
       action_items: t.action_items ?? [],
       recording_url: t.recording_storage_id ? await ctx.storage.getUrl(t.recording_storage_id) : null,

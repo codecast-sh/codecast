@@ -11,7 +11,10 @@
 //
 // Editions are upserted per day and never deleted, so their feed only adds:
 // an answer that lacks one (a team-wide read stops at a row cap) removes
-// nothing from the cache.
+// nothing from the cache. One more editions feed reads every repository's last
+// 14 days up to today, so the repository list and the default repository do
+// not depend on which day is on screen.
+// In week mode a last feed reads the week edition, keyed by its ISO week.
 //
 // Readers subscribe to signatures of the fields the page renders. Story rows
 // change only when a rebuild writes them, so the lists stay still between
@@ -39,6 +42,19 @@ export type DateWindow = { from_date: string; to_date: string };
 /** The fed window around a YYYY-MM-DD day. */
 export function changesWindow(date: string): DateWindow {
   return { from_date: addDays(date, -CHANGES_WINDOW_RADIUS), to_date: addDays(date, CHANGES_WINDOW_RADIUS) };
+}
+
+/** A week edition's window: the one ISO week (`2026-W40`), as listEditions keys week rows. */
+export function weekWindow(week: string): DateWindow {
+  return { from_date: week, to_date: week };
+}
+
+/** Days back from today whose editions name the team's active repositories (spec 4.1). */
+export const CHANGES_REPO_DAYS = 14;
+
+/** The last CHANGES_REPO_DAYS days ending today, whatever day is on screen. */
+export function recentWindow(today: string): DateWindow {
+  return { from_date: addDays(today, -(CHANGES_REPO_DAYS - 1)), to_date: today };
 }
 
 /** The repository as the server stores it, so store rows compare equal. */
@@ -80,6 +96,11 @@ export type ChangesView = {
   repository?: string;
   /** The viewed day, YYYY-MM-DD in the team's day. */
   date: string | undefined;
+  /** The team's today. With it, every repository's editions of the last
+   *  CHANGES_REPO_DAYS feed the repository list, whichever day is viewed. */
+  today?: string;
+  /** In week mode, the ISO week (`2026-W40`) whose week edition is fed. */
+  week?: string;
 };
 
 export type ChangesFeedState = {
@@ -88,6 +109,10 @@ export type ChangesFeedState = {
   ready: boolean;
   /** The server refused the caller: not a member, signed out, or Changes is off for the team. */
   refused: boolean;
+  /** The team-wide recent editions have answered (never, without `today`). */
+  recentReady: boolean;
+  /** The live strip has answered (never, without a repository). */
+  liveReady: boolean;
   error?: Error;
 };
 
@@ -99,6 +124,8 @@ export function useSyncChanges(view: ChangesView): ChangesFeedState {
   const teamId = view.teamId && isConvexId(view.teamId) ? view.teamId : undefined;
   const repository = canonical(view.repository);
   const date = view.date;
+  const today = view.today;
+  const week = view.week;
 
   const feeds = useMemo(() => {
     if (!teamId || !date) return null;
@@ -116,21 +143,27 @@ export function useSyncChanges(view: ChangesView): ChangesFeedState {
         opts: { select: selectStories, syncOpts: storySyncOpts(scope, around, date) },
       },
       editions: { team_id: teamId, ...repoArg, scope: "day", ...around },
+      recent: today ? { team_id: teamId, scope: "day", ...recentWindow(today) } : "skip",
+      week: week ? { team_id: teamId, ...repoArg, scope: "week", ...weekWindow(week) } : "skip",
       live: repository ? { team_id: teamId, repository } : "skip",
       works: { team_id: teamId, ...repoArg },
     } as const;
-  }, [teamId, repository, date]);
+  }, [teamId, repository, date, today, week]);
 
   const day = useSyncCollection("changeStories", api.changesQueries.listStories, feeds?.day.args ?? "skip", feeds?.day.opts);
   const around = useSyncCollection("changeStories", api.changesQueries.listStories, feeds?.around.args ?? "skip", feeds?.around.opts);
   const editions = useSyncCollection("changeEditions", api.changesQueries.listEditions, feeds?.editions ?? "skip");
+  const recent = useSyncCollection("changeEditions", api.changesQueries.listEditions, feeds?.recent ?? "skip");
+  const weekEdition = useSyncCollection("changeEditions", api.changesQueries.listEditions, feeds?.week ?? "skip");
   const live = useSyncCollection("changeLive", api.changesQueries.liveStatus, feeds?.live ?? "skip");
   const works = useSyncCollection("changeWorks", api.changesQueries.inTheWorks, feeds?.works ?? "skip");
 
   return {
     ready: day.ready && editions.ready,
     refused: day.refused || editions.refused,
-    error: day.error ?? editions.error ?? around.error ?? live.error ?? works.error,
+    recentReady: recent.ready,
+    liveReady: live.ready,
+    error: day.error ?? editions.error ?? around.error ?? recent.error ?? weekEdition.error ?? live.error ?? works.error,
   };
 }
 
@@ -156,6 +189,7 @@ const editionSig = (e: EditionRow) =>
     e.headline ?? "", e.status ?? "", e.inputs_hash ?? "", e.narrative, e.lead_story_key ?? "", e.generated_at,
     (e.section_order ?? []).join(","), (e.brief_story_keys ?? []).join(","), JSON.stringify(e.stats ?? null),
     (e.releases ?? []).map((r) => `${r.surface}@${r.version ?? r.sha}`).join(","), e.dirty_since ?? "",
+    (e.top_story_keys ?? []).join(","), JSON.stringify(e.area_totals ?? null), e.capped_at ?? "",
   ].join("|");
 
 const liveSig = (l: LiveRow) => `${l.version ?? ""}|${l.sha}|${l.at}|${l.kind}|${l.waiting}|${l.waiting_exact ? 1 : 0}`;
