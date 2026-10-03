@@ -151,12 +151,12 @@ export function LocalDaemonUnreachable({
       <div className="text-sol-text font-medium">{copy.title}</div>
       <div className="text-sm text-sol-text-muted max-w-md">{copy.body}</div>
       {detail && (
-        <code className="text-[11px] text-sol-text-dim max-w-md break-all">{detail}</code>
+        <code className="text-[11px] text-sol-text-dim max-w-md [overflow-wrap:anywhere]">{detail}</code>
       )}
       {stderr && stderr.length > 0 && (
         <pre
           data-unreachable-stderr
-          className="max-w-2xl w-full max-h-64 overflow-auto text-left text-[11px] leading-relaxed font-mono text-sol-text-secondary bg-sol-bg-inset border border-sol-border/40 rounded-md px-3 py-2 whitespace-pre-wrap break-all"
+          className="max-w-2xl w-full max-h-64 overflow-auto text-left text-[11px] leading-relaxed font-mono text-sol-text-secondary bg-sol-bg-inset border border-sol-border/40 rounded-md px-3 py-2 whitespace-pre-wrap [overflow-wrap:anywhere]"
         >
           {stderr.join("\n")}
         </pre>

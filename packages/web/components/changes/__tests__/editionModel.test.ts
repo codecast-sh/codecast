@@ -1,245 +1,137 @@
 import { describe, expect, test } from "bun:test";
-import { awaitsStories, buildEdition, dayVolumes, echoesHeadline, filterAreas, stepOrder } from "../editionModel";
+import { peopleOf, personFor, riskText, type Person } from "../editionModel";
+import { buildTimeline, type TimelineDay } from "../timelineModel";
 import { EMPTY_URL, type ChangesUrl } from "../useChangesUrlState";
-import { DAY, at, edition, liveRow, story } from "./fixtures";
+import { DAY, edition, story } from "./fixtures";
 
 const url = (over: Partial<ChangesUrl> = {}): ChangesUrl => ({ ...EMPTY_URL, ...over });
-const build = (stories: ReturnType<typeof story>[], over: Partial<Parameters<typeof buildEdition>[0]> = {}) =>
-  buildEdition({ stories, date: DAY, edition: undefined, live: [], url: url(), ...over });
+const days = (stories: ReturnType<typeof story>[], u = url(), person: Person | null = null, editions: ReturnType<typeof edition>[] = [], weeks: ReturnType<typeof edition>[] = []) =>
+  buildTimeline({ stories, editions, weeks, url: u, person, today: "2026-10-12" });
+const shownKeys = (stories: ReturnType<typeof story>[], u: ChangesUrl, person: Person | null) =>
+  days(stories, u, person).flatMap((d) => (d.kind === "day" ? [...d.stories, ...d.small].map((s) => s.story_key) : []));
 
-describe("buildEdition", () => {
-  test("before an edition: the heaviest main story leads and the headline is the day's counts", () => {
-    const m = build([
-      story("a", { insertions: 5 }),
-      story("b", { insertions: 900, area: "cli" }),
-      story("c", { kind: "docs", area: "docs" }),
+describe("buildTimeline", () => {
+  test("one entry per day with stories, newest first, heaviest story first", () => {
+    const items = days([
+      story("old", { date: "2026-09-30", importance: 3 }),
+      story("small", { importance: 2, insertions: 1 }),
+      story("big", { importance: 2, insertions: 900 }),
     ]);
-    expect(m.lead?.story_key).toBe("b");
-    expect(m.brief.map((s) => s.story_key)).toEqual(["c"]);
-    expect(m.sections.map((s) => s.area)).toEqual(["web"]);
-    expect(m.prose).toBe(false);
-    expect(m.headline).toBe("3 commits, 3 stories");
-    expect(m.standfirst).toBeNull();
+    expect(items.map((i) => (i.kind === "day" ? i.date : i.week))).toEqual([DAY, "2026-09-30"]);
+    expect((items[0] as TimelineDay).stories.map((s) => s.story_key)).toEqual(["big", "small"]);
   });
 
-  test("the edition's lead, section order, brief and prose win once written", () => {
-    const m = build(
-      [story("a"), story("b", { area: "cli" }), story("c", { area: "convex" }), story("d", { area: "web" })],
-      {
-        edition: edition({
-          status: "written",
-          headline: "Agent helpers stop starving",
-          narrative: "A big day for reliability.",
-          lead_story_key: "a",
-          section_order: ["convex", "cli"],
-          brief_story_keys: ["d"],
-        }),
-      },
-    );
-    expect(m.lead?.story_key).toBe("a");
-    expect(m.sections.map((s) => s.area)).toEqual(["convex", "cli"]);
-    expect(m.brief.map((s) => s.story_key)).toEqual(["d"]);
-    expect(m.headline).toBe("Agent helpers stop starving");
-    expect(m.standfirst).toBe("A big day for reliability.");
+  test("the edition's one sentence heads its day once written, and its brief list folds", () => {
+    const items = days([story("a", { importance: 4 }), story("b")], url(), null, [
+      edition({ headline: "Uploads retry now", status: "final", brief_story_keys: ["b"] }),
+    ]);
+    const day = items[0] as TimelineDay;
+    expect(day.summary).toBe("Uploads retry now");
+    expect(day.stories.map((s) => s.story_key)).toEqual(["a"]);
+    expect(day.small.map((s) => s.story_key)).toEqual(["b"]);
   });
 
-  test("a failed edition keeps the counts headline", () => {
-    const m = build([story("a")], { edition: edition({ status: "failed", headline: "Not shown" }) });
-    expect(m.prose).toBe(false);
-    expect(m.headline).toBe("1 commit, 1 story");
+  test("before an edition, importance 1 is housekeeping and the day has no sentence", () => {
+    const day = days([story("a", { importance: 3 }), story("chore", { importance: 1 })])[0] as TimelineDay;
+    expect(day.summary).toBeNull();
+    expect(day.small.map((s) => s.story_key)).toEqual(["chore"]);
   });
 
-  test("branch stories appear only with all branches", () => {
-    const stories = [story("a"), story("b", { on_default_branch: false, branch: "feat/x" })];
-    expect(build(stories).day.map((s) => s.story_key)).toEqual(["a"]);
-    expect(build(stories, { url: url({ branches: "all" }) }).day).toHaveLength(2);
+  test("branch stories show only with all branches", () => {
+    const stories = [story("main"), story("wip", { on_default_branch: false, importance: 2 })];
+    expect(shownKeys(stories, url(), null)).toEqual(["main"]);
+    expect(shownKeys(stories, url({ branches: "all" }), null).sort()).toEqual(["main", "wip"]);
   });
 
-  test("a release stamp sits between the rows that landed before and after it", () => {
+  test("area, risk and text filters hide what they miss, and a day with nothing left drops out", () => {
     const stories = [
-      story("lead", { insertions: 5000, area: "convex" }),
-      story("early", { last_at: at("09:00"), area: "cli" }),
-      story("late", { last_at: at("17:00"), area: "cli" }),
+      story("web", { area: "web", headline: "Line pages" }),
+      story("cli", { area: "cli", risks: [{ code: "schema", evidence: [] }] }),
+      story("quiet", { area: "docs", date: "2026-09-30" }),
     ];
-    const m = build(stories, {
-      edition: edition({ releases: [{ surface: "cli", version: "1.1.163", sha: "rel1", at: at("15:27") }] }),
-    });
-    const cli = m.sections.find((s) => s.area === "cli")!;
-    expect(cli.items.map((i) => (i.kind === "story" ? i.story.story_key : `stamp:${i.ship.version}`))).toEqual(["early", "stamp:1.1.163", "late"]);
-    expect(cli.count).toBe(2);
+    expect(shownKeys(stories, url({ areas: ["web"] }), null)).toEqual(["web"]);
+    expect(shownKeys(stories, url({ risk: true }), null)).toEqual(["cli"]);
+    expect(shownKeys(stories, url({ q: "pages" }), null)).toEqual(["web"]);
+    expect(days(stories, url({ areas: ["web"] }))).toHaveLength(1);
+    const day = days(stories, url({ areas: ["web"] }))[0] as TimelineDay;
+    expect(day.total).toBe(2);
   });
 
-  test("a ship before every row of a section is earlier work and gets no stamp; one after them all closes the block", () => {
-    const stories = [story("lead", { insertions: 5000, area: "convex" }), story("x", { last_at: at("12:00"), area: "cli" })];
-    const before = build(stories, { edition: edition({ releases: [{ surface: "cli", sha: "r0", at: at("08:00") }] }) });
-    expect(before.sections.find((s) => s.area === "cli")!.items.map((i) => i.kind)).toEqual(["story"]);
-    const after = build(stories, { edition: edition({ releases: [{ surface: "cli", sha: "r1", at: at("18:00") }] }) });
-    expect(after.sections.find((s) => s.area === "cli")!.items.map((i) => i.kind)).toEqual(["story", "stamp"]);
-  });
-
-  test("an area filter dims what it misses and drops it from the reading order", () => {
-    const stories = [story("lead", { insertions: 5000 }), story("w2"), story("c1", { area: "cli" })];
-    const m = build(stories, { url: url({ areas: ["cli"] }) });
-    expect(m.sections.find((s) => s.area === "web")!.dimmed).toBe(true);
-    expect(m.sections.find((s) => s.area === "cli")!.dimmed).toBe(false);
-    expect(m.dimmed.has("lead")).toBe(true);
-    expect(m.order).toEqual(["c1"]);
-    expect(m.matching).toBe(1);
-    expect(m.filterLine).toBe("Showing 1 of 3 stories (cli)");
-  });
-
-  test("a surface filter dims the areas its surface does not ship", () => {
-    const m = build([story("a", { insertions: 5000, area: "convex" }), story("b", { area: "cli" })], { url: url({ surface: "cli" }) });
-    expect(m.dimmed.has("a")).toBe(true);
-    expect(m.order).toEqual(["b"]);
-  });
-
-  test("risk, person, waiting and text filters hide what they miss", () => {
-    const stories = [
-      story("a", { insertions: 5000, risks: [{ code: "schema", evidence: ["sha1"] }] }),
-      story("b", { author_names: ["Grace"], last_at: at("16:00") }),
-      story("c", { headline: "Spelling suggestions", actor_user_ids: ["u9" as any] }),
-    ];
-    expect(build(stories, { url: url({ risk: true }) }).order).toEqual(["a"]);
-    expect(build(stories, { url: url({ person: "Grace" }) }).order).toEqual(["b"]);
-    expect(build(stories, { url: url({ person: "u9" }) }).order).toEqual(["c"]);
-    expect(build(stories, { url: url({ q: "spelling" }) }).order).toEqual(["c"]);
-    const waiting = build(stories, { url: url({ waiting: true }), live: [liveRow("web", { at: at("15:00") })] });
-    expect(waiting.order).toEqual(["b"]);
-    expect(waiting.waiting.has("b")).toBe(true);
-  });
-
-  test("no match leaves an empty reading order and a zero count", () => {
-    const m = build([story("a")], { url: url({ q: "nothing like this" }) });
-    expect(m.matching).toBe(0);
-    expect(m.order).toEqual([]);
-    expect(m.lead).toBeNull();
-  });
-
-  test("reading order: lead, then each section's rows in grid order, then In brief", () => {
-    const m = build([
-      story("lead", { insertions: 5000, area: "convex" }),
-      story("w1", { last_at: at("09:00") }),
-      story("w2", { last_at: at("11:00") }),
-      story("c1", { area: "cli" }),
-      story("d1", { kind: "docs", area: "docs" }),
-    ]);
-    expect(m.order).toEqual(["lead", ...m.sections.flatMap((s) => s.items.flatMap((i) => (i.kind === "story" ? [i.story.story_key] : []))), "d1"]);
-    expect(m.order.indexOf("w1")).toBeLessThan(m.order.indexOf("w2"));
-  });
-
-  test("stats come from the stories until the edition has its own", () => {
-    const stories = [
-      story("a", { commit_shas: ["s1", "s2"], author_names: ["Ada"], conversation_ids: ["c1" as any], private_session_count: 1 }),
-      story("b", { commit_shas: ["s2", "s3"], author_names: ["Grace"], conversation_ids: ["c1" as any] }),
-    ];
-    expect(build(stories).stats).toEqual({ commits: 3, stories: 2, releases: 0, people: 2, sessions: 1, private_sessions: 1 });
-    const stats = { commits: 16, stories: 9, releases: 3, people: 4, sessions: 11, private_sessions: 4 };
-    expect(build(stories, { edition: edition({ stats }) }).stats).toEqual(stats);
-  });
-
-  test("areas today sum file touches and count distinct commits", () => {
-    const m = build([
-      story("a", { area_counts: { web: 3, shared: 1 }, commit_shas: ["s1"] }),
-      story("b", { area_counts: { web: 2 }, commit_shas: ["s1", "s2"] }),
-    ]);
-    expect(m.areas).toEqual([
-      { area: "web", touches: 5, commits: 2, stories: 2 },
-      { area: "shared", touches: 1, commits: 1, stories: 0 },
-    ]);
-  });
-
-  test("a commit is credited to an area only as far as its touches prove it", () => {
-    const shas = Array.from({ length: 30 }, (_, i) => `c${i}`);
-    const m = build([story("a", { area_counts: { web: 120, github: 1 }, commit_shas: shas })]);
-    expect(m.areas).toEqual([
-      { area: "web", touches: 120, commits: 30, stories: 1 },
-      { area: "github", touches: 1, commits: 1, stories: 0 },
-    ]);
-  });
-
-  test("the area filter offers the stories' own areas, never an area touched only inside them", () => {
-    const stories = [
-      story("a", { area: "web", area_counts: { web: 9, github: 2 } }),
-      story("b", { area: "cli", area_counts: { cli: 3, github: 1 } }),
-      story("c", { area: "cli", area_counts: { cli: 1 } }),
-      story("d", { area: "release", area_counts: {} }),
-    ];
-    const m = build(stories);
-    expect(m.areas.map((a) => a.area)).toEqual(["web", "cli", "github"]);
-    expect(filterAreas(m.day, m.areas)).toEqual(["web", "cli", "release"]);
+  test("a finished week's notes sit where the timeline enters the week, only once written and never repeating a day", () => {
+    const stories = [story("mon", { date: "2026-09-28" }), story("fri")];
+    const weeks = [edition({ scope: "week", date: "2026-W40", headline: "Calls moved to one window", status: "final" })];
+    const items = days(stories, url(), null, [], weeks);
+    expect(items.map((i) => i.kind)).toEqual(["week", "day", "day"]);
+    expect(days(stories, url(), null, [], [{ ...weeks[0], status: "facts" } as any]).map((i) => i.kind)).toEqual(["day", "day"]);
+    // The week in progress, or notes that restate a day, add nothing.
+    expect(buildTimeline({ stories, editions: [], weeks, url: url(), person: null, today: "2026-10-03" }).map((i) => i.kind)).toEqual(["day", "day"]);
+    const echo = [edition({ headline: "Calls moved to one window", status: "final" })];
+    expect(days(stories, url(), null, echo, weeks).map((i) => i.kind)).toEqual(["day", "day"]);
   });
 });
 
-describe("dayVolumes", () => {
-  test("the edition's count, else main-branch commits, else unknown", () => {
-    const v = dayVolumes(
-      [story("a", { commit_shas: ["s1", "s2"] }), story("b", { date: "2026-10-01", on_default_branch: false })],
-      [edition({ date: "2026-09-30", stats: { commits: 7, stories: 1, releases: 0, people: 1, sessions: 0, private_sessions: 0 } })],
-      ["2026-09-29", "2026-09-30", "2026-10-01", DAY],
-    );
-    expect(v).toEqual({ "2026-09-29": null, "2026-09-30": 7, "2026-10-01": null, [DAY]: 2 });
+describe("people", () => {
+  const roster = [{ _id: "u_ana", name: "Ana Lopez" }, { _id: "u_ben", name: "" }] as any[];
+  // Ana ran one session that committed under her name, and committed twice with no session.
+  const stories = [
+    story("session", { actor_user_ids: ["u_ana" as any], author_names: ["Ana Lopez"] }),
+    story("commit1", { author_names: ["ana lopez "] }),
+    story("commit2", { author_names: ["Ana Lopez"], area: "cli" }),
+    story("other", { author_names: ["Cid"], area: "cli" }),
+    story("blank", { actor_user_ids: ["u_ben" as any], author_names: [" "] }),
+  ];
+
+  test("one person per human: the roster name, every id and spelling that is them, blank names skipped", () => {
+    expect(peopleOf(stories, roster)).toEqual([
+      { key: "ana lopez", name: "Ana Lopez", userIds: ["u_ana"], authorNames: ["Ana Lopez", "ana lopez "] },
+      { key: "cid", name: "Cid", userIds: [], authorNames: ["Cid"] },
+    ]);
+  });
+
+  test("choosing the person keeps their session story and both commit-only stories", () => {
+    const people = peopleOf(stories, roster);
+    expect(shownKeys(stories, url({ person: "ana lopez" }), personFor("ana lopez", people)).sort()).toEqual(["commit1", "commit2", "session"]);
+  });
+
+  test("an agent or bot suffix is the same person", () => {
+    const people = peopleOf([story("a", { author_names: ["Cid (agent)", "cid", "Cid[bot]"] })]);
+    expect(people).toEqual([{ key: "cid", name: "Cid", userIds: [], authorNames: ["Cid (agent)", "cid", "Cid[bot]"] }]);
+  });
+
+  test("an older link naming the roster id finds the same three stories", () => {
+    expect(shownKeys(stories, url({ person: "u_ana" }), personFor("u_ana", peopleOf(stories, roster)))).toHaveLength(3);
   });
 });
 
-describe("stepOrder", () => {
-  test("starts at the ends, clamps at both", () => {
-    expect(stepOrder(["a", "b", "c"], null, 1)).toBe("a");
-    expect(stepOrder(["a", "b", "c"], null, -1)).toBe("c");
-    expect(stepOrder(["a", "b", "c"], "b", 1)).toBe("c");
-    expect(stepOrder(["a", "b", "c"], "c", 1)).toBe("c");
-    expect(stepOrder(["a", "b", "c"], "a", -1)).toBe("a");
-    expect(stepOrder(["a"], "gone", 1)).toBe("a");
-    expect(stepOrder([], "a", 1)).toBeNull();
-  });
-});
+describe("riskText", () => {
+  const SHA = "0123456789abcdef0123456789abcdef01234567";
 
-describe("awaitsStories", () => {
-  const stats = (stories: number) => ({ commits: stories, stories, releases: 0, people: 1, sessions: 0, private_sessions: 0 });
-
-  test("a cached edition that counts stories waits for them instead of saying nothing landed", () => {
-    expect(awaitsStories(0, false, [edition({ stats: stats(4) })])).toBe(true);
-    expect(awaitsStories(0, false, [undefined])).toBe(true);
+  test("a worded risk is its line alone, without the evidence it already explains", () => {
+    const s = { risks: [{ code: "schema" as const, evidence: ["packages/convex/convex/schema.ts"] }], risk_lines: { schema: "The schema changed; deploy convex before web." } };
+    expect(riskText(s)).toBe("The schema changed; deploy convex before web.");
   });
 
-  test("cached stories, an answered feed, or editions that say nothing landed paint at once", () => {
-    expect(awaitsStories(3, false, [undefined])).toBe(false);
-    expect(awaitsStories(0, true, [edition({ stats: stats(4) })])).toBe(false);
-    expect(awaitsStories(0, false, [edition({ stats: stats(0) })])).toBe(false);
+  test("an unworded risk is its code with evidence: full hashes cut to seven, a repeated file name dropped", () => {
+    const s = {
+      risks: [
+        { code: "skew" as const, evidence: [SHA, "backend deployed 2026-10-02T10:00:00Z", `web shipped 2026-10-02T11:00:00Z at ${SHA}`] },
+        { code: "schema" as const, evidence: ["packages/convex/convex/schema.ts", "packages/old/schema.ts"] },
+      ],
+      risk_lines: {},
+    };
+    expect(riskText(s)).toBe([
+      "skew (0123456, backend deployed 2026-10-02T10:00:00Z, web shipped 2026-10-02T11:00:00Z at 0123456)",
+      "schema (packages/convex/convex/schema.ts)",
+    ].join("\n"));
+    // One line for a tooltip that lists several stories.
+    expect(riskText(s, "; ")).toContain(")\u003b schema (");
   });
 
-  test("a week is quiet from cache only when every day so far says so", () => {
-    expect(awaitsStories(0, false, [edition({ stats: stats(0) }), edition({ stats: stats(2) })])).toBe(true);
-    expect(awaitsStories(0, false, [edition({ stats: stats(0) }), undefined])).toBe(true);
-    expect(awaitsStories(0, false, [edition({ stats: stats(0) }), edition({ stats: stats(0) })])).toBe(false);
-  });
-});
-
-describe("echoesHeadline", () => {
-  // The shape of the 2 Oct pair, reworded: the edition headline restates its lead story and adds a clause.
-  const EDITION = "Outreach now holds a three-touch cadence, and the tip engine stops repeating itself";
-  const LEAD = "Outreach holds a three-touch cadence";
-
-  test("a lead that the edition headline restates is an echo", () => {
-    expect(echoesHeadline(LEAD, EDITION)).toBe(true);
-    // Its words open the edition headline, whatever the case and punctuation.
-    expect(echoesHeadline("Outreach now holds a three-touch cadence.", EDITION)).toBe(true);
-    expect(echoesHeadline("outreach now holds", `"Outreach" now holds: a cadence`)).toBe(true);
-  });
-
-  test("an unrelated lead, or one too short to compare, is not", () => {
-    expect(echoesHeadline("Mobile sign-in survives a cold start on Android", EDITION)).toBe(false);
-    expect(echoesHeadline("The tip engine caches its scores for a day", EDITION)).toBe(false);
-    expect(echoesHeadline("Outreach now", EDITION)).toBe(false);
-    expect(echoesHeadline(LEAD, "")).toBe(false);
-  });
-
-  test("the model flags it only against prose: the counts headline never repeats a story", () => {
-    const stories = [story("a", { headline: LEAD, insertions: 900 }), story("b", { area: "cli" })];
-    expect(build(stories).leadEchoesHeadline).toBe(false);
-    const written = build(stories, { edition: edition({ status: "written", headline: EDITION, lead_story_key: "a" }) });
-    expect(written.leadEchoesHeadline).toBe(true);
-    const other = build(stories, { edition: edition({ status: "written", headline: EDITION, lead_story_key: "b" }) });
-    expect(other.leadEchoesHeadline).toBe(false);
+  test("worded and unworded risks mix, and at most four evidence items show", () => {
+    const s = {
+      risks: [{ code: "bulk" as const, evidence: ["4200 lines", "a1", "a2", "a3", "a4"] }, { code: "revert" as const, evidence: [] }],
+      risk_lines: { revert: "A revert of yesterday's import." },
+    };
+    expect(riskText(s)).toBe("bulk (4200 lines, a1, a2, a3, ...)\nA revert of yesterday's import.");
   });
 });

@@ -176,7 +176,7 @@ describe('check cost and the budget status suggests', () => {
 
   test('a run set records each model it ran on separately', () => {
     const costs = repCostsByModel([{ model: 'a', costUsd: 1, realMs: 1000 }, { model: 'a', costUsd: 3, realMs: 3000 }, { model: null, costUsd: 7, realMs: 7000 }], 'pin');
-    expect(costs).toEqual({ a: { usd: 2, seconds: 2 }, pin: { usd: 7, seconds: 7 } });
+    expect(costs).toEqual({ a: { usd: 2, seconds: 2, peakUsd: 3 }, pin: { usd: 7, seconds: 7, peakUsd: 7 } });
   });
 
   test('the time estimate spreads each surface\'s recorded seconds per rep over the slots, and waits for a record', () => {

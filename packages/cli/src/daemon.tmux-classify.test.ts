@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { classifyStartedPane, parsePermissionModeFooter, stepPermissionMode, classifyBypassBlock, classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, clearUnresolvablePane, extractTmuxLiveRegion, GROK_TRUST_PANE_CAPTURE_LINES, isGrokTrustDialog, isPhantomBypassPermissionBlock, noteUnresolvablePane, paneContentAfterLaunchEcho, parseInteractivePrompt, planHighlightStep, planTrustPromptStep, selectRowHasLabel } from "./daemon.js";
+import { classifyStartedPane, parsePermissionModeFooter, stepPermissionMode, classifyBypassBlock, classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, clearUnresolvablePane, extractTmuxLiveRegion, GROK_TRUST_PANE_CAPTURE_LINES, isGrokTrustDialog, isPhantomBypassPermissionBlock, limitDialogOnPane, noteUnresolvablePane, paneContentAfterLaunchEcho, parseInteractivePrompt, planHighlightStep, planTrustPromptStep, selectRowHasLabel } from "./daemon.js";
 import { AGENT_CLIENTS } from "@codecast/shared/contracts";
 import { CLAUDE_BYPASS_WARNING_PANE, CODEX_TRUST_PANE, GROK_TRUST_PANE } from "./test-helpers/trustDialogFrames.js";
 
@@ -1054,5 +1054,32 @@ describe("Claude Code's bypass-permissions warning (ct-55193)", () => {
     expect(planTrustPromptStep(lines)).toEqual({ action: "move", key: "Down", times: 1 });
     const moved = lines.map((l) => l.replace("❯ No, exit", "  No, exit").replace("  Yes, I accept", "❯ Yes, I accept"));
     expect(planTrustPromptStep(moved)).toEqual({ action: "confirm", option: expect.stringContaining("Yes, I accept") });
+  });
+});
+
+// Captured 2026-10-04 from a pane parked on Claude Code 2.1.289's limit dialog.
+const LIMIT_DIALOG_PANE = [
+  "  ⎿  You've hit your weekly limit · resets Oct 5 at 3pm (America/New_York)",
+  "✻ Cooked for 8m 31s · done 8:00 AM · 1 shell still running",
+  "▔".repeat(120),
+  "   What do you want to do?",
+  "   ❯ 1. Stop and wait for limit to reset",
+  "     2. Wait here, then continue automatically at Oct 5 at 3pm",
+  "     3. Switch to usage credits",
+  "   Enter to confirm · Esc to cancel",
+].join("\n");
+
+describe("Claude Code's limit dialog (2026-10-04)", () => {
+  test("is a park dismissed with Escape, not a Rewind modal or a question", () => {
+    expect(limitDialogOnPane(LIMIT_DIALOG_PANE)).toBe(true);
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(LIMIT_DIALOG_PANE))).toBe("limit_dialog");
+  });
+
+  test("an ordinary numbered question is not one", () => {
+    const question = LIMIT_DIALOG_PANE
+      .replace("Stop and wait for limit to reset", "Keep the old schema")
+      .replace("Wait here, then continue automatically at Oct 5 at 3pm", "Migrate now")
+      .replace("Switch to usage credits", "Ask me later");
+    expect(limitDialogOnPane(question)).toBe(false);
   });
 });

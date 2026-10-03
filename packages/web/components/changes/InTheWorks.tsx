@@ -8,8 +8,9 @@ import { foldShepherdState } from "@codecast/shared/contracts";
 import { useState, type ReactNode } from "react";
 import type { WorksRow } from "../../hooks/useSyncChanges";
 import { PrStatusChip } from "../PrStatusChip";
-import { areaColor, areaLabel, ink, STUCK_RULE } from "./areaColor";
+import { areaFill, areaLabel, ink, STUCK_RULE } from "./areaColor";
 import type { AreaTouch } from "./editionModel";
+import { plural } from "./format";
 import { AreaTag, SessionPills, Tip } from "./StoryParts";
 import { useAreaColors } from "./storyContext";
 
@@ -17,10 +18,13 @@ type Review = Extract<WorksRow, { kind: "review" }>;
 type Insight = Extract<WorksRow, { kind: "stuck" | "building" }>;
 type Branch = Extract<WorksRow, { kind: "branch" }>;
 
-function Group({ label, children }: { label: string; children: ReactNode }) {
+function Group({ label, unit, children }: { label: string; unit?: string; children: ReactNode }) {
   return (
     <section className="space-y-1.5">
-      <h4 className="chg-ui text-[12px] font-medium text-sol-text/75">{label}</h4>
+      <div>
+        <h4 className="chg-ui text-[12px] font-medium text-sol-text/75">{label}</h4>
+        {unit && <p className="font-mono text-[10px]" style={{ color: ink(45) }}>{unit}</p>}
+      </div>
       {children}
     </section>
   );
@@ -67,47 +71,64 @@ function BranchRow({ row }: { row: Branch }) {
   return (
     <div className="flex min-w-0 items-center gap-2 font-mono text-[11px]">
       <span className="min-w-0 flex-1 truncate text-sol-text/70" title={row.branch}>{row.branch}</span>
-      <span className="shrink-0 tabular-nums text-sol-text/45" title={`${row.commits} commits in ${row.stories} stories`}>{row.commits}</span>
+      <span className="shrink-0 tabular-nums text-sol-text/45" title={`${plural(row.commits, "commit")} in ${plural(row.stories, "story", "stories")}`}>{plural(row.commits, "commit")}</span>
       {row.top_area && <AreaTag area={row.top_area} className="shrink-0 text-[10px]" />}
     </div>
   );
 }
 
-const touchCount = (n: number) => `${n.toLocaleString()} file ${n === 1 ? "touch" : "touches"}`;
+const touchCount = (n: number) => plural(n, "file touch", "file touches");
 
 /** An area with stories of its own names its commits; one without says its touches sit inside other stories. */
 function barTip(a: AreaTouch): string {
   if (!a.stories) return `${areaLabel(a.area)}: ${touchCount(a.touches)}, inside other stories`;
-  return `${areaLabel(a.area)}: ${touchCount(a.touches)} in ${a.commits} ${a.commits === 1 ? "commit" : "commits"}`;
+  return `${areaLabel(a.area)}: ${touchCount(a.touches)} in ${plural(a.commits, "commit")}`;
 }
 
-function AreaBars({ areas }: { areas: readonly AreaTouch[] }) {
+/**
+ * One bar per area, each a button that toggles the area filter, its count in
+ * words on hover, focus and to a screen reader. An area whose touches all sit
+ * inside other stories has no story to filter to: it still answers, and does nothing.
+ */
+function AreaBars({ areas, active, onArea }: { areas: readonly AreaTouch[]; active: readonly string[]; onArea?: (area: string) => void }) {
   const colors = useAreaColors();
   const max = Math.max(1, ...areas.map((a) => a.touches));
   return (
-    <div className="space-y-1">
+    <div className="space-y-0.5">
       {areas.slice(0, 8).map((a) => (
         <Tip key={a.area} text={barTip(a)} side="left">
-          <div className="grid grid-cols-[5.5rem_minmax(0,1fr)_2.5rem] items-center gap-2">
+          <button
+            type="button"
+            aria-label={barTip(a)}
+            aria-pressed={a.stories > 0 ? active.includes(a.area) : undefined}
+            aria-disabled={a.stories > 0 && onArea ? undefined : true}
+            onClick={() => a.stories > 0 && onArea?.(a.area)}
+            className={`-mx-1 grid w-[calc(100%+0.5rem)] grid-cols-[5.5rem_minmax(0,1fr)_2.5rem] items-center gap-2 rounded px-1 py-[1px] text-left transition-colors ${
+              a.stories > 0 && onArea ? "hover:bg-sol-bg-alt/60" : "cursor-default"
+            } ${active.includes(a.area) ? "bg-sol-bg-alt/60" : ""}`}
+          >
             <span className="truncate font-mono text-[11px] text-sol-text/60">{areaLabel(a.area)}</span>
-            <span className="h-1.5 rounded-[1px]" style={{ background: ink(8) }}>
-              <span className="block h-full rounded-[1px]" style={{ width: `${Math.max(3, (a.touches / max) * 100)}%`, background: a.stories ? areaColor(a.area, colors) : ink(45) }} />
+            <span className="h-1 rounded-[1px]" style={{ background: ink(8) }}>
+              <span className="block h-full rounded-[1px]" style={{ width: `${Math.max(3, (a.touches / max) * 100)}%`, background: a.stories ? areaFill(a.area, 55, colors) : ink(30) }} />
             </span>
             <span className="text-right font-mono text-[10px] tabular-nums text-sol-text/45">{a.touches}</span>
-          </div>
+          </button>
         </Tip>
       ))}
     </div>
   );
 }
 
-export function InTheWorks({ works, areas, areasLabel, live, viewed }: {
+export function InTheWorks({ works, areas, areasLabel, live, viewed, activeAreas = [], onArea }: {
   works: readonly WorksRow[];
   areas: readonly AreaTouch[];
+  /** The area filter, which the bars toggle. */
+  activeAreas?: readonly string[];
+  onArea?: (area: string) => void;
   areasLabel: string;
   /** The edition on screen is today's (or this week's), so the moving work belongs to it. */
   live: boolean;
-  /** What is on screen when it is not: "Sun 27 Sep", or "this week". */
+  /** What is on screen when it is not: "Sun 27 Sep", or "the week of Mon 21 Sep". */
   viewed: string;
 }) {
   const stuck = works.filter((w): w is Insight => w.kind === "stuck");
@@ -116,8 +137,8 @@ export function InTheWorks({ works, areas, areasLabel, live, viewed }: {
   const branches = works.filter((w): w is Branch => w.kind === "branch");
   const moving = stuck.length + building.length + reviews.length + branches.length > 0;
   const bars = areas.length > 0 && (
-    <Group label={areasLabel}>
-      <AreaBars areas={areas} />
+    <Group label={areasLabel} unit="file touches">
+      <AreaBars areas={areas} active={activeAreas} onArea={onArea} />
     </Group>
   );
   const rule = bars && <div className="h-px bg-sol-border/15" />;
@@ -134,7 +155,7 @@ export function InTheWorks({ works, areas, areasLabel, live, viewed }: {
       <Capped label="Stuck" rows={stuck} cap={2} render={(w) => <Quote key={w._id} row={w} rule={STUCK_RULE} />} />
       <Capped label="In progress" rows={building} cap={2} render={(w) => <Quote key={w._id} row={w} rule={ink(18)} />} />
       <Capped label="In review" rows={reviews} cap={4} render={(w) => <ReviewRow key={w._id} row={w} />} />
-      <Capped label="On branches today" rows={branches} cap={4} render={(w) => <BranchRow key={w._id} row={w} />} />
+      <Capped label="On branches now" rows={branches} cap={4} render={(w) => <BranchRow key={w._id} row={w} />} />
       {live && rule}
       {live && bars}
     </div>

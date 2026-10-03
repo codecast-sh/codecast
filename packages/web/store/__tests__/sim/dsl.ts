@@ -70,6 +70,7 @@ import {
   type StepRecord,
 } from "./report";
 import { SCRIPTED_ORDER_MARK } from "./shrink";
+import { traceMatches } from "./labels";
 import { SimWorld } from "./world";
 import type { SimWindow } from "./window";
 
@@ -478,9 +479,7 @@ export class ScenarioWorld extends SimWorld {
     }
     this.events.push({ seq: d.seq, channel: d.channel, due: d.due, label: d.label, producer: d.producer });
     if (!this.trace) return;
-    const text = `${d.channel} ${d.label} ${d.producer}`;
-    const id = this.trace !== "1" && this.labels.has(this.trace) ? this.labels.id(this.trace) : null;
-    if (this.trace !== "1" && !(id && text.includes(id)) && !this.labels.relabel(text).includes(this.trace)) return;
+    if (this.trace !== "1" && !traceMatches(d, this.trace, this.labels)) return;
     console.log(`sim trace ${this.scenario} [${this.mode} seed ${this.seed}]  ${renderDeliveries([d], this.labels, T0)[0]}`);
   }
 

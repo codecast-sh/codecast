@@ -91,3 +91,35 @@ describe("a board drop into another group's gap", () => {
     expect(labels()).toEqual([]);
   });
 });
+
+// A team's own statuses refine a category; the label names the one picked.
+describe("status labels name the team's status", () => {
+  const TEAM = "t".repeat(32);
+  const statuses = [
+    { id: "open", name: "Open", category: "open" },
+    { id: "in_progress", name: "In Progress", category: "in_progress" },
+    { id: "s_today", name: "Today", category: "in_progress" },
+    { id: "s_wait", name: "Pending Approval", category: "in_review" },
+  ];
+  beforeEach(() => {
+    useInboxStore.setState({
+      teams: [{ _id: TEAM, task_statuses: statuses }],
+      tasks: { [A]: task(A, "ct-1", { team_id: TEAM }) },
+    } as any);
+  });
+
+  it("a move to a custom status names it", () => {
+    s().updateTask("ct-1", { status: "in_progress", status_id: "s_today" });
+    expect(labels()).toEqual(["Moved ct-1 to Today"]);
+  });
+
+  it("a move to a category default names the default", () => {
+    s().updateTask("ct-1", { status: "in_progress", status_id: "" });
+    expect(labels()).toEqual(["Moved ct-1 to In Progress"]);
+  });
+
+  it("an unknown status id falls back to the category", () => {
+    s().updateTask("ct-1", { status: "in_review", status_id: "gone" });
+    expect(labels()).toEqual(["Moved ct-1 to In Review"]);
+  });
+});

@@ -22,7 +22,8 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { useConvex, useQuery } from 'convex/react';
+import { useConvex } from 'convex/react';
+import { useCallList } from '@codecast/web/hooks/useSyncCalls';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import * as Haptics from 'expo-haptics';
 import { api } from '@codecast/convex/convex/_generated/api';
@@ -78,12 +79,13 @@ export default function RecordScreen() {
   const convex = useConvex();
   const rec = useSyncExternalStore(subscribeRecorder, getRecorderSnapshot, getRecorderSnapshot);
 
-  const calls = useQuery(api.transcripts.webListCalls, { limit: 50 });
+  // Off the store's persisted call list, so the list paints at once.
+  const { calls, ready: callsReady } = useCallList(50);
   // A recording is the only thing this screen lists. Huddle transcripts are a
   // team's shared record behind the calls feature; a recording is one person's
   // and is exempt from it, so mixing them here would put rows in the list that
   // half the app cannot open.
-  const recordings = (calls ?? []).filter((c: any) => isRecRoomKey(c.room_key));
+  const recordings = calls.filter((c: any) => isRecRoomKey(c.room_key));
 
   const onPress = useCallback(async () => {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -205,7 +207,7 @@ export default function RecordScreen() {
           ) : null
         }
         ListEmptyComponent={
-          calls === undefined ? null : (
+          !callsReady && calls.length === 0 ? null : (
             <RNText style={styles.empty}>Nothing recorded yet.</RNText>
           )
         }

@@ -33,11 +33,12 @@ import {
   parseRoomKey,
 } from "./callRooms";
 import { isTeamMember } from "./privacy";
+import { requireUser } from "./lib/requireUser";
 import { channelMemberIds, isRestricted } from "./chatAccess";
 import { bucketTs } from "./presenceState";
 import { teamFeatureOffMessage, teamHasFeature } from "./teamFeatures";
 import { huddleAlive, idleLiveTranscriptsForRoom, resumeOrEndHuddle } from "./transcripts";
-import { noteRecordedPeople, nudgeRecordingForShare, recordingConfigured, roomRecordingState, stopRoomRecording } from "./lib/callRecordingRuns";
+import { noteRecordedPeople, nudgeRecordingForShare, recordingConfigured, recordingOutage, roomRecordingState, stopRoomRecording } from "./lib/callRecordingRuns";
 import { liveTranscriptFor, postEvent } from "./callChat";
 import { admittedGuests, guestKnocks, projectGuest } from "./callGuests";
 import { endGuestAdmissions } from "./lib/callGuestAdmission";
@@ -264,12 +265,6 @@ export const getMyCalls = query({
     };
   },
 });
-
-async function requireUser(ctx: any): Promise<Id<"users">> {
-  const userId = await getAuthUserId(ctx);
-  if (!userId) throw new Error("Not authenticated");
-  return userId;
-}
 
 // Sweep a room's dead rows while we're writing to it anyway. Returns the
 // rows as they stood before the sweep: a join into an emptied room dates the
@@ -587,7 +582,8 @@ export const leaveRoom = mutation({
         if (seat) await upsertRoomState(ctx, roomKey, seat, { emptied_at: now }, now);
         // Inside the grace nothing else ends here. The recording stops on
         // its own once LiveKit's room has held no teammate for
-        // RECORDING_EMPTY_ROOM_STOP_MS (guests never keep it going:
+        // RECORDING_EMPTY_ROOM_STOP_MS, counted from RECORDING_LEFT_ROOM_HOLD_MS
+        // after this stamp so a slow reload keeps it (guests never keep it going:
         // huddleKeepers), or with the record (transcripts.endTranscript);
         // guests' admissions end with the huddle (transcripts.endIdleTranscript,
         // or the minute sweep). Only a huddle already past its grace (the
@@ -1171,6 +1167,7 @@ export const getLiveRooms = query({
     }
 
     const out = [];
+    const recordingUnavailable = byRoom.size ? ((await recordingOutage(ctx))?.reason ?? null) : null;
     for (const roomKey of [...byRoom.keys()].sort()) {
       const live = byRoom.get(roomKey)!;
       const seated = live.some((m) => String(m.user_id) === String(userId));
@@ -1233,6 +1230,11 @@ export const getLiveRooms = query({
         // Whether a press could work at all on this server, so a client
         // leaves the button out rather than offer one that fails.
         recording_configured: recordingConfigured(),
+        // Why a configured server cannot record right now (the LiveKit plan
+        // spent its minutes), so the button says so instead of failing in
+        // front of the room. Byte-stable: set by a refusal, cleared by an
+        // accepted egress or its own scheduled lapse.
+        recording_unavailable: recordingUnavailable,
         can_join: canJoin,
         redacted,
         title,

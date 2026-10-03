@@ -1,4 +1,4 @@
-import { Circle, Maximize2, Mic, MicOff, PhoneOff, User, Users, X } from "lucide-react";
+import { Circle, Link2, Maximize2, Mic, MicOff, PhoneOff, User, Users, X } from "lucide-react";
 import { useMicLevelVar } from "../../hooks/useMicLevelVar";
 import { useCircleFace } from "../../hooks/useCircleFace";
 import { AvatarImg } from "../../lib/avatarCache";
@@ -164,6 +164,15 @@ export function FaceCircle({
           </span>
         )}
       </div>
+      {/* A guest wears the face row's guest mark (a link, in the guest's
+          yellow), outside the disc so its clip cannot cut it: let in on a
+          link, not one of the team, and never passing for a teammate in the
+          one view of the call that floats over other apps. */}
+      {person.guest && (
+        <span className="face-guest-mark" aria-label="guest" title="A guest from outside the team">
+          <Link2 aria-hidden="true" />
+        </span>
+      )}
       {/* Outside the circle, because the circle clips itself: the name hangs
           under the face, where it covers nothing, and the window grows to make
           room for it at the moment the pointer arrives. */}

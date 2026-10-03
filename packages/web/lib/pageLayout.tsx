@@ -66,6 +66,8 @@ const FULL_WIDTH_PATTERNS: RegExp[] = [
   /^\/memory(\/|$)/,
   // Evals: its own nav, wall and charts edge to edge, each view its own scroll.
   /^\/evals(\/|$)/,
+  // Ops: its own tab bar, then a table, a timeline or a player edge to edge.
+  /^\/ops(\/|$)/,
 ];
 
 function routePath(pathname: string): string {

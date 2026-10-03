@@ -5,6 +5,7 @@ import { basename, join, relative } from 'node:path';
 import type { CheckResult, Freeze, GateResult, Score } from '@platform/evals';
 
 import { routeGates, scoreOf } from '../../adapters/replay';
+import { commitLabels } from '../../labels';
 import { homePaths } from '../../paths';
 import { gate, type AgentResult } from '../../surface';
 import { meta } from './meta';
@@ -184,6 +185,36 @@ export function loadGradeSets(ws: string): GradeSets {
   const path = join(labelsDir(ws), 'grade-sets.json');
   if (!existsSync(path)) throw new Error(`no grade sets for ${ws} at ${path}; the hand labels live in the private labels repo (./evals doctor)`);
   return readJson(path) as GradeSets;
+}
+
+/** The sets a record can be labelled into. */
+export const GRADE_SETS = ['must_not_close', 'should_close', 'found_by_a_run', 'name_it', 'never_name', 'must_not_reopen', 'either'] as const satisfies ReadonlyArray<keyof GradeSets>;
+
+/**
+ * Moves one record of a workspace's grade sets into `to` (or out of every set,
+ * `none`), and writes why into the workspace's ground-truth.md, both committed
+ * and pushed in one step (commitLabels): the only way a workspace label
+ * changes, so its reasoning stays in the private repo beside it. Every
+ * org-review freeze on the workspace grades on these sets. Returns the sets
+ * the record left.
+ */
+export function moveInGradeSets(ws: string, record: string, to: (typeof GRADE_SETS)[number] | 'none', why: string, o: { visibility?: () => string | null } = {}): string[] {
+  const dir = labelsDir(ws);
+  const sets = loadGradeSets(ws) as unknown as Record<string, string[] | undefined>;
+  const from = GRADE_SETS.filter((k) => sets[k]?.includes(record));
+  for (const k of from) sets[k] = sets[k]!.filter((x) => x !== record);
+  if (to !== 'none') sets[to] = [...(sets[to] ?? []), record];
+  const truth = join(dir, 'ground-truth.md');
+  const entry = `\n- ${new Date().toISOString().slice(0, 10)}: ${record} ${from.join(', ') || 'unlabelled'} -> ${to}. ${why.trim()}\n`;
+  const labels = homePaths().labels;
+  commitLabels(labels, [relative(labels, join(dir, 'grade-sets.json')), relative(labels, truth)], `${SURFACE}/${ws}: ${record} ${from.join(', ') || 'unlabelled'} -> ${to}`, {
+    visibility: o.visibility,
+    write: () => {
+      writeFileSync(join(dir, 'grade-sets.json'), `${JSON.stringify(sets, null, 1)}\n`);
+      writeFileSync(truth, `${existsSync(truth) ? readFileSync(truth, 'utf8').replace(/\n*$/, '\n') : ''}${entry}`);
+    },
+  });
+  return from;
 }
 
 /** The role handles a proposal's changes add and an inputs file's roster holds. */

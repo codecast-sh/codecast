@@ -32,6 +32,10 @@ export const GROUND_BATCH = 8;
 const SIGNALS_SHOWN = 20;
 const COMMENTS_SHOWN = 10;
 export const GROUND_AUTHOR = "ground";
+// The strong model thinks before it answers and its thinking counts toward
+// max_tokens (as changesProse.ts notes): at 400 a cause that took any thought
+// came back as JSON cut off before its note. Only tokens used are billed.
+export const GROUND_MAX_TOKENS = 2000;
 
 /** An open cause no one has grounded and no run holds. */
 export function isUngroundedCause(task: Doc<"tasks"> | null): task is Doc<"tasks"> {
@@ -142,7 +146,7 @@ export const sweep = internalAction({
     const result: GroundSweepResult = { grounded: 0, unreadable: 0, unanswered: 0 };
     await Promise.all(jobs.map(async (job) => {
       const { system, prompt } = groundCausePrompt(job.cause, job.brief, now);
-      const reply = await callModel({ model: STRONG_MODEL, system, prompt, max_tokens: 400, label: "Line ground", timeout_ms: 60_000 });
+      const reply = await callModel({ model: STRONG_MODEL, system, prompt, max_tokens: GROUND_MAX_TOKENS, label: "Line ground", timeout_ms: 60_000 });
       if (!reply?.text) { result.unanswered++; return; }
       const outcome = parseGroundReply(parseJsonBlock(reply.text), briefGoalRefs(job.brief));
       const status: string = await ctx.runMutation(internal.lineGround.record, "fields" in outcome ? { task_id: job.task_id, fields: outcome.fields } : { task_id: job.task_id, error: outcome.error });

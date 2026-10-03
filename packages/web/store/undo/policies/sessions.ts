@@ -39,30 +39,31 @@ function restoreEachHidden(ctx: UndoCtx): Invocation[] {
 }
 
 // The server's kill transition also stamps inbox_killed_at (cleanup.ts
-// applyHideTransition), a field the kill's draft never wrote, so the patches
-// cannot restore it. Once that echo lands shouldShowInInbox hides the row on
-// it alone, so an undo would show nothing until the server's un-kill came
-// back. A second pass clears it locally on each row the kill retired that was
-// not killed before; its lock holds through stale pushes until that un-kill
-// echoes. The server ignores the clear itself (the dispatch guard honours only
-// an un-kill-shaped patch) and un-kills through the first pass's restore.
-// Either twin names the row: a child session a parent's kill cascades over
-// usually has no conversations row, and shouldShowInInbox reads sessions.
-function restoreEachKilled(ctx: UndoCtx): Invocation[] {
-  const unkill: string[] = [];
-  for (const c of ctx.changes) {
+// applyHideTransition), a field the kill's draft never wrote, so the captured
+// cells cannot restore it, and shouldShowInInbox hides a row on it alone. The
+// spell adds a clear of it on each store copy of a row the kill retired that
+// was not killed before (either twin names the row: a child a parent's kill
+// cascades over usually has no conversations row). The clear rides the first
+// restoreSession pass beside the row's inbox_dismissed_at clear, the un-kill
+// shape the dispatch guard honours (dispatch.ts), so the server acknowledges it
+// and the acknowledgement retires both copies' locks whatever reaches the
+// server next (a redo, a fresh kill). A clear sent on its own is stripped by
+// that guard, and its locks could only retire on a null echo a re-kill never
+// sends. The sessions row does not dispatch the marker, so the conversations
+// copy carries it even on a thin meta row that never held the stamp.
+function spellUnkill(cells: CellChange[], ctx?: UndoCtx): CellChange[] {
+  const out = [...cells];
+  for (const c of cells) {
     if (!isSessionCell(c) || c.field !== "inbox_dismissed_at" || c.before || !c.after) continue;
-    if (ctx.before?.conversations?.[c.id]?.inbox_killed_at || ctx.before?.sessions?.[c.id]?.inbox_killed_at) continue;
-    if (!unkill.includes(c.id)) unkill.push(c.id);
+    if (ctx?.before?.conversations?.[c.id]?.inbox_killed_at || ctx?.before?.sessions?.[c.id]?.inbox_killed_at) continue;
+    if (out.some((k) => k.store === c.store && k.id === c.id && k.field === "inbox_killed_at")) continue;
+    out.push({ ...c, field: "inbox_killed_at", before: null, hadBefore: true, after: undefined, hadAfter: false });
   }
-  return [
-    ...restoreEachHidden(ctx),
-    ...unkill.map((id) => ({ action: "patchConversation", args: [id, { inbox_killed_at: null }] })),
-  ];
+  return out;
 }
 
 const HIDE: Partial<UndoSpec> = { inverse: restoreEachHidden, restoreView: true, toast: true };
-const KILL: Partial<UndoSpec> = { ...HIDE, inverse: restoreEachKilled };
+const KILL: Partial<UndoSpec> = { ...HIDE, spell: spellUnkill };
 const KILL_NOTE = "(agent stays stopped on undo)";
 
 // patchConversation's gesture callers (the /sessions page) write the triage
@@ -120,8 +121,10 @@ export const SESSIONS_UNDO_POLICY: UndoPolicy = {
       label: (ctx) => `Renamed ${sessionTitle(ctx.before, ctx.args[0] as string)} to ${quoted(ctx.args[1] as string, "untitled")}`,
     },
   },
-  setSessionCharacter: onSession("Changed the character of"),
-  setSessionCharacters: { spec: { label: characters } },
+  // The picker writes on every face it lands on (arrow keys, clicks,
+  // shuffles), so browsing faces merges into one entry.
+  setSessionCharacter: onSession("Changed the character of", { coalesce: true }),
+  setSessionCharacters: { spec: { label: characters, coalesce: true } },
   patchConversation: onSession(patchVerb),
   toggleFavorite: onSession((ctx) => (ctx.after?.conversations?.[ctx.args[0] as string]?.is_favorite ? "Favorited" : "Unfavorited"), {
     spell: spellUnfavorite,

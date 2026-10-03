@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { _resetUndoStacks } from "@platform/engine";
 import { useInboxStore, type InboxSession } from "../inboxStore";
-import { performUndo } from "../undoStack";
+import { performRedo, performUndo } from "../undoStack";
 import { shouldShowInInbox } from "@codecast/shared/contracts";
 
 // Undo of a stash restores the row at once. The server has usually already
@@ -128,12 +128,10 @@ describe("undoing a kill lands each row where it was, on the server too", () => 
     expect(session().inbox_stashed_at).toBe(STASHED_AT);
   });
 
-  test("the undo dispatches restoreSession per row, carrying the restored stamps", async () => {
+  test("the undo dispatches restoreSession per row, carrying the restored stamps", () => {
     useInboxStore.getState().killSession(ID);
     sent = [];
     performUndo();
-    // The undo's send follows the kill's, which is still on the wire.
-    await Bun.sleep(5);
 
     const restores = sent.filter((s) => s.action === "restoreSession");
     expect(restores.map((s) => s.args[0]).sort()).toEqual([ID, CHILD].sort());
@@ -143,7 +141,100 @@ describe("undoing a kill lands each row where it was, on the server too", () => 
     expect(patched[CHILD]).toMatchObject({ inbox_dismissed_at: null });
   });
 
-  test("a teammate's row the kill forgot comes back, and the server hears restoreSession", async () => {
+  // The server stamps inbox_killed_at on a kill. The undo's clear of it has to
+  // ride the restoreSession patch, which the server applies (and acknowledges)
+  // as an un-kill: a separate clear is stripped by the dispatch guard, so no
+  // acknowledgement ever covers its locks and they hold the null over a later
+  // kill's stamp.
+  const KILLED_AT = 1700000009000;
+  // The kill confirmed for both rows the cascade hid: the server stamps the marker on each.
+  const killConfirmed = () => {
+    useInboxStore.getState().killSession(ID);
+    const kid = useInboxStore.getState().sessions[CHILD] as any;
+    const echo = { inbox_dismissed_at: session().inbox_dismissed_at, inbox_killed_at: KILLED_AT };
+    const kidEcho = { inbox_dismissed_at: kid.inbox_dismissed_at, inbox_killed_at: KILLED_AT };
+    useInboxStore.getState().syncTable("sessions", [row(echo), { ...kid, ...kidEcho }]);
+    useInboxStore.getState().syncTable("conversations", [{ _id: ID, ...echo }, { _id: CHILD, ...kidEcho }]);
+    useInboxStore.setState({ pending: {} } as any);
+  };
+  const killedLocks = () => Object.keys(useInboxStore.getState().pending).filter((k) => k.endsWith(`${ID}:inbox_killed_at`));
+  // The server acknowledges what it applied. Its dispatch guard drops a clear
+  // of inbox_killed_at that is not shaped like an un-kill (dispatch.ts), and a
+  // send that writes nothing is acknowledged at no position.
+  const applied = (patches: any) => {
+    const out: Record<string, Record<string, unknown>> = {};
+    for (const [id, fields] of Object.entries<any>(patches?.conversations ?? {})) {
+      const kept = { ...fields };
+      if ("inbox_killed_at" in kept && !kept.inbox_killed_at && !("inbox_dismissed_at" in kept && !kept.inbox_dismissed_at)) delete kept.inbox_killed_at;
+      if (Object.keys(kept).length > 0) out[id] = kept;
+    }
+    return Object.keys(out).length > 0 ? { conversations: out } : null;
+  };
+  const ackAll = (scope: string, position: number) => {
+    for (const s of sent) {
+      const patches = applied(s.patches);
+      if (patches) useInboxStore.getState().stampSyncAck(patches, [{ scope_key: scope, position }], Date.now() + 1, { local: true });
+    }
+    useInboxStore.getState().retireAckedPending(scope, position);
+  };
+
+  test("the undo of a confirmed kill clears inbox_killed_at inside the restoreSession patch", () => {
+    killConfirmed();
+    sent = [];
+    expect(performUndo()).toBe(true);
+    expect(sent.some((s) => s.action === "patchConversation")).toBe(false);
+    const patched = Object.assign({}, ...sent.filter((s) => s.action === "restoreSession").map((s) => s.patches?.conversations ?? {}));
+    expect(patched[ID]).toMatchObject({ inbox_dismissed_at: null, inbox_killed_at: null });
+    expect(patched[CHILD]).toMatchObject({ inbox_dismissed_at: null, inbox_killed_at: null });
+    expect(session().inbox_killed_at ?? null).toBe(null);
+  });
+
+  test("the undo's acknowledgement retires its inbox_killed_at locks without any echo", () => {
+    killConfirmed();
+    sent = [];
+    performUndo();
+    expect(killedLocks().length).toBeGreaterThan(0);
+    ackAll("user:ada", 10);
+    expect(killedLocks()).toEqual([]);
+  });
+
+  test("a redo before the undo's echo: the re-kill's stamp shows once it lands", async () => {
+    killConfirmed();
+    sent = [];
+    performUndo();
+    expect(performRedo()).toBe(true);
+    await new Promise((r) => setTimeout(r, 0));
+    ackAll("user:ada", 10);
+    // The redo's kill lands on the server, which stamps the marker again.
+    const REKILLED_AT = KILLED_AT + 5000;
+    const echo = { inbox_dismissed_at: session().inbox_dismissed_at, inbox_killed_at: REKILLED_AT };
+    useInboxStore.getState().syncTable("sessions", [row(echo)]);
+    useInboxStore.getState().syncTable("conversations", [{ _id: ID, ...echo }]);
+    expect(session().inbox_killed_at).toBe(REKILLED_AT);
+    expect(conversation().inbox_killed_at).toBe(REKILLED_AT);
+  });
+
+  // A kill gives the row the marker again, so it retires any lock still
+  // asserting the undo's clear: on a follower the acknowledgement retires
+  // locks only after the page that carried the new stamp, which they had held off.
+  for (const again of ["redo", "a fresh kill"] as const) {
+    test(`${again} after the undo drops the undo's inbox_killed_at locks before any acknowledgement`, async () => {
+      killConfirmed();
+      performUndo();
+      expect(killedLocks().length).toBeGreaterThan(0);
+      // A redo goes out after the undo's own sends, which the stub answers at once.
+      if (again === "redo") expect(performRedo()).toBe(true);
+      else useInboxStore.getState().killSession(ID);
+      await new Promise((r) => setTimeout(r, 0));
+      expect(typeof session().inbox_dismissed_at).toBe("number");
+      expect(killedLocks()).toEqual([]);
+      const REKILLED_AT = KILLED_AT + 7000;
+      useInboxStore.getState().syncTable("sessions", [row({ inbox_dismissed_at: session().inbox_dismissed_at, inbox_killed_at: REKILLED_AT })]);
+      expect(session().inbox_killed_at).toBe(REKILLED_AT);
+    });
+  }
+
+  test("a teammate's row the kill forgot comes back, and the server hears restoreSession", () => {
     useInboxStore.setState({
       sessions: { [ID]: row() },
       conversations: { [ID]: { _id: ID, is_own: false } },
@@ -153,7 +244,6 @@ describe("undoing a kill lands each row where it was, on the server too", () => 
     sent = [];
 
     expect(performUndo()).toBe(true);
-    await Bun.sleep(5);
     expect(session()?._id).toBe(ID);
     expect(Object.keys(useInboxStore.getState().pending).filter((k) => k.includes(ID) && (useInboxStore.getState().pending as any)[k].type === "exclude")).toEqual([]);
     expect(sent.filter((s) => s.action === "restoreSession").map((s) => s.args[0])).toEqual([ID]);

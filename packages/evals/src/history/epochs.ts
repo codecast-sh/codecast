@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import type { Epoch, FootingMarker, PromptFilePair, RunRow } from '@codecast/shared/contracts/evalsApi';
 
-import { batchSet, batchStarts, defaultRuler, footingOf, type RulerOf, type VerdictRun } from '../commands/verdict';
+import { batchSet, batchStarts, BISECT_CADENCE, defaultRuler, footingOf, type RulerOf, type VerdictRun } from '../commands/verdict';
 import { homePaths } from '../paths';
 
 // Prompt epochs: the stretches of a surface's history over which every
@@ -91,7 +91,7 @@ const key = (batch: string, freezeId: string) => `${batch}\x1f${freezeId}`;
 
 /** A surface's batches oldest first, by when each began (batch names do not all sort by time), bisect probes left out. */
 export function timeline<R extends EpochRow>(rows: R[]): Array<{ batch: string; at: string; reps: R[] }> {
-  const kept = rows.filter((r) => r.batch && r.cadence !== 'bisect');
+  const kept = rows.filter((r) => r.batch && r.cadence !== BISECT_CADENCE);
   const starts = batchStarts(kept);
   const by = new Map<string, R[]>();
   for (const r of kept) {
@@ -126,7 +126,7 @@ const ANALYZER_ONLY = new Set(['org-review']);
 export function renderKeys(rows: EpochRow[], reader: PromptReader = folderPromptReader(), surface?: string): Map<string, string> {
   const shas = new Map<string, Map<string, EpochRow[]>>();
   for (const r of rows) {
-    if (!r.batch || !r.promptSha || r.cadence === 'bisect') continue;
+    if (!r.batch || !r.promptSha || r.cadence === BISECT_CADENCE) continue;
     if (!shas.has(r.freezeId)) shas.set(r.freezeId, new Map());
     const f = shas.get(r.freezeId)!;
     if (!f.has(r.batch)) f.set(r.batch, []);

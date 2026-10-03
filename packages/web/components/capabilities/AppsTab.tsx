@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Loader2 } from "lucide-react";
 import {
@@ -13,6 +14,7 @@ import {
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { APP_LOOK, useAppConnection } from "../../lib/integrations";
 import { InlineSpinner, SurfaceError } from "./EmptyStates";
+import { TokenConnectForm } from "../integrations/TokenConnectForm";
 
 /**
  * The Apps tab of /capabilities: the services a workspace can connect so agents
@@ -57,7 +59,11 @@ function AppCard({
   const comingSoon = descriptor.connectKind === "coming-soon";
   const connected = connection?.status === "connected" ? connection : null;
 
-  const { connect, disconnect: revoke, busy, error } = useAppConnection(descriptor, connection, scope);
+  const { connect, connectToken, disconnect: revoke, busy, error } = useAppConnection(descriptor, connection, scope);
+  // A token app connects through the inline form (shared with the settings
+  // card) instead of a popup.
+  const tokenPaste = descriptor.connectKind === "token-paste";
+  const [tokenFormOpen, setTokenFormOpen] = useState(false);
   const disconnect = async () => {
     if (!connected?.disconnect_id) return;
     if (!confirm(`Disconnect ${descriptor.name}? Agents lose access it granted.`)) return;
@@ -139,13 +145,24 @@ function AppCard({
         <p className="text-[11px] text-sol-text-dim">
           No connector yet — this card turns live when it lands.
         </p>
+      ) : tokenPaste && tokenFormOpen ? (
+        <TokenConnectForm
+          descriptor={descriptor}
+          busy={busy}
+          onSubmit={async (token, config) => {
+            const stored = await connectToken(token, config);
+            if (stored) setTokenFormOpen(false);
+            return stored;
+          }}
+          onCancel={() => setTokenFormOpen(false)}
+        />
       ) : (
         <div>
           {/* When the state query failed, this app may already be connected —
               offering Connect would overclaim. Disabled, with the reason. */}
           <button
             type="button"
-            onClick={connect}
+            onClick={tokenPaste ? () => setTokenFormOpen(true) : connect}
             disabled={busy || (!connection && !loading)}
             title={
               !connection && !loading

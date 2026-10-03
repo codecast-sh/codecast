@@ -16,6 +16,7 @@ import type { MutationCtx } from "./_generated/server";
 import { canAccessDoc, canAccessInitiative, canAccessPlan, canAccessProject, canAccessTask, isSameWorkspace, workspaceForResource } from "./lib/access";
 import { canReadCall } from "./transcripts";
 import { sharedCallVideoKey, sharedCallVideos } from "./callRecordings";
+import { restampRunShare } from "./lib/callRecordingRuns";
 import { assigneeNamesFor } from "./tasks";
 import { userMayRead } from "./sessionDecisions";
 import { canReadStack } from "./decisionStacks";
@@ -39,8 +40,17 @@ export async function claimShareToken(
   row: { _id: Id<ShareTable>; share_token?: string | null },
   token: string | null,
 ): Promise<void> {
+  // A call's link may also carry its video (callRecordings.setCallShareVideo).
+  // That choice belongs to the link it was made for: a link cleared or
+  // re-aimed drops it, so a link turned on again (even with the old token,
+  // which any free UUID may be) starts with the transcript alone and video is
+  // always a fresh choice.
+  const dropVideo = table === "transcripts" ? { share_video_token: undefined, share_video_through: undefined } : {};
   if (token === null) {
-    if (row.share_token) await ctx.db.patch(row._id, { share_token: undefined } as any);
+    if (row.share_token) {
+      await ctx.db.patch(row._id, { share_token: undefined, ...dropVideo } as any);
+      await restampCallRuns(ctx, table, row);
+    }
     return;
   }
   if (row.share_token === token) return;
@@ -49,7 +59,17 @@ export async function claimShareToken(
     .withIndex("by_share_token", (q: any) => q.eq("share_token", token))
     .first();
   if (taken) throw new Error("Invalid share token");
-  await ctx.db.patch(row._id, { share_token: token } as any);
+  await ctx.db.patch(row._id, { share_token: token, ...dropVideo } as any);
+  await restampCallRuns(ctx, table, row);
+}
+
+/** A call's running recordings carry whether their video goes out with the
+ *  link (the room's live notice reads it there): a link cleared or re-aimed
+ *  has just dropped the video, so they are told. */
+async function restampCallRuns(ctx: Pick<MutationCtx, "db">, table: ShareTable, row: { _id: Id<ShareTable> }): Promise<void> {
+  if (table !== "transcripts") return;
+  const call = await ctx.db.get(row._id as Id<"transcripts">);
+  if (call) await restampRunShare(ctx, call);
 }
 
 // Who may turn a kind's link on or off: whoever may read the object. Docs,

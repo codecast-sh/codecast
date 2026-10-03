@@ -15,7 +15,7 @@ import { WorkflowRunNodes } from "../../WorkflowRunNodes";
 import { wfStatusMeta, wfFmtTokens } from "../../../lib/workflowRun";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { copyToClipboard } from "../../../lib/utils";
-import { useWorkflowRun } from "../../../hooks/useSyncWorkflows";
+import { useWorkflow, useWorkflowRun } from "../../../hooks/useSyncWorkflows";
 import { EntityIdPill, TextWithMentions } from "../../EntityIdPill";
 import { EstablishedRefsProvider } from "../../../hooks/entityMentionScope";
 import { FormattedSummary } from "../../FormattedSummary";
@@ -1175,8 +1175,9 @@ function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, 
 
 // Inline conversation card for a dynamic-workflow run. Reads live run state by id
 // (posted once as an anchor message), so it updates as the run progresses.
-function DynamicRunCard({ runId, name }: { runId?: string; name?: string }) {
+function DynamicRunCard({ runId, name, goal }: { runId?: string; name?: string; goal?: string }) {
   const run = useWorkflowRun(runId);
+  const workflow = useWorkflow(run?.workflow_id);
   const status = run?.status as string | undefined;
   const sm = wfStatusMeta(status);
   return (
@@ -1185,6 +1186,7 @@ function DynamicRunCard({ runId, name }: { runId?: string; name?: string }) {
         <Workflow className="w-3.5 h-3.5 text-sol-cyan flex-shrink-0" />
         <span data-cc-tech className="text-[10px] text-sol-cyan uppercase tracking-wider font-semibold">Workflow</span>
         <span className="text-xs text-sol-text-muted truncate">{run?.workflow_name || name || "workflow"}</span>
+        {goal && <span className="text-xs text-sol-text-dim truncate min-w-0">{goal}</span>}
         <div className="ml-auto flex items-center gap-2 flex-shrink-0">
           {run?.agent_count != null && <span data-cc-tech className="text-[10px] text-sol-text-dim">{run.agent_count} agents</span>}
           {run?.total_tokens ? <span data-cc-tech className="text-[10px] text-sol-text-dim/70">{wfFmtTokens(run.total_tokens)} tok</span> : null}
@@ -1197,7 +1199,7 @@ function DynamicRunCard({ runId, name }: { runId?: string; name?: string }) {
         </div>
       </div>
       <div className="px-1.5 py-1.5">
-        {run ? <WorkflowRunNodes run={run} /> : <span className="px-1.5 text-[11px] text-sol-text-dim">loading run…</span>}
+        {run ? <WorkflowRunNodes run={run} workflow={workflow} /> : <span className="px-1.5 text-[11px] text-sol-text-dim">loading run…</span>}
       </div>
     </div>
   );
@@ -1212,6 +1214,14 @@ export function WorkflowEventBlock({ content, workflowRun, onGateChoice }: {
   try { event = JSON.parse(content); } catch { return null; }
 
   const wf = event.__wf as string;
+
+  // A run's own session (is_workflow_primary) is its log: when the run row is
+  // at hand, the started event draws the run once, its stations live with
+  // their sessions, and the per-node events it already shows stay out.
+  if (workflowRun && (wf === "node_start" || wf === "node_done" || wf === "node_failed")) return null;
+  if (wf === "started" && workflowRun) {
+    return <DynamicRunCard runId={workflowRun._id} name={event.workflow_name} goal={event.goal} />;
+  }
 
   if (wf === "started") {
     return (

@@ -90,7 +90,7 @@ export function createShortcutProvider<A extends string>(
     // and produces a new registerAction, children re-register their handlers in
     // the new dispatcher instead of leaving them orphaned in the old one.
     useEffect(() => {
-      return registerAction(action, () => handlerRef.current());
+      return registerAction(action, (source) => handlerRef.current(source));
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [registerAction, action]);
   }

@@ -33,14 +33,15 @@ import {
   type ChangeCommit,
   type ChangeKind,
 } from "@codecast/shared/changes";
-import { STRONG_MODEL, callModel, modelCost, parseJsonBlock, type SurfaceRequest } from "./lib/anthropic";
+import { callModel, modelCost, parseJsonBlock, type SurfaceRequest } from "./lib/anthropic";
+import { PROSE_MODEL } from "./lib/changesProseModel";
 import { teamVisibleInputs, type ChangesInputMode } from "./lib/changesAccess";
 import { changesZone, markDayDirty } from "./lib/changesDirty";
 import { teamDayBounds } from "./lib/teamDay";
 import { normalizeRepository } from "./lib/gitRefs";
 import { hasEditionProse, projectCommit } from "./changes";
 
-export const EDITION_PROMPT_VERSION = "edition-2";
+export const EDITION_PROMPT_VERSION = "edition-3";
 
 /** A story is written once no commit has joined it for this long, or once its day has ended (spec 7.4). */
 export const SETTLE_MS = 20 * 60_000;
@@ -48,13 +49,7 @@ export const SETTLE_MS = 20 * 60_000;
 export const EDITION_INTERVAL_MS = 60 * 60_000;
 /** What one team day's prose may spend, stories and editions together (spec 7.8). */
 export const DAILY_CAP_USD = 2;
-/**
- * Stories and editions both ask the strong model. On the evals Haiku kept
- * supplying motives no input stated (14 of 20 story replays passed against
- * Sonnet's 20 of 20), and the page is only worth reading if every reason on it
- * is sourced. A day costs cents either way, under DAILY_CAP_USD.
- */
-export const PROSE_MODEL = STRONG_MODEL;
+export { PROSE_MODEL };
 /** Story calls in flight at once. */
 const STORY_PARALLEL = 8;
 
@@ -85,6 +80,10 @@ const EDITION_STORIES = 80;
 const EDITION_BRANCHES = 10;
 const EDITION_BLOCKED = 5;
 export const EDITION_HEADLINE_MAX = 110;
+/** What the prompts ask for; the MAX values are only the clip for a reply that runs over. */
+const HEADLINE_TARGET = 60;
+const DEK_TARGET = 80;
+const EDITION_HEADLINE_TARGET = 80;
 /** How far past its target an edition or week headline may run before it is cut back to a clause. */
 export const HEADLINE_SLACK = 40;
 /** The same allowance for a story headline. */
@@ -297,14 +296,15 @@ export function storyRequest(input: StoryPromptInput): SurfaceRequest {
 
 Write the story of this work.
 
+- Be brief and direct. A teammate scans a day of these in a minute: use the fewest plain words that carry the change, and leave out file names, ids and mechanics unless they are the news.
 - Say what changed, in plain words, as it shows up for the people who use the product or work on it: what happens now that did not before. Lead with that, not with the files or the mechanics.
 - A reason is anything that says why the change was made or what it is for: a purpose, a benefit, a problem it solves, any "to ...", "so that ..." or "making it easier to ..." clause. Give one only when an input states it, and set why_source to the input it came from: ${sources.map((s) => `"${s}"`).join(", ")}. When no input states one, set why_source to "none" and write no reason anywhere: not in the headline, the dek or the body.
 - Use only what the inputs say. Name no person or session the inputs do not name, and copy ids such as jx7c6zk, ct-1234 and #412 exactly as written.
 ${riskCodes.length ? `- For each flagged risk (${riskCodes.join(", ")}), write one plain line telling a teammate what to watch, keyed by its code in risk_lines.\n` : ""}- No em dashes.
 
 Fields:
-- headline: what changed, in sentence case, at most ${HEADLINE_MAX} characters.
-- dek: one short sentence, well under ${DEK_MAX} characters, carrying the stated reason when there is one, otherwise one fact the headline leaves out.
+- headline: what changed, in sentence case, short enough to read at a glance (aim for under ${HEADLINE_TARGET} characters).
+- dek: one short line, not a summary of the work (aim for under ${DEK_TARGET} characters): the stated reason when there is one, otherwise the one fact the headline most needs; "" when the headline says it all. Further detail belongs in the body.
 - body: "" unless the inputs hold facts the headline and dek leave out; then up to ${BODY_SENTENCES} sentences of those facts and nothing else.
 - kind: one of ${KINDS.join(", ")}.
 - importance: 1 to 5, how much a teammate needs to know this today. 5 is a change everyone will notice, 1 is housekeeping.
@@ -370,7 +370,7 @@ export function parseStoryReply(text: string, input: Pick<StoryPromptInput, "ses
     : {};
   return {
     headline,
-    dek: clip(str(r.dek), DEK_MAX),
+    dek: fitProse(str(r.dek), DEK_MAX, DEK_MAX + HEADLINE_SLACK),
     ...(body ? { body } : {}),
     kind,
     importance,
@@ -464,20 +464,17 @@ function renderEditionInput(i: EditionPromptInput): string {
 
 /** The edition request prod posts. */
 export function editionRequest(input: EditionPromptInput): SurfaceRequest {
-  const areas = [...new Set(input.stories.map((s) => s.area))];
   const prompt = `${renderEditionInput(input)}
 
 Edit this day into an edition.
 
-- The headline is the day's news in one plain sentence: the change that mattered most and what it means for the team. It is a headline, not an inventory, so it does not string areas, releases or topics together; a release belongs in it only when shipping it was the news. Sentence case, at most ${EDITION_HEADLINE_MAX} characters.
-- The standfirst gives the shape of the day in two or three sentences, at most ${STANDFIRST_WORDS} words: what mattered most, and how it hangs together.
+- The headline is the day in one short, plain sentence: the change that mattered most. It is a headline, not an inventory, so it does not string areas, releases or topics together, and it does not restate a story's own headline word for word. Sentence case, aim for under ${EDITION_HEADLINE_TARGET} characters.
 - The lead is the one story a teammate most needs to read today, by its key.
-- section_order lists the areas (${areas.join(", ")}) in the order their news matters today.
 - brief_story_keys lists the stories that are housekeeping (docs, tests, chores, small fixes) and read best as one line each.
 - Say only what the stories and facts say. Give no reason a story does not give, name no one the stories do not name, and copy ids such as jx7c6zk and #412 exactly.
 - No em dashes.
 
-{"edition_headline": "...", "standfirst": "...", "lead_story_key": "s1", "section_order": ["..."], "brief_story_keys": ["..."]}`;
+{"edition_headline": "...", "lead_story_key": "s1", "brief_story_keys": ["..."]}`;
   return { model: PROSE_MODEL, max_tokens: EDITION_MAX_TOKENS, system: EDITION_SYSTEM, prompt };
 }
 

@@ -36,6 +36,7 @@
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { humanizeConvexError } from "@codecast/shared/contracts";
 import { useInboxStore } from "../../store/inboxStore";
+import { roomRecordingOn } from "./roomRecordingFields";
 import { focusExistingHuddle, huddleInOtherWindow } from "./huddleWindow";
 import { CHAT_CHANNEL_STUB_PREFIX, dmOpenInFlight, newChatMessageClientId, resolveChannelStubId } from "../../store/chatSlice";
 import { bindWalkieUpgrade, getCallTiles, getRoom, joinCall, leaveCall, mediaFailureReason, setCamera, setMuted } from "./callManager";
@@ -186,8 +187,10 @@ export type WalkieStatus = {
    * unrepresentable rather than defended (ct-46031).
    */
   liveRoom: WalkieLiveRoom | null;
-  /** Why push-to-talk cannot be used; null when it can. */
-  unavailable: null | "another-call" | "not-ready";
+  /** Why push-to-talk cannot be used; null when it can. `recorded`: the room
+   *  is being recorded and this client is not sitting in it, so a burst
+   *  would put a voice in the video that never saw the notice. */
+  unavailable: null | "another-call" | "not-ready" | "recorded";
   /** True when holding the key would answer someone — the reply affordance. */
   canReply: boolean;
   /**
@@ -473,7 +476,12 @@ function busyElsewhere(roomKey?: string): boolean {
  */
 export function walkieBlockedFor(roomKey?: string): WalkieStatus["unavailable"] {
   if (!convex) return "not-ready";
-  return busyElsewhere(roomKey) ? "another-call" : null;
+  if (busyElsewhere(roomKey)) return "another-call";
+  // Speaking or listening into a recorded room puts this person in its video;
+  // the call itself, with its notice, is the way in. Someone already sitting
+  // in it has seen the notice and may reply inside it as ever.
+  if (roomKey && roomRecordingOn(useInboxStore.getState(), roomKey) && !inRoom(roomKey)) return "recorded";
+  return null;
 }
 
 /**

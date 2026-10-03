@@ -1456,8 +1456,13 @@ pre[class*="language-"] {
   min-height: 44px;
 }
 @media (max-width: 767px) {
+  /* clip, not hidden: hidden turns body into a scroll container that never
+     scrolls, and every position: sticky under it goes inert (the guest
+     lobby's Ask to join sank below the fold on a phone). hidden stays first
+     for WebKit before 16, which drops the clip line. */
   html, body {
     overflow-x: hidden;
+    overflow-x: clip;
   }
   [data-cc-shell] {
     padding-top: env(safe-area-inset-top);
@@ -6457,9 +6462,29 @@ mark.search-hit[data-search-active] {
    the room the page has, not the window (a sidebar takes part of the window).
    Accents are var(--sol-*) only. Motion runs once on change, never ambient,
    and every animation stops under reduced motion. */
-.chg-root { container: changes / inline-size; }
+.chg-root {
+  container: changes / inline-size;
+  /* The grid's column gap: the grid and every width worked out from its columns read this one value. */
+  --chg-gap: 32px;
+  /* Risk is a texture, never a fill (spec 5.2): one hatch for every flagged
+     edge and swatch, denser on dark grounds, where a faint red disappears. */
+  --chg-risk-hatch: repeating-linear-gradient(135deg, color-mix(in srgb, var(--sol-red) 55%, transparent) 0 2px, transparent 2px 5px);
+}
+html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color-mix(in srgb, var(--sol-red) 38%, transparent) 0 2px, transparent 2px 5px); }
 .chg-ui { font-family: var(--font-ui); }
 .chg-root input { font-variant-ligatures: none; }
+/* One focus ring for every control on the page. A row's own trigger and a
+   week story's button are left out: their story draws the ring around the
+   whole row or card (.chg-story below). The filter field shows focus by its
+   border alone. */
+.chg-root :is(button, a, [role=tab]):not(.chg-row [data-story-trigger]):not(button[data-story-key]):focus-visible {
+  outline: 1px solid color-mix(in srgb, var(--sol-text) 40%, transparent);
+  outline-offset: 2px;
+}
+.chg-root input:focus-visible { outline: none; }
+/* The header's date label takes the keyboard after a day travel; it shows
+   focus as an underline, so the date never wears a box. */
+.chg-root [data-changes-date]:focus-visible { box-shadow: 0 1px 0 0 color-mix(in srgb, var(--sol-text) 45%, transparent); }
 .chg-headline {
   font-family: var(--font-ui);
   font-size: 30px;
@@ -6468,11 +6493,6 @@ mark.search-hit[data-search-active] {
   letter-spacing: -0.02em;
   font-variant-ligatures: none;
   text-wrap: balance;
-  /* A height guard: a headline is one sentence, and never more than three lines of the page. */
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  overflow: hidden;
   overflow-wrap: anywhere;
 }
 .chg-rule {
@@ -6486,14 +6506,32 @@ mark.search-hit[data-search-active] {
 .chg-grid > * { align-self: start; }
 .chg-sections { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px 32px; grid-auto-flow: row; align-items: start; }
 .chg-works-inner { position: sticky; top: 16px; }
+/* Prose keeps a reading measure at every width. Inside the lead card the
+   card is the measure, so its dek, body and risk line share one right edge. */
+.chg-standfirst, .chg-lead-prose { max-width: 68ch; }
+.chg-standfirst { text-wrap: pretty; }
+.chg-story .chg-lead-prose { max-width: none; }
 @container changes (max-width: 760px) {
   .chg-headline { font-size: 24px; line-height: 1.2; }
+}
+@container changes (max-width: 480px) {
+  .chg-headline { font-size: 21px; }
+}
+@container changes (min-width: 860px) {
+  /* Two columns from 860px: the main column, and In the works in a 17rem rail
+     beside it, so a mid-width pane reads the rail next to the lead and not
+     under every section. Rows as at 1100px below. */
+  .chg-grid { grid-template-columns: minmax(0, 1fr) 17rem; grid-template-rows: auto auto 1fr; column-gap: var(--chg-gap); }
+  .chg-span-12 { grid-column: 1 / -1; }
+  .chg-span-8 { grid-column: 1; }
+  .chg-works { grid-column: 2; grid-row: 2 / span 2; align-self: stretch; }
+  .chg-works-inner { max-height: calc(100cqh - 32px); overflow-y: auto; }
 }
 @container changes (min-width: 1100px) {
   /* Head, main column, In brief. The last row takes whatever height the
      works column needs past the other two, so In brief stays under the
      sections however long the works run. */
-  .chg-grid { grid-template-columns: repeat(12, minmax(0, 1fr)); grid-template-rows: auto auto 1fr; column-gap: 32px; }
+  .chg-grid { grid-template-columns: repeat(12, minmax(0, 1fr)); grid-template-rows: auto auto 1fr; column-gap: var(--chg-gap); }
   .chg-span-12 { grid-column: 1 / -1; }
   .chg-span-8 { grid-column: 1 / span 8; }
   /* Beside the main column and In brief under it, so no other region's
@@ -6504,20 +6542,23 @@ mark.search-hit[data-search-active] {
      about 30rem for its headline to read in two lines. Areas pair up only
      where two such columns fit. */
   .chg-sections { grid-template-columns: repeat(auto-fit, minmax(min(100%, 30rem), 1fr)); }
-  .chg-standfirst { max-width: calc(8 / 12 * 100%); }
+  /* The standfirst spans the head's full row; its right edge is the main
+     column's, eight columns and their seven gaps, so it lines up with the
+     lead card and the sections under it. */
+  .chg-span-12 .chg-standfirst { max-width: calc((100% - 11 * var(--chg-gap)) / 12 * 8 + 7 * var(--chg-gap)); }
 }
 /* The release stamp: a perforated line through a centred pill. */
 .chg-perf { height: 1px; flex: 1; background: repeating-linear-gradient(90deg, var(--sol-border) 0 4px, transparent 4px 7px); }
 /* In brief: a dotted leader from the line to its area. */
+/* Dots big enough to render at a device pixel ratio of 1, on the first line's baseline. */
 .chg-leader {
   flex: 1;
   min-width: 16px;
-  height: 4px;
-  align-self: center;
-  background: radial-gradient(var(--sol-text-dim) 0.6px, transparent 0.6px) 0 50% / 4px 4px repeat-x;
-  opacity: 0.7;
+  height: 3px;
+  align-self: baseline;
+  background: radial-gradient(circle, var(--sol-text-dim) 0.9px, transparent 1.15px) 0 0 / 5px 3px repeat-x;
+  opacity: 1;
 }
-.chg-hatch { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--sol-red) 22%, transparent) 0 2px, transparent 2px 6px); }
 .chg-pending-bar {
   display: block;
   height: 0.7em;
@@ -6528,21 +6569,37 @@ mark.search-hit[data-search-active] {
   background-size: 200% 100%;
   animation: ccShimmer 2.4s linear infinite;
 }
-.chg-story[data-focused="true"] { background: color-mix(in srgb, var(--sol-text) 5%, transparent); }
-/* A row is one control: the whole of it answers the pointer. */
-.chg-row { cursor: pointer; }
-.chg-row:not([data-focused="true"]):hover { background: color-mix(in srgb, var(--sol-text) 3%, transparent); transition: background-color 120ms; }
+/* The cursor's tint marks a closed row; an open one is marked by its drawer,
+   and a tint across the drawer would read as a hover state. A card (the lead,
+   the week's biggest story) keeps its own fill and takes a hairline inside its
+   border instead, its drop shadow kept. */
+.chg-row.chg-story[data-focused="true"]:not(:has(> .chg-drawer[data-state="open"])) { background: color-mix(in srgb, var(--sol-text) 5%, transparent); }
+.chg-story.bg-sol-card[data-focused="true"] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sol-text) 22%, transparent), var(--tw-shadow, 0 0 transparent); }
+/* A row's head is one control: the whole of it answers the pointer. Its open
+   drawer is reading matter, so it neither points nor tints the row on hover. */
+.chg-row [data-story-trigger] { cursor: pointer; }
+.chg-row .chg-drawer { cursor: auto; }
+.chg-row:not([data-focused="true"]):hover:not(:has(.chg-drawer:hover)) { background: color-mix(in srgb, var(--sol-text) 3%, transparent); transition: background-color 120ms; }
+/* A row's worded risks: the first two show, each clamped at two lines, then
+   "+N more". Its open drawer lifts the clamp and shows them all. */
+.chg-risk-extra { display: none; }
+.chg-row:has(> .chg-drawer[data-state="open"]) .chg-risk-clamp { display: block; -webkit-line-clamp: unset; overflow: visible; }
+.chg-row:has(> .chg-drawer[data-state="open"]) .chg-risk-more { display: none; }
 /* References on the page (sessions, pull requests) are quiet ink, not the
    loudest thing on it; they still answer as links on hover and focus. */
 .chg-root .entity-ref { background: transparent; color: color-mix(in srgb, var(--sol-text) 62%, transparent); font-weight: 400; }
 .chg-root .entity-ref:hover, .chg-root .entity-ref:focus-visible { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 6%, transparent); }
 .chg-story { scroll-margin: 24px 0 96px; }
-.chg-story:has(:focus-visible), .chg-story:focus-visible { outline: 1px solid color-mix(in srgb, var(--sol-text) 40%, transparent); outline-offset: 2px; }
-/* The open drawer's height animation, opening only: a drawer that closes goes
-   at once, so the story that opens keeps its place on screen. */
-@keyframes chgOpen { from { height: 0; } to { height: var(--radix-accordion-content-height); } }
+/* A row rings when its own trigger has focus, not when a link in its open
+   drawer does: that link wears its own ring, and two would say two things. */
+.chg-row:has(> [data-story-trigger]:focus-visible, > * > [data-story-trigger]:focus-visible), .chg-story:focus-visible { outline: 1px solid color-mix(in srgb, var(--sol-text) 40%, transparent); outline-offset: 2px; }
+/* An opening drawer is at its full height at once, and its contents rise in.
+   Its height never animates: the story that opens keeps its place only if
+   the page measures the drawers at their real size, and a background tab
+   parks an animation on its first frame, which for a height is a drawer
+   shut. A drawer that closes goes at once. */
 .chg-drawer { overflow: hidden; }
-.chg-drawer[data-state="open"] { animation: chgOpen 200ms ease-out; }
+.chg-drawer[data-state="open"] > * { animation: chgRise 180ms ease-out both; }
 /* Transform with a partial fade: a background tab parks an animation on its
    first frame, and a region parked invisible is a page nobody can read. */
 @keyframes chgRise { from { opacity: 0.35; transform: translateY(4px); } to { opacity: 1; transform: none; } }
@@ -6558,6 +6615,6 @@ mark.search-hit[data-search-active] {
 @keyframes chgPulse { 0% { opacity: 1; } 35% { opacity: 0.3; } 100% { opacity: 1; } }
 .chg-pulse { animation: chgPulse 700ms ease-out 1; }
 @media (prefers-reduced-motion: reduce) {
-  .chg-rise, .chg-slide-next, .chg-slide-prev, .chg-prose-in, .chg-roll, .chg-pulse, .chg-pending-bar, .chg-drawer[data-state="open"] { animation: none; }
-  .chg-row:not([data-focused="true"]):hover { transition: none; }
+  .chg-rise, .chg-slide-next, .chg-slide-prev, .chg-prose-in, .chg-roll, .chg-pulse, .chg-pending-bar, .chg-drawer[data-state="open"] > * { animation: none; }
+  .chg-row:not([data-focused="true"]):hover:not(:has(.chg-drawer:hover)) { transition: none; }
 }

@@ -57,4 +57,20 @@ export class SimLabels {
   entries(): [id: string, label: string][] {
     return [...this.byId];
   }
+
+  // A run's recorded labels (world.json, result.json), for a reader. A pair
+  // that would clash with one already taken is skipped rather than thrown on.
+  static from(byId: Record<string, string>): SimLabels {
+    const labels = new SimLabels();
+    for (const [id, label] of Object.entries(byId)) if (!labels.byId.has(id) && !labels.byLabel.has(label)) labels.register(id, label);
+    return labels;
+  }
+}
+
+// Whether a delivery is one `--trace <label>` prints: its channel, label and
+// producer carry the label's id raw, or the label once ids are relabelled.
+// The runner (dsl.ts) and the Evals sim run page both decide by this.
+export function traceMatches(d: { channel: string; label: string; producer: string }, trace: string, labels: SimLabels): boolean {
+  const text = `${d.channel} ${d.label} ${d.producer}`;
+  return (labels.has(trace) && text.includes(labels.id(trace))) || labels.relabel(text).includes(trace);
 }

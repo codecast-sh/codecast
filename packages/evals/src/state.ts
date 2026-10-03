@@ -33,6 +33,8 @@ export interface SurfaceState {
 export interface RepCost {
   usd: number;
   seconds: number;
+  /** The costliest rep of that run: what `check` reserves for a rep in flight (replay.ts laneRepUsd), since an agent rep can cost several times the average. */
+  peakUsd?: number;
 }
 
 export type EvalsState = Record<string, SurfaceState>;
@@ -58,6 +60,11 @@ export function perRepUsd(meta: SurfaceMeta, state: EvalsState, model = meta.mod
   return state[meta.id]?.perRep?.[model]?.usd ?? meta.maxUsdPerRep;
 }
 
+/** What one rep on a model may cost: the costliest rep of the last real run on it, else the average (perRepUsd). */
+export function perRepPeakUsd(meta: SurfaceMeta, state: EvalsState, model = meta.model): number {
+  return state[meta.id]?.perRep?.[model]?.peakUsd ?? perRepUsd(meta, state, model);
+}
+
 /** What `check` estimates for one surface, and refuses on when it is over `--budget`. */
 export function checkCostUsd(meta: SurfaceMeta, freezes: number, state: EvalsState, reps = meta.reps.check, model = meta.model): number {
   return reps * freezes * perRepUsd(meta, state, model);
@@ -78,11 +85,11 @@ export function checkMinutes(work: Array<{ meta: SurfaceMeta; reps: number; mode
   return seconds / Math.max(1, parallel) / 60;
 }
 
-/** Each model's average cost and wall time over a run set's real reps, for SurfaceState.perRep. */
+/** Each model's average cost and wall time, and its costliest rep, over a run set's real reps, for SurfaceState.perRep. */
 export function repCostsByModel(reps: Array<{ model?: string | null; costUsd: number; realMs: number }>, fallbackModel: string): Record<string, RepCost> {
   const by = new Map<string, Array<{ costUsd: number; realMs: number }>>();
   for (const r of reps) by.set(r.model ?? fallbackModel, [...(by.get(r.model ?? fallbackModel) ?? []), r]);
-  return Object.fromEntries([...by].map(([model, rs]) => [model, { usd: rs.reduce((t, r) => t + r.costUsd, 0) / rs.length, seconds: rs.reduce((t, r) => t + r.realMs, 0) / rs.length / 1000 }]));
+  return Object.fromEntries([...by].map(([model, rs]) => [model, { usd: rs.reduce((t, r) => t + r.costUsd, 0) / rs.length, seconds: rs.reduce((t, r) => t + r.realMs, 0) / rs.length / 1000, peakUsd: Math.max(...rs.map((r) => r.costUsd)) }]));
 }
 
 /**

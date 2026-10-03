@@ -79,7 +79,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { ccKeychainReadArgs, ccKeychainReadItems } from "../src/ccKeychain.ts";
-import { accountTokenFilePath } from "../src/ccAccounts.ts";
+import { accountTokenFilePath, fleetStoreDir, fleetStoreEnabled } from "../src/ccAccounts.ts";
 
 function arg(name: string, fallback?: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -123,9 +123,14 @@ function profileToken(name: string): string {
   if (!m) throw new Error(`no CLAUDE_CODE_OAUTH_TOKEN in ${file}`);
   return m[1];
 }
-/** The machine login, best candidate first; the scoped item when this shell itself runs under a config dir. */
+/** The login every session on this machine runs on: the machine item (or the
+ *  scoped one when this shell runs under a config dir), then the fleet store's
+ *  item, which the daemon rewrites on every account switch. A signed-out
+ *  machine login keeps its item with the token blanked, so the fleet store is
+ *  what a run must fall back to, or it fails while every session works. */
 function loginToken(): string {
-  for (const item of ccKeychainReadItems()) {
+  const items = [...ccKeychainReadItems(), ...(fleetStoreEnabled() ? ccKeychainReadItems(fleetStoreDir()) : [])];
+  for (const item of items) {
     const r = spawnSync("security", ccKeychainReadArgs(item), { encoding: "utf8" });
     if (r.status !== 0 || !r.stdout.trim()) continue;
     try {
@@ -133,7 +138,7 @@ function loginToken(): string {
       if (tok) return tok;
     } catch { /* not this item */ }
   }
-  throw new Error("no Claude Code login in the keychain; run `claude` once on this machine");
+  throw new Error("no Claude Code login in the keychain or the fleet store; run `claude` once on this machine, or pass --account <profile>");
 }
 
 fs.mkdirSync(runDir, { recursive: true });

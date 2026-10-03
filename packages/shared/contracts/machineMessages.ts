@@ -514,7 +514,34 @@ export function isBootstrapPrompt(rawContent: string | null | undefined): boolea
 // report that lost its session wrapper, or the prompt that seated a standing
 // agent.
 export function isMachineDeliveredMessage(rawContent: string | null | undefined): boolean {
-  return isAgentContextMessage(rawContent) || isSessionMessage(rawContent) || isAgentMessage(rawContent) || isTeammateMessage(rawContent) || isScheduledTaskMessage(rawContent) || isTaskNotificationMessage(rawContent) || isChatWakePrompt(rawContent) || isUnwrappedSessionReport(rawContent) || isBootstrapPrompt(rawContent) || isSessionEscalationMessage(rawContent);
+  return isAgentContextMessage(rawContent) || isSessionMessage(rawContent) || isAgentMessage(rawContent) || isTeammateMessage(rawContent) || isScheduledTaskMessage(rawContent) || isTaskNotificationMessage(rawContent) || isChatWakePrompt(rawContent) || isUnwrappedSessionReport(rawContent) || isBootstrapPrompt(rawContent) || isSessionEscalationMessage(rawContent) || isRoleWakeFrame(rawContent) || isCodexApprovalReviewPrompt(rawContent) || isAgentDefinitionPrompt(rawContent);
+}
+
+// The prompt Codex writes into the thread it spawns to assess an approval
+// request. Rollouts mark that thread as spawned (cli isCodexProgramLaunch),
+// but sessions synced before codecast read the mark carry only this text.
+const CODEX_APPROVAL_REVIEW_RE = /^The following is the Codex agent history (?:whose request action you are assessing|added since your last approval assessment)/;
+
+export function isCodexApprovalReviewPrompt(rawContent: string | null | undefined): boolean {
+  return !!rawContent && CODEX_APPROVAL_REVIEW_RE.test(stripInjectionNoise(rawContent).trimStart());
+}
+
+// An agent or skill definition file handed to a session as its prompt: the
+// file's own frontmatter (`name:` then `description:`) opens the message. A
+// launcher pastes the file whole; a person writing to an agent does not open
+// with its definition.
+const AGENT_DEFINITION_RE = /^---\r?\nname:[^\n]*\r?\ndescription:/;
+
+export function isAgentDefinitionPrompt(rawContent: string | null | undefined): boolean {
+  return !!rawContent && AGENT_DEFINITION_RE.test(stripInjectionNoise(rawContent).trimStart());
+}
+
+// LEGACY: the frame the role wake rail delivered into a role's standing
+// session (`<role-wake or-23 wake="rw-967" …>`). The rail is gone (roles wake
+// through triggers since 2026-09-25); threads written before then still hold
+// the frames, and they are not anything the session's person wrote.
+export function isRoleWakeFrame(rawContent: string | null | undefined): boolean {
+  return !!rawContent && /^<role-wake[\s>]/.test(stripInjectionNoise(rawContent));
 }
 
 // --- A session moving between a role and a person (org-roles-run-work.md R1, revised) ---

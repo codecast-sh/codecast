@@ -10,7 +10,7 @@
 
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { FolderGit2, Globe, Waypoints, Workflow, Zap, MessageSquare, MessagesSquare, FolderKanban, Flag, Newspaper } from "lucide-react";
+import { FolderGit2, Globe, Radar, Waypoints, Workflow, Zap, MessageSquare, MessagesSquare, FolderKanban, Flag, Newspaper } from "lucide-react";
 import { RailHeading, NavCount, NavSection, type SectionRowSpec } from "./navPrimitives";
 import { DocsNavIcon, SessionsNavIcon, TasksNavIcon } from "./navIcons";
 import { TeamIcon } from "../TeamIcon";
@@ -179,6 +179,7 @@ export type SidebarNavActive = {
   workflows: boolean;
   line: boolean;
   triggers: boolean;
+  ops: boolean;
   org: boolean;
   /** Absent where the rail never shows Changes (the marketing hero). */
   changes?: boolean;
@@ -379,6 +380,15 @@ export function SidebarNavView({
           isNarrow={isNarrow}
           onMobileClose={onMobileClose}
           icon={<Zap className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
+        />
+        <NavSection
+          label="Ops"
+          href="/ops"
+          isActive={active.ops}
+          isNarrow={isNarrow}
+          onMobileClose={onMobileClose}
+          title="Ops: your product's errors, checks, replays and metrics"
+          icon={<Radar className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
         />
         {orgOn && (<>
         <NavSection

@@ -177,6 +177,7 @@ const AdminDaemonLogs = lazy(() => import("@/app/admin/daemon-logs/page"));
 const ConfigPage = lazy(() => import("@/app/config/page"));
 const Memory = lazy(() => import("@/app/memory/page"));
 const Evals = lazy(() => import("@/app/evals/page"));
+const Ops = lazy(() => import("@/app/ops/page"));
 
 // Standalone shell pages (outside the shared shell — page-specific props / not tab-routable)
 const Explore = lazy(() => import("@/app/explore/page"));
@@ -367,6 +368,9 @@ export const ROUTES: RouteEntry[] = [
   // (components/evals/evalsPaths.ts), so a new view needs no route here.
   { path: "evals", component: cast(Evals), layout: "dashboardShell", tab: "/evals" },
   { path: "evals/*", component: cast(Evals), layout: "dashboardShell", tab: "/evals/*" },
+  // Ops the same way (components/ops/opsPaths.ts): tabs, issues and replays.
+  { path: "ops", component: cast(Ops), layout: "dashboardShell", tab: "/ops" },
+  { path: "ops/*", component: cast(Ops), layout: "dashboardShell", tab: "/ops/*" },
 
   // -- Standalone shell pages (outside the shared shell) --
   // `windows` is NOT in DashboardShell in App.tsx, yet TabContent CAN render it in

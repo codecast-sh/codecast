@@ -55,6 +55,7 @@ test("in a session a program launched, only a message a person queued counts", a
     { _id: "conversations_trigger", user_id: "users_owner", team_id: "teams_team", agent_task_id: "agent_tasks_a" },
     { _id: "conversations_headless", user_id: "users_owner", team_id: "teams_team", cli_flags: "--print" },
     { _id: "conversations_sub", user_id: "users_owner", team_id: "teams_team", parent_conversation_id: "conversations_lead" },
+    { _id: "conversations_test_run", user_id: "users_owner", team_id: "teams_team", project_path: "/var/folders/sr/T/codecast-test-cwd-Ou3Jod" },
   ] as any[];
   const db = makeFakeDb({ user_send_daily: [] });
   for (const c of launched) {

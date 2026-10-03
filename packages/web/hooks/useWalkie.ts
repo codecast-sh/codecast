@@ -119,6 +119,7 @@ export function walkieJoinReason(roomKey: string | undefined): string | null {
   const blocked = walkieBlockedFor(roomKey);
   if (blocked === "another-call") return "You are in another call";
   if (blocked === "not-ready") return "Calls are not ready yet";
+  if (blocked === "recorded") return "This call is being recorded. Join it to talk";
   return null;
 }
 

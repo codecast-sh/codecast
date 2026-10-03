@@ -18,3 +18,15 @@ export function timingSafeEqualHex(a: string, b: string): boolean {
   for (let i = 0; i < a.length; i++) mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return mismatch === 0;
 }
+
+/**
+ * Whether `signature` is the lowercase hex HMAC-SHA256 of the raw `body`
+ * under `secret`, the scheme Linear and Sentry webhooks use. Fails closed: no
+ * secret or no signature is never a match. A sender's uppercase hex is
+ * folded, since the digest is the same either way.
+ */
+export async function verifyHmacHex(body: string, signature: string | null | undefined, secret: string | null | undefined): Promise<boolean> {
+  if (!secret || !signature) return false;
+  const expected = hex(await hmacSha256(encoder.encode(secret).buffer as ArrayBuffer, body));
+  return timingSafeEqualHex(signature.trim().toLowerCase(), expected);
+}

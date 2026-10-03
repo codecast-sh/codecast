@@ -320,7 +320,7 @@ export const callbackHandler = async (ctx: any, request: Request): Promise<Respo
 export const callback = httpAction(callbackHandler);
 
 /** The one connection row a scope holds for a provider, pending or not. */
-async function connectionRowFor(
+export async function connectionRowFor(
   ctx: { db: any },
   provider: string,
   scope: { team_id?: any; user_id?: any },
@@ -445,8 +445,9 @@ export const confirmConnection = action({
 /** Is this person still allowed to hold this connection? Asked at CONFIRM, not
  *  only at connect: the fifteen minutes in between are enough to leave a team,
  *  and a grant activated after that answers for a workspace nobody in it
- *  authorised. */
-async function stillAuthorized(ctx: { db: any }, row: any, userId: any): Promise<boolean> {
+ *  authorised. Token connectors (tokenConnectors.ts) ask the same question
+ *  before storing a pasted credential. */
+export async function stillAuthorized(ctx: { db: any }, row: any, userId: any): Promise<boolean> {
   if (row.team_id) {
     const member = await ctx.db
       .query("team_memberships")

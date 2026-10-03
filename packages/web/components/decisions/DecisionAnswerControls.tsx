@@ -47,7 +47,8 @@ function GenericAnswerControls({
   onDismiss?: () => void;
   keys?: boolean;
   keyScope?: RefObject<HTMLElement | null>;
-  size?: "full" | "compact";
+  /** "line" is a change card's chip row in the queue; other kinds draw it as compact. */
+  size?: "full" | "compact" | "line";
   /** The option a role on the ladder recommended (the latest hop with one). */
   recommendation?: number;
 }) {
@@ -153,7 +154,7 @@ function GenericAnswerControls({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [keys, keyScope, kind, decision.options.length, answerSingle, answerText, submit, onDismiss, togglePick, setOtherOpen]);
 
-  const compact = size === "compact";
+  const compact = size !== "full";
   const submitBtn = (
     <button onClick={submit} className={`flex items-center gap-2 rounded border border-sol-green/40 text-sol-text transition-colors hover:bg-sol-green hover:text-sol-bg ${compact ? "px-2.5 py-1.5 text-[12px]" : "px-3 py-2 text-sm"}`}>
       {keys && <KeyCap size="xs">return</KeyCap>}

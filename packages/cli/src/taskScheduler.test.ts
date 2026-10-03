@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, spyOn } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { TaskScheduler, buildRunLaunch, runPaneFinished, triggerRunTaskId } from "./taskScheduler.js";
+import { TaskScheduler, buildRunLaunch, buildRunScript, runPaneFinished, triggerRunTaskId } from "./taskScheduler.js";
 import { deviceId } from "./remote/device.js";
 import { runTriggerPrecheck } from "./precheckRunner.js";
 import { triggerPrecheckPassed } from "@codecast/shared/contracts";
@@ -280,6 +280,26 @@ describe("spawned run launch flags", () => {
     expect(extraAgentArgs).toContain("--resume");
     expect(extraAgentArgs[extraAgentArgs.indexOf("--resume") + 1]).toBe("parked-uuid");
     expect(extraAgentArgs).not.toContain("--session-id");
+  });
+
+  // ct-56748: a bare `claude -p` reads the machine keychain, which can sit
+  // signed out while every other launch runs on the fleet store.
+  it("runs a Claude run on the launch account, never the bare keychain login", () => {
+    const prefix = ". /home/x/.codecast/cc-fleet.env 2>/dev/null || true; ";
+    const script = buildRunScript({
+      agentType: "claude", agentBin: "claude", extraAgentArgs: ["--session-id", "u1"],
+      promptFile: "/tmp/p.txt", scriptFile: "/tmp/s.sh", accountPrefix: prefix,
+    });
+    const line = script.split("\n").find((l) => l.includes(" -p "))!;
+    expect(line.startsWith(`${prefix}claude -p "$(cat /tmp/p.txt)"`)).toBe(true);
+  });
+
+  it("leaves a codex run's launch alone", () => {
+    const script = buildRunScript({
+      agentType: "codex", agentBin: "codex", extraAgentArgs: [], promptFile: "/tmp/p.txt", scriptFile: "/tmp/s.sh",
+      accountPrefix: ". /x 2>/dev/null || true; ",
+    });
+    expect(script).not.toContain("/x 2>");
   });
 
   it("uses codex's -m for a codex trigger", () => {

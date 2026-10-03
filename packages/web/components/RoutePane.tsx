@@ -57,6 +57,7 @@ const Windows = lazyPage("@/app/windows/page", () => import("@/app/windows/page"
 const ConfigPage = lazyPage("@/app/config/page", () => import("@/app/config/page"));
 const Memory = lazyPage("@/app/memory/page", () => import("@/app/memory/page"));
 const Evals = lazyPage("@/app/evals/page", () => import("@/app/evals/page"));
+const Ops = lazyPage("@/app/ops/page", () => import("@/app/ops/page"));
 const Vault = lazyPage("@/app/vault/page", () => import("@/app/vault/page"));
 const Artifacts = lazyPage("@/app/artifacts/page", () => import("@/app/artifacts/page"));
 const Notifications = lazyPage("@/app/notifications/page", () => import("@/app/notifications/page"));
@@ -178,6 +179,9 @@ const ROUTES: RouteEntry[] = [
   // Evals views reconciles instead of remounting the shell.
   { pattern: /^\/evals$/, paramNames: [], component: Evals },
   { pattern: /^\/evals\/(.+)$/, paramNames: ["rest"], component: Evals },
+  // Ops likewise: one component for the tabs and the detail pages.
+  { pattern: /^\/ops$/, paramNames: [], component: Ops },
+  { pattern: /^\/ops\/(.+)$/, paramNames: ["rest"], component: Ops },
   { pattern: /^\/notifications$/, paramNames: [], component: Notifications },
   { pattern: /^\/questions$/, paramNames: [], component: Questions },
   { pattern: /^\/line$/, paramNames: [], component: Line },

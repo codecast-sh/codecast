@@ -57,13 +57,13 @@ describe("line.cast template", () => {
     expect(validateWorkflow(graph)).toEqual([]);
     expect([...graph.nodes.keys()]).toEqual([
       "start", "exit", "ground", "park", "plan", "plan_gate", "analyze", "prove", "red", "dissolve",
-      "implement", "verify", "green", "eval", "review", "card_draft", "card_write", "card",
+      "implement", "verify", "green", "eval", "unscored", "review", "card_draft", "card_write", "card",
       "decide", "reopen", "drop", "ship", "merge", "watch",
     ]);
     // The merge step (the-line.md L12) is a script node that reports to the
     // server about this run; it exits 0 whether it merged or left it.
     expect(graph.nodes.get("merge")?.type).toBe("command");
-    expect(graph.nodes.get("merge")?.script).toBe("cast line merge --run $run_id --branch $branch --into $default_branch --cwd $project_path");
+    expect(graph.nodes.get("merge")?.script).toBe("cast line merge --run $run_id --branch $branch --into $default_branch --cwd $project_path --task $task_id");
     expect(graph.nodes.get("merge")?.timeout).toBe(600);
     expect(graph.nodes.get("verify")?.type).toBe("command");
     expect(graph.nodes.get("verify")?.script).toContain("bash -c $line.commands.check");
@@ -229,7 +229,9 @@ describe("line.cast template", () => {
     expect(fired("verify", { outcome: "failure", category: "code" })).toEqual(["implement"]);
     expect(fired("green", { outcome: "failure" })).toEqual(["implement"]);
     expect(fired("green", { outcome: "success" })).toEqual(["eval"]);
-    expect(fired("eval", { outcome: "failure" })).toEqual(["implement"]);
+    expect(fired("eval", { outcome: "failure", "eval.exit_code": "1" })).toEqual(["implement"]);
+    // No verdict on the change (no reps, nothing scored) is not the builder's to fix.
+    expect(fired("eval", { outcome: "failure", "eval.exit_code": "2" })).toEqual(["unscored"]);
     expect(fired("eval", { outcome: "success" })).toEqual(["review"]);
   });
 
@@ -240,7 +242,9 @@ describe("line.cast template", () => {
     expect(graph.nodes.get("implement")?.reviewer).toBeUndefined();
     expect(from(graph, "card_draft")).toEqual(["card_write:"]);
     expect(from(graph, "card")).toEqual(["decide:outcome = success", "card_write:outcome = failure"]);
-    expect(from(graph, "merge")).toEqual(["watch:"]);
+    // A merge left to a person exits 0 and goes on to watch (the task carries
+    // the blocker); a merge step that crashed ends the run as failed.
+    expect(from(graph, "merge")).toEqual(["watch:outcome = success"]);
     expect(from(graph, "watch")).toEqual(["exit:"]);
     expect(graph.nodes.get("watch")?.script).toBe("cast task update $task_id --watch-days $line.watch_days");
   });
@@ -298,7 +302,7 @@ describe("line.cast template", () => {
     expect(scripts.eval).toContain("cmd=''");
     expect(scripts.ship).toContain("cmd=''");
     const all = prompts.join("\n");
-    expect(all).toContain("principles, each with a stable id: none");
+    expect(all).toContain("principles, each with a stable id: https://github.com/codecast-sh/codecast/blob/main/docs/principles.md (the shared set)\n");
     expect(all).toContain("github.com/codecast-sh/codecast/blob/main/docs/prompting.md");
   });
 
@@ -388,13 +392,30 @@ describe("line.cast station scripts", () => {
     const missing = run("red", prove);
     expect(missing.code).toBe(0);
     expect(missing.json.red).toBe(false);
-    expect(missing.json.why).toBe("the prove command did not show the miss: no freezes for ct-1");
+    expect(missing.json.why).toBe("the prove command did not show the miss on the base: no freezes for ct-1");
     fs.writeFileSync(path.join(runDir(), "freezes.txt"), "fz-1\n");
-    expect(run("red", prove).json).toEqual({ red: true, dir: runDir(), why: "the prove command shows the miss" });
+    expect(run("red", prove).json).toEqual({ red: true, dir: runDir(), why: "the prove command shows the miss on the base" });
     expect(calls()).toEqual([]);
     const none = run("red", { category: "prompt" });
     expect(none.json).toEqual({ red: true, dir: runDir(), why: "no prove command; passed with a note" });
     expect(calls()).toEqual([["task", "comment", "ct-1", "This project's line profile names no prove command, so the prove station passed without showing the miss.", "-t", "progress"]]);
+  });
+
+  test("red for a prompt on a rerun: the branch carries the last round's fix, so the miss is shown on the merge base and the branch comes back", () => {
+    const git = (...a: string[]) => spawnSync("git", ["-C", repo, "-c", "user.email=t@t", "-c", "user.name=t", ...a], { encoding: "utf-8" }).stdout.trim();
+    fs.writeFileSync(path.join(repo, "prompt.txt"), "old\n");
+    git("add", "."); git("commit", "-qm", "base"); git("branch", "-M", "main");
+    git("checkout", "-qb", "codecast/line-ct-1");
+    fs.writeFileSync(path.join(repo, "prompt.txt"), "fixed\n");
+    git("commit", "-qam", "fix");
+    // The miss shows only while the prompt is the old one.
+    const prove = { category: "prompt", "line.commands.prove": 'grep -q old prompt.txt' };
+    expect(run("red", prove).json).toEqual({ red: true, dir: runDir(), why: "the prove command shows the miss on the base" });
+    expect(git("rev-parse", "--abbrev-ref", "HEAD")).toBe("codecast/line-ct-1");
+    expect(fs.readFileSync(path.join(repo, "prompt.txt"), "utf-8")).toBe("fixed\n");
+    // Uncommitted work is never carried to the base.
+    fs.writeFileSync(path.join(repo, "prompt.txt"), "edited\n");
+    expect(run("red", prove).json.why).toBe("the worktree has uncommitted changes, so it cannot go to the base to show the miss");
   });
 
   test("green: writes proof.json red then green for the card, and fails while the reproduction still fails", () => {
@@ -430,7 +451,7 @@ describe("line.cast station scripts", () => {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, "reps.json"), "{}\n");
     const crashed = run("eval", { "line.commands.eval": "echo boom; exit 2" });
-    expect(crashed.code).toBe(1);
+    expect(crashed.code).toBe(2);
     expect(crashed.out).toContain(`the eval command exited 2 and wrote no ${dir}/reps.json`);
     expect(calls()).toEqual([]);
     expect(run("eval", {}).code).toBe(0);
@@ -560,7 +581,7 @@ describe("line.cast offline run through the session path", () => {
         effects[stationOf[id]]?.();
         out = { sessions: [{ id, work_state: "done", is_live: false }] };
       } else if (route === "/cli/sessions/state/get") {
-        out = { status: "done", text: pinned[stationOf[body.session]] ?? "" };
+        out = { ok: true, status: "done", state: pinned[stationOf[body.session]] ?? null };
       } else if (route === "/cli/workflow-runs/poll-gate") {
         out = { status: "paused", gate_response: gateAnswers.shift() ?? null };
       } else if (route === "/cli/work/update" || route === "/cli/work/comment" || route === "/cli/decide") out = { success: true, id: "sd-1" };
@@ -701,6 +722,25 @@ describe("line.cast offline run through the session path", () => {
     expect(calls.find((c) => c.route === "/cli/work/comment")?.body.text).toContain("killed");
     expect(calls.filter((c) => c.route === "/cli/spawn")).toHaveLength(1);
   }, 30000);
+
+  test("a hand parked on a usage limit is waited out, not read as settled", async () => {
+    const settle = globalThis.fetch;
+    let parkedPolls = 0;
+    globalThis.fetch = (async (url: any, init: any) => {
+      const body = JSON.parse(init?.body || "{}");
+      if (String(url).endsWith("/cli/inbox") && stationOf[body.session_ids?.[0]] === "prove" && parkedPolls < 3) {
+        parkedPolls++;
+        calls.push({ route: "/cli/inbox", body });
+        return new Response(JSON.stringify({ sessions: [{ id: body.session_ids[0], work_state: "needs_input", is_live: true, blocked_on: "limit" }] }), { status: 200 });
+      }
+      return settle(url, init);
+    }) as typeof fetch;
+    gateAnswers = ["S"];
+    const outcome = await runWorkflow(offlineLine(tmpDir), opts({ runId: "run_1" }));
+    expect(parkedPolls).toBe(3);
+    expect(outcome).toBe("completed");
+    expect(stations()).toContain("implement");
+  });
 
   test("the review hand receives only the branch, title and criteria: no context or error appendix", async () => {
     const graph = offlineLine(tmpDir);
