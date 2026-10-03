@@ -13,7 +13,7 @@ import { Ban, CornerDownLeft, History, Network, Redo2, Undo2 } from "lucide-reac
 import { cn } from "../../lib/utils";
 import { visitTimeAgo, type ResolvedVisit } from "../../lib/recentVisits";
 import { undoActLabel, undoSetAsideLine, undoWindowWords, type UndoTimelineModel, type UndoTimelineRow } from "../../lib/undoHistory";
-import type { UndoTimelineMode } from "../../lib/undoTimelineOpen";
+import type { UndoTimelineFlash, UndoTimelineMode } from "../../lib/undoTimelineOpen";
 import { HISTORY_STRUCK, HistoryFold, HistoryRailDot, HistoryRailLine } from "../history/HistoryRail";
 import { RecentVisitGlyph } from "../RecentVisitRow";
 import { KeyCap, MenuKeyCaps } from "../KeyboardShortcutsHelp";
@@ -33,12 +33,17 @@ export type UndoTimelineViewProps = {
   /** The first look at every key: the card's own chords (⌘Z steps while it
    *  is open). Return true when handled. */
   onKey?: (e: ReactKeyboardEvent) => boolean;
+  /** A ⌘Z stopped at this row (its undo widens access): select and mark it. */
+  flash?: UndoTimelineFlash | null;
 };
 
 const HINT = "flex items-center gap-1";
 const CHORD = "inline-flex items-center gap-[2px] align-middle";
 
-export function UndoTimelineView({ model, mode, onUndoTo, onRedoTo, onOpen, onOpenOrg, onClose, onKey }: UndoTimelineViewProps) {
+/** How long a flashed row stays marked. */
+const FLASH_MS = 1400;
+
+export function UndoTimelineView({ model, mode, onUndoTo, onRedoTo, onOpen, onOpenOrg, onClose, onKey, flash }: UndoTimelineViewProps) {
   const peek = mode === "peek";
   // A peek shows the head with a few rows either side; interactive shows all.
   const { rows, headIndex, atEnd } = useMemo(() => {
@@ -63,6 +68,23 @@ export function UndoTimelineView({ model, mode, onUndoTo, onRedoTo, onOpen, onOp
     lastHead.current = model.headId;
     setSelected(model.headId ?? model.rows[model.rows.length - 1]?.id ?? "");
   }, [model.headId, model.rows]);
+
+  // A ⌘Z that stopped at a row it may not take back: the press is not a dead
+  // key, the row it stopped at lights up and takes the selection.
+  // Only stops made while this card is mounted: an older one is history.
+  const [flashing, setFlashing] = useState<string | null>(null);
+  const seenFlash = useRef(flash?.n);
+  const flashN = flash?.n;
+  useLayoutEffect(() => {
+    if (!flash || flash.n === seenFlash.current) return;
+    seenFlash.current = flash.n;
+    if (!rows.some((r) => r.id === flash.id)) return;
+    setSelected(flash.id);
+    setFlashing(flash.id);
+    const t = setTimeout(() => setFlashing(null), FLASH_MS);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one run per stop
+  }, [flashN]);
 
   // The selected row stays in sight however the selection moved there
   // (Home, End, the head following ⌘Z): Enter acts on what the user sees.
@@ -179,6 +201,7 @@ export function UndoTimelineView({ model, mode, onUndoTo, onRedoTo, onOpen, onOp
                   key={row.id}
                   row={row}
                   aboveHead={i < headIndex}
+                  flashing={flashing === row.id}
                   foldOpen={folds.has(row.id)}
                   onFold={() => toggleFold(row.id)}
                   onAct={() => act(row)}
@@ -272,9 +295,10 @@ function RowDot({ row }: { row: UndoTimelineRow }) {
   }
 }
 
-function Row({ row, aboveHead, foldOpen, onFold, onAct, onOpen, refCb }: {
+function Row({ row, aboveHead, flashing, foldOpen, onFold, onAct, onOpen, refCb }: {
   row: UndoTimelineRow;
   aboveHead: boolean;
+  flashing: boolean;
   foldOpen: boolean;
   onFold: () => void;
   onAct: () => void;
@@ -296,7 +320,13 @@ function Row({ row, aboveHead, foldOpen, onFold, onAct, onOpen, refCb }: {
       data-undo-row={row.id}
       data-state={row.state}
       data-above-head={aboveHead ? "" : undefined}
-      className="group relative mx-1 px-2 py-1.5 rounded-lg cursor-default border border-transparent transition-colors data-[selected=true]:bg-sol-cyan/[0.09] data-[selected=true]:border-sol-cyan/25"
+      data-undo-flash={flashing ? "" : undefined}
+      className={cn(
+        "group relative mx-1 px-2 py-1.5 rounded-lg cursor-default border border-transparent transition-colors duration-300",
+        flashing
+          ? "bg-sol-yellow/[0.12] border-sol-yellow/40"
+          : "data-[selected=true]:bg-sol-cyan/[0.09] data-[selected=true]:border-sol-cyan/25",
+      )}
     >
       <div className="relative pl-[30px]">
         <RowDot row={row} />
@@ -324,7 +354,7 @@ function Row({ row, aboveHead, foldOpen, onFold, onAct, onOpen, refCb }: {
         <div className="flex items-center gap-2 min-h-[18px]">
           <span
             className="min-w-0 truncate text-[11px]"
-            style={{ color: row.state === "conflict" ? "var(--sol-yellow)" : row.state === "refused" ? "var(--sol-red)" : row.secondsLeft !== null ? "var(--sol-orange)" : "var(--sol-text-dim)" }}
+            style={{ color: row.state === "conflict" || flashing ? "var(--sol-yellow)" : row.state === "refused" ? "var(--sol-red)" : row.secondsLeft !== null ? "var(--sol-orange)" : "var(--sol-text-dim)" }}
             data-undo-detail
           >
             {row.detail}

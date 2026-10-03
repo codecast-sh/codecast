@@ -1,10 +1,10 @@
-// In brief (spec 4.6): the small stories, one line each, with a dotted leader
+// In brief (spec 4.6): the small stories, a line each (two at most), with a dotted leader
 // to their area. Each line is still a story: j/k visits it and `e` opens its
 // evidence. Each line is its own component, so it can carry the story's hooks.
 import * as Accordion from "@radix-ui/react-accordion";
 import type { StoryRow } from "../../hooks/useSyncChanges";
 import { EvidenceDrawer } from "./EvidenceDrawer";
-import { AreaTag, FadeText } from "./StoryParts";
+import { AreaTag, FadeText, Tip } from "./StoryParts";
 import { useStoryAttrs, useStoryCtx } from "./storyContext";
 
 export function InBrief({ stories }: { stories: readonly StoryRow[] }) {
@@ -33,9 +33,11 @@ function BriefItem({ story: s }: { story: StoryRow }) {
       <Accordion.Header asChild>
         <div>
           <Accordion.Trigger data-story-trigger className="flex w-full min-w-0 items-center gap-2 text-left outline-none">
-            <span className="chg-ui min-w-0 shrink truncate text-[13px] leading-[1.55] text-sol-text/70">
-              <FadeText text={s.headline} />
-            </span>
+            <Tip text={s.headline} whenClipped>
+              <span className="chg-ui line-clamp-2 min-w-0 shrink text-[13px] leading-[1.55] text-sol-text/70 [overflow-wrap:anywhere]">
+                <FadeText text={s.headline} />
+              </span>
+            </Tip>
             <span aria-hidden className="chg-leader" />
             <AreaTag area={s.area} className="shrink-0" />
           </Accordion.Trigger>

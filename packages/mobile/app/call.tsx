@@ -12,6 +12,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 import { Ionicons } from "@expo/vector-icons";
 import { useMutation, useQuery } from "convex/react";
+import { useInboxStore } from "@codecast/web/store/inboxStore";
 import { livekit } from "@/lib/calls/livekitNative";
 import { guestIdFromIdentity, humanizeConvexError, isGuestParticipant } from "@codecast/shared/contracts";
 
@@ -41,7 +42,6 @@ import { LivePulse } from "@/components/calls/LiveRooms";
 import { acceptInvite, declineInvite } from "@/lib/calls/callManager";
 import { stopRinging } from "@/lib/calls/ringtone";
 import { GuestDoor, GuestInviteRow, useGuestRemover } from "@/components/calls/GuestDoor";
-import { useAuth } from "@/lib/auth";
 
 // The call stage, phone-shaped. The same design intents as the web stage,
 // re-derived for a hand-held portrait screen:
@@ -71,9 +71,10 @@ export default function CallScreen() {
   const ring = useIncomingRing();
   // The caller's side of a ring: who we're ringing into THIS room, and whether
   // they declined (the server keeps declines visible for 30s).
-  const { isAuthenticated } = useAuth();
-  const myCalls = useQuery(api.calls.getMyCalls, isAuthenticated ? {} : "skip");
-  const outgoingHere = (myCalls?.outgoing ?? []).filter((o: any) => o.room_key === call.roomKey);
+  // Off the store (the sync bridge feeds calls.getMyCalls), so the strip is
+  // right on the stage's first frame.
+  const outgoing = useInboxStore((s) => s.myCalls.outgoing) as any[];
+  const outgoingHere = outgoing.filter((o: any) => o.room_key === call.roomKey);
   const ringingNames = outgoingHere.filter((o: any) => o.status === "ringing").map((o: any) => firstName(o.to_name));
   const declinedNames = outgoingHere.filter((o: any) => o.status === "declined").map((o: any) => firstName(o.to_name));
   const onJoinRing = (r: RingRow) => {
@@ -357,14 +358,13 @@ export default function CallScreen() {
 
 // The room is being recorded (convex callRecordings, filmed on LiveKit's
 // servers): the same red REC every other call surface wears, read off the
-// live rooms list the tab bar already subscribes to, so the phone costs no
-// extra query and works against a server that predates recording (the flag
-// is simply absent). Recording starts from a desktop or web stage; anyone in
-// the call may stop it, so a tap on the mark offers exactly that.
+// room's callRooms row (the store's one home for it, fed with the live rooms
+// by the sync bridge), so it costs no query of its own and works against a
+// server that predates recording (the flag is simply absent). Recording
+// starts from a desktop or web stage; anyone in the call may stop it, so a
+// tap on the mark offers exactly that.
 function useRoomRecordingFlag(roomKey: string | null): boolean {
-  const { isAuthenticated } = useAuth();
-  const rooms = useQuery(api.calls.getLiveRooms, isAuthenticated && roomKey ? {} : "skip");
-  return !!roomKey && (rooms ?? []).some((r: any) => r.room_key === roomKey && r.recording);
+  return useInboxStore((s) => !!roomKey && !!(s.callRooms as any)[roomKey]?.recording);
 }
 
 /** Stop for everyone, asked once more first: one tap must not end the room's

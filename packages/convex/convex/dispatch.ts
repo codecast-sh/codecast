@@ -1673,6 +1673,13 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     await (ctx as any).runMutation(api.users.updateProfile, patch);
   },
 
+  // The canonical workspace pointer (store setActiveTeamPointer, through
+  // useSwitchWorkspace). The client already re-scoped; this is the
+  // authoritative write, membership-checked by the mutation.
+  setActiveTeamPointer: async (ctx, userId, [teamId]: [string | null]) => {
+    await (ctx as any).runMutation(api.teams.setActiveTeam, { team_id: teamId ?? undefined });
+  },
+
   // The walkie door, from settings (store setWalkiePref). Same shape as the
   // status above: the client already closed or opened its own door, this is the
   // authoritative write.

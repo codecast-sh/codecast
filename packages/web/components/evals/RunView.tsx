@@ -1,0 +1,500 @@
+// One run in full (docs/architecture/evals-ui.md section 4.4), props only:
+// everything one rep did and why it scored what it did. RunPage feeds it from
+// GET /run/:id and the freeze's GET /freeze/:id (the moment, the production
+// reply, and the freeze's other runs and epochs for the prompt diffs); the
+// fixture in __fixtures__/run.ts feeds it in the mount test.
+
+import { useEffect, useRef, type ReactNode } from "react";
+import { ArrowLeftRight, FolderOpen, RotateCcw, Scale } from "lucide-react";
+import type { Epoch, FreezeResponse, RunResponse, RunRow } from "@codecast/shared/contracts/evalsApi";
+import { KeyCap } from "../KeyboardShortcutsHelp";
+import { AgentTranscript } from "./AgentTranscript";
+import { CallPane, CopyButton, TextPane } from "./CallPane";
+import { PASS_MARK } from "./charts/scale";
+import { evalsHref } from "./evalsPaths";
+import { MomentPane, ProductionCard } from "./FreezeView";
+import { GateList } from "./GateList";
+import { GuardLog } from "./GuardLog";
+import { JudgeCall, JudgeChecks, MissedFloors, RubricCard, ScoreHistory } from "./JudgeChecks";
+import { EvalsLink, LockBadge, ProvenanceChips, VerdictGlyph, score2, shortSha, usd, verdictOfRow } from "./parts";
+import { RunFiles, type OpenFile } from "./RunFiles";
+import "./run.css";
+
+// ── What the page decides ───────────────────────────────────────────────────
+
+export type RunTab = "verdict" | "moment" | "calls" | "agent" | "guard" | "files";
+
+export const RUN_TAB_WORDS: Record<RunTab, string> = { verdict: "Verdict", moment: "Moment and reply", calls: "Calls", agent: "Agent", guard: "Guard", files: "Files" };
+
+/** The tabs a rep has: Calls when it made calls, Agent and Guard on agent routes. */
+export function runTabs(run: Pick<RunResponse, "run" | "calls" | "agents" | "guard">): RunTab[] {
+  const agent = run.run.route === "agent" || run.agents.length > 0;
+  return ["verdict", "moment", ...(run.calls.length || !agent ? (["calls"] as const) : []), ...(agent ? (["agent"] as const) : []), ...(agent || run.guard.length ? (["guard"] as const) : []), "files"];
+}
+
+/**
+ * The tab a fragment names. A gate or check address (`#gate-no-leak`,
+ * `#check-criteria`) lives on the Verdict tab; a tab's own name opens it.
+ */
+export function tabOfHash(hash: string, tabs: readonly RunTab[]): { tab: RunTab; target: string | null } {
+  const h = decodeURIComponent(hash.replace(/^#/, ""));
+  if (h.startsWith("gate-") || h.startsWith("check-")) return { tab: "verdict", target: h };
+  if ((tabs as readonly string[]).includes(h)) return { tab: h as RunTab, target: null };
+  return { tab: "verdict", target: null };
+}
+
+/** The prompt epoch a batch ran in: the last one that began at or before it. */
+export function epochOfBatch(batchAt: string | null, epochs: readonly Epoch[]): Epoch | null {
+  if (!batchAt) return null;
+  let found: Epoch | null = null;
+  for (const e of [...epochs].sort((a, b) => a.n - b.n)) if (e.firstBatchAt <= batchAt) found = e;
+  return found;
+}
+
+/**
+ * The run to diff this rep's prompts against: the same freeze in the previous
+ * prompt epoch, newest first and the same seed when there is one. Crashes and
+ * bisect probes are passed over (a probe renders an old commit on purpose).
+ */
+export function previousEpochRun(row: RunRow, runs: readonly RunRow[], epochs: readonly Epoch[]): { id: string | null; why: string } {
+  const e = epochOfBatch(row.batchAt, epochs);
+  if (!e) return { id: null, why: epochs.length ? "This rep's batch is older than every epoch on record" : "The freeze's epochs are still loading" };
+  if (e.n === 1) return { id: null, why: "This rep ran in the first prompt epoch: there is nothing earlier to diff against" };
+  const prev = epochs.find((x) => x.n === e.n - 1);
+  if (!prev) return { id: null, why: `Epoch e${e.n - 1} is not on record` };
+  const inPrev = runs.filter((r) => r.freezeId === row.freezeId && r.batchAt !== null && r.batchAt >= prev.firstBatchAt && r.batchAt < e.firstBatchAt && r.status !== "crash" && r.cadence !== "bisect");
+  if (!inPrev.length) return { id: null, why: `Epoch e${prev.n} never ran this freeze` };
+  const best = [...inPrev].sort((a, b) => (b.batchAt ?? "").localeCompare(a.batchAt ?? "") || Number(b.seed === row.seed) - Number(a.seed === row.seed))[0];
+  const sameSeed = inPrev.filter((r) => r.batch === best.batch).find((r) => r.seed === row.seed);
+  return { id: (sameSeed ?? best).id, why: `e${prev.n} against e${e.n}` };
+}
+
+/** The previous and next seed of this freeze in this batch, by seed. */
+export function seedNeighbours(row: RunRow, siblings: readonly RunRow[]): { prev: string | null; next: string | null; all: RunRow[] } {
+  const all = [row, ...siblings.filter((s) => s.id !== row.id)].sort((a, b) => a.seed - b.seed || a.stamp.localeCompare(b.stamp));
+  const i = all.findIndex((r) => r.id === row.id);
+  return { prev: all[i - 1]?.id ?? null, next: all[i + 1]?.id ?? null, all };
+}
+
+/** The three things worth copying: where the folder is, how to replay its freeze, how to grade it again. */
+export function runCommands(row: Pick<RunRow, "id" | "freezeId" | "model">, evalsHome: string | null) {
+  return {
+    path: `${evalsHome ?? "$EVALS_HOME"}/runs/${row.id}`,
+    replay: `./evals freeze replay ${row.freezeId.slice(0, 8)} --reps 3${row.model ? ` --model ${row.model}` : ""}`,
+    rescore: `./evals rescore ${row.id}`,
+  };
+}
+
+/** Reps worth comparing this one with, grouped: the batch's other seeds, the same freeze one batch either side, and the freeze's other recent reps. */
+export function compareCandidates(run: Pick<RunResponse, "row" | "siblings" | "adjacent">, freezeRuns: readonly RunRow[]): Array<{ group: string; rows: Array<{ id: string; label: string; row: RunRow | null }> }> {
+  const seen = new Set<string>([run.row.id]);
+  const take = (id: string | null, label: string, row: RunRow | null) => {
+    if (!id || seen.has(id)) return null;
+    seen.add(id);
+    return { id, label, row };
+  };
+  const byId = new Map(freezeRuns.map((r) => [r.id, r]));
+  const groups = [
+    { group: "This batch, other seeds", rows: run.siblings.map((s) => take(s.id, `seed ${s.seed}`, s)) },
+    {
+      group: "The same freeze, one batch either side",
+      rows: [take(run.adjacent.previous, "previous batch", run.adjacent.previous ? byId.get(run.adjacent.previous) ?? null : null), take(run.adjacent.next, "next batch", run.adjacent.next ? byId.get(run.adjacent.next) ?? null : null)],
+    },
+    {
+      group: "Other reps of this freeze",
+      rows: [...freezeRuns]
+        .filter((r) => r.status !== "dry")
+        .sort((a, b) => b.stamp.localeCompare(a.stamp))
+        .slice(0, 12)
+        .map((r) => take(r.id, `${(r.batch ?? r.stamp).slice(5, 16).replace("T", " ")}, seed ${r.seed}`, r)),
+    },
+  ];
+  return groups.map((g) => ({ group: g.group, rows: g.rows.filter((x): x is NonNullable<typeof x> => !!x) })).filter((g) => g.rows.length);
+}
+
+// ── Header ──────────────────────────────────────────────────────────────────
+
+/** The score as a ruler from 0 to 1 with the pass mark ruled through it. */
+function BigRuler({ score, passMark, state }: { score: number | null; passMark: number; state: string }) {
+  return (
+    <div className={`ev-ruler-big ${state === "pass" ? "ev-pass" : state === "fail" ? "ev-fail" : "ev-quiet"}`} aria-hidden data-ev-ruler>
+      <span className="ev-ruler-big-track" />
+      {score !== null && <span className="ev-ruler-big-fill" style={{ width: `${Math.max(0.5, Math.min(1, score) * 100)}%` }} />}
+      <span className="ev-ruler-big-mark" style={{ left: `${passMark * 100}%` }} title={`pass mark ${passMark}`} />
+      <span className="ev-ruler-big-ticks">
+        <span>0</span>
+        <span style={{ position: "absolute", left: `${passMark * 100}%`, transform: "translateX(-50%)" }}>{passMark}</span>
+        <span>1</span>
+      </span>
+    </div>
+  );
+}
+
+/** This batch's reps on the same freeze as dots on the score line, so a glance says whether this rep is typical. */
+function SeedStrip({ row, all }: { row: RunRow; all: RunRow[] }) {
+  const W = 240;
+  const H = 26;
+  const x = (s: number) => 8 + Math.max(0, Math.min(1, s)) * (W - 16);
+  const mark = row.passMark ?? PASS_MARK;
+  return (
+    <div className="ev-seeds" data-ev-seed-strip>
+      <span>
+        {all.length} rep{all.length === 1 ? "" : "s"} of this freeze in the batch
+      </span>
+      <div className="ev-seeds-plot ev-bench">
+        <svg width={W} height={H} role="group" aria-label="Reps of this freeze in this batch">
+          <line x1={x(mark)} x2={x(mark)} y1={2} y2={H - 2} className="ev-strip-mark" />
+          {all.map((r, i) => {
+            const cx = r.score === null ? x(0) : x(r.score);
+            const cy = H / 2 + (all.length > 1 ? ((i % 3) - 1) * 5 : 0);
+            const state = verdictOfRow(r);
+            const self = r.id === row.id;
+            const label = `seed ${r.seed}: ${r.score === null ? state : score2(r.score)}${self ? " (this rep)" : ""}`;
+            const dot = (
+              <g className={state === "pass" ? "ev-pass" : state === "fail" ? "ev-fail" : "ev-quiet"}>
+                {state === "crash" ? (
+                  <path d={`M${cx - 3.5},${cy - 3.5} L${cx + 3.5},${cy + 3.5} M${cx + 3.5},${cy - 3.5} L${cx - 3.5},${cy + 3.5}`} stroke="currentColor" strokeWidth={1.6} />
+                ) : (
+                  <circle cx={cx} cy={cy} r={4} fill={state === "pass" ? "currentColor" : "var(--sol-card)"} stroke="currentColor" strokeWidth={1.5} />
+                )}
+                {self && <circle cx={cx} cy={cy} r={7} className="ev-seed-self" />}
+                <title>{label}</title>
+              </g>
+            );
+            return self ? (
+              <g key={r.id} data-ev-seed={r.seed} data-ev-self>
+                {dot}
+              </g>
+            ) : (
+              <EvalsLink key={r.id} href={evalsHref.run(r.id)} className="ev-seed-dot" aria-label={label} data-ev-seed={r.seed}>
+                {dot}
+              </EvalsLink>
+            );
+          })}
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+function ComparePicker({ run, freezeRuns, onClose }: { run: RunResponse; freezeRuns: readonly RunRow[]; onClose: () => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const groups = compareCandidates(run, freezeRuns);
+  useEffect(() => {
+    const away = (e: MouseEvent) => {
+      if (ref.current && !ref.current.parentElement?.contains(e.target as Node)) onClose();
+    };
+    const esc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", esc);
+    ref.current?.querySelector<HTMLElement>("a")?.focus();
+    return () => {
+      document.removeEventListener("mousedown", away);
+      document.removeEventListener("keydown", esc);
+    };
+  }, [onClose]);
+  return (
+    <div ref={ref} className="ev-picker" role="listbox" aria-label="Compare with" data-ev-picker>
+      {!groups.length && <div className="ev-empty-note">No other rep of this freeze to compare with.</div>}
+      {groups.map((g) => (
+        <div key={g.group}>
+          <div className="ev-picker-group">{g.group}</div>
+          {g.rows.map((c) => (
+            <EvalsLink key={c.id} href={evalsHref.compare(run.row.id, c.id)} className="ev-picker-item" role="option" onClick={onClose} data-ev-pick={c.id}>
+              {c.row ? <VerdictGlyph state={verdictOfRow(c.row)} size={10} /> : <span style={{ width: 10 }} />}
+              <span>{c.label}</span>
+              <span className="flex-1" />
+              {c.row && <span className="ev-tabular">{score2(c.row.score)}</span>}
+              <span className="ev-mono">{shortSha(c.row?.gitHead ?? null)}</span>
+            </EvalsLink>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Keys({ keys, children }: { keys: string[]; children: ReactNode }) {
+  return (
+    <span className="ev-keys">
+      {keys.map((k) => (
+        <KeyCap key={k} size="xs">
+          {k}
+        </KeyCap>
+      ))}
+      {children}
+    </span>
+  );
+}
+
+// ── The view ────────────────────────────────────────────────────────────────
+
+export interface RunViewProps {
+  run: RunResponse;
+  /** The freeze's own record: its moment, production reply, other runs and epochs. Null while it loads. */
+  freeze: FreezeResponse | null;
+  evalsHome: string | null;
+  tab: RunTab;
+  onTab: (tab: RunTab) => void;
+  /** The gate or check the address names, highlighted where it sits. */
+  target: string | null;
+  anchorHref: (anchor: string) => string;
+  onAnchor: (anchor: string) => void;
+  file: OpenFile | null;
+  onOpenFile: (path: string) => void;
+  picking: boolean;
+  onPicking: (open: boolean) => void;
+  overlayProduction: boolean;
+  onOverlayProduction: (on: boolean) => void;
+  /** The rep is still being written: a pulse says so. */
+  landing?: boolean;
+}
+
+export function RunView(p: RunViewProps) {
+  const { run, freeze } = p;
+  const row = run.row;
+  const state = verdictOfRow(row);
+  const passMark = run.score?.passMark ?? row.passMark ?? PASS_MARK;
+  const tabs = runTabs(run);
+  const tab = tabs.includes(p.tab) ? p.tab : "verdict";
+  const epochs = freeze?.epochs ?? [];
+  const epoch = epochOfBatch(row.batchAt, epochs);
+  const prevEpoch = freeze ? previousEpochRun(row, freeze.runs, epochs) : { id: null, why: "The freeze's other runs are still loading" };
+  const seeds = seedNeighbours(row, run.siblings);
+  const cmds = runCommands(row, p.evalsHome);
+  const guardFlag = row.guard.live > 0 || run.guard.some((g) => g.status === "LIVE");
+
+  return (
+    <div className="ev-page ev-run" data-evals-run={row.id} data-ev-run-status={row.status}>
+      {run.logTail && (
+        <section className="ev-crash" data-ev-crash>
+          <header>
+            <span className="ev-fail inline-flex">
+              <VerdictGlyph state="crash" size={13} />
+            </span>
+            The rep crashed{run.result?.stopReason ? `: ${run.result.stopReason}` : ""}
+          </header>
+          <pre>{run.logTail}</pre>
+        </section>
+      )}
+
+      <header className="ev-run-head">
+        <div className="ev-run-name">
+          <h1>
+            {row.surface} <span className="ev-quiet">/</span> {row.freezeName} <span className="ev-quiet">seed {row.seed}</span>
+          </h1>
+          <span className="ev-mono" title={row.id}>
+            {row.id}
+          </span>
+        </div>
+        <div className="ev-run-row">
+          <div className="ev-run-score">
+            <VerdictGlyph state={state} size={26} />
+            <div className="flex flex-col gap-1">
+              <span className={`ev-num ${state === "pass" ? "" : state === "fail" ? "ev-fail" : "ev-quiet"}`} data-ev-score>
+                {row.score === null ? (state === "crash" ? "crash" : state === "dry" ? "dry" : "--") : score2(row.score)}
+              </span>
+              <span className="ev-run-score-word">
+                {state === "pass" ? "passed" : state === "fail" ? (row.gatesFailed.length ? `failed at gate ${row.gatesFailed.join(", ")}` : "failed") : state === "crash" ? "crashed, not scored" : state === "dry" ? "dry render, nothing graded" : "not scored yet"}
+                {p.landing && <span className="ev-pulse">, still landing</span>}
+              </span>
+            </div>
+            <BigRuler score={row.score} passMark={passMark} state={state} />
+          </div>
+          <div className="ev-run-meta" data-ev-run-chips>
+            <EvalsLink className="ev-chip ev-run-link" href={evalsHref.surface(row.surface, { batch: row.batch })} title="Open the surface at this batch">
+              {row.surface}
+            </EvalsLink>
+            <EvalsLink className="ev-chip ev-run-link" href={evalsHref.freeze(row.freezeId, { batch: row.batch })} title="Open this freeze across time">
+              {row.freezeName} {shortSha(row.freezeId)}
+            </EvalsLink>
+            <LockBadge visibility={row.visibility} />
+            <span className="ev-chip">seed {row.seed}</span>
+            <span className="ev-chip" title="The model the rep answered on">
+              {row.model ?? "no model"}
+            </span>
+            <span className="ev-chip" title={row.ruler ? `Judge ruler ${row.ruler}` : "Judge model"}>
+              <Scale /> {row.judgeModel ?? "not judged"}
+            </span>
+            <ProvenanceChips row={row} epoch={epoch?.n ?? null} />
+            <span className="ev-chip" title={`model ${usd(row.costUsd)} + judge ${usd(row.judgeCostUsd)}`}>
+              {usd(row.costUsd + row.judgeCostUsd)} in {(row.realMs / 1000).toFixed(row.realMs >= 10_000 ? 0 : 1)}s
+            </span>
+          </div>
+        </div>
+      </header>
+
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+        <SeedStrip row={row} all={seeds.all} />
+        <div className="ev-run-actions">
+          <CopyButton text={cmds.path} what="the run folder path" label="path" icon={<FolderOpen />} />
+          <CopyButton text={cmds.replay} what="the replay command" label="replay" icon={<RotateCcw />} />
+          <CopyButton text={cmds.rescore} what="the rescore command" label="rescore" />
+          <span className="relative">
+            <button type="button" className="ev-btn" aria-pressed={p.picking} aria-haspopup="listbox" onClick={() => p.onPicking(!p.picking)} data-ev-compare-open>
+              <ArrowLeftRight /> compare with
+            </button>
+            {p.picking && <ComparePicker run={run} freezeRuns={freeze?.runs ?? []} onClose={() => p.onPicking(false)} />}
+          </span>
+        </div>
+        <span className="flex-1" />
+        <div className="flex flex-wrap gap-3">
+          <Keys keys={["j", "k"]}>seed</Keys>
+          <Keys keys={["[", "]"]}>batch</Keys>
+          <Keys keys={["c"]}>compare</Keys>
+        </div>
+      </div>
+
+      <nav className="ev-run-tabs" role="tablist" aria-label="This run">
+        {tabs.map((t) => (
+          <button key={t} type="button" role="tab" className="ev-tab" aria-current={t === tab ? "page" : undefined} aria-selected={t === tab} onClick={() => p.onTab(t)} data-ev-tab={t}>
+            {RUN_TAB_WORDS[t]}
+            {t === "verdict" && run.score && run.score.gates.some((g) => !g.pass) && <span className="ev-tab-flag" title="A gate failed" />}
+            {t === "calls" && <span className="ev-tab-count">{run.calls.length}</span>}
+            {t === "guard" && <span className="ev-tab-count">{run.guard.length}</span>}
+            {t === "guard" && guardFlag && <span className="ev-tab-flag" title="It read the live workspace" />}
+            {t === "files" && <span className="ev-tab-count">{run.files.filter((f) => f.kind === "file").length}</span>}
+          </button>
+        ))}
+      </nav>
+
+      <div role="tabpanel" data-ev-panel={tab}>
+        {tab === "verdict" && <VerdictTab {...p} />}
+        {tab === "moment" && <MomentTab run={run} freeze={freeze} overlay={p.overlayProduction} onOverlay={p.onOverlayProduction} />}
+        {tab === "calls" &&
+          (run.calls.length ? (
+            <div className="flex flex-col gap-4">
+              {run.calls.map((c) => (
+                <CallPane key={c.n} call={c} runId={row.id} previousEpochRun={prevEpoch.id} previousWhy={prevEpoch.why} />
+              ))}
+            </div>
+          ) : (
+            <div className="ev-card ev-empty-note">{row.status === "crash" ? "The rep crashed before its first call landed." : "This rep made no model calls."}</div>
+          ))}
+        {tab === "agent" &&
+          (run.agents.length ? (
+            <div className="flex flex-col gap-6">
+              {run.agents.map((a) => (
+                <AgentTranscript key={a.n} agent={a} runId={row.id} previousEpochRun={prevEpoch.id} previousWhy={prevEpoch.why} />
+              ))}
+            </div>
+          ) : (
+            <div className="ev-card ev-empty-note">{row.status === "crash" ? "The rep crashed before the agent wrote a turn." : "No agent folder in this run."}</div>
+          ))}
+        {tab === "guard" && <GuardLog entries={run.guard} counts={row.guard} />}
+        {tab === "files" && <RunFiles files={run.files} open={p.file} onOpen={p.onOpenFile} />}
+      </div>
+    </div>
+  );
+}
+
+function VerdictTab(p: RunViewProps) {
+  const { run } = p;
+  const score = run.score;
+  return (
+    <div className="flex flex-col gap-6" data-ev-verdict-tab>
+      {!score ? (
+        run.rubric ? (
+          <RubricCard rubric={run.rubric} status={run.row.status === "crash" || run.row.status === "dry" ? run.row.status : "unscored"} />
+        ) : (
+          <div className="ev-card ev-empty-note">{run.row.status === "crash" ? "A crashed rep is never scored." : "No score and no rubric on record for this rep."}</div>
+        )
+      ) : (
+        <>
+          <section className="ev-section">
+            <h2 className="ev-title">
+              <VerdictGlyph state={score.gates.every((g) => g.pass) ? "pass" : "fail"} /> Gates
+              <span className="text-[11.5px] font-normal ev-quiet">
+                {score.gates.filter((g) => !g.pass).length} of {score.gates.length} failed
+              </span>
+            </h2>
+            <GateList gates={score.gates} target={p.target} anchorHref={p.anchorHref} onAnchor={p.onAnchor} />
+          </section>
+          <section className="ev-section">
+            <h2 className="ev-title">
+              <VerdictGlyph state={score.pass ? "pass" : "fail"} /> Judged checks
+              <span className="text-[11.5px] font-normal ev-quiet ev-tabular">
+                total {score2(score.score)} against {score2(score.passMark)}
+              </span>
+            </h2>
+            <JudgeChecks score={score} target={p.target} anchorHref={p.anchorHref} onAnchor={p.onAnchor} />
+          </section>
+          {!!score.missedFloors?.length && (
+            <section className="ev-section">
+              <h2 className="ev-title">
+                <VerdictGlyph state="fail" /> Missed floors
+              </h2>
+              <MissedFloors floors={score.missedFloors} />
+            </section>
+          )}
+        </>
+      )}
+      {run.judge && <JudgeCall judge={run.judge} />}
+      {run.scoreVersions.length > 0 && (
+        <section className="ev-section">
+          <h2 className="ev-title">
+            <VerdictGlyph state="unscored" /> Score history
+            <span className="text-[11.5px] font-normal ev-quiet">{run.scoreVersions.length} version{run.scoreVersions.length === 1 ? "" : "s"}</span>
+          </h2>
+          <ScoreHistory versions={run.scoreVersions} />
+        </section>
+      )}
+      {run.extra && (
+        <section className="ev-section" data-ev-extra>
+          <h2 className="ev-title">
+            <VerdictGlyph state="unscored" /> Analyzer grade
+          </h2>
+          {run.extra.gradeAuto !== undefined && <TextPane name="grade-auto.json" text={JSON.stringify(run.extra.gradeAuto, null, 2)} open />}
+          {run.extra.hashes !== undefined && <TextPane name="hashes.json" text={JSON.stringify(run.extra.hashes, null, 2)} />}
+        </section>
+      )}
+    </div>
+  );
+}
+
+function MomentTab({ run, freeze, overlay, onOverlay }: { run: RunResponse; freeze: FreezeResponse | null; overlay: boolean; onOverlay: (on: boolean) => void }) {
+  return (
+    <div className="ev-split" data-ev-moment-tab>
+      {freeze ? (
+        <MomentPane messages={freeze.moment} cutAt={freeze.cutAt} asOf={freeze.freeze.asOf} />
+      ) : (
+        <div className="ev-card ev-empty-note">Reading the frozen moment...</div>
+      )}
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center gap-2">
+          <span className="ev-title">What this rep sent</span>
+          <span className="text-[11.5px] ev-quiet">
+            {run.sends.length} send{run.sends.length === 1 ? "" : "s"}
+          </span>
+          <span className="flex-1" />
+          <button type="button" className="ev-btn" aria-pressed={overlay} onClick={() => onOverlay(!overlay)} disabled={!freeze} data-ev-overlay>
+            production reply {overlay ? "on" : "off"}
+          </button>
+        </div>
+        {overlay && freeze && <ProductionCard production={freeze.production} surface={run.row.surface} />}
+        <section className="ev-card overflow-hidden" data-ev-sends>
+          {!run.sends.length ? (
+            <div className="ev-empty-note">{run.row.status === "crash" ? "It crashed before sending anything." : "It sent nothing."}</div>
+          ) : (
+            run.sends.map((s) => (
+              <div key={s.seq} className="ev-send" data-ev-send={s.seq}>
+                <div className="ev-chips">
+                  <span className="ev-chip" title="Rail">{s.rail ?? "no rail"}</span>
+                  <span className="ev-chip" title="Audience">{s.audience}</span>
+                  {s.to && <span className="ev-chip" title="To">to {s.to}</span>}
+                  {s.label && <span className="ev-chip" title="Label">{s.label}</span>}
+                  <span className="ev-chip ev-tabular" title="Length">
+                    {s.chars.toLocaleString()} chars
+                  </span>
+                </div>
+                <div className="ev-reply-text">{s.text}</div>
+              </div>
+            ))
+          )}
+        </section>
+      </div>
+    </div>
+  );
+}

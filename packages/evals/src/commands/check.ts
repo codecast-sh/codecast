@@ -1,3 +1,5 @@
+import { join } from 'node:path';
+
 import type { Command } from 'commander';
 import { mapLimit } from '@codecast/shared/async';
 import type { EvalSources, Freeze } from '@platform/evals';
@@ -5,16 +7,21 @@ import { fmt } from '@platform/cli-kit/colors';
 import { formatCost } from '@platform/cli-kit/format';
 import { stripAnsi } from '@platform/cli-kit/render';
 
+import { acquireLock, releaseLock, type LockOptions } from '../../../cli/src/capabilities/lock';
 import { outcomeOf, prepareFreeze, repCount, replayModel, replayRep, treeFacts, type RepLedger } from '../adapters/replay';
 import { hasSnapshot, loadLabel, loadSnapshot } from '../adapters/resolver';
 import { surfaceRuns } from '../adapters/runs';
 import { loadSurface } from '../registry';
-import { checkMinutes, DAILY_USD, patchSurfaceState, perRepUsd, readState, repCostsByModel, spentToday, staleness, suggestedBudget, type EvalsState } from '../state';
+import { homePaths } from '../paths';
+import { checkMinutes, DAILY_USD, patchSurfaceState, perRepPeakUsd, perRepUsd, readState, repCostsByModel, spentToday, staleness, suggestedBudget, type EvalsState } from '../state';
 import { evalSignals, reportSignals, type SurfaceVerdict } from '../signals';
+import { holdsAcross, type Separation } from '../stats';
 import type { SurfaceMeta } from '../surface';
 import { publishSite } from './publish';
 import { pickSurfaces } from './stale';
-import { batchSet, CADENCE_BASELINE_BATCHES, majority, positiveNumber, setVerdict } from './verdict';
+import { batchSet, BISECT_CADENCE, CADENCE_BASELINE_BATCHES, majority, positiveNumber, setVerdict } from './verdict';
+
+export { BISECT_CADENCE };
 
 // `./evals check`: replay every freeze of each chosen surface, grade every
 // rep, and print a verdict per surface against its previous run set. It
@@ -32,10 +39,15 @@ import { batchSet, CADENCE_BASELINE_BATCHES, majority, positiveNumber, setVerdic
 // set against one named batch instead of each freeze's newest other one, so
 // an ablation compares the variant with its own baseline whatever ran since.
 // --cadence names a standing run (the nightly): its reps carry the name, and
-// its set is weighed against that cadence's own last batches pooled, so drift
-// is a `separated: worse` decided here, and nothing else's reps join the pool.
+// its set is weighed against that cadence's own last batches night by night
+// per freeze, so drift is a `separated: worse` decided here, and nothing
+// else's reps join that baseline.
 // --cadence bisect marks a bisect's probe reps: they ran some other commit, so
-// they leave the cadence state alone. --stop-file cancels between reps.
+// they leave the cadence state alone and are no baseline. --stop-file cancels
+// between reps. A named --batch is held by one check at a time (its lock under
+// EVALS_HOME/locks), so a retried firing never runs the same reps twice. A
+// separated `worse` is a regression only when it holds across every surface
+// the check weighed (Holm), so a wide check is not a lottery of false alarms.
 
 /** The exit code of a check that stopped short: a budget stop, or a requested surface with no rep scored. */
 export const EXIT_INCOMPLETE = 3;
@@ -47,8 +59,8 @@ export const EXIT_INCOMPLETE = 3;
  */
 export const DEFAULT_PARALLEL = 4;
 
-/** The cadence a bisect's probes run under (check --cadence bisect): a probe ran another commit than the checkout's, so it never moves the cadence state, and views hide it by default. */
-export const BISECT_CADENCE = 'bisect';
+/** The lock a named batch is held by while a check runs on it: one file per batch, stale once its pid is gone. */
+export const batchLock = (batch: string): LockOptions & { root: string } => ({ root: join(homePaths().root, 'locks'), name: `${batch.replace(/[^\w.-]/g, '_')}.lock`, ceilingMs: Infinity });
 
 export interface CheckFlags {
   stale?: boolean;
@@ -97,6 +109,22 @@ interface Job {
 const surfaceOf = (f: Freeze): string => String((f.meta as { surface?: string } | undefined)?.surface ?? '');
 
 export async function runCheck(ids: string[], flags: CheckFlags, sources: EvalSources): Promise<number> {
+  if (!flags.batch) return checkBatch(ids, flags, sources);
+  // A second check on a batch another is still running would see its queued reps as missing and run them too, on a budget of its own.
+  const { root, ...lock } = batchLock(flags.batch);
+  const held = acquireLock(root, (l) => console.log(fmt.muted(l)), lock);
+  if (!held.acquired) {
+    console.log(`refused: batch ${flags.batch} is being run by pid ${held.heldBy?.pid ?? '?'} (since ${held.heldBy?.acquired_at ?? '?'}); a second check would run its reps twice. Wait for it, or stop it with its --stop-file, then run this again to resume (exit ${EXIT_INCOMPLETE})`);
+    return EXIT_INCOMPLETE;
+  }
+  try {
+    return await checkBatch(ids, flags, sources);
+  } finally {
+    releaseLock(root, lock);
+  }
+}
+
+async function checkBatch(ids: string[], flags: CheckFlags, sources: EvalSources): Promise<number> {
   const store = sources.freezes!;
   let metas = pickSurfaces(ids, flags.route);
   const state = readState();
@@ -210,14 +238,15 @@ export async function runCheck(ids: string[], flags: CheckFlags, sources: EvalSo
 
   const spent: RepLedger = { usd: 0 };
   const deadline = flags.maxMinutes ? Date.now() + flags.maxMinutes * 60_000 : null;
-  const opts = (plan: Plan, est = 0) => ({ reps: plan.reps, model: flags.model ?? null, dry: Boolean(flags.dry), notes: flags.notes ?? null, batch, cadence: flags.cadence ?? null, budgetUsd: stopAt, spent, estPerRep: est, deadline, stopFile: flags.stopFile ?? null, onLine: (l: string) => console.log(fmt.muted(l)) });
+  const opts = (plan: Plan, est = 0, peak = 0) => ({ reps: plan.reps, model: flags.model ?? null, dry: Boolean(flags.dry), notes: flags.notes ?? null, batch, cadence: flags.cadence ?? null, budgetUsd: stopAt, spent, estPerRep: est, peakPerRep: peak, deadline, stopFile: flags.stopFile ?? null, onLine: (l: string) => console.log(fmt.muted(l)) });
   // Jobs in surface order, so a stop leaves the later surfaces unreached rather than every surface half run.
   const prepared = new Map(await Promise.all(plans.flatMap((plan) => plan.freezes.map(async (f) => [f.id, await prepareFreeze(f, opts(plan), facts)] as const))));
-  const results = await mapLimit(jobs, parallel, (j) => replayRep(prepared.get(j.freeze.id)!, j.rep, repCount(j.plan.reps), opts(j.plan, perRepUsd(j.plan.meta, state, modelOf(j)))));
+  const results = await mapLimit(jobs, parallel, (j) => replayRep(prepared.get(j.freeze.id)!, j.rep, repCount(j.plan.reps), opts(j.plan, perRepUsd(j.plan.meta, state, modelOf(j)), perRepPeakUsd(j.plan.meta, state, modelOf(j)))));
   const budgetHit = Boolean(spent.stoppedBy);
   let failed = false;
-  const report: string[] = [];
+  const reports: string[][] = [];
   const verdicts: SurfaceVerdict[] = [];
+  const separations: Separation[] = [];
   for (const plan of plans) {
     const outcome = outcomeOf(results.filter((_, i) => jobs[i]!.plan === plan), spent);
     const crashes = outcome.crashes;
@@ -229,9 +258,10 @@ export async function runCheck(ids: string[], flags: CheckFlags, sources: EvalSo
     // A surface the stop cut off before its first rep never ran: it is named below, not graded.
     if (budgetHit && !scored.length) continue;
     if (!scored.length) unrun.push(plan.meta.id);
-    report.push(...v.lines);
+    reports.push(v.lines);
+    separations.push(v.verdict.separation);
     // A dry rep's gates grade canned output, so only a crash fails a dry check.
-    if (v.regression || crashes || scored.some((r) => r.status !== 'dry' && r.gatesFailed.length)) failed = true;
+    if (crashes || scored.some((r) => r.status !== 'dry' && r.gatesFailed.length)) failed = true;
     verdicts.push({
       surface: plan.meta.id,
       regression: v.regression,
@@ -255,8 +285,20 @@ export async function runCheck(ids: string[], flags: CheckFlags, sources: EvalSo
     }));
   }
 
+  // A worse separation is a regression only when it holds across every surface this check weighed.
+  const holds = holdsAcross(separations);
+  const tested = separations.filter((x) => x.kind !== 'too-few').length;
+  verdicts.forEach((v, i) => {
+    const s = separations[i]!;
+    if (!v.regression || holds[i] || s.kind !== 'worse') return;
+    const note = `  ${fmt.muted(`not a regression: p=${s.p.toFixed(4)} does not hold across the ${tested} surfaces this check weighed (Holm)`)}`;
+    reports[i]!.splice(2, 0, note);
+    v.summary.splice(2, 0, stripAnsi(note));
+    v.regression = false;
+  });
+  if (verdicts.some((v) => v.regression)) failed = true;
   console.log('');
-  for (const line of report) console.log(line);
+  for (const line of reports.flat()) console.log(line);
   const neverReached = plans.filter((p) => !verdicts.some((v) => v.surface === p.meta.id)).map((p) => p.meta.id);
   const stopWhy = spent.stoppedBy === 'stop-file' ? `${flags.stopFile} exists` : spent.stoppedBy === 'time' ? `the ${flags.maxMinutes} minute limit passed` : `the ${formatCost(stopAt ?? 0)} budget is spent`;
   if (budgetHit) console.log(fmt.warning(`stopped: ${stopWhy} (endedBecause: budget)${neverReached.length ? `; never reached: ${neverReached.join(', ')}` : ''} (exit ${EXIT_INCOMPLETE})`));
@@ -305,7 +347,7 @@ export function registerCheck(program: Command, sources: EvalSources): void {
     .option('--freeze <id>', 'only this freeze (repeatable, prefix ok)', (v: string, all: string[]) => [...all, v], [] as string[])
     .option('--reps <n>', 'reps per freeze (default: the surface meta, 5 for calls)', positiveNumber('--reps', true))
     .option('--model <id>', 'ablate the model under test; the judge is unaffected')
-    .option('--budget <usd>', 'refuse when the estimate is over, stop when the spend reaches it (default: stop at the estimate and half again)', positiveNumber('--budget'))
+    .option('--budget <usd>', "refuse when the estimate is over; start no rep whose likely cost (the costliest recent rep on its surface and model) would cross it, while reps in flight finish (default: the estimate and half again)", positiveNumber('--budget'))
     .option('--daily <usd>', `with --stale: refuse once today's spend reaches this (default ${DAILY_USD})`, positiveNumber('--daily'))
     .option('--max-minutes <n>', 'start no rep after this many minutes; stops like the budget (exit 3)', positiveNumber('--max-minutes'))
     .option('--stop-file <path>', 'start no rep once this file exists; stops like the budget (exit 3)')

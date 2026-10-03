@@ -43,8 +43,8 @@ describe("the lead card", () => {
     expect(pending).toContain("Notes pending");
   });
 
-  test("each worded risk is its own line", () => {
+  test("the worded risks share one clamped line, the whole of them on hover", () => {
     const html = render({ ...lead, risks: [{ code: "schema", evidence: [] }, { code: "bulk", evidence: [] }], risk_lines: { schema: "Run the migration first.", bulk: "Nobody reviewed 4,000 lines." } } as any, false);
-    expect(html).toContain('<span class="block">Run the migration first.</span><span class="block">Nobody reviewed 4,000 lines.</span>');
+    expect(html).toMatch(/<span class="line-clamp-1[^"]*"[^>]*>Run the migration first\. Nobody reviewed 4,000 lines\.<\/span>/);
   });
 });

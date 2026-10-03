@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { replaceGlobals } from "../../../test-helpers/globals";
 import { closeDomWindow } from "../../../test-helpers/domGlobals";
-import { CARD_DECISION_OPTIONS, type ChangeCard } from "@codecast/shared/contracts/changeCard";
+import { CARD_DECISION_OPTIONS, suiteGateCheck, SUITE_GATE_CHECK, type ChangeCard } from "@codecast/shared/contracts/changeCard";
 
 // A decision about a change card (LE11) draws the card natively and answers
 // Ship, Revise or Drop with the keys; Revise carries a note.
@@ -47,10 +47,17 @@ test("the full card draws every section from the contract", async () => {
   const { container, unmount } = await mount(<ChangeCardView card={card} />);
   const text = container.textContent!;
   expect(text).toContain("ct-56301");
-  // The cause's meta reads "14 signals · first seen …": separators sit between items, never leading a row.
-  const metas = container.querySelectorAll(".cc-cause-meta");
-  expect(metas[0].querySelector(".cc-sep")).toBeNull();
-  expect(metas[1].querySelector(".cc-sep")).toBeTruthy();
+  // The cause's facts read "14 signals · first seen …": each carries its
+  // separator inside a clipped row, so the one opening a line never shows.
+  const metas = container.querySelectorAll(".cc-cause-facts .cc-cause-meta");
+  expect(Array.from(metas).every((m) => m.firstElementChild?.classList.contains("cc-sep"))).toBe(true);
+  // Two rows: the cause, then signals with their sources, age and goal on one line.
+  expect(container.querySelectorAll(".cc-cause > .cc-cause-row, .cc-cause-facts > .cc-cause-row")).toHaveLength(2);
+  expect(metas[0].textContent).toContain(`${card.cause.signals} signals from ${card.cause.sources[0]}`);
+  // No kicker: the card opens on what was wrong, muted, then the proof.
+  expect(container.querySelector("[data-cc-head]")).toBeNull();
+  expect(container.querySelector(".cc-leadin")).toBeNull();
+  expect(container.querySelector(".cc-recommend")!.textContent).toContain("Why Ship");
   expect(text).toContain(card.goal.name);
   expect(text).toContain(card.wrong);
   expect(text).toContain(card.change);
@@ -65,16 +72,19 @@ test("the full card draws every section from the contract", async () => {
   await act(() => { more.click(); });
   expect(container.querySelectorAll(".cc-example")).toHaveLength(3);
   expect(container.querySelector("[data-cc-more]")).toBeNull();
-  // The shared before and after read once as a caption, with no column labels;
-  // only the row that differs keeps its detail.
-  expect(container.querySelector(".cc-track-labels")).toBeNull();
-  expect(container.querySelector(".cc-proof-caption")!.textContent).toContain("fails on origin/main");
-  expect(Array.from(container.querySelectorAll(".cc-proof-detail")).filter((d) => d.textContent).length).toBe(1);
+  // Every row keeps one rhythm: a detail line each, the shared one dimmed,
+  // the row that differs in full ink.
+  expect(container.querySelector(".cc-proof-caption")).toBeNull();
+  const details = Array.from(container.querySelectorAll(".cc-proof-detail"));
+  expect(details.every((d) => d.textContent)).toBe(true);
+  expect(details.filter((d) => d.classList.contains("is-shared"))).toHaveLength(3);
+  // A test file's group reads as a short dim prefix, without ".test.ts".
+  expect(container.querySelector(".cc-proof-prefix")!.textContent).toBe("titlePrompt");
   // The goal is one muted line in the cause header; every section and fact is named one way.
   expect(container.querySelector(".cc-goal")!.textContent).toContain(`serves ${card.goal.name}`);
   expect(Array.from(container.querySelectorAll(".cc-label")).map((k) => k.textContent)).toEqual(["Proof", "Examples", "Checks", "Diff", "Risk", "Cost"]);
   // Passing checks fold into a count in the facts and open on a click.
-  expect(container.querySelector("[data-cc-checks]")!.textContent).toContain("all 3 pass");
+  expect(container.querySelector("[data-cc-checks]")!.textContent).toBe("3 of 3 pass");
   // Diff counts are neutral ink, never the proof's red and green.
   expect(container.querySelector(".cc-diff")!.closest(".cc-text-green, .cc-text-red")).toBeNull();
   expect(container.querySelector(".cc-diff .cc-text-green, .cc-diff .cc-text-red")).toBeNull();
@@ -82,17 +92,30 @@ test("the full card draws every section from the contract", async () => {
   await act(() => { (container.querySelector("[data-cc-checks]") as HTMLButtonElement).click(); });
   expect(container.querySelectorAll(".cc-check")).toHaveLength(3);
   expect(text).toContain("PR #912");
-  expect(text).toContain("Low risk");
+  // A low risk says only its reason; its class rides the dot and the proof line.
+  expect(text).not.toContain("Low risk");
+  expect(container.querySelector(".cc-risk-dot")!.getAttribute("aria-label")).toBe("Low risk");
+  expect(text).toContain(card.risk.reason);
   expect(text).toContain("$1.96");
-  expect(text).toContain("Recommends Ship");
   await unmount();
 }, 30_000); // the first mount pays for loading the store under a loaded machine
+
+test("a failed suite gate shows unfolded in the checks, naming its scenarios", async () => {
+  const gated: ChangeCard = { ...card, checks: [...card.checks, suiteGateCheck(["handoff-keeps-owner", "dup-merge-keeps-newest"])], recommend: { verdict: "revise", why: "Two suite scenarios fail." } };
+  const { container, unmount } = await mount(<ChangeCardView card={gated} />);
+  expect(container.querySelector("[data-cc-checks]")!.textContent).toContain("1 of 4 fail");
+  const row = Array.from(container.querySelectorAll(".cc-check")).find((r) => r.textContent!.includes(SUITE_GATE_CHECK))!;
+  expect(row.querySelector(".cc-tone-red")).toBeTruthy();
+  expect(row.textContent).toContain("handoff-keeps-owner, dup-merge-keeps-newest");
+  await unmount();
+});
 
 test("an answerable surface says the recommendation once, on the control", async () => {
   const { container, unmount } = await mount(<><ChangeCardView card={card} recommend={false} /><DecisionAnswerControls decision={decision} onAnswer={() => {}} /></>);
   expect(container.querySelector(".cc-recommend")).toBeNull();
   expect(container.querySelector("[data-verdict=ship]")!.textContent).toContain("recommended");
-  expect(container.querySelector(".cc-why")!.textContent).toContain(card.recommend.why);
+  // Why, as one muted sentence with no label: the button already names it.
+  expect(container.querySelector(".cc-why")!.textContent).toBe(card.recommend.why);
   await unmount();
 });
 
@@ -158,6 +181,31 @@ test("the line is one dense proof summary", async () => {
   expect(container.textContent).toContain("checks 3/3");
   expect(container.textContent).toContain("recommends Ship");
   expect(container.textContent).not.toContain("$1.96");
+  await unmount();
+});
+
+test("an advisory card marks the course the agent took on its button, not in red", async () => {
+  const advisory = { ...decision, blocking: false, default_option: 2 };
+  const { container, unmount } = await mount(<DecisionAnswerControls decision={advisory} onAnswer={() => {}} />);
+  const drop = container.querySelector("[data-verdict=drop]")!;
+  expect(drop.classList.contains("is-taken")).toBe(true);
+  expect(drop.textContent).toContain("taken");
+  expect(container.querySelector("[data-cc-course] .cc-course-verdict")!.textContent).toBe("Drop");
+  expect(container.querySelector("[data-cc-course] .cc-text-red")).toBeNull();
+  await unmount();
+});
+
+test("the queue row draws Ship, Revise and Drop as bare chips", async () => {
+  const advisory = { ...decision, blocking: false, default_option: 2 };
+  const answers: any[] = [];
+  const { container, unmount } = await mount(<DecisionAnswerControls decision={advisory} onAnswer={(a) => answers.push(a)} onDismiss={() => {}} size="line" keys />);
+  expect(container.querySelector("[data-cc-course]")).toBeNull();
+  expect(container.querySelector(".cc-why")).toBeNull();
+  expect(container.querySelector(".cc-dismiss")).toBeNull();
+  expect(Array.from(container.querySelectorAll("[data-verdict]")).map((b) => b.textContent)).toEqual(["1Ship", "2Revise", "3Drop"]);
+  expect(container.querySelector("[data-verdict=drop]")!.classList.contains("is-taken")).toBe(true);
+  await press("1");
+  expect(answers).toEqual([{ index: 0 }]);
   await unmount();
 });
 

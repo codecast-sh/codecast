@@ -149,6 +149,7 @@ import type * as lib_callValidators from "../lib/callValidators.js";
 import type * as lib_castPlayer from "../lib/castPlayer.js";
 import type * as lib_changesAccess from "../lib/changesAccess.js";
 import type * as lib_changesDirty from "../lib/changesDirty.js";
+import type * as lib_changesProseModel from "../lib/changesProseModel.js";
 import type * as lib_charterBudget from "../lib/charterBudget.js";
 import type * as lib_chatAttachment from "../lib/chatAttachment.js";
 import type * as lib_chatQuota from "../lib/chatQuota.js";
@@ -499,6 +500,7 @@ declare const fullApi: ApiFromModules<{
   "lib/castPlayer": typeof lib_castPlayer;
   "lib/changesAccess": typeof lib_changesAccess;
   "lib/changesDirty": typeof lib_changesDirty;
+  "lib/changesProseModel": typeof lib_changesProseModel;
   "lib/charterBudget": typeof lib_charterBudget;
   "lib/chatAttachment": typeof lib_chatAttachment;
   "lib/chatQuota": typeof lib_chatQuota;

@@ -106,8 +106,8 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
         ? <>answered by {detail.holder_role?.name ?? detail.ladder.find((h) => h.role_id === answeredBy.id)?.role?.name ?? "a role"} under a grant</>
         : <span className="inline-flex items-center gap-1.5">answered by <PersonChip userId={answeredBy.id} fallbackName={answeredPerson?.name ?? (answeredBy.id === meId ? "you" : "a person")} fallbackImage={answeredPerson?.avatar_url} /></span>;
 
-  // A settled change card says what happened: the verdict alone in the header
-  // pill, and who gave it and when as the card's last line.
+  // A settled change card says what happened once: the verdict, who gave it
+  // and when, as the card's last line.
   const answererName = !answeredBy
     ? "a person"
     : answeredBy.kind === "policy"
@@ -116,6 +116,7 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
         ? detail.holder_role?.name ?? detail.ladder.find((h) => h.role_id === answeredBy.id)?.role?.name ?? "a role"
         : answeredPerson?.name ?? (answeredBy.id === meId ? "you" : "a person");
   const outcome = decision.card ? cardOutcome(decision, answererName, now) : null;
+  const cardQuestion = decision.card && decision.question.trim() !== decision.card.change.trim() ? decision.question : null;
 
   // Reopen is the people's (asked_users): gate on the detail's people set, not
   // on whether the 24 hour queue cache still holds the row.
@@ -126,13 +127,6 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
   // change and its proof, so for one these facts follow the card.
   const meta = (
     <dl className="mt-4 decision-meta text-[12px]">
-      {/* A card's page leads with the change, so the asker's own words move here. */}
-      {decision.card && decision.question.trim() !== decision.card.change.trim() && (
-        <>
-          <dt>question</dt>
-          <dd>{decision.question}</dd>
-        </>
-      )}
       <dt>asked by</dt>
       <dd><AskingSession decision={decision} /></dd>
       {proposalRefInContext(decision.context_md) && (
@@ -145,8 +139,8 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
         <>
           <dt>task</dt>
           <dd>
-            <Link href={`/tasks/${detail.task?.short_id ?? decision.task_id}`} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-violet/30 text-sol-violet hover:bg-sol-violet/10">
-              {detail.task?.short_id ?? "task"}<span className="text-sol-text truncate max-w-[20rem]">{detail.task?.title}</span>
+            <Link href={`/tasks/${detail.task?.short_id ?? decision.task_id}`} className="inline-flex items-center gap-1 max-w-full min-w-0 align-bottom px-1.5 py-0.5 rounded border border-sol-violet/30 text-sol-violet hover:bg-sol-violet/10 [overflow-wrap:normal]">
+              <span className="whitespace-nowrap shrink-0">{detail.task?.short_id ?? "task"}</span><span className="text-sol-text truncate min-w-0 max-w-[20rem]">{detail.task?.title}</span>
             </Link>
             {decision.station && <span className="text-sol-text-dim"> held at <span className="text-sol-text">{decision.station}</span></span>}
           </dd>
@@ -199,9 +193,9 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
         <header className="mt-4">
           <div className="flex items-center gap-2 flex-wrap text-[11px] text-sol-text-dim">
             <span className="font-mono px-1.5 py-0.5 rounded border border-sol-border/60">{decision.short_id ?? "decision"}</span>
-            {outcome ? (
-              <span className={`px-1.5 py-0.5 rounded cc-outcome-pill cc-tone-${outcome.tone}`} data-outcome-pill>{outcome.verdict}</span>
-            ) : (
+            {/* A settled card says its verdict once, as the card's last line with
+                who and when, so the header keeps only the id and the age. */}
+            {!outcome && (
               <span className={`px-1.5 py-0.5 rounded border ${pending ? (decision.blocking ? "border-sol-yellow/40 text-sol-yellow" : "border-sol-blue/30 text-sol-blue") : "border-sol-border text-sol-text-dim"}`}>
                 {pending ? (decision.blocking ? "blocking · the session is parked" : "advisory · the agent proceeded") : decision.status}
               </span>
@@ -215,6 +209,9 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
           {/* A change card leads with what changed, and its cause and goal under
               it, so the first line says what and the second says why. */}
           <h1 className="mt-3 decision-question text-sol-text">{decision.card?.change || decision.question}</h1>
+          {/* A card's page leads with the change; the asker's own question
+              reads right under it, dim, so the page says why it was asked. */}
+          {cardQuestion && <p className="mt-1.5 text-[13px] leading-snug text-sol-text-dim" data-card-question>{cardQuestion}</p>}
           {decision.card ? <ChangeCardCause card={decision.card} className="mt-3" /> : meta}
         </header>
 

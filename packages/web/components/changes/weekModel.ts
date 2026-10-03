@@ -70,10 +70,11 @@ export function buildWeek(input: {
   });
   const stories = perDay.flatMap((d) => d.stories);
   const ledger = releaseLedger(perDay.flatMap((d) => d.edition?.releases ?? []));
-  const stats = weekStats(perDay.map((d) => d.stats), stories.flatMap((s) => s.author_names), ledger.reduce((n, l) => n + l.count, 0));
+  const people = peopleOf(stories, input.roster);
+  // The header counts the people the person chips show, as the day does.
+  const stats = { ...weekStats(perDay.map((d) => d.stats), stories.flatMap((s) => s.author_names), ledger.reduce((n, l) => n + l.count, 0)), people: people.length };
 
   const waiting = waitingKeys(stories, input.live ?? []);
-  const people = peopleOf(stories, input.roster);
   const person = url.person ? personFor(url.person, people) : null;
   const pool = stories.filter((s) => inFocus(s, url) && survives(s, url, waiting, person));
 

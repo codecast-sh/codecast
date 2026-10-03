@@ -6,7 +6,7 @@ import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { servedReadKey } from "../../evals/src/served.ts";
+import { loggedArgv, servedReadKey } from "../../evals/src/served.ts";
 
 const GUARD = path.join(import.meta.dir, "prompt-dry-run-bin", "cast");
 const HARNESS = path.join(import.meta.dir, "prompt-dry-run.ts");
@@ -82,6 +82,9 @@ function world(serve: { files?: Record<string, string>; frozen?: string[]; tree?
   return { cast, log, real, runDir, serveDir, helpDir: path.join(runDir, ".cast-help") };
 }
 
+/** An argv as calls.log keeps it: an argument that is not a plain word single-quoted. */
+const logged = (argv: string[]) => argv.map((a) => (/^[A-Za-z0-9_./:=@%+,-]+$/.test(a) ? a : `'${a.replace(/'/g, "'\\''")}'`)).join(" ");
+
 describe("guard cast: served reads", () => {
   test("the two key vectors hold, and the guard files reads under the same key", () => {
     expect(servedReadKey(["brief"])).toBe("5aade2e80f5dd74f765b32cf20b9954d5283af5331c34e0ad909d8a609cecbcf");
@@ -151,7 +154,7 @@ describe("guard cast: served reads", () => {
     expect(w.cast("decide", "ls").out).toBe("LIVE decide ls dir=/real/state\n");
     for (const argv of [["decide", "Ship it?"], ["decide", "Ship it?", "-o", "Yes"], ["decide", "recommend", "sd-5", "1"]]) {
       expect(w.cast(...argv).code).toBe(1);
-      expect(w.log()).toContain(`REFUSED ${argv.join(" ")}`);
+      expect(w.log()).toContain(`REFUSED ${logged(argv)}`);
     }
   });
 
@@ -176,6 +179,38 @@ describe("guard cast: served reads", () => {
     }
   });
 
+  test("a session read goes live; read --ack (marks it read) and --ask (a paid model call) are refused unless the world served them", () => {
+    const w = world({ tree: [...TREE, ["read", true]] });
+    expect(w.cast("read", "jx7abcd", "--full").out).toBe("LIVE read jx7abcd --full dir=/real/state\n");
+    for (const argv of [["read", "jx7abcd", "--ack"], ["read", "jx7abcd", "--ack=true"], ["read", "jx7abcd", "--ask", "what landed?"], ["read", "jx7abcd", "--ask=what landed?"]]) {
+      const r = w.cast(...argv);
+      expect(r.code).toBe(1);
+      expect(r.err).toContain("read the session without them");
+      expect(w.log()).toContain(`REFUSED ${logged(argv)}`);
+    }
+    expect(w.real().filter((a) => a !== "agent-context --json")).toEqual(["read jx7abcd --full"]);
+    // A synthetic world's prefix record still answers --ask with the transcript it holds.
+    const prefixed = ["read", "jx7abcd"];
+    const k = servedReadKey(prefixed);
+    const served = world({ files: { [`reads/${k}.out`]: "the transcript\n", [`reads/${k}.prefix`]: prefixed.map((a) => `${a}\x1f`).join("") } });
+    expect(served.cast("read", "jx7abcd", "--ask", "what landed?")).toMatchObject({ code: 0, out: "the transcript\n" });
+    expect(served.real()).toEqual([]);
+  });
+
+  test("calls.log keeps every argument's boundaries, so a logged line splits back into the argv and classifies the same", () => {
+    const w = world();
+    const argv = ["decide", "show which plan ships", "-o", "it's", "", 'a"b'];
+    w.cast(...argv);
+    expect(w.log()).toContain(`REFUSED decide 'show which plan ships' -o 'it'\\''s' '' 'a"b'\n`);
+    const line = w.log().split("\n").find((l) => l.startsWith("REFUSED "))!.slice("REFUSED ".length);
+    expect(loggedArgv(line)).toEqual(argv);
+    expect(line).toBe(logged(argv));
+    const classify = (...a: string[]) => Bun.spawnSync(["bash", GUARD, ...a], { env: { PATH: "/usr/bin:/bin", DRY_RUN_CLASSIFY: "1" } }).stdout.toString().trim();
+    // Split back, it is still the write it was; the space-joined line the guard used to log read its question as `decide show`.
+    expect(classify(...loggedArgv(line)!)).toBe("write");
+    expect(classify(...argv.join(" ").split(" ").filter(Boolean))).toBe("read");
+  });
+
   test("DRY_RUN_CLASSIFY answers read or write and logs and runs nothing", () => {
     const w = world();
     const classify = (...argv: string[]) => {
@@ -189,6 +224,9 @@ describe("guard cast: served reads", () => {
     expect(classify("plan", "replay", "pl-4")).toBe("read");
     for (const group of ["task", "trigger", "doc", "org"]) expect(classify(group, "replay", "x")).toBe("write");
     expect(classify("publish", "comments", "pg", "--resolve=c1")).toBe("write");
+    expect(classify("read", "jx7abcd")).toBe("read");
+    expect(classify("read", "jx7abcd", "--ack")).toBe("write");
+    expect(classify("read", "jx7abcd", "--ask", "x")).toBe("write");
     expect(fs.existsSync(path.join(w.runDir, "calls.log"))).toBe(false);
     expect(w.real()).toEqual([]);
   });
@@ -204,7 +242,7 @@ describe("guard cast: served reads", () => {
     ];
     for (const argv of writes) {
       expect(w.cast(...argv).code).toBe(1);
-      expect(w.log()).toContain(`REFUSED ${argv.join(" ")}`);
+      expect(w.log()).toContain(`REFUSED ${logged(argv)}`);
     }
     expect(w.real().filter((a) => a !== "agent-context --json")).toHaveLength(4);
     // Every check here is a guard spawn, about two seconds each at a load of 500.
@@ -217,7 +255,7 @@ describe("guard cast: served reads", () => {
     }
     for (const argv of [["pr", "comment", "12", "hi"], ["pr", "merge", "12"], ["pr", "review", "12", "--approve"], ["chat", "send", "hi"], ["chat", "mark-read"]]) {
       expect(w.cast(...argv).code).toBe(1);
-      expect(w.log()).toContain(`REFUSED ${argv.join(" ")}`);
+      expect(w.log()).toContain(`REFUSED ${logged(argv)}`);
     }
   }, 120_000);
 
@@ -246,7 +284,7 @@ describe("guard cast: served reads", () => {
     const w = world();
     for (const argv of [["sync", "foo"], ["hosts", "foo"], ["send", "jx7abc", "hi"], ["decide", "yes"], ["task", "create", "X"]]) {
       expect(w.cast(...argv)).toMatchObject({ code: 1, out: "" });
-      expect(w.log()).toContain(`REFUSED ${argv.join(" ")}`);
+      expect(w.log()).toContain(`REFUSED ${logged(argv)}`);
     }
     expect(w.log()).not.toContain("UNKNOWN");
     // Nothing but the tree read reached the real CLI.

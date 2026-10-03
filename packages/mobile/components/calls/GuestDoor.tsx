@@ -1,7 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Pressable, Share, StyleSheet, View } from "react-native";
 import * as Haptics from "expo-haptics";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
+import { useInboxStore } from "@codecast/web/store/inboxStore";
+import { useGuestLinks } from "@codecast/web/hooks/useGuestLinks";
+import { useQueryNoThrow } from "@codecast/web/hooks/useQueryNoThrow";
+import { useConvexSync } from "@codecast/web/hooks/useConvexSync";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { humanizeConvexError } from "@codecast/shared/contracts";
 import { CODECAST_BASE_URL } from "@codecast/shared/entities";
@@ -59,14 +63,13 @@ function linkOf(k: GuestKnock): string | null {
  *  who could not (the same answer the web's remove button reads: whether
  *  the room's link list answers them at all). */
 export function useGuestRemover(roomKey: string | null): ((guestId: string, name: string) => void) | null {
-  const { isAuthenticated } = useAuth();
-  const links = useQuery(api.callGuests.listGuestLinks, isAuthenticated && roomKey ? { room_key: roomKey } : "skip");
-  const remove = useMutation(api.callGuests.removeGuest);
-  if (!roomKey || !links) return null;
+  const { canInvite } = useGuestLinks(roomKey);
+  if (!roomKey || !canInvite) return null;
   return (guestId, name) => {
+    // The store's action takes them off the faces now; a refusal puts them back.
     const out = (revokeLink: boolean) => {
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      void remove({ guest_id: guestId, ...(revokeLink ? { revoke_link: true } : {}) }).catch((err: unknown) =>
+      void useInboxStore.getState().removeCallGuest(roomKey, guestId, revokeLink).catch((err: unknown) =>
         Alert.alert("Couldn't remove them", humanizeConvexError(err, "Something went wrong")),
       );
     };
@@ -78,8 +81,6 @@ export function useGuestRemover(roomKey: string | null): ((guestId: string, name
   };
 }
 
-type GuestLink = { link_id: string; path: string; mine: boolean; waiting: number; admitted: number };
-
 /** Invite somebody from outside the team, from the phone: make a link (or
  *  take the one already open) and hand it to the share sheet, and turn it
  *  off. Shown to whoever could make one here, which is the server's answer:
@@ -87,15 +88,14 @@ type GuestLink = { link_id: string; path: string; mine: boolean; waiting: number
  *  invite reads. The link stays open for the default time; picking another
  *  length is the web panel's. */
 export function GuestInviteRow({ roomKey }: { roomKey: string | null }) {
-  const { isAuthenticated } = useAuth();
-  const links = useQuery(api.callGuests.listGuestLinks, isAuthenticated && roomKey ? { room_key: roomKey } : "skip") as
-    | GuestLink[]
-    | null
-    | undefined;
+  // The room's links off the store's guestLinks home (web's own feeder):
+  // whether the viewer may invite is the server's answer, unknown until it
+  // lands, and the row waits for it rather than offer a press that fails.
+  const { links, canInvite } = useGuestLinks(roomKey);
   const create = useMutation(api.callGuests.createGuestLink);
   const revoke = useMutation(api.callGuests.revokeGuestLink);
   const [busy, setBusy] = useState<null | "share" | "off">(null);
-  if (!roomKey || !links) return null;
+  if (!roomKey || !canInvite) return null;
   const mine = links.find((l) => l.mine) ?? null;
 
   const share = async () => {
@@ -169,14 +169,19 @@ export function GuestInviteRow({ roomKey }: { roomKey: string | null }) {
 }
 
 export function GuestDoor({ roomKey }: { roomKey: string | null }) {
+  // Who is at the door, in the store's roomKnocks home: fed here while the
+  // stage shows the room, and answered through the store's localFirst
+  // actions, so an answered knock leaves at once and a refusal restores it.
   const { isAuthenticated } = useAuth();
-  const knocks = useQuery(api.calls.getRoomKnocks, isAuthenticated && roomKey ? { room_key: roomKey, guests: true } : "skip") as
-    | GuestKnock[]
-    | undefined;
-  const admit = useMutation(api.callGuests.admitGuest);
-  const deny = useMutation(api.callGuests.denyGuest);
-  const [busy, setBusy] = useState<string | null>(null);
-  const guests = (knocks ?? []).filter((k) => k.kind === "guest" && k.guest_id);
+  const { data: knockFeed } = useQueryNoThrow(
+    api.calls.getRoomKnocks,
+    isAuthenticated && roomKey ? { room_key: roomKey, guests: true } : "skip",
+  );
+  useConvexSync(knockFeed, useCallback((d: any) => {
+    useInboxStore.getState().syncTable("roomKnocks", d);
+  }, []));
+  const knocks = useInboxStore((s) => s.roomKnocks) as GuestKnock[];
+  const guests = knocks.filter((k) => k.kind === "guest" && k.guest_id);
 
   // A new knock is felt as well as seen: the phone may be face up on a desk.
   const heard = useRef(new Set<string>());
@@ -193,24 +198,21 @@ export function GuestDoor({ roomKey }: { roomKey: string | null }) {
   if (guests.length === 0) return null;
 
   const answer = (k: GuestKnock, how: "admit" | "deny" | "deny_link") => {
-    setBusy(k.guest_id!);
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    const store = useInboxStore.getState();
     const run =
       how === "admit"
-        ? admit({ guest_id: k.guest_id!, name: k.from_name })
-        : deny({ guest_id: k.guest_id!, ...(how === "deny_link" ? { revoke_link: true } : {}) });
-    void run
-      .catch((err: unknown) =>
-        Alert.alert(how === "admit" ? "Couldn't let them in" : "Couldn't turn them away", humanizeConvexError(err, "Something went wrong")),
-      )
-      .finally(() => setBusy(null));
+        ? store.admitGuestKnock(k.guest_id!, k.from_name)
+        : store.denyGuestKnock(k.guest_id!, how === "deny_link");
+    void run.catch((err: unknown) =>
+      Alert.alert(how === "admit" ? "Couldn't let them in" : "Couldn't turn them away", humanizeConvexError(err, "Something went wrong")),
+    );
   };
 
   return (
     <View style={styles.wrap}>
       {guests.map((k) => {
         const canAnswer = k.can_answer !== false;
-        const pending = busy === k.guest_id;
         return (
           <View key={k.from_user} style={styles.card} accessibilityRole="alert">
             <View style={styles.body}>
@@ -224,10 +226,9 @@ export function GuestDoor({ roomKey }: { roomKey: string | null }) {
               </Text>
               {canAnswer && (k.link_turned_away ?? 0) >= 1 && (
                 <Pressable
-                  disabled={pending}
                   onPress={() => answer(k, "deny_link")}
                   hitSlop={6}
-                  style={({ pressed }) => [styles.linkBtn, (pressed || pending) && styles.pressed]}
+                  style={({ pressed }) => [styles.linkBtn, pressed && styles.pressed]}
                   accessibilityLabel={`Turn ${k.from_name} away and turn the link off`}
                 >
                   <Text style={styles.linkBtnText}>
@@ -239,22 +240,20 @@ export function GuestDoor({ roomKey }: { roomKey: string | null }) {
             {canAnswer && (
               <View style={styles.actions}>
                 <Pressable
-                  disabled={pending}
                   onPress={() => answer(k, "deny")}
                   hitSlop={6}
-                  style={({ pressed }) => [styles.btn, (pressed || pending) && styles.pressed]}
+                  style={({ pressed }) => [styles.btn, pressed && styles.pressed]}
                   accessibilityLabel={`Don't let ${k.from_name} in`}
                 >
                   <Text style={styles.btnText}>Deny</Text>
                 </Pressable>
                 <Pressable
-                  disabled={pending}
                   onPress={() => answer(k, "admit")}
                   hitSlop={6}
-                  style={({ pressed }) => [styles.btn, styles.btnPrimary, (pressed || pending) && styles.pressed]}
+                  style={({ pressed }) => [styles.btn, styles.btnPrimary, pressed && styles.pressed]}
                   accessibilityLabel={`Let ${k.from_name} in`}
                 >
-                  <Text style={styles.btnPrimaryText}>{pending ? "…" : "Admit"}</Text>
+                  <Text style={styles.btnPrimaryText}>Admit</Text>
                 </Pressable>
               </View>
             )}

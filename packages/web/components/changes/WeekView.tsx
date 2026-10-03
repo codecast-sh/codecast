@@ -4,11 +4,11 @@
 // visual language as the day: the biggest story is the one card, the rest are
 // rows, facts are mono. Every story is a link into its day with its evidence
 // open. Built only from day editions, stories and the week row (weekModel).
-import { ledgerLabel, type LedgerLine } from "@codecast/shared/changes";
+import { leadSentences, ledgerLabel, type LedgerLine } from "@codecast/shared/changes";
 import type { StoryRow, WorksRow } from "../../hooks/useSyncChanges";
 import { changesDayLabel } from "../../lib/changesDay";
 import { DiffStat } from "../entityDisplay";
-import { RELEASE_COLOR } from "./areaColor";
+import { ink, RELEASE_COLOR } from "./areaColor";
 import { EditionHead } from "./EditionHead";
 import { InTheWorks } from "./InTheWorks";
 import { AreaTag, FadeText, KindGlyph, ReleaseTag, RiskSrText, StoryEdge } from "./StoryParts";
@@ -16,6 +16,9 @@ import { useStoryAttrs } from "./storyContext";
 import type { WeekModel } from "./weekModel";
 
 const rise = (i: number) => ({ ["--i" as any]: Math.min(i, 10) });
+
+/** Words of the week's standfirst the head keeps, so the biggest story stays above the fold; the rest follows the biggest stories. */
+const STANDFIRST_WORDS = 60;
 
 function SectionTitle({ children }: { children: string }) {
   return (
@@ -45,7 +48,7 @@ function TopCard({ story, onOpen, echo }: { story: StoryRow; onOpen: () => void;
         <ReleaseTag story={story} />
         <span className="font-mono text-[11px] text-sol-text/45">{changesDayLabel(story.date)}</span>
       </span>
-      <span className={continues ? "sr-only" : "chg-ui mt-2 block text-[22px] font-semibold leading-[1.25] text-sol-text [overflow-wrap:anywhere] [text-wrap:balance]"}>
+      <span className={continues ? "sr-only" : "chg-ui mt-2 block text-[22px] font-semibold leading-[1.25] text-sol-text [overflow-wrap:anywhere] [text-wrap:pretty]"}>
         <FadeText text={story.headline} />
       </span>
       {story.dek && (
@@ -125,6 +128,7 @@ export function WeekView({ week, works, today, reserve, animate, onDay, onStory,
 }) {
   const motion = (i: number) => (animate ? { className: "chg-rise", style: rise(i) } : { className: "", style: undefined });
   const [lead, ...rest] = week.top;
+  const standfirst = week.standfirst ? leadSentences(week.standfirst, STANDFIRST_WORDS) : null;
   const thisWeek = week.days.some((d) => d.date === today);
   const quiet = week.stories.length === 0;
   return (
@@ -133,7 +137,7 @@ export function WeekView({ week, works, today, reserve, animate, onDay, onStory,
         {quiet ? (
           <h2 className="chg-headline text-sol-text/80">Nothing landed on main {thisWeek ? "this week yet" : "this week"}.</h2>
         ) : (
-          <EditionHead headline={week.headline} standfirst={week.standfirst} reserve={reserve} filterLine={week.filterLine} onClear={onClearFilters} />
+          <EditionHead headline={week.headline} standfirst={standfirst?.lead ?? null} reserve={reserve} filterLine={week.filterLine} onClear={onClearFilters} />
         )}
       </div>
 
@@ -156,6 +160,12 @@ export function WeekView({ week, works, today, reserve, animate, onDay, onStory,
             )}
           </section>
         )}
+        {/* The standfirst's remainder: the summary stays whole, read on past the stories it names. */}
+        {standfirst?.rest && (
+          <p className={`chg-ui chg-standfirst text-[15px] leading-[1.6] ${motion(2).className}`} style={{ ...motion(2).style, color: ink(80) }}>
+            <FadeText text={standfirst.rest} />
+          </p>
+        )}
 
         {week.ledger.length > 0 && (
           <section className={motion(3).className} style={motion(3).style}>
@@ -173,13 +183,13 @@ export function WeekView({ week, works, today, reserve, animate, onDay, onStory,
                 type="button"
                 onClick={() => onDay(d.date)}
                 title={d.quiet ? undefined : d.headline}
-                className="grid w-full grid-cols-[6.5rem_minmax(0,1fr)_auto] items-start gap-3 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-sol-bg-alt/60"
+                className="grid w-full grid-cols-[6.5rem_minmax(0,1fr)_5.5rem] items-start gap-3 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-sol-bg-alt/60"
               >
                 <span className="font-mono text-[12px] leading-5 tabular-nums text-sol-text/55">{changesDayLabel(d.date)}</span>
                 <span className={`chg-ui line-clamp-3 text-[14px] leading-5 ${d.quiet ? "text-sol-text/40" : "font-medium text-sol-text/90"}`}>
                   {d.quiet ? (d.date === today ? "Nothing landed yet" : "Nothing landed") : d.headline}
                 </span>
-                <span className="font-mono text-[10px] leading-5 tabular-nums text-sol-text/45">{d.quiet ? "" : `${d.commits} ${d.commits === 1 ? "commit" : "commits"}`}</span>
+                <span className="text-right font-mono text-[10px] leading-5 tabular-nums text-sol-text/45">{d.quiet ? "" : `${d.commits} ${d.commits === 1 ? "commit" : "commits"}`}</span>
               </button>
             ))}
           </div>

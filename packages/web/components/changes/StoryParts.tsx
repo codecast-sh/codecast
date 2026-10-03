@@ -2,26 +2,41 @@
 // In brief and the drawer, so a story reads the same wherever it sits: its area
 // tag, kind glyph, risk texture, the release that carried it, the people and
 // sessions behind it, and the line that says where its "why" came from.
-import { useRef, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { ChevronUp, CircleDashed, CornerUpLeft, Zap } from "lucide-react";
 import type { StoryRow } from "../../hooks/useSyncChanges";
 import { useTeamRosterIdentity } from "../../hooks/useTeamRoster";
-import { memberAvatarUrl, memberDisplayName } from "../../lib/liveEntities";
+import { memberAvatarUrl } from "../../lib/liveEntities";
 import { AuthorAvatar } from "../entityDisplay";
 import { EntityIdPill, TextWithMentions } from "../EntityIdPill";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { areaColor, areaLabel, KIND_COLOR, RISK_HATCH } from "./areaColor";
+import { peopleOf } from "./editionModel";
 import { useAreaColors } from "./storyContext";
 
 /** A wall-clock time, "15:27" in the reader's locale. */
 export const clockOf = (t: number) => new Date(t).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
 
-/** A tooltip in the page's quiet register. */
-export function Tip({ text, children, side = "top" }: { text: ReactNode; children: ReactNode; side?: "top" | "bottom" | "left" | "right" }) {
+/** Whether an element's text is cut by its own box: a line clamp, or a truncate. */
+const isClipped = (el: HTMLElement | null) => !!el && (el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1);
+
+/**
+ * A tooltip in the page's quiet register. With `whenClipped` it opens only
+ * while its trigger's text is cut short, so text on screen whole is never
+ * said twice.
+ */
+export function Tip({ text, children, side = "top", whenClipped = false }: {
+  text: ReactNode;
+  children: ReactNode;
+  side?: "top" | "bottom" | "left" | "right";
+  whenClipped?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const trigger = useRef<HTMLElement>(null);
   if (!text) return <>{children}</>;
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>{children}</TooltipTrigger>
+    <Tooltip open={open} onOpenChange={(o) => setOpen(o && (!whenClipped || isClipped(trigger.current)))}>
+      <TooltipTrigger asChild ref={trigger as any}>{children}</TooltipTrigger>
       <TooltipContent side={side} className="max-w-[320px] border border-sol-border/40 bg-sol-bg px-2 py-1 font-mono text-[10px] leading-relaxed text-sol-text shadow-md">
         {text}
       </TooltipContent>
@@ -156,24 +171,13 @@ export function Provenance({ story, className = "" }: { story: WhyFacts; classNa
   return <span className={`inline-flex min-w-0 flex-wrap items-center gap-1 font-mono text-[11px] text-sol-text/55 ${className}`}>{body}</span>;
 }
 
-/** The people behind a story: session owners from the live roster, then commit authors by name. */
+/** The people behind a story, one face per person (editionModel.peopleOf), the faces from the live roster. */
 export function People({ story, size = 16, max = 4 }: { story: Pick<StoryRow, "actor_user_ids" | "author_names">; size?: number; max?: number }) {
   const roster = useTeamRosterIdentity();
-  const people: { key: string; name: string; image?: string }[] = [];
-  const seen = new Set<string>();
-  for (const id of story.actor_user_ids) {
-    const m = roster.find((r) => r._id === String(id));
-    if (!m) continue;
-    const name = memberDisplayName(m);
-    seen.add(name.toLowerCase());
-    people.push({ key: String(id), name, image: memberAvatarUrl(m) });
-  }
-  for (const name of story.author_names) {
-    if (seen.has(name.toLowerCase())) continue;
-    seen.add(name.toLowerCase());
-    const m = roster.find((r) => (r.name ?? "").toLowerCase() === name.toLowerCase());
-    people.push({ key: `a:${name}`, name, image: m ? memberAvatarUrl(m) : undefined });
-  }
+  const people = peopleOf([story], roster).map((p) => {
+    const m = p.userIds.map((id) => roster.find((r) => String(r._id) === id)).find(Boolean);
+    return { key: p.key, name: p.name, image: m ? memberAvatarUrl(m) : undefined };
+  });
   if (!people.length) return null;
   const shown = people.slice(0, max);
   const names = people.map((p) => p.name).join(", ");

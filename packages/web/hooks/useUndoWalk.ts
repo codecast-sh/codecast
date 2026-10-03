@@ -7,14 +7,14 @@
 import { useCallback, useEffect, useRef } from "react";
 import { useEventListener } from "./useEventListener";
 import { subscribeShortcutUsed, useShortcutAction, useShortcuts } from "../shortcuts/ShortcutProvider";
-import { shortcutAllowedAt } from "@platform/keys";
+import { isEditableTarget, shortcutAllowedAt } from "@platform/keys";
 import { getShortcutsForAction, isMac, matchShortcut, type ShortcutAction } from "../shortcuts/registry";
 import { KEY_OWNERSHIP } from "../shortcuts/keyOwnership";
 import { bridge, isElectron } from "../lib/desktop";
 import { getUndoHistory, performRedo, performUndo } from "../store/undoStack";
 import * as undoTimeline from "../lib/undoTimelineOpen";
 import { fireUndoHistoryMilestone } from "../lib/undoHistory";
-import { WALK_IDLE, walk, walkTimer, walkView, type WalkEvent, type WalkState } from "../lib/undoWalk";
+import { WALK_IDLE, fieldOwnsStep, walk, walkTimer, walkView, type WalkEvent, type WalkState } from "../lib/undoWalk";
 
 const CARD_SELECTOR = "[data-undo-timeline]";
 /** The shortcut context live while the card peeks or fades: it routes H to
@@ -39,6 +39,8 @@ function landingTop(dir: "undo" | "redo"): string | undefined {
   return (dir === "undo" ? h.redoOrder : h.undoOrder)[0];
 }
 
+const CAPTURE: AddEventListenerOptions = { capture: true };
+
 function pointerOverCard(): boolean {
   const card = typeof document !== "undefined" ? document.querySelector(CARD_SELECTOR) : null;
   return !!card?.matches(":hover");
@@ -49,6 +51,8 @@ export function useUndoWalk(): void {
   const held = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { setContext } = useShortcuts();
+  // When each text field was last edited, for fieldOwnsStep.
+  const fieldEdits = useRef(new WeakMap<Element, number>());
 
   const feed = useCallback((event: WalkEvent) => {
     const prev = state.current;
@@ -75,6 +79,10 @@ export function useUndoWalk(): void {
   // opened (the palette, the chord, a toast) is left as it is: the walk only
   // drives a card it opened itself.
   const step = useCallback((dir: "undo" | "redo") => {
+    // The chords reach here from an empty text field too. One whose own
+    // history is newer than the entry declines, so the browser's undo runs.
+    const focus = typeof document !== "undefined" ? document.activeElement : null;
+    if (isEditableTarget(focus) && fieldOwnsStep(dir, fieldEdits.current.get(focus!), getUndoHistory())) return false;
     const landed = landingTop(dir);
     const done = dir === "undo" ? performUndo() : performRedo();
     // Only a press that took something back is a step. One with nothing to
@@ -149,6 +157,10 @@ export function useUndoWalk(): void {
     held.current = false;
     feed({ type: "release", hovered: pointerOverCard() });
   });
+
+  useEventListener("input", (e: Event) => {
+    if (e.target instanceof Element) fieldEdits.current.set(e.target, Date.now());
+  }, undefined, CAPTURE);
 
   // Leaving the window drops the key state with it.
   useEventListener("blur", () => {

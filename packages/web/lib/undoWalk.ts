@@ -102,3 +102,23 @@ export function walkTimer(state: WalkState): { ms: number; event: WalkEvent } | 
   if (state.phase === "fading") return { ms: FADE_MS, event: { type: "fadeTimer" } };
   return null;
 }
+
+/**
+ * Whether a press from an empty text field belongs to the field rather than
+ * the app. The undo chords fire app undo from an empty field (the triage
+ * chords act from an empty composer and leave focus there), but a field
+ * edited after the entry the press would reach was recorded (undo) or taken
+ * back (redo) holds the newer history: clearing a draft and pressing ⌘Z
+ * brings the draft back.
+ */
+export function fieldOwnsStep(
+  dir: "undo" | "redo",
+  lastEditAt: number | undefined,
+  history: { items: readonly { id: string; ts: number; undoneAt?: number }[]; undoOrder: readonly string[]; redoOrder: readonly string[] },
+): boolean {
+  if (lastEditAt === undefined) return false;
+  const id = (dir === "undo" ? history.undoOrder : history.redoOrder)[0];
+  const entry = id ? history.items.find((i) => i.id === id) : undefined;
+  if (!entry) return true;
+  return lastEditAt > (dir === "undo" ? entry.ts : (entry.undoneAt ?? entry.ts));
+}

@@ -66,6 +66,8 @@ export const DRY_RUN_SCRIPT = join(REPO_ROOT, 'packages', 'cli', 'scripts', 'pro
 export const DRY_RUN_SCRIPT_REL = 'packages/cli/scripts/prompt-dry-run.ts';
 /** The guard `cast` a dry run puts first on PATH; its read list is the one answer to whether a call writes. */
 export const GUARD_CAST = join(REPO_ROOT, 'packages', 'cli', 'scripts', 'prompt-dry-run-bin', 'cast');
+/** The file in an agent rep's folder naming the guard classifier its refusals were graded with (replay.ts guardClassifierSha); part of its ruler. */
+export const GUARD_STAMP = 'guard.sha';
 
 /** The real instruction file; CLAUDE.md is a symlink to it. */
 export const AGENTS_MD = join(REPO_ROOT, 'AGENTS.md');

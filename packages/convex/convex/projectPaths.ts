@@ -57,6 +57,27 @@ export function pathWithinLocalRoots(pathRaw: string, roots: string[]): boolean 
   });
 }
 
+/**
+ * The project a directory belongs to: the one whose project_path contains it
+ * (pathWithinLocalRoots), the deepest such path when several do. Projects that
+ * share that path are told apart by the repo's line profile default
+ * (projects.line_profile.default); still more than one is no answer, because
+ * guessing files a signal into a line nobody there is watching.
+ */
+export function projectContainingPath<P extends { project_path?: string; line_profile?: { default?: boolean } }>(
+  projects: P[],
+  dirRaw: string | null | undefined,
+): P | null {
+  if (!dirRaw) return null;
+  const depth = (p: P) => p.project_path!.replace(/\/+$/, "").length;
+  const holding = projects.filter((p) => p.project_path && pathWithinLocalRoots(dirRaw, [p.project_path]));
+  if (holding.length === 0) return null;
+  const deepest = Math.max(...holding.map(depth));
+  let best = holding.filter((p) => depth(p) === deepest);
+  if (best.length > 1) best = best.filter((p) => p.line_profile?.default);
+  return best.length === 1 ? best[0] : null;
+}
+
 export interface GitMetaSource {
   git_remote_url?: string | null;
   git_root?: string | null;

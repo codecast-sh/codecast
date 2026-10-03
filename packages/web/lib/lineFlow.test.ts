@@ -96,6 +96,14 @@ describe("buildLineFlow", () => {
     expect(f.throughput.shipped).toBe(3);
   });
 
+  it("a ship still in its watch counts as shipped and says it sits in Watching, not Closed", () => {
+    const f = flow({ tasks: [cause("w", { status: "done", closed_at: NOW - DAY, watch_until: NOW + 5 * DAY })] });
+    expect(f.throughput.shipped).toBe(1);
+    expect(f.throughput.shippedInWatch).toBe(1);
+    expect(f.watching.count).toBe(1);
+    expect(f.closed.count).toBe(0);
+  });
+
   it("only cards at the decide gate hold admission; Awaiting lists every blocking ask", () => {
     const asks = [1, 2, 3, 4, 5].map((i) => card(`d${i}`, { created_at: NOW - i * HOUR, gate_node_id: i === 1 ? "review" : "decide" }));
     const f = flow({ tasks: [cause("a")], decisions: asks });
@@ -114,7 +122,7 @@ describe("buildLineFlow", () => {
     expect(f.build.state).toMatchObject({ kind: "running", why: "1 building, 1 stalled" });
   });
 
-  it("sense groups by source with a 24 hour sparkline", () => {
+  it("sense groups by source with a seven day sparkline", () => {
     const f = flow({
       signals: [
         signal("s1", { created_at: NOW - 30 * 60_000 }),
@@ -123,8 +131,8 @@ describe("buildLineFlow", () => {
       ],
     });
     expect(f.sense.items.map((s) => [s.source, s.day, s.week])).toEqual([["sentry", 2, 2], ["evals", 0, 1]]);
-    expect(f.sense.items[0].spark[23]).toBe(1);
-    expect(f.sense.items[0].spark[19]).toBe(1);
+    expect(f.sense.items[0].spark).toEqual([0, 0, 0, 0, 0, 0, 2]);
+    expect(f.sense.items[1].spark).toEqual([0, 0, 0, 0, 1, 0, 0]);
     expect(f.sense.count).toBe(2);
     expect(f.sense.state.kind).toBe("running");
   });
@@ -155,6 +163,7 @@ describe("buildLineFlow", () => {
       opened: 2,
       dissolved: 1,
       shipped: 2,
+      shippedInWatch: 0,
       reopened: 1,
       medianToShip: 3.5 * DAY,
       tokensPerShip: 2000,

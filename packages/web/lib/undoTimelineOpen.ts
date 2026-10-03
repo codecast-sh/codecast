@@ -95,3 +95,27 @@ export function subscribe(fn: () => void): () => void {
     listeners.delete(fn);
   };
 }
+
+// A keyboard undo that stopped at an entry it may not take back blind (one
+// whose undo widens access) while the card is open: the notifier stays quiet
+// so no toast covers the card, and the card marks that row instead. `n`
+// counts the stops, so a second press on the same row flashes it again.
+export type UndoTimelineFlash = { id: string; n: number };
+let flash: UndoTimelineFlash | null = null;
+const flashListeners = new Set<() => void>();
+
+export function flashRow(id: string): void {
+  flash = { id, n: (flash?.n ?? 0) + 1 };
+  for (const listener of [...flashListeners]) listener();
+}
+
+export function getFlash(): UndoTimelineFlash | null {
+  return flash;
+}
+
+export function subscribeFlash(fn: () => void): () => void {
+  flashListeners.add(fn);
+  return () => {
+    flashListeners.delete(fn);
+  };
+}

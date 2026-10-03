@@ -298,7 +298,7 @@ describe("line.cast template", () => {
     expect(scripts.eval).toContain("cmd=''");
     expect(scripts.ship).toContain("cmd=''");
     const all = prompts.join("\n");
-    expect(all).toContain("principles, each with a stable id: none");
+    expect(all).toContain("principles, each with a stable id: https://github.com/codecast-sh/codecast/blob/main/docs/principles.md (the shared set)\n");
     expect(all).toContain("github.com/codecast-sh/codecast/blob/main/docs/prompting.md");
   });
 
