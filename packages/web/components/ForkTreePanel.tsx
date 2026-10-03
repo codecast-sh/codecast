@@ -1,7 +1,7 @@
 import { AppLoader } from "./AppLoader";
+import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useRef, useState, useMemo, useCallback } from "react";
 import { createPortal } from "react-dom";
-import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Split, Search, GitFork, ChevronRight } from "lucide-react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -278,12 +278,12 @@ function ForkTreeContent({
   // MessageBrowserPopover reads) answers instantly for any branch the viewer
   // has opened; the query fires only when that cache is cold.
   const cachedDrillMsgs = useInboxStore((s) => (drillId ? s.userMessages[drillId] : undefined));
-  const drillMsgsQuery = useQuery(
+  const drillMsgsQuery = useQueryNoThrow(
     api.conversations.getUserMessages,
     mode === "messages" && drillId && isConvexId(drillId) && !cachedDrillMsgs
       ? { conversation_id: drillId as any, ...shareTokenArg(drillId) }
       : "skip",
-  );
+  ).data;
   const drillMsgsRaw = cachedDrillMsgs ?? drillMsgsQuery;
   const drillMsgs: NavMsg[] = useMemo(() => {
     const arr = Array.isArray(drillMsgsRaw) ? (drillMsgsRaw as NavMsg[]).slice() : [];

@@ -11,15 +11,14 @@
  */
 
 import { useCallback, useMemo, useState } from "react";
+import Link from "next/link";
 import { ShortId } from "../../../components/ShortId";
 import { useMutation } from "convex/react";
 import { useShallow } from "zustand/react/shallow";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
 import {
-  AlertTriangle,
   ArrowRightLeft,
-  Check,
   CheckSquare,
   History,
   Loader2,
@@ -49,62 +48,26 @@ import {
   useDevices,
   type Device,
 } from "../../../components/DeviceBadge";
-import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
+import { useMigrationBatches, useMigrationCandidates } from "../../../hooks/useSyncMigrations";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useInboxStore } from "../../../store/inboxStore";
 import { cn } from "../../../lib/utils";
+import { MigrationStatusPill } from "../../../components/MigrationStatusPill";
 import {
   MID_TURN_STATUSES,
-  ROW_STATUS_LABEL,
   WAIT_PRESETS,
   batchLooksUnclaimed,
+  effectiveRowStatus,
   eligibilityFor,
   isRowActive,
   isRowTerminal,
+  type MigrationBatch as Batch,
+  type MigrationBatchRow as BatchRow,
   type MigrationCandidate,
   type MigrationRowStatus,
 } from "../../../lib/migrationPlan";
 
 const api = _api as any;
-
-type BatchRow = {
-  migration_id: string;
-  conversation_id: string;
-  title: string | null;
-  short_id: string | null;
-  direction: "to_cloud" | "to_local";
-  from_device_id: string | null;
-  to_device_id: string;
-  executor_device_id: string;
-  status: MigrationRowStatus;
-  stage: string | null;
-  error: string | null;
-  attempt: number;
-  started_at: number | null;
-  finished_at: number | null;
-  updated_at: number;
-  destination_path: string | null;
-  verification: string | null;
-};
-
-type Batch = {
-  batch_id: string;
-  to_device_id: string;
-  created_at: number;
-  updated_at: number;
-  cancelled_at: number | null;
-  wait_for_idle_ms: number;
-  concurrency: number;
-  executor_device_ids: string[];
-  total: number;
-  done: number;
-  failed: number;
-  cancelled: number;
-  active: number;
-  queued: number;
-  state: "running" | "done" | "partial" | "failed" | "cancelled" | "empty";
-  rows: BatchRow[];
-};
 
 function shortName(c: { title: string | null; short_id: string | null; conversation_id?: string; _id?: string }): string {
   return c.title?.trim() || c.short_id || (c.conversation_id ?? c._id ?? "").slice(0, 8);
@@ -129,29 +92,6 @@ function useTicker(active: boolean): number {
     return () => clearInterval(t);
   }, [active]);
   return now;
-}
-
-const STATUS_TONE: Record<MigrationRowStatus, string> = {
-  queued: "bg-sol-bg-highlight/60 text-sol-text-muted",
-  waiting_idle: "bg-sol-yellow/15 text-sol-yellow",
-  quiescing: "bg-sol-orange/15 text-sol-orange",
-  transferring: "bg-sol-blue/15 text-sol-blue",
-  switching: "bg-sol-violet/15 text-sol-violet",
-  resuming: "bg-sol-cyan/15 text-sol-cyan",
-  done: "bg-sol-green/15 text-sol-green",
-  failed: "bg-sol-red/15 text-sol-red",
-  cancelled: "bg-sol-bg-highlight/60 text-sol-text-dim",
-};
-
-function StatusPill({ status }: { status: MigrationRowStatus }) {
-  return (
-    <span className={cn("inline-flex items-center gap-1 rounded px-1.5 py-px text-[10px] font-medium whitespace-nowrap", STATUS_TONE[status])}>
-      {isRowActive(status) && <Loader2 className="h-2.5 w-2.5 animate-spin" />}
-      {status === "done" && <Check className="h-2.5 w-2.5" />}
-      {status === "failed" && <AlertTriangle className="h-2.5 w-2.5" />}
-      {ROW_STATUS_LABEL[status]}
-    </span>
-  );
 }
 
 const AGENT_DOT: Record<string, string> = {
@@ -339,7 +279,7 @@ function BatchCard({ b, devices, now, expandedDefault }: { b: Batch; devices: Ma
             const dest = devices.get(r.to_device_id);
             return (
               <li key={r.migration_id} className="flex items-start gap-3 px-3 py-2">
-                <StatusPill status={r.status} />
+                <MigrationStatusPill status={effectiveRowStatus(b, r)} />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 min-w-0">
                     <span className="truncate text-sm text-sol-text">{shortName(r)}</span>
@@ -374,8 +314,8 @@ function BatchCard({ b, devices, now, expandedDefault }: { b: Batch; devices: Ma
 
 export default function MigratePanel() {
   const { devices, byId, locals, remotes, loaded } = useDevices();
-  const { data: candidatesRaw } = useQueryNoThrow(api.sessionMigrations.candidates, {}) as { data: MigrationCandidate[] | null | undefined };
-  const { data: batchesRaw } = useQueryNoThrow(api.sessionMigrations.listBatches, {}) as { data: Batch[] | null | undefined };
+  const { candidates: candidatesRaw, error: candidatesError, retry: retryCandidates } = useMigrationCandidates();
+  const { batches: batchesRaw } = useMigrationBatches();
   const createBatch = useMutation(api.sessionMigrations.createBatch);
 
   const candidates = useMemo(() => candidatesRaw ?? [], [candidatesRaw]);
@@ -507,6 +447,9 @@ export default function MigratePanel() {
 
   return (
     <SettingsPanel>
+      <p className="px-1 pb-2 text-[11px] text-sol-text-muted">
+        To see which sessions are using a laptop's CPU and memory, and get suggestions when it is under load, open <Link href="/resources" className="text-sol-cyan hover:underline">Resources</Link>.
+      </p>
       <SettingsSection
         title="Destination"
         icon={ArrowRightLeft}
@@ -558,7 +501,12 @@ export default function MigratePanel() {
             movable only
           </label>
         </div>
-        {candidatesRaw === undefined ? (
+        {candidatesRaw === undefined && candidatesError ? (
+          <div className="px-4 py-6 text-center text-xs text-sol-text-muted sm:px-5">
+            Your sessions could not be loaded.{" "}
+            <button type="button" onClick={retryCandidates} className="text-sol-cyan hover:underline">Try again</button>
+          </div>
+        ) : candidatesRaw === undefined ? (
           <div className="px-4 py-6 text-center text-xs text-sol-text-muted sm:px-5">Loading sessions…</div>
         ) : rows.length === 0 ? (
           <div className="px-4 py-6 text-center text-xs text-sol-text-muted sm:px-5">

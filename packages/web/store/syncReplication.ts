@@ -95,6 +95,8 @@ export type MutUpdate = ReplicationUpdate & {
   fields?: Record<string, Record<string, unknown>>;
   /** The action's time on the follower: the mirrored lock's `ts`, so the write's later acknowledgement (sent after the action) matches it. */
   ts?: number;
+  /** Rows the follower put back whole (an undo of a hide that forgot them): the host lifts the excludes its own forget planted. */
+  readds?: string[];
 };
 
 export function buildMutUpdates(patches: readonly any[], state: any): MutUpdate[] {
@@ -102,6 +104,7 @@ export function buildMutUpdates(patches: readonly any[], state: any): MutUpdate[
   const ts = Date.now();
   const edited = new Map<string, Map<string, Record<string, unknown>>>();
   const whole = new Map<string, Set<string>>();
+  const readded = new Map<string, Set<string>>();
   for (const patch of patches) {
     const path = patch.path as (string | number)[];
     if (path.length < 2) continue;
@@ -113,6 +116,11 @@ export function buildMutUpdates(patches: readonly any[], state: any): MutUpdate[
       let w = whole.get(key);
       if (!w) whole.set(key, (w = new Set()));
       w.add(id);
+      if (patch.op === "add" && (key === "sessions" || key === "conversations")) {
+        let r = readded.get(key);
+        if (!r) readded.set(key, (r = new Set()));
+        r.add(id);
+      }
       continue;
     }
     if (path.length !== 3) continue; // a nested edit: the row ships whole
@@ -124,6 +132,11 @@ export function buildMutUpdates(patches: readonly any[], state: any): MutUpdate[
     f[field] = state?.[key]?.[id]?.[field];
   }
   for (const u of updates) {
+    const back = readded.get(u.key);
+    if (back && u.upserts?.some((row: any) => back.has(String(row._id)))) {
+      u.readds = [...back];
+      u.ts ??= ts;
+    }
     const rows = edited.get(u.key);
     if (!rows || !u.upserts) continue;
     const w = whole.get(u.key);
@@ -300,6 +313,17 @@ function applyUpdatesToStoreInner(updates: MutUpdate[], opts?: { optimistic?: bo
     }
     if (u.upserts?.length) {
       if (opts?.optimistic) {
+        if (u.readds?.length && (u.key === "sessions" || u.key === "conversations")) {
+          // The delta merge below skips an excluded id, so a row the follower
+          // put back after this window forgot it lands the way the gesture
+          // bridge lands it: excludes lifted, row put, include lock held.
+          const coll = u.key;
+          const back = new Set(u.readds);
+          const rows = u.upserts
+            .filter((row: any) => back.has(String(row._id)))
+            .map((row: any) => ({ id: String(row._id), [coll]: row }));
+          useInboxStore.getState().applyGestureBridge({ kind: "unforget", rows, ts: u.ts ?? Date.now() });
+        }
         const current = useInboxStore.getState();
         // Every lock this window holds on the sibling's rows, which the merge
         // below would read as a value echo and retire.

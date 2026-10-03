@@ -19,6 +19,8 @@ export type PendingMessageInsertFields = {
   imageStorageIds?: Id<"_storage">[];
   clientId?: string;
   origin?: "scheduler";
+  // A person wrote this (see enqueuePendingMessage.human).
+  human?: boolean;
   createdAt: number;
   // Park the row as "held" (a standing session's turn, released by the wake
   // rail's flush) instead of "pending".
@@ -105,6 +107,7 @@ async function insertPendingMessageRow(
     image_storage_ids: fields.imageStorageIds,
     client_id: fields.clientId,
     origin: fields.origin,
+    human: fields.human || undefined,
     status: fields.held ? ("held" as const) : ("pending" as const),
     created_at: fields.createdAt,
     retry_count: 0,

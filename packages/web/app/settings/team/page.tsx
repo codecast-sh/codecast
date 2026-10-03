@@ -44,7 +44,10 @@ export default function TeamPage() {
   const setMemberRole = useMutation(api.teams.setMemberRole);
   const syncGithubOrg = useAction(api.teams.syncGithubOrg);
   const updateTeamIcon = useMutation(api.teams.updateTeamIcon);
-  const { data: teamMembers } = useSettingsData("teamMembers");
+  const { data: teamMembers, error: membersError } = useSettingsData("teamMembers");
+  // Nothing cached and the roster query failed: no count is known, so none
+  // is claimed.
+  const membersUnknown = teamMembers === undefined && !!membersError;
 
   const [teamName, setTeamName] = useState("");
   const [isEditingTeamName, setIsEditingTeamName] = useState(false);
@@ -372,10 +375,13 @@ export default function TeamPage() {
         icon={Users}
         actions={
           <span className="text-xs text-sol-text-muted">
-            {memberCount} member{memberCount !== 1 ? "s" : ""}
+            {membersUnknown ? "Could not load members" : `${memberCount} member${memberCount !== 1 ? "s" : ""}`}
           </span>
         }
       >
+        {membersUnknown && (
+          <div className="px-4 py-3 text-xs text-sol-text-muted sm:px-5">The member list could not be loaded.</div>
+        )}
         {people.map((member) => {
           const daemonStatus = getMemberDaemonStatus(member.daemon_last_seen);
           return (
@@ -486,7 +492,9 @@ export default function TeamPage() {
         >
           <SettingsRow
             label="Delete this team"
-            description={memberCount === 1
+            description={membersUnknown
+              ? "Every member loses access the moment you confirm."
+              : memberCount === 1
               ? "You are the only member. The team ends the moment you confirm."
               : `${memberCount} members lose access the moment you confirm.`}
           >

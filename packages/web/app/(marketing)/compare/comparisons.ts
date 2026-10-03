@@ -100,7 +100,7 @@ export const COMPARISONS: Comparison[] = [
     title: "Codecast vs Delta",
     dek: "Delta, from the makers of the Zed editor, and codecast share a premise: the conversation with the agent is the unit of work, and the team should see it live. Delta builds that on its own agent and its own file history. Codecast builds it on the agents you already run and on git.",
     codecastIs:
-      "Codecast is a team record and control layer for coding agents: a daemon on each machine watches the history files Claude Code, Codex, Cursor and Gemini already write and syncs every session live into one searchable, steerable place your team shares, with tasks, plans, docs, triggers and line attribution built on that record.",
+      "Codecast is a workspace for a team and its coding agents: chat, calls, tasks, plans, docs, pull requests, decisions and triggers, with agents taking part in each. A daemon on each machine watches the history files Claude Code, Codex, Cursor and Gemini already write and syncs every session live, so all of it is built on one searchable, steerable record with line attribution.",
     competitorIs:
       "Delta is a desktop app from Zed Industries, in public beta since September 2026, built around the thread: a conversation with Delta's own agent, paired with a checkout of your repository. Its sync layer, DeltaDB, records each edit and message in order between git commits and replicates the conversation and the working tree to everyone in the thread in real time.",
     bottomLine:
@@ -221,7 +221,7 @@ export const COMPARISONS: Comparison[] = [
     strengths: {
       codecast: {
         pros: [
-          "Records every session live with no change to how anyone works: four agents, any machine, nothing to switch on.",
+          "Records every session live with no change to how anyone works: six agents, any machine, nothing to switch on.",
           "The record outlives the session. Full text and semantic search, questions across the whole corpus, and cast blame from any line back to the conversation that wrote it.",
           "Agents read the record themselves, so memory carries across sessions, people and months.",
           "Already runs away from your desk: move a live session to another machine with its working tree, fork onto a cloud host, and answer permission prompts from a phone.",
@@ -399,9 +399,9 @@ export const COMPARISONS: Comparison[] = [
     competitor: "Conductor",
     competitorUrl: "https://conductor.build",
     title: "Codecast vs Conductor",
-    dek: "Conductor runs a fleet of agents in parallel from one Mac app. Codecast records and steers the sessions your whole team runs, on every machine.",
+    dek: "Conductor runs a fleet of agents in parallel from one Mac app. Codecast is the workspace a whole team and its agents share: every session on every machine, with the chat, tasks, docs and pull requests around them.",
     codecastIs:
-      "Codecast is a team dashboard and memory for coding agent sessions: a daemon syncs every session your team runs — any supported agent, any machine — into one searchable, steerable record.",
+      "Codecast is a workspace for a team and its coding agents. A daemon syncs every session your team runs, on any supported agent and any machine, into one searchable, steerable record, and the team's chat, tasks, plans, docs, pull requests and decisions live on that record with agents taking part in each.",
     competitorIs:
       "Conductor is a macOS app for running multiple Claude Code, Codex, and Cursor agents in parallel — each in an isolated workspace, locally or in Conductor's cloud sandboxes — with a dashboard for monitoring, review, and merging.",
     rows: [
@@ -442,9 +442,9 @@ export const COMPARISONS: Comparison[] = [
     competitor: "Vibe Kanban",
     competitorUrl: "https://vibekanban.com",
     title: "Codecast vs Vibe Kanban",
-    dek: "Vibe Kanban plans and dispatches agent tasks from a board. Codecast is the record and memory of every session your team's agents run.",
+    dek: "Vibe Kanban plans and dispatches agent tasks from a board. Codecast is a full workspace for a team and its agents, where the task board is one surface beside chat, docs, pull requests and the record of every session.",
     codecastIs:
-      "Codecast records every coding agent session your team runs into one searchable dashboard — with live steering, cross-session memory for agents, and line-level attribution — and layers tasks and plans on top of that record.",
+      "Codecast is a workspace for a team and its coding agents: an inbox of every session, chat, calls, tasks and plans, docs, pull requests, decisions and triggers. Agents are assignees and participants in each, and all of it sits on one searchable record with live steering, cross-session memory and line-level attribution.",
     competitorIs:
       "Vibe Kanban is an open-source (Apache-2.0) kanban board for orchestrating coding agents: you write tasks as cards, dispatch them to agents like Claude Code, Codex, or Gemini, and review the results as they move across the board. Its maker, Bloop, announced in April 2026 that the project is sunsetting; the repository stays available and the community can continue it.",
     rows: [
@@ -482,9 +482,9 @@ export const COMPARISONS: Comparison[] = [
     competitor: "Claude Code Remote Control",
     competitorUrl: "https://code.claude.com/docs/en/remote-control",
     title: "Codecast vs Claude Code Remote Control",
-    dek: "Anthropic ships remote control for your own live Claude Code sessions. Codecast records every session your team runs, across four agents, and keeps them after they end.",
+    dek: "Anthropic ships remote control for your own live Claude Code sessions. Codecast is a team workspace built on every session your team runs, across six agents, kept after they end.",
     codecastIs:
-      "Codecast records every coding agent session your team runs — Claude Code, Codex, Cursor, Gemini, on any machine — into one searchable record you can steer, search months later, and trace back to the line of code it wrote.",
+      "Codecast is a workspace for a team and its coding agents. It records every session your team runs (Claude Code, Codex, Cursor, Gemini, OpenCode and pi, on any machine) into one record you can steer, search months later and trace back to the line of code it wrote, and it puts the team's chat, tasks, docs, pull requests and decisions on that record.",
     competitorIs:
       "Remote Control connects claude.ai/code or the Claude mobile app to a Claude Code session running on your machine. You turn it on for a session with `claude --rc` or `/rc`, execution stays local, and you can read output, send instructions, and answer permission prompts from your phone or another browser.",
     rows: [
@@ -538,9 +538,9 @@ export const COMPARISONS: Comparison[] = [
     competitor: "Happy",
     competitorUrl: "https://github.com/slopus/happy",
     title: "Codecast vs Happy",
-    dek: "Happy is a polished remote control for your own Claude Code sessions. Codecast is a team-wide record, memory, and steering layer for every agent.",
+    dek: "Happy is a polished remote control for your own Claude Code sessions. Codecast is a workspace for a whole team and its agents: steering, memory, chat, tasks, docs and pull requests in one place.",
     codecastIs:
-      "Codecast syncs every session your team runs — Claude Code, Codex, Cursor, Gemini — to one dashboard with live steering, full-text search, agent-usable memory, and line-level attribution.",
+      "Codecast is a workspace for a team and its coding agents. It syncs every session your team runs (Claude Code, Codex, Cursor, Gemini, OpenCode and pi) with live steering, full-text search, agent-usable memory and line-level attribution, and adds the chat, tasks, docs, pull requests and decisions the team works in.",
     competitorIs:
       "Happy is an open-source mobile and web client for Claude Code: it mirrors your sessions to your phone with end-to-end encryption, push notifications, and voice input, so you can watch and answer your own agents from anywhere.",
     rows: [
@@ -580,9 +580,9 @@ export const COMPARISONS: Comparison[] = [
     competitor: "Claudia",
     competitorUrl: "https://claudiacode.com",
     title: "Codecast vs Claudia",
-    dek: "Claudia is a desktop GUI that wraps Claude Code on your machine. Codecast leaves your terminal alone and syncs every session to a team dashboard.",
+    dek: "Claudia is a desktop GUI that wraps Claude Code on your machine. Codecast leaves your terminal alone and brings every session into a workspace your team shares.",
     codecastIs:
-      "Codecast doesn't replace how you run agents: a daemon watches the sessions you already run in your own terminal and syncs them — across agents and machines — to a shared, searchable, steerable record.",
+      "Codecast doesn't replace how you run agents: a daemon watches the sessions you already run in your own terminal and syncs them, across agents and machines, into a workspace your team shares, with a searchable, steerable record and the chat, tasks, docs and pull requests built on it.",
     competitorIs:
       "Claudia is an open-source desktop app that wraps Claude Code in a GUI: manage projects and sessions, build custom agents, track usage and costs, and checkpoint session timelines, all locally on your machine.",
     rows: [

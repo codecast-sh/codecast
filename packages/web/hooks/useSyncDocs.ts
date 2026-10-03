@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from "react";
-import { useQuery, useConvex } from "convex/react";
+import { useQueryNoThrow } from "./useQueryNoThrow";
+import { useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, DocDetail } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
@@ -236,7 +237,7 @@ export function useSyncDocs() {
  */
 export function useSyncMentionDocs() {
   const syncMentionIndex = useInboxStore((s) => s.syncMentionIndex);
-  const result = useQuery(api.docs.webMentionList, { workspace: "all" } as any);
+  const result = useQueryNoThrow(api.docs.webMentionList, { workspace: "all" } as any).data;
 
   useConvexSync(result, useCallback((data: any) => {
     syncMentionIndex("docs", data?.items ?? []);
@@ -254,10 +255,10 @@ export function useSyncMentionDocs() {
 const CACHED_AT_GRAIN_MS = 6 * 60 * 60 * 1000;
 
 export function useSyncDocDetail(id?: string) {
-  const data = useQuery(
+  const data = useQueryNoThrow(
     api.taskMining.webGetDocDetail,
     id ? { id: id as any } : "skip"
-  );
+  ).data;
   const syncRecord = useInboxStore((s) => s.syncRecord);
 
   useConvexSync(data, useCallback((d: any) => {

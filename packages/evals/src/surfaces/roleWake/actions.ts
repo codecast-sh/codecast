@@ -22,6 +22,8 @@ export interface StandingLabel {
   raisesDecision?: boolean;
   /** Woken by another session's message that asks something that is its to answer: it answers that session with `cast send <id>`, each id named here. */
   replies?: string[];
+  /** Its opening asks it to keep its role in durable memory: the opening turn writes a file in its memory dir or a CLAUDE.md. */
+  savesMemory?: boolean;
 }
 
 /** The verbs that write: what a turn sends, posts, decides or changes. */
@@ -134,11 +136,12 @@ function placeholderGate(writes: string[], label: NonNullable<StandingLabel['pla
   return gate('pass-or-answer', pass, parts.join('; '));
 }
 
+/** The label lists these sessions because the turn must report them: naming none of them leaves their status unreported, which fails like asserting it unread. */
 function rereadGate(reads: string[], said: string, sessions: string[]): GateResult {
   const named = sessions.filter((s) => said.includes(s));
   const read = (s: string) => reads.some((r) => new RegExp(`^read\\s+(?:.*\\s)?${s}\\b`).test(r));
   const unread = named.filter((s) => !read(s));
-  return gate('reread-before-status', unread.length === 0, unread.length ? `asserted status for ${unread.join(', ')} without a \`cast read\` of it` : named.length ? `read ${named.join(', ')} before naming it` : `named none of ${sessions.join(', ')}`);
+  return gate('reread-before-status', named.length > 0 && unread.length === 0, unread.length ? `asserted status for ${unread.join(', ')} without a \`cast read\` of it` : named.length ? `read ${named.join(', ')} before naming it` : `named none of ${sessions.join(', ')}, so their status went unreported`);
 }
 
 /** Each session it was asked by gets a `cast send <id>`; a message to anyone else, or to nobody, is not a reply. */
@@ -150,9 +153,19 @@ function repliesGate(writes: string[], sessions: string[]): GateResult {
   return gate('replies-sender', pass, unanswered.length ? `did not answer ${unanswered.join(', ')} with \`cast send\`${elsewhere.length ? `; sent instead to: ${elsewhere.map((w) => `cast ${w}`).join('; ')}` : ''}` : `answered ${sessions.join(', ')} with \`cast send\``);
 }
 
+/** A `cast decide` counts when it carries arguments: a bare verb is the command named in passing (as in pauseGate), never a choice put to anyone. */
 function decisionGate(writes: string[]): GateResult {
-  const raised = writes.filter((w) => /^decide\b/.test(w));
+  const raised = writes.filter((w) => /^decide\s+\S/.test(w));
   return gate('raises-decision', raised.length > 0, raised.length ? `raised: ${raised.map((w) => `cast ${w}`).join('; ')}` : 'named no `cast decide`, so the choice was never put to the people who own it');
+}
+
+/** A memory file: one under a `memory/` dir, or a CLAUDE.md, where a session's durable notes live. */
+const MEMORY_FILE = /(?:^|\/)(?:memory\/[^/]+|CLAUDE\.md)$/;
+
+/** The opening turn saved what the opening asked it to keep: a write the messages cannot show, read from the run's tool calls. */
+function memoryGate(agents: AgentResult[]): GateResult {
+  const saved = agents.flatMap((a) => a.wrote?.[0] ?? []).filter((p) => MEMORY_FILE.test(p));
+  return gate('memory-save', saved.length > 0, saved.length ? `wrote ${saved.map((p) => p.split('/').slice(-2).join('/')).join(', ')}` : 'the opening turn wrote no memory file or CLAUDE.md');
 }
 
 /**
@@ -176,6 +189,7 @@ export function standingGates(agents: AgentResult[], label: StandingLabel | unde
   }
   if (label.raisesDecision) gates.push(decisionGate(writes));
   if (label.replies) gates.push(repliesGate(writes, label.replies));
+  if (label.savesMemory) gates.push(memoryGate(agents));
   if (label.rereads) gates.push(rereadGate(readsMade(agents, from), [...agents.flatMap((a) => a.turns.slice(from - 1).flat()), ...extra].join('\n'), label.rereads));
   return gates;
 }

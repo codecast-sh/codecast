@@ -8,6 +8,8 @@ import { codeThreadRootKey } from "@codecast/shared/comments";
 import { accentSoft, accentVar, externalEventRowToExternalEvent, type ExternalEventRecord } from "../../lib/externalEvents";
 import { relTimeShort } from "../../lib/utils";
 import { copyText } from "../../lib/copyText";
+import { StampTime } from "../StampTime";
+import { useStampNow } from "../../lib/conversationFormat";
 import {
   REVIEW_STATE_ACCENT,
   dayLabel,
@@ -67,7 +69,7 @@ function ReviewItem({
         <CommentAvatar name={review.author_github_username ?? "?"} size={18} />
         <span className="font-medium text-sol-text">{review.author_github_username ?? "A reviewer"}</span>
         <span style={{ color: accentVar(accent) }}>{verb}</span>
-        <span className="text-sol-text-dim">{relTimeShort(review.submitted_at)}</span>
+        <span className="text-sol-text-dim"><StampTime ts={review.submitted_at} format={relTimeShort} /></span>
         {linkUrl && (
           <button
             type="button"
@@ -145,6 +147,7 @@ export function PRTimeline({
   lastSeenAt?: number;
 }) {
   let lastDay = "";
+  const now = useStampNow();
   // The first item newer than the last visit gets the line; none when
   // nothing is new, or when this is the first visit.
   // The description card says who opened it and when, so the "opened" event
@@ -162,7 +165,7 @@ export function PRTimeline({
             <CommentAvatar name={pr.author_github_username ?? "?"} image={pr.author_avatar_url} size={18} />
             <span className="text-sol-text">{pr.author_github_username}</span>
             <span className="text-sol-text-dim">opened this</span>
-            {openedAt ? <span className="ml-auto text-[11px] text-sol-text-dim" title={new Date(openedAt).toLocaleString()}>{relTimeShort(openedAt)}</span> : null}
+            {openedAt ? <span className="ml-auto text-[11px] text-sol-text-dim" title={new Date(openedAt).toLocaleString()}><StampTime ts={openedAt} format={relTimeShort} /></span> : null}
           </div>
           <div className="px-4 py-3">
             <MarkdownRenderer content={pr.body} />
@@ -174,7 +177,7 @@ export function PRTimeline({
 
       <div className="mt-4 space-y-2">
         {shown.map((item) => {
-          const day = dayLabel(item.at);
+          const day = dayLabel(item.at, now);
           const divider = day !== lastDay ? day : null;
           lastDay = day;
           return (

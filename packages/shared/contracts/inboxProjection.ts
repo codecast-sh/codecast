@@ -8,7 +8,7 @@
 import { ACTIVE_AGENT_STATUSES, AGENT_IDLE_GRACE_MS, DORMANT_CLAIM_TTL_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, trustedAgentStatus } from "./agentStatus";
 import { isMachineDeliveredMessage } from "./machineMessages";
 import { isLoopFresh, LOOP_OVERDUE_GRACE_MS, type LoopState } from "./loopState";
-import { openTasksVouchForWaiting, OPEN_TASKS_FRESH_MS } from "./openTasks";
+import { openTasksVouchForWaiting } from "./openTasks";
 import type { WorkState } from "./workState";
 
 // ── Buckets ──────────────────────────────────────────────────────────────────
@@ -711,6 +711,26 @@ export function isStackedAsk(d: StackedAskRow): boolean {
   return d.status === "pending" && (!!d.blocking || !!d.stack_id);
 }
 
+// Whether an answered advisory ask still takes a person's answer. The agent
+// went ahead on its default the moment it asked, so an answer on record (its
+// default applied by a stack policy, or a person's earlier pick) is a course
+// it is already on, and a person may still change it: the new answer reaches
+// the agent as one more message. A blocking ask, a gate on a run (its run
+// already routed on the answer) and a role's answer under a grant (reopened
+// through its own path) stay settled. ONE rule for the dispatch guard, the
+// server's settle hook and the web store, so no rail accepts what another
+// refuses.
+export interface AdvisoryAnswerRow {
+  status: string;
+  blocking?: boolean;
+  workflow_run_id?: unknown;
+  answered_by?: { kind: string } | null;
+}
+
+export function advisoryAnswerOpen(d: AdvisoryAnswerRow): boolean {
+  return d.status === "answered" && d.blocking === false && !d.workflow_run_id && d.answered_by?.kind !== "role";
+}
+
 // ── Riding the lead ─────────────────────────────────────────────────────────
 //
 // A member whose state rolls up to another member (rollupParentIdOf: an
@@ -1173,6 +1193,7 @@ export interface ProjectableInboxRow extends WorkingSetRow {
   last_user_message?: string | null;
   // Overlay-owned facts (INBOX_FACT_FIELDS).
   agent_status?: string | null;
+  agent_status_raw?: string | null;
   is_idle?: boolean | null;
   is_unresponsive?: boolean | null;
   awaiting_input?: boolean | null;
@@ -1202,8 +1223,9 @@ export interface ProjectableInboxRow extends WorkingSetRow {
 // at its own clock to render, and the time flip (computeBucketStale) runs it
 // at each deadline on both sides. Every term is monotone in `t` for fixed
 // facts (a grace passes, a heartbeat lapses, a status decays, production
-// ends), so re-running it over an already-coerced shipped status is
-// idempotent and only ever moves a row toward settled — never back.
+// ends), so it only ever moves a row toward settled, never back. The status
+// it trusts is the daemon's raw one (agent_status_raw on a shipped row): a
+// verdict coerced at one instant does not replay at a later one.
 
 export interface SessionIdleInput {
   /** managed_sessions.agent_status, coerced for heartbeat staleness by the caller. */
@@ -1271,6 +1293,8 @@ export interface LiveFactsRow {
   inbox_stashed_at?: number | null;
   inbox_snoozed_until?: number | null;
   agent_status?: string | null;
+  /** The daemon's own status before any trust rule (managed_sessions.agent_status), on a row a replica holds. Absent on the server's raw facts, whose agent_status is already raw. */
+  agent_status_raw?: string | null;
   agent_status_updated_at?: number | null;
   last_heartbeat?: number | null;
   daemon_alive_until?: number | null;
@@ -1291,14 +1315,23 @@ export type LiveFacts = {
   daemon_alive: boolean;
 };
 
+// The row's own heartbeat is inside the liveness window at instant `t`.
+export function rowHeartbeatAliveAt(row: { last_heartbeat?: number | null }, t: number): boolean {
+  return row.last_heartbeat != null && t - row.last_heartbeat < HEARTBEAT_ALIVE_MS;
+}
+
 export function deriveLiveAt(row: LiveFactsRow, t: number): LiveFacts {
   const msgs = row.message_count ?? 0;
   const hasPending = !!row.has_pending_messages;
   // isLiveAt: the row's own heartbeat inside the window (the liveness set and
   // the heartbeat map are populated together, so this IS membership).
-  const heartbeatAlive = row.last_heartbeat != null && t - row.last_heartbeat < HEARTBEAT_ALIVE_MS;
-  const verifiedWaiting = openTasksVouchForWaiting(row.open_tasks_at, row.open_tasks?.length ?? 0, t);
-  const agentStatus = trustedAgentStatus(row.agent_status ?? undefined, row.updated_at, t, heartbeatAlive, verifiedWaiting);
+  const heartbeatAlive = rowHeartbeatAliveAt(row, t);
+  const verifiedWaiting = openTasksVouchForWaiting(row.open_tasks_at, row.open_tasks?.length ?? 0, heartbeatAlive);
+  // The trust rules run over the daemon's raw status. A shipped row's
+  // agent_status is the overlay's verdict at its own epoch, and a verdict does
+  // not replay: working decays to idle past the trust TTL while the heartbeat
+  // lives, and to stopped once it lapses, but idle stays idle (ct-56054).
+  const agentStatus = trustedAgentStatus((row.agent_status_raw ?? row.agent_status) ?? undefined, row.updated_at, t, heartbeatAlive, verifiedWaiting);
   // A stopped agent is never connected, whatever the user's other daemons say.
   const daemonAlive = agentStatus !== "stopped" && row.daemon_alive_until != null && t < row.daemon_alive_until;
   const recentlyUpdated = t - row.updated_at < AGENT_IDLE_GRACE_MS;
@@ -1329,8 +1362,8 @@ export function deriveLiveAt(row: LiveFactsRow, t: number): LiveFacts {
 
 // Every instant at which one of the row's time terms crosses its threshold
 // (design C2): the idle grace on activity and on the status change, the
-// heartbeat window, the trust TTL, the daemon and production deadlines, the
-// open-task freshness, and an armed loop going overdue. The server's time flip
+// heartbeat window (which also ends an open-task vouch), the trust TTL, the
+// daemon and production deadlines, and an armed loop going overdue. The server's time flip
 // and the replica's recompute scheduler both read this list, so a deadline
 // cannot exist on one side only.
 export function rowLiveDeadlines(row: LiveFactsRow): Array<number | null> {
@@ -1344,7 +1377,6 @@ export function rowLiveDeadlines(row: LiveFactsRow): Array<number | null> {
     row.daemon_alive_until ?? null,
     row.producing_until ?? null,
     row.inbox_snoozed_until ?? null,
-    row.open_tasks_at != null ? row.open_tasks_at + OPEN_TASKS_FRESH_MS : null,
     row.loop_state?.status === "armed" ? row.loop_state.wakeup_at + LOOP_OVERDUE_GRACE_MS : null,
     // A bare dormant claim outliving its trust (placeProjectableRow).
     u + DORMANT_CLAIM_TTL_MS,
@@ -1389,7 +1421,7 @@ export function placeProjectableRow(
     (row.armed_trigger_kind ?? "none") !== "none" ||
     childProducingAt(row, epoch) ||
     (!!loop && loop.status === "armed" && isLoopFresh(loop, epoch)) ||
-    openTasksVouchForWaiting(row.open_tasks_at, row.open_tasks?.length ?? 0, epoch);
+    openTasksVouchForWaiting(row.open_tasks_at, row.open_tasks?.length ?? 0, rowHeartbeatAliveAt(row, epoch));
   return placeInboxRow({
     agentStatus: row.agent_status ?? undefined,
     isIdle: !!row.is_idle,
@@ -1492,6 +1524,10 @@ export const INBOX_FACT_FIELDS = [
   // the +45s settle, the heartbeat lapse and the trust decay flip on the
   // replica's own clock instead of waiting for a server re-execution.
   "agent_status_updated_at",
+  // The daemon's raw status beside the shipped verdict (agent_status): the
+  // trust rules re-run over it, since a verdict does not replay at a later
+  // instant (ct-56054).
+  "agent_status_raw",
   // The settle's own facts (ct-49533): whether it came from a lifecycle event
   // rather than a turn ending — which the replica must place exactly as the
   // server does — and which turn it belongs to, the identity a completion

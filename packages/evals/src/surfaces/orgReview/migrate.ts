@@ -1,9 +1,8 @@
-import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { legacyFile, lockSnapshot } from '../../commands/snapshot';
-import { assertLabelsPushable } from '../../labels';
+import { commitLabels } from '../../labels';
 import { homePaths } from '../../paths';
 import { fillArgv, writeFrozenVerbs, writeServedRead } from '../../served';
 import { ORG_EVAL_CACHE, roleHandles, tryJson } from './grade';
@@ -82,23 +81,8 @@ export function migrateOrgEval(o: { cache?: string; commit?: boolean } = {}): Mi
       lockSnapshot(dest);
     });
   }
-  if (o.commit) commitLabels(home.labels);
+  if (o.commit) commitLabels(home.labels, ['org-review'], 'org-review: labels and handle pool from ~/.cache/org-eval');
   return res;
-}
-
-/** Commits and pushes the labels repo (sd-319: every label write is pushed to the private remote). */
-export function commitLabels(dir: string): void {
-  if (!existsSync(join(dir, '.git'))) throw new Error(`${dir} is not a git repo; run ./evals doctor --init first`);
-  assertLabelsPushable(dir);
-  const git = (...args: string[]) => {
-    const r = spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
-    if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr.trim()}`);
-    return r.stdout;
-  };
-  git('add', '-A', 'org-review');
-  if (!git('status', '--porcelain', 'org-review').trim()) return;
-  git('commit', '-qm', 'org-review: labels and handle pool from ~/.cache/org-eval');
-  git('push', '-q', '-u', 'origin', 'HEAD');
 }
 
 if (import.meta.main) {

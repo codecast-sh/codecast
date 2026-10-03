@@ -5,6 +5,11 @@ import {
   groupMessagesByConversation,
   conversationMatchesAllTerms,
   contentMatchesAnyTerm,
+  relevanceWithFields,
+  bestMessages,
+  searchFieldsOf,
+  originMatch,
+  earlierTitlesAfter,
 } from "./searchCore";
 
 // Regression for the `cast context` failure: a 7-word natural-language task
@@ -131,5 +136,65 @@ describe("groupMessagesByConversation", () => {
     expect([...groupMessagesByConversation(pool, terms, true).keys()]).toEqual(["b"]);
     // b covers 1 of 3 words, below the half a three-word query needs.
     expect(rankConversationsByCoverage(all, terms).map((r) => r.convId)).toEqual(["a"]);
+  });
+});
+
+// "k pop warm intro video" could not find the session that made the video: it
+// had been retitled "Warmintro landing site", its rows showed late messages
+// about domain names, and newer sessions that said "popped" and "introduce"
+// tied with it. Ranking now reads how each word matched, whose words they are,
+// and what the session was before its title moved on.
+describe("ranking a drifted session", () => {
+  const terms = parseSearchTerms("k pop warm intro video");
+  const drifted = {
+    title: "Warmintro landing site",
+    subtitle: "Deploy the landing page",
+    first_prompt: "build e2e a music video that will advertise Union, with an amazing k pop song",
+    earlier_titles: ["Union K-pop music video"],
+  };
+  const groups = new Map([
+    ["noise", [{ role: "assistant", content: "the modal popped up; introduce a warmup, see the video" }]],
+    ["made", [
+      { role: "assistant", content: "Brainstorm warm intro names and check domain prices" },
+      { role: "user", content: "make the k-pop warm intro video the centre of the page" },
+      { role: "user", content: "tool output mentioning video", tool_results_count: 1 },
+    ]],
+  ]);
+  const ranked = new Map(rankConversationsByCoverage(groups, terms).map((r) => [r.convId, r]));
+
+  test("the session about it outranks one that only holds the letters", () => {
+    const made = relevanceWithFields(ranked.get("made")!, searchFieldsOf(drifted), terms);
+    const noise = relevanceWithFields(ranked.get("noise")!, ["Modal polish"], terms);
+    expect(made).toBeGreaterThan(noise + 0.3);
+  });
+
+  test("its own fields lift it, and do not change what the messages said", () => {
+    const before = relevanceWithFields(ranked.get("made")!, [], terms);
+    const after = relevanceWithFields(ranked.get("made")!, searchFieldsOf(drifted), terms);
+    expect(after).toBeGreaterThanOrEqual(before);
+    expect(relevanceWithFields(ranked.get("made")!, [], terms)).toBe(before);
+  });
+
+  test("the row shows the person's own message that holds the most of the query", () => {
+    expect(bestMessages(ranked.get("made")!, 1)[0].content).toContain("k-pop warm intro video");
+  });
+
+  test("a result says what the session began as when that is what matched", () => {
+    expect(originMatch(drifted, terms)).toEqual({
+      started_as: drifted.first_prompt,
+      earlier_titles: ["Union K-pop music video"],
+    });
+    expect(originMatch({ title: "x", first_prompt: "unrelated" }, terms)).toBeUndefined();
+  });
+});
+
+describe("earlierTitlesAfter", () => {
+  test("keeps the replaced title, distinct and bounded, and nothing when unchanged", () => {
+    expect(earlierTitlesAfter({ title: "A" }, "B")).toEqual(["A"]);
+    expect(earlierTitlesAfter({ title: "B", earlier_titles: ["A"] }, "A")).toEqual(["B"]);
+    expect(earlierTitlesAfter({ title: "A", earlier_titles: ["Z"] }, "A")).toBeUndefined();
+    expect(earlierTitlesAfter({}, "A")).toBeUndefined();
+    const many = earlierTitlesAfter({ title: "T7", earlier_titles: ["T1", "T2", "T3", "T4", "T5", "T6"] }, "T8")!;
+    expect(many).toEqual(["T2", "T3", "T4", "T5", "T6", "T7"]);
   });
 });

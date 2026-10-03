@@ -2,14 +2,14 @@ import { describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DORMANT_CLAIM_TTL_MS, OPEN_TASKS_FRESH_MS, placeProjectableRow, type ProjectableInboxRow } from "@codecast/shared/contracts";
-import { acquireSessionProcessOwnership, findSessionFile, openTasksRefreshDue, paneReconcileTarget, primeSessionFileIndexAtBoot, reconciledStatusWithTasks, resetSessionFileIndexForTests, resolveTurnEndStatus } from "./daemon.js";
+import { DORMANT_CLAIM_TTL_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, deriveLiveAt, placeProjectableRow, type ProjectableInboxRow } from "@codecast/shared/contracts";
+import { acquireSessionProcessOwnership, findSessionFile, paneReconcileTarget, primeSessionFileIndexAtBoot, reconciledStatusWithTasks, resetSessionFileIndexForTests, resolveTurnEndStatus } from "./daemon.js";
 import { closeDaemonWorkers, configureDaemonWorkers } from "./workers/bridge.js";
 import { writeThreadStatePulse } from "./threadStateStamp.js";
 
 const START = 1_800_000_000_000;
 const task = { id: "bjmsej5ia", kind: "background" as const };
-const dormant = (openTasksAt: number): ProjectableInboxRow => ({
+const dormant = (openTasksAt: number, lastHeartbeat: number | null = openTasksAt): ProjectableInboxRow => ({
   _id: "dormant-background-wait",
   updated_at: START,
   message_count: 275,
@@ -18,6 +18,7 @@ const dormant = (openTasksAt: number): ProjectableInboxRow => ({
   is_idle: true,
   open_tasks: [task],
   open_tasks_at: openTasksAt,
+  last_heartbeat: lastHeartbeat,
 });
 
 describe("dormant background task refresh", () => {
@@ -99,39 +100,36 @@ describe("dormant background task refresh", () => {
     }
   });
 
-  test("a verified background wait stays dormant beyond the two-hour claim expiry", () => {
-    const row = dormant(START);
-    const end = START + DORMANT_CLAIM_TTL_MS + OPEN_TASKS_FRESH_MS;
-    let refreshes = 0;
+  test("a verified background wait stays dormant beyond the two-hour claim expiry while its daemon heartbeats", () => {
+    const end = START + DORMANT_CLAIM_TTL_MS + 60 * 60_000;
     for (let now = START; now <= end; now += 90_000) {
       expect(paneReconcileTarget("idle", "dormant")).toBe("idle");
       expect(reconciledStatusWithTasks("dormant", "idle", true, "dormant")).toBeNull();
-      if (openTasksRefreshDue("dormant", 1, row.open_tasks_at!, now)) {
-        row.open_tasks_at = now;
-        refreshes++;
-      }
-      expect(placeProjectableRow(row, false, now)).toEqual({ bucket: "dormant", work_state: "dormant" });
+      // The report is never re-sent: the heartbeat alone keeps it standing.
+      expect(placeProjectableRow(dormant(START, now - 30_000), false, now)).toEqual({ bucket: "dormant", work_state: "dormant" });
     }
-    expect(refreshes).toBeGreaterThan(1);
-    expect(placeProjectableRow(dormant(START), false, end).work_state).toBe("needs_input");
+  });
+
+  test("a parked workflow's waiting survives a late maintenance pass (2026-10-03)", () => {
+    // Quiet for 90 minutes (past the trust TTL), report 30 minutes old, daemon
+    // heartbeating: the waiting is vouched for and the row stays dormant.
+    const now = START + STATUS_TRUST_TTL_MS + 30 * 60_000;
+    const row: ProjectableInboxRow = {
+      ...dormant(now - 30 * 60_000, now - 30_000),
+      agent_status: "waiting",
+      agent_status_raw: "waiting",
+      thread_state_status: null,
+      open_tasks: [{ id: "w301mlcjt", kind: "workflow" }],
+    };
+    const live = deriveLiveAt(row, now);
+    expect(live.agent_status).toBe("waiting");
+    expect(placeProjectableRow({ ...row, ...live }, false, now).work_state).toBe("dormant");
   });
 
   test("completed work and lost daemon reports still expire", () => {
     const now = START + DORMANT_CLAIM_TTL_MS;
-    expect(openTasksRefreshDue("dormant", 0, START, now)).toBe(false);
     expect(placeProjectableRow({ ...dormant(now), open_tasks: [] }, false, now).work_state).toBe("needs_input");
-    expect(placeProjectableRow(dormant(now - OPEN_TASKS_FRESH_MS), false, now).work_state).toBe("needs_input");
-  });
-
-  test("refreshes are throttled and do not publish active or completed verdicts", () => {
-    for (const status of ["dormant", "waiting"] as const) {
-      expect(openTasksRefreshDue(status, 1, START, START + 90_000)).toBe(false);
-      expect(openTasksRefreshDue(status, 1, START, START + 4 * 60_000)).toBe(true);
-      expect(openTasksRefreshDue(status, 1, undefined, START)).toBe(true);
-    }
-    for (const status of ["working", "thinking", "done", "idle", "permission_blocked"] as const) {
-      expect(openTasksRefreshDue(status, 1, START, START + OPEN_TASKS_FRESH_MS)).toBe(false);
-    }
+    expect(placeProjectableRow(dormant(now, now - HEARTBEAT_ALIVE_MS), false, now).work_state).toBe("needs_input");
   });
 
   test("fresh wait evidence cannot conceal a question, error, or wake", () => {

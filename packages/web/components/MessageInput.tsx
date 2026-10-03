@@ -29,7 +29,7 @@ import { ReviewBar } from "./ReviewBar";
 import { ComposerFoot, ComposerSendButton, ComposerShell, ComposerTextarea, ComposerTextRow } from "./ComposerShell";
 import { composerColumn, FIELD_SIZING_SUPPORTED } from "./composerLayout";
 import { ComposerSuggestion, ComposerSuggestionHandle } from "./ComposerSuggestion";
-import { useMutation, useQuery, useConvex } from "convex/react";
+import { useMutation, useConvex } from "convex/react";
 import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { HandoffPicker, useOwnersFromStore } from "./OwnersBadge";
@@ -674,10 +674,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       .map(img => img.storageId!);
     return ids.length > 0 ? ids : null;
   }, [pastedImages]);
-  const resolvedImageUrls = useQuery(
+  const resolvedImageUrls = useQueryNoThrow(
     api.images.getImageUrls,
     staleImageIds ? { storageIds: staleImageIds as Id<"_storage">[] } : "skip"
-  );
+  ).data;
   useWatchEffect(() => {
     if (!resolvedImageUrls) return;
     setPastedImages(prev => {

@@ -64,6 +64,22 @@ export function withGuestMedia<T extends { user_id: unknown; guest?: boolean; mu
   return out;
 }
 
+/** The guests withGuestMedia leaves out: let in, still holding their place
+ *  by their lease, and not in the media yet (answering the browser's prompt,
+ *  reading a notice that changed, one press from walking in after a reload).
+ *  The stage draws them the way it draws a teammate being rung, so whoever
+ *  pressed Admit can see it worked and that the guest is on their way, not
+ *  gone. The server stops listing a guest whose place lapsed, and the ghost
+ *  goes with it. Nobody when the media cannot say. */
+export function guestsJoining<T extends { user_id: unknown; guest?: boolean }>(
+  roster: readonly T[],
+  media: readonly GuestMedia[] | null,
+): T[] {
+  if (!media) return [];
+  const here = new Set(media.map((g) => g.identity));
+  return roster.filter((row) => row.guest && !here.has(String(row.user_id)));
+}
+
 /** A signature of a room's guests, for a store subscription that should wake
  *  when somebody is let in, leaves or is renamed, and never on a heartbeat. */
 export function guestsSig(guests: readonly LiveRoomGuest[] | undefined): string {

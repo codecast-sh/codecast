@@ -4,6 +4,7 @@ import { Command as CommandPrimitive } from "cmdk";
 import { SessionGlyph, SessionIdentityLine } from "./identity";
 import { identityRowOf } from "../lib/sessionIdentity";
 import { cleanTitle } from "../lib/conversationProcessor";
+import { paletteSearchValue, paletteSessionValue } from "../lib/paletteRowValues";
 import { AvatarImg } from "../lib/avatarCache";
 import { getProjectName } from "../store/inboxStore";
 import { useLabelColor } from "../lib/labelColors";
@@ -12,6 +13,8 @@ import { ShortId } from "./ShortId";
 import { formatDateSmart } from "@codecast/shared/time";
 import { parseSessionQuery } from "@codecast/shared/search";
 import { highlightMatch, getSnippet } from "../lib/searchHighlight";
+import { SearchOrigin } from "./search/SearchOrigin";
+import { StampTime } from "./StampTime";
 
 // Presentational rows of the Cmd+K palette. CommandPalette owns the data and
 // the select handlers; these draw a row from plain props, so the marketing
@@ -114,7 +117,7 @@ export function PaletteSessionRow({ conv, bucket, onSelect }: {
   return (
     <CommandPrimitive.Item
       data-palette-type="session" data-palette-id={conv._id} data-palette-title={conv.title} data-palette-short-id={conv.short_id}
-      value={`__recent__ ${cleanTitle(conv.title || "")} ${conv.project_path || ""} ${conv.authorName || ""}|||${conv._id}`}
+      value={paletteSessionValue(conv)}
       onSelect={onSelect}
       className={`${itemClass} group`}
     >
@@ -144,7 +147,7 @@ export function PaletteSessionRow({ conv, bucket, onSelect }: {
       {isTeam && conv.authorName && (
         <span className="text-[10px] text-sol-text-dim flex-shrink-0">· {conv.authorName}</span>
       )}
-      <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{formatDateSmart(conv.updated_at)}</span>
+      <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0"><StampTime ts={conv.updated_at} format={formatDateSmart} /></span>
     </CommandPrimitive.Item>
   );
 }
@@ -158,6 +161,8 @@ export type PaletteSearchResult = {
   authorAvatar?: string | null;
   titleMatch?: boolean;
   matches?: { content?: string; messageId?: string }[];
+  origin?: { started_as?: string; earlier_titles?: string[] } | null;
+  workerCount?: number;
   identity?: Record<string, unknown>;
   [key: string]: unknown;
 };
@@ -174,7 +179,7 @@ export function PaletteSearchResultRow({ result, query = "", onSelect }: {
   return (
     <CommandPrimitive.Item
       data-palette-type="session" data-palette-id={result.conversationId} data-palette-title={result.title}
-      value={`__search__ ${result.title} ${result.matches?.[0]?.content?.slice(0, 100) || ""}|||${result.conversationId}`}
+      value={paletteSearchValue(result)}
       onSelect={onSelect}
       className={itemClass}
     >
@@ -190,6 +195,7 @@ export function PaletteSearchResultRow({ result, query = "", onSelect }: {
             <span className="text-[10px] text-sol-text-dim flex-shrink-0">· {result.authorName}</span>
           )}
         </div>
+        <SearchOrigin row={result} query={terms} className="mt-0.5" />
         {result.matches?.[0]?.content && (
           <div className="truncate text-[11px] text-sol-text-dim mt-0.5">
             {highlightMatch(getSnippet(result.matches[0].content, terms, 160), terms)}
@@ -204,7 +210,7 @@ export function PaletteSearchResultRow({ result, query = "", onSelect }: {
           // An operator-only query (file:, pr:, ...) matches the session, not a message.
           : "filter"}
       </span>
-      <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{formatDateSmart(result.updatedAt)}</span>
+      <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0"><StampTime ts={result.updatedAt} format={formatDateSmart} /></span>
     </CommandPrimitive.Item>
   );
 }
@@ -242,7 +248,7 @@ export function PaletteTaskRow({ task, status, onSelect }: {
       <span className="truncate flex-1">{task.title || "Untitled"}</span>
       {status && <span className={`text-[10px] flex-shrink-0 ${status.color}`}>{status.label}</span>}
       <ShortId id={task.short_id} className="text-[10px] text-sol-text-dim tabular-nums" />
-      <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{formatDateSmart(task.updated_at)}</span>
+      <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0"><StampTime ts={task.updated_at} format={formatDateSmart} /></span>
     </CommandPrimitive.Item>
   );
 }

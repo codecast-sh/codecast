@@ -3,7 +3,7 @@
 // one cause task by fingerprint, by a small judge call, or as a new cause
 // (LE4), and reopens a cause still in watch (LE12).
 //
-//   cast signal add --source <s> --kind <k> --fingerprint <f> --title <t> [--detail -] [--url] [--subject] [--goal-hint] [--json]
+//   cast signal add --source <s> --kind <k> --title <t> [--fingerprint <f>] [--detail -] [--url] [--subject] [--goal-hint] [--json]
 //   cast signal ls [--task ct-N] [--source <s>] [--json]
 //   cast signal show sg-N [--json]
 //
@@ -15,6 +15,7 @@ import { commandGroup } from "./commandGroups.js";
 import { formatAge } from "./decideCommand.js";
 import { loadWorkspaceRoster, resolveWorkspaceForRead, resolveWorkspaceForWrite, workspaceScope } from "./resolveWorkspace.js";
 import { stdinText } from "./sendBody.js";
+import { slugifyHeading } from "@codecast/shared/vault";
 
 export const SIGNAL_KINDS = ["bug", "regression", "prompt_miss", "ux", "cohesion", "request"] as const;
 
@@ -48,9 +49,11 @@ export interface SignalRow {
   task_status?: string;
 }
 
-/** The wire body for `cast signal add`, or the one line that says what is missing. */
+/** The wire body for `cast signal add`, or the one line that says what is missing.
+ *  A finder passes its own fingerprint; a person filing by hand gets one from
+ *  the source and title, so the same report filed twice joins one cause. */
 export function signalAddBody(options: SignalAddOptions): Record<string, string> {
-  const missing = (["source", "kind", "fingerprint", "title"] as const).filter((k) => !options[k]?.trim());
+  const missing = (["source", "kind", "title"] as const).filter((k) => !options[k]?.trim());
   if (missing.length) throw new Error(`cast signal add needs ${missing.map((k) => `--${k}`).join(", ")}`);
   const kind = options.kind!.trim().toLowerCase();
   if (!(SIGNAL_KINDS as readonly string[]).includes(kind)) {
@@ -59,7 +62,7 @@ export function signalAddBody(options: SignalAddOptions): Record<string, string>
   const body: Record<string, string> = {
     source: options.source!.trim(),
     kind,
-    fingerprint: options.fingerprint!.trim(),
+    fingerprint: options.fingerprint?.trim() || `${options.source!.trim()}:${slugifyHeading(options.title!)}`,
     title: options.title!.trim(),
   };
   if (options.detail?.trim()) body.detail_md = options.detail.trim();
@@ -77,7 +80,7 @@ const ATTACH_WORDS: Record<SignalRow["attach"], string> = {
 };
 
 export function formatSignalList(rows: SignalRow[], now: number = Date.now()): string {
-  if (rows.length === 0) return "No signals. File one: cast signal add --source person --kind bug --fingerprint <key> --title \"...\"";
+  if (rows.length === 0) return "No signals. File one: cast signal add --source person --kind bug --title \"...\"";
   return rows
     .map((s) => `${s.short_id}  ${s.source}/${s.kind}  ${s.title}  → ${s.task_short_id ?? "?"} (${ATTACH_WORDS[s.attach]}${s.reopened ? ", reopened it" : ""}; ${formatAge(now - s.created_at)})`)
     .join("\n");
@@ -111,7 +114,7 @@ export function registerSignalCommand(program: Command, deps: PublishDeps): void
     .description("File one observation; it attaches to a cause task by fingerprint, by judgment, or as a new cause")
     .option("--source <name>", "The finder: sentry, posthog, evals, agentwatch, insight, lesson, org_health, issue, person, ...")
     .option("--kind <kind>", `What it saw: ${SIGNAL_KINDS.join(", ")}`)
-    .option("--fingerprint <key>", "The stable key the finder computes (error group, eval surface+check, cluster id); the dedupe key")
+    .option("--fingerprint <key>", "The stable key the finder computes (error group, eval surface+check, cluster id); the dedupe key. Default: <source>:<title slug>")
     .option("--title <text>", "One line, in the finder's words")
     .option("--detail <markdown>", stdinText("The observation"))
     .option("--url <url>", "Where a person can see it")

@@ -22,6 +22,7 @@
  *  - Sessions sharing one working tree push the tree once per host.
  */
 
+import { mapLimit } from "@codecast/shared/async";
 import { MID_TURN_AGENT_STATUSES } from "@codecast/shared/contracts";
 
 export type RowDirection = "to_cloud" | "to_local";
@@ -46,6 +47,7 @@ export interface RunnerBatch {
   to_device_id: string;
   cancelled_at: number | null;
   wait_for_idle_ms: number;
+  interrupt_on_timeout?: boolean;
   concurrency: number;
   rows: RunnerRow[];
 }
@@ -220,7 +222,10 @@ export async function migrateRow(
     for (;;) {
       const busy = WAIT_FOR_STATUSES.has(status ?? "");
       if (!busy) break;
-      if (io.now() >= deadline) { forced = true; break; }
+      if (io.now() >= deadline) {
+        if (batch.interrupt_on_timeout === false) return fail("The session is still busy; it was left running on its original machine. Retry when the turn finishes.");
+        forced = true; break;
+      }
       await io.report(id, { status: "waiting_idle", stage: `waiting for the current turn to finish (${status}; up to ${minutes(deadline - io.now())} more)` });
       await io.sleep(IDLE_POLL_MS);
       const f = await io.facts(id);
@@ -234,6 +239,14 @@ export async function migrateRow(
     }
     if (forced) io.log(`${tag}: still ${status} after the idle window — interrupting the turn`);
     else if (status === "permission_blocked") io.log(`${tag}: stopped at a permission prompt — moving now; the prompt re-asks on the destination`);
+
+    const prepareDestination = async (stage: "waiting_idle" | "transferring") => {
+      await io.report(id, { status: stage, stage: `waking ${facts.to_label ?? "the cloud host"}` });
+      await io.prepareHost(facts.to_device_id);
+      return awaitDeviceOnline(io, facts.to_device_id);
+    };
+    const prepareBeforeStop = facts.direction === "to_cloud" && batch.interrupt_on_timeout === false;
+    if (prepareBeforeStop && !(await prepareDestination("waiting_idle"))) return fail(`${facts.to_label ?? "the cloud host"} never came online; the session was left running locally`);
 
     // ── 2. quiesce the current owner so the transcript is final ─────────────
     // For a move back, the owner is the cloud host: wake it and wait for its
@@ -258,7 +271,10 @@ export async function migrateRow(
       if (parsed.quiesced === false) {
         // A turn began between our check and the stop. Keep waiting inside
         // the same window; past it, force.
-        if (io.now() >= deadline || attempt >= 60) { mode = "force"; forced = true; continue; }
+        if (io.now() >= deadline || attempt >= 60) {
+          if (batch.interrupt_on_timeout === false) return fail("The session started another turn; it was left running on its original machine.");
+          mode = "force"; forced = true; continue;
+        }
         await io.report(id, { status: "waiting_idle", stage: `a turn started (${parsed.reason ?? "busy"}); waiting for it to finish` });
         await io.sleep(IDLE_POLL_MS);
         continue;
@@ -269,9 +285,7 @@ export async function migrateRow(
     // ── 3. transfer ─────────────────────────────────────────────────────────
     let transfer: TransferResult;
     if (facts.direction === "to_cloud") {
-      await io.report(id, { status: "transferring", stage: `waking ${facts.to_label ?? "the cloud host"}` });
-      await io.prepareHost(facts.to_device_id);
-      if (!(await awaitDeviceOnline(io, facts.to_device_id))) {
+      if (!prepareBeforeStop && !(await prepareDestination("transferring"))) {
         return fail(`${facts.to_label ?? "the cloud host"} never came online`);
       }
       // Sessions that share a working tree push it once per host.
@@ -311,6 +325,11 @@ export async function migrateRow(
     // ── 5. confirm the resume landed ────────────────────────────────────────
     if (fin.resume_command_id) {
       const st = await awaitCommand(io, fin.resume_command_id, RESUME_CONFIRM_TIMEOUT_MS);
+      if (!st && batch.interrupt_on_timeout === false) {
+        const detail = `Moved to ${facts.to_label ?? "the destination"}, but its daemon has not confirmed the resume. Open the session on that machine before retrying.`;
+        await io.confirm(id, false, { error: detail });
+        return { migration_id: id, outcome: "failed", detail };
+      }
       if (st?.error) {
         const detail = `moved, but the resume on ${facts.to_label ?? "the destination"} failed: ${st.error}`;
         io.log(`${tag}: ${detail}`);
@@ -322,6 +341,11 @@ export async function migrateRow(
         : `moved to ${facts.to_label ?? "the destination"}; its daemon has not confirmed the resume yet`;
       await io.confirm(id, true, { stage });
     } else {
+      if (batch.interrupt_on_timeout === false) {
+        const detail = "The session moved, but no destination resume was queued. Open it on the destination before retrying.";
+        await io.confirm(id, false, { error: detail });
+        return { migration_id: id, outcome: "failed", detail };
+      }
       await io.confirm(id, true, { stage: `moved to ${facts.to_label ?? "the destination"}` });
     }
     io.log(`done ${tag} → ${transfer.destinationPath}`);
@@ -343,17 +367,8 @@ export async function runBatch(io: RunnerIo, opts: { concurrency?: number } = {}
   io.log(`batch ${batch.batch_id}: ${mine.length} queued row(s) for this machine (device ${short(io.deviceId())}), concurrency ${opts.concurrency ?? batch.concurrency}`);
   if (mine.length === 0) return [];
   const ledger = new SharedTreeLedger();
-  const outcomes: RowOutcome[] = [];
   const width = Math.max(1, opts.concurrency ?? batch.concurrency ?? 1);
-  let next = 0;
-  const worker = async () => {
-    for (;;) {
-      const row = mine[next++];
-      if (!row) return;
-      outcomes.push(await migrateRow(io, batch, row, ledger));
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(width, mine.length) }, worker));
+  const outcomes = await mapLimit(mine, width, (row) => migrateRow(io, batch, row, ledger));
   const tally = outcomes.reduce((acc, o) => ({ ...acc, [o.outcome]: (acc[o.outcome] ?? 0) + 1 }), {} as Record<string, number>);
   io.log(`batch ${batch.batch_id} finished: ${Object.entries(tally).map(([k, n]) => `${n} ${k}`).join(", ") || "nothing to do"}`);
   return outcomes;

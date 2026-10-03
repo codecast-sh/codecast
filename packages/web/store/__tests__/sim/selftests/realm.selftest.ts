@@ -3,25 +3,27 @@
 // timers), and uninstalling leaves the process as it found it.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { __createInboxStoreForTests, store, useInboxStore } from "../../../inboxStore";
+import { store, useInboxStore } from "../../../inboxStore";
 import { gestureSourceToken } from "../../../gestureBridge";
 import { Net } from "../net";
 import {
   activeWindow,
   advance,
   attachRealm,
+  createWindowStore,
   installRealm,
   mono,
   now,
   runInWindow,
   stream,
+  uuidFrom,
   T0,
   uninstallRealm,
   type RealmWindow,
 } from "../realm";
 import { freshSlots, restoreSlots, saveSlots, WINDOW_SLOTS, type SlotSnapshot } from "../windowSlots";
 
-const win = (name: string): RealmWindow => ({ name, store: __createInboxStoreForTests() });
+const win = (name: string): RealmWindow => ({ name, store: createWindowStore(name) });
 
 function attachNet(): Net {
   const net = new Net({ rng: stream("net"), writes: () => 0, now, advance });
@@ -129,6 +131,27 @@ describe("realm", () => {
     const expected = stream("call:1")();
     attachRealm({ serverCall: () => ({ rng: call }) });
     expect(await runInWindow(win("A"), () => Math.random())).toBe(expected);
+  });
+
+  test("building a store moves no other stream, whatever runs around it", async () => {
+    installRealm(5);
+    let calling = false;
+    const call = stream("call:1");
+    attachRealm({ serverCall: () => (calling ? { rng: call } : null) });
+    // Stores built with a server call running, with none, and inside a
+    // window's turn: whatever production draws as it builds a store lands on
+    // that store's own stream.
+    calling = true;
+    const a = win("A");
+    calling = false;
+    const b = win("B");
+    await runInWindow(b, () => win("C"));
+    expect(Math.random()).toBe(stream("world")());
+    calling = true;
+    expect(Math.random()).toBe(stream("call:1")());
+    calling = false;
+    expect(await runInWindow(a, () => Math.random())).toBe(stream("window:A")());
+    expect<string>(await runInWindow(b, () => crypto.randomUUID())).toBe(uuidFrom(stream("window:B")));
   });
 
   test("a setTimeout(fn, 0) armed inside A runs inside A; a delayed one moves the clock", async () => {

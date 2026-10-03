@@ -3,48 +3,105 @@
 // module installs sonner as the notifier and preserves the import path.
 //
 // - A recorded entry's toast carries an Undo button for THAT entry
-//   (undoEntry), never whatever happens to be newest.
+//   (undoEntry), never whatever happens to be newest. Each recorded toast has
+//   its own id, and once its entry leaves the undo stack (stepped from the
+//   toast, the keyboard or the timeline, a multi-step "Back to here"
+//   included, or lost to a conflict) the toast comes down, so no Undo button
+//   outlives its entry.
 // - Undo and redo announcements share one toast id, so a chain of undos
-//   updates one toast instead of stacking them.
-// - The "Undid" toast offers a quiet History action once there is more than
-//   one thing in the history.
+//   updates one toast in place instead of stacking them. sonner merges an
+//   update into the toast it replaces, so every announcement names its action
+//   (or its absence) explicitly; a "Redid" must not keep the "Undid" History.
+// - A partial step says how many rows it reached: "Undid: X (2 of 3; 1
+//   changed since)". A conflict comes from the engine through notify:
+//   "Can't undo X: changed since".
+// - While the timeline tier is hidden, the "Undid" toast offers a quiet
+//   History action once there is more history than the step it announces.
 // - While the timeline card is open it narrates the steps, so the notifier
-//   stays silent.
+//   stays silent, and opening it takes down the status toast already showing.
 import { toast } from "sonner";
-import { getUndoHistory, setUndoNotifier, undoEntry, type UndoEntry } from "@platform/engine";
+import { getUndoHistory, setUndoNotifier, subscribeUndoHistory, undoEntry, type UndoEntry, type UndoNotifier } from "@platform/engine";
 import * as undoTimeline from "../lib/undoTimelineOpen";
 
 export const UNDO_STATUS_TOAST_ID = "undo-status";
 
-function stepMessage(kind: "undo" | "redo", steps: number, entry: UndoEntry): string {
-  const verb = kind === "undo" ? "Undid" : "Redid";
-  if (steps > 1) return `${verb} ${steps} changes`;
-  const left = kind === "undo" ? entry.skipped?.length ?? 0 : 0;
-  const partial = left > 0 ? ` (${left} changed since, left as ${left === 1 ? "it is" : "they are"})` : "";
-  return `${verb}: ${entry.label}${partial}`;
+/** The id of the toast announcing a recorded entry. */
+export function undoEntryToastId(entryId: string): string {
+  return `undo-${entryId}`;
 }
 
-setUndoNotifier({
+export function undoStepMessage(kind: "undo" | "redo", steps: number, entry: Pick<UndoEntry, "label" | "skipped" | "objects">): string {
+  const verb = kind === "undo" ? "Undid" : "Redid";
+  if (steps > 1) return `${verb} ${steps} changes`;
+  const left = entry.skipped?.length ?? 0;
+  if (left === 0) return `${verb}: ${entry.label}`;
+  const total = Math.max(entry.objects?.length ?? 0, left);
+  return `${verb}: ${entry.label} (${total - left} of ${total}; ${left} changed since)`;
+}
+
+/** Take down a toast if it is on screen (a no-op for an id that is not).
+ *  sonner schedules the dismissal on a frame; without one (the bun store
+ *  tests) no Toaster is mounted and there is nothing on screen to take down.
+ *  Not gated on toast.getToasts(): a plain toast() never clears its id from
+ *  sonner's dismissed set, so a reused id (the status toast) drops out of that
+ *  list for good after its first dismissal while still showing on screen. */
+function retireToast(id: string): void {
+  if (typeof requestAnimationFrame !== "function") return;
+  toast.dismiss(id);
+}
+
+/** Entries whose recorded toast may still be on screen. */
+const liveEntryToasts = new Set<string>();
+
+// Any history change can move several entries at once (undoTo walks the
+// stack), so every live toast whose entry is no longer undoable comes down.
+subscribeUndoHistory(() => {
+  if (liveEntryToasts.size === 0) return;
+  const undoable = new Set(getUndoHistory().undoOrder);
+  for (const id of liveEntryToasts) {
+    if (undoable.has(id)) continue;
+    liveEntryToasts.delete(id);
+    retireToast(undoEntryToastId(id));
+  }
+});
+
+// The card opens in the toast corner and narrates from then on: the "Undid"
+// toast that announced the step before the held peek opened would sit on top
+// of it.
+undoTimeline.subscribe(() => {
+  if (undoTimeline.isOpen()) retireToast(UNDO_STATUS_TOAST_ID);
+});
+
+/** Codecast's notifier: sonner toasts, silent while the timeline is open. */
+export const CODECAST_UNDO_NOTIFIER: UndoNotifier = {
   notify: (message) => {
     if (undoTimeline.isOpen()) return;
-    toast(message, { id: UNDO_STATUS_TOAST_ID });
+    toast(message, { id: UNDO_STATUS_TOAST_ID, action: undefined });
   },
   notifyWithUndo: (label, entryId) => {
     if (undoTimeline.isOpen()) return;
+    liveEntryToasts.add(entryId);
+    const forget = () => { liveEntryToasts.delete(entryId); };
     toast(label, {
+      id: undoEntryToastId(entryId),
       action: { label: "Undo", onClick: () => undoEntry(entryId) },
       duration: 5000,
+      onAutoClose: forget,
+      onDismiss: forget,
     });
   },
   onHistoryStep: (kind, steps, entry) => {
     if (undoTimeline.isOpen()) return;
-    const more = kind === "undo" && getUndoHistory().items.length > 1;
-    toast(stepMessage(kind, steps, entry), {
+    const more = kind === "undo"
+      && undoTimeline.UNDO_HISTORY_TIER === "hidden"
+      && getUndoHistory().items.length > steps;
+    toast(undoStepMessage(kind, steps, entry), {
       id: UNDO_STATUS_TOAST_ID,
-      ...(more ? { action: { label: "History", onClick: () => undoTimeline.open("interactive") } } : {}),
+      action: more ? { label: "History", onClick: () => undoTimeline.open("interactive") } : undefined,
     });
   },
-});
+};
+setUndoNotifier(CODECAST_UNDO_NOTIFIER);
 
 export {
   pushUndo,

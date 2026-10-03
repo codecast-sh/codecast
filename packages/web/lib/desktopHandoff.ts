@@ -130,7 +130,7 @@ const HANDOFF_DENY = [
 export const IN_SHELL_ROOT_SEGMENTS = new Set([
   // Tab pages (RoutePane patterns)
   "inbox", "feed", "changes", "crosstalk", "org", "browser", "chat", "community", "search", "notifications", "questions", "line", "threads", "docs", "capabilities", "plans", "tasks", "files", "vault", "pages", "artifacts",
-  "projects", "initiatives", "workflows", "routines", "triggers", "schedules", "sessions", "anchor", "team", "config", "calls",
+  "projects", "initiatives", "workflows", "routines", "triggers", "schedules", "sessions", "resources", "anchor", "team", "config", "memory", "calls",
   // Standalone shell pages (own <Route>, not in RoutePane)
   "explore", "timeline", "windows", "orchestration", "roadmap", "cli",
   // The repository index (its history, source and commit pages are deeper paths)

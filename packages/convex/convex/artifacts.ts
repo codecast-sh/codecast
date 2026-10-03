@@ -777,7 +777,7 @@ export const appendVersion = internalMutation({
   },
   handler: async (ctx, args) => {
     const artifact = await ctx.db.get(args.artifact_id);
-    if (!artifact) throw new Error("Artifact not found");
+    if (!artifact) throw new Error("Page not found");
     const version = await bumpVersion(ctx, artifact, {
       storage_id: args.storage_id,
       size: args.size,
@@ -1416,7 +1416,7 @@ async function resolveTarget(
     const listing = candidates.map((a) => `  ${a.slug}  ${a.title}`).join("\n");
     return { error: `"${target}" matches ${candidates.length} artifacts — use a slug:\n${listing}` };
   }
-  if (!candidates.length) return { error: `No artifact matches "${target}"` };
+  if (!candidates.length) return { error: `No page matches "${target}"` };
   return { match: candidates[0] };
 }
 
@@ -1439,7 +1439,7 @@ export const deleteFromCLI = mutation({
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) return { error: "Unauthorized" };
     const r = await resolveTarget(ctx, auth.userId, args.target);
-    if (r.error || !r.match) return { error: r.error ?? `No artifact matches "${args.target}"` };
+    if (r.error || !r.match) return { error: r.error ?? `No page matches "${args.target}"` };
     const match = r.match;
     await deleteArtifactCascade(ctx, match);
     return { deleted: toCliRow(match) };
@@ -1677,7 +1677,7 @@ export const getShared = query({
     if (gated) {
       return {
         slug: artifact.slug,
-        title: "Protected artifact",
+        title: "Protected page",
         size: 0,
         version: 0,
         kind: artifact.kind ?? "html",

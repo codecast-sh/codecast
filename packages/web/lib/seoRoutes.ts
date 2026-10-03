@@ -44,7 +44,7 @@ const STATIC_ENTRIES: SeoEntry[] = [
     path: "/about",
     title: "About — Codecast",
     description:
-      "Why we built Codecast: coding agents forget everything between sessions, and teams lose the reasoning behind their own code. Codecast keeps the record.",
+      "Why we built Codecast: it began as the record of every coding agent session and grew into the workspace where a team and its agents work together.",
   },
   {
     path: "/features",

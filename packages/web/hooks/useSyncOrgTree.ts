@@ -16,26 +16,41 @@ export function isMissingFunctionError(error: Error | undefined): boolean {
   return !!error && /Could not find public function/i.test(error.message ?? "");
 }
 
-/** The feeder alone: mounts the subscription and reports its state without
- *  subscribing the caller to the tree. A page that only names roles (an
- *  owner chip, the head of people link) mounts this and reads useOrgRoles,
- *  so a message under any node does not re-render it. */
-export function useSyncOrgTreeFeeder(canonicalTeamId?: string | null): { ready: boolean; error?: Error; missing: boolean; refused: boolean; retry: () => void } {
-  // Web reads the mirrored pointer. Mobile switches teams through
-  // users.active_team_id alone and never writes the mirror, so it hands over
-  // the canonical pointer instead (null = the personal workspace).
+// The team argument both feeders share. Web reads the mirrored pointer.
+// Mobile switches teams through users.active_team_id alone and never writes
+// the mirror, so it hands over the canonical pointer instead (null = the
+// personal workspace). A team stub id (createTeam in flight) is not a Convex
+// id: skip until it resolves, because falling back to `{}` would load the
+// PERSONAL org into the slot under the team just created.
+function useOrgTeamArg(canonicalTeamId?: string | null): Record<string, string> | "skip" {
   const mirroredTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
   const activeTeamId = canonicalTeamId === undefined ? mirroredTeamId : canonicalTeamId;
-  // A team stub id (createTeam in flight) is not a Convex id. Skip until it
-  // resolves: falling back to `{}` would load the PERSONAL tree into the slot
-  // and show the user's own org under the team they just created.
-  const teamArg = !activeTeamId ? {} : isConvexId(activeTeamId) ? { team_id: activeTeamId } : "skip";
-  const { ready, error, refused, retry } = useSyncCollection("orgTree", api.org.tree, teamArg);
+  return !activeTeamId ? {} : isConvexId(activeTeamId) ? { team_id: activeTeamId } : "skip";
+}
+
+function useOrgFeed(query: any, canonicalTeamId?: string | null) {
+  const { ready, error, refused, retry } = useSyncCollection("orgTree", query, useOrgTeamArg(canonicalTeamId));
   return { ready, error, missing: isMissingFunctionError(error), refused, retry };
 }
 
+/** The feeder alone, for a surface that only NAMES roles (an owner chip, the
+ *  role picker, the task board, the inbox): it subscribes to org.roles, which
+ *  reads roles and seats and no session, so it re-runs only when the org
+ *  changes. Read the roles with useOrgRoles. A surface that draws sessions,
+ *  counts or a standing agent's live state uses useSyncOrgTree instead. */
+export function useSyncOrgTreeFeeder(canonicalTeamId?: string | null): { ready: boolean; error?: Error; missing: boolean; refused: boolean; retry: () => void } {
+  return useOrgFeed(api.org.roles, canonicalTeamId);
+}
+
+/** The full tree feeder (org.tree): people, per role sessions and counts, and
+ *  the standing agents' live state. It re-runs on every session write in the
+ *  workspace, so only surfaces that draw those mount it. */
+export function useSyncOrgTreeFull(canonicalTeamId?: string | null): { ready: boolean; error?: Error; missing: boolean; refused: boolean; retry: () => void } {
+  return useOrgFeed(api.org.tree, canonicalTeamId);
+}
+
 export function useSyncOrgTree(): { tree: OrgTree | null; ready: boolean; error?: Error; missing: boolean; refused: boolean; retry: () => void } {
-  const state = useSyncOrgTreeFeeder();
+  const state = useSyncOrgTreeFull();
   const tree = useInboxStore((s) => s.orgTree);
   return { tree, ...state };
 }

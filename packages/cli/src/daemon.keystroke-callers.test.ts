@@ -39,7 +39,7 @@ function fixture(writeSucceeded = true) {
     statusFlipStartsTurn: () => false, markTurnStarted: () => {}, pendingOpenTaskReports: new Map(),
     SETTLE_STATUSES_WITH_TASKS: new Set(["idle"]), SETTLE_VERDICT_STATUSES: new Set(),
     turnCompletedAtBySession: new Map(), serializeSessionStatus: (_sid: string, write: () => unknown) => write(),
-    hibernatedSessions: new Set(), lastOpenTasksSentAt: new Map(), lastOpenTasksSentJson: new Map(),
+    hibernatedSessions: new Set(), lastOpenTasksSentJson: new Map(),
     writePane: () => writeSucceeded,
     ACTIVE_AGENT_STATUSES: new Set(["working", "thinking", "tool_use"]),
     isPhantomBypassPermissionBlock: () => false,

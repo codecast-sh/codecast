@@ -1,7 +1,8 @@
 // The Changes keyboard (spec 6.1), bound through the shortcuts registry's
 // `changes` context. The context stands only while the page is the active
 // pane, and every handler declines otherwise: a visited Changes tab stays
-// mounted hidden, and its `j` must not answer for the page in front.
+// mounted hidden, and its `j` must not answer for the page in front. They
+// decline as well while a menu is open over the page.
 import { useCallback } from "react";
 import { formatShortcutParts, getShortcutsForAction, useShortcutAction, useShortcutContext } from "../../shortcuts";
 import type { ShortcutAction } from "../../shortcuts";
@@ -26,9 +27,41 @@ export type ChangesKeyHandlers = {
   escape: Handler;
 };
 
+/** An open menu or listbox owns the keyboard: its arrows, letters, Enter and Escape are its own. */
+export function layerOpen(doc: Pick<Document, "querySelector"> = document): boolean {
+  return !!doc.querySelector('[role="menu"][data-state="open"], [role="listbox"][data-state="open"]');
+}
+
+/**
+ * Whether Enter belongs to the focused control and not to the story around
+ * it: a commit link, a session pill or "+149 more files" inside a story acts
+ * on Enter itself. The story's own control (its trigger, or the week's story
+ * button) is the one control whose Enter is the evidence key.
+ */
+export function keepsOwnEnter(active: Element | null): boolean {
+  const ctl = active?.closest("button, a, input, [role=menuitem]");
+  return !!ctl && !ctl.matches("[data-story-trigger]") && !ctl.matches("button[data-story-key]");
+}
+
+export type EscapeStep = "clear-text" | "leave-field" | "close-story" | "clear-filters" | "close-filter" | null;
+
+/**
+ * What one Escape does. In the filter field it works on the field first: the
+ * typed text goes, chips stay; a second press leaves the field. Anywhere else
+ * it closes the open evidence, then clears every filter, then closes the
+ * filter bar.
+ */
+export function escapeStep(s: { inFilterField: boolean; q: string | undefined; story: string | undefined; filtered: boolean; filterOpen: boolean }): EscapeStep {
+  if (s.inFilterField) return s.q ? "clear-text" : "leave-field";
+  if (s.story) return "close-story";
+  if (s.filtered) return "clear-filters";
+  return s.filterOpen ? "close-filter" : null;
+}
+
 export function useChangesKeys(active: boolean, h: ChangesKeyHandlers): void {
   useShortcutContext("changes", active);
-  const here = useCallback((fn: Handler) => () => (active ? fn() : false), [active]);
+  // One gate for every key: the page must be the active pane, with no menu open over it.
+  const here = useCallback((fn: Handler) => () => (active && !layerOpen() ? fn() : false), [active]);
   useShortcutAction("changes.prevDay", here(h.prevDay));
   useShortcutAction("changes.nextDay", here(h.nextDay));
   useShortcutAction("changes.today", here(h.today));

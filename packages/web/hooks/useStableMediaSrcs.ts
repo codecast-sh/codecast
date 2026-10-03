@@ -39,12 +39,19 @@ export type StableMediaSrcs = {
   loaded: (id: string) => void;
   /** Gave up on a file: refused with nothing left to try. */
   dead: (id: string) => boolean;
+  /** The person asked to try a dead file again: its retries start over and
+   *  its element is made anew (keyOf), on the newest URL there is. */
+  retry: (id: string) => void;
+  /** The React key for a file's element: a new one whenever the element has
+   *  to start over (another URL, or a retry of the same one). */
+  keyOf: (file: { id: string; url: string | null }) => string;
 };
 
 export function useStableMediaSrcs(files: readonly { id: string; url: string | null }[]): StableMediaSrcs {
   const srcs = useRef(new Map<string, string>());
   const tries = useRef(new Map<string, number>());
   const failed = useRef(new Set<string>());
+  const remounts = useRef(new Map<string, number>());
   const [, bump] = useState(0);
 
   const latest = (id: string) => files.find((f) => f.id === id)?.url ?? null;
@@ -89,5 +96,12 @@ export function useStableMediaSrcs(files: readonly { id: string; url: string | n
       tries.current.delete(id);
     },
     dead: (id) => failed.current.has(id),
+    retry: (id) => {
+      tries.current.delete(id);
+      remounts.current.set(id, (remounts.current.get(id) ?? 0) + 1);
+      const url = latest(id) ?? srcs.current.get(id);
+      if (url) swap(id, url);
+    },
+    keyOf: (f) => `${f.id}:${srcs.current.get(f.id) ?? f.url ?? ""}:${remounts.current.get(f.id) ?? 0}`,
   };
 }

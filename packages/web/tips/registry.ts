@@ -62,6 +62,8 @@ export const TIPS: TipDef[] = [
     content: 'Pinned — this session stays at the top of your list' },
   { id: 'm-first-stash', type: 'milestone', phase: 2,
     content: 'Stashed — find it later via the dismissed toggle' },
+  { id: 'm-undo-history', type: 'milestone', phase: 2, shortcutAction: 'ui.undoHistory',
+    content: 'Every change in this window has a way back. See them all in the undo history' },
 
   // Nudges: contextual suggestions
   { id: 'n-many-sessions', type: 'nudge', phase: 2,

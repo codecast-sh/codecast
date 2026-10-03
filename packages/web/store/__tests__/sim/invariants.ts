@@ -17,7 +17,7 @@
 // which is called over the db directly. Those client reads are recorded in
 // backend.calls like any other call, at the same points in every replay.
 import { accessStampFor, authorizedFor, heldKeysFor } from "@codecast/convex/convex/lib/accessKeys";
-import { hourBucket } from "@codecast/convex/convex/lib/chatQuota";
+import { agentPosterKey, hourBucket } from "@codecast/convex/convex/lib/chatQuota";
 import { parseChatMentionClientId, parseChatRelayClientId } from "@codecast/convex/convex/lib/chatWakeIds";
 import { armedTriggerKindFor } from "@codecast/convex/convex/dormancy";
 import { visibleAnchorsForUser } from "@codecast/convex/convex/anchors";
@@ -433,11 +433,11 @@ export const INVARIANTS: readonly Invariant[] = [
   },
   {
     id: "INV-ping-pong",
-    meaning: "agent to agent wakes per virtual hour stay under the mention caps, per sender and per target",
+    meaning: "agent to agent wakes per virtual hour stay under the mention caps, per sender, per person and per target",
     keys: [],
     on: "world",
     async check(world) {
-      const agentLines = new Set(tableRows(world, "chat_messages").filter((m) => m.origin === "agent").map((m) => String(m._id)));
+      const agentLines = new Map(tableRows(world, "chat_messages").filter((m) => m.origin === "agent").map((m) => [String(m._id), m]));
       // From a session: a session's own send, or a chat wake carrying an agent's
       // line, either its mention or its reply relayed to the session that
       // mentioned it (lib/chatWakeIds).
@@ -450,8 +450,25 @@ export const INVARIANTS: readonly Invariant[] = [
         const id = String(rs[0].conversation_id);
         out.push({ message: `${rs.length} agent wakes into one session in hour ${k}, over ${MENTION_WAKES_PER_TARGET_HOUR}`, row: { table: "conversations", id, server: await serverRow(world, id), replica: null } });
       }
-      for (const [k, rs] of overCap(fromAgent, (r) => `${hourOf(r)} ${r.from_user_id}`, MENTION_WAKES_PER_SENDER_HOUR)) {
+      // The sender the server charges (chat.ts reserveMentionWakeCaps): the
+      // person for a mention, the replying session for a relayed reply.
+      const senderOf = (r: Row) => {
+        const relayed = typeof r.client_id === "string" ? agentLines.get(parseChatRelayClientId(r.client_id) ?? "") : undefined;
+        return agentPosterKey(String(r.from_user_id), relayed?.origin_session_id as string | undefined);
+      };
+      for (const [k, rs] of overCap(fromAgent, (r) => `${hourOf(r)} ${senderOf(r)}`, MENTION_WAKES_PER_SENDER_HOUR)) {
         out.push({ message: `${rs.length} agent wakes from one sender in hour ${k}, over ${MENTION_WAKES_PER_SENDER_HOUR}`, row: { table: "users", id: String(rs[0].from_user_id), server: null, replica: null } });
+      }
+      // A person's ceiling, from ownership rather than the charge key: one
+      // sender cap for their mentions plus one for each session they own. A
+      // key narrower than a real session (a line, a stamp no session holds)
+      // passes the check above and fails this one.
+      const owned = new Map<string, number>();
+      for (const c of tableRows(world, "conversations")) owned.set(String(c.user_id), (owned.get(String(c.user_id)) ?? 0) + 1);
+      for (const [k, rs] of overCap(fromAgent, (r) => `${hourOf(r)} ${r.from_user_id}`, 0)) {
+        const ceiling = MENTION_WAKES_PER_SENDER_HOUR * (1 + (owned.get(String(rs[0].from_user_id)) ?? 0));
+        if (rs.length <= ceiling) continue;
+        out.push({ message: `${rs.length} agent wakes from one person in hour ${k}, over their ceiling of ${ceiling}`, row: { table: "users", id: String(rs[0].from_user_id), server: null, replica: null } });
       }
       return out;
     },

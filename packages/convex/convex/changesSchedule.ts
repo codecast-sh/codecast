@@ -7,8 +7,8 @@
 import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery, type ActionCtx } from "./functions";
 import { internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
-import { runBuildDay, type BuildDayResult } from "./changes";
+import type { Doc, Id } from "./_generated/dataModel";
+import { retriesProse, runBuildDay, type BuildDayResult } from "./changes";
 import { runProse } from "./changesProse";
 import {
   BACKFILL_DAYS,
@@ -108,7 +108,17 @@ export const commitDaysPage = internalQuery({
   },
 });
 
-/** Mark days dirty, spaced apart, newest first as given. `skip_final` passes over days whose edition is final. */
+/** Whether a day holds a story whose failed prose call has attempts left. */
+async function hasRetryableStory(ctx: { db: any }, teamId: Id<"teams">, day: { repository: string; date: string }): Promise<boolean> {
+  const failed: Doc<"change_stories">[] = await ctx.db
+    .query("change_stories")
+    .withIndex("by_team_repo_date", (q: any) => q.eq("team_id", teamId).eq("repository", day.repository).eq("date", day.date))
+    .filter((q: any) => q.eq(q.field("prose_status"), "failed"))
+    .collect();
+  return failed.some(retriesProse);
+}
+
+/** Mark days dirty, spaced apart, newest first as given. `skip_final` passes over days whose edition is final and whose stories need no retry. */
 export const markDays = internalMutation({
   args: { team_id: v.id("teams"), days: v.array(dayKey), spacing_ms: v.number(), skip_final: v.boolean() },
   handler: async (ctx, args): Promise<number> => {
@@ -121,7 +131,7 @@ export const markDays = internalMutation({
           .withIndex("by_team_repo_scope_date", (q) =>
             q.eq("team_id", args.team_id).eq("repository", day.repository).eq("scope", "day").eq("date", day.date))
           .first();
-        if (edition?.status === "final") continue;
+        if (edition?.status === "final" && !(await hasRetryableStory(ctx, args.team_id, day))) continue;
       }
       await markDayDirty(ctx, { team_id: args.team_id, ...day }, args.spacing_ms * marked);
       marked += 1;
@@ -154,15 +164,19 @@ export const rescheduleStrandedDays = internalMutation({
   handler: async (ctx): Promise<number> => rescheduleStranded(ctx, Date.now()),
 });
 
-/** Every 6 hours (crons.ts): days of the last three with commits and no final edition, and rebuilds that died. */
+/** Every 6 hours (crons.ts): days of the last three with commits and no final edition, weeks that ended unfinished, and rebuilds that died. */
 export const reconcile = internalAction({
   args: {},
-  handler: async (ctx): Promise<{ teams: number; marked: number; rescheduled: number }> => {
+  handler: async (ctx): Promise<{ teams: number; marked: number; weeks: number; rescheduled: number }> => {
     const teams: Array<{ team_id: Id<"teams">; timezone: string }> = await ctx.runQuery(internal.changesSchedule.changesTeams, {});
     let marked = 0;
-    for (const team of teams) marked += await markRecentDays(ctx, team.team_id, team.timezone, RECONCILE_DAYS, true);
+    let weeks = 0;
+    for (const team of teams) {
+      marked += await markRecentDays(ctx, team.team_id, team.timezone, RECONCILE_DAYS, true);
+      weeks += await ctx.runMutation(internal.changesWeek.reconcileWeeks, { team_id: team.team_id });
+    }
     const rescheduled: number = await ctx.runMutation(internal.changesSchedule.rescheduleStrandedDays, {});
-    return { teams: teams.length, marked, rescheduled };
+    return { teams: teams.length, marked, weeks, rescheduled };
   },
 });
 

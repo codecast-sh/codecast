@@ -36,6 +36,7 @@ The loop: \`./evals freeze create title@jx7c6zk:142\` → \`./evals check title
 ./evals freeze list | show <id> | results <id> | diff <id> --run A --run B
 ./evals freeze replay <id> --reps 3       # one freeze; check replays them all
 ./evals freeze judge <id> "the reply must …" [--rejudge]
+./evals freeze label <id> '<json>'|-       # a private freeze's label: written, committed, pushed
 ./evals check [surface…] [--reps n] [--model id] [--budget usd] [--dry]
 ./evals stale [surface…]                  # the precheck: exit 0 when a surface changed
 ./evals runs [show|score|diff] …          # every eval run, from the evidence folders

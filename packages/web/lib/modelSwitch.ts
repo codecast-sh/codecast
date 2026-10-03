@@ -8,6 +8,7 @@ import {
 } from "@codecast/shared/contracts";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { DispatchNotWiredError } from "../store/mutativeMiddleware";
+import { withoutUndo } from "../store/undoStack";
 
 // modelOptionKey ("claude-opus-4-8" → "opus") is pure contract logic — it lives
 // in @codecast/shared/contracts now (the store's create path needs it too). Kept
@@ -86,7 +87,8 @@ export async function commitModelChange(opts: {
     // pending-message rekey carries over to the real conversation.
     const messages = modelSwitchMessages(agentType, sel);
     if (messages.length === 0) {
-      store.setConversationModel(conversationId, prev);
+      // Taking back our own stamp, not a choice of the user's: no undo entry.
+      withoutUndo(() => store.setConversationModel(conversationId, prev));
       notify("This model can't be switched in a running session");
       return;
     }
@@ -111,7 +113,7 @@ export async function commitModelChange(opts: {
     // outbox drain — reverting the local stamp here would make the UI disagree
     // with the server the moment it lands. Keep the choice; stay quiet.
     if (err instanceof DispatchNotWiredError && err.parked) return;
-    store.setConversationModel(conversationId, prev);
+    withoutUndo(() => store.setConversationModel(conversationId, prev));
     notify(err instanceof Error ? err.message : "Failed to switch model");
   }
 }

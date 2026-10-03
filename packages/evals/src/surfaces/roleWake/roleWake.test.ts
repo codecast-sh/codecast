@@ -181,7 +181,7 @@ describe('served reads', () => {
     mkdirSync(runDir, { recursive: true });
     const served = servedDirFor(fixtureSnap('docs-needs-input'), { runDir }, meta);
     for (const argv of [['plan', 'show', 'pl-31'], ['trigger', 'ls'], ['task', 'ls', '-q', 'webhooks'], ['decide', 'show', 'sd-55'], ['read', 'jx7ref2']]) expect(guard(served, runDir, ...argv).code).toBe(0);
-    for (const argv of [['plan', 'show', 'pl-99'], ['trigger', 'show', 'tr-901'], ['feed'], ['search', 'webhooks'], ['project', 'ls'], ['doc', 'ls']]) expect(guard(served, runDir, ...argv)).toMatchObject({ code: 1, out: '' });
+    for (const argv of [['plan', 'show', 'pl-99'], ['trigger', 'show', 'tr-901'], ['calls'], ['search', 'webhooks'], ['project', 'ls'], ['doc', 'ls']]) expect(guard(served, runDir, ...argv)).toMatchObject({ code: 1, out: '' });
     const log = readFileSync(join(runDir, 'calls.log'), 'utf8');
     expect(log).not.toMatch(/^LIVE /m);
     expect(log).toContain('UNSERVED plan show pl-99');

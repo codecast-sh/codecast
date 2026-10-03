@@ -558,6 +558,7 @@ export function SessionsView() {
               </svg>
             </Link>
             <h1 className="text-lg font-medium tracking-tight">Sessions</h1>
+            <Link href="/resources" className="rounded border border-zinc-700 px-2 py-0.5 text-xs text-zinc-300 hover:border-zinc-500 hover:text-zinc-100" title="CPU, memory and processes per machine and session">Resources</Link>
             <div className="flex flex-wrap items-center gap-3 text-xs text-zinc-500 font-mono">
               <span><span className="text-sky-400">{counts.active}</span> active</span>
               <span className="text-zinc-700">|</span>

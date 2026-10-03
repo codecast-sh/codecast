@@ -36,6 +36,8 @@ export interface RunJson {
   /** Agent reads that went to the live workspace: more than 0 and the rep is not reproducible. */
   liveReads: number;
   batch: string;
+  /** The standing run this rep belongs to (check --cadence, e.g. the nightly): its batches are weighed against their own pooled history, which no other run joins. Null for any other run. */
+  cadence?: string | null;
   title: string;
 }
 

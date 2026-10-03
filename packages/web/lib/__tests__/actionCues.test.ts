@@ -52,8 +52,13 @@ describe("KILL_DOOR", () => {
 });
 
 describe("DORMANT_SETTLE", () => {
-  test("it falls: the second note sits below the first", () => {
-    expect(crossingRate(DORMANT_SETTLE, 0.3, 0.45)).toBeLessThan(crossingRate(DORMANT_SETTLE, 0.02, 0.12) * 0.8);
+  test("it falls: the breath ends far lower than it starts", () => {
+    expect(crossingRate(DORMANT_SETTLE, 0.24, 0.34)).toBeLessThan(crossingRate(DORMANT_SETTLE, 0.02, 0.12) * 0.5);
+  });
+
+  test("it is no louder over its length than stash or kill", () => {
+    const rms = (spec: CueSpec) => Math.sqrt(renderCue(spec).reduce((sum, v) => sum + v * v, 0) / renderCue(spec).length);
+    expect(rms(DORMANT_SETTLE)).toBeLessThan(Math.max(rms(STASH_AWAY), rms(KILL_DOOR)) * 1.1);
   });
 
   test("it eases in instead of opening at full", () => {

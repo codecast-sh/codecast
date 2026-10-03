@@ -1,6 +1,6 @@
 import { createContext, useContext } from "react";
 import { stripTitleHeading } from "@codecast/shared/docs";
-import { useQuery } from "convex/react";
+import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import Link from "next/link";
 import { FileText, ArrowUpRight } from "lucide-react";
@@ -24,11 +24,11 @@ const EmbedDepth = createContext(0);
  */
 export function DocEmbed({ id }: { id: string }) {
   const depth = useContext(EmbedDepth);
-  const doc = useQuery(api.docs.webGet, depth < MAX_EMBED_DEPTH ? { id } : "skip");
+  const { data: doc, error } = useQueryNoThrow(api.docs.webGet, depth < MAX_EMBED_DEPTH ? { id } : "skip");
 
   if (depth >= MAX_EMBED_DEPTH) return <EntityIdPill type="doc" id={id} />;
 
-  if (doc === undefined) {
+  if (doc === undefined && !error) {
     return (
       <span className="not-prose my-3 block rounded-md border border-sol-border bg-sol-bg-alt px-3 py-2 text-xs text-sol-text-dim">
         Loading doc…
@@ -36,8 +36,9 @@ export function DocEmbed({ id }: { id: string }) {
     );
   }
 
-  // Not found or not accessible (webGet enforces creator-or-team access).
-  if (doc === null) {
+  // Not found, not accessible (webGet enforces creator-or-team access), or
+  // the lookup failed: the embed says so and the message around it stays.
+  if (!doc) {
     return (
       <span className="not-prose my-3 block rounded-md border border-dashed border-sol-border bg-sol-bg-alt px-3 py-2 text-xs text-sol-text-dim">
         Doc unavailable <span className="font-mono">{id}</span>

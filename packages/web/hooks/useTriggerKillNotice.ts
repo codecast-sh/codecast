@@ -4,7 +4,7 @@ import { useQueryNoThrow } from "./useQueryNoThrow";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
-import { animatedHideSession } from "../store/undoActions";
+import { animatedHideSessions } from "../store/undoActions";
 import { useInboxStore } from "../store/inboxStore";
 import {
   armedInjectTasksFor,
@@ -65,19 +65,15 @@ export function useTriggerKillNotice() {
     );
   }, [reactivateTask]);
 
-  // Kill one session, saying what triggers died with it.
-  const killWithNotice = useCallback((id: string) => {
-    const armed = armedInjectTasksFor(tasksRef.current, id);
-    animatedHideSession(id, "kill");
-    noticeCanceled(armed);
-  }, [noticeCanceled]);
-
-  // Bulk kill (the stashed bucket's "Kill all"): one aggregate notice.
+  // Bulk kill (a selection, the stashed bucket's "Kill all"): every card
+  // collapses out, the kill is one undo, and the notice is one aggregate.
   const killManyWithNotice = useCallback((ids: string[]) => {
     if (!ids.length) return;
-    useInboxStore.getState().killSessions(ids);
-    noticeCanceled(ids.flatMap((id) => armedInjectTasksFor(tasksRef.current, id)));
+    const armed = new Map(ids.map((id) => [id, armedInjectTasksFor(tasksRef.current, id)]));
+    void animatedHideSessions(ids, "kill").then((killed) => noticeCanceled(killed.flatMap((id) => armed.get(id) ?? [])));
   }, [noticeCanceled]);
+  // Kill one session, saying what triggers died with it.
+  const killWithNotice = useCallback((id: string) => killManyWithNotice([id]), [killManyWithNotice]);
 
   // Restore a killed session, saying what triggers came back with it. The
   // re-arm itself happens server-side on the un-hide transition; this only

@@ -698,7 +698,7 @@ export async function deriveConversationVerdict(
   const heartbeatFresh = !!session?.last_heartbeat && now - session.last_heartbeat < HEARTBEAT_ALIVE_MS;
   const agentStatus = trustedAgentStatus(
     session?.agent_status, conv.updated_at, now, heartbeatFresh,
-    openTasksVouchForWaiting(session?.open_tasks_at, session?.open_tasks?.length ?? 0, now),
+    openTasksVouchForWaiting(session?.open_tasks_at, session?.open_tasks?.length ?? 0, heartbeatFresh),
   );
   const daemonAlive = agentStatus === "stopped" ? false : heartbeatFresh;
   const hasPending = !!conv.has_pending_messages;

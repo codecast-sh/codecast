@@ -2,63 +2,37 @@
 // snippet around it looks like, and how a match is marked. The header search,
 // the /search page and chat search all render from these, so a hit looks the
 // same wherever it is shown.
-import { parseSearchTerms } from "@codecast/shared/search";
+import { parseSearchTerms, parseQueryTerms, termSpans, snippetAround } from "@codecast/shared/search";
 
 export { parseSearchTerms };
 
+/** `text` with the words the search used marked. The terms are the ones the
+ *  server ranked by (parseQueryTerms): a stop-word or a lone letter it dropped
+ *  is not marked, and neighbouring words found together are one mark. */
 export function highlightMatch(text: string, query: string): React.ReactNode {
   if (!query.trim()) return text;
+  const spans = termSpans(text, parseQueryTerms(query));
+  if (spans.length === 0) return text;
 
-  const terms = parseSearchTerms(query);
-  if (terms.length === 0) return text;
-
-  const pattern = terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
-  const regex = new RegExp(`(${pattern})`, "gi");
-  const parts = text.split(regex);
-
-  if (parts.length === 1) return text;
-
-  return (
-    <>
-      {parts.map((part, i) => {
-        const isMatch = terms.some((t) => part.toLowerCase() === t);
-        return isMatch ? (
-          <mark
-            key={i}
-            className="bg-amber-300/40 text-amber-900 dark:text-amber-200 rounded px-0.5 font-medium"
-          >
-            {part}
-          </mark>
-        ) : (
-          <span key={i}>{part}</span>
-        );
-      })}
-    </>
-  );
+  const parts: React.ReactNode[] = [];
+  let at = 0;
+  spans.forEach(([start, end], i) => {
+    if (start > at) parts.push(<span key={`t${i}`}>{text.slice(at, start)}</span>);
+    parts.push(
+      <mark
+        key={`m${i}`}
+        className="bg-amber-300/40 text-amber-900 dark:text-amber-200 rounded px-0.5 font-medium"
+      >
+        {text.slice(start, end)}
+      </mark>,
+    );
+    at = end;
+  });
+  if (at < text.length) parts.push(<span key="tail">{text.slice(at)}</span>);
+  return <>{parts}</>;
 }
 
+/** The stretch of `content` that shows the most of the query (snippetAround). */
 export function getSnippet(content: string, query: string, maxLen = 400): string {
-  const lowerContent = content.toLowerCase();
-  const terms = parseSearchTerms(query);
-
-  let bestIndex = -1;
-  for (const term of terms) {
-    const idx = lowerContent.indexOf(term);
-    if (idx !== -1 && (bestIndex === -1 || idx < bestIndex)) {
-      bestIndex = idx;
-    }
-  }
-
-  if (bestIndex === -1) return content.slice(0, maxLen);
-
-  // Keep the hit in view with a quarter of the budget of lead-in before it.
-  const lead = Math.round(maxLen / 4);
-  const start = Math.max(0, bestIndex - lead);
-  const end = Math.min(content.length, bestIndex + (maxLen - lead));
-  let snippet = content.slice(start, end);
-
-  if (start > 0) snippet = "..." + snippet;
-  if (end < content.length) snippet = snippet + "...";
-
-  return snippet;
+  return snippetAround(content, parseQueryTerms(query), maxLen);
 }

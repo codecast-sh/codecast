@@ -33,7 +33,7 @@ import { useBulkMoveSessions } from "../hooks/useBulkMoveSessions";
 import { useInboxSelection } from "../lib/inboxSelection";
 import { useVaultStore } from "../store/vaultStore";
 import { filesHref } from "../lib/vault/vaultHref";
-import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, placeInboxRows, filterInboxScopeFromState, convBucketMap, sortLabels, computeChipCounts, getProjectName, RecentVisit, selectSessionRailOpen, sessionRowFromSummary } from "../store/inboxStore";
+import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, placeInboxRows, filterInboxScopeFromState, convBucketMap, sortLabels, computeChipCounts, getProjectName, RecentVisit, selectSessionRailOpen, sessionRowFromSummary, isFavoriteInStore } from "../store/inboxStore";
 import { resolveRecentVisits, visitTimeAgo, VISIT_OBJECT_LABEL, type ResolvedVisit } from "../lib/recentVisits";
 import { inActiveWorkspace } from "../lib/workspaceScope";
 import { RecentVisitGlyph } from "./RecentVisitRow";
@@ -99,11 +99,14 @@ import type { WorkbenchSnapshot } from "../store/workbench";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { getLabelColor, DEFAULT_LABELS } from "../lib/labelColors";
 import { toast } from "sonner";
-import { undoableArchiveDoc, undoableHideSession, undoableDeferSession, animatedSetSessionRest } from "../store/undoActions";
+import { animatedSetSessionRest, undoAsOne } from "../store/undoActions";
+import { counted } from "../store/undo/labels";
+import type { UserRest } from "@codecast/shared/contracts";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
 import { STATUS_OPTIONS, PRIORITY_OPTIONS, PLAN_STATUS_OPTIONS, DOC_TYPE_OPTIONS } from "./menus/entityOptions";
 import { statusByKey, statusEntityOptions, statusWriteFields, taskStatusKey, useTeamTaskStatusList } from "../lib/taskStatuses";
 import { copyToClipboard, shareOrigin } from "../lib/utils";
+import { UNDO_HISTORY_TIER } from "../lib/undoTimelineOpen";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import {
   Circle,
@@ -251,6 +254,7 @@ const NAV_PAGES: ReadonlyArray<{
   { label: "Documents", path: "/docs", icon: "file", keywords: "notes plans specs" },
   { label: "Code", path: "/repo", icon: "code", keywords: "repositories repository github git source commits branches pull requests history browse code" },
   { label: "Files", path: "/files", icon: "folder", keywords: "notes markdown obsidian files vault local" },
+  { label: "Memory", path: "/memory", icon: "file", keywords: "claude code memories memory.md index recall learned facts feedback map graph" },
   { label: "Triggers", path: "/triggers", icon: "clock", keywords: "schedules cron automation recurring followup reminders" },
   { label: "Capabilities", path: "/capabilities", icon: "grid", keywords: "skills mcp plugins drift machines library apps connect" },
   { label: "Pages", path: "/pages", icon: "file", keywords: "published html artifacts share cast publish gallery" },
@@ -266,6 +270,7 @@ const NAV_PAGES: ReadonlyArray<{
   { label: "Workflows", path: "/routines", icon: "workflow", keywords: "orchestration runs graph dot gates routines", secondary: true },
   { label: "Line", path: "/line", icon: "workflow", keywords: "the line signals causes build cards watch shipped factory throughput", secondary: true },
   { label: "Live Sessions", path: "/sessions", icon: "session", keywords: "running machines devices liveness", secondary: true },
+  { label: "Resources", path: "/resources", icon: "session", keywords: "cpu memory activity monitor load pressure processes offload cloud", secondary: true },
   { label: "Notifications", path: "/notifications", icon: "bell", keywords: "alerts updates", secondary: true },
   { label: "Team Settings", path: "/settings/team", icon: "settings", keywords: "members invite workspace", secondary: true },
   { label: "Claude Accounts", path: "/settings/claude-accounts", icon: "settings", keywords: "account switch login oauth", secondary: true },
@@ -291,6 +296,8 @@ const GLOBAL_COMMANDS: ReadonlyArray<{
   /** Rows that do not apply to every window say so; the people window has the
    *  wall as its whole view and needs no command to open one. */
   hidden?: () => boolean;
+  /** Found by search only: listed once the query is non-empty. */
+  searchOnly?: boolean;
 }> = [
   { action: "anchor.toggle", label: "Talk to the workspace's agent", icon: HeadOfPeopleFace, keywords: "agent assistant bot standing member ask personal team head of people", hidden: () => !workspaceHasFeatureNow("org") },
   { action: "people.wall", label: "The team — hold a face to talk", icon: Users, keywords: "people wall faces who is around hold to talk walkie everyone roster", hidden: isPeopleWindow },
@@ -306,7 +313,9 @@ const GLOBAL_COMMANDS: ReadonlyArray<{
   { action: "inbox.toggleTriageBar", label: () => (isTriageBarCompact(useInboxStore.getState().clientState.ui) ? "Show triage bar" : "Hide triage bar"), icon: PanelBottom, keywords: "triage bar defer stash kill verbs footer show hide" },
   { action: "ui.undo", label: "Undo", icon: Undo2, keywords: "restore revert last action" },
   { action: "ui.redo", label: "Redo", icon: Redo2, keywords: "repeat undone action" },
-  { action: "ui.undoHistory", label: "Undo history", icon: History, keywords: "undo redo history timeline changes take back revert recent actions" },
+  // While the timeline is a hidden tier, its row is a doorway found by search,
+  // not by browsing (undo-history S9).
+  { action: "ui.undoHistory", label: "Undo history", icon: History, keywords: "undo redo history timeline changes take back revert recent actions", searchOnly: UNDO_HISTORY_TIER === "hidden" },
   { action: "tab.new", label: "New tab", icon: Plus, keywords: "tab create" },
   { action: "tab.close", label: "Close tab", icon: Square, keywords: "tab dismiss" },
   { action: "tab.next", label: "Next tab", icon: ArrowDown, keywords: "tab switch navigate" },
@@ -337,6 +346,22 @@ function palettePerson(row: TeammateWhereabouts, following: boolean, session?: {
     session: id ? (session ?? useInboxStore.getState().sessions[id] ?? { _id: id, title: row.title }) : null,
   };
 }
+
+// The undo label of a per-session palette verb run over a selection.
+const PALETTE_SESSION_VERB: Record<string, string> = {
+  session_restore: "Restored",
+  session_kill: "Killed",
+  session_stash: "Stashed",
+  session_stash_hide: "Stashed and hid",
+  session_unsnooze: "Woke",
+  session_defer: "Deferred",
+};
+
+const PALETTE_REST_VERDICT: Partial<Record<string, UserRest>> = {
+  session_dormant: "dormant",
+  session_done: "done",
+  session_needs_input: "needs_input",
+};
 
 /**
  * One palette row per teammate: their name, and where they are under it.
@@ -841,7 +866,9 @@ export function ActionSubmenu({
     }
     if (mode === "snooze") {
       const until = sessionSnoozeUntil(item.key as SessionSnoozeKey);
-      for (const target of targets) useInboxStore.getState().snoozeSession(target._id, until);
+      undoAsOne(`Snoozed ${counted(targets.length, "session")}`, () => {
+        for (const target of targets) useInboxStore.getState().snoozeSession(target._id, until);
+      });
       toast.success(`Snoozed for ${item.label}`);
       onClose();
       return;
@@ -915,13 +942,15 @@ export function ActionSubmenu({
           if (!date || localDate !== search.trim()) { toast.error("Enter a date as YYYY-MM-DD"); return; }
           fields = { target_date: date.getTime() };
         } else fields = mode === "rename" ? { title: search.trim() } : mode === "project" ? { project_id: item.key } : { status: item.key };
-        for (const row of targets) {
-          if (targetType === "session") store.renameSession(row._id, fields.title);
-          else if (targetType === "task") store.updateTask(row.short_id, fields);
-          else if (targetType === "doc") store.updateDoc(row._id, fields);
-          else if (targetType === "plan") store.updatePlan(row.short_id || row._id, fields);
-          else if (targetType === "project") store.updateProject(row._id, fields);
-        }
+        undoAsOne(`Changed ${counted(targets.length, targetType === "doc" ? "document" : targetType)}`, () => {
+          for (const row of targets) {
+            if (targetType === "session") store.renameSession(row._id, fields.title);
+            else if (targetType === "task") store.updateTask(row.short_id, fields);
+            else if (targetType === "doc") store.updateDoc(row._id, fields);
+            else if (targetType === "plan") store.updatePlan(row.short_id || row._id, fields);
+            else if (targetType === "project") store.updateProject(row._id, fields);
+          }
+        });
       }
       onClose();
       return;
@@ -997,13 +1026,12 @@ export function ActionSubmenu({
         return isConvexId(real) || store.sessions[real] || store.conversations[real] ? real : null;
       };
       const applyBucket = (bucketId: string | null, bucketLabel?: string) => {
-        let applied = 0;
-        for (const t of targets) {
-          const convId = resolveConvId(t);
-          if (!convId) continue;
-          store.assignSessionToBucket(convId, bucketId);
-          applied++;
-        }
+        const convIds = targets.map(resolveConvId).filter((id): id is string => !!id);
+        const applied = convIds.length;
+        const sessions = counted(applied, "session");
+        undoAsOne(bucketId ? `Labeled ${sessions} ${bucketLabel ?? ""}`.trimEnd() : `Removed the label from ${sessions}`, () => {
+          for (const convId of convIds) store.assignSessionToBucket(convId, bucketId);
+        });
         if (!applied) {
           toast.error("Session is no longer available");
           return;
@@ -1035,9 +1063,9 @@ export function ActionSubmenu({
 
     if (targetType === "task") {
       const applyTaskUpdate = (fields: Record<string, any>) => {
-        for (const t of targets as TaskItem[]) {
-          updateTask(t.short_id, fields);
-        }
+        undoAsOne(`Changed ${counted(targets.length, "task")}`, () => {
+          for (const t of targets as TaskItem[]) updateTask(t.short_id, fields);
+        });
       };
       const label = count === 1 ? (targets[0] as TaskItem).short_id : `${count} tasks`;
 
@@ -1052,9 +1080,12 @@ export function ActionSubmenu({
         // and stranding a doomed local state the server refuses.
         if (fields.status === "done" || fields.status === "dropped") {
           let deferred = false;
-          for (const t of targets as TaskItem[]) {
-            if (closeTaskWithGuard(t.short_id, fields.status, undefined, fields.status_id).needsConfirm) deferred = true;
-          }
+          const status = fields.status;
+          undoAsOne(`Moved ${counted(targets.length, "task")} to ${item.label}`, () => {
+            for (const t of targets as TaskItem[]) {
+              if (closeTaskWithGuard(t.short_id, status, undefined, fields.status_id).needsConfirm) deferred = true;
+            }
+          });
           if (!deferred) toast.success(`${label} \u2192 ${item.label}`);
         } else {
           applyTaskUpdate(fields);
@@ -1064,7 +1095,9 @@ export function ActionSubmenu({
         applyTaskUpdate({ priority: item.key });
         toast.success(`${label} priority \u2192 ${item.label}`);
       } else if (mode === "labels") {
-        for (const task of targets as TaskItem[]) updateTask(task.short_id, { labels: item.active ? (task.labels || []).filter(l => l !== item.key) : [...new Set([...(task.labels || []), item.key])] });
+        undoAsOne(`${item.active ? "Removed" : "Added"} label ${item.key} on ${counted(targets.length, "task")}`, () => {
+          for (const task of targets as TaskItem[]) updateTask(task.short_id, { labels: item.active ? (task.labels || []).filter(l => l !== item.key) : [...new Set([...(task.labels || []), item.key])] });
+        });
         toast.success(`${item.active ? "Removed" : "Added"} label: ${item.key}`);
       } else if (mode === "assign") {
         applyTaskUpdate({ assignee: item.key });
@@ -1072,10 +1105,12 @@ export function ActionSubmenu({
         toast.success(item.key ? `Assigned to ${item.face ? item.label : memberDisplayName(member, "user")}` : "Unassigned");
       } else if (mode === "parent") {
         let failed = 0;
-        for (const t of targets as TaskItem[]) {
-          const res = setTaskParent(t.short_id, item.key);
-          if (!res.ok) failed++;
-        }
+        undoAsOne(`Nested ${counted(targets.length, "task")} under ${item.key}`, () => {
+          for (const t of targets as TaskItem[]) {
+            const res = setTaskParent(t.short_id, item.key);
+            if (!res.ok) failed++;
+          }
+        });
         if (failed === 0) toast.success(`Nested under ${item.key}`);
         else toast.error(`${failed} could not be nested (cycle, depth, or workspace)`);
       }
@@ -1087,10 +1122,14 @@ export function ActionSubmenu({
       }
     } else {
       if (mode === "type") {
-        for (const row of targets) updateDoc(row._id, { doc_type: item.key });
+        undoAsOne(`Changed the type of ${counted(targets.length, "document")}`, () => {
+          for (const row of targets) updateDoc(row._id, { doc_type: item.key });
+        });
         toast.success(`Type \u2192 ${item.label}`);
       } else if (mode === "labels") {
-        for (const row of targets) updateDoc(row._id, { labels: item.active ? (row.labels || []).filter((l: string) => l !== item.key) : [...new Set([...(row.labels || []), item.key])] });
+        undoAsOne(`${item.active ? "Removed" : "Added"} label ${item.key} on ${counted(targets.length, "document")}`, () => {
+          for (const row of targets) updateDoc(row._id, { labels: item.active ? (row.labels || []).filter((l: string) => l !== item.key) : [...new Set([...(row.labels || []), item.key])] });
+        });
         toast.success(`${item.active ? "Removed" : "Added"} label: ${item.key}`);
       }
     }
@@ -1574,7 +1613,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   const pinDoc = useInboxStore((s) => s.pinDoc);
   // Kill from the palette says what schedules died with the session, same as
   // the sidebar kill button (the webList subscription inside is deduped).
-  const { killWithNotice } = useTriggerKillNotice();
+  const { killWithNotice, killManyWithNotice } = useTriggerKillNotice();
   const { user: currentUser } = useCurrentUser();
   const teamMembers = useInboxStore((s) => s.teamMembers.length > 0 ? s.teamMembers : undefined);
   const openDm = useOpenDm();
@@ -2209,9 +2248,10 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     if (actionKey.startsWith("trigger_")) { state.triggerAction(target._id, actionKey.slice(8) as "pause" | "resume" | "runNow" | "reactivate"); closePalette(); return; }
 
     if (actionKey === "remove_parent" && targetType === "task") {
-      for (const t of targets as TaskItem[]) {
-        if ((t as any).parent_id) setTaskParent(t.short_id, "");
-      }
+      const nested = (targets as TaskItem[]).filter((t) => (t as any).parent_id);
+      undoAsOne(`Removed the parent of ${counted(nested.length, "task")}`, () => {
+        for (const t of nested) setTaskParent(t.short_id, "");
+      });
       toast.success("Parent removed");
       closePalette();
       return;
@@ -2234,9 +2274,11 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
 
     if (actionKey === "drop" && targetType === "task") {
       let deferred = false;
-      for (const t of targets as TaskItem[]) {
-        if (closeTaskWithGuard(t.short_id, "dropped").needsConfirm) deferred = true;
-      }
+      undoAsOne(`Dropped ${counted(targets.length, "task")}`, () => {
+        for (const t of targets as TaskItem[]) {
+          if (closeTaskWithGuard(t.short_id, "dropped").needsConfirm) deferred = true;
+        }
+      });
       if (!deferred) toast.success("Task dropped");
       closePalette();
       return;
@@ -2251,7 +2293,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     }
 
     if (actionKey === "archive" && targetType === "doc") {
-      for (const doc of targets) undoableArchiveDoc(doc._id);
+      undoAsOne(`Archived ${counted(targets.length, "document")}`, () => {
+        for (const doc of targets) state.archiveDoc(doc._id);
+      });
       router.push("/docs");
       closePalette();
       return;
@@ -2261,6 +2305,8 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     // runs once per target, so a ticked selection acts as one gesture.
     if (targetType === "session") {
       const session = target as InboxSession;
+      // The palette's row can predate a toggle; the store says what the star shows now.
+      const sessionFavorite = isFavoriteInStore(state, session._id);
       if (actionKey === "session_parent") { navigate(`/conversation/${session.parent_conversation_id}`); return; }
       if (actionKey === "session_branch") { void copyToClipboard(session.git_branch || "").then(() => toast.success("Branch copied")); closePalette(); return; }
       if (actionKey === "session_files") { navigate(filesHref({ localPath: session.project_path || session.git_root })); return; }
@@ -2269,28 +2315,38 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         // Pin and favorite follow the first row's state, so a mixed selection
         // ends all pinned (or all unpinned) instead of flipping each row.
         session_pin: (id) => { if (!!state.sessions[id]?.is_pinned === !!session.is_pinned) state.pinSession(id); },
-        session_favorite: (id) => { if (!!state.sessions[id]?.is_favorite === !!session.is_favorite) state.toggleFavorite(id); },
+        session_favorite: (id) => { if (isFavoriteInStore(state, id) === sessionFavorite) state.toggleFavorite(id); },
         // The teardown rides the hide transition server side (dispatch.applyPatches);
         // the notice hook names any schedules the kill cancels.
         session_kill: (id) => killWithNotice(id),
-        session_stash: (id) => undoableHideSession(id, "stash"),
-        session_stash_hide: (id) => undoableHideSession(id, "stash", { hidden: true }),
+        session_stash: (id) => state.stashSession(id),
+        session_stash_hide: (id) => state.stashSession(id, { hidden: true }),
         session_unsnooze: (id) => state.wakeSnoozedSession(id),
-        session_defer: (id) => undoableDeferSession(id),
-        session_dormant: (id) => animatedSetSessionRest(id, "dormant"),
-        session_done: (id) => animatedSetSessionRest(id, "done"),
-        session_needs_input: (id) => animatedSetSessionRest(id, "needs_input"),
+        session_defer: (id) => state.deferSession(id),
       };
-      const run = each[actionKey];
-      if (!run) return;
-      for (const t of targets) run(t._id);
+      // The rest verdicts animate every row out, then file them as one undo.
+      const rest = PALETTE_REST_VERDICT[actionKey];
+      const ids = targets.map((t) => t._id);
+      if (rest) void animatedSetSessionRest(ids, rest);
+      // Several kills are one bulk kill: one undo, one sound, one notice.
+      else if (actionKey === "session_kill" && ids.length > 1) killManyWithNotice(ids);
+      else {
+        const run = each[actionKey];
+        if (!run) return;
+        const verb = actionKey === "session_pin" ? (session.is_pinned ? "Unpinned" : "Pinned")
+          : actionKey === "session_favorite" ? (sessionFavorite ? "Unfavorited" : "Favorited")
+          : PALETTE_SESSION_VERB[actionKey] ?? "Changed";
+        undoAsOne(`${verb} ${counted(ids.length, "session")}`, () => {
+          for (const id of ids) run(id);
+        });
+      }
       if (actionKey === "session_pin") toast.success(`${session.is_pinned ? "Unpinned" : "Pinned"}${targets.length > 1 ? ` ${targets.length} sessions` : ""}`);
-      if (actionKey === "session_favorite") toast.success(session.is_favorite ? "Removed from favorites" : "Added to favorites");
+      if (actionKey === "session_favorite") toast.success(sessionFavorite ? "Removed from favorites" : "Added to favorites");
       if (targets.length > 1) useInboxSelection.getState().clear();
       closePalette();
       return;
     }
-  }, [targets, targetType, closePalette, pinDoc, router, navigate, navigateToSession, killWithNotice, openCreateModal, runPersonAction]);
+  }, [targets, targetType, closePalette, pinDoc, router, navigate, navigateToSession, killWithNotice, killManyWithNotice, openCreateModal, runPersonAction]);
 
   const hasTargets = targets.length > 0 && targetType;
   const target = targets[0] as any;
@@ -3285,7 +3341,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
 
         {!standalone && !picking && (
           <CommandPrimitive.Group heading="Commands" className={groupClass}>
-            {GLOBAL_COMMANDS.filter((cmd) => !cmd.hidden?.()).map((cmd) => {
+            {GLOBAL_COMMANDS.filter((cmd) => !cmd.hidden?.() && !(cmd.searchOnly && !query.trim())).map((cmd) => {
               const Icon = cmd.icon;
               const label = typeof cmd.label === "function" ? cmd.label() : cmd.label;
               return (

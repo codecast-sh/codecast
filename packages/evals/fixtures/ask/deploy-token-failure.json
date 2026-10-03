@@ -1,7 +1,6 @@
 {
  "asOf": "2026-01-15T14:04:40.000Z",
  "notes": "synthetic session: a staging deploy fails on a missing token, then succeeds once the token is loaded",
- "judge": "says the first deploy failed because STAGING_TOKEN was not set, and that a later deploy succeeded after the token was loaded from the vault; cites the lines for both",
  "snapshot": {
   "question": "Why did the staging deploy fail, and is it fixed?",
   "title": "Deploy web to staging",

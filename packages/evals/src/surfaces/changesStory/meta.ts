@@ -1,11 +1,11 @@
-import { CALL_MODEL } from '../../models';
+import { PROSE_MODEL } from '../../models';
 import { surfaceSources, type SurfaceMeta } from '../../surface';
 
 export const meta: SurfaceMeta = {
   id: 'changes-story',
   title: 'Changes page: one story from its commits and gated sessions',
   route: 'call',
-  model: CALL_MODEL,
+  model: PROSE_MODEL,
   // changesProse.ts builds and parses the request; shared/changes holds the
   // length limits, clip and the skip rule's subject parsing; changesCommon.ts
   // holds the leak and em dash gates.

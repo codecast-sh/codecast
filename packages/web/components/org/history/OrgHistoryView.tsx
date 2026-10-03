@@ -13,12 +13,13 @@
 // orgLogEffectLines), which call the proposal page's own writers, so this
 // page has no wording of its own for a change.
 import { useState, type ReactNode } from "react";
-import { ChevronRight, FileText, Flag, FolderKanban, History, Network, Redo2, Settings2, Terminal, Undo2 } from "lucide-react";
+import { FileText, Flag, FolderKanban, History, Network, Redo2, Settings2, Terminal, Undo2 } from "lucide-react";
 import { leftAloneLine, orgLogEffectLines, orgLogEntryLine, orgLogLine, type OrgLogDoor, type OrgLogEntry, type OrgLogRow, type OrgUndoPreview } from "@codecast/shared/contracts/orgChange";
 import { groupOrgLogByDay, orgLogClock, orgLogDoorWords, orgUndoCannotLine } from "@codecast/shared/contracts/orgLog";
 import { cn } from "../../../lib/utils";
 import { OrgButton } from "../OrgButton";
 import { ORG_LOG_FOLD_ROWS } from "../../../lib/orgHistoryView";
+import { HISTORY_HAIRLINE as hairline, HISTORY_STRUCK, HistoryFold, HistoryRail, HistoryRailDot } from "../../history/HistoryRail";
 
 const DOOR_ICON: Record<OrgLogDoor, typeof FileText> = {
   proposal: FileText,
@@ -29,8 +30,6 @@ const DOOR_ICON: Record<OrgLogDoor, typeof FileText> = {
   cli: Terminal,
   history: History,
 };
-
-const hairline = "color-mix(in srgb, var(--sol-border) 28%, transparent)";
 
 export type OrgHistoryState = "ready" | "loading" | "missing" | "error";
 
@@ -78,9 +77,7 @@ export function OrgHistoryView({ entries, now, state = "ready", limit, onMore, r
             {g.label}
             <span className="flex-1 h-px" style={{ background: hairline }} />
           </h3>
-          <ol className="relative">
-            {/* the rail the entries hang from */}
-            <span aria-hidden className="absolute left-[10.5px] top-3 bottom-3 w-px" style={{ background: hairline }} />
+          <HistoryRail>
             {g.entries.map((e) => (
               <Entry
                 key={e._id}
@@ -93,7 +90,7 @@ export function OrgHistoryView({ entries, now, state = "ready", limit, onMore, r
                 preview={asking?.batch === e._id ? renderPreview(e, asking.redo, () => setAsking(null)) : null}
               />
             ))}
-          </ol>
+          </HistoryRail>
         </section>
       ))}
       {hidden > 0 && onMore && (
@@ -127,10 +124,10 @@ function Entry({ entry, foldOpen, onFold, asking, onAsk, rows, preview }: {
 
   return (
     <li className="relative pl-[34px] pb-4 last:pb-0" data-org-history-entry={entry._id} data-undone={undone ? "" : undefined}>
-      <span aria-hidden className="absolute left-0 top-0 w-[22px] h-[22px] rounded-full inline-flex items-center justify-center border" style={{ background: "var(--sol-bg)", borderColor: hairline, color: undone ? "var(--sol-text-dim)" : entry.door === "proposal" ? "var(--sol-violet)" : "var(--sol-text-muted)" }}>
+      <HistoryRailDot color={undone ? "var(--sol-text-dim)" : entry.door === "proposal" ? "var(--sol-violet)" : "var(--sol-text-muted)"}>
         <Icon className="w-3 h-3" />
-      </span>
-      <p className={cn("text-[13px] leading-snug", undone && "line-through decoration-1")} style={{ color: undone ? "var(--sol-text-dim)" : "var(--sol-text)" }} data-org-history-line>
+      </HistoryRailDot>
+      <p className={cn("text-[13px] leading-snug", undone && HISTORY_STRUCK)} style={{ color: undone ? "var(--sol-text-dim)" : "var(--sol-text)" }} data-org-history-line>
         {orgLogEntryLine(entry)}
       </p>
       <p className="mt-0.5 text-[11.5px]" style={{ color: "var(--sol-text-dim)" }} data-org-history-meta>
@@ -144,10 +141,9 @@ function Entry({ entry, foldOpen, onFold, asking, onAsk, rows, preview }: {
       {(foldLabel || mayAct) && asking === null && (
         <div className="mt-1.5 flex items-center gap-2">
           {foldLabel && (
-            <button type="button" onClick={onFold} aria-expanded={foldOpen} className="inline-flex items-center gap-1 h-6 -ml-1 px-1 rounded text-[11.5px] transition-colors hover:bg-sol-bg-highlight/70" style={{ color: "var(--sol-text-muted)" }} data-org-history-fold>
-              <ChevronRight className={cn("w-3 h-3 transition-transform", foldOpen && "rotate-90")} />
+            <HistoryFold open={foldOpen} onClick={onFold} data-org-history-fold>
               {foldLabel}
-            </button>
+            </HistoryFold>
           )}
           {mayAct && (
             <OrgButton size="sm" className="ml-auto" onClick={() => onAsk(!!undone)} data-org-history-act={undone ? "redo" : "undo"}>
@@ -168,7 +164,7 @@ function RowLine({ row, struck }: { row: OrgLogRow; struck?: boolean }) {
   const effects = orgLogEffectLines(row);
   return (
     <li className="text-[12px] leading-snug" data-org-history-row={row._id}>
-      <span className={cn(struck && "line-through decoration-1")} style={{ color: struck ? "var(--sol-text-dim)" : "var(--sol-text-secondary, var(--sol-text-muted))" }}>{orgLogLine(row)}</span>
+      <span className={cn(struck && HISTORY_STRUCK)} style={{ color: struck ? "var(--sol-text-dim)" : "var(--sol-text-secondary, var(--sol-text-muted))" }}>{orgLogLine(row)}</span>
       {effects.map((line) => (
         <span key={line} className="block pl-3 text-[11.5px]" style={{ color: "var(--sol-text-dim)" }} data-org-history-effect>{line.charAt(0).toUpperCase() + line.slice(1)}</span>
       ))}

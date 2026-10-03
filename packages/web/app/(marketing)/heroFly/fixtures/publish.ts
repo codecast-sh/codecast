@@ -13,7 +13,7 @@ import type { EntityFixture } from "@/lib/entityDisplay";
 import { readyAt } from "../world";
 import { CUES, MIN, OBJECTS, PEOPLE, SESSIONS } from "./story";
 
-/** Film-time cues inside the chapter (the camera holds 69.1 to 73.9). */
+/** Film-time cues inside the chapter (the camera holds 69.2 to 73.9). */
 export const PUBLISH = {
   /** The canvas reply is in place before the page's surface turns face-up, so it turns over onto it. */
   reply: readyAt("page"),

@@ -441,9 +441,14 @@ function wrapWorkspaceQuery(
   key: WorkspaceKey,
   userId: Id<"users">,
 ): any {
-  const legacyBase = () => workspace.type === "team"
+  // The legacy side asks the database for unkeyed rows only. Without that
+  // filter every keyed row in the team (or owned by the user) was read into JS
+  // a second time just to be skipped, which doubled memory and put a large
+  // team's `cast task ls` over the 64 MB query cap.
+  const unkeyed = (q: any) => q.or(q.eq(q.field("workspace"), undefined), q.eq(q.field("workspace"), ""));
+  const legacyBase = () => (workspace.type === "team"
     ? ctx.db.query(table).withIndex("by_team_id", (q: any) => q.eq("team_id", workspace.teamId))
-    : ctx.db.query(table).withIndex("by_user_id", (q: any) => q.eq("user_id", userId));
+    : ctx.db.query(table).withIndex("by_user_id", (q: any) => q.eq("user_id", userId))).filter(unkeyed);
   const keyed = () => ctx.db.query(table).withIndex("by_workspace", (q: any) => q.eq("workspace", key));
 
   const build = (mods: Array<(q: any) => any>) => {

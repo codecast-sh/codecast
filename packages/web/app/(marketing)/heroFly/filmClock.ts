@@ -11,13 +11,19 @@ import { createContext, useContext, useSyncExternalStore, type CSSProperties } f
 import { frame } from "./timeline";
 import { POSTER_T } from "./world";
 
-/** Film time for one hero instance: the driver sets it every frame it renders. */
-export type FilmClock = { get(): number; set(t: number): void; subscribe(fn: () => void): () => void };
+/**
+ * Film time for one hero instance: the driver sets it every frame it renders.
+ * `view` is the framing the driver renders for (the phone's, and how far the
+ * page reaches past the box), so a view asking whether its window is on
+ * screen gets the visitor's answer, not the default desktop's.
+ */
+export type FilmClock = { get(): number; set(t: number): void; subscribe(fn: () => void): () => void; view: { mobile: boolean; side?: number } };
 
 export function createFilmClock(t0 = POSTER_T): FilmClock {
   let t = t0;
   const listeners = new Set<() => void>();
   return {
+    view: { mobile: false },
     get: () => t,
     set(next) {
       if (next === t) return;

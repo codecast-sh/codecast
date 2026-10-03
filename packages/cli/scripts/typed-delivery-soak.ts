@@ -103,7 +103,8 @@ function nextPayload(i: number): Payload {
 const load = cpuLoad();
 const loadOn = load.on;
 const loadOff = load.off;
-for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(sig, () => { loadOff(); unplantLogins(); process.exit(1); });
+// cpuLoad stops its loaders on these signals itself; the soak adds its logins.
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(sig, () => { unplantLogins(); process.exit(1); });
 
 // ---- dialog probe ----------------------------------------------------------
 const waitFor = (test: (p: string) => boolean, timeoutMs: number, everyMs = 500) => waitForPane(PANE, test, timeoutMs, everyMs);

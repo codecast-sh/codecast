@@ -19,14 +19,13 @@ import { UserMenu } from "./UserMenu";
 import { Sidebar } from "./Sidebar";
 import { MobileDrawer } from "./MobileDrawer";
 import { GlobalSearch } from "./GlobalSearch";
-import { ThemeToggle } from "./ThemeToggle";
 import { NotificationBell } from "./NotificationBell";
 import { TeamSwitcher } from "./TeamSwitcher";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { ComposeHost } from "./ComposeHost";
 import { subscribeComposeOptimistic } from "../lib/composeBridge";
 import { NEW_SESSION_EVENT } from "../lib/utils";
-import { Plus, PanelLeft, PanelRight, Menu, MessageSquare, SquareTerminal, ChevronLeft, ChevronRight } from "lucide-react";
+import { Plus, PanelLeft, PanelRight, Menu, MessageSquare, SquareTerminal, ChevronLeft, ChevronRight, Bot } from "lucide-react";
 import { SetupPromptBanner } from "./SetupPromptBanner";
 import { TriageBar } from "./triage/TriageBar";
 import { TriageNuxGate } from "./triage/TriageNux";
@@ -35,6 +34,8 @@ import { NewSnippetsBanner } from "./NewSnippetsBanner";
 import { OrgIntroAnywhere } from "./org/OrgIntroAnywhere";
 import { NativeAppBanner } from "./NativeAppBanner";
 import { CliOfflineBanner } from "./CliOfflineBanner";
+import { ResourcePressureNotice } from "./resources/ResourcePressureNotice";
+import { useSyncMachineResources } from "../hooks/useResourceMonitor";
 import { NotificationNudgeBanner } from "./NotificationNudgeBanner";
 import { TeamSharingNudgeBanner } from "./TeamSharingNudgeBanner";
 import { SharingSetupBanner } from "./SharingSetupBanner";
@@ -44,12 +45,13 @@ import { StorageHealthBanner } from "./StorageHealthBanner";
 import { StatusNoticeStack } from "./StatusNoticeStack";
 import { DaemonStatusChip } from "./DaemonStatusChip";
 import { AccountUsageChip } from "./AccountUsageChip";
-import { StatusDot } from "./StatusDot";
-import { TopbarButton, TopbarDivider } from "./TopbarButton";
+import { TopbarButton, TopbarChip, TopbarTray } from "./TopbarButton";
+import { TopbarRow } from "./TopbarRow";
 import { HeaderPins, AnchorPanel } from "./anchor/AnchorPanel";
 import { useSyncAnchors } from "../hooks/useSyncAnchors";
 import { useSyncTeamExternalEvents } from "../hooks/useSyncExternalEvents";
 import { useSyncIssueSyncSources } from "../hooks/useSyncIssueSyncSources";
+import { useAdoptTimezone } from "../hooks/useAdoptTimezone";
 import { useSyncAgentDefinitions } from "../hooks/useSyncAgentDefinitions";
 import { useSyncInitiatives } from "../hooks/useInitiatives";
 import { useSyncSettings } from "../hooks/useSyncSettings";
@@ -86,6 +88,7 @@ import { useSyncMentionTasks } from "../hooks/useSyncTasks";
 import { isInboxSessionView, pageOwnsRailHighlight, railPointerOnNavigate, sessionFocusKind } from "../lib/inboxRouting";
 import { useOpenSession } from "../hooks/useOpenSession";
 import { RecentSwitcherHost } from "./RecentSwitcher";
+import { UndoTimelineHost } from "./undo/UndoTimeline";
 import { TabBar, AttachTabButton } from "./TabBar";
 import { AppWindowBar } from "./desktop/AppWindowBar";
 import { useAppWindowRegistry } from "../hooks/useAppWindowRegistry";
@@ -193,24 +196,20 @@ const ActiveAgentsBadge = memo(function ActiveAgentsBadge({ isOnInboxPage }: { i
   const activeAgentCount = working.length;
   return (
     <ShortcutTooltip label={`${activeAgentCount} agent${activeAgentCount !== 1 ? 's' : ''} running`}>
-      <button
+      <TopbarChip
         onClick={() => {
           const store = useInboxStore.getState();
           if (!selectSessionRailOpen(store)) store.toggleSidePanel();
           if (working[0]) openSession(working[0]._id);
         }}
-        className="hidden md:flex items-center gap-1.5 px-2 py-0.5 rounded-full cursor-pointer select-none transition-all duration-300"
-        style={{
-          background: 'color-mix(in srgb, var(--sol-green) 12%, transparent)',
-          border: '1px solid color-mix(in srgb, var(--sol-green) 20%, transparent)',
-          boxShadow: '0 0 10px color-mix(in srgb, var(--sol-green) 12%, transparent)',
-        }}
+        aria-label={`${activeAgentCount} agent${activeAgentCount !== 1 ? 's' : ''} running`}
       >
-        <StatusDot color="var(--sol-green)" ping pingDuration="1.5s" />
-        <span className="text-[11px] font-mono font-bold tabular-nums" style={{ color: 'var(--sol-green)' }}>
-          {activeAgentCount}
-        </span>
-      </button>
+        {/* A glyph, not a light: the tray's lights are states (sync, a
+            fault), and this is a count of agents at work. Steady, because in
+            the tray only a fault pulses. */}
+        <Bot className="h-3.5 w-3.5 shrink-0 text-sol-green" />
+        <span className="text-sol-text">{activeAgentCount}</span>
+      </TopbarChip>
     </ShortcutTooltip>
   );
 });
@@ -296,6 +295,8 @@ function HostFeeders() {
   // integrations panel and any project surface that shows where its tasks
   // came from — one subscription rather than one per opened card.
   useSyncIssueSyncSources();
+  // A profile with no timezone takes this device's (team day cuts, local clocks).
+  useAdoptTimezone();
   // The workspace's agent definitions and chains: the compose "as" chooser,
   // the settings library and the spawn actions all read them.
   useSyncAgentDefinitions();
@@ -303,6 +304,8 @@ function HostFeeders() {
   // line, the task board's axis and every `in-N` pill.
   useSyncInitiatives();
   useSyncSettings();
+  // Machine resource reports: the pressure notice and /resources read them.
+  useSyncMachineResources();
   return null;
 }
 
@@ -1108,9 +1111,19 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         {typeof window !== "undefined" && window.location.hostname.includes("local.") && (
           <div data-cc-local-corner className="absolute top-0 left-0 w-0 h-0 border-t-[20px] border-r-[20px] border-t-emerald-500 border-r-transparent z-30" />
         )}
-        <div data-cc-topbar-row className="px-2 sm:px-3 py-1 sm:py-1.5 flex items-center gap-1.5 sm:gap-3">
-          {/* Left section: Sidebar toggle + nav */}
-          <div className="flex items-center gap-1 flex-shrink-0">
+        <TopbarRow
+          nav={<>
+            {!hideSidebar && (
+              <TopbarButton
+                onClick={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
+                className="md:hidden"
+                active={isMobileSidebarOpen}
+                aria-label="Open menu"
+                aria-expanded={isMobileSidebarOpen}
+              >
+                <Menu />
+              </TopbarButton>
+            )}
             <ShortcutTooltip label={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"} action="sidebar.toggleLeft">
               <TopbarButton
                 onClick={(e) => { s.setNavCollapsed(!sidebarCollapsed); tipActions.whisper('sidebar.toggleLeft', e); }}
@@ -1142,21 +1155,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             <ErrorBoundary name="RecentlyViewedMenu" level="inline">
               <RecentlyViewedMenu onSelectSession={sessionListOnSelect} />
             </ErrorBoundary>
-            {!hideSidebar && (
-              <TopbarButton
-                onClick={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
-                className="md:hidden"
-                active={isMobileSidebarOpen}
-                aria-label="Open menu"
-                aria-expanded={isMobileSidebarOpen}
-              >
-                <Menu />
-              </TopbarButton>
-            )}
-          </div>
-
-          {/* Team switcher and avatars — left-aligned */}
-          <div className="hidden sm:flex items-center gap-2 flex-shrink-0">
+          </>}
+          workspace={<>
             <ErrorBoundary name="TeamSwitcher" level="inline">
               <TeamSwitcher />
             </ErrorBoundary>
@@ -1166,101 +1166,90 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             <ErrorBoundary name="FollowPill" level="inline">
               <FollowPill />
             </ErrorBoundary>
-          </div>
-
-          {/* Center section: Search */}
-          <div data-cc-topbar-search className="hidden sm:flex flex-1 justify-center min-w-0">
+          </>}
+          search={
             <ErrorBoundary name="GlobalSearch" level="inline">
               <GlobalSearch />
             </ErrorBoundary>
-          </div>
-
-          {/* Right section, three groups left to right: STATUS (dot-led
-              pills: account usage, daemon, sync, running agents), ACTIONS
-              (new session, anchor, notifications, theme, account) and
-              LAYOUT (comments, terminal, sessions panel). Every icon
-              control is a TopbarButton so the row reads as one set. */}
-          <div data-cc-topbar-actions className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
-            <div data-cc-topbar-group className="hidden md:flex items-center gap-1.5">
-              <ErrorBoundary name="AccountUsageChip" level="inline">
-                <AccountUsageChip />
-              </ErrorBoundary>
-              <ErrorBoundary name="DaemonStatusChip" level="inline">
-                <DaemonStatusChip />
-              </ErrorBoundary>
-              <ErrorBoundary name="SyncStatusChip" level="inline">
-                <SyncStatusChip />
-              </ErrorBoundary>
-              <ActiveAgentsBadge isOnInboxPage={isOnInboxPage} />
-            </div>
-            <TopbarDivider />
-            <div data-cc-topbar-group className="flex items-center gap-0.5">
-              <ShortcutTooltip label="New session" action="session.create">
+          }
+          status={<TopbarTray>
+            {/* The sync light leads, the steady facts follow, and an alert
+                (the daemon) comes last, where the row's eye lands. */}
+            <ErrorBoundary name="SyncStatusChip" level="inline">
+              <SyncStatusChip />
+            </ErrorBoundary>
+            <ErrorBoundary name="AccountUsageChip" level="inline">
+              <AccountUsageChip />
+            </ErrorBoundary>
+            <ActiveAgentsBadge isOnInboxPage={isOnInboxPage} />
+            <ErrorBoundary name="DaemonStatusChip" level="inline">
+              <DaemonStatusChip />
+            </ErrorBoundary>
+          </TopbarTray>}
+          actions={<>
+            <ShortcutTooltip label="New session" action="session.create">
+              <TopbarButton
+                onClick={(e) => {
+                  openCompose();
+                  tipActions.whisper('session.create', e);
+                }}
+                aria-label="New session"
+                desktopOnly
+              >
+                <Plus />
+              </TopbarButton>
+            </ShortcutTooltip>
+            <ErrorBoundary name="HeaderPins" level="inline">
+              <HeaderPins />
+            </ErrorBoundary>
+            <ErrorBoundary name="NotificationBell" level="inline">
+              <NotificationBell />
+            </ErrorBoundary>
+            <ErrorBoundary name="UserMenu" level="inline">
+              <UserMenu />
+            </ErrorBoundary>
+          </>}
+          panels={<>
+            {showCommentsToggle && (
+              <ShortcutTooltip label={commentRailOpen ? "Hide comments" : "Show comments"} action="sidebar.toggleComments">
                 <TopbarButton
-                  onClick={(e) => {
-                    openCompose();
-                    tipActions.whisper('session.create', e);
-                  }}
-                  aria-label="New session"
+                  onClick={(e) => { s.setCommentRailOpen(!commentRailOpen); tipActions.whisper('sidebar.toggleComments', e); }}
+                  active={commentRailOpen}
+                  aria-label={commentRailOpen ? "Hide comments" : "Show comments"}
+                >
+                  <MessageSquare />
+                </TopbarButton>
+              </ShortcutTooltip>
+            )}
+            {!isMobile && (
+              <ShortcutTooltip label="Toggle terminal" action="terminal.toggle">
+                <TopbarButton
+                  onClick={(e) => { s.setDockOpen(s.workspace.dock.pane == null); tipActions.whisper('terminal.toggle', e); }}
+                  active={s.workspace.dock.pane != null}
+                  aria-label="Toggle terminal panel"
                   desktopOnly
                 >
-                  <Plus />
+                  <SquareTerminal />
                 </TopbarButton>
               </ShortcutTooltip>
-              <ErrorBoundary name="HeaderPins" level="inline">
-                <HeaderPins />
-              </ErrorBoundary>
-              <ErrorBoundary name="NotificationBell" level="inline">
-                <NotificationBell />
-              </ErrorBoundary>
-              <ThemeToggle />
-              <ErrorBoundary name="UserMenu" level="inline">
-                <UserMenu />
-              </ErrorBoundary>
-            </div>
-            <TopbarDivider />
-            <div data-cc-topbar-group className="flex items-center gap-0.5">
-              {showCommentsToggle && (
-                <ShortcutTooltip label={commentRailOpen ? "Hide comments" : "Show comments"} action="sidebar.toggleComments">
-                  <TopbarButton
-                    onClick={(e) => { s.setCommentRailOpen(!commentRailOpen); tipActions.whisper('sidebar.toggleComments', e); }}
-                    active={commentRailOpen}
-                    aria-label={commentRailOpen ? "Hide comments" : "Show comments"}
-                  >
-                    <MessageSquare />
-                  </TopbarButton>
-                </ShortcutTooltip>
-              )}
-              {!isMobile && (
-                <ShortcutTooltip label="Toggle terminal" action="terminal.toggle">
-                  <TopbarButton
-                    onClick={(e) => { s.setDockOpen(s.workspace.dock.pane == null); tipActions.whisper('terminal.toggle', e); }}
-                    active={s.workspace.dock.pane != null}
-                    aria-label="Toggle terminal panel"
-                    desktopOnly
-                  >
-                    <SquareTerminal />
-                  </TopbarButton>
-                </ShortcutTooltip>
-              )}
-              {/* Detached tab window only: merge this surface back into the
-                  main window as a tab (renders null everywhere else). */}
-              <AttachTabButton />
-              <ShortcutTooltip label="Toggle sessions panel" action="sidebar.toggleRight">
-                <TopbarButton
-                  onClick={(e) => {
-                    if (isMobile) setIsMobileSessionListOpen((open) => !open);
-                    else s.toggleSidePanel();
-                    tipActions.whisper('sidebar.toggleRight', e);
-                  }}
-                  aria-label="Toggle sessions panel"
-                >
-                  <PanelRight />
-                </TopbarButton>
-              </ShortcutTooltip>
-            </div>
-          </div>
-        </div>
+            )}
+            {/* Detached tab window only: merge this surface back into the
+                main window as a tab (renders null everywhere else). */}
+            <AttachTabButton />
+            <ShortcutTooltip label="Toggle sessions panel" action="sidebar.toggleRight">
+              <TopbarButton
+                onClick={(e) => {
+                  if (isMobile) setIsMobileSessionListOpen((open) => !open);
+                  else s.toggleSidePanel();
+                  tipActions.whisper('sidebar.toggleRight', e);
+                }}
+                aria-label="Toggle sessions panel"
+              >
+                <PanelRight />
+              </TopbarButton>
+            </ShortcutTooltip>
+          </>}
+        />
       </header>
 
       {/* Status notices (connection, storage, CLI offline, tmux missing) render
@@ -1277,6 +1266,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         <NewSnippetsBanner />
         <OrgIntroAnywhere />
         <CliOfflineBanner />
+        <ResourcePressureNotice />
         <TmuxMissingBanner />
         <NotificationNudgeBanner />
         <SharingSetupBanner />
@@ -1476,6 +1466,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         <FindBar />
       </ErrorBoundary>
       <RecentSwitcherHost />
+      <UndoTimelineHost />
     </div>
   );
 }

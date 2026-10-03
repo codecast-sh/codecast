@@ -1,4 +1,4 @@
-import { openTasksVouchForWaiting, OPEN_TASKS_FRESH_MS, isTransientRateLimit429, throttleBannerContent, THROTTLE_BANNER_PREFIX, BLOCKED_BANNER_KINDS, CONTINUE_BANNER_KINDS } from "@codecast/shared/contracts";
+import { openTasksVouchForWaiting, isTransientRateLimit429, throttleBannerContent, THROTTLE_BANNER_PREFIX, BLOCKED_BANNER_KINDS, CONTINUE_BANNER_KINDS } from "@codecast/shared/contracts";
 import { describe, expect, test } from "bun:test";
 // The REAL web helpers, imported so the cross-check below enforces the
 // convex/web agreement instead of restating it.
@@ -961,11 +961,14 @@ describe("trustedAgentStatus (stale 'working' trust TTL)", () => {
     expect(trustedAgentStatus("working", NOW - STATUS_TRUST_TTL_MS, NOW, true, true)).toBe("idle");
   });
 
-  test("openTasksVouchForWaiting: fresh + non-empty only", () => {
-    expect(openTasksVouchForWaiting(NOW - 60_000, 1, NOW)).toBe(true);
-    expect(openTasksVouchForWaiting(NOW - 60_000, 0, NOW)).toBe(false);
-    expect(openTasksVouchForWaiting(NOW - OPEN_TASKS_FRESH_MS, 1, NOW)).toBe(false);
-    expect(openTasksVouchForWaiting(null, 1, NOW)).toBe(false);
+  test("openTasksVouchForWaiting: non-empty report from a heartbeating daemon", () => {
+    expect(openTasksVouchForWaiting(NOW - 60_000, 1, true)).toBe(true);
+    // The report's age is not the test: a maintenance pass that runs late
+    // under load must not unpark a workflow the daemon still stands behind.
+    expect(openTasksVouchForWaiting(NOW - 60 * 60_000, 1, true)).toBe(true);
+    expect(openTasksVouchForWaiting(NOW - 60_000, 0, true)).toBe(false);
+    expect(openTasksVouchForWaiting(null, 1, true)).toBe(false);
+    expect(openTasksVouchForWaiting(NOW - 60_000, 1, false)).toBe(false);
   });
 
   test("undefined status / unknown updatedAt are left alone", () => {

@@ -145,6 +145,20 @@ describe("planMigration", () => {
 });
 
 describe("performCreateBatch", () => {
+  test("safe offload persists its policy and refuses an older runner's forced stop", async () => {
+    const db = fixtures();
+    const created = await performCreateBatch({ db }, ME as any, { conversation_ids: ["c1"], to_device_id: BOX, interrupt_on_timeout: false }, NOW);
+    expect(db._tables.migration_batches[0].interrupt_on_timeout).toBe(false);
+    const id = created.rows[0].migration_id as any;
+    const before = commands(db).length;
+    await expect(performEnqueueQuiesce({ db }, ME as any, { migration_id: id, mode: "force" }, NOW)).rejects.toThrow("must not interrupt");
+    expect(commands(db)).toHaveLength(before);
+    await performEnqueueQuiesce({ db }, ME as any, { migration_id: id, mode: "idle" }, NOW);
+    expect(commands(db)).toHaveLength(before + 1);
+    await performCancelBatch({ db }, ME as any, created.batch_id!, NOW + 1);
+    await expect(performEnqueueQuiesce({ db }, ME as any, { migration_id: id, mode: "idle" }, NOW + 2)).rejects.toThrow("cancelled");
+    expect(commands(db)).toHaveLength(before + 1);
+  });
   test("one batch, one row per session, one command per executor", async () => {
     const db = fixtures();
     const res = await performCreateBatch({ db }, ME as any, { conversation_ids: ["c1", "c2", "c3", "nope"], to_device_id: BOX }, NOW);

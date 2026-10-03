@@ -112,7 +112,7 @@
   },
   "recommend": {
     "verdict": "ship",
-    "why": "All three proven misses now pass, nothing regressed, and the change is one prompt."
+    "why": "All four proven misses now pass, nothing regressed, and the change is one prompt."
   },
   "cost": {
     "tokens": 412000,

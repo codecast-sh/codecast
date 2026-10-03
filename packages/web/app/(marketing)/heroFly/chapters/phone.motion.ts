@@ -4,9 +4,9 @@
  *
  * The API worker stops on a question at the foot of its pane. The question
  * flies to the phone and lands in the app's session screen, the field takes
- * focus and the keyboard rises, the answer is typed and sent, the worker
- * turns back to Working and streams its reply, and the answer's arc draws
- * back to the worker on the pull-back.
+ * focus and the keyboard rises, the answer is typed and sent (the keyboard
+ * stays up, as in the app), the worker turns back to Working and streams its
+ * reply above it, and the answer's arc draws back to the worker.
  *
  * The phone's screen is the app laid out at a phone's width (APP_W) and
  * scaled onto the model's screen. Each entry that lands in its feed opens its
@@ -14,7 +14,7 @@
  */
 
 import { CUES } from "../fixtures/story";
-import { regionPt, surfacePt } from "../world";
+import { PAIR, regionPt, surfacePt } from "../world";
 import type { ChapterMotion } from "./contract";
 
 /** The app's width in CSS px (an iPhone's, a little narrower), and its scale onto the model's 276px screen. */
@@ -51,15 +51,10 @@ export const PHONE_AT = {
   sent: 24.52,
   /** The worker picks the answer up (the API worker's row turns green here too). */
   working: CUES.answered,
-  /** The keyboard goes down so the reply has the screen. */
-  blur: 24.95,
   /** The reply's turn opens and streams in, word by word. */
   reply: 25.15,
   replyWords: 25.3,
   wordRate: 11,
-  /** The test run it starts, and its result. */
-  test: 26.85,
-  testDone: 27.85,
 } as const;
 
 /** The desk's copy of the exchange lands in the worker's pane while the camera is on the phone. */
@@ -75,37 +70,30 @@ const ASK_AT = { x: APP_W / 2, y: 602 };
 /** A point on the screen given in app px, on the surface. */
 const onScreen = (x: number, y: number, z = 0) => surfacePt("phone", SCREEN.x + x * APP_K, SCREEN.y + y * APP_K, z);
 
-/** Where the answer's arc starts: the user's message on the screen (app px). */
-const STEER_AT = { x: APP_W / 2, y: 452 };
+/** Where the answer's arc starts: the user's message on the screen (app px), with the feed lifted over the keyboard. */
+const STEER_AT = { x: APP_W / 2, y: 452 - KEYBOARD_LIFT };
 
 export const motion: ChapterMotion = {
   beats: {
-    // The dashboard worker steps back while the camera frames the API worker's question, and comes forward again for Talk.
-    pairB: [
-      { id: "phone.veil", cue: CUES.question - 0.2, dur: 0.5, preset: "fadeIn" },
-      { id: "phone.veil", cue: CUES.answerDrawn, dur: 0.5, preset: "fadeOut" },
-    ],
     pairA: [{ id: "phone.ask", cue: DESK_AT.ask, preset: "drop", z: 60, rx: -10, y: 14 }],
     phone: [
       // The question is invisible while its room opens, then takes over from the flyer in place.
       { id: "phone.askBubble", cue: PHONE_AT.askLands, dur: 0.06, preset: "fadeIn" },
-      // The keyboard rises with the field's focus and carries the feed and the composer up with it; it goes down again after the send.
-      // Its own pace (KEYBOARD_DUR), shared by the keyboard and the body riding on it so the composer stays glued to its top.
+      // The keyboard rises with the field's focus and carries the feed and the composer up with it, at its own pace (KEYBOARD_DUR),
+      // shared by the keyboard and the body riding on it so the composer stays glued to its top. Sending keeps it up, as the app
+      // does: the reply streams in above it.
       { id: "phone.keyboard", cue: PHONE_AT.focus, dur: KEYBOARD_DUR, preset: "push", y: KEYBOARD_H },
-      { id: "phone.keyboard", cue: PHONE_AT.blur, dur: KEYBOARD_DUR, preset: "liftOut", y: KEYBOARD_H, z: 0 },
       { id: "phone.body", cue: PHONE_AT.focus, dur: KEYBOARD_DUR, preset: "liftOut", y: -KEYBOARD_LIFT, z: 0 },
-      { id: "phone.body", cue: PHONE_AT.blur, dur: KEYBOARD_DUR, preset: "liftOut", y: KEYBOARD_LIFT, z: 0 },
       { id: "phone.tap", cue: PHONE_AT.focus - 0.08, preset: "ring", dur: 0.5 },
       { id: "phone.send", cue: PHONE_AT.press, preset: "press", dur: 0.22 },
       { id: "phone.sendTap", cue: PHONE_AT.press - 0.04, preset: "ring", dur: 0.5 },
       { id: "phone.steer", cue: PHONE_AT.sent, preset: "drop", z: 40, rx: -8, y: 10 },
       { id: "phone.reply", cue: PHONE_AT.reply, dur: 0.3, preset: "fadeIn" },
-      { id: "phone.test", cue: PHONE_AT.test, dur: 0.3, preset: "fadeIn" },
     ],
   },
   flyers: [
     // From the question at the foot of the worker's pane to its place in the phone's feed, opaque to its last frame, where the feed's own copy takes over.
-    { id: "phone.question", cue: FLY_CUE, dur: FLY_DUR, from: regionPt("pairA.transcript", 270, 270), to: onScreen(ASK_AT.x, ASK_AT.y, 1), arc: 320, rot: [[0, -6, 0], [0, -20, 4], [0, -12, -2]], scale: [1.12, 1], ease: "glide", fade: [0.12, 0] },
+    { id: "phone.question", cue: FLY_CUE, dur: FLY_DUR, from: regionPt("pairA.transcript", PAIR.w / 2, PAIR.h - 44 - 26), to: onScreen(ASK_AT.x, ASK_AT.y, 1), arc: 320, rot: [[0, -6, 0], [0, -20, 4], [0, -12, -2]], scale: [1.12, 1], ease: "glide", fade: [0.12, 0] },
   ],
   arcs: [
     { id: "phone.answered", cue: CUES.answerDrawn - 0.5, dur: 0.5, hold: 1.0, from: onScreen(STEER_AT.x, STEER_AT.y), to: regionPt("pairA.header", 250, 22), color: "var(--sol-blue)", apex: 90 },
