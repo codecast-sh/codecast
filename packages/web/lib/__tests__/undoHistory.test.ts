@@ -145,6 +145,13 @@ describe("undo timeline row model", () => {
     expect(undoActLabel(row("fx-org").act)).toBe("Open in org record");
   });
 
+  test("a done row that ⌘Z stops at (its undo widens access) says to take it back from the row", () => {
+    const items = fx.snapshot.items.map((i) => (i.id === "fx-status" ? { ...i, confirm: true } : i));
+    const m = undoTimelineRows({ ...fx.snapshot, items }, fx.state, NOW, WINDOW);
+    expect(row("fx-status", m).detail).toMatch(/its undo widens access: take it back from here$/);
+    expect(row("fx-status", m).act).toEqual({ kind: "back", steps: 1 });
+  });
+
   test("objects resolve live through the recent-visit shape", () => {
     expect(row("fx-pin").visits[0]?.title).toBe("Fix the auth race on sign-in");
     expect(row("fx-status").visits[0]?.objectType).toBe("task");

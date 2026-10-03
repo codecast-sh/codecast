@@ -250,8 +250,9 @@ describe("mobile send button is a real tap target", () => {
   );
 
   test("session send is 44pt and lives outside the jump overlay", () => {
-    expect(sessionSource).toContain("minWidth: 44");
-    expect(sessionSource).toContain("height: 44");
+    // The send button's size lives in the shared session style.
+    const sharedStyle = readFileSync(`${import.meta.dir}/../../shared/render/mobileSessionStyle.ts`, "utf8");
+    expect(sharedStyle).toMatch(/sendButton: \{[^}]*minWidth: 44[^}]*height: 44/);
     expect(sessionSource).toContain('keyboardShouldPersistTaps="always"');
     // Overlay is a child of the list pane, closed before composerLayer.
     const overlay = sessionSource.indexOf("styles.jumpButtonsOverlay");

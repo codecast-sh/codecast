@@ -81,6 +81,7 @@
     "./agents": "./agents/index.ts",
     "./search": "./search/index.ts",
     "./async": "./async/index.ts",
+    "./random": "./random/index.ts",
     "./changes": "./changes/index.ts"
   },
   "dependencies": {

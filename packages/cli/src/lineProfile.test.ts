@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  CODECAST_PRINCIPLES,
   CODECAST_PROMPTING,
   findLineProfile,
   formatLineProfile,
@@ -142,10 +143,10 @@ describe("line profile (LP2)", () => {
     const vars = lineProfileVars(resolveLineProfile(parseLineProfileText(LP2_EXAMPLE).values).profile);
     expect(vars["line.commands.check"]).toContain("test:touched");
     expect(vars["line.size_budget"]).toBe("400");
-    expect(vars["line.principles"]).toBe("outreach/docs/line/principles.md");
+    expect(vars["line.principles"]).toBe(`${CODECAST_PRINCIPLES} (the shared set) and outreach/docs/line/principles.md (this project's own)`);
     const empty = lineProfileVars(resolveLineProfile({}).profile);
     expect(empty["line.commands.prove"]).toBe("");
-    expect(empty["line.principles"]).toBe("none");
+    expect(empty["line.principles"]).toBe(`${CODECAST_PRINCIPLES} (the shared set)`);
     expect(empty["line.commands.check"]).toBe("cast ws check");
   });
 

@@ -779,9 +779,10 @@ export const CLIENT_SYNC_REGISTRY = {
   // date windows, so delta; their feeder prunes the days an answer covered
   // whole, since a rebuild deletes a story whose key disappeared (a story's
   // _id is never reused, so the exclude tombstone that prune plants never
-  // hides a later row). Live surfaces and In the works describe now for the
-  // viewed team and repository, and each answer is the complete set, so
-  // snapshot: a surface or a stuck session that drops out leaves.
+  // hides a later row). Live surfaces and In the works describe now for one
+  // repository, so delta: each answer is complete for its repository, and
+  // its feeder drops the rows of that repository it lacks (dropAbsent, no
+  // tombstone, the ids are composed) while other repositories stay cached.
   changeStories: {
     persistence: { kind: "collection", key: "changeStories" },
     hydration: { phase: "deferred" },
@@ -799,14 +800,14 @@ export const CLIENT_SYNC_REGISTRY = {
   changeLive: {
     persistence: { kind: "collection", key: "changeLive" },
     hydration: { phase: "deferred" },
-    sync: {},
+    sync: { isDelta: true },
     indexes: "_id, team_id, repository, surface",
     feeds: ["changesQueries.liveStatus"],
   },
   changeWorks: {
     persistence: { kind: "collection", key: "changeWorks" },
     hydration: { phase: "deferred" },
-    sync: {},
+    sync: { isDelta: true },
     indexes: "_id, team_id, kind",
     feeds: ["changesQueries.inTheWorks"],
   },
@@ -1024,6 +1025,23 @@ export const CLIENT_SYNC_REGISTRY = {
     localFirst: true,
     unprotectedFields: ["deleted_here_at"],
     feeds: ["callRecordings.webCallRecordings"],
+  },
+  // The viewer's calls and recordings (transcripts.webListCalls, the newest
+  // page) and each call opened (transcripts.webGetCall, keyed by transcript
+  // id, segments included). Persisted so the phone's Record list and a
+  // recording's page open on what they showed last; the recording_url is a
+  // storage URL, stable across sessions (unlike a call video's signed one).
+  // The list is a delta overlay so a shorter page never prunes the longer one.
+  // No `feeds` yet: web's calls page still subscribes to both directly.
+  callList: {
+    persistence: { kind: "collection", key: "callList" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true },
+  },
+  callDetails: {
+    persistence: { kind: "collection", key: "callDetails" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true },
   },
   clientState: {
     persistence: { kind: "meta", key: "clientState" },
@@ -1448,6 +1466,8 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   // Per-view, like guestLinks: fed by the window showing the call.
   callRecordings: "local",
   callRecordingCalls: "local",
+  callList: "shared",
+  callDetails: "shared",
   clientState: "shared",
   liveInboxIdList: "shared",
   teamInboxIdSnapshot: "shared",

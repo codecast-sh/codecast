@@ -1,11 +1,13 @@
 // One story inside a section block (spec 4.5): a kind glyph, a 14px headline
-// with its diffstat in a fixed column at the right, and the dek under it. The
+// with its size in a fixed column at the right, and the dek under it. The
+// size is one muted number, lines added; the colored diffstat is the lead
+// card's and the drawer's, so a column of rows reads as text, not a chart. The
 // whole row is the accordion trigger, so a click anywhere on it opens the
 // evidence drawer under it. A flagged story wears the risk hatch on its left
 // edge, where its worded risk answers on hover.
 import * as Accordion from "@radix-ui/react-accordion";
 import type { StoryRow as Story } from "../../hooks/useSyncChanges";
-import { DiffStat } from "../entityDisplay";
+import { ink } from "./areaColor";
 import { EvidenceDrawer } from "./EvidenceDrawer";
 import { FadeText, KindGlyph, RiskSrText, StoryEdge } from "./StoryParts";
 import { useStoryAttrs, useStoryCtx } from "./storyContext";
@@ -35,8 +37,13 @@ export function StoryRow({ story }: { story: Story }) {
               {waiting && <span className="shrink-0 font-mono text-[10px] text-sol-text/45">waiting</span>}
               <RiskSrText story={story} />
               {/* The column keeps its width with nothing in it, so sizes line up down the block. */}
-              <span className="flex w-[5.5rem] shrink-0 justify-end tabular-nums">
-                {(story.insertions > 0 || story.deletions > 0) && <DiffStat additions={story.insertions} deletions={story.deletions} themed />}
+              <span
+                className="w-[5.5rem] shrink-0 text-right font-mono text-[10px] tabular-nums"
+                style={{ color: ink(40) }}
+                title={`+${story.insertions.toLocaleString()} -${story.deletions.toLocaleString()} lines`}
+              >
+                {/* A story that only removed lines says so instead of standing blank. */}
+                {story.insertions > 0 ? `+${story.insertions.toLocaleString()}` : story.deletions > 0 ? `-${story.deletions.toLocaleString()}` : ""}
               </span>
             </span>
             {(pending || story.dek) && (

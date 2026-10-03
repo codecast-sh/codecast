@@ -68,19 +68,30 @@ export async function connectTarget(t) {
     }
     return r.result.value;
   };
-  /** Navigate and wait for the load event. */
-  const navigate = async (url) => {
+  /** Navigate and wait for the load event. A navigation that fails (the dev
+   *  server is restarting after its optimizer cache was purged, or not up
+   *  yet) lands on Chrome's error page, which loads like any other: try again
+   *  until `retryMs` runs out, then throw Chrome's reason rather than hand
+   *  back a page on the wrong origin. */
+  const navigate = async (url, { retryMs = 120_000 } = {}) => {
     await send("Page.enable");
-    const loaded = new Promise((res) => {
-      const off = on((m) => {
-        if (m.method === "Page.loadEventFired") {
-          off();
-          res();
-        }
+    const deadline = Date.now() + retryMs;
+    for (;;) {
+      let off;
+      const loaded = new Promise((res) => {
+        off = on((m) => {
+          if (m.method === "Page.loadEventFired") {
+            off();
+            res();
+          }
+        });
       });
-    });
-    await send("Page.navigate", { url });
-    await loaded;
+      const { errorText } = await send("Page.navigate", { url });
+      if (!errorText) return loaded;
+      off();
+      if (Date.now() > deadline) throw new Error(`navigate ${url}: ${errorText}`);
+      await sleep(2000);
+    }
   };
   /** A script that runs in every new document before the app does. */
   const addInitScript = (source) => send("Page.addScriptToEvaluateOnNewDocument", { source });

@@ -279,9 +279,16 @@ describe("the undo chords", () => {
     expect(resolve(false, keyEvent({ ctrlKey: true, altKey: true }))).toBe("ui.undoHistory");
   });
 
-  test("none of them bypasses the input guard", () => {
-    for (const def of SHORTCUTS.filter((d) => UNDO_ACTIONS.includes(d.action))) {
-      expect(def.skipInputCheck).toBeUndefined();
+  // The triage chords fire from an empty composer and leave focus there, so
+  // undo and redo reach app undo from an empty field; a field with text keeps
+  // its own. The history chord never fires from a field.
+  test("undo and redo bypass the input guard only from an empty field", () => {
+    for (const def of SHORTCUTS.filter((d) => d.action === "ui.undo" || d.action === "ui.redo")) {
+      expect(def.skipInputCheck).toBe("whenEmpty");
+      expect(inputGuardBypass(def, { tagName: "TEXTAREA", value: "" })).toBe(true);
+      expect(inputGuardBypass(def, { tagName: "TEXTAREA", value: "draft" })).toBe(false);
+    }
+    for (const def of SHORTCUTS.filter((d) => d.action === "ui.undoHistory")) {
       expect(inputGuardBypass(def, { tagName: "TEXTAREA", value: "" })).toBe(false);
     }
   });
@@ -300,5 +307,23 @@ describe("the undo chords", () => {
         .filter((c) => new Set(c.defs.map((d) => d.action)).size > 1);
       expect(collides).toEqual([]);
     }
+  });
+});
+
+// A held toggle would flap the view (week, day, week...) or reopen what it
+// just closed; a held step key walks on, as it should.
+describe("Changes keys", () => {
+  test("toggles fire once per press, steps repeat", () => {
+    const changes = SHORTCUTS.filter((d) => d.when === "changes");
+    const once = [...new Set(changes.filter((d) => d.noRepeat).map((d) => d.action))].sort();
+    expect(once).toEqual([
+      "changes.branches", "changes.copyLink", "changes.evidence", "changes.filter", "changes.mode",
+      "changes.open", "changes.risks", "changes.today", "changes.waiting",
+    ]);
+    for (const action of ["changes.next", "changes.prev", "changes.prevDay", "changes.nextDay"]) {
+      expect(changes.filter((d) => d.action === action).every((d) => !d.noRepeat)).toBe(true);
+    }
+    // Both evidence bindings, e and enter.
+    expect(changes.filter((d) => d.action === "changes.evidence").every((d) => d.noRepeat)).toBe(true);
   });
 });

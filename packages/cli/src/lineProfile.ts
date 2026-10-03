@@ -13,6 +13,18 @@ import { SIGNAL_KINDS, type SignalKind } from "@codecast/shared/contracts/signal
 export const LINE_PROFILE_REL_PATH = ".codecast/line.toml";
 /** codecast's prompting standard, for a repo that names none (LP2). The repo is public. */
 export const CODECAST_PROMPTING = "https://github.com/codecast-sh/codecast/blob/main/docs/prompting.md";
+/**
+ * The shared principles every project's line reads in addition to the
+ * profile's own files (LP5). A link, because the review node runs in the
+ * project's worktree, where codecast's docs/ is not on disk.
+ */
+export const CODECAST_PRINCIPLES = "https://github.com/codecast-sh/codecast/blob/main/docs/principles.md";
+
+/** The principles a line reads, as prose for a node prompt: the shared set, then the profile's own files. */
+export function principlesProse(paths: string[]): string {
+  const shared = `${CODECAST_PRINCIPLES} (the shared set)`;
+  return paths.length ? `${shared} and ${paths.join(", ")} (this project's own)` : shared;
+}
 
 export interface LineFinder {
   id: string;
@@ -261,13 +273,13 @@ export function lineCommandEnv(context: Record<string, string>): Record<string, 
 /**
  * The profile as flat `line.<key>` variables (the runner's `$line.commands.check`).
  * Commands absent from the profile are empty, so an edge condition can test
- * them; principles read as prose in a node prompt (paths joined, or "none").
+ * them; principles read as prose in a node prompt (the shared set, then the profile's files).
  */
 export function lineProfileVars(profile: LineProfile): Record<string, string> {
   const vars: Record<string, string> = {
     "line.team": profile.team ?? "",
     "line.project": profile.project ?? "",
-    "line.principles": profile.principles.length ? profile.principles.join(", ") : "none",
+    "line.principles": principlesProse(profile.principles),
     "line.prompting": profile.prompting,
     "line.size_budget": String(profile.size_budget),
     "line.watch_days": String(profile.watch_days),
@@ -283,7 +295,7 @@ export function formatLineProfile(r: ResolvedLineProfile): string {
   const rows: Array<[string, string]> = [
     ["team", p.team ?? "(none: the session's team, else the directory's mapping)"],
     ["project", p.project ?? "(none)"],
-    ["principles", p.principles.length ? p.principles.join(", ") : "(none)"],
+    ["principles", `${p.principles.length ? p.principles.join(", ") : "(none)"}, read with the shared set`],
     ["prompting", p.prompting],
     ["size_budget", String(p.size_budget)],
     ["watch_days", String(p.watch_days)],

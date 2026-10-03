@@ -514,7 +514,15 @@ export function isBootstrapPrompt(rawContent: string | null | undefined): boolea
 // report that lost its session wrapper, or the prompt that seated a standing
 // agent.
 export function isMachineDeliveredMessage(rawContent: string | null | undefined): boolean {
-  return isAgentContextMessage(rawContent) || isSessionMessage(rawContent) || isAgentMessage(rawContent) || isTeammateMessage(rawContent) || isScheduledTaskMessage(rawContent) || isTaskNotificationMessage(rawContent) || isChatWakePrompt(rawContent) || isUnwrappedSessionReport(rawContent) || isBootstrapPrompt(rawContent) || isSessionEscalationMessage(rawContent);
+  return isAgentContextMessage(rawContent) || isSessionMessage(rawContent) || isAgentMessage(rawContent) || isTeammateMessage(rawContent) || isScheduledTaskMessage(rawContent) || isTaskNotificationMessage(rawContent) || isChatWakePrompt(rawContent) || isUnwrappedSessionReport(rawContent) || isBootstrapPrompt(rawContent) || isSessionEscalationMessage(rawContent) || isRoleWakeFrame(rawContent);
+}
+
+// LEGACY: the frame the role wake rail delivered into a role's standing
+// session (`<role-wake or-23 wake="rw-967" …>`). The rail is gone (roles wake
+// through triggers since 2026-09-25); threads written before then still hold
+// the frames, and they are not anything the session's person wrote.
+export function isRoleWakeFrame(rawContent: string | null | undefined): boolean {
+  return !!rawContent && /^<role-wake[\s>]/.test(stripInjectionNoise(rawContent));
 }
 
 // --- A session moving between a role and a person (org-roles-run-work.md R1, revised) ---

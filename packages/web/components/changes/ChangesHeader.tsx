@@ -207,6 +207,8 @@ export function ChangesHeader(props: {
   filterOpen: boolean;
   onToggleFilter: () => void;
   filterRef: RefObject<HTMLInputElement | null>;
+  /** The filter toggle, where focus returns when the filter field is left. */
+  filterToggleRef?: RefObject<HTMLButtonElement | null>;
   options: FilterOptions;
   personName: (id: string) => string;
   /** Any ship is known, so the waiting filter has something to show. */
@@ -224,7 +226,7 @@ export function ChangesHeader(props: {
     ...(stats.sessions ? [{ key: "sessions", node: plural(stats.sessions, "session") }] : []),
   ];
   return (
-    <header className="pt-6">
+    <header className="pt-6" data-changes-header>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
         <div className="flex items-center gap-2.5">
           <h1 className="chg-ui text-[20px] font-semibold text-sol-text">Changes</h1>
@@ -279,6 +281,7 @@ export function ChangesHeader(props: {
             options={[{ value: "main", label: "main", hint: "Default branch" }, { value: "all", label: "all branches" }]}
           />
           <button
+            ref={props.filterToggleRef}
             type="button"
             onClick={props.onToggleFilter}
             aria-expanded={props.filterOpen}

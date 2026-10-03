@@ -113,8 +113,11 @@ export function RoomKnocks({ roomKey }: { roomKey: string }) {
                 />
               </span>
               <span className="flex min-w-0 flex-1 items-center gap-1.5 text-[11px] text-sol-text-muted">
+                {/* Two lines before an ellipsis: in the stage's corner a
+                    guest's row also holds Deny, and one truncated line kept
+                    the name and lost what they are asking for. */}
                 <span
-                  className="min-w-0 truncate"
+                  className="min-w-0 break-words line-clamp-2"
                   title={guest ? `${k.from_name}, a guest from outside the team${k.link_by ? `, on ${linkOf(k)}` : ""}` : undefined}
                 >
                   {name} {canAnswer ? "wants to join" : "is waiting"}

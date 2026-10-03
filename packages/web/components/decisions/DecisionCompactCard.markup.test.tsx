@@ -89,3 +89,25 @@ describe("DecisionCompactCardView", () => {
     });
   }
 });
+
+// A change card (LE11) is one row in the queue: the change, its proof and
+// Ship / Revise / Drop as chips, with no question link, proof block or
+// answer row of its own.
+test("a change card draws as one row with its answer chips", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { CARD_DECISION_OPTIONS } = await import("@codecast/shared/contracts/changeCard");
+  const card = JSON.parse(readFileSync(join(import.meta.dir, "../../../shared/contracts/__fixtures__/changeCard/card.json"), "utf-8"));
+  const html = wrap(<DecisionCompactCard decision={{ ...base, _id: "hero-card", blocking: false, default_option: 2, question: "[test] change card render", options: CARD_DECISION_OPTIONS.map((o) => ({ ...o })), card } as any} keys />);
+  const { JSDOM } = await import("jsdom");
+  const doc = new JSDOM(html).window.document;
+  const row = doc.querySelector("[data-card-row]")!;
+  expect(row).toBeTruthy();
+  expect(doc.querySelector(".decision-question")).toBeNull();
+  expect(row.querySelector(".cc-line-change")!.textContent).toBe(card.change);
+  expect(row.textContent).toContain("4/4 misses fixed");
+  expect(Array.from(row.querySelectorAll("[data-verdict]")).map((b) => b.getAttribute("data-verdict"))).toEqual(["ship", "revise", "drop"]);
+  expect(row.querySelector("[data-verdict=drop]")!.className).toContain("is-taken");
+  expect(doc.querySelector("[data-cc-course]")).toBeNull();
+  expect(doc.querySelector("[data-card-question]")!.textContent).toBe("[test] change card render");
+});

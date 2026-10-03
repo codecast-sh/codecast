@@ -15,7 +15,7 @@ export type ChangesUrl = {
   /** Week mode, `2026-W40`. */
   w?: string;
   areas: string[];
-  /** A commit author's name or a session owner's user id. */
+  /** A person's key (personKey: a lowercased name), or a session owner's user id from an older link. */
   person?: string;
   branches: "main" | "all";
   risk: boolean;

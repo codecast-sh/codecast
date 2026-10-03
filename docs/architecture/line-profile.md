@@ -75,7 +75,7 @@ directory (`<git common dir>/cast-line/line-<task>`), the same for every
 station and never committed.
 A repo without a profile gets the defaults: `cast ws check`, no prove or eval
 command (the stations pass with a note saying so), codecast's prompting
-standard, no principles file.
+standard, and the shared principles with no project file.
 
 ## LP3. Finders are declared
 
@@ -99,17 +99,25 @@ declaration; the finder itself lives where its data lives.
 - `cast line eval-result --reps $run_dir/reps.json --out eval-result.json`
   turns reps into the `EvalResult` the card reads: separation by the one
   Mann-Whitney implementation (`packages/evals/src/stats.ts`), flips, proven
-  freezes, the verdict. Its exit code is the eval station's.
+  freezes, the verdict. Its exit code is the eval station's. A failed suite
+  gate (`gates_failed`) reaches the card as its own red check, "Suite gates",
+  naming each failing scenario, so the card cannot recommend Ship over it.
 - **ship** lands the change the project's way and prints one line saying what
   is true now: live, or waiting on a deploy and where.
 
 ## LP5. Principles and prompting per project
 
 Principles are split three ways. The shared set ships with codecast
-(`docs/principles.md`, the ones the evidence shows in every project). A
-project's own set lives in its repo at the path its profile names. The review
-node reads both and cites ids; a project id is prefixed with the project
-(`UN-prompt-2`). The weekly lessons run is per project: it mines that
+(`docs/principles.md`, the ones the evidence shows in more than one project,
+in project-neutral language). A project's own set lives in its repo at the
+path its profile names: codecast's is `docs/line/principles.md` (`CC-` ids),
+Union's `outreach/docs/line/principles.md` (`UN-` ids). A project file holds
+what is true only there and the concrete form a shared principle takes in
+that project. Every reader takes both, shared first: `cast goals` reads the
+shared set from the copy built into the CLI and the profile's files from the
+repo, and the plan, implement and review nodes receive the shared set's
+public link with the profile's paths (`$line.principles`). Reviews cite ids.
+The weekly lessons run is per project: it mines that
 project's sessions and files `lesson:<id>` signals into that project.
 
 ## LP6. Who answers

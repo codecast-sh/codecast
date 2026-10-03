@@ -28,11 +28,17 @@ const KEYS = (mode: "day" | "week"): { actions: ShortcutAction[]; label: string 
   { actions: ["changes.escape"], label: "close" },
 ];
 
-export function ChangesFooter({ stats, edition, hasSignals, mode = "day", date, today }: {
+/** "from 128 of 161 commits", or when main has since lost commits, "from 161 commits, 128 now". */
+const notesFromText = (n: { written: number; now: number }) =>
+  n.written < n.now ? `from ${n.written.toLocaleString()} of ${plural(n.now, "commit")}` : `from ${plural(n.written, "commit")}, ${n.now.toLocaleString()} now`;
+
+export function ChangesFooter({ stats, edition, notesFrom, hasSignals, mode = "day", date, today }: {
   /** The view's counts; null while the view is still loading. */
   stats: EditionStats | null;
   /** The day edition, or in week mode the week edition. */
   edition: EditionRow | undefined;
+  /** The notes were written from fewer (or more) commits than main holds now: how many then, and now. */
+  notesFrom?: { written: number; now: number } | null;
   hasSignals: boolean;
   mode?: "day" | "week";
   /** The day on screen; empty in week mode. */
@@ -48,7 +54,8 @@ export function ChangesFooter({ stats, edition, hasSignals, mode = "day", date, 
   const notes =
     edition?.capped_at ? (mode === "week" ? "Prose paused for this week (spending limit)." : `Prose paused for ${date === today ? "today" : "this day"} (daily limit).`)
     : edition?.status === "failed" ? "Prose unavailable for this edition; showing commit subjects."
-    : edition && (edition.status === "written" || edition.status === "final") ? `Notes written ${writtenAt(edition.generated_at)}.`
+    : edition && (edition.status === "written" || edition.status === "final")
+      ? `Notes written ${writtenAt(edition.generated_at)}${notesFrom ? `, ${notesFromText(notesFrom)}` : ""}.`
     : null;
   return (
     <footer className="mt-12 space-y-2 border-t border-sol-border/20 pb-10 pt-4">

@@ -18,6 +18,10 @@ import "./evals.css";
 export const shortSha = (sha: string | null | undefined, n = 8) => (sha ? sha.slice(0, n) : "none");
 export const usd = (v: number) => (v >= 10 ? `$${v.toFixed(0)}` : v >= 0.1 ? `$${v.toFixed(2)}` : v > 0 ? `$${v.toFixed(3)}` : "$0");
 export const score2 = (v: number | null | undefined) => (v === null || v === undefined ? "n/a" : v.toFixed(2));
+/** A model as a person names it: no vendor prefix, no date stamp. */
+export const shortModel = (m: string | null | undefined) => (m ? m.replace(/^claude-/, "").replace(/-\d{8}$/, "") : "none");
+/** A judge ruler (`<model>#<rubric>`) as its rubric, else the short model. */
+export const shortRuler = (r: string | null | undefined) => (r ? (r.includes("#") ? r.slice(r.indexOf("#") + 1) : shortModel(r)) : "none");
 
 // ── EvalsLink ───────────────────────────────────────────────────────────────
 

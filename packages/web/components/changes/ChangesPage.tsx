@@ -7,11 +7,12 @@
 //
 // Layout: header, live strip, the edition headline, then a 12 column grid of
 // the lead story, sections by area, In brief under them, and In the works beside
-// (one column below 1100px of page width, in that reading order). Stories are
+// (In the works in a rail beside the main column from 860px of page width,
+// one column below that, in that reading order). Stories are
 // one Radix accordion, so one evidence drawer is open at a time; the URL's
 // `story=` names it, and the story keeps its place on screen as it opens.
 import * as Accordion from "@radix-ui/react-accordion";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, type UIEvent } from "react";
 import { useRouter } from "next/navigation";
 import { SURFACE_PATHS, surfaceCoversArea, waitingStories } from "@codecast/shared/changes";
 import { normalizeRepository } from "@codecast/shared/contracts";
@@ -44,7 +45,7 @@ import { ChangesHeader, type FilterOptions, type Summarizing } from "./ChangesHe
 import { commitPath } from "./EvidenceDrawer";
 import { EditionHead } from "./EditionHead";
 import { assignAreaColors } from "./areaColor";
-import { awaitsStories, buildEdition, dayVolumes, filterAreas, stepOrder } from "./editionModel";
+import { awaitsStories, buildEdition, dayVolumes, filterAreas, nameOfPerson, stepOrder } from "./editionModel";
 import { InBrief } from "./InBrief";
 import { InTheWorks } from "./InTheWorks";
 import { LeadStory } from "./LeadStory";
@@ -55,11 +56,33 @@ import { escapeStep, keepsOwnEnter, useChangesKeys } from "./useChangesKeys";
 import { buildWeek } from "./weekModel";
 import { WeekView } from "./WeekView";
 import { changesHref, clearFilters, hasFilters, isoWeekOf, stepView, useChangesUrlState, weekDaysOf, weekMonday } from "./useChangesUrlState";
+import { storySelector, useStoryPin } from "./useStoryPin";
 
 /** `--i` for the first paint's stagger (spec 5.4), capped at 10. */
 const rise = (i: number) => ({ ["--i" as any]: Math.min(i, 10) });
 
-const storySelector = (key: string) => `[data-story-key="${CSS.escape(key)}"]`;
+// Where each view of the page was scrolled to, by its href, for the life of
+// the tab: Back and Forward return to it. Written as the page scrolls, so the
+// view being left has its place recorded before the next one paints.
+const scrollByHref = new Map<string, number>();
+// The href the last Back or Forward is landing on. Listened for at module
+// load, so a Back from another page into this one is seen too. The page
+// renders the traversal before `popstate` fires, so the Navigation API's
+// `navigate` names it first; `popstate` covers a browser without that API.
+let poppedHref: string | null = null;
+if (typeof window !== "undefined") {
+  const nav = (window as any).navigation as EventTarget | undefined;
+  nav?.addEventListener("navigate", (e: any) => {
+    if (e.navigationType !== "traverse") return;
+    const to = new URL(e.destination.url);
+    poppedHref = to.pathname + to.search;
+  });
+  if (!nav) {
+    window.addEventListener("popstate", () => {
+      poppedHref = window.location.pathname + window.location.search;
+    });
+  }
+}
 
 function Skeleton() {
   const bar = (w: string, h: number, mt = 0) => (
@@ -113,28 +136,43 @@ export function ChangesPage() {
     () => teamRepos.rows.filter((r) => String(r.team_id) === teamId).map((r) => normalizeRepository(r.repository)).sort(),
     [teamRepos.rows, teamId],
   );
+  // Every repository is ranked by one measure, its commits in the last 14
+  // days of editions; the fed window's commits only break ties, which places
+  // a repository with no editions yet after every one that has them.
   const repos = useMemo(() => {
     const commits = new Map<string, number>();
     for (const e of recentEditions) if (e.repository) commits.set(e.repository, (commits.get(e.repository) ?? 0) + (e.stats?.commits ?? 0));
     const shas = new Map<string, Set<string>>();
     for (const s of allStories) {
-      if (commits.has(s.repository)) continue;
       const set = shas.get(s.repository) ?? new Set<string>();
       for (const sha of s.commit_shas) set.add(sha);
       shas.set(s.repository, set);
     }
-    for (const [repo, set] of shas) commits.set(repo, set.size);
-    return [...commits.entries()].filter(([, n]) => n > 0).map(([repo, n]) => ({ repo, commits: n })).sort((a, b) => b.commits - a.commits || a.repo.localeCompare(b.repo));
+    const names = new Set([...commits.keys(), ...shas.keys()]);
+    return [...names]
+      .map((repo) => ({ repo, commits: commits.get(repo) ?? 0, window: shas.get(repo)?.size ?? 0 }))
+      .filter((r) => r.commits > 0 || r.window > 0)
+      .sort((a, b) => b.commits - a.commits || b.window - a.window || a.repo.localeCompare(b.repo))
+      .map((r) => ({ repo: r.repo, commits: r.commits || r.window }));
   }, [recentEditions, allStories]);
-  const repo = url.repo ? normalizeRepository(url.repo) : repos[0]?.repo ?? knownRepos[0];
+  // The default repository is chosen once, from the 14 days of editions
+  // (cached, or once the feed answers), and written into the URL, so nothing
+  // arriving later can move the page to another repository.
+  const recentKnown = recentEditions.length > 0;
   const weekKey = isoWeekOf(weekDays[0]);
-  const feed = useSyncChanges({ teamId, repository: repo, date: feedDate, today, week: mode === "week" ? weekKey : undefined });
+  const feed = useSyncChanges({ teamId, repository: url.repo ? normalizeRepository(url.repo) : undefined, date: feedDate, today, week: mode === "week" ? weekKey : undefined });
+  const defaultRepo = feed.recentReady || recentKnown ? repos[0]?.repo ?? knownRepos[0] : undefined;
+  const repo = url.repo ? normalizeRepository(url.repo) : defaultRepo;
+  useWatchEffect(() => {
+    if (!url.repo && defaultRepo) setUrl({ repo: defaultRepo }, "replace");
+  }, [url.repo, defaultRepo]);
   const stories = useMemo(() => (repo ? allStories.filter((s) => s.repository === repo) : allStories), [allStories, repo]);
   const editions = useChangeEditions(teamId, repo, fed);
   const live = useChangeLive(teamId, repo);
   const allWorks = useChangeWorks(teamId);
+  // A repository's page shows only its own moving work; a session row says its repository when it was read for one.
   const works = useMemo(
-    () => allWorks.filter((w) => !repo || (w.kind !== "review" && w.kind !== "branch") || normalizeRepository(w.repository) === repo),
+    () => allWorks.filter((w) => !repo || (!!w.repository && normalizeRepository(w.repository) === repo)),
     [allWorks, repo],
   );
   const edition = editions.find((e) => e.date === viewDate);
@@ -149,16 +187,16 @@ export function ChangesPage() {
     },
     [roster],
   );
-  // `person=` is a user id or a commit author's name; an id never shows as a name.
-  const personName = useCallback((id: string) => memberName(id) ?? (isConvexId(id) ? "A teammate" : id), [memberName]);
+  // A `person=` value no story on screen names: a roster id from an older link, else as written. An id never shows as a name.
+  const fallbackName = useCallback((id: string) => memberName(id) ?? (isConvexId(id) ? "A teammate" : id), [memberName]);
 
   const week = useMemo(
-    () => (mode === "week" ? buildWeek({ days: weekDays.filter((d) => d <= today), stories, editions, week: weekRow, url, live, personName }) : null),
-    [mode, weekDays, today, stories, editions, weekRow, url, live, personName],
+    () => (mode === "week" ? buildWeek({ days: weekDays.filter((d) => d <= today), stories, editions, week: weekRow, url, live, roster, personName: fallbackName }) : null),
+    [mode, weekDays, today, stories, editions, weekRow, url, live, roster, fallbackName],
   );
   const model = useMemo(
-    () => buildEdition({ stories, date: viewDate, edition, live, url, personName }),
-    [stories, viewDate, edition, live, url, personName],
+    () => buildEdition({ stories, date: viewDate, edition, live, url, roster, personName: fallbackName }),
+    [stories, viewDate, edition, live, url, roster, fallbackName],
   );
   const byKey = useMemo(() => new Map(model.day.map((s) => [s.story_key, s])), [model.day]);
   // One color per area, from the repository's areas across the fed window and
@@ -199,36 +237,43 @@ export function ChangesPage() {
   }, [live, stories]);
 
   // The filter offers what is on screen: the day's stories, or the week's.
+  // Its person chips (the first 12 by name), the avatars and the header's
+  // people count all read one list, peopleOf.
   const shown = week?.stories ?? model.day;
   const shownAreas = week?.areas ?? model.areas;
+  const shownPeople = week?.people ?? model.people;
   const order = week?.order ?? model.order;
-  const options = useMemo<FilterOptions>(() => {
-    const people = new Map<string, string>();
-    for (const s of shown) {
-      for (const id of s.actor_user_ids) {
-        const name = memberName(String(id));
-        if (name) people.set(String(id), name);
-      }
-      for (const a of s.author_names) if (![...people.values()].includes(a)) people.set(a, a);
-    }
-    return {
-      areas: filterAreas(shown, shownAreas),
-      people: [...people.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name)).slice(0, 12),
-    };
-  }, [shown, shownAreas, memberName]);
+  const options = useMemo<FilterOptions>(() => ({
+    areas: filterAreas(shown, shownAreas),
+    people: shownPeople.map((p) => ({ id: p.key, name: p.name })).slice(0, 12),
+  }), [shown, shownAreas, shownPeople]);
+  const personName = useMemo(() => nameOfPerson(shownPeople, fallbackName), [shownPeople, fallbackName]);
+
+  // Week notes written from fewer commits than the week's days hold now: the
+  // week row keeps the day editions' sum as of its build, and the days have
+  // moved on since. Both are counts on main, whatever the branch toggle shows.
+  // A day edition needs no such check: its counts are refreshed by every
+  // rebuild, and a rebuild still to come is its dirty_since.
+  const notesRow = mode === "week" ? weekRow : edition;
+  const weekWritten = mode === "week" && !!weekRow?.stats && (weekRow.status === "written" || weekRow.status === "final");
+  const notesStale = weekWritten && week && weekRow!.stats!.commits !== week.mainCommits
+    ? { written: weekRow!.stats!.commits, now: week.mainCommits, at: weekRow!.generated_at }
+    : null;
 
   const summarizing: Summarizing = useMemo(() => {
+    if (notesStale) return { since: notesStale.at, stale: true };
     if (mode !== "day") return null;
     if (edition?.dirty_since != null) return { since: edition.dirty_since, stale: edition.stale };
     const recent = viewDate >= addDays(today, -1);
     const pending = model.day.some((s) => s.on_default_branch && s.prose_status === "pending");
     return recent && pending && !edition?.capped_at && edition?.status !== "failed" ? { since: null, stale: false } : null;
-  }, [mode, edition, viewDate, today, model.day]);
+  }, [notesStale, mode, edition, viewDate, today, model.day]);
 
   // ── Focus, drawer and scroll ────────────────────────────────────────────
   const scrollRef = useRef<HTMLDivElement>(null);
   const stripRef = useRef<HTMLDivElement>(null);
   const filterRef = useRef<HTMLInputElement>(null);
+  const filterToggleRef = useRef<HTMLButtonElement>(null);
   const [focused, setFocused] = useState<string | null>(url.story ?? null);
   const [filterOpen, setFilterOpen] = useState(false);
   const [focusFilter, setFocusFilter] = useState(0);
@@ -248,6 +293,11 @@ export function ChangesPage() {
     lastView.current = { mode, key: viewKey, repo };
   }
   const travel = travelRef.current;
+  /** A story in this view: the same story key in another day, week or repository is another landing. */
+  const landingKey = (key: string) => `${viewKey}:${repo ?? ""}:${key}`;
+  const href = changesHref(url);
+  const hrefRef = useRef(href);
+  hrefRef.current = href;
 
   const storyEl = (key: string) => scrollRef.current?.querySelector<HTMLElement>(storySelector(key)) ?? null;
 
@@ -260,57 +310,71 @@ export function ChangesPage() {
     return el;
   }, []);
 
-  // Opening a drawer keeps the story it belongs to where it is on screen: a
+  // Opening a drawer keeps the story it belongs to where it is on screen: the
   // drawer above it closes at once, and the scroll takes up the difference.
-  const pin = useRef<{ key: string; top: number } | null>(null);
+  const pinStory = useStoryPin(scrollRef, url.story);
   const landed = useRef<string | null>(null);
   const openStory = useCallback((key: string | undefined) => {
-    const anchor = key ?? url.story;
-    const el = anchor ? storyEl(anchor) : null;
-    pin.current = anchor && el ? { key: anchor, top: el.getBoundingClientRect().top } : null;
+    pinStory(key ?? url.story, key);
     if (key) {
       setFocused(key);
       focusControl(key);
-      // Already on screen: the pin holds it, and the pasted-link landing below must not recenter it.
-      landed.current = key;
+      // Already on screen: the pin holds it, and the landing below must not recenter it.
+      landed.current = landingKey(key);
+    } else if (url.story) {
+      // Closing hides the drawer, and focus inside it (a commit link) would fall to the body: it returns to the story.
+      focusControl(url.story);
     }
     setUrl({ story: key });
-  }, [url.story, setUrl, focusControl]);
-  useLayoutEffect(() => {
-    const p = pin.current;
-    pin.current = null;
-    const el = p ? storyEl(p.key) : null;
-    if (!p || !el || !scrollRef.current) return;
-    const delta = el.getBoundingClientRect().top - p.top;
-    if (Math.abs(delta) >= 1) scrollRef.current.scrollTop += delta;
-  }, [url.story]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- landingKey reads viewKey and repo
+  }, [url.story, setUrl, focusControl, pinStory, viewKey, repo]);
 
-  // A pasted `story=` link lands on its story once the story is on the page:
-  // centred when it fits the pane, else from its top, so its headline is never
-  // cut off by its own drawer.
+  // A `story=` the reader arrives at (a pasted link, a story picked in the
+  // week, Back to a story) lands once the story is on the page: centred when
+  // it fits the pane, else from its top, so its headline is never cut off by
+  // its own drawer. Once per arrival: a view change clears the landing, and
+  // a drawer opened in place marks itself landed, so it never recenters.
   useWatchEffect(() => {
     const key = url.story;
-    if (!key || landed.current === key || !byKey.has(key)) return;
-    landed.current = key;
+    if (!key || landed.current === landingKey(key) || !byKey.has(key)) return;
+    landed.current = landingKey(key);
     setFocused(key);
     const el = focusControl(key);
     const room = (scrollRef.current?.clientHeight ?? 0) - 120;
     el?.scrollIntoView({ block: el.offsetHeight > room ? "start" : "center" });
-  }, [url.story, byKey]);
+  }, [url.story, byKey, viewKey, repo]);
 
-  // A new day, week or repository starts at its top. Not on the first mount
-  // (Back and Forward restore their own scroll), and not when a story is
-  // being landed on.
+  // A new day, week or repository starts at its top, and Back or Forward
+  // returns to where that view was left. A story being landed on places
+  // itself. On the first mount only a Back or Forward restores.
   const viewed = useRef(false);
   useLayoutEffect(() => {
-    if (!viewed.current) {
-      viewed.current = true;
+    const first = !viewed.current;
+    viewed.current = true;
+    // Every arrival at a view lands its story afresh, the same day reached a second time included.
+    landed.current = null;
+    const el = scrollRef.current;
+    if (!el) return;
+    const popped = poppedHref === hrefRef.current;
+    poppedHref = null;
+    if (popped) {
+      // The keyboard returns with the place: to the story the reader was on, when it is in this view.
+      const back = [focused, url.story].find((k): k is string => !!k && !!storyEl(k));
+      if (back) focusControl(back);
+    }
+    const saved = popped ? scrollByHref.get(hrefRef.current) : undefined;
+    if (saved != null) {
+      el.scrollTop = saved;
+      if (url.story) landed.current = landingKey(url.story);
       return;
     }
-    if (!url.story && scrollRef.current) scrollRef.current.scrollTop = 0;
+    if (!first && !url.story) el.scrollTop = 0;
     // `url.story` is read, not watched: opening a drawer must not scroll.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, viewKey, repo]);
+  const onScroll = useCallback((e: UIEvent<HTMLDivElement>) => {
+    scrollByHref.set(hrefRef.current, e.currentTarget.scrollTop);
+  }, []);
 
   useWatchEffect(() => {
     if (focusFilter) filterRef.current?.focus();
@@ -346,8 +410,8 @@ export function ChangesPage() {
   // A story picked in the week opens in its day, with its evidence drawer open.
   const goStory = useCallback((day: string, key: string) => {
     setFocused(key);
-    setUrl({ d: day >= today ? undefined : day, w: undefined, story: key }, "push");
-  }, [today, setUrl]);
+    setUrl({ repo, d: day >= today ? undefined : day, w: undefined, story: key }, "push");
+  }, [repo, today, setUrl]);
 
   // Relative to the live view, not the one on screen when the key was bound:
   // two quick presses of `[` move two days.
@@ -362,12 +426,12 @@ export function ChangesPage() {
   const setMode = useCallback((next: "day" | "week") => {
     if (next === mode) return;
     if (next === "week") {
-      setUrl({ w: isoWeekOf(viewDate), story: undefined }, "push");
+      setUrl({ repo, w: isoWeekOf(viewDate), story: undefined }, "push");
       return;
     }
     const day = url.d && weekDays.includes(url.d) ? url.d : weekDays[6] < today ? weekDays[6] : today;
-    setUrl({ w: undefined, d: day === today ? undefined : day }, "push");
-  }, [mode, viewDate, url.d, weekDays, today, setUrl]);
+    setUrl({ repo, w: undefined, d: day === today ? undefined : day }, "push");
+  }, [repo, mode, viewDate, url.d, weekDays, today, setUrl]);
 
   const pickSurface = useCallback((surface: string) => void setUrl((s) => ({ ...s, surface: s.surface === surface ? undefined : surface })), [setUrl]);
 
@@ -450,10 +514,11 @@ export function ChangesPage() {
       const key = pointedStory();
       // A week story links to its day, where it opens; the week links to itself.
       const inWeek = mode === "week" && key ? week?.top.find((s) => s.story_key === key) : undefined;
+      // Always with the repository on screen, so the link opens it whatever the reader's default.
       const href = changesHref(
-        inWeek ? { ...url, d: inWeek.date, w: undefined, story: inWeek.story_key }
-          : mode === "week" ? { ...url, d: undefined, story: undefined }
-          : { ...url, d: viewDate, story: key ?? undefined },
+        inWeek ? { ...url, repo, d: inWeek.date, w: undefined, story: inWeek.story_key }
+          : mode === "week" ? { ...url, repo, d: undefined, story: undefined }
+          : { ...url, repo, d: viewDate, story: key ?? undefined },
       );
       const what = key ? "Link to the story copied" : mode === "week" ? "Link to the week copied" : "Link to the day copied";
       void copyText(`${window.location.origin}${href}`, what);
@@ -470,7 +535,9 @@ export function ChangesPage() {
         case "leave-field":
         case "close-filter":
           setFilterOpen(false);
-          filterRef.current?.blur();
+          // Focus leaving the field, or the bar as it closes, goes to the toggle that opened it, not
+          // the body. A reader whose focus is elsewhere on the page keeps it.
+          if (!active || active === document.body || active.closest("[data-changes-header]")) filterToggleRef.current?.focus({ preventScroll: true });
           return true;
         case "close-story":
           openStory(undefined);
@@ -493,9 +560,10 @@ export function ChangesPage() {
   // A skeleton only while the view has no stories cached and its feed has
   // not answered: a cached day or week paints at once, and "Nothing landed"
   // waits for the server, or the view's own editions, to say so.
-  const cold = mode === "week"
+  // Until the default repository is chosen the view is not yet known: the skeleton holds.
+  const cold = (!repo && !feed.recentReady) || (mode === "week"
     ? awaitsStories(week!.stories.length, feed.windowReady, week!.days.map((d) => editions.find((e) => e.date === d.date)))
-    : awaitsStories(model.day.length, feed.ready, [edition]);
+    : awaitsStories(model.day.length, feed.ready, [edition]));
   // "Nothing to write about" is for a team with no history at all; any known
   // repository or edition makes an empty day a quiet day.
   const nothingKnown =
@@ -548,12 +616,17 @@ export function ChangesPage() {
     <div className="grid grid-cols-[minmax(0,1fr)] gap-7">
       {model.lead && (
         <div className={motion(3).className} style={motion(3).style}>
-          <LeadStory story={model.lead} open={url.story === model.lead.story_key} echo={model.leadEchoesHeadline} />
+          <LeadStory
+            story={model.lead}
+            open={url.story === model.lead.story_key}
+            echo={model.leadEchoesHeadline}
+            collapsed={model.matching > 0 && model.dimmed.has(model.lead.story_key)}
+          />
         </div>
       )}
       {model.sections.length > 0 && (
         <div className={`chg-sections ${motion(5).className}`} style={motion(5).style}>
-          {model.sections.map((sec) => <SectionBlock key={sec.area} section={sec} stories={stories} />)}
+          {model.sections.map((sec) => <SectionBlock key={sec.area} section={sec} stories={stories} collapsed={model.matching > 0 && sec.dimmed} />)}
         </div>
       )}
     </div>
@@ -564,7 +637,7 @@ export function ChangesPage() {
   return (
     <TooltipProvider delayDuration={250}>
       <StoryCtx.Provider value={storyCtx}>
-      <div ref={scrollRef} className="chg-root h-full overflow-y-auto">
+      <div ref={scrollRef} onScroll={onScroll} className="chg-root h-full overflow-y-auto">
         <div className="mx-auto max-w-[1180px] px-6">
           <ChangesHeader
             repos={repos}
@@ -588,6 +661,7 @@ export function ChangesPage() {
               setFocusFilter((n) => n + 1);
             }}
             filterRef={filterRef}
+            filterToggleRef={filterToggleRef}
             options={options}
             personName={personName}
             hasSignals={live.length > 0}
@@ -652,7 +726,7 @@ export function ChangesPage() {
               </div>
           )}
 
-          <ChangesFooter stats={stats} edition={mode === "day" ? edition : weekRow} hasSignals={live.length > 0 || !feed.liveReady} mode={mode} date={mode === "day" ? viewDate : ""} today={today} />
+          <ChangesFooter stats={stats} edition={notesRow} notesFrom={notesStale} hasSignals={live.length > 0 || !feed.liveReady} mode={mode} date={mode === "day" ? viewDate : ""} today={today} />
         </div>
       </div>
       </StoryCtx.Provider>

@@ -16,10 +16,9 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useQuery } from 'convex/react';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { api } from '@codecast/convex/convex/_generated/api';
-import type { Id } from '@codecast/convex/convex/_generated/dataModel';
+import { useInboxStore } from '@codecast/web/store/inboxStore';
+import { useCallDetail } from '@codecast/web/hooks/useSyncCalls';
 import { fmtClock } from '@codecast/web/components/calls/speakers';
 import { Text as RNText } from '@/components/Themed';
 import { Theme, Spacing, FontSize, BorderRadius, CHROME_FONT_CAP, themedStyles, useTheme } from '@/constants/Theme';
@@ -62,10 +61,10 @@ export default function RecordingDetailScreen() {
   const Theme = useTheme();
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const call = useQuery(
-    api.transcripts.webGetCall,
-    id ? { transcript_id: id as Id<'transcripts'> } : 'skip',
-  );
+  // Off the store's persisted call detail; the list row the person tapped
+  // names the page while a never-opened recording's detail is on its way.
+  const call = useCallDetail(id);
+  const listRow = useInboxStore((s: any) => (id ? s.callList?.[id] : undefined));
 
   const player = useRef<any>(null);
   const [playing, setPlaying] = useState(false);
@@ -133,7 +132,7 @@ export default function RecordingDetailScreen() {
           <FontAwesome name="angle-left" size={24} color={Theme.textMuted} />
         </TouchableOpacity>
         <RNText style={styles.headerTitle} numberOfLines={1}>
-          {call?.title || 'Recording'}
+          {call?.title || listRow?.title || 'Recording'}
         </RNText>
       </RNView>
 

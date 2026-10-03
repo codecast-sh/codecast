@@ -14,6 +14,8 @@
   color: var(--sol-text);
   background: var(--sol-bg);
   font-family: var(--font-ui);
+  container-type: inline-size;
+  container-name: evals;
 }
 
 /* Fixed colour meanings. Glyphs and marks draw in currentColor. */
@@ -83,7 +85,8 @@
   display: flex;
   align-items: center;
   align-self: center;
-  width: min(320px, 34vw);
+  flex: 0 1 320px;
+  min-width: 150px;
 }
 .ev-search input {
   width: 100%;
@@ -132,6 +135,22 @@
 .ev-search-empty { padding: 8px; font-size: 12px; color: var(--sol-text-dim); }
 
 .ev-status { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--sol-text-dim); white-space: nowrap; }
+
+/* A split pane or a narrow window: the search shrinks first, then the status
+   line and the mark's word give way, so the sections stay reachable. */
+@container evals (max-width: 860px) {
+  .ev-status { display: none; }
+  .ev-nav { gap: 12px; padding: 0 12px; }
+}
+@container evals (max-width: 640px) {
+  .ev-mark-word, .ev-nav-spacer, .ev-search-key { display: none; }
+  .ev-tab { padding: 0 6px; }
+  /* The field narrows to its icon and still takes typing; its list keeps a readable width. */
+  .ev-search { flex: 1 1 auto; min-width: 30px; }
+  .ev-search input { padding-right: 6px; }
+  .ev-search input:not(:focus)::placeholder { color: transparent; }
+  .ev-search-list { left: auto; right: 0; width: 280px; }
+}
 
 /* ── Body ───────────────────────────────────────────────────────────────── */
 

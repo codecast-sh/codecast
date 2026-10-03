@@ -171,7 +171,9 @@ describe("the Changes URL in history", () => {
   });
 
   test("the page pushes exactly the writes that move to another day, week or repo", () => {
-    const calls = setUrlCalls();
+    // Pinning the default repository into the URL names the repository already
+    // on screen: it moves nothing, so it replaces and Back never stops on it.
+    const calls = setUrlCalls().filter((c) => !/^\{ repo: defaultRepo \}/.test(c.args));
     const travels = (args: string) => setsKey(args, "d|w|repo") || /\bstepView\(/.test(args);
     const travel = calls.filter((c) => travels(c.args));
     // The scan sees the page: day and week travel, the repo picker, and the story and filter writes.

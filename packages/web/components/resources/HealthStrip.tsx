@@ -78,7 +78,7 @@ const W = 200;
 const H = 36;
 
 /** A trace as an SVG path, split at missing points. */
-function tracePath(pts: ResourcePoint[], f: (p: ResourcePoint) => number | undefined, max: number, t0: number, t1: number): { line: string; area: string } {
+function tracePath<P extends { at: number }>(pts: P[], f: (p: P) => number | undefined, max: number, t0: number, t1: number): { line: string; area: string } {
   const span = Math.max(1, t1 - t0);
   let line = ""; let area = ""; let run: Array<[number, number]> = [];
   const flush = () => {
@@ -182,8 +182,8 @@ export function HealthStrip({ machine, freshness, now }: { machine: ResourceMach
   );
 }
 
-/** A compact trace for the all-machines list. */
-export function MiniTrace({ points, f, max, className }: { points: ResourcePoint[]; f: (p: ResourcePoint) => number | undefined; max: number; className?: string }) {
+/** A small trace of any series over time (`at`): the vitals rows, and the Multiplayer sim grid over sessions. */
+export function MiniTrace<P extends { at: number }>({ points, f, max, className }: { points: P[]; f: (p: P) => number | undefined; max: number; className?: string }) {
   if (points.length < 2) return <span className={cn("inline-block h-4 w-20", className)} />;
   const { line } = tracePath(points, f, max, points[0].at, points[points.length - 1].at);
   return (

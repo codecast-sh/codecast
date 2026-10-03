@@ -59,6 +59,7 @@ describe("typedWords", () => {
     expect(typedWords("<command-name>/model</command-name><command-args>opus</command-args>")).toBeNull();
     expect(typedWords("[Codecast Task: Sweep]\nTask ID: tr-1\nMode: spawn\n\ncheck the queue")).toBeNull();
     expect(typedWords('<session-message from="jx7c6zk">\ntake the auth half\n</session-message>')).toBeNull();
+    expect(typedWords('<role-wake or-23 wake="rw-967" at="2026-09-25T00:09:10.548Z" causes="2" held="0">\n## You Chief of Staff\n</role-wake>')).toBeNull();
     expect(typedWords("")).toBeNull();
     expect(typedWords(undefined)).toBeNull();
   });
