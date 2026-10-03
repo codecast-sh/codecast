@@ -101,7 +101,10 @@ export interface AgentResult {
   turns: string[][];
   calls: string[];
   costUsd: number;
+  /** Every model the run spent on, its `Agent` subagents included. */
   modelUsage: CallResult['modelUsage'];
+  /** The agent's own loop: top-level assistant messages per model, read from the stream (dryRun.ts loopTurnsOf). Empty for a dry run. */
+  loopTurns?: Record<string, number>;
   isError: boolean;
   harnessFailure?: string;
   exitCode: number;

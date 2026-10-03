@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { addSpend, changedSince, checkCostUsd, checkMinutes, dirtySurfaces, readState, sourceHashes, spentToday, staleness, suggestedBudget, writeState } from './state';
+import { addSpend, changedSince, checkCostUsd, checkMinutes, dirtySurfaces, readState, repCostsByModel, sourceHashes, spentToday, staleness, suggestedBudget, writeState } from './state';
 import type { SurfaceMeta } from './surface';
 
 const meta = (id: string, route: 'call' | 'agent', sources: string[]): SurfaceMeta => ({ id, title: id, route, model: 'm', sources, reps: { check: 5 }, maxUsdPerRep: 0.01 });
@@ -146,24 +146,34 @@ describe('staleness', () => {
   }, GIT_MS);
 
   test('state round-trips through EVALS_HOME', () => {
-    writeState({ c: { lastRunHash: 'h', lastCostPerRep: 0.01 } });
-    expect(readState()).toEqual({ c: { lastRunHash: 'h', lastCostPerRep: 0.01 } });
+    writeState({ c: { lastRunHash: 'h', perRep: { m: { usd: 0.01, seconds: 3 } } } });
+    expect(readState()).toEqual({ c: { lastRunHash: 'h', perRep: { m: { usd: 0.01, seconds: 3 } } } });
   });
 });
 
 describe('check cost and the budget status suggests', () => {
-  test('the estimate uses the last measured cost per rep, else the declared ceiling', () => {
+  test('the estimate uses the last measured cost per rep on the model the reps run on, else the declared ceiling', () => {
     const m = meta('c', 'call', []);
     expect(checkCostUsd(m, 12, {})).toBeCloseTo(5 * 12 * 0.01);
-    expect(checkCostUsd(m, 12, { c: { lastCostPerRep: 0.05 } }, 3)).toBeCloseTo(3 * 12 * 0.05);
+    const state = { c: { perRep: { [m.model]: { usd: 0.05, seconds: 1 }, other: { usd: 0.5, seconds: 1 } } } };
+    expect(checkCostUsd(m, 12, state, 3)).toBeCloseTo(3 * 12 * 0.05);
+    expect(checkCostUsd(m, 12, state, 3, 'other')).toBeCloseTo(3 * 12 * 0.5);
+    // A pin moved to a model with no history: the ceiling, never the old model's price.
+    expect(checkCostUsd(m, 12, state, 3, 'new-pin')).toBeCloseTo(3 * 12 * m.maxUsdPerRep);
+  });
+
+  test('a run set records each model it ran on separately', () => {
+    const costs = repCostsByModel([{ model: 'a', costUsd: 1, realMs: 1000 }, { model: 'a', costUsd: 3, realMs: 3000 }, { model: null, costUsd: 7, realMs: 7000 }], 'pin');
+    expect(costs).toEqual({ a: { usd: 2, seconds: 2 }, pin: { usd: 7, seconds: 7 } });
   });
 
   test('the time estimate spreads each surface\'s recorded seconds per rep over the slots, and waits for a record', () => {
     const a = meta('a', 'call', []);
     const b = meta('b', 'call', []);
-    const state = { a: { lastSecondsPerRep: 30 }, b: { lastSecondsPerRep: 90 } };
+    const state = { a: { perRep: { [a.model]: { usd: 0, seconds: 30 } } }, b: { perRep: { [b.model]: { usd: 0, seconds: 90 } } } };
     expect(checkMinutes([{ meta: a, reps: 60 }, { meta: b, reps: 20 }], state, 4)).toBeCloseTo((60 * 30 + 20 * 90) / 4 / 60);
     expect(checkMinutes([{ meta: a, reps: 10 }, { meta: meta('new', 'call', []), reps: 1 }], state, 4)).toBeNull();
+    expect(checkMinutes([{ meta: a, reps: 10, model: 'unseen' }], state, 4)).toBeNull();
   });
 
   test('a suggested budget is never under the estimate check refuses on', () => {
