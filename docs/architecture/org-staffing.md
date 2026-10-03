@@ -1315,3 +1315,35 @@ terminal, lets the person pick one. The call runs on `CHEAP_MODEL` through
 owner a person confirmed, gated on a well-formed answer naming a live handle,
 judged on whether the reason cites something the roster says. No change to
 the prompt is called good without a run that separates from the baseline.
+
+**As built (2026-10-02).** The rule's readers: `lib/orgOwnership.sessionWork`
+reads a session's task, then its plan, and nothing else; `org.sessionsInScope`
+lists bound and filed sessions; `holdChangeFor` says what a binding does to a
+hold and `sessionOwnership.applyHoldChange` applies it through the reparent
+core, scheduled (`internal.sessionOwnership.reconcileHold`) from a task start
+(after `claimTaskOwnership`), a task closed (`updateStatus`, `cascadeClose`), a
+plan bound or unbound (`plans.bindSession`, `unbindSession`), and a session
+created on a task (`dispatch.createSession`, `tasks.run`). The stamp is
+`conversations.org_role_hold` (`bound` | `filed`), written by the reparent
+core's role target (`hold`, default `filed`; a takeover passes `bound`), by a
+hand start (`filed`) and cleared with the role pointer. The folder is edited
+with `cast project update --path <dir|none>` (`projects.update` and
+`webUpdate` take `project_path`, `null` clears) and inline on the project page
+under the lead chip. The migration is `migrations:releaseFolderHeldSessions`
+(`{dryRun, team, role, limit}`): it skips killed rows, keeps bound sessions,
+filed sessions and hands (a line run's `workflow_run_id`, a parent chain to
+the standing session, or a first message that opens with
+`spawn.HAND_BRIEFING_HEADER`), names the change whose takeover moved a session
+by reading `effects.takeover.sessions` once per boundary, and counts
+`release_live` as status active with a pinned state that is not done. The
+routing rule is `contracts/orgRoute.routeWork` (`landingLine` prints it); the
+server is `orgRoute.route` (an action: `internal.orgRoute.prepare` resolves
+the caller, the target and the anchors and builds the roster; a landing is
+`tasks.create` plus `orgRoles.wake`) behind `/cli/route`; the CLI is
+`routeCommand.ts`. The router is `lib/orgRouter.ts` (`routerRequest`,
+`parseRouterReply`, `routerDecision`, `ROUTER_CONFIDENT` 0.8 and
+`ROUTER_MARGIN` 0.3 over the runner-up's own confidence); its eval is the
+`route` surface (`packages/evals/src/surfaces/route`, refs
+`route@<team>:<ct-N>` and `route@fixture:<case>`; gates `parse`, `no-misfile`,
+`owner-known`).
+
