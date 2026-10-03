@@ -3859,6 +3859,12 @@ export default defineSchema({
     // When the team's daily prose cap first left a story or the edition of
     // this day unwritten. Independent of status: a written edition can be capped.
     capped_at: v.optional(v.number()),
+    // Week editions (scope "week", date an ISO week `2026-W40`, changesWeek.ts):
+    // the week's biggest stories by key, lead first, and its area totals.
+    top_story_keys: v.optional(v.array(v.string())),
+    area_totals: v.optional(v.array(v.object({ area: v.string(), stories: v.number(), files: v.number() }))),
+    // The week build scheduled by a day edition finalizing, while it waits.
+    scheduled_id: v.optional(v.id("_scheduled_functions")),
   })
     .index("by_user_scope_date", ["user_id", "scope", "date"])
     .index("by_team_scope_date", ["team_id", "scope", "date"])

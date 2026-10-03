@@ -29,6 +29,12 @@ const REGISTRY: PlatformConfig["registry"] = {
     dispatchTable: { table: "item_rows", kind: "collection" },
     unprotectedFields: ["comments"],
   },
+  // A second copy of the same server rows (codecast's sessions and conversations).
+  twins: {
+    persistence: { kind: "collection", key: "twins" },
+    localFirst: true,
+    dispatchTable: { table: "item_rows", kind: "collection" },
+  },
   // Off the patch rail: undo reaches the server through a writer.
   docs: { persistence: { kind: "collection", key: "docs" }, localFirst: true },
   marks: { persistence: { kind: "meta", key: "marks" }, localFirst: true, sync: { kind: "list", rowKey: "message_id" } },
@@ -62,11 +68,31 @@ function undoConfig(calls: Calls, over: Partial<UndoConfig> = {}): UndoConfig {
       renameBoth: { label: label("Both") },
       setTwo: { label: label("Set two") },
       defer: { label: label("Deferred") },
+      deferTwin: { label: label("Deferred twin") },
       addItem: { label: label("Added") },
       drop: { label: label("Dropped") },
       toggleMark: { label: label("Marked") },
       setStatus: { label: label("Status") },
       toggleFav: { label: label("Favorite") },
+      favBoth: { label: label("Favorited two") },
+      // One restore per row the changes name, so a partial undo narrows it.
+      stashBoth: {
+        label: label("Stashed two"),
+        inverse: (ctx) =>
+          [...new Set(ctx.changes.filter((c) => c.store === "items").map((c) => c.id))].map((id) => ({
+            action: "restore",
+            args: [id],
+            runDraft: false,
+          })),
+      },
+      // The same gesture with its ids read from the args: it cannot narrow.
+      stashPair: {
+        label: label("Stashed pair"),
+        inverse: (ctx) => [
+          { action: "restore", args: [ctx.args[0]], runDraft: false },
+          { action: "restore", args: [ctx.args[1]], runDraft: false },
+        ],
+      },
       note: { label: label("Note") },
       setComments: { label: label("Comments") },
       open: { label: label("Opened"), restoreView: true },
@@ -112,6 +138,7 @@ function makeStore(opts: { undo?: UndoConfig | null; viewDeclared?: () => boolea
   const wrapped = mutativeMiddleware(
     () => ({
       items: {} as Record<string, any>,
+      twins: {} as Record<string, any>,
       docs: {} as Record<string, any>,
       notes: {} as Record<string, any>,
       favorites: [] as any[],
@@ -140,6 +167,10 @@ function makeStore(opts: { undo?: UndoConfig | null; viewDeclared?: () => boolea
         this.items[id].deferred_at = 5;
         this.items[id].snoozed_until = null;
       }),
+      deferTwin: action(function (this: any, id: string) {
+        this.items[id].deferred_at = 5;
+        this.twins[id].deferred_at = 5;
+      }),
       addItem: action(function (this: any, id: string) {
         this.items[id] = { _id: id, title: "new" };
       }),
@@ -159,6 +190,20 @@ function makeStore(opts: { undo?: UndoConfig | null; viewDeclared?: () => boolea
         this.items[id].is_favorite = on;
         if (on) this.favorites.push({ _id: id });
         else this.favorites = this.favorites.filter((f: any) => f._id !== id);
+      }),
+      favBoth: action(function (this: any, a: string, b: string) {
+        for (const id of [a, b]) {
+          this.items[id].is_favorite = true;
+          this.favorites.push({ _id: id });
+        }
+      }),
+      stashBoth: action(function (this: any, a: string, b: string) {
+        this.items[a].hidden_at = 7;
+        this.items[b].hidden_at = 7;
+      }),
+      stashPair: action(function (this: any, a: string, b: string) {
+        this.items[a].hidden_at = 7;
+        this.items[b].hidden_at = 7;
       }),
       note: action(function (this: any, id: string, text: string) {
         this.notes[id] = text;
@@ -492,6 +537,27 @@ describe("replay mechanics", () => {
     expect(lastDispatch(h, "applyUndoPatches")).toBeUndefined();
   });
 
+  it("a writer's clears spell an unset before value the way the server stores the clear", () => {
+    const calls: Calls = { beforeReplay: [], afterReplay: [], restoreView: [] };
+    const base = undoConfig(calls);
+    const h = makeStore({
+      undo: undoConfig(calls, {
+        writers: { docs: { ...base.writers!.docs!, clears: { labels: [] } } },
+      }),
+    });
+    h.setState({ docs: { [A]: { _id: A, title: "Doc" } } });
+    h.wrapped.editDoc(A, { labels: ["y"] });
+    performUndo();
+    // The row holds the server's spelling of the clear, the writer sends it,
+    // and the lock asserts it, so the echo of the clear retires the lock.
+    expect(h.state.docs[A].labels).toEqual([]);
+    expect(lastDispatch(h, "saveDoc")!.args).toEqual([A, { labels: [] }]);
+    expect(h.state.pending[`docs:${A}:labels`]).toMatchObject({ type: "field", value: [] });
+    // Redo finds the row where the undo left it.
+    expect(performRedo()).toBe(true);
+    expect(h.state.docs[A].labels).toEqual(["y"]);
+  });
+
   it("a removed row comes back through the writer's restoreRow, and its exclude goes", () => {
     const h = makeStore();
     h.setState({ docs: { [A]: { _id: A, title: "Doc", updated_at: 1 } } });
@@ -636,6 +702,100 @@ describe("conflicts and partial undo", () => {
     expect(h.state.items[A].title).toBe("a");
   });
 
+  it("an entry whose every row conflicts is a conflict even when a mirror could be restored", () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "t" });
+    h.wrapped.toggleFav(A);
+    h.setState({ items: { [A]: { ...h.state.items[A], is_favorite: "remote" } } });
+    const id = top().id;
+    performUndo();
+    expect(h.state.items[A].is_favorite).toBe("remote");
+    expect(h.state.favorites).toEqual([{ _id: A }]);
+    expect(items().find((i) => i.id === id)!.status).toBe("conflict");
+    expect(notices).toEqual(["Can't undo Favorite: changed since"]);
+  });
+
+  it("a partial undo leaves the mirror cells of the rows it skipped", () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "a" });
+    h.wrapped.seed(B, { title: "b" });
+    h.wrapped.favBoth(A, B);
+    h.setState({ items: { ...h.state.items, [B]: { ...h.state.items[B], is_favorite: "remote" } } });
+    performUndo();
+    expect(h.state.items[A].is_favorite).toBeUndefined();
+    expect(h.state.favorites).toEqual([{ _id: B }]);
+  });
+
+  it("a partial undo of an inverse entry dispatches nothing for the skipped row", () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "a" });
+    h.wrapped.seed(B, { title: "b" });
+    h.wrapped.stashBoth(A, B);
+    h.setState({ items: { ...h.state.items, [B]: { ...h.state.items[B], hidden_at: 99 } } });
+    const before = h.dispatched.length;
+    performUndo();
+    const sent = h.dispatched.slice(before);
+    expect(sent.map((d) => [d.action, d.args])).toEqual([["restore", [A]]]);
+    expect(sent[0]!.patches).toEqual({ item_rows: { [A]: { hidden_at: null } } });
+    expect(h.state.items[A].hidden_at).toBeUndefined();
+    expect(h.state.items[B].hidden_at).toBe(99);
+    expect(notices).toEqual(["Undid: Stashed two (1 changed since, left as they are)"]);
+  });
+
+  it("two stores on one server row are judged as one row", () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "a" });
+    h.setState({ twins: { [A]: { _id: A, title: "a" } } });
+    h.wrapped.deferTwin(A);
+    // A later change reaches only one copy.
+    h.setState({ items: { [A]: { ...h.state.items[A], deferred_at: 9 } } });
+    const before = h.dispatched.length;
+    const pendingBefore = { ...h.state.pending };
+    performUndo();
+    expect(h.dispatched.length).toBe(before);
+    expect(h.state.items[A].deferred_at).toBe(9);
+    expect(h.state.twins[A].deferred_at).toBe(5);
+    expect(h.state.pending).toEqual(pendingBefore);
+    expect(notices).toEqual(["Can't undo Deferred twin: changed since"]);
+  });
+
+  it("a partial undo leaves both copies of the skipped row and counts it once", () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "a" });
+    h.wrapped.seed(B, { title: "b" });
+    h.setState({ twins: { [A]: { _id: A }, [B]: { _id: B } } });
+    undoGroup("Deferred two", () => {
+      h.wrapped.deferTwin(A);
+      h.wrapped.deferTwin(B);
+    });
+    h.setState({ twins: { ...h.state.twins, [B]: { ...h.state.twins[B], deferred_at: 9 } } });
+    const before = h.dispatched.length;
+    performUndo();
+    expect(h.state.items[A].deferred_at).toBeUndefined();
+    expect(h.state.twins[A].deferred_at).toBeUndefined();
+    expect(h.state.items[B].deferred_at).toBe(5);
+    expect(h.state.twins[B].deferred_at).toBe(9);
+    const sent = h.dispatched.slice(before).map((d) => JSON.stringify(d.patches));
+    expect(sent.some((p) => p.includes(B))).toBe(false);
+    expect(notices).toEqual(["Undid: Deferred two (1 changed since, left as they are)"]);
+  });
+
+  it("an inverse that still names a skipped row refuses the undo whole", () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "a" });
+    h.wrapped.seed(B, { title: "b" });
+    h.wrapped.stashPair(A, B);
+    h.setState({ items: { ...h.state.items, [B]: { ...h.state.items[B], hidden_at: 99 } } });
+    const id = top().id;
+    const before = h.dispatched.length;
+    performUndo();
+    expect(h.dispatched.slice(before)).toEqual([]);
+    expect(h.state.items[A].hidden_at).toBe(7);
+    expect(h.state.items[B].hidden_at).toBe(99);
+    expect(items().find((i) => i.id === id)!.status).toBe("conflict");
+    expect(notices).toEqual(["Can't undo Stashed pair: changed since"]);
+  });
+
   it("a gone row is a conflict, a re-added row counts as already undone", () => {
     const h = makeStore();
     h.wrapped.seed(A, { title: "a" });
@@ -686,6 +846,42 @@ describe("redo and groups", () => {
     performRedo();
     expect(h.state.items[A].title).toBe("someone");
     expect(notices.at(-1)).toBe("Can't redo Renamed to x: changed since");
+  });
+
+  it("redo after a partial undo restores only the rows the undo applied", () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "a" });
+    h.wrapped.seed(B, { title: "b" });
+    h.wrapped.renameBoth(A, B, "both");
+    h.setState({ items: { ...h.state.items, [B]: { ...h.state.items[B], title: "someone" } } });
+    performUndo();
+    const renames = h.dispatched.filter((d) => d.action === "renameBoth").length;
+    expect(performRedo()).toBe(true);
+    expect(h.state.items[A].title).toBe("both");
+    expect(h.state.items[B].title).toBe("someone");
+    // The applied cells went back on the undo's route; the action never re-ran.
+    expect(h.dispatched.filter((d) => d.action === "renameBoth")).toHaveLength(renames);
+    expect(lastDispatch(h, "applyUndoPatches")!.patches).toBeTruthy();
+    expect(h.state.pending[`items:${A}:title`]).toMatchObject({ value: "both" });
+    expect(notices.at(-1)).toBe("Redid: Both (1 changed since, left as they are)");
+    // And it undoes again, partially, as before.
+    performUndo();
+    expect(h.state.items[A].title).toBe("a");
+    expect(h.state.items[B].title).toBe("someone");
+  });
+
+  it("redo after a partial undo of an inverse spec is refused", () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "a" });
+    h.wrapped.seed(B, { title: "b" });
+    h.wrapped.stashBoth(A, B);
+    h.setState({ items: { ...h.state.items, [B]: { ...h.state.items[B], hidden_at: 99 } } });
+    performUndo();
+    expect(h.state.items[A].hidden_at).toBeUndefined();
+    performRedo();
+    expect(h.state.items[A].hidden_at).toBeUndefined();
+    expect(h.state.items[B].hidden_at).toBe(99);
+    expect(notices.at(-1)).toBe("Can't redo Stashed two: changed since");
   });
 
   it("undoGroup folds captures into one entry, undone in reverse and redone forward", () => {
@@ -763,6 +959,63 @@ describe("refusal and rekey", () => {
     await waitFor(() => getUndoHistory().head === id);
     expect(items().find((i) => i.id === id)!.status).toBe("done");
     expect(h.state.items[A].title).toBe("x");
+  });
+
+  it("an undo refused once per pass returns to the undo stack and stays there", async () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "a" });
+    h.wrapped.seed(B, { title: "b" });
+    h.wrapped.stashBoth(A, B);
+    const id = top().id;
+    await waitFor(() => h.outbox.size === 0);
+    h.respond(async (a) => {
+      if (a === "restore") throw new Error("Uncaught Error: no");
+      return {};
+    });
+    const before = h.dispatched.length;
+    performUndo();
+    await waitFor(() => h.dispatched.slice(before).filter((d) => d.action === "restore").length === 2 && h.outbox.size === 0);
+    await waitFor(() => getUndoHistory().head === id);
+    expect(items().find((i) => i.id === id)!.status).toBe("done");
+    expect(h.state.items[A].hidden_at).toBe(7);
+    expect(h.state.items[B].hidden_at).toBe(7);
+  });
+
+  it("a refused partial redo dispatch rolls back and the entry returns to the redo stack", async () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "a" });
+    h.wrapped.seed(B, { title: "b" });
+    h.wrapped.renameBoth(A, B, "both");
+    h.setState({ items: { ...h.state.items, [B]: { ...h.state.items[B], title: "someone" } } });
+    const id = top().id;
+    performUndo();
+    await waitFor(() => h.outbox.size === 0);
+    h.respond(async (a) => {
+      if (a === "applyUndoPatches") throw new Error("Uncaught Error: no");
+      return {};
+    });
+    performRedo();
+    expect(h.state.items[A].title).toBe("both");
+    await waitFor(() => items().find((i) => i.id === id)!.status === "undone");
+    expect(h.state.items[A].title).toBe("a");
+    expect(getUndoHistory().head).not.toBe(id);
+  });
+
+  it("a rekeyed removal comes back under the server id, and a rekeyed inverse names it", () => {
+    const h = makeStore();
+    h.wrapped.seed("stub_1", { title: "a" });
+    h.wrapped.drop("stub_1");
+    rekeyUndoIds("stub_1", A);
+    performUndo();
+    expect(h.state.items).toEqual({ [A]: { _id: A, title: "a" } });
+
+    h.wrapped.seed("stub_2", { title: "b" });
+    h.wrapped.stash("stub_2");
+    h.setState({ items: { ...h.state.items, [B]: { ...h.state.items["stub_2"], _id: B } } });
+    rekeyUndoIds("stub_2", B);
+    performUndo();
+    expect(lastDispatch(h, "restore")!.args).toEqual([B]);
+    expect(h.state.items[B].hidden_at).toBeUndefined();
   });
 
   it("a stub rekey rewrites ids in live entries", () => {

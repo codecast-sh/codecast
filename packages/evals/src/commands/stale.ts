@@ -14,6 +14,8 @@ export interface StaleFlags {
   route?: string;
   list?: boolean;
   base?: string;
+  /** The --budget the check behind this precheck passes: a surface refused at a smaller budget is due again. */
+  budget?: number;
 }
 
 export function pickSurfaces(ids: string[], route?: string): SurfaceMeta[] {
@@ -38,7 +40,7 @@ export function runStale(ids: string[], flags: StaleFlags): number {
     }
     return changed.length ? 0 : 1;
   }
-  const { stale, waiting, due, blocked } = staleness(pickSurfaces(ids, flags.route));
+  const { stale, waiting, due, blocked } = staleness(pickSurfaces(ids, flags.route), undefined, undefined, flags.budget);
   // An unattended day that spent its ceiling fires nothing more; `check --stale` would only refuse.
   const spent = spentToday();
   if (due.length && spent >= DAILY_USD) {
@@ -55,6 +57,18 @@ export function runStale(ids: string[], flags: StaleFlags): number {
   return due.length ? 0 : 1;
 }
 
+/** A flag's positive number, or null: NaN would disable every spend check. `check`'s parsers share it. */
+export const positiveValue = (v: string | undefined, integer = false): number | null => {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 && (!integer || Number.isInteger(n)) ? n : null;
+};
+
+const budgetArg = (v: string | undefined): number => {
+  const n = positiveValue(v);
+  if (n == null) throw new Error(`--budget takes a positive number, not "${v ?? ''}"`);
+  return n;
+};
+
 /**
  * The fast path: `./evals stale` parsed by hand, so commander and the platform
  * never load. It throws on a bad argument; index.ts prints that as one line
@@ -70,7 +84,8 @@ export function staleMain(argv: string[]): number {
     else if (a.startsWith('--route=')) flags.route = a.slice('--route='.length);
     else if (a === '--base') flags.base = argv[++i];
     else if (a.startsWith('--base=')) flags.base = a.slice('--base='.length);
-    else if (a.startsWith('-')) throw new Error(`stale has no option ${a}; it takes --route, --list and --base`);
+    else if (a === '--budget' || a.startsWith('--budget=')) flags.budget = budgetArg(a === '--budget' ? argv[++i] : a.slice('--budget='.length));
+    else if (a.startsWith('-')) throw new Error(`stale has no option ${a}; it takes --route, --list, --base and --budget`);
     else ids.push(a);
   }
   return runStale(ids, flags);
@@ -83,6 +98,7 @@ export function registerStale(program: Command): void {
     .option('--route <route>', 'call or agent')
     .option('--list', 'only the stale surface ids')
     .option('--base <ref>', 'instead: the surfaces whose sources differ since the branch left <ref> (committed or dirty)')
+    .option('--budget <usd>', "the check's --budget: a surface refused at a smaller one is due again", budgetArg)
     .action((ids: string[], flags: StaleFlags) => {
       process.exitCode = runStale(ids, flags);
     });

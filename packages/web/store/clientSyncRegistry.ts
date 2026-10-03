@@ -662,11 +662,14 @@ export const CLIENT_SYNC_REGISTRY = {
   // The org tree (people, roles, anchors, top sessions per parent): one
   // server-derived snapshot for the active workspace. Singleton; the store's
   // SYNC_REGISTRY strips generated_at so a no-op push doesn't wake the page.
+  // Two feeds, one home: org.tree for the surfaces that draw sessions, and
+  // org.roles (roles and seats, no session read) for the ones that only name
+  // a role; ORG_SYNC_REGISTRY fills a roles-only push from the held tree.
   orgTree: {
     persistence: { kind: "meta", key: "orgTree" },
     hydration: { phase: "deferred", merge: "fill" },
     sync: { kind: "singleton" },
-    feeds: ["org.tree"],
+    feeds: ["org.tree", "org.roles"],
   },
   // The company's flow signals and flags (org-staffing.md S3): one snapshot
   // for the active workspace, painted by the staffing pane and the node

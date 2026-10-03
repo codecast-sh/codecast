@@ -134,11 +134,12 @@ function placeholderGate(writes: string[], label: NonNullable<StandingLabel['pla
   return gate('pass-or-answer', pass, parts.join('; '));
 }
 
+/** The label lists these sessions because the turn must report them: naming none of them leaves their status unreported, which fails like asserting it unread. */
 function rereadGate(reads: string[], said: string, sessions: string[]): GateResult {
   const named = sessions.filter((s) => said.includes(s));
   const read = (s: string) => reads.some((r) => new RegExp(`^read\\s+(?:.*\\s)?${s}\\b`).test(r));
   const unread = named.filter((s) => !read(s));
-  return gate('reread-before-status', unread.length === 0, unread.length ? `asserted status for ${unread.join(', ')} without a \`cast read\` of it` : named.length ? `read ${named.join(', ')} before naming it` : `named none of ${sessions.join(', ')}`);
+  return gate('reread-before-status', named.length > 0 && unread.length === 0, unread.length ? `asserted status for ${unread.join(', ')} without a \`cast read\` of it` : named.length ? `read ${named.join(', ')} before naming it` : `named none of ${sessions.join(', ')}, so their status went unreported`);
 }
 
 /** Each session it was asked by gets a `cast send <id>`; a message to anyone else, or to nobody, is not a reply. */
@@ -150,8 +151,9 @@ function repliesGate(writes: string[], sessions: string[]): GateResult {
   return gate('replies-sender', pass, unanswered.length ? `did not answer ${unanswered.join(', ')} with \`cast send\`${elsewhere.length ? `; sent instead to: ${elsewhere.map((w) => `cast ${w}`).join('; ')}` : ''}` : `answered ${sessions.join(', ')} with \`cast send\``);
 }
 
+/** A `cast decide` counts when it carries arguments: a bare verb is the command named in passing (as in pauseGate), never a choice put to anyone. */
 function decisionGate(writes: string[]): GateResult {
-  const raised = writes.filter((w) => /^decide\b/.test(w));
+  const raised = writes.filter((w) => /^decide\s+\S/.test(w));
   return gate('raises-decision', raised.length > 0, raised.length ? `raised: ${raised.map((w) => `cast ${w}`).join('; ')}` : 'named no `cast decide`, so the choice was never put to the people who own it');
 }
 

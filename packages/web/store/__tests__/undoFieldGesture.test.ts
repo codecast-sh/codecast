@@ -1,15 +1,15 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { useInboxStore } from "../inboxStore";
+import { _resetUndoStacks } from "@platform/engine";
 import { performUndo } from "../undoStack";
-import { undoableDeferSession, undoablePinSession, undoableSetSessionRest } from "../undoActions";
 
-// Every field gesture routes through undoableFieldGesture, which names the
-// fields it stamps in one place. The rule these tests pin: a gesture's undo
-// restores EVERY field the action touched, not just the one the gesture is
-// named after. Each of these actions clears a snooze on the way
+// Every field gesture is a store action with an undo spec, and the engine
+// records every cell the action wrote. The rule these tests pin: a gesture's
+// undo restores EVERY field the action touched, not just the one the gesture
+// is named after. Each of these actions clears a snooze on the way
 // (clearSessionSnoozeInDraft), so undoing one has to give the snooze back —
 // the hand-written versions of defer and pin did not, and silently ate it.
-const ID = "jx7testconv00000000000000000000";
+const ID = "jx7testconv000000000000000000000";
 const SNOOZE_UNTIL = 1800000000000;
 
 const seed = (extra: Record<string, any> = {}) => {
@@ -24,10 +24,10 @@ const row = () => useInboxStore.getState().sessions[ID] as any;
 const conv = () => useInboxStore.getState().conversations[ID] as any;
 
 describe("undoable field gestures restore every field the action touched", () => {
-  beforeEach(() => { seed(); });
+  beforeEach(() => { _resetUndoStacks(); seed(); });
 
   test("defer clears the snooze, and undo puts it back on both rows", () => {
-    undoableDeferSession(ID);
+    useInboxStore.getState().deferSession(ID);
     expect(row().is_deferred).toBe(true);
     expect(row().inbox_snoozed_until).toBe(null);
 
@@ -38,7 +38,7 @@ describe("undoable field gestures restore every field the action touched", () =>
   });
 
   test("a rest verdict is undone whole: verdict, stamp, and the snooze it cleared", () => {
-    undoableSetSessionRest(ID, "dormant");
+    useInboxStore.getState().setSessionRest(ID, "dormant");
     expect(row().user_rest).toBe("dormant");
     expect(row().inbox_snoozed_until).toBe(null);
 
@@ -50,15 +50,21 @@ describe("undoable field gestures restore every field the action touched", () =>
   });
 
   test("pin the same way, and its undo releases the pending locks it took", () => {
-    undoablePinSession(ID);
+    useInboxStore.getState().pinSession(ID);
     expect(row().is_pinned).toBe(true);
     expect(row().inbox_snoozed_until).toBe(null);
 
     performUndo();
     expect(row().is_pinned ?? null).toBe(null);
     expect(row().inbox_snoozed_until).toBe(SNOOZE_UNTIL);
-    const locks = Object.keys(useInboxStore.getState().pending).filter((k) => k.startsWith(`sessions:${ID}:`));
-    expect(locks).toEqual([]);
+    // The pin's own locks are released: what holds the row until the server
+    // echoes is a lock on each RESTORED value, never on the pin.
+    const locks = Object.entries(useInboxStore.getState().pending as Record<string, any>)
+      .filter(([k]) => k.startsWith(`sessions:${ID}:`));
+    expect(locks.length).toBeGreaterThan(0);
+    for (const [key, lock] of locks) {
+      expect(lock.value ?? null).toBe(key.endsWith(":inbox_snoozed_until") ? SNOOZE_UNTIL : null);
+    }
   });
 
   test("the undo dispatches the restored stamps, so the server converges too", () => {
@@ -67,12 +73,12 @@ describe("undoable field gestures restore every field the action touched", () =>
     // undo's server half.
     const undoPatches: Array<Record<string, any>> = [];
     const owner = {};
-    useInboxStore.getState()._setDispatch(async (action, args) => {
-      if (action === "applyUndoPatches") undoPatches.push(args[0] as Record<string, any>);
+    useInboxStore.getState()._setDispatch(async (action, _args, patches) => {
+      if (action === "applyUndoPatches") undoPatches.push((patches ?? {}) as Record<string, any>);
       return null;
     }, { owner });
     try {
-      undoableDeferSession(ID);
+      useInboxStore.getState().deferSession(ID);
       performUndo();
       const stamps = undoPatches.flatMap((p) => Object.values(p.conversations ?? {}));
       expect(stamps.some((f: any) => f.inbox_snoozed_until === SNOOZE_UNTIL)).toBe(true);
@@ -80,5 +86,57 @@ describe("undoable field gestures restore every field the action touched", () =>
     } finally {
       useInboxStore.getState()._clearDispatch(owner);
     }
+  });
+
+  // B2: the forward write's locks held the forward value, so a push that still
+  // carried it (the server applied the gesture before the undo landed) used to
+  // put it back. The undo replaces those locks with the restored values.
+  const lockedOn = () => Object.keys(useInboxStore.getState().pending).filter((k) => k.includes(ID));
+  const push = (fields: Record<string, any>) => {
+    useInboxStore.getState().syncTable("sessions", [{ _id: ID, title: "Test session", updated_at: 1, ...fields }] as any);
+    useInboxStore.getState().syncTable("conversations", [{ _id: ID, title: "Test session", ...fields }] as any);
+  };
+
+  test("defer: a stale push after the undo does not re-defer, and the echo leaves no lock", () => {
+    useInboxStore.getState().deferSession(ID);
+    const deferredAt = row().inbox_deferred_at;
+    performUndo();
+
+    push({ inbox_deferred_at: deferredAt, inbox_snoozed_until: null });
+    expect(row().inbox_deferred_at ?? null).toBe(null);
+    expect(conv().inbox_deferred_at ?? null).toBe(null);
+    expect(row().inbox_snoozed_until).toBe(SNOOZE_UNTIL);
+
+    push({ inbox_snoozed_until: SNOOZE_UNTIL });
+    expect(row().inbox_snoozed_until).toBe(SNOOZE_UNTIL);
+    expect(lockedOn()).toEqual([]);
+  });
+
+  test("rest verdict: a stale push after the undo does not re-file, and the echo leaves no lock", () => {
+    useInboxStore.getState().setSessionRest(ID, "done");
+    const restAt = row().inbox_rest_at;
+    performUndo();
+
+    push({ inbox_rest: "done", inbox_rest_at: restAt, inbox_snoozed_until: null });
+    expect(conv().inbox_rest ?? null).toBe(null);
+    expect(row().inbox_rest ?? null).toBe(null);
+    expect(row().inbox_snoozed_until).toBe(SNOOZE_UNTIL);
+
+    push({ inbox_snoozed_until: SNOOZE_UNTIL });
+    expect(lockedOn()).toEqual([]);
+  });
+
+  test("pin: a stale push after the undo does not re-pin, and the echo leaves no lock", () => {
+    useInboxStore.getState().pinSession(ID);
+    const pinnedAt = row().inbox_pinned_at;
+    performUndo();
+
+    push({ inbox_pinned_at: pinnedAt, is_pinned: true, inbox_snoozed_until: null });
+    expect(row().inbox_pinned_at ?? null).toBe(null);
+    expect(conv().inbox_pinned_at ?? null).toBe(null);
+
+    push({ inbox_snoozed_until: SNOOZE_UNTIL });
+    expect(row().inbox_snoozed_until).toBe(SNOOZE_UNTIL);
+    expect(lockedOn()).toEqual([]);
   });
 });

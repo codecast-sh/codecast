@@ -9,11 +9,12 @@ import { useCurrentUser } from "../hooks/useCurrentUser";
 import { isDesktopShell } from "../lib/desktop";
 import { MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { TopbarButton } from "./TopbarButton";
+import { useTheme } from "./ThemeProvider";
 import {
   Settings, Keyboard, Compass, SlidersHorizontal, CircleUser, History, Rss, ListChecks,
   FileText, FolderGit2, CalendarClock, ArrowLeftRight, ScrollText, Globe, LogOut, Waypoints,
   BookOpen, ExternalLink, Radio, Newspaper, Home, MonitorSmartphone,
-  Blocks,
+  Blocks, Sun, Moon,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -148,6 +149,7 @@ export function UserMenu() {
 
   const displayName = user?.name || user?.email?.split("@")[0] || "User";
   const isAdmin = user?.role === "admin";
+  const { theme, toggleTheme } = useTheme();
   const isLocal = typeof window !== "undefined" && window.location.hostname.includes("local.");
 
   const go = (path: string) => { setOpen(false); router.push(path); };
@@ -205,6 +207,11 @@ export function UserMenu() {
               label="Keyboard shortcuts"
               onClick={() => { setOpen(false); toggleShortcutsPanel(); }}
               trailing={<MenuKeyCaps action="ui.toggleShortcutsHelp" />}
+            />
+            <MenuItem
+              icon={theme === "dark" ? Sun : Moon}
+              label={theme === "dark" ? "Light mode" : "Dark mode"}
+              onClick={() => { setOpen(false); toggleTheme(); }}
             />
             <MenuItem icon={Compass} label="Tours" onClick={() => { setOpen(false); useInboxStore.getState().setToursPanelOpen(true); }} />
             <MenuItem icon={SlidersHorizontal} label="Agent Config" onClick={() => go("/config")} />

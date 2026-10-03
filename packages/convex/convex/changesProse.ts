@@ -309,10 +309,10 @@ export type StoryProse = {
   risk_lines?: Record<string, string>;
 };
 
-const str = (x: unknown): string => (typeof x === "string" ? x.replace(/\s+/g, " ").trim() : "");
+export const str = (x: unknown): string => (typeof x === "string" ? x.replace(/\s+/g, " ").trim() : "");
 
 /** At most `n` sentences. */
-function sentences(text: string, n: number): string {
+export function sentences(text: string, n: number): string {
   const parts = text.match(/[^.!?]+(?:[.!?]+(?=\s|$)|$)/g)?.map((s) => s.trim()).filter(Boolean) ?? [];
   return parts.slice(0, n).join(" ");
 }
@@ -670,11 +670,11 @@ export const readEdition = internalQuery({
 
 // ── Writes ───────────────────────────────────────────────────────────────
 
-const usageArg = v.object({ model: v.string(), input_tokens: v.number(), output_tokens: v.number(), cost_usd: v.number() });
-type Usage = typeof usageArg.type;
+export const usageArg = v.object({ model: v.string(), input_tokens: v.number(), output_tokens: v.number(), cost_usd: v.number() });
+export type Usage = typeof usageArg.type;
 
 /** A row's spend after one more call. Tokens and dollars add up over every call the row has had. */
-function spend(row: { input_tokens?: number; output_tokens?: number; cost_usd?: number }, usage: Usage | undefined) {
+export function spend(row: { input_tokens?: number; output_tokens?: number; cost_usd?: number }, usage: Usage | undefined) {
   if (!usage) return {};
   return {
     model: usage.model,
@@ -870,7 +870,10 @@ export type ProseResult = {
   spent_usd: number;
 };
 
-const usageOf = (model: string, u: { input_tokens: number; output_tokens: number }): Usage => ({
+/** Edition outcomes of an ended day that schedule its week (changesWeek.ts). */
+const WEEK_AFTER: ReadonlySet<ProseResult["edition"]> = new Set(["final", "failed", "capped", "held"]);
+
+export const usageOf = (model: string, u: { input_tokens: number; output_tokens: number }): Usage => ({
   model,
   input_tokens: u.input_tokens,
   output_tokens: u.output_tokens,
@@ -893,7 +896,7 @@ type Budget = { spent: number };
 type StoryStep = "written" | "skipped" | "failed" | "stale" | "deferred" | "capped" | "held" | "gone";
 
 /** A deployment without a model key writes no prose and marks nothing failed: the stories wait for one. */
-const hasModelKey = () => !!process.env.ANTHROPIC_API_KEY;
+export const hasModelKey = () => !!process.env.ANTHROPIC_API_KEY;
 
 async function proseForStory(ctx: ActionCtx, storyId: Id<"change_stories">, dayEnd: number, now: number, budget: Budget, settle: number[]): Promise<StoryStep> {
   const read: StoryRead | null = await ctx.runQuery(internal.changesProse.readStory, { story_id: storyId });
@@ -1014,6 +1017,11 @@ export async function runProse(
 
   if (result.capped || result.edition === "capped") {
     await ctx.runMutation(internal.changesProse.markCapped, { team_id: args.team_id, repository: args.repository, date: args.date });
+  }
+  // An ended day's edition is as written as it will get (prose, or facts the
+  // cap, a missing key or a failure left): its week is built from it.
+  if (now >= day.end && WEEK_AFTER.has(result.edition)) {
+    await ctx.runMutation(internal.changesWeek.scheduleWeek, { team_id: args.team_id, repository: args.repository, date: args.date });
   }
   if (settle.length) {
     await ctx.runMutation(internal.changesProse.deferDay, {

@@ -46,6 +46,7 @@ import { copyToClipboard } from "../lib/utils";
 import { fmtClock, fmtDuration, describeTaskCadence, isTaskOverdue, taskStateLabel } from "./triggerCadence";
 import { taskDisplayTitle, taskGist, lastRunHeadline, type TriggerRow, type TriggerHomeGroup, type TaskRow } from "./triggerTasks";
 import { TriggerRunList, useTriggerRuns, type TriggerRun } from "./TriggerRunHistory";
+import { triggerInverse } from "../store/undo/policies/work";
 
 const SCHED_ACCENT: Record<SchedAccent, string> = {
   running: "border-l-sol-green",
@@ -198,9 +199,13 @@ export const TriggerRowItem = memo(function TriggerRowItem({
   const runAgain = () => { triggerAction(taskId, "reactivate"); confirm(() => toast.success("Re-armed — runs within ~30s")); };
   const pause = () => triggerAction(taskId, "pause");
   const resume = () => triggerAction(taskId, "resume");
+  // A cancel the store can take back records an undo entry, whose toast
+  // ("Canceled … · Undo") is the confirmation; one it cannot (a running
+  // trigger) just says it happened.
   const cancel = () => {
+    const undoable = triggerInverse("cancel", task.status) !== null;
     triggerAction(taskId, "cancel");
-    confirm(() => toast("Trigger canceled", { description: taskDisplayTitle(task), action: { label: "Undo", onClick: () => triggerAction(taskId, "reactivate") } }));
+    if (!undoable) confirm(() => toast("Trigger canceled", { description: taskDisplayTitle(task) }));
   };
   const paused = task.status === "paused";
   const terminal = task.status === "completed" || task.status === "failed";

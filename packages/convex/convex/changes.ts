@@ -206,7 +206,7 @@ export const readEventsPage = internalQuery({
 
 // ── Writes ───────────────────────────────────────────────────────────────
 
-const releaseArg = v.object({ surface: v.string(), version: v.optional(v.string()), sha: v.string(), at: v.number() });
+export const releaseArg = v.object({ surface: v.string(), version: v.optional(v.string()), sha: v.string(), at: v.number() });
 
 const storyArg = v.object({
   story_key: v.string(),

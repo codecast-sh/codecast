@@ -1,6 +1,6 @@
 // THE ROW'S TWO WIDTHS, AND THE STYLESHEET THAT DRAWS THEM (pl-756 F2).
 //
-// The bar is 32px faces with compact links; the float is 64px faces (or the
+// The bar is 28px faces with compact links; the float is 64px faces (or the
 // bigger size the person picked) with the call circles' margin. The numbers live once in FACE_ROW_METRICS and once in
 // faceRow.css, and this file holds the two together: a window sized from the
 // constants must be the window the stylesheet fills.
@@ -27,21 +27,23 @@ import {
 const css = readFileSync(join(import.meta.dir, "..", "faceRow.css"), "utf8");
 /** The value of a custom property inside one rule of the stylesheet. */
 function cssVar(rule: string, name: string): string | null {
-  const block = css.split(rule)[1]?.split("}")[0] ?? "";
+  // The rule as written at the start of a line: `.face-card {` is the card's
+  // own rule, never a descendant selector that happens to end the same way.
+  const block = css.split(`\n${rule}`)[1]?.split("}")[0] ?? "";
   return block.match(new RegExp(`${name}:\\s*([^;]+);`))?.[1].trim() ?? null;
 }
 
 describe("the bar", () => {
-  test("32px faces, and each link pulls its pair together", () => {
-    expect(FACE_ROW_METRICS.bar).toEqual({ face: 32, gap: 6, link: 14, pad: 0 });
+  test("28px faces, and each link pulls its pair together", () => {
+    expect(FACE_ROW_METRICS.bar).toEqual({ face: 28, gap: 6, link: 14, pad: 0 });
     expect(faceRowWidth("bar", 0, 0)).toBe(0);
-    expect(faceRowWidth("bar", 1, 0)).toBe(32);
-    expect(faceRowWidth("bar", 3, 0)).toBe(3 * 32 + 2 * 6);
+    expect(faceRowWidth("bar", 1, 0)).toBe(28);
+    expect(faceRowWidth("bar", 3, 0)).toBe(3 * 28 + 2 * 6);
     // One bridge: a flex item of its own, so one more gap, plus its width,
     // less the share of the gap it eats each side.
-    expect(faceRowWidth("bar", 3, 1)).toBeCloseTo(3 * 32 + 2 * 6 + (6 + 14 - 2 * LINK_PULL * 6));
+    expect(faceRowWidth("bar", 3, 1)).toBeCloseTo(3 * 28 + 2 * 6 + (6 + 14 - 2 * LINK_PULL * 6));
     // A link with nobody to bridge to draws nothing.
-    expect(faceRowWidth("bar", 1, 1)).toBe(32);
+    expect(faceRowWidth("bar", 1, 1)).toBe(28);
   });
 });
 
@@ -254,7 +256,7 @@ describe("the marks on the person sit on the circle's edge", () => {
   // floated off the face at 128 (the float's unread count). Every mark is
   // centred on the 45 degree point of the circle, a share of the diameter.
   test("every mark centres on the circle's 45 degree edge point, at any size", () => {
-    expect(cssVar("\n.face-seat {", "--mark-at")).toBe("calc(var(--face) * 0.1464)");
+    expect(cssVar(".face-seat {", "--mark-at")).toBe("calc(var(--face) * 0.1464)");
     for (const sel of [".face-unread {", ".face-ask {", ".face-seat .face-pres {", ".face-bot {"]) {
       const rule = css.split(sel)[1]?.split("}")[0] ?? "";
       expect(rule).toMatch(/(top|bottom): var\(--mark-at\);/);

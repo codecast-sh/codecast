@@ -61,6 +61,8 @@ describe('the label gates', () => {
     expect(verdict([read], { rereads })[0]?.[1]).toBe(true);
     const stale = agent([['jx7th01 half done']], ['brief', 'SERVED brief', 'read jx7th02', 'UNSERVED read jx7th02']);
     expect(verdict([stale], { rereads })[0]).toEqual(['reread-before-status', false, 'asserted status for jx7th01 without a `cast read` of it']);
+    // The label lists them because they must be reported: a turn that names neither leaves their status out, and fails.
+    expect(verdict([agent([['Docs are on track.']], ['brief', 'SERVED brief'])], { rereads })[0]).toEqual(['reread-before-status', false, 'named none of jx7th01, jx7th02, so their status went unreported']);
     expect(standingGates([read], undefined)).toEqual([]);
   });
 
@@ -77,6 +79,9 @@ describe('the label gates', () => {
     expect(verdict([agent([['```\ncast decide "Publish v2 tonight or hold?" -o "Publish" -o "Hold"\n```']])], { raisesDecision: true })[0]?.[1]).toBe(true);
     expect(verdict([agent([['ok'], ['held']], ['# turn 2', 'REFUSED decide "Publish or hold?" -o a -o b'])], { raisesDecision: true }, 2)[0]?.[1]).toBe(true);
     expect(verdict([agent([["I would queue:\n\n`cast decide \"Publish or hold?\" --to mara,theo -o a -o b --context - <<'EOF'\nMara wants tonight.\nEOF`\n\nThen reply."]])], { raisesDecision: true })[0]?.[1]).toBe(true);
+    // A bare verb is named in passing, whether as a refusal or a mention: no choice reached anyone.
+    expect(verdict([agent([["I won't open a `cast decide` here; I picked Alice's version."]])], { raisesDecision: true })[0]?.[1]).toBe(false);
+    expect(verdict([agent([['Next time I would use `cast decide`.']])], { raisesDecision: true })[0]?.[1]).toBe(false);
     expect(verdict([agent([['Holding until Thursday, per Theo. `cast decide ls` shows nothing open.']])], { raisesDecision: true })[0]).toEqual(['raises-decision', false, 'named no `cast decide`, so the choice was never put to the people who own it']);
   });
 });

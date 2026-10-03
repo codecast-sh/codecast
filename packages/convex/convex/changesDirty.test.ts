@@ -28,6 +28,7 @@ const modules = {
   "./changes.ts": () => import("./changes"),
   "./changesSchedule.ts": () => import("./changesSchedule"),
   "./changesProse.ts": () => import("./changesProse"),
+  "./changesWeek.ts": () => import("./changesWeek"),
   "./githubWebhooks.ts": () => import("./githubWebhooks"),
   "./sessionInsights.ts": () => import("./sessionInsights"),
   "./teamFeatures.ts": () => import("./teamFeatures"),

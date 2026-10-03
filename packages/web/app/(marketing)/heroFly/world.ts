@@ -85,20 +85,18 @@ const whole = (w: number, h: number): Record<string, Region> => ({ main: { x: 0,
  */
 const PAIR_A_X = 1630;
 const PAIR_DY = 105;
-/** The phone's centre: its own half width (at its zoom) and half the frame's width east of the API worker's edge, so a hold on it leaves the worker just off the page. */
-const PHONE_X = PAIR_A_X + 270 + 640;
-/**
- * Near the API worker's centre, so the pull-back that shows the two together
- * centres both on one line; a little above it, because a full-height phone
- * level with the lowered worker hangs past a phone's box foot as it slides in.
- */
-const PHONE_Y = 55;
-
 /** The film box's inner margin each hold's subject keeps from its edges (stage px). */
 export const FRAME_MARGIN = { desktop: { x: 80, y: 36 }, mobile: { x: 24, y: 56 } } as const;
 
 /** The frame's inner size on a desktop (stage px): the box less its margins. */
 const FILL = { w: STAGE_SIZE.desktop.w - 2 * FRAME_MARGIN.desktop.x, h: STAGE_SIZE.desktop.h - 2 * FRAME_MARGIN.desktop.y };
+/** The phone's zoom: the frame's full height. */
+const PHONE_ZOOM = FILL.h / 620;
+/** The phone's centre: the band's gap (200px) and its own half width (at its zoom) east of the API worker's edge, so the shot of the two together is one window's width. */
+const PHONE_X = PAIR_A_X + 270 + 200 + (300 * PHONE_ZOOM) / 2;
+/** Near the API worker's centre, so the two sit on one line; a little above it, because a full-height phone level with the lowered worker hangs past the box's foot. */
+const PHONE_Y = 55;
+
 /** The zoom that shows a w x h surface filling the frame at the camera's own scale, up to a quarter larger than its px. */
 const fill = (w: number, h: number) => Math.min(1.25, FILL.w / w, FILL.h / h);
 /** The x of a surface `gap` px west of an edge, given its world width. */
@@ -176,10 +174,9 @@ export const SURFACES: Surface[] = [
     id: "pairB", w: 540, h: 340, pos: [PAIR_A_X - 580, -PAIR_DY, -60], rot: [0, -3, 0], radius: 12,
     regions: { header: { x: 0, y: 0, w: 540, h: 44 }, transcript: { x: 0, y: 44, w: 540, h: 296, anchor: "bottom" }, scrim: { x: 0, y: 0, w: 540, h: 340 } },
   },
-  // East of the API worker, level with it, far enough that a hold on the phone shows the phone alone: every move to and from it is a
-  // pan that carries the workers off the side of the page as it slides in, never a window dissolving over another.
+  // East of the API worker, level with it, a band's gap away: the chat is one shot of the phone and the worker it answers.
   {
-    id: "phone", w: 300, h: 620, pos: [PHONE_X, PHONE_Y, -60], rot: [0, -12, -2], radius: 44, frame: "phone", zoom: FILL.h / 620,
+    id: "phone", w: 300, h: 620, pos: [PHONE_X, PHONE_Y, -60], rot: [0, -12, -2], radius: 44, frame: "phone", zoom: PHONE_ZOOM,
     // The whole screen, the status bar's band beside the notch included: the app's header runs under it, as on iOS.
     regions: { main: { x: 0, y: -24, w: 276, h: 596 } },
   },
@@ -230,11 +227,13 @@ export type Hold = {
   pose: Pose;
   /**
    * The windows this hold is about, the only ones it shows. A move shows the
-   * windows of the holds at both ends: the next ones dissolve in as it sets
-   * off and the last ones out as it lands, so the page is never empty between
-   * them (timeline.ts transitOpacity).
+   * windows of the holds at both ends: it carries the next ones in from the
+   * side of the page and the last ones off it, so the page is never empty
+   * between them (timeline.ts transitOpacity).
    */
   sees: SurfaceId[];
+  /** On a phone's narrow frame, where the hold's windows side by side would be too small to read: the one it is about there. */
+  mobileSees?: SurfaceId[];
   /** Applied to the transit that ARRIVES at this hold: extra pull-back (negative dist) and roll at mid-move. */
   crest?: number;
   crestRoll?: number;
@@ -264,11 +263,10 @@ const HOLDS: Hold[] = [
   // 3 Fan out: the lead's window, then the two workers it spawned, side by side.
   { t0: 14.1, t1: 16.5, pose: P(0, 0, 0, 2, 2, 0, 0), sees: ["desk"], drift: true },
   { t0: 18.3, t1: 21.0, pose: P(PAIR_A_X - 290, 0, -60, 0, 4, 0, 0), sees: ["pairA", "pairB"], crest: -300, drift: true },
-  // 4 East past the API worker to the phone, then a pull-back to see it beside the worker it answers (the dashboard worker, west of it, stays out of this shot; it returns for Talk).
-  { t0: 22.6, t1: 25.9, pose: P(PHONE_X, PHONE_Y, -60, 0, 12, 2, 0), sees: ["phone"], crest: -120, crestRoll: 1.5, drift: true },
-  { t0: 27.0, t1: 29.3, pose: P((PAIR_A_X + PHONE_X) / 2, PAIR_DY, -60, 0, 6, 0, 0), sees: ["phone", "pairA"] },
+  // 4 East onto the phone beside the API worker it answers: the question crosses from one to the other, the answer comes back (the dashboard worker, west, is carried off; it returns for Talk). A phone's frame holds on the phone alone.
+  { t0: 22.6, t1: 29.3, pose: P((PAIR_A_X + PHONE_X) / 2, PAIR_DY, -60, 0, 8, 1, 0), sees: ["phone", "pairA"], mobileSees: ["phone"], crest: -120, crestRoll: 1.5, drift: true },
   // 5 Agents talk: west again, the phone carried off the east side as the dashboard worker comes in from the west.
-  { t0: 31.0, t1: 35.7, pose: P(PAIR_A_X - 290, 0, -60, 0, 4, 0, 0), sees: ["pairA", "pairB"], drift: true },
+  { t0: 31.0, t1: 35.4, pose: P(PAIR_A_X - 290, 0, -60, 0, 4, 0, 0), sees: ["pairA", "pairB"], drift: true },
   // 6 Decide: the card over the veiled conversation, face-on.
   { t0: 37.5, t1: 41.8, pose: P(0, 0, 0, 2, -3, 0, 0), sees: ["desk"], crest: -500, crestRoll: 1.5, drift: true },
   // 7 Track: west along the band to the board.
@@ -283,7 +281,7 @@ const HOLDS: Hold[] = [
   { t0: 69.1, t1: 73.9, pose: P(SX.page, 0, -260, 4, 0, 0, 0), sees: ["page"], crest: -400, crestRoll: -1.5, drift: true },
   // 12 Memory: past the "3 weeks later" label to the palette, then the blame.
   { t0: 75.8, t1: 77.9, pose: P(SX.palette, -30, -100, 0, -4, 0, 0), sees: ["palette"], crest: -300, drift: true },
-  { t0: 79.6, t1: 81.3, pose: P(SX.blame, 20, -40, -2, -4, 0, 0), sees: ["blame"], crest: -300, drift: true },
+  { t0: 79.6, t1: 81.1, pose: P(SX.blame, 20, -40, -2, -4, 0, 0), sees: ["blame"], crest: -300, drift: true },
   // 13 Anywhere: back on the whole desk as the cloud worker's row is opened; then the move home to the opening frame for the seam (timeline.ts SEAM).
   { t0: 83.0, t1: DURATION - 2.2, pose: P(0, 0, 0, 2, -2, 0, 0), sees: ["desk"], crest: -300, drift: true },
 ];
@@ -302,8 +300,7 @@ const MOBILE: MobileFraming[] = [
   { align: 0.25, dist: 90 },
   { align: 0.95, dist: 90 },
   { align: 0, yaw: 4, dist: 230 },
-  { dist: -40 },
-  { dist: -1700 },
+  { yaw: 12, dist: -40 },
   { align: 0, yaw: 4, dist: 230 },
   { align: 0.5, dist: 120 },
   { align: 0, dist: 225 },
@@ -381,6 +378,9 @@ function framed(ids: SurfaceId[], start: Pose, mobile: boolean, push: number, si
 
 const pushOf = (h: Hold) => (h.drift ? DRIFT.push : 0);
 
+/** The windows a hold shows in a framing. */
+export const seesOf = (h: Hold, mobile: boolean): SurfaceId[] => (mobile && h.mobileSees) || h.sees;
+
 /**
  * Each transit takes the time its distance needs, so no move crosses the
  * frame faster than a couple of widths a second. The last entry is the
@@ -388,16 +388,17 @@ const pushOf = (h: Hold) => (h.drift ? DRIFT.push : 0);
  */
 export const CAMERA: Hold[] = [...HOLDS, { ...HOLDS[0], t0: DURATION, t1: DURATION, crest: -160 }].map((h, i, all) => {
   const src = i === all.length - 1 ? HOLDS[0] : h;
-  return { ...h, pose: framed(src.sees, src.pose, false, pushOf(src), "fit") };
+  return { ...h, pose: framed(seesOf(src, false), src.pose, false, pushOf(src), "fit") };
 });
 
 export const CAMERA_MOBILE: Partial<Pose>[] = CAMERA.map((h, i) => {
   const src = HOLDS[i % HOLDS.length];
   const { align, ...rest } = MOBILE[i % HOLDS.length];
   // MOBILE's distances are how much larger a surface's own px are shown; a zoomed surface (Surface.zoom) is already that much larger, so the camera stays back by as much.
-  const zoom = src.sees.length === 1 ? (SURFACE_BY_ID[src.sees[0]].zoom ?? 1) : 1;
+  const sees = seesOf(src, true);
+  const zoom = sees.length === 1 ? (SURFACE_BY_ID[sees[0]].zoom ?? 1) : 1;
   if (rest.dist !== undefined) rest.dist = PERSP - (PERSP - rest.dist) * zoom;
-  const pose = framed(src.sees, { ...src.pose, dist: 0, ...rest }, true, pushOf(src), "shrink", align);
+  const pose = framed(sees, { ...src.pose, dist: 0, ...rest }, true, pushOf(src), "shrink", align);
   return { x: pose.x, y: pose.y, z: pose.z, pitch: pose.pitch, yaw: pose.yaw, dist: pose.dist };
 });
 

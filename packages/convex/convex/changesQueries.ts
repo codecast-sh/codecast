@@ -15,7 +15,7 @@
 import { v } from "convex/values";
 import { query } from "./functions";
 import type { Doc, Id } from "./_generated/dataModel";
-import { latestShips, waitingStories, type ShipEvent } from "@codecast/shared/changes";
+import { isoWeekOf, latestShips, waitingStories, weekMonday, type ShipEvent } from "@codecast/shared/changes";
 import { getUserOrToken } from "./lib/auth";
 import { isTeamMember } from "./lib/access";
 import { teamHasFeature } from "./lib/teamFeatureGuard";
@@ -38,6 +38,8 @@ const STORY_PAGE = 600;
 const STORY_PAGE_BYTES = 768 * 1024;
 /** Editions are one small row per day and scope. */
 const EDITION_WINDOW_DAYS = 120;
+/** Week editions one read may return. */
+const EDITION_WINDOW_WEEKS = 20;
 /** A surface exists when it shipped in this window (spec 7.3). */
 const SURFACE_WINDOW_DAYS = 30;
 /** Recent ship events read directly, ahead of the next rebuild folding them into an edition. */
@@ -77,6 +79,14 @@ export function dateWindow(from: string, to: string, maxDays: number): { from: s
   if (!DATE.test(from) || !DATE.test(to)) return null;
   const [lo, hi] = from <= to ? [from, to] : [to, from];
   const floor = addDays(hi, -(maxDays - 1));
+  return { from: lo < floor ? floor : lo, to: hi };
+}
+
+/** A from/to pair of ISO weeks (`2026-W40`), ordered and clamped to `maxWeeks`, or null when malformed. */
+export function weekWindow(from: string, to: string, maxWeeks: number): { from: string; to: string } | null {
+  if (!weekMonday(from) || !weekMonday(to)) return null;
+  const [lo, hi] = from <= to ? [from, to] : [to, from];
+  const floor = isoWeekOf(addDays(weekMonday(hi)!, -7 * (maxWeeks - 1)));
   return { from: lo < floor ? floor : lo, to: hi };
 }
 
@@ -130,7 +140,7 @@ export const listStories = query({
 
 // ── Editions ─────────────────────────────────────────────────────────────
 
-export type EditionRow = Omit<Doc<"digests">, "user_id" | "events" | "model" | "input_tokens" | "output_tokens" | "cost_usd"> & {
+export type EditionRow = Omit<Doc<"digests">, "user_id" | "events" | "model" | "input_tokens" | "output_tokens" | "cost_usd" | "scheduled_id"> & {
   /** When the day was first marked for a rebuild that has not run yet, else null. */
   dirty_since: number | null;
   /** dirty_since is older than STALE_AFTER_MS as of this read. The time moves on without a new read, so a page holding the row compares dirty_since itself. */
@@ -153,7 +163,10 @@ export const listEditions = query({
   },
   handler: async (ctx, args): Promise<EditionRow[] | null> => {
     if (!(await changesReader(ctx, args.team_id, args.api_token))) return null;
-    const window = dateWindow(args.from_date, args.to_date, EDITION_WINDOW_DAYS);
+    // Day editions are keyed by day, week editions by ISO week.
+    const window = args.scope === "week"
+      ? weekWindow(args.from_date, args.to_date, EDITION_WINDOW_WEEKS)
+      : dateWindow(args.from_date, args.to_date, EDITION_WINDOW_DAYS);
     if (!window) return [];
     const repository = repositoryOf(args.repository);
     const rows: Doc<"digests">[] = repository
@@ -169,7 +182,7 @@ export const listEditions = query({
         .query("change_dirty")
         .withIndex("by_key", (q) => q.eq("team_id", args.team_id).eq("repository", d.repository!).eq("date", d.date))
         .first();
-      const { user_id: _u, events: _e, model: _m, input_tokens: _i, output_tokens: _o, cost_usd: _c, ...rest } = d;
+      const { user_id: _u, events: _e, model: _m, input_tokens: _i, output_tokens: _o, cost_usd: _c, scheduled_id: _s, ...rest } = d;
       return { ...rest, dirty_since: dirty?.since ?? null, stale: !!dirty && now - dirty.since > STALE_AFTER_MS };
     }));
   },

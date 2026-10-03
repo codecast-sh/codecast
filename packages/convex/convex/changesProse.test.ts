@@ -208,6 +208,7 @@ const modules = {
   "./changes.ts": () => import("./changes"),
   "./changesSchedule.ts": () => import("./changesSchedule"),
   "./changesProse.ts": () => import("./changesProse"),
+  "./changesWeek.ts": () => import("./changesWeek"),
 };
 
 const REPO = "acme/app";

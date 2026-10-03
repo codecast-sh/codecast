@@ -1,5 +1,6 @@
 import { toast } from "sonner";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
+import { undoAsOne } from "../store/undoActions";
 
 /**
  * File sessions under a label (null removes it). The one sink for the bulk
@@ -15,17 +16,19 @@ export function labelSessions(ids: string[], bucketId: string | null) {
     return;
   }
   let applied = 0;
-  for (const id of ids) {
-    const real = store.getConvexId(id) ?? id;
-    if (!isConvexId(real)) continue;
-    store.assignSessionToBucket(real, bucketId);
-    applied++;
-  }
+  const name = bucketId ? store.buckets[bucketId]?.name : null;
+  undoAsOne(bucketId ? `Labeled ${ids.length} sessions${name ? ` ${name}` : ""}` : `Removed the label from ${ids.length} sessions`, () => {
+    for (const id of ids) {
+      const real = store.getConvexId(id) ?? id;
+      if (!isConvexId(real)) continue;
+      store.assignSessionToBucket(real, bucketId);
+      applied++;
+    }
+  });
   if (applied === 0) {
     toast.error("Session is still being created — try again in a moment");
     return;
   }
   const what = applied === 1 ? "" : ` ${applied} sessions`;
-  const name = bucketId ? store.buckets[bucketId]?.name : null;
   toast.success(bucketId ? `Labeled${what}${name ? ` ${name}` : ""}` : `Label removed${what ? ` from${what}` : ""}`);
 }

@@ -214,8 +214,10 @@ export function OrgPageInner() {
   // `?compose=<text>` (a charter empty state links here) opens the pane and
   // seeds the head of people's composer with the text.
   const composeText = composeParam(searchParams.toString());
-  const [panelMode, setPanelModeState] = useState<OrgPanelMode>(proposalShortId ? "staffing" : "node");
-  const [staffingOpen, setStaffingOpen] = useState(!!proposalShortId);
+  // `?panel=history` (the undo timeline's "Open in org record") opens on the History tab.
+  const historyLink = !proposalShortId && new URLSearchParams(searchParams.toString()).get("panel") === "history";
+  const [panelMode, setPanelModeState] = useState<OrgPanelMode>(proposalShortId ? "staffing" : historyLink ? "history" : "node");
+  const [staffingOpen, setStaffingOpen] = useState(!!proposalShortId || historyLink);
   // `?view=health` is the health page (HealthBoard): the chart in its health
   // mode, each role's week on its card, and the head of people's conversation
   // in its own column. A proposal link wins: the page is the proposal while one is open.

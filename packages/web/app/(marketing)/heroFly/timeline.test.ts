@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { ARCS, FLYERS } from "./motion";
-import { coverage, findJumps, summarise } from "./filmQa";
+import { cardOffset, coverage, findJumps, summarise } from "./filmQa";
 import { project, rotateXYZ, STAGE_SIZE } from "./project";
 import { DROP, SETTLE, SNAP, cameraAt, frame, ghostOpacity, isLive, presence, SEAM_GHOST, typed } from "./timeline";
-import { CAMERA, CAMERA_MOBILE, DURATION, FRAME_MARGIN, SCENES, SURFACES, SURFACE_BY_ID, localToWorld, subjectBox, surfacePt, type Pose, type SurfaceId, type V3 } from "./world";
+import { CAMERA, CAMERA_MOBILE, DURATION, FRAME_MARGIN, SCENES, SURFACES, SURFACE_BY_ID, localToWorld, seesOf, subjectBox, surfacePt, type Pose, type SurfaceId, type V3 } from "./world";
 
 const nums = (s: string | undefined) => (s ?? "").match(/-?\d+(\.\d+)?(e-?\d+)?/g)?.map(Number) ?? [];
 
@@ -82,7 +82,7 @@ describe("hero fly-through timeline", () => {
   });
 
   // Every hold frames its hero surface near scale 1 and near face-on, so text reads crisply.
-  const HERO: (SurfaceId | null)[] = ["desk", "desk", "desk", "pairA", "phone", null, "pairB", "desk", "board", "auto", "team", "pr", "page", "palette", "blame", "desk", null];
+  const HERO: (SurfaceId | null)[] = ["desk", "desk", "desk", "pairA", "phone", "pairB", "desk", "board", "auto", "team", "pr", "page", "palette", "blame", "desk", null];
 
   test("every camera hold has a hero entry and a mobile override", () => {
     expect(HERO.length).toBe(CAMERA.length);
@@ -161,10 +161,9 @@ describe("hero fly-through timeline", () => {
   const PAGE = { desktop: { x0: -700, x1: 1980, h: STAGE_SIZE.desktop.h }, mobile: { x0: -60, x1: 700, h: STAGE_SIZE.mobile.h } };
   function cardCorners(id: SurfaceId, tf: string | undefined, pose: Pose, mobile: boolean) {
     const sf = SURFACE_BY_ID[id];
-    // A card is only ever lowered (a surface's rise) and scaled about its centre (a lift-out).
-    const down = Number(/translate3d\(0px, (-?[\d.e-]+)px, 0px\)/.exec(tf ?? "")?.[1] ?? 0);
-    const k = Number(/scale\((-?[\d.e-]+)\)/.exec(tf ?? "")?.[1] ?? 1);
-    return [[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([lx, ly]) => project(pose, localToWorld(id, (lx * sf.w * k) / 2, (ly * sf.h * k) / 2 + down), mobile));
+    // A card is only ever slid along its width (a move carrying it), lowered (a surface's rise) and scaled about its centre (a lift-out).
+    const { x: slid, y: down, k } = cardOffset(tf);
+    return [[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([lx, ly]) => project(pose, localToWorld(id, (lx * sf.w * k) / 2 + slid, (ly * sf.h * k) / 2 + down), mobile));
   }
 
   for (const mobile of [false, true]) {
@@ -215,7 +214,7 @@ describe("hero fly-through timeline", () => {
     // whole and at full opacity, from the moment the camera lands until it sets off.
     test(`every hold shows its windows whole${mobile ? " (mobile)" : ""}`, () => {
       CAMERA.forEach((h, i) => {
-        const ids = h.sees;
+        const ids = seesOf(h, mobile);
         for (let t = h.t0; t <= h.t1; t += 0.05) {
           for (const id of ids) expect(presence(id, t, mobile).o, `${id} at ${t.toFixed(2)} (hold ${i})`).toBe(1);
         }
@@ -251,7 +250,7 @@ describe("hero fly-through timeline", () => {
         // A hold drifts by a push about the box's centre and a slight turn (DRIFT): it lands and leaves centred too.
         for (const [v, tol] of [[0.5, 3], [0, 8], [1, 8]] as const) {
           const t = hold.t0 + (hold.t1 - hold.t0) * v;
-          const b = subjectBox(hold.sees, cameraAt(t, mobile).pose, mobile)!;
+          const b = subjectBox(seesOf(hold, mobile), cameraAt(t, mobile).pose, mobile)!;
           const [cx, cy] = [(b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2];
           if (Math.abs(cy - h / 2) > tol) bad.push(`hold ${i} at ${t.toFixed(2)}: centre y ${cy.toFixed(1)}`);
           const fits = b.x1 - b.x0 <= w - 2 * m.x + 1;

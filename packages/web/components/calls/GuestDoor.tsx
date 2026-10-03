@@ -3,7 +3,7 @@
 import { useCallback, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Check, Copy, Link2, RefreshCw, UserMinus, X } from "lucide-react";
-import { GUEST_LINK_TTL_MS, guestIdFromIdentity, isGuestIdentity } from "@codecast/shared/contracts";
+import { GUEST_LINK_TTL_MS, guestIdFromIdentity, isGuestIdentity, parseRoomKey } from "@codecast/shared/contracts";
 import { useGuestLinks } from "../../hooks/useGuestLinks";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useMountEffect } from "../../hooks/useMountEffect";
@@ -246,7 +246,21 @@ function GuestInvitePanel({
   };
   const ttlLabel = GUEST_LINK_TTL_CHOICES.find((c) => c.ms === ttl)?.label ?? "7 days";
   // What travels with the link: the guest's page and every unfurl of it.
-  const seenAs = meetingTitle(links[0]?.title ?? null, { name: (mine ?? links[0])?.created_by_public ?? null });
+  // A link carries the server's answer (callGuests.linkTitle and the
+  // creator's public name). Before there is one, the panel says what the
+  // link it is about to make will carry, from the same two facts: a channel
+  // is called by its name, and any other room after whoever invites, which
+  // is the viewer. Without this the line read "A codecast call" until the
+  // first press, and changed under the person once the link existed.
+  const channelName = useInboxStore((st) => {
+    const parsed = parseRoomKey(roomKey);
+    return parsed?.kind === "channel" ? (st.chatChannels as any)?.[parsed.channelId]?.name ?? null : null;
+  });
+  // The server's publicPersonLabel order: a name, else the GitHub handle.
+  const myName = useInboxStore((st) => (st.currentUser as any)?.name?.trim() || (st.currentUser as any)?.github_username || null);
+  const seenAs = links[0]
+    ? meetingTitle(links[0].title ?? null, { name: (mine ?? links[0]).created_by_public ?? null })
+    : meetingTitle(channelName ? `#${channelName}` : null, { name: myName });
 
   return createPortal(
     <div

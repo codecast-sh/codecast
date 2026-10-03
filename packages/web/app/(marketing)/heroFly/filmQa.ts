@@ -5,7 +5,7 @@
  * frames), and no frame of a move leaves the film box near empty.
  */
 
-import { cameraAt, frame, PAGE_X, SEAM_GHOST, type Frame } from "./timeline";
+import { cameraAt, frame, PAGE_SIDE, PAGE_X, SEAM_GHOST, type Frame } from "./timeline";
 import { project, STAGE_SIZE } from "./project";
 import { BEATS, FLYERS } from "./motion";
 import { DURATION, SURFACES, localToWorld, type SurfaceId } from "./world";
@@ -104,24 +104,22 @@ const throughGhost = (fr: Frame, id: string) => {
 
 const CORNERS = SURFACES.map((s) => [[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([lx, ly]) => localToWorld(s.id, (lx * s.w) / 2, (ly * s.h) / 2)));
 
-/** A card's own lift and scale as the frame writes them: `translate3d(0, y, 0)` (a surface's rise) then `scale(k)` about its centre. */
-function cardOffset(tf: string | undefined): { y: number; k: number } {
-  return {
-    y: Number(/translate3d\(0px, (-?[\d.]+)px, 0px\)/.exec(tf ?? "")?.[1] ?? 0),
-    k: Number(/scale\(([\d.]+)\)/.exec(tf ?? "")?.[1] ?? 1),
-  };
+/** A card's own slide, lift and scale as the frame writes them: `translate3d(x, y, 0)` (a move carrying it, a surface's rise) then `scale(k)` about its centre. */
+export function cardOffset(tf: string | undefined): { x: number; y: number; k: number } {
+  const m = /translate3d\((-?[\d.e-]+)px, (-?[\d.e-]+)px, 0px\)/.exec(tf ?? "");
+  return { x: Number(m?.[1] ?? 0), y: Number(m?.[2] ?? 0), k: Number(/scale\(([\d.]+)\)/.exec(tf ?? "")?.[1] ?? 1) };
 }
 
 /** Each shown window's projected corners (stage px), with how shown it is. */
-export function shownRects(t: number, mobile: boolean, f: Frame = frame(t, mobile)) {
+export function shownRects(t: number, mobile: boolean, f: Frame = frame(t, mobile), all = false) {
   const { pose } = cameraAt(t, mobile);
   const out: { id: SurfaceId; o: number; pts: { x: number; y: number }[] }[] = [];
   SURFACES.forEach((s, i) => {
     const o = f.els[`mount:${s.id}`].visible ? (f.els[`face:${s.id}`].opacity ?? 1) : 0;
-    if (o <= 0.02) return;
-    const { y: lift, k } = cardOffset(f.els[`card:${s.id}`].transform);
-    // The card's lift is in the surface's own px (turned and zoomed with it), and its scale is about the surface's centre.
-    const down = localToWorld(s.id, 0, lift).map((v, a) => v - s.pos[a]);
+    if (o <= 0.02 && !all) return;
+    const { x: slid, y: lift, k } = cardOffset(f.els[`card:${s.id}`].transform);
+    // The card's slide and lift are in the surface's own px (turned and zoomed with it), and its scale is about the surface's centre.
+    const down = localToWorld(s.id, slid, lift).map((v, a) => v - s.pos[a]);
     const pts = CORNERS[i].map((c) => {
       const [x, y, z] = [0, 1, 2].map((a) => s.pos[a] + (c[a] - s.pos[a]) * k + down[a]);
       return project(pose, [x, y, z], mobile) ?? { x: NaN, y: NaN };
@@ -148,20 +146,24 @@ export function coverage(t: number, mobile: boolean, f?: Frame): number {
 export type Jump = { t: number; what: string; amount: number; limit: number };
 
 /** Step the film frame by frame and report every change faster than LIMITS. */
-export function findJumps(mobile: boolean, from = 0, to = DURATION): Jump[] {
+export function findJumps(mobile: boolean, from = 0, to = DURATION, side?: number): Jump[] {
   const jumps: Jump[] = [];
   const n = Math.round((to - from) * FPS);
   let prev: Frame | null = null;
   let prevRects: Map<SurfaceId, { o: number; pts: { x: number; y: number }[] }> | null = null;
   let prevVel = new Map<SurfaceId, { x: number; y: number }[]>();
+  let prevOffPage = new Set<SurfaceId>();
   const report = (t: number, what: string, amount: number, limit: number) => {
     if (amount > limit) jumps.push({ t: Math.round(t * 1000) / 1000, what, amount: Math.round(amount * 1000) / 1000, limit });
   };
   for (let k = 0; k <= n; k++) {
     // The loop: the frame after the last is the first.
     const t = Math.min(from + k / FPS, DURATION);
-    const f = frame(t >= DURATION ? 0 : t, mobile);
+    const f = frame(t >= DURATION ? 0 : t, mobile, side);
     const rects = new Map(shownRects(t >= DURATION ? 0 : t, mobile, f).map((r) => [r.id, r]));
+    // Where every window is, shown or not: one that in each of two frames is either wholly beyond the page's sides or not shown at all shows nothing between them, whatever it does there.
+    const [px0, px1] = [-(side ?? PAGE_SIDE[mobile ? "mobile" : "desktop"]), (mobile ? STAGE_SIZE.mobile.w : STAGE_SIZE.desktop.w) + (side ?? PAGE_SIDE[mobile ? "mobile" : "desktop"])];
+    const offPage = new Set(shownRects(t >= DURATION ? 0 : t, mobile, f, true).filter((r) => r.o <= 0.02 || r.pts.every((p) => p.x <= px0) || r.pts.every((p) => p.x >= px1)).map((r) => r.id));
     if (prev && prevRects) {
       const faceOf = (fr: Frame, sid: SurfaceId | null) => (sid ? (fr.els[`mount:${sid}`]?.visible ? (fr.els[`face:${sid}`]?.opacity ?? 1) : 0) : 1);
       const wrapped = t >= DURATION;
@@ -175,6 +177,7 @@ export function findJumps(mobile: boolean, from = 0, to = DURATION): Jump[] {
         if (wrapped && id.startsWith("ghost:")) continue;
         const shown = Math.max(faceOf(prev, sid) * (wrapped && underCopy(id) ? 1 : throughGhost(prev, id)), faceOf(f, sid) * throughGhost(f, id));
         if (shown <= 0.02) continue;
+        if (sid && offPage.has(sid) && prevOffPage.has(sid)) continue;
         if (id.startsWith("mount:")) {
           // Culling a window wholly off the page shows nothing.
           const [x0, x1] = PAGE_X[mobile ? "mobile" : "desktop"];
@@ -212,6 +215,7 @@ export function findJumps(mobile: boolean, from = 0, to = DURATION): Jump[] {
     }
     prev = f;
     prevRects = rects;
+    prevOffPage = offPage;
   }
   return jumps;
 }

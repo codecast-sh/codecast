@@ -18,6 +18,7 @@ import {
   bindUndoStore,
   type DurableCreateContinuation,
 } from "./mutativeMiddleware";
+import { withoutUndo } from "@platform/engine";
 import { adoptWorkspaceSnapshot, createWorkspace, serializeWorkspace, hydrateWorkspace, autoAllowed as wsAutoAllowedPure, isSessionRailOpen, isCommentRailOpen, SESSION_LIST_PANE, TERMINAL_PANE, type PersistedWorkspace, showPane, hidePane, togglePane, setPresentation as wsSetPresentationPure, setSize as wsSetSizePure, type WorkspaceState, type SlotId, type Pane, type Presentation } from "./workspace";
 import { applyWorkbench as applyWorkbenchPure, captureWorkbench, chipFilterOf, resolveWorkbenchFilter, type WorkbenchSnapshot } from "./workbench";
 import { declareViewNav, hasViewNavigated, recordNavEvent, type ViewNavSource } from "./viewNav";
@@ -62,7 +63,7 @@ import { makeCollectionSig } from "./wakeSig";
 import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessage } from "./gestureBridge";
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
-import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, decisionAnswerLabel, hasThreadState, clearedThreadStateFields, isInboxRowField } from "@codecast/shared/contracts";
+import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, clearedThreadStateFields, isInboxRowField } from "@codecast/shared/contracts";
 import { liveFactsOf } from "../lib/liveness";
 // The shared inbox projection (docs/architecture/sync-convergence.md): the
 // working-set selection, fold, fact/stamp field ownership, and the epoch clock.
@@ -6945,8 +6946,9 @@ function resumePostCreateBucketIntentFor(
   }
   // The assignment action is durable and the server upsert is idempotent. Keep
   // the marker until an authoritative (Convex-id-keyed) assignment echo lands,
-  // so a crash between this call and its outbox commit merely retries.
-  store.assignSessionToBucket(convexId, bucketId);
+  // so a crash between this call and its outbox commit merely retries. The
+  // filing replays the create's intent, not a gesture: nothing to undo.
+  withoutUndo(() => store.assignSessionToBucket(convexId, bucketId));
 }
 
 function scheduleResolvedSessionContinuations(
@@ -7564,9 +7566,9 @@ function setProjectFilterHeadInDraft(draft: Draft, name: string | null, path?: s
 }
 
 // The signed-in user, as the gesture bridge stamps it on outbound messages and
-// matches it on inbound ones. Exported for undoActions, whose undo closures
-// broadcast the reverted value (an un-announced undo leaves a sibling holding
-// the pre-undo row — see gestureBridge.ts).
+// matches it on inbound ones. The undo binding (mutativeMiddleware afterReplay)
+// stamps it on the reverted values it broadcasts (an un-announced undo leaves a
+// sibling holding the pre-undo row — see gestureBridge.ts).
 export function bridgeUserId(state: any): string | null {
   return state.currentUser?._id?.toString?.() ?? null;
 }
@@ -8516,7 +8518,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
   }),
   answerDecision: action(function (this: Draft, decisionId: string, answer: DecisionAnswerInput) {
     const row = this.sessionDecisions[decisionId];
-    if (!row || row.status !== "pending") return;
+    // Pending, or an advisory answer a person is changing (advisoryAnswerOpen):
+    // the agent went ahead on its default, so a new pick is one more message.
+    if (!row || (row.status !== "pending" && ("dismiss" in answer || !advisoryAnswerOpen(row)))) return;
     const now = Date.now();
     if ("dismiss" in answer) {
       row.status = "dismissed";
@@ -9430,10 +9434,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
     clear(this.conversations[conversationId]);
   }),
 
-  // Undo restores its full local snapshot in undoActions.ts. This no-op action
-  // carries only the exact authoritative field tombstones/values through the
-  // durable outbox; dispatch.ts applies them with the ordinary validated patch
-  // gate, so a reload cannot lose the undo's server half.
+  // The engine's undo replay (store/undo) writes the prior values through this
+  // action's pipeline, so the draft here stays a no-op: the grouped patches
+  // carry the exact field tombstones/values through the durable outbox, and
+  // dispatch.ts applies them with the ordinary validated patch gate, so a
+  // reload cannot lose the undo's server half.
   applyUndoPatches: action(function (
     _patches: Record<string, Record<string, Record<string, any>>>,
   ) {}),

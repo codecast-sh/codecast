@@ -13,7 +13,7 @@
  * badge (`.face-mute`) are the floating call circles' own (calls/faces.css),
  * because a face is the same element whether it shows a photo or video.
  *
- * Two densities, one stylesheet: the header bar at 32px and the floating
+ * Two densities, one stylesheet: the header bar at 28px and the floating
  * window at 64px, or the bigger size the person picked (FaceRow writes
  * `--face` on the row; every size below is a share of it). The numbers below are mirrored in FACE_ROW_METRICS
  * (FaceRow.tsx), which the layout test holds against this file.
@@ -25,11 +25,11 @@
 @property --face {
   syntax: "<length>";
   inherits: true;
-  initial-value: 32px;
+  initial-value: 28px;
 }
 
 .face-row {
-  --face: 32px;
+  --face: 28px;
   --face-gap: 6px;
   --link-w: 14px;
   position: relative;
@@ -151,8 +151,9 @@
   border-bottom-left-radius: 14px;
   border-bottom-right-radius: 14px;
 }
-/* The member card is the head of the paper card, not a card of its own. */
-.face-row[data-density="float"] .face-row-below [data-member-card] {
+/* The face's card (a member's or a guest's) is the head of the paper card,
+   not a card of its own. */
+.face-row[data-density="float"] .face-row-below .face-card {
   --lead: 0px;
   margin: 0;
   border: 0;
@@ -161,7 +162,7 @@
   background: transparent;
   animation: none;
 }
-.face-row[data-density="float"] .face-row-below [data-member-card]::before {
+.face-row[data-density="float"] .face-row-below .face-card::before {
   display: none;
 }
 
@@ -288,8 +289,9 @@
 .face-row .face-seat[data-stacked] .face::after {
   opacity: 0.5;
 }
-/* The header's circles are 32px: at the float's share they read as dots,
-   so the bar's stack keeps more of its size and less of the veil. */
+/* The header's circles are 28px, the top bar's one control height: at the
+   float's share they read as dots, so the bar's stack keeps more of its size
+   and less of the veil. */
 .face-row[data-density="bar"] {
   --face-stacked: calc(var(--face) * 0.72);
 }
@@ -376,9 +378,10 @@
   height: 55%;
 }
 /* The float's others (FaceRow): everyone off the call folds behind one small
-   quiet circle after the strip. A folded seat keeps its full room, so the
-   window measured from the row is the same size open or folded and never
-   moves; it only fades, a beat after its neighbour, and takes no click. */
+   quiet circle after the strip, at half the call's size (floatOffCallFace).
+   A folded seat keeps its room, so the window measured from the row is the
+   same size open or folded and never moves; it only fades, a beat after its
+   neighbour, and takes no click. */
 .face-row[data-density="float"] .face-seat[data-folded] {
   opacity: 0;
   pointer-events: none;

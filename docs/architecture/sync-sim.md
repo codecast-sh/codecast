@@ -176,7 +176,7 @@ Every `settle()`, every point check, and the end of every run check the whole ca
 | `INV-pending-sends` (always: uniqueness) | every send bubble is echoed, settled or failed, and each `client_id` is on at most one `pending_messages` row | server rows |
 | `INV-chat` (always: dedupe and caps) | the chat replica equals `chat:listMessages`, each mention wakes its target once, and the hourly wake caps hold | `MENTION_WAKES_PER_*_HOUR`, `hourBucket` |
 | `INV-roles` | each role's mention wake counter equals the wakes enqueued for it, and `listAnchors` equals `visibleAnchorsForUser` | `anchors.ts`, chat quota rows |
-| `INV-ping-pong` | agent to agent wakes per virtual hour stay under the mention caps, per sender and per target | `pending_messages` rows |
+| `INV-ping-pong` | agent to agent wakes per virtual hour stay under the mention caps, per sender (the person for a mention, the replying session for a relayed reply) and per target | `pending_messages` rows |
 | `INV-row-shape` | every sessions row holds only the inbox row's fields (`INBOX_ROW_FIELDS` plus the facts), or a field a pending local write holds | `INBOX_ROW_FIELDS`, pinned by a convex test to what the feeders write |
 | `INV-fixpoint` | re-running every mounted feeder, one catch-up and a byIds pass over every held id changes nothing | the feeders themselves |
 
@@ -230,17 +230,18 @@ A red scenario reproduces a bug we have today. Each test holds its run to the sc
 - **`red` markers** name the failures a run ends in. A run a marker covers must stop on a `SimFailure` whose invariant (or point check) the marker names; its report header then reads `sim failure (expected, red: <task>)`. A harness error, a timeout, or a failure on an invariant no marker names fails the test as it is. A run that passes fails with `red scenario "<name>" now passes; it was marked to fail on <invariant> (<task>). Remove those red: markers and close <task>`. A marker with `modes` or `seeds` covers only those runs (an order replay matches any mode); every other run must pass.
 - **`known` invariants** are left out of every run, so a run reaches the scenario's own checks past a bug that trips first. Each scenario with `known` registers one more test, its first run with nothing left out (`..., nothing left out (known: <task>)`), which must fail on a known invariant. Once the bug is fixed that test fails with `scenario "<name>" no longer fails on <invariant> (<task>) with nothing left out; remove them from known: and close <task>`. So a scenario cannot quietly weaken itself, and fixing a known bug flips every scenario that names it.
 
-Every marker below is what the default runs actually hit (measured 2026-10-02, after ct-56011, ct-56048, ct-56050, ct-56051 and ct-56053 landed):
+Every marker below is what the default runs actually hit (measured 2026-10-02, after ct-56011, ct-56044, ct-56045, ct-56047, ct-56048, ct-56050, ct-56051 and ct-56053 landed):
 
 | Scenario | What it drives | Red | Known |
 |---|---|---|---|
 | `visibilityFlip` | ada shares a private session with acme and takes it back; bo's team slot and the linked task follow | none | none |
-| `viewerHideVsOwner` | bo hides ada's team-visible session while ada's daemon settles it | ct-56045 on `expect.shows`, interleave seed 239423: bo's floor probe prunes the team row with a durable exclude | none |
+| `viewerHideVsOwner` | bo hides ada's team-visible session while ada's daemon settles it | none | none |
 | `reapVsFollowerLock` | a follower kills an empty session, the daemon heartbeats, the gc reaps the row | none | none |
 | `queuedSendVsLaggingTail` | ada sends while her transcript tail lags; the daemon delivers twice | none | none |
 | `roleTriggerScope` | a session filed under a role settles `permission_blocked` twice with a working turn between | none | none |
-| `agentPingPong` | two agent sessions mention each other in a thread for an hour | ct-56047 on `INV-ping-pong`: the mention-reply relay bypasses the hourly caps | none |
-| `personalAnchorOwnedByTeammate` | bo, a second owner of ada's personal standing session, pins and kills it | ct-56044 on `INV-pending-locks`: co-owner locks never retire (sync-log fan-out reaches the runner only) | none |
+| `agentPingPong` | two agent sessions mention each other in a thread for an hour | none | none |
+| `agentPingPongOwnSessions` | one session names six of its owner's sessions in a thread and each answers | none | none |
+| `personalAnchorOwnedByTeammate` | bo, a second owner of ada's personal standing session, pins and kills it | none | none |
 | `twoHumansOneRole` | ada and bo tell one role something 200ms apart, in both orders | none | none |
 | `memberRemovedMidTurn` | bo is removed from acme while offline, then kills a session he can no longer read | none | INV-fixpoint: ct-56354 (a task's first byIds adds the comments the task list never carries) |
 | `resumeVsSend` | a send and a resume race on two parked sessions | none | none |
@@ -248,7 +249,7 @@ Every marker below is what the default runs actually hit (measured 2026-10-02, a
 
 Sweeps have also found ct-56054 (the overlay ships the derived agent_status as the fact) on sweep seeds of `queuedSendVsLaggingTail` and `resumeVsSend`. A sweep widens the seeds past the markers, so those runs fail as unexpected, which is what a sweep is for.
 
-Red list item 8 (a teammate's paste over 2KB into a live pane under load) needs a real terminal client, so it is not a sim scenario. It lives in `packages/cli/src/daemon.inject-cross-user-paste.e2e.test.ts`: the server's own send, claim and echo-ack code (on the fake db) around a real Claude Code pane (the matrix harness's `spawnClientPane`, with this machine's cached remote flags so the paste is wrapped in `<pasted_content>`, against a fake model endpoint), idle and mid-turn, in the classic and fullscreen renderers, with every core loaded by `yes` (`test-helpers/cpuLoad.ts`). It asserts one transcript turn, one ack, a verified receipt, at most one paste chip, and that a retry of the same delivery writes nothing. It self-skips without `tmux` or `claude`, so CI never runs it; run it with `bun test src/daemon.inject-cross-user-paste.e2e.test.ts` from `packages/cli`.
+Red list item 8 (a teammate's paste over 2KB into a live pane under load) needs a real terminal client, so it is not a sim scenario. It lives in `packages/cli/src/daemon.inject-cross-user-paste.e2e.test.ts`: the server's own send, claim and echo-ack code (on the fake db) around a real Claude Code pane (the matrix harness's `spawnClientPane`, with this machine's cached remote flags so the paste is wrapped in `<pasted_content>`, against a fake model endpoint), idle and mid-turn, in the classic and fullscreen renderers, with every core loaded by `yes` (`test-helpers/cpuLoad.ts`). It asserts one transcript turn, one ack, a verified receipt, exactly one paste chip, one `<pasted_content>` wrapper when this machine's cached flags turn the wrapper on, and that a retry of the same delivery writes nothing. It loads every core for minutes, so it runs only on request: `CODECAST_PASTE_E2E=1 bun test src/daemon.inject-cross-user-paste.e2e.test.ts` from `packages/cli` (it also skips without `tmux` or `claude`, so CI never runs it).
 
 `bun run sim --list` prints the current markers. To add a red scenario: run it, file a task under pl-810 with the report block and the `--order` line, add `red: { task: "<ct-id>", invariant: "<id the report names>" }` (with `modes` and `seeds` when only some runs reach it), rerun to confirm the report header reads `(expected, red: <ct-id>)`, and finish with `bun run sim <name> --sweep 20` to show no harness errors across seeds.
 

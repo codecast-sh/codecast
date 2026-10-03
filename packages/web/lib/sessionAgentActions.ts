@@ -2,6 +2,7 @@ import { captureException } from "@sentry/react";
 import type { ConvexAgentType } from "@codecast/shared/contracts";
 import { isConvexId, type InboxSession, useInboxStore } from "../store/inboxStore";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
+import { withoutUndo } from "../store/undoStack";
 
 export async function switchSessionAgent(
   session: Pick<InboxSession, "_id" | "agent_type">,
@@ -22,7 +23,8 @@ export async function switchSessionAgent(
   } catch (error) {
     if (isParkedDispatchError(error)) return;
     captureException(error);
-    useInboxStore.getState().setConversationAgent(id, previousAgentType);
+    // The switch failed: taking back our own stamp is not an undoable change.
+    withoutUndo(() => useInboxStore.getState().setConversationAgent(id, previousAgentType));
     throw error;
   }
 }

@@ -437,7 +437,7 @@ export const INVARIANTS: readonly Invariant[] = [
     keys: [],
     on: "world",
     async check(world) {
-      const agentLines = new Set(tableRows(world, "chat_messages").filter((m) => m.origin === "agent").map((m) => String(m._id)));
+      const agentLines = new Map(tableRows(world, "chat_messages").filter((m) => m.origin === "agent").map((m) => [String(m._id), m]));
       // From a session: a session's own send, or a chat wake carrying an agent's
       // line, either its mention or its reply relayed to the session that
       // mentioned it (lib/chatWakeIds).
@@ -450,7 +450,13 @@ export const INVARIANTS: readonly Invariant[] = [
         const id = String(rs[0].conversation_id);
         out.push({ message: `${rs.length} agent wakes into one session in hour ${k}, over ${MENTION_WAKES_PER_TARGET_HOUR}`, row: { table: "conversations", id, server: await serverRow(world, id), replica: null } });
       }
-      for (const [k, rs] of overCap(fromAgent, (r) => `${hourOf(r)} ${r.from_user_id}`, MENTION_WAKES_PER_SENDER_HOUR)) {
+      // The sender the server charges (chat.ts reserveMentionWakeCaps): the
+      // person for a mention, the replying session for a relayed reply.
+      const senderOf = (r: Row) => {
+        const relayed = typeof r.client_id === "string" ? agentLines.get(parseChatRelayClientId(r.client_id) ?? "") : undefined;
+        return relayed?.origin_session_id ? `${r.from_user_id}:${relayed.origin_session_id}` : String(r.from_user_id);
+      };
+      for (const [k, rs] of overCap(fromAgent, (r) => `${hourOf(r)} ${senderOf(r)}`, MENTION_WAKES_PER_SENDER_HOUR)) {
         out.push({ message: `${rs.length} agent wakes from one sender in hour ${k}, over ${MENTION_WAKES_PER_SENDER_HOUR}`, row: { table: "users", id: String(rs[0].from_user_id), server: null, replica: null } });
       }
       return out;

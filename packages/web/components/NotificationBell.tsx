@@ -35,7 +35,7 @@ export const NotificationBellButton = forwardRef<
           />
         </svg>
         {unreadCount !== undefined && unreadCount > 0 && (
-          <span className="absolute -top-1 -right-1.5 inline-flex items-center justify-center px-1 py-0.5 text-[10px] font-bold leading-none text-white bg-sol-orange rounded-full min-w-[16px] ring-2 ring-sol-bg">
+          <span className="absolute -top-0.5 -right-1 inline-flex h-3.5 min-w-[14px] items-center justify-center rounded-full bg-sol-orange px-[3px] text-[9px] font-semibold leading-none tabular-nums text-white ring-2 ring-sol-bg">
             {unreadCount > 9 ? '9+' : unreadCount}
           </span>
         )}

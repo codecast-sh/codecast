@@ -253,7 +253,11 @@ export type UndoCtx = {
 export type UndoSpec = {
   /** null = do not record this call. */
   label: (ctx: UndoCtx) => string | null;
-  /** Overrides the store-derived server half. */
+  /**
+   * Overrides the store-derived server half. Derive the invocations from
+   * `ctx.changes`: a partial undo asks again with the skipped rows taken out,
+   * and refuses whole if an invocation still names one.
+   */
   inverse?: (ctx: UndoCtx) => Invocation[] | null;
   ignoreFields?: readonly string[];
   /** Restore view fields if the view has not moved since. */
@@ -263,7 +267,7 @@ export type UndoSpec = {
   coalesce?: boolean;
   /** A display-only history item (org); never on the stack. */
   external?: string;
-  /** Blind keyboard undo skips it with a notice; the toast and the timeline may undo it. */
+  /** Blind keyboard undo stops at it with a notice; only the toast and the timeline may undo it. */
   confirm?: boolean;
 };
 
@@ -271,6 +275,13 @@ export type UndoWriter = {
   fields?: (id: string, fields: Record<string, unknown>, row: any, state: any) => Invocation[];
   restoreRow?: (id: string, row: any, state: any) => Invocation[];
   removeRow?: (id: string, row: any, state: any) => Invocation[];
+  /**
+   * How the server stores a field it cannot unset once set (a cleared task
+   * assignee is stored as ""). An undo that takes such a field back to unset
+   * restores this value instead, so the row is what the server will echo and
+   * the replay's lock retires on that echo.
+   */
+  clears?: Readonly<Record<string, unknown>>;
 };
 
 export type UndoOutcome =
@@ -300,6 +311,8 @@ export type UndoEntry = {
   confirm?: boolean;
   /** Outbox ids of this entry's own undo dispatches (a refused one puts the entry back). */
   replayOutboxIds?: string[];
+  /** Which way those dispatches went: the stack the replay put the entry on. */
+  replayDir?: "undo" | "redo";
 };
 
 export type UndoConfig = {

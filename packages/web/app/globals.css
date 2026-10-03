@@ -1099,6 +1099,22 @@ html[data-idle] *::after {
   background: var(--beacon);
   animation: ccBeaconDot 2s ease-in-out infinite;
 }
+/* The message rail's "you are here" tick: brighter, longer, and breathing a
+   soft glow so it reads at a glance among the dim ticks. */
+.cc-rail-here {
+  width: 1.5rem;
+  height: 3px;
+  background: var(--sol-text);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--sol-text) 55%, transparent);
+  animation: ccRailHere 2.4s ease-in-out infinite;
+}
+@keyframes ccRailHere {
+  0%, 100% { opacity: 0.85; box-shadow: 0 0 3px color-mix(in srgb, var(--sol-text) 35%, transparent); }
+  50% { opacity: 1; box-shadow: 0 0 8px color-mix(in srgb, var(--sol-text) 65%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cc-rail-here { animation: none; }
+}
 @keyframes ccBeaconDot {
   0%, 100% { opacity: 0.35; }
   50% { opacity: 1; }
@@ -3953,7 +3969,7 @@ pre[class*="language-"] {
 }
 
 .minimal-style [data-cc-topbar-search] input {
-  height: 32px;
+  height: 28px;
   min-height: 0;
   border-color: transparent;
   border-radius: 9px;
@@ -4004,6 +4020,17 @@ pre[class*="language-"] {
 .minimal-style [data-cc-topbar] .people-bar {
   gap: 2px;
   padding-inline: 3px;
+}
+
+/* Below 1024px the row cannot hold faces, status and controls at once. The
+   people row steps aside unless something is live on it (a call, a ring),
+   and the status tray keeps only an alert, as Minimal does at every width. */
+@media (max-width: 1023px) {
+  [data-cc-topbar] .people-bar:not([data-live], [data-floating]),
+  [data-cc-topbar-tray]:not(:has([data-topbar-chip="alert"])),
+  [data-cc-topbar-tray] > :not([data-topbar-chip="alert"], :has([data-topbar-chip="alert"])) {
+    display: none !important;
+  }
 }
 
 /* Text fields show focus with their caret and container, never a ring. */
@@ -4603,8 +4630,8 @@ pre[class*="language-"] {
 .minimal-style [data-sv-convhead] [data-cc-conv-actions] > :not([data-cc-keep]),
 .minimal-style [data-sv-convhead] [data-cc-conv-actions] [data-huddle-idle],
 .minimal-style [data-cc-topbar] .people-bar:not([data-live], [data-floating]),
-.minimal-style [data-cc-topbar-actions] > [data-cc-topbar-group]:first-child,
-.minimal-style [data-cc-topbar-actions] > [data-cc-topbar-group]:first-child + div,
+.minimal-style [data-cc-topbar-tray]:not(:has([data-topbar-chip="alert"])),
+.minimal-style [data-cc-topbar-tray] > :not([data-topbar-chip="alert"], :has([data-topbar-chip="alert"])),
 .minimal-style [data-sv-rail] [data-sv-label-chips]:not(:has([aria-pressed="true"])) {
   display: none !important;
 }
@@ -6458,7 +6485,8 @@ mark.search-hit[data-search-active] {
   .chg-grid { grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: 32px; }
   .chg-span-12 { grid-column: 1 / -1; }
   .chg-span-8 { grid-column: 1 / span 8; }
-  .chg-works { grid-column: 9 / span 4; grid-row: 2 / span 2; }
+  /* Beside the main column, one cell, so no other region's presence moves it. */
+  .chg-works { grid-column: 9 / span 4; grid-row: 2; }
   .chg-sections { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .chg-standfirst { max-width: calc(8 / 12 * 100%); }
 }

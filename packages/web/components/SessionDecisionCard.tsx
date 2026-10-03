@@ -272,9 +272,16 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
       if (!action) return;
       // Outside the queue, a folded card must not claim the thread's keys:
       // j/k/digits belong to the conversation until the card owns the pane.
+      // Only a blocking ask comes back on a key: an advisory one never
+      // interrupts, and raising it on the thread's own j would put its
+      // answers one digit away from a reader who never opened it.
       if (!stepper && !full && action.kind !== "commit-free-text" && action.kind !== "close-free-text") {
-        if (action.kind !== "full") return;
+        if (action.kind !== "full" || !item.blocking) return;
       }
+      // An answer, a dismissal or a typed answer is the card's only while it
+      // is the thing in focus: a digit typed into anything else in this
+      // window (another pane, a tab an agent drives) never answers it.
+      if ((action.kind === "answer" || action.kind === "dismiss" || action.kind === "open-free-text") && !rootRef.current?.contains(document.activeElement)) return;
       e.preventDefault();
       e.stopPropagation();
       switch (action.kind) {
@@ -297,7 +304,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
     // list navigation and would eat them first.
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [options, answer, answerFreeText, otherText, openSession, onSkip, dismiss, onExit, full, stepper, isPermissionCard, isInfraDialog, richControls, shrink, grow]);
+  }, [options, answer, answerFreeText, otherText, openSession, onSkip, dismiss, onExit, full, stepper, item.blocking, isPermissionCard, isInfraDialog, richControls, shrink, grow]);
 
   const answerRich = useCallback((input: Parameters<typeof answerDecision>[1]) => {
     if (!item.decisionId) return;
@@ -489,7 +496,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
         </div>
       )}
       {richControls && decisionRow && (
-        <DecisionAnswerControls decision={decisionRow} onAnswer={answerRich} keys />
+        <DecisionAnswerControls decision={decisionRow} onAnswer={answerRich} keys keyScope={rootRef} />
       )}
       {!isInfraDialog && !richControls && (
         <div className="space-y-2">

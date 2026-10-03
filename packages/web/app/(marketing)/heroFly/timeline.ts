@@ -17,6 +17,7 @@ import {
   SURFACE_BY_ID,
   SURFACES,
   localToWorld,
+  seesOf,
   type Beat,
   type Flyer,
   type Hold,
@@ -162,7 +163,7 @@ function solveCrests(mobile: boolean): number[] {
   const h = boxH(mobile);
   return CAMERA.slice(0, -1).map((hold, i) => {
     const next = CAMERA[i + 1];
-    const ids = [...new Set([...hold.sees, ...next.sees])];
+    const ids = [...new Set([...seesOf(hold, mobile), ...seesOf(next, mobile)])];
     const span = next.t0 - hold.t1;
     const steps = Math.max(24, Math.ceil(span * 40));
     // How many sampled frames would show a window across the top or bottom, over the part of the move a pull-back reaches (at least half of it applied).
@@ -172,9 +173,9 @@ function solveCrests(mobile: boolean): number[] {
         const u = k / steps;
         if (Math.sin(Math.PI * camEase(u)) < 0.5) continue;
         const at = projector(transitPose(i, u, mobile, crest), mobile);
+        // A window either end is about is shown whenever it reaches the page (transitOpacity), so every one of them counts.
         for (const id of ids) {
-          if (transitOpacity(id, hold.t1 + u * span) <= 0.01) continue;
-          const b = bounds(cornersAt(SURFACE_INDEX[id], hold.t1 + u * span), at);
+          const b = bounds(CORNERS_OF[SURFACE_INDEX[id]], at);
           if (b && (b.x1 <= px0 || b.x0 >= px1)) continue;
           if (!b || b.y0 < EDGE_CLEAR + CREST_CLEAR || b.y1 > h - EDGE_CLEAR - CREST_CLEAR) n++;
         }
@@ -243,33 +244,197 @@ const FADE_IN = 0.35;
 const FADE_OUT = 0.45;
 
 /**
+ * How far the page reaches beyond either side of the box, in stage px, when
+ * the driver has not said (tests, the prerender): a 2560px screen's. The
+ * driver passes the visitor's own (HeroFlythrough `side`), so a window's
+ * fade always happens beyond the page they can actually see.
+ */
+export const PAGE_SIDE = { desktop: 700, mobile: 60 } as const;
+const sideOf = (mobile: boolean, side?: number) => side ?? PAGE_SIDE[mobile ? "mobile" : "desktop"];
+
+/**
+ * How a move brings in and takes away the windows only one of its ends is
+ * about, per framing and page width, solved once each on first use.
+ *
+ * A window arriving is carried in from beyond the side of the page: if the
+ * pan alone would have it on the page as the move sets off (the band keeps
+ * neighbours close, so the page is never empty mid-move), it starts slid out
+ * along its own width to just past the page's edge (`dx`, in its own px) and
+ * eases into its place by SLIDE of the move, coming on with the pan. A window
+ * leaving is taken off the same way, sliding out over the last SLIDE of the
+ * move when the pan alone would leave it on the page as the move lands.
+ * Either way its fade (`from` to `to`) happens wholly beyond the page's edge,
+ * where nobody sees it: a window is opaque whenever any of it is on the page.
+ */
+type Passage = { dx: number; from: number; to: number; u0: number; u1: number };
+const PASSAGES = new Map<string, Partial<Record<SurfaceId, Passage>>[]>();
+/** Room kept past the page's edge, as a share of the window's width: its shadow's spread and a little more. */
+const EDGE_PAD = 0.08;
+const TOUCH_GAP = 0.02;
+/**
+ * The share of a move a carried window's slide takes, on the camera's own
+ * ease: an arriving one is in place a little before the camera lands and a
+ * leaving one sets off a little after it, so the two meet in the middle of
+ * the move rather than leaving it bare.
+ */
+const SLIDE = 0.75;
+/**
+ * The widest page (stage px beyond either side of the box) a move clears
+ * before it lets a window fade: about a 1440px laptop's. On a wider screen
+ * the fade happens beyond that, far out at the page's sides, because
+ * carrying windows clear of a 2560px page leaves the middle of every move
+ * bare.
+ */
+const CLEAR_SIDE_MAX = 460;
+/** Room (stage px) a window carried in or off keeps from the box's top and bottom while any of it is on the page. */
+const TALL_CLEAR = 4;
+
+/** A surface's corners in world space, slid `dx` of its own px along its width and lowered `down`. */
+function cornersMoved(id: SurfaceId, dx: number, down: number): V3[] {
+  const s = SURFACE_BY_ID[id];
+  if (Math.abs(dx) < 0.001 && down <= 0.001) return CORNERS_OF[SURFACE_INDEX[id]];
+  return CORNERS.map(([lx, ly]) => localToWorld(id, (lx * s.w) / 2 + dx, (ly * s.h) / 2 + down));
+}
+
+function passagesFor(mobile: boolean, side: number): Partial<Record<SurfaceId, Passage>>[] {
+  const key = `${mobile ? "m" : "d"}:${Math.round(Math.min(side, CLEAR_SIDE_MAX))}`;
+  const hit = PASSAGES.get(key);
+  if (hit) return hit;
+  const w = mobile ? STAGE_SIZE.mobile.w : STAGE_SIZE.desktop.w;
+  const reach = Math.min(side, CLEAR_SIDE_MAX);
+  const [px0, px1] = [-reach, w + reach];
+  const crests = crestsFor(mobile);
+  const out = CAMERA.slice(0, -1).map((h, i) => {
+    const next = CAMERA[i + 1];
+    const span = next.t0 - h.t1;
+    const at = (u: number) => projector(transitPose(i, clamp(u), mobile, crests[i]), mobile);
+    const boxOf = (id: SurfaceId, u: number, dx: number) => bounds(cornersMoved(id, dx, 0), at(u));
+    const boxH = mobile ? STAGE_SIZE.mobile.h : STAGE_SIZE.desktop.h;
+    const padOf = (b: Bounds) => (b.x1 - b.x0) * EDGE_PAD;
+    const onPage = (b: Bounds | null) => !b || (b.x1 + padOf(b) > px0 && b.x0 - padOf(b) < px1);
+    /** The slide (own px) that puts a window just past the page's edge on its own side at u, or 0 when it is past it already. */
+    const clearAt = (id: SurfaceId, u: number) => {
+      const b = boxOf(id, u, 0);
+      if (!b || !onPage(b)) return 0;
+      const dir = (b.x0 + b.x1) / 2 >= w / 2 ? 1 : -1;
+      let [lo, hi] = [0, 6000];
+      for (let r = 0; r < 30; r++) {
+        const mid = (lo + hi) / 2;
+        if (onPage(boxOf(id, u, dir * mid))) lo = mid;
+        else hi = mid;
+      }
+      return dir * hi;
+    };
+    const passages: Partial<Record<SurfaceId, Passage>> = {};
+    const steps = Math.max(40, Math.ceil(span * 120));
+    const [hs, ns] = [seesOf(h, mobile), seesOf(next, mobile)];
+    for (const id of new Set([...hs, ...ns])) {
+      const [a, b] = [hs.includes(id), ns.includes(id)];
+      if (a && b) continue;
+      const arriving = b;
+      // A window that would reach past the box's top or bottom while on the page (near a move's end the camera is too close for a tall one) is held beyond the page's edge until the camera has drawn back, or taken off before it closes in.
+      const tall = (bx: Bounds | null) => !!bx && onPage(bx) && (bx.y0 < EDGE_CLEAR + TALL_CLEAR || bx.y1 > boxH - EDGE_CLEAR - TALL_CLEAR);
+      const { fadeIn = FADE_IN, fadeOut = FADE_OUT } = SURFACE_BY_ID[id];
+      // When it may come onto the page (arriving) or must be off it (leaving), and the part of the move its slide takes.
+      let [wait, by] = [0, 1];
+      if (arriving) {
+        for (let k = steps; k >= 0; k--) if (tall(boxOf(id, k / steps, 0))) { wait = Math.min(0.75, (k + 1) / steps); break; }
+      } else {
+        for (let k = 0; k <= steps; k++) if (tall(boxOf(id, k / steps, 0))) { by = Math.max(0.25, (k - 1) / steps); break; }
+      }
+      let dx = 0;
+      let [u0, u1] = [0, 1];
+      const slideAt = (u: number) => dx * (arriving ? 1 - camEase(clamp((u - u0) / (u1 - u0))) : camEase(clamp((u - u0) / (u1 - u0))));
+      // Slid out along its width, a turned window's far edge comes nearer the eye: wait (or leave) a step longer until the slid path stays inside the box's height too.
+      for (let round = 0; round < 40; round++) {
+        [u0, u1] = arriving ? [wait, wait + (1 - wait) * SLIDE] : [by * (1 - SLIDE), by];
+        // Far enough to be past the page's edge for as long as it waits there, and for at least its own fade, which happens there.
+        dx = 0;
+        const [held, gone] = [Math.max(wait, fadeIn / span), Math.min(by, 1 - fadeOut / span)];
+        for (let k = 0; k <= 8; k++) {
+          const c = clearAt(id, arriving ? (held * k) / 8 : gone + ((1 - gone) * k) / 8);
+          if (Math.abs(c) > Math.abs(dx)) dx = c;
+        }
+        let crossed = false;
+        for (let k = 0; k <= steps && !crossed; k++) crossed = tall(boxOf(id, k / steps, slideAt(k / steps)));
+        if (!crossed) break;
+        if (arriving) wait = Math.min(0.75, wait + 0.02);
+        else by = Math.max(0.25, by - 0.02);
+      }
+      const shownAt = (u: number) => onPage(boxOf(id, u, slideAt(u)));
+      // The moment between u0 and u1 where the window crosses the page's edge.
+      const edge = (u0: number, u1: number) => {
+        const s0 = shownAt(u0);
+        for (let r = 0; r < 24; r++) {
+          const mid = (u0 + u1) / 2;
+          if (shownAt(mid) === s0) u0 = mid;
+          else u1 = mid;
+        }
+        return h.t1 + ((u0 + u1) / 2) * span;
+      };
+      if (arriving) {
+        let k = 0;
+        while (k <= steps && !shownAt(k / steps)) k++;
+        const to = k === 0 ? h.t1 + fadeIn : k > steps ? next.t0 : Math.max(h.t1 + 1e-3, edge((k - 1) / steps, k / steps) - TOUCH_GAP);
+        passages[id] = { dx, u0, u1, from: k === 0 ? h.t1 : Math.max(h.t1, to - fadeIn), to };
+      } else {
+        let k = steps;
+        while (k >= 0 && !shownAt(k / steps)) k--;
+        const from = k === steps ? next.t0 - fadeOut : k < 0 ? h.t1 : Math.min(next.t0 - 1e-3, edge((k + 1) / steps, k / steps) + TOUCH_GAP);
+        passages[id] = { dx, u0, u1, from, to: Math.min(next.t0, from + fadeOut) };
+      }
+    }
+    return passages;
+  });
+  PASSAGES.set(key, out);
+  return out;
+}
+
+/** The move under way at t: its index, how far through it is, and the hold it leaves and the one it reaches. */
+function moveAt(t: number): { i: number; u: number; h: Hold; next: Hold } | null {
+  for (let i = 0; i + 1 < CAMERA.length; i++) {
+    const [h, next] = [CAMERA[i], CAMERA[i + 1]];
+    if (t > h.t1 && t < next.t0) return { i, u: (t - h.t1) / (next.t0 - h.t1), h, next };
+  }
+  return null;
+}
+
+/** How far a window is slid along its width at t (own px) while a move carries it in or takes it off. */
+function slideOf(id: SurfaceId, t: number, mobile = false, side?: number): number {
+  const m = moveAt(t);
+  if (!m) return 0;
+  const p = passagesFor(mobile, sideOf(mobile, side))[m.i][id];
+  if (!p || p.dx === 0) return 0;
+  const k = camEase(clamp((m.u - p.u0) / (p.u1 - p.u0)));
+  return seesOf(m.next, mobile).includes(id) ? p.dx * (1 - k) : p.dx * k;
+}
+
+/**
  * Opacity of a surface across the camera's path. A hold shows only the
  * surfaces it is about, so nothing sits idle at the page's edges while a
- * chapter holds. A move shows both ends: the windows it heads for dissolve in
- * over its first FADE_IN (their own `fadeIn`) while they are still off to the
- * side, and the windows it leaves stay until its last FADE_OUT (their own
- * `fadeOut`), by when the pan has carried them off the side of the page, so
- * the page is never empty mid-move. A surface neither hold is about stays
- * hidden.
+ * chapter holds. A move shows both ends, the windows it leaves carried off
+ * the side of the page and the ones it reaches carried in, each wholly
+ * opaque while any of it is on the page (passagesFor). A surface neither hold
+ * is about stays hidden.
  */
-function transitOpacity(id: SurfaceId, t: number): number {
+function transitOpacity(id: SurfaceId, t: number, mobile = false, side?: number): number {
   for (let i = 0; i < CAMERA.length; i++) {
     const h = CAMERA[i];
-    if (t >= h.t0 && t <= h.t1) return h.sees.includes(id) ? 1 : 0;
+    if (t >= h.t0 && t <= h.t1) return seesOf(h, mobile).includes(id) ? 1 : 0;
     const next = CAMERA[i + 1];
     if (!next || t <= h.t1 || t >= next.t0) continue;
-    const [a, b] = [h.sees.includes(id), next.sees.includes(id)];
+    const [a, b] = [seesOf(h, mobile).includes(id), seesOf(next, mobile).includes(id)];
     if (a && b) return 1;
-    const { fadeIn = FADE_IN, fadeOut = FADE_OUT } = SURFACE_BY_ID[id];
-    if (a) return glide(clamp((next.t0 - t) / fadeOut));
-    if (b) return glide(clamp((t - h.t1) / fadeIn));
-    return 0;
+    if (!a && !b) return 0;
+    const r = passagesFor(mobile, sideOf(mobile, side))[i][id]!;
+    const k = glide(clamp((t - r.from) / Math.max(1e-6, r.to - r.from)));
+    return b ? k : 1 - k;
   }
   return 0;
 }
 
 /** How far a surface with `rise` has to go: 1 out of view, 0 in place, following its own fade. */
-const riseOf = (id: SurfaceId, t: number) => (SURFACE_BY_ID[id].rise ? 1 - transitOpacity(id, t) : 0);
+const riseOf = (id: SurfaceId, t: number, mobile = false, side?: number) => (SURFACE_BY_ID[id].rise ? 1 - transitOpacity(id, t, mobile, side) : 0);
 
 /**
  * A contact shadow: just behind its surface and a little below, so the
@@ -279,14 +444,14 @@ const riseOf = (id: SurfaceId, t: number) => (SURFACE_BY_ID[id].rise ? 1 - trans
  * one; low ones a tight one.
  */
 const PAGE_Z = -420;
-function shadowOf(s: (typeof SURFACES)[number]): El {
+function shadowOf(s: (typeof SURFACES)[number], slid = 0): El {
   const h = s.pos[2] - PAGE_Z;
   // Held behind the surface by as far as its tilt swings its edges, so no part of the shadow pokes through it.
   const tilt = Math.sin((Math.max(Math.abs(s.rot[0]), Math.abs(s.rot[1])) * Math.PI) / 180) * (Math.max(s.w, s.h) / 2);
   const clear = 12 + tilt * 1.1;
   const scale = 1 + h / 2400;
   return {
-    transform: `translate3d(0px, ${r3(6 + h * 0.02)}px, ${r3(-(clear + 24 + h * 0.05))}px) scale(${r3(scale)})`,
+    transform: `translate3d(${r3(slid)}px, ${r3(6 + h * 0.02)}px, ${r3(-(clear + 24 + h * 0.05))}px) scale(${r3(scale)})`,
     opacity: r3(clamp(0.3 - (0.12 * h) / 600, 0.08, 0.3) / 0.3),
   };
 }
@@ -313,12 +478,10 @@ const CORNERS = [[-1, -1], [1, -1], [-1, 1], [1, 1]];
 /** Each surface's corners in world space. */
 const CORNERS_OF = SURFACES.map((s) => CORNERS.map(([lx, ly]) => localToWorld(s.id, (lx * s.w) / 2, (ly * s.h) / 2)));
 
-/** A surface's corners at t, lowered by its rise while it comes or goes (the card's transform in `frame`). */
-function cornersAt(i: number, t: number): V3[] {
+/** A surface's corners at t, slid while a move carries it and lowered by its rise while it comes or goes (the card's transform in `frame`). */
+function cornersAt(i: number, t: number, mobile: boolean, side?: number): V3[] {
   const s = SURFACES[i];
-  const down = (s.rise ?? 0) * riseOf(s.id, t);
-  if (down <= 0.001) return CORNERS_OF[i];
-  return CORNERS.map(([lx, ly]) => localToWorld(s.id, (lx * s.w) / 2, (ly * s.h) / 2 + down));
+  return cornersMoved(s.id, slideOf(s.id, t, mobile, side), (s.rise ?? 0) * riseOf(s.id, t, mobile, side));
 }
 
 /** The stage box of a card's corners, or null when part of it is behind the eye. */
@@ -383,8 +546,9 @@ const merge = (spans: [number, number][], gap: number): [number, number][] => {
  * would lie above or below the box while it is within the page's width. Both derive from the same projection the stage
  * draws, so what is rendered and what is shown follow what the camera sees.
  */
-function buildTrack(mobile: boolean): Track {
-  const [px0, px1] = PAGE_X[mobile ? "mobile" : "desktop"];
+function buildTrack(mobile: boolean, side?: number): Track {
+  // The visitor's own page: a window beyond its sides is neither drawn nor seen, whatever its height.
+  const [px0, px1] = [-sideOf(mobile, side), (mobile ? STAGE_SIZE.mobile.w : STAGE_SIZE.desktop.w) + sideOf(mobile, side)];
   const h = boxH(mobile);
   const live: [number, number][][] = SURFACES.map(() => []);
   const away: [number, number][][] = SURFACES.map(() => []);
@@ -393,29 +557,35 @@ function buildTrack(mobile: boolean): Track {
     const t = Math.min(k * STEP, DURATION - 1e-6);
     const at = projector(cameraAt(t, mobile).pose, mobile);
     SURFACES.forEach((_, i) => {
-      const b = bounds(cornersAt(i, t), at);
+      const b = bounds(cornersAt(i, t, mobile, side), at);
       // Rendered while any of it reaches the page, its shadow's spread (5% either side) included.
       const [sx, sy] = b ? [(b.x1 - b.x0) * 0.05, (b.y1 - b.y0) * 0.05] : [0, 0];
       if (!b || (b.x1 + sx > px0 && b.x0 - sx < px1 && b.y1 + sy > 0 && b.y0 - sy < h)) live[i].push([Math.max(0, t - LIVE_PAD), Math.min(DURATION, t + LIVE_PAD)]);
       const sideways = b && (b.x1 <= px0 || b.x0 >= px1);
-      const crossing = !b || (!sideways && (b.y0 < EDGE_CLEAR || b.y1 > h - EDGE_CLEAR));
+      // Only a window the camera's path shows can cross: one hidden at a hold (beside the window a hold is about) never needs to leave.
+      const crossing = transitOpacity(SURFACES[i].id, t, mobile, side) > 0 && (!b || (!sideways && (b.y0 < EDGE_CLEAR || b.y1 > h - EDGE_CLEAR)));
       if (crossing) away[i].push([Math.max(0, t - STEP), Math.min(DURATION, t + STEP)]);
     });
   }
   return { live: live.map((s) => merge(s, 0)), away: away.map((s) => merge(s, MIN_SHOWN).map(beats)) };
 }
 
-const TRACKS: Partial<Record<"desktop" | "mobile", Track>> = {};
-const track = (mobile: boolean): Track => (TRACKS[mobile ? "mobile" : "desktop"] ??= buildTrack(mobile));
+const TRACKS = new Map<string, Track>();
+function track(mobile: boolean, side?: number): Track {
+  const key = `${mobile ? "m" : "d"}:${Math.round(sideOf(mobile, side))}`;
+  let tr = TRACKS.get(key);
+  if (!tr) TRACKS.set(key, (tr = buildTrack(mobile, side)));
+  return tr;
+}
 
 /** Whether a surface is rendered at t: some part of it reaches the page, and it is not away from the frame. */
-export const isLive = (id: SurfaceId, t: number, mobile = false): boolean =>
-  track(mobile).live[SURFACE_INDEX[id]].some(([a, b]) => t >= a && t <= b) && presence(id, t, mobile).o > 0;
+export const isLive = (id: SurfaceId, t: number, mobile = false, side?: number): boolean =>
+  track(mobile, side).live[SURFACE_INDEX[id]].some(([a, b]) => t >= a && t <= b) && presence(id, t, mobile, side).o > 0;
 
 /** How present a window is at t (1 shown, 0 away) and the scale it wears while lifting out or dropping in. */
-export function presence(id: SurfaceId, t: number, mobile = false): { o: number; scale: number } {
+export function presence(id: SurfaceId, t: number, mobile = false, side?: number): { o: number; scale: number } {
   let o = 1;
-  for (const { from, a, b, to } of track(mobile).away[SURFACE_INDEX[id]]) {
+  for (const { from, a, b, to } of track(mobile, side).away[SURFACE_INDEX[id]]) {
     if (t >= a && t <= b) return { o: 0, scale: 1 - AWAY_SCALE };
     // Both ease at each end, so the window neither blinks out at the last frame nor pops in at the first.
     if (t < a && t > from) o = Math.min(o, 1 - glide((t - from) / (a - from)));
@@ -551,24 +721,30 @@ export function wrapT(t: number): number {
   return Math.round((m < 0 ? m + DURATION : m) * 1e6) / 1e6;
 }
 
-export function frame(tIn: number, mobile = false): Frame {
+/**
+ * The film at t. `side` is how far the visitor's page reaches beyond either
+ * side of the box (stage px); windows fade only beyond it (transitOpacity).
+ */
+export function frame(tIn: number, mobile = false, side?: number): Frame {
   const t = wrapT(tIn);
   const els: Record<string, El> = {};
   const texts: Record<string, string> = {};
   const cam = cameraAt(t, mobile);
 
   SURFACES.forEach((s) => {
-    const here = presence(s.id, t, mobile);
-    // A surface that rises into view (the phone, raised beside the desk) comes up from below as it fades in and goes down as it fades out.
-    const lowered = (s.rise ?? 0) * riseOf(s.id, t);
-    const tf = [lowered > 0.001 ? `translate3d(0px, ${r3(lowered)}px, 0px)` : "", here.scale < 1 ? `scale(${r3(here.scale)})` : ""].filter(Boolean).join(" ");
+    const here = presence(s.id, t, mobile, side);
+    // A surface that rises into view (the phone, raised beside the desk) comes up from below as it fades in and goes down as it fades out; one a move carries slides along its width.
+    const lowered = (s.rise ?? 0) * riseOf(s.id, t, mobile, side);
+    const slid = slideOf(s.id, t, mobile, side);
+    const moved = lowered > 0.001 || Math.abs(slid) > 0.001;
+    const tf = [moved ? `translate3d(${r3(slid)}px, ${r3(lowered)}px, 0px)` : "", here.scale < 1 ? `scale(${r3(here.scale)})` : ""].filter(Boolean).join(" ");
     els[`card:${s.id}`] = { transform: tf || "none" };
-    const shadow = shadowOf(s);
+    const shadow = shadowOf(s, slid);
     // Opacity goes on the face, not the card: opacity on a preserve-3d element flattens it.
-    const shown = transitOpacity(s.id, t) * here.o;
+    const shown = transitOpacity(s.id, t, mobile, side) * here.o;
     els[`shadow:${s.id}`] = { ...shadow, opacity: r3((shadow.opacity ?? 1) * shown) };
     // A hidden surface takes no clicks and costs no paint.
-    els[`mount:${s.id}`] = { visible: shown > 0 && isLive(s.id, t, mobile) };
+    els[`mount:${s.id}`] = { visible: shown > 0 && isLive(s.id, t, mobile, side) };
     els[`face:${s.id}`] = { opacity: r3(shown) };
     if (SEAM_GHOST.surfaces.includes(s.id)) {
       const g = ghostOpacity(t);
@@ -616,3 +792,4 @@ export function frame(tIn: number, mobile = false): Frame {
 }
 
 export { SURFACE_INDEX };
+export const __track = track;

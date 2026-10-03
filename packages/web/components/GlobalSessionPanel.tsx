@@ -2734,7 +2734,7 @@ function SessionListPanelImpl({
   // Dropping a card on a status section files it there: the user's rest
   // verdict, undoable like the menu gesture. One stable handler per verdict.
   const dropSessionOnRest = useMemo(() => Object.fromEntries(
-    USER_RESTS.map((rest) => [rest, (ids: string[]) => fileSessionsAsRest(ids, rest)]),
+    USER_RESTS.map((rest) => [rest, (ids: string[]) => { void fileSessionsAsRest(ids, rest); }]),
   ) as Record<UserRest, (ids: string[]) => void>, []);
 
   // Section drop targets: whole group is droppable.

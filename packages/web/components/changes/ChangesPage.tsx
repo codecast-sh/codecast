@@ -18,25 +18,27 @@ import { normalizeRepository } from "@codecast/shared/contracts";
 import { addDays, localDate, normalizeTimezone } from "@codecast/convex/convex/lib/teamDay";
 import {
   changesWindow,
+  recentWindow,
   useChangeEditions,
   useChangeLive,
   useChangeStories,
   useChangeWorks,
   useSyncChanges,
+  weekWindow,
 } from "../../hooks/useSyncChanges";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
+import { useRepositories } from "../../hooks/useRepoBrowse";
 import { useTeamRosterIdentity } from "../../hooks/useTeamRoster";
 import { useTabActive } from "../../hooks/usePagePresence";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { changesDayLabel, localDay } from "../../lib/changesDay";
 import { copyText } from "../../lib/copyText";
 import { memberDisplayName } from "../../lib/liveEntities";
-import { useInboxStore } from "../../store/inboxStore";
+import { isConvexId, useInboxStore } from "../../store/inboxStore";
 import { EmptyState } from "../EmptyState";
 import { TooltipProvider } from "../ui/tooltip";
 import { ChangesFooter } from "./ChangesFooter";
 import { ChangesHeader, type FilterOptions, type Summarizing } from "./ChangesHeader";
-import { ChangesWeek } from "./ChangesWeek";
 import { commitPath } from "./EvidenceDrawer";
 import { EditionHead } from "./EditionHead";
 import { buildEdition, dayVolumes, stepOrder } from "./editionModel";
@@ -47,6 +49,8 @@ import { LiveStrip, type LiveTile } from "./LiveStrip";
 import { SectionBlock } from "./SectionBlock";
 import { StoryCtx, type StoryContext } from "./storyContext";
 import { useChangesKeys } from "./useChangesKeys";
+import { buildWeek } from "./weekModel";
+import { WeekView } from "./WeekView";
 import { changesHref, clearFilters, hasFilters, isoWeekOf, useChangesUrlState, weekDaysOf, weekMonday } from "./useChangesUrlState";
 
 /** `--i` for the first paint's stagger (spec 5.4), capped at 10. */
@@ -95,18 +99,33 @@ export function ChangesPage() {
   const fed = useMemo(() => changesWindow(feedDate), [feedDate]);
 
   // ── Store rows ──────────────────────────────────────────────────────────
+  // The repository list is every repository's commits over the last 14 days
+  // (spec 4.1), whichever day is on screen, plus any the fed window names.
+  // The team's known repositories stand in for a team quiet that long.
   const allStories = useChangeStories(teamId, undefined, fed);
+  const recent = useMemo(() => recentWindow(today), [today]);
+  const recentEditions = useChangeEditions(teamId, undefined, recent);
+  const teamRepos = useRepositories();
+  const knownRepos = useMemo(
+    () => teamRepos.rows.filter((r) => String(r.team_id) === teamId).map((r) => normalizeRepository(r.repository)).sort(),
+    [teamRepos.rows, teamId],
+  );
   const repos = useMemo(() => {
+    const commits = new Map<string, number>();
+    for (const e of recentEditions) if (e.repository) commits.set(e.repository, (commits.get(e.repository) ?? 0) + (e.stats?.commits ?? 0));
     const shas = new Map<string, Set<string>>();
     for (const s of allStories) {
+      if (commits.has(s.repository)) continue;
       const set = shas.get(s.repository) ?? new Set<string>();
       for (const sha of s.commit_shas) set.add(sha);
       shas.set(s.repository, set);
     }
-    return [...shas.entries()].map(([repo, set]) => ({ repo, commits: set.size })).sort((a, b) => b.commits - a.commits || a.repo.localeCompare(b.repo));
-  }, [allStories]);
-  const repo = url.repo ? normalizeRepository(url.repo) : repos[0]?.repo;
-  const feed = useSyncChanges({ teamId, repository: repo, date: feedDate });
+    for (const [repo, set] of shas) commits.set(repo, set.size);
+    return [...commits.entries()].filter(([, n]) => n > 0).map(([repo, n]) => ({ repo, commits: n })).sort((a, b) => b.commits - a.commits || a.repo.localeCompare(b.repo));
+  }, [recentEditions, allStories]);
+  const repo = url.repo ? normalizeRepository(url.repo) : repos[0]?.repo ?? knownRepos[0];
+  const weekKey = isoWeekOf(weekDays[0]);
+  const feed = useSyncChanges({ teamId, repository: repo, date: feedDate, today, week: mode === "week" ? weekKey : undefined });
   const stories = useMemo(() => (repo ? allStories.filter((s) => s.repository === repo) : allStories), [allStories, repo]);
   const editions = useChangeEditions(teamId, repo, fed);
   const live = useChangeLive(teamId, repo);
@@ -116,15 +135,23 @@ export function ChangesPage() {
     [allWorks, repo],
   );
   const edition = editions.find((e) => e.date === viewDate);
+  const weekWin = useMemo(() => weekWindow(weekKey), [weekKey]);
+  const weekRow = useChangeEditions(teamId, repo, mode === "week" ? weekWin : undefined, "week")[0];
+  const week = useMemo(
+    () => (mode === "week" ? buildWeek({ days: weekDays.filter((d) => d <= today), stories, editions, week: weekRow, branches: url.branches }) : null),
+    [mode, weekDays, today, stories, editions, weekRow, url.branches],
+  );
 
   const roster = useTeamRosterIdentity();
-  const personName = useCallback(
+  const memberName = useCallback(
     (id: string) => {
       const m = roster.find((r) => r._id === id);
-      return m ? memberDisplayName(m) : id;
+      return m ? memberDisplayName(m) : null;
     },
     [roster],
   );
+  // `person=` is a user id or a commit author's name; an id never shows as a name.
+  const personName = useCallback((id: string) => memberName(id) ?? (isConvexId(id) ? "A teammate" : id), [memberName]);
 
   const model = useMemo(
     () => buildEdition({ stories, date: viewDate, edition, live, url, personName }),
@@ -154,14 +181,17 @@ export function ChangesPage() {
   const options = useMemo<FilterOptions>(() => {
     const people = new Map<string, string>();
     for (const s of model.day) {
-      for (const id of s.actor_user_ids) people.set(String(id), personName(String(id)));
+      for (const id of s.actor_user_ids) {
+        const name = memberName(String(id));
+        if (name) people.set(String(id), name);
+      }
       for (const a of s.author_names) if (![...people.values()].includes(a)) people.set(a, a);
     }
     return {
       areas: model.areas.map((a) => a.area),
       people: [...people.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name)).slice(0, 12),
     };
-  }, [model.day, model.areas, personName]);
+  }, [model.day, model.areas, memberName]);
 
   const summarizing: Summarizing = useMemo(() => {
     if (mode !== "day") return null;
@@ -186,11 +216,16 @@ export function ChangesPage() {
   // Opening a drawer keeps the story it belongs to where it is on screen: a
   // drawer above it closes at once, and the scroll takes up the difference.
   const pin = useRef<{ key: string; top: number } | null>(null);
+  const landed = useRef<string | null>(null);
   const openStory = useCallback((key: string | undefined) => {
     const anchor = key ?? url.story;
     const el = anchor ? storyEl(anchor) : null;
     pin.current = anchor && el ? { key: anchor, top: el.getBoundingClientRect().top } : null;
-    if (key) setFocused(key);
+    if (key) {
+      setFocused(key);
+      // Already on screen: the pin holds it, and the pasted-link landing below must not recenter it.
+      landed.current = key;
+    }
     setUrl({ story: key });
   }, [url.story, setUrl]);
   useLayoutEffect(() => {
@@ -203,7 +238,6 @@ export function ChangesPage() {
   }, [url.story]);
 
   // A pasted `story=` link lands on its story once the story is on the page.
-  const landed = useRef<string | null>(null);
   useWatchEffect(() => {
     const key = url.story;
     if (!key || landed.current === key || !byKey.has(key)) return;
@@ -233,6 +267,13 @@ export function ChangesPage() {
     return true;
   }, [today, viewDate, mode, setUrl]);
 
+  // A story picked in the week opens in its day, with its evidence drawer open.
+  const goStory = useCallback((day: string, key: string) => {
+    setTravel(null);
+    setFocused(key);
+    setUrl({ d: day >= today ? undefined : day, w: undefined, story: key }, "push");
+  }, [today, setUrl]);
+
   const step = useCallback((delta: number) => {
     if (mode === "week") {
       const monday = addDays(weekDays[0], delta * 7);
@@ -244,10 +285,17 @@ export function ChangesPage() {
     return goDay(addDays(viewDate, delta));
   }, [mode, weekDays, today, viewDate, goDay, setUrl]);
 
+  // Week mode keeps `d`, so a return to day mode lands on the day it left
+  // when that day is in the week on screen, else on the week's last day so far.
   const setMode = useCallback((next: "day" | "week") => {
     if (next === mode) return;
-    setUrl(next === "week" ? { w: isoWeekOf(viewDate), story: undefined } : { w: undefined }, "push");
-  }, [mode, viewDate, setUrl]);
+    if (next === "week") {
+      setUrl({ w: isoWeekOf(viewDate), story: undefined }, "push");
+      return;
+    }
+    const day = url.d && weekDays.includes(url.d) ? url.d : weekDays[6] < today ? weekDays[6] : today;
+    setUrl({ w: undefined, d: day === today ? undefined : day }, "push");
+  }, [mode, viewDate, url.d, weekDays, today, setUrl]);
 
   const pickSurface = useCallback((surface: string) => setUrl({ surface: url.surface === surface ? undefined : surface }), [url.surface, setUrl]);
 
@@ -340,9 +388,13 @@ export function ChangesPage() {
   // not answered: a cached day paints at once, and "Nothing landed" waits for
   // the server to say so.
   const cold = !feed.ready && model.day.length === 0 && !edition;
-  const nothingKnown = feed.ready && repos.length === 0 && editions.length === 0 && live.length === 0 && !url.repo;
+  // "Nothing to write about" is for a team with no history at all; any known
+  // repository or edition makes an empty day a quiet day.
+  const nothingKnown =
+    feed.ready && feed.recentReady && (teamRepos.ready || !!teamRepos.error) && !url.repo &&
+    !repo && repos.length === 0 && editions.length === 0 && recentEditions.length === 0 && live.length === 0;
 
-  if (feed.refused && !(window as any).__chgPreview) {
+  if (feed.refused) {
     return <EmptyState title="Changes is not turned on for this team yet." description="A team admin can turn it on in the team's settings." />;
   }
   if (nothingKnown) {
@@ -358,12 +410,45 @@ export function ChangesPage() {
   const intro = viewDate === introDate && !travel;
   const motion = (i: number) => (intro ? { className: "chg-rise", style: rise(i) } : { className: "", style: undefined });
   const quiet = model.day.length === 0;
-  const previous = editions.filter((e) => e.date < viewDate && (e.stats?.commits ?? 1) > 0).map((e) => e.date).sort().pop() ?? addDays(viewDate, -1);
+  const previous =
+    [...editions, ...recentEditions.filter((e) => e.repository === repo)]
+      .filter((e) => e.date < viewDate && (e.stats?.commits ?? 1) > 0).map((e) => e.date).sort().pop() ?? addDays(viewDate, -1);
   const strip = tiles.length > 0 && (
     <div className="mt-4">
       <LiveStrip tiles={tiles} stories={stories} activeSurface={url.surface} onPick={pickSurface} stripRef={stripRef} animate={intro} />
     </div>
   );
+
+  // The main column is one grid cell, with In the works pinned beside it, so
+  // the grid never depends on which regions exist. In brief runs full width
+  // below them, or takes the column itself when it is all the day has.
+  const noMatch = !quiet && model.matching === 0 && hasFilters(url);
+  const hasStories = !!model.lead || model.sections.length > 0;
+  const brief = model.brief.length > 0 && <InBrief stories={model.brief} />;
+  const briefRow = !!brief && !noMatch && hasStories;
+  const mainColumn = noMatch ? (
+    <div className="rounded-lg border border-dashed border-sol-border/40 px-5 py-8 text-center">
+      <p className="chg-ui text-[14px] text-sol-text/70">No stories match these filters.</p>
+      <button type="button" onClick={() => setUrl(clearFilters(url))} className="mt-2 font-mono text-[11px] text-sol-text/60 underline-offset-2 hover:text-sol-text hover:underline">
+        clear filters
+      </button>
+    </div>
+  ) : hasStories ? (
+    <div className="grid gap-7">
+      {model.lead && (
+        <div className={motion(3).className} style={motion(3).style}>
+          <LeadStory story={model.lead} open={url.story === model.lead.story_key} />
+        </div>
+      )}
+      {model.sections.length > 0 && (
+        <div className={`chg-sections ${motion(5).className}`} style={motion(5).style}>
+          {model.sections.map((sec) => <SectionBlock key={sec.area} section={sec} stories={stories} />)}
+        </div>
+      )}
+    </div>
+  ) : brief ? (
+    <div className={motion(6).className} style={motion(6).style}>{brief}</div>
+  ) : null;
 
   return (
     <TooltipProvider delayDuration={250}>
@@ -376,7 +461,7 @@ export function ChangesPage() {
             today={today}
             weekDays={weekDays}
             volumes={volumes}
-            stats={model.stats}
+            stats={week?.stats ?? model.stats}
             summarizing={summarizing}
             url={url}
             setUrl={setUrl}
@@ -395,7 +480,17 @@ export function ChangesPage() {
           />
 
           {mode === "week" ? (
-            <ChangesWeek days={weekDays} today={today} editions={editions} stories={stories} works={works} branches={url.branches} onDay={goDay} />
+            <div key={weekKey} className={travel === "next" ? "chg-slide-next" : travel === "prev" ? "chg-slide-prev" : ""}>
+              <WeekView
+                week={week!}
+                works={works}
+                today={today}
+                reserve={!week!.prose && !!weekRow && !weekRow.capped_at && weekRow.status !== "failed"}
+                animate={!travel}
+                onDay={goDay}
+                onStory={goStory}
+              />
+            </div>
           ) : cold ? (
             <Skeleton />
           ) : (
@@ -425,33 +520,8 @@ export function ChangesPage() {
                       )}
                     </div>
 
-                    {!quiet && model.matching === 0 && hasFilters(url) ? (
-                      <div className="chg-span-8 rounded-lg border border-dashed border-sol-border/40 px-5 py-8 text-center">
-                        <p className="chg-ui text-[14px] text-sol-text/70">No stories match these filters.</p>
-                        <button type="button" onClick={() => setUrl(clearFilters(url))} className="mt-2 font-mono text-[11px] text-sol-text/60 underline-offset-2 hover:text-sol-text hover:underline">
-                          clear filters
-                        </button>
-                      </div>
-                    ) : (
-                      <>
-                        {model.lead && (
-                          <div className={`chg-span-8 ${motion(3).className}`} style={motion(3).style}>
-                            <LeadStory story={model.lead} open={url.story === model.lead.story_key} />
-                          </div>
-                        )}
-                        {model.sections.length > 0 && (
-                          <div className={`chg-span-8 chg-sections ${motion(5).className}`} style={motion(5).style}>
-                            {model.sections.map((sec) => <SectionBlock key={sec.area} section={sec} stories={stories} />)}
-                          </div>
-                        )}
-                        {model.brief.length > 0 && (
-                          <div className={`chg-span-12 ${motion(6).className}`} style={motion(6).style}>
-                            <InBrief stories={model.brief} />
-                          </div>
-                        )}
-                      </>
-                    )}
-
+                    {mainColumn && <div className="chg-span-8">{mainColumn}</div>}
+                    {briefRow && <div className={`chg-span-12 ${motion(6).className}`} style={motion(6).style}>{brief}</div>}
                     <aside className={`chg-works ${motion(4).className}`} style={motion(4).style} aria-label="In the works">
                       <InTheWorks
                         works={works}
@@ -468,7 +538,7 @@ export function ChangesPage() {
           {feed.error && cold && (
             <p className="mt-6 font-mono text-[11px] text-sol-text/55">Changes could not load: {feed.error.message}</p>
           )}
-          <ChangesFooter stats={model.stats} edition={mode === "day" ? edition : undefined} hasSignals={live.length > 0} />
+          <ChangesFooter stats={week?.stats ?? model.stats} edition={mode === "day" ? edition : weekRow} hasSignals={live.length > 0 || !feed.liveReady} />
         </div>
       </div>
     </TooltipProvider>

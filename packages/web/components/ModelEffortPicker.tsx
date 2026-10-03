@@ -21,6 +21,7 @@ import {
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
 import { useInboxStore } from "../store/inboxStore";
+import { undoGroup } from "../store/undoStack";
 import { useLiveSessionMeta } from "../hooks/useLiveSessionMeta";
 import { useAgentDefinitions } from "../hooks/useSyncAgentDefinitions";
 import { toConvexAgentType } from "@codecast/shared/contracts";
@@ -275,9 +276,12 @@ export function AgentDefinitionPill({ conversationId }: { conversationId: string
   const current = live?.agentDefinition;
   const pick = (name: string | null) => {
     const s = useInboxStore.getState();
-    s.setConversationAgentDefinition(conversationId, name);
     const def = name ? definitions.find((d) => d.name === name) : undefined;
-    if (def?.agent) s.setConversationAgent(conversationId, toConvexAgentType(def.agent));
+    // One pick, one undo: the definition and the agent it flips.
+    undoGroup((entries) => entries[0]?.label ?? "Changed the agent", () => {
+      s.setConversationAgentDefinition(conversationId, name);
+      if (def?.agent) s.setConversationAgent(conversationId, toConvexAgentType(def.agent));
+    });
   };
   return (
     <DropdownMenu>

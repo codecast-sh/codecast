@@ -9,12 +9,12 @@ import { outcomeOf, prepareFreeze, repCount, repPassed, replayModel, replayRep, 
 import { hasSnapshot, loadLabel, loadSnapshot } from '../adapters/resolver';
 import { codecastRunSource, surfaceRuns, type SurfaceRun } from '../adapters/runs';
 import { loadSurface } from '../registry';
-import { addSpend, checkMinutes, DAILY_USD, patchSurfaceState, perRepUsd, readState, repCostsByModel, spentToday, staleness, suggestedBudget } from '../state';
+import { checkMinutes, DAILY_USD, patchSurfaceState, perRepUsd, readState, repCostsByModel, spentToday, staleness, suggestedBudget } from '../state';
 import { evalSignals, reportSignals, type SurfaceVerdict } from '../signals';
 import { separate, separationLine } from '../stats';
 import type { SurfaceMeta } from '../surface';
 import { publishSite } from './publish';
-import { pickSurfaces } from './stale';
+import { pickSurfaces, positiveValue } from './stale';
 
 // `./evals check`: replay every freeze of each chosen surface, grade every
 // rep, and print a verdict per surface against its previous run set. It
@@ -40,8 +40,8 @@ export const DEFAULT_PARALLEL = 4;
 
 /** A commander parser for a positive number; NaN would disable every spend check, so it is a usage error. */
 export const positiveNumber = (flag: string, integer = false) => (v: string): number => {
-  const n = Number(v);
-  if (!Number.isFinite(n) || n <= 0 || (integer && !Number.isInteger(n))) throw new InvalidArgumentError(`${flag} takes a positive ${integer ? 'whole number' : 'number'}, not "${v}"`);
+  const n = positiveValue(v, integer);
+  if (n == null) throw new InvalidArgumentError(`${flag} takes a positive ${integer ? 'whole number' : 'number'}, not "${v}"`);
   return n;
 };
 
@@ -111,13 +111,14 @@ export const batchSet = (history: SurfaceRun[], batch: string): SurfaceRun[] => 
 
 /**
  * The run set a check is weighed against: for each freeze, the reps of the
- * newest other batch that ran it. A later run of one freeze then never hides
- * the other freezes' sets.
+ * newest other batch that graded it. A later run of one freeze then never
+ * hides the other freezes' sets, and a batch whose reps on a freeze all
+ * crashed graded nothing there, so the comparison falls back past it.
  */
 export function previousRunSet(history: SurfaceRun[], batch: string): SurfaceRun[] {
   const real = history.filter((r) => r.batch && r.batch !== batch && r.status !== 'dry' && r.status !== 'unscored');
   const newest = new Map<string, string>();
-  for (const r of real) if ((newest.get(r.freezeId ?? '') ?? '') < r.batch!) newest.set(r.freezeId ?? '', r.batch!);
+  for (const r of real) if (r.status !== 'crash' && (newest.get(r.freezeId ?? '') ?? '') < r.batch!) newest.set(r.freezeId ?? '', r.batch!);
   return onePerSeed(real.filter((r) => newest.get(r.freezeId ?? '') === r.batch));
 }
 
@@ -142,7 +143,8 @@ function verdictLines(meta: SurfaceMeta, batch: string, set: SurfaceRun[], previ
   const scores = current.map(scoreOrZero);
   const passed = current.filter((r) => r.status === 'pass').length;
   const mean = scores.reduce((s, x) => s + x, 0) / Math.max(1, scores.length);
-  const cost = current.reduce((s, r) => s + r.costUsd, 0);
+  // What the set spent, its crashes included.
+  const cost = set.reduce((s, r) => s + r.costUsd, 0);
   const now = majority(current);
   const before = majority(previous);
   const flips = [...now].filter(([k, v]) => before.has(k) && before.get(k) !== v).length;
@@ -159,6 +161,23 @@ function verdictLines(meta: SurfaceMeta, batch: string, set: SurfaceRun[], previ
   if (crashes) lines.push(`  ${fmt.error(`${crashes} crashed`)}, left out of the numbers above: ./evals runs list --scenario ${meta.id}- --status crash; ./evals check ${meta.id} --batch ${batch} with the same --reps and --freeze runs them again`);
   const regression = previous.length > 0 && separate(compared, previous.map(scoreOrZero)).kind === 'worse';
   return { lines, regression };
+}
+
+/**
+ * A surface's run set `batch` as `check` reports it: the verdict against its
+ * previous set, then the surface's own summary lines over the reps it scored.
+ * `history` is the surface's runs, newest first; `check` and `publish` both
+ * print from here.
+ */
+export async function setVerdict(meta: SurfaceMeta, batch: string, history: SurfaceRun[]): Promise<{ lines: string[]; regression: boolean; scored: SurfaceRun[] }> {
+  const scored = batchSet(history, batch);
+  const v = verdictLines(meta, batch, scored, previousRunSet(history, batch));
+  const impl = await loadSurface(meta.id);
+  if (impl.summarize) {
+    const details = await Promise.all(scored.map((r) => codecastRunSource().get(r.id)));
+    v.lines.push(...impl.summarize(details.flatMap((d) => (d?.verdict ? [d.verdict] : []))).map((l) => `  ${l}`));
+  }
+  return { ...v, scored };
 }
 
 export async function runCheck(ids: string[], flags: CheckFlags, sources: EvalSources): Promise<number> {
@@ -180,7 +199,7 @@ export async function runCheck(ids: string[], flags: CheckFlags, sources: EvalSo
       console.log(`refused: ${formatCost(spent)} spent today reaches the ${formatCost(daily)} daily ceiling for unattended runs; the next day's firing runs it, or ./evals check by hand`);
       return 1;
     }
-    const { due, waiting, hashes } = staleness(metas, state);
+    const { due, waiting, hashes } = staleness(metas, state, undefined, flags.budget);
     for (const m of due.filter((s) => s.route === 'agent')) {
       console.log(`manual run needed: ${m.id} changed at HEAD (agent surfaces never run unattended): ./evals check ${m.id}`);
       if (keepState) patchSurfaceState(m.id, (s) => ({ ...s, lastNotifiedHash: hashes.get(m.id) }));
@@ -242,10 +261,10 @@ export async function runCheck(ids: string[], flags: CheckFlags, sources: EvalSo
   const hashes = facts.hashes;
   if (flags.budget != null && estimate > flags.budget) {
     console.log(`refused: the estimate ${formatCost(estimate)} is over the --budget ${formatCost(flags.budget)}; fewer --reps, fewer surfaces, or a bigger budget`);
-    // An unattended refusal is named once per source change; the next firing leaves these surfaces for a run by hand.
+    // An unattended refusal is named once per source change: later firings leave these surfaces for a run by hand, or for a bigger --budget.
     if (flags.stale && keepState) {
-      for (const p of plans) patchSurfaceState(p.meta.id, (s) => ({ ...s, lastRefusedHash: hashes.get(p.meta.id) }));
-      console.log(`not retried until their sources change: ./evals check ${plans.map((p) => p.meta.id).join(' ')} --budget ${suggestedBudget(estimate)} runs them by hand`);
+      for (const p of plans) patchSurfaceState(p.meta.id, (s) => ({ ...s, lastRefusedHash: hashes.get(p.meta.id), lastRefusedBudget: flags.budget }));
+      console.log(`not retried until their sources change or a firing passes more than --budget ${flags.budget}: ./evals check ${plans.map((p) => p.meta.id).join(' ')} --budget ${suggestedBudget(estimate)} runs them by hand`);
     }
     return 1;
   }
@@ -267,21 +286,15 @@ export async function runCheck(ids: string[], flags: CheckFlags, sources: EvalSo
   for (const plan of plans) {
     const outcome = outcomeOf(results.filter((_, i) => jobs[i]!.plan === plan), spent);
     const crashes = outcome.crashes;
-    if (!flags.dry) addSpend(outcome.costUsd);
     // The set is the whole batch on these freezes: on a resume, the reps it already held count with the ones run now.
     const history = (await surfaceRuns(plan.meta.id)).filter((r) => plan.freezes.some((f) => f.id === r.freezeId));
-    const scored = batchSet(history, batch);
+    // The previous run set: each freeze's newest other batch of real reps; a dry rep is wiring, never a baseline.
+    const v = await setVerdict(plan.meta, batch, history);
+    const scored = v.scored;
     // A surface the stop cut off before its first rep never ran: it is named below, not graded.
     if (budgetHit && !scored.length) continue;
     if (!scored.length) unrun.push(plan.meta.id);
-    // The previous run set: each freeze's newest other batch of real reps; a dry rep is wiring, never a baseline.
-    const v = verdictLines(plan.meta, batch, scored, previousRunSet(history, batch));
     report.push(...v.lines);
-    const impl = await loadSurface(plan.meta.id);
-    if (impl.summarize) {
-      const details = await Promise.all(scored.map((r) => codecastRunSource().get(r.id)));
-      report.push(...impl.summarize(details.flatMap((d) => (d?.verdict ? [d.verdict] : []))).map((l) => `  ${l}`));
-    }
     // A dry rep's gates grade canned output, so only a crash fails a dry check.
     if (v.regression || crashes || scored.some((r) => r.status !== 'dry' && r.gatesFailed.length)) failed = true;
     verdicts.push({
@@ -297,10 +310,12 @@ export async function runCheck(ids: string[], flags: CheckFlags, sources: EvalSo
     const real = outcome.runs.filter((r) => r.status !== 'unscored' && r.status !== 'crash' && r.status !== 'dry');
     // A surface the stop cut short has not run on these sources, so it stays stale for the next firing.
     const cutShort = budgetHit && scored.length < plan.freezes.length * repCount(plan.reps);
+    // The hash names HEAD's sources; a checkout with them dirty graded something else, so it is not their run.
+    const dirty = facts.dirty.has(plan.meta.id);
     if (flags.state !== false) patchSurfaceState(plan.meta.id, (s) => ({
       ...s,
       crash: crashes ? { hash, count: s.crash?.hash === hash ? s.crash.count + 1 : 1 } : undefined,
-      ...(flags.dry || crashes || cutShort ? {} : { lastRunHash: hash }),
+      ...(flags.dry || crashes || cutShort || dirty ? {} : { lastRunHash: hash }),
       ...(!flags.dry && real.length ? { perRep: { ...s.perRep, ...repCostsByModel(real, plan.meta.model) } } : {}),
     }));
   }

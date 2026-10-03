@@ -120,7 +120,7 @@ function harness(w: ReturnType<typeof world>) {
     expect(deleted).toEqual([]);
     expect(lines(git(w.targetRoot, "ls-files", "--deleted"))).toEqual([]);
   };
-  return { state, carried, push, inStep, noTrackedLost, keepsTracked: () => !!stamps[`${w.host.user}@${w.host.address}`]?.keeps_tracked };
+  return { state, carried, deleted, push, inStep, noTrackedLost, keepsTracked: () => !!stamps[`${w.host.user}@${w.host.address}`]?.keeps_tracked };
 }
 
 test("laptop N+1 and host N: the laptop keeps the wide set, nothing tracked is deleted, and the two converge", async () => {
@@ -177,22 +177,29 @@ test("host upgraded N to N+1 under laptop N+1: the laptop narrows only after the
   await h.inStep();
 }, 60_000);
 
-// Expected failure, filed as ct-56327 under ct-55689 (pl-810). The laptop
-// records keeps_tracked per user@address and keeps it forever (saveHostStamp),
-// and the host stamp it reads before building carries no receiver capability.
-// A host that runs receiver N again after the laptop learned keeps-tracked
-// (cast reinstalled from an older release, a VM rolled back, an instance
-// replaced at the same address) gets the narrow bundle while its stamp still
-// owns the tracked files the wide push wrote, and receiver N deletes them.
-test.failing("host back on N after the laptop learned keeps-tracked: the laptop must not narrow for it", async () => {
+// Pins a known bug, ct-56327 under ct-55689 (pl-810). The laptop records
+// keeps_tracked per user@address and keeps it forever (saveHostStamp), and the
+// host stamp it reads before building carries no receiver capability. A host
+// that runs receiver N again after the laptop learned keeps-tracked (cast
+// reinstalled from an older release, a VM rolled back, an instance replaced at
+// the same address) gets the narrow bundle while its stamp still owns the
+// tracked files the wide push wrote, and receiver N deletes them.
+//
+// The test asserts that wrong outcome step by step, so it fails on anything
+// else, a broken harness included. When ct-56327 is fixed it fails here: flip
+// it to "the laptop sends the wide set, h.noTrackedLost(), h.inStep()".
+const DELETED_BY_CT_56327 = ["work/app/CHANGELOG.md", "work/app/README.md", "work/app/docs/guide.md"];
+test("host back on N after the laptop learned keeps-tracked: the laptop still narrows for it and receiver N deletes tracked files (ct-56327)", async () => {
   const w = world();
   const h = harness(w);
   h.state.receiver = "N+1";
   await h.push();
   expect(h.keepsTracked()).toBe(true);
+  expect(h.carried[0]!.paths).toContain("work/app/docs/guide.md");
   h.state.receiver = "N";
   write(w.sourceRoot, "AGENTS.md", "project rules, revised\n");
   await h.push();
-  h.noTrackedLost();
-  await h.inStep();
+  expect(h.carried[1]!.paths).not.toContain("work/app/docs/guide.md");
+  expect([...h.deleted].sort()).toEqual(DELETED_BY_CT_56327);
+  expect(lines(git(w.targetRoot, "ls-files", "--deleted")).map((rel) => `work/app/${rel}`).sort()).toEqual(DELETED_BY_CT_56327);
 }, 60_000);

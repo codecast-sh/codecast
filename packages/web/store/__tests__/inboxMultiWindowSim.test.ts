@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, setDefaultTimeout } from "bun:test";
+import { _resetUndoStacks } from "@platform/engine";
 import { useInboxStore, type InboxSession } from "../inboxStore";
+import { performUndo } from "../undoStack";
 import {
   Device,
   GEN_DAY,
@@ -288,6 +290,47 @@ describe("a follower that joins late", () => {
     await A.host.receiveAll();
     await A.drain();
     expect(late.placementsSnapshot()).toEqual(A.host.placementsSnapshot());
+    await settleAndAssertConverged(server, A.windows);
+  });
+});
+
+// B3: an undo is an ordinary action replay, so a follower's undo rides the
+// same paths as its gestures: its own outbox to the server, a mut to the host,
+// and the host's write tee (IndexedDB) after it. The hand-written undos wrote
+// the follower's store with a raw setState, which reached none of them.
+describe("a follower undoes its own stash", () => {
+  it("the host converges through the mut, and the host's write tee persists the restored row", async () => {
+    const server = new SimServer(seededWorld(121));
+    const A = await bootDevice(server, "A", 1, 1);
+    const [q] = await visibleIds(server, A);
+    const w1 = A.followers[0];
+
+    _resetUndoStacks();
+    await w1.stash(q);
+    await A.drain();
+    expect(hiddenEverywhere(A.windows, q)).toEqual({ "A-host": true, "A-w1": true });
+
+    // What the host persists for q from here on.
+    const persisted: Array<Record<string, unknown> | undefined> = [];
+    const stopWatching = A.host.window.onWrite((_patches, state) => {
+      const row = (state as any)?.sessions?.[q];
+      persisted.push(row ? { ...row } : undefined);
+    });
+    try {
+      expect(await w1.withStore(() => performUndo())).toBe(true);
+      expect(w1.shows(q)).toBe(true);
+      await A.drain();
+      expect(hiddenEverywhere(A.windows, q)).toEqual({ "A-host": false, "A-w1": false });
+      expect(persisted.length).toBeGreaterThan(0);
+      expect(persisted.at(-1)?.inbox_stashed_at ?? null).toBe(null);
+    } finally {
+      stopWatching();
+    }
+
+    // The server took the undo too: the host's feeds and the log keep it shown.
+    await A.host.receiveAll();
+    await A.drain();
+    expect(hiddenEverywhere(A.windows, q)).toEqual({ "A-host": false, "A-w1": false });
     await settleAndAssertConverged(server, A.windows);
   });
 });

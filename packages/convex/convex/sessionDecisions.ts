@@ -20,7 +20,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { canAccessConversation, canAccessTask, computeWorkspaceKey } from "./lib/access";
 import { teamVisibleConvTeam } from "./privacy";
-import { pickAnsweredDecision, formatDecisionAnswer, decisionAnswerLabel } from "@codecast/shared/contracts";
+import { pickAnsweredDecision, formatDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen } from "@codecast/shared/contracts";
 import type { Doc, Id } from "./_generated/dataModel";
 import { nextShortId } from "./counters";
 import { enqueuePendingMessage, reachableRole, tellRole } from "./pendingMessages";
@@ -626,8 +626,16 @@ export async function settleClientResolution(
   userId: Id<"users">,
   now: number,
 ) {
-  if (row.status !== "pending") return;
   if (patch.status !== "answered" && patch.status !== "dismissed") return;
+  // A person changing an advisory answer (advisoryAnswerOpen): the client sent
+  // the new answer into the session, and the side effects already ran when
+  // the row first settled, so the row only learns who answered last.
+  if (row.status !== "pending") {
+    if (patch.status === "answered" && advisoryAnswerOpen(row)) {
+      await ctx.db.patch(row._id, { answered_by: { kind: "user", id: String(userId) }, resolved_by: userId, resolved_at: now });
+    }
+    return;
+  }
   const verdict: Verdict = {
     status: patch.status,
     answer_index: patch.answer_index,
@@ -642,11 +650,14 @@ export async function settleClientResolution(
 
 // The dispatch rail's pending guard (first writer wins on every rail): a
 // resolution patch on a row that is no longer pending is dropped whole, so a
-// web answer cannot overwrite what a role or a stack policy already wrote.
+// web answer cannot overwrite what a role already wrote. The one exception is
+// a new answer on an advisory ask (advisoryAnswerOpen): the agent went ahead
+// on its default, and a person may still change its course.
 // Pure, so it is unit tested without the dispatch mutation.
 const RESOLUTION_FIELDS = ["status", "answer_index", "answer_text", "answer_json", "resolved_at"];
-export function guardClientResolution(doc: { status?: string }, safe: Record<string, any>): Record<string, any> {
+export function guardClientResolution(doc: { status?: string; blocking?: boolean; workflow_run_id?: unknown; answered_by?: { kind: string } | null }, safe: Record<string, any>): Record<string, any> {
   if (doc.status === "pending") return safe;
+  if (safe.status === "answered" && advisoryAnswerOpen(doc as any)) return safe;
   return RESOLUTION_FIELDS.some((f) => f in safe) ? {} : safe;
 }
 
