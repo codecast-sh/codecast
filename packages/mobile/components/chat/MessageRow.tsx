@@ -1,7 +1,8 @@
 import { memo } from 'react';
 import { StyleSheet, TouchableOpacity, View as RNView, Image, Linking, useWindowDimensions } from 'react-native';
-import { useQuery } from 'convex/react';
-import { api } from '@codecast/convex/convex/_generated/api';
+import { useStorageImageUrl } from '@codecast/web/hooks/useStorageImageUrl';
+import type { ChatMessageView } from '@codecast/web/components/chat/chatTypes';
+import type { ChatMessageRow } from '@codecast/web/store/inboxStore';
 import { Text as RNText } from '@/components/Themed';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
@@ -17,13 +18,19 @@ import type { IdentityRow } from '@codecast/web/lib/sessionIdentity';
 // (agent error, unsent message) rendered loudly enough that nobody scrolls
 // past them unaware.
 
-/** One uploaded image. The URL comes from the same storage query the session
- *  screen uses; a tile keeps a fixed footprint while it resolves so the
- *  transcript doesn't jump when the bytes land. */
-function AttachmentImage({ storageId, onOpen }: { storageId: string; onOpen?: (url: string) => void }) {
+/** One uploaded image. The URL comes from the shared storage resolver (one
+ *  batched query, cached across mounts and warmed when a page of chat lands),
+ *  so a revisited tile paints at once; a tile keeps a fixed footprint while
+ *  it resolves so the transcript doesn't jump when the bytes land. */
+function AttachmentImage({ storageId, previewUrl, onOpen }: {
+  storageId: string;
+  /** The local file of an image still uploading: paints until the stored one resolves. */
+  previewUrl?: string;
+  onOpen?: (url: string) => void;
+}) {
   const Theme = useTheme();
   const { width } = useWindowDimensions();
-  const url = useQuery(api.images.getImageUrl, { storageId: storageId as any });
+  const url = useStorageImageUrl(storageId || undefined) || previewUrl;
   const side = Math.min(width - 96, 280);
   return (
     <TouchableOpacity
@@ -76,7 +83,7 @@ export type MobileChatMessage = {
   failed?: boolean;
   reactions?: { emoji: string; count: number; mine: boolean }[];
   /** Uploaded images, shown as tappable tiles under the text. */
-  attachments?: { storage_id: string; name?: string }[];
+  attachments?: { storage_id: string; name?: string; preview_url?: string }[];
   thread?: {
     replyCount: number;
     replyCapped: boolean;
@@ -84,6 +91,53 @@ export type MobileChatMessage = {
     agentStatus?: 'thinking' | 'streaming' | 'error';
   };
 };
+
+/** A shared chat view (web's ChatMessageView, what the store readers hand
+ *  back) as the phone's row model. `row` is the store row behind it, for the
+ *  fields the shared view does not carry; `identityFor` resolves the session a
+ *  session-typed line personifies. */
+export function fromChatView(
+  view: ChatMessageView,
+  row: ChatMessageRow | undefined,
+  identityFor: (sessionId: string) => IdentityRow | null | undefined,
+): MobileChatMessage {
+  const a = view.author;
+  const status = view.agentStatus === 'listening' || view.agentStatus === 'passed' ? undefined : view.agentStatus;
+  const attachments = view.attachments
+    ?.filter((x) => x.storage_id || x.preview_url)
+    .map((x) => ({ storage_id: x.storage_id, name: x.name, preview_url: x.preview_url }));
+  return {
+    id: view.id,
+    slack: view.slack,
+    author: a.session
+      ? {
+          id: a.id,
+          name: a.name,
+          isAgent: true,
+          session: { agentType: a.session.agentType, via: a.session.via, identity: identityFor(a.session.id) ?? null },
+        }
+      : { id: a.id, name: a.name, avatarUrl: a.avatarUrl, isAgent: a.isAgent, slack: a.slack as ChatAuthorLite['slack'] },
+    content: view.content,
+    createdAt: view.createdAt,
+    editedAt: view.editedAt,
+    deletedAt: view.deletedAt,
+    mentionsMe: view.mentionsMe,
+    agentStatus: status,
+    agentDeadlineAt: (row as any)?.agent_deadline_at,
+    pending: view.pending && !view.failed,
+    failed: view.failed,
+    reactions: view.reactions?.map((r) => ({ emoji: r.emoji, count: r.count, mine: r.mine })),
+    attachments: attachments?.length ? attachments : undefined,
+    thread: view.replyCount
+      ? {
+          replyCount: view.replyCount,
+          replyCapped: false,
+          lastReplyAt: view.lastReplyAt ?? view.createdAt,
+          agentStatus: view.threadAgentStatus,
+        }
+      : undefined,
+  };
+}
 
 const AVATAR_HUES = [Theme.blue, Theme.cyan, Theme.green, Theme.violet, Theme.magenta, Theme.orange];
 function hueFor(seed: string): string {
@@ -101,32 +155,6 @@ function initials(name: string): string {
 
 function clock(ts: number): string {
   return new Date(ts).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-}
-
-/** The author and Slack fields a mirrored chat_messages row carries, in row
- *  shape. Both chat screens fold this into their view mapping so the rule
- *  lives once: an `external_author` snapshot names the real Slack person and
- *  the bridge identity behind `user_id` is never shown (web: slackAuthorFor). */
-export function slackFieldsFor(row: {
-  user_id: unknown;
-  external?: { provider: string; direction: 'inbound' | 'outbound'; permalink?: string; user?: string } | null;
-  external_author?: { name: string; avatar_url?: string; is_bot?: boolean } | null;
-}): { author?: ChatAuthorLite; slack?: MobileChatMessage['slack'] } {
-  const ext = row.external_author;
-  return {
-    author: ext
-      ? {
-          id: String(row.user_id),
-          name: ext.name || 'Someone',
-          avatarUrl: ext.avatar_url || undefined,
-          isAgent: false,
-          slack: { isBot: !!ext.is_bot, userId: row.external?.user || undefined },
-        }
-      : undefined,
-    slack: row.external?.provider === 'slack'
-      ? { direction: row.external.direction, permalink: row.external.permalink }
-      : undefined,
-  };
 }
 
 /** "From Slack" / "Also in Slack" beside the time. Tapping opens the line in
@@ -299,7 +327,7 @@ export const MessageRow = memo(function MessageRow({
         {!!message.attachments?.length && (
           <RNView style={styles.attachments}>
             {message.attachments.map((att) => (
-              <AttachmentImage key={att.storage_id} storageId={att.storage_id} onOpen={onOpenImage} />
+              <AttachmentImage key={att.storage_id || att.preview_url} storageId={att.storage_id} previewUrl={att.preview_url} onOpen={onOpenImage} />
             ))}
           </RNView>
         )}

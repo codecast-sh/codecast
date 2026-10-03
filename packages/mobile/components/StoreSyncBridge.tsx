@@ -2,6 +2,16 @@ import { useEffect, useState } from 'react';
 import { AppState } from 'react-native';
 import { useSyncCore } from '@codecast/web/hooks/useSyncCore';
 import { useSessionCommandResults } from '@codecast/web/hooks/useSessionCommands';
+import { useSyncDevices } from '@codecast/web/hooks/useSyncDevices';
+import { useRecentProjectsFeed } from '@codecast/web/hooks/useRecentProjectsFeed';
+import { useSyncTriggers } from '@codecast/web/hooks/useSyncTriggers';
+import { useSyncTeams } from '@codecast/web/hooks/useSyncTeams';
+import { useSyncTeamMembers } from '@codecast/web/hooks/useSyncTeamMembers';
+import { useChatChannelsSync } from '@codecast/web/hooks/useChatSync';
+import { useCallBaseFeeds } from '@codecast/web/hooks/useCallBaseFeeds';
+import { useInboxStore } from '@codecast/web/store/inboxStore';
+import { activeTeamIdOf } from '@codecast/web/lib/activeTeam';
+import { useSyncWorkspaceData } from '@/hooks/useSyncWorkspaceData';
 import { emitSyncWake } from '@codecast/web/hooks/syncWake';
 import { flushPersistence } from '@codecast/web/store/idbCache';
 import { bootMark } from '@/lib/bootProfile';
@@ -40,6 +50,21 @@ function StoreSyncBridgeInner() {
   // Settles the daemon commands this phone asked for (restart, device move),
   // as web's DashboardLayout does for each window.
   useSessionCommandResults();
+  // What the inbox and the New Session sheet draw beyond sessions: the machine
+  // roster, my recent folders and my triggers. Fed here, ahead of any screen,
+  // so the sheet opens with its machines and folders already in the store.
+  useSyncDevices();
+  useRecentProjectsFeed();
+  useSyncTriggers();
+  // Chat and calls draw from these, so they are fed here, ahead of any
+  // screen: the Chat tab, a channel and a huddle open on the team's rooms,
+  // people and unread already in the store (the same feeders web mounts).
+  useSyncTeams();
+  useSyncTeamMembers(useInboxStore(activeTeamIdOf));
+  useChatChannelsSync();
+  useCallBaseFeeds();
+  // Teams, roster, notifications, tasks, plans, docs, projects and org roles.
+  useSyncWorkspaceData();
   useEffect(() => { bootMark("sync-armed"); }, []);
   // eslint-disable-next-line no-restricted-syntax -- platform wake-source wiring
   useEffect(() => {

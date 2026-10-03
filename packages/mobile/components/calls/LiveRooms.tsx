@@ -1,17 +1,17 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 import { Animated, Pressable, StyleSheet, View as RNView } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import * as Haptics from "expo-haptics";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { CALL_KNOCK_TTL_MS } from "@codecast/shared/contracts";
-import { describeRoom } from "@codecast/web/lib/calls/roomLabels";
+import { useLiveRoomRows, type LiveRoomRow } from "@codecast/web/hooks/liveRoomRows";
+import { useInboxStore } from "@codecast/web/store/inboxStore";
 import { Text } from "@/components/Themed";
 import { SolarizedLight, Spacing, themedStyles, useTheme } from "@/constants/Theme";
 import { ChatAvatar } from "@/components/chat/MessageRow";
-import { joinCall } from "@/lib/calls/callManager";
+import { getCallSnapshot, joinCall, subscribeCall } from "@/lib/calls/callManager";
 
 // Live now, phone-shaped: the huddles running anywhere in your teams, listed
 // where you would walk past them. A room is a door — one tap walks into a
@@ -22,83 +22,31 @@ import { joinCall } from "@/lib/calls/callManager";
 // The rows are named by the SAME rule as every web surface (describeRoom), so
 // a huddle never reads differently on the phone than in the dock.
 
-export type LiveRoomRow = {
-  roomKey: string;
-  label: string;
-  locked: boolean;
-  /** The server's own authorizeRoom answer: Join versus Knock branches on this,
-   *  never on `locked` (calls.knock refuses anyone who could just join). */
-  canJoin: boolean;
-  redacted: boolean;
-  members: { user_id: string; user_name?: string; user_image?: string }[];
-  /** I am seated in it right now. */
-  mine: boolean;
-};
+export type { LiveRoomRow };
 
-export type LiveRoomsInput = {
-  members: any[] | undefined;
-  currentUser: any | null | undefined;
-  channels: any[] | undefined;
-  rail: { channel_id: string; member_ids?: string[] }[] | undefined;
-  /** My live call's room, so "mine" is true the moment I start connecting. */
-  myRoomKey: string | null;
-};
-
-export function useLiveRooms(input: LiveRoomsInput, enabled: boolean): LiveRoomRow[] | undefined {
-  const rooms = useQuery(api.calls.getLiveRooms, enabled ? {} : "skip");
-  const { members, currentUser, channels, rail, myRoomKey } = input;
-  return useMemo(() => {
-    if (!enabled) return [];
-    if (rooms === undefined) return undefined;
-    const me = String(currentUser?._id ?? "");
-    const chatChannels: Record<string, any> = {};
-    for (const c of channels ?? []) chatChannels[String(c._id)] = c;
-    const store = {
-      teamMembers: members ?? [],
-      currentUser: currentUser ?? null,
-      chatChannels,
-      chatRail: rail,
-      conversations: {},
-      sessions: {},
-      liveRooms: rooms,
-    };
-    return rooms.map((room: any) => ({
-      roomKey: room.room_key,
-      label: describeRoom(room.room_key, store as any, { redacted: room.redacted, serverTitle: room.title }).label,
-      locked: !!room.locked,
-      canJoin: !!room.can_join,
-      redacted: !!room.redacted,
-      members: room.members ?? [],
-      mine: myRoomKey === room.room_key || (room.members ?? []).some((m: any) => String(m.user_id) === me),
-    }));
-  }, [enabled, rooms, members, currentUser, channels, rail, myRoomKey]);
+/** The live huddles off the store (the sync bridge feeds calls.getLiveRooms),
+ *  through web's own derivation, with "mine" meaning my call plane's room. */
+export function useLiveRooms(enabled: boolean): LiveRoomRow[] {
+  const myRoomKey = useSyncExternalStore(subscribeCall, () => getCallSnapshot().roomKey, () => null);
+  const rows = useLiveRoomRows(myRoomKey);
+  return enabled ? rows : NO_ROWS;
 }
 
-/** A knock expires on its own after the server's TTL, so the "knocked" state
- *  is a timestamp per room, re-read on a slow tick. */
-function useKnocks(): { knocked: (roomKey: string) => boolean; knock: (roomKey: string) => Promise<void> } {
+const NO_ROWS: LiveRoomRow[] = [];
+
+/** Knock at a locked door. The row reads "knocked" the moment it is pressed
+ *  (the store's knock mark, the same one web paints) and goes back if the
+ *  server refuses. The mark expires on the server's TTL by itself. */
+function useKnock(): (roomKey: string) => Promise<void> {
   const knockMutation = useMutation(api.calls.knock);
-  const [at, setAt] = useState<Record<string, number>>({});
-  const [, tick] = useState(0);
-  useEffect(() => {
-    if (Object.keys(at).length === 0) return;
-    const t = setInterval(() => tick((n) => n + 1), 5_000);
-    return () => clearInterval(t);
-  }, [at]);
-  return {
-    knocked: (roomKey) => Date.now() - (at[roomKey] ?? 0) < CALL_KNOCK_TTL_MS,
-    knock: async (roomKey) => {
-      setAt((prev) => ({ ...prev, [roomKey]: Date.now() }));
-      try {
-        await knockMutation({ room_key: roomKey });
-      } catch {
-        setAt((prev) => {
-          const next = { ...prev };
-          delete next[roomKey];
-          return next;
-        });
-      }
-    },
+  return async (roomKey) => {
+    const store = useInboxStore.getState();
+    store.noteKnock(roomKey);
+    try {
+      await knockMutation({ room_key: roomKey });
+    } catch {
+      store.clearKnock(roomKey);
+    }
   };
 }
 
@@ -186,7 +134,7 @@ function peopleLine(row: LiveRoomRow): string {
 export function LiveRoomCard({ row }: { row: LiveRoomRow }) {
   const Theme = useTheme();
   const router = useRouter();
-  const { knocked, knock } = useKnocks();
+  const knock = useKnock();
   const walkIn = () => {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     void joinCall(row.roomKey);
@@ -201,7 +149,7 @@ export function LiveRoomCard({ row }: { row: LiveRoomRow }) {
       <Ionicons name="headset" size={13} color={SolarizedLight.bgAlt} />
       <Text style={styles.actionJoinText}>join</Text>
     </Pressable>
-  ) : knocked(row.roomKey) ? (
+  ) : row.knocked ? (
     <RNView style={styles.actionGhost}>
       <Text style={styles.actionGhostText}>knocked</Text>
     </RNView>

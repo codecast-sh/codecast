@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { StyleSheet, FlatList, TouchableOpacity, View as RNView, ActivityIndicator } from 'react-native';
+import { StyleSheet, FlatList, TouchableOpacity, View as RNView } from 'react-native';
 import { Text as RNText, TextInput as ThemedTextInput } from '@/components/Themed';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, Stack, useLocalSearchParams } from 'expo-router';
@@ -7,18 +7,16 @@ import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
 import { dmRoomKey } from '@codecast/shared/contracts';
 import { startHuddle } from '@/lib/calls/callManager';
-import { useQuery, useMutation } from 'convex/react';
-import { api } from '@codecast/convex/convex/_generated/api';
-import type { Id } from '@codecast/convex/convex/_generated/dataModel';
+import { useInboxStore } from '@codecast/web/store/inboxStore';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { ChatAvatar } from '@/components/chat/MessageRow';
 import { isPerson } from '@codecast/shared/team/memberKind';
 
 // New message: pick one teammate and land in the 1:1, or several and land in
-// the group. openDm is idempotent on the member set, so tapping through to an
-// existing conversation and starting a "new" one are the same gesture — the
-// room that comes back is the room you already had.
+// the group. openDmChannel is idempotent on the member set and local-first:
+// a room the store holds answers with its real id, a new one with a stub the
+// server row supersedes, so the screen moves in the same tick either way.
 //
 // With `huddle=1` the same picker starts a call instead: one person rings
 // their 1:1 room, several ring the group's room (the same keys web's chips
@@ -29,18 +27,12 @@ export default function NewMessageScreen() {
   const router = useRouter();
   const { huddle } = useLocalSearchParams<{ huddle?: string }>();
   const huddleMode = huddle === '1';
-  const currentUser = useQuery(api.users.getCurrentUser);
-  const viewerId = currentUser?._id ? String(currentUser._id) : '';
-  const teamId = (currentUser as any)?.active_team_id ?? (currentUser as any)?.team_id;
-  const teamMembers = useQuery(
-    api.teams.getTeamMembers,
-    teamId ? { team_id: teamId as Id<'teams'> } : 'skip',
-  );
-  const openDm = useMutation(api.chat.openDm);
+  // The active team's roster, off the store the sync bridge feeds.
+  const viewerId = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : ''));
+  const teamMembers = useInboxStore((s) => s.teamMembers) as any[];
 
   const [q, setQ] = useState('');
   const [picked, setPicked] = useState<string[]>([]);
-  const [opening, setOpening] = useState(false);
 
   const candidates = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -58,21 +50,16 @@ export default function NewMessageScreen() {
       });
   }, [teamMembers, q, viewerId]);
 
-  const open = async (ids: string[]) => {
-    if (ids.length === 0 || opening) return;
+  const open = (ids: string[]) => {
+    if (ids.length === 0) return;
     if (huddleMode) {
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       void startHuddle({ roomKey: dmRoomKey(viewerId, ids), toUserIds: ids });
       router.replace('/call');
       return;
     }
-    setOpening(true);
-    try {
-      const res = await openDm({ member_ids: ids as any });
-      router.replace({ pathname: '/chat/[id]', params: { id: String(res.channel_id) } } as never);
-    } catch {
-      setOpening(false);
-    }
+    const channelId = useInboxStore.getState().openDmChannel(ids);
+    router.replace({ pathname: '/chat/[id]', params: { id: channelId } } as never);
   };
 
   const toggle = (id: string) =>
@@ -87,10 +74,8 @@ export default function NewMessageScreen() {
         </TouchableOpacity>
         <RNText style={styles.title}>{huddleMode ? 'Start a huddle' : 'New message'}</RNText>
         {picked.length > 0 && (
-          <TouchableOpacity style={[styles.go, huddleMode && styles.goHuddle]} onPress={() => open(picked)} disabled={opening}>
-            {opening ? (
-              <ActivityIndicator size="small" color={Theme.bg} />
-            ) : huddleMode ? (
+          <TouchableOpacity style={[styles.go, huddleMode && styles.goHuddle]} onPress={() => open(picked)}>
+            {huddleMode ? (
               <RNView style={styles.goRow}>
                 <Ionicons name="headset" size={13} color={Theme.bg} />
                 <RNText style={styles.goText}>Ring{picked.length > 1 ? ` ${picked.length}` : ''}</RNText>
@@ -132,7 +117,7 @@ export default function NewMessageScreen() {
               activeOpacity={0.7}
               // Tap = open the 1:1 now (the common case). Long-press = start
               // picking a group.
-              onPress={() => (picked.length ? toggle(id) : void open([id]))}
+              onPress={() => (picked.length ? toggle(id) : open([id]))}
               onLongPress={() => toggle(id)}
             >
               <RNView>
@@ -155,7 +140,8 @@ export default function NewMessageScreen() {
           );
         }}
         ListEmptyComponent={
-          teamMembers === undefined ? null : (
+          // An empty roster is a cold cache (a team always holds the viewer).
+          (teamMembers ?? []).length === 0 ? null : (
             <RNText style={styles.emptyText}>Nobody matches</RNText>
           )
         }

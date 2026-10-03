@@ -5,27 +5,32 @@
 // refuses chat queries for an off team and a thrown query takes the screen
 // down with it.
 //
-// The hooks are @platform/flags' factory over one injected source: mobile's
-// source is the two live queries below, so the resolver, the catalog and the
-// "still loading = undefined" rule are the same ones the web and the Convex
-// guard use.
-import { useQuery } from "convex/react";
-import { api } from "@codecast/convex/convex/_generated/api";
+// The hooks are @platform/flags' factory over one injected source: the
+// store's persisted user record and teams list, so a cached answer paints on
+// the first frame. The resolver, the catalog and the "still unknown =
+// undefined" rule are the same ones the web and the Convex guard use.
+import { useMemo } from "react";
+import { useInboxStore } from "@codecast/web/store/inboxStore";
 import { TEAM_FEATURES, workspaceFeatureEnabled, type TeamFeatureKey } from "@codecast/shared/contracts";
 import { createFeatureHooks, defineFeatures, type FeatureSource } from "@platform/flags";
 
 const TEAM_FEATURE_CATALOG = defineFeatures(TEAM_FEATURES);
 
-/** The active team and every team the viewer belongs to; undefined until both
- *  queries have answered, which is what makes the hooks report undefined
- *  rather than a premature false. */
+/** The active team (canonical pointer, users.active_team_id; unset = personal)
+ *  and every team the viewer belongs to. undefined while the user is unknown,
+ *  or while the active team is missing from the list (never fed, or a team
+ *  created this tick), which keeps the hooks from reporting a premature false. */
 function useTeamSource(): FeatureSource<TeamFeatureKey> | undefined {
-  const currentUser = useQuery(api.users.getCurrentUser);
-  const teams = useQuery(api.teams.getUserTeams, {});
-  if (currentUser === undefined || teams === undefined) return undefined;
-  const activeTeamId = currentUser?.active_team_id || currentUser?.team_id;
-  const active = teams?.find((t: any) => t && String(t._id) === String(activeTeamId));
-  return { active: active as any, all: (teams ?? []) as any };
+  const userKnown = useInboxStore((s) => !!s.currentUser?._id);
+  const activeTeamId = useInboxStore((s) => (s.currentUser as any)?.active_team_id as string | undefined);
+  const teams = useInboxStore((s) => s.teams) as any[];
+  return useMemo(() => {
+    if (!userKnown) return undefined;
+    const all = (teams ?? []).filter(Boolean);
+    const active = activeTeamId ? all.find((t: any) => String(t._id) === String(activeTeamId)) : undefined;
+    if (activeTeamId && !active) return undefined;
+    return { active, all } as FeatureSource<TeamFeatureKey>;
+  }, [userKnown, activeTeamId, teams]);
 }
 
 const hooks = createFeatureHooks(TEAM_FEATURE_CATALOG, useTeamSource);

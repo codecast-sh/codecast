@@ -9,15 +9,17 @@ import {
 } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
 import { useLocalSearchParams, useRouter, Stack } from "expo-router";
-import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Theme, Spacing, themedStyles, useTheme } from "@/constants/Theme";
 import { Mono } from "@/constants/fonts";
 import { useInboxStore } from "@codecast/web/store/inboxStore";
 import { computePlanProgress } from "@codecast/web/lib/liveEntities";
+import { useQueryNoThrow } from "@codecast/web/hooks/useQueryNoThrow";
+import { useConvexSync } from "@codecast/web/hooks/useConvexSync";
+import { ingestPlanDetail } from "@codecast/web/hooks/useSyncPlans";
 import { inActiveWorkspace } from "@codecast/web/lib/workspaceScope";
-import { useSyncPlans } from "@/hooks/useSyncPlans";
+import { useFeedLoading } from "@/hooks/useSyncWorkspaceData";
 import { PLAN_STATUS_CONFIG } from "@/components/PlanItem";
 import { TaskItemRow, showTaskActions } from "@/components/TaskItem";
 import { MarkdownContent } from "@/components/MarkdownRenderer";
@@ -31,21 +33,27 @@ export default function PlanDetailScreen() {
   const plans = useInboxStore((s) => s.plans);
   const tasks = useInboxStore((s) => s.tasks);
   const updateTask = useInboxStore((s) => s.updateTask);
-  const { ready: plansReady } = useSyncPlans();
+  const plansLoading = useFeedLoading("plans");
 
   const storePlan = useMemo(() => {
-    return Object.values(plans).find((p) => p.short_id === id);
+    return (id ? plans[id] : undefined) ?? Object.values(plans).find((p) => p.short_id === id);
   }, [plans, id]);
 
-  const planDetail = useQuery(api.plans.webGet, id ? { short_id: id } : "skip");
+  // The detail enriches (joined tasks, sessions, body) and seeds the plans row,
+  // so a plan outside the synced window lands in the store and stays cached.
+  const planDetail = useQueryNoThrow(api.plans.webGet, id ? { short_id: id } : "skip").data;
+  useConvexSync(planDetail, ingestPlanDetail);
+  // The plan's body is its doc: a cached doc body paints before webGet answers.
+  const docId = (storePlan as any)?.doc_id as string | undefined;
+  const cachedBody = useInboxStore((s) => (docId ? s.docDetails[docId]?.content : undefined));
 
   // A share link carries the token along (?share=). For a viewer without
   // access of their own (webGet answers null), the public token query renders
   // the same screen from the shared snapshot.
-  const sharedPlan = useQuery(
+  const sharedPlan = useQueryNoThrow(
     (api as any).plans.getShared,
     !storePlan && share ? { share_token: share } : "skip",
-  );
+  ).data as any;
 
   // Fall back to the fetched server record when the plan isn't in the local
   // store yet (cold deep-link from a push/universal link, or a plan outside the
@@ -55,14 +63,17 @@ export default function PlanDetailScreen() {
   const planTasks = useMemo(() => {
     // Store-derived (live) tasks when the plan is in the store, so a task status
     // flip moves the progress bar instantly. Otherwise use the server snapshot.
-    if (storePlan) {
-      // Plan membership AND the plan's own workspace: a cached row from
-      // another team must not ride in on a stale plan pointer.
-      return Object.values(tasks).filter(
+    // Plan membership AND the plan's own workspace: a cached row from another
+    // team must not ride in on a stale plan pointer. The server snapshot adds
+    // members the store has never cached, overlaid with any live fields.
+    const live = storePlan
+      ? Object.values(tasks).filter(
         (t) => t.plan?._id === storePlan._id && inActiveWorkspace(t, (storePlan as any).team_id),
-      );
-    }
-    return (planDetail?.tasks ?? sharedPlan?.tasks ?? []) as any[];
+      )
+      : [];
+    const snapshot = ((planDetail as any)?.tasks ?? sharedPlan?.tasks ?? []) as any[];
+    const extra = snapshot.filter((t) => !tasks[t._id]);
+    return [...live, ...extra];
   }, [tasks, storePlan, planDetail, sharedPlan]);
 
   const activeTasks = useMemo(
@@ -78,7 +89,7 @@ export default function PlanDetailScreen() {
   // (null = no access / missing). While still loading (undefined) keep the
   // spinner so a cold deep-link doesn't flash "not found" before the fetch
   // lands. With a share token, its query must settle too.
-  const hasSynced = plansReady && planDetail !== undefined && (!share || storePlan || sharedPlan !== undefined);
+  const hasSynced = !plansLoading && planDetail !== undefined && (!share || storePlan || sharedPlan !== undefined);
 
   if (!plan) {
     return (
@@ -113,6 +124,7 @@ export default function PlanDetailScreen() {
   // the webGet snapshot at runtime, but the generated webGet type doesn't declare
   // it — read it defensively so the union (storePlan ?? planDetail) typechecks.
   const sessionCount = (plan as { session_count?: number }).session_count;
+  const body: string | undefined = ((planDetail ?? sharedPlan) as any)?.doc_content ?? cachedBody;
 
   return (
     <>
@@ -150,10 +162,10 @@ export default function PlanDetailScreen() {
           </RNView>
         )}
 
-        {(planDetail ?? sharedPlan)?.doc_content && (
+        {body && (
           <RNView style={styles.section}>
             <RNText style={styles.sectionLabel}>Description</RNText>
-            <MarkdownContent text={(planDetail ?? sharedPlan).doc_content} baseStyle={styles.bodyText} />
+            <MarkdownContent text={body} baseStyle={styles.bodyText} />
           </RNView>
         )}
 

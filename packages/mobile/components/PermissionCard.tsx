@@ -1,10 +1,8 @@
-import { StyleSheet, TouchableOpacity, View, Alert } from 'react-native';
+import { StyleSheet, TouchableOpacity, View } from 'react-native';
 import { Text } from '@/components/Themed';
-import { useMutation } from 'convex/react';
-import { api } from '@codecast/convex/convex/_generated/api';
 import { Id } from '@codecast/convex/convex/_generated/dataModel';
 import * as Haptics from 'expo-haptics';
-import { useState } from 'react';
+import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { PERMISSION_CARD_COPY, PERMISSION_CARD_STYLE } from '@codecast/shared/render/permissionCardStyle';
 
 type Permission = {
@@ -20,48 +18,16 @@ type PermissionCardProps = {
 };
 
 export function PermissionCard({ permission }: PermissionCardProps) {
-  const [isProcessing, setIsProcessing] = useState(false);
-  const updatePermissionStatus = useMutation(api.permissions.updatePermissionStatus);
+  const resolvePermission = useInboxStore((s) => s.resolvePermission);
 
-  const handleApprove = async () => {
-    if (isProcessing) return;
-
-    setIsProcessing(true);
-    try {
-      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      await updatePermissionStatus({
-        permission_id: permission._id,
-        status: "approved",
-      });
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      Alert.alert("Error", `Failed to approve: ${errMsg}`);
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-    } finally {
-      setIsProcessing(false);
-    }
+  // Local-first (store resolvePermission): the row leaves the store on the
+  // press, so the card disappears without waiting on the server.
+  const resolve = (status: "approved" | "denied") => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    resolvePermission(permission._id, status);
   };
-
-  const handleDeny = async () => {
-    if (isProcessing) return;
-
-    setIsProcessing(true);
-    try {
-      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      await updatePermissionStatus({
-        permission_id: permission._id,
-        status: "denied",
-      });
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      Alert.alert("Error", `Failed to deny: ${errMsg}`);
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-    } finally {
-      setIsProcessing(false);
-    }
-  };
+  const handleApprove = () => resolve("approved");
+  const handleDeny = () => resolve("denied");
 
   if (permission.status !== "pending") {
     return null;
@@ -88,22 +54,20 @@ export function PermissionCard({ permission }: PermissionCardProps) {
 
       <View style={styles.buttonContainer}>
         <TouchableOpacity
-          style={[styles.button, styles.approveButton, isProcessing && styles.buttonDisabled]}
+          style={[styles.button, styles.approveButton]}
           onPress={handleApprove}
-          disabled={isProcessing}
         >
           <Text style={styles.approveButtonText}>
-            {isProcessing ? PERMISSION_CARD_COPY.processing : PERMISSION_CARD_COPY.approve}
+            {PERMISSION_CARD_COPY.approve}
           </Text>
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={[styles.button, styles.denyButton, isProcessing && styles.buttonDisabled]}
+          style={[styles.button, styles.denyButton]}
           onPress={handleDeny}
-          disabled={isProcessing}
         >
           <Text style={styles.denyButtonText}>
-            {isProcessing ? PERMISSION_CARD_COPY.processing : PERMISSION_CARD_COPY.deny}
+            {PERMISSION_CARD_COPY.deny}
           </Text>
         </TouchableOpacity>
       </View>

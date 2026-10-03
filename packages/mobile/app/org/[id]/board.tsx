@@ -7,15 +7,16 @@
 import { useCallback, useMemo } from 'react';
 import { ActivityIndicator, FlatList, Image, ScrollView, StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { useQuery } from 'convex/react';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { api } from '@codecast/convex/convex/_generated/api';
 import { Text as RNText } from '@/components/Themed';
 import { Spacing, themedStyles, useTheme, chipShell, chipText, chipTint, CHROME_FONT_CAP } from '@/constants/Theme';
 import { Mono } from '@/constants/fonts';
 import { RoleFace } from '@/components/org/RoleFace';
 import { useSyncOrgTree } from '@/hooks/useSyncOrgTree';
-import { useWorkspaceArgs } from '@/hooks/useWorkspaceArgs';
+import { useActiveTeam } from '@/hooks/useWorkspaceArgs';
+import { useFeedLoading } from '@/hooks/useSyncWorkspaceData';
+import { useInboxStore } from '@codecast/web/store/inboxStore';
+import { filterToWorkspace } from '@codecast/web/lib/workspaceScope';
 import { mobileRouteForUrl } from '@/lib/linkRoutes';
 import { openLink } from '@/lib/links';
 import { solColor } from '@/lib/solColor';
@@ -54,8 +55,15 @@ export default function ScopeBoardScreen() {
   // alike: the server resolves a role's empty scope to nothing, so the page
   // names every project for it. Only that case asks for the project list.
   const whole = !role || (role.scope.project_ids.length === 0 && role.scope.plan_ids.length === 0);
-  const workspaceArgs = useWorkspaceArgs();
-  const projects = useQuery(api.projects.webList, whole && workspaceArgs !== 'skip' ? workspaceArgs : 'skip') as Array<{ _id: string; title?: string; short_id?: string }> | undefined;
+  // The workspace's projects from the persisted store (fed app-wide by
+  // useSyncWorkspaceData). Undefined only while a never-cached list loads.
+  const { teamId } = useActiveTeam();
+  const projectRows = useInboxStore((s) => s.projects);
+  const projectsLoading = useFeedLoading('projects');
+  const projects = useMemo(() => {
+    const rows = filterToWorkspace(Object.values(projectRows) as any[], teamId) as Array<{ _id: string; title?: string; short_id?: string }>;
+    return rows.length === 0 && projectsLoading ? undefined : rows;
+  }, [projectRows, teamId, projectsLoading]);
   const scopeRef: ScopeRef | null = useMemo(() => {
     if (!tree || (!role && !isRoot) || (whole && !projects)) return null;
     return scopeQueryRef(role, (projects ?? []).map((p) => String(p._id)), tree.workspace.kind === 'team' ? tree.workspace.id : undefined);

@@ -13,9 +13,6 @@ import { Image,
   View,
 } from 'react-native';
 import { Text, TextInput } from '@/components/Themed';
-import { useQuery } from 'convex/react';
-import { api } from '@codecast/convex/convex/_generated/api';
-import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import * as Haptics from 'expo-haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -85,11 +82,11 @@ export function AssignmentChip({
   const insets = useSafeAreaInsets();
   const { devices, byId, loaded } = useDevices();
 
-  // Mobile doesn't hydrate the shared store's roster — query it per screen,
-  // like the settings screen does, and inject it into the shared owners hook.
-  const currentUser = useQuery(api.users.getCurrentUser);
-  const activeTeamId = (currentUser?.active_team_id || currentUser?.team_id) as Id<'teams'> | undefined;
-  const teamMembers = useQuery(api.teams.getTeamMembers, activeTeamId ? { team_id: activeTeamId } : 'skip');
+  // The viewer and the roster from the persisted store (the roster is fed
+  // app-wide for the active team by useSyncWorkspaceData), injected into the
+  // shared owners hook so the sheet opens with every name already drawn.
+  const currentUser = useInboxStore((s) => s.currentUser) as any;
+  const teamMembers = useInboxStore((s) => s.teamMembers) as any[];
   // The store binding web uses: every owner change and role move rides the one
   // reparent path, so the inbox refiles and open questions follow the owners.
   const owners = useOwners(conversationId ?? '', useStoreOwnersEnv(conversationId ?? '', {
@@ -381,8 +378,8 @@ function OwnerSheetRows({
 export function AssignedToYouBanner({ conversationId }: { conversationId: string | null | undefined }) {
   const Theme = useTheme();
   // The banner only reads the viewer's own row off listOwners, so the roster
-  // isn't needed — skip the team members query the chip pays for.
-  const currentUser = useQuery(api.users.getCurrentUser);
+  // isn't needed.
+  const currentUser = useInboxStore((s) => s.currentUser) as any;
   const owners = useOwners(conversationId ?? '', useStoreOwnersEnv(conversationId ?? '', { teamMembers: undefined, currentUser, notify: () => {} }));
   const a = owners.myAssignment;
   if (!a || !conversationId) return null;

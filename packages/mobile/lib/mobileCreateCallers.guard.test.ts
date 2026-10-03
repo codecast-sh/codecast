@@ -23,28 +23,31 @@ function sourceBetween(start: string, end: string): string {
 }
 
 describe("mobile result-dependent create callers", () => {
-  test("session create observes readiness before closing or navigating", () => {
-    const submit = sourceBetween(
-      "const handleSubmit",
-      "\n  return (",
-    );
-    const awaitIndex = submit.indexOf("await ready");
-    const finishIndex = submit.indexOf("finishSessionCreate(", awaitIndex);
-    const retainStubIndex = submit.indexOf("retryStubId.current = stubId");
-    const materializeIndex = submit.indexOf("started.materialize()");
-    const finish = sourceBetween(
-      "const finishSessionCreate",
-      "const handleClose",
-    );
-
-    expect(submit).toContain("mobileCreateFailureDisposition");
+  // Starting a session is instant: the sheet closes and the stub opens in the
+  // same tick, with the create's outbox row already on disk. Awaiting the server
+  // here put a network round trip between the tap and the screen.
+  test("session create navigates to the stub without awaiting the server", () => {
+    const submit = sourceBetween("const handleSubmit", "\n  return (");
     expect(submit).toContain("deferCreate: true");
-    expect(retainStubIndex).toBeGreaterThanOrEqual(0);
-    expect(materializeIndex).toBeGreaterThan(retainStubIndex);
-    expect(awaitIndex).toBeGreaterThanOrEqual(0);
-    expect(finishIndex).toBeGreaterThan(awaitIndex);
-    expect(finish).toContain("onClose()");
-    expect(finish).toContain("onSessionCreated(");
+    expect(submit).not.toMatch(/\bawait\b/);
+    const watch = submit.indexOf("watchSessionCreate(stubId, started.materialize(), create)");
+    const finish = submit.indexOf("finishSessionCreate(stubId)");
+    expect(watch).toBeGreaterThanOrEqual(0);
+    expect(finish).toBeGreaterThan(watch);
+    const finishBody = sourceBetween("const finishSessionCreate", "const handleSubmit");
+    expect(finishBody).toContain("onClose()");
+    expect(finishBody).toContain("onSessionCreated(");
+  });
+
+  // A refused create must not vanish silently once the sheet is gone: it is
+  // raised with a retry that reuses the stub's session_id. A parked create is
+  // durable and needs no prompt.
+  test("a refused create raises a retry under the same session_id", () => {
+    const watch = sourceBetween("function watchSessionCreate", "\n}\n");
+    expect(watch).toContain("mobileCreateFailureDisposition(error)");
+    expect(watch).toContain("create(stubId)");
+    expect(watch).toContain("trackSessionCreate(stubId, retry)");
+    expect(watch).toContain("resolveSessionId(stubId, convexId)");
   });
 
   test("label create exposes a retry instead of leaving a rejected promise", () => {
@@ -70,7 +73,12 @@ describe("mobile new-session launch options", () => {
   // is not a no-op: a target short-circuits routing past the rung that prefers
   // the machine holding the checkout, and stable_mode overrides `cast stable`.
   test("only explicit non-default picks are stamped", () => {
-    expect(inboxSource).toContain("deviceId ? { device_id: deviceId } : {}");
+    // The folder list is scoped only by an explicit machine pick.
+    expect(inboxSource).toContain("useScopedRecentProjects({ scopedDeviceId: deviceId,");
+    // The sheet paints from the store on open: machines and folders are fed
+    // app-wide (StoreSyncBridge), never queried when the sheet appears.
+    expect(inboxSource).not.toContain("api.devices.listDevices");
+    expect(inboxSource).not.toContain("api.users.getRecentProjectPaths");
     expect(inboxSource).toContain("devices.length > 1 &&");
 
     const builder = sourceBetween("const launchStampsForCreate", "const finishSessionCreate");
@@ -108,18 +116,12 @@ describe("mobile new-session launch options", () => {
     // itself, so the sheet must write nothing.
     expect(stamp).toContain("if (bucketPick === undefined) return");
     expect(stamp).toContain("_postCreateBucketId");
-    // Stamped synchronously before the await — after the rekey it's too late.
+    // Stamped before the create fires — after the rekey it's too late.
     const submit = sourceBetween("const handleSubmit", "\n  return (");
     const stampIndex = submit.indexOf("stampLabelIntent(stubId)");
-    const awaitIndex = submit.indexOf("await ready");
+    const materializeIndex = submit.indexOf("started.materialize()");
     expect(stampIndex).toBeGreaterThanOrEqual(0);
-    expect(awaitIndex).toBeGreaterThan(stampIndex);
-    // The already-resolved retry has no stub rows; the finish path assigns
-    // directly, guarded so a marker replay can't double-file.
-    const finish = sourceBetween("const finishSessionCreate", "const handleClose");
-    expect(finish).toContain("isConvexId(conversationId)");
-    expect(finish).toContain("assignSessionToBucket");
-    expect(finish).toContain("convBucketMap");
+    expect(materializeIndex).toBeGreaterThan(stampIndex);
     // The dead-code shape this replaced must not come back.
     expect(inboxSource).not.toContain("awaitSessionCreate(conversationId)");
   });
@@ -141,7 +143,7 @@ describe("mobile new-session launch options", () => {
   // A sheet that reopens holding the last launch's choices would silently apply
   // them to the next session.
   test("a completed create resets every launch choice", () => {
-    const finish = sourceBetween("const finishSessionCreate", "const handleClose");
+    const finish = sourceBetween("const finishSessionCreate", "const handleSubmit");
     for (const reset of [
       'setProjectPath("")',
       "setDeviceId(null)",

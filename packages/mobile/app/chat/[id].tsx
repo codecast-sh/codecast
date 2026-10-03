@@ -10,15 +10,16 @@ import { copyToClipboard } from '@/lib/clipboard';
 import { setChatFocus, clearChatFocus } from '@/lib/chatFocus';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
-import { useQuery, useMutation, useConvex } from 'convex/react';
+import { useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
-import type { Id } from '@codecast/convex/convex/_generated/dataModel';
+import { useInboxStore, selectChannelReadMarker } from '@codecast/web/store/inboxStore';
+import { useChannelMessages, useChannelMessagesSync, useChatRail, useSupersededChannelId } from '@codecast/web/hooks/useChatSync';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { authorGroupKey, buildChatTimeline, dmOtherIds, memberHandle } from '@codecast/shared/chat';
 import { channelHuddleMemberIds, chatRoomKey } from '@codecast/shared/contracts';
 import { HuddleButton } from '@/components/calls/SessionHuddleButton';
-import { MessageRow, DayDivider, NewDivider, ChatAvatar, slackFieldsFor, type MobileChatMessage } from '@/components/chat/MessageRow';
+import { MessageRow, DayDivider, NewDivider, ChatAvatar, fromChatView, type MobileChatMessage } from '@/components/chat/MessageRow';
 import { type MentionCandidate } from '@/components/chat/MentionStrip';
 import { useSessionIdentityLookup } from '@/components/identity';
 import { ChatComposerBar } from '@/components/chat/ChatComposerBar';
@@ -38,38 +39,32 @@ import type { ChatAttachmentArg } from '@/components/chat/chatUpload';
 // A push that merely mounts this screen in the background must never eat the
 // unread state the person came to see.
 
-type PendingSend = {
-  clientId: string;
-  content: string;
-  createdAt: number;
-  threadRootId?: string;
-  attachments?: ChatAttachmentArg[];
-  failed?: boolean;
-};
-
 export default function ChatChannelScreen() {
   const Theme = useTheme();
   const { id, m: targetParam } = useLocalSearchParams<{ id: string; m?: string }>();
-  const channelId = id as Id<'chat_channels'>;
+  // A DM opened this tick has a stub id; once the server row lands the stub
+  // is gone and its forwarding address is the real room.
+  const superseded = useSupersededChannelId(id);
+  const channelId = (superseded ?? id) as string;
   const router = useRouter();
-  const convex = useConvex();
 
-  const currentUser = useQuery(api.users.getCurrentUser);
+  // LOCAL FIRST. Everything this screen draws is read from the store, which
+  // is persisted: the channel's cached page, its reactions, the roster and
+  // the rail paint on the first frame. useChannelMessagesSync is only the
+  // feeder (live newest page, older pages on demand), and every gesture is a
+  // store action that paints before the server hears of it.
+  const currentUser = useInboxStore((s) => s.currentUser) as any;
   const viewerId = currentUser?._id ? String(currentUser._id) : '';
 
   // Chat is a per-team opt-in; a deep link into an off team's channel must
-  // not subscribe (the server refuses, and a thrown query drops the screen).
+  // not subscribe (the server refuses). Unknown (cold) still feeds: the
+  // feeder never throws, and the cached page is already on screen.
   const chatOn = useActiveTeamFeature("chat");
-  // Channel meta + roster come from queries this screen's tab already warmed.
-  const channelData = useQuery(api.chat.listChannels, chatOn ? {} : 'skip');
-  const channel = useMemo(
-    () => (channelData?.channels as any[] | undefined)?.find((c) => String(c._id) === String(channelId)),
-    [channelData, channelId],
-  );
-  const teamMembers = useQuery(
-    api.teams.getTeamMembers,
-    channel ? { team_id: channel.team_id } : 'skip',
-  );
+  const feed = useChannelMessagesSync(chatOn === false ? undefined : channelId);
+  const views = useChannelMessages(channelId, feed.floor);
+  const channel = useInboxStore((s) => s.chatChannels[channelId]) as any;
+  const railRow = useChatRail().find((c) => c.id === channelId);
+  const teamMembers = useInboxStore((s) => s.teamMembers) as any[];
   const memberById = useMemo(() => {
     const map = new Map<string, any>();
     for (const m of teamMembers ?? []) if (m) map.set(String(m._id), m);
@@ -102,52 +97,28 @@ export default function ChatChannelScreen() {
     [mentionCandidates],
   );
 
-  // Head page stays live via the subscription; older pages accumulate below it.
-  const head = useQuery(api.chat.listMessages, chatOn ? { channel_id: channelId, limit: 60 } : 'skip');
-  // Names for authors the roster no longer carries (departed members): the
-  // query's own authors map, so old messages never degrade to "Teammate".
-  const authorById = useMemo(() => {
-    const map = new Map<string, any>();
-    for (const a of ((head?.authors as any[]) ?? [])) map.set(String(a._id), a);
-    return map;
-  }, [head?.authors]);
-
-  const [older, setOlder] = useState<any[]>([]);
-  const [olderCursor, setOlderCursor] = useState<string | null>(null);
-  const [loadingOlder, setLoadingOlder] = useState(false);
-
-  const [pending, setPending] = useState<PendingSend[]>([]);
   const [sheetTarget, setSheetTarget] = useState<MobileChatMessage | null>(null);
   const [editing, setEditing] = useState<{ messageId: string; content: string } | null>(null);
   const [viewerUri, setViewerUri] = useState<string | null>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
 
-  const sendMessage = useMutation(api.chat.sendMessage);
-  const editMessage = useMutation(api.chat.editMessage);
-  const markRead = useMutation(api.chat.markRead);
-  const toggleReaction = useMutation(api.chat.toggleReaction);
   const stopAnchor = useMutation(api.chat.stopAnchorReply);
-  const deleteMessage = useMutation(api.chat.deleteMessage);
 
   // The unread rule renders against the read mark AS IT WAS when the screen
   // opened. The live mark advances while you read — computing against it would
-  // erase your place mid-scroll.
-  const entryReadAtRef = useRef<number | undefined>(undefined);
-  const readsReady = channelData !== undefined;
-  if (entryReadAtRef.current === undefined && readsReady) {
-    const read = (channelData?.reads as any[] | undefined)?.find(
-      (r) => String(r.channel_id) === String(channelId),
-    );
-    entryReadAtRef.current = read?.last_read_at ?? 0;
+  // erase your place mid-scroll. Frozen once the room resolves (the cached rail
+  // usually holds it on the first frame).
+  const entryReadAtRef = useRef<{ channelId: string; at: number | undefined } | null>(null);
+  if (railRow && entryReadAtRef.current?.channelId !== channelId) {
+    entryReadAtRef.current = { channelId, at: railRow.lastReadAt ?? 0 };
   }
 
   // A coarse clock: drives the thinking row's elapsed seconds without
   // re-rendering the list more than once a second, and only while needed.
   const [now, setNow] = useState(() => Date.now());
-  const anyThinking = (head?.messages as any[] | undefined)?.some(
-    (m) => m.agent_status === 'thinking' || m.agent_status === 'streaming',
-  ) || (head?.threads as any[] | undefined)?.some(
-    (t) => t.agent_status === 'thinking' || t.agent_status === 'streaming',
+  const anyThinking = views.some(
+    (m) => m.agentStatus === 'thinking' || m.agentStatus === 'streaming'
+      || m.threadAgentStatus === 'thinking' || m.threadAgentStatus === 'streaming',
   );
   useEffect(() => {
     if (!anyThinking) return;
@@ -157,16 +128,18 @@ export default function ChatChannelScreen() {
 
   // ── Honest reading ────────────────────────────────────────────────────────
   // Focused screen + foregrounded app = the person is looking. Only then does
-  // the newest message advance their mark (and silence their phone).
+  // the newest message advance their mark (and silence their phone). The
+  // mark is the newest row in the ROOM, replies included, so a badge a thread
+  // reply raised clears too (web's rule).
   const focusedRef = useRef(false);
   const appActiveRef = useRef(AppState.currentState === 'active');
-  const newestId = (head?.messages as any[] | undefined)?.at(-1)?._id;
-  const newestIdRef = useRef<string | undefined>(undefined);
-  newestIdRef.current = newestId ? String(newestId) : undefined;
+  const newestId = views.at(-1)?.id;
   const markIfPresent = useCallback(() => {
-    if (!focusedRef.current || !appActiveRef.current || !newestIdRef.current) return;
-    markRead({ channel_id: channelId, last_read_message_id: newestIdRef.current as any }).catch(() => {});
-  }, [channelId, markRead]);
+    if (!focusedRef.current || !appActiveRef.current) return;
+    const state = useInboxStore.getState();
+    const marker = selectChannelReadMarker(state as any, channelId);
+    if (marker) state.markChannelRead(channelId, marker._id);
+  }, [channelId]);
   useFocusEffect(
     useCallback(() => {
       focusedRef.current = true;
@@ -187,161 +160,37 @@ export default function ChatChannelScreen() {
   }, [markIfPresent]);
   useEffect(() => { markIfPresent(); }, [newestId, markIfPresent]);
 
-  // Sends that echoed back from the server leave the pending list.
-  const echoedClientIds = useMemo(() => {
-    const set = new Set<string>();
-    for (const m of (head?.messages as any[]) ?? []) if (m.client_id) set.add(m.client_id);
-    return set;
-  }, [head?.messages]);
-  useEffect(() => {
-    if (echoedClientIds.size === 0) return;
-    setPending((prev) => prev.filter((p) => !echoedClientIds.has(p.clientId)));
-  }, [echoedClientIds]);
-
-  const doSend = useCallback(async (entry: PendingSend) => {
-    try {
-      await sendMessage({
-        channel_id: channelId,
-        content: entry.content,
-        client_id: entry.clientId,
-        ...(entry.attachments?.length ? { attachments: entry.attachments as any } : {}),
-        ...(entry.threadRootId ? { thread_root_id: entry.threadRootId as any } : {}),
-      });
-    } catch {
-      // The row turns red and offers Retry — a message must never look sent
-      // when it was not, and must never silently vanish.
-      setPending((prev) => prev.map((p) => (p.clientId === entry.clientId ? { ...p, failed: true } : p)));
-    }
-  }, [channelId, sendMessage]);
-
+  // Sends paint in this tick (the store's send action writes the row and
+  // journals the mutation); a refused send turns the row red with Retry.
   const onSend = useCallback((content: string, attachments: ChatAttachmentArg[]) => {
-    const entry: PendingSend = {
-      clientId: `mob-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
-      content,
-      createdAt: Date.now(),
-      attachments: attachments.length ? attachments : undefined,
-    };
-    setPending((prev) => [...prev, entry]);
-    void doSend(entry);
-  }, [doSend]);
+    useInboxStore.getState().sendChatMessage(channelId, content, {
+      attachments: attachments.length ? (attachments as any) : undefined,
+    });
+  }, [channelId]);
 
   const onSubmitEdit = useCallback((messageId: string, content: string) => {
-    void editMessage({ message_id: messageId as any, content }).catch(() => {
-      Alert.alert('Edit failed', 'The message kept its previous text.');
-    });
-  }, [editMessage]);
+    useInboxStore.getState().editChatMessage(messageId, content);
+  }, []);
 
-  const onRetrySend = useCallback((id: string) => {
-    setPending((prev) => prev.map((p) => (`pend-${p.clientId}` === id ? { ...p, failed: false } : p)));
-    const entry = pending.find((p) => `pend-${p.clientId}` === id);
-    if (entry) void doSend({ ...entry, failed: false });
-  }, [pending, doSend]);
+  const onRetrySend = useCallback((rowId: string) => {
+    useInboxStore.getState().retryChatSend(rowId);
+  }, []);
 
-  const loadOlder = useCallback(async () => {
-    if (loadingOlder || !head || !head.has_more) return;
-    setLoadingOlder(true);
-    try {
-      const page = await convex.query(api.chat.listMessages, {
-        channel_id: channelId,
-        limit: 60,
-        cursor: (olderCursor ?? head.next_cursor) as any,
-      });
-      setOlder((prev) => [...(page.messages as any[]), ...prev]);
-      setOlderCursor(page.next_cursor);
-    } finally {
-      setLoadingOlder(false);
-    }
-  }, [convex, channelId, head, olderCursor, loadingOlder]);
+  const toggleReaction = useCallback((messageId: string, emoji: string) => {
+    useInboxStore.getState().toggleChatReaction(messageId, emoji);
+  }, []);
 
-  // Reaction rows aggregate per message: emoji → count + whether mine.
-  const reactionsByMessage = useMemo(() => {
-    const map = new Map<string, { emoji: string; count: number; mine: boolean }[]>();
-    for (const r of ((head?.reactions as any[]) ?? [])) {
-      const key = String(r.message_id);
-      const list = map.get(key) ?? [];
-      const existing = list.find((x) => x.emoji === r.emoji);
-      if (existing) {
-        existing.count += 1;
-        existing.mine = existing.mine || String(r.user_id) === viewerId;
-      } else {
-        list.push({ emoji: r.emoji, count: 1, mine: String(r.user_id) === viewerId });
-      }
-      map.set(key, list);
-    }
-    return map;
-  }, [head?.reactions, viewerId]);
-
-  const threadByRoot = useMemo(() => {
-    const map = new Map<string, any>();
-    for (const t of ((head?.threads as any[]) ?? [])) map.set(String(t.root_id), t);
-    return map;
-  }, [head?.threads]);
+  const loadingOlder = feed.isLoadingOlder;
+  const loadOlder = useCallback(() => {
+    if (feed.hasMoreAbove) feed.loadOlder();
+  }, [feed]);
 
   const identityFor = useSessionIdentityLookup();
-  const toView = useCallback((msg: any): MobileChatMessage => {
-    const member = memberById.get(String(msg.user_id));
-    const thread = threadByRoot.get(String(msg._id));
-    const humanName = member?.name || authorById.get(String(msg.user_id))?.name;
-    // A line a codecast SESSION typed renders as the session (title as the
-    // name, agent identity), with the human as a "via" credit — same rule as
-    // web's sessionAuthorFor. The title is the server's send-time snapshot.
-    const sessionOrigin = msg.origin === 'agent' && msg.origin_session_id && msg.author_kind !== 'agent';
-    // A Slack-relayed line names the real Slack person, never the bridge.
-    const slack = slackFieldsFor(msg);
-    return {
-      id: String(msg._id),
-      slack: slack.slack,
-      author: slack.author ?? (sessionOrigin
-        ? {
-            id: String(msg.user_id),
-            name: msg.origin_session_title || 'Agent session',
-            isAgent: true,
-            session: { agentType: msg.origin_agent_type, via: humanName, identity: identityFor(msg.origin_session_id) },
-          }
-        : {
-            id: String(msg.user_id),
-            name: humanName || (msg.author_kind === 'agent' ? 'Workspace agent' : 'Teammate'),
-            avatarUrl: member?.github_avatar_url || member?.image || undefined,
-            isAgent: msg.author_kind === 'agent' || member?.is_bot,
-          }),
-      content: msg.content,
-      createdAt: msg.created_at,
-      editedAt: msg.edited_at,
-      deletedAt: msg.deleted_at,
-      mentionsMe: (msg.mentions ?? []).some((x: any) => String(x) === viewerId) || msg.mention_scope === 'here',
-      agentStatus: msg.agent_status,
-      agentDeadlineAt: msg.agent_deadline_at,
-      attachments: msg.attachments?.length ? msg.attachments : undefined,
-      reactions: reactionsByMessage.get(String(msg._id)),
-      thread: thread
-        ? {
-            replyCount: thread.reply_count,
-            replyCapped: thread.reply_capped,
-            lastReplyAt: thread.last_reply_at,
-            agentStatus: thread.agent_status,
-          }
-        : undefined,
-    };
-  }, [memberById, authorById, viewerId, reactionsByMessage, threadByRoot, identityFor]);
+  const chatMessages = useInboxStore.getState().chatMessages;
 
-  // Older pages + live head + optimistic sends, ascending, folded through the
-  // SAME timeline rules the web uses.
+  // The shared views, folded through the SAME timeline rules the web uses.
   const rows = useMemo(() => {
-    const serverRows = [...older, ...((head?.messages as any[]) ?? [])].map(toView);
-    const pendingRows: MobileChatMessage[] = pending.map((p) => ({
-      id: `pend-${p.clientId}`,
-      author: {
-        id: viewerId,
-        name: currentUser?.name || 'You',
-        avatarUrl: (currentUser as any)?.github_avatar_url || (currentUser as any)?.image,
-      },
-      content: p.content,
-      createdAt: p.createdAt,
-      attachments: p.attachments?.map((a) => ({ storage_id: a.storage_id })),
-      pending: !p.failed,
-      failed: p.failed,
-    }));
-    const all = [...serverRows, ...pendingRows];
+    const all = views.map((v) => fromChatView(v, chatMessages[v.id], identityFor));
     return buildChatTimeline(
       all.map((msg) => ({
         id: msg.id,
@@ -352,55 +201,57 @@ export default function ChatChannelScreen() {
         deleted: !!msg.deletedAt,
         view: msg,
       })),
-      { now, lastReadAt: entryReadAtRef.current, viewerId },
+      { now, lastReadAt: entryReadAtRef.current?.at, viewerId },
     );
-  }, [older, head?.messages, pending, toView, now, viewerId, currentUser]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [views, identityFor, now, viewerId]);
 
   // Inverted list: index 0 renders at the bottom, so the rows reverse.
   const inverted = useMemo(() => [...rows].reverse(), [rows]);
 
   // ── Deep-link target (?m=<messageId>) ─────────────────────────────────────
   // A push or a web permalink names a message. A reply forwards to its thread;
-  // a channel row scrolls into view and flashes. Bounded search: the head page
-  // plus up to three older pages — past that the link degrades to "the channel".
+  // a channel row scrolls into view and flashes. Bounded search: the pages the
+  // store holds plus up to three older ones — past that the link degrades to
+  // "the channel".
   const listRef = useRef<FlatList>(null);
   const targetTriesRef = useRef(0);
   const doneTargetRef = useRef<string | null>(null);
   useEffect(() => {
     const target = typeof targetParam === 'string' ? targetParam : undefined;
-    if (!target || doneTargetRef.current === target || !head) return;
-    const inHead = [...older, ...((head.messages as any[]) ?? [])].find((r) => String(r._id) === target);
-    if (inHead?.thread_root_id) {
+    if (!target || doneTargetRef.current === target) return;
+    // The store first: a cached or prefetched row answers without a page.
+    const row = useInboxStore.getState().chatMessages[target] as any;
+    if (row?.thread_root_id) {
       doneTargetRef.current = target;
       router.replace({
         pathname: '/chat/thread/[id]',
-        params: { id: String(inHead.thread_root_id), channel: String(channelId), m: target },
+        params: { id: String(row.thread_root_id), channel: String(channelId), m: target },
       } as never);
       return;
     }
-    if (inHead) {
+    const index = inverted.findIndex((it: any) => it.kind === 'message' && it.message?.id === target);
+    if (index >= 0) {
       doneTargetRef.current = target;
-      const index = inverted.findIndex((it: any) => it.kind === 'message' && it.message?.id === target);
-      if (index >= 0) {
-        setHighlightId(target);
-        // The inverted list already opens at the newest line. Centering a
-        // notification that named that line is a scroll away from the bottom
-        // and back — skip it. A permalink into history still jumps.
-        if (index > 2) {
-          setTimeout(() => listRef.current?.scrollToIndex({ index, viewPosition: 0.5, animated: true }), 250);
-        }
-        setTimeout(() => setHighlightId(null), 3200);
+      setHighlightId(target);
+      // The inverted list already opens at the newest line. Centering a
+      // notification that named that line is a scroll away from the bottom
+      // and back — skip it. A permalink into history still jumps.
+      if (index > 2) {
+        setTimeout(() => listRef.current?.scrollToIndex({ index, viewPosition: 0.5, animated: true }), 250);
       }
+      setTimeout(() => setHighlightId(null), 3200);
       return;
     }
-    if (targetTriesRef.current < 3 && head.has_more && !loadingOlder) {
+    if (feed.loading) return;
+    if (targetTriesRef.current < 3 && feed.hasMoreAbove && !loadingOlder) {
       targetTriesRef.current += 1;
-      void loadOlder();
-    } else {
+      loadOlder();
+    } else if (!loadingOlder) {
       // Give up quietly: the person is in the right room, which is the point.
       doneTargetRef.current = target;
     }
-  }, [targetParam, head, older, inverted, loadOlder, loadingOlder, router, channelId]);
+  }, [targetParam, inverted, feed.loading, feed.hasMoreAbove, loadOlder, loadingOlder, router, channelId]);
 
   // ── Scroll pill ───────────────────────────────────────────────────────────
   // Away from the newest message, a pill offers the way back — and counts what
@@ -441,7 +292,7 @@ export default function ChatChannelScreen() {
     const message = sheetTarget;
     if (!message) return;
     if (action.kind === 'react') {
-      void toggleReaction({ message_id: message.id as any, emoji: action.emoji });
+      toggleReaction(message.id, action.emoji);
     } else if (action.kind === 'reply') {
       pushThread(message.id);
     } else if (action.kind === 'copy') {
@@ -452,10 +303,10 @@ export default function ChatChannelScreen() {
     } else if (action.kind === 'delete') {
       Alert.alert('Delete message?', 'It will show as deleted for everyone.', [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Delete', style: 'destructive', onPress: () => void deleteMessage({ message_id: message.id as any }) },
+        { text: 'Delete', style: 'destructive', onPress: () => useInboxStore.getState().deleteChatMessage(message.id) },
       ]);
     }
-  }, [sheetTarget, toggleReaction, pushThread, deleteMessage]);
+  }, [sheetTarget, toggleReaction, pushThread]);
 
   const renderItem = useCallback(({ item }: { item: (typeof rows)[number] }) => {
     if (item.kind === 'day') return <DayDivider label={item.label} />;
@@ -470,7 +321,7 @@ export default function ChatChannelScreen() {
           knownMentionHandles={knownHandles}
           onOpenThread={pushThread}
           onLongPress={onLongPress}
-          onToggleReaction={(mid, emoji) => void toggleReaction({ message_id: mid as any, emoji })}
+          onToggleReaction={toggleReaction}
           onStopAgent={(mid) => void stopAnchor({ message_id: mid as any })}
           onRetrySend={onRetrySend}
           onOpenImage={setViewerUri}
@@ -544,7 +395,7 @@ export default function ChatChannelScreen() {
         {channel && channel.kind !== 'community' && (
           <HuddleButton
             roomKey={chatRoomKey({
-              id: String(channel._id),
+              id: channelId,
               kind: channel.kind,
               otherIds: dmOthers,
               viewerId,
@@ -552,11 +403,7 @@ export default function ChatChannelScreen() {
             })}
             teamId={channel.team_id ? String(channel.team_id) : null}
             ring={isDm ? dmOthers : undefined}
-            channelMemberCount={channelHuddleMemberIds(
-              channel.kind,
-              channelData?.rail?.find((row) => String(row.channel_id) === String(channelId))?.member_ids,
-              teamMembers ?? undefined,
-            )?.length}
+            channelMemberCount={channelHuddleMemberIds(channel.kind, railRow?.memberIds, teamMembers)?.length}
             anchorTitle={isDm ? (dmOthers.length > 1 ? `with ${roomName}` : undefined) : `#${channel.name}`}
           />
         )}
@@ -585,7 +432,9 @@ export default function ChatChannelScreen() {
               ) : null
             }
             ListEmptyComponent={
-              head === undefined ? null : (
+              // A cold cache waits for the first page; a room the rail attests
+              // is empty, or one the server has answered for, says so at once.
+              feed.loading && !railRow?.knownEmpty ? null : (
                 <RNView style={styles.emptyWrap}>
                   {/* Fabric's inverted list leaves empty/footer components
                       untransformed — no counter-flip (verified on device). */}

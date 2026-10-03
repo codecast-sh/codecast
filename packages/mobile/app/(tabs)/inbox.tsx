@@ -18,16 +18,19 @@ import {
   sessionsWakeSig, pendingSendWakeSig, sessionUnreadMap, sessionUnreadWakeSig, sectionHeaderCount,
 } from '@codecast/web/store/inboxStore';
 import {
-  AGENT_MODEL_CONFIG, featuredModelOptions, launchRailOptions, toConvexAgentType,
+  AGENT_MODEL_CONFIG, compareMachineChips, featuredModelOptions, launchRailOptions, toConvexAgentType,
   type AgentClientId, type DeviceModelInventory,
 } from '@codecast/shared/contracts';
 import { defaultMachineId } from '@codecast/web/lib/machinePicker';
 import { ModelEffortSheet } from '@/components/ModelEffortSheet';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import { usePinnedLaunchOptions } from '@codecast/web/hooks/usePinnedAgents';
+import { useScopedRecentProjects } from '@codecast/web/hooks/useScopedRecentProjects';
 import { partitionTriggerInbox, type TaskRow } from '@codecast/web/components/triggerTasks';
+import { useTriggers } from '@codecast/web/hooks/useSyncTriggers';
+import { useInstantSessionRows, mergeSearchRows, type SessionSearchRow } from '@codecast/web/lib/instantSessionSearch';
 import { labelHexColor } from '@/lib/labelColors';
-import { type Device, deviceColor, deviceDisplayName } from '@/components/DevicesSection';
+import { type Device, deviceDisplayName } from '@/components/DevicesSection';
 import { SessionListSkeleton } from '@/components/SkeletonLoader';
 import { TriggerDock } from '@/components/TriggerDock';
 import { AgentLogoSvg } from '@/components/AgentLogo';
@@ -144,6 +147,32 @@ function mobileCreateErrorMessage(subject: string, error: unknown): string {
   return `CodeCast could not confirm the ${subject} request. Your choices are still here, and retrying is safe.`;
 }
 
+// The sheet has already closed and the stub is on screen by the time a create
+// can fail, so a failure is raised over whatever is showing. A parked create is
+// durable and delivers on its own; anything else offers a retry under the same
+// session_id (idempotent server side). Left alone, the stub still self-heals on
+// its first send (awaitConvexId → ensureSessionCreated).
+function watchSessionCreate(stubId: string, ready: Promise<string>, create: (stubId: string) => Promise<string>) {
+  ready.catch((error) => {
+    const store = useInboxStore.getState();
+    if (store.getConvexId(stubId) || mobileCreateFailureDisposition(error) === "accepted-pending") return;
+    Alert.alert("Session didn't start", "The server didn't confirm the new session. Retrying is safe.", [
+      { text: "Not now", style: "cancel" },
+      {
+        text: "Retry",
+        onPress: () => {
+          const retry = create(stubId).then((convexId) => {
+            if (convexId) store.resolveSessionId(stubId, convexId);
+            return convexId;
+          });
+          store.trackSessionCreate(stubId, retry);
+          watchSessionCreate(stubId, retry, create);
+        },
+      },
+    ]);
+  });
+}
+
 // A sheet section that folds to "LABEL   value ›" until tapped. The header is
 // the same micro-label as the always-open sections, so closed and open rows
 // read as one list; only the trailing summary + chevron mark it as foldable.
@@ -182,11 +211,10 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
   const Theme = useTheme();
   const [agentId, setAgentId] = useState<AgentClientId>("claude");
   const agentOptions = usePinnedLaunchOptions(agentId);
-  const [projectPath, setProjectPath] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+  // An explicit folder pick only; null = untouched, so the field shows the
+  // top recent folder from the store on the very first frame.
+  const [pathPick, setProjectPath] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const retryStubId = useRef<string | null>(null);
-  const submitAttempt = useRef(0);
   // Launch options. Each holds an EXPLICIT pick only — "default"/"auto"/false
   // mean "say nothing and let the agent's or machine's own default win".
   const [model, setModel] = useState("default");
@@ -211,34 +239,28 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
   // picks the machine (deviceRouting) and the folder list stays the union across
   // online devices — the behaviour before this row existed.
   const [deviceId, setDeviceId] = useState<string | null>(null);
-  const rawDevices = (useQuery(api.devices.listDevices, visible ? {} : "skip") ?? []) as MachineDevice[];
-  // listDevices is last_seen-sorted, so heartbeats would reshuffle the chips
-  // under the user's thumb. Hold them still: locals first, then by name.
-  const devices = useMemo(
-    () => [...rawDevices].sort((a, b) =>
-      Number(a.is_remote) - Number(b.is_remote) || deviceDisplayName(a).localeCompare(deviceDisplayName(b))),
-    [rawDevices],
-  );
+  // Store-fed (StoreSyncBridge mounts useSyncDevices), so the row paints at open.
+  const rawDevices = useInboxStore((s) => s.machineRoster) as MachineDevice[];
+  // listDevices is last_seen-sorted; chips hold still instead.
+  const devices = useMemo(() => [...rawDevices].sort(compareMachineChips), [rawDevices]);
+  // The row scrolls sideways, so the selected chip can open past the edge:
+  // its first layout scrolls the row to it.
+  const machineRowRef = useRef<ScrollView>(null);
   // What auto-routing would choose, so the highlighted chip matches where the
   // session actually lands. One ladder with the web picker (machinePicker), fed
   // the folder being typed so a machine holding that checkout wins — the same
   // rung routing uses. The ladder is deterministic (stable tie-breaks), so no
   // feedback loop is needed to pin the highlight against heartbeats.
+  // The folder list for the picked machine (or the union with no pick), from
+  // the store: the same ladder web's ProjectSwitcher uses.
+  const pickedDevice = useMemo(() => (deviceId ? devices.find((d) => d.device_id === deviceId) ?? null : null), [devices, deviceId]);
+  const recentProjects = useScopedRecentProjects({ scopedDeviceId: deviceId, routedDevice: pickedDevice, active: visible });
+  const projectPath = pathPick ?? recentProjects[0]?.path ?? "";
   const defaultDeviceId = defaultMachineId(rawDevices, {
     ownerDeviceId: null,
     projectPath: projectPath.trim() || null,
   });
   const selectedDeviceId = deviceId ?? defaultDeviceId;
-  const recentProjects = useQuery(
-    api.users.getRecentProjectPaths,
-    visible ? { limit: 50, ...(deviceId ? { device_id: deviceId } : {}) } : "skip",
-  );
-
-  useEffect(() => {
-    if (visible && !projectPath && recentProjects?.length) {
-      setProjectPath(recentProjects[0].path);
-    }
-  }, [visible, recentProjects]);
 
   // Deliver every launch choice to the session the sheet creates. They must ride
   // the CREATE itself, never a follow-up reconfigure: the create's server side
@@ -282,17 +304,6 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
   };
 
   const finishSessionCreate = (conversationId: string) => {
-    // Filing doesn't affect the spawn. The stub path is covered by the marker
-    // stamped at submit; a create that resolved in-line (retry of an already
-    // landed create) has no stub rows left to carry it, so assign directly —
-    // guarded, because the marker replay may have filed it already.
-    if (effectiveBucketId && isConvexId(conversationId)) {
-      const st = useInboxStore.getState();
-      if (convBucketMap(st.bucketAssignments)[conversationId] !== effectiveBucketId) {
-        st.assignSessionToBucket(conversationId, effectiveBucketId);
-      }
-    }
-    retryStubId.current = null;
     setSubmitError(null);
     setProjectPath("");
     setDeviceId(null);
@@ -308,93 +319,46 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
     onSessionCreated(conversationId);
   };
 
-  const handleClose = () => {
-    // A Convex mutation may wait across an offline window. Closing the sheet
-    // must not cause a late acknowledgement to navigate unexpectedly; the
-    // retained stub lets a later reopen resolve or retry the same intent.
-    submitAttempt.current++;
-    setSubmitting(false);
-    onClose();
-  };
-
-  // Seed the optimistic stub immediately, but do not close or navigate until
-  // the create is either server-confirmed or synchronously persisted in the
-  // native outbox. A dropped parked:false call keeps this modal and all input.
-  // Retry reuses the same session_id, which is idempotent on the server.
-  const handleSubmit = async () => {
-    if (submitting) return;
-    const attempt = ++submitAttempt.current;
-    setSubmitting(true);
+  // Instant start, the same shape as web's compose popup: seed the local stub,
+  // fire the create, then close the sheet and open the stub in the same tick.
+  // The create's native outbox row is written synchronously before the network
+  // call, so nothing here waits on the server. The session screen renders the
+  // stub, a first message typed meanwhile queues locally, and the store rekeys
+  // stub → real id when the create lands. A create the server refuses surfaces
+  // through watchSessionCreate with a retry under the same session_id.
+  const handleSubmit = () => {
     setSubmitError(null);
     const store = useInboxStore.getState();
     const agent_type = toConvexAgentType(agentId);
     const path = projectPath.trim() || undefined;
-    let stubId = retryStubId.current ?? "";
-
+    // Bound to this render's picks, so a retry after the sheet has reset still
+    // re-sends exactly what the user launched with.
+    const create = (stubId: string) =>
+      store.createSession({
+        agent_type,
+        project_path: path,
+        git_root: path,
+        session_id: stubId,
+        ...launchStampsForCreate(),
+      });
+    let stubId: string;
     try {
-      let ready: Promise<string>;
-      if (stubId) {
-        const alreadyResolved = store.getConvexId(stubId);
-        if (alreadyResolved) {
-          ready = Promise.resolve(alreadyResolved);
-        } else {
-          ready = store.createSession({
-            agent_type,
-            project_path: path,
-            git_root: path,
-            session_id: stubId,
-            ...launchStampsForCreate(),
-          }).then((convexId: string) => {
-            if (convexId) store.resolveSessionId(stubId, convexId);
-            return convexId || stubId;
-          });
-          store.trackSessionCreate(stubId, ready);
-          ready.catch(() => {});
-        }
-      } else {
-        // Capture the stub before materializing. Native persistence is
-        // deliberately synchronous, so a full/damaged database can throw
-        // during createSession; deferCreate lets the catch below retain the
-        // exact stub and present a safe retry instead of losing the intent.
-        const started = store.beginOptimisticSession({
-          agentType: agent_type,
-          projectPath: path,
-          gitRoot: path,
-          deferCreate: true,
-          create: (createdStubId) =>
-            store.createSession({
-              agent_type,
-              project_path: path,
-              git_root: path,
-              session_id: createdStubId,
-              ...launchStampsForCreate(),
-            }),
-        });
-        stubId = started.stubId;
-        retryStubId.current = stubId;
-        ready = started.materialize();
-      }
-
-      // Synchronous with the branches above — the stub rows (when any) still
-      // exist and the rekey continuation can't have run yet, so the marker is
-      // in place before the id resolves. The already-resolved retry has no stub
-      // rows; finishSessionCreate's direct assign covers it.
+      const started = store.beginOptimisticSession({
+        agentType: agent_type,
+        projectPath: path,
+        gitRoot: path,
+        deferCreate: true,
+        create,
+      });
+      stubId = started.stubId;
+      // Before materialize, so the marker is on the stub rows before any rekey.
       stampLabelIntent(stubId);
-
-      const conversationId = await ready;
-      if (submitAttempt.current !== attempt) return;
-      finishSessionCreate(conversationId || store.getConvexId(stubId) || stubId);
+      watchSessionCreate(stubId, started.materialize(), create);
     } catch (error) {
-      if (submitAttempt.current !== attempt) return;
-      if (mobileCreateFailureDisposition(error) === "accepted-pending") {
-        // The create is durably queued, not lost — and it carries the pick.
-        finishSessionCreate(stubId);
-      } else {
-        setSubmitError(mobileCreateErrorMessage("session", error));
-      }
-    } finally {
-      if (submitAttempt.current === attempt) setSubmitting(false);
+      setSubmitError(mobileCreateErrorMessage("session", error));
+      return;
     }
+    finishSessionCreate(stubId);
   };
 
   // The launch model/effort rail for the selected agent — absent for clients
@@ -457,7 +421,7 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
   // The expanded folder list narrows to what the user is TYPING. A path that
   // came from the list (or the seeding effect) is a selection, not a query, so
   // it must not collapse the browser to a single row.
-  const allRecents = recentProjects ?? [];
+  const allRecents = recentProjects;
   const typed = projectPath.trim().toLowerCase();
   // The rows render ~-collapsed (displayPath), so a query typed from what the
   // list shows — or from the input's own "~/src/my-project" placeholder — must
@@ -469,12 +433,12 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
     : allRecents;
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={handleClose}>
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <KeyboardAvoidingView style={modalStyles.container} behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <RNView style={modalStyles.header}>
           <RNText style={modalStyles.title}>New Session</RNText>
           <TouchableOpacity
-            onPress={handleClose}
+            onPress={onClose}
             hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
           >
             <FontAwesome name="times" size={20} color={Theme.textMuted} />
@@ -503,7 +467,6 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
                     setModel("default");
                     setEffort("default");
                   }}
-                  disabled={submitting}
                   activeOpacity={0.7}
                 >
                   <RNView style={{ opacity: active ? 1 : 0.4 }}>
@@ -523,6 +486,7 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
             <>
               <RNText style={modalStyles.label}>Machine</RNText>
               <ScrollView
+                ref={machineRowRef}
                 horizontal
                 showsHorizontalScrollIndicator={false}
                 contentContainerStyle={modalStyles.machineRow}
@@ -530,28 +494,29 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
               >
                 {devices.map((d) => {
                   const active = selectedDeviceId === d.device_id;
-                  const color = deviceColor(d);
                   return (
                     <TouchableOpacity
                       key={d.device_id}
+                      onLayout={(e) => {
+                        if (active) machineRowRef.current?.scrollTo({ x: Math.max(0, e.nativeEvent.layout.x - Spacing.lg), animated: false });
+                      }}
                       style={[
                         modalStyles.machineChip,
-                        !d.online && modalStyles.machineChipOffline,
-                        active && { borderColor: color, backgroundColor: color + "20" },
+                        !d.online && !active && modalStyles.machineChipOffline,
+                        active && modalStyles.machineChipActive,
                       ]}
                       onPress={() => {
                         // Scoping the folder list to another machine can drop the
                         // current path (it may have no such checkout), so clear it
-                        // and let the seeding effect refill from the new list.
+                        // and let the field fall back to the new list's top folder.
                         setDeviceId(d.device_id === defaultDeviceId ? null : d.device_id);
-                        setProjectPath("");
+                        setProjectPath(null);
                         setSubmitError(null);
                       }}
-                      disabled={submitting}
                       activeOpacity={0.7}
                     >
                       <RNView style={[modalStyles.machineDot, { backgroundColor: d.online ? Theme.green : Theme.textMuted0 }]} />
-                      <RNText style={[modalStyles.machineChipText, active && { color }]} numberOfLines={1}>
+                      <RNText style={[modalStyles.machineChipText, active && modalStyles.machineChipTextActive]} numberOfLines={1}>
                         {deviceDisplayName(d)}
                       </RNText>
                     </TouchableOpacity>
@@ -574,7 +539,6 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
             }
             open={projectOpen}
             onToggle={() => setProjectOpen((v) => !v)}
-            disabled={submitting}
           >
           <TextInput
             style={modalStyles.input}
@@ -587,7 +551,6 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
             placeholderTextColor={Theme.textMuted0}
             autoCorrect={false}
             autoCapitalize="none"
-            editable={!submitting}
           />
           </CollapsibleSection>
           {allRecents.length > 0 && (
@@ -607,7 +570,6 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
                     setProjectPath(p.path);
                     setSubmitError(null);
                   }}
-                  disabled={submitting}
                   activeOpacity={0.7}
                 >
                   <RNText style={[modalStyles.recentChipText, projectPath === p.path && { color: Theme.cyan }]} numberOfLines={1}>
@@ -619,7 +581,6 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
                 <TouchableOpacity
                   style={modalStyles.recentChip}
                   onPress={() => setShowAllRecents((v) => !v)}
-                  disabled={submitting}
                   activeOpacity={0.7}
                 >
                   <RNText style={[modalStyles.recentChipText, showAllRecents && { color: Theme.cyan }]}>
@@ -641,7 +602,6 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
                     setProjectPath(p.path);
                     setSubmitError(null);
                   }}
-                  disabled={submitting}
                   activeOpacity={0.7}
                 >
                   <RNText style={[modalStyles.recentListText, projectPath === p.path && { color: Theme.cyan }]} numberOfLines={1}>
@@ -658,7 +618,6 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
               <TouchableOpacity
                 style={modalStyles.selectChip}
                 onPress={() => setModelSheetVisible(true)}
-                disabled={submitting}
                 activeOpacity={0.7}
               >
                 <RNText style={modalStyles.selectChipText} numberOfLines={1}>
@@ -674,7 +633,6 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
             summary={STABLE_MODES.find((m) => m.key === stableMode)?.label ?? "Auto"}
             open={contextOpen}
             onToggle={() => setContextOpen((v) => !v)}
-            disabled={submitting}
           >
           <RNView style={modalStyles.segmentRow}>
             {STABLE_MODES.map((m) => {
@@ -684,7 +642,6 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
                   key={m.key}
                   style={[modalStyles.segment, active && { borderColor: Theme.cyan, backgroundColor: Theme.cyan + "18" }]}
                   onPress={() => setStableMode(m.key)}
-                  disabled={submitting}
                   activeOpacity={0.7}
                 >
                   <RNText style={[modalStyles.segmentText, active && { color: Theme.cyan, fontWeight: "600" }]}>{m.label}</RNText>
@@ -702,7 +659,6 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
             <Switch
               value={isolated}
               onValueChange={setIsolated}
-              disabled={submitting}
               trackColor={{ true: Theme.cyan, false: Theme.borderLight }}
             />
           </RNView>
@@ -712,7 +668,6 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
               <TouchableOpacity
                 style={[modalStyles.labelPill, !chosenLabel && modalStyles.labelPillEmpty]}
                 onPress={openBucketPicker}
-                disabled={submitting}
                 activeOpacity={0.7}
               >
                 {chosenLabel ? (
@@ -737,22 +692,18 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
         <RNView style={modalStyles.footer}>
           <TouchableOpacity
             style={modalStyles.cancelBtn}
-            onPress={handleClose}
+            onPress={onClose}
             activeOpacity={0.7}
           >
-            <RNText style={modalStyles.cancelBtnText}>{submitting ? "Close" : "Cancel"}</RNText>
+            <RNText style={modalStyles.cancelBtnText}>Cancel</RNText>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[modalStyles.submitBtn, submitting && modalStyles.disabledBtn]}
+            style={modalStyles.submitBtn}
             onPress={handleSubmit}
-            disabled={submitting}
             activeOpacity={0.7}
           >
             <RNView style={modalStyles.submitContent}>
-              {submitting ? <ActivityIndicator size="small" color="#fff" /> : null}
-              <RNText style={modalStyles.submitBtnText}>
-                {submitting ? "Saving…" : retryStubId.current ? "Retry" : "Start Session"}
-              </RNText>
+              <RNText style={modalStyles.submitBtnText}>Start Session</RNText>
             </RNView>
           </TouchableOpacity>
         </RNView>
@@ -857,7 +808,9 @@ const modalStyles = themedStyles((Theme) => StyleSheet.create({
     maxWidth: 180,
   },
   machineChipOffline: { opacity: 0.5 },
+  machineChipActive: { borderColor: Theme.cyan, backgroundColor: Theme.cyan + "18" },
   machineChipText: { fontSize: 12, color: Theme.textMuted, fontWeight: "500", flexShrink: 1 },
+  machineChipTextActive: { color: Theme.cyan, fontWeight: "700" },
   machineDot: { width: 6, height: 6, borderRadius: 3 },
   recentRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8 },
   recentChip: {
@@ -951,27 +904,13 @@ const modalStyles = themedStyles((Theme) => StyleSheet.create({
   },
   submitContent: { flexDirection: "row", alignItems: "center", gap: 8 },
   submitBtnText: { fontSize: 15, fontWeight: "600", color: "#fff" },
-  disabledBtn: { opacity: 0.55 },
 }));
 
-type SearchResult = {
-  conversationId: string;
-  title: string;
-  matches: Array<{
-    messageId: string;
-    content: string;
-    role: string;
-    timestamp: number;
-  }>;
-  updatedAt: number;
-  authorName: string;
-  isOwn: boolean;
-  messageCount: number;
-};
-
-function SearchResultItem({ result, onPress }: { result: SearchResult; onPress: () => void }) {
+function SearchResultItem({ result, onPress }: { result: SessionSearchRow; onPress: () => void }) {
   const Theme = useTheme();
-  const firstMatch = result.matches[0];
+  // A cached row has no message matches yet; its preview is the text the
+  // local match landed in until the server row supersedes it.
+  const snippet = result.matches[0]?.content ?? result.instantSnippet;
   // A found session reads as the same character its inbox row wears.
   const identityRow = useSessionIdentityRow(result.conversationId);
   return (
@@ -979,13 +918,15 @@ function SearchResultItem({ result, onPress }: { result: SearchResult; onPress: 
       <RNView style={styles.searchResultHeader}>
         <MobileIdentityFace row={identityRow} size={18} style={{ marginRight: 6 }} />
         <MobileSessionIdentityLine row={identityRow} title={result.title} style={styles.searchResultTitle} />
-        <RNText style={styles.searchResultCount}>{result.matches.length} match{result.matches.length !== 1 ? 'es' : ''}</RNText>
+        {result.matches.length > 0 && (
+          <RNText style={styles.searchResultCount}>{result.matches.length} match{result.matches.length !== 1 ? 'es' : ''}</RNText>
+        )}
       </RNView>
-      {firstMatch && (
+      {snippet ? (
         <RNText style={styles.searchResultSnippet} numberOfLines={2}>
-          {firstMatch.content}
+          {snippet}
         </RNText>
-      )}
+      ) : null}
       <RNView style={styles.conversationMeta}>
         <RNText style={styles.metaText}>{formatRelativeTime(result.updatedAt)}</RNText>
         <RNText style={styles.metaSeparator}>·</RNText>
@@ -1026,14 +967,22 @@ class SearchErrorBoundary extends Component<{ resetKey: string; children: ReactN
 }
 
 // Owns the search subscription so a server error surfaces inside the boundary
-// above instead of unmounting InboxScreen.
-function SearchResultsList({ query, userOnly, onOpen }: { query: string; userOnly: boolean; onOpen: (conversationId: string) => void }) {
+// above instead of unmounting InboxScreen. The cached sessions answer on the
+// first keystroke (the same instant tier web's search uses); the server's
+// message-content matches land on top when the debounced query returns.
+function SearchResultsList({ query, serverQuery, userOnly, onOpen }: { query: string; serverQuery: string; userOnly: boolean; onOpen: (conversationId: string) => void }) {
   const Theme = useTheme();
-  const searchResults = useQuery(api.conversations.searchConversations, { query, limit: 30, userOnly });
-  const searchResultsList = useMemo(() => {
-    if (!searchResults) return [];
-    return 'results' in searchResults ? searchResults.results : (searchResults as SearchResult[]);
+  const instantRows = useInstantSessionRows(query, 12, { mineOnly: userOnly });
+  const searchResults = useQuery(
+    api.conversations.searchConversations,
+    serverQuery.length >= 2 ? { query: serverQuery, limit: 30, userOnly } : "skip",
+  );
+  const serverRows = useMemo(() => {
+    if (!searchResults) return undefined;
+    return ('results' in searchResults ? searchResults.results : searchResults) as unknown as SessionSearchRow[];
   }, [searchResults]);
+  const searchResultsList = useMemo(() => mergeSearchRows(serverRows, instantRows), [serverRows, instantRows]);
+  const serverPending = serverRows === undefined || serverQuery !== query.trim();
   return (
     <FlatList
       data={searchResultsList}
@@ -1043,13 +992,13 @@ function SearchResultsList({ query, userOnly, onOpen }: { query: string; userOnl
       keyExtractor={(item) => item.conversationId}
       contentContainerStyle={searchResultsList.length === 0 ? styles.emptyList : styles.listContent}
       ListEmptyComponent={
-        searchResults === undefined ? (
+        serverPending ? (
           <RNView style={styles.emptyInbox}>
             <ActivityIndicator size="small" color={Theme.textMuted} />
           </RNView>
         ) : (
           <RNView style={styles.emptyInbox}>
-            <RNText style={styles.emptyText}>No results for "{query}"</RNText>
+            <RNText style={styles.emptyText}>No results for "{query.trim()}"</RNText>
           </RNView>
         )
       }
@@ -1072,7 +1021,7 @@ export default function InboxScreen() {
   const [userOnly, setUserOnly] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const router = useRouter();
-  const isSearching = debouncedQuery.length >= 2;
+  const isSearching = searchQuery.trim().length >= 2;
   // The org feature is per team, default off: the org button exists only
   // once the workspace is known to have it on.
   const orgOn = useWorkspaceFeatureState('org');
@@ -1406,7 +1355,10 @@ export default function InboxScreen() {
   // (resting loop homes + uneventful runs). All membership rules live in
   // partitionTriggerInbox. schedules_seen_at is read as a scalar off clientState
   // (never the whole singleton), same as showSubagents.
-  const scheduleTasks = useQuery(api.agentTasks.webList, {}) as TaskRow[] | undefined;
+  // Store-fed (StoreSyncBridge mounts useSyncTriggers): the schedule rows
+  // paint from the cached roster at boot instead of waiting a round-trip.
+  const { tasks: scheduleTaskRows, ready: schedulesReady } = useTriggers();
+  const scheduleTasks = (schedulesReady || scheduleTaskRows.length > 0 ? scheduleTaskRows : undefined) as TaskRow[] | undefined;
   const schedulesSeenAt = useInboxStore((s) => s.clientState?.ui?.schedules_seen_at ?? 0);
   const schedulePartition = useMemo(
     () => partitionTriggerInbox(scheduleTasks, visibleSessions, {
@@ -1748,7 +1700,8 @@ export default function InboxScreen() {
       {isSearching ? (
         <SearchErrorBoundary resetKey={`${debouncedQuery}|${userOnly}`}>
           <SearchResultsList
-            query={debouncedQuery}
+            query={searchQuery}
+            serverQuery={debouncedQuery}
             userOnly={userOnly}
             onOpen={(conversationId) => router.push(`/session/${conversationId}`)}
           />

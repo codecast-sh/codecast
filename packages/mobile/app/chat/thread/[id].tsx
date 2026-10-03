@@ -10,13 +10,14 @@ import { copyToClipboard } from '@/lib/clipboard';
 import { setChatFocus, clearChatFocus } from '@/lib/chatFocus';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
-import { useQuery, useMutation } from 'convex/react';
+import { useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
-import type { Id } from '@codecast/convex/convex/_generated/dataModel';
+import { useInboxStore, selectChannelReadMarker } from '@codecast/web/store/inboxStore';
+import { useThreadMessages, useThreadSync } from '@codecast/web/hooks/useChatSync';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { authorGroupKey, buildChatTimeline, memberHandle } from '@codecast/shared/chat';
-import { MessageRow, slackFieldsFor, type MobileChatMessage } from '@/components/chat/MessageRow';
+import { MessageRow, fromChatView, type MobileChatMessage } from '@/components/chat/MessageRow';
 import { type MentionCandidate } from '@/components/chat/MentionStrip';
 import { useSessionIdentityLookup } from '@/components/identity';
 import { ChatComposerBar } from '@/components/chat/ChatComposerBar';
@@ -33,51 +34,30 @@ import type { ChatAttachmentArg } from '@/components/chat/chatUpload';
 // Reads are honest here too: the CHANNEL's mark advances to the newest reply,
 // but only while this screen is focused and the app is foregrounded.
 
-type PendingSend = {
-  clientId: string;
-  content: string;
-  createdAt: number;
-  attachments?: ChatAttachmentArg[];
-  failed?: boolean;
-};
-
 export default function ChatThreadScreen() {
   const Theme = useTheme();
   const { id, channel: channelParam, m: targetParam } = useLocalSearchParams<{ id: string; channel?: string; m?: string }>();
-  const rootId = id as Id<'chat_messages'>;
+  const rootId = id as string;
   const router = useRouter();
 
-  const currentUser = useQuery(api.users.getCurrentUser);
+  // LOCAL FIRST, like the channel screen: the root and its replies read from
+  // the store (a reply the channel page or a push prefetch already holds
+  // paints at once); useThreadSync only feeds it.
+  const currentUser = useInboxStore((s) => s.currentUser) as any;
   const viewerId = currentUser?._id ? String(currentUser._id) : '';
 
   const chatOn = useActiveTeamFeature("chat");
-  const thread = useQuery(api.chat.getThread, chatOn ? { root_id: rootId } : 'skip');
-  const channelId = (thread?.root?.channel_id ?? channelParam) as Id<'chat_channels'> | undefined;
-
-  const channelData = useQuery(api.chat.listChannels, chatOn ? {} : 'skip');
-  const channel = useMemo(
-    () => (channelData?.channels as any[] | undefined)?.find(
-      (c) => String(c._id) === String(channelId),
-    ),
-    [channelData, channelId],
-  );
-  const teamMembers = useQuery(
-    api.teams.getTeamMembers,
-    channel ? { team_id: channel.team_id } : 'skip',
-  );
+  const thread = useThreadSync(chatOn === false ? undefined : rootId);
+  const { root, replies } = useThreadMessages(rootId);
+  const rootRow = useInboxStore((s) => s.chatMessages[rootId]) as any;
+  const channelId = (rootRow?.channel_id ?? channelParam) as string | undefined;
+  const channel = useInboxStore((s) => (channelId ? s.chatChannels[channelId] : undefined)) as any;
+  const teamMembers = useInboxStore((s) => s.teamMembers) as any[];
   const memberById = useMemo(() => {
     const map = new Map<string, any>();
     for (const m of teamMembers ?? []) if (m) map.set(String(m._id), m);
     return map;
   }, [teamMembers]);
-
-  // Names for authors the roster no longer carries (departed members): the
-  // query's own authors map, so old messages never degrade to "Teammate".
-  const authorById = useMemo(() => {
-    const map = new Map<string, any>();
-    for (const a of ((thread?.authors as any[]) ?? [])) map.set(String(a._id), a);
-    return map;
-  }, [thread?.authors]);
 
   // Completion candidates carry the SAME handles the server resolves
   // (memberHandle) — a handle the strip offers is a handle a send will honour.
@@ -105,24 +85,16 @@ export default function ChatThreadScreen() {
     [mentionCandidates],
   );
 
-  const [pending, setPending] = useState<PendingSend[]>([]);
   const [sheetTarget, setSheetTarget] = useState<MobileChatMessage | null>(null);
   const [editing, setEditing] = useState<{ messageId: string; content: string } | null>(null);
   const [viewerUri, setViewerUri] = useState<string | null>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
 
-  const sendMessage = useMutation(api.chat.sendMessage);
-  const editMessage = useMutation(api.chat.editMessage);
-  const markRead = useMutation(api.chat.markRead);
-  const toggleReaction = useMutation(api.chat.toggleReaction);
   const stopAnchor = useMutation(api.chat.stopAnchorReply);
   const setFollow = useMutation(api.chat.setAnchorFollow);
-  const deleteMessage = useMutation(api.chat.deleteMessage);
 
   const [now, setNow] = useState(() => Date.now());
-  const anyThinking = (thread?.replies as any[] | undefined)?.some(
-    (m) => m.agent_status === 'thinking' || m.agent_status === 'streaming',
-  );
+  const anyThinking = replies.some((m) => m.agentStatus === 'thinking' || m.agentStatus === 'streaming');
   useEffect(() => {
     if (!anyThinking) return;
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -130,19 +102,19 @@ export default function ChatThreadScreen() {
   }, [anyThinking]);
 
   // ── Honest reading ────────────────────────────────────────────────────────
-  // Reading a thread advances the CHANNEL's read mark to the newest reply —
+  // Reading a thread advances the CHANNEL's read mark to the newest row —
   // without this, a channel whose latest activity lives in threads would badge
   // forever, because the channel view alone can never reach those rows. But
   // only while the person is actually looking (focused + foregrounded).
   const focusedRef = useRef(false);
   const appActiveRef = useRef(AppState.currentState === 'active');
-  const newestReplyId = (thread?.replies as any[] | undefined)?.at(-1)?._id;
-  const newestReplyRef = useRef<string | undefined>(undefined);
-  newestReplyRef.current = newestReplyId ? String(newestReplyId) : undefined;
+  const newestReplyId = replies.at(-1)?.id;
   const markIfPresent = useCallback(() => {
-    if (!focusedRef.current || !appActiveRef.current || !channelId || !newestReplyRef.current) return;
-    markRead({ channel_id: channelId, last_read_message_id: newestReplyRef.current as any }).catch(() => {});
-  }, [channelId, markRead]);
+    if (!focusedRef.current || !appActiveRef.current || !channelId) return;
+    const state = useInboxStore.getState();
+    const marker = selectChannelReadMarker(state as any, channelId);
+    if (marker) state.markChannelRead(channelId, marker._id);
+  }, [channelId]);
   useFocusEffect(
     useCallback(() => {
       focusedRef.current = true;
@@ -163,127 +135,40 @@ export default function ChatThreadScreen() {
   }, [markIfPresent]);
   useEffect(() => { markIfPresent(); }, [newestReplyId, markIfPresent]);
 
-  const echoed = useMemo(() => {
-    const set = new Set<string>();
-    for (const m of (thread?.replies as any[]) ?? []) if (m.client_id) set.add(m.client_id);
-    return set;
-  }, [thread?.replies]);
-  useEffect(() => {
-    if (echoed.size === 0) return;
-    setPending((prev) => prev.filter((p) => !echoed.has(p.clientId)));
-  }, [echoed]);
-
-  const doSend = useCallback(async (entry: PendingSend) => {
-    if (!channelId) return;
-    try {
-      await sendMessage({
-        channel_id: channelId,
-        content: entry.content,
-        client_id: entry.clientId,
-        thread_root_id: rootId,
-        ...(entry.attachments?.length ? { attachments: entry.attachments as any } : {}),
-      });
-    } catch {
-      setPending((prev) => prev.map((p) => (p.clientId === entry.clientId ? { ...p, failed: true } : p)));
-    }
-  }, [channelId, rootId, sendMessage]);
-
+  // Replies paint in this tick through the store's send action.
   const onSend = useCallback((content: string, attachments: ChatAttachmentArg[]) => {
-    const entry: PendingSend = {
-      clientId: `mobt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
-      content,
-      createdAt: Date.now(),
-      attachments: attachments.length ? attachments : undefined,
-    };
-    setPending((prev) => [...prev, entry]);
-    void doSend(entry);
-  }, [doSend]);
+    if (!channelId) return;
+    useInboxStore.getState().sendChatMessage(channelId, content, {
+      threadRootId: rootId,
+      attachments: attachments.length ? (attachments as any) : undefined,
+    });
+  }, [channelId, rootId]);
 
-  const onRetrySend = useCallback((id: string) => {
-    setPending((prev) => prev.map((p) => (`pend-${p.clientId}` === id ? { ...p, failed: false } : p)));
-    const entry = pending.find((p) => `pend-${p.clientId}` === id);
-    if (entry) void doSend({ ...entry, failed: false });
-  }, [pending, doSend]);
+  const onRetrySend = useCallback((rowId: string) => {
+    useInboxStore.getState().retryChatSend(rowId);
+  }, []);
 
   const onSubmitEdit = useCallback((messageId: string, content: string) => {
-    void editMessage({ message_id: messageId as any, content }).catch(() => {
-      Alert.alert('Edit failed', 'The message kept its previous text.');
-    });
-  }, [editMessage]);
+    useInboxStore.getState().editChatMessage(messageId, content);
+  }, []);
 
-  const reactionsByMessage = useMemo(() => {
-    const map = new Map<string, { emoji: string; count: number; mine: boolean }[]>();
-    for (const r of ((thread?.reactions as any[]) ?? [])) {
-      const key = String(r.message_id);
-      const list = map.get(key) ?? [];
-      const existing = list.find((x) => x.emoji === r.emoji);
-      if (existing) {
-        existing.count += 1;
-        existing.mine = existing.mine || String(r.user_id) === viewerId;
-      } else {
-        list.push({ emoji: r.emoji, count: 1, mine: String(r.user_id) === viewerId });
-      }
-      map.set(key, list);
-    }
-    return map;
-  }, [thread?.reactions, viewerId]);
+  const toggleReaction = useCallback((messageId: string, emoji: string) => {
+    useInboxStore.getState().toggleChatReaction(messageId, emoji);
+  }, []);
 
   const identityFor = useSessionIdentityLookup();
-  const toView = useCallback((m: any): MobileChatMessage => {
-    const member = memberById.get(String(m.user_id));
-    const humanName = member?.name || authorById.get(String(m.user_id))?.name;
-    // Session-typed line → session persona (see app/chat/[id].tsx toView).
-    const sessionOrigin = m.origin === 'agent' && m.origin_session_id && m.author_kind !== 'agent';
-    // A Slack-relayed line names the real Slack person, never the bridge.
-    const slack = slackFieldsFor(m);
-    return {
-      id: String(m._id),
-      slack: slack.slack,
-      author: slack.author ?? (sessionOrigin
-        ? {
-            id: String(m.user_id),
-            name: m.origin_session_title || 'Agent session',
-            isAgent: true,
-            session: { agentType: m.origin_agent_type, via: humanName, identity: identityFor(m.origin_session_id) },
-          }
-        : {
-            id: String(m.user_id),
-            name: humanName
-              || (m.author_kind === 'agent' ? thread?.anchor?.name ?? 'Workspace agent' : 'Teammate'),
-            avatarUrl: member?.github_avatar_url || member?.image || undefined,
-            isAgent: m.author_kind === 'agent' || member?.is_bot,
-          }),
-      content: m.content,
-      createdAt: m.created_at,
-      editedAt: m.edited_at,
-      deletedAt: m.deleted_at,
-      mentionsMe: (m.mentions ?? []).some((x: any) => String(x) === viewerId),
-      agentStatus: m.agent_status,
-      agentDeadlineAt: m.agent_deadline_at,
-      attachments: m.attachments?.length ? m.attachments : undefined,
-      reactions: reactionsByMessage.get(String(m._id)),
-    };
-  }, [memberById, authorById, viewerId, reactionsByMessage, thread?.anchor?.name, identityFor]);
+  const chatMessages = useInboxStore.getState().chatMessages;
+  const rootView = useMemo(
+    () => (root ? fromChatView(root, chatMessages[root.id], identityFor) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [root, identityFor],
+  );
 
   const rows = useMemo(() => {
-    if (!thread?.root) return [];
-    const replies = ((thread.replies as any[]) ?? []).map(toView);
-    const pendingRows: MobileChatMessage[] = pending.map((p) => ({
-      id: `pend-${p.clientId}`,
-      author: {
-        id: viewerId,
-        name: currentUser?.name || 'You',
-        avatarUrl: (currentUser as any)?.github_avatar_url || (currentUser as any)?.image,
-      },
-      content: p.content,
-      createdAt: p.createdAt,
-      attachments: p.attachments?.map((a) => ({ storage_id: a.storage_id })),
-      pending: !p.failed,
-      failed: p.failed,
-    }));
+    if (!root) return [];
     // Day separators add noise, not orientation, in a short dense thread.
     return buildChatTimeline(
-      [...replies, ...pendingRows].map((m) => ({
+      replies.map((v) => fromChatView(v, chatMessages[v.id], identityFor)).map((m) => ({
         id: m.id,
         authorId: m.author.id,
         groupKey: authorGroupKey(m.author),
@@ -294,20 +179,23 @@ export default function ChatThreadScreen() {
       })),
       { now, viewerId, withoutDays: true },
     );
-  }, [thread, pending, toView, now, viewerId, currentUser]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [root, replies, identityFor, now, viewerId]);
 
   const inverted = useMemo(() => [...rows].reverse(), [rows]);
 
   // ── Deep-link target (?m=<replyId>) ───────────────────────────────────────
   // A push about a thread reply lands here; the reply flashes so the eye finds
-  // it. getThread returns the whole thread, so no paging hunt is needed.
+  // it. The thread page is the whole thread, so no paging hunt is needed.
   const listRef = useRef<FlatList>(null);
   const doneTargetRef = useRef<string | null>(null);
   useEffect(() => {
     const target = typeof targetParam === 'string' ? targetParam : undefined;
-    if (!target || doneTargetRef.current === target || !thread?.root) return;
-    doneTargetRef.current = target;
+    if (!target || doneTargetRef.current === target || !root) return;
     const index = inverted.findIndex((it: any) => it.kind === 'message' && it.message?.id === target);
+    // A cached thread may not hold the reply yet: wait for the page.
+    if (index < 0 && thread.loading) return;
+    doneTargetRef.current = target;
     if (index >= 0) {
       setHighlightId(target);
       if (index > 2) {
@@ -315,7 +203,7 @@ export default function ChatThreadScreen() {
       }
       setTimeout(() => setHighlightId(null), 3200);
     }
-  }, [targetParam, thread?.root, inverted]);
+  }, [targetParam, root, inverted, thread.loading]);
 
   // ── Long-press sheet ──────────────────────────────────────────────────────
   const onLongPress = useCallback((message: MobileChatMessage) => {
@@ -328,7 +216,7 @@ export default function ChatThreadScreen() {
     const message = sheetTarget;
     if (!message) return;
     if (action.kind === 'react') {
-      void toggleReaction({ message_id: message.id as any, emoji: action.emoji });
+      toggleReaction(message.id, action.emoji);
     } else if (action.kind === 'copy') {
       copyToClipboard(message.content);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -337,18 +225,18 @@ export default function ChatThreadScreen() {
     } else if (action.kind === 'delete') {
       Alert.alert('Delete message?', 'It will show as deleted for everyone.', [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Delete', style: 'destructive', onPress: () => void deleteMessage({ message_id: message.id as any }) },
+        { text: 'Delete', style: 'destructive', onPress: () => useInboxStore.getState().deleteChatMessage(message.id) },
       ]);
     }
-  }, [sheetTarget, toggleReaction, deleteMessage]);
+  }, [sheetTarget, toggleReaction]);
 
   const nameOf = useCallback((uid: string) => {
     const m = memberById.get(uid);
     return m?.name?.split(/\s+/)[0] || m?.github_username || '';
   }, [memberById]);
 
-  const armed = thread?.anchor?.armed ?? false;
-  const anchorName = thread?.anchor?.name ?? 'Workspace agent';
+  const armed = thread.anchor?.armed ?? false;
+  const anchorName = thread.anchor?.name ?? 'Workspace agent';
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -365,7 +253,7 @@ export default function ChatThreadScreen() {
         </RNView>
         {armed && (
           <TouchableOpacity
-            onPress={() => void setFollow({ root_id: rootId, follow: false })}
+            onPress={() => void setFollow({ root_id: rootId as any, follow: false })}
             hitSlop={8}
             style={styles.armedPill}
           >
@@ -398,7 +286,7 @@ export default function ChatThreadScreen() {
                   inThread
                   knownMentionHandles={knownHandles}
                   onLongPress={onLongPress}
-                  onToggleReaction={(mid, emoji) => void toggleReaction({ message_id: mid as any, emoji })}
+                  onToggleReaction={toggleReaction}
                   onStopAgent={(mid) => void stopAnchor({ message_id: mid as any })}
                   onRetrySend={onRetrySend}
                   onOpenImage={setViewerUri}
@@ -409,10 +297,10 @@ export default function ChatThreadScreen() {
           // The root renders at the top of the inverted list — the subject line
           // the replies hang from.
           ListFooterComponent={
-            thread?.root ? (
+            rootView ? (
               <RNView style={styles.rootWrap}>
                 <MessageRow
-                  message={toView(thread.root)}
+                  message={rootView}
                   now={now}
                   inThread
                   knownMentionHandles={knownHandles}

@@ -12,7 +12,6 @@ import 'react-native-reanimated';
 import { GestureHandlerRootView } from '@/lib/gestureHandler';
 import { ConvexProvider } from 'convex/react';
 import { ConvexAuthProvider } from '@convex-dev/auth/react';
-import { useQuery } from 'convex/react';
 
 import { Palettes, setActiveScheme, useActiveScheme, type ColorScheme } from '@/constants/Theme';
 import { useColorScheme } from '@/components/useColorScheme';
@@ -21,11 +20,17 @@ import { convex, CONVEX_URL } from '@/lib/convex';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
 import { useLiveActivity } from '@/hooks/useLiveActivity';
+import { useViewerIdentity } from '@codecast/web/hooks/useTeamRoster';
 import { initAnalytics, identifyUser, resetUser, trackScreen, wrapRoot } from '@/lib/analytics';
-import { api } from '@codecast/convex/convex/_generated/api';
 import { startCallKitBridge, republishVoipToken, notifyCallKitAuth } from '@/lib/calls/callKit';
 import { bootMark } from '@/lib/bootProfile';
 import * as Font from 'expo-font';
+import { Alert } from 'react-native';
+import { setTaskErrorReporter } from '@codecast/web/lib/taskActions';
+
+// A task write the server refuses (createTaskAndAdopt drops its stub) says so,
+// as web's toast does.
+setTaskErrorReporter((msg) => Alert.alert('Task', msg));
 
 const CallOverlay = lazy(() => import('@/components/calls/CallOverlay').then((m) => ({ default: m.CallOverlay })));
 
@@ -277,7 +282,9 @@ function RootLayoutNav() {
 }
 
 function AnalyticsIdentify() {
-  const user = useQuery(api.users.getCurrentUser);
+  // The persisted viewer, projected to identity fields so daemon heartbeats on
+  // the user doc never re-run this.
+  const user = useViewerIdentity();
   const lastId = useRef<string | null>(null);
   const id = user?._id ?? null;
   useEffect(() => {

@@ -1,18 +1,17 @@
 import { StyleSheet, TouchableOpacity, View as RNView, ActionSheetIOS, useWindowDimensions } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useQuery, useMutation } from 'convex/react';
-import { api } from '@codecast/convex/convex/_generated/api';
 import { useCallback, useMemo, useSyncExternalStore } from 'react';
 import { useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { teamFeatureEnabled } from '@codecast/shared/contracts';
-import type { Id } from '@codecast/convex/convex/_generated/dataModel';
+import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { Spacing, themedStyles, useTheme } from '@/constants/Theme';
-import { ChatHomeList, useChatRail } from '@/components/chat/ChannelList';
+import { ChatHomeList } from '@/components/chat/ChannelList';
 import { useLiveRooms } from '@/components/calls/LiveRooms';
+import { useActiveTeam, useSwitchActiveTeam } from '@/hooks/useWorkspaceArgs';
 import { getCallSnapshot, subscribeCall } from '@/lib/calls/callManager';
 
 const TEAM_ICON_EMOJI: Record<string, string> = {
@@ -32,30 +31,24 @@ export default function ChatScreen() {
   const router = useRouter();
   const { width } = useWindowDimensions();
 
-  const currentUser = useQuery(api.users.getCurrentUser);
-  const teams = useQuery(api.teams.getUserTeams, {});
-  const saveActiveTeam = useMutation(api.teams.setActiveTeam);
-
-  const activeTeamId = (currentUser?.active_team_id || currentUser?.team_id) as Id<'teams'> | undefined;
-  const validTeams = useMemo(() => (teams?.filter(Boolean) ?? []) as NonNullable<NonNullable<typeof teams>[number]>[], [teams]);
-  const activeTeam = validTeams.find((t) => t._id === activeTeamId);
+  // Everything here reads the store (the sync bridge feeds it, and it is
+  // persisted), so the tab paints the cached team, rooms and people at once.
+  const currentUser = useInboxStore((s) => s.currentUser) as any;
+  const { teamId: activeTeamId, activeTeam, validTeams } = useActiveTeam();
+  const switchTeam = useSwitchActiveTeam();
   const teamName = activeTeam?.name || 'Team';
 
-  // Chat and calls are per-team opt-ins (default off). getCallConfig lists
-  // the caller's teams that have calls, and is false outright when the
-  // deployment has no LiveKit.
+  // Chat and calls are per-team opt-ins (default off). callConfig lists the
+  // caller's teams that have calls, and is false outright when the deployment
+  // has no LiveKit.
   const chatOn = teamFeatureEnabled(activeTeam as any, 'chat');
-  const callConfig = useQuery(api.calls.getCallConfig);
+  const callConfig = useInboxStore((s) => s.callConfig) as { enabled: boolean; teams?: string[] } | null;
   const callsOn = callConfig?.enabled === true && !!activeTeamId && (callConfig.teams ?? []).includes(String(activeTeamId));
 
-  const teamMembers = useQuery(api.teams.getTeamMembers, activeTeamId ? { team_id: activeTeamId } : 'skip');
-  const members = useMemo(() => (teamMembers ?? []).filter(Boolean) as any[], [teamMembers]);
-  const rail = useChatRail(activeTeamId, chatOn);
-  const call = useSyncExternalStore(subscribeCall, getCallSnapshot, getCallSnapshot);
-  const liveRooms = useLiveRooms(
-    { members: teamMembers === undefined ? undefined : members, currentUser, channels: rail?.channels, rail: rail?.rail, myRoomKey: call.roomKey },
-    callsOn,
-  );
+  const teamMembers = useInboxStore((s) => s.teamMembers) as any[];
+  const members = useMemo(() => (teamMembers ?? []).filter(Boolean), [teamMembers]);
+  const myRoomKey = useSyncExternalStore(subscribeCall, () => getCallSnapshot().roomKey, () => null);
+  const liveRooms = useLiveRooms(callsOn);
 
   const showTeamPicker = useCallback(() => {
     if (validTeams.length <= 1) return;
@@ -64,12 +57,12 @@ export default function ChatScreen() {
     ActionSheetIOS.showActionSheetWithOptions(
       { options, cancelButtonIndex: options.length - 1, title: 'Switch team' },
       (index) => {
-        if (index < validTeams.length) void saveActiveTeam({ team_id: validTeams[index]._id });
+        if (index < validTeams.length) switchTeam(validTeams[index]._id);
       },
     );
-  }, [validTeams, saveActiveTeam]);
+  }, [validTeams, switchTeam]);
 
-  if (currentUser !== undefined && teams !== undefined && !activeTeamId) {
+  if (currentUser?._id && !activeTeamId) {
     return (
       <SafeAreaView style={styles.container} edges={['top']}>
         <RNView style={styles.header}>
@@ -140,14 +133,13 @@ export default function ChatScreen() {
 
       {activeTeamId ? (
         <ChatHomeList
-          teamId={activeTeamId}
           teamName={teamName}
           chatOn={chatOn}
           callsOn={callsOn}
           currentUser={currentUser}
-          members={teamMembers === undefined ? undefined : members}
+          members={members}
           liveRooms={liveRooms}
-          myRoomKey={call.roomKey}
+          myRoomKey={myRoomKey}
         />
       ) : null}
     </SafeAreaView>

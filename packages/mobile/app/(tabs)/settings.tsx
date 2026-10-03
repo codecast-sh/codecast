@@ -17,12 +17,14 @@ import { Text as RNText, TextInput } from '@/components/Themed';
 import { copyToClipboard } from '@/lib/clipboard';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/lib/auth';
-import { useQuery, useMutation } from 'convex/react';
+import { useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
+import { useSettingsData } from '@codecast/web/hooks/useSyncSettings';
+import { useTeamRosterIdentity } from '@codecast/web/hooks/useTeamRoster';
 import { DevicesSection } from '@/components/DevicesSection';
 import { liveActivityNative } from '@/modules/codecast-live-activity';
 import { peopleOf } from '@codecast/shared/team/memberKind';
@@ -50,9 +52,13 @@ export default function SettingsScreen() {
     disableBiometric,
   } = useAuth();
 
-  const currentUser = useQuery(api.users.getCurrentUser);
-  const updateNotificationPreferences = useMutation(api.users.updateNotificationPreferences);
-  const updateProfile = useMutation(api.users.updateProfile);
+  // The store's user row, so every switch below paints its own write in the
+  // same tick (currentUser is a localFirst singleton: a flip holds over pushes
+  // and rolls back if the server refuses).
+  const currentUser = useInboxStore((s) => s.currentUser) as any;
+  const updatePrefs = useInboxStore((s) => s.updateNotificationSettings);
+  const setMyStatus = useInboxStore((s) => s.setMyStatus);
+  const updateMyProfile = useInboxStore((s) => s.updateMyProfile);
   const deleteAccountMutation = useMutation(api.users.deleteAccount);
   const [isDeleting, setIsDeleting] = useState(false);
   const [editingField, setEditingField] = useState<string | null>(null);
@@ -61,8 +67,12 @@ export default function SettingsScreen() {
   const inboxImageThumbs = useInboxStore((s) => s.clientState?.ui?.inbox_image_thumbs === true);
   const updateClientUI = useInboxStore((s) => s.updateClientUI);
 
-  const activeTeamId = (currentUser?.active_team_id || currentUser?.team_id) as Id<"teams"> | undefined;
-  const activeTeam = useQuery(api.teams.getTeam, activeTeamId ? { team_id: activeTeamId } : "skip");
+  // Canonical pointer only (unset = personal). The team's row paints from the
+  // store's teams list; its invite code from the persisted settings cache.
+  const activeTeamId = currentUser?.active_team_id as Id<"teams"> | undefined;
+  const teamRow = useInboxStore((s) => (activeTeamId ? (s.teams as any[]).find((t) => t && String(t._id) === String(activeTeamId)) : undefined));
+  const teamRecord = useSettingsData("team", activeTeamId ?? null).data as any;
+  const activeTeam = teamRow || teamRecord ? { ...teamRow, ...teamRecord } : undefined;
   const regenerateInvite = useMutation(api.teams.regenerateInviteCode);
 
   const handleShareInvite = useCallback(async () => {
@@ -101,31 +111,22 @@ export default function SettingsScreen() {
     setEditValue(currentValue || '');
   }, []);
 
-  const saveField = useCallback(async () => {
+  const saveField = useCallback(() => {
     if (!editingField) return;
-    try {
-      await updateProfile({ [editingField]: editValue.trim() || undefined });
-    } catch (_e) {
-      Alert.alert('Error', 'Failed to update profile');
-    }
+    // An emptied field is a real edit: send "" (updateProfile skips undefined).
+    updateMyProfile({ [editingField]: editValue.trim() });
     setEditingField(null);
-  }, [editingField, editValue, updateProfile]);
+  }, [editingField, editValue, updateMyProfile]);
 
   const showStatusPicker = useCallback(() => {
     const options = [...STATUS_OPTIONS.map(s => s.label), 'Cancel'];
     ActionSheetIOS.showActionSheetWithOptions(
       { options, cancelButtonIndex: options.length - 1, title: 'Set Status' },
-      async (idx) => {
-        if (idx < STATUS_OPTIONS.length) {
-          try {
-            await updateProfile({ status: STATUS_OPTIONS[idx].key });
-          } catch (_e) {
-            Alert.alert('Error', 'Failed to update status');
-          }
-        }
+      (idx) => {
+        if (idx < STATUS_OPTIONS.length) setMyStatus(STATUS_OPTIONS[idx].key as any);
       },
     );
-  }, [updateProfile]);
+  }, [setMyStatus]);
 
   const showThemePicker = useCallback(() => {
     const options = [...THEME_OPTIONS.map(t => t.label), 'Cancel'];
@@ -151,30 +152,20 @@ export default function SettingsScreen() {
     }
   };
 
-  const handleToggleNotifications = async () => {
-    const newValue = !currentUser?.notifications_enabled;
-    try {
-      await updateNotificationPreferences({
-        notifications_enabled: newValue,
-      });
-    } catch (error) {
-      Alert.alert('Error', 'Failed to update notification settings');
-    }
+  const handleToggleNotifications = () => {
+    updatePrefs({ notifications_enabled: !currentUser?.notifications_enabled });
   };
 
-  const handleToggleMachinePresence = async () => {
-    try {
-      await updateNotificationPreferences({
-        machine_wide_presence: !((currentUser as any)?.machine_wide_presence ?? true),
-      });
-    } catch (error) {
-      Alert.alert('Error', 'Failed to update notification settings');
-    }
+  const handleToggleMachinePresence = () => {
+    updatePrefs({ machine_wide_presence: !(currentUser?.machine_wide_presence ?? true) });
   };
 
-  const teamMembers = useQuery(api.teams.getTeamMembers, activeTeamId ? { team_id: activeTeamId } : "skip");
+  // The roster, fed app-wide for the active team (useSyncWorkspaceData).
+  // Identity projection: presence heartbeats on the roster re-render nothing.
+  const roster = useTeamRosterIdentity();
+  const teamMembers = activeTeamId ? roster : undefined;
 
-  const handleToggleNotificationType = async (type: 'team_session_start' | 'mention' | 'permission_request' | 'session_idle' | 'session_idle_digest' | 'session_error' | 'task_activity' | 'doc_activity' | 'plan_activity' | 'chat_activity' | 'live_activity') => {
+  const handleToggleNotificationType = (type: 'team_session_start' | 'mention' | 'permission_request' | 'session_idle' | 'session_idle_digest' | 'session_error' | 'task_activity' | 'doc_activity' | 'plan_activity' | 'chat_activity' | 'live_activity') => {
     const currentPrefs = currentUser?.notification_preferences || {
       team_session_start: true,
       mention: true,
@@ -186,40 +177,32 @@ export default function SettingsScreen() {
       plan_activity: true,
     };
 
-    try {
-      const currentVal = (currentPrefs as any)[type] ?? true;
-      // The server ends an activity it started; one the app began on a phone
-      // without push-to-start is only addressable from here.
-      if (type === 'live_activity' && currentVal) liveActivityNative?.endAll().catch(() => {});
-      await updateNotificationPreferences({
-        notification_preferences: {
-          ...currentPrefs,
-          session_idle: currentPrefs.session_idle ?? true,
-          session_idle_digest: (currentPrefs as any).session_idle_digest ?? true,
-          session_error: currentPrefs.session_error ?? true,
-          task_activity: currentPrefs.task_activity ?? true,
-          doc_activity: currentPrefs.doc_activity ?? true,
-          plan_activity: currentPrefs.plan_activity ?? true,
-          chat_activity: (currentPrefs as any).chat_activity ?? true,
-          [type]: !currentVal,
-        },
-      });
-    } catch (error) {
-      Alert.alert('Error', 'Failed to update notification preferences');
-    }
+    const currentVal = (currentPrefs as any)[type] ?? true;
+    // The server ends an activity it started; one the app began on a phone
+    // without push-to-start is only addressable from here.
+    if (type === 'live_activity' && currentVal) liveActivityNative?.endAll().catch(() => {});
+    updatePrefs({
+      notification_preferences: {
+        ...currentPrefs,
+        session_idle: currentPrefs.session_idle ?? true,
+        session_idle_digest: (currentPrefs as any).session_idle_digest ?? true,
+        session_error: currentPrefs.session_error ?? true,
+        task_activity: currentPrefs.task_activity ?? true,
+        doc_activity: currentPrefs.doc_activity ?? true,
+        plan_activity: currentPrefs.plan_activity ?? true,
+        chat_activity: (currentPrefs as any).chat_activity ?? true,
+        [type]: !currentVal,
+      },
+    });
   };
 
-  const handleToggleMuteMember = async (memberId: Id<"users">) => {
+  const handleToggleMuteMember = (memberId: Id<"users">) => {
     const currentMuted = currentUser?.muted_members ?? [];
     const isMuted = currentMuted.includes(memberId);
     const newMuted = isMuted
       ? currentMuted.filter((id: Id<"users">) => id !== memberId)
       : [...currentMuted, memberId];
-    try {
-      await updateNotificationPreferences({ muted_members: newMuted });
-    } catch (error) {
-      Alert.alert('Error', 'Failed to update mute settings');
-    }
+    updatePrefs({ muted_members: newMuted });
   };
 
   const handleSignOut = () => {
