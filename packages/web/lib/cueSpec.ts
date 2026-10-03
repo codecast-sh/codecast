@@ -154,3 +154,15 @@ export const KILL_DOOR: CueSpec = {
   ],
   tones: [{ freq: 95, sweepTo: 70, start: 0.09, dur: 0.18, gain: 0.9, attack: 0.003, type: "triangle", lowpass: 400 }],
 };
+
+/** Dormant: the session settles down to wait for a machine to wake it. Two
+ *  soft sines falling a fifth (E5 to A4), the second sagging a semitone as it
+ *  fades, so it reads as easing off rather than as the rising idle motif. Slow
+ *  attacks keep it a sigh, not a ping; it sits beside stash and kill. */
+export const DORMANT_SETTLE: CueSpec = {
+  master: 0.04,
+  tones: [
+    { freq: 659.25, start: 0, dur: 0.28, gain: 0.55, attack: 0.04, type: "sine" },
+    { freq: 440, sweepTo: 415, start: 0.13, dur: 0.42, gain: 0.5, attack: 0.05, type: "sine", lowpass: 1200 },
+  ],
+};
